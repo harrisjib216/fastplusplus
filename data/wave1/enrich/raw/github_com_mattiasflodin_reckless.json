@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/mattiasflodin/reckless",
+  "one_liner": "Asynchronous C++ logging library, drastically lower caller-side latency than std::fstream/fprintf and other async loggers.",
+  "what_it_does": "Reckless is a printf-style, type-safe logging library. Call sites push arguments onto a lockless queue and return immediately; a dedicated background thread formats and writes them. API is not a drop-in for fstream/fprintf: you construct a writer (file_writer, stdout_writer, or custom) and a policy_log/severity_log template, then call typed write/debug/info/warn/error methods with printf-like format strings.",
+  "how_it_is_fast": "Call site only pushes args onto a lockless MPSC ring buffer (mpsc_ring_buffer.hpp) shared with the writer thread, so the common case costs about one function call with no kernel transition, no lock, and no formatting or I/O on the caller's thread. Formatting and writing happen entirely on the background thread, and bursts of queued entries are batched into fewer I/O operations. Uses a home-grown float-to-string routine (template_formatter) instead of the standard library's, trading some accuracy for speed.",
+  "when_to_use": [
+    "Latency-sensitive hot paths that log frequently but can tolerate async/eventual persistence",
+    "Single-threaded or lightly-threaded workloads where formatting cost on a shared background thread won't bottleneck",
+    "Windows or Linux targets on x86-family hardware; C++11-only codebases",
+    "Willing to vendor/pin an unmaintained MIT library instead of using an actively developed logger",
+    "Need low overhead specifically vs. synchronous std::fstream/fprintf-with-flush logging"
+  ],
+  "when_not_to_use": [
+    "Need macOS/BSD support (README: OS X unsupported, BSD only 'on the roadmap')",
+    "High log-argument volume from many parallel threads, since all formatting funnels through one background thread (README calls this out as a scalability limit)",
+    "Passing pointers/references to short-lived data without ensuring they outlive the flush (dangling-pointer risk by design)",
+    "Need guaranteed-precise float formatting: custom float-to-string algorithm mismatches the exact/shortest round-trip representation for roughly 0.6% of values per the manual's own stats",
+    "Want an actively maintained project: last commit 2021-04-10, open ThreadSanitizer data-race report (#35) unresolved"
+  ],
+  "integration": {
+    "form": "static lib (built via Make/CMake/Visual Studio; not header-only)",
+    "dependencies": "pthread (POSIX threads) on Linux; no other third-party deps for core library",
+    "min_toolchain": "C++11 (CMakeLists.txt sets CMAKE_CXX_STANDARD 11); GCC-compatible compiler or MSVC/Visual Studio",
+    "platforms": "Windows and Linux only; no macOS/OS X, BSD listed as roadmap-only; no stated architecture restriction beyond x86 cache-line-size assumptions in the buffer sizing docs",
+    "thread_safety": "Multiple threads may call write/debug/info/warn/error concurrently (lockless input queue); worker_thread() access for priority/affinity tuning is documented as unsafe to misuse (moving/detaching it breaks the library); an open issue (#35) reports ThreadSanitizer-flagged data races the maintainer has not resolved",
+    "drop_in_for_baseline": "partial — explain: not source-compatible with std::fstream/fprintf; requires constructing a writer + policy_log/severity_log object and using its typed write methods instead of ostream operators or printf"
+  },
+  "gotchas": [
+    "Passing log arguments by pointer/reference requires the referenced data to stay valid until the log is flushed or closed; prefer std::string/shared_ptr/unique_ptr for dynamic data",
+    "Crash safety requires explicit handling (panic_flush/crash_handler) since unflushed async data can be lost on crash, same class of issue as buffered fprintf but easier to overlook",
+    "Custom float-to-string formatter is not always the shortest round-trip representation: manual reports 98.5% exact match and 99.4% correct-but-sometimes-longer over 100M random values",
+    "worker_thread() exposes the internal std::thread for OS-level tuning (priority/affinity) but destructive operations on it (move/detach) will break the logger"
+  ],
+  "pick_this_over_siblings_when": "No siblings catalogued yet in this category target std::fstream/fprintf directly the way reckless does; CPath and FastReader address filesystem traversal and file reads, not logging, so they aren't substitutes for this use case.",
+  "verified_claims_summary": "First-party benchmarks (doc/performance.md, gcc 7.3.0, AMD Ryzen 7 2700X @3.7GHz, libstdc++) show reckless's caller-side latency far below std::fstream (flushed per line) and fprintf (fflush per call): about 41-44x lower under light periodic load, and up to ~5720x lower than fstream in the disk-I/O scenario, though this compares an async design against baselines that synchronously flush every line, not raw I/O throughput.",
+  "status_note": "Abandoned: last commit on master 2021-04-10, no newer maintenance activity found; MIT licensed and small enough to vendor, but an unresolved ThreadSanitizer data-race report (#35) and a still-open VS2019 compile-error issue (#45) are unpatched.",
+  "sources_read": [
+    "https://github.com/mattiasflodin/reckless",
+    "https://github.com/mattiasflodin/reckless/blob/master/doc/performance.md",
+    "https://github.com/mattiasflodin/reckless/blob/master/README.md",
+    "https://github.com/mattiasflodin/reckless/blob/master/doc/manual.md",
+    "https://github.com/mattiasflodin/reckless/blob/master/CMakeLists.txt",
+    "https://github.com/mattiasflodin/reckless (file tree via git trees API)",
+    "https://github.com/mattiasflodin/reckless/issues (all issues, state=all)",
+    "https://github.com/mattiasflodin/reckless/issues/35",
+    "https://github.com/mattiasflodin/reckless/blob/master/LICENSE.txt (per verification block)",
+    "https://github.com/mattiasflodin/reckless/blob/master/Tuprules.lua (per verification block)",
+    "https://github.com/mattiasflodin/reckless/blob/master/benchmarks/Tupfile.lua (per verification block)",
+    "https://github.com/mattiasflodin/reckless/blob/master/Makefile (per verification block)"
+  ],
+  "confidence": 0.8
+}

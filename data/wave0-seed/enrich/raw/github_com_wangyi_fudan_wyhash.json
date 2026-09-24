@@ -1,0 +1,45 @@
+{
+  "id": "https://github.com/wangyi-fudan/wyhash",
+  "one_liner": "Header-only 64-bit non-cryptographic hash + PRNG; about 9% faster bulk throughput than xxHash's XXH3.",
+  "what_it_does": "wyhash is a general-purpose non-cryptographic hash function for byte strings, bundled with a PRNG (wyrand), a 64-to-64 mixer (wyhash64), and uniform/Gaussian conversion helpers, all in a single C header (wyhash.h). The core call is wyhash(key, len, seed, secret), where secret is a caller-supplied array of 4 uint64_t values (a default _wyp is provided, or one can be generated per-process with make_secret()). This is a different call shape from a typical seed-only hash API, so it is not a drop-in swap for xxHash's XXH3 functions without adapting the call site.",
+  "how_it_is_fast": "The core primitive is a 128-bit multiply-and-xor-mix (_wymum/_wymix, \"MUM\"), implemented via __uint128_t on GCC/Clang or the _umul128 intrinsic on MSVC x64, so one multiply produces two mixed 64-bit halves per round. For inputs >=48 bytes the main loop is unrolled to run three interleaved MUM mixes per 48-byte chunk (three independent accumulator states), overlapping multiply latency across chunks instead of serializing one mix per 16 bytes. Short inputs (<=16 bytes) take a separate branch that reads overlapping 3/4/8-byte windows directly instead of looping, avoiding per-byte overhead on small keys.",
+  "when_to_use": [
+    "Bulk hashing of large buffers (the benchmarked case is 256KB keys) where a ~9% throughput edge over XXH3 matters at scale, e.g. content-addressed storage or dedup",
+    "Small/short keys (<=16 bytes), which get a dedicated fast path — this is why Go (1.17+), Zig, V, and Nim use it as their default map hash",
+    "C/C++ projects that want a single vendorable header with no build step, working on 32- or 64-bit, big- or little-endian, x86/aarch64",
+    "Internal hash tables or checksums where non-adversarial input is acceptable and ~62-bit (not full 64-bit) collision resistance is fine",
+    "Projects already comfortable adopting a library whose own maintainer is steering new users toward its successor (see status_note)"
+  ],
+  "when_not_to_use": [
+    "Hashing untrusted/adversarial input with the default secret — the built-in _wyp constant is public; use make_secret() to derive a per-process secret for hash-flood resistance, which the library does not do automatically",
+    "Anywhere full 64-bit collision resistance or a security review is required — the author states wyhash/wyrand are only about 62-bit collision resistant, per outside reports cited in the README",
+    "Generating very long random streams with wyrand — the author's own README says wyrand fails PractRand at 32TB/23 days, and issue #130 separately reported wyrand failing 64-bit 1-D collision tests",
+    "Using the separate 32-bit variant (wyhash32.h) on 4-byte keys from sparse/bitflip keysets — open issue #153 (filed 2026-02-27, still open) reports SMHasher3 failures there; this does not affect the 64-bit wyhash() function that was benchmarked here",
+    "Starting a brand-new project where you want the actively promoted state of the art — the wyhash README itself says the project 'has evolved into rapidhash' and points new adopters there"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none beyond the C standard library (stdint.h, string.h); <intrin.h> pulled in only for the MSVC x64 path",
+    "min_toolchain": "C99 / C++11-ish (stdint.h, static inline); relies on GCC/Clang __uint128_t or MSVC's _umul128 intrinsic for the 128-bit multiply, with a portable 32x32 fallback for other compilers",
+    "platforms": "x86-64, aarch64, and 32-bit systems; both little- and big-endian (explicit byteswap paths); GCC, Clang, MSVC, Intel C++",
+    "thread_safety": "not explicitly documented in the README; from reading wyhash.h, wyhash()/wyhash64() are pure functions with no shared/global mutable state and are safe to call concurrently, while wyrand()/w1rand()/make_secret() mutate a uint64_t* seed the caller owns, so they are only thread-safe if each thread uses its own seed",
+    "drop_in_for_baseline": "partial — explain: wyhash() requires an explicit 4x uint64_t secret argument (xxHash's XXH3 functions take just data/len/seed), so callers must change the call site, not just relink"
+  },
+  "gotchas": [
+    "Default secret (_wyp) is a fixed, publicly known constant baked into the header; generate your own with make_secret(seed, secret) if flood resistance matters",
+    "Only ~62-bit, not full 64-bit, collision resistance per the README's own limitations section",
+    "wyrand fails PractRand on very long streams (32TB, ~23 days) per the author's README",
+    "wyhash32.h (a separate, distinct file from the benchmarked 64-bit wyhash.h) currently fails SMHasher3 Sparse/Bitflip tests on 4-byte keys — open issue #153, unresolved as of 2026-08"
+  ],
+  "pick_this_over_siblings_when": "Pick wyhash over xxHash when the ~9% bulk-throughput edge (22,640.53 vs 20,853.74 MiB/s on the cited single-CPU run) is worth taking on a Tier-B, single-reference-machine result with no stated compiler/flags; xxHash (XXH3) is the safer default when you want a widely adopted, spec-documented hash with results reproduced across more hardware.",
+  "verified_claims_summary": "On the rurban/smhasher bulk-speed test (262144-byte keys, averaged across alignments 0-7) on the suite's AMD Ryzen 5 3350G 3.6GHz reference machine (compiler/flags not stated), wyhash measured 22,640.53 MiB/s versus xxHash's XXH3 at 20,853.74 MiB/s (~1.09x), City64 at 14,390.09 MiB/s (~1.57x), and Murmur3A at 3,027.30 MiB/s (~7.5x).",
+  "status_note": "Actively maintained (last commit 2026-03-23; 19 open issues, not archived), and public-domain (Unlicense) so it costs nothing to vendor, but the author's own README states wyhash 'has evolved into rapidhash,' its designated successor, so new adopters are explicitly pointed elsewhere.",
+  "sources_read": [
+    "https://github.com/wangyi-fudan/wyhash",
+    "https://github.com/wangyi-fudan/wyhash/blob/master/wyhash.h",
+    "https://github.com/wangyi-fudan/wyhash/blob/master/LICENSE",
+    "https://github.com/wangyi-fudan/wyhash/issues/153",
+    "https://github.com/wangyi-fudan/wyhash/issues/130"
+  ],
+  "confidence": 0.8
+}

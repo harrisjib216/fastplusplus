@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/simdjson/simdjson",
+  "one_liner": "SIMD-accelerated JSON parser with full UTF-8 validation; ~4x faster than RapidJSON, ~25x than nlohmann.",
+  "what_it_does": "Parses and validates JSON (RFC 8259) with SIMD instructions, full UTF-8 validation, and exact number parsing. Ships two front-ends: On-Demand (default) is a forward, lazy iterator over the document; DOM is a traditional parsed tree with random access. It is not a drop-in for RapidJSON's SAX/DOM API — callers write against `ondemand::parser`/`dom::parser` and navigate with `[]`, ranges, or key selectors, so porting requires rewriting access code.",
+  "how_it_is_fast": "Uses SIMD vector instructions to find structural characters, string boundaries, and numbers in bulk rather than byte-by-byte, splitting parsing into index-building and interpretation stages. The On-Demand front-end skips materializing a full DOM/tape, lazily interpreting bytes only as the caller touches them so unused fields/subtrees cost nothing. A runtime CPU-dispatch layer selects among icelake (AVX-512), haswell (AVX2), westmere (SSE4.2), arm64 (NEON), ppc64 (VSX/AltiVec), lsx/lasx (LoongArch), or a generic 64-bit fallback kernel, so one compiled binary runs optimally across chips.",
+  "when_to_use": [
+    "Large or numerous real-world JSON payloads (twitter.json-scale and up) where RapidJSON/nlohmann parsing throughput is the bottleneck",
+    "Single-pass extraction of a known set of fields, read in roughly document order (log/event pipelines, API response parsing)",
+    "x86-64 (SSE4.2+) or aarch64 targets where a runtime-CPU-dispatching binary is acceptable",
+    "NDJSON or streamed multi-document workloads via parse_many/iterate_many, optionally multithreaded",
+    "Need strict RFC 8259 + full UTF-8 validation with no correctness shortcuts"
+  ],
+  "when_not_to_use": [
+    "Random, out-of-order, or repeated access to the same keys with On-Demand — raises OUT_OF_ORDER_ITERATION or falls back to a much slower path (Glaze's independent ABC test measured On-Demand at 89 MB/s vs 1163 MB/s in-order)",
+    "You need a true drop-in replacement for RapidJSON's API — the iterator/On-Demand or DOM interface differs and calling code must change",
+    "Non-standard or very old embedded targets without a >=4KB page size or a supported compiler (GCC 7.4+/Clang 6+/VS2017+)",
+    "Float-heavy documents (e.g. GeoJSON) — decimal-to-binary float conversion caps throughput at a few hundred MB/s regardless of SIMD",
+    "Chips below SSE4.2/NEON/VSX — falls back to the generic kernel and loses most of the speedup"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none for the core library at runtime (bundles Dragonbox for float serialization and a Boost-licensed string_view shim for pre-C++17 compilers); the benchmark suite alone depends on RapidJSON/nlohmann/sajson/yyjson/etc.",
+    "min_toolchain": "C++11 minimum (GNU GCC 7.4+, LLVM Clang 6+, Xcode 11+, Visual Studio 2017+); C++17 unlocks padded_input convenience; C++20 unlocks u8string_view/ranges; C++26 unlocks reflection-based (de)serialization",
+    "platforms": "x86-64 (SSE4.2 'westmere' floor, AVX2 'haswell', AVX-512-VBMI2 'icelake' auto-selected at runtime), aarch64 (NEON), ppc64 (VSX/AltiVec, tested little-endian), LoongArch (LSX/LASX), plus a generic 64-bit fallback; also tested on big-endian s390x",
+    "thread_safety": "Single-threaded except parse_many/iterate_many, which may use secondary threads when built with thread support. One parser instance per thread is recommended; the On-Demand `document` is an iterator and is not thread-safe. Runtime CPU-detection dispatch itself is thread-safe, but relies on globals set up at process start, so using the library from background threads during main-thread teardown can be unsafe.",
+    "drop_in_for_baseline": "partial — explain: same problem domain (parse JSON to accessible values) but a different API shape (lazy On-Demand iterator, or a separate DOM tree type) than RapidJSON's SAX/DOM interface, so call sites need rewriting"
+  },
+  "gotchas": [
+    "On-Demand documents must generally be walked forward, once, in roughly key order; re-reading a field or skipping around triggers OUT_OF_ORDER_ITERATION or a slow path",
+    "Input must be a padded buffer (SIMDJSON_PADDING extra bytes); raw pointers/spans without padding aren't accepted directly (padded_string::load, the _padded literal, or padded_string_view handle this)",
+    "Exceptions are thrown by default on parse errors; the no-exception API/build path must be opted into explicitly",
+    "Debug builds can need hundreds of KB of stack; the README recommends turning on optimization or increasing stack size in threaded/limited-stack environments"
+  ],
+  "pick_this_over_siblings_when": "Pick simdjson over yyjson when you need the widest CPU/platform dispatch matrix (AVX-512 down through ARM/PPC/LoongArch) or the lazy On-Demand API for single-pass field extraction; yyjson's simpler in-situ DOM is easier to reason about and still beats RapidJSON by roughly 2x with less API surface. Pick simdjson over glaze when you can't build a static C++ struct/reflection schema for glaze to compile against, or don't want On-Demand's key-order sensitivity — glaze generates a schema-specific path and isn't subject to the same out-of-order penalty.",
+  "verified_claims_summary": "On GCC 10 -O3 on an unnamed 3.4 GHz Skylake chip, the README's rome.png chart (code in benchmark/) shows simdjson at roughly 2.2-3.2 GB/s against RapidJSON at roughly 0.4-0.5 GB/s. The peer-reviewed VLDB Journal 2019 paper pins the same comparison down with named hardware: on an Intel i7-6700 (Skylake) with GCC 9.1 -O3 -march=native, Table 10 shows simdjson parsing twitter.json at 2.2 GB/s vs RapidJSON at 0.45 GB/s (~4.9x) and RapidJSON insitu at 0.72 GB/s (~3.1x).",
+  "status_note": "Actively maintained (last commit 2026-09-23, 24.3k stars, used in Node.js, ClickHouse, Meta Velox, Apache Doris, Milvus, StarRocks and others); dual Apache-2.0/MIT licensed and small enough to vendor as a two-file source drop.",
+  "sources_read": [
+    "https://github.com/simdjson/simdjson",
+    "https://github.com/simdjson/simdjson#performance-results",
+    "https://github.com/simdjson/simdjson/blob/master/doc/basics.md",
+    "https://github.com/simdjson/simdjson/blob/master/doc/implementation-selection.md",
+    "https://github.com/simdjson/simdjson/blob/master/doc/performance.md",
+    "https://github.com/simdjson/simdjson/tree/master",
+    "https://github.com/simdjson/simdjson/issues?q=out+of+order",
+    "https://github.com/simdjson/simdjson/issues?q=CVE",
+    "https://github.com/simdjson/simdjson/issues?q=not+recommended"
+  ],
+  "confidence": 0.85
+}

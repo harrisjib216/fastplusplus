@@ -1,0 +1,47 @@
+{
+  "id": "https://github.com/boostorg/algorithm",
+  "one_liner": "Header-only Boyer-Moore / Boyer-Moore-Horspool string searchers, ~4-5x faster than std::search on long patterns.",
+  "what_it_does": "Provides substring search over random-access iterator ranges: boyer_moore_search / boyer_moore_horspool_search take corpus and pattern iterator pairs like std::search but return a std::pair of iterators marking the match's start and end. It also ships reusable functor classes (boyer_moore, boyer_moore_horspool) that build the skip table once from a pattern and can be applied to multiple corpora via operator(). Both forms work over any random-access iterator, not just char/byte data, provided the pattern and corpus share the same value_type.",
+  "how_it_is_fast": "Both algorithms precompute a bad-character skip table from the pattern (full Boyer-Moore adds a good-suffix table) so on a mismatch the search can jump ahead by more than one position instead of std::search's linear rescan. The skip table is a fixed-size array (O(2^CHAR_BIT) entries) for small numeric value types like unsigned char, or a boost::unordered_map/std::unordered_map otherwise, giving O(pattern length + alphabet size) preprocessing. Horspool drops the good-suffix table for cheaper preprocessing at the cost of slightly weaker worst-case skips.",
+  "when_to_use": [
+    "Long patterns (tens to hundreds of elements) searched against large corpora, the shape of the PR's benchmark (105/43/91-entry patterns over a 2.76M-entry corpus)",
+    "The same pattern is searched repeatedly against many or large corpora: construct a boyer_moore/boyer_moore_horspool object once and reuse operator() to amortize the skip-table build",
+    "Pre-C++17 toolchains, or any C++03/11/14 codebase that can take a Boost dependency but can't use std::boyer_moore_searcher",
+    "Searching over random-access ranges of non-char element types with comparable (and ideally hashable) values, not just byte strings"
+  ],
+  "when_not_to_use": [
+    "Short, one-off pattern searches — the skip-table build can cost more than a plain linear scan for a single small search",
+    "C++17+ code already reaching for std::boyer_moore_searcher/std::boyer_moore_horspool_searcher, which is the same algorithm with no Boost dependency",
+    "Forward-only or input iterators — both searchers require random-access iterators, unlike std::search",
+    "Mixed-type pattern/corpus comparisons — a BOOST_STATIC_ASSERT requires identical value_type on both iterators",
+    "Workloads wanting SIMD-level throughput on x86/ARM byte strings — this is a scalar algorithm; StringZilla or sse4-strstr target that instead"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "Boost.Config, Boost.Assert, Boost.StaticAssert, Boost.Range, Boost.Core, Boost.TypeTraits, Boost.Array, and Boost.Unordered (all header-only Boost libraries; part of full Boost distributions)",
+    "min_toolchain": "C++03 (README lists 'Properties: C++03, Header-only'; falls back to boost::unordered_map when BOOST_NO_CXX11_HDR_UNORDERED_MAP is defined, std::unordered_map otherwise)",
+    "platforms": "any (portable C++, no SIMD or architecture-specific code observed in the headers read)",
+    "thread_safety": "not documented; operator() on the boyer_moore/boyer_moore_horspool functor classes is const and the skip tables are built once in the constructor, but the library makes no explicit thread-safety guarantee",
+    "drop_in_for_baseline": "partial — explain: the free-function form takes corpus/pattern iterator pairs in the same order as std::search, but returns a std::pair<iterator,iterator> (match start and end) instead of std::search's single iterator, and requires random-access iterators where std::search accepts forward iterators"
+  },
+  "gotchas": [
+    "Random-access iterators are required for both corpus and pattern; forward/input iterators that std::search accepts will not compile",
+    "Pattern and corpus iterators must share the same value_type, enforced at compile time via BOOST_STATIC_ASSERT",
+    "Non-numeric or wide value types fall back to an unordered_map-based skip table, which is slower to build and probe than the fixed array table used for byte-like data",
+    "The much larger Musser-Nishanov searcher proposed in the same PR #25 (still open/unmerged) had a reported segfault on large real-world corpora during development; that bug is in the unmerged code, not the mainline boyer_moore/boyer_moore_horspool searchers this benchmark measures"
+  ],
+  "pick_this_over_siblings_when": "Pick this over sse4-strstr or StringZilla when the workload needs a portable, non-SIMD, header-only implementation that works over arbitrary random-access element types (not just bytes) or that reuses a prebuilt search object across many corpora; pick StringZilla or sse4-strstr instead when the goal is maximum single-call byte-string throughput on x86/ARM via SIMD.",
+  "verified_claims_summary": "PR #25 (opened 2016 by Jeremy Murphy, still open/unmerged) republishes edited test/search_test2.cpp output on a 2,756,252-entry random 8-bit corpus: std::search 0.4848s vs boyer_moore_search 0.1171s (~4.1x) and boyer_moore_horspool_search 0.1076s (~4.5x) for a 105-entry pattern found mid-corpus, and std::search 1.028s vs boyer_moore_horspool_search 0.1825s (~5.6x) for a 91-entry not-found pattern; compiler, flags, CPU model, and standard library are not stated, and the PR author notes ~5-10% run-to-run variance.",
+  "status_note": "Actively maintained mainline Boost.Algorithm code (develop branch last commit 2026-08-05), BSL-1.0 licensed and header-only, trivial to vendor a single header pair; the PR these benchmark numbers come from has sat open and unmerged since 2016 and proposes a different, unrelated Musser-Nishanov searcher.",
+  "sources_read": [
+    "https://github.com/boostorg/algorithm",
+    "https://github.com/boostorg/algorithm/pull/25",
+    "https://github.com/boostorg/algorithm/tree/develop/test",
+    "https://github.com/boostorg/algorithm/blob/develop/include/boost/algorithm/searching/boyer_moore.hpp",
+    "https://github.com/boostorg/algorithm/blob/develop/include/boost/algorithm/searching/boyer_moore_horspool.hpp",
+    "https://github.com/boostorg/algorithm/blob/develop/include/boost/algorithm/searching/detail/bm_traits.hpp",
+    "https://github.com/boostorg/algorithm/blob/develop/test/search_test2.cpp",
+    "https://github.com/boostorg/algorithm/issues?q=boyer_moore"
+  ],
+  "confidence": 0.6
+}

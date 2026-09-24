@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/Nikhil0250/trigno_simd_cpp",
+  "one_liner": "Piecewise rational sin/cos/tan approximation using AVX2 FMA plus a fast inverse-sqrt hack; beats scalar libm sin/cos/tan.",
+  "what_it_does": "Scalar-in, scalar-out replacement for std::sin/std::cos/std::tan on doubles: proposed_sin/cos/tan(double) -> double share the libm signature, so call sites are drop-in, but results are approximate rather than IEEE-correctly-rounded. Each call reduces the input angle to one of 7 fixed ranges (angle_reduction.cpp), then evaluates a piecewise rational approximation selected for that range. Despite using __m256d AVX2 intrinsics throughout, the public API handles one angle per call: the scalar is broadcast into all 4 lanes and only lane 0 is read back, so there is no batched multi-angle entry point.",
+  "how_it_is_fast": "Replaces libm's accurate but branchy range reduction and polynomial/CORDIC evaluation with a cheap piecewise rational fit: angle reduction picks 1 of 7 precomputed coefficient sets (SinHelperParams/CosHelperParams/TanHelperParams), then computes (linear numerator) * fastInverseSqrt(quadratic denominator) via AVX2 FMA (_mm256_fmadd_pd). The reciprocal-sqrt step uses a Quake III-style fast inverse square root (magic constant 0x5fe6eb50c7b537a9 plus one Newton-Raphson refinement) instead of hardware division or sqrt, trading accuracy for fewer cycles.",
+  "when_to_use": [
+    "Scalar sin/cos/tan calls where ~3-4 significant digits (max rel error ~0.004; tan max abs error 0.27 near asymptotes) is acceptable, e.g. graphics, audio, game logic, DSP.",
+    "x86-64 targets with AVX2+FMA, or FPGA/HLS synthesis (vitis_hls_code/ ships Vitis HLS variants of the same algorithm).",
+    "Call sites currently latency-bound on libm sin/cos/tan, willing to trade IEEE correctness for ~4.4-5.5x fewer cycles per call.",
+    "OK vendoring a handful of .h/.cpp files directly, since there is no packaged library to link."
+  ],
+  "when_not_to_use": [
+    "Need IEEE-correctly-rounded or tightly error-bounded trig (scientific/numeric code checked against std::sin/cos/tan).",
+    "Need real batch/vector throughput over arrays of independent angles: the public API is one angle in, one double out, with no array entry point despite internal AVX2 use.",
+    "Angles very near odd multiples of pi/2 for tan: the function returns +infinity via explicit masking rather than a precise blow-up value.",
+    "Non-x86 targets or CPUs without AVX2/FMA: no scalar or portable fallback is present in the source.",
+    "Need a mature, widely-used dependency: 7 stars, single first-party arXiv preprint (not peer-reviewed), no CI/tests, no install target."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (only <immintrin.h> AVX2/FMA compiler intrinsics)",
+    "min_toolchain": "C++17; g++ (developed/tested with MinGW-w64 g++ on Windows; CMakeLists.txt requires CMake >=3.10)",
+    "platforms": "x86-64 with AVX2 and FMA (uses __m256d/_mm256_* intrinsics); separate Vitis HLS C++ sources exist for FPGA synthesis in vitis_hls_code/",
+    "thread_safety": "not documented; the three parameter tables (sinparams/cosparams/tanparams) are read-only after static initialization and the functions hold no other shared state, so concurrent calls look safe by inspection",
+    "drop_in_for_baseline": "partial — same double(double) signature as std::sin/cos/tan, but not numerically interchangeable (max rel error ~0.004 for sin/cos, tan max abs error 0.27 near asymptotes; not IEEE correctly rounded)"
+  },
+  "gotchas": [
+    "Each call broadcasts the single scalar angle into all 4 AVX2 lanes and reads back only lane 0 — SIMD width is not used to batch multiple angles, so the reported per-call speedup may not translate into per-element throughput on arrays.",
+    "tan() near odd multiples of pi/2 is special-cased to return +infinity via an AVX2 compare/blend, not computed from the rational approximation.",
+    "Uses a Quake-style fast inverse square root (bit-hack + 1 Newton-Raphson step) in place of sqrt/division, an extra approximation layer on top of the rational fit.",
+    "No CMake install or library target — the build only produces a benchmark executable (bin/trigno_benchmark.exe), so consumers copy the include/ and relevant src/ files into their own project."
+  ],
+  "pick_this_over_siblings_when": "Pick this over SLEEF or VDT only if you specifically want this piecewise-rational-plus-fast-inverse-sqrt technique or its FPGA/HLS variant; SLEEF gives true 4-wide vectorized libm replacements with selectable ulp accuracy, and VDT is an older, better-documented scalar libm-vs-SIMD comparison with wider function coverage — both are more mature (more usage, tests) than this 7-star single-paper repo.",
+  "verified_claims_summary": "arXiv 2502.10831 (Goyal & Arora) measured mean speed-up vs 'inbuilt' std::sin/cos/tan of 5.49x/5.52x/4.44x over 1000 random angles in [-1e6, 1e6] (seed 2024873), each called 1e5 times through a function pointer, built with g++ -std=c++17 -mavx2 -mfma -O3 -march=native on an AMD Ryzen 9 5900HX under Windows/MinGW-w64. This is scalar per-call latency against the MinGW CRT libm, not glibc, and not array/batch throughput.",
+  "status_note": "Actively maintained (last commit 2026-01-29 added tan asymptote masking) and Apache-2.0 licensed, but only 7 stars, no CI/tests, and no packaged library target — usability is 'copyable' source, not a dependency to pull in.",
+  "sources_read": [
+    "https://github.com/Nikhil0250/trigno_simd_cpp",
+    "https://github.com/Nikhil0250/trigno_simd_cpp/blob/main/README.md",
+    "https://github.com/Nikhil0250/trigno_simd_cpp/blob/main/CMakeLists.txt",
+    "https://github.com/Nikhil0250/trigno_simd_cpp/blob/main/include/proposed_trigno.h",
+    "https://github.com/Nikhil0250/trigno_simd_cpp/blob/main/src/proposed_trigno.cpp",
+    "https://github.com/Nikhil0250/trigno_simd_cpp/blob/main/LICENSE",
+    "https://arxiv.org/html/2502.10831v1"
+  ],
+  "confidence": 0.72
+}

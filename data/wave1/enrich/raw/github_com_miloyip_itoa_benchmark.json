@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/miloyip/itoa-benchmark",
+  "one_liner": "SSE2-vectorized itoa for uint32/int32/uint64/int64 in Milo Yip's benchmark repo; 25.51x faster than sprintf on 9-10 digit values.",
+  "what_it_does": "Four SSE2-accelerated functions (u32toa_sse2, i32toa_sse2, u64toa_sse2, i64toa_sse2) convert 32-bit and 64-bit signed/unsigned integers to null-terminated decimal ASCII, writing directly into a caller-provided char buffer. It lives as one implementation file (src/sse2.cpp) inside Milo Yip's itoa-benchmark shootout repo alongside a dozen other itoa strategies (naive, lut, branchlut, countlut, etc.), not as a standalone package. The API shape mirrors classic itoa()-style functions, not sprintf's format-string interface or std::to_chars's pointer/error-code return.",
+  "how_it_is_fast": "For short values (<10^8 for u32, <10^16 for u64) the code falls back to the same digit-pair lookup table (gDigitsLut) used by the repo's lut/countlut/branchlut entries -- the SIMD path there is wrapped in #if 0 because, per the author's own comment, experiments found SSE2 slower in that range. For 9-10 digit u32 values and all u64 conversions it runs Wojciech Mula's SSE2 algorithm (Convert8DigitsSSE2): a chain of SIMD multiply-high/shift operations divides 8 decimal digits by powers of ten in parallel in a 128-bit register, packs the results into ASCII bytes with _mm_packus_epi16, then uses a movemask/ctz trick to trim leading zeros.",
+  "when_to_use": [
+    "Hot-path serialization of high-volume 32-bit or especially 64-bit integers to decimal ASCII (logging, JSON/CSV writers, wire protocols) where sprintf's format-string parsing is the bottleneck.",
+    "Your integers are frequently large (9-10 digit uint32_t, or most uint64_t/int64_t values) -- the only range where this file's SIMD path actually runs instead of falling back to scalar/LUT code.",
+    "x86 or x86-64 targets that guarantee SSE2 (default on effectively all x86-64 CPUs); no ARM or other-arch support needed.",
+    "You're willing to hand-extract two files (sse2.cpp + digitslut.h) from a benchmark harness, strip the REGISTER_TEST macro/test.h dependency, and own buffer-size correctness yourself since there is no bounds checking."
+  ],
+  "when_not_to_use": [
+    "You need a maintained, versioned library rather than one file inside a 10+-implementation benchmark shootout with issues and PRs open since 2016 and no formal releases.",
+    "Non-x86 targets: the file compiles to nothing outside `#if defined(i386) || __amd64 || _M_IX86 || _M_X64`, with no portable fallback provided.",
+    "Values are mostly 1-8 decimal digits -- the SIMD kernel is dead code there by the author's own admission, so you get the same LUT-pair scalar performance as branchlut/countlut without SSE2's added complexity.",
+    "You need std::to_chars-style safety (returned end pointer, error reporting, no overflow) -- this API just writes to a raw buffer with zero bounds checking.",
+    "You want the speedup verified independently or on current hardware -- the only published numbers are first-party, from a Core i7 920 (2010-era) with Visual C++ 2013, and the std:: baselines (ostringstream/to_string) were never enabled for this table."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "digitslut.h (200-byte const lookup table, in-repo); test.h is only needed for the REGISTER_TEST self-registration macro used by the benchmark harness and must be stripped/replaced to vendor standalone",
+    "min_toolchain": "not documented; source uses <cassert>, <stdint.h>, and <emmintrin.h> SSE2 intrinsics with no C++11-only syntax, so most C++ toolchains with SSE2 intrinsic support should compile it (published results used Visual C++ 2013)",
+    "platforms": "x86/x86-64 only, guarded by #if defined(i386) || defined(__amd64) || defined(_M_IX86) || defined(_M_X64); requires SSE2 (baseline on all x86-64; needs explicit enabling on some 32-bit x86 toolchains); no fallback for other architectures in this file",
+    "thread_safety": "not documented; by inspection the functions are stateless, writing only to the caller-supplied buffer and reading only from const static tables, so concurrent calls on distinct buffers should be safe",
+    "drop_in_for_baseline": "partial — explain: different call shape than sprintf (writes null-terminated ASCII into a caller buffer, no format string, no returned length, no bounds checking), so it's a manual per-call-site swap rather than a signature-compatible replacement"
+  },
+  "gotchas": [
+    "Issue #8 (closed) flagged that i32toa_sse2/i64toa_sse2 previously computed `value = -value` on the most-negative int, which is signed-overflow UB and reportedly segfaulted on g++ 4.9.1; the code read this session already uses the recommended two's-complement fix (`u = ~u + 1`).",
+    "No bounds checking: caller must size the buffer correctly (worst case ~11 bytes incl. sign/null for i32, ~21 for i64) or risk a buffer overflow.",
+    "The vectorized 8-digit SSE2 kernel (Convert8DigitsSSE2) is dead code for u32toa values under 100,000,000 -- that branch is behind #if 0 with a comment that SSE2 measured slower there, so most 1-8-digit conversions actually run the same scalar/LUT-pair code as the branchlut/countlut entries, not SIMD.",
+    "Uses 16-byte-aligned static constant tables (ALIGN_PRE/ALIGN_SUF macros); if copy-pasting only part of the file, bring the matching aligned constants along."
+  ],
+  "pick_this_over_siblings_when": "Most siblings in this category target floating-point/general charconv (Boost.Charconv, c4core, fast_double_parser, fpconv, double-conversion, milo Grisu2) or a broader iostream replacement (rigtorp CharConv, fast_io, stb_sprintf); pick this one specifically when you want a SIMD kernel for many-digit unsigned/signed 32- or 64-bit integers on x86 and are fine hand-extracting it from a benchmark harness -- jeaiii/itoa is the closer apples-to-apples sibling (also integer-only, from a similar shootout) but is header-only, scalar, and easier to vendor without SSE2 intrinsics.",
+  "verified_claims_summary": "On the repo's own README table (Core i7 920 @2.67GHz, Visual C++ 2013, Win64 release build), the SSE2 u32toa implementation averages 7.614 ns per call vs sprintf's 194.225 ns across the sequential 1-10 digit benchmark (100,000 reps/group, min of 10 trials) -- a 25.51x speedup, ahead of branchlut (23.04x) and countlut (19.57x) in the same table; std::ostringstream/std::to_string are compiled out by default (RUN_CPPITOA macro) and have no published numbers on this page.",
+  "status_note": "Not a maintained library in its own right: it's one implementation file inside a community benchmark repo that still gets sporadic commits/PRs (last push 2025-02-10) but has open issues and PRs dating back to 2016 and no versioned releases; MIT-licensed and small (~250 lines plus a header), so it's cheap to vendor and re-audit yourself.",
+  "sources_read": [
+    "https://github.com/miloyip/itoa-benchmark",
+    "https://github.com/miloyip/itoa-benchmark/blob/master/readme.md",
+    "https://github.com/miloyip/itoa-benchmark/blob/master/src/sse2.cpp",
+    "https://github.com/miloyip/itoa-benchmark/blob/master/src/test.h",
+    "https://github.com/miloyip/itoa-benchmark/blob/master/src/digitslut.h",
+    "https://github.com/miloyip/itoa-benchmark/blob/master/license.txt",
+    "https://github.com/miloyip/itoa-benchmark/issues/8",
+    "https://github.com/miloyip/itoa-benchmark/issues",
+    "https://github.com/miloyip/itoa-benchmark/pulls"
+  ],
+  "confidence": 0.6
+}

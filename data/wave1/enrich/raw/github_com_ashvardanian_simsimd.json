@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/ashvardanian/simsimd",
+  "one_liner": "Header-only SIMD kernel library beating GCC's auto-vectorized f16 loops in dot product and distance metrics 20-118x.",
+  "what_it_does": "NumKong (formerly SimSIMD) is a header-only library of 2,000+ SIMD kernels for dot products, distance metrics, and geospatial/geometric operations across 15+ numeric types, from 4-bit integers to 128-bit complex numbers. It targets code that would otherwise be a hand-rolled reduction loop or a call through std::inner_product/std::transform_reduce over float/half arrays. The API is a flat C function surface (nk_*) plus C++ template wrappers, with separate Python, Rust, JS, Go, and Swift bindings; it is not a drop-in replacement for <numeric> algorithms — call sites must be rewritten against NumKong's own functions.",
+  "how_it_is_fast": "Runtime CPU-feature dispatch selects a kernel per architecture (AVX-512-FP16, F16C, SVE, VNNI, AMX/SME) instead of relying on the compiler to auto-vectorize a scalar loop, and low-precision types get algorithmic transforms (lookup tables, algebraic domain shifts, widened-accumulator FMA) that scalar auto-vectorization does not synthesize. Masked loads (e.g. _mm512_maskz_loadu_ps, svld1_f32) replace the usual unrolled-body-plus-scalar-tail pattern, so remainder elements run the same arithmetic path as the SIMD body. The library deliberately avoids source-level loop unrolling, leaning on out-of-order execution and register renaming instead, to control binary size and compile time across 1,500+ kernel endpoints.",
+  "when_to_use": [
+    "Single- or half-precision (f16/bf16/e4m3) dot product, cosine distance, squared Euclidean, or Jensen-Shannon divergence over vectors, where GCC/Clang auto-vectorization of a scalar loop is the realistic alternative",
+    "Need mixed-precision accumulation (f16->f32, i8->i32) to avoid the silent overflow a naive same-type reduction would hit",
+    "Cross-platform kernels wanted from one header-only source: x86 (AVX2/AVX-512), Arm (NEON/SVE), RISC-V, WASM",
+    "Caller already manages its own threading and wants a numerics layer with no hidden thread pool",
+    "Small binary footprint matters (Python wheels, npm, Rust crates) versus linking a full BLAS"
+  ],
+  "when_not_to_use": [
+    "Need a literal drop-in for std::inner_product/std::transform_reduce call sites — the API differs and requires rewriting",
+    "f32-only workloads on GCC: GCC already auto-vectorizes plain float loops reasonably well (3,810 K/s in the README's own f32 row), so the large multipliers shown are f16-specific, not universal",
+    "Trigonometric/element-wise kernels (sin/cos/atan): the README only benchmarks those against NumKong's own scalar reimplementation, not against std::sin/cos, so no verified std:: comparison exists for that portion",
+    "Extreme-magnitude inputs through the serial fallback path: open bug (#384) shows nk_euclidean_f64_serial returns 0 after fp64 overflow",
+    "Need C++ exceptions for error handling: the library passes by pointer and does not throw"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none for the core C/C++ headers; pthreads (via CMake's Threads package) for optional threading helpers",
+    "min_toolchain": "C++20 for the C++ layer, C99 for the C layer (include/README.md); CMake for prebuilt/shared-lib builds",
+    "platforms": "x86-64 (SSE/AVX2/AVX-512/F16C/VNNI), Arm (NEON/SVE, AMX/SME on supporting chips), RISC-V, LoongArch, Power, WebAssembly; Linux, macOS, Windows, Android for the C/C++ package",
+    "thread_safety": "No hidden thread pool; the library does not own threads. nk_configure_thread() must be called once per thread before using AMX-accelerated ops. Designed to compose with caller-managed std::thread, ForkUnion, or any external scheduler (README 'Threading Model' / 'Parallelism & Multi-Threading').",
+    "drop_in_for_baseline": "false — different function surface (nk_* C functions / C++ template wrappers), not call-compatible with std::inner_product/std::transform_reduce"
+  },
+  "gotchas": [
+    "Open bug: nk_euclidean_f64_serial returns 0 instead of the correct distance after fp64 overflow on extreme-magnitude inputs (issue #384, reproduced on v7.8.2)",
+    "macOS arm64 Python wheel reported loading a second libomp runtime and crashing alongside PyTorch (issue #373), despite the core README's 'no hidden thread pool' claim — appears tied to an optional/bundled component, not the header-only C++ core",
+    "nk.moments reported ~30x slower on N-D arrays than on a flattened 1D view of the same data (issue #336) — memory layout matters for the reduction kernels",
+    "No exceptions: errors are communicated by return value/pointer, not C++ exceptions"
+  ],
+  "pick_this_over_siblings_when": "Pick NumKong over the trig-focused siblings (SLEEF, FABE13-HX, fmath, VDT, fast_math_cpp, trigno_simd_cpp) when the workload is dot-product/distance/reduction linear algebra rather than elementwise transcendental functions, since those all target std::sin/cos/exp/log while NumKong's verified numbers here cover inner product, cosine distance, squared Euclidean, and JS divergence. Pick Axiom or LibRapid instead when a tensor/array-expression API is wanted rather than a flat kernel-call API.",
+  "verified_claims_summary": "On Intel Sapphire Rapids, single-threaded, NumKong's f16 kernels beat a scalar f16 loop auto-vectorized by GCC 12 (-O3 -march=native -ffast-math per the author's blog; flags not stated in the README itself) by 31x (inner product), 20x (cosine distance), 36x (squared Euclidean distance), and 118x (Jensen-Shannon divergence), per the README's first-party 'Auto-Vectorization & Loop Unrolling' table. This is not a benchmark against a literal std::inner_product/std::transform_reduce call.",
+  "status_note": "Actively maintained (default-branch HEAD commit 2026-09-01, ~1,894 stars, not archived) and Apache-2.0 licensed; the header-only C/C++ core is copyable/vendorable on its own. The project renamed from SimSIMD to NumKong, and github.com/ashvardanian/SimSIMD now redirects to github.com/ashvardanian/NumKong.",
+  "sources_read": [
+    "https://github.com/ashvardanian/NumKong",
+    "https://github.com/ashvardanian/NumKong/blob/main/README.md",
+    "https://github.com/ashvardanian/NumKong/blob/main/include/README.md",
+    "https://github.com/ashvardanian/NumKong/issues/384",
+    "https://github.com/ashvardanian/NumKong/issues/356",
+    "https://github.com/ashvardanian/NumKong/issues/358",
+    "https://github.com/ashvardanian/NumKong/issues/360",
+    "https://github.com/ashvardanian/NumKong/issues/373",
+    "https://github.com/ashvardanian/NumKong/issues/371",
+    "https://github.com/ashvardanian/NumKong/issues/333",
+    "https://github.com/ashvardanian/NumKong/issues/336",
+    "https://github.com/ashvardanian/NumKong/commits/main"
+  ],
+  "confidence": 0.65
+}

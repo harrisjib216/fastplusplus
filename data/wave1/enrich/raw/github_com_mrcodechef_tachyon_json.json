@@ -1,0 +1,45 @@
+{
+  "id": "https://github.com/mrcodechef/tachyon.json",
+  "one_liner": "Single-header AVX2 JSON parser under a proprietary license; benchmarks nlohmann/simdjson but times only its structural-bitmask build, not full parsing.",
+  "what_it_does": "Tachyon is a single-header C++20/23 JSON library with a Tachyon::json/Tachyon::Document API shaped like nlohmann (operator[], .get<T>(), .dump(), TACHYON_DEFINE_TYPE_NON_INTRUSIVE reflection macros), not a drop-in replacement. Document::parse_view() builds a 'structural bitmask' index over the input buffer without allocating any value nodes; json::operator[]/at() lazily walk that bitmask via a Cursor and only materialize a real std::map/std::vector DOM when a node is mutated or otherwise forced. CBOR/MessagePack entry points exist but throw std::runtime_error, and bare JSON numbers are parsed only through std::from_chars<int64_t> in both the lazy accessor and materialize(), so there is no path that decodes a double from source text.",
+  "how_it_is_fast": "The structural scan (SIMD::compute_structural_mask) loads 128 bytes at a time into four 256-bit AVX2 registers, uses a PSHUFB (_mm256_shuffle_epi8) nibble lookup table to classify bytes as quote/backslash/structural in one pass, and derives a per-32-byte token-boundary bitmask with _mm256_movemask_epi8. String/escape state is tracked with a branchless XOR-prefix-sum over the quote bitmask rather than a byte-by-byte state machine, falling back to a scalar loop only when a chunk contains a backslash. Because parse_view() stops at building this index and never allocates or decodes individual values, the benchmarked 'parse' step skips the DOM construction that nlohmann, simdjson OnDemand, and Glaze all pay for in the same loop -- which accounts for most of the measured gap.",
+  "when_to_use": [
+    "Read-heavy code that only probes a few keys/values from a large document via Cursor-based lazy lookup and never needs a materialized DOM",
+    "x86-64 deployments where AVX2 is guaranteed and build flags can be tuned per machine (e.g. -march=native)",
+    "Studying/benchmarking a PSHUFB structural-classification + branchless quote-escape-bitmask technique, given the license blocks reusing the code itself",
+    "Data that is only integers, strings, and booleans -- no fractional numbers anywhere in the document",
+    "Throwaway internal tooling where a 0-star, single-maintainer, unlicensed-for-redistribution header is acceptable"
+  ],
+  "when_not_to_use": [
+    "Any JSON containing floating-point values: materialize() and the lazy number accessor both parse bare numbers as int64_t via std::from_chars, so \"3.14\" silently becomes 3, and dump() has no serialization case for the double variant (a json built from a double prints the literal string \"null\")",
+    "Anything needing portability: the scan hard-requires AVX2 (_mm256_* intrinsics) with no scalar fallback and no runtime CPU dispatch like simdjson's -- it won't build/run on non-AVX2 x86 or ARM",
+    "Commercial or open-source products you need to redistribute, fork, or modify -- the TACHYON PROPRIETARY SOURCE LICENSE v1.0 forbids redistribution and forbids modifying the ASM/SIMD kernels",
+    "CBOR or MessagePack support -- from_cbor()/from_msgpack() are stubs that throw std::runtime_error",
+    "Trusting the throughput numbers as apples-to-apples: the README times Tachyon's index-only parse_view() against nlohmann's/simdjson's/glaze's full value decode, runs nlohmann for only 10 iterations vs 1000 for Tachyon/simdjson (README claims uniform 'median of 1000') and has no CPU model, compiler version, or public CI run behind the numbers"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none for the library itself (bench_scientific.cpp separately pulls in nlohmann/json, simdjson, and Glaze only for the comparison harness)",
+    "min_toolchain": "C++20 minimum (uses <concepts>, std::countr_zero/std::popcount from <bit>, string_view); README badge says C++20 but the shipped Makefile compiles the benchmark with -std=c++23 -O3 -march=native -flto -- unclear if C++23 is actually required by Tachyon.hpp itself",
+    "platforms": "x86-64 with AVX2 required (immintrin.h 256-bit intrinsics: _mm256_shuffle_epi8, _mm256_movemask_epi8, etc.); no aarch64/NEON path and no runtime feature detection, so it must be compiled for an AVX2-capable target",
+    "thread_safety": "Not documented. A parsed Document is held behind a std::shared_ptr and read through a Cursor, which looks safe for concurrent read-only lazy lookups, but json::materialize() mutates a node's std::variant in place with no synchronization, so concurrently materializing the same json object from multiple threads is unsafe.",
+    "drop_in_for_baseline": "false -- different namespace/types (Tachyon::json vs nlohmann::json), no double/float decoding, no CBOR/MessagePack, error handling via out_of_range/runtime_error rather than nlohmann's exception hierarchy"
+  },
+  "gotchas": [
+    "Materializing to DOM (or calling as_int64() on any lazy node) parses every bare number as int64_t via std::from_chars, silently truncating fractional values (3.14 -> 3); there is no reachable path that produces a double from parsed text",
+    "json::dump() has no case for the double variant -- a json constructed from a C++ double (e.g. json(3.14)) serializes to the literal string \"null\"",
+    "No scalar/fallback path for non-AVX2 hardware: compute_structural_mask and skip_whitespace assume 256-bit AVX2 registers are available at compile time",
+    "from_cbor()/from_msgpack() exist as API stubs and always throw std::runtime_error(\"... not fully implemented\")"
+  ],
+  "pick_this_over_siblings_when": "Rarely: the catalogued siblings (cjson.cpp, json.cpp, DAW JSON Link, utl::json) all measure the same operation on both sides of their comparison and ship under permissive licenses. Tachyon's index-only benchmark isn't measuring the same thing as a full nlohmann/simdjson parse, and its DOM path silently mangles floating-point data, so pick it only to study the AVX2 structural-bitmask/PSHUFB technique in isolation -- not for production parsing, redistribution, or any dataset with fractional numbers.",
+  "verified_claims_summary": "README claims Tachyon's parse_view() (builds only a structural bitmask index, no value materialization) reaches 4,577 MB/s on a 25MB in-memory generated array and 5,585 MB/s on canada.json, vs simdjson's ondemand parser.iterate() at 1,886/3,541 MB/s (~2.4x/~1.6x) and nlohmann::json's full json::parse() DOM build at 25/31 MB/s (~183x/~180x), built with g++ -std=c++23 -O3 -march=native -flto (compiler version unstated) on an unspecified Intel Xeon (Haswell). The harness runs 1000 iterations for Tachyon and simdjson, 100 for Glaze, and only 10 for nlohmann, despite the README stating a uniform 'median of 1000 iterations'.",
+  "status_note": "Repo history spans only 2026-01-02 to 2026-01-04 (created and last pushed within days of each other), 0 stars, and the proprietary license permits free use but forbids redistribution, forking, or modifying the SIMD kernels -- reference/study-only despite counting as 'active' under a 12-month recency rule.",
+  "sources_read": [
+    "https://github.com/mrcodechef/Tachyon.JSON",
+    "https://github.com/mrcodechef/Tachyon.JSON/blob/main/README.md",
+    "https://github.com/mrcodechef/Tachyon.JSON/blob/main/Makefile",
+    "https://github.com/mrcodechef/Tachyon.JSON/blob/main/bench_scientific.cpp",
+    "https://github.com/mrcodechef/Tachyon.JSON/blob/main/Tachyon.hpp"
+  ],
+  "confidence": 0.25
+}

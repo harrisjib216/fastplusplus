@@ -1,0 +1,47 @@
+{
+  "id": "https://github.com/MengRao/str",
+  "one_liner": "Fixed-capacity char-array type with SIMD-accelerated equality, compare, and fixed-width integer/string conversion, beating std::string and stoi/to_string in author benchmarks.",
+  "what_it_does": "Str<SIZE> is a template-parameterized, fixed-length char array wrapper (single header, Str.h) offering equality, three-way compare, and fixed-width decimal integer conversion (toi/toi64/fromi) as member functions. It is not a resizable string: capacity is a compile-time template parameter, there is no append/substr/find, and instances behave like a POD raw byte array rather than a null-terminated C string. It pairs with a separate StrHash open-addressing table (out of scope here) for use as a fast map/hash key.",
+  "how_it_is_fast": "operator==/compare fold the array into 8-byte word comparisons and use __builtin_ctzll to locate the first differing byte, avoiding a per-byte loop, and switch to AVX-512 (VL+BW) masked byte compares (_mm512/256/128_cmpneq_epu8_mask) when the target supports it. fromi/toi convert between fixed-width, zero-padded decimal digits and integers using a branchless SIMD digit-pair multiply-add trick (SSE4.1 pmaddubsw/pmaddwd chain, citing arXiv:1902.08318 Fig.7) for 8/16-digit chunks, plus a precomputed 2-character lookup table for the remaining/non-SIMD path, replacing libc's division-per-digit stoi/to_string loop.",
+  "when_to_use": [
+    "Fixed-width string fields known at compile time (exchange/ticker symbols, FIX/ITCH-style protocol codes, instrument IDs)",
+    "Hot-path equality/ordering comparisons of short (up to tens of bytes), fixed-length keys, e.g. market-data order-book keys",
+    "Fixed-width, zero-padded decimal integer<->string conversion where the exact digit width is known ahead of time (e.g. date/session codes)",
+    "x86-64 targets that can build with -march=native or at least enable SSE4.1/AVX-512 to hit the accelerated code paths",
+    "Low-latency code already avoiding heap allocation that wants a trivially-copyable POD string type usable as a map/hash key"
+  ],
+  "when_not_to_use": [
+    "Variable-length or arbitrary strings: Str has no resize/append/growth, its capacity is baked into the template parameter",
+    "General integer parsing/formatting: fromi/toi require the number to fit exactly in SIZE zero-padded digits; no sign handling or variable width like stoi/to_string",
+    "Non-x86 targets: Str.h includes <x86intrin.h> unconditionally, so it will not compile on ARM/aarch64",
+    "Constructing Str from a C-string/buffer shorter than SIZE: the (const char*) constructor does a raw SIZE-byte struct copy and can read past the source buffer",
+    "Projects wanting upstream support: last commit 2021-07-04, single maintainer, 127 stars, no CI beyond the bundled benchmarks"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (STL headers + x86 intrinsics only)",
+    "min_toolchain": "C++11 minimum; C++17 only needed for tosv() (std::string_view). Benchmarks build with g++ -march=native -O3 (benchfindstr/benchfindint additionally add -std=c++17); GCC version not stated.",
+    "platforms": "x86-64 only (unconditionally includes <x86intrin.h>); AVX-512VL+AVX-512BW enable the SIMD compare path, SSE4.1 enables the SIMD toi/fromi path, otherwise a generic 8-byte-word fallback is used",
+    "thread_safety": "not documented; Str itself is a stateless/POD char-array wrapper with no shared mutable state, so independent instances can be used concurrently, but this is not asserted anywhere in the docs",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Str(const char*) does a raw SIZE-byte struct copy (`*(const Str<SIZE>*)p`), which can read past the source buffer if it is shorter than SIZE — no null-termination or bounds checks",
+    "fromi/toi require the value to fit exactly in SIZE zero-padded decimal digits (no sign, no variable width); correctness is only exercised via asserts in the author's own benchmark, not enforced by the header",
+    "Which code path (and therefore the speedup) you get is decided at compile time by preprocessor macros (__AVX512VL__/__AVX512BW__/__SSE4_1__), so build flags like -march=native directly determine performance",
+    "AlignSize is documented but not enforced: Str is not required to be aligned, but the README/header notes that aligning it speeds up comparisons"
+  ],
+  "pick_this_over_siblings_when": "Pick Str over to_static_string/FastString/fstring/buffet when the field width is a known compile-time constant (fixed-width protocol/exchange codes) and you want the fastest possible equality/compare plus fixed-width numeric conversion via word-at-a-time/AVX-512 compare and SIMD digit conversion; for general resizable strings or variable-width number formatting, use one of those siblings instead.",
+  "verified_claims_summary": "Author's own bundled microbenchmarks (benchmark/benchcmp.cc for comparisons, benchmark/benchnum.cc for conversions; built with g++ -march=native -O3, no compiler version or hardware stated) report Str's operator==/compare running about 2x faster than strncmp/memcmp/std::string equivalents, and fromi/toi running about 10x faster than stoi/strtol/to_string/sprintf for fixed-width numeric conversions. The README gives only these round numbers, with no result tables.",
+  "status_note": "Abandoned since 2021-07-04 (last commit), single maintainer, 127 stars, 2 open issues and no CI; MIT-licensed and small enough (single header) to vendor and freeze as-is.",
+  "sources_read": [
+    "https://github.com/MengRao/str",
+    "https://github.com/MengRao/str/blob/master/Str.h",
+    "https://github.com/MengRao/str/blob/master/benchmark/build.sh",
+    "https://github.com/MengRao/str/blob/master/benchmark/benchcmp.cc",
+    "https://github.com/MengRao/str/blob/master/benchmark/benchnum.cc",
+    "https://github.com/MengRao/str/issues",
+    "https://github.com/MengRao/str/pulls"
+  ],
+  "confidence": 0.5
+}

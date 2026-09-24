@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/shibatch/sleef",
+  "one_liner": "Vectorized C library of libm math functions (sin, cos, exp, log, pow); beats scalar <cmath>/libm when call sites are SIMD-batched.",
+  "what_it_does": "SLEEF is a portable SIMD library re-implementing C standard-library elementary math functions (sin, cos, tan, exp, log, pow, etc.), plus DFT and quad-precision routines, written entirely in C with vector-intrinsic macros. It exposes separate Sleef_* symbols per ISA and vector width (e.g. Sleef_sind4_u10avx2 takes a 256-bit __m256d and returns 4 doubles per call) instead of overloading std::sin/std::exp, so callers must batch arguments into SIMD registers themselves. A runtime dispatcher selects the best available ISA (AVX512F/AVX2/SSE2/AdvSIMD/scalar) on first call.",
+  "how_it_is_fast": "Processes multiple lanes per call (4/8 doubles, 8/16 floats depending on ISA) instead of looping scalar libm calls, and uses a modified Payne-Hanek argument-reduction algorithm redesigned to minimize the data-dependent branching that otherwise forces every SIMD lane onto the slow path if any single lane needs it (paper: 'SLEEF: A Portable Vectorized Library of C Standard Mathematical Functions', Shibata & Petrogalli). It offers a 1-ULP tier (compensated double-double arithmetic) and a faster ~3.5-ULP tier with a shorter polynomial, trading accuracy for speed. Portability comes from wrapping each ISA's intrinsics behind common inline-function/macro helper headers (helperavx2.h, helperadvsimd.h, helpersve.h, ...) compiled per-target.",
+  "when_to_use": [
+    "Hot loops that already batch scalar math across arrays and can call the Sleef_*dN_u10/u35 vector entry points directly instead of std::sin/std::exp per element",
+    "Wide-domain or branchy transcendental workloads (large-magnitude arguments needing full range reduction) where scalar libm's branches hurt SIMD throughput — Table 2 shows ~3.2-3.6x per-call wins for wide-domain sin/cos/tan, ~2.0x log, ~1.6x exp, ~1.25x pow (SLEEF 4-wide AVX2 vs scalar FDLIBM)",
+    "Need one source portable across AVX2, AVX512F, AdvSIMD (and experimentally SSE2/RISC-V) via runtime dispatch",
+    "Can tolerate the 3.5-ULP accuracy tier for extra speed on non-critical paths",
+    "Also need DFT or quad-precision elementary functions bundled with the math kernels"
+  ],
+  "when_not_to_use": [
+    "Scalar call sites (one value at a time): the benchmarked win is SIMD-vs-scalar, and on narrow argument domains or for acos/atan, scalar FDLIBM was faster per call than vector SLEEF in the same table",
+    "Want a drop-in <cmath> replacement without restructuring loops to load SIMD vectors — API is a different symbol/type surface, not operator/name-compatible with std::sin",
+    "SSE2-only x86 targets (experimental, 'seeking sponsorship') or RISC-V RVV targets (unmaintained, may be removed without notice)",
+    "Code that compiles the inline-header path without -O3: open issue #436 reports wrong results in that configuration",
+    "Need guaranteed-correct cos() when any vector lane's argument may reach >=1e14: open issue #444 reports inconsistent per-lane results there, and the benchmarked domain here goes up to 1e100"
+  ],
+  "integration": {
+    "form": "static lib | shared lib (CMake build; not header-only, though inline-header build path also exists)",
+    "dependencies": "none at runtime for the library itself; build needs CMake 3.18+ and matching C/C++ compiler versions; TLFloat is auto-fetched if not present; tests additionally need libssl/libcrypto, libgmp, libmpfr, libfftw",
+    "min_toolchain": "CMake 3.18+; GCC/Clang/MSVC (README requires the C and C++ compilers to be the same version)",
+    "platforms": "x86-64 (SSE2 experimental, AVX2 and AVX512F mainline-supported), AArch64 AdvSIMD (mainline), RISC-V RVVM1/RVVM2 (unmaintained); toolchain files also exist for POWER (ppc64el) and s390x; CI-tested on Linux/Windows/macOS per the README support matrix",
+    "thread_safety": "not documented as thread-safe; open issue #560 (2024) reports the runtime CPU-feature-detection dispatcher races on the first call across threads",
+    "drop_in_for_baseline": "false — separate Sleef_* symbols take native SIMD vector types (e.g. __m256d), not scalar double/float, so call sites must be rewritten to pass vectors"
+  },
+  "gotchas": [
+    "Inline-header build path gives wrong results if the including translation unit is compiled without -O3 (open issue #436, since 2021)",
+    "Vectorized cos() can give inconsistent per-lane results once any lane's argument is >=1e14 (open issue #444) — relevant since the benchmarked domain in this record runs up to 1e100",
+    "exp and pow can return infinity earlier than correct (open issue #600, 2024)",
+    "Runtime CPU-extension dispatch is not thread-safe on first call, per an open maintainer-acknowledged issue (#560)"
+  ],
+  "pick_this_over_siblings_when": "Pick SLEEF over VDT, fmath, or trigno_simd_cpp when you need multiple ISAs (AVX2/AVX512F/AdvSIMD/RISC-V) behind one API with runtime dispatch, plus quad-precision or DFT routines, or want a tunable 1-ULP/3.5-ULP accuracy knob; those siblings target a single ISA/precision and a narrower function set.",
+  "verified_claims_summary": "A peer-reviewed paper (Shibata & Petrogalli, IEEE TPDS vol. 31 no. 6, 2020; arXiv 2001.09258) Table 2 measured reciprocal throughput (ns/call) of SLEEF 3.4's 256-bit AVX2 double-precision vector functions (4 lanes/call, 1-ULP tier) against scalar FDLIBM 5.3, both built with gcc-7.3.0 -O3 -mavx2 -mfma, on an Intel Core i7-6700 with Turbo off: wide-domain sin/cos/tan ran ~3.2-3.6x faster per call, log ~2.0x, exp ~1.6x, pow ~1.25x; on narrow argument domains and for acos/atan, scalar FDLIBM was faster per call than vector SLEEF. This is a SIMD-vs-scalar comparison, not a like-for-like scalar replacement of std::sin/std::exp.",
+  "status_note": "Actively maintained — last commit 2025-12-25, latest tagged release 3.9.0 (March 2025); this session found five open issues touching accuracy and thread-safety dating back to 2021. BSL-1.0 licensed and small enough to vendor or build as a static/shared lib; the cited benchmark used the older 3.4 branch, several major releases behind current master.",
+  "sources_read": [
+    "https://github.com/shibatch/sleef",
+    "https://github.com/shibatch/sleef/blob/master/README.adoc",
+    "https://github.com/shibatch/sleef/blob/master/src/libm/dispatcher.h",
+    "https://github.com/shibatch/sleef/issues/436",
+    "https://github.com/shibatch/sleef/issues/444",
+    "https://github.com/shibatch/sleef/issues/600",
+    "https://github.com/shibatch/sleef/issues/560",
+    "https://github.com/shibatch/sleef/issues/570",
+    "https://github.com/shibatch/sleef/releases",
+    "https://arxiv.org/abs/2001.09258"
+  ],
+  "confidence": 0.72
+}

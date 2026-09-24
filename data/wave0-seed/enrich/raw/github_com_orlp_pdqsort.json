@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/orlp/pdqsort",
+  "one_liner": "Header-only C++ drop-in std::sort replacement: pattern-defeating quicksort with branchless partitioning and a guaranteed O(n log n) worst case.",
+  "what_it_does": "pdqsort.h implements pattern-defeating quicksort, a hybrid of quicksort, insertion sort, and heapsort that detects common input shapes (already sorted/reverse-sorted, many equal keys, or ascending-plus-one-out-of-place-element) and sorts them in linear time instead of n log n. It exposes template functions pdqsort(begin, end[, comp]) with the exact calling convention of std::sort, so most call sites can swap std::sort for pdqsort directly. A second entry point, pdqsort_branchless(begin, end[, comp]), forces a branch-free partitioning path; pdqsort itself auto-dispatches to it under C++11 when sorting an arithmetic type with the default std::less/std::greater.",
+  "how_it_is_fast": "Quicksort with median-of-3 pivoting (Tukey's ninther above 128 elements), switching to insertion sort below 24 elements, and falling back to std::make_heap/std::sort_heap after O(log n) highly unbalanced (<12.5% or >87.5%) partitions, which bounds the worst case at O(n log n) like introsort. After every partition it checks whether the sequence was already partitioned and, if so, attempts a move-bounded insertion sort, giving linear time on sorted/equal/nearly-sorted patterns. For arithmetic types with a default comparator it uses the branchless partitioning technique from Edelkamp & Weiss's BlockQuicksort paper, filling small index buffers with unconditional stores to avoid branch mispredictions during partitioning.",
+  "when_to_use": [
+    "Sorting std::vector/array of built-in arithmetic types (int, float, double) with the default comparator, where the branchless fast path auto-activates",
+    "Data likely to contain patterns: nearly-sorted, reverse-sorted, many duplicate keys, or one misplaced element in an otherwise sorted run",
+    "Header-only C++03/C++11 codebases that want a drop-in std::sort replacement without adding a build/link dependency",
+    "Large arrays (1000+ elements) where branch-misprediction overhead in a naive quicksort partition loop matters",
+    "Need a guaranteed O(n log n) worst case (heapsort fallback) without giving up quicksort's average-case speed"
+  ],
+  "when_not_to_use": [
+    "Need a stable sort (equal elements keep relative order) — no stable variant is provided, unlike std::stable_sort",
+    "Comparator itself is expensive (e.g. calls into an interpreted-language callback) — issue #20 shows pdqsort can invoke the comparator more often than glibc qsort/introsort, making it slower than std::sort or qsort when comparison cost dominates",
+    "Data shaped like a 'pipe organ' (ascending then descending) sorted against libstdc++ std::stable_sort — the verified README chart shows pdqsort ~2.3x slower there, and roughly tied on 'push front'",
+    "Need MSVC 64-bit builds warning-clean — open issue #22 (int64->int conversion warnings) is unresolved",
+    "Need std::execution parallel policies or a maintained upstream — no commits since 2021-03-14 and issue #16 (C++17 parallel execution) is still open"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (standard library only: <algorithm>, <cstddef>, <functional>, <utility>, <iterator>, plus <cstdint>/<type_traits> under C++11)",
+    "min_toolchain": "C++03 compiles (branch-based path only); C++11+ enables automatic branchless dispatch and move semantics",
+    "platforms": "any (portable C++, no SIMD/architecture-specific intrinsics); MSVC 64-bit builds emit C4244 int64->int conversion warnings (open issue #22)",
+    "thread_safety": "not documented — stateless free template functions with no shared/global state; ordinary iterator-range algorithm semantics apply",
+    "drop_in_for_baseline": "partial — matches std::sort's call signature exactly (pdqsort(begin, end[, comp])), but it is unstable, so it is a drop-in only for std::sort, not for std::stable_sort"
+  },
+  "gotchas": [
+    "Branchless auto-dispatch only triggers for arithmetic value types compared with std::less/std::greater under C++11; custom structs or comparators always take the slower branch-based path unless you call pdqsort_branchless explicitly",
+    "Can make more comparator calls than a plain qsort/introsort in some cases (issue #20), so it loses to std::sort/qsort when the comparator itself is costly, even though it does fewer swaps",
+    "Switches to std::make_heap/std::sort_heap after O(log n) highly unbalanced partitions, so pathological inputs degrade to heapsort speed, not quicksort speed",
+    "Comparator ordering requirements (strict weak ordering vs. total order) are not documented in the README (issue #28, open question, unanswered as of last commit)"
+  ],
+  "pick_this_over_siblings_when": "Prefer pdqsort over Highway (vqsort) when you can't require AVX2/AVX3 hardware or want to avoid a SIMD library dependency, and over ska_sort when your keys aren't specifically skewed/geometric-distributed integers. vergesort is the closest comparison (same libstdc++ pattern-detection premise, also unstable-vs-stable tradeoffs), but pdqsort additionally documents a branchless partitioning fast path for arithmetic types with default comparators.",
+  "verified_claims_summary": "Per the record's verified README bar chart (std::vector<int>, 10^6 elements, i5-4670k @ 3.4GHz, g++ -std=c++11 -O2 -m64 -march=native), pdqsort beat GCC libstdc++ std::sort on all 8 tested distributions, from ~1.9x on shuffled ints to over 10x on ascending/all-equal/push-middle patterns. Against std::stable_sort it was faster on most patterns (~2.4x on shuffled) but ~2.3x slower on pipe organ and about tied on push front.",
+  "status_note": "Abandoned: no commits since 2021-03-14, the same day an integer-overflow fix (issue #13) landed; a later MSVC-warning issue (#22, 2022) and a C++17 parallel-execution request (#16, 2024) remain open and unaddressed. zlib-licensed and a single ~350-line header, so it's cheap to vendor and patch yourself if needed.",
+  "sources_read": [
+    "https://github.com/orlp/pdqsort",
+    "https://github.com/orlp/pdqsort/blob/master/pdqsort.h",
+    "https://github.com/orlp/pdqsort/blob/master/bench/readme.txt",
+    "https://github.com/orlp/pdqsort/issues/20",
+    "https://github.com/orlp/pdqsort/issues/13",
+    "https://github.com/orlp/pdqsort/issues/22",
+    "https://github.com/orlp/pdqsort/issues/28",
+    "https://github.com/orlp/pdqsort/issues/3"
+  ],
+  "confidence": 0.8
+}

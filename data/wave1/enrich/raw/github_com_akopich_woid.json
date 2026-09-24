@@ -1,0 +1,47 @@
+{
+  "id": "https://github.com/akopich/woid",
+  "one_liner": "Header-only C++23 type-erasure toolkit; woid::Fun beats std::function via configurable SBO storage and const/noexcept-correct signatures.",
+  "what_it_does": "woid is a single-header C++23 library for type erasure: it provides owning/non-owning SBO storages (Any, TrivialAny, DynamicAny, Ref/CRef), a std::function replacement (Fun/FunRef), and a virtual-function replacement (InterfaceBuilder/SealedInterfaceBuilder) built on the same storages. Fun is not a drop-in for std::function: you pick a Storage type (its SBO size/alignment and copy/exception-guarantee policy) as a template parameter, and the call signature can carry const/noexcept qualifiers that std::function ignores. There is no separate move-only wrapper type — a Fun is copyable exactly when its chosen Storage is copyable.",
+  "how_it_is_fast": "Speed comes from configurable small-buffer optimization: callers size the inline buffer (Any<N>) to the actual capture, avoiding the heap allocation std::function often falls back to for anything beyond a word-sized capture. TrivialAny skips the stored copy/move/destroy function-pointer indirection entirely for trivially-movable/copyable callables, treating the buffer as raw bytes instead; ExceptionGuarantee::NONE (usable as a Storage policy) further removes strong-guarantee bookkeeping that std::function-like wrappers pay for. InterfaceBuilder avoids vtable indirection by storing function pointers directly in (or referenced from) the wrapper, and SealedInterfaceBuilder replaces indirection with std::variant + visitation when the polymorphic type set is known at compile time.",
+  "when_to_use": [
+    "Hot loops that repeatedly construct/invoke small comparator or callback closures (e.g. sort comparators), where std::function's heap fallback and call overhead show up in profiles",
+    "Callables whose captures fit a known small size — size Any<N>/TrivialAny<N> to match the capture so SBO always applies and heap allocation is designed out",
+    "You need call-signature const/noexcept correctness that std::function does not enforce",
+    "You also want a non-intrusive virtual-function alternative (InterfaceBuilder) so unrelated types can share an interface without a base class, especially when the concrete type set is closed (SealedInterfaceBuilder + std::variant)",
+    "C++23-only toolchains (tested with Clang 21 / GCC 15) where you're willing to vendor a single young header and re-verify before relying on it in production"
+  ],
+  "when_not_to_use": [
+    "Project is stuck on C++20 or earlier — woid requires C++23",
+    "Need a battle-tested, widely-deployed std::function replacement; woid has 7 GitHub stars, 0 filed issues, and a first commit from 2025-10-23, so edge cases are largely unexercised outside the author's own tests",
+    "Need documented thread-safety guarantees — none are stated for any woid type, so a shared Fun/Any used across threads needs synchronization you verify yourself",
+    "Move-only captures needed alongside copyable ones elsewhere — you must pick a Copy::DISABLED storage up front; there's no separate move_only_function-style type or runtime toggle",
+    "At the smallest input sizes (vector length 1-2 in the sort benchmark) woid::Fun is only ~1.0x vs std::function, so the win is workload-size-dependent, not universal"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none for the library itself (single header include/woid.hpp); building the tests/benchmarks pulls in GTest, google/benchmark, Boost 1.76+, and the third_party submodules function2/boost::te/microsoft::proxy",
+    "min_toolchain": "C++23 (CMakeLists requires CMake 3.21+); tested with Clang 21.1.6 and GCC 15",
+    "platforms": "not documented — no architecture/OS restriction stated in README; author's benchmarks ran on x86-64 (Intel i9-10850K)",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": "partial — explain: same call syntax (f(args...)) but Fun requires choosing a Storage template parameter (unlike std::function's single fixed type), and its call signature can be const/noexcept-qualified in ways std::function's signature cannot express"
+  },
+  "gotchas": [
+    "TrivialAny silently falls back to heap allocation for non-trivial or non-trivially-movable/copyable objects unless kCanAllocate is disabled, in which case it becomes a compile error instead",
+    "ExceptionGuarantee::NONE (a configurable, non-strict default) is UB if the stored callable's copy/move constructor throws; opting into STRONG costs performance and also disables SBO for non-nothrow-movable types",
+    "No separate move-only Fun type: copyability of Fun/Any is inherited from the chosen Storage's Copy policy, so move-only captures require picking Copy::DISABLED explicitly",
+    "0 issues have ever been filed on the repo (young project), so failure modes beyond the author's own GTest suite are unverified"
+  ],
+  "pick_this_over_siblings_when": "Pick woid over Delegate/inplace_function/SmallFunction/sy_callback.hpp when you need const/noexcept-correct call signatures and configurable SBO storage shared with a broader type-erasure toolkit (Any + a virtual-function replacement) in one header; those siblings are narrower, longer-established std::function replacements with more real-world usage and no C++23 requirement.",
+  "verified_claims_summary": "Benchmark (bench/fun_bench.cpp, run via bench/plot.py) sorts vectors of ints (sizes 2^0-2^18) with a comparator wrapped in woid::Fun vs std::function<bool(int,int)> vs function2 vs a plain lambda, built Release (-O3 -DNDEBUG -fno-rtti -fno-exceptions) with Clang 21.1.6 on an Intel i9-10850K. Per the verifier's reading of the SVG plot geometry, woid::Fun is ~1.0x at the smallest sizes and roughly 1.2x-1.6x vs std::function on the std::less<int> comparator (up to ~2.55x on the 32-byte BigLess comparator around size 2^8); the README itself only claims woid 'ranks first in most cases' without giving exact multipliers.",
+  "status_note": "Active (pushed 2026-02-09) but very young — first commit 2025-10-23, 7 GitHub stars, 0 issues filed; MIT-licensed and a single header, so it's cheap to vendor and drop if it stalls.",
+  "sources_read": [
+    "https://github.com/akopich/woid",
+    "https://github.com/akopich/woid/blob/main/README.md",
+    "https://github.com/akopich/woid/blob/main/CMakeLists.txt",
+    "https://github.com/akopich/woid/blob/main/LICENSE",
+    "https://github.com/akopich/woid/blob/main/include/woid.hpp",
+    "https://github.com/akopich/woid/blob/main/bench/fun_bench.cpp",
+    "https://github.com/akopich/woid/issues"
+  ],
+  "confidence": 0.6
+}

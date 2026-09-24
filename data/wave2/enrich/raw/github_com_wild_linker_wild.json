@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/wild-linker/wild",
+  "one_liner": "Rust linker for Linux that beats LLVM lld on debug-build link time via mmap'd input and rayon-parallelized phases.",
+  "what_it_does": "Wild is a from-scratch Rust ELF linker for Linux, invoked as a drop-in for lld/ld via -fuse-ld=wild, --ld-path=wild, the -B<dir> symlink trick, or CMake's CMAKE_LINKER_TYPE=WILD — the same command-line integration points as lld, not a new API. It supports x86-64, ARM64, RISC-V, LoongArch64, and PPC64LE on Linux, plus experimental WebAssembly output; Mach-O and Windows are out of scope. Its stated long-term goal is incremental linking (which mold's author has said mold will not pursue), but incremental linking itself is not yet implemented — today's speed comes entirely from a fast non-incremental link path.",
+  "how_it_is_fast": "Wild mmaps input files instead of read()-ing them, deduplicates merge-string sections up front, and resolves symbols through a hashmap before touching relocations — the same input-handling strategy mold uses. Its phases (symbol_db, resolution, layout, elf_writer) run on a rayon-owned thread pool, using par_iter/par_bridge to parallelize the relocation-graph traversal and the copy/relocate step in the ELF writer, with only a few phases left single-threaded. It isn't algorithmically different from mold — both are mmap-plus-parallel-ELF-writer designs — it is simply slower in practice today (mold's README puts wild ~1.9x behind mold at the median on the same benchmark).",
+  "when_to_use": [
+    "Iterative Linux debug builds (Rust/Cargo, or C/C++ via Clang or GCC 16.1+/CMake 4.4+) where lld's link time is the edit-compile-link bottleneck, for a program wild can link (Blender, Clang, ClickHouse, Godot, LibreOffice, PyTorch, Chromium debug all measured 1.4x-4.2x faster than lld).",
+    "Projects already invoking lld via -fuse-ld=lld/--ld-path=lld — swapping to wild is a flag-value change, no build-system rework.",
+    "x86-64, ARM64, riscv64gc, PPC64LE, or LoongArch64 Linux targets, especially with Clang or GCC 16.1+ / CMake 4.4+ for first-class integration.",
+    "Teams that want an actively developed, Rust-native alternative to mold specifically because mold's author has ruled out incremental linking.",
+    "Experimental wasm32-wasip1/wasm32-unknown-unknown linking, if you're comfortable with a feature flagged as experimental (--features wasm)."
+  ],
+  "when_not_to_use": [
+    "Release builds needing --icf=all (identical code folding) — wild doesn't implement it, so it is N/A on the mold benchmark's Chromium-release rows rather than just losing some size savings.",
+    "Programs wild can't link at all yet: TensorFlow 2.21, Firefox debug builds, and ARM64 Chromium/Firefox are N/A for wild in the mold benchmark suite.",
+    "Any Mach-O (Apple) or Windows target, or non-Linux host — unsupported.",
+    "Builds depending on fuller linker-script features (SEARCH_DIR, STARTUP, TARGET, INSERT, NOCROSSREFS, REGION_ALIAS, MEMORY '>region' placement, PHDRS AT attribute) — only partially implemented per LINKER_SCRIPT_SUPPORT.md.",
+    "When mold is an option and Rust-native tooling isn't a requirement: mold links the same benchmark suite ~1.9x faster than wild at the median and covers more architectures (adds i386, PowerPC, s390x, LoongArch32, SPARC64, m68k, SH-4)."
+  ],
+  "integration": {
+    "form": "crate (cargo-installed binary) — invoked as your linker executable, not linked into your program",
+    "dependencies": "none to vendor as a unit; Rust workspace of 7 crates pulling ~40 crates.io deps, notably rayon (thread pool), hashbrown/foldhash (symbol hashmap), gimli (DWARF), iced-x86, blake3, zlib-rs, clap",
+    "min_toolchain": "Rust 1.97.1 (workspace rust-version), edition 2024, to build wild itself; to use it as your linker you need Clang or GCC 16.1+ for -fuse-ld=wild, or CMake 4.4+ for CMAKE_LINKER_TYPE=WILD",
+    "platforms": "Linux only — x86-64, ARM64, RISC-V (riscv64gc), LoongArch64 and PPC64LE (both 'initial support'); WebAssembly output experimental behind --features wasm; no Mach-O, no Windows",
+    "thread_safety": "not documented as an embeddable library — it's a CLI tool; internally uses a rayon-owned thread pool across most phases (par_iter/par_bridge), with a few phases intentionally single-threaded per DESIGN.md",
+    "drop_in_for_baseline": "partial — same invocation surface as lld (-fuse-ld=wild, --ld-path=wild, -B<dir> trick, CMAKE_LINKER_TYPE=WILD) but not feature-complete: no --icf=all, partial linker-script support, and it cannot link every program lld can (TensorFlow, Firefox debug, ARM64 Chromium/Firefox in the mold benchmark)"
+  },
+  "gotchas": [
+    "GCC before 16.1 rejects -fuse-ld=wild outright; use the ld.wild symlink plus -B/tmp workaround documented in the README.",
+    "Archive entry load order and symbol-resolution priority don't yet fully match GNU ld/LLD semantics (open issue #600), which can change which duplicate symbol wins in ambiguous builds.",
+    "wild's Chromium-release 'N/A' in the mold benchmark is a deliberate limitation (no --icf=all), not a crash — don't assume every N/A row is a bug.",
+    "The repo was transferred from davidlattimore/wild to the wild-linker org; the old URL redirects, but pin CI/install scripts to the new path."
+  ],
+  "pick_this_over_siblings_when": "Pick wild over lld whenever your debug-link target is in its supported set — it's 1.4x-4.2x faster with an identical invocation. Pick mold instead of wild when you just want the fastest available Linux linker today (mold beats wild by ~1.9x at the median on the same benchmark) and don't specifically need Rust-native tooling or wild's incremental-linking roadmap; zld isn't a real alternative here since it only targets Apple's ld64, not ELF.",
+  "verified_claims_summary": "Verified against mold's own August 2026 README benchmark table (all three linkers built from source in release mode as of 2026-08-28, wall-clock median of 3 runs after warm-up, on a Threadripper 7980X/Ubuntu 24.04 and an M1 Ultra/Fedora Asahi 42): wild beat lld on all 28 rows where it could link (per-row ratios 1.38x-4.18x, median ~2.1x, e.g. Chromium debug 16.64s to 3.98s), while mold beat wild on those same rows by ~1.9x at the median.",
+  "status_note": "Actively maintained (3,998 stars, commits the same day as this record, not archived or a fork) and permissively dual-licensed (Apache-2.0 OR MIT confirmed in-repo, though GitHub's UI reports only Apache-2.0); still pre-1.0 (v0.10.0) with incremental linking — the project's actual reason for existing — not yet built.",
+  "sources_read": [
+    "https://github.com/wild-linker/wild",
+    "https://github.com/wild-linker/wild/blob/main/README.md",
+    "https://github.com/wild-linker/wild/blob/main/Cargo.toml",
+    "https://github.com/wild-linker/wild/blob/main/DESIGN.md",
+    "https://github.com/wild-linker/wild/blob/main/LINKER_SCRIPT_SUPPORT.md",
+    "https://github.com/wild-linker/wild/blob/main/LICENSE-APACHE",
+    "https://github.com/wild-linker/wild/blob/main/LICENSE-MIT",
+    "https://github.com/wild-linker/wild/issues/600",
+    "https://github.com/rui314/mold#benchmark"
+  ],
+  "confidence": 0.85
+}

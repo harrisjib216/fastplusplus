@@ -1,0 +1,45 @@
+{
+  "id": "https://github.com/rust-lang/rustc_codegen_cranelift",
+  "one_liner": "Drop-in Cranelift codegen backend for rustc that replaces LLVM to cut debug-build compile times.",
+  "what_it_does": "rustc_codegen_cranelift (cg_clif) is an alternate backend for the Rust compiler that swaps LLVM for Cranelift when generating machine code, aimed at debug builds rather than optimized release builds. It ships as an official rustup component (rustc-codegen-cranelift-preview) on nightly Rust for Linux, macOS, and x86_64 Windows, invoked via cargo-clif or by setting a codegen-backend profile option, so existing crates need no source changes, just a build-time flag/profile switch. A JIT mode is also available but is explicitly marked highly experimental.",
+  "how_it_is_fast": "Cranelift is a simpler, JIT-oriented code generator with far less optimization machinery than LLVM, so it spends much less time per function translating MIR to machine code, trading away optimized codegen quality that doesn't matter for debug builds. The Nov 2024 progress report attributes the bulk of the observed win to switching the link step to lld for non-LLVM backends (rust-lang/rust PR #132774) and to adding a BufWriter around object-file writes, which fixed a specific regression on the 'coercions' rustc-perf benchmark.",
+  "when_to_use": [
+    "Local dev-loop cargo build/cargo check cycles where debug binaries are compiled and rerun repeatedly and compile latency matters more than runtime speed",
+    "Projects already on Rust nightly, running on Linux, macOS, or x86_64 Windows",
+    "Codebases that avoid heavy std::arch SIMD intrinsics and unwinding-based panic handling (or already build with -Cpanic=abort)",
+    "Willing to opt in per-profile via Cargo.toml/.cargo/config.toml so only the debug profile uses cg_clif",
+    "Crates that hit an unsupported feature can fall back to the default LLVM backend without any code change"
+  ],
+  "when_not_to_use": [
+    "Release/optimized builds -- cg_clif is not a target here and produces slower-running code than LLVM -O",
+    "Code leaning on std::arch SIMD intrinsics beyond the partially-supported subset (std::simd portable SIMD does work fully)",
+    "Programs that unwind on panic when targeting Windows or macOS -- unwinding support there is experimental and unsupported",
+    "Crates with 'pathological' codegen shapes -- the Nov 2024 report notes a few secondary benchmarks still regress vs cg_llvm",
+    "Anyone who needs stable (non-nightly) Rust, since it's only distributed for nightly via rustup"
+  ],
+  "integration": {
+    "form": "compiler backend, distributed as a rustup component and loaded via -Zcodegen-backend",
+    "dependencies": "none for the user; Cranelift is pulled in by the backend itself",
+    "min_toolchain": "Rust nightly (requires the unstable -Zcodegen-backend / codegen-backend cargo feature)",
+    "platforms": "Linux x86-64/AArch64/RISC-V/s390x, macOS x86-64/AArch64, Windows x86-64 (fully tested per README matrix); FreeBSD and some Linux targets are unverified",
+    "thread_safety": "not documented (this is a compiler backend, not a concurrent data structure)",
+    "drop_in_for_baseline": "partial -- explain: no source changes to the crate being compiled, but requires nightly Rust plus an explicit opt-in (CARGO_PROFILE_DEV_CODEGEN_BACKEND=cranelift or an equivalent Cargo.toml/.cargo/config.toml setting), and is meant for the debug profile only"
+  },
+  "gotchas": [
+    "-Cpanic=abort is enabled by default because stack unwinding is experimental and unsupported on Windows/macOS",
+    "std::arch SIMD intrinsics are only partially supported; std::simd portable SIMD is fully supported",
+    "2020 measurements (issue #878) showed clean-incremental builds up to ~200% slower because compiled object files were not cached in the incremental cache (#760); the Nov 2024 report does not say whether this was fixed",
+    "JIT mode requires all dependencies to be available as dynamic libraries and lacks incremental compilation, so it can be slower than normal AOT builds"
+  ],
+  "pick_this_over_siblings_when": "The catalogued siblings (zapcc, MIR/c2m, TinyCC) all target C/C++ toolchains; cg_clif is the only Rust-ecosystem entry here, so it's the pick whenever the baseline being replaced is rustc/cargo rather than gcc/clang.",
+  "verified_claims_summary": "First-party numbers only. bjorn3's Nov 2024 progress report says that on the rustc-perf suite, after enabling lld for non-LLVM backends, cg_clif was '10-50% faster' than cg_llvm on most benchmarks, with a couple of pathological benchmarks still regressed; no hardware, exact rustc version, or raw data are given. Separately, issue #878 (2020) reported debug-profile clean and baseline-incremental builds about 10-60% faster (often ~40%) versus cg_llvm, but clean-incremental builds up to ~200% slower due to uncached object files.",
+  "status_note": "Actively maintained (commit as of 2026-09-23) and distributed as an official nightly-only rustup component, but still labeled experimental overall; MIT/Apache-2.0 dual-licensed and adopted by adding a build flag rather than vendoring a library.",
+  "sources_read": [
+    "https://github.com/rust-lang/rustc_codegen_cranelift",
+    "https://github.com/rust-lang/rustc_codegen_cranelift/blob/master/README.md",
+    "https://github.com/rust-lang/rustc_codegen_cranelift/blob/master/docs/usage.md",
+    "https://github.com/rust-lang/rustc_codegen_cranelift/issues/878",
+    "https://bjorn3.github.io/2024/11/14/progress-report-nov-2024.html"
+  ],
+  "confidence": 0.4
+}

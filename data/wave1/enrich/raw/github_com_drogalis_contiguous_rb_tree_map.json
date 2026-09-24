@@ -1,0 +1,44 @@
+{
+  "id": "https://github.com/drogalis/contiguous-rb-tree-map",
+  "one_liner": "Header-only flat red-black tree map/set in a vector; 1.4-1.9x faster than std::map at scale.",
+  "what_it_does": "dro::FlatMap and dro::FlatSet are STL-compatible red-black tree map/set implementations that store nodes contiguously in a std::vector instead of individually heap-allocating each node. The API mirrors std::map/std::set (at, operator[], find, insert, erase, lower_bound, iterators) so it's close to drop-in, but keys and values must be default-constructible and erased slots aren't freed until shrink_to_fit() or destruction.",
+  "how_it_is_fast": "Storing nodes in a vector keeps the tree cache-contiguous and lets the implementation prefetch the next probed level during binary search on insert/erase, cutting cache misses versus a pointer-chasing red-black tree. Rotations swap node and child slots in place rather than relocating via pointers, and erase swaps the deleted key with the in-order successor then moves it to the vector's end instead of freeing/reallocating a node.",
+  "when_to_use": [
+    "Insert/find/erase-heavy workloads on int32-like keys where std::map's per-node allocation dominates, especially at 1M-10M elements (1.4-1.9x measured gain).",
+    "You can pick a MaxSize index type (uint8_t-uint64_t) matching your expected element count for space efficiency.",
+    "Keys/values are default-constructible and you don't need pointer/reference stability across inserts/erases.",
+    "You want ordered iteration plus a map-like API without accepting flat_map's insert/erase cost."
+  ],
+  "when_not_to_use": [
+    "Find-dominated workloads at large sizes: boost::flat_map find is faster than dro::FlatMap by 1M elements (134ns vs 234ns), and folly::heap_vector_map overtakes dro on find from ~100K elements.",
+    "Code that holds iterators across modifying operations: every insert/erase/clear invalidates ALL iterators, not just erased ones.",
+    "Long-lived containers with heavy erase churn: erased slots stay allocated until shrink_to_fit() or destruction, so memory can grow unbounded between compactions.",
+    "Key/value types that aren't default-constructible.",
+    "Production use requiring maturity: project is self-labeled Beta Testing with ~50% test coverage and has no issue-tracker history to gauge stability (issue tracker is empty)."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (standard library only: <vector>, <stdexcept>, <concepts>, <type_traits>, etc.)",
+    "min_toolchain": "C++20 per README; repo's own CMakeLists.txt builds with C++23",
+    "platforms": "not documented (no architecture-specific intrinsics in the header; no platform restrictions stated)",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": "partial — API mirrors std::map/std::set (at, operator[], find, insert, erase, iterators) but requires default-constructible key/value, invalidates all iterators on any modification, and doesn't auto-deallocate erased slots"
+  },
+  "gotchas": [
+    "All iterators are invalidated by any modifying operation (insert/erase/clear/swap), not just iterators to erased elements as in std::map.",
+    "erase() does not free memory; call shrink_to_fit() or destroy the container to reclaim space from erased slots.",
+    "Key and Value types must be default-constructible in addition to copy/move-assignable.",
+    "The MaxSize template parameter (an integral type) bounds max_size() and throws std::runtime_error if the container grows past it."
+  ],
+  "pick_this_over_siblings_when": "Pick over boost::container::flat_set/flat_map when insert/erase throughput matters more than find at scale (boost::flat_map degrades sharply on insert/erase, e.g. 146,200ns at 1M vs dro's 283ns), but pick boost::flat_map instead if find dominates. Versus fast-containers or frozenca/BTree (larger, more mature B-tree alternatives with wider verified gains), dro::FlatMap is a smaller header-only option but is explicitly beta with ~50% test coverage.",
+  "verified_claims_summary": "On gcc 14.2.1 with libstdc++, -DCMAKE_BUILD_TYPE=Release, on an isolcpus-pinned Intel Core i5-9300H (4 cores), dro::FlatMap beat std::map at 10,000,000 int32 elements: insert 622ns vs 855ns, find 551ns vs 774ns, erase 627ns vs 916ns (~1.4-1.9x across sizes); numbers are from the repo's committed benchmarks/results/*.txt, not chart-reading.",
+  "status_note": "Stale: last commit 2024-11-16, GPL-3.0, and the project self-labels 'Beta Testing' with ~50% coverage — usable as a copyable single header, but treat as unmaintained and verify against current libstdc++ before relying on it.",
+  "sources_read": [
+    "https://github.com/drogalis/contiguous-rb-tree-map",
+    "https://github.com/drogalis/contiguous-rb-tree-map/blob/main/README.md",
+    "https://github.com/drogalis/contiguous-rb-tree-map/blob/main/CMakeLists.txt",
+    "https://github.com/drogalis/contiguous-rb-tree-map/blob/main/include/dro/flat-rb-tree.hpp",
+    "https://github.com/drogalis/contiguous-rb-tree-map/issues"
+  ],
+  "confidence": 0.7
+}

@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/facebook/pyrefly",
+  "one_liner": "Rust type checker and LSP for Python; faster than mypy and Pyright on cold, whole-project checks.",
+  "what_it_does": "Pyrefly is a standalone CLI type checker and LSP server for Python, written in Rust and distributed as a prebuilt binary via `pip install pyrefly` or as IDE extensions (VS Code, Neovim, Zed). It is not a literal drop-in for mypy/Pyright — it has its own CLI, config format, and error set — but ships `pyrefly init` to bootstrap from an existing config, `pyrefly suppress` to auto-silence pre-existing errors, and `pyrefly infer` to add annotations. It understands Pydantic, Django, and pytest patterns out of the box, and is Meta's default checker for Instagram's ~20M-line codebase, also adopted by PyTorch and JAX.",
+  "how_it_is_fast": "The whole tool is a single Rust binary; type-checking is parallelized across modules with rayon, backed by concurrent data structures (dashmap, parking_lot) and jemalloc/mimalloc allocators. Per its own ARCHITECTURE.md, it deliberately favors module-level incrementality over fine-grained, binding-level incrementality (the Salsa/rust-analyzer or Roslyn/TypeScript approach): each module's bindings are solved sequentially and completely, betting that whole-module solving is fast enough that finer-grained caching isn't needed. That design gives fast cold/batch checks but is the likely reason its LSP incremental recheck lagged both Pyright and ty in Astral's benchmark.",
+  "when_to_use": [
+    "Cold or CI type-checks of large, multi-module Python codebases (millions of LOC) where batch throughput matters more than incremental recheck latency",
+    "Migrating an existing mypy or Pyright project and wanting built-in tooling (`pyrefly init`, `pyrefly suppress`) to stage the rollout",
+    "Codebases heavy on Pydantic, Django, or pytest patterns, where Pyrefly's built-in framework modeling reduces false positives",
+    "Wanting one tool that is both the CLI checker and the editor LSP with consistent results (VS Code, Neovim, Zed)",
+    "Multi-core CI machines, since checking parallelizes across modules with rayon"
+  ],
+  "when_not_to_use": [
+    "Editor-driven inner loop where every-keystroke/save recheck latency matters most: Astral's benchmark measured Pyrefly's incremental LSP recheck on PyTorch at ~2.4-2.6s, versus ~370ms for Pyright and ~4.5ms for ty",
+    "Memory-constrained dev machines: multiple open issues report very high RSS, including one reporting the VS Code extension reaching up to 100GB on a large repo",
+    "Older Linux hosts on glibc 2.17, where a memory-allocation crash has been reported",
+    "Teams that need strict semver stability: Pyrefly's own version policy states monthly minor releases can introduce new type errors or other breaking changes",
+    "Relying on the README's PyTorch '15x faster than mypy/Pyright' headline for capacity planning — no hardware or methodology is published for it"
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "none to run (pip install pyrefly ships a prebuilt Rust binary); building from source pulls a Rust workspace (rayon, dashmap, parking_lot, lsp-server, ruff_python_parser/ruff_notebook, tokio, etc.)",
+    "min_toolchain": "Rust stable, edition 2024 (Rust 1.85+) to build from source; rust-toolchain.toml pins channel=stable with no exact version",
+    "platforms": "Linux x86_64/i686/aarch64 (glibc and musl), macOS x86_64/arm64, Windows x86_64/i686/aarch64 — all built as prebuilt release binaries",
+    "thread_safety": "not documented as an embeddable library API; internally parallelizes checking across modules via rayon/dashmap/parking_lot",
+    "drop_in_for_baseline": "partial — separate CLI, config file, and error set from mypy/Pyright; provides `pyrefly init`/`suppress`/`infer` to ease migration and can read some existing Mypy/Pyright config values"
+  },
+  "gotchas": [
+    "README claims IDE rechecks 'typically complete in under 10 milliseconds,' but Astral's independent benchmark measured 2.4-2.6s for Pyrefly's LSP recheck on PyTorch — a large, credible gap",
+    "Multiple open GitHub issues report excessive memory use, including one titled 'Pyrefly consumes A LOT of memory' and another reporting the VS Code extension using up to 100GB",
+    "Reported crash allocating memory on glibc 2.17 (older Linux distros)",
+    "Does not follow strict semver: any minor version bump (monthly) may add new type errors or change behavior; `pyrefly suppress` exists specifically to manage that churn"
+  ],
+  "pick_this_over_siblings_when": "Pick Pyrefly over ty (astral-sh/ty) when you value production-scale proof (Instagram's 20M-LOC codebase, PyTorch, JAX adoption) and built-in Pydantic/Django/pytest modeling over raw speed — in the same benchmark ty beat Pyrefly on both cold checks (2.19s vs 5.32s) and, by a wide margin, incremental LSP rechecks (4.5ms vs 2.6s).",
+  "verified_claims_summary": "Astral's ty_benchmark harness (public, pinned revisions) ran a cold CLI type-check of home-assistant/core with no cache on an Apple M4: Pyrefly 5.32s vs Pyright 19.62s (~3.7x faster) vs mypy 45.66s (~8.6x faster). The same post's LSP incremental-recheck test on PyTorch showed Pyrefly was the slowest of the three, ~2.4-2.6s vs Pyright's ~370-386ms and ty's ~4.5-4.7ms; no compiler flags are relevant since these are prebuilt/uv-installed binaries, hardware is stated only as 'M4'.",
+  "status_note": "Actively maintained — commits as of today (2026-09-24), monthly minor releases, 1.0 tagged as stable; MIT-licensed and installable as a prebuilt binary via pip, so adoption cost is low despite the non-semver upgrade churn.",
+  "sources_read": [
+    "https://github.com/facebook/pyrefly",
+    "https://github.com/facebook/pyrefly/blob/main/README.md",
+    "https://github.com/facebook/pyrefly/blob/main/ARCHITECTURE.md",
+    "https://github.com/facebook/pyrefly/blob/main/Cargo.toml",
+    "https://github.com/facebook/pyrefly/blob/main/pyrefly/Cargo.toml",
+    "https://github.com/facebook/pyrefly/blob/main/rust-toolchain.toml",
+    "https://github.com/facebook/pyrefly/blob/main/.github/workflows/release_binaries.yml",
+    "https://github.com/facebook/pyrefly/issues",
+    "https://github.com/facebook/pyrefly/releases",
+    "https://astral.sh/blog/ty"
+  ],
+  "confidence": 0.6
+}

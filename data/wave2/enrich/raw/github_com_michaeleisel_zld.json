@@ -1,0 +1,47 @@
+{
+  "id": "https://github.com/michaeleisel/zld",
+  "one_liner": "Drop-in fork of Apple's ld64 that speeds up incremental Xcode debug linking; archived, maintainer now recommends lld instead.",
+  "what_it_does": "zld is a source fork of Apple's open-source ld64 linker, built and swapped in via `-fuse-ld=<path to zld>` in Xcode, Bazel, or Cargo linker flags. It is not a library with an API; it's a standalone linker binary meant only to replace `ld` during debug-configuration incremental builds, not release/App Store builds. Behaviorally it aims to produce the same Mach-O output as stock ld64 aside from internal hashing/ordering optimizations.",
+  "how_it_is_fast": "Replaces ld64's STL hash maps/sets with Abseil's Swiss Tables (open-addressing, SIMD-probed hash containers) for the linker's internal symbol/string tables. Parallelizes stages that ld64 runs serially, including library parsing, output-file writing, and sorting. Also caches and speeds up string hashing (hash caching plus a faster hash function) and persists some object/library-name metadata under /tmp/zld-... between runs to warm later links.",
+  "when_to_use": [
+    "Xcode, Bazel, or Cargo debug builds on macOS/iOS where a single ld64 link already takes >=500ms and faster edit-build-run loops matter",
+    "Projects that must stay on Apple's own ld64 codebase for behavioral/stability reasons rather than switching linker families entirely",
+    "Debug-only linking (not release, not App Store archive builds) where a small correctness/regression risk is acceptable",
+    "Teams that can pin to a matching Xcode/ld64 vintage (repo's last activity is 2023, roughly Xcode 13-14 era) and won't chase newer toolchains",
+    "x86_64 or arm64 Xcode debug targets where the arm64_32/Mac Catalyst fallback gap (see gotchas) doesn't apply"
+  ],
+  "when_not_to_use": [
+    "Any release, App Store, or otherwise correctness-critical build -- the README states it is untested/unintended for that",
+    "Newer Xcode/ld64 versions past 2023: repo is archived (last commit 2023-02-15), so toolchain drift bugs like the Xcode 14 undefined `_objc_msgSend$...` selector-stub issue (#113, #125) won't be fixed",
+    "Apple Silicon (M1) hosts, where users reported SIGKILL crashes and codesigning issues with certain Rust/Cargo link setups (#110, referencing #85)",
+    "arm64_32 or Mac Catalyst link targets: zld knows it has issues there and silently falls back to the real ld unless you also pass `-zld_original_ld_path`",
+    "New projects generally: the maintainer's own 2022 RFC (#112) says lld is faster and more reproducible and is what they'd pick today; the README's top line now tells readers to use lld instead"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "cmake (build-time); vendors Abseil (for Swiss Tables) and Apple's ld64/corecrypto sources in-tree; requires the full Xcode.app (not just Command Line Tools) to build and run",
+    "min_toolchain": "macOS with a full Xcode install; built via `make`/cmake; benchmark and issue history point to an Xcode 13-14 / clang 11.0.0 / ld64 vintage, unmaintained since 2023-02-15",
+    "platforms": "macOS hosts only (Intel and Apple Silicon), producing Mach-O output for macOS/iOS/watchOS/tvOS targets; not applicable to Linux/Windows/GNU/MSVC toolchains",
+    "thread_safety": "not documented (it's a single-shot CLI linker invocation, not an embeddable library API)",
+    "drop_in_for_baseline": "partial -- explain: drop-in via -fuse-ld=<path> for debug configurations, but it silently falls back to the real ld64 for known-broken cases (arm64_32, Mac Catalyst) unless -zld_original_ld_path is also set, and it's explicitly not validated for release builds"
+  },
+  "gotchas": [
+    "Without also passing -Wl,-zld_original_ld_path,<real ld>, zld silently falls back to Apple's stock linker for cases it knows are broken (arm64_32, Mac Catalyst) with no warning",
+    "Needs the full Xcode.app installed, not just Xcode Command Line Tools, or builds/runs fail (#106, #109)",
+    "Caches metadata under /tmp/zld-...; README says to run a link twice before judging speedup because the first run pays cold-cache cost",
+    "Reported SIGKILL/codesigning crashes on Apple Silicon with some Rust+Cargo configurations (#110, #85), and an Xcode 14 undefined-symbol bug with ObjC selector stubs (#113, #125)"
+  ],
+  "pick_this_over_siblings_when": "mold and Wild are ELF/Linux linkers competing with lld; neither links Mach-O/Xcode debug builds, so they aren't substitutes for zld's use case. Pick zld over them only when the job is specifically Xcode/Bazel/Cargo debug-linking on macOS/iOS -- and even then, the maintainer's own RFC and the archived README both point to lld as the better current choice for that same job.",
+  "verified_claims_summary": "First-party misc/benchmarks.md (with the full captured ld command lines) shows zld beating stock Apple ld64 on three real Xcode/Mach-O debug links on a 'high-end Mac desktop': Signal's iOS app binary 390ms->250ms (~1.6x), Firefox macOS's XUL framework 5.2s->2.20s (~2.4x), and Firefox iOS's Storage.framework 495ms->340ms (~1.5x), with similar percentage gains reported on a 2014 MacBook Pro. No specific CPU model, run count, or variance is given, and the exact Xcode/clang version used for the benchmark itself isn't stated (the captured ld invocations reference clang 11.0.0 and 9.0.1 runtime libs).",
+  "status_note": "Archived since 2023-02-15 (MIT license, 1,191 stars); the README's own top line now says to use lld instead, echoing the maintainer's 2022 'Future of zld' RFC (#112) that lld is faster, more reproducible, and what they'd choose for a new project today.",
+  "sources_read": [
+    "https://github.com/michaeleisel/zld",
+    "https://github.com/michaeleisel/zld/blob/master/README.md",
+    "https://github.com/michaeleisel/zld/blob/master/misc/benchmarks.md",
+    "https://github.com/michaeleisel/zld/issues/112",
+    "https://github.com/michaeleisel/zld/issues/124",
+    "https://github.com/michaeleisel/zld/issues/125",
+    "https://github.com/michaeleisel/zld/issues/110"
+  ],
+  "confidence": 0.75
+}

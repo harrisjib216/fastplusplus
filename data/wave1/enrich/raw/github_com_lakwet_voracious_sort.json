@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/lakwet/voracious_sort",
+  "one_liner": "Rust MSD/LSD radix-sort crate for primitive types and custom structs, several times faster than Rust's own sort on large arrays.",
+  "what_it_does": "A Rust crate providing several radix-sort variants (Voracious MSD, DLSD, Rollercoaster, and the multithreaded Peeka sort) behind a RadixSort trait exposing .voracious_sort()/.voracious_stable_sort()/.voracious_mt_sort(n) on slices and Vecs. Works out of the box on primitive types (bool, char, integers, floats); custom structs need a manual Radixable trait impl. Below a per-type/size diversion threshold it transparently calls Rust's own sort_unstable or stable sort instead of running the radix algorithm.",
+  "how_it_is_fast": "Uses most-significant-digit (MSD) radix partitioning derived from Ska sort, with a Verge-sort pre-processing heuristic to detect near-sorted runs and switch strategy; depending on type and size it may instead use DLSD (a diverting LSD radix sort) or 'Rollercoaster' (MSD then LSD hybrid, the author's own contribution). The multithreaded Peeka sort is an in-place parallel MSD radix sort based on MIT's Regions-sort. Per-type/size constants (radix width, diversion thresholds, thread chunk sizes) are hand-'profiled' ahead of time rather than computed at runtime, cutting overhead once arrays are large enough to amortize the histogram passes.",
+  "when_to_use": [
+    "Large in-memory arrays (roughly 1M+ elements) of primitive integer, float, bool or char types where extra memory for an out-of-place sort is acceptable",
+    "Types already covered in PROFILING.md's tuned table (bool, char, f32/f64, u8/u32/u64, i32/i64, usize/isize 8/32/64) on x86-64 hardware similar to a Ryzen 3950x",
+    "Throughput-bound batch sorting where you can re-run the benchmarks and re-tune constants on your own CPU before committing",
+    "Multithreaded sorts of very large arrays (RELEASES.md 1.2.0 fixed Peeka sort scaling past 1B elements) via the voracious_multithread feature"
+  ],
+  "when_not_to_use": [
+    "Small or medium arrays below the per-type diversion threshold (e.g. ~300-800 elements for f64) — you're just paying trait dispatch over calling Rust's own sort directly",
+    "Sorting String, tuples, or arrays — unsupported (Rust's orphan rule blocks tuple impls; String has no implementation yet)",
+    "Types outside the profiled table (u16, u128, i8/i16/i128, and most custom-struct field types) — these fall back to an untuned 'default default' profile the README says is 'clearly not optimized'",
+    "Memory-constrained environments — the out-of-place trait variants can use up to 2x the input array's memory",
+    "Needing an actively released, MSRV-stable dependency — crates.io's last documented release is 1.2.0 (March 2023) and the README's own 'last tested' toolchain is rustc 1.46.0 (2020), despite commits into late 2025"
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "none for single-thread use; optional rayon 1.7 pulled in only by the 'voracious_multithread' feature flag",
+    "min_toolchain": "edition 2018; README's stated 'last tested' toolchain is rustc 1.46.0 stable (2020) — no formal MSRV policy documented",
+    "platforms": "not explicitly documented; all tuning constants in PROFILING.md are profiled on an AMD Ryzen 9 3950x (x86-64) and the README says they are 'valid only for the computer on which I am doing the profiling'",
+    "thread_safety": "single-thread trait methods only require the element type to be Copy + PartialOrd; voracious_mt_sort additionally requires Send + Sync and only compiles when the voracious_multithread feature is enabled",
+    "drop_in_for_baseline": "partial — explain: different call syntax (.voracious_sort()/.voracious_stable_sort()/.voracious_mt_sort(n) instead of .sort()/.sort_unstable()); primitive slices/Vec work immediately via blanket impls, custom struct types must implement the Radixable trait by hand"
+  },
+  "gotchas": [
+    "Falls back to Rust's stock sort below a per-type size threshold, so 'wins' on small arrays in the benchmark data are really just measuring Rust's own sort_unstable/stable sort",
+    "Only the types checked off in PROFILING.md's table are actually tuned; everything else (u16, u128, i8/i16/i128, most struct field types) uses an unoptimized default profile",
+    "Closed GitHub issue #22 reports voracious_mt_sort appearing to hang for 2+ hours (192 threads) sorting 200 billion u64 values; the issue was closed with no comments or stated fix, so the failure mode is unresolved in the public record",
+    "Tuning constants (radix, diversion thresholds, thread chunk sizes) are hardcoded per the maintainer's own Ryzen 3950x — PROFILING.md explicitly warns gains may not transfer to other CPUs without re-profiling"
+  ],
+  "pick_this_over_siblings_when": "It's the only Rust entry among these siblings (the others are C++), so pick it when you're already in a Rust codebase sorting large primitive arrays and don't want an FFI shim to a C++ sort. If you need a C/C++ library instead, poor-circle/radix_sort is the closer analog (also LSD-style radix sort, benchmarked directly against std::sort/std::stable_sort at up to 1B int32).",
+  "verified_claims_summary": "A first-party benchmark checked into results/benchmark_1_2_0/ on an AMD Ryzen 3950x compares Voracious's trait sort against Rust's own sort_unstable (pdqsort-era) and stable sort on i64 arrays, not C++ std::sort. At 1,000,000 elements Voracious took 9.31ms vs sort_unstable's 37.9ms (~4.1x) and stable sort's 66.8ms (~7.2x); at 10,000,000 elements the gap was ~4.6x and ~6.4x respectively. At 1,000 elements Voracious is roughly tied with sort_unstable because it has already fallen back to pdqsort at that size. Compiler flags for the specific run are not stated.",
+  "status_note": "Repository shows commits into late 2025 (maintenance_status: active), but the crate's own RELEASES.md stops at 1.2.0 (March 2023) and the README's 'last tested' toolchain is rustc 1.46.0 from 2020. MIT-licensed and small enough to vendor or fork if you need to refresh the tuning constants or toolchain yourself.",
+  "sources_read": [
+    "https://github.com/lakwet/voracious_sort",
+    "https://github.com/lakwet/voracious_sort/blob/master/README.md",
+    "https://github.com/lakwet/voracious_sort/blob/master/Cargo.toml",
+    "https://github.com/lakwet/voracious_sort/blob/master/src/traits/radixsort.rs",
+    "https://github.com/lakwet/voracious_sort/blob/master/src/traits/radixable.rs",
+    "https://github.com/lakwet/voracious_sort/blob/master/PROFILING.md",
+    "https://github.com/lakwet/voracious_sort/blob/master/RELEASES.md",
+    "https://github.com/lakwet/voracious_sort/issues/22",
+    "https://github.com/lakwet/voracious_sort/issues",
+    "https://github.com/lakwet/voracious_sort/blob/master/results/benchmark_1_2_0/benchmark_results_trait_i64",
+    "https://github.com/lakwet/voracious_sort/blob/master/results/benchmark_1_2_0/computer_spec"
+  ],
+  "confidence": 0.4
+}

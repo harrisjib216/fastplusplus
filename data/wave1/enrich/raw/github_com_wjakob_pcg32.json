@@ -1,0 +1,45 @@
+{
+  "id": "https://github.com/wjakob/pcg32",
+  "one_liner": "Tiny two-header PCG32 RNG beating std::mt19937 on speed, with an optional AVX2 8-wide variant.",
+  "what_it_does": "A minimal, self-contained C++ port of Melissa O'Neill's PCG32 algorithm as a single struct (pcg32) with nextUInt(), nextUInt(bound), nextFloat(), nextDouble(), advance() (jump-ahead/back), a distance operator, and a Knuth shuffle() helper. pcg32_8.h adds pcg32_8, which runs eight PCG32 streams in parallel using AVX2 intrinsics, falling back to a plain loop of eight pcg32 instances when AVX2 isn't compiled in. It is not a drop-in for std::mt19937: callers switch the engine type and call its own methods rather than passing it through std::distribution machinery.",
+  "how_it_is_fast": "Implements the PCG technique: a 64-bit linear congruential state advanced each step, with an XSH-RR permutation (xorshift on the high bits, then a data-dependent rotate) producing the 32-bit output. The 16-byte state and few-instruction step are cheaper than MT19937's 624-word state and tempering. pcg32_8 vectorizes eight independent PCG32 streams with AVX2 (32-bit lane multiplies via partial products, permutevar8x32 lane shuffles, variable-shift rotate) to emit 8 outputs per step on capable hardware.",
+  "when_to_use": [
+    "Bulk generation of 32-bit random values for non-cryptographic use (simulations, games, sampling)",
+    "Need jump-ahead/jump-back (advance()) or stream-distance queries that std::mt19937 doesn't offer",
+    "Want to vendor a tiny, dependency-free source drop (two headers) instead of linking a library",
+    "Target CPU has AVX2 and the workload can batch draws 8 at a time (pcg32_8)",
+    "MT19937-class statistical quality is sufficient; cryptographic security is not required"
+  ],
+  "when_not_to_use": [
+    "Cryptographic or adversarial contexts — neither PCG32 nor MT19937 is designed for that",
+    "Need a native 64-bit output engine — this repo only has 32-bit pcg32 (use imneme/pcg-cpp for pcg64 variants)",
+    "Code needs to satisfy std::uniform_random_bit_generator (e.g. pass the engine to std::uniform_int_distribution or std::shuffle) — pcg32 has no operator() or static min()/max()",
+    "Building for a CPU without AVX2 while expecting the pcg32_8 speedup — it silently compiles to the scalar 8-instance fallback with no warning",
+    "Need active upstream maintenance — no commits since June 2016 and an open 'Missing LICENSE' issue since 2021"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none beyond the STL (pcg32.h: <inttypes.h>, <cmath>, <cassert>, <algorithm>; pcg32_8.h additionally: <immintrin.h>, <utility>, and includes pcg32.h)",
+    "min_toolchain": "not documented — no CMakeLists or pinned language standard; code uses only C++11-era features",
+    "platforms": "pcg32.h: any platform with a C++ compiler; pcg32_8.h: x86-64 with AVX2 (guarded by #if defined(__AVX2__)), else compiles a portable scalar fallback",
+    "thread_safety": "not documented; each pcg32/pcg32_8 instance owns its own state with no internal locking, so per-thread instances are safe by construction but this isn't stated in the source",
+    "drop_in_for_baseline": "partial — explain: nextUInt()/nextFloat()/nextDouble() mirror engine-style usage, but pcg32 lacks operator() and static min()/max(), so it does not satisfy std::uniform_random_bit_generator and can't be passed directly to std::uniform_int_distribution or std::shuffle"
+  },
+  "gotchas": [
+    "pcg32_8's AVX2 path is selected purely by the __AVX2__ macro at compile time; forgetting -mavx2 (or /arch:AVX2) silently yields the scalar fallback with no warning or error",
+    "No operator()/min()/max(), so it can't be used as a standard UniformRandomBitGenerator with <random> distributions — use its own nextUInt(bound) or shuffle() instead",
+    "Apache-2.0 is only stated in file header comments; there is no root LICENSE file, so GitHub reports 'no license' and an open issue (#2, 'Missing LICENSE', filed 2021) is still unresolved",
+    "advance() and operator- assume both generators share the same inc (stream) value; this is only checked via assert(), which is compiled out in NDEBUG/release builds"
+  ],
+  "pick_this_over_siblings_when": "Pick this over pcg-cpp (imneme/pcg-cpp) when you want the smallest possible PCG32-only source drop (two headers, no build system) rather than the full PCG engine family. On the same benchmark, pcg-cpp's pcg32_fast is about 14% faster (1071.97M vs 940.39M gen/s) and adds 64-bit engines, so prefer pcg-cpp when raw throughput or 64-bit output matters more than minimalism.",
+  "verified_claims_summary": "In the zeFresk/cpp-random-benchmarks shootout (clang, -O3 -DNDEBUG, no -march flag, Intel i5-3570 @ 3.40GHz, 100 repetitions), pcg32::nextUInt averaged 940.39M gen/s vs std::mt19937's 270.65M gen/s (~3.47x). pcg32_8 measured 944.20M gen/s, but since this CPU has no AVX2, that number reflects the header's scalar 8-instance fallback path rather than the intended vectorized path.",
+  "status_note": "Abandoned since June 2016 (no further commits; an open 'Missing LICENSE' issue since 2021) but Apache-2.0-licensed (declared in file headers only) and small enough — two headers — to vendor as-is.",
+  "sources_read": [
+    "https://github.com/wjakob/pcg32",
+    "https://github.com/wjakob/pcg32/blob/master/pcg32.h",
+    "https://github.com/wjakob/pcg32/blob/master/pcg32_8.h",
+    "https://github.com/wjakob/pcg32/issues",
+    "https://github.com/zeFresk/cpp-random-benchmarks"
+  ],
+  "confidence": 0.83
+}

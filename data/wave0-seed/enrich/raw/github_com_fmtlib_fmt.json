@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/fmtlib/fmt",
+  "one_liner": "Type-safe C++ formatting library beating printf/iostreams; its Dragonbox-based float formatter is the speed driver here.",
+  "what_it_does": "Type-safe replacement for C stdio (printf/sprintf) and C++ iostreams, using Python-style {} format strings. Core API is fmt::format (returns std::string), fmt::print (writes to a stream/file), and fmt::format_to (writes into an iterator or buffer, the call used in the benchmarked workload). Not source-compatible with printf/sprintf — different syntax and headers — though fmt::printf (fmt/printf.h) offers a printf-syntax-compatible wrapper. It is the reference implementation C++20 std::format and C++23 std::print were based on.",
+  "how_it_is_fast": "Float-to-string conversion uses the Dragonbox algorithm for shortest, correctly-rounded, round-trip decimal output, confirmed directly in the dtoa-benchmark README ('fmt::format_to with compile-time format strings (uses Dragonbox)'). FMT_COMPILE parses the format string into formatting code at compile time — confirmed in include/fmt/compile.h, which requires C++17 constexpr-if support for the compiled fast path and otherwise silently falls back to a non-compiled string check. Output accumulates in fmt::memory_buffer, avoiding iostreams' per-call locale/stream-state overhead and sprintf's null-terminated buffer handling.",
+  "when_to_use": [
+    "Hot paths converting many doubles/ints to strings (logging, serialization) where printf/iostreams latency is measurable",
+    "Format strings are known at compile time and paired with FMT_COMPILE to get the benchmarked fast path — the ~20x number does not apply to runtime-only format strings",
+    "Need shortest, correctly-rounded, round-trip float-to-string output, which sprintf/ostringstream do not guarantee",
+    "C++11+ codebase that can take on a header-only or compiled dependency for type-safe, low-allocation formatting",
+    "Already moving toward C++20/23 std::format/std::print — fmt is the pre-standard superset (adds chrono, ranges, color/style output)"
+  ],
+  "when_not_to_use": [
+    "Format strings are assembled dynamically at runtime with unknown structure — loses the FMT_COMPILE path the benchmark measured",
+    "printf's current latency is already acceptable and adding any dependency isn't worth it",
+    "Pre-C++11 toolchain — CMakeLists.txt requires cxx_std_11 as a hard minimum",
+    "Compile-time budget is tight across many translation units: fmt headers add ~5.1s vs printf's 1.6s per the README's 100-TU bloat-test (still far below IOStreams' 25.5s)",
+    "Need it truly drop-in for existing printf/sprintf call sites — the fast {}-syntax API requires rewriting call sites; only fmt::printf approximates a drop-in and wasn't the path benchmarked"
+  ],
+  "integration": {
+    "form": "header-only (FMT_HEADER_ONLY macro) or compiled static/shared lib (default); minimum config is 3 headers (core.h, format.h, format-inl.h) per README",
+    "dependencies": "none (README: 'no external dependencies')",
+    "min_toolchain": "C++11 minimum (CMakeLists.txt: target_compile_features(fmt PUBLIC cxx_std_11)); C++17 constexpr-if needed for the FMT_COMPILE fast path used in the benchmark",
+    "platforms": "any — README lists Linux/macOS/Windows CI (linux.yml, macos.yml, windows.yml workflows); no architecture-specific requirement found",
+    "thread_safety": "'fmt::format is thread-safe' (fmt maintainer, GitHub issue #3417 comment); no broader documented guarantee found this session for fmt::print or format_to writing into a buffer shared across threads",
+    "drop_in_for_baseline": "partial — fmt::printf (fmt/printf.h) offers printf-syntax compatibility including POSIX positional args, but the benchmarked fast path (fmt::format_to + FMT_COMPILE) uses the different {}-format API and is not a source drop-in for sprintf"
+  },
+  "gotchas": [
+    "FMT_COMPILE needs C++17 constexpr-if (__cpp_if_constexpr) to produce the compiled fast path; without it, it falls back to FMT_STRING (compile-time validated, not the fast-formatting path) — per include/fmt/compile.h",
+    "Exceptions can be disabled for -fno-exceptions builds via FMT_USE_EXCEPTIONS (checked in include/fmt/format.h)",
+    "basic_memory_buffer takes an Allocator template parameter (include/fmt/format.h) for custom allocation, but the default allocator is used unless a caller specifies otherwise"
+  ],
+  "pick_this_over_siblings_when": "Pick fmt when you want a full formatting API (containers, chrono, positional args, color output) whose float path happens to use Dragonbox internally, not just a float-to-string primitive. Pick Dragonbox directly (1.77x faster than std::to_chars) or Ryu (16.164x vs sprintf) when you need a standalone dtoa routine with no formatting-library overhead; fast_float solves the reverse problem (string-to-double parsing) and isn't a substitute here.",
+  "verified_claims_summary": "On an Apple M1 Pro with Apple Clang 21.0.0, fmt::format_to with FMT_COMPILE converted a 1.7M-value pool of random doubles to shortest round-trip decimal strings in a mean 36.84ns each, versus 744.72ns for sprintf (20.214x) and 885.30ns for ostringstream (~24x), per the fmtlib/dtoa-benchmark suite that fmt's own README links from its Performance section.",
+  "status_note": "Actively maintained (25,807 stars, MIT license, last commit 2026-09-21, 12 open issues, not archived) — low-risk long-term dependency; it's the reference basis for C++20 std::format.",
+  "sources_read": [
+    "https://github.com/fmtlib/fmt",
+    "https://github.com/fmtlib/fmt/blob/master/README.md",
+    "https://github.com/fmtlib/fmt/blob/master/CMakeLists.txt",
+    "https://github.com/fmtlib/fmt/blob/master/include/fmt/base.h",
+    "https://github.com/fmtlib/fmt/blob/master/include/fmt/core.h",
+    "https://github.com/fmtlib/fmt/blob/master/include/fmt/format.h",
+    "https://github.com/fmtlib/fmt/blob/master/include/fmt/compile.h",
+    "https://github.com/fmtlib/fmt/issues/3417",
+    "https://github.com/fmtlib/dtoa-benchmark/blob/main/README.md"
+  ],
+  "confidence": 0.88
+}

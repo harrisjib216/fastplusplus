@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/greg7mdp/parallel-hashmap",
+  "one_liner": "Header-only, Abseil-derived flat/node hash maps and a btree; drop-in for std::unordered_map/map, ~3x faster inserts.",
+  "what_it_does": "Provides eight SwissTable-style hash map/set variants (flat_hash_*, node_hash_*, and their parallel_* counterparts) plus ordered btree_map/btree_set/multimap/multiset, targeting std::unordered_map/set and std::map/set. API mirrors the STL associative-container interface (insert, find, erase, try_emplace, iterators) under the phmap:: namespace, so most code ports by swapping the type and header. The parallel_* variants add sharded submaps with optional per-submap locking for concurrent use.",
+  "how_it_is_fast": "Uses Abseil's swiss-table design: an open-addressed table with a parallel one-byte-per-slot metadata array probed with SSE2 (checks 16 slots at once), letting load factor run up to 87.5% before resizing. flat_hash_map/set store keys and values directly in the bucket array (no per-node allocation/indirection). parallel_* variants split the table into N (default 16) independently resizable submaps, which lowers peak resize memory and lets different threads lock different submaps concurrently.",
+  "when_to_use": [
+    "Insert/lookup-heavy replacement for std::unordered_map/set where you can accept flat_hash_map's pointer/iterator invalidation on mutation.",
+    "Need pointer stability but still want a faster-than-std table: use node_hash_map/set instead of flat.",
+    "Multithreaded code with a few large maps read/written from many threads: parallel_flat_hash_map/parallel_node_hash_map with an explicit mutex template argument (std::mutex, boost::shared_mutex, etc.) and if_contains/modify_if/try_emplace_l.",
+    "Header-only C++11 codebase (old GCC/Clang/MSVC, embedded/toolchain-constrained) that can't pull in full Abseil.",
+    "Want a std::map/set-like ordered container with lower memory than a red-black tree: btree_map/btree_set family."
+  ],
+  "when_not_to_use": [
+    "Code relies on std::unordered_map/std::map pointer/iterator stability across mutation: flat_hash_map and all btree containers move elements in memory on rehash/mutation.",
+    "Highly skewed concurrent insert workloads (most inserts hitting one key/submap): parallel_flat_hash_map throughput collapses under submap-lock contention (repo issue #215: 240M inserts, ~239M identical keys, CPU usage dropped to ~19%, 233s vs 17s for a Windows concurrent_unordered_map).",
+    "Assuming built-in thread safety: the parallel_* default mutex is NullMutex (no locking); concurrent read+write without supplying a real mutex template parameter is undefined behavior and has produced real crashes (issue #181, EXC_BAD_ACCESS).",
+    "Need Abseil's randomized iteration order for DoS resistance against adversarial keys: phmap disables that randomization by default (opt-in via PHMAP_NON_DETERMINISTIC).",
+    "Large, expensive-to-move value types (roughly >100 bytes per README's own caveat): flat_hash_map's in-place moves get costly; node_hash_map is the safer choice."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none required; optional Abseil headers (include before phmap.h + define PHMAP_USE_ABSL_HASH) to use absl::Hash instead of std::hash, optional boost::hash_value() support",
+    "min_toolchain": "C++11 required (C++14/17 APIs like try_emplace available when the compiler supports them); GCC 4.7+, Xcode/Apple clang 4.2.1+, MSVC roughly VS2015 update3+ per phmap_config.h version gate; README states CI coverage on GCC 4.8-12, Clang 3.9-16, VS2015/2017/2019/2022, Intel 18/19",
+    "platforms": "tested on Windows, Linux, macOS; x86/x86-64 uses SSE2 for the parallel probe (per swiss-table design); phmap_config.h also has __arm__/__aarch64__ branches, so ARM builds are supported through the portable path",
+    "thread_safety": "Follows std library rules: a single table is safe for concurrent reads only; concurrent read+write to the same table needs external synchronization unless using a parallel_* table instantiated with a mutex type as the last template parameter, in which case if_contains()/modify_if()/try_emplace_l()/lazy_emplace_l() lock at the submap level. Iterators/references from standard APIs are never protected by that mutex.",
+    "drop_in_for_baseline": "partial — explain: same insert/find/erase/iterator surface as std::unordered_map/std::map, but under the phmap:: namespace, with different iterator/pointer invalidation guarantees for flat_hash_* and btree_* (elements move in memory), and no synchronization at all unless you opt into the parallel_* variants with a mutex."
+  },
+  "gotchas": [
+    "flat_hash_map/set and all btree containers can relocate stored elements in memory on mutation, invalidating pointers/iterators — unlike std::unordered_map/std::map. Use node_hash_map/set if you need stability.",
+    "parallel_* tables default to NullMutex (no locking); you must supply a real mutex type as the template's last parameter to get thread-safe concurrent access, or you risk crashes under concurrent read/write (issue #181).",
+    "parallel_* insert throughput can collapse under extreme key skew because most threads contend for the same submap's lock (issue #215: near-total single-key workload dropped to ~19% CPU use and lost to a naive concurrent map).",
+    "Abseil-style randomized iteration order (DoS mitigation) is off by default in phmap; enable explicitly with #define PHMAP_NON_DETERMINISTIC 1 before including phmap.h if that matters for your use case."
+  ],
+  "pick_this_over_siblings_when": "phmap is the only sibling that bundles flat AND node hash variants, submap-sharded parallel_* variants with built-in per-submap locking, and a btree ordered-map family in one header-only, actively maintained package — pick it over ska::flat_hash_map/tsl::robin_map/sparsepp/Verstable when you specifically want that locking-capable multithreaded variant or the flat/node choice, and over libcuckoo when your concurrency needs are moderate (a few large maps, not massively parallel) since phmap's parallel_* design loses badly under heavy single-key contention (issue #215) where libcuckoo's design is built for exactly that.",
+  "verified_claims_summary": "Per the record's verification of the repo's own raw benchmark data (100M random 8-byte-integer-key inserts, MSVC Visual Studio 2017, cl -EHsc -DNDEBUG -O2, CPU model not stated): std::unordered_map took 48.38s vs phmap::flat_hash_map 14.41s vs phmap::parallel_flat_hash_map 14.47s, roughly 3.4x faster than std::unordered_map. The writeup's own '~3x faster' sentence actually describes absl::flat_hash_map vs VS2017's std::unordered_map, not phmap directly.",
+  "status_note": "Actively maintained (last commit 2026-09-10, 3.2k stars, Apache-2.0, header-only so trivially vendorable), but the author is directing new feature development to the C++20 successor repo 'gtl'; treat parallel-hashmap as the stable C++11-compatible branch rather than where new capabilities land.",
+  "sources_read": [
+    "https://github.com/greg7mdp/parallel-hashmap",
+    "https://github.com/greg7mdp/parallel-hashmap/blob/master/README.md",
+    "https://github.com/greg7mdp/parallel-hashmap/blob/master/parallel_hashmap/phmap_config.h",
+    "https://github.com/greg7mdp/parallel-hashmap/issues/215",
+    "https://github.com/greg7mdp/parallel-hashmap/issues/181",
+    "https://github.com/greg7mdp/parallel-hashmap/issues"
+  ],
+  "confidence": 0.75
+}

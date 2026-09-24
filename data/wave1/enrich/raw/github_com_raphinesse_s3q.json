@@ -1,0 +1,41 @@
+{
+  "id": "https://github.com/raphinesse/s3q",
+  "one_liner": "Header-only C++17 cache-efficient priority queue beating std::priority_queue via batched, sample-sort-style bucket classification.",
+  "what_it_does": "S3Q is a comparison-based priority queue (push/pop/top/size/empty) supporting the same operations as std::priority_queue but not its interface: you configure it with a `Cfg` struct specifying `Item`, an optional `GetKey` functor, and two tuning constants, then instantiate `s3q::PriorityQueue<Cfg>`. Internally it buffers inserts, classifies them into buckets using a splitter-based classifier reused from the `ips4o` sample-sort library, and refills a small binary heap on pop, amortizing work in batches instead of doing per-element heap operations.",
+  "how_it_is_fast": "It avoids per-insert branch mispredictions of a plain binary heap by batching pushes/pops and using a branchless, sample-sort-derived splitter classifier (borrowed from ips4o's classifier.hpp) to route items into buckets in bulk. Only a small base-case binary heap (sized to fit L1, `kBufBaseSize`, default ~32KiB/Item) is ever heap-ordered directly; the rest lives in coarser buckets that are split/merged in batches, giving amortized O(1/B log(M/B) N/M) cache misses per operation instead of O(log N) essentially-random accesses.",
+  "when_to_use": [
+    "Large queues (benchmark validated 2^13-2^27 elements) where cache-miss-driven throughput matters more than per-op latency",
+    "Comparison-based key ordering needed with no monotonicity constraint (unlike radix heaps)",
+    "Keys are mostly-unique or have modest duplication (see gotchas)",
+    "C++17 project that can pull in ips4o, range-v3, and xoshiro as build dependencies",
+    "Workload matches push/pop-heavy microbenchmark shape (bulk insert then repeated pop+push)"
+  ],
+  "when_not_to_use": [
+    "Workloads with many duplicate/near-duplicate keys: open issue #15 (opened 2026-04-10, still open) reports a stack overflow inserting millions of identical/near-identical keys; thesis 5.2.1 admits full duplicate-key handling is future work",
+    "Need item keys at the extreme of the key's range (e.g. INT_MIN for i32 keys) — reserved internally as sentinels, confirmed problematic in issue #15",
+    "Need a true drop-in for std::priority_queue's template interface (comparator + container) — S3Q requires a Cfg struct and different construction",
+    "Concurrent/multi-threaded access — no synchronization in the code and thread safety is not documented",
+    "Small queues that fit comfortably in L1 already — the bucket/classifier machinery adds setup overhead a plain heap doesn't need"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "ips4o (fork: raphinesse/ips4o, tag s3q.2), range-v3 (pinned commit 6f3d0e2af9ae), xoshiro (Reputeless/Xoshiro-cpp v1.1); benchmarks additionally pull tlx and raphinesse/SequenceHeap",
+    "min_toolchain": "C++17; thesis benchmarks used GCC 9.3.0 -O3. Closed issues #1, #5, #8 record and fix build failures on GCC 12-15 (-Werror=array-bounds, dangling-pointer warnings)",
+    "platforms": "x86-64 tested in the thesis (Xeon E5-2650 v2, Athlon II X4 635); no SIMD intrinsics or arch-specific code visible in the headers I read, so likely portable, but only x86-64 is verified",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": "partial — explain: same push/top/pop/size/empty semantics, but construction requires a Cfg template parameter (Item type + GetKey) instead of std::priority_queue's Compare/Container template parameters, so call sites need rewriting, not just a type swap"
+  },
+  "gotchas": [
+    "Open issue #15 (still open as of 2026-05-27): stack overflow on inputs with large numbers of duplicate/near-duplicate keys; root cause is that overflowing buckets need enough distinct keys to split cleanly",
+    "Item keys must avoid the extreme sentinel values of the key type (e.g. i32::MIN) — reserved internally for range bounds per the issue #15 discussion",
+    "kBufBaseSize/kLogMaxDegree defaults are tuned for a 32KiB, 8-way, 64B-line L1D (per maintainer comment on issue #15); mismatched cache geometry may need retuning for best throughput",
+    "Requires defining a Cfg struct per Item type (Item::key member or custom GetKey functor) — more upfront setup than a comparator-only API"
+  ],
+  "pick_this_over_siblings_when": "Pick S3Q over radix-heap/pair_radix_heap when keys aren't monotone or aren't well-suited to radix decomposition, since S3Q is purely comparison-based. Pick it over prio_queue (rollbear) when N is large enough (thesis tested up to 2^27) that cache-miss throughput dominates over a simpler binary-heap implementation; for smaller queues or simplicity, prio_queue's plain-heap approach avoids S3Q's extra dependencies and duplicate-key edge cases. If AVX2/AVX-512 hardware is available and the workload is monotone/constant-size, SimdQuickHeap is reported to beat S3Q itself by 1.4-2.8x.",
+  "verified_claims_summary": "In a push+pop microbenchmark (2^13 to 2^27 elements) measured on GCC 9.3.0 -O3 (Ubuntu 20.04) across an Intel Xeon E5-2650 v2 and an AMD Athlon II X4 635, S3Q's speedup over min(S3QBH tuned binary heap, StdQueue) grows roughly logarithmically with N, reaching 4.6x-7x at the largest sizes; StdQueue in the benchmark harness is literally `std::priority_queue<T, std::vector<T>, std::greater<T>>` (confirmed in benchmarks/include/subjects/StdQueue.hpp), i.e. GCC's libstdc++ std::priority_queue.",
+  "status_note": "Actively maintained (last commit 2026-05-27, three build/correctness issues closed in 2025, one duplicate-key stack-overflow issue still open); MIT-licensed and header-only so it's easy to vendor, but small (7 stars) and the duplicate-key edge case is unresolved.",
+  "sources_read": [
+    "https://github.com/raphinesse/s3q"
+  ],
+  "confidence": 0.85
+}

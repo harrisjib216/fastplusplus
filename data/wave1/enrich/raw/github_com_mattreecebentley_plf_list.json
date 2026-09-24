@@ -1,0 +1,47 @@
+{
+  "id": "https://github.com/mattreecebentley/plf_list",
+  "one_liner": "Node-clustering drop-in replacement for std::list; faster insertion, erasure, sort, and much faster clear/destruction.",
+  "what_it_does": "plf::list is a header-only, near-drop-in replacement for std::list that keeps the same doubly-linked, order-preserving, pointer-stable semantics but groups nodes into fixed-size memory blocks (default 2048 elements) instead of allocating one node per insertion. It exposes the full std::list interface plus extras (reserve(), shrink_to_fit(), capacity(), memory(), unordered_find_* helpers) and adds within-list splice overloads, but drops single-element/range splicing between two separate list instances (only whole-list splice across instances is supported).",
+  "how_it_is_fast": "Each memory block keeps a per-block free list of erased slots; on insertion the algorithm searches outward from the target position for a nearby free slot before falling back to allocating a new block, which keeps blocks dense and cuts allocator calls compared to std::list's one-node-per-element scheme. sort() temporarily gathers node pointers into a contiguous array and quicksorts that array instead of mergesorting the linked list in place, which is faster but not guaranteed stable. clear()/destruction skip per-node destructor calls entirely for trivially-destructible element types, which is why those two benchmarks show multiple-order-of-magnitude speedups that don't generalize to non-trivial types.",
+  "when_to_use": [
+    "Hot paths doing frequent insertion/erasure in the middle of a list-like sequence, where std::list's per-node allocation overhead dominates",
+    "Trivially-destructible or small POD element types, where the clear()/destructor speedups are largest",
+    "Code that needs std::list's pointer/iterator stability under insertion and erasure but wants better cache locality from clustered nodes",
+    "GCC/libstdc++ targets on x86-64 similar to the tested environment (MinGW GCC 9.2, Haswell), where the numbers are verified",
+    "Projects that can vendor two headers (plf_list.h, plf_tools.h) and want C++98-through-C++23 portability without a build step"
+  ],
+  "when_not_to_use": [
+    "Code relying on partial (single-element or range) splicing between two separate list objects — only whole-list splice across instances is supported",
+    "Code that needs a stable sort; plf::list's pointer-array quicksort is explicitly not guaranteed stable, unlike std::list::sort()",
+    "Heavy multi-threaded use beyond simultaneous reads — docs describe only limited concurrency guarantees, not general thread safety",
+    "Anything on libc++ or MSVC STL — only libstdc++ (MinGW GCC 9.2) is benchmarked, so gains on those standard libraries are unverified",
+    "Very large heap-memory scenarios, where the project's own docs say erasure is only 'best... until very large amounts of memory are involved' without quantifying the falloff"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (bundles plf_tools.h / plf_tools_undef.h from the same repo for compiler-feature detection)",
+    "min_toolchain": "C++98 minimum; auto-detects and uses C++11/14/17/20 features (allocator_traits, variadics, concepts, ranges) when the compiler supports them",
+    "platforms": "any (portable standard C++, no platform-specific code); benchmarked on x86-64 Windows/MinGW GCC 9.2",
+    "thread_safety": "Not documented as generally thread-safe. Docs state only simultaneous reads are reliably safe, and that insertion is unaffected by concurrent iteration except at the exact insertion point.",
+    "drop_in_for_baseline": "partial — full std::list API plus extras, but splice() between two separate list instances only supports whole-list transfer, not single-element/range splice"
+  },
+  "gotchas": [
+    "sort() is not guaranteed stable, unlike std::list::sort()",
+    "The multiple-order-of-magnitude clear()/destruction speedups apply only to trivially-destructible types; non-trivially-destructible types see 811%/1,248% instead of 1,147,900%/6,350%",
+    "shrink_to_fit() invalidates all pointers, iterators, and references — unlike ordinary insertion/erasure on plf::list",
+    "Splicing an iterator to its own position is undefined behavior, matching std::list (raised as issue #34, closed by the maintainer as user error/UB, not a bug)"
+  ],
+  "pick_this_over_siblings_when": "Pick plf::list over plf::colony/hive when you need std::list's ordered, doubly-linked semantics and its splice/sort/merge/remove API; plf::colony is unordered and only a substitute when insertion order doesn't matter. The other siblings (eastl::vector, fast_vector, veque) target std::vector, not std::list, so they're not alternatives when you specifically need list-style pointer stability and O(1) mid-sequence insertion/erasure.",
+  "verified_claims_summary": "On the project's own benchmark page (MinGW GCC 9.2 x64, -O2 -march=native, Intel Xeon E3-1241 Haswell, libstdc++), plf::list beat std::list by about 333% average insertion throughput, 77% faster sort, 70% faster reverse, 91% faster remove/remove_if, 63% faster unique, and roughly 25% faster in ordered 'real-world' modification scenarios; the multi-order-of-magnitude clear()/destruction gains apply only to trivially-destructible types (811%/1,248% for non-trivial types).",
+  "status_note": "Actively maintained (last commit 2026-09-19; all 29 historical GitHub issues are closed) and Zlib-licensed, so it's low-risk to vendor as two header files.",
+  "sources_read": [
+    "https://github.com/mattreecebentley/plf_list",
+    "https://github.com/mattreecebentley/plf_list/blob/master/README.md",
+    "https://github.com/mattreecebentley/plf_list/blob/master/plf_list.h",
+    "https://github.com/mattreecebentley/plf_list/blob/master/LICENSE.md",
+    "https://github.com/mattreecebentley/plf_list/issues/34",
+    "http://www.plflib.org/benchmarks_haswell_gcc.htm",
+    "https://plflib.org/list.htm"
+  ],
+  "confidence": 0.8
+}

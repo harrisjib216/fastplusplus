@@ -1,0 +1,45 @@
+{
+  "id": "https://github.com/lemire/simdsearch",
+  "one_liner": "Header-only SIMD substring search with a linear-time worst-case fallback; ~30x libc memmem on Apple M-series.",
+  "what_it_does": "Finds the first occurrence of a byte pattern in a byte buffer, the job memmem/strstr/std::string::find already do. The API is not drop-in: simdsearch::find takes explicit length-delimited char pointers or a string_view and returns a {bool, index} pair or npos, as a free function with no searcher object to build. It handles arbitrary bytes (NUL, values above 0x7F, empty needles) and never reads outside the given ranges.",
+  "how_it_is_fast": "Needle-Hammer picks 2-4 selective bytes from the needle as anchors and SIMD-filters 256 haystack positions per AVX-512 iteration (64 on NEON) against them, narrowing survivors byte by byte. A per-call work counter caps how much filtering it does; once the budget is spent on adversarial input it hands off to a Crochemore-Perrin two-way search, so every call stays O(n+m) instead of degrading like an unguarded anchor filter.",
+  "when_to_use": [
+    "Substring/byte search over ordinary text or binary data on x86-64 with AVX-512F+BW, or any AArch64 core (NEON is architectural there)",
+    "Throughput-bound scanning (log grepping, large-buffer search) rather than a single short lookup, since the design targets memory-speed scanning",
+    "You can tolerate adversarial-input inputs falling back only to two-way's O(n+m), not needing sublinear worst-case behavior",
+    "You can vendor a header-only, dependency-free library and compile per target machine (a checked-in single header and single-header releases exist)",
+    "You need byte-exact, NUL-safe, non-UTF-8-aware search rather than a character-aware routine"
+  ],
+  "when_not_to_use": [
+    "Shipping one binary to x86-64 machines with unknown/mixed CPUs — there is no runtime dispatch; a CPU without AVX-512F+BW hits an illegal instruction",
+    "Targeting mainstream x86-64 client parts (most Intel client chips have AVX-512 fused off, pre-Zen4 AMD lacks it) or 32-bit/RISC-V/POWER, all unsupported",
+    "Building with MSVC — unsupported, since the headers use GCC/Clang builtins and attributes",
+    "Needing a licensed dependency for production use — the repo ships no LICENSE file",
+    "Wanting a published, apples-to-apples comparison against std::search or std::string::find — the benchmark driver includes both but no numbers for them are in the README"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none for the library itself; the benchmark driver additionally fetches a 'counters' library and StringZilla via CPM (network access needed at configure time) and can optionally link Rust's memchr crate",
+    "min_toolchain": "C++17 for the library (GCC 14+ or a recent Clang, tested on GCC 14/15 and Apple clang 17); the benchmark driver needs C++23 for std::print; MSVC unsupported",
+    "platforms": "x86-64 requiring AVX-512F and AVX-512BW at compile time with no runtime dispatch, or AArch64 with NEON; other architectures fail to compile with #error",
+    "thread_safety": "Documented as reentrant and thread-safe: no allocation, no global or static state; needle preprocessing happens fresh inside every call with nothing to amortize across calls",
+    "drop_in_for_baseline": "partial — matches memmem/std::string::find first-occurrence semantics, but the call shape differs: explicit length-delimited pointers or string_view in, {bool,index} pair or npos out, no iterators"
+  },
+  "gotchas": [
+    "No runtime CPU dispatch: an AVX-512-compiled binary executes illegal instructions on hardware without AVX-512F+BW; the caller must detect the CPU and keep a fallback path itself",
+    "find_unguarded skips the work-counter guard entirely (a few percent faster on ordinary text) but reverts to O(n·m) worst case; documented as safe only on input the caller controls",
+    "Tuning constants (NH2_START_ANCHORS, NH2_BUDGET_DEN, etc.) were fitted on Emerald Rapids, Zen 5 and Apple M4 Max; the README says you shouldn't need to touch them but does not claim they are optimal on other hardware",
+    "No LICENSE file anywhere in the repo, so there is no stated legal basis for use, modification, or redistribution"
+  ],
+  "pick_this_over_siblings_when": "The catalogued siblings (sb_lower_bound, scandum/binary_search, SIMD Quad search, FastBinarySearch) all accelerate binary search over sorted arrays; simdsearch instead accelerates unsorted substring/byte search, i.e. memmem/strstr territory. Pick it when the task is finding a byte pattern inside a buffer, not locating a key in an already-sorted sequence.",
+  "verified_claims_summary": "The README claims about 45 GB/s substring-search throughput on an unnamed Apple M-series core, roughly 30x the platform's libc memmem, measured on ordinary text at memory speed. The repo's own benchmark/README.md notes Apple's memmem 'uses a much simpler scan and lands well behind strstr,' so the 30x figure is against a weak platform baseline, and the top-level README tells readers to reproduce numbers on their own machine rather than publishing a results table for this specific claim.",
+  "status_note": "Active: created 2026-07-28, last commit 2026-09-21, with one merged PR already fixing kernel correctness issues, but it is a brand-new, single-contributor project (9 stars, no LICENSE file), so treat it as reference material rather than something to depend on directly.",
+  "sources_read": [
+    "https://github.com/lemire/simdsearch#readme",
+    "https://github.com/lemire/simdsearch/blob/main/benchmark/README.md",
+    "https://github.com/lemire/simdsearch",
+    "https://github.com/lemire/simdsearch/issues",
+    "https://github.com/lemire/simdsearch/pulls"
+  ],
+  "confidence": 0.6
+}

@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/jart/json.cpp",
+  "one_liner": "Lean C++11 JSON parser/serializer beating nlohmann::json 2-3x on parse/round-trip latency and compile time.",
+  "what_it_does": "A minimal JSON value type (jt::Json) with a hand-written recursive-descent parser and serializer, shipped as a two-file source drop (json.h + json.cpp) plus a vendored copy of Google's double-conversion library for float/double formatting. Values are a tagged union over bool/long/float/double/std::string/std::vector<Json>/std::map<std::string,Json>, so object members live in a std::map (key-sorted) rather than insertion order. The API shape (is*/get*/operator[]/toString) resembles nlohmann's but is not source-compatible: parse() returns a std::pair<Status, Json> instead of throwing on malformed input, and type-mismatch getters abort() or throw std::logic_error depending on whether exceptions are enabled.",
+  "how_it_is_fast": "Speed comes from a small, allocation-conscious value type (a union of primitive/std::string/vector/map with no std::variant or type-erasure layer) and a direct byte-level recursive-descent parser that walks raw char pointers guided by a precomputed 256-entry classification table (kJsonStr) instead of stream or iterator abstractions. Float/double-to-string conversion is offloaded to Google's double-conversion library rather than the locale-aware sstream/strtod paths nlohmann and the STL use. The small overall code size (233 + 1,303 lines) also keeps compile times and instruction-cache pressure down versus nlohmann's single ~24,766-line header.",
+  "when_to_use": [
+    "Hot-path JSON parse/serialize where nlohmann::json's per-value overhead or header compile cost is the bottleneck",
+    "Projects that can tolerate std::map key-ordered (not insertion-ordered) JSON objects",
+    "Contexts where vendoring a small source-drop (json.h/json.cpp + double-conversion) beats pulling in a large header-only library",
+    "Need accurate float32 round-tripping (e.g. embeddings served over HTTP) without upcasting to double",
+    "C++11-only or less common toolchains/architectures: CI covers gcc/Ubuntu, ppc64le, s390x (via QEMU), macOS, and MSVC 2022"
+  ],
+  "when_not_to_use": [
+    "Need nlohmann::json's feature surface: JSON Pointer, SAX interface, custom (de)serializers, CBOR/MessagePack/BSON, or ordered_json's true insertion-order objects",
+    "Need a widely audited, battle-tested parser; json.cpp has 796 stars and has been public only since late 2024, versus nlohmann's much longer track record",
+    "Can't accept abort() as a possible outcome of a type-mismatch getter call in exception-disabled builds",
+    "Can't take on Google double-conversion as a build dependency (vendored, but still required)",
+    "Need independently reproduced numbers: the benchmark is first-party, single-machine, and the README itself flags an unexplained 39x result on the unmodified json_test_suite case"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "Google double-conversion (vendored in-repo under double-conversion/)",
+    "min_toolchain": "C++11 (CMAKE_CXX_STANDARD 11 in CMakeLists.txt); builds with GCC, Clang/AppleClang, and MSVC 2022 per CI",
+    "platforms": "x86-64, ppc64le, s390x (CI via QEMU), macOS, Windows (MSVC) — no SIMD requirement",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": "partial — similar is*/get*/operator[] API shape to nlohmann, but parse() returns a Status/Json pair instead of throwing, type-mismatch getters abort() or throw std::logic_error (not nlohmann::type_error), and std::map-backed objects sort by key instead of preserving insertion order like the ordered_json baseline it's benchmarked against"
+  },
+  "gotchas": [
+    "Object keys are stored in std::map, so iteration/serialization order is alphabetical, not insertion order — a real behavioral difference from the ordered_json baseline used in its own benchmark",
+    "Getter type mismatches call abort() by default, or throw std::logic_error instead if __cpp_exceptions/__EXCEPTIONS/_CPPUNWIND is defined at compile time (json.cpp, ON_LOGIC_ERROR macro)",
+    "The headline json_test_suite benchmark number (~1.6x/3x) comes from a locally modified version of that test that keeps only the passing cases; the README states the unmodified test shows a 39x gap the authors 'haven't figured out how to explain yet'",
+    "Requires Google double-conversion at build time; it's vendored in the repo (not a git submodule) so no separate fetch is needed, but it is a hard link dependency"
+  ],
+  "pick_this_over_siblings_when": "Among the nlohmann-beating siblings, pick json.cpp over utl::json when you want a much smaller (233+1,303-line) source drop instead of a header-only library and don't need utl::json's wider UTL ecosystem. If the workload needs SIMD-scale throughput on large documents rather than a 2-3x win over nlohmann on small/medium fixtures, look at a simdjson/yyjson-class parser instead (see DAW JSON Link's or Tachyon.JSON's comparisons).",
+  "verified_claims_summary": "On gcc 13.2 -O3 (Ubuntu 24.04, AMD Ryzen Threadripper PRO 7995WX), json.cpp's own benchmark (2000 runs per fixture) reports roughly 2.8x-3.25x lower latency than nlohmann::ordered_json on object/deep/parse/round-trip micro-tests and about 1.6x on a locally modified json_test_suite run; this is a first-party, single-machine result with no independent reproduction found.",
+  "status_note": "Actively maintained (last commit 2026-04-08, 796 stars, 3 open issues), Apache-2.0 licensed and small enough to vendor, but young (public since late 2024) and far less battle-tested than nlohmann::json.",
+  "sources_read": [
+    "https://github.com/jart/json.cpp",
+    "https://github.com/jart/json.cpp/blob/main/README.md",
+    "https://github.com/jart/json.cpp/blob/main/json.h",
+    "https://github.com/jart/json.cpp/blob/main/json.cpp",
+    "https://github.com/jart/json.cpp/blob/main/CMakeLists.txt",
+    "https://github.com/jart/json.cpp/blob/main/.github/workflows/ubuntu.yml",
+    "https://github.com/jart/json.cpp/blob/main/.github/workflows/macos.yml",
+    "https://github.com/jart/json.cpp/blob/main/.github/workflows/msvc.yml",
+    "https://github.com/jart/json.cpp/blob/main/json_test.cpp",
+    "https://github.com/jart/json.cpp/issues/12",
+    "https://github.com/jart/json.cpp/issues",
+    "https://github.com/jart/json.cpp/tree/main/double-conversion"
+  ],
+  "confidence": 0.7
+}

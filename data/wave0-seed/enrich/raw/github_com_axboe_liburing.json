@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/axboe/liburing",
+  "one_liner": "Userspace wrapper around Linux's io_uring ring-buffer syscall interface; beats libaio and POSIX-AIO on IOPS and syscall overhead.",
+  "what_it_does": "liburing wraps the Linux io_uring syscalls (io_uring_setup, io_uring_enter, io_uring_register) behind a submission-queue/completion-queue (SQE/CQE) API backed by ring buffers mmap'd between kernel and userspace. It targets the same async file and network I/O use cases as libaio and POSIX-AIO, but the interface is a batch ring rather than libaio's io_submit()/io_getevents() call pair: callers fill SQEs, call io_uring_submit(), and reap CQEs. Most of the public API is 'static inline' in liburing.h; a separate liburing-ffi shared library exposes the same calls as real symbols for callers that can't use inline functions.",
+  "how_it_is_fast": "The submission and completion queues are ring buffers shared via mmap, so many I/O requests can be queued and many results reaped without a syscall per operation — io_uring_enter can submit a whole batch of SQEs and/or reap a batch of CQEs in one call. Optional SQPOLL mode runs a kernel-side thread that polls the SQ directly, letting the application skip io_uring_enter for submission entirely. This avoids POSIX-AIO's thread-pool dispatch overhead and cuts the per-op syscall count that libaio still pays for io_submit/io_getevents, which is what produces the reported IOPS gains (largest over POSIX-AIO, smaller over libaio).",
+  "when_to_use": [
+    "High-IOPS NVMe/direct-I/O or socket workloads on Linux 5.1+ where syscall count per operation matters (fio-style random read/write, proxies, storage engines).",
+    "Workloads that naturally batch many concurrent I/Os per thread, so ring-based submit/reap amortizes across a batch.",
+    "Need I/O opcodes beyond read/write/fsync — accept, connect, splice, openat, provided-buffer recv, etc. — from one interface.",
+    "Willing to dedicate a kernel thread (SQPOLL) to shave submission syscalls for sustained high-throughput pipelines.",
+    "Already a Linux-only codebase (QEMU, RocksDB, ScyllaDB/Seastar are existing adopters) where portability isn't a constraint."
+  ],
+  "when_not_to_use": [
+    "Need portability off Linux, or must support pre-5.1 kernels / distros that disable io_uring by policy (some hardened container platforms, ChromeOS).",
+    "Low-concurrency, latency-insensitive I/O where the ~7-12% direct-I/O / ~22% buffered-I/O gain over libaio doesn't justify the added ring-management complexity.",
+    "Security-sensitive or multi-tenant environments wary of io_uring's kernel-side CVE history.",
+    "Constrained memlocked rlimit environments (older kernels, small containers) where registering buffers or large rings can hit RLIMIT_MEMLOCK.",
+    "Need to submit from multiple threads against a single ring without adding your own locking — concurrent unsynchronized submission isn't documented as safe."
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "none beyond the Linux kernel UAPI headers",
+    "min_toolchain": "not documented precisely; GCC/Clang with GNU extensions (built with -D_GNU_SOURCE), built via ./configure && make",
+    "platforms": "Linux only, kernel 5.1+ (more opcodes/features on newer kernels); dedicated syscall/lib.h for x86, x86-64, aarch64, riscv64, generic fallback elsewhere",
+    "thread_safety": "not documented in headers/man pages; recurring GitHub issues (e.g. #39, #604) about cross-thread use suggest a ring's SQ is not safe for concurrent unsynchronized submission — use one ring per thread or add your own locking",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "fio's io_uring engine (engines/io_uring.c) issues raw io_uring_enter syscalls directly and does not link liburing — the ScyllaDB benchmark measures the kernel io_uring interface liburing wraps, not liburing's own call overhead.",
+    "SQPOLL and registered buffers eat into RLIMIT_MEMLOCK; a low default (~64K) can silently cap ring/buffer registration on kernels <=5.11.",
+    "One vendored kernel header ships GPL-with-Linux-syscall-note-exception rather than the LGPL/MIT dual license covering the rest of the repo.",
+    "CQEs can complete out of submission order; correlate them via user_data, not position."
+  ],
+  "pick_this_over_siblings_when": "no siblings catalogued yet",
+  "verified_claims_summary": "ScyllaDB (independent third party) ran fio 1KB random reads across 4 files on an 8-CPU/NVMe box, 72 jobs, iodepth=8: direct I/O gave io_uring 1.42-1.49M IOPS vs libaio 1.32M (~7-12% faster) and sync read/write 814K (~1.7-1.8x); hot-cache buffered I/O gave io_uring 5.02M IOPS vs libaio 4.13M (~22% faster, where libaio degrades toward sync behavior). A separate single-CPU 512B test on Intel Optane showed io_uring at 346MB/s / 1,470us vs libaio 330MB/s / 1,549us (~5% faster). CPU model, kernel version, fio version and compiler flags are not stated on the page.",
+  "status_note": "Actively maintained (latest release 2.15 per liburing.spec, commits as recently as 2026-09-11); MIT/LGPL-2.1+ dual license (one GPL-with-syscall-note kernel header excepted) and small enough to vendor.",
+  "sources_read": [
+    "https://github.com/axboe/liburing",
+    "https://github.com/axboe/liburing/blob/master/README",
+    "https://github.com/axboe/liburing/blob/master/CHANGELOG",
+    "https://github.com/axboe/liburing/blob/master/man/io_uring.7",
+    "https://github.com/axboe/liburing/blob/master/man/io_uring_submit.3",
+    "https://github.com/axboe/liburing/blob/master/man/io_uring_sqpoll.7",
+    "https://github.com/axboe/liburing/blob/master/src/include/liburing.h",
+    "https://github.com/axboe/liburing/blob/master/liburing.spec",
+    "https://github.com/axboe/liburing/blob/master/configure",
+    "https://github.com/axboe/liburing/issues?q=CVE",
+    "https://github.com/axboe/liburing/issues?q=%22not+thread+safe%22",
+    "https://www.scylladb.com/2020/05/05/how-io_uring-and-ebpf-will-revolutionize-programming-in-linux/"
+  ],
+  "confidence": 0.75
+}

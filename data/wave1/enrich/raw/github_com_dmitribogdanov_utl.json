@@ -1,0 +1,45 @@
+{
+  "id": "https://github.com/DmitriBogdanov/UTL",
+  "one_liner": "Header-only C++17 work-stealing thread pool with recursion-safe futures; beats std::async on small and recursive tasks.",
+  "what_it_does": "utl::parallel is one module of a header-only C++17 utility collection, providing tasks, parallel-for loops, and parallel reductions via a Scheduler/ThreadPool API similar in spirit to Intel TBB. It targets the specific failure mode where naive std::async/std::thread per-task creation overhead cripples small-task throughput, and where scatter-gather workloads with awaited nested subtasks deadlock most existing thread pools. It is not a drop-in std::async replacement: task submission uses detached_task/awaitable_task/blocking_loop-style calls, and awaitable_task returns a custom future_type rather than std::future.",
+  "how_it_is_fast": "Work-stealing thread pool: each worker has a local LIFO deque fed by recursively spawned tasks (kept hot in cache) plus a global FIFO queue for externally submitted tasks; idle threads steal from the back of other workers' local deques. Recursive awaiting is made safe by a custom future_type wrapping std::future whose get()/wait() search for stealable work locally instead of blocking outright, which is what avoids both the thread-creation overhead of std::async and the deadlocks that plain std::future-based pools hit on nested awaits.",
+  "when_to_use": [
+    "Many small (well under 1ms) tasks where std::async's per-call thread-spawn overhead dominates runtime",
+    "Recursive/scatter-gather workloads (divide-and-conquer, fan-out fibonacci-style spawning) that need awaitable subtasks without deadlocking",
+    "Header-only C++17 codebases that want a single dependency-free, vendorable (~600-900 LOC) thread pool instead of pulling in a framework",
+    "Cross-platform targets (Windows, Linux, macOS, FreeBSD all CI-tested) needing a pool with no platform-specific code",
+    "Parallel-for / parallel-reduce over containers or index ranges with automatic grain-size splitting"
+  ],
+  "when_not_to_use": [
+    "Large uniform non-recursive tasks (1-3ms+): advantage over std::async nearly vanishes (~1.06x, roughly tied)",
+    "Workloads wanting a vendor-optimized scheduler (OpenMP/TBB-class NUMA-aware or SIMD-tuned scheduling) — author explicitly disclaims superiority over those",
+    "Code that needs a real std::future everywhere (generic code pattern-matching on std::future<T>); future_type is a custom wrapper, only constructible from std::future, not one itself",
+    "Projects already committed to a C++20-only recursive pool (Leopard, riften::ThiefPool) if that ecosystem fits better; utl::parallel is intentionally capped at C++17",
+    "High-stakes throughput decisions without your own validation: this is the project's single-machine (consumer laptop) benchmark with no independent third-party reproduction, and the library is small (336 stars) and young"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (standard library only: <thread>, <future>, <mutex>, <condition_variable>, <queue>, <optional>, etc.)",
+    "min_toolchain": "C++17",
+    "platforms": "any (CI-tested on Windows, Ubuntu, macOS, FreeBSD); no platform-specific code",
+    "thread_safety": "All ThreadPool methods (including set_thread_count, task submission) are thread-safe and callable concurrently from any number of external threads. Calling set_thread_count() from a thread that is itself inside the pool throws std::runtime_error instead of deadlocking.",
+    "drop_in_for_baseline": "partial — explain: task submission API (detached_task/awaitable_task/blocking_loop) differs from std::async(), and awaitable_task returns a custom future_type (constructible from std::future, same method surface) rather than std::future itself, which is required specifically so recursive get()/wait() can steal work instead of deadlocking."
+  },
+  "gotchas": [
+    "future_type is not std::future; code that specifically requires std::future<T> (e.g. via type traits) won't accept it directly, only convert from one",
+    "set_thread_count() blocks until all in-flight tasks finish before resizing, and throws std::runtime_error if invoked from inside the pool on itself",
+    "Default grain size is hardware_concurrency()*4 subranges; very unevenly-costed per-element work may need a manually tuned grain_size",
+    "Only 4 of the module's benchmark scenarios include BS::thread_pool/progschj/ThreadPool as recursion baselines; those two deadlock outright once tasks await nested subtasks"
+  ],
+  "pick_this_over_siblings_when": "Pick utl::parallel over BS::thread_pool or meet1214/thread-pool when the workload has recursively-awaited subtasks — both siblings deadlock on that pattern per UTL's own benchmark, while utl::parallel stays correct and ~3.6x faster than std::async. For large-scale or NUMA-sensitive scatter-gather work, the oneTBB-class siblings (Taskflow, dispenso, TooManyCooks, libfork) are the more feature-complete choice; utl::parallel wins when you want a minimal, dependency-free, copy-pastable single header instead of a full framework.",
+  "verified_claims_summary": "On a 6-core AMD Ryzen 5 5600H (hyper-threading off), g++ 11.4.0 -O2, against libstdc++: utl::parallel::ThreadPool reached 573.3% of serial throughput vs std::async's 214.0% on small (0-100us) tasks (~2.7x faster) and 583.0%/565.1% vs 161.1%/154.7% on shallow/deep recursive tasks (~3.6x faster), where BS::thread_pool and progschj/ThreadPool deadlocked entirely; on large (1-3ms) tasks the two were nearly tied (597.0% vs 564.2%, ~1.06x).",
+  "status_note": "Actively maintained (last commit 2025-12-08 on master; 336 stars); MIT-licensed, header-only, small enough (~600-900 LOC for this module) to vendor directly into a project.",
+  "sources_read": [
+    "https://github.com/DmitriBogdanov/UTL",
+    "https://github.com/DmitriBogdanov/UTL/blob/master/README.md",
+    "https://github.com/DmitriBogdanov/UTL/blob/master/docs/module_parallel.md",
+    "https://github.com/DmitriBogdanov/UTL/blob/master/include/UTL/parallel.hpp",
+    "https://github.com/DmitriBogdanov/UTL/tree/master/benchmarks/module_parallel"
+  ],
+  "confidence": 0.75
+}

@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/mattreecebentley/plf_colony",
+  "one_liner": "Unordered container beating std::vector/deque/list on erase-heavy workloads via O(1) erase that never invalidates other iterators.",
+  "what_it_does": "plf::colony (rebranded plf::hive for the pending C++20 std::hive proposal) is an unordered sequence container for objects that are randomly inserted and erased at high frequency while other code holds pointers/iterators/references into the container. It has no operator[] and does not preserve insertion order, so it is not a drop-in swap for vector/deque; its API (insert/erase/begin/end, allocator template parameter) is STL-container-shaped but callers written against vector's or list's semantics need rework. Header-only single-file library (plf_colony.h).",
+  "how_it_is_fast": "Elements live in fixed-capacity memory blocks ('groups') allocated contiguously with a parallel 'skipfield' array; erase() marks the slot in the skipfield and threads it onto an intrusive free list instead of shifting or destroying neighboring elements, making erase O(1) per call regardless of position (vs vector/deque's O(n) shift). The skipfield lets ++/-- jump over erased runs without branching, and empty groups are freed so iteration stays bounded. This avoids the copy/move churn that dominates vector's cost under interleaved random erasure.",
+  "when_to_use": [
+    "Randomized insert/erase interleaved with iteration where other code holds pointers/iterators/references to elements that must stay valid across unrelated erasures (game entity/particle pools, object registries).",
+    "Large element sizes (100s of bytes to multi-KB) under heavy erase churn -- the cited benchmark's largest wins (up to ~361,143x vs vector) occur at 4096B elements with 50% random erasure.",
+    "Erase pattern is effectively random-access, not sequential from one end (where deque/list already do fine).",
+    "Concurrent read+insert to different locations is acceptable per the docs (though iterate+write concurrently is not).",
+    "No need for positional indexing or a defined element order."
+  ],
+  "when_not_to_use": [
+    "Code relies on operator[] / positional indexing or a stable insertion/iteration order -- colony is explicitly unordered.",
+    "Simple sequential fill / back-insertion of small elements: the cited benchmark measured colony ~3x slower than a reserve()'d std::vector for 8B elements.",
+    "Linear-search-dominated access: colony measured ~50% slower than std::list in the same benchmark.",
+    "Need flat contiguous memory for SIMD/gather-free vectorized access -- colony storage is chunked into blocks, not one array.",
+    "Multithreaded iterate-while-write on the same container: the docs state colony cannot be safely iterated and written to at the same time."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (C++ standard library only)",
+    "min_toolchain": "C++98/03 minimum (per README); move semantics and other modern features activate under C++11+; the plf::hive fork requires C++20+",
+    "platforms": "any (portable standard C++, no architecture-specific intrinsics); ships an MSVC .natvis debugger visualizer",
+    "thread_safety": "Not fully thread-safe. Docs (plflib.org/colony.htm): can be read from and inserted into concurrently at different locations, but cannot be iterated over and written to at the same time.",
+    "drop_in_for_baseline": "partial -- explain: STL-container-like API and allocator support, but no operator[], no defined order, and different iterator-invalidation rules, so vector/deque/list call sites require code changes, not just a type alias."
+  },
+  "gotchas": [
+    "erase(it) invalidates the iterator `it` passed to it (like vector) -- must reassign from erase()'s return value; GitHub issue #57 shows a user hitting this by continuing to use a stale iterator.",
+    "Exception safety is the strong guarantee for all allocating operations except operator=, which only offers the basic guarantee: on exception during assignment the colony ends up empty rather than rolled back.",
+    "clear() has been reported (issue #42) as slower than repeated erase() calls in some cases, which is counterintuitive versus typical container expectations.",
+    "Skipfield element width (8-bit vs 16-bit) is chosen automatically from element size/alignment via the 'priority' template parameter, silently affecting per-block memory overhead."
+  ],
+  "pick_this_over_siblings_when": "Pick colony/hive over plf::list, eastl::vector, fast_vector, or veque specifically when the workload does heavy random-order erasure while other code needs held pointers/iterators to stay valid -- those siblings speed up ordered, indexable, contiguous-or-node storage (growth/allocation/push_back patterns) but don't give colony's O(1) erase-without-invalidation guarantee.",
+  "verified_claims_summary": "Third-party benchmark (Baptiste Wicht, 2017) built g++-4.9.4 -std=c++11 -march=native -O2 on an Intel Core i7-4770 @3.4GHz/Gentoo Linux, comparing plf::colony against libstdc++'s std::vector/deque/list across fill, linear-search, random-insert, randomized iterate-and-erase (1%/50% probability), sort and destruction at element sizes 8B-4096B. At 1% erase probability with 1024B elements colony ran about three orders of magnitude faster than vector/deque; at 50% erase probability with 4096B elements colony was about 361,143x faster than vector. The same post reports colony ~3x slower than a reserved vector for plain 8B fill/back-insertion and ~50% slower than list for linear search.",
+  "status_note": "Actively maintained (last commit 2026-09-19, days before this review) under the permissive Zlib license, header-only so trivial to vendor into a project; the author now maintains a parallel C++20 fork, plf::hive, tracking the pending std::hive standardization proposal (P0447), so new C++20 codebases may prefer hive while pre-C++20 projects stay on colony.",
+  "sources_read": [
+    "https://github.com/mattreecebentley/plf_colony",
+    "https://github.com/mattreecebentley/plf_colony/blob/master/README.md",
+    "https://github.com/mattreecebentley/plf_colony/blob/master/plf_colony.h",
+    "https://github.com/mattreecebentley/plf_colony/issues",
+    "https://github.com/mattreecebentley/plf_colony/issues/57",
+    "https://github.com/mattreecebentley/plf_hive",
+    "https://plflib.org/colony.htm",
+    "https://baptiste-wicht.com/posts/2017/05/cpp-containers-benchmark-vector-list-deque-plf-colony.html"
+  ],
+  "confidence": 0.82
+}

@@ -1,0 +1,41 @@
+{
+  "id": "https://arxiv.org/abs/2508.20253",
+  "one_liner": "Hardware support-core design offloading malloc/free; gem5-simulated 1.75x throughput over jemalloc, no real silicon exists.",
+  "what_it_does": "SpeedMalloc offloads all malloc()/free() work to a dedicated lightweight 'support-core' wired directly onto the cache-coherent interconnect, so allocator metadata lives only in that core's private L1 instead of polluting main-core caches. Application code still calls malloc()/free() normally and links SpeedMalloc as a static or shared library with no source changes, but the binary must be built with GCC plus a post-compilation pass that inserts four new ISA branch instructions (mallocstart/freestart issued by main cores, mallocend/freeend run on the support-core) to hand allocation requests off the main core's critical path. It is a hardware/software co-design proposal, not a library you can build against an existing CPU.",
+  "how_it_is_fast": "Metadata never touches main-core caches: the support-core holds a segregated free-list layout in its own L1, eliminating the cache pollution and cross-core atomic-instruction traffic (up to ~22.8% of cycles in the paper's jemalloc/TCMalloc profiling) that shared/thread-local allocator metadata causes today. Hardware message queues (dispatcher, malloc/free queues, scheduler, response queue) in the support-core pipeline and round-robin allocation requests from up to 16 cores instead of serializing on coherence traffic. free() is fire-and-forget and returns to the main core immediately (processed asynchronously off the critical path); malloc() only stalls the main core if it has no independent work to overlap while waiting for the support-core's 'end' signal.",
+  "when_to_use": [
+    "You're researching or designing CPU memory-subsystem hardware and want a concrete design point for offloading allocator metadata to a dedicated core",
+    "Comparing hardware-accelerated allocator proposals (Mallacc, Memento) for multithreaded, many-core AArch64 systems",
+    "Need a gem5 full-system reference for quantifying cache-pollution and metadata-synchronization overhead across allocators",
+    "Interested in the paper's 'butterfly effect' data: allocation is ~4.4% of instructions but choice of allocator swings whole-program performance up to 2.7x"
+  ],
+  "when_not_to_use": [
+    "You need something to link into a real program today: has_code is false, no repo, no artifact was published with the paper",
+    "Your target is x86 or any platform without a custom support-core wired above the LLC and a modified ISA/compiler toolchain",
+    "Single-threaded or lightly threaded workloads: SpeedMalloc's edge there is only ~1.09x/1.08x/1.04x over jemalloc/TCMalloc/mimalloc",
+    "You need peer-reviewed or independently reproduced results: this is a v1 arXiv preprint ('manuscript submitted to ACM'), not yet reviewed",
+    "Any production or deployment use case: the authors state they could not prototype even on FPGA because the required ISA and coherent-bus hardware do not exist in current systems"
+  ],
+  "integration": {
+    "form": "not applicable — hardware/ISA co-design proposal, no software artifact released",
+    "dependencies": "not documented (no code released)",
+    "min_toolchain": "Paper's evaluation used GCC 9.4, -O3, -march=armv8.1-a (for 'far atomics'), plus a required post-compilation pass to resolve new branch-instruction targets — no such toolchain is publicly available",
+    "platforms": "AArch64 only, and only on custom silicon with a support-core attached to the coherent network above the LLC; no x86 or commodity-hardware path exists",
+    "thread_safety": "By design: all allocator metadata lives solely on the support-core, which serializes requests through hardware queues (round-robin fairness across main cores), so no cross-thread metadata races. The paper also notes interrupts/exceptions are masked on a main core while it waits for the support-core's malloc() completion signal; behavior beyond that is not documented.",
+    "drop_in_for_baseline": "partial — explain: linking swaps the allocator with no source changes, but requires a support-core, a 4-instruction ISA extension, and a compiler post-pass; it cannot run on existing binaries or hardware"
+  },
+  "gotchas": [
+    "Interrupts and exceptions are masked on the main core while it waits for the support-core's 'end' signal during a malloc() call",
+    "free() completes asynchronously off the critical path, so its completion is not visible/synchronous to the caller",
+    "Gains are concentrated in multithreaded workloads (1.75x geomean over jemalloc); single-threaded gains are much smaller (~1.09x)",
+    "No FPGA or real-silicon prototype exists — footnote 8 states current ISA and hardware cannot support one; every number is gem5-simulated"
+  ],
+  "pick_this_over_siblings_when": "Not applicable for real use: every catalogued sibling (metapool, NUMAlloc, SuperMalloc, Hoard, scalloc, both arena-allocators, ltalloc, rpmalloc, smmalloc) is a software allocator you can build and link today, while SpeedMalloc requires hardware that does not exist. Treat it only as a research reference for hardware/software co-design ideas, never as a substitute for any of the software allocators.",
+  "verified_claims_summary": "In gem5 full-system simulation (1-16 AArch64 out-of-order big cores + 1 in-order support core, GCC 9.4 -O3 -march=armv8.1-a), the paper reports SpeedMalloc achieves 1.75x/1.18x/1.15x/1.23x/1.18x geomean throughput over jemalloc/TCMalloc/mimalloc/Mallacc/Memento+ across 10 multithreaded workloads (7 from mimalloc-bench, GAPBS BFS and BC, NAS DC), with smaller single-threaded gains of ~1.09x/1.08x/1.04x/1.03x over jemalloc/TCMalloc/mimalloc/Mallacc. It never compares against glibc malloc or std::allocator directly.",
+  "status_note": "Research preprint only (arXiv v1, Aug 2025, 'manuscript submitted to ACM'), not peer-reviewed and with no linked code or artifact; usability is 'reference' and maintenance status is not applicable since nothing is released to maintain.",
+  "sources_read": [
+    "https://arxiv.org/abs/2508.20253",
+    "https://arxiv.org/pdf/2508.20253"
+  ],
+  "confidence": 0.35
+}

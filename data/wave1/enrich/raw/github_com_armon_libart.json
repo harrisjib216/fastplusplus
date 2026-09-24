@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/armon/libart",
+  "one_liner": "C99 Adaptive Radix Tree: ordered byte-key map/set, algorithmically faster than red-black trees (std::map's structure).",
+  "what_it_does": "libart is a C99 implementation of the Adaptive Radix Tree (ART), an ordered associative structure keyed on binary-comparable byte strings, supporting insert/search/delete, min/max lookup, full ordered iteration, and prefix-based iteration. It is not a drop-in for std::map: the API is a flat set of C functions (art_insert, art_search, art_delete, art_iter, art_iter_prefix) taking a raw key buffer + length and an opaque void* value, with no templates, iterators, or operator overloads.",
+  "how_it_is_fast": "ART uses four node types (4/16/48/256 children) sized to actual local fanout instead of one fixed node shape, so small nodes stay cache-small and dense nodes get direct/O(1) child lookup. Path compression (inline partial keys up to MAX_PREFIX_LEN=10 bytes) and lazy expansion collapse single-child chains, bounding worst-case overhead to about 52 bytes/key. On x86/x86-64, Node16's 16-way key comparison is vectorized with SSE2 (_mm_cmpeq_epi8 + movemask + ctz) instead of a scalar loop; other architectures fall back to a plain scan.",
+  "when_to_use": [
+    "Ordered map/set semantics (min/max, ordered iteration, prefix iteration) over keys you can encode as binary-comparable byte strings",
+    "Read-heavy, single-threaded in-process indexes (e.g. routing tables, in-memory dictionaries) where you own the key encoding",
+    "Key sets where no key is a byte-for-byte prefix of another key, or you pre-length-prefix/terminate keys to avoid that case",
+    "x86/x86-64 targets, where the SSE2 Node16 fast path applies (other archs still work via scalar fallback, just without that speedup)",
+    "You're willing to vendor and maintain the ~2-file source yourself since the project is unmaintained"
+  ],
+  "when_not_to_use": [
+    "Any key can be a strict byte-for-byte prefix of another key: issue #56 (open) documents out-of-bounds reads / incorrect leaf-splitting in recursive_insert for exactly this case, with no released fix",
+    "Multi-threaded concurrent access: no locks, atomics, or volatile-qualified state in the source; maintainer-adjacent discussion in issue #53 confirms it is not thread-safe and points to forks (e.g. ARTSynchronized) for concurrent variants",
+    "You need a drop-in std::map/std::set replacement: this is an untemplated C library with a byte-key/void*-value function API, not a C++ generic container",
+    "You need it actively maintained: last commit 2021-02-11, with confirmed bugs (#54 search returns null for prefix+NUL keys, #42 key_len issues, #35 crash in recursive_insert, #17 valgrind warning on prefix keys) still open",
+    "You need project-specific speed evidence: libart ships no benchmarks of its own (repo has only src/ and tests/); every claimed number comes from the ART paper's own unreleased implementations, not this codebase"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (libcheck is only needed to build the test_runner test suite, not the library)",
+    "min_toolchain": "C99; comments in art.c work around GCC 4.2.2's broken C99 inline support and a GCC 5.1 loop-unrolling bug, but no explicit minimum compiler version is stated",
+    "platforms": "any (portable C99); SSE2 fast path compiled only under __i386__/__amd64__ for Node16 child lookup, scalar fallback loop used elsewhere",
+    "thread_safety": "not thread-safe / not documented as safe — no mutexes, atomics, or volatile-qualified fields in the source; see issue #53",
+    "drop_in_for_baseline": "partial — explain: same broad job as std::map/std::set (ordered key-value lookup) but a different C API (byte-buffer keys, void* values, callback-based iteration), no templates or RAII"
+  },
+  "gotchas": [
+    "Keys that are a byte-for-byte prefix of another inserted key can cause out-of-bounds reads and incorrect behavior in recursive_insert (issue #56, open; related #12, #17, #54)",
+    "Path-compressed prefixes longer than MAX_PREFIX_LEN=10 bytes are only partially stored inline; matching a longer shared prefix requires re-reading a leaf key, a deliberate space/time tradeoff from the ART paper",
+    "Keys must already be binary-comparable byte strings; signed integers, floats, and multi-field keys need an explicit transform before insertion, the library does none of this for you",
+    "Leaf pointers are tagged in their low bit to distinguish them from internal nodes, so values/allocations the caller stores must not rely on odd pointer addresses"
+  ],
+  "pick_this_over_siblings_when": "Pick libart only when you specifically need ordered + prefix iteration over binary-comparable byte-string keys and are willing to vendor and patch an abandoned C library. Every other sibling in this category (cpp-btree, tlx, frozenca/BTree, fast-containers, RadixMap, S+ tree, boost::container flat_set) has actual project-measured benchmarks against std::map; libart has none of its own, so prefer those when maintained, verifiable numbers matter more than ART's specific prefix/min/max feature set.",
+  "verified_claims_summary": "The claimed speedups (up to ~14-17x on dense keys, ~5-10x on sparse keys at 65K-256M random 32-bit keys) are entirely from the ART paper (Leis et al., ICDE 2013), which benchmarked the paper authors' own unreleased ART and red-black-tree implementations, compiled with GCC 4.6 on an Intel Core i7-3930K (6C/12T, 3.2GHz, 12MB shared L3, 32GB DDR3-1600, Linux 3.2 x86-64) — not libart, and not any std::map implementation. libart itself has no benchmark suite.",
+  "status_note": "Abandoned since its last commit on 2021-02-11; several confirmed bugs, including an unresolved out-of-bounds read for prefix-key inserts (#56), remain open years later. BSD-3-Clause and small enough (two files, src/art.c + src/art.h) to vendor and patch yourself if you accept that risk.",
+  "sources_read": [
+    "https://github.com/armon/libart",
+    "https://github.com/armon/libart/blob/master/README.md",
+    "https://github.com/armon/libart/blob/master/LICENSE",
+    "https://github.com/armon/libart/blob/master/src/art.h",
+    "https://github.com/armon/libart/blob/master/src/art.c",
+    "https://github.com/armon/libart/issues/53",
+    "https://github.com/armon/libart/issues/56",
+    "https://github.com/armon/libart/issues"
+  ],
+  "confidence": 0.45
+}

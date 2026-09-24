@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/PCRE2Project/pcre2",
+  "one_liner": "Mature C library for Perl-compatible regex matching; 4-12x faster than libstdc++'s std::regex on find-and-count benchmarks.",
+  "what_it_does": "PCRE2 is a C library implementing Perl-compatible regular expression matching, exposed through a native pcre2_* C API (compile a pattern into a pcre2_code object, allocate match-data, match, free both explicitly) plus a narrower, explicitly non-thread-safe POSIX-compatibility wrapper. It is not a drop-in for std::regex: there is no RAII, no exceptions, and pattern syntax is PCRE/Perl-flavored rather than ECMAScript. It underlies regex support in PHP, Apache, and other software, and per the README is bundled in products such as Excel, Safari, and Git.",
+  "how_it_is_fast": "Two matching engines: a default depth-first backtracking interpreter, and an optional JIT (built on the bundled sljit code, checked out as a git submodule) that compiles a pattern to native machine code via pcre2_jit_compile()/pcre2_jit_match(). On the mariomka/regex-benchmark suite the non-JIT interpreter alone already beats libstdc++ std::regex 4.07x (251.37ms vs 1023.49ms total, confirmed against c/benchmark.c which calls plain pcre2_match()); enabling JIT (confirmed against the optimized branch's benchmark.c) widens that to 11.6x (87.87ms).",
+  "when_to_use": [
+    "Need full PCRE/Perl regex syntax (lookaround, recursion, \\K, Unicode properties) beyond what std::regex's ECMAScript grammar supports.",
+    "A pattern is compiled once and matched repeatedly against many/large inputs, especially with JIT enabled -- the regime the benchmark measures.",
+    "Building a portable C (not C++) project, or embedding regex support behind an FFI boundary the way PHP/Apache do.",
+    "Can accept an external C library dependency and manual pcre2_code/pcre2_match_data lifetime management instead of RAII.",
+    "Targets one of PCRE2's continuously tested platforms/architectures (Linux, Windows, macOS, BSDs, Solaris, z/OS; x86, ARM, RISC-V, POWER, S390X)."
+  ],
+  "when_not_to_use": [
+    "Want a C++-idiomatic, exception-based, RAII-managed interface -- PCRE2's C API requires manual free() of every code/match-data/context object.",
+    "Need exact ECMAScript regex semantics to stay compatible with existing std::regex-authored patterns.",
+    "Run patterns against untrusted input without setting match_limit/depth_limit -- the default backtracking engine is worst-case exponential time (per pcre2.txt).",
+    "Need rock-solid JIT concurrency today: issue #924 (open) is a ThreadSanitizer-reported data race in JIT stack creation, and #974 (open) documents interpreter/JIT match-result discrepancies.",
+    "Want a single-header drop-in; PCRE2 must be built and linked (CMake, Autoconf, Bazel, or zig build) or vendored as source, not header-only."
+  ],
+  "integration": {
+    "form": "static lib | shared lib (also usable as source-drop by vendoring pcre2's .c files directly, per its README)",
+    "dependencies": "none for the core library; JIT support additionally requires the bundled sljit git submodule at build time",
+    "min_toolchain": "C99 compiler; CMake or Autoconf/./configure (Bazel and zig build also supported per the README)",
+    "platforms": "Linux, Windows, macOS, FreeBSD, OpenBSD, Solaris, z/OS; x86, ARM, RISC-V, POWER, S390X (others reported to work)",
+    "thread_safety": "Core library is thread-safe (no static/global state, per pcre2.txt); a single compiled pattern can be matched concurrently from multiple threads. JIT needs a separate pcre2_jit_stack per thread. A context object shared across threads may only be read, not mutated, without caller-supplied locking.",
+    "drop_in_for_baseline": "partial -- explain: a POSIX-regex compatibility wrapper (pcre2posix) exists but pcre2.txt states it is not thread-safe and does not expose full PCRE2 functionality; there is no std::regex-compatible C++ interface, so adopting PCRE2 means rewriting call sites against its native C API."
+  },
+  "gotchas": [
+    "Default (non-JIT) engine backtracks depth-first and is worst-case exponential time; set match_limit/depth_limit for untrusted patterns or input.",
+    "JIT is opt-in: requires checking out the sljit git submodule and calling pcre2_jit_compile() yourself, or you silently keep using the slower interpreter.",
+    "Open issue #924: ThreadSanitizer flags a data race in get_page_alignment() during concurrent pcre2_jit_stack_create(). Open issue #974: interpreter and JIT can return different match results for some patterns.",
+    "No RAII -- every pcre2_code, pcre2_match_data, and context object must be freed explicitly (pcre2_code_free, pcre2_match_data_free, etc.)."
+  ],
+  "pick_this_over_siblings_when": "Pick PCRE2 over Boost.Regex when JIT is enabled (87.87ms vs Boost's 104.23ms on this benchmark) or when you need a portable C library rather than a Boost/C++ dependency; pick Boost.Regex instead for a closer std::regex-like C++ interface without JIT's build complexity, or if the default (non-JIT) build is all you can ship (Boost then wins, 104.23ms vs PCRE2's 251.37ms). Pick PCRE2 over RE/flex when patterns are compiled at runtime rather than generated ahead-of-time as a scanner/lexer.",
+  "verified_claims_summary": "On mariomka/regex-benchmark (non-overlapping find-and-count of email/URI/IPv4 patterns over a learnxinyminutes text corpus; MacBook Pro 16-inch 2019, 2.4GHz Core i9; gcc/g++ 7.5.0, -O3, run in Docker), C PCRE2 10.36-2 totaled 251.37ms without JIT versus libstdc++ std::regex's 1023.49ms (4.07x); with JIT enabled on the benchmark's optimized branch, PCRE2 dropped to 87.87ms (11.6x). Per-pattern and total figures were re-confirmed directly against the benchmark README and both branches' benchmark.c source this session.",
+  "status_note": "Actively maintained (pushed 2026-09-24; the project commits to backporting security and high-severity fixes for at least five years). BSD-3-Clause-with-exception license makes it freely usable and vendorable, but as a C library it must be built and linked (or its .c files dropped into a project) rather than included as a header.",
+  "sources_read": [
+    "https://github.com/PCRE2Project/pcre2",
+    "https://github.com/PCRE2Project/pcre2/blob/main/README.md",
+    "https://github.com/PCRE2Project/pcre2/blob/main/LICENCE.md",
+    "https://github.com/PCRE2Project/pcre2/blob/main/doc/pcre2.txt",
+    "https://github.com/PCRE2Project/pcre2/issues?q=performance",
+    "https://github.com/PCRE2Project/pcre2/issues?q=label%3Abug",
+    "https://github.com/mariomka/regex-benchmark/blob/master/README.md",
+    "https://github.com/mariomka/regex-benchmark/blob/master/c/benchmark.c",
+    "https://github.com/mariomka/regex-benchmark/blob/optimized/c/benchmark.c"
+  ],
+  "confidence": 0.92
+}

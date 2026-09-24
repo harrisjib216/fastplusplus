@@ -1,0 +1,47 @@
+{
+  "id": "https://github.com/google/highway",
+  "one_liner": "SIMD-dispatched vectorized quicksort/quickselect for built-in key types; ~10x faster than LLVM std::sort on large arrays.",
+  "what_it_does": "VQSort, VQPartialSort, and VQSelect are free functions that sort, partially sort, or select-in-place over raw arrays of built-in integer/float types (16/32/64-bit), 32/64-bit key-value pairs (K32V32, K64V64), or 128-bit keys (uint128_t), given a pointer, count, and a SortAscending/SortDescending tag. It is not a drop-in for std::sort: no iterators, no custom comparator, and only the listed key types are supported. It lives in hwy/contrib/sort inside Google's Highway SIMD library and dispatches at runtime to the best available instruction set.",
+  "how_it_is_fast": "Vectorized Quicksort (VQSort paper, arXiv:2205.05982): wide-SIMD partitioning (AVX-512/AVX2/NEON/SVE-width) with in-register sorting networks for base cases, and pivot selection from a 384-byte random sample to balance partitions and avoid recursing into all-equal runs. Later work added 8x2/8x4/4x1/8x1 sorting-network shapes for small inputs and moved RNG seeding into a per-thread TLS cache (previously it fetched OS entropy on every call), which removed most of the small-array overhead (hwy/contrib/sort/README.md, 'Optimizations for small arrays').",
+  "when_to_use": [
+    "Sorting large arrays (README recommends >=100 KiB, i.e. roughly 100K+ elements) of built-in numeric types on hardware with real SIMD (AVX2/AVX3, NEON, SVE/SVE2, etc.)",
+    "Throughput-bound bulk sorting where equal-key order doesn't need to be preserved (unstable sort)",
+    "Sorting packed key-value pairs (K32V32, K64V64) or 128-bit keys without a separate index/permutation array",
+    "Top-k or median-style workloads via VQPartialSort/VQSelect instead of a full sort",
+    "Already-vectorized pipelines that keep AVX-512 'warm', so even small VQSort calls benefit without startup penalty (README AVX-512 startup analysis)"
+  ],
+  "when_not_to_use": [
+    "Sorting custom structs/classes or needing a user-supplied comparator — only fixed built-in key types with ascending/descending order are supported",
+    "Anywhere a stable sort is required; VQSort does not preserve the relative order of equal keys",
+    "Near-sorted input on aarch64/NEON: issue #3139 (open) reports VQSelect/VQSort running 2-4x slower than scalar sort in that case",
+    "Small arrays dropped into an otherwise scalar codebase: AVX-512 warm-up/downclocking can shrink the effective speedup on ~10K-element inputs from ~10x to as little as 1.4x (README AVX-512 startup study)",
+    "SVE2-128 targets: issue #3336 (open) reports a Clang-only Min-instruction workaround costs 26-40% of VQSort's runtime there"
+  ],
+  "integration": {
+    "form": "source-drop | static lib | shared lib",
+    "dependencies": "none for the sort module itself (only the rest of the Highway headers, e.g. hwy/base.h, hwy/os_rng.h); Highway's own test suite additionally uses googletest, not required for library use",
+    "min_toolchain": "C++17; CMake build (Bazel also supported); published sort benchmarks used Clang 13.0.1/15.0.6",
+    "platforms": "27 Highway targets across x86-64 (SSE2 through AVX10.2), Armv7+/NEON/SVE/SVE2, POWER8-10, RISC-V (RVV), IBM Z14/Z15, LoongArch, and WebAssembly; the headline vqsort speedup needs AVX2/AVX3/NEON/SVE-class SIMD",
+    "thread_safety": "Not formally documented, but vqsort.h notes each call caches its RNG seed in an internal thread-local cache, so concurrent VQSort calls on independent arrays from different threads are safe by design",
+    "drop_in_for_baseline": "false — different call signature (pointer + count + SortAscending/SortDescending tag, no iterators/comparator) and a fixed set of supported key types"
+  },
+  "gotchas": [
+    "Not a stable sort — equal keys can be reordered",
+    "An earlier version re-seeded from OS entropy on every call, which was costly for arrays of ~100-1000 elements; fixed in PR #1334 by caching seeds in TLS per thread — some historical benchmark numbers predate this fix",
+    "Near-sorted arrays on aarch64/NEON can be 2-4x slower than scalar sort (issue #3139, open as of 2026-09)",
+    "The 'about 10x' headline figure assumes AVX-512 is already warm; in a scalar-only surrounding codebase the effective win on medium-small inputs can drop to ~1.4x due to AVX-512 startup and downclocking overhead"
+  ],
+  "pick_this_over_siblings_when": "Pick vqsort over pdqsort/ska_sort/vergesort when the target hardware has AVX2/AVX3/NEON/SVE and the data is built-in numeric keys (or 32/64-bit key-value pairs) sorted in bulk at 100K+ elements — its wide-SIMD partitioning beats the scalar-only pdqsort/ska_sort/vergesort by roughly an order of magnitude over plain std::sort. Favor the scalar siblings instead when you need a custom comparator, arbitrary key types, a guaranteed-scalar target, or want to avoid Highway's runtime-dispatch machinery entirely.",
+  "verified_claims_summary": "hwy/contrib/sort/README.md shows vqsort at 1143 MB/s vs LLVM libc++ std::sort at 54 MB/s (~21x) sorting 1e6 uniform-random f32 keys under AVX3 (AVX-512) on a Xeon 6154 (Skylake-X) at 3 GHz, built with Clang 13.0.1/15.0.6 via `bazelisk build -c opt`; the README's own headline claim is the more conservative '~10x for large arrays of built-in types' as of 2022-06-07, and it separately notes pdqsort-class scalar sorts are about 2x std::sort, not 10x.",
+  "status_note": "Actively maintained as part of Google's Highway SIMD library (last commit 2026-09-23, 5.9k stars); dual Apache-2.0/BSD-3-Clause. Listed as 'copyable' — the sort module can be vendored as source (hwy/contrib/sort plus the core Highway headers it depends on) rather than requiring the full library as a prebuilt external dependency.",
+  "sources_read": [
+    "https://github.com/google/highway",
+    "https://github.com/google/highway/blob/master/hwy/contrib/sort/README.md",
+    "https://github.com/google/highway/tree/master/hwy/contrib/sort",
+    "https://github.com/google/highway/blob/master/hwy/contrib/sort/vqsort.h",
+    "https://github.com/google/highway/blob/master/hwy/contrib/sort/algo-inl.h",
+    "https://github.com/google/highway/issues/3139",
+    "https://github.com/google/highway/issues/3336"
+  ],
+  "confidence": 0.88
+}

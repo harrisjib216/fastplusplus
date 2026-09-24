@@ -1,0 +1,47 @@
+{
+  "id": "https://github.com/hijimasa/fast_math_cpp",
+  "one_liner": "Header-only float math library beating glibc's <cmath> on composed functions (sinh, tanh, atan2, integer pow), not raw trig or exp/log.",
+  "what_it_does": "Provides float (single-precision) replacements for glibc <cmath> functions under a FastMath:: namespace: sin, cos, sincos, tan, asin, acos, atan2, the hyperbolic/inverse-hyperbolic family, log10, integer pow, fmod, ceil/floor/round, plus exp/log/log2/sqrt/fractional-pow, which are inline forwarders to std:: itself. Signatures mostly mirror std:: (same args, free functions), so most call sites need a namespace swap rather than a rewrite; sincos returns a two-field struct instead of writing through pointers. A separate batch API (FastMath::sin(in, out, n), etc.) covers array workloads for sin/cos/sincos/atan2 with SIMD.",
+  "how_it_is_fast": "The scalar wins come from composing sinh/tanh/atanh/asinh/acosh/log10 directly out of std::exp/std::log rather than calling glibc's own (non-table-based) composed routines, plus binary exponentiation for pow(base,int). An FP-register rounding trick (add/subtract 1.5*2^23 to a float) gets the integer part needed for exp's and the angle reduction's range folding without crossing to the general-purpose register file. Where glibc already uses lookup tables (exp, log, log2, sqrt), the library forwards to std:: instead of trying to beat it with a polynomial. The batch API's speed comes from SIMD (GCC vector extensions compiling to SSE on x86 / NEON on aarch64) processing 4 floats per iteration, amortizing the call overhead and branches that dominate scalar timings.",
+  "when_to_use": [
+    "Scalar composed functions on floats: sinh/cosh/tanh/asinh/acosh/atanh/log10 -- 1.2x-4.5x over glibc, wider margin on ARM than x86",
+    "Squared or small-integer-power distances: pow(base, int) is 1.5x-4.5x faster than std::pow via the explicit int overload",
+    "Array workloads (lidar scans, particle sets): batch sin/cos/sincos/atan2, 2x-6.2x over a std:: loop depending on platform and function",
+    "Scalar sin/cos/sincos on angles already normalized to [-pi, pi], where this ties or slightly beats std on both platforms",
+    "Header/robotics C++17 codebases already tolerant of float precision that want one namespace instead of mixing FastMath:: and std::"
+  ],
+  "when_not_to_use": [
+    "exp, log, log2, sqrt, or pow with a fractional exponent -- these are thin std:: forwarders, switching buys nothing",
+    "Scalar sin/cos/sincos on angles still needing range reduction ([-2pi,2pi]) on ARM -- measured slower than std (0.63x-0.82x on Pi)",
+    "Anywhere double precision is needed -- the API is float-only, no double overloads exist",
+    "Builds that require -ffast-math -- the library's rounding trick and inf/NaN/signed-zero contracts break under -ffinite-math-only, so it errors out rather than compiling silently wrong",
+    "Dependencies where maintainer bus-factor matters -- 2 GitHub stars, single author, no issues or PRs filed to gauge responsiveness"
+  ],
+  "integration": {
+    "form": "static lib (default) or shared lib (CMake FAST_MATH_BUILD_SHARED_LIBS option) -- despite the README's 'Header-Only Design' claim, include/fast_math.hpp only declares functions; definitions live in src/fast_math.cpp and src/fast_math_batch.cpp and must be built/linked via CMake add_subdirectory + target_link_libraries",
+    "dependencies": "none for the library itself; GoogleTest required only to build the test target (BUILD_TESTS=ON by default, disable with -DBUILD_TESTS=OFF to skip the GTest dependency)",
+    "min_toolchain": "C++17, CMake 3.16+; CI builds with GCC 11 and Clang 15",
+    "platforms": "x86_64 and aarch64 (Raspberry Pi 4 / Cortex-A72) directly benchmarked; README badge also claims macOS/Windows but GitHub Actions CI only runs ubuntu-latest, so those are untested claims",
+    "thread_safety": "not documented; public API is stateless free functions over value arguments, no mutable global/static state visible in the header",
+    "drop_in_for_baseline": "partial -- explain: matching float signatures and semantics under a FastMath:: namespace (a namespace swap, not a literal drop-in), and exp/log/log2/sqrt/fractional-pow are literally std:: under the hood; float-only, so it does not cover call sites using double math"
+  },
+  "gotchas": [
+    "CMakeLists.txt has a stray add_library(mcl::map ALIAS fast_math_cpp) -- looks like a leftover from a robotics 'MCL' (Monte Carlo Localization) template this was extracted from; harmless but a sign of how small/informal the project is",
+    "-ffast-math is deliberately rejected by the build -- it silently breaks the FP-register rounding trick (folds (v+magic)-magic back to v), so the library errors out at compile time rather than returning wrong answers under it",
+    "log, log2, asinh-family etc. return a sentinel (-1e38f) for out-of-domain input instead of -inf/NaN like std:: -- a behavioral difference from the baseline being replaced",
+    "sqrt() returns 0 for non-positive input instead of NaN/domain-error like std::sqrt -- another silent semantic deviation"
+  ],
+  "pick_this_over_siblings_when": "Pick this over VDT, SLEEF, fmath, or trigno_simd_cpp when the workload is scalar, float-only composed math (sinh/tanh/atan2/integer pow) rather than raw vectorized double trig or bulk elementwise arrays -- those siblings post larger, more consistent multiples (VDT 4.7x-12.8x on double exp/sin, SLEEF/fmath on vectorized batches), but fast_math_cpp is the only one of this set that documents where it loses (exp/log/sqrt/fractional pow at parity, ARM scalar sin/cos regressing on wide angles) rather than only showing wins.",
+  "verified_claims_summary": "Scalar float calls, both sides built with identical flags (-O3 -march=native -funroll-loops), best of 25 interleaved runs of 1,000,000 calls, on WSL2 x86_64 GCC 11.4 (no CPU model stated) and Raspberry Pi 4 GCC 12.2 against glibc's float <cmath>: composed functions like sinh (2.96x/3.94x), tanh (2.94x/3.91x) and integer pow (2.02x/4.54x) win; exp/log/log2/sqrt sit at parity (0.94x-1.01x) because they forward to std::; scalar sin/cos/sincos on wide angle ranges lose on ARM (0.63x-0.82x). A separate batch/array API for sin/cos/sincos/atan2 reached up to 6.16x (atan2) over a std:: loop on x86 and 3.48x on the Pi.",
+  "status_note": "Active (last commit 2026-07-28), MIT-licensed, small enough to vendor -- but a very small personal project (2 stars, no issues or PRs filed, single named author), so verify it still builds against your toolchain before depending on it.",
+  "sources_read": [
+    "https://github.com/hijimasa/fast_math_cpp",
+    "https://github.com/hijimasa/fast_math_cpp/blob/main/README.md",
+    "https://github.com/hijimasa/fast_math_cpp/blob/main/CMakeLists.txt",
+    "https://github.com/hijimasa/fast_math_cpp/blob/main/include/fast_math.hpp",
+    "https://github.com/hijimasa/fast_math_cpp/blob/main/.github/workflows/ci.yml",
+    "https://github.com/hijimasa/fast_math_cpp/issues",
+    "https://github.com/hijimasa/fast_math_cpp/pulls"
+  ],
+  "confidence": 0.78
+}

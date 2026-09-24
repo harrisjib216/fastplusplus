@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/google/cityhash",
+  "one_liner": "Non-cryptographic 64/128-bit string hash family beating Murmur2/Murmur3F, ~1.7-2.5x faster at 64 bytes.",
+  "what_it_does": "CityHash provides free functions (CityHash32/64/128 and WithSeed/WithSeeds variants, plus CRC-accelerated CityHashCrc128/256) that hash a (const char*, size_t) byte buffer into a fixed-width integer or uint128 (a std::pair<uint64,uint64>). It targets the same use case as Murmur2/Murmur3 — non-cryptographic hashing for hash-table keys — with the same buffer-in/integer-out shape, but there is no std::hash specialization and no streaming/incremental API; the whole input must be in memory at once.",
+  "how_it_is_fast": "Short inputs (<=4, <=8, <=16, <=32, <=64 bytes) each get a dedicated fast path using register-width multiply/rotate mixing tuned to that length bucket, so most hash-table-key-sized strings finish in a handful of instructions. For long strings, CityHashCrc128/256 layer that same multiply-rotate mixing on top of the hardware CRC32 instruction (_mm_crc32_u64) as a cheap mixing primitive, reaching about 5-5.5 bytes/cycle versus ~2.4 bytes/cycle for pure-software Murmur3F.",
+  "when_to_use": [
+    "Fixed, fully-buffered byte strings (not streamed) used as hash-table keys, especially short strings in the 1-64 byte range",
+    "x86-64 targets with SSE4.2 available, where CityHashCrc128/256 can use the CRC32 instruction for long-string throughput",
+    "Codebases that want to vendor a tiny, frozen source drop (city.cc/city.h/citycrc.h) rather than add a package-manager dependency",
+    "Need an MIT-licensed implementation with a stable, unchanging API (no upstream churn since 2013)",
+    "Non-adversarial input, or input always hashed with a caller-supplied random seed via the *WithSeed variants"
+  ],
+  "when_not_to_use": [
+    "Need to hash data arriving in chunks/streams — no incremental API exists",
+    "Want the fastest available long-string throughput on modern hardware — newer SIMD-tuned hashes (xxh3, rapidhash, komihash) beat it and are actively maintained",
+    "Non-x86-64 or no-SSE4.2 platform and you wanted the CRC-based variants (CityHashCrc128/256 hard-require _mm_crc32_u64)",
+    "Untrusted/adversarial keys going into a hash table without supplying a random seed — CVE-2012-6051 hash-flooding DoS applies to unseeded CityHash",
+    "Want a maintained project — repo is archived by Google, last real release was v1.1.1 in June 2013"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (stdint.h, utility); CRC variants additionally need an SSE4.2-capable CPU and compiler support for the _mm_crc32_u64 intrinsic",
+    "min_toolchain": "not documented precisely; header only uses uint32_t/uint64_t/std::pair, autoconf build dates to 2011-2013, no C++11-only constructs observed",
+    "platforms": "little-endian x86/x86-64 primarily (CRC variants need SSE4.2); header states big-endian support is only lightly tested",
+    "thread_safety": "not documented; functions take no global state in their declarations (city.h has no mutable globals), so they are reentrant by construction, but the project makes no explicit thread-safety statement",
+    "drop_in_for_baseline": "partial — explain: same free-function shape as Murmur2/Murmur3 (buffer+len in, integer out) so it's a drop-in for a hand-rolled Murmur call, but there is no std::hash specialization, so it is not a drop-in for std::hash itself"
+  },
+  "gotchas": [
+    "No seed randomization by default: CityHash64/CityHash32 without a seed are vulnerable to a hash-flooding DoS (CVE-2012-6051); pass a random seed via the *WithSeed/*WithSeeds variants for adversarial input",
+    "CRC-based variants (CityHashCrc128/256 in citycrc.h) require an SSE4.2 CPU and the _mm_crc32_u64 intrinsic; the autoconf build's --enable-sse4.2 flag must be set or citycrc.h isn't installed",
+    "hash(a+b) cannot be derived from hash(a) and hash(b) for any function in this file (stated in the header) — no incremental combination of partial hashes (open issue #17)",
+    "Big-endian support is explicitly called out in city.h as 'only lightly tested'"
+  ],
+  "pick_this_over_siblings_when": "Pick CityHash mainly for legacy/reproducibility reasons (matching an existing on-disk hash or a 2011-era baseline); for new code, komihash, rapidhash, or t1ha in this catalog beat both CityHash and Murmur with active maintenance, and MUM/VMUM-V2 explicitly benchmarks itself against CityHash64 and wins.",
+  "verified_claims_summary": "Google's own README (MIT, ~2011-2013 numbers) reports CityHash64 v1.0.3 vs Murmur2/Murmur3F on a single core of a 2.67GHz Xeon X5550: 9ns vs 15ns/23ns at 64 bytes (~1.7x-2.5x faster), and CityHashCrc256 at 5-5.5 bytes/cycle vs Murmur3F's 2.4 bytes/cycle on long strings (~2.1x-2.3x faster); compiler and flags used for these specific numbers are not stated.",
+  "status_note": "Archived by Google; last commit 2022-07-19 was housekeeping, last real release was v1.1.1 in June 2013. MIT-licensed and small enough (3 source files) to vendor, but expect no further fixes — known issues such as CVE-2012-6051 and #46 (Windows byteswap.h detection) remain open.",
+  "sources_read": [
+    "https://github.com/google/cityhash",
+    "https://github.com/google/cityhash/blob/master/README",
+    "https://github.com/google/cityhash/blob/master/src/city.h",
+    "https://github.com/google/cityhash/blob/master/NEWS",
+    "https://github.com/google/cityhash/issues",
+    "https://github.com/google/cityhash/issues/10"
+  ],
+  "confidence": 0.6
+}

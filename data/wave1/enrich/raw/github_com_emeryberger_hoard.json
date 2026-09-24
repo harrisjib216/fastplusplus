@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/emeryberger/Hoard",
+  "one_liner": "Drop-in multithreaded malloc replacement beating Solaris/Ptmalloc via per-processor heaps and bounded blowup.",
+  "what_it_does": "Hoard is a general-purpose malloc/free/new/delete replacement, not a std::allocator template adapter, aimed at multithreaded and multiprocessor C/C++ programs that bottleneck on the system allocator. It installs via LD_PRELOAD/DYLD_INSERT_LIBRARIES, static/shared linking, or on Windows via Detours-based DLL injection (withdll.exe/setdll.exe) or direct link — no source changes required.",
+  "how_it_is_fast": "Per-processor heaps plus a global heap reduce lock contention, with objects grouped into size-class \"superblocks\" that move between per-thread and global heaps to keep memory use provably bounded rather than growing per-CPU. Thread-local allocation buffers (TLAB, see hoardtlab.h/percputlab.h) give a lock-free fast path, and a remote-free queue (remotefreequeue.h) lets a thread free memory another thread allocated without a global lock. Superblocks are cache-line aligned to avoid false sharing, and the spinlock (futexlock.h) uses PAUSE/YIELD exponential backoff.",
+  "when_to_use": [
+    "Multithreaded server-style workloads with many short-lived allocations and cross-thread object passing (Larson-style)",
+    "Multi-socket NUMA machines, where README claims up to 1.6x over glibc at 128 threads",
+    "Realloc-heavy workloads (repeated grow/shrink), where README claims 2-5x over other allocators",
+    "Programs suffering false sharing or heap contention from the default allocator on multiprocessor hardware",
+    "Deployments wanting a mature (25+ yr), Apache-2.0, provably-bounded-blowup allocator rather than a newer research allocator"
+  ],
+  "when_not_to_use": [
+    "Single-threaded/uniprocessor programs — the original ASPLOS paper measured Hoard averaging 6.2% slower than the Solaris allocator uniprocessor (shbench +49.2% runtime, Ghostscript +10.6% runtime)",
+    "Very high pure malloc/free-pair throughput with no work between calls (linux-scalability benchmark) — current README concedes jemalloc wins this workload",
+    "Windows binaries statically linking the CRT (/MT) — Hoard cannot intercept allocation calls embedded in the executable, only /MD dynamic-CRT builds",
+    "Code wanting a std::allocator-compatible template to plug into individual STL containers — Hoard replaces malloc/new globally, not per-container",
+    "Extreme thread counts (256+) where README shows Hoard only matching mimalloc rather than leading"
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "none at runtime beyond libc; build fetches Heap-Layers, printf (allocation-free printf), and alloc8 (interposition library) via CMake FetchContent",
+    "min_toolchain": "CMake 3.15+; targets C++23 but CMAKE_CXX_STANDARD_REQUIRED is OFF; Linux needs libstdc++-dev installed",
+    "platforms": "Linux, macOS (Intel + Apple Silicon arm64/arm64e), Windows (x86, x64, ARM, ARM64 via Microsoft Detours)",
+    "thread_safety": "not documented as a formal guarantee, but the architecture (per-processor heaps, TLAB fast path, remote-free queue) is built specifically for safe cross-thread alloc/free",
+    "drop_in_for_baseline": "partial — LD_PRELOAD/DYLD_INSERT_LIBRARIES or link-time replacement on Unix is a true drop-in; on Windows it requires /MD dynamic-CRT linkage and DLL injection or import-table patching, and cannot intercept /MT static-CRT executables"
+  },
+  "gotchas": [
+    "Windows apps must be built with /MD; /MT static-CRT binaries embed their own allocator and Hoard can't hook them",
+    "Historical Windows crashes from CRT/DLL interop (e.g. _onexit shimming, ucrtbase heap corruption) took years to fully resolve per issue #51; worth checking current behavior on your exact Windows/CRT version",
+    "Multi-heap design bounds memory blowup mathematically but does not eliminate it — expect some extra memory versus a single-heap allocator in exchange for scalability",
+    "linux-scalability (pure malloc/free pairs, no intervening work) is explicitly called out in the README as adversarial to Hoard's superblock design"
+  ],
+  "pick_this_over_siblings_when": "Pick Hoard over NUMAlloc/scalloc when you want a long-deployed (AOL/Cisco/SAP-era), Apache-2.0, SPEC CPU2006-standard allocator with a proven bounded-blowup guarantee rather than a newer research allocator. SuperMalloc's own README claims to beat the best of DLmalloc/JEmalloc/Hoard/TBBmalloc outright, so prefer SuperMalloc if squeezing out more raw throughput matters more than Hoard's maturity and simpler (non-HTM) build.",
+  "verified_claims_summary": "The ASPLOS 2000 paper (14x400MHz UltraSPARC Sun Enterprise 5000, Solaris 7, GNU C++ -O6) measured up to 60x over the Solaris default allocator and up to 18x over Ptmalloc at 14 processors on Larson, with threadtest 278% and shbench 85% faster than Ptmalloc at 14p, but a 6.2% average uniprocessor slowdown versus Solaris. The current README adds unreviewed first-party benchmarks on a 192-core 2-node AMD EPYC system claiming 1.3-1.5x higher Larson throughput than glibc/mimalloc/jemalloc and 1.6x over glibc at 128 threads on NUMA, while conceding jemalloc wins the linux-scalability workload.",
+  "status_note": "Actively maintained (last commit 2026-07-19, open PR/issue #84 adding hot-path optimizations); Apache-2.0 and a simple drop-in library, so easy to vendor or pin even if development slowed.",
+  "sources_read": [
+    "https://github.com/emeryberger/Hoard",
+    "https://github.com/emeryberger/Hoard/blob/main/README.md",
+    "https://github.com/emeryberger/Hoard/blob/main/CMakeLists.txt",
+    "https://github.com/emeryberger/Hoard/blob/main/src/README.md",
+    "https://github.com/emeryberger/Hoard/blob/main/src/include/hoard/README",
+    "https://github.com/emeryberger/Hoard/issues/51",
+    "https://github.com/emeryberger/Hoard/issues/84",
+    "https://github.com/emeryberger/Hoard/issues"
+  ],
+  "confidence": 0.6
+}

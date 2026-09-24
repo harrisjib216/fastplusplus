@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/loopperfect/smallfunction",
+  "one_liner": "Header-only, fixed-capacity alternative to std::function that placement-news the callable into an inline stack buffer instead of the heap.",
+  "what_it_does": "SmallFun<Signature, N> is a type-erased callable wrapper used the same way as std::function, but the erased callable is placement-new'd into an N-byte char buffer embedded in the object (default N=128) instead of being heap-allocated behind a shared_ptr-style PImpl. Buffer size is a compile-time template parameter; a callable whose type-erasure model exceeds N bytes fails to compile (SFINAE/enable_if) rather than silently spilling to the heap the way std::function would. It supports copy construction and copy assignment between SmallFun instances of different (sufficiently large) buffer sizes, but has no move constructor, no operator bool, and no empty-call check.",
+  "how_it_is_fast": "Classic type erasure (SFConcept/SFModel, i.e. a hand-rolled PImpl) combined with small-buffer optimization: the Model is placement-new'd directly into a char[N] member on the stack, removing the heap allocation and one pointer indirection that std::function pays on every assignment. The repo's own Google Benchmark constructs and invokes 100 small lambdas per iteration; because the gain is almost entirely 'no malloc', it is largest for small buffers and shrinks as N grows and the inline copy itself gets more expensive to construct/copy.",
+  "when_to_use": [
+    "Hot loops that repeatedly construct/reassign many short-lived small-capture callables (the upstream benchmark: 100 lambdas capturing one int and one unsigned, assigned and invoked per iteration).",
+    "Capture size is small and known ahead of time — the largest wins (3-5x) are at 32-256 byte buffers.",
+    "A single call site can commit to one fixed buffer size and doesn't need to store arbitrarily-sized callables behind one type.",
+    "You're willing to vendor a ~100-line single header (MIT) and patch it yourself rather than rely on upstream maintenance.",
+    "Target has relaxed alignment handling for unaligned/misaligned loads (see gotchas) or you've verified/fixed the alignment issue yourself."
+  ],
+  "when_not_to_use": [
+    "You need to store callables of unpredictable or varying size behind one type — oversized captures are a hard compile error here, not a transparent heap fallback like std::function.",
+    "Captures include pointers or other over-aligned members on strict-alignment platforms (e.g. ARM) — issue #1 shows UBSan-confirmed misaligned member-access crashes because storage is a plain char[N] with no alignas.",
+    "Code paths may call a default-constructed or moved-from SmallFun — invoking an empty one is undefined behavior; std::function would throw std::bad_function_call instead.",
+    "You require move semantics for move-only state — SmallFun only defines copy construction/assignment.",
+    "You need an actively maintained dependency — last commit 2018-01-04, the alignment bug is still open, and the only fix (PR #3, alignof(std::max_align_t)) was never merged."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (only <type_traits>)",
+    "min_toolchain": "C++14 (uses std::enable_if_t); upstream benchmarked with g++6 and clang++6/libc++",
+    "platforms": "any standard C++ target in principle; not safe on strict-alignment platforms without patching the buffer's alignment (see gotchas)",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": "partial — explain: same construct/assign/call syntax as std::function, but requires choosing a compile-time buffer size, rejects (does not heap-fallback) oversized callables at compile time, has no operator bool/empty check, and lacks move semantics"
+  },
+  "gotchas": [
+    "Storage is a raw char[size] member with no alignas; open issue #1 documents a UBSan-caught case (pointer capture placed after a bool member) producing 'member call on misaligned address ... requires 8 byte alignment' crashes. An unmerged PR (#3) fixes this via alignof(std::max_align_t), but master still ships without it.",
+    "operator() has no allocated-flag check, so calling a default-constructed or emptied SmallFun is undefined behavior rather than throwing.",
+    "No move constructor or move-assignment operator is defined — only copy, which round-trips through the stored callable's own copy constructor.",
+    "Exceeding the fixed buffer size for a given signature is a compile-time SFINAE failure, so bumping a lambda's capture set can break the build until you also raise the template's size parameter."
+  ],
+  "pick_this_over_siblings_when": "Pick SmallFun over woid, Delegate, or sy_callback.hpp when you want the smallest possible (~100-line) header-only SBO implementation to vendor and are willing to patch the known alignment bug yourself; stdext::inplace_function (WG21-SG14) implements the same idea with an actively-referenced SG14 design and no open alignment defect, and is the safer default when that matters more than minimalism.",
+  "verified_claims_summary": "First-party Google Benchmark (100 identical lambdas capturing int i and unsigned N, assigned into a vector and invoked via std::transform per iteration) on g++6 and clang++6/libc++, no CPU stated: std::function averaged 1141 ns (g++6) / 1511 ns (clang++6+libc++) versus SmallFun buffers from 312 ns (32-byte) up to 870 ns (2048-byte) on g++6 — about 3.0-3.7x faster at 32-256-byte buffers, narrowing to 1.3x at 2048 bytes (up to ~5.0x on clang at the smallest buffer).",
+  "status_note": "Abandoned: no commits since 2018-01-04, the same day an alignment bug (issue #1) was reported and an unrelated operator= bug (issue #2) was fixed; MIT-licensed and small enough to vendor and patch, but the alignment issue is unresolved on master and its only proposed fix (PR #3) was never merged.",
+  "sources_read": [
+    "https://github.com/LoopPerfect/smallfunction",
+    "https://github.com/LoopPerfect/smallfunction/blob/master/smallfun/include/smallfun.hpp",
+    "https://github.com/LoopPerfect/smallfunction/issues",
+    "https://github.com/LoopPerfect/smallfunction/issues/1",
+    "https://github.com/LoopPerfect/smallfunction/issues/2",
+    "https://github.com/LoopPerfect/smallfunction/pull/3"
+  ],
+  "confidence": 0.55
+}

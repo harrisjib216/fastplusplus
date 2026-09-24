@@ -1,0 +1,49 @@
+{
+  "id": "https://gitlab.com/libeigen/eigen",
+  "one_liner": "Header-only C++ template library for dense/sparse linear algebra; beats OpenBLAS at small-to-mid sizes without linking BLAS.",
+  "what_it_does": "Eigen provides matrix/vector types, dense and sparse linear algebra, and solvers (LU, QR, SVD, eigenvalue decompositions) as a self-contained C++ numerics layer. It exposes its own expression-based API (Matrix, Array, Map, operator overloading) rather than C BLAS/LAPACK function signatures, so moving off OpenBLAS means rewriting call sites, not relinking. It can optionally call an external BLAS/LAPACK backend for large problems, but the kernels measured in this benchmark are Eigen's own, with no external BLAS.",
+  "how_it_is_fast": "Expression templates fuse chained operations into a single loop at compile time, avoiding temporaries. Eigen's own GEMM kernel does three-level cache blocking -- mc x kc panels packed for L2/L3, mr x kc micro-panels kept in L1, and a register-blocked micro-kernel -- the same family of technique GotoBLAS/BLIS use, confirmed in the header comment of GeneralBlockPanelKernel.h. Kernels are explicitly SIMD-vectorized (SSE/AVX/AVX-512/NEON/etc.), and small fixed-size matrices get compile-time loop unrolling that skips packing overhead entirely, which is why Eigen's edge over OpenBLAS is largest at small sizes (DOT 4.9x, GEMV 2.2x at n<=16) and shrinks or reverses as size grows.",
+  "when_to_use": [
+    "Small and medium dense ops (roughly n<=1024) where OpenBLAS's dispatch/call overhead dominates -- GEMV and DOT measured 1.1-4.9x faster than OpenBLAS here",
+    "You want a header-only dependency with no external BLAS/LAPACK to build, package, or version-pin",
+    "Fixed-size or compile-time-sized linear algebra (small transforms, small solvers) where Eigen's unrolled kernels apply",
+    "TRSM, POTRF, SYEV workloads at small/mid size, where Eigen beat OpenBLAS by 1.25-3.6x per this benchmark",
+    "C++ codebases that want expression-template ergonomics instead of raw BLAS call signatures"
+  ],
+  "when_not_to_use": [
+    "Very large dense GEMM/SYRK (n in the 1500+ range) where Eigen is roughly at parity with OpenBLAS and often slower than oneMKL",
+    "GEEV (nonsymmetric eigenvalues) -- measured at 0.45x OpenBLAS at 192-1024, and well behind oneMKL at large sizes",
+    "GESDD (SVD) at mid-to-large sizes -- measured 0.6-0.9x OpenBLAS",
+    "Large-scale multi-threaded numerics -- this benchmark and Eigen's own kernels are single-threaded; OpenMP only parallelizes some ops (dense GEMM, PartialPivLU, a few iterative sparse solvers), not the full LAPACK surface",
+    "Storing fixed-size Eigen objects in STL containers or passing them by value without alignment care -- triggers runtime alignment assertions on SIMD builds"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (STL only); optional external BLAS/LAPACK backend for large-matrix offload",
+    "min_toolchain": "C++14 (target_compile_features cxx_std_14 in CMakeLists.txt); CMake 3.18+ only needed for the optional install/test build, not for using the headers",
+    "platforms": "x86-64 (SSE2 baseline, AVX/AVX2/AVX-512 optional), aarch64/ARM NEON, PowerPC Altivec/VSX, MIPS MSA; this benchmark ran on AVX-512",
+    "thread_safety": "Safe across threads if Eigen::initParallel() is called before spawning them (optional on C++11 compilers with thread-safe static init, per TopicMultiThreading); Random()/setRandom() are explicitly not thread-safe or reentrant",
+    "drop_in_for_baseline": "partial -- not ABI/API compatible with BLAS/LAPACK call signatures; this benchmark compares Eigen's native API against a separate OpenBLAS binary, it is not a relink-only swap"
+  },
+  "gotchas": [
+    "Fixed-size vectorizable types (Vector4d, Matrix4d, Quaternionf, etc.) assert at runtime if misaligned -- avoid storing them by value in STL containers or passing by value without EIGEN_MAKE_ALIGNED_OPERATOR_NEW",
+    "OpenMP thread count should match physical cores, not logical/hyperthreads -- oversubscription slows things down since Eigen's kernels already saturate a core",
+    "Heavy expression-template usage increases compile times",
+    "For very large dense problems, Eigen's own docs and this benchmark both point toward linking an external BLAS/LAPACK backend instead of relying solely on Eigen's kernels"
+  ],
+  "pick_this_over_siblings_when": "no siblings catalogued yet",
+  "verified_claims_summary": "On an Intel Xeon Gold 6444Y (GCC 13.3.0, -O3 -DNDEBUG -mavx512dq -mfma, single-threaded), Eigen's own kernels beat OpenBLAS 0.3.26's geometric-mean GFLOP/s on GEMV, DOT, TRSM, POTRF and SYEV across most size bands (roughly 1.1-4.9x), are near parity on large GEMM, and lose on GEEV and GESDD; against Intel oneMKL 2025.3, Eigen is generally slower at large sizes. The harness (Google Benchmark 1.8.3, median of 10 reps) is public but still an unmerged GitLab merge request (!2903), and frequency was not locked during the run.",
+  "status_note": "Actively maintained (last commit 2026-09-23) with a large downstream user base (ROS, TensorFlow, Ceres Solver, OpenCV, Blender); MPL-2.0, header-only, trivial to vendor.",
+  "sources_read": [
+    "https://gitlab.com/libeigen/eigen",
+    "https://gitlab.com/libeigen/eigen/-/raw/master/README.md",
+    "https://gitlab.com/libeigen/eigen/-/raw/master/INSTALL",
+    "https://gitlab.com/libeigen/eigen/-/raw/master/CMakeLists.txt",
+    "https://gitlab.com/libeigen/eigen/-/raw/master/Eigen/src/Core/products/GeneralBlockPanelKernel.h",
+    "https://libeigen.gitlab.io/benchmarks/2026-09-xeon-gold-6444y-blas-lapack-avx512/",
+    "https://libeigen.gitlab.io/eigen/docs-nightly/TopicMultiThreading.html",
+    "https://libeigen.gitlab.io/eigen/docs-nightly/TopicUnalignedArrayAssert.html",
+    "https://gitlab.com/api/v4/projects/libeigen%2Feigen/issues?labels=Bug&state=opened&per_page=20&order_by=updated_at"
+  ],
+  "confidence": 0.6
+}

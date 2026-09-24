@@ -1,0 +1,45 @@
+{
+  "id": "https://github.com/ShigamiYune/sy_callback.hpp",
+  "one_liner": "Header-only type-erased callback wrapper beating std::function on construct/destroy, move, and assign; no SBO.",
+  "what_it_does": "sy_callback::callback<Signature> is a type-erased callable wrapper for member/static/global functions, lambdas, functors, and template functions, aimed at std::function replacement. Simple assignment (cb = lambda / cb = &func) works like std::function's operator=, but binding a specific member function needs the static factory callback<Sig>::make<Class,&Class::Func>(obj) instead of std::bind/std::mem_fn. Also exposes target<T>(), isCallable()/operator bool, reset(), swap(), and an opt-in invoke_prediction<T>() fast path.",
+  "how_it_is_fast": "The object is 16 bytes: an object_ptr slot plus a thunk_fn that returns one of two static function pointers (invoke_fn, life_fn) rather than std::function's typical vtable/control-block scheme. Non-capturing lambdas and plain function pointers are stored directly in the pointer slot and invoked with no heap allocation, so construct/destroy/move for that common case is just pointer copies instead of allocator traffic. invoke_prediction<T>() lets a caller assert the concrete static type to skip the thunk indirection on the call, at a claimed ~10-20% gain per the README.",
+  "when_to_use": [
+    "Hot loops that construct, destroy, move, or assign large numbers of callbacks (per-frame game/embedded code) where std::function's allocation and vtable overhead dominates",
+    "Callbacks are mostly non-capturing lambdas or plain function/static-member pointers, which avoid heap allocation entirely in this design",
+    "Binary-size or compile-time sensitive code instantiating many distinct callback signatures (README's 1000-callback table shows much smaller generated code and faster compiles than std::function in most rows, though this table has no public benchmark source)",
+    "Single-threaded callback ownership, or lifetime changes (move/assign/swap/reset) externally synchronized",
+    "C++11-only toolchains/embedded targets where a minimal, dependency-free header is preferable to <functional>'s std::function"
+  ],
+  "when_not_to_use": [
+    "Callbacks built from std::bind-wrapped member functions: the README's own numbers show std::function ~5x faster than sy_callback there",
+    "Multi-threaded code that moves, destroys, assigns, swaps, or resets a shared callback concurrently — only copy is documented thread-safe",
+    "Expecting small-buffer optimization for small captures: there is none, so every capturing lambda or functor heap-allocates regardless of capture size",
+    "Anything requiring production-grade maturity: single-contributor repo, 0 stars, no CI, no releases/tags, most benchmark tables (init/destroy, copy/move/assign, compile-time) have no published harness",
+    "Code needing package-manager distribution or CMake config — it's a bare header plus a manual test.cpp, no build tooling included"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none beyond the C++ standard library (<functional>, <type_traits>, <typeindex>)",
+    "min_toolchain": "C++11 minimum; compiles an additional noexcept-function-pointer code path under C++17 (__cplusplus >= 201703L)",
+    "platforms": "not documented beyond the benchmark machine (Apple M1 macOS, clang++); no CI workflows in the repo and no explicit platform support statement",
+    "thread_safety": "Copying a callback across threads is documented safe; move, assign, swap, and reset are explicitly called out in DOCUMENT.ENG.md as potentially racing across threads",
+    "drop_in_for_baseline": "partial — explain: operator= from a lambda/functor/function pointer mirrors std::function, and calling an empty callback throws the same std::bad_function_call, but wrapping a specific member function requires callback<Sig>::make<Class,&Class::Func>(obj) instead of std::bind, so call sites using std::bind/std::mem_fn need rewriting"
+  },
+  "gotchas": [
+    "Calling an empty or moved-from callback throws std::bad_function_call() (reused from <functional>), not a library-specific exception type",
+    "target<T>() relies on RTTI (typeid/std::type_index) internally",
+    "invoke_prediction<T>() requires the caller to name the exact static type (or member-function pointer) to get the fast path; a wrong guess still works correctly but the speedup is only ~10-20% per the README, with some code-size increase",
+    "No SBO: capturing lambdas and functors always heap-allocate, even for a single captured byte; only non-capturing lambdas and plain function pointers avoid the heap"
+  ],
+  "pick_this_over_siblings_when": "Among the std::function-beating siblings (woid, Delegate, stdext::inplace_function, SmallFunction), pick sy_callback when you specifically want zero heap allocation for non-capturing lambdas/plain functions and a minimal 16-byte base object, and can tolerate heap allocation for every capturing case; pick inplace_function or SmallFunction instead when you need true SBO for small captures, since those have broader validation than this single-contributor, 0-star repo.",
+  "verified_claims_summary": "First-party README benchmarks (clang++ -O2, Apple M1 macOS, libc++) over 10M reps claim sy_callback beats std::function on init+destroy (~6x for non-capturing lambdas, ~15x for 1024-byte captures), move (~14x), assign (~7x), copy (~1.5x), and most call-time paths (~1.8x for non-capturing lambdas/global functions); std::function is ~5x faster specifically when the callback wraps a std::bind'd member function. Only the call-time numbers have a public harness (test.cpp); init/destroy, copy/move/assign, and compile-time tables are unverified first-party figures.",
+  "status_note": "Stale: single-contributor repo created 2025-09-01, last pushed 2025-09-18, 0 stars, no releases/tags/CI; Apache-2.0 licensed and copyable as one header, so cheap to vendor and read despite the lack of outside validation.",
+  "sources_read": [
+    "https://github.com/ShigamiYune/sy_callback.hpp",
+    "https://github.com/ShigamiYune/sy_callback.hpp/blob/main/README.ENG.md",
+    "https://github.com/ShigamiYune/sy_callback.hpp/blob/main/DOCUMENT.ENG.md",
+    "https://github.com/ShigamiYune/sy_callback.hpp/blob/main/test.cpp",
+    "https://github.com/ShigamiYune/sy_callback.hpp/blob/main/sy_callback.hpp"
+  ],
+  "confidence": 0.5
+}

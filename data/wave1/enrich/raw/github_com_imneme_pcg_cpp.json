@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/imneme/pcg-cpp",
+  "one_liner": "Header-only C++11 PCG-family RNG beating std::mt19937/std::mt19937_64 raw-generation throughput by ~2.6-4x.",
+  "what_it_does": "PCG (permuted congruential generator) family of pseudo-random engines meant to replace std::mt19937/std::mt19937_64 as a raw uniform-random-bit source. Ships convenience typedefs (pcg32, pcg64, pcg32_fast, pcg64_fast, plus oneseq/setseq/unique/mcg and extended k-dimensional variants) over one heavily templated engine class, mirroring how std::mt19937 is a typedef of std::mersenne_twister_engine. Not a literal drop-in: type names, constructors, and seed()/set_stream() calls differ from std::mt19937, though the engines satisfy the same UniformRandomBitGenerator concept so they plug into std::uniform_int_distribution and other <random> distributions.",
+  "how_it_is_fast": "Each engine keeps a small 64-bit or 128-bit linear/multiplicative congruential generator (LCG/MCG) state, permuted through an output function (XSH-RR, XSL-RR, XSH-RS) on every call, instead of Mersenne Twister's ~20,000-bit state array and tempering step -- so a generated value costs one multiply-add plus a permute rather than a big-array update. The benchmarked '_fast' variants are MCG-based (pcg32_fast = mcg_xsh_rs_64_32, pcg64_fast = mcg_xsl_rr_128_64): they drop the increment/stream-selection add that the default setseq/oneseq engines perform every step, shortening the instruction path at the cost of a single fixed stream per type.",
+  "when_to_use": [
+    "Raw uint32_t/uint64_t generation is the bottleneck (Monte Carlo inner loops, procedural generation, shuffling large arrays) and you don't need many independent streams.",
+    "Code already consumes std::uniform_int_distribution or other <random> distributions -- PCG engines satisfy UniformRandomBitGenerator so distributions work unchanged.",
+    "Non-cryptographic use where 64-bit (pcg32_fast) or 128-bit (pcg64_fast) internal state is acceptable.",
+    "You can vendor a small, unmaintained header-only library (Apache-2.0/MIT dual-licensed) rather than depend on an actively-updated package.",
+    "You want tunable stream separation later (setseq/oneseq/unique variants) without changing the surrounding API shape, if you outgrow the fast/MCG variant."
+  ],
+  "when_not_to_use": [
+    "You need many statistically independent streams (e.g. one RNG per thread/worker) -- pcg32_fast/pcg64_fast are MCG-based with a single fixed stream; use the setseq variants (pcg32/pcg64) instead, at lower throughput.",
+    "Cryptographic or security-sensitive randomness is needed -- PCG is not a CSPRNG and issue #27 ('Seed securely by default') is still open, so default seeding is not secure by default.",
+    "Your code relies on seed()/set_stream() being independent -- issue #94 documents that calling seed() or seed(itype) on pcg32/pcg64 resets the stream to the default, silently discarding a previously-selected stream.",
+    "You need an actively maintained upstream -- last commit 2022-04-08; issue #106 (Dec 2025) proposes a third-party fork (Total-Random/pcg-cpp) for Windows ARM64/MSVC/128-bit-fallback fixes that are unmerged upstream.",
+    "You're touching custom seeding/streaming edge cases without testing -- several other open issues (#85, #91, #102) report surprising stream-selection/repeat behavior in specific variants; verify your exact typedef and seeding path."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (pcg_random.hpp includes pcg_extras.hpp and pcg_uint128.hpp from the same repo, no external deps)",
+    "min_toolchain": "C++11",
+    "platforms": "any; uses __SIZEOF_INT128__/compiler builtins where available and has MSVC-specific intrinsic paths for 128-bit ops in pcg_uint128.hpp, but community issue #106 reports unmerged fixes needed for Windows ARM64 and some MSVC/128-bit-fallback cases",
+    "thread_safety": "not documented; no mutex/atomic usage found in pcg_random.hpp or pcg_extras.hpp -- treat a shared engine instance as unsynchronized, same caveat as std::mt19937",
+    "drop_in_for_baseline": "partial -- explain: satisfies UniformRandomBitGenerator like std::mt19937 so it works with std <random> distributions, but type names, constructors, and seed()/set_stream() semantics differ and are not interchangeable with std::mt19937 call sites"
+  },
+  "gotchas": [
+    "pcg32_fast/pcg64_fast are MCG-based (mcg_xsh_rs_64_32 / mcg_xsl_rr_128_64): one fixed stream per instance, no per-object stream selection.",
+    "seed() and seed(itype) on pcg32/pcg64 reinstall the default stream, discarding any stream previously set via set_stream() (issue #94, open).",
+    "No secure-by-default seeding -- issue #27 (open) asks for default construction to seed from OS entropy; currently you must seed explicitly.",
+    "Repository is a reference implementation with many similarly-named typedefs (pcg32 vs pcg32_oneseq vs pcg32_fast vs pcg32_k64 ...); picking the wrong one changes both speed and stream-independence guarantees."
+  ],
+  "pick_this_over_siblings_when": "Pick imneme/pcg-cpp over wjakob/pcg32 when you need 64-bit generation or explicit stream-separation strategies (oneseq/setseq/unique/mcg, extended k-dimensional generators) -- wjakob/pcg32 is a smaller single-header 32-bit-only PCG (940M gen/s, ~3.47x) with less machinery. Pick it over xoshiro_cpp when you want PCG's settable-stream model (C++11 SeedSequence support, per-stream selection) rather than xoshiro256++'s larger 256-bit-state, no-stream-argument design, even though xoshiro256++ measured similarly (946M gen/s, ~3.22x) on the same benchmark suite.",
+  "verified_claims_summary": "On zeFresk/cpp-random-benchmarks (Google Benchmark, pcg-cpp pinned at commit 428802d, clang -O3 -DNDEBUG, Intel Core i5-3570, no AVX2): pcg32_fast measured 1071.97M generations/s vs std::mt19937's 270.65M/s (~3.96x), and pcg64_fast measured 763.50M/s vs std::mt19937_64's 294.26M/s (~2.59x). Which C++ standard library (libstdc++ vs libc++) backed the std::mt19937 baseline is not stated in the benchmark.",
+  "status_note": "Abandoned upstream -- last commit 2022-04-08, more than 3 years with no update; Apache-2.0/MIT dual-licensed and small enough to vendor as-is. A community fork (Total-Random/pcg-cpp, referenced in issue #106) exists for modern-platform fixes but is not merged upstream.",
+  "sources_read": [
+    "https://github.com/imneme/pcg-cpp",
+    "https://github.com/imneme/pcg-cpp/blob/master/README.md",
+    "https://github.com/imneme/pcg-cpp/blob/master/include/pcg_random.hpp",
+    "https://github.com/imneme/pcg-cpp/blob/master/include/pcg_extras.hpp",
+    "https://github.com/imneme/pcg-cpp/blob/master/include/pcg_uint128.hpp",
+    "https://github.com/imneme/pcg-cpp/issues (search: bug, performance)",
+    "https://github.com/imneme/pcg-cpp/issues/27",
+    "https://github.com/imneme/pcg-cpp/issues/94",
+    "https://github.com/imneme/pcg-cpp/issues/106"
+  ],
+  "confidence": 0.85
+}

@@ -1,0 +1,55 @@
+{
+  "id": "https://github.com/WojciechMula/sse4-strstr",
+  "one_liner": "SIMD substring-search kernels (SSE2-AVX512, NEON) from a blog article; beats glibc strstr by ~1.3-1.8x on x86.",
+  "what_it_does": "Companion source code for 0x80.pl's \"SIMD-friendly algorithms for substring searching\" article: exact single-needle substring search over a byte buffer, the same problem std::strstr / std::string::find / std::search solve. It is a set of free functions with signature (const char* s, size_t n, const char* needle, size_t k) -> size_t (or std::string overloads), returning the match offset or std::string::npos -- not a packaged library, just loose .cpp/.h kernel files meant to be read or vendored individually. A separate original/ subdirectory holds 32-bit inline-asm code from an earlier 2008 article.",
+  "how_it_is_fast": "SWAR and SIMD kernels (SSE2, SSE4.1 MPSADBW, SSE4.2 PCMPESTRM, AVX2, AVX512F/BW, NEON) scan 16-64 bytes per iteration instead of glibc strstr's byte-at-a-time loop. The fastest \"generic\" kernel behind the cited 1.82x number (avx2_strstr_v2 -> avx2_strstr_anysize) broadcasts the needle's first and last byte across a 32-byte AVX2 vector, compares both in one pass to get a lane mask of candidate offsets, then verifies each candidate with a short memcmp -- a vectorized two-byte filter (0x80.pl's \"SIMD-friendly Karp-Rabin\" scheme), not a per-byte scan. Needles of length 2-12 get separate template-specialized SSE4.1/AVX2 kernels tuned per exact length.",
+  "when_to_use": [
+    "Exact single fixed-needle search over large in-memory byte buffers (logs, text corpora) on x86-64 with SSE4.1/AVX2/AVX512, or ARMv7/AArch64 with NEON, where the scan itself is the bottleneck",
+    "You want reference/teaching code for SIMD substring-search techniques (the vectorized Karp-Rabin-style first/last-byte filter) rather than a dependency",
+    "You can vendor a handful of individual .cpp/.h files into your own build instead of linking a packaged library",
+    "Needle length and target ISA are known ahead of time so you can pick/compile the matching kernel (SSE4, AVX2, AVX512BW, NEON) for your CPU",
+    "You're willing to own and patch the code yourself going forward -- no upstream maintenance since Jan 2022"
+  ],
+  "when_not_to_use": [
+    "You need a drop-in for std::string::find/strstr with wide-char support, custom predicates, or a std::string_view-friendly API -- none of that exists here",
+    "You need multi-needle or streaming search; only a single fixed needle against a fully-buffered haystack is implemented (open issue #18 asks for multithreading, #19 for combining with Raita's algorithm -- both unaddressed)",
+    "You need a maintained, packaged dependency: no releases, no build-system package config, last commit 2022-01-04, and confirmed bugs (#11, #16) are unfixed",
+    "Needle length 1 passed directly to the low-level avx2_strstr_anysize kernel (bypassing the dispatcher) hits a confirmed bug: k-2 underflows (issue #11)",
+    "On current hardware/libc the maintainer himself says (issue #12, 2020) \"AVX2 won't help much\" over a decent modern strstr -- re-benchmark on your own CPU/libc before adopting"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (uses <immintrin.h>/<arm_neon.h> intrinsics and the C++11 standard library only)",
+    "min_toolchain": "C++11; GCC or Clang with the matching ISA flag per kernel (-msse4.2, -mavx2, -mavx512bw, -mfpu=neon)",
+    "platforms": "x86-64 (SSE2 baseline; SSE4.1/4.2, AVX2, AVX512F/AVX512BW variants gated by build flags), ARMv7 (NEON) and ARMv8/AArch64",
+    "thread_safety": "not documented -- kernels are pure functions with no shared mutable state, but there is no synchronization code anywhere in the repo, and issue #18 (open) requests multithreading support",
+    "drop_in_for_baseline": "partial -- explain: the top-level function signature/return convention mirrors std::string::find (offset or npos) rather than strstr's null-terminated char* return, and using it means vendoring specific kernel files plus manual dispatch by needle length and target ISA rather than including one header"
+  },
+  "gotchas": [
+    "Raw per-length kernels (e.g. avx2_strstr_anysize, sse4_strstr_anysize) assert needle_size > 4 or > 0 depending on variant; only the top-level dispatchers (avx2_strstr, avx2_strstr_v2, sse4_strstr_anysize's callers) special-case short needles (0-4 bytes) via strchr/strstr/memcmp -- calling a raw kernel directly with a short needle is unsafe (issue #11, confirmed bug for k=1)",
+    "The vectorized loops load fixed 16/32-byte windows (_mm256_loadu_si256 at s+i and s+i+k-1) per iteration, which can read past the logical end of the haystack near its tail; the README/code does not document a guaranteed-safe overread margin, so vendoring into a tightly-sized buffer needs care",
+    "Open, unanswered GitHub issue (#16) questions whether the `next1` vector in avx2_strstr_eq (the 2-byte-needle path) is read before being fully initialized",
+    "The repo's own speedup.cpp deliberately skips std::string::find on GCC/x86 builds (\"proven to be utterly slow, don't waste our time\"), so its own benchmark has no std::string::find numbers to compare against on x86"
+  ],
+  "pick_this_over_siblings_when": "Pick this over StringZilla or Boost.Algorithm's Boyer-Moore/Boyer-Moore-Horspool searchers only when you specifically want the raw, ISA-specific kernel source to vendor one function with zero dependencies (no Boost, no StringZilla) or to study the 0x80.pl vectorized Karp-Rabin technique; both siblings are actively packaged and maintained, and StringZilla in particular reports larger, more current speedups over std::string::find.",
+  "verified_claims_summary": "On an Intel Skylake i7-6700 with GCC 5.4.1 (-O3 -mavx2), the repo's own speedup_avx2 benchmark scanning data/i386.txt for data/words shows glibc std::strstr at 0.662s vs the \"AVX2 (generic)\" kernel at 0.364s across three runs with identical checksums (~1.82x faster); \"SSE2 (generic)\" is 0.489s (~1.35x faster). std::string::find is not measured on this run -- the harness skips it on GCC/x86.",
+  "status_note": "Abandoned: last commit 2022-01-04, not archived, two confirmed/unanswered bugs (#11, #16) unaddressed; BSD-2-Clause and small enough to vendor a single kernel file, but the maintainer himself notes (2020) that on modern CPUs/libc the AVX2 advantage over strstr is small.",
+  "sources_read": [
+    "https://github.com/WojciechMula/sse4-strstr",
+    "https://github.com/WojciechMula/sse4-strstr/blob/master/README.rst",
+    "https://github.com/WojciechMula/sse4-strstr/blob/master/Makefile",
+    "https://github.com/WojciechMula/sse4-strstr/blob/master/common.h",
+    "https://github.com/WojciechMula/sse4-strstr/blob/master/src/speedup.cpp",
+    "https://github.com/WojciechMula/sse4-strstr/blob/master/src/all_procedures.cpp",
+    "https://github.com/WojciechMula/sse4-strstr/blob/master/avx2-strstr.cpp",
+    "https://github.com/WojciechMula/sse4-strstr/blob/master/avx2-strstr-v2.cpp",
+    "https://github.com/WojciechMula/sse4-strstr/blob/master/sse4-strstr.cpp",
+    "https://github.com/WojciechMula/sse4-strstr/blob/master/results/skylake-i7-6700-gcc5.4.1-avx2.txt",
+    "https://github.com/WojciechMula/sse4-strstr/issues/11",
+    "https://github.com/WojciechMula/sse4-strstr/issues/12",
+    "https://github.com/WojciechMula/sse4-strstr/issues/15",
+    "https://github.com/WojciechMula/sse4-strstr/issues/16",
+    "https://github.com/WojciechMula/sse4-strstr/issues"
+  ],
+  "confidence": 0.82
+}

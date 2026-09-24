@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/mjansson/rpmalloc",
+  "one_liner": "Lock-free, per-thread-caching malloc replacement for C/C++, drop-in via LD_PRELOAD or override, faster than glibc/tcmalloc/jemalloc under threaded churn.",
+  "what_it_does": "rpmalloc is a malloc-family replacement (rpmalloc/rpfree plus C++ new/delete overrides) that can be linked directly, injected via LD_PRELOAD/DYLD_INSERT_LIBRARIES, or compiled in to override libc malloc (ENABLE_OVERRIDE=1). It also exposes an optional first-class heap API (rpmalloc_heap_*) for scoped allocation with a single free-all call. It is not a std::allocator template — C++ code gets it by overriding global operator new/delete, not by swapping a container's allocator type.",
+  "how_it_is_fast": "Each thread owns a private heap and the hot allocate/free path takes no locks. Memory is organized span (256MiB-aligned) -> page -> block by fixed size class, so free() locates the owning span/page header in O(1) by masking the pointer's low bits instead of a table lookup. Blocks freed by a non-owning thread are pushed to a per-page atomic deferred free list and reclaimed lazily by the owner thread, avoiding the double thread-cache hop other allocators pay on producer/consumer handoff.",
+  "when_to_use": [
+    "Multi-threaded C/C++ workloads with heavy alloc/free churn, especially cross-thread frees (producer/consumer handoff) where lock contention dominates.",
+    "Need a quick libc malloc swap to test allocator impact via LD_PRELOAD/DYLD_INSERT_LIBRARIES without recompiling the target binary.",
+    "Want natural 16-byte alignment on every allocation without calling aligned-alloc variants.",
+    "Want a small (~3.3k-line core), single-vendor C11 allocator you can vendor as source and actually read.",
+    "Workloads whose high/low allocation water-mark swing fits the free-page retention thresholds, so committed pages stay resident instead of thrashing decommit/recommit."
+  ],
+  "when_not_to_use": [
+    "Code that relies on operator new throwing std::bad_alloc on OOM — rpnew.h's overrides call rpmalloc() directly and return null on failure instead of throwing, silently breaking exception-based OOM handling.",
+    "You need a std::allocator-compatible type to plug into individual std:: containers rather than a global malloc replacement.",
+    "Threads that touch a few blocks from many different size classes each commit a page per class, wasting resident memory versus a single shared arena.",
+    "Windows with explicit huge pages enabled: huge-page-backed ranges can't be partially decommitted and stay committed until the whole span unmaps.",
+    "Targets outside Windows/Linux/macOS/iOS/Android on x86-64/arm64 (also LoongArch, arm64ec per changelog) — no WASM or other embedded targets in CI."
+  ],
+  "integration": {
+    "form": "source-drop (rpmalloc.c/h, ~3.3k LOC core; also builds as static/shared lib via configure.py + ninja)",
+    "dependencies": "none",
+    "min_toolchain": "C11 (C++ optional, only needed for the operator new/delete override in rpnew.h)",
+    "platforms": "Windows, Linux (glibc and musl/Alpine), macOS, iOS, Android; x86-64 and arm64 covered in CI",
+    "thread_safety": "Per-thread heaps with a lock-free hot alloc/free path; cross-thread frees are deferred to the owning thread via an atomic per-page free list. The optional first-class heap API (RPMALLOC_FIRST_CLASS_HEAPS) is explicitly not thread-safe — each heap object must be used by a single thread at a time.",
+    "drop_in_for_baseline": "partial — explain: replaces the malloc-family functions via LD_PRELOAD/DYLD_INSERT_LIBRARIES or ENABLE_OVERRIDE=1, and overrides global operator new/delete (automatic on non-Windows, requires #include <rpnew.h> in exactly one translation unit on Windows), but it is not a std::allocator template for use with individual containers."
+  },
+  "gotchas": [
+    "Overridden operator new returns null on allocation failure instead of throwing std::bad_alloc (confirmed in rpnew.h — no null-check/throw logic anywhere in the override), breaking code that expects exception-based OOM handling.",
+    "If rpmalloc is compiled as a static lib and the caller only ever invokes plain malloc/free (never an rp*-prefixed symbol), the linker can drop the override object entirely; call the provided rpmalloc_linker_reference() dummy, or include rpmalloc.h in a translation unit, to force inclusion.",
+    "On Windows, huge-page-backed memory can't be partially decommitted, so unused ranges stay committed until the whole span unmaps; on Linux, unused huge-page ranges are only decommitted on kernel 5.18+.",
+    "The custom memory_map/memory_unmap interface changed in 2.0 (gained separate commit/decommit callbacks) and is not source-compatible with pre-2.0 custom map/unmap implementations."
+  ],
+  "pick_this_over_siblings_when": "Pick rpmalloc over the arena/pool-style siblings (metapool, the two arena-allocator entries, ShortAlloc) when you need a general-purpose, thread-safe, drop-in replacement for the whole process's malloc rather than a scoped bump/arena allocator for one object's lifetime; pick it over SuperMalloc, Hoard, scalloc, or NUMAlloc when you want a small, single-vendor, actively maintained C11 source you can vendor and read, instead of a research-grade or NUMA/HTM-specific allocator with heavier build or hardware requirements.",
+  "verified_claims_summary": "Verifier-confirmed numbers come from the project's own (now separate) rpmalloc-benchmark suite run on one Ubuntu 16.10 machine (8 logical cores; CPU model and compiler unstated): roughly 2.3x crt (glibc malloc) throughput at 1 thread and 3.4x at 4 threads for random 16-1000B allocations, and about 2.4x at 1 thread for 512B-160000B allocations, all read approximately off chart images (tier C, no raw numbers in the page text). The suite's own 'lockless' allocator beats rpmalloc in the large-size chart, contradicting the page's 'faster than all tested allocators except lockfree-malloc' claim.",
+  "status_note": "Actively maintained (last commit 2026-07-15, current release 2.0.1) and public-domain/MIT dual-licensed; the verified crt numbers predate a major 2.0.0 architecture redesign (span->page->block replacing the earlier span->block design, confirmed in the CHANGELOG read this session), so they may not reflect current performance — the current README/BENCHMARKS.md use a newer mimalloc-bench-based methodology that has not been independently verified to this tier.",
+  "sources_read": [
+    "https://github.com/mjansson/rpmalloc",
+    "https://github.com/mjansson/rpmalloc/blob/HEAD/README.md",
+    "https://github.com/mjansson/rpmalloc/blob/HEAD/BENCHMARKS.md",
+    "https://github.com/mjansson/rpmalloc/blob/HEAD/CHANGELOG",
+    "https://github.com/mjansson/rpmalloc/blob/HEAD/rpmalloc/rpmalloc.h",
+    "https://github.com/mjansson/rpmalloc/blob/HEAD/rpmalloc/rpnew.h",
+    "https://github.com/mjansson/rpmalloc/blob/HEAD/.github/workflows/ci.yml",
+    "https://github.com/mjansson/rpmalloc/issues",
+    "https://github.com/mjansson/rpmalloc-benchmark"
+  ],
+  "confidence": 0.5
+}

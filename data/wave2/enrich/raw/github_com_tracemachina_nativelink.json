@@ -1,0 +1,45 @@
+{
+  "id": "https://github.com/tracemachina/nativelink",
+  "one_liner": "REAPI remote build-cache and execution server for Bazel/Buck2/CMake; beats local-only, non-distributed builds.",
+  "what_it_does": "NativeLink is a Rust server implementing the Bazel Remote Execution API (REAPI): a scheduler, content-addressed storage (CAS), and worker pool that cache build outputs and fan build actions out to a cluster. It is not a compiler wrapper you swap in locally; you point an REAPI-speaking client (Bazel, Buck2, Goma/Siso, or CMake+Ninja via the recc compiler-launcher) at it instead of building on one machine. It is deployed as a Docker/Kubernetes service (or built from source via Bazel/Cargo/Nix), not a single local binary.",
+  "how_it_is_fast": "Content-addressed storage caches and reuses previously-built objects across machines and CI runs so unchanged actions are skipped entirely. A scheduler fans independent build actions from the action graph out to remote worker pods for parallel execution over the REAPI protocol (the same protocol Bazel, Buck2, and reclient use). In the verified benchmark this let a CMake/Ninja LLVM build run at -j96 across a home Kubernetes cluster instead of the client machine's default -j.",
+  "when_to_use": [
+    "Already building with Bazel, Buck2, Goma/Siso, or another REAPI client, where integration is closer to transparent",
+    "CMake/Ninja C/C++ projects willing to add the recc compiler-launcher shim",
+    "Large action graphs with many independent, cacheable steps (e.g. LLVM/Chromium-scale monorepos)",
+    "Teams/CI where a cache and worker pool shared across many machines pays off more than single-machine speed",
+    "You can operate a Docker/Kubernetes cluster to host the CAS, scheduler and workers"
+  ],
+  "when_not_to_use": [
+    "Solo local dev with no cluster to distribute to — the verified benchmark shows no win without remote workers",
+    "Builds that depend on precompiled headers through recc: its input scanner doesn't recognize PCH files, so PCH had to be disabled, and re-enabling it locally cut the measured gain from ~4.0x to ~2.65x",
+    "Teams that want a single dependency-free binary rather than standing up and operating a CAS/RE server",
+    "Production use of the metrics/persistent-worker modules without a commercial license — those are Business Source Licensed separately from the FSL-1.1 core",
+    "Windows Bazel builds: README claims Windows support but an open issue reports Bazel tests failing on Windows x64 (#485, unresolved since 2024)"
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "an REAPI-speaking build client (Bazel, Buck2, Goma/Siso, or CMake+Ninja plus recc); Docker or Kubernetes to host the CAS/scheduler/worker services",
+    "min_toolchain": "Rust 1.97.1 (edition 2024) to build from source (Cargo.toml, v1.7.1); prebuilt Docker images available for consumers who don't build it",
+    "platforms": "Unix-based OSes and Windows per README; prebuilt container images are x86_64 only; Windows has at least one open, unresolved Bazel-test-failure issue (#485)",
+    "thread_safety": "not documented (it is a server/service, not an in-process data-structure API)",
+    "drop_in_for_baseline": "partial — explain: near-transparent for clients that already speak the Bazel Remote Execution API (Bazel, Buck2, reclient); CMake/Ninja needs the recc launcher shim, and in the verified benchmark PCH had to be disabled because recc's input scanner didn't see precompiled headers"
+  },
+  "gotchas": [
+    "recc's input scanner doesn't recognize precompiled headers as build inputs; disabling PCH was required, and doing so alone accounts for most of the gap between the claimed 4.0x and the author's corrected 2.65x",
+    "Core is FSL-1.1 (source-available, permits only non-competing use, converts to Apache-2.0 two years after each release, not OSI-approved); the metrics and persistent-worker modules are separately Business Source Licensed, needing a commercial license for shared production use",
+    "Open issue reports Bazel tests failing on a Windows x64 machine (#485, open since 2024)",
+    "The only third-party speedup evidence is a single-author, single-run personal blog post; the vendor's own '4-15x' homepage claim has no published methodology"
+  ],
+  "pick_this_over_siblings_when": "Pick NativeLink over FASTBuild/HOMCC/octobuild when you're already on, or willing to adopt, a Bazel Remote Execution API client (Bazel, Buck2, or CMake via recc) and want a shared cache plus a horizontally scalable Kubernetes-style execution cluster, rather than the single-protocol local caching (FASTBuild) or distcc-style compiler forwarding (HOMCC, octobuild) the siblings use.",
+  "verified_claims_summary": "Independent blog (Reid Kleckner, 2026-03-30): a full LLVM+Clang build via CMake/Ninja/recc took 1026s locally (laptop, PCH disabled, Ninja default -j) versus 257s distributed at -j96 through NativeLink on a home Kubernetes/Talos cluster (~4.0x); with PCH enabled the local build dropped to 683s, making the real distributed gain 2.65x, which the author calls the 4x headline an overstatement. No CPU models are given for the laptop or cluster nodes, and each configuration was run once (evidence tier C).",
+  "status_note": "Actively maintained (last commit 2026-09-24; 1.6k stars, 244 forks; vendor claims 10B+ build requests/month in production including Samsung); usability is 'reference' because it's infrastructure to deploy and operate, not a library to link.",
+  "sources_read": [
+    "https://github.com/TraceMachina/nativelink",
+    "https://github.com/TraceMachina/nativelink/blob/main/README.md",
+    "https://github.com/TraceMachina/nativelink/blob/main/LICENSE",
+    "https://github.com/TraceMachina/nativelink/blob/main/Cargo.toml",
+    "https://reidkleckner.dev/posts/llvm-recc-nativelink/"
+  ],
+  "confidence": 0.55
+}

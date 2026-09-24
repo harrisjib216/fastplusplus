@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/wqking/eventpp",
+  "one_liner": "Header-only spinlock policy for eventpp's EventQueue/EventDispatcher, swapping std::mutex for a std::atomic_flag test-and-set lock at <=core-count thread counts.",
+  "what_it_does": "eventpp::SpinLock is a minimal spinlock supplied as an optional Threading::Mutex policy for eventpp's EventQueue, EventDispatcher, and CallbackList, replacing the default std::mutex used to guard their internal listener/event lists. It is not a standalone queue or general-purpose lock; you opt in via a custom Threading policy (e.g. `eventpp::GeneralThreading<eventpp::SpinLock>`) with no other code changes. It only exposes lock()/unlock() (BasicLockable), so it fills that one policy point rather than acting as a general std::mutex substitute.",
+  "how_it_is_fast": "It is a raw test-and-set spinlock: one std::atomic_flag, with lock() spinning on test_and_set(memory_order_acquire) and unlock() calling clear(memory_order_release) - no backoff, no OS involvement. This skips the kernel-mutex path (futex/CRITICAL_SECTION) std::mutex takes under contention, which wins when critical sections are short and thread count is at or below the core count. There is no yielding, so once threads outnumber cores it just burns CPU instead of sleeping.",
+  "when_to_use": [
+    "Thread count is roughly at or below the physical core count (benchmark shows a win at 1/1 and near-ties at 2/2 and 4/4 threads on a 4-core/8-thread laptop)",
+    "You are already using eventpp's EventQueue, EventDispatcher, or CallbackList and want a drop-in policy swap without restructuring code",
+    "Critical sections guarding the event/listener list are short (enqueue/dequeue bookkeeping, not long listener execution)",
+    "Throughput on the enqueue/process path matters more than CPU headroom for other work",
+    "You can control or know the thread count won't exceed available cores"
+  ],
+  "when_not_to_use": [
+    "Thread count exceeds CPU cores: the 16-enqueue/16-process benchmark shows SpinLock ~2.7x slower than std::mutex from busy-wait CPU burn",
+    "Listeners or event processing hold the lock for any non-trivial time, since spinning wastes cycles instead of descheduling",
+    "You need try_lock, timed_lock, recursive locking, or fairness/ordering guarantees; SpinLock implements only lock()/unlock()",
+    "Power- or CPU-budget-constrained environments (laptops on battery, oversubscribed containers/VMs) where busy-waiting steals cycles from co-scheduled work",
+    "You want portable, well-controlled benchmark evidence: only one first-party Windows/MinGW run exists with no stated optimization flags (evidence tier C)"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none",
+    "min_toolchain": "C++11 for the library; author tests MSVC 2019/2022, MinGW GCC 7.2+, Ubuntu GCC 5.4, Intel C++ 2022, macOS GCC (benchmark itself used MinGW GCC 11.3.0)",
+    "platforms": "any platform with a conforming C++11 compiler and std::atomic_flag (portable standard C++, no arch-specific intrinsics); benchmarked on Windows/x86-64",
+    "thread_safety": "eventpp::SpinLock itself implements only BasicLockable (lock/unlock) via std::atomic_flag; not recursive, no try_lock/timed_lock. It substitutes for std::mutex only at eventpp's Threading::Mutex policy point (GeneralThreading<SpinLock>), which is documented as thread-safe for the enclosing EventQueue/EventDispatcher/CallbackList.",
+    "drop_in_for_baseline": "partial — explain: implements enough of std::mutex's interface (lock/unlock) to slot into eventpp's Threading::Mutex policy in place of std::mutex with a one-line policy change, but it lacks try_lock/timed_lock so it is not a general-purpose std::mutex replacement outside that policy point."
+  },
+  "gotchas": [
+    "Plain test-and-set spinning with no backoff/pause/yield: it will peg a CPU core at 100% while waiting, unlike std::mutex which can block via the OS",
+    "No fairness or ordering guarantee — it's a simple TAS lock, not a ticket/queued lock, so waiting threads can be starved under heavy contention",
+    "Only takes effect where you explicitly wire it in via a custom Threading policy (GeneralThreading<SpinLock>); the library's default remains std::mutex",
+    "Missing try_lock/timed_lock means code that needs std::unique_lock's try-lock or timed variants can't use it as-is"
+  ],
+  "pick_this_over_siblings_when": "The sibling entries (atomic_queue, Boost.Lockfree, moodycamel::ReaderWriterQueue, oneTBB concurrent_bounded_queue, xenium) are all standalone lock-free concurrent queues usable in any C++ codebase, with consistent multi-x nanosecond-latency wins over std::mutex. eventpp::SpinLock is not a queue at all — it only makes sense if you're already using eventpp's EventQueue/EventDispatcher/CallbackList and want to shave mutex overhead there at <=core-count thread counts; for a general-purpose concurrent queue outside eventpp, pick one of the lock-free siblings instead, since their evidence is stronger and their wins don't flip to a loss at higher thread counts the way SpinLock's does.",
+  "verified_claims_summary": "On one Intel Core i5-8300H laptop (4 cores/8 threads, Windows 10) compiled with MinGW GCC 11.3.0, moving 10M events across 100 event types/listeners through eventpp's EventQueue: eventpp::SpinLock beat std::mutex only at 1 enqueue/1 process thread (1303ms vs 1824ms, ~1.4x faster) and was roughly tied at 2/2 and 4/4 threads; it lost at 1/3 threads (3186 vs 2989ms) and was ~2.7x slower than std::mutex at 16/16 threads (1891 vs 708ms). The doc itself attributes this to thread count exceeding core count. No optimization flags or build type are stated, so evidence is capped at tier C.",
+  "status_note": "Stale but not abandoned: last commit 2024-12-08, the README calls the project 'actively maintained' despite release gaps; Apache-2.0 licensed (GitHub's license detector shows NOASSERTION but the LICENSE file text is Apache-2.0) and header-only, so it's low-risk to vendor.",
+  "sources_read": [
+    "https://github.com/wqking/eventpp",
+    "https://github.com/wqking/eventpp/blob/master/doc/benchmark.md",
+    "https://github.com/wqking/eventpp/blob/master/doc/policies.md",
+    "https://github.com/wqking/eventpp/blob/master/doc/eventqueue.md",
+    "https://github.com/wqking/eventpp/blob/master/include/eventpp/eventpolicies.h",
+    "https://github.com/wqking/eventpp/blob/master/license",
+    "https://github.com/wqking/eventpp/issues?q=spinlock",
+    "https://github.com/wqking/eventpp/issues?q=performance"
+  ],
+  "confidence": 0.55
+}

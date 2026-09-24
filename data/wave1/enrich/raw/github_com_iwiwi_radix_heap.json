@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/iwiwi/radix-heap",
+  "one_liner": "Header-only C++ monotone radix heap: 1.2-1.7x faster than std::priority_queue on Dijkstra shortest-path workloads.",
+  "what_it_does": "radix_heap and pair_radix_heap are C++ template classes implementing a monotone priority queue: a queue where a pushed key must never be smaller than the last key extracted, which fits algorithms like Dijkstra's shortest path with non-negative edge weights. radix_heap holds bare numeric keys (signed/unsigned integers or float/double); pair_radix_heap additionally attaches a movable value to each key via push(key, value) or emplace(key, args...), mirroring priority_queue<pair<Key,Value>> usage in graph search. The API shape (push/pop/top/size/empty/swap) resembles std::priority_queue but push() only accepts non-decreasing keys, enforced by an assert() that is compiled out under NDEBUG.",
+  "how_it_is_fast": "Instead of a binary heap's comparison tree, it XOR-encodes keys into an order-preserving unsigned representation (internal::encoder, specialized for signed ints and IEEE float/double) and buckets each pushed key by the index of the highest bit where it differs from the last-extracted key (internal::find_bucket, via __builtin_clz/__builtin_clzll). Because extraction is monotone, popping only needs to redistribute the single lowest non-empty bucket into finer buckets one level at a time, rather than the O(log n) sift-down a binary heap performs on every pop -- giving O(1) amortized push and O(b) amortized pop where b is the key's bit width. This is the classic Ahuja/Mehlhorn/Orlin/Tarjan (1990) radix-heap algorithm.",
+  "when_to_use": [
+    "Dijkstra's algorithm or other monotone-priority-queue algorithms over non-negative edge/cost weights",
+    "Keys are native signed/unsigned integers or float/double (32- or 64-bit) that internal::encoder already handles",
+    "Graph/grid search at the sizes benchmarked here (roughly 264K to 24M vertices), where the per-pop constant factor on the hot path matters",
+    "Willing to vendor a single ~250-line header rather than pull in a build dependency",
+    "Building with GCC or Clang (the bucket-index trick relies on their __builtin_clz/__builtin_clzll builtins)"
+  ],
+  "when_not_to_use": [
+    "Need a general-purpose priority queue where extracted keys can decrease (A*, event simulation with re-priority, negative edge weights) -- violates the monotonicity assert and corrupts the heap silently in release builds",
+    "Need a custom comparator or non-numeric/composite keys -- there is no comparator template parameter, only the built-in integer/float encoders",
+    "Need MSVC support out of the box -- code depends on GCC/Clang builtins, not verified against MSVC's intrinsics",
+    "Need active maintenance -- no commits since 2015-05-16, single closed issue (a README-language request), CI last validated on gcc 4.8/clang 3.4",
+    "Need in-place decrease-key/update or erase of a pushed element -- not exposed; only push, pop, and clear"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none beyond the C++ standard library (<algorithm>, <array>, <cassert>, <climits>, <cstdint>, <limits>, <type_traits>, <utility>, <vector>)",
+    "min_toolchain": "C++11 (std::array, constexpr, variadic templates, std::piecewise_construct); CI-tested with gcc 4.8 and clang 3.4 per README/Travis badge",
+    "platforms": "GCC/Clang (uses __builtin_clz/__builtin_clzll); not documented or tested on MSVC",
+    "thread_safety": "not documented; no locks/atomics in the source, assume single-threaded like std::priority_queue",
+    "drop_in_for_baseline": "partial — explain: push/pop/top/size/empty/swap match std::priority_queue's shape and pair_radix_heap mirrors priority_queue<pair<K,V>> usage, but keys must be numeric and non-decreasing (monotone), there is no comparator template parameter, and top() returns by value with no operator< customization point"
+  },
+  "gotchas": [
+    "push() enforces monotonicity only via assert(last_ <= x); in a release build compiled with NDEBUG a non-monotone push is silently accepted and produces wrong pop order rather than an error",
+    "Each radix_heap/pair_radix_heap instance holds a fixed std::array of digits+1 std::vector buckets as members (33 buckets for 32-bit keys, 65 for 64-bit) -- more per-instance state than std::priority_queue's single vector, though the extra vectors are empty until pushes land in them",
+    "No decrease-key, update, or erase of an already-pushed element -- only push/emplace, pop, top, clear",
+    "Floating-point and signed-integer keys pass through an XOR bit-transform (internal::encoder) before bucketing; this is transparent through the public API but means the class is not usable with arbitrary user-defined key types, only the specializations provided"
+  ],
+  "pick_this_over_siblings_when": "Pick radix-heap when the workload is specifically a monotone shortest-path search (Dijkstra-style, non-negative weights) over integer/float keys in C++ -- prio_queue (rollbear) and Superscalar Sample Queue (S3Q) are general-purpose std::priority_queue replacements without the monotonicity restriction and are the better choice when keys can decrease or aren't numeric. If the same monotone-Dijkstra pattern is needed in Rust, use radix_heap_rust instead, since this library has no Rust port.",
+  "verified_claims_summary": "Benchmarked as pair_radix_heap vs. libstdc++'s std::priority_queue inside a standard Dijkstra implementation over DIMACS challenge-9 real USA road networks (264K to 24M vertices), compiled with gcc 4.6.3 -O3 on an Intel Xeon E5-2690 0 @ 2.90GHz / 256GB RAM / Linux 3.2.0, averaged over 100 random sources per graph. Pure priority-queue time was 1.40-1.74x faster (e.g. USA-road-t.USA.gr: 1.302186s vs 2.266316s); overall Dijkstra time including edge traversal was 1.12-1.29x faster (e.g. USA-road-t.USA.gr: 3.817832s vs 4.934690s), with the speedup shrinking on the smallest (264K-vertex NY) graphs.",
+  "status_note": "Abandoned since its last commit on 2015-05-16, but MIT-licensed (full license text in README.md, no separate LICENSE file) and a single ~250-line header, so it's cheap to vendor, read in full, and maintain yourself without upstream support.",
+  "sources_read": [
+    "https://github.com/iwiwi/radix-heap",
+    "https://github.com/iwiwi/radix-heap/blob/master/README.md",
+    "https://github.com/iwiwi/radix-heap/blob/master/example/README.md",
+    "https://github.com/iwiwi/radix-heap/blob/master/radix_heap.h",
+    "https://github.com/iwiwi/radix-heap (repo file tree)",
+    "https://github.com/iwiwi/radix-heap/issues"
+  ],
+  "confidence": 0.9
+}

@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/astral-sh/ty",
+  "one_liner": "Rust-based Python type checker and language server from Astral; 10-100x faster cold checks than mypy and Pyright.",
+  "what_it_does": "ty is a static type checker for Python with an integrated language server, positioned as a replacement for mypy and Pyright. It ships a CLI (`ty check`) that behaves similarly to mypy/pyright invocations plus an LSP binary for editor integration (VS Code, PyCharm, Neovim). Configuration lives under `[tool.ty]` in pyproject.toml; suppression uses `# ty: ignore[rule]` instead of `# type: ignore` or `# pyright: ignore`, so migration is close but not literally drop-in.",
+  "how_it_is_fast": "Written in Rust and built on the `salsa` incremental-computation framework (the same query/memoization engine used by rust-analyzer), giving fine-grained incremental re-analysis so editing one file only recomputes affected queries instead of re-checking the project. It parallelizes work with `rayon`, and on Linux/other non-macOS/Windows targets swaps in `tikv-jemallocator` for allocation-heavy workloads. Cold/no-cache runs are fast because the whole pipeline (parsing, semantic indexing, inference) is Rust-native rather than Python, unlike mypy.",
+  "when_to_use": [
+    "Large monorepos where cold, no-cache CLI type-check latency matters (CI, pre-commit)",
+    "IDE/language-server usage where sub-second incremental re-check after each keystroke/save matters",
+    "Projects already on the Astral toolchain (uv, Ruff) wanting one vendor for lint/format/type-check",
+    "Teams willing to tolerate a beta, fast-moving type checker in exchange for speed",
+    "Python 3.10+ targeted codebases (earlier versions type-check with more false positives/negatives)"
+  ],
+  "when_not_to_use": [
+    "Projects needing a stable, versioned API/behavior contract — ty is 0.0.x with no stable-API guarantee and diagnostics can change between any two releases",
+    "Codebases relying on mypy/pyright-specific strict-mode flags or plugins with no ty equivalent yet (see docs/coming-from-mypy-or-pyright.md rule-mapping gaps)",
+    "Code with very complex/deeply nested expressions where bidirectional type inference has known 'dismal performance' and regression reports (astral-sh/ty#3180, #3505)",
+    "Warm/cached CLI re-check comparisons — the headline benchmark is a no-cache scenario; only mypy supports warm cached re-checks in that comparison, so it doesn't show ty's cache-hit CLI behavior",
+    "Teams that need mature third-party plugin ecosystems (e.g. mypy plugins) that ty doesn't support"
+  ],
+  "integration": {
+    "form": "source-drop (prebuilt standalone binary / PyPI wheel built via maturin from a Rust binary crate in the astral-sh/ruff monorepo)",
+    "dependencies": "none (Python package pyproject.toml declares zero deps; the Rust binary statically bundles its own dependencies)",
+    "min_toolchain": "none required to use it (install via uvx/pipx/pip/standalone installer/Docker); building from source requires Rust 1.96+ per astral-sh/ruff's workspace Cargo.toml",
+    "platforms": "macOS, Linux, Windows (prebuilt binaries via GitHub Releases, PyPI wheels, standalone installer script, Docker image ghcr.io/astral-sh/ty)",
+    "thread_safety": "not documented as an embeddable library (it's used as a CLI/LSP binary, not linked as a crate); internally parallelizes with rayon and uses salsa's incremental scheduler",
+    "drop_in_for_baseline": "partial — CLI shape (`ty check`) and pyproject.toml config resemble mypy/pyright, but suppression syntax (`# ty: ignore[rule]`), rule names, and strict-mode behavior differ; docs/coming-from-mypy-or-pyright.md documents the rule mapping and gaps"
+  },
+  "gotchas": [
+    "0.0.x versioning: no stable API yet, diagnostics/behavior can change between any two releases (README 'Version policy')",
+    "Default checking mode is stricter than mypy/pyright defaults in several ways (e.g. always checks unannotated function bodies) with no flag to relax it, which can surface new errors when migrating",
+    "Complex/deeply nested expressions can trigger severe slowdowns from bidirectional type inference cost (open issues: 'Dismal performance when some complex expressions exist', a sympy performance regression)",
+    "The astral-sh/ty GitHub repo is mostly packaging/docs; the actual Rust type-checker source lives in the astral-sh/ruff repo's crates/ty* via a git submodule"
+  ],
+  "pick_this_over_siblings_when": "Versus Pyrefly (the only true sibling here — same baseline of mypy/Pyright): pick ty when incremental LSP re-check latency matters most (Astral's benchmark shows ty beating Pyrefly by ~500x on that metric) and you want a public, pinned, reproducible benchmark harness rather than Pyrefly's README claim with no stated methodology; pick Pyrefly if you need functionality ty doesn't yet have. Biome/Oxlint/clangd-tidy/Ruff aren't real alternatives here — different languages or different tool category (linting/formatting, not type checking).",
+  "verified_claims_summary": "Astral's own blog (astral.sh/blog/ty, dated 2025-12-16) reports, on an Apple M4: cold no-cache CLI type-check of home-assistant/core at ty 2.19s vs Pyrefly 5.32s vs Pyright 19.62s vs mypy 45.66s (~9x over Pyright, ~21x over mypy), and LSP incremental re-check after editing a file in pytorch/pytorch at ty 4.5ms vs Pyright 370.5ms vs Pyrefly 2.60s (~82x over Pyright, ~578x over Pyrefly; prose cites slightly different 4.7ms/386ms/2.38s). No tool versions or exact M4 variant/RAM are stated on the page; the harness (astral-sh/ruff scripts/ty_benchmark) is public with pinned lockfiles. The repo's own BENCHMARKS.md, run separately on an Apple M3 Max (128GB) with pinned versions (ty 0.0.55, Pyright 1.1.410, mypy 2.1.0, Pyrefly 1.1.1), corroborates the same ranking on other projects (e.g. Black: ty 69.5ms vs Pyrefly 128.3ms vs mypy 1.316s vs Pyright 1.420s) though with different magnitudes than the blog.",
+  "status_note": "Actively developed beta from Astral (same team as Ruff/uv), with commits as recent as today; MIT licensed and usable now via uvx/pipx/pip, but the 0.0.x version policy means no stable API and diagnostics can change release to release.",
+  "sources_read": [
+    "https://github.com/astral-sh/ty",
+    "https://github.com/astral-sh/ty (README)",
+    "https://github.com/astral-sh/ty (repo file tree)",
+    "https://github.com/astral-sh/ty/blob/main/BENCHMARKS.md",
+    "https://github.com/astral-sh/ty/blob/main/pyproject.toml",
+    "https://github.com/astral-sh/ty/blob/main/docs/installation.md",
+    "https://github.com/astral-sh/ty/blob/main/.gitmodules",
+    "https://github.com/astral-sh/ty/blob/main/docs/coming-from-mypy-or-pyright.md",
+    "https://github.com/astral-sh/ty/blob/main/docs/features/language-server.md",
+    "https://github.com/astral-sh/ty/issues (search: performance)",
+    "https://github.com/astral-sh/ty/issues (search: memory/slow/hang/timeout)",
+    "https://github.com/astral-sh/ruff/blob/main/crates/ty/Cargo.toml",
+    "https://github.com/astral-sh/ruff/blob/main/Cargo.toml",
+    "https://astral.sh/blog/ty"
+  ],
+  "confidence": 0.82
+}

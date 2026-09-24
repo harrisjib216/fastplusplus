@@ -1,0 +1,44 @@
+{
+  "id": "https://github.com/microsoft/mimalloc",
+  "one_liner": "General-purpose malloc drop-in replacement using sharded per-thread free lists; beats jemalloc/tcmalloc on multi-threaded workloads.",
+  "what_it_does": "mimalloc is a general-purpose heap allocator meant as a drop-in replacement for the C `malloc`/`free` interface, with no code changes required via LD_PRELOAD (Linux/BSD), DYLD_INSERT_LIBRARIES (macOS), or a redirection DLL (Windows). It can also be used directly through the `mi_` prefixed API (`mi_malloc`, `mi_zalloc`, `mi_malloc_small`, etc.) when linked statically, and offers a `mi_stl_allocator`/`mimalloc-new-delete.h` header for C++ `std::allocator` and global `new`/`delete` overriding. The whole library is about 10k LOC, small enough to vendor into another project's build.",
+  "how_it_is_fast": "Each ~64KiB 'mimalloc page' (one size class) uses free-list sharding, and within a page mimalloc keeps two lists per size class: a thread-local free list for same-thread frees and a separate lock-free 'remote free' list for cross-thread frees, so freeing from another thread is a single CAS with no coordination -- this is what wins on cross-thread-free benchmarks like larsonN and xmalloc-testN. It also does eager page purging (decommit/reset OS pages once a shard empties) to cut RSS, and v3 adds true first-class heaps that can allocate from any thread and be destroyed in bulk instead of freeing objects individually.",
+  "when_to_use": [
+    "Multi-threaded server workloads with producer/consumer or cross-thread free patterns (allocate on one thread, free on another)",
+    "Want a small (~10k LOC), portable allocator to vendor/port to less-common platforms (Haiku, WASM, various BSDs, MUSL, riscV)",
+    "Want built-in, production-usable overflow/double-free detection (guarded mode with sampling, or full secure mode) without swapping allocators for debug builds",
+    "C++ code that can override global new/delete and wants first-class heaps for bulk-allocate/bulk-destroy object arenas",
+    "Long-running services where reduced steady-state RSS from eager purge matters more than avoiding purge syscall overhead"
+  ],
+  "when_not_to_use": [
+    "Need mature allocation-profiling/heap-diff tooling; mimalloc offers stats/ETW/verbose output, not an equivalent to jemalloc's jeprof",
+    "Single-threaded, allocation-light workloads (README's own cfrac/redis benchmarks show mimalloc roughly ties jemalloc/tcmalloc there)",
+    "Code that forks() while using large/huge OS pages -- copy-on-write duplicates the whole 1GiB/2MiB page on first write post-fork, which can spike memory",
+    "Statically overriding malloc in a codebase you don't fully control -- README warns mixing pointers across heaps can occur unless every source uses mimalloc-override.h",
+    "Teams that specifically need decades of hardening at extreme single-vendor scale (e.g. Google-internal), where gperftools/Google TCMalloc has the longer track record"
+  ],
+  "integration": {
+    "form": "static lib | shared lib | source-drop (single src/static.c + mimalloc.o)",
+    "dependencies": "none (uses only mmap/VirtualAlloc)",
+    "min_toolchain": "CMake >=3.18 to build the library (CMAKE_C_STANDARD 11 / CXX_STANDARD 17 internally); consumers just need a C or C++ compiler and mimalloc.h",
+    "platforms": "x86-64 (opts to -march=haswell/AVX2 by default), arm64 (armv8.1, armv8.3 on Apple silicon), riscV (rv64gcb_zacas); Windows (incl. ARM64EC, UWP, Xbox), Linux, macOS, various BSDs, Haiku, MUSL, WASM",
+    "thread_safety": "thread-safe; per-page free lists are split into a thread-local free list and a separate cross-thread 'remote free' list resolved with a single CAS, so concurrent free from other threads needs no locking",
+    "drop_in_for_baseline": true
+  },
+  "gotchas": [
+    "Static override via mimalloc-override.h only works reliably if ALL sources in the program are rebuilt with it; otherwise pointers from different heaps can mix and corrupt memory",
+    "mimalloc-new-delete.h (C++ new/delete override) must be included in exactly one source file, not every file",
+    "-DMI_SECURE=FULL (guard page after every 64KiB page) is explicitly 'not recommended in general' -- costs more and can hit Linux's max VMA count on large heaps",
+    "Large/huge OS pages plus fork(): copy-on-write duplicates the entire 1GiB/2MiB page on first write in the child, which can balloon memory use"
+  ],
+  "pick_this_over_siblings_when": "Pick mimalloc over jemalloc when you want a much smaller (~10k LOC), easily-vendored codebase with broader OS/arch ports (Haiku, WASM, BSD, MUSL, riscV) and built-in guard-page/secure modes, at the cost of jemalloc's more mature profiling tooling. Pick it over snmalloc when you need that platform breadth more than snmalloc's extreme many-thread producer/consumer throughput, and over gperftools/Google TCMalloc when first-class heaps and lower baseline memory overhead matter more than TCMalloc's longer production track record at large single-vendor scale.",
+  "verified_claims_summary": "mimalloc's own README Performance section runs the public mimalloc-bench suite (glibc 2.31, GCC 9.3.0/Clang 10.0.0, on a 16-core AMD 5950x and a 36-core Xeon c5.18xlarge) and states in prose that mimalloc is 'more than 2.5x faster than jemalloc' (5.2.1) on sh6bench, 'quite a bit faster' than jemalloc/tcmalloc on larsonN, and 13% faster than tcmalloc (2.8.1) on the leanN Lean self-build workload.",
+  "status_note": "Actively maintained: latest release v3.5.3 on 2026-09-16 with commits through 2026-09-17; MIT licensed and small enough to vendor as a single source file (src/static.c), consistent with its 'copyable' usability rating.",
+  "sources_read": [
+    "https://github.com/microsoft/mimalloc",
+    "https://github.com/microsoft/mimalloc#performance",
+    "https://github.com/microsoft/mimalloc/blob/main/CMakeLists.txt",
+    "https://github.com/microsoft/mimalloc/issues/1105"
+  ],
+  "confidence": 0.8
+}

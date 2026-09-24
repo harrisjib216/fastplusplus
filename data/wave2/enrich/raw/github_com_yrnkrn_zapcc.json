@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/yrnkrn/zapcc",
+  "one_liner": "zapcc: a Clang fork with a persistent caching server that rebuilds template-heavy C++ 1.2-3.3x faster than GCC/Clang.",
+  "what_it_does": "zapcc is a heavily patched Clang/LLVM toolchain (client binaries zapcc/zapcc++ plus a background zapccs server) that keeps an in-memory cache of parsed headers, template instantiations, and generated code across compiler invocations, rather than reparsing everything on every translation unit. Command-line syntax is identical to clang, so it's invoked as a near drop-in replacement for clang/clang++ in a build (e.g. CMAKE_CXX_COMPILER=zapcc++), but each build spawns or attaches to a long-lived zapccs process that must be killed manually (pkill zapcc) to free memory or pick up a rebuilt compiler. It targets template-heavy, header-heavy C++ code; the README states plain C or lightly-templated projects see little to no benefit.",
+  "how_it_is_fast": "The zapccs server keeps parsed ASTs, template instantiations, and generated IR/code resident in memory between compiles instead of redoing that work per translation unit, and can reuse results across source files in a way the README compares to link-time inlining decisions being made proactively. This turns repeated compilation of shared, heavily-templated headers (the dominant cost in libraries like ETL) into cache hits instead of full reparses/re-instantiations. The README claims single-file incremental recompiles are typically 10-50x faster than a cold build because only the changed dependency subgraph is reprocessed; full from-scratch builds see smaller (2-5x) gains that scale with how template/header-heavy the project is.",
+  "when_to_use": [
+    "Large, template/header-heavy C++ codebase (clang- or gcc-compatible source) built repeatedly on Linux x86-64, where CI or local dev-loop compile time dominates",
+    "Iterative development where a single file changes and you rebuild often (the caching server gives its biggest wins here)",
+    "Full debug builds of header-only template libraries similar in shape to ETL (measured 2-3.3x faster than Clang/GCC)",
+    "You already know the project compiles cleanly with vanilla Clang and can dedicate a long-lived background process and extra RAM to the caching server",
+    "You don't need sanitizers and can tolerate an unmaintained, LLVM-r325000-vintage (Feb 2018) fork"
+  ],
+  "when_not_to_use": [
+    "Plain C or lightly-templated C++, where the README itself says caching gives little to no acceleration",
+    "Any build needing ASan/UBSan/TSan/MSan - explicitly unsupported",
+    "Modern C++17/C++20 code: development stopped in 2020, last synced to LLVM trunk 2018-02-13, and -std=gnu++17 was still rejected as an invalid value as of the last activity on that issue (Dec 2018)",
+    "Correctness-sensitive or release builds: a user reported (issue #42) non-deterministic object files and binaries that segfault at reproducible-but-build-order-dependent locations under parallel (-j>1) builds, not reproduced with plain clang, and it was never resolved",
+    "Windows/macOS targets: only minimally/lightly tested, MSVC ABI and zapcc-cl are explicitly unsupported, and there is no one left maintaining platform fixes"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none beyond a standard LLVM/Clang build toolchain (CMake + Ninja, per README)",
+    "min_toolchain": "Effectively frozen at Clang/LLVM ~6.0-era conformance (last merged with LLVM r325000, 2018-02-13); build via CMake + Ninja exactly as for LLVM. -std=gnu++17 was not recognized as of the last relevant activity (issue #32, Dec 2018); treat full C++17/C++20 support as unverified/likely absent.",
+    "platforms": "x86-64 Linux (thoroughly tested, primary target); Windows via MSVC or mingw-w64 targeting mingw-w64 32/64-bit (minimally tested; zapcc-cl/MSVC-ABI target explicitly unsupported); macOS via Clang (experimental, lightly tested). No aarch64 or RISC-V support (a RISC-V feature request was closed unresolved).",
+    "thread_safety": "Not documented as safe under parallel builds. Issue #42 reports non-deterministic .o output and binaries that segfault at build-order-dependent locations when using -j>1, which the maintainer attributed to cross-translation-unit state reuse in the caching server (not reproduced on plain clang++ 7).",
+    "drop_in_for_baseline": "partial — CLI syntax matches clang/clang++ exactly (set CMAKE_CXX_COMPILER=zapcc++), so it slots into a clang-compatible build, but it also requires a persistent background zapccs server, extra RAM, has no sanitizer support, and per user reports can produce non-deterministic or crashing output under parallel builds that the equivalent clang/gcc build did not."
+  },
+  "gotchas": [
+    "The in-memory server can share/inline state across translation units, making -j>1 builds non-deterministic and, per issue #42, occasionally producing binaries that segfault at reproducible-but-order-dependent locations not seen with plain clang",
+    "-std=gnu++17 was rejected as an invalid value as of the project's last active development (issue #32); it was never fixed before the maintainer confirmed (issue #47, 2021) the project is dead",
+    "zapccs must be killed manually (pkill zapcc) to release memory or to pick up a freshly rebuilt zapcc binary; it also has a configurable memory cap (bin/zapccs.config MaxMemory) that silently resets the entire cache when hit",
+    "README recommends -j should not exceed physical core count + 2, especially on hyperthreaded Intel CPUs that report double the physical core count — oversubscribing the server can make builds slower, not faster"
+  ],
+  "pick_this_over_siblings_when": "Pick zapcc over MIR/c2m or TinyCC when the actual cost is template-instantiation and header re-parsing in a large, clang/gcc-compatible C++ codebase (its gains scale with template/header weight); MIR/c2m and TinyCC instead target small/simple C or C-subset inputs for fast one-shot JIT-style compiles and are both still maintained, whereas zapcc has been abandoned since 2020 with an open, unresolved correctness bug (issue #42).",
+  "verified_claims_summary": "On Baptiste Wicht's 2016 ETL (header-only, template-heavy) benchmark on a 4-core/16GB desktop, zapcc++ (beta) built ETL's debug config at -j1 in 214s vs 469s for GCC 5.4.0 (~2.2x) and 710s for Clang 3.9 (~3.3x); the release config at -j1 took 640s vs 782s for GCC (~1.2x) and 960s for Clang (~1.5x). Colfax Research's independent 2017 compiler comparison found Zapcc 1.0.1 compiling the TMV library in 510s vs 848s for GCC 7.2.0 and 902s for Clang 5.0.0 (~1.7x) on a 2-socket Xeon Platinum 8168, corroborating the direction and rough magnitude of the gain.",
+  "status_note": "Abandoned since 2020 (last commit 2020-07-21, last synced to LLVM trunk 2018-02-13); the maintainer confirmed in a 2021 issue that the project is dead. NCSA/LLVM-Release-licensed and copyable, but it's a full compiler toolchain you'd have to build and maintain yourself, not a small vendorable file, and the known non-determinism/segfault correctness bug (issue #42) was never fixed.",
+  "sources_read": [
+    "https://github.com/yrnkrn/zapcc",
+    "https://github.com/yrnkrn/zapcc/blob/master/README.md",
+    "https://github.com/yrnkrn/zapcc/blob/master/LICENSE.TXT",
+    "https://github.com/yrnkrn/zapcc/issues/32",
+    "https://github.com/yrnkrn/zapcc/issues/42",
+    "https://github.com/yrnkrn/zapcc/issues/47"
+  ],
+  "confidence": 0.7
+}

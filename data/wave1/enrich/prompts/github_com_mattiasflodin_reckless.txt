@@ -1,0 +1,143 @@
+You are a technical writer producing the entry for ONE library in a curated
+catalog of implementations that beat the default/incumbent tool on
+performance. You will receive a verified JSON record. Your job is to open the
+project and write a short, accurate, opinionated entry that lets a busy
+engineer decide in 30 seconds whether to use it.
+
+Today's date: 2026-09-23
+
+INPUT RECORD:
+{
+  "name": "reckless",
+  "repo_url": "https://github.com/mattiasflodin/reckless",
+  "language": "C++",
+  "domain": "stdlib-replacements",
+  "category": "io-and-filesystem",
+  "baseline": "std::fstream, fprintf (stdio)",
+  "baseline_in_list": true,
+  "metric": "latency",
+  "workload": "Caller-side log-call latency in four scenarios. (1) Single-threaded periodic calls that never fill the buffer. (2) A call burst that fills the buffer. (3) Disk I/O: 2048 log entries interleaved with writing 64 GiB of data. (4) A Mandelbrot computation that logs ~1M lines with 1-8 worker threads (total runtime over 100 runs, overhead vs no-op). Baselines are std::fstream (std::flush after each line) and fprintf (fflush after each call), plus spdlog, g3log and Boost.Log.",
+  "claimed_speedup": "Relative average call latency (reckless = 1.00). Periodic calls: fstream 41.32, stdio 43.77, spdlog 40.85, boost_log 67.42, g3log 78.19. Call burst: spdlog 1.93, fstream 2.36, stdio 2.55. Disk I/O: stdio 17.01, spdlog 23.82, fstream 5719.93. Mandelbrot overhead: single thread fstream 10.73, stdio 12.21, spdlog 9.21; 8 threads fstream 4.62, stdio 3.70. The page concludes: 'For low loads, the speed advantage over a simple fprintf can be a factor of 40.'",
+  "evidence_tier": "A",
+  "benchmark_url": "https://github.com/mattiasflodin/reckless/blob/master/doc/performance.md",
+  "baseline_stdlib": [
+    "libstdc++"
+  ],
+  "compiler_and_flags": "gcc 7.3.0 (stated on the benchmark page). The benchmarks are built with tup (benchmarks/Tupfile.lua + Tuprules.lua), which on Linux compiles with g++ -O3 -ggdb3 -std=c++11 -Wall -Werror unless DEBUG=yes (then -O0). The page itself does not restate the flags.",
+  "hardware": "AMD Ryzen 7 2700X @ 3.7GHz, 8 cores (SMT off); Samsung 970 EVO 1TB SSD (+ WD Red 3TB HDD for disk-I/O scenario); 32GB RAM; Linux kernel 4.14.65",
+  "compared_against_cpp_std_directly": true,
+  "license": "MIT",
+  "usability": "copyable",
+  "last_commit": "2021-04-10",
+  "maintenance_status": "abandoned",
+  "is_fork_of": null,
+  "stars_or_usage": "510 stars",
+  "has_code": true,
+  "tradeoffs": "Async design allows passing raw pointers to the background writer thread for speed, at the cost of dangling-pointer risk if misused; trades some floating-point formatting precision for performance; writes are backgrounded/batched rather than immediate, with a configurable buffer size trading latency spikes against memory use.",
+  "caveats": "The benchmark is first-party. reckless is asynchronous (formatting and writing happen on a background thread), while the fstream/stdio baselines flush after every line. So the win is caller-side latency under an async-vs-synchronous-flush design, not raw I/O throughput. The figures use 2019-era versions of the competitors (spdlog 1.3.1, g3log 1.3.2, Boost 1.65). GitHub's license detector reports NOASSERTION, but LICENSE.txt is standard MIT text. The last commit on master is 2021-04-10 (a 'next' branch has 2022-07-17 commits); the repo's pushed_at of 2023-10-22 matches no branch head.",
+  "is_evidence_for_known": false,
+  "confidence": 0.7,
+  "id": "https://github.com/mattiasflodin/reckless",
+  "verification": {
+    "date": "2026-09-23",
+    "verdict": "confirm",
+    "tier_before": "C",
+    "tier_reason": "Upgraded from C. The benchmark code is public (benchmarks/periodic_calls.cpp, call_burst.cpp, write_files.cpp, benchmark_mandelbrot.cpp), built via benchmarks/Tupfile.lua + Tuprules.lua, which uses g++ -O3 -std=c++11 for non-DEBUG Linux builds. doc/performance.md states gcc 7.3.0 and an AMD Ryzen 7 2700X, and runs directly against std::fstream and stdio. The 'first-party caps at C' reasoning in the record misreads the rules, which say who ran the benchmark does not matter.",
+    "notes": "The record wrongly said fstream was not in the disk-I/O scenario; it is, at 5719.93x relative latency. The A tier assumes the published runs used the default non-DEBUG tup build (-O3); the page does not say so explicitly. The master branch was last committed in 2021-04, so it is abandoned, not stale.",
+    "urls_opened": [
+      "https://github.com/mattiasflodin/reckless",
+      "https://github.com/mattiasflodin/reckless/blob/master/doc/performance.md",
+      "https://github.com/mattiasflodin/reckless/blob/master/Tuprules.lua",
+      "https://github.com/mattiasflodin/reckless/blob/master/benchmarks/Tupfile.lua",
+      "https://github.com/mattiasflodin/reckless/blob/master/Makefile",
+      "https://github.com/mattiasflodin/reckless/blob/master/LICENSE.txt"
+    ],
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true
+  }
+}
+
+SIBLING ENTRIES (same category, already catalogued):
+- CPath (https://github.com/BraedonWooding/cpath): beats find (GNU findutils), TinyDir, Cute Files, Python os.walk; Wall time 0.082-0.083s for CPath (recursion/emplace, C and C++) vs 0.147s for `find`, 0.237s for Python os.walk, 0.284s for Cute Files, 0.294s for TinyDir, 0.62
+- FastReader (https://github.com/GeorgiiFirsov/FastReader): beats std::ifstream; CFileHandler: 56,700 ns vs std::ifstream: 241,000 ns, about 4.25x faster (derived from page data). Each figure is the mean of 10 timed samples, and each sample 
+
+=====================================================================
+PROCESS
+=====================================================================
+1. Open repo_url. Read the README, the main header/API surface, and the
+   benchmark page at benchmark_url. Skim the source enough to identify the
+   core technique (open addressing + SIMD probe groups, radix partitioning,
+   branchless binary search, io_uring, etc.).
+2. Check: header-only or built? Dependencies? Minimum language standard or
+   toolchain version? Platforms/architectures supported? Thread safety?
+   Exceptions? Allocator customization? ABI stability?
+3. Look for known failure modes: issues tagged "bug"/"performance", pathological
+   inputs the README warns about, CVEs, "not recommended for" notes.
+4. Identify 1–3 alternatives in the same category from the catalog
+   (the SIBLING ENTRIES listed under the input record) and say when you'd pick this one over them.
+5. Write the entry. Every claim you make must be traceable to something you
+   read this session. If you don't know, say "not documented" rather than
+   guessing.
+
+=====================================================================
+STYLE
+=====================================================================
+- Plain, direct, no marketing language. "2.3x faster lookups on 64-bit keys"
+  not "blazing fast".
+- Each field has a length cap. Respect it; brevity is the point.
+- Write for someone who knows the baseline well and has never heard of this.
+- Do not restate the JSON fields verbatim; they're rendered separately.
+
+=====================================================================
+OUTPUT — return ONLY this JSON object
+=====================================================================
+{
+  "id": "<repo canonical url>",
+  "one_liner": "<=20 words: what it is and what it beats",
+  "what_it_does": "2-4 sentences. The problem it solves and the API shape (drop-in? different interface?).",
+  "how_it_is_fast": "2-4 sentences. The core technique(s) that produce the speedup. Name the algorithm/idea so a reader can look it up.",
+  "when_to_use": [
+    "3-5 bullets, each a concrete situation: workload shape, key/value types, size ranges, latency vs throughput needs, platform"
+  ],
+  "when_not_to_use": [
+    "3-5 bullets: workloads where it loses or is risky, missing features, platform gaps, pathological cases, memory cost, maturity concerns"
+  ],
+  "integration": {
+    "form": "header-only | static lib | shared lib | crate | module | source-drop",
+    "dependencies": "none | list",
+    "min_toolchain": "e.g. C++17, GCC 9+, Rust 1.70",
+    "platforms": "e.g. x86-64 (AVX2 required), aarch64, any",
+    "thread_safety": "string or 'not documented'",
+    "drop_in_for_baseline": true | false | "partial — explain"
+  },
+  "gotchas": [
+    "0-4 bullets: surprising behavior, iterator invalidation rules, hash quality requirements, alignment needs, unsafe blocks, etc."
+  ],
+  "pick_this_over_siblings_when": "1-2 sentences comparing to the SIBLING ENTRIES listed under the input record, or 'no siblings catalogued yet'",
+  "verified_claims_summary": "1-2 sentences restating the benchmark result in your own words with the baseline, stdlib/compiler, and hardware, so the reader knows what was actually measured",
+  "status_note": "1 sentence on maintenance_status and usability, e.g. 'Abandoned since 2019 but MIT-licensed and small enough to vendor; last known-good compiler GCC 9.'",
+  "sources_read": ["every URL you opened"],
+  "confidence": 0.0-1.0
+}
+
+=====================================================================
+ORCHESTRATOR HARNESS NOTES (environment-specific; these override only
+the output-delivery rule above)
+=====================================================================
+- Tools: WebSearch and WebFetch (if they are not loaded yet, load them
+  with ToolSearch query "select:WebSearch,WebFetch"). The `gh` CLI is
+  authenticated; for GitHub repos prefer it over WebFetch:
+    gh api repos/OWNER/REPO/readme -H "Accept: application/vnd.github.raw"
+    gh api repos/OWNER/REPO/contents/PATH -H "Accept: application/vnd.github.raw"
+    gh api "repos/OWNER/REPO/git/trees/HEAD?recursive=1" --jq '.tree[].path'
+    gh search issues --repo OWNER/REPO "<terms>" --limit 20
+  Fetching content through gh counts as opening the github.com URL.
+- Do not clone repositories or build anything.
+- The record's `verification` block holds the verifier's notes; treat its
+  corrections as authoritative over older claims.
+- Budget: about 15 tool calls.
+- Deliver your output by writing the JSON object, and nothing else, to:
+    /path/to/fastpp/data/wave1/enrich/raw/github_com_mattiasflodin_reckless.json
+  Then check it parses:
+    python3 -c "import json,sys; json.load(open(sys.argv[1]))" /path/to/fastpp/data/wave1/enrich/raw/github_com_mattiasflodin_reckless.json
+- Your final reply to the orchestrator is one line: the entry name and your confidence.

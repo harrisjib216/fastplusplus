@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/roaringbitmap/croaring",
+  "one_liner": "Compressed bitmap for sparse 32/64-bit integer sets; set-algebra ops beat std::unordered_set/vector by 3x-800x, loses on dense data.",
+  "what_it_does": "CRoaring is a C/C++ implementation of Roaring bitmaps: compressed, mutable sets of 32-bit (or 64-bit via Roaring64Map/Roaring64) unsigned integers supporting add/remove/contains, cardinality, iteration, set algebra (AND/OR/XOR/ANDNOT), and portable cross-language (de)serialization. The C API (roaring.h/roaring64.h) uses opaque roaring_bitmap_t* handles with explicit create/free; the C++ wrapper (roaring.hh/roaring64map.hh/roaring64.hh) is its own RAII class with operator overloads (&, |, ^, -). It is not a drop-in header for std::unordered_set or std::vector<uint32_t>: callers use CRoaring's own construction and query API.",
+  "how_it_is_fast": "Values are bucketed by their high 16 bits into 'containers' that switch representation per bucket: a sorted array for sparse chunks, a plain bitset for dense chunks, or a run-length list for consecutive runs (include/roaring/containers/{array,bitset,run}.h), so every 65536-value chunk stores whatever layout is smallest. Set operations dispatch per-container based on both operands' types (mixed_intersection.h, mixed_union.h, etc.) and use runtime-dispatched AVX2/AVX-512 SIMD on x86-64 for bitset and array operations. This adaptivity is what produces both the ~35x memory reduction over an uncompressed bitset and the win over linear STL set algebra on sparse/clustered data.",
+  "when_to_use": [
+    "Sets of 32-bit (or 64-bit) integers with variable, often sparse cardinality where you repeatedly compute intersections/unions/differences (search-index posting lists, ID filtering, join pushdown)",
+    "Memory is a constraint: paper Table 4 shows Roaring at 15.1 bits/value on Census1881 and 2.60 on CensusInc vs 195 for std::unordered_set and 32 for std::vector on every dataset",
+    "Throughput-oriented batch set algebra rather than single-key latency-sensitive lookups",
+    "x86-64 (gets AVX2/AVX-512 runtime dispatch) or ARM/POWER/big-endian/RISC-V via the generic scalar path",
+    "Need cross-language interop: portable serialization format shared with the Java, Go, Python, and Rust Roaring implementations"
+  ],
+  "when_not_to_use": [
+    "Fixed-size dense bit flags: a plain uncompressed bitset (the authors' own cbitset) beats Roaring by ~1.7-3x on dense/small-universe datasets and by roughly an order of magnitude on every membership query in the paper's Tables 6/7",
+    "Membership-query-heavy workloads on clustered/dense data: std::unordered_set was faster than Roaring on 4 of 8 paper datasets for random-access contains()",
+    "Multithreaded mutation: no built-in locking; a bitmap being modified must not be queried on another thread, and safe sharing requires passing copies (optionally with copy-on-write enabled)",
+    "64-bit sets via Roaring64Map specifically — issue #225 (open) reports poor read/write performance for its std::map-of-32-bit-buckets design; the ART-based Roaring64 alternative is marked experimental",
+    "Untrusted input handled carelessly: the 32-bit API's unsafe portable_deserialize can read out of bounds on malformed data; must use the *_safe variant plus roaring_bitmap_internal_validate"
+  ],
+  "integration": {
+    "form": "source-drop (amalgamated single-file roaring.c/roaring.h/roaring.hh via amalgamation.sh) or static/shared lib via CMake",
+    "dependencies": "none for the C library; C++11-capable compiler only if using the optional roaring.hh/roaring64map.hh wrapper",
+    "min_toolchain": "C11 (GCC 7+, clang 8+, MSVC 2022+, Xcode 11+, Intel oneAPI 2023.2+); C++11+ for the C++ wrapper",
+    "platforms": "x86-64 (AVX2/AVX-512 runtime-dispatched, no special build flags needed), ARM, POWER, big-endian, generic scalar path for others including RISC-V",
+    "thread_safety": "No built-in locking, same posture as STL containers per README: concurrent reads of an unmodified bitmap are safe, but a bitmap being modified must not be read elsewhere; safe cross-thread use means passing copies, with copy-on-write (off by default) making those copies cheap via atomic-refcounted shared containers",
+    "drop_in_for_baseline": "false — opaque handle + explicit free() in C, or a distinct RAII class with operator overloads in C++; not a header substitution for std::unordered_set or std::vector<uint32_t>"
+  },
+  "gotchas": [
+    "roaring_bitmap_portable_deserialize (32-bit, unsafe variant) reads out of bounds on malformed input; use the *_deserialize_safe variant plus roaring_bitmap_internal_validate for untrusted data (the 64-bit API only exposes the safe form)",
+    "Two distinct 64-bit classes exist: Roaring64Map (std::map-keyed 32-bit Roaring buckets, flagged as having bad read/write performance in open issue #225) vs Roaring64 (ART-based, wraps roaring64.h, marked experimental)",
+    "Copy-on-write is opt-in and off by default; mixing bitmaps with different COW settings was flagged unsafe in a still-open issue (#97) — set it consistently before sharing bitmaps across threads",
+    "Run-container compression (runOptimize()/runOptimize) is not automatic — a bitmap built by looping add() over consecutive ranges keeps its original array/bitset containers until you explicitly call it"
+  ],
+  "pick_this_over_siblings_when": "Pick CRoaring over plf::bitset, better_bitset, BitLib, or sul::dynamic_bitset when the domain is a sparse, dynamically-sized 32/64-bit integer *set* with heavy AND/OR/XOR/ANDNOT algebra — those siblings instead accelerate fixed-width std::bitset/std::vector<bool>-style dense bit-vector ops like shift/test/reset. Prefer pasta::bit_vector or a plain uncompressed bitset instead of CRoaring for succinct rank/select or dense small-universe bitsets, where CRoaring's per-container overhead loses on both memory and membership-query latency.",
+  "verified_claims_summary": "Paper (Lemire et al., Software: Practice and Experience 2018, arXiv:1709.07821) benchmarked CRoaring single-threaded on an Intel i7-6700 (Skylake, Turbo off) against GCC 5.4 libstdc++ std::vector+STL set algorithms, std::unordered_set, and the authors' own uncompressed 'cbitset', compiled with -O3 -march=native, across 8 real 32-bit integer-set datasets (200 sets each, timed with rdtsc). Roaring's pairwise intersections beat sorted-vector+std::set_intersection by ~3-36x and std::unordered_set by up to ~250x while using 15.1 bits/value on Census1881 vs 195 for std::unordered_set and 32 for std::vector, but a plain uncompressed bitset beat Roaring on every membership query and on set algebra for dense/small-universe datasets.",
+  "status_note": "Actively maintained (push activity as of today, 1,887 stars, used in production by ClickHouse, Apache Doris, Redpanda, YDB, Alibaba Tair, and StarRocks); dual Apache-2.0/MIT licensed, so the amalgamated single-file build is safe to vendor regardless of future upstream changes.",
+  "sources_read": [
+    "https://github.com/RoaringBitmap/CRoaring",
+    "https://github.com/RoaringBitmap/CRoaring/blob/master/README.md",
+    "https://github.com/RoaringBitmap/CRoaring/blob/master/LICENSE",
+    "https://github.com/RoaringBitmap/CRoaring/tree/master/include/roaring",
+    "https://github.com/RoaringBitmap/CRoaring/tree/master/include/roaring/containers",
+    "https://github.com/RoaringBitmap/CRoaring/tree/master/src",
+    "https://github.com/RoaringBitmap/CRoaring/issues",
+    "https://arxiv.org/pdf/1709.07821"
+  ],
+  "confidence": 0.6
+}

@@ -1,0 +1,47 @@
+{
+  "id": "https://github.com/AlexeyAB/object_threadsafe",
+  "one_liner": "Per-thread sharded reader-writer lock and object wrapper claiming up to ~10x std::shared_mutex throughput under read-heavy contention.",
+  "what_it_does": "safe_ptr.h is a single header defining safe_ptr<>/safe_obj<> wrappers that make any C++ object thread-safe, plus a standalone contention_free_shared_mutex<> that implements the same lock()/unlock()/lock_shared()/unlock_shared() calls as std::shared_mutex. contfree_safe_ptr<T> combines the two: wrap a container such as std::map and every access through operator-> or operator* automatically takes the contention-free lock. Access syntax differs from a raw object -- there is no direct member access, only locked proxy calls.",
+  "how_it_is_fast": "contention_free_shared_mutex shards the 'a reader is present' flag across a fixed-size array (default 36 slots), one cache-line-padded atomic<int> per registered thread; a reader touches only its own slot instead of contending on the single shared atomic that a typical std::shared_mutex reader count uses. A writer sets one global want_x_lock flag, then spins until every slot reports idle. Thread-to-slot mapping is cached in a thread_local unordered_map keyed by the mutex instance so repeat lock_shared() calls skip the registration scan.",
+  "when_to_use": [
+    "Shared state accessed by a bounded, roughly-known number of threads (<=36 by default, adjustable via the contention_free_count template parameter) under a read-heavy or mixed workload currently guarded by std::shared_mutex.",
+    "You can accept the operator-> / operator* locking syntax instead of direct member access, or you only need contention_free_shared_mutex<> itself as a mutex-only drop-in.",
+    "You want recursive locking across same-mode combinations (X->X, S->S) that std::shared_mutex does not provide.",
+    "The project is small enough (one ~630-line header, Apache-2.0) to vendor and audit or patch yourself."
+  ],
+  "when_not_to_use": [
+    "More than ~36 threads regularly contend: past the compiled-in slot count, get_or_set_index() returns -1 and lock_shared() falls back to competing for the same exclusive want_x_lock flag as lock(), erasing the advantage.",
+    "Producer/consumer or queue-shaped concurrency -- this is a general object lock, not a lock-free queue like the sibling entries in this category.",
+    "Any code path upgrades a shared lock to exclusive (S->X): explicitly documented in the header comment as undefined behavior.",
+    "You create and destroy contention_free_shared_mutex instances repeatedly (e.g. on the stack): open, unfixed issue #5 shows the thread-local index cache can misidentify a new instance that reuses a freed instance's memory address, corrupting lock state.",
+    "You need try_lock/try_lock_shared or timed locking: contention_free_shared_mutex only implements lock/unlock/lock_shared/unlock_shared, not the full BasicLockable/SharedTimedLockable interface std::shared_timed_mutex offers."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none beyond the standard library (<atomic>, <mutex>, <thread>, and <shared_mutex> when C++14 is detected)",
+    "min_toolchain": "C++11 for safe_ptr<>/safe_obj<>/contention_free_shared_mutex<>; C++14 (or MSVC 1900+) additionally enables the std::shared_timed_mutex-based shared_mutex_safe_ptr variant via an __cplusplus/_MSC_VER check. Benchmarks were built with g++ -std=c++14 -pthread -O3.",
+    "platforms": "any platform with a C++11/14 standard library and std::atomic; benchmarked on x86-64 Linux with GCC, and ships MSVS 2015 project files for Windows.",
+    "thread_safety": "contention_free_shared_mutex<> is itself the synchronization primitive; safe_ptr<>/contfree_safe_ptr<> are thread-safe by construction since every access acquires the wrapped mutex.",
+    "drop_in_for_baseline": "partial -- explain: contention_free_shared_mutex<> implements lock()/unlock()/lock_shared()/unlock_shared() like std::shared_mutex and can replace it directly as a mutex type, but lacks try_lock/try_lock_shared and has different (recursive) upgrade semantics. safe_ptr<>/contfree_safe_ptr<> change the access syntax to operator-> / operator*, so wrapping an existing object for external callers is not drop-in."
+  },
+  "gotchas": [
+    "S->X lock upgrade (taking the exclusive lock while already holding a shared lock) is explicitly undefined behavior per the header's own comment.",
+    "Contention-free behavior caps at contention_free_count threads (default 36); beyond that, lock_shared() falls back to the same exclusive want_x_lock path as lock(), per the registration logic in safe_ptr.h.",
+    "Open issue #5 (unfixed as of this check): the per-thread slot index is cached in a thread_local map keyed by the mutex's `this` pointer, so a stack-allocated mutex that is destroyed and a new one reallocated at the same address can be misidentified, corrupting lock state.",
+    "Every contention_free_shared_mutex<> instance allocates contention_free_count x 64-byte padded slots up front (~2.3 KB at the default of 36), a fixed per-instance memory cost regardless of actual thread count."
+  ],
+  "pick_this_over_siblings_when": "All six sibling entries in this category (atomic_queue, Boost.Lockfree, moodycamel::ReaderWriterQueue, oneTBB concurrent_bounded_queue, xenium, eventpp::SpinLock) are lock-free queues benchmarked against std::mutex for producer/consumer handoff latency; none targets std::shared_mutex. Pick object_threadsafe when the baseline is a std::shared_mutex-guarded object (e.g. a std::map) under a read-heavy or mixed workload with a bounded thread count, not a queue-shaped pipeline.",
+  "verified_claims_summary": "The author's own benchmark (bench_contfree, g++ -std=c++14 -pthread -O3, GCC 6.3.0, 16 threads on one Xeon E5-2660 v3) measured a std::map guarded by contention_free_shared_mutex<> against the same map guarded by std::shared_mutex: 34.60 vs 2.44 Mops at 0% writes (~14x) and 5.16 vs 0.74 Mops at 15% writes (~7x). The README's headline '10x' sits between these two figures; a separate real-app chart (2x Xeon E5-2686 v4, 20 usec forced inter-thread delay) shows near-parity up to 16 threads and only ~5x at 64 threads.",
+  "status_note": "Abandoned: last commit 2020-04-13, and a known thread-index correctness bug (issue #5) has sat open and unfixed since; still Apache-2.0 and a single ~630-line header, so it remains cheap to vendor and patch yourself.",
+  "sources_read": [
+    "https://github.com/AlexeyAB/object_threadsafe",
+    "https://github.com/AlexeyAB/object_threadsafe/blob/master/Readme.md",
+    "https://github.com/AlexeyAB/object_threadsafe/blob/master/safe_ptr.h",
+    "https://github.com/AlexeyAB/object_threadsafe/blob/master/bench_contfree/Makefile",
+    "https://github.com/AlexeyAB/object_threadsafe/blob/master/bench_contfree/Readme.md",
+    "https://github.com/AlexeyAB/object_threadsafe/issues/5",
+    "https://github.com/AlexeyAB/object_threadsafe/issues/3",
+    "https://github.com/AlexeyAB/object_threadsafe/commits/master"
+  ],
+  "confidence": 0.55
+}

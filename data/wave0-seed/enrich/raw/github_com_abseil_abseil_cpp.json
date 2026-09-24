@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/abseil/abseil-cpp",
+  "one_liner": "SwissTable-based hash map beating std::unordered_map on build, find, churn, and iteration speed.",
+  "what_it_does": "absl::flat_hash_map is an open-addressing hash map/set family that replaces std::unordered_map with O(1) find/insert/erase but different guarantees: keys must be CopyConstructible, values MoveConstructible, and it supports heterogeneous lookup via transparent Hash/Eq types. The API mirrors std::unordered_map (insert, find, erase, iteration) but adds capacity(), takes a reservation size instead of bucket count in constructors, and erase(iterator) returns void instead of an iterator.",
+  "how_it_is_fast": "SwissTable: an open-addressing table with quadratic probing over groups of slots, where a separate control-byte array stores a 7-bit hash fragment (H2) per slot and SIMD-style group instructions (SSE-like on x86, bit tricks on other architectures) scan a whole group at once to reject non-matches before touching slot memory. The control-byte array is dense and cache-friendly, packing more logical slots per cache line than a node-based table, and a small-object optimization keeps tiny tables entirely inline, avoiding allocation.",
+  "when_to_use": [
+    "uint64_t or small POD keys where build+destroy, find, or iteration dominate: 5.99x/2.43x/8.28x faster than std::unordered_map respectively on this benchmark.",
+    "std::string-keyed maps needing faster iteration (24.8x) or build+destroy (1.76x) than std::unordered_map.",
+    "Codebases already depending on Abseil (absl::Hash, absl::string_view) where adding one more absl:: type has no extra dependency cost.",
+    "Iteration-heavy or lookup-heavy workloads on x86-64 or aarch64 where cache-friendly probing matters.",
+    "General-purpose 'default hash map' choice, which is Abseil's own stated recommendation, when pointer/reference stability is not required."
+  ],
+  "when_not_to_use": [
+    "Code that needs pointer/reference stability across insert/rehash — use absl::node_hash_map or std::unordered_map's node-based stability instead.",
+    "Exception-safety requirements: flat_hash_map is explicitly documented as not exception-safe.",
+    "Crossing dynamically-loaded library (.so/.dll) boundaries — unsupported because absl::Hash values are randomized per DSO.",
+    "Untrusted or adversarial key input: absl::Hash is not a cryptographic hash, and open issue #2171 (opened 2026-09-23) shows fixed string pairs that collide for every seed, a hash-flooding-style risk.",
+    "Insert-then-mostly-erase workloads: capacity only shrinks on rehash()/clear(), so tombstones from erase() bloat iteration cost (O(capacity), not O(size))."
+  ],
+  "integration": {
+    "form": "source-drop / static lib (built via Bazel or CMake; not a single header)",
+    "dependencies": "none beyond the C++ standard library (absl/base itself has no dependency on other Abseil code)",
+    "min_toolchain": "C++17 (per README); CMake 3.16+ if using the CMake build",
+    "platforms": "x86 (SIMD-style group scan) with a portable bit-trick fallback for other architectures such as aarch64, per raw_hash_set.h; any platform with a C++17 compiler and Bazel or CMake",
+    "thread_safety": "not documented in the headers read this session",
+    "drop_in_for_baseline": "partial — explain: same O(1) find/insert/erase API shape as std::unordered_map, but weaker iterator/pointer stability (invalidated on rehash and move), requires CopyConstructible keys and MoveConstructible values, erase(iterator) returns void, and constructors take a reservation size instead of a bucket count."
+  },
+  "gotchas": [
+    "rehash() and move invalidate all iterators, pointers, and references — std::unordered_map keeps references stable on rehash, flat_hash_map does not.",
+    "Not exception-safe (stated directly in flat_hash_map.h's header comment).",
+    "Iteration is O(capacity), not O(size); heavy erase() churn slows down begin()/++iterator, and capacity never shrinks except on rehash()/clear().",
+    "Open issue #2171 (filed 2026-09-23, unresolved as of this writing): absl::Hash has fixed string-pair inputs that collide under every seed — worth checking if keys are attacker-controlled."
+  ],
+  "pick_this_over_siblings_when": "Pick abseil when you're already in the Abseil ecosystem or want a Google-maintained library with the widest deployment footprint (Chromium, TensorFlow); its u64 numbers (5.99x build+destroy, 8.28x iterate) sit close to boost::unordered_flat_map (5.00x/similar) and unordered_dense (4.84x/13x) on this harness. unordered_dense's own analysis of the same run notes boost::unordered_flat_map beats absl on u64 find and churn (absl scores 0.81x relative on both) — pick boost or unordered_dense instead if lookup/churn latency or a lighter, header-only dependency matters more than ecosystem fit.",
+  "verified_claims_summary": "Benchmarked by unordered_dense's third-party harness (scripts/ab/bench_readme.sh) against std::unordered_map on libstdc++, clang 22.1.8, -O3 -DNDEBUG -std=c++20, AMD Ryzen 9 7950X: absl::flat_hash_map is 5.99x faster build+destroy, 2.43x faster find, 3.52x faster churn, and 8.28x faster iterate on uint64_t keys (1.76x-24.8x across ops on std::string keys), while carrying roughly 1.11x the resident memory of std::unordered_map — a gap the benchmark authors attribute partly to glibc allocator arena retention rather than the map's own footprint.",
+  "status_note": "Actively maintained by Google with a 'live-at-head' philosophy (last commit 2026-09-24) plus LTS releases for teams that can't track head; Apache-2.0, 18.1k stars, used at Chromium/TensorFlow/Google scale — mature and well-tested, but requires a Bazel or CMake build rather than a drop-in single header.",
+  "sources_read": [
+    "https://github.com/abseil/abseil-cpp",
+    "https://github.com/abseil/abseil-cpp/blob/main/absl/container/flat_hash_map.h",
+    "https://github.com/abseil/abseil-cpp/blob/main/absl/container/internal/raw_hash_set.h",
+    "https://github.com/abseil/abseil-cpp/blob/main/CMakeLists.txt",
+    "https://github.com/abseil/abseil-cpp/issues/2171",
+    "https://github.com/abseil/abseil-cpp/issues?q=flat_hash_map+performance",
+    "https://github.com/abseil/abseil-cpp/issues?q=hash+flooding",
+    "https://github.com/martinus/unordered_dense/blob/main/doc/benchmarks.md"
+  ],
+  "confidence": 0.85
+}

@@ -1,0 +1,45 @@
+{
+  "id": "https://github.com/WG21-SG14/SG14",
+  "one_liner": "Header-only, fixed-capacity callable wrapper beating std::function's invocation speed in 5 of 7 shootout categories.",
+  "what_it_does": "stdext::inplace_function<Signature, Capacity, Alignment> is a type-erased callable wrapper like std::function, but it stores the callable inline in a fixed-size buffer instead of on the heap. It exposes the same copy/move/operator()/operator-bool surface, plus two extra non-type template parameters (Capacity, default 32; Alignment); a callable that doesn't fit is a compile-time static_assert failure, not a runtime allocation. It comes from SG14 (WG21's low-latency/games/embedded study group) and has an associated standards proposal, Docs/Proposals/NonAllocatingStandardFunction.pdf, for a future std::inplace_function.",
+  "how_it_is_fast": "It avoids the heap allocation std::function performs for non-trivial or captured callables: the object is placement-new'd into an inline aligned_storage buffer sized at compile time, and a small per-type vtable (invoke/copy/relocate/destroy function pointers) replaces the allocator plus type-erasure machinery libstdc++/MSVC use. This removes the allocate/deallocate pair on construction/destruction and an extra pointer indirection to heap-owned state, which is what the CxxFunctionBenchmark invocation timings pick up for stateful callables.",
+  "when_to_use": [
+    "The callable's captured/bound state fits a known small size (tested here at 40 bytes) and that bound can be enforced at compile time.",
+    "Hot path repeatedly invokes an already-assigned callable (function pointers, member-fn delegates, small functors) and heap traffic is the std::function cost you're trying to remove.",
+    "Embedded, low-latency, or game code where dynamic allocation is undesirable or banned.",
+    "You're willing to hand-tune per-callsite capacity/alignment template arguments instead of using one universal type.",
+    "MSVC or GCC/Clang toolchain with plain standard C++ (no platform-specific requirements)."
+  ],
+  "when_not_to_use": [
+    "Callable sizes are unknown or unbounded at the call site: std::function's heap fallback always compiles, inplace_function doesn't.",
+    "Capturing/stateless lambdas dominate the workload: in this benchmark inplace_function was slower than std::function for lambda_capture (0.1851s vs 0.1757s) and stateless_lambda (0.1845s vs 0.1799s).",
+    "Code crosses shared-library/DLL boundaries: open issue #170 flags ABI concerns for inplace_function used at library edges.",
+    "You need an actively maintained dependency: last commit 2022-04-19, repo is abandoned, and 19 issues are open, several unresolved design questions.",
+    "You need real concurrency guarantees: open issue #158 notes operator() is const but backed by a mutable, non-atomic buffer, so 'const-callable' isn't a thread-safety guarantee."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (single header; uses <type_traits>, <utility>, <functional> from the standard library)",
+    "min_toolchain": "C++14 (repo's own alternate build command compiles with -std=c++14; header uses std::exchange and documents an aligned_storage workaround for older GCC/MSVC 32-bit)",
+    "platforms": "any (portable standard C++, no SIMD/OS-specific code); the benchmark numbers here are MSVC 64-bit only",
+    "thread_safety": "not documented; open issue #158 disputes whether the const operator() implies thread-safety, since the object's storage is declared mutable",
+    "drop_in_for_baseline": "partial — explain: same copy/move/call/operator-bool surface as std::function, but the template takes extra Capacity/Alignment parameters, requires the wrapped type to be copy-constructible (static_assert) and to fit the chosen capacity/alignment (static_assert, compile-time failure), and has no allocator fallback for callables that don't fit."
+  },
+  "gotchas": [
+    "Assigning a callable larger than Capacity or overaligned relative to Alignment is a hard compile error, not a runtime allocation; issue #160 'Giant Sized Buffers Required for Compilation' documents this surfacing in practice.",
+    "Calling an empty (default-constructed or moved-from) inplace_function throws std::bad_function_call by default via the SG14_INPLACE_FUNCTION_THROW macro, which can be redefined before including the header to opt out of exceptions.",
+    "operator() is declared const, but the underlying storage_ member is mutable, so a const inplace_function can still run a mutating call operator (see issue #158).",
+    "License lives only in the header's comment block (Boost Software License 1.0); the SG14 repository itself has no license field set on GitHub."
+  ],
+  "pick_this_over_siblings_when": "Pick inplace_function over Delegate (bdiamand/Delegate) when compile-time capacity enforcement and WG21 pedigree (a standards proposal exists to make this std::inplace_function) matter more than raw speed — Delegate wins all 7 categories of the same CxxFunctionBenchmark shootout, where inplace_function only wins 5 of 7. Pick SmallFunction or woid instead for a smaller, single-purpose library without SG14's monorepo and open design questions.",
+  "verified_claims_summary": "Third-party CxxFunctionBenchmark (jamboree/CxxFunctionBenchmark, various.cpp) times stdext::inplace_function<int(int),40> against std::function<int(int)> on MSVC 64-bit/Visual Studio 15.9.4, Release build: inplace_function is faster in 5 of 7 invocation categories (e.g. 0.2365s vs 0.2640s for function_pointer, 0.1593s vs 0.1906s for compile_time_delegate) but slower for lambda_capture (0.1851s vs 0.1757s) and stateless_lambda (0.1845s vs 0.1799s); no CPU model or exact compiler flags are given beyond 'Release Build'.",
+  "status_note": "Abandoned since the last commit on 2022-04-19 (a repo-wide date covering all SG14 proposals, not just this header); BSL-1.0 licensed and small enough (one ~200-line header) to vendor regardless, but carries 19 open issues including unresolved questions about exception-free use and shared-library ABI.",
+  "sources_read": [
+    "https://github.com/WG21-SG14/SG14",
+    "https://github.com/WG21-SG14/SG14/blob/master/SG14/inplace_function.h",
+    "https://github.com/WG21-SG14/SG14/issues?q=inplace_function",
+    "https://github.com/jamboree/CxxFunctionBenchmark",
+    "https://github.com/jamboree/CxxFunctionBenchmark#sample-result"
+  ],
+  "confidence": 0.6
+}

@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/celonis/homcc",
+  "one_liner": "Distributed C/C++ compiler wrapper replacing distcc with server-side dependency caching and compression for thin uplinks.",
+  "what_it_does": "homcc is a distcc-style distributed compilation system for C and C++ (gcc/clang) built from a `homcc` client and a `homccd` server daemon, with hosts specified via `$HOMCC_HOSTS`/hosts files similar to distcc's `DISTCC_HOSTS`. It hooks into a build the same way distcc does, via `CCACHE_PREFIX=homcc` or by invoking `homcc <compiler>` directly. Its distinguishing feature is a server-side cache of preprocessed dependencies plus lzo/lzma compression of everything transferred, aimed specifically at reducing bytes-on-the-wire for slow/variable home-office links.",
+  "how_it_is_fast": "On a cache miss homcc still sends preprocessed sources like distcc, but homccd keeps a persistent, size-bounded (LRU, `HOMCC_MAX_DEPENDENCY_CACHE_SIZE`) cache of dependency files keyed by content hash, so once warm only genuinely new headers/sources cross the network instead of the full preprocessed unit every time. Transferred sources and resulting object files are additionally compressed with lzo or lzma. Both mechanisms specifically target bandwidth, not CPU parallelism, which is why the reported gains shrink to nothing as link speed rises.",
+  "when_to_use": [
+    "Remote/distributed C or C++ builds (gcc or clang) over thin or variable-bandwidth links (roughly 5-40 Mbps in the README's own numbers), e.g. work-from-home developers hitting an office build farm",
+    "Teams already using a distcc-style CCACHE_PREFIX or conan-profile hook and willing to swap in a different client/server pair",
+    "Need sandboxed remote compilation per client via schroot profiles or docker containers rather than running arbitrary code directly on the build host",
+    "Debian/Ubuntu-based build infrastructure (packaged and tested as .deb on Ubuntu 22.04)",
+    "Want to tunnel remote compiles over SSH (multiplexed ControlMaster) instead of exposing a plaintext TCP service"
+  ],
+  "when_not_to_use": [
+    "Gigabit or otherwise unconstrained links to the build farm — the project's own chart shows distcc is not slower (slightly faster) once bandwidth stops being the bottleneck",
+    "Untrusted/public networks without a VPN or SSH tunnel — there is no built-in TLS; homcc transmits source over plain TCP by default and the README explicitly warns not to expose homccd publicly",
+    "Environments needing per-client connection limits on the server — homccd does not cap simultaneous connections from one client, so a single client can exhaust the job pool",
+    "Non-Debian/Ubuntu targets or languages other than C/C++ — schroot sandboxing and the packaging are Debian-specific, and gcc/clang are the only supported compilers",
+    "Projects wary of small-team tooling — 24 stars, single corporate maintainer (Celonis), no independent adopters visible; internal benchmark numbers cannot be reproduced by outsiders"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "python-lzo (>=1.12, needs liblzo2-dev/apt python3-lzo) for compression; sysv_ipc for the client's semaphore-based concurrency control; optional schroot or docker for sandboxed remote execution; ssh for tunneled hosts",
+    "min_toolchain": "Python 3.9+ (debian/control declares X-Python3-Version >= 3.9; CI runs on 3.9); gcc or clang on both client and server",
+    "platforms": "Linux, packaged and CI-tested for Debian/Ubuntu (ubuntu-22.04); schroot sandboxing is Debian/Ubuntu-specific, docker sandboxing is more portable but the server itself targets Linux",
+    "thread_safety": "not documented as a formal guarantee; the client uses SysV semaphores (sysv_ipc, inspectable via `ipcs -s`) to bound concurrent local/remote compilation slots, and the issue history shows multiple fixed semaphore-race and AttributeError-on-exit bugs in that mechanism",
+    "drop_in_for_baseline": "partial — explain: same general workflow as distcc (CCACHE_PREFIX hook, HOST/LIMIT-style hosts file), but it is a separate protocol and daemon: you run homccd instead of distccd, configure via HOMCC_*/HOMCCD_* env vars or homcc.conf instead of distcc's variables, and there is no wire-protocol compatibility with distcc"
+  },
+  "gotchas": [
+    "No built-in transport encryption: plain TCP hosts send source unencrypted; use an SSH-tunneled `@HOST`/`user@HOST` entry or a VPN, and never expose homccd on an untrusted network",
+    "homccd does not limit simultaneous connections per client, so one misbehaving client can consume the entire server job pool",
+    "docker sandboxing requires the container to bind-mount the host's /tmp to /tmp so the server-side dependency cache is reachable inside the container; schroot sandboxing has the same /tmp-mount requirement",
+    "Client relies on SysV semaphores for concurrency bookkeeping — historically a source of race-condition bugs (see issues 'Fix SysV semaphore race', 'AttributeError on HostSemaphore __exit__'), now fixed but worth knowing if debugging odd hangs"
+  ],
+  "pick_this_over_siblings_when": "Pick homcc over NativeLink, FASTBuild, or octobuild specifically when your bottleneck is a thin/variable uplink to an existing distcc-style distributed build farm and you want server-side dependency caching plus compression to shrink that — NativeLink targets single-machine local build acceleration (no distribution), FASTBuild is a from-scratch build system with its own distribution/unity-build model, and octobuild is scoped to Unreal Engine's UBT/UAT toolchain; none of them are distcc drop-in replacements for bandwidth-constrained remote C/C++ compilation.",
+  "verified_claims_summary": "On an internal, non-public Celonis C++ codebase built with clang++-14 (server job limit 112, 60 compilation threads), the README's bar chart shows homcc beating distcc by about 6.3x at 5/25 Mbps (~9.2 vs ~57.5 min), narrowing to ~1.4x at 40/200 Mbps, and homcc being slightly slower than distcc at gigabit (~5.8 vs ~4.9 min). No CPU/hardware spec, raw data, or runnable benchmark script is published; the numbers are estimated from bar heights in an image, and the README's prose claim of gains 'by some orders of magnitude' overstates what its own chart shows.",
+  "status_note": "Actively maintained by Celonis (last commit 2026-08-18, v1.0.4 tagged the same day, zero open issues) under the MIT license; small adoption (24 stars) but the codebase is compact and copyable/vendorable if you accept the Debian/Ubuntu-oriented packaging.",
+  "sources_read": [
+    "https://github.com/celonis/homcc",
+    "https://github.com/celonis/homcc#readme",
+    "https://github.com/celonis/homcc/blob/main/pyproject.toml",
+    "https://github.com/celonis/homcc/blob/main/requirements.txt",
+    "https://github.com/celonis/homcc/blob/main/setup.py",
+    "https://github.com/celonis/homcc/blob/main/debian/control",
+    "https://github.com/celonis/homcc/blob/main/.github/workflows/build-main.yml",
+    "https://github.com/celonis/homcc/blob/main/homcc/__init__.py",
+    "https://github.com/celonis/homcc/blob/main/homcc/client/__init__.py",
+    "https://github.com/celonis/homcc/blob/main/LICENSE",
+    "https://github.com/celonis/homcc/issues",
+    "https://github.com/celonis/homcc/releases"
+  ],
+  "confidence": 0.6
+}

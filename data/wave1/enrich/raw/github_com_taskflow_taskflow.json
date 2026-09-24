@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/taskflow/taskflow",
+  "one_liner": "Header-only C++ task-graph library that beats oneTBB FlowGraph on heterogeneous CPU+GPU DAG workloads.",
+  "what_it_does": "Taskflow lets you express complex task dependency graphs (DAGs) with static, recursive (subflow), and conditional/cyclic control flow, plus CPU+GPU tasks in the same graph. It is not a drop-in for std::async/std::thread or oneTBB FlowGraph: you build a tf::Taskflow of tasks via emplace()/precede()/succeed() (or the built-in for_each/reduce/sort/pipeline algorithms) and hand it to a tf::Executor, which owns a work-stealing thread pool and runs the graph asynchronously via a tf::Future. GPU kernels are expressed as native CUDA Graphs (tf::cudaGraph/cudaflow.hpp) inside the same task graph rather than a separate stream API.",
+  "how_it_is_fast": "Each worker has a bounded lock-free work-stealing queue (ring buffer, default 256 slots, log2-sized via TF_DEFAULT_BOUNDED_TASK_QUEUE_LOG_SIZE) backed by an unbounded overflow queue, so idle workers steal ready tasks instead of waiting on a central scheduler like FlowGraph's. Worker wakeup uses a non-blocking/atomic notifier rather than plain condition variables. GPU offload is captured as an Nvidia CUDA Graph and replayed via a single graph-exec launch, avoiding per-kernel CPU launch overhead, which is the mechanism behind the paper's reported gains on a mixed CPU+GPU task graph.",
+  "when_to_use": [
+    "Workload is itself an irregular task DAG mixing CPU and GPU kernels in one graph, not a flat parallel-for",
+    "Graph structure is dynamic or recursive at runtime (subflows) rather than declared statically up front like TBB FlowGraph",
+    "Multiple taskflows/processes co-run on the same CPU+GPU node and you care about aggregate throughput under contention, not just single-run latency",
+    "You want built-in parallel algorithms (for_each/reduce/sort/pipeline) and a graph profiler (TFProf) bundled with the scheduler",
+    "A C++20 toolchain is already available (GCC 11+/Clang 12+/MSVC 19.29+/NVCC 12.0+)"
+  ],
+  "when_not_to_use": [
+    "You just need flat parallel loops or fire-and-forget async calls; a simple thread pool or std::async has far less API surface",
+    "You're pinned to C++17 or an older compiler; the current release (v4.0.0) requires C++20",
+    "Tasks throw exceptions heavily: open issues report tf::Semaphore combined with exceptions can deadlock (#732) and throwing many exceptions is UB that can crash or silently lose the exception (#724)",
+    "You need evidence measured against std::async/std::thread directly; this benchmark is tier B and compares against oneTBB FlowGraph, one step removed from the std baseline",
+    "You want a minimal header with no GPU-adjacent code paths; the repo ships a full CUDA task-graph subsystem (taskflow/cuda/*) even if you never touch a GPU"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none for CPU tasking; optional Nvidia CUDA Toolkit 12.0+ (nvcc) for cudaFlow GPU tasking",
+    "min_toolchain": "C++20: GCC 11+, Clang 12+, MSVC 19.29+ (VS2019), Apple Clang 13+, NVCC 12.0+, Intel oneAPI DPC++ 2022.0+ (current README; the cited paper's benchmark used an earlier Taskflow with clang++ v10 and -std=c++17)",
+    "platforms": "Linux, Windows, macOS; x86-64 and other C++20-capable targets; optional Nvidia CUDA GPU offload via taskflow/cuda",
+    "thread_safety": "README states tf::Executor's run/run_n/run_until/wait_for_all methods are thread-safe; building/mutating a tf::Taskflow graph concurrently from multiple threads is not documented as safe",
+    "drop_in_for_baseline": "false — different API from oneTBB FlowGraph; graphs are built with tf::Taskflow::emplace/precede/succeed and run by tf::Executor, with no tbb::flow::graph node types"
+  },
+  "gotchas": [
+    "Exception handling in tasks is a known weak spot: tf::Semaphore plus exceptions can deadlock (issue #732), and throwing many exceptions is undefined behavior that can crash or drop the exception (issue #724)",
+    "Past releases had real throughput regressions (reported in 3.8 and 3.10, since fixed) — verify the specific version before trusting a benchmark number",
+    "Per-worker bounded work-stealing queue defaults to 256 tasks; graphs with very deep/bursty fan-out spill into the slower unbounded overflow queue",
+    "v4.0.0 raised the minimum standard to C++20, up from C++17 in earlier major versions — code and CI written for older Taskflow may not compile as-is"
+  ],
+  "pick_this_over_siblings_when": "dispenso, TooManyCooks, and libfork also beat oneTBB, but against its flat parallel_for/task-group APIs on CPU-only workloads. Pick Taskflow over them (and over Boost.Fiber/utl::parallel/meet1214/BS::thread_pool, which target std::thread/std::async) when the job is a DAG with heterogeneous CPU+GPU tasks, subflows, or conditional/cyclic control flow rather than a flat thread-pool or fiber replacement.",
+  "verified_claims_summary": "On a 1920-layer sparse DNN inference task graph (LSDNN challenge) run as a CPU+GPU task graph with up to 4 cudaFlows, across up to 9 co-running processes on 40 Intel Xeon CPU cores plus 4 GeForce RTX 2080 GPUs (clang++ v10 host compiler, CUDA 11, -std=c++17 -O2), Taskflow's IEEE TPDS 2021 paper (arXiv 2004.10908) reports up to 29% faster runtime, 1.5x less memory, and 1.9x higher weighted throughput than Intel oneTBB 2021.1 FlowGraph.",
+  "status_note": "Actively maintained (commit as recent as 2026-09-14, 12.2k stars, 36 open issues); MIT-licensed and header-only so it's easy to vendor, but GitHub's license detector shows NOASSERTION even though the LICENSE file is standard MIT text, and the current release requires a C++20 toolchain.",
+  "sources_read": [
+    "https://github.com/taskflow/taskflow",
+    "https://github.com/taskflow/taskflow/blob/master/README.md",
+    "https://github.com/taskflow/taskflow/blob/master/LICENSE",
+    "https://github.com/taskflow/taskflow/blob/master/taskflow/core/wsq.hpp",
+    "https://github.com/taskflow/taskflow/issues",
+    "https://arxiv.org/abs/2004.10908"
+  ],
+  "confidence": 0.6
+}

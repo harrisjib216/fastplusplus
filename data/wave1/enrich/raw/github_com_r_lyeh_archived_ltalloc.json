@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/r-lyeh-archived/ltalloc",
+  "one_liner": "Single-file source drop-in overriding operator new/delete; thread-local free lists speed up many small (<256B) allocations vs CRT malloc.",
+  "what_it_does": "ltalloc is a free-list-based memory allocator for C++ programs doing many small (<256B) allocations from multiple threads, such as STL container usage. You add ltalloc.cc to your build and it transparently overrides global operator new/delete and malloc/free-equivalents (ltmalloc, ltfree, ltrealloc, ltcalloc, ltmemalign, ltsqueeze); no container or call-site changes are required. An optional ltalloc.hpp provides a lt::allocator<T> STL-allocator wrapper for code that wants to opt in explicitly instead of overriding globally.",
+  "how_it_is_fast": "Each thread keeps a per-size-class free list (a TCMalloc-inspired thread cache) so alloc/free for blocks under 56KB is O(1) with, in the common case, a single conditional branch. Size-class selection is computed from constants only (no dynamic data), so with LTO/inlining enabled (-flto, /GL, -ipo) the compiler can inline the whole allocation path at the call site. Blocks are moved between the thread-local list and a shared central list in batches of up to 256 to bound cross-thread contention (at most one spin-lock per 256 ops), and chunks carry one 64-byte header per 64KB instead of a per-allocation header, cutting fragmentation.",
+  "when_to_use": [
+    "Hot path is many small (<256B) alloc/free calls, e.g. STL container churn, especially with a producer-consumer pattern where one thread allocates and another frees.",
+    "You can add a single ltalloc.cc to the build and build with LTO (-flto/-ipo//GL) to get the compile-time size-class inlining benefit.",
+    "You want a drop-in for global operator new/delete with no per-container allocator template changes.",
+    "Target is Windows (MSVC) or Linux/macOS; ARM64/ARM64EC support was merged in April 2026 for those wanting arm64.",
+    "You're fine manually reclaiming memory to the OS (via ltalloc_squeeze()) instead of relying on automatic trim."
+  ],
+  "when_not_to_use": [
+    "You need memory returned to the OS automatically; small-block memory is only released when you explicitly call ltalloc_squeeze().",
+    "You need allocator statistics/introspection - none is provided by design (no malloc_stats equivalent).",
+    "Correctness matters more than raw throughput: open, unresolved issues report a segfault in ptrie_insert (#23), a realloc() hang/CPU-spin (#27), and chunk leaks (#30).",
+    "You want an actively developed project: real bug-fix activity stopped in 2019; the only 2026 commit was an externally contributed ARM64 PR merge.",
+    "Peak throughput vs. other allocators (not just CRT) matters: in the third-party smmalloc benchmark table, ltalloc trails smmalloc, rpmalloc, and hoard at both 1 and 5 threads on i7-2600."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (stdlib.h; optional <new>/<limits> only for the ltalloc.hpp STL-allocator wrapper)",
+    "min_toolchain": "Compiles as C or C++ (no C++11 required); thread-local storage via compiler builtins (__thread / __declspec(thread)), not the C++11 thread_local keyword; LTO (-flto/-ipo//GL) recommended for full inlining benefit",
+    "platforms": "Windows (MSVC, AppVeyor CI) and Linux/macOS (Travis CI); ARM64/ARM64EC support merged April 2026; primarily x86/x86-64",
+    "thread_safety": "Almost lock-free per README: dedicated free list per thread per size class, at most one spin-lock per up to 256 alloc/free calls when refilling from the shared central list",
+    "drop_in_for_baseline": true
+  },
+  "gotchas": [
+    "Full performance depends on LTO so the compiler can inline the compile-time size-class computation; without it you keep correctness but lose much of the speed edge.",
+    "Memory for small blocks is never returned to the OS automatically; call ltalloc_squeeze() yourself (e.g. periodically from a background thread) to release it.",
+    "No memory-usage statistics API exists by design; wrap in your own malloc if you need introspection.",
+    "Several correctness bugs are open and unfixed as of the last commit (April 2026): segfault in ptrie_insert, realloc() hang, chunk leaks."
+  ],
+  "pick_this_over_siblings_when": "Pick ltalloc over rpmalloc or smmalloc (same category, both also beat CRT malloc) only when you want the absolute smallest integration footprint - one .cc file, no build-system hookup - and can tolerate a project with no real bug-fix activity since 2019 and open segfault/hang reports; in the shared smmalloc benchmark table ltalloc is consistently slower than both rpmalloc and smmalloc, so neither is chosen for raw throughput.",
+  "verified_claims_summary": "Third-party smmalloc README table (128-byte concurrent alloc/free stress test, compiler/flags/units unstated) shows ltalloc vs CRT malloc on Windows 10/i7-2600: ~62.5M vs ~23.9M ops at 1 thread (~2.6x) and ~27.3M vs ~14.6M at 5 threads (~1.9x); on PS4: ~28.6M vs ~4.4M at 1 thread (~6.4x) and ~14.7M vs ~332K at 4 threads (~44x). In that same table ltalloc trails rpmalloc, hoard, and smmalloc at every thread count. I confirmed these exact figures by reading the smmalloc README directly.",
+  "status_note": "GitHub marks the repo active (pushed April 2026, not archived) and it is not a fork, but real development stopped in 2019 - the only 2026 activity was merging one external ARM64/ARM64EC PR - and 8 issues remain open including unresolved crash/hang reports. BSD-3-Clause and a single source file, so it's cheap to vendor and pin even though upstream is effectively dormant.",
+  "sources_read": [
+    "https://github.com/r-lyeh-archived/ltalloc",
+    "https://github.com/r-lyeh-archived/ltalloc/blob/master/ltalloc.h",
+    "https://github.com/r-lyeh-archived/ltalloc/blob/master/ltalloc.hpp",
+    "https://github.com/r-lyeh-archived/ltalloc/blob/master/ltalloc.cc",
+    "https://github.com/r-lyeh-archived/ltalloc/issues",
+    "https://github.com/r-lyeh-archived/ltalloc/issues/23",
+    "https://github.com/r-lyeh-archived/ltalloc/issues/27",
+    "https://github.com/r-lyeh-archived/ltalloc/commits/master",
+    "https://github.com/SergeyMakeev/smmalloc#performance"
+  ],
+  "confidence": 0.45
+}

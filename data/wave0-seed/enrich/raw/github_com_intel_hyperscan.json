@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/intel/hyperscan",
+  "one_liner": "SIMD multi-pattern regex matching library beating PCRE2 6.9-183x on large network-security rulesets.",
+  "what_it_does": "Hyperscan is a standalone multi-pattern regex library using PCRE-like syntax, built for DPI/network security where thousands of regexes must be matched against a byte stream at once. The API is compile-then-scan: build an hs_database_t from a pattern set via hs_compile_multi (or a streaming/vectored variant), allocate a per-thread hs_scratch_t via hs_alloc_scratch/hs_clone_scratch, then call hs_scan or hs_scan_stream with a match callback. This is a different shape than PCRE2's single exec-style call.",
+  "how_it_is_fast": "Uses hybrid automata (combinations of NFA/DFA representations) plus SIMD-accelerated multi-literal prefilter engines (FDR/Teddy) to scan tens of thousands of patterns in one pass over the input, instead of running each regex independently as PCRE2 does. Minimum requirement is SSSE3; it can additionally use SSE4.2, BMI/BMI2, POPCNT, and AVX2 if present, selected at compile time. Because matching is batched across the whole compiled pattern database, speedups scale with ruleset size: 1.8-2.3x over PCRE2 for single-pattern matching but 6.9-183x for multi-pattern (multi-mode) matching.",
+  "when_to_use": [
+    "Large multi-pattern rulesets (hundreds to tens of thousands of regexes) scanned against the same input stream, e.g. Snort/Suricata-style DPI",
+    "x86-64 or 32-bit x86 targets with at least SSSE3; larger gains with AVX2 present",
+    "Throughput-bound network/security scanning where the multi-mode win (6.9-183x over PCRE2) matters more than compile-step latency",
+    "Streaming matching across TCP-like flows using block or streaming scan modes",
+    "Workloads where a fast approximate prefilter match followed by a slower exact-match confirmation pass is acceptable"
+  ],
+  "when_not_to_use": [
+    "Single-pattern lookups, where the win over PCRE2 is a modest 1.8-2.3x and API complexity may not be worth it",
+    "Patterns needing backreferences, capturing sub-expressions, atomic/possessive quantifiers, conditional patterns, or arbitrary zero-width assertions -- these are compile errors, not degraded matches",
+    "Non-x86 targets: no upstream ARM/aarch64/PowerPC support (issues #187, #197 open since 2018-19 unresolved); use the community Vectorscan fork instead",
+    "Latency-sensitive single-shot small scans where the separate pattern-database compile step doesn't amortize",
+    "Streaming mode when block mode is possible -- docs note streaming carries extra overhead per record versus block"
+  ],
+  "integration": {
+    "form": "static lib | shared lib",
+    "dependencies": "CMake >=2.8.11, Ragel 6.9, Python 2.7, Boost >=1.57 (headers only), OpenSSL (required, used for HMAC-SHA256 database integrity); pcap optional, only for example code",
+    "min_toolchain": "C99 + C++11; GCC 4.8.1+, Clang 3.4+, Intel C++ Compiler 15+, or MSVC 2017 Build Tools",
+    "platforms": "x86-64 and 32-bit x86 only; minimum SSSE3, optionally uses SSE4.2/BMI/BMI2/AVX2; no official ARM or PowerPC build",
+    "thread_safety": "Library calls are re-entrant, but hs_scratch_t is not thread-safe -- one scratch space per thread is required, made cheaply via hs_clone_scratch",
+    "drop_in_for_baseline": "partial -- pattern syntax is PCRE-compatible (validated against PCRE 8.41) but the C API is compile-then-scan with callback-based matching against a precompiled database, not PCRE2's single exec call"
+  },
+  "gotchas": [
+    "Backreferences, capturing groups, lookaround/zero-width assertions, atomic and possessive quantifiers, and conditional patterns fail to compile rather than silently degrading",
+    "Prefiltering mode returns a superset of true matches and requires a second exact-match pass with another engine",
+    "OpenSSL is a hard build dependency (used for database integrity hashing), not optional",
+    "No official ARM/aarch64 build; long-open issues (#187, #197) point users to the community Vectorscan fork instead"
+  ],
+  "pick_this_over_siblings_when": "no siblings catalogued yet",
+  "verified_claims_summary": "Measured on a single core of an Intel Xeon Platinum 8180 (GCC 5.4) against PCRE2 v10.32 with JIT enabled: Hyperscan's multi-pattern mode matched the Suricata ET-Open ruleset (2,800 regexes) against a 1GB real HTTP trace in 133s vs PCRE2's 913s (6.9x), and the Snort Talos ruleset (1,300 regexes) in 2.15s vs 394s (183x); single-pattern mode was a more modest 1.8-2.3x over PCRE2 on the same traces.",
+  "status_note": "Actively maintained (last commit 2026-09-17) under BSD-3-Clause, used in production DPI stacks like Snort/Suricata; last tagged release is 5.4.2 (2023-04-19), and it is flagged 'copyable' usability in this catalog.",
+  "sources_read": [
+    "https://github.com/intel/hyperscan",
+    "https://github.com/intel/hyperscan/blob/master/README.md",
+    "https://github.com/intel/hyperscan/blob/master/doc/dev-reference/getting_started.rst",
+    "https://github.com/intel/hyperscan/blob/master/doc/dev-reference/runtime.rst",
+    "https://github.com/intel/hyperscan/blob/master/doc/dev-reference/performance.rst",
+    "https://github.com/intel/hyperscan/blob/master/doc/dev-reference/compilation.rst",
+    "https://github.com/intel/hyperscan/blob/master/CMakeLists.txt",
+    "https://github.com/intel/hyperscan/blob/master/CHANGELOG.md",
+    "https://github.com/intel/hyperscan/issues/187",
+    "https://github.com/intel/hyperscan/issues/197"
+  ],
+  "confidence": 0.85
+}

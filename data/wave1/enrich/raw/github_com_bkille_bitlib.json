@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/bkille/BitLib",
+  "one_liner": "Header-only bit_vector and STL-style bit algorithms that beat std::vector<bool> by operating word-at-a-time instead of bit-at-a-time.",
+  "what_it_does": "BitLib provides bit::bit_vector<WordType>, a near drop-in replacement for std::vector<bool> built on top of std::vector<WordType>, plus a bit:: namespace of algorithms (set, shift_left/right, reverse, rotate, count, transform, copy, equal, move, copy_backward, fill, find, swap_ranges) that mirror the <algorithm> interface. bit_vector adds a string constructor and a debug_string() helper but otherwise matches std::vector<bool>'s API; unsupported STL algorithms still work by falling back to plain std:: calls on the container.",
+  "how_it_is_fast": "The library is built on 'bit iterators' (from Vincent Reverdy's bit/bit-algorithms projects) that track a word pointer plus a sub-word bit position, letting algorithms process a full WordType (typically uint64_t) per step instead of std::vector<bool>::iterator's implicit bit-by-bit proxy-reference access. Word-aligned ranges get bulk word operations (memmove-style shifts, popcount via libpopcnt for count, word-wise bitwise ops for transform), with a separate slower path for unaligned (U) boundaries. An optional SIMD path via Google Highway (BITLIB_HWY) is available but not on by default.",
+  "when_to_use": [
+    "Bulk bitset operations (shift, rotate, reverse, transform, count) over large bit ranges (tens of thousands of bits and up) where std::vector<bool>'s bit-by-bit iteration is the bottleneck",
+    "Code already calling <algorithm> functions on std::vector<bool> that can be swapped to bit:: equivalents with matching signatures",
+    "Word-aligned or mostly-aligned access patterns (aligned ranges are 1.5-5x faster than unaligned in BitLib's own numbers)",
+    "Projects that can pin to a single header-only vendored dependency and C++17 or newer",
+    "Prototyping/research code where a stale-but-working header is acceptable and the library can be forked/patched in place"
+  ],
+  "when_not_to_use": [
+    "You need the exact std::vector<bool> ABI/type (e.g. interop with code expecting std::vector<bool> by value) rather than a similarly-shaped but distinct bit_vector type",
+    "Small containers (small = 256 bits): several bit:: operations are still faster than std but by single-digit-ns margins, not worth a new dependency for",
+    "You need algorithms not yet implemented (sort, stable_sort, inner_product, shuffle, sample, mismatch, search, search_n, move_backward are all open feature requests, not present)",
+    "You need active upstream support: last commit 2024-06-06, no releases/tags visible, solo maintainer",
+    "You need SIMD acceleration out of the box: Highway support exists but is opt-in and unbenchmarked in the published table"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none for core library; Google Highway only if BITLIB_HWY SIMD path is enabled; GoogleTest/Google Benchmark only for building tests/benchmarks",
+    "min_toolchain": "C++17 (CMakeLists defaults to C++17, notes C++20 is faster and adds std::shift_* interop); CI tests GCC 11 on Ubuntu 20.04/22.04 with -std=17 and -std=20 only",
+    "platforms": "not documented beyond CI: only Linux+GCC 11 is exercised in CI (.github/workflows/cmake.yml); no macOS/Windows/clang CI coverage, no ISA requirement for the core path (SIMD path via Highway is optional)",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": "partial — explain: bit_vector's constructors/iterators/most member functions mirror std::vector<bool>, and unsupported std:: algorithms still compile against it, but it is a distinct class template (not std::vector<bool> itself) and the measured speedups only apply when call sites are switched from std:: to bit:: algorithm names"
+  },
+  "gotchas": [
+    "Bit position within a word increases LSB to MSB, which is the opposite of how people usually read a printed bit string; the README calls this out as a common source of bugs when writing custom algorithms against bit_iterator directly",
+    "Aligned (A) vs unaligned (U) vs random (R) iterator boundaries materially change performance (e.g. bit::reverse (large) 1.25ms aligned vs 1.80ms unaligned) — the win over std:: shrinks (but does not disappear) on misaligned ranges",
+    "SIMD path requires manually defining BITLIB_HWY and adding Google Highway as a dependency; it is not covered by the published benchmark table",
+    "Only 10 of the library's own open issues are unimplemented std::algorithm equivalents (sort, mismatch, search, search_n, shuffle, sample, inner_product, move_backward) — check the list before assuming full <algorithm> parity"
+  ],
+  "pick_this_over_siblings_when": "Pick BitLib over sul::dynamic_bitset when you need the fuller STL-algorithm surface (rotate, transform, swap_ranges, copy_backward) rather than just a bitset type, and over plf::bitset/better_bitset (which target std::bitset, a fixed-size type) when your container size is runtime-determined like std::vector<bool>. sul::dynamic_bitset showed a larger small-size shift_left win in BitLib's own table (13.1ns vs BitLib's 26.8ns), so for small, shift-heavy workloads it may edge out BitLib.",
+  "verified_claims_summary": "First-party Google Benchmark results in BitLib's README, run on undocumented hardware/compiler/stdlib, show bit:: algorithms beating std:: on std::vector<bool> at 'large' size (2^24 bits): shift_left 371,224ns vs 105,227,752ns (~283x), reverse 1,245,260ns vs 293,563,397ns (~236x), count 365,194ns vs 58,934,071ns (~161x), rotate 7,333,284ns vs 514,697,313ns (~70x), and set 1.90ns vs 2.39ns (~1.26x); the same table also benchmarks against pinam45/dynamic_bitset and noporpoise/BitArray.",
+  "status_note": "Stale: last commit 2024-06-06, 11 open issues (all feature requests, no known correctness bugs found), 76 stars, single maintainer; BSD-3-Clause and header-only, so it is cheap to vendor and patch even without upstream activity.",
+  "sources_read": [
+    "https://github.com/bkille/BitLib",
+    "https://github.com/bkille/BitLib/blob/master/README.md",
+    "https://github.com/bkille/BitLib/tree/master/benchmark",
+    "repos/bkille/BitLib/contents/CMakeLists.txt",
+    "repos/bkille/BitLib/contents/.github/workflows/cmake.yml",
+    "repos/bkille/BitLib/contents/include/bitlib/bit-containers/bit_vector.hpp",
+    "repos/bkille/BitLib/issues (list + #35)",
+    "repos/bkille/BitLib (repo metadata)"
+  ],
+  "confidence": 0.6
+}

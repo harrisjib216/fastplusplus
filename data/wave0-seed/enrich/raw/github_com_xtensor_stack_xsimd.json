@@ -1,0 +1,47 @@
+{
+  "id": "https://github.com/xtensor-stack/xsimd",
+  "one_liner": "Header-only C++ SIMD abstraction: portable batch<T,Arch> type replaces scalar loops across x86/ARM/RISC-V/WASM.",
+  "what_it_does": "xsimd wraps vendor-specific SIMD intrinsics (SSE/AVX/AVX512, NEON/SVE, RVV, WASM, VSX, LSX/LASX, VXE) behind a single batch<T, Arch> value type with normal arithmetic operators and vectorized math functions (exp, log, trig, pow). It is not a drop-in for std::transform or scalar loops: callers restructure a loop into SIMD-width chunks using load_aligned/store_aligned (or unaligned variants) and must hand-write the tail loop for sizes not divisible by the batch width.",
+  "how_it_is_fast": "It compiles operators and math functions directly to the target ISA's real SIMD instructions instead of relying on the autovectorizer or scalar code, via either an explicit Arch template parameter or auto-selection based on compiler flags (e.g. -mavx2). The vectorized math functions (exp/log/trig/pow) are lightweight polynomial-approximation implementations inherited from the now-deprecated boost.SIMD project. xsimd::dispatch() adds runtime ISA dispatch so one binary can pick the best available instruction set at startup.",
+  "when_to_use": [
+    "Tight numeric kernels applying the same arithmetic/math op over large arrays of floats/doubles/ints",
+    "Need one portable source across x86-64, ARM (NEON/SVE), RISC-V (RVV), WASM, PowerPC (VSX), LoongArch, or IBM z, without hand-written per-ISA intrinsics",
+    "Want vectorized exp/log/trig/pow without trusting the compiler's autovectorizer",
+    "Header-only vendoring is acceptable (no separate build/link step)",
+    "Need runtime dispatch across multiple ISAs from a single binary via xsimd::dispatch()"
+  ],
+  "when_not_to_use": [
+    "Workload sizes rarely align to the SIMD width and remainder-loop bookkeeping is unwanted overhead",
+    "Using -ffast-math with log() on AVX2 pre-fix builds: issue #1264 showed materially wrong results (now closed/fixed, but confirm the fix is in your pinned version)",
+    "Chained math-function expressions (e.g. sqrt((cos+sin)/2) over 1e8 elements): issue #880 is an open, unresolved report of xsimd being ~3x slower than the scalar std:: equivalent on AVX2 for that pattern",
+    "You need a published, reproducible benchmark before committing — none exists in this repo (evidence tier D, no numbers in README/docs/benchmark/)",
+    "Toolchain is older than GCC 10 / Clang 16 / MSVC 2022, or pre-C++17"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (optional: xtl, only if you enable XSIMD_ENABLE_XTL_COMPLEX for xtl::xcomplex constructors)",
+    "min_toolchain": "C++17; GCC 10+, Clang 16+, MSVC 2022+",
+    "platforms": "x86-64 (SSE2..AVX512, FMA3/FMA4), ARM (NEON, NEON64, SVE), WebAssembly (WASM), PowerPC64 (VSX), RISC-V (RVV), LoongArch64 (LSX/LASX), IBM z/Architecture (VXE)",
+    "thread_safety": "not documented; batch<T,Arch> is a stateless value type with no shared mutable state, so read-only concurrent use appears safe by construction, but the project makes no explicit guarantee",
+    "drop_in_for_baseline": "partial — explain: replaces the operator/math-function bodies of a scalar loop, but the caller must restructure the loop into batch-width chunks and write the tail/remainder loop by hand; it is not a transparent std::transform substitute"
+  },
+  "gotchas": [
+    "log() on AVX2 compiled with -ffast-math produced wrong results (issue #1264); reported closed/fixed but verify against your pinned xsimd version",
+    "Compound math expressions (cos/sin/sqrt combined) were reported ~3x slower than the equivalent scalar std:: code on AVX2 over 1e8 elements (issue #880, open, unconfirmed by maintainers) — benchmark your actual expression before assuming a win",
+    "Pinning an explicit Arch template parameter (e.g. batch<double, xsimd::avx2>) fails to compile on hardware lacking that ISA; leave Arch unset to auto-select based on compiler flags for portability",
+    "Caller owns tail-loop correctness: batch operations only cover size - (size % simd_size) elements"
+  ],
+  "pick_this_over_siblings_when": "no siblings catalogued yet",
+  "verified_claims_summary": "No numeric benchmark is published anywhere in the repo, docs, or README. The repo's benchmark/ directory (main.cpp, xsimd_benchmark.hpp) is a Google-Benchmark-style harness that times scalar loops against xsimd batches, but no results are committed or published, so 'faster than scalar/std::transform' is an unverified qualitative claim, not a measured number against any specific compiler, flag set, or hardware.",
+  "status_note": "Actively maintained (last commit 2026-09-22; 2.8k stars; used by Firefox, Apache Arrow, Pandas, KDE Krita, Meta Velox, Milvus, and Pythran); BSD-3-Clause and header-only, so it is trivial and low-risk to vendor even without ongoing upstream engagement.",
+  "sources_read": [
+    "https://github.com/xtensor-stack/xsimd",
+    "https://github.com/xtensor-stack/xsimd/blob/master/docs/source/build_options.rst",
+    "https://github.com/xtensor-stack/xsimd/blob/master/docs/source/vectorized_code.rst",
+    "https://github.com/xtensor-stack/xsimd/issues/625",
+    "https://github.com/xtensor-stack/xsimd/issues/1009",
+    "https://github.com/xtensor-stack/xsimd/issues/1264",
+    "https://github.com/xtensor-stack/xsimd/issues/880"
+  ],
+  "confidence": 0.72
+}

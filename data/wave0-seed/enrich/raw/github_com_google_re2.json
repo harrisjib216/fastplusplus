@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/google/re2",
+  "one_liner": "Linear-time, non-backtracking C++ regex engine beating classic PCRE on untrusted input; loses to PCRE2 JIT and Hyperscan.",
+  "what_it_does": "RE2 is a C++ regular expression library with FullMatch/PartialMatch matching plus submatch extraction into std::string/absl::string_view/int, built around a Perl/POSIX-like syntax subset that excludes backreferences and lookaround so every match is guaranteed linear in input length. It is not a drop-in for PCRE: the API (RE2::FullMatch, RE2 objects, RE2::Options) and output types (StringPiece/absl::string_view instead of pcre_exec's ovector) differ, and some patterns will need rewriting. The official Python wrapper ships as google-re2 on PyPI; many other languages have unofficial third-party wrappers.",
+  "how_it_is_fast": "RE2 compiles a pattern to an automaton and executes it with Thompson-NFA/lazy-DFA style simulation that evaluates all alternatives in parallel instead of backtracking, so match time is asymptotically linear in input length regardless of pattern shape, and there is no catastrophic-backtracking worst case like non-JIT PCRE. It uses no SIMD and no JIT compiler of its own — maintainers closed a request (issue #383) to add x86 SIMD to close the gap with Hyperscan — which is exactly why it loses to PCRE2's JIT and to Hyperscan in the cited benchmark.",
+  "when_to_use": [
+    "Untrusted or user-supplied regex patterns/input where guaranteed linear-time matching (no ReDoS/catastrophic backtracking) is a security requirement.",
+    "Serial single-regex matching against classic non-JIT PCRE as the baseline: measured ~3.9x (Talos) and ~2.7x (ET-Open) faster on the NSDI'19 HTTP-traffic benchmark.",
+    "C++17+ codebases already depending on Abseil that want a mature (production at Google since 2006), widely used (9.8k stars) engine.",
+    "Need safe submatch extraction on adversarial input without recursion/stack-overflow risk.",
+    "std::regex is the actual baseline: third-party WG21 paper P1433R0 found RE2 roughly 9x-160x faster than libstdc++/libc++ std::regex on a 1.3GB CSV scan."
+  ],
+  "when_not_to_use": [
+    "Need backreferences or lookaround assertions — unsupported by design; a 'bounded lookaround' implementation (issue #585, open since Feb 2026) is only a proof of concept, not merged.",
+    "Raw single-regex throughput matters more than backtracking safety and PCRE2 JIT or Hyperscan is available — RE2 lost to PCRE2 10.32 JIT (1777s vs 394s Talos; 4696s vs 913s ET-Open) and to Hyperscan by 9-10x in the same paper.",
+    "Extracting many capturing groups per match on a hot path — GitHub issue #204 reports captures making RE2 ~10x slower than non-capturing matches, ending up slower than PCRE with captures on.",
+    "Need a PCRE-compatible API/syntax for a true drop-in migration — RE2 requires rewriting call sites and possibly patterns.",
+    "Unicode-heavy patterns where compile time matters — issue #46 reports Unicode regex compilation is noticeably slower; RE2 also does no Unicode normalization itself."
+  ],
+  "integration": {
+    "form": "static lib (also buildable as shared lib via CMake/Bazel, or vendored as source via CMake add_subdirectory)",
+    "dependencies": "Abseil (required); optional ICU for extended \\p/\\P Unicode properties (RE2_USE_ICU); GoogleTest + Benchmark needed only to build tests/benchmarks",
+    "min_toolchain": "C++17; build via GNU make, CMake, or Bazel (Bazelisk); Visual Studio 2019+ on Windows",
+    "platforms": "any — Linux, macOS, Windows (VS2019+, MinGW, Cygwin/MSYS); no SIMD or specific-arch requirement documented",
+    "thread_safety": "RE2 objects are documented thread-safe and logically immutable once constructed ('safe for concurrent use by multiple threads', re2.h); LazyRE2 is provided for careful lazy static initialization across threads.",
+    "drop_in_for_baseline": "partial — explain: RE2::FullMatch/PartialMatch and StringPiece/absl::string_view outputs replace PCRE's pcre_exec/ovector, and the syntax subset drops backreferences and lookaround, so call sites and possibly patterns must be rewritten."
+  },
+  "gotchas": [
+    "Capturing submatches is expensive: issue #204 measured captures making RE2 ~10x slower than non-capturing matches (2800ns vs 250ns in that benchmark), ending up slower than PCRE with captures enabled.",
+    "No SIMD or JIT of its own, so throughput on modern hardware trails PCRE2 JIT and Hyperscan; maintainers closed a request to add x86 SIMD (issue #383).",
+    "Backreferences and lookaround are unsupported by design; 'bounded lookaround' (issue #585) is an open proof-of-concept, not shipped.",
+    "No Unicode normalization: a codepoint form and a combining-character form of the 'same' character won't match unless normalized before use (README)."
+  ],
+  "pick_this_over_siblings_when": "Pick RE2 over CTRE when the pattern is runtime-supplied or untrusted (user input, config-driven regexes) rather than known at compile time, or when the toolchain is C++17 without C++20; CTRE beats std::regex by ~10x-125x via compile-time NFA generation but requires the pattern to be a compile-time constant, which RE2 does not.",
+  "verified_claims_summary": "Third-party NSDI'19 Hyperscan paper (Xeon Platinum 8180, single core, GCC 5.4): RE2 serial mode beat JIT-enabled PCRE 8.41 by ~3.9x on Talos (6942s->1777s) and ~2.7x on ET-Open (12800s->4696s), but lost to JIT-enabled PCRE2 10.32 (1777s vs 394s; 4696s vs 913s) and to Hyperscan by ~9-10x; separately, WG21 paper P1433R0 found RE2 far faster than libstdc++/libc++ std::regex on a 1.3GB CSV scan, though with no hardware/flags stated.",
+  "status_note": "Actively maintained (last commit 2026-01-22, not archived or a fork), BSD-3-Clause, used in Google production since 2006; not header-only but the source is small and copyable/vendorable via CMake add_subdirectory.",
+  "sources_read": [
+    "https://github.com/google/re2",
+    "https://github.com/google/re2/blob/main/re2/re2.h",
+    "https://github.com/google/re2/issues/383",
+    "https://github.com/google/re2/issues/204",
+    "https://github.com/google/re2/blob/main/SECURITY.md",
+    "https://github.com/google/re2/issues/585"
+  ],
+  "confidence": 0.6
+}

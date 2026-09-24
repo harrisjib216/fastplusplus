@@ -26,7 +26,7 @@ def bullets(items):
 
 def render_entry(e, x, with_integration):
     lines = [
-        f"#### {e['name']}  `{e['language']}`  `{e['license'] or 'no license'}`  `{e['maintenance_status']}`  `Tier {e['evidence_tier']}`",
+        f"##### {e['name']}  `{e['language']}`  `{e['license'] or 'no license'}`  `{e['maintenance_status']}`  `Tier {e['evidence_tier']}`",
         x["one_liner"],
         f"**Beats:** {e['baseline']} — {x['verified_claims_summary']}",
         f"**How:** {x['how_it_is_fast']}",
@@ -46,15 +46,17 @@ def render_entry(e, x, with_integration):
     return "\n\n".join(lines)
 
 
-def section(title, entries, enrich, with_integration, level="##"):
-    out = [f"{level} {title}"]
-    by_cat = defaultdict(list)
+def section(title, entries, enrich, with_integration):
+    out = [f"## {title}"]
+    grouped = defaultdict(lambda: defaultdict(list))
     for e in entries:
-        by_cat[e["category"]].append(e)
-    for cat in sorted(by_cat):
-        out.append(f"{level}# {cat}")
-        for e in sorted(by_cat[cat], key=lambda e: (TIER_RANK[e["evidence_tier"]], e["name"].lower())):
-            out.append(render_entry(e, enrich[e["id"]], with_integration))
+        grouped[e["domain"]][e["category"]].append(e)
+    for domain in sorted(grouped):
+        out.append(f"### {domain}")
+        for cat in sorted(grouped[domain]):
+            out.append(f"#### {cat}")
+            for e in sorted(grouped[domain][cat], key=lambda e: (TIER_RANK[e["evidence_tier"]], e["name"].lower())):
+                out.append(render_entry(e, enrich[e["id"]], with_integration))
     return out
 
 

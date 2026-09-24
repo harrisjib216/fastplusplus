@@ -1,0 +1,47 @@
+{
+  "id": "https://github.com/alcover/buffet",
+  "one_liner": "C buffer type with SSO and refcounted views beating std::string on append, but not on plain memcopy or views.",
+  "what_it_does": "Buffet is a 24-byte tagged-union buffer type for C, filling the role std::string/string_view play in C++: it embeds small strings inline (SSO), and offers reference-counted no-copy 'views' (slices) into either an SSO or a heap-backed store. The API is C, not object-oriented: bft_memcopy/bft_view/bft_append/bft_split/bft_join create and mutate Buffets, and bft_free must be called explicitly (no RAII).",
+  "how_it_is_fast": "Small strings (<=21 bytes on 64-bit) live inline in the union, avoiding heap allocation and the pointer chase std::string sometimes needs. Substring 'views' (VUE/SSV/OWN-shared tags) alias the original data with a bumped refcount instead of copying, so split() returns a list of views rather than N allocated+copied strings, and join() writes them into one new store instead of many intermediate concatenations - this is what drives the SPLITJOIN number down. Appends resize via the same tagged-union/store machinery with -O2 codegen, giving a modest edge over std::string's growth strategy at some size pairs.",
+  "when_to_use": [
+    "Pure-C codebases that want std::string-like ergonomics (SSO, no-copy slicing) without pulling in C++",
+    "Split/join-heavy workloads on many small-to-medium substrings, where view aliasing avoids per-substring allocation",
+    "Incremental string building in roughly the 8-32 byte init/append range, matching the one workload buffet actually beats std::string on",
+    "Short strings (<=21 bytes) where SSO avoids heap allocation entirely",
+    "GPL-3.0 licensing is acceptable for the project"
+  ],
+  "when_not_to_use": [
+    "Proprietary/closed-source code - GPL-3.0 requires the whole linked work to be GPL-compatible",
+    "Multithreaded sharing of a Buffet or its views - README lists thread safety as a TODO; refcounts are plain, non-atomic",
+    "Read-only scanning/viewing of existing memory - std::string_view beats buffet's view construction by ~10x (0.609 vs 6.36 ns) in the repo's own bench",
+    "Plain memcopy of buffers 32 bytes and up - raw C malloc+memcpy beats buffet at every size from 32 to 8192 bytes in the bench; buffet only wins at 8 bytes",
+    "Anything needing C++ ergonomics (operators, RAII) or long-term maintenance guarantees - C API only, manual bft_free, no commits since Nov 2023, and the author calls the lib 'not much optimized' and the bench 'maybe amateurish'"
+  ],
+  "integration": {
+    "form": "static lib (source-drop friendly: single buffet.c/buffet.h pair, `make` builds bin/libbuffet.a)",
+    "dependencies": "none for the library; Google Benchmark (libbenchmark-dev) only to build the optional bench target",
+    "min_toolchain": "C11 for the library (gcc -std=c11); usable from C++ via the built-in extern \"C\" guard. Building the bundled benchmark harness needs C++20 (g++ -std=c++2a -fpermissive)",
+    "platforms": "not explicitly documented; the tagged-union layout is asserted at compile time for 64-bit size_t/pointers, and the README's own TODO list includes '\"test 32-bit and small RAM\"', i.e. 32-bit is unverified",
+    "thread_safety": "not thread-safe. README lists \"Todo: thread safety\" up front; refcounts on SSO/store headers are plain integers, not atomics. Repo has an unbuilt-by-default src/threadtest.c",
+    "drop_in_for_baseline": "false - C function-call API (bft_*), not operator-overloaded, requires explicit bft_free; no RAII or STL-container compatibility"
+  },
+  "gotchas": [
+    "Never alias a Buffet with plain `=`; refcounts get corrupted. Use bft_dup() instead - README calls this out explicitly.",
+    "Appending to an SSO Buffet that has live views can fail (returns 0) rather than growing, because growth would invalidate the views; release views first.",
+    "Freeing the last view of a shared OWN store frees the underlying memory - any remaining un-bft_dup'd alias becomes a dangling pointer (README's own Security section shows this failure case).",
+    "MEMCHECK/DEBUG guards that catch aliasing/double-free bugs are opt-in (`MEMCHECK=1 make` / `DEBUG=1 make`), not default."
+  ],
+  "pick_this_over_siblings_when": "Pick buffet over the C++-only siblings (FastString, fstring, Str, zuu_string_view, jank persistent_string, to_static_string) specifically when the codebase is plain C and needs reference-counted no-copy slicing for split/join-heavy string work; none of the other catalogued entries offer a C API. For pure view/scan-heavy work or C++ projects, prefer std::string_view or zuu_string_view instead, since buffet's own bench shows it losing to string_view by ~10x on plain views.",
+  "verified_claims_summary": "On an unnamed \"weak Core i3\" (no CPU model given), Google Benchmark via g++ -std=c++2a -O2 against libstdc++: buffet's append beats real std::string (built with operator+=) by ~1.2-1.7x at 8/16, 24/4 and 24/32 init/append byte sizes, but loses at 8/4 (16.3 vs 10.9 ns). The headline SPLITJOIN figure (1397ns vs 3317ns) is not a std::string comparison - src/bench.cpp's SPLITJOIN_cpp splits into vector<string_view> and joins into a malloc'd char*, bypassing std::string entirely. std::string_view beats buffet's view construction by ~10x, and plain C memcpy beats buffet's memcopy at every size from 32 to 8192 bytes.",
+  "status_note": "Stale: no commits since 2023-11-16 and the author's own README calls the library 'not much optimized' and the bench 'maybe amateurish'. Small enough to vendor as a single .c/.h pair, but GPL-3.0 blocks embedding in proprietary code.",
+  "sources_read": [
+    "https://github.com/alcover/buffet",
+    "https://github.com/alcover/buffet/blob/main/README.md",
+    "https://github.com/alcover/buffet/blob/main/Makefile",
+    "https://github.com/alcover/buffet/blob/main/src/buffet.h",
+    "https://github.com/alcover/buffet/blob/main/src/bench.cpp",
+    "https://github.com/alcover/buffet (repo metadata: license, archived status, pushed_at, open issues via gh api)",
+    "https://github.com/alcover/buffet/issues (gh search issues, 2 closed, unrelated to performance/bugs)"
+  ],
+  "confidence": 0.55
+}

@@ -1,0 +1,42 @@
+{
+  "id": "https://github.com/gorddev/fstring",
+  "one_liner": "Stack-allocated fixed-capacity string using std::to_chars for numeric formatting; unverified 2-3x claim vs std::string.",
+  "what_it_does": "fstring<C> is a templated, stack-allocated, fixed-capacity string type with a `<<` piping operator for appending strings, integers, floats, bools, and pointers. str_view type-erases the capacity template parameter so a function can accept any fstring<C> by calling .wrap(). It is not a drop-in std::string replacement: capacity is fixed at compile time (max 65533 chars) and the API centers on `<<` and wrap()/str_view rather than assignment, append(), or substring methods.",
+  "how_it_is_fast": "Numeric conversions (int, float, hex pointer) go through std::to_chars written directly into the fixed stack buffer, skipping sprintf/iostream formatting overhead. There is no heap allocation and no dynamic capacity growth; appends are raw memcpy/pointer-arithmetic into a preallocated char array sized C+1 at compile time. Bounds/overflow checks call a `*_throw_err` helper whose `throw std::runtime_error(err)` statement is commented out in the shipped header, so failed-check paths add effectively no cost (and also report nothing).",
+  "when_to_use": [
+    "Fixed, known-at-compile-time max string length, e.g. per-frame HUD/debug text buffers refreshed repeatedly",
+    "WASM or embedded targets where heap allocation/fragmentation must be avoided",
+    "Hot paths formatting int/float/pointer to text where std::to_chars-level speed matters more than a general-purpose string API",
+    "Code that can adopt the `<<` piping interface and pass buffers across functions via str_view instead of std::string&"
+  ],
+  "when_not_to_use": [
+    "Max string length is unknown or varies at runtime beyond a compile-time bound",
+    "You need reported bounds/overflow errors: the throw statements are commented out, so overflow/out-of-range access is silently swallowed, not observable",
+    "Anything safety- or correctness-critical: reading the header found two real bugs (an out-of-bounds write and an off-by-one append), with no tests, CI, or benchmark harness to catch them",
+    "You need an actively maintained dependency: all 3 commits landed on 2026-05-14, 0 stars, no issues, nothing since",
+    "You need the '2-3x faster' claim substantiated before adopting: no benchmark code, numbers table, compiler/flags, or hardware are published"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (STL only: <concepts>, <cstring>, <algorithm>, <stdexcept>, <charconv>)",
+    "min_toolchain": "C++20 (uses concepts and requires-clauses); float append needs a standard library with a working floating-point std::to_chars overload (not stated by author)",
+    "platforms": "not documented; source is portable standard C++ with no platform-specific code; README calls out WASM as a target use case",
+    "thread_safety": "not documented; len/arr are plain unsynchronized members, no atomics or locks in source",
+    "drop_in_for_baseline": "false — templated fixed capacity, `<<`-piping API, and wrap()/str_view type erasure instead of std::string's dynamic assignment/append interface"
+  },
+  "gotchas": [
+    "fstring<C>::operator<<(precision<P>) writes `arr[C + 1] = P`, but arr is declared `char arr[C + 1]` (valid indices 0..C) — this is an out-of-bounds write on every use of the precision manipulator on an fstring (not on str_view, whose precision member is a separate field)",
+    "fstring<C>::operator<<(const char (&str)[N]) computes `bytes = min(N, C - len)`, omitting the `-1` that the equivalent str_view overload correctly applies — it copies the literal's null terminator as if it were a character and advances len past it, corrupting the length count",
+    "Overflow/bounds checks (`fstring_throw_err`, `fstr_view_throw_err`) never actually throw — the `throw` line is commented out in the shipped header, so the README's 'prevents overflow' claim degrades to silent truncation/no-op rather than a reported error",
+    "Every fstring<C> instance always occupies C+1 bytes on the stack regardless of current length — no small-buffer/move optimization, so large declared capacities are paid for even when the string in use is short"
+  ],
+  "pick_this_over_siblings_when": "Only if you specifically want the fixed-capacity `<<`-piping/wrap() API and accept an unverified claim from a single-day, 0-star, no-CI repo; for anything where the speedup needs to be trusted, prefer to_static_string or FastString, both of which have published before/after numbers for to_string-style and construction/append operations respectively.",
+  "verified_claims_summary": "The only measurement is the README's own prose: 'around 2x - 3x faster for writing and conversion' than std::string, with no operation counts, benchmark code, compiler/flags, or hardware given, so the ratio cannot be independently checked.",
+  "status_note": "maintenance_status is recorded as active, but all 3 commits date to 2026-05-14 with nothing since (as of 2026-09-24), 0 stars, 0 issues, and no CI; MIT-licensed as a single header (fstring.hpp), so it is trivial to vendor and audit yourself.",
+  "sources_read": [
+    "https://github.com/gorddev/fstring",
+    "https://github.com/gorddev/fstring/blob/main/README.md",
+    "https://github.com/gorddev/fstring/blob/main/fstring.hpp"
+  ],
+  "confidence": 0.2
+}

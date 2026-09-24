@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/electronicarts/EASTL",
+  "one_liner": "EA's from-scratch STL reimplementation for games; eastl::vector targets faster push_back/indexing than std::vector.",
+  "what_it_does": "EASTL reimplements STL containers, iterators, and algorithms (vector, deque, list, hash_map, etc.) for game runtimes and tools, plus extras std doesn't have, like fixed_* (stack-allocated, no heap alloc) and intrusive_* containers. eastl::vector exposes the same template shape and most member functions as std::vector, so most call sites port with a namespace swap. The allocator interface, exception-handling toggle, and a few semantics (e.g. operator= doesn't copy the allocator) diverge from the standard, so it is not a byte-for-byte drop-in.",
+  "how_it_is_fast": "EASTL avoids the deep, virtual-free but call-heavy chains that make debug-build STL slow, so its win is largest in unoptimized builds and on weak historical STL implementations (MSVC VC7/VC8, console STL). For trivially-copyable element types it uses memcpy/memmove during vector reallocation instead of invoking copy/move constructors per element (documented in doc/Gotchas.md). It also guarantees no allocation for a newly-constructed empty container and supports fully disabling exception handling, removing that overhead from the container/allocator path.",
+  "when_to_use": [
+    "Game/console codebases where debug (unoptimized) container performance matters and you can standardize on one non-standard container library across all target platforms",
+    "Workloads dominated by push_back/reallocation of trivially-copyable structs, where the memcpy/memmove optimization applies",
+    "You also want fixed_vector/intrusive_list-style zero-allocation containers alongside vector, not just a faster vector",
+    "Targeting older or console toolchains (VC7/VC8-era, GCC 3.x+) where std STL implementations were measurably weak",
+    "You're comfortable vendoring a large source-drop plus its EABase dependency rather than a single header"
+  ],
+  "when_not_to_use": [
+    "You need a literal drop-in for std::vector with zero porting cost: allocator model, exception semantics, and operator= behavior differ",
+    "You're on an EASTL release older than 3.27.00 (Oct 2025): eastl::vector::push_back(v.back()) (self-referential push_back) silently corrupted data on reallocation (issue #524), fixed only in that release",
+    "Concurrent writers without your own locking: EASTL containers are not thread-safe for mutation from multiple threads, same as std::vector",
+    "You need certainty of a speedup on current hardware: the only public numbers are a first-party 2007 WG21 paper (evidence tier C) on Pentium 4/PowerPC-era hardware and compilers; libstdc++ push_back gain was only 1.02x and eastl::sort was 0.92x (slower) than std::sort on libstdc++",
+    "Sort-heavy workloads on libstdc++-class standard libraries, where the same paper showed EASTL losing to std::sort"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "EABase (EA's base config/type-traits header library; CMakeLists.txt fetches it via FetchContent)",
+    "min_toolchain": "C++14 per CMakeLists.txt (target_compile_features cxx_std_14), but include/EASTL/vector.h currently uses unguarded `if constexpr`, which warns/fails below C++17 (open issue #587) -- C++17 recommended in practice",
+    "platforms": "any C++14+ compiler, 32-bit and 64-bit; no OS-specific code path required, historically used across PC, console, and Mac/Linux toolchains",
+    "thread_safety": "Not thread-safe for concurrent mutation of the same container instance; per doc/FAQ.md, EASTL uses no static/global state and leaves synchronization (e.g. a mutex) to the caller, same model as std::vector",
+    "drop_in_for_baseline": "partial -- explain: same template surface and most member functions as std::vector, but allocator interface, exception-handling toggle, and operator=() (doesn't copy the allocator) differ from the standard"
+  },
+  "gotchas": [
+    "eastl::vector::push_back(v.back()) (self-referential push_back) silently corrupted data on reallocation before release 3.27.00 (Oct 2025) -- pin to >=3.27.00 (issue #524)",
+    "vector::operator=() does not copy the source container's allocator, unlike some std implementations",
+    "vector::size() is computed by pointer subtraction and can trigger an integer division when sizeof(T) isn't a power of two",
+    "Overriding the global allocator requires supplying EASTL's two custom operator new[] overloads, not a standard C++ allocator"
+  ],
+  "pick_this_over_siblings_when": "Pick eastl::vector when you want one consistent container ecosystem (fixed_*, intrusive_*, allocator model) across an entire codebase, especially on older/console toolchains, rather than swapping in a single faster vector type. For a narrowly-scoped, better-evidenced vector replacement alone, fast_vector or veque have more direct current benchmarks; plf::colony is the better pick if the workload is erase-heavy rather than push_back-heavy.",
+  "verified_claims_summary": "The only available measurement is a first-party 2007 EA/WG21 committee paper (N2271, evidence tier C) comparing eastl::vector<uint64> against std::vector: push_back was 1.63x faster on Windows/Pentium4/VC8, 2.18x on a 64-bit PowerPC console/VC7, 1.02x on Linux/Pentium4/GCC4.1/libstdc++, and 1.59x on Mac G5 PowerPC/GCC4.0/libstdc++; operator[] on Linux/libstdc++ was 1.29x faster; sort on Linux/libstdc++ was 0.92x (slower than std::sort).",
+  "status_note": "Actively maintained by EA (latest release 3.27.01, Nov 2025), BSD-3-Clause, 9,367 stars; usable via source-drop or CMake, but it's a large, non-trivial dependency (EABase plus a big header/source tree), not a lightweight vendor-in.",
+  "sources_read": [
+    "https://github.com/electronicarts/EASTL",
+    "https://github.com/electronicarts/EASTL/blob/master/doc/Introduction.md",
+    "https://github.com/electronicarts/EASTL/blob/master/doc/FAQ.md",
+    "https://github.com/electronicarts/EASTL/blob/master/CONTRIBUTING.md",
+    "https://github.com/electronicarts/EASTL/blob/master/CMakeLists.txt",
+    "https://github.com/electronicarts/EASTL/blob/master/doc/Gotchas.md",
+    "https://github.com/electronicarts/EASTL/issues/524",
+    "https://github.com/electronicarts/EASTL/issues/587",
+    "https://github.com/electronicarts/EASTL/releases"
+  ],
+  "confidence": 0.4
+}

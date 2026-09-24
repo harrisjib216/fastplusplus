@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/mattreecebentley/plf_bitsets",
+  "one_liner": "Header-only bitset beating std::bitset at ranged set/reset, shifts, and bit search, minus from-string constructors.",
+  "what_it_does": "plf::bitset is a header-only reimplementation of std::bitset: a fixed compile-time-sized bit array with the same test/set/reset/flip/count/any/all/none/operator[]/to_string/to_ulong surface. plf::bitsetb is a sibling type for when the size isn't known at compile time, either heap-allocating its own buffer or (with user_supplied_buffer=true) borrowing a caller-supplied block of memory. Both add set_range/reset_range, ranged any/all/none/count, first/last one/zero search helpers, and a noexcept XOR-based swap; neither implements the from-string or from-ulong/ullong constructors.",
+  "how_it_is_fast": "Same word-array layout as std::bitset (array of storage_type words), but set_range/reset_range write whole words with masks instead of looping bit-by-bit like std::bitset callers have to (std::bitset has no bulk range primitive at all, which is why that number is ~340x-676x rather than a small constant factor). Bit search (first/next/prev one or zero) uses compiler builtins directly (__builtin_ctz/_BitScanForward64, or std::countr_zero/std::popcount under C++20's <bit>) instead of a generic scan loop. No SIMD/AVX intrinsics are used in the header itself despite the AVX2 benchmark flag - the ~20-24% overall test-suite gain comes from tighter, more branch-light word-level code (e.g. compile-time-eliminated overflow-bit handling, template-gated bounds checks) rather than a different algorithm.",
+  "when_to_use": [
+    "Fixed-size bit flags where you already use std::bitset and don't rely on its from-string constructor",
+    "Workloads that set/clear/query contiguous ranges of bits (set_range/reset_range) instead of single bits in a loop",
+    "Need a runtime-sized or user-buffer-backed bitset (plf::bitsetb) - e.g. per-instance variable size, or placement over pre-allocated/arena memory",
+    "GCC or MSVC targets on x86-64, where the author's release numbers were actually measured (i7-9750H, O2/AVX2, C++23)",
+    "Want first/last-one/zero search or an allocation-free swap that std::bitset doesn't offer"
+  ],
+  "when_not_to_use": [
+    "Code that constructs std::bitset from a string or unsigned long/long long - those constructors aren't implemented here",
+    "Organizations that require an OSI-approved license - Computing For Good v1.01 is zlib-like but adds ethical-use restrictions (4a-4e) and is not OSI-approved",
+    "Clang/libc++ targets - the author states libc++ was not tested or benchmarked",
+    "Projects that need independently-reproduced numbers - all benchmark results are first-party (author's own page and repo), with 14 stars and no third-party reproduction found",
+    "Code paths hitting the four currently-open correctness issues (overflow-bit restoration, not-found sentinels - see gotchas) until they're resolved"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none beyond the C++ standard library (<cmath> <cassert> <string> <stdexcept> <limits> <ostream> <cstring> <algorithm>; <bit> under C++20; bitsetb also uses <memory> for allocator_type support)",
+    "min_toolchain": "C++11 minimum via feature-detection macros in plf_tools.h (supports back to MSVC 2015 / GCC 4-era compilers with reduced feature use); takes advantage of constexpr/consteval, if-constexpr, and <bit> under C++20/23 when the compiler and standard library support them. Author's benchmark used GCC 13.2 and MSVC 2022 with C++23.",
+    "platforms": "portable C++ - no architecture-specific intrinsics in the header (relies on portable __builtin_ctz/_BitScanForward64/std::countr_zero paths per compiler). AVX2 in the benchmark build is a codegen flag only, not a hard requirement.",
+    "thread_safety": "not documented - no mention in the README or headers; assume the same as std::bitset (no internal synchronization, concurrent writes to one instance are unsafe)",
+    "drop_in_for_baseline": "partial — explain: same core operation set and semantics as std::bitset (test/set/reset/flip/any/all/none/count/operator[]/to_string/to_ulong), but the from-string and from-ulong/ullong constructors are missing, and the template signature adds a storage_type and a hardened (bounds-checking) parameter not present on std::bitset."
+  },
+  "gotchas": [
+    "Four issues are open on the repo (#3, #4, #5 filed against overflow-bit restoration in set_overflow_to_one, all_range's empty-range path, and next/prev_zero's not-found path; #6 requests a proper not-found sentinel for the search functions) - check these before relying on exact behavior at bitset-size edges",
+    "from-string / from-ulong / from-ullong constructors aren't implemented - existing std::bitset(str) call sites need to be rewritten, not just retyped",
+    "The third template parameter (hardened, default false) controls bounds checking; with it left at default, operator[] is unchecked like std::bitset's, while test() still throws - read the header if you rely on a specific check point",
+    "License is Computing For Good v1.01, not a standard permissive license - clauses 4a-4e restrict use by field/purpose, which needs a legal read some organizations won't accept"
+  ],
+  "pick_this_over_siblings_when": "Pick plf::bitset over CRoaring, pasta::bit_vector, better_bitset, BitLib, and sul::dynamic_bitset when you specifically want std::bitset's fixed-size, non-succinct, no-rank/select shape (not a compressed/sparse structure like CRoaring, not a rank/select index like pasta::bit_vector) but need faster ranged set/reset or shifts than std::bitset provides; use plf::bitsetb instead of BitLib or sul::dynamic_bitset when you want that same std::bitset-shaped API with a runtime-determined size or a user-supplied buffer rather than a vector<bool>-style resizable container.",
+  "verified_claims_summary": "First-party benchmark (plflib.org/bitsets.htm, author's own numbers, methodology and code published) on an Intel i7-9750H under Windows 10, GCC 13.2 (libstdc++) and MSVC 2022 (MSVC STL), O2/AVX2/C++23 release build: plf::bitset beat std::bitset by 24%/20% overall on a full-operation test-suite loop, ~101%/98% (GCC) and 35%/22% (MSVC) on left/right shift, and 34,652%/67,612% on set_range/reset_range across 10,000 random ranges of a 128,000-bit bitset - the last figure mostly reflects that std::bitset has no bulk range-set primitive at all rather than a raw constant-factor win.",
+  "status_note": "Actively maintained (last commit 2026-09-19, four open bug-tracking issues under active triage); usability is marked 'reference' rather than drop-in because the non-OSI Computing For Good v1.01 license's ethical-use clauses (4a-4e) call for a legal review before production adoption at most companies.",
+  "sources_read": [
+    "https://github.com/mattreecebentley/plf_bitsets",
+    "https://github.com/mattreecebentley/plf_bitsets/blob/main/README.md",
+    "https://github.com/mattreecebentley/plf_bitsets/blob/main/plf_bitset.h",
+    "https://github.com/mattreecebentley/plf_bitsets/blob/main/plf_bitsetb.h",
+    "https://github.com/mattreecebentley/plf_bitsets/blob/main/plf_tools.h",
+    "https://github.com/mattreecebentley/plf_bitsets/blob/main/LICENSE",
+    "https://github.com/mattreecebentley/plf_bitsets/issues",
+    "https://plflib.org/bitsets.htm"
+  ],
+  "confidence": 0.85
+}

@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/cksystemsgroup/scalloc",
+  "one_liner": "Multicore-scalable, low-fragmentation malloc replacement beating ptmalloc2; drop-in via LD_PRELOAD, rewritten since its OOPSLA'15 paper.",
+  "what_it_does": "A multicore-scalable, low-fragmentation malloc/free (and operator new/delete) replacement for C/C++ programs. It targets the classic allocator tradeoff between temporal and spatial performance under concurrent allocation. There is no new API: it is loaded via LD_PRELOAD (Linux) or DYLD_INSERT_LIBRARIES (OSX) to transparently replace the process's default allocator.",
+  "how_it_is_fast": "Uses 'virtual spans' (2MiB-aligned regions, kVirtualSpanShift=21) to treat small and large objects uniformly instead of separate size-class machinery. Per-thread local allocation buffers (LABs) handle the fast path, while a scalable global span pool reclaims and redistributes spans across cores. Allocation/deallocation are constant-time modulo synchronization, trading memory reuse against spatial locality to avoid false sharing.",
+  "when_to_use": [
+    "Multithreaded, allocation-heavy C/C++ workloads on Linux or OSX x86 where you want a drop-in swap without recompiling (LD_PRELOAD/DYLD_INSERT_LIBRARIES)",
+    "Producer-consumer or varying-object-size workloads whose object sizes fit within 2MiB virtual spans",
+    "You can tune the environment (overcommit accounting, transparent huge pages) for correct/best behavior",
+    "Memory footprint under concurrency matters as much as raw throughput (paper claims lower memory than TBB at comparable/better speed)",
+    "You're willing to re-benchmark on current hardware and current allocator code rather than trust the 2015 numbers"
+  ],
+  "when_not_to_use": [
+    "Windows: unsupported (override.h explicitly #errors on non-Linux/non-Apple)",
+    "Build is gyp-based and broken on modern Python (open, unanswered GitHub issue #1, 'Switch to a supported build system')",
+    "Single-threaded throughput vs ptmalloc2 is the goal: the paper's own numbers put scalloc mid-pack (~1.28x), behind TCMalloc/llalloc/TBB/SuperMalloc",
+    "Address-space-constrained or containerized environments: reserves up to 32TB of virtual space per arena, which can hit mmap/overcommit limits",
+    "Project is stale with a single unresolved open issue; README itself says the allocator was 'completely rewritten from scratch' since the benchmarked paper version, so published speedup numbers may not reflect current code"
+  ],
+  "integration": {
+    "form": "shared lib (built with gyp+make; loaded via LD_PRELOAD/DYLD_INSERT_LIBRARIES)",
+    "dependencies": "gyp (build-time only, fetched via tools/make_deps.sh); no runtime dependencies documented",
+    "min_toolchain": "not documented (no C++ standard stated); build needs Python for gyp, which is currently broken per open issue #1",
+    "platforms": "Linux and OSX (>10.6); README's design assumes 64-bit address space; no Windows (override.h errors on any other OS)",
+    "thread_safety": "core design goal is safe concurrent/multicore allocation; no separate documented thread-safety contract beyond that",
+    "drop_in_for_baseline": true
+  },
+  "gotchas": [
+    "gyp build is broken on modern Python versions; open issue #1 (filed 2025-06-02) is unresolved",
+    "Needs vm.overcommit_memory=1 and transparent huge pages disabled on Linux for correct/best operation",
+    "Reserves up to 32TB of virtual address space per arena; relies on on-demand paging/madvise to keep physical memory low",
+    "OSX preload needs DYLD_FORCE_FLAT_NAMESPACE=1 in addition to DYLD_INSERT_LIBRARIES"
+  ],
+  "pick_this_over_siblings_when": "Pick scalloc over SuperMalloc/NUMAlloc/Hoard only when you specifically want its virtual-span design for producer-consumer or mixed-size multithreaded workloads with lower memory use than TBB; for single-threaded throughput vs ptmalloc2, SuperMalloc and TCMalloc beat scalloc in its own paper's numbers, and SuperMalloc/NUMAlloc have more recent or broader comparative benchmarks.",
+  "verified_claims_summary": "The OOPSLA'15 paper (arXiv v2, Aug 2015) reports scalloc at roughly a 1.28x SPEC ratio vs ptmalloc2 on single-threaded SPEC CPU2006 483.xalancbmk (read off a Figure 5 bar, no printed number, no compiler/flags stated), measured on 4x 10-core Xeon E7-4850 with 128GB RAM; it separately claims scalloc beats TBB's average multithreaded throughput while using less memory across threadtest/shbench/larson/ACDC.",
+  "status_note": "maintenance_status is stale and the BSD-2-Clause license makes it easy to vendor, but the gyp build is broken on current Python (open issue #1, unresolved) and the README itself says to re-benchmark since a full rewrite post-paper.",
+  "sources_read": [
+    "https://github.com/cksystemsgroup/scalloc",
+    "https://github.com/cksystemsgroup/scalloc/blob/master/README.md",
+    "https://github.com/cksystemsgroup/scalloc/blob/master/LICENSE",
+    "https://github.com/cksystemsgroup/scalloc/blob/master/src/glue.cc",
+    "https://github.com/cksystemsgroup/scalloc/blob/master/src/globals.h",
+    "https://github.com/cksystemsgroup/scalloc/blob/master/src/platform/globals.h",
+    "https://github.com/cksystemsgroup/scalloc/blob/master/src/platform/override.h",
+    "https://github.com/cksystemsgroup/scalloc/issues/1"
+  ],
+  "confidence": 0.7
+}

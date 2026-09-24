@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/fastfloat/fast_float",
+  "one_liner": "Header-only C++ from_chars for float/double/int; 3-5x faster than glibc strtod, exact IEEE rounding.",
+  "what_it_does": "Parses ASCII decimal strings into float, double, and integer types with exact, correctly-rounded IEEE-754 results, mirroring the C++17 std::from_chars signature while only requiring C++11. It is largely drop-in for strtod/std::from_chars call sites: from_chars(first, last, value, fmt) returns a from_chars_result{ptr, ec}, never throws, and never allocates. A separate from_chars_advanced entry point adds locale-style decimal separators, JSON/JavaScript/Fortran number-format modes, and UTF-16/UTF-32 input.",
+  "how_it_is_fast": "Uses the Eisel-Lemire algorithm (named directly in a comment in include/fast_float/parse_number.h): a fast path that combines the decimal significand with precomputed power-of-five tables to compute the correctly-rounded binary value from one or two 64-bit multiplications (compute_product_approximation in decimal_to_binary.h). When that approximation cannot be proven correct, which is rare, it falls back to exact big-integer digit comparison (bigint.h / digit_comparison.h) instead of a slow generic parser, so the common case stays branch-light and allocation-free.",
+  "when_to_use": [
+    "Parsing large volumes of floats/doubles from text (JSON, CSV, scientific/columnar data) where strtod or std::from_chars throughput is a bottleneck",
+    "Header-only C++11+ codebases that want a from_chars-shaped API without adding a build dependency",
+    "Need locale-independent, correctly-rounded parsing with round-to-even tie-breaking",
+    "Need JSON, JavaScript-literal, or Fortran-literal number grammars without hand-rolling the format checks",
+    "Compile-time (constexpr) float parsing in C++20"
+  ],
+  "when_not_to_use": [
+    "Need long double parsing - unsupported; only float, double, and fixed-width float16/32/64/bfloat16 are covered",
+    "Need hexadecimal floating-point literals - decimal format only",
+    "Building with -ffast-math: infinity()/NaN handling is documented-incompatible in open issue #397 (unresolved as of 2026-09-24)",
+    "Only parsing a handful of floats and every byte of compile time / include overhead matters, since it is a template-heavy header-only include vs. a plain libc call",
+    "Want locale-aware parsing out of the box - the default from_chars is locale-independent; locale behavior requires the separate from_chars_advanced API"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none",
+    "min_toolchain": "C++11 for the core library (CMakeLists.txt sets FASTFLOAT_CXX_STANDARD 11 by default); C++20 needed for constexpr parsing; CMake 3.14+ for the build/install targets",
+    "platforms": "Windows/MSVC, macOS, Linux, FreeBSD per README; supports big- and little-endian, 32-bit and 64-bit systems; CI also exercises ARM, RISC-V, and s390x (big-endian)",
+    "thread_safety": "not documented explicitly, but from_chars/from_chars_advanced are stateless, non-throwing, and non-allocating (per README), with no shared mutable state, so concurrent calls on independent buffers are safe",
+    "drop_in_for_baseline": "partial - explain: call shape tracks C++17 std::from_chars (same argument order, chars_format enum), but the result is returned via from_chars_result{ptr, ec} rather than strtod's return-value+errno+endptr convention, so strtod call sites need updating, not just relinking"
+  },
+  "gotchas": [
+    "-ffast-math builds break infinity/NaN handling (open issue #397 as of 2026-09-24; no fix merged yet)",
+    "Locale-dependent decimal separators (e.g. comma) require the separate from_chars_advanced + parse_options call, not the default from_chars",
+    "chars_format::json rejects bare inf/nan by default; use the non-standard json_or_infnan variant to allow them",
+    "v8.2.0 had a big-endian regression on s390x (issue #354, closed/fixed) - use a current release rather than pinning that tag if targeting big-endian"
+  ],
+  "pick_this_over_siblings_when": "fast_float parses text to binary (beats strtod/std::from_chars); Dragonbox, Ryu, and {fmt} format binary to text (beat sprintf/std::to_chars) - they solve the opposite problem, so pick fast_float for the parsing side of a pipeline and pair it with one of those for the formatting side rather than treating them as substitutes.",
+  "verified_claims_summary": "Peer-reviewed benchmark (Lemire, Software: Practice and Experience 51(8), 2021) measured fast_float::from_chars against glibc strtod, single-threaded, GCC 10.2 -O3 -DNDEBUG, on an Intel Skylake i7-6700: 45 Mfloat/s vs 9.0 Mfloat/s (5x) on the 111k-line 'canada' JSON coordinate corpus (Table 9); comparable 3-5x wins held on AMD Zen2, ARM Ampere, and IBM POWER9 CPUs, and against MSVC STL's std::from_chars on an Intel i7-7700K (Table 13).",
+  "status_note": "Actively maintained (last commit 2026-09-23, tagged v8.3.0), triple-licensed Apache-2.0/MIT/BSL-1.0, header-only and small enough to vendor; already embedded in GCC 12's std::from_chars and used by Chromium, WebKit/Safari, MySQL, DuckDB, Boost.JSON, ClickHouse, Blender, and Apache Arrow, which makes it low-risk to adopt.",
+  "sources_read": [
+    "https://github.com/fastfloat/fast_float",
+    "https://github.com/fastfloat/fast_float/blob/HEAD/README.md",
+    "https://github.com/fastfloat/fast_float/blob/HEAD/CMakeLists.txt",
+    "https://github.com/fastfloat/fast_float/blob/HEAD/SECURITY.md",
+    "https://github.com/fastfloat/fast_float/blob/HEAD/include/fast_float/fast_float.h",
+    "https://github.com/fastfloat/fast_float/blob/HEAD/include/fast_float/decimal_to_binary.h",
+    "https://github.com/fastfloat/fast_float/blob/HEAD/include/fast_float/bigint.h",
+    "https://github.com/fastfloat/fast_float/blob/HEAD/include/fast_float/parse_number.h",
+    "https://github.com/fastfloat/fast_float/issues/397",
+    "https://github.com/fastfloat/fast_float/issues?q=bug",
+    "https://arxiv.org/abs/2101.11408"
+  ],
+  "confidence": 0.9
+}

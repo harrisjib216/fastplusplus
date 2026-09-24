@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/facebook/zstd",
+  "one_liner": "General-purpose lossless compressor beating zlib/deflate on speed and ratio, with tunable levels and negative fast modes.",
+  "what_it_does": "Zstandard is an in-memory lossless data compressor for files, streams, and network payloads, aimed at replacing zlib/deflate at similar or better ratio with much higher throughput. It exposes a C API with a simple one-shot form (ZSTD_compress/ZSTD_decompress), an explicit-context form for reuse, and a streaming API, plus a CLI that reads/writes its own .zst container (RFC 8878) as well as .gz/.xz/.lz4. It is not wire-compatible with zlib; adopting it means changing the compressed format, not just relinking.",
+  "how_it_is_fast": "Compression uses selectable match-finder strategies per level, from cheap hash-chain/greedy search at low levels up to binary-tree/optimal parsing at high levels, so speed vs ratio is a single tunable knob (including negative --fast=# levels that skip expensive search entirely). The entropy stage uses FSE (tANS) and Huff0, which decode faster than classic Huffman/zlib entropy coding. On x86-64 the library auto-dispatches to BMI2 instructions at runtime when available, mainly speeding up the decoder; optional dictionary training (ZDICT) amortizes the cost of small, similarly-shaped inputs.",
+  "when_to_use": [
+    "General file/stream compression where you want a better ratio than zlib at several times the throughput",
+    "Workloads needing a single tunable speed/ratio knob, from --fast=# (skip ratio for max speed) up to level 22 (max ratio)",
+    "Many small, structurally similar records (e.g. JSON/API payloads) via a trained dictionary, where per-item ratio would otherwise be poor",
+    "Large-payload compression that can use multiple threads (built with ZSTD_MULTITHREAD + pthread)",
+    "Codebases needing a permissive-or-copyleft license choice (dual BSD-3-Clause / GPLv2)"
+  ],
+  "when_not_to_use": [
+    "You need byte-compatible zlib/deflate/gzip output for an existing wire protocol or file format — zstd's container is a different, RFC 8878 format",
+    "You need the best possible ratio regardless of CPU cost — the README's own table doesn't include xz, a stronger-ratio baseline it lists as uncompared here",
+    "You're decompressing untrusted archives via the CLI's recursive mode: a crafted circular symlink can hang `zstd -d -r -f` (open issue #4081)",
+    "You need the experimental/advanced API surface (behind ZSTD_STATIC_LINKING_ONLY) in a dynamically-linked build — it's explicitly static-link-only and unstable across versions",
+    "You're on a toolchain where strict C90 portability doesn't matter and you'd rather have a simpler, smaller single-strategy codec"
+  ],
+  "integration": {
+    "form": "static lib | shared lib | source-drop (Makefile is the reference build; CMake, Meson, Buck, Bazel, and VS project files are also maintained)",
+    "dependencies": "none for core library; POSIX pthread required only if built with ZSTD_MULTITHREAD for multithreaded compression",
+    "min_toolchain": "strict C90 C (per CONTRIBUTING.md); no C99/C++ requirement for the library itself",
+    "platforms": "portable C90 baseline runs anywhere; x86-64 gets optional runtime BMI2 dispatch (auto-detected, not required); aarch64 supported; Windows via VS2008+/CMake; macOS Universal2 (x86_64/arm64) build documented",
+    "thread_safety": "CCtx/DCtx are not thread-safe — use one context per thread for parallel calls. A created ZSTD_CDict is read-only and safe to share across threads concurrently. Default `make lib` builds a multithreaded dynamic library but a single-threaded static library; `lib-mt`/`lib-nomt` targets force one or the other.",
+    "drop_in_for_baseline": "partial — same in-memory/streaming compression API shape as zlib (one-shot and streaming calls) but a different, non-interoperable wire format, so callers must change format, not just swap the library"
+  },
+  "gotchas": [
+    "Static and dynamic library builds default to different threading modes (single- vs multi-threaded); mismatched expectations here are a common build-config surprise",
+    "Advanced/experimental API (unlocked via ZSTD_STATIC_LINKING_ONLY) is explicitly forbidden with dynamic linking because its ABI is unstable",
+    "CLI recursive decompress can hang on a crafted circular symlink (open issue #4081) — a library-embedding concern only if you shell out to the CLI",
+    "Open performance-regression report (#4587) for level 18 after an internal API v2 change, unresolved as of this session"
+  ],
+  "pick_this_over_siblings_when": "Pick zstd over LZ4 when ratio matters more than raw peak speed: zstd -1 gets 2.896 ratio at 510/1550 MB/s vs LZ4's 2.101 ratio at 780/4970 MB/s in the same README table. Pick LZ4 instead when you need decompression well above 2 GB/s or compression above ~700 MB/s and can accept a much lower ratio.",
+  "verified_claims_summary": "zstd 1.5.7 -1 measured 510 MB/s compression and 1550 MB/s decompression at ratio 2.896, vs zlib 1.3.1 -1 at 105 MB/s / 390 MB/s and ratio 2.743, in the project's own README Benchmarks table (lzbench, gcc 14.2.0, Silesia corpus, single-threaded, Core i7-9700K @ 4.9GHz, Ubuntu 24.04). The lzbench project's own README independently corroborates a similar zstd-vs-zlib gap on different hardware (AMD EPYC 9554, zstd 1.5.6 -1 at 422/1347 MB/s vs zlib 1.3.1 -1 at 93.0/323 MB/s).",
+  "status_note": "Actively maintained (last commit 2026-09-18 on branch 'dev'), reference implementation of RFC 8878 used in the Linux kernel, Chromium, FreeBSD, and PostgreSQL; usability is 'copyable' and it is dual-licensed BSD-3-Clause OR GPLv2.",
+  "sources_read": [
+    "https://github.com/facebook/zstd (README, via gh api repos/facebook/zstd/readme)",
+    "https://github.com/facebook/zstd/blob/dev/lib/README.md",
+    "https://github.com/facebook/zstd/blob/dev/lib/zstd.h",
+    "https://github.com/facebook/zstd/blob/dev/SECURITY.md",
+    "https://github.com/facebook/zstd/blob/dev/CONTRIBUTING.md",
+    "https://github.com/facebook/zstd (repo file tree, via gh api git/trees)",
+    "https://github.com/facebook/zstd/issues (gh search issues: performance regression)",
+    "https://github.com/facebook/zstd/issues (gh search issues: label:bug)"
+  ],
+  "confidence": 0.88
+}

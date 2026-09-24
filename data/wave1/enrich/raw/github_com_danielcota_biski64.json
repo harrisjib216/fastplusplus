@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/danielcota/biski64",
+  "one_liner": "Tiny 3-word Weyl+rotate PRNG beating std::mt19937_64 on raw throughput; not a drop-in, ships as Rust crate + C reference source.",
+  "what_it_does": "biski64 is a non-cryptographic 64-bit PRNG built from three 64-bit words (a Weyl-sequence counter fast_loop, plus mix and loop_mix) combined with two fixed rotations (16, 40) and add/XOR per step. The primary deliverable is a Rust crate (Biski64Rng) implementing rand_core's RngCore/SeedableRng traits; C and Java versions ship in the repo as reference implementations, not packaged libraries. The C file (c/biski64.c) currently has its own main(), so using it means copying the struct and three functions (biski64_seed/biski64_stream/biski64_next) rather than #include-ing the file as-is (an open PR proposes fixing this).",
+  "how_it_is_fast": "Each step is 3 register-sized XOR/add/rotate operations with no multiplication, no lookup tables, and no branches, which is why the author's own benchmarks show it tying wyrand/sfc64 and beating xoshiro256++/xoroshiro128++ in ns/call. A 64-bit Weyl sequence (fast_loop += 0x9999999999999999) guarantees the period never drops below 2^64 regardless of how mix/loop_mix behave, letting the design use less state than xoshiro-family generators, which need a larger state array for their period guarantee. Against std::mt19937/mt19937_64 specifically, the win is the generic 'small counter+mix generator beats tempering-heavy Mersenne Twister' gap, not a biski64-specific trick.",
+  "when_to_use": [
+    "Non-cryptographic, throughput-bound 64-bit generation (simulation, sampling, shuffling) where you'd otherwise use std::mt19937_64 and want a smaller/faster algorithm to port in.",
+    "Rust projects on rand_core/rand 0.9 wanting a no_std-compatible RngCore/SeedableRng implementation via the biski64 crate.",
+    "Parallel workloads needing independent streams from one seed: biski64_stream()/from_seed_for_stream() space fast_loop per stream without a separate jump-ahead call.",
+    "Memory- or register-constrained targets: 3 x 64-bit words of state; a user reports it running on an ESP32 (issue #11).",
+    "You've already accepted a Weyl-sequence design's 2^64 minimum period as sufficient for the workload."
+  ],
+  "when_not_to_use": [
+    "You need a literal drop-in for std::mt19937/mt19937_64 in C++: biski64's C code has no std::random-compatible interface (no operator(), min()/max()), so adoption is a rewrite, not a swap.",
+    "Long-running, high-volume statistical workloads: a third party (SmokeRand author, issue #8) reports biski16/32/64 fail a Hamming-distance test at roughly 1 TiB of output, and issue #10 shows biski64 failing PractRand's expanded/extra-folding test set at 2^34 bytes (16 GB), traced to periodicity in the Weyl sequence's low bits.",
+    "Cryptographic or adversarial contexts: not designed or claimed to be cryptographically secure.",
+    "You want a battle-tested, widely audited generator: first published 2025, 152 stars, last commit 2025-06-12 and now stale; PCG and xoshiro have years more scrutiny and independent implementations.",
+    "You need maximum period margin: 2^64 minimum vs 2^256 for xoshiro256++, relevant for very long single-stream runs or huge numbers of parallel streams."
+  ],
+  "integration": {
+    "form": "source-drop (C: copy struct + 3 functions from c/biski64.c) | crate (Rust: biski64 on crates.io)",
+    "dependencies": "C: none beyond stdint.h. Rust: rand_core 0.9 (rand 0.9 / rand_xoshiro / criterion are dev-only, for the crate's own benchmark comparisons).",
+    "min_toolchain": "C: C99 (stdint.h only, no other requirement found in source). Rust: edition 2021, no_std compatible. The C++ port used for the benchmark (planet36/prng-test-bench) needs C++20 for std::rotl, but that's the harness, not upstream biski64.",
+    "platforms": "any (plain integer ops, no SIMD/intrinsics observed); reported working on an ESP32 microcontroller in issue #11 (closed).",
+    "thread_safety": "not documented; state is a plain struct/fields with no synchronization — treat each biski64_state / Biski64Rng instance as single-threaded and use biski64_stream()/from_seed_for_stream() to create separate instances for parallel use.",
+    "drop_in_for_baseline": "partial — explain: same problem domain (64-bit PRNG, seedable) but not std::random-interface-compatible in C, and the Rust API is rand_core-shaped rather than a mt19937 clone; the throughput numbers come from a third-party C++ port (planet36/prng-test-bench), not the upstream C code."
+  },
+  "gotchas": [
+    "c/biski64.c ships with its own main(); PR #6 (open) proposes a fix. Until merged, strip main() or apply the workaround from that PR before including the file.",
+    "Seeding functions run a 16-iteration warmup (biski64_warmup / the loop in from_seed_for_stream) before first use; a hand-rolled state init that skips this would start on weaker, non-warmed state.",
+    "Two independent third-party reports found statistical weaknesses invisible to BigCrush/PractRand's default settings: SmokeRand's hamming_distr test (issue #8, ~1 TiB) and PractRand with extra folding (issue #10, fails at 2^34 bytes / 16 GB).",
+    "Parallel-stream seeding (biski64_stream / from_seed_for_stream) needs total_streams fixed up front to space fast_loop; there is no independent jump-ahead/split function for streams created later."
+  ],
+  "pick_this_over_siblings_when": "Pick biski64 over PCG (pcg-cpp), wjakob/pcg32, or xoshiro_cpp when a smaller 3-word state matters more than track record and you accept a newer, less-audited design with a 2^64 period floor. Prefer PCG or xoshiro_cpp instead when you need a C++-native, std::random-compatible API today (biski64's C code has none) or want a generator without the open statistical-weakness reports noted above.",
+  "verified_claims_summary": "In planet36/prng-test-bench's Google Benchmark harness (7 threads on an 8-vCPU VM, g++ -O3 -flto=auto -march=native, C++26), that harness's own C++ port of biski64 sustained 13.8 GB/s median / 14.0 GB/s mean per-thread next()-call throughput versus 5.63/5.54 GB/s for libstdc++'s std::mt19937_64 (~2.5x) and 5.01/5.02 GB/s for std::mt19937 (~2.8x). biski64's own README instead benchmarks against xoshiro/PCG/wyrand/sfc64/Java generators on an AMD Ryzen 9 7950X3D and does not include std::mt19937.",
+  "status_note": "Last commit 2025-06-12, marked stale by the catalog's maintenance check; MIT-licensed and small (three functions, ~150 lines of C) so easy to vendor regardless, but two open issues (SmokeRand hamming_distr failure, PractRand extra-folding failure at 16 GB) show the statistical design is still under active scrutiny.",
+  "sources_read": [
+    "https://github.com/danielcota/biski64",
+    "https://github.com/danielcota/biski64/blob/main/README.md",
+    "https://github.com/danielcota/biski64/blob/main/c/biski64.c",
+    "https://github.com/danielcota/biski64/blob/main/src/lib.rs",
+    "https://github.com/danielcota/biski64/blob/main/Cargo.toml",
+    "https://github.com/danielcota/biski64/issues/8",
+    "https://github.com/danielcota/biski64/issues/10",
+    "https://github.com/danielcota/biski64/issues/1",
+    "https://github.com/danielcota/biski64/issues",
+    "https://github.com/danielcota/biski64/pulls",
+    "https://github.com/planet36/prng-test-bench/blob/main/include/biski64.hpp"
+  ],
+  "confidence": 0.7
+}

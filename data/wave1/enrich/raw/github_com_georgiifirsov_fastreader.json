@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/GeorgiiFirsov/FastReader",
+  "one_liner": "Windows memory-mapped line reader using memchr; ~4x faster line iteration than std::ifstream::getline on a 9 KB file.",
+  "what_it_does": "CFileHandler memory-maps a whole file with CreateFile/CreateFileMapping/MapViewOfFile and exposes a forward range over its lines via range-based for; each dereference materializes one line as std::string. It replaces std::ifstream + std::getline for read-only, whole-line iteration over a file that already exists on disk. It is not drop-in: construction takes a wide-char path (LPCWSTR/std::wstring), errors surface as a custom CWin32Error exception instead of stream fail bits, and there is no seeking, formatted extraction, or write support.",
+  "how_it_is_fast": "Maps the file into the process address space once instead of streaming through libc/CRT buffered I/O, avoiding per-getline syscalls and intermediate buffer copies. Line boundaries are found with memchr, which uses a vectorized/optimized scan, rather than std::getline's char-by-char sentry loop with locale-aware traits comparisons. Each line is copied exactly once, directly from the mapped pages into the returned std::string.",
+  "when_to_use": [
+    "Windows-only tool that repeatedly parses a small-to-medium text file line-by-line and can absorb the one-time CreateFileMapping cost",
+    "Read-only, whole-file-fits-in-memory workloads (log parsing, config files) where std::ifstream + getline overhead is a measured bottleneck",
+    "Codebases already linking ATL (atlbase.h/CHandle), so the extra dependency is free",
+    "Prototyping or benchmarking where GPL-3.0 licensing of the file itself is acceptable"
+  ],
+  "when_not_to_use": [
+    "Any non-Windows target - code compiles only against WinAPI + ATL",
+    "Files without a trailing newline: memchr returning nullptr on the last unterminated line yields (BYTE*)0 + 1, an invalid non-null pointer bug present in both the constructor and operator++",
+    "Proprietary/closed-source projects that cannot take on GPL-3.0",
+    "Anything needing formatted input, seeking, writing, or multi-threaded access - no documented thread safety, and CFileHandler holds raw pointers with no locking",
+    "Production use generally: single-maintainer, 5 stars, no commits since 2019-11-13, no issues or PRs on record"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "WinAPI (CreateFile/CreateFileMapping/MapViewOfFile) and ATL (atlbase.h, for CHandle)",
+    "min_toolchain": "Visual Studio 2019, PlatformToolset v142 per FastReader.vcxproj; uses std::iterator<> as an iterator base, which is deprecated in C++17 and removed in C++20, so it will not compile unmodified under /std:c++20",
+    "platforms": "Windows x86 and x64 (Win32 and x64 configs in the vcxproj); WinAPI-dependent, no POSIX path",
+    "thread_safety": "not documented; raw pointers with no locking around Open/Close/iteration",
+    "drop_in_for_baseline": "partial — explain: same job (iterate lines of a file) but different construction (wide-char path only), a different exception type (CWin32Error, not stream fail state), and no seek/write/formatted-extraction API"
+  },
+  "gotchas": [
+    "Unterminated final line (no trailing '\\n') triggers memchr returning nullptr, which the code adds 1 to unchecked, producing an invalid pointer instead of a clean end-of-file marker",
+    "Copy constructor and assignment are deleted with no move alternative provided, so CFileHandler cannot be stored in most STL containers directly",
+    "CFileHandlerIterator::operator* allocates a new std::string per line, so iteration is not zero-copy despite the memory-mapped backing",
+    "Requires ATL (atlbase.h) solely for CHandle's RAII wrapper around HANDLE, pulling in more than a plain WinAPI call would need"
+  ],
+  "pick_this_over_siblings_when": "Neither catalogued sibling (CPath, reckless) targets line-by-line file reading, so this is the only io-and-filesystem entry solving that specific std::ifstream problem; pick it only if the workload is Windows-only line iteration and the GPL-3.0 license, ATL dependency, and unterminated-newline bug are all acceptable.",
+  "verified_claims_summary": "On the repo's own Google Test 'Timing' suite (mean of 10 samples x 3 full passes over the repo's 9,194-byte TestFile.txt), CFileHandler averaged 56,700 ns versus 241,000 ns for std::ifstream + std::getline against the MSVC STL — about 4.25x faster — with no CPU disclosed and the Debug-vs-Release build configuration used for the published numbers unstated.",
+  "status_note": "Abandoned since 2019-11-13 (single maintainer, no open issues or PRs, 5 stars); GPL-3.0 plus the ATL dependency make it copyable only into GPL-compatible, Windows-with-ATL projects.",
+  "sources_read": [
+    "https://github.com/GeorgiiFirsov/FastReader",
+    "https://github.com/GeorgiiFirsov/FastReader#test-results",
+    "https://github.com/GeorgiiFirsov/FastReader/blob/master/FastReader/FileHandler.h",
+    "https://github.com/GeorgiiFirsov/FastReader/blob/master/FastReader/FileHandler.cpp",
+    "https://github.com/GeorgiiFirsov/FastReader/blob/master/FastReaderTest/test.cpp",
+    "https://github.com/GeorgiiFirsov/FastReader/blob/master/FastReader/FastReader.vcxproj",
+    "https://github.com/GeorgiiFirsov/FastReader/blob/master/FastReader/stdafx.h",
+    "https://github.com/GeorgiiFirsov/FastReader/issues",
+    "https://github.com/GeorgiiFirsov/FastReader/pulls"
+  ],
+  "confidence": 0.55
+}

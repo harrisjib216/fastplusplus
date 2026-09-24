@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/frikallo/axiom",
+  "one_liner": "Lazy-evaluated C++20 NumPy/PyTorch-style tensor library for CPU and Metal GPU; beats Eigen3 on some unary math ops, loses on others.",
+  "what_it_does": "Axiom is a NumPy/PyTorch-style tensor library for C++20: operator overloading, broadcasting, einops-style rearrange/reduce, and a lazy computation graph that fuses chained ops and reuses buffers before materializing. It targets CPU (via Apple Accelerate, OpenBLAS, or a portable Highway SIMD/OpenMP path) and Apple Metal GPU, with zero-copy CPU/GPU transfers on Apple Silicon's unified memory. It is not a drop-in for Eigen or std:: containers — the API is whole-tensor with NumPy/PyTorch semantics, not a scalar math-function replacement.",
+  "how_it_is_fast": "CPU element-wise ops dispatch through three tiers (seen in src/backends/cpu/cpu_operations.cpp): Apple Accelerate/vDSP (vvsinf/vvcosf/vvexpf/vvlogf) on macOS, then Google Highway's portable SIMD kernels (AVX2/AVX-512/NEON/SVE/RVV, see src/backends/cpu/simd/simd_dispatch.hpp) as the cross-platform fallback, then a scalar loop parallelized with OpenMP for large tensors. Matmul/linear algebra route through a BLAS/LAPACK backend (Accelerate, OpenBLAS, or native). A lazy graph compiler fuses chained elementwise operations and reuses buffers to cut materialization and memory traffic.",
+  "when_to_use": [
+    "On macOS/Apple Silicon, want NumPy/PyTorch ergonomics in C++ with a Metal GPU path and zero-copy CPU/GPU transfers",
+    "Whole-tensor elementwise math (exp/log/sin/cos) at large sizes (~4096x4096 float32) where Accelerate vForce or Highway SIMD beats Eigen3's own vectorization",
+    "Want einops-style rearrange/reduce and a lazy fused computation graph instead of hand-rolled expression templates",
+    "Need built-in FFT, numpy/safetensors/flatbuffers IO, or basic NN layers (Linear, Conv, Attention, RNN) alongside tensor math",
+    "Can link a built library (CMake, C++20 toolchain) rather than needing a header-only drop-in"
+  ],
+  "when_not_to_use": [
+    "Need a scalar, single-value <cmath>-style API — Axiom has no fine-grained per-value math entry point",
+    "The op is sqrt or tanh specifically — Axiom's own benchmark table shows both slower than Eigen3 on the tested hardware",
+    "Off-macOS (Linux/Windows), where the fast path is Highway SIMD + OpenMP, not Accelerate — the published GB/s numbers are macOS/Accelerate-specific and won't transfer as-is",
+    "Need GPU acceleration beyond Apple Metal — no CUDA/ROCm backend",
+    "Production use requiring API stability — v0.5.1, 114 stars, open issue on CPU-only macOS builds failing to link (#28) and a tracked gap in public-interface docs (#9)"
+  ],
+  "integration": {
+    "form": "static lib | shared lib (CMake FetchContent source-drop; not header-only)",
+    "dependencies": "bundled: Highway, mimalloc, pocketfft, flatbuffers, nlohmann_json, FP16, FXdiv; optional: OpenBLAS, Apple Accelerate framework (macOS), OpenMP, Metal/MPSGraph (macOS GPU)",
+    "min_toolchain": "C++20, CMake 3.20+, Clang/GCC/MSVC",
+    "platforms": "macOS (Accelerate + Metal GPU), Linux, Windows; portable SIMD via Highway (SSE2 through AVX-512, NEON, SVE, RVV)",
+    "thread_safety": "not documented beyond internally OpenMP-parallelized kernels; no stated guarantee about concurrent access to a single Tensor from multiple threads",
+    "drop_in_for_baseline": "false — different API model (whole-tensor NumPy/PyTorch semantics, lazy graph) vs Eigen3's expression templates"
+  },
+  "gotchas": [
+    "On macOS the measured unary-op speedups over Eigen3 come from Apple Accelerate vForce (vvsinf/vvcosf/vvexpf/vvlogf), not Axiom's own SIMD kernels — the win is largely Accelerate's, not portable",
+    "sqrt and tanh are slower than Eigen3 in Axiom's own benchmark table — op-specific, not a blanket win",
+    "Open issue #28: CPU-only builds on macOS can fail to link because some Metal call sites guard on __APPLE__ instead of the AXIOM_METAL_SUPPORT flag",
+    "Library type follows BUILD_SHARED_LIBS (defaults to SHARED); set it explicitly before FetchContent/add_subdirectory if you need a single static archive"
+  ],
+  "pick_this_over_siblings_when": "trigno_simd_cpp, SLEEF, FABE13-HX, fast_math_cpp, fmath, and VDT are scalar/vector math-function libraries meant to drop into existing loops in place of <cmath>/libm calls; Axiom is a whole-tensor library with a lazy graph and GPU path, so pick it only when you also want NumPy/PyTorch-style tensor ops and fusion — not when you just need a faster std::sin/std::exp replacement, where the siblings are the direct fit and Axiom is not.",
+  "verified_claims_summary": "docs/BENCHMARKS.md (auto-generated 2026-02-21; Test Environment states only 'Darwin 25.3.0 arm64', no CPU model or compiler) reports 4096x4096 float32 unary-op GB/s vs Eigen3: sin 26.0 vs 11.0 (~2.4x), cos 25.2 vs 11.0 (~2.3x), exp 23.0 vs 16.4 (~1.4x), log 17.0 vs 13.1 (~1.3x); the same table shows sqrt (39.0 vs 66.3) and tanh (14.3 vs 21.5) slower than Eigen3. Code confirms macOS sin/cos/exp/log dispatch to Apple Accelerate vForce ahead of Axiom's own Highway kernels, so the measured win largely reflects Accelerate vs Eigen3's own vectorization rather than a novel Axiom algorithm.",
+  "status_note": "Actively maintained (last commit 2026-05-29, v0.5.1, MIT) but young and small (114 stars, 5 open issues); 'copyable' usability means a real CMake build with bundled third-party deps, not a single header to vendor.",
+  "sources_read": [
+    "https://github.com/Frikallo/axiom",
+    "https://github.com/Frikallo/axiom/blob/main/README.md",
+    "https://github.com/Frikallo/axiom/blob/main/docs/BENCHMARKS.md",
+    "https://github.com/Frikallo/axiom/blob/main/CMakeLists.txt",
+    "https://github.com/Frikallo/axiom/blob/main/src/backends/cpu/cpu_operations.cpp",
+    "https://github.com/Frikallo/axiom/blob/main/include/axiom/error.hpp",
+    "https://github.com/Frikallo/axiom/blob/main/src/backends/cpu/simd/simd_dispatch.hpp",
+    "https://github.com/Frikallo/axiom/blob/main/docs/getting-started.md",
+    "https://github.com/Frikallo/axiom/issues"
+  ],
+  "confidence": 0.55
+}

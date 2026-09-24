@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/yaroslavaristov/arena-allocator",
+  "one_liner": "Bump-pointer mmap arena for single-threaded HFT hot paths; O(1) allocate/reset, 10x-27x faster than malloc/free.",
+  "what_it_does": "Single-header bump-pointer allocator for zero-allocation critical paths: it mmaps one power-of-two-sized region upfront (with optional HugePages and mlock'd pages), then serves allocate<T>(count) as a masked pointer increment. There is no per-object free; the whole arena is released at once via reset(), an O(1) pointer rewind. The API is not a drop-in for malloc/new -- call sites template on the object type and get nullptr back on overflow instead of an exception.",
+  "how_it_is_fast": "It sidesteps the general-purpose allocator entirely: one mmap/mlock call reserves and pre-faults memory at construction, and allocate() does alignment and bounds checking with bitwise arithmetic on a raw pointer, no heap metadata, freelist, or locking involved. Bulk deallocation is a single pointer reset instead of N individual free() calls, so malloc's per-call bookkeeping and heap fragmentation (visible in the README's own numbers as N grows) never happen on the arena side.",
+  "when_to_use": [
+    "Single-threaded HFT-style hot path: allocate a batch of same-lifetime objects (the benchmarks cover 1-1024 objects, 8-256 bytes each) then discard them all together",
+    "Latency-critical loop where malloc/free tail latency or heap fragmentation is the risk you're trying to eliminate",
+    "A fixed, known-upfront capacity is acceptable and can be rounded up to a power of two",
+    "Linux x86-64 or aarch64 with mmap/mlock available (and tolerance for a stderr warning if HugePages or mlock aren't permitted)",
+    "Already on C++23 with GCC 14+ or Clang 17+, so the toolchain floor isn't a blocker"
+  ],
+  "when_not_to_use": [
+    "Need to free individual objects before the whole batch ends -- there is no per-object free, only bulk reset()",
+    "Variable or unbounded total allocation size -- capacity is fixed at construction, must be a power of two, and allocate() silently returns nullptr on overflow (callers must check)",
+    "Multi-threaded access to one arena instance -- the class docstring says 'Not thread-safe', no internal synchronization exists",
+    "Need a vetted, general-purpose replacement for malloc/new across a codebase -- this is a single header from one contributor, 1 GitHub star, unaudited, merged in the last two months",
+    "Portability across OSes matters -- Linux-only (mmap/mlock/MAP_HUGETLB), plus a C++23 + GCC14/Clang17 floor rules out older toolchains"
+  ],
+  "integration": {
+    "form": "header-only (include/arena.hpp)",
+    "dependencies": "none for the library; Google Benchmark is only a dependency of the benchmark target",
+    "min_toolchain": "C++23, GCC 14+ or Clang 17+ (README-stated requirement); CMakeLists.txt additionally hard-pins CMAKE_CXX_COMPILER to g++-14",
+    "platforms": "Linux only -- relies on mmap, mlock, and MAP_HUGETLB; no Windows or macOS support documented",
+    "thread_safety": "Not thread-safe, per the class docstring ('Designed for single-threaded HFT critical paths'); the header's separate top-of-file comment calling it a 'Lock-free arena allocator' contradicts this and appears to be a mislabel -- there is no synchronization in the code",
+    "drop_in_for_baseline": "false -- different API shape: allocate<T, Alignment>(count) is templated and returns nullptr instead of throwing on overflow, there is no delete/free (only bulk reset()), and the arena itself is move-only and must be constructed with an explicit power-of-two byte capacity"
+  },
+  "gotchas": [
+    "Capacity must be an exact power of two or the constructor throws std::invalid_argument",
+    "allocate<T>() returns nullptr (not an exception) when the arena is exhausted -- callers must check the return value",
+    "reset() invalidates every previously returned pointer at once; nothing tracks or flags which pointers are now dangling",
+    "Header comment says 'Lock-free arena allocator' but the class docstring says 'Not thread-safe' -- treat it as strictly single-threaded, not lock-free-safe for concurrent use"
+  ],
+  "pick_this_over_siblings_when": "Pick this over metapool or the ShortAlloc-based arena-allocator when you specifically want an mmap+HugePage-backed arena with mlock'd pages for HFT-style latency floors and don't need per-object free. metapool and ShortAlloc both report much larger multiples on their own benchmarks (up to 1300x and up to 230x respectively), so this entry is not the fastest arena catalogued -- it's a smaller, simpler single-header alternative with a narrower feature set (no per-object free, no stack-allocated buffer option).",
+  "verified_claims_summary": "On AMD EPYC 7763 (GitHub Codespaces, g++-14, C++23, Release flags -O3 -march=native -funroll-loops -DNDEBUG) the arena beat sequential malloc/free by 10x-27x for N=1 to 1024 64-byte objects, and by 15x on a mixed 8/64/256-byte alloc-then-release batch. The same benchmark binary showed 32x-342x and 15x respectively on an Apple M1, but that run was under OrbStack virtualization, which the README itself flags as not native hardware.",
+  "status_note": "Actively maintained (last commit 2026-07-21), MIT-licensed and small enough to vendor as one header, but it is a 1-star, single-contributor, zero-open-issues project with no external audit or peer review.",
+  "sources_read": [
+    "https://github.com/yaroslavaristov/arena-allocator",
+    "https://github.com/yaroslavaristov/arena-allocator#benchmark-results",
+    "https://github.com/yaroslavaristov/arena-allocator/blob/main/README.md",
+    "https://github.com/yaroslavaristov/arena-allocator/blob/main/include/arena.hpp",
+    "https://github.com/yaroslavaristov/arena-allocator/blob/main/CMakeLists.txt",
+    "https://github.com/yaroslavaristov/arena-allocator/blob/main/benchmarks/bench.cpp"
+  ],
+  "confidence": 0.7
+}

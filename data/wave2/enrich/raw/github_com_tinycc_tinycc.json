@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/TinyCC/tinycc",
+  "one_liner": "Tiny self-hosting C compiler/JIT that compiles about 9x faster than gcc -O0, trading away optimization.",
+  "what_it_does": "TinyCC (tcc) is a complete, self-hosting ANSI C compiler, assembler and linker bundled into one roughly 100KB binary, targeting ISO C99 plus many C11 features and GNU extensions including inline asm. It works both as a gcc-compatible command-line compiler and, via the libtcc library, as an embeddable in-memory JIT: compile a C string or file with tcc_compile_string()/tcc_add_file() and then run it with tcc_run() or relocate it and pull out symbols with tcc_get_symbol(). It also supports 'C scripting': adding a '#!/usr/local/bin/tcc -run' shebang lets a .c file execute directly like a shell script, no separate build step.",
+  "how_it_is_fast": "It skips almost everything gcc's pipeline does beyond translation: no real optimizer (tcc has no flag comparable to -O1/-O2/-O3), a single fast pass from source straight to machine code, and its own integrated preprocessor/assembler/linker avoid forking out to separate cc1/as/ld processes. It also natively supports 6 target architectures (i386, x86-64, ARM, AArch64, RISC-V64, plus legacy TMS320C67xx) with a simple, non-SSA-optimizing code generator per target. The cost of skipping optimization is codegen roughly at gcc -O0/-O1 quality.",
+  "when_to_use": [
+    "Tight edit-compile-run development loops where compiler latency, not runtime speed, dominates iteration time",
+    "Ad hoc 'C scripting' -- running a .c file directly via a #!tcc -run shebang instead of compiling a real binary",
+    "Embedding a C compiler/JIT inside another program (via libtcc) for runtime code generation, e.g. compiling small C snippets to native code and calling them in-process",
+    "Bootstrapping or rescue environments where binary size matters (GNU Mes uses tcc to bootstrap a build from source)",
+    "Local/CI dev builds of large C codebases where a project bundles tcc for fast iteration and uses a real compiler for release builds (this is how the V language uses it)"
+  ],
+  "when_not_to_use": [
+    "Producing optimized release binaries -- there is no optimization pass comparable to gcc -O1/-O2/-O3, so generated code is measurably slower",
+    "Code relying on full C11 or the broader GNU C extension surface -- tcc covers 'many' C11 features and GNU extensions, not all of them (not documented as 100% coverage)",
+    "C++ code -- tcc is a C compiler only",
+    "Toolchains that depend on gcc/clang-specific features such as LTO, sanitizers, or vendor-specific builtins not implemented by tcc",
+    "Programs combining the -b bounds checker with signal handlers or fork() in a multi-threaded process -- the docs call this out as a known incompatibility because the bounds-checking code uses locks"
+  ],
+  "integration": {
+    "form": "source-drop / standalone compiler binary (CLI, gcc-like flags); optional static and shared libtcc library for embedding as an in-memory JIT",
+    "dependencies": "none required to build (self-hosting: ./configure && make, or make test); optional -lpthread when using the -pthread flag",
+    "min_toolchain": "Any ANSI C (C89) host compiler to bootstrap from source, or tcc itself; as a language target it implements ISO C99, many ISO C11 features, and GNU C extensions (inline asm, _Thread_local, __attribute__((cleanup)), _Static_assert, asm goto, stdatomic)",
+    "platforms": "x86 (i386), x86-64, ARM, AArch64, RISC-V64, legacy TMS320C67xx; Linux/BSD (ELF), native macOS x86-64 (Mach-O), Windows (PE, see tcc-win32.txt), Android (position-independent executables)",
+    "thread_safety": "Not a single shared global state: separate TCCState compilation contexts can be created and used concurrently from different threads (see tests/libtcc_test_mt.c in the repo). Per-state concurrent use from multiple threads simultaneously is not documented.",
+    "drop_in_for_baseline": "partial -- tcc accepts many gcc-compatible command-line flags and is used as a gcc substitute in several build systems (V language dev builds, GNU Mes bootstrap), but incomplete C11/GNU-extension coverage, no LTO/sanitizers, and gcc -O0/-O1-level codegen mean it cannot replace gcc for anything needing full standards coverage or optimized output"
+  },
+  "gotchas": [
+    "The -b bounds checker is incompatible with signal handlers (checking is disabled inside them) and interacts badly with fork() in multi-threaded programs, per tcc-doc.texi -- both stem from locking inside the bounds-checking runtime",
+    "Bound-checked code (-b) is not included in shared libraries; the main executable must itself be built with -b for the checker to take effect",
+    "Codegen quality sits around gcc -O0/-O1; don't compare tcc binaries' runtime speed to an optimized gcc/clang build",
+    "-std=version only distinguishes c11/gnu11 (sets __STDC_VERSION__ to 201112) from everything else (199901); it isn't a fine-grained standards switch like gcc's"
+  ],
+  "pick_this_over_siblings_when": "Pick tcc over zapcc or MIR/c2m when you want a mature, widely-deployed, general-purpose C compiler and embeddable JIT rather than a narrower research/prototype tool: zapcc is an abandoned Clang fork focused on incremental C++ template caching, and MIR/c2m is a newer, more experimental C-to-MIR JIT (bigger claimed speedup, less production track record). Neither zapcc nor cg_clif target C the way tcc does (zapcc is C++-only via Clang, cg_clif is a Rust backend), so for straight C dev-loop speed or in-process C JITing, tcc is the direct fit.",
+  "verified_claims_summary": "On Fabrice Bellard's own tcc benchmark page, compiling the Links web browser (76,936 source lines, but 1,950,947 lines / 67.2MB actually compiled due to repeated header inclusion) on a 2.4GHz Pentium 4: TinyCC 0.9.22 finished in 2.27s (859,000 lines/s, 29.6MB/s) versus GCC 3.2 at -O0 in 20.0s (98,000 lines/s, 3.4MB/s), about a 9x wall-clock advantage. Both compilers ran with no comparable optimization flags enabled (tcc has none), and the hardware/compiler versions are roughly 2003-2005 era.",
+  "status_note": "Actively maintained: this GitHub mirror tracks the upstream repo.or.cz mob development branch and was pushed 2026-09-22; current in-tree version is 0.9.28rc. LGPL-2.1, small self-contained C source tree, easy to vendor -- matches its 'copyable' usability rating.",
+  "sources_read": [
+    "https://github.com/TinyCC/tinycc",
+    "https://github.com/TinyCC/tinycc/blob/mob/README",
+    "https://github.com/TinyCC/tinycc/blob/mob/libtcc.h",
+    "https://github.com/TinyCC/tinycc/blob/mob/USES",
+    "https://github.com/TinyCC/tinycc/blob/mob/Changelog",
+    "https://github.com/TinyCC/tinycc/blob/mob/VERSION",
+    "https://github.com/TinyCC/tinycc/blob/mob/tcc-doc.texi",
+    "https://github.com/TinyCC/tinycc/issues (search: miscompile, wrong code -- no matches)",
+    "https://bellard.org/tcc/"
+  ],
+  "confidence": 0.62
+}

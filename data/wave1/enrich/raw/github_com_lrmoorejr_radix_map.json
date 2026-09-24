@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/lrmoorejr/radix-map",
+  "one_liner": "Header-only PATRICIA/radix-tree map beating std::map on insert/contains for string and numeric keys.",
+  "what_it_does": "RadixMap is a sorted associative container for std::string or integral/floating-point keys, exposing insert/contains/at/operator[]/erase/find/lower_bound/upper_bound and ascending-order iteration much like std::map. It adds prefix_range(prefix), a bounded-descent query for every key starting with a prefix, which std::map has no clean way to express. It is not a drop-in template-for-template swap: no comparator/allocator parameter, and any Key beyond std::string or arithmetic types needs a RadixMapKeyTraits<Key> specialization.",
+  "how_it_is_fast": "Uses a PATRICIA/radix-tree structure that stores each shared key prefix once per node (a node for \"http://\" is shared by every key starting with it) instead of comparing whole keys node-by-node like a red-black tree, and branches via an adaptively-sized bit-mask over the next byte rather than per-byte/per-key comparison. Nodes and values are allocated from a block-based bump/arena allocator (RadixMapArena) rather than individually. For fixed-length keys (integral/floating-point), the find()/lower_bound() traversal stack is backed by the vendored BoundedVector, making that state heap-allocation-free.",
+  "when_to_use": [
+    "Sorted map over std::string or integral/floating-point keys where insert/contains throughput matters most: 3.2x/5.4x faster than std::map for strings, 2.2x/2.3x for doubles at 20,000 keys (Release, -O3, per README).",
+    "Need prefix search over string keys (prefix_range) instead of hand-rolling lower_bound() plus an increment-last-byte upper bound that breaks on a 0xFF-terminated prefix.",
+    "Workload dominated by contains()/at()/operator[] rather than find()/lower_bound(): contains() is far cheaper than find() in the same benchmarks (e.g. ~70-73ms vs ~452-461ms for 20,000 string keys).",
+    "Single-threaded or externally-synchronized use only — no built-in thread safety.",
+    "C++20 codebase willing to vendor two header files (RadixMap.hpp + BoundedVector.hpp) rather than link a library."
+  ],
+  "when_not_to_use": [
+    "Need reverse iteration: no rbegin()/rend()/operator--, forward-only because the tree has no parent pointers.",
+    "Need a custom comparator or allocator template parameter — the header's own doc comment lists both as unsupported.",
+    "Erase-heavy workloads: erase() is a tombstone that clears the value but leaves the compressed tree structure (and its memory) untouched, so memory grows with churn beyond the live entry count.",
+    "Key type has no RadixMapKeyTraits specialization and you don't want to write one (only std::string and arithmetic types are built in).",
+    "Risk-averse selection: 0 GitHub stars, first commit 2026-07-06, single author, 0 issues opened yet, no independent benchmarking or production use documented."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none at runtime; Catch2 3 is required only to build/run the bundled RadixMap-test.cpp benchmark/test suite; optional integration with a separate Ensure.hpp project for throw_if(), falls back to an equivalent local implementation if that header isn't present",
+    "min_toolchain": "C++20 (CMakeLists.txt sets CMAKE_CXX_STANDARD 20)",
+    "platforms": "no explicit architecture requirement documented; CI (.github/workflows/ci.yml) builds and tests on ubuntu-24.04 and macos-latest via CMake+Ninja; Windows/MSVC not covered by CI",
+    "thread_safety": "not thread-safe — the class's own doc comment explicitly lists 'thread-safety' under 'Not supported'",
+    "drop_in_for_baseline": "partial — explain: same core operations as std::map (insert/contains/at/operator[]/erase/find/lower_bound/upper_bound/iteration) but no comparator/allocator template parameter, requires a RadixMapKeyTraits<Key> specialization for any Key beyond std::string/arithmetic types, and needs a second vendored header (BoundedVector.hpp) despite the repo description calling it single-header"
+  },
+  "gotchas": [
+    "Range-for needs auto&& or auto, never auto&: operator*() returns a proxy Entry{Key first; Value& second;}, not a reference into a stored pair, so 'for(auto &entry : map)' fails to compile.",
+    "+0.0 and -0.0 double keys encode to different byte patterns and are treated as distinct, unlike std::map<double,...>'s default std::less which treats them as equal.",
+    "erase() does not reclaim compression: repeated insert/erase churn leaves memory usage above the current live-entry count, with no compact() available yet.",
+    "prefix_range() degenerates to at most a single entry for fixed-width key types like double, since a shorter double isn't itself a valid key — it only does useful prefix work for std::string keys."
+  ],
+  "pick_this_over_siblings_when": "Pick RadixMap over the B-tree-family siblings (fast-containers, Flat-Map-RB-Tree, cpp-btree, frozenca/BTree, tlx::btree_map) when you specifically need prefix_range()-style prefix queries over std::string keys, or want a two-header vendor-and-go dependency rather than a library benchmarked at multi-million-element scale. Pick libart instead if you want a more independently scrutinized adaptive radix tree (with a C API, not a std::map-like C++ interface); pick a B-tree sibling if you need comparator/allocator customization or verified performance at 1M+ elements, since RadixMap has only been measured at 20,000 keys by its sole author.",
+  "verified_claims_summary": "README's Catch2 [benchmark]-tagged test cases (Release build, -O3, compiler version and CPU unstated), inserting and then contains()-checking 20,000 keys, report RadixMap 3.2x faster insert and 5.4x faster contains() than std::map for std::string keys (~111-118ms/~70-73ms vs std::map's ~366-369ms/~379-407ms), and 2.2x faster insert / 2.3x faster contains() for double keys (~101-104ms/~46-47ms vs std::map's ~215-234ms/~100-109ms).",
+  "status_note": "Active but very new (first commit 2026-07-06, last commit 2026-07-09), single-author, 0 stars, 0 issues opened; Apache-2.0 licensed and header-only (two files: RadixMap.hpp + BoundedVector.hpp), trivial to vendor or drop.",
+  "sources_read": [
+    "https://github.com/lrmoorejr/radix-map",
+    "https://github.com/lrmoorejr/radix-map/blob/main/README.md",
+    "https://github.com/lrmoorejr/radix-map/blob/main/CMakeLists.txt",
+    "https://github.com/lrmoorejr/radix-map/blob/main/RadixMap.hpp",
+    "https://github.com/lrmoorejr/radix-map/blob/main/.github/workflows/ci.yml",
+    "https://github.com/lrmoorejr/radix-map/issues"
+  ],
+  "confidence": 0.45
+}

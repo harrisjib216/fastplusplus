@@ -1,0 +1,47 @@
+{
+  "id": "https://github.com/Nicoshev/rapidhash",
+  "one_liner": "Header-only, wyhash-derived 64-bit hash beating xxh3 on latency and throughput on most CPUs; ties or loses on AMD Ryzen.",
+  "what_it_does": "rapidhash is a general-purpose, non-cryptographic 64-bit hash function for hash-table keys, checksums, and deduplication, positioned as a faster drop-in for xxh3/wyhash-style hashing. It ships as a single header exposing rapidhash(key, len) and rapidhash_withSeed(key, len, seed), both returning a uint64_t. Two size-tuned siblings, rapidhashMicro and rapidhashNano, share the same call shape but trade long-input throughput for smaller code size and lower small-key latency.",
+  "how_it_is_fast": "The core is a wyhash-style multiply-mix: a 64x64->128-bit multiply (rapid_mum) folded with XOR (rapid_mix), deliberately avoiding AES-NI/CLMUL or other vectorized instructions so the same code path runs on x86-64 and aarch64. Clang 18+ compiles rapidhash to roughly 185 instructions on both architectures (rapidhashMicro ~140, rapidhashNano under 100, both stack-free). An optional RAPIDHASH_UNROLLED macro trades code size for large-input throughput; RAPIDHASH_PROTECTED trades speed for extra entropy protection against the multiply's zero-collapse cases.",
+  "when_to_use": [
+    "General-purpose in-memory hash-table/hash-map keys needing a fast, SMHasher-passing 64-bit hash as an xxh3 or wyhash replacement.",
+    "Mixed key-size workloads (roughly 4 bytes to 2MB) on x86-64 or aarch64 where one algorithm should cover both tiny keys and large buffers.",
+    "Latency-sensitive small-key hashing (4/8/16 bytes) on Apple Silicon, ARM Neoverse V2, or AMD Turin, where README numbers show rapidhash ~5-9% faster than xxh3.",
+    "Code-size-constrained embedded/mobile targets hashing keys up to ~48 bytes: use rapidhashNano (<100 instructions, no stack usage).",
+    "Cache-miss-sensitive HPC/server code hashing keys up to ~512 bytes: use rapidhashMicro (~140 instructions, no stack usage)."
+  ],
+  "when_not_to_use": [
+    "Streaming/incremental hashing where input length isn't known upfront and can't be buffered whole: no streaming API ships despite the README's 'Streamable' framing (maintainer confirms in issue #39 that the C/C++ side has no streaming implementation and the hash targets short, whole-buffer runs).",
+    "Adversarial or untrusted-input contexts needing DoS resistance: with the default secret, same-length inputs above 16 bytes admit a documented collision construction (issue #25); mitigate by generating a per-process secret with the bundled secret.h.",
+    "Any context requiring cryptographic hashing or collision resistance guarantees: explicitly non-cryptographic.",
+    "Need for a 128-bit or 32-bit hash output: not offered (open issues #26 and #46, no stated plans).",
+    "Peak throughput on AMD Zen5 desktop parts (Ryzen 9700X): xxh3 leads there in the README's own table (78 vs 68 GB/s)."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (stdint.h, string.h; intrin.h + _umul128 intrinsic on MSVC)",
+    "min_toolchain": "C99 or C++11; constexpr evaluation additionally needs C++14. README claims support for GCC, Clang, Intel icx, and MSVC; the ~185-instruction codegen figure is specifically for Clang 18+.",
+    "platforms": "x86-64 and aarch64 are the tested/optimized targets (no AVX/AES-NI/CLMUL required); the header compiles generically elsewhere via its endianness macros, consistent with the README's 'platform-independent' claim, but only x86-64/aarch64 numbers are published.",
+    "thread_safety": "not documented explicitly; the hash functions are stateless, operating only on caller-supplied input and a read-only default secret table, so concurrent calls from multiple threads need no external synchronization",
+    "drop_in_for_baseline": "partial — same call shape as xxh3 (pointer + length [+ seed] -> 64-bit integer) but produces different, incompatible hash values; rapidhash/Micro/Nano are also not interchangeable with each other above 48-80 byte inputs"
+  },
+  "gotchas": [
+    "README markets the family as 'Streamable,' but no streaming API exists for C/C++ (open issue #39) — it's designed for short, whole-buffer runs, not incremental hashing.",
+    "Default secret permits a documented collision construction for same-length inputs over 16 bytes (issue #25); use secret.h to generate a custom secret for any adversarial-input exposure.",
+    "rapidhash, rapidhashMicro, and rapidhashNano only produce matching output below 80 and 48 bytes respectively — swapping variants for larger keys silently changes hash values.",
+    "An older header-only revision could produce 'multiple definition of rapid_secret' linker errors across translation units (issue #6, fixed via a static/const macro); the vendored old_version/rapidhashV1.h may not carry that fix."
+  ],
+  "pick_this_over_siblings_when": "Pick rapidhash over komihash or MUM/VMUM when you want the specific hash already vendored into Chromium, Node.js, Folly's F14, Fuchsia, Ninja, JuliaLang, and Zig, plus size-tuned Micro/Nano builds for cache- or code-size-constrained targets. Pick HighwayHash instead if AVX2-level throughput matters more than portability, since HighwayHash depends on vector instructions rapidhash deliberately avoids; pick t1ha or CityHash if a longer independent track record matters more than the newest peak-speed numbers.",
+  "verified_claims_summary": "README benchmarks (bench/ harness adapted from xxHash's benchHash, compiler/flags unstated) show rapidhash beating xxh3 on average per-hash latency for 4/8/16-byte keys on Apple M1 Pro, M3 Pro, ARM Neoverse V2, and AMD Turin (roughly tied on Ryzen 9700X), and beating xxh3 on peak throughput hashing 16KB-2MB files on M1 Pro, M3 Pro, M3 Ultra, M4, and Neoverse V2 (xxh3 wins on Ryzen 9700X, 78 vs 68 GB/s). Independently, rurban/smhasher's default-build results table (AMD Ryzen 5 3350G) also shows rapidhash ahead of xxh3 on both bulk throughput and small-key cycles/hash, without stating compiler flags.",
+  "status_note": "Actively maintained single header (last commit 2026-08-19, V3 released 2025), MIT-licensed and trivial to vendor; open issues (no 128-bit or 32-bit output, no streaming API) mark real feature gaps rather than signs of abandonment.",
+  "sources_read": [
+    "https://github.com/Nicoshev/rapidhash",
+    "https://github.com/Nicoshev/rapidhash#outstanding-performance",
+    "https://github.com/Nicoshev/rapidhash/blob/master/rapidhash.h",
+    "https://github.com/Nicoshev/rapidhash/issues",
+    "https://github.com/Nicoshev/rapidhash/issues/39",
+    "https://github.com/Nicoshev/rapidhash/issues/6",
+    "https://github.com/Nicoshev/rapidhash/issues/25"
+  ],
+  "confidence": 0.6
+}

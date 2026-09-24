@@ -1,0 +1,47 @@
+{
+  "id": "https://github.com/scandum/gridsort",
+  "one_liner": "Stable C sort using a cache-friendly bucketed grid; qsort-compatible interface; 1.4x-2.6x faster than std::stable_sort on 1M-int arrays.",
+  "what_it_does": "Gridsort is a stable, comparison-based sort for C arrays of fixed-width primitive types (8/16/32/64-bit ints, long double), exposed through the same (array, nmemb, size, cmp) signature as qsort(). It inserts elements into a 2-D 'binary cube' of buckets located via a boundless binary search, spills each overflowing bucket into a quadsort-sorted chunk, then merges all buckets back into the array. The README says non-primitive-width data (structs) should be sorted indirectly via an array of pointers.",
+  "how_it_is_fast": "Speed comes from three layered techniques: a boundless binary search (README claims up to 2x faster than a bounds-checked binary search) to pin down the right bucket, a self-balancing grid ('binary cube') sized so buckets stay cache-resident, and quadsort's branchless merge (8-element memcpy blocks with head/tail branchless merges) used both to sort overflowing buckets and to do the final merge. It also switches to an adaptive binary search once it detects already-sorted runs, which is consistent with its larger lead over std::stable_sort on 'generic order' and ascending/descending inputs than on pure random data.",
+  "when_to_use": [
+    "C codebases already calling qsort() that want a stable, drop-in-signature replacement and can tolerate O(n) extra memory",
+    "1M-element-scale arrays of 8/16/32/64-bit ints or long doubles with partial existing order (ascending/descending runs, sawtooth, 'generic order') -- this is where gridsort showed its largest measured edge (~2.6x vs std::stable_sort)",
+    "Sorting arrays of pointers or handles (size_t/void*-sized elements) to indirectly sort structs, since the sort itself only accepts elements of size 1/2/4/8/sizeof(long double)",
+    "Projects wanting a small, dependency-free, public-domain (Unlicense) C source drop rather than a C++ template library"
+  ],
+  "when_not_to_use": [
+    "Elements whose size isn't exactly 1, 2, 4, 8, or sizeof(long double) bytes -- gridsort asserts on other sizes, and that assert compiles out under NDEBUG, silently skipping the sort",
+    "Multi-threaded callers: gridsort.c/gridsort.h declare a single global size_t BSC_Z reused by every type specialization and recomputed at the start of each grid build -- observed directly in source, not documented, and not safe for concurrent gridsort() calls",
+    "Memory-constrained environments: needs O(n) auxiliary allocation (2*sqrt(n) blocks of sqrt(n) elements per the README) versus in-place alternatives",
+    "C++ code wanting a literal std::stable_sort drop-in -- the interface is qsort-style (void*, size_t, size_t, CMPFUNC*), not iterators/functors, so it needs a wrapper and is only exercised on POD-like data in the benchmarks",
+    "Chasing the best possible raw random-data throughput or an actively maintained option -- the README's own 'Porting' notes point to the author's newer fluxsort/quadsort as faster/simpler alternatives, and the repo has had no commits since 2024-07-27"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none beyond the C standard library (stdlib.h, stdio.h, assert.h, errno.h; quadsort.h adds float.h, string.h); bundles its own copy of quadsort.h/quadsort.c in the same src/ directory",
+    "min_toolchain": "not documented; bench.c's header comment lists gcc -O3, clang -O3, or g++ -O3 as working compile lines; plain C with no version-specific features observed",
+    "platforms": "any (portable C, no SIMD intrinsics or threading in gridsort.c/quadsort.c); note sizeof(long double) is platform/ABI-dependent, which affects the 128-bit type-size dispatch case",
+    "thread_safety": "not documented; source shows a shared, non-thread-local global (BSC_Z) written at the start of every top-level call, which looks unsafe for concurrent gridsort() invocations",
+    "drop_in_for_baseline": "partial -- qsort-compatible C signature (void *array, size_t nmemb, size_t size, CMPFUNC *cmp), not a std::stable_sort drop-in; C++ callers need a wrapper, and only elements of size 1/2/4/8/sizeof(long double) are accepted directly"
+  },
+  "gotchas": [
+    "Only element sizes matching sizeof(char/short/int/long long/long double) are supported; other sizes hit an assert() that is a no-op under NDEBUG, so release builds can silently fail to sort",
+    "Falls back to plain quadsort() for nmemb < BSC_X*BSC_X (1024 elements), so small arrays never exercise the grid/bucket logic",
+    "Global BSC_Z is shared mutable state across all five type specializations (8/16/32/64/128-bit) -- not safe to call from multiple threads concurrently",
+    "The 'long double' case is used as the stand-in for 128-bit elements; its actual byte width varies by platform/ABI, so the size dispatch is not portable as-is"
+  ],
+  "pick_this_over_siblings_when": "Among the sibling stable sorts from the same author/repo family (quadsort, fluxsort, blitsort), pick gridsort specifically for its bucket/binary-cube behavior on partially-ordered or structurally patterned data ('generic order', ascending/descending runs), where its README-measured lead over std::stable_sort was largest (~2.6x vs ~1.4x on pure random order); for best raw random-data throughput or lower memory overhead, the README's own porting notes point to the newer fluxsort/quadsort instead.",
+  "verified_claims_summary": "Against libstdc++ std::stable_sort (g++ -O3 -w -fpermissive, WSL gcc 7.5.0/Ubuntu 18.04, comparisons inlined, no CPU model stated), sorting 1,000,000 random-order 32-bit ints, 10-sample average: gridsort 0.051147s vs std::stable_sort 0.073191s (~1.4x); on 'generic order' 1M 32-bit, 0.016224s vs 0.041741s (~2.6x). A separate, older benchmark (gcc -O3, WSL gcc 7.4.0, comparisons not inlined) shows gridsort ~1.6x faster than glibc's qsort() (a mergesort variant, not std::sort) on 100,000 random-order 128-bit elements (0.012730s vs 0.019996s).",
+  "status_note": "Stale: last commit 2024-07-27 (over two years old as of this writing) with zero open issues and no CPU model given for either benchmark; still Unlicense (public-domain, no patent grant) and small enough (two header + two source files, no dependencies) to vendor as-is.",
+  "sources_read": [
+    "https://github.com/scandum/gridsort",
+    "https://github.com/scandum/gridsort/blob/main/README.md",
+    "https://github.com/scandum/gridsort/blob/main/src/gridsort.h",
+    "https://github.com/scandum/gridsort/blob/main/src/gridsort.c",
+    "https://github.com/scandum/gridsort/blob/main/src/quadsort.h",
+    "https://github.com/scandum/gridsort/blob/main/src/quadsort.c",
+    "https://github.com/scandum/gridsort/blob/main/src/bench.c",
+    "https://github.com/scandum/gridsort/blob/main/LICENSE"
+  ],
+  "confidence": 0.6
+}

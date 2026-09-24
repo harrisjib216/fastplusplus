@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/mh-dm/sb_lower_bound",
+  "one_liner": "Branchless drop-in-shaped replacement for std::lower_bound that relies on clang emitting cmov instead of a branch.",
+  "what_it_does": "A single-header template function with the same call shape as std::lower_bound (iterator pair, value, optional comparator) that finds the first element not less than value in a sorted range. Instead of the classic branchy binary-search loop, it writes the pointer update as a plain if whose codegen is steered toward a conditional move rather than a conditional jump. The repo ships this as one of ~13 sibling variant headers (prefetching, multiply-based, hand-written asm) that test.cpp benchmarks against each other and against std::lower_bound.",
+  "how_it_is_fast": "Classic binary search on random data mispredicts branches roughly half the time, stalling the pipeline; sb_lower_bound's comparison-and-advance step is written so clang (with -mllvm -x86-cmov-converter=false) lowers it to a cmov, letting the CPU avoid that misprediction penalty at the cost of doing k+1 comparisons per lookup instead of std::lower_bound's average log2(n+1). A separate variant in the same repo, sbpm_lower_bound, adds __builtin_prefetch calls on both candidate cache lines once the range exceeds an L2-sized threshold (256KB), which the author's later post credits for most of the gain on multi-hundred-MB arrays.",
+  "when_to_use": [
+    "Sorted arrays of primitive integer/float/pointer keys with a single-instruction comparator",
+    "Hot search loops compiled with clang on x86-64 where you can add -mllvm -x86-cmov-converter=false",
+    "Very large (multi-MB to GB scale) arrays where the prefetching variant (sbpm_lower_bound/sbp_lower_bound) can hide memory latency",
+    "Latency-critical code dominated by branch mispredictions from unpredictable/random query patterns",
+    "Willing to vendor a small header and pin toolchain/flags rather than depend on portable stdlib codegen"
+  ],
+  "when_not_to_use": [
+    "Comparators over strings or other multi-instruction keys - the author's own numbers show it is slightly slower than std::lower_bound for 8-byte string keys in every tested configuration",
+    "Building with GCC, or clang without the cmov flag - branchless codegen doesn't happen and performance is roughly parity with std::lower_bound",
+    "Anything outside x86-64 - all reported gains are clang+cmov on one Haswell-class -march target; no ARM/other-arch data exists",
+    "Only forward iterators are available - despite the 'ForwardIt' template parameter name, the implementation uses operator[], so it actually requires random-access iterators",
+    "Codebases wanting an actively maintained dependency - last commit July 2023, 24 stars, zero issues or PRs to gauge real-world robustness beyond the author's own benchmark"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (only <bit>, <functional> from the standard library)",
+    "min_toolchain": "C++20 (repo's own build commands use -std=c++20; functions are constexpr); benchmarked with g++-10 / clang++-10",
+    "platforms": "x86-64 only in the evidence given (branchless gains shown solely with clang + -mllvm -x86-cmov-converter=false, -march=haswell); GCC does not produce the branchless path",
+    "thread_safety": "not documented (stateless, read-only template function - no reason to expect different behavior from std::lower_bound, but the repo makes no explicit statement)",
+    "drop_in_for_baseline": "partial - explain: matching call signature (iterator pair + value [+ comp]) to std::lower_bound, but it needs random-access iterators despite the ForwardIt name, and the speed advantage only materializes under clang with the specific -mllvm flag; under gcc or default clang it's a same-signature but not faster substitute"
+  },
+  "gotchas": [
+    "The 'ForwardIt' template parameter is misleading: the body indexes with first[half], so only random-access iterators actually work",
+    "The headline 2x/1.84x numbers require clang plus -mllvm -x86-cmov-converter=false; without that flag (or under gcc) it's roughly as fast as std::lower_bound",
+    "Makes k+1 comparisons per call (2^k <= n < 2^(k+1)) versus std::lower_bound's average log2(n+1), so it can lose on cheap comparators even when branch prediction isn't the bottleneck",
+    "The prefetching variants (sbp_/sbpm_lower_bound) hardcode an L2-sized 256KB threshold and cache-line constants tuned to the author's own benchmark machine"
+  ],
+  "pick_this_over_siblings_when": "Pick sb_lower_bound over the SIMD/layout-restructuring siblings (FastBinarySearch, Lemire's SIMD Quad search, simdsearch) when you want a minimal single-header, std::lower_bound-signature-compatible branchless search for primitive keys on clang/x86-64 without SIMD intrinsics or a precomputed/cache-friendly array layout; pick scandum/binary_search instead if your actual baseline is C's bsearch() rather than std::lower_bound.",
+  "verified_claims_summary": "Author's own benchmark (test.cpp) on one unspecified Intel Kaby Lake i7, g++-10/clang++-10 -std=c++20 -O2 -march=haswell, against libstdc++'s std::lower_bound: with clang and -mllvm -x86-cmov-converter=false, sb_lower_bound averages 33.24 ns/call vs 61.30 ns for std::lower_bound (~1.84x) on primitive types; without that flag, or under gcc, results are roughly parity, and for 8-byte string keys sb_lower_bound is slightly slower in every measured configuration. A later post on the same site reports the separate prefetching variant sbpm_lower_bound at ~71 ns vs std::lower_bound's ~161 ns (~2.3x) on arrays up to ~128M entries.",
+  "status_note": "Abandoned since its last commit on 2023-07-06 (repo not archived, but no open issues or PRs exist to gauge upkeep); MIT-licensed via LICENSES/MIT.txt and per-file SPDX headers even though GitHub's own license detector reports none, and it's small and header-only enough to vendor as-is.",
+  "sources_read": [
+    "https://mhdm.dev/posts/sb_lower_bound/",
+    "https://github.com/mh-dm/sb_lower_bound",
+    "https://github.com/mh-dm/sb_lower_bound/blob/master/README.md",
+    "https://github.com/mh-dm/sb_lower_bound/blob/master/sb_lower_bound.h",
+    "https://github.com/mh-dm/sb_lower_bound/blob/master/std_lower_bound.h",
+    "https://github.com/mh-dm/sb_lower_bound/blob/master/sbpm_lower_bound.h",
+    "https://github.com/mh-dm/sb_lower_bound/blob/master/test.cpp",
+    "https://github.com/mh-dm/sb_lower_bound/issues",
+    "https://github.com/mh-dm/sb_lower_bound/pulls"
+  ],
+  "confidence": 0.8
+}

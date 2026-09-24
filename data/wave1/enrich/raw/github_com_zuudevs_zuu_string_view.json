@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/zuudevs/zuu_string_view",
+  "one_liner": "Header-only C++11 SWAR-accelerated string_view alternative; faster find/rfind/find_first_of than std::string_view, slower on not_of scans.",
+  "what_it_does": "zuu_string_view is a non-owning, zero-copy view type that brings std::string_view-style ergonomics (find, rfind, find_first_of/last_of, find_first_not_of/last_not_of, substr) to C++11 codebases that can't move to C++17. It's templated over char, wchar_t, char8_t/16_t/32_t, is constructible from C strings, char arrays, std::string, and (when compiled as C++17+) std::string_view, and converts implicitly back to std::string and std::string_view. It is not a strict drop-in: size_type/npos is `unsigned int` (32-bit), not std::size_t, so return values and npos comparisons differ from std::string_view's.",
+  "how_it_is_fast": "The positive-search functions (find, rfind, find_first_of, find_last_of) use SWAR (SIMD-within-a-register): they memcpy 8 bytes at a time into a uint64_t 'tape', broadcast the needle byte(s) across all 8 lanes, XOR against the tape, and apply the classic branchless haszero/hasless byte-detection trick (0x7F7F...7F and 0x8080...80 masks) plus count_trailing_zeros/count_leading_zeros to locate the matching byte in one shot instead of a per-byte loop. Multi-char searches (find_first_of family) extend this with a 256-bit bitmap built from 4 uint64_t lookup words. This path only triggers for sizeof(CharT)==1 outside constexpr evaluation; everything else falls back to a scalar loop.",
+  "when_to_use": [
+    "Hot-path find/rfind/find_first_of/find_last_of/find(char) calls over ASCII/byte strings (README's own test string is ~95 chars) where a few nanoseconds per call matters",
+    "C++11-only codebases that want string_view-style ergonomics without raising the language standard",
+    "Header-only vendoring is acceptable: just include/zuu/string_view.hpp + include/zuu/char_class.hpp, no build step",
+    "Single-threaded or read-only-shared usage (it's a raw pointer+length pair with no internal synchronization)",
+    "Data provably under ~4 billion characters, since length is stored as a 32-bit unsigned int"
+  ],
+  "when_not_to_use": [
+    "find_first_not_of / find_last_not_of-heavy code: the README's own numbers show zuu 20-26% slower than std::string_view there",
+    "Buffers that could exceed ~4B characters, or code that assumes std::string_view's std::size_t-typed npos/return values",
+    "wchar_t/char16_t/char32_t workloads or constexpr contexts: the SWAR path is disabled there (sizeof(CharT)==1 and non-constexpr only), so performance likely reduces to the scalar fallback, which is unbenchmarked",
+    "Projects that need a licensed dependency to ship: no LICENSE file and no license field in vcpkg.json",
+    "Teams wanting proven maturity: repo created 2026-09-11, all 30 commits land within about a day, 0 stars, 0 issues, no third-party validation"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none for the library itself (Google Benchmark and GoogleTest are dev-only, pulled via vcpkg for building the tests/benchmarks)",
+    "min_toolchain": "C++11 (CI builds it under GCC, Clang, MSVC, and Apple Clang with -DCMAKE_CXX_STANDARD=11); CMake 3.20+ if using the provided build",
+    "platforms": "CI covers Ubuntu 24.04 (GCC/Clang), Windows 2022 (MSVC), macOS 15 (Apple Clang); no vector intrinsics used (SWAR is plain uint64_t arithmetic), so it should build anywhere a 64-bit integer type exists",
+    "thread_safety": "not documented; the view holds only an immutable pointer+length with no internal mutable state, so concurrent reads of the same view look safe by inspection, but the project does not state this",
+    "drop_in_for_baseline": "partial — explain: API names and shape closely mirror std::string_view and it implicitly converts to/from std::string and std::string_view, but size_type/npos is `unsigned int` rather than std::size_t, so code comparing against std::string_view::npos or relying on 64-bit indices needs changes"
+  },
+  "gotchas": [
+    "size_type and npos are `unsigned int` (32-bit), not std::size_t like std::string_view — a real interop gap, not just a naming difference",
+    "The SWAR fast path only activates when sizeof(CharT)==1 and outside constexpr evaluation; wide-char types and constexpr calls silently use the scalar loop instead",
+    "find_first_not_of and find_last_not_of are slower than std::string_view (20-26% per the README), the opposite of the library's headline claim",
+    "No LICENSE file and no license field in vcpkg.json, so legal usability is unresolved even though the source is public"
+  ],
+  "pick_this_over_siblings_when": "It's the only catalogued entry benchmarked against std::string_view itself (the other siblings target std::string/std::to_string), so pick it specifically when your bottleneck is string_view::find-family calls on a C++11 toolchain; for std::string construction/formatting/conversion speedups, use FastString, to_static_string, or Str instead.",
+  "verified_claims_summary": "README's first-party Google Benchmark table (one ~95-char haystack, compiler/flags/stdlib unstated, hardware reported only as '12x 2096 MHz CPU') shows zuu::string_view beating std::string_view on find_first_of (6.11 vs 15.7 ns, ~2.5x), find/substring (11.1 vs 14.1 ns), rfind/substring (11.4 vs 16.7 ns), find_last_of (11.0 vs 14.7 ns), and find/char (1.56 vs 2.24 ns), while std::string_view wins on find_first_not_of (5.01 vs 6.22 ns) and find_last_not_of (5.00 vs 6.82 ns).",
+  "status_note": "Actively developed as of the last commit (2026-09-12) but very early: v0.4.0, all 30 commits landed within about a day of creation (2026-09-11), 0 stars, and no LICENSE file, so treat it as unlicensed and unproven rather than production-ready.",
+  "sources_read": [
+    "https://github.com/zuudevs/zuu_string_view",
+    "https://github.com/zuudevs/zuu_string_view/blob/main/README.md",
+    "https://github.com/zuudevs/zuu_string_view/blob/main/include/zuu/string_view.hpp",
+    "https://github.com/zuudevs/zuu_string_view/blob/main/include/zuu/char_class.hpp",
+    "https://github.com/zuudevs/zuu_string_view/blob/main/vcpkg.json",
+    "https://github.com/zuudevs/zuu_string_view/blob/main/CMakePresets.json",
+    "https://github.com/zuudevs/zuu_string_view/blob/main/CMakeLists.txt",
+    "https://github.com/zuudevs/zuu_string_view/blob/main/benchmarks/api/string_view_find.cpp",
+    "https://github.com/zuudevs/zuu_string_view/blob/main/.github/workflows/ci.yml",
+    "https://github.com/zuudevs/zuu_string_view/issues",
+    "https://github.com/zuudevs/zuu_string_view/commits/main"
+  ],
+  "confidence": 0.45
+}

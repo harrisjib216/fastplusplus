@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/kuszmaul/supermalloc",
+  "one_liner": "Research malloc(3) replacement using 2MiB virtual-memory superblocks and optional Haswell HTM; beats DLmalloc/JEmalloc/Hoard/TBBmalloc.",
+  "what_it_does": "SuperMalloc is a drop-in implementation of malloc/calloc/free/realloc/posix_memalign/memalign/aligned_alloc plus malloc_usable_size, built as libsupermalloc.so (uses Haswell hardware transactional memory) or libsupermalloc_pthread.so (pthread-mutex fallback for non-HTM CPUs). It is Bradley Kuszmaul's ISMM'15 paper allocator, built to stress the malloc-test multithreaded alloc/free microbenchmark rather than to serve as a maintained production allocator.",
+  "how_it_is_fast": "Objects are allocated from 2MiB chunks that each hold one size class; chunk-number-to-metadata lookup uses a big mostly-uncommitted array instead of a tree, and most size classes use a prime number of cache lines (plus random alignment for large objects) to avoid cache associativity conflicts. Allocation/free paths use a 3-level cache (10-object per-thread cache, a per-CPU cache sized to roughly one L2's worth of objects per size class, and a global cache), with objects moved between levels in O(1) via array/bitmap operations. Everything a critical section needs is prefetched beforehand so the section itself is short, which speeds ordinary locking and raises the commit rate of the RTM hardware-transaction path.",
+  "when_to_use": [
+    "Reproducing or extending the ISMM'15 malloc-test throughput results on period-matched hardware/toolchain (Haswell+ with TSX, gcc 4.8.3-class compiler)",
+    "Research into HTM-assisted allocator design or virtual-address-space-heavy (superblock/chunk) allocator layouts",
+    "Workloads shaped like malloc-test: many threads doing tight fixed-size-class allocate/free cycles",
+    "Willing to vendor and patch a ~2015-era C++11 source drop (dual MIT/GPLv3) instead of taking a maintained package",
+    "Have access to Haswell+ HTM for the full-speed build, or accept the pthread-lock fallback build otherwise"
+  ],
+  "when_not_to_use": [
+    "Need an actively maintained allocator: last commit 2017-10-25, no response to open issues since",
+    "Need production reliability: open/closed issues report crashes under mysql and sysbench, and 'make check results in Aborted (core dumped)' on some setups",
+    "Need 8-byte-aligned allocation support: issue #36 requesting that mode is still open, i.e. unimplemented",
+    "No Haswell+ TSX hardware and don't want to fall back to the slower pthread-mutex build",
+    "Need current comparisons: no head-to-head vs mimalloc/snmalloc/rpmalloc exists, only vs 2014-era DLmalloc 2.8.6/Hoard 3.10/JEmalloc 3.6.0/TBBmalloc tbb43",
+    "Virtual address space is constrained: allocates 2MiB chunks per size class rather than tightly packing"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none beyond libc/libdl (-ldl); vendored copies of Hoard/jemalloc/tbb exist only under other-mallocs/ for building benchmark comparisons, not for SuperMalloc itself",
+    "min_toolchain": "C++11 (-std=c++11) / C11; needs GCC with LTO (release build uses -O3 -flto); a Makefile comment notes it does not compile with gcc 4.8.0",
+    "platforms": "64-bit Linux, x86-64 only; the RTM/HTM build additionally needs a Haswell+ CPU with TSX, otherwise use the libsupermalloc_pthread.so build",
+    "thread_safety": "designed as a thread-safe malloc via per-thread and per-CPU caches backed by either RTM hardware transactions or pthread-mutex-protected shared structures; no separate documented thread-safety contract beyond that",
+    "drop_in_for_baseline": "true — exposes malloc/calloc/free/realloc/posix_memalign/memalign/aligned_alloc/malloc_usable_size with standard C signatures for linking or LD_PRELOAD"
+  },
+  "gotchas": [
+    "Two separate shared libraries ship (HTM vs pthread); the README says a runtime auto-detect was 'planned' but was never added, so you must pick the right one yourself",
+    "Runtime behavior is gated by undocumented env vars (SUPERMALLOC_THREADCACHE, SUPERMALLOC_TRANSACTIONS, SUPERMALLOC_PREDO) used throughout the benchmark Makefiles",
+    "Reported crashes against real workloads: mysql (issue #23) and sysbench (issue #33)",
+    "8-byte-aligned allocation is requested but not implemented (issue #36, open)"
+  ],
+  "pick_this_over_siblings_when": "Pick SuperMalloc over the sibling allocators (NUMAlloc, Hoard, scalloc, arena/pool allocators) when the question is specifically HTM-assisted allocator design validated by an A-tier paper benchmark against DLmalloc/JEmalloc/Hoard/TBBmalloc — not for production use, where NUMAlloc (maintained, benchmarked vs glibc 2.28 and mimalloc) or Hoard (still maintained) are safer choices.",
+  "verified_claims_summary": "On the author's malloc-test multithreaded allocate/free microbenchmark (ISMM'15 paper, gcc 4.8.3 -O3 -flto on Fedora 20/glibc 2.18), SuperMalloc reached ~2.1x the throughput of the best of DLmalloc 2.8.6, JEmalloc 3.6.0, Hoard 3.10, and TBBmalloc tbb43_20140724 at 1 thread; 2.75x at 8 threads using Haswell HTM on a Core i7-4770; and 3.4x at 32 threads without HTM on a 2-socket Xeon E5-2665.",
+  "status_note": "Abandoned: last commit 2017-10-25 with 20 open issues including build failures on CentOS 6.5 and lto1 errors; dual MIT/GPLv3-licensed C++11 source is small enough to vendor but expect to patch around a 2015-era toolchain assumption.",
+  "sources_read": [
+    "https://github.com/kuszmaul/SuperMalloc",
+    "https://github.com/kuszmaul/SuperMalloc/tree/master",
+    "https://github.com/kuszmaul/SuperMalloc/blob/master/src/supermalloc.h",
+    "https://github.com/kuszmaul/SuperMalloc/blob/master/Makefile.include",
+    "https://github.com/kuszmaul/SuperMalloc/blob/master/release/Makefile",
+    "https://raw.githubusercontent.com/kuszmaul/SuperMalloc/master/paper/ismm15/supermalloc.tex",
+    "https://github.com/kuszmaul/SuperMalloc/blob/master/LICENSE",
+    "https://github.com/kuszmaul/SuperMalloc/issues"
+  ],
+  "confidence": 0.8
+}

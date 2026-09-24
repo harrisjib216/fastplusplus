@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/google/highwayhash",
+  "one_liner": "SIMD-based keyed hash function; ~5x faster than SipHash at 1 KiB while keeping DoS-resistant strong-hash security claims.",
+  "what_it_does": "HighwayHash is a keyed, SIMD-accelerated pseudorandom hash function meant as a faster, still-strong replacement for SipHash in hash-flooding-resistant hash tables, message authentication, and checksums. It produces 64, 128, or 256-bit digests from a key via HighwayHashT<Target>(state, bytes, size, &result) for a compile-time target, InstructionSets::Run<HighwayHash> for runtime CPU dispatch, or c_bindings.h's HighwayHash64/128/256 for a C-callable API. It is not a drop-in for std::hash: callers build/link the library, manage a key, and pick a dispatch strategy; the repo's included SipHash implementation is the closer reference-C drop-in.",
+  "how_it_is_fast": "Mixes input using SIMD 32x32->64-bit multiplies and permutes over a 1024-bit internal state held in AVX2/SSE4.1/VSX/NEON registers, with specialized handling of partial vectors for small inputs. The AVX2 build reaches 0.24 cycles/byte at 1024 bytes vs SipHash's 1.26, more than twice as fast as the repo's own SipTreeHash variant. A runtime dispatcher (instruction_sets.h) selects AVX2, SSE4.1, VSX, NEON, or a portable fallback at first use so one binary can exploit the widest available SIMD without recompiling.",
+  "when_to_use": [
+    "Hash-flooding-resistant hashing where a strong keyed hash faster than SipHash is needed, especially for inputs >=64 bytes where the AVX2 speedup is largest",
+    "x86-64 targets with AVX2 or SSE4.1, or POWER (VSX) / ARM/AArch64 (NEON) where the corresponding source file is included",
+    "Applications that persist hashes long-term: output format is declared frozen forever, so stored hashes never break on upgrade",
+    "Need 128- or 256-bit digests (checksums/integrity) from a single pass, not just a 64-bit hash",
+    "Willing to vendor an archived Apache-2.0 source drop and pin a validated compiler rather than depend on a maintained package"
+  ],
+  "when_not_to_use": [
+    "Need a literal std::hash / std::unordered_map drop-in swap — HighwayHash needs explicit key management and its own state object, not a hasher functor substitution",
+    "Target platform has none of AVX2/SSE4.1/VSX/NEON: falls back to a portable path the README says runs at ~10% of AVX2 throughput",
+    "Building with a modern stock compiler without validating output first: open issue #94 (filed 2020, still open) reports a Portable-target hash mismatch on GCC 10.2, and the archived repo will never fix it",
+    "Need the 'cryptographically strong' framing to hold at typical hash-table bin counts — the repo's own issue #28 is an unresolved dispute over that security claim",
+    "Need active maintenance or security patching — GitHub shows the repository archived (read-only) and the hash output is explicitly frozen, so no further algorithmic or compiler-compat fixes will land"
+  ],
+  "integration": {
+    "form": "source-drop / static lib (Makefile and CMakeLists.txt build lib/libhighwayhash.a; CMake's BUILD_SHARED_LIBS option can produce a shared lib instead)",
+    "dependencies": "none beyond the C++ standard library; pthread is linked for the optional ThreadPool/profiling utilities, not required for hashing itself",
+    "min_toolchain": "C++11 (Makefile and CMakeLists.txt both pass -std=c++11); CMake >= 3.18 for the CMake build path; GCC/Clang new enough for AVX2/SSE4.1/NEON intrinsics as needed per target",
+    "platforms": "x86-64 (AVX2 or SSE4.1), ARM/AArch64 (NEON), POWER (VSX), plus a portable C++ fallback for any other architecture",
+    "thread_safety": "not documented — HHState objects are stateful, constructed per hash, and the README/headers make no thread-safety claim; data_parallel.h's ThreadPool is for parallelizing benchmarks, not for sharing a hash state across threads",
+    "drop_in_for_baseline": "partial — explain: same problem domain and a similar shape (keyed state object) as the repo's own SipHash implementation, but HighwayHash needs its own headers, a build step, and different key material, so it is not a std::hash-compatible swap"
+  },
+  "gotchas": [
+    "Output is declared 'frozen forever' in the README: no future release will ever change existing hash values, but also none will ever improve speed or security further",
+    "Intrinsics-using headers must be compiled into separate per-target translation units with matching flags (README 'Dispatch' section); mixing this up risks an ODR violation and crashes",
+    "AVX2 carries a ~56K-cycle warmup penalty on Haswell-era CPUs per the README, so the authors recommend against AVX2 for infrequent/sporadic hashing in an otherwise non-AVX2 application",
+    "Repository is GitHub-archived (read-only); open issue #94 (GCC 10.2 Portable-target hash mismatch, filed 2020) has no fix and, given the archival, never will"
+  ],
+  "pick_this_over_siblings_when": "Pick HighwayHash over komihash/MUM-hash/t1ha/rapidhash when the requirement is specifically SipHash's DoS-resistant strong-hash security framing plus multi-width (64/128/256-bit) SIMD output beating SipHash, not just the fastest possible non-cryptographic hashmap key hash; those sibling hashes target xxHash/CityHash/wyhash-class baselines for general-purpose hashing and are actively maintained, unlike this archived, output-frozen project.",
+  "verified_claims_summary": "On a single idle core of an Intel Xeon E5-2690 v3 (2.6 GHz) compiled with a patched GCC 4.9, the README's own benchmark table shows HighwayHashAVX2 at 0.24 cycles/byte for 1024-byte inputs vs SipHash's 1.26 cycles/byte (~5.25x) and 0.95 vs 1.93 cycles/byte at 64 bytes (~2x), consistent with the linked arXiv paper's stated 5.2-5.3x speedup at 1 KiB.",
+  "status_note": "Abandoned: the GitHub repo is archived (read-only), last commit 2024-04-18, and the hash output is explicitly declared frozen forever; it is Apache-2.0 licensed and small enough to vendor as a source drop, but pin and test the exact compiler version given the open, unresolved GCC 10.2 output-mismatch report (issue #94).",
+  "sources_read": [
+    "https://github.com/google/highwayhash",
+    "https://github.com/google/highwayhash/blob/master/README.md",
+    "https://github.com/google/highwayhash/blob/master/highwayhash/highwayhash.h",
+    "https://github.com/google/highwayhash/blob/master/Makefile",
+    "https://github.com/google/highwayhash/blob/master/CMakeLists.txt",
+    "https://github.com/google/highwayhash/blob/master/highwayhash/highwayhash_target.h",
+    "https://github.com/google/highwayhash/issues/94",
+    "https://github.com/google/highwayhash/issues/28"
+  ],
+  "confidence": 0.85
+}

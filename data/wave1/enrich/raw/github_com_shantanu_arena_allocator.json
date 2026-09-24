@@ -1,0 +1,45 @@
+{
+  "id": "https://github.com/shantanu/arena-allocator",
+  "one_liner": "Single-file bump-pointer arena allocator with an STL-compatible wrapper; beats glibc malloc via std::vector, especially above the mmap threshold.",
+  "what_it_does": "Arena<N> is a fixed-size std::array<std::byte,N> bump-pointer buffer that hands out sequentially-aligned memory and falls back to global operator new when it runs out; deallocate() only rewinds the pointer if you free the most-recently-allocated block. ShortAlloc<T,N> wraps a reference to an Arena in an STL-compatible allocator so it can be plugged in as std::vector<T, ShortAlloc<T,N>>'s second template parameter. It is not a global malloc replacement: you declare the Arena, construct the container with a reference to it, and must keep the arena alive for the container's lifetime.",
+  "how_it_is_fast": "Allocation is a pointer bump plus an alignment round-up (no free-list search, no locking, no syscalls) as long as the arena has room, so it stays in cache and skips heap-manager bookkeeping entirely. The largest gains (93x-230x) show up once std::vector's reallocations grow past glibc's mmap threshold (~128KB total), where the default allocator pays for an mmap syscall and first-touch page faults that the arena avoids by staying on the stack-backed buffer.",
+  "when_to_use": [
+    "Short-lived, single-threaded scopes with a known upper bound on total allocation, e.g. a function-local std::vector that shouldn't touch the heap",
+    "Many same-sized emplace_back/reallocation cycles where the arena can be sized to the container's peak footprint",
+    "LIFO-order allocate/deallocate patterns, since deallocate() only reclaims the block at the top of the arena",
+    "Containers whose elements grow into the 1KB-8KB+ range, where you want to sidestep glibc's mmap-threshold latency cliff",
+    "Reference/teaching use: a ~180-line file showing a bump allocator plus STL-allocator plumbing"
+  ],
+  "when_not_to_use": [
+    "Multi-threaded code — no locking or atomics in Arena or ShortAlloc; concurrent use is undefined behavior",
+    "Workloads needing out-of-order or random-order frees, since only the most recent allocation can be reclaimed",
+    "Long-running or size-unbounded containers — the arena is a fixed std::array<N> and silently falls back to global operator new once exhausted, with no bookkeeping to route the matching free back correctly",
+    "Anywhere licensing matters — the repo ships no LICENSE file, so reuse terms are undefined",
+    "Copy-pasting the repo as-is into production — the committed source has active std::cout debug prints in allocate()/deallocate() that the benchmarked version did not have"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (only <iostream>, <vector>, <array>, <memory>, <cstdint> from the STL)",
+    "min_toolchain": "C++17 (uses std::byte, std::array); benchmarked with clang 17.0, -std=c++20, libstdc++",
+    "platforms": "any (portable standard C++, no architecture-specific code)",
+    "thread_safety": "not documented; source has no mutex/atomics — Arena and ShortAlloc are not thread-safe",
+    "drop_in_for_baseline": "partial — explain: ShortAlloc is STL-allocator-compatible so it plugs into std::vector<T, ShortAlloc<T,N>>, but you must declare an Arena<N>, construct the container with a reference to it, and keep the arena alive; it does not replace global operator new/delete."
+  },
+  "gotchas": [
+    "The GitHub source (arena-benchmark.cpp) has its std::cout diagnostic lines active inside allocate()/deallocate(); the QuickBench snippet that produced the published numbers has those lines commented out, so running the repo file as-is will not reproduce the benchmark",
+    "deallocate() silently no-ops (leaks the block) if you free anything that isn't both in-buffer and the most-recently-allocated block — no error or assertion is raised",
+    "Once the arena is exhausted, allocate() falls back to ::operator new, but deallocate() has no bookkeeping to route those heap-backed blocks to ::operator delete except via the top-of-stack pointer check — mixed arena/heap blocks can be freed incorrectly",
+    "The free operator== / operator!= for ShortAlloc reference a nonexistent `rhs.arena` member (the field is actually private `d_arena`) and access it without a friend declaration — this code would fail to compile if a container ever invoked allocator comparison"
+  ],
+  "pick_this_over_siblings_when": "Pick this over general-purpose allocator replacements in the catalog (Hoard, SuperMalloc, NUMAlloc, scalloc) when you want a tiny, dependency-free, single-file bump allocator for a bounded, single-threaded, LIFO-style scope rather than a global malloc replacement for multi-threaded programs. Against the other same-domain arena-allocator (yaroslavaristov), prefer that one for broader, harder benchmark evidence (AMD EPYC and Apple M1, direct malloc/free comparison); prefer this one specifically for the ready-made STL-compatible ShortAlloc wrapper usable as std::vector<T, Alloc>.",
+  "verified_claims_summary": "On QuickBench (clang 17.0, -O3, -std=c++20, libstdc++, single CPU core from a shared AWS pool), std::vector<TestClass, ShortAlloc> doing 100 emplace_back calls was 2.2x-4.4x faster than std::vector's default allocator (glibc malloc) for 8B-512B objects, and 93x-230x faster for 1KB-8KB objects — the latter driven by the default allocator crossing glibc's mmap threshold during vector reallocation, not a general per-allocation speed advantage at that size.",
+  "status_note": "Stale (last commit 2025-03-13, 9 GitHub stars, no open issues, no LICENSE file) and marked 'reference' usability — best read as a worked example of a bump allocator plus STL-allocator wiring rather than adopted as-is; the repo currently ships the un-optimized, debug-print-enabled source, so strip those lines before reusing it.",
+  "sources_read": [
+    "https://github.com/shantanu/arena-allocator",
+    "https://github.com/shantanu/arena-allocator#%EF%B8%8F-performance-benchmarks",
+    "https://github.com/shantanu/arena-allocator/blob/main/arena-benchmark.cpp",
+    "https://github.com/shantanu/arena-allocator/issues",
+    "https://quick-bench.com/quick/hnEZC5GC-9UoXK6aMM5VZ-66CKY"
+  ],
+  "confidence": 0.4
+}

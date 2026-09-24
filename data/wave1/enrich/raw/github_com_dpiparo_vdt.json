@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/dpiparo/vdt",
+  "one_liner": "Header-only Padé-polynomial libm replacements for exp/log/trig/asin-acos-atan/isqrt, auto-vectorizable, 1.3-13x faster scalar.",
+  "what_it_does": "VDT provides inline, header-only replacements for libm's transcendental math functions: exp, log, sin, cos, tan, tanh, asin, acos, atan, atan2, and isqrt (1/sqrt), in double and single precision. Functions live in the vdt:: namespace with fast_ prefixes (vdt::fast_exp, vdt::fast_sinf, vdt::fast_logv for arrays), not as std:: overloads, so call sites must be rewritten explicitly. Every function has a scalar T(T) signature and an array void(unsigned int, T*, T*) signature; an optional PRELOAD CMake build mode can additionally intercept existing libm calls at runtime without touching source.",
+  "how_it_is_fast": "Each function is a Padé/minimax rational-polynomial approximation adapted from the Cephes math library, evaluated with a small fixed number of multiply-adds instead of libm's argument-reduction-and-table-lookup algorithms. The scalar code uses no intrinsics, so it auto-vectorizes under GCC/Clang/ICC into SSE/AVX/AVX2(+FMA) loops; the array (*_v) signatures make this explicit for the compiler and unlock the larger SIMD gains. Accuracy is deliberately relaxed (~0.1-0.5 average LSB difference from libm per the README's own table) to keep polynomial degree and branching low.",
+  "when_to_use": [
+    "Hot loops calling exp/log/sin/cos/tan/asin/acos/atan/atan2/isqrt millions of times where ~0.1-0.5 ULP error is acceptable, e.g. physics simulation and reconstruction code (VDT originated at CERN and is used in Geant4 and LHC experiment software).",
+    "Code that can call the array (*_v) signatures or already auto-vectorizes, since SIMD gains (SSE/AVX/AVX2+FMA) are consistently larger than scalar gains in both the README table and the cited paper.",
+    "x86-64 builds where you can pick SSE/AVX/AVX2/FMA at CMake configure time, or ARM builds via the NEON CMake option (though NEON is not exercised in the published benchmarks).",
+    "Projects willing to vendor a small LGPL-3 header-only library and either call vdt:: functions directly or use the PRELOAD build to intercept an existing libm-calling binary without recompiling it."
+  ],
+  "when_not_to_use": [
+    "Need bit-identical results to libm/std math (finance, reproducibility-critical or correctness-critical code) — VDT trades ~0.1-0.5 ULP accuracy for speed on every function.",
+    "Building on Windows: issue #1 (open) reports it isn't compatible (__restrict__ vs __restrict, missing _USE_MATH_DEFINES) with no merged fix.",
+    "Building on aarch64: default CMake option SSE=ON still passes -msse and breaks the build (issue #21, filed 2025-04-29, open, unresolved as of the last commit).",
+    "Scalar single-precision expf/logf/isqrtf specifically — the record's own benchmark numbers show these particular scalar variants are slower than glibc libm.",
+    "Teams that need active upstream support: last commit 2025-04-03, several issues open for years (CMake overwrites user CXX flags, clang linking error, Python 3.12 removed the imp module the Python scripts depend on)."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (optional Vc library integration via USE_VC CMake option)",
+    "min_toolchain": "GCC >=4.8, AppleClang >=5.0, Clang >=3.3, or ICC >=15.0 (enforced by CMakeLists.txt); C++11 is required only to build the optional DIAG benchmarking/unit-test tools, not to use the headers",
+    "platforms": "x86-64 primarily (SSE on by default, AVX/AVX2/FMA opt-in via CMake flags); NEON is an opt-in CMake option for ARM but the default aarch64 build is currently broken by the SSE flag (issue #21); not Windows-compatible per issue #1",
+    "thread_safety": "not documented; the scalar functions inspected (exp.h, stdwrap.h) are stateless/pure with no shared mutable state, so concurrent calls appear safe, but no explicit guarantee is stated anywhere in the docs",
+    "drop_in_for_baseline": "partial — functions are not std:: overloads, callers must explicitly call vdt::fast_* instead of std::exp/std::sin/etc.; only the optional PRELOAD build mode intercepts existing libm calls at runtime without source changes"
+  },
+  "gotchas": [
+    "fast_expf has a documented undefined-behavior bug (left shift of a negative value) for large negative inputs such as -163.48, caught by UBSan; open since 2019 (issue #10) with a proposed but unmerged fix.",
+    "Default CMake option SSE=ON means a plain `cmake .` still emits -msse even on non-x86 targets, which currently breaks aarch64 builds (issue #21).",
+    "Accuracy varies per function: the README's own table shows isqrt averaging ~0.45 LSB off libm, the largest deviation of any function in the library.",
+    "CMake overwrites user-supplied CMAKE_CXX_FLAGS instead of appending to them (issue #8, open since 2018)."
+  ],
+  "pick_this_over_siblings_when": "Pick VDT over SLEEF or trigno_simd_cpp when you want one small header-only LGPL library covering the whole transcendental family (exp/log/trig/inverse-trig/isqrt) with a production track record in CERN/Geant4 physics code, rather than SLEEF's correctly-rounded (1-ulp) precision or trigno_simd_cpp's narrower sin/cos/tan-only scope; choose SLEEF instead when correct rounding matters more than raw speed.",
+  "verified_claims_summary": "The refereed CHEP2013 paper (glibc 2.12 libm vs VDT v0.3.6, GCC 4.8.1, Intel Core i7-4770K) reports scalar double-precision speedups from ~1.3x (isqrt) to ~12.8x (exp), with AVX2+FMA-vectorized log reaching ~22x; the README's separate i7-3930K table shows smaller but consistent scalar gains (Exp 2.7x, Log 2.8x, Tan 3.7x) rising to 4-8x with SSE/AVX. Both sources agree that scalar single-precision expf/logf/isqrtf are slower than libm.",
+  "status_note": "Maintenance is stale (last commit 2025-04-03; multiple issues from 2016-2025 remain open, including a Windows-incompatibility report and an unfixed UB bug), but it's LGPL-3.0-or-later, header-only, and small enough to vendor; it's still cited in the repo description as used in CERN's Geant4 and LHC experiment software.",
+  "sources_read": [
+    "https://github.com/dpiparo/vdt",
+    "https://github.com/dpiparo/vdt/blob/master/ReadMe.md",
+    "https://github.com/dpiparo/vdt/blob/master/Licence.txt",
+    "https://github.com/dpiparo/vdt/blob/master/include/exp.h",
+    "https://github.com/dpiparo/vdt/blob/master/include/vdtMath.h",
+    "https://github.com/dpiparo/vdt/blob/master/CMakeLists.txt",
+    "https://github.com/dpiparo/vdt/blob/master/include/stdwrap.h",
+    "https://github.com/dpiparo/vdt/issues/1",
+    "https://github.com/dpiparo/vdt/issues/10",
+    "https://github.com/dpiparo/vdt/issues/21",
+    "https://github.com/dpiparo/vdt/issues (list of open/closed issues)"
+  ],
+  "confidence": 0.65
+}

@@ -1,0 +1,47 @@
+{
+  "id": "https://github.com/lemire/code-used-on-daniel-lemire-s-blog",
+  "one_liner": "SIMD quaternary-interpolation search over sorted 16-bit arrays in 16-element blocks; beats std::binary_search on Roaring-Bitmap-style containers.",
+  "what_it_does": "It answers membership queries (\"is key k in this sorted array?\") on arrays of 16-bit unsigned integers shaped like Roaring Bitmap array containers (sorted, up to a few thousand elements). The core is a single ~40-line inlineable function, simd_quad(const array_container_t*, uint16_t), taking a {pointer, cardinality} struct and a key and returning a bool. It is not a drop-in for std::binary_search: the calling convention and return type differ, and there is no lower_bound/insertion-point variant.",
+  "how_it_is_fast": "It narrows to a candidate 16-element block using quaternary interpolation search over block-boundary keys (comparing 3 split points per round instead of binary search's 1, so fewer rounds), then checks all 16 candidates in that block with one SIMD compare pass (NEON vceqq_u16 or SSE2 _mm_cmpeq_epi16 over two 8-lane loads, ORed and reduced) instead of continuing scalar element-by-element comparisons.",
+  "when_to_use": [
+    "Sorted arrays of uint16_t, roughly 16-4096 elements (the tested range and Roaring array-container size cap)",
+    "Membership-only lookups (found/not-found), not insertion-point queries",
+    "Workload is warm-cache-dominated on x86 (author measured >2x vs std::binary_search there) or cold-cache-dominated on Apple Silicon (>2x there)",
+    "You can adapt call sites to the array_container_t{const uint16_t*, size_t} shape and compile with NEON or SSE2 guaranteed",
+    "You're comfortable vendoring a ~40-line function rather than linking a library"
+  ],
+  "when_not_to_use": [
+    "Any key type other than uint16_t — the compares are hardcoded to 16-bit values",
+    "General-purpose sorted containers with arbitrary element types/sizes where std::binary_search/lower_bound already fits",
+    "Platforms without SSE2 or NEON — no scalar/AVX2/SVE fallback beyond a small-array linear scan below 16 elements",
+    "Need for an insertion point (lower_bound semantics) — simd_quad only returns a boolean",
+    "Anything requiring production hardening: this is unpackaged blog-benchmark code with no test suite beyond a self-check against std::binary_search inside the benchmark harness itself, and no issue tracker for this specific function"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none for the algorithm itself; the benchmark harness additionally pulls lemire/counters v3.1.0 via CPM for perf-counter instrumentation, not needed to use simd_quad on its own",
+    "min_toolchain": "the function itself only needs NEON (__ARM_NEON) or SSE2 (__SSE2__) intrinsic headers; the author's benchmark harness requires C++23 (std::print/std::format) and CMake's default Release build (-O3 -DNDEBUG)",
+    "platforms": "x86-64 with SSE2 (always available on x86-64) or aarch64 with NEON; no portable fallback path for other architectures",
+    "thread_safety": "not documented; the function only reads caller-owned memory and writes no shared state, so concurrent calls over the same array should be safe by inspection",
+    "drop_in_for_baseline": "partial — same asymptotic membership-test job as std::binary_search but a different signature (struct pointer + cardinality instead of an iterator pair) and returns only a bool, not an iterator or insertion point"
+  },
+  "gotchas": [
+    "Assumes the array is already sorted ascending; the code does not check this and will silently return wrong answers on unsorted input",
+    "Arrays smaller than 16 elements (the fixed block size) skip the SIMD/interpolation path entirely and fall back to a plain linear scan, so there's no benefit below that size",
+    "The quaternary-interpolation step over plain SIMD-binary-search only helped in the author's own ablation on the Intel machine (large arrays, cold cache); on Apple M4 it had little effect, so porting it as-is to ARM buys less than the Intel numbers suggest"
+  ],
+  "pick_this_over_siblings_when": "Pick simd_quad over the generic siblings (sb_lower_bound, scandum/binary_search, FastBinarySearch) only when you're already working with sorted uint16_t arrays capped near 4096 elements in the Roaring-Bitmap array-container shape and can adapt to its struct-based calling convention; for generic sorted-array membership or lower_bound over other primitive types or larger/unbounded sizes, the siblings are closer to drop-in replacements for std::lower_bound/bsearch and are the better fit.",
+  "verified_claims_summary": "On an Intel Emerald Rapids server (GCC) and an Apple M4 (Apple LLVM), Release-mode C++23 builds (CMake default -O3 -DNDEBUG, no -march flags) benchmarking membership queries on sorted uint16_t arrays (sizes 2-4096, 100,000 arrays per size, 10M cold-cache + 10M warm-cache queries per size): simd_quad beat std::binary_search in every tested configuration, with the >2x speedup holding specifically for Intel-warm-cache and Apple-M4-cold-cache; the opposite cache mode on each platform showed smaller, numerically unstated gains (charts only, no numeric tables in the post text).",
+  "status_note": "Not a maintained library — it's single-author blog-benchmark code; the repo README explicitly disclaims industrial-strength quality ('don't expect or ask for industrial-strength software... it can be wrong, slow, poorly coded') and states the code is public domain ('don't bother forking, just steal it') even though no formal LICENSE file exists. Usability is reference-only: read the technique, don't depend on the repo as a dependency.",
+  "sources_read": [
+    "https://github.com/lemire/Code-used-on-Daniel-Lemire-s-blog",
+    "https://github.com/lemire/Code-used-on-Daniel-Lemire-s-blog/blob/master/README.md",
+    "https://github.com/lemire/Code-used-on-Daniel-Lemire-s-blog/tree/master/2026/04/26/benchmark",
+    "https://github.com/lemire/Code-used-on-Daniel-Lemire-s-blog/blob/master/2026/04/26/benchmark/CMakeLists.txt",
+    "https://github.com/lemire/Code-used-on-Daniel-Lemire-s-blog/blob/master/2026/04/26/benchmark/README.md",
+    "https://github.com/lemire/Code-used-on-Daniel-Lemire-s-blog/blob/master/2026/04/26/benchmark/benchmarks/simple.cpp",
+    "https://github.com/lemire/Code-used-on-Daniel-Lemire-s-blog/blob/master/2026/04/26/benchmark/benchmarks/benchmark.cpp",
+    "https://lemire.me/blog/2026/04/27/you-can-beat-the-binary-search/"
+  ],
+  "confidence": 0.8
+}

@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/eliaskosunen/scnlib",
+  "one_liner": "Type-safe scanf/istream replacement; ~3-5x faster than std::stringstream and sscanf at parsing ints, floats, and words.",
+  "what_it_does": "scnlib replaces scanf and std::istream for extracting typed values (ints, floats, strings, chrono types, user-defined types) out of text, using a Python-format-like format string that is checked at compile time. scn::scan<Types...>(input, format) returns a result object holding the parsed values and the unconsumed range, instead of writing through output parameters or operator>>. It is not a syntactic drop-in for scanf or istream call sites; those call sites must be rewritten to the new API.",
+  "how_it_is_fast": "It parses the format string once and dispatches straight to type-specialized scanning routines, avoiding stringstream's locale-aware state construction and sscanf's repeated format-string reparsing and whitespace-skipping (the README attributes ~400ns of sscanf's overhead to %n handling and whitespace skipping). Integer scanning has a stripped-down fast path (scn::scan_int, scn::scan_int_exhaustive_valid) and float scanning is built on the fast_float library (or std::from_chars) rather than a locale-aware strtod-style conversion. It also avoids RTTI and, in its core scanning path, exceptions (built with -fno-exceptions -fno-rtti in CI).",
+  "when_to_use": [
+    "Hot loops parsing many ints/doubles/whitespace-delimited words out of in-memory text (logs, config, simple text protocols) where stringstream or sscanf overhead shows up in profiles",
+    "C++17+ codebases on GCC 7+/Clang 8+/MSVC 2019+ that can add a CMake dependency and rewrite the affected parsing call sites",
+    "Code that wants compile-time-checked format strings instead of scanf's unchecked '%' format bugs",
+    "Environments that disable exceptions/RTTI, since scnlib's core scanning path is usable without either",
+    "Cross-platform targets beyond x86: ARM/AArch64, RISC-V, ppc64le, s390x are all CI-tested"
+  ],
+  "when_not_to_use": [
+    "Pure numeric conversion only (string->int/double, no whitespace/word handling) — std::from_chars and fast_float::from_chars both beat scn::scan outright (10.9ns/23.0ns vs 27.1ns/59.7ns for int/double in the README's own table)",
+    "Projects that need a header-only drop-in — scnlib builds a library (source-drop with a src/scn/impl.cpp) and pulls in fast_float via CMake FetchContent by default",
+    "Teams unwilling to learn scn's format-string semantics, which are evaluated left-to-right per-type and are explicitly not a regex/pattern language (documented FAQ gotcha)",
+    "Code paths hit by open correctness issues: wrong result scanning from a std::deque-backed range (#144), a multi-value scan failing after a string value (#134), and floats with very large/small magnitude (#126) — check these against the version you'd pin before relying on them",
+    "I/O-bound parsing (reading from disk/socket dominates), since the measured gains are for in-memory string parsing only, not end-to-end I/O latency"
+  ],
+  "integration": {
+    "form": "static lib (default; shared lib via BUILD_SHARED_LIBS=ON; a C++20 module target scn::module is also available via SCN_MODULES)",
+    "dependencies": "fast_float (fetched via CMake FetchContent by default; can be pointed at an external/vendored copy, or disabled with SCN_DISABLE_FAST_FLOAT to fall back to std::from_chars). GTest and Google Benchmark are pulled in only when building scnlib's own tests/benchmarks, not for library consumers.",
+    "min_toolchain": "C++17; GCC 7+, Clang 8+, or Visual Studio 2019/2022 (CI-tested)",
+    "platforms": "Windows, Linux, macOS (14/15); x86, x86-64, arm, aarch64, riscv64, ppc64le, s390x, mips64le all CI-tested; 32- and 64-bit Windows, MinGW/MSYS2 also covered. One open issue reports test failures on OpenBSD (#155) and another a build failure against libc++ 23 (#159)",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": "partial — same problem domain as scanf/istream (extracting typed values from text) but a different API: scn::scan returns values via a result object instead of scanf's output parameters or istream's operator>>, so existing call sites must be rewritten"
+  },
+  "gotchas": [
+    "Format strings are not regexes or patterns: scn::scan<std::string,std::string>(input, \"{},{}\") does NOT stop the first field at the comma — each {} scans per its type's default rule (a string reads until whitespace), and the literal text between fields is matched and discarded separately; use \"{:[^,]},{}\" to stop at a comma (documented in the FAQ)",
+    "Requires and assumes Unicode input (UTF-8, UTF-16, or UTF-32); behavior on non-Unicode/binary input is not something this session verified",
+    "Not exception-free end-to-end: a custom Scanner's parse() can still throw scn::scan_format_string_error even though the core value-scanning path avoids exceptions/RTTI",
+    "This is the reference implementation of an in-progress ISO C++ proposal (P1729 'Text Parsing'), so API surface may still shift across major versions"
+  ],
+  "pick_this_over_siblings_when": "All the catalogued siblings (cjson.cpp, json.cpp, Cap'n Proto, DAW JSON Link, zpp::bits, Tachyon.JSON, utl::json, HPS) target structured JSON or binary (de)serialization; scnlib solves a different problem — unformatted, scanf/istream-style extraction of ints/floats/words from free text. Pick scnlib when the baseline you're replacing is std::stringstream/sscanf/operator>>, not when you're parsing or emitting JSON or a binary wire format.",
+  "verified_claims_summary": "On an AMD Ryzen 7 5700X (Fedora 40, kernel 6.8.9), compiled with clang 18.1.1 at -O3 -DNDEBUG -march=haswell with LTO, scnlib's own in-repo benchmark suite (commit 3fd830de, run 2024-05-23) measured scn::scan averaging 27.1ns for int, 59.7ns for double, and 24.5ns for a whitespace-delimited string word, versus std::stringstream at 85.5ns/283ns/134ns and sscanf at 272.7ns/432ns/58.4ns — roughly 3.2x, 4.7x, and 5.5x faster than stringstream respectively. The same tables show std::from_chars (10.9ns int, 23.0ns double) and fast_float::from_chars beating scn::scan outright.",
+  "status_note": "Actively maintained (latest master commit 2025-10-29, v4.0 docs current, ongoing releases and CI); Apache-2.0 and technically copyable, but it's a compiled library with a build step and a fast_float dependency, not a header you can just drop into a source tree.",
+  "sources_read": [
+    "https://github.com/eliaskosunen/scnlib",
+    "https://github.com/eliaskosunen/scnlib/blob/master/README.md",
+    "https://github.com/eliaskosunen/scnlib/blob/master/cmake/dependencies.cmake",
+    "https://github.com/eliaskosunen/scnlib/blob/master/docs/pages/faq.md",
+    "https://github.com/eliaskosunen/scnlib/blob/master/docs/pages/guide.md",
+    "https://github.com/eliaskosunen/scnlib/blob/master/docs/pages/mainpage.md",
+    "https://github.com/eliaskosunen/scnlib/blob/master/include/scn/istream.h",
+    "https://github.com/eliaskosunen/scnlib/issues"
+  ],
+  "confidence": 0.85
+}

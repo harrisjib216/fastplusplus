@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/google/flatbuffers",
+  "one_liner": "Zero-copy binary serialization with schema-generated accessors; reads fields in place without unpacking, unlike protoc.",
+  "what_it_does": "FlatBuffers is a cross-platform binary serialization format and toolchain (the `flatc` compiler) that lets code read fields directly from the wire buffer without a separate decode/unpack step. You define types in a `.fbs` schema, run flatc to generate typed accessor classes per target language (17 languages including C++, Rust, Go, Java, Python), and build/read buffers through those generated classes plus `FlatBufferBuilder`. It is not a drop-in replacement for protoc: different schema language (`.fbs` vs `.proto`), different generated API, and a separate code-generation step tied to its own compiler.",
+  "how_it_is_fast": "Tables are encoded as offset-linked vtables and structs as fixed, aligned inline scalar layouts, so field access is pointer arithmetic through the received buffer rather than a parse pass — no intermediate object graph is allocated on decode (0 bytes/blocks reported vs Protobuf LITE's 760B/20 blocks in the project's own benchmark). `FlatBufferBuilder` constructs buffers back-to-front to avoid backpatching offsets during encode. There's an optional slower object API (`--gen-object-api`) that unpacks into STL containers, but the default zero-copy path is what produces the measured speedup.",
+  "when_to_use": [
+    "Game engines or real-time systems reading many small/medium structured messages per frame (scene data, network packets) where allocation-free decode matters",
+    "Read-many, build-once workloads: mmap'd assets, IPC payloads, or config blobs accessed repeatedly after being written once",
+    "Cross-language data exchange needing schema-driven forward/backward field compatibility without adopting full gRPC/protobuf tooling",
+    "Memory-constrained platforms (mobile, embedded) where avoiding a fully parsed object graph saves RAM",
+    "You control both producer and consumer and can regenerate code from `.fbs` schemas as part of your build"
+  ],
+  "when_not_to_use": [
+    "Data arrives from an untrusted source and you don't run flatbuffers::Verifier first — direct field access does no bounds checking on malformed offsets",
+    "You need protobuf's broader ecosystem (gRPC-first tooling, dynamic/reflective message manipulation, established schema registries) with minimal migration cost",
+    "Wire size is the priority over decode speed: FlatBuffers's own benchmark shows its binary format larger than Protobuf's for the same object (344B vs 228B)",
+    "You need a fully mutable object graph by default — that requires the object API, which unpacks the tree and gives up most of the zero-copy advantage",
+    "Team is unfamiliar with offset/vtable-based wire formats and wants protobuf's simpler 'parse into a plain object' mental model"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none for the core C++ runtime (all headers under include/flatbuffers); optional grpc.h integration needs gRPC if used",
+    "min_toolchain": "C++11 (README: works on 'any [platform] with a recent C++ compiler (C++ 11 and newer)'); CMake exposes an optional C++17 test target, not a runtime requirement",
+    "platforms": "Windows, macOS, Linux, Android per README, plus 'any others with a recent C++ compiler'; no architecture-specific (SIMD/AVX) requirement found in headers",
+    "thread_safety": "not documented for the C++ runtime specifically; historical issues (#4164, #5745) report non-thread-safe concurrent reads in the C# runtime, so don't assume cross-language guarantees without checking",
+    "drop_in_for_baseline": "partial — same problem space as protoc/Protobuf but a different schema language, different generated API shape, and its own code-generation step; no source-compatible swap"
+  },
+  "gotchas": [
+    "Direct field access skips validation; run flatbuffers::Verifier (include/flatbuffers/verifier.h) before trusting a buffer from an untrusted source, or bad offsets can read out of bounds",
+    "Accessors return pointers into the original buffer, not owned copies — the backing buffer must outlive every object/string pointer you keep",
+    "The convenient, fully mutable object API (--gen-object-api) unpacks the whole tree into STL containers, forfeiting most of the zero-copy speed this entry is cataloged for",
+    "The wire format carries no self-describing type tag/version — a reader must already know the schema (or use the separate reflection API) to interpret a buffer"
+  ],
+  "pick_this_over_siblings_when": "Pick FlatBuffers over RapidProto, Zserio, or vtprotobuf when you want true zero-copy field access with no unpack step at all — those alternatives still build or touch a parsed object on decode, just cheaper than stock protoc. Pick one of them instead if you must stay on the actual Protobuf wire format/schema/gRPC ecosystem while cutting decode cost.",
+  "verified_claims_summary": "FlatBuffers's own C++ benchmark page (docs/source/benchmarks.md) reports, per 1M iterations on a ~10-object struct (array, 4 strings, mixed int/float scalars): Decode+Traverse+Dealloc 0.08s (FlatBuffers binary) vs 302s (Protocol Buffers LITE C++ runtime from protoc), ~3775x, and Encode 3.2s vs 185s, ~58x. Run on 'Windows 7 64bit' with no compiler, flags, or CPU model stated.",
+  "status_note": "Actively maintained (last commit 2026-09-14, 26.5k stars, used at Google, Unity, Facebook, and many game engines), Apache-2.0 and copyable; but the specific protobuf-comparison benchmark code lived in a now-deleted `benchmarks` git branch and isn't reproducible today, so the >3000x decode figure should be read skeptically (likely an unoptimized/debug protobuf build) even though the library's own speed reputation is well established elsewhere.",
+  "sources_read": [
+    "https://github.com/google/flatbuffers",
+    "https://github.com/google/flatbuffers/blob/master/README.md",
+    "https://github.com/google/flatbuffers/blob/master/docs/source/benchmarks.md",
+    "https://github.com/google/flatbuffers/tree/benchmarks",
+    "https://github.com/google/flatbuffers/tree/master/benchmarks/cpp",
+    "https://github.com/google/flatbuffers/blob/master/docs/source/languages/cpp.md",
+    "https://github.com/google/flatbuffers/blob/master/CMakeLists.txt",
+    "https://github.com/google/flatbuffers/tree/master/include/flatbuffers",
+    "https://github.com/google/flatbuffers/blob/master/docs/source/building.md",
+    "https://github.com/google/flatbuffers/blob/master/docs/source/internals.md",
+    "https://github.com/google/flatbuffers/blob/master/SECURITY.md",
+    "https://github.com/google/flatbuffers/blob/master/include/flatbuffers/verifier.h",
+    "https://github.com/google/flatbuffers/issues?q=thread+safety",
+    "https://github.com/google/flatbuffers/issues?q=verifier+crash"
+  ],
+  "confidence": 0.55
+}

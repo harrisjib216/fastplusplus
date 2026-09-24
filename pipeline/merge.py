@@ -80,8 +80,10 @@ def known_urls(exclude_wave_dir=None):
     return urls
 
 
-def merge(wave_dir):
+def merge(wave_dir, allow_seed=False):
     known = known_urls(exclude_wave_dir=wave_dir)
+    if allow_seed:
+        known -= {canonical(u) for u in read_url_list(KNOWN_SEED)}
     merged, evidence_for_known, report = {}, [], []
 
     for raw in sorted((wave_dir / "raw").glob("*.json")):
@@ -137,8 +139,9 @@ def regenerate_known_list():
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("wave_dir", type=Path)
+    ap.add_argument("--allow-seed", action="store_true", help="seed-record pass: keep entries on the seed list")
     args = ap.parse_args()
-    out, efk, report = merge(args.wave_dir)
+    out, efk, report = merge(args.wave_dir, args.allow_seed)
     print("\n".join(report))
     by_tier = {}
     for e in out:

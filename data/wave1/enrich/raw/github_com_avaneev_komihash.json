@@ -1,0 +1,44 @@
+{
+  "id": "https://github.com/avaneev/komihash",
+  "one_liner": "Header-only, non-cryptographic 64-bit hash beating wyhash and xxHash on short keys (0-31 bytes) via full 128-bit multiply accumulation.",
+  "what_it_does": "komihash is a non-cryptographic 64-bit hash function aimed at hash tables, hash maps, and Bloom filters, plus a PRNG (komirand) built on the same mathematical construct. The core API is a plain C call, komihash(data, len, seed) -> uint64_t, not a std::hash<T> functor, with additional preseed (komihash_with_preseed), discrete-incremental (feed the previous hash back in as the seed), and streamed (init/update/final) variants for hashing values whose total length isn't known upfront. It produces identical results on big- and little-endian systems and ships as a single header (komihash.h) with no external dependencies.",
+  "how_it_is_fast": "Unlike wyhash/CircleHash/lehmer64-style hashes, komihash keeps the full 128-bit result of each internal multiplication instead of folding it back into one 64-bit state word, so consecutive internal states stay distinguishable rather than losing entropy. It parses the input message without overlapping reads, which the author argues avoids the seed-value flaws overlap-based parsers can hit, while keeping branch count low on the 0-15/8-28 byte fast paths. It's scalar C99 (no SIMD requirement), so short-key speed comes from a tight instruction sequence rather than vector width.",
+  "when_to_use": [
+    "Hash table/map/Bloom-filter keying where short keys (0-31 bytes) dominate and you want lower cycles/hash than wyhash_final4 or XXH3_64 without requiring AVX2/SIMD",
+    "Need identical hash values on both big- and little-endian platforms (e.g. hashes stored/compared across architectures)",
+    "Hashing values whose total length isn't known upfront, or hashing many independent fixed-size fields incrementally (discrete-incremental API)",
+    "Want a single dependency-free header (MIT) that's trivial to vendor into a C or C++ codebase",
+    "Portable/scalar targets (no SIMD available) where a branch-light, non-vectorized hash is required"
+  ],
+  "when_not_to_use": [
+    "Bulk/large-buffer hashing (files, big blobs): on the README's own 256,000-byte test komihash (19.3-42.7 GB/s) loses to XXH3_64 (28.0-68.4 GB/s) on all 10 tested platforms and to wyhash_final4 on 8 of 10",
+    "Adversarial or untrusted input where seeded collision-resistance matters: issue #23 (opened 2026-09-18, open as of this review) demonstrates a fixed 64-byte message pair that collides for ~91% of uniformly-random hidden 64-bit seeds, which weakens the README's 'seed it and hash-flooding risk is minimized' guidance",
+    "Need a std::hash<T> drop-in for unordered_map/unordered_set without writing a wrapper — komihash exposes plain C functions, not a functor",
+    "32-bit target platforms, where the README states throughput is 'considerably lower' than 64-bit (no number given)",
+    "Need cryptographic collision resistance — explicitly a non-cryptographic hash"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (standard C headers only: stdint.h, string.h)",
+    "min_toolchain": "ISO C99 (C++98 supported via a stdint.h fallback path; full auto C++ compatibility, with extra branch optimizations under C++11+)",
+    "platforms": "x86, x86-64 (Intel/AMD), AArch64 (Apple Silicon); tested on Windows 10/11, AlmaLinux 9.6, macOS 26.4; scalar code, no SIMD required; 32-bit builds work but are notably slower per README",
+    "thread_safety": "not documented explicitly; reading komihash.h shows the hash functions are pure/stateless with no global mutable state, so concurrent calls from independent threads with their own seed/context arguments appear safe by inspection — each thread must use its own komihash_stream_t for the streaming API",
+    "drop_in_for_baseline": "partial — explain: same plain-C calling convention as xxHash/wyhash (komihash(data,len,seed) -> uint64_t), not a std::hash<T> specialization; needs a small wrapper to use in unordered_map/unordered_set"
+  },
+  "gotchas": [
+    "Open issue #23 (filed 2026-09-18, unresolved as of this review): a fixed 64-byte message pair collides under komihash for ~91% of uniformly-random hidden seeds, reproduced independently by the reporter against the released 5.34 header — a real gap in the 'seed it for collision-attack resistance' advice",
+    "Default seed is 0 (no randomization) unless the caller passes one; self-seeding is required for any hash-flooding resistance, and per the issue above that resistance is weaker than the README implies",
+    "No identity/passthrough hashing: README explicitly recommends using raw key values directly for fixed-size keys rather than hashing them, since komihash adds overhead a no-op wouldn't have",
+    "Big-endian systems pay a ~20% bulk-throughput penalty from byte-swapping, which can be disabled via a macro but then breaks cross-platform hash-value portability"
+  ],
+  "pick_this_over_siblings_when": "Pick komihash over t1ha/CityHash/MUM-VMUM when you want the widest reproducible compiler/CPU benchmark matrix (10 combos) for short-key throughput and don't need SIMD. Pick rapidhash or another sibling instead if the open seed-dependent collision report (issue #23) is disqualifying for your threat model, or if bulk-buffer throughput matters more than short-key speed.",
+  "verified_claims_summary": "Author-run README benchmark across 10 compiler/CPU/OS combinations (GCC 11.5, Clang 18/19, ICC 19, clang-cl 18, Apple Clang 15 on Ryzen 3700X/9950X, Xeon E-2386G, Core i7-7700K, Apple M1) shows komihash 5.34 averaging 7.2 cycles/hash (0-15 bytes) and 8.6 cycles/hash (8-28 bytes) versus wyhash_final4 13.5/18.0, XXH3_64 14.2/21.8, and XXH64 10.2/15.0 — roughly 1.9-2.5x fewer cycles on short keys. On 256,000-byte bulk buffers komihash (19.3-42.7 GB/s) loses to XXH3_64 (28.0-68.4 GB/s) on all 10 platforms and to wyhash_final4 on 8 of 10.",
+  "status_note": "Actively maintained (last commit 2026-08-04, MIT-licensed, 286 stars) and trivial to vendor as one header, but an unresolved collision report (issue #23, opened 2026-09-18, six days before this review) is a live caveat for any security-relevant use.",
+  "sources_read": [
+    "https://github.com/avaneev/komihash",
+    "https://github.com/avaneev/komihash/blob/master/README.md",
+    "https://github.com/avaneev/komihash/blob/master/komihash.h",
+    "https://github.com/avaneev/komihash/issues/23"
+  ],
+  "confidence": 0.6
+}

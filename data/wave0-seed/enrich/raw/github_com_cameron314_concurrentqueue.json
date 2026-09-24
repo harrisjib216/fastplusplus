@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/cameron314/concurrentqueue",
+  "one_liner": "Lock-free MPMC C++11 queue with per-producer sub-queues and bulk ops, beating boost::lockfree::queue on throughput.",
+  "what_it_does": "Single-header, templated multi-producer multi-consumer lock-free queue for C++11. Usable like any other templated queue (enqueue/try_dequeue) but adds bulk enqueue_bulk/try_dequeue_bulk, optional producer/consumer tokens for lower overhead, and a separate BlockingConcurrentQueue wrapper with wait_dequeue for consumers that want to block instead of spin.",
+  "how_it_is_fast": "Each producer gets its own internal sub-queue built from contiguous, freelist-recycled blocks (default 32 elements) instead of a shared linked list, so producers rarely contend; consumers scan sub-queues for a non-empty one. Tokens let a thread cache its producer/consumer handle to skip repeated lookups, and bulk enqueue/dequeue amortize per-operation atomic/CAS overhead across many elements at once. try_enqueue never allocates once the queue is correctly pre-sized, trading a possible false-full return for zero lock/alloc cost on the hot path.",
+  "when_to_use": [
+    "Producer/consumer pipelines with many independent threads, where cross-producer linearizability is not required",
+    "Workloads that can batch items — bulk enqueue/dequeue is where the largest measured gains are (up to ~226x on producer-only microbenchmarks vs boost::lockfree in this record)",
+    "Need both non-blocking (spin/poll) and blocking (wait_dequeue) consumer modes from one library",
+    "Header-only C++11 codebase that can't take a Boost or TBB dependency",
+    "Per-item ordering only needs to hold within a single producer, not globally"
+  ],
+  "when_not_to_use": [
+    "Need strict global linearizable ordering across independent producers — explicitly not guaranteed",
+    "NUMA machines where cross-socket memory reuse patterns matter — not NUMA-aware by the author's own admission",
+    "Single-item, low-contention enqueue only, where boost::lockfree::queue is just ~1.2x slower and you'd rather have a narrower API",
+    "Compilers older than g++4.8 / pre-VS2012, or g++4.6 specifically (documented std::atomic bug)",
+    "Strict per-producer FIFO ordering is load-bearing: issue #437 (open, reported Dec 2025) describes a model-checker-found case where bulk, token-less enqueue/dequeue with small block sizes may reorder a producer's own sequence; unresolved as of this write-up"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none for ConcurrentQueue; BlockingConcurrentQueue additionally needs lightweightsemaphore.h, shipped in the same repo",
+    "min_toolchain": "C++11; VS2012+ or g++ 4.8+ (g++4.6 has a known std::atomic bug and is unsupported)",
+    "platforms": "any (pure C++11 atomics, no inline assembly); CI cross-compiles and runs tests for riscv64 Linux under QEMU; author-tested on Linux (Fedora) and Windows on x86",
+    "thread_safety": "Fully thread-safe for concurrent use from any number of threads; not linearizable across independent producers; tokens themselves are not thread-safe (one per thread/task)",
+    "drop_in_for_baseline": "partial — same general templated-queue usage pattern as boost::lockfree::queue (enqueue/try_dequeue), but adds no-throw bulk ops and tokens, and drops boost's trivial-constructor/trivial-destructor restriction; not an API/ABI-identical drop-in"
+  },
+  "gotchas": [
+    "Not linearizable across independent producers; ordering is only guaranteed within a single producer's own enqueues",
+    "try_enqueue never allocates — correct pre-sizing requires working through the block-size/producer-count formulas in the README, and even then contention can cause spurious false-full returns under weak memory ordering",
+    "Exception safety requires element destructors and any bulk-operation iterators to never throw; only enqueue-side constructor exceptions roll back cleanly",
+    "Open issue #437 (unresolved) questions whether bulk, token-less dequeue can skip a prefix of a sub-queue under certain interleavings with small block sizes"
+  ],
+  "pick_this_over_siblings_when": "no siblings catalogued yet",
+  "verified_claims_summary": "On an 8-core AWS c1.xlarge, moodycamel with tokens reached 795.01k ops/s vs boost::lockfree::queue's 647.96k ops/s (~1.2x) at 8 threads under a balanced producer/consumer workload; the large 70-226x figures are from a producer-only, single-item-with-tokens enqueue microbenchmark, and the ~4-5x weighted averages include moodycamel's bulk operations, which boost and tbb do not support. g++ version and optimization flags are not stated for the AWS runs.",
+  "status_note": "Actively maintained (last commit 2026-07-11, 12.5k GitHub stars, packaged in vcpkg); dual BSD-2-Clause/BSL-1.0 single header, trivial to vendor.",
+  "sources_read": [
+    "https://github.com/cameron314/concurrentqueue",
+    "https://github.com/cameron314/concurrentqueue/blob/master/README.md",
+    "https://github.com/cameron314/concurrentqueue/blob/master/CMakeLists.txt",
+    "https://github.com/cameron314/concurrentqueue (repo file tree)",
+    "https://github.com/cameron314/concurrentqueue/issues/437",
+    "https://github.com/cameron314/concurrentqueue/issues/399"
+  ],
+  "confidence": 0.75
+}

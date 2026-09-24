@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/fabiocannizzo/FastBinarySearch",
+  "one_liner": "Header-only C++ library for O(1)/vectorized insertion-point search in sorted float arrays, beating std::lower_bound scalar and SIMD-batched.",
+  "what_it_does": "Solves the same problem as std::lower_bound: given a sorted array and a query value, find the insertion index. It targets sorted arrays of single/double-precision floats, the case used in spline interpolation and empirical-CDF lookup. The API is not iterator-based: you instantiate a templated BinAlgo<InstrSet, T, Algo> 'engine' over a fixed array (choosing instruction set and algorithm as template parameters), then call .scalar(z) for one query or .vectorial(...) for a batch. A separate C and Fortran wrapper exposes a smaller subset for non-C++ callers (used inside NAG's m01ndc routine).",
+  "how_it_is_fast": "Its headline technique (Direct/DirectCache, the O(1) family) precomputes a linear scaling function that maps a float key straight to a bucket index in a preprocessed table, replacing comparison-based search with arithmetic and a table lookup for roughly log-uniformly distributed data. Other included algorithms (Eytzinger-layout cache-friendly binary search, branchless BitSet search, k-ary ternary/pentary/nonary search) cut iteration count or branch mispredicts more conventionally. The vectorial() path uses SSE4.1/AVX2 and FMA intrinsics to compute several insertion points per call instead of one.",
+  "when_to_use": [
+    "Repeated point-location queries against the same static sorted float/double array (spline interpolation, ECDF lookup) where upfront index preprocessing pays off",
+    "Queries arrive in batches so the SIMD vectorial() path can be used -- this is where the largest (~35x scalar, ~70x+ batched) gains actually show up",
+    "The array's values are close to log-uniformly distributed across their range, keeping the O(1) Direct index table compact",
+    "Target is x86-64 with AVX2/FMA (or at least SSE4.1) available at compile time",
+    "You can accept a template-heavy, per-array engine object instead of a generic iterator-based lower_bound(first,last,val) call"
+  ],
+  "when_not_to_use": [
+    "You need a generic, iterator-based drop-in for std::lower_bound over arbitrary containers/types -- this only supports float/double arrays via its own engine object",
+    "The array is mutated often -- Direct/DirectCache methods need their index table rebuilt on every change, and preprocessing isn't free",
+    "Target is ARM/other non-x86 -- no NEON/ARM port exists (open, unclaimed issue since 2023)",
+    "Memory is tight -- DirectCache/Direct2 variants need extra memory for the index table on top of the array itself",
+    "Workload is a single occasional scalar query -- realistic scalar-to-scalar gain is ~35x at best (per README numbers), not the headline ~100x figure, which mixes batched SIMD throughput against std::lower_bound's scalar number"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (STL only); Intel MKL is only an optional comparison target in the benchmark harness, not a library dependency",
+    "min_toolchain": "C++11-class syntax (paper benchmark builds with -std=c++0x); the library's own demo Makefile defaults to -std=c++17. Needs a compiler exposing SSE4.1/AVX2/FMA intrinsics (GCC/Clang -mavx2 -mfma, or MSVC equivalent) for the fast paths",
+    "platforms": "x86-64 (SSE4.1/AVX2/FMA needed for the fastest scalar and all vectorial paths); no ARM/NEON support (issue #2, open, unclaimed as of 2023)",
+    "thread_safety": "not documented; the engine object is built once over an immutable array and scalar()/vectorial() only read from it, so concurrent read-only use looks safe by inspection, but the author states nothing about this",
+    "drop_in_for_baseline": "partial -- functionally equivalent (returns the same insertion index as std::lower_bound), but the call shape differs: construct a BinAlgo<InstrSet,T,Algo> engine per array/algorithm and call .scalar()/.vectorial() rather than passing iterators to lower_bound()"
+  },
+  "gotchas": [
+    "A 2020 memory-alignment bug (issue #1) made release/non-DEBUG builds return wrong results for some SIMD levels; the author fixed it and the reporter confirmed correct output on master, but the issue itself is still open on GitHub and this session did not re-derive the fix's correctness independently",
+    "That same issue shows -mavx (plain AVX, no AVX2/FMA) failing to compile on gcc 7 with an 'inlining failed... target specific option mismatch' error -- stick to the FMA/AVX2 or SSE2 SIMDLEVEL options that the README benchmarks actually use",
+    "O(1) Direct/DirectCache methods validate the computed index range and throw std::invalid_argument if the array's value range would overflow a uint32 index, rather than silently corrupting results",
+    "No ARM/NEON port; x86-only today"
+  ],
+  "pick_this_over_siblings_when": "Pick FastBinarySearch when the data is a sorted array of floats/doubles and you can preprocess it once and batch queries -- no sibling here offers an O(1) indexed technique or documented AVX2-batched throughput this large. Pick sb_lower_bound instead when you need a true drop-in, single-query, iterator-based replacement with zero preprocessing (its own gain, ~1.8x, is far more modest but has no setup cost or type restriction to floats).",
+  "verified_claims_summary": "On an Intel Xeon E5-2620 v3 (Haswell, 2014) with gcc 7 / libstdc++, the README's own benchmark (2048-element sorted array, single precision) shows the O(1) DirectCacheFMA method at 496.44M scalar searches/s vs std::lower_bound's 14.02M/s scalar -- about 35x, apples-to-apples. The larger '~71x/100x' figures instead compare AVX-2 batched throughput (992.87M/s) against std::lower_bound's scalar-only number, which only reflects real-world gains if the caller actually issues batched queries.",
+  "status_note": "Stale: last commit 2024-12-19 with sporadic activity, and both open GitHub issues (an unclaimed ARM-port request, and a 2020 miscompile report the author says he fixed but never closed) remain open. Still MIT-licensed, header-only, and small enough to vendor; a subset ships in NAG's commercial m01ndc routine, which is some evidence of real-world use beyond the 153 stars.",
+  "sources_read": [
+    "https://github.com/fabiocannizzo/FastBinarySearch",
+    "https://github.com/fabiocannizzo/FastBinarySearch/blob/master/README.md",
+    "https://github.com/fabiocannizzo/FastBinarySearch/blob/master/source/Makefile",
+    "https://github.com/fabiocannizzo/FastBinarySearch/blob/master/source/paper/Makefile",
+    "https://github.com/fabiocannizzo/FastBinarySearch/blob/master/source/include/BinAlgo.h",
+    "https://github.com/fabiocannizzo/FastBinarySearch/blob/master/source/include/Portable.h",
+    "https://github.com/fabiocannizzo/FastBinarySearch/blob/master/source/include/BinSearch.h",
+    "https://github.com/fabiocannizzo/FastBinarySearch/blob/master/source/include/Type.h",
+    "https://github.com/fabiocannizzo/FastBinarySearch/blob/master/source/include/Algo-Direct-Common.h",
+    "https://github.com/fabiocannizzo/FastBinarySearch/blob/master/LICENSE",
+    "https://github.com/fabiocannizzo/FastBinarySearch/issues/1",
+    "https://github.com/fabiocannizzo/FastBinarySearch/issues/2"
+  ],
+  "confidence": 0.85
+}

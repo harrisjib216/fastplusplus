@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/m3janitha/faststring",
+  "one_liner": "Fixed-capacity, stack-allocated, constexpr string class that avoids the heap allocation std::string needs past SSO.",
+  "what_it_does": "FastString (`fss::basic_str<CharT, N>`, aliased as `fixed_size_str<N>`) is a header-only template wrapper around a fixed CharT array with a compile-time capacity N, giving constexpr noexcept construction, copy/move, append, reset, and comparison with no heap allocation. It is not a drop-in std::string: capacity is fixed by the template parameter, and construction/append/reset silently truncate input longer than that capacity rather than growing or throwing. The API is deliberately small and string_view-like (`c_str()`, `str()` returning a `std::string_view`, `remove_prefix`/`remove_suffix` with no bounds checking, `append`, `reset`, `clear`, `swap`) rather than replicating std::string's full surface.",
+  "how_it_is_fast": "Storage is a single fixed `CharT buffer_[max_length + 1]` plus a `std::size_t` length counter, both on the stack, so there is never a heap allocation, unlike std::string once an input exceeds small-string-optimization capacity (typically ~15-22 chars). Construction, append, and reset are just `Traits::copy`/`std::copy` calls capped at the compile-time capacity, and most member functions are `constexpr`, so short/compile-time-known strings can be folded away entirely. The repo's own Godbolt comparison (compiler_analysis.jpg) shows visibly smaller MSVC/gcc-trunk codegen for FastString versus std::string's allocation/SSO-branch logic for the same construct-and-return-length function.",
+  "when_to_use": [
+    "Short strings with a length bound known at compile time (order IDs, tickers, fixed-format codes) in latency-sensitive hot paths.",
+    "Struct/message fields where predictable, allocation-free stack storage and fixed sizeof matter more than a general string API.",
+    "Code that already consumes std::string_view and can call .str() to hand off for further processing.",
+    "Compile-time (constexpr) string construction and simple manipulation.",
+    "Workloads that can tolerate silent truncation of oversized input rather than needing growth or errors."
+  ],
+  "when_not_to_use": [
+    "Any string whose length can exceed the chosen template capacity at runtime — it truncates silently instead of growing or signaling an error.",
+    "Code expecting std::string's full interface (find, mutating substr, operator+, resize/reserve, stream extraction) — FastString's surface is much smaller.",
+    "Append-heavy workloads on strings already inside SSO range: the project's own numbers show FastString roughly at parity (190ns vs 164ns) or slightly slower (50.0ns vs 61.5ns, i.e. ~0.8x) than std::string append in two of the four benchmarked scenarios.",
+    "Toolchains without mature C++20 constexpr support — the repo's own open issue shows GCC 12.2.1 fails to compile the bundled example over a constexpr std::string_view::substr() error.",
+    "Projects that need an actively maintained dependency: last commit 2024-03-31, 27 stars, and two pull requests (missing <cstdint> include, smaller size-type) sitting open and unmerged."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none for the library itself (single header uses only <string_view>, <algorithm>, <string>, <ostream>); benchmark/test targets pull Google Benchmark and Google Test via CMake FetchContent",
+    "min_toolchain": "C++20 (constexpr std::copy is required); README states MSVC 19.27.29111+ or x86-64 gcc-trunk; open issue #4 shows GCC 12.2.1 fails to compile the example over a constexpr std::string_view::substr() limitation",
+    "platforms": "any (portable C++20, no architecture-specific intrinsics); the only published benchmark numbers are from MSVC on Windows, and a multi-platform CMake CI workflow exists but its results were not inspected",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": "partial — same construct/append/compare shape as std::string but fixed compile-time capacity, silent truncation instead of growth, and a much smaller API (no find, no mutating substr, no operator+, no resize/reserve)"
+  },
+  "gotchas": [
+    "Construction/append/reset silently truncate any input longer than the compile-time capacity — no exception, no error flag, no way to detect truncation at the call site.",
+    "remove_prefix/remove_suffix perform no bounds checking (string_view-style); an out-of-range length is undefined behavior.",
+    "Length is stored as a full std::size_t per instance (8 bytes on 64-bit) even for tiny fixed strings; an open, unmerged PR (#5) proposes a smaller configurable size type to cut this overhead.",
+    "GCC 12.2.1 fails to compile the bundled example (open issue #4, unresolved as of the last commit) due to a constexpr std::string_view::substr() error — check your exact GCC version before adopting."
+  ],
+  "pick_this_over_siblings_when": "Pick FastString when you specifically want stack-only, compile-time-sized strings with a minimal-dependency, genuinely constexpr-friendly header for constructing short strings in latency-critical code and can accept silent truncation. The other cataloged siblings solve different problems — to_static_string targets numeric-to-string conversion, buffet/fstring/Str/the Dicanio pool-allocator benchmark target more general-purpose (still growable or heap-backed) string replacements, zuu_string_view targets search over views, and jank's persistent_string is a language runtime's immutable string — none offer FastString's fixed-capacity, constexpr, stack-only design.",
+  "verified_claims_summary": "On MSVC 19.28.29334.0 (Windows; CPU reported only as \"8 x 1498 MHz\" with L1d 48KiB x4, L1i 32KiB x4, L2 512KiB x4, L3 8MiB — no CPU model given, no optimization flags stated), Google Benchmark shows constructing a short string from const char* averaging 498ns wall / 148ns CPU for std::string versus 46.9ns / 16.3ns for fixed_size_str<15> (~10.6x on wall time), and constructing a 45-character string in 1048ns versus 153ns (~6.8x). Append is roughly at parity (190ns vs 164ns for a fixed_size_str<63> case) while a small-buffer append case is slightly slower for FastString (50.0ns vs 61.5ns).",
+  "status_note": "Stale (last commit 2024-03-31) with two open, unmerged pull requests and one unresolved GCC 12.2.1 compile-failure issue; MIT-licensed and small enough (~140-line single header) to vendor and patch yourself if you accept the maintenance risk.",
+  "sources_read": [
+    "https://github.com/m3janitha/FastString",
+    "https://raw.githubusercontent.com/m3janitha/FastString/master/README.md",
+    "https://github.com/m3janitha/FastString/blob/master/include/FastString.h",
+    "https://github.com/m3janitha/FastString/blob/master/CMakeLists.txt",
+    "https://github.com/m3janitha/FastString/blob/master/benchmark/benchmark_test.cpp",
+    "https://github.com/m3janitha/FastString/issues/4",
+    "https://github.com/m3janitha/FastString/issues",
+    "https://github.com/m3janitha/FastString/pulls"
+  ],
+  "confidence": 0.6
+}

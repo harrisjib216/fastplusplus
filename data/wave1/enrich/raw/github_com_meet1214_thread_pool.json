@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/meet1214/thread-pool",
+  "one_liner": "Header-only C++17 fixed-size thread pool with typed futures and exception propagation, beats std::async by reusing worker threads.",
+  "what_it_does": "A minimal general-purpose thread pool: construct ThreadPool(n), call submit(f, args...) to get a std::future<T> back, same shape as std::async but backed by n persistent worker threads instead of spawning a new OS thread per call. Exceptions thrown inside a task are captured by std::packaged_task and re-thrown on future.get(). Single shared FIFO task queue guarded by one mutex/condition_variable; shutdown() is idempotent and also runs from the destructor.",
+  "how_it_is_fast": "Amortizes thread-creation cost: std::async(std::launch::async, ...) typically spawns a fresh OS thread per call, while ThreadPool spawns n threads once and reuses them across all submitted tasks via a locked queue. Workers block on a condition_variable when idle (no busy-waiting). No lock-free structures, work stealing, or SIMD — the entire speedup story is 'don't call clone()/pthread_create() 100 times.'",
+  "when_to_use": [
+    "Many short-lived CPU-bound tasks where std::async's per-call thread spawn is the dominant cost",
+    "You want a drop-in-shaped replacement for ad-hoc std::async fan-out with typed futures and exception propagation",
+    "A single-header dependency is acceptable and you can vendor code without a LICENSE file being a blocker (internal/prototype use)",
+    "A fixed, known worker count is fine and you don't need cancellation or priorities",
+    "Teaching/reference use: the README's architecture section is a clear worked example of the packaged_task + shared_ptr pattern for storing move-only tasks in std::function"
+  ],
+  "when_not_to_use": [
+    "Any production dependency where a license is required — there is no LICENSE file despite an MIT badge in the README (404 on GitHub)",
+    "Workloads needing task cancellation, priorities, or dynamic pool resizing — none are implemented",
+    "High task-submission-rate workloads — single global queue/mutex/condvar means no work stealing and one contention point across all workers",
+    "Any decision that needs trustworthy performance numbers — the published benchmark shows superlinear speedup (3.2x on 2 threads, 9.7x on 8 threads, all on a 4-core machine), a single untimed-repetition run, and an unoptimized default build",
+    "Projects wanting an actively maintained, community-vetted pool — 0 stars, single author, no issues or PRs, so no external validation exists"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none for the library itself; tests/benchmark build pulls GoogleTest via CMake FetchContent (test-only)",
+    "min_toolchain": "C++17, CMake 3.14+ for the provided build (GCC/Clang, exact versions not documented)",
+    "platforms": "not documented beyond \"4-core Linux machine\"; implementation uses only <thread>/<mutex>/<condition_variable>/<atomic>/<future> so it should build anywhere a C++17 std library is available, but only Linux is exercised",
+    "thread_safety": "submit() locks queue_mutex_ so concurrent submission from multiple threads is safe by inspection; not explicitly documented as thread-safe anywhere in the README",
+    "drop_in_for_baseline": "partial — explain: call shape changes from std::async(std::launch::async, f, args...) to pool.submit(f, args...) on a pre-constructed ThreadPool object; futures behave the same"
+  },
+  "gotchas": [
+    "No LICENSE file exists despite the README's MIT badge — legal status of reuse is actually undefined",
+    "CMakeLists.txt sets no CMAKE_BUILD_TYPE and only passes -Wall -Wextra, so the documented `cmake -B build && cmake --build build` produces an unoptimized (likely -O0) benchmark and test build",
+    "Single shared queue/mutex/condvar design (no work stealing) means throughput will not scale past the point where lock contention dominates, unlike pools built for high task-submission rates",
+    "The benchmark's std::async row spawns 100 OS threads for 100 tasks, so the reported 'ThreadPool beats std::async' number is largely measuring thread-creation overhead, not scheduling efficiency"
+  ],
+  "pick_this_over_siblings_when": "Pick this only as a tiny, license-free-to-check, easy-to-read reference implementation of the packaged_task/shared_ptr pattern; for real use, BS::thread_pool (also header-only, mature, widely used) or utl::parallel (also targets std::async, with a somewhat more detailed benchmark) are safer choices since both have far more scrutiny and, in BS::thread_pool's case, an actual license.",
+  "verified_claims_summary": "README's own benchmark/benchmark.cpp, run once on an unspecified 4-core Linux box with no compiler or flags stated, timed 100 std::sqrt-loop tasks: single-threaded 68ms, std::async 18ms (3.8x), ThreadPool at 4 threads 10ms (6.8x) and at 8 threads 7ms (9.7x) — all relative to the single-threaded run; against std::async directly that's about 1.8x (4 threads) to 2.6x (8 threads) faster.",
+  "status_note": "Repo shows recent activity (last push 2026-04-01, marked active) but has zero stars, one author, no issues/PRs, and no LICENSE file, so despite MIT branding it is usable only as a reference, not a dependency to actually take on.",
+  "sources_read": [
+    "https://github.com/meet1214/thread-pool",
+    "https://github.com/meet1214/thread-pool#benchmark-results",
+    "https://github.com/meet1214/thread-pool/blob/main/include/ThreadPool.h",
+    "https://github.com/meet1214/thread-pool/blob/main/CMakeLists.txt",
+    "https://github.com/meet1214/thread-pool/blob/main/benchmark/benchmark.cpp",
+    "https://github.com/meet1214/thread-pool/blob/main/LICENSE"
+  ],
+  "confidence": 0.3
+}

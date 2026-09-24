@@ -1,0 +1,45 @@
+{
+  "id": "https://github.com/gittup/tup",
+  "one_liner": "File-based build tool that beats Make's incremental-rebuild scanning via a persistent Linux-only file monitor and per-command sandboxing.",
+  "what_it_does": "Tup is a DAG-based build tool: Tupfiles (Lua-flavored syntax) declare commands plus their explicit inputs and outputs, and tup wraps each command in a FUSE-based sandbox (dllinject/ldpreload on macOS/Windows) that records actual file accesses to catch undeclared dependencies. It is not a drop-in Makefile replacement -- projects are rewritten in Tup's own rule syntax, with no implicit wildcard globbing.",
+  "how_it_is_fast": "Speed comes from a persistent background 'monitor' process (inotify on Linux) that watches the filesystem so tup never has to stat/walk the whole tree like make does on every invocation; state lives in an embedded SQLite database rather than being recomputed each run. Per-command FUSE sandboxing produces an exact dependency graph (not user-declared globs), so a change dirties only the affected graph nodes -- turning no-op and single-file rebuild checks into near O(changed files) instead of O(all files).",
+  "when_to_use": [
+    "Large Linux C/C++ trees (tens of thousands of files) where make's per-invocation directory scan/stat dominates the edit-compile-test loop.",
+    "Teams willing to run a persistent `tup monitor` daemon in the background and keep it warm.",
+    "Projects that want undeclared-dependency errors caught automatically via file-access tracing instead of hand-maintained header dependency lists.",
+    "GPL-2.0-compatible projects that can vendor the tool as-is (it already bundles Lua, PCRE2 and SQLite3, no external runtime deps)."
+  ],
+  "when_not_to_use": [
+    "Clean/cold builds: tup measured 5-30% slower than make across sizes on the vendor's own benchmark.",
+    "macOS/Windows, or Linux without FUSE: the fast-path monitor is inotify/Linux-specific, the OSX shim has an open unresolved issue since 2014, and FUSE-based sandboxing broke on libfuse3 3.17.1 as recently as 2025 (issue #518).",
+    "Teams needing Makefile compatibility, mainstream IDE integration, or a large plugin ecosystem -- 1.3k stars versus make's ubiquity.",
+    "Build outputs generated dynamically/implicitly -- tup requires every output declared up front; undeclared writes are errors, which is a real migration cost.",
+    "One-off or CI-only cold builds where the monitor never warms up -- most of the claimed win depends on a hot monitor and hot OS cache."
+  ],
+  "integration": {
+    "form": "source-drop (build tup itself from source via bootstrap.sh; not header-only)",
+    "dependencies": "none required to vendor -- bundles Lua, PCRE2, SQLite3 in-tree; needs libfuse on Linux for command sandboxing",
+    "min_toolchain": "not documented precisely -- plain C, built via its own bootstrap.sh/tup; Windows build via build-win32.sh (MinGW)",
+    "platforms": "Linux (full speed: inotify monitor + FUSE sandbox), macOS (dllinject/ldpreload shim, no monitor -- open issue since 2014), Windows (dllinject-based tracing)",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": "false -- different Tupfile syntax (Lua-based), explicit output declarations required, no implicit globbing"
+  },
+  "gotchas": [
+    "Near-zero no-op/rebuild times require `tup monitor` already running; without it tup falls back to scanning, and a third-party benchmark (issue #268) found it slower than make/ninja.",
+    "libfuse3 ABI changes have broken tup's build-command file sandboxing before (3.17.1, reported 2025).",
+    "Monitor cold-start took 2min:30s at 200k files in the vendor's own benchmark (2.5s once cache is hot).",
+    "All build outputs must be declared explicitly; undeclared writes are treated as errors, not warnings."
+  ],
+  "pick_this_over_siblings_when": "Pick tup over xmake/Mill/Buck2/ccache when the specific pain is make's linear directory-scan overhead on a huge Linux C/C++ tree during interactive edit-rebuild, and you can run a persistent monitor daemon and rewrite the build in Tup's DAG syntax; xmake is the closer choice for a faster Make-compatible generator without changing build files, and ccache if the bottleneck is recompilation itself rather than dependency scanning.",
+  "verified_claims_summary": "On tup's own synthetic C-project generator (log-scale graphs, N up to 100k files / ~200k with headers, make run as `make -rR`, no CPU/OS/compiler flags stated), tup reports ~0s no-op checks and ~0.1s single-file rebuilds versus make's figures of roughly 20-30 minutes at 100k files; tup's cold/initial build is itself 5-30% slower than make, and tup's own file monitor took up to 2min:30s to cold-start at 200k files.",
+  "status_note": "Actively maintained (last commit 2026-07-30, closed a race-condition crash as recently as July 2026) but niche -- 1,262 stars, 168 open issues; GPL-2.0 and copyable/vendorable, though its FUSE-based build sandboxing has broken on newer libfuse3 as recently as 2025.",
+  "sources_read": [
+    "https://github.com/gittup/tup",
+    "https://github.com/gittup/tup/blob/master/README.md",
+    "https://github.com/gittup/tup/blob/master/CONTRIBUTING.md",
+    "https://github.com/gittup/tup/issues/268",
+    "https://github.com/gittup/tup/issues/518",
+    "http://gittup.org/tup/make_vs_tup.html"
+  ],
+  "confidence": 0.4
+}

@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/tzcnt/toomanycooks",
+  "one_liner": "Header-only C++20 coroutine thread pool with continuation-stealing scheduling; 1.1-3.8x faster than oneTBB on fork-join workloads.",
+  "what_it_does": "TooManyCooks (TMC) is a general-purpose async runtime for C++20: a lock-free, work-stealing, continuation-stealing thread pool (`ex_cpu`) plus a suite of async data/control structures (channel, latch, barrier, mutex, semaphore) and Asio-based network/file I/O and timers. It is not a drop-in for oneTBB or std::async; the API is coroutine-native, built around `tmc::task<T>`, `co_await`, and helpers like `tmc::spawn`/`tmc::spawn_tuple` (though it also accepts plain functors). It also supports task priorities and hwloc-based NUMA/topology-aware thread placement.",
+  "how_it_is_fast": "Each worker owns a Chase-Lev lock-free work-stealing deque (own thread pushes/pops the tail, other threads steal from the head, buffer doubles on growth); when a coroutine's continuation is ready, the same worker keeps running it instead of handing back to a generic scheduler loop (continuation-stealing), avoiding round-trips through a central queue. Per-thread inboxes and a priority-bitmap scheduler reduce contention for load balancing, and hwloc integration lets thread placement follow real cache/NUMA topology on many-core servers.",
+  "when_to_use": [
+    "Recursive fork-join / divide-and-conquer workloads (skynet, nqueens, fib-style forking) on many-core machines (32-64+ threads) where oneTBB's per-task overhead dominates",
+    "Codebase can standardize on C++20 coroutines and Clang 17+ (or GCC 14+ on Linux) for best codegen",
+    "Need integrated async I/O (sockets, files, timers via Asio) alongside CPU task scheduling, not just a bare thread pool",
+    "Want NUMA/topology-aware thread placement via hwloc on large multi-socket or many-core servers",
+    "Fine vendoring a header-only library instead of linking a prebuilt TBB installation"
+  ],
+  "when_not_to_use": [
+    "Any code path that must build with MSVC: unsupported due to a documented compiler bug causing release-mode miscompilation (may run in Debug, crashes in Release)",
+    "Workload is closer to matmul(2048)-style compute-bound with little forking, where the margin over oneTBB drops to ~1.1x - not worth an API rewrite",
+    "Team can't or won't move to C++20 coroutines, or needs a signature-compatible replacement for std::async/std::thread",
+    "Chasing best-in-class results specifically on this benchmark suite: citor (1.06x mean-ratio-to-best) and libfork (1.18x) beat TMC (1.32x) on the same four workloads",
+    "Risk-averse on maturity: 281 stars, and a channel hazard-pointer crash was reported and only worked around (not code-fixed) as of August 2026"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "hwloc (optional, required by default in the CMake target; disable with TMC_USE_HWLOC=OFF); Asio or Boost.Asio (only needed for the tmc/asio/* network/file I/O headers)",
+    "min_toolchain": "C++20 coroutines; Linux: Clang 17+ (recommended) or GCC 14+, kernel 5.16+ for futex_waitv; Windows: clang-cl 17+ (MSVC unsupported); macOS: Apple Clang 17+ with -fexperimental-library",
+    "platforms": "x86 (32/64-bit), AArch64, LoongArch LA64, riscv64",
+    "thread_safety": "The ex_cpu executor accepts concurrent task submission from any thread. Async data structures like channel are safe across distinct token copies, but a single token instance is not thread-safe - each concurrent task/thread needs its own token copy.",
+    "drop_in_for_baseline": "partial — conceptually replaces oneTBB's task_group/flow-graph scheduling, but requires rewriting call sites to the coroutine-based tmc::task<T>/co_await API rather than a signature-compatible swap"
+  },
+  "gotchas": [
+    "Per the project's own version notes, minor version bumps (not just majors) may include breaking API changes - pin a version rather than tracking main",
+    "channel.hpp hazard-pointer issue reported in issue #275 (Aug 2026): reusing or sharing a single chan_tok across tasks/threads caused intermittent crashes; the maintainer's fix is disciplined per-task token copies, not a code patch, and a separate stale-hazard-pointer soundness edge case (extremely long token idle time) is acknowledged as theoretically possible but undocumented",
+    "hwloc is a required dependency by default under the CMake target; must explicitly pass TMC_USE_HWLOC=OFF to drop it",
+    "MSVC builds can appear to work in Debug but crash in Release due to a compiler thread_local-caching bug - do not rely on MSVC even for prototyping"
+  ],
+  "pick_this_over_siblings_when": "Pick TMC over dispenso or Taskflow when the workload is naturally coroutine-shaped (co_await-driven recursive fork-join) and you also want built-in async I/O in the same runtime; libfork slightly beats TMC on this exact benchmark suite's mean ratio (1.18x vs 1.32x) if you don't need channels/Asio integration, so prefer libfork for pure recursive-task speed and TMC when the fuller feature set (channels, priorities, I/O) matters more than the last ~10% of throughput.",
+  "verified_claims_summary": "On a 64-core/64-thread AMD EPYC 7742 (Debian 13, Clang 21.1.7, -O3 -march=native, linked against libtcmalloc), TMC beat oneTBB by 3.77x on the skynet 100M-task benchmark (37,949us vs 142,887us), 1.79x on nqueens, 2.49x on fib(39), and 1.12x on matmul(2048), per the tzcnt/runtime-benchmarks suite that is maintained by TMC's own author but publishes reproducible code, compiler flags, and hardware specs.",
+  "status_note": "Actively maintained (commit as recent as 2026-09-22, currently v1.7.0) and BSL-1.0 licensed with Conan/vcpkg packaging, but still young (281 stars) - a channel hazard-pointer crash was still being triaged via GitHub issue as recently as August 2026, and the header-only form makes it cheap to vendor a pinned version if that matters.",
+  "sources_read": [
+    "https://github.com/tzcnt/TooManyCooks",
+    "https://github.com/tzcnt/TooManyCooks/blob/main/README.md",
+    "https://github.com/tzcnt/TooManyCooks/blob/main/include/tmc/ex_cpu.hpp",
+    "https://github.com/tzcnt/TooManyCooks/blob/main/include/tmc/detail/qu_chase_lev64.hpp",
+    "https://github.com/tzcnt/TooManyCooks/blob/main/include/tmc/version.hpp",
+    "https://github.com/tzcnt/TooManyCooks/blob/main/include/tmc/channel.hpp",
+    "https://github.com/tzcnt/TooManyCooks/blob/main/LICENSE",
+    "https://github.com/tzcnt/TooManyCooks/issues",
+    "https://github.com/tzcnt/TooManyCooks/issues/275",
+    "https://github.com/tzcnt/runtime-benchmarks"
+  ],
+  "confidence": 0.85
+}

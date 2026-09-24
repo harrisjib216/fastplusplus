@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/ariss44/sigmod-2025-contest-solution",
+  "one_liner": "Coursework hash-join pipeline: four custom open-addressing tables plus a columnar 'Unchained' design that beat std::unordered_map on an IMDB join benchmark.",
+  "what_it_does": "This is a full SIGMOD-2025-contest hash-join pipeline for a university course, not a standalone hash-map library. It defines a HashMultiMap<Key> interface (insert(key, row_idx) / find(key) -> vector<size_t> of matching rows) with four interchangeable backends selected at compile time: Robin Hood, Hopscotch, Cuckoo, and a paper-derived 'Unchained' table. Around the table sits a column-store with late materialization, a 3-level slab allocator, and a work-stealing parallel build/probe pipeline for running SQL join queries over the IMDB dataset. It replaces the whole join step of a query engine, not just a container.",
+  "how_it_is_fast": "Part 1's three tables use open addressing to shorten probe chains versus std::unordered_map's separate chaining: Robin Hood displaces by probe-sequence length, Hopscotch checks a 32-64-slot neighborhood bitmap, Cuckoo uses two tables with a splitmix64 second hash -- this alone is only ~3-18% faster. Most of the headline speedup comes from architecture: late materialization defers string payloads to (table,column,page,offset) references, an 8KB-paged column-store improves sequential access, and 'Unchained' sorts tuples by hash prefix into one contiguous adjacency array with a directory of precomputed 16-bit Bloom-filter tags per slot, trading pointer chasing for sequential scans and rejecting most misses before touching the array. Part 3 parallelizes tuple collection/build/probe across 16 threads via a 3-level slab allocator (each thread owns a private memory region, no allocator contention) and atomic-counter work stealing over fixed-size chunks.",
+  "when_to_use": [
+    "You want a worked, single-file reference for Robin Hood, Hopscotch, Cuckoo, or 'Unchained' (directory + adjacency array + Bloom tags) hashing in modern C++17.",
+    "You're building your own analytical hash-join engine over int32 join keys and can adopt the surrounding column-store/late-materialization design, not just swap a container.",
+    "Build-then-probe multimap workloads (many row-ids per key) rather than a general mutable map with deletes.",
+    "8-16+ core x86-64 or aarch64 machines where a work-stealing parallel build/probe pipeline amortizes across many queries.",
+    "Benchmarking/prototyping hash-table variants against std::unordered_map on your own dataset before picking one."
+  ],
+  "when_not_to_use": [
+    "You need a drop-in std::unordered_map replacement: the API is insert(key,row)/find(key), not the STL container interface (no erase, no iterators, no operator[]), and only int32 keys are exercised in tests/benchmarks despite the Key template parameter.",
+    "You need a thread-safe table for concurrent insert/lookup from multiple threads on one instance: none of the four tables have internal synchronization -- the repo's own parallelism partitions data across separate thread-local structures instead.",
+    "Your target lacks SSE4.2 (x86) or the ARM CRC32 extension: Unchained.hpp hashes via hardware CRC32 intrinsics (nmmintrin.h / arm_acle.h) with no portable software fallback.",
+    "You need key deletion: none of the four HashMultiMap implementations expose remove/erase.",
+    "You need production maturity: 1-star, 3-student university coursework repo with no independent replication and no issue/CVE history to check."
+  ],
+  "integration": {
+    "form": "header-only for Robin Hood/Hopscotch/Cuckoo (single .hpp each); source-drop for Unchained (Unchained.hpp + Unchained.cpp, plus slab_allocator/tuple_collector/parallel_probing headers if you want the parallel build)",
+    "dependencies": "none for the hash tables themselves beyond the C++ standard library, plus hardware CRC32 intrinsics for Unchained only (nmmintrin.h on x86 / arm_acle.h on ARM). The surrounding application pulls in abseil, re2, nlohmann/json, sql-parser, range-v3, fmt, DuckDB, and Catch2 via CMake FetchContent, but those are not required to use the hash tables in isolation.",
+    "min_toolchain": "C++17 (CMakeLists.txt sets CMAKE_CXX_STANDARD 17), CMake >= 3.16; README recommends 'Clang 18 (recommended)' but the compiler actually used to produce the published numbers is not stated",
+    "platforms": "x86-64 (SSE4.2 needed for Unchained's CRC32 intrinsic) or aarch64 (ARM CRC32 feature); CMakeLists.txt unconditionally adds -march=native except on PowerPC, so built binaries are tied to the build machine's CPU unless that flag is changed",
+    "thread_safety": "not documented / not thread-safe for concurrent access to a single table instance -- insert() and find() have no locking or atomics in any of the four implementations",
+    "drop_in_for_baseline": "partial — explain: same insert-then-lookup usage pattern as std::unordered_map for multimap-style joins, but the API (insert(key,row_idx), find(key)->vector<size_t>*) is not the STL container interface, so call sites need adapting rather than a type swap"
+  },
+  "gotchas": [
+    "Robin Hood (max_load 0.4) and Cuckoo (max_load 0.6) rehash by doubling; Cuckoo caps kick-outs at max_kicks=512 before forcing a full rehash+reinsert, a latency spike on adversarial key sets.",
+    "Hopscotch throws std::runtime_error('Rehash failed during rehashing...') if neighborhood displacement fails while already rehashing -- an unguarded abort path under pathological hash distributions rather than a graceful fallback.",
+    "Unchained caches a 64-bit CRC32-derived hash per tuple (HashTuple.hash) and reuses it across build passes to avoid recomputing CRC32+multiplication; if you repurpose the struct, keep that field in sync with your own hash function.",
+    "All four tables are templated on Key via std::hash<Key>, but only int32 join keys are covered by the benchmarks and unit tests -- correctness/performance for string or composite keys is not demonstrated."
+  ],
+  "pick_this_over_siblings_when": "Pick this over the catalogued sibling hash maps only when you want a worked example of pairing a hash table with a column-store + late-materialization join pipeline and parallel build/probe, and are willing to extract and adapt a header (e.g. RobinHoodHash.hpp) yourself. For a maintained, general-purpose std::unordered_map replacement, prefer emhash, tsl::robin_map, or ska::flat_hash_map -- all have broader validation, non-coursework provenance, and don't require hardware CRC32 support.",
+  "verified_claims_summary": "On a 113-query IMDB hash-join benchmark (MacBook Pro, Apple M4 Pro, 14 cores, 48GB RAM; CMake Release + -march=native; compiler unstated), swapping std::unordered_map for the Unchained hashtable cut single-threaded hash insert+lookup time from 14,560ms to 7,343ms (~2.0x) and column-store total runtime from 24,696ms to 15,698ms (~1.57x), per REPORT.md's per-stage tables. Robin Hood, Hopscotch, and Cuckoo alone (row-store, Part 1) were only 3-18% faster than std::unordered_map. The repo's own 'Final speedup: ~16x' headline additionally folds in column-store layout, late materialization, and 14-core parallel execution against a single-threaded baseline -- it is not a hash-table-vs-std::unordered_map number.",
+  "status_note": "Last commit 2026-08-08 (active), but this is University of Athens K23a coursework by 3 students with 1 star, zero pull requests, and no bug-tagged issues to check; MIT-licensed and small enough to vendor the individual headers, but treat it as a reference implementation rather than a maintained library.",
+  "sources_read": [
+    "https://github.com/ArisS44/Sigmod-2025-contest-solution",
+    "https://github.com/ArisS44/Sigmod-2025-contest-solution/blob/main/README.md",
+    "https://github.com/ArisS44/Sigmod-2025-contest-solution/blob/main/REPORT.md",
+    "https://github.com/ArisS44/Sigmod-2025-contest-solution/blob/main/CMakeLists.txt",
+    "https://github.com/ArisS44/Sigmod-2025-contest-solution/blob/main/include/RobinHoodHash.hpp",
+    "https://github.com/ArisS44/Sigmod-2025-contest-solution/blob/main/include/HopscotchHash.hpp",
+    "https://github.com/ArisS44/Sigmod-2025-contest-solution/blob/main/include/CuckooHash.hpp",
+    "https://github.com/ArisS44/Sigmod-2025-contest-solution/blob/main/include/Unchained.hpp",
+    "https://github.com/ArisS44/Sigmod-2025-contest-solution/blob/main/include/hash.hpp",
+    "https://github.com/ArisS44/Sigmod-2025-contest-solution/issues",
+    "https://github.com/ArisS44/Sigmod-2025-contest-solution/pulls"
+  ],
+  "confidence": 0.55
+}

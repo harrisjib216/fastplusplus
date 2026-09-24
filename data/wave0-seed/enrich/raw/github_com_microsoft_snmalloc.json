@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/microsoft/snmalloc",
+  "one_liner": "Header-only C++ allocator using lock-free message-passing frees, beating glibc malloc on cross-thread and batch-deallocation workloads.",
+  "what_it_does": "snmalloc is a general-purpose allocator that replaces malloc/free/new/delete, used as a header-only library compiled into your build, LD_PRELOADed as libsnmallocshim.so on ELF platforms (Linux/BSD), or pulled into Rust via the snmalloc-rs crate. It targets two patterns that hurt many allocators: objects allocated on one thread and freed on another, and deallocation in large batches. Its override layer (malloc.cc, new.cc, jemalloc_compat.cc) exports the standard malloc-family symbols plus a jemalloc-compatible API.",
+  "how_it_is_fast": "Frees on the allocating thread take no lock and no atomic operation. Frees from a different thread go through a lock-free message-passing scheme that batches remote deallocations and returns them to the owner with a single atomic operation instead of one per free, so throughput scales with core count. Large page ranges (superslabs) amortize metadata bookkeeping, and the malloc/free fast path is two branches under Clang on Linux.",
+  "when_to_use": [
+    "Multi-threaded C/C++ services with heavy cross-thread free (producer/consumer queues, thread pools, work-stealing schedulers).",
+    "Workloads with bursty batch deallocation (freeing thousands of objects at once) that stall thread-caching allocators.",
+    "Need a glibc- or jemalloc-API-compatible drop-in on Linux/BSD via LD_PRELOAD or static link.",
+    "Rust services wanting the same allocator via the snmalloc-rs crate.",
+    "Security-conscious C++ services that can absorb <5% overhead for the hardened build (guard pages, freelist-corruption checks, randomization)."
+  ],
+  "when_not_to_use": [
+    "Single-threaded or same-thread-dominated allocation patterns: the paper's own symmetric-workload chart (Fig 4) shows jemalloc, tcmalloc and SuperMalloc ahead of snmalloc there.",
+    "OpenBSD: BUILDING.md lists it as a supported PAL, but issue #594 (open since 2023, still unresolved as of a Sept 2025 comment) says pagemap init fails because OpenBSD has no overcommit.",
+    "NetBSD without a libatomic implementation or without Clang, since the default NetBSD toolchain emits libatomic calls snmalloc needs.",
+    "Building with GCC — the project itself calls this 'not recommended' due to extra libatomic calls for 128-bit atomics.",
+    "Long-running processes with certain shapes: open issues report committed-memory growth over time (#814, #846) and slab thrashing for transient large-object alloc/dealloc pairs (#811), unresolved as of Sept 2026."
+  ],
+  "integration": {
+    "form": "header-only (also static/shared lib via CMake)",
+    "dependencies": "none at runtime; build needs CMake 3.21+ and Ninja",
+    "min_toolchain": "C++17 minimum (SNMALLOC_USE_CXX17 flag for legacy support); default build and PAL concept checks assume C++20; Clang 6.0+ recommended",
+    "platforms": "Linux, macOS/iOS (XNU), Windows (Visual Studio 2019+/clang-cl), FreeBSD, NetBSD, Android out of the box; x86-64/ARM/PowerPC/RISC-V/SPARC plus experimental CHERI; OpenBSD is listed but currently broken (issue #594)",
+    "thread_safety": "Core design goal, not an afterthought: same-thread free requires no synchronization; cross-thread free is lock-free via message passing",
+    "drop_in_for_baseline": "partial — LD_PRELOAD gives an ABI-level drop-in swap for glibc malloc on ELF platforms and jemalloc_compat.cc adds jemalloc-API compatibility; globally overriding malloc/free/new/delete on Windows is still an open problem per issues #700, #782, #783"
+  },
+  "gotchas": [
+    "Remote deallocation batches into a default 1 MiB outgoing buffer before memory returns to the owning thread — tunable, trades some memory for throughput.",
+    "Hardened build (libsnmalloc-checks.so) adds guard pages, freelist-corruption checks and randomization; measured at <5% overhead on mimalloc-bench on a 72-core Azure VM, but it's a separate opt-in build, not the default.",
+    "Metadata layout has changed significantly since the 2019 ISMM paper (per the README's own admission), so current performance and internals differ from what's described in snmalloc.pdf.",
+    "RISC-V Linux: flat pagemap reservation is reported oversized on Sv39 (issue #861, open)."
+  ],
+  "pick_this_over_siblings_when": "Pick snmalloc over mimalloc/jemalloc/TCMalloc when the workload is dominated by cross-thread free or bursty batch deallocation — that's the specific case its message-passing remote-free design targets. The paper itself shows jemalloc and tcmalloc ahead of snmalloc on same-thread alloc/free, so prefer one of those siblings when allocation and deallocation mostly happen on the same thread.",
+  "verified_claims_summary": "ISMM 2019 paper, producer/consumer malloc-test thread sweep (64 threads, Ubuntu 18.04 on an Azure F64s_v2 VM, 64 vCPUs, dual-socket Xeon Platinum 8168, 128 GB RAM): snmalloc reaches roughly 190-220M allocs/sec versus glibc ptmalloc2's ~47M (~4x, read off chart data). On the symmetric same-thread workload the gap narrows to ~1.7x and jemalloc/tcmalloc/SuperMalloc beat snmalloc outright. No compiler or flags are given, which caps this at evidence tier B.",
+  "status_note": "Actively maintained — commits as recent as 2026-09-21 and 53 open issues being triaged; MIT-licensed and header-only so it vendors easily, but its internals have diverged substantially from the 2019 paper the headline numbers come from.",
+  "sources_read": [
+    "https://github.com/microsoft/snmalloc",
+    "https://github.com/microsoft/snmalloc/blob/main/docs/BUILDING.md",
+    "https://github.com/microsoft/snmalloc/blob/main/docs/PORTING.md",
+    "https://github.com/microsoft/snmalloc/blob/main/CMakeLists.txt",
+    "https://github.com/microsoft/snmalloc/issues",
+    "https://github.com/microsoft/snmalloc/issues/594",
+    "https://github.com/microsoft/snmalloc/tree/main/src/snmalloc/override",
+    "https://github.com/microsoft/snmalloc/blob/main/src/snmalloc/override/malloc.cc",
+    "https://github.com/microsoft/snmalloc/blob/main/docs/security/README.md"
+  ],
+  "confidence": 0.62
+}

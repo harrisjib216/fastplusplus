@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/dragontamer/AESRand",
+  "one_liner": "AES-NI hardware-accelerated PRNG streaming 256 bits per iteration, far outpacing std::mt19937 in raw throughput.",
+  "what_it_does": "AESRand is a prototype PRNG that generates 256 bits (32 bytes) of output per call by running hardware AES round instructions over a 128-bit SIMD counter state, following a PCG-style counter+mixer split. It is not a drop-in std::mt19937 replacement: the API is a set of free functions (AESRand_init, AESRand_increment, AESRand_rand / AESRand_rand_uint32) operating on an explicit __m128i (x86) or simd128 (ARM/Power9) state that the caller owns and threads through the loop, not a class implementing the <random> UniformRandomBitGenerator concept.",
+  "how_it_is_fast": "The 'counter' portion (AESRand_increment) is a single SIMD add with 1-cycle latency, kept deliberately minimal since it bounds the loop's critical path. The 'mixer' chains 2-3 AESENC/AESDEC round instructions per iteration, which have 1-per-cycle (or 2-per-cycle on AMD Zen) throughput, so instruction-level parallelism across loop iterations hides most of the ~4-cycle AES latency. The dual-stream variant runs two independent counter/mixer chains to expose more ILP, measured at 2.95 cycles/iteration vs 3.69 for the single-stream version.",
+  "when_to_use": [
+    "Bulk random-byte generation on x86-64 with AES-NI (Westmere/Bulldozer or newer) where throughput, not API compatibility, is the goal",
+    "Workloads that can consume 256 bits per draw at once (buffer fill, Monte Carlo sampling, fuzz-input generation)",
+    "You're willing to vendor a small source drop and manage RNG state explicitly per thread/stream yourself",
+    "You need many verified-independent parallel streams (PractRand-clean to 4TB across the tested stream space) rather than a single sequential stream",
+    "You're prototyping/researching AES-NI-based RNG design rather than shipping a supported dependency"
+  ],
+  "when_not_to_use": [
+    "Target hardware lacks AES-NI / ARMv8 crypto extension / Power9 crypto builtins (no software fallback exists)",
+    "You need a std::mt19937-compatible engine you can plug into <random> distributions or std::shuffle without wrapper code",
+    "You need cryptographic-strength randomness; this is a statistical PRNG only, with an author-documented weakness to single-bit counter changes",
+    "You'd run the parallel-stream (dual-output) variant past 8TB of PractRand-equivalent output, where it's known to fail",
+    "You need active maintenance, releases, CI, or community support (repo is a single-author research prototype, abandoned since 2019)"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none beyond compiler intrinsics (immintrin.h on x86, arm_neon.h on aarch64, GCC PPC crypto builtins on Power9)",
+    "min_toolchain": "C++11 (AESRand_Paper's ARM Makefile pins -std=c++11, built with g++-8.3; the x86 Makefile passes no -std flag, just -maes; the Windows benchmark used VS2017/v141)",
+    "platforms": "x86-64 with AES-NI required for the benchmarked path; AESRand_Paper additionally ships aarch64 (ARMv8 crypto ext, via Makefile.arm) and Power9/PPC64 (via Makefile.power9) implementations, but only the x86 path was benchmarked",
+    "thread_safety": "not documented; the core RNG has no global mutable state (state is an explicit value passed/returned by the caller), so per-thread state should be safe in practice, but the author does not state this",
+    "drop_in_for_baseline": "false — free-function API over an explicit SIMD state, not a std::mt19937-compatible engine class"
+  },
+  "gotchas": [
+    "Author's own benchmark notes std::mt19937 was NOT inlined by MSVC, which may inflate the measured speedup vs. an inlined baseline",
+    "1-bit changes to the counter increment are a documented weak direction; the design compensates by changing the full 128-bit state every step",
+    "The parallel-stream (dual-output) variant only varies the top 64 bits and fails PractRand beyond 8TB, so only ~2^35 verified-independent streams exist despite a 2^64 theoretical claim",
+    "Three near-duplicate implementations exist in-tree (Windows/VS2017, AESRand_Linux, AESRand_Paper) with slightly different APIs (e.g. AESRand_rand vs AESRand_rand_uint32); pick one and expect to adapt it"
+  ],
+  "pick_this_over_siblings_when": "Pick AESRand over ALU-based siblings (PCG, xoshiro_cpp, wjakob/pcg32, biski64, nanobench::Rng) when you specifically want to saturate AES-NI throughput for bulk byte generation rather than a small, portable, dependency-free integer generator. Prefer Random123 (also AES-NI-based) instead if you want a similarly hardware-accelerated generator with more independent, peer-reviewed statistical validation — Random123's reported margin over std::mt19937_64 (~1.8x) is far more conservative than AESRand's ~32-40x, partly reflecting AESRand's larger per-call output and its non-inlined mt19937 baseline.",
+  "verified_claims_summary": "On the author's own benchmark (5-10 billion iteration tight loop, Visual Studio 2017 x64 build, AMD Threadripper 1950x manually locked to 3.4GHz), AESRand measured 27.45 GB/s single-stream / 34.35 GB/s dual-stream versus 0.858 GB/s for std::mt19937 (MSVC STL) — about 32x/40x higher throughput, or 3.69 cycles per 32-byte iteration versus mt19937's 14.76 cycles per 4-byte iteration. The README itself flags that mt19937 was not inlined in this test, which may inflate the ratio.",
+  "status_note": "Abandoned since its last commit in April 2019; MIT-licensed and small enough to vendor as source, but it's a single-author research prototype with no releases, no CI, and only one (non-bug) closed issue — treat it as a design reference to adapt, not a supported dependency.",
+  "sources_read": [
+    "https://github.com/dragontamer/AESRand",
+    "https://github.com/dragontamer/AESRand/blob/master/README.md",
+    "https://github.com/dragontamer/AESRand/blob/master/BenchmarkResults.md",
+    "https://github.com/dragontamer/AESRand/blob/master/AESRand_Linux/AESRand.cpp",
+    "https://github.com/dragontamer/AESRand/blob/master/AESRand_Paper/AESRand.hpp",
+    "https://github.com/dragontamer/AESRand/blob/master/AESRand_Paper/README.md",
+    "https://github.com/dragontamer/AESRand/blob/master/AESRand_Paper/UnitTest.cpp",
+    "https://github.com/dragontamer/AESRand/blob/master/AESRand_Paper/Makefile",
+    "https://github.com/dragontamer/AESRand/blob/master/AESRand_Paper/Makefile.arm",
+    "https://github.com/dragontamer/AESRand/issues (search)",
+    "https://github.com/dragontamer/AESRand/pulls"
+  ],
+  "confidence": 0.6
+}

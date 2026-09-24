@@ -61,7 +61,8 @@ def main():
     for e in entries:
         siblings = [s for s in entries if s["category"] == e["category"] and s["id"] != e["id"]]
         sibling_text = "\n".join(
-            f"- {s['name']} ({s['repo_url']}): beats {s['baseline']}; {s['claimed_speedup'][:160]}" for s in siblings
+            f"- {s['name']} ({s['repo_url']}): beats {s['baseline']}; {(s.get('claimed_speedup') or 'no numbers')[:160]}"
+            for s in siblings
         ) or "none catalogued yet"
         record = {k: v for k, v in e.items() if k not in INTERNAL_FIELDS}
         out = (raw_dir / f"{slug(e['id'])}.json").resolve()

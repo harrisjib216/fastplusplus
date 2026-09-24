@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/ulfjack/ryu",
+  "one_liner": "Shortest round-trip float/double-to-string conversion beating sprintf, plus a faster %f/%e printf replacement.",
+  "what_it_does": "Ryu converts IEEE-754 floats/doubles to the shortest decimal string that round-trips back to the exact original value, replacing sprintf/ostringstream or std::to_chars for that job. The public C API (d2s_buffered_n, d2s, f2s, etc.) is a handful of free functions, not a printf drop-in: output is always in scientific notation, not %g-style. A separate component, Ryu Printf (d2fixed_buffered, d2exp_buffered), implements %f and %e formatting with a caller-supplied precision, aiming for byte-identical output to libc printf for those two specifiers.",
+  "how_it_is_fast": "Ryu is a table-based shortest-decimal algorithm (successor to Dragon4/Grisu): fixed lookup tables of powers of 5 let it compute, without bignum arithmetic, the shortest decimal digit string whose rounding interval contains the original binary float in one pass. This avoids the double-rounding correctness checks and slow-path fallbacks that Grisu3-style algorithms need for hard cases. Ryu Printf reuses the same table machinery but is restricted to a fixed precision, letting it skip the general shortest-digit search entirely. Correctness for both is proven in peer-reviewed papers (PLDI'18, OOPSLA'19) rather than established only by fuzz testing.",
+  "when_to_use": [
+    "Hot paths serializing large volumes of doubles to text (JSON/CSV emitters, log lines, time-series export) where sprintf/ostringstream latency shows up in profiles.",
+    "Need shortest round-trip decimal output (like Python repr or JS Number.toString) rather than a fixed %.17g dump.",
+    "C/C++ codebase that can vendor a small, dependency-free source tree (CMake 3.10+ or Bazel build, no external libs).",
+    "Want %f/%e output several times faster than platform printf while matching its rounding, and can live without other printf flags.",
+    "Targeting x86-64/aarch64, or another platform where float and integer types share endianness; the hand-tuned fast paths cover 32/64-bit float/double."
+  ],
+  "when_not_to_use": [
+    "Need full printf flag support (%g, width, padding, +, #) — Ryu Printf only implements %f/%e precision, not the full spec.",
+    "Formatting mostly small-integer-valued doubles (counters, sensor readings) — issue #144 reports Ryu ~1.5-2x slower than double-conversion there; no built-in integer fast path.",
+    "Need fast long double/__float128 conversion — only a slower generic 128-bit fallback exists for those widths, and it isn't available on MSVC (needs __uint128_t).",
+    "Need a documented safe output-buffer-size constant before calling *_buffered — issue #149 (open) notes ryu.h has no #define for required buffer length.",
+    "Want output identical to std::to_chars — the measured margin over libc++'s to_chars is only ~1.11x, and to_chars ships in the standard library with zero extra dependency."
+  ],
+  "integration": {
+    "form": "static lib (source-drop; CMake or Bazel build, no header-only mode)",
+    "dependencies": "none for the C core; CMake 3.10+ or Bazel 0.14+ to build; JDK 8+ only for the separate Java port",
+    "min_toolchain": "C99 (uses stdint.h/inttypes.h); generic_128 (128-bit fallback) needs GCC/Clang/Intel for __uint128_t, not available on MSVC",
+    "platforms": "x86-64, aarch64, and other platforms where the float type and same-width integer type share endianness (README states big-endian works under that condition); CI covers Ubuntu 18.04, macOS, Windows Server 1803",
+    "thread_safety": "not documented by upstream; common.h/d2s.c use only static inline pure functions and const lookup tables with no mutable globals observed, so concurrent calls appear safe, but this is not an explicit upstream guarantee",
+    "drop_in_for_baseline": "partial — explain: d2s_buffered_n covers the shortest-round-trip case sprintf can't directly express and always emits scientific notation rather than %g-style output; d2fixed/d2exp mimic %f/%e precision but implement no other printf flags, so it's not a full sprintf replacement."
+  },
+  "gotchas": [
+    "Ryu, Dragonbox, and Schubfach (per the fmtlib benchmark's own notes) always emit exponential notation in shortest mode, e.g. 0.1 -> 1E-1, unlike %g's 0.1 — don't assume output matches sprintf's shortest-%g style.",
+    "No documented #define for safe output buffer size (open issue #149); undersizing the buffer passed to a *_buffered_n function is a real overflow risk.",
+    "f2s (float32) shortest mode has at least one known incorrect-rounding case still open as of 2025 (#235: 2147483904 is formatted as 2.147484E9 instead of the exact value) — the d2s/double path used in this benchmark is a separate code path but this signals the algorithm's edge cases aren't all closed.",
+    "Public C identifiers (d2s, f2s, d2s_buffered, etc.) are unprefixed (open issue #148) and can collide with other libraries' symbols when statically linked."
+  ],
+  "pick_this_over_siblings_when": "Pick Ryu over Dragonbox when you want a plain-C implementation with the widest set of independent language ports to reference (Rust, Go, Julia stdlib, Erlang/OTP, etc.); Dragonbox is faster still on this same benchmark (25.7x vs sprintf and a direct win over Ryu) if closing that extra gap matters more than portability. Pick {fmt} instead if you're already pulling in a formatting/iostream-replacement library (it also uses Dragonbox internally) and want printf-style format strings rather than raw conversion functions.",
+  "verified_claims_summary": "The independent fmtlib/dtoa-benchmark (Google Benchmark, Apple clang 21.0.0, CMake Release build, Apple M1 Pro) measured Ryu's d2s_buffered at 46.07ns/double mean vs C sprintf(\"%.17g\", value) at 744.72ns — 16.164x faster — across a mixed 1.7M-value pool of doubles at 1-17 significant digits; the same table puts std::to_chars (libc++) at 51.35ns, only about 1.11x slower than Ryu.",
+  "status_note": "Actively maintained (last commit 2026-02-09, ~1.4k stars) under dual Apache-2.0/BSL-1.0 licensing, so it's copyable under either regime; the algorithm has been ported into a dozen-plus languages and standard libraries (Rust, Go, Julia's stdlib, Erlang/OTP, etc.), a strong maturity signal despite a few still-open ergonomics/correctness issues (undocumented buffer size, an f32 shortest-mode rounding edge case).",
+  "sources_read": [
+    "https://github.com/ulfjack/ryu",
+    "https://github.com/ulfjack/ryu/blob/master/README.md",
+    "https://github.com/ulfjack/ryu/blob/master/ryu/ryu.h",
+    "https://github.com/ulfjack/ryu/blob/master/CMakeLists.txt",
+    "https://github.com/ulfjack/ryu/blob/master/ryu/common.h",
+    "https://github.com/ulfjack/ryu/issues/149",
+    "https://github.com/ulfjack/ryu/issues/144",
+    "https://github.com/ulfjack/ryu/issues/235",
+    "https://github.com/ulfjack/ryu/issues (search: bug, performance labels)",
+    "https://github.com/fmtlib/dtoa-benchmark/blob/main/README.md"
+  ],
+  "confidence": 0.85
+}

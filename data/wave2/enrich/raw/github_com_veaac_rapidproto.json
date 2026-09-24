@@ -1,0 +1,47 @@
+{
+  "id": "https://github.com/veaac/rapidproto",
+  "one_liner": "Header-only codegen protobuf decoder for C++: arena and streaming models beating protoc's Arena decode and protozero.",
+  "what_it_does": "RapidProto's `rapidprotoc` CLI compiles a .proto schema into header-only C++ decoders specialized to that schema at compile time. It emits two decode models from one schema: an arena decoder that materializes a full read-only object tree you navigate with accessors (a drop-in-shaped replacement for protoc + google::protobuf::Arena), and a streaming decoder that walks the wire once and hands each field to a callback with zero allocation. Both fully validate wire-format integrity against malformed/adversarial input. It is decode-only: no serialization, mutation, or JSON codec, and the generated API differs from protoc's generated message classes.",
+  "how_it_is_fast": "Per docs/optimizations.md, the gains stack from compile-time specialization: borrowed string_view fields instead of copies, packed-array pre-sizing (a bulk memcpy for fixed-width packed fields, a length-bounded allocation for varint arrays), forced full inlining of the wire-read call tree (RP_FLATTEN), a fused single-bounds-check tag read, SWAR (SIMD-within-a-register) 64-bit varint kernels that decode multiple bytes' continuation bits per branch instead of one byte at a time, a one-byte dispatch hub for low field numbers, and field-order threading that jumps straight to the next expected field's label when fields arrive in ascending wire order (protoc's own emission order). Together these moved the arena decoder from 2.4x protoc to 6-7x protoc on the project's mixed Dataset benchmark.",
+  "when_to_use": [
+    "Hot decode path for schemas you can regenerate ahead of time via codegen (not reflection-based), where protoc+Arena decode throughput or peak memory is the bottleneck",
+    "Read-mostly consumption of a message tree needing random/repeated accessor access (arena model), e.g. a mixed record with strings, nested/repeated messages, packed scalars",
+    "Extracting a handful of fields or forwarding data without materializing objects (streaming model) — zero allocation, faster than protozero on most shapes",
+    "Input strings/bytes can be safely borrowed as views into a buffer you keep alive (or you accept the cost of decode_owned for a self-contained handle)",
+    "Linux/macOS/Windows C++17 projects on GCC/Clang/AppleClang/MSVC that can add a header-only generated decoder without a new link dependency"
+  ],
+  "when_not_to_use": [
+    "You need to serialize, mutate, or produce protobuf messages — RapidProto is decode-only; keep protoc for the write path",
+    "You need real closed-enum semantics or strict proto3 string UTF-8 validation — RapidProto decodes all enums open and does not validate UTF-8 (part of where its speed margin over protoc comes from)",
+    "You rely on protobuf's normal merge behavior for a repeated singular sub-message on the wire — the arena decoder rejects the buffer (RepeatedSingularMessage) instead of merging it",
+    "You decode large packed scalar arrays mainly through the streaming model — it is slower than protozero there since a callback can't batch a bulk store; use the arena model for that shape",
+    "The project is 3 stars, about three months old (created 2026-06-28), with first-party-only benchmarks that don't state a CPU model — weigh that immaturity against protoc for anything load-bearing today"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (generated headers are self-contained; rapidprotoc itself needs only a C++17 toolchain to build, or use a prebuilt release binary)",
+    "min_toolchain": "C++17; GCC, Clang (incl. AppleClang), or MSVC — CI/benchmarks use g++-13 and clang++-20",
+    "platforms": "Linux, macOS, Windows (all three CI-covered); no documented CPU-architecture requirement (SWAR only, no SIMD intrinsics)",
+    "thread_safety": "Streaming decode() is const/stateless, so concurrent decodes of one unmutated buffer are safe; arena decode() mutates its Arena, so give each thread its own Arena — the resulting read-only tree can then be shared (docs/semantics.md)",
+    "drop_in_for_baseline": "partial — explain: replaces protoc's read path with a different API (arena accessor tree or streaming callbacks, not protoc's generated message classes/reflection); decode-only, so you still need protoc (or another encoder) to produce the bytes, and any existing mutation/serialization code stays on protoc"
+  },
+  "gotchas": [
+    "Arena tree strings/bytes/raw payloads are borrowed views into the input buffer: the tree is valid only while both the Arena and the input outlive it, unless you use decode_owned",
+    "A duplicate singular sub-message field on the wire is rejected outright (ArenaDecodeError::RepeatedSingularMessage), not merged the way protoc merges two concatenated messages",
+    "Enums always decode open, even proto2/editions-CLOSED enums — an unrecognized value arrives as a raw integer instead of routing to unknown fields",
+    "Recursion-depth guards against pathological nesting are sized for an 8MB stack; Windows defaults to a 1MB stack, so untrusted deeply-nested input needs a larger linked stack (/STACK:8388608) to stay safely rejecting"
+  ],
+  "pick_this_over_siblings_when": "Pick RapidProto over Zserio or vtprotobuf when you're staying on the .proto/protoc ecosystem but want a much larger raw C++ decode throughput and memory win than Zserio's ~1.17-1.2x over protoc, and can accept a narrower, decode-only, C++-only tool (vtprotobuf targets Go). Pick FlatBuffers instead when you can drop the protobuf wire format entirely for true zero-copy access with no decode step at all.",
+  "verified_claims_summary": "On the project's own in-repo harness (tests/bench.py), decoding a 2000-record mixed Dataset (strings, nested/repeated messages, packed scalars) serialized by protoc, the arena decoder ran ~7x protoc+google::protobuf::Arena's throughput at 0.49x its peak payload memory on g++-13 (~6x on clang++-20), and the streaming decoder ran ~12x protoc+Arena and ~1.8x protozero; on protobuf's own google_message1/2 corpora and a 20MB OSM PBF extract the arena/streaming decoders beat protoc's protobuf-layer throughput by roughly 28-155% depending on payload shape. All figures use protobuf 4.25.3, -O3 -DNDEBUG; no CPU model is documented, only 'a quiesced box' with SMT/turbo off and core pinning.",
+  "status_note": "Active (last commit 2026-09-14) and Apache-2.0-licensed, but a brand-new, 3-star project (created 2026-06-28) with no independent benchmark or adoption track record yet; it is copyable/vendorable since the consumer-facing output is generated header-only code, but treat the maturity as early.",
+  "sources_read": [
+    "https://github.com/VeaaC/rapidproto",
+    "https://github.com/VeaaC/rapidproto/blob/main/README.md",
+    "https://github.com/VeaaC/rapidproto/blob/main/docs/benchmarks.md",
+    "https://github.com/VeaaC/rapidproto/blob/main/docs/semantics.md",
+    "https://github.com/VeaaC/rapidproto/blob/main/docs/optimizations.md",
+    "https://github.com/VeaaC/rapidproto/blob/main/architecture.md",
+    "https://github.com/VeaaC/rapidproto/issues"
+  ],
+  "confidence": 0.7
+}

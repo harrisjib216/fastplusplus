@@ -1,0 +1,45 @@
+{
+  "id": "https://github.com/vnmakarov/mum-hash",
+  "one_liner": "Header-only C multiply-mix hash family (MUM/VMUM) rivaling xxHash3, beating CityHash and SipHash24 on most key sizes.",
+  "what_it_does": "MUM/VMUM are non-cryptographic hash functions for hash-table keys and general-purpose hashing of byte strings, aimed at the same use case as xxHash3, CityHash, SipHash24, and MetroHash. The API is a streaming triple (mum_hash_init/mum_hash_step/mum_hash_finish) plus one-shot mum_hash(key, len, seed) and mum_hash64(key, seed); it is not a literal std::hash drop-in since the call signature differs from any of those libraries. VMUM is the SIMD-accelerated variant of the same base algorithm, aimed specifically at mid-to-long keys.",
+  "how_it_is_fast": "MUM (Multiply and Mix) randomizes each 64-bit chunk with a 64x64->128-bit multiply, mixes the high/low halves with addition, and XORs into a running state, using a table of pre-generated random factors; the main loop is written to be unrolled by the compiler for out-of-order scheduling, with no per-byte branching. VMUM extends this with target vector instructions (AVX2 32x32->64 multiplies on x86-64, NEON on aarch64, Altivec on ppc64) processing multiple lanes per step, and runs two unrolled loops in parallel to keep OOO execution units busy; targets without vector support fall back to scalar emulation.",
+  "when_to_use": [
+    "Very short keys (3-16 bytes) where MUM/VMUM's fast startup wins on every benchmarked machine (ratio ~1.00 vs xxHash3's 0.7-0.95)",
+    "Long keys (512-1024 bytes) and 16MB bulk hashing on AVX2 (x86-64) or NEON (aarch64) hardware, where VMUM-V2 is ~1.1-1.9x faster than xxHash3",
+    "Apple M4 / aarch64 targets specifically, where VMUM-V2 beats xxHash3 by ~1.3x geomean and CityHash/SipHash24 by 2.6x/4.8x",
+    "Hash-table implementations that want a header-only C hash with no crypto/library dependency and are willing to hand-write the call sites",
+    "Cases wanting the collision-attack-resistant fixed hash by default (Nov 2025 fix), with the ability to opt back into the faster pre-fix variant via VMUM_V1/MUM_V3 macros for controlled environments"
+  ],
+  "when_not_to_use": [
+    "Mid-size keys, roughly 32-128 bytes (16 bytes on Power10): xxHash3 is faster there, e.g. 128 bytes is 1.98x faster on AMD, 1.81x on M4, 2.03x on Power10",
+    "Targets without AVX2/NEON/Altivec and without a compiler 128-bit-integer extension: VMUM drops to scalar emulation and MUM needs GCC/Clang-style __int128 to hit its documented numbers",
+    "Projects that require a real drop-in for std::hash/xxHash's call signature without touching call sites -- MUM/VMUM's API shape is different",
+    "Teams uncomfortable with no LICENSE file at repo root (MIT is only asserted in per-file header comments; GitHub's own license detector shows none)",
+    "Cross-platform byte-identical hashes across BE/LE or 32/64-bit targets, unless [V]MUM_TARGET_INDEPENDENT_HASH is explicitly defined (with a performance cost on BE/no-int128 targets)"
+  ],
+  "integration": {
+    "form": "header-only (single file: mum.h or vmum.h)",
+    "dependencies": "none beyond the C standard library (stddef.h, stdlib.h, string.h, limits.h, stdint.h)",
+    "min_toolchain": "C99; GCC or Clang recommended to get the 128-bit-integer multiply path (checked via __GNUC__); MSVC compiles via typedef shims but takes the non-__int128 fallback path",
+    "platforms": "x86-64 (AVX2 needed for VMUM's full speed, e.g. -mavx2), aarch64 (NEON), ppc64 (Altivec); scalar emulation on any other target",
+    "thread_safety": "mum_hash_init/step/finish/hash/hash64 only read pre-generated, read-only factor tables and are reentrant. mum_hash_randomize()/vmum_hash_randomize() mutate shared module-level globals and are not documented as thread-safe -- call once at startup before spawning threads.",
+    "drop_in_for_baseline": "partial -- same hash-table-key role as xxHash3/CityHash/SipHash24 but a different call signature (mum_hash(key,len,seed), not a pluggable std::hash specialization), so call sites need to be rewritten"
+  },
+  "gotchas": [
+    "The pre-Nov-2025 VMUM/MUM-V3 variants have a collision-attack weakness (issue #18: an adversary can zero one operand of _vmum to force identical hashes); the fix is now default and costs ~10% throughput, old fast variants are opt-in via VMUM_V1/MUM_V3 macros",
+    "No LICENSE file at repo root; MIT terms live only in the header comment of each source file (mum.h, vmum.h, mum512.h, mum-prng.h)",
+    "Hash values are not target-independent by default (differ across BE/LE and 32/64-bit, and with/without int128 support) unless [V]MUM_TARGET_INDEPENDENT_HASH is defined",
+    "VMUM needs an explicit compile flag (e.g. -mavx2 on x86-64, -mcpu=native/NEON on aarch64) to use its vector code path; without it, it silently falls back to slower scalar emulation"
+  ],
+  "pick_this_over_siblings_when": "Pick VMUM over rapidhash, t1ha, or CityHash when hashing very short keys (<=16 bytes) or long/bulk keys on AVX2 or NEON hardware, where it edges out xxHash3 and clearly beats CityHash/SipHash24/t1ha2. Prefer xxHash3, rapidhash, or komihash instead for the common 32-128 byte range, where VMUM-V2 loses to xxHash3 by up to ~2x.",
+  "verified_claims_summary": "Hashing 1,280M keys (3-1024 bytes) plus 10,000x16MB bulk keys, GCC -O3 (-flto added only for the competing hash functions, not MUM/VMUM), pinned single-core runs, minimum of 3 repeats kept: VMUM-V2's geomean relative throughput (1.00 baseline) is xxHash3 0.79, CityHash 0.38, SipHash24 0.21 on Apple M4 (GCC 14.2.1), and xxHash3 0.93, CityHash 0.48 on IBM Power10 (GCC 11.5.0) -- i.e. VMUM-V2 is ~1.3x faster than xxHash3 and ~2.6x faster than CityHash on M4, and roughly on par with xxHash3 on Power10.",
+  "status_note": "Actively maintained (last commit 2026-06-02, with a collision-attack fix shipped Nov 2025); MIT-licensed via per-file source headers (no repo-root LICENSE file) and small enough as single headers to vendor directly.",
+  "sources_read": [
+    "https://github.com/vnmakarov/mum-hash",
+    "https://github.com/vnmakarov/mum-hash#vmum-and-mum-benchmarking-vs-other-famous-hash-functions",
+    "https://github.com/vnmakarov/mum-hash/blob/master/mum.h",
+    "https://github.com/vnmakarov/mum-hash/blob/master/vmum.h",
+    "https://github.com/vnmakarov/mum-hash/issues"
+  ],
+  "confidence": 0.75
+}

@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/frozenca/btree",
+  "one_liner": "Header-only C++20 B-tree (BTreeSet/Map) with optional AVX-512 SIMD search, ~5x faster than std::set on int64 keys.",
+  "what_it_does": "Drop-in-shaped replacement for std::set/multiset/map/multimap: frozenca::BTreeSet, BTreeMultiSet, BTreeMap, and BTreeMultiMap expose the same ordered-associative-container interface (insert, lower_bound/upper_bound/equal_range, iterators) plus B-tree-specific extras like kth()/order() rank queries, enumerate()/erase_range() range operations, and tree join()/split(). Nodes hold multiple keys each (configurable fanout, default 64) instead of one key per node like std::set's red-black tree. A separate DiskBTreeSet/DiskBTreeMap variant backs the tree with a memory-mapped file for out-of-core use, which std::set has no equivalent for.",
+  "how_it_is_fast": "Wider nodes (fanout 64 default, tunable) mean far fewer cache-line-missing pointer chases per operation than a red-black tree's one-key-per-node layout, and in-node key search can use either linear or binary search depending on a tunable threshold. For signed integer/float keys on AVX-512 hardware, an optional SIMD intrinsics path (macro-toggled, credited to Algorithmica's Static B-Trees) vectorizes the in-node comparison; the README's own figures show fanout-64 without SIMD is already ~4.0-4.4x over std::set, with SIMD adding roughly another 10-20% on top.",
+  "when_to_use": [
+    "Ordered set/map of primitive keys (int64, float) where insert/lookup/erase throughput matters more than per-node iterator stability, on x86-64 with AVX-512 for the full ~5x gain",
+    "Need operations std::set lacks: O(log n) k-th/rank queries (kth/order), range enumerate()/erase_range(), or tree join()/split()",
+    "Want an out-of-core ordered container: DiskBTreeSet/DiskBTreeMap memory-maps a file, which std::set cannot do at all",
+    "Already on a C++20 toolchain (gcc 11.2+/MSVC 19.32+) and willing to vendor a small, header-only, currently unmaintained library",
+    "Bulk-loading sorted or near-sorted ranges via insert_range(), which the README documents as faster than repeated single inserts"
+  ],
+  "when_not_to_use": [
+    "Code relies on std::set/map's iterator/reference stability across insert and erase elsewhere in the container — any insert/erase here can invalidate iterators anywhere in the tree",
+    "Keys are std::string or other non-trivial-comparison types: measured speedup drops to ~1.04-1.4x because the SIMD path only covers signed integers/floats",
+    "Need thread safety: concurrency is explicitly unsupported ('thread safety is not guaranteed'), no lock-free path implemented",
+    "Stuck on C++17 or earlier, or need an actively maintained/widely-used dependency: last commit 2024-10-29, 249 stars, effectively a single-maintainer project with no open issues but no recent activity either",
+    "Profiling debug builds: full-tree O(n) sanity checks run on every insert/erase/join/split unless a macro is disabled (per issue #3), so debug-build timings are misleading"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none for library use; Catch2 only to build the test suite (per vcpkg.json)",
+    "min_toolchain": "C++20; README states verified against gcc 11.2 and MSVC 19.32. \"There are currently no plans to support C++17 and earlier.\" Apple Clang compile errors were reported and fixed via PRs (issue #7) but Clang isn't in the README's stated verified-compiler list",
+    "platforms": "x86-64 for the optional AVX-512 SIMD path; base header-only containers are architecture-agnostic. POSIX and Windows both supported for the memory-mapped disk variant",
+    "thread_safety": "not thread-safe; README: 'Currently, thread safety is not guaranteed. Lock-free support is the first TODO'",
+    "drop_in_for_baseline": "partial — same STL-like member surface as std::set/map (insert, lower_bound, iterators, structured bindings for maps) but different invalidation semantics: any insert/erase can invalidate iterators anywhere in the tree, unlike std::set's per-node stability, so it's a source-level swap requiring an invalidation-rule audit, not a behavior-identical drop-in"
+  },
+  "gotchas": [
+    "Any insert or erase can invalidate iterators anywhere in the tree, because a B-tree node holds multiple keys, unlike std::set's one-key-per-node stability guarantee",
+    "SIMD path only helps signed integer/floating-point keys and requires both a macro toggle and AVX-512 hardware; without it the README's own non-SIMD numbers show ~4.0-4.4x rather than ~5x",
+    "DiskBTreeSet/DiskBTreeMap requires std::trivially_copyable key/value types with alignment at least that of a pointer, and its memory-mapped pool cannot be extended after creation without invalidating all allocator pointers",
+    "Debug builds run O(n) full-tree sanity checks on every insert/erase/join/split (confirmed in closed issue #3, 'Performance issue'); only release-build numbers are meaningful"
+  ],
+  "pick_this_over_siblings_when": "Pick this over cpp-btree or tlx::btree when you specifically want std::set-compatible rank queries (kth/order), range enumerate()/erase_range(), tree join()/split(), or the disk-backed memory-mapped variant, none of which those siblings offer; prefer cpp-btree or tlx::btree instead if you need broader compiler/standard support, since this one hard-requires C++20 and its full headline speedup needs AVX-512.",
+  "verified_claims_summary": "Author-run benchmark (gcc 11.2, -O3, libstdc++, CPU model not stated, 200 repeats) inserting/looking up/erasing 1M random std::int64_t keys: frozenca::BTreeSet (fanout 64, SIMD) averaged 175.5/197.8/211.3ms vs std::set's 907.1/961.9/990.0ms (~4.7-5.2x); the same test without the SIMD path averaged 204.2/221.0/249.8ms (~4.0-4.4x). For 1M std::string keys (length 1-50) the gap narrows to ~1.04-1.4x (e.g. insert 1519.6ms vs std::set's 1662.9ms).",
+  "status_note": "Stale: last commit 2024-10-29, effectively single-maintainer, 249 stars, all 15 filed issues closed with none open; but it's header-only and small enough to vendor as-is if C++20 support is acceptable. License is plain Apache-2.0 per LICENSE.md and GitHub's own detection, despite the README additionally advertising an Apache-2.0-with-LLVM-exception/BSL-1.0 dual license.",
+  "sources_read": [
+    "https://github.com/frozenca/BTree/blob/main/README.md",
+    "https://github.com/frozenca/BTree",
+    "https://github.com/frozenca/BTree/blob/main/LICENSE.md",
+    "https://github.com/frozenca/BTree/issues (all 15, incl. #3 'Performance issue', #4, #6, #7, #11)",
+    "https://github.com/frozenca/BTree/blob/main/vcpkg.json",
+    "https://github.com/frozenca/BTree/blob/main/CMakeLists.txt"
+  ],
+  "confidence": 0.6
+}

@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/esterlein/metapool",
+  "one_liner": "Header-only, TLS pool allocator with compile-time size classes; up to 1380x faster reserve() than std::vector, 3.6x vs pmr::vector.",
+  "what_it_does": "metapool is a header-only, compile-time-configured pool allocator for C++23, built around fixed-stride 'metaset' freelists preallocated into one arena per thread. It ships std::allocator and std::pmr::memory_resource adapters so it plugs into existing std/pmr containers, plus its own mtp::vault dynamic-array container. Unlike std::allocator or std::pmr pool resources, stride sizes and block counts are declared at compile time; there is no general fallback once the configured strides are exhausted.",
+  "how_it_is_fast": "Allocations are grouped into stride (size-class) segregated freelists, each an intrusive singly-linked list carved once from a monotonic arena, so alloc/free are O(1) pointer push/pop with a 2-byte inline per-block header for O(1) stride lookup on free. Instances are thread-local by default, so the hot path needs no locking or atomics (confirmed: no mutex/atomic in allocator.hpp, freelist.hpp, or memory_model.hpp). The arena is sized to fit L1/L2 cache and is grabbed once, avoiding the malloc/free syscalls and heap bookkeeping std::vector triggers on every reserve().",
+  "when_to_use": [
+    "Game/simulation-style workloads with known, stable allocation size distributions that can be pre-declared in a metaset",
+    "Hot single-thread loops doing frequent same-size alloc/dealloc or reserve() cycles, where the TLS lock-free path beats malloc/free churn",
+    "Codebases that can adopt the std::allocator or std::pmr::memory_resource adapter to plug metapool into existing containers without rewriting them",
+    "Bounded working sets that fit a preallocated arena, where avoiding heap/kernel allocation variance matters (e.g. real-time frame loops)",
+    "Projects already on a C++23-capable compiler (tested: clang 20.1.8) that are fine vendoring a header-only library"
+  ],
+  "when_not_to_use": [
+    "Allocation sizes are unpredictable or span a wide unbounded range: no fallback exists beyond the configured strides",
+    "Multiple threads need to share one allocator instance concurrently: no mutex/atomic found in the reviewed source, so mtp::shared is not proven thread-safe without external locking",
+    "You need organic growth past the compile-time arena: exhaustion calls a noreturn fatal() that terminates the process, and reset() invalidates all live objects without running destructors",
+    "Toolchain is not C++23-capable, or you need verified GCC/MSVC/ARM support (only clang 20.1.8 on x86-64 is documented/tested)",
+    "You're chasing the headline >1000x number: that figure is from a single-vector reserve()/destroy microbenchmark dominated by glibc malloc/free of large blocks; realistic emplace_back gains are only 1.2x-1.6x, and one churn case (4096B/16384B elements) is up to 1.58x slower than std"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none",
+    "min_toolchain": "C++23; tested with clang 20.1.8 (no GCC/MSVC verification found)",
+    "platforms": "x86-64 tested (AMD Ryzen 7 PRO 8840U, Arch Linux); no ARM/other-arch support documented in files reviewed",
+    "thread_safety": "not documented explicitly; source shows a thread_local default instance (no cross-thread sharing) and a mtp::shared variant with no mutex/atomic anywhere in allocator.hpp, freelist.hpp, or memory_model.hpp — treat concurrent access to a shared instance as unsynchronized",
+    "drop_in_for_baseline": "partial — explain: the std::allocator and std::pmr::memory_resource adapters let metapool back existing std/pmr containers directly, but the flagship mtp::vault container is a separate API from std::vector, not a drop-in replacement"
+  },
+  "gotchas": [
+    "MTP_ASSERT (bounds/pointer sanity checks throughout the alloc/free path) compiles to a no-op under NDEBUG, so release builds skip these checks entirely",
+    "Total freelist exhaustion across all strides calls a [[noreturn]] fatal() that prints a framed error to stderr and terminates the process — this is not a C++ exception and cannot be caught",
+    "reset() (needed to reclaim arena space) invalidates all previously constructed objects without calling destructors",
+    "Allocations round up to the nearest configured stride; a gap in the metaset (e.g. smallest stride 1024B for a 2B request) wastes the difference per block"
+  ],
+  "pick_this_over_siblings_when": "All 10 catalogued siblings (NUMAlloc, SuperMalloc, Hoard, scalloc, both arena-allocators, ltalloc, rpmalloc, smmalloc, SpeedMalloc) are general-purpose malloc/operator-new replacements. metapool is the only one requiring compile-time, per-workload tuning of a fixed stride layout (metaset) instead of being a drop-in allocator — pick it when allocation sizes are known ahead of time and you want a header-only, TLS, lock-free pool packed into L1/L2 cache (e.g. a game engine's per-frame allocations); pick a general allocator like rpmalloc or smmalloc instead when sizes vary unpredictably or you need a true whole-app malloc replacement.",
+  "verified_claims_summary": "On an AMD Ryzen 7 PRO 8840U (Arch Linux, glibc 2.42/ptmalloc, clang 20.1.8, -O3 -march=native -fstrict-aliasing -flto), metapool's mtp::vault construction+reserve() beat std::vector (std::allocator/ptmalloc) by roughly 940x-1380x (one 4763x outlier) and beat std::pmr::vector (pmr pool resource + monotonic_buffer_resource) by 2.65x-3.63x in the reserve microbenchmark; in the more representative emplace_back benchmark the margin over std::vector was only 1.2x-1.6x, and a churn simulation ranged from 1.58x slower to 1.66x faster than std depending on element size.",
+  "status_note": "Active (last commit 2026-02-21), MIT-licensed, header-only and small enough to vendor; but a young single-author project (created Aug 2025, 37 stars, 3 forks, 0 open issues) with benchmark results published only as a PNG and no independent verification found.",
+  "sources_read": [
+    "https://github.com/esterlein/metapool",
+    "https://github.com/esterlein/metapool#benchmark",
+    "https://github.com/esterlein/metapool/blob/master/license",
+    "https://github.com/esterlein/metapool/blob/master/mtp_memory.hpp",
+    "https://github.com/esterlein/metapool/blob/master/container/vault.hpp",
+    "https://github.com/esterlein/metapool/blob/master/mtp/fail.hpp",
+    "https://github.com/esterlein/metapool/blob/master/mtp/metapool.hpp",
+    "https://github.com/esterlein/metapool/blob/master/mtp/freelist.hpp",
+    "https://github.com/esterlein/metapool/blob/master/mtp/freelist_proxy.hpp",
+    "https://github.com/esterlein/metapool/blob/master/mtp/allocator.hpp",
+    "https://github.com/esterlein/metapool/blob/master/mtp/monotonic_arena.hpp",
+    "https://github.com/esterlein/metapool/blob/master/mtp/mtpint.hpp",
+    "https://github.com/esterlein/metapool/blob/master/mtp/memory_model.hpp"
+  ],
+  "confidence": 0.62
+}

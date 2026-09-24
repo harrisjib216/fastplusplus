@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/chenyibo1029/CYBHash",
+  "one_liner": "Header-only bit-packing + BMI2 pext lookup for fixed-format Chinese futures/stock/option ticker symbols, vs std::unordered_map.",
+  "what_it_does": "CYB_Hash.h provides a CRTP base (base_symbol_table) that inherits std::unordered_map so you populate it with normal operator[] using symbol strings as keys. You then call sync_with_unordered_map() (or sync_with_additional_symbols()) to pack each symbol into an int64 id, pick a small bit mask that minimizes collisions, and build a flat open-addressed lookup vector; afterward you query with get_value(sym) instead of find(). Specialized subclasses exist for option, stock, stock6, future (conflict-free and conflict-allowed variants), and a combine_symbol_table dispatcher.",
+  "how_it_is_fast": "Each fixed-length ticker string (5-16 bytes) is packed into a uint64 id via per-table bit-selection logic (get_id), then find_min_mask_by_cost greedily/bruteforce-searches for a small bit mask whose _pext_u64 (BMI2 pext instruction) extraction gives few collisions across the known key set. Lookups become one pext plus linear-probe over a flat vector<pair<id,value>>, skipping std::unordered_map's string hashing and bucket-chain traversal entirely. The idea is borrowed from qlibs/mph (pext-based hashing) and MengRao/str (fast fixed-size string keys, bundled as Str.h/StrHash.h though unused in the active benchmark path).",
+  "when_to_use": [
+    "Keys are exactly Chinese futures/stock/option ticker symbols (5-16 ASCII chars, e.g. '600000.SSE', 'eb2505-C-10000') that fit this project's packing rules",
+    "The key set is known/stable before the hot lookup loop (build via sync_with_unordered_map() once, then read-only queries)",
+    "Running on x86-64 hardware with BMI2 (pext) available",
+    "Throughput on symbol->value lookup matters more than general-purpose map semantics",
+    "You are prototyping/studying the technique rather than shipping it verbatim (no license to redistribute)"
+  ],
+  "when_not_to_use": [
+    "Any key format other than these narrow ticker patterns -- get_id()'s bit layout is hard-coded per table type, not a general string hash",
+    "Keys are inserted/removed continuously; the design assumes a build-then-freeze workflow, not interleaved mutation",
+    "Target platform lacks BMI2 (older x86, most ARM/aarch64) -- pext isn't available, and the code isn't portable around it",
+    "You need a license to copy/redistribute the code -- no LICENSE file exists at the repo root",
+    "You need verified performance numbers before adopting -- no benchmark output, hardware, or run data is published, and the project shows no CI, tests-as-assertions beyond ad hoc checks, or recent activity"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none required for CYB_Hash.h itself; repo also bundles Str.h/StrHash.h (MengRao/str, MIT) but those are not used by the active benchmark code paths (bench_hash<> calls are commented out in testCYBHash.cc main())",
+    "min_toolchain": "C++17, g++ with -mbmi2 (per test.sh: g++ -std=c++17 -mbmi2 -O3 -DNDEBUG)",
+    "platforms": "x86-64 with BMI2 (pext instruction) required; testEndian() throws at construction on big-endian; aarch64/ARM not supported",
+    "thread_safety": "not documented -- no locks/atomics in CYB_Hash.h; build phase (operator[] + sync_with_unordered_map) is unsynchronized like std::unordered_map, and get_value() reads are plain vector indexing with no protection against concurrent writes",
+    "drop_in_for_baseline": "partial — explain: population uses std::unordered_map's operator[] syntax (it inherits from unordered_map), but you must call sync_with_unordered_map()/sync_with_additional_symbols() before querying, and lookups go through get_value(sym) rather than find()/operator[], so call sites must change"
+  },
+  "gotchas": [
+    "Symbol length is constrained to 5-16 characters; if length is 16 the last byte must be '0', otherwise sync_with_unordered_map() prints an error and calls std::exit(0)",
+    "Table size is capped at 1<<MAX_BIT_SIZE (2^25) entries; sync returns false / prints 'table size too large' beyond that",
+    "get_id() bit-packing differs per subclass (option/stock/stock6/future) and is specific to real Chinese exchange symbol formats (e.g. '.SSE'/'.SZE'/'.BSE' suffixes, 'eb2505-C-10000' style option codes) -- using it outside those formats gives undefined/garbage ids",
+    "future_symbol_table's calculate_mask disallows id conflicts and can abort (exit(0)) if no collision-free mask is found within the search space"
+  ],
+  "pick_this_over_siblings_when": "Only if your keys are literally these Chinese exchange ticker formats and you're willing to vendor unlicensed, unbenchmarked code for a niche win; for general string/integer key hashing, catalogued siblings like emhash, tsl::robin_map, or Verstable are general-purpose, actively tested, and (unlike CYBHash) carry reproducible benchmark data and clear licenses.",
+  "verified_claims_summary": "The README states CYBHash is 'approximately 10 times faster than std::unordered_map' for symbol-to-value lookup, while the repo's separate GitHub description says 'approximately 5-30 times faster' -- the two first-party figures disagree. testCYBHash.cc + test.sh do contain a real benchmark harness (bench_file_unordered_map alongside the symbol-table benches, run via g++ -std=c++17 -mbmi2 -O3 -DNDEBUG over bundled combine.txt/shfe.txt/stock.txt/dce.txt/option.txt files), but no output numbers, hardware, or compiler version tied to the README's claim are published anywhere in the repo.",
+  "status_note": "Last commit 2025-03-14 with 10 stars; maintenance looks stale (no issues, PRs, releases, or CI found). Usability stays reference-only: GitHub reports license: null (no repo-root LICENSE file), even though CYB_Hash.h itself carries an inline MIT header (Copyright 2023 Chen Yibo) and the bundled StrHash.h/Str.h carry a separate inline MIT header (Copyright 2019 Meng Rao) -- the absence of a formal LICENSE file leaves redistribution rights ambiguous despite these in-file notices.",
+  "sources_read": [
+    "https://github.com/chenyibo1029/CYBHash",
+    "https://github.com/chenyibo1029/CYBHash/blob/main/README.md",
+    "https://github.com/chenyibo1029/CYBHash/blob/main/CYB_Hash.h",
+    "https://github.com/chenyibo1029/CYBHash/blob/main/test.sh",
+    "https://github.com/chenyibo1029/CYBHash/blob/main/testCYBHash.cc",
+    "https://github.com/chenyibo1029/CYBHash/blob/main/StrHash.h"
+  ],
+  "confidence": 0.35
+}

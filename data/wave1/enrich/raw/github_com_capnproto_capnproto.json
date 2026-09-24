@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/capnproto/capnproto",
+  "one_liner": "Zero-copy binary serialization/RPC system: wire format equals in-memory layout, beating RapidJSON-based JSON serialize/deserialize by ~2.8x/1.6x.",
+  "what_it_does": "Cap'n Proto is a schema-driven binary serialization format and capability-based RPC system for structured data (its own pitch: 'like Protocol Buffers, but faster'). You write a .capnp schema, run the `capnp compile` code generator, and get typed C++ Builder/Reader types instead of hand-building JSON with RapidJSON's DOM/SAX API — it is not a drop-in replacement, the interface is different by design. It also ships an RPC layer (capnp-rpc/kj-async) with promise pipelining, something a JSON+RapidJSON stack has no equivalent for.",
+  "how_it_is_fast": "The wire format is identical to the in-memory layout: messages live in arena-allocated segments (BuilderArena/SegmentBuilder) navigated by struct/list/far pointers, so writing is just placing fields directly and reading is pointer validation with no separate decode pass. This skips the DOM-build-then-stringify step JSON needs to write and the parse-then-materialize step JSON needs to read, which is consistent with the benchmark's bigger win on serialize (~2.8x) than deserialize (~1.6x, and that JSON figure excludes JSON's own parse cost, reported separately at 771ns).",
+  "when_to_use": [
+    "C++ service-to-service messaging or RPC (not just wire format) where you can adopt promise pipelining via capnp-rpc",
+    "Structured, schema-evolving payloads shared across services/languages, where a build-time codegen step is acceptable",
+    "Read-heavy or partial-read workloads over a message buffer, since Cap'n Proto readers touch only the fields accessed instead of materializing the whole object",
+    "Trading/finance-shaped fixed object graphs like the benchmarked one (accounts, balances, orders) where both serialize and deserialize latency matter",
+    "Cases where message size matters too: 208 bytes here vs. JSON's 301 bytes for the same object"
+  ],
+  "when_not_to_use": [
+    "You need a human-readable, greppable, or hand-editable wire format (logs, configs, ad hoc debugging) — stay with JSON",
+    "Pure C++-to-C++ traffic with no RPC/schema-evolution need and raw speed is the only goal — zpp::bits (34ns/37ns in the same suite) is ~7x faster with no schema compiler",
+    "Small one-off tools/scripts where adding a .capnp schema and `capnp compile` build step isn't worth the setup",
+    "Teams needing a dynamic/schema-less path in C++ — the generated-code path is the primary supported workflow",
+    "Long-lived buffer lifetime is hard to guarantee — zero-copy readers require the backing buffer to outlive them"
+  ],
+  "integration": {
+    "form": "static lib | shared lib (plus a codegen step: `capnp compile` generates .h/.c++ from your .capnp schema, which you then build)",
+    "dependencies": "none required for core capnp/kj; optional deps only for extras — OpenSSL (kj-tls), zlib (kj-gzip), Brotli — and the `capnp` schema compiler is needed at build time",
+    "min_toolchain": "Stable 1.0 line (`master` branch): C++14, GCC 5+/Clang 5+/MSVC 2017+. The repository's current default branch (`v2`, in active development) raises this to C++20, built with -std=gnu++23/​/std:c++23preview",
+    "platforms": "Linux, macOS, Windows (per CMake/Bazel build files and the CppSerialization benchmark's cross-platform build); no SIMD/CPU-arch requirement documented",
+    "thread_safety": "Not documented as a blanket guarantee. Source comments flag specific unsafe operations (e.g. MessageBuilder::getOrphanage() is called out in-source as 'not thread-safe'); the KJ async runtime is single-threaded per EventLoop, and cross-thread coordination needs explicit primitives (see GH issue #2234, a TSAN report against CrossThreadFulfiller).",
+    "drop_in_for_baseline": "partial — replacing RapidJSON means adopting a .capnp schema, the capnp compiler, and generated Builder/Reader types in place of a JSON DOM/SAX API; not a header swap"
+  },
+  "gotchas": [
+    "Message buffers must outlive every Reader built from them — readers view the buffer directly (zero-copy), so freeing or reusing it early dangles",
+    "MessageBuilder::getOrphanage() is documented in-source as not thread-safe even though adjacent accessors look read-only",
+    "Binary wire format isn't eyeball-debuggable like JSON; inspecting a message needs `capnp decode`/`capnp convert` against the schema",
+    "Schema changes require rerunning `capnp compile` and rebuilding generated headers; there's no schema-less mode on the standard C++ path"
+  ],
+  "pick_this_over_siblings_when": "Pick Cap'n Proto over the JSON-focused siblings (DAW JSON Link, cjson.cpp, json.cpp, Tachyon.JSON, utl::json) when you can drop JSON as the wire format entirely and want cross-language schemas plus an RPC layer, not just a faster JSON parser. Pick zpp::bits instead when you stay C++-only and don't need RPC or schema evolution — it's markedly faster in the same benchmark (34ns/37ns vs. 247ns/184ns) with no schema compiler.",
+  "verified_claims_summary": "On chronoxor/CppSerialization's fixed trading-object shootout (accounts/balances/orders) on an Apple M1 Pro under macOS with CppBenchmark's 'release' configuration (compiler and flags not stated), Cap'n Proto serialized in 247ns to 208 bytes and deserialized in 184ns, versus RapidJSON-based JSON at 696ns serialize / 291ns deserialize / 301 bytes — about 2.8x faster to serialize and 1.6x faster to deserialize than JSON in that fixture; independently confirmed against the current CppSerialization README table.",
+  "status_note": "Actively maintained (commits as of the record date) under the MIT license, 13.2k stars, used in production by Cloudflare and Sandstorm; MIT terms make it freely redistributable, but it is not a small vendor-in-header — expect to build libcapnp/libkj and wire the capnp compiler into your build.",
+  "sources_read": [
+    "https://github.com/capnproto/capnproto",
+    "https://github.com/capnproto/capnproto/blob/v2/README.md",
+    "https://github.com/capnproto/capnproto/blob/v2/c%2B%2B/README.txt",
+    "https://github.com/capnproto/capnproto/blob/v2/c%2B%2B/CMakeLists.txt",
+    "https://github.com/capnproto/capnproto/blob/v2/c%2B%2B/compile_flags.txt",
+    "https://github.com/capnproto/capnproto/blob/master/c%2B%2B/src/kj/common.h",
+    "https://github.com/capnproto/capnproto/blob/master/c%2B%2B/src/kj/exception.h",
+    "https://github.com/capnproto/capnproto/blob/master/c%2B%2B/src/capnp/message.h",
+    "https://github.com/capnproto/capnproto/blob/master/c%2B%2B/src/kj/async.h",
+    "https://capnproto.org/cxx.html",
+    "https://github.com/chronoxor/CppSerialization",
+    "https://github.com/chronoxor/CppSerialization/blob/main/README.md",
+    "https://github.com/capnproto/capnproto/issues/2234",
+    "https://github.com/capnproto/capnproto/branches"
+  ],
+  "confidence": 0.55
+}
