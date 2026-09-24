@@ -76,7 +76,7 @@ def known_urls(exclude_wave_dir=None):
     for f in list(DATA.glob("wave*/merged.json")) + list(DATA.glob("wave*/rejected.json")):
         if exclude_wave_dir and f.parent.resolve() == exclude_wave_dir.resolve():
             continue
-        urls |= {e["id"] for e in json.loads(f.read_text()) if not e["id"].startswith("paper:")}
+        urls |= {e["id"].split("#")[0] for e in json.loads(f.read_text()) if not e["id"].startswith("paper:")}
     return urls
 
 
@@ -103,6 +103,10 @@ def merge(wave_dir):
             if key in known:
                 report.append(f"  KNOWN-LIST VIOLATION {e['name']} ({key})")
                 continue
+            if (key in merged and merged[key]["category"] != e["category"]
+                    and short_name(merged[key]["name"]) != short_name(e["name"])):
+                # one repo hosting separate libraries in different categories (e.g. UTL)
+                key = f"{key}#{e['category']}"
             e["id"] = key
             prev = merged.get(key)
             if prev is None:

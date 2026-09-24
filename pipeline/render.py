@@ -29,6 +29,12 @@ the output-delivery rule above)
   `gh search` shares a 30-requests/minute limit with other agents running in
   parallel. If it reports a rate limit, do not retry in a loop: switch to
   WebSearch for discovery and keep using `gh api repos/...` (5000/hour).
+- WebSearch has a per-session budget shared by all agents. If it fails as
+  exhausted, do not retry; use WebFetch on public search endpoints instead:
+    http://export.arxiv.org/api/query?search_query=all:<terms>&max_results=20
+    https://api.semanticscholar.org/graph/v1/paper/search?query=<terms>&fields=title,url,year,externalIds&limit=20
+    https://hn.algolia.com/api/v1/search?query=<terms>&tags=story
+  (Reddit and Lobsters block automated fetches.)
 - Do not clone repositories or build anything; this is a search task.
 - Budget: about 50 tool calls. Stop earlier if queries stop surfacing new items.
 - Deliver your output by writing the JSON array, and nothing else, to:
