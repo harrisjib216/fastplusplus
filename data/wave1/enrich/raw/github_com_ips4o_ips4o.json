@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/ips4o/ips4o",
+  "one_liner": "In-place parallel/sequential comparison sort beating std::sort via cache-efficient block-based samplesort partitioning.",
+  "what_it_does": "Drop-in replacement for std::sort: ips4o::sort(begin, end[, comp]) sorts a random-access range sequentially, and ips4o::parallel::sort(begin, end[, comp][, thread_pool]) does the same across threads. Solves general-purpose in-place comparison sorting for arrays and vectors of any comparable type, including small fixed-size records and duplicate-heavy keys.",
+  "how_it_is_fast": "Superscalar samplesort: recursively partitions the array in-place into many buckets per pass using a branchless decision tree over sampled splitters, then permutes elements block-by-block to stay cache-efficient without extra memory. It special-cases inputs with many equal elements to avoid pathological partitioning, and the parallel version dynamically load-balances buckets across threads.",
+  "when_to_use": [
+    "Sorting large arrays/vectors of primitives, floats, or small records (Pair/Quartet/100-byte) in-place with no extra buffer",
+    "Multi-core machines where parallel::sort (OpenMP or std::thread + TBB) can use the extra cores for large inputs (roughly n >= 2^18)",
+    "Data with many duplicate keys or skewed distributions, which the branchless classifier handles without the usual pathological slowdown",
+    "Sequential drop-in replacement for std::sort on Linux/macOS with a C++14-capable GCC or Clang toolchain"
+  ],
+  "when_not_to_use": [
+    "Windows builds -- the README states the code does not currently compile on Windows",
+    "Very small inputs (n <= 2^15), where BlockQuicksort is faster per the record's caveats",
+    "Need a stable sort that preserves the relative order of equal keys -- not documented as stable, and in-place bucket permutation gives no such guarantee",
+    "Can't add TBB and libatomic (or -mcx16 / native 16-byte CAS) to the build -- parallel mode requires them; sequential-only mode is header-only with no dependencies",
+    "Sanitizer-clean concurrency required -- open, unresolved TSan-flagged data race in the parallel presort check (issue #3)"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "sequential: none. parallel: pthreads/std::thread, TBB, libatomic (or -mcx16 / native 16-byte compare-and-exchange)",
+    "min_toolchain": "C++14 (CMakeLists sets CMAKE_CXX_STANDARD 14); benchmarked with GCC 7.5.0, -march=native -O3",
+    "platforms": "Linux/macOS, GCC or Clang, x86-64 (16-byte CAS needed for fastest parallel mode); does not compile on Windows",
+    "thread_safety": "not documented beyond parallel::sort owning its own thread pool per call; issue #3 (open) reports a TSan-flagged data race in the parallel presort check (base_case.hpp isSorted, concurrent vector<bool> writes)",
+    "drop_in_for_baseline": "partial -- sequential ips4o::sort(begin, end[, comp]) matches std::sort's signature exactly; parallel::sort is a separate call you opt into, not automatic"
+  },
+  "gotchas": [
+    "Parallel mode needs 16-byte atomic compare-and-exchange (-march=native or -mcx16, plus -latomic) or it falls back to lock emulation and loses speed",
+    "CMake's IPS4O_OPTIMIZE_FOR_NATIVE defaults to ON (-march=native), which can produce binaries that crash on other CPUs if redistributed",
+    "Open, unresolved TSan-flagged data race in the parallel presort check (issue #3)",
+    "The ips4o/ips4o repo ships no benchmark code (only src/example.cpp); the paper's numbers come from the separate GPL-3.0 ips4o-benchmark-suite, which is not linked from the README"
+  ],
+  "pick_this_over_siblings_when": "Pick IPS4o over BlockQuicksort/quadsort/fluxsort when you need a parallel multi-core sort or must stay robust across many data types and skewed/duplicate-heavy distributions; pick those instead for a header-only, dependency-free sequential drop-in with a simpler build.",
+  "verified_claims_summary": "On the four-machine benchmark suite (arXiv 2009.13569, GCC 7.5.0, -march=native -O3), sequential IPS4o averaged roughly 2x std::sort's throughput on double/uint64/uint32 keys (Table 1 'Total' slowdown factors 1.20-1.78 for IPS4o vs 2.47-3.93 for std::sort's libstdc++ introsort), and Fig. 11 shows std::sort off-plot and slower than IPS4o on uniform uint64 across all four machines (AMD Ryzen 9 3950X, AMD EPYC Rome 7702P, 2x Xeon E5-2683 v4, 4x Xeon Gold 6138). The paper gives no direct parallel-vs-std::sort figure; its parallel speedups (8.37x-40.92x) are relative to sequential IPS4o, not std::sort.",
+  "status_note": "Stale (last commit 2025-01-15) but the maintained successor to the deprecated SaschaWitt/ips4o fork; BSD-2-Clause and header-only for sequential use, so it is easy to vendor even without upstream activity.",
+  "sources_read": [
+    "https://github.com/ips4o/ips4o",
+    "https://github.com/ips4o/ips4o/blob/HEAD/CMakeLists.txt",
+    "https://github.com/ips4o/ips4o/blob/HEAD/include/ips4o.hpp",
+    "https://github.com/ips4o/ips4o/blob/HEAD/include/ips4o/ips4o.hpp",
+    "https://github.com/ips4o/ips4o/blob/HEAD/src/example.cpp",
+    "https://github.com/ips4o/ips4o/issues",
+    "https://github.com/ips4o/ips4o/issues/3"
+  ],
+  "confidence": 0.85
+}

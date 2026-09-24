@@ -21,9 +21,9 @@ Pipeline the waves: while wave N is in verification/cleanup, launch wave N+1 sea
 
 **Per-wave pipeline.** search agents → merge/dedup → verifier → cleanup/enrichment (Part 5) → section writer → publish. Don't start enrichment until the verifier has run; enriching rejected entries wastes Sonnet tokens.
 
-**Sharding within a wave.** Each agent gets one `{DOMAIN}` × `{CATEGORY}` × `{SOURCE}` × optional `{LANGUAGE_FILTER}`. With ~15 categories × ~10 sources × a few language filters you get several hundred distinct assignments per wave; run each 3–5× with different `{SEED_QUERY}` variants to reach thousands without pure duplication.
+**Sharding within a wave.** Each agent gets one `{DOMAIN}` × `{CATEGORY}` × `{SOURCE}` × optional `{LANGUAGE_FILTER}`. With ~15 categories × ~10 sources × a few language filters you get several hundred distinct assignments per wave; run each 3–5× with different `{SEED_QUERY}` variants to reach thousands without pure duplication. Run a category's sources sequentially across batches (never two sources for the same category in one batch) and regenerate the known-list in between — in the wave-1 pilot, two parallel hash-map agents overlapped on 6 of 8 entries.
 
-**Known list.** Pass `{KNOWN_LIST}` — canonical repo URLs already catalogued — so agents skip them. Regenerate it after every batch. Seed it with the obvious ones (abseil, folly, boost.unordered, ankerl::unordered_dense, robin-hood-hashing, simdjson, glaze, yyjson, fmt, fast_float, dragonbox, ryu, pdqsort, vergesort, ska_sort, mimalloc, jemalloc, tcmalloc, snmalloc, hyperscan, RE2, ctre, moodycamel concurrentqueue, xsimd, highway, eigen, xxhash, wyhash, zstd, lz4, xoshiro, io_uring wrappers, etc.).
+**Known list.** Pass `{KNOWN_LIST}` — canonical repo URLs already catalogued — so agents skip them. Regenerate it after every batch. Seed it with the obvious ones (abseil, folly, boost.unordered, ankerl::unordered_dense, robin-hood-hashing, simdjson, glaze, yyjson, fmt, fast_float, dragonbox, ryu, pdqsort, vergesort, ska_sort, mimalloc, jemalloc, tcmalloc, snmalloc, hyperscan, RE2, ctre, moodycamel concurrentqueue, xsimd, highway, eigen, xxhash, wyhash, zstd, lz4, xoshiro, io_uring wrappers, etc.). Seed items are skipped by search agents, so they still need their own records: run a seed-record pass (one agent per few seed projects, same schema, project named explicitly) before publishing. Seed list: `data/known_seed.txt`; the generated list is `data/known_list.txt`.
 
 **Dedup key.** Lowercased canonical repo URL (strip `www.`, `.git`, trailing slash, mirror hosts). Merge duplicate entries by keeping the highest evidence tier and unioning sources.
 
@@ -32,9 +32,9 @@ Pipeline the waves: while wave N is in verification/cleanup, launch wave N+1 sea
 - `REFERENCE.md` — everything else: unlicensed code, papers without code, non-OSI, `mixed`. These are ideas to study or reimplement clean-room, not code to copy. Abandoned-but-licensed projects still go in COPYABLE with a `maintenance_status` badge; being dead doesn't make code uncopyable.
 Nothing is dropped for age, fork status, or being a toy — those are tags, not filters.
 
-**Verification pass (recommended).** A Sonnet/Opus verifier receives each merged entry, opens `benchmark_url`, and answers: does the page actually compare against the named baseline with numbers? Downgrade or reject if not. Tier-C-only entries go in a separate "unverified claims" section of the awesome-list.
+**Verification pass (required).** A Sonnet/Opus verifier receives each merged entry, opens `benchmark_url`, and answers: does the page actually compare against the named baseline with numbers? Downgrade or reject if not. Tier-C-only entries go in a separate "unverified claims" section of the awesome-list. Prompt: `pipeline/verifier_prompt.txt`. In the wave-1 pilot the verifier changed 42% of tiers and found materially wrong numbers in ~5 of 38 records, so it is not optional.
 
-**Budget per agent.** ~15–25 tool calls, hard cap `{MAX_ENTRIES}` (suggest 8). Prefer 3 well-evidenced entries over 10 shallow ones.
+**Budget per agent.** ~50 tool calls, hard cap `{MAX_ENTRIES}` (6). Prefer 3 well-evidenced entries over 10 shallow ones. (The pilot's agents used 45–68 calls; a 15–25 budget was not realistic for opening every repo and benchmark page.)
 
 **Variables to fill:** `{DOMAIN}`, `{CATEGORY}`, `{BASELINES}` (from Part 4), `{SOURCE}`, `{LANGUAGE_FILTER}`, `{SEED_QUERY}`, `{KNOWN_LIST}`, `{MAX_ENTRIES}`, `{TODAY}`.
 
@@ -63,6 +63,9 @@ Source to search: {SOURCE}
 Language filter: {LANGUAGE_FILTER}   (e.g. "any", "C++ only", "Rust", "Go", "Zig", "Python", "Clojure/JVM")
 Starting query:  {SEED_QUERY}
 Max entries:     {MAX_ENTRIES}
+
+"C++ only" means usable directly from C++: C++ libraries and C libraries
+with a C API both count. It excludes implementations in other languages.
 
 Do NOT report anything whose canonical repo URL is in this list (already catalogued):
 {KNOWN_LIST}
@@ -102,12 +105,18 @@ libstdc++'s std::regex is a much weaker result than beating all three.
 =====================================================================
 EVIDENCE TIERS (assign exactly one)
 =====================================================================
-A — Reproducible benchmark code in the repo (or a linked repo) that compares
-    against the named std facility, with compiler, flags, and hardware stated.
+A — Reproducible benchmark that runs against the named baseline: the
+    benchmark code is public AND compiler, flags, and hardware (CPU model)
+    are all stated. Who ran it does not matter — the project's own repo, a
+    linked repo, a paper's artifact repo, or an independent third-party
+    suite all qualify.
 B — Peer-reviewed paper, or a well-known independent third-party benchmark
-    suite (e.g. a community hash-map or JSON-parser shootout) showing the win.
-C — Claim only: README, blog post, talk, or tweet with numbers but no
-    reproducible artifact, OR numbers without stated methodology.
+    suite (e.g. a community hash-map or JSON-parser shootout) showing the
+    win, that falls short of A (code, compiler, flags, or CPU model missing).
+C — First-party claim (README, blog post, talk, tweet) with numbers that
+    falls short of A, OR numbers without stated methodology. The project's
+    own benchmark code with partial methodology is C, not B — B is reserved
+    for peer review or independent suites.
 D — Claim with no numbers at all ("blazing fast"). Record at most 1 of these
     per run, and only if the project is clearly notable (>1k stars or widely
     referenced). Otherwise skip.
@@ -121,8 +130,9 @@ DO NOT EXCLUDE — TAG INSTEAD
 =====================================================================
 Abandoned, unlicensed, forked, academic, and toy projects are all IN SCOPE.
 A dead repo with a genuinely fast algorithm is still valuable to study or
-port. Instead of filtering, fill these fields honestly so the orchestrator
-can sort entries into the right list:
+port. Low or zero stars and very new projects are NOT a reason to skip —
+only tier D entries need notability. Instead of filtering, fill these fields
+honestly so the orchestrator can sort entries into the right list:
 
   maintenance_status:
     "active"     — commits within 12 months
@@ -133,7 +143,9 @@ can sort entries into the right list:
 
   usability:
     "copyable"   — permissive or copyleft OSI license (MIT, BSD, Apache-2.0,
-                   Boost, zlib, MPL, LGPL, GPL...). Record the SPDX id.
+                   Boost, zlib, MPL, LGPL, GPL...), or a CC0-1.0 /
+                   public-domain dedication (add "no patent grant" to
+                   caveats). Record the SPDX id.
     "reference"  — no license, unclear license, non-OSI, "all rights
                    reserved", or paper/pseudocode only. Can be studied and
                    reimplemented from the idea, but the code itself must
@@ -195,6 +207,10 @@ HARD RULES
 =====================================================================
 - Every URL you output must be one you actually opened this session.
 - Every number in claimed_speedup must appear on the page at benchmark_url.
+  A ratio you compute from numbers on that page is allowed only when marked
+  "(derived from page data)".
+- When harvesting from a shared shootout page, double-check the row: quote
+  the numbers for THIS project, not a neighbouring one.
 - If a project claims to beat "the STL" without naming the facility, infer
   the facility only if it's unambiguous (a hash map obviously targets
   std::unordered_map); otherwise put your best guess in baseline and

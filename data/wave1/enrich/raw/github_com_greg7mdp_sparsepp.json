@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/greg7mdp/sparsepp",
+  "one_liner": "Header-only open-addressing hash map/set beating std::unordered_map on memory and, per two independent suites, speed.",
+  "what_it_does": "Drop-in replacement for std::unordered_map/unordered_set, built on open addressing (a flat probed array) instead of chaining, so it needs far less per-entry overhead (about 1 byte/entry). Header-only, same STL-style interface, plus optional serialize()/unserialize() to dump a whole table to a file or stream. Values must be copyable-and-movable or movable-only; erase()/insert() invalidate iterators and value references more readily than std::unordered_map does.",
+  "how_it_is_fast": "Uses Google sparsehash's 'sparsetable' layout: slots are grouped (SPP_GROUP_SIZE, 32 or 64) and each group carries a bitmap (group_bm_type in spp.h) marking which slots are occupied, so mostly-empty regions cost almost nothing to store. Open addressing itself avoids std::unordered_map's per-node allocation and pointer chasing. The README says this layout also keeps the resize memory spike small compared to a plain open-addressing table, though the resize algorithm itself wasn't inspected this session. Integer keys get a built-in bit-mixing default hash to avoid the pathological slowdown that sequential/identity-hashed keys cause on non-present lookups.",
+  "when_to_use": [
+    "Memory-constrained C++ workloads (embedded, large in-memory indexes) where per-entry overhead or resize memory spikes from std::unordered_map/dense_hash_map are the bottleneck",
+    "Integer or string key/value hash tables in the hundreds-of-thousands to ~100M entry range, matching the benchmarked workload",
+    "Projects on pre-C++11 or older MSVC/g++ toolchains that can't take the C++11 requirement of greg7mdp/parallel-hashmap",
+    "Throughput-oriented insert/lookup/erase workloads, not strict latency SLAs, with no need for concurrent writers",
+    "Need built-in binary serialize()/unserialize() of the whole table to a file or stream"
+  ],
+  "when_not_to_use": [
+    "Peak throughput matters most: google::dense_hash_map beats sparsepp on insert, lookup, and delete in the author's own bench.md",
+    "Any C++11+ toolchain is available: the author's README now recommends greg7mdp/parallel-hashmap (or gtl) instead of sparsepp",
+    "Code holds long-lived references or pointers into the map across insert()/erase() — sparsepp invalidates them more aggressively than std::unordered_map",
+    "Code uses a sparse_hash_map/set after moving from it — moved-from tables segfault on further use (issue #83, open, unresolved)",
+    "Hash quality is uncertain (e.g. an unmixed identity hash on integer keys) — spp degrades badly or times out per Ankerl 2022"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (C++ standard library only)",
+    "min_toolchain": "Works with C++03; C++11 features (move semantics, initializer lists) auto-detected and used if the compiler supports them. Tested on VS2010-2015, g++, clang++.",
+    "platforms": "Windows, Linux, macOS; x86/x64, no SIMD required. Compiler/platform detection macros derived from Boost for portability.",
+    "thread_safety": "Follows std library container rules: concurrent reads on one table from multiple threads are safe; if one thread writes to a table, all other reads/writes to that same table must be externally synchronized; separate table instances are fully independent (documented in README).",
+    "drop_in_for_baseline": "partial — same STL-style interface as std::unordered_map/set, but erase()/insert() invalidate iterators and value references more aggressively, and a moved-from table is left broken (open bug) rather than empty."
+  },
+  "gotchas": [
+    "Moved-from sparse_hash_map/set is left in an inconsistent state; calling find() or other operations on it segfaults (issue #83, open as of 2026-09-23; author's own workaround suggestion is to switch to parallel-hashmap)",
+    "insert()/erase() can invalidate references and pointers to stored values, unlike std::unordered_map where references survive unless a rehash occurs",
+    "Default integer hash does bit-mixing to dodge sequential-key pathologies; a user-supplied hash with similar low-order bits across keys needs the SPP_MIX_HASH macro or collisions increase",
+    "Copy construction/assignment is slow relative to the baseline (per verification caveats)"
+  ],
+  "pick_this_over_siblings_when": "Pick sparsepp over google::dense_hash_map when the final table size is unknown and you can't absorb dense_hash_map's larger resize memory spike; pick it over tsl::robin_map/ska::flat_hash_map/emhash mainly when stuck on a pre-C++11 toolchain, since for any C++11+ project the author's own README recommends parallel-hashmap (not sparsepp) over those newer designs too.",
+  "verified_claims_summary": "Two independent third-party suites (not the author's own graphs) show spp::sparse_hash_map beating libstdc++'s std::unordered_map: Ankerl 2022 (clang++13, -O3 -march=native, Intel i7-8700) measured geometric-mean speedups of 1.98-2.03x depending on hash choice, with number-find up to 2.51x, but spp timed out on integer insert/erase/find when using an unmixed identity hash. Tessil's 2017 shootout (Clang 5.0 with libstdc++, 200K-3M entries) measured 1.11-3.31x faster successful lookups and 1.15-5.60x faster misses, with inserts ranging 0.61-1.47x (slower than std::unordered_map on string keys).",
+  "status_note": "Actively maintained (last commit 2026-09-19, BSD-3-Clause, 1311 stars, not a fork or archived) but the author's own README now steers users to greg7mdp/parallel-hashmap for any C++11+ project, calling it a better speed/memory trade-off than sparsepp.",
+  "sources_read": [
+    "https://github.com/greg7mdp/sparsepp",
+    "https://github.com/greg7mdp/sparsepp/blob/master/README.md",
+    "https://github.com/greg7mdp/sparsepp/blob/master/sparsepp/spp_config.h",
+    "https://github.com/greg7mdp/sparsepp/blob/master/sparsepp/spp.h",
+    "https://github.com/greg7mdp/sparsepp/blob/master/CHANGELOG.md",
+    "https://github.com/greg7mdp/sparsepp/issues/83",
+    "https://github.com/greg7mdp/sparsepp/issues?q=bug",
+    "https://github.com/greg7mdp/sparsepp/issues?q=performance"
+  ],
+  "confidence": 0.7
+}

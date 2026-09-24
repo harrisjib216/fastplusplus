@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/skarupke/flat_hash_map",
+  "one_liner": "Header-only Robin Hood open-addressing hash map/set beating std::unordered_map on lookups, inserts, and erases.",
+  "what_it_does": "Two header-only, open-addressing associative containers (plus set variants) that copy most of std::unordered_map/std::unordered_set's interface: operator[], at, emplace, insert, insert_or_assign, erase, find, equal_range, reserve, swap, max_load_factor, ==/!=. flat_hash_map stores value_type directly in one contiguous array; bytell_hash_map splits each block into a metadata byte array plus a data array to shrink per-slot overhead. Neither exposes bucket()/bucket_count() (only a separate ska::unordered_map wrapper in the same repo does), and neither has C++17 try_emplace.",
+  "how_it_is_fast": "Both use Robin Hood open addressing with backward-shift deletion (no tombstones) and cap worst-case probe length at max(4, log2(bucket_count)), so lookups stay bounded regardless of hash quality. flat_hash_map defaults to a fibonacci hash policy (multiply-shift, no modulo) with a low 0.5 max load factor to keep probe chains short; a power_of_two_std_hash wrapper opts into masking instead. bytell_hash_map keeps the same Robin Hood core but stores per-slot state in packed metadata blocks (a triangular-number jump-distance table) and raises max load factor to 0.9375, trading some speed for a smaller footprint.",
+  "when_to_use": [
+    "Hot lookup/insert/erase paths on int or short string keys, single-threaded, where you control hash quality: Ankerl 2022 shows 2.06-2.32x geomean over libstdc++ std::unordered_map with the same hash.",
+    "Sizes known up front (reserve()-able) with light iteration, since the gain is on insert/erase/find, not on scanning.",
+    "Insert/erase churn workloads, especially with bytell_hash_map (insert-then-erase ~4.4-4.6x vs std::unordered_map) where the 0.9375 load factor also keeps memory tight.",
+    "Small vendorable dependency for game/offline C++11-14 code that can't take on Abseil or a newer-toolchain-only library.",
+    "Trusted, non-adversarial key inputs (internal data, not user-controlled strings from the network)."
+  ],
+  "when_not_to_use": [
+    "Iteration-heavy code: flat_hash_map's iteration is 0.79-0.97x std::unordered_map (Ankerl 2022) and described by that benchmark as one of the slowest tested; memory use is also high.",
+    "bytell_hash_map erase-during-iteration loops: issue #41 reports duplicate elements returned after erase() while iterating; a fix was posted in comments but never merged.",
+    "Builds using -O2 -DNDEBUG with bytell_hash_map: issue #11 reports a 'free(): invalid pointer' SIGSEGV traced to sherwood_v8_block::empty_block()'s static sentinel; unresolved since 2018.",
+    "Untrusted/attacker-influenced keys: no seeded/randomized hashing (issue #17, 'Unsafe with attacker controlled keys'), same exposure as raw std::hash but with nobody patching it.",
+    "Code shared across shared-library/module boundaries: issues #43 and #26 describe static-data (empty_default_table) problems when the header is instantiated in multiple translation units.",
+    "Anywhere you rely on std::unordered_map's iterator/reference stability: backward-shift deletion relocates other elements on erase (issue #30, 'Insert invalidate iterators')."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none beyond the STL (<cstdint> <cstddef> <functional> <cmath> <algorithm> <iterator> <utility> <type_traits>; bytell_hash_map.hpp additionally includes flat_hash_map.hpp, <vector>, <array>)",
+    "min_toolchain": "C++11 (variadic templates, rvalue refs, allocator_traits; ships its own void_t shim rather than relying on C++14/17, so no later standard is required)",
+    "platforms": "any standard C++ target, no SIMD/intrinsics; open issues note past failures on 32-bit ARM (fix referenced in issue #18) and a still-open concern about jump_distances on x86 builds for bytell_hash_map (issue #37)",
+    "thread_safety": "not documented; no locking or atomics in the source — treat as single-writer, same as std::unordered_map",
+    "drop_in_for_baseline": "partial — explain: method names match std::unordered_map (operator[], at, emplace, insert, insert_or_assign, erase, find, equal_range, reserve, swap, max_load_factor, ==/!=), but there is no try_emplace (open issues #19/#21), no bucket()/bucket_count() on flat_hash_map/bytell_hash_map itself, and erase/rehash can relocate other elements' storage (Robin Hood backward-shift), unlike std::unordered_map's node-based stability."
+  },
+  "gotchas": [
+    "erase() performs backward-shift deletion: elements after the erased slot get moved in memory, invalidating their iterators/references too, not just the erased one's (sherwood_v3_table::erase; issue #30).",
+    "bytell_hash_map: duplicate-item-after-erase bug when erasing during iteration (issue #41), fix posted in comments but never merged.",
+    "bytell_hash_map: reported SIGSEGV under -O2 -DNDEBUG tied to sherwood_v8_block::empty_block()'s static sentinel (issues #11, #14), unresolved.",
+    "No seeded hashing; adversarial keys can force worst-case probing exactly like plain std::hash (issue #17)."
+  ],
+  "pick_this_over_siblings_when": "Pick this over emhash, sparsepp, robin-map, or rigtorp::HashMap when the independent Ankerl 2022 head-to-head numbers (same-hash, normalized geomean) matter more than a vendor's own benchmark, or when you specifically want bytell_hash_map's lower memory overhead (0.9375 load factor) at some cost to lookup/iteration speed. Prefer an actively maintained sibling (e.g. tsl::robin_map, emhash) if you need try_emplace, bucket() semantics, or bug fixes — this repo has had zero commits since 2018-07-15 and 42 open issues, including the correctness/crash bugs above.",
+  "verified_claims_summary": "Ankerl 2022 (martinus/map_benchmark; clang++13 -O3 -march=native; Intel i7-8700 @3200MHz; libstdc++), normalizing to the same hash function for both sides, measured ska::flat_hash_map at 2.06-2.32x std::unordered_map geometric-mean runtime (number find 2.8-3.6x, string find 1.55-1.95x, random insert/erase 4.0-4.6x, iteration 0.79-0.97x i.e. slightly slower) and ska::bytell_hash_map at 2.12-2.31x geomean (insert-then-erase 4.4-4.6x). The author's own 2017 post claims the fastest lookups he tested, but shows only graphs with no stated compiler or hardware.",
+  "status_note": "Abandoned since 2018-07-15 with 42 open issues, including two unresolved correctness/crash bugs specific to bytell_hash_map; declared BSL-1.0 in every header despite GitHub showing no LICENSE file, so it's freely copyable and small enough to vendor and patch yourself.",
+  "sources_read": [
+    "https://github.com/skarupke/flat_hash_map",
+    "https://github.com/skarupke/flat_hash_map/blob/master/flat_hash_map.hpp",
+    "https://github.com/skarupke/flat_hash_map/blob/master/bytell_hash_map.hpp",
+    "https://github.com/skarupke/flat_hash_map/blob/master/unordered_map.hpp",
+    "https://github.com/skarupke/flat_hash_map/issues",
+    "https://github.com/skarupke/flat_hash_map/issues/41",
+    "https://github.com/skarupke/flat_hash_map/issues/11",
+    "https://martin.ankerl.com/2022/08/27/hashmap-bench-01/"
+  ],
+  "confidence": 0.62
+}

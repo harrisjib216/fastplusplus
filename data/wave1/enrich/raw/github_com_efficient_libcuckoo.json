@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/efficient/libcuckoo",
+  "one_liner": "Header-only concurrent cuckoo hash map with per-bucket locks; beats std::unordered_map only under real multi-core contention.",
+  "what_it_does": "Provides a thread-safe hash map that supports multiple concurrent reader and writer threads without a single global lock, unlike std::unordered_map, which the EuroSys'14 paper treats as a single-writer table. The API is functional rather than iterator-based: find(key, val) fills an out-parameter or throws std::out_of_range, and insert/update/upsert/erase take keys and callables directly. Safe bulk iteration and STL-style iterators are only available through locked_table(), which exclusively locks the whole map for its lifetime.",
+  "how_it_is_fast": "Uses cuckoo hashing: each key maps to 2 candidate buckets of SLOT_PER_BUCKET=4 slots, so a lookup touches at most 2 cache lines and displacement chains stay short. Concurrency comes from fine-grained per-bucket spinlocks combined with a resize counter/versioning scheme (the EuroSys'14 optimistic-locking design), letting many writers and readers operate on different buckets simultaneously instead of serializing on one table-wide lock the way std::unordered_map does under concurrent access.",
+  "when_to_use": [
+    "Multi-threaded workloads with genuine concurrent inserts and lookups across several cores (paper measures gains at 4-16 cores, 1:1 read:write and mixed operation mixes).",
+    "Fixed-shape, trivially hashable keys/values (paper benchmark uses 8-byte key/8-byte value, ~120M entries) where the 2-cache-line cuckoo probe pays off.",
+    "Code that can adopt a non-STL API (out-parameter find, functor-based update/upsert) instead of std::unordered_map's interface.",
+    "Workloads that need occasional safe bulk iteration via locked_table(), not concurrent iteration.",
+    "C++11-capable toolchain on Linux/macOS; header-only, so easy to vendor into a build with no link step."
+  ],
+  "when_not_to_use": [
+    "Single-threaded or low-contention use: the per-bucket spinlock/version machinery is pure overhead with no payoff.",
+    "Memory-constrained settings: users report roughly 3x higher RSS than std::unordered_map for long-key/int-value maps at ~42M entries (issues #134, #136).",
+    "Many reader threads hammering the same hot keys: open issue #159 reports spinlock contention degrading badly past ~16-64 threads, since even find() takes the bucket spinlock (no shared/exclusive mode).",
+    "Code relying on std::unordered_map's free iterators or erase-while-iterating: normal access has no standalone iterators, only locked_table() does, and that locks the entire table.",
+    "Scaling requirements beyond what's measured: the peer-reviewed numbers stop at 16 cores, and at least one independent report (issue #152) found scalability collapsing beyond ~16 threads in their own workload."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (self-contained headers: cuckoohash_map.hh, bucket_container.hh, cuckoohash_config.hh, cuckoohash_util.hh; optional C wrapper in libcuckoo-c/)",
+    "min_toolchain": "C++11; clang++ >= 3.3 or g++ >= 4.8 per README (latest versions recommended for atomics support); CMake >= 3.1.0 needed only to build tests/examples",
+    "platforms": "Tested on macOS >= 10.8 and Ubuntu >= 12.04 (README); no stated architecture restriction, plain std::atomic used, no SIMD/intrinsics observed in the header; Windows build status is an open/unclear question (issue #62)",
+    "thread_safety": "Multiple concurrent readers and writers on the same table via per-bucket spinlocks plus a resize counter/versioning scheme (EuroSys'14 design); find() still acquires a bucket lock, so heavy same-key read contention can spin (issue #159).",
+    "drop_in_for_baseline": "partial — same template parameter shape (Key, T, Hash, KeyEqual, Allocator) as std::unordered_map, but find()/insert()/update() use out-parameter or functor style instead of iterators, there is no operator[], and iterators exist only inside locked_table()."
+  },
+  "gotchas": [
+    "find(key, val) (bool-returning, out-parameter) and find(key) (returns mapped_type or throws std::out_of_range) are different overloads; there is no iterator/end() sentinel on the normal concurrent path.",
+    "Automatic expansion throws load_factor_too_low if load factor falls below minimum_load_factor() (default 0.05) — a weak hash function or adversarial key set can trigger this.",
+    "Bulk/STL-style iteration requires locked_table(), which takes an exclusive lock over the whole table for as long as it's held, blocking every other thread.",
+    "Reported ~3x memory overhead vs std::unordered_map for 8-byte-key/4-byte-value workloads at scale (issues #134, #136); size capacity planning accordingly."
+  ],
+  "pick_this_over_siblings_when": "All catalogued siblings (emhash, dense_hash_map, rigtorp/HashMap, Verstable, sparsepp, hopscotch/ordered/robin-map, ska::flat_hash_map/bytell_hash_map) are single-threaded tables tuned for single-core cache behavior and are not safe for concurrent access without an external lock. Pick libcuckoo over any of them only when multiple threads genuinely insert into and look up the same map concurrently.",
+  "verified_claims_summary": "On a 16-core machine the EuroSys'14 paper reports ~40M inserts/sec and ~70M lookups/sec; Figure 1 (4-core Intel i7-4770 Haswell, 120M 8-byte-key/8-byte-value pairs, 1:1 read:write) places libcuckoo well above C++11 std::unordered_map, but the only explicit numeric multiplier given in text is 'up to 2.5x' vs Intel TBB concurrent_hash_map — the std::unordered_map comparison is visual-only in the figure, and the paper treats std::unordered_map as a single-writer table (run under a global or TSX lock), so the measured win is multi-core scalability, not single-threaded op speed.",
+  "status_note": "Active (last commit 2026-07-31, 1747 stars); Apache-2.0, header-only, and small enough to vendor directly into a project (usability: copyable).",
+  "sources_read": [
+    "https://github.com/efficient/libcuckoo",
+    "https://github.com/efficient/libcuckoo/blob/master/README.md",
+    "https://github.com/efficient/libcuckoo/blob/master/libcuckoo/cuckoohash_map.hh",
+    "https://github.com/efficient/libcuckoo/blob/master/libcuckoo/cuckoohash_util.hh",
+    "https://github.com/efficient/libcuckoo/blob/master/libcuckoo/cuckoohash_config.hh",
+    "https://github.com/efficient/libcuckoo/blob/master/tests/universal-benchmark/README.md",
+    "https://github.com/efficient/libcuckoo/issues/159",
+    "https://github.com/efficient/libcuckoo/issues/134",
+    "https://github.com/efficient/libcuckoo/issues/152"
+  ],
+  "confidence": 0.65
+}

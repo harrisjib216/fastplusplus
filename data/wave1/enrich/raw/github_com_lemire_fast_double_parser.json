@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/lemire/fast_double_parser",
+  "one_liner": "Header-only C++11 double parser using the Eisel-Lemire algorithm; 2.5-9.5x strtod throughput, superseded by fast_float.",
+  "what_it_does": "Parses ASCII decimal strings following the JSON (RFC 7159) number grammar into IEEE754 binary64 doubles via a single `parse_number(const char*, double*)` call that returns an end-pointer on success or nullptr on failure. It is not a std::stod drop-in: the API is a raw C-style pointer parse rather than a std::string/exception interface, and it only covers the string-to-double direction (no formatting/to_chars counterpart).",
+  "how_it_is_fast": "Implements the Eisel-Lemire algorithm (Lemire, \"Number Parsing at a Gigabyte per Second,\" arXiv:2101.11408): accumulate up to 19 significant digits into a 64-bit integer, then multiply it by a precomputed 64-bit truncated mantissa for the decimal exponent using a 128-bit full multiplication (hardware `_umul128`/`__uint128_t`, with an emulated fallback) to directly assemble the correctly-rounded IEEE754 bit pattern. This skips strtod's general parsing path entirely and falls back to the platform's locale-independent strtod_l/_strtod_l only for the rare >19-significant-digit or ambiguous-rounding cases.",
+  "when_to_use": [
+    "Hot-path parsing of many decimal doubles from files/network (GeoJSON, CSV, log lines) where strtod is a measured bottleneck",
+    "JSON-shaped numeric literals only (no hex floats, no locale decimal comma)",
+    "Header-only vendoring is acceptable (drop include/fast_double_parser.h into the build)",
+    "C++11-only toolchains that can't adopt fast_float's newer API/build requirements",
+    "Throughput-bound batch parsing (MB/s) rather than a single latency-critical call"
+  ],
+  "when_not_to_use": [
+    "Any new project — the README itself tells users to adopt fast_float instead (more grammar support, same speed, wider adoption/testing)",
+    "Need std::from_chars-style explicit begin/end pointers rather than a null/non-numeric-terminated C string — use fast_float",
+    "Need 32-bit float parsing — this library is double-only",
+    "Need hex floats, NaN/Infinity, or non-JSON strtod grammar (e.g. leading '+', \"0x1p3\", leading zeros like \"01\")",
+    "Repo is stale (last commit 2025-05-27) with only 2 open issues (macro hygiene, power-range tightening) and no active feature work"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (the benchmark target pulls in abseil and double-conversion, but the library itself has zero deps)",
+    "min_toolchain": "C++11 (CMakeLists sets CMAKE_CXX_STANDARD 11); MSVC, GCC, and Clang all supported",
+    "platforms": "x86-64, ARM64, and 32-bit (native _umul128/__uint128_t 128-bit multiply where available, emulated fallback otherwise); Windows/Linux/macOS plus a stringstream-based strtod workaround for Cygwin/MSYS2/Solaris",
+    "thread_safety": "not explicitly documented by the project; from reading the header, parse_number is a pure function over caller-supplied buffers, and the >19-digit fallback path uses a function-local static locale object (newlocale/_create_locale) whose one-time initialization is safe under C++11's thread-safe 'magic statics' rule, so concurrent parsing calls appear safe",
+    "drop_in_for_baseline": "partial — explain: produces the same double, bit-for-bit, as strtod (by the library's own accuracy claim), but the call is parse_number(const char*, double*) returning an end-pointer, not std::stod(std::string) with exceptions, so call sites need adapting"
+  },
+  "gotchas": [
+    "Global-namespace macros (WARN_UNUSED, really_inline, unlikely) defined in the header are never #undef'd and can collide with same-named macros pulled in transitively from other libraries (issue #66); this bit a real user combining it with Microsoft LightGBM, which itself vendors this same library",
+    "Rejects some strtod-valid-but-JSON-invalid forms: leading zeros (\"01\"), a bare trailing decimal point (\"1.\"), hex floats, and never produces NaN/Infinity",
+    "Falls back to platform strtod_l for any number with >19 significant digits, so very long decimal mantissas get strtod's speed rather than the fast path",
+    "Assumes the FPU rounding mode is round-to-nearest (FE_TONEAREST); behavior under other rounding modes is unverified"
+  ],
+  "pick_this_over_siblings_when": "No catalogued sibling targets double parsing (they cover to_chars/from_chars formatting or integer conversions); the real alternative is its own successor fast_float. Pick fast_double_parser only when a C++11-only toolchain or an existing call site already depends on its exact pointer-in/pointer-out API — otherwise fast_float matches its speed with a std::from_chars-style API and broader (non-JSON-restricted) grammar support.",
+  "verified_claims_summary": "Benchmarked against strtod_l (C locale) on Apple clang 11.0.0 / Intel Core i7-7700K: 460.64 MB/s vs strtod's 186.90 MB/s (~2.5x) parsing random doubles in [0,1), and 662.01 MB/s vs 69.73 MB/s (~9.5x) parsing the canada.json real-world coordinate dataset; the README's '4x' headline sits between these two workload-specific ratios. The same run also reports abseil and double-conversion figures, both slower than fast_double_parser on both workloads.",
+  "status_note": "Maintenance status is stale — last commit 2025-05-27, no active feature development, and the maintainer's own README recommends migrating to fast_float — but it's a single small header under a dual Apache-2.0/Boost-1.0 license, cheap to vendor and freeze if a project already depends on its exact API.",
+  "sources_read": [
+    "https://github.com/lemire/fast_double_parser",
+    "https://github.com/lemire/fast_double_parser/blob/master/README.md",
+    "https://github.com/lemire/fast_double_parser/tree/master",
+    "https://github.com/lemire/fast_double_parser/blob/master/include/fast_double_parser.h",
+    "https://github.com/lemire/fast_double_parser/blob/master/CMakeLists.txt",
+    "https://github.com/lemire/fast_double_parser/issues",
+    "https://github.com/lemire/fast_double_parser/issues/66",
+    "https://github.com/lemire/fast_double_parser/blob/master/LICENSE.BSL"
+  ],
+  "confidence": 0.9
+}

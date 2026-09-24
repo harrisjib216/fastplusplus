@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/mpoeter/xenium",
+  "one_liner": "Header-only lock-free MPMC queue templates (Michael-Scott, Ramalhete, Vyukov) beating std::mutex latency 2.5-5.7x.",
+  "what_it_does": "xenium is a header-only C++17 library of lock-free concurrent data structures paired with pluggable memory-reclamation schemes (hazard pointers, epoch-based, stamp-it, etc.), selected as a template policy similar to STL allocator customization. Three queue implementations replace a std::mutex-guarded std::queue: michael_scott_queue (generic, node-per-push), ramalhete_queue (FAAArrayQueue, restricted to pointers/unique_ptr/small trivially-copyable types), and vyukov_bounded_queue (fixed-capacity ring buffer, no reclaimer needed). API is push/try_pop/pop rather than std::queue's interface, so it is not a drop-in replacement.",
+  "how_it_is_fast": "ramalhete_queue implements Ramalhete & Correia's FAAArrayQueue: array-segmented linked-list nodes with fetch-and-add push/pop index cursors instead of a CAS per element, cutting contention on the fast path. michael_scott_queue is the classic Michael & Scott (1996) CAS-based lock-free linked-list queue. vyukov_bounded_queue uses Vyukov's bounded MPMC ring-buffer design with per-slot sequence numbers so producers and consumers avoid contending on shared head/tail counters. In the benchmark that produced these numbers, both node-based queues were configured with xenium::reclamation::new_epoch_based (confirmed in atomic_queue's benchmarks.cc), avoiding hazard-pointer-style per-op bookkeeping.",
+  "when_to_use": [
+    "Low-latency SPSC/MPMC ping-pong or handoff paths where std::mutex+std::queue's lock overhead dominates (measured 56-128ns vs 320ns round trip)",
+    "Fixed, known-capacity workloads where an allocation-free bounded ring buffer is acceptable -> vyukov_bounded_queue",
+    "Value types that are raw pointers, std::unique_ptr, or small trivially copyable PODs and you want the fastest of the three -> ramalhete_queue",
+    "Arbitrary movable value types where ramalhete_queue's type restriction is unacceptable and you can absorb per-push allocation -> michael_scott_queue",
+    "C++17 codebases willing to vendor a header-only dependency and explicitly choose a reclamation-scheme policy"
+  ],
+  "when_not_to_use": [
+    "High push contention with ramalhete_queue: an open, maintainer-confirmed double-free bug in the node destructor when pop_idx/push_idx wrap (issue #44, opened Oct 2025, unresolved)",
+    "Object destructors that themselves push to a xenium queue using the same reclamation scheme can recurse into reclamation and double-destruct (issue #41, open; workaround is using a different reclaimer per structure)",
+    "Repo has had no commits in ~14 months (last push 2025-07-29); treat as stale, not actively developed",
+    "Need arbitrary non-trivial value types and want the fastest queue: ramalhete_queue's type restriction (pointer-like or small trivially copyable) rules it out",
+    "Teams that want to avoid template-heavy header-only code and reclamation-scheme decisions versus the simplicity of std::mutex+std::queue"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none for library use (C++17 standard library only); googletest, taocpp/json, taocpp/config are only needed as submodules to build the unit tests/benchmarks",
+    "min_toolchain": "C++17; CI validates gcc9, clang10, Visual Studio 2019",
+    "platforms": "x86-64 confirmed in the cited benchmark (Ryzen 5950X, Linux); CI also covers Windows/VS2019; no documented architecture restriction, ARM not verified",
+    "thread_safety": "not a single blanket guarantee - each operation documents its own progress guarantee individually in the Doxygen comments (e.g. push is 'lock-free, may allocate', try_pop is 'lock-free')",
+    "drop_in_for_baseline": "partial — explain: API is push/try_pop/pop, not std::queue's interface; michael_scott_queue and ramalhete_queue require choosing a reclamation-scheme template policy, and vyukov_bounded_queue requires a fixed capacity at construction"
+  },
+  "gotchas": [
+    "Open, maintainer-confirmed bug: ramalhete_queue's node destructor can double-free under high push contention when pop_idx/push_idx wrap around (issue #44, unresolved as of this writing)",
+    "Pushing to a queue from inside an object's destructor while that object is being reclaimed by the same scheme can recurse and double-destruct (issue #41); maintainer recommends a different reclamation scheme per data structure",
+    "ramalhete_queue only accepts raw pointers, std::unique_ptr (custom deleters not yet supported), or trivially copyable types no larger than a pointer",
+    "stamp_it reclaimer emits -Winvalid-memory-model warnings under gcc12 with -Werror (issue #26, open since 2022, documented one-line workaround)"
+  ],
+  "pick_this_over_siblings_when": "Pick xenium when you also want a reusable library of composable reclamation schemes (hazard pointers, epoch-based, stamp-it) shared across other lock-free structures like hash maps and sets, not just a queue; atomic_queue and moodycamel::ReaderWriterQueue are narrower, simpler, and measured faster (33-51ns) with no reclamation-scheme decision to make, and Boost.Lockfree/oneTBB trade some speed for being part of a more widely vetted, already-deployed library.",
+  "verified_claims_summary": "Independent third-party shootout (max0x7ba/atomic_queue benchmarks.cc, gcc-14.2.0, xenium commit f6416d3, -O3 -march=native -mtune=native, libstdc++, AMD Ryzen 5950X, mitigations=off) measured mean round-trip ping-pong latency of 56ns for ramalhete_queue, 60ns for vyukov_bounded_queue, and 128ns for michael_scott_queue against 320ns for std::mutex — roughly 5.7x, 5.3x, and 2.5x lower respectively; xenium's own benchmark suite has no std::mutex comparison.",
+  "status_note": "Stale: no commits since 2025-07-29 (~14 months) though the maintainer still replies to issues; MIT-licensed, header-only, and small enough to vendor, but two open double-free/double-destruction bug reports (#41, #44) remain unresolved.",
+  "sources_read": [
+    "https://github.com/mpoeter/xenium",
+    "https://github.com/mpoeter/xenium/blob/main/README.md",
+    "https://github.com/mpoeter/xenium/blob/main/xenium/ramalhete_queue.hpp",
+    "https://github.com/mpoeter/xenium/blob/main/xenium/vyukov_bounded_queue.hpp",
+    "https://github.com/mpoeter/xenium/blob/main/xenium/michael_scott_queue.hpp",
+    "https://github.com/mpoeter/xenium/issues/44",
+    "https://github.com/mpoeter/xenium/issues/41",
+    "https://github.com/mpoeter/xenium/issues/26",
+    "https://github.com/max0x7ba/atomic_queue/blob/master/src/benchmarks.cc",
+    "https://max0x7ba.github.io/atomic_queue/html/benchmarks.html"
+  ],
+  "confidence": 0.75
+}

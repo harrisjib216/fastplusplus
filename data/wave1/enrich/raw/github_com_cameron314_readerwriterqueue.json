@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/cameron314/readerwriterqueue",
+  "one_liner": "Header-only lock-free SPSC queue for C++11; beats a mutex-guarded queue by ~7x in ping-pong latency.",
+  "what_it_does": "Passes objects between exactly one producer thread and one consumer thread without locking. API is shaped like std::queue (enqueue/try_enqueue, try_dequeue, peek, size_approx) but is its own templated class, not a drop-in swap for a std::mutex+std::queue call site. Also ships a blocking variant (BlockingReaderWriterQueue, wait_dequeue) and a fixed-capacity circular-buffer sibling (readerwritercircularbuffer.h).",
+  "how_it_is_fast": "Queue-of-queues design: a circular-linked-list of fixed-size 'block' ring buffers, with the producer owning tail indices/pointers and the consumer owning front indices/pointers so each thread only writes its own state. Enqueue/dequeue are wait-free (no CAS loop, no spinning), O(1) except when a new block must be malloc'd. On x86/x86-64 the required memory barriers compile down to no-ops, so the hot path is just plain loads and stores.",
+  "when_to_use": [
+    "Exactly one fixed producer thread and one fixed consumer thread that never swap roles",
+    "Passing small, cheaply-movable/copyable values (counters, pointers, small structs) between the two threads",
+    "Need sub-100ns round-trip latency and want to avoid std::mutex-guarded queue overhead entirely",
+    "Want a 2-file header-only drop with zero build step and zero external dependencies",
+    "Running on x86/x86-64 (the best-tested and only architecture the author has directly validated)"
+  ],
+  "when_not_to_use": [
+    "Need multiple producers or multiple consumers (use the same author's moodycamel::ConcurrentQueue instead)",
+    "Threads need to switch producer/consumer roles at runtime, or use the queue from more than 2 threads",
+    "Targeting AArch64 or another weakly-ordered architecture on an old pinned commit: size_approx() had a real SIGSEGV race from a missing release fence before publishing new blocks (issue #171); fixed, but verify the fix is in your pinned commit",
+    "Need a version-pinned release: the project ships no tags (open issues #144/#146 ask for one), so you pin a raw commit SHA",
+    "Destroying the queue while a thread is blocked in wait_dequeue() is undefined behavior — risky in ad-hoc shutdown paths"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (readerwriterqueue.h + atomicops.h; atomicops.h embeds Preshing's zlib-licensed semaphore for the blocking variant)",
+    "min_toolchain": "C++11; MSVC2010+, GCC 4.7+ (GCC 4.6 has a fence bug), ICC 13+",
+    "platforms": "x86/x86-64 (only architecture directly tested by the author); portable to ARM/PowerPC per code comments but AArch64 had a confirmed weak-memory-model race, fixed in a recent commit (issue #171); explicitly not for DEC Alpha",
+    "thread_safety": "Exactly one producer thread + one consumer thread, fixed roles; concurrent/re-entrant calls from more than one thread per role trip a debug-only assert (issues #151/#162) and are undefined in release builds",
+    "drop_in_for_baseline": "partial — same problem domain and a std::queue-like API shape, but SPSC-only and a different type, so call sites using std::mutex + std::queue must be rewritten, not just relinked"
+  },
+  "gotchas": [
+    "size_approx() could dereference a null block on AArch64 due to a missing release fence in inner_enqueue() (issue #171) — fixed, but confirm the fix predates whatever commit you pin",
+    "Plain enqueue() can malloc and grow the queue on demand; only try_enqueue() is guaranteed never to allocate",
+    "Destroying the queue while a thread is blocked in wait_dequeue()/wait_dequeue_timed() is undefined behavior",
+    "No tagged releases exist (open issues #144, #146); vendor a commit SHA rather than expecting semver tags"
+  ],
+  "pick_this_over_siblings_when": "Pick this over atomic_queue, Boost.Lockfree, xenium, or oneTBB when you want the smallest possible header-only footprint (2 files, no build) purely for the SPSC case and don't need bounded/blocking strategy choices or MPMC support; atomic_queue's AtomicQueue (42ns) and OptimistAtomicQueue (33ns) edge it out slightly in the same shootout, so pick those instead if the last few nanoseconds matter more than dependency count.",
+  "verified_claims_summary": "In the independent max0x7ba/atomic_queue SPSC ping-pong shootout (gcc-14.2.0, -O3 -march=native -mtune=native, AMD Ryzen 5950X, readerwriterqueue commit 2ae710d), moodycamel::ReaderWriterQueue measured a 43ns mean round-trip latency versus 320ns for a mutex-guarded ring buffer used as the std::mutex baseline (~7.4x lower). The project's own benchmarks/bench.cpp never compares against std::mutex at all — only against the 1024cores SPSC queue and folly::ProducerConsumerQueue.",
+  "status_note": "Actively maintained (last commit 2026-09-07, 4.6k stars) but ships no tagged releases; BSD-2-Clause (Simplified BSD, per LICENSE.md — GitHub's license detector shows NOASSERTION) and small enough (2 headers) to vendor directly.",
+  "sources_read": [
+    "https://github.com/cameron314/readerwriterqueue (README, via gh api repos/.../readme)",
+    "https://github.com/cameron314/readerwriterqueue/git/trees/HEAD (full file tree, via gh api)",
+    "https://github.com/cameron314/readerwriterqueue/blob/master/readerwriterqueue.h",
+    "https://github.com/cameron314/readerwriterqueue/blob/master/atomicops.h",
+    "https://github.com/cameron314/readerwriterqueue/issues (issue list, via gh issue list)",
+    "https://github.com/cameron314/readerwriterqueue/issues/171"
+  ],
+  "confidence": 0.82
+}

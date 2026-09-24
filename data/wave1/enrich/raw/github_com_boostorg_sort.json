@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/boostorg/sort",
+  "one_liner": "Hybrid radix/comparison sort in Boost; beats std::sort on large random integers, strings, and objects.",
+  "what_it_does": "spreadsort is one of four single-thread algorithms in Boost.Sort; the library exposes integer_sort, float_sort, and string_sort, plus a generic spreadsort() dispatcher that picks the right one from the iterator's value_type. Each takes a [first,last) random-access-iterator range just like std::sort, with optional right-shift and/or comparison functor overloads for custom key types. All variants fall back to Boost's pdqsort for inputs under 1000 elements, so small-N behavior matches a comparison sort rather than radix sort.",
+  "how_it_is_fast": "It is a hybrid radix/comparison sort: it recursively buckets elements by their most-significant bits (read via a right-shift functor) and dynamically chooses radix or comparison-based sorting per bucket, whichever has better worst-case cost. Worst case is the lesser of O(N log N) comparisons and O(N log(K/S + S)) operations, where K is key bit-width and S (max_splits, default 11) is a tunable constant. This gives near-linear behavior on wide or clustered integer/float/string keys where std::sort spends more time on comparisons.",
+  "when_to_use": [
+    "Sorting 100K-100M+ 64-bit integers, floats, or std::strings single-threaded, where the ~2x win on random data matters.",
+    "Large or expensive-to-compare elements (long keys, heavy comparators, key+payload records) — the object benchmark shows bigger wins as element size grows.",
+    "Data that is already sorted or nearly sorted forward — spreadsort has an early-exit fast path competitive with pdqsort.",
+    "Custom numeric-like keys where you can write a correct right-shift functor (fixed-point types, custom integer wrappers).",
+    "You are fine with an unstable sort, same as std::sort."
+  ],
+  "when_not_to_use": [
+    "Reverse-sorted or adversarial input — the repo's own benchmark shows spreadsort slower than std::sort here (1.87s vs 1.36s on 100M ints).",
+    "Inputs under ~1000 elements — falls back to pdqsort internally, so there is no spreadsort-specific benefit.",
+    "Need a stable sort — use Boost's spinsort/flat_stable_sort instead, though neither beat std::stable_sort on random data in this same benchmark, only on near-sorted input.",
+    "Indirect/argsort-style sorting through an index lookup — GitHub issue #85 shows overriding only the right-shift functor without also overriding the comparator silently falls back to plain (wrong-looking) comparison behavior for small inputs.",
+    "Need the benchmarked ~2x margins reproduced on current hardware/toolchains — the doc's numbers are from GCC 6.3 on a 2017-era CPU and have not been re-run since."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "Boost.Range, Boost.TypeTraits, Boost.Core (static_assert) — ships as part of Boost, not a standalone zero-dependency library",
+    "min_toolchain": "C++11 (README states a C++11 compiler is required; parallel algorithms in the same repo also need C++11)",
+    "platforms": "any — portable C++ template code, no SIMD/intrinsics or arch-specific code observed in the spreadsort headers",
+    "thread_safety": "not documented — each call sorts one range with no shared/global state visible in the headers; safe to run independent calls on separate data from separate threads, but this is inferred, not stated",
+    "drop_in_for_baseline": "partial — explain: the two-iterator spreadsort(first,last)/integer_sort(first,last) overload matches std::sort's call signature for random-access iterators and is unstable like std::sort, but only accepts types with the right type_traits (integer/IEC-559 float/std::string); other key types need integer_sort/float_sort/string_sort called directly with a right-shift functor"
+  },
+  "gotchas": [
+    "Right-shift functor must fully discriminate between elements consistent with operator< (documented requirement, GitHub issue #7).",
+    "Overriding the right-shift functor alone for indirect/argsort use (sorting indices via a lambda into another array) without also overriding the comparator can give surprising results on small inputs that fall back to default comparison (issue #85).",
+    "Doc header warns exceptions during comparisons, swaps/moves, the right shift, or iterator operations propagate and 'may cause data loss'; only the internal small-vector-resize-throw path is documented as data-loss-free.",
+    "Needs O(key_length) extra memory for radix buckets, so memory scales with key bit-width as well as N — not a fixed small overhead like introsort's O(log N)."
+  ],
+  "pick_this_over_siblings_when": "Pick spreadsort over comparison-based siblings (BlockQuicksort, pdqsort-class sorts) when data is plain integers/floats/strings with wide or clustered key bits and you don't need stability or multithreading; pick IPS4o or x86-simd-sort instead when you can parallelize or vectorize, and pick fluxsort/quadsort instead when stability matters more than raw unstable-sort throughput.",
+  "verified_claims_summary": "In the library's own linux_single.qbk benchmark (GCC 6.3, -std=c++11 -march=native -O3, Intel i7-5820K, libstdc++), spreadsort sorted 100M random 64-bit ints in 4.2248s vs std::sort's 8.2154s (~1.94x), 10M random strings in 2.4323s vs 6.2442s (~2.57x), and 100M 8-byte objects with a heavy comparator in 5.10s vs 8.25s (~1.62x); spreadsort was slower than std::sort on reverse-sorted ints (1.87s vs 1.36s).",
+  "status_note": "Actively maintained as part of Boost (last commit 2026-04-11 on develop); BSL-1.0 licensed, header-only, and small enough to vendor without a build step.",
+  "sources_read": [
+    "https://github.com/boostorg/sort",
+    "https://github.com/boostorg/sort/blob/develop/README.md",
+    "https://github.com/boostorg/sort/blob/develop/doc/linux_single.qbk",
+    "https://github.com/boostorg/sort/blob/develop/doc/spreadsort.qbk",
+    "https://github.com/boostorg/sort/tree/develop/include/boost/sort",
+    "https://github.com/boostorg/sort/blob/develop/include/boost/sort/spreadsort/spreadsort.hpp",
+    "https://github.com/boostorg/sort/blob/develop/include/boost/sort/spreadsort/integer_sort.hpp",
+    "https://github.com/boostorg/sort/issues/7",
+    "https://github.com/boostorg/sort/issues/45",
+    "https://github.com/boostorg/sort/issues/60",
+    "https://github.com/boostorg/sort/issues/85"
+  ],
+  "confidence": 0.85
+}

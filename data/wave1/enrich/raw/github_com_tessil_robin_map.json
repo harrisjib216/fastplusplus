@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/Tessil/robin-map",
+  "one_liner": "Header-only robin hood open-addressing hash map/set beating std::unordered_map on insert, lookup, erase, and iteration.",
+  "what_it_does": "tsl::robin_map/robin_set are drop-in-shaped replacements for std::unordered_map/set backed by open addressing instead of chaining. The API mirrors the STL container closely (insert, find, erase, iterators, heterogeneous lookup via transparent KeyEqual), so most call sites port with small changes rather than a rewrite. Two growth-policy variants are provided as separate types: robin_map/robin_set (power-of-two buckets, fastest) and robin_pg_map/robin_pg_set (prime buckets, more resistant to weak hash functions).",
+  "how_it_is_fast": "Robin hood hashing with linear probing keeps entries close to their ideal bucket, so lookups scan a short, cache-resident run instead of chasing pointers through separate chaining nodes. Erase uses backward-shift deletion (no tombstones), which keeps probe sequences short after deletes. Optional per-entry hash caching (StoreHash) and a precalculated_hash parameter let callers skip recomputing hashes on rehash or lookup when the hash or key-equality function is expensive.",
+  "when_to_use": [
+    "int64_t or other cheap-to-hash keys where you supply a decent hash (not the identity std::hash) and want faster inserts/lookups/erases than std::unordered_map",
+    "std::string keys, especially short (SSO-sized) strings, where robin_map's automatic hash caching gives a large insertion win",
+    "workloads dominated by successful/unsuccessful lookups or full-table iteration at sizes from ~200K to several million elements",
+    "code that needs heterogeneous lookup (find by a different-but-comparable type) or binary serialize/deserialize of the table",
+    "environments where -fno-exceptions or TSL_NO_EXCEPTIONS is desired; the library supports exception-free builds via std::terminate"
+  ],
+  "when_not_to_use": [
+    "pointer/reference/iterator stability across modification matters: open addressing invalidates all of them on any insert, erase, or rehash, unlike std::unordered_map",
+    "keys hashed with the default identity-like std::hash for integers combined with the default power-of-two growth policy: linear inserts can trigger exponential storage growth (GH issue #39); switch to robin_pg_map/robin_pg_set or supply a better hash",
+    "code that erases elements while iterating and depends on visiting each element exactly once: backward-shift deletion can revisit an already-seen element (GH issue #20, open, no fix planned)",
+    "memory-constrained int64 workloads at large scale: at 3M entries the author's own CSV shows ~202MB for robin_map vs ~126MB for std::unordered_map (~1.6x)",
+    "key/value types that are not swappable or not copy/move constructible, or where you rely on std::unordered_map's bucket-inspection API (bucket(), bucket_size(), etc.), which robin_map omits"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none for the library; Boost Test only needed to build the test suite",
+    "min_toolchain": "C++17 (README: \"should work with any C++17 standard-compliant compiler\")",
+    "platforms": "portable C++17, no SIMD or arch-specific intrinsics in the source; CI covers Linux and macOS (GCC and Clang) and Windows (MSVC via Visual Studio 2025, x64 and x86)",
+    "thread_safety": "Same guarantee as std::unordered_map/set: safe for multiple concurrent readers, not safe with any concurrent writer; no internal locking",
+    "drop_in_for_baseline": "partial — API closely mirrors std::unordered_map/set, but iterator invalidation is stricter, map iterators return const std::pair (mutate via it.value(), not it->second), bucket-inspection methods are absent, and the strong exception guarantee only holds when value_type is nothrow-swappable and nothrow-move-constructible"
+  },
+  "gotchas": [
+    "Any insert, erase, or rehash invalidates all iterators, pointers, and references into the table (stricter than std::unordered_map).",
+    "Default power-of-two growth policy + a poor/identity hash (common for std::hash<integral>) can make a linear insertion sequence blow up storage exponentially; use robin_pg_map/robin_pg_set or a stronger hash.",
+    "erase(iterator) walks forward to the next nonempty bucket to return a valid iterator, which is O(expensive) at low load factor; use void erase_fast(iterator) when you don't need the returned iterator.",
+    "Iterating while erasing can visit one element twice due to backward-shift deletion wrap-around; open upstream issue (#20) since 2019, maintainer's stance is 'that's the way it is'."
+  ],
+  "pick_this_over_siblings_when": "Prefer tsl::robin_map over ska::flat_hash_map/bytell_hash_map or sparsepp when you want an actively maintained, documented library with heterogeneous lookup, binary serialization, and a built-in prime-growth fallback (robin_pg_map) for weak hashes. Prefer tsl::hopscotch_map instead when erase-heavy iteration or memory density at high load factor matters more than raw lookup/insert throughput, since hopscotch avoids robin-map's backward-shift erase cost and identity-hash growth pathology.",
+  "verified_claims_summary": "Author-run benchmark (Clang 5.0, -O3 -march=native -DNDEBUG; Intel i5-5200u, 8GB RAM, Linux 4.11 x64; libstdc++) across 200K-3M entries with int64_t and 15/50-char string keys found robin_map faster than std::unordered_map in every measured case: inserts 1.08-3.63x, successful lookups 1.55-5.34x, unsuccessful lookups 1.66-6.57x, erase 1.58-13.5x, iteration 2.6-5.3x. The independent Ankerl 2022 suite puts the geometric-mean advantage around 2.4x, but in that same suite robin_map times out on random insert/erase with an identity std::hash and iterates slower (0.80-0.92x) than std::unordered_map.",
+  "status_note": "Actively maintained (last commit 2026-06-13, 1508 stars, CI green across GCC/Clang/MSVC), MIT-licensed and header-only, so it is trivially vendorable even if upstream development ever stopped.",
+  "sources_read": [
+    "https://github.com/Tessil/robin-map",
+    "https://github.com/Tessil/robin-map/blob/master/README.md",
+    "https://github.com/Tessil/robin-map/blob/master/.github/workflows/ci.yml",
+    "https://github.com/Tessil/robin-map/blob/master/include/tsl/robin_hash.h",
+    "https://github.com/Tessil/robin-map/issues/20",
+    "https://tessil.github.io/2016/08/29/benchmark-hopscotch-map.html"
+  ],
+  "confidence": 0.75
+}

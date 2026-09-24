@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/max0x7ba/atomic_queue",
+  "one_liner": "Header-only lock-free MPMC/SPSC ring-buffer queues beating std::mutex-guarded queues by 4-10x in latency and throughput.",
+  "what_it_does": "Header-only C++14 template library of fixed-capacity ring-buffer queues (AtomicQueue, AtomicQueue2, and heap-backed B variants) for passing small copyable/movable messages between threads with minimal push-to-pop latency. Its API is try_push/try_pop (non-blocking) or push/pop (busy-wait 'optimist' variants), plus was_size/was_empty/was_full/capacity; it is not a drop-in std::queue replacement, so callers adopt its explicit-capacity, value-semantics interface. Atomic-element queues reserve one NIL sentinel value; non-atomic-element queues (AtomicQueue2/B2) support move-only types such as std::unique_ptr.",
+  "how_it_is_fast": "A ring buffer with compile-time or construction-time fixed capacity avoids heap allocation and pointer chasing after construction, and value semantics (no references into the buffer) avoid pointer aliasing. It issues the bare minimum of atomic instructions per push/pop, explicitly pads to avoid false sharing, and its SPSC mode drops expensive atomic read-modify-write ops in favor of plain atomic loads/stores. There is no OS-blocking wait path: push/pop either fail fast (try_ variants) or busy-spin (optimist push/pop), avoiding the roughly 1-3us syscall/wake-up latency of a blocked thread.",
+  "when_to_use": [
+    "Fixed/bounded number of in-flight small, cheaply copyable/movable messages (integers, pointers, small PODs) between a known set of threads.",
+    "Sub-microsecond push-to-pop latency matters more than avoiding CPU spin, and dedicated cores/threads are available to spin.",
+    "SPSC hot path (e.g. one I/O thread feeding one processing thread) where the SPSC-tuned mode avoids read-modify-write atomics entirely.",
+    "Shared-memory IPC between processes: non-B variants are position-independent and can be placement-new'd into mmap/shm_open segments.",
+    "Need back-pressure signaling via try_push failure rather than letting a queue grow unbounded."
+  ],
+  "when_not_to_use": [
+    "Need unbounded or dynamically-growing capacity; maximum size must be fixed at compile time (array buffer) or construction time (B variants).",
+    "Threads should sleep/block instead of spinning; there is no OS-blocking wait, so waiting threads pin a CPU core at 100%.",
+    "Elements are large or expensive to copy/move, since push/pop always copies or moves the element and no in-place references are exposed.",
+    "Need per-element priorities or ordering guarantees beyond FIFO/the optional totally-ordered mode.",
+    "Atomic-element queues: pushing the reserved NIL sentinel is undefined behavior in release builds (only debug asserts catch it), so element type/value range must exclude it."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none to use the library; Boost.Test is needed only to build its own unit tests",
+    "min_toolchain": "C++14; also builds under C++20/C++23 as of v1.9.4 (v1.9.3 had a C++20 AtomicQueueB2 constructor bug on Apple clang, fixed in v1.9.4)",
+    "platforms": "Linux x86_64 (primary dev/benchmark target); CI also covers Linux ARM, RISC-V, PowerPC, S390, LoongArch (via QEMU), Windows x86_64, and macOS ARM",
+    "thread_safety": "Lock-free MPMC and SPSC-tuned modes built on std::atomic; queue objects are safe to share across threads or processes, but pushing the NIL sentinel on atomic-element queues is undefined behavior",
+    "drop_in_for_baseline": "partial — explain: same push/pop role as a std::mutex-guarded queue, but a different API (try_push/try_pop, fixed capacity, value semantics, NIL sentinel for atomic variants); not source-compatible with std::queue"
+  },
+  "gotchas": [
+    "NIL sentinel (default 0) must never be pushed into atomic-element queues; release builds have no runtime check and violation causes UB such as deadlocks or lost elements.",
+    "No OS-blocking push/pop: busy-spin waiting consumes a full CPU core, unsuitable for threads that should yield or sleep.",
+    "v1.9.3 broke AtomicQueueB2's constructor under -std=c++20 on Apple clang (issue #109, fixed in v1.9.4, released 2026-09-16); use >=1.9.4.",
+    "Capacity is fixed once (compile time for array buffers, construction time for heap/B-variant buffers) and cannot grow; undersizing it makes try_push start failing under load."
+  ],
+  "pick_this_over_siblings_when": "Pick atomic_queue's OptimistAtomicQueue when the workload has contention from multiple producer/consumer pairs, since it is the only queue in this shootout that keeps a large (4-24x) throughput lead over std::mutex from 2 to 16 pairs, or when queue objects must be position-independent for shared-memory IPC. For a pure low-contention SPSC channel, moodycamel::ReaderWriterQueue (43ns) and Boost.Lockfree spsc_queue (51ns) post comparable ping-pong latency with smaller, more established codebases, and plain (non-optimist) AtomicQueue itself is only at parity with std::mutex once several producer/consumer pairs contend.",
+  "verified_claims_summary": "On the author's own shootout (gcc-14.2.0, libstdc++, Ryzen 5950X with SMT on), AtomicQueue's SPSC ping-pong round-trip latency is 42ns versus 320ns for a std::mutex-guarded ring buffer baseline (~7.6x lower), and OptimistAtomicQueue reaches 33ns (~9.7x lower); 1-producer/1-consumer throughput is ~142.7M msg/s for AtomicQueue and a highly variable ~1.23B msg/s for OptimistAtomicQueue versus ~4.1M msg/s for std::mutex, though with 2-16 producer/consumer pairs only OptimistAtomicQueue keeps a large (4-24x) lead while plain AtomicQueue is roughly at parity with std::mutex.",
+  "status_note": "Actively maintained (recent commits and the v1.9.4 point release as of September 2026) under the MIT license; header-only and small enough to vendor directly.",
+  "sources_read": [
+    "https://github.com/max0x7ba/atomic_queue",
+    "https://github.com/max0x7ba/atomic_queue/blob/master/README.md",
+    "https://github.com/max0x7ba/atomic_queue/blob/master/src/example.cc",
+    "https://github.com/max0x7ba/atomic_queue/blob/master/CHANGELOG.md",
+    "https://github.com/max0x7ba/atomic_queue/issues/109",
+    "https://github.com/max0x7ba/atomic_queue/issues?q=is%3Aissue"
+  ],
+  "confidence": 0.85
+}

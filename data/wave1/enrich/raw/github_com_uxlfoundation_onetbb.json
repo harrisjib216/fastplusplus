@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/uxlfoundation/oneTBB",
+  "one_liner": "Bounded/blocking FIFO queue in Intel's oneTBB parallelism library; non-blocking try_push/try_pop mode cuts round-trip latency ~3.9x vs std::mutex.",
+  "what_it_does": "concurrent_bounded_queue<T,Allocator> is a thread-safe FIFO queue template inside oneTBB, Intel's general-purpose C++ parallelism library governed by the UXL Foundation. It supports blocking push()/pop() that wait for room or an item, non-blocking try_push()/try_pop() that fail fast instead, an optional capacity via set_capacity(), and abort() to unblock all waiters by throwing. It is not a drop-in for std::queue: size() is signed and can go negative to report waiting consumers, and callers must explicitly choose blocking vs non-blocking calls and handle abort().",
+  "how_it_is_fast": "Enqueue/dequeue hand out monotonically increasing 'tickets' from head_counter/tail_counter atomics via compare-exchange, mapping each ticket to a slot in a lazily-grown ring of fixed-size micro-segments, so there is no single global mutex on the hot path. Blocking waits (capacity-limited push, empty pop) go through a dedicated concurrent_monitor wait/notify mechanism implemented in the compiled runtime rather than busy-spinning, and internal structures are cache-line aligned (cache_aligned_allocator, alignment asserts against max_nfs_size) to reduce false sharing between producer and consumer cache lines. The cited benchmark used non-blocking try_push/try_pop, which skips the monitor-wait path entirely and reduces each operation to a handful of atomics plus one CAS.",
+  "when_to_use": [
+    "Already linking oneTBB elsewhere in the app, so adding another dependency just for a queue is unnecessary",
+    "Need bounded capacity plus real blocking push/pop with a documented cancellation path (abort())",
+    "Producer/consumer counts are modest (roughly 1 pair) where ~3.9x lower latency and ~2x throughput over std::mutex is enough headroom",
+    "Want an Apache-2.0, multi-platform (Windows/Linux/macOS/Android) queue backed by an industry foundation rather than a single-maintainer header library",
+    "Value signed size()/empty() semantics that expose how many consumers are waiting"
+  ],
+  "when_not_to_use": [
+    "Pure SPSC ping-pong latency is the goal: moodycamel::ReaderWriterQueue (43ns) and atomic_queue (42ns) are faster and header-only",
+    "Cannot add a compiled runtime/link dependency: the blocking and abort machinery lives in the compiled oneTBB library, not just the header",
+    "Higher contention (2+ producer/consumer pairs): in the same shootout's MPMC throughput test std::mutex actually beat concurrent_bounded_queue at 2 pairs (13.0M vs 11.1M msg/s) and 4 pairs (6.9M vs 6.5M msg/s)",
+    "Exceptions are disabled: abort() and blocked waiters signal cancellation by throwing exception_id::user_abort, not via a non-throwing flag",
+    "Want a minimal, easily vendored single header; oneTBB is a large library with its own build/install story"
+  ],
+  "integration": {
+    "form": "shared lib (headers call into a compiled runtime; can also be built static via CMake)",
+    "dependencies": "oneTBB runtime library (libtbb) must be built/linked; no third-party deps for the queue itself. oneTBB overall optionally uses hwloc for NUMA-aware scheduling elsewhere in the library, not required for this queue.",
+    "min_toolchain": "C++11 minimum per the CMake default (CMAKE_CXX_STANDARD); GCC 8-16, Clang 7-22, MSVC 14.2+ (VS2019+), or Intel oneAPI DPC++/C++ per SYSTEM_REQUIREMENTS.md",
+    "platforms": "x86-64 primary; Windows, Linux, and macOS officially supported, Android 9 supported; MinGW, FreeBSD, Windows on ARM/ARM64, and macOS on ARM64 are community-supported; separate WASM support documented",
+    "thread_safety": "Multiple threads may push and pop concurrently by design. size() and empty() are documented as thread-unsafe snapshots; size() is pushes-started minus pops-started and can be negative.",
+    "drop_in_for_baseline": "partial — explain: replaces a std::queue guarded by std::mutex, but the API (try_push/try_pop, signed size(), abort()) differs enough from std::queue that call sites need changes, not just the container type"
+  },
+  "gotchas": [
+    "abort() and any blocked push()/pop() unblock by throwing exception_id::user_abort, so callers need exceptions enabled and abort-aware code, not a simple non-throwing cancel flag",
+    "Default capacity is effectively unbounded (near SIZE_MAX / item size); set_capacity() is required to get real bounding, and the docs note bounded queues are slower than unbounded ones",
+    "empty() means size() <= 0, not 'no elements present' — with pending pops, size() is negative",
+    "Not a single-header drop-in: it links against a compiled oneTBB runtime rather than working as a standalone header like a typical lock-free queue library"
+  ],
+  "pick_this_over_siblings_when": "Pick oneTBB's concurrent_bounded_queue over atomic_queue, Boost.Lockfree, moodycamel::ReaderWriterQueue, or xenium when you already depend on oneTBB or specifically need its bounded-capacity blocking push/pop plus abort()-based cancellation with vendor-grade, multi-platform support; all four siblings are faster in raw ping-pong latency (42-60ns vs 83ns) and are header-only, so prefer them when latency or a zero-dependency drop-in matters more than having one production parallelism library.",
+  "verified_claims_summary": "In the independent max0x7ba/atomic_queue SPSC ping-pong shootout on an AMD Ryzen 5950X (gcc-14.2.0, -O3 -march=native -mtune=native, TBB 2021.11.0-2ubuntu2, mitigations=off), tbb::concurrent_bounded_queue driven via non-blocking try_push/try_pop averaged 83ns round-trip latency versus 320ns for a std::mutex-guarded queue over libstdc++, about 3.9x lower latency; the same suite's MPMC throughput test showed only ~2x std::mutex at 1 producer/1 consumer, with std::mutex ahead at 2 and 4 pairs.",
+  "status_note": "Actively maintained by the UXL Foundation as Intel's flagship C++ threading library (about 6.7k stars); Apache-2.0 licensed and copyable, but adopting concurrent_bounded_queue alone still means pulling in oneTBB's full compiled runtime, not vendoring a small file.",
+  "sources_read": [
+    "https://github.com/uxlfoundation/oneTBB",
+    "https://github.com/uxlfoundation/oneTBB/blob/master/SYSTEM_REQUIREMENTS.md",
+    "https://github.com/uxlfoundation/oneTBB/blob/master/include/oneapi/tbb/concurrent_queue.h",
+    "https://github.com/uxlfoundation/oneTBB/blob/master/doc/main/tbb_userguide/Concurrent_Queue_Classes.rst",
+    "https://github.com/uxlfoundation/oneTBB/blob/master/doc/main/tbb_userguide/When_Not_to_Use_Queues.rst",
+    "https://github.com/uxlfoundation/oneTBB/issues?q=concurrent_bounded_queue",
+    "https://github.com/uxlfoundation/oneTBB/blob/master/CMakeLists.txt",
+    "https://github.com/uxlfoundation/oneTBB/blob/master/VERSIONING.md"
+  ],
+  "confidence": 0.75
+}

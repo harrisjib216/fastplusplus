@@ -1,0 +1,44 @@
+{
+  "id": "https://github.com/boostorg/container",
+  "one_liner": "Vector-backed sorted set/map beating std::set on insert+remove at small sizes, up to ~256 elements.",
+  "what_it_does": "flat_set/flat_map are Boost.Container's vector-backed drop-in replacements for std::set/std::map, keeping elements in one contiguous sorted array instead of a red-black tree. Lookup and positioning use binary search (O(log n) comparisons), but insertion and erasure shift elements, making those O(n). The public API mirrors std::set/std::map's associative-container interface, iterators, and comparators, so most code ports with an include and namespace change.",
+  "how_it_is_fast": "Core technique is cache-friendly linear storage: a sorted vector-like sequence (default plain vector, or a user-supplied vector-like container) gives contiguous memory and random-access iterators, avoiding the pointer-chasing and per-node allocation of a red-black tree. For small containers this locality and lack of per-element allocation outweighs the O(n) shifting cost of insert/erase; std::set's balanced-tree structure only pays off once n is large enough that O(log n) tree operations beat O(n) vector shifts (crossover around 128-256 elements per the cited benchmark).",
+  "when_to_use": [
+    "Sets/maps that stay small (roughly <=128-256 elements per container), even if there are many such containers",
+    "Read-mostly or lookup-heavy workloads where iteration/cache locality matters more than mutation cost",
+    "Cheap-to-move key types (ints, small PODs) where shifting on insert/erase is cheap",
+    "Existing std::set/std::map code that can tolerate iterator/reference invalidation on mutation",
+    "Memory-constrained code avoiding the per-node allocation overhead of tree containers"
+  ],
+  "when_not_to_use": [
+    "Large sets/maps (thousands+ elements) mutated frequently -- std::set was ~13.4x faster than flat_set at 8192 elements in the cited benchmark",
+    "Code relying on iterator/reference/pointer stability across insert/erase -- flat containers invalidate on shift/reallocation",
+    "Bulk one-at-a-time insertion of very large unsorted datasets -- GitHub issue #154 reports near-hang (100% CPU) inserting ~9M elements individually into flat_map",
+    "Workloads needing guaranteed O(log n) worst-case insert/erase (latency-bounded mutation)",
+    "Large or expensive-to-move key/value types, since every insert/erase move-shifts surrounding elements"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "Boost.Config, Boost.Move, Boost.Intrusive (ships as part of Boost; no separately compiled library)",
+    "min_toolchain": "C++03 baseline (README states C++03 support); has conditional code paths for C++11 features like initializer_list and variadic templates when available",
+    "platforms": "any (portable C++, no architecture-specific code observed)",
+    "thread_safety": "not documented -- no built-in synchronization; same external-synchronization requirement as std::set/std::map",
+    "drop_in_for_baseline": "partial — explain: same associative-container API/semantics as std::set/std::map, but different iterator/reference invalidation rules and iterator category (random-access vs. bidirectional), so algorithmic code ports directly while code depending on node stability does not"
+  },
+  "gotchas": [
+    "Insert/erase invalidate iterators and references to elements after the mutation point (vector shift/reallocation), unlike std::set's per-node stability",
+    "Underlying sequence container is swappable (e.g. stable_vector, static_vector, small_vector) -- use stable_vector for reference stability at the cost of contiguity",
+    "One-at-a-time insertion of large unsorted data can effectively hang (see issue #154); prefer bulk/sorted-range construction to amortize shifting",
+    "Provides random-access iterators, so generic code that dispatches on iterator category behaves differently than with std::set's bidirectional iterators"
+  ],
+  "pick_this_over_siblings_when": "Pick flat_set/flat_map over fast-containers, S+ tree, or tlx::btree when the working set stays small (roughly <=128-256 elements) and you want a true drop-in std::set/map replacement shipped with Boost and no extra dependency; the sibling B-tree/B+tree structures target much larger n (up to 10M-scale) and win precisely in the size range where flat_set has already crossed over to being slower than std::set.",
+  "verified_claims_summary": "A single-author 2014 blog benchmark (500,000 random insert-then-erase operations on int keys, -O3, compiler and hardware unstated) timed boost::container::flat_set against std::set across sizes 2-8192: flat_set was ~2.5x faster at size 2, ~1.1x faster at 128, then lost ground from 256 elements up, with std::set ~13.4x faster at 8192.",
+  "status_note": "Actively maintained as a core part of Boost (repo shows a commit dated 2026-09-23) and BSL-1.0 licensed, so it is freely copyable/redistributable with no licensing friction.",
+  "sources_read": [
+    "https://github.com/boostorg/container",
+    "https://github.com/boostorg/container/blob/master/include/boost/container/flat_set.hpp",
+    "https://github.com/boostorg/container/issues/154",
+    "https://blog.fellstat.com/?p=376"
+  ],
+  "confidence": 0.6
+}

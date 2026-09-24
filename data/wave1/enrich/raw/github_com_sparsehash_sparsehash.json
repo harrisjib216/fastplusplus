@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/sparsehash/sparsehash",
+  "one_liner": "Open-addressing C++ hash map beating std::unordered_map on lookups/inserts at large memory cost.",
+  "what_it_does": "dense_hash_map is a Hashed Associative Container from the sparsehash package (alongside sparse_hash_map/set), modeled on SGI's hash_map and mostly compatible with tr1 unordered_map. Its API is a superset of std::unordered_map's (operator[], find, insert, erase) but is not a true drop-in: you must call set_empty_key() immediately after construction, and set_deleted_key() before using erase(), reserving both as sentinel values you can never insert. The constructor also takes an expected-element-count hint rather than a bucket count.",
+  "how_it_is_fast": "It stores all key/value pairs inline in one contiguous array (densehashtable.h) using quadratic-probing open addressing, so lookups walk cache lines instead of chasing per-node pointers/allocations the way node-based chaining maps do. A reserved empty-key sentinel marks free slots without a separate occupancy bitmap, and erase() writes a deleted-key tombstone instead of compacting, which avoids iterator invalidation but leaves stale entries until a resize. Confirmed against README.md, the dense_hash_map header, and densehashtable.h in the repo, and against Tessil's independent shootout (Clang 5.0, -O3 -march=native -DNDEBUG, Intel i5-5200u), which measured it fastest in 20 of 21 tests.",
+  "when_to_use": [
+    "Read-heavy workloads with fixed-size keys (integers, pointers, short strings) where lookup latency matters more than memory footprint.",
+    "Data sets that comfortably fit in RAM with headroom to spare for a doubling resize.",
+    "You can carve out two sentinel key values (empty + deleted) that will never appear as real data.",
+    "You can build and run under an older/stable C++ toolchain (GCC/Clang pre-C++20) and pin -DNDEBUG so asserts don't eat the speed gain.",
+    "You're fine vendoring a BSD-3-Clause, unmaintained-since-2020 header set rather than depending on active upstream support."
+  ],
+  "when_not_to_use": [
+    "Memory-constrained services: README states a 2-4x steady-state overhead, rising to a 6x 'high-water mark' mid-resize (old 2x table plus new 4x table coexist).",
+    "Heavy erase/reinsert cycles near max_load_factor(1): issue #141 shows find() on a missing key can loop forever once every bucket is either occupied or a deleted-tombstone.",
+    "Very large datasets: issue #123 reports dense_hash_map hanging/failing around ~900M entries (16-process distributed job) where std::unordered_map ran fine.",
+    "Element counts that land just below a power of two: issue #172 (open, filed Dec 2025) reports an unresolved, order-of-magnitude slowdown in the 2.0.4 release near power-of-two sizes, absent in 2.0.3.",
+    "String-heavy or variable-length keys, and any build on GCC 11+ with -std=c++20/c++2b: Tessil's shootout shows it losing on insert_string (0.90x vs std::unordered_map), and open PRs/issues (#165, #166) report c++20 build fixes needed and a c++2b segfault in libc_allocator_with_realloc."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none at the API level, but the build needs autotools (./configure/make install) or an equivalent packaged sparseconfig.h to generate the platform's HASH_FUN_H macro before the headers are usable",
+    "min_toolchain": "C++03/11-era API (tr1-style hash<>); upstream has not verified newer standards - open reports of build failures/segfaults under -std=c++20/c++2b on GCC 11+",
+    "platforms": "any (README reports Linux, Solaris, FreeBSD, macOS, and Windows/MSVC support, last verified against toolchains circa 2010-2015; pure C++, no SIMD/intrinsics required)",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": "partial — explain: API superset of std::unordered_map, but set_empty_key() is mandatory before first use and set_deleted_key() is mandatory before any erase(); inserting either sentinel value is undefined behavior"
+  },
+  "gotchas": [
+    "set_empty_key() must be called right after construction (or passed to the iterator-range constructor) and set_deleted_key() before any erase() call; skipping either, or inserting a key equal to one, causes undefined/mysterious failures per the header comments.",
+    "erase() never reclaims memory or invalidates iterators; repeated erase/insert cycles bloat memory until you call resize(0), and at max_load_factor(1) a fully-occupied table (valid + deleted buckets only) can make find() on an absent key loop forever (issue #141).",
+    "Resizing needs up to 6x the raw entry size as a transient high-water mark (README), so budget memory headroom well beyond the steady-state 2-4x overhead.",
+    "dense_hash_map's disk-serialization methods (write_metadata/write_nopointer_data) are present in the API but unimplemented and always fail — only sparse_hash_map actually supports save/restore to disk."
+  ],
+  "pick_this_over_siblings_when": "Within the sparsehash family, pick dense_hash_map over sparsepp when you have RAM to spare and want the fastest lookups; sparsepp trades some of that speed for much lower memory and reportedly beats dense_hash_map's stability at very large sizes. Against actively maintained alternatives (tsl::robin_map, ska::flat_hash_map, emhash), dense_hash_map's only real draw is its long-proven quadratic-probing design — those get comparable or better speed without the mandatory empty/deleted-key setup or an unmaintained-since-2020 codebase with open hang/perf-regression reports.",
+  "verified_claims_summary": "On Tessil's independent hash-table shootout (Clang 5.0, -O3 -march=native -DNDEBUG, libstdc++, Intel i5-5200u), google::dense_hash_map beat std::unordered_map in 20 of 21 tests, a ~2.3x geometric-mean speedup, including read_random_full at n=3,000,000 (0.054s vs 0.297s, ~5.5x) and insert_random_full (0.309s vs 1.056s, ~3.4x); its sole loss was insert_string at ~0.90x.",
+  "status_note": "Abandoned since its last commit on 2020-08-12 — the repo has 20+ open issues/PRs including an unresolved December 2025 report of a severe performance regression near power-of-two sizes in the 2.0.4 release; it's BSD-3-Clause and small enough to vendor, but expect friction building under modern C++ standards/compilers.",
+  "sources_read": [
+    "https://github.com/sparsehash/sparsehash",
+    "https://github.com/sparsehash/sparsehash/blob/master/README",
+    "https://github.com/sparsehash/sparsehash/blob/master/doc/dense_hash_map.html",
+    "https://github.com/sparsehash/sparsehash/blob/master/src/sparsehash/dense_hash_map",
+    "https://github.com/sparsehash/sparsehash/blob/master/NEWS",
+    "https://github.com/sparsehash/sparsehash/issues/172",
+    "https://github.com/sparsehash/sparsehash/issues/123",
+    "https://github.com/sparsehash/sparsehash/issues/141",
+    "https://github.com/sparsehash/sparsehash/issues/110",
+    "https://tessil.github.io/2016/08/29/benchmark-hopscotch-map.html"
+  ],
+  "confidence": 0.7
+}

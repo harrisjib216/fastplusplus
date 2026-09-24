@@ -1,0 +1,107 @@
+[
+  {
+    "id": "https://github.com/max0x7ba/atomic_queue",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "A",
+    "tier_reason": "src/benchmarks.cc in the repo runs the ping-pong latency and N-producer/N-consumer throughput benchmarks against a ring buffer guarded by std::mutex (AtomicQueueMutex<unsigned, C, std::mutex>). The page names the compilers (gcc-14.2.0, and gcc-8.4.0 on the legacy boxes), CPUs, OS and kernel, and the Makefile holds the release flags.",
+    "corrections": {
+      "claimed_speedup": "Ping-pong latency on Ryzen 5950X (SMT): AtomicQueue mean 42ns vs std::mutex 320ns (~7.6x lower); OptimistAtomicQueue 33ns (~9.7x lower). 1-producer/1-consumer throughput on 5950X: AtomicQueue ~142.7M msg/s vs std::mutex ~4.1M msg/s (~34x); OptimistAtomicQueue mean ~1.23B msg/s (stdev ~136M, max ~2.04B). With 2-16 producer/consumer pairs, OptimistAtomicQueue stays ~4-24x ahead of std::mutex (52.9M vs 13.0M msg/s at 2; 55.3M vs 2.3M at 16), while plain AtomicQueue is roughly at parity with std::mutex.",
+      "compiler_and_flags": "gcc-14.2.0 (Ryzen 5950X/5825U); gcc-8.4.0 (legacy i9-9900KS/Xeon Gold 6132). Current Makefile gcc release flags: -O3 -march=native -mtune=native -falign-functions=64 -DNDEBUG -fno-stack-protector -fno-stack-clash-protection -fno-tree-ch -fno-move-loop-invariants -fno-plt -fno-math-errno -ffinite-math-only -pthread; benchmarks.cc is compiled with -std=c++17, which is appended after the base -std=c++14.",
+      "caveats": "The 'std::mutex' baseline is atomic_queue's own fixed-size ring buffer guarded by std::mutex (AtomicQueueMutex), polled through try_push/try_pop retry loops. It is not std::queue with a condition variable. The ~1.23B msg/s 1P/1C OptimistAtomicQueue figure varies a lot (stdev ~136M, max ~2.04B). The page says throughput exceeds the inverse of latency on purpose, because the throughput loop has no dependency chains. Treat the 7.6-9.7x latency figures as the conservative claim. With 2+ producer/consumer pairs on the 5950X, plain AtomicQueue is roughly at parity with std::mutex: std::mutex leads at 2 pairs (13.0M vs 10.1M msg/s) and ties at 4. Only OptimistAtomicQueue keeps a large throughput lead under contention."
+    },
+    "notes": "All claimed numbers match the page's results.js: 5950X SMT latency 42/33/320 ns and 1P/1C throughput 142.7M/1227.1M/4.1M msg/s. I removed the record's unsupported claim that the 1.23B figure is 'almost certainly' a compiler artifact, because the author attributes it to the benchmark design. Metadata checked: MIT, 1894 stars, not a fork, last commit 2026-09-22, Conan Center and vcpkg listed in the README.",
+    "urls_opened": [
+      "https://max0x7ba.github.io/atomic_queue/html/benchmarks.html",
+      "https://max0x7ba.github.io/atomic_queue/html/results.js",
+      "https://max0x7ba.github.io/atomic_queue/html/benchmarks.js",
+      "https://github.com/max0x7ba/atomic_queue",
+      "https://github.com/max0x7ba/atomic_queue/blob/master/Makefile",
+      "https://github.com/max0x7ba/atomic_queue/blob/master/src/benchmarks.cc",
+      "https://github.com/max0x7ba/atomic_queue/blob/master/include/atomic_queue/atomic_queue_mutex.h",
+      "https://github.com/max0x7ba/atomic_queue/blob/master/README.md"
+    ]
+  },
+  {
+    "id": "https://github.com/boostorg/lockfree",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "B",
+    "tier_reason": "Independent atomic_queue shootout (code in max0x7ba/atomic_queue src/benchmarks.cc; gcc-14.2.0, Boost 1.83.0, Ryzen 5950X) shows spsc_queue at 51ns and queue at 92ns vs std::mutex at 320ns. Qihoo360/evpp docs/benchmark_lockfree_vs_mutex.md is a second independent benchmark. Neither is Boost's own benchmark, so tier B.",
+    "corrections": {
+      "claimed_speedup": "atomic_queue shootout, Ryzen 5950X (SMT) ping-pong latency: boost::lockfree::spsc_queue mean 51ns vs std::mutex 320ns (~6.3x lower); boost::lockfree::queue 92ns (~3.5x lower). 1P/1C throughput: spsc_queue ~114M msg/s and queue ~7.8M msg/s vs std::mutex ~4.1M msg/s. A separate evpp benchmark (Qihoo360, 2017, GCC 4.8.2, Boost 1.58, Xeon E5-2630 v2) reports boost::lockfree::queue averaging ~75%-150% higher throughput than a std::mutex-guarded std::vector with multiple producers, and only a small advantage with 1 producer/1 consumer.",
+      "caveats": "The '100%-500%' figure in the evpp doc is moodycamel::ConcurrentQueue vs std::mutex, not Boost.Lockfree. Boost's figure there is 75%-150% (multi-producer only), and the doc dates from 2017, not 2015. In the atomic_queue MPMC throughput test on the 5950X, boost::lockfree::queue is SLOWER than the std::mutex ring buffer at every count of 2+ producer/consumer pairs (5.9M vs 13.0M msg/s at 2; 1.5M vs 2.3M at 16). The measured win is in latency and SPSC/1P1C, not in contended MPMC throughput. Neither benchmark is Boost.Lockfree's own."
+    },
+    "notes": "The shootout numbers (51/92 vs 320 ns) check out. The evpp corroboration was misattributed: 100-500% is moodycamel's margin, and Boost's is 75-150%. The atomic_queue throughput data also shows boost::lockfree::queue losing to std::mutex under MPMC contention. Metadata checked: BSL-1.0, 160 stars, default branch develop, last commit author date 2026-08-14 (committer date 2026-08-15).",
+    "urls_opened": [
+      "https://max0x7ba.github.io/atomic_queue/html/benchmarks.html",
+      "https://max0x7ba.github.io/atomic_queue/html/results.js",
+      "https://github.com/max0x7ba/atomic_queue/blob/master/src/benchmarks.cc",
+      "https://github.com/boostorg/lockfree",
+      "https://github.com/Qihoo360/evpp/blob/master/docs/benchmark_lockfree_vs_mutex.md"
+    ]
+  },
+  {
+    "id": "https://github.com/cameron314/readerwriterqueue",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "B",
+    "tier_reason": "The independent atomic_queue shootout (src/benchmarks.cc in max0x7ba/atomic_queue; gcc-14.2.0, readerwriterqueue commit 2ae710d, Ryzen 5950X) shows a mean of 43ns vs 320ns for std::mutex. The project's own benchmarks/bench.cpp compares only against the 1024cores SPSC queue and folly::ProducerConsumerQueue, so the std::mutex evidence is third-party only.",
+    "corrections": {
+      "caveats": "The project's own benchmarks never compare against std::mutex. benchmarks/bench.cpp and the blog post at moodycamel.com/blog/2013/a-fast-lock-free-queue-for-c++ (updated 2013 and Jan 2015) test only against Dmitry Vyukov's SPSC queue and folly::ProducerConsumerQueue. They ran on an AMD C-50, a Core 2 Duo T6500 and a Linode Xeon L5520 VM, with MSVC2010, ICC 13 and GCC 4.7.2/4.8.1/4.9.2. The std::mutex comparison comes entirely from the independent max0x7ba/atomic_queue shootout, whose 'std::mutex' baseline is a mutex-guarded ring buffer. Its 1P/1C throughput in that shootout varies a lot (5950X mean ~322M msg/s, stdev ~206M)."
+    },
+    "notes": "The 43ns vs 320ns figure matches the page. GitHub reports the license as NOASSERTION, but LICENSE.md is the Simplified BSD license (BSD-2-Clause). Only the third-party files in benchmarks/ext and Preshing's zlib-licensed semaphore in atomicops.h are excepted, so 'copyable' stands. Stars 4625 and last commit 2026-09-07 verified.",
+    "urls_opened": [
+      "https://max0x7ba.github.io/atomic_queue/html/benchmarks.html",
+      "https://max0x7ba.github.io/atomic_queue/html/results.js",
+      "https://github.com/cameron314/readerwriterqueue",
+      "https://github.com/cameron314/readerwriterqueue/blob/master/LICENSE.md",
+      "https://github.com/cameron314/readerwriterqueue/blob/master/README.md",
+      "https://github.com/cameron314/readerwriterqueue/blob/master/benchmarks/bench.cpp",
+      "http://moodycamel.com/blog/2013/a-fast-lock-free-queue-for-c++"
+    ]
+  },
+  {
+    "id": "https://github.com/uxlfoundation/onetbb",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "B",
+    "tier_reason": "The independent atomic_queue shootout (src/benchmarks.cc, TbbAdapter over tbb::concurrent_bounded_queue with try_push/try_pop retry; gcc-14.2.0, TBB 2021.11.0-2ubuntu2, Ryzen 5950X) shows a mean of 83ns vs 320ns for std::mutex. The evidence is third-party, not oneTBB's own.",
+    "corrections": {
+      "caveats": "The evidence comes from the independent max0x7ba/atomic_queue shootout, not from oneTBB's own published benchmarks. oneTBB is a large general-purpose parallelism library, so the result covers only concurrent_bounded_queue, used through non-blocking try_push/try_pop. In the same shootout's MPMC throughput test on the 5950X it is only ~2x std::mutex at 1P/1C (8.8M vs 4.1M msg/s). Beyond that it is roughly at parity, and std::mutex leads at 2 pairs (13.0M vs 11.1M) and at 4 pairs (6.9M vs 6.5M)."
+    },
+    "notes": "The 83ns vs 320ns latency claim matches the page. I added a caveat that the throughput advantage mostly disappears under contention. Metadata checked: Apache-2.0, 6749 stars, not a fork or archived, last commit 2026-09-23.",
+    "urls_opened": [
+      "https://max0x7ba.github.io/atomic_queue/html/benchmarks.html",
+      "https://max0x7ba.github.io/atomic_queue/html/results.js",
+      "https://github.com/max0x7ba/atomic_queue/blob/master/src/benchmarks.cc",
+      "https://github.com/uxlfoundation/oneTBB"
+    ]
+  },
+  {
+    "id": "https://github.com/mpoeter/xenium",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "B",
+    "tier_reason": "The independent atomic_queue shootout (src/benchmarks.cc; gcc-14.2.0, xenium commit f6416d3, Ryzen 5950X) shows ramalhete_queue at 56ns, vyukov_bounded_queue at 60ns and michael_scott_queue at 128ns, against 320ns for std::mutex. xenium's own benchmarks/ suite has no std::mutex baseline.",
+    "corrections": {},
+    "notes": "The latency figures match the page exactly. In the throughput data, ramalhete_queue and vyukov_bounded_queue stay well ahead of std::mutex at every thread count, while michael_scott_queue is roughly at parity. Last commit 2025-07-29 (~14 months ago), so 'stale' is correct; MIT and 657 stars verified. The 'feature-complete per other users' remark in caveats was not verified.",
+    "urls_opened": [
+      "https://max0x7ba.github.io/atomic_queue/html/benchmarks.html",
+      "https://max0x7ba.github.io/atomic_queue/html/results.js",
+      "https://github.com/mpoeter/xenium",
+      "https://github.com/mpoeter/xenium/blob/main/README.md",
+      "https://github.com/mpoeter/xenium/blob/main/benchmarks/queues.hpp"
+    ]
+  }
+]

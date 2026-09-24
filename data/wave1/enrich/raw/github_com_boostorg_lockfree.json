@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/boostorg/lockfree",
+  "one_liner": "Boost's lock-free MPMC/SPSC queue and stack family; beats std::mutex on latency, not contended MPMC throughput.",
+  "what_it_does": "Boost.Lockfree provides six non-blocking concurrent data structures - queue and stack for multi-producer/multi-consumer use, spsc_queue and spsc_value for single-producer/single-consumer use, plus bounded_ticket_queue and mpsc_weak_queue - as an alternative to guarding a std::queue, std::stack, or std::deque with std::mutex. It is not a drop-in replacement for those containers: push/pop return bool status codes, there are no iterators, and capacity is chosen through compile-time or runtime policy templates instead of dynamic resizing. Elements generally must be trivially copy-assignable and trivially destructible; move-only types are rejected at compile time (open feature request, issue #125).",
+  "how_it_is_fast": "queue implements Michael & Scott's lock-free MPMC algorithm with a tagged-pointer freelist that recycles nodes instead of returning memory to the OS on every pop. spsc_queue is a wait-free single-producer/single-consumer ring buffer (the same technique used in the Linux kernel) with no compare-and-swap on its hot path at all. Skipping mutex acquisition removes the futex/syscall path and priority-inversion risk that dominate std::mutex latency under contention. bounded_ticket_queue additionally implements a Vyukov turnstile algorithm that becomes wait-free when producer or consumer count is fixed to one side.",
+  "when_to_use": [
+    "Exactly one producer thread and one consumer thread need a ring buffer and latency matters (spsc_queue measured at 51ns vs std::mutex 320ns in the atomic_queue shootout)",
+    "MPMC queue with a bounded/fixed-size capacity, where avoiding OS-level allocation and priority inversion matters more than peak contended throughput",
+    "Already depend on Boost and want an actively maintained (last commit 2026-08-14), widely-used lock-free structure without adding a new third-party dependency",
+    "Element type is a small, trivially-copyable POD (ints, small structs, raw pointers used carefully) rather than move-only or exception-throwing"
+  ],
+  "when_not_to_use": [
+    "Heavily contended MPMC throughput: in the atomic_queue shootout, boost::lockfree::queue loses to a std::mutex-guarded ring buffer at every count of 2+ producer/consumer pairs (5.9M vs 13.0M msg/s at 2 pairs; 1.5M vs 2.3M at 16)",
+    "T is a pointer type: open issue #120 reports a data race where concurrent pop() can hand the same pointer to two threads",
+    "Code depends on pop() returning false only when the queue is truly empty: open issue #119 shows pop() can spuriously return false under concurrent push/pop on a non-empty queue",
+    "Need move-only element types or exception-safety guarantees in push/pop: unsupported (open request #125); docs explicitly discourage exceptions in lock-free code",
+    "Need std::queue/std::stack API compatibility such as iteration or arbitrary resizing: the API is deliberately narrower"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "Boost.Align, Boost.Assert, Boost.Atomic, Boost.Config, Boost.Core, Boost.Parameter, Boost.Predef, Boost.Utility (ships as part of Boost, not standalone)",
+    "min_toolchain": "C++14 (CMake target_compile_features cxx_std_14); uses C++20 concepts opportunistically when available",
+    "platforms": "any platform with CAS/double-width-CAS atomic support; internal tagged-pointer representation switches between a DCAS scheme and a pointer-compression scheme depending on platform, not documented as restricted to a specific ISA",
+    "thread_safety": "push/pop are lock-free (queue, stack) or wait-free (spsc_queue, spsc_value) across concurrent threads; construction and destruction of the container itself must be externally synchronized, per the doc comment in queue.hpp",
+    "drop_in_for_baseline": "partial - explain: replaces a std::mutex-guarded container's push/pop calls, but push/pop return bool status codes, there are no iterators, and size/capacity is set via template policies rather than dynamic growth"
+  },
+  "gotchas": [
+    "boost::lockfree::queue<T*> has an open data-race report (issue #120): concurrent pop() can return the same pointer to two threads",
+    "pop() can spuriously return false on a non-empty queue under concurrent push/pop (issue #119), so a false return does not strictly mean 'empty'",
+    "T must be trivially copy-assignable and trivially destructible for queue; move-only types fail to compile rather than degrading gracefully",
+    "capacity<> and allocator<> policy options are mutually exclusive (static_assert) - pick compile-time-fixed or runtime-allocated sizing, not both"
+  ],
+  "pick_this_over_siblings_when": "Pick Boost.Lockfree when you already depend on Boost and want an actively-maintained, well-tested queue without adding a new dependency. Pick atomic_queue or moodycamel::ReaderWriterQueue instead when SPSC latency is the priority (42-43ns vs Boost's 51ns) or for contended MPMC throughput, where boost::lockfree::queue loses to a plain std::mutex ring buffer.",
+  "verified_claims_summary": "An independent third-party benchmark (the atomic_queue shootout; gcc-14.2.0 -O3 -march=native, AMD Ryzen 5950X, Linux) measured ping-pong round-trip latency of spsc_queue at 51ns and queue at 92ns against std::mutex at 320ns (about 6.3x and 3.5x lower). A separate 2017 evpp benchmark (gcc-4.8.2, Xeon E5-2630 v2) found boost::lockfree::queue giving 75-150% higher throughput than a mutex-guarded std::vector, but only with multiple producers. Neither benchmark is Boost's own, and the same shootout's MPMC throughput data shows boost::lockfree::queue losing to std::mutex once 2 or more producer/consumer pairs are contending.",
+  "status_note": "Actively maintained as part of mainline Boost (last commit 2026-08-14); BSL-1.0 licensed and header-only, so it is cheap to adopt if you already take Boost as a dependency.",
+  "sources_read": [
+    "https://github.com/boostorg/lockfree",
+    "https://github.com/boostorg/lockfree/blob/develop/doc/lockfree.qbk",
+    "https://github.com/boostorg/lockfree/blob/develop/include/boost/lockfree/queue.hpp",
+    "https://github.com/boostorg/lockfree/blob/develop/include/boost/lockfree/spsc_queue.hpp",
+    "https://github.com/boostorg/lockfree/blob/develop/CMakeLists.txt",
+    "https://github.com/boostorg/lockfree/issues/120",
+    "https://github.com/boostorg/lockfree/issues/119",
+    "https://github.com/boostorg/lockfree/issues",
+    "https://max0x7ba.github.io/atomic_queue/html/benchmarks.html"
+  ],
+  "confidence": 0.72
+}

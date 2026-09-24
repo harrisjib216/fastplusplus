@@ -1,0 +1,45 @@
+{
+  "id": "https://github.com/kressler/fast-containers",
+  "one_liner": "Header-only C++23 B+tree with SIMD search and hugepage allocators, 2-5x faster than std::map on large trees.",
+  "what_it_does": "A header-only, cache-friendly B+tree (`kressler::fast_containers::btree<Key,Value,...>`) for ordered key-value storage, plus standalone hugepage pool allocators that can be used independently (e.g. paired with Abseil's btree). Basic operations (insert, find, erase, iteration, size) mirror std::map's shape closely enough for straightforward porting, but it is not a strict drop-in: the template adds leaf/internal node-size and SearchMode parameters, the iterator value_type is `pair<Key,Value>` rather than `pair<const Key,Value>`, and a closed issue ('Add missing std::map interface methods to btree') shows API parity is still being filled in.",
+  "how_it_is_fast": "Fixed-size leaf/internal nodes (heuristically sized to ~1-2KB, 16-32 cache lines) replace the per-node pointer-chasing of a red-black tree. Node search uses AVX2 SIMD linear scans (`SearchMode::SIMD`) over a dense sorted array (`dense_map`) instead of branchy binary search. A pooling `HugePageAllocator` backs node storage with 2MB hugepages, cutting TLB misses and making allocation near-free compared to the default allocator; the README calls this 'the single most important optimization,' giving a 2-3x speedup on its own.",
+  "when_to_use": [
+    "Ordered int64-keyed maps with 32-256 byte values at large scale (roughly 1M-10M+ elements) where TLB misses and allocator overhead dominate runtime",
+    "You need both P50 and P99.9 latency wins over std::map for insert/find/erase, not just throughput",
+    "You control an x86-64 Linux environment with AVX2 (Haswell/Excavator or newer) and can configure OS hugepages",
+    "You're willing to tune node size, SearchMode, and allocator per key/value size instead of relying on one default",
+    "You're also considering Abseil's btree: this implementation beats absl+hugepages by 20-135% in the repo's own benchmarks"
+  ],
+  "when_not_to_use": [
+    "Trees under roughly 10K elements: std::map becomes competitive and even wins some tail-latency cases (e.g. ERASE P99.9 with 256B values: 213.6ns vs 245.7ns)",
+    "Non-x86-64 or non-Linux targets — SIMD paths and RDTSC timing are x86-64-specific, and the README states Windows is untested",
+    "Workloads relying on std::map's pointer/iterator stability across mutations; the header documents that some operations invalidate all iterators",
+    "Environments where OS hugepages can't be configured/administered — losing hugepages removes most of the measured advantage",
+    "Risk-averse adoption: single-author, explicitly AI-agent-assisted, actively-changing work-in-progress with self-reported, not independently reproduced benchmarks"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none for the library itself; tests/benchmarks pull in Abseil, Google Benchmark, Catch2, lyra, unordered_dense, and a histograms library as git submodules",
+    "min_toolchain": "C++23, GCC 14+ or Clang 19+, CMake 3.30+",
+    "platforms": "x86-64 with AVX2 (Intel Haswell 2013+ / AMD Excavator 2015+); built and tested on Linux only",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": "partial — insert/find/erase/iteration match std::map's shape, but the template signature, iterator value_type (pair<Key,Value>, not pair<const Key,Value>), and full method surface differ; a closed issue ('Add missing std::map interface methods to btree') indicates parity work is ongoing, not complete"
+  },
+  "gotchas": [
+    "Header docs state some operations invalidate all iterators — no red-black-tree-style iterator/pointer stability like std::map",
+    "A closed bug (issue #47) found incorrect SIMD comparison semantics for composite and unsigned key types — fixed, but signals SIMD comparator correctness needs care for non-trivial key types",
+    "The hugepage allocator needs OS-level hugepage configuration; without it the library is still faster than std::map but by a much smaller margin than the headline numbers",
+    "The benchmarked 'winner' configuration (SIMD search + hugepage allocator, specific leaf/internal node sizes) is one tuned instantiation — other node-size/SearchMode combinations are meaningfully slower"
+  ],
+  "pick_this_over_siblings_when": "Pick this over tlx::btree_map or boost::container::flat_map/flat_set when the workload is specifically very large (multi-million element), int64-keyed trees on x86-64 Linux and hugepages are available to configure; its P99.9 gains at 10M elements are larger than tlx's reported multiset comparisons and target a size range boost's flat_set (best at 2-256 elements) doesn't cover. Prefer tlx or boost instead for portability, small-to-mid-size trees, or a longer track record than a single-author work-in-progress.",
+  "verified_claims_summary": "On an isolated core of an AMD Ryzen 9 5950X (Linux 6.16.3, Clang Release build with -O3 -march=haswell -mavx2 -mfma -flto=thin), the repo's own RDTSC-timed benchmark shows the SIMD+hugepage btree beating std::map by roughly 2.1-4.8x on P50/P99.9 insert/find/erase at 10M elements with 8-byte keys and 32B or 256B values; at 10K elements the advantage shrinks and std::map wins ERASE P99.9 with 256B values (213.6ns vs 245.7ns).",
+  "status_note": "Actively developed (last commit 2026-01-06, all filed issues closed) but explicitly a single-author work-in-progress built with heavy AI-agent assistance; BSD-3-Clause and header-only make it cheap to vendor, but expect API and behavior churn before treating it as stable.",
+  "sources_read": [
+    "https://github.com/kressler/fast-containers",
+    "https://github.com/kressler/fast-containers/blob/main/README.md",
+    "https://github.com/kressler/fast-containers/blob/main/results/btree_benchmark_results.md",
+    "https://github.com/kressler/fast-containers/blob/main/include/fast_containers/btree.hpp",
+    "https://github.com/kressler/fast-containers/issues"
+  ],
+  "confidence": 0.72
+}

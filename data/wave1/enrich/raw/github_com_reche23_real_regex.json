@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/RECHE23/real-regex",
+  "one_liner": "Header-only C++20 linear-time regex engine with lookaround support, beating std::regex 8x-152x and RE2 on every supported pattern.",
+  "what_it_does": "REAL is a header-only C++20 regex engine that uses Thompson-NFA (Pike VM) simulation to guarantee linear-time, ReDoS-safe matching while still supporting bounded lookahead/lookbehind and possessive quantifiers/atomic groups, features the other linear engines (RE2, Rust regex) drop entirely. Its native API (real::regex) is not the same interface as std::regex; a separate real::compat::std header (<real/compat/std/regex.hpp>) offers a std::regex-shaped surface instead. Ships Python, Rust, Go and C bindings alongside the C++ core, all header-only/source, zero runtime dependencies.",
+  "how_it_is_fast": "Routes each compiled pattern to the cheapest execution tier that can handle it - exact-literal/fixed-shape fast paths, a one-pass DFA, a lazy DFA with a bounded state cache, or the general Pike VM (Thompson-NFA simulation) as fallback - instead of always running one general matcher. Character-class steps use SIMD probing (engine/simd.hpp), and a required-literal prefilter rejects non-matching input (e.g. classic ReDoS patterns) in microseconds without entering the NFA at all. Constexpr-friendly parsing/compilation lets patterns known at compile time be parsed, compiled and matched at compile time.",
+  "when_to_use": [
+    "C++20 codebase needing linear-time, ReDoS-safe matching AND lookaround in the same engine (RE2/Rust regex lack lookaround, PCRE2/std::regex backtrack)",
+    "Single-pattern throughput workloads - word/digit/field extraction, hex/date matching, alternation - where the project's own benchmark shows 8.20x-41.97x (x86-64) / 15.31x-151.97x (arm64) over std::regex and wins over RE2 in every case RE2 supports",
+    "Untrusted or adversarial regex patterns/subject text where catastrophic backtracking (e.g. (a+)+b) is a real operational risk",
+    "Need the same engine exposed from Python, Rust, Go and C via the project's own bindings, not just C++",
+    "Willing to pay a header-only compile-time cost (measured 4.3s / 213KiB __text for one TU vs 1.1s / 47KiB for <regex>, arm64 clang -O2) in exchange for the runtime win"
+  ],
+  "when_not_to_use": [
+    "Pattern needs backreferences or conditional groups - REAL rejects these outright by design (real::regex_error, no silent fallback in its native API)",
+    "Matching many patterns against one text at once (regex_set) with N much above ~56 - REAL's pure N-walk mode degrades hard (~559 MB/s at N=16 down to ~39 MB/s at N=128 on the project's own bench) and loses to RE2::Set/Hyperscan at scale",
+    "Lookahead-heavy or fixed-width date/hex workloads specifically - PCRE2-JIT still wins those rows outright (0.71x-0.92x, i.e. PCRE2 faster) in REAL's own tables",
+    "Toolchain stuck below C++20 - this is a hard minimum, asserted in every header, versus std::regex's C++11 floor",
+    "Risk-averse teams: this is an extremely new project (4 stars, repo created 2026-06-13) with benchmarks that are self-published and not yet independently reproduced"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (zero runtime deps; the SciForge harness is only needed to build the test suite/CI, never the library itself)",
+    "min_toolchain": "C++20 (hard requirement, enforced via a static_assert in every header); tested in CI with g++ 13.3.0, Apple Clang 16, and MSVC on Windows",
+    "platforms": "Linux x86-64 and AArch64, macOS arm64, Windows (MSVC) per CI matrix; no specific SIMD ISA extension (e.g. AVX2) documented as mandatory",
+    "thread_safety": "A compiled real::regex is immutable and can be used from many threads simultaneously; a match iterator is not shared across threads (docs/site/reference/basic_regex.rst)",
+    "drop_in_for_baseline": "partial - explain: native API (real::regex) is a different interface from std::regex; the separate real::compat::std header runs a pattern on REAL when provably equivalent to std::regex/ECMAScript (incl. all five POSIX grammars) and falls back to std::regex otherwise, reporting which backend ran via uses_real()"
+  },
+  "gotchas": [
+    "Possessive quantifiers/atomic groups are only linear-time (Tier 1) for a single atom or one atom wrapped in one capturing group ([^x]*+, \\d++, (?>\\w+)); a compound body inside them is rejected outright, never silently mismatched",
+    "Nullable patterns (a*, (x)?) keep REAL's ReDoS-safe search/match, but regex_replace and iteration on them are delegated to std::regex per-operation - the linear-time guarantee doesn't cover every operation on every pattern",
+    "find_iter (and Python finditer) do not get the trailing-lookahead fast path that count_matches/search/match/replace get - benchmarks that compare via len(findall(...)) rather than count_matches are not comparable to this project's own numbers",
+    "Backreferences, recursion, subroutine calls and callouts are excluded by design (raise real::regex_error) - not a roadmap gap but a permanent rejection to preserve the linear-time guarantee"
+  ],
+  "pick_this_over_siblings_when": "Pick REAL over Boost.Regex when you need a linear-time ReDoS-safe guarantee with lookaround - Boost.Regex is a backtracking engine like std::regex and doesn't offer that guarantee. Pick it over RE/flex when you need general runtime regex matching rather than an offline lexer-generator workflow, and over Unformat when the task is general pattern matching rather than std::format-style structured parsing.",
+  "verified_claims_summary": "REAL's own in-repo benchmark (benchmarks/bench_engines.cpp via make bench-engines, c++ -std=c++20 -O2; g++ 13.3.0 on an unnamed x86-64 host, Apple Clang 16 on arm64 Apple Silicon) counted non-overlapping matches for 12 general-purpose patterns and measured REAL 8.20x-41.97x faster than std::regex (libstdc++) on x86-64 and 15.31x-151.97x faster than std::regex (libc++) on arm64, 2.90x-16.34x/2.41x-11.53x faster than RE2 where RE2 supports the pattern, and ahead of PCRE2-JIT on 7 of 12 rows on both ISAs - all figures matched exactly what is published in docs/BENCHMARKS.md this session.",
+  "status_note": "Actively maintained - near-daily CalVer releases (release notes run through v2026.9.7, last commit 2026-09-24) - and MIT-licensed, header-only, so trivially vendorable, but still a very new, small project (4 stars, repo created 2026-06-13) with no external validation of its benchmarks beyond its own suite.",
+  "sources_read": [
+    "https://github.com/RECHE23/real-regex",
+    "https://github.com/RECHE23/real-regex/blob/main/README.md",
+    "https://github.com/RECHE23/real-regex/blob/main/docs/BENCHMARKS.md",
+    "https://github.com/RECHE23/real-regex/blob/main/docs/COMPATIBILITY.md",
+    "https://github.com/RECHE23/real-regex/blob/main/SECURITY.md",
+    "https://github.com/RECHE23/real-regex/blob/main/docs/site/reference/basic_regex.rst",
+    "https://github.com/RECHE23/real-regex/issues?q=bug",
+    "https://github.com/RECHE23/real-regex/issues?q=performance"
+  ],
+  "confidence": 0.72
+}

@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/ktprime/emhash",
+  "one_liner": "Header-only open-addressing C++ hash table family; emhash7 beats std::unordered_map on insert/find/erase/iterate at 10M elements.",
+  "what_it_does": "emhash is a header-only family of open-addressing hash tables (emhash5/6/7/8 plus emilib1-4) that replace std::unordered_map/std::unordered_set. The API is a near drop-in: operator[], find, insert, emplace, erase, reserve, and range-for match std::unordered_map, but reference/iterator stability and node handles are not provided. Each numbered variant tunes a different tradeoff (small-table SBO, erase speed, high load factor, dense iteration) rather than offering one universal implementation.",
+  "how_it_is_fast": "emhash7 stores key-value pairs inline in one contiguous array plus a separate bitmask for fast empty-slot scanning, and repairs the bucket chain on erase instead of leaving tombstones, so mixed insert/erase workloads don't degrade even at load factor 0.999. Iteration is a straight scan of that array, which is why it beats std::unordered_map's pointer-chasing linked-node layout by roughly 85x on the 10M-element iterate benchmark. The emilib variants instead use Swiss-table-style SIMD group probing with a 1-byte H2 tag per bucket to filter most candidates before a full key comparison.",
+  "when_to_use": [
+    "Mixed insert/find/erase workloads on integer or POD keys where throughput close to hand-tuned open addressing matters (emhash7)",
+    "Need a load factor above 0.9 (up to 0.999) without the clustering/degradation open addressing usually shows at that density",
+    "Iteration-heavy hot paths over the whole map/set (emhash7/emhash8), since the flat array scan beats std::unordered_map's node chasing by an order of magnitude",
+    "Want a header-only, dependency-free drop-in (copy one .hpp) rather than adding a build dependency",
+    "Input keys are trusted/internal, not adversarially chosen"
+  ],
+  "when_not_to_use": [
+    "Code holds long-lived references or pointers into the map across inserts — open addressing invalidates them on rehash; std::unordered_map does not",
+    "Keys come from untrusted/adversarial input: emhash7/8 don't cap probe-sequence length by default, which SECURITY.md flags as a hash-flooding DoS risk unless you enable EMH_SAFE_HASH or switch to an emilib EMH_SAFE_PSL variant",
+    "Multiple threads write concurrently without your own locking — emhash provides no internal synchronization",
+    "You want independently reproduced numbers rather than the vendor's own benchmark (emhash's table is self-measured on one Windows/GCC config, not verified here against Ankerl 2022 or Allan 2024 methodology)",
+    "Very large value types where rehash-driven moves are costly and you haven't wrapped them in unique_ptr"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (wyhash is bundled in config.hpp; pass -DEMH_NO_BUILTIN_WYHASH to supply your own)",
+    "min_toolchain": "C++17 (some examples use C++20); GCC, Clang, or MSVC",
+    "platforms": "Windows, Linux, macOS; x86-64 and ARM64 (Apple M1/M2). emhash5-8 are scalar (no SIMD requirement); emilib variants add SSE2/AVX2/AVX-512 group probing where available",
+    "thread_safety": "Not thread-safe. Concurrent writes require an external mutex; concurrent read-only access (find/contains/count) with no active writer is safe (per docs/usage_notes.md)",
+    "drop_in_for_baseline": "partial — operator[], find, insert, emplace, erase, reserve, begin/end, load_factor, etc. match std::unordered_map's signatures, but there is no reference/iterator stability guarantee, no node handle, and bucket()/bucket_size() require the EMH_STATIS build flag"
+  },
+  "gotchas": [
+    "emhash7/8 do not cap probe-sequence length by default; SECURITY.md calls this a hash-flooding DoS risk on untrusted keys. Mitigate with EMH_SAFE_HASH (~10% overhead) or an emilib EMH_SAFE_PSL variant",
+    "Any insert that triggers a rehash invalidates all existing references and iterators, unlike std::unordered_map's node-based stability",
+    "Erasing inside a plain range-for is undefined behavior; use the iterator-returning erase(it) or erase_if() instead",
+    "Some thirdparty/emilib variants (e.g. emilib2ss) can degrade into a full table scan under an all-keys-collide attack; the maintained include/emilib/emihmap2.hpp (emilib2::HashMap) is not the affected fork, but pick emilib2o/emilib2s for untrusted input regardless"
+  ],
+  "pick_this_over_siblings_when": "Pick emhash over rigtorp::HashMap, ska::flat_hash_map, or tsl::robin_map/hopscotch_map when you need a load factor up to 0.999 without tombstone-driven degradation on mixed insert/erase workloads, or want a matched family (emhash6/7/8) tuned per access pattern instead of one fixed design. Pick a sibling instead when you want a single implementation whose speedup was measured by an independent, cross-library suite (e.g. Ankerl 2022) rather than the vendor's own benchmark.",
+  "verified_claims_summary": "On an AMD Ryzen 7 5800H / Windows 10, GCC 11.3 (-O3 -march=native -std=c++17) build, emhash7 beat std::unordered_map (libstdc++) at 10M integer-key elements: insert ~4.5x (66.0 vs 295), find-hit ~2x (16.9 vs 33.0), find-miss ~2.9x (18.1 vs 52.0), erase ~14x (20.4 vs 293), and iterate ~85x (0.74 vs 62.6). These are the project's own docs/performance.md numbers, reproducible via bench/ebench but not independently re-run for this entry.",
+  "status_note": "Actively maintained (last commit 2026-09-05, v1.1.0) and MIT-licensed; header-only, so a single .hpp such as hash_table7.hpp can be vendored with no external dependency.",
+  "sources_read": [
+    "https://github.com/ktprime/emhash",
+    "https://github.com/ktprime/emhash/blob/master/README.md",
+    "https://github.com/ktprime/emhash/blob/master/docs/performance.md",
+    "https://github.com/ktprime/emhash/blob/master/docs/PERFORMANCE_TRACKING.md",
+    "https://github.com/ktprime/emhash/blob/master/docs/usage_notes.md",
+    "https://github.com/ktprime/emhash/blob/master/docs/design.md",
+    "https://github.com/ktprime/emhash/blob/master/docs/migration_guide.md",
+    "https://github.com/ktprime/emhash/blob/master/SECURITY.md"
+  ],
+  "confidence": 0.85
+}

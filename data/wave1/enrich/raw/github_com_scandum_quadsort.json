@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/scandum/quadsort",
+  "one_liner": "Stable branchless bottom-up adaptive merge sort in C, beating std::stable_sort on random and partially ordered arrays.",
+  "what_it_does": "Quadsort is a stable, adaptive, branchless merge sort implemented in plain C, meant as a faster stand-in for std::stable_sort/qsort-style sorting. Its API mirrors qsort: quadsort(array, nmemb, size, cmp) takes a raw array, element count, element size, and a qsort-style comparator, not a C++ iterator/predicate pair. quadsort_prim sorts raw 32/64-bit int arrays without any comparator call, and quadsort_size handles arrays of structs via an index-then-copy pass.",
+  "how_it_is_fast": "An 8-element analyzer detects ascending or descending runs using a 4-comparison bitmask trick, cutting branch mispredictions to about 0.2 per 8 elements versus ~3.2 for naive comparisons, and exits with pre-sorted 8-element blocks. Small blocks are combined with branchless swap and 'parity merge' macros, then merged bottom-up with a single reusable O(n) swap buffer (like std::stable_sort's own auxiliary buffer) instead of per-level allocation. The branchless macros are written as GCC-style conditional stores on gcc and as ternary expressions on clang, so codegen and speed differ by compiler.",
+  "when_to_use": [
+    "Large arrays (100K+) of primitives on gcc/x86 where std::stable_sort's overhead is measured to be a bottleneck",
+    "Partially ordered input (ascending/descending runs, sawtooth, pipe-organ patterns) where the run-detecting analyzer pays off most",
+    "C codebases already built around qsort-style comparators, or C++ call sites that can pass contiguous arrays of PODs",
+    "Fixed-width 32/64-bit integer arrays, via quadsort_prim, to skip comparator call overhead entirely",
+    "Projects fine vendoring a small, unlicensed (public-domain) header/source pair instead of linking a library"
+  ],
+  "when_not_to_use": [
+    "Call sites that need std::stable_sort's actual iterator/comparator signature over arbitrary containers, not just contiguous arrays",
+    "Bit-reversal-ordered input: the vendor's own benchmark table shows quadsort slower than std::stable_sort there",
+    "Building with clang instead of gcc: author states the branchless merge/small-sort routines run 2-3x slower under clang",
+    "Need current, independently reproduced numbers: last commit 2024-07-27 ('stale'), sole benchmark is first-party with no CPU stated, and the README's big 100,000-element per-distribution table is mislabeled 'fluxsort' even though its graph is captioned 'quadsort'",
+    "Memory-constrained sorts expecting an in-place win: quadsort still needs an O(n) auxiliary swap buffer, same as std::stable_sort"
+  ],
+  "integration": {
+    "form": "header-only (quadsort.h #includes quadsort.c internally; single #include \"quadsort.h\" is enough)",
+    "dependencies": "none (stdlib.h, stdio.h, assert.h, errno.h, float.h, string.h only)",
+    "min_toolchain": "plain C (no C99/C11-specific features observed); README benchmarks used GCC 7.5.0 and clang 10 with -O3; the C++ bench harness needed -fpermissive to compile the C header as C++",
+    "platforms": "any target with a C compiler; portable C with no SIMD intrinsics, but branchless codegen and measured speed are tuned for gcc/x86 (2-3x slower merge/small-sort routines under clang per the author)",
+    "thread_safety": "not documented (single-threaded implementation; no mention of thread safety or reentrancy in README or headers)",
+    "drop_in_for_baseline": "partial — explain: quadsort takes a qsort-style (array, nmemb, size, cmp) signature, not std::stable_sort's (first, last, comp) iterator interface, so C++ call sites need an adapter and are limited to contiguous arrays of PODs, not arbitrary containers/iterators"
+  },
+  "gotchas": [
+    "QUAD_CACHE (default 262144) gates performance for pointer/struct sorts via quadsort_size; the header comments say it needs tuning for large arrays and L3 cache size",
+    "Branchless macros branch on the __clang__ define, so gcc and clang run genuinely different code paths for the same source, not just different optimizer output",
+    "quadsort and quadsort_size malloc their own O(n) swap buffer internally with no custom-allocator hook, and assert() on malloc failure rather than returning an error code",
+    "A user-filed correctness question about cross_merge's tail pointer possibly running past the block's tail (issue #20) is closed but its resolution isn't confirmed in the visible thread"
+  ],
+  "pick_this_over_siblings_when": "Pick quadsort over the same author's fluxsort when you specifically want the mergesort half without fluxsort's quicksort partitioning (fluxsort itself is the faster average-case hybrid per the vendor's own comparisons); pick quadsort over BlockQuicksort, Boost.Sort/spreadsort, IPS4o, LearnedSort, or x86-simd-sort specifically when stability is required, since those all target unstable std::sort rather than std::stable_sort.",
+  "verified_claims_summary": "On WSL2/Ubuntu 18.04 with g++ 7.5.0 (-O3 -w -fpermissive), the author's own wolfsort bench.c measured quadsort at 0.005664s vs std::stable_sort's 0.013871s (best-of-50) sorting weighted random arrays of 513-1024 32-bit ints, about 2.4x, with roughly 2.0-4.9x across the full 1-4096 item weighted sweep; no CPU model is stated. The README's larger 100,000-element, 11-distribution table (~4-16x claims) is mislabeled 'fluxsort' in its row data despite a 'quadsort' bar-graph caption, so those bigger numbers cannot be confidently attributed to quadsort itself.",
+  "status_note": "Maintenance is stale (last commit 2024-07-27, no recent activity) but the code is Unlicense (public domain) and a small, single header/source pair, cheap to vendor and freeze indefinitely.",
+  "sources_read": [
+    "https://github.com/scandum/quadsort",
+    "https://github.com/scandum/quadsort#benchmark-quadsort-vs-stdstable_sort-vs-timsort",
+    "https://github.com/scandum/quadsort/blob/master/README.md",
+    "https://github.com/scandum/quadsort/blob/master/src/quadsort.h",
+    "https://github.com/scandum/quadsort/blob/master/src/quadsort.c",
+    "https://github.com/scandum/quadsort/blob/master/src/bench.c",
+    "https://github.com/scandum/quadsort/issues",
+    "https://github.com/scandum/quadsort/issues/14",
+    "https://github.com/scandum/quadsort/issues/20"
+  ],
+  "confidence": 0.75
+}

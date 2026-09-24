@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/boostorg/regex",
+  "one_liner": "Header-only successor to std::regex: same backtracking engine, hand-tuned matcher and pooled allocation for real throughput gains.",
+  "what_it_does": "Boost.Regex is the ancestor of std::regex: it provides basic_regex/regex_match/regex_search/regex_replace/regex_iterator plus a POSIX regcomp/regexec-compatible C API, MFC string support, and ICU/Unicode string interop that std::regex lacks. The API mirrors std::regex closely (boost::regex, boost::smatch) but uses its own types, so porting means renaming types/includes rather than a pure header swap. Since Boost.Regex 6.0.0 (Boost 1.77, 2021) it is header-only and can run standalone, without the rest of Boost, by defining BOOST_REGEX_STANDALONE or automatically on any C++17 compiler where <boost/version.hpp> isn't found.",
+  "how_it_is_fast": "Same backtracking-NFA design as std::regex: basic_regex_creator compiles the pattern into a graph of states, then perl_matcher walks it. The implementation is heavily hand-tuned around that: a non-recursive matcher (perl_matcher_non_recursive.hpp) that uses an explicit stack instead of C++ call recursion, a pooled memory-block allocator (mem_block_cache.hpp) that reuses backtracking-stack memory across matches instead of hitting the heap, precompiled character-class bitmaps, and a leading-literal fast-skip so scanning for a required prefix doesn't reevaluate the whole state machine at every position. There is no SIMD and no asymptotic change over backtracking matching -- the win is fewer allocations and tighter C++, and it can still hit catastrophic backtracking on adversarial patterns just like std::regex.",
+  "when_to_use": [
+    "Need std::regex-shaped semantics (ECMAScript/Perl/POSIX syntax, smatch-like results) but higher matching throughput on typical (non-adversarial) patterns.",
+    "Pattern set is compiled once and reused across many inputs, so per-call matching cost dominates over one-time compilation.",
+    "Need the POSIX regcomp/regexec API, MFC string support, or ICU/Unicode string iteration that std::regex does not provide.",
+    "Already on or willing to add Boost (or the standalone header mode) and accept BSL-1.0, for a well-documented ~9.8x total / up to ~47x per-pattern win over libstdc++ std::regex on text-scanning workloads like log or URI/email extraction.",
+    "Building against Boost 1.77+ where the library is header-only, so no extra link step is needed for the core C++ API."
+  ],
+  "when_not_to_use": [
+    "Patterns come from untrusted input (user-supplied regex or unbounded nested quantifiers/alternation): this is the same backtracking/ReDoS risk class as std::regex, not a safer engine (see GH issue #178, 'Subroutine call backtracking bug').",
+    "Need a hard guarantee of linear-time matching regardless of pattern shape -- pick a DFA/Thompson-NFA engine like RE2 instead of any backtracking engine, including this one.",
+    "Targeting Boost older than 1.77 (before Boost.Regex 6.0.0, 2021) where the library still requires linking a compiled boost_regex lib, as the mariomka benchmark used (Boost 1.65.1, built with -lboost_regex).",
+    "Want a truly zero-dependency drop-in: even in standalone mode you still add a distinct type hierarchy (boost::regex != std::regex); non-standalone mode also pulls in Boost.Config/Assert/Predef/ThrowException.",
+    "Small, one-off, latency-sensitive regex use where std::regex's ubiquity and zero extra header outweigh a ~2x-ish smaller, but still real, integration cost."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none in standalone mode (BOOST_REGEX_STANDALONE, or auto-detected under C++17 with __has_include when <boost/version.hpp> is absent); otherwise Boost.Config, Boost.Assert, Boost.Predef, Boost.ThrowException. Optional ICU for Unicode string integration. The POSIX C API (src/posix_api.cpp, src/wide_posix_api.cpp) is still compiled/linked separately if used.",
+    "min_toolchain": "C++11 minimum; C++03 support was formally deprecated in 6.0.0/Boost 1.77 (doc/history.qbk). C++17 is only needed for automatic standalone-mode detection via __has_include, not as a hard floor.",
+    "platforms": "any (portable C++; no SIMD/ISA requirement found in headers or docs)",
+    "thread_safety": "Documented (doc/html/.../thread_safety.html): basic_regex/regex/wregex are safe to compile once and share read-only across threads; regex_match/regex_search/regex_replace and the POSIX functions are reentrant; match_results can be copied between threads but needs a separate instance per thread if used concurrently; calling set_locale from one thread while another thread is matching is unsafe; requires only one thread running before main() starts.",
+    "drop_in_for_baseline": "partial -- explain: API shape (regex_match/regex_search/regex_replace, smatch/cmatch) mirrors std::regex almost 1:1, but boost::regex is a distinct type from std::regex, so switching means editing type names and includes, not just relinking."
+  },
+  "gotchas": [
+    "Header-only status is recent (Boost.Regex 6.0.0 / Boost 1.77, 2021, confirmed via CMakeLists.txt's `add_library(boost_regex INTERFACE)`); the benchmark numbers in this record used Boost 1.65.1, compiled with `-lboost_regex`, from before that change.",
+    "Same backtracking design as std::regex: pathological patterns can still blow up, with no linear-time guarantee (GH #178).",
+    "Standalone mode drops Boost.Config's compiler-defect workarounds; if you disable exceptions in standalone mode you must define BOOST_NO_EXCEPTIONS yourself.",
+    "Changing the global C locale from one thread while another thread is mid-match is explicitly called out as unsafe in the docs."
+  ],
+  "pick_this_over_siblings_when": "Pick Boost.Regex over RE/flex or REAL when you want an API and feature set (POSIX/ICU/MFC support, Perl/ECMAScript syntax) almost identical to std::regex for an easy migration, rather than adopting a scanner-generator workflow (RE/flex) or a from-scratch header-only engine (REAL/real-regex) for their larger reported multipliers. Unformat is not comparable here -- it only handles fixed-shape format strings at compile time, not general regex.",
+  "verified_claims_summary": "On mariomka/regex-benchmark (g++ 7.5.0, -std=c++11 -O3, Boost 1.65.1 linked via -lboost_regex, Docker ubuntu:bionic on a 2019 MacBook Pro i9), Boost.Regex compiled and matched 3 patterns (Email/URI/IPv4) over the Learn-X-in-Y-minutes corpus in 104ms total versus 1023ms for libstdc++'s std::regex (~9.8x, including compilation time). The independent rust-leipzig regex-performance suite (18 patterns over a ~16MB text file, AMD Threadripper 3960X, compiler unstated) confirmed the same direction on 13 of 14 shared patterns, from ~1.0x up to ~47x, losing on one alternation-heavy pattern ('([A-Za-z]awyer|[A-Za-z]inn)\\s').",
+  "status_note": "Actively maintained (last commit 2026-05-22 on the default branch) and BSL-1.0 licensed, so freely copyable/vendorable; GitHub reports a null license for the repo, but the header comments carry the Boost Software License 1.0 text directly.",
+  "sources_read": [
+    "https://github.com/boostorg/regex",
+    "https://github.com/boostorg/regex/blob/develop/README.md",
+    "https://github.com/boostorg/regex/blob/develop/include/boost/regex/config.hpp",
+    "https://github.com/boostorg/regex/blob/develop/doc/html/boost_regex/background/thread_safety.html",
+    "https://github.com/boostorg/regex/blob/develop/doc/html/boost_regex/configuration/standalone.html",
+    "https://github.com/boostorg/regex/blob/develop/CMakeLists.txt",
+    "https://github.com/boostorg/regex/blob/develop/doc/history.qbk",
+    "https://github.com/boostorg/regex/blob/develop/doc/standards.qbk",
+    "https://github.com/boostorg/regex/blob/develop/doc/performance.qbk",
+    "https://github.com/boostorg/regex/issues",
+    "https://github.com/mariomka/regex-benchmark/blob/master/cpp/README.md"
+  ],
+  "confidence": 0.82
+}

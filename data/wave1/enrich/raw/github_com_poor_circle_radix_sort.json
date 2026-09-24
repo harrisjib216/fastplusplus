@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/poor-circle/radix_sort",
+  "one_liner": "Header-only C++20 LSD byte-radix sort for ints/floats/pointers/pairs/structs; drop-in call syntax beats std::sort.",
+  "what_it_does": "Sorts arrays of fixed-width keys (integers, floats, pointers, std::pair, small structs) faster than a comparison sort. The API mirrors std::sort's call shape: free-function templates `radix_sort(first, second, buffer=nullptr)` and a `radix_sort(first, second, std::execution::par, buffer=nullptr)` overload, plus an optional user-supplied scratch buffer parameter std::sort doesn't have. Key support is opened up through a `radix_trait<T>` specialization point (built-in traits cover unsigned/signed integers, floating point, pointers, and std::pair; user structs add their own specialization exposing `radix_size` and a per-byte `get<i>`).",
+  "how_it_is_fast": "LSD (least-significant-byte-first) radix sort: one 256-bucket counting-sort pass per byte of the key (histogram, prefix-sum, scatter), so it never does a per-element comparison. The count and scatter loops are manually unrolled 4-wide with Duff's device, and each pass ping-pongs the data between the input and an auxiliary buffer rather than sorting in place. The `std::execution::par` overload shards the range across std::async tasks that count locally, merge per-thread histograms, then scatter concurrently for each byte pass, layering thread parallelism on top of the linear-time algorithm.",
+  "when_to_use": [
+    "Sorting large (1e6+) arrays of int32/uint32/float/pointer keys, where the key type already has or can get a radix_trait",
+    "Composite keys such as std::pair<K,V> or small structs, where a byte-radix trait can be written for the sort key",
+    "Throughput-bound batch sorting, sequential or with std::execution::par, on x86 with MSVC-class compilers",
+    "Need for stable, comparator-free sorting of fixed-width keys rather than an arbitrary Compare predicate",
+    "Willing to vendor one C++20 header (GPL-3.0 permitting) into the project"
+  ],
+  "when_not_to_use": [
+    "Need arbitrary/custom comparators (sort by a runtime-selected field or lambda) — radix_sort needs a compile-time radix_trait, not a Compare object",
+    "Wide keys (64-bit ints, pair<uint64,uint64>): sequential speedup drops to ~2.9-5.2x, and radix_sort(par) can be slightly slower than std::sort(par) (measured 24608ms vs 23532ms on 1e9 pair<uint64,uint64>)",
+    "Memory-constrained workloads: needs an O(n) auxiliary buffer the size of the input unless the caller supplies one",
+    "Non-MSVC toolchains: the author only benchmarked MSVC STL on Windows, not libstdc++/libc++",
+    "Projects needing active upstream support: single author, no commits since Jan 2022, one open usage question unanswered"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (standard library only: <vector>, <array>, <execution>, <future>, <memory>, <cstring>, <limits>)",
+    "min_toolchain": "C++20 (uses std::unsigned_integral/signed_integral/floating_point concepts and requires-clauses)",
+    "platforms": "any (portable C++20, no SIMD or platform intrinsics); author only benchmarked Windows/MSVC x86-64",
+    "thread_safety": "not documented; the std::execution::par overload spawns its own std::async tasks per byte pass rather than using a caller-supplied thread pool or a standard execution-policy backend",
+    "drop_in_for_baseline": "partial — explain: same (first, second[, policy]) call syntax as std::sort, but restricted to types with a radix_trait specialization and adds an extra optional buffer parameter"
+  },
+  "gotchas": [
+    "std::execution::par is accepted only as a dispatch tag; it always drives its own std::async tasks internally rather than routing through a standard execution-policy engine",
+    "demo/demo.cpp's custom-struct example does not compile as written (its radix_trait<mystruct> and my_trait reference undefined p1/p2 identifiers) — follow the README's mystruct pattern instead",
+    "Signed integers and floats flip the sign/exponent bit (XOR 0x80) inside the built-in radix_trait so byte order matches numeric order; a hand-written trait for a new type must replicate this or sort order breaks silently",
+    "Without a caller-supplied buffer, every call allocates a full extra copy of the input (sizeof(value_type) * n bytes)"
+  ],
+  "pick_this_over_siblings_when": "Unlike the comparison-based siblings (BlockQuicksort, IPS4o, LearnedSort, x86-simd-sort) or the stable-sort replacements (fluxsort, quadsort), radix_sort is the only non-comparison LSD byte-radix sort in this set; pick it when the key is an integer, float, pointer, or a pair/struct you can describe with a byte-radix trait and you want the largest win on 32-bit keys, and prefer a comparison-sort sibling for 64-bit/wide keys or arbitrary comparators where radix_sort's edge shrinks or vanishes.",
+  "verified_claims_summary": "First-party benchmark (author's benchmark/benchmark.cpp, MSVC 2022 release build, Intel i9-9900K @4.7GHz / DDR4-3000): sequential radix_sort sorted 1e9 int32 elements in 6402ms vs std::sort's 91407ms (~14.3x) and std::stable_sort's 82896ms (~12.9x); the margin narrows to ~5.2x on uint64 and ~2.9x on pair<uint64,uint64>, and measured against std::sort(par) instead of sequential std::sort the parallel win is only ~4.8x on int32, with radix_sort(par) slightly slower than std::sort(par) on pair<uint64,uint64> (24608ms vs 23532ms).",
+  "status_note": "Abandoned since its last commit on 2022-01-31 (single author, one unanswered open issue); GPL-3.0-licensed and a single header, so still copyable, but expect no fixes or support.",
+  "sources_read": [
+    "https://github.com/poor-circle/radix_sort",
+    "https://github.com/poor-circle/radix_sort/blob/master/README.md",
+    "https://github.com/poor-circle/radix_sort/blob/master/include/radix_sort.hpp",
+    "https://github.com/poor-circle/radix_sort/blob/master/benchmark/benchmark_output.txt",
+    "https://github.com/poor-circle/radix_sort/blob/master/demo/demo.cpp",
+    "https://github.com/poor-circle/radix_sort/issues"
+  ],
+  "confidence": 0.6
+}

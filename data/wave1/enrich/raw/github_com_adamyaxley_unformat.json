@@ -1,0 +1,47 @@
+{
+  "id": "https://github.com/adamyaxley/Unformat",
+  "one_liner": "Single-header scanf-style '{}' field extractor for fixed-shape strings; beats std::regex when regex is overkill.",
+  "what_it_does": "Unformat extracts typed values (ints, floats, char, and a non-owning ay::string_view) from a string by matching literal text around '{}' placeholders in a format string, similar to a type-safe sscanf rather than a regex engine. You call ay::unformat(input, format, out_args...); the format can be a runtime C-string or, for extra speed, a constexpr ay::make_format(...) parsed at compile time. It is not a drop-in for std::regex: no pattern syntax, no match object, and output values are written through reference out-parameters.",
+  "how_it_is_fast": "It avoids std::regex entirely: no NFA construction, no std::string allocations, no capture-group bookkeeping. The constexpr make_format path precomputes each placeholder's byte offset and delimiter character at compile time, so unformat_internal just walks pointers with inlined, per-type combined scan+parse loops (fixed-point digit accumulation instead of std::stoi/std::stof). Numeric parsing accumulates an integer mantissa and applies one final multiply against precomputed powers-of-10 tables, with a noinline cold path reserved for scientific notation or >18-digit literals.",
+  "when_to_use": [
+    "Extracting a handful of ints/floats/strings from a fixed, known-shape line (logs, telemetry, simple protocols) where std::regex would only be used for its capture groups, not real pattern matching.",
+    "Hot loops calling the same format thousands of times per second, where std::regex's per-construction NFA compile is the bottleneck (the benchmarked 3269 ns/call includes that compile, not just matching).",
+    "The format string can be pinned as a compile-time literal, so ay::make_format runs at compile time (11.5 ns vs 32.6 ns for the runtime-parsed path, per the repo's own benchmark).",
+    "Header-only vendoring is acceptable: copy unformat.h into a codebase with no other dependencies and no build-system integration.",
+    "Input is trusted and guaranteed to match the format exactly (internal data, not raw user/network input)."
+  ],
+  "when_not_to_use": [
+    "You need actual regex features -- wildcards, character classes, alternation, quantifiers, anchors; Unformat only matches literal text between '{}' tokens.",
+    "Input may be malformed, truncated, or adversarial: the string_view/char scan path (unformat_arg_scan<ay::string_view> in unformat.h) has no check against the input's terminating null while hunting for a delimiter, so a non-matching string can read past the buffer end.",
+    "You need match/fail feedback: there is no success return, exception, or optional -- bad input silently yields wrong values (a 'does this match' check was requested in issue #3 back in 2017 and is still open).",
+    "More than 16 '{}' placeholders in one format string (hard-coded format::MAX_COUNT = 16).",
+    "Your real baseline is a precompiled std::regex rather than one rebuilt every call -- the ~100x-284x gap narrows a lot once compilation is amortized (see verified_claims_summary)."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (only <cstddef> from the standard library)",
+    "min_toolchain": "C++14 in practice for the constexpr make_format path -- make_format_non_template declares a local variable, uses a loop, and a throw, which need C++14 relaxed-constexpr rules. CMakeLists.txt sets CMAKE_CXX_STANDARD 11 for the test/benchmark build, which predates that; the plain runtime unformat() call compiles fine under C++11.",
+    "platforms": "any -- portable C++, no SIMD/intrinsics; MSVC/GCC/Clang are detected via macros only to pick inline/noinline/restrict hints, with a generic fallback for other compilers",
+    "thread_safety": "not documented; the implementation has no shared/global mutable state beyond read-only static pow10 lookup tables, so concurrent calls writing to disjoint output variables look safe by inspection"
+  },
+  "gotchas": [
+    "The string_view/char scan path has no null-terminator check while hunting for a placeholder's end delimiter -- malformed input that never contains that delimiter can read out of bounds (verified in unformat.h's unformat_arg_scan<ay::string_view> specialization).",
+    "Exceeding 16 '{}' placeholders throws a raw string literal (\"Max number of {} has been exceeded.\") from the format constructor -- a compile error in a constexpr context, an untyped throw at runtime.",
+    "ay::string_view is a bare {const char* data; size_t size;}, non-owning into the original input buffer -- it dangles if the source string is freed, reallocated, or goes out of scope.",
+    "CMakeLists.txt declares C++11 but constexpr make_format needs C++14 relaxed-constexpr to actually compile as constexpr; verify your compiler's effective standard before relying on the compile-time path."
+  ],
+  "pick_this_over_siblings_when": "Pick Unformat over Boost.Regex, RE/flex, or REAL when you're pulling a few typed fields out of a fixed-shape string and don't need any real regex syntax (wildcards, classes, alternation) -- it's a smaller, dependency-free single header, where the siblings are full regex engines (or, for RE/flex, a code-generation tool) sized for genuine pattern-matching workloads.",
+  "verified_claims_summary": "On the repo's own Google Benchmark run (32 x 2420 MHz CPUs; compiler, flags, and OS unstated), Unformat took 32.6 ns per call (11.5 ns with the constexpr make_format path) versus 3269 ns for std::regex parsing the same 4-field string. The std::regex leg constructs (compiles) the regex object inside the timed loop every iteration, so that 3269 ns bundles NFA compilation with the match itself; against a precompiled regex the gap would be far smaller than the ~100x-284x (or advertised '300x') headline suggests.",
+  "status_note": "Actively maintained as of March 2026, with recent commits micro-optimizing numeric parsing and the pow10 tables; public-domain (Unlicense) and small enough (one header) to vendor and maintain yourself even if upstream activity stops.",
+  "sources_read": [
+    "https://github.com/adamyaxley/Unformat",
+    "https://github.com/adamyaxley/Unformat/blob/master/README.md",
+    "https://github.com/adamyaxley/Unformat/blob/master/unformat.h",
+    "https://github.com/adamyaxley/Unformat/blob/master/unformat_benchmark.cpp",
+    "https://github.com/adamyaxley/Unformat/blob/master/unformat_test.cpp",
+    "https://github.com/adamyaxley/Unformat/blob/master/CMakeLists.txt",
+    "https://github.com/adamyaxley/Unformat/issues",
+    "https://github.com/adamyaxley/Unformat/commits/master"
+  ],
+  "confidence": 0.6
+}

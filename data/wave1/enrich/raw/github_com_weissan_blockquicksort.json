@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/weissan/blockquicksort",
+  "one_liner": "In-place Quicksort using block-buffered Hoare partitioning to avoid branch mispredictions; ~88% more elements/s than GCC std::sort on random ints.",
+  "what_it_does": "A research codebase of ~40 Quicksort variants (quicksort.h for main loops, partition.h for partitioners, median.h for pivot selection) accompanying the BlockQuicksort paper (ESA 2016 / ACM JEA 2019). The recommended entry points, e.g. blocked_double_pivot_check_mosqrt::sort(begin, end, less) and an overload taking a std::vector<T>&, mirror std::sort's (begin, end, comparator) signature but live in their own namespace rather than overriding std::sort. It is not a packaged, single-header library — it's the paper's experiment harness.",
+  "how_it_is_fast": "partition.h's hoare_block_partition_* functions compare a BLOCKSIZE=128 chunk of elements against the pivot into small fixed-size index buffers first, then do the swaps in a second, branch-free loop, so the CPU's branch predictor never has to guess the per-element comparison outcome during the swap phase. Pivot selection samples a median of ~sqrt(n) elements (median.h), and the qsort_double_pivot_check main loop (quicksort.h) adds a check for duplicate-heavy partitions adapted from Elmasry/Katajainen/Stenmark's Tuned Quicksort, falling back to insertion sort/std::partial_sort at small sizes like libstdc++'s introsort.",
+  "when_to_use": [
+    "Sorting large (n in the hundreds of millions) arrays of random 32-bit ints where per-element comparison is cheap and branch mispredictions dominate cost — the paper's largest reported gain (~88%) is at n=2^28.",
+    "Multi-field comparators (the paper's 10-dim Vector / 21-field Record benchmarks) where smaller but still positive gains hold for the mo-sqrt(n),dc variant.",
+    "Batch/offline throughput-oriented sorts where an unstable, in-place sort is acceptable and you're willing to hand-integrate a research header into your own call sites.",
+    "As a reference implementation or benchmarking baseline for new sequential sort research — it's already used as the 'closest sequential competitor' in the IPS4o paper.",
+    "Random or otherwise non-sorted input distributions; the paper itself reports std::sort wins on sorted/nearly-sorted input."
+  ],
+  "when_not_to_use": [
+    "Need stability (equal elements keep relative order) — not stable, no stable variant provided.",
+    "Sorted or nearly-sorted input — the input record's own claim notes std::sort wins there.",
+    "Want a true drop-in replacement for std::sort with no call-site changes — this exposes sort() under its own namespace, not an overload of std::sort.",
+    "Production/commercial use needing an actively maintained, permissively-licensed dependency — repo abandoned since Nov 2021 with two issues open and unanswered since 2019, and it's GPL-3.0 (the branch-avoidance technique itself has since been reimplemented under more permissive licenses in pdqsort and PPQSort).",
+    "Want to just include one clean header — mixing more than one *.h++ interface file in the same translation unit causes duplicate-template-definition compile errors (open issue #6, unresolved)."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none external; each *.h++ variant needs matching repo-internal headers (quicksort.h, partition.h, median.h, insertionsort.h, rotations.h) included alongside it",
+    "min_toolchain": "C++11 (repo makefile: g++ -O3 -std=c++11 -march=native; benchmarked with GCC 4.8.4)",
+    "platforms": "x86-64 only benchmarked (-march=native, Intel Core i5-2500K); portable C++11 templates with no explicit SIMD intrinsics observed — the branch-avoidance win depends on the compiler auto-vectorizing/optimizing the small fixed-size block-classification loop, so results are compiler- and arch-dependent",
+    "thread_safety": "not documented — single-threaded algorithm; no shared/global mutable state visible in partition.h or quicksort.h (an unused #include <future> is the only concurrency-related trace found)",
+    "drop_in_for_baseline": "partial — explain: same (begin, end, comparator) iterator signature as std::sort, but exposed as e.g. blocked_double_pivot_check_mosqrt::sort(...) rather than an overload of std::sort, so every call site must be edited; also unstable and in-place unlike std::stable_sort"
+  },
+  "gotchas": [
+    "Including more than one *.h++ interface header in the same translation unit triggers 'redefinition of template' errors from median.h (issue #6, open since 2019).",
+    "Release-flag builds compile with -DNDEBUG, so the assert() sanity checks scattered through partition.h are stripped in the benchmarked configuration.",
+    "The README recommends only blocked_double_pivot_check_mosqrt.h++ and blocked_simple.h++ out of ~40 header variants; a user asked in issue #5 (2019, still open) for clearer guidance on which variant to actually use.",
+    "BLOCKSIZE (128) and pivot-sample-size constants are compile-time #defines tuned for the paper's int/Vector/Record types on one CPU; other key types or hardware may need retuning."
+  ],
+  "pick_this_over_siblings_when": "Pick this over Boost.Sort/IPS4o/LearnedSort/etc. only when you specifically want the original peer-reviewed (ESA 2016 / JEA 2019) branch-avoidance partitioner — e.g. reproducing or benchmarking against it as IPS4o did — since the technique itself is now available in actively maintained, permissively-licensed form in pdqsort and PPQSort; for production sequential sorting prefer fluxsort or a pdqsort-family library instead of this abandoned GPL-3.0 repo.",
+  "verified_claims_summary": "On GCC 4.8.4 (-O3 -march=native) on an Intel Core i5-2500K (4 cores, Ubuntu 14.04.4), the optimized BlockQuicksort variant needs ~45 ns/element vs ~85 ns/element for the repo's bundled copy of GCC 4.7.2's std::sort at n=2^28 on random 32-bit ints (~88% more elements sorted per second); smaller but still positive gains hold on 10-dim Vector and 21-field Record comparators for the mo-sqrt(n), duplicate-check variant, and std::sort wins on sorted/nearly-sorted input.",
+  "status_note": "Abandoned since its last commit on 2021-11-29, with two open issues unanswered since 2019, but classified 'copyable' — the source is small enough to vendor directly if your project's license tolerates GPL-3.0.",
+  "sources_read": [
+    "https://github.com/weissan/BlockQuicksort",
+    "https://github.com/weissan/BlockQuicksort/blob/master/README.md",
+    "https://github.com/weissan/BlockQuicksort/blob/master/quicksort.h",
+    "https://github.com/weissan/BlockQuicksort/blob/master/partition.h",
+    "https://github.com/weissan/BlockQuicksort/blob/master/blocked_double_pivot_check_mosqrt.h++",
+    "https://github.com/weissan/BlockQuicksort/blob/master/makefile",
+    "https://github.com/weissan/BlockQuicksort/issues/5",
+    "https://github.com/weissan/BlockQuicksort/issues/6",
+    "https://github.com/weissan/BlockQuicksort/pulls?q=is%3Apr"
+  ],
+  "confidence": 0.83
+}

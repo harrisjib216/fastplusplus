@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/sslotin/amh-code",
+  "one_liner": "SIMD (AVX2) static B+-tree array layout beating std::lower_bound/std::set on batched int32 lookups.",
+  "what_it_does": "It is a reference implementation (not a packaged library) of a static, cache-line-blocked B-ary tree layout for predecessor/lower_bound queries over a sorted array of 32-bit integers. You call prepare() once on a sorted array to build the blocked layout, then query with lower_bound(x); there is no insert/erase, so any key-set change means rebuilding from scratch. The tree size N is a compile-time constant baked into constexpr offset/height math, not a runtime parameter, so this is not a drop-in std::set/std::map replacement but a technique to adapt into your own build.",
+  "how_it_is_fast": "The sorted array is rearranged into a B-ary tree (16 keys per node/cache line, branching factor 17) stored as one flat array with compile-time layer offsets instead of pointers (the 'S+ tree' = separate internal/leaf layers, vs. the pointer/Eytzinger-numbered 'S-tree'). Each node comparison loads 16 keys into two AVX2 256-bit registers, does _mm256_cmpgt_epi32 SIMD compares, permutes/packs the masks, and extracts the branch index with tzcnt, replacing several scalar branchy comparisons per level with one branchless SIMD step; large trees also use aligned_alloc + madvise(MADV_HUGEPAGE) to cut TLB misses. The headline numbers are reciprocal-throughput over batches of independent queries, which lets the CPU overlap several independent tree descents (~3x ILP per the article) rather than shrinking single-query latency much.",
+  "when_to_use": [
+    "Read-mostly/static sorted 32-bit-integer key sets that are bulk-built once (or rarely rebuilt), not mutated incrementally",
+    "Workloads that issue many independent lookups that can be batched/pipelined (joins, index probes, columnar scans) so the reciprocal-throughput gains actually materialize",
+    "x86-64 targets with AVX2 where you can build with -march=native and enable transparent huge pages for large (>1e6-element) arrays",
+    "Arrays that fit or mostly fit in cache, where the article's ~15x-over-std::lower_bound number applies (~8x still holds up to 2^25 elements)",
+    "You're willing to vendor and adapt a single .cc file into your own build rather than link a maintained library"
+  ],
+  "when_not_to_use": [
+    "You need insert/delete or any online mutation of the key set -- no dynamic update path is implemented, only a full prepare() rebuild",
+    "Latency-sensitive single-query paths with data-dependent lookups (pointer chasing between queries) -- the author states real per-query latency gains are much smaller than the throughput numbers",
+    "Non-x86 or AVX2-unavailable targets -- the article says porting to AVX-512 or Arm NEON needs 'non-trivial changes', and none is provided in this repo",
+    "You need arbitrary key/value types, comparators, or a runtime-chosen array size -- N is a compile-time constant baked into the offset/height calculations",
+    "Anything beyond experimentation/benchmarking in production -- no LICENSE file, abandoned since 2022, and the author frames this as teaching/reference code"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none beyond platform headers (x86intrin.h, sys/mman.h)",
+    "min_toolchain": "C++17; article/Makefile use Clang 10 (clang++ -std=c++17 -O3 -march=native); GCC compiles but the author notes it performs slightly worse",
+    "platforms": "x86-64 with AVX2 required; Linux assumed for the madvise/hugepage path, a Windows path is stubbed out in comments (memoryapi.h) but not implemented",
+    "thread_safety": "not documented; the implementation uses process-global state (a global btree array/pointer), so multiple independent trees or concurrent prepare()/query calls in one process are not safe without rewriting it",
+    "drop_in_for_baseline": "partial -- explain: lower_bound()-style query semantics match std::lower_bound, but there is no container type, no insert/erase, and the array size is a compile-time constant, so it cannot replace std::set/std::map as a mutable, runtime-sized container"
+  },
+  "gotchas": [
+    "Array size N is a preprocessor/constexpr constant (binsearch.hh defaults to 1<<20), so each key-set size effectively needs its own compiled variant rather than being a runtime parameter",
+    "Requires AVX2 codegen (-march=native or explicit target attributes); there is no scalar fallback path in these files",
+    "Large-array speedups depend on aligned_alloc + madvise(MADV_HUGEPAGE) actually getting huge pages from the OS; without that configured, expect smaller gains than reported",
+    "Headline speedups are reciprocal-throughput over batches of independent queries -- single dependent-query ('real') latency shows a much smaller win, per the author's own caveat in the article"
+  ],
+  "pick_this_over_siblings_when": "Pick this over tlx::btree or boost::container::flat_set/fast-containers when your key set is effectively static (bulk-loaded, then read-heavy) and lookups can be batched for throughput; those siblings are actual libraries supporting online insert/erase/find, whereas amh-code is an unpackaged technique reference you'd have to adapt, re-tune, and maintain yourself.",
+  "verified_claims_summary": "Reciprocal-throughput microbenchmarks on an AMD Zen 2 CPU with Clang 10 (-O3 -march=native) show the S+ tree up to ~15x faster than std::lower_bound on cache-resident sorted int32 arrays (~8x for arrays >1e6, up to 2^25 elements), up to ~30x faster than std::multiset::lower_bound, and (pointer variant) ~15x faster than Abseil's absl::btree on large arrays; the author explicitly notes real single-query latency gains are much smaller than these throughput figures.",
+  "status_note": "Abandoned reference code (last commit 2022-10-06, no LICENSE file) published as teaching/benchmark material for the Algorithmica HPC book, not a maintained library -- treat it as a technique to study and port, not a dependency to pull in.",
+  "sources_read": [
+    "https://github.com/sslotin/amh-code",
+    "https://github.com/sslotin/amh-code/blob/main/README.md",
+    "https://github.com/sslotin/amh-code/blob/main/binsearch/Makefile",
+    "https://github.com/sslotin/amh-code/blob/main/binsearch/bplus.cc",
+    "https://github.com/sslotin/amh-code/blob/main/binsearch/bplus-pointers.cc",
+    "https://github.com/sslotin/amh-code/blob/main/binsearch/binsearch.hh",
+    "https://github.com/sslotin/amh-code/blob/main/binsearch/std.cc",
+    "https://github.com/sslotin/amh-code/blob/main/binsearch/set.cc",
+    "https://github.com/sslotin/amh-code/blob/main/binsearch/eytzinger.cc",
+    "https://github.com/sslotin/amh-code/blob/main/binsearch/standalone.cc",
+    "https://en.algorithmica.org/hpc/data-structures/s-tree/"
+  ],
+  "confidence": 0.75
+}

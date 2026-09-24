@@ -1,0 +1,45 @@
+{
+  "id": "https://github.com/Tessil/hopscotch-map",
+  "one_liner": "Header-only C++17 hopscotch-hashing hash map/set, faster than std::unordered_map with dense_hash_map-like speed.",
+  "what_it_does": "tsl::hopscotch_map/hopscotch_set are open-addressing hash containers using hopscotch hashing to bound probe-sequence length, meant to replace std::unordered_map/set where lookup, insert, and iteration speed matter. The API mirrors std::unordered_map/set closely, including heterogeneous lookups and an optional precalculated-hash parameter to find(), so most call sites port with a type swap. It is not a strict drop-in: iterator/reference invalidation rules differ, iterators dereference to a const value (mutate via .value()), and move-only value types must have a nothrow move constructor. bhopscotch_map/set variants add O(log n) worst-case lookups/deletions for LessThanComparable keys, trading speed for DoS resistance.",
+  "how_it_is_fast": "Hopscotch hashing keeps every key within a fixed-size neighborhood (bitmap) of its ideal bucket, so a lookup only scans a small, cache-local run of buckets instead of following a chain; neighborhoods are rearranged on insert to preserve this bound. Elements are stored contiguously via open addressing, avoiding the per-node heap allocation std::unordered_map's separate chaining requires. The default power-of-two growth policy replaces modulo with a bitmask; a prime growth policy (_pg variants) is offered when the hash has weak low-bit entropy, at some speed cost. Optional hash caching (StoreHash) and passing a precalculated hash into find() avoid recomputing hashes on rehash/lookup.",
+  "when_to_use": [
+    "Read-heavy workloads (successful/unsuccessful lookup, iteration) with int64 or short-to-medium string keys, in the low-hundred-thousands to low-millions element range (benchmarked at 200K-3M).",
+    "You want a near-drop-in replacement for std::unordered_map without adopting its chained-bucket allocation overhead, and can require C++17 and header-only integration.",
+    "You want dense_hash_map-like throughput but without reserving sentinel/deleted-key values or accepting dense_hash_map's more restrictive API.",
+    "You control the hash function well enough to avoid low-bit collisions, or are willing to switch to the _pg (prime growth) variant if you can't.",
+    "You need optional worst-case DoS resistance (bhopscotch_map/set) for keys that are LessThanComparable, at a throughput cost."
+  ],
+  "when_not_to_use": [
+    "Identity or otherwise weak hash functions on adversarial/clustered-bit-pattern keys with the default power-of-two policy: the independent Ankerl 2022 suite reports hopscotch timing out on random insert/erase with identity std::hash.",
+    "Code that depends on std::unordered_map's iterator/reference stability across insert: hopscotch invalidates all iterators and references on any insert (only erase preserves them).",
+    "Move-only value types whose move constructor isn't noexcept: not supported, since rehash needs the nothrow guarantee under open addressing.",
+    "Code relying on bucket-introspection methods (bucket(), bucket_size(), etc.): not implemented.",
+    "Inserting implicitly-converted move-only pairs (e.g. a derived-class unique_ptr into a base-class-keyed map) via the generic insert(P&&) overload: open bug #66, a regression after PR #63, still open as of 2026-09-23."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none for the library; Boost Test is needed only to build the test suite",
+    "min_toolchain": "C++17-compliant compiler",
+    "platforms": "architecture-agnostic; the headers read include only standard library headers, no SIMD intrinsics or platform-specific code observed",
+    "thread_safety": "same as std::unordered_map/set per README: safe for multiple concurrent readers with no concurrent writer; no internal synchronization",
+    "drop_in_for_baseline": "partial — explain: same method names and semantics as std::unordered_map/set including heterogeneous lookup, but insert/emplace invalidate all iterators and references (erase does not), iterators yield a const value (mutate via .value()), move-only values need a nothrow move constructor, and bucket-introspection methods are missing"
+  },
+  "gotchas": [
+    "Insert/emplace invalidate all iterators and references, unlike std::unordered_map's node-based stability; only erase is safe.",
+    "it->second is not assignable; iterators dereference to const std::pair, so mutate via it.value() = ...",
+    "Default growth policy is power-of-two; a hash with poor low-bit entropy causes heavy collisions — check overflow_size() and switch to the _pg (prime) variant if it's nonzero.",
+    "Open issue #66: insert(P&&) is broken for implicitly-convertible move-only pairs (e.g. derived-to-base unique_ptr), a regression introduced after PR #63 and unresolved at time of writing."
+  ],
+  "pick_this_over_siblings_when": "Pick hopscotch_map over robin_map/ska/emhash when you want the bhopscotch_map DoS-resistant option or heterogeneous lookups with dense_hash_map-like throughput and lower memory than dense_hash_map; robin-hood-style siblings (robin_map, ska::flat_hash_map, emhash) tend to edge it out on raw insert throughput in independent benchmarks.",
+  "verified_claims_summary": "Against std::unordered_map (libstdc++, Clang 5.0, -O3 -march=native -DNDEBUG, Intel i5-5200u/8GB RAM/Linux 4.11), the author's benchmark (200K-3M entries, int64 identity-hash and 15/50-char string keys) found hopscotch_map faster in every measured case: 1.08-2.67x on insert, 1.51-5.47x on successful/unsuccessful lookup, 1.55-10.1x on erase, and 4.6-13.2x on iteration.",
+  "status_note": "Actively maintained (last commit 2025-11-02) under MIT; small and header-only enough to vendor, but requires C++17 and currently has one open correctness bug (#66) in a move-only insert overload.",
+  "sources_read": [
+    "https://github.com/Tessil/hopscotch-map",
+    "https://github.com/Tessil/hopscotch-map/blob/master/README.md",
+    "https://github.com/Tessil/hopscotch-map/blob/master/include/tsl/hopscotch_hash.h",
+    "https://github.com/Tessil/hopscotch-map/issues/66",
+    "https://github.com/Tessil/hopscotch-map/issues/55"
+  ],
+  "confidence": 0.72
+}
