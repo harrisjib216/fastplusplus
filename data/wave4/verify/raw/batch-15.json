@@ -1,0 +1,77 @@
+[
+  {
+    "id": "paper:mison-speculative-structural-index-json-parser",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "B",
+    "tier_reason": "Peer-reviewed PVLDB 10(10) 2017 paper whose Sec 6.1 benchmarks Mison against RapidJSON (plus Jackson and Gson). It reports Mison 5.5-9.1x faster than the best competitor on Twitter Q1-Q8 (Fig. 8) and states the CPU (Xeon E5-1620 v3). No code, compiler or flags are published, so it cannot be A. Under this verifier's rubric that is B, the same tier the wave-3 no-code ASPLOS paper StreamTok received.",
+    "corrections": {
+      "claimed_speedup": "Paper Sec 6.1.1 / Fig. 8 (Twitter, Q1-Q8, single thread, throughput in GB/s): 'Mison is between 5.5 and 9.1 times faster than the best competitor in this experiment. The best case for Mison (8~9X) is for simple queries on mandatory fields (Q1-Q4)'. RapidJSON is one of the three competitors, so Mison is at least 5.5x faster than RapidJSON on Q1-Q8 (derived from page data; in the Fig. 8 bars Jackson, not RapidJSON, is the best competitor). Sec 6.1.2 (Fig. 9, GitHub dataset, all 31 fields, no projection push-down): Mison 'still outperforms the best existing JSON parser (Jackson) by a factor of 2'. Sec 6.1.4 / Fig. 11 (Twitter, first+last field query): basic (non-speculative) Mison beats Jackson by 3.6x, speculative Mison by 10.2x.",
+      "hardware": "3.5GHz Intel Xeon E5-1620 v3 (the paper calls it 'Broadwell-EP'), 16GB DDR3, 64-bit Windows 10; single-threaded runs with the JSON data preloaded into memory (I/O excluded)",
+      "compiler_and_flags": "Mison is a C++ static library; the first structural-index step uses 256-bit AVX2 SIMD and the bit-parallel steps use 64-bit instructions. The paper does not state the compiler, its version, or the flags for Mison or RapidJSON, nor the JVM version used for Jackson and Gson.",
+      "workload": "Single-threaded field-projection queries over real-world JSON loaded into memory: Twitter Q1-Q8 (records have 25-30 top-level fields and a nested user object of 37-38 fields), Yelp business records (16 top-level fields), and GitHub user records (31 fixed fields). The paper compares parsing throughput (GB/s) of Mison against Gson, Jackson and RapidJSON, each using its streaming-mode API. It also runs TPC-H queries through Spark with Mison vs Jackson.",
+      "caveats": "No official Mison source was found: the MSR publication page and the paper link no code or artifact. Only unofficial reimplementations exist, none benchmarked against the paper: pikkr/pikkr (Rust, 641 stars, MIT), ubnt-intrepid/misosoup (Rust, 9 stars), leocassarani/mison (Rust, 10 stars, no license), Anghagaed/MISON (21 stars, no license) and indiependente/gomison (Go, 0 stars). The compiler and flags are unstated, and in Fig. 8 RapidJSON (SAX/streaming API on Windows) is slower than Java's Jackson, so the C++ comparison point may not be well tuned. The paper calls the E5-1620 v3 'Broadwell-EP', but v3 Xeon E5 parts are Haswell-EP (a 2014-era CPU). The speedups rely on projection/filter push-down; when all fields are parsed the gain drops to about 2x over Jackson."
+    },
+    "notes": "I raised the tier from C to B. The search prompt (faster-than-std-agent-prompt.md:97) says no-code papers go in as C, but this verifier rubric makes a peer-reviewed paper B, and the wave-3 StreamTok precedent (no code) was B. If the orchestrator wants the no-code cap to win, set C. All quoted numbers (5.5-9.1x, 8-9x, 2x, 3.6x, 10.2x) appear verbatim in the paper. The only error was the figure reference for the 2x claim: it is Sec 6.1.2 / Fig. 9, not Fig. 10.",
+    "urls_opened": [
+      "http://www.vldb.org/pvldb/vol10/p1118-li.pdf",
+      "https://www.microsoft.com/en-us/research/publication/mison-fast-json-parser-data-analytics/",
+      "https://github.com/ubnt-intrepid/misosoup",
+      "https://github.com/indiependente/gomison",
+      "https://github.com/pikkr/pikkr",
+      "https://github.com/leocassarani/mison",
+      "https://github.com/Anghagaed/MISON"
+    ]
+  },
+  {
+    "id": "https://github.com/ijl/orjson",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "First-party README tables compare orjson with CPython's stdlib json, and every latency and ratio in the record matches them. The benchmark code is public (script/pybench runs bench/benchmark_dumps.py and benchmark_loads.py under pytest-benchmark), and Python 3.11.10 plus the exact PyPI wheel are stated. It is not A because no CPU model is given (only 'x86-64-v4') and the Rust toolchain that built the wheel is not stated.",
+    "corrections": {
+      "license": "MPL-2.0 AND (Apache-2.0 OR MIT)",
+      "last_commit": "2026-08-14",
+      "compiler_and_flags": "Measured with the prebuilt PyPI wheel orjson-3.10.11-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl under CPython 3.11.10. The Rust toolchain and flags used to build that wheel are not stated. The README's recommended build is `maturin build --release --strip`, which today needs Rust >= 1.95, and the README notes that nightly Rust gives a significant performance benefit.",
+      "caveats": "The baseline is Python's stdlib json module, not RapidJSON, nlohmann, simdjson or serde_json, so baseline_in_list=false. The numbers are first-party (orjson's own README) and reproducible with the published pybench script, but the CPU is given only as x86-64-v4, with no model. The benchmark used orjson 3.10.11, while the current release is 3.12.0 (2026-08-14). The license is mixed OSI: much of src/ is MPL-2.0 (file-level copyleft) and the rest is Apache-2.0 OR MIT; GitHub reports only Apache-2.0. orjson ships only as a Python module, not a Rust crate."
+    },
+    "notes": "All eight median-latency rows and ratios in claimed_speedup match the README verbatim. The latest commit on the default branch (master) is 2026-08-14. The record's 2026-09-14 is the repo pushed_at date, not a master commit. Stars are 8,234; not archived, not a fork.",
+    "urls_opened": [
+      "https://github.com/ijl/orjson/blob/master/README.md#performance",
+      "https://github.com/ijl/orjson",
+      "https://github.com/ijl/orjson/blob/master/script/pybench",
+      "https://github.com/ijl/orjson/blob/master/bench/benchmark_dumps.py"
+    ]
+  },
+  {
+    "id": "https://github.com/getml/reflect-cpp",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "First-party benchmarks README states in text only that reflect-cpp is 'usually about twice as fast' as RapidJSON and 'about 10 times faster' than nlohmann/json, with no measured values. The public benchmark code (benchmarks/json/{canada,licenses,person}.cpp, Google Benchmark vs nlohmann, RapidJSON, simdjson and yyjson) runs only in CI, whose results sit in job step summaries, and no CPU model is given, so the tier is C.",
+    "corrections": {
+      "workload": "Read-only benchmark (parse JSON into typed C++ structs) on three datasets: canada (float-heavy), licenses (nested, string-heavy) and person (small). It compares reflect-cpp (yyjson backend, one-line rfl::json::read) against hand-written nlohmann/json, RapidJSON, simdjson (skipped on clang) and yyjson code with Google Benchmark (benchmarks/json/*.cpp). Writes are benchmarked only in the separate cross-format suite (benchmarks/all).",
+      "compiler_and_flags": "benchmarks/CMakeLists.txt sets -std=c++20 -Wall -O2 (MSVC: -std:c++20 -O2) and the README builds with -DCMAKE_BUILD_TYPE=Release. The README's 'gcc 11.4 on Ubuntu 22.4' note applies only to the depicted cross-format charts. The JSON-library comparison runs in CI (.github/workflows/linux.yaml 'benchmarks' jobs, gcc 11-14 and clang 16-18), with results written only to GitHub Actions job step summaries.",
+      "hardware": "Not stated on the page; the CI benchmark jobs run on GitHub-hosted ubuntu-24.04 runners (CPU model not stated)",
+      "caveats": "The page has no measured numbers for the RapidJSON and nlohmann comparison, only the text summary ('usually about twice as fast', 'about 10 times faster'). The PNG charts in benchmarks/img compare reflect-cpp's own formats (flexbuf, msgpack, bson, json, cbor, toml, yaml, xml) against each other, not against other JSON libraries. Per-run numbers exist only in GitHub Actions job step summaries, which are not in the job logs. No CPU model is given. The comparison is first-party, and reflect-cpp's JSON speed comes from its embedded yyjson backend; the README says it is slightly slower than simdjson and yyjson."
+    },
+    "notes": "The claimed_speedup quotes are accurate. The record's caveat was wrong that the PNG charts show the RapidJSON and nlohmann results: they are cross-format charts. Metadata checks out: MIT, 1,937 stars, last commit 2026-09-22, not archived, not a fork. rfl.getml.com/benchmarks repeats the same text claims, also without numbers.",
+    "urls_opened": [
+      "https://github.com/getml/reflect-cpp/blob/main/benchmarks/README.md",
+      "https://github.com/getml/reflect-cpp",
+      "https://github.com/getml/reflect-cpp/blob/main/benchmarks/json/canada.cpp",
+      "https://github.com/getml/reflect-cpp/blob/main/benchmarks/CMakeLists.txt",
+      "https://github.com/getml/reflect-cpp/blob/main/.github/workflows/linux.yaml",
+      "https://raw.githubusercontent.com/getml/reflect-cpp/main/benchmarks/img/canada_read.png",
+      "https://raw.githubusercontent.com/getml/reflect-cpp/main/benchmarks/img/licenses_read.png",
+      "https://rfl.getml.com/benchmarks",
+      "https://github.com/getml/reflect-cpp/actions/runs/35785689216"
+    ]
+  }
+]
