@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/automatalab/jsonski",
+  "one_liner": "Streaming JSONPath engine that skips irrelevant JSON with bit-parallel fast-forwarding; ~4.8x faster than simdjson parse+query (ASPLOS'22).",
+  "what_it_does": "Evaluates one simple JSONPath query (child keys, [*], [i], [m:n]) over a JSON document already loaded into memory, in a single pass and without building a DOM or a structural index. The API is small: RecordLoader::loadSingleRecord(path) or loadRecords(path) for newline-delimited records, then QueryProcessor(\"$.a[*].b\").runQuery(record). runQuery returns one std::string that joins the raw JSON text of each match, each followed by ';'. It does not replace a parser: you get no typed values, no DOM, no serialization and no validation.",
+  "how_it_is_fast": "The query becomes a small automaton that drives recursive-descent streaming. When the automaton is in an unmatched state, or the value's type cannot match, the engine jumps over whole objects, arrays or primitives without tokenizing them. The jumps use 'structural intervals': AVX2 compares build 64-bit bitmaps of one metacharacter per 64-byte word, a PCLMULQDQ prefix-XOR masks out bytes inside strings (the simdjson/Mison quote-and-escape technique), and interval bitmaps between successive '{' or '[' are counted with popcnt/lzcnt/ctz to find where the matching '}' or ']' falls. The paper reports that more than 95% of input bytes were fast-forwarded on all 12 queries. Bitmaps are built lazily per word, so no global index is kept.",
+  "when_to_use": [
+    "Pulling a few fields with a simple path (such as $[*].entities.urls[*].url) out of very large single JSON documents, 100 MB to tens of GB, where most of the bytes are irrelevant to the query",
+    "Memory-bound jobs: the paper measured about 1 GB total for a 1 GB input, against 2-3 GB for simdjson, RapidJSON and Pison. It scaled to a 72 GB single record, where RapidJSON and Pison ran out of memory and simdjson hit its 4 GB document limit",
+    "Newline-delimited JSON with records under about 1 MB each, one query per record, parallelized by giving each thread its own QueryProcessor (the paper's 16-thread small-record run scaled 10.3x)",
+    "Trusted, machine-generated, compact JSON (your own logs or data-lake dumps) on x86-64 Linux servers with AVX2",
+    "A research or prototype base when you want the fast-forward primitives (goOverObj, goToAryEnd, etc.) for custom one-pass analytics and are willing to edit the source"
+  ],
+  "when_not_to_use": [
+    "Untrusted or possibly malformed input. Nothing is validated, and several fixed-size buffers are filled with unchecked memcpy: 10,000 bytes per output match (mText) and 1,000 bytes per key (mKey). A large matched value or a long key corrupts the heap or object memory",
+    "You need more than the supported JSONPath subset. Recursive descent '..', filters, unions, negative indices and quoted/bracketed keys are unsupported, and there is one path per QueryProcessor. The parser gives no error for unsupported syntax and just builds a different automaton. The code also has no special case for an object-member '.*' wildcard (keys are memcmp'd literally), even though the README lists '*'",
+    "You need typed values, a DOM, mutation or serialization. The output is raw JSON text joined with ';', so values that contain ';' are ambiguous and every value still needs a real parser",
+    "ARM, Apple Silicon, or x86 without AVX2 and PCLMULQDQ. The code calls _mm256 and _mm_clmulepi64 intrinsics unconditionally and has no scalar fallback",
+    "Many-core processing of one huge record. JSONSki runs a single record on one thread, and the paper reports 16-thread speculative Pison was 48% faster on single large records"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (C++ standard library plus x86 intrinsics headers; -lpthread is linked but no threads are used)",
+    "min_toolchain": "C++11. The README requires g++ 7.4.0+, and the makefile compiles with -O3 -std=c++11 -mavx -mavx2 -msse4.2 -mpclmul. CircleCI builds with gcc 10. No CMake, library target or install rule: the makefile only builds the four examples, so you add the three src/*.cpp files to your own build",
+    "platforms": "x86-64 only (AVX2 and PCLMULQDQ required). The README says Linux. The badge says linux-macos and a 2022 PR added macOS include guards, but the CI job named 'build-for-macos' actually runs in a Linux gcc10 Docker image",
+    "thread_safety": "Not documented. QueryProcessor keeps per-run mutable state (bitmaps, automaton stack, output buffer), so use one instance per thread. Records loaded by loadRecords share one read-only text buffer",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Truncated or unbalanced JSON can hang. goOverObj, goOverAry, goToObjEnd and goToAryEnd wrap their word loop in while(true), so once word_id reaches the end of the input without finding the closing bracket they spin forever. Errors go to stdout ('pop out exception', 'additional [') and are not returned, and RecordSet::operator[] calls exit(0) on an out-of-range index",
+    "The loaders have memory bugs. loadSingleRecord writes its NUL one byte past the allocation when the file size is a multiple of 64. loadRecords allocates str.size() bytes and then strcpy's the terminator (one byte over), uses a 1 MB stack line buffer, silently splits lines longer than about 1 MB, and can overflow that buffer while padding lines near 1 MB. The QueryProcessor destructor free()s a buffer allocated with new[]",
+    "The text scanning is fragile. getElementType and getAttributeType skip only spaces, and tabs are never skipped anywhere, so a tab or newline after ':' can make an object be read as a primitive; feed minified JSON. Keys are compared as raw bytes, with no \\uXXXX decoding and no escaped-quote handling in the key scanner",
+    "The headers are unhygienic. They use 'using namespace std' at global scope and unprefixed macros (OBJECT, ARRAY, KEY, NONE, SUCCESS, INVALID, and MAX_KEY_LENGTH defined twice, as 100 and 1000). The fast-forward functions the README documents are private members of QueryProcessor. getOutputMatchesNum() accumulates across runQuery calls because init() never resets mNumMatches"
+  ],
+  "pick_this_over_siblings_when": "Over simdjson: pick JSONSki only for simple-path extraction from GB-scale trusted documents where memory or the 4 GB document limit matters. The paper's 4.8x was measured against simdjson building a parse tree, and current simdjson On-Demand has at_path() and for_each_at_path_with_wildcard(), plus validation, typed values, ARM support and active maintenance, so try it first. Over Pison (same lab): JSONSki is 3.1x faster single-threaded and needs no index memory, but Pison's speculative multi-threading wins on one huge record when you have 16 cores. Mison is paper-only.",
+  "verified_claims_summary": "In the ASPLOS'22 paper, measured on 2x Xeon E5-2620 v4 with G++ 7.4.0 -O3 on CentOS 7, single-threaded JSONSki averaged 0.40 s over 12 JSONPath queries on six ~1 GB single-record datasets. The baselines, timed end to end including parse or index build, were simdjson at 1.92 s (4.8x), Pison at 1.24 s (3.1x) and RapidJSON at 5.07 s (~12.7x, derived); JPStream was 12.3x slower. On small-record inputs JSONSki averaged 0.41 s, against 1.70 s for simdjson and 4.19 s for RapidJSON. Baseline versions are unstated (2020-era), the simdjson run used its parse-tree path, and the repo has no baseline harness, so the numbers cannot be reproduced from source.",
+  "status_note": "Stale: the source was last changed 2023-09-20 and later commits touch only README and LICENSE; there are no releases, no tests beyond running example1 in CI, and 3 closed PRs with no open issues. It is MIT-licensed and only 8 source files, so vendoring is easy, but plan to fix the buffer and termination bugs yourself.",
+  "sources_read": [
+    "https://github.com/AutomataLab/JSONSki",
+    "https://github.com/AutomataLab/JSONSki#performance-results",
+    "https://github.com/AutomataLab/JSONSki/blob/master/makefile",
+    "https://github.com/AutomataLab/JSONSki/blob/master/.circleci/config.yml",
+    "https://github.com/AutomataLab/JSONSki/blob/master/src/lib/QueryProcessor.h",
+    "https://github.com/AutomataLab/JSONSki/blob/master/src/lib/QueryAutomaton.h",
+    "https://github.com/AutomataLab/JSONSki/blob/master/src/lib/RecordLoader.h",
+    "https://github.com/AutomataLab/JSONSki/blob/master/src/lib/Records.h",
+    "https://github.com/AutomataLab/JSONSki/blob/master/src/lib/JSONPathParser.h",
+    "https://github.com/AutomataLab/JSONSki/blob/master/src/QueryProcessor.cpp",
+    "https://github.com/AutomataLab/JSONSki/blob/master/src/RecordLoader.cpp",
+    "https://github.com/AutomataLab/JSONSki/blob/master/src/JSONPathParser.cpp",
+    "https://github.com/AutomataLab/JSONSki/blob/master/example/example1.cpp",
+    "https://github.com/AutomataLab/JSONSki/blob/master/example/example4.cpp",
+    "https://github.com/AutomataLab/JSONSki/issues?q=is%3Aissue%20OR%20is%3Apr",
+    "https://github.com/AutomataLab/JSONSki/commits/master",
+    "https://github.com/AutomataLab/JSONSki/commits/master/src",
+    "https://github.com/AutomataLab/JSONSki_nodejs",
+    "https://web.archive.org/web/20240414071233id_/https://dl.acm.org/doi/pdf/10.1145/3503222.3507719",
+    "https://github.com/simdjson/simdjson/blob/master/doc/basics.md",
+    "https://github.com/AutomataLab/Pison",
+    "https://services.nvd.nist.gov/rest/json/cves/2.0?keywordSearch=JSONSki"
+  ],
+  "confidence": 0.8
+}

@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/gofractally/psio",
+  "one_liner": "C++23 reflection-driven, SSZ-derived binary format with zero-copy views; author benchmarks show faster encode/decode than libprotobuf, capnp, FlatBuffers, msgpack.",
+  "what_it_does": "psio is a C++23 serialization library: you annotate a plain struct with PSIO_REFLECT(Type, fields...) and call psio::encode(psio::pssz{}, v), psio::validate<T>, psio::decode<T>, or read fields in place through psio::view<T, pssz>, and the same declaration also targets pjson, SSZ, capnp, FlatBuffers, Protobuf, MessagePack and JSON. pSSZ is its primary schema-driven format, derived from Ethereum SSZ, with fracpack-style append-only schema evolution and a canonical encoding. It is not wire-compatible with Protobuf, Cap'n Proto or FlatBuffers, so it replaces them only when you control both ends.",
+  "how_it_is_fast": "Each record is a fixed region (scalars inline, one offset slot per variable field) followed by a dynamic region, so a field's position is a compile-time constant that a view reads with one load, and a variable field's size comes from the next offset instead of a length prefix. The offset width (1, 2 or 4 bytes) is chosen per type at compile time from length_bound and maxDynamicData annotations. Records marked definitionWillNotChange() (DWNC) drop the extensibility header, and a trivially copyable, unpadded DWNC record (or a vector of them) encodes and decodes as one memcpy. Validation is one bounds check per offset slot, with nesting depth capped at 64.",
+  "when_to_use": [
+    "C++23 services that exchange existing structs between processes you control, and want to serialize them with no separate IDL or codegen step.",
+    "Read-heavy paths that pull one field out of a validated buffer. The spec's view_one table shows 0.33-0.56 ns for pSSZ, against 0.58-3.46 ns for FlatBuffers and 17-28 ns for Cap'n Proto on the same shapes.",
+    "Content-addressed or signed payloads that need exactly one canonical byte sequence per value (spec §15).",
+    "Bulk arrays of fixed-layout records such as validator or tick lists. Marking the record DWNC and trivially copyable turns encode and decode into a memcpy.",
+    "Small bounded messages, where length_bound annotations shrink offset slots and headers to 1 or 2 bytes."
+  ],
+  "when_not_to_use": [
+    "Integer-heavy or sparse payloads where wire size matters most. In the author's table Avro, MessagePack and Protobuf are 0.56-0.65x pSSZ's raw size. The gap narrows to 0.87-0.91x after zstd-1.",
+    "Streaming or incremental parsing. Offsets are container-relative, so the whole container must be in memory before any field can be read.",
+    "Polyglot systems. pSSZ exists only in C++ and Rust: JS/TS has no pSSZ, and no Python, Go or Java port exists. psio's own Protobuf, MessagePack, capnp and FlatBuffers codecs are covered by only two shared fixture records each.",
+    "Production code or code that parses untrusted input today. The library is at 0.1.0 with no tags or releases and no LICENSE file, and it has been verified only on macOS ARM64. Its own release checklist asks for sanitizer and fuzz jobs 'before accepting untrusted inputs'.",
+    "Builds with -fno-exceptions or for WASI guests. The docs say the exception-free profile is incomplete: headers still contain unguarded throws."
+  ],
+  "integration": {
+    "form": "header-only in practice. The psio::psio CMake target compiles a single placeholder stub.cpp. Consume it via add_subdirectory, FetchContent, or find_package(psio 0.1 CONFIG).",
+    "dependencies": "Boost headers (required, for Boost.Preprocessor in the reflection macros) and xxhash (vendored). simdjson is optional and only enables JSON-to-pjson. Benchmarks can optionally use libprotobuf, capnp, flatbuffers, msgpack-cxx, lz4 and zstd.",
+    "min_toolchain": "C++23 and CMake 3.20+. On macOS the README says to use Homebrew LLVM rather than Apple Clang. Benchmarks used llvm-clang 22.1. GCC and MSVC support is not documented. The Rust crate uses edition 2021, and packaging was checked with Cargo 1.94.1.",
+    "platforms": "Verified only on macOS ARM64; Linux/x86-64 runs are an open release gate. pssz.hpp and pssz_view.hpp memcpy scalars and offsets in host byte order with no byte-swap path, so hosts are effectively limited to little-endian (inferred from source, not stated in the docs).",
+    "thread_safety": "not documented. From the source, encode, decode and validate are stateless free functions (tag_invoke CPOs) over caller-owned buffers, and pssz.hpp has no mutable globals.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Only validate reports errors. error.hpp says decode and view accessors assume the input has already been validated, so call psio::validate<T>(psio::pssz{}, bytes) on every untrusted buffer first. The 64-level depth cap applies to validate, not to decode.",
+    "The offset width W is derived from the type and never stored on the wire. Changing a length_bound in a way that flips W, or adding definitionWillNotChange() to an existing record, silently breaks bytes that are already stored. Encoding more than maxDynamicData throws codec_exception.",
+    "Unknown trailing fields are silently dropped, strings are not checked for UTF-8 unless you use validate_strict (which also fully decodes), and appending a variant-typed field is not a safe evolution.",
+    "The spec promises single-pass encode, but the C++ encode entry point first runs size_of over the value and then writes into the pre-sized buffer with unchecked memcpy (fast_buf_stream)."
+  ],
+  "pick_this_over_siblings_when": "Pick pSSZ when both ends run C++ (or Rust) and you want one reflected struct declaration to give zero-copy single-field reads, canonical bytes and append-only schema evolution together, and you can accept a pre-release, unlicensed codebase. Pick hpp-proto if you must stay on the Protobuf wire, and rkyv for a Rust-only zero-copy codebase.",
+  "verified_claims_summary": "On the author's own psio_bench_vs_externals harness (unspecified Apple M-series, llvm-clang 22.1, -O3 -DNDEBUG, library versions not stated), per-shape geomeans show libprotobuf 6.4x slower than pSSZ to decode and 43x slower to encode, FlatBuffers 1.23x slower to decode and 2.3x slower on a single-field view, and Cap'n Proto 5.4x slower to decode and 48x slower on a view. The comparison is weaker than it looks: the external encode cells include copying a native C++ struct into the library's builder or message, FlatBuffers and capnp 'decode' means materializing a native struct, the validate ratios are against psio's own re-implementations of those formats, and the anchor CSV is not committed.",
+  "status_note": "Actively worked on (last push 2026-09-16) but pre-release, so treat it as a reference design rather than a dependency: version 0.1.0, 0 stars, no tags or releases, verified only on macOS ARM64, and no LICENSE file (the Rust and npm manifests declare MIT, while the C++ core declares no license).",
+  "sources_read": [
+    "https://github.com/gofractally/psio",
+    "https://github.com/gofractally/psio/blob/main/README.md",
+    "https://github.com/gofractally/psio/blob/main/docs/format-comparison.md",
+    "https://github.com/gofractally/psio/blob/main/docs/pssz-spec.md",
+    "https://github.com/gofractally/psio/blob/main/docs/psio-overview.md",
+    "https://github.com/gofractally/psio/blob/main/docs/compatibility.md",
+    "https://github.com/gofractally/psio/blob/main/docs/release-work.md",
+    "https://github.com/gofractally/psio/blob/main/CMakeLists.txt",
+    "https://github.com/gofractally/psio/blob/main/cpp/CMakeLists.txt",
+    "https://github.com/gofractally/psio/blob/main/cpp/include/psio/pssz.hpp",
+    "https://github.com/gofractally/psio/blob/main/cpp/include/psio/pssz_view.hpp",
+    "https://github.com/gofractally/psio/blob/main/cpp/include/psio/view.hpp",
+    "https://github.com/gofractally/psio/blob/main/cpp/include/psio/stream.hpp",
+    "https://github.com/gofractally/psio/blob/main/cpp/include/psio/error.hpp",
+    "https://github.com/gofractally/psio/blob/main/cpp/include/psio/reflect.hpp",
+    "https://github.com/gofractally/psio/blob/main/cpp/include/psio/cpo.hpp",
+    "https://github.com/gofractally/psio/blob/main/cpp/include/psio/detail/unaligned_iter.hpp",
+    "https://github.com/gofractally/psio/blob/main/cpp/benchmarks/CMakeLists.txt",
+    "https://github.com/gofractally/psio/blob/main/cpp/benchmarks/bench_psio_vs_externals.cpp",
+    "https://github.com/gofractally/psio/blob/main/cpp/benchmarks/harness.hpp",
+    "https://github.com/gofractally/psio/blob/main/cpp/benchmarks/gen_report.py",
+    "https://github.com/gofractally/psio/blob/main/cpp/benchmarks/shapes.hpp",
+    "https://github.com/gofractally/psio/blob/main/cpp/benchmarks/adapters/protobuf_adapter.hpp",
+    "https://github.com/gofractally/psio/blob/main/examples/consumer/main.cpp",
+    "https://github.com/gofractally/psio/blob/main/rust/psio/Cargo.toml",
+    "https://github.com/gofractally/psio/commits/main",
+    "https://github.com/gofractally/psio/commit/4b7ae98",
+    "https://github.com/gofractally/psio/issues",
+    "https://github.com/gofractally/psio/tags",
+    "https://github.com/gofractally/psio/releases"
+  ],
+  "confidence": 0.55
+}

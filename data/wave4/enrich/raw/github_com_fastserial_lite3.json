@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/fastserial/lite3",
+  "one_liner": "Schemaless, JSON-compatible zero-copy C format: a B-tree in one mutable buffer; author runs beat FlatBuffers and simdjson.",
+  "what_it_does": "Lite³ is a C11 library and binary format that stores JSON-shaped data (null, bool, i64, f64, bytes, string, nested objects and arrays) as a serialized dictionary. You get, set and iterate fields directly on the wire buffer, and that same buffer is what you send, so there is no separate encode or decode step. There are two APIs: the Buffer API works on a caller-supplied buffer and returns -1/ENOBUFS so you can grow it and retry (no malloc), and the Context API wraps it with an auto-growing heap buffer; lite3_json_dec/lite3_json_enc convert to and from JSON through a bundled yyjson. It has no IDL or code generator and addresses fields by string key or array index at runtime, so it replaces FlatBuffers neither at the API level nor on the wire.",
+  "how_it_is_fast": "Each object or array is a B-tree laid out inside one contiguous buffer with 32-bit relative offsets. A 96-byte node (1.5 cache lines) holds up to 7 sorted 32-bit DJB2 key hashes, 7 key-value offsets and 8 child offsets, so a lookup walks at most 9 nodes comparing integers, and macros compute the hashes of string-literal keys at compile time. Values carry a 1-byte type tag and store i64/f64 natively in little-endian, so reads return pointers into the buffer, fixed-size overwrites happen in place, and iterators issue __builtin_prefetch for the next nodes and entries. The benchmark wins come from skipping work rather than from SIMD: in the simdjson fork, find_tweet on the converted data runs about 4.9k instructions, against 764k for simdjson On-Demand parsing the JSON.",
+  "when_to_use": [
+    "C or C++ services that receive a message, read or change a few fields and forward it: gets and sets run on the received buffer, and sending is a memcpy with no re-serialize.",
+    "JSON-shaped data with no fixed schema, stored or sent in Lite³ form and queried selectively. The author's find_tweet run takes 448 ns against 53,937 ns for simdjson On-Demand on twitter.json (~632 kB), because the query reads only the nodes on its path.",
+    "Both ends are your own C/C++ code and CPU cost matters more than bytes on the wire, with JSON conversion still available for debugging and for existing JSON APIs.",
+    "Embedded or no-malloc code on little-endian 64-bit targets: the Buffer API never allocates, the core is 9.3 kB, and `make LITE3_JSON_LIBRARIES=0` leaves out yyjson and base64.",
+    "Cases where FlatBuffers' IDL, codegen and lock-step schema upgrades are the real pain, and O(log n) field access is acceptable."
+  ],
+  "when_not_to_use": [
+    "Bandwidth- or storage-bound links. Every message carries its keys, the design page reports ~40% more bytes than JSON on the Twitter data, and the README says to pick Protocol Buffers if you are bandwidth-constrained. In the author's graph run it is 38.1 MB, against 25.3 MB for Cista++ offset slim and 37.8 MB for zpp::bits (FlatBuffers: 63.0 MB).",
+    "Data that arrives as JSON on every request. lite3_json_dec does a full yyjson parse and then rebuilds the tree as Lite³, so that path cannot beat yyjson, and the 120x query numbers leave out the conversion.",
+    "Fixed-schema hot paths that need O(1) field access or the lowest encode+decode time. FlatBuffers, Cap'n Proto and SBE offer O(1) reads, and in the author's own graph run zpp::bits (4.66 ms) and Cista++ offset slim (3.96 ms) beat Lite³ (7.79 ms) on serialize+deserialize.",
+    "Untrusted input in production today. A fuzz-found misaligned-access/undefined-behavior report (#20, April 2026) is still open, the repo has no fuzz harness, and there is no formal spec. The README calls the API unstable, and the author plans to replace the DJB2 hash, which would change the wire format.",
+    "Big-endian or 32-bit targets (big-endian is a compile error; 32-bit support is future work), messages over 4 GiB, objects or arrays over 2^26 entries, and non-C languages: the Python bindings are an open PR, and the C++ (1 star) and C# ports are third-party."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none for the core. JSON conversion uses vendored yyjson and nibble_base64 (in lib/, MIT), on by default and removable with LITE3_JSON_LIBRARIES=0. The Makefile uses GNU nm/objcopy to prefix the vendored symbols with lite3_internal_ and installs a pkg-config file.",
+    "min_toolchain": "C11 with GNU extensions; the README requires GCC or Clang because of builtins. A C23-only label/declaration construct that broke GCC 9.4 and Clang 10 was fixed in PR #18. The headers have extern \"C\" guards, and the author's benchmark includes them from C++20 built with g++-11.",
+    "platforms": "Little-endian only (big-endian fails with #error); needs int64_t and 8-byte doubles; 32-bit CPUs are listed as future work. The README says it has not been tested on ARM, and the header warns that the default LITE3_PREFETCHING can crash on non-x86 platforms near unmapped pages or on messages with invalid offsets. Published runs were on x86-64.",
+    "thread_safety": "Read-only calls (get, iterators, JSON encode) are documented as thread-safe on a shared buffer. Any mutation, including JSON decode into a buffer, needs external locking, and mixing reads with writes is not safe.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Object keys are ordered by their 32-bit DJB2 hash, so iteration and JSON output do not keep insertion order (the README's own example prints \"method\" before \"event\"). The hash is unseeded (fixed start value 5381), and quadratic probing is capped at LITE3_HASH_PROBE_MAX = 128 attempts.",
+    "String and bytes results are generation-stamped references. Read them only through LITE3_STR()/LITE3_BYTES(), which return NULL after any mutation of the buffer; dereferencing .ptr directly is unsafe. PR #23 (merged Aug 2026) made mutations of nested objects invalidate these references too, and the message start must be 4-byte aligned.",
+    "A failed set can still write to the buffer and increase buflen. Overwriting a string or bytes value with a larger one appends it and never reclaims the old space. lite3.h has no key-delete call, and the only way to compact is to rewrite the message into a new buffer. The Context API grows by 4x via realloc, and its docs advise against it for latency-sensitive code unless you preallocate.",
+    "JSON conversion: unsigned integers above INT64_MAX silently become f64, nesting is capped at 32 levels, and bytes become base64 strings. Library error messages are off by default (LITE3_ERROR_MESSAGES), so failures show only as -1 plus errno."
+  ],
+  "pick_this_over_siblings_when": "Pick Lite³ over schema-based siblings such as YaFF, ProtoCache or SBE only when a schema/IDL is unacceptable, when you must mutate a received buffer in place and send it on, or when you need a lossless JSON round trip. With a known schema, those siblings give O(1) or near-O(1) reads and smaller messages, and rkyv covers the same zero-copy niche in Rust.",
+  "verified_claims_summary": "In the author's fork of the Cista++ graph benchmark (1,870 nodes; g++-11 CMake Release with liblite3 at -O2; CPU not stated), Lite³ serialize+deserialize takes 7.79 ms against 1887.49 ms for FlatBuffers. Nearly all of that gap is FlatBuffers serialize (1845.8 vs 3.02 ms), where its adapter builds per-edge tables through a std::map while the Lite³ adapter memcpys uint16 edge arrays as opaque byte blobs; deserialize (Lite³ copying out to std::vector against the FlatBuffers verifier) is 8.7x faster and traverse is about equal (79.4 vs 90.5 ms). The '120x' is find_tweet in the author's simdjson fork (448 ns vs 53,937 ns for simdjson On-Demand) on twitter.json already converted to Lite³, run on an x86-64 machine where simdjson picked its AVX-512 'icelake' kernel at ~3.8 GHz; model and conversion cost are not reported.",
+  "status_note": "Active (last commit 2026-08-06, created Nov 2025, 807 stars) and MIT, with a ~9.3 kB dependency-free C core that is easy to vendor. But there are no tagged releases or formal spec, only third-party ports exist outside C, and the API and wire format are declared unstable.",
+  "sources_read": [
+    "https://github.com/fastserial/lite3",
+    "https://github.com/fastserial/lite3/blob/main/README.md",
+    "https://github.com/fastserial/lite3/blob/main/include/lite3.h",
+    "https://github.com/fastserial/lite3/blob/main/include/lite3_context_api.h",
+    "https://github.com/fastserial/lite3/blob/main/src/lite3.c",
+    "https://github.com/fastserial/lite3/blob/main/src/json_dec.c",
+    "https://github.com/fastserial/lite3/blob/main/Makefile",
+    "https://github.com/fastserial/lite3/blob/main/lite3.pc",
+    "https://github.com/fastserial/lite3/commits/main",
+    "https://github.com/fastserial/lite3/releases",
+    "https://github.com/fastserial/lite3/tags",
+    "https://github.com/fastserial/lite3/issues",
+    "https://github.com/fastserial/lite3/issues/20",
+    "https://github.com/fastserial/lite3/issues/17",
+    "https://github.com/fastserial/lite3/issues/19",
+    "https://github.com/fastserial/lite3/issues/16",
+    "https://github.com/fastserial/lite3/issues/3",
+    "https://github.com/fastserial/lite3/pulls",
+    "https://github.com/fastserial/lite3/pull/21",
+    "https://lite3.io/design_and_limitations.html",
+    "https://github.com/fastserial/cpp-serialization-benchmark/blob/master/include/csb/benches/lite3.h",
+    "https://github.com/fastserial/cpp-serialization-benchmark/blob/master/include/csb/benches/fbs.h",
+    "https://github.com/fastserial/cpp-serialization-benchmark/blob/master/include/csb/lite3_graph.h",
+    "https://github.com/fastserial/cpp-serialization-benchmark/blob/master/CMakeLists.txt",
+    "https://github.com/fastserial/cpp-serialization-benchmark/blob/master/cpp_serialization_benchmark_output.txt",
+    "https://github.com/fastserial/simdjson",
+    "https://github.com/fastserial/simdjson/blob/master/README.md",
+    "https://github.com/fastserial/simdjson/blob/master/simdjson_output.txt",
+    "https://github.com/fastserial/simdjson/blob/master/benchmark/find_tweet/lite3.h",
+    "https://github.com/fastserial/kostya-benchmark/blob/master/README.md",
+    "https://github.com/jasoncoposky/lite3-cpp"
+  ],
+  "confidence": 0.8
+}
