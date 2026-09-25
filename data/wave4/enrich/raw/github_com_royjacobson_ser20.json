@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/royjacobson/ser20",
+  "one_liner": "C++20 fork of cereal with a buffered binary archive: 1.3-2.1x faster than cereal, 1.1-2.8x than Boost, on small-field data.",
+  "what_it_does": "A near source-compatible C++20 rewrite of cereal. You write the same serialize/save/load (and save_minimal/load_minimal) functions, call archive(x, y, z), and get binary, portable-binary, JSON and XML archives with support for std containers, smart pointers, polymorphic types and class versioning. Moving from cereal is mostly a rename of the namespace (cereal:: to ser20::) and the macro prefix (SER20_REGISTER_TYPE and so on). SFINAE dispatch is replaced with C++20 requires-clauses, and there is an experimental C++20 module interface (module/ser20.cppm). Unlike cereal, it is not header-only: two .cpp files (shared-pointer storage and the polymorphic caster registry) must be compiled.",
+  "how_it_is_fast": "cereal's BinaryArchive makes one streambuf sputn/sgetn call per primitive, so a vector of structs or a container of short strings pays that per-call stream overhead for every field. ser20's BinaryOutputArchive memcpys writes under 1 KiB into a 4 KiB buffer and flushes it at the end of each top-level archive call; this is write coalescing. BinaryInputArchive reads the stream in 4 KiB chunks and serves small loads from that buffer (read-ahead buffering). Dispatch functions are also marked always_inline + nodebug (SER20_HIDE_FUNCTION). Contiguous arithmetic vectors and single large strings already go out as one bulk write in both libraries, so they gain nothing.",
+  "when_to_use": [
+    "An existing cereal codebase on BinaryArchive where profiles show time in many small field writes: vectors of structs, map<string, struct>, many short strings. The repo's numbers show 1.8-2.1x faster saves and 1.3-1.8x faster loads than cereal on these.",
+    "Moving off boost::serialization to a cereal-style API. ser20 keeps cereal's Boost transition layer (operator&, is_loading/is_saving) and beat Boost 1.1-2.8x in the chart's struct, map and string categories.",
+    "The project is already on C++20 (GCC 10+, Clang 13+, AppleClang 15+, MSVC VS 2019/2022) and builds with CMake 3.20+ or Bazel bzlmod.",
+    "Saving to or loading from std::ostringstream/istringstream or file streams, where per-call streambuf overhead dominates.",
+    "You care about debug builds. The README claims smaller debug symbols and a better debugging experience because of nodebug/always_inline wrappers, and 25% faster compiles, but gives no data."
+  ],
+  "when_not_to_use": [
+    "Bulk arithmetic payloads (vector<double>, vector<uint8_t>, one large std::string): the repo's own numbers show parity with cereal and Boost.",
+    "Types with virtual bases or heavy polymorphism: PoDChild (virtual base) loads were about 7% slower than cereal (26.27 vs 24.64).",
+    "Portable-binary, JSON or XML archives: only BinaryArchive has the buffer. PortableBinaryArchive still calls sputn/sgetn for every value, and no benchmarks exist for the other archives.",
+    "You need top throughput: the author says it is 'by far not the fastest serialization library out there'. It keeps cereal's per-field stream model and only batches it.",
+    "Maturity or untrusted input matter: single maintainer, 34 stars, v0.9.1, no commits since 2025-06-25, no issue tracker activity. Container loads resize() to the size stored in the archive with no bound, so a hostile archive can force huge allocations."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "None at runtime. It bundles rapidjson, rapidxml and base64 headers for the JSON/XML archives. Boost.Serialization is needed only for the optional comparison benchmark (SKIP_PERFORMANCE_COMPARISON=OFF).",
+    "min_toolchain": "C++20 with concepts (C++17 is rejected with #error). CI covers GCC 10/12/14, Clang 13/15/16/18, AppleClang via Xcode 15.4/16.2, and MSVC on windows-2019/2025. Needs CMake 3.20+ or Bazel (bzlmod).",
+    "platforms": "Any platform with a C++20 compiler. CI runs on Ubuntu, macOS and Windows. BinaryArchive uses native endianness; PortableBinaryArchive handles endianness conversion.",
+    "thread_safety": "One archive must be used by one thread at a time. Running several archives in parallel is safe only with SER20_THREAD_SAFE=1, which puts mutexes around the global static registries. The CMake THREAD_SAFE option defaults to OFF and is only offered on UNIX.",
+    "drop_in_for_baseline": "partial — cereal code is source-compatible after renaming the cereal:: namespace and the CEREAL_* macros to SER20_*. JSON/XML class-version fields are written as 'ser20_class_version' instead of 'cereal_class_version'. Binary compatibility with cereal archives is not documented. Boost users get cereal's transition layer but must still port serialize(ar, version) signatures and registration macros."
+  },
+  "gotchas": [
+    "BinaryInputArchive reads ahead in 4 KiB sgetn chunks and never gives unused bytes back (the destructor is defaulted). After a load, the istream position can be past the end of the archive. Unlike cereal, which reads exactly the bytes it needs, you cannot interleave raw reads or run back-to-back archives on the same stream. On a pipe or socket streambuf, a small load may block until 4 KiB or EOF arrives.",
+    "BinaryOutputArchive holds data in a 4 KiB buffer until the end of each top-level ar(...) call or until destruction. Writes of 1 KiB or more bypass the buffer. Stream write or read failures throw ser20::Exception.",
+    "Version numbers disagree: the CMake project says 1.4.0 (used for the find_package SameMajorVersion check), version.hpp says 0.9.1 and MODULE.bazel says 0.9.0. version.hpp warns that compatibility is not guaranteed across versions.",
+    "The C++20 module file (module/ser20.cppm) is marked experimental and is not wired into the CMake build. The README's '15% smaller' and 'compile up to 25% faster' claims have no published data."
+  ],
+  "pick_this_over_siblings_when": "Pick ser20 when you have cereal-style code, or need cereal features (polymorphic pointers, shared_ptr tracking, versioning, JSON/XML archives), and want a cheap speedup from a rename. For raw speed, bitsery and YAS report 3.5-10x wins over cereal and Boost in third-party suites, and Cista++ and struct_pack are different, much faster designs, but all of them are separate libraries with their own APIs.",
+  "verified_claims_summary": "The repo's own sandbox/performance.cpp saves and loads the same data with Boost, cereal and ser20 binary archives to std::ostringstream/istringstream, averaged over 100 interleaved runs. The committed numbers show ser20 about 2.0x faster on save and 1.8x on load than cereal for vector<PoDStruct>, 2.1x/1.3x for map<string,PoDStruct>, and 1.85x/1.3x for the 'String' bar. That bar is most likely the vector<string> test, because a duplicate dict key overwrote the single-string entry, which was at parity. Against Boost the range is 1.1-2.8x, and bulk arithmetic vectors are at parity. Compiler, flags, CPU, library versions and the data size behind each bar are not stated, and no one has reproduced the results independently.",
+  "status_note": "Stale single-maintainer project (v0.9.1, last commit 2025-06-25, 34 stars, no issues filed). It is BSD-3-Clause and small (two .cpp files plus cereal-derived headers), so it is easy to vendor. Upstream cereal (4.7k stars) is still being pushed to as of 2026-03.",
+  "sources_read": [
+    "https://github.com/royjacobson/ser20",
+    "https://github.com/royjacobson/ser20#performance",
+    "https://github.com/royjacobson/ser20/blob/main/include/ser20/archives/binary.hpp",
+    "https://github.com/royjacobson/ser20/blob/main/include/ser20/archives/portable_binary.hpp",
+    "https://github.com/royjacobson/ser20/blob/main/include/ser20/ser20.hpp",
+    "https://github.com/royjacobson/ser20/blob/main/include/ser20/macros.hpp",
+    "https://github.com/royjacobson/ser20/blob/main/include/ser20/version.hpp",
+    "https://github.com/royjacobson/ser20/blob/main/include/ser20/types/vector.hpp",
+    "https://github.com/royjacobson/ser20/blob/main/include/ser20/types/polymorphic.hpp",
+    "https://github.com/royjacobson/ser20/blob/main/include/ser20/details/static_object.hpp",
+    "https://github.com/royjacobson/ser20/blob/main/src/ser20.cpp",
+    "https://github.com/royjacobson/ser20/blob/main/src/polymorphic_impl.cpp",
+    "https://github.com/royjacobson/ser20/blob/main/CMakeLists.txt",
+    "https://github.com/royjacobson/ser20/blob/main/BUILD",
+    "https://github.com/royjacobson/ser20/blob/main/MODULE.bazel",
+    "https://github.com/royjacobson/ser20/blob/main/module/ser20.cppm",
+    "https://github.com/royjacobson/ser20/blob/main/sandbox/performance.cpp",
+    "https://github.com/royjacobson/ser20/blob/main/sandbox/CMakeLists.txt",
+    "https://github.com/royjacobson/ser20/blob/main/scripts/benchmark_plot.py",
+    "https://github.com/royjacobson/ser20/blob/main/doc/benchmarks.png",
+    "https://github.com/royjacobson/ser20/blob/main/unittests/benchmarks/benchmark.cpp",
+    "https://github.com/royjacobson/ser20/blob/main/unittests/binary_archive.cpp",
+    "https://github.com/royjacobson/ser20/blob/main/unittests/CMakeLists.txt",
+    "https://github.com/royjacobson/ser20/blob/main/.github/workflows/ci-lin.yml",
+    "https://github.com/royjacobson/ser20/blob/main/.github/workflows/ci-macos.yml",
+    "https://github.com/royjacobson/ser20/blob/main/.github/workflows/ci-win.yml",
+    "https://github.com/royjacobson/ser20/issues",
+    "https://github.com/royjacobson/ser20/pulls",
+    "https://github.com/royjacobson/ser20/commits/main",
+    "https://github.com/royjacobson/ser20/releases",
+    "https://github.com/USCiLab/cereal",
+    "https://github.com/USCiLab/cereal/blob/master/include/cereal/archives/binary.hpp",
+    "https://github.com/USCiLab/cereal/blob/master/include/cereal/cereal.hpp"
+  ],
+  "confidence": 0.6
+}
