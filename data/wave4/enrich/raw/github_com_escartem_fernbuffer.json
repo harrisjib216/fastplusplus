@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/escartem/fernbuffer",
+  "one_liner": "Prototype bit-packed JSON encoder (C API over a C++17 core) that beats MessagePack on size for string- and key-heavy JSON.",
+  "what_it_does": "Turns JSON text into a compact, schemaless binary blob and back. The whole API is three C functions: fernbuffer_encode(json, len, &out_len) returns a malloc'd byte buffer, fernbuffer_decode(bytes, len) returns a JSON string, and fernbuffer_free releases either one. Any error returns NULL with no detail. It is not wire-compatible with MessagePack and has no typed pack/unpack API: you always pass JSON text, and the WASM wrapper and the README's Python ctypes snippet stringify objects first. The README calls it 'a prototype / proof of concept'.",
+  "how_it_is_fast": "It wins on size, not speed. The JSON tree is flattened into DFS-ordered (path, value) leaves, and each path is written as push/pop deltas against the previous path (trie-style prefix sharing), all in one unaligned bit stream. Lengths, token IDs and integer magnitudes use Fibonacci (Zeckendorf) universal codes. Strings and keys seen at least twice go into two dictionaries at the front of the stream. Hex text (whole even-length hex strings, or runs of 8 or more even hex chars inside a string) is packed 2:1 into raw bytes, and floats are stored as f32 when that round-trips exactly. Every leaf also pays schema ops plus a 2-bit type tag, which is why dense numeric and bool arrays come out larger than MessagePack's 1-byte fixint/true/false.",
+  "when_to_use": [
+    "Arrays of records or log lines where the same keys and string values repeat. In the repo's test files this was 28-54% smaller than Python msgpack: log entries 11,156 vs 15,465 B, flat records 2,171 vs 4,093 B, sparse nulls 903 vs 1,974 B, repeated strings 557 vs 1,178 B.",
+    "Payloads full of all-lowercase or all-uppercase hex strings (hashes, digests, hex IDs), which are stored as raw bytes: 1,898 vs 3,493 B on the hex_strings file.",
+    "Storing or shipping blobs where bytes cost more than CPU, and your data already exists as JSON text (the API takes and returns JSON strings).",
+    "Browser/JS experiments via the prebuilt Emscripten WASM build (fb.encode(obj) returns a Uint8Array, fb.decode returns an object), or as a reference design for bit-level JSON packing (delta paths, Fibonacci coding, token tables)."
+  ],
+  "when_not_to_use": [
+    "Numeric or boolean arrays. In the repo's own table it is larger than MessagePack on floats (+8%), ints (+21%) and bools (+87%), and the README reports [0..49] at ~2.19x MsgPack. Bool 'runs' are documented as N bits, but the encoder only ever emits one bool per field.",
+    "Any data that must round-trip exactly. Mixed-case hex-alphabet strings come back lowercased (tested: 'Cafe' -> 'cafe', 'Facade' -> 'facade'). Repeated uppercase hex values or GUID segments lose their case. Unsigned integers above INT64_MAX come back negative (18446744073709551615 -> -1).",
+    "Top-level scalars, {} or []: they encode fine but crash on decode (path.back() on an empty path, which is UB; the v1 WASM build traps 'memory access out of bounds').",
+    "Untrusted input, or latency/throughput-sensitive paths. The decoder is not hardened (UB on a pop from an empty path, LEB128 shifts past 64 bits) and there are no tests or fuzzing. Each call parses JSON text with nlohmann/json and writes one bit at a time. Wide objects scale quadratically: in the v1 WASM build, a 16k-key object took 232 ms to encode and 459 ms to decode, vs 1.9/3.1 ms for 1k keys.",
+    "Production use or large streams: the author labels it a prototype, there is no incremental/streaming decode (per the README), and the decoder reads the format version field but ignores it."
+  ],
+  "integration": {
+    "form": "source-drop (one C++17 translation unit, fernbuffer.cpp plus src/*.hpp, behind the C header fernbuffer.h); release v1 also ships a prebuilt Windows x64 DLL/CLI and an Emscripten WASM+JS build",
+    "dependencies": "nlohmann/json (vendored as src/json.hpp, uses ordered_json); C++ standard library, including exceptions, which are caught at the C boundary",
+    "min_toolchain": "C++17 (structured bindings; the build scripts pass /std:c++17 to MSVC from Visual Studio 2017+, and -std=c++17 -O3 to Emscripten). The Makefile needs GNU make with the Windows cmd shell.",
+    "platforms": "Windows x64 (MSVC build scripts, found via vswhere) and WebAssembly (Emscripten). The header has GCC/Clang visibility macros, but no Linux/macOS build script is provided. Floats are memcpy'd in host byte order, so the format assumes little-endian.",
+    "thread_safety": "The header says encode/decode are stateless and safe to call concurrently. However, coding.hpp grows a global Fibonacci table (static std::vector) with unsynchronized push_back, so the first concurrent calls that need larger codes can race. fernbuffer_free must run on the receiving thread or be externally synchronized.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Hex detection is lossy. A string that is entirely hex characters and of even length (even 2 chars) is stored as bytes with a single upper/lower flag, so mixed case decodes as lowercase. Token-table hex entries drop the flag completely, so repeated uppercase hex decodes as lowercase.",
+    "Integers are handled as int64. uint64 values above 2^63-1 are silently reinterpreted as negative, and negating INT64_MIN in the encoder is signed overflow (UB; it happened to round-trip in the WASM build).",
+    "Decoding the output of a top-level scalar, empty object or empty array is undefined behavior; only non-empty objects and arrays at the root decode.",
+    "Both calls return heap buffers that must be freed with fernbuffer_free (the README warns that ctypes c_char_p leaks). The WASM wrapper round-trips through JSON.stringify/JSON.parse, so JS-side number formatting applies."
+  ],
+  "pick_this_over_siblings_when": "Choose it over JSON BinPack only when you want schemaless JSON-in/JSON-out size reduction with no schema to write and can live with a prototype, since JSON BinPack's catalogued best-size results are schema-driven. For anything production-bound, numeric-heavy or needing exact round-trips, use JSON BinPack, qdf's compression tier or plain MessagePack. MTS-1 targets delta-encoded telemetry, not general JSON.",
+  "verified_claims_summary": "Only encoded byte size was measured: the 10 JSON files in benchmark/, compared with Python msgpack's defaults (floats packed as float64). Size is deterministic, so compiler and hardware do not matter, and I reproduced every number exactly (fernBuffer v1 release WASM under Node 24, msgpack 1.2.2). fernBuffer wins 6 of 10 (log -28%, flat records -47%, hex strings -46%, sparse nulls -54%, repeated strings -53%, deep nesting 18 vs 25 B) and loses 4 (floats +8%, ints +21%, bools +87%, tiny object 11 vs 10 B). The project publishes no speed numbers.",
+  "status_note": "Single-author prototype: 3 commits, all on 2026-06-07, none since, one v1 release, no issues or PRs, 6 stars. It is MIT-licensed with under 40 KB of its own source plus vendored nlohmann/json, so it is easy to vendor, but treat it as a reference design rather than a production codec.",
+  "sources_read": [
+    "https://github.com/Escartem/fernBuffer",
+    "https://github.com/Escartem/fernBuffer#benchmark",
+    "https://github.com/Escartem/fernBuffer/blob/master/README.md",
+    "https://github.com/Escartem/fernBuffer/tree/master/benchmark",
+    "https://github.com/Escartem/fernBuffer/blob/master/benchmark/log_entries.json",
+    "https://github.com/Escartem/fernBuffer/blob/master/benchmark/flat_records.json",
+    "https://github.com/Escartem/fernBuffer/blob/master/benchmark/hex_strings.json",
+    "https://github.com/Escartem/fernBuffer/blob/master/benchmark/sparse_nulls.json",
+    "https://github.com/Escartem/fernBuffer/blob/master/benchmark/repeated_strings.json",
+    "https://github.com/Escartem/fernBuffer/blob/master/benchmark/float_array.json",
+    "https://github.com/Escartem/fernBuffer/blob/master/benchmark/int_array.json",
+    "https://github.com/Escartem/fernBuffer/blob/master/benchmark/bool_array.json",
+    "https://github.com/Escartem/fernBuffer/blob/master/benchmark/tiny_object.json",
+    "https://github.com/Escartem/fernBuffer/blob/master/benchmark/deep_nesting.json",
+    "https://github.com/Escartem/fernBuffer/blob/master/fernbuffer.h",
+    "https://github.com/Escartem/fernBuffer/blob/master/fernbuffer.cpp",
+    "https://github.com/Escartem/fernBuffer/blob/master/Makefile",
+    "https://github.com/Escartem/fernBuffer/blob/master/build_dll.bat",
+    "https://github.com/Escartem/fernBuffer/blob/master/build_cli.bat",
+    "https://github.com/Escartem/fernBuffer/blob/master/src/bit.hpp",
+    "https://github.com/Escartem/fernBuffer/blob/master/src/coding.hpp",
+    "https://github.com/Escartem/fernBuffer/blob/master/src/value.hpp",
+    "https://github.com/Escartem/fernBuffer/blob/master/src/packing.hpp",
+    "https://github.com/Escartem/fernBuffer/blob/master/src/encoder.hpp",
+    "https://github.com/Escartem/fernBuffer/blob/master/src/decoder.hpp",
+    "https://github.com/Escartem/fernBuffer/blob/master/src/wrapper.js",
+    "https://github.com/Escartem/fernBuffer/blob/master/test/cli.cpp",
+    "https://github.com/Escartem/fernBuffer/commits/master",
+    "https://github.com/Escartem/fernBuffer/releases/tag/v1",
+    "https://github.com/Escartem/fernBuffer/releases/download/v1/fernbuffer_v1_web.zip",
+    "https://github.com/Escartem/fernBuffer/releases/download/v1/fernbuffer_v1_x86_64.zip",
+    "https://github.com/Escartem/fernBuffer/issues",
+    "https://github.com/Escartem/fernBuffer/pulls"
+  ],
+  "confidence": 0.86
+}

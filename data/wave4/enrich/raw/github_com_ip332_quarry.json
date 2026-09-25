@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/ip332/quarry",
+  "one_liner": "Schema compiler emitting no-heap C99, C++20 and Python BRF codecs; its C decoder beats Protobuf C++ on large/nested payloads.",
+  "what_it_does": "Quarry compiles YAML `.brd` schemas into generated strict-C99, C++20 and Python codecs that share one binary wire format, BRF. It targets embedded and systems code: every string, bytes and array field must declare a `max_bytes`/`max_elements` bound, and the C backend generates plain fixed-capacity structs plus `<Record>_encode(&rec, buf, cap)` / `<Record>_decode(bytes, len)` free functions that return status structs (C++ gets builders and `encode()`/`decode_<Record>()` returning result types). It is not a drop-in for Protobuf: the schema language, wire format and generated API all differ, though a bundled translator converts a bounded subset of `.proto` descriptor sets (with Quarry or Nanopb `.options` bounds) into `.brd` sources.",
+  "how_it_is_fast": "The C path never touches the heap: decode validates the record and copies strings, bytes, arrays and nested records into inline fixed-capacity struct members sized from the schema bounds. Protobuf C++ allocates std::string/RepeatedField/sub-message storage for those fields on every parse, which largely explains Quarry C's large (~2.0x) and nested (~1.6x) decode wins at HEAD. The current wire format, BRF v2, is a schema-determined fixed-offset layout (16-byte header, presence bitmap, one slot per declared field in declaration order, fixed-width big-endian scalars inline, variable data behind 8-byte offset/length descriptors), so encoding is plain stores at known offsets with no per-scalar varint work. The cost is wire size, because absent fields still occupy their slots and nothing is varint-compressed.",
+  "when_to_use": [
+    "MCU-to-Linux or device-telemetry links where the embedded side needs a strict-C99, malloc-free codec with statically sized buffers; CI cross-builds the generated C for Cortex-M4 with arm-none-eabi-gcc.",
+    "Decode-heavy C code on records with many bounded strings, bytes, arrays or repeated nested records. At HEAD (CI run on 5c8adcde), Quarry C decodes the large workload at 1.17M ops/s against 0.57M for Protobuf C++, and the nested workload at 2.84M against 1.76M.",
+    "One schema shared by an embedded C producer and Python tooling. The README says C, C++ and Python encodings are verified byte-for-byte identical.",
+    "Teams whose Protobuf/Nanopb schemas are already fully bounded (`max_size`/`max_count`) and who want to evaluate a no-heap alternative using the descriptor-set translator."
+  ],
+  "when_not_to_use": [
+    "Small or sparse messages. At HEAD, Protobuf C++ is ~2x faster on telemetry decode (13.5M vs 6.9M ops/s) and ~2.8x faster on stress decode (18.7M vs 6.6M). BRF v2 records are also much larger: 84 bytes vs Protobuf's 16 (telemetry) and 5 (stress), because every declared field gets a slot.",
+    "Bandwidth- or storage-bound links. Each record and each nested record carries its own 16-byte header, and the large workload is 1,771 bytes vs 1,425 for Protobuf at HEAD.",
+    "C++ call sites. The generated C++ API returns owning std::vector/std::string values and is slower than Protobuf C++ in every benchmark row, e.g. large decode 0.22M vs 0.57M ops/s.",
+    "Schemas that need Protobuf wire compatibility, oneof, maps, proto3 optional, recursive messages, nested arrays, unbounded strings/arrays or negative enum values. All of these are unsupported or rejected.",
+    "Persisted data or public protocols that need a stable format. The project is pre-1.0 (v0.1.30-rc.3) with a single maintainer and 4 stars. Its release notes say BRF v1 data from RC1 is not wire-compatible with RC2/RC3 (BRF v2)."
+  ],
+  "integration": {
+    "form": "header-only runtime (`Quarry::runtime`, C++20 INTERFACE target; C codec primitives are `static inline` headers) plus generated .h/.c or .hpp per schema. The schema compiler is a built host tool. The generic QBS/BRF-inspection C runtime `Quarry::runtime_c` builds as a static lib, although its README calls it header-only.",
+    "dependencies": "Generated code and runtime: none beyond the C99 or C++20 standard library. The schema compiler needs libyaml, Protobuf (libprotobuf + protoc) and Abseil to build.",
+    "min_toolchain": "C99 for generated C; C++20 for the C++ runtime and the compiler; CMake 3.20+. CI uses GCC 13.3 on Ubuntu 24.04 and arm-none-eabi-gcc for Cortex-M4.",
+    "platforms": "Any. The wire format is explicit big-endian with byte-wise, alignment-safe access. CI covers Linux x86-64 and a Cortex-M4 bare-metal cross-build; Windows and macOS are not in CI.",
+    "thread_safety": "not documented (generated codecs are free functions over caller-owned structs and buffers)",
+    "drop_in_for_baseline": "partial: not wire- or API-compatible with Protobuf. quarry-protobuf-translator turns a bounded subset of .proto descriptor sets into .brd schemas, but every call site must be rewritten."
+  },
+  "gotchas": [
+    "Generated C structs reserve worst-case capacity for every bounded field. The benchmark Workload struct is 3,576 bytes, against a 128-byte Protobuf message object. `_decode()` returns the whole record by value inside its result struct, so check stack budgets on MCUs.",
+    "Field indexes are compiler-assigned, not author-assigned tags as in Protobuf. BRF v2 places slots in schema declaration order, and the BRF spec defers schema-evolution rules to future work, so treat reordering or inserting fields as a wire break.",
+    "The README performance table comes from commit 04349e57 (Aug 2026), before the BRF v2 switch. At HEAD, telemetry encodes to 84 bytes, not 60, and the speeds differ. Use the CI `Benchmarks` artifact for current numbers.",
+    "The README's Cortex-M4F table reports 6,243 cycles for 500 encodes, about 12.5 cycles per 85-byte record. A Cortex-M4 cannot store 85 bytes in that time, so treat the table as unverified."
+  ],
+  "pick_this_over_siblings_when": "Pick Quarry over SBE, YaFF or ProtoCache only when you need strict-C99, no-heap generated code for a microcontroller plus a matching Python backend from the same schema. Those siblings report far larger margins over Protobuf (e.g. SBE ~6.75x faster decode, ProtoCache ~20x decode+traverse), while Quarry C wins only on large and nested decode and loses on small messages.",
+  "verified_claims_summary": "Quarry's public-API benchmark (GCC 13.3 Release -O3, GitHub-hosted AMD EPYC 7763, medians of 5 runs, against Protobuf C++ 3.21.12 distro build, default and Arena) shows Quarry C decoding the large workload at 0.85M ops/s vs 0.57M (~1.5x) in the README baseline (commit 04349e57) and 1.17M vs 0.57M (~2.0x) at HEAD 5c8adcde, plus 2.84M vs 1.76M nested decode (~1.6x) at HEAD, while losing telemetry encode/decode and large encode by 1.9-3.3x in the README table. Quarry C writes into caller-owned fixed buffers while Protobuf uses its allocating owning API, and the Arena harness deep-copies (`CopyFrom`) each record before serializing, so the wins partly measure the API and allocation model, not only codec speed.",
+  "status_note": "Actively developed by one maintainer (last push 2026-09-20, v0.1.30-rc.3 prerelease, 4 stars, no external issues) and Apache-2.0 and copyable, but pre-1.0 with a wire-format break already between RC1 and RC2.",
+  "sources_read": [
+    "https://github.com/ip332/quarry",
+    "https://github.com/ip332/quarry#performance--footprint",
+    "https://github.com/ip332/quarry/blob/main/benchmarks/README.md",
+    "https://github.com/ip332/quarry/blob/main/benchmarks/schemas/workload.brd",
+    "https://github.com/ip332/quarry/blob/main/benchmarks/schemas/workload.proto",
+    "https://github.com/ip332/quarry/blob/main/benchmarks/c/proof_benchmark.c",
+    "https://github.com/ip332/quarry/blob/main/benchmarks/cpp/proof_benchmark.cpp",
+    "https://github.com/ip332/quarry/blob/main/benchmarks/protobuf/proof_benchmark.cpp",
+    "https://github.com/ip332/quarry/blob/main/docs/specifications/binary-record-format.md",
+    "https://github.com/ip332/quarry/blob/main/docs/design/c-backend.md",
+    "https://github.com/ip332/quarry/blob/main/docs/design/schema-evolution.md",
+    "https://github.com/ip332/quarry/blob/main/runtime/README.md",
+    "https://github.com/ip332/quarry/blob/main/runtime_c/README.md",
+    "https://github.com/ip332/quarry/blob/main/runtime/CMakeLists.txt",
+    "https://github.com/ip332/quarry/blob/main/runtime_c/CMakeLists.txt",
+    "https://github.com/ip332/quarry/blob/main/CMakeLists.txt",
+    "https://github.com/ip332/quarry/blob/main/compiler/CMakeLists.txt",
+    "https://github.com/ip332/quarry/blob/main/include/quarry/runtime_c/binary_record_v2.h",
+    "https://github.com/ip332/quarry/blob/main/include/quarry/runtime/binary_record_v2.hpp",
+    "https://github.com/ip332/quarry/blob/main/tools/schema-translators/protobuf/README.md",
+    "https://github.com/ip332/quarry/blob/main/release-notes-v0.1.30-rc.3.md",
+    "https://github.com/ip332/quarry/blob/main/Dockerfile",
+    "https://github.com/ip332/quarry/blob/main/.github/workflows/ci.yml",
+    "https://github.com/ip332/quarry/blob/main/docs/development-environment.md",
+    "https://github.com/ip332/quarry/commit/04349e57f227ddd12880b4e65ab2b4fe7d7b06fe",
+    "https://github.com/ip332/quarry/commits/main",
+    "https://github.com/ip332/quarry/releases",
+    "https://github.com/ip332/quarry/issues?q=is%3Aissue",
+    "https://github.com/ip332/quarry/actions/runs/35518348476",
+    "https://github.com/ip332/quarry/actions/runs/35518348476/artifacts/10607347748"
+  ],
+  "confidence": 0.8
+}

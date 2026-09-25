@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/alex60217101990/qdf",
+  "one_liner": "Go-only schemaless binary format: record batches 29-68% smaller than Protobuf, ~7x faster decode than encoding/json.",
+  "what_it_does": "qdf is a pure-Go binary serializer with an encoding/json-style API: Marshal(v, opts), AppendMarshal, Unmarshal, and stream encoders/decoders. It reads `qdf:` struct tags and falls back to `json:` tags, so there is no IDL or schema registry. There is one self-describing wire format. A per-call Options bitmask (OptSpeed, OptBalanced, OptCompression, or custom bits) sets how hard to compress, and a single Unmarshal reads every variant. Beyond encode/decode it offers column projection and row filtering (Select/Where pushdown) on columnar batches, structural Diff/Apply patches, canonical encoding, a lossy embedding codec, and an optional qdfgen code generator for reflection-free methods.",
+  "how_it_is_fast": "It shrinks data across records instead of encoding each record on its own. Dense mode keeps an inline string-intern table (a flat open-addressed hash with linear probing): the first occurrence of a string is written in full and repeats become varint back-references, shortened further by Markov-0 repeat, move-to-front and Markov-1 successor predictors. Struct shapes are also interned, so field names go on the wire once. Slices of 16 or more homogeneous structs are transposed to columns once a 32-row sampling probe predicts at least a 10% saving. Each column then gets the smallest of frame-of-reference, delta+FOR, RLE, dictionary, patched FOR, Gorilla/Chimp128 XOR, ALP, FSST or alphabet packing. OptCompression adds an order-0 tANS/FSE entropy pass over the body. On decode, a cached per-type descriptor reads fields through unsafe.Pointer and field offsets instead of reflect.Value, which accounts for the speed gap over encoding/json and msgpack.",
+  "when_to_use": [
+    "Go-to-Go shipping or storage of batches (16+ rows) of same-shape records such as logs, OTLP spans, RTB bids and events, where strings and enum values repeat across rows and bytes on the wire or disk cost money. The author's fixtures came out 29-68% smaller than protobuf at OptCompression.",
+    "Replacing encoding/json or vmihailenco/msgpack inside a Go-only system without writing a schema. Existing json tags work, and OptBalanced was 2.1x smaller with ~7x faster decode than encoding/json on a 5,000-row AD export.",
+    "Numeric and time-series slices (metric series, sensor floats, monotonic timestamps, status-code columns), where QPack codecs pay off. One example: a 1024-element HTTP status column encodes to 99 bytes, against 4.1 KB of JSON.",
+    "Stored wide columnar batches that readers query by column or predicate. With OptColumnIndex plus Select/Where, decoding a subset skips unread columns and filtered rows; the author measured ~5x faster projection than a full decode.",
+    "Cold storage or archives where encode CPU is cheap and size matters. Use OptCompression there."
+  ],
+  "when_not_to_use": [
+    "One small message at a time (RPC, single events). The docs say protobuf wins single-tiny-message size. Dense predictors and shape interning never amortise, and columnar needs at least 16 rows.",
+    "Cross-language contracts, or data that must stay readable for years. qdf is Go-only, alpha, pre-1.0 and has no backwards-compatibility promise, and the README says to pin a commit.",
+    "Paths bound by decode throughput or allocation, where protobuf or FlatBuffers is an option. The author concedes both win raw decode, and FlatBuffers wins encode allocation. In the buffer-reuse table, qdf_balanced and qdf_compression allocate more per encode than protobuf (RTB: 4.38-5.28 MB vs 2.51 MB per cycle).",
+    "Hot encode paths at OptCompression. It runs at ~70 MB/s on the IoT float batch against ~1100 MB/s for OptBalanced, and it encodes RTB slower than json/v2 defaults (1281 us vs 1238 us).",
+    "Zero-copy random field access into large mmap'd files. The README points to FlatBuffers or Cap'n Proto for that."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none in the default build (stdlib only). go.mod lists modern-go/reflect2, imported only under -tags qdf_reflect2, and golang.org/x/sys, imported only under -tags qdf_simd on amd64 for CPUID. The optional cmd/qdfgen is a separate module that uses golang.org/x/tools.",
+    "min_toolchain": "Go 1.27 (go.mod declares `go 1.27.0`; the README badge and 'Requires Go 1.26' text are out of date)",
+    "platforms": "amd64 and arm64 are the stated supported targets. The optional qdf_simd tag adds AVX2 asm on amd64 (CPUID-gated, with scalar fallback) and NEON integer decode on arm64. Other architectures compile a scalar stub.",
+    "thread_safety": "Marshal, AppendMarshal and Unmarshal are safe for concurrent use because each call leases a pooled encoder or decoder. A single Encoder, Decoder or StreamEncoder must not be shared across goroutines. One Dense document is sequential, so to parallelise, shard the data and Marshal each shard.",
+    "drop_in_for_baseline": "partial: Marshal/Unmarshal mirror encoding/json (Marshal takes an extra opts argument) and honour json tags, so it can replace encoding/json or msgpack calls between Go programs. It is not wire-compatible with protobuf, FlatBuffers or msgpack and has no IDL or non-Go readers, so it cannot replace protobuf across a language boundary."
+  },
+  "gotchas": [
+    "Each Marshal call starts with an empty intern table, so repeats are only deduplicated within one call. Cross-message dedup needs StreamEncoder, and streaming drops the whole-batch features (OptColumnIndex, Where/Select pushdown, the tANS/FSE pass).",
+    "WithNoCopy decodes strings and []byte as aliases of the input buffer. If that buffer is pooled or mutated (for example an HTTP request body), values silently corrupt and the race detector will not catch it. Likewise, UnmarshalBatch handles are undefined after Release in production builds.",
+    "Dense wire depends on emission order and is not byte-stable. Use OptSpeed or OptCanonical before hashing or signing it. Decoding into `any` gives uint64 for positive ints, and renaming a tag silently leaves the field empty for readers that still use the old name.",
+    "The wire format still changes. New codec forms make older decoders fail with ErrBadTag (for example the ALP reconstruction flag in PR #177), so upgrade readers before writers. The README says 'zero dependencies', but go.mod still requires reflect2 and x/sys; both are imported only behind build tags."
+  ],
+  "pick_this_over_siblings_when": "greenpack and ZebraPack are the Go siblings: msgpack2-based, codegen-driven formats that target per-message marshal speed against protobuf and stay readable by any msgpack library. Pick qdf when you move batches of repetitive records from Go to Go and wire size matters more than per-message latency, because it compresses across records and needs no codegen or schema. JSON BinPack also wins on size but is schema-driven.",
+  "verified_claims_summary": "On five batch fixtures (RTB, IoT, OTLP, Logs, Events) from the public bench/ suite (scripts/compare.sh, go test -bench -benchmem -count=6, default build, Go 1.26, i7-9750H darwin/amd64, dated 2026-06-01), qdf_compression's wire was 29-68% smaller than google.golang.org/protobuf and also smaller than FlatBuffers, msgpack and encoding/json. The speed wins are only against encoding/json v1 and vmihailenco/msgpack (5,000-user AD export: 7.9 ms decode vs 57.8 ms and 16.7 ms), and that AD harness times only qdf; protobuf and FlatBuffers still win raw decode, and the README's newer ubuntu-latest wire table (-24 to -77% vs protobuf) does not match the dated page.",
+  "status_note": "Actively developed by one author (HEAD committed 2026-09-18, tagged releases up to v0.1.3 on 2026-08-14, recurring self-audit PRs fixing overflow and corruption bugs). It is MIT-licensed and usable if you control both ends and pin a commit, but it is alpha with a moving wire format.",
+  "sources_read": [
+    "https://github.com/alex60217101990/qdf",
+    "https://github.com/alex60217101990/qdf/blob/main/README.md",
+    "https://github.com/alex60217101990/qdf/blob/main/docs/COMPETITIVE.md",
+    "https://github.com/alex60217101990/qdf/blob/main/docs/CHOOSING.md",
+    "https://github.com/alex60217101990/qdf/blob/main/docs/BENCH.md",
+    "https://github.com/alex60217101990/qdf/blob/main/docs/USAGE.md",
+    "https://github.com/alex60217101990/qdf/blob/main/docs/GUIDE.md",
+    "https://github.com/alex60217101990/qdf/blob/main/SECURITY.md",
+    "https://github.com/alex60217101990/qdf/blob/main/go.mod",
+    "https://github.com/alex60217101990/qdf/blob/main/bench/go.mod",
+    "https://github.com/alex60217101990/qdf/blob/main/scripts/compare.sh",
+    "https://github.com/alex60217101990/qdf/blob/main/qdf.go",
+    "https://github.com/alex60217101990/qdf/blob/main/columnar.go",
+    "https://github.com/alex60217101990/qdf/blob/main/state.go",
+    "https://github.com/alex60217101990/qdf/blob/main/floats_simd.go",
+    "https://github.com/alex60217101990/qdf/blob/main/floats_default.go",
+    "https://github.com/alex60217101990/qdf/blob/main/internal/reflectutil/alloc.go",
+    "https://github.com/alex60217101990/qdf/blob/main/internal/reflectutil/alloc_reflect2.go",
+    "https://github.com/alex60217101990/qdf/blob/main/internal/bitpack/bitpack_amd64.go",
+    "https://github.com/alex60217101990/qdf/blob/main/internal/bitpack/bitpack_stub.go",
+    "https://github.com/alex60217101990/qdf/blob/main/internal/endian/endian_be.go",
+    "https://github.com/alex60217101990/qdf/blob/main/bench/realistic_ad_bench_test.go",
+    "https://github.com/alex60217101990/qdf/blob/main/bench/competitor.go",
+    "https://github.com/alex60217101990/qdf/blob/main/cmd/qdfgen/README.md",
+    "https://github.com/alex60217101990/qdf/issues?q=is%3Aissue",
+    "https://github.com/alex60217101990/qdf/pulls?q=is%3Apr",
+    "https://github.com/alex60217101990/qdf/pull/177",
+    "https://github.com/alex60217101990/qdf/pull/164",
+    "https://github.com/alex60217101990/qdf/pull/168",
+    "https://github.com/alex60217101990/qdf/releases",
+    "https://github.com/alex60217101990/qdf/graphs/contributors",
+    "https://github.com/glycerine/greenpack",
+    "https://github.com/glycerine/zebrapack"
+  ],
+  "confidence": 0.8
+}
