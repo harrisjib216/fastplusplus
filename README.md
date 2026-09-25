@@ -7,11 +7,11 @@ claim against the cited page before it was written up.
 
 ## Lists
 
-- [COPYABLE.md](COPYABLE.md): 296 entries under an OSI license or CC0. Code can be vendored or forked.
+- [COPYABLE.md](COPYABLE.md): 329 entries under an OSI license or CC0. Code can be vendored or forked.
 - [REFERENCE.md](REFERENCE.md): 21 entries with no, unclear, or non-OSI license. Study the idea; don't copy the code.
 - [REJECTED.md](REJECTED.md): 6 candidates that failed verification.
 
-Tiers across both lists: A 129, B 29, C 154, D 5.
+Tiers across both lists: A 140, B 30, C 175, D 5.
 
 ## Evidence tiers
 
@@ -39,28 +39,31 @@ Ratios marked "(derived from page data)" were computed from numbers on the cited
 | parsing-and-text | text-search-and-indexing | 8 | 3 | 0 | 5 | 0 |
 | parsing-and-text | unicode-utf8 | 10 | 5 | 0 | 5 | 0 |
 | runtime-and-systems | filesystems-and-io | 1 | 0 | 1 | 0 | 0 |
-| serialization-and-formats | json | 3 | 2 | 0 | 1 | 0 |
-| stdlib-replacements | allocators | 16 | 4 | 4 | 7 | 1 |
+| serialization-and-formats | binary-schemas | 4 | 1 | 0 | 3 | 0 |
+| serialization-and-formats | json | 12 | 7 | 0 | 5 | 0 |
+| serialization-and-formats | reflection-and-codegen | 5 | 2 | 1 | 2 | 0 |
+| serialization-and-formats | yaml-toml-xml | 8 | 3 | 0 | 5 | 0 |
+| stdlib-replacements | allocators | 17 | 4 | 4 | 8 | 1 |
 | stdlib-replacements | async-tasks-threadpools | 8 | 5 | 1 | 1 | 1 |
 | stdlib-replacements | bitsets-and-succinct | 6 | 3 | 0 | 3 | 0 |
 | stdlib-replacements | concurrency-queues-locks | 8 | 6 | 0 | 2 | 0 |
-| stdlib-replacements | hash-maps-sets | 18 | 13 | 1 | 4 | 0 |
-| stdlib-replacements | io-and-filesystem | 3 | 1 | 0 | 2 | 0 |
+| stdlib-replacements | hash-maps-sets | 19 | 13 | 1 | 5 | 0 |
+| stdlib-replacements | io-and-filesystem | 4 | 1 | 0 | 3 | 0 |
 | stdlib-replacements | k-mer-dictionaries | 3 | 1 | 2 | 0 | 0 |
 | stdlib-replacements | math-simd-linear-algebra | 10 | 2 | 2 | 5 | 1 |
 | stdlib-replacements | minimal-perfect-hash-functions | 20 | 14 | 2 | 4 | 0 |
-| stdlib-replacements | number-parsing-formatting | 15 | 6 | 2 | 7 | 0 |
+| stdlib-replacements | number-parsing-formatting | 16 | 6 | 2 | 8 | 0 |
 | stdlib-replacements | ordered-maps-trees | 9 | 4 | 0 | 5 | 0 |
 | stdlib-replacements | perfect-hash-static-tables | 20 | 8 | 0 | 12 | 0 |
 | stdlib-replacements | priority-queues-heaps | 5 | 4 | 0 | 1 | 0 |
 | stdlib-replacements | random | 9 | 4 | 2 | 3 | 0 |
 | stdlib-replacements | regex | 7 | 3 | 1 | 3 | 0 |
-| stdlib-replacements | searching | 5 | 2 | 0 | 3 | 0 |
+| stdlib-replacements | searching | 6 | 2 | 0 | 4 | 0 |
 | stdlib-replacements | sequence-containers | 5 | 2 | 0 | 3 | 0 |
 | stdlib-replacements | serialization-json | 10 | 5 | 0 | 5 | 0 |
-| stdlib-replacements | small-buffer-and-strings | 7 | 1 | 0 | 5 | 1 |
+| stdlib-replacements | small-buffer-and-strings | 8 | 1 | 0 | 6 | 1 |
 | stdlib-replacements | smart-pointers-and-refcount | 7 | 3 | 1 | 3 | 0 |
-| stdlib-replacements | sorting | 17 | 6 | 0 | 11 | 0 |
+| stdlib-replacements | sorting | 18 | 6 | 0 | 12 | 0 |
 | stdlib-replacements | string-search-and-hashing | 9 | 5 | 1 | 3 | 0 |
 | toolchain-and-build | build-systems | 5 | 1 | 0 | 4 | 0 |
 | toolchain-and-build | compile-caching-and-distribution | 4 | 0 | 0 | 4 | 0 |
