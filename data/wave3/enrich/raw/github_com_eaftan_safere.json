@@ -1,0 +1,47 @@
+{
+  "id": "https://github.com/eaftan/safere",
+  "one_liner": "Linear-time, ReDoS-proof Java regex engine; drop-in java.util.regex replacement, RE2 port, 2.22x faster on real-world workloads.",
+  "what_it_does": "SafeRE is a from-scratch Java port of RE2 that serves as a drop-in replacement for java.util.regex.Pattern and Matcher, so existing code needs only an import change. Its finite-automata engines guarantee linear-time matching, eliminating the exponential-time ReDoS risk inherent to the JDK's backtracking engine. It also exposes a separate Utf8Input/Utf8Matcher API for matching UTF-8 byte arrays directly without decoding to a String, and a PatternSet type for matching multiple patterns in one pass.",
+  "how_it_is_fast": "Like RE2, SafeRE compiles patterns to finite automata instead of a backtracking NFA, and picks among five engines per query (OnePass, DFA, BitState, Pike-VM NFA, and reverse DFA) to fit the query's structure. This avoids catastrophic backtracking entirely (0.089us vs the JDK's 17,079us on an adversarial a?{25}a{25} pattern) and, on the real-world 150-row matrix, comes out ahead of java.util.regex's backtracking overhead overall. A SWAR (and experimental incubating-Vector-API) byte scanner accelerates ASCII character-class/literal prefix scans on the UTF-8 input path.",
+  "when_to_use": [
+    "Untrusted or user-supplied patterns where a JDK backtracking engine could hang (ReDoS); SafeRE rejects unsafe constructs at compile time and guarantees linear time.",
+    "Java 21+ services replacing java.util.regex on workloads shaped like the 150-row real-world matrix (mixed pattern types, 1K-100K inputs, match and no-match) where the 2.22x geomean win was measured.",
+    "JVM data/storage/network code that already holds text as UTF-8 bytes and wants to skip an input-sized UTF-8 to UTF-16 conversion before matching.",
+    "Need to test many patterns against the same input in one pass (PatternSet).",
+    "Willing to trade much slower pattern compilation for consistently bounded match latency."
+  ],
+  "when_not_to_use": [
+    "Compile-heavy workloads (many distinct patterns compiled once or rarely reused): compilation is 71.2x slower than the JDK and 11.7x slower than RE2/J.",
+    "Workloads shaped like the project's own Core/Application suites (short literal/class/API-style operations): SafeRE measured 22% and 7% slower than java.util.regex there.",
+    "Need backreferences, lookahead/lookbehind, possessive quantifiers over consuming operands, or atomic groups -- all rejected at compile time, not silently degraded.",
+    "Already running native C++/Rust/Go/.NET: SafeRE is 13% slower than C++ RE2, 2.03x slower than Rust regex, and 2.47x slower than PCRE2 JIT on the same real-world matrix.",
+    "Need Matcher.hitEnd()/requireEnd() or exact JDK matcher-state parity after usePattern()/a terminal empty find() -- SafeRE intentionally diverges there."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none for the core org.safere:safere artifact; the separate safere-ffm-re2 module adds a native RE2 FFM binding used only for benchmarking",
+    "min_toolchain": "Java 21+ (built with JDK 26 targeting --release 21; CI verifies JDK 21 through 26)",
+    "platforms": "any JVM platform; optional experimental Vector API scanner needs a JDK 21+ incubator module flag and only covers UTF-8 prefix scans",
+    "thread_safety": "Pattern is documented as thread-safe and reusable (README quick start); Matcher thread-safety is not documented, consistent with java.util.regex's stateful, non-thread-safe Matcher.",
+    "drop_in_for_baseline": "partial — drop-in for java.util.regex.Pattern/Matcher on supported syntax, but backreferences, lookaround, possessive-over-consuming quantifiers, atomic groups, and CANON_EQ are rejected at compile time, hitEnd()/requireEnd() are unsupported, and a few matcher-state edge cases after usePattern() or a terminal empty find() intentionally diverge from the JDK."
+  },
+  "gotchas": [
+    "usePattern() keeps the prior match's group-zero bounds/text valid; JDK 26 instead nulls group() while leaving start()/end() non-throwing, an inconsistency SafeRE deliberately does not reproduce (tracked upstream as JDK-8390449).",
+    "After a terminal empty find() at the region end, hasMatch() becomes false and start()/end()/group() throw IllegalStateException, whereas the JDK leaves inconsistent-but-non-throwing state; replaceAll/replaceFirst output text itself still matches the JDK.",
+    "Unsupported syntax (backreferences, lookaround, possessive quantifiers over consuming operands, atomic groups, CANON_EQ) fails at Pattern.compile time with an explicit error rather than falling back silently.",
+    "The experimental Vector scanner needs both --add-modules=jdk.incubator.vector and a system property; without both it silently keeps using the default SWAR scanner."
+  ],
+  "pick_this_over_siblings_when": "None of the catalogued siblings target java.util.regex -- they beat RE2, PCRE2, Python re, or Rust regex directly. Pick SafeRE specifically when java.util.regex is your incumbent and you need a same-API, linear-time-guaranteed replacement; if you can drop java.util.regex API compatibility, RE2/J or a native RE2/PCRE2/Rust-regex binding will outrun SafeRE on the same benchmark matrix.",
+  "verified_claims_summary": "On the project's own JMH suite (OpenJDK 26.0.2 targeting Java 21, JMH 1.37, Intel i7-11700K under WSL2/Ubuntu 24.04), SafeRE is a 2.22x geometric-mean win over java.util.regex across a 150-row real-world matrix (1.88x excluding 2 pathological-backtracking rows), but 22% slower than the JDK on 8 'Core' operations and 7% slower on 8 'Application' tasks; against native C++ RE2 (g++ 13.3.0 -O3), Rust regex 1.13.1, and PCRE2 10.47 JIT on the same real-world matrix it is 13%, 103%, and 147% slower respectively.",
+  "status_note": "Actively maintained (commits as recent as today, extensive open design docs and issue tracker) and published to Maven Central; BSD-3-Clause per pom.xml and the LICENSE text even though GitHub's license detector shows NOASSERTION because the LICENSE file bundles RE2's and RE2/J's notices.",
+  "sources_read": [
+    "https://github.com/eaftan/safere",
+    "https://github.com/eaftan/safere/blob/main/README.md",
+    "https://github.com/eaftan/safere/blob/main/BENCHMARKS.md",
+    "https://github.com/eaftan/safere/blob/main/pom.xml",
+    "https://github.com/eaftan/safere/blob/main/LICENSE",
+    "https://github.com/eaftan/safere/blob/main/INTENTIONAL_DIVERGENCES.md",
+    "https://github.com/eaftan/safere/issues"
+  ],
+  "confidence": 0.7
+}

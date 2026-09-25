@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/quickwit-oss/tantivy",
+  "one_liner": "Embeddable Rust full-text search library, architecturally close to Lucene, ahead on phrase/negated/count-heavy queries.",
+  "what_it_does": "Tantivy is a Rust crate for building full-text search: schema definition, an IndexWriter for multithreaded incremental indexing with BM25 scoring, a query parser/query API, and collectors for top-k results, counting, and aggregations. It is a library, not a server (Quickwit is the distributed server built on top), and it is not source- or API-compatible with Lucene — you write Rust against tantivy's own types rather than dropping it in as a replacement.",
+  "how_it_is_fast": "Indexes are immutable, mmap'd segments with FST-based term dictionaries (tantivy-fst) for fast term lookup and block-bitpacked (bitpacker4x) SIMD-friendly postings compression. Top-k boolean queries use Block-Max WAND pruning (src/query/boolean_query/block_wand_intersection.rs and block_wand_union.rs): documents are processed in 128-doc windows and whole blocks are skipped when their precomputed max score can't beat the current threshold. These are the same algorithmic family Lucene uses, reimplemented in Rust.",
+  "when_to_use": [
+    "Embedding a BM25 full-text index directly into a Rust binary, CLI, or service without running a separate search server or JVM",
+    "Read-heavy workloads dominated by phrase, negated, or count-only queries (COUNT / TOP_100_COUNT), where the current benchmark shows it ahead of Lucene",
+    "Append-mostly / batch indexing that fits a commit-based, immutable-segment model rather than constant per-document mutation",
+    "Need multi-language stemming (17 languages), JSON fields, facets, or range queries out of the box in a single crate",
+    "Fine with a Rust core and using community bindings (tantivy-py, Ruby) rather than a JVM dependency"
+  ],
+  "when_not_to_use": [
+    "Latency-sensitive TOP_10 result pages or intersection/union-heavy boolean queries, where the current benchmark shows Lucene ~2x-2.6x faster",
+    "Frequent in-place document edits: segments are immutable, so updates are delete-then-reindex plus a merge",
+    "Need a standalone search server out of the box; Tantivy itself has no REST/network layer (pair with Quickwit or build one)",
+    "Team is JVM-only and doesn't want a Rust toolchain in the stack just for search",
+    "Need Lucene's much longer operational history and broader third-party tooling/plugin ecosystem"
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "many small Rust crates (regex, aho-corasick, tantivy-fst, bitpacking, rayon, lz4_flex/zstd optional, serde); no external services or JVM",
+    "min_toolchain": "Rust 1.87 (edition 2021, per Cargo.toml rust-version); the benchmark build used Rust 1.96.0 with target-cpu=native + LTO",
+    "platforms": "any (pure Rust, Linux/macOS/Windows per README); SIMD integer postings compression activates on SSE2-capable CPUs",
+    "thread_safety": "not documented as a blanket guarantee; source shows one active IndexWriter per index (internally multithreaded, up to 8 worker threads, memory-budgeted per thread) while Searcher/IndexReader snapshots are cheap to clone and read concurrently",
+    "drop_in_for_baseline": "partial — explain: mirrors Lucene's design (BM25, schema, segments, merge policy) but is a different language and API, not wire- or source-compatible"
+  },
+  "gotchas": [
+    "Segments are immutable; deletes are tombstones resolved only at merge time, so delete-heavy workloads need merge-policy tuning",
+    "Only one IndexWriter may be open on an index at a time (directory-locked); concurrent writers must be coordinated externally",
+    "SIMD postings gains are CPU-dependent (SSE2 assumed); the published benchmark numbers were built with -C target-cpu=native and LTO, which a default `cargo build --release` from crates.io won't reproduce",
+    "Experimental features like the jitexpr predicate crate are explicitly marked unstable and likely to change"
+  ],
+  "pick_this_over_siblings_when": "Pick Tantivy over IResearch/SereneDB or SeekStorm (same category, also run through the same search-benchmark-game harness against Lucene) when you want the most mature, widely production-used Rust search crate (Etsy, ParadeDB, Nuclia) rather than the largest headline multiple — IResearch and SeekStorm claim bigger speedups in that same suite but have far less deployment history.",
+  "verified_claims_summary": "In the search-benchmark-game suite, Tantivy 0.26 (Rust 1.96.0, target-cpu=native, LTO, opt-level=3) vs Lucene 10.4.0 (OpenJDK 21.0.11, ParallelGC) on an AMD Ryzen 7 9800X3D shows per-collector geometric-mean ratios from 0.83x (Lucene faster on TOP_10) to 1.31x (TOP_100_COUNT) — not the README's claimed '~2x faster' — with Tantivy's wins concentrated in phrase, negated, and count-heavy collectors and Lucene ahead on TOP_10 and intersection/union queries.",
+  "status_note": "Actively maintained (last commit 2026-09-23, Cargo.toml already at 0.27.0) with 16.1k stars and real production users (Etsy, ParadeDB, Nuclia, Element.io); MIT-licensed and usable as an ordinary vendored Rust dependency.",
+  "sources_read": [
+    "https://github.com/quickwit-oss/tantivy (README)",
+    "https://github.com/quickwit-oss/tantivy/blob/main/Cargo.toml",
+    "https://github.com/quickwit-oss/tantivy (repo tree listing)",
+    "https://github.com/quickwit-oss/tantivy/issues (search: corruption OR data loss OR panic)",
+    "https://github.com/quickwit-oss/tantivy/blob/main/src/lib.rs",
+    "https://github.com/quickwit-oss/tantivy/blob/main/src/query/boolean_query/block_wand_intersection.rs",
+    "https://github.com/quickwit-oss/tantivy/blob/main/CHANGELOG.md",
+    "https://github.com/quickwit-oss/tantivy/blob/main/src/indexer/index_writer.rs"
+  ],
+  "confidence": 0.8
+}

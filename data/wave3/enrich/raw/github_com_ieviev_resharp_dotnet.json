@@ -1,0 +1,47 @@
+{
+  "id": "https://github.com/ieviev/resharp-dotnet",
+  "one_liner": "Automata-based .NET/F# regex engine beating Rust's regex crate on rebar benchmarks; adds intersection, complement, lookarounds.",
+  "what_it_does": "RE# is a from-scratch symbolic-automata regex engine for .NET (core written in F#, thin C# runtime shim) exposed as the `Resharp.Regex` type. It solves the same matching/searching problem as `System.Text.RegularExpressions` but is not a drop-in replacement: it is a separate type with `IsMatch`, `Matches`, `Count`, `Replace`, `ValueMatches`, and `FirstEnd`/`LongestEnd` methods, extends .NET syntax with intersection (`&`), complement (`~(...)`), and a universal wildcard (`_`), and has no capture groups other than the whole match.",
+  "how_it_is_fast": "Patterns compile ahead of time into a symbolic (minterm-partitioned) automaton: the alphabet is collapsed into equivalence classes via a BDD-backed solver (BitVector/UInt64/CharSet solvers) so transition tables stay small regardless of Unicode range. Matching is derivative-based, non-backtracking, and guaranteed linear-time; RE# optionally precompiles a full DFA up front (`ResharpOptions.HighThroughputDefaults`, `DfaThreshold`) or falls back to lazy on-the-fly DFA construction for very large patterns, plus start-set inference and literal-prefix scanning to skip non-matching regions.",
+  "when_to_use": [
+    "Large/complex patterns (many alternations, loops, big Unicode classes) where .NET's Compiled/SourceGenerated engines and Rust regex both degrade",
+    "Untrusted input where guaranteed non-backtracking, linear-time matching is needed to rule out ReDoS",
+    "Patterns needing lookaround in a non-backtracking automata engine, or boolean composition of constraints (e.g. 'matches A and matches B and length in range') via intersection/complement",
+    "Same compiled pattern reused many times over large .NET/F# text buffers, using `ValueMatches` for zero-allocation matching",
+    ".NET/F# codebases already comfortable adding a NuGet dependency for a non-standard regex type"
+  ],
+  "when_not_to_use": [
+    "Non-.NET stacks — ships only as a .NET library; the companion Rust rewrite (github.com/ieviev/resharp) is, per its author, currently slower than this F# version",
+    "Need multi-group capture extraction — RE# has no capturing groups beyond the whole match ($0 only in Replace); pair with another engine for group extraction",
+    "Need lazy quantifiers, backreferences, balancing groups, or conditional patterns — unsupported, automata-only feature set",
+    "Need PCRE/.NET leftmost-first semantics — RE# is leftmost-longest, which changed match results on 2 of 27 rebar baseline benchmarks vs. leftmost-greedy engines",
+    "Simple literal or literal-alternation patterns — the paper shows Rust regex has a lower slowdown than RE# in exactly these two baseline categories"
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none",
+    "min_toolchain": ".NET SDK 8+ (multi-targets net8.0;net9.0;net10.0), F# compiler for the core library",
+    "platforms": "any (managed .NET/F#; no native code or SIMD intrinsics documented)",
+    "thread_safety": "A Regex instance is thread-safe and shareable across threads without external locking; matching methods lock internally only during DFA construction, then run lock-free once the state graph is built (docs/api.md)",
+    "drop_in_for_baseline": "partial — explain: same broad method shapes as System.Text.RegularExpressions (IsMatch/Matches/Count/Replace) but a different type, extended (&, ~, _) syntax, no capture groups beyond $0, and leftmost-longest instead of leftmost-first semantics"
+  },
+  "gotchas": [
+    "`ValueMatches` returns a disposable pooled value list — must be `use`/disposed or pooled memory leaks",
+    "Leftmost-longest matching can return a different match than .NET's or PCRE's leftmost-first engines for the same pattern",
+    "Lookarounds cannot be nested, unioned across alternatives, or placed mid-pattern — only at pattern edges (confirmed by closed issue #2 on this exact limitation)",
+    "No numbered capture groups; `Replace` supports `$0` only, so multi-group extraction needs a second pass with a different engine"
+  ],
+  "pick_this_over_siblings_when": "Locked into .NET/F# and need Rust-regex-beating throughput plus features Rust's regex crate can't do at all (intersection, complement, lookarounds); coregex is the only other sibling benchmarked against Rust regex, but it's a different (non-.NET) engine and wins on fewer patterns (6 of 16) rather than topping an independent multi-engine suite the way RE# does on rebar.",
+  "verified_claims_summary": "Per the peer-reviewed paper (arXiv 2407.20479), on BurntSushi/rebar's 27-benchmark baseline suite RE# posts a geometric-mean slowdown of 1.48 vs Rust regex's 2.54 (paper's own '71% faster' framing), and on extended benchmarks RE# is 1.09 vs Hyperscan 3.77 and rust/regex 29.5, measured on an AMD Threadripper 3960X 24-core/128GB RAM Ubuntu 22.04 Docker box with engine versions and compiler/runtime flags unstated. The repo's own README table separately shows RE# 37x-34,833x faster than .NET's Compiled/SourceGenerated regex on curated rebar-derived patterns (Ryzen 7 5800X, .NET 10.0).",
+  "status_note": "Active (last commit 2026-07-04), MIT-licensed and published on NuGet as `Resharp`; 257 stars puts it early-stage rather than widely adopted, but it's a small managed library with no external dependencies, so it's cheap to vendor or pin.",
+  "sources_read": [
+    "https://github.com/ieviev/resharp-dotnet",
+    "https://github.com/ieviev/resharp-dotnet/blob/main/README.md",
+    "https://github.com/ieviev/resharp-dotnet/blob/main/docs/api.md",
+    "https://github.com/ieviev/resharp-dotnet/blob/main/docs/syntax.md",
+    "https://github.com/ieviev/resharp-dotnet/blob/main/Directory.Build.props",
+    "https://github.com/ieviev/resharp-dotnet/blob/main/src/Resharp/Resharp.fsproj",
+    "https://github.com/ieviev/resharp-dotnet/issues"
+  ],
+  "confidence": 0.72
+}

@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/pyos/re2jit",
+  "one_liner": "JIT-compiles RE2's NFA to x86-64 machine code; beats RE2 on capture groups and Unicode classes.",
+  "what_it_does": "re2jit rewrites some of RE2's internal constructs, then JIT-compiles RE2's Thompson NFA into native x86-64 machine code executed from mmapped executable memory, instead of stepping RE2's bytecode VM. It still falls back to RE2's own DFA for plain unanchored searches that discard capture groups. The API is a separate `re2jit::it` class wrapping a compiled pattern, with a `match()` method mirroring RE2::Match's Anchor/StringPiece-array signature — a similar shape, not a subclass or drop-in for `RE2`.",
+  "how_it_is_fast": "Two techniques: an x86-64 assembler DSL (asm64.h) plus a converter (it.x64.cc) turn Thompson-NFA thread stepping into native opcodes in mmapped executable memory, skipping RE2's VM dispatch loop when capture positions must be reported; and a rewriter (rewriter.h) replaces RE2's per-codepoint alternation expansion of Unicode classes (\\pL, \\p{Lu}, etc.) with a generated 2-stage lookup table, turning a many-branch match into a table lookup. For simple unanchored, non-capturing search it just defers to RE2's DFA, so there's no regression there.",
+  "when_to_use": [
+    "Capture groups whose boundaries must be reported, on x86-64 Linux/macOS.",
+    "Patterns using full Unicode property classes (\\pL, \\p{Lu}, etc.) in a hot loop, especially against older RE2 versions.",
+    "Backreference-heavy patterns where no backreferenced group is itself repeated, needing guaranteed polynomial (not exponential) time.",
+    "You're willing to vendor an abandoned, single-maintainer MIT source-drop rather than depend on a maintained package.",
+    "You can build RE2 as a git submodule/static lib yourself; no package manager integration exists."
+  ],
+  "when_not_to_use": [
+    "Need \\b/\\B word-boundary matching — not implemented at all, not even as an error.",
+    "Non-x86-64 targets — falls back to a slower VM interpreter (ENABLE_VM=1) with no real speed benefit.",
+    "Comparing against a current RE2 release — the author's own README says newer RE2 closed much of the Unicode-charclass gap, so the up-to-100x figure is likely stale.",
+    "Regexes with a repeated backreferenced group (e.g. (x*)*\\1) — exponential time, the standard backreference pitfall.",
+    "Anything you'd call production-critical — no commits since 2016, no CI evidence found, and the README literally ends with 'don't use this thing either way.'"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "google/re2 (git submodule, built to obj/libre2.a)",
+    "min_toolchain": "C++11, g++-compatible CXX; Python 3 to regenerate unicodedata.h",
+    "platforms": "x86-64 (Linux/macOS and similar 64-bit UNIX); other architectures only via a slower VM interpreter (ENABLE_VM=1)",
+    "thread_safety": "not documented beyond an internal std::atomic cache for named_groups(); no stated guarantee for concurrent match() calls on one it instance",
+    "drop_in_for_baseline": "partial — separate re2jit::it class mirrors RE2::Match's Anchor/StringPiece signature but isn't a subclass or ABI-compatible replacement for RE2"
+  },
+  "gotchas": [
+    "Reserves Unicode plane-15 private-use code points (roughly U+F0000-U+F0FFF) for internal use; matching against them is unsupported.",
+    "\\b/\\B word boundaries are silently absent rather than erroring.",
+    "Unanchored search with backreferences can't use RE2's DFA fallback, so it's slow by a large constant, independent of algorithmic complexity.",
+    "Perf figures come only from two repo-bundled programs (test/30-long, test/32-markdownish, built with ENABLE_PERF_TESTS=1); no independent benchmark exists."
+  ],
+  "pick_this_over_siblings_when": "Among the catalogued RE2-beating siblings (rejit, BLARE), pick re2jit specifically when the bottleneck is \\p{X} Unicode-class matching or capture-group boundary reporting on x86-64 Linux/macOS — that's its one distinctly measured edge. rejit and BLARE report broader RE2 speedups and don't share re2jit's missing \\b/\\B support, so prefer them for general-purpose replacement.",
+  "verified_claims_summary": "First-party README benchmarks (no CPU model, compiler, flags, or absolute timings given) claim re2jit matches RE2's speed on unanchored non-capturing search (shared DFA), runs 20-30% faster than RE2 when capture-group boundaries are needed (test/32-markdownish, a two-regex Markdown-to-HTML converter), and up to 100x faster than RE2 on patterns using Unicode property classes like \\pL (test/30-long, a tokenizer for the 'dg' language), all measured against google/re2 directly with no C++ stdlib comparison.",
+  "status_note": "Abandoned since its last commit on 2016-11-25, and the README itself says 'don't use this thing either way' — but it's MIT-licensed, depends only on RE2, and small enough to vendor if you just want the Unicode-charclass lookup-table trick.",
+  "sources_read": [
+    "https://github.com/pyos/re2jit",
+    "https://github.com/pyos/re2jit/blob/master/README.md",
+    "https://github.com/pyos/re2jit/blob/master/re2jit/it.h",
+    "https://github.com/pyos/re2jit/blob/master/Makefile",
+    "https://github.com/pyos/re2jit/blob/master/.gitmodules",
+    "https://github.com/pyos/re2jit/issues"
+  ],
+  "confidence": 0.35
+}

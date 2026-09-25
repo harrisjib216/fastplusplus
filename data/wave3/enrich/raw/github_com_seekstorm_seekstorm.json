@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/seekstorm/seekstorm",
+  "one_liner": "Rust in-process search engine with native lexical and vector indexes; claims sub-millisecond BM25 latency beating Lucene.",
+  "what_it_does": "Embeddable Rust crate plus a standalone multi-tenancy HTTP search server, with its own JSON schema and query syntax rather than a Lucene-compatible API. Runs two first-class index types side by side, an inverted index for BM25F lexical search and an IVF ANN index for vector search, unified by a query planner that fuses results with Reciprocal Rank Fusion. Documents are indexed with async calls like index_document() or via the server's REST/OpenAPI endpoints, then queried with typed query objects.",
+  "how_it_is_fast": "Term-proximity BM25F ranking with block-max WAND/Maxscore query pruning and roaring-bitmap-compressed posting lists cuts work per query; intersection/union routines are hand-written with SIMD (see intersection_simd.rs, AVX2/NEON). Being a single Rust binary avoids JVM warm-up, GC pauses, and Lucene-style segment merges, which the README credits for stable tail latency (no cold-start or merge-triggered spikes). True real-time indexing means new documents are searchable immediately, without a commit/refresh delay.",
+  "when_to_use": [
+    "Million-doc-scale BM25 lexical search (like the Wikipedia benchmark) where sub-millisecond latency and low tail latency (P99) matter",
+    "Need lexical + vector hybrid search behind one query planner (RRF fusion) instead of bolting a vector DB onto Lucene",
+    "Want a single-binary Rust deployment with no JVM, avoiding GC pauses and segment-merge latency spikes",
+    "True real-time search requirement: every indexed document must be searchable immediately, not near-real-time",
+    "Willing to adopt a new schema/query API and Rust crate ecosystem instead of reusing an existing Lucene index"
+  ],
+  "when_not_to_use": [
+    "Need drop-in Lucene/Solr/Elasticsearch compatibility: index format, Query DSL, and Java plugin ecosystem are not compatible with SeekStorm's own REST API and schema",
+    "Risk-averse production use: 1.9k stars and a young issue tracker, smaller deployment base than Lucene/Tantivy",
+    "Workload is dominated by single very-frequent-term COUNT queries: SeekStorm measured about 3x slower than Lucene on the term 'the' under the COUNT collector, and plain TOP_10 union gains are only 1.3x, not the 100x+ figures reported for other collectors",
+    "Platform outside x86-64/aarch64 or Windows/Linux/macOS: other OSes are explicitly untested per README",
+    "Need the 20-year analyzer/connector/plugin ecosystem Lucene has accumulated"
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "many: tokio, serde/serde_json, rayon, zstd, ahash (or optional gxhash), regex, model2vec-rs for embeddings, optional pdfium-render (feature \"pdf\") and Chinese segmentation (feature \"zh\") — see Cargo.toml for full list (~30 deps)",
+    "min_toolchain": "Rust edition 2024 (Cargo.toml edition=\"2024\"); the verified benchmark build used Rust 1.90 with RUSTFLAGS='-C target-cpu=native'",
+    "platforms": "x86-64 and aarch64 with SIMD acceleration on both; Windows, Linux, macOS documented, other OS untested per README",
+    "thread_safety": "not formally documented beyond usage pattern; README examples wrap the index in Arc<RwLock<..>> and require an async Tokio runtime (#[tokio::main]) for indexing and search calls",
+    "drop_in_for_baseline": "partial — explain: the server exposes a REST API like a search backend, but uses its own JSON schema, query syntax and OpenAPI spec, not Lucene's API or index format"
+  },
+  "gotchas": [
+    "Requires an async Tokio runtime even for basic single-threaded indexing/search calls",
+    "Default Cargo features pull in Chinese word segmentation, PDF text extraction (pdfium-render), and varint bitpacking; disable with default-features=false if not needed",
+    "Historical panics reported on commit() after reopening an external-vector index (issue #65) and during realtime search (issue #36); both closed/fixed but indicate edge cases under specific update sequences",
+    "Optional gxhash feature needs AES/SSE2 hardware support; enabling it without that support is a documented risk"
+  ],
+  "pick_this_over_siblings_when": "Pick SeekStorm over Tantivy or IResearch (SereneDB) when you need a first-class native vector index and hybrid RRF fusion in the same engine, not just lexical search; its phrase/union speedups (3.1x-13.1x) are also larger in its own benchmark run than Tantivy's ~2x README claim, though intersection gains (1.5x-2.0x) are in a similar range and SeekStorm is the youngest, smallest-community project of the three.",
+  "verified_claims_summary": "Against Lucene 10.3.0-bp (OpenJDK 21, -XX:+UseParallelGC, --add-modules jdk.incubator.vector) with SeekStorm 1.0.0 built via RUSTFLAGS='-C target-cpu=native' cargo build --release on Rust 1.90, run on a ThinkPad P1 Gen 6 (i7-13700H, NVMe SSD, Ubuntu 24.04): over 300 intersection, 300 phrase and 301 union AOL-derived queries plus 'the' and a two-phase-critic query on 5,032,105-doc English Wikipedia, mean best-of-10 latency was 1.5x-2.0x faster for intersection, 3.1x-6.4x for phrase, 1.3x-13.1x for union, and 115x-135x for the two-phase-critic query, but about 3x slower than Lucene on 'the' under the COUNT collector.",
+  "status_note": "Actively maintained (last commit 2026-09-12), Apache-2.0 licensed, and copyable as a Rust crate; 1.9k stars is small next to Lucene's install base, but the CHANGELOG and issue tracker show ongoing bug fixes and feature work.",
+  "sources_read": [
+    "https://github.com/SeekStorm/SeekStorm",
+    "https://github.com/SeekStorm/SeekStorm/blob/main/README.md",
+    "https://github.com/SeekStorm/SeekStorm (recursive file tree)",
+    "https://github.com/SeekStorm/SeekStorm/blob/main/seekstorm/Cargo.toml",
+    "https://github.com/SeekStorm/SeekStorm/blob/main/Cargo.toml",
+    "https://github.com/SeekStorm/SeekStorm/blob/main/seekstorm/src/lib.rs",
+    "https://github.com/SeekStorm/SeekStorm/issues (search: bug)",
+    "https://github.com/SeekStorm/SeekStorm/issues?state=open"
+  ],
+  "confidence": 0.6
+}

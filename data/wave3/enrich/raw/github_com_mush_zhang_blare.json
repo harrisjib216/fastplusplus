@@ -1,4 +1,49 @@
 {
   "id": "https://github.com/mush-zhang/blare",
   "one_liner": "Research framework that decomposes regexes into reordered sub-matches via a bandit-picked plan, layered on RE2/PCRE2/Boost/ICU.",
-  "what_it_does": "BLARE speeds up repeated regex matching over large line-oriented corpora by splitting one regex into components and evaluating them in a non-left-to-right order chosen by a multi-armed-bandit policy, instead of matching the whole pattern in one pass through the underlying engine. It is not a regex engine itself: it wraps RE2, PCRE2, Boost.Regex, or ICU Regex and exposes free functions per backend, e.g. `BlareRE2(lines, reg_string)` returning a `(time, match_count, other)` tuple, rather than a drop-in `Regex`/`RE2` object. Callers link against one of the four `blare_<engine>` targets and call its function directly on a vector of input lines plus the regex string.";
+  "what_it_does": "BLARE speeds up repeated regex matching over large line-oriented corpora by splitting one regex into components and evaluating them in a non-left-to-right order chosen by a multi-armed-bandit policy, instead of matching the whole pattern in one pass. It is not a standalone regex engine: it wraps RE2, PCRE2, Boost.Regex, or ICU Regex and exposes free functions per backend, e.g. BlareRE2(lines, reg_string), returning a (time, match_count, other) tuple, rather than a drop-in Regex/RE2 object. Callers build one of the four blare_<engine> targets and call its function directly on a vector of input lines plus the regex string.",
+  "how_it_is_fast": "The regex is split (3-way split_regex or N-way split_regex_multi) into sub-patterns, and a multi-armed-bandit policy picks which sub-pattern to evaluate first based on observed cost/selectivity, so cheap or highly discriminating fragments reject non-matching lines before the full pattern is ever run through the underlying engine. Because the same regex is reused across many lines (log/dataset scanning), the bandit amortizes its exploration cost and converges on a near-optimal evaluation order for that workload; the final per-fragment match still calls the wrapped engine (RE2/PCRE2/Boost/ICU), so BLARE is an execution-order optimizer on top of those engines, not a replacement matcher.",
+  "when_to_use": [
+    "Batch, single-threaded scanning of many lines against one recurring regex (e.g. log parsing, dataset filtering) where the bandit can amortize warm-up",
+    "You already depend on RE2, PCRE2, Boost.Regex, or ICU Regex and want extra throughput without switching engines",
+    "Regexes with decomposable structure (alternations, literal anchors) that benefit from evaluating a cheap/selective piece first",
+    "Reproducing or extending the SIGMOD 2023 paper's results, using original_codebase/BLARE_CODE for exact numbers",
+    "First-match-per-line extraction workloads similar to the paper's US-Accidents / production log benchmarks"
+  ],
+  "when_not_to_use": [
+    "Any production dependency requiring maintenance or support: last commit 2023-11-20, 9 stars, 0 forks, no CI visible",
+    "Anywhere licensing matters: no LICENSE file, so GitHub marks it all-rights-reserved by default",
+    "Environments that can't add Abseil, Boost >=1.65.1, ICU4C, and PCRE2/jPCRE2 as build dependencies",
+    "Multi-threaded or latency-sensitive services: paper benchmarks are single-threaded only; thread safety is not documented",
+    "Anything needing the exact paper numbers from current main: README states main-branch code 'may not produce results identical to that in the BLARE paper'",
+    "Non-Linux targets: build instructions are Ubuntu/apt-based and the original experiment flags use -march=native, tying binaries to the build host's CPU"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "Abseil, Boost (>=1.65.1), RE2, PCRE2 10.40 via jPCRE2 (JIT), ICU4C 72, CMake (>=3.14), git-lfs for the sample dataset",
+    "min_toolchain": "C++17, g++ 8.4.0+, CMake 3.14+",
+    "platforms": "Linux/Ubuntu per documented build steps; macOS/Windows not documented; original experiment binaries built with -march=native are host-CPU-specific",
+    "thread_safety": "not documented — all reported benchmarks are single-threaded",
+    "drop_in_for_baseline": "partial — explain: wraps RE2/PCRE2/Boost/ICU internally but exposes its own free functions (e.g. BlareRE2(lines, reg_string) -> tuple) per backend rather than each engine's native API, so callers must adopt BLARE's function signatures instead of swapping a header"
+  },
+  "gotchas": [
+    "Main-branch code is under active change and the README itself warns it may not reproduce the paper's numbers; use original_codebase/BLARE_CODE for that",
+    "No LICENSE file is present (GitHub reports 'license: none'), so usage/redistribution rights are unclear by default",
+    "The bundled US-Accidents CSV requires 'git lfs pull'; a newer Kaggle CSV format breaks the hard-coded read_traffic parser and needs manual edits",
+    "Two of the three paper workloads (DB-X, System-Y) are Microsoft-internal logs and cannot be rerun outside Microsoft; only the 1.6x-vs-RE2 US-Accidents result is publicly reproducible"
+  ],
+  "pick_this_over_siblings_when": "Pick BLARE over re2jit or rejit only when the goal is specifically reproducing or studying the SIGMOD 2023 decomposition/bandit technique on RE2, PCRE2, Boost, or ICU; for a production RE2 speedup, re2jit is the safer sibling (20-30% faster on capture-group workloads, no extra Abseil/Boost/ICU/PCRE2 dependency chain) since BLARE is stale and unlicensed.",
+  "verified_claims_summary": "The peer-reviewed paper (Proc. ACM Manag. Data 1(2), Art. 152, SIGMOD 2023), run single-threaded on an Azure Xeon Platinum 8370C VM with C++17 code at -O3, reports BLARE 1.6x-3.7x faster than RE2 (09-2022 build), 3.4x-7.9x faster than Boost 1.65.1, and 3.1x to over 100x faster than PCRE2 10.40/JIT, across 2 Microsoft-internal production log workloads and the public US-Accidents Kaggle dataset; only the RE2/US-Accidents comparison (~1.6x) can be independently rerun from the public repo, and the ACM DOI page returns HTTP 403 to automated fetches (paper is mirrored as BLARE.pdf in the repo).",
+  "status_note": "Stale research prototype (last commit 2023-11-20, 9 stars, no LICENSE) — useful as a reference implementation of the decompose-and-reorder technique, not something to take a runtime dependency on.",
+  "sources_read": [
+    "https://github.com/mush-zhang/Blare",
+    "https://github.com/mush-zhang/Blare/blob/main/README.md",
+    "https://github.com/mush-zhang/Blare/blob/main/include/blare.hpp",
+    "https://github.com/mush-zhang/Blare/blob/main/include/blare_re2/blare.hpp",
+    "https://github.com/mush-zhang/Blare/blob/main/include/misc/split_regex.hpp",
+    "https://github.com/mush-zhang/Blare/blob/main/include/blare_re2/split_match_multiway.hpp",
+    "https://github.com/mush-zhang/Blare/blob/main/original_codebase/README.md",
+    "https://github.com/mush-zhang/Blare/issues"
+  ],
+  "confidence": 0.6
+}

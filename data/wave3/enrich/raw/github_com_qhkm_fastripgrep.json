@@ -1,0 +1,43 @@
+{
+  "id": "https://github.com/qhkm/fastripgrep",
+  "one_liner": "Rust CLI that indexes a codebase with sparse n-grams to search faster than ripgrep on every tested pattern.",
+  "what_it_does": "frg is a CLI text-search tool that pre-builds an on-disk inverted index of a directory (`frg index`), then uses that index to narrow candidate files before running a regex engine, instead of scanning every file like grep/ripgrep. Its subcommands and flags (`search`, `-i`, `-S`, `-F`, `-l`, `-c`, `-C`, `--glob`, `--type`, `--json`) mirror a ripgrep-like interface, plus a `frg replace` subcommand with dry-run-by-default search-and-replace. It is not a straight binary swap: it needs an explicit `frg index` step first and leaves a `.frg/` directory in the repo tree.",
+  "how_it_is_fast": "It extracts 'sparse n-grams' (variable-length byte substrings selected by a 256x256 byte-pair weight table so a substring's edge pair-weights exceed all interior pair-weights) into an inverted index of xxh3-hashed n-gram to file-ID posting lists, stored as delta-varint-encoded, mmap-friendly binary. A query's mandatory literals are covered by a minimum set of these n-grams, whose posting lists are intersected/unioned to shrink 9,000 files to about 5 candidates before full regex verification. Patterns with no extractable literals (`.*`, single-byte) skip the index and instead use parallel rayon file scanning with SIMD memchr byte search and zero-copy output.",
+  "when_to_use": [
+    "Large, mostly-static codebase (thousands of files) searched repeatedly, where the one-time ~20-23s index build amortizes",
+    "Interactive or AI-agent-driven code search (frg ships Claude Code/Cursor/Codex integration) where sub-100ms per-query latency matters more than a one-off build cost",
+    "Selective literal or alternation queries (function/variable names, `useState|useEffect`) — this is where the README shows the biggest indexed wins (1.7x-5.3x vs ripgrep)",
+    "Environments where the index can be kept current via `frg watch`/`frg update` (~70ms incremental) rather than rebuilt from scratch each time"
+  ],
+  "when_not_to_use": [
+    "One-off search of a directory with no existing index — the ~20-23s build cost dominates a single query",
+    "High-churn repos or CI checkouts that are scanned once and discarded, where index upkeep or build time outweighs any per-search gain",
+    "Wildcard/single-byte patterns with no extractable literals — the index can't help there and speedup drops to 1.06x-2.7x, close to ripgrep",
+    "Anywhere an independently reproducible benchmark is required — the ripgrep comparison is a first-party README table only; benches/bench.rs never invokes ripgrep",
+    "Teams unwilling to add a `.frg/` state directory to the repo tree or manage index sync"
+  ],
+  "integration": {
+    "form": "crate (binary via cargo install / Homebrew tap / source build)",
+    "dependencies": "regex, regex-syntax, rayon, memmap2, memchr, ignore, xxhash-rust, clap, clap_complete, clap_mangen, notify, serde, serde_json, anyhow, fs4, indicatif, is-terminal, glob",
+    "min_toolchain": "Rust stable, edition 2021; no minimum rustc version pinned in Cargo.toml or CI",
+    "platforms": "CI (GitHub Actions) tests ubuntu-latest and macos-latest only; no Windows CI; no CPU-specific build flags in Cargo.toml",
+    "thread_safety": "not documented explicitly; indexing and search are parallelized with rayon and the on-disk index is read via memmap2",
+    "drop_in_for_baseline": "partial — explain: CLI flags mirror a ripgrep subset (-i, -S, -F, -l, -c, -C, --glob, --type, --json) but requires an explicit `frg index` step and adds a .frg/ directory; not a binary swap for rg"
+  },
+  "gotchas": [
+    "Index must exist and be current before indexed search helps; `frg update`/`frg watch` keep it in sync after file changes (README claims ~70ms incremental via overlay/tombstone)",
+    "Adds a `.frg/` directory (generations/<id>/meta.json, postings.bin, lookup.bin, files.bin) to the project tree",
+    "Patterns with no extractable literals bypass the index entirely and fall back to parallel brute-force scanning",
+    "`frg replace` writes only with an explicit `--write` flag (dry-run/diff-preview by default)"
+  ],
+  "pick_this_over_siblings_when": "Same category as ngi and trigrep (both also pair an index with regex search to beat ripgrep); frg's own benchmark covers more pattern types (8, including alternation and wildcard) and ships a maintained replace subcommand plus AI-agent skill integration, but ngi reports larger peak speedups on the Linux kernel (up to 5.9x) and ugrep is the more mature, feature-complete indexed-grep option if proven adoption matters more than novelty.",
+  "verified_claims_summary": "First-party README table on the openclaw codebase (9,000 files, case-sensitive, warm cache, output to /dev/null), built with `cargo build --release` (no rustc version or CPU model stated): frg beat ripgrep on all 8 tested patterns (1.06x-5.3x, e.g. 10ms vs ripgrep's 53ms on a selective literal) and beat grep by roughly 155x on that same literal (1,553ms), excluding the one-time ~20-23s index build. benches/bench.rs only times frg against itself on synthetic 1K/5K-file repos and never runs ripgrep, so the comparison table has no independent, reproducible harness.",
+  "status_note": "Active as of last commit 2026-03-24 (single maintainer, 16 stars), MIT-licensed, v0.3.0, distributed via crates.io/Homebrew/source — small and copyable to vendor, but young with no third-party benchmark verification yet.",
+  "sources_read": [
+    "https://github.com/qhkm/fastripgrep",
+    "https://github.com/qhkm/fastripgrep#benchmarks",
+    "https://github.com/qhkm/fastripgrep/blob/main/Cargo.toml",
+    "https://github.com/qhkm/fastripgrep/blob/main/.github/workflows/ci.yml"
+  ],
+  "confidence": 0.6
+}
