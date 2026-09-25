@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/sfmqrb/sphinx",
+  "one_liner": "Dynamic succinct perfect hash index (~4 bits/key) for log-structured KV stores; paper reports ~2x lower latency than DHT/Aleph Filter.",
+  "what_it_does": "Sphinx is the in-memory index of a log-structured hash table. It maps each key's 128-bit hash to a payload, by default a 32-bit address in an append-only log, without storing the keys, and it never returns a wrong entry for a key that exists (no false positives, at most one storage read). It supports insert, update, delete and incremental growth. It is not a map API: you append the pair to an SSDLog<Traits>, pass the returned address to Directory<Traits>::writeSegmentSingleThread(key, value, log, addr), and reads return std::optional<EntryType> fetched from the log; a std::future-based async API exists when built with ENABLE_MT.",
+  "how_it_is_fast": "Each 64-slot block is a 256-bit Trie Store: an occupancy bitmap, 1-delimited unary slot sizes, and DHT-style delta tries with one extra delimiter bit, so the number of 1s before any slot's trie is known and the slot is reached with rank (POPCNT) and select (PDEP+TZCNT) over four 64-bit words instead of DHT's bit-by-bit scan, at a cost of about 0.3 bits/entry. A 4 KB L1-resident Decoder, a collision-free 512-bucket table of the 128 most probable trie shapes hashed with shifts and XOR, turns trie decoding into one PEXT of the fingerprint plus a packed-offset lookup; only about 1% of lookups fall back to walking the trie. Overflowing slots go to 4 shared extension blocks per 64-block group instead of chains. Growth splits one block group at a time through an extendible-hashing directory and reuses hash bits already in the tries and the optional Reserve Bits, so expansion rarely rereads keys from storage.",
+  "when_to_use": [
+    "In-memory key-to-log-address index for an index+log / Bitcask-style KV store on SSD or Optane, where index memory per key limits scale.",
+    "Queries, updates and deletes of existing keys that must cost exactly one storage read with stable p99 latency (no fingerprint false positives, unlike RSQF/Aleph-style fingerprint indexes).",
+    "Datasets that grow over time: the index expands one 64-block group at a time rather than being preallocated like DHT or fully rehashed.",
+    "Skewed workloads with a hot block cache where index CPU cost dominates: the paper measures 10-35% speedup over DHT-expandable at 90-99% cache hit rates.",
+    "x86-64 Linux servers with fast BMI2 (Intel Haswell or newer, AMD Zen 3 or newer)."
+  ],
+  "when_not_to_use": [
+    "As a general in-memory hash map: it stores no keys, so every hit reads the backing log to get the key and value, and you must provide the log and its garbage collection yourself.",
+    "Static key sets: the catalogued static MPHFs use about 2-3 bits/key and need no backing log. Sphinx's Trie Store alone is about 4 bits/key before payloads, and with uncompressed 32-bit pointers the payloads dominate. The paper's ~20 bits/key total depends on DHT-style pointer compression.",
+    "Insert-heavy or miss-heavy workloads in the default configuration: every insert (read-before-write) and every query for an absent key costs one storage read unless you enable Reserve Bits (the Sphinx-4 variant with 4 bits).",
+    "ARM, Apple Silicon, Windows/macOS, or AMD CPUs before Zen 3, where PDEP/PEXT are microcoded at about 18 cycles instead of 3. The code includes <x86intrin.h>, builds with -march=native, and the paper lists an ARM port as future work.",
+    "Production use that needs a stable API: this is a research artifact configured through global #defines and Traits structs, with hard-coded benchmark paths, no releases, no CI and no API docs."
+  ],
+  "integration": {
+    "form": "source-drop (header templates exposed as CMake INTERFACE targets, plus one small static lib holding the Decoder table; no install target or package)",
+    "dependencies": "Vendored in lib/: xxhash (XXHash64) and moodycamel ConcurrentQueue; Catch2 for tests; Memento filter and a YCSB Zipfian generator for benchmarks only; links -latomic",
+    "min_toolchain": "C++23 (CMake passes -std=c++23 to GCC); GCC 11.4.0+ and CMake 3.22.1+ per benchmark/reproducibility.md (CMakeLists sets an RPATH to /usr/local/gcc-14.1.0); Clang and MSVC not documented",
+    "platforms": "x86-64 with BMI2 (PDEP/PEXT), POPCNT and LZCNT/TZCNT; Linux as written (SSDLog uses O_DIRECT, posix_fallocate, sysconf); no ARM",
+    "thread_safety": "Opt-in at compile time. With ENABLE_MT, every read and write takes a per-block-group std::mutex, directory doubling takes a global mutex, and the async readSegment/writeSegment/removeSegment calls shard work by group ID to per-thread lock-free queues and return std::future. Without ENABLE_MT, the *SingleThread calls are unsynchronized and the async calls throw. SSDLog::write is never synchronized (the benchmarks call it from the main thread).",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "A read does not check that the returned log entry's key equals the queried key. For an absent key (with Reserve Bits off) it returns whatever record that slot points to, so compare kv.key yourself.",
+    "Reads modify the index: with Reserve Bits enabled, a read rewrites that entry's reserve bits from the fetched key. Concurrent readers of one block group therefore need the per-group mutex, which is taken only under ENABLE_MT.",
+    "Behaviour depends on global macros in config/config.h (IN_MEMORY_FILE, ENABLE_XDP, ENABLE_MT, ENABLE_BP_FOR_READ) and on compile-time Traits (key and payload types, reserve bits, DHT modes). The Directory constructor starts maxThreads worker threads that spin on std::this_thread::yield() until destruction. A failed remove throws std::invalid_argument.",
+    "Keys must be fixed-size and trivially copyable (default int64_t). They are hashed as raw bytes with XXHash64 under two seeds, and updates identify a key by that 128-bit digest. The bundled SSDLog is a benchmark-grade, fixed-size circular log with no garbage collection that detects Optane by the substring 'optane' in the file name. The README build steps omit the `cmake ..` configure step."
+  ],
+  "pick_this_over_siblings_when": "Every catalogued sibling (PTHash, PtrHash, RecSplit, ShockHash, PHast, etc.) is a static MPHF: it is built once over a fixed key set and reaches roughly 2-3 bits/key with tens of ns per query (e.g. PTHash 37 ns at 3.23 bits/key). Pick Sphinx only when keys are continually inserted, updated and deleted and each key already has a record in storage that can be read to confirm it; for a fixed key set, PtrHash or PTHash is smaller, simpler and needs no backing log.",
+  "verified_claims_summary": "The PVLDB 18(11) paper measures Sphinx against the authors' own C++ DHT and DHT-expandable and against RSQF, Aleph Filter and Adaptive Aleph Filter (Memento Filter codebase), using ~1.2x10^8 xxhash-hashed int64 keys and uniform queries to existing keys, built with GCC 11.4.0+ -O3 -march=native -mbmi2 on a Xeon W7-2495X (in memory and on a Samsung 980 PRO SSD) and on dual Xeon Silver 4314 with Optane PMem 200. The results are figures only: Sphinx has the lowest in-memory average and p99 query/update latency (average insert is slightly slower unless 4 Reserve Bits are used), a slight edge over DHT-expandable on SSD with uniform keys, and 10-35% speedup at 90-99% cache hit rates; std::unordered_map and static MPHFs were never measured.",
+  "status_note": "Stale BSD-2-Clause research artifact (last commit 2025-08-31, only a paper link; no releases or CI; a third-party 'Simd' PR closed unmerged in April 2026) that is copyable once you strip the benchmark scaffolding, last documented with GCC 11.4.0.",
+  "sources_read": [
+    "https://github.com/sfmqrb/sphinx",
+    "https://github.com/sfmqrb/sphinx/blob/master/README.md",
+    "https://github.com/sfmqrb/sphinx/blob/master/CMakeLists.txt",
+    "https://github.com/sfmqrb/sphinx/blob/master/benchmark/reproducibility.md",
+    "https://github.com/sfmqrb/sphinx/blob/master/benchmark/CMakeLists.txt",
+    "https://github.com/sfmqrb/sphinx/blob/master/benchmark/benchmark_main.cpp",
+    "https://github.com/sfmqrb/sphinx/blob/master/benchmark/benchmark_multi_threaded.cpp",
+    "https://github.com/sfmqrb/sphinx/blob/master/config/config.h",
+    "https://github.com/sfmqrb/sphinx/blob/master/directory/directory.h",
+    "https://github.com/sfmqrb/sphinx/blob/master/directory/directory_tests.cpp",
+    "https://github.com/sfmqrb/sphinx/blob/master/segment/segment.h",
+    "https://github.com/sfmqrb/sphinx/blob/master/block/block.h",
+    "https://github.com/sfmqrb/sphinx/blob/master/SSDLog/SSDLog.h",
+    "https://github.com/sfmqrb/sphinx/blob/master/hashtable/hashtable.h",
+    "https://github.com/sfmqrb/sphinx/blob/master/hashtable/hashtable.cpp",
+    "https://github.com/sfmqrb/sphinx/blob/master/hashtable/CMakeLists.txt",
+    "https://github.com/sfmqrb/sphinx/blob/master/hashing/hashing.h",
+    "https://github.com/sfmqrb/sphinx/blob/master/fingerprint_gen_helper/fingerprint_gen_helper.h",
+    "https://github.com/sfmqrb/sphinx/blob/master/bitset_wrapper/bitset_wrapper.h",
+    "https://github.com/sfmqrb/sphinx/blob/master/payload/payload.h",
+    "https://github.com/sfmqrb/sphinx/blob/master/extension_block/extension_block.h",
+    "https://github.com/sfmqrb/sphinx/blob/master/block/CMakeLists.txt",
+    "https://github.com/sfmqrb/sphinx/blob/master/directory/CMakeLists.txt",
+    "https://github.com/sfmqrb/sphinx/blob/master/segment/CMakeLists.txt",
+    "https://github.com/sfmqrb/sphinx/blob/master/SSDLog/CMakeLists.txt",
+    "https://github.com/sfmqrb/sphinx/commits/master",
+    "https://github.com/sfmqrb/sphinx/pull/1",
+    "https://www.vldb.org/pvldb/vol18/p4424-maghrebi.pdf",
+    "https://en.wikipedia.org/wiki/X86_Bit_manipulation_instruction_set"
+  ],
+  "confidence": 0.8
+}
