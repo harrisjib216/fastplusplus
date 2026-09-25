@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/serenedb/serenedb",
+  "one_liner": "C++ inverted-index search library (ex-ArangoSearch) embedded in SereneDB; claims 5x over Lucene, real gains are 1.0x-1.7x.",
+  "what_it_does": "IResearch is a C++ information-retrieval library: inverted-index full-text search (phrase, boolean, prefix, wildcard, fuzzy/Levenshtein, n-gram, regex, range), pluggable BM25/TFIDF/LM-Dirichlet/DFI scoring, columnar stored fields, HNSW/IVF vector search and S2-based geospatial filters. It is not drop-in for Lucene: consumers link the `iresearch-static` CMake target and implement custom Field structs (Name/GetIndexFeatures/GetTokens/Value) with id-based columnar reads rather than call a Lucene-compatible API; a Lucene-syntax query-string parser is provided only for query-text compatibility. It ships embedded in the SereneDB Postgres-compatible search/analytics database but is buildable and usable as a standalone library.",
+  "how_it_is_fast": "A vectorized, block-at-a-time SIMD scoring pipeline processes posting lists in batches instead of doc-by-doc; postings use a block-128 format with simdcomp bit-packing and a burst-trie term dictionary plus skip lists for fast term/intersection seeks. Lazy evaluation defers non-lead iterators in conjunctions, exclusions and two-phase queries so cheap clauses avoid unnecessary work. The project's own blog series attributes gains to top-K candidate collection, block scoring, norm gathering, lazy two-phase queries and an adaptive posting-list format, but the measured geo-mean speedup vs Lucene 10.4.0 in the current benchmark run is only 0.99x-1.67x depending on collector type, well short of the 5x headline.",
+  "when_to_use": [
+    "Embedding a C++ inverted-index engine directly into an application or DuckDB-based database instead of running a JVM search server",
+    "Need BM25/TFIDF/LM-Dirichlet scoring plus vector (HNSW/IVF) and geospatial (S2) search in one library without separate services",
+    "Workload is dominated by TOP_100/TOP_1000/TOP_100_COUNT/COUNT-style multi-hit collection, where the measured 1.2x-1.7x gain over Lucene 10.4.0 actually applies",
+    "JVM-free deployment is a hard requirement (embedded/edge, memory-constrained hosts)",
+    "Team can build with a very recent clang/lld (21+) and is willing to vendor SereneDB as a git submodule"
+  ],
+  "when_not_to_use": [
+    "Workload is TOP_10 single/few-hit lookups: geo-mean is roughly parity with Lucene 10.4.0 (0.99x) there, and Lucene with BP doc reordering beats IResearch on TOP_10/TOP_100 mean latency",
+    "Specifically hits intersection or union query shapes at TOP_10: IResearch is slower than plain Lucene 10.4.0 on both (390 vs 241us intersection, 372 vs 309us union)",
+    "Need a stable, versioned public C API/ABI: this is a C++26 CMake target meant to be vendored as source, not a library with ABI guarantees",
+    "Need a widely deployed, mature standalone search library: outside SereneDB, IResearch's install base is essentially just ArangoDB since 2018 (188-star archived iresearch-toolkit/iresearch predecessor)",
+    "Toolchain is older than clang/lld 21 or CMake 3.28: the repo requires C++26 and pins a bleeding-edge compiler"
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "simdcomp (posting bit-packing), ICU (icu_text_tokenizer), fastText, S2 geometry (geo filters), Abseil, DuckDB (column codec + buffer manager integration), liburing (optional, SDB_IOURING), jemalloc/tcmalloc (optional allocator)",
+    "min_toolchain": "C++26 (CMAKE_CXX_STANDARD 26), CMake 3.26+ (benchmark build uses 3.28.3+), clang/clang++ + lld 21.1.8+",
+    "platforms": "Linux (repo Docker images use llvm-toolchain-noble-21, glibc 2.35+); io_uring feature is Linux-only; macOS/Windows/aarch64 support not documented",
+    "thread_safety": "IndexWriter guards commits with an internal recursive mutex, a commit lock, and a filesystem write.lock -- a single-writer-per-index model similar to Lucene; parallel indexing is supported (per the benchmark engine README) but not documented in prose beyond the header's locking code",
+    "drop_in_for_baseline": "partial -- API is a distinct C++ class hierarchy (IndexWriter/DirectoryReader/Field structs, id-based column access), not source- or wire-compatible with Lucene; only query syntax (Lucene-style query strings) is compatible"
+  },
+  "gotchas": [
+    "Requires C++26 and a very new clang/lld toolchain (repo's own Docker image and the benchmark harness both pin clang/lld 21) -- will not build with older compilers",
+    "Field-to-column mapping is id-based, not name-based; callers own the field_id -> name mapping (per the basic.cpp example's comments)",
+    "The legacy `Write()` STORE callback was removed; stored values now go through a separate `.col` writer that needs a DuckDB DatabaseInstance for codec lookup",
+    "Open issue #937 describes a bug in BlockDisjunction's sub-iterator refill (uses advance() where seek() is needed); issue #364 tracks a still-open broader 'IResearch optimizations' plan, i.e. some perf paths are acknowledged unfinished"
+  ],
+  "pick_this_over_siblings_when": "Pick IResearch over Tantivy or SeekStorm when native C++ embedding into a DuckDB-based engine and JVM-freedom matter more than winning the benchmark outright -- on the same suite Tantivy is close (IResearch is only 1.15x-1.28x over Tantivy) and both Tantivy and SeekStorm are more mature as standalone, independently-installable libraries than IResearch is outside SereneDB/ArangoDB.",
+  "verified_claims_summary": "On the third-party Search Benchmark, The Game (English Wikipedia + AOL-derived queries, single-threaded, warm cache, best of 10 runs, AMD Ryzen 7 9800X3D), IResearch 26.03.1 (clang 21/lld 21, Release, jemalloc) shows per-collector geo-mean speedups of 0.99x-1.67x vs Lucene 10.4.0 (OpenJDK 21, UseParallelGC) and 1.15x-1.28x vs Tantivy 0.26 (Rust 1.96, LTO release) -- not the README's 'up to 5x', which occurs on about 0.1% of queries (max 8.5x on the term query 'the').",
+  "status_note": "Actively maintained (last commit 2026-09-25) as part of the SereneDB monorepo, Apache-2.0 and copyable as a CMake submodule, but its C++26/clang-21 toolchain requirement raises the vendoring bar compared to more portable C++ search libraries.",
+  "sources_read": [
+    "https://github.com/serenedb/serenedb",
+    "https://github.com/serenedb/serenedb/blob/main/README.md",
+    "https://github.com/serenedb/serenedb/blob/main/iresearch/README.md",
+    "https://github.com/serenedb/serenedb/blob/main/CMakePresets.json",
+    "https://github.com/serenedb/serenedb/blob/main/CMakeLists.txt",
+    "https://github.com/serenedb/serenedb/blob/main/iresearch/CMakeLists.txt",
+    "https://github.com/serenedb/serenedb/blob/main/third_party/LICENSES.md",
+    "https://github.com/serenedb/serenedb/blob/main/iresearch/index/index_writer.hpp",
+    "https://github.com/serenedb/serenedb/blob/main/iresearch/index/directory_reader.hpp",
+    "https://github.com/serenedb/serenedb/blob/main/examples/iresearch/basic.cpp",
+    "https://github.com/serenedb/serenedb/issues/937",
+    "https://github.com/serenedb/serenedb/issues/364",
+    "https://github.com/quickwit-oss/search-benchmark-game/blob/master/engines/iresearch-26.03.1/README.md"
+  ],
+  "confidence": 0.78
+}

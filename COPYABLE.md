@@ -158,7 +158,302 @@ Header-only 64-bit non-cryptographic hash + PRNG; about 9% faster bulk throughpu
 
 ### parsing-and-text
 
+#### csv-tabular
+
+##### go-simdcsv  `Go`  `MIT`  `active`  `Tier A`
+
+AVX-512 SIMD CSV parser for Go; drop-in encoding/csv replacement, faster only on unquoted data.
+
+**Beats:** encoding/csv (Go standard library CSV parser) — Verifier confirmed the README's ReadAll throughput table (e.g. 228->309 MB/s unquoted, 10K rows; +35%) against public paired Stdlib/SIMD benchmarks in benchmark_test.go, run with `go test -bench=. -benchmem` on Go 1.26 + GOEXPERIMENT=simd, AMD EPYC 9R14 (AVX-512), via a manually-triggered self-hosted CI workflow; the reported -30% regression applies specifically to the 10K-row all-quoted-fields case.
+
+**How:** It scans input in 64-byte AVX-512 chunks (`scanBuffer`), building bitmasks for quote/comma/CR/LF positions instead of branching byte-by-byte, then derives the in-quotes region with a prefix-XOR computed via PCLMULQDQ carryless multiplication (the simdjson-style structural-character technique) before locating field boundaries and materializing strings. `useAVX512` is checked once at init via a CPU feature test, with an automatic scalar fallback when AVX-512 (F/BW/VL) isn't available.
+
+**Use it when:**
+- Go services that already deploy on amd64 hardware with AVX-512 (AMD Zen4+/EPYC 9x, Intel Skylake-X+)
+- Large, mostly-unquoted CSV (logs, numeric exports) at 10K-100K+ row scale, where the README shows +35% ReadAll throughput
+- You can pin CI/prod to Go 1.26+ built with the experimental GOEXPERIMENT=simd flag
+- You want the raw-bytes path (ParseBytes/ParseBytesStreaming) to skip io.Reader overhead entirely
+- You're prototyping or benchmarking SIMD CSV techniques in Go rather than shipping a production dependency
+
+**Skip it when:**
+- Production systems that can't accept a dependency the README itself calls experimental and 'not recommended for production use'
+- Any deployment target without AVX-512 F/BW/VL: Apple Silicon/ARM64, pre-Zen4 AMD, pre-Skylake-X Intel, and most hosted CI runners (ubuntu-latest included) — you get the scalar path with no speedup
+- Heavily-quoted CSV: the README's own numbers show ~30% slower than encoding/csv on all-quoted 10K-row data due to extra validation passes
+- Teams that can't carry an experimental Go toolchain flag (GOEXPERIMENT=simd) through their build pipeline
+- Anyone needing a stable API long-term: `simd/archsimd` is called out as unstable across Go releases, and the project is very young (47 stars, first tagged releases only recently)
+
+**Integration:** module · none beyond stdlib and Go's experimental simd/archsimd package · Go 1.26.4+ built with GOEXPERIMENT=simd · amd64 only for the SIMD path (requires AVX-512 F/BW/VL); falls back to a scalar implementation elsewhere, including arm64/Apple Silicon
+
+**Vs siblings:** It's the only Go-language entry in this category (siblings are .NET/Rust/Python/R/CLI tools) and the closest analog to the Rust `simd-csv` crate's idea applied to Go's encoding/csv. Pick it over cisv/zsv/xan/qsv only when you need an in-process Go library rather than a CLI tool, your data is mostly unquoted, and you can run on AVX-512 hardware with an experimental Go build.
+
+**Gotchas:**
+- SIMD source files are gated behind the `goexperiment.simd && amd64` build tag, so the fast path only compiles/activates under GOEXPERIMENT=simd on amd64; everywhere else you silently get the scalar implementation
+- All-quoted-field CSV is ~30% slower than encoding/csv (10K-row case) — the opposite of the headline speedup
+- Published AVX-512 numbers come only from a manually-triggered self-hosted CI workflow (ci-avx512.yml); the default per-PR CI (ubuntu-latest) runs scalar-only and doesn't exercise or verify the SIMD path
+- `simd/archsimd` is an experimental Go package the README warns 'may have breaking changes in future Go releases'
+
+**Status:** Actively maintained (last commit 2026-06-14, MIT-licensed) but the author labels it experimental and 'not recommended for production use'; at 47 stars it's better treated as a technique to read or vendor selectively than a dependency to adopt outright.
+
+[repo](https://github.com/nnnkkk7/go-simdcsv) · [benchmark](https://github.com/nnnkkk7/go-simdcsv#performance)
+
+##### Sep  `C#`  `MIT`  `active`  `Tier A`
+
+Zero-allocation, SIMD-vectorized .NET CSV/TSV parser built to beat CsvHelper on throughput.
+
+**Beats:** CsvHelper (the most widely used .NET CSV parsing library) — First-party BenchmarkDotNet comparisons on .NET 9.0.X (current script targets net10.0) with GC DATAS disabled, run across multiple CPUs (AMD EPYC 7763, Ryzen 9950X, etc.), show Sep (0.13-0.17.1) beating CsvHelper 33.1 on the NCsvPerf PackageAssets benchmark (50K rows) by 17.8x/20.9x/3.1x (row/cols/asset) unquoted and 6.8-8.4x with quotes on EPYC 7763; the README's headline 'about 10x'/'up to 35x' figures come from a non-like-for-like Spaces-and-Quotes trim/unescape comparison (~7.3x like-for-like) and a multi-threaded Floats benchmark on Ryzen 9 9950X (Sep_MT 2.06ms vs CsvHelper 68.3ms, ~33x) respectively.
+
+**How:** Uses architecture-specific and cross-platform SIMD vectorized scanning (64/128/256/512-bit paths, e.g. AVX2, AVX-512 on .NET 8+, NEON) to find separators/quotes, and the csFastFloat library for fast float/double parsing. Memory is pooled (ArrayPool<T>, ref structs, Span<T>) so steady-state parsing is zero-allocation after warmup. An opt-in `ParallelEnumerate` API adds multi-threaded batch parsing on top via LINQ AsParallel/AsOrdered for further throughput on large files.
+
+**Use it when:**
+- Large CSV/TSV files with mostly numeric columns (floats, ints) parsed repeatedly in .NET, where CsvHelper's throughput is the bottleneck
+- ML/data-pipeline style workloads reading many rows where zero-allocation parsing after warmup matters
+- .NET 8+/9+ services that need AOT/NativeAOT or trimmed deployments (no reflection or dynamic codegen)
+- Offline/batch parsing of very large files where the fixed overhead of ParallelEnumerate's multi-threaded batching pays off
+- Projects that can accept an opinionated, non-CsvHelper API and control both the writer and reader side
+
+**Skip it when:**
+- You need CsvHelper's mature feature set: attribute/class mapping, broad configuration surface, long compatibility history
+- Input has heavy quoting, embedded newlines, or stray spaces and you rely on automatic unescape/trim — Sep disables both by default and requires explicit opt-in
+- Comma-separated files without a usable header row: default separator is ';', inferred from the header, so plain ',' input needs explicit configuration
+- Small files or one-off scripts, where ParallelEnumerate's batching/LINQ overhead outweighs any gain over single-threaded CsvHelper
+- You need native `#` comment-line support — Sep has none; you must filter such rows manually in the read loop
+
+**Integration:** module · csFastFloat (NuGet package reference, used for fast float/double parsing) · C# 13.0+ (repo currently builds with C# 14.0), .NET 8.0+ (SepReader implements IAsyncEnumerable/native enumerable behavior added for .NET 9+), AllowUnsafeBlocks enabled in the csproj · Any platform/architecture .NET runs on; SIMD fast paths for x86-64 AVX2/AVX-512 (.NET 8+) and ARM NEON, with a portable fallback elsewhere. Comparison benchmarks were run on AMD EPYC 7763, Ryzen 7840U/5950X/9950X/9950X3D2, Apple M1 (virtual), and a Cobalt ARM VM
+
+**Vs siblings:** None of the catalogued CSV siblings (DuckDB, Polars, qsv, zsv, vroom, xan, cisv, go-simdcsv, simd-csv, zsv-ruby) target .NET — Sep is the only .NET-specific entry in this category, so pick it whenever the project is C#/.NET and needs faster-than-CsvHelper parsing of numeric-heavy CSV into typed columns; reach for one of the others only if you're not on .NET.
+
+**Gotchas:**
+- Default column separator is ';', not ',' — inferred from the header row unless set explicitly
+- No automatic unescaping or trimming: must opt in via SepReaderOptions (Unescape/Trim); trimming/unescaping can happen in-place, leaving the row's raw Span in a documented 'garbage' state for those columns after processing
+- ParallelEnumerate carries real fixed overhead (batching + LINQ AsParallel/AsOrdered) and can be slower than plain single-threaded Enumerate/foreach on small inputs — the README explicitly warns to measure before using it
+- An 'AccessViolation on .NET 10' issue (#423, opened Nov 2025) was reported and closed — worth checking against your exact .NET 10 build if adopting early
+
+**Status:** Actively maintained (last commit 2026-09-19, most recent push 2026-09-21) with ~1.5k GitHub stars; MIT-licensed NuGet package, small and simple enough to vendor or pin if needed.
+
+[repo](https://github.com/nietras/Sep) · [benchmark](https://github.com/nietras/Sep#comparison-benchmarks)
+
+#### lexers-tokenizers
+
+##### Accelerated-Zig-Parser (compacting SIMD tokenizer)  `Zig`  `MIT AND Apache-2.0`  `stale`  `Tier A`
+
+SIMD 'compacting' tokenizer for Zig source that beats the stdlib's hand-written tokenizer 2.75x on AVX-512 x86-64.
+
+**Beats:** Zig standard library tokenizer (hand-written, used by the Zig 0.14 self-hosted compiler) — On one run on a Ryzen AI 9 HX 370 (Zig 0.14, -Doptimize=ReleaseFast) over a 3,253-file/~47MB user-assembled Zig source corpus, the AVX-512 'compacting' tokenizer reached 1.41 GB/s versus 0.51 GB/s for the mainline std.zig.Tokenizer used by the Zig 0.14 self-hosted compiler — a 2.75x throughput gain and ~2.47x less memory — measured as a single timed pass on the author's own laptop, not an independent benchmark suite.
+
+**How:** Computes per-64-byte-chunk bitstrings marking character classes (identifier/quote/comment/whitespace boundaries) via SIMD/SWAR so the cursor jumps via count-trailing-zeros instead of a branchy per-character loop. The 'compacting' variant additionally uses AVX-512 masked-compress/permute intrinsics (llvm.x86.avx512.mask.compress.q, avx512vbmi permvar) to pack token boundaries out of a chunk in parallel. Keywords/operators are matched with a compile-time perfect hash plus an array-mapped-trie bitmap (Bagwell-style) instead of DFA transitions, and tokens are stored as 1-byte lengths (with a 0-sentinel escape to a 4-byte length) rather than 32-bit start indices, cutting memory versus the stdlib tokenizer.
+
+**Use it when:**
+- Batch/offline tokenization of large Zig corpora on AVX-512 x86-64 hardware (recent AMD or a 'beefy' Intel server) where raw GB/s throughput matters more than portability
+- You want a source-droppable reference for chunk-wise SIMD bitstring lexing tricks (perfect hashing, multiply-based movemask, sentinel padding) to adapt into your own tokenizer
+- Token memory footprint matters: the byte-length token encoding gets ~2.47x less memory than std's tokenizer in the author's test
+- You can pin a specific Zig 0.14 / -Doptimize=ReleaseFast toolchain and don't need long-term API stability
+
+**Skip it when:**
+- Any non-AVX-512 target (older x86-64, Apple Silicon/ARM, RISC-V, POWER/SPARC): the 2.75x number is AVX-512-only, and the README says the older 'Tokenizer 1' ARM/RISC-V code path 'has gone poof'
+- You need a stable, embeddable tokenizer API: this is a benchmark harness with `pub fn main()` as the only public function, not a packaged module
+- You need a full parser: AST generation is explicitly disabled/unimplemented in the harness (RUN_NEW_AST/RUN_LEGACY_AST off), and issue #2 ('parser design') is still open
+- You need conformant Unicode handling without checking current code state: the README repeatedly notes the UTF-8 validator being turned off during development
+- You want an actively maintained project: last commit 2025-04-16, and the author calls the project 'not ready for prime-time just yet'
+
+**Integration:** source-drop · jdz_allocator (pinned in build.zig.zon); vendored simdjson/simdjzon-derived UTF-8 validation code (Apache-2.0) inside main.zig · Zig 0.14 (build.zig.zon leaves minimum_zig_version unset; the verified benchmark used Zig 0.14 with -Doptimize=ReleaseFast) · x86-64 with AVX-512 (avx512f/avx512bw/avx512vbmi) needed for the compacting tokenizer's benchmarked speed; SWAR and ARM NEON code paths exist in main.zig for other architectures but are not covered by the verified numbers
+
+**Vs siblings:** Pick this over the flex/logos-family entries (LRSTAR, simd-lexing, Ragel, lexer-exp, logos) only if your workload is specifically Zig source on AVX-512 x86-64 and you want implementation ideas for a hand-rolled chunk-wise SIMD lexer; unlike Gigatoken or CrossDB it isn't a finished, general-purpose library, and it has no parser yet, so it's a reference/benchmark, not a drop-in replacement.
+
+**Gotchas:**
+- Compacting-tokenizer speed depends on specific AVX-512 intrinsics (mask.compress.q, avx512vbmi permvar/pshufb); hardware lacking these features uses different, unbenchmarked-here paths
+- The harness's printed line count (3,504,899,722 lines for ~47MB of source) is implausible and looks like a counting bug — trust the GB/s figures, not the derived loc/s numbers
+- Author notes legacy-tokenizer timings can shift ~15% from trivial code changes, so single-run comparisons are noisy
+- UTF-8 validation has been repeatedly disabled/re-enabled during development ('Currently the utf8 validator is turned off') — verify its state before relying on Unicode correctness
+
+**Status:** Stale (last commit 2025-04-16) and explicitly not production-ready by the author's own account (parser unimplemented, UTF-8 validation toggled during development); MIT/Apache-2.0-licensed and small enough (~4.8k-line main.zig) to read or vendor, but expect to extract and rewire the tokenizer code rather than import it as a library.
+
+[repo](https://github.com/Validark/Accelerated-Zig-Parser) · [benchmark](https://validark.dev/posts/deus-lex-machina/)
+
+#### markup-html-markdown
+
+##### lexbor  `C`  `Apache-2.0`  `active`  `Tier A`
+
+Standards-compliant C99 HTML5/CSS/DOM/URL engine; beats libxml2-based bindings on HTML parsing and CSS selector throughput.
+
+**Beats:** libxml2 — Third-party Crystal-language benchmark (kostya/lexbor, not the lexbor project) parsed a 1.5MB Google search-results HTML page 1000 times and ran 5000 CSS selector queries on a Ryzen 3800x. Same-language comparisons show lexbor beating libxml2-backed bindings by ~3.0x (Crystal Crystagiri) to ~4.6x (Ruby Nokogiri) on parsing and ~51x-79x on CSS selection (Nokogiri's CSS runs through XPath translation); the headline 116x and the 45.6x M1 figures mix Crystal against Ruby or reflect an anomalous Crystal/libxml2 binding path and are not like-for-like.
+
+**How:** Hot scanning loops (tokenizer character search) use a SWAR (SIMD-within-a-register) bit-trick, lexbor_swar_seek4, that checks up to 4 target bytes per machine word instead of per-byte comparisons (source/lexbor/core/swar.h, based on the Stanford 'bit twiddling hacks' techniques). Keyword/tag lookups use a compact static binary search tree (lexbor_sbst_entry_static_t, source/lexbor/core/sbst.h) baked in at compile time instead of runtime hashing. Node and string allocation goes through a custom arena/region allocator (mraw) plus fixed-size object pools (dobject), cutting malloc/free call counts versus a generic tree library. The HTML tokenizer itself is a hand-written WHATWG-spec state machine rather than a generic/recursive parser.
+
+**Use it when:**
+- High-volume HTML5 parsing of real-world (possibly malformed) markup where a spec-conformant tokenizer matters, e.g. scraping/crawling pipelines (SerpApi runs lexbor in production for this).
+- Need HTML parsing and CSS selector matching from one dependency-free C library instead of wiring libxml2 plus a separate CSS engine.
+- Embedding in a size- or dependency-constrained project via the single-header amalgamation (perl single.pl --all), with no libxml2/expat linkage.
+- Batch/throughput workloads (many documents or many CSS queries per run) where the benchmark shows the gap over libxml2-based bindings widens most.
+- Already need URL parsing, 40+ text encodings, or Unicode normalization/IDNA alongside HTML/CSS, and want one codebase for all of it.
+
+**Skip it when:**
+- Need XML (non-HTML) parsing, XPath, or XSLT — lexbor targets HTML5/CSS/URL/DOM, not general XML; libxml2 still covers that ground.
+- Multiple threads touching one parsed document concurrently: the CMake LEXBOR_WITHOUT_THREADS option is documented as inert ('Not used now, for the future'), and no locking is visible in the mraw arena allocator.
+- Need well-defined reference-counted/GC'd DOM node lifetime across a long-lived app — 'Reference counting of DOM nodes' (issue #132) is still open and unresolved.
+- Depend on the Layout or Fonts modules — both are marked 'in progress' in the README and are not usable yet.
+- Writing in Crystal/Ruby/Python/Elixir without going through a wrapper: those bindings (kostya/lexbor, Nokolexbor, Selectolax, fast_html) add their own overhead, and part of the benchmark's largest ratios (51-79x, 116x CSS) come from the baseline's slow Ruby CSS-via-XPath path, not a guaranteed win in every host language.
+
+**Integration:** source-drop (single-header amalgamation via single.pl) or static/shared lib via CMake · none (pure C99) · C99 compiler; CMake for building from source (no minimum GCC/Clang version stated in docs) · prebuilt binaries for x86-64 (CentOS, Debian, Fedora, RHEL, Ubuntu) plus Homebrew/MacPorts on macOS and vcpkg; builds from source on any platform with a C99 compiler and CMake, including Windows via MSYS — other architectures require a source build (README asks to email support for anything beyond x86-64 binaries)
+
+**Vs siblings:** Use lexbor directly, in C/C++, when you need HTML+CSS+URL+Encoding together with no dependency; on Python or Ruby, selectolax and Nokolexbor already embed lexbor as a backend, so use those instead of binding lexbor yourself. MyHTML (also lexborisov's) is lexbor's own now-superseded predecessor benchmarked against Gumbo/html5ever — lexbor is its actively developed successor, not a co-equal alternative.
+
+**Gotchas:**
+- DOM node reference counting/lifetime is an open design question (issue #132, still open) — do not assume libxml2-style ownership semantics.
+- Memory comes from a per-document arena (mraw) plus object pools (dobject); document teardown follows lexbor's own lifecycle calls, not ad hoc free().
+- Layout and Fonts modules are listed 'in progress' in the README; only DOM, HTML, CSS, URL, Encoding, Unicode, and Punycode are marked ready.
+- Project policy restricts AI-authored contributions to the core library (README 'AI Policy'): PRs touching core C code that read as AI-generated are likely to be rejected, relevant if you plan to upstream a patch.
+
+**Status:** Actively maintained (last commit 2026-09-22, ~2.1k stars) under Apache-2.0, and easy to vendor via the single-header amalgamation script (single.pl), so treated as 'copyable' usability.
+
+[repo](https://github.com/lexbor/lexbor) · [benchmark](https://github.com/kostya/lexbor#benchmark)
+
+#### parser-generators-and-combinators
+
+##### flap (fused lexing and parsing)  `OCaml`  `MIT`  `abandoned`  `Tier A`
+
+Fuses OCaml lexer and parser via MetaOCaml staging, generating token-free code 2-6x faster than ocamlyacc.
+
+**Beats:** ocamlyacc (also benchmarked against Menhir's table- and code-generation backends) — PLDI 2023 paper benchmarks six grammars (JSON, CSV, S-expressions, PGN, Netpbm PPM, an arithmetic language) with Core_bench on one core of an Intel i9-12900K (1 GB RAM, Debian Linux), compiled with BER MetaOCaml N111 + flambda and -O3; flap's fused, staged code reached 1.9x-6.5x the throughput of ocamlyacc-generated parsers per grammar (e.g. ~5.8x on JSON, ~6.5x on PPM, ~1.9x on the arithmetic grammar) and also beat both menhir table- and code-generation backends.
+
+**How:** The grammar is converted to Greibach Normal Form so the recognizer only ever needs one token of lookahead (a deterministic GNF, DGNF), letting the compiler generate a flat, branch-predictable recognizer instead of a table-driven automaton. Lexing and parsing are fused during code generation, so no intermediate token stream or token allocation is produced between the two phases. BER MetaOCaml multi-stage programming then specializes and unrolls this recognizer into monomorphic native code per grammar, removing the interpretive/dispatch overhead that generic combinator libraries and ocamlyacc/menhir's generated tables carry.
+
+**Use it when:**
+- Parsing in OCaml where the grammar is a deterministic context-free grammar with one-token lookahead (structured formats like CSV, JSON, S-expressions, PGN, Netpbm-style binary/text formats)
+- Throughput-bound batch parsing of many or large documents (paper measures linear scaling up to ~2 MB inputs) where generated-code specialization amortizes
+- Already using, or willing to adopt, the BER MetaOCaml staged-compilation toolchain
+- Want to beat ocamlyacc- or menhir-generated parsers without hand-writing a bespoke recursive-descent parser
+- Research or prototyping context where an abandoned, single-author artifact (79 stars, MIT) is an acceptable dependency to read or vendor from
+
+**Skip it when:**
+- Need an actively maintained, supported parsing library — last commit 2023-07-01, no releases beyond the PLDI 2023 artifact
+- Grammar is ambiguous, needs backtracking/GLR-style resolution, or requires more than one token of lookahead — flap's <|> alternatives must be disjoint (not both nullable, non-overlapping first sets)
+- Need the parser usable from C/C++ or any non-OCaml host; there is no FFI story, it is OCaml-only
+- Cannot install a nonstandard compiler variant — flap requires the BER MetaOCaml switch (4.11.1+BER, optionally +flambda, or 4.14.1+BER), not stock OCaml
+- Generated code size matters: GNF conversion plus lexer/parser fusion can duplicate grammar productions
+
+**Integration:** module · letrec, reex, reex_match, ppx_deriving (opam, runtime); ounit (test-only) · BER MetaOCaml N111 (opam-variants 4.11.1+BER, +flambda optional, or 4.14.1+BER); dune >= 2.9 with menhir 2.0 integration (used for the benchmark comparisons, not the library itself) · CI only exercises ubuntu-latest (x86-64 Linux) with ocaml-variants.4.11.1+BER; macOS/Windows/ARM support not documented
+
+**Vs siblings:** The catalogued siblings (re2c, lexy, winnow, chumsky, MPL, PAPAGENO, Pika Parser) target C or Rust and aren't usable from OCaml, so there's no direct substitution; pick flap specifically when you're already in OCaml, your grammar is a deterministic single-token-lookahead CFG, and you want to beat ocamlyacc/menhir rather than hand-roll a recursive-descent parser.
+
+**Gotchas:**
+- compile returns Error string rather than raising when the grammar is ambiguous or left-recursive, so grammar bugs surface as a typing/compile-time result, not a parser exception
+- <|> alternatives must be manually kept disjoint (no shared first token, not both nullable); the library does not infer this for you
+- Requires the nonstandard BER MetaOCaml compiler switch; it will not build against a stock ocaml/opam toolchain
+- Runtime dependencies (reex, reex_match, letrec) are also single-author (yallop) packages, adding transitive maintenance risk beyond flap itself
+
+**Status:** Abandoned: no commits since 2023-07-01, existing only as the code artifact for a single PLDI 2023 paper. MIT-licensed and small enough to read or vendor, but the BER MetaOCaml toolchain requirement makes it high-friction to actually build on.
+
+[repo](https://github.com/yallop/ocaml-flap) · [benchmark](https://arxiv.org/pdf/2304.05276)
+
+##### re2c  `C`  `Public Domain (dedication, not a formal OSI license)`  `active`  `Tier A`
+
+Lexer generator emitting inline jump-based state machines for 12 languages; beats Ragel on real-world grammars, loses on synthetic repetition.
+
+**Beats:** Ragel — On 35 Google Benchmark CPU-time lexer benchmarks (HTTP, URI, Apache log, datetime, email, IPv4, plus synthetic alt/cat/rep patterns), built with GCC-14.2.0 and Clang-19.1.4 at -O3 on an Intel Core i7-8750H, re2c --tags lexers ran roughly 1.0-1.44x faster than Ragel 7.0.4's -G2 simple variant on the real-world formats, but 1.5-4.1x slower on synthetic repetition-heavy patterns — I confirmed the raw cpu_time values (e.g. http-rfc7230-gcc_re2c-simple = 21.17) directly in results_20250131.json.
+
+**How:** Instead of Ragel's/Flex's table-driven DFA interpretation, re2c encodes the automaton directly as conditional jumps and character-range comparisons in the target language, letting the downstream compiler apply ordinary branch and jump-table optimizations to the lexer body. It runs its own passes (state merging, jump threading, range-comparison compression) before emitting code, and for --tags submatch extraction tracks minimal per-tag position updates rather than replaying full match history.
+
+**Use it when:**
+- Target is C, C++, Go, Rust, D, Java, JS, OCaml, Python, Swift, V, or Zig and you need only a lexer, integrated by hand, not a full parser toolkit
+- Real-world text formats close to the benchmarked ones (HTTP headers, URIs, log lines, datetimes, email addresses), where re2c ran ~1.0-1.44x faster than Ragel
+- You're willing to write buffer/driver code yourself in exchange for not depending on Ragel's runtime conventions
+- Submatch/capture extraction is needed alongside tokenizing (--tags)
+- Public-domain licensing (no attribution or patent clause) is acceptable or preferred
+
+**Skip it when:**
+- Grammar is dominated by fixed-length repetition/counting patterns (the rep-*/rep-alt-* benchmarks) — Ragel was 1.5-4.1x faster there
+- You want one tool for both lexing and parsing; re2c only generates the lexer, so you still need a separate parser
+- You need re2c benchmarked against Flex, Bison, ANTLR, or Boost.Spirit before deciding — its own suite only compares to Ragel
+- Grammar is large/complex enough that inline-jump code generation risks a much bigger generated file than a table-driven approach (see issue #427, "Generated file too large")
+- Betting specifically on the Go backend (re2go) for throughput — issue #487 reports a real-world case where generated Go code was reportedly an order of magnitude slower than Go's standard regexp
+
+**Integration:** source-drop · none at runtime — output is plain source in the target language; building the re2c tool itself needs a C++11 compiler and Python 3 (CMake or Autotools) · C++11 to build the re2c tool; whatever toolchain compiles the generated target-language code (e.g. GCC-14/Clang-19 in the benchmarked build) · any — Linux, macOS, Windows (CMake presets and Mingw cross-compile documented in BUILD.md)
+
+**Vs siblings:** Pick re2c over the catalogued siblings when you need a lexer only (not a full parser) and want one grammar to retarget across many languages (C/C++/Go/Rust/Java/etc.); the siblings (flap, PAPAGENO, Pika Parser, winnow, chumsky, lexy, MPL/FastParse) are single-language parser or parsing-combinator libraries benchmarked against Bison/Flex, ANTLR4, or nom, and none of them compare to Ragel the way re2c does.
+
+**Gotchas:**
+- Nothing runs out of the box: you must define the API primitives (buffer cursor, limit, refill callback, etc.) yourself before generated code compiles or runs correctly — re2c does not validate these definitions
+- Inline-jump codegen can make generated files much larger than table-driven output for big/complex grammars (issue #427)
+- The Go backend (re2go) has at least one reported case of being far slower than Go's stdlib regexp on real-world input (issue #487) — don't assume the C/C++ numbers here transfer to other backends
+- License is a bespoke public-domain dedication with no explicit patent grant; GitHub's license detector reports it as NOASSERTION, which some legal reviews flag despite it being effectively public domain
+
+**Status:** Actively maintained (last commit 2026-09-17, ~1.3k stars); public-domain dedication makes it freely copyable, though GitHub flags the license NOASSERTION since it's a bespoke dedication rather than a formal OSI license with a patent grant.
+
+[repo](https://github.com/skvadrik/re2c) · [benchmark](https://github.com/skvadrik/re2c/blob/master/benchmarks/c/results/results_20250131.json)
+
 #### regex-engines
+
+##### nim-regex (nitely/regex)  `Nim`  `MIT`  `active`  `Tier A`
+
+Pure-Nim linear-time regex engine (PCRE-like syntax, no backtracking) beating PCRE2 on find-all throughput.
+
+**Beats:** PCRE2 — In mariomka/regex-benchmark's third-party cross-language shootout (find-all of email/URI/IPv4 patterns over a concatenated learnxinyminutes-docs corpus, on a 2019 MacBook Pro 16" i9, run in Docker), nim-regex (Nim 1.4.4, -d:release --opt:speed) totaled 36.09 ms versus C PCRE2 10.36-2's 251.37 ms (gcc -O3) and libstdc++ std::regex's 1023.49 ms (g++ -O3) in the default-settings table; with PCRE2 and Rust's regex crate both given their optimized/JIT builds, the PCRE2 gap narrows to ~2.6x (34.15 ms vs 87.87 ms) and optimized Rust regex (27.94 ms) comes out ahead of nim-regex.
+
+**How:** Matching runs as a Thompson-style NFA simulation over parallel states (Pike's-VM approach, files nfamatch.nim/nfamatch2.nim use a `Pstates`/`Capts3` structure) rather than backtracking, giving match time linear in text and regex length. A literal-substring prefilter (litopt.nim, added in v0.22.0) skips ahead using known literal prefixes/substrings of the pattern, which is why the email-pattern benchmark result (1.32 ms vs PCRE2's 126.10 ms) dominates the aggregate speedup. Captures use a block-based capture array (space O(regex_len * groups_count)) instead of per-thread heap allocation.
+
+**Use it when:**
+- Nim codebases that need to run regexes over untrusted input and want a hard linear-time guarantee instead of PCRE2's backtracking risk
+- Patterns with distinctive literal prefixes/substrings (email-, URL-, tag-style patterns) where the litopt prefilter gives large wins
+- Compile-time regex validation/compilation is wanted (re2"..." as a const catches syntax errors at compile time and avoids runtime compile cost)
+- Need PCRE-like syntax (character classes, named groups, lookaround) in Nim without adding a C PCRE2 dependency or FFI binding
+- Running inside Nim's compile-time VM, where linking a C library like PCRE2 isn't an option
+
+**Skip it when:**
+- Need to call the engine from C/C++/other languages without writing an FFI wrapper — PCRE2 is natively embeddable there, nim-regex is not
+- Pattern relies on backreferences or other non-regular PCRE features — explicitly unsupported to preserve the linear-time guarantee
+- Character-class-heavy patterns without literal anchors (e.g. pure IPv4-style patterns): in the optimized-PCRE2 run, PCRE2 beat nim-regex on the IPv4 pattern (4.73 ms vs 7.27 ms), and optimized Rust regex beat it overall
+- Need Unicode level 2/3 support (locale-aware casing, full normalization) — only Unicode level-1 is implemented
+- Feeding invalid/untrusted UTF-8 bytes in a release/danger build: UTF-8 validation is only performed in debug builds, so malformed input is undefined behavior (can hit an AssertionDefect) unless you pre-validate
+
+**Integration:** module · none (pure Nim, stdlib only: std/unicode, std/tables, std/sets, std/algorithm, std/math, std/bitops) · Nim 1.6.0+ · any platform Nim compiles to (pure Nim source, no SIMD/architecture-specific code observed)
+
+**Vs siblings:** The other catalogued regex-engine entries (rejit, SafeRE, BLARE, RE#, coregex, nanoregex, re2jit) target C++/Rejit, Java, C++, .NET, Go/Rust-bench, or Python ecosystems; nim-regex is the only Nim-native option, so pick it when you're already in Nim and want PCRE2-beating throughput plus a no-backtracking safety guarantee without FFI, not when raw cross-language speedup magnitude is what matters.
+
+**Gotchas:**
+- v0.21.0 deprecated the old re""/Regex/RegexMatch API in favor of re2""/Regex2/RegexMatch2 — check which API a given nimble version exposes
+- Only the last repetition of a repeated capture group is retained (same limitation as most regex engines), not all repetitions
+- Lookarounds that themselves contain repetition (*, +, {n,}) can run in polynomial time, breaking the library's headline linear-time guarantee
+- UTF-8 input validation is skipped in release/danger builds for performance; malformed UTF-8 is undefined behavior there, so untrusted text must be pre-validated (e.g. with validateUtf8 or nim-unicodeplus)
+
+**Status:** Actively maintained — latest release v0.26.2 with recent "performance improvements" commits and last commit 2026-08-25; MIT-licensed pure-Nim source, small enough to vendor directly into a project.
+
+[repo](https://github.com/nitely/nim-regex) · [benchmark](https://github.com/mariomka/regex-benchmark/blob/master/README.md)
+
+##### SafeRE  `Java`  `BSD-3-Clause`  `active`  `Tier A`
+
+Linear-time, ReDoS-proof Java regex engine; drop-in java.util.regex replacement, RE2 port, 2.22x faster on real-world workloads.
+
+**Beats:** java.util.regex (JDK) — On the project's own JMH suite (OpenJDK 26.0.2 targeting Java 21, JMH 1.37, Intel i7-11700K under WSL2/Ubuntu 24.04), SafeRE is a 2.22x geometric-mean win over java.util.regex across a 150-row real-world matrix (1.88x excluding 2 pathological-backtracking rows), but 22% slower than the JDK on 8 'Core' operations and 7% slower on 8 'Application' tasks; against native C++ RE2 (g++ 13.3.0 -O3), Rust regex 1.13.1, and PCRE2 10.47 JIT on the same real-world matrix it is 13%, 103%, and 147% slower respectively.
+
+**How:** Like RE2, SafeRE compiles patterns to finite automata instead of a backtracking NFA, and picks among five engines per query (OnePass, DFA, BitState, Pike-VM NFA, and reverse DFA) to fit the query's structure. This avoids catastrophic backtracking entirely (0.089us vs the JDK's 17,079us on an adversarial a?{25}a{25} pattern) and, on the real-world 150-row matrix, comes out ahead of java.util.regex's backtracking overhead overall. A SWAR (and experimental incubating-Vector-API) byte scanner accelerates ASCII character-class/literal prefix scans on the UTF-8 input path.
+
+**Use it when:**
+- Untrusted or user-supplied patterns where a JDK backtracking engine could hang (ReDoS); SafeRE rejects unsafe constructs at compile time and guarantees linear time.
+- Java 21+ services replacing java.util.regex on workloads shaped like the 150-row real-world matrix (mixed pattern types, 1K-100K inputs, match and no-match) where the 2.22x geomean win was measured.
+- JVM data/storage/network code that already holds text as UTF-8 bytes and wants to skip an input-sized UTF-8 to UTF-16 conversion before matching.
+- Need to test many patterns against the same input in one pass (PatternSet).
+- Willing to trade much slower pattern compilation for consistently bounded match latency.
+
+**Skip it when:**
+- Compile-heavy workloads (many distinct patterns compiled once or rarely reused): compilation is 71.2x slower than the JDK and 11.7x slower than RE2/J.
+- Workloads shaped like the project's own Core/Application suites (short literal/class/API-style operations): SafeRE measured 22% and 7% slower than java.util.regex there.
+- Need backreferences, lookahead/lookbehind, possessive quantifiers over consuming operands, or atomic groups -- all rejected at compile time, not silently degraded.
+- Already running native C++/Rust/Go/.NET: SafeRE is 13% slower than C++ RE2, 2.03x slower than Rust regex, and 2.47x slower than PCRE2 JIT on the same real-world matrix.
+- Need Matcher.hitEnd()/requireEnd() or exact JDK matcher-state parity after usePattern()/a terminal empty find() -- SafeRE intentionally diverges there.
+
+**Integration:** module · none for the core org.safere:safere artifact; the separate safere-ffm-re2 module adds a native RE2 FFM binding used only for benchmarking · Java 21+ (built with JDK 26 targeting --release 21; CI verifies JDK 21 through 26) · any JVM platform; optional experimental Vector API scanner needs a JDK 21+ incubator module flag and only covers UTF-8 prefix scans
+
+**Vs siblings:** None of the catalogued siblings target java.util.regex -- they beat RE2, PCRE2, Python re, or Rust regex directly. Pick SafeRE specifically when java.util.regex is your incumbent and you need a same-API, linear-time-guaranteed replacement; if you can drop java.util.regex API compatibility, RE2/J or a native RE2/PCRE2/Rust-regex binding will outrun SafeRE on the same benchmark matrix.
+
+**Gotchas:**
+- usePattern() keeps the prior match's group-zero bounds/text valid; JDK 26 instead nulls group() while leaving start()/end() non-throwing, an inconsistency SafeRE deliberately does not reproduce (tracked upstream as JDK-8390449).
+- After a terminal empty find() at the region end, hasMatch() becomes false and start()/end()/group() throw IllegalStateException, whereas the JDK leaves inconsistent-but-non-throwing state; replaceAll/replaceFirst output text itself still matches the JDK.
+- Unsupported syntax (backreferences, lookaround, possessive quantifiers over consuming operands, atomic groups, CANON_EQ) fails at Pattern.compile time with an explicit error rather than falling back silently.
+- The experimental Vector scanner needs both --add-modules=jdk.incubator.vector and a system property; without both it silently keeps using the default SWAR scanner.
+
+**Status:** Actively maintained (commits as recent as today, extensive open design docs and issue tracker) and published to Maven Central; BSD-3-Clause per pom.xml and the LICENSE text even though GitHub's license detector shows NOASSERTION because the LICENSE file bundles RE2's and RE2/J's notices.
+
+[repo](https://github.com/eaftan/safere) · [benchmark](https://github.com/eaftan/safere/blob/main/BENCHMARKS.md)
 
 ##### Hyperscan  `C`  `BSD-3-Clause`  `active`  `Tier B`
 
@@ -195,6 +490,334 @@ SIMD multi-pattern regex matching library beating PCRE2 6.9-183x on large networ
 **Status:** Actively maintained (last commit 2026-09-17) under BSD-3-Clause, used in production DPI stacks like Snort/Suricata; last tagged release is 5.4.2 (2023-04-19), and it is flagged 'copyable' usability in this catalog.
 
 [repo](https://github.com/intel/hyperscan) · [benchmark](https://www.usenix.org/system/files/nsdi19-wang-xiang.pdf)
+
+##### RE# (Resharp)  `F#`  `MIT`  `active`  `Tier B`
+
+Automata-based .NET/F# regex engine beating Rust's regex crate on rebar benchmarks; adds intersection, complement, lookarounds.
+
+**Beats:** Rust regex — Per the peer-reviewed paper (arXiv 2407.20479), on BurntSushi/rebar's 27-benchmark baseline suite RE# posts a geometric-mean slowdown of 1.48 vs Rust regex's 2.54 (paper's own '71% faster' framing), and on extended benchmarks RE# is 1.09 vs Hyperscan 3.77 and rust/regex 29.5, measured on an AMD Threadripper 3960X 24-core/128GB RAM Ubuntu 22.04 Docker box with engine versions and compiler/runtime flags unstated. The repo's own README table separately shows RE# 37x-34,833x faster than .NET's Compiled/SourceGenerated regex on curated rebar-derived patterns (Ryzen 7 5800X, .NET 10.0).
+
+**How:** Patterns compile ahead of time into a symbolic (minterm-partitioned) automaton: the alphabet is collapsed into equivalence classes via a BDD-backed solver (BitVector/UInt64/CharSet solvers) so transition tables stay small regardless of Unicode range. Matching is derivative-based, non-backtracking, and guaranteed linear-time; RE# optionally precompiles a full DFA up front (`ResharpOptions.HighThroughputDefaults`, `DfaThreshold`) or falls back to lazy on-the-fly DFA construction for very large patterns, plus start-set inference and literal-prefix scanning to skip non-matching regions.
+
+**Use it when:**
+- Large/complex patterns (many alternations, loops, big Unicode classes) where .NET's Compiled/SourceGenerated engines and Rust regex both degrade
+- Untrusted input where guaranteed non-backtracking, linear-time matching is needed to rule out ReDoS
+- Patterns needing lookaround in a non-backtracking automata engine, or boolean composition of constraints (e.g. 'matches A and matches B and length in range') via intersection/complement
+- Same compiled pattern reused many times over large .NET/F# text buffers, using `ValueMatches` for zero-allocation matching
+- .NET/F# codebases already comfortable adding a NuGet dependency for a non-standard regex type
+
+**Skip it when:**
+- Non-.NET stacks — ships only as a .NET library; the companion Rust rewrite (github.com/ieviev/resharp) is, per its author, currently slower than this F# version
+- Need multi-group capture extraction — RE# has no capturing groups beyond the whole match ($0 only in Replace); pair with another engine for group extraction
+- Need lazy quantifiers, backreferences, balancing groups, or conditional patterns — unsupported, automata-only feature set
+- Need PCRE/.NET leftmost-first semantics — RE# is leftmost-longest, which changed match results on 2 of 27 rebar baseline benchmarks vs. leftmost-greedy engines
+- Simple literal or literal-alternation patterns — the paper shows Rust regex has a lower slowdown than RE# in exactly these two baseline categories
+
+**Integration:** module · none · .NET SDK 8+ (multi-targets net8.0;net9.0;net10.0), F# compiler for the core library · any (managed .NET/F#; no native code or SIMD intrinsics documented)
+
+**Vs siblings:** Locked into .NET/F# and need Rust-regex-beating throughput plus features Rust's regex crate can't do at all (intersection, complement, lookarounds); coregex is the only other sibling benchmarked against Rust regex, but it's a different (non-.NET) engine and wins on fewer patterns (6 of 16) rather than topping an independent multi-engine suite the way RE# does on rebar.
+
+**Gotchas:**
+- `ValueMatches` returns a disposable pooled value list — must be `use`/disposed or pooled memory leaks
+- Leftmost-longest matching can return a different match than .NET's or PCRE's leftmost-first engines for the same pattern
+- Lookarounds cannot be nested, unioned across alternatives, or placed mid-pattern — only at pattern edges (confirmed by closed issue #2 on this exact limitation)
+- No numbered capture groups; `Replace` supports `$0` only, so multi-group extraction needs a second pass with a different engine
+
+**Status:** Active (last commit 2026-07-04), MIT-licensed and published on NuGet as `Resharp`; 257 stars puts it early-stage rather than widely adopted, but it's a small managed library with no external dependencies, so it's cheap to vendor or pin.
+
+[repo](https://github.com/ieviev/resharp-dotnet) · [benchmark](https://arxiv.org/abs/2407.20479)
+
+#### text-search-and-indexing
+
+##### IResearch (SereneDB)  `C++`  `Apache-2.0`  `active`  `Tier A`
+
+C++ inverted-index search library (ex-ArangoSearch) embedded in SereneDB; claims 5x over Lucene, real gains are 1.0x-1.7x.
+
+**Beats:** Lucene — On the third-party Search Benchmark, The Game (English Wikipedia + AOL-derived queries, single-threaded, warm cache, best of 10 runs, AMD Ryzen 7 9800X3D), IResearch 26.03.1 (clang 21/lld 21, Release, jemalloc) shows per-collector geo-mean speedups of 0.99x-1.67x vs Lucene 10.4.0 (OpenJDK 21, UseParallelGC) and 1.15x-1.28x vs Tantivy 0.26 (Rust 1.96, LTO release) -- not the README's 'up to 5x', which occurs on about 0.1% of queries (max 8.5x on the term query 'the').
+
+**How:** A vectorized, block-at-a-time SIMD scoring pipeline processes posting lists in batches instead of doc-by-doc; postings use a block-128 format with simdcomp bit-packing and a burst-trie term dictionary plus skip lists for fast term/intersection seeks. Lazy evaluation defers non-lead iterators in conjunctions, exclusions and two-phase queries so cheap clauses avoid unnecessary work. The project's own blog series attributes gains to top-K candidate collection, block scoring, norm gathering, lazy two-phase queries and an adaptive posting-list format, but the measured geo-mean speedup vs Lucene 10.4.0 in the current benchmark run is only 0.99x-1.67x depending on collector type, well short of the 5x headline.
+
+**Use it when:**
+- Embedding a C++ inverted-index engine directly into an application or DuckDB-based database instead of running a JVM search server
+- Need BM25/TFIDF/LM-Dirichlet scoring plus vector (HNSW/IVF) and geospatial (S2) search in one library without separate services
+- Workload is dominated by TOP_100/TOP_1000/TOP_100_COUNT/COUNT-style multi-hit collection, where the measured 1.2x-1.7x gain over Lucene 10.4.0 actually applies
+- JVM-free deployment is a hard requirement (embedded/edge, memory-constrained hosts)
+- Team can build with a very recent clang/lld (21+) and is willing to vendor SereneDB as a git submodule
+
+**Skip it when:**
+- Workload is TOP_10 single/few-hit lookups: geo-mean is roughly parity with Lucene 10.4.0 (0.99x) there, and Lucene with BP doc reordering beats IResearch on TOP_10/TOP_100 mean latency
+- Specifically hits intersection or union query shapes at TOP_10: IResearch is slower than plain Lucene 10.4.0 on both (390 vs 241us intersection, 372 vs 309us union)
+- Need a stable, versioned public C API/ABI: this is a C++26 CMake target meant to be vendored as source, not a library with ABI guarantees
+- Need a widely deployed, mature standalone search library: outside SereneDB, IResearch's install base is essentially just ArangoDB since 2018 (188-star archived iresearch-toolkit/iresearch predecessor)
+- Toolchain is older than clang/lld 21 or CMake 3.28: the repo requires C++26 and pins a bleeding-edge compiler
+
+**Integration:** static lib · simdcomp (posting bit-packing), ICU (icu_text_tokenizer), fastText, S2 geometry (geo filters), Abseil, DuckDB (column codec + buffer manager integration), liburing (optional, SDB_IOURING), jemalloc/tcmalloc (optional allocator) · C++26 (CMAKE_CXX_STANDARD 26), CMake 3.26+ (benchmark build uses 3.28.3+), clang/clang++ + lld 21.1.8+ · Linux (repo Docker images use llvm-toolchain-noble-21, glibc 2.35+); io_uring feature is Linux-only; macOS/Windows/aarch64 support not documented
+
+**Vs siblings:** Pick IResearch over Tantivy or SeekStorm when native C++ embedding into a DuckDB-based engine and JVM-freedom matter more than winning the benchmark outright -- on the same suite Tantivy is close (IResearch is only 1.15x-1.28x over Tantivy) and both Tantivy and SeekStorm are more mature as standalone, independently-installable libraries than IResearch is outside SereneDB/ArangoDB.
+
+**Gotchas:**
+- Requires C++26 and a very new clang/lld toolchain (repo's own Docker image and the benchmark harness both pin clang/lld 21) -- will not build with older compilers
+- Field-to-column mapping is id-based, not name-based; callers own the field_id -> name mapping (per the basic.cpp example's comments)
+- The legacy `Write()` STORE callback was removed; stored values now go through a separate `.col` writer that needs a DuckDB DatabaseInstance for codec lookup
+- Open issue #937 describes a bug in BlockDisjunction's sub-iterator refill (uses advance() where seek() is needed); issue #364 tracks a still-open broader 'IResearch optimizations' plan, i.e. some perf paths are acknowledged unfinished
+
+**Status:** Actively maintained (last commit 2026-09-25) as part of the SereneDB monorepo, Apache-2.0 and copyable as a CMake submodule, but its C++26/clang-21 toolchain requirement raises the vendoring bar compared to more portable C++ search libraries.
+
+[repo](https://github.com/serenedb/serenedb) · [benchmark](https://github.com/quickwit-oss/search-benchmark-game)
+
+##### SeekStorm  `Rust`  `Apache-2.0`  `active`  `Tier A`
+
+Rust in-process search engine with native lexical and vector indexes; claims sub-millisecond BM25 latency beating Lucene.
+
+**Beats:** Apache Lucene — Against Lucene 10.3.0-bp (OpenJDK 21, -XX:+UseParallelGC, --add-modules jdk.incubator.vector) with SeekStorm 1.0.0 built via RUSTFLAGS='-C target-cpu=native' cargo build --release on Rust 1.90, run on a ThinkPad P1 Gen 6 (i7-13700H, NVMe SSD, Ubuntu 24.04): over 300 intersection, 300 phrase and 301 union AOL-derived queries plus 'the' and a two-phase-critic query on 5,032,105-doc English Wikipedia, mean best-of-10 latency was 1.5x-2.0x faster for intersection, 3.1x-6.4x for phrase, 1.3x-13.1x for union, and 115x-135x for the two-phase-critic query, but about 3x slower than Lucene on 'the' under the COUNT collector.
+
+**How:** Term-proximity BM25F ranking with block-max WAND/Maxscore query pruning and roaring-bitmap-compressed posting lists cuts work per query; intersection/union routines are hand-written with SIMD (see intersection_simd.rs, AVX2/NEON). Being a single Rust binary avoids JVM warm-up, GC pauses, and Lucene-style segment merges, which the README credits for stable tail latency (no cold-start or merge-triggered spikes). True real-time indexing means new documents are searchable immediately, without a commit/refresh delay.
+
+**Use it when:**
+- Million-doc-scale BM25 lexical search (like the Wikipedia benchmark) where sub-millisecond latency and low tail latency (P99) matter
+- Need lexical + vector hybrid search behind one query planner (RRF fusion) instead of bolting a vector DB onto Lucene
+- Want a single-binary Rust deployment with no JVM, avoiding GC pauses and segment-merge latency spikes
+- True real-time search requirement: every indexed document must be searchable immediately, not near-real-time
+- Willing to adopt a new schema/query API and Rust crate ecosystem instead of reusing an existing Lucene index
+
+**Skip it when:**
+- Need drop-in Lucene/Solr/Elasticsearch compatibility: index format, Query DSL, and Java plugin ecosystem are not compatible with SeekStorm's own REST API and schema
+- Risk-averse production use: 1.9k stars and a young issue tracker, smaller deployment base than Lucene/Tantivy
+- Workload is dominated by single very-frequent-term COUNT queries: SeekStorm measured about 3x slower than Lucene on the term 'the' under the COUNT collector, and plain TOP_10 union gains are only 1.3x, not the 100x+ figures reported for other collectors
+- Platform outside x86-64/aarch64 or Windows/Linux/macOS: other OSes are explicitly untested per README
+- Need the 20-year analyzer/connector/plugin ecosystem Lucene has accumulated
+
+**Integration:** crate · many: tokio, serde/serde_json, rayon, zstd, ahash (or optional gxhash), regex, model2vec-rs for embeddings, optional pdfium-render (feature "pdf") and Chinese segmentation (feature "zh") — see Cargo.toml for full list (~30 deps) · Rust edition 2024 (Cargo.toml edition="2024"); the verified benchmark build used Rust 1.90 with RUSTFLAGS='-C target-cpu=native' · x86-64 and aarch64 with SIMD acceleration on both; Windows, Linux, macOS documented, other OS untested per README
+
+**Vs siblings:** Pick SeekStorm over Tantivy or IResearch (SereneDB) when you need a first-class native vector index and hybrid RRF fusion in the same engine, not just lexical search; its phrase/union speedups (3.1x-13.1x) are also larger in its own benchmark run than Tantivy's ~2x README claim, though intersection gains (1.5x-2.0x) are in a similar range and SeekStorm is the youngest, smallest-community project of the three.
+
+**Gotchas:**
+- Requires an async Tokio runtime even for basic single-threaded indexing/search calls
+- Default Cargo features pull in Chinese word segmentation, PDF text extraction (pdfium-render), and varint bitpacking; disable with default-features=false if not needed
+- Historical panics reported on commit() after reopening an external-vector index (issue #65) and during realtime search (issue #36); both closed/fixed but indicate edge cases under specific update sequences
+- Optional gxhash feature needs AES/SSE2 hardware support; enabling it without that support is a documented risk
+
+**Status:** Actively maintained (last commit 2026-09-12), Apache-2.0 licensed, and copyable as a Rust crate; 1.9k stars is small next to Lucene's install base, but the CHANGELOG and issue tracker show ongoing bug fixes and feature work.
+
+[repo](https://github.com/SeekStorm/SeekStorm) · [benchmark](https://github.com/SeekStorm/search-benchmark-game)
+
+##### Tantivy  `Rust`  `MIT`  `active`  `Tier A`
+
+Embeddable Rust full-text search library, architecturally close to Lucene, ahead on phrase/negated/count-heavy queries.
+
+**Beats:** Lucene — In the search-benchmark-game suite, Tantivy 0.26 (Rust 1.96.0, target-cpu=native, LTO, opt-level=3) vs Lucene 10.4.0 (OpenJDK 21.0.11, ParallelGC) on an AMD Ryzen 7 9800X3D shows per-collector geometric-mean ratios from 0.83x (Lucene faster on TOP_10) to 1.31x (TOP_100_COUNT) — not the README's claimed '~2x faster' — with Tantivy's wins concentrated in phrase, negated, and count-heavy collectors and Lucene ahead on TOP_10 and intersection/union queries.
+
+**How:** Indexes are immutable, mmap'd segments with FST-based term dictionaries (tantivy-fst) for fast term lookup and block-bitpacked (bitpacker4x) SIMD-friendly postings compression. Top-k boolean queries use Block-Max WAND pruning (src/query/boolean_query/block_wand_intersection.rs and block_wand_union.rs): documents are processed in 128-doc windows and whole blocks are skipped when their precomputed max score can't beat the current threshold. These are the same algorithmic family Lucene uses, reimplemented in Rust.
+
+**Use it when:**
+- Embedding a BM25 full-text index directly into a Rust binary, CLI, or service without running a separate search server or JVM
+- Read-heavy workloads dominated by phrase, negated, or count-only queries (COUNT / TOP_100_COUNT), where the current benchmark shows it ahead of Lucene
+- Append-mostly / batch indexing that fits a commit-based, immutable-segment model rather than constant per-document mutation
+- Need multi-language stemming (17 languages), JSON fields, facets, or range queries out of the box in a single crate
+- Fine with a Rust core and using community bindings (tantivy-py, Ruby) rather than a JVM dependency
+
+**Skip it when:**
+- Latency-sensitive TOP_10 result pages or intersection/union-heavy boolean queries, where the current benchmark shows Lucene ~2x-2.6x faster
+- Frequent in-place document edits: segments are immutable, so updates are delete-then-reindex plus a merge
+- Need a standalone search server out of the box; Tantivy itself has no REST/network layer (pair with Quickwit or build one)
+- Team is JVM-only and doesn't want a Rust toolchain in the stack just for search
+- Need Lucene's much longer operational history and broader third-party tooling/plugin ecosystem
+
+**Integration:** crate · many small Rust crates (regex, aho-corasick, tantivy-fst, bitpacking, rayon, lz4_flex/zstd optional, serde); no external services or JVM · Rust 1.87 (edition 2021, per Cargo.toml rust-version); the benchmark build used Rust 1.96.0 with target-cpu=native + LTO · any (pure Rust, Linux/macOS/Windows per README); SIMD integer postings compression activates on SSE2-capable CPUs
+
+**Vs siblings:** Pick Tantivy over IResearch/SereneDB or SeekStorm (same category, also run through the same search-benchmark-game harness against Lucene) when you want the most mature, widely production-used Rust search crate (Etsy, ParadeDB, Nuclia) rather than the largest headline multiple — IResearch and SeekStorm claim bigger speedups in that same suite but have far less deployment history.
+
+**Gotchas:**
+- Segments are immutable; deletes are tombstones resolved only at merge time, so delete-heavy workloads need merge-policy tuning
+- Only one IndexWriter may be open on an index at a time (directory-locked); concurrent writers must be coordinated externally
+- SIMD postings gains are CPU-dependent (SSE2 assumed); the published benchmark numbers were built with -C target-cpu=native and LTO, which a default `cargo build --release` from crates.io won't reproduce
+- Experimental features like the jitexpr predicate crate are explicitly marked unstable and likely to change
+
+**Status:** Actively maintained (last commit 2026-09-23, Cargo.toml already at 0.27.0) with 16.1k stars and real production users (Etsy, ParadeDB, Nuclia, Element.io); MIT-licensed and usable as an ordinary vendored Rust dependency.
+
+[repo](https://github.com/quickwit-oss/tantivy) · [benchmark](https://github.com/quickwit-oss/search-benchmark-game)
+
+#### unicode-utf8
+
+##### ada-url/idna  `C++`  `Apache-2.0 OR MIT`  `active`  `Tier A`
+
+C++20 IDNA to_ascii/to_unicode (UTS #46) domain-name encoder, about 1.26x faster than ICU.
+
+**Beats:** ICU — On Apple M1 Max with LLVM 14 (C++20, Release build via the repo's own CMake benchmark target), Google Benchmark's to_ascii tool measured Ada at 1504 ns/op (48.5 M/s, ~3.99 M domains/s) versus ICU's uidna_nameToASCII_UTF8 at 1898 ns/op (38.5 M/s, ~3.16 M domains/s), over a fixed set of 6 sample domain strings defined in benchmarks/to_ascii.cpp — about 1.26x faster.
+
+**How:** An all-ASCII fast path (from_ascii_to_ascii) skips the whole Unicode pipeline and just lowercases in place. Non-ASCII input goes through a single UTF-8->UTF-32 transcode into a pre-sized buffer, a mapping pass into an exactly-sized second buffer to avoid reallocation, and an is_already_nfc check that skips NFC normalization entirely when the input is already normalized; labels are then walked with a single pointer scan instead of repeated string::find calls. Unicode/IDNA lookup tables are stored DEFLATE-compressed on disk and inflated once, lazily, behind an atomic-CAS/spin-wait (no mutex) into the same O(1) multi-stage lookup layout used pre-compression, so steady-state lookups are plain table hits and only first use pays an inflate cost.
+
+**Use it when:**
+- Already building or embedding a URL/host-normalization layer and want IDNA to_ascii/to_unicode without linking full ICU
+- C++20 toolchain available (GCC 12+, LLVM/Clang 12+, MSVC 2022)
+- Workload is many small domain-name labels (matches the benchmark's label-oriented shape), not bulk text
+- Want to vendor a small, dual Apache-2.0/MIT-licensed source-drop instead of a system Unicode dependency
+- Building something with precedent for this exact use, e.g. Node.js or a ClickHouse-style URL/host column
+
+**Skip it when:**
+- Need general-purpose UTF-8 validation or transcoding, not domain-name IDNA specifically (out of scope for this library)
+- Stuck on a pre-C++20 toolchain
+- Need ICU's broader Unicode services (locale, collation, etc.) beyond IDNA
+- Want strong benchmark confidence: only one README micro-benchmark over 6 fixed sample domain strings, ICU version unstated, and the measured gain is modest (~1.26x)
+- Want a library with a long track record; only 69 stars and comparatively young/niche despite active maintenance
+
+**Integration:** source-drop · none for the core library; optional simdutf for UTF transcoding via ADA_USE_SIMDUTF (off by default); benchmarks/tests pull Google Benchmark, GoogleTest, and simdjson via CPM but are not needed to use the library · C++20 (GCC 12+, LLVM/Clang 12+, MSVC 2022 per README); note the singleheader demo.cpp is documented as compiled with -std=c++17, but the library core itself requires C++20 · portable C++20, no SIMD/arch requirement in the core path; explicit byte-swap code in table_store.hpp for big-endian platforms (e.g. s390x)
+
+**Vs siblings:** The catalogued siblings (simdutf8, xutf, SimdUnicode, utf8_range, encoding_rs, Boost.Text, unicode-transforms, etc.) are general UTF-8/Unicode validators or transcoders and don't do domain-name IDNA at all. Pick ada-url/idna specifically for URL host normalization (to_ascii/to_unicode), not as a substitute for those general-purpose libraries.
+
+**Gotchas:**
+- to_ascii/to_unicode may accept or even produce invalid domains by design (documented WHATWG carve-outs), not strict RFC validity enforcement
+- Inputs over max_domain_input_bytes (16384 bytes) are rejected outright rather than truncated
+- Two API shapes exist: the value-returning to_ascii() has an ambiguous empty-string-on-error case; the bool-returning out-parameter overload avoids that ambiguity
+- Table inflate happens lazily on first call; a corrupted/OOM init path is a hard error per the source comments, not a silent fallback
+
+**Status:** Actively maintained (last commit 2026-08-24, 5 open issues, used by Node.js and referenced in a ClickHouse PR); dual Apache-2.0/MIT licensed and small enough to vendor as a source-drop despite a modest 69-star footprint.
+
+[repo](https://github.com/ada-url/idna) · [benchmark](https://github.com/ada-url/idna#benchmarks)
+
+##### go-simd/utf8  `Go`  `BSD-3-Clause`  `active`  `Tier A`
+
+Pure-Go SIMD UTF-8 validator and rune counter, byte-identical to unicode/utf8, faster on non-ASCII text.
+
+**Beats:** Go standard library unicode/utf8 package — On a native GitHub Actions AMD EPYC runner (AVX2, GOAMD64=v1, Go stable) using the BenchmarkParity* harness against Go stdlib unicode/utf8, mixed-UTF-8 Valid throughput reaches 19.74x stdlib (5196 vs 263 MB/s at 1 MiB) and RuneCount reaches 21.08x; on an Apple M4 Max (NEON, Go 1.26.4) the same harness shows 1.21x-2.21x on ASCII, 1.90x-9.0x on mixed Valid, and 3.58x-8.7x on RuneCount; a separate real-hardware IBM z15 (s390x, go1.26.4) run shows 1.73x-1.96x on ASCII and 9.5x-10.4x on mixed/RuneCount. ppc64le figures are llvm-mca cycle-model estimates, not measured runs.
+
+**How:** Implements Lemire & Keiser's 'Validating UTF-8 In Less Than One Instruction Per Byte' nibble-lookup algorithm (PSHUFB/VTBL byte classification, PALIGNR/VEXT to shift in the previous block, PTEST error accumulator), generated via go-asmgen, replacing stdlib's byte-at-a-time DFA with one-pass block validation. RuneCount piggybacks on an already-validated block and mask-and-POPCNTs continuation bytes instead of decoding runes individually. A dedicated ASCII pre-scan (group-of-4 PMOVMSKB on amd64, a 64-byte-unrolled high-bit test on NEON/s390x) short-circuits pure-ASCII input to a memory-bandwidth scan, fixing an earlier 5-8x regression the full validator had against stdlib's own ASCII fast path.
+
+**Use it when:**
+- Non-ASCII or mixed-script UTF-8 (2/3/4-byte runes) on amd64 or arm64, where measured wins are 1.9x-21x
+- Throughput-bound batch validation or rune counting of buffers roughly 1 KiB-1 MiB
+- Need exact stdlib-compatible semantics (identical bool/int, even on malformed input) with no calling-code changes
+- Running on amd64 (SSE4.1/AVX2) or Apple Silicon arm64 (NEON), the two kernels with native-hardware benchmarks and fuzzing
+- s390x (z13+) workloads: the only other kernel measured on real hardware (IBM z15), 1.7x-10.4x
+
+**Skip it when:**
+- ppc64le deployments where you need proven real-silicon numbers: those figures are llvm-mca static estimates, not measurements
+- loong64/riscv64 targets, which still just call unicode/utf8 with ordinary function-call overhead (no SIMD kernel)
+- Hot paths that call ValidString/RuneCountInString specifically: both are plain aliases to stdlib, no SIMD benefit
+- Anything requiring a track record: 0 GitHub stars, first NEON kernel landed only 2026-06-22, ppc64le/s390x pre-scan fixes as recent as this year
+- Teams uncomfortable with generated assembly (go-asmgen) and per-arch .s files as a maintenance surface
+
+**Integration:** module · golang.org/x/sys (CPU feature detection); test-only: github.com/stuartcarnie/go-simd (benchmark comparator), github.com/stretchr/testify · Go 1.26.4 (go.mod requires `go 1.26.4`) · amd64 (SSE2/SSSE3/SSE4.1 baseline, AVX2 runtime-dispatched), arm64 (NEON), ppc64le (VSX/AltiVec, qemu-validated only, no native perf data), s390x (vector facility, validated on real z15); loong64/riscv64 fall back to scalar unicode/utf8
+
+**Vs siblings:** Versus stuartcarnie/go-simd — the only other pure-Go SIMD UTF-8 validator and also Lemire-based — this package edges it ~3.5% on native AVX2 CI, adds NEON/VSX/s390x kernels and a RuneCount fast path the 2018 stuartcarnie repo lacks (which also predates go.mod and has no explicit root license), and is actively maintained; the other siblings (simdutf8, SimdUnicode, utf8_range, etc.) target Rust/.NET/C++ ecosystems, so this is the pick specifically for Go code that must stay pure-Go (no cgo).
+
+**Gotchas:**
+- All-ASCII input on amd64 and s390x used to be 5-8x slower than stdlib before the ASCII pre-scan landed (fixed in current main, but shows the failure mode the design has to guard against)
+- ppc64le has no GitHub-hosted runner; it is cross-compiled and tested under qemu only, so 'native perf pending' per the README
+- ValidString/RuneCountInString get zero speedup — they're pass-throughs, not SIMD-accelerated
+- Package is very new (0 stars, single open issue is Renovate's dependency dashboard) with no external adopters found
+
+**Status:** Active (last commit 2026-09-08), BSD-3-Clause, and small enough (about a dozen Go/asm files) to vendor or fork, but has zero stars and its NEON/ASCII-prescan fixes are only weeks to months old — an early-stage result, not a battle-tested one.
+
+[repo](https://github.com/go-simd/utf8) · [benchmark](https://github.com/go-simd/utf8/blob/main/BENCHMARKS.md)
+
+##### SimdUnicode  `C#`  `MIT`  `active`  `Tier A`
+
+Drop-in faster UTF-8 validator for .NET, beating the runtime's private SIMD validator on non-ASCII text.
+
+**Beats:** .NET runtime's built-in UTF-8 validator (Utf8Utility.GetPointerToFirstInvalidByte; private in the runtime, benchmarked through a vendored MIT copy in benchmark/UTF8_runtime.cs) — On an Intel Xeon Gold 6548N (.NET 10, AVX-512, BenchmarkDotNet 0.15.4, dotnet run -c Release), SimdUnicode reaches 36 GB/s vs 14 GB/s (2.5x) on Twitter.json and up to 14x on Emoji-Lipsum (15 vs 1.1 GB/s), measured against a vendored copy of the runtime's private Utf8Utility.GetPointerToFirstInvalidByte; it is slower than .NET on pure ASCII (72 vs 107 GB/s). ARM64 systems (Apple M2, Graviton 2/3, Qualcomm 8cx gen3) show 1.2x-5.8x gains, with .NET version unstated for those runs.
+
+**How:** Implements the Keiser-Lemire 'less than one instruction per byte' UTF-8 validation algorithm (arXiv 2010.03090), the same algorithm used by Node.js, Bun, GraalVM and PHP. It processes 16-64 bytes per iteration with SIMD shuffle-based lookup tables that classify byte roles and continuation-byte counts in a handful of vector ops instead of per-byte branches. A runtime dispatcher picks the widest available kernel per host CPU: NEON on ARM64, then AVX-512BW, AVX2, SSE4.2/SSSE3, falling back to a scalar implementation.
+
+**Use it when:**
+- Validating mixed or mostly non-ASCII UTF-8 (Arabic, CJK, emoji, Hindi, etc.) on a hot path
+- Running on AVX-512-capable x64 (Zen 4 / Ice Lake+) or ARM64 NEON hardware, where the gap is largest
+- .NET 10 codebases that need an unsafe byte* validation entrypoint mirroring the private runtime API
+- Need the offset of the first invalid byte, not just a valid/invalid boolean
+- Comfortable vendoring MIT-licensed source directly since there is no NuGet package
+
+**Skip it when:**
+- Pure-ASCII-heavy workloads on x64: .NET 10's own validator is faster there (107 vs 72 GB/s, Latin-Lipsum)
+- Need a managed/safe API; this is unsafe pointer-only, no documented Span<byte> overload
+- Fuzzing is still an open item (issue #27), so hardening against adversarial input is unproven beyond unit tests
+- Small user base (49 stars) and source-drop-only distribution, no package manager integration
+- Targeting anything outside C#/.NET; no bindings for other runtimes
+
+**Integration:** source-drop · none · .NET 10 (net10.0), AllowUnsafeBlocks enabled · x86-64 (SSE4.2/AVX2/AVX-512BW tiers), aarch64 (NEON), scalar fallback elsewhere
+
+**Vs siblings:** Pick SimdUnicode when you're specifically on .NET and want the fastest available replacement for Utf8Utility.GetPointerToFirstInvalidByte; unlike simdutf8 (Rust) or utf8_range (C++/protobuf), it's the only sibling targeting the C#/.NET runtime and its own private validator as baseline. For non-.NET stacks or a larger adoption base, look at simdutf8 or utf8_range instead.
+
+**Gotchas:**
+- unsafe byte* API only; caller manages pinning and buffer lifetime, no managed overload
+- slower than the built-in .NET validator on pure ASCII text (Latin-Lipsum benchmark)
+- SharpFuzz fuzzing not yet wired in (issue #27 open); correctness on hostile input relies on unit tests only
+- ARM benchmark tables don't state a .NET version, unlike the fully specified x64 table
+
+**Status:** Actively maintained (last commit 2026-08-19) and MIT-licensed, small enough to vendor as source, but adoption is minimal (49 stars) and it remains a self-proposed candidate for the .NET runtime (dotnet/runtime#103781) rather than a shipped feature.
+
+[repo](https://github.com/simdutf/SimdUnicode) · [benchmark](https://github.com/simdutf/SimdUnicode/blob/main/README.md)
+
+##### simdutf8  `Rust`  `MIT OR Apache-2.0`  `active`  `Tier A`
+
+SIMD-accelerated UTF-8 validator for Rust, a drop-in replacement for std::str::from_utf8, up to 23x faster.
+
+**Beats:** Rust std::str::from_utf8 (also compared against simdjson's UTF-8 validator) — On an AMD Ryzen 7 PRO 3700 (Zen2, Linux, Rust 1.52.0, default cargo bench profile), simdutf8's basic API validated valid non-ASCII UTF-8 up to 23x faster than std::str::from_utf8 and pure ASCII up to 4x faster; on an Apple M1 (aarch64, rustc 1.54.0-nightly) it was up to 11x faster on non-ASCII and up to 4x on ASCII. It was also faster than simdjson's own UTF-8 validator (simdutf8 built with #[inline(never)] for that comparison) on almost all tested inputs.
+
+**How:** It ports simdjson's SIMD UTF-8 validation algorithm (Keiser & Lemire, 'Validating UTF-8 In Less Than One Instruction Per Byte') to Rust, with its own added ASCII fast path and x86 prefetching. At runtime on x86 it dispatches to the best available instruction set (AVX-512, AVX2, or SSE4.2) via `is_x86_feature_detected!`; aarch64/NEON, armv7/NEON and wasm32 simd128 are also supported, with SIMD chosen at compile time on those. Inputs under 64 bytes are simply handed to `core::str::from_utf8()` instead of invoking SIMD. The `basic` API further speeds things up by only checking the aggregated error state once at the end rather than per-block.
+
+**Use it when:**
+- Validating large buffers (well over 64 bytes) of UTF-8, especially non-ASCII text, where the current bottleneck is std::str::from_utf8
+- Parsers or ingestion pipelines that mostly see valid or mostly-valid UTF-8 and want the fastest possible check before trusting the bytes
+- Rust targets with SIMD support: x86/x86-64 (SSE4.2/AVX2/AVX-512), aarch64, wasm32, or armv7 on nightly
+- no_std/embedded projects that can pick a target CPU feature at compile time via RUSTFLAGS
+- Cases needing detailed error position on failure via the `compat` API instead of hand-rolled validation
+
+**Skip it when:**
+- Buffers routinely under 64 bytes — simdutf8 just forwards these to std::str::from_utf8, so there's no win and only added dependency weight
+- Platforms without any of the supported SIMD extensions — it silently falls back to std with no speedup
+- You need every from_utf8 call to also report the exact invalid byte position at basic-API speed — that requires the slightly slower `compat` flavor
+- AltiVec/PowerPC targets — SIMD support there is an open feature request (issue #110), not implemented
+- Taking the README's 23x/11x numbers at face value for today's stack — they're from 2021 (simdutf8 v0.1.2, Rust 1.52/1.54-nightly, simdjson v0.9.2) and haven't been re-run against current std or crate versions
+
+**Integration:** crate · flexpect (runtime, used internally); rustversion (build-dependency) · MSRV 1.38.0 for the crate itself; aarch64 NEON needs Rust 1.61+, AVX-512 needs Rust 1.89+, armv7 NEON needs nightly · x86/x86-64 (SSE4.2, AVX2, AVX-512), aarch64, armv7 (nightly, feature-gated), wasm32 (simd128), falls back to core::str::from_utf8 elsewhere
+
+**Vs siblings:** The other same-category entries (xutf, SimdUnicode, Parabix, utf8_range) beat C++/.NET/bitstream validators, not Rust's std — pick simdutf8 when you're writing Rust and want an actual crate that's near-drop-in for std::str::from_utf8. If your real target is beating simdutf (C++) specifically, simdutf8's own maintainers haven't benchmarked that comparison (open issue #54); look at xutf or SimdUnicode instead.
+
+**Gotchas:**
+- Building with opt-level = "z" disables inlining and makes it noticeably slower — the README explicitly warns against it
+- no_std builds pick the SIMD implementation at compile time, not runtime, so you must set RUSTFLAGS (e.g. target-feature=+avx2 or +neon) to get anything faster than the fallback
+- Internals use unsafe SIMD intrinsics; the project says it's fuzzed and has 'no known bugs' but that's a maintainer claim, not a formal audit
+- AVX-512 is only auto-selected on CPUs supporting VBMI2 (Ice Lake+) to avoid the frequency throttling older AVX-512 CPUs incur
+
+**Status:** Actively maintained (last default-branch commit 2026-06-15, v0.1.5 on crates.io) under MIT OR Apache-2.0; adds as an ordinary Cargo dependency, no vendoring needed.
+
+[repo](https://github.com/rusticstuff/simdutf8) · [benchmark](https://github.com/rusticstuff/simdutf8#benchmarks)
+
+##### xutf  `Rust`  `MIT`  `active`  `Tier A`
+
+SIMD Rust UTF-8/16/32 transcoder beating simdutf on most inputs, plus allocation-free grapheme/width/wrap terminal-text primitives.
+
+**Beats:** simdutf — Measured with a custom best-of-7 harness (not criterion; optional divan mode) on ~1 MiB ASCII/CJK/emoji corpora against the Rust `simdutf` 0.7.0 crate's validating convert_* entry points (simdutf itself calls C++ via FFI); built with nightly rustc, release profile lto="thin", RUSTFLAGS="-C target-cpu=native", on an Apple M4 Max and a second host labeled only 'Xeon x86-64'. Non-emoji transcoding margins over simdutf range -1.1% to +57.9% (below the headline 1.5-2x), while UTF-16/32->UTF-8 on emoji input reaches +294% (M4 Max) and +854% (Xeon).
+
+**How:** Ported from the C++ xstd branchless UTF kernel: UTF-8 is treated as a bit permutation, so one mask table drives both directions, with BMI2 pext gathering payload bits on decode and pdep scattering them on encode instead of per-codepoint branches or shuffle tables. Bulk paths use Rust's core::simd portable SIMD plus hand-written AVX-512 (src/x86.rs) and NEON (src/neon.rs) kernels. Decoding is also non-validating (never fails), removing the branchy error-checking state machine strict validators like simdutf must run.
+
+**Use it when:**
+- Rust services doing bulk UTF-8/16/32 transcoding (log/network pipelines, file loaders) where simdutf's validating converters are the bottleneck, especially on emoji-heavy or mixed CJK+emoji text (+294% to +854% on UTF-16/32->UTF-8 emoji rows).
+- Terminal/TUI code needing fast grapheme-cluster iteration, visible-width math, or width-bounded truncation/wrap without per-call allocation (3-13x over unicode-segmentation/textwrap on the README's corpora).
+- Code that must decode untrusted or arbitrary bytes and can never error, rather than validating first and rejecting malformed input.
+- Cross-encoding equality/ordering checks (e.g. UTF-8 buffer vs UTF-16 buffer) without an intermediate String conversion.
+- Projects already on nightly Rust that can pin RUSTFLAGS="-C target-cpu=native" builds and accept a crates.io/git dependency to that toolchain.
+
+**Skip it when:**
+- Need strict validation with structured decode errors (reject malformed input) — xutf is permissive/lossy by design, different semantics from simdutf's validating convert_* API.
+- Need a C/C++-callable library directly — it's #![no_std] Rust with zero runtime deps, not usable from C++ without writing an FFI shim.
+- Can't run nightly Rust: requires the core::simd/portable_simd feature, and rust-toolchain.toml only pins channel = "nightly" (no exact version).
+- Risk-averse production use: 10 GitHub stars, no visible issue/bug history yet to judge maturity against, and the 'Xeon x86-64' benchmark host isn't identified by exact CPU model.
+- Only need plain ASCII-range validation — the ASCII-only wins over simdutf are modest here (some rows within 20%, one row -1.1%), so a simpler validator may suffice.
+
+**Integration:** crate · none at runtime; #![no_std] + alloc, zero runtime dependencies (dev-dependencies only for its own benches/tests) · Rust nightly (portable_simd feature), edition 2024; exact nightly version not pinned · x86-64 (BMI2/AVX-512 kernels when available) and aarch64 (NEON kernels); other targets fall back to the portable core::simd path, not covered by the published benchmarks
+
+**Vs siblings:** Pick xutf over simdutf when you're already in pure Rust, don't need simdutf's strict validation errors, and want faster UTF-16/32<->UTF-8 transcoding plus bundled grapheme/width/wrap terminal-text helpers in one crate. Pick encoding_rs instead if you need a far more battle-tested, widely-deployed transcoder or broader legacy-encoding support beyond UTF-8/16/32 (xutf's own tables show it beating encoding_rs by roughly 1.6-8x on non-ASCII).
+
+**Gotchas:**
+- Decoding never fails: truncated UTF-8 sequences, lone surrogates, and garbage bytes all decode to defined-but-lossy output (e.g. a truncated sequence decodes to codepoint 0) instead of erroring — do not use where strict validation is required.
+- RUSTFLAGS="-C target-cpu=native" is required to reach the README's peak throughput numbers; a plain nightly build without it will be slower.
+- UTF-16 low-surrogate encoding was deliberately changed from the original C++ xstd formula (which corrupted pairs when bit 13 of cp - 0x10000 is set, e.g. U+12000).
+- simdutf's non-validating convert_valid_* entry points are excluded from the README's comparison tables; only simdutf's validating convert_* path is benchmarked against.
+
+**Status:** Actively maintained (last commit 2026-09-03, v1.5.0 published on crates.io with about 32.5k downloads across 7 releases) but still a young project at 10 GitHub stars; rated 'copyable', though the nightly-only core::simd requirement and no_std/alloc design mean it can't simply be vendored into a non-Rust codebase the way a header-only C library could.
+
+[repo](https://github.com/can1357/xutf) · [benchmark](https://github.com/can1357/xutf#benchmarks)
 
 ### runtime-and-systems
 
@@ -3673,6 +4296,1278 @@ Staged, typed OCaml parser combinators (MetaOCaml) that beat ocamlyacc/ocamllex 
 
 ## Permissive — Unverified claims (tier C/D)
 
+### parsing-and-text
+
+#### csv-tabular
+
+##### cisv  `C`  `MIT`  `abandoned`  `Tier C`
+
+SIMD-accelerated C CSV parser/writer (AVX-512/AVX2) beating csvkit and PapaParse; monorepo now deprecated.
+
+**Beats:** csvkit — Author's blog, built with -O3 -march=native -mavx512f -mavx512bw on an unspecified Intel Core i9, reports CLI row-counting of a 1M-row/98MB CSV: miller 0.004s, cisv 0.055s, wc -l 0.083s, rust-csv 0.664s, csvkit 9.788s (~178x over csvkit, but ~14x slower than miller in the same table). Separately, Node.js synchronous parsing measured cisv at 60.80 MB/s vs PapaParse 25.12 MB/s (~2.4x) and csv-parse 14.67 MB/s.
+
+**How:** Vectorized byte scanning for delimiters/quotes/newlines using AVX-512 mask compares (or AVX2/SSE2 movemask + ctz, ARM NEON fallback) instead of a byte-at-a-time state machine. Input files are zero-copy memory-mapped with kernel read-ahead hints and read through an L3-sized ring buffer. A chunk-splitting API (mmap + split-at-row-boundaries) enables multi-threaded parallel parsing, described in the header as a '1 Billion Row Challenge technique'.
+
+**Use it when:**
+- Row-counting or bulk parsing of large CSVs on x86-64 with AVX-512 or AVX2 available
+- Embedding a small C parser/writer directly into a C/C++ codebase rather than shelling out to a Python tool
+- Node.js/Python/PHP apps that need faster synchronous CSV parsing than PapaParse/csv-parse for one-shot batch jobs
+- Workloads needing early-exit row iteration (stop after N matching rows) without loading the whole file
+- Multi-core boxes where parallel chunked parsing of one large file is worth the added complexity
+
+**Skip it when:**
+- Production systems: the whole monorepo is archived/deprecated by its own author, moved to separate cisv-core/cisv-cli/bindings repos with unclear activity
+- CPUs without AVX2/AVX-512 (older x86, some cloud instance types) — falls back to SSE2/NEON/scalar with speed not benchmarked
+- Anywhere `miller` is an option: the author's own table shows miller ~14x faster than cisv on the same 1M-row count
+- Windows — unsupported (README lists it as 'planned... maybe')
+- Teams needing a mature, community-supported CSV toolkit rather than a single-author experimental project (91 stars, author calls it 'still evolving')
+
+**Integration:** source-drop / static lib (CMake or Makefile build) plus separate Node.js/Python/PHP native bindings · none for core C library; Node.js 14+, Python 3.7+, or PHP 7.4+ toolchains for the respective bindings · GCC 7+ or Clang 6+, CMake 3.14+ · x86-64 (AVX-512 or AVX2 preferred, SSE2 fallback), ARM64/NEON; Linux and macOS only, no Windows
+
+**Vs siblings:** Pick cisv only for a minimal, vendorable C library/CLI using raw SIMD intrinsics with no dependencies; zsv (same category) does the same mmap+SIMD row-counting approach but is faster in its own benchmarks, more actively maintained, and has broader language coverage, so prefer zsv unless you specifically want cisv's smaller C surface.
+
+**Gotchas:**
+- Repo is marked DEPRECATED in its own README; code has moved to split repos (cisv-core, cisv-cli, cisv-nodejs, cisv-python, cisv-php)
+- Peak throughput requires AVX-512; on AVX2/SSE2/NEON hardware speed is unverified
+- Author states the code changed during writing of the benchmark blog post, so published numbers may not match current source
+- Row iterator's returned field pointers are only valid until the next call — no copy-out API mentioned for retention
+
+**Status:** Abandoned/archived, and the monorepo itself declares itself deprecated in favor of split successor repos; MIT-licensed and small enough to vendor, but pick a maintained fork or successor repo before depending on it.
+
+[repo](https://github.com/sanix-darker/cisv) · [benchmark](https://sanixdk.xyz/blogs/how-i-accidentally-created-the-fastest-csv-parser-ever-made)
+
+##### DuckDB (CSV reader)  `C++`  `MIT`  `active`  `Tier C`
+
+In-process OLAP SQL engine that queries CSV files directly, beating pandas read_csv + groupby on large files.
+
+**Beats:** pandas read_csv — A third-party, DuckDB-unaffiliated blog (duckdblab.org) reports that on one Ryzen 9 7950X / 64GB DDR5 / NVMe machine, DuckDB SQL run directly over a synthetic ~8GB/50M-row Nginx access-log CSV (date parsing, group-by status code, percentile calc) took ~3.8s and ~380MB RAM, versus a naive `pd.read_csv` + groupby at ~180s and ~4.2GB RAM — about 47x faster and 90% less memory. DuckDB was 'v1.5.x plus some v2.0 Preview features'; pandas version, compiler flags, and a benchmark script were not published.
+
+**How:** It uses a vectorized, columnar execution engine (operates on batches of values rather than row-by-row Python objects) combined with a multi-threaded CSV scanner that reads and parses chunks of the file in parallel (`parallel=true` by default). A CSV "sniffer" auto-detects delimiter, quoting, header, and column types from a sample of the file before the full parallel scan, and query operators (filter/group-by/projection) push down into the scan instead of materializing the whole table first, which is what keeps memory low relative to a full `pd.read_csv` load.
+
+**Use it when:**
+- Query, filter, join, or aggregate CSV data larger than comfortably fits in a pandas DataFrame (tens of millions of rows / multi-GB files) without hand-writing chunked pandas code
+- The workload is naturally SQL-shaped: group-bys, window functions, percentiles, or joins across multiple CSV/Parquet files
+- You want to query CSV/Parquet (including gzip-compressed CSV) in place without a separate ETL/load step
+- Single-machine job where you want multi-core throughput on the read+aggregate path without standing up Spark/Dask
+- You already use pandas/Polars downstream and just want DuckDB as an accelerator for ingest+aggregate, then hand results back as a DataFrame
+
+**Skip it when:**
+- Pure scanning/row-counting/field-extraction with no aggregation — sibling tools like zsv and xan are reported to beat DuckDB's own CSV reader on those tasks
+- Team is committed to pandas' imperative, method-chaining style and can't adopt SQL or a relational API
+- CSV has very long lines/fields beyond the default 2MB max_line_size, or wildly inconsistent schemas across many files, without tuning the sniffer (max_line_size, sample_size, files_to_sniff)
+- You need guaranteed constant memory regardless of input method: memory behavior currently differs between reading by filename (streams) and reading CSV via a pipe/stdin with the same query (open GH issue #25165 as of Sept 2026)
+- Columns contain long numeric IDs — the sniffer has been reported to infer these as DOUBLE instead of HUGEINT/VARCHAR, silently losing precision unless types are pinned explicitly
+
+**Integration:** shared lib / static lib / source-drop (single-file amalgamation) / language packages (pip, npm, etc.) · none required to build the core (vendors what it needs); optional extensions may pull their own deps · C++17-compliant compiler, CMake, Python 3 (build-time only, per README) · x86-64 and aarch64 on Linux/macOS/Windows, plus WebAssembly (DuckDB-Wasm) via language clients
+
+**Vs siblings:** Pick DuckDB when the job is more than parsing — joins, group-bys, window functions, or percentiles across one or more CSV/Parquet files in a single SQL statement. For pure scanning, row-counting, or field extraction, siblings like zsv and xan are reported faster than DuckDB's own CSV reader and are lighter-weight if a full SQL engine isn't needed.
+
+**Gotchas:**
+- CSV type sniffer reported to infer long numeric ID columns as DOUBLE instead of HUGEINT/VARCHAR, causing precision loss unless column types are pinned explicitly (GH #22750, closed)
+- Memory profile isn't uniform across input methods: reading a named CSV file streams in near-constant memory, but reading CSV from a pipe/stdin with the same query has been reported to retain the full projected columns in memory (GH #25165, open)
+- Default max_line_size is 2,000,000 bytes and the sniffer samples a bounded prefix by default — very long lines or unusual multi-file schemas may need manual max_line_size/sample_size/files_to_sniff tuning
+- The parallel CSV reader has had past correctness bugs combining ignore_errors=true with specific internal vector-size builds (GH #7755, closed) — the multi-threaded CSV path is intricate enough that staying on a current release matters
+
+**Status:** Actively developed (repo pushed within the last day of this review, current dev branch v2.0-cyanoptera, 41.7k stars, MIT-licensed) with prebuilt packages for most languages and platforms — no maintenance risk; 'copyable' here just means querying a CSV via DuckDB is a few lines of SQL, not that DuckDB's own source is meant to be vendored.
+
+[repo](https://github.com/duckdb/duckdb) · [benchmark](https://duckdblab.org/en/post/duckdb-large-file-processing/)
+
+##### Polars  `Rust`  `MIT`  `active`  `Tier C`
+
+Rust DataFrame engine with lazy query optimization and SIMD execution; ~45x faster CSV writing than pandas.
+
+**Beats:** pandas (CSV write path; independent benchmarks separately report CSV read speedups) — An official Polars blog post benchmarked reading 15 Parquet files (~800MB, NYC Yellow Tripdata) and writing the result to CSV on a MacBook Pro M3 (24GB RAM): Polars 0.20.30 is reported ~45x faster than pandas and ~3.5x faster than pyarrow on the CSV write step (ratios read from plots, no absolute pandas/pyarrow times or benchmark code given), and 0.20.30 itself is ~40% faster than 0.20.19 (8.975s vs 14.684s) due to PR #15576's per-datatype serializer.
+
+**How:** The core engine is multi-threaded and vectorized (SIMD) over Arrow's columnar memory layout, with a lazy execution mode whose query optimizer applies predicate/projection pushdown so only needed data is read and computed. The specific CSV-writer speedup (0.20.19 to 0.20.30) came from PR #15576, which replaced generic per-value serialization with a dedicated serializer per datatype, cutting function-call overhead and type conversions during writing.
+
+**Use it when:**
+- Reading/writing large Parquet or CSV files (hundreds of MB to multi-GB) where pandas' single-threaded loops bottleneck
+- Datasets larger than RAM, using the streaming engine (`collect(engine='streaming')`)
+- Multi-core machines where a query (joins, group-by, filters) can be parallelized across threads and columns
+- Teams willing to adopt the expression/lazy API instead of pandas indexing semantics
+- Multi-language pipelines (Python/Rust/Node/R) that want to share Arrow memory zero-copy
+
+**Skip it when:**
+- Codebases tightly coupled to pandas' `.loc`/`.iloc`/index-based API - migrating is real engineering work, not a swap
+- Row counts above ~4.2 billion (2^32) - the default build uses 32-bit indexing and needs a bigidx build
+- Pre-2011 CPUs or CPUs without AVX2 - the default release build targets modern instruction sets; use the `LTS_CPU=1` build instead
+- x86-64 Python installs running under Rosetta on Apple Silicon need special install handling per the docs
+- Treating the 45x/3.5x numbers as proof of CSV *read* speed - this benchmark measures a Parquet-read + CSV-write pipeline on a first-party blog post with no published benchmark code or build flags, and pandas/pyarrow figures come from plots, not stated absolute times
+
+**Integration:** crate (Rust workspace of polars-* crates) + prebuilt Python wheel / Node package / R package · none required beyond the language runtime for prebuilt packages; internally vendors its own Arrow implementation (polars-arrow) rather than depending on the reference Arrow crate · Rust edition 2024 (recent rustc, e.g. 1.85+) for building from source; Python >=3.10 for py-polars · x86-64 (AVX2 assumed by default release build; LTS_CPU=1 build for older CPUs), aarch64; optional NVIDIA GPU acceleration for query execution
+
+**Vs siblings:** Most siblings in this category (xan, cisv, qsv, zsv, Sep, go-simdcsv, simd-csv, vroom, zsv-ruby) are single-purpose CSV parsers; DuckDB is the closest comparable full engine. Pick Polars when you need a full DataFrame/query engine (joins, group-by, lazy optimization, larger-than-RAM streaming) and are migrating off pandas, not just parsing CSV as fast as possible — for pure CSV-read throughput, a dedicated parser like zsv/qsv/DuckDB is the better-evidenced choice since this benchmark only covers Polars' CSV write path.
+
+**Gotchas:**
+- Default release binaries assume AVX2; pre-2011 CPUs need the separate LTS_CPU=1 build
+- Default build indexes rows with 32-bit integers, capping datasets at ~4.2 billion (2^32) rows without a bigidx build
+- Apple Silicon users running an x86-64 Python build under Rosetta need special installation handling (per the install guide)
+- The quoted 45x/3.5x figures come from a plot in a first-party blog post with no benchmark code or build flags published, and measure Parquet-read+CSV-write, not a pure CSV-read microbenchmark
+
+**Status:** Actively maintained — pushed to today, 39,859 stars, ~2,930 open issues on a large fast-moving repo; MIT-licensed and installable via `pip install polars` / `cargo add polars`, so vendoring is unnecessary.
+
+[repo](https://github.com/pola-rs/polars) · [benchmark](https://pola.rs/posts/polars-in-aggregate-jun24/)
+
+##### qsv  `Rust`  `MIT`  `active`  `Tier C`
+
+CLI data-wrangling toolkit that computes CSV summary stats far faster than pandas describe, no DataFrame required.
+
+**Beats:** pandas read_csv / pandas .describe()-style stats — On a 124MB, 2.7M-row CSV, qsv's default `stats` finished in under 0.16s versus pandas computing comparable stats in 12s (75x faster), and `stats --everything` (48 measures) took 2s (6x faster); these are the maintainer's own numbers from an April 28, 2022 GitHub Discussion post, with no hardware or compiler flags disclosed for that specific comparison (a separate footnote's 22.4s/Ryzen 7 4800H figure is for a different, larger NYC-311 run with no pandas comparison).
+
+**How:** `stats` streams the file once and computes its default statistic set (sum, min/max, mean, stddev, sparsity, etc.) in constant memory instead of materializing a DataFrame, and it multithreads per-column work once a `qsv index` (.idx) exists for the file. The non-streaming statistics that need the whole dataset (median, quartiles, mode, cardinality) use a memory-aware chunking algorithm rather than a naive full load. `stats` also assumes the CSV is well-formed and UTF-8, letting it skip repeated UTF-8 validation and bounds checks that a general-purpose parser like pandas' would perform.
+
+**Use it when:**
+- One-off or scripted CSV summary stats / type inference from shell pipelines, Makefiles, or CI, without spinning up Python or pandas.
+- You can build a `qsv index` for the file first (or set QSV_AUTOINDEX_SIZE) to unlock multithreaded stats, frequency, split, and instant count/slice/sample.
+- You need guaranteed, deterministic type inference per column rather than pandas' best-effort dtype guessing.
+- Large CSVs (hundreds of MB to tens of GB) where you want the default 'streaming' stats in constant memory rather than a full in-memory DataFrame.
+- Batch/ETL contexts where a standalone compiled CLI (or its MCP server) is an acceptable dependency.
+
+**Skip it when:**
+- You need the result as an in-memory DataFrame/array for further Python computation — qsv emits CSV/JSON text, not a DataFrame object.
+- Your CSVs are malformed or non-UTF-8: `stats` explicitly assumes well-formed, valid UTF-8 input and warns of undefined behavior otherwise; run `qsv validate` first.
+- You need the full 48-statistic 'advanced' set (median, quartiles, mode, cardinality) on very large files without accepting an extra chunked, higher-memory pass.
+- Team is Python-only and can't add a separate compiled binary/CLI step to the pipeline.
+- You want a reproducible, modern-hardware performance claim: the 75x/6x numbers are from an April 2022 maintainer GitHub Discussion post, not a benchmark suite, with no hardware or compiler flags given for that specific run.
+
+**Integration:** source-drop · none for prebuilt binaries; building from source pulls in many optional, feature-gated crates (Polars, DuckDB-backed commands, Luau, geocoding databases, etc.) — the project's Cargo.toml notes `cargo install qsv` from crates.io is not currently supported · Rust 1.98 (edition 2024), per Cargo.toml and the README badge · Linux (x86_64 GNU/musl, aarch64 GNU), macOS (Apple Silicon), Windows (x86_64 MSVC, aarch64), plus IBM Power (PowerPC64 LE) and IBM Z (s390x); prebuilt x86_64 binaries deliberately skip CPU-specific optimizations to avoid SIGILL faults across CPU variants
+
+**Vs siblings:** Pick qsv over xan, zsv, or DuckDB's CSV reader when you want one CLI with dozens of built-in wrangling verbs (join, dedupe, geocode, schema/JSON-Schema inference, Polars-backed SQL) beyond just fast parsing or stats. Pick zsv or xan instead when raw parse/read throughput is the goal — zsv's own darwin-arm64 shootout benchmarks it directly against qsv (and xsv, xan) and shows it ahead on parsing speed.
+
+**Gotchas:**
+- `stats` assumes a well-formed, UTF-8 CSV and skips validation for speed; malformed input is explicitly undefined behavior — run `qsv validate` first if unsure.
+- Multithreading, instant `count`/`slice`/`sample`, and faster `stats`/`frequency`/`schema`/`split` only kick in once you build a `qsv index`; without one, stats runs single-threaded and streaming.
+- Only the default 'streaming' statistics run in constant memory; median, quartiles, mode/antimode, and cardinality require loading more data (via a memory-aware chunker, not the naive whole file) and must be enabled explicitly (e.g. `--everything`).
+- GitHub's UI reports the license as NOASSERTION; the repo's own LICENSE-MIT, COPYING, and Cargo.toml confirm MIT-only licensing since v21.1.1 (dual MIT/Unlicense in v21.1.1 and earlier).
+
+**Status:** Actively maintained (commits as recently as today) and MIT-licensed since v21.1.1; ships as prebuilt binaries for all major OS/arch combinations or builds from a Rust 1.98 source tree, making it straightforward to vendor as a standalone CLI tool.
+
+[repo](https://github.com/dathere/qsv) · [benchmark](https://github.com/dathere/datapusher-plus/discussions/15)
+
+##### simd-csv (Rust crate)  `Rust`  `MIT`  `active`  `Tier C`
+
+SIMD-accelerated Rust CSV reader/writer family beating the csv crate on throughput, gains data-dependent.
+
+**Beats:** csv crate (docs.rs/csv, i.e. BurntSushi/rust-csv, the de facto standard Rust CSV library) — First-party README table compares simd-csv's three reader modes (Splitter/split, ZeroCopyReader/zero_copy, Reader/copy) against the docs.rs `csv` crate (v1.3.1 in dev-dependencies) parsing 10 files (100MB-11GB) streamed from SSD on x86_64 with AVX2, no CPU model given. Reported gains range from ~1.0x on worst-case.csv (100MB, split mode) up to ~6.0x on tweets.csv (6.5GB, split mode), with most files in the ~1.5-4.8x range and quote-heavy/low-entropy files (quote-always.csv, range.csv) near 1.0-1.4x.
+
+**How:** Hybrid design: a traditional state machine for CSV structure, combined with memchr-style SIMD string searching for structural characters (comma, newline, quote) instead of byte-by-byte scanning. Unquoted runs use an amortized move-mask scan that reuses a mask across multiple matches instead of restarting per match; quoted runs instead use memchr's unrolled routines directly, because the authors found wider AVX2 registers hurt performance there. ByteRecord stores fields as ranges over the raw byte slice (rather than pure offsets) so the copying Reader can copy large runs of unquoted bytes at once instead of field-by-field.
+
+**Use it when:**
+- Large CSV/TSV files (hundreds of MB to multi-GB) streamed from disk where parse throughput matters
+- Data with large records/cells and mostly non-quoted content (README: bigger cells/records give bigger wins)
+- Just need record or line counts / positions: Splitter or LineReader avoid cell-level work entirely
+- x86_64 (SSE2 baseline, AVX2 auto-detected), aarch64 (NEON), or wasm (simd128) targets
+- Willing to depend on a young Rust crate (memchr as only hard dependency) and adapt to a non-csv-crate API
+
+**Skip it when:**
+- QUOTE_ALWAYS-style or heavily-quoted data, or single-column/short-cell data: gains shrink to ~1.0-1.4x (quote-always.csv, range.csv, worst-case.csv)
+- Need the csv crate's full feature set, serde integration, or maximum flexibility/ergonomics
+- CSV with lone-CR (old Mac style) line endings: only CRLF and LF are recognized, and leading CR bytes are silently trimmed
+- Data where fields may contain a stray opening quote mid-field: the parser has no 'beginning of field' concept and can merge/misalign subsequent fields
+- Risk-averse production use of a 19-star, single-maintainer crate not yet used outside its own xan CLI ecosystem
+
+**Integration:** crate · memchr 2.7.6 (required); simdutf8 0.1.5 (optional, only for the `str` feature) · Rust 1.81.0 (pinned in rust-toolchain.toml), edition 2021 · x86_64 (SSE2 always, AVX2 via runtime detection), aarch64 (NEON), wasm (simd128), scalar/SWAR fallback elsewhere
+
+**Vs siblings:** Use simd-csv over the plain csv crate when writing Rust code that streams large, mostly-unquoted CSV/TSV from disk and you can tolerate its lower-level, non-drop-in API; use its sibling xan instead if you just want a ready-made CLI (xan is built by the same authors for the same use case) rather than a library to embed. The other siblings (go-simdcsv, Sep, zsv, cisv, zsv-ruby) target Go, .NET, C, Node and Ruby respectively and aren't relevant unless leaving the Rust ecosystem.
+
+**Gotchas:**
+- Mid-field opening quotes can corrupt output: the parser has no 'beginning of field' state, so quotes anywhere except a field's true start can merge subsequent fields/rows
+- Only CRLF and LF line terminators are handled; lone CR is not, and leading CR characters are trimmed from record starts as a documented tradeoff
+- In single-column CSV, an empty cell must be written as a quoted empty string ("") — an unquoted blank line is treated as a skipped empty line, not an empty record
+- Wider AVX2 registers are deliberately avoided for unquoted-data scanning because the authors measured them as slower than the amortized memchr approach used
+
+**Status:** Actively maintained (last commit 2026-09-16, steady stream of open enhancement issues, no open bug-tagged issues found) but a tiny, single-maintainer project (19 stars); MIT-licensed and small enough to vendor/copy if the dependency risk is a concern.
+
+[repo](https://github.com/medialab/simd-csv) · [benchmark](https://github.com/medialab/simd-csv#regarding-performance)
+
+##### vroom  `R`  `MIT`  `active`  `Tier C`
+
+Lazy, ALTREP-backed delimited-file reader for R; indexes then reads on demand, beating base R's read.delim/readr/data.table.
+
+**Beats:** R base read.delim (utils) — On a real 1.53GB/14.7M-row/11-column taxi-trip CSV, the tidyverse blog table reports vroom reading in 3.6s versus base R read.delim's 1m21.5s (~22.6x), and a full read+print+head+tail+sample+filter+summarise workflow at 7s versus 1m22.6s (~11.8x); the post gives no CPU or compiler flags. A newer benchmarks vignette (vroom 1.5.1, public code in inst/bench/taxi, EC2 m5.4xlarge/16 vCPUs) shows read.delim at 1m12.3s versus vroom 1.3s to read, still without compiler flags.
+
+**How:** Memory-maps the input file (bundled mio C++ library) and scans it with multiple threads to build a byte-offset index of every delimited field, so no value is parsed before it's needed. Returned columns are R ALTREP objects (character columns lazy by default) that convert raw bytes to R values only on access; non-character materialization and file writing also run multi-threaded, and grisu3 provides fast double-to-string formatting when writing.
+
+**Use it when:**
+- Large local, uncompressed CSV/TSV/FWF files (hundreds of MB to multi-GB) read directly from disk, where memory-mapping applies
+- Pipelines that only touch a subset of rows/columns after loading (select/filter before printing or string ops), so lazy character materialization pays off
+- Existing readr users who want a faster, largely drop-in replacement without rewriting column-spec code
+- Writing large delimited files, where parallel formatting plus async write beats base R's write functions
+- R >= 4.1 environments, where ALTREP is fully supported by the runtime
+
+**Skip it when:**
+- Small files, where indexing overhead and R startup cost dominate and base read.delim/readr are already fast enough
+- Workflows that immediately print, filter, or string-process every character column, since that forces materialization and shifts most of the 'read' cost to first access, hiding behind read-time-only benchmarks
+- Remote or compressed sources (.gz/.bz2/.xz/.zip): vroom downloads to a temp file before mapping it, losing the mmap/lazy advantage
+- Contexts needing embedded newlines inside quoted headers/fields, which force num_threads = 1 and remove the multi-threaded indexing speedup
+- Situations requiring reproducible cross-hardware speedup numbers: the cited benchmarks give no compiler flags, and only the newer vignette names a CPU (EC2 m5.4xlarge)
+
+**Integration:** module · R packages bit64, cli, glue, hms, lifecycle, rlang, tibble, tidyselect, tzdb, vctrs, withr (Imports); cpp11, progress, tzdb (LinkingTo, compile-time); bundled mio (header-only C++ mmap library) · R >= 4.1 (Depends, needed for full ALTREP support); C++ compiler to build from source (CRAN also ships binaries) · any platform R runs on (Windows/macOS/Linux, x86-64/aarch64) via mio's cross-platform mmap wrapper
+
+**Vs siblings:** All catalogued siblings target C/Go/Rust/.NET/Ruby/Python CSV stacks; vroom is the only R-ecosystem entry, so pick it whenever the pipeline is already in R and you want readr-compatible syntax — its speed claim is against base R's read.delim, not against any sibling's baseline, so it isn't a substitute for those language-specific choices.
+
+**Gotchas:**
+- Only character columns use ALTREP lazy loading by default (VROOM_USE_ALTREP_CHR=true); numeric/integer/date ALTREP is opt-in via separate env vars, so headline read-time numbers can hide deferred character-materialization cost
+- Reading from R connections or compressed/remote files downloads to a temp file first, forfeiting the mmap-based lazy-read advantage
+- Embedded newlines inside quoted headers or fields require num_threads = 1, disabling the multi-threaded indexing that produces most of the speedup
+- Repository moved from r-lib/vroom to tidyverse/vroom in April 2022; the r-lib URL still resolves via GitHub's redirect
+
+**Status:** Actively maintained (last commit 2026-06-09, current CRAN release 1.7.1, part of the core tidyverse); MIT-licensed (DESCRIPTION and LICENSE.md) and simple to depend on via CRAN or pak, despite GitHub's NOASSERTION license auto-detection.
+
+[repo](https://github.com/r-lib/vroom) · [benchmark](https://tidyverse.org/blog/2019/05/vroom-1-0-0/)
+
+##### xan  `Rust`  `Unlicense`  `active`  `Tier C`
+
+CLI CSV toolkit with a SIMD parser and built-in expression language; faster single-threaded select than xsv, Polars, DuckDB.
+
+**Beats:** BurntSushi/xsv and Python Polars/DuckDB CSV readers (independent comparison; xan itself targets csvkit-style CSV toolkits) — On zsv's own darwin-arm64 shootout (Apple M3 Pro, xan 0.54.1, csv crate-based xsv as baseline, 500000x20-row unquoted/sparse-quoted data, best-of-5), xan's `select` ran 0.077s/0.081s versus xsv's 0.189s/0.195s (~2.4x), beating single-threaded Polars (0.410s/0.408s) and default DuckDB v0.10.2 (0.110s/0.105s), but losing to zsv fast/compat in --parallel mode and to DuckDB with QUOTE='' on sparse-quoted data; the xan binary's compiler flags are not stated.
+
+**How:** Core parsing goes through medialab/simd-csv, a separate SIMD-accelerated CSV parser crate, instead of a byte-at-a-time scalar reader like the csv crate xsv uses. Selected commands (e.g. the `parallel` subcommand and some stats/aggregation paths) multithread across cores. The moonblade expression language is evaluated directly by xan rather than by invoking an external scripting interpreter, cutting subprocess/interpreter overhead for row transforms.
+
+**Use it when:**
+- Ad hoc CLI exploration and filtering of large (GB-TB) CSV files where you'd otherwise reach for xsv or csvkit
+- Unquoted or sparsely-quoted CSV where single-threaded select/count throughput matters (fastest single-threaded tool in the zsv shootout)
+- Want stats, join, dedup, pivot, and format conversion in one CLI without leaving the shell for pandas/DuckDB
+- Converting CSV to/from JSON, ndjson, Excel, Parquet, or numpy from the command line
+- Already scripting with xsv and want a faster, more feature-rich drop-in CLI replacement
+
+**Skip it when:**
+- Need an embeddable Rust/Python library rather than a CLI binary; not documented as an embeddable API (use simd-csv or the csv crate directly instead)
+- Data contains nonstandard-quoted CSV; xan produces incorrect output there per the wave3 verification pass
+- Need the single fastest option regardless of thread count: zsv fast/compat with --parallel and DuckDB with QUOTE='' beat xan on the same benchmark
+- Need a build with documented, reproducible compiler flags; the benchmarked xan binary's flags are unstated (evidence tier C)
+- Want a minimal, small dependency footprint; xan bundles 60+ crates including Excel, Parquet, HTML, and Markdown parsers
+
+**Integration:** crate (binary via cargo install; not designed as an embeddable library) · 60+ crates, including ahash, aho-corasick, csv, calamine (Excel), comrak (Markdown), docopt, jiff, and medialab/simd-csv for the fast CSV path · Rust 1.88.0, edition 2024 (per Cargo.toml) · x86_64 (Linux gnu/musl, macOS, Windows msvc), aarch64 (macOS, Linux gnu); ppc64le only via unofficial conda-forge build, not CI-built
+
+**Vs siblings:** Pick xan over qsv, zsv, or DuckDB/Polars when you want one feature-rich CLI (stats, join, expression language, multi-format conversion) rather than the single fastest parser; pick zsv (especially --parallel) or DuckDB's QUOTE='' path instead when raw select/count throughput is the only goal, and pick simd-csv directly if you want the SIMD parser as a Rust library dependency rather than a CLI tool.
+
+**Gotchas:**
+- Produces incorrect output on nonstandard-quoted CSV, the same limitation zsv-fast has (per wave3 verifier notes)
+- Cargo.toml licenses it "Unlicense OR MIT" (dual), though the catalog record lists Unlicense only
+- The competitive benchmark numbers come from rival project zsv's own shootout script, not from xan's own README or docs
+- Large dependency surface (Excel, Parquet, HTML, Markdown parsing all bundled) makes this a heavyweight binary, not a minimal tool
+
+**Status:** Actively maintained (last commit 2026-09-23, 4.5k stars) and Unlicense-licensed per the catalog record (Cargo.toml also permits MIT), so it is safe to install via cargo/brew/pacman/nix — but it ships as a CLI tool, not a library, so "copyable" usability applies to its command surface rather than embedding its source.
+
+[repo](https://github.com/medialab/xan) · [benchmark](https://github.com/liquidaty/zsv/blob/main/app/benchmark/results/benchmark-fast-parser-quoting-darwin-arm64-2026-03-26-1124.md)
+
+##### zsv (zsv+lib)  `C`  `MIT`  `active`  `Tier C`
+
+SIMD C CSV parser/CLI beating DuckDB and Polars on read throughput, with a slow correct fallback for nonstandard quoting.
+
+**Beats:** DuckDB CSV reader and Python Polars read_csv (also benchmarked against BurntSushi/xsv, qsv, and xan) — On zsv's first-party darwin-arm64 (Apple M3 Pro) results page, `zsv fast --parallel` counted rows on a 500,000x20 unquoted CSV in 0.008s (14.29 GB/s) versus 0.085s for multi-threaded DuckDB v0.10.2 (default settings), 0.049s for DuckDB with quote recognition disabled, and 0.092s for single-threaded Python Polars 1.35.2; the zsv binary's compiler and optimization flags are not stated on the page.
+
+**How:** The default 'compat' parser is a byte-by-byte state machine; the optional `--parser fast` mode adds a SIMD path using branchless prefix-XOR carry propagation to track quote state across a buffer, available on aarch64 (NEON) and x86-64 (AVX2, SSE2). Either parser mode can be combined with `--parallel` to split input across threads/cores. The library also targets a small, roughly input-size-independent memory footprint rather than buffering whole rows or tables.
+
+**Use it when:**
+- Bulk row counting or column-selection/re-shaping over large CSVs (hundreds of MB+) where wall-clock throughput matters more than a dataframe API
+- CSV known or verified to be RFC-4180-compliant, so `zsv fast --parallel` can be used safely
+- Memory-constrained environments (embedded, containers, CI) — zsv's own README claims ~1.5MB single-threaded footprint vs 76MB (DuckDB) and 475MB (Polars) on the same task
+- Need a small embeddable C library or a WebAssembly build rather than a full dataframe/query engine
+- Need default handling of 'dirty' real-world CSV (stray unescaped quotes, ragged row lengths) without extra configuration
+
+**Skip it when:**
+- Input has nonstandard (non-RFC-4180) quoting and you want the fastest path — `zsv fast`, alone or with `--parallel`, produces incorrect output on such data per zsv's own benchmark page; must fall back to the slower `compat` parser
+- You need SQL/dataframe operations, joins, or broader analytics — DuckDB and Polars are full engines, zsv's `sql` command is CSV-file-scoped
+- Workload is `select`-style full-parse-plus-output on unquoted or sparsely-quoted data — sibling `xan`, single-threaded, beats single-threaded zsv there on zsv's own results page
+- You need documented thread-safety for sharing one parser instance across threads; not stated in the API header — `--parallel` in the CLI partitions the file rather than exposing a safe shared-parser contract
+- Non-C/C++ stack without willingness to wrap the C API or shell out to the CLI — only a community-maintained Ruby binding exists
+
+**Integration:** static lib or shared lib (source-drop also possible; `./configure && make install` builds both; CLI extensions are plugin shared libraries) · none documented for the core parser/library; some CLI subcommands (`sql`, `jq`, `sheet`) bundle their own dependencies, not itemized in the README · C, unspecified standard; GCC 11+ recommended (clang also supported), plus a basic unix toolchain (sh, make/gmake) · macOS (clang/gcc), Linux (gcc), Windows (mingw64), BSD (gcc), and WebAssembly (emscripten); the SIMD fast parser additionally needs aarch64 NEON or x86-64 AVX2/SSE2, other targets use the scalar compat parser
+
+**Vs siblings:** Pick zsv over xan/DuckDB/Polars when you want a small embeddable C library (or WASM target) rather than a broader dataframe/query engine, or specifically need row counting, where zsv wins across all quoting types on its own benchmark; pick xan instead for `select`-style full-parse-and-output on unquoted or sparsely-quoted data, where single-threaded xan beats single-threaded zsv on zsv's own results page.
+
+**Gotchas:**
+- `zsv fast`, with or without `--parallel`, gives incorrect output on non-RFC-4180 quoting (confirmed 'incorrect' on the nonstandard_quoted row of zsv's own results page); use `compat` for untrusted or dirty CSV
+- DuckDB and Polars in zsv's benchmark were run with relaxed quote/newline handling ('handicaps' per app/benchmark/README.md) to be competitive, so the headline speedups overstate the gap at correctness-equivalent settings
+- The much-cited memory numbers (1.5MB vs 76MB/475MB) come from a separate 433MB worldcitiespop run described in app/benchmark/README.md, not from the quoting benchmark page
+- A use-after-free bug was found via ASan and fixed (issue #605, closed) — the project runs ASan in CI, but this indicates memory-safety has needed active fixing, not just inspection-level trust
+
+**Status:** Actively maintained (last commit 2026-09-23, CI-gated) and MIT-licensed, so it's reasonable to depend on directly rather than vendor, though it has a small following (397 stars) and a small maintainer base.
+
+[repo](https://github.com/liquidaty/zsv) · [benchmark](https://github.com/liquidaty/zsv/blob/main/app/benchmark/results/benchmark-fast-parser-quoting-darwin-arm64-2026-03-26-1124.md)
+
+##### zsv-ruby  `Ruby`  `MIT`  `active`  `Tier C`
+
+Ruby native-extension binding to the zsv C library; drop-in CSV stdlib replacement, 5-6x faster.
+
+**Beats:** CSV (Ruby standard library CSV parser) — README benchmark-ips results (Ruby 3.4.7, no CPU/compiler stated) show ZSV beating stdlib CSV by 6.20x at 1K rows (1,013.7 vs 163.4 i/s), 5.27x at 10K rows, 5.00x at 100K rows, and 4.33x at 10K rows with headers enabled, plus 82.6% less memory and 56.9% fewer string allocations at 10K-100K rows.
+
+**How:** The speed comes entirely from zsv's SIMD-accelerated scanning (SSE2/AVX2, per its build output) for delimiter/quote detection, plus a streaming pull-based parser that avoids buffering whole files. The Ruby layer adds a row builder (row.c) that converts parsed fields straight into Ruby arrays/hashes with frozen strings, cutting string allocations (~57% fewer per the README) versus stdlib CSV's line-by-line Ruby-level splitting.
+
+**Use it when:**
+- Ruby app already reading large CSVs with stdlib CSV and CPU time in parsing is a bottleneck
+- Batch/ETL jobs on 10K-100K+ row files where throughput matters more than ecosystem maturity
+- Simple, mostly-unquoted or lightly-quoted tabular data (the benchmarks use synthetic value_i_j fields, no heavy quoting)
+- Linux or macOS (ARM or x86) environments where a C toolchain is available at gem-install time
+- Willing to accept a single-author, low-adoption (17-star) dependency in exchange for the speedup
+
+**Skip it when:**
+- Need CSV stdlib's type/header converters (:numeric, :date, :date_time) or unconverted_fields -- explicitly marked 'not yet implemented' (Phase 2 roadmap item)
+- Need CVS generation/writing -- only reading/parsing is implemented
+- Windows without a working C build environment, since the gem compiles zsv from source at install time (no confirmed precompiled binary gems)
+- Risk-averse production use: single maintainer, first release Dec 2025, only 17 stars, no independent (non-author) verification of the benchmark numbers
+- Heavily-quoted or malformed/adversarial CSV, since only synthetic unquoted data was benchmarked and liberal_parsing edge cases aren't documented in depth
+
+**Integration:** module (native C extension gem) · none at runtime beyond a C toolchain; extconf.rb downloads and compiles liquidaty/zsv 1.4.3 source from GitHub during gem install · Ruby >= 3.3 (gemspec); README states tested on 3.3, 3.4, 4.0; C99 compiler (extconf uses -std=c99) · Linux and macOS (ARM and x86) per README; extconf.rb has Darwin/Linux-specific link flags (-framework Foundation vs -lpthread -lm) and no Windows branch
+
+**Vs siblings:** Pick this specifically when you're on Ruby and want zsv's speed without writing your own FFI bindings; for any other language, use liquidaty/zsv directly (same underlying engine, more mature, more battle-tested) or a language-native SIMD parser like simd-csv (Rust) or go-simdcsv (Go).
+
+**Gotchas:**
+- Native extension: gem install compiles C code and fetches zsv 1.4.3 source over the network at install time, which can fail or be slow in sandboxed/offline CI
+- No CSV writing support -- read-only replacement
+- Type/header converters from stdlib CSV are unimplemented (explicit roadmap gap)
+- Returned strings are frozen for efficiency, which can break code that mutates row values in place
+
+**Status:** Actively maintained (last commit 2026-07-30) and MIT-licensed, but very new (first release Dec 2025) and low-adoption (17 stars, single author); README discloses it was built with Claude Code, so treat it as an early-stage convenience wrapper around the more established liquidaty/zsv C library.
+
+[repo](https://github.com/sebyx07/zsv-ruby) · [benchmark](https://github.com/sebyx07/zsv-ruby#-performance)
+
+#### lexers-tokenizers
+
+##### Gigatoken  `Rust`  `MIT`  `active`  `Tier C`
+
+SIMD/cache-optimized BPE tokenizer with a Python API, roughly 7x-1300x faster encoding than HF tokenizers.
+
+**Beats:** HuggingFace tokenizers (and OpenAI tiktoken) — First-party benchmark (benchmarks/compare/measure.py + sweep.py, raw data in benchmarks/results.json) built with Rust nightly and a fat-LTO release profile: on a dual-socket AMD EPYC 9565 (144 cores) encoding the 11.9GB openwebtext corpus, Gigatoken reached 24.53 GB/s on GPT-2 BPE vs HF tokenizers' 24.8 MB/s (989x) and tiktoken's 36.0 MB/s (681x). Across 23 tokenizer families on three CPUs (EPYC 9565, Apple M4 Max, Ryzen 7 9800X3D), the margin vs HF ranged from 7.3x (Gemma 1, EPYC) to 1,299x (OLMo 2/3, M4 Max); Gigatoken tokenized the whole file unsplit while HF got the first 100MB and tiktoken the first 1GB, both pre-split on the document separator.
+
+**How:** Pretokenization (normally outsourced to a regex engine) is replaced with hand-written, per-tokenizer-family SIMD pretokenizers (src/pretokenize/fast/{cl100k,o200k,deepseek_v3,kimi,nemotron,olmo3,qwen2,qwen3_5,r50k}.rs) that avoid branching and generic regex overhead. A pretoken-cache hierarchy (src/bpe/pretoken_cache.rs) memoizes previously-seen word-to-token mappings using a concurrent hashmap (dashmap) so repeated words skip re-encoding. Work is parallelized across cores with rayon, input is read via memory-mapped files (memmap2) to avoid copies, and the Python/Rust boundary is minimized to cut interpreter overhead.
+
+**Use it when:**
+- Encoding large text corpora (GB-to-TB scale) with a supported BPE vocab (GPT-2/Llama/Qwen/DeepSeek/GLM/Phi-4 family, etc.) for LLM pretraining or bulk preprocessing
+- Throughput-bound batch tokenization jobs where you control the pipeline and can adopt the native TextFileSource API instead of the HF/tiktoken object interface
+- x86-64 or aarch64 Linux/macOS hosts, especially many-core servers (the EPYC/M4 Max/Ryzen numbers show gains scale with core count)
+- Workloads dominated by common BPE (not SentencePiece) pretokenization, where the biggest speedups (hundreds to ~1000x vs HF) apply
+- Cases where you can pin a Rust nightly toolchain to build the PyO3 wheel, or install a prebuilt wheel
+
+**Skip it when:**
+- You need byte-identical drop-in behavior with zero code change and top speed simultaneously — compatibility mode preserves output but is 'noticeably slower' than native mode per the README
+- Your tokenizer is SentencePiece-based (Gemma, Mistral, CodeLlama, TinyLlama/Phi-3) — README states these paths 'are not well optimized' and gains drop to ~7-22x vs HF instead of hundreds of x
+- WordPiece tokenizers — not supported yet
+- CJK-heavy corpora — README says these are 'much slower to tokenize' due to caching challenges
+- Windows deployment, or environments that can't tolerate an unpinned Rust nightly compiler dependency — README says Windows 'has not been tested much', recommends WSL
+
+**Integration:** crate (Rust, cdylib+lib) packaged as a PyO3 Python extension; pip install gigatoken · Rust: dashmap, rayon, pyo3 (abi3-py310), memmap2, icu, sonic-rs, memchr, aho-corasick, serde, flate2, zstd, spm_precompiled, simdutf, winnow, parquet/arrow-array/arrow-schema, ureq, libc (Linux only). Python: numpy>=1.24.4, awkward>=2.6.3, typer>=0.12 · Rust nightly (rust-toolchain.toml channel = "nightly", version unpinned), edition 2024; Python >=3.10 (built against PyO3 abi3-py310) · x86-64 and aarch64 (SIMD variants referenced for AVX512/AVX2/NEON in profiling assets); Windows 'not been tested much', README recommends WSL instead
+
+**Vs siblings:** The catalogued siblings (Accelerated-Zig-Parser, StreamTok, CrossDB, lexer-exp, logos, LRSTAR, simd-lexing, Ragel) are all programming-language/DFA lexers beating flex-family tools, not LLM BPE tokenizers — none overlap with Gigatoken's workload. Pick Gigatoken specifically when the task is encoding natural-language text for an LLM with a supported BPE vocabulary at GB/s+ scale; it has no direct competitor among the siblings.
+
+**Gotchas:**
+- Compatibility mode (byte-identical to HF/tiktoken) is 'noticeably' slower than native mode — don't expect the headline ~1000x number when using it as a drop-in
+- SentencePiece-family tokenizers (Gemma, Mistral, CodeLlama, TinyLlama/Phi-3) get far smaller speedups (~7-22x vs HF) than the BPE families (up to ~1300x)
+- README warns the first run on macOS triggers a security scan that slows the Rust binary, and recommends running benchmarks twice to get a representative timing
+- WordPiece tokenizers and file sinks (in the native API) are not yet implemented
+
+**Status:** Actively maintained (last commit 2026-08-06 on main), MIT-licensed, 4.1k stars; small enough to vendor as a source drop but the build depends on an unpinned Rust nightly toolchain, so pin one yourself if reproducibility matters.
+
+[repo](https://github.com/marcelroed/gigatoken) · [benchmark](https://github.com/marcelroed/gigatoken#benchmarks)
+
+##### logos  `Rust`  `MIT OR Apache-2.0`  `active`  `Tier C`
+
+Rust proc-macro lexer generator: compiles token/regex rules into one DFA with jump tables, aiming to beat hand-written lexers.
+
+**Beats:** hand-written lexer — Logos's README reports only its own Criterion throughput (identifiers 1204 MB/s, strings 1575 MB/s, keywords/operators/punctuators 1037 MB/s) with no baseline lexer measured in the same run and no hardware or rustc version given. The one paired comparison found, a third-party blog (alic.dev) on an Apple M1 tokenizing a 100KB pseudocode file, showed logos beating a naive hand-written lexer ~1.8x (174,476 vs 312,837 ns/iter) but running about 10% slower than that same hand lexer on an unspecified x86_64 CPU (221,110 vs 201,148 ns/iter); the author's later SIMD-optimized (NEON) hand-written lexer beat logos by 20-35%.
+
+**How:** All token/regex rules are merged into a single deterministic finite automaton instead of being matched one-by-one, and branches in that DFA are compiled into lookup or jump tables. The codegen unrolls loops and batches byte reads to cut bounds checks, and disallows backtracking inside token definitions (avoiding ReDoS-style regex backtracking cost). All of this happens as proc-macro codegen at compile time, so the generated lexer has no runtime interpretation overhead.
+
+**Use it when:**
+- Building a lexer for a DSL, config format, or query language in Rust and you want a declarative token spec instead of a hand-rolled state machine
+- Token set is a regular language expressible as literal tokens and regexes (identifiers, keywords, operators, punctuation, quoted strings)
+- Targeting no_std/embedded Rust (logos ships a no_std CI workflow) but still want compile-time generated matching
+- Want Criterion-verified throughput (README claims 1000+ MB/s on identifiers/strings) without hand-tuning SIMD yourself
+- Fine with proc-macro compile-time cost in exchange for a maintained, widely-used (3.6k-star) crate
+
+**Skip it when:**
+- Grammar needs backtracking, lookahead, or context-sensitive tokenization — logos explicitly forbids backtracking inside token definitions
+- Non-Rust project — this is a Rust crate/proc-macro, not usable from C/C++ or other toolchains
+- You need proof it beats a specific hand-written lexer: the project publishes no paired benchmark, and the only third-party paired test (alic.dev) shows logos losing ~10% to a naive hand lexer on x86_64 and 20-35% to an optimized SIMD hand lexer
+- You want to avoid unsafe code by default — logos uses unsafe internally unless you opt into the `forbid_unsafe` feature, which the README notes may cost performance
+- You want a single dependency-free source file to vendor — logos is a workspace of crates (logos, logos-derive, logos-codegen) driven by a proc-macro, not a drop-in header/source file
+
+**Integration:** crate · logos-derive (proc-macro, enabled via default `export_derive` feature); no required runtime deps beyond std (std feature can be disabled for no_std) · Rust 1.80.0 (rust-version in Cargo.toml), edition 2021 · any (no_std supported per CI workflow and crate keywords); no architecture-specific SIMD requirement documented
+
+**Vs siblings:** Pick logos when you want a general-purpose, actively maintained Rust lexer generator with an ergonomic derive-macro API and broad adoption (3.6k stars) rather than a domain-specific tool like CrossDB (SQL only) or Accelerated-Zig-Parser (Zig compiler internals); pick a hand-written or SIMD-tuned lexer instead (e.g. dist1ll's lexer-exp, which reports beating logos by ~35% on Apple M1) when raw throughput against a tuned baseline matters more than developer ergonomics.
+
+**Gotchas:**
+- Default build relies on unsafe code internally; the `forbid_unsafe` Cargo feature swaps in safe alternatives but the README/Cargo.toml note this may reduce performance
+- Backtracking inside token definitions is disallowed by design, so overlapping/ambiguous patterns need manual priority handling (see the book's token-disambiguation page)
+- A `state_machine_codegen` feature switches between two different codegen backends (tailcall vs. state-machine); behavior and performance can differ between them
+- The repo's own bench suite (tests/benches/bench.rs, run via CodSpeed CI) only benchmarks logos itself — no hand-written baseline is run in the same harness, so the README's 'ridiculously fast' framing is not a paired comparison
+
+**Status:** Actively maintained (last commit 2026-09-11, v0.16.1 on crates.io, 3,566 stars) and dual MIT/Apache-2.0 licensed, so it's low-risk to depend on directly; it is an ordinary Cargo dependency rather than a header-only file, so 'copyable' here means small enough to vendor, not a single-file drop-in.
+
+[repo](https://github.com/maciejhirsz/logos) · [benchmark](https://alic.dev/blog/fast-lexing)
+
+##### LRSTAR (DFA lexer generator)  `C++`  `BSD-3-Clause`  `active`  `Tier C`
+
+A grammar-driven DFA-table lexer generator for C++, claiming 2x flex's throughput at similar table size.
+
+**Beats:** flex — The only benchmark is a first-party statement on the project's own DFA documentation page: DFA-generated lexers are 'TWO TIMES the speed of "flex" created lexers and about the same size,' with no compiler, compiler flags, hardware, or benchmark corpus given. The same page states re2c-generated lexers are up to 10% faster than LRSTAR's DFA lexers, so LRSTAR is presented as beating flex but not re2c.
+
+**How:** The core technique is a compressed-matrix DFA transition table: each input character does one table lookup to advance state, with no backtracking and no separate hash-table lookup for keywords (keyword literals are compiled into the same DFA as identifier matching). Comment skipping is also expressed as ordinary DFA transitions rather than a separate scanning routine. The tradeoff for compile-time size is table compression (an explicit 'minimize lexer-table size' /m option), which the author says keeps generation fast even for large keyword sets, unlike more aggressive table-based generators such as re2c.
+
+**Use it when:**
+- Compiler-style grammar with a large keyword set (hundreds of keywords) where you want them recognized without a separate keyword hash lookup
+- Already comfortable with a flex-like 'grammar in, C++ lexer source out' workflow and want a claimed 2x throughput bump over flex at similar generated-lexer size
+- Want lexer-generation (build) time and generated table size to stay small, even if that costs a few percent of runtime speed versus re2c
+- Building on Windows (MSVC, 32- or 64-bit) or Linux (g++), willing to vendor generated C++ into the build rather than link a library
+- Want the lexer and an LALR parser generated from one coupled toolchain (LRSTAR proper) instead of stitching together separate lexer/parser generators
+
+**Skip it when:**
+- Need the fastest possible generated lexer: by the same author's own account, re2c-generated lexers are up to 10% faster than LRSTAR's DFA lexers
+- Grammar needs matching-parenthesis-style recursive constructs handled in the lexer -- the author found a PDA-based approach ~5x slower and says to push that into the parser grammar instead
+- Need macOS support: the author's own build docs say plainly, 'ON MAC OS X SYSTEMS: I don't know about this, sorry'
+- Want an actively maintained or widely adopted project: 0 GitHub stars, 0 forks, 0 open issues, and this GitHub copy is a third-party 'maintenance fork' whose recent commits are GitHub-linguist/language-detection tweaks, not functional changes
+- Need benchmark numbers you can independently verify: the only figures are first-party, with no stated compiler, flags, hardware, or benchmark corpus, and the upstream SourceForge page for the same project cites a different number ('80% faster than flex') for what appears to be the same claim
+
+**Integration:** source-drop · none (standalone C++, no external libraries) · not documented as a specific standard; author reports building with GCC 4.6.1 (2014) and Visual Studio project files are checked in; code style predates modern C++ (raw pointers, static class members), no C++11+ features required · Windows (x86/x64 via -Dx64), Linux (g++ with -DLINUX); macOS explicitly untested/unsupported per author
+
+**Vs siblings:** Pick LRSTAR/DFA over Ragel when you want a stated numeric improvement over flex (2x, even if first-party/unverified) rather than Ragel's directional-only 'faster than flex, slower than re2c' claim with no ratio; pick it over re2c-class or SIMD approaches (simd-lexing, StreamTok) when your grammar has a large keyword set and short lexer-generation time and small table size matter more to you than the last ~10% of runtime throughput.
+
+**Gotchas:**
+- DFA lexers can't natively handle matching-parenthesis-style constructs; the author's PDA-based workaround measured ~5x slower, so that logic belongs in the parser grammar instead
+- GitHub shows this repo as having no license because there is no root LICENSE file, even though doc/software_license.txt and source_dfa/license.txt both state BSD-3-Clause
+- Generated LALR/DFA table files are marked read-only by the tool; the project's own setup notes warn to check your editor's read-only-file handling or regeneration can silently fail
+- Default build target is 32-bit; 64-bit executables require an explicit -Dx64 (Windows) or -Dx64 command-line flag
+
+**Status:** Listed as actively maintained (last commit 2026-04-19) and copyable (BSD-3-Clause, confirmed via doc/software_license.txt and source_dfa/license.txt despite GitHub showing no license), but this GitHub repository is a third-party 'maintenance fork' of Paul B Mann's SourceForge project and its recent commits are GitHub-linguist tweaks rather than functional work -- treat the SourceForge project as the canonical upstream.
+
+[repo](https://github.com/p7r0x7/LRSTAR) · [benchmark](https://github.com/p7r0x7/LRSTAR/blob/master/website/dfa_doc_expert.html)
+
+##### simd-lexing  `C`  `Zlib`  `abandoned`  `Tier C`
+
+Single-header AVX2 C99 lexer with no tables, ~3-6x faster than flex on tokenizing GCC source.
+
+**Beats:** flex (lexer generator) — On a single concatenated file of GCC source (identifiers/strings/comments only, no numeric literals) on a Skylake 2.40GHz i5 laptop, the README's gcc --std=gnu99 -O3 -march=native build of simd-lex ran in 34ms versus flex at 231ms (default), 102ms (--fast) and 106ms (--full) -- roughly 6.8x and ~3x faster respectively; timings come from single shell `time` runs (including process startup/I/O) and the flex reference binaries plus their build flags are not included in the repo.
+
+**How:** Uses AVX2 vector compares to classify characters and find token/line boundaries across chunks in parallel, instead of driving a DFA table one byte at a time like flex. It is table-free: token-class rules are baked in via preprocessor macros and inlined with the callback into a single translation unit, avoiding flex's table lookups and per-transition function-call overhead. The fixed, narrow token set (idents, strings, comments, a small set of 1-3 char operators; no numeric literals) is what makes the branch-light SIMD scan tractable.
+
+**Use it when:**
+- Tokenizing large volumes of C-like source (identifiers, string/char literals, // and /* */ comments, common short operators) where flex's DFA walk is the bottleneck
+- x86-64 build targets with AVX2 available and a willingness to compile with -march=native or explicit AVX2 flags
+- Prototyping a custom lexer where hand-writing token-class macros is acceptable instead of authoring a flex grammar
+- Workloads that don't need numeric-literal lexing, or where you're willing to add that yourself
+- Small, embeddable single-header C99 codebases that want to avoid a flex/bison toolchain dependency
+
+**Skip it when:**
+- Need numeric literal (int/float) tokenization out of the box -- not implemented
+- Targeting non-x86 or pre-AVX2 hardware -- no scalar or NEON fallback path in the header
+- Need an actively maintained project -- last commit 2021-09-24, author describes it as a 'proof-of-concept', 19 stars
+- Want flex-style declarative grammar files or code generation rather than macro-configured C source
+- Need the published 34ms/231ms benchmark to be independently reproducible -- the flex reference binaries and their build flags live outside this repo
+
+**Integration:** header-only · none beyond libc (string.h, stddef.h, stdint.h); immintrin.h when __AVX2__ is defined · C99 (Makefile uses --std=gnu99); GCC/Clang path exercised, MSVC intrinsics branches present but build recipe targets gcc; needs -march=native or equivalent AVX2 flag · x86-64 with AVX2 required; no aarch64/NEON port documented
+
+**Vs siblings:** Pick simd-lexing only when you want a tiny, dependency-free single-header C lexer to vendor and hand-tune via macros for a narrow token set; Accelerated-Zig-Parser and Gigatoken report larger speedups with more reproducible harnesses, and CrossDB's hand-written lexer/parser is actively maintained, so any of those is a better default if you need a supported project rather than an abandoned proof-of-concept.
+
+**Gotchas:**
+- Must define ALLOWED_TOK2/ALLOWED_TOK3, comment start/end tokens, and ON_TOKEN_CB before #include "slex.h" -- the header ships no default token set
+- ON_TOKEN_CB must be a static inline function defined in the same translation unit; the header's own comments say a function-pointer callback is slower
+- Does not lex numeric literals -- README lists this as 'on the way' but it's not in the shipped code as of the last commit
+- Requires AVX2 (__AVX2__); nothing in the header falls back to a scalar path if it's unavailable
+
+**Status:** Abandoned since its last commit on 2021-09-24 -- the author calls it a proof-of-concept -- but it's Zlib-licensed and small enough (one header) to vendor and maintain yourself.
+
+[repo](https://github.com/Mateuszd6/simd-lexing) · [benchmark](https://github.com/Mateuszd6/simd-lexing#readme)
+
+##### Ragel State Machine Compiler  `C++`  `MIT`  `active`  `Tier D`
+
+State-machine compiler that generates FSM-based scanners/parsers in 13 host languages; beats flex on one old, unmeasured example.
+
+**Beats:** flex — The only comparison is an author's changelog entry for Ragel 3.7 (Oct 31, 2004): a C++ tokenizer example (examples/cppscan) was implemented three ways -- Ragel, flex, and re2c -- and the Ragel version was reported to run faster than the flex version but slower than the re2c version, with no numbers, no stated compiler flags, and no hardware given.
+
+**How:** The goto-driven backends (-G0/-G1/-G2) generate direct branches between states with action code inlined at each transition, instead of flex's table-driven lookup-and-dispatch loop, trading generated code size for fewer indirections per input byte. Ragel also offers table-driven (-T0/-T1) and flat-table (-F0/-F1) backends for a size/speed tradeoff. The only concrete comparison found is a 2004-era changelog note (Ragel 3.7) that its C++ tokenizer example ran faster than an equivalent flex version but slower than a re2c version, with no numbers given.
+
+**Use it when:**
+- You need one grammar to generate scanners/parsers for multiple host languages (e.g. C, Go, Rust, Zig) without maintaining separate lexers per language
+- You're building a hand-tunable, embeddable tokenizer where you want inlined action code and control over table vs. goto-driven codegen (as HarfBuzz and Puma's http11 parser do)
+- You want a long-lived, still-maintained lexer generator over one that's effectively archived (original ragel repo is archived; development continues here)
+- You're comfortable learning a dedicated grammar/action-code DSL instead of reusing an existing flex .l file
+
+**Skip it when:**
+- You need a numbers-backed performance case against flex: the only comparison here is a 22-year-old, non-numeric changelog claim (Tier D evidence)
+- You have an existing flex grammar and want a mechanical drop-in swap; Ragel's syntax and action-embedding model are different enough to require a rewrite
+- You need re2c-class speed specifically: Ragel's own changelog says it did not beat re2c on the one example checked
+- You need CI-verified support beyond x86-64 Linux; the project's GitHub Actions matrix only builds on ubuntu-latest, so other platforms/architectures are unverified here
+- You want to avoid a bootstrap toolchain: building Ragel from source requires building Colm first, since Ragel's frontend is written in Colm
+
+**Integration:** source-drop · none for generated code beyond the chosen host language's standard runtime; building the ragel compiler itself needs make, libtool, gcc, g++, autoconf, automake (or CMake 3.16+) · not documented (no minimum C/C++ standard stated for generated code; build-from-source requires autotools or CMake 3.16+) · CI covers x86-64 Linux only (GitHub Actions, ubuntu-latest); changelog references macOS build fixes (7.1.0, Aug 2026); no aarch64 CI observed
+
+**Vs siblings:** Pick Ragel over the numbers-backed siblings (LRSTAR's ~2x, simd-lexing's ~6.8x, CrossDB's ~10x, all vs. flex) when you need multi-target-language codegen and a widely-deployed, actively maintained generator rather than a project with an actual measured speedup; for a documented numeric win over flex specifically, LRSTAR or simd-lexing have real benchmark data and Ragel does not.
+
+**Gotchas:**
+- Ragel's frontend is written in Colm, so building from source bootstraps Colm first, not just Ragel
+- Generated code style is chosen per grammar via compiler flag (table/flat-table/goto-driven, -T/-F/-G), so speed vs. code-size is a build-time decision, not automatic
+- The original standalone adrian-thurston/ragel GitHub repo is archived; active development moved to this adrian-thurston/colm-suite monorepo
+- The flex/re2c comparison lives in examples/, not in the project's test suite, and has never been rerun or updated with numbers since 2004
+
+**Status:** Actively maintained under the colm-suite umbrella with a commit on 2026-09-25 and a 7.1.0 release (Aug 2026) adding Zig support; MIT licensed and small enough to vendor, but the original standalone ragel repo is archived so colm-suite is the current canonical home.
+
+[repo](https://github.com/adrian-thurston/colm-suite) · [benchmark](https://github.com/adrian-thurston/colm-suite/blob/main/src/ragel/ChangeLog)
+
+#### markup-html-markdown
+
+##### html5-parser  `C (Python extension)`  `Apache-2.0`  `active`  `Tier C`
+
+C extension pairing a gumbo-derived HTML5 tokenizer with a direct-to-libxml2 tree build; far faster than pure-Python html5lib.
+
+**Beats:** html5lib (pure-Python HTML5 parser); also BeautifulSoup with html5lib and lxml (libxml2) backends — Author's own benchmark.py, a single run on his own machine with Python 3 (no CPU, OS, or compiler flags stated), parsed a 5.7MB HTML file 100x with html5-parser vs 10x for the others: 0.397s vs html5lib 13.906s (35x, the apples-to-apples lxml-tree/HTML5 comparison), BeautifulSoup+html5lib 12.683s (8x), and BeautifulSoup+lxml.html 3.826s (2x -- this margin reflects BeautifulSoup's own overhead, not libxml2 speed, since html5-parser was not benchmarked against lxml.html/libxml2 used directly).
+
+**How:** Tokenizes and builds a parse tree in C using a modified copy of Google's gumbo-parser (vendored under gumbo/), then walks that gumbo tree once and constructs a libxml2 document directly in C (src/as-libxml.c) via an explicit stack-based traversal, before handing the finished xmlDoc to lxml with etree.adopt_external_document. This skips the extra Python-object-construction pass that gumbo's own Python bindings and BeautifulSoup-based stacks require, and skips html5lib's pure-Python tokenizer/tree-builder entirely.
+
+**Use it when:**
+- Already building on lxml/libxml2 in Python and need spec-correct HTML5 (not HTML4/XML) tokenization and tree construction
+- Parsing large HTML documents or a high volume of pages where html5lib or BeautifulSoup+html5lib throughput is the bottleneck
+- Need HTML5-correct namespace handling for embedded SVG/MathML, which html5lib handles poorly
+- Parsing messy or slightly-XHTML-flavored markup, using maybe_xhtml to tolerate self-closed elements
+- Desktop/batch app parsing lots of untrusted real-world HTML in bulk, e.g. an e-book/EPUB pipeline (its proving ground is calibre)
+
+**Skip it when:**
+- Already calling lxml.html.fromstring/libxml2 directly and don't need strict HTML5 algorithm compliance -- html5-parser is not shown to beat libxml2 itself; selectolax's benchmark measured it slower than lxml.html on real pages (16.10s vs 9.09s over 754 pages)
+- Environment can't build/ship a C extension, or uses PyPI's binary lxml wheel (static libxml2) -- html5-parser raises a RuntimeError at import on a libxml2 version mismatch unless lxml is installed with --no-binary
+- Need streaming or head-only parsing to skip a large <body> -- not supported (open feature request, issue #31)
+- Parsing adversarial/untrusted fragments through non-HTML fragment_context -- a MathML-integration-point fragment case caused infinite looping (issue #29); confirm the fix is in your pinned version
+- Non-lxml treebuilder output (etree/dom/soup) needed -- those re-walk the tree in Python and lose most of the C-vs-C speed advantage
+
+**Integration:** module · lxml >= 3.8.0 (must be installed with --no-binary so it links dynamic libxml2), chardet (encoding-detection fallback), optional BeautifulSoup4 for treebuilder='soup' · C99 compiler; setup.py compiles with -std=c99 -O3 -Wall -Werror -pedantic-errors on Unix, /O2 on Windows (MSVC via a dedicated win-ci.py script) · Linux, macOS, Windows -- CI runs three OSes and four compilers per the README; no documented CPU-architecture restriction
+
+**Vs siblings:** Pick html5-parser when you specifically need HTML5-spec-correct parsing into a real lxml/libxml2 tree from Python and can accept lxml's --no-binary build constraint. If the goal is raw throughput against libxml2 itself rather than against html5lib, selectolax (Lexbor backend, ~3.8x faster than lxml.html directly in its own benchmark) or lexbor beat it outright.
+
+**Gotchas:**
+- Binary lxml wheels bundle a static libxml2; you must `pip install --no-binary lxml lxml` first or you get a RuntimeError citing mismatched LIBXML_VERSION at import
+- sanitize_names defaults to True, silently rewriting non-ASCII-safe tag/attribute names to keep the tree valid XML -- turn it off if strict HTML5 spec fidelity matters more than XML-safety
+- Only the lxml/lxml_html treebuilders are fast; etree, dom, and soup treebuilders are implemented in Python on top of the same parse and are correspondingly slower
+- A fragment-parsing edge case at MathML integration points could infinite-loop (issue #29, filed and since closed) -- worth confirming on your pinned version if you parse untrusted fragments
+
+**Status:** Actively maintained (last commit 2026-09-20) and used in production inside calibre despite a small following (706 stars); Apache-2.0 and a compact C codebase, but the requirement to build lxml against a matching dynamic libxml2 makes it harder to vendor cleanly than a header-only or wheel-friendly library.
+
+[repo](https://github.com/kovidgoyal/html5-parser) · [benchmark](https://html5-parser.readthedocs.io/en/latest/index.html)
+
+##### MD4C  `C`  `MIT`  `active`  `Tier C`
+
+SAX-style CommonMark parser in C, no AST, beats cmark on speed and memory when you don't need a DOM.
+
+**Beats:** cmark — Author-run benchmark (2017) comparing MD4C's md2html CLI against the cmark CLI of that era, 10 runs each on tmpfs, on a 64-bit Slackware 14.2 Linux box with unstated CPU and compiler flags: MD4C ran 1.4x-7.7x faster depending on input shape and used ~1.8x less peak heap on a ~105MB Pro-Git Markdown compilation, with far fewer realloc() calls (36 vs 1,304,578) reflecting its no-AST design.
+
+**How:** No AST allocation: nodes/spans are never materialized as heap objects, they're reported directly as callback events with pointers into the original input buffer plus a length (strings aren't even zero-terminated, avoiding a copy). This is why realloc() calls on the Pro-Git benchmark are 36 for MD4C vs 1,304,578 for cmark, and heap peak is ~1.8x lower. The parser is also written for linear/near-linear time on adversarial input, with a pathological-input test suite (test/pathological-tests.py) guarding against the quadratic blowups some Markdown parsers hit.
+
+**Use it when:**
+- You only need HTML (or another flat format) output and don't need to inspect/mutate a parsed document tree
+- You're parsing large or many documents and cmark's AST allocation overhead (memory, realloc churn) is the bottleneck
+- You want a single-header/single-source C library to vendor with zero dependencies beyond libc
+- Input may be adversarial or untrusted and you want protection against quadratic-time pathological Markdown
+- You're fine writing your own callback-based renderer instead of consuming a ready-made tree
+
+**Skip it when:**
+- You need a DOM/AST to transform, query, or re-serialize the document (MD4C has no tree; you'd build and maintain your own)
+- You need GFM tables/strikethrough/tasklists out of the box without opting into extension flags — CommonMark-only by default
+- Input isn't already validated UTF-8/ASCII-compatible and you care about malformed-input handling: MD4C does no input validation by design (GIGO) and will propagate ill-formed byte sequences verbatim
+- You're relying on the 2017 author benchmark as a rigorous head-to-head: CPU model and compiler flags are unstated, and it compares a SAX renderer against an AST-building parser, which the author himself calls an unfair memory comparison
+- You need runtime allocator customization or documented thread-safety guarantees — neither is documented in the public header
+
+**Integration:** source-drop · none beyond the C standard library · C (CMake >=3.14 for the provided build); no C standard version stated in README/CMakeLists beyond LANGUAGES C · Windows and POSIX; README states other platforms should work if C stdlib with heap management is available
+
+**Vs siblings:** No siblings catalogued yet for Markdown specifically — the other markup-html-markdown entries (lexbor, html5-parser, MarkupEver, MyHTML, pugixml, roxmltree, selectolax, stb_xml) are HTML/XML parsers, not Markdown. Pick MD4C whenever the workload is Markdown-to-HTML (or Markdown-to-anything via callbacks) and you don't need a DOM.
+
+**Gotchas:**
+- Callback strings are not zero-terminated; you must use the supplied MD_SIZE length, not strlen()
+- No input validation: malformed UTF-8 is passed through to callbacks unchanged (GIGO philosophy), so validate upstream if that matters
+- Multiple heap-buffer-overflow CVEs were reported and fixed in 2018 (issues #36–#39); no similar reports found in more recent history via search
+- GFM-style tables, strikethrough, footnotes, tasklists, highlight/insert/spoiler spans etc. are all opt-in via MD_FLAG_* bits, not defaults
+
+**Status:** Actively maintained (last commit 2026-09-17), MIT licensed, single C source/header pair small enough to vendor directly — low risk to adopt even without upstream support.
+
+[repo](https://github.com/mity/md4c) · [benchmark](https://talk.commonmark.org/t/2520)
+
+##### pugixml  `C++`  `MIT`  `active`  `Tier C`
+
+In-place, allocation-light C++ XML DOM parser with XPath 1.0, beating libxml2 on parse throughput.
+
+**Beats:** libxml2 — On an Intel Core i7 @ 2.67GHz with MSVC 2015 ('all optimizations on'), pugixml parsed nine 1-20MB XML test files (including a 10MB XMark file) into a DOM 4.5x-23.4x faster than libxml2's DOM mode and 2.7x-19.1x faster than libxml2's SAX mode on x86 builds, with similar 4.1x-24.1x / 2.6x-19.7x ratios on x64; the figures come from pugixml.org's benchmark-data.js chart data rather than a public, runnable benchmark harness.
+
+**How:** Node and attribute names/values are pointers into a single large parsed character buffer rather than individually heap-allocated strings; the fastest load path (load_buffer_inplace/_own) parses the caller's buffer directly ('in-situ' parsing), avoiding the extra copy libxml2's DOM path makes. Tree storage uses its own page-based allocator (one big allocation) instead of many small node allocations, and the recursive-descent parser uses lookup-table character classification rather than generic, more DTD/encoding-aware machinery. An optional compact mode trades ~10-50% more CPU time for 2.5x-5x smaller tree memory via relative-offset node/attribute encoding.
+
+**Use it when:**
+- Parsing well-formed XML (config files, save formats, scene/asset descriptors) in the 1-20MB range where DOM parse throughput matters and libxml2's generality is overhead you don't need
+- Embedding in game engines or tools that want a small, dependency-free, MIT-licensed C++ XML library (two source files, or header-only via PUGIXML_HEADER_ONLY)
+- Need XPath 1.0 queries and in-place tree editing without pulling in libxml2's full XPath/validation stack
+- Memory-constrained targets where compact mode's 2.5x-5x smaller tree is worth a 10-50% parse-time cost
+- Codebases spanning C++98 through C++20 that want one parser across that range (move semantics and range-for activate automatically under C++11, string_view under C++17)
+
+**Skip it when:**
+- Need DTD or XML Schema validation, or custom (non-predefined) entity expansion — pugixml explicitly does not do this
+- Documents too large to fit fully in memory — pugixml is DOM-only, no incremental/SAX streaming mode
+- Want a drop-in libxml2 replacement — the API surface, error model, and node types are different, so this is a rewrite, not a swap
+- Need the benchmarked numbers to be independently reproducible: the comparison lives in a chart-rendering script (benchmark-data.js) on pugixml.org, not a runnable harness in the repo or a public benchmark repo under the author's account
+- Targeting strict-alignment architectures with very old pugixml versions — a misaligned-access UB bug in UTF-16/32 decoding was reported and fixed (issue #698, closed 2026-04-14); make sure you're on a version at or after that fix
+
+**Integration:** source-drop (src/pugixml.hpp + src/pugixml.cpp, ~2 files); header-only build available via PUGIXML_HEADER_ONLY · none required; STL usage is optional and can be disabled with PUGIXML_NO_STL · C++98 minimum; C++11 unlocks move semantics/range-based for; C++17 unlocks std::string_view overloads and optional charconv float formatting (PUGIXML_CHARCONV_FLOAT) · any (portable standard C++, no SIMD/arch-specific code path)
+
+**Vs siblings:** Pick pugixml over roxmltree when the codebase is C++ (roxmltree is Rust) and you need in-tree mutation plus XPath 1.0, not just read-only access; pick it over stb_xml when you need XPath, Unicode encoding conversion, or DOM editing rather than a minimal single-header reader. The HTML-focused siblings (lexbor, html5-parser, MyHTML, selectolax, MarkupEver) target malformed/HTML5 markup, not well-formed XML, so they solve a different problem.
+
+**Gotchas:**
+- load_buffer_inplace/_own parse by modifying the caller's buffer in place; the buffer must outlive the document tree, and load_buffer_inplace does not take ownership (you must free it yourself)
+- The non-inplace load_buffer copies the input into a private buffer first, which costs more time and memory than the inplace variants — use inplace when performance is critical
+- No DTD/XML Schema validation and no custom entity resolution; only the five predefined XML entities are expanded, unresolvable references are left as-is
+- Whole document must fit in memory — there is no streaming/SAX-style incremental parse mode
+
+**Status:** Actively maintained (last commit 2026-06-16, current release 1.16, CI on GitHub Actions/AppVeyor, MIT-licensed, not a fork or archived); small enough (two source files) to vendor directly into a project.
+
+[repo](https://github.com/zeux/pugixml) · [benchmark](https://pugixml.org/benchmark-data.js)
+
+##### roxmltree  `Rust`  `Apache-2.0 OR MIT`  `active`  `Tier C`
+
+Read-only, zero-copy Rust XML DOM parser; 2-3.5x faster than libxml2, no mutation or writing.
+
+**Beats:** libxml2 — On an Apple M1 Pro, using `cargo bench` with the bencher/libtest harness, roxmltree parsed four synthetic XML sizes 2.2-2.3x faster than libxml2 (called via the rust-libxml FFI crate) for medium/large/huge files and ~3.5x faster for tiny files; no rustc version, compiler flags, or libxml2 version are stated.
+
+**How:** Node/attribute names, text, comments, and processing instructions are kept as Range<usize> slices into the original input buffer instead of being allocated and copied, so the tree is largely zero-copy. The tree itself is a flat, vector-backed arena (a modified version of the ego-tree crate) rather than a pointer-chasing linked structure. Scanning uses the memchr crate for fast byte search, and the crate forbids unsafe code and supports no_std, avoiding both libxml2's own allocator/type-conversion layer and the FFI marshalling overhead the benchmark's rust-libxml bindings add on the libxml2 side.
+
+**Use it when:**
+- Read-only extraction/querying from well-formed, UTF-8 XML (config files, SVG, feeds, data interchange)
+- Latency- or throughput-sensitive parsing of small-to-large (not multi-GB) documents where libxml2 FFI overhead matters
+- Pure-Rust builds that must avoid a C dependency or unsafe code (no_std-compatible via memchr)
+- Workloads needing exact source position tracking per node/attribute for diagnostics (positions feature)
+- One-shot parse-then-read pipelines where no later edit/round-trip-serialize step is needed
+
+**Skip it when:**
+- Any workflow that mutates the tree or writes XML back out — not supported at all
+- Documents needing DTD resolution/validation — DTD support is not complete
+- Non-UTF-8 input — not supported (libxml2 handles this)
+- Very large documents where memory is tight: peak RAM runs ~6-8x file size (author's own 1.1GB file measurement: 7.6GB peak)
+- HTML or non-well-formed markup — no HTML mode, unlike libxml2
+
+**Integration:** crate · memchr (sole dependency; the README's own alternatives table lists roxmltree as having 0 dependencies, which conflicts with Cargo.toml) · Rust 1.60+ (edition 2021) · any (pure Rust, no_std-compatible, no arch-specific requirements documented)
+
+**Vs siblings:** Pick roxmltree over pugixml or lexbor/libxml2 when you need a pure-Rust, no-unsafe, no-C-dependency parser for read-only XML querying and don't need mutation, writing, DTD, or HTML support; pick pugixml or lexbor instead when you need in-place tree editing, serialization, or HTML parsing.
+
+**Gotchas:**
+- Disabling the `positions` feature saves 8 bytes/node and part of the attribute overhead but removes original-document position tracking
+- README's benchmark tables are internally inconsistent: huge_roxmltree is 2,997,887 ns/iter in the libxml2 comparison table but 3,147,424 ns/iter in the streaming-parser table, where huge_quick_xml instead shows exactly 2,997,887 ns/iter — looks like a copy-paste slip in one of the two tables
+- Project states any panic is a critical bug to report, i.e. panics are not expected/allowed even on malformed input
+- libxml2 in this benchmark is driven through the `rust-libxml` FFI wrapper crate, not called natively, so its measured time includes binding overhead
+
+**Status:** Actively maintained (last commit 2026-09-22, 537 stars) and dual MIT/Apache-2.0 licensed, small pure-Rust crate that's easy to vendor or pin.
+
+[repo](https://github.com/RazrFalcon/roxmltree) · [benchmark](https://github.com/RazrFalcon/roxmltree#performance)
+
+##### selectolax  `Python (Cython bindings to C engines)`  `MIT`  `active`  `Tier C`
+
+Cython bindings to the Lexbor/Modest C HTML5 engines, giving CSS-selector DOM parsing faster than lxml/libxml2.
+
+**Beats:** libxml2 (via lxml.html.fromstring used directly) — On a 324MB corpus of 754 top-domain homepages (extracting title, `a[href]`s, script-tag count, and meta description), selectolax(Lexbor) ran in 2.39s and selectolax(Modest) in 2.94s versus lxml.html.fromstring+XPath used directly at 9.09s (~3.8x and ~3.1x faster respectively) and BeautifulSoup(html.parser) at 61.02s. This is a single wall-clock run with no CPU, compiler, or flags stated, and the corpus itself is unpublished due to copyright.
+
+**How:** The speedup comes from parsing in native, purpose-built HTML5 engines (Modest, and its successor Lexbor) rather than through libxml2's more general-purpose parser/tree machinery that lxml wraps, or Python-level parsing in BeautifulSoup's html.parser backend. Cython binds directly to the C node structures for traversal and CSS matching instead of materializing a heavier Python object per node. The published benchmark exercises light extraction (title, `a[href]`, script count, one meta tag) over 754 pages, not full tree mutation or serialization, so the win is concentrated in parse + shallow query, not general DOM editing.
+
+**Use it when:**
+- Scraping/extraction pipelines that are CPU-bound on parsing large volumes of HTML and only need to read specific fields, not mutate the tree heavily
+- You're fine writing to selectolax's own CSS-selector API instead of XPath or BeautifulSoup's find/find_all
+- You want HTML5-spec error recovery (like a browser) without a full browser or html5lib
+- CPython 3.9–3.14 environments (per pyproject `requires-python`), Linux/macOS/Windows
+- You explicitly use the Lexbor backend (`LexborHTMLParser`) rather than the legacy Modest one
+
+**Skip it when:**
+- You need a free-threaded (no-GIL) Python build — support is requested but still open (issue #215, opened 2026-03-18)
+- Workload is XPath-driven or needs heavy DOM mutation/serialization — the verified benchmark only covers read-only field extraction
+- You want the Modest backend for new code — the project itself says the underlying Modest C library is unmaintained and steers users to Lexbor
+- You can't tolerate native-extension crash risk — past segfault under sustained load with `strip_tags()`+`text()` (#217) and memory corruption when deleting attributes (#172), both since fixed but indicative of the risk class
+- You need XPath support at all — selectolax is CSS-selectors only, with a nonstandard `:lexbor-contains()` pseudo-class as its one extension
+
+**Integration:** module · none at runtime; Cython + setuptools>=62.4 needed only to build from source (wheels ship prebuilt) · Python >=3.9,<3.15 (CPython); Cython for source builds · Linux, macOS, Windows (per PyPI classifiers); no free-threaded/no-GIL build yet
+
+**Vs siblings:** Pick selectolax over raw lexbor when you want a maintained, widely-used (1.68k stars) Python package instead of hand-rolling FFI bindings to the C library yourself. Pick it over html5-parser when you don't need the output as an lxml tree — html5-parser deliberately produces an lxml-compatible tree so you can keep using XPath, which selectolax does not support. MarkupEver's published numbers are on microsecond-scale document sizes versus this benchmark's multi-second, 324MB corpus, so the two aren't directly comparable without testing on your own data.
+
+**Gotchas:**
+- Two backends (Modest, Lexbor) with overlapping but not identical features; Lexbor is the recommended one since 2024 but isn't used by every example/class by default — check which parser you import
+- Backend licenses differ from the package license: Modest is LGPL-2.1 and Lexbor is Apache-2.0, even though selectolax itself is MIT
+- Native-extension bugs have caused a SIGSEGV under sustained load (`strip_tags()`+`text()`, v0.4.8, issue #217) and memory corruption when deleting attributes (issue #172) — both closed/fixed, but crashes bypass normal Python exception handling
+- No XPath; only CSS selectors plus the Lexbor-specific `:lexbor-contains()` pseudo-class for text matching
+
+**Status:** Actively maintained (last commit 2026-09-24, CI passing, Python 3.9-3.14 support) and MIT-licensed, but the bundled Modest engine is itself unmaintained upstream, so new code should target the Lexbor backend; free-threaded-Python support remains an open request.
+
+[repo](https://github.com/rushter/selectolax) · [benchmark](https://github.com/rushter/selectolax#simple-benchmark)
+
+##### stb_xml  `C`  `BSD-3-Clause`  `active`  `Tier C`
+
+Single-header, zero-allocation XML tokenizer for C; beats libxml2's DOM parser on raw throughput.
+
+**Beats:** libxml2 — Console output from test_stb_xml.c (gcc -O2 -std=c99) and test_libxml.c (gcc -lxml2 -O2) on the author's machine (no CPU model given) shows stb_xml at 188 MB/s vs libxml2's 15 MB/s on a 72-byte document (~12.5x) and 556 MB/s vs 36 MB/s on a ~1KB document (~15x); the 1MB-file figure (8707 vs 46 MB/s, ~189x, matching the README's '193x' claim) is invalid because the benchmark's fixed 10000-token buffer caps stb_xml's work at roughly 11% of the document while libxml2 fully parses all ~87357 nodes and throughput is computed over the full byte count on both sides.
+
+**How:** It is a single-pass, branch-heavy state machine (4 states: default, in-tag, comment, CDATA) that never copies bytes or allocates memory; tokens just record start/end offsets into the caller-owned buffer. Each token is a packed 6-byte struct (two uint16 offsets, two uint8 fields) versus libxml2's 40+ byte DOM nodes, so far less memory is written per byte of input. libxml2, by contrast, builds a full DOM (xmlParseMemory + tree of xmlNode/xmlAttr) with allocation, validation-related bookkeeping, and pointer-linked structures.
+
+**Use it when:**
+- Small, trusted, well-formed XML (config files, game/level data, small message payloads) where you just need tag/attribute offsets, not a DOM
+- Embedded or memory-constrained targets where a ~1.5KB single header and zero heap allocation during parsing matter more than feature completeness
+- You're willing to write your own tree/attribute-lookup layer on top of a flat token array
+- Throughput-bound repeated parsing of the same small/medium shapes, e.g. request/response bodies a few hundred bytes to ~1KB, where the ~12-15x tokenizer-vs-DOM gap (small: 188 vs 15 MB/s; medium: 556 vs 36 MB/s) is real overhead you're paying today in libxml2
+- You need only tokenization, not validation - malformed XML, external entities, or DTDs are not your concern
+
+**Skip it when:**
+- Any input over 10000 tokens: the reference benchmark harness passes a fixed `tokens[10000]` buffer, and `xml_parse` silently stops filling tokens once `max_tokens` is hit rather than erroring, so large documents are silently truncated unless you size the buffer yourself and check the return value
+- You need namespaces, DTD/entity handling, XPath, XSLT, or XML Schema - none exist here
+- Untrusted or possibly-malformed input: the parser does 'minimal error checking' per its own README/feature list and has no validation path
+- You need a DOM, mutation, or serialization API - stb_xml only tokenizes; there is no tree, no write-back, no libxml2-compatible surface
+- Production use generally: this is a single-developer, 2-commit, 2-star proof-of-concept with no tests beyond one manual sample and no CI, issue history, or track record
+
+**Integration:** header-only · none · C99 (repo builds with gcc -O2 -std=c99); uses stdint.h fixed-width types · not documented (pure C99, no platform-specific code visible, but no explicit platform/arch statement in README)
+
+**Vs siblings:** Pick stb_xml over pugixml or roxmltree only if you specifically want a bare tokenizer with no tree at all and can tolerate its 10000-token/65535-byte-span limits and near-total lack of validation; pugixml and roxmltree both build real (if lightweight) trees, are far more mature, and their libxml2 comparisons (4.5x-23x and ~2.3x-2.5x respectively) are not artifacts of a token cap the way stb_xml's headline number is.
+
+**Gotchas:**
+- max_tokens truncation is silent: xml_parse's own benchmark (test_stb_xml.c) caps a 1MB document at 10000 tokens out of ~87000 nodes libxml2 produces for the same file, and the reported 8707 MB/s and README's 193x figure are computed by dividing the full file size by the time to fill only those 10000 tokens - the actual per-byte-of-input throughput on large documents is far lower than advertised
+- Attribute value end is not stored: xml_token_t.val_start marks where a quoted attribute value begins, but you must rescan for the closing quote yourself (test_stb_xml.c's print_token does this with a manual strlen scan) since there's no val_end field
+- Self-closing tags (`<tag/>`) reuse val_start as a boolean flag (1 = self-closing) on TAG_OPEN tokens, which collides in meaning with its use as a value-offset on ATTR tokens - easy to misread if you don't check token.type first
+- start/end offsets are uint16_t, capping any single tag name, text run, or attribute span at 65535 bytes even though input length itself is int32_t
+
+**Status:** Active per last-commit date (2026-01-05) but the entire history is 2 commits from a single developer with 2 stars and 0 issues - effectively a brand-new proof-of-concept, not a maintained project; BSD-3-Clause and small enough (~1.5KB single header) to vendor and re-verify yourself if you still want it.
+
+[repo](https://github.com/Ferki-git-creator/stb_xml) · [benchmark](https://github.com/Ferki-git-creator/stb_xml/blob/main/output_tests.txt)
+
+#### parser-generators-and-combinators
+
+##### chumsky  `Rust`  `MIT`  `active`  `Tier C`
+
+Rust parser-combinator library beating nom on JSON throughput, with error recovery and zero-copy output.
+
+**Beats:** nom — In chumsky's own first-party criterion JSON-parsing benchmark, run on a single core of an AMD Ryzen 7 3700x, chumsky's check-only mode took 140.77 us (797 MB/s) and full parse took 210.43 us (533 MB/s), versus 526.52 us (213 MB/s) for nom (7.1/8 both used as dev-dependencies) — roughly 3.7x and 2.5x the throughput of nom on that one workload. rustc version and optimization flags are not stated in the benchmark writeup.
+
+**How:** Parsers are built as a typed combinator tree that chumsky's internal optimizer (built on GATs) specializes at compile time, avoiding much of the dynamic dispatch overhead of naive combinator libraries. A 'check-only' mode validates input without constructing an output/AST at all, which is the fastest configuration in its own benchmark. Zero-copy string/byte-slice handling avoids per-token allocation, and the optional `stacker` feature (on by default) spills recursion state to the heap only when the native stack is close to exhausted, rather than paying a cost up front.
+
+**Use it when:**
+- Writing a compiler, interpreter, or DSL parser where you want structured error recovery and multiple diagnostics per parse instead of failing on the first error
+- Parsing UTF-8 text or byte slices where zero-copy output (slices into the input) matters for throughput or memory
+- Validation-only workloads where you just need to know if input is well-formed (chumsky's check-only mode is the fastest path in its own JSON benchmark)
+- no_std/embedded targets that need a parser combinator library without the standard library
+- Grammars needing context-sensitivity (semantic indentation, raw strings) beyond plain context-free/PEG combinators
+
+**Skip it when:**
+- You need nom's streaming/incremental parsing model for partial network buffers; chumsky's API is not drop-in compatible with nom and expects the input available as a slice
+- You want the fastest full-AST parse in this exact benchmark family: winnow (178.91 us) beats chumsky's full-parse mode (210.43 us) on the same JSON workload
+- You need a fully stable, 1.0-guaranteed API today; the crate is at 0.13.0 and an open tracking issue (#543, 'Tracking: Stable 1.0') shows the API surface is still settling
+- You plan to share a single parser value across threads via `recursive()`: chumsky's source (src/lib.rs) imports `alloc::rc::Rc` and `core::cell::{Cell, RefCell}` for its recursive-parser machinery, and thread-safety is not documented, so Send/Sync should not be assumed without checking
+- You're on the latest Windows MSVC toolchain: an open issue (#815) reports a linker error from just `use chumsky;`, unresolved as of this session
+
+**Integration:** crate · always: hashbrown, unicode-ident, unicode-segmentation; optional (feature-gated): stacker (default-on), regex-automata, lexical, either, serde, bytes, railroad · Rust 1.65, edition 2021 (per Cargo.toml `rust-version`) · any — no_std-compatible (`#![cfg_attr(not(...), no_std)]`), no architecture-specific requirements found; Windows+MSVC has an open unresolved linker-error report (issue #815)
+
+**Vs siblings:** Of the catalogued siblings, only winnow is a close substitute (also a Rust parser library beating nom on this exact JSON benchmark). Pick chumsky over winnow when you want combinator ergonomics, built-in error recovery, and rich diagnostics for a hand-rolled language/DSL grammar; pick winnow when raw full-parse throughput matters most, since it beats chumsky's full-parse mode (178.91 us vs 210.43 us) in chumsky's own table. The other siblings (flap, PAPAGENO, re2c, Pika Parser) target OCaml/C parser-generator or lexer-generator use cases, not Rust combinator parsing, so they aren't direct alternatives.
+
+**Gotchas:**
+- The headline check-only number (140.77 us) validates input without building any output tree — don't compare it directly to other libraries' full-parse numbers, including chumsky's own 210.43 us full-parse figure
+- recursive() parsers appear to rely on Rc<RefCell<_>> internally (inferred from src/lib.rs imports, not stated in the docs), a likely source of !Send/!Sync surprises
+- Open issue #798: parsers wrapped in `.ignored()` currently skip `map_with()`, which the maintainers call out as unexpected behavior
+- Open issue #159: error-recovery logic can affect how otherwise-valid input is parsed, i.e. enabling recovery is not purely additive
+
+**Status:** Actively maintained (last commit 2026-09-16) — the GitHub repo is now an archived mirror after the project's move to Codeberg (codeberg.org/zesterer/chumsky), where development continues. MIT-licensed and distributed as an ordinary crate, but still pre-1.0 (v0.13.0), so treat the combinator API as subject to change.
+
+[repo](https://github.com/zesterer/chumsky) · [benchmark](https://codeberg.org/zesterer/chumsky#performance)
+
+##### lexy  `C++`  `BSL-1.0`  `active`  `Tier C`
+
+C++17 parser combinator DSL that beats PEGTL on JSON validation by avoiding implicit backtracking.
+
+**Beats:** PEGTL (taocpp/PEGTL) — First-party nanobench benchmark (JSON accept/reject validation, no DOM construction) on a 2020 M1 Mac Mini shows lexy beating PEGTL (fetched from its main/develop/master branch at build time, not a pinned release) by ~1.6x-2.2x median latency across canada.json, citm_catalog.json, and twitter.json; compiler and optimization flags are not stated on the page.
+
+**How:** The core idea is explicit, branch-condition-controlled backtracking: rules only backtrack or look ahead when the grammar author says so, unlike PEG engines (PEGTL included) that backtrack implicitly on every ordered choice, re-testing input the programmer didn't intend to re-test. Because output is delivered through callbacks straight into caller-owned types (zero-copy), there's no intermediate DOM allocation/copy step during validation. The library also uses SIMD-width ('SWAR') string/character-class scanning internally (the benchmark's 'lexy no SWAR' variant exists specifically to isolate that contribution).
+
+**Use it when:**
+- Validating or parsing well-defined text/binary grammars (JSON-like formats, IPv4/config/protocol grammars) where you control both grammar and target C++ types
+- You want zero-copy parsing into existing structs/enums instead of building a generic DOM first
+- You can require C++17 (ideally C++20) and are fine embedding the grammar as C++ rather than an external grammar file
+- Compile-time (constexpr) parsing of literals/config baked into the binary is valuable
+- You're already comparing PEG-style combinator libraries and want less implicit backtracking than PEGTL/Boost.Spirit
+
+**Skip it when:**
+- You need a ready-made JSON/XML DOM out of the box — lexy explicitly puts 'implement an efficient container' out of scope, and on the same benchmark page a DOM-oriented library (glaze) beats lexy by ~1.5-2.3x
+- Pre-C++17 toolchains, or projects that want a small, familiar template-class grammar style (PEGTL) instead of operator-heavy DSL syntax
+- Teams sensitive to compile-time cost of heavy constexpr/template metaprogramming (author states ~2s per JSON-parser TU in debug; isolate lexy into its own TU)
+- You need a pinned, independently-run benchmark before adopting on performance grounds alone — this is a first-party nanobench result with no stated compiler/flags
+- Full parsing into a data structure is the actual workload — the only public benchmark measures accept/reject validation, not construction cost
+
+**Integration:** header-only · none for the core header-only library (only fundamental stdlib headers like <type_traits>/<cstddef>); a small optional compiled component (lexy_file, from src/input/file.cpp) backs lexy::read_file for file I/O · C++17 (CMake option LEXY_FORCE_CPP17 pins this; uses C++20 automatically when available); CMake >= 3.8 to configure, >= 3.18 for the top-level build with tests/examples/benchmarks · not documented beyond generic C++17/20 (CI badge present but CI matrix not inspected this session); benchmark hardware was Apple M1 (aarch64), not architecture-restricted
+
+**Vs siblings:** No C++ siblings are catalogued in this category yet (its own baseline, PEGTL, isn't itself catalogued as an entry); relative to the Rust combinators here (winnow, chumsky), lexy targets the same 'combinator beats naive/PEG baseline' niche but the comparisons aren't cross-language-comparable — pick lexy specifically when you're in C++17+, want compile-time grammars, and want less implicit backtracking than PEGTL.
+
+**Gotchas:**
+- No generic DOM/tree type ships for JSON-like formats; you must define your own value types and callbacks or accept more manual work than nlohmann/rapidjson-style libraries
+- Grammar rules only backtrack/lookahead where you explicitly write branch conditions — porting PEG intuition from PEGTL/Boost.Spirit (which backtrack implicitly) can silently change parsing behavior, not just performance
+- Debug-mode compile times are noticeable per translation unit (author-reported ~2s for the example JSON parser); the docs recommend isolating the grammar in its own TU or using dsl::subgrammar to split it
+- No open GitHub issues surfaced for 'stack overflow/crash/recursion/performance' in a limited search, so no widely-flagged pathological-input bug was found — absence of evidence, not confirmation of safety on adversarial input
+
+**Status:** Actively maintained (last commit 2025-10-18, ~1.3k stars) and BSL-1.0 licensed; header-only core makes it easy to vendor, though the DSL is more verbose than PEGTL's and requires C++17.
+
+[repo](https://github.com/foonathan/lexy) · [benchmark](https://lexy.foonathan.net/benchmark_json/)
+
+##### MPL / FastParse (kurotakazuki/mpl)  `Rust`  `Apache-2.0`  `active`  `Tier C`
+
+One-rule TDPL/PEG grammar crate whose static-codegen backend (FastParse) beats nom, pest, peg, winnow, chumsky on recognition benchmarks.
+
+**Beats:** nom (also benchmarked against pest, peg, winnow, chumsky, serde_json) — First-party Criterion benchmarks (sample size 100, RUSTFLAGS="-C target-cpu=native", pinned crate versions: pest 2.8.6/peg 0.8.6/winnow 1.0.3/nom 8.0.0/chumsky 0.13.0, re-run 2026-05-30, no CPU model or rustc version stated) show MPL's recognition-only FastParse backend parsing nested/flat parenthesis strings 2.25x-3.3x faster than nom (e.g. depth-1024 nested: 2.26us vs nom 7.50us) and 1.8x-2.5x faster than peg on JSON-subset recognition; these numbers measure recognition only and do not capture the cost of building an actual parse tree, which is what most nom users need.
+
+**How:** Compile-time analysis picks a fast path per rule: char-class cascades become `[bool; 256]` lookup tables, multi-branch first-symbol choices become a single first-byte `match` dispatch, and tail-recursive repetition (`R = X R / ()`) compiles to an explicit `loop {}` instead of relying on LLVM tail-call optimization. Mizushima cut analysis restricts memoization to only the rules whose FIRST sets actually overlap; everything else (most rules in their 99-rule test grammar) skips the memo table entirely. Left recursion uses Squirrel-style position-only seed-growing memoization, the same family as peg's `#[cache_left_rec]`. Recognition-only calls run through a thin `CheckState` (input + furthest position, no token buffer).
+
+**Use it when:**
+- Recognition-only or validation-style workloads (need a bool or a walkable token stream, not necessarily a typed AST) where nom/peg/pest parsing overhead is the bottleneck
+- Grammars expressible in the single-rule TDPL/PEG form (sequence, choice, recursion, repetition, negative predicates), including left-recursive rules like `LSum = LSum N / N`
+- Rust projects that can accept a build-time grammar file plus proc-macro dependencies (bumpalo, syn, quote), not just inline combinator code
+- High-throughput repeated parsing where an externally supplied, resettable `Bump` arena (`fast_recognize_in`) amortizes allocation
+- Willing to depend on a young, single-maintainer, 6-star crate for a non-critical or experimental parsing path
+
+**Skip it when:**
+- You need a typed AST/`Value` tree directly (e.g. JSON deserialization) — MPL's fast tier only emits a flat token buffer, a token-to-Value walker isn't shipped, and MPL's token tier is already slower than serde_json for that shape
+- Your data has deeply nested coordinate-array shapes like canada.json — pest's coarser token queue beat MPL's per-variable Start/End emission by 1.68x in the token tier there
+- You need nom's combinator ecosystem (streaming/incremental input, existing combinator libraries) — MPL has no equivalent
+- Production systems needing a mature, widely-audited parser: 6 GitHub stars, first-party unreproduced benchmarks, and zero GitHub issues on record (nothing to check known-failure-mode history against)
+- Deployments that don't set `RUSTFLAGS="-C target-cpu=native"` — the headline 2-3x numbers were measured with it; default release builds will be slower than reported
+
+**Integration:** crate · mpl: bumpalo 3.20 (arena allocator); mpl-macro (proc-macro crate): proc-macro2, quote, syn, plus mpl itself · not documented — Cargo.toml declares edition 2021 with no MSRV pin; CI only builds against the stable toolchain · not documented beyond CI, which runs only on ubuntu-latest; source is pure Rust with a single `unsafe fn push_unchecked` in fast.rs (capacity-checked buffer push), no target-specific/SIMD code observed
+
+**Vs siblings:** Among the nom-beating siblings (winnow, chumsky), pick MPL only if you can restrict the workload to recognition-only or flat-token output and accept a single-rule grammar DSL from a single-maintainer, 6-star crate; winnow and chumsky are both far more established combinator libraries that were benchmarked against nom on equal-work full parsing, which is closer to what most nom users actually need.
+
+**Gotchas:**
+- fast_recognize still builds a token buffer internally to match pest's semantics; use fast_recognize_only for the buffer-free fast path
+- One unsafe block (push_unchecked in packages/mpl/src/fast.rs) relies on the caller having already checked capacity
+- README's 'beats every comparator' claim is contradicted by its own canada-1024 token-tier row, where pest wins
+- The serde_json row in the README is not equal-work (different output shapes) — don't read it as a parser-vs-parser result
+
+**Status:** Active as of the 2026-05-30 last commit with green CI, but effectively unadopted (6 GitHub stars, single maintainer, zero GitHub issues on record); dual MIT/Apache-2.0 licensed and small enough to vendor, but pre-1.0 (0.3.1) and should be treated as research-grade rather than a production nom replacement.
+
+[repo](https://github.com/kurotakazuki/mpl) · [benchmark](https://github.com/kurotakazuki/mpl#readme)
+
+##### Pika Parser (reference implementation)  `Java`  `MIT`  `active`  `Tier C`
+
+Reference implementation of pika parsing: a bottom-up, right-to-left PEG algorithm that beats ANTLR4 on simple grammars but loses on Java.
+
+**Beats:** ANTLR4 (also benchmarked against Parboiled2) — Single-threaded on a Ryzen 1800X under JRE 13.0.2 (baselines ANTLR4 4.8-1 and Parboiled2 1.3.1), the arXiv preprint reports pika parsing roughly matching both baselines on small arithmetic expressions but becoming about 10x faster than ANTLR4 and 1000x faster than Parboiled2 as expression length grows to 4.8MB, because pika scales linearly versus their ~n^1.21/~n^1.9 growth; on 5,372 real Java source files (Spring framework, comments stripped) the result reverses, with pika measured as 10-1000x slower than ANTLR4 and about 100x slower than Parboiled2.
+
+**How:** The pika algorithm memoizes every clause (rule) at every input position in a single bottom-up pass over the input, so each rule/position pair is computed once total rather than repeatedly re-tried via backtracking, giving guaranteed linear-time parsing independent of how the grammar recurses. Because shorter substrings are resolved before longer ones, left-recursive rules fall out of the recurrence naturally, with no seed-growing or left-recursion-elimination rewriting needed, unlike ANTLR4's ALL(*) prediction. This linear scaling is what produces the 10x/1000x wins over ANTLR4/Parboiled2's superlinear (~n^1.21 / ~n^1.9) scaling on multi-megabyte arithmetic expressions; on Java source the same exhaustive per-position memoization of every rule (most of which go unused at most positions) adds a large constant-factor overhead per character, which is why it loses badly there.
+
+**Use it when:**
+- Grammars with heavy or ambiguous left recursion (e.g. left-associative expression grammars) where you want a linear-time guarantee without hand-rewriting rules to eliminate left recursion
+- Very large single inputs (multi-MB, e.g. up to 4.8MB in the paper's benchmark) parsed with shallow, simple grammars, where ANTLR4/Parboiled2's superlinear scaling becomes the bottleneck
+- Need built-in, no-extra-code syntax-error recovery/reporting (NavigableMap of syntax error spans) rather than hand-written recovery rules
+- Prototyping in pure Java with no code-generation step or external toolchain (no `.g4` compile step, no build plugin)
+- Small/greenfield projects willing to author the grammar in Pika's own text dialect and consume the `MemoTable`/`Match` API directly
+
+**Skip it when:**
+- Parsing complex, deeply nested grammars for real languages (Java, and by extension similarly complex languages) — the paper's own benchmark on 5,372 Spring-framework Java files shows pika 10-1000x slower than ANTLR4 and ~100x slower than Parboiled2
+- You need to reuse an existing ANTLR4 `.g4` grammar or its generated visitor/listener tooling — there is no converter and the clause syntax differs
+- Memory-constrained parsing of large inputs — pika memoizes every rule at every position, so memory scales with grammar size times input length
+- Production use needing an actively released, versioned dependency — this is a 153-star reference implementation tied to one paper, still at `0.0.1-SNAPSHOT`, not published to Maven Central
+- Left-recursive grammars where the recursion's "seed" can match zero characters — open issue #35 ("Infinite left-recursion when seed parent might be empty") documents incorrect/looping behavior in this case
+
+**Integration:** source-drop · none at runtime; JUnit 4.13.1 for tests only (per pom.xml) · Java 11 (pom.xml maven-compiler-plugin source/target 11); paper's benchmark ran on JRE 13.0.2 · any (pure Java, no native/SIMD code)
+
+**Vs siblings:** The catalogued siblings (re2c, winnow, chumsky, lexy, MPL, PAPAGENO, flap) are lexer/combinator/codegen libraries in C, Rust, or OCaml aimed at fast recognition of relatively fixed grammars; pika parser is the only one here offering built-in left-recursion support plus dynamic-programming syntax-error recovery in Java. Pick it specifically for expression-like or left-recursive grammars needing a linear-time guarantee on large single inputs — not for complex language grammars, where ANTLR4 itself (its own baseline here) or the other siblings' combinator/codegen approaches will be faster.
+
+**Gotchas:**
+- Left recursion whose "seed" can match zero characters can loop or mis-parse (open issue #35, unresolved)
+- README warns that negated character sets (`[^...]`) "will slow down the parser" since the negated rule spuriously matches at many more positions
+- Every grammar rule is memoized at every input position regardless of whether it is actually needed there, so cost and memory scale with grammar size x input length even when most memo entries are unused — this is the paper's own explanation for the Java-grammar slowdown
+- The repo's only runnable benchmark (src/test/java/pikaparser/Benchmark.java) compares against Parboiled2 only; there is no ANTLR4 harness in the repo, so the ANTLR4 numbers can't be reproduced from this codebase, only from the PDF plots under paper/
+
+**Status:** Repo metadata shows a push as recently as the record's last_commit date and open issues still being answered, so it is not abandoned, but it remains a single-paper reference implementation (153 stars, `0.0.1-SNAPSHOT`, never released to Maven Central); MIT-licensed and small enough to vendor as source if you accept that unreleased-artifact status.
+
+[repo](https://github.com/lukehutch/pikaparser) · [benchmark](https://arxiv.org/abs/2005.06444)
+
+##### winnow  `Rust`  `MIT`  `active`  `Tier C`
+
+Zero-copy Rust parser-combinator crate, forked from nom, favoring API evolution and built-in features over strict compatibility.
+
+**Beats:** nom — On chumsky's own idiomatic single-document JSON benchmark (single core, AMD Ryzen 7 3700x, cargo bench with debug=true, rustc version/flags unstated), winnow parsed at 178.91 us (627 MB/s) versus nom at 526.52 us (213 MB/s), about 2.9x the throughput. The table lives in chumsky's README (mirrored on Codeberg), not in winnow's own docs or benchmarks, and was not rerun independently this session.
+
+**How:** The library is byte-oriented and zero-copy by default; its own performance docs recommend parsing as `u8` rather than `char` and using `dispatch` instead of `alt` when branches have unique prefixes, to cut per-token overhead. An optional `simd` feature pulls in `memchr` for accelerated byte/substring search. winnow deliberately avoids Rust GATs (which nom v8 uses for call-site specialization), trading a slice of peak throughput for more predictable performance and simpler generated code (smaller `impl Trait` return types, faster builds).
+
+**Use it when:**
+- Already writing or migrating a nom-style combinator parser and want ongoing feature development rather than nom's stability-first churn policy
+- Parsing bytes/binary formats where zero-copy slices and streaming (partial-input) parsing matter
+- Willing to enable the `simd` feature (adds `memchr`) for token/substring-heavy grammars
+- Want built-in extras (debug tracing, `dispatch`, bit-level parsing, error recovery groundwork) without pulling in separate nom-ecosystem crates
+- no_std / no-alloc embedded targets, using the crate's `alloc`/`std` feature flags to scope in only what's needed
+
+**Skip it when:**
+- Need a drop-in nom replacement with zero migration cost — API is renamed and trait-based, not source-compatible
+- Basing the choice purely on the winnow-vs-nom speed number: it comes from a competing project's (chumsky) README table, not winnow's own benchmark suite, and was not independently reproduced this session
+- Need the single fastest option in this category — chumsky's own bench shows chumsky itself beating winnow (140.77 us / 797 MB/s check-only, 210.43 us / 533 MB/s full parse, vs winnow's 178.91 us / 627 MB/s) on the same workload
+- Require documented thread-safety guarantees — none are stated in the README or docs pages read
+- Need nom v8's GAT-based call-site specialization for squeezing out extra throughput in hot, tightly-controlled parsers
+
+**Integration:** crate · none required; optional memchr (simd feature), optional anstream/anstyle/is_terminal_polyfill/terminal_size (debug feature) · Rust 1.65.0 (MSRV, per Cargo.toml) · any (pure Rust; alloc/std feature-gated for no_std use)
+
+**Vs siblings:** Pick winnow over chumsky when you want a nom-style imperative combinator API and an incremental migration path from an existing nom parser, not the top raw throughput — chumsky's own benchmark shows chumsky itself outrunning winnow on the same JSON workload. Pick it over MPL/FastParse when you need a mature, widely-used, actively maintained general-purpose crate rather than a newer project whose README leads with beating winnow specifically.
+
+**Gotchas:**
+- Char-based parsing is measurably slower than byte-based per the project's own performance notes; parse `u8` and use `BStr` only for debug display
+- Chained combinators can produce large inferred types that slow builds; the docs recommend wrapping chains in a closure or naming them to avoid `impl Trait` bloat
+- `simd` feature must be opted into (`cargo add winnow -F simd`) to get memchr-accelerated search; it is not on by default
+- GitHub's license badge shows NOASSERTION, but LICENSE-MIT, Cargo.toml, and the COPYRIGHT file all state MIT
+
+**Status:** Actively maintained (default-branch commit 2026-09-17, frequent releases per crates.io versioning in Cargo.toml); MIT-licensed and published as an ordinary crate, so it is easy to vendor or pin despite the GitHub license-detector showing NOASSERTION.
+
+[repo](https://github.com/winnow-rs/winnow) · [benchmark](https://codeberg.org/zesterer/chumsky#performance)
+
+#### regex-engines
+
+##### coregex  `Go`  `MIT`  `active`  `Tier C`
+
+Drop-in Go regexp replacement using 17 pattern-specific engines and SIMD prefilters; beats Rust regex on literal-heavy patterns only.
+
+**Beats:** Rust regex — On kolkov/regex-bench's cross-language corpus (6.0 MB generated text, 16 real-world patterns, FindAll, coregex v0.12.23, Rust regex 1.11 built with --release/LTO/codegen-units=1, Go 1.23, on a GitHub Actions AMD EPYC runner), coregex beat Rust regex on 6 of 16 patterns (1.2x-52x: version, char_class, multiline_php, suffix, ip, inner_literal), lost on 8 of 16 (1.8x-7.4x slower: uri, alpha_digit, word_digit, http_methods, multi_literal, email, word_repeat, literal_alt), and tied on 2 anchored patterns. Against Go stdlib regexp it was 3.6x-893x faster on all 16 patterns.
+
+**How:** At compile time it extracts required literals (prefix, suffix, inner substring, digit runs) and routes to an engine built for that shape instead of one generic NFA: SIMD memchr/memmem (AVX2/SSSE3) for single-literal search, Slim/Fat Teddy or Aho-Corasick for multi-literal alternation, and reverse (right-to-left) DFA search for suffix/inner-literal patterns that skips most of the input entirely. Patterns without a strong literal anchor fall back to LazyDFA, PikeVM, OnePass, or BoundedBacktracker.
+
+**Use it when:**
+- Pattern has an extractable literal (suffix like .*\.log, inner substring like .*error.*, an IP/digit run, or an anchored prefix): reverse-DFA/prefilter paths ran 1.2x-52x faster than Rust regex on kolkov/regex-bench.
+- Migrating a Go codebase off stdlib regexp for CPU-bound matching where the 100%-API-compatible surface (per docs/STDLIB_COMPATIBILITY.md) avoids a rewrite.
+- Deploying on amd64 with AVX2/SSSE3 available (the benchmark ran on a GitHub Actions AMD EPYC runner); SIMD prefilters only exist on that architecture.
+- A zero-allocation hot loop over many matches: AllIndex/AppendAllIndex iterators are up to 30% faster than FindAll per the README.
+- Multi-pattern literal alternation (foo|bar|baz, roughly 2-64 literals) handled by the Teddy or Aho-Corasick engines.
+
+**Skip it when:**
+- Pattern is alternation-heavy without a literal anchor, has bounded-repeat groups, or is a plain character class: coregex was 1.8x-7.4x slower than Rust regex on 8 of 16 kolkov/regex-bench patterns (email, uri, literal_alt, http_methods, multi_literal, alpha_digit, word_digit, word_repeat).
+- Backreferences are required: not supported (by design, to keep the O(n) guarantee) — use regexp2 instead.
+- Target is not amd64: SIMD paths are disabled and it falls back to pure Go, so the Rust-beating numbers do not apply there.
+- Toolchain is older than what the module requires: go.mod pins `go 1.27.1`, while the README's stated minimum ("Go 1.25+") is lower and inconsistent with go.mod — verify against your own Go version before adopting.
+- Correctness-sensitive code relying on stdlib's exact empty-match positions or repeated-capture-group semantics: docs/STDLIB_COMPATIBILITY.md lists these as unresolved known differences, and the tracker shows a steady stream of matching bugs (dot-vs-codepoint, anchors, negated classes, case-insensitivity) fixed between Dec 2025 and Mar 2026.
+
+**Integration:** module · golang.org/x/sys, github.com/coregx/ahocorasick (per go.mod) · go.mod declares `go 1.27.1`; README separately claims "Go 1.25+" — the two disagree, go.mod is the binding constraint for `go build` · amd64 with AVX2/SSSE3 for SIMD prefilters; other architectures use a pure-Go fallback (per the record's tradeoffs field, not independently verified this session on non-amd64)
+
+**Vs siblings:** It's the only catalogued regex engine targeting Go; the other siblings (nim-regex, rejit, SafeRE, BLARE, RE#, nanoregex, re2jit) are for Nim, C++/RE2, Java, .NET, and Python. Pick coregex specifically when you're on Go stdlib regexp and your patterns are literal-anchored (suffix/inner/prefix); the siblings aren't options in a Go codebase.
+
+**Gotchas:**
+- Repeated capture groups like (a)* can capture a different iteration than stdlib's "last match" behavior (docs/STDLIB_COMPATIBILITY.md).
+- Empty-match count and position can differ from stdlib on patterns such as [a-c]*, .*, ^ — documented as an open, unresolved difference.
+- No backreference support at all; RE2-syntax only.
+- Two open performance issues on the tracker at verification time: #153 (FindAllStringIndex slower than stdlib in some cases) and #120 (Teddy SIMD 8.6x slower than Rust due to Go/assembly call-boundary overhead).
+
+**Status:** Actively maintained (last commit 2026-09-06), MIT-licensed, 261 stars; the issue tracker shows a fast-closing but frequent stream of correctness bugs fixed between Dec 2025 and Mar 2026, indicating a young engine rather than one battle-hardened over years like Rust regex.
+
+[repo](https://github.com/coregx/coregex) · [benchmark](https://github.com/kolkov/regex-bench)
+
+##### nanoregex  `Zig`  `MIT`  `active`  `Tier C`
+
+Pure-Zig regex engine beating Python's re module on 6 of 7 README benchmark patterns.
+
+**Beats:** Python re (CPython built-in re module) — First-party README table: findAll over a 142 KB Zig source file, 200 iterations, zig build -Doptimize=ReleaseFast, compared against Python's built-in re module (no CPU model given, no published comparison harness for the Python/zig-regex side). nanoregex wins 6 of 7 listed patterns by 1.65x-2.8x; Python re wins the `fn [A-Za-z]+\(.*alloc` pattern by 1.5x. Separately, ~5000x faster than predecessor zig-regex 0.1.1 on a catastrophic-backtracking pattern (43s to 8ms).
+
+**How:** Dispatches each pattern to the cheapest of five tiers: memmem for pure literals, prefilter-plus-DFA for literal-prefixed patterns, a lazy subset-construction DFA for anchor/backref-free patterns under a 4096-state budget, and a Pike VM (linear-time, always correct) fallback otherwise. The DFA folds bytes into minterm classes (e.g. `[a-z]+` collapses 256 bytes to 2 classes), shrinking each transition-table row from 1 KB to 8 bytes so it fits in L1 cache.
+
+**Use it when:**
+- Zig codebase wanting a dependency-free regex engine (no FFI, no libc regex, no PCRE binding)
+- Workloads dominated by findAll over literal or literal-prefixed patterns (memmem/DFA fast paths)
+- Migrating off zig-regex 0.1.1, especially away from patterns that risk catastrophic backtracking
+- Zig 0.16.0+ toolchain, ReleaseFast builds where the lazy-DFA warmup cost is amortized over many calls
+
+**Skip it when:**
+- Need lookaround, named groups, in-pattern backreferences, inline flag groups, or Unicode property classes -- not supported, may silently diverge
+- Patterns dominated by backtracking-only constructs where the Pike-VM fallback is the only correct path (loses the speed advantage)
+- Non-Zig codebases -- no C ABI or bindings documented
+- Need a widely-used/audited engine: 2 stars, single maintainer, no CI or fuzzing evidence found
+- Correctness-critical Unicode text -- parity is only checked against Python re on 27 ASCII-oriented fixtures
+
+**Integration:** source-drop · none · Zig 0.16.0 (from build.zig.zon minimum_zig_version) · not documented (pure Zig, no arch-specific code observed; no CI config found in repo tree)
+
+**Vs siblings:** All catalogued siblings (nim-regex, rejit, SafeRE, BLARE, RE#, coregex, re2jit) target PCRE2/RE2/JDK/.NET/Rust regex in C/C++/Rust/.NET ecosystems; nanoregex is the only Zig-native option, so pick it specifically when the project is already Zig and needs zero FFI, not for raw throughput versus those more mature engines.
+
+**Gotchas:**
+- Methods take *Regex (mutable), not *const Regex -- the lazy DFA mutates internal state on first use, so a fresh Regex's first findAll call is slower (cache warmup) than subsequent calls
+- DFA eligibility silently falls back to Pike VM for capture groups, anchors, lazy quantifiers, case-insensitive patterns, or patterns whose DFA would exceed 4096 states -- no user-visible signal of which path ran
+- Patterns using unsupported syntax (lookaround, named groups, in-pattern backrefs) parse without error but matching may diverge from expectation
+- README's own header claims '8 of 8 head-to-head non-anchored patterns won' but the table beneath it has 7 rows with 1 Python win -- read the table, not the prose
+
+**Status:** Active (last commit 2026-06-23), MIT-licensed, single small source-drop (3,200 lines) -- easy to vendor and audit given no dependencies, but very new/unstarred (2 stars) with no CI evidence found in the repo tree.
+
+[repo](https://github.com/justrach/nanoregex) · [benchmark](https://github.com/justrach/nanoregex/blob/main/README.md)
+
+##### re2jit  `C++`  `MIT`  `abandoned`  `Tier C`
+
+JIT-compiles RE2's NFA to x86-64 machine code; beats RE2 on capture groups and Unicode classes.
+
+**Beats:** RE2 — First-party README benchmarks (no CPU model, compiler, flags, or absolute timings given) claim re2jit matches RE2's speed on unanchored non-capturing search (shared DFA), runs 20-30% faster than RE2 when capture-group boundaries are needed (test/32-markdownish, a two-regex Markdown-to-HTML converter), and up to 100x faster than RE2 on patterns using Unicode property classes like \pL (test/30-long, a tokenizer for the 'dg' language), all measured against google/re2 directly with no C++ stdlib comparison.
+
+**How:** Two techniques: an x86-64 assembler DSL (asm64.h) plus a converter (it.x64.cc) turn Thompson-NFA thread stepping into native opcodes in mmapped executable memory, skipping RE2's VM dispatch loop when capture positions must be reported; and a rewriter (rewriter.h) replaces RE2's per-codepoint alternation expansion of Unicode classes (\pL, \p{Lu}, etc.) with a generated 2-stage lookup table, turning a many-branch match into a table lookup. For simple unanchored, non-capturing search it just defers to RE2's DFA, so there's no regression there.
+
+**Use it when:**
+- Capture groups whose boundaries must be reported, on x86-64 Linux/macOS.
+- Patterns using full Unicode property classes (\pL, \p{Lu}, etc.) in a hot loop, especially against older RE2 versions.
+- Backreference-heavy patterns where no backreferenced group is itself repeated, needing guaranteed polynomial (not exponential) time.
+- You're willing to vendor an abandoned, single-maintainer MIT source-drop rather than depend on a maintained package.
+- You can build RE2 as a git submodule/static lib yourself; no package manager integration exists.
+
+**Skip it when:**
+- Need \b/\B word-boundary matching — not implemented at all, not even as an error.
+- Non-x86-64 targets — falls back to a slower VM interpreter (ENABLE_VM=1) with no real speed benefit.
+- Comparing against a current RE2 release — the author's own README says newer RE2 closed much of the Unicode-charclass gap, so the up-to-100x figure is likely stale.
+- Regexes with a repeated backreferenced group (e.g. (x*)*\1) — exponential time, the standard backreference pitfall.
+- Anything you'd call production-critical — no commits since 2016, no CI evidence found, and the README literally ends with 'don't use this thing either way.'
+
+**Integration:** source-drop · google/re2 (git submodule, built to obj/libre2.a) · C++11, g++-compatible CXX; Python 3 to regenerate unicodedata.h · x86-64 (Linux/macOS and similar 64-bit UNIX); other architectures only via a slower VM interpreter (ENABLE_VM=1)
+
+**Vs siblings:** Among the catalogued RE2-beating siblings (rejit, BLARE), pick re2jit specifically when the bottleneck is \p{X} Unicode-class matching or capture-group boundary reporting on x86-64 Linux/macOS — that's its one distinctly measured edge. rejit and BLARE report broader RE2 speedups and don't share re2jit's missing \b/\B support, so prefer them for general-purpose replacement.
+
+**Gotchas:**
+- Reserves Unicode plane-15 private-use code points (roughly U+F0000-U+F0FFF) for internal use; matching against them is unsupported.
+- \b/\B word boundaries are silently absent rather than erroring.
+- Unanchored search with backreferences can't use RE2's DFA fallback, so it's slow by a large constant, independent of algorithmic complexity.
+- Perf figures come only from two repo-bundled programs (test/30-long, test/32-markdownish, built with ENABLE_PERF_TESTS=1); no independent benchmark exists.
+
+**Status:** Abandoned since its last commit on 2016-11-25, and the README itself says 'don't use this thing either way' — but it's MIT-licensed, depends only on RE2, and small enough to vendor if you just want the Unicode-charclass lookup-table trick.
+
+[repo](https://github.com/pyos/re2jit) · [benchmark](https://github.com/pyos/re2jit/blob/master/README.md)
+
+#### text-search-and-indexing
+
+##### frg (fastripgrep)  `Rust`  `MIT`  `active`  `Tier C`
+
+Rust CLI that indexes a codebase with sparse n-grams to search faster than ripgrep on every tested pattern.
+
+**Beats:** ripgrep — First-party README table on the openclaw codebase (9,000 files, case-sensitive, warm cache, output to /dev/null), built with `cargo build --release` (no rustc version or CPU model stated): frg beat ripgrep on all 8 tested patterns (1.06x-5.3x, e.g. 10ms vs ripgrep's 53ms on a selective literal) and beat grep by roughly 155x on that same literal (1,553ms), excluding the one-time ~20-23s index build. benches/bench.rs only times frg against itself on synthetic 1K/5K-file repos and never runs ripgrep, so the comparison table has no independent, reproducible harness.
+
+**How:** It extracts 'sparse n-grams' (variable-length byte substrings selected by a 256x256 byte-pair weight table so a substring's edge pair-weights exceed all interior pair-weights) into an inverted index of xxh3-hashed n-gram to file-ID posting lists, stored as delta-varint-encoded, mmap-friendly binary. A query's mandatory literals are covered by a minimum set of these n-grams, whose posting lists are intersected/unioned to shrink 9,000 files to about 5 candidates before full regex verification. Patterns with no extractable literals (`.*`, single-byte) skip the index and instead use parallel rayon file scanning with SIMD memchr byte search and zero-copy output.
+
+**Use it when:**
+- Large, mostly-static codebase (thousands of files) searched repeatedly, where the one-time ~20-23s index build amortizes
+- Interactive or AI-agent-driven code search (frg ships Claude Code/Cursor/Codex integration) where sub-100ms per-query latency matters more than a one-off build cost
+- Selective literal or alternation queries (function/variable names, `useState|useEffect`) — this is where the README shows the biggest indexed wins (1.7x-5.3x vs ripgrep)
+- Environments where the index can be kept current via `frg watch`/`frg update` (~70ms incremental) rather than rebuilt from scratch each time
+
+**Skip it when:**
+- One-off search of a directory with no existing index — the ~20-23s build cost dominates a single query
+- High-churn repos or CI checkouts that are scanned once and discarded, where index upkeep or build time outweighs any per-search gain
+- Wildcard/single-byte patterns with no extractable literals — the index can't help there and speedup drops to 1.06x-2.7x, close to ripgrep
+- Anywhere an independently reproducible benchmark is required — the ripgrep comparison is a first-party README table only; benches/bench.rs never invokes ripgrep
+- Teams unwilling to add a `.frg/` state directory to the repo tree or manage index sync
+
+**Integration:** crate (binary via cargo install / Homebrew tap / source build) · regex, regex-syntax, rayon, memmap2, memchr, ignore, xxhash-rust, clap, clap_complete, clap_mangen, notify, serde, serde_json, anyhow, fs4, indicatif, is-terminal, glob · Rust stable, edition 2021; no minimum rustc version pinned in Cargo.toml or CI · CI (GitHub Actions) tests ubuntu-latest and macos-latest only; no Windows CI; no CPU-specific build flags in Cargo.toml
+
+**Vs siblings:** Same category as ngi and trigrep (both also pair an index with regex search to beat ripgrep); frg's own benchmark covers more pattern types (8, including alternation and wildcard) and ships a maintained replace subcommand plus AI-agent skill integration, but ngi reports larger peak speedups on the Linux kernel (up to 5.9x) and ugrep is the more mature, feature-complete indexed-grep option if proven adoption matters more than novelty.
+
+**Gotchas:**
+- Index must exist and be current before indexed search helps; `frg update`/`frg watch` keep it in sync after file changes (README claims ~70ms incremental via overlay/tombstone)
+- Adds a `.frg/` directory (generations/<id>/meta.json, postings.bin, lookup.bin, files.bin) to the project tree
+- Patterns with no extractable literals bypass the index entirely and fall back to parallel brute-force scanning
+- `frg replace` writes only with an explicit `--write` flag (dry-run/diff-preview by default)
+
+**Status:** Active as of last commit 2026-03-24 (single maintainer, 16 stars), MIT-licensed, v0.3.0, distributed via crates.io/Homebrew/source — small and copyable to vendor, but young with no third-party benchmark verification yet.
+
+[repo](https://github.com/qhkm/fastripgrep) · [benchmark](https://github.com/qhkm/fastripgrep#benchmarks)
+
+##### ngi (N-gram Indexed Regex Search)  `Rust`  `MIT`  `active`  `Tier C`
+
+CLI that builds a trigram index of a codebase to pre-filter files before ripgrep does the actual regex match.
+
+**Beats:** ripgrep — First-party README benchmark on the Linux kernel source tree (92,916 files): ngi beat ripgrep by 1.7x-5.9x and grep -r by 13x-69x across 5 regex patterns (e.g. 27ms vs rg's 161ms vs grep's 1866ms for `__attribute__.*section`), with 100% result parity vs ripgrep (13/13 queries). No CPU/hardware, rustc or ripgrep version, or run count is given, and the 16s/146MB one-time index build for the kernel tree is excluded from the reported timings.
+
+**How:** Every file is decomposed into 3-byte substrings (trigrams) and stored as an inverted index (trigram -> posting list of files), mmap'd and binary-searched at query time -- the classic trigram-index scheme (Russ Cox / Google Code Search). regex-syntax parses the pattern to extract required literal substrings, whose trigrams are intersected to shrink the candidate set before rg runs at all. If the surviving candidates exceed ~10% of files, ngi skips the index and lets rg's own file walker do a full scan instead. Note: DESIGN.md describes a fancier 'sparse n-gram' weighted/monotonic-stack extraction scheme (inspired by Cursor's blog post), but src/ngram.rs shows the shipped v0.1.0 index is plain fixed-length trigrams hashed with FNV-1a -- the sparse-gram design in the doc isn't what's actually implemented.
+
+**Use it when:**
+- Large trees (tens of thousands of files, Linux-kernel scale) searched repeatedly with the same working copy
+- Queries with extractable literal substrings (identifiers, macro/symbol names) rather than pure wildcards or anchors
+- ripgrep is already installed and on PATH -- ngi is a pre-filter in front of it, not a replacement matcher
+- Selective queries expected to touch well under 10% of files, where the index actually narrows the candidate set
+- Agentic/tooling workflows that want JSONL (`--json`) output alongside the speedup
+
+**Skip it when:**
+- Broad/unselective patterns (>10% of files match) -- ngi's own fallback logic hands the whole scan to rg, so no speedup applies
+- One-off searches on a tree you won't query again -- index build (16s / 146MB for the Linux kernel) isn't worth it for a single search
+- Rapidly-changing or ephemeral checkouts (CI runners, throwaway containers) where keeping `.ngi/` current adds overhead each run
+- Patterns with no extractable literals (e.g. `.*`, bare character classes) -- no trigram filtering is possible
+- Anything production-critical: v0.1.0, 21 stars, single first-party benchmark, no third-party validation or issue history yet
+
+**Integration:** crate · anyhow, clap, crc32fast, ignore, memmap2, rayon, regex, regex-syntax (Rust, build-time); ripgrep recommended on PATH at runtime, falls back to the built-in regex crate if absent · Rust edition 2024 (rustc 1.85+); CI builds against Rust stable · CI covers Linux (ubuntu-latest) and macOS (macos-latest) only; Windows is untested and undocumented
+
+**Vs siblings:** Pick ngi specifically when you already run ripgrep and just want a pre-filtering index layer in front of it (it literally shells out to rg for the match step) with an explicit >10%-match fallback rule; trigrep and frg make similar 'faster than ripgrep' claims without that documented fallback threshold, and none of the three ripgrep-adjacent siblings has more than a first-party README benchmark backing it.
+
+**Gotchas:**
+- DESIGN.md documents a weighted 'sparse n-gram' extraction algorithm that the shipped code does not implement -- src/ngram.rs is plain fixed-length trigrams; don't take the design doc as current behavior
+- `.ngi/` must be added to .gitignore manually per the README -- a stale or accidentally-committed index is a footgun
+- Falls back to a full rg scan silently whenever a query matches >10% of files; `ngi search --explain` is the only way to see which mode (indexed/rg-fullscan/full-scan/no-index) actually ran
+- The FNV-1a trigram hash is pinned by unit tests as part of the on-disk index format, implying a future hash change would need an index rebuild/migration
+
+**Status:** Active as of the last commit (2026-03-24) but very early: v0.1.0, 21 stars, MIT-licensed, no third-party benchmark or issue history yet; the codebase is a small single crate (8 source files under src/) so it's easy to vendor or fork if development stalls.
+
+[repo](https://github.com/erogol/ngi) · [benchmark](https://github.com/erogol/ngi#benchmarks)
+
+##### ugrep (with ugrep-indexer)  `C++`  `BSD-3-Clause`  `active`  `Tier C`
+
+ugrep-indexer builds Bloom-filter file indexes so ugrep's cold recursive search skips non-matching files, beating ripgrep.
+
+**Beats:** ripgrep — On ugrep's own v3.12.6 source tree (1,317 files, 12.2MB, 8 threads), cold-filesystem search for 'std::chrono' took 1.02s unindexed vs 0.0487s best-of-4 (range 0.0487-0.0983s) with --index -- a 10x-21x self-comparison; ripgrep 13.0.0 took 1.18s on the same cold search (timed with shell `time`, vs ugrep's internal --stats timer), giving a derived roughly 12x-24x gap between indexed ugrep and ripgrep. No CPU, OS, or compiler flags are stated.
+
+**How:** ugrep-indexer builds a windowed N-gram hash table per file (Bloom-filter-like, tunable accuracy -0 to -9, default -4) using an additive prime-61 rolling hash over up to the first 16 bytes of the eventual search pattern, compiled by ugrep into a hash finite automaton (HFA) layered on top of its regex DFA. At search time ugrep tests each file's stored hash bits against the pattern's HFA before opening the file, so on a cold (uncached) filesystem it avoids the disk read and decompression cost for files that cannot match.
+
+**Use it when:**
+- Recursive greps over directories that are cold in the OS page cache: network drives, rarely-touched archives, first search after mount/boot
+- Repeated searches of the same large, slowly-changing tree where the indexing pass amortizes over many searches
+- Patterns with a short, selective literal prefix (first 8-16 bytes distinctive) that keep the index false-positive rate low
+- Already using ugrep for its grep-compatible CLI, Unicode support, or archive/compressed-file search and want an extra lever for cold storage
+- Willing to spend ~0.5KB-14KB of index storage per file depending on chosen accuracy level
+
+**Skip it when:**
+- Files are already warm in the OS page cache -- indexing adds startup/check overhead and can be slower than a plain search
+- Highly volatile trees needing frequent re-indexing; re-indexing is incremental but still recurring maintenance work
+- Patterns using unlimited `*`/`+` repeats or large Unicode character classes -- these raise both index-hash construction start-up time and the false-positive rate
+- Need `-v` (invert), `--filter`, `-P` (Perl regex), or `-Z` (fuzzy) -- `--index` does not support these ugrep modes
+- Only one small, first-party benchmark exists (1,317 files/12.2MB on ugrep's own v3.12.6 tree); no independent or larger-scale confirmation
+
+**Integration:** source-drop · none required for core grep functionality; optional PCRE2 or Boost.Regex for -P (Perl regex), zlib for -z, and optional bzip2/lzma/lz4/zstd/brotli/bzip3 for specific compressed-archive formats · not documented -- autotools build (AC_PROG_CXX in configure.ac / ./build.sh), no pinned C++ standard flag found in configure.ac or src/Makefile.am · Linux, macOS (Homebrew/MacPorts), Windows (winget), FreeBSD, OpenBSD, Alpine, Arch; x86-64 with SSE2/AVX2/AVX512BW auto-detected (disable via --disable-sse2/--disable-avx2), ARM/AArch64 NEON (--disable-neon to turn off)
+
+**Vs siblings:** Sibling entries (frg, ngi, trigrep) speed up ripgrep-class search on warm/in-memory data; ugrep+ugrep-indexer targets the opposite case -- cold, uncached filesystems -- and only pays off after a separate indexing pass, so pick it when your searches hit rarely-cached storage (network or cold disks) and you can tolerate index upkeep, not for ordinary warm-cache greps.
+
+**Gotchas:**
+- Index has a false-positive (noise) rate -- some non-matching files are still opened; rate rises with permissive patterns and lower accuracy settings
+- Index files are hidden per-directory `._UG#_Store` files; use ugrep-indexer -d to remove them or re-index after large structural changes
+- Current --index design is safe (files are always re-scanned if newer than the index timestamp) only because indexes stay per-directory; the README explicitly warns a possible future 'single combined index file' option would drop that safety guarantee
+- Higher accuracy levels (-8/-9) push index storage up to tens of KB per very noisy file, versus ~4KB/file at the default -4
+
+**Status:** Core ugrep is actively maintained (3,302 stars, BSD-3-Clause, last commit 2026-09-15); the ugrep-indexer companion repo is smaller (84 stars) with its own last commit on 2025-06-22, so the indexing feature is iterating more slowly than core ugrep.
+
+[repo](https://github.com/Genivia/ugrep) · [benchmark](https://github.com/Genivia/ugrep-indexer/blob/main/README.md)
+
+#### unicode-utf8
+
+##### Boost.Text (tzlaine/text)  `C++`  `BSL-1.0`  `stale`  `Tier C`
+
+Boost-style C++ Unicode library (transcoding, normalization, text types) faster than ICU only in narrow, now-degraded cases.
+
+**Beats:** ICU — Vendor's Google Benchmark charts (GCC on Linux, no CPU model/compiler version/flags stated) on ~0.5MB of Wikipedia text show Text's NFC-normalize-from-NFC-input path on European text beating ICU's UTF-8 normalizer by ~1.02-1.24x and roughly matching ICU's UTF-16 normalizer, while ICU's UTF-16 path wins the other 3 of 4 NFC scenarios; for UTF-8->UTF-16 transcoding, Text's SIMD path matched ICU (~473k vs ~476k ns) but the code now shipped (SIMD disabled) runs the slower ~590k ns scalar path.
+
+**How:** The fast paths write runs of already-decoded or already-normalized output in bulk rather than branching per code unit, which is what a std::back_inserter or the transcoding iterators force. A SIMD transcode path (originally from Bob Steagall's C++Now 2018 work) decoded up to 16 UTF-8 bytes per op, but commit dd2959e7 (2024-01-18, fixing issue #212 — a correctness bug that produced silently wrong UTF-16 output) force-disabled that SIMD path repo-wide, so the code now shipping runs the plain scalar path that the vendor's own charts show as slower than ICU for UTF-8->UTF-16.
+
+**Use it when:**
+- NFC normalization of already-NFC European-script UTF-8 text, compared only against ICU's UTF-8-input normalizer (not ICU's faster UTF-16 path) -- best case ~1.24x per the vendor's charts.
+- You call the pointer-to-pointer bulk transcode_to_*/normalize_append APIs directly instead of back-inserters or transcoding iterators; that is the only path where any measured gain applies.
+- You want one Boost-style, STL-familiar library covering the full Unicode algorithm stack (segmentation, collation, bidi) plus text/rope types, not just fast transcoding.
+- A C++14 codebase (Clang 6+/GCC 6+/VS2019+) that cannot add ICU as a dependency and values API/code familiarity over ICU feature completeness.
+
+**Skip it when:**
+- UTF-8->UTF-16 throughput: since dd2959e7 (Jan 2024) disabled SIMD, the shipped scalar path is slower than ICU's UnicodeString::fromUTF8 per the vendor's own chart.
+- Non-European scripts or NFD-origin input for normalization: ICU's UTF-16 normalizer beats Text in 3 of the 4 charted NFC scenarios.
+- Code that pipes output through std::back_inserter or the transcoding iterators for further per-code-unit work: documented by the author as 'quite bad'/'terrible' for performance, erasing the advantage.
+- Wanting an actively maintained dependency: no commits since 2024-01-18 (stale), and the last fix was for a silent data-corruption bug in the fast path.
+- Header-only vendoring: the data-heavy parts (collation_data_*.cpp, normalization_data_*.cpp, break tables) are compiled sources, not header-only, so you must build a library, not just #include headers.
+
+**Integration:** static lib · Boost >= 1.71.0 (auto-cloned by CMake if not found); Boost.Filesystem/System only for the optional ncurses example editor · C++14 minimum (Clang 6+, GCC 6+, VS2019+); C++20 mode (concepts/coroutines) needs GCC 10+/Clang 13+/VS2019+ · any platform supported by GCC/Clang/MSVC; the transcode SIMD path targeted x86 SIMD historically but is force-disabled as of 2024-01-18, so the current build is effectively scalar
+
+**Vs siblings:** Pick Boost.Text only when you need its broader Unicode algorithm/text-type surface (segmentation, collation, bidi, rope) in one Boost-style library; for pure UTF-8 validation/transcoding speed, ada-url/idna, encoding_rs, or SimdUnicode show larger, better-documented speedups over ICU or their respective baselines without a disabled fast path.
+
+**Gotchas:**
+- SIMD-accelerated transcoding (transcode_algorithm.hpp) was force-disabled repo-wide by commit dd2959e7 (2024-01-18), fixing issue #212 where BOOST_TEXT_USE_SIMD=1 produced corrupted, non-deterministic UTF-16 output; there is no supported way to safely re-enable it in the shipped code.
+- Using std::back_inserter or the transcode/normalize iterators directly forfeits nearly all the measured speed advantage -- only the pointer-to-pointer bulk APIs are fast.
+- MSVC users must build with /utf8 (or at least /source-charset:utf-8) or the ~150 CLDR locale headers under boost/text/data/ will be misinterpreted.
+- The published performance charts predate the 2024-01-18 SIMD disable and no longer reflect the UTF-8->UTF-16 numbers of the code you'd actually build today.
+
+**Status:** Stale since its last commit on 2024-01-18, which force-disabled the SIMD transcode path after it was found to silently corrupt UTF-16 output; BSL-1.0 licensed and copyable, but not header-only -- vendoring means building compiled data/algorithm sources, not just including headers.
+
+[repo](https://github.com/tzlaine/text) · [benchmark](https://github.com/tzlaine/text/blob/master/doc/performance.qbk)
+
+##### encoding_rs  `Rust`  `(Apache-2.0 OR MIT) AND BSD-3-Clause`  `active`  `Tier C`
+
+Rust implementation of the WHATWG Encoding Standard; beats ICU at UTF-8/UTF-16/legacy transcoding on Web-shaped text.
+
+**Beats:** ICU — Author's own 2016 benchmark measured encoding_rs against ICU 55 (as built by Ubuntu 16.04) on x86_64 Haswell, with and without explicit SSE2: English UTF-8<->UTF-16 conversion was 7.23x faster decode and 7.00x faster encode than ICU, most other tested languages' UTF-8 conversions were 1.6x-3.9x faster, but UTF-16LE/UTF-16BE conversions were 0.30x-0.32x of ICU's speed (slower).
+
+**How:** Non-streaming UTF-8 paths borrow (Cow) instead of copying when input is already valid, and UTF-8 validation itself uses the SIMD-accelerated simdutf8 crate. ASCII-heavy fast paths are hand-written and, with the `simd-accel` feature, runtime-multiversioned per target (AVX2+BMI1 detection via `multiversion`/`core_detect` on x86_64, NEON on aarch64/thumbv7neon) so a single binary picks the best code path at runtime. The README notes the ASCII acceleration was rewritten in 2026 for Zen 3/M3 Pro/Raspberry Pi 4, i.e. the code measured in the 2016 benchmark is not the code shipping today.
+
+**Use it when:**
+- Parsing arbitrary Web content (HTML/CSS/XML) whose declared or sniffed charset may be a legacy encoding, mirroring what a browser does
+- UTF-8<->UTF-16 conversion in a Gecko/Servo-like pipeline where FFI-friendly, allocation-free (Cow) conversion matters
+- Targeting x86_64, aarch64, i686, or thumbv7neon where the `simd-accel` feature's runtime dispatch pays off
+- no_std / no-allocator embedded contexts (crate supports no_std with `alloc` feature togglable)
+- You want a small, vendorable crate (only WHATWG's ~40 encodings) rather than all of ICU's converters
+
+**Skip it when:**
+- You need ICU's full arbitrary-encoding converter surface (charsets outside the Web Encoding Standard) or ICU-specific APIs (transliteration, locale-aware behavior)
+- You need UTF-16LE/UTF-16BE-labeled output specifically: those labels' "output encoding" is UTF-8 per spec, a documented API surprise, not a bug
+- Encoding legacy CJK (Big5/GB/Shift_JIS/EUC-KR/Hanja/Hangul) at top speed by default: those encode paths are size-optimized, not speed-optimized, unless you opt into the `fast-*` Cargo features
+- You need the full SIMD acceleration path on stable Rust without qualification: `simd-accel` depends on nightly-only features (`rustversion`, `any_all_workaround` crates), so a stable build may miss it
+- Deciding based on the cited benchmark: it is a decade-old first-party 2016 post against ICU 55, and the library's own code has changed materially since (2018 and 2026 rewrites) per the README
+
+**Integration:** crate · cfg-if, scopeguard, multiversion_no_op (always); optional: multiversion (x86/x86_64 without baseline AVX2+BMI1), simdutf8 (x86/x86_64/aarch64/wasm32+simd128), core_detect (x86/x86_64), serde, rustversion + any_all_workaround (simd-accel feature) · Rust 1.88 (MSRV, per Cargo.toml `rust-version`); `simd-accel` feature further constrains to Rust versions with the nightly features it needs · any (falls back to portable code); SIMD acceleration tuned for x86_64, aarch64, i686, thumbv7neon via the `simd-accel` feature
+
+**Vs siblings:** The catalogued siblings are narrower single-purpose primitives (UTF-8 validation: simdutf8, xutf, SimdUnicode, utf8_range, Parabix; normalization: Boost.Text, unicode-transforms; URL/IDNA: ada-url/idna); pick encoding_rs when the job is full transcoding between UTF-8/UTF-16 and arbitrary legacy Web charsets (e.g. sniffing and decoding real-world HTML), and pick one of the UTF-8-only validators instead when all you need is to validate or count code points in already-UTF-8 data.
+
+**Gotchas:**
+- Encoding to UTF-16LE, UTF-16BE, or "replacement" always yields UTF-8 output because those are their WHATWG-defined output encodings, not the input encoding
+- Speed is an explicit non-goal for legacy-encoding encode paths by default; enable `fast-hangul-encode`/`fast-kanji-encode`/etc. (or the `fast-legacy-encode` bundle) if CJK encode throughput matters
+- `simd-accel` requires nightly Rust features, so a plain stable build won't get the full multiversioned SIMD dispatch described in the README
+- The Cargo license string is a compound `(Apache-2.0 OR MIT) AND BSD-3-Clause`: the BSD-3-Clause part covers WHATWG-derived label/encoding data, not just the code
+
+**Status:** Actively maintained (last commit 2026-09-24, core dependency of Firefox/Gecko and Servo); dual Apache-2.0/MIT plus BSD-3-Clause licensed and small enough to vendor ("copyable"), though the cited benchmark predates two later rewrites of the hot paths.
+
+[repo](https://github.com/hsivonen/encoding_rs) · [benchmark](https://hsivonen.fi/encoding-perf-2016-11/)
+
+##### unicode-transforms  `Haskell`  `BSD-3-Clause`  `active`  `Tier C`
+
+Pure-Haskell Unicode NFC/NFKC/NFD/NFKD normalization for Text, beating ICU's C library binding on decomposition forms.
+
+**Beats:** ICU (ICU4C 65.1, via the text-icu Haskell binding) — The README's per-file wall-clock ms table (package v0.3.7) compares unicode-transforms against text-icu 0.x calling ICU4C 65.1, across 7 language corpora, on unstated macOS hardware (no CPU model, GHC version, or compiler flags given). unicode-transforms wins all 14 NFD/NFKD rows (+8.8% to +376.9%, e.g. NFKD/Korean 7.78ms vs ICU's 37.10ms) but loses 9 of 14 NFC/NFKC rows, including NFC/Japanese (11.90ms vs ICU's 3.04ms) and NFC/AllChars (9.72ms vs 3.58ms).
+
+**How:** It rides text's internal stream-fusion machinery (Data.Text.Internal.Fusion) to decompose/recompose characters while writing directly into a mutable Text array, avoiding intermediate list or Text allocations. Combining marks awaiting reorder by combining class are held in a small hand-unrolled buffer (`ReBuf = Empty | One Char | Many Char Char [Char]`) rather than a general list, so the common 0-2 mark case avoids list overhead. Hangul syllable decomposition/composition is done algorithmically instead of via UCD table lookup. The library is built with `-O2 -funbox-strict-fields -fspec-constr-count=10` (optional LLVM backend via a cabal flag).
+
+**Use it when:**
+- Pure-Haskell codebases that want to drop the native ICU4C runtime dependency and FFI overhead of text-icu
+- Decomposition-heavy workloads (NFD/NFKD): wins all 14 measured README rows, from +8.8% to +377% over ICU
+- Batch/offline normalization of in-memory Data.Text values, e.g. Korean or Vietnamese text (largest measured wins)
+- Projects on GHC 8.0.2 through 9.14.1 wanting a small dependency footprint (base, text, bytestring, ghc-prim, unicode-data only)
+- Cases where a small, auditable pure-Haskell implementation is preferred over linking libicu
+
+**Skip it when:**
+- Composition-heavy workloads (NFC/NFKC): ICU is faster in 9 of 14 measured rows, e.g. NFC/Japanese 11.90ms vs ICU's 3.04ms, NFC/AllChars 9.72ms vs 3.58ms
+- NFKC on Korean input specifically: open issue #106 reports NFKC is not idempotent on some Korean inputs — a correctness bug, not just a perf gap
+- Need ICU features beyond normalization (collation, FCD normalization, string iteration, regex) — this package does normalization only
+- Callers outside Haskell (C/C++/other languages) — there is no exposed FFI surface, it's a Haskell library only
+- Need normalization numbers you can trust on your own hardware: the published table is for package v0.3.7 (current is 0.4.0.1), unspecified 'macOS' hardware with no CPU model, GHC version, compiler flags, or run date given
+
+**Integration:** module · base (>=4.8,<4.23), text (>=1.1.1,<=1.2.5.0 or >=2.0,<2.2), bytestring, ghc-prim, unicode-data · GHC 8.0.2+ (CI tests through GHC 9.14.1); cabal-version 2.2 · any (pure Haskell); CI covers Linux, Windows (AppVeyor), and s390x
+
+**Vs siblings:** The catalogued siblings are C/C++/Rust/Go SIMD UTF-8 validators/decoders, not Unicode normalizers, except Boost.Text (C++, also claims to beat ICU on NFC). Pick unicode-transforms over ICU (or Boost.Text) specifically when you're in a pure-Haskell codebase doing decomposition (NFD/NFKD) and want to remove the ICU4C runtime dependency; for NFC/NFKC-heavy or non-Haskell workloads, ICU or Boost.Text is likely still faster.
+
+**Gotchas:**
+- Open bug: NFKC is not idempotent on some Korean inputs (issue #106, still open as of 2026-08-17)
+- Ships a deprecated Data.ByteString.UTF8.Normalize module alongside the current Data.Text.Normalize API
+- For some scripts (Japanese, AllChars) composition forms are markedly slower than ICU, up to roughly 4x, not just a modest loss
+- Package is still marked 'Experimental' stability in its cabal file despite a decade of releases
+
+**Status:** Actively maintained — last master commit 2026-01-18, adding support for newer GHC releases up through 9.14; BSD-3-Clause and small enough to vendor, but stability is marked 'Experimental' and there is an open correctness bug in NFKC on Korean text (issue #106).
+
+[repo](https://github.com/composewell/unicode-transforms) · [benchmark](https://github.com/composewell/unicode-transforms#performance)
+
+##### utf8_range (SIMD Range-based UTF-8 validator)  `C`  `MIT`  `active`  `Tier C`
+
+SIMD range-based UTF-8 validator bundled in protobuf; edges out Lemire's SSE/NEON validator, mostly on ARM.
+
+**Beats:** Lemire's SIMD UTF-8 validator (github.com/lemire/fastvalidate-utf-8, the algorithmic ancestor incorporated into simdutf) — First-party README benchmark (gcc-7.3, no optimization flags stated) compares 'range2' (a two-block NEON/SSE variant of the range algorithm) against Lemire's 2018 fastvalidate-utf-8 prototype on an unspecified ARMv8-A chip and an Intel Xeon E5-2650 (SSE4.1). On NEON, range2 beats Lemire by about 1.17x-1.78x depending on buffer size (~1.32x on the UTF-8 demo text and at 1K-1M buffers); on SSE4 it is within noise of Lemire (near parity on demo text and 1M, and slower than Lemire at 32 bytes).
+
+**How:** Core technique is the 'range algorithm': load 16 bytes, use a SIMD table lookup (NEON tbl / SSE pshufb) to assign each byte a predicted 'range index' based on where it should fall in a 1-4 byte UTF-8 sequence, then validate all 16 bytes against their [min,max] ranges in one pass, avoiding Lemire's more branch-heavy state tracking and the classic Hoehrmann DFA table walk. The shipped wrapper (utf8_range.c) adds an 8-bytes-at-a-time SWAR ASCII fast-skip (checking the high bit of 8 packed bytes at once) before entering the SIMD range check, and falls back to a naive byte-by-byte loop for tails under 16 bytes or on platforms without SSE4.1/ARM64 NEON.
+
+**Use it when:**
+- Already depending on protobuf or Abseil in C/C++ and want its vendored validator instead of adding a new dependency
+- Buffers of roughly 1KB+ on ARMv8 NEON, where range2 shows its clearest edge over Lemire-style validation (~1.3x+)
+- ASCII-heavy input, where the wrapper's 8-byte SWAR ASCII skip dominates before SIMD is ever reached
+- Only need a boolean valid/invalid result or the longest-valid-prefix length, not decoding
+- x86-64 SSE4.1 targets where parity with a 2018-era SIMD validator is acceptable
+
+**Skip it when:**
+- Need AVX2/AVX-512 throughput: the shipped utf8_range.c only dispatches to SSE4.1 or 64-bit ARM NEON; range-avx2.c exists in the tree but is not wired into the wrapper protobuf actually links
+- Targeting 32-bit ARM, RISC-V, WASM, or other platforms without SSE4.1/NEON: falls back to a naive per-byte loop with no SIMD speedup
+- Small non-ASCII buffers: SSE4 numbers show range2 losing to Lemire at 32 bytes (2173 vs 2891 MB/s)
+- Need UTF-8<->UTF-16/32 transcoding, not just validation: this library only validates
+- Want current, independently-run benchmarks: the README table is an unmaintained ~2019 first-party benchmark against Lemire's 2018 prototype, not today's simdutf
+
+**Integration:** source-drop · none for the C library (utf8_range.c/.h); Abseil (absl::strings, for absl::string_view) for the C++ wrapper utf8_validity.h · C99/C11 for the core C file; C++ (protobuf's current C++17 baseline) for the wrapper; README's own build was tested with gcc-7.3, CMakeLists.txt requires CMake 3.16+ · x86-64 with SSE4.1, or aarch64 with NEON, for the SIMD path; any platform via a naive byte-by-byte fallback otherwise
+
+**Vs siblings:** Pick it only if you're already pulling in protobuf/Abseil and want its bundled C validator without adding a new dependency; simdutf8 (up to 23x over Rust std), SimdUnicode (up to 14x over .NET), and xutf (1.5-10x over simdutf) show larger and more current speedups, and utf8_range's own edge over Lemire is ARM-specific and within noise on x86 SSE4.
+
+**Gotchas:**
+- The README benchmark tables measure the original standalone research files (range-neon.c, range2-*.c, lemire-*.c via main.c), not utf8_range.c, the 2023 Google-rewritten wrapper with the ASCII fast path that protobuf actually ships and links
+- No AVX2 dispatch reaches production despite range-avx2.c sitting in the same directory — the wrapper only branches on __SSE4_1__ or __ARM_NEON+64-bit
+- Only static-library linkage is provided (CMake/Bazel add_library targets utf8_range and utf8_validity); a shared-library request (issue #14958) was closed without adding one
+- The component's own LICENSE file is MIT (Yibo Cai 2019 + Google 2022) even though the surrounding protobuf repo is BSD-3-Clause — relevant if vendoring just this directory
+
+**Status:** Actively maintained as part of protobuf (this component last touched 2026-06-19; the protobuf repo overall as of 2026-09-25); MIT-licensed and small enough to vendor on its own, but only static-library builds are supported.
+
+[repo](https://github.com/protocolbuffers/protobuf) · [benchmark](https://github.com/protocolbuffers/protobuf/blob/main/third_party/utf8_range/README.md)
+
 ### serialization-and-formats
 
 #### json
@@ -6716,6 +8611,45 @@ Header-only C++ template library for dense/sparse linear algebra; beats OpenBLAS
 
 [repo](https://gitlab.com/libeigen/eigen) · [benchmark](https://libeigen.gitlab.io/benchmarks/2026-09-xeon-gold-6444y-blas-lapack-avx512/)
 
+### parsing-and-text
+
+#### parser-generators-and-combinators
+
+##### PAPAGENO (PArallel PArser GENeratOr)  `C`  `GPL-2.0`  `abandoned`  `Tier A`
+
+Bison-style generator that emits pthreads-parallel operator-precedence parsers, up to 5.5x faster than Flex+Bison on ARM.
+
+**Beats:** GNU Bison + GNU Flex (sequential LALR(1) parser/lexer) — The paper (Barenghi et al., preprint for Science of Computer Programming) benchmarks the PAPAGENO-generated parallel lexer/parser against the authors' own sequential Flex+Bison LALR(1) reference parser, both built with gcc 4.9.1 -O3 -march=native, on a 16-core quad-Opteron 8378 server and a 4x-Cortex-A15 Odroid-XU ARM board, over real-world JSON (2.7KiB-75MiB) and Lua (7KiB-35MiB) inputs. It reports up to 5.5x speedup on the ARM board and a separate maximum 7x speedup for parallel lexing alone vs. sequential Flex (not vs. the full Flex+Bison pipeline); the 16-core server JSON comparison (Fig. 13b) is a 3D plot with no stated exact peak number against Flex+Bison.
+
+**How:** Exploits the OPG property that the shift/reduce decision between two adjacent terminals depends only on a fixed precedence relation, not on global parse state, so the input can be split into chunks and reduced independently on separate POSIX threads with no wasted re-computation when recombining partial trees. Lexing can likewise be split into an independent parallel pass (test/JSON_parallel_lexer). The README states throughput scales close to linearly with thread count on JSON workloads.
+
+**Use it when:**
+- Files large enough for parallelism to amortize thread overhead (paper shows real gains mainly on multi-MB inputs, up to 75MiB JSON / 35MiB Lua)
+- A grammar that is already an Operator Precedence Grammar, or small enough to convert without exploding the rule set (e.g. arithmetic expressions, JSON)
+- Batch/offline C parsing on multi-core x86_64 servers or ARM big.LITTLE boards where lexing/parsing is a proven bottleneck
+- You can vendor and maintain generated C source yourself (Python 2.x generator, no upstream releases since 2015)
+
+**Skip it when:**
+- General LALR(1) or ambiguous/context-free grammars: converting real-world Lua to OPG+Fischer-normal-form blew productions up from 144 to 8547 plus required manual lexer transforms
+- Small or streaming inputs (KB-scale) — paper reports negligible or negative speedup there from thread migration/NUMA overhead
+- Anywhere you need Bison's GLR mode or ANTLR-style handling of ambiguous grammars — OPG is a strict LALR(1) subset
+- Projects needing an actively maintained tool or Python 3 support: last commit 2015-04-20, generator is Python 2.x only, one unresolved GitHub issue
+- Anywhere a true drop-in Bison/Flex replacement is required — grammar syntax is Bison-like but the generated parser's call signature and build process differ
+
+**Integration:** source-drop · Python 2.x to run the generator; GNU Flex, gcc/clang, Make, and POSIX threads (pthreads) to build the generated parser · Python 2.x (generator); C with pthreads and GNU Flex for the generated code (paper's own build used gcc 4.9.1, -O3 -march=native) · x86_64 and ARM (tested on Cortex-A15/A7); requires a POSIX threads implementation (tested on Linux NPTL)
+
+**Vs siblings:** Pick PAPAGENO only when the win you need is multi-core parallelism on a Bison-compatible C grammar that is (or can be forced into) Operator Precedence form; the catalogued siblings (flap, re2c, Pika Parser, winnow, chumsky, MPL/FastParse) are all single-threaded OCaml/Rust tools that get their speedups from fused lexing, code generation, or SIMD/table specialization, not from splitting work across cores, so they don't compete on this axis.
+
+**Gotchas:**
+- Generator statically rejects non-OPG grammars (consecutive nonterminals, precedence conflicts) and only prints diagnostics — you must manually restructure the grammar
+- Real-world grammars can blow up drastically under OPG conversion: Lua went from 144 to 8547 productions in the paper's benchmark
+- README states terminal/nonterminal names may not start with '_'
+- Generator itself is Python 2.x only; no indication of a Python 3 port
+
+**Status:** Abandoned: no commits since 2015-04-20, GPL-2.0 licensed, one open GitHub issue and no CI/releases; small enough (a handful of C files plus a Python 2.x code generator) to vendor and maintain yourself if you accept the OPG grammar restriction.
+
+[repo](https://github.com/PAPAGENO-devels/papageno) · [benchmark](https://re.public.polimi.it/retrieve/handle/11311/971391/67830/papaj-final.pdf)
+
 ### stdlib-replacements
 
 #### async-tasks-threadpools
@@ -6943,6 +8877,231 @@ CDF-model-based sort for numeric arrays, ~4x faster than std::sort on random dat
 [repo](https://github.com/anikristo/LearnedSort) · [benchmark](https://github.com/anikristo/LearnedSort/blob/master/plots/perf_charts.png)
 
 ## Copyleft — Unverified claims (tier C/D)
+
+### parsing-and-text
+
+#### lexers-tokenizers
+
+##### CrossDB (hand-written SQL lexer/parser)  `C`  `MPL-2.0`  `stale`  `Tier C`
+
+Hand-written SQL scanner/parser inside CrossDB's embedded RDBMS, claimed 10x faster than Flex/Bison-generated code.
+
+**Beats:** Flex/Bison — CrossDB's docs FAQ claims its hand-written scanner+parser is 'over 10 times faster than Flex/Bison parser tools' and about one-third the code size, stated as a single unsourced bullet in docs/faq.md with no linked benchmark script, hardware, or compiler/flags, and it bundles scanning and parsing together rather than isolating lexer-only throughput.
+
+**How:** A hand-written recursive-descent parser calls a hand-written scanner directly, skipping the generated DFA table-walk that Flex output uses; the scanner classifies characters with a 256-entry static lookup table (s_tok_type) and switches on token type inline. Because xdb_token.c is textually #included into xdb_parser.c, the compiler can inline across the scanner/parser boundary in a way two separately compiled Flex/Bison translation units cannot. The ~10x and ~1/3-code-size figures come from a single unsourced FAQ bullet with no published benchmark script, hardware, or compiler flags.
+
+**Use it when:**
+- Embedding a small in-memory/on-disk OLTP relational engine in C/C++/Go/Python/Rust and wanting its internal SQL parsing fast without adding Flex/Bison to the build
+- High-frequency, short OLTP-style SQL statements parsed repeatedly rather than parsed once and cached
+- Needing portability across Linux/macOS/Windows/FreeBSD and x86/ARM/PowerPC/MIPS without a Flex/Bison toolchain dependency
+- Wanting a reentrant, thread-safe SQL front end with no shared global parser state across connections
+- Accepting CrossDB's own MySQL-flavored SQL dialect rather than needing a general-purpose or standard SQL grammar
+
+**Skip it when:**
+- You need a standalone, reusable SQL lexer/parser library: CrossDB's scanner and parser are internal to the engine and not exposed as an independent API
+- You need the 10x claim substantiated: no benchmark script, workload, hardware, or scanner-only vs parser-only breakdown is published
+- You need a mature, standard SQL dialect: the project itself says it is 'still in its early stages and currently lacks stability'
+- You need active upstream development: last commit 2025-06-20, 268 stars, 21 forks, and only 3 open issues suggest limited real-world usage exercising parser edge cases
+- Your dataset won't fit in available memory or lives on network-mounted disks, which the project's own FAQ lists as limitations of the engine the parser serves
+
+**Integration:** source-drop · none (single C source tree; optional Go/Python bindings and JNI wrapper ship separately in the repo) · not documented precisely; uses _GNU_SOURCE, stdint.h/stdbool.h; built with GCC via Makefile/CMake, MinGW64 for Windows · Linux/macOS/FreeBSD/Windows; x86 32/64-bit, ARM, PowerPC, MIPS per README
+
+**Vs siblings:** All the catalogued siblings (logos, LRSTAR, simd-lexing, lexer-exp, Gigatoken, Accelerated-Zig-Parser, StreamTok, Ragel) are extractable, general-purpose lexers/tokenizers you drop into your own project; CrossDB's parser is only worth it if you're embedding the CrossDB RDBMS itself and want its SQL front end's speed as a side effect, not as a standalone lexer replacement.
+
+**Gotchas:**
+- Scanner and parser aren't separable: xdb_token.c is #included directly into xdb_parser.c, so the tokenizer can't be linked or used on its own
+- Parsing is tied to CrossDB's own metadata structs (xdb_stmt_t, xdb_tblm_t, xdb_tblm lookups) — output is not a generic, reusable AST
+- Functions use XDB_STATIC internal linkage and file-scope static tables, confirming this is compiled as one amalgamated unit rather than a modular library
+- One closed GitHub issue documents a parser bug on inequality expressions (Aug 2024), fixed before the 2025-06-20 last commit but indicative of a young grammar
+
+**Status:** Stale by this catalog's threshold (last commit 2025-06-20) with only 268 stars/21 forks, and the project's own README/CONTRIBUTING call it early-stage and not yet stable; MPL-2.0 and copyable as source, but not a drop-in component outside the full CrossDB engine.
+
+[repo](https://github.com/crossdb-org/crossdb) · [benchmark](https://github.com/crossdb-org/docs/blob/main/docs/faq.md)
+
+##### lexer-exp (SIMD NEON lexer experiments, dist1ll)  `Rust`  `MPL-2.0`  `stale`  `Tier C`
+
+Hand-rolled NEON SIMD lexer for a toy language; beats the Rust logos crate 20-35% on Apple M1.
+
+**Beats:** logos (Rust lexer-generator crate, v0.13) — First-party `cargo bench` results (unpinned Rust nightly, single Apple M1 machine) show lnpl's NEON lexer at 118,476 ns/iter vs logos 0.13 at 174,476 ns/iter tokenizing a 100KB synthetic pseudocode file (~35% faster), and 89,151 ns/iter vs logos's 108,257 ns/iter (~1.21x) on real Hubris-kernel source snippets (5KB-1MB); the author separately reports 20-30% gains across that Hubris file-size range.
+
+**How:** The aarch64 path loads input in 512-byte chunks into an aligned SIMD buffer and uses NEON 128-bit vector loads to classify 16 ASCII bytes at once (ident/whitespace/number/etc. character classes), with hand-written NEON assembly (aarch64.s) pulled in via global_asm!. Keyword matching uses a perfect hash that packs each keyword into a 64-bit word for single-instruction comparison instead of a DFA/trie walk. The author also reports a 5-10% gain from replacing a computed classification mask with a precomputed lookup table.
+
+**Use it when:**
+- You're targeting aarch64 (Apple Silicon or ARM servers) specifically -- there is no x86_64 SIMD path
+- You want a worked example of NEON-based ASCII token classification plus perfect-hash keyword matching to adapt into your own lexer
+- Your token stream is dominated by short, repetitive keyword/identifier patterns, where the gain over logos is largest (~35% on the synthetic benchmark)
+- You can build with an unpinned Rust nightly and are comfortable vendoring unsafe/asm source rather than depending on a published crate
+- Throughput on medium files (5KB-1MB) matters more than lexer generality or ergonomics
+
+**Skip it when:**
+- x86_64 targets: the author's own numbers show the naive scalar lexer beating logos there, and no NEON-equivalent path exists
+- You need a drop-in replacement for logos's `#[derive(Logos)]` API -- lnpl's token types are hardcoded to the author's toy language
+- You need stable Rust: the crate uses `#![feature(core_intrinsics)]` and `#![feature(stdsimd)]`, unstable nightly-only features
+- You need a maintained dependency: no crates.io release found, last commit April 2024, no README, and it's explicitly experimental research code
+- Your workload looks like realistic, non-repetitive source rather than synthetic pseudocode -- the measured gain shrinks from ~35% to ~20% on the real Hubris kernel snippets
+
+**Integration:** source-drop · logos 0.13 (used only for parity testing / bench comparison, not by the aarch64 lexer itself) · Rust nightly (unpinned; requires core_intrinsics + stdsimd unstable features; .cargo/config.toml sets rustflags = -Zpolonius) · aarch64 (NEON) for the benchmarked/optimized path; a generic fallback exists for other architectures but is not benchmarked or discussed
+
+**Vs siblings:** None of the catalogued siblings target Rust + logos on aarch64, so this is the only entry showing that specific pairing; pick it only as a technique reference for NEON ASCII classification + perfect-hash keywords, not as an installable lexer -- for an actual drop-in tokenizer, Accelerated-Zig-Parser or simd-lexing are more complete SIMD lexers, and logos itself (already catalogued) remains the safer general-purpose choice off aarch64.
+
+**Gotchas:**
+- Contains raw NEON assembly (aarch64.s) loaded via global_asm! plus unsafe SIMD intrinsics -- review before vendoring
+- Uses a fixed 512-byte, 128-byte-aligned SIMD input buffer (SimdBuffer); behavior at buffer boundaries wasn't verified in this review
+- Depends on nightly-only, unstable compiler features (core_intrinsics, stdsimd) with no pinned rustc version
+- The published benchmark numbers on the blog labeled the lnpl result 'logos:' (apparent typo) -- read the repo's bench source (benches/lexer.rs), not just the blog table, to confirm which number is which
+
+**Status:** Stale since April 2024 with zero open issues and no crates.io listing found; MPL-2.0 licensed research code from a personal toy-compiler project, small enough to vendor the lexer module but not maintained or packaged as a library.
+
+[repo](https://github.com/dist1ll/lexer-exp) · [benchmark](https://alic.dev/blog/fast-lexing)
+
+#### markup-html-markdown
+
+##### MarkupEver  `Rust (Python bindings)`  `MPL-2.0`  `active`  `Tier C`
+
+Rust HTML/XML parser with CSS selection for Python; faster than BeautifulSoup4 and html5lib, slower than lxml-based Parsel.
+
+**Beats:** BeautifulSoup4 (html.parser and lxml backends) and html5lib — On the maintainer's own micro-benchmark (Manjaro Linux x86_64, 8GB RAM, Intel i3-1115G4; Python version and compiler flags unstated), MarkupEver parsed a test HTML page in 4,927us avg vs BeautifulSoup4(lxml)'s 22,809us (~4.6x) and html5lib's 63,489us; CSS-selected in 310us vs BeautifulSoup4's 2,995us (~9.7x); and serialized in 1,952us vs BeautifulSoup4's 14,900us (~7.6x). On the same table, Parsel (using lxml/libxml2 directly) beat MarkupEver on all three operations (4,072us parse, 161us select, 1,276us serialize).
+
+**How:** Tokenizing and tree-building run through html5ever (Rust's spec-compliant HTML5 parser) and CSS matching uses servo's `selectors` crate, both compiled natively instead of going through Python's html.parser or the tree BeautifulSoup builds on top. The DOM is a single Vec-backed Rust tree (treedom crate), avoiding per-node Python object churn until a node is touched, and the release build uses fat LTO, one codegen unit, and panic=abort.
+
+**Use it when:**
+- Parsing/selecting/serializing many small-to-medium HTML or XML documents from Python where BeautifulSoup4 or html5lib is the measured bottleneck
+- Need CSS-selector querying (soupsieve-style syntax) without switching to XPath
+- Building a DOM from scratch and serializing it (e.g. generating HTML), not just parsing existing markup
+- Large or streamed input where incremental parsing via Parser.process() avoids buffering the whole document
+- Deploying to Linux, Windows, or macOS with a prebuilt PyPI wheel - no local Rust toolchain needed
+
+**Skip it when:**
+- You already call lxml/Parsel directly - on the project's own benchmark table, Parsel beats MarkupEver on every measured operation (parse, select, serialize)
+- You need the CSS :has() pseudo-class - an open issue says it does not work
+- You need a BeautifulSoup-compatible API (Tag, NavigableString, .find()) - MarkupEver's dom/select API is different, so adopting it is a rewrite, not a swap
+- You need airtight cross-thread sharing of parser objects - an unsound `impl Sync` on Tendril-based parser/matching types was reported (issue #10) and fixed later, but the exact fixed version is not documented
+- You want independently reproduced numbers - only the maintainer's own benchmark exists, with no published benchmark code, no stated Python version, and no stated build flags
+
+**Integration:** module · Rust build deps only (pyo3 0.29, parking_lot 0.12, hashbrown 0.17, plus html5ever/selectors pulled in via the treedom and matching workspace crates); Python runtime has no extra dependencies · Rust edition 2021 (build-time only, via maturin); Python >=3.8, with wheels published for CPython 3.9-3.14 and PyPy - no Rust toolchain needed to install from PyPI · Linux, Windows, macOS per PyPI classifiers; benchmarked on x86-64 (Manjaro), no documented architecture restriction
+
+**Vs siblings:** Pick MarkupEver over html5-parser when you also want CSS selection and DOM construction/serialization in the same library, not just fast HTML5-to-lxml-tree parsing; pick selectolax or Parsel/lxml directly instead when you don't need MarkupEver's DOM-building API, since both outperform MarkupEver on this same class of parse/select/serialize benchmark.
+
+**Gotchas:**
+- CSS :has() pseudo-class does not work (open issue, unresolved as of this session)
+- Historical unsound Sync impl on parser/matching types tied to html5ever's Tendril type (issue #10) - fixed later, but pin a recent version if you share parser objects across threads
+- A separate 'attaching a node to itself causes crash' bug was reported and closed - confirm you're past that fix
+- pyproject.toml's PyPI classifier lists the license as MIT while the actual LICENSE file and Cargo.toml both say MPL-2.0 - a metadata inconsistency, not an alternate license grant
+
+**Status:** Actively maintained (last commit 2026-07-21, CI running on push) and MPL-2.0 licensed, but it's a compiled PyO3/maturin extension rather than a source-drop, and it's a small, largely single-author project (37 stars) with an unresolved CSS-selector gap and a past thread-safety soundness bug, so treat it as promising but young.
+
+[repo](https://github.com/awolverp/markupever) · [benchmark](https://awolverp.github.io/markupever/#performance)
+
+##### MyHTML  `C`  `LGPL-2.1`  `stale`  `Tier C`
+
+Pure C99 HTML5 parser using a thread-pool tokenizer/tree-builder; beats Gumbo and html5ever on parse throughput.
+
+**Beats:** gumbo and html5ever (Rust, via html2html_lib C binding) — On the author's own 2016-era benchmark (466 Alexa Top-500 homepages parsed sequentially in one process, 'ex vivo'), threaded MyHTML totaled 0.509s vs Gumbo 6.130s (~12x) and html5ever 4.505s (~8.9x) on an Intel Core i7-3615QM / 8GB DDR3 Mac built with Apple LLVM 7.0.2 (clang-700.1.81); the harness Makefile default is only -O2 and library-specific build flags for myhtml, gumbo, and html5ever are unstated. MyHTML's Single Mode (single-threaded, the fairer comparison against the single-threaded baselines) totaled 0.722s, about 8.5x over Gumbo and 6.2x over html5ever.
+
+**How:** myhtml_init takes a thread_count and internally fans tokenization and tree construction out across a worker thread pool (thread_queue) backed by custom pool allocators (mcobject/mcsimple/mchar_async) instead of per-node malloc/free, so parsing one page overlaps tokenizing and tree-building work across cores. A single-threaded path (MyHTML_OPTIONS_PARSE_MODE_SINGLE, or building with MyCORE_BUILD_WITHOUT_THREADS=YES) exists for when thread overhead isn't worth it or POSIX threads aren't available.
+
+**Use it when:**
+- Bulk/offline HTML5 parsing where you can dedicate a thread pool per parser instance (e.g. batch crawling, corpus processing) and want the threaded mode's throughput
+- C or C99 codebases that want a dependency-free, spec-conformant HTML5 tokenizer/tree builder without pulling in Rust or a GC runtime
+- Existing consumers via the Perl, Crystal, Elixir/Erlang, or Swift bindings who need a fast HTML5 parse step without CSS selectors
+- POSIX or Windows targets (source ports exist for both) where you don't need a selector engine and can build the library or vendor the source
+
+**Skip it when:**
+- New projects: the project's own README tells users to use the lexbor project instead, which is the maintained successor
+- Anything needing CSS selectors or a renderer — MyHTML only builds the tree; you'd need Modest/lexbor on top
+- Latency-sensitive single-page parsing on a resource-constrained host — thread-pool setup/teardown per page adds overhead unless you use Single Mode
+- Code that touches token/attribute text from a different thread than the parser's workers without calling myhtml_token_node_wait_for_done first, since after-token-done callbacks fire on worker threads in the default threaded mode
+- Projects wanting active upstream support: last commit 2025-01-15 and status is stale
+
+**Integration:** source-drop · none (pure C99; POSIX threads optional and can be disabled at build time) · C99; GNU Make (or CMake) build; POSIX threads unless built with MyCORE_BUILD_WITHOUT_THREADS=YES · POSIX (Linux/macOS/BSD) and Windows source ports (source/myport/posix, source/myport/windows_nt); benchmarked on macOS/x86-64
+
+**Vs siblings:** Prefer lexbor (its own successor, already catalogued) for any new work — same author says so. MyHTML is only worth reaching for if you're maintaining an existing MyHTML integration or need one of its non-Rust/non-C bindings (Perl, Crystal, Elixir/Erlang, Swift) and don't need CSS selectors.
+
+**Gotchas:**
+- In default threaded mode, token/tree callbacks run on worker threads; reading node text/attributes from the caller thread without waiting (myhtml_token_node_wait_for_done) races with the parser
+- No CSS selector engine — pair with Modest or lexbor if you need selectors or rendering
+- The upstream README itself redirects new users to lexbor, the maintained successor already in this catalog
+- Build flags used for the Gumbo/html5ever comparison binaries in the benchmark are not documented, so the exact magnitude of the speedup depends on how optimized those baselines were
+
+**Status:** Stale: last commit 2025-01-15, and the project's own README now directs users to the lexbor project instead; still LGPL-2.1 and small/dependency-free enough to vendor if you're stuck maintaining an existing integration.
+
+[repo](https://github.com/lexborisov/myhtml) · [benchmark](https://lexborisov.github.io/benchmark-html-parsers/)
+
+#### regex-engines
+
+##### rejit  `C++`  `GPL-3.0`  `abandoned`  `Tier C`
+
+Prototype non-backtracking JIT regex compiler for x86-64 that beats RE2 and grep on throughput, unmaintained since 2015.
+
+**Beats:** RE2 — First-party README benchmarks on an Intel Core i5-2400 (quad-core, SSE4.2, Fedora 17, RE2 commit aa957b5e3374 from ~2013): multi-threaded Rejit vs. the Benchmarks Game RE2 regex-dna program is 1.68x-2.1x faster in real time across 500KB-500MB inputs, and Rejit-powered jrep is 1.68x faster than GNU grep 2.14 on `grep -R` over the Linux 3.10.6 source tree (0.370s vs 0.622s real); the compiler and optimization flags actually used for these runs are not stated.
+
+**How:** Each regex is JIT-compiled at runtime into native x86-64 machine code using a V8-derived assembler/codegen (src/x64/assembler-x64.*), avoiding backtracking entirely. Matching uses SIMD to test up to 4 characters per instruction (kMaxParallelChars=4 in src/cpu.h, requires SSE4.2, disable with simd:off) and a 'fast forward' skip-ahead mechanism that jumps past non-matching regions instead of scanning byte by byte. The multi-threaded benchmark samples (jrep -R, regexdna-multithread.cc) add throughput by splitting input across threads manually.
+
+**Use it when:**
+- Bulk, offline x86_64 Linux/macOS text-scanning jobs where you can vendor a small unmaintained C++11 GPLv3 static lib for extra single-machine regex throughput on large inputs (tens of MB+)
+- Simple find/match/replace patterns that don't need capture groups, back-references, word boundaries, Unicode/UTF-8, or POSIX BRE syntax
+- You already split work across threads yourself (as jrep and the DNA benchmark samples do) and want a non-backtracking engine per thread
+- Studying or extending a small, readable non-backtracking SIMD regex JIT implementation
+- GPL-3.0 licensing is acceptable in your project
+
+**Skip it when:**
+- You need capture/submatch extraction: issue #6 'Support submatches extraction' has been open since 2014 and unresolved; Match only exposes begin/end of the whole match
+- You need word boundaries (\b), back-references, Unicode/UTF-8 encoding, or POSIX BRE syntax: all are open, unimplemented feature requests (issues #1, #3, #5, #7)
+- Non-x86_64 targets: issue #10 'Support other architectures' is open and unaddressed; SConstruct only builds arch:x64
+- Production or long-lived use: no commits since April 2015, and the SConstruct build script itself prints a warning that 'top-of-tree is not maintained any more, and contains some bugs. In particular, some regular expressions are incorrectly evaluated,' pointing to an apparently-unfinished successor (arames/regit)
+- You need permissive licensing or static linking into a non-GPL product: license is GPL-3.0
+
+**Integration:** static lib · none for the core library at build time (SCons is the build tool, not a runtime dependency); the benchmark harness separately depends on RE2, V8, and PCRE for comparison only · C++11 (SConstruct sets CXXFLAGS -std=c++11); specific compiler/version not stated; built with SCons · x86_64 only, SIMD path assumes SSE4.2 (kMaxParallelChars=4 in src/cpu.h); SConstruct has Linux and macOS build configs; other architectures are an open, unimplemented issue (#10)
+
+**Vs siblings:** Pick rejit over BLARE or re2jit only if you want a from-scratch, dependency-free non-backtracking JIT engine to study or extend and don't need RE2-compatible behavior; BLARE reports broader RE2/PCRE2/Boost comparisons and re2jit stays API-compatible with RE2 (it falls back to RE2 for cases it doesn't optimize), while rejit offers neither RE2 API compatibility nor capture groups.
+
+**Gotchas:**
+- The project's own SConstruct prints a build-time warning: 'top-of-tree is not maintained any more, and contains some bugs. In particular, some regular expressions are incorrectly evaluated.'
+- No capture-group/submatch API — Match exposes only begin/end of the whole match (issue #6 open since 2014)
+- x86_64-only; the SIMD fast path assumes SSE4.2 and can be turned off at build time with simd:off
+- The public header include/rejit.h has `using namespace std;` at file scope, which can leak std:: names into including translation units
+
+**Status:** Abandoned since its last commit in April 2015; GPL-3.0, C++11, and small enough (~20 source files) to vendor as a source-drop, but the build script itself warns of known incorrect-match bugs and never reached a maintained successor.
+
+[repo](https://github.com/coreperf/rejit) · [benchmark](https://github.com/coreperf/rejit)
+
+#### text-search-and-indexing
+
+##### Manticore Search  `C++`  `GPL-3.0`  `active`  `Tier C`
+
+SQL/HTTP full-text and analytics search database, C++ core, positioned as a faster Elasticsearch alternative.
+
+**Beats:** Elasticsearch — Vendor blog (Manticore, Jul 2022) benchmarked Manticore 5.0.0-5.0.2 against Elasticsearch 7.15.2/8.3.2 on a 32-core SSD server (CPU model and compiler flags unstated): 4x faster on a 1.7B-row taxi dataset, 15x on 1.1M Hacker News comments, 22x on 10M nginx log lines, 25x faster bulk-load of the 1.7B-doc set (1h08m vs 28h33m via Logstash), and roughly 2x higher direct-load throughput for 50M docs (894,856 vs 416,788 docs/s, sharded configs) — though unsharded default Elasticsearch was actually 21% faster in that same test. The db-benchmarks.com suite behind these numbers is maintained by the Manticore team itself.
+
+**How:** Query execution is multi-threaded across all CPU cores with a cost-based optimizer choosing execution plans from indexed-data statistics. It offers both row-wise storage (faster, more RAM) and a separate columnar storage engine (Manticore Columnar Library) for datasets too large for RAM. Automatic secondary indexes use a PGM-index (Piecewise Geometric Model) for key-to-location mapping instead of classic B-trees. The core inverted-index/search engine descends from the Sphinx search engine, rewritten and extended in C++17.
+
+**Use it when:**
+- Log/analytics workloads (e.g. nginx logs, time-series) where columnar storage plus the cost-based optimizer avoid JVM/Lucene overhead
+- Teams that want SQL over full-text/analytics search rather than learning Elasticsearch's Query DSL, especially existing MySQL-protocol tooling
+- Ingest-heavy pipelines where bulk-load throughput matters more than incremental refresh latency
+- Resource-constrained deployments: README states ~40MB RSS for an empty instance
+- Single query needing both full-text and vector/KNN retrieval (hybrid search) without a separate vector DB
+
+**Skip it when:**
+- Need Elasticsearch's mature aggregation framework, Query DSL, or its large ecosystem of plugins/native Kibana support
+- Can't accept GPL-3.0 copyleft for embedding into proprietary systems (vs Elasticsearch's SSPL/Elastic license)
+- Require strict ACID guarantees: README states Manticore is 'not fully ACID-compliant', offering only isolated transactions and binary logging
+- Basing a purchase decision on the cited speedup numbers: the db-benchmarks.com suite behind them is maintained by the same Manticore team, so treat 4x/15x/22x/25x/2x figures as vendor-reported, not independent
+- Need multi-master replication stronger than Galera-based 'virtually synchronous' replication provides
+
+**Integration:** source-drop · Bundled Manticore Columnar Library (git submodule) for columnar storage; optional ICU for CJK/Chinese segmentation; various vendored libs under .gitmodules. Not a linkable library — ships as searchd/indexer binaries. · C++17, CMake 3.17+ · Linux (Debian/Ubuntu, RHEL/CentOS/Amazon/Oracle/Fedora families) and macOS via Homebrew per install script; Windows has its own CI test template (win_test_template.yml). x86-64 assumed; ARM support not documented in README.
+
+**Vs siblings:** The sibling entries are either embeddable Lucene-replacement indexing libraries (IResearch, Tantivy, SeekStorm) or single-machine grep-replacement CLIs (frg, ngi, trigrep, ugrep); Manticore is the only full standalone SQL/HTTP search server in the set. Pick it when you need a deployable, replicated, multi-user database with backup/restore and SQL access rather than a library to embed in your own indexing pipeline, and specifically over Elasticsearch when your workload matches log/analytics/full-text patterns and you can accept GPL-3.0 and a smaller ecosystem.
+
+**Gotchas:**
+- README explicitly states Manticore is 'not fully ACID-compliant' despite having isolated transactions and binlog
+- Columnar storage saves RAM but README says it gives 'lower performance than row-wise storage for some kinds of queries' — pick per-table
+- GPL-3.0 licensed and historically forked from the Sphinx search engine — copyleft terms differ materially from Elasticsearch's license
+- The benchmark suite (db-benchmarks.com / github.com/db-benchmarks/db-benchmarks) used for the headline multipliers is run by the same Manticore team (top contributor sanikolaev), not an independent third party
+
+**Status:** Actively maintained (record's last_commit is current, large nightly/CI test matrix in .github/workflows) and free to install via package manager, Docker, or source build; GPL-3.0 licensing is the main friction point for proprietary embedding rather than any maturity concern.
+
+[repo](https://github.com/manticoresoftware/manticoresearch) · [benchmark](https://manticoresearch.com/blog/manticore-alternative-to-elasticsearch/)
 
 ### stdlib-replacements
 

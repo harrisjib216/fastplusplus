@@ -4,6 +4,79 @@ No license, unclear/non-OSI license, mixed licensing, or paper-only. Study the i
 
 ## Verified
 
+### parsing-and-text
+
+#### lexers-tokenizers
+
+##### StreamTok (Static Analysis for Efficient Streaming Tokenization)  `Rust`  `no license`  `unknown`  `Tier B`
+
+Rust streaming tokenizer using static max-lookahead analysis for O(1)-per-symbol maximal-munch tokenization vs flex's backtracking
+
+**Beats:** flex — Peer-reviewed benchmark (RQ3, Fig. 10) reports StreamTok 2x-3x faster than flex-generated C lexers across JSON/CSV/TSV/XML/YAML/FASTA/DNS-zone/log grammars on a 10MB input; application-level tests (RQ5, Table 2) show 2.5x-3.1x for log-to-TSV and up to 5.39x for JSON minify. RQ1-RQ2 ran on an Intel Xeon E5-2640 v4 @ 2.40GHz/128GB RAM; the flex throughput comparisons (RQ3-RQ6) ran on an AMD EPYC 7252 8-core @ 3.10GHz/256GB RAM. Rust compiler version and build flags are not stated in the paper.
+
+**How:** The paper introduces 'maximum token neighbor distance' (max-TND): the worst-case number of extra symbols needed to confirm no longer token is possible past a given match. When max-TND is bounded (statically computed via a co-accessibility fixpoint over the tokenizer DFA, O(state^2)), StreamTok builds a second automaton via powerset construction that runs K symbols ahead of the main DFA, so a fixed-size lookahead buffer of size K replaces flex's unbounded backtracking. This turns per-symbol tokenization from flex's O(k) backtracking (worse for pathological grammars) into O(1) amortized work per symbol.
+
+**Use it when:**
+- You're building/generating a tokenizer for a grammar you can statically analyze up front (JSON, CSV/TSV, XML, YAML, log formats, DNS zone files) and want to prove/bound the lookahead cost
+- Streaming or memory-constrained pipelines where you cannot buffer the whole input the way a flex backtracking lexer might need to
+- Grammars with pathological repeated-prefix ambiguity (the paper's synthetic (a{0,k}b)|a family) where flex's backtracking degrades with grammar parameter k but StreamTok stays O(1) per symbol
+- Research/prototyping contexts where you can implement the pre-analysis + Rust runtime yourself, since there is no published crate
+
+**Skip it when:**
+- You need a drop-in flex replacement today: no public source, crate, or build artifact exists for StreamTok as of this writing
+- Your grammar has unbounded max-TND — the paper found this true for ~32% of a 2,669-grammar GitHub sample, including C, R, and SQL, which fall back to non-constant (unbounded lookahead) behavior
+- You need production maturity guarantees: this is a single ASPLOS '26 paper's evaluation artifact with no maintenance history, license, or usage outside the paper
+- Computing max-TND for an arbitrary grammar is PSPACE-hard in the worst case (practical instances reportedly analyze in <100ms for 99.4% of the sampled grammars, but there's no guarantee for yours)
+- You need C interop or the flex/re2c ecosystem (skeleton files, %option flags, yacc/bison integration) — StreamTok has none of that tooling
+
+**Vs siblings:** Pick StreamTok over the other flex-beating entries (LRSTAR, simd-lexing, Ragel, CrossDB's hand-written parser) only if you specifically need a formal, provable bound on streaming lookahead for maximal-munch tokenization and are willing to reimplement from the paper — those other tools are usable today with real repos, while StreamTok has no code to run.
+
+**Gotchas:**
+- Falls back to unbounded lookahead behavior on grammars with unbounded max-TND (no error is thrown per se, but the O(1) guarantee disappears)
+- Requires an upfront static-analysis and DFA/powerset-construction build step before any streaming can start, unlike flex's simpler generate-then-run model
+- No public source, artifact, or package exists to inspect for actual API ergonomics or unsafe code use
+
+**Status:** Maintenance status is unknown because no public repository exists at all; usability is 'reference' — this is an ASPLOS '26 paper's evaluation prototype, not a distributed library.
+
+[benchmark](https://github.com/bojieli/ai-infra-book/blob/main/references/proceedings/ASPLOS/2026/paper-152.txt)
+
+#### regex-engines
+
+##### BLARE (Blazingly Fast Regular Expression)  `C++`  `no license`  `stale`  `Tier B`
+
+Research framework that decomposes regexes into reordered sub-matches via a bandit-picked plan, layered on RE2/PCRE2/Boost/ICU.
+
+**Beats:** RE2 — The peer-reviewed paper (Proc. ACM Manag. Data 1(2), Art. 152, SIGMOD 2023), run single-threaded on an Azure Xeon Platinum 8370C VM with C++17 code at -O3, reports BLARE 1.6x-3.7x faster than RE2 (09-2022 build), 3.4x-7.9x faster than Boost 1.65.1, and 3.1x to over 100x faster than PCRE2 10.40/JIT, across 2 Microsoft-internal production log workloads and the public US-Accidents Kaggle dataset; only the RE2/US-Accidents comparison (~1.6x) can be independently rerun from the public repo, and the ACM DOI page returns HTTP 403 to automated fetches (paper is mirrored as BLARE.pdf in the repo).
+
+**How:** The regex is split (3-way split_regex or N-way split_regex_multi) into sub-patterns, and a multi-armed-bandit policy picks which sub-pattern to evaluate first based on observed cost/selectivity, so cheap or highly discriminating fragments reject non-matching lines before the full pattern is ever run through the underlying engine. Because the same regex is reused across many lines (log/dataset scanning), the bandit amortizes its exploration cost and converges on a near-optimal evaluation order for that workload; the final per-fragment match still calls the wrapped engine (RE2/PCRE2/Boost/ICU), so BLARE is an execution-order optimizer on top of those engines, not a replacement matcher.
+
+**Use it when:**
+- Batch, single-threaded scanning of many lines against one recurring regex (e.g. log parsing, dataset filtering) where the bandit can amortize warm-up
+- You already depend on RE2, PCRE2, Boost.Regex, or ICU Regex and want extra throughput without switching engines
+- Regexes with decomposable structure (alternations, literal anchors) that benefit from evaluating a cheap/selective piece first
+- Reproducing or extending the SIGMOD 2023 paper's results, using original_codebase/BLARE_CODE for exact numbers
+- First-match-per-line extraction workloads similar to the paper's US-Accidents / production log benchmarks
+
+**Skip it when:**
+- Any production dependency requiring maintenance or support: last commit 2023-11-20, 9 stars, 0 forks, no CI visible
+- Anywhere licensing matters: no LICENSE file, so GitHub marks it all-rights-reserved by default
+- Environments that can't add Abseil, Boost >=1.65.1, ICU4C, and PCRE2/jPCRE2 as build dependencies
+- Multi-threaded or latency-sensitive services: paper benchmarks are single-threaded only; thread safety is not documented
+- Anything needing the exact paper numbers from current main: README states main-branch code 'may not produce results identical to that in the BLARE paper'
+- Non-Linux targets: build instructions are Ubuntu/apt-based and the original experiment flags use -march=native, tying binaries to the build host's CPU
+
+**Vs siblings:** Pick BLARE over re2jit or rejit only when the goal is specifically reproducing or studying the SIGMOD 2023 decomposition/bandit technique on RE2, PCRE2, Boost, or ICU; for a production RE2 speedup, re2jit is the safer sibling (20-30% faster on capture-group workloads, no extra Abseil/Boost/ICU/PCRE2 dependency chain) since BLARE is stale and unlicensed.
+
+**Gotchas:**
+- Main-branch code is under active change and the README itself warns it may not reproduce the paper's numbers; use original_codebase/BLARE_CODE for that
+- No LICENSE file is present (GitHub reports 'license: none'), so usage/redistribution rights are unclear by default
+- The bundled US-Accidents CSV requires 'git lfs pull'; a newer Kaggle CSV format breaks the hard-coded read_traffic parser and needs manual edits
+- Two of the three paper workloads (DB-X, System-Y) are Microsoft-internal logs and cannot be rerun outside Microsoft; only the 1.6x-vs-RE2 US-Accidents result is publicly reproducible
+
+**Status:** Stale research prototype (last commit 2023-11-20, 9 stars, no LICENSE) — useful as a reference implementation of the decompose-and-reorder technique, not something to take a runtime dependency on.
+
+[repo](https://github.com/mush-zhang/Blare) · [benchmark](https://dl.acm.org/doi/10.1145/3589297)
+
 ### stdlib-replacements
 
 #### allocators
@@ -150,6 +223,80 @@ SIMD quaternary-interpolation search over sorted 16-bit arrays in 16-element blo
 [repo](https://github.com/lemire/Code-used-on-Daniel-Lemire-s-blog) · [benchmark](https://lemire.me/blog/2026/04/27/you-can-beat-the-binary-search/)
 
 ## Unverified claims (tier C/D)
+
+### parsing-and-text
+
+#### text-search-and-indexing
+
+##### trigrep  `Rust`  `no license`  `active`  `Tier C`
+
+Rust CLI that pre-builds a disk-backed trigram index of a repo, then searches only candidate files, beating ripgrep in a first-party benchmark.
+
+**Beats:** ripgrep — First-party README benchmark on a clone of git/git (4 patterns, 5 timed runs + 1 warmup each, index pre-built) reports mean query time 0.0405s for trigrep vs 0.0640s for ripgrep and 0.5990s for grep, i.e. ~1.58x and ~14.79x; medians for trigrep and ripgrep are tied at 0.0500s. Timed with `/usr/bin/time -p` (10ms resolution) over 20 samples; no CPU model or rustc version given, and index build time is excluded.
+
+**How:** Indexing extracts every overlapping 3-byte trigram per file and writes a sorted, mmap'd lookup table (`lookup.bin`) plus posting lists (`postings.bin`), enabling binary search instead of a byte scan. At query time the regex is parsed into a `regex-syntax` HIR and decomposed into an AND/OR tree of literal trigrams; posting lists are intersected/unioned (smallest-first) to shrink the file set before the real regex engine ever runs. An 8-bit `loc_mask` (byte-offset adjacency) and an 8-bit `next_mask` Bloom filter on the following byte further prune false-positive candidates pre-verification. Indexing itself is parallelized with rayon.
+
+**Use it when:**
+- Large, mostly-static trees (git.git-scale or bigger) searched repeatedly, so index-build cost amortizes
+- AI coding agents or scripted workflows issuing many regex searches per checkout, as the README targets
+- Patterns with real literal content (e.g. TODO|FIXME, ^#include) that decompose into selective trigrams
+- Need for grep-compatible text output or structured JSON output in the same tool
+- Prebuilt-binary install wanted on Linux/macOS (x86_64/aarch64) or Windows (x86_64) without a Rust toolchain
+
+**Skip it when:**
+- One-off or rarely-repeated searches on a tree: index-build time is excluded from the published benchmark and isn't amortized
+- Anything requiring code reuse or redistribution rights: no LICENSE file and no license field in either Cargo.toml, so it is reference-only
+- Patterns with no extractable literal (bare character classes, anchors, `.`) fall back to a MatchAll node, losing index selectivity
+- Decisions resting on the headline 1.58x: trigrep and ripgrep have the same 0.0500s median, so the gap is mean-only and close to the 10ms timer resolution used
+- Concurrent or long-lived multi-process use where index staleness/locking matters: thread/process safety around the on-disk index is not documented
+
+**Vs siblings:** Pick trigrep over ngi or ugrep-indexer mainly for its Cursor-derived on-disk format (mmap'd trigram lookup + loc/next-mask filtering) rather than for the strength of the evidence: ngi reports 1.7x-5.9x and ugrep-indexer 10x-21x with clearer separation, while trigrep's own numbers show tied medians and only a mean-based 1.58x over ripgrep.
+
+**Gotchas:**
+- Search auto-builds the index if missing, so a cold first query pays full index-build cost that the published benchmark excludes
+- No LICENSE file and no license field in Cargo.toml: code can be read but not legally reused or redistributed
+- The next_mask adjacency filter is a Bloom filter (false positives possible, no false negatives); correctness depends on the final real-regex verification pass, not the index alone
+- `trigrep status` checks staleness against git HEAD but the index is not auto-refreshed on file edits without rerunning `trigrep index`
+
+**Status:** Actively maintained (last commit 2026-04-30, 46 stars) but ships with no license, so usability is reference-only rather than reusable/redistributable.
+
+[repo](https://github.com/PythonicNinja/trigrep) · [benchmark](https://github.com/PythonicNinja/trigrep#benchmark)
+
+#### unicode-utf8
+
+##### Parabix (bitstream UTF-16 validation kernel)  `C++`  `OSL-3.0`  `abandoned`  `Tier C`
+
+Bitstream-parallel text-processing framework whose LLVM-JIT'd SIMD kernel beat a simdutf CLI wrapper on UTF-16 validation.
+
+**Beats:** simdutf — On valid UTF-16LE corpora (128/256 MiB, single thread, Apple M1, median of 7 runs), a third-party benchmark measured Parabix's SIMD kernel at 2900-3760 MiB/s raw (5075-5205 MiB/s overhead-adjusted) against a simdutf v9.0.0 CLI wrapper (clang -O3 -std=c++17) at 1824-2532 MiB/s raw (1883-2600 MiB/s adjusted) -- about 1.18-2.0x raw and 2.0-2.7x adjusted -- but the simdutf wrapper reads the whole file into memory before validating while Parabix streams it, so part of the gap reflects I/O handling rather than the validation kernels.
+
+**How:** Core technique is Cameron et al.'s parallel bit-stream method: input is transposed (s2p) into 8/16 bitstreams, each holding one bit-position across the whole buffer, turning per-character branching into bitwise AND/OR/shift ops across a full register width, plus optional multicore pipeline parallelism (--thread-num). On this specific benchmark part of the apparent win is a process/I-O gap rather than kernel speed: Parabix streams the file through ReadSourceKernel while the simdutf wrapper CLI reads the whole file into a std::vector via ifstream before validating; the benchmark authors' own methodology doc says I/O is not equalized between the two.
+
+**Use it when:**
+- Building a new streaming text pipeline (regex search, XML parsing, transcoding) where adopting the whole Parabix framework is acceptable, not just linking a validator
+- Multi-stage text transforms where replacing many per-character branches with bitwise ops across a full register/vector width is the goal (icgrep-style regex matching)
+- Research or teaching on bit-parallel SIMD algorithms and LLVM JIT code generation
+- Environments that can carry an LLVM 5+/Boost 1.61+/Z3/CMake toolchain at both build and run time
+- Workloads that also want multicore pipeline parallelism (thread-num > 1) inside the same kernel model
+
+**Skip it when:**
+- You need a small, embeddable UTF-8/UTF-16 validator with a stable C/C++ API — no such component exists in this mirror; use simdutf directly
+- Startup latency matters: Parabix's LLVM JIT pipeline load adds ~0.019s fixed overhead per process vs ~0.002s for simdutf, dominating small-input timings
+- You need permissive licensing — Parabix/icgrep is OSL-3.0 (strong copyleft), unlike simdutf's permissive license
+- You need an actively maintained project — no commits on this mirror since 2021-08-10
+- You need UTF-8 rather than UTF-16 — this benchmark and the validator it measures are UTF-16LE only
+
+**Vs siblings:** None of the catalogued UTF-8 siblings (ada-url/idna, simdutf8, xutf, SimdUnicode, utf8_range) target UTF-16, so there's no direct sibling for this workload; pick Parabix over building your own UTF-16 path only if you're already adopting its whole bit-parallel framework for other text processing, not for a standalone validator.
+
+**Gotchas:**
+- The benchmarked tools/utf16validate isn't in this GitHub mirror; it's added by a third-party patch to Parabix commit f0369dd pulled from the SFU GitLab, and that commit postdates this mirror's last sync (2021-08-10)
+- Fixed per-process overhead (~0.019s, mostly LLVM JIT pipeline load) is roughly 9x simdutf's (~0.002s) — raw wall-clock throughput on small inputs is dominated by this, use the benchmark's overhead-adjusted numbers instead
+- GitHub reports this repo's license as NOASSERTION even though the README and OSL3.0.txt/LLVM-LICENSE.txt in the tree declare OSL-3.0 for Parabix code and the LLVM Release License for vendored LLVM files
+- This is a read-only mirror: it does not accept GitHub pull requests; patches go to an SFU GitLab research repo instead
+
+**Status:** Abandoned on this mirror since 2021-08-10 (no evidence in this session of active development elsewhere) and usability is mixed: it's a research framework with no stable API, requiring a full LLVM/Boost/Z3 build toolchain rather than a library you can drop in.
+
+[repo](https://github.com/parabix/parabix-devel-mirror) · [benchmark](https://github.com/dakshkashyap/cmpt479-project-group8/blob/main/results/utf16_benchmark_apple_arm64_summary.md)
 
 ### stdlib-replacements
 

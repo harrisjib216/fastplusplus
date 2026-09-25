@@ -1,0 +1,45 @@
+{
+  "id": "https://github.com/rusticstuff/simdutf8",
+  "one_liner": "SIMD-accelerated UTF-8 validator for Rust, a drop-in replacement for std::str::from_utf8, up to 23x faster.",
+  "what_it_does": "simdutf8 checks whether a byte buffer is valid UTF-8 without doing a full decode, the same job as std::str::from_utf8. It ships two API flavors: `basic`, optimized purely for speed with a zero-sized error type and no failure position, and `compat`, which mirrors std's signature exactly including `valid_up_to()`/`error_len()` for locating the first bad byte.",
+  "how_it_is_fast": "It ports simdjson's SIMD UTF-8 validation algorithm (Keiser & Lemire, 'Validating UTF-8 In Less Than One Instruction Per Byte') to Rust, with its own added ASCII fast path and x86 prefetching. At runtime on x86 it dispatches to the best available instruction set (AVX-512, AVX2, or SSE4.2) via `is_x86_feature_detected!`; aarch64/NEON, armv7/NEON and wasm32 simd128 are also supported, with SIMD chosen at compile time on those. Inputs under 64 bytes are simply handed to `core::str::from_utf8()` instead of invoking SIMD. The `basic` API further speeds things up by only checking the aggregated error state once at the end rather than per-block.",
+  "when_to_use": [
+    "Validating large buffers (well over 64 bytes) of UTF-8, especially non-ASCII text, where the current bottleneck is std::str::from_utf8",
+    "Parsers or ingestion pipelines that mostly see valid or mostly-valid UTF-8 and want the fastest possible check before trusting the bytes",
+    "Rust targets with SIMD support: x86/x86-64 (SSE4.2/AVX2/AVX-512), aarch64, wasm32, or armv7 on nightly",
+    "no_std/embedded projects that can pick a target CPU feature at compile time via RUSTFLAGS",
+    "Cases needing detailed error position on failure via the `compat` API instead of hand-rolled validation"
+  ],
+  "when_not_to_use": [
+    "Buffers routinely under 64 bytes — simdutf8 just forwards these to std::str::from_utf8, so there's no win and only added dependency weight",
+    "Platforms without any of the supported SIMD extensions — it silently falls back to std with no speedup",
+    "You need every from_utf8 call to also report the exact invalid byte position at basic-API speed — that requires the slightly slower `compat` flavor",
+    "AltiVec/PowerPC targets — SIMD support there is an open feature request (issue #110), not implemented",
+    "Taking the README's 23x/11x numbers at face value for today's stack — they're from 2021 (simdutf8 v0.1.2, Rust 1.52/1.54-nightly, simdjson v0.9.2) and haven't been re-run against current std or crate versions"
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "flexpect (runtime, used internally); rustversion (build-dependency)",
+    "min_toolchain": "MSRV 1.38.0 for the crate itself; aarch64 NEON needs Rust 1.61+, AVX-512 needs Rust 1.89+, armv7 NEON needs nightly",
+    "platforms": "x86/x86-64 (SSE4.2, AVX2, AVX-512), aarch64, armv7 (nightly, feature-gated), wasm32 (simd128), falls back to core::str::from_utf8 elsewhere",
+    "thread_safety": "not documented explicitly; the validation functions are pure and stateless (no shared mutable state), so concurrent calls are safe",
+    "drop_in_for_baseline": "partial — explain: basic::from_utf8 matches std's Ok(&str) return but its error type carries no position; compat::from_utf8 is a full drop-in including error details, at a small speed cost versus basic"
+  },
+  "gotchas": [
+    "Building with opt-level = \"z\" disables inlining and makes it noticeably slower — the README explicitly warns against it",
+    "no_std builds pick the SIMD implementation at compile time, not runtime, so you must set RUSTFLAGS (e.g. target-feature=+avx2 or +neon) to get anything faster than the fallback",
+    "Internals use unsafe SIMD intrinsics; the project says it's fuzzed and has 'no known bugs' but that's a maintainer claim, not a formal audit",
+    "AVX-512 is only auto-selected on CPUs supporting VBMI2 (Ice Lake+) to avoid the frequency throttling older AVX-512 CPUs incur"
+  ],
+  "pick_this_over_siblings_when": "The other same-category entries (xutf, SimdUnicode, Parabix, utf8_range) beat C++/.NET/bitstream validators, not Rust's std — pick simdutf8 when you're writing Rust and want an actual crate that's near-drop-in for std::str::from_utf8. If your real target is beating simdutf (C++) specifically, simdutf8's own maintainers haven't benchmarked that comparison (open issue #54); look at xutf or SimdUnicode instead.",
+  "verified_claims_summary": "On an AMD Ryzen 7 PRO 3700 (Zen2, Linux, Rust 1.52.0, default cargo bench profile), simdutf8's basic API validated valid non-ASCII UTF-8 up to 23x faster than std::str::from_utf8 and pure ASCII up to 4x faster; on an Apple M1 (aarch64, rustc 1.54.0-nightly) it was up to 11x faster on non-ASCII and up to 4x on ASCII. It was also faster than simdjson's own UTF-8 validator (simdutf8 built with #[inline(never)] for that comparison) on almost all tested inputs.",
+  "status_note": "Actively maintained (last default-branch commit 2026-06-15, v0.1.5 on crates.io) under MIT OR Apache-2.0; adds as an ordinary Cargo dependency, no vendoring needed.",
+  "sources_read": [
+    "https://github.com/rusticstuff/simdutf8",
+    "https://github.com/rusticstuff/simdutf8#benchmarks",
+    "https://github.com/rusticstuff/simdutf8/blob/main/Cargo.toml",
+    "https://github.com/rusticstuff/simdutf8/blob/main/src/lib.rs",
+    "https://github.com/rusticstuff/simdutf8/issues"
+  ],
+  "confidence": 0.75
+}

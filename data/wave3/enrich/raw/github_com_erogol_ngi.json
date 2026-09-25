@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/erogol/ngi",
+  "one_liner": "CLI that builds a trigram index of a codebase to pre-filter files before ripgrep does the actual regex match.",
+  "what_it_does": "ngi is a command-line tool, not a library: `ngi search 'pattern'` auto-builds an inverted trigram index of the working tree on first run, then narrows candidate files before handing the regex to ripgrep for matching. It exposes ripgrep-like flags (-i, -l, -f, -C/-A/-B, -m, --json) under its own `ngi` binary and subcommands (search, index, status, clean), not as an `rg` wrapper. The index lives in `.ngi/` at the git root and is reindexed incrementally as files change.",
+  "how_it_is_fast": "Every file is decomposed into 3-byte substrings (trigrams) and stored as an inverted index (trigram -> posting list of files), mmap'd and binary-searched at query time -- the classic trigram-index scheme (Russ Cox / Google Code Search). regex-syntax parses the pattern to extract required literal substrings, whose trigrams are intersected to shrink the candidate set before rg runs at all. If the surviving candidates exceed ~10% of files, ngi skips the index and lets rg's own file walker do a full scan instead. Note: DESIGN.md describes a fancier 'sparse n-gram' weighted/monotonic-stack extraction scheme (inspired by Cursor's blog post), but src/ngram.rs shows the shipped v0.1.0 index is plain fixed-length trigrams hashed with FNV-1a -- the sparse-gram design in the doc isn't what's actually implemented.",
+  "when_to_use": [
+    "Large trees (tens of thousands of files, Linux-kernel scale) searched repeatedly with the same working copy",
+    "Queries with extractable literal substrings (identifiers, macro/symbol names) rather than pure wildcards or anchors",
+    "ripgrep is already installed and on PATH -- ngi is a pre-filter in front of it, not a replacement matcher",
+    "Selective queries expected to touch well under 10% of files, where the index actually narrows the candidate set",
+    "Agentic/tooling workflows that want JSONL (`--json`) output alongside the speedup"
+  ],
+  "when_not_to_use": [
+    "Broad/unselective patterns (>10% of files match) -- ngi's own fallback logic hands the whole scan to rg, so no speedup applies",
+    "One-off searches on a tree you won't query again -- index build (16s / 146MB for the Linux kernel) isn't worth it for a single search",
+    "Rapidly-changing or ephemeral checkouts (CI runners, throwaway containers) where keeping `.ngi/` current adds overhead each run",
+    "Patterns with no extractable literals (e.g. `.*`, bare character classes) -- no trigram filtering is possible",
+    "Anything production-critical: v0.1.0, 21 stars, single first-party benchmark, no third-party validation or issue history yet"
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "anyhow, clap, crc32fast, ignore, memmap2, rayon, regex, regex-syntax (Rust, build-time); ripgrep recommended on PATH at runtime, falls back to the built-in regex crate if absent",
+    "min_toolchain": "Rust edition 2024 (rustc 1.85+); CI builds against Rust stable",
+    "platforms": "CI covers Linux (ubuntu-latest) and macOS (macos-latest) only; Windows is untested and undocumented",
+    "thread_safety": "not documented; index build parallelizes file walking/hashing via rayon, and search reads a read-only mmap'd index, but there are no stated guarantees for concurrent writers to the same .ngi/ index",
+    "drop_in_for_baseline": "partial — explain: mirrors common ripgrep flags (-i, -l, -f, -C/-A/-B, -m, --json) under `ngi search`, but it is a separate binary/subcommand CLI with its own index directory, not an `rg` alias or wrapper script"
+  },
+  "gotchas": [
+    "DESIGN.md documents a weighted 'sparse n-gram' extraction algorithm that the shipped code does not implement -- src/ngram.rs is plain fixed-length trigrams; don't take the design doc as current behavior",
+    "`.ngi/` must be added to .gitignore manually per the README -- a stale or accidentally-committed index is a footgun",
+    "Falls back to a full rg scan silently whenever a query matches >10% of files; `ngi search --explain` is the only way to see which mode (indexed/rg-fullscan/full-scan/no-index) actually ran",
+    "The FNV-1a trigram hash is pinned by unit tests as part of the on-disk index format, implying a future hash change would need an index rebuild/migration"
+  ],
+  "pick_this_over_siblings_when": "Pick ngi specifically when you already run ripgrep and just want a pre-filtering index layer in front of it (it literally shells out to rg for the match step) with an explicit >10%-match fallback rule; trigrep and frg make similar 'faster than ripgrep' claims without that documented fallback threshold, and none of the three ripgrep-adjacent siblings has more than a first-party README benchmark backing it.",
+  "verified_claims_summary": "First-party README benchmark on the Linux kernel source tree (92,916 files): ngi beat ripgrep by 1.7x-5.9x and grep -r by 13x-69x across 5 regex patterns (e.g. 27ms vs rg's 161ms vs grep's 1866ms for `__attribute__.*section`), with 100% result parity vs ripgrep (13/13 queries). No CPU/hardware, rustc or ripgrep version, or run count is given, and the 16s/146MB one-time index build for the kernel tree is excluded from the reported timings.",
+  "status_note": "Active as of the last commit (2026-03-24) but very early: v0.1.0, 21 stars, MIT-licensed, no third-party benchmark or issue history yet; the codebase is a small single crate (8 source files under src/) so it's easy to vendor or fork if development stalls.",
+  "sources_read": [
+    "https://github.com/erogol/ngi",
+    "https://github.com/erogol/ngi#benchmarks",
+    "https://github.com/erogol/ngi/blob/main/README.md",
+    "https://github.com/erogol/ngi/blob/main/DESIGN.md",
+    "https://github.com/erogol/ngi/blob/main/CHANGELOG.md",
+    "https://github.com/erogol/ngi/blob/main/Cargo.toml",
+    "https://github.com/erogol/ngi/blob/main/src/lib.rs",
+    "https://github.com/erogol/ngi/blob/main/src/ngram.rs",
+    "https://github.com/erogol/ngi/blob/main/.github/workflows/ci.yml",
+    "https://github.com/erogol/ngi/issues"
+  ],
+  "confidence": 0.6
+}

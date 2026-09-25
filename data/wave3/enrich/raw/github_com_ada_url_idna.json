@@ -1,0 +1,56 @@
+{
+  "id": "https://github.com/ada-url/idna",
+  "one_liner": "C++20 IDNA to_ascii/to_unicode (UTS #46) domain-name encoder, about 1.26x faster than ICU.",
+  "what_it_does": "Implements the WHATWG/UTS #46 domain-to-ASCII and domain-to-Unicode algorithms used to normalize internationalized domain names inside URL hosts (e.g. \"me\\u00dfagefactory.ca\" -> \"xn--meagefactory-m9a.ca\"). The API is free functions over std::string_view/std::string, either returning a std::string (empty on error) or writing into an out-parameter and returning bool; it is not a drop-in replacement for ICU's uidna_openUTS46/uidna_nameToASCII_UTF8 C API. Ships as a normal CMake source library or, via singleheader/amalgamate.py, as an amalgamated single header+cpp pair for source-drop vendoring.",
+  "how_it_is_fast": "An all-ASCII fast path (from_ascii_to_ascii) skips the whole Unicode pipeline and just lowercases in place. Non-ASCII input goes through a single UTF-8->UTF-32 transcode into a pre-sized buffer, a mapping pass into an exactly-sized second buffer to avoid reallocation, and an is_already_nfc check that skips NFC normalization entirely when the input is already normalized; labels are then walked with a single pointer scan instead of repeated string::find calls. Unicode/IDNA lookup tables are stored DEFLATE-compressed on disk and inflated once, lazily, behind an atomic-CAS/spin-wait (no mutex) into the same O(1) multi-stage lookup layout used pre-compression, so steady-state lookups are plain table hits and only first use pays an inflate cost.",
+  "when_to_use": [
+    "Already building or embedding a URL/host-normalization layer and want IDNA to_ascii/to_unicode without linking full ICU",
+    "C++20 toolchain available (GCC 12+, LLVM/Clang 12+, MSVC 2022)",
+    "Workload is many small domain-name labels (matches the benchmark's label-oriented shape), not bulk text",
+    "Want to vendor a small, dual Apache-2.0/MIT-licensed source-drop instead of a system Unicode dependency",
+    "Building something with precedent for this exact use, e.g. Node.js or a ClickHouse-style URL/host column"
+  ],
+  "when_not_to_use": [
+    "Need general-purpose UTF-8 validation or transcoding, not domain-name IDNA specifically (out of scope for this library)",
+    "Stuck on a pre-C++20 toolchain",
+    "Need ICU's broader Unicode services (locale, collation, etc.) beyond IDNA",
+    "Want strong benchmark confidence: only one README micro-benchmark over 6 fixed sample domain strings, ICU version unstated, and the measured gain is modest (~1.26x)",
+    "Want a library with a long track record; only 69 stars and comparatively young/niche despite active maintenance"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none for the core library; optional simdutf for UTF transcoding via ADA_USE_SIMDUTF (off by default); benchmarks/tests pull Google Benchmark, GoogleTest, and simdjson via CPM but are not needed to use the library",
+    "min_toolchain": "C++20 (GCC 12+, LLVM/Clang 12+, MSVC 2022 per README); note the singleheader demo.cpp is documented as compiled with -std=c++17, but the library core itself requires C++20",
+    "platforms": "portable C++20, no SIMD/arch requirement in the core path; explicit byte-swap code in table_store.hpp for big-endian platforms (e.g. s390x)",
+    "thread_safety": "table initialization is thread-safe via atomic CAS + spin-wait, no mutex (table_store.hpp); ensure_tables() returns false on init failure (OOM/corrupt blob), which callers must treat as a hard error; otherwise not documented beyond that",
+    "drop_in_for_baseline": "partial — different API shape than ICU: std::string_view free functions vs ICU's uidna_openUTS46/uidna_nameToASCII_UTF8 C API, so a small wrapper is needed to substitute it"
+  },
+  "gotchas": [
+    "to_ascii/to_unicode may accept or even produce invalid domains by design (documented WHATWG carve-outs), not strict RFC validity enforcement",
+    "Inputs over max_domain_input_bytes (16384 bytes) are rejected outright rather than truncated",
+    "Two API shapes exist: the value-returning to_ascii() has an ambiguous empty-string-on-error case; the bool-returning out-parameter overload avoids that ambiguity",
+    "Table inflate happens lazily on first call; a corrupted/OOM init path is a hard error per the source comments, not a silent fallback"
+  ],
+  "pick_this_over_siblings_when": "The catalogued siblings (simdutf8, xutf, SimdUnicode, utf8_range, encoding_rs, Boost.Text, unicode-transforms, etc.) are general UTF-8/Unicode validators or transcoders and don't do domain-name IDNA at all. Pick ada-url/idna specifically for URL host normalization (to_ascii/to_unicode), not as a substitute for those general-purpose libraries.",
+  "verified_claims_summary": "On Apple M1 Max with LLVM 14 (C++20, Release build via the repo's own CMake benchmark target), Google Benchmark's to_ascii tool measured Ada at 1504 ns/op (48.5 M/s, ~3.99 M domains/s) versus ICU's uidna_nameToASCII_UTF8 at 1898 ns/op (38.5 M/s, ~3.16 M domains/s), over a fixed set of 6 sample domain strings defined in benchmarks/to_ascii.cpp — about 1.26x faster.",
+  "status_note": "Actively maintained (last commit 2026-08-24, 5 open issues, used by Node.js and referenced in a ClickHouse PR); dual Apache-2.0/MIT licensed and small enough to vendor as a source-drop despite a modest 69-star footprint.",
+  "sources_read": [
+    "https://github.com/ada-url/idna",
+    "https://github.com/ada-url/idna#benchmarks",
+    "https://github.com/ada-url/idna (readme via gh api)",
+    "https://github.com/ada-url/idna/git/trees/HEAD (recursive file tree via gh api)",
+    "https://github.com/ada-url/idna/blob/main/include/idna.h",
+    "https://github.com/ada-url/idna/blob/main/CMakeLists.txt",
+    "https://github.com/ada-url/idna/blob/main/cmake/idna-flags.cmake",
+    "https://github.com/ada-url/idna/blob/main/singleheader/README.md",
+    "https://github.com/ada-url/idna/blob/main/src/to_ascii.cpp",
+    "https://github.com/ada-url/idna/blob/main/benchmarks/to_ascii.cpp",
+    "https://github.com/ada-url/idna/blob/main/include/ada/idna/to_ascii.h",
+    "https://github.com/ada-url/idna/blob/main/src/table_store.hpp",
+    "https://github.com/ada-url/idna/blob/main/include/ada/idna/identifier.h",
+    "https://github.com/ada-url/idna/blob/main/include/ada/idna/limits.h",
+    "https://github.com/ada-url/idna (repo metadata via gh api: license, stars, pushed_at, archived, open_issues)",
+    "gh search issues --repo ada-url/idna \"bug OR performance OR crash\" (no matching open issues found)"
+  ],
+  "confidence": 0.6
+}

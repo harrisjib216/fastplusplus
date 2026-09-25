@@ -1,0 +1,47 @@
+{
+  "id": "https://github.com/simdutf/simdunicode",
+  "one_liner": "Drop-in faster UTF-8 validator for .NET, beating the runtime's private SIMD validator on non-ASCII text.",
+  "what_it_does": "SimdUnicode replaces .NET's internal Utf8Utility.GetPointerToFirstInvalidByte, which the runtime never exposes publicly. It ships one static method, SimdUnicode.UTF8.GetPointerToFirstInvalidByte(byte*, int, out int, out int), matching the runtime's own signature and semantics: a pointer past the buffer when valid, or to the first bad byte, plus UTF-16/scalar length adjustments. It is unsafe, pointer-based C#, not a wrapper over string or Span<byte>, so callers manage buffer pinning themselves.",
+  "how_it_is_fast": "Implements the Keiser-Lemire 'less than one instruction per byte' UTF-8 validation algorithm (arXiv 2010.03090), the same algorithm used by Node.js, Bun, GraalVM and PHP. It processes 16-64 bytes per iteration with SIMD shuffle-based lookup tables that classify byte roles and continuation-byte counts in a handful of vector ops instead of per-byte branches. A runtime dispatcher picks the widest available kernel per host CPU: NEON on ARM64, then AVX-512BW, AVX2, SSE4.2/SSSE3, falling back to a scalar implementation.",
+  "when_to_use": [
+    "Validating mixed or mostly non-ASCII UTF-8 (Arabic, CJK, emoji, Hindi, etc.) on a hot path",
+    "Running on AVX-512-capable x64 (Zen 4 / Ice Lake+) or ARM64 NEON hardware, where the gap is largest",
+    ".NET 10 codebases that need an unsafe byte* validation entrypoint mirroring the private runtime API",
+    "Need the offset of the first invalid byte, not just a valid/invalid boolean",
+    "Comfortable vendoring MIT-licensed source directly since there is no NuGet package"
+  ],
+  "when_not_to_use": [
+    "Pure-ASCII-heavy workloads on x64: .NET 10's own validator is faster there (107 vs 72 GB/s, Latin-Lipsum)",
+    "Need a managed/safe API; this is unsafe pointer-only, no documented Span<byte> overload",
+    "Fuzzing is still an open item (issue #27), so hardening against adversarial input is unproven beyond unit tests",
+    "Small user base (49 stars) and source-drop-only distribution, no package manager integration",
+    "Targeting anything outside C#/.NET; no bindings for other runtimes"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none",
+    "min_toolchain": ".NET 10 (net10.0), AllowUnsafeBlocks enabled",
+    "platforms": "x86-64 (SSE4.2/AVX2/AVX-512BW tiers), aarch64 (NEON), scalar fallback elsewhere",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": "partial — same signature and semantics as Utf8Utility.GetPointerToFirstInvalidByte, but that method is private in the BCL, so callers must reference SimdUnicode.UTF8 explicitly rather than getting it automatically via the runtime"
+  },
+  "gotchas": [
+    "unsafe byte* API only; caller manages pinning and buffer lifetime, no managed overload",
+    "slower than the built-in .NET validator on pure ASCII text (Latin-Lipsum benchmark)",
+    "SharpFuzz fuzzing not yet wired in (issue #27 open); correctness on hostile input relies on unit tests only",
+    "ARM benchmark tables don't state a .NET version, unlike the fully specified x64 table"
+  ],
+  "pick_this_over_siblings_when": "Pick SimdUnicode when you're specifically on .NET and want the fastest available replacement for Utf8Utility.GetPointerToFirstInvalidByte; unlike simdutf8 (Rust) or utf8_range (C++/protobuf), it's the only sibling targeting the C#/.NET runtime and its own private validator as baseline. For non-.NET stacks or a larger adoption base, look at simdutf8 or utf8_range instead.",
+  "verified_claims_summary": "On an Intel Xeon Gold 6548N (.NET 10, AVX-512, BenchmarkDotNet 0.15.4, dotnet run -c Release), SimdUnicode reaches 36 GB/s vs 14 GB/s (2.5x) on Twitter.json and up to 14x on Emoji-Lipsum (15 vs 1.1 GB/s), measured against a vendored copy of the runtime's private Utf8Utility.GetPointerToFirstInvalidByte; it is slower than .NET on pure ASCII (72 vs 107 GB/s). ARM64 systems (Apple M2, Graviton 2/3, Qualcomm 8cx gen3) show 1.2x-5.8x gains, with .NET version unstated for those runs.",
+  "status_note": "Actively maintained (last commit 2026-08-19) and MIT-licensed, small enough to vendor as source, but adoption is minimal (49 stars) and it remains a self-proposed candidate for the .NET runtime (dotnet/runtime#103781) rather than a shipped feature.",
+  "sources_read": [
+    "https://github.com/simdutf/SimdUnicode",
+    "https://github.com/simdutf/SimdUnicode/blob/main/README.md",
+    "https://github.com/simdutf/SimdUnicode/blob/main/src/SimdUnicode.csproj",
+    "https://github.com/simdutf/SimdUnicode/blob/main/docs/articles/how-it-works.md",
+    "https://github.com/simdutf/SimdUnicode/blob/main/info/FUTUREWORK.md",
+    "https://github.com/simdutf/SimdUnicode/blob/main/src/UTF8.cs",
+    "https://github.com/simdutf/SimdUnicode/issues"
+  ],
+  "confidence": 0.6
+}

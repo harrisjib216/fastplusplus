@@ -1,0 +1,44 @@
+{
+  "id": "https://github.com/hsivonen/encoding_rs",
+  "one_liner": "Rust implementation of the WHATWG Encoding Standard; beats ICU at UTF-8/UTF-16/legacy transcoding on Web-shaped text.",
+  "what_it_does": "encoding_rs decodes bytes in any WHATWG-listed character encoding to UTF-8 or UTF-16, and encodes UTF-8 or UTF-16 back to those encodings, plus label resolution (e.g. \"iso-8859-1\" -> Encoding object) and a `mem` module for in-RAM UTF-8/UTF-16/Latin1 checks and conversions. The API is Rust-native (`Encoding`, `Decoder`, `Encoder` types with streaming and non-streaming variants), not a drop-in replacement for ICU's converter API; it only covers the encodings the Encoding Standard defines, not ICU's broader charset set.",
+  "how_it_is_fast": "Non-streaming UTF-8 paths borrow (Cow) instead of copying when input is already valid, and UTF-8 validation itself uses the SIMD-accelerated simdutf8 crate. ASCII-heavy fast paths are hand-written and, with the `simd-accel` feature, runtime-multiversioned per target (AVX2+BMI1 detection via `multiversion`/`core_detect` on x86_64, NEON on aarch64/thumbv7neon) so a single binary picks the best code path at runtime. The README notes the ASCII acceleration was rewritten in 2026 for Zen 3/M3 Pro/Raspberry Pi 4, i.e. the code measured in the 2016 benchmark is not the code shipping today.",
+  "when_to_use": [
+    "Parsing arbitrary Web content (HTML/CSS/XML) whose declared or sniffed charset may be a legacy encoding, mirroring what a browser does",
+    "UTF-8<->UTF-16 conversion in a Gecko/Servo-like pipeline where FFI-friendly, allocation-free (Cow) conversion matters",
+    "Targeting x86_64, aarch64, i686, or thumbv7neon where the `simd-accel` feature's runtime dispatch pays off",
+    "no_std / no-allocator embedded contexts (crate supports no_std with `alloc` feature togglable)",
+    "You want a small, vendorable crate (only WHATWG's ~40 encodings) rather than all of ICU's converters"
+  ],
+  "when_not_to_use": [
+    "You need ICU's full arbitrary-encoding converter surface (charsets outside the Web Encoding Standard) or ICU-specific APIs (transliteration, locale-aware behavior)",
+    "You need UTF-16LE/UTF-16BE-labeled output specifically: those labels' \"output encoding\" is UTF-8 per spec, a documented API surprise, not a bug",
+    "Encoding legacy CJK (Big5/GB/Shift_JIS/EUC-KR/Hanja/Hangul) at top speed by default: those encode paths are size-optimized, not speed-optimized, unless you opt into the `fast-*` Cargo features",
+    "You need the full SIMD acceleration path on stable Rust without qualification: `simd-accel` depends on nightly-only features (`rustversion`, `any_all_workaround` crates), so a stable build may miss it",
+    "Deciding based on the cited benchmark: it is a decade-old first-party 2016 post against ICU 55, and the library's own code has changed materially since (2018 and 2026 rewrites) per the README"
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "cfg-if, scopeguard, multiversion_no_op (always); optional: multiversion (x86/x86_64 without baseline AVX2+BMI1), simdutf8 (x86/x86_64/aarch64/wasm32+simd128), core_detect (x86/x86_64), serde, rustversion + any_all_workaround (simd-accel feature)",
+    "min_toolchain": "Rust 1.88 (MSRV, per Cargo.toml `rust-version`); `simd-accel` feature further constrains to Rust versions with the nightly features it needs",
+    "platforms": "any (falls back to portable code); SIMD acceleration tuned for x86_64, aarch64, i686, thumbv7neon via the `simd-accel` feature",
+    "thread_safety": "not documented explicitly; `Encoding` values are `'static` references usable freely, but README/API docs give no explicit Sync/Send guarantee for `Decoder`/`Encoder` instances",
+    "drop_in_for_baseline": "partial — replaces ICU's charset-conversion role for Web-defined encodings but exposes a different, Rust-native API (Decoder/Encoder streaming model) and does not cover ICU's full encoding catalog"
+  },
+  "gotchas": [
+    "Encoding to UTF-16LE, UTF-16BE, or \"replacement\" always yields UTF-8 output because those are their WHATWG-defined output encodings, not the input encoding",
+    "Speed is an explicit non-goal for legacy-encoding encode paths by default; enable `fast-hangul-encode`/`fast-kanji-encode`/etc. (or the `fast-legacy-encode` bundle) if CJK encode throughput matters",
+    "`simd-accel` requires nightly Rust features, so a plain stable build won't get the full multiversioned SIMD dispatch described in the README",
+    "The Cargo license string is a compound `(Apache-2.0 OR MIT) AND BSD-3-Clause`: the BSD-3-Clause part covers WHATWG-derived label/encoding data, not just the code"
+  ],
+  "pick_this_over_siblings_when": "The catalogued siblings are narrower single-purpose primitives (UTF-8 validation: simdutf8, xutf, SimdUnicode, utf8_range, Parabix; normalization: Boost.Text, unicode-transforms; URL/IDNA: ada-url/idna); pick encoding_rs when the job is full transcoding between UTF-8/UTF-16 and arbitrary legacy Web charsets (e.g. sniffing and decoding real-world HTML), and pick one of the UTF-8-only validators instead when all you need is to validate or count code points in already-UTF-8 data.",
+  "verified_claims_summary": "Author's own 2016 benchmark measured encoding_rs against ICU 55 (as built by Ubuntu 16.04) on x86_64 Haswell, with and without explicit SSE2: English UTF-8<->UTF-16 conversion was 7.23x faster decode and 7.00x faster encode than ICU, most other tested languages' UTF-8 conversions were 1.6x-3.9x faster, but UTF-16LE/UTF-16BE conversions were 0.30x-0.32x of ICU's speed (slower).",
+  "status_note": "Actively maintained (last commit 2026-09-24, core dependency of Firefox/Gecko and Servo); dual Apache-2.0/MIT plus BSD-3-Clause licensed and small enough to vendor (\"copyable\"), though the cited benchmark predates two later rewrites of the hot paths.",
+  "sources_read": [
+    "https://github.com/hsivonen/encoding_rs",
+    "https://github.com/hsivonen/encoding_rs/blob/main/Cargo.toml",
+    "https://github.com/hsivonen/encoding_rs/blob/main/src/lib.rs",
+    "https://hsivonen.fi/encoding-perf-2016-11/"
+  ],
+  "confidence": 0.7
+}

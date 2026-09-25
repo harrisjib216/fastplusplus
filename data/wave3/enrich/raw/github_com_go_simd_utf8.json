@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/go-simd/utf8",
+  "one_liner": "Pure-Go SIMD UTF-8 validator and rune counter, byte-identical to unicode/utf8, faster on non-ASCII text.",
+  "what_it_does": "Drop-in replacement for unicode/utf8's Valid, ValidString, RuneCount, and RuneCountInString, returning identical results on every input including malformed and truncated sequences. Valid runs a Lemire-Keiser SIMD lookup validator over full blocks (SSE/SSSE3/AVX2 on amd64, NEON on arm64, VSX on ppc64le, vector facility on s390x) and falls back to unicode/utf8 for the tail and any rune straddling a block boundary. RuneCount reuses a Valid-confirmed prefix and counts non-continuation bytes via a mask/POPCNT trick, falling back to the scalar decoder whenever the prefix isn't valid UTF-8; ValidString and RuneCountInString just call stdlib directly to avoid an allocating []byte copy.",
+  "how_it_is_fast": "Implements Lemire & Keiser's 'Validating UTF-8 In Less Than One Instruction Per Byte' nibble-lookup algorithm (PSHUFB/VTBL byte classification, PALIGNR/VEXT to shift in the previous block, PTEST error accumulator), generated via go-asmgen, replacing stdlib's byte-at-a-time DFA with one-pass block validation. RuneCount piggybacks on an already-validated block and mask-and-POPCNTs continuation bytes instead of decoding runes individually. A dedicated ASCII pre-scan (group-of-4 PMOVMSKB on amd64, a 64-byte-unrolled high-bit test on NEON/s390x) short-circuits pure-ASCII input to a memory-bandwidth scan, fixing an earlier 5-8x regression the full validator had against stdlib's own ASCII fast path.",
+  "when_to_use": [
+    "Non-ASCII or mixed-script UTF-8 (2/3/4-byte runes) on amd64 or arm64, where measured wins are 1.9x-21x",
+    "Throughput-bound batch validation or rune counting of buffers roughly 1 KiB-1 MiB",
+    "Need exact stdlib-compatible semantics (identical bool/int, even on malformed input) with no calling-code changes",
+    "Running on amd64 (SSE4.1/AVX2) or Apple Silicon arm64 (NEON), the two kernels with native-hardware benchmarks and fuzzing",
+    "s390x (z13+) workloads: the only other kernel measured on real hardware (IBM z15), 1.7x-10.4x"
+  ],
+  "when_not_to_use": [
+    "ppc64le deployments where you need proven real-silicon numbers: those figures are llvm-mca static estimates, not measurements",
+    "loong64/riscv64 targets, which still just call unicode/utf8 with ordinary function-call overhead (no SIMD kernel)",
+    "Hot paths that call ValidString/RuneCountInString specifically: both are plain aliases to stdlib, no SIMD benefit",
+    "Anything requiring a track record: 0 GitHub stars, first NEON kernel landed only 2026-06-22, ppc64le/s390x pre-scan fixes as recent as this year",
+    "Teams uncomfortable with generated assembly (go-asmgen) and per-arch .s files as a maintenance surface"
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "golang.org/x/sys (CPU feature detection); test-only: github.com/stuartcarnie/go-simd (benchmark comparator), github.com/stretchr/testify",
+    "min_toolchain": "Go 1.26.4 (go.mod requires `go 1.26.4`)",
+    "platforms": "amd64 (SSE2/SSSE3/SSE4.1 baseline, AVX2 runtime-dispatched), arm64 (NEON), ppc64le (VSX/AltiVec, qemu-validated only, no native perf data), s390x (vector facility, validated on real z15); loong64/riscv64 fall back to scalar unicode/utf8",
+    "thread_safety": "not documented; Valid/RuneCount are pure functions with no package-level mutable state visible in utf8.go, so ordinary concurrent-read use appears safe but is not explicitly guaranteed",
+    "drop_in_for_baseline": "partial — Valid and RuneCount are true drop-ins (same signature, byte-identical output including on invalid input); ValidString and RuneCountInString exist for API parity but literally forward to unicode/utf8 with no SIMD path"
+  },
+  "gotchas": [
+    "All-ASCII input on amd64 and s390x used to be 5-8x slower than stdlib before the ASCII pre-scan landed (fixed in current main, but shows the failure mode the design has to guard against)",
+    "ppc64le has no GitHub-hosted runner; it is cross-compiled and tested under qemu only, so 'native perf pending' per the README",
+    "ValidString/RuneCountInString get zero speedup — they're pass-throughs, not SIMD-accelerated",
+    "Package is very new (0 stars, single open issue is Renovate's dependency dashboard) with no external adopters found"
+  ],
+  "pick_this_over_siblings_when": "Versus stuartcarnie/go-simd — the only other pure-Go SIMD UTF-8 validator and also Lemire-based — this package edges it ~3.5% on native AVX2 CI, adds NEON/VSX/s390x kernels and a RuneCount fast path the 2018 stuartcarnie repo lacks (which also predates go.mod and has no explicit root license), and is actively maintained; the other siblings (simdutf8, SimdUnicode, utf8_range, etc.) target Rust/.NET/C++ ecosystems, so this is the pick specifically for Go code that must stay pure-Go (no cgo).",
+  "verified_claims_summary": "On a native GitHub Actions AMD EPYC runner (AVX2, GOAMD64=v1, Go stable) using the BenchmarkParity* harness against Go stdlib unicode/utf8, mixed-UTF-8 Valid throughput reaches 19.74x stdlib (5196 vs 263 MB/s at 1 MiB) and RuneCount reaches 21.08x; on an Apple M4 Max (NEON, Go 1.26.4) the same harness shows 1.21x-2.21x on ASCII, 1.90x-9.0x on mixed Valid, and 3.58x-8.7x on RuneCount; a separate real-hardware IBM z15 (s390x, go1.26.4) run shows 1.73x-1.96x on ASCII and 9.5x-10.4x on mixed/RuneCount. ppc64le figures are llvm-mca cycle-model estimates, not measured runs.",
+  "status_note": "Active (last commit 2026-09-08), BSD-3-Clause, and small enough (about a dozen Go/asm files) to vendor or fork, but has zero stars and its NEON/ASCII-prescan fixes are only weeks to months old — an early-stage result, not a battle-tested one.",
+  "sources_read": [
+    "https://github.com/go-simd/utf8",
+    "https://github.com/go-simd/utf8/blob/main/README.md",
+    "https://github.com/go-simd/utf8/blob/main/BENCHMARKS.md",
+    "https://github.com/go-simd/utf8/blob/main/go.mod",
+    "https://github.com/go-simd/utf8/blob/main/utf8.go",
+    "https://github.com/go-simd/utf8/issues"
+  ],
+  "confidence": 0.68
+}

@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/tzlaine/text",
+  "one_liner": "Boost-style C++ Unicode library (transcoding, normalization, text types) faster than ICU only in narrow, now-degraded cases.",
+  "what_it_does": "Boost.Text provides Unicode transcoding (UTF-8/16/32), the standard Unicode algorithms (normalization, segmentation, case mapping, collation with CLDR tailoring, bidi), and STL-like text/text_view/rope/rope_view container types built on UTF-8 storage. It is not a drop-in for ICU's API: it exposes iterator/view-based interfaces (as_utf8/as_utf16/as_utf32, pointer-to-pointer transcode_to_*/normalize_append functions) styled after the C++ standard library, with parallel v1 (SFINAE, C++14/17) and v2 (concepts, C++20) namespaces selected automatically by the compiler mode. The Unicode-algorithm layer can be used standalone without the text/rope types.",
+  "how_it_is_fast": "The fast paths write runs of already-decoded or already-normalized output in bulk rather than branching per code unit, which is what a std::back_inserter or the transcoding iterators force. A SIMD transcode path (originally from Bob Steagall's C++Now 2018 work) decoded up to 16 UTF-8 bytes per op, but commit dd2959e7 (2024-01-18, fixing issue #212 — a correctness bug that produced silently wrong UTF-16 output) force-disabled that SIMD path repo-wide, so the code now shipping runs the plain scalar path that the vendor's own charts show as slower than ICU for UTF-8->UTF-16.",
+  "when_to_use": [
+    "NFC normalization of already-NFC European-script UTF-8 text, compared only against ICU's UTF-8-input normalizer (not ICU's faster UTF-16 path) -- best case ~1.24x per the vendor's charts.",
+    "You call the pointer-to-pointer bulk transcode_to_*/normalize_append APIs directly instead of back-inserters or transcoding iterators; that is the only path where any measured gain applies.",
+    "You want one Boost-style, STL-familiar library covering the full Unicode algorithm stack (segmentation, collation, bidi) plus text/rope types, not just fast transcoding.",
+    "A C++14 codebase (Clang 6+/GCC 6+/VS2019+) that cannot add ICU as a dependency and values API/code familiarity over ICU feature completeness."
+  ],
+  "when_not_to_use": [
+    "UTF-8->UTF-16 throughput: since dd2959e7 (Jan 2024) disabled SIMD, the shipped scalar path is slower than ICU's UnicodeString::fromUTF8 per the vendor's own chart.",
+    "Non-European scripts or NFD-origin input for normalization: ICU's UTF-16 normalizer beats Text in 3 of the 4 charted NFC scenarios.",
+    "Code that pipes output through std::back_inserter or the transcoding iterators for further per-code-unit work: documented by the author as 'quite bad'/'terrible' for performance, erasing the advantage.",
+    "Wanting an actively maintained dependency: no commits since 2024-01-18 (stale), and the last fix was for a silent data-corruption bug in the fast path.",
+    "Header-only vendoring: the data-heavy parts (collation_data_*.cpp, normalization_data_*.cpp, break tables) are compiled sources, not header-only, so you must build a library, not just #include headers."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "Boost >= 1.71.0 (auto-cloned by CMake if not found); Boost.Filesystem/System only for the optional ncurses example editor",
+    "min_toolchain": "C++14 minimum (Clang 6+, GCC 6+, VS2019+); C++20 mode (concepts/coroutines) needs GCC 10+/Clang 13+/VS2019+",
+    "platforms": "any platform supported by GCC/Clang/MSVC; the transcode SIMD path targeted x86 SIMD historically but is force-disabled as of 2024-01-18, so the current build is effectively scalar",
+    "thread_safety": "not documented, beyond a perf note that rope ref-counting uses atomics (8ns non-atomic vs 9-10ns atomic per copy, measured on macOS)",
+    "drop_in_for_baseline": "partial -- covers ICU's transcoding/normalization/segmentation/collation feature areas but with a different, Boost/STL-style API, not ICU's UnicodeString/UBreakIterator surface"
+  },
+  "gotchas": [
+    "SIMD-accelerated transcoding (transcode_algorithm.hpp) was force-disabled repo-wide by commit dd2959e7 (2024-01-18), fixing issue #212 where BOOST_TEXT_USE_SIMD=1 produced corrupted, non-deterministic UTF-16 output; there is no supported way to safely re-enable it in the shipped code.",
+    "Using std::back_inserter or the transcode/normalize iterators directly forfeits nearly all the measured speed advantage -- only the pointer-to-pointer bulk APIs are fast.",
+    "MSVC users must build with /utf8 (or at least /source-charset:utf-8) or the ~150 CLDR locale headers under boost/text/data/ will be misinterpreted.",
+    "The published performance charts predate the 2024-01-18 SIMD disable and no longer reflect the UTF-8->UTF-16 numbers of the code you'd actually build today."
+  ],
+  "pick_this_over_siblings_when": "Pick Boost.Text only when you need its broader Unicode algorithm/text-type surface (segmentation, collation, bidi, rope) in one Boost-style library; for pure UTF-8 validation/transcoding speed, ada-url/idna, encoding_rs, or SimdUnicode show larger, better-documented speedups over ICU or their respective baselines without a disabled fast path.",
+  "verified_claims_summary": "Vendor's Google Benchmark charts (GCC on Linux, no CPU model/compiler version/flags stated) on ~0.5MB of Wikipedia text show Text's NFC-normalize-from-NFC-input path on European text beating ICU's UTF-8 normalizer by ~1.02-1.24x and roughly matching ICU's UTF-16 normalizer, while ICU's UTF-16 path wins the other 3 of 4 NFC scenarios; for UTF-8->UTF-16 transcoding, Text's SIMD path matched ICU (~473k vs ~476k ns) but the code now shipped (SIMD disabled) runs the slower ~590k ns scalar path.",
+  "status_note": "Stale since its last commit on 2024-01-18, which force-disabled the SIMD transcode path after it was found to silently corrupt UTF-16 output; BSL-1.0 licensed and copyable, but not header-only -- vendoring means building compiled data/algorithm sources, not just including headers.",
+  "sources_read": [
+    "https://github.com/tzlaine/text",
+    "https://github.com/tzlaine/text/blob/master/doc/performance.qbk",
+    "https://github.com/tzlaine/text/blob/master/doc/compiler_support.qbk",
+    "https://github.com/tzlaine/text/blob/master/doc/configuration.qbk",
+    "https://github.com/tzlaine/text/blob/master/doc/overview.qbk",
+    "https://github.com/tzlaine/text/blob/master/CMakeLists.txt",
+    "https://github.com/tzlaine/text/blob/master/cmake/dependencies.cmake",
+    "https://github.com/tzlaine/text/commit/dd2959e7143fde3f62b24d87a6573b5b96b6ea46",
+    "https://github.com/tzlaine/text/issues/212",
+    "https://github.com/tzlaine/text/tree/master"
+  ],
+  "confidence": 0.4
+}
