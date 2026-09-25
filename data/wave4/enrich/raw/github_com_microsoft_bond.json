@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/microsoft/bond",
+  "one_liner": "Discontinued Microsoft schema-based serializer whose Compact Binary wire format is smaller than FlatBuffers and unpacked Cap'n Proto.",
+  "what_it_does": "Bond is a cross-language (C++, C#, Java, Python) framework for schematized data. You write schemas in a .bond IDL, and the gbc code generator produces native C++ structs backed by STL containers (custom allocators are supported). Templated Serialize/Deserialize/Marshal calls take a protocol reader or writer (Compact Binary, Fast Binary, Simple Binary, Simple JSON) over a buffer. Like Protobuf and Thrift, it decodes into objects rather than reading fields in place as FlatBuffers and Cap'n Proto do, so switching means a new IDL, new generated types and a different access pattern. It also offers bonded<T> lazy deserialization, runtime schemas and protocol transcoding.",
+  "how_it_is_fast": "This entry's win is about size, not speed. Compact Binary is a tagged format. Each field has a 1-byte header that packs a 5-bit type with a field id of 5 or less; ids up to 255 take 2 bytes. Unsigned integers are LEB128 varints and signed ones are zigzag-encoded first. Strings and containers carry varint counts, and a struct ends with a single BT_STOP byte instead of an offset table or vtable. FlatBuffers and Cap'n Proto spend bytes on alignment padding, pointers or vtables and fixed-width scalars so they can read without decoding, which is why Bond comes out smaller on small, text-heavy documents. Floats and doubles are still fixed 4/8-byte IEEE 754.",
+  "when_to_use": [
+    "FlatBuffers or Cap'n Proto payloads are too large for your RPC or storage and you don't need zero-copy reads. Summed over the 27 SchemaStore documents, Bond needed 7,456 B against 12,452 B for FlatBuffers and 11,776 B for unpacked Cap'n Proto.",
+    "You already have Bond schemas or stored Compact Binary data (common in Microsoft services) that you must keep reading and writing. C++ 13.0.1 is the final release.",
+    "You need one schema shared by C++, C#, Java and Python, with schema evolution through optional fields and defaults.",
+    "You want to transcode between protocols (for example Compact Binary to JSON) or pass data through without the struct definition, using bonded<T>/bonded<void>.",
+    "You store many records that share one schema. Simple Binary (untagged, with the runtime schema stored once) removes per-field tags, but this benchmark did not measure it."
+  ],
+  "when_not_to_use": [
+    "Your goal is the smallest encoding. In the same suite Protobuf was smaller than Bond on 26 of 27 documents, Thrift Compact and unframed Avro were never larger, ASN.1 PER was larger only once, and JSON BinPack was smallest everywhere.",
+    "You need in-place or random access into the buffer, which is the reason to choose FlatBuffers or Cap'n Proto. Bond decodes the whole payload into STL structs, and this benchmark measured no speed at all.",
+    "You parse untrusted input. Bond gets no security fixes after March 2025. Releases 11.0.1 and 13.0.1 fixed CPU DoS, oversized-allocation and deep-nesting stack-overflow issues, and the benchmarked 9.0.4 predates those fixes.",
+    "Your data is mostly floating point. Doubles always take 8 bytes: the GeoJSON sample encoded to 298 B in Bond against 190 B as minified JSON.",
+    "You want a simple build. You need Boost, RapidJSON and the gbc compiler (built with Haskell Stack). The template-heavy code compiles slowly, and Bond's CMake files cannot be pulled in with add_subdirectory."
+  ],
+  "integration": {
+    "form": "header-only template core, plus a static lib (libbond, optional libbond_apply) when you use runtime-schema or bond.bond types; also needs a gbc codegen step with an optional per-schema _apply.cpp",
+    "dependencies": "Boost headers (1.61+ per the build docs), RapidJSON (git submodule, or an external copy via BOND_FIND_RAPIDJSON), and the gbc compiler. Building from source needs CMake 3.1+ and Haskell Stack 1.5.1+. A vcpkg 'bond' port also exists.",
+    "min_toolchain": "C++11. The changelog lists Clang 3.4+, GCC 4.7+ and MSVC 2013+ as minimums; the build README says features are limited to VS 2015 and that it was tested with Clang 3.8 and GCC 5.4. The final 13.0.1 added Boost 1.83 support.",
+    "platforms": "Linux, macOS and Windows are documented. CPU architecture requirements are not documented. Compact Binary stores floats as little-endian IEEE 754.",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The default CompactBinaryWriter/Reader version is v1. v2 adds struct length prefixes, which enable constant-time skipping and bonded<T> deserialization, but its two-pass encoding makes serialization up to 30% slower. Reader and writer must be constructed with the same version.",
+    "Fields marked 'required' are always written; only optional fields left at their default are omitted. The benchmark marked every field required: its one-false-bool document is 3 B in Bond and 0 B in proto3 Protobuf.",
+    "The protocol-selection macros (BOND_COMPACT_BINARY_PROTOCOL and similar) must be defined identically in every translation unit, or you get ODR violations. The docs strongly advise disabling MSVC link-time code generation.",
+    "Errors surface as C++ exceptions: bond::CoreException, bond::StreamException, std::bad_alloc when a payload declares huge containers, and std::range_error from JSON string conversion. The deserialization depth limit is set process-wide through bond::SetDeserializeMaxDepth."
+  ],
+  "pick_this_over_siblings_when": "Pick Bond only if you are already invested in Bond, or you need its multi-language schema evolution and transcoding and FlatBuffers/Cap'n Proto size is the complaint. For the fewest bytes, JSON BinPack (smallest on all 27 of the same documents) or a Protobuf-wire implementation such as hpp-proto is the better pick, since Protobuf was smaller than Bond on 26 of 27. For low-latency access, Simple Binary Encoding or the zero-copy siblings target speed, which Bond's catalogued result never measured.",
+  "verified_claims_summary": "This is a size-only result from jviotti/binary-json-size-benchmark, an archived suite run by the JSON BinPack author. It re-encoded 27 SchemaStore JSON documents with hand-written schemas, using Bond C++ 9.0.4 Compact Binary v1, flatc 1.12.0, capnp 0.8.0 and Python protobuf 3.15.3. Bond was smaller than FlatBuffers on 27 of 27 documents (JSON Resume: 2,256 vs 3,116 B), than unpacked Cap'n Proto on 26 of 27 and than packed Cap'n Proto on 21 of 27, but larger than Protobuf on 26 of 27 (summed: 7,456 vs 7,146 B). No speed was measured, and no compiler, flags or hardware are given.",
+  "status_note": "Microsoft archived Bond when the open-source project ended on 31 March 2025, with no further bug or security fixes; the last C++ release was 13.0.1 (October 2024). It is MIT-licensed and still installable from source or vcpkg, but the Haskell-built gbc and the Boost dependency make vendoring much heavier than dropping in a header.",
+  "sources_read": [
+    "https://github.com/microsoft/bond",
+    "https://github.com/microsoft/bond/blob/master/README.md",
+    "https://github.com/microsoft/bond/blob/master/README.old.md",
+    "https://github.com/microsoft/bond/blob/master/cpp/inc/bond/protocol/compact_binary.h",
+    "https://github.com/microsoft/bond/blob/master/cpp/inc/bond/core/bond_version.h",
+    "https://github.com/microsoft/bond/blob/master/cpp/inc/bond/core/traits.h",
+    "https://github.com/microsoft/bond/blob/master/cpp/inc/bond/core/protocol.h",
+    "https://github.com/microsoft/bond/blob/master/cpp/inc/bond/protocol/encoding.h",
+    "https://github.com/microsoft/bond/blob/master/doc/src/why_bond.md",
+    "https://github.com/microsoft/bond/blob/master/doc/src/bond_cpp.md",
+    "https://github.com/microsoft/bond/blob/master/CHANGELOG.md",
+    "https://github.com/microsoft/bond/releases",
+    "https://github.com/microsoft/bond/issues/1215",
+    "https://github.com/microsoft/bond/issues/1111",
+    "https://github.com/microsoft/bond/issues?q=performance",
+    "https://github.com/jviotti/binary-json-size-benchmark",
+    "https://github.com/jviotti/binary-json-size-benchmark/blob/main/README.md",
+    "https://github.com/jviotti/binary-json-size-benchmark/blob/main/DEPENDENCIES",
+    "https://github.com/jviotti/binary-json-size-benchmark/blob/main/skeleton/bond/encode.cpp",
+    "https://github.com/jviotti/binary-json-size-benchmark/blob/main/benchmark/jsonresume/bond/schema.bond",
+    "https://github.com/jviotti/binary-json-size-benchmark/blob/main/benchmark/commitlintbasic/bond/schema.bond",
+    "https://github.com/jviotti/binary-json-size-benchmark/blob/main/benchmark/commitlintbasic/document.json",
+    "https://github.com/jviotti/binary-json-size-benchmark/blob/main/benchmark/geojson/bond/schema.bond",
+    "https://github.com/jviotti/binary-json-size-benchmark/blob/main/benchmark/geojson/protobuf/schema.proto",
+    "https://github.com/jviotti/binary-json-size-benchmark/blob/main/benchmark/geojson/document.json",
+    "https://arxiv.org/abs/2201.03051",
+    "https://benchmark.sourcemeta.com"
+  ],
+  "confidence": 0.8
+}
