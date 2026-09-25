@@ -1,12 +1,48 @@
 # Copyable
 
-Entries with a confirmed OSI license: code can be vendored, wrapped, or forked. Grouped by license family, then category; tier A/B first, tier C/D under *Unverified claims*.
+Entries with a confirmed OSI license or a CC0/public-domain dedication: code can be vendored, wrapped, or forked. Grouped by license family, then domain and category; tier A/B first, tier C/D under *Unverified claims*.
 
 ## Permissive
 
 ### compression-and-encoding
 
 #### general-lossless
+
+##### LZ4  `C`  `BSD-2-Clause`  `active`  `Tier B`
+
+In-memory block/frame compressor beating zlib deflate on speed, trading compression ratio for GB/s decode.
+
+**Beats:** zlib — First-party lzbench run (LZ4 v1.9.0, GCC 8.2.0, Core i7-9700K @4.9GHz, Ubuntu 4.18.0-17) reports LZ4 default at 780/4970 MB/s (compress/decompress) and ratio 2.101, versus zlib deflate 1.2.11 -1 at 100/415 MB/s and ratio 2.730 — roughly 7.8x faster compression and 12.0x faster decompression at a lower ratio. An independent lzbench 2.0.1 run (gcc 14.2.0, AMD EPYC 9554) corroborates the direction: lz4 1.10.0 at 577/3716 MB/s vs zlib 1.3.1 -1 at 93.0/323 MB/s.
+
+**How:** LZ4 uses a byte-oriented LZ77 variant with a simple hash-chain match finder and no entropy coding stage (no Huffman/range coding like deflate), so both compression and decompression are dominated by cheap memcpy-style literal/match copies instead of bit-level decoding. Decompression in particular is just a sequence of length-prefixed copy operations, which is why it reaches multi-GB/s per core. A tunable "acceleration" factor lets the compressor skip more match-search work for more speed at a lower ratio, and LZ4_FAST_DEC_LOOP enables an optimized decode loop on x86/x64/aarch64.
+
+**Use it when:**
+- Hot-path in-memory compression where decompression speed dominates (caches, IPC payloads, columnar/log formats)
+- Read-heavy data where you decompress far more often than you compress
+- Need dictionary compression for many small, similar payloads (frame API supports a 64KB dictionary window)
+- Embedded/freestanding targets: single C90 source pair (lz4.c/lz4.h), optional LZ4_FREESTANDING build removes libc dependency
+- Already have LZ4_HC available when you need a higher ratio at the same decompression speed but slower compression
+
+**Skip it when:**
+- Compression ratio matters more than speed: zlib -6 (3.099) and zstd both beat LZ4's 2.101 default ratio
+- Need a drop-in replacement for a zlib/deflate API surface — LZ4's API and block/frame formats are different
+- Want one universal knob for ratio/speed tradeoffs across a wide range — zstd's level range is broader than LZ4's acceleration + HC split
+- Pulling in a released package manager build: the current tagged release (v1.10.0, 2024-07-22) predates a 2025-06-01 fix for unhandled NULL-pointer args in lz4frame (CVE-2025-62813); only the dev branch has it
+- Need built-in multithreading: LZ4 itself is single-thread per call; parallelism is the caller's responsibility
+
+**Integration:** source-drop (lz4.c+lz4.h minimum) | static lib | shared lib · none for block API; frame API (lz4frame) additionally needs xxhash.c/xxhash.h from the same repo; lz4file adds a <stdio.h> dependency · C90 (with long long and optional variadic macros); C99+ used opportunistically (e.g. restrict) with a C90 fallback · any C90 target incl. 32-bit and freestanding/embedded (LZ4_FREESTANDING=1 drops libc); LZ4_FAST_DEC_LOOP auto-enabled on x86, x64, aarch64
+
+**Vs siblings:** Pick LZ4 over Zstandard when decompression throughput and minimal-dependency portability (down to freestanding C90) matter more than ratio; zstd's -1 level already beats LZ4's ratio (2.883 vs 2.101) at somewhat lower speed, and zstd exposes a much wider ratio/speed level range, so pick zstd when you want one tunable knob spanning LZ4-like speed to gzip-beating ratio.
+
+**Gotchas:**
+- Block API (lz4.h) is not self-describing: caller must transmit/store the compressed size and a max decompressed-size bound separately
+- Advanced/experimental symbols behind LZ4_STATIC_LINKING_ONLY are excluded from the shared-library ABI and can break between versions — static-link only
+- Repo license is split by directory: lib/ is BSD-2-Clause, programs/ (CLI, tests) is GPL-2.0-or-later; check which files you actually vendor
+- Open issue #1779 (as of 2026-08) flags the streaming-decompression "synchronized mode" docs as wrong/misleading — verify ring-buffer streaming behavior against source, not just the header comment
+
+**Status:** Actively maintained (dev branch commit 2026-06-01) but the latest tagged release is v1.10.0 from 2024-07-22, so a NULL-pointer-arg fix (CVE-2025-62813, merged 2025-06-01) is not yet in any released tag; usability is 'copyable' since every file carries an OSI license (BSD-2-Clause in lib/, GPL-2.0-or-later elsewhere).
+
+[repo](https://github.com/lz4/lz4) · [benchmark](https://github.com/lz4/lz4)
 
 ##### Zstandard (zstd)  `C`  `BSD-3-Clause OR GPL-2.0-only`  `active`  `Tier B`
 
@@ -5469,41 +5505,6 @@ Fixed-capacity, stack-allocated, constexpr string class that avoids the heap all
 
 [repo](https://github.com/m3janitha/FastString) · [benchmark](https://raw.githubusercontent.com/m3janitha/FastString/master/README.md)
 
-##### fstring  `C++`  `MIT`  `active`  `Tier C`
-
-Stack-allocated fixed-capacity string using std::to_chars for numeric formatting; unverified 2-3x claim vs std::string.
-
-**Beats:** std::string — The only measurement is the README's own prose: 'around 2x - 3x faster for writing and conversion' than std::string, with no operation counts, benchmark code, compiler/flags, or hardware given, so the ratio cannot be independently checked.
-
-**How:** Numeric conversions (int, float, hex pointer) go through std::to_chars written directly into the fixed stack buffer, skipping sprintf/iostream formatting overhead. There is no heap allocation and no dynamic capacity growth; appends are raw memcpy/pointer-arithmetic into a preallocated char array sized C+1 at compile time. Bounds/overflow checks call a `*_throw_err` helper whose `throw std::runtime_error(err)` statement is commented out in the shipped header, so failed-check paths add effectively no cost (and also report nothing).
-
-**Use it when:**
-- Fixed, known-at-compile-time max string length, e.g. per-frame HUD/debug text buffers refreshed repeatedly
-- WASM or embedded targets where heap allocation/fragmentation must be avoided
-- Hot paths formatting int/float/pointer to text where std::to_chars-level speed matters more than a general-purpose string API
-- Code that can adopt the `<<` piping interface and pass buffers across functions via str_view instead of std::string&
-
-**Skip it when:**
-- Max string length is unknown or varies at runtime beyond a compile-time bound
-- You need reported bounds/overflow errors: the throw statements are commented out, so overflow/out-of-range access is silently swallowed, not observable
-- Anything safety- or correctness-critical: reading the header found two real bugs (an out-of-bounds write and an off-by-one append), with no tests, CI, or benchmark harness to catch them
-- You need an actively maintained dependency: all 3 commits landed on 2026-05-14, 0 stars, no issues, nothing since
-- You need the '2-3x faster' claim substantiated before adopting: no benchmark code, numbers table, compiler/flags, or hardware are published
-
-**Integration:** header-only · none (STL only: <concepts>, <cstring>, <algorithm>, <stdexcept>, <charconv>) · C++20 (uses concepts and requires-clauses); float append needs a standard library with a working floating-point std::to_chars overload (not stated by author) · not documented; source is portable standard C++ with no platform-specific code; README calls out WASM as a target use case
-
-**Vs siblings:** Only if you specifically want the fixed-capacity `<<`-piping/wrap() API and accept an unverified claim from a single-day, 0-star, no-CI repo; for anything where the speedup needs to be trusted, prefer to_static_string or FastString, both of which have published before/after numbers for to_string-style and construction/append operations respectively.
-
-**Gotchas:**
-- fstring<C>::operator<<(precision<P>) writes `arr[C + 1] = P`, but arr is declared `char arr[C + 1]` (valid indices 0..C) — this is an out-of-bounds write on every use of the precision manipulator on an fstring (not on str_view, whose precision member is a separate field)
-- fstring<C>::operator<<(const char (&str)[N]) computes `bytes = min(N, C - len)`, omitting the `-1` that the equivalent str_view overload correctly applies — it copies the literal's null terminator as if it were a character and advances len past it, corrupting the length count
-- Overflow/bounds checks (`fstring_throw_err`, `fstr_view_throw_err`) never actually throw — the `throw` line is commented out in the shipped header, so the README's 'prevents overflow' claim degrades to silent truncation/no-op rather than a reported error
-- Every fstring<C> instance always occupies C+1 bytes on the stack regardless of current length — no small-buffer/move optimization, so large declared capacities are paid for even when the string in use is short
-
-**Status:** maintenance_status is recorded as active, but all 3 commits date to 2026-05-14 with nothing since (as of 2026-09-24), 0 stars, 0 issues, and no CI; MIT-licensed as a single header (fstring.hpp), so it is trivial to vendor and audit yourself.
-
-[repo](https://github.com/gorddev/fstring) · [benchmark](https://github.com/gorddev/fstring)
-
 ##### Pool-allocator string (Dicanio STL/ATL/Pool string benchmark)  `C++`  `MIT`  `stale`  `Tier C`
 
 Fixed-chunk pool allocator for bulk wide-char strings, beating ATL CStringW and std::wstring on creation.
@@ -6674,46 +6675,6 @@ Own-IDL C++/Java/Python serialization framework; bit-packed decode 1.2x-2.6x fas
 [repo](https://github.com/ndsev/zserio) · [benchmark](https://github.com/ndsev/zserio-protobuf-benchmarks)
 
 ## Copyleft
-
-### compression-and-encoding
-
-#### general-lossless
-
-##### LZ4  `C`  `BSD-2-Clause AND GPL-2.0-or-later`  `active`  `Tier B`
-
-In-memory block/frame compressor beating zlib deflate on speed, trading compression ratio for GB/s decode.
-
-**Beats:** zlib — First-party lzbench run (LZ4 v1.9.0, GCC 8.2.0, Core i7-9700K @4.9GHz, Ubuntu 4.18.0-17) reports LZ4 default at 780/4970 MB/s (compress/decompress) and ratio 2.101, versus zlib deflate 1.2.11 -1 at 100/415 MB/s and ratio 2.730 — roughly 7.8x faster compression and 12.0x faster decompression at a lower ratio. An independent lzbench 2.0.1 run (gcc 14.2.0, AMD EPYC 9554) corroborates the direction: lz4 1.10.0 at 577/3716 MB/s vs zlib 1.3.1 -1 at 93.0/323 MB/s.
-
-**How:** LZ4 uses a byte-oriented LZ77 variant with a simple hash-chain match finder and no entropy coding stage (no Huffman/range coding like deflate), so both compression and decompression are dominated by cheap memcpy-style literal/match copies instead of bit-level decoding. Decompression in particular is just a sequence of length-prefixed copy operations, which is why it reaches multi-GB/s per core. A tunable "acceleration" factor lets the compressor skip more match-search work for more speed at a lower ratio, and LZ4_FAST_DEC_LOOP enables an optimized decode loop on x86/x64/aarch64.
-
-**Use it when:**
-- Hot-path in-memory compression where decompression speed dominates (caches, IPC payloads, columnar/log formats)
-- Read-heavy data where you decompress far more often than you compress
-- Need dictionary compression for many small, similar payloads (frame API supports a 64KB dictionary window)
-- Embedded/freestanding targets: single C90 source pair (lz4.c/lz4.h), optional LZ4_FREESTANDING build removes libc dependency
-- Already have LZ4_HC available when you need a higher ratio at the same decompression speed but slower compression
-
-**Skip it when:**
-- Compression ratio matters more than speed: zlib -6 (3.099) and zstd both beat LZ4's 2.101 default ratio
-- Need a drop-in replacement for a zlib/deflate API surface — LZ4's API and block/frame formats are different
-- Want one universal knob for ratio/speed tradeoffs across a wide range — zstd's level range is broader than LZ4's acceleration + HC split
-- Pulling in a released package manager build: the current tagged release (v1.10.0, 2024-07-22) predates a 2025-06-01 fix for unhandled NULL-pointer args in lz4frame (CVE-2025-62813); only the dev branch has it
-- Need built-in multithreading: LZ4 itself is single-thread per call; parallelism is the caller's responsibility
-
-**Integration:** source-drop (lz4.c+lz4.h minimum) | static lib | shared lib · none for block API; frame API (lz4frame) additionally needs xxhash.c/xxhash.h from the same repo; lz4file adds a <stdio.h> dependency · C90 (with long long and optional variadic macros); C99+ used opportunistically (e.g. restrict) with a C90 fallback · any C90 target incl. 32-bit and freestanding/embedded (LZ4_FREESTANDING=1 drops libc); LZ4_FAST_DEC_LOOP auto-enabled on x86, x64, aarch64
-
-**Vs siblings:** Pick LZ4 over Zstandard when decompression throughput and minimal-dependency portability (down to freestanding C90) matter more than ratio; zstd's -1 level already beats LZ4's ratio (2.883 vs 2.101) at somewhat lower speed, and zstd exposes a much wider ratio/speed level range, so pick zstd when you want one tunable knob spanning LZ4-like speed to gzip-beating ratio.
-
-**Gotchas:**
-- Block API (lz4.h) is not self-describing: caller must transmit/store the compressed size and a max decompressed-size bound separately
-- Advanced/experimental symbols behind LZ4_STATIC_LINKING_ONLY are excluded from the shared-library ABI and can break between versions — static-link only
-- Repo license is split by directory: lib/ is BSD-2-Clause, programs/ (CLI, tests) is GPL-2.0-or-later; check which files you actually vendor
-- Open issue #1779 (as of 2026-08) flags the streaming-decompression "synchronized mode" docs as wrong/misleading — verify ring-buffer streaming behavior against source, not just the header comment
-
-**Status:** Actively maintained (dev branch commit 2026-06-01) but the latest tagged release is v1.10.0 from 2024-07-22, so a NULL-pointer-arg fix (CVE-2025-62813, merged 2025-06-01) is not yet in any released tag; usability is 'copyable' since every file carries an OSI license (BSD-2-Clause in lib/, GPL-2.0-or-later elsewhere).
-
-[repo](https://github.com/lz4/lz4) · [benchmark](https://github.com/lz4/lz4)
 
 ### numerics-and-science
 
