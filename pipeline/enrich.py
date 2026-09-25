@@ -54,13 +54,15 @@ def main():
 
     today = json.loads((args.wave_dir / "assignments.json").read_text())["today"]
     entries = json.loads((args.wave_dir / "verified.json").read_text())
+    catalogue = {s["id"]: s for f in sorted((ROOT / "data").glob("wave*/verified.json"))
+                 for s in json.loads(f.read_text())}.values()
     template = load_template()
     prompts_dir, raw_dir = args.wave_dir / "enrich" / "prompts", args.wave_dir / "enrich" / "raw"
     prompts_dir.mkdir(parents=True, exist_ok=True)
     raw_dir.mkdir(parents=True, exist_ok=True)
 
     for e in entries:
-        siblings = [s for s in entries if s["category"] == e["category"] and s["id"] != e["id"]]
+        siblings = [s for s in catalogue if s["category"] == e["category"] and s["id"] != e["id"]]
         sibling_text = "\n".join(
             f"- {s['name']} ({s['repo_url']}): beats {s['baseline']}; {(s.get('claimed_speedup') or 'no numbers')[:160]}"
             for s in siblings
