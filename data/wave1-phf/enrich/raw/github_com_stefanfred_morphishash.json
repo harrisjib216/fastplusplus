@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/stefanfred/morphishash",
+  "one_liner": "Minimal perfect hash function that removes ShockHash's redundant cycle-orientation bits: 1.501 vs 1.523 bits/key at equal build time.",
+  "what_it_does": "Builds a static minimal perfect hash function (MPHF) that maps a fixed set of n distinct keys to 0..n-1 without collisions, close to the 1.443 bits/key lower bound. It is not a hash table: you construct once from a std::vector<std::string> (or precomputed 128-bit hashes) and call operator()(key) to get a slot index, with no membership check, so unknown keys return arbitrary slots. There are two class templates: morphishash::MorphisHash<leafSize, ws>(keys, bucketSize, numThreads) uses RecSplit partitioning (MorphisHash-RS), and morphishash::MorphisHashFlat<k, ws, extraSeedBits>(keys) uses flat bucketing with threshold bumping and has faster queries. The README has no usage example; it says to choose ws so that b = n - ws and that everything else works as in ShockHash.",
+  "how_it_is_fast": "The gain is in space, not speed. As in bipartite ShockHash, each key gets two candidate positions, and a seed search samples random graphs until the graph is a pseudoforest, which can be oriented into a bijection. ShockHash then stores n bits of orientation in a retrieval structure and wastes about one bit per cycle, because every cycle has two valid orientations. MorphisHash writes the valid orientations as a GF(2) linear system Ay = d, substitutes a smaller b-bit retrieval vector (y = Hx, b < n), and solves AHx = d with Gaussian elimination only for seeds that pass the pseudoforest filter. The paper proves this saves Θ(ln n) bits per base case in expectation; a query reads the seed and the b-bit vector, takes the parity of a masked 128-bit hash and picks one of the two candidates.",
+  "when_to_use": [
+    "Static key sets that are built once and queried many times, where the size of the MPHF matters most (for example compressed indexes or k-mer tools), and single-core build costs of about 6-8 microseconds per key are acceptable.",
+    "You want the space-optimized RecSplit-style trade-off. On 100M keys, MorphisHash-RS (n=52, ws=4) gives 1.501 bits/key with 137 ns queries and a 6,669 ns/key build, about 0.02 bits/key less than bipartite ShockHash-RS at the same build time.",
+    "You need ShockHash-RS space (1.489 bits/key) without its build time: MorphisHash-RS builds at 8,085 ns/key vs 172,738 ns/key, about 21x faster, with similar queries (139 vs 131 ns).",
+    "You want queries around 75 ns at about 1.54 bits/key: MorphisHash-Flat (n=88, ws=2) gives 1.541 bits/key vs 1.554 for bipartite ShockHash-Flat at the same query time.",
+    "Your platform is Linux x86-64 with GCC 11-13 and CMake subprojects, and a GPL-3.0 (plus GCC Runtime Library Exception) dependency is acceptable."
+  ],
+  "when_not_to_use": [
+    "Space is the only priority: in the same Table 1, Consensus-RS reaches 1.447 bits/key at a similar build cost (6,733 ns/key), but its queries are slower (222 ns vs 137 ns).",
+    "Query latency is the priority: PHOBIC answers in 49 ns vs 137 ns for MorphisHash-RS, at 1.749 bits/key.",
+    "The key set changes or you need membership tests: there is no insert or delete, and non-member keys map to arbitrary valid slots unless you store keys or fingerprints yourself.",
+    "You need a maintained production library: there is no save/load serialization API in the headers and no README usage docs; the repo has 3 stars, and the code last changed in April 2025.",
+    "Your toolchain is MSVC or non-GCC: the code needs libstdc++ <experimental/simd>, __uint128_t, __builtin_parityll and glibc's __attribute_noinline__ macro, and CI only covers GCC 11, 12 and 13 on Ubuntu 24.04."
+  ],
+  "integration": {
+    "form": "shared lib — header templates plus two CMake-built shared libraries (MorphisHash2Precompiled, Ips2raMorphisHashSorter); consume via add_subdirectory and link the MorphisHash target",
+    "dependencies": "sux, tlx, ips2ra (links Intel TBB, pthread and libatomic) and ByteHamster/Util (pulls in pasta bit_vector); all are git submodules except TBB, which must be installed",
+    "min_toolchain": "C++20, CMake 3.25+, GCC 11+ (CI tests GCC 11, 12 and 13)",
+    "platforms": "x86-64 Linux is tested (paper uses an Intel Core i7-11700; top-level Release builds use -march=native). The GCC/glibc-specific code rules out MSVC. Other architectures are not documented.",
+    "thread_safety": "Not documented. MorphisHash-RS construction takes a num_threads argument (parallel key hashing and per-bucket work); MorphisHashFlat construction is single-threaded. operator() is non-const on both classes, though it only reads state.",
+    "drop_in_for_baseline": "partial — the constructor shape (keys, bucketSize, threads) and operator()(key) returning an index in [0, n) follow ShockHash, but the namespace, class names, template parameters and output positions differ, so code must be recompiled and positions rebuilt"
+  },
+  "gotchas": [
+    "Input keys must be distinct, and neither constructor checks this. Identical keys hash identically under every seed, so the while (true) seed search can never find a bijection.",
+    "The library writes to stdout during construction ('Skipped seed because of floating point inaccuracy' from the seed-pairing function). The precompiled base-case dispatcher prints to stderr and calls exit(1) for leaf sizes or widths that were not compiled in (leaf sizes up to 106 and up to 7 below each).",
+    "MorphisHashFlat allocates its rank-select structure with a raw new and has no destructor or copy/move handling, so it leaks and copies share the pointer. Construct it in place, as MPHF-Experiments does with new.",
+    "All tuning is compile-time and barely documented. The paper's Pareto picks are ws=4 (b=n-4) for RS and ws=2 for Flat. MorphisHashFlat's template order is <k, ws, extraSeedBits>, while the MPHF-Experiments wrapper orders it <l, eb, ws>."
+  ],
+  "pick_this_over_siblings_when": "Pick MorphisHash over ShockHash when you want ShockHash-RS space at about 1/21 of its build time, or slightly less space at the same build time. Pick ConsensusRecSplit instead when the last 0.05 bits/key matters more than queries 1.6x slower (1.447 bits/key, 222 ns vs 137 ns in the same table), and PTHash/PHOBIC or PtrHash when queries must be under about 50 ns and 1.7-3 bits/key is acceptable.",
+  "verified_claims_summary": "In the MPHF-Experiments harness (std::string keys) on 100M keys on an Intel Core i7-11700, bipartite MorphisHash-RS (n=52, b=n-4) measured 1.501 bits/key, 137 ns/query and 6,669 ns/key build vs bipartite ShockHash-RS (n=66) at 1.523 bits/key, 147 ns and 7,186 ns/key. At an equal 1.489 bits/key, it built in 8,085 vs 172,738 ns/key. The paper does not state the compiler or flags (the CMake default is Release with -march=native), and there is no std:: or CMPH baseline. The abstract's '20x less overhead' applies to one unpartitioned base case (under 0.1 vs about 2 bits total at b=n-6, with about 4x more seed tests), not to the bits/key of a full MPHF.",
+  "status_note": "The repo is stale research code, a fork of ByteHamster/ShockHash: the code last changed 2025-04-08, the README 2025-07-03, and its only release is a 'zenodo' archive tag (2025-11-13). It ships ShockHash's GPLv3 COPYING plus COPYING.RUNTIME (GCC Runtime Library Exception), so it can be vendored at a pinned commit with submodules, but expect to fix build and API rough edges yourself.",
+  "sources_read": [
+    "https://github.com/stefanfred/MorphisHash",
+    "https://github.com/stefanfred/MorphisHash/blob/main/README.md",
+    "https://github.com/stefanfred/MorphisHash/blob/main/include/MorphisHash.h",
+    "https://github.com/stefanfred/MorphisHash/blob/main/include/MorphisHash-internal.h",
+    "https://github.com/stefanfred/MorphisHash/blob/main/include/MorphisHashFlat.h",
+    "https://github.com/stefanfred/MorphisHash/blob/main/include/MorphisHashFlatBase.h",
+    "https://github.com/stefanfred/MorphisHash/blob/main/include/MorphisHash-precompiled.h",
+    "https://github.com/stefanfred/MorphisHash/blob/main/src/MorphisHash-precompiled.cpp",
+    "https://github.com/stefanfred/MorphisHash/blob/main/CMakeLists.txt",
+    "https://github.com/stefanfred/MorphisHash/blob/main/.github/workflows/build.yml",
+    "https://github.com/stefanfred/MorphisHash/blob/main/.gitmodules",
+    "https://github.com/stefanfred/MorphisHash/blob/main/benchmark/benchmark_construction.cpp",
+    "https://github.com/stefanfred/MorphisHash/blob/main/COPYING.RUNTIME",
+    "https://github.com/stefanfred/MorphisHash/issues?q=is%3Aissue",
+    "https://github.com/stefanfred/MorphisHash/commits/main",
+    "https://github.com/stefanfred/MorphisHash/actions",
+    "https://github.com/stefanfred/MorphisHash/releases",
+    "https://github.com/ByteHamster/ShockHash",
+    "https://github.com/ByteHamster/Util/blob/main/CMakeLists.txt",
+    "https://github.com/ByteHamster/MPHF-Experiments/blob/main/src/tableMorphisHash.cpp",
+    "https://github.com/ByteHamster/MPHF-Experiments/blob/main/contenders/shockhash/MorphisHashContender.h",
+    "https://github.com/ByteHamster/MPHF-Experiments/blob/main/contenders/shockhash/MorphisHashFlatContender.h",
+    "https://arxiv.org/abs/2503.10161",
+    "https://arxiv.org/pdf/2503.10161"
+  ],
+  "confidence": 0.78
+}

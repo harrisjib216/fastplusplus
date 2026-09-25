@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/rurban/perfect-hash",
+  "one_liner": "Perl generator (pperf) that emits C perfect-hash lookup tables; builds 100k-key tables in 1-2 s where gperf times out.",
+  "what_it_does": "Perfect::Hash is a Perl/XS module with a `pperf` CLI. It takes a static set of string keys (a one-key-per-line file, or a Perl array or hash) and writes pperf.c/pperf.h exposing `long pperf_lookup(const char *s)`, or `(const char *s, int l)` with --nul. The function returns the key's index or integer value, or -1. It fills gperf's build-time role, but it does not read gperf keyfiles and it returns an index, not a struct pointer. Selectable backends: CHD-style -hanovpp/-hanov/-urban, Pearson variants, a nested-switch generator, and wrappers around bundled cmph-2.0 and the gperf executable.",
+  "how_it_is_fast": "The -hanov* methods use hash-and-displace, a Perl port of Steve Hanov's 'Easy Perfect Minimal Hashing' (after Fox et al., CACM 1992, and the CHD algorithm of Belazzougui, Botelho and Dietzfelbinger). Keys go into buckets by h(key,0) mod n. The largest buckets are placed first by trying seeds d until every key in the bucket lands in a free slot, and singleton buckets go straight into leftover slots, marked by a negative d. This greedy pass only retries seeds per bucket, so generation stays in seconds at 99k keys. gperf instead picks key character positions and associated values, and Gperf.pm says it is limited to fewer than 50,000 keys and sensitive to anagrams. A lookup costs 1-2 string hashes (FNV-1, or CRC32 via zlib or SSE4.2), two array loads and one length+memcmp key check. -switch skips hashing: it nests switches on key length and then on the most distinguishing byte, and it compares with word-sized loads instead of memcmp.",
+  "when_to_use": [
+    "Build-time C lookup tables for large static string sets (tens of thousands of keys and up) where gperf stalls. On 99,171 dictionary words, -hanov generated in 0.79-1.03 s and compiled in 1.3-2.2 s. gperf was killed after 65-386 s without output.",
+    "Key lists regenerated often in a build or CI pipeline, where generation time per run matters more than lookup nanoseconds.",
+    "Closed-vocabulary lookups where every probe is a known member. -false-positives drops the stored keys and roughly halves the generated source (about 2.39 MB to 1.20 MB for 99,171 keys).",
+    "Choosing a static-table strategy by measurement. examples/bench.pl generates, compiles and times hanov*, pearson*, cmph-*, switch and gperf output for your own key file and size.",
+    "You need dependency-free C output. -hanovpp (FNV-1) and -switch emit self-contained C that needs no run-time library."
+  ],
+  "when_not_to_use": [
+    "Small or medium keyword sets that gperf already handles. Whole-process lookup times tie: at 2,000 keys gperf takes 0.001428 s vs 0.001418-0.001609 s for pearsonnp/urban/switch/hanovpp, and at 127 keys all methods are within 0.2 ms. So there is no speed gain.",
+    "You need a maintained, released tool. The README says alpha. It was never released to CPAN and has no tags. -minimal and -optimal-* are unimplemented, find_best_method always returns HanovPP, -bob and -cuckoo are TODO, and Urban.pm says its save_c is 'not yet working right'.",
+    "-switch or -pearson on large sets. For 99,171 keys, -switch emitted 147.7 MB of C that took 36-38 s to compile, and -pearson took about 61 s to generate.",
+    "Very large or non-string key sets. The author's benchmarks stop at 99,171 keys (issue #6 asks for 1M). Issue #7 reports --cmph-chm failing on 1,732,934 keys, while 805,769 keys worked in 5.8 s. Keys must be strings and C output values are integers only. Case-insensitive matching and gperf keyfile syntax are not implemented."
+  ],
+  "integration": {
+    "form": "source-drop (generated pperf.c/pperf.h; the generator is a Perl XS module built with perl Makefile.PL && make)",
+    "dependencies": "Generator: Perl 5 with an XS toolchain, Time::HiRes, optional zlib. Makefile.PL also pulls the nbperf and bob git submodules and unpacks the bundled cmph-2.0. The gperf executable is needed only for -gperf. Generated code: none for -hanovpp, -switch and -pearson*; zlib (-lz) or SSE4.2 for -hanov/-urban; libcmph at run time for -cmph-*.",
+    "min_toolchain": "Generator: Perl 5.8+ (the Travis matrix covers 5.8-5.22) plus a C compiler. Generated code is plain C using `inline` (`__inline` on MSVC), with <stdint.h>/<smmintrin.h> only in the SSE4.2 path. Nothing else is documented.",
+    "platforms": "Generator CI ran on Linux (Travis). The code also has paths for macOS, BSD, Solaris, Cygwin and Win32/MSVC. The -hanov SSE4.2 hash needs x86-64. -switch output assumes unaligned loads and the generating host's byte order.",
+    "thread_safety": "not documented (generated lookup functions read only static const tables and keep no state)",
+    "drop_in_for_baseline": "partial — fills gperf's role but reads one-key-per-line files, not gperf's %%-delimited keyfiles (issue #4 open), and returns a long index or -1 instead of a struct pointer"
+  },
+  "gotchas": [
+    "pperf passes options to new() in Perl hash order, but new() treats only the first option as the method name. An option such as --prefix can land first, and pperf then silently falls back to HanovPP (issue #7 shows this). pperf also rejects --switch, --gperf and --bob, so call the Perl API for those.",
+    "Without stored keys there is no membership check. -false-positives lookups return some valid index for absent keys. -cmph-* C output never compares keys; it returns cmph_search_packed() % n.",
+    "-hanov/-urban tables depend on the hash the generator was built with. With zlib, the .c includes zlib.h and needs -lz; otherwise it uses SSE4.2 CRC32-C (-msse4.2) or FNV-1. Hanov.pm notes that MacPorts zlib has no hardware crc32.",
+    "-switch output compares keys with unaligned int/long/quad loads against constants packed in the generating host's byte order. Do not cross-compile it for big-endian or strict-alignment targets (issue #1 also reports a UBSan misaligned load in -urban). The generated header has no include guard and no extern \"C\", so wrap it when you call it from C++."
+  ],
+  "pick_this_over_siblings_when": "Pick it over triehash, strager/perfect-hash-tables or mph when the key set has tens of thousands of strings or more and you need plain C source generated in about a second. Those siblings' catalogued benchmarks use small keyword-style sets and show real lookup wins over gperf. For small C++ sets, frozen or mph build the table at compile time with no Perl step. cmph/cxxmph is the library route if you can link it at run time.",
+  "verified_claims_summary": "The author's examples/bench.pl ran on an Intel Core i5-2300 @ 2.80 GHz under linux/amd64; the 99,171-key table comes from an August 2014 commit. The compiler is not stated (Perl's configured cc, with optimization rewritten to -O3). On 99,171 /usr/share/dict/words keys, gperf (run with -l -c -C) produced no table under any of four option sets and was killed after 65-386 s; that time sits in the 'compile' column because the harness runs gperf inside save_c. hanov/hanovpp/urban generated in 0.79-1.73 s, and a process that looks up every key once ran in 0.0074-0.0161 s. At 2,000 and 127 keys the same whole-process lookup times tie gperf, so the measured win is generation scalability, not lookup speed.",
+  "status_note": "Abandoned alpha: most work dates from 2014-2015, the last commit was 2022-05-31, and there is no CPAN release or tag. The Perl-licensed generator still works as a build step whose emitted .c/.h you vendor, but -cmph-* output needs the LGPL-2/MPL-1.1 libcmph.",
+  "sources_read": [
+    "https://github.com/rurban/Perfect-Hash",
+    "https://github.com/rurban/Perfect-Hash/blob/master/README.md",
+    "https://github.com/rurban/Perfect-Hash#benchmarks",
+    "https://github.com/rurban/Perfect-Hash/blob/master/lib/Perfect/Hash.pm",
+    "https://github.com/rurban/Perfect-Hash/blob/master/lib/Perfect/Hash/HanovPP.pm",
+    "https://github.com/rurban/Perfect-Hash/blob/master/lib/Perfect/Hash/Hanov.pm",
+    "https://github.com/rurban/Perfect-Hash/blob/master/lib/Perfect/Hash/Urban.pm",
+    "https://github.com/rurban/Perfect-Hash/blob/master/lib/Perfect/Hash/C.pm",
+    "https://github.com/rurban/Perfect-Hash/blob/master/lib/Perfect/Hash/Switch.pm",
+    "https://github.com/rurban/Perfect-Hash/blob/master/lib/Perfect/Hash/Gperf.pm",
+    "https://github.com/rurban/Perfect-Hash/blob/master/lib/Perfect/Hash/CMPH.pm",
+    "https://github.com/rurban/Perfect-Hash/blob/master/lib/Perfect/PerfectHashInt.pm",
+    "https://github.com/rurban/Perfect-Hash/blob/master/Hash.xs",
+    "https://github.com/rurban/Perfect-Hash/blob/master/Makefile.PL",
+    "https://github.com/rurban/Perfect-Hash/blob/master/script/pperf.PL",
+    "https://github.com/rurban/Perfect-Hash/blob/master/.gitmodules",
+    "https://github.com/rurban/Perfect-Hash/blob/master/.travis.yml",
+    "https://github.com/rurban/Perfect-Hash/blob/master/examples/bench.pl",
+    "https://github.com/rurban/Perfect-Hash/blob/master/examples/all-bench.sh",
+    "https://github.com/rurban/Perfect-Hash/blob/master/t/test.pl",
+    "https://github.com/rurban/Perfect-Hash/blob/master/t/02sysdict.t",
+    "https://github.com/rurban/Perfect-Hash/blob/master/t/03false-positives.t",
+    "https://github.com/rurban/Perfect-Hash/blob/master/t/04save_c.t",
+    "https://github.com/rurban/Perfect-Hash/issues/1",
+    "https://github.com/rurban/Perfect-Hash/issues/2",
+    "https://github.com/rurban/Perfect-Hash/issues/4",
+    "https://github.com/rurban/Perfect-Hash/issues/5",
+    "https://github.com/rurban/Perfect-Hash/issues/6",
+    "https://github.com/rurban/Perfect-Hash/issues/7",
+    "https://github.com/rurban/Perfect-Hash/commits/master",
+    "https://github.com/rurban/Perfect-Hash/commit/d5abdd3",
+    "https://fastapi.metacpan.org/v1/release/Perfect-Hash",
+    "https://metacpan.org/dist/Perfect-Hash"
+  ],
+  "confidence": 0.75
+}

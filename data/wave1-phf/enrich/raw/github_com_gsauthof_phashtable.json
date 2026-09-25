@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/gsauthof/phashtable",
+  "one_liner": "Tiny C/C++ two-level perfect hash index, built at startup, that flattens worst-case lookup latency versus std::unordered_map.",
+  "what_it_does": "Builds a collision-free lookup table at run time over a static key set that you already hold in an array, such as reference data loaded at program start. Lookup returns a uint32_t index into your array; the table stores no keys or values, and you supply a parametrized hash callback. The C API is gms_phash_table_build / gms_phash_table_lookup / gms_phash_table_free, and phash_table.hh adds a move-only RAII wrapper, gms::Phash_Table. It is not a map interface: there is no insert, erase, iteration, or found/not-found result.",
+  "how_it_is_fast": "It uses two-level perfect hashing in the style of the classic FKS scheme: a first-level table with n/2 buckets stores an offset, a secondary size (at most 255) and an 8-bit hash parameter per bucket. At build time, a per-bucket search over sizes and parameters makes every secondary table collision-free. Both levels map hashes to slots with Lemire's fast-range multiply-shift instead of modulo, and the default hash is SDBM with a parametrized multiplier (65599 + param). Every lookup runs two hash calls, two multiply-shifts and two table loads with no probing or chaining, even when the bucket's parameter is 0, so that every key costs the same.",
+  "when_to_use": [
+    "The key set is fixed or reloaded wholesale (for example a daily instrument/ISIN master file), and rebuilding at startup or re-init is acceptable.",
+    "Latency-sensitive paths where the slowest key matters. On the author's Xeon, the per-key cost stays at 11-12 ns, while std::unordered_map ranges from 9 to 34 ns depending on the key.",
+    "Short, fixed-length string keys with a cheap hash (the benchmark uses 12-byte ISINs with SDBM), especially on low-end cores like Atom, where the hash cost dominates.",
+    "Large runtime key sets where gperf is impractical. The README builds 1.4M ISINs into about 11.4 MB, and reports that gperf did not finish on that set.",
+    "C code, or C++ code that wants a ~370-line BSL-1.0 source drop mapping keys to positions in an existing array."
+  ],
+  "when_not_to_use": [
+    "The set changes incrementally: there is no insert or delete, and any change means a full rebuild.",
+    "You care about the best case or the average. unordered_map's fastest keys beat it (22 vs 43 ns on Atom, 9 vs 11 ns on Xeon, both with SDBM), because every lookup pays for two hash calls.",
+    "Memory is tight. The index alone costs about 8.1-8.6 bytes/key on top of your item array, vs about 5.33 for a 75%-full open-addressing index; cmph's CHD needs about 2 bits/key.",
+    "Many lookups are for absent keys, or the key set is untrusted. Lookup always returns some index, and a bad hash or duplicate keys make the build fail (bucket overflow gives -2; no collision-free secondary table gives -3).",
+    "You need a maintained, tested dependency. The repo has 12 commits from Oct-Nov 2020, no tests beyond one example program, and no CI."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none for the library (libc calloc/free/memset). The example program uses POSIX getline. The benchmark needs Google Benchmark, an external SipHash checkout (not vendored) and libstdc++ internals (std::_Hash_bytes).",
+    "min_toolchain": "C99 for phash_table.c/.h (compound literals, stdbool) and C++11 for the phash_table.hh wrapper. The published benchmarks were built with g++ -std=gnu++17 (GCC 9).",
+    "platforms": "Portable C with no intrinsics or arch-specific code, so any platform should work. It was only measured on x86-64 Linux (Atom C3758 on Fedora 31, Xeon Gold 6246 on RHEL 7).",
+    "thread_safety": "Not documented. By code inspection, lookup only reads the const tables, so concurrent lookups after the build look safe. Build and free need exclusive access.",
+    "drop_in_for_baseline": "false — it is a key-to-array-index function with a user-supplied hash callback. It does no key comparison, has no membership result, no mutation and no iteration. You wrap it and keep your own item array."
+  },
+  "gotchas": [
+    "Lookup never says 'not found'. It returns an index for any key, and absent keys can land on unfilled slots that hold 0. Always compare the key stored at that index, as bench.cc and test_hash_table.c do with memcmp.",
+    "One callback signature does two jobs. Build calls hfn(items, i, param) and lookup calls hfn(key, 0, param), so you normally write two functions that must hash identically. Only the low 8 bits feed the second level, with parameters 0-23 and secondary tables of at most 255 slots.",
+    "C++ wrapper pitfalls. A plain `gms::Phash_Table t;` in automatic storage leaves the pointers uninitialized (the defaulted constructor sits over a C struct), and the destructor then frees them. Move assignment overwrites without freeing the old tables. Use `{}` or construct with data.",
+    "Edge cases are unchecked. With n = 1 the bucket count is n/2 = 0, and the build writes out of bounds. The build computes 2*n in uint32_t, which caps sets below 2^31 keys. The makefile's default target references pybind11 sources that are not in the repo, so compile phash_table.c yourself."
+  ],
+  "pick_this_over_siblings_when": "Pick it over frozen (compile-time constexpr keys) when the keys arrive at run time and number in the millions, and over cmph when you want a tiny BSL-1.0 C drop-in that returns your original array index with flat per-key cost and can accept about 8 bytes/key vs CHD's ~2 bits/key. Choose fph-table instead if you want a C++17, std::unordered_map-like container that allows occasional inserts.",
+  "verified_claims_summary": "The author's Google Benchmark code hammers each of 2,776 ISINs in turn against gms::Phash_Table and libstdc++ std::unordered_map<const char*, uint32_t> (custom hash/equality functors), keeping each key's best of 3 pinned runs. With SDBM the slowest key costs 44 vs 61 ns on an Atom C3758 (g++ -O3 -march=goldmont-plus) and 12 vs 34 ns on a Xeon Gold 6246 (GCC 9, RHEL 7, 4.1 GHz), about 1.4x and 2.8x lower, though unordered_map's fastest keys still win (22 vs 43 and 9 vs 11 ns) and hot-key repetition means cache-miss latency was not measured.",
+  "status_note": "Abandoned since 2020-11-22 (12 commits, no issues or PRs ever filed) but BSL-1.0 and about 370 lines in three files, so it is easy to vendor and audit; the last known-good compiler is GCC 9.",
+  "sources_read": [
+    "https://github.com/gsauthof/phashtable",
+    "https://github.com/gsauthof/phashtable#measurements",
+    "https://github.com/gsauthof/phashtable/blob/master/README.adoc",
+    "https://github.com/gsauthof/phashtable/blob/master/phash_table.h",
+    "https://github.com/gsauthof/phashtable/blob/master/phash_table.c",
+    "https://github.com/gsauthof/phashtable/blob/master/phash_table.hh",
+    "https://github.com/gsauthof/phashtable/blob/master/instrument.h",
+    "https://github.com/gsauthof/phashtable/blob/master/instrument.c",
+    "https://github.com/gsauthof/phashtable/blob/master/test_hash_table.c",
+    "https://github.com/gsauthof/phashtable/blob/master/makefile",
+    "https://github.com/gsauthof/phashtable/blob/master/bench.cc",
+    "https://github.com/gsauthof/phashtable/blob/master/build-bench.sh",
+    "https://github.com/gsauthof/phashtable/blob/master/run-bench.sh",
+    "https://github.com/gsauthof/phashtable/blob/master/describe.py",
+    "https://github.com/gsauthof/phashtable/blob/master/notebook.ipynb",
+    "https://github.com/gsauthof/phashtable/blob/master/libphash-lookup.dot",
+    "https://github.com/gsauthof/phashtable/commits/master",
+    "https://github.com/gsauthof/phashtable/issues?q=",
+    "https://github.com/gsauthof/phashtable/network/members",
+    "https://gms.tf/perfect-hashing.html",
+    "https://github.com/renzibei/fph-table",
+    "https://github.com/serge-sans-paille/frozen",
+    "https://github.com/zvelo/cmph"
+  ],
+  "confidence": 0.85
+}

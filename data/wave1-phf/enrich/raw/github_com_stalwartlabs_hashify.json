@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/stalwartlabs/hashify",
+  "one_liner": "Rust proc-macro that compiles fixed byte-string keyword sets into perfect-hash lookups; beats string `match` and the phf crate.",
+  "what_it_does": "Turns a compile-time list of literal keys into a lookup in the calling crate, replacing a long string `match` or a phf map. `map!(key, T, \"k\" => v, ...)` returns `Option<&'static T>` from a static table, `set!` returns `bool`, and `fnc_map!` works like a `match` whose arms run only on a hit and may `return`, use `?` or `continue`. Each macro has an ASCII-case-insensitive `_ignore_case` variant. The key argument is anything that slices to `&[u8]`, so you pass strings with `.as_bytes()`.",
+  "how_it_is_fast": "Keys of up to 16 bytes are packed into two u64 words (the first and last 8 bytes, which can overlap) plus the length. A hit is then confirmed with three integer compares, with no memcmp and no pointer chase. Longer keys go in a second table and are compared 8 bytes at a time. Up to 16 keys become a gperf --switch style decision tree on the length and one byte (or the XOR of two bytes). 17-64 keys get a collision-free power-of-two table with a searched seed (one multiply, a shift and a load). Larger sets get a PtrHash/PHast-style minimal perfect hash with one 8-bit pilot per bucket, found by a cuckoo-like eviction search. The hash is a cheap multiply-and-fold of the key words rather than the SipHash-1-3 that phf uses, and 32-bit targets get separate tables built from a 32-bit hash.",
+  "when_to_use": [
+    "Rust protocol or format parsers that dispatch on a fixed keyword set known at compile time. The benchmarked sets are HTTP methods, IMAP commands, Sieve keywords, charset names and HTML entities.",
+    "Replacing a string `match` with more than ~100 arms. `match` measured 7.5-7.8 ns per random lookup at 128-149 keys and 25-40 ns at 2125 keys, against about 1.8-2 ns for hashify.",
+    "Replacing phf_map!/phf_set! when the keys are literals. It was 4.1x-12.6x faster than phf 0.14 CHD in the author's benchmark, including the synthetic sets of 10k and 100k keys.",
+    "Miss-heavy input such as tokenizing untrusted text. Half the probes in the random workload are one-bit-off misses, and hashify stays at about 1.0-2.2 ns per lookup.",
+    "no_std, no-alloc or unsafe-forbidding code. The generated code uses only `core` paths, never allocates (tested with a counting allocator) and compiles under #![forbid(unsafe_code)]."
+  ],
+  "when_not_to_use": [
+    "C or C++ code. It is a Rust proc macro with no C ABI and no standalone code-generator output.",
+    "Keys known only at runtime, built programmatically, or named by `const` items or enum variants. Only literal tokens are accepted ('unsupported key expression', issue #1), and there is no build.rs/codegen API (issue #2 is still open).",
+    "Small sets of up to ~26 keys, where a plain `match` stays within 2x (1.34-2.51 ns) and needs no dependency.",
+    "Very large key sets in a crate you rebuild often. The macro re-runs on every compile, incremental builds included, and 1,000,000 keys add about 24 s (15 s with build-override opt-level 3). A `fnc_map!` with 10,000 arms costs about 4 s of extra LLVM time in release builds.",
+    "Case-insensitive matching beyond ASCII. The `_ignore_case` variants fold only A-Z, and all other bytes must match exactly."
+  ],
+  "integration": {
+    "form": "crate (procedural macro)",
+    "dependencies": "none at runtime; syn 3.0, quote and proc-macro2 at build time",
+    "min_toolchain": "Rust 1.88 (Cargo.toml rust-version), edition 2024",
+    "platforms": "any Rust target; no architecture-specific code; 32-bit targets get separate 32-bit-hash tables via cfg(target_pointer_width)",
+    "thread_safety": "not documented; the generated lookups only read immutable `static` tables, so any thread can call them",
+    "drop_in_for_baseline": "partial — fnc_map! mirrors a string `match` (arms run lazily, and return/?/continue are allowed), but you have to rewrite the match as a macro call over bytes with literal keys; map!/set! replace phf_map!/phf_set! with different syntax"
+  },
+  "gotchas": [
+    "Integer keys are matched against their big-endian bytes (`1u16` matches [0, 1]). `map!` values are stored in a `static`, so they must be constant expressions.",
+    "0.3.0 (2026-09-23) was a rewrite. The 0.2 `tiny_map!`/`tiny_set!` macros are gone, and the algorithm changed from FNV-1a + PTHash to the current scheme, so 0.2 users have to migrate. Separately, 0.2 releases before 0.2.8 produced non-reproducible builds (issue #4).",
+    "Keep big lookups in their own crate and set `[profile.release.build-override] opt-level = 3`. Cargo compiles proc macros without optimization by default, which slows table construction (24.07 s vs 15.24 s at 1M keys).",
+    "Table construction can fail with the compile error 'failed to resolve hash collision' once its seed and load-factor retries run out. Large or hard key sets may get up to 5% spare slots instead of a strictly minimal table."
+  ],
+  "pick_this_over_siblings_when": "Every catalogued sibling is C++ (qlibs mph, constexpr-phf, frozen, ConstexprCore/perfect_hash, triehash and the other gperf alternatives), so pick hashify only when the lookup lives in Rust. There it fills the role constexpr-phf or mph fill in C++, and like constexpr-phf it is benchmarked directly against the switch/match baseline; for C++ code, use a sibling.",
+  "verified_claims_summary": "The author's criterion benchmark (benches/lookup.rs, Apple M5 Max, Rust 1.98, default cargo bench profile at opt-level 3) times hashify map! against a Rust `match` with one string arm per key on five real key sets. Results run from 0.68 vs 1.34 ns (9 HTTP methods, hits) to 1.84 vs 39.8 ns (2125 HTML entities, random with half near-misses), about 1.25x-21.6x, plus 4.1x-12.6x over phf 0.14 CHD and 3.2x-8.8x over phf ptrhash; there is no C++ std or gperf comparison, and nobody has reproduced the results independently.",
+  "status_note": "Actively maintained by Stalwart Labs: v0.3.1 reached crates.io on 2026-09-24 under MIT OR Apache-2.0, the crate has ~2.67M downloads and Stalwart's own mail-parser, mail-auth and sieve-rs crates depend on it, but the 0.3 rewrite is only days old and the crate can be reused only from Rust projects.",
+  "sources_read": [
+    "https://github.com/stalwartlabs/hashify",
+    "https://github.com/stalwartlabs/hashify/blob/main/README.md",
+    "https://github.com/stalwartlabs/hashify/blob/main/Cargo.toml",
+    "https://github.com/stalwartlabs/hashify/blob/main/src/lib.rs",
+    "https://github.com/stalwartlabs/hashify/blob/main/src/lookup/mod.rs",
+    "https://github.com/stalwartlabs/hashify/blob/main/src/lookup/hasher.rs",
+    "https://github.com/stalwartlabs/hashify/blob/main/src/lookup/builder.rs",
+    "https://github.com/stalwartlabs/hashify/blob/main/src/lookup/switch.rs",
+    "https://github.com/stalwartlabs/hashify/blob/main/benches/lookup.rs",
+    "https://github.com/stalwartlabs/hashify/blob/main/examples/build_time.rs",
+    "https://github.com/stalwartlabs/hashify/blob/main/tests/strict.rs",
+    "https://github.com/stalwartlabs/hashify/blob/main/tests/allocations.rs",
+    "https://github.com/stalwartlabs/hashify/blob/main/tests/no_prelude.rs",
+    "https://github.com/stalwartlabs/hashify/blob/main/tests/lookups.rs",
+    "https://github.com/stalwartlabs/hashify/blob/74bd8a2/README.md",
+    "https://github.com/stalwartlabs/hashify/commits/main",
+    "https://github.com/stalwartlabs/hashify/issues/1",
+    "https://github.com/stalwartlabs/hashify/issues/2",
+    "https://github.com/stalwartlabs/hashify/issues/3",
+    "https://github.com/stalwartlabs/hashify/issues/4",
+    "https://crates.io/api/v1/crates/hashify",
+    "https://crates.io/api/v1/crates/hashify/reverse_dependencies"
+  ],
+  "confidence": 0.85
+}
