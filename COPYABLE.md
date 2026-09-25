@@ -829,6 +829,10 @@ Userspace wrapper around Linux's io_uring ring-buffer syscall interface; beats l
 
 **Beats:** libaio — ScyllaDB (independent third party) ran fio 1KB random reads across 4 files on an 8-CPU/NVMe box, 72 jobs, iodepth=8: direct I/O gave io_uring 1.42-1.49M IOPS vs libaio 1.32M (~7-12% faster) and sync read/write 814K (~1.7-1.8x); hot-cache buffered I/O gave io_uring 5.02M IOPS vs libaio 4.13M (~22% faster, where libaio degrades toward sync behavior). A separate single-CPU 512B test on Intel Optane showed io_uring at 346MB/s / 1,470us vs libaio 330MB/s / 1,549us (~5% faster). CPU model, kernel version, fio version and compiler flags are not stated on the page.
 
+**Independent measurement:** For 256 round trips of 64B through a pipe, io_uring at batch=1 took 515.97 ns per round trip, 1.79x slower than blocking write+read (288.352 ns) with the same 2.0 kernel entries. batch=256 with registered files and buffers reached 158.753 ns (1.82x faster), but going from batch=64 to 256 cut kernel entries 4x and bought nothing (200.81 vs 201.874 ns). (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz with meltdown/retbleed 'Not affected', run 2026-09-03-third-party)
+
+**Independent measurement:** Kernel entry measured about 100 ns (getppid 100.464 ns), which is ~70% of a pipe round trip (ceiling 3.3x) but only ~11% of a loopback TCP round trip (1833.73 ns, ceiling 1.12x). IORING_SETUP_SQPOLL removed all syscalls yet measured 1.8x slower than the same ring without it and burned an extra core (1.97 CPU-seconds per wall-second). (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz with meltdown/retbleed 'Not affected', run 2026-09-03-third-party)
+
 **How:** The submission and completion queues are ring buffers shared via mmap, so many I/O requests can be queued and many results reaped without a syscall per operation — io_uring_enter can submit a whole batch of SQEs and/or reap a batch of CQEs in one call. Optional SQPOLL mode runs a kernel-side thread that polls the SQ directly, letting the application skip io_uring_enter for submission entirely. This avoids POSIX-AIO's thread-pool dispatch overhead and cuts the per-op syscall count that libaio still pays for io_submit/io_getevents, which is what produces the reported IOPS gains (largest over POSIX-AIO, smaller over libaio).
 
 **Use it when:**
@@ -869,6 +873,10 @@ SIMD-accelerated JSON parser with full UTF-8 validation; ~4x faster than RapidJS
 
 **Beats:** RapidJSON — On GCC 10 -O3 on an unnamed 3.4 GHz Skylake chip, the README's rome.png chart (code in benchmark/) shows simdjson at roughly 2.2-3.2 GB/s against RapidJSON at roughly 0.4-0.5 GB/s. The peer-reviewed VLDB Journal 2019 paper pins the same comparison down with named hardware: on an Intel i7-6700 (Skylake) with GCC 9.1 -O3 -march=native, Table 10 shows simdjson parsing twitter.json at 2.2 GB/s vs RapidJSON at 0.45 GB/s (~4.9x) and RapidJSON insitu at 0.72 GB/s (~3.1x).
 
+**Independent measurement:** Parsing 20k records (2.88 MB, nested 3 deep, escaped strings) and extracting 9 fields each, simdjson On Demand with a reused parser took 113.546 ns/record (1268 MB/s) vs 191.56 ns for yyjson (1.69x). On a 13.86 MB selection corpus it ran at 1445 MB/s vs Glaze 787, yyjson 643 and RapidJSON 248 (5.8x RapidJSON). (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, run 2026-09-03-third-party)
+
+**Independent measurement:** Building simdjson.cpp with -march=native on an AVX-512 host compiled only the icelake kernel (vs icelake, haswell, westmere and fallback with no arch flag), which gives a binary that dies with SIGILL on AVX2-only CPUs. The active kernel was icelake in all three builds, so the portable build cost nothing measurable, and the vendored source is 10.5 MB vs yyjson's 733 KB. (developer source, private repo; gcc 13.3.0, AVX-512 Intel Xeon @ 2.10GHz, run 2026-09-03-third-party)
+
 **How:** Uses SIMD vector instructions to find structural characters, string boundaries, and numbers in bulk rather than byte-by-byte, splitting parsing into index-building and interpretation stages. The On-Demand front-end skips materializing a full DOM/tape, lazily interpreting bytes only as the caller touches them so unused fields/subtrees cost nothing. A runtime CPU-dispatch layer selects among icelake (AVX-512), haswell (AVX2), westmere (SSE4.2), arm64 (NEON), ppc64 (VSX/AltiVec), lsx/lasx (LoongArch), or a generic 64-bit fallback kernel, so one compiled binary runs optimally across chips.
 
 **Use it when:**
@@ -904,6 +912,8 @@ SIMD-accelerated JSON parser with full UTF-8 validation; ~4x faster than RapidJS
 ANSI C JSON DOM library beating RapidJSON via single-file design, in-situ parsing, and low-allocation strategy.
 
 **Beats:** RapidJSON — On AWS EC2 (AMD EPYC 7R32, gcc 9.3, CMake Release build i.e. -O3 -DNDEBUG plus -march=native) yyjson(insitu) parses twitter.json at 1.80 GB/s and stringifies at 1.51 GB/s versus RapidJSON(insitu) 0.77 GB/s parse and RapidJSON(utf8) 0.26/0.39 GB/s parse/stringify, roughly 2.3x-6.9x. On Apple A14 (clang 12) yyjson reaches 2.39-3.51 GB/s parse versus RapidJSON's 0.30-0.75 GB/s.
+
+**Independent measurement:** On the same 20k-record parse-and-extract workload yyjson took 191.56 ns/record vs simdjson's 113.546 (simdjson 1.69x), with 733 KB of source vs 10.5 MB and no SIMD dispatch to mis-build (selection: 643 MB/s, 2.6x RapidJSON). Its documented pool-allocator idiom showed no benefit in a repeated-parse loop (193.125 vs 191.56 ns), although a one-shot 13.86 MB parse during selection did show ~45%. (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, run 2026-09-03-third-party)
 
 **How:** No explicit SIMD anywhere (ANSI C89 throughout); the README attributes speed instead to a modern-CPU-friendly code shape (high ILP, good branch prediction, tolerant of misaligned access) plus three concrete design choices visible in the docs: a single up-front memory allocation per document sized via yyjson_read_max_memory_usage rather than per-node mallocs, an optional in-situ reader (YYJSON_READ_INSITU) that parses strings in place inside the caller's buffer to skip copies, and a built-in fast float parse/print path that bypasses libc strtod/dtoa (toggle: YYJSON_DISABLE_FAST_FP_CONV). doc/Performance.md is a TODO stub, so no deeper algorithmic writeup exists in-repo.
 
@@ -1016,6 +1026,8 @@ Header-only, TLS pool allocator with compile-time size classes; up to 1380x fast
 General-purpose malloc drop-in replacement using sharded per-thread free lists; beats jemalloc/tcmalloc on multi-threaded workloads.
 
 **Beats:** jemalloc — mimalloc's own README Performance section runs the public mimalloc-bench suite (glibc 2.31, GCC 9.3.0/Clang 10.0.0, on a 16-core AMD 5950x and a 36-core Xeon c5.18xlarge) and states in prose that mimalloc is 'more than 2.5x faster than jemalloc' (5.2.1) on sh6bench, 'quite a bit faster' than jemalloc/tcmalloc on larsonN, and 13% faster than tcmalloc (2.8.1) on the leanN Lean self-build workload.
+
+**Independent measurement:** developer source's allocator selection put mimalloc at about 1.5x glibc malloc on allocate/free churn and about 6x on bulk free (approximate figures, no per-row table published), the same order as jemalloc's measured 2.71x via LD_PRELOAD on the committed churn benchmark. It was not vendored because swapping the allocator with LD_PRELOAD gets that gain without a source dependency. (developer source, private repo; selection measurement cited in docs/allocators.md and results/fastest.json row allocator_churn, run 2026-09-03-third-party)
 
 **How:** Each ~64KiB 'mimalloc page' (one size class) uses free-list sharding, and within a page mimalloc keeps two lists per size class: a thread-local free list for same-thread frees and a separate lock-free 'remote free' list for cross-thread frees, so freeing from another thread is a single CAS with no coordination -- this is what wins on cross-thread-free benchmarks like larsonN and xmalloc-testN. It also does eager page purging (decommit/reset OS pages once a shard empties) to cut RSS, and v3 adds true first-class heaps that can allocate from any thread and be destroyed in bulk instead of freeing objects individually.
 
@@ -1382,6 +1394,12 @@ Compressed bitmap for sparse 32/64-bit integer sets; set-algebra ops beat std::u
 
 **Beats:** std::unordered_set<uint32_t> and sorted std::vector<uint32_t> with STL set algorithms (std::set_intersection/union/difference, std::binary_search) from the standard library bundled with GCC 5.4; also an uncompressed bitset (the authors' portable C 'cbitset', same word-array layout as std::bitset/std::vector<bool>) — Paper (Lemire et al., Software: Practice and Experience 2018, arXiv:1709.07821) benchmarked CRoaring single-threaded on an Intel i7-6700 (Skylake, Turbo off) against GCC 5.4 libstdc++ std::vector+STL set algorithms, std::unordered_set, and the authors' own uncompressed 'cbitset', compiled with -O3 -march=native, across 8 real 32-bit integer-set datasets (200 sets each, timed with rdtsc). Roaring's pairwise intersections beat sorted-vector+std::set_intersection by ~3-36x and std::unordered_set by up to ~250x while using 15.1 bits/value on Census1881 vs 195 for std::unordered_set and 32 for std::vector, but a plain uncompressed bitset beat Roaring on every membership query and on set algebra for dense/small-universe datasets.
 
+**Independent measurement:** With two 10k-value sets over a 0..100M domain, AND took 104,928 ns vs 2,303,116 ns for std::bitset<100000000> (21.95x) at 32 KB vs 12.5 MB per bitmap (388x smaller), and iterating was 2782.7x faster (34,163 vs 95,069,724 ns). and_cardinality() answered |A&B| in 36,572 ns, and std::set<uint32_t> also beat the bitset here (325,412 ns). (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, min of 3 samples, run 2026-09-03-third-party)
+
+**Independent measurement:** Inversion on 50%-dense data (5M values over 0..10M): an in-place std::bitset &= beat Roaring's AND (147,744 vs 165,892 ns, 1.12x), Roaring's iterator was 2.7x slower than scanning a bitset (24.4 vs 9.2 ms), and its footprint was slightly larger than the raw bits (1.204 vs 1.192 MB). Only and_cardinality() still won clearly (46,809 ns, 3.2x the best bitset formulation). (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, min of 3 samples, run 2026-09-03-third-party)
+
+**Independent measurement:** Point queries lost in both regimes: 200k probes at ~50% hit rate cost 22.849 ns per contains() on dense data vs 1.07 ns for std::bitset (21.35x slower; 15x slower on sparse data). Sorting the probes for containsBulk() only brought it to 2.053 ns. (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, run 2026-09-03-third-party)
+
 **How:** Values are bucketed by their high 16 bits into 'containers' that switch representation per bucket: a sorted array for sparse chunks, a plain bitset for dense chunks, or a run-length list for consecutive runs (include/roaring/containers/{array,bitset,run}.h), so every 65536-value chunk stores whatever layout is smallest. Set operations dispatch per-container based on both operands' types (mixed_intersection.h, mixed_union.h, etc.) and use runtime-dispatched AVX2/AVX-512 SIMD on x86-64 for bitset and array operations. This adaptivity is what produces both the ~35x memory reduction over an uncompressed bitset and the win over linear STL set algebra on sparse/clustered data.
 
 **Use it when:**
@@ -1525,6 +1543,8 @@ Per-thread sharded reader-writer lock and object wrapper claiming up to ~10x std
 Header-only lock-free SPSC queue for C++11; beats a mutex-guarded queue by ~7x in ping-pong latency.
 
 **Beats:** std::mutex — In the independent max0x7ba/atomic_queue SPSC ping-pong shootout (gcc-14.2.0, -O3 -march=native -mtune=native, AMD Ryzen 5950X, readerwriterqueue commit 2ae710d), moodycamel::ReaderWriterQueue measured a 43ns mean round-trip latency versus 320ns for a mutex-guarded ring buffer used as the std::mutex baseline (~7.4x lower). The project's own benchmarks/bench.cpp never compares against std::mutex at all — only against the 1024cores SPSC queue and folly::ProducerConsumerQueue.
+
+**Independent measurement:** 1 producer/1 consumer, 500k items: 9.4 ns/item vs 131.37 ns for std::mutex + std::deque (13.98x best-of-7; medians 11.72 vs 172.71), while moodycamel::ConcurrentQueue on the same SPSC workload cost 61.54 ns (6.5x slower). A separate 10M-item median-of-11 run measured 6.36 vs 173.04 ns for std::mutex + std::queue (27x). (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, 4 hardware threads, run 2026-09-03-third-party)
 
 **How:** Queue-of-queues design: a circular-linked-list of fixed-size 'block' ring buffers, with the producer owning tail indices/pointers and the consumer owning front indices/pointers so each thread only writes its own state. Enqueue/dequeue are wait-free (no CAS loop, no spinning), O(1) except when a new block must be malloc'd. On x86/x86-64 the required memory barriers compile down to no-ops, so the hot path is just plain loads and stores.
 
@@ -1671,6 +1691,8 @@ SwissTable-based hash map beating std::unordered_map on build, find, churn, and 
 Vector-backed hash map beating std::unordered_map on build, iteration, and string-key workloads, with weaker reference stability.
 
 **Beats:** std::unordered_map — On the library's own scripts/ab/bench_readme.sh harness (clang 22.1.8, -O3, transparent huge pages via madvise, pinned to one core, Fedora 44, AMD Ryzen 9 7950X; std::unordered_map presumed on libstdc++) with 1-2 million u64 or std::string keys, ankerl::unordered_dense::map beat std::unordered_map by 4.84x on build+destroy, 1.98x on find, 2.84x on churn, and roughly 110x on full-table iteration (0.19 vs 21.29 ns/element); with std::string keys build+destroy was 3.64x faster. This is a first-party benchmark — the author wrote both the map and the harness, which he states on the page — but the harness, raw CSV, and SVGs are public in the repo.
+
+**Independent measurement:** On 1M uint64 keys ankerl::unordered_dense was slower than developer source's own fastcpp::flat_hash_map on all three workloads measured (hit lookup, miss lookup, build from empty), and that map in turn lost lookups to phmap (1.29x on hits, 1.39x on misses). Per-operation figures for unordered_dense were not published. (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, run 2026-09-02-libraries)
 
 **How:** Values live in a std::vector, so iteration is a linear scan with no pointer chasing. Lookups use a separate flat array of 88-byte 'group' blocks (16 slots each: 16 one-byte fingerprints, 8 overflow counters, 16 value indices); a probe loads all 16 fingerprints and compares them in one SSE2 (x86-64) or NEON (AArch64) instruction. Overflow counters replace tombstones, so erase never forces a rehash. Inserts emplace_back onto the vector and record the slot in the index, keeping iteration order equal to insertion order until an erase reorders it.
 
@@ -2033,6 +2055,8 @@ Header-only robin hood open-addressing hash map/set beating std::unordered_map o
 
 **Beats:** std::unordered_map — Author-run benchmark (Clang 5.0, -O3 -march=native -DNDEBUG; Intel i5-5200u, 8GB RAM, Linux 4.11 x64; libstdc++) across 200K-3M entries with int64_t and 15/50-char string keys found robin_map faster than std::unordered_map in every measured case: inserts 1.08-3.63x, successful lookups 1.55-5.34x, unsuccessful lookups 1.66-6.57x, erase 1.58-13.5x, iteration 2.6-5.3x. The independent Ankerl 2022 suite puts the geometric-mean advantage around 2.4x, but in that same suite robin_map times out on random insert/erase with an identity std::hash and iterates slower (0.80-0.92x) than std::unordered_map.
 
+**Independent measurement:** Against developer source's SIMD Swiss-table fastcpp::flat_hash_map on 1M uint64 keys, tsl::robin_map was 1.18x faster on hit lookups but 0.49x on misses and 0.82x on build-from-empty, so phmap was adopted instead (absolute ns not published). (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, run 2026-09-02-libraries)
+
 **How:** Robin hood hashing with linear probing keeps entries close to their ideal bucket, so lookups scan a short, cache-resident run instead of chasing pointers through separate chaining nodes. Erase uses backward-shift deletion (no tombstones), which keeps probe sequences short after deletes. Optional per-entry hash caching (StoreHash) and a precalculated_hash parameter let callers skip recomputing hashes on rehash or lookup when the hash or key-equality function is expensive.
 
 **Use it when:**
@@ -2172,6 +2196,84 @@ Asynchronous C++ logging library, drastically lower caller-side latency than std
 **Status:** Abandoned: last commit on master 2021-04-10, no newer maintenance activity found; MIT licensed and small enough to vendor, but an unresolved ThreadSanitizer data-race report (#35) and a still-open VS2019 compile-error issue (#45) are unpatched.
 
 [repo](https://github.com/mattiasflodin/reckless) · [benchmark](https://github.com/mattiasflodin/reckless/blob/master/doc/performance.md)
+
+#### k-mer-dictionaries
+
+##### RSHash  `C++`  `MIT`  `active`  `Tier A`
+
+Static compressed k-mer dictionary that swaps SSHash's MPHF for rank/select bitvectors; 1.4x faster streaming lookups than current SSHash.
+
+**Beats:** SSHash — The authors' Bioinformatics 2026 paper ran k = 31 on one core of an AMD EPYC 9454 with GCC 12.2 in release mode (the repo sets -O3 -march=native), using the Pibiri 2022 genomes and read sets. Streaming lookups were on average 1.4x (up to 2x) faster than SSHash5 (commit e65dcb2) and 4.5x faster than SSHash3 (5a13d6a) at similar bits/k-mer. Random negative lookups were about 50% faster and positive lookups about 10% slower, and builds were 60% faster with 40% less memory. No standard-library or MPHF baseline was measured.
+
+**Known shortcoming:** Benchmarked only against SSHash (SSHash3/SSHash5); positive single lookups are ~10% slower than SSHash5. It does not use an MPHF.
+
+**How:** Like SSHash, it buckets k-mers by random (XOR-seeded) minimizers over a 2-bit-packed copy of the input text. Where SSHash uses a PTHash MPHF, RSHash marks minimizers in an Elias-Fano bitvector R (from Vigna's sux) and ranks into it, then uses a select-indexed bitvector S to find that minimizer's run of text offsets. A negative lookup usually ends after one bit test in R plus a probe of a small hash table for frequent k-mers, with no MPHF evaluation and no text check. Streaming lookups load all text k-mers for the current minimizer into a buffer that is reused for the expected (k-m+2)/2 following k-mers, and extend hits one base at a time along the text. Minimizers that occur more than threshold t times go to up to three further levels with other minimizer lengths and seeds, and the last level is a gtl flat hash set or an Elias-Fano set.
+
+**Use it when:**
+- Streaming membership queries of sequencing reads against a static k-mer set with k <= 32 on one x86-64 core. The paper reports 21-142 ns/k-mer, on average 1.4x faster than SSHash5 at about the same bits/k-mer.
+- Workloads where most k-mers are absent (screening, low-hit read sets). This is where the gap is largest: kestrel low-hit streaming takes 20 vs 40 ns/k-mer, and random negative lookups on human take 360 vs 464 ns.
+- Indexing raw genome assemblies directly, without first building a compacted de Bruijn graph with BCALM2/UST or GGCAT, when you need text positions (locate) rather than k-mer IDs.
+- Pipelines that rebuild indexes often. In the paper, builds from preprocessed inputs are on average 60% faster than SSHash5 and use 40% less memory (human: 3:23 and 10.4 GB vs 6:03 and 14.4 GB).
+- Research or benchmarking where you can tune minimizer lengths, thresholds and levels per dataset. Use the single-level fast setup for speed, or two or three levels to reach about 8 bits/k-mer on human.
+
+**Skip it when:**
+- Random single lookups where most k-mers are present. These are about 10% slower than SSHash5 (human: 701 vs 626 ns). On human high-hit reads, streaming is a tie (83 vs 84 ns/k-mer) and the fast index is larger (10.7 vs 10.1 bits/k-mer).
+- k > 32, k-mer IDs to index satellite data, weights/abundances, or navigational queries. The minimizer views throw for windows over 32, and k up to 63 is only listed as future work. SSHash offers all of these.
+- Non-x86 targets or CPUs without BMI2, and macOS or Windows. shape.hpp includes <immintrin.h> and calls _pext_u64/_pdep_u64 with no fallback, CMake hard-codes -march=native, and only Linux/GCC builds are shown.
+- Projects that need a packaged, stable library. There is no library target, no install rules, no releases or tags, and no API documentation. The project is one author's research code with 8 stars.
+- Untuned or small inputs, and raw collections of many genomes. Parameters (m, t, levels) are tuned by hand for each dataset, and automatic selection is future work. Building the raw bacterial collection took 73.3 GB, against 29.7 GB for SSHash5 on the preprocessed input.
+
+**Integration:** source-drop · seqan3 3.x, sharg-parser and sux (git submodules); gtl v1.2.0 (CMake FetchContent); cereal, which seqan3 pulls in through CPM; vendored kxsort.h and a modified copy of sux's EliasFano.hpp · C++20 and CMake 3.20+. The README builds with g++-14 and the paper used GCC 12.2. The GCC-specific -Wno-interference-size flag is set, and Clang is not documented. · x86-64 with BMI2 only (PEXT/PDEP intrinsics are unconditional and -march=native is hard-coded). Linux is the only documented OS.
+
+**Vs siblings:** Pick RSHash over SSHash for single-threaded streaming read queries against a static k <= 32 set on x86-64. This is strongest for low-hit workloads, faster and leaner builds, text-position locate, or indexing raw genomes with no de Bruijn graph step. Stay with SSHash if you need k up to 63, k-mer IDs, weights or navigational queries, mostly-positive random lookups, or a packaged library that builds on macOS. Against BLight (AGPL-3.0, multi-threaded, needs a de Bruijn graph), RSHash is MIT-licensed and reports 8.0-10.7 bits/k-mer on human against BLight's 22.3, but the two have never been run head to head.
+
+**Gotchas:**
+- With CLI defaults (--level 2), building a small genome segfaults: when level 1 has no frequent minimizers, filter_freq_minimizers indexes an empty vector (open issue #5). Pass --level 1. The author says the defaults were changed, but main still has level{2} (last main commit 2026-07-31).
+- Input is parsed as seqan3 dna4 with dna15 as the legal alphabet. N and other IUPAC codes are silently turned into bases (N becomes A), so N runs in raw genomes or reads become poly-A k-mers instead of being skipped.
+- lookup() and streaming_lookup() return only the number of hits in the batch or read, not a result for each k-mer. Each call heap-allocates scratch buffers. locate needs an index built with --loc. build() and load() print progress to stdout, and the CLI exits with -1 and no message on bad arguments.
+- Index files are raw cereal binary archives with no version field. The sux submodule and the vendored EliasFano.hpp carry LGPL-3.0+/GPL-3.0 headers (with the GCC Runtime Library Exception), not MIT, so check the licensing before you vendor the code.
+
+**Status:** Active single-author research code: the last main commit was 2026-07-31, gapped-k-mer work landed on the multishapes branch in September 2026, and open crash issue #5 was answered within days. It is MIT-licensed with 8 stars and no releases, and you use it by building the CLI or copying source/ into a C++20 x86-64 Linux project.
+
+[repo](https://github.com/jonsmcode/rshash) · [benchmark](https://pmc.ncbi.nlm.nih.gov/articles/PMC13501323/)
+
+##### SSHash  `C++`  `MIT`  `active`  `Tier B`
+
+Compressed static DNA k-mer dictionary: ~5x smaller than Pufferfish, 1.6-2.4x faster streaming lookups, but slower random lookups.
+
+**Beats:** Pufferfish (and dBG-FM, BLight k-mer dictionaries) — In the 2022 Bioinformatics paper (gcc 11.2.0 -O3 -march=native, Intel i9-9940X, one thread, human genome with 2.5 billion 31-mers), canonical SSHash answered streaming membership in 253/183 ns per k-mer (high/low hit rate), against 402/435 ns for Pufferfish dense and 440/1,088 ns for BLight. It used 9.39 bits/k-mer (vs 45.04 and 20.17) and built in 16.2 min (vs 70.7 and 25.0), but its random lookups (990/854 ns) were slower than Pufferfish dense (720/519 ns); no standard-library baseline was involved, and only the SSHash side of that harness is public.
+
+**Known shortcoming:** Benchmarked only against other k-mer dictionaries (Pufferfish, BLight, SBWT, FMSI), never against std::unordered_map or a standalone MPHF. Pufferfish (dense) is faster on random lookup; SSHash's wins are streaming queries, space and build time.
+
+**How:** Sparse and skew hashing: consecutive k-mers of the input strings are grouped into super-k-mers by their minimizer, and a PTHash minimal perfect hash is built over the distinct minimizers only (about 6.5x fewer keys than k-mers at k=31, m=20 in the 2022 paper), so a lookup hashes the minimizer to a small bucket of offsets into the 2-bit-packed strings and verifies the k-mer against the text instead of storing k-mers. Singleton buckets resolve with one text comparison, buckets with fewer than 2^6 super-k-mers are scanned, and the rare heavy buckets go to a 'skew index' of per-size-class PTHash functions over the k-mers themselves, which caps string accesses. Streaming queries skip hashing while a read follows a stored string: after a hit the next query k-mer is compared with the next k-mer of the same unitig ('extension'), and v6 memoizes the last minimizer's bucket to shortcut negatives. Since v6 a forward minimizer scheme with a centre-closest tie-break puts a k-mer and its reverse complement in the same bucket, so every lookup is a single probe.
+
+**Use it when:**
+- Static sets of 10^8 to 10^10 DNA k-mers (bacterial pangenomes, human, HPRC) built from unitigs/eulertigs, where you need k-mer-to-ID and ID-to-k-mer, e.g. as the k-mer index inside a read mapper (the repo carries merged PRs for submodule integration into COMBINE-lab's piscem).
+- Streaming membership over FASTQ reads, where consecutive k-mers overlap: v6 measures 76 ns/k-mer on Human k=31 (high-hit), against 266 ns for SBWT and 1,176 ns for FMSI on the same hardware in jermp/kmer_sets_benchmark.
+- Memory-constrained indexing: 7.4-10.6 bits/k-mer at k=31 and 3.8-7.6 at k=63 in the current benchmarks (2.75 GB for human k=31), with an --mmap option to query the index from disk.
+- Workloads that need Access (rank to k-mer) or navigational queries: Access takes 0.35 us/k-mer on Human k=31, against 10.81 us for SBWT and 18.62 us for FMSI.
+- Pipelines that rebuild often: human k=31 builds in 2:35 with 64 threads under a 16 GB RAM cap, using an external-memory builder with a RAM limit (-g) and a temp directory (-d).
+
+**Skip it when:**
+- Isolated random point lookups with RAM to spare: in the 2022 paper Pufferfish dense answered them faster (720/519 ns positive/negative vs 990/854 ns) while using about 5x the space (45.04 vs 9.39 bits/k-mer).
+- When the smallest index matters most: FMSI takes 3.2-4.4 bits/k-mer at k=31, against 7.4-10.6 for SSHash, though its lookups and streaming queries are more than 10x slower.
+- Dynamic sets: the index is immutable, so any insert or delete means a full rebuild.
+- Raw reads or sequences with duplicate or non-ACGT k-mers: the README requires deduplicated, N-free, one-sequence-per-line input, so you must run GGCAT/BCALM2 first. For membership-only use on inputs with duplicate k-mers (e.g. matchtigs), the author points to SSHash-Lite.
+- General keys or tiny sets: it is not a general hash map or MPHF (use PTHash directly for that), and the author says the smallest input worth indexing is a single bacterial genome (issue #33).
+
+**Integration:** static lib · PTHash (git submodule, which brings bits, essentials, fastmod, xxHash and mm_file), zlib; CityHash vendored in external/ · C++17, CMake 3.5+; CI builds with GCC 11-14 and Clang 16-18 on Ubuntu; k up to 63 needs __uint128_t (GCC/Clang) · x86-64 (CMake always adds -mavx2 -mbmi2, so AVX2/BMI2 CPUs are required) and aarch64 (builds since the Sep 2025 fix for issue #77); tested on Linux with gcc and macOS with clang; Windows not documented
+
+**Vs siblings:** Over RSHash, which claims 1.4x faster streaming on average, pick SSHash for maturity and features: Bioconda packaging, a Rust port, releases since 2022, navigational queries, compressed weights and k up to 63 (RSHash has 8 stars, and its README builds with g++-14 and seqan3). Over BLight, pick SSHash when space and query speed matter: in the 2022 paper it used 9.39 vs 20.17 bits/k-mer and was faster on both streaming and random lookups, though BLight's build peaked at less RAM (7.5 vs 17.3 GB).
+
+**Gotchas:**
+- The builder does not screen its input: build with the same k that produced the unitigs, and supply deduplicated, ACGT-only sequences with one per line. Use --check to verify the built index.
+- The default 2-bit nucleotide encoding is non-standard (A=00, C=01, T=10, G=11), so passing packed-integer k-mers from other tools needs -DSSHASH_USE_TRADITIONAL_NUCLEOTIDE_ENCODING=On. Max k (31 or 63) is also fixed at compile time.
+- Performance and size depend on the minimizer length m, which you must choose. The builder prints a warning only in --verbose mode when m < ceil(log4(N))+1, and the benchmarks tune m per dataset (19-21 for k=31, 23-31 for k=63).
+- The index format is versioned: v6.0.0 (Aug 2026) removed the canonical/regular modes, and loading an index with a different major version throws 'SSHash index needs rebuilding'.
+
+**Status:** Actively maintained (v6.0.0 shipped 2026-08-29 with a breaking index-format change; last commit 2026-09-03), MIT-licensed, on Bioconda with a Rust port, and consumed as a CMake static-library target with submodules rather than a header-only drop.
+
+[repo](https://github.com/jermp/sshash) · [benchmark](https://pmc.ncbi.nlm.nih.gov/articles/PMC9235479/)
 
 #### math-simd-linear-algebra
 
@@ -2579,6 +2681,8 @@ Shortest round-trip double/float-to-decimal conversion, faster than std::to_char
 
 **Beats:** std::to_chars — On the independent fmtlib/dtoa-benchmark suite (Apple M1 Pro, Apple clang 21.0.0, Release build via libc++), Dragonbox's to_chars_n with the full cache table converts a double to its shortest round-trip decimal string in a mean 28.95ns vs 51.35ns for libc++'s std::to_chars (1.77x) and 744.72ns for sprintf (25.72x), over a mixed 1.7M-value pool spanning 1-17 significant digits.
 
+**Independent measurement:** Measured through {fmt} 12.2.0's built-in Dragonbox path, not the standalone library: 20k doubles to shortest round-trip decimal at 52.679 ns each vs 288.311 ns for snprintf %.17g (5.47x) and 456.477 ns for std::ostringstream, while emitting fewer characters than %.17g. (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, run 2026-09-02-core)
+
 **How:** Based on Schubfach (a continuous pigeonhole-principle argument), itself inspired by Grisu/Grisu-Exact. It picks the shortest correctly-rounded decimal digits directly from a precomputed power-of-10 cache table plus magic-number/branchless integer arithmetic, avoiding the big-integer or iterative digit-adjustment loops older dtoa algorithms use. A full cache table (9904 bytes for double) trades static data for speed; a compact table (584 bytes) is ~20% slower.
 
 **Use it when:**
@@ -2722,6 +2826,10 @@ Shortest round-trip float/double-to-string conversion beating sprintf, plus a fa
 Type-safe C++ formatting library beating printf/iostreams; its Dragonbox-based float formatter is the speed driver here.
 
 **Beats:** printf (sprintf) — On an Apple M1 Pro with Apple Clang 21.0.0, fmt::format_to with FMT_COMPILE converted a 1.7M-value pool of random doubles to shortest round-trip decimal strings in a mean 36.84ns each, versus 744.72ns for sprintf (20.214x) and 885.30ns for ostringstream (~24x), per the fmtlib/dtoa-benchmark suite that fmt's own README links from its Performance section.
+
+**Independent measurement:** Formatting 20k mixed rows with '{:>8} {:>10.3f} {}', fmt::format_to with FMT_COMPILE took 71.9 ns/row vs 227.129 ns for snprintf (3.16x) and 391.713 ns for std::ostringstream. fmt::format returning a std::string took 140.399 ns, about 35% over format_to into a reused stack buffer (104.134 ns). (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, run 2026-09-02-core)
+
+**Independent measurement:** Writing 20k doubles in shortest round-trip form, fmt (Dragonbox) took 52.679 ns each vs 288.311 ns for snprintf %.17g (5.47x) and 456.477 ns for std::ostringstream. (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, run 2026-09-02-core)
 
 **How:** Float-to-string conversion uses the Dragonbox algorithm for shortest, correctly-rounded, round-trip decimal output, confirmed directly in the dtoa-benchmark README ('fmt::format_to with compile-time format strings (uses Dragonbox)'). FMT_COMPILE parses the format string into formatting code at compile time — confirmed in include/fmt/compile.h, which requires C++17 constexpr-if support for the compiled fast path and otherwise silently falls back to a non-compiled string check. Output accumulates in fmt::memory_buffer, avoiding iostreams' per-call locale/stream-state overhead and sprintf's null-terminated buffer handling.
 
@@ -2941,6 +3049,8 @@ Header-only C++17 dynamic perfect-hash map/set with unordered_map-like API: look
 Header-only C++14 constexpr immutable set/map/unordered_map built on compile-time perfect hashing; beats std::unordered_map on fixed key sets.
 
 **Beats:** std::unordered_map (arXiv 2602.22506 demos); std::set and std::unordered_set in the author's first-party 2018 Quarkslab microbenchmark — The static_maps preprint (arXiv 2602.22506) timed construction plus lookup for frozen::unordered_map (frozen::basic_string keys, built at compile time) against std::unordered_map<std::string_view> (libstdc++, built at runtime inside the timed region). Setup: g++ 15.2.1 -O3 -march=native on a Core i5-1240P laptop. Results: 44.9 vs 89.6 us for 1,024 individually timed lookups in an 84-key map (~2.0x); 1365.5 vs 1746.8 us translating 65,536 codons through a 64-key map (~1.28x); 15804.5 vs 21228.1 us for 258,688 value updates in a 4,042-key map (~1.34x).
+
+**Independent measurement:** On a 92-key C++ keyword set (200k words, 1:8 keyword:identifier) frozen::unordered_map took 18.888 ns per lookup vs 5.322 ns for developer source's compile-time perfect hash table (3.55x slower; 3.5-3.7x across runs) and 29.168 ns for std::unordered_map (frozen 1.54x faster, derived). (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, run 2026-09-02-libraries)
 
 **How:** unordered_* uses a two-level perfect hash (not minimal) in the hash-and-displace style of Steve Hanov's 'Throw away the keys', built entirely in constexpr. Keys are seed-hashed into M buckets, where M is the next power of two at or above N (doubled below 32 keys). Buckets are processed largest first. A singleton bucket stores its item index directly in table G. A larger bucket gets a per-bucket seed, found by random search with minstd_rand, that puts all its items into free slots of table H. A lookup is one hash into G, at most one more seeded hash into H, then a single key comparison: no probing, no chains, no heap. frozen::set and frozen::map are sorted arrays searched by a fully unrolled branchless binary search.
 
@@ -4182,6 +4292,8 @@ SIMD-dispatched vectorized quicksort/quickselect for built-in key types; ~10x fa
 
 **Beats:** std::sort — hwy/contrib/sort/README.md shows vqsort at 1143 MB/s vs LLVM libc++ std::sort at 54 MB/s (~21x) sorting 1e6 uniform-random f32 keys under AVX3 (AVX-512) on a Xeon 6154 (Skylake-X) at 3 GHz, built with Clang 13.0.1/15.0.6 via `bazelisk build -c opt`; the README's own headline claim is the more conservative '~10x for large arrays of built-in types' as of 2022-06-07, and it separately notes pdqsort-class scalar sorts are about 2x std::sort, not 10x.
 
+**Independent measurement:** In developer source's SIMD selection Highway measured within noise of xsimd on all three kernels over 8.4M floats (fused sum+min+max, dot product, filter/count; xsimd was 7.1x, 2.3x and 1.4x over -O3 autovectorised scalar). It was rejected on integration cost, not speed, because only its static-dispatch subset is header-only; vqsort itself was not measured. (developer source, private repo; selection measurement in third_party/xsimd/VENDORING.md, median of 45 samples, -O3 -march=native baseline; evaluation for run 2026-09-03-third-party)
+
 **How:** Vectorized Quicksort (VQSort paper, arXiv:2205.05982): wide-SIMD partitioning (AVX-512/AVX2/NEON/SVE-width) with in-register sorting networks for base cases, and pivot selection from a 384-byte random sample to balance partitions and avoid recursing into all-equal runs. Later work added 8x2/8x4/4x1/8x1 sorting-network shapes for small inputs and moved RNG seeding into a per-thread TLS cache (previously it fetched OS entropy on every call), which removed most of the small-array overhead (hwy/contrib/sort/README.md, 'Optimizations for small arrays').
 
 **Use it when:**
@@ -4813,6 +4925,8 @@ SIMD-accelerated C CSV parser/writer (AVX-512/AVX2) beating csvkit and PapaParse
 
 **Beats:** csvkit — Author's blog, built with -O3 -march=native -mavx512f -mavx512bw on an unspecified Intel Core i9, reports CLI row-counting of a 1M-row/98MB CSV: miller 0.004s, cisv 0.055s, wc -l 0.083s, rust-csv 0.664s, csvkit 9.788s (~178x over csvkit, but ~14x slower than miller in the same table). Separately, Node.js synchronous parsing measured cisv at 60.80 MB/s vs PapaParse 25.12 MB/s (~2.4x) and csv-parse 14.67 MB/s.
 
+**Known shortcoming:** Upstream marks this monorepo deprecated in favour of split cisv-core / cisv-cli / language-binding repos; the benchmark measures CLI row counting, not full parsing.
+
 **How:** Vectorized byte scanning for delimiters/quotes/newlines using AVX-512 mask compares (or AVX2/SSE2 movemask + ctz, ARM NEON fallback) instead of a byte-at-a-time state machine. Input files are zero-copy memory-mapped with kernel read-ahead hints and read through an L3-sized ring buffer. A chunk-splitting API (mmap + split-at-row-boundaries) enables multi-threaded parallel parsing, described in the header as a '1 Billion Row Challenge technique'.
 
 **Use it when:**
@@ -5101,6 +5215,8 @@ Ruby native-extension binding to the zsv C library; drop-in CSV stdlib replaceme
 
 **Beats:** CSV (Ruby standard library CSV parser) — README benchmark-ips results (Ruby 3.4.7, no CPU/compiler stated) show ZSV beating stdlib CSV by 6.20x at 1K rows (1,013.7 vs 163.4 i/s), 5.27x at 10K rows, 5.00x at 100K rows, and 4.33x at 10K rows with headers enabled, plus 82.6% less memory and 56.9% fewer string allocations at 10K-100K rows.
 
+**Known shortcoming:** A Ruby binding around zsv (github.com/liquidaty/zsv, also listed); its speed is zsv's, so prefer zsv directly outside Ruby.
+
 **How:** The speed comes entirely from zsv's SIMD-accelerated scanning (SSE2/AVX2, per its build output) for delimiter/quote detection, plus a streaming pull-based parser that avoids buffering whole files. The Ruby layer adds a row builder (row.c) that converts parsed fields straight into Ruby arrays/hashes with frozen strings, cutting string allocations (~57% fewer per the README) versus stdlib CSV's line-by-line Ruby-level splitting.
 
 **Use it when:**
@@ -5175,6 +5291,8 @@ Rust proc-macro lexer generator: compiles token/regex rules into one DFA with ju
 
 **Beats:** hand-written lexer — Logos's README reports only its own Criterion throughput (identifiers 1204 MB/s, strings 1575 MB/s, keywords/operators/punctuators 1037 MB/s) with no baseline lexer measured in the same run and no hardware or rustc version given. The one paired comparison found, a third-party blog (alic.dev) on an Apple M1 tokenizing a 100KB pseudocode file, showed logos beating a naive hand-written lexer ~1.8x (174,476 vs 312,837 ns/iter) but running about 10% slower than that same hand lexer on an unspecified x86_64 CPU (221,110 vs 201,148 ns/iter); the author's later SIMD-optimized (NEON) hand-written lexer beat logos by 20-35%.
 
+**Known shortcoming:** Its own README publishes only logos's throughput with no paired baseline; the one head-to-head comparison found (the alic.dev blog) shows mixed results against a hand-written lexer.
+
 **How:** All token/regex rules are merged into a single deterministic finite automaton instead of being matched one-by-one, and branches in that DFA are compiled into lookup or jump tables. The codegen unrolls loops and batches byte reads to cut bounds checks, and disallows backtracking inside token definitions (avoiding ReDoS-style regex backtracking cost). All of this happens as proc-macro codegen at compile time, so the generated lexer has no runtime interpretation overhead.
 
 **Use it when:**
@@ -5210,6 +5328,8 @@ Rust proc-macro lexer generator: compiles token/regex rules into one DFA with ju
 A grammar-driven DFA-table lexer generator for C++, claiming 2x flex's throughput at similar table size.
 
 **Beats:** flex — The only benchmark is a first-party statement on the project's own DFA documentation page: DFA-generated lexers are 'TWO TIMES the speed of "flex" created lexers and about the same size,' with no compiler, compiler flags, hardware, or benchmark corpus given. The same page states re2c-generated lexers are up to 10% faster than LRSTAR's DFA lexers, so LRSTAR is presented as beating flex but not re2c.
+
+**Known shortcoming:** Compared against flex, which is not in this category's baseline list; the '2x flex' claim has no stated compiler, hardware or corpus, and the SourceForge page says '80% faster' instead.
 
 **How:** The core technique is a compressed-matrix DFA transition table: each input character does one table lookup to advance state, with no backtracking and no separate hash-table lookup for keywords (keyword literals are compiled into the same DFA as identifier matching). Comment skipping is also expressed as ordinary DFA transitions rather than a separate scanning routine. The tradeoff for compile-time size is table compression (an explicit 'minimize lexer-table size' /m option), which the author says keeps generation fast even for large keyword sets, unlike more aggressive table-based generators such as re2c.
 
@@ -5282,6 +5402,8 @@ Single-header AVX2 C99 lexer with no tables, ~3-6x faster than flex on tokenizin
 State-machine compiler that generates FSM-based scanners/parsers in 13 host languages; beats flex on one old, unmeasured example.
 
 **Beats:** flex — The only comparison is an author's changelog entry for Ragel 3.7 (Oct 31, 2004): a C++ tokenizer example (examples/cppscan) was implemented three ways -- Ragel, flex, and re2c -- and the Ragel version was reported to run faster than the flex version but slower than the re2c version, with no numbers, no stated compiler flags, and no hardware given.
+
+**Known shortcoming:** Directional claim only (tier D): the flex/re2c comparison in examples/cppscan dates from Ragel 3.7 (2004) and publishes no current numbers; flex is not in this category's baseline list.
 
 **How:** The goto-driven backends (-G0/-G1/-G2) generate direct branches between states with action code inlined at each transition, instead of flex's table-driven lookup-and-dispatch loop, trading generated code size for fewer indirections per input byte. Ragel also offers table-driven (-T0/-T1) and flat-table (-F0/-F1) backends for a size/speed tradeoff. The only concrete comparison found is a 2004-era changelog note (Ragel 3.7) that its C++ tokenizer example ran faster than an equivalent flex version but slower than a re2c version, with no numbers given.
 
@@ -5500,6 +5622,8 @@ Single-header, zero-allocation XML tokenizer for C; beats libxml2's DOM parser o
 
 **Beats:** libxml2 — Console output from test_stb_xml.c (gcc -O2 -std=c99) and test_libxml.c (gcc -lxml2 -O2) on the author's machine (no CPU model given) shows stb_xml at 188 MB/s vs libxml2's 15 MB/s on a 72-byte document (~12.5x) and 556 MB/s vs 36 MB/s on a ~1KB document (~15x); the 1MB-file figure (8707 vs 46 MB/s, ~189x, matching the README's '193x' claim) is invalid because the benchmark's fixed 10000-token buffer caps stb_xml's work at roughly 11% of the document while libxml2 fully parses all ~87357 nodes and throughput is computed over the full byte count on both sides.
 
+**Known shortcoming:** 2 stars. The README's 1 MB figure (~193x) comes from a harness bug that stops parsing at 10,000 tokens while dividing by the full file size; only the ~12-15x on small and medium files holds, and that compares a tokenizer against libxml2 building a full DOM.
+
 **How:** It is a single-pass, branch-heavy state machine (4 states: default, in-tag, comment, CDATA) that never copies bytes or allocates memory; tokens just record start/end offsets into the caller-owned buffer. Each token is a packed 6-byte struct (two uint16 offsets, two uint8 fields) versus libxml2's 40+ byte DOM nodes, so far less memory is written per byte of input. libxml2, by contrast, builds a full DOM (xmlParseMemory + tree of xmlNode/xmlAttr) with allocation, validation-related bookkeeping, and pointer-linked structures.
 
 **Use it when:**
@@ -5537,6 +5661,8 @@ Single-header, zero-allocation XML tokenizer for C; beats libxml2's DOM parser o
 Rust parser-combinator library beating nom on JSON throughput, with error recovery and zero-copy output.
 
 **Beats:** nom — In chumsky's own first-party criterion JSON-parsing benchmark, run on a single core of an AMD Ryzen 7 3700x, chumsky's check-only mode took 140.77 us (797 MB/s) and full parse took 210.43 us (533 MB/s), versus 526.52 us (213 MB/s) for nom (7.1/8 both used as dev-dependencies) — roughly 3.7x and 2.5x the throughput of nom on that one workload. rustc version and optimization flags are not stated in the benchmark writeup.
+
+**Known shortcoming:** The GitHub repo linked here is archived because development moved to https://codeberg.org/zesterer/chumsky, which is active.
 
 **How:** Parsers are built as a typed combinator tree that chumsky's internal optimizer (built on GATs) specializes at compile time, avoiding much of the dynamic dispatch overhead of naive combinator libraries. A 'check-only' mode validates input without constructing an output/AST at all, which is the fastest configuration in its own benchmark. Zero-copy string/byte-slice handling avoids per-token allocation, and the optional `stacker` feature (on by default) spills recursion state to the heap only when the native stack is close to exhausted, rather than paying a cost up front.
 
@@ -5790,6 +5916,8 @@ Pure-Zig regex engine beating Python's re module on 6 of 7 README benchmark patt
 JIT-compiles RE2's NFA to x86-64 machine code; beats RE2 on capture groups and Unicode classes.
 
 **Beats:** RE2 — First-party README benchmarks (no CPU model, compiler, flags, or absolute timings given) claim re2jit matches RE2's speed on unanchored non-capturing search (shared DFA), runs 20-30% faster than RE2 when capture-group boundaries are needed (test/32-markdownish, a two-regex Markdown-to-HTML converter), and up to 100x faster than RE2 on patterns using Unicode property classes like \pL (test/30-long, a tokenizer for the 'dg' language), all measured against google/re2 directly with no C++ stdlib comparison.
+
+**Known shortcoming:** The author's own README warns against using it in production.
 
 **How:** Two techniques: an x86-64 assembler DSL (asm64.h) plus a converter (it.x64.cc) turn Thompson-NFA thread stepping into native opcodes in mmapped executable memory, skipping RE2's VM dispatch loop when capture positions must be reported; and a rewriter (rewriter.h) replaces RE2's per-codepoint alternation expansion of Unicode classes (\pL, \p{Lu}, etc.) with a generated 2-stage lookup table, turning a many-branch match into a table lookup. For simple unanchored, non-capturing search it just defers to RE2's DFA, so there's no regression there.
 
@@ -6085,6 +6213,8 @@ Header-only, C++23 reflection-based JSON (plus BEVE/CBOR/MessagePack/TOML/YAML/C
 
 **Beats:** RapidJSON — On a single-core MacBook Pro M1 with Clang 17 (optimization flags not specified in the benchmark harness), Glaze round-trips a nested JSON test struct 1,000,000 times in 1.01s (1396 MB/s write / 1200 MB/s read) versus RapidJSON's 3.76s (289 MB/s write / 416 MB/s read) — roughly 3.7x roundtrip, 4.8x write, 2.9x read — per the author-run json_performance benchmark (results dated June 8, 2025), which also appears verbatim in the Glaze README's Performance table.
 
+**Independent measurement:** In developer source's JSON selection (13.86 MB corpus, 20k nested records, full parse plus 9-field extraction, identical checksums) Glaze ran at 787 MB/s vs simdjson 1445, yyjson 643 and RapidJSON 248 (3.2x RapidJSON). It was not adopted because it failed to compile under -std=c++20 on gcc 13.3 and clang 18.1 (it needs C++23) and has no runtime SIMD dispatch. (developer source, private repo; selection measurement in third_party/simdjson/VENDORING.md, median of repeated runs; evaluation for run 2026-09-03-third-party)
+
 **How:** Uses C++23 compile-time reflection (or C++26 P2996 on GCC 16+/Bloomberg clang-p2996) to generate per-struct parse/serialize code at compile time instead of runtime introspection or macro-generated boilerplate, writing directly into destination objects rather than an intermediate DOM. Adds compile-time perfect-hash maps for key lookup and runtime SIMD dispatch (SSE2 through AVX-512BW on x86-64, NEON on ARM, SIMD128 on Wasm, auto-selected from compiler target macros) for UTF-8 validation, string escaping, and structural whitespace skipping.
 
 **Use it when:**
@@ -6161,6 +6291,10 @@ General-purpose malloc(3) with per-thread arenas and decay-based purging; beats 
 
 **Beats:** phkmalloc (FreeBSD libc malloc, the incumbent jemalloc replaced) — Evans' 2006 BSDCan paper (first-party, not peer-reviewed, no compiler/flags given, on a 4-CPU dual-dual AMD Opteron 275 / FreeBSD-CURRENT box) shows jemalloc beating FreeBSD's phkmalloc by roughly 1.1x-1.55x mean run time across five single-threaded programs (cca, gs, sh6bench, smlng, cfrac), and by roughly two orders of magnitude or more in throughput on a 20-thread malloc-test microbenchmark, where phkmalloc collapses below 1e5 allocs/sec by 10 threads while jemalloc plateaus near 3e7.
 
+**Independent measurement:** Loaded into the same binary with LD_PRELOAD (no rebuild), jemalloc cut new/delete churn (200k allocate/free pairs in unrelated order, 4096 live 48-byte objects) from 11.738 to 4.33 ns vs glibc malloc (2.71x). It also closed a fragmented 200k-node list walk from 13.028 to 3.965 ns per node, so most of the apparent arena locality win was a glibc fragmentation loss. (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, run 2026-09-03-third-party)
+
+**Independent measurement:** jemalloc did not replace an arena: when 200k nodes were allocated and then all freed, new/delete under jemalloc only improved from 18.682 to 12.63 ns per node, against 3.15 ns for a bump arena (4.0x, derived). std::pmr::unsynchronized_pool_resource stayed at 42.77 ns on churn under jemalloc. (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, run 2026-09-03-third-party)
+
 **How:** Splits the heap into multiple independent arenas (selected per-CPU or per-thread) so unrelated threads rarely contend on the same lock, backed by per-thread caches (tcache) that serve small size-class allocations without touching an arena at all. Size-class segregation limits fragmentation, and unused pages are reclaimed via time-based decay (dirty_decay_ms/muzzy_decay_ms) instead of immediate unmap, trading a little steady-state memory for fewer syscalls. The 5.4.0 release (Sep 2026) adds an HPA (huge-page-aware) extent allocator and demand-adaptive tcache refill/flush, replacing the older fixed-size tcache tuning knobs.
 
 **Use it when:**
@@ -6232,6 +6366,8 @@ Single-file source drop-in overriding operator new/delete; thread-local free lis
 Lock-free, per-thread-caching malloc replacement for C/C++, drop-in via LD_PRELOAD or override, faster than glibc/tcmalloc/jemalloc under threaded churn.
 
 **Beats:** crt (system glibc malloc on Ubuntu 16.10, backing operator new/delete); charts also include tcmalloc, ptmalloc3, jemalloc, lockfree-malloc, scalloc, lockless — Verifier-confirmed numbers come from the project's own (now separate) rpmalloc-benchmark suite run on one Ubuntu 16.10 machine (8 logical cores; CPU model and compiler unstated): roughly 2.3x crt (glibc malloc) throughput at 1 thread and 3.4x at 4 threads for random 16-1000B allocations, and about 2.4x at 1 thread for 512B-160000B allocations, all read approximately off chart images (tier C, no raw numbers in the page text). The suite's own 'lockless' allocator beats rpmalloc in the large-size chart, contradicting the page's 'faster than all tested allocators except lockfree-malloc' claim.
+
+**Independent measurement:** developer source's allocator selection put rpmalloc at about 2x glibc malloc on allocate/free churn (approximate figure, no per-row table published), the same order as jemalloc's measured 2.71x via LD_PRELOAD (11.738 to 4.33 ns). (developer source, private repo; selection measurement cited in docs/allocators.md and results/fastest.json row allocator_churn, run 2026-09-03-third-party)
 
 **How:** Each thread owns a private heap and the hot allocate/free path takes no locks. Memory is organized span (256MiB-aligned) -> page -> block by fixed size class, so free() locates the owning span/page header in O(1) by masking the pointer's low bits instead of a table lookup. Blocks freed by a non-owning thread are pushed to a per-page atomic deferred free list and reclaimed lazily by the owner thread, avoiding the double thread-cache hop other allocators pay on producer/consumer handoff.
 
@@ -6491,6 +6627,10 @@ Lock-free MPMC C++11 queue with per-producer sub-queues and bulk ops, beating bo
 
 **Beats:** boost::lockfree::queue — On an 8-core AWS c1.xlarge, moodycamel with tokens reached 795.01k ops/s vs boost::lockfree::queue's 647.96k ops/s (~1.2x) at 8 threads under a balanced producer/consumer workload; the large 70-226x figures are from a producer-only, single-item-with-tokens enqueue microbenchmark, and the ~4-5x weighted averages include moodycamel's bulk operations, which boost and tbb do not support. g++ version and optimization flags are not stated for the AWS runs.
 
+**Independent measurement:** 2 producers/2 consumers, 1M items: with ProducerToken/ConsumerToken 115.76 ns/item vs 176.76 ns for std::mutex + std::deque (1.53x), but the plain enqueue()/try_dequeue() API measured 243.01 ns and lost to the mutex. Nothing warns at compile time. (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, 4 hardware threads, run 2026-09-03-third-party)
+
+**Independent measurement:** Aggregate throughput fell from 1P1C to 2P2C (with tokens 29.2 to 15.3 M items/s, 0.52x; without tokens 15.8 to 6.2 M/s) while std::mutex + std::queue rose from 5.8 to 7.4 M/s. Single-threaded and uncontended, the bare queue was slower than a mutex (16.64 vs 7.94 ns). (developer source, private repo; selection measurement in third_party/concurrentqueue/VENDORING.md, median of 11 runs, shared 4-core VM; evaluation for run 2026-09-03-third-party)
+
 **How:** Each producer gets its own internal sub-queue built from contiguous, freelist-recycled blocks (default 32 elements) instead of a shared linked list, so producers rarely contend; consumers scan sub-queues for a non-empty one. Tokens let a thread cache its producer/consumer handle to skip repeated lookups, and bulk enqueue/dequeue amortize per-operation atomic/CAS overhead across many elements at once. try_enqueue never allocates once the queue is correctly pre-sized, trading a possible false-full return for zero lock/alloc cost on the hot path.
 
 **Use it when:**
@@ -6528,6 +6668,14 @@ Lock-free MPMC C++11 queue with per-producer sub-queues and bulk ops, beating bo
 Header-only, Abseil-derived flat/node hash maps and a btree; drop-in for std::unordered_map/map, ~3x faster inserts.
 
 **Beats:** std::unordered_map — Per the record's verification of the repo's own raw benchmark data (100M random 8-byte-integer-key inserts, MSVC Visual Studio 2017, cl -EHsc -DNDEBUG -O2, CPU model not stated): std::unordered_map took 48.38s vs phmap::flat_hash_map 14.41s vs phmap::parallel_flat_hash_map 14.47s, roughly 3.4x faster than std::unordered_map. The writeup's own '~3x faster' sentence actually describes absl::flat_hash_map vs VS2017's std::unordered_map, not phmap directly.
+
+**Independent measurement:** On 1M uint64 keys phmap::flat_hash_map found hits in 14.625 ns vs 18.911 ns for developer source's own SIMD Swiss table (1.29x) and 33.687 ns for std::unordered_map, and misses in 7.006 ns vs 9.723 ns (1.39x) and 44.665 ns (6.4x). It lost build-from-empty to the in-repo map, 38.07 vs 34.72 ns per key (1.10x). (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, run 2026-09-02-core)
+
+**Independent measurement:** On a closed 92-key C++ keyword set (200k words, 1:8 keyword:identifier) phmap::flat_hash_map took 19.787 ns per lookup vs 5.322 ns for a compile-time perfect hash table (3.7x slower) and 29.168 ns for std::unordered_map. (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, run 2026-09-02-libraries)
+
+**Independent measurement:** At 1M uint64 keys phmap::btree_map beat std::map 18.72x on in-order iteration (7.106 vs 133.05 ns per element), 3.89x on lower_bound range queries (255.2 vs 991.946 ns) and 3.65x on build from random key order (267.5 vs 977.2 ns). (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, run 2026-09-03-third-party)
+
+**Independent measurement:** Inversion: at 10k cache-resident keys std::map beat phmap::btree_map on lookups, 36.773 vs 54.947 ns for hits (std::map 1.49x) and 38.3 vs 53.7 ns for misses, while btree_map won 1M-key lookups by only 1.26x. Iteration still favoured btree_map at 10k (1.16 vs 9.14 ns, 7.9x). (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, run 2026-09-03-third-party)
 
 **How:** Uses Abseil's swiss-table design: an open-addressed table with a parallel one-byte-per-slot metadata array probed with SSE2 (checks 16 slots at once), letting load factor run up to 87.5% before resizing. flat_hash_map/set store keys and values directly in the bucket array (no per-node allocation/indirection). parallel_* variants split the table into N (default 16) independently resizable submaps, which lowers peak resize memory and lets different threads lock different submaps concurrently.
 
@@ -6853,6 +7001,12 @@ Header-only C++ SIMD abstraction: portable batch<T,Arch> type replaces scalar lo
 
 **Beats:** std::transform / scalar loops — No numeric benchmark is published anywhere in the repo, docs, or README. The repo's benchmark/ directory (main.cpp, xsimd_benchmark.hpp) is a Google-Benchmark-style harness that times scalar loops against xsimd batches, but no results are committed or published, so 'faster than scalar/std::transform' is an unverified qualitative claim, not a measured number against any specific compiler, flag set, or hardware.
 
+**Independent measurement:** A fused sum+min+max over 8.4M floats ran at 0.18 ns/element with xsimd vs 1.277 ns for the scalar loop (7.08x), because gcc emits zero vector instructions for that float reduction at -O3 -march=native without -ffast-math. The xsimd result was also 158x more accurate against a double-precision reference. (developer source, private repo; gcc 13.3.0 -O3 -march=native (benchmarks forced to -O3 per the row's re-measurement note), Intel Xeon @ 2.10GHz, run 2026-09-03-third-party)
+
+**Independent measurement:** Where gcc can vectorise, the margin shrank: dot product over 8.4M floats 0.317 vs 0.717 ns/element (2.26x, memory-bound) and an integer filter/count 0.164 vs 0.249 ns (1.51x, kept as the negative control). The filter/count result was 1.82x before the scalar baseline was corrected from -O2 to -O3. (developer source, private repo; gcc 13.3.0 -O3 -march=native, Intel Xeon @ 2.10GHz, run 2026-09-03-third-party)
+
+**Independent measurement:** On a 128x128 float32 matmul an explicit xsimd ikj kernel (162,632 ns) lost to the plain ikj loop with __restrict on the parameters (122,170 ns; 1.33x, derived). Hand-written xsimd did win fixed 4x4 multiplies against a naive triple loop (3.091 vs 6.247 ns, 2.02x) and was the fastest complex multiply-add variant measured (0.147 ns/element SoA vs 0.966 for AoS std::complex<float>). (developer source, private repo; gcc 13.3.0 -O3 -march=native, Intel Xeon @ 2.10GHz, run 2026-09-03-third-party)
+
 **How:** It compiles operators and math functions directly to the target ISA's real SIMD instructions instead of relying on the autovectorizer or scalar code, via either an explicit Arch template parameter or auto-selection based on compiler flags (e.g. -mavx2). The vectorized math functions (exp/log/trig/pow) are lightweight polynomial-approximation implementations inherited from the now-deprecated boost.SIMD project. xsimd::dispatch() adds runtime ISA dispatch so one binary can pick the best available instruction set at startup.
 
 **Use it when:**
@@ -6890,6 +7044,8 @@ Header-only C++ SIMD abstraction: portable batch<T,Arch> type replaces scalar lo
 Cloudflare's immutable Rust map/set on a fingerprinting MPHF (2.1-2.7 bits/key); its edge over std HashMap is compactness, not lookup speed.
 
 **Beats:** Rust std::collections::HashMap / HashSet, tested only in the third-party benches of unmerged PR #6 (with FxHash and with the SipHash DefaultHasher). The README itself claims, without numbers, faster query and construction than the `ph` crate (beling/bsuccinct-rs) and better performance than rkyv::ArchivedHashMap. std::unordered_map is never tested. — First-party criterion comments only, with no baseline, no CPU and no rustc stated (fat-LTO release profile, Dec 2023, then-default FxHasher, result not black_boxed): on 1M random u64 keys, a bare Mphf<32,8> get takes 14.4 ns at 2.10 bits/key (gamma 1.0) and 4.6 ns at 2.72 bits/key (gamma 2.0), and a MapWithDict<u64,u32> get takes ~75.8 ns. The only head-to-head is unmerged third-party PR #6 (Cargo default profile, hardware unstated): 19.7-26.3 ns per Mphf get, 1.8-2.4x slower than std HashSet/HashMap with FxHash, ~1.3x faster only than std HashSet with SipHash (~1.06x at equal hasher), ~1.1x slower than rkyv ArchivedHashMap. Neither source measures memory against std, and no C++ baseline exists.
+
+**Known shortcoming:** Not faster at lookup: the only head-to-head numbers (unmerged third-party PR #6) show it 1.8-2.4x slower than Rust's std HashMap with FxHash and ~1.1x slower than rkyv ArchivedHashMap. Its win is memory; the README's 5-20 ns figures predate the current default hasher.
 
 **How:** The MPHF is FMPHGO, Beling's 'Fingerprinting-based minimal perfect hashing revisited': keys are hashed with WyHash into a bit array of gamma*n bits per level. A key that lands alone sets its bit, and colliding keys move to the next level. Group optimization splits each level into B-bit groups, tries 2^S seeds per group and keeps the seed with the fewest collisions, so fewer levels are needed (tests at 100k keys: 1.64 average levels at gamma 1.0, 1.06 at gamma 2.0). A query hashes the key once per level until it finds a set bit, then returns rank(bit) from a two-level rank directory (4096/512-bit blocks packed in 16 bytes, ~3.1% overhead, after Kurpicz's rank/select engineering paper). Map and Set then do one equality check against the stored key at that index.
 
@@ -7579,6 +7735,8 @@ Compile-time perfect hash table for fixed string-key sets (keywords, opcodes); 5
 
 **Beats:** std::unordered_map — With gcc 13.3 and libstdc++ at -O2 -march=native -std=c++20 on a shared 4-core 'Intel Xeon @ 2.10GHz' cloud VM (commit dfa74f2, minimum of 7 samples), 200k lookups against the 92 C++20 keywords took 3.3 ns vs 23.2 ns for std::unordered_map<string_view,uint16_t> when every lookup hit, 3.0 vs 20.2 ns when every lookup missed, and 4.9 vs 28.2 ns with 1 keyword per 8 words. These are the author's own numbers, with no outside review, and the results file warns that absolute ns drift between runs (3.42 vs 5.24 ns for the same lookup); only the ratios within a run are claimed.
 
+**Known shortcoming:** The repo (private:developer-source) is private, so the link returns 404 for readers and the result cannot be reproduced; the recorded run names no CPU model beyond 'Intel Xeon @ 2.10GHz'.
+
 **How:** It reimplements the technique from Matthew 'strager' Glazar's talk 'Faster than Rust and C++: the PERFECT hash table' as a constexpr brute-force search for a single-level perfect hash. The search tries, cheapest first, which characters to hash (any subset of s[0], s[1], s[2], s[n/2], s[n-3], s[n-2], s[n-1] and the length), a power-of-two table size and a 32-bit seed. The resulting hash is a few byte loads packed into one 64-bit word and one multiplicative (Lehmer-style) hash, with no loop over the string; the benchmarked C++ table hashes 3 characters into 1024 slots. Length-range and first-character-range gates reject many misses before any hashing. Keys are stored inline in the slots of a .rodata array, so a hit costs one load and one std::memcmp, with no probe loop or pointer chase.
 
 **Use it when:**
@@ -7686,6 +7844,8 @@ Rust no_std perfect-hash immutable Map/Set (up to 65,535 keys) with 1.9x-16.9x l
 Perl generator (pperf) that emits C perfect-hash lookup tables; builds 100k-key tables in 1-2 s where gperf times out.
 
 **Beats:** gperf — The author's examples/bench.pl ran on an Intel Core i5-2300 @ 2.80 GHz under linux/amd64; the 99,171-key table comes from an August 2014 commit. The compiler is not stated (Perl's configured cc, with optimization rewritten to -O3). On 99,171 /usr/share/dict/words keys, gperf (run with -l -c -C) produced no table under any of four option sets and was killed after 65-386 s; that time sits in the 'compile' column because the harness runs gperf inside save_c. hanov/hanovpp/urban generated in 0.79-1.73 s, and a process that looks up every key once ran in 0.0074-0.0161 s. At 2,000 and 127 keys the same whole-process lookup times tie gperf, so the measured win is generation scalability, not lookup speed.
+
+**Known shortcoming:** Lookups only tie gperf (and pearsonnp edges it at 2,000 keys). The real win is table generation on very large key sets: ~1-2 s for ~99k keys where gperf was killed after 65-386 s. The generator is Perl.
 
 **How:** The -hanov* methods use hash-and-displace, a Perl port of Steve Hanov's 'Easy Perfect Minimal Hashing' (after Fox et al., CACM 1992, and the CHD algorithm of Belazzougui, Botelho and Dietzfelbinger). Keys go into buckets by h(key,0) mod n. The largest buckets are placed first by trying seeds d until every key in the bucket lands in a free slot, and singleton buckets go straight into leftover slots, marked by a negative d. This greedy pass only retries seeds per bucket, so generation stays in seconds at 99k keys. gperf instead picks key character positions and associated values, and Gperf.pm says it is limited to fewer than 50,000 keys and sensitive to anagrams. A lookup costs 1-2 string hashes (FNV-1, or CRC32 via zlib or SSE4.2), two array loads and one length+memcmp key check. -switch skips hashing: it nests switches on key length and then on the most distinguishing byte, and it compares with word-sized loads instead of memcmp.
 
@@ -8345,6 +8505,10 @@ Header-only C++17 JSON library, 2-4x faster than nlohmann::json at parsing and s
 Header-only C++20 binary serializer using compile-time aggregate reflection; no schema, no codegen, faster than JSON via RapidJSON in third-party benchmarks.
 
 **Beats:** JSON serialization (RapidJSON) — In chronoxor/CppSerialization's trading-object-graph benchmark on Apple M1 Pro (macOS, CppBenchmark 'release' build, compiler/flags otherwise unstated), zpp::bits serialized in 34ns and deserialized in 37ns for a 130-byte message, versus RapidJSON-based JSON at 696ns/291ns for a 301-byte message — about 20x/7.9x faster. This compares a binary format to JSON text rather than the same facility, and the 291ns JSON-deserialize figure excludes a separately reported 771ns JSON-parse step.
+
+**Independent measurement:** Serializing 100k records with std::string and std::vector members took 26.914 ns/record into a reused output buffer vs 39.735 ns with a fresh buffer each time, so buffer reuse alone was worth 1.48x. In selection it was the fastest of three header-only serializers (24.19/63.37 ns serialize/deserialize vs bitsery 32.22/66.34 and cista 62.87/99.17, median of 11). (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, run 2026-09-03-third-party)
+
+**Independent measurement:** Recorded as a loss: deserializing the same 100k records took 99.041 ns/record, 32.8x the 3.02 ns memcpy floor (POD only, allocates nothing), and most of the gap is allocating owning members. zpp_bits also defaults to native byte order unless zpp::bits::endian::little{} is passed. (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, run 2026-09-03-third-party)
 
 **How:** Member enumeration happens at compile time via structured bindings or an explicit `zpp::bits::members<N>` count, so there is no RTTI or runtime reflection, and the library is written almost entirely `constexpr` so the compiler can inline and specialize per type. It writes fields directly into a contiguous byte buffer (vector, array, or span) with no intermediate DOM/tree, unlike a JSON library that must build an object model. Field sizes can be fixed-width or opted out entirely, avoiding the text formatting and number parsing that JSON serialization pays for on every field.
 
@@ -9595,6 +9759,10 @@ Header-only C++ template library for dense/sparse linear algebra; beats OpenBLAS
 
 **Beats:** OpenBLAS — On an Intel Xeon Gold 6444Y (GCC 13.3.0, -O3 -DNDEBUG -mavx512dq -mfma, single-threaded), Eigen's own kernels beat OpenBLAS 0.3.26's geometric-mean GFLOP/s on GEMV, DOT, TRSM, POTRF and SYEV across most size bands (roughly 1.1-4.9x), are near parity on large GEMM, and lose on GEEV and GESDD; against Intel oneMKL 2025.3, Eigen is generally slower at large sizes. The harness (Google Benchmark 1.8.3, median of 10 reps) is public but still an unmerged GitLab merge request (!2903), and frequency was not locked during the run.
 
+**Independent measurement:** Eigen 5.0.1 reached 193.1 GFLOP/s on f32 matmul N=1024 (91% of the host's measured single-core FMA peak of 212.2, 1.42x a hand-written xsimd kernel, 1.85x Blaze), but lost fixed 4x4 multiplies to a naive triple loop (5.87 vs 3.20 ns, naive 1.83x) and 3x3 to hand-rolled xsimd (5.59 vs 2.26 ns, 2.5x). At N=64 hand-rolled xsimd also beat it 1.41x (187.4 vs 133.2 GFLOP/s), and the naive 4x4 win is gcc-specific (clang 18 leaves that loop scalar and Eigen wins there). (developer source, private repo; selection harness in docs/linear-algebra.md, gcc 13 -O3 -march=native, Intel Xeon @ 2.10GHz, run 2026-09-03-third-party)
+
+**Independent measurement:** Built without -march=native, Eigen fell from 193.1 to 34.6 GFLOP/s on f32 matmul N=1024 (5.6x loss), while OpenBLAS with runtime CPU dispatch went from 575.9 to 569.2. sizeof(struct{Eigen::Matrix4f; char;}) is 80/96/128 bytes under SSE2/AVX2/AVX-512, so translation units built with different arch flags silently disagree on layout. (developer source, private repo; selection harness in docs/linear-algebra.md, gcc 13, Intel Xeon @ 2.10GHz, run 2026-09-03-third-party)
+
 **How:** Expression templates fuse chained operations into a single loop at compile time, avoiding temporaries. Eigen's own GEMM kernel does three-level cache blocking -- mc x kc panels packed for L2/L3, mr x kc micro-panels kept in L1, and a register-blocked micro-kernel -- the same family of technique GotoBLAS/BLIS use, confirmed in the header comment of GeneralBlockPanelKernel.h. Kernels are explicitly SIMD-vectorized (SSE/AVX/AVX-512/NEON/etc.), and small fixed-size matrices get compile-time loop unrolling that skips packing overhead entirely, which is why Eigen's edge over OpenBLAS is largest at small sizes (DOT 4.9x, GEMV 2.2x at n<=16) and shrinks or reverses as size grows.
 
 **Use it when:**
@@ -9741,6 +9909,45 @@ Header-only C++20 rank/select bit vector: 8% faster rank, 16.5% faster select th
 **Status:** Maintenance is stale (single-author, last commit 2025-04-07, 36 stars), but it's header-only and small enough to read fully and vendor; GPL-3.0 licensing is the main adoption friction, not code quality.
 
 [repo](https://github.com/pasta-toolbox/bit_vector) · [benchmark](https://arxiv.org/abs/2206.01149)
+
+#### k-mer-dictionaries
+
+##### BLight  `C++`  `AGPL-3.0`  `stale`  `Tier B`
+
+Minimizer-partitioned, MPHF-based exact k-mer dictionary; indexes human k=31 at 22.3 bits/k-mer versus Pufferfish's 55.6.
+
+**Beats:** Pufferfish — The BLight paper (Bioinformatics 37(18):2858) measured human k=31 on a Xeon E5-2420 at 1.9 GHz with 192 GB RAM under Ubuntu 16.04, with compiler and flags unstated. On 12 threads BLight built in 10 min with 7.4 GB peak and 22.3 bits/k-mer vs Pufferfish dense's 69 min, 27.4 GB and 55.59 bits/k-mer; querying all 2.5 billion reference k-mers took 1,748 s vs 1,799 s single-threaded and 155 s vs 655 s multi-threaded, and no std:: container, BBHash or other standalone MPHF was benchmarked.
+
+**Known shortcoming:** Benchmarked only against Pufferfish (and Squeakr/SRC, where it builds slower). The construction win needs 12 threads; single-thread queries are at parity on reference k-mers and slower on real reads (1,577 s vs 1,260 s).
+
+**How:** K-mers are partitioned into 4^m buckets by minimizer (m=10 by default), and each run of consecutive k-mers that share a minimizer is stored once as a 2-bit-packed super-k-mer. Each partition gets a BBHash minimal perfect hash function. Per k-mer the index keeps only log2(super-k-mers in its bucket) bits that point to its super-k-mer, finds that super-k-mer's start with a BitMagic rank/select bitvector, and decodes it to check the hit, so answers are exact. The paper's breakdown is about 8-11 bits/k-mer for sequence, 4 for the MPHF, 5-13 for positions and under 1 for rank/select. Streaming queries cache the decoded super-k-mer and test the next query k-mers against it before touching the MPHF, and construction splits the input into 4^s temporary files that OpenMP threads process independently, which is why build and batch queries scale with cores.
+
+**Use it when:**
+- Static, duplicate-free k-mer set (k <= 32, canonical) from BCALM2 unitigs where RAM is the limit: the paper reports 22.3 bits/k-mer and 7.4 GB peak for the 2.5 billion human k-mers. It also built pine and axolotl (18.3 billion k-mers in 62.4 GB), where Pufferfish could not be built for lack of memory on a 192 GB machine.
+- You need a dense k-mer-to-integer ID in [0, N) to index your own side arrays (counts, colors, flags) and you need exact negatives, not the arbitrary value a bare MPHF returns for absent keys.
+- Batch-querying whole genomes or read files on a multi-core machine: all human reference k-mers took 155 s vs Pufferfish's 655 s with 12 threads (Table 2 labels the column 16T). The paper's Table 2 footnote says Pufferfish queries cannot benefit from multiple threads.
+- Index build time matters and you have about 12 cores: 10 min for human vs 69 min for Pufferfish dense. BLight's single-thread build took 60 min, so the build win needs the threads.
+
+**Skip it when:**
+- Single-threaded querying: 1,748 s vs Pufferfish's 1,799 s on reference k-mers (parity), and 1,577 s vs 1,260 s on real reads (SRR5833294), so BLight is about 25% slower there.
+- You want the smallest index or the fastest single-core lookups: in the SSHash paper's benchmark (i9-9940X, gcc 11.2, one core) BLight b=0 used 20.17 bits/k-mer vs 8.28-9.39 for SSHash, and streamed high-hit reads at 440 vs 253 ns/k-mer.
+- Query streams that are mostly misses: the same benchmark measured 1,088 ns/k-mer for BLight on a low-hit stream vs 183 for canonical SSHash, and that paper notes BLight's query time degrades when most queries are negative.
+- Sets that change, k > 32, or non-DNA keys: the index is static (rebuild to add k-mers), and the kmer type is uint64_t, with a commented-out __uint128_t typedef for k <= 64 that needs a recompile.
+- Counting k-mer abundance from raw reads: in the paper's Table 4, BLight took 19:49 (hh:mm) vs 05:12 for SRC and 15:11 for Squeakr, and won only on peak memory (20.8 GB vs 44.2 and 185.4 GB).
+
+**Integration:** source-drop · zlib and OpenMP; BBHash, BitMagic, LZ4, zstr and robin_hood are vendored in include/ and lz4/ · C++11 (the makefile uses g++ -std=c++11 -fopenmp); minimum GCC version not documented · x86-64 only in practice (SSSE3 _mm_shuffle_epi8 via <tmmintrin.h>; the makefile sets -msse4 -march=native); POSIX/Linux (setrlimit, pthread); macOS and Windows not documented
+
+**Vs siblings:** Pick BLight over SSHash or RSHash when build RAM is the tightest limit (the SSHash paper measured 7.5 GB peak to build human with BLight vs 15.4 GB for SSHash) or when you want OpenMP-parallel construction and batch-query helpers in a C++11 codebase that can accept AGPL. Otherwise SSHash (8.28-9.39 vs 20.17 bits/k-mer, 253 vs 440 ns/k-mer streaming in that benchmark) and RSHash, which its entry reports as faster than SSHash, are smaller, faster per core, MIT-licensed and still maintained.
+
+**Gotchas:**
+- Input must be 2-line FASTA (one sequence line per record; no multi-line FASTA or FASTQ, per snippet.cpp) with no duplicate k-mers. Construction encodes every character other than uppercase A/C/G as T, while queries map bases with (c/2)%4 (N becomes G), so soft-masked or N-containing input gives wrong answers without any error.
+- construct_index needs a working directory that already exists and opens 4^s temporary files (256 by default), so raise ulimit -n. Failures such as a file that cannot be opened call exit() instead of throwing, and the library prints progress and index recaps to stdout.
+- Building a second index in the same process segfaults (issue #10, open since 2022-02-17 with no reply).
+- get_hashes_query returns MPHF values, not positions, and there is no ID-to-k-mer access call (only a full iterator). An index loaded from disk hard-codes 20 threads for the file_query_* helpers, and the destructor deletes any files named _out0.._out<4^s-1> in the current directory.
+
+**Status:** Stale since 2024-07-06 (last commit was a BCALM2 parsing tweak), with 4 open issues including an unanswered segfault report and a libBlight packaging PR open since 2021. The core is about 1,400 lines of blight.cpp plus vendored headers, small enough to vendor, but AGPL-3.0 carries copyleft to programs that link it, including network services.
+
+[repo](https://github.com/Malfoy/BLight) · [benchmark](https://academic.oup.com/bioinformatics/article/37/18/2858/6209734)
 
 #### math-simd-linear-algebra
 
@@ -10224,6 +10431,8 @@ CDF-model-based sort for numeric arrays, ~4x faster than std::sort on random dat
 Hand-written SQL scanner/parser inside CrossDB's embedded RDBMS, claimed 10x faster than Flex/Bison-generated code.
 
 **Beats:** Flex/Bison — CrossDB's docs FAQ claims its hand-written scanner+parser is 'over 10 times faster than Flex/Bison parser tools' and about one-third the code size, stated as a single unsourced bullet in docs/faq.md with no linked benchmark script, hardware, or compiler/flags, and it bundles scanning and parsing together rather than isolating lexer-only throughput.
+
+**Known shortcoming:** Compared against Flex/Bison, which is not in this category's baseline list, and the ~10x figure is an unsourced FAQ number with no benchmark behind it.
 
 **How:** A hand-written recursive-descent parser calls a hand-written scanner directly, skipping the generated DFA table-walk that Flex output uses; the scanner classifies characters with a 256-entry static lookup table (s_tok_type) and switches on token type inline. Because xdb_token.c is textually #included into xdb_parser.c, the compiler can inline across the scanner/parser boundary in a way two separately compiled Flex/Bison translation units cannot. The ~10x and ~1/3-code-size figures come from a single unsourced FAQ bullet with no published benchmark script, hardware, or compiler flags.
 

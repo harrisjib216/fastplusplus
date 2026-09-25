@@ -7,11 +7,11 @@ claim against the cited page before it was written up.
 
 ## Lists
 
-- [COPYABLE.md](COPYABLE.md): 293 entries under an OSI license or CC0. Code can be vendored or forked.
+- [COPYABLE.md](COPYABLE.md): 296 entries under an OSI license or CC0. Code can be vendored or forked.
 - [REFERENCE.md](REFERENCE.md): 21 entries with no, unclear, or non-OSI license. Study the idea; don't copy the code.
-- [REJECTED.md](REJECTED.md): 9 candidates that failed verification.
+- [REJECTED.md](REJECTED.md): 6 candidates that failed verification.
 
-Tiers across both lists: A 128, B 27, C 154, D 5.
+Tiers across both lists: A 129, B 29, C 154, D 5.
 
 ## Evidence tiers
 
@@ -46,6 +46,7 @@ Ratios marked "(derived from page data)" were computed from numbers on the cited
 | stdlib-replacements | concurrency-queues-locks | 8 | 6 | 0 | 2 | 0 |
 | stdlib-replacements | hash-maps-sets | 18 | 13 | 1 | 4 | 0 |
 | stdlib-replacements | io-and-filesystem | 3 | 1 | 0 | 2 | 0 |
+| stdlib-replacements | k-mer-dictionaries | 3 | 1 | 2 | 0 | 0 |
 | stdlib-replacements | math-simd-linear-algebra | 10 | 2 | 2 | 5 | 1 |
 | stdlib-replacements | minimal-perfect-hash-functions | 20 | 14 | 2 | 4 | 0 |
 | stdlib-replacements | number-parsing-formatting | 15 | 6 | 2 | 7 | 0 |
