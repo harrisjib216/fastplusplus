@@ -1,0 +1,65 @@
+{
+  "id": "https://doi.org/10.14778/3115404.3115416",
+  "one_liner": "VLDB 2017 JSON parser (no public code) that jumps straight to queried fields; reports 5.5-9.1x over best of RapidJSON/Jackson/Gson.",
+  "what_it_does": "Mison is a Microsoft Research parser for running analytics directly on raw JSON records. You don't get a DOM or a SAX event stream. You create the parser with a list of field paths ('user.id', 'categories[]'), then call NextRecord()/NextField(), which return the IDs of the requested fields only and never surface other fields or tokens. You can push filters down by splitting the fields into groups: parse the predicate group first, then skip the rest of a record that fails. The paper's C++ static library was never released, so the ideas are available only through third-party reimplementations.",
+  "how_it_is_fast": "First it builds a per-record structural index. AVX2 compares 32 bytes at a time against quote, backslash, colon and braces (and brackets or commas when arrays are queried), and the results become bitmaps. 64-bit bit tricks (x&(x-1), x&-x, x^(x-1), popcnt) then drop escaped quotes, build a string mask, and use a brace stack to split colons into 'leveled colon bitmaps', one per nesting depth, built only down to the deepest queried field. The k-th set bit therefore locates the k-th field's key/value boundary without tokenizing. Second, it parses speculatively. 'Pattern trees', trained on a sample (the first 1,000 records in the paper, keeping patterns seen more than 1% of the time), predict each queried field's ordinal position. The parser jumps there, checks that the key name matches, tries less frequent patterns if it doesn't, and falls back to scanning every colon at that level if none match. In the paper's Fig. 11, index-only (basic) Mison was 3.6x faster than Jackson and speculation raised that to 10.2x.",
+  "when_to_use": [
+    "In-memory scans of newline-delimited record streams where a query needs 1-2 fields out of dozens (the Twitter records had 25-30 top-level fields plus a 37-38-field user object). That is where the paper shows its 8-9x best case.",
+    "Record collections that share a few layouts in a stable field order, such as the paper's GitHub user records (31 fields, always in the same order) or Twitter's user field, which sat at position 11 in 80.7% of tweets and 12 in the rest. Speculation pays off there.",
+    "Selective filters that can be evaluated before projection. In the Spark TPC-H runs, queries with 0.5-3.7% selectivity on lineitem ran 16.3-32.5x faster with Mison than with Spark's Jackson path.",
+    "As a design reference for a query-on-raw-JSON engine. The leveled colon/comma bitmap index is implemented in C++ in AutomataLab/Pison (MIT). The full algorithm, including pattern-tree speculation, exists in the Rust crate pikkr (MIT)."
+  ],
+  "when_not_to_use": [
+    "You need a maintained library. No official code exists, and the reimplementations are research or hobby code: pikkr's last push was 2017, and its open issue #76 reports it doesn't build on Rust 1.80. The misosoup README says 'DO NOT use for production use'. gomison contains only a README and a LICENSE.",
+    "Full-document parsing, DOM building or serialization. With all 31 GitHub fields read, the lead over Jackson falls to about 2x. Mison has no writer and builds no tree.",
+    "Untrusted or possibly malformed input. The simdjson paper notes that Mison does not validate documents and assumes pure ASCII rather than UTF-8. pikkr, which follows the same design, accepts {\"x\":0,} and returns the value '0,'.",
+    "Highly irregular or schema-drifting data, optional fields, and arrays. In the paper, Q5 (a field with 7 root-level patterns) was slower, and Q6-Q8 needed Bloom filters or leveled comma bitmaps, which cut Mison's advantage.",
+    "Data you will query many times. The paper itself finds converting to Parquet faster (Spark+Parquet was 1.6x faster than Spark+Mison, geometric mean over TPC-H SF1, not counting about 100 s of conversion). A single huge JSON document is also a poor fit: Mison indexes each record serially, and Pison was built to parallelize that case."
+  ],
+  "integration": {
+    "form": "static lib (per the paper; never released, no public source or binary)",
+    "dependencies": "not documented (unreleased)",
+    "min_toolchain": "not documented: the paper gives no compiler, version or flags (C++, tested on 64-bit Windows 10). The closest runnable code has its own requirements: Pison builds with g++ 7.4+ using -std=c++11 -mavx2 -mpclmul on Linux, and pikkr needs Rust nightly with target-cpu=native.",
+    "platforms": "x86-64 with AVX2 (the character-classification step uses 256-bit AVX2; the other steps use 64-bit integer ops plus popcnt). It was evaluated only on a Xeon E5-1620 v3 under Windows 10.",
+    "thread_safety": "not documented. The paper says only that separate threads over independent data partitions scaled near-linearly (results omitted). Each parser carries mutable training and pattern-tree state.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Keys are assumed unique within an object (the paper states this assumption), and input is assumed to be ASCII. Neither is checked.",
+    "A missing queried field makes Mison either skip the whole record or return null, depending on configuration. Choosing skip silently drops rows; the Anghagaed/MISON reimplementation lists exactly this as a known bug compared with Spark.",
+    "Speculation depends on a one-time training sample, and patterns below the weight threshold are pruned. The paper describes no retraining, so if the data layout drifts, every record falls back to the slower basic parse.",
+    "The training cost is included in the paper's timings, but the paper does not report how much of the total it is."
+  ],
+  "pick_this_over_siblings_when": "For shipping code, use simdjson's On-Demand API: the simdjson paper says it follows Mison's structural-index outline but with branchless stage-1 code, and On-Demand skips fields you never access while validating the ones you use. Reach for Mison, in practice pikkr or Pison, only to study or reproduce pattern-tree speculation and leveled-bitmap projection. For full parsing or writing, yyjson or glaze fit better.",
+  "verified_claims_summary": "The authors' own single-threaded benchmark ran field-projection queries on a 3.5 GHz Xeon E5-1620 v3 under Windows 10, with data preloaded into memory and no compiler or flags stated. On Twitter records, Mison was 5.5-9.1x faster than the best of Jackson, Gson and RapidJSON (all using their streaming APIs; Jackson, not RapidJSON, was the strongest), and about 2x faster than Jackson when all 31 GitHub fields were read. No one has reproduced the full parser; Sparser's authors reimplemented only the index step, found Mison over 2 GB/s per core and over 5x RapidJSON, and noted that the implementation 'is not open source'.",
+  "status_note": "Nothing was ever released: the MSR page carries only the PDF, and Microsoft's FishStore used Mison in its SIGMOD 2019 paper but ships simdjson in the open-source repo, so treat Mison as a reference design whose nearest usable code is pikkr (Rust, MIT, dormant since 2017) or Pison (C++, MIT, index only, no speculation).",
+  "sources_read": [
+    "http://www.vldb.org/pvldb/vol10/p1118-li.pdf",
+    "https://www.microsoft.com/en-us/research/publication/mison-fast-json-parser-data-analytics/",
+    "https://api.crossref.org/works?query.bibliographic=Mison%20A%20Fast%20JSON%20Parser%20for%20Data%20Analytics&rows=3",
+    "https://arxiv.org/pdf/1902.08318",
+    "http://www.vldb.org/pvldb/vol11/p1576-palkar.pdf",
+    "https://github.com/pikkr/pikkr",
+    "https://github.com/pikkr/pikkr/blob/master/src/pikkr.rs",
+    "https://github.com/pikkr/pikkr/issues",
+    "https://github.com/pikkr/pikkr/issues/5",
+    "https://github.com/pikkr/pikkr/issues/9",
+    "https://github.com/pikkr/pikkr/issues/72",
+    "https://github.com/pikkr/pikkr/issues/76",
+    "https://github.com/ubnt-intrepid/misosoup",
+    "https://github.com/leocassarani/mison",
+    "https://github.com/Anghagaed/MISON",
+    "https://github.com/indiependente/gomison",
+    "https://github.com/AutomataLab/Pison",
+    "https://github.com/AutomataLab/Pison/blob/master/makefile",
+    "https://github.com/AutomataLab/Pison/blob/master/src/SerialBitmap.cpp",
+    "https://github.com/AutomataLab/Pison/blob/master/src/SerialBitmapIterator.cpp",
+    "https://github.com/AutomataLab/Pison/blob/master/src/ParallelBitmapIterator.cpp",
+    "https://github.com/AutomataLab/Pison/blob/master/src/BitmapIterator.h",
+    "https://github.com/AutomataLab/JSONSki",
+    "https://github.com/stanford-futuredata/sparser",
+    "https://github.com/microsoft/FishStore",
+    "https://github.com/simdjson/simdjson/blob/master/doc/ondemand_design.md"
+  ],
+  "confidence": 0.8
+}
