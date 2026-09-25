@@ -36,7 +36,11 @@ the output-delivery rule above)
     https://hn.algolia.com/api/v1/search?query=<terms>&tags=story
   (Reddit and Lobsters block automated fetches.)
 - Do not clone repositories or build anything; this is a search task.
-- Budget: about 50 tool calls. Stop earlier if queries stop surfacing new items.
+- For papers and Hacker News, prefer the arXiv / Semantic Scholar / HN Algolia
+  endpoints above over WebSearch; save WebSearch for blogs, talks and pages
+  those APIs don't index.
+- Budget: about 150 tool calls. Token cost is not a concern; stop when queries
+  stop surfacing new items, not to save calls.
 - Deliver your output by writing the JSON array, and nothing else, to:
     {output_path}
   Then check it parses:

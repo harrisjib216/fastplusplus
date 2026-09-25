@@ -2,6 +2,8 @@
 
 ## Part 1 — Orchestrator notes (read before launching)
 
+**Goal.** A centralized list of the fastest C++ code (other languages later), so agents and developers can find faster implementations and libraries to use in their projects. C++ comes first: give every category C++-filtered assignments (C libraries callable from C++ count), and treat `any`-language passes as extra coverage. Non-C++ entries stay in the list, tagged by language.
+
 **Run in waves, one domain per wave.** Each domain is roughly the size of the whole stdlib effort, and each needs its own baseline table, seed queries, and known-list. Waves also let you calibrate: wave 1 (stdlib) has the cleanest baselines, so use it to tune evidence tiers, agent budgets, and the verifier before touching messier domains. Suggested order (see Part 4 for the baseline tables):
 
 1. stdlib-replacements
@@ -19,7 +21,7 @@
 
 Pipeline the waves: while wave N is in verification/cleanup, launch wave N+1 search. The known-list carries forward across waves so cross-domain hits (simdjson appears in stdlib, parsing, and serialization) are caught once.
 
-**Per-wave pipeline.** search agents → merge/dedup → verifier → cleanup/enrichment (Part 5) → section writer → publish. Don't start enrichment until the verifier has run; enriching rejected entries wastes Sonnet tokens.
+**Per-wave pipeline.** search agents → merge/dedup → verifier → cleanup/enrichment (Part 5) → section writer → publish. Don't start enrichment until the verifier has run; enriching entries the verifier will reject is wasted work.
 
 **Sharding within a wave.** Each agent gets one `{DOMAIN}` × `{CATEGORY}` × `{SOURCE}` × optional `{LANGUAGE_FILTER}`. With ~15 categories × ~10 sources × a few language filters you get several hundred distinct assignments per wave; run each 3–5× with different `{SEED_QUERY}` variants to reach thousands without pure duplication. Run a category's sources sequentially across batches (never two sources for the same category in one batch) and regenerate the known-list in between — in the wave-1 pilot, two parallel hash-map agents overlapped on 6 of 8 entries.
 
@@ -34,7 +36,9 @@ Nothing is dropped for age, fork status, or being a toy — those are tags, not 
 
 **Verification pass (required).** A Sonnet/Opus verifier receives each merged entry, opens `benchmark_url`, and answers: does the page actually compare against the named baseline with numbers? Downgrade or reject if not. Tier-C-only entries go in a separate "unverified claims" section of the awesome-list. Prompt: `pipeline/verifier_prompt.txt`. In the wave-1 pilot the verifier changed 42% of tiers and found materially wrong numbers in ~5 of 38 records, so it is not optional.
 
-**Budget per agent.** ~50 tool calls, hard cap `{MAX_ENTRIES}` (6). Prefer 3 well-evidenced entries over 10 shallow ones. (The pilot's agents used 45–68 calls; a 15–25 budget was not realistic for opening every repo and benchmark page.)
+**Budget per agent.** Token spend is not a constraint (user decision, 2026-09-25): budgets exist only to stop agents that have run dry. Search agents: ~150 tool calls, hard cap `{MAX_ENTRIES}` (15); stop when queries stop surfacing new items. Enrichment agents: ~40 calls. Verifier: 3 records per agent. Use Opus for every stage; in wave 3, Opus verifiers rewrote 63% of the speedup numbers reported by Sonnet search agents. Still prefer well-evidenced entries over shallow ones. The binding limits are external: `gh search` allows 30 requests/min shared by all agents (keep ~5 GitHub-source agents in parallel), and WebSearch allows 200 calls per session (use the arXiv / Semantic Scholar / HN Algolia APIs via WebFetch where they cover the source, and start a fresh session for WebSearch-heavy batches). Concurrency: raise `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` rather than serializing work.
+
+**Coverage over caps.** Coverage is limited far more by the number of assignments than by per-agent budgets: wave 3 ran 2 sources per category and most agents returned 3–5 entries. Give each category at least 4 sources (GitHub, papers, blogs/talks, forums, package registries, independent shootouts) with 2–3 seed-query variants each.
 
 **Variables to fill:** `{DOMAIN}`, `{CATEGORY}`, `{BASELINES}` (from Part 4), `{SOURCE}`, `{LANGUAGE_FILTER}`, `{SEED_QUERY}`, `{KNOWN_LIST}`, `{MAX_ENTRIES}`, `{TODAY}`.
 

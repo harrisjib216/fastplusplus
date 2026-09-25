@@ -25,7 +25,8 @@ the output-delivery rule above)
 - Do not clone repositories or build anything.
 - The record's `verification` block holds the verifier's notes; treat its
   corrections as authoritative over older claims.
-- Budget: about 15 tool calls.
+- Budget: about 40 tool calls. Token cost is not a concern; read the source and
+  docs deeply enough to fill every field with evidence.
 - Deliver your output by writing the JSON object, and nothing else, to:
     {output_path}
   Then check it parses:

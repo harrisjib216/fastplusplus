@@ -105,7 +105,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("command", choices=["render", "apply"])
     ap.add_argument("wave_dir", type=Path)
-    ap.add_argument("--batch-size", type=int, default=5)
+    ap.add_argument("--batch-size", type=int, default=3)
     args = ap.parse_args()
     today = json.loads((args.wave_dir / "assignments.json").read_text())["today"]
     if args.command == "render":
