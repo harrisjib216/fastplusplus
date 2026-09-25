@@ -1,0 +1,59 @@
+{
+  "id": "private:developer-source#sorting",
+  "one_liner": "Header-only pdqsort-style quicksort and LSD radix sort; 2.3x libstdc++ std::sort on random int64, 6.6x sorted, loses nearly-sorted.",
+  "what_it_does": "Two sorting functions from the fastcpp header library (the repo is named developer source). fastcpp::algo::sort(first, last, comp = std::less<>{}) has std::sort's signature and contract: unstable, O(n log n) worst case, random-access iterators, any strict weak ordering. fastcpp::algo::radix_sort(T* first, T* last, std::vector<Key>* scratch = nullptr), or radix_sort(std::vector<T>&), sorts bare uint32/uint64/int32/int64/float/double keys ascending. It takes no comparator and can reuse a scratch vector the caller owns.",
+  "how_it_is_fast": "sort is a pdqsort-style pattern-defeating quicksort whose partition is Edelkamp & Weiss BlockQuicksort: each 64-element block records the byte offsets of misplaced elements with an unconditional store plus a boolean increment and then swaps them in pairs, so no branch depends on the data. Pattern detection does the rest: a partition that finds its range already partitioned tries a bounded insertion sort (at most 8 moves per side) to finish in one pass, and a pivot equal to the element before the range triggers an equal-keys partition that drops the whole duplicate run. The supporting pieces are a ninther pivot above 128 elements, fixed sorting networks for n<=8 (gcc 13 emits vpminsq/vpmaxsq with no conditional jumps), insertion sort up to 24 elements, and a heapsort fallback after 2*log2(n) levels. radix_sort is an 8-bit-digit LSD radix sort that counts every digit's histogram in one read and skips any pass where all keys have the same digit.",
+  "when_to_use": [
+    "You sort large arrays of int64 or other cheap-to-copy scalars with std::sort on gcc/libstdc++, and the input is often already sorted (6.63x at 1M), has few distinct values (3.42x with 8 values), or is a sorted array with ~1% new records appended (2.33x).",
+    "Uniformly random 1M-element int64 sorts where you want a near drop-in with the same comparator contract: 2.28x over std::sort, and no extra memory.",
+    "Random uint32/uint64/int32/int64/float/double keys in roughly the 1K-1M range where an extra n-key buffer is affordable: radix_sort measured 4.30x std::sort at 16,384 uint64 and 3.15x at 256K.",
+    "Repeated sorts in a loop, passing radix_sort a reused scratch vector so that one of its two buffers is not reallocated on every call.",
+    "You would rather vendor code than add a dependency. It is four MIT headers that use only the standard library."
+  ],
+  "when_not_to_use": [
+    "Nearly sorted data with scattered displacements (1% of positions swapped): std::sort wins by 7-10% (0.93x). The 8-move sorted-run probe fails, and its cost is wasted.",
+    "Move-only or expensive-to-copy element types. The small-sort networks and pivot selection copy-construct both elements on every compare-exchange, and only int64/uint64 were benchmarked.",
+    "radix_sort below about 1K elements (0.23x at n=64, 0.92x at n=1024) or around 4M and above, where fastcpp::algo::sort beats it (140.5 ms vs 158.2 ms). Also not for sorting structs or records by key, for floats that may contain NaN, or when memory is tight (up to 2n extra keys).",
+    "You need numbers for libc++, MSVC STL, clang, -O2 builds or non-x86 hardware. Only gcc 13.3/libstdc++ at -O3 -march=native on one shared Xeon VM was measured, and no one else has reproduced it.",
+    "Adversarial or hostile input. Unlike pdqsort, there is no pattern-breaking shuffle after a lopsided partition, so it depends only on the heapsort fallback. The code is also young: one commit (2026-09-04) in a private, 0-star repo."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "None beyond the standard library. sort.hpp includes algo/sorting_network.hpp and core/macros.hpp, and radix_sort.hpp includes core/macros.hpp, so four headers under include/fastcpp/ cover both. Copy them instead of using add_subdirectory, because the fastcpp::fastcpp CMake target links all 10 vendored libraries (fmt, phmap, xsimd, simdjson, CRoaring, ...) and requires C++23.",
+    "min_toolchain": "By inspection, sort.hpp and sorting_network.hpp need C++17 (structured bindings, inline constexpr). radix_sort.hpp needs C++20 (concepts, std::bit_cast). The project itself targets C++23; the README lists gcc 13+, clang 17+ and MSVC 19.35+. The commit reports tests passing on gcc 13.3, gcc 14.2 and clang 18.1 with -Werror. MSVC is not in CI.",
+    "platforms": "Portable C++ with no intrinsics in these headers. The branch-free behavior depends on the compiler emitting conditional moves or min/max, which was verified only for gcc 13 at -O3 -march=native on x86-64. Benchmarked only on x86-64 Linux. CI compiles test_sort and bench_sort on Linux gcc/clang and macOS clang, but runs test_sort only on Linux gcc -march=native and ASan/UBSan.",
+    "thread_safety": "Not documented. Both are stateless functions over the caller's range, so concurrent calls on separate ranges are safe by construction. Do not share one radix_sort scratch vector between concurrent calls.",
+    "drop_in_for_baseline": "partial — fastcpp::algo::sort matches std::sort's (first, last[, comp]) signature and unstable O(n log n) contract, but it is not constexpr, has no ranges or execution-policy overloads, and by code reading will not compile for move-only element types. radix_sort is not a drop-in: it takes pointers or a std::vector, supports six key types, and has no comparator."
+  },
+  "gotchas": [
+    "sorting_network.hpp's compare_exchange always copy-constructs and copy-assigns both elements (`const T lo = out_of_order ? b : a;`), whether or not they are out of order. Move-only types like std::unique_ptr should therefore not compile, and heap-owning types such as long std::string pay allocations in every small sort. The test commented 'Move-only, non-trivially-copyable' actually sorts std::string.",
+    "radix_sort always allocates a fresh n-key buffer per call, even when you pass scratch (owned_b is unconditional). Without scratch it allocates two, so peak extra memory is 2n keys, although the header comment says 'one scratch buffer'.",
+    "radix_sort specializes only the exact fixed-width typedefs, so types such as long long on Linux, or size_t/long on macOS (where uint64_t is unsigned long long), fail the radix_sortable concept at compile time. NaN is unsupported and unchecked, and -0.0 is placed before +0.0.",
+    "The speedups come from -O3 -march=native builds (the repo forces -O3 for benchmarks). Branch-free codegen of the networks was verified by disassembly only on gcc 13, and the default RelWithDebInfo (-O2) build was not measured."
+  ],
+  "pick_this_over_siblings_when": "No siblings catalogued yet. Against std::sort itself, use fastcpp::algo::sort for large scalar arrays that are random, sorted or few-valued, use radix_sort only for 1K-1M bare numeric keys, and keep std::sort for nearly-sorted data.",
+  "verified_claims_summary": "On a 4-core 'Intel Xeon @ 2.10GHz' shared cloud VM with gcc 13.3 -O3 -march=native and libstdc++, the project's own bench_sort.cpp (minimum of 3 samples) timed fastcpp::algo::sort against std::sort on 1M int64: 6.63x on already-sorted input, 3.42x with 8 distinct values, 2.28x on random input and 0.93x (a loss) with 1% swapped; radix_sort against std::sort on random uint64 peaked at 4.30x (n=16,384) and fell to 0.23x at n=64. The appended/sawtooth/reverse ratios (2.33x/1.71x/1.55x) exist only in the commit message and README, not in results/fastest.json, and each timed body includes copying the source array, which pulls all ratios toward 1.",
+  "status_note": "Active but brand new: the repo is private (private:developer-source, 0 stars) and MIT-licensed, the sorting code landed in one commit on 2026-09-04, and the four self-contained headers are easy to vendor for anyone with access; all 21 CI runs are red, but at that commit the failures come from unrelated targets (the xsimd bench_matmul build and a UBSan error in string/parse.hpp), and test_sort passed wherever it ran.",
+  "sources_read": [
+    "private:developer-source",
+    "private:developer-source/blob/main/README.md",
+    "private:developer-source/blob/main/include/fastcpp/algo/sort.hpp",
+    "private:developer-source/blob/main/include/fastcpp/algo/radix_sort.hpp",
+    "private:developer-source/blob/main/include/fastcpp/algo/sorting_network.hpp",
+    "private:developer-source/blob/main/include/fastcpp/core/macros.hpp",
+    "private:developer-source/blob/main/bench/bench_sort.cpp",
+    "private:developer-source/blob/main/bench/bench_harness.hpp",
+    "private:developer-source/blob/main/bench/CMakeLists.txt",
+    "private:developer-source/blob/main/tests/test_sort.cpp",
+    "private:developer-source/blob/main/results/fastest.json",
+    "private:developer-source/blob/main/CMakeLists.txt",
+    "private:developer-source/blob/main/CMakePresets.json",
+    "private:developer-source/blob/main/.github/workflows/ci.yml",
+    "private:developer-source/commit/2fa7d3df006a9e4bc58c863c651d5fefe721f9e3",
+    "private:developer-source/commits/main",
+    "private:developer-source/issues",
+    "private:developer-source/actions",
+    "private:developer-source/actions/runs/33828450197"
+  ],
+  "confidence": 0.82
+}

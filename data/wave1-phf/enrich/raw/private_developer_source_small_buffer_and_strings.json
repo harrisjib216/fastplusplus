@@ -1,0 +1,60 @@
+{
+  "id": "private:developer-source#small-buffer-and-strings",
+  "one_liner": "C++ vector with N inline slots (default 8). It skips std::vector's heap allocation while the vector stays small.",
+  "what_it_does": "fastcpp::small_vector<T, N> keeps its first N elements (default 8) inside the object and moves to a heap buffer only when a push overflows that capacity. It implements part of the std::vector interface: push_back/emplace_back/pop_back, clear, resize(n), reserve, operator[], at, front/back, data, begin/end, size/capacity/empty, plus is_inline() to check that no allocation has happened. It has no insert/erase, assign, swap, shrink_to_fit, comparison operators, reverse iterators, count/range constructors or allocator parameter, so it replaces std::vector only in code that avoids those.",
+  "how_it_is_fast": "It uses the small-buffer optimization (inline storage). An alignas(T) byte array of N*sizeof(T) is a member, and data_ points into it until the first overflow. Construction, pushes below N and destruction make no allocator calls, and the elements sit in the object's own cache lines, which are usually on the stack. The push_back fast path is one always-inlined size==capacity compare marked unlikely, followed by a placement-new. Growth is in a separate noinline grow() that doubles the capacity. For trivially destructible T, `if constexpr` skips the destructor loop.",
+  "when_to_use": [
+    "Hot loops that create and destroy many short-lived vectors whose size is usually at or below a known small bound (e.g. a few ints or pointers per item), where malloc/free is most of the cost",
+    "Function-local temporaries on the stack, where the extra N*sizeof(T) bytes are not kept and the elements share cache lines with the rest of the frame",
+    "Trivially copyable element types (ints, pointers, small PODs): destruction does no per-element work and an inline copy or move is a short element loop",
+    "Call sites that only append, pop, resize, index and iterate, and never insert or erase in the middle",
+    "When you want tests or debug asserts to prove the hot path never allocates, via is_inline()"
+  ],
+  "when_not_to_use": [
+    "Vectors that often grow past N. After the first overflow it is an ordinary doubling heap vector that still carries the unused inline buffer. No row in results/fastest.json measures the overflow or crossover case",
+    "Vectors stored in bulk (array elements, hash-map values, long-lived struct members). From the member layout, small_vector<int, 8> is 56 bytes against std::vector's 24, and an empty one costs the same",
+    "Code that moves or swaps vectors a lot. Moving an inline vector moves each element instead of stealing a pointer, and without a swap member std::swap does three O(size) moves",
+    "Code that needs the rest of the std::vector API (insert, erase, assign, comparisons, resize(n, value), (n, value) or iterator-range constructors, custom allocators) or exception safety while growing",
+    "Teams that need a reviewed, supported dependency. The code is in a private single-author repo. The header has one commit and 4 unit tests (inline-until-overflow, std::string elements, move of inline storage, resize/pop), and the tracker has no issues"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none beyond the C++ standard library for this header, which includes only fastcpp/core/bits.hpp and fastcpp/core/macros.hpp. Copy those three files. add_subdirectory plus fastcpp::fastcpp is much heavier, because the INTERFACE target links all ten vendored libraries (fmt, phmap, xsimd, zpp_bits, the two queues, simdjson, yyjson, CRoaring, pocketfft)",
+    "min_toolchain": "C++20 for this header (bits.hpp uses <bit>/std::countl_zero and std::is_constant_evaluated). The repo's CMake requires C++23, and its README lists gcc 13+, clang 17+ or MSVC 19.35+. The benchmark was built with gcc 13.3 at -std=c++20",
+    "platforms": "any: portable C++ with no intrinsics in this header. CI builds and tests with gcc and clang on Linux and clang on macOS, plus ASan+UBSan on Linux. The macros have MSVC branches, but MSVC is not in CI",
+    "thread_safety": "not documented; the class has no internal synchronization",
+    "drop_in_for_baseline": "partial — the type is small_vector<T, N> rather than std::vector<T>, and only a subset of the API exists (push_back/emplace_back/pop_back/clear/resize(n)/reserve/[]/at/front/back/data/begin/end/size/capacity/empty). There is no insert, erase, emplace(pos), assign, swap, shrink_to_fit, ==/<, cbegin or rbegin, const at(), count/range constructors or Allocator parameter"
+  },
+  "gotchas": [
+    "Pushing an element of the same vector when it is full is unsafe. emplace_back calls grow() before building the new element, and grow() moves the old elements out, destroys them and frees the old heap buffer. So v.push_back(v[0]) at size()==capacity() reads a moved-from or freed object, a case std::vector handles. This comes from reading grow()/emplace_back; no test covers it.",
+    "Moving an inline small_vector invalidates pointers, references and iterators to its elements, because they are rebuilt in the destination; a std::vector move keeps element addresses. The moved-from vector is cleared.",
+    "grow() gives no exception safety. If an element's copy or move throws partway through, the new buffer leaks and the already-destroyed source elements stay counted in size(), so the destructor destroys them a second time.",
+    "Once it spills to the heap it never goes back inline. clear(), resize() and copy-assignment keep the heap buffer and there is no shrink_to_fit; only move-assigning into it frees the buffer."
+  ],
+  "pick_this_over_siblings_when": "No siblings catalogued yet.",
+  "verified_claims_summary": "In the repo's own bench_doing_less, building, summing and destroying 50,000 vectors of 4 ints cost 1.856 ns per vector with small_vector<int, 8> and 39.6 ns with a std::vector<int> that was not reserve()d (libstdc++, 21.3x). The build was gcc 13.3.0 at -O2 -march=native on a shared 4-core Xeon @ 2.10GHz VM, minimum of 7 samples. Under 1->2->4 growth the baseline pays three malloc/free pairs and two reallocations per vector, so the figure is no allocation against un-reserved growth, not one allocation against none. The row (run 2026-09-02-core, commit dfa74f2) was recorded before the repo switched its benchmarks to -O3 and has not been re-measured since.",
+  "status_note": "The repo is PRIVATE (private:developer-source, 0 stars, readable only with access). It was last pushed 2026-09-04, but this header has had one commit since it was added on 2026-09-02. It is MIT-licensed and small (227 lines plus two helper headers), so copying it into your tree is the practical way to use it.",
+  "sources_read": [
+    "private:developer-source",
+    "private:developer-source/blob/main/README.md",
+    "private:developer-source/blob/main/LICENSE",
+    "private:developer-source/blob/main/include/fastcpp/container/small_vector.hpp",
+    "private:developer-source/blob/main/include/fastcpp/core/bits.hpp",
+    "private:developer-source/blob/main/include/fastcpp/core/macros.hpp",
+    "private:developer-source/blob/main/bench/bench_doing_less.cpp",
+    "private:developer-source/blob/main/bench/bench_harness.hpp",
+    "private:developer-source/blob/main/results/fastest.json",
+    "private:developer-source/blob/main/tests/test_containers.cpp",
+    "private:developer-source/blob/main/CMakeLists.txt",
+    "private:developer-source/blob/main/.github/workflows/ci.yml",
+    "private:developer-source/blob/main/include/fastcpp/io/format.hpp",
+    "private:developer-source/blob/main/include/fastcpp/container/flat_hash_map.hpp",
+    "private:developer-source/blob/main/include/fastcpp/memory/arena.hpp",
+    "private:developer-source/issues",
+    "private:developer-source/pulls",
+    "private:developer-source/commits/main",
+    "private:developer-source/commits/main/include/fastcpp/container/small_vector.hpp",
+    "private:developer-source/commit/dfa74f2"
+  ],
+  "confidence": 0.85
+}

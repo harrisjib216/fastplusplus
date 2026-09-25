@@ -1,0 +1,67 @@
+{
+  "id": "private:developer-source#number-parsing-formatting",
+  "one_liner": "Header-only uint64 decimal parse (SWAR) and format (two-digit table): ~3x strtoull/snprintf, 1.5x from_chars, 1.2x to_chars.",
+  "what_it_does": "Two small functions from the header-only fastcpp library in the developer source repo. `fastcpp::str::parse_u64(const char*, size_t)` (or a `string_view` overload) reads a run of ASCII decimal digits and returns `{value, consumed}`, where `consumed == 0` means empty input, no leading digit, or overflow; `parse_i64` adds an optional '+'/'-' sign. `u64_to_chars(char* out, uint64_t)` writes the digits into a caller buffer and returns the length (no NUL), and `to_decimal()` wraps it in a stack buffer exposing a `string_view`. It is not a drop-in for strtoull or snprintf: the interface is closer to std::from_chars/std::to_chars, minus their end pointer and `errc`.",
+  "how_it_is_fast": "parse_u64 uses SWAR (SIMD within a register). It memcpy-loads 8 bytes as one uint64, checks that all eight are '0'-'9' with a single add-and-mask test, and combines them in three multiply-shift-mask rounds (8 one-digit lanes, then 4 two-digit, 2 four-digit, 1 value). Any remaining digits (fewer than 8) go through a scalar loop. u64_to_chars counts the digits first with `bit_width*1233>>12` plus one powers-of-10 table correction, then divides by 100 and writes two characters per step from a 200-byte '00'..'99' table straight into their final positions. Most of the gain over strtoull and snprintf comes from skipping locale, whitespace, base-prefix, errno and format-string work. The repo's own notes say libstdc++'s to_chars already uses the same table-plus-digit-count method, which is why that margin is only ~1.2x.",
+  "when_to_use": [
+    "Hot loops that parse long unsigned decimal fields (IDs, nanosecond timestamps, counters with 16+ digits) out of text you have already tokenized, such as CSV, log or wire-protocol parsers where std::from_chars is the measured bottleneck.",
+    "Fixed-width 8-digit fields whose shape you have already validated (YYYYMMDD dates, fixed protocol headers): parse_exactly_8_digits is the branch-free kernel with no checks.",
+    "Output paths that still use snprintf(\"%llu\"), std::to_string or ostringstream to write integers into a buffer you own (3.1x faster than snprintf, 1.8x faster than to_string and 7.9x faster than ostringstream on this benchmark).",
+    "When you want a tiny, dependency-free, noexcept, allocation-free piece of code to vendor: two ~125-line headers plus fastcpp/core/bits.hpp and core/macros.hpp, MIT-licensed."
+  ],
+  "when_not_to_use": [
+    "You already use std::from_chars, std::to_chars or {fmt}. The remaining margin is about 1.5x (parse) and 1.2-1.3x (format) on one benchmark, and results/fastest.json itself calls u64_to_chars 'a readable reference implementation, not an improvement on the standard library.'",
+    "Short numbers. Only uniformly random uint64 values were measured, and about 95% of those have 19-20 digits. Inputs under 8 digits never reach the SWAR path, and their speed was not measured.",
+    "You need strtoull semantics: leading-whitespace skipping, bases other than 10 or 0x/0 prefixes, locale handling, errno, or an end pointer that separates 'no digits' from 'overflow'.",
+    "Signed parsing, until it is fixed. parse_i64 negates a signed int64 at parse.hpp:106, which is undefined behavior for \"-9223372036854775808\", and the repo's own asan+ubsan CI job fails on exactly that line. It happens to give the right value in optimized gcc builds.",
+    "You need a maintained, public dependency. The repo is private with 0 stars, has 13 commits made over 2-4 Sept 2026, has no releases, and every CI run is red (other jobs also fail to build the vendored xsimd benchmarks)."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none for these headers beyond fastcpp/core/bits.hpp and fastcpp/core/macros.hpp from the same repo; note that the repo's CMake target fastcpp::fastcpp links every vendored third_party library (fmt, phmap, xsimd, simdjson, yyjson, CRoaring, ...), so copying the four headers is the lighter route",
+    "min_toolchain": "C++20 for these headers (<bit> std::bit_width, std::is_constant_evaluated, constexpr-lambda tables). The repo as a whole targets C++23, and its README lists gcc 13+, clang 17+ and MSVC 19.35+. Benchmarked with gcc 13.3 at -std=c++20.",
+    "platforms": "Portable C++ with no intrinsics, but little-endian only: the SWAR decode has no byte swap. Tests pass in CI only on x86-64 Linux with gcc 13.3. The macOS arm64 AppleClang 21 job compiles test_strings, but its tests never run because the build fails in the xsimd benchmarks.",
+    "thread_safety": "not documented; the functions are stateless and noexcept (they touch only constexpr lookup tables and caller-owned buffers), so concurrent calls are safe by construction",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "parse_u64 stops silently at the first non-digit (\"12345abc\" gives 12345 with consumed=5), and consumed=0 is returned for empty input, a leading non-digit and overflow alike. Check `consumed == size` if the whole field must be numeric.",
+    "The overflow guard in the 8-digit loop (parse.hpp:69) is conservative. It rejects a value > 184467440736 at a word boundary, even when the next word would still fit. As a result, values from 18446744073700000000 to UINT64_MAX written with exactly 4 (or 12, 20, ...) leading zeros are reported as overflow. This comes from modeling the source, and the tests do not cover it.",
+    "u64_to_chars and i64_to_chars do no bounds checking. The caller must provide 20 and 21 writable bytes respectively, no NUL is written, and the length is the return value, unlike std::to_chars, which takes an end pointer.",
+    "The SWAR decode expects the first digit in the low byte of a plain memcpy load, so it is wrong on big-endian targets. parse_exactly_8_digits also reads 8 bytes unconditionally and does no validation."
+  ],
+  "pick_this_over_siblings_when": "No siblings catalogued yet. The realistic competitors are std::from_chars (1.49x slower here) and std::to_chars (1.27x slower), and both offer end-pointer bounds checks and error codes that this lacks.",
+  "verified_claims_summary": "First-party numbers from results/fastest.json (run 2026-09-02-core, commit dfa74f2, gcc 13.3.0 -O2 -march=native -std=c++20 with libstdc++, Intel Xeon @ 2.10GHz shared cloud VM, minimum of 7 samples) cover two single-threaded workloads. Parsing 20k std::to_string'd random uint64 values took 12.3 ns each, against 36.7 ns for strtoull (2.98x) and 18.3 ns for std::from_chars; formatting 20k random uint64 values took 16.6 ns each, against 51.8 ns for snprintf (3.12x) and 21.1 ns for std::to_chars. A later CI smoke run at 2fa7d3d (-O3, GitHub x86-64 runner, same gcc, all checksums agreeing) gives the same ordering: parsing 9.9 / 29.5 / 14.2 ns (parse_u64 / strtoull / from_chars) and formatting 13.4 / 44.7 / 15.7 ns (u64_to_chars / snprintf / to_chars), though the workflow itself says CI runners cannot measure reliably.",
+  "status_note": "Lives in a PRIVATE repository (private:developer-source, 0 stars, not publicly browsable). The last commit was on 2026-09-04, and the parse/itoa headers are unchanged since the first commit. The code is MIT-licensed and small enough to vendor if you have access, but fix parse_i64's INT64_MIN UB first.",
+  "sources_read": [
+    "private:developer-source",
+    "private:developer-source/tree/main",
+    "private:developer-source/commits/main",
+    "private:developer-source/commits/main/include/fastcpp/string/parse.hpp",
+    "private:developer-source/commits/main/include/fastcpp/string/itoa.hpp",
+    "private:developer-source/blob/main/README.md",
+    "private:developer-source/blob/main/include/fastcpp/string/parse.hpp",
+    "private:developer-source/blob/main/include/fastcpp/string/itoa.hpp",
+    "private:developer-source/blob/main/include/fastcpp/core/bits.hpp",
+    "private:developer-source/blob/main/include/fastcpp/core/macros.hpp",
+    "private:developer-source/blob/main/CMakeLists.txt",
+    "private:developer-source/blob/main/CMakePresets.json",
+    "private:developer-source/blob/main/LICENSE",
+    "private:developer-source/blob/main/results/fastest.json",
+    "private:developer-source/blob/main/bench/bench_doing_less.cpp",
+    "private:developer-source/blob/main/bench/bench_harness.hpp",
+    "private:developer-source/blob/main/tests/test_strings.cpp",
+    "private:developer-source/blob/main/tests/CMakeLists.txt",
+    "private:developer-source/blob/main/.github/workflows/ci.yml",
+    "private:developer-source/actions",
+    "private:developer-source/actions/runs/33828450197",
+    "private:developer-source/actions/runs/33828450197/job/100886052547",
+    "private:developer-source/actions/runs/33828450197/job/100886052702",
+    "private:developer-source/actions/runs/33828450197/job/100886052824",
+    "private:developer-source/actions/runs/33828450197/job/100886052892",
+    "private:developer-source/actions/runs/33828450197/job/100886052902",
+    "private:developer-source/issues",
+    "private:developer-source/pulls"
+  ],
+  "confidence": 0.85
+}
