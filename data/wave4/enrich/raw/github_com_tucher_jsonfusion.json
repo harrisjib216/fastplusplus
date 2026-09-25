@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/tucher/jsonfusion",
+  "one_liner": "Header-only C++23 reflection-based JSON parser that parses, validates and fills your structs in one pass, beating RapidJSON plus hand-written mapping.",
+  "what_it_does": "You declare plain C++ aggregates and call JsonFusion::Parse(obj, input) or Serialize(obj, out). Any field can be wrapped in A<T, options...> to rename its key or add range, length, enum, skip or as_array rules. Field names come from Boost.PFR, or from C++26 reflection on GCC 16, so there are no macros and no registration. It replaces the DOM-walk-and-copy code you would write around RapidJSON, not RapidJSON's DOM API: there is no JSON tree. Input can come from forward-only iterators, so byte-at-a-time streams work, the same models also read and write CBOR, and typed streaming consumers and producers handle array elements one at a time without storing the whole array.",
+  "how_it_is_fast": "It wins by doing less work, not by scanning faster. One pass reads tokens straight into the destination fields: no DOM is allocated, no second traversal copies values out, and the validators are compile-time template options that turn into inline branches. Compile-time reflection (Boost.PFR) generates a parser for each struct type. An object key is read into a stack buffer sized to the longest known key and matched by linear comparison against a constexpr field table, and a std::bitset catches duplicate keys. Fields marked `skip` are syntax-checked without converting their numbers, which is the whole source of the canada.json win. The reader is plain scalar code over generic iterators with no SIMD, and the docs say the default in-house float parser is 2-5x slower than fast_float, which explains the losses on float-heavy data.",
+  "when_to_use": [
+    "Known-schema config, RPC, telemetry, log or event messages parsed straight into structs, where you would otherwise write RapidJSON DOM plus mapping code. The README reports 15-65% faster on six such small-message scenarios.",
+    "Microcontroller firmware (Cortex-M0+/M7, ESP32) built with -Os -fno-exceptions -fno-rtti and no heap. With std::array or char[N] fields the library allocates nothing, and the README reports 21.8 KB .text on Cortex-M7 for two models parsed and serialized.",
+    "Input that arrives in pieces (UART, socket, file iterator): forward-only iterators work, so you don't have to buffer the whole document first.",
+    "You need range, length and enum validation plus JSON-path error locations (e.g. $.statuses[3].user.name) in the same pass, or the same model over both JSON and CBOR.",
+    "Counting or filtering large documents where most values can be marked `skip` or consumed by a streaming consumer instead of stored."
+  ],
+  "when_not_to_use": [
+    "Peak throughput on JSON already in memory with a fixed schema: the author's own table puts Glaze about 3x ahead on twitter.json (360 vs 1020 us/iter).",
+    "Float-heavy data or data that needs exact float values: canada.json parse-and-populate is ~15% slower than RapidJSON, and the default float backend is only accurate to within 1 ULP and does not round-trip doubles exactly (issue #3 is open).",
+    "You need a DOM, ad-hoc queries or schema-less editing. The README says in capitals that this is not a DOM library.",
+    "Toolchains other than GCC 14+ or Clang 20+ (MSVC is not supported), pre-C++23 codebases, or non-aggregate classes with custom constructors or virtual functions, unless you use GCC 16's C++26 reflection mode.",
+    "Teams that need a mature, widely used dependency: one contributor, 15 stars, and published benchmarks that no one else has reproduced. On 8-bit AVR its code is also larger than cJSON or jsmn."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none required (Boost.PFR is bundled under include/). Optional: the yyjson library for YyjsonReader, rapidyaml for YAML, and the bundled fast_float/simdjson float headers for JSONFUSION_FP_BACKEND=1.",
+    "min_toolchain": "C++23 with GCC 14+ or Clang 20+ (MSVC not supported); the optional C++26 reflection mode needs GCC 16+ with -std=c++26 -freflection",
+    "platforms": "any. There is no SIMD or architecture-specific code, and the README reports builds on x64, arm64 (Apple M1, Linux), ARM Cortex-M0+/M7, ESP32 (Xtensa LX6) and AVR ATmega2560 (the last needs avr-gcc 15 plus avr-libstdcpp).",
+    "thread_safety": "not documented. Parse and Serialize keep their state in per-call reader and context objects, and the README says the constexpr core has no hidden global state or thread-local caches, but it never states a concurrency guarantee.",
+    "drop_in_for_baseline": "false — there is no DOM or SAX-compatible API. You define C++ structs and call Parse(obj, input); it replaces RapidJSON plus your hand-written mapping and validation code, not RapidJSON's Document interface."
+  },
+  "gotchas": [
+    "Unknown JSON keys are a parse error (EXCESS_FIELD) unless the struct carries `allow_excess_fields`, and duplicate keys are always an error. Absent keys, by contrast, are not an error unless you add required<> or not_required<>, so a missing field is silently left untouched.",
+    "Integer fields reject numbers written with a decimal point or exponent (1.0, 1e3). Number tokens longer than 63 characters fail unless you raise JSONFUSION_NUMBER_BUF_SIZE. Skipping an unmodeled value nested more than 64 levels deep fails with SKIPPING_STACK_OVERFLOW (the MaxSkipNesting template parameter).",
+    "Doubles do not round-trip exactly with the default backend. To fix that, define JSONFUSION_FP_BACKEND=1 (fast_float, which loses constexpr) or parse through YyjsonReader (which adds a DOM allocation and a yyjson dependency).",
+    "Recursive model types fail a static_assert unless JSONFUSION_ALLOW_DYNAMIC_ERROR_STACK is defined. Streaming through true single-pass iterators such as std::istreambuf_iterator was broken by a peek-ahead bug reported in issue #4; the owner says it is fixed, but the issue is still open."
+  ],
+  "pick_this_over_siblings_when": "Pick it over Glaze when you need forward-only or byte-by-byte input, no allocations inside the library, small -Os builds (the README reports 21.8 KB vs Glaze's 30.4 KB .text on Cortex-M7) or JSON-path errors; pick Glaze for raw speed, since it is ~3x faster on twitter.json. Against reflect-cpp it is slightly faster on twitter.json (1020 vs 1130 us/iter) and skips reflect-cpp's intermediate yyjson DOM. If you want a DOM or the fastest raw parse, simdjson or yyjson fit better.",
+  "verified_claims_summary": "These are the author's own README numbers. On an Apple M1 Max (macOS 26.1, GCC 14, 1M iterations), parse+validate+populate into structs ran 15-65% faster than RapidJSON DOM plus hand-written mapping in six small-message scenarios, and tied a hand-written RapidJSON SAX handler on static embedded config. On twitter.json (arm64 Ubuntu 24.04, GCC 14.3, CPU not named) it took 1020 vs 1620 us/iter (~1.6x) against RapidJSON ParseInsitu plus manual populate. On canada.json it loses (~15% slower parse+populate) unless floats are skipped. The README gives no compiler flags; the repo's scripts/run_benchmarks.sh builds in CMake Release mode, and each result is a single timed loop with no repeated runs.",
+  "status_note": "Actively maintained by a single author (v1.1.1 tagged 2026-08-06, 343 commits by one contributor, 15 stars). It is MIT-licensed, header-only and packaged for vcpkg, Conan and PlatformIO, so it is easy to vendor, but the API is young.",
+  "sources_read": [
+    "https://github.com/tucher/JsonFusion",
+    "https://github.com/tucher/JsonFusion/blob/master/README.md",
+    "https://github.com/tucher/JsonFusion/blob/master/include/JsonFusion/string_search.hpp",
+    "https://github.com/tucher/JsonFusion/blob/master/include/JsonFusion/parser.hpp",
+    "https://github.com/tucher/JsonFusion/blob/master/include/JsonFusion/json.hpp",
+    "https://github.com/tucher/JsonFusion/blob/master/include/JsonFusion/fp_to_str.hpp",
+    "https://github.com/tucher/JsonFusion/blob/master/include/JsonFusion/validators.hpp",
+    "https://github.com/tucher/JsonFusion/blob/master/docs/explanation/architecture.md",
+    "https://github.com/tucher/JsonFusion/blob/master/docs/FP_BACKEND_ARCHITECTURE.md",
+    "https://github.com/tucher/JsonFusion/blob/master/docs/ANNOTATIONS_REFERENCE.md",
+    "https://github.com/tucher/JsonFusion/blob/master/docs/how-to/ERROR_HANDLING.md",
+    "https://github.com/tucher/JsonFusion/blob/master/docs/vcpkg_usage.md",
+    "https://github.com/tucher/JsonFusion/blob/master/docs/tutorials/02-modeling-json-types.md",
+    "https://github.com/tucher/JsonFusion/blob/master/docs/tutorials/03-validation-and-annotations.md",
+    "https://github.com/tucher/JsonFusion/blob/master/TODO.md",
+    "https://github.com/tucher/JsonFusion/blob/master/CMakeLists.txt",
+    "https://github.com/tucher/JsonFusion/blob/master/scripts/run_benchmarks.sh",
+    "https://github.com/tucher/JsonFusion/blob/master/.github/workflows/benchmarks.yml",
+    "https://github.com/tucher/JsonFusion/tree/master/benchmarks/twitter_json",
+    "https://github.com/tucher/JsonFusion/blob/master/benchmarks/twitter_json/benchmark.hpp",
+    "https://github.com/tucher/JsonFusion/blob/master/benchmarks/twitter_json/twitter_json_parsing.cpp",
+    "https://github.com/tucher/JsonFusion/blob/master/benchmarks/twitter_json/twitter_json_parsing_rapidjson.cpp",
+    "https://github.com/tucher/JsonFusion/blob/master/benchmarks/twitter_json/rapidjson_populate.hpp",
+    "https://github.com/tucher/JsonFusion/blob/master/benchmarks/twitter_json/twitter_model_generic.hpp",
+    "https://github.com/tucher/JsonFusion/tree/master/benchmarks/syntetic",
+    "https://github.com/tucher/JsonFusion/blob/master/benchmarks/syntetic/main.cpp",
+    "https://github.com/tucher/JsonFusion/blob/master/benchmarks/syntetic/bench_matrix.hpp",
+    "https://github.com/tucher/JsonFusion/issues",
+    "https://github.com/tucher/JsonFusion/issues/3",
+    "https://github.com/tucher/JsonFusion/issues/4",
+    "https://github.com/tucher/JsonFusion/pulls",
+    "https://github.com/tucher/JsonFusion/tags",
+    "https://github.com/tucher/JsonFusion/commits/master"
+  ],
+  "confidence": 0.6
+}
