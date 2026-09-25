@@ -8,6 +8,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
 TIER_RANK = {"A": 0, "B": 1, "C": 2, "D": 3}
+DECISIONS = {d["id"]: d for d in json.loads((DATA / "decisions.json").read_text())} \
+    if (DATA / "decisions.json").exists() else {}
 COPYLEFT = re.compile(r"\b(A?GPL|LGPL|MPL|EPL|CDDL|EUPL|OSL)", re.I)
 
 
@@ -29,6 +31,8 @@ def render_entry(e, x, with_integration):
         f"##### {e['name']}  `{e['language']}`  `{e['license'] or 'no license'}`  `{e['maintenance_status']}`  `Tier {e['evidence_tier']}`",
         x["one_liner"],
         f"**Beats:** {e['baseline']} — {x['verified_claims_summary']}",
+        *(f"**Known shortcoming:** {s}" for s in DECISIONS.get(e["id"], {}).get("shortcomings", [])),
+        *(f"**Independent measurement:** {m}" for m in DECISIONS.get(e["id"], {}).get("measurements", [])),
         f"**How:** {x['how_it_is_fast']}",
         f"**Use it when:**\n{bullets(x['when_to_use'])}",
         f"**Skip it when:**\n{bullets(x['when_not_to_use'])}",

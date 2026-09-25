@@ -14,6 +14,7 @@ CORRECTABLE = {
     "is_fork_of", "stars_or_usage", "has_code", "caveats", "workload",
 }
 PUBLIC_DOMAIN = re.compile(r"\bCC0\b|public[ -]domain", re.I)
+DECISIONS = ROOT / "data" / "decisions.json"
 STRIP_FOR_VERIFIER = {"tradeoffs", "found_via", "assignment_ids", "domain", "is_evidence_for_known"}
 
 
@@ -47,6 +48,7 @@ def apply(wave_dir, today):
         for v in json.loads(f.read_text()):
             retiers[v["id"]] = v
 
+    decisions = {d["id"]: d for d in json.loads(DECISIONS.read_text())} if DECISIONS.exists() else {}
     verified, rejected, unverified = [], [], []
     tier_moves, fixed_fields, verdict_counts = Counter(), Counter(), Counter()
     for eid, e in entries.items():
@@ -61,10 +63,16 @@ def apply(wave_dir, today):
             "page_compares_against_baseline": v.get("page_compares_against_baseline"),
             "numbers_found_on_page": v.get("numbers_found_on_page"),
         }
+        d = decisions.get(eid, {})
         if v["verdict"] == "reject":
             e["verification"]["reject_reason"] = v.get("reject_reason")
-            rejected.append(e)
-            continue
+            if d.get("decision") != "keep":
+                rejected.append(e)
+                continue
+            e["verification"]["reject_overridden"] = d.get("reason")
+        for field in ("domain", "category"):
+            if d.get(field):
+                e[field] = d[field]
         for field, value in (v.get("corrections") or {}).items():
             if field in CORRECTABLE and e.get(field) != value:
                 e.setdefault("corrected_fields", {})[field] = e.get(field)
