@@ -1,0 +1,47 @@
+{
+  "id": "https://github.com/kovidgoyal/html5-parser",
+  "one_liner": "C extension pairing a gumbo-derived HTML5 tokenizer with a direct-to-libxml2 tree build; far faster than pure-Python html5lib.",
+  "what_it_does": "Parses HTML5 (including malformed real-world markup) into a tree via a single function, html5_parser.parse(). Default output is an lxml (or lxml.html) Element built in C; it can also adapt the same parse into stdlib etree, minidom, or BeautifulSoup, and handles character-encoding sniffing (BOM, meta charset, chardet fallback) internally. Not a drop-in for lxml.html.fromstring's build/ABI story, but the returned tree is a normal lxml tree usable anywhere lxml is used.",
+  "how_it_is_fast": "Tokenizes and builds a parse tree in C using a modified copy of Google's gumbo-parser (vendored under gumbo/), then walks that gumbo tree once and constructs a libxml2 document directly in C (src/as-libxml.c) via an explicit stack-based traversal, before handing the finished xmlDoc to lxml with etree.adopt_external_document. This skips the extra Python-object-construction pass that gumbo's own Python bindings and BeautifulSoup-based stacks require, and skips html5lib's pure-Python tokenizer/tree-builder entirely.",
+  "when_to_use": [
+    "Already building on lxml/libxml2 in Python and need spec-correct HTML5 (not HTML4/XML) tokenization and tree construction",
+    "Parsing large HTML documents or a high volume of pages where html5lib or BeautifulSoup+html5lib throughput is the bottleneck",
+    "Need HTML5-correct namespace handling for embedded SVG/MathML, which html5lib handles poorly",
+    "Parsing messy or slightly-XHTML-flavored markup, using maybe_xhtml to tolerate self-closed elements",
+    "Desktop/batch app parsing lots of untrusted real-world HTML in bulk, e.g. an e-book/EPUB pipeline (its proving ground is calibre)"
+  ],
+  "when_not_to_use": [
+    "Already calling lxml.html.fromstring/libxml2 directly and don't need strict HTML5 algorithm compliance -- html5-parser is not shown to beat libxml2 itself; selectolax's benchmark measured it slower than lxml.html on real pages (16.10s vs 9.09s over 754 pages)",
+    "Environment can't build/ship a C extension, or uses PyPI's binary lxml wheel (static libxml2) -- html5-parser raises a RuntimeError at import on a libxml2 version mismatch unless lxml is installed with --no-binary",
+    "Need streaming or head-only parsing to skip a large <body> -- not supported (open feature request, issue #31)",
+    "Parsing adversarial/untrusted fragments through non-HTML fragment_context -- a MathML-integration-point fragment case caused infinite looping (issue #29); confirm the fix is in your pinned version",
+    "Non-lxml treebuilder output (etree/dom/soup) needed -- those re-walk the tree in Python and lose most of the C-vs-C speed advantage"
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "lxml >= 3.8.0 (must be installed with --no-binary so it links dynamic libxml2), chardet (encoding-detection fallback), optional BeautifulSoup4 for treebuilder='soup'",
+    "min_toolchain": "C99 compiler; setup.py compiles with -std=c99 -O3 -Wall -Werror -pedantic-errors on Unix, /O2 on Windows (MSVC via a dedicated win-ci.py script)",
+    "platforms": "Linux, macOS, Windows -- CI runs three OSes and four compilers per the README; no documented CPU-architecture restriction",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": "partial -- explain: the output is a standard lxml Element like lxml.html.fromstring would give, but html5-parser and lxml must share the exact same dynamically-loaded libxml2 build, so a plain `pip install html5-parser` next to a normal binary lxml wheel fails at import"
+  },
+  "gotchas": [
+    "Binary lxml wheels bundle a static libxml2; you must `pip install --no-binary lxml lxml` first or you get a RuntimeError citing mismatched LIBXML_VERSION at import",
+    "sanitize_names defaults to True, silently rewriting non-ASCII-safe tag/attribute names to keep the tree valid XML -- turn it off if strict HTML5 spec fidelity matters more than XML-safety",
+    "Only the lxml/lxml_html treebuilders are fast; etree, dom, and soup treebuilders are implemented in Python on top of the same parse and are correspondingly slower",
+    "A fragment-parsing edge case at MathML integration points could infinite-loop (issue #29, filed and since closed) -- worth confirming on your pinned version if you parse untrusted fragments"
+  ],
+  "pick_this_over_siblings_when": "Pick html5-parser when you specifically need HTML5-spec-correct parsing into a real lxml/libxml2 tree from Python and can accept lxml's --no-binary build constraint. If the goal is raw throughput against libxml2 itself rather than against html5lib, selectolax (Lexbor backend, ~3.8x faster than lxml.html directly in its own benchmark) or lexbor beat it outright.",
+  "verified_claims_summary": "Author's own benchmark.py, a single run on his own machine with Python 3 (no CPU, OS, or compiler flags stated), parsed a 5.7MB HTML file 100x with html5-parser vs 10x for the others: 0.397s vs html5lib 13.906s (35x, the apples-to-apples lxml-tree/HTML5 comparison), BeautifulSoup+html5lib 12.683s (8x), and BeautifulSoup+lxml.html 3.826s (2x -- this margin reflects BeautifulSoup's own overhead, not libxml2 speed, since html5-parser was not benchmarked against lxml.html/libxml2 used directly).",
+  "status_note": "Actively maintained (last commit 2026-09-20) and used in production inside calibre despite a small following (706 stars); Apache-2.0 and a compact C codebase, but the requirement to build lxml against a matching dynamic libxml2 makes it harder to vendor cleanly than a header-only or wheel-friendly library.",
+  "sources_read": [
+    "https://github.com/kovidgoyal/html5-parser",
+    "https://github.com/kovidgoyal/html5-parser/blob/master/README.rst",
+    "https://github.com/kovidgoyal/html5-parser/blob/master/docs/index.rst",
+    "https://github.com/kovidgoyal/html5-parser/blob/master/src/html5_parser/__init__.py",
+    "https://github.com/kovidgoyal/html5-parser/blob/master/setup.py",
+    "https://github.com/kovidgoyal/html5-parser/blob/master/src/as-libxml.c",
+    "https://github.com/kovidgoyal/html5-parser/issues"
+  ],
+  "confidence": 0.5
+}

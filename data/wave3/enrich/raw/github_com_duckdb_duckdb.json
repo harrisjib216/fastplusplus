@@ -1,0 +1,45 @@
+{
+  "id": "https://github.com/duckdb/duckdb",
+  "one_liner": "In-process OLAP SQL engine that queries CSV files directly, beating pandas read_csv + groupby on large files.",
+  "what_it_does": "DuckDB is an embedded, columnar SQL database that can query CSV (and Parquet) files in place, e.g. `SELECT * FROM 'file.csv'`, with no separate load step. It replaces pandas' imperative read/groupby methods with a SQL/relational interface, but interoperates with pandas: query results can be pulled back into a DataFrame via `.df()`. It ships as a C++ library with official Python, R, Java, Node, and CLI clients, plus a Wasm build.",
+  "how_it_is_fast": "It uses a vectorized, columnar execution engine (operates on batches of values rather than row-by-row Python objects) combined with a multi-threaded CSV scanner that reads and parses chunks of the file in parallel (`parallel=true` by default). A CSV \"sniffer\" auto-detects delimiter, quoting, header, and column types from a sample of the file before the full parallel scan, and query operators (filter/group-by/projection) push down into the scan instead of materializing the whole table first, which is what keeps memory low relative to a full `pd.read_csv` load.",
+  "when_to_use": [
+    "Query, filter, join, or aggregate CSV data larger than comfortably fits in a pandas DataFrame (tens of millions of rows / multi-GB files) without hand-writing chunked pandas code",
+    "The workload is naturally SQL-shaped: group-bys, window functions, percentiles, or joins across multiple CSV/Parquet files",
+    "You want to query CSV/Parquet (including gzip-compressed CSV) in place without a separate ETL/load step",
+    "Single-machine job where you want multi-core throughput on the read+aggregate path without standing up Spark/Dask",
+    "You already use pandas/Polars downstream and just want DuckDB as an accelerator for ingest+aggregate, then hand results back as a DataFrame"
+  ],
+  "when_not_to_use": [
+    "Pure scanning/row-counting/field-extraction with no aggregation — sibling tools like zsv and xan are reported to beat DuckDB's own CSV reader on those tasks",
+    "Team is committed to pandas' imperative, method-chaining style and can't adopt SQL or a relational API",
+    "CSV has very long lines/fields beyond the default 2MB max_line_size, or wildly inconsistent schemas across many files, without tuning the sniffer (max_line_size, sample_size, files_to_sniff)",
+    "You need guaranteed constant memory regardless of input method: memory behavior currently differs between reading by filename (streams) and reading CSV via a pipe/stdin with the same query (open GH issue #25165 as of Sept 2026)",
+    "Columns contain long numeric IDs — the sniffer has been reported to infer these as DOUBLE instead of HUGEINT/VARCHAR, silently losing precision unless types are pinned explicitly"
+  ],
+  "integration": {
+    "form": "shared lib / static lib / source-drop (single-file amalgamation) / language packages (pip, npm, etc.)",
+    "dependencies": "none required to build the core (vendors what it needs); optional extensions may pull their own deps",
+    "min_toolchain": "C++17-compliant compiler, CMake, Python 3 (build-time only, per README)",
+    "platforms": "x86-64 and aarch64 on Linux/macOS/Windows, plus WebAssembly (DuckDB-Wasm) via language clients",
+    "thread_safety": "not documented at the API level in what I read; the CSV reader and query engine are internally multi-threaded (parallel=true by default) for a single query",
+    "drop_in_for_baseline": "partial — explain: replaces `pd.read_csv().groupby()` with SQL over the file, not a pandas-compatible call, but results can be materialized back into a DataFrame via `.df()`, so it's a drop-in for the data path, not the pandas API"
+  },
+  "gotchas": [
+    "CSV type sniffer reported to infer long numeric ID columns as DOUBLE instead of HUGEINT/VARCHAR, causing precision loss unless column types are pinned explicitly (GH #22750, closed)",
+    "Memory profile isn't uniform across input methods: reading a named CSV file streams in near-constant memory, but reading CSV from a pipe/stdin with the same query has been reported to retain the full projected columns in memory (GH #25165, open)",
+    "Default max_line_size is 2,000,000 bytes and the sniffer samples a bounded prefix by default — very long lines or unusual multi-file schemas may need manual max_line_size/sample_size/files_to_sniff tuning",
+    "The parallel CSV reader has had past correctness bugs combining ignore_errors=true with specific internal vector-size builds (GH #7755, closed) — the multi-threaded CSV path is intricate enough that staying on a current release matters"
+  ],
+  "pick_this_over_siblings_when": "Pick DuckDB when the job is more than parsing — joins, group-bys, window functions, or percentiles across one or more CSV/Parquet files in a single SQL statement. For pure scanning, row-counting, or field extraction, siblings like zsv and xan are reported faster than DuckDB's own CSV reader and are lighter-weight if a full SQL engine isn't needed.",
+  "verified_claims_summary": "A third-party, DuckDB-unaffiliated blog (duckdblab.org) reports that on one Ryzen 9 7950X / 64GB DDR5 / NVMe machine, DuckDB SQL run directly over a synthetic ~8GB/50M-row Nginx access-log CSV (date parsing, group-by status code, percentile calc) took ~3.8s and ~380MB RAM, versus a naive `pd.read_csv` + groupby at ~180s and ~4.2GB RAM — about 47x faster and 90% less memory. DuckDB was 'v1.5.x plus some v2.0 Preview features'; pandas version, compiler flags, and a benchmark script were not published.",
+  "status_note": "Actively developed (repo pushed within the last day of this review, current dev branch v2.0-cyanoptera, 41.7k stars, MIT-licensed) with prebuilt packages for most languages and platforms — no maintenance risk; 'copyable' here just means querying a CSV via DuckDB is a few lines of SQL, not that DuckDB's own source is meant to be vendored.",
+  "sources_read": [
+    "https://github.com/duckdb/duckdb",
+    "https://github.com/duckdb/duckdb/blob/main/README.md",
+    "https://duckdblab.org/en/post/duckdb-large-file-processing/",
+    "https://duckdb.org/docs/current/data/csv/overview.html",
+    "https://github.com/duckdb/duckdb/issues (search: CSV out of memory / wrong result)"
+  ],
+  "confidence": 0.4
+}
