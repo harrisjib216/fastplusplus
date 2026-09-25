@@ -43,10 +43,11 @@ ORCHESTRATOR HARNESS NOTES
   `gh api "repos/OWNER/REPO/commits?per_page=1"`, `gh api repos/OWNER/REPO/readme
   -H "Accept: application/vnd.github.raw"`, `gh api repos/OWNER/REPO/contents/PATH
   -H "Accept: application/vnd.github.raw"`). Fetching through gh counts as
-  opening the github.com URL. WebSearch is exhausted for this session: do not
-  call it. For papers use http://export.arxiv.org/api/query?search_query=all:<terms>
-  via WebFetch.
-- Do not clone or build anything. Budget: about 10 tool calls per project.
+  opening the github.com URL. WebSearch has a per-session budget shared by all
+  agents; prefer direct URLs, and for papers use
+  http://export.arxiv.org/api/query?search_query=all:<terms> via WebFetch.
+- Do not clone or build anything. Budget: about 40 tool calls per project;
+  token cost is not a concern, so read the benchmark sources, not just READMEs.
 - Write the JSON array (one object per project, nothing else) to:
     {output_path}
   Then check it parses:
@@ -63,6 +64,7 @@ def sections(template):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("wave_dir", type=Path)
+    ap.add_argument("--batch", help="only render assignments in this batch")
     args = ap.parse_args()
     manifest = json.loads((args.wave_dir / "assignments.json").read_text())
     secs = sections(load_template())
@@ -81,6 +83,8 @@ def main():
     prompts_dir.mkdir(parents=True, exist_ok=True)
     raw_dir.mkdir(parents=True, exist_ok=True)
     for a in manifest["assignments"]:
+        if (args.batch and a["batch"] != args.batch) or "projects" not in a:
+            continue
         projects = "\n".join(
             f"- {p['name']} | {p['repo_url']} | domain: {p['domain']} | category: {p['category']} | "
             f"baselines: {p['baselines']}" + (f" | lead: {p['lead']}" if p.get("lead") else "")
