@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/zhaoliangcn/pipeyaml",
+  "one_liner": "C++17 YAML parser/emitter with a yaml-cpp-style API; author reports ~10x faster Load, ~5x faster Dump on sub-1 KB configs.",
+  "what_it_does": "PipeYAML is a from-scratch YAML parser and emitter that copies yaml-cpp's surface API. YAML::Load, LoadFile and LoadAll return YAML::Node values. You read them with operator[], as<T>() and as<T>(fallback), build them with push_back and operator=, and serialize them with YAML::Dump or an Emitter driven by BeginMap/Key/Value manipulators. It is only a partial drop-in. Type queries are snake_case (is_map(), scalar(), type()), there are no node iterators, and custom convert<T> specializations use a different encode signature. It is aimed at small block-style config files, and tags, merge keys, multi-line plain scalars and several other YAML 1.2 features are not implemented.",
+  "how_it_is_fast": "Load copies the whole input into one NUL-terminated std::string. The scanner reads it in string_view batches and dispatches on the first character with a single switch. It scans every token into a vector-plus-head-index queue, and a recursive-descent parser then builds a shared_ptr<node_data> tree in which each map is an insertion-ordered vector of key/value pairs. The emitter appends directly to a std::string instead of an ostringstream (the design doc credits this with a 41% cut in Dump time). Integers are decoded with std::from_chars, and each node caches its int/double/bool value after the first as<T>() call, which is where the 34x/54x conversion figures come from. The library has no SIMD and no arena allocator. Part of the gap to yaml-cpp probably comes from doing less work: the scanner ignores tags, drops '?' explicit keys, never expands merge keys and does not apply flow-context rules to plain scalars.",
+  "when_to_use": [
+    "Your yaml-cpp code only uses YAML::Load/LoadFile, operator[], as<T>() and Dump, and parse or reload latency on small config files matters (short-lived CLI tools, services that re-read config often).",
+    "Your inputs are small block-style configs you control, like the 368-911 byte documents in the published numbers. They use plain key: value pairs, nested maps, block sequences, quoted strings, simple anchors/aliases and |/> block scalars.",
+    "Hot code reads the same int, double or bool field many times through as<T>(). After the first call PipeYAML returns a cached value: about 10 ns in the author's run, against 357-574 ns for yaml-cpp, which parses the text again on every call.",
+    "You want a small MIT codebase to vendor (about 3.1k lines in 7 headers and 6 .cpp files) and are prepared to fix parser bugs yourself."
+  ],
+  "when_not_to_use": [
+    "YAML written by other tools or people (Kubernetes manifests, CI files, CloudFormation). Per the scanner source, an unquoted block value that contains , [ ] { } or ` is split at that character, and Load then usually throws (e.g. `msg: Hello, world`). Multi-line plain scalars also throw. Tags such as !!str or !Ref stay in the scalar text, `<<` merge keys are not expanded, '?' explicit keys are silently dropped, and UTF-16/32 input is rejected.",
+    "Untrusted input that you later Dump. The parser shares one node for every alias, but the emitter writes each alias out in full and never emits &/*. A billion-laughs document therefore parses cheaply, and its output then grows exponentially.",
+    "Round-trip or data-exchange output. Anchors, comments and quoting style are lost. A quoted numeric string like \"123\" is re-emitted unquoted. A string with a comma in the middle is also written unquoted, so PipeYAML cannot load its own output.",
+    "Large documents or wide maps. Key lookup and operator[] insertion both scan a vector of pairs linearly. Load copies the input and tokenizes the whole stream before parsing, and no published benchmark goes above about 1 KB of input.",
+    "Anything production-critical. The code is AI-written, the repo was created 2026-07-03, it has 0 stars and no releases or tags, nothing has been fuzzed, and CI has failed on main since 2026-07-12. The published speedups were measured before the July and September fixes for infinite loops, comment truncation and swallowed sibling keys, and the author notes one flow-mapping defect that is still open."
+  ],
+  "integration": {
+    "form": "static lib: CMake target pipeyaml, exported as PipeYAML::pipeyaml. The README's 'header-only style' only means there is a single include; 6 .cpp files still have to be compiled, and they are easy to source-drop.",
+    "dependencies": "None for the library. When the top-level CMakeLists is configured, FetchContent clones tinyTest from GitHub (branch main) unless TINYTEST_DIR is set, even with tests turned off. Google Benchmark and a prebuilt yaml-cpp are needed only for the benchmarks.",
+    "min_toolchain": "C++17 (uses std::from_chars, std::optional and std::filesystem) and CMake 3.14. The README claims GCC 7+, Clang 5+ and MSVC 2017+. The only evidence is GCC 9.4 for the benchmarks and g++/clang++ on ubuntu-latest in CI, where the Clang build of the unit tests currently fails.",
+    "platforms": "The library is portable C++ with no intrinsics or OS-specific calls, so in principle it runs anywhere. In practice only Linux is exercised (CI on ubuntu-latest). The benchmark targets link pthread and rt, which makes them Linux-only. macOS and Windows appear only as goals in the design doc.",
+    "thread_safety": "Not documented. as<int>(), as<double>() and as<bool>() are const but write a mutable per-node cache, so concurrent reads of one Node from several threads are a data race. Each Load() keeps its stream, scanner, parser and anchor table local to the call, and I found no mutable globals on the parse path.",
+    "drop_in_for_baseline": "partial: it keeps yaml-cpp's YAML namespace, Load/LoadFile/LoadAll/Dump, Node, operator[], as<T>(), push_back and the Emitter manipulators. The differences: type queries are snake_case (is_map(), scalar(), type()); there are no begin()/end() iterators; convert<T>::encode is bool encode(const T&, Node&); the Flow/Block/quoting manipulators are accepted but ignored; and several valid YAML constructs are rejected or mis-parsed (see when_not_to_use)."
+  },
+  "gotchas": [
+    "`node[0]` with a literal 0 is an ambiguous call, because 0 also converts to std::string through const char*. Clang rejects it, which is why CI is red. Write node[std::size_t(0)] as the README does; an int or size_t variable as the index is fine.",
+    "PipeYAML uses namespace YAML with the same class and function names as yaml-cpp, so the two cannot be linked into one binary. Its own comparison benchmark builds two separate executables. Migration is all-or-nothing per binary.",
+    "`node = 3.14159265358979` stores \"3.141593\" and `node = 1e-9` stores \"0.000000\", because convert<double>::encode uses std::to_string. Emitter << double uses 15 significant digits instead. Format doubles yourself before assigning them if precision matters.",
+    "Node::operator== on two maps compares only their sizes. as<std::vector<T>>() links only for bool, int, double and std::string elements (explicit instantiations), and there are no std::map converters. Load() throws ParserException on empty or comment-only input. With no iterators, the only way to walk unknown keys is node.get_data()->map()."
+  ],
+  "pick_this_over_siblings_when": "Pick it only when keeping yaml-cpp-style call sites (YAML::Load, Node, operator[], as<T>) matters more than spec coverage and maturity. fkYAML (header-only C++11 with its own fkyaml::node API, ~7.5x yaml-cpp on real files such as ubuntu.yml) and rapidyaml (C++11 with its own Tree API, claims ~30x on parse) are faster or better proven on real inputs. PipeYAML's own numbers work out to roughly 50-80 MB/s on sub-1 KB documents, which is fkYAML's range rather than rapidyaml's, and libfyaml is a C library at ~3x.",
+  "verified_claims_summary": "The numbers come from the author's Google Benchmark suite: two separate executables with identical benchmark bodies and inputs, run on an unspecified 'Intel Xeon' with GCC 9.4 in C++17 mode and unstated optimization flags for both libraries. Loading a 747-byte, 55-line config takes 14.3 us against yaml-cpp 0.8's 150 us (10.5x). The 368-byte nested and 911-byte anchor/merge-key documents load 9.4-9.7x faster, Dump is 5.0-5.3x faster, and load-modify-dump is 7.5x faster. The README calls the config '~75 lines'. The 34x/54x int/double figures time repeated as<T>() calls on one node, which PipeYAML answers from its cache, so they do not measure parsing. All results date from 2026-07-07 and were not re-run after the correctness fixes of 07-12 and 09-08.",
+  "status_note": "Active but brand-new: a single-author, AI-written project created 2026-07-03, last commit 2026-09-08, 0 stars, no releases, CI failing on main. It is MIT-licensed and about 3.1k lines, so it can be copied, but treat it as code you would have to own and fix.",
+  "sources_read": [
+    "https://github.com/zhaoliangcn/PipeYAML",
+    "https://github.com/zhaoliangcn/PipeYAML#performance-vs-yaml-cpp-08",
+    "https://github.com/zhaoliangcn/PipeYAML/blob/main/README.md",
+    "https://github.com/zhaoliangcn/PipeYAML/blob/main/CMakeLists.txt",
+    "https://github.com/zhaoliangcn/PipeYAML/blob/main/.github/workflows/ci.yml",
+    "https://github.com/zhaoliangcn/PipeYAML/blob/main/PipeYAML%20%E6%9E%B6%E6%9E%84%E8%AE%BE%E8%AE%A1%E6%96%87%E6%A1%A3.md",
+    "https://github.com/zhaoliangcn/PipeYAML/blob/main/include/pipeyaml/pipeyaml.h",
+    "https://github.com/zhaoliangcn/PipeYAML/blob/main/include/pipeyaml/node.h",
+    "https://github.com/zhaoliangcn/PipeYAML/blob/main/include/pipeyaml/parser.h",
+    "https://github.com/zhaoliangcn/PipeYAML/blob/main/include/pipeyaml/scanner.h",
+    "https://github.com/zhaoliangcn/PipeYAML/blob/main/include/pipeyaml/stream.h",
+    "https://github.com/zhaoliangcn/PipeYAML/blob/main/include/pipeyaml/emitter.h",
+    "https://github.com/zhaoliangcn/PipeYAML/blob/main/include/pipeyaml/exception.h",
+    "https://github.com/zhaoliangcn/PipeYAML/blob/main/src/convert.cpp",
+    "https://github.com/zhaoliangcn/PipeYAML/blob/main/src/node.cpp",
+    "https://github.com/zhaoliangcn/PipeYAML/blob/main/src/parser.cpp",
+    "https://github.com/zhaoliangcn/PipeYAML/blob/main/src/scanner.cpp",
+    "https://github.com/zhaoliangcn/PipeYAML/blob/main/src/stream.cpp",
+    "https://github.com/zhaoliangcn/PipeYAML/blob/main/src/emitter.cpp",
+    "https://github.com/zhaoliangcn/PipeYAML/blob/main/benchmarks/bench_parse.cpp",
+    "https://github.com/zhaoliangcn/PipeYAML/blob/main/benchmarks/bench_yamlcpp.cpp",
+    "https://github.com/zhaoliangcn/PipeYAML/blob/main/benchmarks/bench_data.h",
+    "https://github.com/zhaoliangcn/PipeYAML/blob/main/tests/unit/test_node.cpp",
+    "https://github.com/zhaoliangcn/PipeYAML/blob/main/tests/unit/test_parser.cpp",
+    "https://github.com/zhaoliangcn/PipeYAML/blob/main/tests/integration/test_roundtrip.cpp",
+    "https://github.com/zhaoliangcn/PipeYAML/commits/main",
+    "https://github.com/zhaoliangcn/PipeYAML/commit/522a664",
+    "https://github.com/zhaoliangcn/PipeYAML/issues",
+    "https://github.com/zhaoliangcn/PipeYAML/actions",
+    "https://github.com/zhaoliangcn/PipeYAML/actions/runs/34185462773",
+    "https://github.com/fktn-k/fkYAML",
+    "https://github.com/biojppm/rapidyaml"
+  ],
+  "confidence": 0.78
+}

@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/externpro/rapidxml",
+  "one_liner": "Single-header in-situ C++ XML DOM parser from 2009; about 4x libxml2's DOM parse throughput on 10-100 MB inputs.",
+  "what_it_does": "Parses a mutable, zero-terminated character buffer into a pointer-linked DOM (xml_document, xml_node, xml_attribute) whose names and values point back into that buffer; rapidxml_print.hpp prints a DOM back to XML. The API is its own small node-walking interface (first_node, next_sibling, first_attribute, append_node), and parse options are a compile-time template argument (doc.parse<flags>(text)). It does not replace libxml2: it has no XPath, validation, DTD or custom-entity processing, namespace handling or streaming/SAX mode. externpro/rapidxml is upstream 1.13 with one change, a GCC 4.7+ compile fix in rapidxml_print.hpp, plus CMake packaging.",
+  "how_it_is_fast": "In-situ parsing: node names and values are pointers into the source buffer. Zero terminators, entity expansion and whitespace normalization are written into that buffer in place, so no strings are copied. Nodes and attributes are placement-new'd from a bump-pointer arena (memory_pool: a 64 KB block inside the document, then 64 KB heap blocks) that is freed all at once. Parse flags are a template parameter, so each flag combination compiles to its own parser with the unused branches removed; characters are classified with 256-entry lookup tables in scalar recursive-descent code (no SIMD).",
+  "when_to_use": [
+    "Trusted, well-formed XML (configs, asset or scene files, data exports) that fits in memory, when you want a DOM and libxml2's parse plus xmlFreeDoc time dominates. The one measured run shows about 3.9-4.0x libxml2 at the 10 MB and 100 MB buckets.",
+    "You can hand the parser a mutable buffer that outlives the document, such as a std::vector<char> with a trailing '\\0'. For read-only data, use parse_non_destructive and read lengths with name_size()/value_size().",
+    "You want one dependency-free header instead of linking libxml2: embedded targets, cross-compiles, Windows, or builds without exceptions (define RAPIDXML_NO_EXCEPTIONS and supply parse_error_handler).",
+    "Many small or medium documents where you only need element structure and first-text values: parse_fastest skips data nodes and never writes to the buffer."
+  ],
+  "when_not_to_use": [
+    "Untrusted input. Recursion depth is unbounded (parse_element -> parse_node_contents -> parse_node), and Boost.PropertyTree's embedded copy has an open fuzzer report of stack overflow on deep nesting (boostorg/property_tree#130). By default a mismatched closing tag like <a></b> is accepted.",
+    "Anything that needs XPath, DTD or schema validation, namespaces, DTD-declared entities, or real UTF-16/UTF-32. The manual says wide-character support is partial, and SourceForge ticket #23 reports wchar_t parsing broken for code points above 255.",
+    "Choosing a DOM parser on speed alone. pugixml beat RapidXml in every bucket of bemayer's run (1575 vs 1085 MB/s at 10 MB) and in SpeedyXml's README (1.00 s vs 1.29 s on 235 MiB). Parshred's README shows the opposite order, so benchmark on your own data.",
+    "Very large files or tight memory. Throughput fell to 638 MB/s at the 100 MB bucket (1085 MB/s at 10 MB), and Parshred's README shows RapidXML falling from about 2.4 GB/s at 16 MB to about 0.9 GB/s at 64-128 MB. The whole input plus DOM must be resident: RSS was 424 MB at the 100 MB bucket, in a harness that also keeps a copy of the input.",
+    "Projects that need a maintained parser. There has been no upstream release since 1.13 (2009), and the SourceForge tracker has open tickets going back to 2009."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none beyond <cassert>, <cstdlib>, <new> and <exception> (or user-supplied equivalents with RAPIDXML_NO_STDLIB); rapidxml_utils.hpp adds <vector>, <string>, <fstream>",
+    "min_toolchain": "C++98/03. Upstream was tested on VC++ 2003-2008, gcc 3/4 and Comeau 4.3.3; bemayer builds it with Debian bookworm g++ 12.2 in C++17 mode (with -fpermissive for the unpatched print header). externpro's CMakeLists requires CMake 4.3, but you can skip it and copy the header.",
+    "platforms": "any (portable scalar C++, no SIMD or OS calls); externpro publishes packages for Linux amd64/arm64, macOS arm64 and Windows amd64",
+    "thread_safety": "Not documented. The code has no global mutable state (lookup tables are const statics), so separate xml_document instances can run on separate threads; a single document and its pool are unsynchronized.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "xml_document embeds a 64 KB static pool (RAPIDXML_STATIC_POOL_SIZE), so a document on the stack takes 64 KB+ of stack. Calling parse() again on the same document drops the old nodes but does not free the pool, so call clear() between parses.",
+    "Input must be a mutable, zero-terminated Ch* that outlives the document, and the default mode writes '\\0's and expanded entities into it. parse_non_destructive stops the writes, but then names and values are unterminated and entities stay unexpanded. It still needs a terminating zero, so a raw mmap is not enough.",
+    "It is lax by default. Closing-tag names are checked only with parse_validate_closing_tags. DOCTYPE is skipped, only the five built-in entities and &#...; references are expanded, and unrecognised <!...> constructs are silently dropped.",
+    "Nodes do not own their strings: a name or value you set by hand must outlive the node (use doc.allocate_string()). The SourceForge 1.13 zip's rapidxml_print.hpp does not compile on GCC 4.7+ as shipped (bemayer uses -fpermissive), while externpro's copy carries the forward-declaration fix."
+  ],
+  "pick_this_over_siblings_when": "Choose RapidXml over Parshred (needs C++20, GCC 12+) or SpeedyXml (a streaming push parser with no DOM) when you need a mutable in-memory DOM from one dependency-free header that builds on old or unusual toolchains. Parshred's own README puts it within about 5% of RapidXML up to 16 MB and 1.5-1.8x ahead at 64 MB+, so prefer Parshred for very large files on AVX2 hardware.",
+  "verified_claims_summary": "In bemayer/xml-benchmark's 2026-09-01 run (Debian bookworm g++ 12.2, CMake Release -O3, a GitHub Actions ubuntu-latest runner with no CPU model given), DOM parsing averaged over a wide and a deep synthetic file ran about 3.9x faster than Debian's libxml2 2.9.14 at the 10 MB bucket (26.9 vs 104.8 ms) and about 4.0x at 100 MB (163.4 vs 646.7 ms); RapidXml's time includes copying the buffer on every iteration. libxml2 wins the 100 KB and 1 MB buckets, probably because it stops at depth 256 on the deep files, and pugixml beat RapidXml in every bucket.",
+  "status_note": "The parser code has not changed since upstream 1.13 (2009; SourceForge last updated 2013), and externpro's 'active' commits are CMake/CI packaging only, but the dual BSL-1.0/MIT single header is small enough to vendor; take externpro's copy for the patched print header.",
+  "sources_read": [
+    "https://github.com/externpro/rapidxml",
+    "https://github.com/externpro/rapidxml/blob/xpro/rapidxml.hpp",
+    "https://github.com/externpro/rapidxml/blob/xpro/rapidxml_utils.hpp",
+    "https://github.com/externpro/rapidxml/blob/xpro/rapidxml_print.hpp",
+    "https://github.com/externpro/rapidxml/blob/xpro/manual.html",
+    "https://github.com/externpro/rapidxml/blob/xpro/CMakeLists.txt",
+    "https://github.com/externpro/rapidxml/blob/xpro/CMakePresetsBase.json",
+    "https://github.com/externpro/rapidxml/blob/xpro/license.txt",
+    "https://github.com/externpro/rapidxml/blob/xpro/.gitmodules",
+    "https://github.com/externpro/rapidxml/blob/xpro/.github/workflows/xpbuild.yml",
+    "https://github.com/externpro/rapidxml/commits/xpro",
+    "https://github.com/externpro/rapidxml/commit/a71cd03a",
+    "https://github.com/externpro/rapidxml/compare/v1.13...xpro",
+    "https://github.com/externpro/rapidxml/releases",
+    "https://sourceforge.net/p/rapidxml/bugs/",
+    "https://sourceforge.net/p/rapidxml/bugs/20/",
+    "https://services.nvd.nist.gov/rest/json/cves/2.0?keywordSearch=rapidxml",
+    "https://bemayer.github.io/xml-benchmark/",
+    "https://github.com/bemayer/xml-benchmark",
+    "https://github.com/bemayer/xml-benchmark/blob/gh-pages/index.html",
+    "https://github.com/bemayer/xml-benchmark/blob/main/benchmarks/rapidxml/bench.cpp",
+    "https://github.com/bemayer/xml-benchmark/blob/main/benchmarks/rapidxml/CMakeLists.txt",
+    "https://github.com/bemayer/xml-benchmark/blob/main/benchmarks/rapidxml/Dockerfile",
+    "https://github.com/bemayer/xml-benchmark/blob/main/benchmarks/libxml2/bench.cpp",
+    "https://github.com/bemayer/xml-benchmark/blob/main/tools/report_generator.py",
+    "https://github.com/bemayer/xml-benchmark/blob/main/tools/common.py",
+    "https://github.com/bemayer/xml-benchmark/blob/main/tools/download_data.py",
+    "https://github.com/tcShadowWalker/SpeedyXml-cpp",
+    "https://github.com/gregghy/parshred",
+    "https://github.com/KrzysztofKowalski/libsimdxml",
+    "https://github.com/boostorg/property_tree/issues/130",
+    "https://github.com/svgpp/svgpp/issues/84",
+    "https://github.com/search?q=rapidxml+overflow&type=issues"
+  ],
+  "confidence": 0.8
+}
