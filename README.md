@@ -7,11 +7,11 @@ claim against the cited page before it was written up.
 
 ## Lists
 
-- [COPYABLE.md](COPYABLE.md): 196 entries under an OSI license or CC0. Code can be vendored or forked.
-- [REFERENCE.md](REFERENCE.md): 15 entries with no, unclear, or non-OSI license. Study the idea; don't copy the code.
+- [COPYABLE.md](COPYABLE.md): 255 entries under an OSI license or CC0. Code can be vendored or forked.
+- [REFERENCE.md](REFERENCE.md): 19 entries with no, unclear, or non-OSI license. Study the idea; don't copy the code.
 - [REJECTED.md](REJECTED.md): 5 candidates that failed verification.
 
-Tiers across both lists: A 89, B 22, C 96, D 4.
+Tiers across both lists: A 106, B 25, C 138, D 5.
 
 ## Evidence tiers
 
@@ -31,7 +31,13 @@ Ratios marked "(derived from page data)" were computed from numbers on the cited
 | compression-and-encoding | general-lossless | 2 | 0 | 2 | 0 | 0 |
 | crypto-and-hashing | non-crypto-hashes | 2 | 1 | 1 | 0 | 0 |
 | numerics-and-science | blas-lapack | 1 | 1 | 0 | 0 | 0 |
-| parsing-and-text | regex-engines | 1 | 0 | 1 | 0 | 0 |
+| parsing-and-text | csv-tabular | 11 | 2 | 0 | 9 | 0 |
+| parsing-and-text | lexers-tokenizers | 9 | 1 | 1 | 6 | 1 |
+| parsing-and-text | markup-html-markdown | 9 | 1 | 0 | 8 | 0 |
+| parsing-and-text | parser-generators-and-combinators | 8 | 3 | 0 | 5 | 0 |
+| parsing-and-text | regex-engines | 9 | 2 | 3 | 4 | 0 |
+| parsing-and-text | text-search-and-indexing | 8 | 3 | 0 | 5 | 0 |
+| parsing-and-text | unicode-utf8 | 10 | 5 | 0 | 5 | 0 |
 | runtime-and-systems | filesystems-and-io | 1 | 0 | 1 | 0 | 0 |
 | serialization-and-formats | json | 3 | 2 | 0 | 1 | 0 |
 | stdlib-replacements | allocators | 16 | 4 | 4 | 7 | 1 |
