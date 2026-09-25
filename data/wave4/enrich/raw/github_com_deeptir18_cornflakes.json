@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/deeptir18/cornflakes",
+  "one_liner": "Rust research serialization library and kernel-bypass UDP stack that sends large fields zero-copy via NIC scatter-gather, beating Protobuf/FlatBuffers/Cap'n Proto.",
+  "what_it_does": "Cornflakes compiles proto3 schemas into Rust objects (plus C bindings with opaque void* handles) that have Protobuf-style getters, setters, list init/append and deserialize functions. The library is co-designed with its own kernel-bypass UDP stack (custom Mellanox OFED and Intel ICE datapaths, partial DPDK). You do not call serialize into a byte buffer: you pass the object to the connection (send_object / serialize_and_send), and the stack builds the packet. It is not a drop-in replacement: I/O data must come from the stack's pinned, reference-counted buffers, and the wire format resembles Cap'n Proto/FlatBuffers, so it is not Protobuf-wire-compatible.",
+  "how_it_is_fast": "Protobuf, FlatBuffers and Cap'n Proto copy each bytes/string field into a contiguous buffer and then again into DMA memory; Cornflakes instead posts each pinned-memory field of 512 B or more as its own NIC scatter-gather entry (zero-copy transmit), and a per-buffer reference count keeps that memory alive until the DMA completes. A per-field size threshold, checked when the field's smart pointer (CFBytes/CFPtr) is constructed, chooses copy or zero-copy: smaller fields go into an arena-backed copy buffer, because below about 512 B the reference-count cache miss costs more than the memcpy. Serialize-and-send writes the packet header, the object header and the copied data into one entry and posts the zero-copy entries directly onto the NIC ring, with no intermediate scatter-gather array (a 7.7-17.4% throughput gain in the paper). All framing (a field bitmap plus u32 size/offset forward pointers) is at the front of the object, so each zero-copy field needs only one extra scatter-gather entry.",
+  "when_to_use": [
+    "Microsecond-scale datacenter services such as caches and KV stores that already run on kernel bypass with Mellanox ConnectX-5/6 or Intel E810 NICs, where serialization copies are a large share of CPU time per request.",
+    "Responses built from values of 512 B or more that already sit in pinned memory, e.g. a store that returns stored blobs. On the paper's CDN image trace (objects of 1 KB and up) it served 97-128% more objects/s than the three baselines.",
+    "Workloads that mix small and large values, like the Twitter cache trace (about 32% of requests are 512 B or more), where the hybrid copy/zero-copy path beat pure scatter-gather by 2.3-3.9% and beat the copy-based libraries by 15.4-45.9%.",
+    "Applications that never modify data in place while it is being sent, such as Redis-style stores, versioned stores, or code that updates by allocating and swapping pointers.",
+    "As a reference design and threshold-calibration method (paper Section 5) when adding zero-copy serialization to your own kernel-bypass stack."
+  ],
+  "when_not_to_use": [
+    "Small-field workloads. On Google's field-size distribution (94.9% of fields are 512 B or less) it ties or slightly trails Protobuf (844.7 vs 852.5 k req/s at 1 value) and wins only at 1-8 and 1-16 values per list.",
+    "Standard Linux sockets. The linux-datapath returns usize::MAX as its copy threshold (always copies), and many of its functions are unimplemented!().",
+    "Messages larger than one jumbo frame. The prototype has no segmentation: the CDN benchmark split objects into sub-objects that fit a jumbo frame, and the copy path carries a 'doesn't work if buffer is > than an MTU' TODO.",
+    "Production or multicore use, or any need for Protobuf wire compatibility, proto2 required fields, or recursive pointer-based types (the author confirms in issue #7 that trees with pointers are not supported). The paper evaluates a single-core server and leaves multicore to future work.",
+    "Any project that needs a license: the repo has no LICENSE file."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "Cargo workspace crates (cornflakes-codegen, cornflakes-libos, cornflakes-utils, a datapath crate) used as path dependencies with build.rs code generation; git forks of bumpalo (and optionally demikernel); protobuf-parser, rdma-core and DPDK git submodules; Mellanox OFED 5.6-2.0.9.0 or Intel ice drivers (Intel also needs igb_uio binding); hugepages. protoc/flatc/capnp are needed only to build the baselines.",
+    "min_toolchain": "Rust 2021 edition. install-rust.sh installs 1.70.0 and then switches the default to stable, so the rustc version is not pinned. Only Ubuntu 20.04 is tested.",
+    "platforms": "x86-64 Linux (Ubuntu 20.04) with Mellanox ConnectX-5/ConnectX-6 (mlx5) or Intel E810 (ice) NICs; DPDK support is partial; the paper's runs use jumbo frames (MTU 9000)",
+    "thread_safety": "Not documented. The datapath creates one connection per thread from per-thread contexts. The paper's servers run on a single core, and multicore is left to future work. Nothing prevents the application from modifying a buffer that the NIC is still sending.",
+    "drop_in_for_baseline": "partial — it reuses Protobuf's proto3 schema language and a Protobuf-like getter/setter API, but it has its own wire format, networking stack and pinned-buffer allocator, so neither application code nor wire data carry over unchanged"
+  },
+  "gotchas": [
+    "The kv app's --copy_threshold CLI default and the mlx5 datapath default are both 256 B, not the paper's 512 B. The experiment configs pass 512 explicitly (cornflakes-dynamic-512). The paper recommends re-measuring the threshold on your own NIC and CPU.",
+    "Zero-copy applies only to data inside the stack's registered pinned memory. For any other pointer, recover_metadata returns None and the field is copied without any warning.",
+    "Copied entries come before zero-copy entries on the wire. As a result, peers configured with different thresholds can serialize repeated elements in different orders.",
+    "Issue #1, open since 2021: the code generator emits code with lifetime errors for messages that contain only int32 fields."
+  ],
+  "pick_this_over_siblings_when": "Pick it over rkyv, or over FlatBuffers-family formats such as Karmem and Lite³, only when your bottleneck is the transmit-path memcpy on a kernel-bypass NIC and your fields are 512 B or larger. Those siblings speed up CPU encode/decode over any transport, but Cornflakes's gain comes from NIC scatter-gather and disappears for small fields or on normal sockets.",
+  "verified_claims_summary": "The SOSP 2023 paper runs a single-core Rust KV server on CloudLab c6525-100g machines (2x EPYC 7402P, ConnectX-5Ex 100 Gb, MTU 9000), with every system on the Cornflakes UDP stack and the pure-Rust protobuf 3.0.3, flatbuffers 2.1.2 and capnp 0.13.6 crates as baselines; the rustc version is not stated. Cornflakes served 366.5k vs 161.0-186.1k objects/s on the CDN image trace, delivered 15.4-45.9% more throughput on the Twitter trace (p99 about 52-61 us) and roughly tied on Google's small-field trace; in Redis, get/mget/lrange gained 15-40.1% over Redis's own handwritten serialization.",
+  "status_note": "Abandoned research prototype: the main branch was last committed on 2023-07-27 (the timetrace branch on 2024-01-19), and there is no LICENSE file, so use it as a reference design to study, not as a dependency.",
+  "sources_read": [
+    "https://github.com/deeptir18/cornflakes",
+    "https://github.com/deeptir18/cornflakes/blob/main/README.md",
+    "https://github.com/deeptir18/cornflakes/blob/main/Cargo.toml",
+    "https://github.com/deeptir18/cornflakes/blob/main/.gitmodules",
+    "https://github.com/deeptir18/cornflakes/blob/main/install/install-rust.sh",
+    "https://github.com/deeptir18/cornflakes/blob/main/cornflakes-codegen/API.md",
+    "https://github.com/deeptir18/cornflakes/blob/main/cornflakes-codegen/Cargo.toml",
+    "https://github.com/deeptir18/cornflakes/blob/main/cornflakes-libos/Cargo.toml",
+    "https://github.com/deeptir18/cornflakes/blob/main/cornflakes-libos/src/dynamic_rcsga_hybrid_hdr.rs",
+    "https://github.com/deeptir18/cornflakes/blob/main/cornflakes-libos/src/datapath.rs",
+    "https://github.com/deeptir18/cornflakes/blob/main/cornflakes-libos/src/lib.rs",
+    "https://github.com/deeptir18/cornflakes/blob/main/cornflakes-utils/src/lib.rs",
+    "https://github.com/deeptir18/cornflakes/blob/main/mlx5-datapath/src/datapath/connection.rs",
+    "https://github.com/deeptir18/cornflakes/blob/main/mlx5-datapath/mlx5-wrapper/inc/base/mempool.h",
+    "https://github.com/deeptir18/cornflakes/blob/main/linux-datapath/src/datapath/connection.rs",
+    "https://github.com/deeptir18/cornflakes/blob/main/echo-dynamic-sga-c/echo_dynamic_sga.h",
+    "https://github.com/deeptir18/cornflakes/blob/main/cf-kv/Cargo.toml",
+    "https://github.com/deeptir18/cornflakes/blob/main/cf-kv/build.rs",
+    "https://github.com/deeptir18/cornflakes/blob/main/cf-kv/src/lib.rs",
+    "https://github.com/deeptir18/cornflakes/blob/main/cf-kv/src/cdn.rs",
+    "https://github.com/deeptir18/cornflakes/blob/main/cf-kv/src/run_cdn.rs",
+    "https://github.com/deeptir18/cornflakes/blob/main/cf-kv/src/bin/cdn_mlx5.rs",
+    "https://github.com/deeptir18/cornflakes/blob/main/cf-kv/cdn.yaml",
+    "https://github.com/deeptir18/cornflakes/blob/main/experiments/yamls/loopingparams/cf-kv-cdn.yaml",
+    "https://github.com/deeptir18/cornflakes/blob/main/experiments/yamls/loopingparams/cf-kv-twitter.yaml",
+    "https://github.com/deeptir18/cornflakes/issues/1",
+    "https://github.com/deeptir18/cornflakes/issues/7",
+    "https://github.com/deeptir18/cornflakes/pulls?q=is%3Apr",
+    "https://github.com/deeptir18/cornflakes/commits/main",
+    "https://github.com/deeptir18/cornflakes-scripts",
+    "https://people.eecs.berkeley.edu/~matei/papers/2023/sosp_cornflakes.pdf"
+  ],
+  "confidence": 0.82
+}

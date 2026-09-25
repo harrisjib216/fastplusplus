@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/automatalab/pison",
+  "one_liner": "Multithreaded SIMD structural-index builder and path iterator for single huge JSON records; beats simdjson/RapidJSON end-to-end using 8 threads.",
+  "what_it_does": "Pison builds a leveled bitmap index over a JSON text: one bitmap per nesting level for colons and one for commas, plus a quote bitmap. You then walk the index with a BitmapIterator (down/up/moveToKey/moveToIndex/moveNext/getValue) to run hand-coded JSONPath-style queries. It is not a DOM parser and not a drop-in for RapidJSON or simdjson. There is no query-string engine, and getValue() returns a malloc'd copy of the raw value text, with quotes kept and no unescaping or number conversion. Its main difference from Mison and simdjson is that it can build the index for one large record across several cores.",
+  "how_it_is_fast": "Each 64-byte word goes through bit-parallel steps taken from Mison and simdjson: AVX2 compare+movemask builds the structural-character bitmaps, carry arithmetic finds odd backslash runs, and a pclmulqdq prefix-XOR builds the string mask. Leveled bitmaps are then built word by word rather than step by step, which cuts memory traffic (the paper reports 40.8% less memory than step-by-step). To parallelize one record, Pison splits the text into per-thread chunks. Contradiction-based context inference (tokenize a chunk's first 64 bytes as inside-string and as outside-string; a token error rules one out) decides each chunk's string state. When inference fails, Pison speculates and repairs a wrong guess by flipping that chunk's string-mask bitmap. Per-chunk leveled bitmaps are then merged by re-basing their relative levels. Queries only build and touch the levels they need (level_num).",
+  "when_to_use": [
+    "Extracting a few paths (for example $.routes[*].legs[*].steps[*].distance.text) from one very large JSON document, from hundreds of MB to about 1GB, on a multi-core Linux x86-64 server where you can spend 4-8 cores to cut end-to-end latency.",
+    "Running several queries against the same large record: the index is built once and reused (the paper's Twitter workload shares one index across 8 queries).",
+    "Queries that only reach a few levels deep: pass level_num so bitmaps are built only for the depths the query touches.",
+    "Research or prototyping of Mison-style structural-index JSON analytics, where a small (about 3.3K lines) MIT codebase is easy to read and change."
+  ],
+  "when_not_to_use": [
+    "You need a DOM, typed values, JSON validation, or serialization. Pison only finds raw value text, and index construction has no error path for malformed input.",
+    "Streams of many small records: the README reports only serial Pison there, example3 says parallel construction for record sets is 'TBD', and serial Pison is about even with simdjson (paper Table 5 sum 12.14s vs 11.9s).",
+    "Non-Linux or non-x86 targets: it requires AVX2 and pclmulqdq, uses pthread_setaffinity_np and malloc.h, and has no NEON or scalar fallback.",
+    "A single streaming query over a big file, where JSONSki (same lab) says it is about 3x faster than Pison. Also avoid it under tight memory: the paper's Figure 18 reports about 3.0GB average footprint for about 1GB records.",
+    "Production code that sees untrusted input. This is research-grade code with fixed-size buffers and no bounds checks. Parallel mode segfaulted at -O1 and above until a missing return was fixed in October 2023 (issue #2, PR #5)."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none beyond pthreads and the C++ standard library",
+    "min_toolchain": "C++11; g++ 7.4.0+ (README); makefile uses -O3 -mavx -mavx2 -msse4.2 -mpclmul",
+    "platforms": "Linux x86-64 only (AVX2 and pclmulqdq required; CPU pinning via pthread_setaffinity_np)",
+    "thread_safety": "Not safe for concurrent parallel use: ParallelBitmapConstructor keeps the bitmap and thread arrays in static members, and ParallelBitmapIterator uses file-scope global arrays. The README's getCopy() gives separate iterators for querying one index from several threads. Nothing else is documented.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "getValue() returns a malloc'd copy of the raw text between structural characters, including leading whitespace and string quotes, and the caller must free() it. On some edge paths it returns the string literal \"\", and the examples' pattern `if (value) free(value)` would then free a literal.",
+    "Index depth is capped at MAX_LEVEL = 22, and deeper levels are silently left unindexed. down() skips only spaces and newlines before a nested value, so tabs or carriage returns there make it return false. The context-inference tokenizer treats a carriage return as a token error, so CRLF-formatted input may get the wrong string state in parallel mode (inferred from code, not documented).",
+    "Memory-safety edges: loadSingleRecord writes its NUL terminator one byte past the buffer when the file size is a multiple of 64. loadRecords strcpy's into a buffer with no room for the terminator and reads lines through a 1MB stack buffer. Iterator position arrays are fixed-size guesses with no bounds checks (for example 125,001 entries for getCopy() iterators).",
+    "Input must be padded to a multiple of 64 bytes, which RecordLoader does with 'd' filler. Worker i is pinned to CPU i (at most 70 threads). Chunk offsets and word loop counters are 32-bit int, so treat records over 2GB as untested in this code."
+  ],
+  "pick_this_over_siblings_when": "Pick Pison over simdjson or RapidJSON when the input is one very large JSON record, you need only a handful of paths, and you can spend 4-8 cores: the parallel index build is where its end-to-end win over simdjson comes from. For a single streaming query, JSONSki (same lab) reports about 3x faster than Pison. For general parsing, DOM access, or small documents, simdjson or yyjson are the safer picks.",
+  "verified_claims_summary": "The PVLDB'21 paper (G++ 7.4.0 -O3, CentOS 7, 16-core 2x Xeon E5-2620 v4) times index construction plus JSONPath queries over six ~1GB single-record datasets. Pison with 8 threads is 12.2X faster than RapidJSON, 4.6X faster than simdjson, and 4.2X faster than serial Pison. Serial Pison is roughly even with simdjson. The README's 5.4X (Server 1, 8 threads) and 3.1X (4-core Xeon E3-1240 v5, 4 threads) figures compare multithreaded Pison with single-threaded baselines whose 2020-era versions are not stated.",
+  "status_note": "Stale research code: the last source fix was October 2023, the last commit (README only) was 2024-10-10, and two outside PRs are still open. It is MIT-licensed and about 3.3K lines, so vendoring and patching it is practical.",
+  "sources_read": [
+    "https://github.com/AutomataLab/Pison",
+    "https://github.com/AutomataLab/Pison#performance-results",
+    "https://github.com/AutomataLab/Pison/blob/master/makefile",
+    "https://github.com/AutomataLab/Pison/blob/master/src/Bitmap.h",
+    "https://github.com/AutomataLab/Pison/blob/master/src/BitmapConstructor.h",
+    "https://github.com/AutomataLab/Pison/blob/master/src/BitmapConstructor.cpp",
+    "https://github.com/AutomataLab/Pison/blob/master/src/BitmapIterator.h",
+    "https://github.com/AutomataLab/Pison/blob/master/src/Records.h",
+    "https://github.com/AutomataLab/Pison/blob/master/src/RecordLoader.h",
+    "https://github.com/AutomataLab/Pison/blob/master/src/RecordLoader.cpp",
+    "https://github.com/AutomataLab/Pison/blob/master/src/SerialBitmap.h",
+    "https://github.com/AutomataLab/Pison/blob/master/src/SerialBitmap.cpp",
+    "https://github.com/AutomataLab/Pison/blob/master/src/SerialBitmapConstructor.cpp",
+    "https://github.com/AutomataLab/Pison/blob/master/src/SerialBitmapIterator.cpp",
+    "https://github.com/AutomataLab/Pison/blob/master/src/ParallelBitmap.h",
+    "https://github.com/AutomataLab/Pison/blob/master/src/ParallelBitmap.cpp",
+    "https://github.com/AutomataLab/Pison/blob/master/src/ParallelBitmapConstructor.h",
+    "https://github.com/AutomataLab/Pison/blob/master/src/ParallelBitmapConstructor.cpp",
+    "https://github.com/AutomataLab/Pison/blob/master/src/ParallelBitmapIterator.h",
+    "https://github.com/AutomataLab/Pison/blob/master/src/ParallelBitmapIterator.cpp",
+    "https://github.com/AutomataLab/Pison/blob/master/src/LocalBitmap.h",
+    "https://github.com/AutomataLab/Pison/blob/master/src/LocalBitmap.cpp",
+    "https://github.com/AutomataLab/Pison/blob/master/src/Tokenizer.h",
+    "https://github.com/AutomataLab/Pison/blob/master/src/Tokenizer.cpp",
+    "https://github.com/AutomataLab/Pison/blob/master/example/example1.cpp",
+    "https://github.com/AutomataLab/Pison/blob/master/example/example2.cpp",
+    "https://github.com/AutomataLab/Pison/blob/master/example/example3.cpp",
+    "https://github.com/AutomataLab/Pison/issues/2",
+    "https://github.com/AutomataLab/Pison/pull/4",
+    "https://github.com/AutomataLab/Pison/pull/5",
+    "https://github.com/AutomataLab/Pison/pull/6",
+    "https://github.com/AutomataLab/Pison/commits/master",
+    "http://vldb.org/pvldb/vol14/p694-zhao.pdf",
+    "https://github.com/AutomataLab/JSONSki"
+  ],
+  "confidence": 0.8
+}
