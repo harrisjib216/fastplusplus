@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/remade-with-rust/rusty_xml",
+  "one_liner": "Pure safe-Rust rewrite of libxml2 (parse, DOM, SAX, XPath, DTD, C14N) whose CLI parses faster than xmllint as shipped.",
+  "what_it_does": "A new implementation of libxml2 in Rust, not a binding. It covers XML 1.0 parsing into an arena DOM, SAX2, a pull reader, save/writer, XPath 1.0, DTD validation, C14N, XInclude, HTML, and partial RelaxNG/XSD/Schematron. The API mirrors libxml2 in snake_case (xmlReadMemory becomes xml_read_memory, with #[doc(alias)] entries and the same numeric XML_PARSE_* bits), so C code ports over by hand but nothing links against it: the C-ABI cdylib is still a stub. The rxmlint CLI takes the same flags as xmllint.",
+  "how_it_is_fast": "About half of the published margin comes from the allocator. rxmlint uses rusty_alloc, a pure-Rust port of mimalloc, as its #[global_allocator], while xmllint runs on the system allocator. The rest comes from ordinary scanner work in the 0.2.0 performance release: character data and attribute values are copied in one pass per ASCII run instead of decoding each character, names are scanned in place as byte spans, UTF-8 decoding checks only the leading scalar (this fixed an O(n^2) re-validation), scratch attribute vectors are reused, and the arena DOM uses u32 NodeId handles. Allocations on the attribute-heavy file fell 72%. There is no SIMD and no string interning: every node and attribute still holds owned Strings, which explains why the allocator matters so much.",
+  "when_to_use": [
+    "You need libxml2's feature set (XPath 1.0, DTD validation, C14N/exclusive C14N, HTML parsing) in a Rust or wasm32 build with no C toolchain, no *-sys crate and #![forbid(unsafe_code)] throughout.",
+    "You parse untrusted XML and want no-network and no-XXE behaviour that cannot be switched off, plus bounded entity expansion.",
+    "Your binary already uses rusty_alloc (or you are willing to set it as the global allocator). The as-shipped 1.55x-2.31x DOM-parse gain over xmllint depends on it.",
+    "You parse attribute-heavy documents of hundreds of KB to MB into a DOM. big-attr.xml is the only large file that stays faster (about 1.25x) when both sides use the same allocator.",
+    "You are porting libxml2-based code to Rust and want the same function names and option bits."
+  ],
+  "when_not_to_use": [
+    "You need a parser that is faster on its own merits. With the same allocator the author measures 0.80x on big-attr and 1.07x (slower) on big-300k, and the board has not been re-run since rxmlint 0.2.0. The 0.3.0 through 0.8.1 conformance releases have landed since then.",
+    "You need streaming or bounded memory. xml_reader_for_memory and rxmlint --stream build the whole tree and then walk it. Only the rusty_xml-specific XML_PARSE_NO_TREE flag with a SAX handler avoids building nodes.",
+    "You need XML 1.1, external entity or DTD loading, gzip input (XML_PARSE_UNZIP is not wired), or Shift_JIS/EUC-JP/ISO-2022-JP encodings. None of these are supported.",
+    "You need a C-ABI drop-in for libxml2 (the cdylib is a stub) or the full RelaxNG/XSD/Schematron validators (only working subsets exist).",
+    "You need a mature dependency. The repo was created 2026-08-27, versions 0.1.0 to 0.8.1 all shipped within three days, it has 1 star and about 268 crates.io downloads, and every commit since 0.8.1 has been a README edit."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "none outside its own workspace crates for the library. rxmlint alone pulls in rusty_alloc-api (plus libc/windows-sys) through rusty_xml-alloc. cargo-deny bans *-sys crates and copyleft.",
+    "min_toolchain": "Rust 1.85 (MSRV), edition 2021",
+    "platforms": "Windows x86-64, Linux and macOS are built and tested in CI. The wasm32-unknown-unknown library passes cargo check in CI. No arch-specific code or SIMD.",
+    "thread_safety": "not documented. XmlDoc is plain owned data (Vec/String/HashMap, no Rc/RefCell/unsafe) and xml_init_parser is a no-op with no global state, so separate documents on separate threads should be fine.",
+    "drop_in_for_baseline": "partial — the Rust API mirrors libxml2 names and XML_PARSE_* bits and rxmlint takes xmllint's flags, but there is no C ABI, the output diverges on entity-reference nodes and DTD-subset serialization, and NONET|NO_XXE are always forced on"
+  },
+  "gotchas": [
+    "The library never sets #[global_allocator]. Linked into your app on the system allocator, you get the same-allocator result (0.80x-1.07x of libxml2), not the headline 0.43x-0.64x.",
+    "xml_ctxt_use_options ORs in XML_PARSE_NONET | XML_PARSE_NO_XXE on every call, so documents that depend on external entities or DTDs cannot be loaded, even when you pass other flags.",
+    "Without NOENT, general entities are expanded where libxml2 keeps entity-reference nodes, and the internal DTD subset is serialized verbatim where C reorders it. Tree shape and byte output differ from xmllint in these two cases.",
+    "Since 0.2.0 the pub `name` field of #text/#comment/#cdata-section/#document nodes is an empty String. Use XmlDoc::name() to get the canonical name."
+  ],
+  "pick_this_over_siblings_when": "Pick rusty_xml when you need libxml2's breadth (XPath, DTD validation, C14N, HTML) in memory-safe pure Rust. If raw parse speed is the goal, the C/C++ siblings beat libxml2 by much more: RapidXml at 1084.9 vs 278.8 MB/s DOM, SpeedyXml at 4.4x streaming, and libleptris at 1.4-3.6x.",
+  "verified_claims_summary": "This is an author-run, CLI-vs-CLI comparison on Windows: rxmlint 0.2.0 (release build, rustc not stated, linked with rusty_alloc) against a pinned MSVC build of libxml2 v2.15.3 xmllint on the system allocator. Both parsed with --noout --repeat, pinned to one core, measuring CPU time over 20 ABBA pairs; the CPU model is not stated. rusty_xml was 1.55x-2.31x faster on four files (83.25 vs 37.18 MB/s on big-attr), but with the same allocator on both sides it was only about 1.25x faster on big-attr and about 7% slower on big-300k. The slashdot row is inflated because xmllint re-reads the file on every repeat.",
+  "status_note": "The last code release was 0.8.1 on 2026-08-29, and every commit since has been a README edit (the 'active installs' count is self-reported). It is MIT OR Apache-2.0, 100% safe Rust and on crates.io, but the whole project was written in under a month by a single maintainer org.",
+  "sources_read": [
+    "https://github.com/Remade-With-Rust/rusty_xml",
+    "https://github.com/Remade-With-Rust/rusty_xml/blob/main/README.md",
+    "https://github.com/Remade-With-Rust/rusty_xml/blob/main/bench/SIDE-BY-SIDE.md",
+    "https://github.com/Remade-With-Rust/rusty_xml/blob/main/bench/C-ONLY-BOARD.md",
+    "https://github.com/Remade-With-Rust/rusty_xml/blob/main/bench/pinvs.ps1",
+    "https://github.com/Remade-With-Rust/rusty_xml/blob/main/oracle/PIN",
+    "https://github.com/Remade-With-Rust/rusty_xml/blob/main/NOTICE.md",
+    "https://github.com/Remade-With-Rust/rusty_xml/blob/main/Cargo.toml",
+    "https://github.com/Remade-With-Rust/rusty_xml/blob/main/Cargo.lock",
+    "https://github.com/Remade-With-Rust/rusty_xml/blob/main/CHANGELOG.md",
+    "https://github.com/Remade-With-Rust/rusty_xml/blob/main/.github/workflows/ci.yml",
+    "https://github.com/Remade-With-Rust/rusty_xml/blob/main/docs/plan/rusty_xml.md",
+    "https://github.com/Remade-With-Rust/rusty_xml/blob/main/docs/plan/API-CENSUS.md",
+    "https://github.com/Remade-With-Rust/rusty_xml/blob/main/crates/rusty_xml/Cargo.toml",
+    "https://github.com/Remade-With-Rust/rusty_xml/blob/main/crates/rusty_xml/src/lib.rs",
+    "https://github.com/Remade-With-Rust/rusty_xml/blob/main/crates/rusty_xml-alloc/Cargo.toml",
+    "https://github.com/Remade-With-Rust/rusty_xml/blob/main/crates/rusty_xml-alloc/src/lib.rs",
+    "https://github.com/Remade-With-Rust/rusty_xml/blob/main/crates/rusty_xml-parser/Cargo.toml",
+    "https://github.com/Remade-With-Rust/rusty_xml/blob/main/crates/rusty_xml-parser/src/lib.rs",
+    "https://github.com/Remade-With-Rust/rusty_xml/blob/main/crates/rusty_xml-parser/src/parse.rs",
+    "https://github.com/Remade-With-Rust/rusty_xml/blob/main/crates/rusty_xml-tree/src/lib.rs",
+    "https://github.com/Remade-With-Rust/rusty_xml/blob/main/crates/rusty_xml-reader/src/lib.rs",
+    "https://github.com/Remade-With-Rust/rusty_xml/blob/main/crates/rusty_xml-cli/Cargo.toml",
+    "https://github.com/Remade-With-Rust/rusty_xml/blob/main/crates/rusty_xml-cli/src/main.rs",
+    "https://github.com/Remade-With-Rust/rusty_xml/blob/main/crates/rusty_xml-c-abi/src/lib.rs",
+    "https://github.com/Remade-With-Rust/rusty_xml/issues",
+    "https://github.com/Remade-With-Rust/rusty_xml/pulls",
+    "https://github.com/Remade-With-Rust/rusty_xml/commits/main",
+    "https://crates.io/api/v1/crates/rusty_xml"
+  ],
+  "confidence": 0.55
+}
