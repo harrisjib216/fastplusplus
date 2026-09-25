@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/nitely/nim-regex",
+  "one_liner": "Pure-Nim linear-time regex engine (PCRE-like syntax, no backtracking) beating PCRE2 on find-all throughput.",
+  "what_it_does": "Provides regex parsing, compile-time or runtime compilation, and matching (match/find/findAll plus a match macro) for Nim programs, with PCRE-like syntax including named groups and lookaround. It is not a drop-in PCRE2 replacement: the API is re2\"pattern\" plus Regex2/RegexMatch2 objects, callable only from Nim (or via FFI wrapping from C). Regexes can be validated and compiled at compile time via Nim's macro system, catching syntax errors before runtime.",
+  "how_it_is_fast": "Matching runs as a Thompson-style NFA simulation over parallel states (Pike's-VM approach, files nfamatch.nim/nfamatch2.nim use a `Pstates`/`Capts3` structure) rather than backtracking, giving match time linear in text and regex length. A literal-substring prefilter (litopt.nim, added in v0.22.0) skips ahead using known literal prefixes/substrings of the pattern, which is why the email-pattern benchmark result (1.32 ms vs PCRE2's 126.10 ms) dominates the aggregate speedup. Captures use a block-based capture array (space O(regex_len * groups_count)) instead of per-thread heap allocation.",
+  "when_to_use": [
+    "Nim codebases that need to run regexes over untrusted input and want a hard linear-time guarantee instead of PCRE2's backtracking risk",
+    "Patterns with distinctive literal prefixes/substrings (email-, URL-, tag-style patterns) where the litopt prefilter gives large wins",
+    "Compile-time regex validation/compilation is wanted (re2\"...\" as a const catches syntax errors at compile time and avoids runtime compile cost)",
+    "Need PCRE-like syntax (character classes, named groups, lookaround) in Nim without adding a C PCRE2 dependency or FFI binding",
+    "Running inside Nim's compile-time VM, where linking a C library like PCRE2 isn't an option"
+  ],
+  "when_not_to_use": [
+    "Need to call the engine from C/C++/other languages without writing an FFI wrapper — PCRE2 is natively embeddable there, nim-regex is not",
+    "Pattern relies on backreferences or other non-regular PCRE features — explicitly unsupported to preserve the linear-time guarantee",
+    "Character-class-heavy patterns without literal anchors (e.g. pure IPv4-style patterns): in the optimized-PCRE2 run, PCRE2 beat nim-regex on the IPv4 pattern (4.73 ms vs 7.27 ms), and optimized Rust regex beat it overall",
+    "Need Unicode level 2/3 support (locale-aware casing, full normalization) — only Unicode level-1 is implemented",
+    "Feeding invalid/untrusted UTF-8 bytes in a release/danger build: UTF-8 validation is only performed in debug builds, so malformed input is undefined behavior (can hit an AssertionDefect) unless you pre-validate"
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none (pure Nim, stdlib only: std/unicode, std/tables, std/sets, std/algorithm, std/math, std/bitops)",
+    "min_toolchain": "Nim 1.6.0+",
+    "platforms": "any platform Nim compiles to (pure Nim source, no SIMD/architecture-specific code observed)",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": "partial — explain: same problem domain and PCRE-like syntax as PCRE2, but a distinct Nim-only API (re2/Regex2), not an ABI-compatible or FFI drop-in; the v0.21.0 release also broke nim-regex's own older API (re\"\"/Regex -> re2\"\"/Regex2)"
+  },
+  "gotchas": [
+    "v0.21.0 deprecated the old re\"\"/Regex/RegexMatch API in favor of re2\"\"/Regex2/RegexMatch2 — check which API a given nimble version exposes",
+    "Only the last repetition of a repeated capture group is retained (same limitation as most regex engines), not all repetitions",
+    "Lookarounds that themselves contain repetition (*, +, {n,}) can run in polynomial time, breaking the library's headline linear-time guarantee",
+    "UTF-8 input validation is skipped in release/danger builds for performance; malformed UTF-8 is undefined behavior there, so untrusted text must be pre-validated (e.g. with validateUtf8 or nim-unicodeplus)"
+  ],
+  "pick_this_over_siblings_when": "The other catalogued regex-engine entries (rejit, SafeRE, BLARE, RE#, coregex, nanoregex, re2jit) target C++/Rejit, Java, C++, .NET, Go/Rust-bench, or Python ecosystems; nim-regex is the only Nim-native option, so pick it when you're already in Nim and want PCRE2-beating throughput plus a no-backtracking safety guarantee without FFI, not when raw cross-language speedup magnitude is what matters.",
+  "verified_claims_summary": "In mariomka/regex-benchmark's third-party cross-language shootout (find-all of email/URI/IPv4 patterns over a concatenated learnxinyminutes-docs corpus, on a 2019 MacBook Pro 16\" i9, run in Docker), nim-regex (Nim 1.4.4, -d:release --opt:speed) totaled 36.09 ms versus C PCRE2 10.36-2's 251.37 ms (gcc -O3) and libstdc++ std::regex's 1023.49 ms (g++ -O3) in the default-settings table; with PCRE2 and Rust's regex crate both given their optimized/JIT builds, the PCRE2 gap narrows to ~2.6x (34.15 ms vs 87.87 ms) and optimized Rust regex (27.94 ms) comes out ahead of nim-regex.",
+  "status_note": "Actively maintained — latest release v0.26.2 with recent \"performance improvements\" commits and last commit 2026-08-25; MIT-licensed pure-Nim source, small enough to vendor directly into a project.",
+  "sources_read": [
+    "https://github.com/nitely/nim-regex",
+    "https://github.com/nitely/nim-regex/blob/master/README.md",
+    "https://github.com/nitely/nim-regex/blob/master/src/regex.nim",
+    "https://github.com/nitely/nim-regex/blob/master/CHANGELOG.md",
+    "https://github.com/nitely/nim-regex/blob/master/src/regex/nfamatch2.nim",
+    "https://github.com/nitely/nim-regex/blob/master/src/regex/nfatype.nim",
+    "https://github.com/nitely/nim-regex/tree/master/src/regex",
+    "https://github.com/mariomka/regex-benchmark/blob/master/README.md"
+  ],
+  "confidence": 0.78
+}

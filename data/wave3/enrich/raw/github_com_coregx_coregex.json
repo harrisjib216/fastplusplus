@@ -1,0 +1,45 @@
+{
+  "id": "https://github.com/coregx/coregex",
+  "one_liner": "Drop-in Go regexp replacement using 17 pattern-specific engines and SIMD prefilters; beats Rust regex on literal-heavy patterns only.",
+  "what_it_does": "coregex replaces Go stdlib's single generic NFA regexp engine with a compiler that extracts literals from the pattern and dispatches to one of 17 specialized search strategies (LazyDFA, PikeVM, OnePass, BoundedBacktracker, Teddy, Aho-Corasick, reverse-suffix/inner DFAs, etc.). It implements 100% of the stdlib regexp API (per docs/STDLIB_COMPATIBILITY.md), so most call sites need no code change beyond the import path. Backreferences are unsupported by design, preserving stdlib's O(n)/no-ReDoS guarantee.",
+  "how_it_is_fast": "At compile time it extracts required literals (prefix, suffix, inner substring, digit runs) and routes to an engine built for that shape instead of one generic NFA: SIMD memchr/memmem (AVX2/SSSE3) for single-literal search, Slim/Fat Teddy or Aho-Corasick for multi-literal alternation, and reverse (right-to-left) DFA search for suffix/inner-literal patterns that skips most of the input entirely. Patterns without a strong literal anchor fall back to LazyDFA, PikeVM, OnePass, or BoundedBacktracker.",
+  "when_to_use": [
+    "Pattern has an extractable literal (suffix like .*\\.log, inner substring like .*error.*, an IP/digit run, or an anchored prefix): reverse-DFA/prefilter paths ran 1.2x-52x faster than Rust regex on kolkov/regex-bench.",
+    "Migrating a Go codebase off stdlib regexp for CPU-bound matching where the 100%-API-compatible surface (per docs/STDLIB_COMPATIBILITY.md) avoids a rewrite.",
+    "Deploying on amd64 with AVX2/SSSE3 available (the benchmark ran on a GitHub Actions AMD EPYC runner); SIMD prefilters only exist on that architecture.",
+    "A zero-allocation hot loop over many matches: AllIndex/AppendAllIndex iterators are up to 30% faster than FindAll per the README.",
+    "Multi-pattern literal alternation (foo|bar|baz, roughly 2-64 literals) handled by the Teddy or Aho-Corasick engines."
+  ],
+  "when_not_to_use": [
+    "Pattern is alternation-heavy without a literal anchor, has bounded-repeat groups, or is a plain character class: coregex was 1.8x-7.4x slower than Rust regex on 8 of 16 kolkov/regex-bench patterns (email, uri, literal_alt, http_methods, multi_literal, alpha_digit, word_digit, word_repeat).",
+    "Backreferences are required: not supported (by design, to keep the O(n) guarantee) — use regexp2 instead.",
+    "Target is not amd64: SIMD paths are disabled and it falls back to pure Go, so the Rust-beating numbers do not apply there.",
+    "Toolchain is older than what the module requires: go.mod pins `go 1.27.1`, while the README's stated minimum (\"Go 1.25+\") is lower and inconsistent with go.mod — verify against your own Go version before adopting.",
+    "Correctness-sensitive code relying on stdlib's exact empty-match positions or repeated-capture-group semantics: docs/STDLIB_COMPATIBILITY.md lists these as unresolved known differences, and the tracker shows a steady stream of matching bugs (dot-vs-codepoint, anchors, negated classes, case-insensitivity) fixed between Dec 2025 and Mar 2026."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "golang.org/x/sys, github.com/coregx/ahocorasick (per go.mod)",
+    "min_toolchain": "go.mod declares `go 1.27.1`; README separately claims \"Go 1.25+\" — the two disagree, go.mod is the binding constraint for `go build`",
+    "platforms": "amd64 with AVX2/SSSE3 for SIMD prefilters; other architectures use a pure-Go fallback (per the record's tradeoffs field, not independently verified this session on non-amd64)",
+    "thread_safety": "compiled *Regexp is safe for concurrent use by multiple goroutines, using an internal sync.Pool for per-search state (per README)",
+    "drop_in_for_baseline": "partial — 100% of the stdlib regexp API is implemented (docs/STDLIB_COMPATIBILITY.md), but documented behavioral differences remain in empty-match counts/positions, repeated capture-group results, and some combined-flag case-insensitive edge cases"
+  },
+  "gotchas": [
+    "Repeated capture groups like (a)* can capture a different iteration than stdlib's \"last match\" behavior (docs/STDLIB_COMPATIBILITY.md).",
+    "Empty-match count and position can differ from stdlib on patterns such as [a-c]*, .*, ^ — documented as an open, unresolved difference.",
+    "No backreference support at all; RE2-syntax only.",
+    "Two open performance issues on the tracker at verification time: #153 (FindAllStringIndex slower than stdlib in some cases) and #120 (Teddy SIMD 8.6x slower than Rust due to Go/assembly call-boundary overhead)."
+  ],
+  "pick_this_over_siblings_when": "It's the only catalogued regex engine targeting Go; the other siblings (nim-regex, rejit, SafeRE, BLARE, RE#, nanoregex, re2jit) are for Nim, C++/RE2, Java, .NET, and Python. Pick coregex specifically when you're on Go stdlib regexp and your patterns are literal-anchored (suffix/inner/prefix); the siblings aren't options in a Go codebase.",
+  "verified_claims_summary": "On kolkov/regex-bench's cross-language corpus (6.0 MB generated text, 16 real-world patterns, FindAll, coregex v0.12.23, Rust regex 1.11 built with --release/LTO/codegen-units=1, Go 1.23, on a GitHub Actions AMD EPYC runner), coregex beat Rust regex on 6 of 16 patterns (1.2x-52x: version, char_class, multiline_php, suffix, ip, inner_literal), lost on 8 of 16 (1.8x-7.4x slower: uri, alpha_digit, word_digit, http_methods, multi_literal, email, word_repeat, literal_alt), and tied on 2 anchored patterns. Against Go stdlib regexp it was 3.6x-893x faster on all 16 patterns.",
+  "status_note": "Actively maintained (last commit 2026-09-06), MIT-licensed, 261 stars; the issue tracker shows a fast-closing but frequent stream of correctness bugs fixed between Dec 2025 and Mar 2026, indicating a young engine rather than one battle-hardened over years like Rust regex.",
+  "sources_read": [
+    "https://github.com/coregx/coregex",
+    "https://github.com/coregx/coregex/blob/main/go.mod",
+    "https://github.com/coregx/coregex/issues",
+    "https://github.com/coregx/coregex/blob/main/docs/STDLIB_COMPATIBILITY.md",
+    "https://github.com/kolkov/regex-bench"
+  ],
+  "confidence": 0.55
+}

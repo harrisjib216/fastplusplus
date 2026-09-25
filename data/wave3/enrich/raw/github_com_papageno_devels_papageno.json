@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/PAPAGENO-devels/papageno",
+  "one_liner": "Bison-style generator that emits pthreads-parallel operator-precedence parsers, up to 5.5x faster than Flex+Bison on ARM.",
+  "what_it_does": "PAPAGENO takes a Bison-syntax grammar restricted to Floyd's Operator Precedence Grammar (OPG) form, plus a Flex lexer spec, and generates self-contained C source for a multithreaded lexer/parser. Unlike Bison's yyparse()/single-threaded model, the generated code is called as `token_node *parse(int32_t threads, char *file_name)`, splitting the input across threads and building the AST without re-parsing overlapping regions. It is not drop-in: grammars that aren't already OPG must be rewritten (which can be a large transformation, see gotchas).",
+  "how_it_is_fast": "Exploits the OPG property that the shift/reduce decision between two adjacent terminals depends only on a fixed precedence relation, not on global parse state, so the input can be split into chunks and reduced independently on separate POSIX threads with no wasted re-computation when recombining partial trees. Lexing can likewise be split into an independent parallel pass (test/JSON_parallel_lexer). The README states throughput scales close to linearly with thread count on JSON workloads.",
+  "when_to_use": [
+    "Files large enough for parallelism to amortize thread overhead (paper shows real gains mainly on multi-MB inputs, up to 75MiB JSON / 35MiB Lua)",
+    "A grammar that is already an Operator Precedence Grammar, or small enough to convert without exploding the rule set (e.g. arithmetic expressions, JSON)",
+    "Batch/offline C parsing on multi-core x86_64 servers or ARM big.LITTLE boards where lexing/parsing is a proven bottleneck",
+    "You can vendor and maintain generated C source yourself (Python 2.x generator, no upstream releases since 2015)"
+  ],
+  "when_not_to_use": [
+    "General LALR(1) or ambiguous/context-free grammars: converting real-world Lua to OPG+Fischer-normal-form blew productions up from 144 to 8547 plus required manual lexer transforms",
+    "Small or streaming inputs (KB-scale) — paper reports negligible or negative speedup there from thread migration/NUMA overhead",
+    "Anywhere you need Bison's GLR mode or ANTLR-style handling of ambiguous grammars — OPG is a strict LALR(1) subset",
+    "Projects needing an actively maintained tool or Python 3 support: last commit 2015-04-20, generator is Python 2.x only, one unresolved GitHub issue",
+    "Anywhere a true drop-in Bison/Flex replacement is required — grammar syntax is Bison-like but the generated parser's call signature and build process differ"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "Python 2.x to run the generator; GNU Flex, gcc/clang, Make, and POSIX threads (pthreads) to build the generated parser",
+    "min_toolchain": "Python 2.x (generator); C with pthreads and GNU Flex for the generated code (paper's own build used gcc 4.9.1, -O3 -march=native)",
+    "platforms": "x86_64 and ARM (tested on Cortex-A15/A7); requires a POSIX threads implementation (tested on Linux NPTL)",
+    "thread_safety": "not documented beyond the explicit `parse(threads, file_name)` entry point; no stated guarantees about concurrent parse() calls within one process",
+    "drop_in_for_baseline": "partial — explain: grammar file uses Bison-like syntax and reuses a normal Flex .l lexer, but the grammar must be an Operator Precedence Grammar and the generated parser has its own call signature instead of yyparse()"
+  },
+  "gotchas": [
+    "Generator statically rejects non-OPG grammars (consecutive nonterminals, precedence conflicts) and only prints diagnostics — you must manually restructure the grammar",
+    "Real-world grammars can blow up drastically under OPG conversion: Lua went from 144 to 8547 productions in the paper's benchmark",
+    "README states terminal/nonterminal names may not start with '_'",
+    "Generator itself is Python 2.x only; no indication of a Python 3 port"
+  ],
+  "pick_this_over_siblings_when": "Pick PAPAGENO only when the win you need is multi-core parallelism on a Bison-compatible C grammar that is (or can be forced into) Operator Precedence form; the catalogued siblings (flap, re2c, Pika Parser, winnow, chumsky, MPL/FastParse) are all single-threaded OCaml/Rust tools that get their speedups from fused lexing, code generation, or SIMD/table specialization, not from splitting work across cores, so they don't compete on this axis.",
+  "verified_claims_summary": "The paper (Barenghi et al., preprint for Science of Computer Programming) benchmarks the PAPAGENO-generated parallel lexer/parser against the authors' own sequential Flex+Bison LALR(1) reference parser, both built with gcc 4.9.1 -O3 -march=native, on a 16-core quad-Opteron 8378 server and a 4x-Cortex-A15 Odroid-XU ARM board, over real-world JSON (2.7KiB-75MiB) and Lua (7KiB-35MiB) inputs. It reports up to 5.5x speedup on the ARM board and a separate maximum 7x speedup for parallel lexing alone vs. sequential Flex (not vs. the full Flex+Bison pipeline); the 16-core server JSON comparison (Fig. 13b) is a 3D plot with no stated exact peak number against Flex+Bison.",
+  "status_note": "Abandoned: no commits since 2015-04-20, GPL-2.0 licensed, one open GitHub issue and no CI/releases; small enough (a handful of C files plus a Python 2.x code generator) to vendor and maintain yourself if you accept the OPG grammar restriction.",
+  "sources_read": [
+    "https://github.com/PAPAGENO-devels/papageno",
+    "https://github.com/PAPAGENO-devels/papageno/blob/master/README.md",
+    "https://github.com/PAPAGENO-devels/papageno (git tree, recursive)",
+    "https://github.com/PAPAGENO-devels/papageno/blob/master/doc/manual.txt",
+    "https://github.com/PAPAGENO-devels/papageno/blob/master/test/JSON/Makefile",
+    "https://github.com/PAPAGENO-devels/papageno/blob/master/include/opp.h",
+    "https://github.com/PAPAGENO-devels/papageno/issues"
+  ],
+  "confidence": 0.78
+}

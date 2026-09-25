@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/lukehutch/pikaparser",
+  "one_liner": "Reference implementation of pika parsing: a bottom-up, right-to-left PEG algorithm that beats ANTLR4 on simple grammars but loses on Java.",
+  "what_it_does": "Pika parsing solves left recursion and syntax-error recovery for PEG-style grammars by parsing bottom-up, right-to-left with dynamic programming, instead of ANTLR4's top-down prediction or classic top-down packrat parsing. You write a grammar as a text file in Pika's own PEG-like dialect (sequences, ordered choice, `+`/`*`/`?`, lookahead, char sets, precedence/associativity annotations), parse it with `MetaGrammar.parse()`, then call `grammar.parse(input)` to get a `MemoTable` holding every rule match at every position, from which you extract parse trees, ASTs, or a map of syntax errors. It is not a drop-in ANTLR4 replacement: different grammar syntax, different Java API (`Grammar`/`MemoTable`/`Match`/`Rule` objects instead of generated visitor/listener classes).",
+  "how_it_is_fast": "The pika algorithm memoizes every clause (rule) at every input position in a single bottom-up pass over the input, so each rule/position pair is computed once total rather than repeatedly re-tried via backtracking, giving guaranteed linear-time parsing independent of how the grammar recurses. Because shorter substrings are resolved before longer ones, left-recursive rules fall out of the recurrence naturally, with no seed-growing or left-recursion-elimination rewriting needed, unlike ANTLR4's ALL(*) prediction. This linear scaling is what produces the 10x/1000x wins over ANTLR4/Parboiled2's superlinear (~n^1.21 / ~n^1.9) scaling on multi-megabyte arithmetic expressions; on Java source the same exhaustive per-position memoization of every rule (most of which go unused at most positions) adds a large constant-factor overhead per character, which is why it loses badly there.",
+  "when_to_use": [
+    "Grammars with heavy or ambiguous left recursion (e.g. left-associative expression grammars) where you want a linear-time guarantee without hand-rewriting rules to eliminate left recursion",
+    "Very large single inputs (multi-MB, e.g. up to 4.8MB in the paper's benchmark) parsed with shallow, simple grammars, where ANTLR4/Parboiled2's superlinear scaling becomes the bottleneck",
+    "Need built-in, no-extra-code syntax-error recovery/reporting (NavigableMap of syntax error spans) rather than hand-written recovery rules",
+    "Prototyping in pure Java with no code-generation step or external toolchain (no `.g4` compile step, no build plugin)",
+    "Small/greenfield projects willing to author the grammar in Pika's own text dialect and consume the `MemoTable`/`Match` API directly"
+  ],
+  "when_not_to_use": [
+    "Parsing complex, deeply nested grammars for real languages (Java, and by extension similarly complex languages) — the paper's own benchmark on 5,372 Spring-framework Java files shows pika 10-1000x slower than ANTLR4 and ~100x slower than Parboiled2",
+    "You need to reuse an existing ANTLR4 `.g4` grammar or its generated visitor/listener tooling — there is no converter and the clause syntax differs",
+    "Memory-constrained parsing of large inputs — pika memoizes every rule at every position, so memory scales with grammar size times input length",
+    "Production use needing an actively released, versioned dependency — this is a 153-star reference implementation tied to one paper, still at `0.0.1-SNAPSHOT`, not published to Maven Central",
+    "Left-recursive grammars where the recursion's \"seed\" can match zero characters — open issue #35 (\"Infinite left-recursion when seed parent might be empty\") documents incorrect/looping behavior in this case"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none at runtime; JUnit 4.13.1 for tests only (per pom.xml)",
+    "min_toolchain": "Java 11 (pom.xml maven-compiler-plugin source/target 11); paper's benchmark ran on JRE 13.0.2",
+    "platforms": "any (pure Java, no native/SIMD code)",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": "partial — explain: grammar must be rewritten in Pika's own PEG-like text format, and callers use a different Java API (Grammar/MemoTable/Match/Rule) instead of ANTLR4-generated parser classes"
+  },
+  "gotchas": [
+    "Left recursion whose \"seed\" can match zero characters can loop or mis-parse (open issue #35, unresolved)",
+    "README warns that negated character sets (`[^...]`) \"will slow down the parser\" since the negated rule spuriously matches at many more positions",
+    "Every grammar rule is memoized at every input position regardless of whether it is actually needed there, so cost and memory scale with grammar size x input length even when most memo entries are unused — this is the paper's own explanation for the Java-grammar slowdown",
+    "The repo's only runnable benchmark (src/test/java/pikaparser/Benchmark.java) compares against Parboiled2 only; there is no ANTLR4 harness in the repo, so the ANTLR4 numbers can't be reproduced from this codebase, only from the PDF plots under paper/"
+  ],
+  "pick_this_over_siblings_when": "The catalogued siblings (re2c, winnow, chumsky, lexy, MPL, PAPAGENO, flap) are lexer/combinator/codegen libraries in C, Rust, or OCaml aimed at fast recognition of relatively fixed grammars; pika parser is the only one here offering built-in left-recursion support plus dynamic-programming syntax-error recovery in Java. Pick it specifically for expression-like or left-recursive grammars needing a linear-time guarantee on large single inputs — not for complex language grammars, where ANTLR4 itself (its own baseline here) or the other siblings' combinator/codegen approaches will be faster.",
+  "verified_claims_summary": "Single-threaded on a Ryzen 1800X under JRE 13.0.2 (baselines ANTLR4 4.8-1 and Parboiled2 1.3.1), the arXiv preprint reports pika parsing roughly matching both baselines on small arithmetic expressions but becoming about 10x faster than ANTLR4 and 1000x faster than Parboiled2 as expression length grows to 4.8MB, because pika scales linearly versus their ~n^1.21/~n^1.9 growth; on 5,372 real Java source files (Spring framework, comments stripped) the result reverses, with pika measured as 10-1000x slower than ANTLR4 and about 100x slower than Parboiled2.",
+  "status_note": "Repo metadata shows a push as recently as the record's last_commit date and open issues still being answered, so it is not abandoned, but it remains a single-paper reference implementation (153 stars, `0.0.1-SNAPSHOT`, never released to Maven Central); MIT-licensed and small enough to vendor as source if you accept that unreleased-artifact status.",
+  "sources_read": [
+    "https://github.com/lukehutch/pikaparser",
+    "https://github.com/lukehutch/pikaparser/blob/HEAD/README.md",
+    "https://github.com/lukehutch/pikaparser/blob/HEAD/pom.xml",
+    "https://github.com/lukehutch/pikaparser/blob/HEAD/src/test/java/pikaparser/Benchmark.java",
+    "https://github.com/lukehutch/pikaparser/tree/HEAD (recursive file listing)",
+    "https://github.com/lukehutch/pikaparser/issues"
+  ],
+  "confidence": 0.62
+}

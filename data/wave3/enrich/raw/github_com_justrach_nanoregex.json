@@ -1,0 +1,43 @@
+{
+  "id": "https://github.com/justrach/nanoregex",
+  "one_liner": "Pure-Zig regex engine beating Python's re module on 6 of 7 README benchmark patterns.",
+  "what_it_does": "Regex compile/findAll/search/replaceAll library for Zig, meant as a drop-in swap for the predecessor zig-regex 0.1.1. Supports literals, character classes, shorthand escapes, greedy and lazy quantifiers, capturing and non-capturing groups, alternation, anchors, and case-insensitive/multiline/dot-all flags. API takes a mutable `*Regex` because the lazy DFA fills its transition table across calls.",
+  "how_it_is_fast": "Dispatches each pattern to the cheapest of five tiers: memmem for pure literals, prefilter-plus-DFA for literal-prefixed patterns, a lazy subset-construction DFA for anchor/backref-free patterns under a 4096-state budget, and a Pike VM (linear-time, always correct) fallback otherwise. The DFA folds bytes into minterm classes (e.g. `[a-z]+` collapses 256 bytes to 2 classes), shrinking each transition-table row from 1 KB to 8 bytes so it fits in L1 cache.",
+  "when_to_use": [
+    "Zig codebase wanting a dependency-free regex engine (no FFI, no libc regex, no PCRE binding)",
+    "Workloads dominated by findAll over literal or literal-prefixed patterns (memmem/DFA fast paths)",
+    "Migrating off zig-regex 0.1.1, especially away from patterns that risk catastrophic backtracking",
+    "Zig 0.16.0+ toolchain, ReleaseFast builds where the lazy-DFA warmup cost is amortized over many calls"
+  ],
+  "when_not_to_use": [
+    "Need lookaround, named groups, in-pattern backreferences, inline flag groups, or Unicode property classes -- not supported, may silently diverge",
+    "Patterns dominated by backtracking-only constructs where the Pike-VM fallback is the only correct path (loses the speed advantage)",
+    "Non-Zig codebases -- no C ABI or bindings documented",
+    "Need a widely-used/audited engine: 2 stars, single maintainer, no CI or fuzzing evidence found",
+    "Correctness-critical Unicode text -- parity is only checked against Python re on 27 ASCII-oriented fixtures"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none",
+    "min_toolchain": "Zig 0.16.0 (from build.zig.zon minimum_zig_version)",
+    "platforms": "not documented (pure Zig, no arch-specific code observed; no CI config found in repo tree)",
+    "thread_safety": "not documented -- Regex is mutable/stateful (lazy DFA fills its table on use), so likely not safe to share one instance across threads without external locking",
+    "drop_in_for_baseline": "partial -- explain: drop-in replacement target is zig-regex 0.1.1, not Python re; API mirrors zig-regex closely enough that README says most callers switch by changing one build.zig path"
+  },
+  "gotchas": [
+    "Methods take *Regex (mutable), not *const Regex -- the lazy DFA mutates internal state on first use, so a fresh Regex's first findAll call is slower (cache warmup) than subsequent calls",
+    "DFA eligibility silently falls back to Pike VM for capture groups, anchors, lazy quantifiers, case-insensitive patterns, or patterns whose DFA would exceed 4096 states -- no user-visible signal of which path ran",
+    "Patterns using unsupported syntax (lookaround, named groups, in-pattern backrefs) parse without error but matching may diverge from expectation",
+    "README's own header claims '8 of 8 head-to-head non-anchored patterns won' but the table beneath it has 7 rows with 1 Python win -- read the table, not the prose"
+  ],
+  "pick_this_over_siblings_when": "All catalogued siblings (nim-regex, rejit, SafeRE, BLARE, RE#, coregex, re2jit) target PCRE2/RE2/JDK/.NET/Rust regex in C/C++/Rust/.NET ecosystems; nanoregex is the only Zig-native option, so pick it specifically when the project is already Zig and needs zero FFI, not for raw throughput versus those more mature engines.",
+  "verified_claims_summary": "First-party README table: findAll over a 142 KB Zig source file, 200 iterations, zig build -Doptimize=ReleaseFast, compared against Python's built-in re module (no CPU model given, no published comparison harness for the Python/zig-regex side). nanoregex wins 6 of 7 listed patterns by 1.65x-2.8x; Python re wins the `fn [A-Za-z]+\\(.*alloc` pattern by 1.5x. Separately, ~5000x faster than predecessor zig-regex 0.1.1 on a catastrophic-backtracking pattern (43s to 8ms).",
+  "status_note": "Active (last commit 2026-06-23), MIT-licensed, single small source-drop (3,200 lines) -- easy to vendor and audit given no dependencies, but very new/unstarred (2 stars) with no CI evidence found in the repo tree.",
+  "sources_read": [
+    "https://github.com/justrach/nanoregex",
+    "https://github.com/justrach/nanoregex/blob/main/README.md",
+    "https://github.com/justrach/nanoregex/blob/main/src/bench.zig",
+    "https://github.com/justrach/nanoregex/blob/main/build.zig.zon"
+  ],
+  "confidence": 0.4
+}

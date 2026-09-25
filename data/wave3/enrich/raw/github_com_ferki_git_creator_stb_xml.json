@@ -1,0 +1,47 @@
+{
+  "id": "https://github.com/Ferki-git-creator/stb_xml",
+  "one_liner": "Single-header, zero-allocation XML tokenizer for C; beats libxml2's DOM parser on raw throughput.",
+  "what_it_does": "stb_xml scans an XML buffer and emits a flat array of 6-byte tokens (tag open/close, text, comment, CDATA, attribute) marking byte offsets into the original string; it does not build a tree, resolve entities, or validate. The entire API is one function, `xml_parse(xml, len, tokens, max_tokens)`, called after defining `STB_XML_IMPLEMENTATION` in one translation unit, stb-style. It is not a drop-in for libxml2: callers get offsets/lengths into the source buffer and must write their own tree/attribute-value walking on top.",
+  "how_it_is_fast": "It is a single-pass, branch-heavy state machine (4 states: default, in-tag, comment, CDATA) that never copies bytes or allocates memory; tokens just record start/end offsets into the caller-owned buffer. Each token is a packed 6-byte struct (two uint16 offsets, two uint8 fields) versus libxml2's 40+ byte DOM nodes, so far less memory is written per byte of input. libxml2, by contrast, builds a full DOM (xmlParseMemory + tree of xmlNode/xmlAttr) with allocation, validation-related bookkeeping, and pointer-linked structures.",
+  "when_to_use": [
+    "Small, trusted, well-formed XML (config files, game/level data, small message payloads) where you just need tag/attribute offsets, not a DOM",
+    "Embedded or memory-constrained targets where a ~1.5KB single header and zero heap allocation during parsing matter more than feature completeness",
+    "You're willing to write your own tree/attribute-lookup layer on top of a flat token array",
+    "Throughput-bound repeated parsing of the same small/medium shapes, e.g. request/response bodies a few hundred bytes to ~1KB, where the ~12-15x tokenizer-vs-DOM gap (small: 188 vs 15 MB/s; medium: 556 vs 36 MB/s) is real overhead you're paying today in libxml2",
+    "You need only tokenization, not validation - malformed XML, external entities, or DTDs are not your concern"
+  ],
+  "when_not_to_use": [
+    "Any input over 10000 tokens: the reference benchmark harness passes a fixed `tokens[10000]` buffer, and `xml_parse` silently stops filling tokens once `max_tokens` is hit rather than erroring, so large documents are silently truncated unless you size the buffer yourself and check the return value",
+    "You need namespaces, DTD/entity handling, XPath, XSLT, or XML Schema - none exist here",
+    "Untrusted or possibly-malformed input: the parser does 'minimal error checking' per its own README/feature list and has no validation path",
+    "You need a DOM, mutation, or serialization API - stb_xml only tokenizes; there is no tree, no write-back, no libxml2-compatible surface",
+    "Production use generally: this is a single-developer, 2-commit, 2-star proof-of-concept with no tests beyond one manual sample and no CI, issue history, or track record"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none",
+    "min_toolchain": "C99 (repo builds with gcc -O2 -std=c99); uses stdint.h fixed-width types",
+    "platforms": "not documented (pure C99, no platform-specific code visible, but no explicit platform/arch statement in README)",
+    "thread_safety": "not documented (function is reentrant/stateless aside from caller-provided buffers, but this is not stated anywhere in the repo)",
+    "drop_in_for_baseline": "partial — explain: same input (raw XML text) but a completely different output shape (flat offset tokens vs a DOM tree), so callers must rewrite consumption code, not just relink"
+  },
+  "gotchas": [
+    "max_tokens truncation is silent: xml_parse's own benchmark (test_stb_xml.c) caps a 1MB document at 10000 tokens out of ~87000 nodes libxml2 produces for the same file, and the reported 8707 MB/s and README's 193x figure are computed by dividing the full file size by the time to fill only those 10000 tokens - the actual per-byte-of-input throughput on large documents is far lower than advertised",
+    "Attribute value end is not stored: xml_token_t.val_start marks where a quoted attribute value begins, but you must rescan for the closing quote yourself (test_stb_xml.c's print_token does this with a manual strlen scan) since there's no val_end field",
+    "Self-closing tags (`<tag/>`) reuse val_start as a boolean flag (1 = self-closing) on TAG_OPEN tokens, which collides in meaning with its use as a value-offset on ATTR tokens - easy to misread if you don't check token.type first",
+    "start/end offsets are uint16_t, capping any single tag name, text run, or attribute span at 65535 bytes even though input length itself is int32_t"
+  ],
+  "pick_this_over_siblings_when": "Pick stb_xml over pugixml or roxmltree only if you specifically want a bare tokenizer with no tree at all and can tolerate its 10000-token/65535-byte-span limits and near-total lack of validation; pugixml and roxmltree both build real (if lightweight) trees, are far more mature, and their libxml2 comparisons (4.5x-23x and ~2.3x-2.5x respectively) are not artifacts of a token cap the way stb_xml's headline number is.",
+  "verified_claims_summary": "Console output from test_stb_xml.c (gcc -O2 -std=c99) and test_libxml.c (gcc -lxml2 -O2) on the author's machine (no CPU model given) shows stb_xml at 188 MB/s vs libxml2's 15 MB/s on a 72-byte document (~12.5x) and 556 MB/s vs 36 MB/s on a ~1KB document (~15x); the 1MB-file figure (8707 vs 46 MB/s, ~189x, matching the README's '193x' claim) is invalid because the benchmark's fixed 10000-token buffer caps stb_xml's work at roughly 11% of the document while libxml2 fully parses all ~87357 nodes and throughput is computed over the full byte count on both sides.",
+  "status_note": "Active per last-commit date (2026-01-05) but the entire history is 2 commits from a single developer with 2 stars and 0 issues - effectively a brand-new proof-of-concept, not a maintained project; BSD-3-Clause and small enough (~1.5KB single header) to vendor and re-verify yourself if you still want it.",
+  "sources_read": [
+    "https://github.com/Ferki-git-creator/stb_xml",
+    "https://github.com/Ferki-git-creator/stb_xml/blob/main/README.md",
+    "https://github.com/Ferki-git-creator/stb_xml/blob/main/stb_xml.h",
+    "https://github.com/Ferki-git-creator/stb_xml/blob/main/test_stb_xml.c",
+    "https://github.com/Ferki-git-creator/stb_xml/blob/main/test_libxml.c",
+    "https://github.com/Ferki-git-creator/stb_xml/blob/main/output_tests.txt",
+    "https://github.com/Ferki-git-creator/stb_xml/blob/main/LICENSE"
+  ],
+  "confidence": 0.3
+}

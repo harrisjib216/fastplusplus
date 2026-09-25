@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/kurotakazuki/mpl",
+  "one_liner": "One-rule TDPL/PEG grammar crate whose static-codegen backend (FastParse) beats nom, pest, peg, winnow, chumsky on recognition benchmarks.",
+  "what_it_does": "MPL is a Rust parser generator built around a single grammar rule form (`A = B C / D`, equivalent in power to TDPL/PEG). You write a `.mplg` grammar file and `#[derive(FastParse)]` on a struct; the macro emits one specialized Rust function per rule with methods `fast_recognize_only`/`fast_recognize`/`fast_parse`/`fast_recognize_in`. It is not a drop-in for nom: nom is combinator functions called from plain Rust, MPL requires a separate grammar file and a derive. Legacy tiers (a `Parser` trait and `#[derive(Parse)]`) exist for hand-rolled or runtime-built grammars.",
+  "how_it_is_fast": "Compile-time analysis picks a fast path per rule: char-class cascades become `[bool; 256]` lookup tables, multi-branch first-symbol choices become a single first-byte `match` dispatch, and tail-recursive repetition (`R = X R / ()`) compiles to an explicit `loop {}` instead of relying on LLVM tail-call optimization. Mizushima cut analysis restricts memoization to only the rules whose FIRST sets actually overlap; everything else (most rules in their 99-rule test grammar) skips the memo table entirely. Left recursion uses Squirrel-style position-only seed-growing memoization, the same family as peg's `#[cache_left_rec]`. Recognition-only calls run through a thin `CheckState` (input + furthest position, no token buffer).",
+  "when_to_use": [
+    "Recognition-only or validation-style workloads (need a bool or a walkable token stream, not necessarily a typed AST) where nom/peg/pest parsing overhead is the bottleneck",
+    "Grammars expressible in the single-rule TDPL/PEG form (sequence, choice, recursion, repetition, negative predicates), including left-recursive rules like `LSum = LSum N / N`",
+    "Rust projects that can accept a build-time grammar file plus proc-macro dependencies (bumpalo, syn, quote), not just inline combinator code",
+    "High-throughput repeated parsing where an externally supplied, resettable `Bump` arena (`fast_recognize_in`) amortizes allocation",
+    "Willing to depend on a young, single-maintainer, 6-star crate for a non-critical or experimental parsing path"
+  ],
+  "when_not_to_use": [
+    "You need a typed AST/`Value` tree directly (e.g. JSON deserialization) — MPL's fast tier only emits a flat token buffer, a token-to-Value walker isn't shipped, and MPL's token tier is already slower than serde_json for that shape",
+    "Your data has deeply nested coordinate-array shapes like canada.json — pest's coarser token queue beat MPL's per-variable Start/End emission by 1.68x in the token tier there",
+    "You need nom's combinator ecosystem (streaming/incremental input, existing combinator libraries) — MPL has no equivalent",
+    "Production systems needing a mature, widely-audited parser: 6 GitHub stars, first-party unreproduced benchmarks, and zero GitHub issues on record (nothing to check known-failure-mode history against)",
+    "Deployments that don't set `RUSTFLAGS=\"-C target-cpu=native\"` — the headline 2-3x numbers were measured with it; default release builds will be slower than reported"
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "mpl: bumpalo 3.20 (arena allocator); mpl-macro (proc-macro crate): proc-macro2, quote, syn, plus mpl itself",
+    "min_toolchain": "not documented — Cargo.toml declares edition 2021 with no MSRV pin; CI only builds against the stable toolchain",
+    "platforms": "not documented beyond CI, which runs only on ubuntu-latest; source is pure Rust with a single `unsafe fn push_unchecked` in fast.rs (capacity-checked buffer push), no target-specific/SIMD code observed",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": "partial — explain: grammar must be written in the .mplg DSL and derived onto a struct rather than composed from nom combinator functions in Rust, so migration is a rewrite, not a swap"
+  },
+  "gotchas": [
+    "fast_recognize still builds a token buffer internally to match pest's semantics; use fast_recognize_only for the buffer-free fast path",
+    "One unsafe block (push_unchecked in packages/mpl/src/fast.rs) relies on the caller having already checked capacity",
+    "README's 'beats every comparator' claim is contradicted by its own canada-1024 token-tier row, where pest wins",
+    "The serde_json row in the README is not equal-work (different output shapes) — don't read it as a parser-vs-parser result"
+  ],
+  "pick_this_over_siblings_when": "Among the nom-beating siblings (winnow, chumsky), pick MPL only if you can restrict the workload to recognition-only or flat-token output and accept a single-rule grammar DSL from a single-maintainer, 6-star crate; winnow and chumsky are both far more established combinator libraries that were benchmarked against nom on equal-work full parsing, which is closer to what most nom users actually need.",
+  "verified_claims_summary": "First-party Criterion benchmarks (sample size 100, RUSTFLAGS=\"-C target-cpu=native\", pinned crate versions: pest 2.8.6/peg 0.8.6/winnow 1.0.3/nom 8.0.0/chumsky 0.13.0, re-run 2026-05-30, no CPU model or rustc version stated) show MPL's recognition-only FastParse backend parsing nested/flat parenthesis strings 2.25x-3.3x faster than nom (e.g. depth-1024 nested: 2.26us vs nom 7.50us) and 1.8x-2.5x faster than peg on JSON-subset recognition; these numbers measure recognition only and do not capture the cost of building an actual parse tree, which is what most nom users need.",
+  "status_note": "Active as of the 2026-05-30 last commit with green CI, but effectively unadopted (6 GitHub stars, single maintainer, zero GitHub issues on record); dual MIT/Apache-2.0 licensed and small enough to vendor, but pre-1.0 (0.3.1) and should be treated as research-grade rather than a production nom replacement.",
+  "sources_read": [
+    "https://github.com/kurotakazuki/mpl",
+    "https://github.com/kurotakazuki/mpl#readme",
+    "https://github.com/kurotakazuki/mpl/tree/main",
+    "https://github.com/kurotakazuki/mpl/blob/main/packages/mpl/Cargo.toml",
+    "https://github.com/kurotakazuki/mpl/blob/main/packages/mpl-macro/Cargo.toml",
+    "https://github.com/kurotakazuki/mpl/blob/main/Cargo.toml",
+    "https://github.com/kurotakazuki/mpl/blob/main/examples/paren_bench/Cargo.toml",
+    "https://github.com/kurotakazuki/mpl/blob/main/.github/workflows/ci.yml",
+    "https://github.com/kurotakazuki/mpl/blob/main/packages/mpl/src/fast.rs",
+    "https://github.com/kurotakazuki/mpl/issues"
+  ],
+  "confidence": 0.4
+}
