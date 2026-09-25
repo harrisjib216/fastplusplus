@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/tidwall/gjson",
+  "one_liner": "Go library that reads single values from JSON by dot-path without unmarshalling; 3.2-5.7x lower latency than encoding/json structs.",
+  "what_it_does": "gjson answers \"give me the value at this path\" against a raw JSON string or []byte. gjson.Get(json, \"friends.#(age>45)#.last\") returns a Result that holds Type, Raw, Str and Num, plus converters (Int, Uint, Float, Bool, Time, Array, Map, ForEach). The path language covers dot keys, array indexes, `#` counts, `*`/`?` wildcards, `#(...)` query filters, multipaths, pipe chaining, built-in and custom `@` modifiers, and JSON Lines via the `..` prefix. It does not replace encoding/json: it cannot unmarshal into structs or marshal, and modification lives in the separate SJSON package.",
+  "how_it_is_fast": "There is no DOM tree and no reflection. Get walks the input once, left to right, compares each object key with the current path component, and returns at the first match. Non-matching subtrees are skipped by parseSquash, which counts bracket depth using a 256-entry byte-class lookup table in a loop unrolled 8 bytes at a time (plain Go, with no SIMD or assembly). Results are substrings of the input (zero-copy for Get on a string, and unsafe string/[]byte casts avoid copying the input in GetBytes), and only the value being returned gets its string or number decoded.",
+  "when_to_use": [
+    "You need a few fields from JSON whose schema you don't want to model as Go structs, such as webhooks, third-party API responses or log records.",
+    "The documents range from hundreds of bytes to tens of KB and you read a handful of fields. The measured gain over encoding/json struct unmarshal grew from 3.2x at 190 B to 5.7x at 24 KB.",
+    "The query strings are written by developers and need to filter or reshape: array filters `#(...)`, wildcards, multipaths `{a,b}`, or modifiers such as `@reverse`, `@flatten` and `@keys`.",
+    "You scan newline-delimited JSON with the `..` path prefix or ForEachLine.",
+    "You target arm64 or any other Go platform. gjson is pure Go with no assembly, while simdjson-go needs AVX2+CLMUL on amd64 and has no fallback."
+  ],
+  "when_not_to_use": [
+    "You read many unrelated fields from the same document. Every Get and every GetMany path rescans from the start. valyala/fastjson's README says it wins in this case because it parses once, and jsonparser's single-pass EachKey beat gjson on the 2.4 KB payload (1,657 vs 2,241 ns/op).",
+    "You need full decoding into typed structs, or encoding. gjson has no Unmarshal or Marshal; use Sonic, go-json or easyjson instead.",
+    "You have zero-allocation hot paths. GetBytes copies the returned Raw/Str, so fetching a large array subtree allocates its full size (28,672 B/op on the 24 KB payload). buger/jsonparser is 0 B/op and about 1.1x faster there.",
+    "You take untrusted JSON without calling Valid() first. Get does not validate, so malformed input gives unexpected results, and Result.Path panics on some malformed documents (issue #400, open).",
+    "Path strings come from untrusted users. Modifiers are on by default, and open issue #391 reports unbounded recursion on deep nesting and O(N^2) memory amplification through `@dig`. Four earlier DoS CVEs (CVE-2020-35380, -36066, -36067, CVE-2021-42836/42248) were fixed by v1.9.3."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "github.com/tidwall/match v1.1.1, github.com/tidwall/pretty v1.2.0",
+    "min_toolchain": "Go 1.23 (go.mod; the All/Keys/Values iterators import the iter package)",
+    "platforms": "any Go target (single-file pure Go, no assembly; uses unsafe for string/[]byte header casts)",
+    "thread_safety": "Not documented for Get/Parse, which share no mutable state except the modifier registry. AddModifier is documented as not thread-safe and must run before any other gjson call; issue #173 was a 'concurrent map writes' crash from calling it at runtime. The package-level DisableModifiers and DisableEscapeHTML bools are a data race if assigned while other goroutines read them (issue #401, open).",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Duplicate keys: Get returns the first occurrence, encoding/json keeps the last, and ForEach yields every occurrence (issue #393, open). Two parsers reading the same input can disagree.",
+    "Numbers are stored as float64. Result.Num and Value() lose precision above 2^53 (issue #351); use Int()/Uint(), which read all 64 bits, or Raw. The scanner also treats tokens starting with i, I or N (NaN/Inf-style) as numbers.",
+    "Memory aliasing: Get on a string returns substrings that keep the whole input alive. GetBytes copies each result, and ParseBytes copies the entire input (it calls Parse(string(json))). To avoid the GetBytes copy, sub-slice the input using result.Index as the README shows.",
+    "Parse on an object or array sets Raw to everything from the opening bracket to the end of the input, trailing bytes included (issue #391). Don't log or echo Raw from a reused buffer."
+  ],
+  "pick_this_over_siblings_when": "Pick gjson over buger/jsonparser when you want the path/query language and typed Result conversions and can accept a few allocations and about 10% more time on large payloads (22,756 vs 20,114 ns/op). Pick it over Sonic, go-json or easyjson when you read a few fields instead of decoding the whole document: in the same suite it beat Sonic on medium (2,241 vs 2,703 ns/op) and large (22,756 vs 41,053) payloads. For many fields per document, valyala/fastjson parses once and also validates.",
+  "verified_claims_summary": "The numbers come from buger/jsonparser's suite (Go 1.26.3, Apple M4 Max arm64, median of 5 runs, gjson v1.19.0). gjson GetBytes path lookups took 402 / 2,241 / 22,756 ns/op on 190 B / 2.4 KB / 24 KB records, against 1,300 / 9,911 / 130,565 ns/op for encoding/json unmarshalling into a minimal struct (about 3.2x / 4.4x / 5.7x). The comparison is not like-for-like, because encoding/json decodes the whole document while gjson decodes only the requested fields and skips the rest. gjson's own first-party benchmark (M1 Max, Go 1.22) is consistent: 202.1 ns/op for one path versus 3,219 ns/op for a struct unmarshal.",
+  "status_note": "Actively maintained by its original author (last commit 2026-08-28, v1.19.0, 15.6k stars) and MIT-licensed. It is a single-file pure-Go module with two small dependencies that is easy to vendor, but the repo has pull requests disabled and several 2026 bug and security reports (#391, #393, #400, #401) are still open.",
+  "sources_read": [
+    "https://github.com/tidwall/gjson",
+    "https://github.com/tidwall/gjson#performance",
+    "https://github.com/tidwall/gjson/blob/master/gjson.go",
+    "https://github.com/tidwall/gjson/blob/master/go.mod",
+    "https://github.com/tidwall/gjson/blob/master/go.sum",
+    "https://github.com/tidwall/gjson/blob/master/SYNTAX.md",
+    "https://github.com/tidwall/gjson/blob/master/.github/workflows/go.yml",
+    "https://github.com/tidwall/gjson/issues/173",
+    "https://github.com/tidwall/gjson/issues/217",
+    "https://github.com/tidwall/gjson/issues/351",
+    "https://github.com/tidwall/gjson/issues/360",
+    "https://github.com/tidwall/gjson/issues/387",
+    "https://github.com/tidwall/gjson/issues/391",
+    "https://github.com/tidwall/gjson/issues/393",
+    "https://github.com/tidwall/gjson/issues/400",
+    "https://github.com/tidwall/gjson/issues/401",
+    "https://github.com/tidwall/gjson-benchmarks",
+    "https://github.com/tidwall/gjson-benchmarks/blob/master/gjson_test.go",
+    "https://github.com/buger/jsonparser#benchmarks",
+    "https://github.com/buger/jsonparser/blob/master/benchmark/benchmark_gjson_sonic_test.go",
+    "https://github.com/buger/jsonparser/blob/master/benchmark/benchmark_large_payload_test.go",
+    "https://github.com/buger/jsonparser/blob/master/benchmark/benchmark.go",
+    "https://github.com/buger/jsonparser/blob/master/benchmark/go.mod",
+    "https://api.osv.dev/v1/query (package github.com/tidwall/gjson, ecosystem Go)",
+    "https://github.com/minio/simdjson-go",
+    "https://github.com/bytedance/sonic",
+    "https://github.com/valyala/fastjson"
+  ],
+  "confidence": 0.85
+}
