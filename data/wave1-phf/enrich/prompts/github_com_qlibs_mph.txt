@@ -13,18 +13,18 @@ INPUT RECORD:
   "language": "C++",
   "domain": "stdlib-replacements",
   "category": "perfect-hash-static-tables",
-  "baseline": "std::unordered_map, std::map, gperf",
+  "baseline": "std::unordered_map (std::hash), std::map, boost::unordered_flat_map (Boost 1.85), frozen::unordered_map, gperf, if-else and switch-case chains",
   "baseline_in_list": true,
   "metric": "latency",
-  "workload": "Per-lookup latency (nanobench, minEpochIterations 1,000,000) on small string-keyed static maps, with keys drawn uniformly at random from the key set. Key sets: 5 keys of length 4, 5 keys of length 8, 6 keys of length 2-5, 100 keys of length 8, and 100 keys of length 1-8; a 5-key random uint set was measured for mph only. Baselines: std::map, std::unordered_map (with boost::hash), boost::unordered_map, boost::container::flat_map and gperf-generated lookup code. Harness: benchmark/benchmark.cpp and data.hpp on the repo's benchmark branch.",
-  "claimed_speedup": "mph is fastest in every row under both g++ and clang++: e.g. random_strings_5_len_4 - std::unordered_map 5.56ns vs mph 1.61ns (~3.5x); random_strings_100_len_8 - std::unordered_map 15.32ns vs mph 1.58ns (~9.7x), gperf 8.04ns vs mph 1.58ns (~5.1x)",
-  "evidence_tier": "C",
-  "benchmark_url": "https://github.com/qlibs/mph#benchmarks",
+  "workload": "Lookups in static maps whose keys are known at compile time. int_to_int: uint16-range keys with 1-32 entries, and uint32-range keys with 1-1024 entries. str_to_int: string_view keys of length 1-8 or exactly 8, with 1-32 and 1-1024 entries. Hit probability 1.0, 0.5 and 0.0. Each target is a separate binary that times size\u00d7100,000 lookups from a pre-generated vector (std::chrono total, median of 3 runs). Checksums are asserted equal across all targets. Baselines: std::map, std::unordered_map (std::hash), boost::unordered_flat_map, frozen::unordered_map, gperf (string keys only), and if_else/switch_case chains. Build time and stripped binary size are also plotted. Harness: https://github.com/qlibs/mph/tree/benchmark/perfect_hashing. The README nanobench tables (5-100 keys) remain as secondary first-party data.",
+  "claimed_speedup": "Perfect-hashing benchmark on an i7-12650H with -O3 -march=native. The page shows plots only, so all values below were read off the plot pixels (derived from page data, about \u00b11 px). Plotted time is the total for size\u00d7100,000 lookups. 1024 string keys of length 1-8, all hits: std::unordered_map ~2.14 s vs mph ~0.16 s ('clang++-19' panel), ~13.7x (~21 ns vs ~1.5 ns per lookup); 'g++-13' panel ~2.07 s vs ~0.15 s, ~14x. In the same run gperf ~0.46 s (~2.9x slower than mph), boost::unordered_flat_map ~0.91 s (~5.9x) and frozen ~1.44 s (~9.2x). 1024 string keys of length exactly 8, all hits: std::unordered_map ~1.58 s vs mph ~0.15 s, ~10x; gperf ~2.1x slower than mph. 1024 uint32 keys, all hits: std::unordered_map ~0.76 s vs mph ~0.13 s, ~5.8-6.1x; boost::unordered_flat_map ~1.15-1.3x; frozen ~2.1-2.3x. 32 string keys of length 1-8, all hits: std::unordered_map ~0.052 s vs mph ~0.0033 s, ~15x (low precision because mph sits near the axis floor). mph is not faster everywhere. All misses, 1024 string keys: gperf ~0.11 s beats mph ~0.13 s. All misses, 1024 int keys: boost::unordered_flat_map roughly ties mph (~0.14 s each in the 'g++-13' panel). std::unordered_map is slower than mph in every plot. The README nanobench tables (no CPU stated) are unchanged: std::unordered_map 15.32 ns vs mph 1.58 ns at 100 keys of length 8 (~9.7x).",
+  "evidence_tier": "A",
+  "benchmark_url": "https://qlibs.github.io/mph/perfect_hashing",
   "baseline_stdlib": [
     "libstdc++"
   ],
-  "compiler_and_flags": "clang++ -std=c++20 -O3 -DNDEBUG -mbmi2 and g++ -std=c++20 -O3 -DNDEBUG -mbmi2",
-  "hardware": null,
+  "compiler_and_flags": "Page labels say clang++-19 and g++-13 with -std=c++20 -DNDEBUG -O3 -march=native. The Makefile also adds -DNTEST -fconstexpr-steps=1000000000 -ftemplate-depth=1024 and -I for Boost 1.85. Both columns were most likely built with clang++-18, because the committed Makefile hard-codes CXX=clang++-18, which overrides the notebook's CXX environment variable. The stripped binary sizes are identical in both panels. The Dockerfile also installs clang 18 and gcc 13.",
+  "hardware": "12th Gen Intel Core i7-12650H (from /proc/cpuinfo in the notebook). Pinned to logical CPU 1 (a P-core) with taskset. Turbo Boost was on and the intel_pstate governor was powersave: pyperf system tune failed with permission errors.",
   "compared_against_cpp_std_directly": true,
   "license": "MIT",
   "usability": "copyable",
@@ -34,7 +34,7 @@ INPUT RECORD:
   "stars_or_usage": "265 stars",
   "has_code": true,
   "tradeoffs": "Requires C++20 (gcc-12+/clang-15+); keys/values must be fully known at compile time (constexpr array), not a general dynamic hash table; author states it targets thousands, not millions, of entries; optional bmi2/SIMD hardware acceleration",
-  "caveats": "First-party benchmark. The harness is on the benchmark branch, last changed 2024-07-02, so the README numbers may predate the current main code. The README gives compiler names and flags but no compiler versions and no CPU model, so the tier is capped at C. The std::unordered_map baseline uses boost::hash, not std::hash. The largest key set is 100 keys, not 149. mph::hash assumes valid keys, while the map baselines call find() with miss handling. The random_uints_5 row has no baseline. The speedup vs std::unordered_map is about 2.4x-10x across rows (derived from page data), which is plausible for 5-100 key sets.",
+  "caveats": "First-party benchmark. The harness is on the benchmark branch, last changed 2024-07-02, so the README numbers may predate the current main code. The README gives compiler names and flags but no compiler versions and no CPU model, so the tier is capped at C. The std::unordered_map baseline uses boost::hash, not std::hash. The largest key set is 100 keys, not 149. mph::hash assumes valid keys, while the map baselines call find() with miss handling. The random_uints_5 row has no baseline. The speedup vs std::unordered_map is about 2.4x-10x across rows (derived from page data), which is plausible for 5-100 key sets. [retier] First-party benchmark by the mph author, run 2024-07-02. Results are shown only as plots; every number was read off the plot pixels (derived from page data). The compiler labels are unreliable: the Makefile's hard-coded CXX=clang++-18 overrides the notebook's CXX, and the binary sizes in the 'clang++-19' and 'g++-13' panels are identical, so this is almost certainly one compiler (likely clang++-18), not a clang vs gcc comparison. baseline_stdlib libstdc++ is inferred: Linux/Ubuntu, and no -stdlib=libc++ appears anywhere. Reproducibility gaps: the benchmark branch does not vendor the mph header (-I.. points at a branch root with no 'mph' file), so the mph version must be supplied by hand (about v5.0.0 / main 2e9418c at run time). frozen and gperf versions are not stated. Key sets come from Python's unseeded random, and only the C++ lookup stream is seeded. Timing is noisy: turbo on, powersave governor, non-monotonic std::unordered_map curves. Plotted time includes streaming a size\u00d7100k-element lookup vector, so mph's ~1.5 ns per lookup at 1024 keys may be close to a memory-streaming floor. mph is not fastest in miss-heavy runs: gperf beats it on 1024 string keys at 0% hits, and boost::unordered_flat_map ties it on 1024 int keys at 0% hits. The README's std::unordered_map-with-boost::hash caveat applies only to the README tables, since this harness uses std::hash. Ratios of ~6-15x vs std::unordered_map are plausible for small static sets under -O3.",
   "is_evidence_for_known": false,
   "confidence": 0.7,
   "id": "https://github.com/qlibs/mph",
@@ -57,22 +57,66 @@ INPUT RECORD:
       "https://github.com/qlibs/mph/blob/benchmark/perfect_hashing/Makefile"
     ],
     "page_compares_against_baseline": true,
-    "numbers_found_on_page": true
+    "numbers_found_on_page": true,
+    "retier": {
+      "from": "C",
+      "to": "A",
+      "reason": "The second benchmark meets all four Tier A conditions. (1) The code is public. The page https://qlibs.github.io/mph/perfect_hashing is perfect_hashing/index.html on the qlibs/mph 'benchmark' branch, served by GitHub Pages from that branch root. It is the rendered export of perfect_hashing/benchmark.ipynb. The harness is in the same folder: Makefile, Dockerfile, benchmark.hpp, and one .cpp per target (mph.cpp, unordered_map.cpp, map.cpp, boost_unordered_flat_map.cpp, frozen.cpp, gperf.cpp, if_else.cpp, switch_case.cpp). The qlibs.github.io repo is only the org landing page and holds no benchmark code. (2) The CPU is stated: the notebook prints /proc/cpuinfo showing '12th Gen Intel(R) Core(TM) i7-12650H'. Runs are pinned to CPU 1 with taskset. (3) Flags are stated: CXXFLAGS='-std=c++20 -DNDEBUG -O3 -march=native' is set in the notebook and printed on every plot title. The Makefile adds -DNTEST and the constexpr/template-depth limits. (4) The compiler is stated: the page and plots say clang++-19 and g++-13. The committed Makefile sets CXX=clang++-18 unconditionally, and a makefile assignment overrides the CXX environment variable the notebook passes. So both columns were most likely built with clang++-18. The byte-identical stripped binary sizes in the 'clang++-19' and 'g++-13' panels (int_to_int and str_to_int) support this. The compiler actually used is still fixed by public code, so the run is reproducible and stays Tier A. The per-compiler labels are unreliable (see caveats). This supersedes the earlier Tier C, which rested on the README nanobench tables that give no compiler version and no CPU.",
+      "urls_opened": [
+        "https://qlibs.github.io/mph/perfect_hashing",
+        "https://api.github.com/repos/qlibs/mph/branches",
+        "https://api.github.com/repos/qlibs/mph",
+        "https://api.github.com/repos/qlibs/mph/pages",
+        "https://api.github.com/repos/qlibs/qlibs.github.io",
+        "https://api.github.com/repos/qlibs/qlibs.github.io/contents/",
+        "https://api.github.com/repos/boost-ext/mph",
+        "https://github.com/qlibs/mph/tree/benchmark/perfect_hashing",
+        "https://api.github.com/repos/qlibs/mph/git/trees/benchmark?recursive=1",
+        "https://api.github.com/repos/qlibs/mph/contents/?ref=benchmark",
+        "https://github.com/qlibs/mph/blob/benchmark/perfect_hashing/Makefile",
+        "https://github.com/qlibs/mph/blob/benchmark/perfect_hashing/Dockerfile",
+        "https://github.com/qlibs/mph/blob/benchmark/perfect_hashing/benchmark.hpp",
+        "https://github.com/qlibs/mph/blob/benchmark/perfect_hashing/benchmark.ipynb",
+        "https://github.com/qlibs/mph/blob/benchmark/perfect_hashing/mph.cpp",
+        "https://github.com/qlibs/mph/blob/benchmark/perfect_hashing/unordered_map.cpp",
+        "https://github.com/qlibs/mph/blob/benchmark/perfect_hashing/map.cpp",
+        "https://github.com/qlibs/mph/blob/benchmark/perfect_hashing/gperf.cpp",
+        "https://github.com/qlibs/mph/blob/benchmark/perfect_hashing/frozen.cpp",
+        "https://github.com/qlibs/mph/blob/benchmark/perfect_hashing/boost_unordered_flat_map.cpp",
+        "https://api.github.com/repos/qlibs/mph/commits?sha=benchmark&path=perfect_hashing/Makefile",
+        "https://api.github.com/repos/qlibs/mph/commits?sha=benchmark&path=perfect_hashing/benchmark.ipynb",
+        "https://api.github.com/repos/qlibs/mph/commits?sha=benchmark&path=perfect_hashing/index.html",
+        "https://api.github.com/repos/qlibs/mph/commits?sha=benchmark&path=perfect_hashing/benchmark.hpp",
+        "https://api.github.com/repos/qlibs/mph/commits/66cd9b26df",
+        "https://api.github.com/repos/qlibs/mph/tags",
+        "https://api.github.com/repos/qlibs/mph/compare/main...benchmark",
+        "https://github.com/qlibs/mph/blob/main/mph",
+        "https://api.github.com/repos/qlibs/mph/commits?sha=main&until=2024-07-03T00:00:00Z",
+        "https://api.github.com/repos/qlibs/mph/commits/v5.0.0",
+        "https://api.github.com/repos/qlibs/mph/commits/v5.0.1",
+        "https://api.github.com/repos/qlibs/mph/commits/v5.0.2"
+      ]
+    }
   }
 }
 
 SIBLING ENTRIES (same category, already catalogued):
+- constmap (https://github.com/lemire/constmap): beats Go builtin map[string]uint64; README 'Performance gains' table (Apple M4 Max, 1,000,000 keys, every key queried once in random order): ConstMap 8.7 ns/op vs Go map[string]uint64 46 ns/op. Th
+- fastconstmap (https://github.com/lemire/fastconstmap): beats CPython dict; README Benchmark block (Apple M4 Max, Python 3.14.5, 1,000,000 string keys, each queried once in random order). Single lookup: dict[k] 336.1 ns/op vs ConstMap[k
 - fastcpp::phf (developer source) (private:developer-source): beats std::unordered_map; 6.98x on all-hit lookups (3.327ns vs 23.208ns/op), 6.70x on all-miss (3.02ns vs 20.243ns), 5.76x on mixed 1:8 (4.903ns vs 28.235ns) -- verbatim from results/fas
 - fph-table (Flash Perfect Hash) (https://github.com/renzibei/fph-table): beats std::unordered_map; Hit find() at max_load_factor 0.9 on uint64 split-bit-masked keys (hashtable-bench Figures 1-2 and CSVs). AMD 3990X: fph::DynamicFphMap+fph::SimpleSeedHash 2.04
 - frozen (https://github.com/serge-sans-paille/frozen): beats std::unordered_map (arXiv 2602.22506 demos); std::set and std::unordered_set in the author's first-party 2018 Quarkslab microbenchmark; Construction+lookup runtime, frozen::unordered_map vs std::unordered_map: element-symbol->mass demo 44.9 us vs 89.6 us (~2.0x), codon->amino-acid demo 1365.5 us
 - hashify (https://github.com/stalwartlabs/hashify): beats switch/if-else chains; README Performance table (criterion median per lookup, Apple M5 Max, Rust 1.98). Against a plain Rust `match` with one string arm per key, hashify map! is faste
 - phashtable (gsauthof) (https://github.com/gsauthof/phashtable): beats std::unordered_map; README tables, ns, min-max across keys. Atom C3758: ptable_sdbm 43-44 vs umap_sdbm 22-61, and ptable_stl 37-69 vs umap_stl 30-101. Xeon Gold 6246: ptable_sdbm 1
 - static_maps (https://doi.org/10.6084/m9.figshare.31416038): beats std::unordered_map; static_maps::unordered_map runtime is <40% of std::unordered_map on the elements demo (35.8 vs 89.6 microsec avg), <35% on the codon demo (607.6 vs 1746.8 micro
+- zmph (Zig Minimal Perfect Hash Map) (https://github.com/PaNDa2code/zmph): beats Zig std.StringHashMap and std.StaticStringMap; Lookup (zBench average of single-call runs): zmph 26ns ± 4ns vs std.StringHashMap 45ns ± 152ns (README: StringHashMap is ~1.7x slower than zmph) and vs std.Stat
 - cmph / cxxmph (mph_map) (https://github.com/zvelo/cmph): beats std::unordered_map (cxxmph's dense_hash_map / sparse_hash_map are its own flavors named after the sparsehash classes; cxxmph/bm_map.cc benchmarks only against std::unordered_map); "about 10%-50% faster than unordered_map" for large (>100k) URL key sets with expensive comparisons (verbatim from the header comment)
 - constexpr-phf (Kronuz/phf) (https://github.com/Kronuz/constexpr-phf): beats std::unordered_map, std::set, if-ladder, switch (binary search), gperf; vs unordered_map/if-ladder/switch: 1.2-1.3 ns/lookup for phf at N=6..1000 vs 2.4-162 ns (if-ladder), 4.0-40 ns (switch), 3.1-3.2 ns (unordered_map). String disp
 - ConstexprCore/perfect_hash (https://github.com/ConstexprCore/perfect_hash): beats std::unordered_map, gperf, frozen::unordered_map, absl::flat_hash_map, pthash, ankerl::unordered_dense, if/else chain; 1.08 billion queries/s for this library vs 0.23 (gperf), 0.22 (kronuz::phf), 0.16 (frozen::unordered_map), 0.14 (absl::flat_hash_map / pthash), 0.10 (std::unord
 - icy (https://github.com/romainaugier/icy): beats std::map, std::unordered_map, std::set, std::unordered_set; std::string_view find() at N=1024: icy 3.228 'cycles/op' vs std::map 44.393, std::unordered_map 5.278, tsl::robin_map 4.595, sorted-vector+lb 23.987. Versus std
+- lute (https://github.com/astral4/lute): beats phf (rust-phf) static compile-time hash maps; Query (derived from page data: values read from the SVG plot marker coordinates against the labeled log-scale axes; lute 0.1.0 vs phf 0.14.0; u64, short-string 
 - Perfect::Hash / pperf (https://github.com/rurban/Perfect-Hash): beats gperf; On the 99,171-key dictionary, gperf never produced a table: every run was killed ('with -1 errors. (killed)') after 65-386 s of generation. hanovpp/hanov/urban 
+- QuickPHF (https://github.com/dtrifuno/quickphf): beats phf (rust-phf) static compile-time hash maps; quickphf/README.md: "About twice as fast as phf at lookup, and more than 10 times faster at construction"; "quickphf is about twice as fast as phf at lookup, wi
 - rust-phf (compile-time perfect hash maps) (https://github.com/rust-phf/rust-phf): beats std::collections::HashMap (Rust) populated at runtime from statically bundled (code-generated) data; PR #18 (Turbo87, merged 2021-10-11): with rust-phf generating both lookup tables at build time, Types::new() becomes 'an essentially empty function' that 'now r
 - strager/perfect-hash-tables (https://github.com/strager/perfect-hash-tables): beats gperf; notes.txt (author's dev log, approximate '~' figures): on the nonkeywords corpus, pht with the icrc32 hasher and --string-compare=check1memcmp (~69 us) beats gp
 - triehash (https://github.com/julian-klode/triehash): beats gperf; README Performance table (GB/s, higher is better). On jak-x230 (amd64, Core i5-3320M), Trie is 2.4 vs gperf 1.3 case-sensitive [~1.85x, derived from page data],
