@@ -1,0 +1,102 @@
+[
+  {
+    "id": "private:developer-source#allocators",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "docs/allocators.md and results/fastest.json (rows allocator_bulk_lifetime, allocator_locality, allocator_churn) compare fastcpp::arena against glibc new/delete and the std::pmr resources, and state gcc 13.3.0, flags and the Xeon CPU. The code (bench/bench_allocator.cpp) is in a PRIVATE repo, so it is not public and cannot be A. There is no paper or independent suite for B, so these are first-party numbers: C.",
+    "corrections": {
+      "baseline_stdlib": [
+        "libstdc++"
+      ],
+      "caveats": "Repo private:developer-source is PRIVATE and readable only via authenticated gh CLI, so despite full compiler/flags/CPU/commit disclosure this is capped below tier A per orchestrator instruction. Much of the locality win (suite B) is a glibc fragmentation artifact rather than an arena advantage: under LD_PRELOAD=jemalloc the same comparison shrinks from 4.75x to about 1.45x (3.965ns). The standard library's own arena, std::pmr::monotonic_buffer_resource (libstdc++), is within 25% of fastcpp::arena on the bulk workload (4.318ns vs 3.451ns), so most of the 5.41x is available from <memory_resource> without this library. Numbers are from a shared cloud VM; the results file's own caveat says absolute nanoseconds are not a reproducible spec, only within-row ratios are meaningful. The allocator rows are tagged run 2026-09-03-third-party, whose recorded commit (0711657) predates bench/bench_allocator.cpp (first committed in 9f5650f); that run's metadata also says bench_allocator used 3 samples, but the source uses the harness default of 7 (docs/allocators.md also says 7). Since commit 6c81a90 (2026-09-03) the benchmarks are forced to -O3 (fastcpp_bench_opt in CMakeLists.txt), so a rebuild at HEAD does not reproduce the -O2 flags these numbers were taken with. docs/allocators.md separately argues, from the same data, that no allocator library should be vendored at all."
+    },
+    "notes": "Every number checks out. docs/allocators.md has 3.45 vs 18.68 (5.4x), 2.74 vs 13.03 (the page says 4.8x) and 11.74 vs 4.33 (2.7x); results/fastest.json has 3.451/18.682 (5.41x), 2.742/13.028 (4.75x), 3.965 under jemalloc and 11.738/4.33 (2.71x). An older, independent row (arena_allocator, bench_doing_less.cpp, run 2026-09-02-core) corroborates the result: 3.76 vs 17.777ns (4.73x) on a 20k-node list. I added libstdc++ to baseline_stdlib (gcc 13.3 on Ubuntu, new/delete and std::pmr), plus the std::pmr near-parity, the run provenance mismatch and the -O3 drift to caveats. MIT, last commit 2026-09-04, 0 stars, private: all confirmed.",
+    "urls_opened": [
+      "private:developer-source",
+      "private:developer-source/commits/main",
+      "private:developer-source/blob/main/docs/allocators.md",
+      "private:developer-source/blob/main/results/fastest.json",
+      "private:developer-source/blob/main/bench/bench_allocator.cpp",
+      "private:developer-source/blob/main/bench/bench_harness.hpp",
+      "private:developer-source/blob/main/bench/bench_doing_less.cpp",
+      "private:developer-source/blob/main/include/fastcpp/memory/arena.hpp",
+      "private:developer-source/blob/main/CMakeLists.txt",
+      "private:developer-source/blob/main/CMakePresets.json",
+      "private:developer-source/blob/main/README.md",
+      "private:developer-source/blob/main/LICENSE",
+      "private:developer-source/commits/main/bench/bench_allocator.cpp",
+      "private:developer-source/commits/main/CMakeLists.txt"
+    ]
+  },
+  {
+    "id": "private:developer-source#hash-maps-sets",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "results/fastest.json rows flat_hash_map_hit_1m, _miss_1m, _build_1m and flat_hash_map_string give exact ns against std::unordered_map (libstdc++), and the run metadata states gcc 13.3.0, flags and the Xeon CPU. The code (bench/bench_vs_libraries.cpp for the 1M rows, bench/bench_hash_map.cpp for the string row) is in a PRIVATE repo, so this cannot be A. There is no paper or independent suite for B, so these are first-party numbers: C.",
+    "corrections": {
+      "claimed_speedup": "5.52x faster to insert 1M uint64 keys into a new map (34.72ns vs 191.714ns per insert; one allocation for the table vs one node per entry). The row is labelled 'build from empty', but bench_vs_libraries calls reserve(1M) on both maps before inserting. 2.18x faster on 200k string-key lookups (33.947ns vs 73.922ns). ~1.78x faster hit lookups and ~4.59x faster miss lookups on 1M uint64 keys (18.911ns vs 33.687ns; 9.723ns vs 44.665ns, derived from page data). Caveat from the same file/README: phmap::flat_hash_map (vendored in the same repo) beats fastcpp::flat_hash_map on raw lookup by 1.29x (hits) and 1.39x (misses), which is why fastcpp's own map is kept only for its faster build path (34.72ns vs phmap 38.07ns).",
+      "workload": "1M random uint64 keys from bench/bench_vs_libraries.cpp (all-hit lookup, all-miss lookup, and build = reserve(1M) then 1M operator[] inserts), plus 200k 'symbol_name_N' string keys, all hit, from bench/bench_hash_map.cpp (fastcpp uses find(string_view), std::unordered_map uses find(const std::string&)). All measured against std::unordered_map.",
+      "compiler_and_flags": "gcc 13.3.0, -O2 -g -DNDEBUG -std=c++20 -march=native (RelWithDebInfo). String row: run 2026-09-02-core, commit dfa74f2. 1M rows: re-measured with bench_vs_libraries at commit 2e21aae (run 2026-09-02-libraries, same flags), although the rows are tagged 2026-09-02-core.",
+      "caveats": "Repo private:developer-source is PRIVATE and readable only via authenticated gh CLI, so the benchmark code is not public; per orchestrator instruction this is capped below tier A despite full compiler/flags/CPU/commit disclosure. The results file's own caveat states absolute nanoseconds vary run to run on this shared cloud VM (elsewhere in the same file the same binary measured 3.42ns and 5.24ns for an identical lookup hours apart); only within-row ratios are meaningful. Provenance: the three 1M-key rows are tagged run 2026-09-02-core, but commit 2e21aae replaced their numbers with bench_vs_libraries figures, and that run's measured_at (2026-09-02T00:00:00Z) predates its own commit. The superseded core-run figures (bench_hash_map.cpp, build with no reserve) were 5.17x build (58.366 vs 301.889ns), 1.83x hits (13.514 vs 24.745ns) and 6.36x misses (6.253 vs 39.757ns). In the string benchmark the std::unordered_map arm also looks up an existing std::string, so neither arm builds a temporary. The 2.18x therefore comes from the hash function and the flat layout, not from heterogeneous lookup as the row's note suggests. Tradeoff: references are invalidated when the table grows. Since commit 6c81a90 the benchmarks are forced to -O3, so a rebuild at HEAD does not reproduce these -O2 flags."
+    },
+    "notes": "All figures (5.52x, 2.18x, 18.911/33.687, 9.723/44.665, phmap 1.29x/1.39x, 38.07ns) match results/fastest.json and README; the derived 1.78x/4.59x are correct. Git history shows the 1M rows came from bench_vs_libraries (which reserves before building), not bench_hash_map, so I reworded the build claim, workload and compiler_and_flags and added the superseded original figures to caveats. MIT, last commit 2026-09-04, 0 stars, private: confirmed.",
+    "urls_opened": [
+      "private:developer-source",
+      "private:developer-source/commits/main",
+      "private:developer-source/blob/main/results/fastest.json",
+      "private:developer-source/blob/b89b9dc/results/fastest.json",
+      "private:developer-source/blob/main/bench/bench_hash_map.cpp",
+      "private:developer-source/blob/main/bench/bench_vs_libraries.cpp",
+      "private:developer-source/blob/main/bench/bench_harness.hpp",
+      "private:developer-source/blob/main/include/fastcpp/container/flat_hash_map.hpp",
+      "private:developer-source/blob/main/third_party/parallel-hashmap/VENDORING.md",
+      "private:developer-source/commit/2e21aae",
+      "private:developer-source/blob/main/README.md",
+      "private:developer-source/blob/main/LICENSE",
+      "private:developer-source/blob/main/CMakeLists.txt",
+      "private:developer-source/blob/main/CMakePresets.json",
+      "private:developer-source/commits/main/bench/bench_hash_map.cpp",
+      "private:developer-source/commits/main/bench/bench_vs_libraries.cpp",
+      "private:developer-source/commits/main/results/fastest.json"
+    ]
+  },
+  {
+    "id": "private:developer-source#io-and-filesystem",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "results/fastest.json row buffered_output (run 2026-09-02-core, commit dfa74f2) gives 2.93 vs 196.803 ns per line against unbuffered write(2) to /dev/null, and states gcc 13.3.0, -O2 flags and the Xeon CPU. The code (bench/bench_doing_less.cpp bench_output) is in a PRIVATE repo, so it is not public and cannot be A, and there is no paper or independent suite for B. First-party numbers: C, unchanged. This is a downgrade because the claim mislabels the baseline.",
+    "corrections": {
+      "baseline": "unbuffered write(2) per call (about two write(2) calls per line)",
+      "claimed_speedup": "67.17x faster per line than an unbuffered writer that makes about two write(2) calls per line (2.93ns vs 196.803ns per line, results/fastest.json row 'buffered_output'). The row labels the baseline 'one write(2) per line', but it makes 40,010 calls for 20,000 lines, i.e. ~98.4ns per write(2) call (derived from page data). The buffered writer cuts the syscall count from 40,010 to 4.",
+      "workload": "bench/bench_doing_less.cpp bench_output writes 20,000 short lines ('line N\\n') to /dev/null through io::fd_sink. The winner is fastcpp::io::buffered_writer with a 64 KiB buffer (4 write(2) calls in total). The baseline is the same buffered_writer with a 1-byte buffer: each 'line ' fragment goes straight to write(2), and each number plus newline goes out in the next flush. That is 40,010 write(2) calls in total, about two per line.",
+      "caveats": "PRIVATE repo, readable only via the authenticated gh CLI (private:developer-source), not publicly browsable -- capped at tier C rather than A despite full compiler/flags/CPU/commit metadata being stated in results/fastest.json, per instruction not to claim tier A for private code. The header's own comment history (include/fastcpp/io/buffered_writer.hpp) originally claimed 'a write(2) costs 1-3us'; bench/bench_syscall.cpp later measured a real write(64B) to /dev/null at ~112ns and a bare kernel entry (getppid) at ~100ns on this unmitigated host -- roughly an order of magnitude below the original claim, because syscall entry cost is dominated by speculative-execution mitigations (KPTI/retpoline), which this host lacks. The repository's own text is explicit that this correction does not weaken the buffered_writer result: the count reduction (40,010 -> 4 syscalls) holds regardless of the per-syscall cost, but the previously advertised per-call nanosecond saving was overstated. The baseline is labelled 'one write(2) per line', but it is buffered_writer with a 1-byte buffer and makes about two write(2) calls per line, so the 67x is measured against a baseline about twice as syscall-heavy as its label. That baseline also writes up to 5 digits plus a newline into its 1-byte heap buffer. This is a heap overrun of up to 5 bytes, which is undefined behaviour. The asan preset builds no benchmarks (FASTCPP_BUILD_BENCHMARKS OFF), so ASan never runs this code. glibc's minimum allocation probably absorbs the overrun, so the timing is likely unaffected. Since commit 6c81a90 the benchmarks are forced to -O3, so a rebuild at HEAD does not reproduce these -O2 flags. Shared cloud VM: results/fastest.json's own caveat states absolute nanoseconds are not stable across runs or CPU-clock changes -- only ratios within one row are meaningful."
+    },
+    "notes": "The numbers (2.93 vs 196.803ns, 67.17x, 40,010 -> 4 calls, ~112ns write and ~100ns getppid) all match results/fastest.json and the README. Tracing buffered_writer with capacity 1 accounts for exactly 40,010 calls: 20,000 'line ' writes, 19,999 per-line flushes, 10 extra flushes for single-digit lines and 1 final flush. So the baseline is ~2 syscalls per line, not one, and I corrected baseline, workload and claimed_speedup. It also overruns a 1-byte heap buffer (UB). Tier C is unchanged; MIT, last commit 2026-09-04 and 0 stars are confirmed.",
+    "urls_opened": [
+      "private:developer-source",
+      "private:developer-source/commits/main",
+      "private:developer-source/blob/main/results/fastest.json",
+      "private:developer-source/blob/main/bench/bench_doing_less.cpp",
+      "private:developer-source/blob/main/include/fastcpp/io/buffered_writer.hpp",
+      "private:developer-source/blob/main/include/fastcpp/string/itoa.hpp",
+      "private:developer-source/blob/main/bench/bench_syscall.cpp",
+      "private:developer-source/blob/main/bench/bench_harness.hpp",
+      "private:developer-source/commit/ab9259f",
+      "private:developer-source/blob/main/README.md",
+      "private:developer-source/blob/main/LICENSE",
+      "private:developer-source/blob/main/CMakeLists.txt",
+      "private:developer-source/blob/main/CMakePresets.json",
+      "private:developer-source/commits/main/include/fastcpp/io/buffered_writer.hpp",
+      "private:developer-source/commits/main/bench/bench_doing_less.cpp"
+    ]
+  }
+]
