@@ -48,6 +48,9 @@ ORCHESTRATOR HARNESS NOTES
   http://export.arxiv.org/api/query?search_query=all:<terms> via WebFetch.
 - Do not clone or build anything. Budget: about 40 tool calls per project;
   token cost is not a concern, so read the benchmark sources, not just READMEs.
+- Never send the user's email address, name or any other personal identifier to an
+  outside service (URLs, headers, payloads). For APIs that want a User-Agent, such as
+  crates.io, use exactly: User-Agent: fastpp-research-bot/1.0
 - Write the JSON array (one object per project, nothing else) to:
     {output_path}
   Then check it parses:

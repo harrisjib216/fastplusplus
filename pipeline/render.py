@@ -36,6 +36,9 @@ the output-delivery rule above)
     https://hn.algolia.com/api/v1/search?query=<terms>&tags=story
   (Reddit and Lobsters block automated fetches.)
 - Do not clone repositories or build anything; this is a search task.
+- Never send the user's email address, name or any other personal identifier to an
+  outside service (URLs, headers, payloads). For APIs that want a User-Agent, such as
+  crates.io, use exactly: User-Agent: fastpp-research-bot/1.0
 - For papers and Hacker News, prefer the arXiv / Semantic Scholar / HN Algolia
   endpoints above over WebSearch; save WebSearch for blogs, talks and pages
   those APIs don't index.
