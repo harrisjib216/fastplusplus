@@ -1,0 +1,270 @@
+{
+  "measurements": [
+    {
+      "id": "https://github.com/greg7mdp/parallel-hashmap",
+      "library": "parallel-hashmap (phmap::flat_hash_map)",
+      "measurement": "On 1M uint64 keys phmap::flat_hash_map found hits in 14.625 ns vs 18.911 ns for developer source's own SIMD Swiss table (1.29x) and 33.687 ns for std::unordered_map, and misses in 7.006 ns vs 9.723 ns (1.39x) and 44.665 ns (6.4x). It lost build-from-empty to the in-repo map, 38.07 vs 34.72 ns per key (1.10x). (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, run 2026-09-02-core)",
+      "source": "results/fastest.json rows flat_hash_map_hit_1m, flat_hash_map_miss_1m, flat_hash_map_build_1m; bench/bench_vs_libraries.cpp"
+    },
+    {
+      "id": "https://github.com/greg7mdp/parallel-hashmap",
+      "library": "parallel-hashmap (phmap::flat_hash_map, static key set)",
+      "measurement": "On a closed 92-key C++ keyword set (200k words, 1:8 keyword:identifier) phmap::flat_hash_map took 19.787 ns per lookup vs 5.322 ns for a compile-time perfect hash table (3.7x slower) and 29.168 ns for std::unordered_map. (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, run 2026-09-02-libraries)",
+      "source": "results/fastest.json row static_lookup_vs_frozen (alternatives_ns); bench/bench_vs_libraries.cpp"
+    },
+    {
+      "id": "https://github.com/greg7mdp/parallel-hashmap",
+      "library": "parallel-hashmap (phmap::btree_map, 1M keys)",
+      "measurement": "At 1M uint64 keys phmap::btree_map beat std::map 18.72x on in-order iteration (7.106 vs 133.05 ns per element), 3.89x on lower_bound range queries (255.2 vs 991.946 ns) and 3.65x on build from random key order (267.5 vs 977.2 ns). (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, run 2026-09-03-third-party)",
+      "source": "results/fastest.json rows ordered_map_iterate_1m, ordered_map_lower_bound_1m; bench/bench_ordered_map.cpp"
+    },
+    {
+      "id": "https://github.com/greg7mdp/parallel-hashmap",
+      "library": "parallel-hashmap (phmap::btree_map, 10k keys - inversion)",
+      "measurement": "Inversion: at 10k cache-resident keys std::map beat phmap::btree_map on lookups, 36.773 vs 54.947 ns for hits (std::map 1.49x) and 38.3 vs 53.7 ns for misses, while btree_map won 1M-key lookups by only 1.26x. Iteration still favoured btree_map at 10k (1.16 vs 9.14 ns, 7.9x). (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, run 2026-09-03-third-party)",
+      "source": "results/fastest.json row ordered_map_lookup_10k; third_party/parallel-hashmap/VENDORING.md (N = 10,000 table)"
+    },
+    {
+      "id": "https://github.com/xtensor-stack/xsimd",
+      "library": "xsimd (fused reduce)",
+      "measurement": "A fused sum+min+max over 8.4M floats ran at 0.18 ns/element with xsimd vs 1.277 ns for the scalar loop (7.08x), because gcc emits zero vector instructions for that float reduction at -O3 -march=native without -ffast-math. The xsimd result was also 158x more accurate against a double-precision reference. (developer source, private repo; gcc 13.3.0 -O3 -march=native (benchmarks forced to -O3 per the row's re-measurement note), Intel Xeon @ 2.10GHz, run 2026-09-03-third-party)",
+      "source": "results/fastest.json row simd_fused_reduce; bench/bench_simd.cpp"
+    },
+    {
+      "id": "https://github.com/xtensor-stack/xsimd",
+      "library": "xsimd (dot product, filter/count)",
+      "measurement": "Where gcc can vectorise, the margin shrank: dot product over 8.4M floats 0.317 vs 0.717 ns/element (2.26x, memory-bound) and an integer filter/count 0.164 vs 0.249 ns (1.51x, kept as the negative control). The filter/count result was 1.82x before the scalar baseline was corrected from -O2 to -O3. (developer source, private repo; gcc 13.3.0 -O3 -march=native, Intel Xeon @ 2.10GHz, run 2026-09-03-third-party)",
+      "source": "results/fastest.json rows simd_dot_product, simd_filter_count; bench/bench_simd.cpp"
+    },
+    {
+      "id": "https://github.com/xtensor-stack/xsimd",
+      "library": "xsimd (matmul and complex kernels)",
+      "measurement": "On a 128x128 float32 matmul an explicit xsimd ikj kernel (162,632 ns) lost to the plain ikj loop with __restrict on the parameters (122,170 ns; 1.33x, derived). Hand-written xsimd did win fixed 4x4 multiplies against a naive triple loop (3.091 vs 6.247 ns, 2.02x) and was the fastest complex multiply-add variant measured (0.147 ns/element SoA vs 0.966 for AoS std::complex<float>). (developer source, private repo; gcc 13.3.0 -O3 -march=native, Intel Xeon @ 2.10GHz, run 2026-09-03-third-party)",
+      "source": "results/fastest.json rows matmul_loop_order, matmul_fixed_4x4, complex_multiply_add; bench/bench_matmul.cpp, bench/bench_complex.cpp"
+    },
+    {
+      "id": "https://github.com/google/highway",
+      "library": "Google Highway (SIMD kernels, not vqsort)",
+      "measurement": "In developer source's SIMD selection Highway measured within noise of xsimd on all three kernels over 8.4M floats (fused sum+min+max, dot product, filter/count; xsimd was 7.1x, 2.3x and 1.4x over -O3 autovectorised scalar). It was rejected on integration cost, not speed, because only its static-dispatch subset is header-only; vqsort itself was not measured. (developer source, private repo; selection measurement in third_party/xsimd/VENDORING.md, median of 45 samples, -O3 -march=native baseline; evaluation for run 2026-09-03-third-party)",
+      "source": "third_party/xsimd/VENDORING.md (section 'Not vendored: Google Highway'); README.md not-vendored list"
+    },
+    {
+      "id": "https://github.com/eyalz800/zpp_bits",
+      "library": "zpp_bits (serialize)",
+      "measurement": "Serializing 100k records with std::string and std::vector members took 26.914 ns/record into a reused output buffer vs 39.735 ns with a fresh buffer each time, so buffer reuse alone was worth 1.48x. In selection it was the fastest of three header-only serializers (24.19/63.37 ns serialize/deserialize vs bitsery 32.22/66.34 and cista 62.87/99.17, median of 11). (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, run 2026-09-03-third-party)",
+      "source": "results/fastest.json row serialize_records; third_party/zpp_bits/VENDORING.md; bench/bench_serialize.cpp"
+    },
+    {
+      "id": "https://github.com/eyalz800/zpp_bits",
+      "library": "zpp_bits (deserialize - recorded loss)",
+      "measurement": "Recorded as a loss: deserializing the same 100k records took 99.041 ns/record, 32.8x the 3.02 ns memcpy floor (POD only, allocates nothing), and most of the gap is allocating owning members. zpp_bits also defaults to native byte order unless zpp::bits::endian::little{} is passed. (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, run 2026-09-03-third-party)",
+      "source": "results/fastest.json rows deserialize_records, serialize_records; third_party/zpp_bits/VENDORING.md"
+    },
+    {
+      "id": "https://github.com/cameron314/readerwriterqueue",
+      "library": "moodycamel::ReaderWriterQueue",
+      "measurement": "1 producer/1 consumer, 500k items: 9.4 ns/item vs 131.37 ns for std::mutex + std::deque (13.98x best-of-7; medians 11.72 vs 172.71), while moodycamel::ConcurrentQueue on the same SPSC workload cost 61.54 ns (6.5x slower). A separate 10M-item median-of-11 run measured 6.36 vs 173.04 ns for std::mutex + std::queue (27x). (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, 4 hardware threads, run 2026-09-03-third-party)",
+      "source": "results/fastest.json row queue_spsc; third_party/readerwriterqueue/VENDORING.md; bench/bench_queue.cpp"
+    },
+    {
+      "id": "https://github.com/cameron314/concurrentqueue",
+      "library": "moodycamel::ConcurrentQueue (tokens vs plain API)",
+      "measurement": "2 producers/2 consumers, 1M items: with ProducerToken/ConsumerToken 115.76 ns/item vs 176.76 ns for std::mutex + std::deque (1.53x), but the plain enqueue()/try_dequeue() API measured 243.01 ns and lost to the mutex. Nothing warns at compile time. (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, 4 hardware threads, run 2026-09-03-third-party)",
+      "source": "results/fastest.json row queue_mpmc; bench/bench_queue.cpp"
+    },
+    {
+      "id": "https://github.com/cameron314/concurrentqueue",
+      "library": "moodycamel::ConcurrentQueue (scaling)",
+      "measurement": "Aggregate throughput fell from 1P1C to 2P2C (with tokens 29.2 to 15.3 M items/s, 0.52x; without tokens 15.8 to 6.2 M/s) while std::mutex + std::queue rose from 5.8 to 7.4 M/s. Single-threaded and uncontended, the bare queue was slower than a mutex (16.64 vs 7.94 ns). (developer source, private repo; selection measurement in third_party/concurrentqueue/VENDORING.md, median of 11 runs, shared 4-core VM; evaluation for run 2026-09-03-third-party)",
+      "source": "third_party/concurrentqueue/VENDORING.md (section 'Honest limitation: it does not scale here')"
+    },
+    {
+      "id": "https://github.com/roaringbitmap/croaring",
+      "library": "CRoaring (sparse data)",
+      "measurement": "With two 10k-value sets over a 0..100M domain, AND took 104,928 ns vs 2,303,116 ns for std::bitset<100000000> (21.95x) at 32 KB vs 12.5 MB per bitmap (388x smaller), and iterating was 2782.7x faster (34,163 vs 95,069,724 ns). and_cardinality() answered |A&B| in 36,572 ns, and std::set<uint32_t> also beat the bitset here (325,412 ns). (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, min of 3 samples, run 2026-09-03-third-party)",
+      "source": "results/fastest.json rows bitmap_and_sparse, bitmap_iterate_sparse; bench/bench_bitmap.cpp"
+    },
+    {
+      "id": "https://github.com/roaringbitmap/croaring",
+      "library": "CRoaring (dense data - inversion)",
+      "measurement": "Inversion on 50%-dense data (5M values over 0..10M): an in-place std::bitset &= beat Roaring's AND (147,744 vs 165,892 ns, 1.12x), Roaring's iterator was 2.7x slower than scanning a bitset (24.4 vs 9.2 ms), and its footprint was slightly larger than the raw bits (1.204 vs 1.192 MB). Only and_cardinality() still won clearly (46,809 ns, 3.2x the best bitset formulation). (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, min of 3 samples, run 2026-09-03-third-party)",
+      "source": "results/fastest.json rows bitmap_and_dense, bitmap_iterate_sparse; third_party/croaring/VENDORING.md"
+    },
+    {
+      "id": "https://github.com/roaringbitmap/croaring",
+      "library": "CRoaring (point queries - loss)",
+      "measurement": "Point queries lost in both regimes: 200k probes at ~50% hit rate cost 22.849 ns per contains() on dense data vs 1.07 ns for std::bitset (21.35x slower; 15x slower on sparse data). Sorting the probes for containsBulk() only brought it to 2.053 ns. (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, run 2026-09-03-third-party)",
+      "source": "results/fastest.json row bitmap_contains; third_party/croaring/VENDORING.md"
+    },
+    {
+      "id": "https://github.com/simdjson/simdjson",
+      "library": "simdjson (parse + extract)",
+      "measurement": "Parsing 20k records (2.88 MB, nested 3 deep, escaped strings) and extracting 9 fields each, simdjson On Demand with a reused parser took 113.546 ns/record (1268 MB/s) vs 191.56 ns for yyjson (1.69x). On a 13.86 MB selection corpus it ran at 1445 MB/s vs Glaze 787, yyjson 643 and RapidJSON 248 (5.8x RapidJSON). (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, run 2026-09-03-third-party)",
+      "source": "results/fastest.json row json_parse_extract; third_party/simdjson/VENDORING.md; bench/bench_json.cpp"
+    },
+    {
+      "id": "https://github.com/simdjson/simdjson",
+      "library": "simdjson (-march=native build trap)",
+      "measurement": "Building simdjson.cpp with -march=native on an AVX-512 host compiled only the icelake kernel (vs icelake, haswell, westmere and fallback with no arch flag), which gives a binary that dies with SIGILL on AVX2-only CPUs. The active kernel was icelake in all three builds, so the portable build cost nothing measurable, and the vendored source is 10.5 MB vs yyjson's 733 KB. (developer source, private repo; gcc 13.3.0, AVX-512 Intel Xeon @ 2.10GHz, run 2026-09-03-third-party)",
+      "source": "third_party/simdjson/VENDORING.md (section 'THE TRAP'); README.md findings list; tests/test_simdjson_dispatch.cpp"
+    },
+    {
+      "id": "https://github.com/ibireme/yyjson",
+      "library": "yyjson",
+      "measurement": "On the same 20k-record parse-and-extract workload yyjson took 191.56 ns/record vs simdjson's 113.546 (simdjson 1.69x), with 733 KB of source vs 10.5 MB and no SIMD dispatch to mis-build (selection: 643 MB/s, 2.6x RapidJSON). Its documented pool-allocator idiom showed no benefit in a repeated-parse loop (193.125 vs 191.56 ns), although a one-shot 13.86 MB parse during selection did show ~45%. (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, run 2026-09-03-third-party)",
+      "source": "results/fastest.json row json_parse_extract; third_party/yyjson/VENDORING.md; third_party/simdjson/VENDORING.md"
+    },
+    {
+      "id": "https://github.com/stephenberry/glaze",
+      "library": "Glaze",
+      "measurement": "In developer source's JSON selection (13.86 MB corpus, 20k nested records, full parse plus 9-field extraction, identical checksums) Glaze ran at 787 MB/s vs simdjson 1445, yyjson 643 and RapidJSON 248 (3.2x RapidJSON). It was not adopted because it failed to compile under -std=c++20 on gcc 13.3 and clang 18.1 (it needs C++23) and has no runtime SIMD dispatch. (developer source, private repo; selection measurement in third_party/simdjson/VENDORING.md, median of repeated runs; evaluation for run 2026-09-03-third-party)",
+      "source": "third_party/simdjson/VENDORING.md (throughput table, section 'Not vendored: Glaze'); results/fastest.json row json_parse_extract (not_vendored)"
+    },
+    {
+      "id": "https://github.com/fmtlib/fmt",
+      "library": "{fmt} 12.2.0 (FMT_COMPILE)",
+      "measurement": "Formatting 20k mixed rows with '{:>8} {:>10.3f} {}', fmt::format_to with FMT_COMPILE took 71.9 ns/row vs 227.129 ns for snprintf (3.16x) and 391.713 ns for std::ostringstream. fmt::format returning a std::string took 140.399 ns, about 35% over format_to into a reused stack buffer (104.134 ns). (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, run 2026-09-02-core)",
+      "source": "results/fastest.json row format_line; bench/bench_format.cpp"
+    },
+    {
+      "id": "https://github.com/fmtlib/fmt",
+      "library": "{fmt} 12.2.0 (floating point)",
+      "measurement": "Writing 20k doubles in shortest round-trip form, fmt (Dragonbox) took 52.679 ns each vs 288.311 ns for snprintf %.17g (5.47x) and 456.477 ns for std::ostringstream. (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, run 2026-09-02-core)",
+      "source": "results/fastest.json row format_double; bench/bench_format.cpp"
+    },
+    {
+      "id": "https://github.com/jk-jeon/dragonbox",
+      "library": "Dragonbox (as embedded in {fmt} 12.2.0)",
+      "measurement": "Measured through {fmt} 12.2.0's built-in Dragonbox path, not the standalone library: 20k doubles to shortest round-trip decimal at 52.679 ns each vs 288.311 ns for snprintf %.17g (5.47x) and 456.477 ns for std::ostringstream, while emitting fewer characters than %.17g. (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, run 2026-09-02-core)",
+      "source": "results/fastest.json row format_double; bench/bench_format.cpp"
+    },
+    {
+      "id": "https://github.com/jemalloc/jemalloc",
+      "library": "jemalloc (via LD_PRELOAD)",
+      "measurement": "Loaded into the same binary with LD_PRELOAD (no rebuild), jemalloc cut new/delete churn (200k allocate/free pairs in unrelated order, 4096 live 48-byte objects) from 11.738 to 4.33 ns vs glibc malloc (2.71x). It also closed a fragmented 200k-node list walk from 13.028 to 3.965 ns per node, so most of the apparent arena locality win was a glibc fragmentation loss. (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, run 2026-09-03-third-party)",
+      "source": "results/fastest.json rows allocator_churn, allocator_locality; docs/allocators.md; bench/bench_allocator.cpp"
+    },
+    {
+      "id": "https://github.com/jemalloc/jemalloc",
+      "library": "jemalloc (vs an arena)",
+      "measurement": "jemalloc did not replace an arena: when 200k nodes were allocated and then all freed, new/delete under jemalloc only improved from 18.682 to 12.63 ns per node, against 3.15 ns for a bump arena (4.0x, derived). std::pmr::unsynchronized_pool_resource stayed at 42.77 ns on churn under jemalloc. (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, run 2026-09-03-third-party)",
+      "source": "results/fastest.json row allocator_bulk_lifetime; docs/allocators.md (tables A and C)"
+    },
+    {
+      "id": "https://github.com/microsoft/mimalloc",
+      "library": "mimalloc",
+      "measurement": "Developer source's allocator selection put mimalloc at about 1.5x glibc malloc on allocate/free churn and about 6x on bulk free (approximate figures, no per-row table published), the same order as jemalloc's measured 2.71x via LD_PRELOAD on the committed churn benchmark. It was not vendored because swapping the allocator with LD_PRELOAD gets that gain without a source dependency. (developer source, private repo; selection measurement cited in docs/allocators.md and results/fastest.json row allocator_churn, run 2026-09-03-third-party)",
+      "source": "docs/allocators.md ('The measurements taken during selection...'); results/fastest.json row allocator_churn (note)"
+    },
+    {
+      "id": "https://github.com/mjansson/rpmalloc",
+      "library": "rpmalloc",
+      "measurement": "Developer source's allocator selection put rpmalloc at about 2x glibc malloc on allocate/free churn (approximate figure, no per-row table published), the same order as jemalloc's measured 2.71x via LD_PRELOAD (11.738 to 4.33 ns). (developer source, private repo; selection measurement cited in docs/allocators.md and results/fastest.json row allocator_churn, run 2026-09-03-third-party)",
+      "source": "docs/allocators.md ('The measurements taken during selection...'); results/fastest.json row allocator_churn (note)"
+    },
+    {
+      "id": "https://gitlab.com/libeigen/eigen",
+      "library": "Eigen 5.0.1 (large vs fixed-size)",
+      "measurement": "Eigen 5.0.1 reached 193.1 GFLOP/s on f32 matmul N=1024 (91% of the host's measured single-core FMA peak of 212.2, 1.42x a hand-written xsimd kernel, 1.85x Blaze), but lost fixed 4x4 multiplies to a naive triple loop (5.87 vs 3.20 ns, naive 1.83x) and 3x3 to hand-rolled xsimd (5.59 vs 2.26 ns, 2.5x). At N=64 hand-rolled xsimd also beat it 1.41x (187.4 vs 133.2 GFLOP/s), and the naive 4x4 win is gcc-specific (clang 18 leaves that loop scalar and Eigen wins there). (developer source, private repo; selection harness in docs/linear-algebra.md, gcc 13 -O3 -march=native, Intel Xeon @ 2.10GHz, run 2026-09-03-third-party)",
+      "source": "docs/linear-algebra.md (Verdicts, 'Where the libraries lose', 'Two more findings'); results/fastest.json row matmul_fixed_4x4"
+    },
+    {
+      "id": "https://gitlab.com/libeigen/eigen",
+      "library": "Eigen 5.0.1 (portable build)",
+      "measurement": "Built without -march=native, Eigen fell from 193.1 to 34.6 GFLOP/s on f32 matmul N=1024 (5.6x loss), while OpenBLAS with runtime CPU dispatch went from 575.9 to 569.2. sizeof(struct{Eigen::Matrix4f; char;}) is 80/96/128 bytes under SSE2/AVX2/AVX-512, so translation units built with different arch flags silently disagree on layout. (developer source, private repo; selection harness in docs/linear-algebra.md, gcc 13, Intel Xeon @ 2.10GHz, run 2026-09-03-third-party)",
+      "source": "results/fastest.json row linalg_portable_build_cost; docs/linear-algebra.md ('Caveats you would otherwise find in production')"
+    },
+    {
+      "id": "https://github.com/axboe/liburing",
+      "library": "liburing / io_uring (batching)",
+      "measurement": "For 256 round trips of 64B through a pipe, io_uring at batch=1 took 515.97 ns per round trip, 1.79x slower than blocking write+read (288.352 ns) with the same 2.0 kernel entries. batch=256 with registered files and buffers reached 158.753 ns (1.82x faster), but going from batch=64 to 256 cut kernel entries 4x and bought nothing (200.81 vs 201.874 ns). (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz with meltdown/retbleed 'Not affected', run 2026-09-03-third-party)",
+      "source": "results/fastest.json row io_uring_batching; docs/networking.md; bench/bench_syscall.cpp"
+    },
+    {
+      "id": "https://github.com/axboe/liburing",
+      "library": "liburing / io_uring (syscall share, SQPOLL)",
+      "measurement": "Kernel entry measured about 100 ns (getppid 100.464 ns), which is ~70% of a pipe round trip (ceiling 3.3x) but only ~11% of a loopback TCP round trip (1833.73 ns, ceiling 1.12x). IORING_SETUP_SQPOLL removed all syscalls yet measured 1.8x slower than the same ring without it and burned an extra core (1.97 CPU-seconds per wall-second). (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz with meltdown/retbleed 'Not affected', run 2026-09-03-third-party)",
+      "source": "results/fastest.json rows syscall_entry_cost, syscall_share_amdahl; docs/networking.md (section 'SQPOLL')"
+    },
+    {
+      "id": "https://github.com/serge-sans-paille/frozen",
+      "library": "frozen (frozen::unordered_map)",
+      "measurement": "On a 92-key C++ keyword set (200k words, 1:8 keyword:identifier) frozen::unordered_map took 18.888 ns per lookup vs 5.322 ns for developer source's compile-time perfect hash table (3.55x slower; 3.5-3.7x across runs) and 29.168 ns for std::unordered_map (frozen 1.54x faster, derived). (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, run 2026-09-02-libraries)",
+      "source": "results/fastest.json row static_lookup_vs_frozen; third_party/parallel-hashmap/VENDORING.md"
+    },
+    {
+      "id": "https://github.com/tessil/robin-map",
+      "library": "tsl::robin_map",
+      "measurement": "Against developer source's SIMD Swiss-table fastcpp::flat_hash_map on 1M uint64 keys, tsl::robin_map was 1.18x faster on hit lookups but 0.49x on misses and 0.82x on build-from-empty, so phmap was adopted instead (absolute ns not published). (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, run 2026-09-02-libraries)",
+      "source": "third_party/parallel-hashmap/VENDORING.md; bench/bench_vs_libraries.cpp header comment; run 2026-09-02-libraries 'covers'"
+    },
+    {
+      "id": "https://github.com/martinus/unordered_dense",
+      "library": "ankerl::unordered_dense",
+      "measurement": "On 1M uint64 keys ankerl::unordered_dense was slower than developer source's own fastcpp::flat_hash_map on all three workloads measured (hit lookup, miss lookup, build from empty), and that map in turn lost lookups to phmap (1.29x on hits, 1.39x on misses). Per-operation figures for unordered_dense were not published. (developer source, private repo; gcc 13.3.0 -O2 -march=native, Intel Xeon @ 2.10GHz, run 2026-09-02-libraries)",
+      "source": "third_party/parallel-hashmap/VENDORING.md; bench/bench_vs_libraries.cpp header comment; results/fastest.json rows flat_hash_map_hit_1m, flat_hash_map_miss_1m"
+    }
+  ],
+  "not_catalogued": [
+    {
+      "library": "pocketfft (github.com/mreineck/pocketfft, cpp branch)",
+      "summary": "Vendored. Forward c2c FFT N=1024: 3,937.485 vs 38,531.323 ns for a 35-line radix-2 (9.79x) and 24x more accurate (1.19e-07 vs 2.91e-06); 6.5x at N=65536, 6.0x at N=1,048,576. N=1002 (2*3*167) costs 4.4x N=1000 (15,216.717 vs 3,470.831 ns). Upstream default POCKETFFT_CACHE_SIZE=0 loses 1.45x at N=1024 and nothing at 65536. Run 2026-09-03-third-party, gcc 13.3 -O3 -march=native."
+    },
+    {
+      "library": "RapidJSON",
+      "summary": "Measured, not vendored: 248 MB/s on the 13.86 MB parse+extract selection corpus, slowest of four (simdjson 5.8x, Glaze 3.2x, yyjson 2.6x faster). Its SIMD is opt-in via -DRAPIDJSON_SSE42, so a plain -march=native build measures scalar code."
+    },
+    {
+      "library": "FFTW 3.3.10",
+      "summary": "Measured only as a ceiling: 1.5x-5.6x faster than pocketfft and the one FFT candidate with runtime CPU dispatch; rejected purely on its GPL-2.0-or-later licence."
+    },
+    {
+      "library": "Meow FFT",
+      "summary": "Beat pocketfft 1.07-1.20x at N=65536 (four builds) and 1.82x at N=64 with equal accuracy, but was 21.1x slower at N=1002 (no Bluestein path) and is stb-style, not header-only."
+    },
+    {
+      "library": "kissfft",
+      "summary": "Lost to pocketfft at every size measured, 15.5x slower at N=1002, and 2.3x less accurate; 8.6x smaller (14 KB)."
+    },
+    {
+      "library": "dj_fft",
+      "summary": "20.7x slower than pocketfft and wrong to 6.38e-05 (round-trip error 1.49e-02 at N=65536); power-of-two only."
+    },
+    {
+      "library": "Blaze 3.9",
+      "summary": "f32 matmul N=1024 104.6 GFLOP/s, 1.85x slower than Eigen, for 34.7 MB across 1,679 headers; 6.02 ns on 4x4 (naive loop 3.20). Most accurate at f32 N=1024 (1.70e-07 vs Eigen 9.37e-07). blaze::StaticMatrix<float,4,4> is 64/128/256 bytes under SSE2/AVX2/AVX-512."
+    },
+    {
+      "library": "OpenBLAS",
+      "summary": "Only linear-algebra candidate with runtime CPU dispatch: f32 matmul N=1024 575.9 GFLOP/s with -march=native and 569.2 with no arch flag (no loss) vs Eigen falling 193.1 to 34.6. Documented, not vendored (not header-only)."
+    },
+    {
+      "library": "Armadillo 14.0.4",
+      "summary": "A BLAS front-end: with ARMA_DONT_USE_BLAS its GEMM is 3.8 GFLOP/s (3.8x slower than a naive -O3 loop) and GEMV 24x slower than naive. Shipped config links OpenBLAS threads (527 GFLOP/s at cpu/wall 3.98; 176 pinned to one thread). 4x4: 5.47 ns."
+    },
+    {
+      "library": "xtensor 0.25",
+      "summary": "No matrix product (xt::linalg::dot lives in xtensor-blas and calls cblas_sgemm); 12.87 ns on 4x4 (naive 3.20); ties the field on AXPY (7.0 GFLOP/s)."
+    },
+    {
+      "library": "Asio (Boost.Asio / standalone)",
+      "summary": "Measured 1.38x slower than raw epoll on identical work, with 7 MB of headers; rejected as a portability abstraction rather than a speed technique."
+    },
+    {
+      "library": "libuv",
+      "summary": "Measured 1.04x over raw epoll; value is cross-platform reach, not speed. Not vendored."
+    },
+    {
+      "library": "bitsery",
+      "summary": "100k-record serializer selection: 32.22 ns serialize / 66.34 ns deserialize vs zpp_bits 24.19 / 63.37 (median of 11). Always little-endian and requires maxSize per container; lost on speed and boilerplate, not correctness."
+    },
+    {
+      "library": "cista",
+      "summary": "62.87 ns serialize / 99.17 ns deserialize (default bounds-checked) vs zpp_bits 24.19 / 63.37. Its advertised zero-copy deserialize (58 ns per 100k-record buffer) is a pointer cast with no data decoded; mode::UNCHECKED edges ~10% ahead of zpp_bits by dropping validation; cista::raw mutates the wire buffer in place."
+    },
+    {
+      "library": "BitMagic",
+      "summary": "Beat CRoaring on dense metrics but lost all of those to std::bitset; sparse footprint 402 KB vs Roaring's 32 KB (12.5x larger); no runtime SIMD dispatch (compile-time -DBMAVX2OPT, latent SIGILL)."
+    }
+  ]
+}

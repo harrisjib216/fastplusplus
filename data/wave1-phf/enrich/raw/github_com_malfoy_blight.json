@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/malfoy/blight",
+  "one_liner": "Minimizer-partitioned, MPHF-based exact k-mer dictionary; indexes human k=31 at 22.3 bits/k-mer versus Pufferfish's 55.6.",
+  "what_it_does": "BLight maps each k-mer of a static set to a unique ID in [0, N) and returns -1 for k-mers outside the set, so it works as an MPHF that also rejects absent keys. The set comes from BCALM2 unitigs or another duplicate-free spectrum-preserving string set in FASTA. The API is one C++ class, kmer_Set_Light: construct it with k, thread count, minimizer size, temp-file exponent and subsampling bits, call construct_index(fasta, wdir), then query whole sequences with get_presence_query (vector<bool>) or get_hashes_query (vector<int64_t>, one entry per k-mer). Pair it with a plain array of get_kmer_number() slots to get a static k-mer-to-value map; dump_disk and a load constructor persist the index, and it is not a drop-in for Pufferfish's mapping index or CLI.",
+  "how_it_is_fast": "K-mers are partitioned into 4^m buckets by minimizer (m=10 by default), and each run of consecutive k-mers that share a minimizer is stored once as a 2-bit-packed super-k-mer. Each partition gets a BBHash minimal perfect hash function. Per k-mer the index keeps only log2(super-k-mers in its bucket) bits that point to its super-k-mer, finds that super-k-mer's start with a BitMagic rank/select bitvector, and decodes it to check the hit, so answers are exact. The paper's breakdown is about 8-11 bits/k-mer for sequence, 4 for the MPHF, 5-13 for positions and under 1 for rank/select. Streaming queries cache the decoded super-k-mer and test the next query k-mers against it before touching the MPHF, and construction splits the input into 4^s temporary files that OpenMP threads process independently, which is why build and batch queries scale with cores.",
+  "when_to_use": [
+    "Static, duplicate-free k-mer set (k <= 32, canonical) from BCALM2 unitigs where RAM is the limit: the paper reports 22.3 bits/k-mer and 7.4 GB peak for the 2.5 billion human k-mers. It also built pine and axolotl (18.3 billion k-mers in 62.4 GB), where Pufferfish could not be built for lack of memory on a 192 GB machine.",
+    "You need a dense k-mer-to-integer ID in [0, N) to index your own side arrays (counts, colors, flags) and you need exact negatives, not the arbitrary value a bare MPHF returns for absent keys.",
+    "Batch-querying whole genomes or read files on a multi-core machine: all human reference k-mers took 155 s vs Pufferfish's 655 s with 12 threads (Table 2 labels the column 16T). The paper's Table 2 footnote says Pufferfish queries cannot benefit from multiple threads.",
+    "Index build time matters and you have about 12 cores: 10 min for human vs 69 min for Pufferfish dense. BLight's single-thread build took 60 min, so the build win needs the threads."
+  ],
+  "when_not_to_use": [
+    "Single-threaded querying: 1,748 s vs Pufferfish's 1,799 s on reference k-mers (parity), and 1,577 s vs 1,260 s on real reads (SRR5833294), so BLight is about 25% slower there.",
+    "You want the smallest index or the fastest single-core lookups: in the SSHash paper's benchmark (i9-9940X, gcc 11.2, one core) BLight b=0 used 20.17 bits/k-mer vs 8.28-9.39 for SSHash, and streamed high-hit reads at 440 vs 253 ns/k-mer.",
+    "Query streams that are mostly misses: the same benchmark measured 1,088 ns/k-mer for BLight on a low-hit stream vs 183 for canonical SSHash, and that paper notes BLight's query time degrades when most queries are negative.",
+    "Sets that change, k > 32, or non-DNA keys: the index is static (rebuild to add k-mers), and the kmer type is uint64_t, with a commented-out __uint128_t typedef for k <= 64 that needs a recompile.",
+    "Counting k-mer abundance from raw reads: in the paper's Table 4, BLight took 19:49 (hh:mm) vs 05:12 for SRC and 15:11 for Squeakr, and won only on peak memory (20.8 GB vs 44.2 and 185.4 GB)."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "zlib and OpenMP; BBHash, BitMagic, LZ4, zstr and robin_hood are vendored in include/ and lz4/",
+    "min_toolchain": "C++11 (the makefile uses g++ -std=c++11 -fopenmp); minimum GCC version not documented",
+    "platforms": "x86-64 only in practice (SSSE3 _mm_shuffle_epi8 via <tmmintrin.h>; the makefile sets -msse4 -march=native); POSIX/Linux (setrlimit, pthread); macOS and Windows not documented",
+    "thread_safety": "Construction and the file_query_* helpers parallelize internally with OpenMP (core_Number parameter, default 1). The file_query_* helpers call get_presence_query/get_hashes_query concurrently on one index, but the methods are non-const and no guarantee for user threads is documented. Building two indexes in one process segfaults (issue #10).",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Input must be 2-line FASTA (one sequence line per record; no multi-line FASTA or FASTQ, per snippet.cpp) with no duplicate k-mers. Construction encodes every character other than uppercase A/C/G as T, while queries map bases with (c/2)%4 (N becomes G), so soft-masked or N-containing input gives wrong answers without any error.",
+    "construct_index needs a working directory that already exists and opens 4^s temporary files (256 by default), so raise ulimit -n. Failures such as a file that cannot be opened call exit() instead of throwing, and the library prints progress and index recaps to stdout.",
+    "Building a second index in the same process segfaults (issue #10, open since 2022-02-17 with no reply).",
+    "get_hashes_query returns MPHF values, not positions, and there is no ID-to-k-mer access call (only a full iterator). An index loaded from disk hard-codes 20 threads for the file_query_* helpers, and the destructor deletes any files named _out0.._out<4^s-1> in the current directory."
+  ],
+  "pick_this_over_siblings_when": "Pick BLight over SSHash or RSHash when build RAM is the tightest limit (the SSHash paper measured 7.5 GB peak to build human with BLight vs 15.4 GB for SSHash) or when you want OpenMP-parallel construction and batch-query helpers in a C++11 codebase that can accept AGPL. Otherwise SSHash (8.28-9.39 vs 20.17 bits/k-mer, 253 vs 440 ns/k-mer streaming in that benchmark) and RSHash, which its entry reports as faster than SSHash, are smaller, faster per core, MIT-licensed and still maintained.",
+  "verified_claims_summary": "The BLight paper (Bioinformatics 37(18):2858) measured human k=31 on a Xeon E5-2420 at 1.9 GHz with 192 GB RAM under Ubuntu 16.04, with compiler and flags unstated. On 12 threads BLight built in 10 min with 7.4 GB peak and 22.3 bits/k-mer vs Pufferfish dense's 69 min, 27.4 GB and 55.59 bits/k-mer; querying all 2.5 billion reference k-mers took 1,748 s vs 1,799 s single-threaded and 155 s vs 655 s multi-threaded, and no std:: container, BBHash or other standalone MPHF was benchmarked.",
+  "status_note": "Stale since 2024-07-06 (last commit was a BCALM2 parsing tweak), with 4 open issues including an unanswered segfault report and a libBlight packaging PR open since 2021. The core is about 1,400 lines of blight.cpp plus vendored headers, small enough to vendor, but AGPL-3.0 carries copyleft to programs that link it, including network services.",
+  "sources_read": [
+    "https://github.com/Malfoy/BLight",
+    "https://github.com/Malfoy/BLight/blob/master/README.md",
+    "https://github.com/Malfoy/BLight/blob/master/blight.h",
+    "https://github.com/Malfoy/BLight/blob/master/blight.cpp",
+    "https://github.com/Malfoy/BLight/blob/master/utils.h",
+    "https://github.com/Malfoy/BLight/blob/master/utils.cpp",
+    "https://github.com/Malfoy/BLight/blob/master/bench_blight.cpp",
+    "https://github.com/Malfoy/BLight/blob/master/snippet.cpp",
+    "https://github.com/Malfoy/BLight/blob/master/makefile",
+    "https://github.com/Malfoy/BLight/blob/master/include/conf.h",
+    "https://github.com/Malfoy/BLight/blob/master/lz4/lz4_stream.h",
+    "https://github.com/Malfoy/BLight/issues/10",
+    "https://github.com/Malfoy/BLight/issues/8",
+    "https://github.com/Malfoy/BLight/issues/7",
+    "https://github.com/Malfoy/BLight/issues/6",
+    "https://github.com/Malfoy/BLight/pull/9",
+    "https://github.com/Malfoy/BLight/commits/master",
+    "https://academic.oup.com/bioinformatics/article/37/18/2858/6209734",
+    "https://doi.org/10.1093/bioinformatics/btac245",
+    "https://academic.oup.com/bioinformatics/article/38/Supplement_1/i185/6617506",
+    "https://github.com/jermp/sshash",
+    "https://github.com/jonsmcode/rshash"
+  ],
+  "confidence": 0.8
+}

@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/jonsmcode/rshash",
+  "one_liner": "Static compressed k-mer dictionary that swaps SSHash's MPHF for rank/select bitvectors; 1.4x faster streaming lookups than current SSHash.",
+  "what_it_does": "RSHash indexes the DNA k-mers (k <= 32; the paper uses only k = 31) of a FASTA/FASTQ sequence set in a static, exact, compressed structure. It answers membership lookups, streaming lookups over every k-mer of a read, access to the k-mer at a text position and, if the index is built with --loc, locate (all text positions of a k-mer). It ships as a CLI (`rshash build|lookup|locate|bench`) around an `RSHash` class in source/rshash.hpp. That class takes seqan3 bitpacked dna4 sequences and 2-bit-packed uint64_t k-mers, so neither its API nor its index files are compatible with SSHash. Unlike SSHash, it can index raw genomes that contain duplicate k-mers, and it returns text positions, not k-mer IDs in [0, n).",
+  "how_it_is_fast": "Like SSHash, it buckets k-mers by random (XOR-seeded) minimizers over a 2-bit-packed copy of the input text. Where SSHash uses a PTHash MPHF, RSHash marks minimizers in an Elias-Fano bitvector R (from Vigna's sux) and ranks into it, then uses a select-indexed bitvector S to find that minimizer's run of text offsets. A negative lookup usually ends after one bit test in R plus a probe of a small hash table for frequent k-mers, with no MPHF evaluation and no text check. Streaming lookups load all text k-mers for the current minimizer into a buffer that is reused for the expected (k-m+2)/2 following k-mers, and extend hits one base at a time along the text. Minimizers that occur more than threshold t times go to up to three further levels with other minimizer lengths and seeds, and the last level is a gtl flat hash set or an Elias-Fano set.",
+  "when_to_use": [
+    "Streaming membership queries of sequencing reads against a static k-mer set with k <= 32 on one x86-64 core. The paper reports 21-142 ns/k-mer, on average 1.4x faster than SSHash5 at about the same bits/k-mer.",
+    "Workloads where most k-mers are absent (screening, low-hit read sets). This is where the gap is largest: kestrel low-hit streaming takes 20 vs 40 ns/k-mer, and random negative lookups on human take 360 vs 464 ns.",
+    "Indexing raw genome assemblies directly, without first building a compacted de Bruijn graph with BCALM2/UST or GGCAT, when you need text positions (locate) rather than k-mer IDs.",
+    "Pipelines that rebuild indexes often. In the paper, builds from preprocessed inputs are on average 60% faster than SSHash5 and use 40% less memory (human: 3:23 and 10.4 GB vs 6:03 and 14.4 GB).",
+    "Research or benchmarking where you can tune minimizer lengths, thresholds and levels per dataset. Use the single-level fast setup for speed, or two or three levels to reach about 8 bits/k-mer on human."
+  ],
+  "when_not_to_use": [
+    "Random single lookups where most k-mers are present. These are about 10% slower than SSHash5 (human: 701 vs 626 ns). On human high-hit reads, streaming is a tie (83 vs 84 ns/k-mer) and the fast index is larger (10.7 vs 10.1 bits/k-mer).",
+    "k > 32, k-mer IDs to index satellite data, weights/abundances, or navigational queries. The minimizer views throw for windows over 32, and k up to 63 is only listed as future work. SSHash offers all of these.",
+    "Non-x86 targets or CPUs without BMI2, and macOS or Windows. shape.hpp includes <immintrin.h> and calls _pext_u64/_pdep_u64 with no fallback, CMake hard-codes -march=native, and only Linux/GCC builds are shown.",
+    "Projects that need a packaged, stable library. There is no library target, no install rules, no releases or tags, and no API documentation. The project is one author's research code with 8 stars.",
+    "Untuned or small inputs, and raw collections of many genomes. Parameters (m, t, levels) are tuned by hand for each dataset, and automatic selection is future work. Building the raw bacterial collection took 73.3 GB, against 29.7 GB for SSHash5 on the preprocessed input."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "seqan3 3.x, sharg-parser and sux (git submodules); gtl v1.2.0 (CMake FetchContent); cereal, which seqan3 pulls in through CPM; vendored kxsort.h and a modified copy of sux's EliasFano.hpp",
+    "min_toolchain": "C++20 and CMake 3.20+. The README builds with g++-14 and the paper used GCC 12.2. The GCC-specific -Wno-interference-size flag is set, and Clang is not documented.",
+    "platforms": "x86-64 with BMI2 only (PEXT/PDEP intrinsics are unconditional and -march=native is hard-coded). Linux is the only documented OS.",
+    "thread_safety": "Not documented. Build and queries are single-threaded (the paper runs on one core and lists parallel lookup as future work). The query methods are non-const, but they allocate their scratch buffers on each call, so concurrent reads of one loaded index look possible but are untested.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "With CLI defaults (--level 2), building a small genome segfaults: when level 1 has no frequent minimizers, filter_freq_minimizers indexes an empty vector (open issue #5). Pass --level 1. The author says the defaults were changed, but main still has level{2} (last main commit 2026-07-31).",
+    "Input is parsed as seqan3 dna4 with dna15 as the legal alphabet. N and other IUPAC codes are silently turned into bases (N becomes A), so N runs in raw genomes or reads become poly-A k-mers instead of being skipped.",
+    "lookup() and streaming_lookup() return only the number of hits in the batch or read, not a result for each k-mer. Each call heap-allocates scratch buffers. locate needs an index built with --loc. build() and load() print progress to stdout, and the CLI exits with -1 and no message on bad arguments.",
+    "Index files are raw cereal binary archives with no version field. The sux submodule and the vendored EliasFano.hpp carry LGPL-3.0+/GPL-3.0 headers (with the GCC Runtime Library Exception), not MIT, so check the licensing before you vendor the code."
+  ],
+  "pick_this_over_siblings_when": "Pick RSHash over SSHash for single-threaded streaming read queries against a static k <= 32 set on x86-64. This is strongest for low-hit workloads, faster and leaner builds, text-position locate, or indexing raw genomes with no de Bruijn graph step. Stay with SSHash if you need k up to 63, k-mer IDs, weights or navigational queries, mostly-positive random lookups, or a packaged library that builds on macOS. Against BLight (AGPL-3.0, multi-threaded, needs a de Bruijn graph), RSHash is MIT-licensed and reports 8.0-10.7 bits/k-mer on human against BLight's 22.3, but the two have never been run head to head.",
+  "verified_claims_summary": "The authors' Bioinformatics 2026 paper ran k = 31 on one core of an AMD EPYC 9454 with GCC 12.2 in release mode (the repo sets -O3 -march=native), using the Pibiri 2022 genomes and read sets. Streaming lookups were on average 1.4x (up to 2x) faster than SSHash5 (commit e65dcb2) and 4.5x faster than SSHash3 (5a13d6a) at similar bits/k-mer. Random negative lookups were about 50% faster and positive lookups about 10% slower, and builds were 60% faster with 40% less memory. No standard-library or MPHF baseline was measured.",
+  "status_note": "Active single-author research code: the last main commit was 2026-07-31, gapped-k-mer work landed on the multishapes branch in September 2026, and open crash issue #5 was answered within days. It is MIT-licensed with 8 stars and no releases, and you use it by building the CLI or copying source/ into a C++20 x86-64 Linux project.",
+  "sources_read": [
+    "https://github.com/jonsmcode/rshash",
+    "https://github.com/jonsmcode/rshash/blob/main/README.md",
+    "https://github.com/jonsmcode/rshash/blob/main/CMakeLists.txt",
+    "https://github.com/jonsmcode/rshash/blob/main/.gitmodules",
+    "https://github.com/jonsmcode/rshash/blob/main/source/CMakeLists.txt",
+    "https://github.com/jonsmcode/rshash/blob/main/source/rshash.hpp",
+    "https://github.com/jonsmcode/rshash/blob/main/source/main.cpp",
+    "https://github.com/jonsmcode/rshash/blob/main/source/lookup.cpp",
+    "https://github.com/jonsmcode/rshash/blob/main/source/build.cpp",
+    "https://github.com/jonsmcode/rshash/blob/main/source/locate.cpp",
+    "https://github.com/jonsmcode/rshash/blob/main/source/io.cpp",
+    "https://github.com/jonsmcode/rshash/blob/main/source/shape.hpp",
+    "https://github.com/jonsmcode/rshash/blob/main/source/util.hpp",
+    "https://github.com/jonsmcode/rshash/blob/main/source/EliasFano.hpp",
+    "https://github.com/jonsmcode/rshash/blob/main/source/flat_map.hpp",
+    "https://github.com/jonsmcode/rshash/blob/main/source/minimiser_views.hpp",
+    "https://github.com/jonsmcode/rshash/blob/main/benchmarks/README.md",
+    "https://github.com/jonsmcode/rshash/blob/main/benchmarks/benchmark_rshash.sh",
+    "https://github.com/jonsmcode/rshash/blob/main/test/CMakeLists.txt",
+    "https://github.com/jonsmcode/rshash/blob/main/test/hashtable.cpp",
+    "https://github.com/jonsmcode/rshash/issues/5",
+    "https://github.com/jonsmcode/rshash/pulls?q=is%3Apr",
+    "https://github.com/jonsmcode/rshash/commits/main",
+    "https://github.com/jonsmcode/rshash/commits/dev",
+    "https://github.com/jonsmcode/rshash/commits/multishapes",
+    "https://pmc.ncbi.nlm.nih.gov/articles/PMC13501323/",
+    "https://github.com/jermp/sshash",
+    "https://github.com/Malfoy/BLight",
+    "https://github.com/seqan/seqan3/blob/main/include/seqan3/alphabet/nucleotide/dna4.hpp",
+    "https://github.com/seqan/seqan3/blob/main/include/seqan3/io/sequence_file/input.hpp"
+  ],
+  "confidence": 0.8
+}
