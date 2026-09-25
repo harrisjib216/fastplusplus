@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/yosh-matsuda/cpp-yyjson",
+  "one_liner": "C++20 JSON DOM library: header-only API over a bundled SIMD-patched yyjson fork; reads 1.4-4.6x, writes 2.6-8.1x faster than RapidJSON.",
+  "what_it_does": "A C++20 interface to the yyjson C library. yyjson::read returns an immutable, reference-counted DOM with STL-like accessors: as_int()/as_string() return std::optional, and arrays and objects are ranges you iterate with range-for. yyjson::value/array/object build mutable documents that serialize with .write() or std::format, and cast<T>() converts to and from C++ types through STL casters, aggregate-struct reflection, a VISITABLE_STRUCT macro or user-defined casters. It does not replace RapidJSON directly: the API is different, and the reference documents no SAX or streaming interface.",
+  "how_it_is_fast": "Parsing and serialization are done by yyjson's DOM reader and writer, which run in a bundled fork of yyjson 0.13.0. The author added x86-64 changes to that fork after upstream declined them because upstream yyjson stays free of SIMD on purpose. The changes: SSE2/AVX2 scanning of strings 16 or 32 bytes at a time for quote, backslash, control or non-ASCII bytes (byte-shuffle table plus movemask); SIMD block copies of long strings on write; one vector compare to skip the predicted indentation of pretty-printed input; SWAR parsing of four decimal digits per step; and madvise(MADV_HUGEPAGE) on glibc blocks of 32 MiB or more, which cuts page faults. The benchmark compiles the backend together with the calling code under LTO; the author measures no overhead from the C++ layer itself.",
+  "when_to_use": [
+    "C++20 code that parses whole documents into a DOM and walks them, or builds documents and serializes them, where RapidJSON or nlohmann-json is the bottleneck. String-heavy documents (gsoc-2018, github_events) and indented ones gain the most.",
+    "x86-64 builds where you can set CPPYYJSON_ENABLE_AVX2=ON and call cpp_yyjson_enable_lto(). This is the configuration that was benchmarked.",
+    "Linux/glibc services that read or write documents of tens of MB. The huge-page advice gives 1.4-1.8x over upstream yyjson there; on other systems, reuse a pool_allocator instead.",
+    "Read-only input such as network buffers or const strings that you cannot pad or overwrite. On such input it read all ten test documents 1.06-1.65x faster than simdjson On Demand, whose time includes the copy and padding it needs.",
+    "Teams that want yyjson-level speed with idiomatic C++: ranges, std::optional accessors, RAII document lifetime and struct reflection for (de)serialization."
+  ],
+  "when_not_to_use": [
+    "You need a SAX, streaming or incremental reader, or bounded memory on very large inputs. The documented API builds a full DOM only.",
+    "Access patterns with many lookups in large objects. Object find/contains/operator[] are O(N), and mutable array operator[] is O(N).",
+    "Toolchains older than C++20 with <ranges> and <format>. The minimum is GCC 13, LLVM 17 or AppleClang 16.",
+    "Non-x86 targets where you expect the headline numbers. The SIMD string and indentation paths are x86-64 only, huge pages work only on Linux/glibc, and no ARM results are published.",
+    "Strict dependency policies. The speed comes from a single-maintainer downstream fork: 14 commits on top of yyjson 0.13.0, written 2026-09-12 to 2026-09-23, that upstream declined to merge (ibireme/yyjson PR #294). Upstream security fixes must be carried over by hand, and the project has 95 stars."
+  ],
+  "integration": {
+    "form": "header-only C++ API plus a static lib (bundled yyjson backend compiled from src/yyjson.c); fully header-only over an external yyjson with -DCPPYYJSON_USE_BUNDLED_YYJSON=OFF",
+    "dependencies": "none with the bundled backend (yyjson.h and field_reflection.hpp ship in include/); external mode needs yyjson >= 0.6.0 (e.g. from vcpkg)",
+    "min_toolchain": "C++20 with <ranges> and <format>; CI tests GCC 13-16, LLVM 17-22, AppleClang 16/17/21, MSVC cl and clang-cl (windows-2022/2025); CMake adds /Zc:preprocessor for MSVC",
+    "platforms": "CI covers x86-64 Linux and Windows and arm64 macOS. SIMD paths are x86-64 only: SSE2 by default, AVX2 opt-in with CPPYYJSON_ENABLE_AVX2=ON, after which the binary requires an AVX2 CPU. Huge-page advice works only on Linux with glibc.",
+    "thread_safety": "Not documented by cpp-yyjson. The bundled yyjson.h says reads are thread-safe when the input is not modified and the allocator is thread-safe or NULL, and that its pool and dynamic allocators are not thread-safe. Documents are reference-counted with std::shared_ptr. The reference shows building separate arrays on worker threads and merging them on one thread.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The default build is not the benchmarked build. AVX2 is OFF unless you set CPPYYJSON_ENABLE_AVX2=ON; it defaults to ON only for the repo's own benchmark build. LTO applies only after cpp_yyjson_enable_lto(target). With Clang 17 or older, or MSVC, every target that links cpp-yyjson then needs that call, or the link fails with 'file format not recognized'.",
+    "Errors are exceptions: read_error for invalid JSON, bad_cast for a failed conversion, std::out_of_range from const operator[] on a missing key, and std::runtime_error when a pool_allocator is too small. Non-const operator[] on a mutable object inserts a default value for a missing key, and emplace does not check for duplicate keys.",
+    "The *_ref classes and string_view results borrow from the document that owns them. Referenced (not copied) strings in built documents must outlive the document. Copying costs 2.5x on array_string, so referencing is faster when lifetimes allow it. stack_pool_allocator must outlive every value created with it.",
+    "Each yyjson::value/array/object owns a separate mutable document, so creating many small ones is expensive. The reference recommends tuple/pair construction and emplace(key, empty_object) over building nested objects separately and inserting them."
+  ],
+  "pick_this_over_siblings_when": "Pick it over yyjson when you want a C++ API (ranges, std::optional, RAII, struct reflection) plus the fork's x86-64 SIMD and huge-page gains: 1.0-1.8x reads and 1.0-2.1x writes vs upstream yyjson 0.12.0. Pick it over simdjson when you also build, mutate or serialize JSON (simdjson has no serializer) or cannot supply a padded buffer. For fixed schemas mapped straight into structs, glaze skips the DOM step and is not in this benchmark, so measure both.",
+  "verified_claims_summary": "Setup: Intel i9-12900K (P-cores only, Turbo off), Ubuntu 26.04, GCC 15.2.0 with -O3 -march=x86-64-v3 and LTO for both cpp-yyjson (AVX2 backend) and header-only RapidJSON 2025-02-26 (default Parse flags, RAPIDJSON_SSE42 not defined). Parsing and visiting every element of ten yyjson_benchmark documents was 1.4x (canada) to 4.6x (github_events) faster than RapidJSON, 2.31x time-weighted; re-serializing was 2.6-8.1x faster, 3.91x weighted. The verifier recomputed every ratio from the committed Google Benchmark logs, and the two largest documents (48.8 MB fgo, 66.4 MB otfcc) dominate the weighted totals.",
+  "status_note": "Active (v1.0.0 released 2026-09-24, CI on GCC/LLVM/AppleClang/MSVC) and MIT-licensed, bundled yyjson fork included, so it is easy to vendor. It is a single-maintainer project with 95 stars, and its SIMD backend is about two weeks old.",
+  "sources_read": [
+    "https://github.com/yosh-matsuda/cpp-yyjson",
+    "https://github.com/yosh-matsuda/cpp-yyjson/blob/main/README.md",
+    "https://github.com/yosh-matsuda/cpp-yyjson/blob/main/docs/benchmark/README.md",
+    "https://github.com/yosh-matsuda/cpp-yyjson/blob/main/docs/reference.md",
+    "https://github.com/yosh-matsuda/cpp-yyjson/blob/main/include/cpp_yyjson.hpp",
+    "https://github.com/yosh-matsuda/cpp-yyjson/blob/main/include/yyjson.h",
+    "https://github.com/yosh-matsuda/cpp-yyjson/blob/main/src/yyjson.c",
+    "https://github.com/yosh-matsuda/cpp-yyjson/blob/main/CMakeLists.txt",
+    "https://github.com/yosh-matsuda/cpp-yyjson/blob/main/test/CMakeLists.txt",
+    "https://github.com/yosh-matsuda/cpp-yyjson/blob/main/test/bench_read.cpp",
+    "https://github.com/yosh-matsuda/cpp-yyjson/blob/main/test/cpp_yyjson_bench_read.log",
+    "https://github.com/yosh-matsuda/cpp-yyjson/blob/main/test/cpp_yyjson_bench_write.log",
+    "https://github.com/yosh-matsuda/cpp-yyjson/blob/main/.github/workflows/tests.yml",
+    "https://github.com/yosh-matsuda/cpp-yyjson/issues?q=is%3Aissue",
+    "https://github.com/yosh-matsuda/cpp-yyjson/issues/5",
+    "https://github.com/yosh-matsuda/cpp-yyjson/issues/23",
+    "https://github.com/yosh-matsuda/cpp-yyjson/pulls?q=is%3Apr",
+    "https://github.com/yosh-matsuda/cpp-yyjson/releases",
+    "https://github.com/yosh-matsuda/yyjson/commits/simd",
+    "https://github.com/ibireme/yyjson/compare/0.13.0...yosh-matsuda:yyjson:simd",
+    "https://github.com/ibireme/yyjson/blob/master/CHANGELOG.md",
+    "https://github.com/ibireme/yyjson/pull/294"
+  ],
+  "confidence": 0.85
+}
