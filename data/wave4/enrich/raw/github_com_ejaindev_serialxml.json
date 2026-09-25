@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/ejaindev/serialxml",
+  "one_liner": "C++26 reflection-based struct-to-XML writer; author measures ~9.6x lower latency than Boost.Serialization/cereal XML archives.",
+  "what_it_does": "Turns any C++ class or struct into an XML std::string with one call, `serial_xml::to_xml(obj, emit_header = true, root_name = \"\")`, and needs no serialize() functions. C++26 static reflection walks the accessible data members (and const getter functions), and C++26 annotations control the mapping: `[[=serial_xml::attribute]]`, `name{}`, `skip`, `iter{}`, `cdata`, `raw`, `format{}`, `unpack`/`no_unpack` and `exclude_on_empty`. std::vector, array, deque, span and similar containers become `<element>` children, empty std::optional members are left out, and other types go through std::format; a separate prettify() adds indentation. It only writes XML: there is no parser or deserializer, so it can replace only the save half of a Boost.Serialization or cereal XML archive.",
+  "how_it_is_fast": "C++26 static reflection (P2996 `std::meta::members_of`/`annotations_of` plus `define_static_string`/`define_static_array`) works out every member's tag text, attribute prefix and handling mode at compile time. At runtime this leaves an unrolled `template for` sequence that memcpy's the precomputed tag literals and uses std::to_chars for numbers, all appended into one pre-reserved (4 KB) std::string through resize_and_overwrite. Escaping compares std::simd vectors against the five XML special characters to build a bitmask, sizes the output with popcount, jumps between hits with countr_zero and copies the clean runs with memcpy. There is no DOM, archive object or ostream. In the benchmark, by contrast, each Boost and cereal call builds an std::ostringstream and an archive, and the pugixml call builds a document tree before printing it.",
+  "when_to_use": [
+    "Write-only export of plain structs to XML text (reports, config dumps, service payloads), where annotations on the struct define the schema and nothing needs to read the XML back.",
+    "Latency-sensitive output of small records with integer and short-string fields: the author's Order payload (about 20 fields) took ~0.8 us per call, vs ~7.9 us with Boost or cereal XML archives and ~1.6 us with a hand-built pugixml tree.",
+    "Codebases already on GCC 16.1+ with -freflection, C++26 and CMake 4.3 `import std` that want to drop hand-written serialize() boilerplate.",
+    "Cases where a bad mapping should fail the build: conflicting annotations (attribute+unpack, attribute+cdata, cdata+raw, cdata+iteration and so on) are static_assert errors."
+  ],
+  "when_not_to_use": [
+    "You need to parse or round-trip XML. There is no deserializer, so it cannot replace the load side of Boost.Serialization or cereal.",
+    "You use any toolchain other than GCC 16 with reflection (Clang, MSVC, older GCC, pre-C++26 code), or your build cannot consume C++ named modules and experimental `import std`.",
+    "Your data has floating-point child elements, strings of 64+ characters, or special characters near the end of strings at least one SIMD vector long. From reading the current source, these paths truncate, corrupt or leave text unescaped, and the tests do not cover them.",
+    "You need versioning or schema evolution, pointer tracking, polymorphism, or binary or JSON formats. None of these are documented.",
+    "You need something production-grade: one author, 0 stars, no tags or releases (CMake version 0.1.0.0), and a StructuralTuple dependency fetched from the main branch of another 0-star repo."
+  ],
+  "integration": {
+    "form": "module (C++ named module `serial_xml` compiled into a CMake STATIC library; consumed via FetchContent or cmake --install + find_package(SerialXML))",
+    "dependencies": "StructuralTuple (EJainDev, MIT; found with find_package or fetched from its main branch with FetchContent); the standard library module (`import std`). Benchmarks, built by default, also need Boost.Serialization, cereal and pugixml v1.16 (fetched); tests need GoogleTest.",
+    "min_toolchain": "C++26 with -freflection; GCC 16.1+ (CI uses gcc:16.2.0); CMake 4.3+ with experimental import std (CMAKE_CXX_MODULE_STD); the presets use Ninja",
+    "platforms": "Not documented. CI only exercises Linux x86-64 with GCC 16.2. Escape scanning uses std::simd at the target's native width, and the code uses std::aligned_alloc.",
+    "thread_safety": "Not documented. to_xml works only on local strings plus a thread_local scratch vector, so from reading the code, concurrent calls on different threads look safe.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Floating-point child elements (from reading the code, not run): in add_child, the floating-point branch returns `combined_size + (ptr - buf)` to resize_and_overwrite without adding original_size. Any float or double emitted as a child element (including inside std::optional or a vector) therefore cuts the whole output down to its first few dozen bytes. Attributes and integers take correct paths. The bug is present both at the benchmark commit (2d679989) and at HEAD, and the benchmark's LineItem::unit_price is exactly such a member.",
+    "Escaping (from reading the code, not run): get_escape_bitmask never checks the last vector-width block of strings that are at least one vector long, because its tail loop runs `simd_size & 7` = 0 times, and for a string exactly one vector long it loads from before the buffer. Separately, copy_with_escapes offsets each 64-bit mask word by `i * 8` instead of `i * 64` and copies at most 63 characters per word. Strings of 64+ characters therefore come out with dropped or duplicated characters and are written past the resized length. The tests only use strings shorter than 40 characters.",
+    "Since 2026-09-05, reflection walks members_of rather than only data members. Any accessible const member function that returns a value and needs no arguments (getters, size(), empty()) is emitted as a child element; use [[=serial_xml::skip]] to suppress it.",
+    "CMake: BUILD_BENCHMARKS and BUILD_EXAMPLES default to ON, so FetchContent consumers must have Boost.Serialization and cereal installed unless they set BUILD_BENCHMARKS=OFF. The README's `release-gcc-16` preset does not exist (the real one is `release-gcc`). -freflection is added through directory-scoped CMAKE_CXX_FLAGS instead of a PUBLIC target option, so consuming targets probably need to add it themselves."
+  ],
+  "pick_this_over_siblings_when": "All catalogued siblings (bitsery, YAS, ser20, Cista++, struct_pack, FBE) are binary serializers benchmarked on binary output. Pick SerialXML only when the output must be XML text, you only ever write it, and you are on GCC 16 reflection; for round-trip, portability across compilers or production maturity, bitsery, YAS, ser20 or cereal itself are safer.",
+  "verified_claims_summary": "In one first-party run on the author's Intel Core 7 240H laptop (DDR5-5600), with a GCC 16 toolchain and unstated flags, a small Order (id, customer, 3-field address, 3 line items, 4 int tags) was serialized 100,000 times. SerialXML took 822 ns per call, vs 7,899 ns for Boost.Serialization xml_oarchive and 7,946 ns for cereal XMLOutputArchive (~9.6x), and 1,585 ns for a hand-built pugixml tree (~1.9x). The outputs are not equivalent (cereal indents by default, and Boost and cereal add archive metadata and go through ostringstream), the harness never checks them, and from reading the source, SerialXML's output for this payload is truncated at the double unit_price element, so its number is not a like-for-like measurement.",
+  "status_note": "Actively developed by one author (repo created 2026-07-12, last commit 2026-09-07, GCC 16.2 CI passing) under MIT, but it has 0 stars, no tags or releases, and correctness gaps in the float and long-string paths, so treat it as experimental and pin a commit if you use it.",
+  "sources_read": [
+    "https://github.com/EJainDev/SerialXML",
+    "https://github.com/EJainDev/SerialXML/blob/main/README.md",
+    "https://github.com/EJainDev/SerialXML/blob/main/include/serial_xml.cxx",
+    "https://github.com/EJainDev/SerialXML/blob/2d679989/include/serial_xml.cxx",
+    "https://github.com/EJainDev/SerialXML/blob/main/benchmarks/xml_serialization_benchmarks.cpp",
+    "https://github.com/EJainDev/SerialXML/blob/main/benchmarks/CMakeLists.txt",
+    "https://github.com/EJainDev/SerialXML/blob/main/tests/test_serial_xml.cpp",
+    "https://github.com/EJainDev/SerialXML/blob/main/tests/CMakeLists.txt",
+    "https://github.com/EJainDev/SerialXML/blob/main/CMakeLists.txt",
+    "https://github.com/EJainDev/SerialXML/blob/main/CMakePresets.json",
+    "https://github.com/EJainDev/SerialXML/blob/main/cmake/SerialXMLConfig.cmake.in",
+    "https://github.com/EJainDev/SerialXML/blob/main/.devcontainer/Dockerfile",
+    "https://github.com/EJainDev/SerialXML/blob/main/.github/workflows/build-and-test.yml",
+    "https://github.com/EJainDev/SerialXML/blob/main/CONTRIBUTING.md",
+    "https://github.com/EJainDev/SerialXML/blob/main/examples/CMakeLists.txt",
+    "https://github.com/EJainDev/SerialXML/blob/main/examples/advanced_mixed.cpp",
+    "https://github.com/EJainDev/SerialXML/blob/main/examples/format_specifiers.cpp",
+    "https://github.com/EJainDev/SerialXML/blob/main/examples/escaping.cpp",
+    "https://github.com/EJainDev/SerialXML/blob/main/examples/stl_containers.cpp",
+    "https://github.com/EJainDev/SerialXML/blob/main/examples/hello_world.cpp",
+    "https://github.com/EJainDev/SerialXML/commits/main",
+    "https://github.com/EJainDev/SerialXML/issues?q=is%3Aissue",
+    "https://github.com/EJainDev/SerialXML/actions",
+    "https://github.com/EJainDev/SerialXML/tags",
+    "https://github.com/EJainDev/StructuralTuple",
+    "https://github.com/USCiLab/cereal/blob/master/include/cereal/archives/xml.hpp"
+  ],
+  "confidence": 0.75
+}
