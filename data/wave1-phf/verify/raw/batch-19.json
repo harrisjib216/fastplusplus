@@ -1,0 +1,80 @@
+[
+  {
+    "id": "private:developer-source#number-parsing-formatting",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "results/fastest.json rows parse_u64 and u64_to_chars (run 2026-09-02-core) give exact ns vs strtoull/snprintf plus std::from_chars/to_chars/to_string/stream alternatives, with gcc 13.3.0, flags, Xeon CPU and commit stated; the bench code (bench/bench_doing_less.cpp bench_parsing/bench_integer_formatting) sits in a PRIVATE repo, so it is not public and cannot be A, and there is no paper or independent suite for B. First-party numbers, so C.",
+    "corrections": {
+      "claimed_speedup": "parse_u64: 2.98x vs strtoull (12.306ns vs 36.713ns); 1.49x vs std::from_chars (18.337ns) and 11.5x vs std::istringstream (141.749ns) (derived from page data). u64_to_chars: 3.12x vs snprintf (16.624ns vs 51.83ns); 1.82x vs std::to_string (30.318ns) and 7.91x vs std::ostringstream (131.548ns) (derived from page data); only ~1.27x vs std::to_chars (21.074ns), which results/fastest.json itself flags: 'HONEST CAVEAT ... Kept as a readable reference implementation, not as an improvement on the standard library.'",
+      "caveats": "PRIVATE repo, readable only via the authenticated gh CLI (private:developer-source), not publicly browsable, so capped below tier A even though results/fastest.json states full compiler/flags/CPU/commit. include/fastcpp/string/parse.hpp:106, inside parse_i64 (`-static_cast<std::int64_t>(magnitude.value)`), overflows on signed negation when the magnitude is 2^63 (INT64_MIN text). CI confirms it: the asan+ubsan job's test_strings fails with 'parse.hpp:106:31: runtime error: negation of -9223372036854775808 cannot be represented in type long int' (run 33828450197 at 2fa7d3d), and that job has failed on all 21 CI runs. That contradicts the README's claim of INT64_MIN round-trips and UBSan-clean tests. parse.hpp has been touched only by its introducing commit 9e6b8a6 (2026-09-02) out of the repo's 13 commits, so it is unfixed. The workload favors SWAR: inputs are std::to_string of uniformly random 64-bit values, so nearly all are 19-20 digits (two full 8-digit words), and short numbers are not measured. parse_u64 is not a drop-in strtoull: no whitespace skipping, sign, base prefix, locale or errno. Shared cloud VM: results/fastest.json's own caveat says absolute ns are not stable across runs, so only ratios within one row are meaningful."
+    },
+    "notes": "Every number checks out against results/fastest.json and bench/bench_doing_less.cpp (20k values, min of 7 samples, 30ms budget per bench_harness.hpp). I fixed three things: marked the cross-alternative ratios as derived; the 'HONEST CAVEAT' quote is in results/fastest.json, not the README; the 'single commit in this repo's history' wording was wrong (13 commits exist, only one touches parse.hpp). The UB claim is verified from the CI job log.",
+    "urls_opened": [
+      "private:developer-source",
+      "private:developer-source/commits/main",
+      "private:developer-source/blob/main/results/fastest.json",
+      "private:developer-source/blob/main/bench/bench_doing_less.cpp",
+      "private:developer-source/blob/main/bench/bench_harness.hpp",
+      "private:developer-source/blob/main/README.md",
+      "private:developer-source/blob/main/LICENSE",
+      "private:developer-source/blob/main/include/fastcpp/string/parse.hpp",
+      "private:developer-source/blob/main/include/fastcpp/string/itoa.hpp",
+      "private:developer-source/blob/main/tests/test_strings.cpp",
+      "private:developer-source/blob/main/.github/workflows/ci.yml",
+      "private:developer-source/blob/main/CMakePresets.json",
+      "private:developer-source/actions/runs/33828450197",
+      "private:developer-source/actions/runs/33828450197/job/100886052547"
+    ]
+  },
+  {
+    "id": "private:developer-source#searching",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "results/fastest.json rows binary_search_cached, binary_search_dram and eytzinger_layout (run 2026-09-02-core) give exact ns vs std::lower_bound with gcc 13.3.0, flags and CPU stated. The bench code (bench/bench_doing_less.cpp bench_binary_search) is in a PRIVATE repo, so this cannot be A, and there is no paper or independent suite for B. First-party numbers, so C.",
+    "corrections": {
+      "workload": "bench/bench_doing_less.cpp bench_binary_search(): 20,000 random-key lower_bound queries over sorted int arrays of 4096 ints (16 KiB, L1-resident) and 4,194,304 ints (16 MiB, exceeds L2). Compares a branchless-cmov lower_bound, a branchless+prefetch variant and an Eytzinger (breadth-first, with prefetch) layout against std::lower_bound; gcc 13.3.0 -O2 -march=native, min of 7 samples.",
+      "caveats": "Developer source is a PRIVATE repo, readable only via authenticated `gh api`, so it is capped below tier A despite full compiler/flags/CPU disclosure in results/fastest.json. include/fastcpp/algo/binary_search.hpp documents the same cmov-vs-branch finding, and the win depends on exact source spelling: `cond ? base+half : base` compiles to a branch on gcc 13 and gains nothing. Only libstdc++/gcc was tested; no libc++ or MSVC STL run. First-party benchmark, not independently reproduced. The repo labels the DRAM row 'UNSTABLE ROW': plain branchless measured 0.72x-1.49x of std::lower_bound over five runs. binary_search.hpp's own comment records the prefetch variant as 'a stable 1.6x', against 1.91x in this row, so the DRAM ratio varies from run to run. Prefetch is a loss on the L1 array (14.877 vs 11.562ns). The Eytzinger-vs-std::lower_bound 5.34x is a cross-row derived ratio. Both rows share run 2026-09-02-core and the identical 4.2M-int workload, but the bench times Eytzinger separately and does not checksum it against std::lower_bound, because it returns a tree index. Eytzinger ties branchless on the 16 KiB array (11.387 vs 11.577ns), needs a build step, and leaves the array unsorted."
+    },
+    "notes": "All numbers (5.83x, 1.91x, 80.132ns, 3.96x vs 317.093ns, derived 5.34x) match results/fastest.json and the bench source. I only added the repo's own instability flags and the missing Eytzinger checksum validation to caveats, and made the workload precise (20k queries, n = 4,194,304).",
+    "urls_opened": [
+      "private:developer-source",
+      "private:developer-source/commits/main",
+      "private:developer-source/blob/main/results/fastest.json",
+      "private:developer-source/blob/main/bench/bench_doing_less.cpp",
+      "private:developer-source/blob/main/bench/bench_harness.hpp",
+      "private:developer-source/blob/main/README.md",
+      "private:developer-source/blob/main/LICENSE",
+      "private:developer-source/blob/main/include/fastcpp/algo/binary_search.hpp"
+    ]
+  },
+  {
+    "id": "private:developer-source#small-buffer-and-strings",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "The results/fastest.json row small_vector (run 2026-09-02-core) gives 1.856 vs 39.6 ns (21.34x) against std::vector<int> with gcc 13.3.0, flags and CPU stated. The bench code (bench/bench_doing_less.cpp bench_small_vectors) is in a PRIVATE repo, so this cannot be A, and there is no paper or independent suite for B. First-party, so C.",
+    "corrections": {
+      "compiler_and_flags": "gcc 13.3.0, -O2 -g -DNDEBUG -std=c++20 -march=native (RelWithDebInfo), commit dfa74f2 (run id '2026-09-02-core')",
+      "caveats": "Repo private:developer-source is PRIVATE and readable only via the authenticated gh CLI, so it is capped below tier A despite full compiler/flags/CPU disclosure. The 4-element workload is close to the best case for inline storage (well under the 8-slot inline capacity), and the results file has no row testing the crossover point where elements overflow to the heap. The baseline is not reserve()d: bench_small_vectors push_backs 4 ints into an empty std::vector<int>, which under libstdc++'s 1->2->4 growth costs 3 heap allocations and 2 relocations per vector, where small_vector does none. So the 21.34x measures malloc avoidance plus regrowth, not one allocation versus none; a reserve(4) or std::array/pmr baseline was not measured. Timings are ns per vector (ops_per_iteration = 50,000), min of 7 samples, on a shared cloud VM where absolute ns are not stable across runs."
+    },
+    "notes": "The 1.856 vs 39.6ns (21.34x) figure matches results/fastest.json and bench/bench_doing_less.cpp exactly. I added the un-reserved std::vector growth caveat (3 mallocs per baseline vector) and the run commit to compiler_and_flags; nothing else needed changing.",
+    "urls_opened": [
+      "private:developer-source",
+      "private:developer-source/commits/main",
+      "private:developer-source/blob/main/results/fastest.json",
+      "private:developer-source/blob/main/bench/bench_doing_less.cpp",
+      "private:developer-source/blob/main/bench/bench_harness.hpp",
+      "private:developer-source/blob/main/README.md",
+      "private:developer-source/blob/main/LICENSE",
+      "private:developer-source/blob/main/include/fastcpp/container/small_vector.hpp"
+    ]
+  }
+]
