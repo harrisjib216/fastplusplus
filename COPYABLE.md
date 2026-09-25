@@ -2282,6 +2282,259 @@ Vectorized C library of libm math functions (sin, cos, exp, log, pow); beats sca
 
 [repo](https://github.com/shibatch/sleef) · [benchmark](https://arxiv.org/pdf/2001.09258)
 
+#### minimal-perfect-hash-functions
+
+##### emphf  `C++`  `Apache-2.0`  `abandoned`  `Tier A`
+
+Hypergraph-peeling (MWHC) minimal perfect hash builder that constructs 5-63x faster than CMPH's CHD, using ~0.5 more bits/key.
+
+**Beats:** CMPH — In the PTHash authors' mphf_benchmark (Table 5 of the SIGIR'21 paper), single-threaded on an Intel i9-9900K with gcc 9.2.1 -O3 -march=native, emphf's in-memory seq builder built an MPHF over 1 billion random 64-bit keys in 374 s at 2.61 bits/key with 199 ns/key average lookup, versus 1972-23746 s, 2.01-2.17 bits/key and 416-419 ns/key for CMPH's CHD at lambda 4-6. At 100 million keys the same table gives 24 s and 147 ns for emphf versus 121-1418 s and 197-204 ns for CHD; the comparison uses the benchmark authors' harness, not emphf's own.
+
+**How:** It uses the Majewski-Wormald-Havas-Czech (MWHC) scheme: one Jenkins 64-bit hash pass gives each key three vertices of a random 3-partite 3-hypergraph with 1.23n vertices, the graph is peeled in linear time, and 2-bit vertex values are assigned in reverse peeling order; a rank over nonzero pairs (one 64-bit count per 512 pairs) makes the result minimal, which is where 1.23 x 2 + ~0.15 = 2.61 bits/key comes from. The in-memory peeler (seq) uses the 'xor trick': each vertex stores only its degree and the XOR of the other endpoints of its edges, so adjacency is a flat array of fixed-size records, not lists. There is no per-bucket displacement search as in CHD, whose build time in the same benchmark grows from 1972 s to 23746 s as lambda goes from 4 to 6. For inputs that exceed RAM, scan_mmap implements the paper's cache-oblivious peeling (sequential scans and sorts, O(sort(n)) I/Os), and HEM splits keys into ~256-key buckets (Botelho-Pagh-Ziviani) that are each peeled in memory.
+
+**Use it when:**
+- Static sets of 10^8-10^9+ keys where single-threaded build time matters and ~2.6 bits/key is acceptable: in PTHash's Table 5 it is the fastest-building row under 2.9 bits/key at both 100M keys (24 s) and 1B keys (374 s).
+- Replacing CMPH's CHD in an offline build step: 24 s vs 121-1418 s at 100M keys and 374 s vs 1972-23746 s at 1B keys, with lookups also 1.4-2.1x faster.
+- Key sets whose peeling working set does not fit in RAM: compute_mphf_scan_mmap builds the same structure from mmapped temporary files; the DCC 2014 paper reports 7.6 billion keys in under 21 hours on one machine.
+- Variable-length string or binary keys: any key type works through an adaptor that returns a byte range, hashed once per lookup.
+- Projects that can vendor and patch 17 small headers and do not need a maintained upstream.
+
+**Skip it when:**
+- Lookup-heavy paths: 199 ns/key at 1B keys (147 ns at 100M) versus 37-101 ns for PTHash configurations and 170 ns for BBHash gamma=1 in the same table; each lookup reads three random 2-bit slots plus a rank block that popcounts up to 16 words.
+- Space-critical uses: 2.61 bits/key versus 1.80 for RecSplit l=8,b=100 and 2.01-2.17 for CHD itself.
+- Multi-core machines where you want a parallel build: every construction path in the source is single-threaded.
+- Dynamic sets or membership tests: the structure is static, and lookup() does no check, so a key outside the build set returns an arbitrary index.
+- Code that needs an active upstream or portability: no commits since 2013-12-06, an open 2015 issue about an endless 'Hypergraph is not peelable' loop on a small set, an unmerged 2024 modernization PR, a Python 2 test script, and no Windows or non-x86 build as written.
+
+**Integration:** source-drop · none beyond the C++ standard library and POSIX (sys/mman.h, sys/time.h, mkstemp for the mmap/HEM paths); build via CMake only for the CLI tools · C++11 (-std=c++11) with GCC or Clang; uses the GNU '?:' extension, __builtin_clzll/__builtin_ctzll and inline asm, so MSVC is out; CMakeLists declares cmake_minimum_required(VERSION 2.8), which CMake 4.0+ rejects unless CMAKE_POLICY_VERSION_MINIMUM=3.5 is set; the PTHash benchmark compiled the headers with gcc 9.2.1 in C++17 mode · Unix only (CMake stops with 'Unsupported platform' otherwise); x86/x86-64 as written because bitpair_vector.hpp includes <xmmintrin.h> (unused); little-endian assumed per a XXX note in base_hash.hpp; optional SSE4.2 hardware popcount via EMPHF_USE_POPCOUNT
+
+**Vs siblings:** Pick emphf over RecSplit (Sux) only when build time outweighs space (374 s vs 936 s at 1B keys, but 2.61 vs 1.80 bits/key at similar ~200 ns lookups), and pick PTHash instead whenever lookup speed matters (37-101 ns vs 199 ns). Its remaining niche is external-memory peeling (scan_mmap) for key sets larger than RAM; none of the sources read here compare it with SicHash, SimdRecSplit, ShockHash or ConsensusRecSplit.
+
+**Gotchas:**
+- common.hpp defines non-inline functions (logger(), nonzero_pairs()) at namespace scope in a header, so including emphf from more than one .cpp gives multiple-definition link errors; mark them inline or keep emphf in one translation unit.
+- Duplicate keys are not detected on the seq path and the retry loop in mphf.hpp is unbounded, so duplicates (or an input that never peels, see issue #1) retry forever; HEM restarts on duplicate hashes with the same result. Deduplicate first. The benchmphf README also reports HEM crashing with std::length_error on sets of ~1000 keys or fewer.
+- Build and lookup must use the same adaptor: stl_string_adaptor hashes the trailing NUL byte, so hashing (s.data(), s.size()) at lookup time returns wrong indices.
+- Construction logs timestamps to stderr unconditionally; seq and HEM need on the order of 30 bytes/key while building (benchmphf README); scan_mmap/HEM create 'mphf.temp.XXXXXX' files in the current working directory; save/load write raw host-endian binaries with no version or checksum.
+
+**Status:** Abandoned since 2013-12-06 (one open issue from 2015, one unmerged PR from 2024), but Apache-2.0 per the LICENSE file and only 17 headers, so it is easy to vendor and patch; last known-good compiler in the sources read is gcc 9.2.1 (C++17 mode, via mphf_benchmark).
+
+[repo](https://github.com/ot/emphf) · [benchmark](https://github.com/roberto-trani/mphf_benchmark/blob/main/README.md)
+
+##### LPHash  `C++`  `MIT`  `abandoned`  `Tier A`
+
+Locality-preserving MPHF for DNA k-mer sets: 0.53-0.87 bits/k-mer at k=63, versus 3.06-3.71 for BBHash and 2.04-2.76 for PTHash.
+
+**Beats:** BBHash (also PTHash) — In the Bioinformatics 2023 paper, five whole-genome SPSS k-mer sets were tested (Yeast 11.6M to Human 2.77G k-mers). At k=63, partitioned LPHash took 0.53-0.87 bits/k-mer, against 3.06-3.71 for BBHash (gamma 1 and 2) and 2.04-2.76 for PTHash, and streaming queries over about 100M Human chr13 k-mers on one core took 22-53 ns/k-mer, against 42-190 ns for BBHash. All code was compiled with gcc 11.2.0 -O3 -march=native and run on an Intel i9-9900K with 64 GB RAM. No C++ standard library container was part of the comparison.
+
+**How:** Each k-mer is keyed by its random minimizer. A run of consecutive k-mers that share a minimizer (a super-k-mer) is stored once, and a k-mer's code is the super-k-mer's prefix-sum offset plus a local rank computed from where the minimizer sits inside the k-mer. As a result, the stored parts are only a PTHash MPHF over the distinct minimizers (about 2/(w+1) of the k-mers, with w = k-m+1) and the offsets and positions, coded with Elias-Fano. The partitioned variant labels each super-k-mer as left-right-max, left-max, right-max or non-max in a 2-bit wavelet tree with Rank9, and skips the offsets or positions that each label already implies. Ambiguous minimizers (1-4% in the paper's datasets) go to a fallback PTHash over their k-mers. In streaming queries the minimizer usually stays the same from one k-mer to the next, so the next code is the previous code plus or minus 1, with no hash-table lookup.
+
+**Use it when:**
+- You need an MPHF, or a k-mer-to-slot index for counts, colors or unitig IDs, over the distinct k-mers of a genome or de Bruijn graph, and memory is the limit. At k=47-63 the paper measured 0.53-1.14 bits/k-mer, below the 1.44 bits/key lower bound for general MPHFs.
+- Lookups arrive as consecutive k-mers from reads or sequences (streaming). At k=63 the paper measured 22-53 ns/k-mer on one core, against 24-72 ns for PTHash-v1 and 42-190 ns for BBHash.
+- You want satellite values to compress well. Consecutive k-mers get consecutive codes, so a value array indexed by the code forms runs of similar values.
+- Sets of millions to a few billion k-mers (11.6M-2.77G tested) on Linux or macOS. The build can spill to disk through --max-memory and -d.
+- Your pipeline already produces SPSS input (BCALM2 + UST or a similar tool), so the preprocessing costs you nothing extra.
+
+**Skip it when:**
+- The keys are not k-mers from a spectrum-preserving string set. LPHash cannot hash arbitrary keys, and the paper itself calls BBHash and PTHash the general-purpose options.
+- Most lookups are in random order. LPHash random lookups measured 110-188 ns/k-mer, against 24-72 ns for PTHash-v1.
+- k is around 31 and lookups are streaming. At k=31, LPHash streaming was slower than PTHash-v1 on 4 of 5 datasets (for example 107 vs 72 ns on Human), and space was 1.18-1.74 bits/k-mer. The maintainer says k < 31 was never tested.
+- You need canonical k-mers, where a k-mer and its reverse complement get the same code. LPHash treats them as different keys (issue #22), and BCALM2/UST output contains only one orientation of each k-mer, so reads from the other strand get arbitrary codes.
+- You need a maintained library with a stable API, or Windows/MSVC support. There has been no main-branch commit since July 2023, there is no library target, and the code depends on __uint128_t and GCC/Clang flags.
+
+**Integration:** source-drop · PTHash (git submodule, which brings its essentials and cmd_line_parser headers) and zlib; kseq.h is vendored. BBHash (external/BooPHF.hpp) is vendored only for the benchmark tools. · C++17 and CMake 3.5+, with GCC or Clang (__uint128_t required). The paper used GCC 11.2.0. With Clang, CMake adds -stdlib=libc++. · The README says it is tested on Linux with GCC and on macOS with Clang, on Intel and ARM (Apple M1). On x86-64, CMake forces -march=native -mbmi2 -msse4.2, so binaries need BMI2 and POPCNT and may not run on other CPUs (issue #21: 'Illegal instruction' on a Xeon E5-2470). Windows is not documented.
+
+**Vs siblings:** Pick LPHash over PTHash, SicHash, ShockHash or ConsensusRecSplit only when the keys are DNA k-mers from a spectrum-preserving string set and k is about 47 or more. In that case it goes below the ~1.44 bits/key floor that general MPHFs approach (for example ShockHash at about 1.56 bits/key), and it beats PTHash on streaming lookups. For arbitrary keys, random-order lookups, or k near 31 (1.18-1.74 bits/k-mer), PTHash (which LPHash uses internally) or the RecSplit family is the better choice.
+
+**Gotchas:**
+- The k-mer width is a compile-time typedef in include/compile_constants.tpd (default __uint128_t, k <= 63). In issue #21, a k=25 build with the default type aborted with PTHash's 'seed did not work', and switching to uint64_t fixed it. The fallback hasher gives different results for the two typedefs, so query with a binary built with the same typedef as the one that built the .lph file.
+- The query tool crashes on any sequence shorter than k (reported in issue #21 and acknowledged). The random-lookup loop is still unguarded on both main and dev. Non-ACGT bases are not supported: streaming mode skips k-mers that contain them, but random mode does not, so the two modes can return different counts.
+- Construction uses external memory: --max-memory defaults to 8 GB, and temp files go to -d (default: current directory). A 955M-k-mer fallback build in issue #21 logged a peak of 28 GB of disk. With 4 threads, the build is slower than BBHash-v1 (Cod 05:30 vs 00:48, Human 07:25 vs 04:13) but faster than PTHash on the three largest sets.
+- Like any MPHF, it returns a valid-looking code for a k-mer that was never indexed (maintainer, issue #22). Add a membership check (for example SSHash) if query reads can contain unseen k-mers.
+
+**Status:** Abandoned by the catalog rule: the last commit on main is 2023-07-19, a restructured dev branch stops at 2023-11-18, and the short-input crash reported in 2023 is still unfixed. It is MIT-licensed, has about 20 source files plus the PTHash submodule, and builds with a C++17 GCC or Clang toolchain, so you can vendor it.
+
+[repo](https://github.com/jermp/lphash) · [benchmark](https://academic.oup.com/bioinformatics/article/39/Supplement_1/i534/7210438)
+
+##### PHast / PHast+ (bsuccinct-rs "ph" crate)  `Rust`  `MIT OR Apache-2.0`  `active`  `Tier A`
+
+Rust minimal perfect hash (PHast/PHast+) giving ~10 ns queries at under 2 bits/key; about 5x faster queries than PTHash.
+
+**Beats:** PTHash — The authors' ALENEX26 paper ran the MPHF-Experiments harness on 50M random 10-50-byte string keys (AMD Ryzen 5600G, 6C/12T; rustc 1.84.1 and gcc 12.2.0 at third-level optimization with native CPU flags; GxHash for the Rust methods). PHast (S=8, lambda=4.3, Elias-Fano) used 1.94 bits/key with 10 ns queries vs PTHash (lambda=5, EF) at 2.11 bits/key and 54 ns. Its single-thread build was about 5% slower (606 vs 577 ns/key) but 3.3x faster on 12 threads (69 vs 231 ns/key). At 500M keys the query gap vs PTHash grows (25 vs 135 ns), and PHast+ builds in 61-140 ns/key at 50M keys; there is no comparison against std or CMPH.
+
+**How:** PHast is a simplified bucket-placement scheme (the CHD/PTHash family). A 64-bit key hash picks a bucket through a plain linear map, and each bucket stores one fixed-width seed, usually one byte. The value is a linear offset floor(alpha*h) plus p(seed, h) inside a small slice of L values (e.g. 1024), so a query is one hash, one byte load, a multiply and a mask, with no nonlinear bucket function, variable-length seed decoding or rank. Buckets with no feasible seed are 'bumped' (seed 0, about 1% of keys) to further levels whose outputs are remapped through an Elias-Fano array. Construction sorts hashes, seeds buckets from a 256-bucket sliding window with a cyclic used/free bitmap, picks the seed that minimizes the values it occupies, and runs in parallel over chunks separated by small gaps. PHast+ switches to additive placement p = (c + s) mod L, so 64 candidate seeds are tested at once by OR-ing bitmap words; this makes construction about an order of magnitude faster.
+
+**Use it when:**
+- Static key sets from millions to hundreds of millions of keys where query latency dominates: at 50M random 10-50-byte string keys PHast answers in 9-12 ns vs 40-54 ns for PTHash and 33-66 ns for PHOBIC.
+- You need about 1.9-2.1 bits/key and fast (re)builds: PHast+ builds at 61-140 ns/key on one thread and 15-26 ns/key on 12 threads at 50M keys.
+- Multi-core construction of the smallest fast variant: regular PHast (S=8, lambda=4.3) goes from 606 to 69 ns/key on 12 threads, and parallel construction adds no query-time partitioning step.
+- Rust code that replaces a read-only HashMap with MPHF + value array (e.g. k-mer or ID indexes). In an informal third-party test (issue #12, u64 keys) PHast + array lookups took 12/20/36 ns at 1M/10M/100M keys, vs 54/80/87 ns for std HashMap and 19/28/30 ns for a GxHash HashMap.
+
+**Skip it when:**
+- The key set changes, or you must reject foreign keys: there is no insert/delete, and `get` has no membership check. A key outside the build set returns an arbitrary index or can panic (open issue #18, no `try_get` yet). Store keys or fingerprints yourself.
+- C++ projects without a Rust toolchain: the API is Rust-only with no C/C++ bindings. The MPHF-Experiments harness had to write its own `extern "C"` shim to call it.
+- Key sets that do not fit in RAM: construction takes a Vec or slice and allocates a 64-bit hash per key. Iterator-based construction is only planned (issue #19), and the external-memory algorithm in the paper is not implemented.
+- Space below about 1.8 bits/key: recursive-splitting methods go lower. PHast needs S=12 and 5,322 ns/key single-thread construction to reach 1.82 bits/key.
+- Hard worst-case query bounds: bumped keys (about 1%) walk extra levels plus an Elias-Fano lookup, and the default configuration has no constant-level guarantee.
+
+**Integration:** crate · bitm, binout, dyn_size_of, seedable_hash (all from the same repo), rayon, voracious_radix_sort, arrayvec; default features add sux, epserde and mem_dbg (aligned-vec on 32-bit targets); optional hash backends: gxhash, wyhash, rapidhash, xxhash-rust, fnv, sip13 (nightly) · Rust edition 2021. `ph` declares no rust-version, but the default `sux` feature pulls sux/epserde releases that require Rust 1.85; `sip13` needs nightly · Optimized for 64-bit CPUs; CI builds only on x86-64 Linux with target-cpu=native. The README says it also compiles on 32-bit targets such as wasm32, but slower. The recommended gxhash backend needs x86 AES-NI+SSE2 or ARM AES+NEON and has no fallback
+
+**Vs siblings:** Pick PHast over PTHash or PHOBIC when query time matters: at 50M keys it answers in ~10 ns vs 33-66 ns at equal or smaller size (1.94 vs 2.11 bits/key for PTHash with EF). Against PtrHash (the closest rival, also Rust), PHast+ at 50M keys is smaller and at least as fast (2.07 bits/key, 12 ns query, 80 ns/key build vs PtrHash 2.12 bits/key, 14 ns, 192 ns/key cubic), but at 500M keys PtrHash matches its queries; choose SIMDRecSplit, ShockHash or ConsensusRecSplit only when space under ~1.8 bits/key matters more than 100+ ns queries.
+
+**Gotchas:**
+- The default hasher is slow unless you pick one. `ph` depends on seedable_hash with default-features off, so without a hash feature `BuildDefaultSeededHasher` is std's SipHash `DefaultHasher`. A user reported PHast as 'strangely slow' in issue #12 because of this. The paper's numbers use the `gxhash` feature, which needs RUSTFLAGS such as `-C target-cpu=native`.
+- `write`/`read` serialization requires the same hasher at load time. std's DefaultHasher algorithm is explicitly unspecified across Rust releases, and gxhash output is stable only within a major version, so pin the hasher before persisting functions.
+- Keys must be distinct (every constructor says so), and construction runs no dedup check. The author warned in issue #2 that duplicate keys make ph (FMPH) construction never finish, so dedupe first.
+- The API is still 0.x and the released crate lags git. crates.io 0.11.0 (Feb 2026) uses `Params` and `with_slice_p_threads_hash_sc`, while git HEAD uses `Conf` and `with_slice_conf_threads_sc`. PHast docs have no examples. Issue #20 reported that 0.11.0's dependency tree would break on a future rustc.
+
+**Status:** Very active: the author commits almost daily as of 2026-09-25, and PHast research (k-perfect, a new paper) is ongoing. It is MIT OR Apache-2.0 and on crates.io (ph 0.11.0, ~878k downloads), but the released crate trails git and the API is still changing.
+
+[repo](https://github.com/beling/bsuccinct-rs) · [benchmark](https://arxiv.org/abs/2504.17918)
+
+##### PTHash  `C++`  `MIT`  `active`  `Tier A`
+
+Header-only C++17 minimal perfect hash library (PTHash/PHOBIC) with 3.1-4.6x faster lookups than BBHash at ~3 bits/key.
+
+**Beats:** BBHash — On the authors' mphf_benchmark harness (1 billion uniformly random 64-bit keys, single core, gcc 9.2.1 -O3 -march=native, Intel i9-9900K with 64 GB DDR3), PTHash looked up keys in 37 ns/key (C-C, 3.23 bits/key) and 55 ns/key (D-D, 2.99 bits/key), versus 170 ns/key for single-threaded BBHash gamma=1 (3.06 bits/key), about 3.1-4.6x faster. BBHash built the set faster (253 s versus 689-1042 s), and these numbers come from a 2022 PTHash commit, not the current lambda-based code.
+
+**How:** It revisits the FCH (Fox-Chen-Heath) scheme: keys are hashed once into buckets (skewed so 60% of keys land in 30% of buckets, or with PHOBIC's 'optimal' bucket function), and the builder processes buckets largest-first, searching for a small integer 'pilot' per bucket that sends all its keys to free slots via a multiply-high reduction of mix(h(x) XOR mix(pilot)). A lookup is therefore one key hash, one random access into a compressed pilot array and a multiply, whereas BBHash can hash the key several times per lookup (once per level). The pilots compress well because small ones are tried first; encodings include compact, dictionary, Elias-Fano, Rice, front/back 'dual' and PHOBIC's interleaved codes. Building with a load factor alpha < 1 makes the pilot search much faster, and minimality is restored by an Elias-Fano 'free slots' array consulted only for keys that land at a position >= n.
+
+**Use it when:**
+- Static sets of millions to billions of keys (64-bit integers, strings, URLs, n-grams) where lookup latency matters most. On 1B random 64-bit keys, a single core looks up in 37-55 ns/key at 3.0-3.2 bits/key.
+- Build-once/query-many deployments. You build offline, serialize with essentials::save, and load or mmap the function at query time.
+- Long variable-length keys. PTHash hashes each key only once per lookup; the paper reports only a 6-26 ns/key increase for q-grams and URLs relative to 64-bit keys.
+- Key sets larger than RAM. single_phf and partitioned_phf have external-memory builders capped by config.ram, and construction can be multi-threaded with config.num_threads.
+- Space/speed tuning. The author's current recommended default is PHOBIC (dense partitioned, C-int encoder, opt bucketer, lambda=7). On 100M keys with 8 threads on a Xeon W-2245, it gave 2.51 bits/key and 33.5 ns/key lookup in an 8.3 s build (author's own benchmark, with no BBHash comparison).
+
+**Skip it when:**
+- Dynamic key sets. The function is static by design, so any insert or delete means a full rebuild.
+- When single-threaded build time matters more than lookup speed. At similar space on 1B keys, BBHash gamma=1 built in 253 s versus 689-1042 s for the fast-lookup PTHash configurations.
+- Tiny key sets (tens to thousands of keys). Fixed metadata dominates: 469 bits/key for 6 keys was reported in issue #88. Several pathological small inputs made the pilot search hang (#14, #67, #87; the maintainer reports these as fixed). The author says MPHFs are meant for at least hundreds of thousands of keys.
+- When you need order preservation or membership tests. Output slots come in arbitrary order, and a key outside the build set still returns a valid-looking slot in [0, n), so you must store and compare keys yourself.
+- 32-bit, embedded or MSVC/Windows targets. The author says it is meant for 64-bit architectures, and the code relies on __uint128_t and POSIX sysconf. Also, PHOBIC's dense_partitioned_phf cannot yet be built in external memory (open issue #90).
+
+**Integration:** header-only · Header-only git submodules: jermp/bits (which pulls in jermp/essentials), jermp/mm_file and xxHash (included inline via xxh3.h). Also pthreads via CMake Threads::Threads. cmd_line_parser is used only by the bundled build/example tools. · C++17 (C++14 is explicitly unsupported, per issue #8) and CMake >= 3.5. CI builds with GCC 11-14 and Clang 16-18 on Ubuntu 24.04; the paper used GCC 9.2.1. · 64-bit only. Tested on Linux/GCC and macOS/Clang, on both x86-64 and Apple ARM (the author reports faster queries on M1 than on the x86 box). On x86-64 Unix, the CMake target adds -march=native -mbmi2 -msse4.2. Windows/MSVC support is not documented.
+
+**Vs siblings:** Pick PTHash when lookup latency dominates. In the same 1B-key table it answers in 37-101 ns/key, versus 199 ns for emphf and 197-220 ns for RecSplit, at a cost of roughly 0.4-1.4 bits/key more than RecSplit's 1.80. Prefer RecSplit, ShockHash or ConsensusRecSplit when you need to get down near 1.5-1.8 bits/key, and LPHash for k-mer sets (the PTHash author himself points k-mer users there).
+
+**Gotchas:**
+- build_configuration defaults to verbose=true, and seed-retry messages go to std::cout regardless, so set config.verbose=false in library code. The default seed is random (up to 10 retries), so builds are not reproducible unless you set config.seed. With a fixed seed, a failed search throws seed_runtime_error instead of retrying.
+- Duplicate keys, or colliding 64-bit hashes, make construction throw 'seed did not work'. The xxhash_64 hasher throws outright above 2^30 keys; use xxhash_128 for large sets.
+- The exported PTHASH CMake target injects -march=native into every consumer target on x86-64 Unix. Binaries built this way may not run on older CPUs; override the flags if you ship binaries.
+- The API and parameters changed after the benchmarked version. mphf_benchmark pins a Dec-2022 commit (b9a0c37) that uses the old 'c' parameter and MurmurHash2, while current master uses 'lambda', xxHash and a Bucketer template argument. Use release v2.0.0 to get 'c' semantics, and re-tune rather than copying the paper's configurations.
+
+**Status:** Actively maintained: the last commit on 2026-07-27 added string_view keys and key mappers, and only one issue is open. It is MIT-licensed and header-only, and adding it as a git submodule is the documented integration path.
+
+[repo](https://github.com/jermp/pthash) · [benchmark](https://github.com/roberto-trani/mphf_benchmark/blob/main/README.md)
+
+##### PtrHash  `Rust`  `MIT`  `active`  `Tier A`
+
+Rust minimal perfect hash with 8-bit pilots (PTHash descendant); queries 2.7-3.8x faster than BBHash, ~7.6x faster than CMPH CHD.
+
+**Beats:** BBHash and CMPH (CHD) in the arXiv 2506.06536 survey; PTHash and PHOBIC (plus CMPH CHD) in the SEA 2025 paper arXiv 2502.15539 — The survey (arXiv 2506.06536v3, Table 6) linked ptr_hash 1.1.0 as a Rust staticlib (Rust 1.85, target-cpu=native) and ran it against C++ BBHash and CMPH CHD (GCC 14.2, -O3 -march=native). The run used 100M random 10-50-byte strings, single-threaded, on an i7-11700 pinned at 2.5 GHz. PtrHash queried in 45-47 ns vs 127-173 ns for BBHash and 356 ns for CHD, and built in 141-358 ns/key vs 157-273 and 1,522 ns/key. The author's SEA 2025 paper (300M strings, 6 threads, i7-10750H at 2.6 GHz, compiler not stated) reports 37 ns (23 ns streaming) vs 77 ns for the fastest PTHash config; no source compares against std::unordered_map.
+
+**How:** It is a PTHash/PHOBIC-style bucket-placement MPHF. Keys hash into buckets, and each bucket stores a 'pilot' whose hash is XORed into the key hash to choose a slot. PtrHash limits pilots to 0..255 and stores them as a plain `Vec<u8>`, with no compact, dictionary or Elias-Fano decoding. When no pilot fits, construction uses cuckoo-style hash-and-evict. The result is that most queries cost one cache-line read plus a few multiply-high range reductions (Lemire's fastrange). With alpha=0.99, the ~1% of slots at or above n are remapped through a plain vector or CacheLineEF, which packs 44 Elias-Fano values into one cache line. `index_stream` hashes keys ahead and software-prefetches pilots 32 iterations early, which the paper shows saturates per-core memory bandwidth. Construction radix-sorts hashes and fills cache-sized parts.
+
+**Use it when:**
+- Static key sets from ~1M to 10^9+ keys (the docs say it was tested up to 10^11) that are queried far more often than rebuilt, e.g. k-mer indexes, string-to-id dictionaries, or dense value arrays indexed by key.
+- Throughput-bound bulk lookups you can stream: on 1e9 integer keys, `index_stream` reaches 8.6-9.7 ns/key, vs 12.5-21.7 ns/key for a plain for-loop (SEA paper Table 1).
+- Tables much larger than L3, where cache misses dominate: the survey measured 1.0 L1 miss per query, vs 4.0-7.4 for BBHash and 11.4 for CHD.
+- You want fast construction without giving up query speed: 141 ns/key single-threaded at 2.99 bits/key (survey Table 6), or 27 ns/key on 6 threads (SEA Table 2).
+- Rust codebases, or C++ projects willing to link a Rust staticlib behind a small extern "C" shim, as MPHF-Experiments does.
+
+**Skip it when:**
+- Space is the priority: at 2.1-3.0 bits/key it is well above Consensus-RecSplit (1.58), SIMDRecSplit (1.81) and PHast (1.85-2.0) in survey Table 6.
+- You need membership tests or a mutable set: it has no insert/delete and no key storage. Any change means a full rebuild, and rejecting non-members needs a separate key or fingerprint array.
+- Pure C++ builds that cannot take a Rust toolchain. There is no C/C++ API. The only C++ port (bassiounix/PtrHash-cc, 3 stars) is an 'as is' rewrite for an LLVM libc RFC; its README says GPLv2 but GitHub detects no license file, and it has no benchmarks.
+- Small sets with the compact config: at 10,000 keys, survey Table 7 shows the cubic/EF config taking 44,300 ns/key to build (the linear/vec config takes 147 ns/key). The README warns that small inputs carry relatively large constant space overhead.
+- You need reproducible builds: construction is not deterministic (issue #36 is open; `build_part` uses an unseeded `fastrand::Rng`), so rebuilding the same keys reassigns indices.
+
+**Integration:** crate · bitvec, itertools, rand 0.10, rand_chacha, rayon, rdst (radix sort), fastrand, tempfile, mem_dbg, colored, log, fxhash, xxhash-rust, prefetch-index; default features add sucds (Elias-Fano) and cacheline-ef; optional: gxhash (StringHash), epserde (zero-copy/mmap serialization), extra hashers · Stable Rust. No MSRV is declared (crates.io rust_version is unset), but the rand 0.10 dependency needs Rust 1.85 (edition 2024). There is no C/C++ API. · x86-64 and aarch64 are built and tested in CI. i686 and armv7 are cross-built only, with --no-default-features (sucds is 64-bit-only and gxhash needs AES). The repo's .cargo/config.toml sets target-cpu=native. Prefetch uses SSE on x86 or PRFM on aarch64 and is a no-op elsewhere. The paper's CacheLineEF lookup uses BMI2 PDEP, which it calls very slow on AMD Zen 2.
+
+**Vs siblings:** Pick PtrHash over PTHash when query latency and build speed matter and Rust is acceptable: 45 vs 76 ns/query and 141 vs 516 ns/key build in survey Table 6, or 37 vs 77 ns in SEA Table 2. Prefer PHast/PHast+ (also Rust) for slightly faster queries at ~2 bits/key (38-44 ns, 1.85-2.07 bits/key), and SIMDRecSplit or Consensus-RecSplit when getting below 2 bits/key justifies 5x+ slower queries.
+
+**Gotchas:**
+- `index_stream` returns an Iterator whose `next()` is `unimplemented!()`. Only fold-based consumers work (`sum`, `for_each`, `fold`); a plain `for` loop over it panics.
+- `new()` panics after 10 failed global seeds; use `try_new()` to get an `Option`. Duplicate keys always fail because duplicate hashes are rejected. `new_from_par_iter` discards the build result, so a failed build is not reported. Regular integer keys broke earlier FxHash-based versions (#19, #21): use `StrongerIntHash` for structured integers, and `StringHash128` for more than 10^9 string keys.
+- The paper's 'Default' config (lambda=3.5, cubic, CacheLineEF, 2.40 bits/key) is now `default_balanced()`, and the crate's `PtrHashParams::default()` is the paper's 'fast' config (~3.0 bits/key). Sharding requires SINGLE_PART=false (`CompactPtrHash`). Setting `params.sharding` on the default single-part types panics in `init`, and the repo's own examples/string_keys.rs does exactly that.
+- Before 2.1.0, safe `index()` could read past the remap array for a key outside the build set (#35). `Packed::index` impls still use `get_unchecked` inside safe fns, and epserde deserialization is `unsafe`. The maintainer says zero-copy CacheLineEF deserialization has alignment issues.
+
+**Status:** Actively maintained by a responsive single author: v2.1.1 shipped 2026-08-27 and the last commit is 2026-08-28. It is MIT-licensed with ~62k crates.io downloads. The 1.x to 2.x break changed type aliases and parameter names and invalidated old on-disk structures, and the benchmarked 1.1.0 predates 2.x. Issue #40 reports 2.x's default_compact building 1.6-1.9x slower at 1M keys because it uses fewer parts.
+
+[repo](https://github.com/RagnarGrootKoerkamp/PtrHash) · [benchmark](https://arxiv.org/abs/2506.06536)
+
+##### Sphinx  `C++`  `BSD-2-Clause`  `stale`  `Tier A`
+
+Dynamic succinct perfect hash index (~4 bits/key) for log-structured KV stores; paper reports ~2x lower latency than DHT/Aleph Filter.
+
+**Beats:** DHT (Delta Hash Table, a dynamic perfect hash table) / RSQF / Aleph Filter / Adaptive Aleph Filter (state-of-the-art fingerprint and perfect-hash indexes for log-structured hash tables / key-value stores) — The PVLDB 18(11) paper measures Sphinx against the authors' own C++ DHT and DHT-expandable and against RSQF, Aleph Filter and Adaptive Aleph Filter (Memento Filter codebase), using ~1.2x10^8 xxhash-hashed int64 keys and uniform queries to existing keys, built with GCC 11.4.0+ -O3 -march=native -mbmi2 on a Xeon W7-2495X (in memory and on a Samsung 980 PRO SSD) and on dual Xeon Silver 4314 with Optane PMem 200. The results are figures only: Sphinx has the lowest in-memory average and p99 query/update latency (average insert is slightly slower unless 4 Reserve Bits are used), a slight edge over DHT-expandable on SSD with uniform keys, and 10-35% speedup at 90-99% cache hit rates; std::unordered_map and static MPHFs were never measured.
+
+**How:** Each 64-slot block is a 256-bit Trie Store: an occupancy bitmap, 1-delimited unary slot sizes, and DHT-style delta tries with one extra delimiter bit, so the number of 1s before any slot's trie is known and the slot is reached with rank (POPCNT) and select (PDEP+TZCNT) over four 64-bit words instead of DHT's bit-by-bit scan, at a cost of about 0.3 bits/entry. A 4 KB L1-resident Decoder, a collision-free 512-bucket table of the 128 most probable trie shapes hashed with shifts and XOR, turns trie decoding into one PEXT of the fingerprint plus a packed-offset lookup; only about 1% of lookups fall back to walking the trie. Overflowing slots go to 4 shared extension blocks per 64-block group instead of chains. Growth splits one block group at a time through an extendible-hashing directory and reuses hash bits already in the tries and the optional Reserve Bits, so expansion rarely rereads keys from storage.
+
+**Use it when:**
+- In-memory key-to-log-address index for an index+log / Bitcask-style KV store on SSD or Optane, where index memory per key limits scale.
+- Queries, updates and deletes of existing keys that must cost exactly one storage read with stable p99 latency (no fingerprint false positives, unlike RSQF/Aleph-style fingerprint indexes).
+- Datasets that grow over time: the index expands one 64-block group at a time rather than being preallocated like DHT or fully rehashed.
+- Skewed workloads with a hot block cache where index CPU cost dominates: the paper measures 10-35% speedup over DHT-expandable at 90-99% cache hit rates.
+- x86-64 Linux servers with fast BMI2 (Intel Haswell or newer, AMD Zen 3 or newer).
+
+**Skip it when:**
+- As a general in-memory hash map: it stores no keys, so every hit reads the backing log to get the key and value, and you must provide the log and its garbage collection yourself.
+- Static key sets: the catalogued static MPHFs use about 2-3 bits/key and need no backing log. Sphinx's Trie Store alone is about 4 bits/key before payloads, and with uncompressed 32-bit pointers the payloads dominate. The paper's ~20 bits/key total depends on DHT-style pointer compression.
+- Insert-heavy or miss-heavy workloads in the default configuration: every insert (read-before-write) and every query for an absent key costs one storage read unless you enable Reserve Bits (the Sphinx-4 variant with 4 bits).
+- ARM, Apple Silicon, Windows/macOS, or AMD CPUs before Zen 3, where PDEP/PEXT are microcoded at about 18 cycles instead of 3. The code includes <x86intrin.h>, builds with -march=native, and the paper lists an ARM port as future work.
+- Production use that needs a stable API: this is a research artifact configured through global #defines and Traits structs, with hard-coded benchmark paths, no releases, no CI and no API docs.
+
+**Integration:** source-drop (header templates exposed as CMake INTERFACE targets, plus one small static lib holding the Decoder table; no install target or package) · Vendored in lib/: xxhash (XXHash64) and moodycamel ConcurrentQueue; Catch2 for tests; Memento filter and a YCSB Zipfian generator for benchmarks only; links -latomic · C++23 (CMake passes -std=c++23 to GCC); GCC 11.4.0+ and CMake 3.22.1+ per benchmark/reproducibility.md (CMakeLists sets an RPATH to /usr/local/gcc-14.1.0); Clang and MSVC not documented · x86-64 with BMI2 (PDEP/PEXT), POPCNT and LZCNT/TZCNT; Linux as written (SSDLog uses O_DIRECT, posix_fallocate, sysconf); no ARM
+
+**Vs siblings:** Every catalogued sibling (PTHash, PtrHash, RecSplit, ShockHash, PHast, etc.) is a static MPHF: it is built once over a fixed key set and reaches roughly 2-3 bits/key with tens of ns per query (e.g. PTHash 37 ns at 3.23 bits/key). Pick Sphinx only when keys are continually inserted, updated and deleted and each key already has a record in storage that can be read to confirm it; for a fixed key set, PtrHash or PTHash is smaller, simpler and needs no backing log.
+
+**Gotchas:**
+- A read does not check that the returned log entry's key equals the queried key. For an absent key (with Reserve Bits off) it returns whatever record that slot points to, so compare kv.key yourself.
+- Reads modify the index: with Reserve Bits enabled, a read rewrites that entry's reserve bits from the fetched key. Concurrent readers of one block group therefore need the per-group mutex, which is taken only under ENABLE_MT.
+- Behaviour depends on global macros in config/config.h (IN_MEMORY_FILE, ENABLE_XDP, ENABLE_MT, ENABLE_BP_FOR_READ) and on compile-time Traits (key and payload types, reserve bits, DHT modes). The Directory constructor starts maxThreads worker threads that spin on std::this_thread::yield() until destruction. A failed remove throws std::invalid_argument.
+- Keys must be fixed-size and trivially copyable (default int64_t). They are hashed as raw bytes with XXHash64 under two seeds, and updates identify a key by that 128-bit digest. The bundled SSDLog is a benchmark-grade, fixed-size circular log with no garbage collection that detects Optane by the substring 'optane' in the file name. The README build steps omit the `cmake ..` configure step.
+
+**Status:** Stale BSD-2-Clause research artifact (last commit 2025-08-31, only a paper link; no releases or CI; a third-party 'Simd' PR closed unmerged in April 2026) that is copyable once you strip the benchmark scaffolding, last documented with GCC 11.4.0.
+
+[repo](https://github.com/sfmqrb/sphinx) · [benchmark](https://www.vldb.org/pvldb/vol18/p4424-maghrebi.pdf)
+
+##### Sux4J (GOV / GOV3Function minimal perfect hash)  `Java`  `LGPL-2.1-or-later OR Apache-2.0`  `active`  `Tier B`
+
+Java GOV minimal perfect hash (F3 linear systems, ~2.2 bits/key) with C lookup; about 2x faster lookups than CMPH's CHD.
+
+**Beats:** CMPH (CHD algorithm) — PTHash paper Table 5 (SIGIR'21, mirrored in mphf_benchmark): 10^9 uniformly random 64-bit keys on one core of an i9-9900K (gcc 9.2.1 -O3 -march=native). GOV averaged 175 ns/key over every input key at 2.23 bits/key, vs 416-419 ns/key for CMPH's CHD (lambda=4-6, 2.01-2.17 bits/key), about 2.4x; at 10^8 keys it was 110 vs 197-204 ns/key, about 1.8x. GOV was built in Java and neither paper names its lookup harness (presumably Sux4J's C code). The RecSplit paper (i7-7770, gcc 8.1.1, Java 12, 128-bit random keys) independently measured 210 vs 444-447 ns/key at 10^9 keys.
+
+**How:** Each key is hashed once with SpookyHash into a 128-bit signature and assigned to a bucket of about 1,500 keys. Each bucket is a random 3-regular linear system over F3 (Genuzio-Ottaviano-Vigna, SEA 2016), with about 10% more variables than equations, solved by hypergraph peeling plus lazy Gaussian elimination. A lookup reads the bucket's offset, then three 2-bit values whose sum mod 3 picks the key's vertex, then ranks that vertex with a broadword popcount of nonzero 2-bit pairs. After the offset read, all memory access stays inside one bucket's ~1,650 cells (~52 words), and construction scales because signatures are bucket-sorted on disk and buckets are solved in parallel.
+
+**Use it when:**
+- JVM services that need a static map from keys to dense IDs (0..n-1) for 10^7 to 10^9+ strings, byte arrays or longs at about 2.2 bits/key, e.g. to index a term dictionary or an ID column into flat arrays.
+- Key sets larger than RAM. BucketedHashStore bucket-sorts 128-bit signatures into disk segments and needs under 0.75 bits/key of main memory while sorting. Each ~1,500-key bucket is then solved on its own.
+- Building offline in Java and querying from C/C++: dump() the function, then call mph_get_uint64_t, mph_get_byte_array or mph_get_uint128_t from c/mph.c.
+- Replacing CMPH's CHD when 0.06-0.22 extra bits/key is acceptable. In return you get about 2x faster lookups and 2.3-27x faster single-core construction (875 s vs 1,972-23,746 s at 10^9 keys).
+- Cases that also need a membership test: signed(w) stores a w-bit signature per key, so a non-member returns -1 except with probability 2^-w.
+
+**Skip it when:**
+- Lookup speed is the priority in native code. In the same Table 5 (10^9 keys), PTHash answers in 37-64 ns/key and BBHash gamma=2 in 143 ns/key, vs 175 ns/key for GOV.
+- Space is the priority. CHD lambda=6 (2.01 bits/key) and RecSplit l=8, b=100 (1.80 bits/key at 204 ns/key, 936 s to build) are both smaller than GOV's 2.23 bits/key.
+- Pure C/C++ or Rust projects that must build the function at runtime. Construction exists only in Java, so you need a JVM plus a dump/load step.
+- Dynamic sets. The structure is static, so any insert or delete means a full rebuild.
+- Small, cache-resident sets. At 10^6 keys (RecSplit paper Table 1), GOV's 58 ns/key trails BBHash gamma=1 (33 ns) and RecSplit l=5, b=5 (47 ns), and its lead over CHD (91-92 ns) shrinks to about 1.6x.
+
+**Integration:** module: Maven Central jar it.unimi.dsi:sux4j, latest release 5.4.1 (March 2023). The optional C lookup is a source-drop: c/mph.c, mph.h, spooky.c, spooky.h. · Java: fastutil, dsiutils, slf4j-api (logback at runtime), JSAP, commons-math3, commons-collections4, commons-lang3. C lookup: only libc/libm. · Java 9+ (CHANGES 5.2.3; the POM targets 1.9), built with Ant + Ivy. The C lookup needs GCC/Clang extensions (__uint128_t, __builtin_popcountll, __builtin_clzll); comp.sh uses gcc -O3 -march=native. · Any JVM. The C lookup needs a 64-bit GCC/Clang target with __uint128_t. dump() writes native byte order, so load the file on a machine with the same endianness. The optional USE_MMAP path uses Linux MAP_HUGETLB.
+
+**Vs siblings:** Pick GOV when you are on the JVM and want a Maven-packaged MPHF that scales past RAM, with optional signatures. minperf, the other Java sibling, claims 'very similar' performance but calls itself work in progress and was last pushed in 2021. In native C/C++, Table 5 shows PTHash at 37-64 ns/key, and RecSplit (Sux) at 1.80 bits/key with similar lookup (204 ns) and build time (936 s), so GOV mainly makes sense there if Sux4J already builds your functions.
+
+**Gotchas:**
+- A key outside the build set gets an arbitrary index in [0, n), not an error, unless you build with signed(w). containsKey() always returns true.
+- You cannot choose the indices. Values stored in a BucketedHashStore passed to the builder are ignored (issue #3). For key-to-value static functions use GOV3Function or GOV4Function, which are not MPHFs.
+- The C lookup code does no validation. Nothing checks that the dump matches the key type or transformation strategy: the uint64_t tests expect RAW_LONG, the byte_array tests RAW_BYTE_ARRAY. Also, the c/ sources are LGPL-3.0-or-later, not the Java code's LGPL-2.1+/Apache-2.0.
+- Java getLong() still allocates a long[2] and an int[3] per call; a user flagged the GC pressure in issue #2. Construction logs heavily unless you configure the SLF4J backend (issue #11). It needs a temp directory for disk segments and throws IllegalArgumentException if duplicates persist after several rebuilds.
+
+**Status:** Still receiving commits (C benchmark harnesses in May 2026), but the last Maven Central release is 5.4.1 from March 2023. The jar is the practical way in, and the C lookup files are small enough to vendor.
+
+[repo](https://github.com/vigna/Sux4J) · [benchmark](https://github.com/roberto-trani/mphf_benchmark)
+
 #### number-parsing-formatting
 
 ##### Boost.Charconv  `C++`  `BSL-1.0`  `active`  `Tier A`
@@ -2644,6 +2897,260 @@ Header-only B+ tree implementing STL's map/set/multimap/multiset; beats libstdc+
 **Status:** Stale: last commit 2025-01-10 per the record, and the only open GitHub issue I found (#62) concerns the unrelated d_ary heap, not btree. BSL-1.0 licensed (unlike the GPL-3.0 predecessor stx-btree) and small enough to vendor as a handful of headers — copyable per the record's usability field.
 
 [repo](https://github.com/tlx/tlx) · [benchmark](https://panthema.net/2007/stx-btree/speedtest/)
+
+#### perfect-hash-static-tables
+
+##### fph-table (Flash Perfect Hash)  `C++`  `Apache-2.0`  `active`  `Tier A`
+
+Header-only C++17 dynamic perfect-hash map/set with unordered_map-like API: lookups 1.2-7.6x faster than std::unordered_map, inserts far slower.
+
+**Beats:** std::unordered_map — The author's own hashtable-bench (January 2022 snapshot) measured average ns per hit find() in a throughput loop on uint64 keys where only ceil(log2 n) bits vary, with tables rehashed at max_load_factor 0.9 and n from 32 to 10^7. DynamicFphMap + SimpleSeedHash took 2.04-30.98 ns vs 10.53-66.43 ns for std::unordered_map + std::hash on a Threadripper 3990X (GCC 10.2, libstdc++, Release -O3), 2.1-7.6x faster than the best std::unordered_map pairing; on an M1 Max (Apple clang 13.1.6, libc++, -mcpu=native) it took 1.63-14.79 ns vs 2.43-45.01 ns for the best pairing (robin_hood::hash), 1.2-7.3x, while libc++ std::unordered_map + std::hash timed out on this dataset at larger sizes.
+
+**How:** It is derived from the FCH minimal-perfect-hash algorithm (Fox, Chen, Heath 1992): keys are grouped into about c*n/(log2 n + 1) buckets (default c = 2.0), and each bucket stores an offset plus one selector bit, found by a randomized seed search at build time, so that every key lands in a distinct power-of-two slot. A lookup is one seed hash, two multiply-and-shift steps with per-table random seeds, one read from the small bucket-parameter array (about 2 bits per key, so it stays in cache), and one slot read followed by a single key compare, with no probe loop. FPH drops FCH's two-step hash selection to remove a branch (paying for it with slower builds), and DynamicFph marks empty slots with a random 'filler' key instead of an occupancy bitmap, avoiding an extra memory load. MetaFph instead adds 1 byte of metadata per slot (7 hash bits plus a position marker), so most misses are rejected without touching the slot array.
+
+**Use it when:**
+- Read-mostly or static key sets: build once with the range constructor, InsertNoDuplicated() or Build(), then run many find()/contains() calls, e.g. ID-to-record, symbol or routing tables.
+- 64-bit integer keys with skewed or structured bit patterns. The default SimpleSeedHash is the identity for integers and the table mixes with random seeds itself. In the author's benchmark on keys where only ceil(log2 n) bits vary, it beat every std::unordered_map + hash pairing 2.1-7.6x on a Threadripper 3990X from n=32 to 10^7.
+- Tables of roughly 10^3 to 10^6 entries that fit in L2/L3. The author's 2023 rerun has DynamicFphMap fastest for hit lookups at 8,192 to 3.1M elements on Xeon E-2388G and 8,192 to 1.2M on M1 Max.
+- Lookup-bound code that only needs a key-to-unique-index mapping (GetSlotPos, which skips the slot fetch), or whose keys are guaranteed present (GetPointerNoCheck, no compare or branch).
+- Large tables with many failed lookups: use fph::MetaFphMap, whose metadata array rejects most misses without reading the slots. The 2023 rerun has it fastest for misses above 6,000 elements on Rocket Lake and above 200,000 on M1 Max.
+
+**Skip it when:**
+- Insert- or erase-heavy workloads. In the same benchmark CSVs on the 3990X, insert-with-reserve at n=10^7 cost about 2,517 ns per element vs 193 ns for std::unordered_map. Erase+insert at n=150,000 cost 2,176 ns vs 59 ns, and at 10^7 it timed out. An insert that breaks perfectness re-places its bucket or rebuilds the whole table.
+- Very small tables on x86 and very large hit-lookup tables at default load factor. ska::flat_hash_map + std::hash beat it below about 1,000 elements on the 3990X, and in the 2023 rerun again when data fit in L2 and once it exceeded L3. For large-n misses, absl::flat_hash_map beat DynamicFphMap in the 2022 data.
+- Key sets you cannot vet. If the seed search fails, which duplicate keys passed to Build()/InsertNoDuplicated() or poorly distributed hashes can cause, construction throws std::invalid_argument ('timeout when try to build fph map'), or calls std::abort with exceptions disabled. With 64-bit hashes of long keys (strings), the README warns collisions become likely beyond about 10^9 keys.
+- Code that needs std::unordered_map's reference stability, node handles (extract/merge), insert_or_assign, or stateful hashers and allocators. None of these are provided.
+- Maturity-sensitive deployments. The header logic has not changed since August 2023, the project has 55 stars, and its own CI docs admit an unfixed defect that trips an assert at -O0 and becomes heap corruption under -DNDEBUG, plus a known defect that crashes on x86-64 but passes on arm64. No issue describes either one.
+
+**Integration:** header-only · none (standard library only); optional CMake INTERFACE target fph::fph_table via add_subdirectory · C++17. CI compiles with GCC and Clang at C++17/20/23 on Ubuntu 24.04 (GCC 13, Clang 18) and Apple clang on macOS 15. The README says MSVC compiles but it is not in CI. The published benchmarks used GCC 10.2 and Apple clang 13.1.6. · Portable scalar C++ with no SIMD intrinsics. CI covers Linux x86-64, Linux arm64 and macOS arm64 (LP64). Windows/MSVC compiles per the README but is untested.
+
+**Vs siblings:** Pick fph-table over the constexpr-oriented siblings (constexpr-phf, ConstexprCore/perfect_hash) and frozen's small fixed tables when keys are only known at run time, number from thousands to millions, or need occasional insert/erase behind an unordered_map-style API. Pick it over cxxmph's mph_map for integer keys: fph reports 2-7x over std::unordered_map, while cxxmph claims 10-50% on large URL-string sets.
+
+**Gotchas:**
+- The const operator[] on DynamicFphMap is noexcept and skips the key check (it calls GetPointerNoCheck). For an absent key it silently returns another element's value or reads an unconstructed slot. Use find() or at() unless the key is known to be present.
+- SeedHash and KeyEqual are static constexpr members, so they must be stateless and constexpr default-constructible, and a hasher instance passed to the constructor is ignored. Slot and bucket storage use default-constructed rebound allocators, so stateful allocators are not honored.
+- Empty slots in the Dynamic variants hold copies of a randomly generated filler key. Every unused slot therefore holds a constructed key (a random short string for std::string keys), and custom key types must supply a RandomKeyGenerator. MetaFph* avoids this with its metadata byte.
+- Pointers and references can be invalidated by any insert (bucket re-placement or full rebuild), not only by rehash. begin() moves to the most recently inserted or erased element, so iteration order shifts after every modification. The default max_load_factor is 0.6 (settable up to 0.98) over power-of-two slot counts, and the default BucketParamType=uint32_t caps capacity at 2^31 slots.
+
+**Status:** Header logic frozen since August 2023, but the author added an Apache-2.0 license and an extensive CI suite (compile matrix, ctest, ASan/UBSan, asm/callgrind lookup gates) in August 2026, so it is lightly maintained, and at two self-contained headers of about 4k lines each it is easy to vendor and pin.
+
+[repo](https://github.com/renzibei/fph-table) · [benchmark](https://github.com/renzibei/hashtable-bench)
+
+##### frozen  `C++`  `Apache-2.0`  `active`  `Tier A`
+
+Header-only C++14 constexpr immutable set/map/unordered_map built on compile-time perfect hashing; beats std::unordered_map on fixed key sets.
+
+**Beats:** std::unordered_map (arXiv 2602.22506 demos); std::set and std::unordered_set in the author's first-party 2018 Quarkslab microbenchmark — The static_maps preprint (arXiv 2602.22506) timed construction plus lookup for frozen::unordered_map (frozen::basic_string keys, built at compile time) against std::unordered_map<std::string_view> (libstdc++, built at runtime inside the timed region). Setup: g++ 15.2.1 -O3 -march=native on a Core i5-1240P laptop. Results: 44.9 vs 89.6 us for 1,024 individually timed lookups in an 84-key map (~2.0x); 1365.5 vs 1746.8 us translating 65,536 codons through a 64-key map (~1.28x); 15804.5 vs 21228.1 us for 258,688 value updates in a 4,042-key map (~1.34x).
+
+**How:** unordered_* uses a two-level perfect hash (not minimal) in the hash-and-displace style of Steve Hanov's 'Throw away the keys', built entirely in constexpr. Keys are seed-hashed into M buckets, where M is the next power of two at or above N (doubled below 32 keys). Buckets are processed largest first. A singleton bucket stores its item index directly in table G. A larger bucket gets a per-bucket seed, found by random search with minstd_rand, that puts all its items into free slots of table H. A lookup is one hash into G, at most one more seeded hash into H, then a single key comparison: no probing, no chains, no heap. frozen::set and frozen::map are sorted arrays searched by a fully unrolled branchless binary search.
+
+**Use it when:**
+- Lookup tables whose key set is fixed at build time: keyword/command/opcode dispatch, enum<->string, symbol tables, HTML entities (all shipped as examples). Tens to a few thousand keys.
+- You need lookups in constant expressions (static_assert, template arguments, constexpr functions), or want constant-key lookups folded away entirely.
+- You want no static-initialization cost and no heap: declare constexpr or constinit and the table goes into the binary. FROZEN_NO_EXCEPTIONS (or -fno-exceptions) turns at()'s throw into std::abort for embedded builds.
+- Keys are fixed but values change at runtime, like the preprint's 4,042-key ticker->price table (~1.34x vs std::unordered_map). Use a constinit map and write through at() or find()->second.
+- Ordered lookups (lower_bound/upper_bound, sorted iteration) over immutable data, where frozen::map/set replace a node-based std::map/std::set with a sorted array.
+
+**Skip it when:**
+- Keys are only known at runtime, or the set changes: there is no insert, erase or rehash. Use a runtime hash map, or a runtime-built PHF such as fph-table or cmph.
+- Large key sets. In the preprint, frozen took 21.1 s to compile the 4,042-key demo vs 1.5 s for std::unordered_map. Big tables hit constexpr step limits (-fconstexpr-steps / -fconstexpr-ops-limit), and issue #76 (open) reports VS2017 failing at 500 entries.
+- Raw lookup throughput is the goal. static_maps ran at 45-97% of frozen's time in the same preprint, and the ConstexprCore/perfect_hash benchmark shows frozen::unordered_map at 0.16 vs 1.08 billion queries/s.
+- Long string keys on a hot path. The default string hash is a byte-at-a-time FNV-1a-style loop and can run twice per lookup (G then H), so cost grows with key length.
+- MSVC with warnings-as-errors: the constexpr hash triggers C4307 'integral constant overflow' warnings (#68, #178). Also, wasm32 has an open, unreproduced report of failed lookups (#198).
+
+**Integration:** header-only · none (standard library only) · C++14. README: Clang 5+, GCC 6+ (slow constexpr), VS2017; GCC 5 unsupported. CI builds GCC 10-13, Clang 13/14/16, AppleClang and MSVC at C++14/17/2a. std::string_view keys need C++17, constinit needs C++20. CMake 3.10+ for the optional install/find_package path. · any (portable C++, no intrinsics). CI runs on Linux, macOS and Windows; the Windows job builds but does not run the tests. One open, unconfirmed wasm32 lookup bug report (#198).
+
+**Vs siblings:** Pick frozen over ConstexprCore/perfect_hash or constexpr-phf (Kronuz) when you want the long-established, C++14-compatible option with a full std-like container family, including ordered map/set with lower_bound. Pick those (or static_maps) when lookup throughput matters most: ConstexprCore's benchmark has frozen::unordered_map at 0.16 vs 1.08 billion queries/s. Unlike the gperf-style generators (triehash, strager/perfect-hash-tables), frozen needs no external build step.
+
+**Gotchas:**
+- Duplicate keys are not reliably caught. The Step 1.5 check in bits/pmh.h compares items[0] with items[i] rather than with the members of each bucket, so most duplicates make the seed search spin. Under constexpr that shows up as a constexpr step-limit error; a map built at runtime loops forever (#181).
+- A map that is neither constexpr nor constinit may be built at runtime, with the seed search running at static-init or first use. Use constinit (C++20), as examples/value_modification.cpp does, to force compile-time construction and get an error when it fails.
+- There is no operator[]. at() throws std::out_of_range, or calls std::abort when exceptions are off. Custom hashers must accept a seed and should be close to pairwise-independent; a weak hash does not break correctness but makes compiles slow or exceed constexpr limits.
+- The default key type frozen::string is a non-owning pointer+length view. std::string_view keys work only if you include the internal header frozen/bits/elsa_std.h, which the README does not mention. The version macros read 1.1.1 and the CMake project reads 1.1.0, while the latest tag is 1.2.0.
+
+**Status:** The README says the library is in maintenance mode: it still merges cleanups (last commit 2026-09-23; 1.2.0 tagged 2024-06). It is Apache-2.0 and header-only, so you can copy include/frozen into your tree or install via CMake.
+
+[repo](https://github.com/serge-sans-paille/frozen) · [benchmark](https://arxiv.org/pdf/2602.22506)
+
+##### hashify  `Rust`  `MIT OR Apache-2.0`  `active`  `Tier A`
+
+Rust proc-macro that compiles fixed byte-string keyword sets into perfect-hash lookups; beats string `match` and the phf crate.
+
+**Beats:** switch/if-else chains — The author's criterion benchmark (benches/lookup.rs, Apple M5 Max, Rust 1.98, default cargo bench profile at opt-level 3) times hashify map! against a Rust `match` with one string arm per key on five real key sets. Results run from 0.68 vs 1.34 ns (9 HTTP methods, hits) to 1.84 vs 39.8 ns (2125 HTML entities, random with half near-misses), about 1.25x-21.6x, plus 4.1x-12.6x over phf 0.14 CHD and 3.2x-8.8x over phf ptrhash; there is no C++ std or gperf comparison, and nobody has reproduced the results independently.
+
+**How:** Keys of up to 16 bytes are packed into two u64 words (the first and last 8 bytes, which can overlap) plus the length. A hit is then confirmed with three integer compares, with no memcmp and no pointer chase. Longer keys go in a second table and are compared 8 bytes at a time. Up to 16 keys become a gperf --switch style decision tree on the length and one byte (or the XOR of two bytes). 17-64 keys get a collision-free power-of-two table with a searched seed (one multiply, a shift and a load). Larger sets get a PtrHash/PHast-style minimal perfect hash with one 8-bit pilot per bucket, found by a cuckoo-like eviction search. The hash is a cheap multiply-and-fold of the key words rather than the SipHash-1-3 that phf uses, and 32-bit targets get separate tables built from a 32-bit hash.
+
+**Use it when:**
+- Rust protocol or format parsers that dispatch on a fixed keyword set known at compile time. The benchmarked sets are HTTP methods, IMAP commands, Sieve keywords, charset names and HTML entities.
+- Replacing a string `match` with more than ~100 arms. `match` measured 7.5-7.8 ns per random lookup at 128-149 keys and 25-40 ns at 2125 keys, against about 1.8-2 ns for hashify.
+- Replacing phf_map!/phf_set! when the keys are literals. It was 4.1x-12.6x faster than phf 0.14 CHD in the author's benchmark, including the synthetic sets of 10k and 100k keys.
+- Miss-heavy input such as tokenizing untrusted text. Half the probes in the random workload are one-bit-off misses, and hashify stays at about 1.0-2.2 ns per lookup.
+- no_std, no-alloc or unsafe-forbidding code. The generated code uses only `core` paths, never allocates (tested with a counting allocator) and compiles under #![forbid(unsafe_code)].
+
+**Skip it when:**
+- C or C++ code. It is a Rust proc macro with no C ABI and no standalone code-generator output.
+- Keys known only at runtime, built programmatically, or named by `const` items or enum variants. Only literal tokens are accepted ('unsupported key expression', issue #1), and there is no build.rs/codegen API (issue #2 is still open).
+- Small sets of up to ~26 keys, where a plain `match` stays within 2x (1.34-2.51 ns) and needs no dependency.
+- Very large key sets in a crate you rebuild often. The macro re-runs on every compile, incremental builds included, and 1,000,000 keys add about 24 s (15 s with build-override opt-level 3). A `fnc_map!` with 10,000 arms costs about 4 s of extra LLVM time in release builds.
+- Case-insensitive matching beyond ASCII. The `_ignore_case` variants fold only A-Z, and all other bytes must match exactly.
+
+**Integration:** crate (procedural macro) · none at runtime; syn 3.0, quote and proc-macro2 at build time · Rust 1.88 (Cargo.toml rust-version), edition 2024 · any Rust target; no architecture-specific code; 32-bit targets get separate 32-bit-hash tables via cfg(target_pointer_width)
+
+**Vs siblings:** Every catalogued sibling is C++ (qlibs mph, constexpr-phf, frozen, ConstexprCore/perfect_hash, triehash and the other gperf alternatives), so pick hashify only when the lookup lives in Rust. There it fills the role constexpr-phf or mph fill in C++, and like constexpr-phf it is benchmarked directly against the switch/match baseline; for C++ code, use a sibling.
+
+**Gotchas:**
+- Integer keys are matched against their big-endian bytes (`1u16` matches [0, 1]). `map!` values are stored in a `static`, so they must be constant expressions.
+- 0.3.0 (2026-09-23) was a rewrite. The 0.2 `tiny_map!`/`tiny_set!` macros are gone, and the algorithm changed from FNV-1a + PTHash to the current scheme, so 0.2 users have to migrate. Separately, 0.2 releases before 0.2.8 produced non-reproducible builds (issue #4).
+- Keep big lookups in their own crate and set `[profile.release.build-override] opt-level = 3`. Cargo compiles proc macros without optimization by default, which slows table construction (24.07 s vs 15.24 s at 1M keys).
+- Table construction can fail with the compile error 'failed to resolve hash collision' once its seed and load-factor retries run out. Large or hard key sets may get up to 5% spare slots instead of a strictly minimal table.
+
+**Status:** Actively maintained by Stalwart Labs: v0.3.1 reached crates.io on 2026-09-24 under MIT OR Apache-2.0, the crate has ~2.67M downloads and Stalwart's own mail-parser, mail-auth and sieve-rs crates depend on it, but the 0.3 rewrite is only days old and the crate can be reused only from Rust projects.
+
+[repo](https://github.com/stalwartlabs/hashify) · [benchmark](https://github.com/stalwartlabs/hashify/blob/main/README.md)
+
+##### mph (qlibs)  `C++`  `MIT`  `stale`  `Tier A`
+
+C++20 compile-time perfect-hash lookup built on BMI2 pext; 2.4-10x lower latency than std::unordered_map on 5-100-key string sets.
+
+**Beats:** std::unordered_map (std::hash), std::map, boost::unordered_flat_map (Boost 1.85), frozen::unordered_map, gperf, if-else and switch-case chains — In the author's nanobench run, lookups were random hits drawn from sets of 5-100 strings of 1-8 bytes. It used clang++ and g++ with -O3 -mbmi2 and libstdc++ on the g++ run; no CPU model or compiler versions are given. mph measured 1.4-7.2 ns per lookup, against 5.3-25.4 ns for std::unordered_map (with boost::hash) and 7.7-13.1 ns for gperf. The lead over gperf shrinks to 1.3-2.2x on the variable-length sets. The harness calls the v2-era mph::hash/mph::fixed_string API, which the current header no longer has, so the tables predate the current lookup/find code.
+
+**How:** All table construction happens at compile time. For very small sets, lookup uses a PCG generator to search for a multiplier such that (key*magic)>>shift picks a bit-field out of one 32/64-bit constant, so the lookup is a multiply, a shift and a mask with no memory access. Otherwise it greedily finds the smallest bit mask that keeps every key unique; at run time, BMI2 PEXT packs those bits into a dense index into a 2^popcount(mask) table, and find does one full-key compare (a cmov by default). Strings up to 16 bytes are loaded as one integer (memcpy plus BZHI to trim the length), so there is no per-character hashing or probe loop, and find on more than 64 entries does a single std::experimental::simd bucket compare.
+
+**Use it when:**
+- Hot-path mapping of a fixed set of short keys known at build time: keyword or command parsing, string_to_enum/enum_to_string, ticker-symbol or message-type dispatch (the README examples).
+- Sets of a few keys up to about a thousand. The README latency tables cover 5-100 string keys; the author's plot-only benchmark goes to 1024 keys.
+- Strings of 8 bytes or fewer, and ideally 4 or fewer (the FAQ says a smaller maximum length gives a smaller table and one fewer instruction), or integer keys as u32/u64.
+- x86-64 with fast PEXT (Intel Haswell+ or AMD Zen3+ per the FAQ), built with -mbmi2 or -march=native.
+- Inputs that are always in the set: mph::lookup (or find<100>) skips the key compare and, for tiny integer sets, compiles to 3-5 instructions (README asm).
+
+**Skip it when:**
+- Keys that are only known, or change, at run time. There is no insert, erase or iteration; the table is generated at compile time.
+- Long keys. Keys must fit in 128 bits (16 bytes), or lookup/find are removed by SFINAE and you must write your own fallback policy (issues #5 and #6 are still open). The mask search also looks at only the low 64 bits (mask<u64>), so keys that share their first 8 bytes can fail (issue #3).
+- MSVC or libc++. The requirements list only GCC 12+ and Clang 15+, and the header uses GCC/Clang builtins. Open PR #19 reports that main does not compile with libc++'s partial <experimental/simd>.
+- Large sets. The FAQ says it handles thousands of keys, not millions; build time grows with size and can hit constexpr step limits.
+- CPUs with slow PEXT (AMD Zen2 takes 18 cycles per the FAQ) or non-x86 targets. Both use the software pext fallback, and no run-time numbers are published for it.
+
+**Integration:** header-only · none (optional <experimental/simd> from libstdc++, which find needs for sets of more than 64 entries) · C++20; GCC 12+ or Clang 15+ (README). A C++20 module wrapper, mph.cppm, is also provided. · x86-64 is the target (BMI2 optional but recommended; AVX2/AVX-512 used through std::experimental::simd); other targets, including arm-none-eabi since issue #14, use a software pext fallback; GCC/Clang only
+
+**Vs siblings:** Pick mph over frozen or gperf when your keys are integers, enums or strings of 8 bytes or fewer on x86-64 with BMI2 and per-lookup latency matters most. The author's plots put it below frozen, gperf and boost::unordered_flat_map up to 1024 keys, and there is no head-to-head with Kronuz constexpr-phf or ConstexprCore/perfect_hash. Pick frozen instead for C++14, MSVC, longer strings or a container API; pick gperf or triehash for long string keys or generated C code.
+
+**Gotchas:**
+- mph::lookup returns an arbitrary value for a key that is not in the set. Use mph::find for untrusted input. find<100> (probability = 100) also skips the compare, so it behaves the same way.
+- The header runs its self-tests as static_asserts every time you include it; define -DNTEST to skip them. Large sets can hit 'constexpr evaluation hit maximum step limit'; raise -fconstexpr-ops-limit (GCC) or -fconstexpr-steps (Clang).
+- Without <experimental/simd>, find only accepts sets of 64 entries or fewer (requires-clause). Sets above 64 entries use SIMD buckets sized to the native register width.
+- Main has an untagged change made after the v5.0.5 tag (PR #18, July 2025), still in the v5_0_5 inline namespace. The change narrows the probe key to the 32/64-bit mask type before find compares it with the full stored key. From reading the code (not compiled), keys longer than 4 bytes whose mask fits in 32 bits may stop matching, and no self-test covers this case. Pin tag v5.0.5 or test your key set.
+
+**Status:** Stale: the last tagged release is v5.0.5 (Jan 2025), the last commit is a July 2025 community PR, and a libc++ build fix (PR #19) has been unmerged since Sept 2025. It is MIT-licensed, a single header with no dependencies, and easy to vendor; pin v5.0.5.
+
+[repo](https://github.com/qlibs/mph) · [benchmark](https://qlibs.github.io/mph/perfect_hashing)
+
+##### phashtable (gsauthof)  `C`  `BSL-1.0`  `abandoned`  `Tier A`
+
+Tiny C/C++ two-level perfect hash index, built at startup, that flattens worst-case lookup latency versus std::unordered_map.
+
+**Beats:** std::unordered_map — The author's Google Benchmark code hammers each of 2,776 ISINs in turn against gms::Phash_Table and libstdc++ std::unordered_map<const char*, uint32_t> (custom hash/equality functors), keeping each key's best of 3 pinned runs. With SDBM the slowest key costs 44 vs 61 ns on an Atom C3758 (g++ -O3 -march=goldmont-plus) and 12 vs 34 ns on a Xeon Gold 6246 (GCC 9, RHEL 7, 4.1 GHz), about 1.4x and 2.8x lower, though unordered_map's fastest keys still win (22 vs 43 and 9 vs 11 ns) and hot-key repetition means cache-miss latency was not measured.
+
+**How:** It uses two-level perfect hashing in the style of the classic FKS scheme: a first-level table with n/2 buckets stores an offset, a secondary size (at most 255) and an 8-bit hash parameter per bucket. At build time, a per-bucket search over sizes and parameters makes every secondary table collision-free. Both levels map hashes to slots with Lemire's fast-range multiply-shift instead of modulo, and the default hash is SDBM with a parametrized multiplier (65599 + param). Every lookup runs two hash calls, two multiply-shifts and two table loads with no probing or chaining, even when the bucket's parameter is 0, so that every key costs the same.
+
+**Use it when:**
+- The key set is fixed or reloaded wholesale (for example a daily instrument/ISIN master file), and rebuilding at startup or re-init is acceptable.
+- Latency-sensitive paths where the slowest key matters. On the author's Xeon, the per-key cost stays at 11-12 ns, while std::unordered_map ranges from 9 to 34 ns depending on the key.
+- Short, fixed-length string keys with a cheap hash (the benchmark uses 12-byte ISINs with SDBM), especially on low-end cores like Atom, where the hash cost dominates.
+- Large runtime key sets where gperf is impractical. The README builds 1.4M ISINs into about 11.4 MB, and reports that gperf did not finish on that set.
+- C code, or C++ code that wants a ~370-line BSL-1.0 source drop mapping keys to positions in an existing array.
+
+**Skip it when:**
+- The set changes incrementally: there is no insert or delete, and any change means a full rebuild.
+- You care about the best case or the average. unordered_map's fastest keys beat it (22 vs 43 ns on Atom, 9 vs 11 ns on Xeon, both with SDBM), because every lookup pays for two hash calls.
+- Memory is tight. The index alone costs about 8.1-8.6 bytes/key on top of your item array, vs about 5.33 for a 75%-full open-addressing index; cmph's CHD needs about 2 bits/key.
+- Many lookups are for absent keys, or the key set is untrusted. Lookup always returns some index, and a bad hash or duplicate keys make the build fail (bucket overflow gives -2; no collision-free secondary table gives -3).
+- You need a maintained, tested dependency. The repo has 12 commits from Oct-Nov 2020, no tests beyond one example program, and no CI.
+
+**Integration:** source-drop · none for the library (libc calloc/free/memset). The example program uses POSIX getline. The benchmark needs Google Benchmark, an external SipHash checkout (not vendored) and libstdc++ internals (std::_Hash_bytes). · C99 for phash_table.c/.h (compound literals, stdbool) and C++11 for the phash_table.hh wrapper. The published benchmarks were built with g++ -std=gnu++17 (GCC 9). · Portable C with no intrinsics or arch-specific code, so any platform should work. It was only measured on x86-64 Linux (Atom C3758 on Fedora 31, Xeon Gold 6246 on RHEL 7).
+
+**Vs siblings:** Pick it over frozen (compile-time constexpr keys) when the keys arrive at run time and number in the millions, and over cmph when you want a tiny BSL-1.0 C drop-in that returns your original array index with flat per-key cost and can accept about 8 bytes/key vs CHD's ~2 bits/key. Choose fph-table instead if you want a C++17, std::unordered_map-like container that allows occasional inserts.
+
+**Gotchas:**
+- Lookup never says 'not found'. It returns an index for any key, and absent keys can land on unfilled slots that hold 0. Always compare the key stored at that index, as bench.cc and test_hash_table.c do with memcmp.
+- One callback signature does two jobs. Build calls hfn(items, i, param) and lookup calls hfn(key, 0, param), so you normally write two functions that must hash identically. Only the low 8 bits feed the second level, with parameters 0-23 and secondary tables of at most 255 slots.
+- C++ wrapper pitfalls. A plain `gms::Phash_Table t;` in automatic storage leaves the pointers uninitialized (the defaulted constructor sits over a C struct), and the destructor then frees them. Move assignment overwrites without freeing the old tables. Use `{}` or construct with data.
+- Edge cases are unchecked. With n = 1 the bucket count is n/2 = 0, and the build writes out of bounds. The build computes 2*n in uint32_t, which caps sets below 2^31 keys. The makefile's default target references pybind11 sources that are not in the repo, so compile phash_table.c yourself.
+
+**Status:** Abandoned since 2020-11-22 (12 commits, no issues or PRs ever filed) but BSL-1.0 and about 370 lines in three files, so it is easy to vendor and audit; the last known-good compiler is GCC 9.
+
+[repo](https://github.com/gsauthof/phashtable) · [benchmark](https://github.com/gsauthof/phashtable#measurements)
+
+##### static_maps  `C++`  `MIT`  `active`  `Tier A`
+
+C++23 consteval FKS perfect-hash unordered_map for compile-time keysets; 1.4-2.9x faster than std::unordered_map in three paper demos.
+
+**Beats:** std::unordered_map — Per-run time (std::unordered_map built at run time plus lookups, vs static_maps built by the compiler) was 35.8 vs 89.6 µs for 1,024 lookups in an 84-key element table, 607.6 vs 1746.8 µs for 65,536 lookups in a 64-codon table, and 15,295 vs 21,228 µs for about 259k in-place updates in a 4,042-ticker table that the paper calls S&P 500 (2.5x, 2.9x and 1.4x, derived from paper data). The authors measured this in their arXiv preprint with g++ 15.2.1 (libstdc++ inferred), -std=c++23 -O3 -march=native, on an Intel Core i5-1240P laptop at real-time priority with ASLR off; no independent run exists.
+
+**How:** It uses Fredman-Komlos-Szemeredi (FKS) two-level perfect hashing with multipliers found by a consteval xorshift64* search. The raw hash (DJB2 for string_view, identity for integers) is multiplied by k modulo the largest prime of a 16/32/64-bit SIZE_T and masked into a power-of-two primary table with 8-16 slots per key. A bucket with one key returns at once; a colliding bucket uses its own multiplier and a quadratic-size secondary table. Because the table is collision-free and sits in .rodata, `operator[]` does no key comparison, probing, heap access or run-time construction, and the factory picks the smallest SIZE_T that keeps truncated hashes distinct (adding an XOR salt if needed), with a compare-and-subtract modulo replacing `%` for 64-bit SIZE_T.
+
+**Use it when:**
+- Fixed string-to-value tables compiled into the binary (symbol, opcode, keyword, codon or ticker lookups) where every key is known at build time and std::unordered_map is only used as a read-mostly dictionary.
+- Hot loops where run-time lookups dominate: the codon demo (64 keys, 65,536 lookups per run) showed the largest gain, about 2.9x over std::unordered_map and 2.2x over Frozen (derived from paper data).
+- Programs that start often or must not allocate at startup: the compiler builds the table and places it in .rodata, so there is no construction cost or heap allocation at run time.
+- Fixed key universe with changing values, where jitter matters: the 4,042-ticker update demo uses a constinit map with mutable values, and its run-time standard deviation was ±950.6 µs vs ±1660.8 µs for std::unordered_map.
+- Code that already uses std::string_view keys, builds with a C++23 GCC 15 or Clang 21, and can accept much longer compile times for the tables involved.
+
+**Skip it when:**
+- Keys that are not known until run time, or keysets that change often: there is no insert or erase, and each keyset change is a recompile.
+- Large keysets or tight build budgets: at 4,042 keys the build took 55.2 s vs 1.5 s for std::unordered_map, raised constexpr limits are required, and nothing larger than 4,042 keys was tested.
+- Miss-heavy lookups or membership tests: there is no find, contains or count, operator[] returns an arbitrary value or throws for an absent key, and at() reports every miss by throwing std::out_of_range (after an internal throw and catch), which is slow when misses are common.
+- Cache-constrained large tables: with the default DELTA_PRIMARY=8 each key gets 8-16 primary rows, each holding three SIZE_T fields in three separate arrays, so a lookup can touch several arrays plus the value array; the paper itself warns that a large delta stresses the CPU cache.
+- Pre-C++23 toolchains, MSVC, -fno-exceptions builds, or teams that need a maintained project: other compilers are not documented, the lookup path uses throw/try/catch, and the code is a one-off figshare deposit whose only test suite belongs to the vendored Frozen.
+
+**Integration:** header-only · none (standard library only; the vendored Frozen 1.1.1 copy is used only by the comparison demos) · C++23 (uses deducing this, std::views::zip/adjacent and constexpr std::vector). Tested only with GCC 15.2.1 and Clang 21.1.6; the paper says earlier working versions are unknown. GCC needs a raised -fconstexpr-ops-limit (and -fconstexpr-loop-limit for large keysets), Clang a raised -fconstexpr-steps, and the 4,042-key demo on Clang also needed -fexperimental-new-constant-interpreter. · any target with a C++23 GCC or Clang (benchmarked only on x86-64 Linux); the optional USING_UINT128 path needs __uint128_t; MSVC not documented
+
+**Vs siblings:** Pick static_maps over frozen when your keys are std::string_view (Frozen needs its own frozen::string type) and lookups dominate: in the paper's demos it beat the vendored Frozen 1.1.1 by 1.25x, 2.25x and 1.03x (derived from paper data), at up to 2.6x Frozen's compile time (55.2 s vs 21.1 s on 4,042 keys). Choose frozen (C++14, also has sets), mph (qlibs) or ConstexprCore/perfect_hash when you need a maintained GitHub project or an older compiler; only Frozen has been benchmarked head-to-head against static_maps.
+
+**Gotchas:**
+- operator[] does not check the key: an absent key either throws std::out_of_range (empty primary slot) or silently returns another key's value. Use at(), which compares the stored key, whenever input can fall outside the keyset. All published timings use the unchecked operator[].
+- Builds are not reproducible by default: the RNG seed comes from __DATE__ and __TIME__, so each compile can pick different multipliers, table layout and compile time. The class constructors accept a seed_val argument, but the make_unordered_map factory does not expose one.
+- Prefer make_unordered_map<data_array>() over the CTAD constructor: the constructor defaults to a 16-bit SIZE_T for up to 255 keys and does not check that truncated raw hashes are distinct. If two keys collide there, the secondary-multiplier search loops until the compiler's constexpr limit aborts the build.
+- Only constexpr_hashes::hash<std::string_view> (DJB2), <int> and <std::size_t> (identity) exist, and the factory always uses hash<K>, so other key types need your own constexpr specialization. The header also does `using namespace constexpr_hashes;` at file scope and puts helpers such as seed() and RaggedArray in the global namespace, so its `hash` can clash with `using namespace std;`.
+
+**Status:** Marked active, but the code is one figshare v1 deposit (2026-02-26) with no repo, issue tracker or later version; it is MIT-licensed and about a dozen small flat headers, so vendoring is the only integration path.
+
+[repo](https://doi.org/10.6084/m9.figshare.31416038) · [benchmark](https://arxiv.org/abs/2602.22506)
+
+##### triehash  `C`  `MIT`  `abandoned`  `Tier A`
+
+Order-preserving minimal perfect hash generator emitting nested C switches for fixed string sets; 1.85-5x gperf's throughput in author's benchmark.
+
+**Beats:** gperf — The numbers come from the author's 2016 hashbench. Each of 82 Debian Packages/Sources field names, plus 3 probe words, was looked up 1,000,000 times back-to-back in a static GCC -O2 build (GCC version not stated), against gperf generated with --pic --readonly-tables. On a Core i5-3320M, triehash reached 2.4 GB/s vs gperf's 1.3 case-sensitive (~1.85x) and 2.2 vs 0.7 case-insensitive (~3.1x). On Debian porterboxes of unstated CPU model, the case-sensitive gap reached ~5x (ppc64el, 2.0 vs 0.4) and the case-insensitive gap ~4x (arm64, 0.8 vs 0.2). re2c (1.7) and APT's unrolled AlphaHash (2.3) came close on the x230, and the repeated-word loop favors branchy switch code.
+
+**How:** The keys go into a trie that is split by word length. The generated code is an outer `switch (length)` that dispatches to one function per length, and each of those is nested `switch` statements over 8-, 4- or 1-byte chunks read as unaligned integers on GNU C. The compiler turns these into compare/jump trees. There is no hash arithmetic, no data table and no final strcmp: reaching a leaf means every byte already matched, and a mismatch exits at the first differing chunk. In `--ignore-case` mode it ORs 0x20 into each chunk (e.g. `| 0x20202020`) wherever every key at that trie level is an unambiguous letter, so it needs no separate upper/lowercase cases. The author's blog reports about 4 instructions per byte.
+
+**Use it when:**
+- Small, fixed sets of field names, keywords or verbs known at build time (the benchmark used 82 Debian control-file field names) that you want mapped to an enum you then `switch` on.
+- ASCII case-insensitive matching of such keys. This is where the gap to gperf is widest: 2.2 vs 0.7 GB/s on a Core i5-3320M, and 0.8 vs 0.2 on arm64.
+- Tokenizers or parsers that already have (pointer, length). The function takes an explicit length, reads only bytes [0, length) and needs no NUL terminator.
+- GCC/Clang builds on x86-64, ppc64el or arm64, where the multi-byte chunk reads are active and the reported speedups are largest.
+- Plain C or mixed C/C++ codebases that want generated code with no runtime dependency beyond <stdint.h> and <stddef.h>.
+
+**Skip it when:**
+- Lookups on an unpredictable mix of keys. The benchmark hashed the same word 1,000,000 times in a row, so the branch predictor was fully trained on nested switches. Open issue #3 raises this and it was never re-measured with shuffled inputs.
+- Large key sets (thousands of keys and up). Code size grows with the trie; the Debian package description itself says the generated code is 'larger' than gperf's, and there is no data beyond ~85 words.
+- Key sets built at runtime, or lookups that must return a payload richer than an integer enum. gperf can return a user struct; with triehash you index your own array with the enum.
+- MSVC or other non-GNU compilers, and ARM targets without unaligned access. These silently fall back to the byte-at-a-time switch, which was not benchmarked.
+- Case-insensitive matching beyond ASCII. The 0x20 trick is ASCII-only.
+
+**Integration:** source-drop · Perl at generation time (Debian package `triehash`); the generated code needs only <stddef.h> and <stdint.h> · Perl 5.14+ to run the generator: it uses package-block syntax, per issue #7, and CI covered Perl 5.14-5.28. Generated code is C with stdint.h. The multi-byte fast path needs GNU C (GCC/Clang: `__attribute__((aligned(1)))`, `__BYTE_ORDER__`); other compilers get the byte-wise fallback. It also builds as C++ via --enum-class (APT compiles it as .cc). · Any. Multi-byte reads work on GNU C little- and big-endian, are disabled automatically on ARM without __ARM_FEATURE_UNALIGNED, and can be forced off with TRIE_HASH_NO_MULTI_BYTE. Benchmarked on amd64, arm64, armel, armhf, ppc64el and mipsel.
+
+**Vs siblings:** Pick triehash over ConstexprCore/perfect_hash or constexpr-phf (Kronuz), which also beat gperf but need C++ constexpr machinery, when you need plain C output or ASCII case-insensitive string-to-enum matching and can accept a Perl step at build time. In a C++17+ codebase that wants the compiler to build the table with no external generator, or needs mapped values rather than an enum, frozen or ConstexprCore/perfect_hash fit better; strager/perfect-hash-tables is research code rather than a packaged generator.
+
+**Gotchas:**
+- The POD documents `--namespace` and `--class` for C++, but GetOptions never registers them, so passing either aborts with 'Could not parse options!'. Only `--enum-class` and `--enum-name` (which accepts a qualified name such as `Foo::Bar`) work.
+- Enum values follow input order. Inserting or removing a key mid-list renumbers every later value. APT's tagfile-keys.list warns that this order is part of libapt's ABI and should only be appended to.
+- Non-members return `Unknown` with no hint, so callers need their own fallback path. APT falls back to a separate BetaHash bucket table for unknown fields.
+- Multi-byte loads cast `&string[i]` to `uint64_t`/`uint32_t` typedefs with `aligned(1)` but no `may_alias`. They only work on GNU C, and 2-byte reads are off by default (`--multi-byte=320`) because the author found they slow older Intel CPUs. The README also cites GCC bug 77729, where the compiler inserts extra zero-extend instructions.
+
+**Status:** Upstream has been abandoned since the last main commit on 2019-04-16 (Debian 0.3-3 was uploaded in 2020 and its packaging branch last touched in 2022). It is still a required build tool for APT and ships as 0.3-3 in every current Debian suite, and the MIT-licensed 728-line Perl script, or its generated C, is easy to vendor.
+
+[repo](https://github.com/julian-klode/triehash) · [benchmark](https://github.com/julian-klode/triehash#performance)
 
 #### priority-queues-heaps
 
@@ -6376,6 +6883,152 @@ Header-only C++ SIMD abstraction: portable batch<T,Arch> type replaces scalar lo
 
 [repo](https://github.com/xtensor-stack/xsimd)
 
+#### minimal-perfect-hash-functions
+
+##### entropy-map  `Rust`  `Apache-2.0`  `active`  `Tier C`
+
+Cloudflare's immutable Rust map/set on a fingerprinting MPHF (2.1-2.7 bits/key); its edge over std HashMap is compactness, not lookup speed.
+
+**Beats:** Rust std::collections::HashMap / HashSet, tested only in the third-party benches of unmerged PR #6 (with FxHash and with the SipHash DefaultHasher). The README itself claims, without numbers, faster query and construction than the `ph` crate (beling/bsuccinct-rs) and better performance than rkyv::ArchivedHashMap. std::unordered_map is never tested. — First-party criterion comments only, with no baseline, no CPU and no rustc stated (fat-LTO release profile, Dec 2023, then-default FxHasher, result not black_boxed): on 1M random u64 keys, a bare Mphf<32,8> get takes 14.4 ns at 2.10 bits/key (gamma 1.0) and 4.6 ns at 2.72 bits/key (gamma 2.0), and a MapWithDict<u64,u32> get takes ~75.8 ns. The only head-to-head is unmerged third-party PR #6 (Cargo default profile, hardware unstated): 19.7-26.3 ns per Mphf get, 1.8-2.4x slower than std HashSet/HashMap with FxHash, ~1.3x faster only than std HashSet with SipHash (~1.06x at equal hasher), ~1.1x slower than rkyv ArchivedHashMap. Neither source measures memory against std, and no C++ baseline exists.
+
+**How:** The MPHF is FMPHGO, Beling's 'Fingerprinting-based minimal perfect hashing revisited': keys are hashed with WyHash into a bit array of gamma*n bits per level. A key that lands alone sets its bit, and colliding keys move to the next level. Group optimization splits each level into B-bit groups, tries 2^S seeds per group and keeps the seed with the fewest collisions, so fewer levels are needed (tests at 100k keys: 1.64 average levels at gamma 1.0, 1.06 at gamma 2.0). A query hashes the key once per level until it finds a set bit, then returns rank(bit) from a two-level rank directory (4096/512-bit blocks packed in 16 bytes, ~3.1% overhead, after Kurpicz's rank/select engineering paper). Map and Set then do one equality check against the stored key at that index.
+
+**Use it when:**
+- Large static key sets (built offline or at deploy, rebuilt wholesale) where resident memory or cache footprint matters more than per-lookup nanoseconds: the MPHF index costs 2.10-2.72 bits/key, and the key array has no empty slots or control bytes.
+- Many keys mapped to few distinct values (labels, scores, small enums): MapWithDict stores each distinct value once. MapWithDictBitpacked stores fixed-length Vec<u32> feature vectors with small ranges at the minimum bit width per 32-value block.
+- Lookup tables shipped as files and read in place with rkyv 0.7: no rehash or deserialization at load, and the first-party benches show archived lookups within ~1-3% of in-memory ones.
+- A dense 0..n-1 index for a known key set, to address your own parallel arrays, when every query key is guaranteed to be in the build set (bare Mphf, no key storage).
+- Rust services where lookups only need to match std HashMap with the default SipHash (PR #6: Set within ~1.06x at equal hasher), not hashbrown with FxHash.
+
+**Skip it when:**
+- Latency-critical lookups when std HashMap/HashSet with FxHash fits in memory. In PR #6, entropy-map is 1.8x slower for Set contains and 2.0-2.4x slower for u64->u32 get, and ~1.1x slower than rkyv's ArchivedHashMap.
+- Mutable data: there is no insert, remove or entry. Any change means a full single-threaded rebuild (1.2-1.5 s per 1M u64 keys in the repo's bench comments; 13.6 s for 1M keys with S=12 in PR #6).
+- Mostly unique or wide values: MapWithDict keeps a full copy of every key plus an 8-byte usize index per key (its own test measures 16.6 bytes/key for u64->u32), so dictionary packing gains little.
+- C++ codebases: it is Rust only, with no C API. For C++, use a C++ MPHF such as PTHash and verify keys yourself.
+- Projects on rkyv 0.8 or reading untrusted serialized data: main pins rkyv 0.7.42 (the 0.8 port exists only in unmerged PR #6), and the validation is incomplete (see gotchas).
+
+**Integration:** crate · bitpacking 0.9, num 0.4, wyhash 0.5; optional rkyv 0.7.42 + bytecheck 0.6 (feature rkyv_derive), serde + serde_bytes (feature serde) · Rust edition 2021; no rust-version declared. v1.2.0 uses slice::as_chunks, which was stabilized in Rust 1.88, so it needs Rust 1.88+ (inferred). v1.1.0 avoided as_chunks. CI tracks stable. · Any Rust target in principle: pure Rust with no arch intrinsics (bit-packing uses bitpacking's BitPacker1x, which the bitpacking docs call standard bitpacking, not the SSE3/AVX2 packers). CI runs only on ubuntu-latest; an aarch64 rkyv alignment fix is in the history (commit 1f5a988f).
+
+**Vs siblings:** Pick it over PHast/ph (bsuccinct-rs) or PtrHash when you want a ready-made immutable Rust Map/Set with key verification, value dedup or bit-packing, and rkyv zero-copy archives rather than a bare MPHF. For the MPHF alone, prefer ph (from the author of the FMPHGO paper entropy-map reimplements) or PtrHash: they publish comparative benchmarks, the 2025 MPHF survey ranks PHast first for queries, and entropy-map's claimed edge over ph has no numbers.
+
+**Gotchas:**
+- Bare Mphf::get on a key outside the build set returns None or an arbitrary valid index (its doc comment). Only Map/Set detect non-members, by storing and comparing full keys (maintainer reply in issue #4).
+- Construction can fail. gamma < 1.0 returns InvalidGammaParameter. Duplicate keys or colliding 64-bit hashes are never separated (from the code), so from_slice returns MaxLevelsExceeded after 64 levels instead of deduplicating (issue #4 reply: construction fails on unresolvable collisions). B, S and the seed type ST are compile-time checked (ST at most u32).
+- The published numbers are stale. The benches/*.rs result comments date from Dec 2023, when the default hasher was FxHasher (switched to WyHash in commit 4a364b53 before v1.0.0). They also leave the lookup result un-black_boxed, which likely explains the 4.6 ns figure; PR #6 measures 19.7-26.3 ns per Mphf get. benches/set.rs still imports the removed fxhash crate (issue #5).
+- Untrusted input is unsafe to load. The MapWithDictBitpacked docs warn that a crafted serde payload can pass deserialization and later panic. The rkyv path relies only on derived CheckBytes while lookups use get_unchecked, so treat archives as trusted. MapWithDictBitpacked requires every Vec<u32> value to have the same length (NotEqualValuesLengths), and the caller passes a buffer of that length to get_values.
+
+**Status:** Active and Cloudflare-owned: v1.2.0 (serde feature) shipped 2026-09-09, with ~839k crates.io downloads. Outside contributions stall, though: PR #6 (rkyv 0.8, bench fixes) and issue #5 have had no maintainer response since Oct 2025. It is Apache-2.0 and ~2,750 lines of pure Rust (including tests) with three small dependencies, so vendoring is easy.
+
+[repo](https://github.com/cloudflare/entropy-map) · [benchmark](https://github.com/cloudflare/entropy-map#overview)
+
+##### go-mph (Go, Hash-Displace-Compress)  `Go`  `MIT`  `abandoned`  `Tier C`
+
+Go hash-and-displace minimal perfect hash for fixed string sets; author reports 25-50% faster index lookups than a Go map.
+
+**Beats:** Go native map[K]V — The only go-mph-versus-map evidence is prose in the author's December 2017 Gopher Academy post: about 25% faster than a Go map for 16 keys and 50% faster for the ~235k entries of /usr/dict/words, with no ns/op, Go version, CPU or flags given, against the pre-Swiss-table map that Go 1.24 replaced. The repo's BenchmarkMPH/BenchmarkMap pair compares an unverified index lookup with a map[string]int32 lookup that does compare keys, and the post's 20.4 vs 172 ns/op table measures a toy multiplier hash, not go-mph.
+
+**How:** It is a simplified, uncompressed form of hash-and-displace from Belazzougui, Botelho and Dietzfelbinger's 'Hash, Displace, and Compress' (CHD), with one bucket per slot chosen by the low bits of a 64-bit MetroHash. For each multi-key bucket, largest first, New brute-forces a seed so that xorshift-multiply(hash+seed) sends every key in the bucket to a free slot, while single-key buckets skip the search and store their slot directly as a negative seed. A Query is one MetroHash of the key (avo-generated assembly on amd64 via go-metro, pure Go elsewhere), a bitmask into Seeds, an optional xorshift-multiply, and a load from Values: two array reads, no probing and no key comparison. The arrays are padded to a power of two so the slot comes from a mask instead of a modulo.
+
+**Use it when:**
+- Static string sets fixed at build time or startup (protocol commands, keywords, dictionary words, ID or enum tables) where you need a key-to-dense-index mapping and keep payloads in a parallel slice.
+- Hot read paths where every queried key is guaranteed to be in the set. Skipping the key comparison is safe there, and it is part of where the speed comes from.
+- Sets from a few keys up to a few million held in RAM. Construction is linear, and the author reports 100-125 ms for about 235k words.
+- Tables you want to precompute and ship. The exported Values/Seeds slices can be serialized, mmapped (the author's suggestion) or generated as Go source, and go-metro reads input little-endian, so hashes match across architectures.
+- When you want about 140 lines of MIT-licensed code you can read in full and vendor, rather than a larger MPHF library.
+
+**Skip it when:**
+- Queries that may include unknown keys. Query returns an arbitrary in-range index for them, so you have to keep the keys and compare, which gives back part of the speedup. cespare/mph does that check inside Lookup.
+- Key sets that change at runtime. There is no insert or delete, so any change means a full rebuild that needs every key up front.
+- Tight memory budgets or very large sets. Values and Seeds together take 8 bytes per power-of-two slot, which is 8-16 bytes per key (about 2 MB for 235k words). PTHash, PtrHash and RecSplit need roughly 2-3 bits per key, and the author's own go-boomphf needs 3.7 bits per key.
+- Non-string keys. New accepts only []string, so integer or struct keys must be encoded to strings first.
+- Anything that needs a maintained dependency. The repo has no go.mod, no tags, 3 known importers on pkg.go.dev, and a 2025 bug-fix PR that nobody has reviewed.
+
+**Integration:** module · github.com/dgryski/go-metro (MetroHash64, MIT) · Not documented. There is no go.mod, so it resolves to pseudo-version v0.0.0-20211217222804-81a8625fb7ed. The code uses sort.Slice (Go 1.8+). go-metro's amd64 stub file carries only a //go:build constraint, so Go 1.17+ is the safe floor. · Any Go target. MetroHash runs as avo-generated assembly on amd64 with the gc compiler (unless the purego or noasm tag is set) and as pure Go elsewhere. No results are published for any platform.
+
+**Vs siblings:** Pick go-mph over cespare/mph, the other Go CHD-style entry, when you need to serialize or code-generate the table (cespare's fields are private) or every key is known to be present, since go-mph then does one full-key hash and no string compare per query where cespare does two Murmur3 hashes and a compare. Pick cespare/mph when absent keys are possible, and PTHash, PtrHash or RecSplit (about 2-3 bits/key) when memory or scale matters more than staying in pure Go.
+
+**Gotchas:**
+- Duplicate keys make New hang. Two identical keys always hash to the same slot, so the seed search for their bucket can never succeed, and it has no iteration cap or error return. Deduplicate first; the open PR #7 adds a duplicate check.
+- Query derives its mask from len(Values), so a hand-built or deserialized Table needs equal-length, power-of-two Values and Seeds. A zero-value Table panics with index out of range.
+- Open PR #7 (Aug 2025, unmerged, no reproducer) reports occasional out-of-bounds panics in Query's negative-seed (singleton) branch. The root cause is not documented.
+- A persisted table only works with the same hash: go-metro's MetroHash64 with seed 0. Swapping the hash, as PR #7 does with xxhash, invalidates saved tables.
+
+**Status:** Abandoned: the last commit (2021-12-17) was a test-name tweak, the author's own 2018 serialization and space-optimization issues are still open, and an Aug 2025 fix PR is unreviewed, but it is a single 140-line MIT file (plus the MIT go-metro) that is easy to vendor and patch.
+
+[repo](https://github.com/dgryski/go-mph) · [benchmark](https://blog.gopheracademy.com/advent-2017/mphf/)
+
+##### minperf (RecSplit implementation)  `Java`  `Apache-2.0`  `abandoned`  `Tier C`
+
+Thomas Mueller's Java RecSplit minimal perfect hash: about 2 bits/key, lookups ~1.1x faster than CHD in one code comment.
+
+**Beats:** CHD algorithm, implementation not named in the comment. The README says performance is 'very similar' to the Sux4J CHD and GOV algorithms, so the baseline is most likely Sux4J's Java CHDMinimalPerfectHashFunction. CMPH is not mentioned anywhere. — The only numbers are hand-written comments in PerformanceTest.java: RecSplit with the test-only rotate-and-xor FastLongHash (leafSize 11, averageBucketSize 55) reaches 1.97 bits/key and 163 ns/key, against an unnamed CHD (likely Sux4J's Java CHD, or the repo's own test CHD) at 2.25 bits/key and 182 ns/key (about 1.1x), while GOV at 132 ns/key beats both. No JVM, CPU, compiler flags or key count is recorded (the harness defaults to 100,000 random longs and 100 repeats), and there is no run setup for the baselines.
+
+**How:** It implements RecSplit (Esposito, Mueller Graf, Vigna, arXiv 1910.06416): keys are hashed into buckets, and each bucket is split recursively by brute-force searching for a seed that divides it into the fanout given by precomputed split rules, down to leaves of at most leafSize keys, where a seed giving a bijection is searched. The seeds are stored Golomb-Rice coded, with per-bucket key counts and bit offsets in Elias-Fano monotone lists with select. A lookup is one universal hash, two Elias-Fano reads and a walk down the Rice-coded tree that decodes and skips sibling subtrees; it uses a cheap SplitMix-style supplemental mixer plus Lemire multiply-shift range reduction and calls the full hash only once per 2^18 seeds. Buckets are independent, so construction runs in parallel on a ForkJoinPool, and buckets over 8x the average fall back to a BDZ function (~3.66 bits/key); the main gain over CHD is space (the README claims under 1.58 bits/key is possible) rather than lookup speed.
+
+**Use it when:**
+- Static JVM key sets from about 10^5 up to about 10^9 keys where memory per key matters more than lookup latency, e.g. mapping keys to slots in a bitmap or counter array (the use cases in recsplit.md).
+- You want a pure-Java MPHF under 2 bits/key under Apache-2.0 rather than LGPL-2.1 (Sux4J's license), and you can vendor the source.
+- Construction time matters on a multi-core box: buckets are built in parallel by default (parallelism = availableProcessors).
+- Key sets that barely fit in heap: maxChunkSize builds one range of buckets per pass over the collection, as LargeSetTest does for 10^9 longs with 100M-key chunks.
+- Long or String keys (SipHash-based LongHash/StringHash are included), or any type for which you write a seeded UniversalHash<T>.
+
+**Skip it when:**
+- Lookup throughput is the goal. The author says java.util.HashMap get() being about 8x faster than evaluate() is expected (issue #15). In the same benchmark comment, Sux4J GOV is faster at equal space (132 vs 138 ns/key at 2.32 bits/key).
+- You must reject keys that are not in the set or store values: no keys or fingerprints are kept, so unknown keys return an arbitrary slot (or 0).
+- The key set changes: any insert or delete means a full rebuild.
+- You need a supported dependency. There are no releases or Maven Central artifact (the pom is 1.0-SNAPSHOT), the only documentation is the tests (issue #18), the README says 'work in progress', and there have been no code changes since 2019-06.
+- More than about 10^9 keys, or C/C++ builds: bit offsets and results are int (a 2^31-bit description cap, about 1B keys at 2 bits/key), and the C code only evaluates functions built in Java.
+
+**Integration:** source-drop · none at runtime for the core (JDK only); the pom also declares jmh-core 1.4 at compile scope and junit 4.13.1 for tests · Java 8 (pom source/target 1.8); C evaluator built with gcc -O3 via its Makefile · any JVM; the C evaluator loads big-endian files written by the Java builder
+
+**Vs siblings:** Pick minperf over Sux4J GOV only if you need a permissive-licensed (Apache-2.0 vs LGPL-2.1) pure-Java MPHF below 2 bits/key and accept unmaintained code; Sux4J is still active (pushed 2026-05) and wins on lookup time in minperf's own comment. For C++, the same algorithm is maintained in Sux's RecSplit, and PTHash or PtrHash give much faster lookups (37-45 ns/key) at about 3 bits/key.
+
+**Gotchas:**
+- The serialized function does not record its parameters. buildEvaluator must get the same UniversalHash, leafSize, averageBucketSize and eliasFanoMonotoneLists used for generation, and a mismatch is not detected.
+- The builder accepts leafSize 1-25, but Settings only has split rules for 7-18: sizes 2-6 throw 'No split rules', and 19+ index past the rules table. Split rules are also cached only for set sizes below 10,240 (getSplit throws above that), so averageBucketSize values near or above that fail even though the builder allows up to 65,536.
+- Keys must be unique. A duplicate can never be separated, so the leaf seed search loops forever instead of failing. The 163 ns/key figure uses FastLongHash, which the source says is 'not recommended to use in the real world'.
+- MAVEN.md and runjmh.sh point at org.minperf.bloom.* JMH benchmarks that are no longer in the tree. The org.minperf.hem package (a 10^12-key experiment with its own Builder and FastEvaluator, see issue #12) is a separate code path, not the RecSplitBuilder API.
+
+**Status:** Abandoned (the last code change was 2019-06, the last commit a 2021-02 dependabot bump, and there are no releases or Maven artifact), but it is Apache-2.0 and the core builder/evaluator is a few dozen JDK-only classes, so you can vendor it if you pin and test it yourself.
+
+[repo](https://github.com/thomasmueller/minperf) · [benchmark](https://github.com/thomasmueller/minperf/blob/master/src/test/java/org/minperf/PerformanceTest.java)
+
+##### mph (Go, Hash-Displace-Compress / CHD)  `Go`  `MIT`  `abandoned`  `Tier C`
+
+Pure-Go static string-to-index table (CHD-style minimal perfect hash); author's 2021 benchmark shows 27% faster lookups than map[string]uint32.
+
+**Beats:** Go native map[string]uint32 — The README's go test -bench run on an Intel i7-8700K (2021; Go toolchain not stated, so the old pre-Swiss-table map) looked up each word of a ~102k-entry /usr/share/dict/words in turn: Table.Lookup took 29.99 ns/op and map[string]uint32 took 40.92 ns/op, 27% less time for mph. A third-party run in issue #3 (2022, Xeon 2.80GHz, 348,454 words) measured 35.4 vs 67.8 ns/op, and nobody has published a run on Go 1.24 or later.
+
+**How:** Build hashes keys with Murmur3 (seed 0) into about n/4 buckets and sorts the buckets largest-first. For each bucket it searches for a Murmur3 seed that sends all of the bucket's keys to free slots in a power-of-two array. This is the hash-and-displace step of CHD (Belazzougui, Botelho, Dietzfelbinger, ESA 2009) without the compress step. A Lookup is two seeded Murmur3 hashes, two uint32 array reads and one string compare against the stored key, with no probing and no collision chains. The 32-bit Murmur3 is hand-written and reads 4-byte blocks directly from the string bytes via unsafe.
+
+**Use it when:**
+- Read-heavy Go code with a fixed set of string keys known at startup (keywords, routes, dictionary words, enum names), where lookup latency matters and rebuilds are rare.
+- Short keys such as dictionary words: all published wins are on word lists (about 102k and 348k words), and the key is hashed twice per lookup.
+- Lookups that include absent keys: Lookup compares against the stored key, so a non-member returns ok=false instead of a bogus index.
+- When you want a zero-dependency file to vendor: 165 lines of non-test Go in two files, MIT-licensed.
+- Toolchains older than Go 1.24, where the built-in map was the pre-Swiss-table design that every published mph benchmark was run against.
+
+**Skip it when:**
+- Keys that change at runtime. The Table is immutable, so any insert or delete means a full rebuild. The README gives 18 ms for 102k words on an i7-8700K, and the PR #4 benchstat shows 32.7 MB and 302k allocations per Build for about 348k words.
+- Go 1.24 or later without re-benchmarking. Go 1.24 moved the built-in map to Swiss Tables, which the Go blog says are up to 60% faster on map microbenchmarks. The README's own margin already shrank from 'almost twice as fast' (2016) to 28% (2018) and then 27% (2021).
+- Long keys. Each Lookup runs a scalar 32-bit Murmur3 over the whole key twice. Issue #3 measured that hash at 16.3 ns for 50 bytes and 202 ns for 500 bytes on a Xeon.
+- Tight memory budgets or very large key sets. Seeds and slots are uncompressed uint32 arrays (roughly 5-10 bytes per key after power-of-two rounding), and the table also keeps the full keys slice. That is far above the 2-3 bits/key of compact MPHFs.
+- Non-string keys, or tables you want to persist. Only string keys are supported, and with no serialization the table is rebuilt at every process start.
+
+**Integration:** module · none (stdlib sort, reflect, unsafe) · go.mod declares go 1.17; no generics are used · any Go target in principle; all published results are amd64 (i7-8700K, Skylake laptop, Xeon); the hash does native-endian, possibly unaligned uint32 loads through unsafe
+
+**Vs siblings:** The other Go entry, dgryski/go-mph, uses one metro hash per query and depends on go-metro, and because it stores no keys an absent key returns an arbitrary index. Pick cespare/mph over it when you need built-in membership checks and zero dependencies. Pick it over C++/Rust MPHFs such as PTHash or PtrHash (2-3 bits/key, scaling to billions of keys) only in pure-Go code with modest key counts where storing the keys is acceptable.
+
+**Gotchas:**
+- Duplicate keys make Build loop forever. Two identical keys collide under every seed, and the seed search has no retry limit and no error return.
+- Build on an empty slice returns a Table whose Lookup panics with index out of range, because it always reads keys[n] and the slice is empty.
+- The Table keeps a reference to the caller's keys slice, not a copy. Modifying that slice after Build silently breaks lookups.
+- murmur.go uses the deprecated reflect.SliceHeader/StringHeader to load native-endian uint32 words. Its test vectors are the standard little-endian Murmur3 values, and the repo has no CI, so big-endian and strict-alignment targets are untested.
+
+**Status:** Abandoned: the last commit and the only tag (v0.1.0) date from 2021-09-01, and a 2022 PR (#4) that switches to xxh3 for ~23% faster lookups is still unmerged. The code is MIT-licensed and 165 lines, so it is easy to vendor and patch.
+
+[repo](https://github.com/cespare/mph) · [benchmark](https://github.com/cespare/mph)
+
 #### number-parsing-formatting
 
 ##### c4core (charconv/xtoa/atox module)  `C++`  `MIT`  `active`  `Tier C`
@@ -6773,6 +7426,367 @@ Header-only PATRICIA/radix-tree map beating std::map on insert/contains for stri
 **Status:** Active but very new (first commit 2026-07-06, last commit 2026-07-09), single-author, 0 stars, 0 issues opened; Apache-2.0 licensed and header-only (two files: RadixMap.hpp + BoundedVector.hpp), trivial to vendor or drop.
 
 [repo](https://github.com/lrmoorejr/radix-map) · [benchmark](https://github.com/lrmoorejr/radix-map/blob/main/README.md)
+
+#### perfect-hash-static-tables
+
+##### constexpr-phf (Kronuz/phf)  `C++`  `MIT`  `active`  `Tier C`
+
+Header-only C++17 constexpr minimal perfect hash for fixed integer key sets; lookups ~2.5x faster than std::unordered_map in author benchmarks.
+
+**Beats:** std::unordered_map, std::set, if-ladder, switch (binary search), gperf — In the author's harness (GCC 11, -O3, x86_64 with no CPU model, libstdc++ inferred), find() on runtime-built tables of 6-1000 random uint32 keys took 1.2-1.3 ns per lookup against 3.1-3.2 ns for std::unordered_map<uint32_t,uint32_t> (~2.5x); this was an all-hit loop of independent lookups, and the 'if-ladder' and 'switch' columns are a runtime loop and std::lower_bound, not compiler-generated code. On 192 Xapiand field-type strings with a 50/50 hit/miss mix, hash+verify took 21 ns/op against 29 ns for std::unordered_map<std::string,int> and 82 ns for std::set, while gperf took 14 ns.
+
+**How:** It uses a two-level CHD ("hash, displace, and compress", Belazzougui/Botelho/Dietzfelbinger, ESA 2009) scheme. The key's low bits select a bucket, and the bucket's stored multiplier and offset place the key with a division-free multiply-shift, ((k * mul) >> shift) + off, into a power-of-two index table; this replaces the classic prime modulo. A lookup is therefore one mask, one multiply, one shift, two array reads and one key compare, with no probing, heap or pointer chasing, so the cost stays at about 1.2-1.3 ns from 6 to 1000 keys. The displacement search (largest buckets first, successive prime multipliers, rollback on collision) runs in constexpr, and key sets that defeat plain multiply-shift (such as distinct powers of two) fall back automatically to an xorshift-multiply pre-mix, which ARCHITECTURE.md says costs about half the multiply-shift speedup.
+
+**Use it when:**
+- Key set known at build time and already integral (enum values, opcodes, protocol or field IDs, precomputed string hashes), from a handful to about a thousand keys, where you need key to dense index for a parallel array.
+- Replacing a sparse switch or if/else ladder: with a constexpr table, find(hash("...")) is a constant expression usable as a case label, so the dispatch compiles to a jump table.
+- Hot lookups on small fixed sets where std::unordered_map's hash-plus-probe floor (about 3.1-3.2 ns in the author's runs) matters and a flat ~1.2-1.3 ns per find() is worth a custom API.
+- Code that must avoid heap allocation or static-init work: a constexpr table is plain arrays in the binary, with no dependencies beyond the standard library.
+- String keyword dispatch where you control the hash and can add one string compare, and do not want gperf's separate code-generation step.
+
+**Skip it when:**
+- Keys change at runtime: there is no insert, erase or rehash, and even runtime assign() rebuilds the whole table and needs the key count N as a template parameter.
+- You want native string keys or mapped values out of the box: phf.hh is integer-only, the string wrapper exists only as benchmark code (bench/phf_dispatch.hh), and the `keywords` front-end that ARCHITECTURE.md and AGENTS.md point to returns 404.
+- Raw string-lookup speed matters most and a codegen step is acceptable: gperf ran 14 ns/op against 21 ns for phf hash+verify in this repo's own 192-keyword benchmark.
+- Large constexpr key sets: construction is a compile-time search, compile-time cost is not measured anywhere, and the repo only builds constexpr tables of 8 keys (test.cc, demo.cc); its 1000- and 5000-key runs use runtime assign().
+- You need a proven dependency: 37 stars, one closed issue, no tags or releases (README pins GIT_TAG master), and the lookup was rewritten in July 2026, with a GCC 13 constexpr fix the next day; MSVC support is not documented.
+
+**Integration:** header-only · none (standard library only; <iostream> only under PHF_DEBUG). The benchmarks alone fetch frozen and ctrie. · C++17 (CMake target sets cxx_std_17; CMake 3.14 for the FetchContent path). Commit 55ac236 reports validation on Clang, GCC 11, g++-13.4 and g++-16; g++-13.3 needed that fix for find() as a case label. MSVC not documented. · any C++17 target (portable integer code, no intrinsics); published numbers are x86_64 only
+
+**Vs siblings:** Pick it over frozen or ConstexprCore/perfect_hash when the keys are already integers and you want dense [0, N) slots usable as constexpr case labels; for strings, those libraries take string keys natively, and gperf beat it in its own harness (14 vs 21 ns). ConstexprCore's table showing kronuz::phf at 0.22 vs its own 1.08 billion queries/s pins constexpr-phf at 2019 commit 0776e93, before the multiply-shift rewrite, so that table does not measure the current lookup.
+
+**Gotchas:**
+- Only lookup() skips the membership check. find(), count() and at() compare the stored integer key and reject non-members, despite the README's note that find() 'hands back whatever sits there'. The real risk is with strings: a non-member whose hash equals a member's hash is reported as a hit unless you compare the stored string.
+- Key types: the correctness suite tests only uint32_t, uint64_t and int keys. By my reading of phf.hh (not tested), 8/16-bit key types are promoted to 32-bit before the multiply, so ((k * mul) >> shift) can index past the table. Signed 64-bit keys use signed multiplication, so overflow is UB and negative results break the index. Prefer uint32_t or uint64_t.
+- Build failures throw std::invalid_argument (duplicate keys, empty or oversized input, 'cannot find suitable table'), and in a constexpr context these become compile errors. at() and operator[] throw std::out_of_range. A -fno-exceptions mode is not documented.
+- Memory is not compact: each index slot holds the key plus a size_t position (16 bytes for uint32_t keys on 64-bit targets), the index is the next power of two at or above 1.25N, and buckets add 8 bytes each. That is about 41 KB for 1000 uint32_t keys (derived from the phf.hh layout), while the benchmarks loop over a hot 4096-lookup work list.
+
+**Status:** Active again since July 2026 (multiply-shift rewrite, GCC 13 fix, benchmarks, README) after a 2019-2026 gap; MIT-licensed, and the single ~1,500-line header (two-thirds of it a prime table) is easy to vendor, but it has a small user base and no tagged releases.
+
+[repo](https://github.com/Kronuz/constexpr-phf) · [benchmark](https://github.com/Kronuz/constexpr-phf#benchmarks)
+
+##### ConstexprCore/perfect_hash  `C++`  `MIT`  `active`  `Tier C`
+
+C++23 compile-time perfect-hash set/map for fixed string keys; author measures ~10x std::unordered_map throughput on a 6-key set.
+
+**Beats:** std::unordered_map, gperf, frozen::unordered_map, absl::flat_hash_map, pthash, ankerl::unordered_dense, if/else chain — On an Apple M4, the README's URL-protocol table (6 keys) reports 1.08 billion queries/s (~0.93 ns per lookup) vs 0.10 for std::unordered_map, 0.16 for frozen::unordered_map and 0.23 for gperf. The repo's harness times 200,000 shuffled lookups and keeps the fastest of 300 runs; the compiler, standard library and hit/miss mix for that table are not stated, and the bench builds as CMake Release by default. An older committed baseline run (hardware and compiler not stated) shows a smaller gap against std::unordered_map: 1.97 vs 13.32 ns on hits (~6.8x), 3.33 vs 4.45 ns on misses (~1.3x), and 5.75 vs 13.08 ns mixed (~2.3x).
+
+**How:** For up to 255 keys, a gperf-style generator runs at compile time. It picks a minimal set of byte positions that tell the keys apart, then solves per-position association values so that h = len + sum(asso[pos][key[pos]]) never collides. If the key set cannot be split that way, it falls back to hash-and-displace (CHD-style), then to a seeded whole-key hash. A lookup is a few small table loads, a power-of-two mask, and one branchless compare against inline key bytes: overlapping 2-byte loads for keys of 4 bytes or less, and page-guarded, masked 16-byte NEON/SSE2/LSX loads for longer keys. Past 255 keys or 254-byte keys, a 'wide' container uses a PTHash-like scheme: one multiply per 64-bit key lane, a per-bucket pilot (displacement) table, and a packed-lane compare, with small integer values stored inside the key word.
+
+**Use it when:**
+- Classifying short tokens from a small, fixed vocabulary on a hot path: HTTP methods or headers, URL schemes, MIME types, language keywords, string-to-enum parsing.
+- Streams where most lookups hit: the committed baseline shows the widest gap on all-hit queries (URL protocols 1.97 ns vs 13.32 ns for std::unordered_map; S&P 100 tickers 2.89 ns vs 13.55 ns).
+- Tables that must exist with no startup cost and no allocation: the table is a constexpr object and can be queried inside static_assert.
+- Large generated symbol lists (hundreds to a few thousand keys) through the wide container, if seconds of compile time are acceptable. The author reports 1.7 ns vs 7.6 ns for absl::flat_hash_map<std::string_view, int> on 5,581 Nasdaq tickers (Apple M3 Max).
+- Projects that already build as C++23 on x86-64, AArch64 or LoongArch64 (CI covers GCC 14, Clang 18, AppleClang, MSVC 2022 and GCC 14 cross-compiled for LoongArch64).
+
+**Skip it when:**
+- Keys that are not known at compile time, or tables that change at runtime. There is no insert or erase; use a runtime hash map.
+- Streams dominated by misses (negative filters) on some key sets. In the committed baseline, C++ Keywords all-miss lookups took 6.91 ns vs 3.49 ns for absl::flat_hash_map and 4.68 ns for ankerl, and URL-protocol misses were only ~1.3x faster than std::unordered_map (3.33 vs 4.45 ns).
+- Codebases that cannot use C++23. The headers use `if consteval`, and the string keys are class-type template arguments.
+- Builds where compile time matters and key sets are large. The 5,581-key map takes ~5 s of compile time and needs -fconstexpr-steps (Clang) or -fconstexpr-ops-limit (GCC) raised. Precompiled headers are the documented fix.
+- Risk-averse production use: v0.2.0, repo created March 2026, and every performance number is first-party. Issue #29 (open) argues the gperf baseline could be tuned better, and issue #28 (open) reported that the CMake dependency failed to clone.
+
+**Integration:** header-only · none for the amalgamated singleheader/perfect_hash.h, which bundles fixed_string.h. The CMake/FetchContent route pulls ConstexprCore/useful_abstractions at an unpinned `master` (the repo is public now; issue #28 reported that the clone failed). · C++23 (CMake 3.20+ for the CMake route). CI covers GCC 14, Clang 18, AppleClang on a macOS 15 runner, MSVC 2022, and GCC 14 cross-compiled for LoongArch64. · x86-64 (SSE2 compare path), AArch64 (NEON path), LoongArch64 (LSX path, tested under QEMU), scalar fallback elsewhere. The seeded whole-key-hash tier assumes little-endian, and big-endian execution was not tested.
+
+**Vs siblings:** Pick this over frozen (C++14; ordered and unordered containers; integer or string keys) and Kronuz constexpr-phf (C++17; integer keys only, so strings must be hashed first) when you have string keys, a C++23 compiler and a hot lookup path. On the URL-protocol set, this repo's own benchmark gives frozen::unordered_map 0.16 and kronuz::phf 0.22 billion queries/s against 1.08 for this library. Pick it over code generators such as gperf, triehash or strager/perfect-hash-tables when you want no separate generation step in the build.
+
+**Gotchas:**
+- SIMD key compares read a whole 16-byte chunk, which can go past the end of the query string. A page guard keeps the read inside the same 4 KB page. These functions opt out of ASan (no_sanitize("address")) and assume pages of at least 4 KB.
+- Every classic table embeds MAX_POSITIONS x 256 bytes of association tables (4 KB with the default of 16), however many positions are actually used. Shrink it with -DCONSTEXPRCORE_MAX_POSITIONS.
+- make_perfect_map takes each value as a non-type template argument (kv<"GET", Method::GET>), so values must be structural types such as enums or integers. Other value types need the array-based wide factories.
+- The factories pick the wide container only above 255 keys or for keys of 255+ bytes. Opting in explicitly for small sets can help all-hit streams (S&P 100: 1.77 to 1.32 ns on an M3 Max) but lost 17-30% on C++ Keywords on a Xeon with GCC 14, so measure first. Wide sets with keys of 16+ bytes also reject keys that differ only by trailing NUL bytes.
+
+**Status:** Actively maintained (last commit and v0.2.0 release on 2026-09-13; commits mostly from GitHub users lemire and FranciscoThiesen); MIT and shipped as one self-contained header that is easy to vendor, but young (created 2026-03-04, 17 stars).
+
+[repo](https://github.com/ConstexprCore/perfect_hash) · [benchmark](https://github.com/ConstexprCore/perfect_hash#ridiculously-fast)
+
+##### constmap  `Go`  `Apache-2.0`  `active`  `Tier C`
+
+Immutable Go string-to-uint64 map built on binary fuse filters; up to 5.3x faster lookups than map[string]uint64 at 1M keys.
+
+**Beats:** Go builtin map[string]uint64 — The author's go test benchmark on an Apple M4 Max (Go version not stated) looked up each of 1,000,000 'key-%d' strings once in random order: ConstMap 8.7 ns vs 46 ns for a presized Go map[string]uint64 (5.3x), and VerifiedConstMap 15 ns (about 3.1x), at 9/18 vs 48 bytes/key. A separate scaling test times one run of 1,000,000 lookups per size (so repeated passes below 1M keys and a partial pass at 10M), and there the gap is about 1.6x at 10K keys, 4.1x at 1M and 2.0x at 10M.
+
+**How:** It is a retrieval structure (static function), not a hash table. The binary fuse filter construction (Graf and Lemire, ACM JEA 2022) gives each key three positions in overlapping segments of a uint64 array about 1.125n long, peels the resulting 3-hypergraph to find an order, and fills cells so the XOR of a key's three cells equals its value. A lookup is one XXH64 hash plus a murmur finalizer, three array loads and two XORs, with no key comparison and no probing, and the array is about 9 bytes/key against about 48 for Go's map, so much more of it stays in cache. MapMany hashes blocks of eight keys first, using an amd64/arm64 assembly XXH64 that keeps the primes in registers, so the loads of all eight keys are in flight at once.
+
+**Use it when:**
+- Read-only string-to-ID or string-to-offset tables in Go (dictionaries, token or symbol IDs, feature-name indexes) built at startup or offline, where every queried key is known to be in the set.
+- Key sets from about 100K to 10M, where Go's map spills out of cache: the README reports 8.7 vs 46 ns at 1M keys (random order) and 4.1x in its scaling test, at 9.0 vs about 48 bytes/key.
+- Memory-constrained services: about 9 bytes/key without keys stored, or 18 bytes/key when you need missing-key detection, against 27-48 bytes/key measured for the Go map.
+- Bulk lookups of keys shorter than 32 bytes: MapMany/MapManyInto run 34-47% faster than a loop over Map on an Apple M4 Max and 0-32% faster on a Xeon Gold 6548N (README batch table), and MapManyInto does not allocate.
+- Values wider than 64 bits: store an index into a side array; the author's blog measured 11 ns vs 21 ns for map[string][]float32 at 100K keys.
+
+**Skip it when:**
+- The key set changes at runtime: there is no insert or delete, every change means a full rebuild, and construction is slower than filling a Go map (the README says so but gives no figure).
+- Callers may pass keys that were never inserted and you use plain ConstMap: it silently returns a wrong value. Use VerifiedConstMap (15 ns, 18 bytes/key at 1M keys) or accept the risk.
+- Small or cache-hot working sets: the README measures only 1.2x over 256 repeated queries and about 1.6x at 10K keys, which may not justify a non-standard API.
+- Maps far larger than the last-level cache: the margin falls to about 2.0x at 10M keys in the README, and a blog reader measured near-parity at 25M keys on an M3 Max (45.70 vs 47.21 ns) under the older sequential benchmark.
+- You need iteration, key recovery, len, or values other than uint64, or mostly-absent lookups with PairedVerifiedConstMap, which the README says is slower than VerifiedConstMap on misses.
+
+**Integration:** module · github.com/cespare/xxhash/v2 v2.3.0 · Go 1.22 (go.mod); CI tests on current stable Go · any Go target via pure-Go code; amd64 and arm64 get assembly for batched hashing and the paired gather (SSE2/NEON, no CPU feature gate); -tags purego disables it; CI covers linux x64, linux arm64 and macOS
+
+**Vs siblings:** Pick it for Go: it is the only Go entry in this category, and fastconstmap is the same binary-fuse design for CPython/C and reads the same files, so you can build in one language and load in the other. The C++ siblings (frozen, qlibs mph, ConstexprCore/perfect_hash) generate tables at compile time for small keyword sets, while constmap builds at runtime and scales to millions of keys at about 9 bytes/key.
+
+**Gotchas:**
+- ConstMap.Map on a map built from zero keys indexes an empty slice and panics (from the source); VerifiedConstMap and PairedVerifiedConstMap return NotFound instead.
+- VerifiedConstMap cannot tell a stored value of 0xFFFFFFFFFFFFFFFF from a missing key, and its false-positive rate is about 2^-64 per the doc comment.
+- The seed is mixed in after an unseeded XXH64, so two distinct keys with the same XXH64 make New fail with 'duplicate key hash detected' on every retry; duplicate keys also return an error rather than keeping the last value. This matters for adversarial key sets.
+- Construction allocates a temporary map[uint64]uint64 over all keys plus several per-slot scratch arrays, so peak build memory is several times the final ~9 bytes/key.
+
+**Status:** Actively developed (v1.2.0 on 2026-09-17, four tagged releases since March 2026) and Apache-2.0 on GitHub, though pkg.go.dev lists the license as UNKNOWN and hides the API docs; it is a small pure-Go package with one dependency and easy to vendor.
+
+[repo](https://github.com/lemire/constmap) · [benchmark](https://github.com/lemire/constmap/blob/main/README.md)
+
+##### fastconstmap  `C`  `Apache-2.0`  `active`  `Tier C`
+
+Immutable string-to-uint64 map for Python, C11 core, built on binary fuse filters; beats CPython dict lookups and memory.
+
+**Beats:** CPython dict — The author's own benchmarks/benchmark.py ran on an Apple M4 Max with CPython 3.14.5 and 1M 'key-{i}-{hex}' strings, each queried once in random order. VerifiedConstMap[k] took 112.3 ns vs dict[k] 336.1 ns (~3.0x, derived); in cold 2000-key batches, VerifiedConstMap.get_many took 33.7 ns/key and ConstMap.get_many_into 14.2 ns/key, vs 148.7 ns/key for a dict comprehension (~4.4x and ~10.5x, derived), with 9.04 vs 118.38 bytes/key. The numbers are from the pre-0.10 XXH3 build (the README says to add 1-5 ns per single lookup and 1-4 ns/key batched for today's XXH64 default), the extension's C compiler is not named, and there is no C/C++ comparison against std::unordered_map.
+
+**How:** It uses the binary fuse filter construction (Graf & Lemire, ACM JEA 2022) as a static function. Each key is hashed (XXH64 by default, XXH3 optional) to three positions in adjacent segments of an array of about 1.125n 64-bit words, and hypergraph peeling sets the cells so that XOR-ing the three returns the value. A lookup is one hash, three independent loads and two XORs, with no probe loop and no key comparison, so the three cache misses overlap. Batched calls hash a block of 8 keys before gathering any values, which keeps 24 loads in flight at once. get_many_into writes raw uint64s so no PyLong is boxed per key, and PairedVerifiedConstMap stores value and check side by side so each slot is read as one 128-bit SSE2/NEON load.
+
+**Use it when:**
+- Python processes that load a large, fixed string-to-int table once (ID maps, vocabularies; 1M keys measured) and query it many times. VerifiedConstMap[k] took 112 ns vs 336 ns for dict[k] on an M4 Max.
+- Bulk lookups where keys already arrive as a list. get_many_into into an array('Q') or numpy uint64 buffer measured 14.2 ns/key (ConstMap) and 23.9 ns/key (VerifiedConstMap), vs 148.7 ns/key for a dict list comprehension.
+- Memory-constrained deployments. It takes ~9 bytes/key (ConstMap) or ~18 (verified classes), vs ~118 bytes/key for a dict with its str keys and int objects, because the keys themselves are not stored.
+- Pre-fork or multiprocessing worker pools that should share one read-only table. write_into puts it in a named SharedMemory block once, and from_buffer opens it in each process without a copy.
+- Pipelines that build the table in Go (constmap) or Rust (rsconstmap) and read it from Python or C, because the default XXH64 file formats are byte-compatible on little-endian hosts.
+
+**Skip it when:**
+- Tables that change. Any insert or delete means a full rebuild: 0.145 s for 1M keys vs 0.004 s to copy a dict. The build needs the source dict plus transient C buffers of roughly 55-60 bytes/key (by the allocations in constmap.c).
+- ConstMap when absent keys can be queried. It returns garbage with no error. Use a verified class, at twice the memory.
+- Non-integer values, keys other than str/bytes, more than 2^32-1 keys, or code that needs to iterate keys or items. Keys are not stored and cannot be recovered.
+- Small or cache-resident tables looked up one key at a time. No dict comparison below 1M keys is published, and the author says single m[k] cost (50-120 ns) is mostly Python call overhead, so the gain there is not documented.
+- Free-threaded CPython (3.13t/3.14t). cp314t wheels are published, but the module uses single-phase init without PyUnstable_Module_SetGIL, so importing it re-enables the GIL with a warning. Lookups also never release the GIL.
+
+**Integration:** module (pip wheels); the C core is a source-drop: src/constmap.c, src/constmap.h (extern "C"-guarded) and a vendored xxhash.h · none at runtime; vendors xxHash 0.8.2 (BSD-2), and a #error breaks the build if that header's version changes; links libm on non-Windows · C11 compiler (setup.py passes -O3 -std=c11, /O2 on MSVC); Python >= 3.8 per pyproject.toml. CI tests Python 3.9, 3.12 and 3.13 on Ubuntu, macOS and Windows. Compiler versions are not documented. · PyPI wheels for CPython 3.8-3.14 (plus 3.14t) on Linux x86-64/aarch64 (manylinux and musllinux), macOS x86-64/arm64/universal2 and Windows AMD64. No 32-bit wheels. SSE2 (x86-64) or NEON (AArch64) is used for the paired layout, with a scalar fallback elsewhere. Zero-copy from_buffer and cross-language files need a little-endian host; from_bytes (copying) also loads on big-endian.
+
+**Vs siblings:** Pick it over frozen or qlibs/mph (constexpr key sets fixed at C++ compile time) when the key set is large, known only at runtime, or must be serialized and shared across processes or languages. Versus constmap (Go), which shares the algorithm and file format, choose by host language; choose fph-table instead if you need occasional inserts or a C++ std::unordered_map-like API.
+
+**Gotchas:**
+- The verified classes use 2**64-1 as their internal not-found sentinel. A key stored with value 2**64-1, or -1 (stored as two's complement), therefore raises KeyError or returns the default as if absent. Negative values in general come back as unsigned integers; the test suite checks 2**64-1 only on ConstMap.
+- Only the PairedVerifiedConstMap readers check that the header's segment parameters match the array length. ConstMap and VerifiedConstMap loads check only magic, length and an FNV-1a checksum (not tamper-resistant), and lookups index the array without bounds checks. Treat .cmap/.vmap files and buffers as trusted input.
+- from_buffer borrows the memory: the buffer must stay alive and unmodified, and you must `del` the map before shm.close(). It also needs an 8-byte-aligned buffer, so a Go/Rust CMAP0001 file (28-byte header) cannot be viewed, only copied with load/from_bytes. Maps from Go/Rust report len() == 0.
+- The key hash is fixed into each file. The default XXH64 (shared with Go/Rust) costs about 1-2 ns more per lookup than hash='xxh3', whose files only fastconstmap reads. Files written by 0.9 and earlier stay XXH3 and can only be moved to the shared format by rebuilding from the original keys.
+
+**Status:** Actively maintained by Daniel Lemire (v0.10.0 released 2026-09-17, no issues filed). It is Apache-2.0 and pip-installable on every mainstream OS, and the C core is two files plus xxhash.h, easy to vendor into a C/C++ project.
+
+[repo](https://github.com/lemire/fastconstmap) · [benchmark](https://github.com/lemire/fastconstmap/blob/main/README.md)
+
+##### fastcpp::phf (developer source)  `C++`  `MIT`  `active`  `Tier C`
+
+Compile-time perfect hash table for fixed string-key sets (keywords, opcodes); 5.8-7x faster lookups than std::unordered_map.
+
+**Beats:** std::unordered_map — With gcc 13.3 and libstdc++ at -O2 -march=native -std=c++20 on a shared 4-core 'Intel Xeon @ 2.10GHz' cloud VM (commit dfa74f2, minimum of 7 samples), 200k lookups against the 92 C++20 keywords took 3.3 ns vs 23.2 ns for std::unordered_map<string_view,uint16_t> when every lookup hit, 3.0 vs 20.2 ns when every lookup missed, and 4.9 vs 28.2 ns with 1 keyword per 8 words. These are the author's own numbers, with no outside review, and the results file warns that absolute ns drift between runs (3.42 vs 5.24 ns for the same lookup); only the ratios within a run are claimed.
+
+**How:** It reimplements the technique from Matthew 'strager' Glazar's talk 'Faster than Rust and C++: the PERFECT hash table' as a constexpr brute-force search for a single-level perfect hash. The search tries, cheapest first, which characters to hash (any subset of s[0], s[1], s[2], s[n/2], s[n-3], s[n-2], s[n-1] and the length), a power-of-two table size and a 32-bit seed. The resulting hash is a few byte loads packed into one 64-bit word and one multiplicative (Lehmer-style) hash, with no loop over the string; the benchmarked C++ table hashes 3 characters into 1024 slots. Length-range and first-character-range gates reject many misses before any hashing. Keys are stored inline in the slots of a .rodata array, so a hit costs one load and one std::memcmp, with no probe loop or pointer chase.
+
+**Use it when:**
+- Keyword recognition in a lexer or parser: a closed set of short string keys (16 bytes or less by default) mapped to small integer IDs on a hot path, like the repo's 92 C++20 keywords and 48 JavaScript keywords.
+- Streams where most lookups miss, like identifiers checked against keywords. The length and first-character gates reject many of them before hashing. Measured: 3.0 ns vs 20.2 ns per miss against std::unordered_map.
+- Tables of opcodes, header names or enum labels that you want to cost nothing at startup, use no heap, and be checked at compile time with static_assert.
+- Lexers whose source buffer has at least 16 readable bytes past every token. That allows the opt-in overread16 compare policy, which measured 3.02 ns vs 3.33 ns for the default memcmp (about 1.1x; the 1.44x figure is measured against the inline_words policy, not the default).
+- You want strager's character-selection technique under a permissive licence: this is an MIT reimplementation, while strager's own repository is CC-BY-NC-ND.
+
+**Skip it when:**
+- Keys that are only known at run time, or that change. find_parameters can run at startup, but perfect_hash_table takes the search result as a non-type template argument, so the shipped table can only be built from compile-time keys, and it has no insert or erase.
+- Large key sets. By the builder's own comment, a single-level perfect hash needs about O(n^2) slots to be found quickly. The 92-key table already takes 1024 slots (about 20 KiB), slot count is capped at 2^16, and the default budget is 1024 seeds per configuration. This is built for tens to low hundreds of keys, not thousands.
+- Keys that agree at every position it can sample (s[0], s[1], s[2], s[n/2], s[n-3], s[n-2], s[n-1] and the length), such as long paths or URLs with shared prefixes and suffixes. No seed can separate them and the search fails. Non-string keys (integers) are not supported at all.
+- Code you need to depend on. The repo is private, three days of commits, single-author (every commit authored by 'Claude'), not reviewed by anyone else, and its CI has never passed. The public siblings are more practical.
+- If you already use a good open-addressing map, the margin is smaller. The repo measured its own SIMD Swiss table at 8.86 ns vs 3.33 ns (2.7x) on all-hit lookups, and phmap::flat_hash_map at 19.8 ns vs 5.3 ns (3.7x) on the mixed stream.
+
+**Integration:** header-only · None beyond the standard library. The phf code is 11 headers under include/fastcpp/{phf,hash,core}. Copy those rather than using add_subdirectory: the repo's fastcpp::fastcpp CMake target links all 10 vendored libraries (fmt, phmap, xsimd, simdjson, CRoaring, yyjson, ...) and forces C++23. · C++20: class-type non-type template parameters, concepts, <bit>, std::is_constant_evaluated. The README lists gcc 13+, clang 17+ and MSVC 19.35+ (gcc 12 and clang 16 with -std=c++2b). The benchmarks used gcc 13.3 with -std=c++20. CI compiles test_phf with gcc and clang. MSVC is not in CI. · Portable scalar lookup path, with a 64-bit multiply fallback where there is no __int128. overread16 uses SSE2 on x86 and silently falls back to inline_words on other targets. The crc32c hashers use SSE4.2, selected at run time, or ARMv8 CRC. Benchmarked only on x86-64 Linux. CI builds on Linux (gcc, clang) and macOS (clang).
+
+**Vs siblings:** Pick it over strager/perfect-hash-tables when you need the same character-selection technique under MIT instead of CC-BY-NC-ND. Pick it over frozen when your keys are short strings and lookup latency is what matters, but note that the repo's 3.5x-over-frozen claim has no committed benchmark code. Otherwise the public ConstexprCore/perfect_hash and Kronuz constexpr-phf are the realistic choices, because this code cannot currently be obtained.
+
+**Gotchas:**
+- A miss returns a sentinel value, not an optional or an iterator: whatever miss value you pass to make_table (the keyword sets reserve 0). make_table does not check that no key maps to that same value.
+- overread16 requires 16 readable bytes at the query pointer, whatever the key length. Without padding, a token near the end of a buffer or page can fault. It is opt-in for that reason.
+- Slot text capacity defaults to 16 bytes and is enforced by static_assert. From reading the code, if you raise TextCapacity for longer keys, only memcmp and first_char_then_memcmp stay correct. inline_words compares only the first and last 8 bytes, so it can report a false hit on 17+ byte keys. overread16 masks just 16 lanes, so it never matches a 17+ byte key. No test covers this, because the longest test key is exactly 16 bytes.
+- The compile-time search needs a raised constexpr limit on clang (the repo uses -fconstexpr-steps=100000000, 100x the default). That flag sits on the repo's internal fastcpp_flags target, not on fastcpp::fastcpp, so consumers must add it themselves. A table that builds on gcc can fail on clang. Any failure, including one caused by duplicate keys, shows up only as the static_assert 'the perfect-hash search failed; widen search_options'.
+
+**Status:** The repo is currently private, so the public gets a 404, and it has 0 stars, no releases and 13 commits over 2026-09-02 to 2026-09-04. The phf part is MIT and small enough to vendor if you have access, but all 21 CI runs have failed: at HEAD the failures are in unrelated targets (the xsimd matmul benchmark build and a UBSan error in string/parse.hpp), and test_phf passes where it runs.
+
+[repo](private:developer-source) · [benchmark](private:developer-source/blob/main/results/fastest.json)
+
+##### icy  `C++`  `BSD-3-Clause`  `active`  `Tier C`
+
+C++23 consteval perfect-hash map/set for fixed keys; ~1.6-1.8x faster string_view hits than std::unordered_map in the author's benchmark.
+
+**Beats:** std::map, std::unordered_map, std::set, std::unordered_set — The author ran an all-hit microbenchmark on an Apple M4 Max (compiler and stdlib unstated; -O3 -march=native; the timer counts CNTVCT_EL0 ticks, not core cycles, so only the ratios mean anything). With hash-only matching (ICY_OPTIMIZE_KEY_CMP), string_view find() over 16-1024 keys took 2.8-3.2 ticks/op, against 4.9-5.3 for std::unordered_map/set (1.64-1.77x) and 13-44 for std::map/set (up to ~14.9x). int64 find gained only 1.02-1.25x (map) and 1.36-2.39x (set) over std::unordered_*.
+
+**How:** Construction runs a CHD-style (compress-hash-displace) search, named chd_result/build_perfect_hash in the code. Keys are split into buckets, buckets are placed largest-first, and each bucket gets a displacement seed (up to 4096 tries under up to 128 global seeds) that moves its keys into empty slots. A lookup is one hash, one bucket-slot read and at most one more slot read, with no chains or probe loops. String keys use a constexpr wyhash port, and each slot stores the key's 64-bit hash, so most misses are rejected without touching the key; ICY_OPTIMIZE_KEY_CMP skips the key compare entirely. Integer keys hash by identity plus multiply-shift (Fibonacci hashing) into deliberately sparse tables, and icy::set keeps the key inside the slot to avoid a second array access.
+
+**Use it when:**
+- A fixed set of string keywords, commands or enum names (tens to about 1000 keys) is looked up on a hot path where you would otherwise use a `static const std::unordered_map<std::string_view, T>`.
+- You are replacing a static std::map/std::set used only for lookup: the author measured 13.6 vs 3.07 ticks/op at 16 string keys and 44.4 vs 3.23 at 1024.
+- You need lookups inside constant expressions (for example `static_assert(keywords.contains("if"))`) or want no runtime initialization and no static-initialization-order problems.
+- You want a bounded per-lookup cost: every find() reads at most two table slots, whatever the key set looks like.
+- The codebase is already on C++23, preferably Clang, which is the toolchain the author's Makefile uses.
+
+**Skip it when:**
+- Keys are not known at compile time, or you need insert/erase or to change mapped values: both keys and values are immutable.
+- int64-key maps: the author's own data shows only 1.02-1.25x over std::unordered_map, and tsl::robin_set beats icy::set at N=512 (0.673 vs 0.777). Integer tables also use 4-32x N slots.
+- String lookups on untrusted input with ICY_OPTIMIZE_KEY_CMP enabled, because a hash-only match can report a false hit. With the macro off, which is the safe mode, the speedup has not been measured.
+- Pre-C++23 code, or key sets well above about 1000: compile time and constexpr step limits become the constraint.
+- Code that needs a mature dependency: the repo was created 2026-09-11, is at v0.2.0 with 0 stars and one author, and CI has built and run no tests since the v0.2 rewrite ('ninja: no work to do', 'No tests were found!!!').
+
+**Integration:** header-only · none (standard library only; the benchmarks use the Tessil robin-map git submodule) · C++23 (`if consteval`, constexpr std::vector and std::sort during consteval construction). The CI matrix names GCC 14, Clang 18, AppleClang (macos-14) and MSVC 2022, but it last compiled tests on v0.1 (2026-09-12). GCC 13 and Clang 17 were dropped from CI. Large key sets need raised constexpr limits (Clang -fconstexpr-steps, GCC -fconstexpr-ops-limit). · Any target with a C++23 compiler; no SIMD or intrinsics are needed (the 64x64 multiply uses __uint128_t, _umul128 on MSVC x64, or a portable fallback). The v0.2.0 benchmarks ran only on an Apple M4 Max.
+
+**Vs siblings:** Pick icy over frozen only if you are on C++23, want the lowest per-hit cost on string_view keys, and can accept an experimental one-author project. frozen (C++14, stable, in maintenance mode, also offers ordered sets/maps and a constinit map with mutable values) remains the safer default. Pick it over Kronuz constexpr-phf when you need string keys or stored values, since that library handles integer keys only; icy has no head-to-head benchmark against any sibling (including ConstexprCore/perfect_hash's 1.08 billion queries/s claim).
+
+**Gotchas:**
+- The README's own usage example defines ICY_OPTIMIZE_KEY_CMP. With it, string-key find() returns a hit when only the 64-bit hash matches, so a non-member key that collides returns the wrong entry. wyhash runs with a fixed public secret and seed 0. The exhaustive tests only check sequential and generated misses against 64 keys. Integer keys always get a full compare.
+- The macro changes the body of inline member functions. Set it project-wide as a compiler flag, not with a #define in some files, or different translation units get different definitions (an ODR violation).
+- The build search runs entirely in the constant evaluator. Hundreds of keys can exceed the default constexpr step budgets, and a failed search is a compile error ('could not build a perfect hash within ICY_MAX_BUILDING_ROUNDS rounds'). Raise ICY_MAX_BUILDING_ROUNDS or the compiler's step limit.
+- Some README text is stale or broken. It says 'table_size == 2 * N ... linear probing', but the code uses hash-and-displace and sizes integer tables at next_pow2(16N+1) up to 64 keys and next_pow2(4N+1) above, so an int64 set of 1024 keys has 8192 16-byte slots (128 KiB), and sets also store every key twice. The CMake bench recipe points at a missing bench.cpp, and tests/CMakeLists.txt passes an undefined ${bench_name}, so the Makefile (Clang-only flags) is the working build path.
+
+**Status:** Active but brand-new (created 2026-09-11, v0.2.0 and last commit 2026-09-16, 0 stars, one author). The BSD-3-Clause single header is easy to vendor but should be treated as experimental.
+
+[repo](https://github.com/romainaugier/icy) · [benchmark](https://github.com/romainaugier/icy#benchmark)
+
+##### lute  `Rust`  `MIT OR Apache-2.0`  `active`  `Tier C`
+
+Rust no_std perfect-hash immutable Map/Set (up to 65,535 keys) with 1.9x-16.9x lower query time than phf.
+
+**Beats:** phf (rust-phf) static compile-time hash maps — The author ran divan benchmarks on an Apple M1 Pro and an AMD Ryzen 9 9950X (rustc version and flags not stated), comparing lute 0.1.x with phf 0.14 maps assembled at runtime from phf_generator output. Keys were u64, short strings and 78-byte shared-prefix strings at n=1-65,535. Values read from the SVG plots show median isolated lookups 1.9x-9.8x faster than phf and amortized per-query time 1.9x-16.9x faster at every plotted point (e.g. u64 n=2048 hit ~1.73 ns vs ~8.04 ns on the 9950X), while PHF search time ranges from ~10x faster to ~120x slower. The plotted code replays queries in key-generation order (shuffling was added later), and the plots predate the main branch's pilot/packed rewrite.
+
+**How:** In the benchmarked 0.1.x release, each query hashes the key once with foldhash, a fast non-cryptographic hasher, where phf_shared uses 128-bit SipHash-1-3. One-entry maps use a linear scan. Maps of up to 10 keys use a 'direct' single-seed perfect hash that needs one multiply-shift (fastrange) and no displacement table. Larger maps use CHD (compress-hash-displace) with a (u16, u16) displacement pair per ~4 keys and a division-free 'fastmod' reduction with a precomputed multiplier, where phf uses `%`. The unreleased main branch replaces this with a PTHash/PtrHash-style scheme: a 16-bit pilot per bucket of ~3 keys, power-of-two bucket selection by shift, and ~1% slack slots remapped back. For n<=12 it uses a 'packed' 16-slot table indexed by one bit window of the hash. Every lookup ends in exactly one key comparison, so a miss costs about the same as a hit.
+
+**Use it when:**
+- Read-only lookup tables known ahead of time (keywords, opcode/MIME/unit tables, u64 ID sets) where you use phf today and query latency matters: the author's plots show lute faster than phf at every plotted size from 1 to 65,535 keys.
+- Tiny tables of about 2-10 keys, where the gap is widest (up to ~16.9x lower amortized time per u64 query on the M1 Pro) because the lookup skips the displacement table entirely.
+- Miss-heavy membership tests such as 'is this token reserved?': a miss costs one hash plus one comparison, and lute beat phf on all-miss streams as well as all-hit streams.
+- no_std (+alloc) targets that need a table in a `static` or `const`, built by a proc macro or build.rs with no runtime construction cost.
+- Keys that are tuples, arrays, ranges, chars, byte strings or C strings (all accepted as literals by map!/set!), or any `Hash + Eq` type when the map is built at runtime or emitted from build.rs with a databake `Bake` impl.
+
+**Skip it when:**
+- More than 65,535 entries: this is a hard limit (u16 indices). Runtime construction panics and the macros emit a compile error.
+- Build-time or startup construction speed is the priority. PHF search is not reliably faster than phf: about 0.5x-0.8x of phf's speed for short strings at n=128-16,384 on the 9950X, and ~120x slower for long strings at n=9 (~44.9 us vs ~0.37 us). The 0.1.x 'direct' strategy for n<=10 tries up to 65,536 seeds and rehashes every key on each try.
+- Cross-compiled tables whose keys contain usize/isize, arrays/slices, byte strings, C strings or multibyte-integer arrays, because their hashes depend on pointer width or endianness. map!/set! add a const assertion that fails the build, but build.rs codegen output (bake.rs) has no such guard, so a mismatched target silently returns None for present keys.
+- You need insertion, mutation, or ordered/sorted iteration: maps are immutable and iteration order is unspecified.
+- You need proven maturity: one author, 4 stars, 39 crates.io downloads, no independent reproduction, and the main branch has an unreleased algorithm rewrite whose performance has no published plots.
+
+**Integration:** crate · foldhash (always); rand_core + rand_xoshiro with the default `construct` feature (0.1.x also pulls hashbrown for duplicate detection); databake + proc-macro-crate with `codegen`; the lute_macros proc-macro crate (syn, quote, proc-macro2, proc-macro-crate) with `macros` · Rust 1.88 (edition 2024, rust-version = 1.88) · any Rust target; no_std but requires alloc; no SIMD or architecture-specific code in lute_core
+
+**Vs siblings:** Compared with QuickPHF (README: about 2x phf on lookups and more than 10x faster construction), pick lute when per-query latency matters more than table-generation time, or when you want runtime, proc-macro and build.rs construction from one API with tuple/array/range literal keys. Pick QuickPHF when fast build-time generation matters. Pick hashify for pure string-keyed `match` replacement. There are no head-to-head numbers between lute and either sibling.
+
+**Gotchas:**
+- map!/set! accept only literal-shaped keys. Integer keys need a type suffix (`2u32`, not `2`), and floats, named constants, enum variants and custom structs are rejected. Use build.rs codegen for those.
+- Runtime construction (From/FromIterator) panics instead of returning a Result. It panics on duplicate keys, on more than 65,535 entries, or when no perfect hash is found within 256 seeds (for example when `Hash` is inconsistent with `Eq`).
+- Generated tables are not stable across breaking versions. The main branch already changed `from_baked_parts` from displacement pairs to a pilots/packed `BakedStrategy`, so regenerate any generated code you committed after upgrading.
+- The main-branch lookup uses unsafe `get_unchecked` for pilot, remap and entry indexing and relies on const-time validation in `from_baked_parts`. The released 0.1.1 lookup uses bounds-checked indexing.
+
+**Status:** Active single-author project (last commit 2026-08-18; 0.1.1 on crates.io since 2026-06-22; no issues filed). It is MIT OR Apache-2.0 and a small pure-Rust workspace that is easy to vendor, but main holds an unreleased algorithm rewrite, so pin 0.1.1 unless you have re-benchmarked HEAD.
+
+[repo](https://github.com/astral4/lute) · [benchmark](https://github.com/astral4/lute/blob/main/BENCHMARKS.md)
+
+##### Perfect::Hash / pperf  `C`  `Artistic-1.0-Perl OR GPL-1.0-or-later`  `abandoned`  `Tier C`
+
+Perl generator (pperf) that emits C perfect-hash lookup tables; builds 100k-key tables in 1-2 s where gperf times out.
+
+**Beats:** gperf — The author's examples/bench.pl ran on an Intel Core i5-2300 @ 2.80 GHz under linux/amd64; the 99,171-key table comes from an August 2014 commit. The compiler is not stated (Perl's configured cc, with optimization rewritten to -O3). On 99,171 /usr/share/dict/words keys, gperf (run with -l -c -C) produced no table under any of four option sets and was killed after 65-386 s; that time sits in the 'compile' column because the harness runs gperf inside save_c. hanov/hanovpp/urban generated in 0.79-1.73 s, and a process that looks up every key once ran in 0.0074-0.0161 s. At 2,000 and 127 keys the same whole-process lookup times tie gperf, so the measured win is generation scalability, not lookup speed.
+
+**How:** The -hanov* methods use hash-and-displace, a Perl port of Steve Hanov's 'Easy Perfect Minimal Hashing' (after Fox et al., CACM 1992, and the CHD algorithm of Belazzougui, Botelho and Dietzfelbinger). Keys go into buckets by h(key,0) mod n. The largest buckets are placed first by trying seeds d until every key in the bucket lands in a free slot, and singleton buckets go straight into leftover slots, marked by a negative d. This greedy pass only retries seeds per bucket, so generation stays in seconds at 99k keys. gperf instead picks key character positions and associated values, and Gperf.pm says it is limited to fewer than 50,000 keys and sensitive to anagrams. A lookup costs 1-2 string hashes (FNV-1, or CRC32 via zlib or SSE4.2), two array loads and one length+memcmp key check. -switch skips hashing: it nests switches on key length and then on the most distinguishing byte, and it compares with word-sized loads instead of memcmp.
+
+**Use it when:**
+- Build-time C lookup tables for large static string sets (tens of thousands of keys and up) where gperf stalls. On 99,171 dictionary words, -hanov generated in 0.79-1.03 s and compiled in 1.3-2.2 s. gperf was killed after 65-386 s without output.
+- Key lists regenerated often in a build or CI pipeline, where generation time per run matters more than lookup nanoseconds.
+- Closed-vocabulary lookups where every probe is a known member. -false-positives drops the stored keys and roughly halves the generated source (about 2.39 MB to 1.20 MB for 99,171 keys).
+- Choosing a static-table strategy by measurement. examples/bench.pl generates, compiles and times hanov*, pearson*, cmph-*, switch and gperf output for your own key file and size.
+- You need dependency-free C output. -hanovpp (FNV-1) and -switch emit self-contained C that needs no run-time library.
+
+**Skip it when:**
+- Small or medium keyword sets that gperf already handles. Whole-process lookup times tie: at 2,000 keys gperf takes 0.001428 s vs 0.001418-0.001609 s for pearsonnp/urban/switch/hanovpp, and at 127 keys all methods are within 0.2 ms. So there is no speed gain.
+- You need a maintained, released tool. The README says alpha. It was never released to CPAN and has no tags. -minimal and -optimal-* are unimplemented, find_best_method always returns HanovPP, -bob and -cuckoo are TODO, and Urban.pm says its save_c is 'not yet working right'.
+- -switch or -pearson on large sets. For 99,171 keys, -switch emitted 147.7 MB of C that took 36-38 s to compile, and -pearson took about 61 s to generate.
+- Very large or non-string key sets. The author's benchmarks stop at 99,171 keys (issue #6 asks for 1M). Issue #7 reports --cmph-chm failing on 1,732,934 keys, while 805,769 keys worked in 5.8 s. Keys must be strings and C output values are integers only. Case-insensitive matching and gperf keyfile syntax are not implemented.
+
+**Integration:** source-drop (generated pperf.c/pperf.h; the generator is a Perl XS module built with perl Makefile.PL && make) · Generator: Perl 5 with an XS toolchain, Time::HiRes, optional zlib. Makefile.PL also pulls the nbperf and bob git submodules and unpacks the bundled cmph-2.0. The gperf executable is needed only for -gperf. Generated code: none for -hanovpp, -switch and -pearson*; zlib (-lz) or SSE4.2 for -hanov/-urban; libcmph at run time for -cmph-*. · Generator: Perl 5.8+ (the Travis matrix covers 5.8-5.22) plus a C compiler. Generated code is plain C using `inline` (`__inline` on MSVC), with <stdint.h>/<smmintrin.h> only in the SSE4.2 path. Nothing else is documented. · Generator CI ran on Linux (Travis). The code also has paths for macOS, BSD, Solaris, Cygwin and Win32/MSVC. The -hanov SSE4.2 hash needs x86-64. -switch output assumes unaligned loads and the generating host's byte order.
+
+**Vs siblings:** Pick it over triehash, strager/perfect-hash-tables or mph when the key set has tens of thousands of strings or more and you need plain C source generated in about a second. Those siblings' catalogued benchmarks use small keyword-style sets and show real lookup wins over gperf. For small C++ sets, frozen or mph build the table at compile time with no Perl step. cmph/cxxmph is the library route if you can link it at run time.
+
+**Gotchas:**
+- pperf passes options to new() in Perl hash order, but new() treats only the first option as the method name. An option such as --prefix can land first, and pperf then silently falls back to HanovPP (issue #7 shows this). pperf also rejects --switch, --gperf and --bob, so call the Perl API for those.
+- Without stored keys there is no membership check. -false-positives lookups return some valid index for absent keys. -cmph-* C output never compares keys; it returns cmph_search_packed() % n.
+- -hanov/-urban tables depend on the hash the generator was built with. With zlib, the .c includes zlib.h and needs -lz; otherwise it uses SSE4.2 CRC32-C (-msse4.2) or FNV-1. Hanov.pm notes that MacPorts zlib has no hardware crc32.
+- -switch output compares keys with unaligned int/long/quad loads against constants packed in the generating host's byte order. Do not cross-compile it for big-endian or strict-alignment targets (issue #1 also reports a UBSan misaligned load in -urban). The generated header has no include guard and no extern "C", so wrap it when you call it from C++.
+
+**Status:** Abandoned alpha: most work dates from 2014-2015, the last commit was 2022-05-31, and there is no CPAN release or tag. The Perl-licensed generator still works as a build step whose emitted .c/.h you vendor, but -cmph-* output needs the LGPL-2/MPL-1.1 libcmph.
+
+[repo](https://github.com/rurban/Perfect-Hash) · [benchmark](https://github.com/rurban/Perfect-Hash#benchmarks)
+
+##### QuickPHF  `Rust`  `MIT OR Apache-2.0 OR Zlib`  `stale`  `Tier C`
+
+Rust PTHash-based static maps/sets generated at build time; ~2x faster lookups and 10x+ faster generation than phf.
+
+**Beats:** phf (rust-phf) static compile-time hash maps — The author ran divan benchmarks (bench profile opt-level=3 with LTO; rustc, CPU and OS not stated) on random u64->u64 maps of 5 to 1M entries against phf 0.11.2's default CHD layout. The PNG charts show lookups at about 10 vs 23 ns per lookup up to 1k keys, and at 1M keys about 86 ns (PhfMap) and 32 ns (RawPhfMap) vs 153 ns. The PHF search alone takes about 0.26 s vs 6.2 s at 1M keys. The charts date from the 2023 initial commit, the committed lookup.rs no longer compiles, and because the query iterator is lazy, RNG calls and a random read from the key vector fall inside the timed loop.
+
+**How:** It implements the PTHash minimal perfect hash (arXiv 2104.10402). Each key is hashed once with wyhash. bucket = h mod B, with about (1.5+0.2*log2 n)*n/log2 n buckets. Each bucket stores a 16-bit pilot, and the slot is (h XOR pilot*K) mod m at a 0.97-0.99 load factor. Slots at or beyond n are redirected through a small u32 `free` array, which makes the table minimal. Both modulo operations use quickdiv's libdivide-style precomputed divisors instead of hardware division. phf's default CHD layout (per phf_shared) uses 128-bit SipHash-1-3, a pair of u32 displacements per bucket, and plain `%`, so quickphf's lookup path is shorter and its bucket table smaller. Construction sorts buckets largest-first, brute-forces a pilot in 0..=65535 for each bucket, and reseeds if that fails.
+
+**Use it when:**
+- Rust code that already uses phf::Map or phf::Set for a build-time-known table (IDs, codes, config or protocol lookups) where lookup latency matters. The author's u64->u64 benchmark shows about 2x over phf 0.11.
+- Large generated tables (100k-1M entries) where phf's build step is slow. The author's chart puts the PHF search for 1M keys at about 0.26 s versus about 6.2 s for phf, not counting rustc time on the generated source.
+- Lookups whose keys are guaranteed members (validated upstream, or a closed input set). RawPhfMap skips the stored-key compare and the key storage, and was charted at about 32 ns versus 153 ns for phf at 1M u64 keys.
+- no_std, embedded or forbid(unsafe) codebases. The runtime crate is #![no_std], contains no unsafe code, never allocates, and tables are &'static slices.
+- Memory-tight static tables. Overhead is one u16 pilot per bucket plus one u32 per spare slot, which the README describes as less than a byte per entry. My arithmetic from phf.rs gives about 0.7 B/key at 1M keys, rising above 1 B/key for maps of about 10 keys.
+
+**Skip it when:**
+- Cross-compiling where the build host and the target differ in endianness, or in pointer width when keys are usize/isize. Tables are built with core::hash::Hash through wyhash, and the README warns this is not portable. phf's PhfHash is explicitly architecture-independent.
+- You want inline literal maps through a macro (phf_map!, lute map!, hashify map!). quickphf only has the build.rs codegen path that writes out source.
+- Maps that can be queried with arbitrary or untrusted keys through RawPhfMap. A missing key silently returns some other entry's value, so use PhfMap for those.
+- You need an actively maintained crate or evidence beyond integer keys. It is at 0.1.x with no commits since Nov 2023, only u64 keys were benchmarked (no strings), and the comparison was against phf 0.11.2, not phf 0.14's experimental ptrhash layout.
+- Tables that change at runtime or have multi-million entries. Maps are immutable, every change means regenerating and recompiling, and the codegen source notes that rustc cannot handle static maps of more than a few million entries.
+
+**Integration:** crate · quickphf (runtime): quickdiv 0.1.1 and wyhash 0.5.0 (which pulls in rand_core 0.6). quickphf_codegen, used as a build-dependency: quickdiv and quickphf. · Rust 1.56 (declared MSRV, edition 2021; CI runs `cargo +1.56.0 check`) · Any target: pure safe Rust, no_std runtime, no arch-specific code. The build host and the target must share endianness, and also pointer width if keys are usize/isize.
+
+**Vs siblings:** Choose it over lute when a table exceeds lute's 65,535-entry cap or needs RawPhfMap's keyless storage. Choose it over hashify when keys are typed values such as u64, tuples or custom types generated from data in build.rs, rather than literals written into a macro and looked up as byte slices. Stay with lute, hashify or phf 0.14 if you need portable hashing, macros or active maintenance.
+
+**Gotchas:**
+- PhfSet::get and PhfSet::contains take &K with no Borrow<Q> bound, so a PhfSet<&'static str> cannot be queried with a &String or any other non-'static &str. PhfMap does accept Borrow. The fix (PR #4) has been open and unmerged since Feb 2024.
+- The build.rs example in the README does not compile as written: it calls `fs::File` without importing `fs`, and `write!(&mut file, code)` has no format string. Use `write!(file, "{}", code)` or `fs::write(path, code.to_string())`, which is what benchmarks/build.rs does.
+- ConstInstantiable is implemented only for integer primitives, bool, char, &str, (), tuples of up to 4 elements, Option and Result. It has no impl for arrays, slices, byte strings, String or floats, so values of those types need a newtype (orphan rule). The array/slice impl (PR #5) is unmerged.
+- Codegen panics on duplicate keys. RawPhfMap::get panics on an empty map.
+
+**Status:** Stale: the last commit was 2023-11-22, the runtime crate is still 0.1.0 (2023-10-16, about 3.4k downloads), and three community PRs have been open since early 2024. The code is small, safe Rust under MIT/Apache-2.0/Zlib, so it is easy to vendor.
+
+[repo](https://github.com/dtrifuno/quickphf) · [benchmark](https://github.com/dtrifuno/quickphf/blob/main/quickphf/README.md)
+
+##### rust-phf (compile-time perfect hash maps)  `Rust`  `MIT`  `active`  `Tier C`
+
+Rust crates that bake immutable perfect-hash maps and sets into the binary at compile time, removing runtime HashMap construction.
+
+**Beats:** std::collections::HashMap (Rust) populated at runtime from statically bundled (code-generated) data — The only rust-phf-specific number is first-party, from conduit-mime-types PR #18 (Tobias Bieniek, merged 2021-10-11). Replacing runtime insertion of bundled MIME data into two std::collections::HashMaps with two phf_codegen-generated static maps made Types::new() run in '3ns instead of 300ms'. No hardware, compiler or methodology is given, and the Criterion bench was deleted in the same PR. It measures initialization moved to build time, not lookup speed; the Mainmatter post's ~80% figure belongs to the earlier non-phf codegen step (PR #17).
+
+**How:** The gain is at startup. The table is solved at build time and stored as `&'static` slices in the binary's read-only data, so nothing is allocated or hashed when the program loads. The default layout is CHD (Compress, Hash, Displace; Belazzougui, Botelho and Dietzfelbinger, ESA 2009): a SipHash-1-3 128-bit hash of the key is split into g, f1 and f2. g picks a bucket (about 3 keys per bucket), and that bucket's stored displacement pair (d1, d2) gives the slot (d2 + f1*d1 + f2) mod n. One key comparison then decides hit or miss. The experimental `ptrhash` feature switches to a PtrHash-style layout (8-bit pilot per bucket, Lemire multiply-shift range reduction, a remap array for the ~1% spare slots), which the maintainer measured at 26-35% higher lookup throughput than CHD. Neither layout is inherently faster per lookup than std HashMap, because the SipHash cost dominates.
+
+**Use it when:**
+- Fixed lookup tables known at build time (keywords, MIME types, HTML entities, charset or Unicode names) that you now fill into a HashMap in lazy_static/OnceLock: init cost and heap allocation drop to zero. In conduit-mime-types, Types::new() went from a reported 300 ms to 3 ns.
+- Short-lived processes, CLIs, cold-start-sensitive services, and no_std/embedded targets, where you cannot or do not want to run initializers or allocate. The runtime crate builds with default-features = false.
+- Tables generated from data files at build time via phf_codegen in build.rs. Generation cost is paid by the build: the maintainer measured 6.2 ms to solve 10,000 keys with CHD, and hashify's measurements show about 3 s of added build time at 100k keys and 42 s at 1M.
+- You need a first-class static map value: iterate entries or keys in fixed order, use OrderedMap/OrderedSet for index order, call get_key for interning, serialize via serde, or key by case-insensitive strings through unicase/uncased.
+- Cross-compiled builds: PhfHash is designed to be architecture-independent (portable SipHasher, fixed-endian integer hashing), so tables generated on the host are valid on the target.
+
+**Skip it when:**
+- Hot-path lookups where per-lookup latency matters. Every lookup runs SipHash-1-3 (128-bit) plus a modulo. A 2023 users.rust-lang.org Criterion test at 100 string keys had phf::Map about 10% slower than std HashMap (8.61-8.79 us vs 7.74-7.86 us per 229-lookup batch). A 2025 rust-phf issue (#349) says the crate is 'almost always slower than hashmap' at lookup.
+- Small keyword sets, where a plain `match` wins. hashify's README (Apple M5 Max, Rust 1.98) measures match hits at 1.3-2.8 ns vs 8.6-9.7 ns for phf at 9-149 keys. phf only beats match on its 2,125-key set (9.1 ns vs 25.1 ns).
+- Keys or values not known when you build, or tables that must change at runtime. Maps are immutable; to add or remove a key you regenerate and recompile.
+- Key types outside PhfHash (arbitrary structs, enum keys: open issue #196), or macro keys computed by const expressions (open issue #188, blocked on const traits). Every phf_map! key must use the same literal shape.
+- Huge phf_map! invocations in a crate you rebuild often: the proc macro reruns on every compile of that crate. Put big tables in their own crate or generate them with phf_codegen.
+
+**Integration:** crate (phf runtime + phf_macros proc-macro via the `macros` feature, or phf_codegen as a build-dependency) · phf -> phf_shared -> siphasher; optional serde, unicase, uncased; `macros` adds phf_macros (syn, quote, proc-macro2, phf_generator -> fastrand); phf_codegen build-dep pulls phf_generator + phf_shared (quote/proc-macro2 optional) · Rust 1.85 (MSRV, edition 2024) for phf 0.14; the in-repo phf-vs-HashMap lookup bench needs nightly (#[bench]) · Any Rust target including no_std (default-features = false); hashing is made endian/pointer-width independent for cross-compiling; CI runs only on ubuntu-latest (1.85, stable, nightly)
+
+**Vs siblings:** hashify, the only other Rust entry, looks up keys 4.1-12.6x faster than phf's default layout on its own Apple M5 Max benchmark. Its macros, though, return a lookup result in expression position over byte-slice keys and do not document iteration. Pick rust-phf when you need a named static Map/Set you can iterate, serialize or intern through, tuple keys, Unicode case-insensitive keys, or build.rs generation from data files. For C++ code use frozen, mph or constexpr-phf instead, since rust-phf is Rust-only.
+
+**Gotchas:**
+- phf_map! syntax is picky: integer literals in the first key must carry suffixes (0u32), and all keys must share the first key's expression type. OR patterns (`"+" | "add" => ...`) work in the macros but not in phf_codegen. Per-entry #[cfg] is handled by a decl-macro resolver since 0.14, after issue #356's overflow panic with many cfg'd entries, but a request for cfg support (#449) is still open, so test your case.
+- The `ptrhash` feature changes the Map struct's fields (pilots/remap instead of disps). It must be enabled on both the generator (phf_codegen/phf_macros) and the runtime phf crate. Because Cargo unifies features, one build uses one layout.
+- phf_codegen writes each value string verbatim as Rust source (you write "\"addition\"" for a &str value). build() panics on duplicate keys. The docs warn that 500+ chained .entry() calls overflow the compiler's stack; loop instead. The generated struct literal fills doc-hidden fields that 'are subject to change at any time', so keep phf and phf_codegen on the same version.
+- `MAP[key]` (Index) panics with 'invalid key' on a miss. Use get() on untrusted input.
+
+**Status:** Actively maintained: 0.14.0 released 2026-06-21 and commits through 2026-09-17. MIT-licensed and very widely used (~562M crates.io downloads, 1,176 reverse dependencies). The faster ptrhash layout is still marked experimental, and issue #458 proposes further tuning.
+
+[repo](https://github.com/rust-phf/rust-phf) · [benchmark](https://github.com/conduit-rust/conduit-mime-types/pull/18)
 
 #### priority-queues-heaps
 
@@ -8765,6 +9779,329 @@ Header-only Padé-polynomial libm replacements for exp/log/trig/asin-acos-atan/i
 
 [repo](https://github.com/dpiparo/vdt) · [benchmark](https://iopscience.iop.org/article/10.1088/1742-6596/513/5/052027)
 
+#### minimal-perfect-hash-functions
+
+##### ConsensusRecSplit  `C++`  `GPL-3.0`  `stale`  `Tier A`
+
+Minimal perfect hash function close to the 1.443 bits/key bound; builds about 100x faster than RecSplit at lower space.
+
+**Beats:** RecSplit — The authors' single-threaded benchmark (MPHF-Experiments, 100M random strings of 10-50 bytes, GCC 11.2 -O3 -march=native, Intel i7-11700) puts ConsensusRecSplit k=256, epsilon=0.1 at 1.578 bits/key and 248 ns/key build, against RecSplit l=12, b=2000 at 1.613 bits/key and 25,667 ns/key: about 103x faster construction at slightly lower space. For about the same build time as that RecSplit setting (30,245 ns/key), it reaches 1.444 bits/key. No standard-library baseline is involved, and the paper's '>350x' figure compares against bipartite ShockHash-RS at 1.489 bits/key, not RecSplit.
+
+**How:** It keeps RecSplit's recursive splitting but uses only balanced 2-way splits and finds their seeds with Consensus (Combined Search and Encoding of Successful Seeds). Each split gets a fixed-width field in one bit stream, and its effective seed is the 64-bit window ending at that field, so it includes the bits of the seeds before it. A depth-first search backtracks when a later split has no working seed. This brings the overhead down to about epsilon bits per seed for O(1/epsilon) expected work, so build time grows linearly in 1/epsilon rather than exponentially as in RecSplit and ShockHash. First, a threshold-based minimal k-perfect hash function (k = 256-32768, with a FiPS fallback for bumped keys) sorts the keys into buckets of exactly k. That skips the expensive, cache-unfriendly top splits.
+
+**Use it when:**
+- Large static key sets where MPHF size is the main constraint and you want 1.44-1.53 bits/key, a range where earlier methods need 30-360x more build time per the paper's Table 1.
+- As a replacement for RecSplit at roughly 1.6 bits/key: k=256, epsilon=0.1 gives 1.578 bits/key at 248 ns/key build (about 25 s for 100M keys), while RecSplit l=12 needs 25,667 ns/key for 1.613 bits/key.
+- Build-once, query-many workloads that can pay for one single-threaded construction of seconds (k=256) up to about 50 minutes (k=32768, epsilon=0.0005, 100M keys) in the process that will run the queries.
+- String keys, or 64-bit keys that are already uniformly hashed, on 64-bit Linux with GCC 12+ in a project that is GPL-3.0-compatible.
+- Research and benchmarking of near-space-optimal perfect hashing: it is the reference implementation of arXiv 2502.05613.
+
+**Skip it when:**
+- Latency-critical lookups. Queries take 140-217 ns on 100M keys, compared with 78-84 ns for bipartite ShockHash-Flat and 139-156 ns for RecSplit in the same table. PTHash reports 37-55 ns at about 3 bits/key in its own benchmark.
+- You need to save the function and load it later. There is no serialization API, so every process must rebuild it, which takes up to an hour at the most compact settings.
+- Proprietary or closed-source distribution. The license is plain GPL-3.0 with no runtime exception (unlike ShockHash), and the Util, FiPS and pasta bit_vector dependencies are also GPL-3.0.
+- Fast or parallel builds at 2-3 bits/key. Construction is single-threaded, the paper leaves parallelization as future work, and it compares only against methods below 1.6 bits/key. At that space budget PTHash or SIMDRecSplit are the tested choices.
+- Memory-constrained builds or production use that needs a maintained library. Build memory is not documented; the code keeps roughly 40 bytes per key of temporaries: 64-bit hashes, a 16-byte-per-key sort array and an unused copy of that array. The repo has 11 stars, no issues filed and no code commits since 2025-06-23.
+
+**Integration:** header-only (CMake INTERFACE target added with add_subdirectory; no install or package-config rules) · Git submodules tlx (BSL-1.0, compiled), ips2ra (BSD-2-Clause), ByteHamster/Util (GPL-3.0, pulls pasta bit_vector, GPL-3.0) and FiPS (GPL-3.0). It also needs TBB, pthread and libatomic linked through ips2ra, even though ips2ra's parallel mode is off. At configure time, pasta bit_vector uses FetchContent to download pasta_utils and tlx from GitHub at origin/main. · C++20 (double non-type template parameter, std::span, std::bit_width), CMake 3.25+; CI builds with GCC 12, 13 and 14; the paper used GCC 11.2; Clang is not tested in CI · 64-bit Linux; CI runs only on x86-64 Ubuntu 24.04. No specific ISA is required: pasta uses BMI2 pdep only when it is enabled. The code assumes a 64-bit `unsigned long` (`~0ul` masks, `1ul << 63`), so Windows/MSVC (LLP64) is not expected to work.
+
+**Vs siblings:** Pick it when bits/key matters most. At about 1.5 bits/key it builds about 30x faster than bipartite ShockHash-RS from the ShockHash repo (584 vs 17,736 ns/key), and at 1.53-1.56 bits/key about 360x faster than SIMDRecSplit. Choose PTHash or bipartite ShockHash-Flat instead when query latency matters or 3 bits/key is fine, and ShockHash when you need its GPL runtime exception.
+
+**Gotchas:**
+- The object owns a raw `bucketingPhf` pointer and has a user-declared destructor but no copy or move operations. Copying it double-frees, and so does `std::move`, which falls back to the copy. Build it in place or on the heap, as the MPHF-Experiments harness does. The internal k-perfect hash function also never frees its rank/select structure.
+- The `uint64_t` constructor uses the keys directly as hashes: the low 32 bits pick the bucket and the high 32 bits the threshold. Hash non-random integer keys first. String keys are reduced to a 64-bit MurmurHash64, and nothing checks for duplicates. Duplicate keys or 64-bit hash collisions (about 2.7% likely at 1B keys) can never be split, so the default level-wise search appears to loop forever. This is inferred from the code, not documented.
+- `k` (a power of two) and `overhead` (epsilon) are template parameters. Every setting you want to try must be instantiated at compile time, as the benchmark's dispatch shows.
+- The default level-wise constructor prints a timing line per tree level to `std::cout`, and the query-optimized one prints its tree size. The project adds `-march=native` only when it is the top-level CMake project.
+
+**Status:** Stale research code from KIT: the last code commit is 2025-06-23 (the 2026-01-04 release tag points to it) and no issues have ever been filed. It builds with GCC 12-14 CI and can be vendored with add_subdirectory plus submodules, but only into GPL-3.0-compatible projects.
+
+[repo](https://github.com/ByteHamster/ConsensusRecSplit) · [benchmark](https://arxiv.org/abs/2502.05613)
+
+##### Engineering Minimal/k-Perfect Hash Functions (stefanfred implementation)  `C++`  `GPL-3.0`  `stale`  `Tier A`
+
+Four minimal k-perfect hash functions; at k=10 threshold-based bumping builds 6.4x and queries 1.7x faster than cmph CHD.
+
+**Beats:** CMPH CHD (cmph library, run as non-minimal k-perfect with load factor 0.97, because cmph CHD supports only non-minimal k-perfect hashing) and the ad-hoc threshold-based bumping kPHF from CONSENSUS-RecSplit [30]; no BBHash, PTHash or 1-perfect RecSplit comparison — Paper Table 2 (ESA 2025) measures 100M random strings of length 10-50 with a single-threaded harness, GCC 11.2 -O3 -march=native, on an Intel i7-11700 running Rocky Linux 9.5. At k=10, Threshold-Based builds in 77 vs 495 ns/key and queries in 56 vs 96 ns against cmph CHD, which was run non-minimal at load factor 0.97 and is slightly smaller (0.627 vs 0.716 bits/key); Threshold-Based + Consensus beats CHD on all three axes (0.450 bits/key, 233 ns/key, 57 ns/query). CHD crashed at k=1000, and there are no k=1, BBHash/PTHash or std:: comparisons.
+
+**How:** Threshold-based bumping hashes keys into ceil(n/(k*gamma)) overloaded bins (gamma > 1). Each bin stores a few-bit index into a small table of fingerprint thresholds, chosen to minimize expected empty slots under a gamma-distribution model, so most queries cost one bin hash and one comparison; bumped keys go to further layers, and a small FiPS 1-PHF plus an Elias-Fano list places the last few keys into leftover slots. Construction only radix-partitions keys by bin (ips2ra) and runs quickselect to find the k-th fingerprint instead of fully sorting, which the paper credits for being up to 50% faster to build than the next-best technique; optional 1-bit BuRR retrieval packing and CONSENSUS-coded thresholds trade some speed for space. The other three are k-perfect ports of known ideas: hash-and-displace with a k-specific optimal bucket-assignment function (CHD/PHOBIC style), RecSplit with leaves of size k, and PaCHash (an Elias-Fano predecessor search plus retrieval).
+
+**Use it when:**
+- You need a static set of string keys split into ceil(n/k) bins of exactly k keys. The paper's examples are a page index for an external-memory hash table, a completely filled bucketized in-memory table, and equal-size partitions for building 1-perfect hash functions.
+- Large k (100-1000) where index size matters. At k=1000, Threshold-Based uses 0.010-0.011 bits/key (lower bound 0.006) with 44-45 ns/key construction and 24-25 ns queries on 100M keys.
+- You currently use cmph CHD_PH in k-perfect mode. At k=10, Threshold-Based builds in 77 vs 495 ns/key and queries in 56 vs 96 ns, and it works at k=1000, where the authors report CHD crashes.
+- Space-critical k=10 indexes. Threshold-Based + Consensus reaches 0.450 bits/key with 57 ns queries; k-RecSplit reaches 0.445 bits/key if 291 ns queries are acceptable.
+- Benchmarking new kPHF designs: the repo's contenders/ and benchmarklib/ harness already wraps all constructions plus cmph CHD and the older ad-hoc threshold-based bumping.
+
+**Skip it when:**
+- You need an ordinary MPHF (k=1). No k=1 experiments exist, so use a 1-perfect sibling such as PTHash, PtrHash or ConsensusRecSplit.
+- The key set changes, or the function must be persisted and reloaded. The structures are static, and none has save/load support (k-RecSplit's stream operators are compiled out with #if 0).
+- You need a permissive license. The code is GPL-3.0, and its FiPS dependency is GPLv3 too.
+- You use MSVC/Windows or a pre-C++23 toolchain. The targets require cxx_std_23, and the code relies on unsigned __int128, __builtin_ctzll and a 64-bit unsigned long (~0ul, 1ul << n). It was only tested on Linux x86-64.
+- You need production maturity, non-string keys or a custom hasher. It is research code with 1 star, no releases and no unit tests beyond the benchmark's validity check. Keys must be std::string (hashed with SpookyHash), except that Threshold-Based also accepts pre-computed 128-bit hashes. Construction is single-threaded.
+
+**Integration:** header-only (CMake add_subdirectory + git submodules; the ThresholdBasedBumping and PaCHash targets also build the SimpleRibbon/BuRR shared library) · Submodules: sux, ByteHamster/Util (with pasta-bit-vector), SimpleRibbon (BuRR, ips2ra, tlx), FiPS, gcem, tlx. cmph and ConsensusRecSplit are needed only for the benchmarks. HashDisplace.hpp includes a header by relative path from inside the simple-ribbon submodule. · C++23 (cxx_std_23), CMake 3.24+ (the SimpleRibbon, FiPS and Util submodules declare 3.25). Paper builds used GCC 11.2 with -O3 -march=native; spack.yaml pins GCC 14.2 and CMake 3.30. GCC/Clang only. · Tested only on x86-64 Linux (Intel i7-11700). There are no SIMD intrinsics in the kphf headers, but the code assumes LP64 and GCC/Clang extensions. -march=native is added only when the project is built top-level.
+
+**Vs siblings:** Every catalogued sibling (PTHash, PtrHash, PHast, RecSplit, ConsensusRecSplit, ShockHash and others) is a 1-perfect MPHF, so pick this only when you need bins of exactly k>1 keys. Its Threshold-Based variant is the tuned successor of the ad-hoc threshold-based bumping in ConsensusRecSplit (1.293 -> 0.716 bits/key at k=10, 137 -> 56 ns queries), and k-RecSplit is the k>1 port of Sux RecSplit.
+
+**Gotchas:**
+- optimalThresholds.hpp and consensus.hpp define non-inline functions and a global (gammapdf, compute_thresholds_normalized, `uint64_t backtracks`). Including the threshold-based headers in more than one translation unit of a single binary therefore gives multiple-definition link errors, so confine them to one .cpp.
+- Duplicate keys are never checked. k-RecSplit documents that duplicates make construction never return, and the other constructions do no deduplication either.
+- Parameters must be tuned per k. The paper's Table 2 uses gamma=2.0 with 2^4-2^5 thresholds for k=10 and gamma=1.2 with 2^7-2^9 thresholds for k=1000. The benchmark binaries only instantiate k in {2, 4, 8, 10, 100, 1000}.
+- k-PaCHash's build prints 'Num ribbon: ...' to stdout on every construction. Its bucket-scan loop also evaluates keys[offset] with offset == keys.size() after the last key, which is an out-of-bounds read (undefined behavior that sanitizers would flag).
+
+**Status:** Frozen research code since the ESA 2025 paper (last commit 2025-07-03, 1 star, no issues, no releases, only a 'zenodo' tag). It is usable via CMake add_subdirectory with 8 submodules, but GPL-3.0 copyleft and unserializable structures limit production use.
+
+[repo](https://github.com/stefanfred/engineering-k-perfect-hashing) · [benchmark](https://arxiv.org/pdf/2504.20001)
+
+##### LeMonHash  `C++`  `GPL-3.0`  `active`  `Tier A`
+
+Learned monotone minimal perfect hash (key to sorted rank): about 3-5 bits/key and 7-19x faster queries than trie-based MMPHFs.
+
+**Beats:** Prior monotone MPHF implementations: the Grossi-Ottaviano C++ Centroid Hollow Trie, Hollow Trie and Path Decomposed Trie (ot/path_decomposed_tries), plus the Belazzougui et al. Java implementations from Sux4J of the Hollow Trie Distributor, Hollow Trie, ZFast Trie, LCP, LCP 2-step, PaCo, VLLCP and VLPaCo — The ESA 2023 paper (arXiv v3) ran single-threaded on an Intel Xeon E5-2670 v3 (2.3 GHz), with GCC 11.1.0 -O3 -march=native, and 5M random member queries per dataset. On 100M uniform 64-bit keys, LeMonHash (epsilon=31) answered 2.72M queries/s at 2.98 bits/key, against 0.35M at 4.61 for the Grossi-Ottaviano C++ Hollow Trie (7.7x) and 0.18M at 4.54 for Sux4J's Java Hollow Trie (15.2x). On 800M osm keys it answered 1.34M/s at 4.42 bits/key, against 0.073M for Sux4J's HTDist (18.3x) and 0.19M for the C++ Hollow Trie (7.2x). The Java baselines ran on OpenJDK 17 after one unmeasured JIT warm-up, each experiment ran twice and was averaged, and no std:: container, binary search or non-monotone MPHF was measured. The paper's own Table 2 reports 1.85M queries/s for the same uniform configuration, so per-query cost depends on the harness.
+
+**How:** Trie-based MMPHFs walk a trie; LeMonHash instead learns the key distribution. A PGM-index (an error-bounded piecewise-linear model, epsilon=31 by default) gives each key an approximate rank, which is used directly as its bucket index, so most buckets hold 0 or 1 keys. The start rank of each bucket is kept as a unary bit vector with a pasta select structure (2n+o(n) bits). Only keys that collide get a local rank stored, in one of ten BuRR (bumped ribbon retrieval) structures picked by ceil(log2 bucket size); the paper puts BuRR's space overhead below 1%. A query is a predecessor search over the PGM segments, one linear-model evaluation, one select and at most one retrieval lookup. That is a small, flat number of memory accesses, where Hollow and ZFast tries chase pointers down O(log u) levels. LeMonHash-VL applies the same scheme recursively to strings. It strips each node's common prefix and turns the next 64-bit chunk into a key, compressing the chunk through a per-node reduced alphabet. It finds child nodes through a PTHash MPHF and per-level partitioned Elias-Fano offset arrays.
+
+**Use it when:**
+- Static, sorted sets of 64-bit integers (IDs, positions, cell IDs, timestamps) where you need each key's rank but cannot afford to store the keys. The paper measured 2.6-3.0 bits/key on uniform, normal, exponential and 5gram data and 4.4-4.9 bits/key on osm and fb, against 4.1-6.0 bits/key for the Hollow-Trie family and 6.1-7.9 for PaCo and ZFast.
+- Query-heavy rank lookups on large sets (100M-800M keys). Single-threaded on a 2014 Xeon it answers 1.3-2.7M queries/s: about 7-8x the Grossi-Ottaviano C++ Hollow Trie and 12-21x the Sux4J Java Hollow Trie and HTDist, at the same or smaller space on every integer dataset except fb.
+- Mapping a sorted key universe onto a dense value array while keeping locality. Consecutive keys land in consecutive slots, so range scans stay sequential. The paper notes this can make an MMPHF preferable to a plain MPHF for array indexing, because memory accesses in sorted order are cache-friendlier.
+- Sorted string dictionaries (terms, k-mers) with LeMonHash-VL, when query speed matters more than the last 10-13% of space. On 35M web terms it answers 1.28M queries/s at 6.08 bits/key. The smallest competitor (HTDist) manages 0.09M/s at 5.40 bits/key, and the C++ Hollow Trie 0.35M/s at 5.84.
+- Batch rebuilds where construction time counts. The default epsilon=31 integer build runs at 5.0-8.5 MKeys/s single-threaded (about 120-200 ns/key), up to 2x faster than the competitor with the next-best space.
+
+**Skip it when:**
+- You do not need sorted order. Every catalogued sibling is a non-monotone MPHF at about 1.5-3 bits/key, with catalogued query times in the tens of nanoseconds (on other hardware). In the paper's runs LeMonHash takes about 370-750 ns per integer query and 0.8-3 us per string query.
+- Membership tests or changing key sets. Foreign keys get an arbitrary rank (there is no fingerprint), any insert means a full rebuild, and without serialization every process start rebuilds from the full in-memory key vector: 5-8.5 MKeys/s for integers, 2.3-2.7 MKeys/s for strings.
+- Long URL-like strings, or when minimum space is the goal. On 106M URLs (average 105 bytes) LeMonHash-VL drops to 338K queries/s, and the C++ Centroid Hollow Trie is 18% faster there (399K/s at 8.36 vs 6.46 bits/key). On strings, LeMonHash-VL uses 10-13% more space than HTDist. On fb IDs, the Hollow tries and HTDist beat LeMonHash's 4.91 bits/key (4.50-4.84).
+- Non-x86-64, non-GCC or non-Linux targets. support/util.h includes <immintrin.h> unconditionally, the string code assumes little-endian unaligned 64-bit loads, and CI covers only GCC 10-13 on x86-64 Ubuntu.
+- Proprietary or permissively licensed products. LeMonHash is GPL-3.0 and links GPL-3.0 ByteHamster/Util.
+
+**Integration:** header-only API (CMake INTERFACE target `LeMonHash`) that links small compiled shared libs: SimpleRibbon/BuRR, RibbonSorter and 4 sdsl-lite source files. It is consumed as a recursive git submodule via add_subdirectory; there are no install or package-config rules. · Git submodules: SimpleRibbon (Apache-2.0 BuRR wrapper, built as a shared lib, pulls ips2ra and tlx), ByteHamster/Util (GPL-3.0, pasta bit_vector, MurmurHash64), ds2i (partitioned Elias-Fano; its configuration.hpp uses boost::lexical_cast), sdsl-lite (bit utilities, partly compiled), PTHash (MIT, used by LeMonHash-VL for node lookup) and tlx. System: Boost (README requirement); CI also installs libtbb-dev. The PGM-index is re-implemented in-tree (include/bucket_mapping/support), not pulled as a dependency. · C++20 (cxx_std_20) and CMake 3.25+. The README says GCC 11 or later, but the 2026-09-13 CI run built successfully on GCC 10, 11, 12 and 13. Clang and MSVC are not tested. The paper used GCC 11.1.0. · x86-64 Linux as written. The integer variant pulls in <immintrin.h> through BucketOffsets.hpp -> support/util.h. bextr uses BMI when __BMI__ is defined and falls back otherwise. ds2i is configured with SUCCINCT_USE_INTRINSICS, described as 'available on all x86-64'. -march=native is added only when LeMonHash is the top-level CMake project. The bundled benchmarks need glibc (mallinfo2). ARM, macOS and Windows are not documented.
+
+**Vs siblings:** All catalogued siblings (PTHash, PtrHash, RecSplit, ShockHash, SicHash, PHast and others) are non-monotone MPHFs, so pick LeMonHash only when the output must be the key's rank in sorted order: range scans over a rank-indexed array, or rank queries on a static set without storing it. If any bijection to [0,n) will do, PTHash or PtrHash (about 3 bits/key and 37-45 ns queries in their entries) or ShockHash or RecSplit (1.56-1.8 bits/key) beat LeMonHash's 2.6-4.9 bits/key and roughly 0.37-0.75 us per integer query, though those numbers come from different hardware.
+
+**Gotchas:**
+- Input must be sorted and duplicate-free, and the whole set must be in a std::vector. The integer constructor throws std::invalid_argument('Data not sorted or duplicates found'), but LeMonHashVL checks order only through debug asserts, so sort and deduplicate strings yourself.
+- Do not copy or move a built object. SimpleRibbon's MultiRetrievalDataStructure owns raw SimpleRibbon* pointers and deletes them in a user-declared destructor, with no copy or move constructors. The implicit copy (which a move also falls back to) therefore creates two owners, and both delete the same pointers. Construct in place or behind new/unique_ptr, as the author's MMPHF-Experiments wrapper does.
+- The defaults are the paper's tuned settings: LeMonHash<> uses SuccinctPGMBucketMapper<31>, and LeMonHashVL<> uses thresholds 128/128, alphabet reduction and UnalignedPGMBucketMapper<63>. epsilon=0 auto-tunes over 63/31/15 and roughly halves integer build speed (3.5 vs 6.5 MKeys/s on uniform keys) for little space gain. LinearBucketMapper and LeMonHashHeuristic only suit uniform data: on fb the linear mapper needs 34.35 bits/key and manages 0.8K queries/s.
+- LeMonHashVL packs a node's common-prefix length into a 15-bit field and per-level offset indexes into 30 bits, and throws 'Increase offsetsOffsetBits' when the offsets overflow. Expect trouble with shared prefixes over 32 KB or with more than about 1B bucket offsets in one tree level. spaceBits() prints to stdout.
+
+**Status:** The code has barely changed since 2023: dependency and CMake upgrades in 2024-2025 and a SimpleRibbon/BuRR submodule bump on 2026-09-13, with CI green on GCC 10-13. It has 32 stars and has never had an issue or PR filed. GPL-3.0 and the submodule-based build limit it to GPL-compatible projects.
+
+[repo](https://github.com/ByteHamster/LeMonHash) · [benchmark](https://arxiv.org/pdf/2304.11012)
+
+##### PHOBIC-GPU  `C++`  `GPL-3.0`  `stale`  `Tier A`
+
+Vulkan GPU builder for PHOBIC minimal perfect hash functions; builds about 62x faster than 8-thread CPU PHOBIC.
+
+**Beats:** PHOBIC (CPU construction, part of jermp/pthash) — The authors' PHOBIC paper (arXiv 2404.18497, ESA 2024, Table 1) built MPHFs on 100M random 10-50 character strings. PHOBIC-GPU (RTX 3090 via Vulkan 1.3.236, plus 8 CPU threads) took 27 ns/key at lambda=9 with interleaved Rice coding (1.76 bits/key, 52 ns CPU query). The authors' own CPU PHOBIC took 1,781 ns/key with 8 threads and 9,171 ns/key with 1 thread on an i7-11700 (GCC 11.4.0 -O3 -march=native). The text calls this a 62x speedup (the table itself gives about 66x) and about 30x less energy (405 W vs 195 W draw). No std:: baseline is involved: this compares the same algorithm on a GPU and on a CPU.
+
+**How:** It runs the PHOBIC algorithm: PTHash-style bucket placement with an optimized bucket-size distribution (OptBucketer), tiny partitions of about 2,048-2,500 keys, and interleaved coding of the seeds. Each partition maps to one Vulkan compute workgroup, and that partition's occupancy bitmap fits in fast shared memory. A per-partition counting-sort shader orders buckets by decreasing size. All threads in the workgroup then search seeds together with a single-loop version of the usual seed/key nested loop: a shared atomicAdd hands out the next candidate, and atomicMin keeps the smallest working seed, which avoids warp divergence. Seeds encode p = s*m + d (an additive displacement), so trying the next candidate only adds 1 to cached positions. The CPU uses OpenMP for the xxHash3-128 master hashing and the final Rice/Compact encoding.
+
+**Use it when:**
+- Rebuilding large MPHFs (the paper benchmarks 10^8 string keys) where build time dominates and a desktop GPU is idle: 27-28 ns/key vs 1,781 ns/key for 8-thread CPU PHOBIC at lambda=9.
+- Space-efficient settings (lambda 9-14, about 1.67-1.76 bits/key) that are too slow to build on a CPU. For example, lambda=13 gives 1.68 bits/key at 560 ns/key on the GPU, and the paper says much larger lambda is not feasible on the CPU.
+- Query-heavy lookup tables that need PTHash-class CPU query latency (37-52 ns) but GPU-speed builds. RecSplit-GPU builds equally fast but queries in 126-147 ns.
+- Linux machines with a Vulkan 1.3 GPU that supports VK_KHR_maintenance4, where build energy matters: the paper measures about 30x less energy per build than the 8-thread CPU.
+
+**Skip it when:**
+- Small inputs or small lambda. Moving the keys to the GPU dominates there: Fig. 6 in the paper shows the GPU needs large n (many partitions) and large lambda to pay off.
+- When you need faster queries. Queries run the same CPU code as PHOBIC, so only construction gets faster.
+- When you need to save and load the function, build in external memory, or go past 2^32 keys. The MPHF class has no serialization, the key count is a uint32_t, and all keys are uploaded to the device at once (16 bytes/key for the key buffer alone). pthash covers these cases.
+- Machines without a Vulkan GPU and driver. Only an Nvidia RTX 3090 on Linux was benchmarked, and CI only builds on Ubuntu 22.04 without running anything.
+- Production use without in-house maintenance: this is research code with 4 stars, one merged PR, no issues filed, and GPL-3.0 copyleft.
+
+**Integration:** shared lib · Vulkan SDK (libvulkan, headers, glslc shader compiler), OpenMP; git submodules xxHash, jermp/essentials, tlx (benchmark CLI only); bundled fastmod.h · C++17, CMake 3.19+, Vulkan 1.3 (shaders compiled with --target-env=vulkan1.3, SPIR-V 1.5); the paper used GCC 11.4.0 · Linux with a Vulkan 1.3 GPU that has VK_KHR_maintenance4 (prefers a discrete GPU; benchmarked only on an Nvidia RTX 3090); the query-side code is plain C++
+
+**Vs siblings:** Choose this over PTHash, whose master branch now ships CPU PHOBIC as pthash::phobic, only when you have a Vulkan GPU and build time on about 10^8 keys dominates; PTHash gives the same query path plus serialization and multithreaded or external-memory builds. Choose it over GpuRecSplit (CUDA) when query latency matters: build speed is similar (27 vs 24 ns/key at about 1.8 bits/key) but CPU queries take 52 ns vs 126 ns; GpuRecSplit is the better choice below 1.6 bits/key (1.58 bits/key at 80 ns/key).
+
+**Gotchas:**
+- Compiled shaders are loaded at runtime from the relative path "shaders/<name>.comp.spv" under the current working directory, but the build writes them to ${CMAKE_BINARY_DIR}/shaders. A process started from any other directory throws "failed to open file".
+- The README says to link `PHOBIC-GPU`, but the CMake target is actually `GpuPTHash` (MPHF-Experiments links `GpuPTHash`).
+- Debug builds (NDEBUG unset) turn on VK_LAYER_KHRONOS_validation and throw std::runtime_error if the layer is not installed. All Vulkan failures, including out-of-memory on the device, are reported as std::runtime_error.
+- The example says the partition size should be tuned for your GPU (defaults: 2,048 in MPHFconfig, 2,500 in the paper). MPHF-Experiments has to `#undef MAX_BUCKET_SIZE` between including pthash.hpp and phobic_gpu_mphf.hpp.
+
+**Status:** Stale research code: the last commit (2025-07-03) only edited the README, and the last code change was 2025-03-20. It has 4 stars and is GPL-3.0 (but CITATION.cff says AGPL-3.0-or-later). You can use it via CMake add_subdirectory, but expect to fix things yourself.
+
+[repo](https://github.com/stefanfred/PHOBIC-GPU) · [benchmark](https://arxiv.org/abs/2404.18497)
+
+##### RecSplit (Sux C++ library)  `C++`  `GPL-3.0-or-later WITH GCC-exception-3.1`  `stale`  `Tier A`
+
+Header-only RecSplit MPHF: 1.8 bits/key, smaller than CMPH's CHD and about 2x faster to build and query on 1e9 keys.
+
+**Beats:** CMPH — In the PTHash authors' mphf_benchmark (Table 5 of the SIGIR'21 paper): 1e9 uniformly random 64-bit keys, one core of an i9-9900K, gcc 9.2.1 -O3 -march=native. RecSplit l=8,b=100 built in 936 s at 1.80 bits/key with 204 ns lookups; CMPH's CHD took 1972-23746 s (lambda 4-6) for 2.01-2.17 bits/key with ~417 ns lookups. At 1e8 keys the same table shows a smaller build gap (92 s vs 121 s for CHD lambda=4; lookups 124 vs 204 ns). The harness pins a May 2020 sux commit (before the BMI2-detection fix that PR #16 says speeds queries by 10-20%) and builds CMPH through its own autotools configure.
+
+**How:** Keys are hashed once to 128 bits with SpookyHash and bucketed, b keys per bucket on average (5 to 2000). Each bucket is split recursively: fanout 2 at the top, then fixed-size groups, down to leaves of at most LEAF_SIZE keys. At every node a brute-force search finds a seed that splits the keys exactly (at leaves, one that maps them bijectively). Only the seeds are stored, as Golomb-Rice codes whose parameters are tables computed at compile time, and a double Elias-Fano list gives each bucket's key offset and bit position. A lookup is therefore one Elias-Fano access plus a short walk down one bucket's tree, using multiply-shift range reduction and broadword select (BMI2 pdep/tzcnt when compiled for it). The RecSplit paper (ALENEX 2020) reports 1.56 bits/key this way, 8.3% above the 1.44 bits/key lower bound.
+
+**Use it when:**
+- Static key sets of millions to billions of keys (URLs, k-mers, dictionary terms) that are built once and queried many times, where the MPHF must be small: about 1.8 bits/key at LEAF_SIZE=8, b=100, down to 1.56 bits/key at LEAF_SIZE=16, b=2000.
+- Replacing CMPH's CHD in C++ code: on 1e9 random 64-bit keys RecSplit l=8,b=100 is smaller (1.80 vs 2.01-2.17 bits/key), builds 2.1-25x faster and answers lookups in about half the time (204 vs ~417 ns).
+- When you want to tune space against build time: LEAF_SIZE (a template parameter) and bucket size cover the range from 233 s at 2.95 bits/key (l=5, b=5) to 936 s at 1.80 bits/key (l=8, b=100) on 1e9 keys.
+- Read-heavy services that query one built instance from many threads: operator() is const and has been thread-safe since 1.0.1.
+- Linux servers with large key sets, where AllocType::TRANSHUGEPAGE or FORCEHUGEPAGE puts the structure on huge pages; switching takes one template argument.
+
+**Skip it when:**
+- Latency-bound lookups: about 200 ns/key at 1e9 keys in the PTHash paper's Table 5, against 37-64 ns for PTHash at 3-4 bits/key.
+- When the build must be fast or parallel at very low space: this construction is single-threaded, and the GpuRecSplit README measures it at about 1.2 ms/key for l=16, b=2000 (1.56 bits/key), against 138 us/key for single-threaded SimdRecSplit.
+- Dynamic sets or membership tests: the structure is immutable (any change means a full rebuild), and keys outside the set map to arbitrary valid indices (issue #21), so you must store your own fingerprints to reject them.
+- Key sets that don't fit in RAM: this implementation holds all 128-bit hashes in memory (16 bytes/key, about 16 GB for 1e9 keys) and sorts them. The paper's external-memory construction is not implemented here.
+- Windows/MSVC builds: the headers need POSIX sys/mman.h, GCC/Clang builtins and attributes, and variable-length arrays, and CI builds only on Ubuntu x86-64.
+
+**Integration:** header-only · none (SpookyV2.hpp is bundled; googletest only for the test suite) · C++20 (std::span, since PR #23 in Oct 2024); GCC or Clang; __int128 support for more than 2^32 keys · POSIX. x86-64 has BMI/BMI2 fast paths with portable fallbacks, and an aarch64 build fix was merged in 2022 (PR #15). CI covers only Ubuntu 24.04. The PTHash mphf_benchmark harness disables RecSplit on __APPLE__.
+
+**Vs siblings:** Pick it when you want the authors' small, dependency-free reference RecSplit that you can copy into an include path at about 1.8 bits/key. Take SimdRecSplit/GpuRecSplit for the same structure with 8-50x faster (and multi-threaded) construction, ShockHash or ConsensusRecSplit below about 1.6 bits/key, PTHash for 3-5.5x faster lookups at 3-4 bits/key, and emphf when 2.61 bits/key with a 374 s build at 1e9 keys fits better than RecSplit's 1.80 bits/936 s or 2.95 bits/233 s.
+
+**Gotchas:**
+- Duplicate keys make the constructor loop forever (documented in the header, and issue #20 was closed as won't-fix), so deduplicate first.
+- The hash128_t constructor assumes uniformly random 128-bit hashes and sorts your span in place. Structured values such as hash128_t(0, i) overflow the fixed 3000-key bucket limit and segfault (issue #7). Hash integer keys first, e.g. with first_hash(&key, sizeof key) as mphf_benchmark does.
+- Compile with -DNDEBUG: the code is 'heavily asserted', and without it the Elias-Fano constructor re-checks every bucket. Errors come as assert/abort, never exceptions: loading a file saved with another LEAF_SIZE calls abort(). The serialized format is raw host-endian binary with no version field.
+- Header hygiene: 'using namespace std' inside sux::function, global macros (likely, unlikely, first_hash, skip_bits, ALLOW_UNALIGNED_READS) and a global SpookyHash class can collide with other code in a large codebase.
+
+**Status:** Stale: the master branch is unchanged since October 2024 and the last release is 1.0.4 (June 2023). A May 2026 'bench' branch commit touches only Elias-Fano/select, not RecSplit. There are no open issues, and this is the algorithm authors' own header-only code under GPLv3 plus the GCC Runtime Library Exception ('use it everywhere, exactly like libstdc++'), though RecSplit.hpp still carries a leftover LGPLv3 paragraph, which is why GitHub reports NOASSERTION.
+
+[repo](https://github.com/vigna/sux) · [benchmark](https://github.com/roberto-trani/mphf_benchmark/blob/main/README.md)
+
+##### ShockHash  `C++`  `GPL-3.0 WITH GCC-exception-3.1`  `stale`  `Tier A`
+
+C++ minimal perfect hash: RecSplit with cuckoo-hashing leaves, building 1.56-1.58 bits/key MPHFs 15-160x faster than RecSplit/SIMDRecSplit.
+
+**Beats:** RecSplit — The paper's Table 1 (arXiv 2308.09561v2) measures 10M random strings of length 10-50, single-threaded, compiled with GCC 11.2.0 -O3 -march=native on an Intel i7-11700 with AVX-512, running SIMDShockHash with rotation fitting. At ~1.56 bits/key, ShockHash-RS n=39 builds at 1,805 ns/key against SIMDRecSplit's 137,902 ns/key (~76x). At ~1.585 bits/key, n=30 builds at 787 ns/key against sux RecSplit's 125,521 ns/key (~160x), but only ~15x against SIMDRecSplit's 11,749 ns/key. Queries are 114-118 ns against 97-108 ns.
+
+**How:** It keeps RecSplit's recursive splitting tree but replaces the brute-force bijection search in each leaf (about e^n seed trials) with ShockHash ('small, heavily overloaded cuckoo hash tables'): each seed gives every key two candidate cells in an n-cell table, and the seed is accepted if the random graph is a pseudoforest, meaning the table can be filled completely by cuckoo insertion. A 1-bit BuRR ribbon retrieval structure records which of the two cells each key uses, and this cuts the expected trials to (e/2)^n·poly(n), almost 2^n fewer, so leaves can have n=30-58 instead of RecSplit's ~8-16. Most seeds are rejected early by a bit-mask filter that checks every cell is hit; the filter runs in registers with AVX2/AVX-512 SIMD, and rotation fitting tries n cyclic rotations of half the keys per hash evaluation.
+
+**Use it when:**
+- Static key sets (millions to hundreds of millions of string keys) where the MPHF must sit close to the 1.44 bits/key lower bound. Table 1 configurations reach 1.52-1.58 bits/key.
+- You already use RecSplit or SIMDRecSplit at b=2000 with leaf 14-16 and build time is the bottleneck. At matched space, ShockHash-RS builds in 787-1,805 ns/key; RecSplit and SIMDRecSplit take 11,749-137,902 ns/key.
+- Processes that build the function once and keep it in RAM, where a ~115 ns query is acceptable. For example, 10M keys with n=30, b=2000 is about 8 s of single-threaded construction.
+- x86-64 Linux with GCC 11+ and AVX2 or AVX-512, using SIMDShockHash with rotation fitting. This is the configuration the paper measured.
+- To go below ~1.52 bits/key, use `ShockHash2` (bipartite ShockHash, arXiv 2310.14959) from the same repo. Its abstract reports 1.489 bits/key for 10M keys in about half an hour.
+
+**Skip it when:**
+- Lookup latency is the constraint. In the same Table 1, queries take 114-118 ns; PTHash takes 20-34 ns and FMPHGO 53-69 ns, at 2.2-4.4 bits/key.
+- You need to save the function to disk and load it later. ShockHash, SIMDShockHash and ShockHash2 have no serialization API (sux RecSplit has `operator<<`/`operator>>`), so every run must rebuild.
+- Dynamic key sets, or code that must detect foreign keys. The function is static and returns an arbitrary index for keys it was not built on, so you need a separate key or fingerprint store.
+- Clang, MSVC, Windows, macOS or ARM toolchains. CI covers only GCC 11/12/13 on Ubuntu, the code uses `<experimental/simd>`, raw x86 intrinsics in the SIMD path and `1ul` shifts of up to 60 bits, and CMake links Intel TBB.
+- The most compact ShockHash-RS setting (n=58, 1.523 bits/key) costs 111,593 ns/key, about 19 minutes single-threaded for 10M keys. The newer ConsensusRecSplit reports getting much closer to the bound.
+
+**Integration:** shared lib (CMake add_subdirectory of the repo with submodules; header-only INTERFACE target plus compiled shared libs ShockHash2Precompiled, Ips2raShockHashSorter, SimpleRibbon, RibbonSorter) · Git submodules: sux (ByteHamster fork), SimpleRibbon (BuRR, ips2ra, tlx), tlx, ByteHamster/Util (pasta-bit-vector), and vectorclass (SIMD variant only). Intel TBB from the system (CI installs libtbb-dev). CMake 3.25+. · C++20; GCC 11+ (CI tests GCC 11/12/13; a commit notes GCC 10 lacks <experimental/simd>); CMake 3.25 · Tested only on Linux x86-64 (Ubuntu CI). SIMDShockHash needs AVX2, uses AVX-512 when available, and must be compiled with -DSIMD. Clang, macOS, Windows and aarch64 are not documented. The code assumes 64-bit unsigned long, and keys beyond 2^32 need __int128 support.
+
+**Vs siblings:** Pick it over RecSplit (sux) or SimdRecSplit when you want 1.52-1.59 bits/key without their 11,749-137,902 ns/key builds, and can accept up to ~20% slower queries (114-118 vs 97-108 ns) and no serialization. Prefer ConsensusRecSplit (same group, 2025; 1.4448 bits/key on 100M keys in about an hour) for minimum space, and PTHash or SicHash when 2-4.4 bits/key is acceptable in return for builds and queries several times faster.
+
+**Gotchas:**
+- Duplicate keys make the constructor loop forever. This is documented in SIMDShockHash's doc comment, as in sux RecSplit. Deduplicate keys before building.
+- MAX_BUCKET_SIZE is 3000, and the header says it 'works with high probability up to average bucket size ~2000'. Only an assert guards the limit, so keep bucket_size at 2000 or below.
+- CMake compiles Ips2raShockHashSorter and ShockHash2Precompiled with -march=native unconditionally, and the ShockHashSIMD target passes -march=native on to consumers. Binaries may not run on CPUs older than the build host.
+- The Table 1 numbers come from `SIMDShockHash<n, true>` (SIMD plus rotation fitting, via the MPHF-Experiments ShockHashContender). The README example `ShockHash<30, false>` is the slower scalar path without rotation fitting. SIMDShockHash stops with #error unless built with -DSIMD (link the ShockHashSIMD target).
+
+**Status:** Stale: the last commit was 2025-03-31, there are no releases or tags, no GitHub issues have ever been filed, and it has 15 stars. The research code uses GPL-3.0 with the GCC Runtime Library Exception, which the README says permits use like libstdc++. Vendoring it means vendoring six submodules and depending on system TBB.
+
+[repo](https://github.com/ByteHamster/ShockHash) · [benchmark](https://arxiv.org/abs/2308.09561)
+
+##### SicHash  `C++`  `GPL-3.0`  `active`  `Tier A`
+
+Cuckoo-hashing-plus-retrieval (minimal) perfect hash for static key sets: about 2.1 bits/key against BBHash's 3.3-3.7, with faster queries.
+
+**Beats:** BBHash — The ALENEX'23 paper ran single-threaded on random 10-50-byte strings, on a dual-socket Xeon E5-2670 v3 with GCC 11.1 -O3 -march=native. SicHash leads the construction-throughput-vs-space Pareto front at load factors 0.85-0.97 for 5M/20M keys (for example 1.75 bits/key built at 3.27 MKeys/s, against PTHash's 0.61 and RecSplit's 0.76 at 1.76-1.78 bits). BBHash appears only in plots, at 3.5-4.0 bits/key, where it builds faster but queries slower at every N from 10^6 to 2x10^8. The author's thesis re-ran it on an i7-11700 with GCC 11.2 and 100M keys, and gives the BBHash gap in numbers: 2.197 vs 3.288 bits/key, 148 vs 172 ns/key to build, and 66 vs 93 ns/query. No std:: container was compared.
+
+**How:** Keys are radix-sorted (ips2ra) into buckets of about 5000 keys. Each bucket becomes a small irregular cuckoo hash table: a hash threshold gives each key 2, 4 or 8 candidate slots, keys are placed with rattle kicking, and tables are filled past the asymptotic load threshold. Small tables vary in how full they can get, so a retry with a new 16-bit seed usually succeeds. Only the chosen slot index is kept (1, 2 or 3 bits per key), in three BuRR bumped-ribbon retrieval structures with about 1% overhead, plus one 64-bit offset/seed word per bucket; minimal PHFs remap slots >= N into holes through an Elias-Fano list, the same trick PTHash uses. A query is one retrieval lookup, one bucket-metadata read and a hash. Those are three independent memory accesses that can be prefetched, with no BBHash-style per-level rank lookups and no RecSplit-style tree decoding.
+
+**Use it when:**
+- Replacing BBHash on static sets of millions to hundreds of millions of keys to cut memory by about a third. At 100M keys the author measured 2.08-2.20 vs 3.29-3.71 bits/key, faster lookups (64-66 vs 85-93 ns) and similar single-thread build time (148-180 vs 135-172 ns/key).
+- Non-minimal PHFs at load factor 0.85-0.97, such as slot indexes into a slightly oversized array. The paper puts it on the construction-vs-space Pareto front for 5M-20M keys: 1.61 bits/key at 0.85 and 1.75 bits/key at 0.95.
+- Key sets that are rebuilt often (index rebuilds, batch pipelines), where build cost matters as much as lookups. The author's thesis reports builds up to about 2x faster than PTHash/PHOBIC at comparable space.
+- String keys, or keys you already hash to 64 bits, in a GPL-compatible C++20/CMake project on Linux with GCC 11+ or Clang 16+.
+
+**Skip it when:**
+- You need the smallest MPHF. The minimal variant bottoms out near 2.0-2.1 bits/key, while ShockHash, SIMDRecSplit and RecSplit reach 1.49-1.81 bits/key. The paper itself says that for MPHFs, RecSplit produces the smallest data structures.
+- Lookup latency or build throughput is the only metric. PTHash/PHOBIC answer queries in 35-60 ns vs SicHash's 64-66 ns at 100M keys. Above 3 bits/key, fingerprinting builds (FiPS at 45-51 ns/key, and BBHash in the paper's heat map) construct faster.
+- Closed-source or permissively licensed products. SicHash and its ByteHamster/Util dependency are plain GPL-3.0.
+- Many-core builds or very large sets. Most build time goes to BuRR, which has no parallel implementation, so the partitioned build scaled poorly on a 64-core AMD machine. Construction is in-memory only (an external-memory build is only sketched in the paper), and the paper tested up to 2x10^8 keys.
+- Tiny sets, or MSVC/Windows/macOS targets. Below about 1M keys it no longer dominates (paper Appendix B). The 4-key README example segfaulted until a Nov 2024 fix (issue #4). CI covers only Linux GCC/Clang.
+
+**Integration:** header-only API (CMake INTERFACE target) that links a compiled shared lib (SimpleRibbon, a BuRR wrapper); consumed via add_subdirectory with recursive git submodules · SimpleRibbon/BuRR (Apache-2.0, built as a shared lib), ips2ra, ByteHamster/Util (GPL-3.0; Elias-Fano on pasta-bit-vector, MurmurHash64) and tlx, all as git submodules; the CI also installs libtbb-dev · C++20, CMake 3.25+; CI tests GCC 11-14 and Clang 16-18 · Linux x86-64 in CI; the paper also ran it on an AMD Ryzen 3950X and an ARM Neoverse-N1. Uses GCC/Clang builtins (__builtin_prefetch, __uint128_t). Windows/macOS/MSVC are not documented. -march=native is added only when SicHash is the top-level CMake project
+
+**Vs siblings:** Pick SicHash over PTHash when build time matters at about 2 bits/key. The thesis measured 148-180 vs 268 ns/key at 100M keys, and the paper shows 3.27 vs 0.61 MKeys/s at 1.75 bits/key; the cost is slower lookups (about 65 vs 35-60 ns/query). Pick it over the RecSplit family (RecSplit, SIMDRecSplit, ShockHash) when query latency matters more than 0.3-0.7 extra bits/key: 64-66 vs 118-157 ns/query at 2.08-2.20 vs 1.49-1.81 bits/key.
+
+**Gotchas:**
+- Construction prints progress to std::cout by default; set `config.silent = true`. `spaceUsage()` on a minimal SicHash<true> always prints a 'Remap space' line.
+- Keys must be std::string (hashed internally with MurmurHash64) or values you have already hashed. Raw integers passed to the uint64_t constructor trip a sanity check that throws invalid_argument. Every key collapses to one 64-bit hash, and there is no duplicate-key check, so duplicates or 64-bit collisions are not detected; the behavior is not documented.
+- A loadFactor of 0.999 or more throws; use SicHash<true> to get a minimal PHF. For minimal PHFs, pick the minimalFanoLowerBits template argument (3/4/5 for load factor <0.89/<0.94/<0.97). Thresholds that are too aggressive throw logic_error after 65,536 seed retries in one bucket.
+- A SicHash object can be neither copied nor moved: its BuRR members are move-only, it has a user-declared destructor and it owns a raw Elias-Fano pointer. Hold it through a pointer, as the author's MPHF-Experiments wrapper does. `writeTo()` dumps raw structs, and the format tag is checked only by assert(), so files are not portable across compilers or endianness and are not validated in release builds.
+
+**Status:** The author still maintains it: last commit 2025-09-30, CI on GCC 11-14 and Clang 16-18, no open issues. Commits are sporadic, it has 20 stars, and GPL-3.0 plus the submodule-based CMake build limit vendoring to GPL-compatible projects.
+
+[repo](https://github.com/ByteHamster/SicHash) · [benchmark](https://arxiv.org/pdf/2210.01560)
+
+##### SimdRecSplit / GpuRecSplit  `C++`  `GPL-3.0 WITH GCC-exception-3.1`  `active`  `Tier A`
+
+SIMD, multicore and GPU construction of RecSplit minimal perfect hashes; single-threaded builds about 4x faster than BBHash at similar space.
+
+**Beats:** BBHash — Paper Table 3 (arXiv 2212.09562v2) measures 10M random strings of length 10-50, single-threaded, with GCC 11.2 -O3 -march=native on an AVX-512 Intel i7-11700. SIMDRecSplit l=5,b=5 builds at 49 ns/key and 2.96 bits/key, against BBHash gamma=1.0 at 208 ns/key and 3.059 bits/key (about 4.2x, derived); BBHash gamma=5.0 matches the speed but needs 6.871 bits/key. The 50x/239x/5438x speedups over original RecSplit (SIMD 1 thread, 16 threads, RTX 3090) come from Table 1 (l=18, b=50, 5M random 128-bit keys), and there is no std baseline.
+
+**How:** Rotation fitting splits a leaf's keys into two halves by one hash bit, then cyclically rotates one half's bit mask to fill the other's holes, so one hash evaluation tests up to m candidate bijections (up to 3x faster construction per the paper). The brute-force seed search is vectorized: each AVX2/AVX-512 lane (Vector Class Library) tests a different seed, and splitting counts use packed 8-bit counters. Independent buckets are radix-sorted with IPS2Ra and split across threads. On the GPU, each leaf or split runs as a CUDA thread block, and same-shaped trees are batched into one kernel.
+
+**Use it when:**
+- Static sets of millions of string keys on x86-64 with AVX2/AVX-512, when build time and space both matter (1.81 bits/key at 107 ns/key build, single-threaded, 10M keys).
+- Very compact MPHFs (about 1.56-1.7 bits/key) that original RecSplit takes hours to build. For 5M keys at 1.56 bits/key, the paper reports about 2 minutes on the CPU and 5 s on an RTX 3090, against 1.5 hours for the original code.
+- Multi-core offline builds: buckets are split across threads without changing the query layout, and the paper shows good scaling on 8-core and 64-core machines.
+- You have an NVIDIA GPU and want the most space-efficient settings: GPURecSplit reaches 1.496 bits/key with l=24.
+
+**Skip it when:**
+- Latency-bound lookups: queries take 71-110 ns/key, against 20-35 ns for PTHash and 36-51 ns for BBHash (Table 3). Queries run on the CPU and walk a Golomb-Rice-coded tree.
+- Non-x86 CPUs, or CPUs without AVX2/AVX-512. SIMDRecSplit is x86-only and falls back to slow emulated SIMD without AVX2. On an AVX2-only AMD EPYC, sequential SIMDRecSplit took 4.6x longer than on the AVX-512 Intel machine. On ARM, only the non-SIMD variant reportedly builds, and CI does not test it.
+- Dynamic key sets, or input with possible duplicate keys. The structure is static, and duplicate keys make construction never return.
+- Projects that cannot take GPL-3.0 (even with the GCC Runtime Library Exception), or that must ship portable binaries, because the CMake targets force -march=native onto consumers.
+- GPURecSplit in a process that uses CUDA for other work (see gotchas). The GPU also gains little for space-inefficient settings, where host-device transfers dominate.
+
+**Integration:** shared lib: header-only class templates, plus one small CMake-built shared library (Ips2raRecSplitSorter) that every target links. Consume it via git clone --recursive and add_subdirectory. · Git submodules: sux (ByteHamster fork), gcem, tlx, ips2ra, and vectorclass (SIMD only). System: Intel TBB, pthread and libatomic. The CUDA toolkit is needed for GPURecSplit. · C++20 and CMake 3.25+. CI uses GCC 10-13 on Ubuntu 24.04. The paper used GCC 11.2 and CUDA 11, and a Jan 2026 commit fixes a newer nvcc. · SIMDRecSplit: x86-64 only; the target needs SSE4.2, and full speed needs AVX2 or AVX-512 (tuned for AVX-512). GPURecSplit: NVIDIA GPU for construction, CPU for queries. Portable variant: reportedly builds on ARM. CI covers Linux only.
+
+**Vs siblings:** On 10M string keys it builds 1.81 bits/key in 107 ns/key, against SicHash's 2.41 bits in 119 ns and PTHash's 3.31 bits in 199 ns, and it builds Sux RecSplit's ~1.8 bits/key 6.6x faster with about 7% slower lookups. Pick PTHash instead when lookups dominate (20-35 vs 71-110 ns), and ShockHash (1.489 bits/key, per the author) for space near the 1.44-bit bound.
+
+**Gotchas:**
+- Duplicate keys make the constructor loop forever, so deduplicate first. Leaf size is capped at 24, and the code comments say bucket size works with high probability only up to an average of about 2000 (MAX_BUCKET_SIZE=3000).
+- The CMake targets set -march=native and -DSIMD as INTERFACE options, so your own target is compiled for the build machine's CPU.
+- GPURecSplit calls cudaDeviceReset() at the end of construction and exit() on any CUDA error, which destroys other CUDA state in the process or the process itself.
+- The output is not interchangeable. The functions differ from Sux RecSplit, and the portable variant differs from SIMD/GPU (a test checks those two for equivalence). Serialization is a raw native binary stream that checks only the leaf size.
+
+**Status:** Active research code from KIT (last commit 2026-01-04 fixes nvcc compatibility; CI on GCC 10-13; 0 open issues, 16 stars), copyable as a git submodule plus add_subdirectory under GPLv3 with the GCC Runtime Library Exception, the same terms as libstdc++.
+
+[repo](https://github.com/ByteHamster/GpuRecSplit) · [benchmark](https://arxiv.org/abs/2212.09562)
+
+##### MorphisHash  `C++`  `GPL-3.0`  `stale`  `Tier B`
+
+Minimal perfect hash function that removes ShockHash's redundant cycle-orientation bits: 1.501 vs 1.523 bits/key at equal build time.
+
+**Beats:** ShockHash — In the MPHF-Experiments harness (std::string keys) on 100M keys on an Intel Core i7-11700, bipartite MorphisHash-RS (n=52, b=n-4) measured 1.501 bits/key, 137 ns/query and 6,669 ns/key build vs bipartite ShockHash-RS (n=66) at 1.523 bits/key, 147 ns and 7,186 ns/key. At an equal 1.489 bits/key, it built in 8,085 vs 172,738 ns/key. The paper does not state the compiler or flags (the CMake default is Release with -march=native), and there is no std:: or CMPH baseline. The abstract's '20x less overhead' applies to one unpartitioned base case (under 0.1 vs about 2 bits total at b=n-6, with about 4x more seed tests), not to the bits/key of a full MPHF.
+
+**How:** The gain is in space, not speed. As in bipartite ShockHash, each key gets two candidate positions, and a seed search samples random graphs until the graph is a pseudoforest, which can be oriented into a bijection. ShockHash then stores n bits of orientation in a retrieval structure and wastes about one bit per cycle, because every cycle has two valid orientations. MorphisHash writes the valid orientations as a GF(2) linear system Ay = d, substitutes a smaller b-bit retrieval vector (y = Hx, b < n), and solves AHx = d with Gaussian elimination only for seeds that pass the pseudoforest filter. The paper proves this saves Θ(ln n) bits per base case in expectation; a query reads the seed and the b-bit vector, takes the parity of a masked 128-bit hash and picks one of the two candidates.
+
+**Use it when:**
+- Static key sets that are built once and queried many times, where the size of the MPHF matters most (for example compressed indexes or k-mer tools), and single-core build costs of about 6-8 microseconds per key are acceptable.
+- You want the space-optimized RecSplit-style trade-off. On 100M keys, MorphisHash-RS (n=52, ws=4) gives 1.501 bits/key with 137 ns queries and a 6,669 ns/key build, about 0.02 bits/key less than bipartite ShockHash-RS at the same build time.
+- You need ShockHash-RS space (1.489 bits/key) without its build time: MorphisHash-RS builds at 8,085 ns/key vs 172,738 ns/key, about 21x faster, with similar queries (139 vs 131 ns).
+- You want queries around 75 ns at about 1.54 bits/key: MorphisHash-Flat (n=88, ws=2) gives 1.541 bits/key vs 1.554 for bipartite ShockHash-Flat at the same query time.
+- Your platform is Linux x86-64 with GCC 11-13 and CMake subprojects, and a GPL-3.0 (plus GCC Runtime Library Exception) dependency is acceptable.
+
+**Skip it when:**
+- Space is the only priority: in the same Table 1, Consensus-RS reaches 1.447 bits/key at a similar build cost (6,733 ns/key), but its queries are slower (222 ns vs 137 ns).
+- Query latency is the priority: PHOBIC answers in 49 ns vs 137 ns for MorphisHash-RS, at 1.749 bits/key.
+- The key set changes or you need membership tests: there is no insert or delete, and non-member keys map to arbitrary valid slots unless you store keys or fingerprints yourself.
+- You need a maintained production library: there is no save/load serialization API in the headers and no README usage docs; the repo has 3 stars, and the code last changed in April 2025.
+- Your toolchain is MSVC or non-GCC: the code needs libstdc++ <experimental/simd>, __uint128_t, __builtin_parityll and glibc's __attribute_noinline__ macro, and CI only covers GCC 11, 12 and 13 on Ubuntu 24.04.
+
+**Integration:** shared lib — header templates plus two CMake-built shared libraries (MorphisHash2Precompiled, Ips2raMorphisHashSorter); consume via add_subdirectory and link the MorphisHash target · sux, tlx, ips2ra (links Intel TBB, pthread and libatomic) and ByteHamster/Util (pulls in pasta bit_vector); all are git submodules except TBB, which must be installed · C++20, CMake 3.25+, GCC 11+ (CI tests GCC 11, 12 and 13) · x86-64 Linux is tested (paper uses an Intel Core i7-11700; top-level Release builds use -march=native). The GCC/glibc-specific code rules out MSVC. Other architectures are not documented.
+
+**Vs siblings:** Pick MorphisHash over ShockHash when you want ShockHash-RS space at about 1/21 of its build time, or slightly less space at the same build time. Pick ConsensusRecSplit instead when the last 0.05 bits/key matters more than queries 1.6x slower (1.447 bits/key, 222 ns vs 137 ns in the same table), and PTHash/PHOBIC or PtrHash when queries must be under about 50 ns and 1.7-3 bits/key is acceptable.
+
+**Gotchas:**
+- Input keys must be distinct, and neither constructor checks this. Identical keys hash identically under every seed, so the while (true) seed search can never find a bijection.
+- The library writes to stdout during construction ('Skipped seed because of floating point inaccuracy' from the seed-pairing function). The precompiled base-case dispatcher prints to stderr and calls exit(1) for leaf sizes or widths that were not compiled in (leaf sizes up to 106 and up to 7 below each).
+- MorphisHashFlat allocates its rank-select structure with a raw new and has no destructor or copy/move handling, so it leaks and copies share the pointer. Construct it in place, as MPHF-Experiments does with new.
+- All tuning is compile-time and barely documented. The paper's Pareto picks are ws=4 (b=n-4) for RS and ws=2 for Flat. MorphisHashFlat's template order is <k, ws, extraSeedBits>, while the MPHF-Experiments wrapper orders it <l, eb, ws>.
+
+**Status:** The repo is stale research code, a fork of ByteHamster/ShockHash: the code last changed 2025-04-08, the README 2025-07-03, and its only release is a 'zenodo' archive tag (2025-11-13). It ships ShockHash's GPLv3 COPYING plus COPYING.RUNTIME (GCC Runtime Library Exception), so it can be vendored at a pinned commit with submodules, but expect to fix build and API rough edges yourself.
+
+[repo](https://github.com/stefanfred/MorphisHash) · [benchmark](https://arxiv.org/abs/2503.10161)
+
 #### ordered-maps-trees
 
 ##### Flat-Map-RB-Tree (dro::FlatMap)  `C++`  `GPL-3.0`  `stale`  `Tier A`
@@ -9141,6 +10478,43 @@ Windows memory-mapped line reader using memchr; ~4x faster line iteration than s
 **Status:** Abandoned since 2019-11-13 (single maintainer, no open issues or PRs, 5 stars); GPL-3.0 plus the ATL dependency make it copyable only into GPL-compatible, Windows-with-ATL projects.
 
 [repo](https://github.com/GeorgiiFirsov/FastReader) · [benchmark](https://github.com/GeorgiiFirsov/FastReader#test-results)
+
+#### perfect-hash-static-tables
+
+##### cmph / cxxmph (mph_map)  `C`  `LGPL-2.1-only OR MPL-1.1`  `abandoned`  `Tier C`
+
+C minimal-perfect-hash library (BDZ/CHD/BRZ) plus cxxmph::mph_map, claimed 10-50% faster than std::unordered_map on >100k URLs.
+
+**Beats:** std::unordered_map (cxxmph's dense_hash_map / sparse_hash_map are its own flavors named after the sparsehash classes; cxxmph/bm_map.cc benchmarks only against std::unordered_map) — The only figure is the author's prose in mph_map.h: on large (>100k) URL sets the cxxmph maps were 'about 10%-50% faster than unordered_map'. The repo harness (bm_map.cc) runs 10M lookups over a 100k-URL file with StringPiece keys at 0% and 90% miss rates, plus 100k uint64 keys, against std::unordered_map with a Murmur3 hasher. The URL file is not shipped, no results are published, and neither compiler nor hardware is given; the header only advises -O3 -DNDEBUG.
+
+**How:** The core is BDZ (Botelho, Pagh, Ziviani): each key hashes to one edge of a random 3-partite 3-uniform hypergraph; construction peels degree-1 vertices to prove the graph acyclic, then assigns 2-bit g values so that (g[v0]+g[v1]+g[v2]) mod 3 selects a slot unique to that key. In cxxmph a lookup is one MurmurHash3 x64_128 call, three 2-bit reads from a table of about 2.93 bits per bucket, a presence bit and at most one key comparison, with no chain walk or probe sequence; that is why the header says gains grow with key size, set size and miss rate. mph_map uses the non-minimal PHF (~81% slot occupancy, modulo), dense_hash_map rounds partitions to a power of two so a mask replaces the modulo (~50% occupancy), and sparse_hash_map adds a rank table for a minimal, 100%-occupied layout at extra lookup cost. The C library also offers CHD (~2.07 bits/key, fastest build) and BRZ (external-memory build for billions of keys).
+
+**Use it when:**
+- Read-mostly string-keyed maps with 100k+ long keys (URLs, paths) that are expensive to compare, especially with many lookup misses: the header's only stated win case. Bulk-load, call rehash(), then serve lookups.
+- Assigning dense ids to a fixed set of 10^6 to 10^9 keys (URLs, words, n-grams) through the C API, with values stored in your own array indexed by the id.
+- Key sets that do not fit in RAM: the BRZ algorithm builds in external memory with a memory budget (-M) and temp dir, producing functions under 8 bits/key.
+- You need a compact, serializable static index: CHD ~2.07 bits/key or BDZ ~2.6 bits/key, dumped to a file or packed with cmph_pack into a blob that can be mmapped and queried with cmph_search_packed.
+
+**Skip it when:**
+- Insert-heavy or interleaved insert/lookup workloads: new keys go to a side std::unordered_map that every lookup checks first, and when the value vector fills the whole BDZ index is rebuilt in O(n).
+- Small maps, integer keys or cheap comparisons: the author warns the classes 'are not necessarily faster than their existing counterparts' and gives a figure only for >100k URLs; no numbers exist for other shapes.
+- Code that relies on std::unordered_map guarantees: any insert can relocate every element (invalidating all iterators and references), value_type is pair<Key, Data> so keys are mutable through iterators, the Alloc parameter is unused, and count/at/emplace/equal_range/reserve are missing.
+- Looking up keys that were not in the build set through the C API: cmph_search returns an arbitrary id for them (zvelo issue #4), so you must store and compare the keys yourself.
+- Projects that need a maintained or MSVC-ready codebase from this URL: the zvelo copy is frozen at 2012, cxxmph uses __builtin_expect and POSIX random(), and in this copy every mph_map unit test except erase_iterator is commented out.
+
+**Integration:** shared lib (autotools/libtool builds libcmph, and libcxxmph with --enable-cxxmph); cxxmph is 'header-mostly' and can be source-dropped as mph_map.h plus mph_index.cc, trigraph.cc, mph_bits.cc and MurmurHash3.cpp · none at runtime beyond libm; autotools to build; the check library only for the optional unit tests · C library: portable C with autotools. cxxmph: C++11 (configure adds -std=c++0x or gnu++0x) on GCC or Clang · C library: GNU/Linux and WIN32, reported to work on OpenBSD and Solaris (README). cxxmph: GCC/Clang on POSIX systems, because of __builtin_expect and random(). No SIMD or architecture requirements.
+
+**Vs siblings:** Pick cmph when the key set is built at run time and is far too large for compile-time tables such as frozen, constexpr-phf or ConstexprCore/perfect_hash: 10^6 to 10^9 keys, a serialized or mmapped function, or an external-memory build with BRZ. For a runtime std::unordered_map replacement, fph-table's dynamic perfect-hash map has published figures; cxxmph::mph_map has only an unquantified header claim.
+
+**Gotchas:**
+- In the zvelo copy, MPHIndex owns a raw new[] rank table and defines no copy constructor, so copying or assigning a populated map double-frees it; bonitao/cmph replaced it with std::vector.
+- A failed build is fatal: if BDZ finds no acyclic hypergraph in 1000 random seeds, mph_map::pack() calls exit(-1). Keys other than strings and built-in integers are hashed through std::hash truncated to 32 bits, so two keys that share those 32 bits collide for every seed and trigger this; by the birthday bound that is a real risk from about 10^5 keys.
+- Call rehash() after bulk loading (the benchmark does this before timing): until then pack() keeps twice the slot count reserved and recent inserts sit in the slack map. rehash() shrinks to fit, so the first insert after it triggers a full rebuild.
+- C API input must be duplicate-free, or the build fails with 'Unable to create minimum perfect hashing function' (FAQ, zvelo issue #2). An open report (bonitao issue #5) describes a memcpy pointer-arithmetic bug in BRZ's buffer_entry.c; the same line is present in this copy.
+
+**Status:** zvelo/cmph is an abandoned 2012 import (last code change 2012-12-05; the 2017 commit only deleted a config file), so vendor the author's active repo github.com/bonitao/cmph instead: it has CI, recent commits (latest 2026-04-27, mostly tooling) and a fix for the rank-table copy bug, under the same LGPL-2.x / MPL-1.1 dual license.
+
+[repo](https://github.com/zvelo/cmph) · [benchmark](https://github.com/zvelo/cmph/blob/master/cxxmph/mph_map.h)
 
 #### small-buffer-and-strings
 

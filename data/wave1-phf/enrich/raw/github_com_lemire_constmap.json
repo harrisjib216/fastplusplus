@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/lemire/constmap",
+  "one_liner": "Immutable Go string-to-uint64 map built on binary fuse filters; up to 5.3x faster lookups than map[string]uint64 at 1M keys.",
+  "what_it_does": "An immutable map from string keys to uint64 values in Go. You build it once from parallel key and value slices with constmap.New(keys, values) and query it with Map(key) uint64. It does not store the keys, so looking up a key outside the build set returns an arbitrary value; VerifiedConstMap (and its PairedVerifiedConstMap layout) adds a per-key fingerprint and returns the NotFound sentinel instead. It is not a drop-in for map[string]uint64: there is no insert, delete, iteration, len or comma-ok form, but maps can be saved to and loaded from files in a format shared with the author's Rust and Python ports.",
+  "how_it_is_fast": "It is a retrieval structure (static function), not a hash table. The binary fuse filter construction (Graf and Lemire, ACM JEA 2022) gives each key three positions in overlapping segments of a uint64 array about 1.125n long, peels the resulting 3-hypergraph to find an order, and fills cells so the XOR of a key's three cells equals its value. A lookup is one XXH64 hash plus a murmur finalizer, three array loads and two XORs, with no key comparison and no probing, and the array is about 9 bytes/key against about 48 for Go's map, so much more of it stays in cache. MapMany hashes blocks of eight keys first, using an amd64/arm64 assembly XXH64 that keeps the primes in registers, so the loads of all eight keys are in flight at once.",
+  "when_to_use": [
+    "Read-only string-to-ID or string-to-offset tables in Go (dictionaries, token or symbol IDs, feature-name indexes) built at startup or offline, where every queried key is known to be in the set.",
+    "Key sets from about 100K to 10M, where Go's map spills out of cache: the README reports 8.7 vs 46 ns at 1M keys (random order) and 4.1x in its scaling test, at 9.0 vs about 48 bytes/key.",
+    "Memory-constrained services: about 9 bytes/key without keys stored, or 18 bytes/key when you need missing-key detection, against 27-48 bytes/key measured for the Go map.",
+    "Bulk lookups of keys shorter than 32 bytes: MapMany/MapManyInto run 34-47% faster than a loop over Map on an Apple M4 Max and 0-32% faster on a Xeon Gold 6548N (README batch table), and MapManyInto does not allocate.",
+    "Values wider than 64 bits: store an index into a side array; the author's blog measured 11 ns vs 21 ns for map[string][]float32 at 100K keys."
+  ],
+  "when_not_to_use": [
+    "The key set changes at runtime: there is no insert or delete, every change means a full rebuild, and construction is slower than filling a Go map (the README says so but gives no figure).",
+    "Callers may pass keys that were never inserted and you use plain ConstMap: it silently returns a wrong value. Use VerifiedConstMap (15 ns, 18 bytes/key at 1M keys) or accept the risk.",
+    "Small or cache-hot working sets: the README measures only 1.2x over 256 repeated queries and about 1.6x at 10K keys, which may not justify a non-standard API.",
+    "Maps far larger than the last-level cache: the margin falls to about 2.0x at 10M keys in the README, and a blog reader measured near-parity at 25M keys on an M3 Max (45.70 vs 47.21 ns) under the older sequential benchmark.",
+    "You need iteration, key recovery, len, or values other than uint64, or mostly-absent lookups with PairedVerifiedConstMap, which the README says is slower than VerifiedConstMap on misses."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "github.com/cespare/xxhash/v2 v2.3.0",
+    "min_toolchain": "Go 1.22 (go.mod); CI tests on current stable Go",
+    "platforms": "any Go target via pure-Go code; amd64 and arm64 get assembly for batched hashing and the paired gather (SSE2/NEON, no CPU feature gate); -tags purego disables it; CI covers linux x64, linux arm64 and macOS",
+    "thread_safety": "not documented; from the source, Map and MapMany only read slices that are never modified after construction, so concurrent lookups appear safe",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "ConstMap.Map on a map built from zero keys indexes an empty slice and panics (from the source); VerifiedConstMap and PairedVerifiedConstMap return NotFound instead.",
+    "VerifiedConstMap cannot tell a stored value of 0xFFFFFFFFFFFFFFFF from a missing key, and its false-positive rate is about 2^-64 per the doc comment.",
+    "The seed is mixed in after an unseeded XXH64, so two distinct keys with the same XXH64 make New fail with 'duplicate key hash detected' on every retry; duplicate keys also return an error rather than keeping the last value. This matters for adversarial key sets.",
+    "Construction allocates a temporary map[uint64]uint64 over all keys plus several per-slot scratch arrays, so peak build memory is several times the final ~9 bytes/key."
+  ],
+  "pick_this_over_siblings_when": "Pick it for Go: it is the only Go entry in this category, and fastconstmap is the same binary-fuse design for CPython/C and reads the same files, so you can build in one language and load in the other. The C++ siblings (frozen, qlibs mph, ConstexprCore/perfect_hash) generate tables at compile time for small keyword sets, while constmap builds at runtime and scales to millions of keys at about 9 bytes/key.",
+  "verified_claims_summary": "The author's go test benchmark on an Apple M4 Max (Go version not stated) looked up each of 1,000,000 'key-%d' strings once in random order: ConstMap 8.7 ns vs 46 ns for a presized Go map[string]uint64 (5.3x), and VerifiedConstMap 15 ns (about 3.1x), at 9/18 vs 48 bytes/key. A separate scaling test times one run of 1,000,000 lookups per size (so repeated passes below 1M keys and a partial pass at 10M), and there the gap is about 1.6x at 10K keys, 4.1x at 1M and 2.0x at 10M.",
+  "status_note": "Actively developed (v1.2.0 on 2026-09-17, four tagged releases since March 2026) and Apache-2.0 on GitHub, though pkg.go.dev lists the license as UNKNOWN and hides the API docs; it is a small pure-Go package with one dependency and easy to vendor.",
+  "sources_read": [
+    "https://github.com/lemire/constmap",
+    "https://github.com/lemire/constmap/blob/main/README.md",
+    "https://github.com/lemire/constmap/blob/main/constmap.go",
+    "https://github.com/lemire/constmap/blob/main/mapmany.go",
+    "https://github.com/lemire/constmap/blob/main/paired.go",
+    "https://github.com/lemire/constmap/blob/main/paired_asm.go",
+    "https://github.com/lemire/constmap/blob/main/paired_other.go",
+    "https://github.com/lemire/constmap/blob/main/hashbatch_asm.go",
+    "https://github.com/lemire/constmap/blob/main/hashbatch_other.go",
+    "https://github.com/lemire/constmap/blob/main/constmap_test.go",
+    "https://github.com/lemire/constmap/blob/main/go.mod",
+    "https://github.com/lemire/constmap/blob/main/go.sum",
+    "https://github.com/lemire/constmap/blob/main/LICENSE",
+    "https://github.com/lemire/constmap/blob/main/.github/workflows/test.yml",
+    "https://github.com/lemire/constmap/commits/main",
+    "https://github.com/lemire/constmap/releases",
+    "https://github.com/lemire/constmap/issues/1",
+    "https://github.com/lemire/constmap/issues/3",
+    "https://github.com/lemire/constmap/pull/2",
+    "https://lemire.me/blog/2026/03/29/a-fast-immutable-map-in-go/",
+    "https://lemire.me/blog/2026/05/05/mapping-strings-to-float-arrays-in-go-how-fast-can-we-go/",
+    "https://pkg.go.dev/github.com/lemire/constmap"
+  ],
+  "confidence": 0.8
+}

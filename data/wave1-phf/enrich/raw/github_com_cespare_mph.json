@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/cespare/mph",
+  "one_liner": "Pure-Go static string-to-index table (CHD-style minimal perfect hash); author's 2021 benchmark shows 27% faster lookups than map[string]uint32.",
+  "what_it_does": "Builds an immutable lookup table from a fixed []string. Lookup(s) returns the key's index in that slice plus a found flag, and values live in a parallel slice indexed by that result. The whole API is Build(keys []string) *Table and (*Table).Lookup(string) (uint32, bool). There is no insert, delete, iteration, generics or serialization, so replacing a read-only map[string]T takes a small refactor.",
+  "how_it_is_fast": "Build hashes keys with Murmur3 (seed 0) into about n/4 buckets and sorts the buckets largest-first. For each bucket it searches for a Murmur3 seed that sends all of the bucket's keys to free slots in a power-of-two array. This is the hash-and-displace step of CHD (Belazzougui, Botelho, Dietzfelbinger, ESA 2009) without the compress step. A Lookup is two seeded Murmur3 hashes, two uint32 array reads and one string compare against the stored key, with no probing and no collision chains. The 32-bit Murmur3 is hand-written and reads 4-byte blocks directly from the string bytes via unsafe.",
+  "when_to_use": [
+    "Read-heavy Go code with a fixed set of string keys known at startup (keywords, routes, dictionary words, enum names), where lookup latency matters and rebuilds are rare.",
+    "Short keys such as dictionary words: all published wins are on word lists (about 102k and 348k words), and the key is hashed twice per lookup.",
+    "Lookups that include absent keys: Lookup compares against the stored key, so a non-member returns ok=false instead of a bogus index.",
+    "When you want a zero-dependency file to vendor: 165 lines of non-test Go in two files, MIT-licensed.",
+    "Toolchains older than Go 1.24, where the built-in map was the pre-Swiss-table design that every published mph benchmark was run against."
+  ],
+  "when_not_to_use": [
+    "Keys that change at runtime. The Table is immutable, so any insert or delete means a full rebuild. The README gives 18 ms for 102k words on an i7-8700K, and the PR #4 benchstat shows 32.7 MB and 302k allocations per Build for about 348k words.",
+    "Go 1.24 or later without re-benchmarking. Go 1.24 moved the built-in map to Swiss Tables, which the Go blog says are up to 60% faster on map microbenchmarks. The README's own margin already shrank from 'almost twice as fast' (2016) to 28% (2018) and then 27% (2021).",
+    "Long keys. Each Lookup runs a scalar 32-bit Murmur3 over the whole key twice. Issue #3 measured that hash at 16.3 ns for 50 bytes and 202 ns for 500 bytes on a Xeon.",
+    "Tight memory budgets or very large key sets. Seeds and slots are uncompressed uint32 arrays (roughly 5-10 bytes per key after power-of-two rounding), and the table also keeps the full keys slice. That is far above the 2-3 bits/key of compact MPHFs.",
+    "Non-string keys, or tables you want to persist. Only string keys are supported, and with no serialization the table is rebuilt at every process start."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none (stdlib sort, reflect, unsafe)",
+    "min_toolchain": "go.mod declares go 1.17; no generics are used",
+    "platforms": "any Go target in principle; all published results are amd64 (i7-8700K, Skylake laptop, Xeon); the hash does native-endian, possibly unaligned uint32 loads through unsafe",
+    "thread_safety": "The Table is documented as immutable and Lookup only reads, so concurrent Lookups are safe by construction. Concurrency is not stated explicitly.",
+    "drop_in_for_baseline": "partial — it replaces only a read-only map[string]uint32-style index. Values must move to a parallel slice, and there is no insert, delete, range or len."
+  },
+  "gotchas": [
+    "Duplicate keys make Build loop forever. Two identical keys collide under every seed, and the seed search has no retry limit and no error return.",
+    "Build on an empty slice returns a Table whose Lookup panics with index out of range, because it always reads keys[n] and the slice is empty.",
+    "The Table keeps a reference to the caller's keys slice, not a copy. Modifying that slice after Build silently breaks lookups.",
+    "murmur.go uses the deprecated reflect.SliceHeader/StringHeader to load native-endian uint32 words. Its test vectors are the standard little-endian Murmur3 values, and the repo has no CI, so big-endian and strict-alignment targets are untested."
+  ],
+  "pick_this_over_siblings_when": "The other Go entry, dgryski/go-mph, uses one metro hash per query and depends on go-metro, and because it stores no keys an absent key returns an arbitrary index. Pick cespare/mph over it when you need built-in membership checks and zero dependencies. Pick it over C++/Rust MPHFs such as PTHash or PtrHash (2-3 bits/key, scaling to billions of keys) only in pure-Go code with modest key counts where storing the keys is acceptable.",
+  "verified_claims_summary": "The README's go test -bench run on an Intel i7-8700K (2021; Go toolchain not stated, so the old pre-Swiss-table map) looked up each word of a ~102k-entry /usr/share/dict/words in turn: Table.Lookup took 29.99 ns/op and map[string]uint32 took 40.92 ns/op, 27% less time for mph. A third-party run in issue #3 (2022, Xeon 2.80GHz, 348,454 words) measured 35.4 vs 67.8 ns/op, and nobody has published a run on Go 1.24 or later.",
+  "status_note": "Abandoned: the last commit and the only tag (v0.1.0) date from 2021-09-01, and a 2022 PR (#4) that switches to xxh3 for ~23% faster lookups is still unmerged. The code is MIT-licensed and 165 lines, so it is easy to vendor and patch.",
+  "sources_read": [
+    "https://github.com/cespare/mph",
+    "https://github.com/cespare/mph/blob/main/README.md",
+    "https://github.com/cespare/mph/blob/main/mph.go",
+    "https://github.com/cespare/mph/blob/main/murmur.go",
+    "https://github.com/cespare/mph/blob/main/mph_test.go",
+    "https://github.com/cespare/mph/blob/main/murmur_test.go",
+    "https://github.com/cespare/mph/blob/main/go.mod",
+    "https://github.com/cespare/mph/blob/main/LICENSE.txt",
+    "https://github.com/cespare/mph/issues?q=",
+    "https://github.com/cespare/mph/issues/1",
+    "https://github.com/cespare/mph/pull/2",
+    "https://github.com/cespare/mph/issues/3",
+    "https://github.com/cespare/mph/pull/4",
+    "https://github.com/cespare/mph/commits/main",
+    "https://github.com/cespare/mph/commit/ecff71bf0208e9325253df11d1cd0e26c7a7a813",
+    "https://github.com/cespare/mph/commit/ed7a6385751e73b58f942091445de0831b5d5945",
+    "https://github.com/cespare/mph/commit/862e796",
+    "https://github.com/cespare/mph/commit/96ffc64",
+    "https://github.com/cespare/mph/tags",
+    "https://github.com/cespare/mph/branches",
+    "https://pkg.go.dev/github.com/cespare/mph",
+    "https://pkg.go.dev/github.com/cespare/mph?tab=importedby",
+    "https://github.com/dgryski/go-mph",
+    "https://github.com/dgryski/go-mph/blob/master/mph.go",
+    "https://go.dev/doc/go1.24",
+    "https://go.dev/blog/swisstable",
+    "https://pkg.go.dev/reflect#SliceHeader"
+  ],
+  "confidence": 0.85
+}
