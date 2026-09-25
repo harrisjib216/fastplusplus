@@ -6,3 +6,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records. S
 - Colfer C output vs protobuf C++: recorded as a measurement on the Colfer entry (data/decisions.json); could become its own C entry if the id scheme allows one repo with two languages.
 - Pison/JSONSki single-threaded variants and pikkr lineage: covered.
 - bemayer/xml-benchmark (https://github.com/bemayer/xml-benchmark): independent, CI-run, monthly cross-language XML shootout (found by the yaml-toml-xml registry agent). Harvest its other C/C++ winners against libxml2/pugixml.
+- flatcc (https://github.com/dvidelabs/flatcc): C FlatBuffers implementation; its benchmark doc claims about 10% faster encode than Google flatbuffers C++, decode tied (first-party, no compiler stated). Found by the binary-schemas blogs agent.
