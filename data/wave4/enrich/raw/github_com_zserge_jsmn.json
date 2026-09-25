@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/zserge/jsmn",
+  "one_liner": "C89 zero-allocation JSON tokenizer; beat nlohmann/json on 8 of 14 benchmark files but trails RapidJSON.",
+  "what_it_does": "jsmn splits a JSON text into a flat, preorder array of tokens (object, array, string, primitive). Each token holds only start/end byte offsets into your buffer and a direct-child count: there is no DOM, no number conversion, no string unescaping and no JSON writer, so you walk the array yourself and call strtol/strtod or compare bytes where needed. The whole API is two C functions, jsmn_init and jsmn_parse, which write into a jsmntok_t array you supply. Pass NULL to get the token count; JSMN_ERROR_PART and JSMN_ERROR_NOMEM let you resume after more input or more tokens arrive.",
+  "how_it_is_fast": "It does much less work than a DOM parser: one byte-at-a-time pass through a switch-based state machine that records offsets only, with no heap allocation, copying, number or escape decoding, UTF-8 validation or SIMD. A `toksuper` index tracks the enclosing container. In the default build a closing bracket finds its parent by scanning the token array backwards, which is quadratic on containers with many container children. -DJSMN_PARENT_LINKS stores a parent index in each token (4 more bytes), so that walk is bounded by nesting depth.",
+  "when_to_use": [
+    "Microcontrollers (the README says it is tested on AVR and ARM) or builds with no heap and no libc, where one C89 header and a fixed stack array of 16-byte tokens (20 bytes with parent links) is all you can afford.",
+    "Small, known-schema messages such as config files or API responses where you extract a few fields and convert only those. The author's page reports good results on objects of about 4 KB.",
+    "Input that arrives in chunks over UART or a socket: call jsmn_parse again as bytes arrive until it stops returning JSMN_ERROR_PART, without building a tree.",
+    "A C or C++ hot path where nlohmann/json is the bottleneck, the documents are flat or shallow, and most values need no conversion. In the paper jsmn ran numbers.json at 0.65 vs 0.06 GB/s and github_events at 0.52 vs 0.09 GB/s."
+  ],
+  "when_not_to_use": [
+    "Untrusted input that must be validated. Even with JSMN_STRICT it accepts missing commas (#217) and stray leading or trailing ':' or ',' (#247). The paper reports that it accepts [0e+]. It does not reject raw control characters in strings or check UTF-8.",
+    "Large nested documents in the default build. canada.json (GeoJSON coordinate arrays) tokenized at 0.01 GB/s, and issue #36 reports a 9 MB nested file taking about 6 s until JSMN_PARENT_LINKS was defined.",
+    "Server or desktop throughput. In the same table RapidJSON insitu, which builds a full DOM, is faster on 13 of 14 files (about 5x geomean). cJSON is faster on 11 of 14, and gason and sajson are faster on all 14.",
+    "Anything that needs lookup by key, DOM mutation, serialization, or decoded numbers and strings. You have to write that layer yourself.",
+    "Documents over 2 GB, because offsets are int and issue #44 shows negative end offsets on overflow. Also projects that need a maintainer: the last commit was 2021-10-14, with 100 open issues and 42 open PRs."
+  ],
+  "integration": {
+    "form": "header-only: a single jsmn.h. Define JSMN_HEADER in every .c file but one, or JSMN_STATIC to make the symbols static.",
+    "dependencies": "none. It includes only <stddef.h> and calls no libc functions.",
+    "min_toolchain": "Any C89 (ANSI C) compiler. It is usable from C++ through its extern \"C\" guard.",
+    "platforms": "Any. It is plain portable C with no SIMD. The README says it is tested on x86/amd64, ARM and AVR, and library.json declares platforms \"*\" (PlatformIO).",
+    "thread_safety": "Not documented. In the source there is no global or static mutable state: all state lives in the caller's jsmn_parser and token array. Separate parser and token pairs can run concurrently, but one parser must not be shared between threads.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "JSMN_PARENT_LINKS changes the jsmntok_t layout. Every translation unit must be built with the same setting or you get memory corruption (#70). Without it, large nested inputs are quadratic.",
+    "Non-strict mode is the default. It accepts unquoted primitives, primitives as keys, and even arrays or objects as keys. That input can give a key a child count that breaks key/value pairing (#193), and the bundled jsondump example reads out of bounds on such trees (#125, #249). Bounds-check any token walk.",
+    "`size` counts direct children only (keys, for objects), and there is no next-sibling link, so skipping a nested value means walking its whole subtree. String tokens exclude the quotes but keep escapes raw. Primitives are untyped: you tell them apart by their first byte.",
+    "Parsing stops at the first NUL byte even if len is larger. On JSMN_ERROR_NOMEM, grow the token array while keeping its contents and call jsmn_parse again with the same parser. The simdjson benchmark avoided this by allocating one 16-byte token per input byte."
+  ],
+  "pick_this_over_siblings_when": "Pick jsmn over gason, sajson or yyjson only when you need C89, no heap, no libc and a tiny footprint on a microcontroller: in the paper's Table 10, gason (0.71-1.1 GB/s) and sajson beat jsmn (0.01-0.65 GB/s) on every file, and yyjson is also ANSI C but validates to RFC 8259 and builds a full DOM with a custom allocator. If you want a real DOM without malloc, parsed into a buffer you supply, qajson4c is the closer fit.",
+  "verified_claims_summary": "The simdjson paper (Langdale and Lemire, VLDB Journal 2019, Table 10) ran jsmn from a 2018 commit (18e9fe4, default build without parent links, token array sized to the input) against nlohmann/json's full DOM parse on 14 files, single-threaded on an Intel i7-6700 (Skylake) with GCC 9.1 -O3 -march=native. jsmn was faster on 8 files (e.g. numbers 0.65 vs 0.06 GB/s, twitter 0.27 vs 0.10) and slower on 6 (e.g. canada 0.01 vs 0.05), about 1.5x by geomean, while RapidJSON insitu beat it on 13 of 14; a tokenizer against a DOM parser is not like-for-like.",
+  "status_note": "Abandoned: the last commit was 2021-10-14 and the last release v1.1.0 (June 2019), with 100 open issues and 42 open PRs, but it is an MIT-licensed single header with no dependencies that is easy to vendor and patch.",
+  "sources_read": [
+    "https://github.com/zserge/jsmn",
+    "https://github.com/zserge/jsmn/blob/master/jsmn.h",
+    "https://github.com/zserge/jsmn/blob/master/Makefile",
+    "https://github.com/zserge/jsmn/blob/master/library.json",
+    "https://github.com/zserge/jsmn/blob/master/example/simple.c",
+    "https://github.com/zserge/jsmn/commits/master",
+    "https://github.com/zserge/jsmn/releases/tag/v1.1.0",
+    "https://github.com/zserge/jsmn/compare/v1.1.0...master",
+    "https://github.com/zserge/jsmn/commit/18e9fe42cbfe21d65076f5c77ae2be379ad1270f",
+    "https://github.com/zserge/jsmn/issues/36",
+    "https://github.com/zserge/jsmn/issues/44",
+    "https://github.com/zserge/jsmn/issues/70",
+    "https://github.com/zserge/jsmn/issues/110",
+    "https://github.com/zserge/jsmn/issues/111",
+    "https://github.com/zserge/jsmn/issues/125",
+    "https://github.com/zserge/jsmn/issues/138",
+    "https://github.com/zserge/jsmn/issues/154",
+    "https://github.com/zserge/jsmn/issues/167",
+    "https://github.com/zserge/jsmn/issues/193",
+    "https://github.com/zserge/jsmn/issues/217",
+    "https://github.com/zserge/jsmn/issues/239",
+    "https://github.com/zserge/jsmn/issues/247",
+    "https://github.com/zserge/jsmn/issues/249",
+    "https://zserge.com/jsmn/",
+    "https://arxiv.org/pdf/1902.08318",
+    "http://lionet.livejournal.com/118853.html",
+    "https://github.com/simdjson/simdjson/blob/v0.2.1/benchmark/parsingcompetition.cpp",
+    "https://github.com/simdjson/simdjson/blob/v0.2.1/Makefile",
+    "https://github.com/simdjson/simdjson/tree/v0.2.1/dependencies",
+    "https://github.com/ibireme/yyjson",
+    "https://github.com/DeHecht/qajson4c",
+    "https://github.com/vivkin/gason"
+  ],
+  "confidence": 0.85
+}
