@@ -1,0 +1,61 @@
+[
+  {
+    "id": "https://github.com/lemire/constmap",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "The README's 'Performance gains' and 'Scaling' tables compare ConstMap against Go's map[string]uint64 on a stated Apple M4 Max, and the code is public in constmap_test.go (BenchmarkConstMap, BenchmarkVerifiedConstMap, BenchmarkGoMap, makeQueryOrder, TestLookupAndMemoryTable). Neither the README nor either of Lemire's blog posts states the Go toolchain version, and the README does not say which go test flags produced the headline table. That leaves first-party numbers with partial methodology, which is tier C. The missing Go version matters here because Go 1.24 replaced the built-in map with a Swiss-table design.",
+    "corrections": {
+      "claimed_speedup": "README 'Performance gains' table (Apple M4 Max, 1,000,000 keys, every key queried once in random order): ConstMap 8.7 ns/op vs Go map[string]uint64 46 ns/op. The README states this as 5.3x over the whole key set, and 1.2x over only 256 queries. VerifiedConstMap, the variant that detects missing keys like a Go map does, takes 15 ns/op, about 3.1x (derived from page data). Memory is 9.0 bytes/key for ConstMap and 18 for VerifiedConstMap vs 48 for the Go map, about 5.3x and 2.7x less (derived from page data). The README 'Scaling' table (TestLookupAndMemoryTable, one pass, M4 Max) reports ConstMap / VerifiedConstMap / Go map at 10K keys as 9.4 / 10.4 / 14.8 ns (about 1.6x / 1.4x), at 1M keys as 12.5 / 18.6 / 51.1 ns (about 4.1x / 2.7x), and at 10M keys as 34.8 / 41.3 / 70.1 ns (about 2.0x / 1.7x). All of these ratios are derived from page data.",
+      "workload": "Every key of a 1,000,000-key string-to-uint64 dataset (keys 'key-%d') is looked up exactly once in random order, from a query buffer allocated in query order (makeQueryOrder in constmap_test.go). The Scaling table runs one pass at 10K, 100K, 1M and 10M keys. The README's batched MapMany numbers compare only against a loop over ConstMap.Map, not against Go's map.",
+      "compiler_and_flags": "Go gc toolchain via go test. The Go version is not stated: go.mod declares only a go 1.22 minimum, and CI uses 'stable'. The README gives `go test -bench=. -benchmem` and recommends `-count=5 -benchtime=3s`, but does not say which flags produced the headline table. The batch table uses medians of `-benchtime 3s -count 3`. The Go-map benchmark code is constmap_test.go (BenchmarkConstMap, BenchmarkVerifiedConstMap, BenchmarkGoMap, TestLookupAndMemoryTable with RUN_HEAVY_MEMORY_TESTS=1). batch_bench_test.go, hashbatch_bench_test.go and paired_test.go hold the batching and paired-layout benchmarks, which have no Go-map baseline.",
+      "hardware": "Apple M4 Max for every Go-map comparison. The Intel Xeon Gold 6548N appears only in the MapMany-vs-loop batching, paired-vs-split layout and serialization numbers, none of which include Go's map.",
+      "caveats": "First-party benchmark by the library author (Daniel Lemire). The code and CPU model are public, but the Go version is not stated. Baseline is Go's built-in map[string]uint64, not C++ std::unordered_map, so this is evidence for the binary-fuse-filter static-map technique, not a direct C++ stdlib win. ConstMap stores no keys and returns an undefined value for absent keys. VerifiedConstMap (15 ns vs 46 ns, about 3.1x) is the semantically comparable variant. The margin depends on cache residency: 1.2x over 256 queries vs 5.3x over the full 1M key set, and about 1.6x at 10K and 2.0x at 10M keys in the Scaling table. Construction is slower than building a Go map, which the README states but does not quantify. The headline table (8.7 vs 46 ns) and the Scaling table (12.5 vs 51.1 ns) differ at the same 1M size. The 2026-03-29 launch blog post reported 7.4 vs 20 ns (about 2.7x) under an earlier methodology; the README switched to random-order lookups on 2026-08-27 (commit d2e538f5)."
+    },
+    "notes": "Numbers verified on the README: 8.7/15/46 ns, 9.0/18/48 bytes/key, and 5.3x appear verbatim. The ~3.1x Verified ratio was derived, not stated, and is now marked so. Downgraded A to C because the Go toolchain version is not stated anywhere, including both lemire.me posts, and the record's benchmark-file list omitted constmap_test.go, where the Go-map benchmarks live. Metadata checked via gh: Apache-2.0, 238 stars, last commit 2026-09-17, not archived, not a fork, active.",
+    "urls_opened": [
+      "https://github.com/lemire/constmap",
+      "https://github.com/lemire/constmap/blob/main/README.md",
+      "https://github.com/lemire/constmap/blob/main/constmap_test.go",
+      "https://github.com/lemire/constmap/blob/main/batch_bench_test.go",
+      "https://github.com/lemire/constmap/blob/main/hashbatch_bench_test.go",
+      "https://github.com/lemire/constmap/blob/main/paired_test.go",
+      "https://github.com/lemire/constmap/blob/main/go.mod",
+      "https://github.com/lemire/constmap/blob/main/.github/workflows/test.yml",
+      "https://github.com/lemire/constmap/commits/main/README.md",
+      "https://lemire.me/blog/2026/03/29/a-fast-immutable-map-in-go/",
+      "https://lemire.me/blog/2026/05/05/mapping-strings-to-float-arrays-in-go-how-fast-can-we-go/"
+    ]
+  },
+  {
+    "id": "https://github.com/lemire/fastconstmap",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "The README 'Benchmark' block compares ConstMap and VerifiedConstMap against CPython's dict on a stated Apple M4 Max with Python 3.14.5, using the public benchmarks/benchmark.py, and setup.py sets -O3 -std=c11. The C compiler that built the extension is never named or versioned. The block was also last regenerated on 2026-08-27 for the XXH3-hash 0.9.x build, so it does not reflect the current XXH64 default. That makes it first-party with partial methodology, which is tier C.",
+    "corrections": {
+      "claimed_speedup": "README Benchmark block (Apple M4 Max, Python 3.14.5, 1,000,000 string keys, each queried once in random order). Single lookup: dict[k] 336.1 ns/op vs ConstMap[k] 95.2 ns/op (about 3.5x) and VerifiedConstMap[k] 112.3 ns/op (about 3.0x; this is the dict-like variant). Batched, 2000 batches of 2000 keys, cold cache: a dict list comprehension takes 148.7 ns/op. ConstMap.get_many takes 24.2 ns/op (about 6.1x; both sides build a Python list), and get_many_into takes 14.2 ns/op (about 10.5x; it writes raw uint64s into a buffer with no list). VerifiedConstMap takes 33.7 ns/op with get_many (about 4.4x) and 23.9 with get_many_into (about 6.2x). All of these ratios are derived from page data. Hot-cache get_many_into is 6.1 ns/op, but the page has no hot-cache dict measurement, so no ratio against dict applies to it. Memory: 9.04 bytes/key vs 118.38 bytes/key for the dict counting table, keys and values, which the page states as 13.1x.",
+      "workload": "Python benchmark (benchmarks/benchmark.py) with 1,000,000 'key-{i}-{hex}' string keys. Single lookups query each key once in random order, from a list built in that order. Batched lookups run 2000 batches of 2000 randomly drawn keys, cold (rotating through 64 distinct batches) or hot (one replayed batch). The dict list comprehension is measured cold only, against ConstMap and VerifiedConstMap get_many and get_many_into. The C-level benchmarks/bench_batch.c compares only batched against looped lookups, with no dict baseline.",
+      "compiler_and_flags": "The C11 extension is built by setup.py with -O3 -std=c11 (/O2 on Windows). The C compiler and its version are not stated, and the README does not say whether the benchmarked build was a wheel or a source build. The dict comparison ran on Python 3.14.5 via `python benchmarks/benchmark.py 1000000`. The C-level benchmarks/bench_batch.c is built with `cc -O3 -std=c11` and has no dict baseline.",
+      "hardware": "Apple M4 Max is the only machine the dict comparison ran on. The Intel Xeon Gold 6548N appears only in the C-level and Python-API batching tables, which have no dict baseline.",
+      "caveats": "First-party benchmark by the library author (Daniel Lemire). The baseline is CPython's dict, not std::unordered_map. The C core (src/constmap.c, src/constmap.h) is usable from C/C++, but no C/C++ hash-map baseline is measured. The README Benchmark block was last regenerated on 2026-08-27 (commit 74de1cea, XXH3 key hash) and predates v0.10.0, which made XXH64 the default. For the current default, the README says to add roughly 1-5 ns to a single m[k] and 1-4 ns/key to the batched columns, and the block lacks the PairedVerifiedConstMap rows the current script prints. ConstMap stores no keys and returns garbage for absent keys, so VerifiedConstMap (112.3 ns, about 3.0x) is the semantically comparable variant. The author says single-lookup times are dominated by Python call overhead. Construction takes 0.145 s vs 0.004 s for dict(d), a copy of an existing dict, at 1M keys. The dict memory figure counts the key strings and int objects, which ConstMap does not keep. The C compiler and version are unstated."
+    },
+    "notes": "Every quoted number is in the README Benchmark block. However, the record's '~24x' compared hot-cache get_many_into (6.1 ns) with a cold-only dict figure, which is not like for like, so that ratio was dropped. The 10x and 3.5x ratios were derived, not stated, and are now marked so. Downgraded A to C because the C compiler is unstated and the published numbers are from the pre-0.10 XXH3 build. Metadata checked via gh: Apache-2.0 (vendored xxHash is BSD-2), 59 stars, last commit 2026-09-17, not archived, not a fork, active.",
+    "urls_opened": [
+      "https://github.com/lemire/fastconstmap",
+      "https://github.com/lemire/fastconstmap/blob/main/README.md",
+      "https://github.com/lemire/fastconstmap/blob/main/benchmarks/benchmark.py",
+      "https://github.com/lemire/fastconstmap/blob/main/benchmarks/bench_batch.c",
+      "https://github.com/lemire/fastconstmap/blob/main/setup.py",
+      "https://github.com/lemire/fastconstmap/blob/main/pyproject.toml",
+      "https://github.com/lemire/fastconstmap/blob/main/.github/workflows/test.yml",
+      "https://github.com/lemire/fastconstmap/commits/main/README.md",
+      "https://github.com/lemire/fastconstmap/commit/74de1cea",
+      "https://github.com/lemire/fastconstmap/commit/47c9f945"
+    ]
+  }
+]
