@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/r-lib/vroom",
+  "one_liner": "Lazy, ALTREP-backed delimited-file reader for R; indexes then reads on demand, beating base R's read.delim/readr/data.table.",
+  "what_it_does": "Reads and writes CSV/TSV/fixed-width text into R data frames/tibbles. Instead of parsing every value up front, vroom does one fast indexing pass over the file to record each field's byte offsets, then returns ALTREP vectors that materialize a column's actual values only when they are first accessed. Its API mirrors readr::read_delim (col_types, col_select, multi-file and multi-connection input), so most readr code ports with a function-name swap rather than a rewrite.",
+  "how_it_is_fast": "Memory-maps the input file (bundled mio C++ library) and scans it with multiple threads to build a byte-offset index of every delimited field, so no value is parsed before it's needed. Returned columns are R ALTREP objects (character columns lazy by default) that convert raw bytes to R values only on access; non-character materialization and file writing also run multi-threaded, and grisu3 provides fast double-to-string formatting when writing.",
+  "when_to_use": [
+    "Large local, uncompressed CSV/TSV/FWF files (hundreds of MB to multi-GB) read directly from disk, where memory-mapping applies",
+    "Pipelines that only touch a subset of rows/columns after loading (select/filter before printing or string ops), so lazy character materialization pays off",
+    "Existing readr users who want a faster, largely drop-in replacement without rewriting column-spec code",
+    "Writing large delimited files, where parallel formatting plus async write beats base R's write functions",
+    "R >= 4.1 environments, where ALTREP is fully supported by the runtime"
+  ],
+  "when_not_to_use": [
+    "Small files, where indexing overhead and R startup cost dominate and base read.delim/readr are already fast enough",
+    "Workflows that immediately print, filter, or string-process every character column, since that forces materialization and shifts most of the 'read' cost to first access, hiding behind read-time-only benchmarks",
+    "Remote or compressed sources (.gz/.bz2/.xz/.zip): vroom downloads to a temp file before mapping it, losing the mmap/lazy advantage",
+    "Contexts needing embedded newlines inside quoted headers/fields, which force num_threads = 1 and remove the multi-threaded indexing speedup",
+    "Situations requiring reproducible cross-hardware speedup numbers: the cited benchmarks give no compiler flags, and only the newer vignette names a CPU (EC2 m5.4xlarge)"
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "R packages bit64, cli, glue, hms, lifecycle, rlang, tibble, tidyselect, tzdb, vctrs, withr (Imports); cpp11, progress, tzdb (LinkingTo, compile-time); bundled mio (header-only C++ mmap library)",
+    "min_toolchain": "R >= 4.1 (Depends, needed for full ALTREP support); C++ compiler to build from source (CRAN also ships binaries)",
+    "platforms": "any platform R runs on (Windows/macOS/Linux, x86-64/aarch64) via mio's cross-platform mmap wrapper",
+    "thread_safety": "not documented for concurrent R sessions/threads calling vroom simultaneously; internally spawns VROOM_THREADS worker threads (default parallel::detectCores()) for indexing, materialization, and writing",
+    "drop_in_for_baseline": "partial — the baseline here is base R read.delim, and vroom's call signature is different (readr-style, not read.delim/read.csv-style); switching requires touching read calls, though the tibble result behaves like a data frame"
+  },
+  "gotchas": [
+    "Only character columns use ALTREP lazy loading by default (VROOM_USE_ALTREP_CHR=true); numeric/integer/date ALTREP is opt-in via separate env vars, so headline read-time numbers can hide deferred character-materialization cost",
+    "Reading from R connections or compressed/remote files downloads to a temp file first, forfeiting the mmap-based lazy-read advantage",
+    "Embedded newlines inside quoted headers or fields require num_threads = 1, disabling the multi-threaded indexing that produces most of the speedup",
+    "Repository moved from r-lib/vroom to tidyverse/vroom in April 2022; the r-lib URL still resolves via GitHub's redirect"
+  ],
+  "pick_this_over_siblings_when": "All catalogued siblings target C/Go/Rust/.NET/Ruby/Python CSV stacks; vroom is the only R-ecosystem entry, so pick it whenever the pipeline is already in R and you want readr-compatible syntax — its speed claim is against base R's read.delim, not against any sibling's baseline, so it isn't a substitute for those language-specific choices.",
+  "verified_claims_summary": "On a real 1.53GB/14.7M-row/11-column taxi-trip CSV, the tidyverse blog table reports vroom reading in 3.6s versus base R read.delim's 1m21.5s (~22.6x), and a full read+print+head+tail+sample+filter+summarise workflow at 7s versus 1m22.6s (~11.8x); the post gives no CPU or compiler flags. A newer benchmarks vignette (vroom 1.5.1, public code in inst/bench/taxi, EC2 m5.4xlarge/16 vCPUs) shows read.delim at 1m12.3s versus vroom 1.3s to read, still without compiler flags.",
+  "status_note": "Actively maintained (last commit 2026-06-09, current CRAN release 1.7.1, part of the core tidyverse); MIT-licensed (DESCRIPTION and LICENSE.md) and simple to depend on via CRAN or pak, despite GitHub's NOASSERTION license auto-detection.",
+  "sources_read": [
+    "https://github.com/r-lib/vroom",
+    "https://github.com/r-lib/vroom/blob/main/README.md",
+    "https://github.com/r-lib/vroom/blob/main/DESCRIPTION",
+    "https://github.com/r-lib/vroom/blob/main/NEWS.md",
+    "https://github.com/r-lib/vroom/tree/main/inst/bench/README.md",
+    "https://github.com/r-lib/vroom/tree/main/src",
+    "https://tidyverse.org/blog/2019/05/vroom-1-0-0/",
+    "https://vroom.r-lib.org/articles/benchmarks.html",
+    "https://vroom.tidyverse.org/articles/benchmarks.html"
+  ],
+  "confidence": 0.6
+}

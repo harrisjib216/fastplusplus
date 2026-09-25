@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/liquidaty/zsv",
+  "one_liner": "SIMD C CSV parser/CLI beating DuckDB and Polars on read throughput, with a slow correct fallback for nonstandard quoting.",
+  "what_it_does": "zsvlib is a C library plus `zsv` CLI for parsing, re-emitting, and querying CSV, generic-delimited, and fixed-width tabular data, exposing row- and cell-level push/pull APIs built around zsv_new/zsv_parse_more/zsv_finish/zsv_delete and row_handler/cell_handler callbacks. It is not a drop-in for any existing library's API; callers write handler callbacks and drive the parse loop, or use the CLI subcommands (`count`, `select`, `sql`, `2json`, etc.) directly. By default it handles real-world 'dirty' CSV the way Excel does (embedded newlines, ragged rows, unescaped mid-cell quotes), and the CLI is extensible via plugin shared libraries.",
+  "how_it_is_fast": "The default 'compat' parser is a byte-by-byte state machine; the optional `--parser fast` mode adds a SIMD path using branchless prefix-XOR carry propagation to track quote state across a buffer, available on aarch64 (NEON) and x86-64 (AVX2, SSE2). Either parser mode can be combined with `--parallel` to split input across threads/cores. The library also targets a small, roughly input-size-independent memory footprint rather than buffering whole rows or tables.",
+  "when_to_use": [
+    "Bulk row counting or column-selection/re-shaping over large CSVs (hundreds of MB+) where wall-clock throughput matters more than a dataframe API",
+    "CSV known or verified to be RFC-4180-compliant, so `zsv fast --parallel` can be used safely",
+    "Memory-constrained environments (embedded, containers, CI) — zsv's own README claims ~1.5MB single-threaded footprint vs 76MB (DuckDB) and 475MB (Polars) on the same task",
+    "Need a small embeddable C library or a WebAssembly build rather than a full dataframe/query engine",
+    "Need default handling of 'dirty' real-world CSV (stray unescaped quotes, ragged row lengths) without extra configuration"
+  ],
+  "when_not_to_use": [
+    "Input has nonstandard (non-RFC-4180) quoting and you want the fastest path — `zsv fast`, alone or with `--parallel`, produces incorrect output on such data per zsv's own benchmark page; must fall back to the slower `compat` parser",
+    "You need SQL/dataframe operations, joins, or broader analytics — DuckDB and Polars are full engines, zsv's `sql` command is CSV-file-scoped",
+    "Workload is `select`-style full-parse-plus-output on unquoted or sparsely-quoted data — sibling `xan`, single-threaded, beats single-threaded zsv there on zsv's own results page",
+    "You need documented thread-safety for sharing one parser instance across threads; not stated in the API header — `--parallel` in the CLI partitions the file rather than exposing a safe shared-parser contract",
+    "Non-C/C++ stack without willingness to wrap the C API or shell out to the CLI — only a community-maintained Ruby binding exists"
+  ],
+  "integration": {
+    "form": "static lib or shared lib (source-drop also possible; `./configure && make install` builds both; CLI extensions are plugin shared libraries)",
+    "dependencies": "none documented for the core parser/library; some CLI subcommands (`sql`, `jq`, `sheet`) bundle their own dependencies, not itemized in the README",
+    "min_toolchain": "C, unspecified standard; GCC 11+ recommended (clang also supported), plus a basic unix toolchain (sh, make/gmake)",
+    "platforms": "macOS (clang/gcc), Linux (gcc), Windows (mingw64), BSD (gcc), and WebAssembly (emscripten); the SIMD fast parser additionally needs aarch64 NEON or x86-64 AVX2/SSE2, other targets use the scalar compat parser",
+    "thread_safety": "not documented for a single zsv_parser instance shared across threads; `--parallel` in the CLI internally partitions the input across separate parser instances rather than one instance being called concurrently",
+    "drop_in_for_baseline": "false — callback-driven C API and a separate CLI, not source- or API-compatible with DuckDB, Polars, or any existing CSV library"
+  },
+  "gotchas": [
+    "`zsv fast`, with or without `--parallel`, gives incorrect output on non-RFC-4180 quoting (confirmed 'incorrect' on the nonstandard_quoted row of zsv's own results page); use `compat` for untrusted or dirty CSV",
+    "DuckDB and Polars in zsv's benchmark were run with relaxed quote/newline handling ('handicaps' per app/benchmark/README.md) to be competitive, so the headline speedups overstate the gap at correctness-equivalent settings",
+    "The much-cited memory numbers (1.5MB vs 76MB/475MB) come from a separate 433MB worldcitiespop run described in app/benchmark/README.md, not from the quoting benchmark page",
+    "A use-after-free bug was found via ASan and fixed (issue #605, closed) — the project runs ASan in CI, but this indicates memory-safety has needed active fixing, not just inspection-level trust"
+  ],
+  "pick_this_over_siblings_when": "Pick zsv over xan/DuckDB/Polars when you want a small embeddable C library (or WASM target) rather than a broader dataframe/query engine, or specifically need row counting, where zsv wins across all quoting types on its own benchmark; pick xan instead for `select`-style full-parse-and-output on unquoted or sparsely-quoted data, where single-threaded xan beats single-threaded zsv on zsv's own results page.",
+  "verified_claims_summary": "On zsv's first-party darwin-arm64 (Apple M3 Pro) results page, `zsv fast --parallel` counted rows on a 500,000x20 unquoted CSV in 0.008s (14.29 GB/s) versus 0.085s for multi-threaded DuckDB v0.10.2 (default settings), 0.049s for DuckDB with quote recognition disabled, and 0.092s for single-threaded Python Polars 1.35.2; the zsv binary's compiler and optimization flags are not stated on the page.",
+  "status_note": "Actively maintained (last commit 2026-09-23, CI-gated) and MIT-licensed, so it's reasonable to depend on directly rather than vendor, though it has a small following (397 stars) and a small maintainer base.",
+  "sources_read": [
+    "https://github.com/liquidaty/zsv",
+    "https://github.com/liquidaty/zsv/blob/main/app/benchmark/results/benchmark-fast-parser-quoting-darwin-arm64-2026-03-26-1124.md",
+    "https://github.com/liquidaty/zsv/blob/main/app/benchmark/README.md",
+    "https://github.com/liquidaty/zsv/blob/main/BUILD.md",
+    "https://github.com/liquidaty/zsv/blob/main/include/zsv/api.h",
+    "https://github.com/liquidaty/zsv/issues/605"
+  ],
+  "confidence": 0.6
+}

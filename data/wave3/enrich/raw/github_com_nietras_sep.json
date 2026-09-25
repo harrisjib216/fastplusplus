@@ -1,0 +1,43 @@
+{
+  "id": "https://github.com/nietras/sep",
+  "one_liner": "Zero-allocation, SIMD-vectorized .NET CSV/TSV parser built to beat CsvHelper on throughput.",
+  "what_it_does": "Sep reads and writes separated-value files (CSV/TSV) in .NET, aimed at replacing CsvHelper in performance-sensitive, ML-style pipelines that parse many numeric columns per row. It is not drop-in: rows and columns are accessed via an indexer/Span API (`row[\"A\"].Span`, `.Parse<T>()`) rather than CsvHelper's class-mapping model, separator is auto-detected from the header (default `;`, not `,`), and quote unescaping/space trimming are opt-in rather than automatic.",
+  "how_it_is_fast": "Uses architecture-specific and cross-platform SIMD vectorized scanning (64/128/256/512-bit paths, e.g. AVX2, AVX-512 on .NET 8+, NEON) to find separators/quotes, and the csFastFloat library for fast float/double parsing. Memory is pooled (ArrayPool<T>, ref structs, Span<T>) so steady-state parsing is zero-allocation after warmup. An opt-in `ParallelEnumerate` API adds multi-threaded batch parsing on top via LINQ AsParallel/AsOrdered for further throughput on large files.",
+  "when_to_use": [
+    "Large CSV/TSV files with mostly numeric columns (floats, ints) parsed repeatedly in .NET, where CsvHelper's throughput is the bottleneck",
+    "ML/data-pipeline style workloads reading many rows where zero-allocation parsing after warmup matters",
+    ".NET 8+/9+ services that need AOT/NativeAOT or trimmed deployments (no reflection or dynamic codegen)",
+    "Offline/batch parsing of very large files where the fixed overhead of ParallelEnumerate's multi-threaded batching pays off",
+    "Projects that can accept an opinionated, non-CsvHelper API and control both the writer and reader side"
+  ],
+  "when_not_to_use": [
+    "You need CsvHelper's mature feature set: attribute/class mapping, broad configuration surface, long compatibility history",
+    "Input has heavy quoting, embedded newlines, or stray spaces and you rely on automatic unescape/trim — Sep disables both by default and requires explicit opt-in",
+    "Comma-separated files without a usable header row: default separator is ';', inferred from the header, so plain ',' input needs explicit configuration",
+    "Small files or one-off scripts, where ParallelEnumerate's batching/LINQ overhead outweighs any gain over single-threaded CsvHelper",
+    "You need native `#` comment-line support — Sep has none; you must filter such rows manually in the read loop"
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "csFastFloat (NuGet package reference, used for fast float/double parsing)",
+    "min_toolchain": "C# 13.0+ (repo currently builds with C# 14.0), .NET 8.0+ (SepReader implements IAsyncEnumerable/native enumerable behavior added for .NET 9+), AllowUnsafeBlocks enabled in the csproj",
+    "platforms": "Any platform/architecture .NET runs on; SIMD fast paths for x86-64 AVX2/AVX-512 (.NET 8+) and ARM NEON, with a portable fallback elsewhere. Comparison benchmarks were run on AMD EPYC 7763, Ryzen 7840U/5950X/9950X/9950X3D2, Apple M1 (virtual), and a Cobalt ARM VM",
+    "thread_safety": "not documented as safe for concurrent access to a single reader/writer instance; multi-threaded parsing is instead opt-in via `ParallelEnumerate`, which batches rows and parallelizes with LINQ AsParallel().AsOrdered() using pooled arrays — callers must ensure their per-row delegate touches no shared mutable state"
+  },
+  "gotchas": [
+    "Default column separator is ';', not ',' — inferred from the header row unless set explicitly",
+    "No automatic unescaping or trimming: must opt in via SepReaderOptions (Unescape/Trim); trimming/unescaping can happen in-place, leaving the row's raw Span in a documented 'garbage' state for those columns after processing",
+    "ParallelEnumerate carries real fixed overhead (batching + LINQ AsParallel/AsOrdered) and can be slower than plain single-threaded Enumerate/foreach on small inputs — the README explicitly warns to measure before using it",
+    "An 'AccessViolation on .NET 10' issue (#423, opened Nov 2025) was reported and closed — worth checking against your exact .NET 10 build if adopting early"
+  ],
+  "pick_this_over_siblings_when": "None of the catalogued CSV siblings (DuckDB, Polars, qsv, zsv, vroom, xan, cisv, go-simdcsv, simd-csv, zsv-ruby) target .NET — Sep is the only .NET-specific entry in this category, so pick it whenever the project is C#/.NET and needs faster-than-CsvHelper parsing of numeric-heavy CSV into typed columns; reach for one of the others only if you're not on .NET.",
+  "verified_claims_summary": "First-party BenchmarkDotNet comparisons on .NET 9.0.X (current script targets net10.0) with GC DATAS disabled, run across multiple CPUs (AMD EPYC 7763, Ryzen 9950X, etc.), show Sep (0.13-0.17.1) beating CsvHelper 33.1 on the NCsvPerf PackageAssets benchmark (50K rows) by 17.8x/20.9x/3.1x (row/cols/asset) unquoted and 6.8-8.4x with quotes on EPYC 7763; the README's headline 'about 10x'/'up to 35x' figures come from a non-like-for-like Spaces-and-Quotes trim/unescape comparison (~7.3x like-for-like) and a multi-threaded Floats benchmark on Ryzen 9 9950X (Sep_MT 2.06ms vs CsvHelper 68.3ms, ~33x) respectively.",
+  "status_note": "Actively maintained (last commit 2026-09-19, most recent push 2026-09-21) with ~1.5k GitHub stars; MIT-licensed NuGet package, small and simple enough to vendor or pin if needed.",
+  "sources_read": [
+    "https://github.com/nietras/Sep",
+    "https://github.com/nietras/Sep#comparison-benchmarks",
+    "https://github.com/nietras/Sep/blob/main/src/Sep/Sep.csproj",
+    "https://github.com/nietras/Sep/issues/423"
+  ],
+  "confidence": 0.85
+}

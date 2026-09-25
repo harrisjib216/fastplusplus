@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/dist1ll/lexer-exp",
+  "one_liner": "Hand-rolled NEON SIMD lexer for a toy language; beats the Rust logos crate 20-35% on Apple M1.",
+  "what_it_does": "lnpl is the lexer for a personal toy-language compiler project (crate name \"lnpl\"), tokenizing source into its own Token/TokenKind enum for the author's Pratt-parser front end. It is not a general-purpose lexer generator: there's no derive-macro or grammar-spec input like logos has, so using it means adapting its hardcoded token set, not swapping in your own grammar. On non-aarch64 targets the crate falls back to a separate, unbenchmarked generic::Lexer implementation.",
+  "how_it_is_fast": "The aarch64 path loads input in 512-byte chunks into an aligned SIMD buffer and uses NEON 128-bit vector loads to classify 16 ASCII bytes at once (ident/whitespace/number/etc. character classes), with hand-written NEON assembly (aarch64.s) pulled in via global_asm!. Keyword matching uses a perfect hash that packs each keyword into a 64-bit word for single-instruction comparison instead of a DFA/trie walk. The author also reports a 5-10% gain from replacing a computed classification mask with a precomputed lookup table.",
+  "when_to_use": [
+    "You're targeting aarch64 (Apple Silicon or ARM servers) specifically -- there is no x86_64 SIMD path",
+    "You want a worked example of NEON-based ASCII token classification plus perfect-hash keyword matching to adapt into your own lexer",
+    "Your token stream is dominated by short, repetitive keyword/identifier patterns, where the gain over logos is largest (~35% on the synthetic benchmark)",
+    "You can build with an unpinned Rust nightly and are comfortable vendoring unsafe/asm source rather than depending on a published crate",
+    "Throughput on medium files (5KB-1MB) matters more than lexer generality or ergonomics"
+  ],
+  "when_not_to_use": [
+    "x86_64 targets: the author's own numbers show the naive scalar lexer beating logos there, and no NEON-equivalent path exists",
+    "You need a drop-in replacement for logos's `#[derive(Logos)]` API -- lnpl's token types are hardcoded to the author's toy language",
+    "You need stable Rust: the crate uses `#![feature(core_intrinsics)]` and `#![feature(stdsimd)]`, unstable nightly-only features",
+    "You need a maintained dependency: no crates.io release found, last commit April 2024, no README, and it's explicitly experimental research code",
+    "Your workload looks like realistic, non-repetitive source rather than synthetic pseudocode -- the measured gain shrinks from ~35% to ~20% on the real Hubris kernel snippets"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "logos 0.13 (used only for parity testing / bench comparison, not by the aarch64 lexer itself)",
+    "min_toolchain": "Rust nightly (unpinned; requires core_intrinsics + stdsimd unstable features; .cargo/config.toml sets rustflags = -Zpolonius)",
+    "platforms": "aarch64 (NEON) for the benchmarked/optimized path; a generic fallback exists for other architectures but is not benchmarked or discussed",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": "partial -- different Token/TokenKind API from logos's derive-macro model; you'd port token definitions, not swap a dependency"
+  },
+  "gotchas": [
+    "Contains raw NEON assembly (aarch64.s) loaded via global_asm! plus unsafe SIMD intrinsics -- review before vendoring",
+    "Uses a fixed 512-byte, 128-byte-aligned SIMD input buffer (SimdBuffer); behavior at buffer boundaries wasn't verified in this review",
+    "Depends on nightly-only, unstable compiler features (core_intrinsics, stdsimd) with no pinned rustc version",
+    "The published benchmark numbers on the blog labeled the lnpl result 'logos:' (apparent typo) -- read the repo's bench source (benches/lexer.rs), not just the blog table, to confirm which number is which"
+  ],
+  "pick_this_over_siblings_when": "None of the catalogued siblings target Rust + logos on aarch64, so this is the only entry showing that specific pairing; pick it only as a technique reference for NEON ASCII classification + perfect-hash keywords, not as an installable lexer -- for an actual drop-in tokenizer, Accelerated-Zig-Parser or simd-lexing are more complete SIMD lexers, and logos itself (already catalogued) remains the safer general-purpose choice off aarch64.",
+  "verified_claims_summary": "First-party `cargo bench` results (unpinned Rust nightly, single Apple M1 machine) show lnpl's NEON lexer at 118,476 ns/iter vs logos 0.13 at 174,476 ns/iter tokenizing a 100KB synthetic pseudocode file (~35% faster), and 89,151 ns/iter vs logos's 108,257 ns/iter (~1.21x) on real Hubris-kernel source snippets (5KB-1MB); the author separately reports 20-30% gains across that Hubris file-size range.",
+  "status_note": "Stale since April 2024 with zero open issues and no crates.io listing found; MPL-2.0 licensed research code from a personal toy-compiler project, small enough to vendor the lexer module but not maintained or packaged as a library.",
+  "sources_read": [
+    "https://github.com/dist1ll/lexer-exp",
+    "https://alic.dev/blog/fast-lexing",
+    "https://github.com/dist1ll/lexer-exp/blob/main/Cargo.toml",
+    "https://github.com/dist1ll/lexer-exp/blob/main/.cargo/config.toml",
+    "https://github.com/dist1ll/lexer-exp/blob/main/src/lib.rs",
+    "https://github.com/dist1ll/lexer-exp/blob/main/src/lexer/mod.rs",
+    "https://github.com/dist1ll/lexer-exp/blob/main/src/lexer/aarch64.rs",
+    "https://github.com/dist1ll/lexer-exp/blob/main/benches/lexer.rs",
+    "https://github.com/dist1ll/lexer-exp/tree/main (file tree)",
+    "https://github.com/dist1ll/lexer-exp/issues"
+  ],
+  "confidence": 0.65
+}

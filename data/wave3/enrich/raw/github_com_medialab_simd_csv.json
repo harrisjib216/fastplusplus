@@ -1,0 +1,47 @@
+{
+  "id": "https://github.com/medialab/simd-csv",
+  "one_liner": "SIMD-accelerated Rust CSV reader/writer family beating the csv crate on throughput, gains data-dependent.",
+  "what_it_does": "Provides a family of streaming CSV readers (Reader, ZeroCopyReader, Splitter, LineReader, TotalReader, Seeker, ReverseReader) and a Writer, built to serve the xan CLI tool's need for fast CSV/TSV parsing. Reader is API-shaped close to the csv crate's Reader/ByteRecord; ZeroCopyReader, Splitter and LineReader trade unescaping and cell/record detection for raw speed and expose different, lower-level APIs. Not a drop-in replacement: the library states it is less flexible and less user-friendly than csv, and the caller picks the reader variant matching how much parsing it actually needs.",
+  "how_it_is_fast": "Hybrid design: a traditional state machine for CSV structure, combined with memchr-style SIMD string searching for structural characters (comma, newline, quote) instead of byte-by-byte scanning. Unquoted runs use an amortized move-mask scan that reuses a mask across multiple matches instead of restarting per match; quoted runs instead use memchr's unrolled routines directly, because the authors found wider AVX2 registers hurt performance there. ByteRecord stores fields as ranges over the raw byte slice (rather than pure offsets) so the copying Reader can copy large runs of unquoted bytes at once instead of field-by-field.",
+  "when_to_use": [
+    "Large CSV/TSV files (hundreds of MB to multi-GB) streamed from disk where parse throughput matters",
+    "Data with large records/cells and mostly non-quoted content (README: bigger cells/records give bigger wins)",
+    "Just need record or line counts / positions: Splitter or LineReader avoid cell-level work entirely",
+    "x86_64 (SSE2 baseline, AVX2 auto-detected), aarch64 (NEON), or wasm (simd128) targets",
+    "Willing to depend on a young Rust crate (memchr as only hard dependency) and adapt to a non-csv-crate API"
+  ],
+  "when_not_to_use": [
+    "QUOTE_ALWAYS-style or heavily-quoted data, or single-column/short-cell data: gains shrink to ~1.0-1.4x (quote-always.csv, range.csv, worst-case.csv)",
+    "Need the csv crate's full feature set, serde integration, or maximum flexibility/ergonomics",
+    "CSV with lone-CR (old Mac style) line endings: only CRLF and LF are recognized, and leading CR bytes are silently trimmed",
+    "Data where fields may contain a stray opening quote mid-field: the parser has no 'beginning of field' concept and can merge/misalign subsequent fields",
+    "Risk-averse production use of a 19-star, single-maintainer crate not yet used outside its own xan CLI ecosystem"
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "memchr 2.7.6 (required); simdutf8 0.1.5 (optional, only for the `str` feature)",
+    "min_toolchain": "Rust 1.81.0 (pinned in rust-toolchain.toml), edition 2021",
+    "platforms": "x86_64 (SSE2 always, AVX2 via runtime detection), aarch64 (NEON), wasm (simd128), scalar/SWAR fallback elsewhere",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": "partial — explain: Reader/ReaderBuilder/ByteRecord mirror the csv crate's copying Reader closely, but ZeroCopyReader, Splitter, LineReader, TotalReader, Seeker and ReverseReader are lower-level APIs with no csv-crate equivalent"
+  },
+  "gotchas": [
+    "Mid-field opening quotes can corrupt output: the parser has no 'beginning of field' state, so quotes anywhere except a field's true start can merge subsequent fields/rows",
+    "Only CRLF and LF line terminators are handled; lone CR is not, and leading CR characters are trimmed from record starts as a documented tradeoff",
+    "In single-column CSV, an empty cell must be written as a quoted empty string (\"\") — an unquoted blank line is treated as a skipped empty line, not an empty record",
+    "Wider AVX2 registers are deliberately avoided for unquoted-data scanning because the authors measured them as slower than the amortized memchr approach used"
+  ],
+  "pick_this_over_siblings_when": "Use simd-csv over the plain csv crate when writing Rust code that streams large, mostly-unquoted CSV/TSV from disk and you can tolerate its lower-level, non-drop-in API; use its sibling xan instead if you just want a ready-made CLI (xan is built by the same authors for the same use case) rather than a library to embed. The other siblings (go-simdcsv, Sep, zsv, cisv, zsv-ruby) target Go, .NET, C, Node and Ruby respectively and aren't relevant unless leaving the Rust ecosystem.",
+  "verified_claims_summary": "First-party README table compares simd-csv's three reader modes (Splitter/split, ZeroCopyReader/zero_copy, Reader/copy) against the docs.rs `csv` crate (v1.3.1 in dev-dependencies) parsing 10 files (100MB-11GB) streamed from SSD on x86_64 with AVX2, no CPU model given. Reported gains range from ~1.0x on worst-case.csv (100MB, split mode) up to ~6.0x on tweets.csv (6.5GB, split mode), with most files in the ~1.5-4.8x range and quote-heavy/low-entropy files (quote-always.csv, range.csv) near 1.0-1.4x.",
+  "status_note": "Actively maintained (last commit 2026-09-16, steady stream of open enhancement issues, no open bug-tagged issues found) but a tiny, single-maintainer project (19 stars); MIT-licensed and small enough to vendor/copy if the dependency risk is a concern.",
+  "sources_read": [
+    "https://github.com/medialab/simd-csv",
+    "https://github.com/medialab/simd-csv#regarding-performance",
+    "https://github.com/medialab/simd-csv/blob/master/Cargo.toml",
+    "https://github.com/medialab/simd-csv/blob/master/rust-toolchain.toml",
+    "https://github.com/medialab/simd-csv/blob/master/scripts/bench.sh",
+    "https://github.com/medialab/simd-csv/blob/master/src/lib.rs",
+    "https://github.com/medialab/simd-csv/issues"
+  ],
+  "confidence": 0.55
+}

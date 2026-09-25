@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/sebyx07/zsv-ruby",
+  "one_liner": "Ruby native-extension binding to the zsv C library; drop-in CSV stdlib replacement, 5-6x faster.",
+  "what_it_does": "Parses CSV (and other delimited text) from files, IO objects, or strings, exposing a Ruby API modeled directly on stdlib CSV (foreach, parse, read, open, Parser#shift/each/rewind/close). It is a thin C-extension wrapper: all parsing work happens in the vendored liquidaty/zsv C library, not in Ruby. Supports headers (boolean or custom array), custom col_sep/quote_char, skip_lines, and a liberal_parsing flag; raises ZSV::Error/MalformedCSVError/InvalidEncodingError to mirror CSV's exception surface.",
+  "how_it_is_fast": "The speed comes entirely from zsv's SIMD-accelerated scanning (SSE2/AVX2, per its build output) for delimiter/quote detection, plus a streaming pull-based parser that avoids buffering whole files. The Ruby layer adds a row builder (row.c) that converts parsed fields straight into Ruby arrays/hashes with frozen strings, cutting string allocations (~57% fewer per the README) versus stdlib CSV's line-by-line Ruby-level splitting.",
+  "when_to_use": [
+    "Ruby app already reading large CSVs with stdlib CSV and CPU time in parsing is a bottleneck",
+    "Batch/ETL jobs on 10K-100K+ row files where throughput matters more than ecosystem maturity",
+    "Simple, mostly-unquoted or lightly-quoted tabular data (the benchmarks use synthetic value_i_j fields, no heavy quoting)",
+    "Linux or macOS (ARM or x86) environments where a C toolchain is available at gem-install time",
+    "Willing to accept a single-author, low-adoption (17-star) dependency in exchange for the speedup"
+  ],
+  "when_not_to_use": [
+    "Need CSV stdlib's type/header converters (:numeric, :date, :date_time) or unconverted_fields -- explicitly marked 'not yet implemented' (Phase 2 roadmap item)",
+    "Need CVS generation/writing -- only reading/parsing is implemented",
+    "Windows without a working C build environment, since the gem compiles zsv from source at install time (no confirmed precompiled binary gems)",
+    "Risk-averse production use: single maintainer, first release Dec 2025, only 17 stars, no independent (non-author) verification of the benchmark numbers",
+    "Heavily-quoted or malformed/adversarial CSV, since only synthetic unquoted data was benchmarked and liberal_parsing edge cases aren't documented in depth"
+  ],
+  "integration": {
+    "form": "module (native C extension gem)",
+    "dependencies": "none at runtime beyond a C toolchain; extconf.rb downloads and compiles liquidaty/zsv 1.4.3 source from GitHub during gem install",
+    "min_toolchain": "Ruby >= 3.3 (gemspec); README states tested on 3.3, 3.4, 4.0; C99 compiler (extconf uses -std=c99)",
+    "platforms": "Linux and macOS (ARM and x86) per README; extconf.rb has Darwin/Linux-specific link flags (-framework Foundation vs -lpthread -lm) and no Windows branch",
+    "thread_safety": "Project's own docs/VERIFICATION.md claims 'Thread-safe (no global state)', but this is a self-generated report, not independently audited; no GVL-release calls (e.g. rb_thread_call_without_gvl) found in parser.c, so a parse call does not appear to release the GVL for concurrent Ruby threads",
+    "drop_in_for_baseline": "partial -- matches CSV's read-path method names/options/exception classes, but has no writer and is missing CSV's converter/header-converter features"
+  },
+  "gotchas": [
+    "Native extension: gem install compiles C code and fetches zsv 1.4.3 source over the network at install time, which can fail or be slow in sandboxed/offline CI",
+    "No CSV writing support -- read-only replacement",
+    "Type/header converters from stdlib CSV are unimplemented (explicit roadmap gap)",
+    "Returned strings are frozen for efficiency, which can break code that mutates row values in place"
+  ],
+  "pick_this_over_siblings_when": "Pick this specifically when you're on Ruby and want zsv's speed without writing your own FFI bindings; for any other language, use liquidaty/zsv directly (same underlying engine, more mature, more battle-tested) or a language-native SIMD parser like simd-csv (Rust) or go-simdcsv (Go).",
+  "verified_claims_summary": "README benchmark-ips results (Ruby 3.4.7, no CPU/compiler stated) show ZSV beating stdlib CSV by 6.20x at 1K rows (1,013.7 vs 163.4 i/s), 5.27x at 10K rows, 5.00x at 100K rows, and 4.33x at 10K rows with headers enabled, plus 82.6% less memory and 56.9% fewer string allocations at 10K-100K rows.",
+  "status_note": "Actively maintained (last commit 2026-07-30) and MIT-licensed, but very new (first release Dec 2025) and low-adoption (17 stars, single author); README discloses it was built with Claude Code, so treat it as an early-stage convenience wrapper around the more established liquidaty/zsv C library.",
+  "sources_read": [
+    "https://github.com/sebyx07/zsv-ruby",
+    "https://github.com/sebyx07/zsv-ruby#-performance",
+    "https://github.com/sebyx07/zsv-ruby/blob/main/benchmark/parse_bench.rb",
+    "https://github.com/sebyx07/zsv-ruby/blob/main/README.md",
+    "https://github.com/sebyx07/zsv-ruby/blob/main/ext/zsv/extconf.rb",
+    "https://github.com/sebyx07/zsv-ruby/blob/main/zsv.gemspec",
+    "https://github.com/sebyx07/zsv-ruby/blob/main/CHANGELOG.md",
+    "https://github.com/sebyx07/zsv-ruby/blob/main/docs/VERIFICATION.md",
+    "https://github.com/sebyx07/zsv-ruby/blob/main/ext/zsv/parser.c",
+    "https://github.com/sebyx07/zsv-ruby/blob/main/lib/zsv/version.rb",
+    "https://github.com/sebyx07/zsv-ruby/issues"
+  ],
+  "confidence": 0.5
+}

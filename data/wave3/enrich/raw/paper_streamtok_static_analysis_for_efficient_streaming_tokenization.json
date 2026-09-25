@@ -1,0 +1,42 @@
+{
+  "id": "https://doi.org/10.1145/3779212.3790227",
+  "one_liner": "Rust streaming tokenizer using static max-lookahead analysis for O(1)-per-symbol maximal-munch tokenization vs flex's backtracking",
+  "what_it_does": "StreamTok tokenizes a stream (JSON, CSV, XML, YAML, log lines, DNS zones, FASTA, etc.) under longest-match ('maximal munch') semantics without buffering the whole input, unlike flex-generated C lexers which can backtrack over arbitrarily long spans to confirm a token is maximal. It is a research prototype, not a flex-compatible tool: you give it a grammar, it runs a one-time static analysis pass to build a bounded lookahead ('token-extension') DFA, then tokenizes the stream block-by-block, emitting tokens incrementally with a small fixed lookahead buffer instead of full backtracking.",
+  "how_it_is_fast": "The paper introduces 'maximum token neighbor distance' (max-TND): the worst-case number of extra symbols needed to confirm no longer token is possible past a given match. When max-TND is bounded (statically computed via a co-accessibility fixpoint over the tokenizer DFA, O(state^2)), StreamTok builds a second automaton via powerset construction that runs K symbols ahead of the main DFA, so a fixed-size lookahead buffer of size K replaces flex's unbounded backtracking. This turns per-symbol tokenization from flex's O(k) backtracking (worse for pathological grammars) into O(1) amortized work per symbol.",
+  "when_to_use": [
+    "You're building/generating a tokenizer for a grammar you can statically analyze up front (JSON, CSV/TSV, XML, YAML, log formats, DNS zone files) and want to prove/bound the lookahead cost",
+    "Streaming or memory-constrained pipelines where you cannot buffer the whole input the way a flex backtracking lexer might need to",
+    "Grammars with pathological repeated-prefix ambiguity (the paper's synthetic (a{0,k}b)|a family) where flex's backtracking degrades with grammar parameter k but StreamTok stays O(1) per symbol",
+    "Research/prototyping contexts where you can implement the pre-analysis + Rust runtime yourself, since there is no published crate"
+  ],
+  "when_not_to_use": [
+    "You need a drop-in flex replacement today: no public source, crate, or build artifact exists for StreamTok as of this writing",
+    "Your grammar has unbounded max-TND — the paper found this true for ~32% of a 2,669-grammar GitHub sample, including C, R, and SQL, which fall back to non-constant (unbounded lookahead) behavior",
+    "You need production maturity guarantees: this is a single ASPLOS '26 paper's evaluation artifact with no maintenance history, license, or usage outside the paper",
+    "Computing max-TND for an arbitrary grammar is PSPACE-hard in the worst case (practical instances reportedly analyze in <100ms for 99.4% of the sampled grammars, but there's no guarantee for yours)",
+    "You need C interop or the flex/re2c ecosystem (skeleton files, %option flags, yacc/bison integration) — StreamTok has none of that tooling"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "not documented (no public repo; paper does not list crates)",
+    "min_toolchain": "Rust (exact edition/version not documented)",
+    "platforms": "not documented",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": "partial — explain: same tokenization problem as flex-generated lexers but a different construction pipeline (grammar -> static max-TND analysis -> token-extension DFA -> streaming tokenizer); no flex-compatible input format or generated-C output"
+  },
+  "gotchas": [
+    "Falls back to unbounded lookahead behavior on grammars with unbounded max-TND (no error is thrown per se, but the O(1) guarantee disappears)",
+    "Requires an upfront static-analysis and DFA/powerset-construction build step before any streaming can start, unlike flex's simpler generate-then-run model",
+    "No public source, artifact, or package exists to inspect for actual API ergonomics or unsafe code use"
+  ],
+  "pick_this_over_siblings_when": "Pick StreamTok over the other flex-beating entries (LRSTAR, simd-lexing, Ragel, CrossDB's hand-written parser) only if you specifically need a formal, provable bound on streaming lookahead for maximal-munch tokenization and are willing to reimplement from the paper — those other tools are usable today with real repos, while StreamTok has no code to run.",
+  "verified_claims_summary": "Peer-reviewed benchmark (RQ3, Fig. 10) reports StreamTok 2x-3x faster than flex-generated C lexers across JSON/CSV/TSV/XML/YAML/FASTA/DNS-zone/log grammars on a 10MB input; application-level tests (RQ5, Table 2) show 2.5x-3.1x for log-to-TSV and up to 5.39x for JSON minify. RQ1-RQ2 ran on an Intel Xeon E5-2640 v4 @ 2.40GHz/128GB RAM; the flex throughput comparisons (RQ3-RQ6) ran on an AMD EPYC 7252 8-core @ 3.10GHz/256GB RAM. Rust compiler version and build flags are not stated in the paper.",
+  "status_note": "Maintenance status is unknown because no public repository exists at all; usability is 'reference' — this is an ASPLOS '26 paper's evaluation prototype, not a distributed library.",
+  "sources_read": [
+    "https://github.com/bojieli/ai-infra-book/blob/main/references/proceedings/ASPLOS/2026/paper-152.txt",
+    "https://doi.org/10.1145/3779212.3790227",
+    "https://dl.acm.org/doi/10.1145/3779212.3790227",
+    "https://github.com/kmamouras"
+  ],
+  "confidence": 0.7
+}

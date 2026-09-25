@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/nnnkkk7/go-simdcsv",
+  "one_liner": "AVX-512 SIMD CSV parser for Go; drop-in encoding/csv replacement, faster only on unquoted data.",
+  "what_it_does": "It's a Go CSV reader/writer meant to replace the standard library's encoding/csv for higher ReadAll throughput. The API is a same-name drop-in: swap the import for `csv github.com/nnnkkk7/go-simdcsv` and Reader/Writer, Comma, LazyQuotes, TrimLeadingSpace, etc. all work unchanged. It also exposes lower-level `ParseBytes`/`ParseBytesStreaming` for parsing a `[]byte` directly without going through `io.Reader`.",
+  "how_it_is_fast": "It scans input in 64-byte AVX-512 chunks (`scanBuffer`), building bitmasks for quote/comma/CR/LF positions instead of branching byte-by-byte, then derives the in-quotes region with a prefix-XOR computed via PCLMULQDQ carryless multiplication (the simdjson-style structural-character technique) before locating field boundaries and materializing strings. `useAVX512` is checked once at init via a CPU feature test, with an automatic scalar fallback when AVX-512 (F/BW/VL) isn't available.",
+  "when_to_use": [
+    "Go services that already deploy on amd64 hardware with AVX-512 (AMD Zen4+/EPYC 9x, Intel Skylake-X+)",
+    "Large, mostly-unquoted CSV (logs, numeric exports) at 10K-100K+ row scale, where the README shows +35% ReadAll throughput",
+    "You can pin CI/prod to Go 1.26+ built with the experimental GOEXPERIMENT=simd flag",
+    "You want the raw-bytes path (ParseBytes/ParseBytesStreaming) to skip io.Reader overhead entirely",
+    "You're prototyping or benchmarking SIMD CSV techniques in Go rather than shipping a production dependency"
+  ],
+  "when_not_to_use": [
+    "Production systems that can't accept a dependency the README itself calls experimental and 'not recommended for production use'",
+    "Any deployment target without AVX-512 F/BW/VL: Apple Silicon/ARM64, pre-Zen4 AMD, pre-Skylake-X Intel, and most hosted CI runners (ubuntu-latest included) — you get the scalar path with no speedup",
+    "Heavily-quoted CSV: the README's own numbers show ~30% slower than encoding/csv on all-quoted 10K-row data due to extra validation passes",
+    "Teams that can't carry an experimental Go toolchain flag (GOEXPERIMENT=simd) through their build pipeline",
+    "Anyone needing a stable API long-term: `simd/archsimd` is called out as unstable across Go releases, and the project is very young (47 stars, first tagged releases only recently)"
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none beyond stdlib and Go's experimental simd/archsimd package",
+    "min_toolchain": "Go 1.26.4+ built with GOEXPERIMENT=simd",
+    "platforms": "amd64 only for the SIMD path (requires AVX-512 F/BW/VL); falls back to a scalar implementation elsewhere, including arm64/Apple Silicon",
+    "thread_safety": "not documented — mirrors encoding/csv, whose Reader/Writer are not documented as safe for concurrent use by multiple goroutines",
+    "drop_in_for_baseline": "partial — explain: the Reader/Writer API is a same-name substitute for encoding/csv with all standard options supported, but unlike stdlib it requires Go 1.26+ and an experimental compiler flag (GOEXPERIMENT=simd), and the SIMD code path only activates on AVX-512 hardware"
+  },
+  "gotchas": [
+    "SIMD source files are gated behind the `goexperiment.simd && amd64` build tag, so the fast path only compiles/activates under GOEXPERIMENT=simd on amd64; everywhere else you silently get the scalar implementation",
+    "All-quoted-field CSV is ~30% slower than encoding/csv (10K-row case) — the opposite of the headline speedup",
+    "Published AVX-512 numbers come only from a manually-triggered self-hosted CI workflow (ci-avx512.yml); the default per-PR CI (ubuntu-latest) runs scalar-only and doesn't exercise or verify the SIMD path",
+    "`simd/archsimd` is an experimental Go package the README warns 'may have breaking changes in future Go releases'"
+  ],
+  "pick_this_over_siblings_when": "It's the only Go-language entry in this category (siblings are .NET/Rust/Python/R/CLI tools) and the closest analog to the Rust `simd-csv` crate's idea applied to Go's encoding/csv. Pick it over cisv/zsv/xan/qsv only when you need an in-process Go library rather than a CLI tool, your data is mostly unquoted, and you can run on AVX-512 hardware with an experimental Go build.",
+  "verified_claims_summary": "Verifier confirmed the README's ReadAll throughput table (e.g. 228->309 MB/s unquoted, 10K rows; +35%) against public paired Stdlib/SIMD benchmarks in benchmark_test.go, run with `go test -bench=. -benchmem` on Go 1.26 + GOEXPERIMENT=simd, AMD EPYC 9R14 (AVX-512), via a manually-triggered self-hosted CI workflow; the reported -30% regression applies specifically to the 10K-row all-quoted-fields case.",
+  "status_note": "Actively maintained (last commit 2026-06-14, MIT-licensed) but the author labels it experimental and 'not recommended for production use'; at 47 stars it's better treated as a technique to read or vendor selectively than a dependency to adopt outright.",
+  "sources_read": [
+    "https://github.com/nnnkkk7/go-simdcsv",
+    "https://github.com/nnnkkk7/go-simdcsv#performance",
+    "https://github.com/nnnkkk7/go-simdcsv/blob/main/go.mod",
+    "https://github.com/nnnkkk7/go-simdcsv/blob/main/simd_scanner.go",
+    "https://github.com/nnnkkk7/go-simdcsv/blob/main/quote.go",
+    "https://github.com/nnnkkk7/go-simdcsv/issues"
+  ],
+  "confidence": 0.78
+}
