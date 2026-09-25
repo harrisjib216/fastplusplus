@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/bytehamster/gpurecsplit",
+  "one_liner": "SIMD, multicore and GPU construction of RecSplit minimal perfect hashes; single-threaded builds about 4x faster than BBHash at similar space.",
+  "what_it_does": "Builds RecSplit minimal perfect hash functions (static bijections from n distinct keys to 0..n-1 at about 1.5-3 bits/key) much faster than the original Sux RecSplit, in three variants: SIMDRecSplit (AVX2/AVX-512), GPURecSplit (CUDA) and a portable multi-threaded RecSplit. Each variant is a class template over leaf size. You build it from a vector<std::string>, a vector of 128-bit hashes or a newline-separated ifstream, plus a bucket size and a thread count. operator() returns the index, iostream operators serialize, and it is not a drop-in replacement for BBHash or Sux RecSplit.",
+  "how_it_is_fast": "Rotation fitting splits a leaf's keys into two halves by one hash bit, then cyclically rotates one half's bit mask to fill the other's holes, so one hash evaluation tests up to m candidate bijections (up to 3x faster construction per the paper). The brute-force seed search is vectorized: each AVX2/AVX-512 lane (Vector Class Library) tests a different seed, and splitting counts use packed 8-bit counters. Independent buckets are radix-sorted with IPS2Ra and split across threads. On the GPU, each leaf or split runs as a CUDA thread block, and same-shaped trees are batched into one kernel.",
+  "when_to_use": [
+    "Static sets of millions of string keys on x86-64 with AVX2/AVX-512, when build time and space both matter (1.81 bits/key at 107 ns/key build, single-threaded, 10M keys).",
+    "Very compact MPHFs (about 1.56-1.7 bits/key) that original RecSplit takes hours to build. For 5M keys at 1.56 bits/key, the paper reports about 2 minutes on the CPU and 5 s on an RTX 3090, against 1.5 hours for the original code.",
+    "Multi-core offline builds: buckets are split across threads without changing the query layout, and the paper shows good scaling on 8-core and 64-core machines.",
+    "You have an NVIDIA GPU and want the most space-efficient settings: GPURecSplit reaches 1.496 bits/key with l=24."
+  ],
+  "when_not_to_use": [
+    "Latency-bound lookups: queries take 71-110 ns/key, against 20-35 ns for PTHash and 36-51 ns for BBHash (Table 3). Queries run on the CPU and walk a Golomb-Rice-coded tree.",
+    "Non-x86 CPUs, or CPUs without AVX2/AVX-512. SIMDRecSplit is x86-only and falls back to slow emulated SIMD without AVX2. On an AVX2-only AMD EPYC, sequential SIMDRecSplit took 4.6x longer than on the AVX-512 Intel machine. On ARM, only the non-SIMD variant reportedly builds, and CI does not test it.",
+    "Dynamic key sets, or input with possible duplicate keys. The structure is static, and duplicate keys make construction never return.",
+    "Projects that cannot take GPL-3.0 (even with the GCC Runtime Library Exception), or that must ship portable binaries, because the CMake targets force -march=native onto consumers.",
+    "GPURecSplit in a process that uses CUDA for other work (see gotchas). The GPU also gains little for space-inefficient settings, where host-device transfers dominate."
+  ],
+  "integration": {
+    "form": "shared lib: header-only class templates, plus one small CMake-built shared library (Ips2raRecSplitSorter) that every target links. Consume it via git clone --recursive and add_subdirectory.",
+    "dependencies": "Git submodules: sux (ByteHamster fork), gcem, tlx, ips2ra, and vectorclass (SIMD only). System: Intel TBB, pthread and libatomic. The CUDA toolkit is needed for GPURecSplit.",
+    "min_toolchain": "C++20 and CMake 3.25+. CI uses GCC 10-13 on Ubuntu 24.04. The paper used GCC 11.2 and CUDA 11, and a Jan 2026 commit fixes a newer nvcc.",
+    "platforms": "SIMDRecSplit: x86-64 only; the target needs SSE4.2, and full speed needs AVX2 or AVX-512 (tuned for AVX-512). GPURecSplit: NVIDIA GPU for construction, CPU for queries. Portable variant: reportedly builds on ARM. CI covers Linux only.",
+    "thread_safety": "Not documented. Construction takes num_threads and parallelizes internally. operator() is non-const, but from reading the code, queries only read the built structure, so concurrent lookups on a finished instance look safe.",
+    "drop_in_for_baseline": "false: the API is different. It accepts only std::string keys or 128-bit hashes, is configured by (bucket_size, num_threads), and hard-codes SpookyHash V2 with no custom hasher."
+  },
+  "gotchas": [
+    "Duplicate keys make the constructor loop forever, so deduplicate first. Leaf size is capped at 24, and the code comments say bucket size works with high probability only up to an average of about 2000 (MAX_BUCKET_SIZE=3000).",
+    "The CMake targets set -march=native and -DSIMD as INTERFACE options, so your own target is compiled for the build machine's CPU.",
+    "GPURecSplit calls cudaDeviceReset() at the end of construction and exit() on any CUDA error, which destroys other CUDA state in the process or the process itself.",
+    "The output is not interchangeable. The functions differ from Sux RecSplit, and the portable variant differs from SIMD/GPU (a test checks those two for equivalence). Serialization is a raw native binary stream that checks only the leaf size."
+  ],
+  "pick_this_over_siblings_when": "On 10M string keys it builds 1.81 bits/key in 107 ns/key, against SicHash's 2.41 bits in 119 ns and PTHash's 3.31 bits in 199 ns, and it builds Sux RecSplit's ~1.8 bits/key 6.6x faster with about 7% slower lookups. Pick PTHash instead when lookups dominate (20-35 vs 71-110 ns), and ShockHash (1.489 bits/key, per the author) for space near the 1.44-bit bound.",
+  "verified_claims_summary": "Paper Table 3 (arXiv 2212.09562v2) measures 10M random strings of length 10-50, single-threaded, with GCC 11.2 -O3 -march=native on an AVX-512 Intel i7-11700. SIMDRecSplit l=5,b=5 builds at 49 ns/key and 2.96 bits/key, against BBHash gamma=1.0 at 208 ns/key and 3.059 bits/key (about 4.2x, derived); BBHash gamma=5.0 matches the speed but needs 6.871 bits/key. The 50x/239x/5438x speedups over original RecSplit (SIMD 1 thread, 16 threads, RTX 3090) come from Table 1 (l=18, b=50, 5M random 128-bit keys), and there is no std baseline.",
+  "status_note": "Active research code from KIT (last commit 2026-01-04 fixes nvcc compatibility; CI on GCC 10-13; 0 open issues, 16 stars), copyable as a git submodule plus add_subdirectory under GPLv3 with the GCC Runtime Library Exception, the same terms as libstdc++.",
+  "sources_read": [
+    "https://github.com/ByteHamster/GpuRecSplit",
+    "https://github.com/ByteHamster/GpuRecSplit/blob/main/README.md",
+    "https://github.com/ByteHamster/GpuRecSplit/blob/main/CMakeLists.txt",
+    "https://github.com/ByteHamster/GpuRecSplit/blob/main/.gitmodules",
+    "https://github.com/ByteHamster/GpuRecSplit/blob/main/.github/workflows/build.yml",
+    "https://github.com/ByteHamster/GpuRecSplit/blob/main/Dockerfile",
+    "https://github.com/ByteHamster/GpuRecSplit/blob/main/include/function/SIMDRecSplit.hpp",
+    "https://github.com/ByteHamster/GpuRecSplit/blob/main/include/function/AbstractParallelRecSplit.hpp",
+    "https://github.com/ByteHamster/GpuRecSplit/blob/main/include/function/GPURecSplit.cuh",
+    "https://github.com/ByteHamster/GpuRecSplit/blob/main/include/function/RecSplitRotate.hpp",
+    "https://github.com/ByteHamster/GpuRecSplit/blob/main/include/function/RiceBitVector.hpp",
+    "https://github.com/ByteHamster/GpuRecSplit/blob/main/include/function/DoubleEF.hpp",
+    "https://github.com/ByteHamster/GpuRecSplit/blob/main/include/util/SimdUtils.hpp",
+    "https://github.com/ByteHamster/GpuRecSplit/blob/main/include/util/Hash128.h",
+    "https://github.com/ByteHamster/GpuRecSplit/blob/main/include/util/Sorter.hpp",
+    "https://github.com/ByteHamster/GpuRecSplit/blob/main/include/support/common.hpp",
+    "https://github.com/ByteHamster/GpuRecSplit/blob/main/src/Sorter.cpp",
+    "https://github.com/ByteHamster/GpuRecSplit/blob/main/test/correctness.hpp",
+    "https://github.com/ByteHamster/GpuRecSplit/blob/main/test/correctness.cpp",
+    "https://github.com/ByteHamster/GpuRecSplit/blob/main/test/GPUandSIMDequivalence.cu",
+    "https://github.com/ByteHamster/GpuRecSplit/blob/main/benchmark/benchmark_construction.hpp",
+    "https://github.com/ByteHamster/GpuRecSplit/blob/main/benchmark/benchmark_construction.cpp",
+    "https://github.com/ByteHamster/GpuRecSplit/issues/1",
+    "https://github.com/ByteHamster/GpuRecSplit/issues/2",
+    "https://github.com/ByteHamster/GpuRecSplit/commits/main",
+    "https://arxiv.org/abs/2212.09562",
+    "https://arxiv.org/pdf/2212.09562"
+  ],
+  "confidence": 0.85
+}

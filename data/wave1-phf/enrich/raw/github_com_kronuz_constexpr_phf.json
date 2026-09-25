@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/kronuz/constexpr-phf",
+  "one_liner": "Header-only C++17 constexpr minimal perfect hash for fixed integer key sets; lookups ~2.5x faster than std::unordered_map in author benchmarks.",
+  "what_it_does": "Builds a minimal perfect hash over a fixed set of integral keys at compile time (or at runtime via assign()). Each key maps to a unique dense slot in [0, N), which you use to index a parallel array or drive a switch. The API is phf::make_phf(keys) returning phf::phf<T, N>, with find() (slot or phf::npos), count(), at()/operator[] (throw on miss) and an unchecked lookup(); it stores no values and has no iterators. Strings are not supported directly: you hash them to integers yourself and, for open input, compare the original string kept at the returned slot.",
+  "how_it_is_fast": "It uses a two-level CHD (\"hash, displace, and compress\", Belazzougui/Botelho/Dietzfelbinger, ESA 2009) scheme. The key's low bits select a bucket, and the bucket's stored multiplier and offset place the key with a division-free multiply-shift, ((k * mul) >> shift) + off, into a power-of-two index table; this replaces the classic prime modulo. A lookup is therefore one mask, one multiply, one shift, two array reads and one key compare, with no probing, heap or pointer chasing, so the cost stays at about 1.2-1.3 ns from 6 to 1000 keys. The displacement search (largest buckets first, successive prime multipliers, rollback on collision) runs in constexpr, and key sets that defeat plain multiply-shift (such as distinct powers of two) fall back automatically to an xorshift-multiply pre-mix, which ARCHITECTURE.md says costs about half the multiply-shift speedup.",
+  "when_to_use": [
+    "Key set known at build time and already integral (enum values, opcodes, protocol or field IDs, precomputed string hashes), from a handful to about a thousand keys, where you need key to dense index for a parallel array.",
+    "Replacing a sparse switch or if/else ladder: with a constexpr table, find(hash(\"...\")) is a constant expression usable as a case label, so the dispatch compiles to a jump table.",
+    "Hot lookups on small fixed sets where std::unordered_map's hash-plus-probe floor (about 3.1-3.2 ns in the author's runs) matters and a flat ~1.2-1.3 ns per find() is worth a custom API.",
+    "Code that must avoid heap allocation or static-init work: a constexpr table is plain arrays in the binary, with no dependencies beyond the standard library.",
+    "String keyword dispatch where you control the hash and can add one string compare, and do not want gperf's separate code-generation step."
+  ],
+  "when_not_to_use": [
+    "Keys change at runtime: there is no insert, erase or rehash, and even runtime assign() rebuilds the whole table and needs the key count N as a template parameter.",
+    "You want native string keys or mapped values out of the box: phf.hh is integer-only, the string wrapper exists only as benchmark code (bench/phf_dispatch.hh), and the `keywords` front-end that ARCHITECTURE.md and AGENTS.md point to returns 404.",
+    "Raw string-lookup speed matters most and a codegen step is acceptable: gperf ran 14 ns/op against 21 ns for phf hash+verify in this repo's own 192-keyword benchmark.",
+    "Large constexpr key sets: construction is a compile-time search, compile-time cost is not measured anywhere, and the repo only builds constexpr tables of 8 keys (test.cc, demo.cc); its 1000- and 5000-key runs use runtime assign().",
+    "You need a proven dependency: 37 stars, one closed issue, no tags or releases (README pins GIT_TAG master), and the lookup was rewritten in July 2026, with a GCC 13 constexpr fix the next day; MSVC support is not documented."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (standard library only; <iostream> only under PHF_DEBUG). The benchmarks alone fetch frozen and ctrie.",
+    "min_toolchain": "C++17 (CMake target sets cxx_std_17; CMake 3.14 for the FetchContent path). Commit 55ac236 reports validation on Clang, GCC 11, g++-13.4 and g++-16; g++-13.3 needed that fix for find() as a case label. MSVC not documented.",
+    "platforms": "any C++17 target (portable integer code, no intrinsics); published numbers are x86_64 only",
+    "thread_safety": "Not documented. Lookups are const member functions over immutable arrays with no internal mutable state, so concurrent reads of a built table are safe by construction; assign() and clear() mutate.",
+    "drop_in_for_baseline": "partial — find()/count()/at() reuse std set/map names, but find() returns a dense slot index or phf::npos instead of an iterator, no values are stored, keys must be integral, and the set is fixed. Against a switch or if-ladder it replaces the comparisons, and the case labels become find(key) constants."
+  },
+  "gotchas": [
+    "Only lookup() skips the membership check. find(), count() and at() compare the stored integer key and reject non-members, despite the README's note that find() 'hands back whatever sits there'. The real risk is with strings: a non-member whose hash equals a member's hash is reported as a hit unless you compare the stored string.",
+    "Key types: the correctness suite tests only uint32_t, uint64_t and int keys. By my reading of phf.hh (not tested), 8/16-bit key types are promoted to 32-bit before the multiply, so ((k * mul) >> shift) can index past the table. Signed 64-bit keys use signed multiplication, so overflow is UB and negative results break the index. Prefer uint32_t or uint64_t.",
+    "Build failures throw std::invalid_argument (duplicate keys, empty or oversized input, 'cannot find suitable table'), and in a constexpr context these become compile errors. at() and operator[] throw std::out_of_range. A -fno-exceptions mode is not documented.",
+    "Memory is not compact: each index slot holds the key plus a size_t position (16 bytes for uint32_t keys on 64-bit targets), the index is the next power of two at or above 1.25N, and buckets add 8 bytes each. That is about 41 KB for 1000 uint32_t keys (derived from the phf.hh layout), while the benchmarks loop over a hot 4096-lookup work list."
+  ],
+  "pick_this_over_siblings_when": "Pick it over frozen or ConstexprCore/perfect_hash when the keys are already integers and you want dense [0, N) slots usable as constexpr case labels; for strings, those libraries take string keys natively, and gperf beat it in its own harness (14 vs 21 ns). ConstexprCore's table showing kronuz::phf at 0.22 vs its own 1.08 billion queries/s pins constexpr-phf at 2019 commit 0776e93, before the multiply-shift rewrite, so that table does not measure the current lookup.",
+  "verified_claims_summary": "In the author's harness (GCC 11, -O3, x86_64 with no CPU model, libstdc++ inferred), find() on runtime-built tables of 6-1000 random uint32 keys took 1.2-1.3 ns per lookup against 3.1-3.2 ns for std::unordered_map<uint32_t,uint32_t> (~2.5x); this was an all-hit loop of independent lookups, and the 'if-ladder' and 'switch' columns are a runtime loop and std::lower_bound, not compiler-generated code. On 192 Xapiand field-type strings with a 50/50 hit/miss mix, hash+verify took 21 ns/op against 29 ns for std::unordered_map<std::string,int> and 82 ns for std::set, while gperf took 14 ns.",
+  "status_note": "Active again since July 2026 (multiply-shift rewrite, GCC 13 fix, benchmarks, README) after a 2019-2026 gap; MIT-licensed, and the single ~1,500-line header (two-thirds of it a prime table) is easy to vendor, but it has a small user base and no tagged releases.",
+  "sources_read": [
+    "https://github.com/Kronuz/constexpr-phf",
+    "https://github.com/Kronuz/constexpr-phf#benchmarks",
+    "https://github.com/Kronuz/constexpr-phf/blob/master/README.md",
+    "https://github.com/Kronuz/constexpr-phf/blob/master/ARCHITECTURE.md",
+    "https://github.com/Kronuz/constexpr-phf/blob/master/AGENTS.md",
+    "https://github.com/Kronuz/constexpr-phf/blob/master/CMakeLists.txt",
+    "https://github.com/Kronuz/constexpr-phf/blob/master/phf.hh",
+    "https://github.com/Kronuz/constexpr-phf/blob/master/test/correctness.cc",
+    "https://github.com/Kronuz/constexpr-phf/blob/master/test/test.cc",
+    "https://github.com/Kronuz/constexpr-phf/blob/master/examples/demo.cc",
+    "https://github.com/Kronuz/constexpr-phf/blob/master/bench/bench.cc",
+    "https://github.com/Kronuz/constexpr-phf/blob/master/bench/compare.cc",
+    "https://github.com/Kronuz/constexpr-phf/blob/master/bench/dispatch_field_types.cc",
+    "https://github.com/Kronuz/constexpr-phf/blob/master/bench/dispatch_stop_words.cc",
+    "https://github.com/Kronuz/constexpr-phf/blob/master/bench/phf_dispatch.hh",
+    "https://github.com/Kronuz/constexpr-phf/commits/master",
+    "https://github.com/Kronuz/constexpr-phf/commit/55ac236",
+    "https://github.com/Kronuz/constexpr-phf/issues?q=is%3Aissue",
+    "https://github.com/Kronuz/constexpr-phf/tags",
+    "https://github.com/Kronuz/constexpr-phf/releases",
+    "https://github.com/Kronuz/keywords",
+    "https://github.com/ConstexprCore/perfect_hash",
+    "https://github.com/ConstexprCore/perfect_hash/blob/HEAD/benchmarks/CMakeLists.txt",
+    "https://github.com/ConstexprCore/perfect_hash/blob/HEAD/benchmarks/bench_protocol.cpp"
+  ],
+  "confidence": 0.85
+}

@@ -1,0 +1,70 @@
+{
+  "id": "private:developer-source",
+  "one_liner": "Compile-time perfect hash table for fixed string-key sets (keywords, opcodes); 5.8-7x faster lookups than std::unordered_map.",
+  "what_it_does": "fastcpp::phf is one component of the developer source repo's header-only 'fastcpp' collection. It builds a collision-free lookup table for a fixed set of short string keys, such as language keywords, opcodes or enum labels, inside the compiler's constant evaluator. You declare a std::array of {string_view, value} pairs, make find_parameters<Hasher>(keys) and make_table<Hasher, params>(keys, miss) constexpr variables (or use the FASTCPP_PHF_DEFINE_TABLE macro), and query with table.lookup(string_view) or lookup(ptr, len), which returns the value or the miss sentinel. It is not a container: there is no insert, erase or iteration, and lookup_constexpr lets you static_assert the table's contents.",
+  "how_it_is_fast": "It reimplements the technique from Matthew 'strager' Glazar's talk 'Faster than Rust and C++: the PERFECT hash table' as a constexpr brute-force search for a single-level perfect hash. The search tries, cheapest first, which characters to hash (any subset of s[0], s[1], s[2], s[n/2], s[n-3], s[n-2], s[n-1] and the length), a power-of-two table size and a 32-bit seed. The resulting hash is a few byte loads packed into one 64-bit word and one multiplicative (Lehmer-style) hash, with no loop over the string; the benchmarked C++ table hashes 3 characters into 1024 slots. Length-range and first-character-range gates reject many misses before any hashing. Keys are stored inline in the slots of a .rodata array, so a hit costs one load and one std::memcmp, with no probe loop or pointer chase.",
+  "when_to_use": [
+    "Keyword recognition in a lexer or parser: a closed set of short string keys (16 bytes or less by default) mapped to small integer IDs on a hot path, like the repo's 92 C++20 keywords and 48 JavaScript keywords.",
+    "Streams where most lookups miss, like identifiers checked against keywords. The length and first-character gates reject many of them before hashing. Measured: 3.0 ns vs 20.2 ns per miss against std::unordered_map.",
+    "Tables of opcodes, header names or enum labels that you want to cost nothing at startup, use no heap, and be checked at compile time with static_assert.",
+    "Lexers whose source buffer has at least 16 readable bytes past every token. That allows the opt-in overread16 compare policy, which measured 3.02 ns vs 3.33 ns for the default memcmp (about 1.1x; the 1.44x figure is measured against the inline_words policy, not the default).",
+    "You want strager's character-selection technique under a permissive licence: this is an MIT reimplementation, while strager's own repository is CC-BY-NC-ND."
+  ],
+  "when_not_to_use": [
+    "Keys that are only known at run time, or that change. find_parameters can run at startup, but perfect_hash_table takes the search result as a non-type template argument, so the shipped table can only be built from compile-time keys, and it has no insert or erase.",
+    "Large key sets. By the builder's own comment, a single-level perfect hash needs about O(n^2) slots to be found quickly. The 92-key table already takes 1024 slots (about 20 KiB), slot count is capped at 2^16, and the default budget is 1024 seeds per configuration. This is built for tens to low hundreds of keys, not thousands.",
+    "Keys that agree at every position it can sample (s[0], s[1], s[2], s[n/2], s[n-3], s[n-2], s[n-1] and the length), such as long paths or URLs with shared prefixes and suffixes. No seed can separate them and the search fails. Non-string keys (integers) are not supported at all.",
+    "Code you need to depend on. The repo is private, three days of commits, single-author (every commit authored by 'Claude'), not reviewed by anyone else, and its CI has never passed. The public siblings are more practical.",
+    "If you already use a good open-addressing map, the margin is smaller. The repo measured its own SIMD Swiss table at 8.86 ns vs 3.33 ns (2.7x) on all-hit lookups, and phmap::flat_hash_map at 19.8 ns vs 5.3 ns (3.7x) on the mixed stream."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "None beyond the standard library. The phf code is 11 headers under include/fastcpp/{phf,hash,core}. Copy those rather than using add_subdirectory: the repo's fastcpp::fastcpp CMake target links all 10 vendored libraries (fmt, phmap, xsimd, simdjson, CRoaring, yyjson, ...) and forces C++23.",
+    "min_toolchain": "C++20: class-type non-type template parameters, concepts, <bit>, std::is_constant_evaluated. The README lists gcc 13+, clang 17+ and MSVC 19.35+ (gcc 12 and clang 16 with -std=c++2b). The benchmarks used gcc 13.3 with -std=c++20. CI compiles test_phf with gcc and clang. MSVC is not in CI.",
+    "platforms": "Portable scalar lookup path, with a 64-bit multiply fallback where there is no __int128. overread16 uses SSE2 on x86 and silently falls back to inline_words on other targets. The crc32c hashers use SSE4.2, selected at run time, or ARMv8 CRC. Benchmarked only on x86-64 Linux. CI builds on Linux (gcc, clang) and macOS (clang).",
+    "thread_safety": "Not documented. By construction, a table is an immutable constexpr aggregate and lookup() is const noexcept with no mutable state, so concurrent lookups are safe.",
+    "drop_in_for_baseline": "partial — it replaces std::unordered_map<string_view, V>::find only for a key set fixed at compile time. lookup() returns V or a miss sentinel instead of an iterator, and there is no insert, erase, iteration or count."
+  },
+  "gotchas": [
+    "A miss returns a sentinel value, not an optional or an iterator: whatever miss value you pass to make_table (the keyword sets reserve 0). make_table does not check that no key maps to that same value.",
+    "overread16 requires 16 readable bytes at the query pointer, whatever the key length. Without padding, a token near the end of a buffer or page can fault. It is opt-in for that reason.",
+    "Slot text capacity defaults to 16 bytes and is enforced by static_assert. From reading the code, if you raise TextCapacity for longer keys, only memcmp and first_char_then_memcmp stay correct. inline_words compares only the first and last 8 bytes, so it can report a false hit on 17+ byte keys. overread16 masks just 16 lanes, so it never matches a 17+ byte key. No test covers this, because the longest test key is exactly 16 bytes.",
+    "The compile-time search needs a raised constexpr limit on clang (the repo uses -fconstexpr-steps=100000000, 100x the default). That flag sits on the repo's internal fastcpp_flags target, not on fastcpp::fastcpp, so consumers must add it themselves. A table that builds on gcc can fail on clang. Any failure, including one caused by duplicate keys, shows up only as the static_assert 'the perfect-hash search failed; widen search_options'."
+  ],
+  "pick_this_over_siblings_when": "Pick it over strager/perfect-hash-tables when you need the same character-selection technique under MIT instead of CC-BY-NC-ND. Pick it over frozen when your keys are short strings and lookup latency is what matters, but note that the repo's 3.5x-over-frozen claim has no committed benchmark code. Otherwise the public ConstexprCore/perfect_hash and Kronuz constexpr-phf are the realistic choices, because this code cannot currently be obtained.",
+  "verified_claims_summary": "With gcc 13.3 and libstdc++ at -O2 -march=native -std=c++20 on a shared 4-core 'Intel Xeon @ 2.10GHz' cloud VM (commit dfa74f2, minimum of 7 samples), 200k lookups against the 92 C++20 keywords took 3.3 ns vs 23.2 ns for std::unordered_map<string_view,uint16_t> when every lookup hit, 3.0 vs 20.2 ns when every lookup missed, and 4.9 vs 28.2 ns with 1 keyword per 8 words. These are the author's own numbers, with no outside review, and the results file warns that absolute ns drift between runs (3.42 vs 5.24 ns for the same lookup); only the ratios within a run are claimed.",
+  "status_note": "The repo is currently private, so the public gets a 404, and it has 0 stars, no releases and 13 commits over 2026-09-02 to 2026-09-04. The phf part is MIT and small enough to vendor if you have access, but all 21 CI runs have failed: at HEAD the failures are in unrelated targets (the xsimd matmul benchmark build and a UBSan error in string/parse.hpp), and test_phf passes where it runs.",
+  "sources_read": [
+    "private:developer-source",
+    "private:developer-source/blob/main/README.md",
+    "private:developer-source/blob/main/include/fastcpp/phf/perfect_hash_table.hpp",
+    "private:developer-source/blob/main/include/fastcpp/phf/builder.hpp",
+    "private:developer-source/blob/main/include/fastcpp/phf/character_selection.hpp",
+    "private:developer-source/blob/main/include/fastcpp/phf/keyword_sets.hpp",
+    "private:developer-source/blob/main/include/fastcpp/hash/hashers.hpp",
+    "private:developer-source/blob/main/include/fastcpp/hash/crc32c.hpp",
+    "private:developer-source/blob/main/include/fastcpp/hash/lehmer.hpp",
+    "private:developer-source/blob/main/include/fastcpp/hash/mix.hpp",
+    "private:developer-source/blob/main/include/fastcpp/core/bits.hpp",
+    "private:developer-source/blob/main/include/fastcpp/core/cpu.hpp",
+    "private:developer-source/blob/main/include/fastcpp/core/macros.hpp",
+    "private:developer-source/blob/main/bench/bench_phf.cpp",
+    "private:developer-source/blob/main/bench/bench_vs_libraries.cpp",
+    "private:developer-source/blob/2e21aae/bench/bench_vs_libraries.cpp",
+    "private:developer-source/commit/2e21aae",
+    "private:developer-source/blob/main/bench/CMakeLists.txt",
+    "private:developer-source/blob/main/results/fastest.json",
+    "private:developer-source/blob/main/CMakeLists.txt",
+    "private:developer-source/blob/dfa74f2328b4dc52c99cc64352d20f063818e3d2/CMakeLists.txt",
+    "private:developer-source/commit/dfa74f2328b4dc52c99cc64352d20f063818e3d2",
+    "private:developer-source/blob/main/CMakePresets.json",
+    "private:developer-source/blob/main/.github/workflows/ci.yml",
+    "private:developer-source/blob/main/tests/test_phf.cpp",
+    "private:developer-source/blob/main/support/corpus.hpp",
+    "private:developer-source/blob/main/third_party/parallel-hashmap/VENDORING.md",
+    "private:developer-source/issues/1",
+    "private:developer-source/actions",
+    "private:developer-source/actions/runs/33828450197"
+  ],
+  "confidence": 0.85
+}

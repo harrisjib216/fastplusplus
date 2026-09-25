@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/jermp/lphash",
+  "one_liner": "Locality-preserving MPHF for DNA k-mer sets: 0.53-0.87 bits/k-mer at k=63, versus 3.06-3.71 for BBHash and 2.04-2.76 for PTHash.",
+  "what_it_does": "LPHash builds a minimal perfect hash function over the distinct k-mers of a spectrum-preserving string set, such as BCALM2 unitigs stitched with UST. It maps the n k-mers one-to-one onto [0, n), and consecutive k-mers in the input tend to get consecutive codes. It does not accept a generic key list. The build reads a FASTA file of DNA strings (k <= 63, minimizer length m < k and m <= 32), and `lphash::mphf::operator()` takes a DNA string and returns a std::vector<uint64_t> with one code per k-mer, in either streaming or from-scratch mode. The repo ships a CLI (`build-p`/`build-u`, `query-p`/`query-u`) rather than a packaged library, and it stores only the function: you keep any satellite-value array indexed by the code yourself.",
+  "how_it_is_fast": "Each k-mer is keyed by its random minimizer. A run of consecutive k-mers that share a minimizer (a super-k-mer) is stored once, and a k-mer's code is the super-k-mer's prefix-sum offset plus a local rank computed from where the minimizer sits inside the k-mer. As a result, the stored parts are only a PTHash MPHF over the distinct minimizers (about 2/(w+1) of the k-mers, with w = k-m+1) and the offsets and positions, coded with Elias-Fano. The partitioned variant labels each super-k-mer as left-right-max, left-max, right-max or non-max in a 2-bit wavelet tree with Rank9, and skips the offsets or positions that each label already implies. Ambiguous minimizers (1-4% in the paper's datasets) go to a fallback PTHash over their k-mers. In streaming queries the minimizer usually stays the same from one k-mer to the next, so the next code is the previous code plus or minus 1, with no hash-table lookup.",
+  "when_to_use": [
+    "You need an MPHF, or a k-mer-to-slot index for counts, colors or unitig IDs, over the distinct k-mers of a genome or de Bruijn graph, and memory is the limit. At k=47-63 the paper measured 0.53-1.14 bits/k-mer, below the 1.44 bits/key lower bound for general MPHFs.",
+    "Lookups arrive as consecutive k-mers from reads or sequences (streaming). At k=63 the paper measured 22-53 ns/k-mer on one core, against 24-72 ns for PTHash-v1 and 42-190 ns for BBHash.",
+    "You want satellite values to compress well. Consecutive k-mers get consecutive codes, so a value array indexed by the code forms runs of similar values.",
+    "Sets of millions to a few billion k-mers (11.6M-2.77G tested) on Linux or macOS. The build can spill to disk through --max-memory and -d.",
+    "Your pipeline already produces SPSS input (BCALM2 + UST or a similar tool), so the preprocessing costs you nothing extra."
+  ],
+  "when_not_to_use": [
+    "The keys are not k-mers from a spectrum-preserving string set. LPHash cannot hash arbitrary keys, and the paper itself calls BBHash and PTHash the general-purpose options.",
+    "Most lookups are in random order. LPHash random lookups measured 110-188 ns/k-mer, against 24-72 ns for PTHash-v1.",
+    "k is around 31 and lookups are streaming. At k=31, LPHash streaming was slower than PTHash-v1 on 4 of 5 datasets (for example 107 vs 72 ns on Human), and space was 1.18-1.74 bits/k-mer. The maintainer says k < 31 was never tested.",
+    "You need canonical k-mers, where a k-mer and its reverse complement get the same code. LPHash treats them as different keys (issue #22), and BCALM2/UST output contains only one orientation of each k-mer, so reads from the other strand get arbitrary codes.",
+    "You need a maintained library with a stable API, or Windows/MSVC support. There has been no main-branch commit since July 2023, there is no library target, and the code depends on __uint128_t and GCC/Clang flags."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "PTHash (git submodule, which brings its essentials and cmd_line_parser headers) and zlib; kseq.h is vendored. BBHash (external/BooPHF.hpp) is vendored only for the benchmark tools.",
+    "min_toolchain": "C++17 and CMake 3.5+, with GCC or Clang (__uint128_t required). The paper used GCC 11.2.0. With Clang, CMake adds -stdlib=libc++.",
+    "platforms": "The README says it is tested on Linux with GCC and on macOS with Clang, on Intel and ARM (Apple M1). On x86-64, CMake forces -march=native -mbmi2 -msse4.2, so binaries need BMI2 and POPCNT and may not run on other CPUs (issue #21: 'Illegal instruction' on a Xeon E5-2470). Windows is not documented.",
+    "thread_safety": "Not documented. The build uses PTHash's multithreaded search (-t); one user with -t 64 got 'parallel search should use at most 36 threads', and the maintainer says contention can make more threads slower. The query methods are const and allocate their buffers per call, but the CLI queries on one thread only (issue #19 asks for more).",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The k-mer width is a compile-time typedef in include/compile_constants.tpd (default __uint128_t, k <= 63). In issue #21, a k=25 build with the default type aborted with PTHash's 'seed did not work', and switching to uint64_t fixed it. The fallback hasher gives different results for the two typedefs, so query with a binary built with the same typedef as the one that built the .lph file.",
+    "The query tool crashes on any sequence shorter than k (reported in issue #21 and acknowledged). The random-lookup loop is still unguarded on both main and dev. Non-ACGT bases are not supported: streaming mode skips k-mers that contain them, but random mode does not, so the two modes can return different counts.",
+    "Construction uses external memory: --max-memory defaults to 8 GB, and temp files go to -d (default: current directory). A 955M-k-mer fallback build in issue #21 logged a peak of 28 GB of disk. With 4 threads, the build is slower than BBHash-v1 (Cod 05:30 vs 00:48, Human 07:25 vs 04:13) but faster than PTHash on the three largest sets.",
+    "Like any MPHF, it returns a valid-looking code for a k-mer that was never indexed (maintainer, issue #22). Add a membership check (for example SSHash) if query reads can contain unseen k-mers."
+  ],
+  "pick_this_over_siblings_when": "Pick LPHash over PTHash, SicHash, ShockHash or ConsensusRecSplit only when the keys are DNA k-mers from a spectrum-preserving string set and k is about 47 or more. In that case it goes below the ~1.44 bits/key floor that general MPHFs approach (for example ShockHash at about 1.56 bits/key), and it beats PTHash on streaming lookups. For arbitrary keys, random-order lookups, or k near 31 (1.18-1.74 bits/k-mer), PTHash (which LPHash uses internally) or the RecSplit family is the better choice.",
+  "verified_claims_summary": "In the Bioinformatics 2023 paper, five whole-genome SPSS k-mer sets were tested (Yeast 11.6M to Human 2.77G k-mers). At k=63, partitioned LPHash took 0.53-0.87 bits/k-mer, against 3.06-3.71 for BBHash (gamma 1 and 2) and 2.04-2.76 for PTHash, and streaming queries over about 100M Human chr13 k-mers on one core took 22-53 ns/k-mer, against 42-190 ns for BBHash. All code was compiled with gcc 11.2.0 -O3 -march=native and run on an Intel i9-9900K with 64 GB RAM. No C++ standard library container was part of the comparison.",
+  "status_note": "Abandoned by the catalog rule: the last commit on main is 2023-07-19, a restructured dev branch stops at 2023-11-18, and the short-input crash reported in 2023 is still unfixed. It is MIT-licensed, has about 20 source files plus the PTHash submodule, and builds with a C++17 GCC or Clang toolchain, so you can vendor it.",
+  "sources_read": [
+    "https://github.com/jermp/lphash",
+    "https://github.com/jermp/lphash/blob/main/README.md",
+    "https://github.com/jermp/lphash/blob/main/CMakeLists.txt",
+    "https://github.com/jermp/lphash/blob/main/.gitmodules",
+    "https://github.com/jermp/lphash/blob/main/include/compile_constants.tpd",
+    "https://github.com/jermp/lphash/blob/main/include/constants.hpp",
+    "https://github.com/jermp/lphash/blob/main/include/partitioned_mphf.hpp",
+    "https://github.com/jermp/lphash/blob/main/include/mphf_utils.hpp",
+    "https://github.com/jermp/lphash/blob/main/include/util.hpp",
+    "https://github.com/jermp/lphash/blob/main/src/partitioned_mphf.cpp",
+    "https://github.com/jermp/lphash/blob/main/src/query.cpp",
+    "https://github.com/jermp/lphash/blob/main/src/build.cpp",
+    "https://github.com/jermp/lphash/commits/main",
+    "https://github.com/jermp/lphash/commits/dev",
+    "https://github.com/jermp/lphash/compare/main...dev",
+    "https://github.com/jermp/lphash/blob/dev/CMakeLists.txt",
+    "https://github.com/jermp/lphash/blob/dev/lib/include/mphf.hpp",
+    "https://github.com/jermp/lphash/blob/dev/lib/include/partitioned_mphf.hpp",
+    "https://github.com/jermp/lphash/issues?q=is%3Aissue",
+    "https://github.com/jermp/lphash/issues/18",
+    "https://github.com/jermp/lphash/issues/19",
+    "https://github.com/jermp/lphash/issues/20",
+    "https://github.com/jermp/lphash/issues/21",
+    "https://github.com/jermp/lphash/issues/22",
+    "https://arxiv.org/pdf/2210.13097v2",
+    "https://academic.oup.com/bioinformatics/article/39/Supplement_1/i534/7210438"
+  ],
+  "confidence": 0.85
+}

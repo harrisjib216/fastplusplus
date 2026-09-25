@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/strager/perfect-hash-tables",
+  "one_liner": "Research generator of CRC32-hashed perfect hash tables for 80 JS/TS keywords; beats gperf ~1.2-1.4x except on keyword-only input.",
+  "what_it_does": "A research repo, not a library. It generates C++ perfect-hash lookup functions for a fixed set of 80 JavaScript/TypeScript keywords, then benchmarks them against gperf 3.1 option combos, a Python rewrite of gperf's output (mygperf), binary and linear search, frozen::unordered_map, std::unordered_map, and Rust phf and HashMap. generate-pht.cpp takes flags (--hasher, --characters, --table-size, --string-compare, --cmov, ...) and emits a .cpp that exports `token_type look_up_identifier(const char*, size_t) noexcept`; each variant is built as a shared library that the Google Benchmark harness loads with dlopen. The keyword list is compiled into the generator from token.h, so there is no gperf-style input file.",
+  "how_it_is_fast": "Stock gperf hashes with len + asso_values[s[0]] + asso_values[s[1]] + asso_values[s[len-1]]. The winning pht variant instead packs four selected bytes (first two and last two) into one 32-bit word and hashes it with a single SSE4.2 CRC32 instruction (_mm_crc32_u32). The generator brute-forces the seed and table size until all 80 keys land in distinct slots (a perfect hash: one probe, no collision chain); the --table-size=small search settled on 262 slots. A lookup rejects lengths outside 2..11, compares the first character, memcmps the rest, and checks the length by reading the NUL at entry_keyword[size], with keywords stored inline in 13-byte entries instead of gperf's default const char* pointers. Other variants try SIMD compares (SSE2 movemask, PTEST, PCMPESTRM, NEON), cmov-based branchless result selection, and AES, Lehmer-128, xxHash3, FNV-1a and Pearson hashers.",
+  "when_to_use": [
+    "You write a lexer and want to know how to beat gperf on a small fixed keyword set (here 80 keys of 2-11 bytes); read generate-pht.cpp and the committed generated/ outputs as a worked design study.",
+    "Your lookups are mostly misses (identifiers that are not keywords). The length bounds check plus the first-character check rejected them fastest: ~69 us vs ~95 us for stock gperf on the non-keyword corpus.",
+    "You target x86-64 with SSE4.2. The winning hasher is the CRC32 instruction, and the Makefile builds the icrc32 variants only on Linux x86-64.",
+    "You want a ready harness that compares gperf options, frozen::unordered_map, std::unordered_map, binary/linear search and Rust phf on one key set, using Google Benchmark and perf stat."
+  ],
+  "when_not_to_use": [
+    "Anything you ship or modify. LICENSE is CC-BY-NC-ND-4.0 and README says 'EDUCATIONAL USE ONLY', so commercial use and derivatives are not allowed.",
+    "Keyword-heavy input. On the keywords-only corpus gperf was only 'competitive' with the best pht variant, so expect no win there.",
+    "A plain memcmp compare. Every pht hasher with --string-compare=memcmp lost to gperf on all three corpora; the gain comes from the check1memcmp compare.",
+    "Key sets that change at runtime or come from a file. Keys are compiled in from token.h, there is no insertion, and the generator exits with 'character selection is not unique' if the chosen characters do not tell the keys apart.",
+    "Non-x86-64 or big-endian targets for the winning config. icrc32 needs the SSE4.2 CRC32 intrinsic, and pht.h has a FIXME noting that its 2-byte memcpy character load is endian-dependent."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "Generated lookups: pht.h, fnv.h, token.h, and the xxHash header (pht.h includes <xxhash.h> unconditionally). Full harness: Google Benchmark, gperf 3.1, frozen, Python 3, and Rust/cargo (phf crate). The Makefile hard-codes local paths such as ~/tmp/Projects/xxhash, ~/tmp/Projects/frozen/include and ~/Toolchains/clang-stage2.",
+    "min_toolchain": "C++20 plus GNU extensions (__uint128_t, [[gnu::always_inline]], GNU inline asm for the --cmov variants). The author built with g++-12 and a local clang build on Linux and with make's default compiler on macOS; MSVC is not addressed.",
+    "platforms": "Linux x86-64 with SSE4.2 and AES-NI (-msse4 -maes) for the icrc32, aes and SIMD-compare variants; macOS aarch64 for the lehmer128, fnv1a32, pearson8 and NEON variants. Little-endian assumed. The generator needs getopt_long_only and the harness needs dlopen.",
+    "thread_safety": "not documented; each generated look_up_identifier reads only constexpr tables and keeps no mutable state",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The SIMD compare variants (sse2, ptest, cmpestri, neon-mask-test) load 16 bytes, and chunk84 loads 12 bytes, from the input pointer whatever the key length. The harness pads every buffer by 32 bytes (padding_bytes in token.h). The check1memcmp winner reads only `size` input bytes.",
+    "--no-early-bounds-check read past the end of the table through entry_keyword[size] (issue #1). It is safe only together with --keyword-size-in-entry, which is how the Makefile pairs them.",
+    "The 'gperf --inline-strings' baseline is not a stock gperf 3.1 option. The Makefile strips the flag and defines GPERF_INLINE, which changes token.gperf's struct to inline char arrays. mygperf is a Python post-processor of gperf's tables with the author's compare code.",
+    "Source files carry GPL-3.0-or-later 'part of quick-lint-js' headers, while README and LICENSE say CC-BY-NC-ND-4.0, and issue #3 about licensing is still open. Treat the code as read-only reference."
+  ],
+  "pick_this_over_siblings_when": "Pick this repo to learn why a gperf-class keyword table is fast or slow: it ablates hasher, character selection, table size and compare strategy against gperf 3.1 options and frozen::unordered_map on one workload. For code you can ship, use triehash (also benchmarked against gperf) or frozen (a constexpr C++ container API), after you check their licenses, because this repo forbids derivatives.",
+  "verified_claims_summary": "The author's dev log (notes.txt: rounded '~' figures, no raw output) gives time per benchmark iteration, where one iteration looks up every identifier in a ~287 KB corpus built from jquery-3.5.1.js. pht icrc32 + check1memcmp took ~69 us vs ~95 us for stock gperf 3.1 on non-keywords (~1.38x) and ~152 us vs ~188 us on mixed (~1.24x; ~1.21x vs gperf with inline strings), and only tied gperf on keywords-only. Builds are -O3 -std=c++20 with g++-12 or a local clang on Linux x86-64; notes.txt names no CPU or compiler for these figures, and the Ryzen 9 5950X appears only in its perf-stat section.",
+  "status_note": "Abandoned since 2023-03-12 (not archived, 2 open issues) and licensed CC-BY-NC-ND-4.0 'EDUCATIONAL USE ONLY', so read it rather than vendor it; the author's maintained GPL-3.0 descendant of the technique is quick-lint-js's tools/generate-lex-keyword.cpp, which hashes the first two and last two characters with a multiply-shift into a power-of-two table.",
+  "sources_read": [
+    "https://github.com/strager/perfect-hash-tables",
+    "https://github.com/strager/perfect-hash-tables/blob/master/README.md",
+    "https://github.com/strager/perfect-hash-tables/blob/master/notes.txt",
+    "https://github.com/strager/perfect-hash-tables/blob/master/LICENSE",
+    "https://github.com/strager/perfect-hash-tables/blob/master/Makefile",
+    "https://github.com/strager/perfect-hash-tables/blob/master/pht.h",
+    "https://github.com/strager/perfect-hash-tables/blob/master/generate-pht.cpp",
+    "https://github.com/strager/perfect-hash-tables/blob/master/generate-mygperf.py",
+    "https://github.com/strager/perfect-hash-tables/blob/master/token.h",
+    "https://github.com/strager/perfect-hash-tables/blob/master/token.gperf",
+    "https://github.com/strager/perfect-hash-tables/blob/master/benchmark.cpp",
+    "https://github.com/strager/perfect-hash-tables/blob/master/implementations.h",
+    "https://github.com/strager/perfect-hash-tables/blob/master/file.h",
+    "https://github.com/strager/perfect-hash-tables/blob/master/lex.h",
+    "https://github.com/strager/perfect-hash-tables/blob/master/map-to-tokens.cpp",
+    "https://github.com/strager/perfect-hash-tables/blob/master/test.cpp",
+    "https://github.com/strager/perfect-hash-tables/blob/master/frozen-unordered-map.cpp",
+    "https://github.com/strager/perfect-hash-tables/blob/master/frozen-unordered-map-lehmer128-firsttwolasttwo.cpp",
+    "https://github.com/strager/perfect-hash-tables/blob/master/std-unordered-map.cpp",
+    "https://github.com/strager/perfect-hash-tables/blob/master/std-unordered-map-lehmer128-firsttwolasttwo.cpp",
+    "https://github.com/strager/perfect-hash-tables/blob/master/rs-phf/src/lib.rs",
+    "https://github.com/strager/perfect-hash-tables/tree/master/generated",
+    "https://github.com/strager/perfect-hash-tables/blob/master/generated/pht--table-size-small_--characters-15_--hasher-icrc32_--string-compare-check1memcmp.cpp",
+    "https://github.com/strager/perfect-hash-tables/blob/master/generated/gperf_.cpp",
+    "https://github.com/strager/perfect-hash-tables/blob/master/generated/mygperf--string-compare-check1memcmp.cpp",
+    "https://github.com/strager/perfect-hash-tables/issues/1",
+    "https://github.com/strager/perfect-hash-tables/issues/2",
+    "https://github.com/strager/perfect-hash-tables/issues/3",
+    "https://github.com/strager/perfect-hash-tables/commits/master",
+    "https://www.youtube.com/watch?v=DMQ_HcNSOAI",
+    "https://github.com/quick-lint/quick-lint-js",
+    "https://github.com/quick-lint/quick-lint-js/blob/master/tools/generate-lex-keyword.cpp",
+    "https://github.com/quick-lint/quick-lint-js/blob/master/src/quick-lint-js/fe/keyword-lexer.h"
+  ],
+  "confidence": 0.8
+}

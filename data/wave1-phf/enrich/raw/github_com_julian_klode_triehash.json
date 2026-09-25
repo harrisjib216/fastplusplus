@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/julian-klode/triehash",
+  "one_liner": "Order-preserving minimal perfect hash generator emitting nested C switches for fixed string sets; 1.85-5x gperf's throughput in author's benchmark.",
+  "what_it_does": "triehash.pl is a single Perl script. It reads a word list (lines of the form `[label ~] word [= value]`) and emits a C header and source file: an enum of labels plus `enum PerfectKey PerfectHash(const char *string, size_t length)`, which returns the word's enum value, or `Unknown` (-1 by default) for non-members. Values count up from 0 in input order, so the result is an order-preserving minimal perfect hash that can index an array directly. It fills the same role as gperf for build-time keyword sets, but it returns an enum instead of a pointer to a keyword struct and uses a different input format. The C++ knobs are `--enum-class` and a qualified `--enum-name`, which is how APT generates `pkgTagSection::Key pkgTagHash(...)`.",
+  "how_it_is_fast": "The keys go into a trie that is split by word length. The generated code is an outer `switch (length)` that dispatches to one function per length, and each of those is nested `switch` statements over 8-, 4- or 1-byte chunks read as unaligned integers on GNU C. The compiler turns these into compare/jump trees. There is no hash arithmetic, no data table and no final strcmp: reaching a leaf means every byte already matched, and a mismatch exits at the first differing chunk. In `--ignore-case` mode it ORs 0x20 into each chunk (e.g. `| 0x20202020`) wherever every key at that trie level is an unambiguous letter, so it needs no separate upper/lowercase cases. The author's blog reports about 4 instructions per byte.",
+  "when_to_use": [
+    "Small, fixed sets of field names, keywords or verbs known at build time (the benchmark used 82 Debian control-file field names) that you want mapped to an enum you then `switch` on.",
+    "ASCII case-insensitive matching of such keys. This is where the gap to gperf is widest: 2.2 vs 0.7 GB/s on a Core i5-3320M, and 0.8 vs 0.2 on arm64.",
+    "Tokenizers or parsers that already have (pointer, length). The function takes an explicit length, reads only bytes [0, length) and needs no NUL terminator.",
+    "GCC/Clang builds on x86-64, ppc64el or arm64, where the multi-byte chunk reads are active and the reported speedups are largest.",
+    "Plain C or mixed C/C++ codebases that want generated code with no runtime dependency beyond <stdint.h> and <stddef.h>."
+  ],
+  "when_not_to_use": [
+    "Lookups on an unpredictable mix of keys. The benchmark hashed the same word 1,000,000 times in a row, so the branch predictor was fully trained on nested switches. Open issue #3 raises this and it was never re-measured with shuffled inputs.",
+    "Large key sets (thousands of keys and up). Code size grows with the trie; the Debian package description itself says the generated code is 'larger' than gperf's, and there is no data beyond ~85 words.",
+    "Key sets built at runtime, or lookups that must return a payload richer than an integer enum. gperf can return a user struct; with triehash you index your own array with the enum.",
+    "MSVC or other non-GNU compilers, and ARM targets without unaligned access. These silently fall back to the byte-at-a-time switch, which was not benchmarked.",
+    "Case-insensitive matching beyond ASCII. The 0x20 trick is ASCII-only."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "Perl at generation time (Debian package `triehash`); the generated code needs only <stddef.h> and <stdint.h>",
+    "min_toolchain": "Perl 5.14+ to run the generator: it uses package-block syntax, per issue #7, and CI covered Perl 5.14-5.28. Generated code is C with stdint.h. The multi-byte fast path needs GNU C (GCC/Clang: `__attribute__((aligned(1)))`, `__BYTE_ORDER__`); other compilers get the byte-wise fallback. It also builds as C++ via --enum-class (APT compiles it as .cc).",
+    "platforms": "Any. Multi-byte reads work on GNU C little- and big-endian, are disabled automatically on ARM without __ARM_FEATURE_UNALIGNED, and can be forced off with TRIE_HASH_NO_MULTI_BYTE. Benchmarked on amd64, arm64, armel, armhf, ppc64el and mipsel.",
+    "thread_safety": "Not documented. The generated function is pure switch code with no tables or mutable state, so it is reentrant by construction.",
+    "drop_in_for_baseline": "partial — it plays the same role as gperf (build-time key set, generated C lookup taking str+len), but it returns an enum instead of a keyword-struct pointer and uses its own input format, so call sites and the key file must be rewritten"
+  },
+  "gotchas": [
+    "The POD documents `--namespace` and `--class` for C++, but GetOptions never registers them, so passing either aborts with 'Could not parse options!'. Only `--enum-class` and `--enum-name` (which accepts a qualified name such as `Foo::Bar`) work.",
+    "Enum values follow input order. Inserting or removing a key mid-list renumbers every later value. APT's tagfile-keys.list warns that this order is part of libapt's ABI and should only be appended to.",
+    "Non-members return `Unknown` with no hint, so callers need their own fallback path. APT falls back to a separate BetaHash bucket table for unknown fields.",
+    "Multi-byte loads cast `&string[i]` to `uint64_t`/`uint32_t` typedefs with `aligned(1)` but no `may_alias`. They only work on GNU C, and 2-byte reads are off by default (`--multi-byte=320`) because the author found they slow older Intel CPUs. The README also cites GCC bug 77729, where the compiler inserts extra zero-extend instructions."
+  ],
+  "pick_this_over_siblings_when": "Pick triehash over ConstexprCore/perfect_hash or constexpr-phf (Kronuz), which also beat gperf but need C++ constexpr machinery, when you need plain C output or ASCII case-insensitive string-to-enum matching and can accept a Perl step at build time. In a C++17+ codebase that wants the compiler to build the table with no external generator, or needs mapped values rather than an enum, frozen or ConstexprCore/perfect_hash fit better; strager/perfect-hash-tables is research code rather than a packaged generator.",
+  "verified_claims_summary": "The numbers come from the author's 2016 hashbench. Each of 82 Debian Packages/Sources field names, plus 3 probe words, was looked up 1,000,000 times back-to-back in a static GCC -O2 build (GCC version not stated), against gperf generated with --pic --readonly-tables. On a Core i5-3320M, triehash reached 2.4 GB/s vs gperf's 1.3 case-sensitive (~1.85x) and 2.2 vs 0.7 case-insensitive (~3.1x). On Debian porterboxes of unstated CPU model, the case-sensitive gap reached ~5x (ppc64el, 2.0 vs 0.4) and the case-insensitive gap ~4x (arm64, 0.8 vs 0.2). re2c (1.7) and APT's unrolled AlphaHash (2.3) came close on the x230, and the repeated-word loop favors branchy switch code.",
+  "status_note": "Upstream has been abandoned since the last main commit on 2019-04-16 (Debian 0.3-3 was uploaded in 2020 and its packaging branch last touched in 2022). It is still a required build tool for APT and ships as 0.3-3 in every current Debian suite, and the MIT-licensed 728-line Perl script, or its generated C, is easy to vendor.",
+  "sources_read": [
+    "https://github.com/julian-klode/triehash",
+    "https://github.com/julian-klode/triehash#performance",
+    "https://github.com/julian-klode/triehash/blob/main/triehash.pl",
+    "https://github.com/julian-klode/triehash/blob/main/.travis.yml",
+    "https://github.com/julian-klode/triehash/blob/main/tests/run-tests.sh",
+    "https://github.com/julian-klode/triehash/blob/main/tests/framework.sh",
+    "https://github.com/julian-klode/triehash/blob/main/tests/test-basic",
+    "https://github.com/julian-klode/triehash/blob/main/tests/test-case-insensitive",
+    "https://github.com/julian-klode/triehash/blob/main/tests/test-enum-include-name-flags",
+    "https://github.com/julian-klode/triehash/blob/main/tests/test-multi-byte-level",
+    "https://github.com/julian-klode/triehash/issues?q=is%3Aissue",
+    "https://github.com/julian-klode/triehash/issues/3",
+    "https://github.com/julian-klode/triehash/issues/7",
+    "https://github.com/julian-klode/triehash/commits/main",
+    "https://github.com/julian-klode/triehash/branches",
+    "https://github.com/julian-klode/triehash/tags",
+    "https://github.com/julian-klode/triehash/compare/main...prefix",
+    "https://github.com/julian-klode/triehash/compare/main...debian/master",
+    "https://github.com/julian-klode/triehash/blob/debian/master/debian/control",
+    "https://blog.jak-linux.org/2016/09/25/introducing-triehash-a-order-preserving-minimal-perfect-hash-function-generator-for-c/",
+    "https://jak-linux.org/projects/triehash/",
+    "https://github.com/julian-klode/hashbench",
+    "https://github.com/julian-klode/hashbench/blob/master/Makefile",
+    "https://github.com/julian-klode/hashbench/blob/master/bench-runner.c",
+    "https://github.com/Debian/apt/blob/main/CMakeLists.txt",
+    "https://github.com/Debian/apt/blob/main/apt-pkg/CMakeLists.txt",
+    "https://github.com/Debian/apt/blob/main/apt-pkg/tagfile.cc",
+    "https://github.com/Debian/apt/blob/main/apt-pkg/tagfile-keys.list",
+    "https://github.com/Debian/apt/commits/main",
+    "https://github.com/strager/perfect-hash-tables",
+    "https://tracker.debian.org/pkg/triehash",
+    "https://gcc.gnu.org/bugzilla/show_bug.cgi?id=77729"
+  ],
+  "confidence": 0.82
+}

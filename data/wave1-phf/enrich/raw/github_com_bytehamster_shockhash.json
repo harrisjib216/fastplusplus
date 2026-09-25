@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/bytehamster/shockhash",
+  "one_liner": "C++ minimal perfect hash: RecSplit with cuckoo-hashing leaves, building 1.56-1.58 bits/key MPHFs 15-160x faster than RecSplit/SIMDRecSplit.",
+  "what_it_does": "Builds a static minimal perfect hash function (MPHF) over a fixed key set of std::string (vector/span) or pre-hashed 128-bit values: each of the n keys maps to a distinct integer in [0, n). The API has the same shape as sux RecSplit: `shockhash::ShockHash<LEAF_SIZE, ROTATION_FITTING> f(keys, bucket_size, num_threads)` then `f(key)`, with the SIMD variant `SIMDShockHash` and the newer bipartite `ShockHash2` / `ShockHash2Flat` in the same repo. You cannot insert or delete keys, and there is no membership check, so a key outside the build set gets an arbitrary index.",
+  "how_it_is_fast": "It keeps RecSplit's recursive splitting tree but replaces the brute-force bijection search in each leaf (about e^n seed trials) with ShockHash ('small, heavily overloaded cuckoo hash tables'): each seed gives every key two candidate cells in an n-cell table, and the seed is accepted if the random graph is a pseudoforest, meaning the table can be filled completely by cuckoo insertion. A 1-bit BuRR ribbon retrieval structure records which of the two cells each key uses, and this cuts the expected trials to (e/2)^n·poly(n), almost 2^n fewer, so leaves can have n=30-58 instead of RecSplit's ~8-16. Most seeds are rejected early by a bit-mask filter that checks every cell is hit; the filter runs in registers with AVX2/AVX-512 SIMD, and rotation fitting tries n cyclic rotations of half the keys per hash evaluation.",
+  "when_to_use": [
+    "Static key sets (millions to hundreds of millions of string keys) where the MPHF must sit close to the 1.44 bits/key lower bound. Table 1 configurations reach 1.52-1.58 bits/key.",
+    "You already use RecSplit or SIMDRecSplit at b=2000 with leaf 14-16 and build time is the bottleneck. At matched space, ShockHash-RS builds in 787-1,805 ns/key; RecSplit and SIMDRecSplit take 11,749-137,902 ns/key.",
+    "Processes that build the function once and keep it in RAM, where a ~115 ns query is acceptable. For example, 10M keys with n=30, b=2000 is about 8 s of single-threaded construction.",
+    "x86-64 Linux with GCC 11+ and AVX2 or AVX-512, using SIMDShockHash with rotation fitting. This is the configuration the paper measured.",
+    "To go below ~1.52 bits/key, use `ShockHash2` (bipartite ShockHash, arXiv 2310.14959) from the same repo. Its abstract reports 1.489 bits/key for 10M keys in about half an hour."
+  ],
+  "when_not_to_use": [
+    "Lookup latency is the constraint. In the same Table 1, queries take 114-118 ns; PTHash takes 20-34 ns and FMPHGO 53-69 ns, at 2.2-4.4 bits/key.",
+    "You need to save the function to disk and load it later. ShockHash, SIMDShockHash and ShockHash2 have no serialization API (sux RecSplit has `operator<<`/`operator>>`), so every run must rebuild.",
+    "Dynamic key sets, or code that must detect foreign keys. The function is static and returns an arbitrary index for keys it was not built on, so you need a separate key or fingerprint store.",
+    "Clang, MSVC, Windows, macOS or ARM toolchains. CI covers only GCC 11/12/13 on Ubuntu, the code uses `<experimental/simd>`, raw x86 intrinsics in the SIMD path and `1ul` shifts of up to 60 bits, and CMake links Intel TBB.",
+    "The most compact ShockHash-RS setting (n=58, 1.523 bits/key) costs 111,593 ns/key, about 19 minutes single-threaded for 10M keys. The newer ConsensusRecSplit reports getting much closer to the bound."
+  ],
+  "integration": {
+    "form": "shared lib (CMake add_subdirectory of the repo with submodules; header-only INTERFACE target plus compiled shared libs ShockHash2Precompiled, Ips2raShockHashSorter, SimpleRibbon, RibbonSorter)",
+    "dependencies": "Git submodules: sux (ByteHamster fork), SimpleRibbon (BuRR, ips2ra, tlx), tlx, ByteHamster/Util (pasta-bit-vector), and vectorclass (SIMD variant only). Intel TBB from the system (CI installs libtbb-dev). CMake 3.25+.",
+    "min_toolchain": "C++20; GCC 11+ (CI tests GCC 11/12/13; a commit notes GCC 10 lacks <experimental/simd>); CMake 3.25",
+    "platforms": "Tested only on Linux x86-64 (Ubuntu CI). SIMDShockHash needs AVX2, uses AVX-512 when available, and must be compiled with -DSIMD. Clang, macOS, Windows and aarch64 are not documented. The code assumes 64-bit unsigned long, and keys beyond 2^32 need __int128 support.",
+    "thread_safety": "Construction can use several threads through the num_threads constructor argument (the paper's benchmarks used 1). Thread safety of concurrent queries is not documented. `ShockHash::operator()` is non-const, while `ShockHash2::operator()` is const.",
+    "drop_in_for_baseline": "partial — the constructor (keys, bucket_size) and operator()(key) match sux RecSplit, but the namespace differs, LEAF_SIZE goes up to 60 (128 for ShockHash2), there is an extra num_threads argument, there is no stream serialization, and the returned indices differ."
+  },
+  "gotchas": [
+    "Duplicate keys make the constructor loop forever. This is documented in SIMDShockHash's doc comment, as in sux RecSplit. Deduplicate keys before building.",
+    "MAX_BUCKET_SIZE is 3000, and the header says it 'works with high probability up to average bucket size ~2000'. Only an assert guards the limit, so keep bucket_size at 2000 or below.",
+    "CMake compiles Ips2raShockHashSorter and ShockHash2Precompiled with -march=native unconditionally, and the ShockHashSIMD target passes -march=native on to consumers. Binaries may not run on CPUs older than the build host.",
+    "The Table 1 numbers come from `SIMDShockHash<n, true>` (SIMD plus rotation fitting, via the MPHF-Experiments ShockHashContender). The README example `ShockHash<30, false>` is the slower scalar path without rotation fitting. SIMDShockHash stops with #error unless built with -DSIMD (link the ShockHashSIMD target)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over RecSplit (sux) or SimdRecSplit when you want 1.52-1.59 bits/key without their 11,749-137,902 ns/key builds, and can accept up to ~20% slower queries (114-118 vs 97-108 ns) and no serialization. Prefer ConsensusRecSplit (same group, 2025; 1.4448 bits/key on 100M keys in about an hour) for minimum space, and PTHash or SicHash when 2-4.4 bits/key is acceptable in return for builds and queries several times faster.",
+  "verified_claims_summary": "The paper's Table 1 (arXiv 2308.09561v2) measures 10M random strings of length 10-50, single-threaded, compiled with GCC 11.2.0 -O3 -march=native on an Intel i7-11700 with AVX-512, running SIMDShockHash with rotation fitting. At ~1.56 bits/key, ShockHash-RS n=39 builds at 1,805 ns/key against SIMDRecSplit's 137,902 ns/key (~76x). At ~1.585 bits/key, n=30 builds at 787 ns/key against sux RecSplit's 125,521 ns/key (~160x), but only ~15x against SIMDRecSplit's 11,749 ns/key. Queries are 114-118 ns against 97-108 ns.",
+  "status_note": "Stale: the last commit was 2025-03-31, there are no releases or tags, no GitHub issues have ever been filed, and it has 15 stars. The research code uses GPL-3.0 with the GCC Runtime Library Exception, which the README says permits use like libstdc++. Vendoring it means vendoring six submodules and depending on system TBB.",
+  "sources_read": [
+    "https://github.com/ByteHamster/ShockHash",
+    "https://github.com/ByteHamster/ShockHash/blob/main/README.md",
+    "https://github.com/ByteHamster/ShockHash/blob/main/CMakeLists.txt",
+    "https://github.com/ByteHamster/ShockHash/blob/main/.gitmodules",
+    "https://github.com/ByteHamster/ShockHash/blob/main/.github/workflows/build.yml",
+    "https://github.com/ByteHamster/ShockHash/blob/main/include/ShockHash.h",
+    "https://github.com/ByteHamster/ShockHash/blob/main/include/SIMDShockHash.hpp",
+    "https://github.com/ByteHamster/ShockHash/blob/main/include/ShockHash2.h",
+    "https://github.com/ByteHamster/ShockHash/blob/main/include/ShockHash2Flat.h",
+    "https://github.com/ByteHamster/ShockHash/blob/main/include/shockhash/TinyBinaryCuckooHashTable.h",
+    "https://github.com/ByteHamster/ShockHash/blob/main/include/shockhash/Sorter.hpp",
+    "https://github.com/ByteHamster/ShockHash/blob/main/include/shockhash/SimdUtils.h",
+    "https://github.com/ByteHamster/ShockHash/blob/main/include/shockhash/ShockHash2-internal.h",
+    "https://github.com/ByteHamster/ShockHash/blob/main/include/shockhash/ShockHash2-precompiled.h",
+    "https://github.com/ByteHamster/ShockHash/blob/main/include/shockhash/ShockHash2FlatBase.h",
+    "https://github.com/ByteHamster/ShockHash/blob/main/src/Sorter.cpp",
+    "https://github.com/ByteHamster/ShockHash/blob/main/src/ShockHash2-precompiled.cpp",
+    "https://github.com/ByteHamster/ShockHash/issues?q=is%3Aissue",
+    "https://github.com/ByteHamster/ShockHash/commits/main",
+    "https://arxiv.org/abs/2308.09561",
+    "https://arxiv.org/pdf/2308.09561",
+    "https://arxiv.org/abs/2310.14959",
+    "https://github.com/ByteHamster/SimpleRibbon/blob/main/CMakeLists.txt",
+    "https://github.com/ByteHamster/SimpleRibbon/blob/main/.gitmodules",
+    "https://github.com/ByteHamster/Util/blob/main/CMakeLists.txt",
+    "https://github.com/ByteHamster/ConsensusRecSplit/blob/main/README.md",
+    "https://github.com/ByteHamster/MPHF-Experiments/blob/main/README.md",
+    "https://github.com/ByteHamster/MPHF-Experiments/blob/8e7f87aee3d235678e9a0a8523dc4b31047a70fc/comparisonQueries.cpp",
+    "https://github.com/ByteHamster/MPHF-Experiments/blob/8e7f87aee3d235678e9a0a8523dc4b31047a70fc/benchmark/ShockHashContender.h",
+    "https://github.com/vigna/sux/blob/master/sux/function/RecSplit.hpp"
+  ],
+  "confidence": 0.82
+}

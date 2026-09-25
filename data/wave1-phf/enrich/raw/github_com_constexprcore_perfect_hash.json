@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/constexprcore/perfect_hash",
+  "one_liner": "C++23 compile-time perfect-hash set/map for fixed string keys; author measures ~10x std::unordered_map throughput on a 6-key set.",
+  "what_it_does": "Builds a collision-free hash set or map over string keys known at compile time. All of the work happens in consteval code, so there is no runtime construction and no heap. You pass keys as template arguments (make_perfect_set<\"GET\", \"POST\">() or make_perfect_map<kv<\"GET\", Method::GET>, ...>()), or a static-storage std::array for large generated lists, and then call contains(sv) or lookup(sv), which returns std::optional<V>. It is not a std::unordered_map replacement: there is no insert, erase, iteration or operator[]. It is for classifying keywords and tokens and for dispatching strings to enums.",
+  "how_it_is_fast": "For up to 255 keys, a gperf-style generator runs at compile time. It picks a minimal set of byte positions that tell the keys apart, then solves per-position association values so that h = len + sum(asso[pos][key[pos]]) never collides. If the key set cannot be split that way, it falls back to hash-and-displace (CHD-style), then to a seeded whole-key hash. A lookup is a few small table loads, a power-of-two mask, and one branchless compare against inline key bytes: overlapping 2-byte loads for keys of 4 bytes or less, and page-guarded, masked 16-byte NEON/SSE2/LSX loads for longer keys. Past 255 keys or 254-byte keys, a 'wide' container uses a PTHash-like scheme: one multiply per 64-bit key lane, a per-bucket pilot (displacement) table, and a packed-lane compare, with small integer values stored inside the key word.",
+  "when_to_use": [
+    "Classifying short tokens from a small, fixed vocabulary on a hot path: HTTP methods or headers, URL schemes, MIME types, language keywords, string-to-enum parsing.",
+    "Streams where most lookups hit: the committed baseline shows the widest gap on all-hit queries (URL protocols 1.97 ns vs 13.32 ns for std::unordered_map; S&P 100 tickers 2.89 ns vs 13.55 ns).",
+    "Tables that must exist with no startup cost and no allocation: the table is a constexpr object and can be queried inside static_assert.",
+    "Large generated symbol lists (hundreds to a few thousand keys) through the wide container, if seconds of compile time are acceptable. The author reports 1.7 ns vs 7.6 ns for absl::flat_hash_map<std::string_view, int> on 5,581 Nasdaq tickers (Apple M3 Max).",
+    "Projects that already build as C++23 on x86-64, AArch64 or LoongArch64 (CI covers GCC 14, Clang 18, AppleClang, MSVC 2022 and GCC 14 cross-compiled for LoongArch64)."
+  ],
+  "when_not_to_use": [
+    "Keys that are not known at compile time, or tables that change at runtime. There is no insert or erase; use a runtime hash map.",
+    "Streams dominated by misses (negative filters) on some key sets. In the committed baseline, C++ Keywords all-miss lookups took 6.91 ns vs 3.49 ns for absl::flat_hash_map and 4.68 ns for ankerl, and URL-protocol misses were only ~1.3x faster than std::unordered_map (3.33 vs 4.45 ns).",
+    "Codebases that cannot use C++23. The headers use `if consteval`, and the string keys are class-type template arguments.",
+    "Builds where compile time matters and key sets are large. The 5,581-key map takes ~5 s of compile time and needs -fconstexpr-steps (Clang) or -fconstexpr-ops-limit (GCC) raised. Precompiled headers are the documented fix.",
+    "Risk-averse production use: v0.2.0, repo created March 2026, and every performance number is first-party. Issue #29 (open) argues the gperf baseline could be tuned better, and issue #28 (open) reported that the CMake dependency failed to clone."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none for the amalgamated singleheader/perfect_hash.h, which bundles fixed_string.h. The CMake/FetchContent route pulls ConstexprCore/useful_abstractions at an unpinned `master` (the repo is public now; issue #28 reported that the clone failed).",
+    "min_toolchain": "C++23 (CMake 3.20+ for the CMake route). CI covers GCC 14, Clang 18, AppleClang on a macOS 15 runner, MSVC 2022, and GCC 14 cross-compiled for LoongArch64.",
+    "platforms": "x86-64 (SSE2 compare path), AArch64 (NEON path), LoongArch64 (LSX path, tested under QEMU), scalar fallback elsewhere. The seeded whole-key-hash tier assumes little-endian, and big-endian execution was not tested.",
+    "thread_safety": "Not documented. Tables are immutable constexpr objects and every lookup is a const noexcept member function, so concurrent reads need no locking.",
+    "drop_in_for_baseline": "partial — only for read-only, string-keyed tables fixed at compile time. The API is contains()/lookup() returning std::optional, with no insert, erase, iterators or operator[], and generation errors (such as duplicate keys) are compile errors."
+  },
+  "gotchas": [
+    "SIMD key compares read a whole 16-byte chunk, which can go past the end of the query string. A page guard keeps the read inside the same 4 KB page. These functions opt out of ASan (no_sanitize(\"address\")) and assume pages of at least 4 KB.",
+    "Every classic table embeds MAX_POSITIONS x 256 bytes of association tables (4 KB with the default of 16), however many positions are actually used. Shrink it with -DCONSTEXPRCORE_MAX_POSITIONS.",
+    "make_perfect_map takes each value as a non-type template argument (kv<\"GET\", Method::GET>), so values must be structural types such as enums or integers. Other value types need the array-based wide factories.",
+    "The factories pick the wide container only above 255 keys or for keys of 255+ bytes. Opting in explicitly for small sets can help all-hit streams (S&P 100: 1.77 to 1.32 ns on an M3 Max) but lost 17-30% on C++ Keywords on a Xeon with GCC 14, so measure first. Wide sets with keys of 16+ bytes also reject keys that differ only by trailing NUL bytes."
+  ],
+  "pick_this_over_siblings_when": "Pick this over frozen (C++14; ordered and unordered containers; integer or string keys) and Kronuz constexpr-phf (C++17; integer keys only, so strings must be hashed first) when you have string keys, a C++23 compiler and a hot lookup path. On the URL-protocol set, this repo's own benchmark gives frozen::unordered_map 0.16 and kronuz::phf 0.22 billion queries/s against 1.08 for this library. Pick it over code generators such as gperf, triehash or strager/perfect-hash-tables when you want no separate generation step in the build.",
+  "verified_claims_summary": "On an Apple M4, the README's URL-protocol table (6 keys) reports 1.08 billion queries/s (~0.93 ns per lookup) vs 0.10 for std::unordered_map, 0.16 for frozen::unordered_map and 0.23 for gperf. The repo's harness times 200,000 shuffled lookups and keeps the fastest of 300 runs; the compiler, standard library and hit/miss mix for that table are not stated, and the bench builds as CMake Release by default. An older committed baseline run (hardware and compiler not stated) shows a smaller gap against std::unordered_map: 1.97 vs 13.32 ns on hits (~6.8x), 3.33 vs 4.45 ns on misses (~1.3x), and 5.75 vs 13.08 ns mixed (~2.3x).",
+  "status_note": "Actively maintained (last commit and v0.2.0 release on 2026-09-13; commits mostly from GitHub users lemire and FranciscoThiesen); MIT and shipped as one self-contained header that is easy to vendor, but young (created 2026-03-04, 17 stars).",
+  "sources_read": [
+    "https://github.com/ConstexprCore/perfect_hash",
+    "https://github.com/ConstexprCore/perfect_hash#ridiculously-fast",
+    "https://github.com/ConstexprCore/perfect_hash/blob/main/include/ConstexprCore/perfect_hash.h",
+    "https://github.com/ConstexprCore/perfect_hash/blob/main/include/ConstexprCore/wide_perfect_hash.h",
+    "https://github.com/ConstexprCore/perfect_hash/blob/main/include/ConstexprCore/detail/gperf_generator.h",
+    "https://github.com/ConstexprCore/perfect_hash/blob/main/include/ConstexprCore/detail/wide_generator.h",
+    "https://github.com/ConstexprCore/perfect_hash/blob/main/include/ConstexprCore/detail/simd16.h",
+    "https://github.com/ConstexprCore/perfect_hash/blob/main/include/ConstexprCore/detail/neon_compare.h",
+    "https://github.com/ConstexprCore/perfect_hash/blob/main/include/ConstexprCore/detail/sse2_compare.h",
+    "https://github.com/ConstexprCore/perfect_hash/blob/main/include/ConstexprCore/perfect_hash_version.h",
+    "https://github.com/ConstexprCore/perfect_hash/blob/main/CMakeLists.txt",
+    "https://github.com/ConstexprCore/perfect_hash/blob/main/benchmarks/CMakeLists.txt",
+    "https://github.com/ConstexprCore/perfect_hash/blob/main/benchmarks/bench_protocol.cpp",
+    "https://github.com/ConstexprCore/perfect_hash/blob/main/benchmarks/bench_common.h",
+    "https://github.com/ConstexprCore/perfect_hash/blob/main/docs/pr30_review.md",
+    "https://github.com/ConstexprCore/perfect_hash/blob/main/perf_viz/README.md",
+    "https://github.com/ConstexprCore/perfect_hash/blob/main/perf_viz/baseline_results.json",
+    "https://github.com/ConstexprCore/perfect_hash/blob/main/.github/workflows/ci.yml",
+    "https://github.com/ConstexprCore/perfect_hash/blob/main/.github/workflows/loongarch64.yml",
+    "https://github.com/ConstexprCore/perfect_hash/blob/main/tests/test_edge_cases.cpp",
+    "https://github.com/ConstexprCore/perfect_hash/issues",
+    "https://github.com/ConstexprCore/perfect_hash/issues/28",
+    "https://github.com/ConstexprCore/perfect_hash/issues/29",
+    "https://github.com/ConstexprCore/perfect_hash/pulls",
+    "https://github.com/ConstexprCore/perfect_hash/releases",
+    "https://github.com/ConstexprCore/perfect_hash/graphs/contributors",
+    "https://github.com/ConstexprCore/useful_abstractions",
+    "https://github.com/serge-sans-paille/frozen",
+    "https://github.com/Kronuz/constexpr-phf"
+  ],
+  "confidence": 0.78
+}
