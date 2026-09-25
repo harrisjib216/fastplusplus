@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/trans/yam",
+  "one_liner": "Zero-copy C11 YAML 1.2 event parser and emitter with an SSE4.2 scanner; parses 1.6-13x faster than libyaml.",
+  "what_it_does": "A pull-style YAML 1.2 parser. You call yam_parse_next() in a loop and get const yam_event pointers (stream/doc/mapping/sequence/scalar/alias) whose value/anchor/tag are (pointer, length) spans into your input buffer or an arena. It also has a lower-level token scanner, an event-driven emitter (block, flow and minimal styles) that writes to an in-memory buffer, opt-in merge-key and alias expansion, and pluggable tag schemas (failsafe/JSON/core/custom). The API is different from libyaml's (yam_* functions, arena ownership, no yaml_parser_t), and there is no DOM.",
+  "how_it_is_fast": "The scanner looks for structural bytes 16 at a time with SSE4.2 PCMPESTRI range compares and SSE2 compare-and-movemask. The SSE4.2 or scalar version is chosen once through function pointers set in a load-time constructor. Plain and quoted scalars that have no escapes or line breaks come back as zero-copy slices of the input. Block scalars, and quoted scalars with escapes or line breaks, are copied into a bump-allocated arena a line or a run at a time, not byte by byte. The parser is an incremental state machine; to decide whether a flow collection is a key, it looks ahead with a SIMD bitmask over 64-byte windows and caches the answer for nested collections, which keeps it linear.",
+  "when_to_use": [
+    "C or C++ code that walks YAML as an event stream (config loaders, CI and Kubernetes-style files, converters) and wants more throughput than libyaml's yaml_parser_parse.",
+    "Inputs dominated by long scalars: literal/folded block scalars and multi-line quoted strings measured 7-13x faster than libyaml, and 2-8x faster than rapidyaml's event parser.",
+    "JSON-like or compile_commands.json-style files that are already in memory (about 2.2 GB/s vs 226 MB/s for libyaml in the author's table).",
+    "You need strict YAML 1.2 conformance (all 308 valid and 94 invalid YAML Test Suite cases pass) plus a round-trip-safe emitter, on x86-64 Linux or macOS."
+  ],
+  "when_not_to_use": [
+    "You want a document tree or DOM. yam only produces events, so you would build the tree yourself; libfyaml or rapidyaml give you one.",
+    "You need streaming input from a FILE*, a callback or a socket, or UTF-16/UTF-32 input. yam parses one contiguous UTF-8 buffer that has to stay alive, and emitter output goes to an in-memory buffer too.",
+    "The documents use anchors, tags, %TAG/%YAML directives, flow keys in block mappings, merge keys or alias resolution. Any of these makes the parser re-parse the whole stream in eager mode and buffer every event, so memory grows with the whole stream. The anchored 'config' benchmark shows the smallest gain (206 vs 125 MB/s, 1.65x).",
+    "Structure-heavy input with short keys and values, if C++ is an option: rapidyaml's event parser was 1.3-1.8x faster than yam on the generated block, mixed and JSON inputs.",
+    "You are risk-averse about maturity. The project was created in Feb 2026, has 0 stars and no external issues, and one maintainer. 1.0.0 is in the header and CHANGELOG, but the newest git tag is v0.3.1."
+  ],
+  "integration": {
+    "form": "static lib | shared lib (Makefile builds libyam.a and libyam.so.1 plus yam.pc; about 8 C files, easy to vendor)",
+    "dependencies": "none (libc only)",
+    "min_toolchain": "C11 with GCC or Clang (uses __attribute__((constructor)), target(\"sse4.2\") and __builtin_cpu_supports; POSIX headers); tested with GCC and Clang on Linux and macOS; MSVC/Windows not documented",
+    "platforms": "x86-64 uses SSE4.2 when the CPU has it, with a scalar fallback chosen at runtime, so no -march=native is needed. There is no NEON path, so aarch64 and other non-x86 targets run the scalar code. CI covers Linux and macOS.",
+    "thread_safety": "not documented. From the source: all state is per parser/scanner/emitter/arena, schema presets are static const, and the only global is the SIMD function-pointer table, which is set once at load time. So separate parsers on separate threads look safe, but a single parser or arena is not synchronized.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The parser stops with YAM_ERR_LIMIT after 10,000 events by default. The README says that is roughly 100-200 KB of dense YAML, and the author's benchmark sets it to 0. Call yam_parser_set_max_events() for large files.",
+    "An event pointer is valid only until the next yam_parse_next() call. The value/anchor/tag spans are not NUL-terminated and stay valid only while both the input buffer and the arena are alive.",
+    "It is stricter than libyaml, which implements YAML 1.1. Tabs as indentation, implicit keys spanning lines and similar input are errors. Schemas are opt-in, so scalars carry no resolved tag unless you set one. There is one deliberate leniency: a closing ] } or quote may sit at any indentation.",
+    "Eager mode (tags, anchors, merge or alias expansion) parses recursively at roughly 1 KB of stack per nesting level. If you raise max_depth or set it to 0 (default 256), deep input can overflow the stack."
+  ],
+  "pick_this_over_siblings_when": "Pick yam over libyaml or libfyaml when you want a plain C event API and more throughput: 1.6-3.4x on structure-heavy YAML and up to 13x on long scalars, with the same full test-suite conformance as libfyaml. Pick rapidyaml or chyaml instead if you are in C++ and your input is mostly short keys and values or you want a tree; also consider yeptris if you target Apple Silicon, since yam's SIMD is x86-only.",
+  "verified_claims_summary": "The author's make bench-compare harness parses the same ~10 MB inputs (generated block/mixed/JSON/config YAML, rapidyaml's real travis.yml, appveyor.yml and compile_commands.json files, and scalar-heavy text) into events with yam, libyaml 0.2.5 and libfyaml 0.9.6. It ran on one pinned core of an Intel Core Ultra 7 155H, with yam built by GCC 16.2 at -O2 and the other two linked as system libraries. yam measured 1.65x (anchored config) to 13.4x (multi-line double-quoted) over libyaml, e.g. 501 vs 149 MB/s on travis.yml. This is first-party and not independently reproduced.",
+  "status_note": "Actively developed by a single author (last commit 2026-09-24, 1.0.0 with an ABI-stability promise declared in the CHANGELOG), fuzzed on every push and daily through ClusterFuzzLite, and MIT-licensed. It is small enough to vendor, but it has no track record of outside users yet.",
+  "sources_read": [
+    "https://github.com/trans/yam",
+    "https://github.com/trans/yam/blob/main/README.md",
+    "https://github.com/trans/yam/blob/main/include/yam/yam.h",
+    "https://github.com/trans/yam/blob/main/Makefile",
+    "https://github.com/trans/yam/blob/main/CHANGELOG.md",
+    "https://github.com/trans/yam/blob/main/src/yam_simd.c",
+    "https://github.com/trans/yam/blob/main/src/yam_simd.h",
+    "https://github.com/trans/yam/blob/main/src/yam_scanner.c",
+    "https://github.com/trans/yam/blob/main/src/yam_parser.c",
+    "https://github.com/trans/yam/blob/main/src/yam_arena.c",
+    "https://github.com/trans/yam/blob/main/src/yam_schema.c",
+    "https://github.com/trans/yam/blob/main/src/yam_internal.h",
+    "https://github.com/trans/yam/blob/main/bench/compare/run.sh",
+    "https://github.com/trans/yam/blob/main/bench/compare/cmp_common.h",
+    "https://github.com/trans/yam/blob/main/bench/compare/cmp_yam.c",
+    "https://github.com/trans/yam/blob/main/bench/compare/cmp_libyaml.c",
+    "https://github.com/trans/yam/blob/main/bench/compare/cmp_libfyaml.c",
+    "https://github.com/trans/yam/blob/main/bench/compare/gen_inputs.c",
+    "https://github.com/trans/yam/blob/main/bench/bench_gen.h",
+    "https://github.com/trans/yam/blob/main/.github/workflows/ci.yml",
+    "https://github.com/trans/yam/blob/main/docs/api/index.md",
+    "https://github.com/trans/yam/issues",
+    "https://github.com/trans/yam/pulls",
+    "https://github.com/trans/yam/releases",
+    "https://github.com/trans/yam/tags"
+  ],
+  "confidence": 0.75
+}
