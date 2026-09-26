@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/zenywallet/caprese",
+  "one_liner": "Nim HTTP/1.1 and WebSocket server with built-in TLS; about 30% more req/s than actix-web on an empty GET /.",
+  "what_it_does": "Caprese is a Nim macro DSL that compiles a whole web server into one self-contained executable: a `config:` block, then `server(ip, port):` / `routes(host):` blocks with `get \"/path\":` handlers that build a response string with `addHeader()` and `send` it. Built in: WebSocket `stream:` blocks, a prefix-match reverse proxy (TCP or UNIX socket), static files embedded at compile time with precompressed Brotli/Deflate variants, SNI multi-certificate TLS with Let's Encrypt certificate hot-reload, an IP filter, and tag-based fan-out of messages to WebSocket clients. It is not a drop-in for actix-web: it is a different language, and the API is compile-time macros, not a handler/extractor library.",
+  "how_it_is_fast": "Each worker thread (one per CPU by default) runs epoll_wait on one shared edge-triggered epoll set (kqueue on OpenBSD). The listening socket is registered with EPOLLEXCLUSIVE, clients come from a preallocated pool, and each client has its own spinlock. The request parser extracts only the headers declared at compile time (`httpHeader:` plus a few internal ones). It uses macro-generated 8-byte and 4-byte word compares (`cmpString`, and `cmpHeaderParam` with OR-0x20 case folding) and a computed-goto case per target header, and it stops scanning once every wanted header is found. With `activeHeader = true`, as in the benchmark app, a response built from a static string is a precomputed byte buffer (status line, headers, body); a background thread patches the Date field once per second into a double buffer.",
+  "when_to_use": [
+    "A Linux (or OpenBSD) service in Nim that pushes real-time messages to many WebSocket clients, especially fan-out by tag (for example, notifying every wallet that watches an address), which is the use case it was built for.",
+    "A small, fixed set of GET endpoints that return static or precomputed bodies over keep-alive, where throughput and median latency matter more than tail latency (median 2.17 ms vs actix-web 3.13 ms at c=512 in the benchmark run).",
+    "You want one statically linked binary that terminates TLS itself (BearSSL, OpenSSL, LibreSSL or BoringSSL chosen at compile time), does SNI, reloads Let's Encrypt certificates without a restart, embeds its static assets, and proxies a few paths to back ends, with no nginx in front.",
+    "Full-stack Nim projects that also generate their HTML (Karax) and minified JavaScript (Nim JS backend plus closure-compiler) in the same code base and binary."
+  ],
+  "when_not_to_use": [
+    "Tail-latency-sensitive services: in the same run caprese's p99 was 10.6 ms vs actix-web 3.2 ms at c=512 and 6.6 ms vs 0.39 ms at c=64, so the throughput lead came with much more jitter.",
+    "General REST APIs: routing is GET-centric. POST is off by default, and enabling it prints the compile warning 'POST is not yet implemented.'; streamed large request bodies are not implemented, there are no PUT/DELETE/HEAD route helpers in the README, and Transfer-Encoding parsing is commented out. HTTP/2, QUIC, IPv6 and cookies are listed as not done.",
+    "macOS or Windows: only Linux and OpenBSD are supported. `nimble install` fails on macOS with \"attempting to call undeclared routine: 'accept4'\" (issue #2, open since 2024-12), and the maintainer puts Windows support 'a few years later' (issue #1).",
+    "Teams that need an ecosystem, middleware, API docs beyond one README, or versioned releases: the package has been version 0.1.0 with no tags or releases, has one maintainer, 84 stars and no pull requests.",
+    "Reproducible or audited builds: the nimble build hook runs `git submodule update --init --remote`, so it compiles the latest upstream HEADs of BearSSL, OpenSSL, LibreSSL, BoringSSL, Brotli and zopfli unless you set NOREMOTEUPDATE=1."
+  ],
+  "integration": {
+    "form": "module (nimble package; macros expand into your program; TLS, Brotli and zopfli C libraries are built from git submodules and statically linked)",
+    "dependencies": "Nim packages karax >= 1.2.3, regex, checksums; C libraries built from submodules: BearSSL, OpenSSL, LibreSSL, BoringSSL (all four are built unless NOSSL=1), Brotli, zopfli; the build needs git, automake, autoconf, libtool and cmake; Java and Maven only if you use the closure-compiler JavaScript minifier",
+    "min_toolchain": "Nim >= 1.6.4 per caprese.nimble, with --threads:on (compile error otherwise); README builds use --mm:orc; the benchmark used Nim 2.2",
+    "platforms": "Linux (epoll; Debian/Ubuntu recommended) and OpenBSD (kqueue); macOS build fails; no Windows. CPU architecture is not documented; the word-compare parser code reads 8-byte words, so 64-bit targets are implied",
+    "thread_safety": "Route bodies run concurrently on serverWorkerNum threads (default: CPU count) and must return immediately; blocking work goes through a `Pendings` queue to `worker(num)` threads, which reply by ClientId. Some Client methods may only be called from route (dispatch-level) code, and using `getClient(ClientId)` from workers needs your own locking (README).",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The benchmarked configuration is not the default: the-benchmarker app sets sslLib = None, activeHeader = true and connectionPreferred = InternalConnection, while the defaults are BearSSL, activeHeader = false and ExternalConnection (a different, throttled dispatch path). activeHeader only precomputes responses whose body is a compile-time static string.",
+    "By default responses carry no Date or Server header (headerDate and headerServer default to false); enable headerDate if clients or caches expect one.",
+    "Only headers declared in `httpHeader:` are parsed, and `reqHeader()` works only inside `routes:` because values point into the receive buffer. The request parser accepts only request lines that start with 'GET /' (POST, when enabled, takes a separate path); HEAD, PUT, DELETE or OPTIONS requests get a parse error.",
+    "connectionTimeout (default 120 s) is approximate: the README says disconnection happens between the set time and twice that time. clientMax (default 32000) client slots are preallocated at start-up."
+  ],
+  "pick_this_over_siblings_when": "Over httpbeast, the other Nim entry: caprese did 212.6k vs 175.5k req/s at c=512 with similar p99 (10.6 vs 11.3 ms) and adds TLS, WebSocket and a proxy, so in Nim it is the faster choice. may_minihttp and fulmine.js were within 4-9% of caprese's throughput at c=512 with about 4x lower p99 (2.7-2.8 ms); pick them unless you are in Nim or need caprese's built-in TLS and WebSocket fan-out.",
+  "verified_claims_summary": "In the-benchmarker/web-frameworks run of 2026-09-24 (commit f673364; GET / with an empty text body over keep-alive, zrk closed loop, mean of 3 runs), caprese 0.1 built with Nim 2.2 without TLS (-d:release --opt:speed plus -flto, per the Nim Dockerfile) did 233,622 / 222,921 / 212,564 req/s at c=64/256/512 against actix-web 4.8's 179,203 / 168,270 / 163,415 (30-32% more), and it was first of all frameworks at each level. Both servers used about 3.95 cores in Docker on one 16-vCPU x86_64 host whose CPU name reads 'M1 Eight-Core Processor'. Caprese sent about 118 bytes per response vs actix-web's 88, so the lead is not from a smaller response; its median latency was lower but its p99 was 3.3x higher at c=512.",
+  "status_note": "Active single-maintainer project (near-daily commits up to 2026-08-04, recently on an experimental `server2` engine) but still version 0.1.0 with no tags or releases, so pin a git commit; MIT-licensed, and the core `server.nim` is a single 6,400-line file.",
+  "sources_read": [
+    "https://github.com/zenywallet/caprese",
+    "https://github.com/zenywallet/caprese/blob/main/README.md",
+    "https://github.com/zenywallet/caprese/blob/main/caprese.nimble",
+    "https://github.com/zenywallet/caprese/blob/main/.gitmodules",
+    "https://github.com/zenywallet/caprese/blob/main/src/caprese.nim",
+    "https://github.com/zenywallet/caprese/blob/main/src/caprese.nim.cfg",
+    "https://github.com/zenywallet/caprese/blob/main/src/caprese/server.nim",
+    "https://github.com/zenywallet/caprese/blob/main/src/caprese/server2.nim",
+    "https://github.com/zenywallet/caprese/blob/main/src/caprese/server3.nim",
+    "https://github.com/zenywallet/caprese/blob/main/src/caprese/config.nim",
+    "https://github.com/zenywallet/caprese/blob/main/src/caprese/cmp.nim",
+    "https://github.com/zenywallet/caprese/blob/main/src/caprese/contents.nim",
+    "https://github.com/zenywallet/caprese/issues/1",
+    "https://github.com/zenywallet/caprese/issues/2",
+    "https://github.com/the-benchmarker/web-frameworks/blob/f673364fb30748e5bb8e57319ec2772bc872f78a/data.json",
+    "https://github.com/the-benchmarker/web-frameworks/blob/f673364fb30748e5bb8e57319ec2772bc872f78a/nim/caprese/config.yaml",
+    "https://github.com/the-benchmarker/web-frameworks/blob/f673364fb30748e5bb8e57319ec2772bc872f78a/nim/caprese/server.nim",
+    "https://github.com/the-benchmarker/web-frameworks/blob/f673364fb30748e5bb8e57319ec2772bc872f78a/nim/caprese/server.nimble",
+    "https://github.com/the-benchmarker/web-frameworks/blob/f673364fb30748e5bb8e57319ec2772bc872f78a/nim/config.yaml",
+    "https://github.com/the-benchmarker/web-frameworks/blob/f673364fb30748e5bb8e57319ec2772bc872f78a/nim/Dockerfile",
+    "https://hn.algolia.com/api/v1/search?query=zenywallet%20caprese"
+  ],
+  "confidence": 0.75
+}
