@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/puma/puma",
+  "one_liner": "Mongrel's Ragel-generated C request/header tokenizer, vendored in Puma; ~1.26x faster than joyent http_parser in a 2016 test.",
+  "what_it_does": "A ~50-line Ragel grammar (http11_parser_common.rl) compiled to C. It tokenizes an HTTP/1.x request line and header block, stops at the blank line and records where the body starts. The API is a puma_parser struct holding eight callbacks (method, URI, path, query, fragment, protocol, each header field/value pair, headers done) plus puma_parser_init/execute/finish/has_error/is_finished; execute(parser, buf, len, off) resumes from an offset but must be passed the whole accumulated buffer every time. It does not parse responses, bodies, chunked encoding or Content-Length (Puma handles those in Ruby in lib/puma/client.rb), so it is not a drop-in for http_parser.",
+  "how_it_is_fast": "Ragel compiles the regular grammar into a DFA, and Puma's Rakefile runs it with `-C -G2`, which emits goto-driven C: each state is a label with a switch on the current byte, so there are no transition tables and no function call per byte. Actions only store buffer offsets (MARK) and, at the end of each token, call a callback with a pointer and length into the caller's buffer, so nothing is copied. It also does less work than http_parser 2.6.0, which tracks Content-Length and the chunked/keep-alive/upgrade flags and ran with its default HTTP_PARSER_STRICT=1 in the benchmark. There is no SIMD; the scan is one byte at a time.",
+  "when_to_use": [
+    "Server or proxy code that only needs the request line and headers of HTTP/1.x requests tokenized from one contiguous buffer, and handles framing (Content-Length/chunked) itself",
+    "You want a small grammar you can audit and edit (method set, URI rules, header charset), then regenerate with Ragel; the same grammar also produces Puma's Java parser for JRuby",
+    "CGI/Rack-style servers that want header names upper-cased with '-' turned into '_' while parsing, the form Puma's HTTP_* env keys use",
+    "Replacing legacy joyent/nodejs http_parser on a request-only path with small header blocks (the benchmark used a 365-byte, 9-header GET), where 2016 data showed about 1.07 us vs 1.36 us per request"
+  ],
+  "when_not_to_use": [
+    "You need response parsing, body/chunked decoding, or keep-alive/upgrade semantics: http_parser and its successor llhttp provide these, and this parser leaves them to the caller",
+    "Streaming over non-contiguous reads: callbacks carry offsets into one growing buffer, so you must append every read to a single buffer and pass all of it again",
+    "Peak throughput on modern x86: no SIMD, and the only benchmark found is from 2016 against the now-archived nodejs/http-parser; nothing read compares it with picohttpparser or llhttp",
+    "Lenient intake of legacy clients: CRLF is required (bare LF rejected since the CVE-2021-41136 fix), obs-fold continuation lines are not in the grammar, and methods must be 1-20 chars of [A-Z0-9$-_.]",
+    "You want a versioned standalone library: it exists only as ext/puma_http11 inside the Ruby gem, and its header includes ruby.h"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "None for the generated C core once the ruby.h include and the VALUE request/body fields in http11_parser.h are removed (the benchmark repo did exactly this). Ragel is needed only to regenerate from the .rl files. Inside Puma the glue (puma_http11.c) links against the Ruby C API.",
+    "min_toolchain": "Any C compiler; plain portable C with no intrinsics (Puma's extconf builds with -Werror plus -Wno-implicit-fallthrough for the Ragel output). Regenerating needs Ragel with `-C -G2`; CI installs the distro ragel without pinning a version, and the benchmark author used Ragel 6.8.",
+    "platforms": "any (byte-at-a-time C with no architecture-specific code; Puma's extconf also handles MinGW builds)",
+    "thread_safety": "Not documented for the C core. All mutable state is in the puma_parser struct (the generated file has only static const state numbers), so one instance per connection is safe in practice. Puma's Ruby glue declares the extension Ractor-safe.",
+    "drop_in_for_baseline": "false. The API is different: offset-based execute over the whole buffer, a fixed set of 8 callbacks instead of http_parser_settings, requests only, and no body, chunked, Content-Length or keep-alive handling. It fills only the header-tokenizing part of http_parser's role."
+  },
+  "gotchas": [
+    "It writes to the input even though execute takes `const char *`: the snake_upcase_field action casts away const and rewrites header-name bytes in place (a-z to A-Z, '-' to '_', '_' to ','). The buffer must be writable, and callbacks see normalized names, not the original bytes. Both benchmark loops strcpy the request into a fresh buffer on every iteration.",
+    "The length limits (header name 256 B, value 80 KB, URI 12 KB, query 10 KB, whole header 112 KB) are enforced in Puma's Ruby glue callbacks, not in the Ragel core. A standalone copy has no limits unless your callbacks add them.",
+    "The '_' to ',' rewrite, the header-value charset (any byte except CTLs, plus tab) and CRLF strictness came from hardening changes in 2020-2021: commit ad8197e4 'Reduce ambiguity of headers', the GHSA-48w2-rm65-62xx fix, and dc76d95b. The later CVE-2024-45614 underscore-header fix sits in the Ruby layer (allow_underscore_headers in client.rb). The 2016 benchmark copy predates all of them, and the current grammar has not been re-benchmarked.",
+    "After the blank line the parser stops (fbreak) and stores body_start; bytes of a pipelined next request or of the body are left to the caller."
+  ],
+  "pick_this_over_siblings_when": "Pick it over the picohttpparser family (vkrasnov AVX2 fork, httpp, hparse) or llhttp-based parsers (iohttpparser, zttp) only when you want an editable Ragel grammar that generates both C and Java and does CGI-style header normalization during the parse. For raw speed use pico-style SIMD parsers, and for full HTTP/1.1 semantics and chunk-by-chunk streaming use llhttp/iohttpparser. None of these were benchmarked against Puma's parser in anything read.",
+  "verified_claims_summary": "A January 2016 one-off (jiakai1000/httpparsers) on an Intel Xeon E5-2407 @ 2.20GHz parsed the same 365-byte, 9-header GET 3M and 5M times. Puma's -G2 Ragel parser (2016 copy, Ruby hooks stripped) took 3.215 s and 5.36 s; joyent http_parser 2.6.0 in its default strict mode took 4.065 s and 6.78 s. That is about 1.07 us vs 1.36 us per parse, 1.26x. Timing used wall-clock `time ./a.out` with empty callbacks and a strcpy per iteration in both loops; the Makefile says gcc -O2, but no GCC version is given and it is not certain the recorded binary was built that way.",
+  "status_note": "Puma is actively maintained (last push 2026-09-16, BSD-3-Clause, 7.9k stars), but the grammar changes only for bug and security fixes (last .rl edit 2022-09), and an open experiment (issue #1889, PR #3815) looks at replacing it with pure-Ruby protocol-http1. Treat it as vendorable source rather than a library you depend on.",
+  "sources_read": [
+    "https://github.com/puma/puma",
+    "https://github.com/puma/puma/blob/main/README.md",
+    "https://github.com/puma/puma/tree/main/ext/puma_http11",
+    "https://github.com/puma/puma/blob/main/ext/puma_http11/http11_parser.h",
+    "https://github.com/puma/puma/blob/main/ext/puma_http11/http11_parser.rl",
+    "https://github.com/puma/puma/blob/main/ext/puma_http11/http11_parser_common.rl",
+    "https://github.com/puma/puma/blob/main/ext/puma_http11/http11_parser.c",
+    "https://github.com/puma/puma/blob/main/ext/puma_http11/puma_http11.c",
+    "https://github.com/puma/puma/blob/main/ext/puma_http11/extconf.rb",
+    "https://github.com/puma/puma/blob/main/Rakefile",
+    "https://github.com/puma/puma/blob/main/.github/workflows/ragel.yml",
+    "https://github.com/puma/puma/blob/main/lib/puma/client.rb",
+    "https://github.com/puma/puma/security/advisories",
+    "https://github.com/puma/puma/security/advisories/GHSA-9hf4-67fc-4vf4",
+    "https://github.com/puma/puma/security/advisories/GHSA-48w2-rm65-62xx",
+    "https://github.com/puma/puma/security/advisories/GHSA-68xg-gqqm-vgj8",
+    "https://github.com/puma/puma/commits/main/ext/puma_http11/http11_parser.rl",
+    "https://github.com/puma/puma/commits/main/ext/puma_http11/http11_parser_common.rl",
+    "https://github.com/puma/puma/commits/main/ext/puma_http11/http11_parser.c",
+    "https://github.com/puma/puma/commit/ad8197e4",
+    "https://github.com/puma/puma/commit/acdc3ae5",
+    "https://github.com/puma/puma/commit/b6ef31ef",
+    "https://github.com/puma/puma/issues/1889",
+    "https://github.com/puma/puma/pull/3815",
+    "https://github.com/jiakai1000/httpparsers",
+    "https://github.com/jiakai1000/httpparsers/blob/master/README.md",
+    "https://github.com/jiakai1000/httpparsers/blob/master/Makefile",
+    "https://github.com/jiakai1000/httpparsers/blob/master/puma1.c",
+    "https://github.com/jiakai1000/httpparsers/blob/master/http11_parser.h",
+    "https://github.com/jiakai1000/httpparsers/blob/master/http11_parser1.c",
+    "https://github.com/jiakai1000/httpparsers/blob/master/http11_parser2.c",
+    "https://github.com/jiakai1000/httpparsers/blob/master/http11_parser.c",
+    "https://github.com/jiakai1000/httpparsers/blob/master/http_parser.h",
+    "https://github.com/nodejs/http-parser"
+  ],
+  "confidence": 0.6
+}

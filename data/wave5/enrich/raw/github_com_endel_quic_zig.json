@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/endel/quic-zig",
+  "one_liner": "Pure-Zig QUIC/HTTP/3/WebTransport stack; ~3% faster than quiche on handshake rate in one harness, slower almost everywhere else.",
+  "what_it_does": "A QUIC v1/v2 stack written in Zig with no C dependencies. It includes its own TLS 1.3, RFC 9002 loss recovery with NewReno and CUBIC, HTTP/3 with QPACK, WebTransport, Media over QUIC, and an HTTP/1.1 and WebSocket listener. It has two API layers. The high-level one is event_loop.Server(Handler) and Client(Handler) on libxev, with comptime handler callbacks such as onStreamData and onDatagram. The low-level one is a sans-I/O connection that you drive with conn.send(buf) and conn.handleDatagram(), and quicperf used that layer behind its own UDP I/O. Neither layer resembles quiche's API.",
+  "how_it_is_fast": "No documented technique explains the one win. On Connect, all 12 stacks fall between 234 and 306 conn/s, so the ~3% edge over quiche most likely reflects the harness, not quic-zig's design. The benchmarked May 2026 fork commit had none of upstream's later speed work. Upstream added that work in September 2026: a keyed AES-GCM context that sets up each key once, and a lower GHASH 8-way aggregation threshold (16 blocks instead of std's 84). Together these took encrypting a 1200 B packet on arm64 from 607 ns to 455 ns. Upstream also added sendmmsg plus UDP_SEGMENT (GSO) send batching to its own event loop, which quicperf bypasses because the harness owns the UDP I/O.",
+  "when_to_use": [
+    "You are writing in Zig and want QUIC, HTTP/3 or WebTransport built into your program with no C or Rust toolchain in the build.",
+    "You want a WebTransport or Media over QUIC server for browsers, with WebSocket fallback on the same port and event loop.",
+    "The workload is dominated by connection setup (full 1-RTT handshakes), where quic-zig roughly matches quiche and other stacks.",
+    "The traffic is mostly unreliable DATAGRAM frames: quicperf measured ~3.55M DATAGRAMs/s, second only to quiche's ~5.1M (quiche's rows are inconclusive).",
+    "You are doing QUIC research or prototyping and prefer a readable, spec-annotated codebase over peak throughput."
+  ],
+  "when_not_to_use": [
+    "Request/response, stream-churn, small-message, 0-RTT or close/reset workloads: in quicperf, quic-zig levels off at ~3,700-3,900 ops/s against quiche's 46k-75k, so quiche is 13-20x faster.",
+    "Bulk transfer: quiche is 1.2-1.6x faster on upload and flow control and 3.5x faster on multistream download (3.17 vs 10.99 Gbps).",
+    "Session resumption: quicperf measured 14-15 conn/s against quiche's ~306. Quinn, noq, s2n-quic and Neqo show the same 14-15 plateau, so the harness may be part of the cause.",
+    "Many idle connections: quicperf measured ~464 KB per connection against quiche's ~125 KB (the row is inconclusive).",
+    "Production or internet-facing use: the README says 'Not production-ready' and that the public APIs may change. Contributed security-fix PRs (#6-#12) have been open since March 2026."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "libxev (pinned to the maintainer's fork, endel/libxev); no C libraries",
+    "min_toolchain": "Zig 0.16.0 (minimum_zig_version in build.zig.zon)",
+    "platforms": "Linux, macOS, FreeBSD (src/sys.zig). Windows support is an open PR (#33). On x86-64, build with AES and PCLMUL CPU features (-Dcpu=native or x86_64_v3+aes+pclmul), or AES-GCM runs in software about 35x slower.",
+    "thread_safety": "Not thread-safe per connection: sessions may only be used from the thread running the server's loop. To use several cores, run one server per thread, each on its own loop (reuse_port or the steering-worker router).",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The low-level tls13.TlsConfig defaults skip_cert_verify to true, which skips chain and CertificateVerify checks. The high-level ClientConfig defaults it to false. PR #12 would change the low-level default and has been open since 2026-03-17.",
+    "On Linux the event loop uses epoll by default, not io_uring, because io_uring setup fails in some containers. On macOS it uses kqueue. Config.max_connections defaults to 256.",
+    "BENCHMARK.md shows 11,009 vs 1,114 req/s against quiche, but that quiche figure comes from quiche's example server with mio, which handles connections one after another, measured on macOS. quicperf finds quiche ~17x faster at request/response, so do not treat BENCHMARK.md as a like-for-like comparison.",
+    "The quicperf numbers come from victorstewart/quic-zig 97a7bec, whose base commit upstream main is now 255 commits ahead of. That base predates the AES-GCM and GSO changes, so current upstream may benchmark differently."
+  ],
+  "pick_this_over_siblings_when": "Pick quic-zig over ngtcp2, TQUIC or picoquic only when you need a pure-Zig stack with WebTransport and MoQ built in. For speed, ngtcp2 is ~1.5-2x quiche on bulk transfer and TQUIC is ~2.4x quiche on request rate in the same harness, while quic-zig trails quiche on both.",
+  "verified_claims_summary": "quicperf (victorstewart/quicperf, loopback, CUBIC, CPU model not recorded) measured the quic-zig fork commit 97a7bec, built with Zig 0.16.0 ReleaseFast and -Dcpu=native, against quiche 0.29.0 built with fat LTO and target-cpu=native. On Connect, quic-zig reached 286 vs 277 conn/s p50 with the syscall backend (8 vs 16 client threads; pairwise ratio 0.968, CI 0.961-0.990) and 267 vs 258 conn/s with io_uring, but it lost to quiche in 21 of 23 pairwise comparisons, by up to ~21x.",
+  "status_note": "Actively developed (last push 2026-09-25) and MIT-licensed, but self-described as not production-ready, rebuilt with AI assistance in 2026, and pinned to a forked libxev and Zig 0.16.",
+  "sources_read": [
+    "https://github.com/endel/quic-zig",
+    "https://github.com/endel/quic-zig/blob/main/README.md",
+    "https://github.com/endel/quic-zig/blob/main/BENCHMARK.md",
+    "https://github.com/endel/quic-zig/blob/main/PRIORITIES.md",
+    "https://github.com/endel/quic-zig/blob/main/CHANGELOG.md",
+    "https://github.com/endel/quic-zig/blob/main/CLAUDE.md",
+    "https://github.com/endel/quic-zig/blob/main/build.zig.zon",
+    "https://github.com/endel/quic-zig/blob/main/DECISIONS/zig_std_divergences.md",
+    "https://github.com/endel/quic-zig/blob/main/src/sys.zig",
+    "https://github.com/endel/quic-zig/blob/main/src/xev_backend.zig",
+    "https://github.com/endel/quic-zig/blob/main/src/event_loop.zig",
+    "https://github.com/endel/quic-zig/blob/main/src/c_api.zig",
+    "https://github.com/endel/quic-zig/blob/main/src/quic/ecn_socket.zig",
+    "https://github.com/endel/quic-zig/blob/main/src/quic/congestion.zig",
+    "https://github.com/endel/quic-zig/blob/main/src/quic/tls13.zig",
+    "https://github.com/endel/quic-zig/blob/main/src/quic/packet_packer.zig",
+    "https://github.com/endel/quic-zig/blob/main/src/quic/connection_manager.zig",
+    "https://github.com/endel/quic-zig/issues",
+    "https://github.com/endel/quic-zig/pulls",
+    "https://github.com/endel/quic-zig/pull/12",
+    "https://github.com/endel/quic-zig/compare/a80e10ea9f25221980e1107f126410c827b384c4...main",
+    "https://github.com/victorstewart/quic-zig/commit/97a7becfcc09e6401c45e620c27eb09fb8a9b739",
+    "https://github.com/victorstewart/quicperf/blob/main/docs/latest-results.md",
+    "https://github.com/victorstewart/quicperf/blob/main/docs/results/fixed-full-matrix-max16-20260601T175816Z/pairwise-comparisons.tsv",
+    "https://github.com/victorstewart/quicperf/blob/main/zig-packet-ffi/src/lib.zig",
+    "https://github.com/victorstewart/quicperf/blob/main/zig-packet-ffi/include/quicperf_zig_packet_ffi.h"
+  ],
+  "confidence": 0.4
+}

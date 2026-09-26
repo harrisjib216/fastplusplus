@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/ipnetworkinglab/picoquic-dpdk",
+  "one_liner": "Research fork of picoquic that swaps kernel UDP sockets for DPDK; about 3x picoquic single-connection goodput on 100 GbE.",
+  "what_it_does": "A patched copy of the picoquic C QUIC stack (picoquic v1.01 era) whose socket loop is replaced by a DPDK poll-mode loop, plus a minimal hand-written Ethernet/IPv4/IPv6/UDP layer with ARP and NDP. Applications keep picoquic's context and stream-callback API, but instead of the socket loop they call picoquic_packet_loop_dpdk(), which needs a DPDK port, queue ID, mbuf mempool, TX buffer and MAC addresses. It ships mainly as a demo binary (dpdk_picoquicdemo, launched with --dpdk plus EAL arguments) that includes a multi-core server sharded by RSS. This IPNetworkingLab repo is the May-June 2022 thesis snapshot. The CoNEXT-SW '22 paper cites UCLouvain-ENSG/picoquic-dpdk, a later copy from October 2022 with the same core loop.",
+  "how_it_is_fast": "Kernel bypass with DPDK. It busy-polls the NIC with rte_eth_rx_burst, so there are no interrupts, no syscalls, no sk_buff and no user/kernel copy. Packets move in batches: the paper receives up to 32 per burst, and the -@/-* flags set RX and TX batch sizes. picoquic writes each outgoing QUIC packet straight into the mbuf at the UDP-payload offset, headers are copied in front, and packets are queued with rte_eth_tx_buffer and flushed together. The paper's profile shows server I/O falling from 18.7% to 5.7% of CPU cycles, which leaves those cycles for crypto and protocol work.",
+  "when_to_use": [
+    "Lab or research testbed with a dedicated DPDK-capable NIC (the paper used 100 GbE between two Xeon Silver 4314 hosts) where you want one core to push one QUIC connection well past 10 Gbps.",
+    "Bulk single-connection downloads measured by goodput: the paper's 20 GB AES-128-GCM transfer reached roughly 15-16 Gbps on 1 core (read from Fig. 1), against about 5 Gbps for kernel-socket picoquic.",
+    "Handshake-rate experiments: up to 6000 zero-byte requests/s, about double stock picoquic in the paper.",
+    "You already have picoquic-based C code and want to measure how much of your cost is kernel I/O rather than crypto or protocol processing.",
+    "Multi-core server scale-out through RSS sharding (one picoquic context per lcore and queue), as long as you do not need connection migration or multipath."
+  ],
+  "when_not_to_use": [
+    "Production or internet-facing services: abandoned since 2022, built on what the maintainer calls 'some random base git commit' of picoquic, and missing years of upstream fixes.",
+    "Anything without dedicated NIC access. The maintainer says it cannot run locally or without a real device, and it needs root, hugepages and a busy-polling core; a VM without SR-IOV or passthrough will not work.",
+    "Apps that need connection migration or multipath on the multi-threaded server; the README says the sharded mode does not support either.",
+    "You need numbers that others have reproduced. Jaeger et al. (IFIP Networking 2023) could not reach the reported picoquic goodput and could not easily reproduce the optimizations.",
+    "Throughput with 2 cores on kernel TCP is acceptable: in the same figure, picoTLS over kernel TCP with a 2-core pipeline reached about 20 Gbps, above picoquic-dpdk's 1-core result."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "DPDK (libdpdk via pkg-config), picotls (a matching commit; a later ENSG commit says the picotls API changed), OpenSSL, pthreads",
+    "min_toolchain": "CMake 2.8.11+; C11/gnu99 GCC or Clang; CMakeLists hard-codes -O3 -march=native -msse4",
+    "platforms": "Linux with a DPDK-supported NIC; x86-64 as shipped (-msse4 in default flags); has #if branches for DPDK versions before and after 21.11",
+    "thread_safety": "One picoquic context per DPDK lcore and RX/TX queue, sharded by RSS or rte_flow (-r); no shared state between cores is documented.",
+    "drop_in_for_baseline": "partial — the picoquic connection/stream callback API is unchanged, but the packet loop is replaced by picoquic_packet_loop_dpdk(), which needs DPDK EAL setup, port/queue/mempool/tx_buffer arguments and peer MAC handling"
+  },
+  "gotchas": [
+    "The built-in L2/L3 layer is minimal. It learns peer MACs from incoming packets into a fixed table (20 entries in this repo, 256 in the ENSG copy), ignores ICMPv4, and makes the client pass the server MAC with -A.",
+    "Unit tests are not maintained. The maintainer said in October 2025 that they never ran the test suite, and an Ubuntu 24.04 / DPDK 21.11.9 report shows many picoquic_ct failures and a segfault in the non-DPDK demo client.",
+    "The no-encryption (memcpy AEAD) variant used in the thesis measurements is not in either repo. It was a local patch to picotls aead_encrypt/aead_decrypt.",
+    "TX-ring overflow only prints 'PACKET DROPPED!' from the drop callback, and the RX loop polls forever, so each worker core sits at 100% even when idle."
+  ],
+  "pick_this_over_siblings_when": "Pick it over upstream picoquic only when you control a DPDK NIC and need single-core goodput; upstream is maintained and uses kernel sockets. Against the tumi8 kernel-bypass forks (LSQUIC-DPDK, quiche-DPDK), pick this one if your code is already on picoquic's C API or you need its RSS-sharded multi-core server. Their results come from a different 10G testbed, so the numbers cannot be compared directly.",
+  "verified_claims_summary": "In the CoNEXT-SW '22 paper, one QUIC connection downloads 20 GB with AES-128-GCM between two Xeon Silver 4314 @ 2.4 GHz hosts over a 100 Gbps link. On one core, picoquic-dpdk reached about 15.7 Gbps (read from Fig. 1) versus about 4.8 Gbps for kernel-socket picoquic, which is roughly the paper's stated 3x. It also beat quicly, msquic (10.6 Gbps with a 3-core pipeline) and quiche, and handled about 2x picoquic's handshake rate. The paper names no compiler; the repo's CMakeLists builds with -O3 -march=native.",
+  "status_note": "Abandoned research code: this repo was last pushed 2022-06-01 and the paper-cited ENSG copy 2022-10-31. It is MIT-licensed, but you get it as a patched picoquic tree tied to 2022-era DPDK and picotls, not as a reusable library.",
+  "sources_read": [
+    "https://github.com/IPNetworkingLab/picoquic-dpdk",
+    "https://github.com/IPNetworkingLab/picoquic-dpdk/blob/main/README.md",
+    "https://github.com/IPNetworkingLab/picoquic-dpdk/blob/main/picoquic/sockloop_dpdk.c",
+    "https://github.com/IPNetworkingLab/picoquic-dpdk/blob/main/dpdk_picoquicfirst/dpdk_picoquicdemo.c",
+    "https://github.com/IPNetworkingLab/picoquic-dpdk/commits/main",
+    "https://github.com/IPNetworkingLab/picoquic-dpdk/issues/1",
+    "https://github.com/UCLouvain-ENSG/picoquic-dpdk",
+    "https://github.com/UCLouvain-ENSG/picoquic-dpdk/blob/main/README.md",
+    "https://github.com/UCLouvain-ENSG/picoquic-dpdk/blob/main/CMakeLists.txt",
+    "https://github.com/UCLouvain-ENSG/picoquic-dpdk/blob/main/picoquic/sockloop_dpdk.c",
+    "https://github.com/UCLouvain-ENSG/picoquic-dpdk/blob/main/dpdk_picoquicfirst/dpdk_picoquicdemo.c",
+    "https://github.com/UCLouvain-ENSG/picoquic-dpdk/blob/main/dpdk_picoquicfirst/dpdk_server.c",
+    "https://github.com/UCLouvain-ENSG/picoquic-dpdk/commits/main",
+    "https://github.com/UCLouvain-ENSG/picoquic-dpdk/issues/1",
+    "https://github.com/UCLouvain-ENSG/picoquic-dpdk-experiments",
+    "https://github.com/UCLouvain-ENSG/picoquic-dpdk-experiments/blob/main/.gitmodules",
+    "https://research.dial.uclouvain.be/bitstreams/acc87432-c1b7-4646-be09-8169627726d8/download",
+    "https://arxiv.org/pdf/2309.16395"
+  ],
+  "confidence": 0.35
+}
