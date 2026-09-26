@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/cwida/fastlanes",
+  "one_liner": "CWI's columnar file format with SIMD-friendly lightweight encodings; decodes 7-44x faster than Parquet, DuckDB and BtrBlocks in its paper.",
+  "what_it_does": "A Parquet-replacement on-disk columnar format plus C++20 reader/writer library that swaps Snappy/Zstd block compression for cascaded lightweight encodings (FFOR, delta, dictionary, RLE, ALP, FSST) chosen per column per rowgroup. Not drop-in: you open a fastlanes::Connection, ingest a directory holding one CSV (or JSON) file plus a schema.json, write .fls with to_fls(), and read back via TableReader -> RowgroupReader::get_chunk(vec_idx), which decodes one 1024-value vector per column (or materialize()/to_csv()). Python (pyfastlanes) and Rust (fls-rs) bindings currently expose only a CSV round trip.",
+  "how_it_is_fast": "Every encoding works on 1024-value vectors in the authors' Unified Transposed / 1024-bit interleaved layout (VLDB 2023 'FastLanes Compression Layout'), which removes data dependencies so decode kernels, delta included, are plain scalar loops the compiler auto-vectorizes (no intrinsics; the paper measured AVX-512 builds about 40% faster than SSE). 'Expression encoding' cascades these light operators (e.g. dictionary codes then FFOR bit-packing) and adds multi-column compression that reuses codes or dictionaries across correlated columns, reaching Zstd-class ratios without a heavyweight decompressor. Decoding is vector-at-a-time into L1-sized buffers, and the writer picks each column's expression by trying a fixed pool on a few sampled vectors per rowgroup (paper: 'three-way' sampling; code default 7 vectors).",
+  "when_to_use": [
+    "Write-once, scan-many analytics on flat tables (integers, decimals, doubles, strings, dates) where decode CPU dominates and much slower writes are acceptable.",
+    "Your own C++ vectorized engine or research prototype that can consume 1024-value vectors, including still-compressed ones such as dictionary codes in transposed order, to try compressed execution.",
+    "Denormalized data with correlated columns, like the Public BI corpus: FastLanes stored 172 MB, Parquet+Snappy was 41% larger, BtrBlocks 18% larger and Parquet+Zstd 2% larger.",
+    "Point reads of one vector from a rowgroup that is already loaded, where decompressing a whole Parquet page with Snappy/Zstd is the bottleneck.",
+    "Builds that must stay portable across x86-64 and ARM without hand-written SIMD while still gaining from wider vector units."
+  ],
+  "when_not_to_use": [
+    "Write-heavy or ETL ingestion. v0.1 encoding took 81.3 s against 5.9 s for Parquet+Snappy and 20.3 s for DuckDB in the paper. The writer also loads the whole table into memory before encoding.",
+    "When you need interop. There is no Arrow, Parquet, DuckDB, Spark or Polars reader or writer. The Python API only exports CSV. In July 2025 the maintainer said HTTP range reads and a DuckDB extension were on the roadmap, not implemented.",
+    "Nested or ML-style data. LIST, STRUCT and MAP appear in the type list, but a list<bigint> column aborts with UNREACHABLE (issue #67, open). The paper lists nested types and schema evolution as future work.",
+    "Normalized or synthetic data such as TPC-H, where Parquet+Zstd compressed 15.3% smaller than FastLanes in the paper.",
+    "Long-term archival or production storage. The format is pre-1.0 (the code's version tag is v0.1.4), the GitHub repo has no releases or tags, and readers accept only a whitelist of five version tags. Crashes on real datasets were reported in 2025 (issue #55, since fixed)."
+  ],
+  "integration": {
+    "form": "static lib by default, built with CMake (FetchContent from the dev branch); shared lib via FLS_BUILD_SHARED_LIBS. Bindings: pyfastlanes on PyPI, fls-rs for Rust.",
+    "dependencies": "none external. FlatBuffers is vendored in-tree, and the ALP and FSST codecs are in-tree. GoogleTest is fetched only for tests.",
+    "min_toolchain": "C++20 and CMake 3.22+. Clang 13+ is the default on Linux and macOS. GCC 11+ and MSVC have been accepted since April 2026 (PR #69), but the maintainer has said Clang is preferred for predictable auto-vectorization (issue #61).",
+    "platforms": "Portable C++ with no intrinsics. CI builds on Linux x86-64 and aarch64, macOS 15 and Windows x64 (Clang and MSVC); the Windows-on-ARM job is disabled. The paper benchmarked only x86 (Ice Lake).",
+    "thread_safety": "not documented. From the source: RowgroupReader::get_chunk decodes into, and returns references to, the reader's own mutable expression buffers, and TableReader keeps a reference to its Connection. So use a separate reader per thread.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "At configure time CMake reads /proc/cpuinfo and adds -march=native (x86 without AVX-512DQ) or -mavx512dq to CMAKE_CXX_FLAGS. A binary built on one host can therefore crash with an illegal instruction on an older CPU. FastLanes also compiles its own sources with -Wall -Werror -Wpedantic, so a newer compiler that adds warnings can break the build.",
+    "The footer is not inlined by default (CFG::Footer::IS_INLINED = false). The reader then looks for a sidecar table_descriptor.fbb in the same directory. Call inline_footer() to get a single self-contained file; the README's Python and Rust examples do this, but the C++ example does not.",
+    "read_csv() takes a directory, not a file. The directory must contain a .csv file and a schema.json, and the default delimiter is '|'. to_fls() throws if the output path already exists.",
+    "Decoded vectors stay in the transposed (UTL) order. To get the original row order you must apply the 1024-entry selection vector, or ask the decoder to restore the order with a gather step."
+  ],
+  "pick_this_over_siblings_when": "Pick FastLanes over BtrBlocks when you want vector-granular decoding, a better compression ratio, or non-x86 targets; the paper says BtrBlocks needs AVX2/AVX-512. Prefer Vortex (which has DuckDB and DataFusion integrations, per its maintainer on HN) or Lance when ecosystem support matters more than peak decode speed. Use ALP, from the same authors and embedded in FastLanes, if you only need a float codec inside your own format.",
+  "verified_claims_summary": "The paper (VLDB 2025) ran everything on one AWS i4i.4xlarge (Ice Lake, compiler not named, AVX-512 build) over 36 Public BI tables. Total decode time was 16.32 ms for FastLanes against 483 ms for DuckDB v1.2's native format, 713 ms and 731 ms for Parquet+Snappy and Parquet+Zstd (written and read through DuckDB v1.2), and 115 ms for BtrBlocks. First-value access took 0.14 ms (6x to 814x faster), while encoding was 4-14x slower than DuckDB and Parquet. Caveat: the artifact's FastLanes timers cover only get_chunk() on a first rowgroup that is already opened and read into memory, whereas Parquet and DuckDB random access was timed as a full DuckDB 'LIMIT 1' query. The paper's own Parquet+Snappy decode total also differs about 3x between Table 4 (712 ms) and Table 6 (2,071 ms), so treat the multipliers as upper bounds.",
+  "status_note": "This is MIT-licensed CWI research code that moves slowly: the last commit was 2026-04-22 (GCC/MSVC support), there are no GitHub releases, and pyfastlanes was last published on 2025-05-30. It is easy to vendor via FetchContent, but the format is pre-1.0 and has no ecosystem readers.",
+  "sources_read": [
+    "https://github.com/cwida/FastLanes",
+    "https://github.com/cwida/FastLanes/blob/dev/README.md",
+    "https://github.com/cwida/FastLanes/blob/dev/CMakeLists.txt",
+    "https://github.com/cwida/FastLanes/blob/dev/CHANGELOG.md",
+    "https://github.com/cwida/FastLanes/blob/dev/CLAUDE.md",
+    "https://github.com/cwida/FastLanes/blob/dev/docs/typing_system.md",
+    "https://github.com/cwida/FastLanes/blob/dev/pyproject.toml",
+    "https://github.com/cwida/FastLanes/blob/dev/rust/Cargo.toml",
+    "https://github.com/cwida/FastLanes/blob/dev/src/include/fls/info.hpp",
+    "https://github.com/cwida/FastLanes/blob/dev/src/include/fls/connection.hpp",
+    "https://github.com/cwida/FastLanes/blob/dev/src/connection.cpp",
+    "https://github.com/cwida/FastLanes/blob/dev/src/include/fls/cfg/cfg.hpp",
+    "https://github.com/cwida/FastLanes/blob/dev/src/include/fls/reader/table_reader.hpp",
+    "https://github.com/cwida/FastLanes/blob/dev/src/reader/table_reader.cpp",
+    "https://github.com/cwida/FastLanes/blob/dev/src/include/fls/reader/rowgroup_reader.hpp",
+    "https://github.com/cwida/FastLanes/blob/dev/src/reader/rowgroup_reader.cpp",
+    "https://github.com/cwida/FastLanes/blob/dev/src/reader/csv_reader.cpp",
+    "https://github.com/cwida/FastLanes/blob/dev/src/expression/expression_executor.cpp",
+    "https://github.com/cwida/FastLanes/blob/dev/src/include/fastlanes.h",
+    "https://github.com/cwida/FastLanes/blob/dev/python/bindings/table_reader_binding.cpp",
+    "https://github.com/cwida/FastLanes/blob/dev/benchmark/bench_decompression_time.cpp",
+    "https://github.com/cwida/FastLanes/blob/dev/benchmark/bench_random_access.cpp",
+    "https://github.com/cwida/FastLanes/blob/dev/.github/workflows/cpp.yaml",
+    "https://github.com/cwida/FastLanes/blob/dev/.github/workflows/benchmark.yaml",
+    "https://github.com/cwida/FastLanes/issues/67",
+    "https://github.com/cwida/FastLanes/issues/61",
+    "https://github.com/cwida/FastLanes/issues/55",
+    "https://github.com/cwida/FastLanes/commits/dev",
+    "https://www.vldb.org/pvldb/vol18/p4629-afroozeh.pdf",
+    "https://github.com/cwida/fastlanes-vldb2025",
+    "https://pypi.org/pypi/pyfastlanes/json",
+    "https://news.ycombinator.com/item?id=44671584"
+  ],
+  "confidence": 0.85
+}
