@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/hickory-dns/hickory-dns",
+  "one_liner": "Memory-safe Rust DNS server, resolver and protocol crates; matches BIND 9.11 on single-query UDP latency, within noise.",
+  "what_it_does": "Hickory DNS (formerly Trust-DNS) is a DNS stack in safe Rust. It ships a `hickory-dns` server binary (authoritative, forwarding, stub, experimental recursive) and library crates: `hickory-proto` for wire encoding, `hickory-net` for transports and a client, `hickory-server` for embedding a server in a Tokio app, and `hickory-resolver` for stub resolution. The server reads RFC 1035 zone files, in-memory zones or SQLite, but uses its own TOML config. It does not read `named.conf`, so it is not a drop-in BIND replacement.",
+  "how_it_is_fast": "The 2017 work took allocations and copies off the UDP query hot path. `LowerName` stores names pre-lowercased, so case-insensitive comparison becomes a plain byte compare (the author's microbench fell from 255 to 7 ns for short names). `MessageResponse<'q, 'a>` borrows records from the zone instead of cloning them. The original query bytes are echoed rather than re-serialized, EDNS is streamed straight to the encoder, and the label-compression table was changed from `HashMap<Vec<String>, u16>` to buffer offsets. The server runs on a multi-threaded Tokio runtime (`--workers` defaults to the CPU core count) and spawns one task per UDP request.",
+  "when_to_use": [
+    "A Rust program needs an embedded authoritative DNS server or stub resolver as a library, instead of running and managing a separate BIND process.",
+    "Small to medium authoritative zones served from memory, zone files or SQLite, where latency equal to BIND is enough and memory safety is the main reason to switch.",
+    "In-process encrypted DNS transports (DoT, DoH, DoQ, DoH3) through rustls, using aws-lc-rs or ring as the crypto provider.",
+    "Dynamic update with SIG(0)/TSIG and a SQLite journal, plus online DNSSEC signing (NSEC/NSEC3) that re-signs zones on each update.",
+    "Replacing the OS resolver inside a Rust application with `hickory-resolver`, which also offers no_std support in `hickory-proto`."
+  ],
+  "when_not_to_use": [
+    "You expect a speedup over BIND. The only evidence is one 2017 serial-latency microbench at about 2% (inside noise), with no qps or throughput numbers, and TCP, dynamic update and DNSSEC signing were not measured.",
+    "High-QPS production serving. The binary's README says 'running in production is not recommended'. Issue #2613 (open) reports about 50% query loss under dnsperf with 100 clients, and scalability testing (#2643) is still an open TODO.",
+    "Primary/secondary deployments that need IXFR (RFC 1995), NOTIFY (RFC 1996), offline zone signing or `named.conf` compatibility. The README lists all of these as not implemented.",
+    "Validating recursive resolution. The recursor is marked experimental, and most of the 38 advisories fixed in v0.26.2 hit DNSSEC validation, the recursor or the cache.",
+    "Stacks that cannot upgrade quickly. The project is pre-1.0 (main is 0.27.0-alpha.1), crates are regularly split, renamed or removed, and only the latest minor release gets security fixes."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "tokio; rustls with aws-lc-rs or ring (crypto features only); optional quinn/h3 (DoQ/DoH3), h2/hyper (DoH), rusqlite with bundled SQLite (default `sqlite` feature in the binary), tikv-jemallocator (optional)",
+    "min_toolchain": "Rust 1.88 (workspace rust-version; the MSRV is guaranteed only for `--no-default-features` builds). The comparison bench needs nightly (`#![feature(test)]`).",
+    "platforms": "CI runs on Linux, macOS and Windows (latest images). `hickory-proto` supports no_std and has a wasm-bindgen feature.",
+    "thread_safety": "Server handlers must be `Send + Sync`. The server runs on a multi-threaded Tokio runtime with one spawned task per request. The in-memory zone store sits behind a `tokio::sync::RwLock`, so updates block readers.",
+    "drop_in_for_baseline": "partial — it serves standard RFC 1035 zone files and speaks the same wire protocols, but configuration is TOML rather than named.conf, and IXFR, NOTIFY, offline signing and many BIND operational features are missing"
+  },
+  "gotchas": [
+    "Always benchmark `--release` builds. The first 2017 result (400 us vs 100 us) came from a debug binary, and the #2613 report was built with plain `cargo run`.",
+    "The in-repo `bin/benches/comparison.rs` is nightly-only and its BIND benches are `#[ignore]`d. They need `TDNS_BIND_PATH` pointing at a self-built named, and the named config path still points at the old `server/benches/` layout, so reproducing the BIND comparison probably needs path fixes.",
+    "Use v0.26.3 or later. v0.26.2 (2026-09-03) fixed 38 advisories, including DNSSEC proof forgery, zone-parser panics and DoH/DoQ memory exhaustion, and v0.26.3 fixed regressions it introduced. hickory-proto before 0.26.1 also has an O(n^2) name-compression CPU DoS (GHSA-q2qq-hmj6-3wpp) in the encoder path the 2017 work optimized.",
+    "Crypto features carry a provider suffix (`tls-ring` vs `tls-aws-lc-rs`, `dnssec-ring`, etc.). DNSSEC and encrypted transports are off until you enable one of them."
+  ],
+  "pick_this_over_siblings_when": "Pick Hickory over Unbound (about 3.4x BIND cache-hit qps) when you need an embeddable Rust library or in-process DoQ/DoH3 rather than a standalone high-throughput C resolver. Pick it over Nail and the Bundy-DNS l1cache branch (about 2.9x and 4.4x BIND throughput claims) when a maintained, published crate matters more than raw qps, because those two are research or experimental code.",
+  "verified_claims_summary": "In the author's 2017 libtest bench, one client sent serial UDP A queries for www.example.com over loopback to a local authoritative server with the same zone. TRust-DNS took 68,173 ns/iter (+/- 11,699) and BIND 9.11 took 69,576 (+/- 3,620), which is about 2% lower and within TRust-DNS's spread. TRust-DNS was a release build on an unstated nightly rustc. BIND was built with default configure (Apple LLVM 7.3.0, -g -O2), and both ran on an aging x86_64 macOS laptop (Darwin 16.1.0) with no CPU model given.",
+  "status_note": "Actively maintained (pushed 2026-09-26; v0.26.3 released 2026-09-10) under MIT OR Apache-2.0 and published on crates.io. It is still pre-1.0, and its own server README advises against production use.",
+  "sources_read": [
+    "https://github.com/hickory-dns/hickory-dns",
+    "https://github.com/hickory-dns/hickory-dns/blob/main/README.md",
+    "https://github.com/hickory-dns/hickory-dns/blob/main/Cargo.toml",
+    "https://github.com/hickory-dns/hickory-dns/blob/main/bin/Cargo.toml",
+    "https://github.com/hickory-dns/hickory-dns/blob/main/bin/README.md",
+    "https://github.com/hickory-dns/hickory-dns/blob/main/bin/src/hickory-dns.rs",
+    "https://github.com/hickory-dns/hickory-dns/blob/main/bin/benches/comparison.rs",
+    "https://github.com/hickory-dns/hickory-dns/blob/main/ARCHITECTURE.md",
+    "https://github.com/hickory-dns/hickory-dns/blob/main/SECURITY.md",
+    "https://github.com/hickory-dns/hickory-dns/blob/main/CHANGELOG.md",
+    "https://github.com/hickory-dns/hickory-dns/blob/main/crates/server/README.md",
+    "https://github.com/hickory-dns/hickory-dns/blob/main/crates/server/src/server/mod.rs",
+    "https://github.com/hickory-dns/hickory-dns/blob/main/crates/server/src/zone_handler/message_response.rs",
+    "https://github.com/hickory-dns/hickory-dns/blob/main/crates/server/src/store/in_memory/mod.rs",
+    "https://github.com/hickory-dns/hickory-dns/blob/main/crates/server/src/store/in_memory/inner.rs",
+    "https://github.com/hickory-dns/hickory-dns/blob/main/crates/proto/src/rr/lower_name.rs",
+    "https://github.com/hickory-dns/hickory-dns/blob/main/crates/proto/Cargo.toml",
+    "https://github.com/hickory-dns/hickory-dns/blob/main/.github/workflows/test.yml",
+    "https://github.com/hickory-dns/hickory-dns/security/advisories",
+    "https://github.com/hickory-dns/hickory-dns/security/advisories/GHSA-q2qq-hmj6-3wpp",
+    "https://github.com/hickory-dns/hickory-dns/releases/tag/v0.26.2",
+    "https://github.com/hickory-dns/hickory-dns/releases/tag/v0.26.3",
+    "https://github.com/hickory-dns/hickory-dns/issues/2613",
+    "https://github.com/hickory-dns/hickory-dns/issues/2643",
+    "https://github.com/hickory-dns/hickory-dns/pull/317",
+    "https://bluejekyll.github.io/blog/posts/making-trust-dns-fast/",
+    "https://gist.github.com/bluejekyll/fa890f3144025a5244c462ba7b69b060"
+  ],
+  "confidence": 0.75
+}
