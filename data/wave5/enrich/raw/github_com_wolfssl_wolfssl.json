@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/wolfssl/wolfssl",
+  "one_liner": "Embedded-first C TLS 1.3 library, not an OpenSSL fork, that beat every OpenSSL version in HAProxy's 64-core Graviton4 tests.",
+  "what_it_does": "A from-scratch SSL/TLS library (up to TLS 1.3 and DTLS 1.3) built on its own wolfCrypt module. It was written for embedded and RTOS targets (the README gives a typical footprint of 20-100 kB) but is also used on servers, and wolfCrypt holds FIPS 140-3 certificate #4718. The native API is wolfSSL_* (wolfSSL_CTX_new, wolfSSL_new, wolfSSL_read, ...). An optional OpenSSL compatibility layer (--enable-opensslextra/--enable-opensslall, which --enable-haproxy and --enable-nginx pull in) uses macros in wolfssl/openssl/ssl.h to map SSL_* names onto those calls, so OpenSSL-API programs such as HAProxy can be recompiled against it; it is not a binary replacement for libssl.so.",
+  "how_it_is_fast": "Public-key math runs on wolfCrypt's 'SP' (single-precision) backend. This is generated code with a fixed size per key length (2048-bit RSA is 32 x 64-bit words) that does Karatsuba multiplication and Montgomery reduction in inline AArch64/x86-64 assembly (sp_arm64.c alone is ~7 MB). It is paired with ARMv8 Crypto Extension/NEON and AES-NI/AVX2/AVX-512 code for AES-GCM, SHA-2, ChaCha20-Poly1305 and X25519. For multi-core scaling, the manual says the library is 'thread safe by design' because it 'avoids global data', and reference counts use C11 <stdatomic.h> or GCC __atomic builtins (wc_port.h). In HAProxy's profiles, wolfSSL's resumption curve did not change between pthread locks and HAProxy's lightweight locks ('it clearly doesn't need locks'), while OpenSSL 1.1.1w and 3.x spent most of their CPU in pthread_rwlock calls and atomics.",
+  "when_to_use": [
+    "HAProxy, or another OpenSSL-API server that already has a wolfSSL port, taking many short-lived TLS connections on many cores, where OpenSSL 3.x lock and atomic contention caps throughput. At 64 threads HAProxy measured 59.7k vs ~43k RSA full handshakes/s (OpenSSL 3.1-3.4-dev) and ~150k vs 23-28k ticket resumptions/s.",
+    "Workloads heavy on ticket resumption, such as a proxy re-encrypting to backends or clients that reconnect often, where you want linear scaling to 64 cores without special lock builds.",
+    "Embedded, RTOS or kernel-module targets that need TLS 1.3/DTLS 1.3 in tens of kB. The repo ships ports for Zephyr, ESP-IDF, STM32, Renesas, NXP and others, custom allocators (wolfSSL_SetAllocators) and a static memory pool (WOLFSSL_STATIC_MEMORY).",
+    "You need a FIPS 140-3 validated module and a vendor that sells commercial licenses and support contracts (HAProxy notes an LTS period is 'probably negotiable').",
+    "Post-quantum TLS work: ML-KEM/ML-DSA with AVX-512/AArch64 assembly plus native Falcon and FrodoKEM, with no liboqs dependency as of 5.9.4."
+  ],
+  "when_not_to_use": [
+    "You need a binary drop-in for libssl/libcrypto or exact OpenSSL behavior. The compatibility layer is a macro mapping, and HAProxy reports 'minor differences' and says deploying it 'requires a lot of testing and feature validation'.",
+    "Proprietary distribution without buying a commercial license: the code is GPL-3.0, and GPL-2.0 is allowed only for a named list of projects (MariaDB, OpenVPN, U-Boot from Cisco, ...).",
+    "You want the absolute top numbers on Graviton. AWS-LC (v1.32.0+30) beat it on full RSA handshakes (63.1k vs 59.7k/s), and AWS-LC built with C11 beat it by ~20% on resumption (183k/s).",
+    "You depend on distro packages and automatic OS security updates. HAProxy found that the Debian/Ubuntu wolfSSL packages lacked the HAProxy options and CPU optimizations it needed, so it had to build and maintain wolfSSL by hand.",
+    "You can't upgrade quickly. 5.9.4 (2026-09-25) fixed three High-severity certificate-verification CVEs, and one of them (CVE-2026-93302, trusted-peer CA check) widens to all CA loading in OPENSSL_COMPATIBLE_DEFAULTS builds, which --enable-haproxy, --enable-nginx, --enable-all and --enable-distro all turn on."
+  ],
+  "integration": {
+    "form": "static lib | shared lib (autotools ./configure or CMake; also source-drop with user_settings.h for IDE/RTOS builds)",
+    "dependencies": "none beyond libc (optional hardware or crypto-callback ports; the liboqs dependency was removed in 5.9.4)",
+    "min_toolchain": "ANSI C (a C89 build is supported via --enable-c89); autoconf/automake/libtool for git checkouts or CMake 3.16+ (CMake support described as 'still under development'); asm is auto-enabled only for GNU-C-compatible compilers; the benchmark used gcc 11.4",
+    "platforms": "any C target; assembly for x86-64 (AES-NI/AVX2/AVX-512), AArch64 (ARMv8 crypto extensions/NEON), ARM32/Thumb-2/Cortex-M, RISC-V 64 and PPC32/64; Linux, Windows, macOS/iOS, Android, many RTOSes and a Linux kernel module",
+    "thread_safety": "The manual says it is 'thread safe by design'. A WOLFSSL_CTX can be shared once it is fully configured, but one WOLFSSL object must not be read and written from two threads at once. Refcounts use C11/GCC atomics, and the server session-ID cache is a process-global array under a single rwlock by default. SINGLE_THREADED builds remove locking.",
+    "drop_in_for_baseline": "partial — source-level only: OpenSSL-named macros in wolfssl/openssl/*.h map to wolfSSL_* when built with --enable-opensslextra/--enable-opensslall. Apps must be recompiled against wolfSSL headers, not every API or behavior matches, and a client verifies the server by default, unlike OpenSSL."
+  },
+  "gotchas": [
+    "Speed depends on configure flags. The fixed-size SP assembly and the ARMv8/Intel assembly are off by default in a plain ./configure (--enable-sp, --enable-armasm and --enable-intelasm all default to disabled). You enable them with --enable-sp --enable-sp-asm, --enable-armasm/--enable-intelasm, or --enable-all-asm; configure.ac turns all-asm on automatically only under --enable-all/all-crypto on 64-bit GNU C. HAProxy did not publish the flags it used.",
+    "The ABI depends on the build configuration. configure generates wolfssl/options.h, which you must include before any other wolfSSL header (or define WOLFSSL_USE_OPTIONS_H). Struct layouts vary with options and between releases (5.9.4 changed OcspRequest, so code that embeds it must be rebuilt).",
+    "Unlike OpenSSL, a client verifies the server by default: without loaded CAs, connect fails with -188 (README Note 2). Static-key RSA/DH/PSK cipher suites are disabled unless you enable them with WOLFSSL_STATIC_* defines.",
+    "The benchmark only measured ticket resumption. Session-ID resumption goes through the process-global SessionCache under one rwlock unless ENABLE_SESSION_CACHE_ROW_LOCK is defined (ssl_sess.c). Issue #10123, still open, reports an ASAN use-after-free when HAProxy's vtest suite runs against wolfSSL master."
+  ],
+  "pick_this_over_siblings_when": "Pick wolfSSL over AWS-LC when you need a small, embeddable or FIPS 140-3 stack across many CPUs and RTOSes, a vendor support contract, or good multi-core scaling from a default build (the AWS-LC versions tested needed CMAKE_C_STANDARD=11 to avoid lock collapse, since fixed upstream); pick AWS-LC for the highest Graviton numbers and an API descended from BoringSSL/OpenSSL. Tempesta FW is a complete web accelerator and DDoS-protection proxy rather than a library, so wolfSSL is the choice when you link TLS into your own server.",
+  "verified_claims_summary": "HAProxy Technologies ran HAProxy 3.1-dev1 on a 64-core Graviton4 (AWS r8g.16xlarge, gcc 11.4, mid-2024) with wolfSSL 5.7.0 and with OpenSSL 1.1.1w, 3.0.x and 3.1-3.4-dev. At 64 threads wolfSSL handled 59.7k full RSA handshakes/s vs 48.3k for 1.1.1w, ~43k for 3.1+ and ~21k for 3.0.x, and ~150k end-to-end ticket resumptions/s vs 17.8k (1.1.1w with pthread locks), 23-28k (3.1+) and 1.6-3.7k (3.0.x). It was second to AWS-LC in both tests, and neither wolfSSL's build flags nor the test harness were published.",
+  "status_note": "Actively maintained by wolfSSL Inc. (5.9.4 released and last commit 2026-09-25) under GPL-3.0 or a commercial license. It is production-usable, but you build it yourself with the right configure flags and must keep up with frequent security releases.",
+  "sources_read": [
+    "https://github.com/wolfSSL/wolfssl",
+    "https://github.com/wolfSSL/wolfssl/blob/master/README.md",
+    "https://www.haproxy.com/blog/state-of-ssl-stacks",
+    "https://github.com/wolfSSL/wolfssl/blob/master/configure.ac",
+    "https://github.com/wolfSSL/wolfssl/blob/master/INSTALL",
+    "https://github.com/wolfSSL/wolfssl/blob/master/LICENSING",
+    "https://github.com/wolfSSL/wolfssl/blob/master/CMakeLists.txt",
+    "https://github.com/wolfSSL/wolfssl/blob/master/src/ssl_sess.c",
+    "https://github.com/wolfSSL/wolfssl/blob/master/wolfssl/internal.h",
+    "https://github.com/wolfSSL/wolfssl/blob/master/wolfssl/wolfcrypt/wc_port.h",
+    "https://github.com/wolfSSL/wolfssl/blob/master/wolfssl/wolfcrypt/settings.h",
+    "https://github.com/wolfSSL/wolfssl/blob/master/wolfssl/wolfcrypt/memory.h",
+    "https://github.com/wolfSSL/wolfssl/blob/master/wolfssl/openssl/ssl.h",
+    "https://raw.githubusercontent.com/wolfSSL/wolfssl/master/wolfcrypt/src/sp_arm64.c",
+    "https://www.wolfssl.com/documentation/manuals/wolfssl/chapter09.html",
+    "https://github.com/wolfSSL/wolfssl/issues/6834",
+    "https://github.com/wolfSSL/wolfssl/issues/10123",
+    "https://github.com/wolfSSL/wolfssl/issues/10796",
+    "https://github.com/wolfSSL/wolfssl/issues?q=label%3Abug",
+    "https://github.com/tempesta-tech/tempesta",
+    "https://github.com/aws/aws-lc"
+  ],
+  "confidence": 0.8
+}
