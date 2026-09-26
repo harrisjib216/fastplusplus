@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/benoitc/gunicorn_h1c",
+  "one_liner": "CPython C extension over vendored picohttpparser that parses HTTP/1.1 requests for Gunicorn; claims ~1.1-2.1x httptools throughput.",
+  "what_it_does": "Gives Python code HTTP/1.1 request, response and header parsing backed by picohttpparser, plus helpers that build a WSGI environ or ASGI scope directly from raw bytes. It exposes three interfaces: dict-returning parse_request, a lazy HttpRequest object from parse_request_fast (and an offsets-only parse_request_raw), and H1CProtocol, a callback parser with an httptools-like on_url/on_header/on_headers_complete/on_body/on_message_complete shape that also handles Content-Length and chunked bodies. It enforces Gunicorn's request limits and raises Gunicorn-style exceptions (LimitRequestLine, InvalidHeader, and so on). Gunicorn 25.0.0+ uses it automatically when installed (http_parser='auto', or 'fast' to require it).",
+  "how_it_is_fast": "The scanning is picohttpparser's: a stateless parser that finds token and field-value boundaries with SSE4.2 PCMPESTRI range matching (_mm_cmpestri) when built with -msse4.2, and an 8-byte-unrolled scalar loop otherwise. The wrapper's own speed comes from not building Python objects it does not need: parse_request_fast keeps pointers into the caller's buffer and creates method/path/header bytes only on first access, pulls Content-Length, chunked and Connection out in C during the parse, and H1CProtocol reuses one growable C buffer across keep-alive requests via reset(). There is no NEON code despite the README: on arm64 (including the Apple M4 Pro used for the numbers) the scalar path runs.",
+  "when_to_use": [
+    "You run Gunicorn 25+ (WSGI or ASGI workers) and want the faster parser: pip install gunicorn[fast] and it is picked up by http_parser='auto'.",
+    "A Python asyncio server whose data_received() currently feeds httptools, and you want callback parsing plus Gunicorn's limits and RFC 9110/9112 framing checks (duplicate Content-Length, CL+TE, bare CR in chunk extensions, duplicate Host) in C.",
+    "Header-heavy request handling where most requests only need method, path and a few framing headers, so parse_request_fast's lazy object creation saves allocations.",
+    "Code that needs a WSGI environ or ASGI scope built straight from a byte buffer without a Python-level header loop."
+  ],
+  "when_not_to_use": [
+    "You need a verified speedup over httptools/llhttp: the ~2.2M req/s httptools row and the ~150K Pure Python row have no script in the repo, request shapes for most rows are not stated, and the only benchmark (benchmarks/bench_protocol.py) compares this library's own two APIs. Gunicorn's benchmarks/http_parser_benchmark.py also omits httptools.",
+    "Free-threaded CPython (3.13t/3.14t): the modules do not declare Py_mod_gil, so importing them re-enables the GIL; issue #16 reports this erases the gthread gain, and PR #18 adding support is still open.",
+    "Platforms without a C toolchain: PyPI has one wheel (cp314 macOS arm64); everything else, including Linux x86-64, builds from the sdist.",
+    "You need httptools' full surface: there is no callback response parser (parse_response returns a dict, no body decoding), no on_chunk_header/on_chunk_complete/on_status callbacks, and no parse_url.",
+    "Maturity-sensitive deployments: first release March 2026, Development Status 4 - Beta, and 0.6.x releases in 2026 still fixed framing bugs (e.g. 0.6.9: bodies of any request with an Upgrade header were silently dropped on Gunicorn's ASGI worker)."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none at runtime (vendored picohttpparser); C compiler and setuptools>=61 to build from sdist",
+    "min_toolchain": "Python 3.9+ (CI tests 3.13 and 3.14 only); any C compiler setuptools can drive, built with -O3 (plus -msse4.2 on x86)",
+    "platforms": "Linux and macOS in CI; SIMD only on x86 built with SSE4.2, scalar picohttpparser path elsewhere (including arm64); Windows not tested",
+    "thread_safety": "Not documented; parser objects hold mutable state with no locking and rely on the GIL (free-threading support pending in PR #18).",
+    "drop_in_for_baseline": "partial — H1CProtocol reuses httptools' callback names, but callbacks are constructor kwargs rather than a protocol object, the method is feed() not feed_data(), method/path/headers are properties, on_headers_complete may return True to skip the body, upgrades are reported via should_upgrade/remaining() instead of an HttpParserUpgrade exception, and errors are gunicorn_h1c exceptions; requests only"
+  },
+  "gotchas": [
+    "x86 builds use -msse4.2 unconditionally, so a binary built on x86 needs an SSE4.2 CPU; on ARM the README's NEON claim is false and parsing is scalar.",
+    "parse_request_raw returns offsets only and skips every limit, RFC and framing check the other entry points run; do not feed it untrusted input without your own validation.",
+    "HttpRequest from parse_request_fast holds a buffer export on your input and embeds a 256-entry phr_header array (about 8 KB per object on 64-bit); keeping it alive pins a bytearray against resizing.",
+    "While in the header state, H1CProtocol buffers everything fed until the header block is complete; the request-line limit is only checked once a CRLF appears and field limits only after a full parse, so the caller must bound bytes per request. After completion, bytes are kept for remaining() up to limit_remaining (64 KB) and dropped by reset() unless you read them first (pipelining)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over zttp (the other Python-level httptools challenger in the catalog, which publishes a 14-workload comparison) when you are on Gunicorn or need Gunicorn-compatible limits, exceptions and WSGI/ASGI builders; pick zttp when you want a documented, reproducible margin over httptools. The C-level picohttpparser variants (vkrasnov AVX2 fork, httparse, hparse) are faster parsing cores but are not Python bindings.",
+  "verified_claims_summary": "The README reports single-thread Python-loop throughput on an Apple M4 Pro: parse_request_fast ~2.5M req/s and a reused H1CProtocol on a simple GET ~4.7M req/s (209 ns/op), against httptools (llhttp) ~2.2M and a pure-Python parser ~150K, i.e. ~1.14x and ~2.1x httptools. Compiler, Python version and the httptools harness are not stated, the CHANGELOG's own note that reused H1CProtocol is only 7% faster than the pull API suggests the table rows use different requests, and on this ARM machine picohttpparser runs its scalar path.",
+  "status_note": "Active (v0.6.9, last commit 2026-08-23), MIT-licensed including the vendored picohttpparser, and shipped as Gunicorn's optional fast parser (~36.6K PyPI downloads/month) despite only 10 GitHub stars.",
+  "sources_read": [
+    "https://github.com/benoitc/gunicorn_h1c",
+    "https://github.com/benoitc/gunicorn_h1c#performance",
+    "https://github.com/benoitc/gunicorn_h1c/blob/main/README.md",
+    "https://github.com/benoitc/gunicorn_h1c/blob/main/setup.py",
+    "https://github.com/benoitc/gunicorn_h1c/blob/main/pyproject.toml",
+    "https://github.com/benoitc/gunicorn_h1c/blob/main/MANIFEST.in",
+    "https://github.com/benoitc/gunicorn_h1c/blob/main/LICENSE",
+    "https://github.com/benoitc/gunicorn_h1c/blob/main/CHANGELOG.md",
+    "https://github.com/benoitc/gunicorn_h1c/blob/main/.github/workflows/ci.yml",
+    "https://github.com/benoitc/gunicorn_h1c/blob/main/benchmarks/bench_protocol.py",
+    "https://github.com/benoitc/gunicorn_h1c/blob/main/src/gunicorn_h1c/__init__.py",
+    "https://github.com/benoitc/gunicorn_h1c/blob/main/src/gunicorn_h1c/pico_parser_fast.c",
+    "https://github.com/benoitc/gunicorn_h1c/blob/main/src/gunicorn_h1c/pico_parser_module.c",
+    "https://github.com/benoitc/gunicorn_h1c/blob/main/src/gunicorn_h1c/pico_protocol.c",
+    "https://github.com/benoitc/gunicorn_h1c/blob/main/src/gunicorn_h1c/pico_utils.h",
+    "https://github.com/benoitc/gunicorn_h1c/blob/main/src/gunicorn_h1c/picohttpparser/picohttpparser.c",
+    "https://github.com/benoitc/gunicorn_h1c/blob/main/src/gunicorn_h1c/picohttpparser/picohttpparser.h",
+    "https://github.com/benoitc/gunicorn_h1c/issues",
+    "https://github.com/benoitc/gunicorn_h1c/pulls",
+    "https://github.com/benoitc/gunicorn_h1c/issues/1",
+    "https://github.com/benoitc/gunicorn_h1c/issues/10",
+    "https://github.com/benoitc/gunicorn_h1c/issues/16",
+    "https://github.com/benoitc/gunicorn_h1c/pull/18",
+    "https://github.com/benoitc/gunicorn/blob/HEAD/benchmarks/http_parser_benchmark.py",
+    "https://github.com/benoitc/gunicorn/blob/HEAD/docs/content/reference/settings.md",
+    "https://github.com/benoitc/gunicorn/blob/HEAD/docs/content/2026-news.md",
+    "https://github.com/MagicStack/httptools/blob/master/README.md",
+    "https://pypi.org/pypi/gunicorn_h1c/json",
+    "https://pypistats.org/api/packages/gunicorn-h1c/recent",
+    "https://hn.algolia.com/api/v1/search?query=gunicorn_h1c&tags=(story,comment)"
+  ],
+  "confidence": 0.75
+}
