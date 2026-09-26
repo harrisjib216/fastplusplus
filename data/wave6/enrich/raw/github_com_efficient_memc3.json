@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/efficient/memc3",
+  "one_liner": "NSDI'13 research fork of Memcached 1.4.13: optimistic cuckoo hashing plus CLOCK eviction; ~3x read-heavy throughput, incomplete protocol.",
+  "what_it_does": "MemC3 is a modified Memcached 1.4.13 server (binary `memc3`) that speaks the memcached protocol, so a libmemcached client can talk to it unchanged. It swaps Memcached's chained hash index for a 4-way set-associative cuckoo table that holds a 1-byte tag and an item pointer per slot, and swaps the per-slab doubly-linked LRU for a 1-bit-per-item CLOCK. It is a prototype, and the paper's own footnote says it lacks the full memcached API. In the code, incr/decr are no-ops that return OK, store_item ignores the command type so add/replace/cas/append/prepend all behave as set, and the stats-dump and flush-expired functions are empty.",
+  "how_it_is_fast": "The index uses optimistic concurrent cuckoo hashing, a form of partial-key cuckoo hashing: each key has two 4-slot buckets, the alternate bucket is b XOR hash(tag) so moving an entry never requires reading its key, and lookups compare 1-byte tags before following a pointer (about 2 cacheline reads per lookup). Readers take no locks; they read one of 8192 striped version counters before and after scanning the buckets and retry if it changed. A writer first finds the whole cuckoo path and then moves keys backward along it, so no key is ever missing from the table mid-insert. CLOCK only sets a recency bit on a hit instead of relinking an LRU list, which removes the LRU mutex, the two LRU pointers and the 2-byte refcount from each item; integer-cast key comparison and optional 2MB hugepages add smaller gains.",
+  "when_to_use": [
+    "Studying or re-implementing a read-mostly (90%+ GET), many-threaded cache index: it is a compact working reference for optimistic cuckoo hashing and CLOCK wired into a real memcached-shaped server.",
+    "Reproducing the NSDI'13 numbers or using MemC3 as a historical baseline in a paper. The repo ships the YCSB trace settings, a trace generator and a libmemcached multi-get bench client.",
+    "Controlled experiments with tiny, fixed-size objects (the paper used 16B keys and 32B values), where per-item header overhead dominates and roughly 40% more items per GB of item memory is the point.",
+    "Pure GET/SET traffic on Linux x86-64 hardware with more than 6 cores, when you don't need delete, CAS, incr/decr or add/replace semantics."
+  ],
+  "when_not_to_use": [
+    "Any production cache. Memcached's maintainer showed (2020 review, with a repro script) that MemC3 can return wrong or corrupt data. Refcounts were removed, yet GET responses are still sent zero-copy from slab memory, so a concurrent overwrite can change a value while it is being sent.",
+    "Workloads that need delete, CAS/gets, incr/decr, add/replace/append/prepend or slab rebalancing. These are stubbed, broken (the review reports that delete leaks the item's memory) or removed outright.",
+    "Write-heavy or miss-heavy caches, because inserts and evictions are single-writer. The paper's own 1GB cache with ~15% misses peaks at 6 MOPS at about 6 threads and falls off after that. With 10% inserts the hash table peaks at 20 MOPS at 10 threads.",
+    "Caches that are small relative to the working set. Table 3 shows LRU beating CLOCK on miss ratio at 256MB and below (e.g. 64MB: cuckoo+LRU 35.87% vs cuckoo+CLOCK 36.46%).",
+    "Growing datasets, or non-Linux / non-x86 / little-core hosts. The cuckoo index never resizes, worker threads are hard-pinned to CPU cores 6+i, x86 intrinsic headers are included, and key comparison assumes little-endian."
+  ],
+  "integration": {
+    "form": "source-drop — an autotools build of a standalone server binary (memc3), not a library. The cuckoo table (assoc_cuckoo.c) is tied to memcached's item and slab code.",
+    "dependencies": "libevent for the server. The bench tools also need libmemcached, YCSB (to pre-generate traces), and OpenSSL/zlib for the trace generator.",
+    "min_toolchain": "C99 (AC_PROG_CC_C99) with GCC __sync builtins and autoconf/automake. Under GCC, configure adds -Wall -Werror -pedantic, and GCC 10+ needs -fcommon because memcached.h defines globals without extern. The last known-good compiler is not documented.",
+    "platforms": "Linux x86-64 in practice: the code includes xmmintrin.h/immintrin.h, uses pthread_attr_setaffinity_np/sched_getcpu, pins worker i to core 6+i, and has a little-endian-only integer key compare. Hugepage support is Linux-only (SHM_HUGETLB).",
+    "thread_safety": "Designed as multi-reader/single-writer: lookups are lock-free and retry on a version change, while inserts and evictions are meant to be serialized (paper, Algorithm 1). In the released code, item_lock() compiles to a no-op in cuckoo builds, and the SET path (store_item -> do_item_link_nolock -> assoc2_insert) holds no lock, even though assoc2_insert is commented 'need to be protected by cache_lock' and uses global cuckoo-path scratch arrays. So concurrent writers look unserialized, and value bytes are not protected after the lookup.",
+    "drop_in_for_baseline": "partial — it speaks the memcached protocol, so plain GET/SET clients work unchanged, but delete, CAS, incr/decr, add/replace semantics, slab rebalancing and several stats commands are missing or broken, and the index has a fixed size."
+  },
+  "gotchas": [
+    "The index is allocated at full size at startup. The default hashpower of 25 means 2^25 packed 40-byte buckets (~1.25 GiB), whatever -m is set to. There is no expansion: when a 500-displacement cuckoo search fails, assoc2_insert prints 'hash table is full ... need to increase hashpower' and do_item_link_nolock hits assert(false). Size the table up front with -o hashpower=N.",
+    "The lookup's version check covers only the index read. GET builds iovecs that point into slab memory, and the refcounts are commented out. The memcached.org repro shows a 200KB value turning from '1's into '2's partway through a large multiget.",
+    "Configuration is compile-time #defines in memc3_config.h: cuckoo vs chaining, CLOCK vs LRU, lock mode, hugepages. The shipped config leaves hugepages off, although the paper's full-system run used MemC3 'with all optimizations enabled'.",
+    "It may not start or build as-is. Creating worker thread i fails on hosts without a core 6+i (the memcached.org reviewers had to comment out the affinity line). Globals such as keyver_array and hashpower are defined in a header, which breaks linking under GCC 10's default -fno-common."
+  ],
+  "pick_this_over_siblings_when": "Pick MemC3 only to study or reproduce the optimistic-cuckoo-plus-CLOCK design inside a memcached-shaped server. For a running cache, Pelikan/Segcache (maintained, about 8x Memcached at 24 threads per NSDI'21) or current Memcached is the safer choice, and MICA (same efficient/ GitHub org) goes much further on tiny items (65.6-76.9 Mops) with a different design. If you only want the concurrent cuckoo table, the README points to its maintained successor, libcuckoo.",
+  "verified_claims_summary": "The server was a 2x6-core Xeon L5640 with 1GB of item memory. 50 client machines on 10GbE replayed a pre-generated YCSB Zipf trace (95% GET / 5% SET) using 100-key libmemcached multi-gets. MemC3 peaked at 4.4 MOPS vs 1.5 MOPS for stock Memcached 1.4.13, almost 3x. Local microbenchmarks showed cuckoo+CLOCK holding ~40% more 16B/32B items than chaining+LRU and ~5M lookups/s per thread. The server compiler and flags are not stated. The baseline predates Memcached 1.4.15 (Sept 2012), which already reworked read scalability, and Memcached's maintainer argues the stock-Memcached number may have been handicapped by benchmark setup.",
+  "status_note": "Abandoned: the last commit was 2014-06-28, it sits on a 2012 Memcached base, and an issue from 2021 is still unanswered. It is BSD-3-Clause and readable as a reference but unsafe to deploy, and its authors point to libcuckoo as the maintained re-engineering of its hash table.",
+  "sources_read": [
+    "https://github.com/efficient/memc3",
+    "https://github.com/efficient/memc3/blob/master/README.md",
+    "https://github.com/efficient/memc3/blob/master/memc3_config.h",
+    "https://github.com/efficient/memc3/blob/master/assoc_cuckoo.c",
+    "https://github.com/efficient/memc3/blob/master/assoc_cuckoo.h",
+    "https://github.com/efficient/memc3/blob/master/memcached.h",
+    "https://github.com/efficient/memc3/blob/master/memcached.c",
+    "https://github.com/efficient/memc3/blob/master/items.c",
+    "https://github.com/efficient/memc3/blob/master/thread.c",
+    "https://github.com/efficient/memc3/blob/master/slabs.c",
+    "https://github.com/efficient/memc3/blob/master/memc3_util.h",
+    "https://github.com/efficient/memc3/blob/master/memc3_util.c",
+    "https://github.com/efficient/memc3/blob/master/configure.ac",
+    "https://github.com/efficient/memc3/blob/master/Makefile.am",
+    "https://github.com/efficient/memc3/blob/master/bench/Makefile",
+    "https://github.com/efficient/memc3/commits/master",
+    "https://github.com/efficient/memc3/issues/2",
+    "https://github.com/efficient/memc3/issues/3",
+    "https://www.usenix.org/system/files/conference/nsdi13/nsdi13-final197.pdf",
+    "https://memcached.org/blog/paper-review-memc3/",
+    "https://github.com/memcached/memcached/wiki/ReleaseNotes1415",
+    "https://github.com/efficient/libcuckoo",
+    "https://gcc.gnu.org/gcc-10/porting_to.html",
+    "https://hn.algolia.com/api/v1/search?query=MemC3&tags=story"
+  ],
+  "confidence": 0.85
+}
