@@ -49,6 +49,9 @@ def short_name(name):
 
 
 def entry_key(e):
+    # an explicit paper: id keeps separate algorithms that share one repo (e.g. SIEVE and S3-FIFO in libCacheSim)
+    if str(e.get("id", "")).startswith("paper:"):
+        return e["id"]
     return canonical(e.get("repo_url")) or "paper:" + re.sub(r"[^a-z0-9]+", "-", e["name"].lower()).strip("-")
 
 
