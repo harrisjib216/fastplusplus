@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/chriskohlhoff/asio",
+  "one_liner": "Opt-in io_uring backend inside Asio/Boost.Asio that replaces the epoll reactor on Linux 5.10+ without API changes.",
+  "what_it_does": "On Linux, Asio's io_context normally uses an epoll reactor to handle sockets, descriptors and timers. If you define ASIO_HAS_IO_URING and ASIO_DISABLE_EPOLL at compile time, Asio uses io_uring_service instead, so the same async_read_some/async_write_some/async_accept/timer code runs on io_uring without source changes. If you define only ASIO_HAS_IO_URING, sockets stay on epoll and io_uring handles only asio::stream_file and random_access_file, which need it on Linux.",
+  "how_it_is_fast": "With epoll, each operation takes a readiness notification plus a separate read or write syscall. Here each async operation becomes a completion-based submission queue entry (SQE): IORING_OP_RECVMSG for receives, or READ_FIXED/WRITE_FIXED when buffers are registered. SQEs are batched: a posted submit operation flushes them, or they go out at once when 128 are pending (reactor/io_uring_submit_batch_size), so one io_uring_submit call covers many operations, and the run loop collects completions from the completion queue (CQ). An operation that returns would_block (for example, on an fd with O_NONBLOCK set) falls back to IORING_OP_POLL_ADD plus a non-blocking recv, which works like epoll.",
+  "when_to_use": [
+    "Existing Asio or Boost.Asio code on Linux 5.10+ where you want io_uring from a recompile rather than a rewrite, and to A/B test it against epoll by flipping two macros.",
+    "A single-threaded io_context (concurrency_hint 1) driving many descriptors with small messages; the maintainer's test (300 pipes, 13-byte messages) finished about 1.38x faster in wall-clock time.",
+    "Async file I/O through asio::stream_file / random_access_file, which require io_uring on Linux anyway.",
+    "Workloads that can pre-register buffers (register_buffers), so reads and writes use io_uring's fixed-buffer READ_FIXED/WRITE_FIXED path."
+  ],
+  "when_not_to_use": [
+    "When total CPU matters more than wall-clock time: the maintainer notes the benchmark leaves out io_uring kernel worker-thread CPU, and total CPU use was higher than with epoll.",
+    "On virtualised or WSL2 hosts without measuring first: one user's WSL2 run of the same benchmark had epoll faster (2.97 s vs 3.66 s).",
+    "A multi-threaded io_context on the default single ring: all threads share one SQ/CQ behind a mutex, and the maintainer said the backend works best single-threaded. Per-thread rings (reactor/io_uring_ring_count) only arrived in 1.38.2 (July 2026), and no published benchmark covers them.",
+    "Timer-heavy code with io_uring as the default backend: open issues report a steady_timer firing only once (#1530) and a timer segfault (#1349), and #1235 reports UBSan errors when an io_context used with coroutines is destroyed.",
+    "Non-Linux platforms or kernels older than 5.10: the build hits a compile-time #error below 5.10, and other OSes keep their usual backends."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "liburing (headers at compile time, -luring at link time); Boost only if you use the Boost.Asio variant (BOOST_ASIO_HAS_IO_URING)",
+    "min_toolchain": "C++11 (Asio 1.29+); Linux kernel headers 5.10+; liburing (the io_uring_iowait option needs liburing 2.12+ and kernel 6.15+)",
+    "platforms": "Linux 5.10+ only; the backend has no architecture-specific code",
+    "thread_safety": "Same as Asio in general: an io_context may be run from several threads, and per-I/O-object locking is on by default (reactor/io_locking). By default all threads share one ring guarded by a mutex; from 1.38.2, reactor/io_uring_ring_count assigns each thread one of N rings, round-robin.",
+    "drop_in_for_baseline": "partial — same Asio API and source, but the backend is chosen per build by macros (ASIO_HAS_IO_URING + ASIO_DISABLE_EPOLL), applies to the whole program, and the code has no runtime fallback to epoll"
+  },
+  "gotchas": [
+    "Define ASIO_HAS_IO_URING the same way in every translation unit: it changes the recycling allocator's chunk_size (8 vs 4), and open issue #1635 reports a heap buffer overflow when units disagree. ASIO_ENABLE_VERSION_NAMESPACE puts the io_uring setting into the inline namespace name, so mismatched units do not share the same symbols.",
+    "Per the docs, ASIO_DISABLE_EPOLL on its own forces select. Only together with ASIO_HAS_IO_URING does it make io_uring the default (ASIO_HAS_IO_URING_AS_DEFAULT), and ASIO_HAS_IO_URING alone leaves sockets on epoll.",
+    "Each ring defaults to 16384 entries (reactor/io_uring_ring_size), which locks memory per ring; lower it where RLIMIT_MEMLOCK is small. If io_uring_queue_init fails, the service throws instead of falling back to epoll.",
+    "By default a thread waiting on the ring counts as iowait whenever SQEs are pending, including socket polls and timers, which inflates iowait metrics. Set reactor/io_uring_iowait=false (needs liburing 2.12+ and kernel 6.15+)."
+  ],
+  "pick_this_over_siblings_when": "Pick it when you already have Asio or Boost.Asio code and want io_uring without a rewrite. For new io_uring-first code, uring_exec reports 1.27x-3.46x the ping-pong throughput of Asio's io_uring backend, and Condy's recv benchmark only measured Asio's epoll path (1588 MB/s vs Condy's 2110 MB/s).",
+  "verified_claims_summary": "In a 2021 comment on issue #401, the maintainer ran a single-threaded io_context over 100 rings of 3 pipes, passing a 13-byte message until each ring reached 10,000 iterations: 1.602 s wall-clock with epoll vs 1.158 s with the pre-release io_uring backend (about 1.38x), on Linux 5.10 with CPU, compiler and flags not stated. The io_uring figure leaves out kernel worker-thread CPU, and a 2022 WSL2 rerun (kernel 5.10.102.1, Boost 1.79) found epoll faster.",
+  "status_note": "Actively maintained and BSL-1.0 licensed: the io_uring backend has shipped opt-in since Asio 1.21.0, 1.38.2 (July 2026) added multi-ring and batching settings, and one user reports four years of production use.",
+  "sources_read": [
+    "https://github.com/chriskohlhoff/asio",
+    "https://github.com/chriskohlhoff/asio/blob/master/README",
+    "https://github.com/chriskohlhoff/asio/issues/401",
+    "https://github.com/chriskohlhoff/asio/blob/master/src/doc/overview/implementation.qbk",
+    "https://github.com/chriskohlhoff/asio/blob/master/src/doc/overview/configuration.qbk",
+    "https://github.com/chriskohlhoff/asio/blob/master/src/doc/overview/files.qbk",
+    "https://github.com/chriskohlhoff/asio/blob/master/src/doc/history.qbk",
+    "https://github.com/chriskohlhoff/asio/blob/master/src/doc/using.qbk",
+    "https://github.com/chriskohlhoff/asio/blob/master/include/asio/detail/config.hpp",
+    "https://github.com/chriskohlhoff/asio/blob/master/include/asio/detail/io_uring_service.hpp",
+    "https://github.com/chriskohlhoff/asio/blob/master/include/asio/detail/impl/io_uring_service.ipp",
+    "https://github.com/chriskohlhoff/asio/blob/master/include/asio/detail/io_uring_socket_recv_op.hpp",
+    "https://github.com/chriskohlhoff/asio/blob/master/include/asio/detail/thread_info_base.hpp",
+    "https://github.com/chriskohlhoff/asio/issues/1635",
+    "https://github.com/chriskohlhoff/asio/issues/1530",
+    "https://github.com/chriskohlhoff/asio/issues/1349",
+    "https://github.com/chriskohlhoff/asio/issues/1235",
+    "https://github.com/chriskohlhoff/asio/issues/1633",
+    "https://github.com/chriskohlhoff/asio/issues/1744",
+    "https://github.com/chriskohlhoff/asio/issues/1754",
+    "https://github.com/chriskohlhoff/asio/issues/965",
+    "https://github.com/Caturra000/uring_exec",
+    "https://github.com/condy-cpp/condy/blob/master/docs/bench.md"
+  ],
+  "confidence": 0.55
+}

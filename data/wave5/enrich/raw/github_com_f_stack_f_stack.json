@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/f-stack/f-stack",
+  "one_liner": "DPDK kernel-bypass framework with a ported FreeBSD TCP/IP stack and epoll/kqueue-style API; beats kernel-stack epoll Nginx on RPS/CPS.",
+  "what_it_does": "F-Stack takes the NIC away from Linux with DPDK and runs a user-space FreeBSD TCP/IP stack inside each worker process, so socket I/O never enters the kernel. Applications call ff_socket/ff_accept/ff_read/ff_write plus ff_kqueue/ff_kevent or ff_epoll_create/ff_epoll_ctl/ff_epoll_wait from a callback passed to ff_run(), which F-Stack invokes on every poll iteration. It is not a drop-in: you port code to ff_* calls, or use the bundled patched Nginx 1.28.0 and Redis 6.2.6, the micro-thread (coroutine) framework, or the LD_PRELOAD adapter libff_syscall.so for unmodified binaries.",
+  "how_it_is_fast": "Kernel bypass: DPDK poll-mode drivers pull packets straight from NIC rings into hugepage mbufs on a busy-polling core, removing interrupts, syscalls, kernel copies and scheduler wakeups. Each lcore runs its own process (or thread with thread_mode=1) holding its own stack instance and RSS queue, so nothing is shared, and the port strips the FreeBSD stack's locks, kernel threads and scheduler. TX is batched (pkt_tx_delay holds up to 100 us while fewer than 32 packets are queued), and optional zero-copy send/receive (ff_zc_send/ff_zc_recv) skips socket-buffer copies.",
+  "when_to_use": [
+    "Dedicated front-end servers that open and close many short TCP connections (HTTP with Connection: close, L4/L7 proxies, TCP DNS), where kernel accept/teardown and softirq cost is the limit. The README shows ~2.3x CPS over reuseport-tuned kernel Nginx at 16 cores.",
+    "Keep-alive serving of small requests over many connections spread across many cores: ~1.46x RPS over IRQ-affinity-tuned kernel Nginx at 24 cores on a 40GbE XL710.",
+    "You already run Nginx or Redis and can switch to the bundled patched versions (Nginx 1.28.0, Redis 6.2.6) instead of rewriting code.",
+    "You own the hardware: a NIC with a DPDK driver (Intel XL710/82599 and Mellanox ConnectX-5 appear in project reports, virtio in VMs) that you can give up entirely, plus hugepages and spare cores to pin at 100% busy-poll.",
+    "Porting a C epoll/kqueue event loop where each core owning its own connections is a natural fit."
+  ],
+  "when_not_to_use": [
+    "Single-connection or low-concurrency workloads. The maintainer calls a single TCP echo/stream F-Stack's worst case, and users measured it slower than Linux sockets (#774: 672 MB/s vs 1.88 GB/s for one-way 4 KB writes on the same host; #758: 350-400 vs 450-500 Mb/s in VMs).",
+    "Bulk transfer that already saturates the NIC: with a 3.7 KB body both stacks reach ~37 Gbit/s on 40GbE at 16 cores, so there is no gain at line rate.",
+    "Shared or general-purpose hosts, or containers without NIC passthrough. The data NIC disappears from Linux, so kernel tools and firewalls no longer see it, and without a separate management port even SSH needs the KNI/virtio exception path.",
+    "Low-rate, latency-sensitive RPC on default settings: pkt_tx_delay=100 us and delayed ACK add latency to each round trip, and idle_sleep=0 burns a full core per lcore even when idle.",
+    "macOS or Windows, or teams that cannot run as root, disable ASLR (required for multi-process mode) and operate DPDK in production."
+  ],
+  "integration": {
+    "form": "static lib (libfstack.a + ff_*.h) plus bundled patched Nginx/Redis; optional shared lib libff_syscall.so for LD_PRELOAD",
+    "dependencies": "Bundled DPDK (24.11.6 on the dev branch), libnuma, OpenSSL, pkg-config >= 0.28, meson/ninja and python3 pyelftools to build DPDK, igb_uio or vfio-pci driver, 2 MB hugepages, NIC with a DPDK poll-mode driver",
+    "min_toolchain": "C built with GCC and GNU make (gmake on FreeBSD). Minimum GCC not documented: release notes fix builds on GCC 11.4 (Ubuntu 22.04), 12.2, 13.2 and 14.1, and CI builds in an Ubuntu 24 image.",
+    "platforms": "Linux and FreeBSD hosts; x86-64 primary, arm64 supported via lib/Makefile and freebsd/arm64; data-plane NIC must have a DPDK driver (bare metal, or virtio in VMs)",
+    "thread_safety": "Not shared across instances. The FreeBSD stack's locks were removed, and each F-Stack process (or thread in thread_mode=1) owns its own stack, NIC queue and sockets, so call ff_* only from that instance's ff_run loop. Threads made with ff_pthread_create panic if they touch per-CPU stack state. The LD_PRELOAD PIPELINE mode allows fds to be used across threads, at a performance cost.",
+    "drop_in_for_baseline": "partial — the epoll calls are mirrored as ff_epoll_* (built on kqueue), but you must rename calls, drive them from ff_run() and give the NIC to DPDK. The LD_PRELOAD adapter runs unmodified apps but needs a separate fstack process, and the project says it uses about twice the CPU."
+  },
+  "gotchas": [
+    "ff_epoll_wait ignores its timeout argument and always returns at once, because ff_run is the real loop. EPOLLET is emulated with kqueue EV_CLEAR, which the source says is not exactly the same. Sockets must be set non-blocking with ff_ioctl(FIONBIO), or ff_write can misbehave.",
+    "Overload fails hard: when connections exhaust the mbuf pool, the whole stack becomes unresponsive, ff_* tools included (#1076). An opt-in mbuf_low_watermark SYN-drop exists but is off by default, so cap kern.ipc.maxsockets to what the mbuf pool can hold.",
+    "Defaults are tuned for high concurrency (pkt_tx_delay=100 us, net.inet.tcp.delayed_ack=1); maintainers tell single-connection users to lower both. The patched Nginx requires user root, sendfile off, use kqueue and worker_processes equal to the lcore count, and reload drops service for about 1 s unless graceful_reload=1.",
+    "No ABI stability: a change to struct ff_config's layout made a helloworld built against the old lib segfault, so rebuild apps on every lib update. The docs lag the code: the README says FreeBSD 11.01/13.0, but dev ships a FreeBSD 15.0 stack (__FreeBSD_version 1500068) that measured 2-6% slower than 13.0 on Nginx short connections."
+  ],
+  "pick_this_over_siblings_when": "Pick F-Stack over mTCP, IX or Arrakis when you want an actively maintained kernel-bypass TCP stack that is in production at Tencent Cloud, with the full FreeBSD TCP feature set and ready-made Nginx/Redis ports, rather than a paper-era research system. Pick Seastar instead if you are writing a new C++ service and accept its framework. If you must keep the Linux stack and a shared NIC, io_uring options (Asio's io_uring backend, monoio, Condy) give ~1.2-1.9x with far less operational burden.",
+  "verified_claims_summary": "Tencent's README charts compare Nginx on the Linux 3.10 kernel stack (epoll) with Nginx+F-Stack on a Xeon E5-2670 v3 and an Intel XL710 40GbE NIC (CentOS 7.2; compiler and load generator not stated). F-Stack shows ~12x CPS/RPS over untuned kernel Nginx, but only ~1.46x RPS over IRQ-tuned Nginx (keep-alive, 24 cores) and ~2.3x CPS over reuseport Nginx (16 cores, different environment), and 3.7 KB-body bandwidth ties at 40GbE line rate. Values are read from chart images. A separate Photon wiki test (single thread, 25G NIC, 512 B messages) shows +20% ping-pong and +40% streaming over Linux 6.x kernel sockets.",
+  "status_note": "Actively developed by Tencent Cloud: dev commits run through 2026-09-18, the last tagged release is v1.25 (2025-11), and dev is VERSION 2.0 on FreeBSD 15.0 and DPDK 24.11.6. The core is BSD-2-Clause, but the bundled BSD-4-Clause FreeBSD code and the GPL-2.0 kernel modules and micro-thread framework need license review.",
+  "sources_read": [
+    "https://github.com/F-Stack/f-stack",
+    "https://github.com/F-Stack/f-stack#nginx-testing-result",
+    "https://github.com/F-Stack/f-stack/blob/dev/lib/ff_api.h",
+    "https://github.com/F-Stack/f-stack/blob/dev/lib/ff_epoll.c",
+    "https://github.com/F-Stack/f-stack/blob/dev/lib/Makefile",
+    "https://github.com/F-Stack/f-stack/blob/dev/config.ini",
+    "https://github.com/F-Stack/f-stack/blob/dev/VERSION",
+    "https://github.com/F-Stack/f-stack/blob/dev/dpdk/VERSION",
+    "https://github.com/F-Stack/f-stack/blob/dev/freebsd/sys/param.h",
+    "https://github.com/F-Stack/f-stack/blob/dev/example/main_epoll.c",
+    "https://github.com/F-Stack/f-stack/blob/dev/.github/workflows/ci.yml",
+    "https://github.com/F-Stack/f-stack/blob/dev/doc/F-Stack_API_Reference.md",
+    "https://github.com/F-Stack/f-stack/blob/dev/doc/F-Stack_Development_Guide.md",
+    "https://github.com/F-Stack/f-stack/blob/dev/doc/F-Stack_Build_Guide.md",
+    "https://github.com/F-Stack/f-stack/blob/dev/doc/F-Stack_Roadmap.md",
+    "https://github.com/F-Stack/f-stack/blob/dev/doc/F-Stack_Release_Note.md",
+    "https://github.com/F-Stack/f-stack/blob/dev/doc/F-Stack_Nginx_APP_Guide.md",
+    "https://github.com/F-Stack/f-stack/blob/dev/adapter/README.md",
+    "https://github.com/F-Stack/f-stack/blob/dev/adapter/syscall/README.md",
+    "https://github.com/F-Stack/f-stack/blob/dev/docs/freebsd_13_to_15_upgrade_spec/physical-machine-bench-report.md",
+    "https://github.com/F-Stack/f-stack/blob/dev/docs/kernel_event_support_spec/10-perf-baseline-report.md",
+    "https://github.com/F-Stack/f-stack/releases",
+    "https://github.com/F-Stack/f-stack/issues/758",
+    "https://github.com/F-Stack/f-stack/issues/594",
+    "https://github.com/F-Stack/f-stack/issues/774",
+    "https://github.com/F-Stack/f-stack/issues/1076",
+    "https://github.com/F-Stack/f-stack/issues/545",
+    "https://raw.githubusercontent.com/wiki/F-Stack/f-stack/Home.md",
+    "https://raw.githubusercontent.com/wiki/F-Stack/f-stack/%5BPhoton---F%E2%80%90Stack%5D-Coroutine-made-DPDK-dev-easy.md"
+  ],
+  "confidence": 0.6
+}

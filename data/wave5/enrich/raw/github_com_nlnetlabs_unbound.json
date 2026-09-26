@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/nlnetlabs/unbound",
+  "one_liner": "NLnet Labs' validating, recursive, caching DNS resolver in C; the developer's 2008 changelog puts cache-hit throughput at ~3.4x BIND's.",
+  "what_it_does": "Unbound is a recursive resolver daemon with DNSSEC validation and caching. It fills the same resolver role as BIND's named but uses its own config format (unbound.conf) and is managed with unbound-control. Authoritative serving is limited to local-zone data and auth-zone copies, and there are no zone transfers out and no dynamic updates. It also ships libunbound, a C library with blocking (ub_resolve) and async (ub_resolve_async, ub_process) calls for validated lookups from an application.",
+  "how_it_is_fast": "On a cache hit the worker thread hashes the query, looks it up in the message cache, locks the referenced RRsets and writes the reply straight from stored wire-format data. It does not enter the iterator/validator module stack (daemon/worker.c answer_from_cache). Both caches are 'slabhash' tables: several fixed-size LRU hash tables, each behind a spinlock, with an rwlock per entry. The number of slabs is set near num-threads to cut lock contention, and each RRset is stored as one contiguous block that messages reference by ID. Other per-thread tricks: an alloc cache that avoids the global malloc lock, NSD-style region allocators per query, and up to 100 UDP reads per readiness event (NUM_UDP_PER_SELECT). The built-in 'mini_event' loop is the default because the authors found it faster than libevent.",
+  "when_to_use": [
+    "Recursive or forwarding resolver for a LAN, ISP or host where most queries are cache hits. This is the path the 3.4x figure measures.",
+    "DNSSEC-validating resolution. The DO-bit cache-hit test kept roughly the same lead over BIND (28.7k vs 8.3k qps).",
+    "Multi-core Linux servers. Set num-threads to the core count and so-reuseport to yes; slabs then scale automatically. The docs say a forked (non-threaded) build is another 10-20% faster.",
+    "Applications that need validated DNS lookups in-process via libunbound, synchronous or asynchronous.",
+    "Resolvers that serve or forward DoT, DoH (libnghttp2) or DoQ (libngtcp2). These are optional build features."
+  ],
+  "when_not_to_use": [
+    "You need an authoritative primary: dynamic updates or AXFR/IXFR/NOTIFY serving (doc/FEATURES). Keep BIND or NSD for that role.",
+    "You need current numbers. The only head-to-head is an unreproducible 2008 changelog note, and the repo has no recent BIND comparison.",
+    "Windows at high load. The maintainer recommends Linux or BSD for more capacity (issue #240), and the Windows outgoing-range default is 48.",
+    "Very large RPZ or auth-zone datasets where startup and reload time matter. Issue #998 'Unbound is slow at loading (big) auth/rpz zones' is open.",
+    "Low-volume DoT forwarding with many threads. One user measured 90 min for 11k sequential DoT lookups with 4-8 threads vs 30 min with 1 thread (issue #1452, open)."
+  ],
+  "integration": {
+    "form": "daemon (unbound) plus shared/static library (libunbound); built from source with ./configure && make, widely distro-packaged",
+    "dependencies": "OpenSSL (libnettle allowed only with --with-libunbound-only), libexpat (for unbound-anchor), flex+bison when building from git; optional: libevent, libnghttp2 (DoH), libngtcp2 (DoQ), libhiredis (cachedb), libsodium (DNSCrypt), Python (pythonmod)",
+    "min_toolchain": "Portable C compiler; minimum C standard not documented; autoconf 2.56+ only if regenerating configure",
+    "platforms": "Linux, FreeBSD and other BSDs, macOS, Solaris, Windows (reduced capacity); any CPU architecture (users run it on ARM64)",
+    "thread_safety": "Daemon: num-threads workers share the slabbed message and RRset caches (spinlock per slab, rwlock per entry). libunbound: multiple threads may share one ub_ctx for blocking calls. unbound.h says the application must set up OpenSSL locking callbacks.",
+    "drop_in_for_baseline": "partial — replaces BIND's recursive/caching resolver role only; configuration must be rewritten in unbound.conf syntax, and authoritative features (dynamic update, outbound zone transfer) are not provided"
+  },
+  "gotchas": [
+    "Defaults are conservative: num-threads 1, and msg-cache-size and rrset-cache-size are 4m each. Follow the performance how-to (threads = cores, rrset cache about 2x msg cache, larger so-rcvbuf/so-sndbuf) before judging speed.",
+    "The docs say malloc overhead can push real memory to 2-2.5x the configured cache sizes. In forked mode every process keeps its own cache.",
+    "The default build uses the built-in mini_event loop, which caps outgoing ports (outgoing-range default 960 vs 4096 with --with-libevent). doc/README still says libevent is the default, but configure.ac contradicts it.",
+    "Security churn is heavy: 1.25.2 (2026-07-22) fixed 24 CVEs and 1.26.1 (2026-09-16) fixed 9, including a DNSKEY heap overflow with possible RCE (CVE-2026-81642) and wildcard cache poisoning (CVE-2026-44690). SECURITY.md says fixes land only in the latest release, with no backports."
+  ],
+  "pick_this_over_siblings_when": "Pick Unbound when you need a production-grade, maintained, validating recursive resolver. NailDNS (Nail) is a demo server and Bundy-DNS's 180K qps l1cache is an experimental branch. Hickory DNS is the choice for a Rust/memory-safe stack, but its BIND comparison is only a single-query latency tie, while Unbound's evidence is an old first-party cache-throughput gap.",
+  "verified_claims_summary": "A 22 Feb 2008 developer Changelog entry reports 31,218 qps (Unbound) vs 8,988 qps (BIND) serving www.nlnetlabs.nl from cache, and 28,736 vs 8,269 qps with the DO bit set, about 3.4x. It also reports near parity with NSD on 100 NSEC3 NXDOMAIN queries (36,048 vs 35,183 qps). The BIND version, compiler, flags, CPU and load generator are not stated. An in-tree perf tool (testcode/perf.c) was written the week before, but the entry does not say it was used. The numbers came right after a round of cache-path optimizations and have not been rerun against modern BIND.",
+  "status_note": "Actively maintained by NLnet Labs (1.26.1 released 2026-09-16, commits through 2026-09-22), BSD-3-Clause and packaged by most distros, so use it as a packaged service rather than vendoring it; stay on the latest release because security fixes are not backported.",
+  "sources_read": [
+    "https://github.com/NLnetLabs/unbound",
+    "https://github.com/NLnetLabs/unbound/blob/master/README.md",
+    "https://github.com/NLnetLabs/unbound/blob/master/doc/Changelog",
+    "https://github.com/NLnetLabs/unbound/blob/master/doc/README",
+    "https://github.com/NLnetLabs/unbound/blob/master/doc/FEATURES",
+    "https://github.com/NLnetLabs/unbound/blob/master/doc/unbound.conf.rst",
+    "https://github.com/NLnetLabs/unbound/blob/master/SECURITY.md",
+    "https://github.com/NLnetLabs/unbound/blob/master/configure.ac",
+    "https://github.com/NLnetLabs/unbound/blob/master/dnscrypt/dnscrypt.m4",
+    "https://github.com/NLnetLabs/unbound/blob/master/daemon/worker.c",
+    "https://github.com/NLnetLabs/unbound/blob/master/util/storage/lruhash.h",
+    "https://github.com/NLnetLabs/unbound/blob/master/util/storage/slabhash.h",
+    "https://github.com/NLnetLabs/unbound/blob/master/util/alloc.h",
+    "https://github.com/NLnetLabs/unbound/blob/master/util/regional.h",
+    "https://github.com/NLnetLabs/unbound/blob/master/util/data/packed_rrset.h",
+    "https://github.com/NLnetLabs/unbound/blob/master/util/data/msgreply.h",
+    "https://github.com/NLnetLabs/unbound/blob/master/util/netevent.c",
+    "https://github.com/NLnetLabs/unbound/blob/master/libunbound/unbound.h",
+    "https://github.com/NLnetLabs/unbound/issues/1452",
+    "https://github.com/NLnetLabs/unbound/issues/1113",
+    "https://github.com/NLnetLabs/unbound/issues/240",
+    "https://github.com/NLnetLabs/unbound/issues?q=performance",
+    "https://github.com/NLnetLabs/unbound/issues?q=cpu",
+    "https://github.com/NLnetLabs/unbound/issues?q=memory+leak",
+    "https://github.com/NLnetLabs/unbound/releases",
+    "https://nlnetlabs.nl/projects/unbound/security-advisories/",
+    "https://unbound.docs.nlnetlabs.nl/en/latest/topics/core/performance.html"
+  ],
+  "confidence": 0.8
+}
