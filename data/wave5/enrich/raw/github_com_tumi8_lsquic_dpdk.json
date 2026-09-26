@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/tumi8/lsquic-dpdk",
+  "one_liner": "LSQUIC 4.2 fork with a zero-copy DPDK datapath; 1.3x kernel MsQuic (GSO+GRO) goodput on single-connection bulk downloads.",
+  "what_it_does": "A copy of LiteSpeed's LSQUIC (based on v4.2.0) whose http_server and http_client run QUIC over a DPDK-owned NIC port or SR-IOV virtual function instead of kernel UDP sockets. The datapath builds its own Ethernet/IPv4/IPv6/UDP headers and answers ARP and IPv6 neighbor solicitations itself. The library keeps LSQUIC's callback-driven engine API, with small breaking signature changes. The DPDK code lives in the example-program sources (bin/dpdk.c, bin/sockloop_dpdk.c, bin/prog.c), so you copy it into your application; it is not a drop-in for MsQuic or for existing LSQUIC apps.",
+  "how_it_is_fast": "Kernel bypass with a run-to-completion busy-poll loop on one DPDK lcore: pull up to 32 packets per rte_eth_rx_burst, feed them to lsquic_engine_packet_in, tick the engine, then flush a 32-packet TX buffer, so there are no syscalls or socket copies. LSQUIC's packet-out memory interface (pmi_allocate) is redirected to hand out space inside hugepage mbufs just past the header offset, so packets are encrypted straight into NIC-visible buffers (zero-copy), and coalesced long-header packets share one mbuf. The paper's perf profile shows the packet-I/O share of CPU falling 90% on the server and 84% on the client, which leaves crypto and file I/O as the new bottlenecks. Upstream LSQUIC has no GSO/GRO, so the gain over it (2.98x) is much larger than over MsQuic, which already uses both offloads (1.30x).",
+  "when_to_use": [
+    "Point-to-point bulk transfers (multi-GiB, single connection) between hosts you control, with LSQUIC-DPDK at both ends: the 10.8 Gbit/s result is for a DPDK client talking to a DPDK server.",
+    "You already use LSQUIC and packet I/O limits you: upstream LSQUIC has no GSO/GRO, and this fork measured 2.98x its kernel goodput on the same hardware (10,756 vs 3,605 Mbit/s).",
+    "Linux x86-64 hosts with a DPDK-supported NIC (tested: Intel E810 on the ice PF or an iavf SR-IOV VF), hugepages, and a core you can give over to busy polling. SR-IOV lets the kernel keep the rest of the port and was slightly faster (11,019 Mbit/s).",
+    "Research or benchmarking of kernel-bypass QUIC: the Interop Runner configs, build scripts and raw per-run CSVs are public, so you can reproduce the numbers."
+  ],
+  "when_not_to_use": [
+    "Only one side can run DPDK. An LSQUIC-DPDK client against a kernel LSQUIC server measured 3,991 vs 3,605 Mbit/s (1.11x). Against a kernel MsQuic server it reached 7,370 Mbit/s, below the 8,250 of plain MsQuic on both ends.",
+    "Internet-facing or production servers. The code is pinned to LSQUIC v4.2.0 (Feb 2025), 21 upstream releases behind v4.10.0. It lacks later fixes such as an ls-qpack use-after-free, rejection of conflicting Content-Length headers, and RST_STREAM stream-limit enforcement. It is research code with 0 stars.",
+    "Many concurrent connections or multi-core scaling. The code allows one engine on one worker lcore and one port (dpdk_init exits otherwise), and uses a fixed 256-entry peer table with linear lookup and no eviction. The client opens a single connection.",
+    "Your baseline is MsQuic with GSO+GRO and you cannot spare a NIC port or VF, hugepages, and a core that polls at 100%. The gain is only 1.30x there, and the paper concludes that GSO/GRO can match DPDK with far less intrusion.",
+    "Multi-hop or shared-bottleneck paths. With DPDK, 99% of LSQUIC's packets leave back-to-back, against 50% spaced at least 2.9 µs apart on the kernel path, so expect bursty traffic."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "DPDK (artifact builds commit 1b3bf112; paper uses v24.11) found via pkg-config libdpdk; BoringSSL (artifact pins 0.20250212.0); zlib; CMake. Needs hugepages, root, and a NIC port or SR-IOV VF bound to a DPDK driver. The libevent requirement of upstream's examples is gone.",
+    "min_toolchain": "CMake 3.0+ (cmake_minimum_required 3.0...3.23); a C compiler that accepts -mssse3 (the artifact uses GCC from Debian 12 build-essential, version not stated); meson/ninja to build DPDK.",
+    "platforms": "Linux x86-64 only as shipped (-mssse3 is hard-coded in bin/CMakeLists.txt); tested only on Intel E810 (ice PF, iavf VF) with Debian 12 / Linux 6.1. Upstream LSQUIC's other platforms do not apply to the DPDK binaries.",
+    "thread_safety": "Not thread-safe: one lsquic engine runs on a single DPDK worker lcore. dpdk_init exits if more than one port or worker lcore is configured, and allocate_mbuf uses static global batch state.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "API break against upstream LSQUIC: lsquic_engine_process_conns() and lsquic_engine_earliest_adv_tick() now take an explicit `now` argument, and pmi_allocate gains an is_long_hdr argument. The kernel-socket event loop and the md5/echo/duck/perf examples were removed, so only the DPDK http_client and http_server build.",
+    "IPv4 packets go out with a UDP checksum of 0, and the IP checksum is computed in software. No checksum or segmentation offloads are enabled; only MBUF_FAST_FREE is requested. The IPv6 receive path passes a NULL peer context to lsquic_engine_packet_in, so treat IPv6 as untested.",
+    "The custom TX error callback only prints 'PACKET DROPPED!' and does not free the unsent mbufs. Registering it replaces DPDK's default callback, which frees them, so a TX-queue overflow leaks mbufs from the 16,383-mbuf pool.",
+    "The client does no ARP resolution: pass the server (or gateway) MAC with -J and the client IP with -x (the error message wrongly says -b). The published runs used the hq-interop ALPN, not h3; the README says h3 and hq should perform alike and that the qif ALPN is untested."
+  ],
+  "pick_this_over_siblings_when": "Pick it over quiche-DPDK and picoquic-DPDK when you want the highest measured kernel-bypass goodput. In the same testbed, LSQUIC-DPDK pairs reached 10,756 Mbit/s against 8,347 for the paper's updated picoquic-DPDK and 5,937 for quiche-DPDK, and 11,019 against 9,070 and 6,168 on SR-IOV. Pick upstream LSQUIC or ngtcp2 instead if you cannot dedicate a NIC port or VF, or you need a current, maintained QUIC stack.",
+  "verified_claims_summary": "Two bare-metal hosts (Intel Xeon Gold 6421N, 100 Gbit/s Intel E810, Debian 12, Linux 6.1, DPDK v24.11) each downloaded an 8 GiB file over one connection 50 times, with the same implementation on client and server. LSQUIC-DPDK averaged 10,756 Mbit/s (SD 39), against 8,250 for upstream MsQuic v2.4.8 on kernel UDP with GSO+GRO (1.30x) and 3,605 for upstream LSQUIC (2.98x). On SR-IOV VFs it averaged 11,019 against 8,118 for MsQuic-DPDK (1.36x). LSQUIC-DPDK was a GCC Release build (-O3, compiler version not stated). The kernel baselines came from a private CI with unpublished flags, and the runs used the hq-interop ALPN.",
+  "status_note": "A research artifact for a NOMS 2026 paper: the DPDK work (authored 2023-2025) landed in Feb 2026, the last commit is a README note on 2026-02-11, and no issues have been filed. MIT-licensed, and the DPDK glue (~1,500 lines) is small enough to copy, but it tracks LSQUIC v4.2.0 and has no upstream path.",
+  "sources_read": [
+    "https://github.com/tumi8/lsquic-dpdk",
+    "https://github.com/tumi8/lsquic-dpdk/blob/main/README.md",
+    "https://github.com/tumi8/lsquic-dpdk/blob/main/CMakeLists.txt",
+    "https://github.com/tumi8/lsquic-dpdk/blob/main/bin/CMakeLists.txt",
+    "https://github.com/tumi8/lsquic-dpdk/blob/main/bin/dpdk.c",
+    "https://github.com/tumi8/lsquic-dpdk/blob/main/bin/dpdk.h",
+    "https://github.com/tumi8/lsquic-dpdk/blob/main/bin/sockloop_dpdk.c",
+    "https://github.com/tumi8/lsquic-dpdk/blob/main/bin/socket_loop.h",
+    "https://github.com/tumi8/lsquic-dpdk/blob/main/bin/prog.c",
+    "https://github.com/tumi8/lsquic-dpdk/blob/main/bin/http_server.c",
+    "https://github.com/tumi8/lsquic-dpdk/commits/main",
+    "https://github.com/tumi8/lsquic-dpdk/commit/f2848806",
+    "https://github.com/tumi8/lsquic-dpdk/commit/667560a6",
+    "https://github.com/tumi8/lsquic-dpdk/commit/fd3d8d0c",
+    "https://github.com/tumi8/lsquic-dpdk/commit/83526046",
+    "https://github.com/tumi8/lsquic-dpdk/branches",
+    "https://www.net.in.tum.de/fileadmin/bibtex/publications/papers/spaethj-noms2026.pdf",
+    "https://github.com/tumi8/quic-bypass-paper/blob/main/quic-dpdk-implementations/lsquic-dpdk/build.sh",
+    "https://github.com/tumi8/quic-bypass-paper/blob/main/quic-dpdk-implementations/lsquic-dpdk/run-server.sh",
+    "https://github.com/tumi8/quic-bypass-paper/blob/main/quic-dpdk-implementations/lsquic-dpdk/run-client.sh",
+    "https://github.com/tumi8/quic-bypass-paper/blob/main/quic-dpdk-implementations/lsquic-dpdk/setup-env.sh",
+    "https://github.com/tumi8/quic-bypass-paper/blob/main/quic-dpdk-implementations/lsquic-dpdk/README.md",
+    "https://github.com/tumi8/quic-bypass-paper/blob/main/measurement-data/06-dpdk-integration/processed.csv",
+    "https://github.com/tumi8/quic-bypass-paper/blob/main/measurement-data/01-implementation-matrix/processed.csv",
+    "https://github.com/tumi8/quic-bypass-paper/blob/main/framework/config/bypass-paper/06-dpdk-integration.conf",
+    "https://github.com/tumi8/quic-bypass-paper/blob/main/framework/implementations.json",
+    "https://github.com/litespeedtech/lsquic/releases",
+    "https://github.com/litespeedtech/lsquic/blob/master/CHANGELOG",
+    "https://github.com/litespeedtech/lsquic/security/advisories",
+    "https://github.com/litespeedtech/lsquic/issues?q=CVE",
+    "https://github.com/DPDK/dpdk/blob/v24.11/lib/ethdev/rte_ethdev.h"
+  ],
+  "confidence": 0.8
+}

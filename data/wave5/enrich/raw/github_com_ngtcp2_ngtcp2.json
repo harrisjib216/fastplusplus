@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/ngtcp2/ngtcp2",
+  "one_liner": "Pure-C IETF QUIC transport library (RFC 9000); in one loopback harness, 1.5-2.1x quiche's bulk-transfer throughput.",
+  "what_it_does": "ngtcp2 implements the QUIC transport (RFC 9000, plus DATAGRAM, QUIC v2, compatible version negotiation and QUIC-bit greasing) as a C11 library that does no I/O and reads no clock itself. The application passes received UDP payloads to ngtcp2_conn_read_pkt(), pulls outgoing packets from ngtcp2_conn_writev_stream() or ngtcp2_conn_write_aggregate_pkt(), supplies nanosecond timestamps, and runs timers from ngtcp2_conn_get_expiry2(). TLS is wired in through a separate per-backend crypto helper library whose callbacks go into ngtcp2_callbacks, and HTTP/3 is the separate nghttp3 library. It is not a drop-in for quiche: it has a different, lower-level, callback-driven API, and you write the socket, timer, pacing and connection-ID routing glue yourself.",
+  "how_it_is_fast": "Neither upstream nor the benchmark attributes the gap to a specific mechanism. The source shows copy-avoidance on both sides. In-order stream data goes to the recv_stream_data callback straight from the decrypted packet buffer, and only out-of-order data is copied into a reorder buffer (ngtcp2_rob). Outgoing stream data is borrowed from the application via ngtcp2_vec until acked_stream_data_offset fires, not copied into an internal send buffer. Internally it uses a deterministic paged skip list (ngtcp2_ksl), a Robin Hood open-addressing hash map with Fibonacci hashing (ngtcp2_map), and an object pool on a block allocator (ngtcp2_objalloc) to cut small-object malloc cost. In quicperf, sendmmsg and GSO batching live in the harness's shared C++ path for every library, so the measured gap reflects per-packet library cost, not socket I/O.",
+  "when_to_use": [
+    "Sustained bulk transfer (large downloads or uploads, several streams, or both directions at once): in quicperf it had the best p50 of all libraries on download, bidirectional (20.5 Gbps), multistream download and upload, and flow-control-limited rows.",
+    "C or C++ servers and clients that already own their event loop (epoll, io_uring, libev) and want a transport core with no external library dependencies.",
+    "Projects that must choose their TLS stack: BoringSSL/aws-lc, GnuTLS, wolfSSL, Picotls, LibreSSL, or OpenSSL >= 3.5 (experimental).",
+    "HTTP/3 clients built on nghttp3. curl documents ngtcp2 as its only non-experimental HTTP/3 backend; quiche is marked EXPERIMENTAL there.",
+    "Servers holding many mostly-idle connections: the run's lowest idle-footprint row was ngtcp2 over io_uring at about 76.5 KB per connection."
+  ],
+  "when_not_to_use": [
+    "Connection-setup-heavy workloads: 113 vs 277 conn/s for quiche on fresh connects (0.41x) and 112 vs 301 on resumed connects (0.37x) in the same run.",
+    "Small request/response, stream churn or small-message rate: 51k vs 65k rps for quiche (0.80x). TQUIC (155k) and LSQUIC (119k) are far ahead in the same run.",
+    "High-rate unreliable DATAGRAM traffic: 1.50M vs 5.14M datagrams/s for quiche (0.29x).",
+    "Multipath QUIC: not supported (see open roadmap issue #2318).",
+    "Teams wanting a batteries-included stack: sockets, timers, pacing, CID-to-connection routing and TLS setup are all application code, and HTTP/3 needs a second library (nghttp3)."
+  ],
+  "integration": {
+    "form": "static lib | shared lib",
+    "dependencies": "none for libngtcp2 itself. The crypto helper needs one TLS stack: BoringSSL/aws-lc, GnuTLS >= 3.7.5, wolfSSL >= 5.5.0, Picotls (pinned commit), LibreSSL >= 3.9.2, quictls (deprecated) or OpenSSL >= 3.5.0 (experimental). HTTP/3 needs nghttp3. The examples also need libev.",
+    "min_toolchain": "C11. README lists clang >= 19, gcc >= 15 and MSVC 2022 (1944) as known to work. Build with CMake >= 3.20, or autotools plus pkg-config >= 0.20. Only the examples need C++23.",
+    "platforms": "Upstream CI covers Linux x86-64 and arm64, macOS, Windows x86/x64 (MSVC via vcpkg) and MinGW x86_64/i686 cross builds. No ISA-specific requirement is documented.",
+    "thread_safety": "ngtcp2_conn is not thread-safe (maintainer, issue #1029): drive each connection from one thread or add your own locking. ngtcp2_rand_ctx allows a per-thread or per-connection RNG.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Pacing is the application's job: call ngtcp2_conn_update_pkt_tx_time() after writing (ngtcp2_conn_write_aggregate_pkt() does this for you) and honor ngtcp2_conn_get_expiry2(). quicperf's ngtcp2 adapter never calls it, and its quiche adapter ignores send_info pacing, so the published numbers are unpaced.",
+    "The outgoing UDP payload is 1200 bytes by default and grows only through PMTUD. The benchmark turned PMTUD off and set no_tx_udp_payload_size_shaping=1 with a 1452-byte max_tx_udp_payload_size; stock settings will not match its numbers.",
+    "Send buffers are borrowed: memory passed to ngtcp2_conn_writev_stream() must stay valid until acked_stream_data_offset reports it acknowledged. If the server rejects 0-RTT data, the library does not resend it as 1-RTT; the application must reopen streams and write the data again.",
+    "Two high-severity CVEs were buffer overflows in the qlog code: CVE-2024-52811 (1.9.0, fixed in 1.9.1) and CVE-2026-40170 (<= 1.22.0, fixed in 1.22.1). Use >= 1.22.1 if you enable qlog."
+  ],
+  "pick_this_over_siblings_when": "Pick ngtcp2 over quiche, picoquic, TQUIC and LSQUIC when multi-stream or bidirectional bulk throughput dominates. In the same quicperf run it beat LSQUIC's collapsed bidirectional and multistream rows (20.5 vs 2.1 Gbps bidirectional), though LSQUIC edged it on single-stream upload (33.5 vs 31.0 Gbps) and loss recovery (18.3 vs 17.4 Gbps). Choose TQUIC or LSQUIC for request/message rate, and picoquic or quic-zig for connection-setup rate.",
+  "verified_claims_summary": "The run is victorstewart/quicperf's 2026-06-01 Linux loopback matrix. It used CUBIC for every library, one shared C++ harness with sendmmsg/GSO batching, -O3/native/LTO builds, ngtcp2 1.22.1 on BoringSSL and quiche 0.29.0 with fat LTO; the CPU model is not recorded and the tree was dirty. ngtcp2's p50 bulk throughput was 1.49-2.10x quiche's on the syscall backend (e.g. upload 31.0 vs 14.8 Gbps) and 1.35-1.71x on io_uring. In the same run it was 0.29-0.80x quiche on connect, request/response, stream-churn and DATAGRAM rates.",
+  "status_note": "Actively maintained (push on 2026-09-26, roughly monthly releases up to v1.25.0 on 2026-07-26, one open issue), MIT-licensed, and fuzzed and sanitizer-tested in CI; the benchmarked 1.22.1 is three minor releases behind, but its structs and functions are versioned (e.g. *_versioned entry points) to keep the ABI stable across releases.",
+  "sources_read": [
+    "https://github.com/ngtcp2/ngtcp2",
+    "https://github.com/ngtcp2/ngtcp2/blob/main/README.rst",
+    "https://github.com/ngtcp2/ngtcp2/releases",
+    "https://github.com/ngtcp2/ngtcp2/blob/main/lib/includes/ngtcp2/ngtcp2.h",
+    "https://github.com/ngtcp2/ngtcp2/blob/main/doc/source/programmers-guide.rst",
+    "https://github.com/ngtcp2/ngtcp2/blob/main/lib/ngtcp2_conn.c",
+    "https://github.com/ngtcp2/ngtcp2/blob/main/lib/ngtcp2_ksl.h",
+    "https://github.com/ngtcp2/ngtcp2/blob/main/lib/ngtcp2_objalloc.h",
+    "https://github.com/ngtcp2/ngtcp2/blob/main/lib/ngtcp2_balloc.h",
+    "https://github.com/ngtcp2/ngtcp2/blob/main/lib/ngtcp2_opl.h",
+    "https://github.com/ngtcp2/ngtcp2/blob/main/lib/ngtcp2_map.h",
+    "https://github.com/ngtcp2/ngtcp2/blob/main/lib/ngtcp2_map.c",
+    "https://github.com/ngtcp2/ngtcp2/blob/main/lib/ngtcp2_rob.h",
+    "https://github.com/ngtcp2/ngtcp2/blob/main/configure.ac",
+    "https://github.com/ngtcp2/ngtcp2/blob/main/CMakeLists.txt",
+    "https://github.com/ngtcp2/ngtcp2/blob/main/.github/workflows/build.yml",
+    "https://github.com/ngtcp2/ngtcp2/blob/main/SECURITY.md",
+    "https://github.com/ngtcp2/ngtcp2/security/advisories/GHSA-f523-465f-8c8f",
+    "https://github.com/ngtcp2/ngtcp2/security/advisories/GHSA-4gmv-gf46-r4g5",
+    "https://github.com/ngtcp2/ngtcp2/issues",
+    "https://github.com/ngtcp2/ngtcp2/issues?q=performance",
+    "https://github.com/ngtcp2/ngtcp2/issues/2318",
+    "https://github.com/ngtcp2/ngtcp2/issues/1029",
+    "https://github.com/victorstewart/quicperf",
+    "https://github.com/victorstewart/quicperf/blob/main/README.md",
+    "https://github.com/victorstewart/quicperf/blob/main/docs/latest-results.md",
+    "https://github.com/victorstewart/quicperf/blob/main/docs/methodology.md",
+    "https://github.com/victorstewart/quicperf/blob/main/perf.ngtcp2.h",
+    "https://github.com/victorstewart/quicperf/blob/main/perf.quiche.h",
+    "https://github.com/victorstewart/quicperf/blob/main/perf.cpp",
+    "https://github.com/victorstewart/quicperf/blob/main/perf.benchmark.h",
+    "https://github.com/victorstewart/quicperf/blob/main/perf.networking.h",
+    "https://github.com/curl/curl/blob/master/docs/HTTP3.md"
+  ],
+  "confidence": 0.75
+}
