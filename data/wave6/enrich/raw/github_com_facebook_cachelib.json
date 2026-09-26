@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/facebook/cachelib",
+  "one_liner": "Meta's in-process C++ caching engine with an optional SSD tier; the authors report up to 60% more throughput than Memcached.",
+  "what_it_does": "CacheLib is a library you link into your own process to build a cache. It is not a server. You create a CacheAllocator (for example LruAllocator), split its memory into pools, allocate() an item, write its raw bytes and insertOrReplace() it. find() returns a ref-counted ReadHandle, which works like a shared_ptr and gives zero-copy access to the item's memory. There is no Memcached wire protocol, so replacing a Memcached server means writing the network layer yourself. Optional components add an SSD tier (Navy), warm restarts through shared memory, TTL reaping, pool rebalancing and a shared_ptr-based ObjectCache for C++ objects.",
+  "how_it_is_fast": "The paper credits most of the gain over Memcached to lower lock contention. Each slab class keeps its own LRU, protected by a folly::DistributedMutex. Its lock_combine() does flat combining: the thread holding the lock runs the critical sections that waiting threads have queued. A promotion delay (lruRefreshTime, 60 s by default) moves a hot item to the LRU head at most once per window. An optional tryLockUpdate setting skips the promotion when the lock is busy. The DRAM index is a chained hash table with compressed pointers and lock striping (locksPower). Memory comes from a custom slab allocator with 4 MB slabs and size classes set per workload, and each item carries about 32 B of intrusive metadata (hash-chain hook, LRU hooks, refcount, timestamps).",
+  "when_to_use": [
+    "A many-threaded C++ service (Rust bindings also exist) that needs a large in-process look-aside cache, tens to hundreds of GB, with many cores reading the same hot keys. This is where a Memcached-style global LRU lock becomes the bottleneck. The 60% gain was measured at 32 threads.",
+    "Working sets bigger than DRAM, where an SSD is cheaper capacity. Navy stores objects under 2 KB in a set-associative Small Object Cache and larger objects in a region-based Large Object Cache. Flash admission is probabilistic to limit write wear.",
+    "Services that deploy often and cannot afford a cold cache. Warm restart keeps the DRAM cache in POSIX shared memory across process restarts on the same host.",
+    "Multi-tenant caches that need per-workload memory isolation (pools), automatic slab rebalancing and OOM-aware memory release, rather than one global LRU.",
+    "Evaluating cache hardware or eviction policies against production-like or trace-driven workloads. The CacheBench tool ships in the repo."
+  ],
+  "when_not_to_use": [
+    "You want a networked, protocol-compatible replacement for Memcached or Redis. CacheLib has no server, protocol, sharding or replication.",
+    "You are not on Linux, or you want a light build. getdeps.py builds folly, fbthrift, fizz, wangle, boost and more. The build needs C++20 and libnuma, CI runs only on Ubuntu, and a vcpkg port is Linux-only. folly has no stable API, so the whole stack has to be upgraded at matching versions.",
+    "Your values are pointer-rich or not memcpy-safe, or your code base is C. The core allocator stores flat bytes, and the paper says ad-serving teams (nested data) and RocksDB (C-style code versus RAII handles) could not adopt it. The newer ObjectCache only partly addresses this.",
+    "The cache is small or single-threaded. Pools, allocation classes, hash-table sizing and the rebalancer are overkill there, and there is about 32 B of overhead per item plus the bucket array (256 MB for up to 32M items at the recommended bucketsPower 26).",
+    "Your bottleneck is how well the eviction policy scales. The S3-FIFO and SIEVE sibling entries report prototypes that beat CacheLib's own optimized LRU, S3-FIFO by more than 6x at 16 threads."
+  ],
+  "integration": {
+    "form": "shared lib (CMake, built through getdeps.py; installs libcachelib_allocator.so etc. plus headers; templates instantiated per eviction trait)",
+    "dependencies": "folly, fbthrift, fizz, wangle, fmt, glog, gflags, boost, googletest, zlib, zstd, libnuma, sparse-map, xxHash, magic_enum; liburing optional",
+    "min_toolchain": "C++20 (CMAKE_CXX_STANDARD 20); GCC 10+ or Clang 10+; CMake 3.14+; Python 3.6+ for getdeps.py",
+    "platforms": "Linux only in practice. CI runs Ubuntu on x86-64, and the docs list Ubuntu 18.04-22.04, CentOS 8 and Debian 10/11. macOS and Windows are not supported, and aarch64 is not documented.",
+    "thread_safety": "The cache API is thread-safe (README). A handle keeps its item from being evicted, but it does not synchronize concurrent reads and writes to the item's memory, so the user must add a lock (docs).",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The default hash-table settings are deliberately unoptimized. Call setAccessConfig(expectedItems) or set bucketsPower to about 2x the item count, or find() and insert slow down. This is the FAQ's first answer to 'why is my cache so slow'.",
+    "Warm restart only works if you drain accesses and call shutDown() before the allocator is destroyed. Otherwise the shared-memory segments are deleted. Any RAM or NVM format-version bump drops the cache on upgrade (kCachelibVersion is now 19, but CHANGELOG.md stops at V17).",
+    "With the SSD tier on, find() can return a not-ready handle that blocks when you touch it (use toSemiFuture() to avoid blocking). findToWrite() is always synchronous and invalidates the flash copy. allocate() returns a null handle instead of throwing when it finds no evictable item, for example when items are pinned by outstanding handles.",
+    "Performance depends on configuration and version. The paper notes that dropping the promotion delay from 60 s to 10 s raised the hit ratio but lowered throughput. One user measured 22.2M to 12.7M gets/s between a Dec-2022 commit and v2023.08.21.00 on a 48-thread CacheBench config (issue #257, closed without a public explanation). ThreadSanitizer reports false races because DistributedMutex is not TSAN-annotated (issue #148)."
+  ],
+  "pick_this_over_siblings_when": "Pick CacheLib over Pelikan/Segcache, Dragonfly or Pogocache when the cache lives inside your own C++ service and you need an SSD tier, warm restarts or per-tenant pools. Those siblings are ready-to-run network servers, and Segcache, MemC3 and MICA report much larger multiples over Memcached (close to 8x, almost 3x) for DRAM-only small-object serving. Look at S3-FIFO or SIEVE, or CacheLib's own 2Q/TinyLFU traits, when scaling the eviction policy matters more than features.",
+  "verified_claims_summary": "In the authors' OSDI 2020 paper, CacheBench drove CacheLib and an in-process, minimally modified Memcached 1.6.6. Both used LRU eviction and 32 threads, with a 100M-object working set and caches of 8-144 GB. CacheLib served up to 60% more requests per second at similar hit ratios; Figure 12's throughput axis spans 0-2 M ops/s. The run used the 60 s promotion delay, and the paper gives no CPU, compiler or build flags; no independent reproduction was found.",
+  "status_note": "Actively maintained by Meta, with weekly vYYYY.MM.DD tags (latest v2026.09.21.00, last commit 2026-09-26) and Apache-2.0 licensing. Using it in practice means building with Meta's getdeps toolchain and upgrading in lockstep with folly/fbthrift, not vendoring a few files.",
+  "sources_read": [
+    "https://github.com/facebook/CacheLib",
+    "https://github.com/facebook/CacheLib/blob/main/README.md",
+    "https://github.com/facebook/CacheLib/blob/main/BENCHMARKS.md",
+    "https://github.com/facebook/CacheLib/blob/main/BUILD.md",
+    "https://github.com/facebook/CacheLib/blob/main/CHANGELOG.md",
+    "https://github.com/facebook/CacheLib/blob/main/cachelib/CMakeLists.txt",
+    "https://github.com/facebook/CacheLib/blob/main/cachelib/allocator/MMLru.h",
+    "https://github.com/facebook/CacheLib/blob/main/cachelib/allocator/CacheAllocator.h",
+    "https://github.com/facebook/CacheLib/blob/main/cachelib/allocator/CacheVersion.h",
+    "https://github.com/facebook/CacheLib/blob/main/cachelib/allocator/Refcount.h",
+    "https://github.com/facebook/CacheLib/blob/main/cachelib/object_cache/ObjectCache.h",
+    "https://github.com/facebook/CacheLib/blob/main/cachelib/rust/Cargo.toml",
+    "https://github.com/facebook/CacheLib/blob/main/.github/workflows/getdeps_linux.yml",
+    "https://github.com/facebook/CacheLib/blob/main/website/docs/Cache_Library_User_Guides/faq.md",
+    "https://github.com/facebook/CacheLib/blob/main/website/docs/Cache_Library_User_Guides/eviction_policy.md",
+    "https://github.com/facebook/CacheLib/blob/main/website/docs/Cache_Library_User_Guides/Set_up_a_simple_cache.md",
+    "https://github.com/facebook/CacheLib/blob/main/website/docs/Cache_Library_User_Guides/Item_and_Handle.md",
+    "https://github.com/facebook/CacheLib/blob/main/website/docs/Cache_Library_User_Guides/Cache_persistence.md",
+    "https://github.com/facebook/CacheLib/blob/main/website/docs/Cache_Library_User_Guides/Configure_HashTable.md",
+    "https://github.com/facebook/CacheLib/blob/main/website/docs/Cache_Library_User_Guides/HybridCache.md",
+    "https://github.com/facebook/CacheLib/blob/main/website/docs/Cache_Library_User_Guides/Configure_HybridCache.md",
+    "https://github.com/facebook/CacheLib/blob/main/website/docs/Cache_Library_Architecture_Guide/RAM_cache_indexing_and_eviction.md",
+    "https://github.com/facebook/CacheLib/blob/main/website/docs/installation/installation.md",
+    "https://github.com/facebook/CacheLib/releases",
+    "https://github.com/facebook/CacheLib/issues/90",
+    "https://github.com/facebook/CacheLib/issues/108",
+    "https://github.com/facebook/CacheLib/issues/112",
+    "https://github.com/facebook/CacheLib/issues/148",
+    "https://github.com/facebook/CacheLib/issues/257",
+    "https://www.usenix.org/system/files/osdi20-berg.pdf",
+    "https://hn.algolia.com/api/v1/search?query=cachelib&tags=story"
+  ],
+  "confidence": 0.8
+}
