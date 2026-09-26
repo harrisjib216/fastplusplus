@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/abso1ut3zer0/nexus",
+  "one_liner": "Sans-IO, zero-copy async WebSocket/REST library for Tokio; receives small TLS frames 2-3x faster than tokio-tungstenite.",
+  "what_it_does": "nexus-async-web puts async adapters around nexus-web's sans-IO RFC 6455 FrameReader/FrameWriter and its HTTP/1.1 REST encoder and parser. It targets exchange market-data and order clients. The main API is split: WsStreamBuilder::connect (or accept on the server side) returns a WsReader, a WsWriter and the transport, and reader.recv(&mut conn) yields a Message<'_> that borrows from the reader's buffer; a WsStream Stream/Sink adapter over OwnedMessage exists for StreamExt/SinkExt code but allocates per message. It is not a drop-in for tokio-tungstenite: the types differ, there is no permessage-deflate, and the runtime backend (Tokio by default, or the experimental nexus-async-rt) is picked by a Cargo feature.",
+  "how_it_is_fast": "A single-frame message is parsed in place in a pre-allocated ReadBuf (1 MiB by default) and returned as a borrowed &str or &[u8], so the hot recv path does no per-message heap allocation. Only fragmented frames, or frames that span reads, are copied into a reusable assembly buffer. Unmasking uses SSE2/AVX2 XOR (runtime-detected on x86-64, a u64 scalar loop elsewhere), UTF-8 validation uses simdutf8, and handshake/HTTP parsing uses httparse. The benchmark's baseline loop calls tokio-tungstenite's StreamExt::next, which returns owned Message values, so part of the gap comes from a borrowed API versus an owned one, not from parsing alone; the nexus-async-rt executor plays no part in the cited TLS numbers, which run on Tokio.",
+  "when_to_use": [
+    "A Rust client that consumes high-rate wss:// feeds of small messages (tens to a few hundred bytes), such as exchange market data, where CPU cost per message matters.",
+    "A Tokio application that can adopt the split WsReader/WsWriter API and finish with each borrowed message before the next recv.",
+    "A service that also makes HTTP/1.1 REST calls to the same venue and wants pooled keep-alive connections (ClientPool, or AtomicClientPool across threads) sharing one request writer.",
+    "A small number of long-lived connections, where a 1 MiB read buffer per connection costs nothing that matters.",
+    "A dedicated-thread design that can use the blocking nexus-web/nexus-net client, which the page measures faster still (37/86 ns/msg over TLS)."
+  ],
+  "when_not_to_use": [
+    "Servers holding thousands of connections: the defaults allocate a 1 MiB read buffer and a 64 KiB write buffer per connection. Both can be shrunk, but no benchmark covers smaller buffers.",
+    "Peers that require permessage-deflate, which nexus-web does not support.",
+    "Code built around tokio-tungstenite's Stream/Sink and owned messages: nexus's WsStream adapter allocates per message, skips the recv-path tuning (max_read_size, compaction), and has no published TLS numbers.",
+    "Production use of the `nexus` backend: nexus-async-rt is marked experimental and not under active development, and its own README says to use Tokio.",
+    "Windows, which the workspace README lists as experimental; the nexus-async-rt backend is Unix-only."
+  ],
+  "integration": {
+    "form": "crate (nexus-async-web 0.10.0 on crates.io, published 2026-06-02; main has moved on and depends on nexus-net-tokio, which is not on crates.io)",
+    "dependencies": "nexus-web, nexus-net, nexus-pool; tokio (io-util, net, rt, time), futures-core/futures-sink; default TLS via tokio-rustls/rustls with aws-lc-rs; optional socket2, bytes, nexus-async-rt",
+    "min_toolchain": "Rust 1.94 (edition 2024)",
+    "platforms": "Linux primary, macOS supported, Windows experimental (workspace README); SIMD unmasking on x86-64 (SSE2, AVX2 runtime-detected), scalar fallback on other architectures; nexus backend is Unix-only",
+    "thread_safety": "WsReader/WsWriter are per-connection types driven through &mut; Send/Sync guarantees are not documented. ClientPool is single-threaded, AtomicClientPool is thread-safe; nexus-async-rt JoinHandle is !Send.",
+    "drop_in_for_baseline": "partial — both run on Tokio and speak RFC 6455 as client or server (517/517 Autobahn cases claimed for nexus-web), but the API is WsReader/WsWriter with borrowed Message instead of Stream<Item = Message>, there is no permessage-deflate, and the Stream/Sink compatibility adapter gives up the zero-copy path"
+  },
+  "gotchas": [
+    "A Message<'_> returned by recv borrows the reader's buffer; convert it to OwnedMessage if you need to keep it past the next recv.",
+    "WsReader::recv returns Ok(None) both on transport EOF and when the read buffer stays full after compaction, so an abnormal peer drop is not an error (open issue #614 tracks the same ambiguity in nexus-web's blocking stream).",
+    "WsStreamBuilder leaves Nagle on by default (nodelay false); call disable_nagle() for latency-sensitive use.",
+    "The tokio-rt and nexus features are mutually exclusive (compile_error!), and the nexus backend needs default-features = false plus an explicit nexus-* feature."
+  ],
+  "pick_this_over_siblings_when": "sockudo-ws is the other Rust WebSocket entry and is benchmarked as a server against uWebSockets (~1.02-1.03x); pick nexus-async-web when you are the client of a few high-rate wss:// feeds on Tokio and want borrowed zero-copy receives plus a REST client built the same way. The RPC siblings (wtx gRPC, brpc, Kitex, rpcx, eRPC) solve a different problem.",
+  "verified_claims_summary": "BENCHMARKS.md (perf_async_ws TLS loopback section, median of 3 runs of 200,000 messages, tls-0.7-refactor branch) reports client-side receive at 54 vs 177 ns/msg at 40B (~3.3x) and 134 vs 280 ns/msg at 128B (~2.1x) for nexus-async-web on a current_thread Tokio runtime vs tokio-tungstenite 0.26. Both clients run over tokio-rustls against the same server, which pre-encodes all frames and writes them in one burst; the test ran on a Core Ultra 7 165U, Linux 6.18, turbo on, and rustc 1.94.0 appears only in the workspace README. The page's '3-5x' holds only for the blocking nexus-net path (37/86 ns/msg), whose server runs on its own OS thread, while in both async rows the server task shares one thread with the client.",
+  "status_note": "Actively developed (last commit 2026-09-25, 118 workspace stars, ~2.9k crates.io downloads plus ~440 under the old nexus-async-net name) and dual MIT/Apache-2.0; the Tokio backend is the supported path, while the nexus-async-rt backend is experimental and gets no new features.",
+  "sources_read": [
+    "https://github.com/Abso1ut3Zer0/nexus",
+    "https://raw.githubusercontent.com/Abso1ut3Zer0/nexus/main/README.md",
+    "https://raw.githubusercontent.com/Abso1ut3Zer0/nexus/main/Cargo.toml",
+    "https://raw.githubusercontent.com/Abso1ut3Zer0/nexus/main/nexus-async-web/README.md",
+    "https://raw.githubusercontent.com/Abso1ut3Zer0/nexus/main/nexus-async-web/BENCHMARKS.md",
+    "https://raw.githubusercontent.com/Abso1ut3Zer0/nexus/main/nexus-async-web/Cargo.toml",
+    "https://raw.githubusercontent.com/Abso1ut3Zer0/nexus/main/nexus-async-web/benches/perf_async_ws.rs",
+    "https://raw.githubusercontent.com/Abso1ut3Zer0/nexus/main/nexus-async-web/src/lib.rs",
+    "https://raw.githubusercontent.com/Abso1ut3Zer0/nexus/main/nexus-async-web/src/ws/mod.rs",
+    "https://raw.githubusercontent.com/Abso1ut3Zer0/nexus/main/nexus-async-web/src/ws/parts.rs",
+    "https://raw.githubusercontent.com/Abso1ut3Zer0/nexus/main/nexus-async-web/src/ws/tokio/mod.rs",
+    "https://raw.githubusercontent.com/Abso1ut3Zer0/nexus/main/nexus-async-web/src/ws/tokio/stream.rs",
+    "https://raw.githubusercontent.com/Abso1ut3Zer0/nexus/main/nexus-async-rt/README.md",
+    "https://raw.githubusercontent.com/Abso1ut3Zer0/nexus/main/nexus-web/README.md",
+    "https://raw.githubusercontent.com/Abso1ut3Zer0/nexus/main/nexus-web/src/ws/mod.rs",
+    "https://raw.githubusercontent.com/Abso1ut3Zer0/nexus/main/nexus-web/src/ws/frame_reader.rs",
+    "https://raw.githubusercontent.com/Abso1ut3Zer0/nexus/main/nexus-web/src/ws/mask.rs",
+    "https://raw.githubusercontent.com/Abso1ut3Zer0/nexus/main/nexus-web/src/ws/handshake.rs",
+    "https://raw.githubusercontent.com/Abso1ut3Zer0/nexus/main/nexus-net/README.md",
+    "https://raw.githubusercontent.com/Abso1ut3Zer0/nexus/main/nexus-net-tokio/README.md",
+    "https://github.com/Abso1ut3Zer0/nexus/issues?q=websocket",
+    "https://github.com/Abso1ut3Zer0/nexus/issues?q=tls",
+    "https://github.com/Abso1ut3Zer0/nexus/issues?q=tungstenite",
+    "https://github.com/Abso1ut3Zer0/nexus/issues?q=bench",
+    "https://github.com/Abso1ut3Zer0/nexus/issues/614",
+    "https://crates.io/api/v1/crates/nexus-async-web",
+    "https://crates.io/api/v1/crates/nexus-async-net",
+    "https://crates.io/api/v1/crates/nexus-web",
+    "https://crates.io/api/v1/crates/nexus-net",
+    "https://crates.io/api/v1/crates/nexus-net-tokio",
+    "https://crates.io/api/v1/crates/tokio-tungstenite",
+    "https://hn.algolia.com/api/v1/search?query=nexus-async-web",
+    "https://hn.algolia.com/api/v1/search?query=Abso1ut3Zer0"
+  ],
+  "confidence": 0.75
+}
