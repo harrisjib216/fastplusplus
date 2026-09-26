@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/opencoff/go-sieve",
+  "one_liner": "Fixed-capacity generic Go SIEVE cache whose mutex-free Get path out-scales hashicorp/golang-lru LRU/ARC under concurrent reads.",
+  "what_it_does": "A thread-safe, fixed-capacity in-memory cache for Go that evicts with SIEVE (Zhang et al., NSDI'24) instead of LRU recency ordering. The API is generic (`New[K comparable, V any](capacity, ...Option) (*Sieve, error)`) and close to golang-lru v2. `Get` has the same signature, but `Add` returns the evicted entry plus a hit/evict bitmask instead of a bool, `Remove` is called `Delete`, and there are extra `Probe`/`ProbeFunc` get-or-insert calls and a Go 1.23 `All()` iterator. It has no eviction callback, TTL, Peek/Contains, Keys or Resize.",
+  "how_it_is_fast": "SIEVE only sets a visited bit on a hit, so reads never reorder a list and never take the global mutex. `Get` does one load from a concurrent puzpuzpuz/xsync map (key to int32 slot index), then one atomic OR on a per-slot uint64 that packs a bit-63 spinlock with the visited counter, then an atomic AND to unlock. Nodes live in a pre-allocated array linked by int32 indices, with a bump allocator and freelist, so steady state makes no per-entry heap allocations and, for scalar K/V, gives the GC no pointers to trace. Misses (insert), eviction (the SIEVE 'hand' walks the FIFO clearing visited bits until it finds an unvisited node) and Delete all go through one global sync.Mutex.",
+  "when_to_use": [
+    "Read-dominated in-process caches hit by many goroutines at once, where golang-lru's single mutex is the bottleneck. The author's examples are HTTP response, DNS resolver and authz decision caches. The gap grows with cores: Get_Parallel is 14.9 vs 31.4 ns/op (LRU) at GOMAXPROCS=1 and 7.5 vs 182.1 at 10.",
+    "Warm caches with high hit rates. The big win is on the hit path (13-55x on trace-replayed parallel Gets); on cold mixed read/write replay it drops to 2-6x.",
+    "Large entry counts with scalar or fixed-size keys and values (ints, [16]byte, small structs), where GC scan cost matters. At 1M entries the heap is 78.4 MB vs 112.4 MB for LRU, and the GC-impact benchmark is 4.37 vs 9.46 ms/iter.",
+    "Get-or-insert code paths. Probe/ProbeFunc do check-then-insert in one TOCTOU-safe call and return the evicted entry synchronously, so the caller can clean it up without channels or callbacks.",
+    "Teams that want a small BSD-2 library with one dependency (the core is sieve.go + slotstate.go) that they can read or vendor, rather than a full caching framework."
+  ],
+  "when_not_to_use": [
+    "Write-, miss- or delete-heavy workloads. Every insert of a new key, every eviction and every Delete takes one global mutex. In the Mixed_Parallel sweep (60% Get/30% Add/10% Delete), SIEVE's own aggregate time gets worse as cores are added, from 33.3 ns/op at 1 core to 92.3 at 10 (LRU goes to 222.8). Delete_Parallel is slower than LRU (81.2 vs 69.5 ns/op).",
+    "When hit ratio matters more than CPU. With the cache at 10% of unique keys, ARC had the lowest miss ratio on 11 of 18 traces and LRU on 5 (all Meta storage traces). SIEVE k=1 beat LRU on only 10 of 18 traces and was never best in its row.",
+    "Very hot-key read skew. Readers spin on the same slot word: at Zipf s=1.50 the lead over LRU shrinks to about 6% (94.2 vs 100.4 ns/op), and at s=1.01 SIEVE's own ns/op rises from 8.2 at 2 cores to 26.6 at 10.",
+    "When you need TTL/expiry, cost- or weight-based capacity, eviction callbacks, Resize, statistics, or loading/refresh. None of these exist, and capacity is a fixed entry count. New() also allocates the full node array, 8 bytes of slot state per entry and a presized map up front, even if the cache never fills.",
+    "Risk-averse production use. It is pre-1.0 (v0.6.6) with 41 stars and one known importer on pkg.go.dev. The repo has no CI workflow directory, and the API has changed between 0.x releases (v0.5.0 replaced the eviction channel with synchronous return values)."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "github.com/puzpuzpuz/xsync/v4 (v4.5.0 at v0.6.6). The benchmarks are a separate bench/ module that also pulls in hashicorp/golang-lru v2.0.7 and opencoff/go-mmap.",
+    "min_toolchain": "go.mod on main/v0.6.6 declares go 1.27.1, the current Go release (v0.6.4-v0.6.5 declare go 1.26.3, and v0.6.3 declares go 1.26.1). All() needs Go 1.23+ iterators.",
+    "platforms": "Pure Go plus one go:linkname to runtime.procyield, so any Go target in principle. It was benchmarked only on Apple M4 darwin/arm64; x86-64 performance is not documented.",
+    "thread_safety": "All methods are safe for concurrent use. Get takes only a per-slot spinlock (atomic OR/AND on a uint64). Add/Probe on a miss, eviction, Delete and Purge take one global mutex. All() is weakly consistent: it holds no lock across the loop body and may rarely yield the same key twice during a concurrent map resize.",
+    "drop_in_for_baseline": "partial — Get(k) (V, bool), Len and Purge match golang-lru v2, and New also returns (cache, error). Add returns (Evicted, CacheResult) instead of a bool, Remove becomes Delete, and Contains/Peek/Keys/Values/Resize/RemoveOldest/GetOldest and NewWithEvict callbacks are missing. There is no equivalent of the ARC variant."
+  },
+  "gotchas": [
+    "The zero value of K is reserved (\"\" for strings, 0 for ints, the zero struct) and is not checked. Freed slots have their key zeroed, so a Get racing with the eviction of a zero key can return a spurious hit with a zero value. Offset or wrap such keys.",
+    "The README calls Get 'lock-free', but it takes a per-slot test-and-set spinlock that backs off with runtime.procyield (via go:linkname) and then Gosched. Every attempt sets the visited bit, even a failed one or one on a stale index, so an unrelated entry can get an undeserved mark. The source comment also says the eviction scan is not strictly bounded under adversarial read load, and that scan runs while holding the global mutex.",
+    "ProbeFunc is not singleflight: concurrent misses on the same key can each run the constructor. Only one value is stored, and the other callers get it back flagged as CacheHit.",
+    "Purge does not zero old key/value slots, so the objects they point to stay reachable until the slots are reused. String and pointer K/V still leave GC-traced pointers in the node array; the GC savings are mainly for scalar types."
+  ],
+  "pick_this_over_siblings_when": "Against otter (the other catalogued golang-lru beater, with adaptive W-TinyLFU, TTL, loading, refresh and stats), pick go-sieve when you only need a fixed-count, read-heavy cache and want a tiny single-dependency codebase with zero steady-state allocations; pick otter when hit ratio or expiry matters. Against golang-fifo (also SIEVE in Go, with TTL and a reader-lock hit path per its README, backed only by a README table), go-sieve has the mutex-free hit path and stronger reproducible evidence: raw results are committed and there is a trace-replay harness.",
+  "verified_claims_summary": "The author ran these on an Apple M4 (10 cores, 4P+6E) with go1.26.3 darwin/arm64 at GOMAXPROCS=10, from a pre-v0.6.5 working tree, and nobody has reproduced them independently. Warm-cache parallel Gets replayed from 18 MSR Cambridge and Meta storage traces took 2.24-12.20 ns/op versus 105.7-384.9 ns/op for hashicorp/golang-lru v2.0.7 LRU/ARC (13-55x faster than the better of the two). Cold mixed replay (Probe vs Get+Add) was 2.0-6.1x faster, and the synthetic 8192-entry uniform-int Get_Parallel was 5.76 vs 144.2 ns/op. All of these are aggregate throughput (wall time divided by b.N across goroutines), not per-call latency.",
+  "status_note": "Actively maintained by a single author (v0.6.6, last commit 2026-09-08), BSD-2-Clause, and small enough to vendor, but still pre-1.0 with API changes between 0.x releases and the latest tag requiring Go 1.27.1.",
+  "sources_read": [
+    "https://github.com/opencoff/go-sieve",
+    "https://github.com/opencoff/go-sieve/blob/main/README.md",
+    "https://github.com/opencoff/go-sieve/blob/main/sieve.go",
+    "https://github.com/opencoff/go-sieve/blob/main/slotstate.go",
+    "https://github.com/opencoff/go-sieve/blob/main/options.go",
+    "https://github.com/opencoff/go-sieve/blob/main/pause.go",
+    "https://github.com/opencoff/go-sieve/blob/main/go.mod",
+    "https://github.com/opencoff/go-sieve/blob/v0.6.5/go.mod",
+    "https://github.com/opencoff/go-sieve/blob/v0.6.3/go.mod",
+    "https://github.com/opencoff/go-sieve/blob/main/Makefile",
+    "https://github.com/opencoff/go-sieve/blob/main/bench-results.md",
+    "https://github.com/opencoff/go-sieve/blob/main/bench/README.md",
+    "https://github.com/opencoff/go-sieve/blob/main/bench/Makefile",
+    "https://github.com/opencoff/go-sieve/blob/main/bench/go.mod",
+    "https://github.com/opencoff/go-sieve/blob/main/bench/bench_test.go",
+    "https://github.com/opencoff/go-sieve/blob/main/bench/results/synthetic.txt",
+    "https://github.com/opencoff/go-sieve/blob/main/bench/results/sweep.txt",
+    "https://github.com/opencoff/go-sieve/blob/main/bench/results/trace.txt",
+    "https://github.com/opencoff/go-sieve/commits/main",
+    "https://github.com/opencoff/go-sieve/tags",
+    "https://github.com/opencoff/go-sieve/issues?q=is%3Aissue",
+    "https://github.com/opencoff/go-sieve/issues/2",
+    "https://pkg.go.dev/github.com/opencoff/go-sieve?tab=importedby",
+    "https://github.com/search?q=opencoff%2Fgo-sieve+path%3Ago.mod&type=code",
+    "https://raw.githubusercontent.com/DNSCrypt/dnscrypt-proxy/master/go.mod",
+    "https://raw.githubusercontent.com/puzpuzpuz/xsync/v4.5.0/go.mod",
+    "https://raw.githubusercontent.com/golang/go/master/src/runtime/stubs.go",
+    "https://raw.githubusercontent.com/hashicorp/golang-lru/v2.0.7/lru.go",
+    "https://go.dev/dl/?mode=json",
+    "https://github.com/maypok86/otter",
+    "https://github.com/scalalang2/golang-fifo",
+    "https://hn.algolia.com/api/v1/search?query=%22go-sieve%22",
+    "https://hn.algolia.com/api/v1/search?query=opencoff%20go-sieve&tags=(story,comment)"
+  ],
+  "confidence": 0.85
+}
