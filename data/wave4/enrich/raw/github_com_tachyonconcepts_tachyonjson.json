@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/tachyonconcepts/tachyonjson",
+  "one_liner": "Tiny unsafe Rust JSON writer for compile-time-constant objects into a fixed stack buffer; claims 8 ns vs serde_json's 23 ns.",
+  "what_it_does": "An encode-only JSON library (four source files, under 10 KB) with no parser and no serde integration. You describe the document as a TachyonValue tree (String, f64 Number, Object, Array, True/False/Null, Undefined) and call the unsafe `encode(&mut TachyonBuffer<N>, no_escape)`, which writes bytes into a const-generic `[u8; N]` held by value. Objects come from `tachyon_object!` (pairs placed in a `const`, so every key and value must be a compile-time constant) or `tachyon_object_noescape!` (string-literal keys and values only, stored in a `static mut`); runtime objects mean hand-building `TachyonObject { ptr, len }` from a raw pointer. It is a different interface, not a replacement for `serde_json::to_writer` on your own types.",
+  "how_it_is_fast": "There is no allocation and no serializer state: output goes into a caller-owned fixed-size array, and most writes (`write_char_fast`, `write_raw_bytes`, the `tcopy!` macro) skip bounds checks. With no_escape=true, string values are memcpy'd instead of scanned for characters to escape, and object keys are never escaped in either mode. `tcopy!` has hand-written fixed-width copy paths for exactly 7-byte strings (one unaligned u64 load/store) and 13-byte strings (u64 + u32 + 1 byte), the lengths of \"message\" and \"Hello, world!\" in the benchmark payload; numbers go through ryu. Because the benchmarked object is a compile-time constant, the runtime work is essentially copying 27 bytes.",
+  "when_to_use": [
+    "A fixed, string-only response known at compile time, such as the TechEmpower-style `/json` endpoint `{\"message\":\"Hello, World!\"}`. That is exactly how the author's own TachyonConcept web server uses it: `tachyon_object_noescape!` into a `TachyonBuffer<100>`.",
+    "Hot paths where you control every key and value and can guarantee they contain no `\"`, `\\` or control characters, so skipping escaping is correct.",
+    "Tiny outputs with a hard, known upper bound on size, so a stack buffer of size N can never be overrun.",
+    "As a reference for how far a hand-specialized, unchecked writer can drop below serde_json on a trivial payload. It is small enough to read in one sitting and borrow the idea from, rather than to depend on."
+  ],
+  "when_not_to_use": [
+    "Serializing your own Rust structs or enums, or anything using serde derives: there is no Serialize integration and no parser at all.",
+    "Untrusted or arbitrary strings: object keys are never escaped, and with no_escape=true values are not either, so a `\"` in the data produces invalid or injectable JSON.",
+    "Output whose size you cannot bound: braces, quotes, commas, unescaped bytes and `tcopy!` copies are unchecked, so going over N writes past the buffer (undefined behavior) rather than failing.",
+    "Integers above 2^53 or non-finite floats: Number is f64 only, and ryu's `format` prints NaN/inf/-inf, which are not valid JSON.",
+    "Anything that needs a maintained dependency: 3 commits all on 2025-07-21, no tests, no doc comments, no issues, 0 stars, no crates.io reverse dependencies."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "ryu 1",
+    "min_toolchain": "Rust 1.85+ implied by edition 2024 (no rust-version declared); the author's consumer project pins nightly",
+    "platforms": "any per source (portable Rust, unaligned access via ptr::read_unaligned, no SIMD or arch intrinsics); the repo's .cargo/config.toml builds with target-cpu=native",
+    "thread_safety": "not documented; TachyonValue/TachyonObject hold raw pointers so they are !Send/!Sync, while TachyonBuffer is a plain value type (use one per thread)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Bounds checking is inconsistent. `write`/`write_str` (numbers, true/false/null, escape sequences) check capacity and set a private error flag, but `write_char_fast` and `tcopy!` do not. The error flag has no public getter, and `reset_pos()` does not clear it, so once it is set every later checked write on that buffer is silently dropped.",
+    "`tcopy!`'s 7-byte path reads 8 bytes from the source string and stores 8 bytes into the buffer, one past each. Reading past the end of a `&str` is undefined behavior in Rust even when it happens to work for literals in .rodata.",
+    "`FastStr::as_str(len)` is a safe fn that builds a `&'static str` from a raw pointer and any caller-supplied length, so safe code can trigger UB. A hand-built `TachyonObject` holds a raw pointer with no borrow on its pair array, so it can dangle.",
+    "`encode`, `as_slice` and `as_str` are `unsafe fn` with no documented safety contract, and `as_str` returns \"\" on invalid UTF-8. A top-level `Undefined` sets the error flag, while `Undefined` inside objects and arrays is silently skipped."
+  ],
+  "pick_this_over_siblings_when": "sonic-rs is the catalogued serde_json alternative that covers serde into structs, an untyped Value, and both parsing and serialization, and simd-json (Rust), jiter and pikkr are catalogued for parsing. Pick Tachyon JSON only when you would otherwise hardcode the bytes of a fixed, trusted object in a bounded buffer; for any real data model, sonic-rs or serde_json itself is the safer choice.",
+  "verified_claims_summary": "The README's only data is one pair of numbers: encoding {\"message\":\"Hello, world!\"} over 1,000,000 iterations took 23 ns with serde_json ('zero-copy') and 8 ns with Tachyon JSON (~2.9x, derived). No benchmark code, CPU, compiler or serde_json version is published (the repo's .cargo/config.toml sets target-cpu=native, opt-level=3), and the Tachyon side encodes a compile-time-constant object with escaping off, through copy paths specialized for this payload's 7- and 13-byte strings, so it is not a like-for-like comparison.",
+  "status_note": "Stale since its single day of commits (2025-07-21), with ~900 crates.io downloads and nothing depending on it; it is MIT per LICENSE (Cargo.toml says MIT OR Apache-2.0) and small enough to vendor, but it is a companion to the author's web server that bills itself as 'powered by undefined behavior and bad ideas', which matches this code's unchecked writes.",
+  "sources_read": [
+    "https://github.com/TachyonConcepts/TachyonJson",
+    "https://github.com/TachyonConcepts/TachyonJson#-performance",
+    "https://github.com/TachyonConcepts/TachyonJson/blob/main/README.md",
+    "https://github.com/TachyonConcepts/TachyonJson/blob/main/Cargo.toml",
+    "https://github.com/TachyonConcepts/TachyonJson/blob/main/Cargo.lock",
+    "https://github.com/TachyonConcepts/TachyonJson/blob/main/.cargo/config.toml",
+    "https://github.com/TachyonConcepts/TachyonJson/blob/main/LICENSE",
+    "https://github.com/TachyonConcepts/TachyonJson/blob/main/src/lib.rs",
+    "https://github.com/TachyonConcepts/TachyonJson/blob/main/src/macros.rs",
+    "https://github.com/TachyonConcepts/TachyonJson/blob/main/src/buffer.rs",
+    "https://github.com/TachyonConcepts/TachyonJson/blob/main/src/value.rs",
+    "https://github.com/TachyonConcepts/TachyonJson/commits/main",
+    "https://github.com/TachyonConcepts/TachyonJson/issues",
+    "https://github.com/TachyonConcepts/TachyonJson/pulls",
+    "https://crates.io/api/v1/crates/tachyon_json",
+    "https://crates.io/api/v1/crates/tachyon_json/reverse_dependencies",
+    "https://docs.rs/tachyon_json/1.0.1/tachyon_json/",
+    "https://docs.rs/crate/tachyon_json/1.0.1/builds.json",
+    "https://github.com/TachyonConcepts",
+    "https://github.com/TachyonConcepts/TachyonConcept",
+    "https://github.com/TachyonConcepts/TachyonConcept/blob/main/Cargo.toml",
+    "https://github.com/TachyonConcepts/TachyonConcept/blob/main/src/main.rs",
+    "https://github.com/TachyonConcepts/TachyonConcept/blob/main/src/library/server.rs",
+    "https://github.com/TachyonConcepts/TachyonConcept/blob/main/rust-toolchain.toml",
+    "https://docs.rs/ryu/1.0.20/ryu/struct.Buffer.html",
+    "https://github.com/cloudwego/sonic-rs"
+  ],
+  "confidence": 0.8
+}
