@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/nelthaarion/breeze",
+  "one_liner": "Go web framework on the gnet event loop; about 2.5x Go net/http on hello-world HTTP/1.1 throughput.",
+  "what_it_does": "Breeze is a Go web framework whose HTTP/1.1 server runs on gnet (epoll/kqueue reactors), not net/http. It also bundles a router, middleware, WebSockets, request binding/validation, OpenAPI/Scalar, a live dashboard, an event bus, workflows, JSON-RPC and MCP tooling. The API is its own: `breeze.NewRouter()`, `router.Handle(breeze.GET, \"/users/:id\", func(ctx *breeze.Context) error {...})`, then `breeze.New(router, breeze.NewEventLoopWorkerPool(n)).Run(port, multiCore)`. There is no `http.Handler` adapter, so net/http handlers and middleware do not plug in.",
+  "how_it_is_fast": "gnet runs one epoll/kqueue event loop per core and pins each connection to one loop (round-robin), so there is no goroutine per connection. Non-blocking routes run inline on that event-loop goroutine and answer with a synchronous `Conn.Write`, which skips the worker-pool channel, two goroutine handoffs and an `AsyncWrite` poller wakeup. A hand-written HTTP/1.1 parser loops over pipelined requests in one read event and copies only the header block (none with the opt-in `SetZeroCopyHeaders`). Context, request, response and wire buffers are pooled, status lines and common header blocks are precomputed, and static paths resolve through a per-method map; the author's microbenchmarks put parse+route+serialize at about 325 ns with zero allocations.",
+  "when_to_use": [
+    "Go HTTP/1.1 API services whose handlers are CPU-only (in-memory lookups, small JSON) and where requests per core matter: in the 2026-09-24 the-benchmarker run it did 2.5-2.6x net/http and about 1.3x fasthttp on hello-world routes.",
+    "Internal services behind a proxy or load balancer that terminates TLS and speaks keep-alive or pipelined HTTP/1.1 to the backend.",
+    "Linux (or macOS/BSD) deployments, where gnet uses epoll/kqueue.",
+    "Teams that want one Go module with the router, WebSocket server/client, validation, OpenAPI docs and a dev dashboard already wired to the event-loop engine.",
+    "WebSocket hubs that live in the same process as the HTTP API; the README says upgraded connections skip HTTP parsing and messages arrive per-connection in FIFO order."
+  ],
+  "when_not_to_use": [
+    "Handlers that mostly wait on databases or remote calls: these must be registered with `HandleBlocking` and go through the worker pool with `AsyncWrite`, which is the slower path that the benchmark did not measure.",
+    "You need the net/http ecosystem: `http.Handler` middleware, in-process TLS, HTTP/2, or chunked request uploads (requests with Transfer-Encoding get a 400).",
+    "Windows production: the author's changelog says gnet has no epoll/kqueue there and falls back to goroutine-per-connection.",
+    "Tail latency matters more than peak throughput: in the same run, p99 at 512 connections was 5.79 ms vs 3.22 ms for actix-web (net/http: 15.5 ms).",
+    "Risk-averse production: the repo was created in October 2025, one author wrote most commits, there were breaking API changes (v1 to v2 changed `HandlerFunc` to return `error`), graceful shutdown arrived only in September 2026, a dashboard security issue (#51, login fields leak into the URL) is open, and the engine is a 1-star personal fork of gnet."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "github.com/nelthaarion/gnet/v2 v2.2.0 (fork of panjf2000/gnet: 7 commits ahead, 0 behind), github.com/nelthaarion/ants/v2, goccy/go-json, andybalholm/brotli, golang-jwt/jwt/v5, gopkg.in/yaml.v3; v1.6.2 used upstream panjf2000/gnet v2.10.0",
+    "min_toolchain": "Go 1.26.7 per go.mod on main (the README still says Go 1.25.13+, which is what v1.6.2 requires)",
+    "platforms": "Linux, macOS and *BSD through gnet epoll/kqueue; Windows builds but gnet falls back to goroutine-per-connection there. Benchmarked only on Linux x86-64.",
+    "thread_safety": "Each connection is pinned to one event-loop goroutine. Inline handlers run on it and must not block, or every connection on that loop stalls. Routes registered with HandleBlocking run on the worker pool. Different connections are served concurrently. WebSocket messages reach the handler in per-connection FIFO order.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Routes registered with `Handle` run on the event loop by default, so one slow call (SQL, file read, outbound HTTP) stalls every connection on that reactor. Mark such routes with `HandleBlocking`, or turn inline execution off globally.",
+    "With `SetZeroCopyHeaders(true)`, `Path` and header strings point into gnet's reused read buffer and are valid only until the handler returns. A retained string changes its contents without warning and can corrupt a map. Use `strings.Clone`, and check third-party middleware.",
+    "`New` needs a pool whose overflow policy is Spawn or Reject. `NewWorkerPoolWithConfig` defaults to Block, which can stall an event loop; `NewEventLoopWorkerPool` uses Spawn, which can create unbounded goroutines under sustained overload.",
+    "Protocol subset: HTTP/1.0 and 1.1 only, no server-side TLS (gnet has none), request Transfer-Encoding is rejected, responses carry no Date header, and dynamic `:param`/wildcard routes are matched by an ordered scan (the first-registered match wins)."
+  ],
+  "pick_this_over_siblings_when": "Choose it over fasthttp, the other catalogued Go option, if you want the higher measured throughput (168,851 vs 125,657 req/s at c=512 in the same run) plus built-in WebSocket/OpenAPI/dashboard, and can accept a young project with one main maintainer. If leaving Go is an option, hyper (166,617) and actix-web (163,415) matched it in that run with lower p99, so pick Breeze only to stay in Go.",
+  "verified_claims_summary": "In the-benchmarker/web-frameworks develop run of 2026-09-24 (commit f673364; one run, Linux x86-64 host with 16 logical CPUs and an unmeasured CPU model, server limited to about 4 cores, Go 1.27 with GOAMD64=v3, closed-loop keep-alive load on hello-world routes), Breeze did 186,467 / 173,403 / 168,851 req/s at 64 / 256 / 512 connections vs 71,499 / 67,382 / 67,239 for the net/http entry (2.51-2.61x); it sent about 64-byte responses vs about 88 for net/http. The benchmark app uses the v1 import path and the v1 handler signature, so it almost certainly built v1.6.2 on upstream gnet, not the v2 that the label says.",
+  "status_note": "Active (last push 2026-09-17, v2.1.0 tagged 2026-09-16), MIT, 215 stars, created October 2025, mostly one author. It installs as a normal Go module, but expect API churn between major versions.",
+  "sources_read": [
+    "https://github.com/nelthaarion/breeze",
+    "https://github.com/nelthaarion/breeze/blob/main/README.md",
+    "https://github.com/nelthaarion/breeze/blob/main/go.mod",
+    "https://github.com/nelthaarion/breeze/blob/main/breeze.go",
+    "https://github.com/nelthaarion/breeze/blob/main/request.go",
+    "https://github.com/nelthaarion/breeze/blob/main/response.go",
+    "https://github.com/nelthaarion/breeze/blob/main/router.go",
+    "https://github.com/nelthaarion/breeze/blob/main/workerpool.go",
+    "https://github.com/nelthaarion/breeze/blob/main/types.go",
+    "https://github.com/nelthaarion/breeze/blob/main/context.go",
+    "https://github.com/nelthaarion/breeze/blob/main/CHANGELOG.md",
+    "https://github.com/nelthaarion/breeze/blob/main/docs/README.md",
+    "https://github.com/nelthaarion/breeze/blob/v1.6.2/go.mod",
+    "https://github.com/nelthaarion/breeze/blob/v1.6.2/breeze.go",
+    "https://github.com/nelthaarion/breeze/blob/v1.6.2/response.go",
+    "https://github.com/nelthaarion/breeze/blob/v1.6.2/router.go",
+    "https://github.com/nelthaarion/breeze/blob/v1.6.2/context.go",
+    "https://github.com/nelthaarion/breeze/tags",
+    "https://github.com/nelthaarion/breeze/releases",
+    "https://github.com/nelthaarion/breeze/issues?q=is%3Aissue",
+    "https://github.com/nelthaarion/breeze/issues/51",
+    "https://github.com/nelthaarion/breeze/graphs/contributors",
+    "https://github.com/nelthaarion/gnet",
+    "https://github.com/panjf2000/gnet/compare/dev...nelthaarion:gnet:dev",
+    "https://raw.githubusercontent.com/nelthaarion/gnet/dev/README.md",
+    "https://raw.githubusercontent.com/the-benchmarker/web-frameworks/f673364fb30748e5bb8e57319ec2772bc872f78a/data.json",
+    "https://raw.githubusercontent.com/the-benchmarker/web-frameworks/f673364fb30748e5bb8e57319ec2772bc872f78a/go/breeze/main.go",
+    "https://raw.githubusercontent.com/the-benchmarker/web-frameworks/f673364fb30748e5bb8e57319ec2772bc872f78a/go/breeze/go.mod",
+    "https://raw.githubusercontent.com/the-benchmarker/web-frameworks/f673364fb30748e5bb8e57319ec2772bc872f78a/go/breeze/config.yaml",
+    "https://raw.githubusercontent.com/the-benchmarker/web-frameworks/f673364fb30748e5bb8e57319ec2772bc872f78a/go/config.yaml",
+    "https://raw.githubusercontent.com/the-benchmarker/web-frameworks/f673364fb30748e5bb8e57319ec2772bc872f78a/go/Dockerfile",
+    "https://hn.algolia.com/api/v1/search?query=nelthaarion%20breeze&tags=story",
+    "https://hn.algolia.com/api/v1/search?query=github.com%2Fnelthaarion%2Fbreeze"
+  ],
+  "confidence": 0.5
+}
