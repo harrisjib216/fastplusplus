@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/elvec1o/gbf-neon",
+  "one_liner": "Static uint64 filter using per-block GF(2) solves and NEON parity; ~2x faster negative queries than author's blocked Bloom.",
+  "what_it_does": "It is a build-once approximate-membership filter over uint64_t keys. You construct gbf::GaloisBipartiteFilter from a container or iterator range, with an optional thread count, and query with contains(key) or contains_batch(keys, bool*, n). The filter can be saved to a file and reopened with load() or zero-copy load_mmap(). There is no insert or erase, and the false-positive rate is fixed at about 2/256 (0.78%): each key has an 8-bit fingerprint and each query checks two blocks, and neither is configurable. The class is move-only, and GaloisBipartiteFilter3 is a denser 3-way variant. A C API mirrors the xor8_* function names from xor_singleheader, with a macro adapter header, so it is not shaped like a Bloom-filter API.",
+  "how_it_is_fast": "Memory is split into 64-byte blocks, each holding eight 64-bit columns. Each key is placed by 2-choice cuckoo hashing into one of two blocks inside a hash-selected partition (64 keys per block at most, about 62 targeted). Gaussian elimination over GF(2) then solves each block so that the parity of (key hash vector AND column j) reproduces the key's 8-bit fingerprint, retrying up to 256 per-block seeds. The author calls it a Ribbon-filter variant, but it is block-local dense elimination with cuckoo placement, not Ribbon's banded matrix. A query hashes to two block indices using bit masks (power-of-two sizing removes the modulo), prefetches both cache lines, and checks 8 AND-popcount parities per block. On aarch64 those parities are explicit NEON vcnt/vpaddl lanes, which the author measured at 1.5-3 ns faster than the scalar __builtin_parityll loop. GBF touches two cache lines per query versus the blocked Bloom's one. The Bloom baseline uses a 64-bit modulo and a branchy 8-probe loop, so part of the gap likely comes from that baseline's implementation rather than the structure.",
+  "when_to_use": [
+    "A read-only set of 64-bit keys (or keys you pre-hash to 64 bits) that is built once and queried many times on Apple Silicon or other aarch64 with NEON, where most lookups miss. The 8.4 ns figure comes from an all-negative query stream.",
+    "Around 1M-key sets where about 0.8% FPR at about 8.5 bits/key suits you and you can size N just below a power-of-two boundary. Bits/key is lowest just under 62 x 2^k keys, for example 1,015,808 or 2,031,616.",
+    "Filters built offline and shipped as files to same-architecture readers: save() plus load_mmap() maps the payload without copying.",
+    "Studying or prototyping cache-line-local GF(2) filters. The core is a readable 649-line header with a libFuzzer harness and a 'what failed' design log (ARTICLE.md)."
+  ],
+  "when_not_to_use": [
+    "Sets that change, or targets other than about 0.78% FPR. There is no insert or erase, and the 8-bit fingerprint and 2-way probe are hard-coded, so lower FPR cannot be bought with more memory.",
+    "Arbitrary or growing N when memory matters. The block count rounds up to a power of two, so bits/key follows a sawtooth between about 8.4 and 16.8. By the sizing code, 1,000,000 keys cost 8.52 bits/key but 1,015,809 keys cost 16.77 at the same about 0.78% FPR. The README's 'up to ~30%' over-allocation understates this.",
+    "Small and mid-size sets built with the default thread count. There is no resize-and-retry: the constructor throws std::runtime_error and the C API returns false. In my re-simulation of the partitioning at worst-case sizes with 16 partitions (machines with 9-16 hardware threads), some partition exceeds its capacity, which guarantees failure, in essentially 100% of trials up to N=7,936. The rate is 96% at 15,872, 75% at 31,744 and 20% at 63,488, and 83% at N=992 with 4 partitions. The tests build small sets only with threads=1, and the fuzz harness de-duplicates keys and treats build exceptions as acceptable.",
+    "Mixed hit/miss or positive-heavy lookups without your own benchmark. The author's own article measured 20.2 ns for a 50/50 mix (versus 6.5 ns all-positive), which it attributes to branch mispredicts. The Bloom baseline was never timed on positives or mixes.",
+    "x86, Windows, or anything that needs a track record. x86 falls back to a scalar parity loop with no AVX2/AVX-512 path and has never been performance-measured (the CI logs have since expired). The code needs POSIX open/mmap and GCC/Clang builtins, so there is no MSVC. It is a 3-commit, 0-star weekend project."
+  ],
+  "integration": {
+    "form": "header-only (src/gbf.hpp + src/hash.hpp); optional static lib gbf_c for the C API",
+    "dependencies": "none beyond the C++ standard library, pthreads (std::thread; CMake links Threads::Threads) and POSIX file/mmap calls",
+    "min_toolchain": "C++17 and CMake 3.16+. Needs GCC or Clang (__builtin_parityll, __builtin_prefetch). Compiler versions are not documented: CI built with ubuntu-latest gcc and clang, and the logs have expired.",
+    "platforms": "aarch64 with NEON, measured only on an Apple M2. x86-64 Linux compiles and passes tests in CI using scalar parity, with no performance numbers. POSIX only; no Windows.",
+    "thread_safety": "Not documented. From the code, contains() and contains_batch() are const and touch no mutable state, so concurrent reads after construction look safe. Construction spawns one std::thread per partition (the next power of two at or above hardware_concurrency unless you pass threads).",
+    "drop_in_for_baseline": "false: it is a build-once constructor over a uint64_t range with no insert, so it cannot replace an incrementally filled Bloom filter. The bundled adapter targets the xor8_* API, not a Bloom API."
+  },
+  "gotchas": [
+    "The xor8 adapter maps xor8_serialize/xor8_deserialize to gbf_filter_save/gbf_filter_load. In xor_singleheader those functions take a memory buffer (char*), but here they take a file path, so ported code compiles and silently treats the buffer as a filename. xor8_allocate's size argument is ignored, and populate copies the keys and builds with all hardware threads.",
+    "The file format stores a magic number plus block and partition counts, but not WAYS and not the payload length. load_mmap() never checks the file size, so a truncated or untrusted file can be read out of bounds, and a GBF<3> file opened as GBF<2> silently gives false negatives. After load, key_count() and bits_per_key() return 0.",
+    "The layout (partition count) depends on the build machine's hardware_concurrency unless you pass threads explicitly. The CMake gbf_headers INTERFACE target also pushes -O3 -march=native onto every target that links it, which yields non-portable binaries.",
+    "The README's batch example does not compile, because std::vector<bool> has no data(); contains_batch needs a real bool array (bench.cpp casts a char buffer). fast_hash (a splitmix64-style mixer) is declared in the global namespace. The version labels disagree: v0.3 in bench_vs.cpp, v0.4 in gbf.hpp, v0.8 in comments, v1.0 in the README."
+  ],
+  "pick_this_over_siblings_when": "Rarely. At its best-case N, GBF's 8.52 bits/key for 0.78% FPR is about 22% above the 7-bit minimum, roughly the Xor filter's 23% overhead cited in the BuRR entry, and it probes two cache lines instead of three with a parallel build. But xor_singleheader is mature, portable and has no size cliff, BuRR is far closer to the space minimum, and the Impala-derived SIMD blocked Bloom in efficient/cuckoofilter supports inserts with one cache line per query. Pick GBF only for a read-only uint64 set on aarch64 whose size you control, or as a small header to experiment with.",
+  "verified_claims_summary": "Only the author's src/bench_vs.cpp, run once on one Apple M2 (-O3 -march=native, compiler unstated) with 1M random uint64 keys, backs the claim. The timed loop covers only the 1M non-member queries, so '8.4 ns vs 16.4 ns' is amortized per-query time on an all-miss stream, not isolated latency or a mixed workload. The baseline is the author's scalar blocked Bloom (512-bit blocks, 8 double-hashed bits, 64-bit modulo, early-exit loop), not a library implementation. My re-simulation of its hashing reproduces the published 2.90% and 1.97% FPRs, while the same layout with independent bit positions gives about 2.5% and 0.40%. So GBF's FPR edge holds at about 8.3 bits/key, but the 12-bits/key Bloom row is about 5x worse than it should be. GBF's 30 ms build uses one thread per partition, against 4-7 ms of single-threaded Bloom inserts.",
+  "status_note": "Effectively a one-weekend drop: three commits on 2026-05-27/28 and nothing since, 0 stars, forks or issues, and the author says it was built in 24 hours and heavily AI-assisted. It is MIT-licensed and small enough to read and vendor, but not production-proven.",
+  "sources_read": [
+    "https://github.com/ElVec1o/GBF-NEON",
+    "https://github.com/ElVec1o/GBF-NEON#head-to-head-vs-competent-blocked-bloom-buildbench_vs",
+    "https://github.com/ElVec1o/GBF-NEON/blob/main/src/gbf.hpp",
+    "https://github.com/ElVec1o/GBF-NEON/blob/main/src/hash.hpp",
+    "https://github.com/ElVec1o/GBF-NEON/blob/main/src/bench_vs.cpp",
+    "https://github.com/ElVec1o/GBF-NEON/blob/main/src/bench.cpp",
+    "https://github.com/ElVec1o/GBF-NEON/blob/main/src/gbf_c.h",
+    "https://github.com/ElVec1o/GBF-NEON/blob/main/src/gbf_c.cpp",
+    "https://github.com/ElVec1o/GBF-NEON/blob/main/src/gbf_xor8_adapter.h",
+    "https://github.com/ElVec1o/GBF-NEON/blob/main/CMakeLists.txt",
+    "https://github.com/ElVec1o/GBF-NEON/blob/main/docs/X86_STATUS.md",
+    "https://github.com/ElVec1o/GBF-NEON/blob/main/ARTICLE.md",
+    "https://github.com/ElVec1o/GBF-NEON/blob/main/tests/test_correctness.cpp",
+    "https://github.com/ElVec1o/GBF-NEON/blob/main/fuzz/README.md",
+    "https://github.com/ElVec1o/GBF-NEON/blob/main/fuzz/fuzz_gbf.cpp",
+    "https://github.com/ElVec1o/GBF-NEON/blob/main/.github/workflows/ci.yml",
+    "https://github.com/ElVec1o/GBF-NEON/commits/main",
+    "https://github.com/ElVec1o/GBF-NEON/actions/runs/26591212481",
+    "https://github.com/FastFilter/xor_singleheader/blob/master/include/xorfilter.h",
+    "https://hn.algolia.com/api/v1/search?query=%22Galois%20Bipartite%20Filter%22"
+  ],
+  "confidence": 0.4
+}
