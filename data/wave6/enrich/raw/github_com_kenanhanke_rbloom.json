@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/kenanhanke/rbloom",
+  "one_liner": "Rust (PyO3) Bloom filter for Python with a set-like API; beats other PyPI Bloom packages on insert+lookup wall time.",
+  "what_it_does": "rbloom is a single-class Python extension (`rbloom.Bloom`) for a classic fixed-size Bloom filter over any hashable Python object. You create it as `Bloom(expected_items, false_positive_rate, hash_func=hash)`, and it copies the built-in `set` API: `add`, `in`, `update`, `union`/`|`, `intersection`/`&`, `issubset`/`<=`, `copy`, `clear`, plus `approx_items`, `size_in_bits` and `save`/`load`/`save_bytes`/`load_bytes`. It replaces other Python Bloom packages (compare.py calls all five with the same `ty(n, 0.01)`, `.add`, `in` shape). It is not a Rust crate you can call from Rust code.",
+  "how_it_is_fast": "Each `add` or `in` makes one call into compiled Rust. The object is hashed once, with Python's `hash()` (an isize) or the user's `hash_func` (up to i128). That single hash seeds a 128-bit linear congruential generator (multiplier from L'Ecuyer 1999), which produces all k bit indices. This is the one-hash-many-indices trick, similar in spirit to Kirsch-Mitzenmacher double hashing. Bits live in a plain `Box<[u8]>`, each index is `x % m`, and lookups stop at the first zero bit. Sizing is textbook: m = -n ln p / ln^2 2 and k = floor(log2(1/p)). There is no blocking, SIMD, or GIL release, so the speedup comes from moving hashing and bit work out of interpreted Python, not from a better filter layout.",
+  "when_to_use": [
+    "Python code that needs a probabilistic 'seen before?' set over arbitrary hashable objects (str, tuples, floats, frozen dataclasses), such as URL or record dedup when a real `set` would not fit in RAM (about 9.6 bits per key at 1% FPR, derived from the sizing formula).",
+    "Replacing pybloom3, Flor or bloom-filter2 in a loop-heavy Python pipeline: the README table shows 18-66x lower wall time than those three (derived from page data).",
+    "Replacing pybloomfiltermmap3 when you don't need its mmap file backing: about 1.9x faster in the same table, and it installs from prebuilt abi3 wheels (the README reports pybloomfiltermmap3 failing to install on 3.11 and segfaulting on 3.10 in January 2023, but fine by October 2024).",
+    "Building filters in several processes or shards and merging them with `|` / `update` or comparing them with `issubset`, as long as every filter uses the same deterministic custom `hash_func` object and the same (n, p) parameters.",
+    "Deployments without a Rust toolchain on mainstream platforms: PyPI ships cp37-abi3 wheels for manylinux x86_64/i686/aarch64/armv7l/ppc64le/s390x, macOS x86_64/arm64 and Windows win32/amd64."
+  ],
+  "when_not_to_use": [
+    "Throughput-critical bulk work: every operation pays Python call and interpreter-loop overhead. The README run works out to about 126 ns per operation (2.52 s / 20M ops, derived). A user in issue #23 measured 8.89M queries/s on an M4 Pro. There is no vectorized NumPy/Arrow insert or query API (issue #23 is open). From Rust, C or C++, use a native filter instead.",
+    "You need deletion, counting, a real length, or auto-growth. It is a plain fixed-size Bloom filter: going past `expected_items` silently raises the FPR, and `approx_items` is an O(m) popcount over the whole bit array (issue #25 asks for O(1)).",
+    "Large, memory-bound filters where cache misses dominate. The layout is unblocked, so each operation makes k independent random bit probes over the whole array. There is no blocked, SIMD, xor, or ribbon variant, so both space and probes per operation are worse than those designs.",
+    "You need a file-backed, mmap-ed or zero-copy shared filter (pybloomfiltermmap3 does this), or you want to pickle it. Pickle is refused by design (issue #16). `save`/`load` work only with a user-supplied deterministic `hash_func`, because the built-in `hash()` is salted per process.",
+    "Free-threaded CPython (3.13t+), multi-core parallel queries, PyPy, or musl/Alpine. The module does not declare `gil_used = false`, so per PyO3 docs a free-threaded interpreter turns the GIL back on at import. No 3.13t, PyPy or musllinux wheels are published, so those builds compile from source with Rust and maturin."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none at runtime; build from source needs PyO3 0.27 (main; the 1.5.4 release used 0.26) and maturin >=1.0,<2.0",
+    "min_toolchain": "CPython 3.7+ (abi3-py37 wheels); source builds need Rust 1.74+ (PyO3 0.26/0.27 MSRV) and maturin 1.x",
+    "platforms": "Prebuilt wheels: Linux (manylinux) x86_64, i686, aarch64, armv7l, ppc64le, s390x; macOS x86_64 and arm64; Windows x86 and x64. Other platforms, including PyPy, musl and free-threaded CPython, build from the sdist.",
+    "thread_safety": "Not documented by the project. The code relies on PyO3's default runtime borrow checking and never releases the GIL, so calls are serialized and give no multi-core speedup. `add`/`update` hold a mutable borrow while calling the Python-level hash, so another thread touching the same filter at that moment can get a RuntimeError ('already borrowed'), as the PyO3 thread-safety guide describes. On free-threaded builds, importing the module turns the GIL back on.",
+    "drop_in_for_baseline": "partial — the core `Bloom(n, p)`, `.add(x)`, `x in bf` shape matches the other Python Bloom packages in compare.py, and the rest copies `set`. But there is no mmap/file-backed mode, persistence requires a custom `hash_func`, pickle is unsupported, and filters can be combined only if (n, p) and the hash-function object are identical."
+  },
+  "gotchas": [
+    "`false_positive_rate` above 0.5 gives k = floor(log2(1/p)) = 0 hash probes. Such a filter never sets a bit, so every `x in bf` is True and `bool(bf)` is always False. The tests construct Bloom(1140, 0.999) but never exercise membership on it. Because k is floored rather than rounded, p=0.01 uses 6 probes and p=0.001 uses 9, so the real FPR lands slightly above target (derived from the constructor arithmetic).",
+    "The default `hash()` is salted per process and follows Python equality (1, 1.0 and True collide on purpose), so a default-hash filter can't be saved or shared across processes. A custom `hash_func` must return an int in [-2^127, 2^127-1]: unsigned 128-bit digests such as xxh3_128_intdigest raise OverflowError (issue #22). Each call to it costs a Python function call.",
+    "The persistence format is 8 bytes of little-endian k followed by raw bits, with no magic number, stored length, n/p or checksum. A truncated or corrupted file loads silently with a different bit length. Every index is `% len`, so that shows up as false negatives rather than an error. `load_bytes` on fewer than 8 bytes hits a Rust slice panic, surfaced as PanicException. The hash function passed to `load` must match the one used to build the filter, and nothing checks this.",
+    "Set operations and comparisons require the exact same hash-function object (identity, not equality) and identical (n, p). Otherwise they raise ValueError. The `rbloom.pyi` stub also declares `load_bytes` without `@classmethod`, which can confuse type checkers."
+  ],
+  "pick_this_over_siblings_when": "Pick rbloom when your code is Python and you want a mutable, set-like filter over arbitrary Python objects from a pip-installable wheel. Every catalogued sibling is a C/C++/Rust/Go/GPU library with no Python API here. If you are writing Rust, fastbloom (one-hash-derived indices plus a lock-free AtomicBloomFilter) or xorf (static xor/binary-fuse filters, smaller and faster to query but built once) are better. efficient/cuckoofilter is the choice when you need deletions.",
+  "verified_claims_summary": "The README table comes from the in-repo benchmarks/compare.py: insert 10M float keys into Bloom(10_000_000, 0.01), then look all of them up, averaged over 5 timeit runs on an Apple M1 Pro. rbloom took 2.52 s, versus pybloomfiltermmap3 4.78 s (~1.9x), pybloom3 46.76 s (~18.6x), Flor 76.94 s (~30.5x) and bloom-filter2 165.54 s (~65.7x); ratios are derived from page data. The timings are whole-loop wall time including the Python interpreter loop. Flor and bloom-filter2 ran through a struct.pack-to-bytes fallback that adds per-key packing cost. Competitor versions are pinned in requirements.txt (pybloomfiltermmap3 0.6.0, pybloom3 0.0.3, flor 1.1.3, bloom-filter2 2.0.0), but the Python version, rustc version and wheel build flags are not stated. The table was last updated in the 2024-10-01 'Reflect benchmark changes' commit, and nothing was compared against a native C/C++ Bloom filter.",
+  "status_note": "MIT-licensed, a single 682-line lib.rs with 318 stars and a Zenodo DOI. Maintenance is low-cadence and bursty: the last PyPI release is 1.5.4 (2025-09-09, PyO3 0.26), the last commit (2025-11-23) only bumped PyO3 to 0.27 and is unreleased, and three feature requests (#22, #23, #25) are open. CI builds wheels but does not run tests/api_test.py.",
+  "sources_read": [
+    "https://github.com/KenanHanke/rbloom",
+    "https://github.com/KenanHanke/rbloom#benchmarks",
+    "https://github.com/KenanHanke/rbloom/blob/main/src/lib.rs",
+    "https://github.com/KenanHanke/rbloom/blob/main/Cargo.toml",
+    "https://github.com/KenanHanke/rbloom/blob/main/pyproject.toml",
+    "https://github.com/KenanHanke/rbloom/blob/main/rbloom.pyi",
+    "https://github.com/KenanHanke/rbloom/blob/main/benchmarks/compare.py",
+    "https://github.com/KenanHanke/rbloom/blob/main/benchmarks/per_operation.py",
+    "https://github.com/KenanHanke/rbloom/blob/main/benchmarks/requirements.in",
+    "https://github.com/KenanHanke/rbloom/blob/main/benchmarks/requirements.txt",
+    "https://github.com/KenanHanke/rbloom/blob/main/tests/api_test.py",
+    "https://github.com/KenanHanke/rbloom/blob/main/.github/workflows/CI.yml",
+    "https://github.com/KenanHanke/rbloom/commits/main",
+    "https://github.com/KenanHanke/rbloom/issues",
+    "https://github.com/KenanHanke/rbloom/issues/13",
+    "https://github.com/KenanHanke/rbloom/issues/14",
+    "https://github.com/KenanHanke/rbloom/issues/16",
+    "https://github.com/KenanHanke/rbloom/issues/17",
+    "https://github.com/KenanHanke/rbloom/issues/19",
+    "https://github.com/KenanHanke/rbloom/issues/22",
+    "https://github.com/KenanHanke/rbloom/issues/23",
+    "https://github.com/KenanHanke/rbloom/issues/25",
+    "https://pypi.org/pypi/rbloom/json",
+    "https://github.com/PyO3/pyo3/blob/v0.27.0/README.md",
+    "https://github.com/PyO3/pyo3/blob/v0.26.0/README.md",
+    "https://github.com/PyO3/pyo3/blob/v0.27.0/guide/src/free-threading.md",
+    "https://github.com/PyO3/pyo3/blob/v0.27.0/guide/src/class/thread-safety.md",
+    "https://github.com/tomtomwombat/fastbloom",
+    "https://github.com/ayazhafiz/xorf",
+    "https://hn.algolia.com/api/v1/search?query=rbloom&tags=story"
+  ],
+  "confidence": 0.85
+}
