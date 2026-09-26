@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/briansmith/ring",
+  "one_liner": "Rust crypto-primitives crate (BoringSSL-derived C/asm) behind rustls; beat OpenSSL 1.5-3.7x on whole-process TLS handshake runs.",
+  "what_it_does": "ring is a low-level Rust library of crypto primitives: AEAD (AES-128/256-GCM, ChaCha20-Poly1305), ECDH (X25519, P-256, P-384), signatures (Ed25519, ECDSA P-256/P-384, RSA PKCS#1 v1.5 and PSS), SHA-2 digests, HMAC, HKDF, PBKDF2 and a system RNG. It is not a TLS stack and has no OpenSSL-compatible API: TLS comes from a library such as rustls (via the rustls-ring provider) or, in the benchmark, wtx, with ring as the crypto backend. The API is deliberately narrow: each parameter set is its own static algorithm object (e.g. RSA_PSS_2048_8192_SHA256), AEAD keys are bound to a NonceSequence (or used through LessSafeKey), and ECDH private keys are ephemeral, single-use types.",
+  "how_it_is_fast": "Most hot paths are BoringSSL/OpenSSL-lineage perlasm assembly chosen at runtime by CPU feature detection: AES-NI+PCLMULQDQ+MOVBE stitched AES-GCM, an AVX2 VAES/VPCLMULQDQ AES-GCM path (added in 0.17.13, fixed in 0.17.14), vector-permutation (vpaes) and bitsliced AES fallbacks, SIMD ChaCha20-Poly1305, Montgomery-multiplication asm for RSA, and the Gueron-Krasnov (Intel) P-256 assembly. X25519 uses fiat-crypto field arithmetic (third_party/fiat), with an ADX assembly path on x86-64 (not Windows) and NEON on 32-bit ARM Linux/Android. In the cited benchmark, most of ring's lead over OpenSSL is a near-constant 2.2-4.4 ms extra per OpenSSL process that the benchmark author could not explain, so the result reflects integration and startup cost as much as primitive speed.",
+  "when_to_use": [
+    "Rust TLS clients/servers on rustls (or wtx) whose handshakes use X25519 or P-256 key agreement with Ed25519, ECDSA-P256 or RSA-PSS certificates: in the benchmark ring was fastest or within about 0.1 ms of the fastest backend on these rows (e.g. Ed25519 + X25519: 1.29-1.32 ms vs OpenSSL 4.40-4.73 ms).",
+    "RSA-PSS certificate handshakes: ring beat aws-lc-rs in every RSA-PSS row with X25519 or secp256r1 (about 0.71-0.79x of aws-lc-rs time, e.g. 1.76 vs 2.47 ms).",
+    "Rust binaries that must build with only cargo and a C compiler (no CMake, Go, Perl or NASM when using the crates.io package) on x86, x86-64, 32-bit ARM or aarch64, including cross-compiles and no_std (+alloc) targets.",
+    "Short-lived processes that open one TLS connection (CLIs, test harnesses), where the benchmark's whole-process time fell from about 4.4-10.2 ms with OpenSSL to 1.3-6.5 ms with ring.",
+    "Code that needs only primitives (AEAD for QUIC/Noise, HKDF, signature verification for webpki-style X.509) and benefits from a small, misuse-resistant API."
+  ],
+  "when_not_to_use": [
+    "Anything P-384-heavy: with ECDSA-P384 certificates, or secp384r1 key agreement plus an ECDSA-P256/Ed25519 certificate, ring was 1.4-2.2x slower than aws-lc-rs (e.g. ECDSA-P384 + X25519 3.40 vs 1.79 ms); P-384 runs on portable C with generic bn_mul_mont_small Montgomery code, and the packaged sources have no P-384-specific assembly.",
+    "You need post-quantum key exchange (ML-KEM hybrids), P-521, finite-field DH, static-key ECDH, AES-CTR/CBC or streaming (pre-hashed) signing: none is offered; the rustls README says the ring provider 'does not support post-quantum algorithms', and P-521 and static-ECDH issues have been open since 2016-2023. No FIPS 140 validation is documented.",
+    "You need a steady release train: the last crates.io release is 0.17.14 (2025-03-11); main holds about 18 months of unreleased work and a 'Request for new release' issue has been open since 2026-05-12. The README now calls the project 'an experiment' and quotes BoringSSL's advice that third parties not depend on it.",
+    "x86-64 macOS or other lightly tested targets: issue #2751 (closed completed) deprecates x86-64 macOS because CI can no longer test ADX/AVX2/AVX-512 paths there; the README warns against toolchains or targets that BoringSSL does not support, and SIDE-CHANNELS.md says constant-time mitigations likely fail on WebAssembly/JIT targets and that ring uses no blinding.",
+    "Non-Rust callers wanting an OpenSSL replacement: there is no C API, no X.509/PEM handling and no TLS protocol code."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "cfg-if, getrandom, untrusted; libc on ARM Linux/Android and Apple aarch64; windows-link on aarch64 Windows; build-time: cc crate plus a C (not C++) compiler that can assemble .S files. Building from Git additionally needs Perl, and NASM for Windows x86/x86-64.",
+    "min_toolchain": "Released 0.17.14: Rust 1.66 (crates.io rust_version). Current main: Rust 1.85, edition 2024. Windows needs Visual Studio 2022 Build Tools (plus the clang component for aarch64-pc-windows-msvc).",
+    "platforms": "Assembly fast paths on x86, x86-64, 32-bit ARM and little-endian aarch64 (Linux, Android, Apple, Windows) with runtime CPU feature detection; portable fallbacks elsewhere, including wasm32 (wasm32_unknown_unknown_js feature) and no_std targets. x86-64 macOS deprecated (issue #2751).",
+    "thread_safety": "signature::KeyPair requires Send + Sync; verification algorithms are Sync statics; SystemRandom and LessSafeKey are Clone handles. No broader thread-safety statement is documented.",
+    "drop_in_for_baseline": "partial — not an OpenSSL API; it replaces OpenSSL only as the crypto backend of a Rust TLS library (rustls-ring provider, wtx), which is how the benchmark swapped it in."
+  },
+  "gotchas": [
+    "Pin >= 0.17.12: RUSTSEC-2025-0009 / CVE-2025-4432 lets a crafted QUIC packet panic HeaderProtectionKey::new_mask() when overflow checks are enabled (default in debug builds, opt-in for release); AES-GCM could also panic near 64 GB in one call. 0.16.x is marked unmaintained (RUSTSEC-2025-0010), and fixes are hard to backport before 0.17.10 because of the license change.",
+    "Open issue #2868 (2026-07): ChaCha20-Poly1305 produced wrong output for messages of 512 bytes and up in x86-64 builds under Rosetta on an Apple M5. It was not reproduced on M4 Pro or on an M5 Pro with newer macOS and is unresolved; the maintainer asked for M5 help with it to speed up the next release.",
+    "API shape differs from EVP: one-shot signing only (no separate digest step), in-place AEAD with the tag appended or separate, nonces from a NonceSequence unless you use LessSafeKey, and agree_ephemeral consumes the EphemeralPrivateKey.",
+    "Maintenance history: RUSTSEC-2025-0007 flagged ring unmaintained on 2025-02-20 and was withdrawn on 2025-02-22 after the rustls team got access; the advisory now says things are 'more-or-less back to how they were before'."
+  ],
+  "pick_this_over_siblings_when": "Pick ring over aws-lc-rs when your handshakes use X25519/P-256 with Ed25519, ECDSA-P256 or RSA-PSS certificates and you want the simpler cargo-plus-C-compiler build; pick aws-lc-rs for P-384 or post-quantum key exchange (the rustls team recommends aws-lc-rs for features and performance). Graviola was fastest in as many combinations (16 of 45) as ring; ring is not an alternative to rustls but one of its crypto backends.",
+  "verified_claims_summary": "One blog benchmark by the WTX author timed whole processes with hyperfine (10 runs, mean): decode 3 PEM files, do one loopback TLS handshake in WTX, exit. It used a Rust 'deploy' profile (opt-level 3, fat LTO, codegen-units 1) with rustc and OpenSSL versions unstated, on a Ryzen 9 5900X under Fedora (kernel 7.0.11). Re-reading the SVG bars gives ring 1.29-6.49 ms vs OpenSSL 4.40-10.17 ms, 1.47-3.67x faster (median about 2.15x) in all 45 certificate/key-agreement/cipher combinations, but the gap is a near-constant 2.2-4.4 ms that the author could not explain, and ring was fastest of the four backends in only 16 of 45.",
+  "status_note": "Main is active (last commit 2026-07-22) but the newest crates.io release, 0.17.14, dates from 2025-03-11; licensed Apache-2.0 AND ISC and very widely depended on (about 759M crates.io downloads), so it is safe to depend on from crates.io despite the README's 'experiment' wording.",
+  "sources_read": [
+    "https://github.com/briansmith/ring",
+    "https://raw.githubusercontent.com/briansmith/ring/main/README.md",
+    "https://raw.githubusercontent.com/briansmith/ring/main/Cargo.toml",
+    "https://raw.githubusercontent.com/briansmith/ring/main/BUILDING.md",
+    "https://raw.githubusercontent.com/briansmith/ring/main/SECURITY.md",
+    "https://raw.githubusercontent.com/briansmith/ring/main/SIDE-CHANNELS.md",
+    "https://raw.githubusercontent.com/briansmith/ring/main/RELEASES.md",
+    "https://raw.githubusercontent.com/briansmith/ring/main/LICENSE",
+    "https://raw.githubusercontent.com/briansmith/ring/main/src/lib.rs",
+    "https://raw.githubusercontent.com/briansmith/ring/main/src/signature.rs",
+    "https://raw.githubusercontent.com/briansmith/ring/main/src/agreement.rs",
+    "https://raw.githubusercontent.com/briansmith/ring/main/src/rand.rs",
+    "https://raw.githubusercontent.com/briansmith/ring/main/src/aead/mod.rs",
+    "https://raw.githubusercontent.com/briansmith/ring/main/src/aead/less_safe_key.rs",
+    "https://raw.githubusercontent.com/briansmith/ring/main/src/ec/suite_b/ops/p256.rs",
+    "https://raw.githubusercontent.com/briansmith/ring/main/src/ec/suite_b/ops/p384.rs",
+    "https://raw.githubusercontent.com/briansmith/ring/main/src/ec/curve25519/x25519.rs",
+    "https://raw.githubusercontent.com/briansmith/ring/main/crypto/fipsmodule/ec/gfp_p384.c",
+    "https://raw.githubusercontent.com/briansmith/ring/main/crypto/curve25519/curve25519_64_adx.c",
+    "https://github.com/briansmith/ring/tree/main/src/aead",
+    "https://github.com/briansmith/ring/issues/2868",
+    "https://github.com/briansmith/ring/issues/2840",
+    "https://github.com/briansmith/ring/issues/2751",
+    "https://github.com/briansmith/ring/issues?q=P-384+performance",
+    "https://crates.io/api/v1/crates/ring",
+    "https://github.com/rustsec/advisory-db/tree/main/crates/ring",
+    "https://raw.githubusercontent.com/rustls/rustls/main/README.md",
+    "https://c410-f3r.github.io/thoughts/tls-handshakes-measuring-the-performance-of-4-cryptography-libraries/",
+    "https://c410-f3r.github.io/thoughts/tls-handshakes-measuring-the-performance-of-4-cryptography-libraries/aes128gcmsha256.svg",
+    "https://c410-f3r.github.io/thoughts/tls-handshakes-measuring-the-performance-of-4-cryptography-libraries/aes256gcmsha384.svg",
+    "https://c410-f3r.github.io/thoughts/tls-handshakes-measuring-the-performance-of-4-cryptography-libraries/chacha20poly1305sha256.svg"
+  ],
+  "confidence": 0.4
+}
