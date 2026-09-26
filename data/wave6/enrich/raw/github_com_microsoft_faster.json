@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/microsoft/faster",
+  "one_liner": "Microsoft's two-tier hash-and-log KV store for skewed, larger-than-memory point workloads; its paper reports ~11.8x RocksDB throughput at 10% memory.",
+  "what_it_does": "F2Kv is an embedded C++ key-value store in the FASTER repo (cc/src/core/f2.h). It serves point Reads, Upserts, Deletes and atomic read-modify-writes over datasets much larger than RAM, aimed at workloads where a small hot set gets most of the traffic. The API looks nothing like RocksDB's: key and value types are compile-time template parameters that implement size() (and GetHash()/operator== for keys), every call takes a user-written IAsyncContext subclass, a callback and a serial number, threads must open sessions, and reads that hit disk return Pending until CompletePending() runs. There are no range scans, iterators, column families, transactions or compression, and durability comes from explicit Checkpoint()/Recover() calls rather than a per-write WAL.",
+  "how_it_is_fast": "Write-hot records stay in a FASTER HybridLog, which is updated in place in its in-memory mutable region, flushed append-only to disk and indexed by a latch-free in-memory hash table. Background hot-cold compaction moves write-cold records to a separate cold log. That log uses a two-level hash index: an in-memory table points to 256 B 'hash chunks' kept on disk, costing under 1 byte of RAM per cold key versus FASTER's 8 bytes. Compaction is multi-threaded and lookup-based, built on a Conditional-Insert primitive that copies a record only if no newer version of its key has been appended; the paper measures it 5.2x faster than FASTER's scan-based compaction while using 25x less memory. A second-chance FIFO read cache, chained into the hot index, serves read-hot records that live on disk, so a hot key needs no I/O and a cold key needs about two (index chunk plus record) instead of an LSM level probe.",
+  "when_to_use": [
+    "Point-only traffic (get/put/delete/RMW) with Zipfian-like skew on a dataset roughly 5-40x larger than the RAM you can give it. The paper used 250M keys (~30 GiB) under a 3 GiB cap.",
+    "Update- or RMW-heavy state such as counters, per-entity or per-function state, or streaming join synopses, where RocksDB's compaction write amplification hurts. Paper: 3.3-3.9 us single-thread write latency vs RocksDB's 6.7-17.3 us, and write amplification of 1.2-2.4 vs 2.5-5.8.",
+    "Workloads where the read-hot and write-hot key sets differ; the read cache keeps disk-resident read-hot records in memory without pulling them back into the write log.",
+    "Billions of keys where index RAM is the constraint: the cold-log index is tunable to under 1 B per key.",
+    "A Linux x86-64 NVMe server running a custom C++ service (up to 96 threads) where you control the per-thread loop (sessions, Refresh, CompletePending)."
+  ],
+  "when_not_to_use": [
+    "You need range scans, prefix seeks, ordered iteration, snapshots, transactions, column families or compression. F2Kv exposes point operations only; the paper even dropped MixGraph's 3% seeks.",
+    "Low-skew or uniform read-heavy access. Every cold-log read costs about two extra I/Os, the paper shows YCSB-B throughput falling as skew drops (alpha <= 50), and once memory reaches 20% or more of the dataset, the original FASTER matches F2.",
+    "Production use that needs a maintained engine. Since Aug 2026 the README says the repo is no longer actively maintained and points to Garnet/Tsavorite (C#). The F2 infinite-compaction/RMW-test-failure issue #944 is still open, its fix #947 has been an unmerged draft since Sep 2025, and the paper says F2 has not been tested on production workloads.",
+    "macOS or other non-Linux/non-Windows targets. The POSIX I/O backend requires Linux libaio (or liburing), and Windows CI runs only the in-memory tests, not the F2 tests.",
+    "You want a drop-in RocksDB swap. The callback/context API, compile-time key/value types and manual checkpointing make a port a rewrite."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "Linux: libaio, libuuid, Intel TBB, stdc++fs, pthread (optional liburing via USE_URING). Windows: rpcrt4. CMake FetchContent downloads toml11 v4.3.0 and googletest v1.14.0 at configure time. The optional Azure blob device also needs cpprestsdk and azure-storage-cpp.",
+    "min_toolchain": "CMake 3.14+. On Linux, GCC in -std=c++17 mode (the headers also use designated initializers, which GCC accepts as an extension). On Windows, Visual Studio 2022 with /std:c++20. CI uses Ubuntu 22.04 g++ and windows-2022.",
+    "platforms": "Linux x86-64 (libaio or io_uring) and Windows x64. No macOS I/O backend. ARM is not documented, and the io_uring spinlock uses the x86-only __builtin_ia32_pause.",
+    "thread_safety": "Latch-free, linearizable concurrent operations. Each thread must call StartSession(), then call Refresh()/CompletePending() periodically, then StopSession(). At most 96 threads (Thread::kMaxNumThreads); going over throws 'Too many threads!'. Only one Checkpoint() may run at a time; a second one throws.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Reads of disk-resident keys return Status::Pending, and the callback fires only when that same thread calls CompletePending(). The bundled benchmark calls Refresh() every 64 ops and CompletePending() every 1,600.",
+    "Auto-compaction is on by default, with disk budgets of only 1 GiB (hot) and 8 GiB (cold). The paper set them to 125% of dataset size (5 GiB / 35 GiB for 30 GiB of data), and budgets under 64 MiB throw. The read cache is off by default (DEFAULT_READ_CACHE_CONFIG.enabled = false) and has to be enabled and sized explicitly.",
+    "The hot index table_size must be a power of two and at most INT32_MAX or the constructor throws std::invalid_argument. The paper advises sizing both indexes to the expected unique-key counts to avoid extra I/Os per lookup. Misuse is reported through C++ exceptions.",
+    "The F2 configuration samples on the docs page do not compile as written (for example the typos hlog_copaction_config and hot-config). Start from cc/benchmark-dir/benchmark_f2.cc instead. That harness also differs from the paper's setup: 8-byte values, read cache disabled, 4 GiB hot + 12 GiB cold in-memory logs (its comment says 6/10 GiB), and only workloads A, B, C and 100% RMW."
+  ],
+  "pick_this_over_siblings_when": "Pick F2 over KVell and SplinterDB for pure point/RMW traffic with heavy skew and RAM around 10% of the data: in the same paper it averaged 11.9x KVell's and 4.6x SplinterDB's throughput, though SplinterDB had slightly lower single-thread YCSB-B read latency (42.1 vs 45.3 us). Pick SplinterDB, whose entry reports it matching RocksDB on small range queries, or another LSM sibling when you need ordered scans.",
+  "verified_claims_summary": "Setup, from the PVLDB 18(12) 2025 paper: CloudLab node with a 16-core Xeon Silver 4314 and 4 PM9A3 NVMe drives in RAID-0, 250M 8 B-key/100 B-value YCSB records (A/B/C/D/F/W) plus MixGraph, 16 threads, memory capped at 10% of the data. Every system ran with Direct I/O and no WAL, compression or checksums, and RocksDB v8.11.4 was tuned with 10-bit Bloom filters and the data-block hash index. F2 averaged 11.8x RocksDB's throughput, and single-thread latency was 1.4x lower on reads and 3.5x lower on writes. The compiler is not stated and the RocksDB harness is not published.",
+  "status_note": "MIT-licensed and public, but the README has said since Aug 2026 that the repo is no longer actively maintained (successor: Garnet/Tsavorite, in C#), not 'active' as recorded. The only C++ source change since F2 merged in Feb 2025 is an integer-overflow hardening patch, and the F2 compaction-hang fix (#947) is still an unmerged draft.",
+  "sources_read": [
+    "https://github.com/microsoft/FASTER",
+    "https://github.com/microsoft/FASTER/blob/main/cc/README.md",
+    "https://github.com/microsoft/FASTER/blob/main/cc/CMakeLists.txt",
+    "https://github.com/microsoft/FASTER/blob/main/cc/src/CMakeLists.txt",
+    "https://github.com/microsoft/FASTER/blob/main/cc/src/core/f2.h",
+    "https://github.com/microsoft/FASTER/blob/main/cc/src/core/config.h",
+    "https://github.com/microsoft/FASTER/blob/main/cc/src/core/thread.h",
+    "https://github.com/microsoft/FASTER/blob/main/cc/src/core/address.h",
+    "https://github.com/microsoft/FASTER/blob/main/cc/src/core/key_hash.h",
+    "https://github.com/microsoft/FASTER/blob/main/cc/src/core/record.h",
+    "https://github.com/microsoft/FASTER/blob/main/cc/src/core/alloc.h",
+    "https://github.com/microsoft/FASTER/blob/main/cc/src/core/light_epoch.h",
+    "https://github.com/microsoft/FASTER/blob/main/cc/src/environment/file_linux.h",
+    "https://github.com/microsoft/FASTER/blob/main/cc/src/index/mem_index.h",
+    "https://github.com/microsoft/FASTER/blob/main/cc/src/index/cold_index.h",
+    "https://github.com/microsoft/FASTER/blob/main/cc/src/index/hash_table.h",
+    "https://github.com/microsoft/FASTER/tree/main/cc/benchmark-dir",
+    "https://github.com/microsoft/FASTER/blob/main/cc/benchmark-dir/README.md",
+    "https://github.com/microsoft/FASTER/blob/main/cc/benchmark-dir/benchmark_f2.cc",
+    "https://github.com/microsoft/FASTER/blob/main/cc/benchmark-dir/benchmark.h",
+    "https://github.com/microsoft/FASTER/blob/main/docs/_docs/29-fasterkv-cpp.md",
+    "https://github.com/microsoft/FASTER/blob/main/azure-pipelines.yml",
+    "https://github.com/microsoft/FASTER/commits/main",
+    "https://github.com/microsoft/FASTER/issues/944",
+    "https://github.com/microsoft/FASTER/issues/924",
+    "https://github.com/microsoft/FASTER/issues/913",
+    "https://github.com/microsoft/FASTER/pull/947",
+    "https://github.com/microsoft/FASTER/pull/960",
+    "https://arxiv.org/abs/2305.01516",
+    "https://arxiv.org/pdf/2305.01516",
+    "https://hn.algolia.com/api/v1/search?query=F2%20FASTER%20key-value&tags=story"
+  ],
+  "confidence": 0.82
+}
