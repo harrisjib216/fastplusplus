@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/rpgmaker/netjson",
+  "one_liner": "C# JSON serializer that emits per-type IL at runtime; ~3.4x faster serialization than Json.NET in a 2014 benchmark.",
+  "what_it_does": "Maps .NET objects (classes, structs, lists, any IDictionary, Tuple, ExpandoObject, primitives) to and from JSON strings. The API is a static class: NetJSON.Serialize<T>(value) and NetJSON.Deserialize<T>(json), with TextWriter/TextReader, System.Type and NetJSONSettings overloads, plus DeserializeObject for an untyped Dictionary<string, object> tree. It is not a drop-in for Json.NET: the entry points differ, it has its own [NetJSONProperty] attribute and its defaults differ.",
+  "how_it_is_fast": "The first time it sees a type, it generates a specialized serializer/deserializer class with System.Reflection.Emit (a TypeBuilder in one shared dynamic assembly plus DynamicMethod stubs) and caches it in a static generic field, so later calls do no reflection. The generated code appends into a StringBuilder cached per thread, formats integers with a 4-digit lookup table into stackalloc buffers (IntUtility), and deserializes by walking the string with unsafe char* pointers and hand-written number parsers. Property names are matched by a generated chain of string.Equals checks. It deliberately skips type validation: the author declined type-mismatch checks for performance (issue #217).",
+  "when_to_use": [
+    "Hot paths that serialize small, statically typed POCOs through the generic Serialize<T>. In the author's .NET 5 BenchmarkDotNet run (issue #238, i7-8650U), a 2-property object took 219.8 ns vs 503.0 ns for System.Text.Json.",
+    "Legacy .NET Framework 3.5/4.0 code bases that need a faster JSON mapper than Json.NET. The 1.4.7 package still ships net35 and net40 builds.",
+    "Services that exchange JSON as .NET strings (UTF-16) rather than UTF-8 byte buffers.",
+    "Long-running processes with a fixed set of types, where the one-time IL-generation cost per type is paid back over many calls.",
+    "Trusted, well-formed payloads produced by your own systems."
+  ],
+  "when_not_to_use": [
+    "Object-typed data such as Dictionary<string, object> with mixed values, or boxed values. A contributor's .NET 5 run in issue #238 measured NetJSON at 6.387 us vs 1.494 us for System.Text.Json on such a dictionary, and a boxed int at 937 ns vs 161 ns.",
+    "UTF-8 or stream pipelines such as ASP.NET Core request and response bodies. There is no byte[], Span, Stream or async API, and the TextReader overloads call ReadToEnd, so the whole payload is buffered (issue #232). Utf8Json beat NetJSON in the same #238 run (150.8 vs 219.8 ns).",
+    "Untrusted input. The parser skips type validation by design, and infinite loops on malformed JSON have been reported and fixed several times (#197, #217, #226).",
+    "High-precision decimal fields such as money: decimal values are parsed through a hand-written double parser (new Decimal(FastStringToDouble(...))), so digits beyond double precision are lost.",
+    "Native AOT, trimmed or other no-JIT targets: serializers are emitted with Reflection.Emit at runtime and there is no source generator."
+  ],
+  "integration": {
+    "form": "shared lib (NuGet package `NetJSON`, managed DLL). The library is five .cs files that need AllowUnsafeBlocks if you vendor them.",
+    "dependencies": "none on the net35 to net9.0 targets; the netstandard1.6/2.0 targets pull in the System.Reflection.Emit* packages, plus Microsoft.Extensions.DependencyModel on 1.6",
+    "min_toolchain": ".NET Framework 3.5, .NET Standard 1.6 or .NET 5. The 1.4.7 package ships net35, net40, net462, net472, netstandard1.6, netstandard2.0 and net5.0 through net9.0 builds.",
+    "platforms": "Any OS or architecture running a JIT-capable CLR with Reflection.Emit; the code uses unsafe pointers. Native AOT support is not documented, and it is unlikely to work because serializers are generated at runtime.",
+    "thread_safety": "Not documented. The caches are ConcurrentDictionary, type generation runs under locks, and the StringBuilders and settings are [ThreadStatic], so concurrent Serialize/Deserialize calls appear to be intended. The global static option setters are not synchronized.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Defaults differ from Json.NET. SkipDefaultValue is true, so members holding 0, false or null are left out of the output. The wiki documents the default DateFormat as a \"\\Date(value)\" form, not ISO 8601.",
+    "The global options (NetJSON.DateFormat, CaseSensitive and others, mostly [Obsolete]) are copied into a [ThreadStatic] NetJSONSettings.CurrentSettings the first time each thread uses it. Changing a static option later does not affect threads that have already serialized, so pass a NetJSONSettings instance instead.",
+    "The IncludeFields setter ignores its argument and always sets true, so public fields are serialized along with properties. The wiki still says the default is false.",
+    "GenerateTypesInto and GenerateAssembly can save a precompiled DLL only on .NET Framework. On .NET Standard and .NET 5+ the dynamic assembly is run-only, so the first-call IL-generation cost cannot be moved to build time."
+  ],
+  "pick_this_over_siblings_when": "No .NET siblings are catalogued in this category: the listed JSON entries (simdjson, yyjson, Sonic, orjson, sonic-rs, etc.) serve C/C++, Go, Rust or Python. NetJSON matters only if you are on .NET and want typed POCO-to-string mapping, not a native parser behind bindings.",
+  "verified_claims_summary": "The README's ratios are serialization times from a 2014 theburningmonk SimpleSpeedTester run on one small object: NetJson 112.24 ms vs 380.59 ms for Json.NET 6.0.4 (~3.4x). Deserialization was 175.00 vs 437.53 ms (~2.5x), protobuf-net beat NetJSON on both, and no CPU, .NET runtime or build settings were given. The README's '1.6x faster than protobuf-net' comes from a separate undocumented log in which deserialization was a tie (252.18 vs 251.50 ms).",
+  "status_note": "Active but in single-maintainer bug-fix mode: releases are sporadic, and 1.4.7 (2026-09-05) fixed ISO DateTime formatting (#253, #254). It is MIT-licensed, has ~1.22M NuGet downloads and is easy to add from NuGet, but no UTF-8, Span or Stream support has landed.",
+  "sources_read": [
+    "https://github.com/rpgmaker/NetJSON",
+    "https://github.com/rpgmaker/NetJSON/blob/master/README.md",
+    "https://github.com/rpgmaker/NetJSON/wiki/Quick-Guide",
+    "https://raw.githubusercontent.com/wiki/rpgmaker/NetJSON/Quick-Guide.md",
+    "https://github.com/rpgmaker/NetJSON/blob/master/NetJSON/NetJSON.cs",
+    "https://github.com/rpgmaker/NetJSON/blob/master/NetJSON/NetJSON.Internals.cs",
+    "https://github.com/rpgmaker/NetJSON/blob/master/NetJSON/Models.cs",
+    "https://github.com/rpgmaker/NetJSON/blob/master/NetJSON/IntUtility.cs",
+    "https://github.com/rpgmaker/NetJSON/blob/master/NetJSON/NetJSON.nuspec",
+    "https://github.com/rpgmaker/NetJSON/blob/master/NetJSON/NetJSON.csproj",
+    "https://github.com/rpgmaker/NetJSON/blob/master/NetJSON.Standard2_0/NetJSON.Standard2_0.csproj",
+    "https://github.com/rpgmaker/NetJSON/blob/master/NetJSON.Net9_0/NetJSON.Net9_0.csproj",
+    "https://github.com/rpgmaker/NetJSON/blob/master/NetJSON.Benchmark.Net5_0/Program.cs",
+    "https://github.com/rpgmaker/NetJSON/blob/master/NetJSON.Benchmark.Net5_0/Benchmark.cs",
+    "https://github.com/rpgmaker/NetJSON/blob/master/NetJSON.Benchmark.Net5_0/Models/SimpleObjectBenchmark.cs",
+    "https://github.com/rpgmaker/NetJSON/blob/master/NetJSON.Benchmark.Net5_0/Models/DictionariesBenchmark.cs",
+    "https://github.com/rpgmaker/NetJSON/issues",
+    "https://github.com/rpgmaker/NetJSON/issues/252",
+    "https://github.com/rpgmaker/NetJSON/issues/238",
+    "https://github.com/rpgmaker/NetJSON/issues/232",
+    "https://github.com/rpgmaker/NetJSON/issues/226",
+    "https://github.com/rpgmaker/NetJSON/issues/217",
+    "https://github.com/rpgmaker/NetJSON/issues/254",
+    "https://github.com/rpgmaker/NetJSON/commits/master",
+    "https://theburningmonk.com/2014/08/json-serializers-benchmarks-updated-2/",
+    "https://theburningmonk.com/wp-content/uploads/2014/08/image1.png",
+    "https://azuresearch-usnc.nuget.org/query?q=packageid:NetJSON&take=1"
+  ],
+  "confidence": 0.75
+}
