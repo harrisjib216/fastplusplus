@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/learnedsystems/SOSD/blob/master/competitors/interpolation_btree.h",
+  "one_liner": "Static B-tree using interpolation search inside nodes, from the SOSD benchmark; about 8% faster lookups than STX B+-tree.",
+  "what_it_does": "A read-only B-tree over sorted integer keys, bulk-loaded bottom-up into 256-entry nodes, where each key maps to a value (in SOSD, the key's position in a sorted array). The core class interpolation_btree::BTree<Key, Value> has only FastLoadGenerate(generator), which builds from a sorted stream, and Lookup(key), which returns the value of the first key >= the query. SOSD's InterpolationBTree<KeyType, size_scale> wrapper indexes only every size_scale-th key and returns a [pos - size_scale, pos] window that the harness then searches in the original array. It is a different interface from STX's std::map-like container, not a drop-in replacement.",
+  "how_it_is_fast": "Each inner and leaf node stores a slope, count / (last_key - first_key), so a lookup guesses the slot as slope * (key - first_key) in one linear-interpolation step. It then walks left or right one slot at a time to the exact lower bound, instead of binary-searching the node (the linear and std::lower_bound versions remain in the file, commented out). The idea is from G. Graefe, 'B-tree indexes, interpolation search, and skew', DaMoN '06 (DOI 10.1145/1140402.1140409), not a 2018 VLDB paper. When keys within a node are close to evenly spaced the guess lands near the target, so the walk is short, and the 256-way fanout keeps the tree shallow.",
+  "when_to_use": [
+    "Static, sorted 32- or 64-bit unsigned integer keys that are loaded once and then only read.",
+    "Keys whose distribution is close to linear inside each 256-key node (smooth CDFs like SOSD's amzn), so the interpolation guess is nearly exact.",
+    "A small sparse index over a large sorted array: index every Nth key and finish with a binary search in the returned window. The 9.0 MB variant beat STX's best 166 MB variant on 32-bit amzn.",
+    "Index-structure research or benchmarking, as the 'B-tree plus interpolation, no learned model' baseline next to RMI, RadixSpline and PGM.",
+    "You want a ~370-line template with no dependencies that you can vendor and modify, and GPL-3.0 is acceptable."
+  ],
+  "when_not_to_use": [
+    "Any workload with inserts, deletes or updates. The SOSD code only bulk-loads, even though the paper's Table 1 marks IBTree as supporting updates.",
+    "Skewed or clustered keys inside a node, such as osm-like cell IDs. A bad guess is corrected by a linear walk of up to 255 slots per node, with no fallback to binary search.",
+    "Latency is the priority. In the same Table 2, RMI (180.90 ns), RadixSpline (266.58 ns), PGM (326.48 ns) and FAST (435.33 ns) are all faster, and the hash tables are faster still for pure point lookups (RobinHash 93.69 ns, CuckooMap 114.50 ns).",
+    "Non-numeric or composite keys such as strings or tuples. Interpolation needs key subtraction and conversion to double, and there is no comparator parameter.",
+    "You need range scans, iteration, a 'not found' result, a maintained library, or a non-copyleft license. None of these is provided, the code is only exercised by SOSD's harness, and the license is GPL-3.0."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "The core interpolation_btree::BTree needs only the C++ standard library. The file itself does not include <vector>, <functional> or <cassert>; it gets them through SOSD's competitors/base.h -> util.h. The InterpolationBTree wrapper also needs SOSD's Competitor, KeyValue, SearchBound and util::timing.",
+    "min_toolchain": "Not documented. SOSD builds with CMAKE_CXX_STANDARD 17, but the header uses only C++11-level features. The maintainers built SOSD with g++-9 in an Ubuntu 18.04 container (issue #8), and the README installs clang on Ubuntu 20.04.",
+    "platforms": "Any. The code is portable scalar C++ with no SIMD intrinsics. The paper's numbers were measured on x86-64 (Xeon Gold 6230) with SOSD's -march=native -ffast-math build.",
+    "thread_safety": "Not documented. The tree cannot change after the bulk load, and Lookup is const and never writes, so concurrent reads should be safe. The paper's multithreaded lookup experiment (Fig. 16) includes IBTree. There is no write path to synchronize.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Destruction is broken. BTreeNodeBase has no virtual destructor, so `delete root` and `delete children[i]` go through base pointers. That is undefined behavior, the inner-node destructors never run, and nearly the whole tree leaks. Separately, the inner destructor loop runs i < count and would skip the last of the count+1 children anyway.",
+    "Querying a key larger than the largest indexed key is undefined behavior. The leaf's early-exit path returns `count`, so Lookup reads values[count], which is uninitialized or past the end of a full 256-entry leaf. SOSD avoids this only because its wrapper always indexes the last key and it only queries existing keys.",
+    "Lookup has lower-bound semantics and never reports a miss: it always returns some value. Node fanout (256) is hard-coded in private type aliases, nodes are allocated with plain new (no allocator parameter), and the internal asserts are compiled out in SOSD's Release (-DNDEBUG) build.",
+    "The 9.0 MB vs 166.0 MB memory comparison reflects which sampling variant was fastest for each structure (both are tuned by indexing every Nth key), not an inherent 18x difference in compactness."
+  ],
+  "pick_this_over_siblings_when": "Choose it over RadixSpline, RMI or FAST (fast64) only when you want a plain comparison tree with no model tuning, no RMI code generation and no Rust/AVX-512 FAST library; on speed alone it loses, since RadixSpline is both faster (266.58 ns) and smaller (4.0 MB) in the same table. If you need updates, use PGM-index, ALEX or LIPP instead.",
+  "verified_claims_summary": "SOSD's PVLDB 14(1) Table 2 (fastest variant of each structure, 32-bit version of the 200M-key amzn dataset, 10M lookups in one harness that finishes with a search over the sorted array) reports IBTree at 446.55 ns per lookup and 9.0 MB against 482.11 ns and 166.0 MB for the STX B+-tree, about 8% faster, on an Intel Xeon Gold 6230 @ 2.10GHz with 256 GB RAM. The build used SOSD's Release -march=native -ffast-math flags, but no compiler is named, no std:: container is compared, and the 64-bit datasets have only Pareto plots, not IBTree numbers.",
+  "status_note": "Abandoned (the IBTree file last changed in a May 2021 reformat, SOSD's last commit was April 2022, and a maintainer wrote in March 2026 in issue #35 that the repo is not kept up to date), but it is a ~370-line GPL-3.0 header that is easy to copy, as long as you accept the copyleft and fix the destructor and out-of-range bugs.",
+  "sources_read": [
+    "https://github.com/learnedsystems/SOSD/blob/master/competitors/interpolation_btree.h",
+    "https://github.com/learnedsystems/SOSD",
+    "https://github.com/learnedsystems/SOSD/blob/master/README.md",
+    "https://github.com/learnedsystems/SOSD/blob/master/CMakeLists.txt",
+    "https://github.com/learnedsystems/SOSD/blob/master/benchmarks/benchmark_ibtree.cc",
+    "https://github.com/learnedsystems/SOSD/blob/master/benchmarks/benchmark_ibtree.h",
+    "https://github.com/learnedsystems/SOSD/blob/master/benchmarks/benchmark_btree.cc",
+    "https://github.com/learnedsystems/SOSD/blob/master/competitors/base.h",
+    "https://github.com/learnedsystems/SOSD/blob/master/competitors/stx_btree.h",
+    "https://github.com/learnedsystems/SOSD/blob/master/benchmark.h",
+    "https://github.com/learnedsystems/SOSD/blob/master/util.h",
+    "https://github.com/learnedsystems/SOSD/commits/master/competitors/interpolation_btree.h",
+    "https://github.com/learnedsystems/SOSD/issues/8",
+    "https://github.com/learnedsystems/SOSD/issues/9",
+    "https://github.com/learnedsystems/SOSD/issues/35",
+    "https://www.vldb.org/pvldb/vol14/p1-marcus.pdf",
+    "https://api.crossref.org/works?query.bibliographic=B-tree+indexes+interpolation+search+and+skew+Graefe",
+    "https://api.semanticscholar.org/graph/v1/paper/DOI:10.1145/1140402.1140409"
+  ],
+  "confidence": 0.8
+}
