@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/atsukisato/CascadedLBF",
+  "one_liner": "Learned Bloom filter: pruned boosted-tree cascade plus Bloom filters; less memory than Bloom/PLBF, faster rejects than PLBF.",
+  "what_it_does": "Answers approximate membership queries for a static key set in which every key and every query also has a feature vector (for example, lexical URL features). A trained classifier then reduces the Bloom-filter bits needed to hit a target false-positive rate (FPR). It is not a Bloom-filter drop-in. You load a pre-trained XGBoost model (or the repo's linear or shallow-NN boosters), calibrate on labeled keys and sampled non-keys, call Calibration_Manager::configure_lbf_assembly(n, F, lambda, mu), and then use add_all(X, keys) and contains_all(X, keys), which take uint64 keys plus std::vector<float> features. Inserted keys are never missed, and the target FPR holds only in expectation over the calibration non-key distribution.",
+  "how_it_is_fast": "The query runs through a cascade of up to D boosted weak learners. Before each tree, a 'trunk' Bloom filter rejects non-keys without running inference. After each tree, a query whose running score exceeds a threshold exits early to a 'branch' Bloom filter. Queries that survive reach a PLBF-style final stage with K=8 score-partitioned Bloom filters. A dynamic program over discretized FPRs (powers of 0.5, 20 levels) chooses how many trees to keep, which prunes an over-sized ensemble, and sets each filter's FPR. It minimizes lambda*memory/M_BF + (1-lambda)*reject_time/R_BF at target FPR F. Thresholds come from quantile candidates, with optional Optuna refinement. The memory saving comes from right-sizing model versus filters; the reject-time saving comes from early rejection, whereas PLBF runs the whole ensemble on every query.",
+  "when_to_use": [
+    "Static blocklist-style sets whose members are predictable from features: malicious URLs or files, intrusion-traffic signatures (the paper's URL, Ember and Kitsune data). Memory must be scarce and rebuilds rare.",
+    "You would otherwise use a PLBF or Sandwiched LBF with boosted trees and don't want to hand-tune the tree count. CLBF prunes a 100-tree XGBoost model to the depth D that minimizes total memory.",
+    "The filter is a pre-filter in front of an expensive exact lookup and non-key reject latency matters. Lower lambda below 1 to trade memory for faster rejects (lambda=0 falls back to a plain Bloom filter).",
+    "Reproducing or benchmarking learned Bloom filters: Docker scripts rebuild CLBF and C++ baselines (Bloom, PLBF, Sandwiched LBF, G-PLBF, ELBF, PHBF, HABF) on 14 datasets."
+  ],
+  "when_not_to_use": [
+    "Keys carry no predictive features (random IDs, hashes). No classifier can separate them, and the optimizer's best case is a plain Bloom filter; use a xor, ribbon or blocked Bloom filter instead.",
+    "The key set changes often. Single-key add() and contains() throw 'Not implemented', and the paper says updates shift the distribution and need a rebuild. Construction includes model training and calibration: even Sandwiched LBF builds 180x-1,100,000x slower than a Bloom filter, and CLBF is 1.003x-1.23x on top of that.",
+    "The query distribution can drift from the calibration non-keys, or is adversarial. The FPR target is met only in expectation on calibration data.",
+    "You need a production library. It is research code with 6 commits and 0 stars, no tests or CI of its own, filter memory that is never freed, hard-coded /tmp scratch files, and headers that link from only one translation unit.",
+    "You need the smallest possible filters: every internal filter is a classical Bloom filter (about 1.44x the information-theoretic bound). The paper says any AMQ could be used, but the code hard-wires Bloom."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "XGBoost C API (libxgboost, dmlc/xgboost git submodule), nlohmann/json, and the vendored fastfilter_cpp Bloom filter (modified for runtime bits-per-key). The experiments additionally need Eigen3 (PHBF baseline) and Python (preprocessing, Optuna variant).",
+    "min_toolchain": "C++17, CMake 3.12+ for the example; paper and Docker image use GCC 11.4.0 on Ubuntu 22.04; fast range reduction uses __uint128_t (GCC/Clang), with a modulo fallback otherwise",
+    "platforms": "Tested on Linux x86-64 (Docker Ubuntu 22.04; experiments build with -march=native). The example CMake also links libxgboost.dylib on macOS. Hard-coded /tmp paths assume POSIX.",
+    "thread_safety": "Not documented. contains_all only reads state. Model load, pruning and configuration write and delete fixed files (/tmp/xgboost_model.bin, /tmp/xgboost_model.json, /tmp/xgboost.json, /tmp/reduced_xgboost.json), so concurrent builds on one host can clobber each other.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Every query must pass the exact feature vector used when the key was inserted. The path through the cascade depends on the running score, so changed features can produce a false negative. Keys are uint64; the experiments hash strings with djb2 first.",
+    "The vendored BloomFilter holds a raw new[] array and its destructor is commented out. Filters are never freed, and copying a CLBF (the example does clbf = calibration_manager.configure_lbf_assembly(...)) gives shallow copies that share bit arrays.",
+    "Headers define non-inline functions and a global variable (warn_too_many_false_positives). Include them from exactly one .cpp file, or linking fails with duplicate symbols.",
+    "The custom tree evaluator ignores XGBoost's default_left, so NaN features always go right and scores can differ from XGBoost's own output. Configuration also times a plain Bloom filter (n keys, 1M queries) at build time, so with lambda < 1 the chosen layout depends on the machine."
+  ],
+  "pick_this_over_siblings_when": "Over PLBF (kapilvaidya24/PLBF), pick CLBF when your model is a boosted ensemble: at matched memory it rejects up to 14.6x faster and needs up to 17% less memory, with no hand-picked tree count. The paper skipped Ada-BF because PLBF dominates it. Pick non-learned siblings (Xor/xor_singleheader, BuRR, Prefix Filter, ChainedFilter) when keys lack predictive features, the set changes, or you need a maintained library.",
+  "verified_claims_summary": "arXiv 2502.03696 v2 setup: Intel i9-11900H, GCC 11.4.0 -O3, single-threaded; 100-round depth-4 XGBoost; 10,000 held-out non-keys. At the same FPR, CLBF used up to 17% less total memory (model plus filters) than the best PLBF configuration (Ember, F=0.005). Its mean reject time was up to 14.6x lower than PLBF's at about 9,250 kB on Higgs, and 65x in an appendix shallow-NN variant. Against the classical fastfilter_cpp Bloom filter it is mostly just plotted; the one quoted number is Kitsune [SSDP] at F=0.01, 3.3 kB vs 1,684 kB, an easy dataset. Reject time includes inference but is measured in a batch over pre-extracted feature vectors, so feature extraction is not counted.",
+  "status_note": "Active research code: 6 commits from January to August 2026, 0 stars, no issues, Apache-2.0. You can copy src/ plus the vendored Bloom header and link libxgboost, but it is not a packaged library. The arXiv v2 abstract links this repo.",
+  "sources_read": [
+    "https://github.com/atsukisato/CascadedLBF",
+    "https://github.com/atsukisato/CascadedLBF/blob/main/README.md",
+    "https://github.com/atsukisato/CascadedLBF/blob/main/.gitmodules",
+    "https://github.com/atsukisato/CascadedLBF/blob/main/src/clbf/clbf.h",
+    "https://github.com/atsukisato/CascadedLBF/blob/main/src/clbf/calibration_manager.h",
+    "https://github.com/atsukisato/CascadedLBF/blob/main/src/clbf/find_optimal_parameters.h",
+    "https://github.com/atsukisato/CascadedLBF/blob/main/src/clbf/lbf_config.h",
+    "https://github.com/atsukisato/CascadedLBF/blob/main/src/bloom/bloom.h",
+    "https://github.com/atsukisato/CascadedLBF/blob/main/src/utils/tree.h",
+    "https://github.com/atsukisato/CascadedLBF/blob/main/src/utils/bloom_io.h",
+    "https://github.com/atsukisato/CascadedLBF/blob/main/src/utils/reduce_xgboost_model.h",
+    "https://github.com/atsukisato/CascadedLBF/blob/main/thirdparty/fastfilter_cpp/src/bloom/bloom.h",
+    "https://github.com/atsukisato/CascadedLBF/blob/main/thirdparty/fastfilter_cpp/src/hashutil.h",
+    "https://github.com/atsukisato/CascadedLBF/blob/main/examples/simple.cpp",
+    "https://github.com/atsukisato/CascadedLBF/blob/main/examples/CMakeLists.txt",
+    "https://github.com/atsukisato/CascadedLBF/blob/main/experiment/CMakeLists.txt",
+    "https://github.com/atsukisato/CascadedLBF/blob/main/experiment/clbf/test_clbf.cpp",
+    "https://github.com/atsukisato/CascadedLBF/blob/main/experiment/utils/str2uint64_hash.h",
+    "https://github.com/atsukisato/CascadedLBF/blob/main/scripts/clbf/construct_clbf.sh",
+    "https://github.com/atsukisato/CascadedLBF/blob/main/scripts/setup.sh",
+    "https://github.com/atsukisato/CascadedLBF/blob/main/Dockerfile",
+    "https://github.com/atsukisato/CascadedLBF/commits/main",
+    "https://github.com/atsukisato/CascadedLBF/issues",
+    "https://arxiv.org/abs/2502.03696",
+    "https://arxiv.org/pdf/2502.03696",
+    "http://export.arxiv.org/api/query?id_list=2502.03696",
+    "https://hn.algolia.com/api/v1/search?query=Cascaded%20Learned%20Bloom%20Filter",
+    "https://api.crossref.org/works?query.bibliographic=Cascaded+Learned+Bloom+Filter+Model-Filter+Size+Balance+Fast+Rejection"
+  ],
+  "confidence": 0.8
+}
