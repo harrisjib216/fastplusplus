@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/wuwuz/vacuum-filter",
+  "one_liner": "Deletable cuckoo-filter variant allowing any table size; ~25% less space than cuckoo on average, smaller than Bloom below 3% FPR.",
+  "what_it_does": "An approximate-membership filter that supports insert, lookup and delete. It stores fingerprints in a 4-slot-per-bucket table like a cuckoo filter, but the table can be any size instead of a power of two. The repo ships two versions. vacuum.h is written from scratch: VacuumFilter<fp_t, fp_len>, with init(n, 4, max_kicks) and insert/lookup/del on uint64_t that return bool; it is always semi-sorted and slower. ModifiedCuckooFilter/ is the faster version: cuckoofilter::VacuumFilter<ItemType, bits, TableType> keeps Fan et al.'s Add/Contain/Delete Status API and adds Add_many/Contain_many/Delete_many batch calls.",
+  "how_it_is_fast": "The table is split into power-of-two chunks, and the alternate bucket is B1 XOR (H(f) mod L), so both candidate buckets sit in the same chunk. The table then only needs to be a multiple of L, not a power of two. A multi-range alternate function uses the fingerprint's low 2 bits to pick one of 4 range sizes, each sized with a balls-into-bins bound for 95% load. Most keys get small ranges and so better cache/TLB locality: the paper's Table 2 reports 75% of bucket pairs in the same 4 KB page, versus 0.83% with a single range. Insertion looks one step ahead, checking the alternates of all 8 fingerprints in the two full buckets before a random-walk kick; bucket indexes use the multiply-shift (x*m)>>32 range reduction; lookups use the CF's SWAR bit-trick tag compare; and optional semi-sorting saves 1 bit per item.",
+  "when_to_use": [
+    "Dynamic sets of 64-bit integer (or pre-hashed) keys that need deletes, where the item count is known up front and is not near 3.8x2^k: there a cuckoo filter must round up to a power-of-two table (the paper's 274,926-cert set: VF-ss 12.9 vs CF-ss 21.0 bits/item at 0.1% FPR, similar lookup speed).",
+    "Target false-positive rates below about 3% (e.g. 0.1%-0.01%), where VF-ss needs about 2.07 + 1.05*log2(1/eps) bits/item and beats Bloom on space.",
+    "Filters much larger than the last-level cache, or on SSD/mmap, where two-bucket locality matters (the paper measured 1.86-2.13x faster lookups than CF on SSD with a 100 MB memory limit).",
+    "Bulk loads and probes that can use the 128-key batch APIs with padded arrays.",
+    "Research or prototyping where you will vendor and patch the headers yourself."
+  ],
+  "when_not_to_use": [
+    "Static or build-once sets: xor/binary fuse or ribbon filters are smaller and faster to query.",
+    "Filters run near full (>90% occupancy for lookups, >65% for inserts): the paper shows cuckoo filters tie or win there.",
+    "You need resizing, duplicate-insert tolerance, serialization or concurrent access: the paper's IUPR/dynamic-VF framework is not in the repo, there is no save/load API, and there is no locking. Inserting the same key 9 times overflows its 8 candidate slots.",
+    "Tiny filters, or FPR above 3%: the fast version rounds the table up to a multiple of at least 1,024 buckets (wasteful below about 4k keys), and above 3% FPR Bloom is smaller.",
+    "Space is not tight and raw lookup speed is the goal: TUM's 2021 partitioned-filters study found that non-power-of-two addressing mostly slows cuckoo/Morton filters and recommends power-of-two tables in that case."
+  ],
+  "integration": {
+    "form": "source-drop (header-only templates: vacuum.h + hashutil.h, or ModifiedCuckooFilter/src/*.h; no CMake/package, only demo makefiles)",
+    "dependencies": "vacuum.h: standard library only. Fast version: ModifiedCuckooFilter/src/hashutil.h includes <openssl/evp.h>, so it needs OpenSSL headers to compile (it links -lssl -lcrypto only if hashutil.cc is used).",
+    "min_toolchain": "C++14 per the top-level makefile (C++11 in the CF subdirectory). GCC/Clang only: needs unsigned __int128, __attribute__((packed)), and <bits/stdc++.h> in the demo. No tested compiler versions are documented.",
+    "platforms": "64-bit little-endian. The paper tested x86-64 (Xeon E5-2687W) and the makefile uses -march=native -mpopcnt. No SIMD intrinsics are needed, but the code does unaligned 64-bit loads.",
+    "thread_safety": "Not documented. There is no synchronization, and inserts use the global rand() (the fast constructor also calls srand(1)). Treat it as single-threaded and lock writers externally.",
+    "drop_in_for_baseline": "partial: the fast version keeps efficient/cuckoofilter's constructor and Add/Contain/Delete Status API, so a CF user mostly just renames the type. It has no Bloom-style API, and keys must be 64-bit integers."
+  },
+  "gotchas": [
+    "A failed insert silently drops an older key. When vacuum.h insert() or the batch Add_many()/evict() runs out of kicks, it returns false after placing the new fingerprint and discards the last evicted one, so a previously inserted key can start returning false negatives. Rebuild on any failure.",
+    "The batch APIs assume key and result arrays padded to a multiple of 128. Contain_many always processes full 128-key batches, and all *_many calls memcpy 128 results, so unpadded arrays are read and written out of bounds. Contain_many also ignores the victim slot.",
+    "The headers are not ODR-safe. Non-inline free functions (upperpower2, solve_equation, proper_alt_range, a global max(int,int)) break linking if included in 2+ translation units. They also define global macros (MIN, MAX, ROUNDUP, debug), and hashutil.h does a global 'using namespace std'. vacuum.h uses assert/log without including <cassert>/<cmath>, and its include guard is named CUCKOO_H.",
+    "Side effects and fixed hashing: the fast constructor prints alt ranges to std::cout and reseeds rand(). Each vacuum.h object embeds 512 KiB of encode/decode tables (the demo puts one on the stack). Hash seeds are fixed (mt19937(1), constant MurmurHash64), so adversarial keys can force insert failures. Deleting a key that was never inserted can remove another key's fingerprint."
+  ],
+  "pick_this_over_siblings_when": "Pick it over Xor/Binary Fuse and BuRR when the set changes and you need deletions, since those are build-once. Pick it over Prefix Filter when you need deletes: Prefix Filter's README calls it an incremental (insert-only) filter. Against Morton Filter, the other deletable cuckoo variant, the VF paper reports lower memory in all its tested cases and support for arbitrary fingerprint lengths; SuRF solves range queries, a different problem.",
+  "verified_claims_summary": "The PVLDB 2020 paper ran on an Intel Xeon E5-2687W (3.0 GHz, 30 MB L3) with the compiler and flags not stated, using 0.95x2^27 random 64-bit keys in 192 MB filters with 12-bit fingerprints (13-bit semi-sorted), against Fan et al.'s CF code, the authors' own Bloom/BBF/DIBF and the published MF/CQF code. VF-ss did positive lookups 1.1-1.8x faster than CF-ss and tied on deletes, and VF had the highest lookup throughput below 90% occupancy and the highest insert throughput below 65%. The ~25%-less-space-than-CF result comes mainly from CF's power-of-two table rounding. The '>10x vs Bloom' headline uses the authors' own Bloom implementation, which an xor-filter co-author on HN called un-optimized (other papers show about 2x for CF over Bloom). No std:: container is compared.",
+  "status_note": "Research code frozen since October 2019: the only later commit (2024-11-23) added the MIT LICENSE, and a 2021 license question is still open with no reply. It is MIT, with an Apache-2.0 subdirectory derived from CMU/Intel's cuckoofilter, and small enough to vendor, but expect to patch the ODR, batch-overrun and stdout issues before production use. A Java port exists in Alibaba's mpc4j, and TUM's partitioned-filters repo vendors the code.",
+  "sources_read": [
+    "https://github.com/wuwuz/Vacuum-Filter",
+    "https://github.com/wuwuz/Vacuum-Filter/blob/master/README.md",
+    "https://github.com/wuwuz/Vacuum-Filter/blob/master/makefile",
+    "https://github.com/wuwuz/Vacuum-Filter/blob/master/test.cpp",
+    "https://github.com/wuwuz/Vacuum-Filter/blob/master/vacuum.h",
+    "https://github.com/wuwuz/Vacuum-Filter/blob/master/hashutil.h",
+    "https://github.com/wuwuz/Vacuum-Filter/blob/master/LICENSE",
+    "https://github.com/wuwuz/Vacuum-Filter/blob/master/ModifiedCuckooFilter/README.md",
+    "https://github.com/wuwuz/Vacuum-Filter/blob/master/ModifiedCuckooFilter/LICENSE",
+    "https://github.com/wuwuz/Vacuum-Filter/blob/master/ModifiedCuckooFilter/Makefile",
+    "https://github.com/wuwuz/Vacuum-Filter/blob/master/ModifiedCuckooFilter/src/cuckoofilter.h",
+    "https://github.com/wuwuz/Vacuum-Filter/blob/master/ModifiedCuckooFilter/src/singletable.h",
+    "https://github.com/wuwuz/Vacuum-Filter/blob/master/ModifiedCuckooFilter/src/packedtable.h",
+    "https://github.com/wuwuz/Vacuum-Filter/blob/master/ModifiedCuckooFilter/src/hashutil.h",
+    "https://github.com/wuwuz/Vacuum-Filter/blob/master/ModifiedCuckooFilter/src/bitsutil.h",
+    "https://github.com/wuwuz/Vacuum-Filter/blob/master/ModifiedCuckooFilter/src/permencoding.h",
+    "https://github.com/wuwuz/Vacuum-Filter/blob/master/ModifiedCuckooFilter/src/debug.h",
+    "https://github.com/wuwuz/Vacuum-Filter/blob/master/ModifiedCuckooFilter/benchmarks/bulk-insert-and-query.cc",
+    "https://github.com/wuwuz/Vacuum-Filter/blob/master/ModifiedCuckooFilter/benchmarks/Makefile",
+    "https://github.com/wuwuz/Vacuum-Filter/issues/1",
+    "https://github.com/wuwuz/Vacuum-Filter/commits/master",
+    "http://www.vldb.org/pvldb/vol13/p197-wang.pdf",
+    "https://hn.algolia.com/api/v1/search?query=%22vacuum%20filter%22&tags=story",
+    "https://hn.algolia.com/api/v1/search?query=%22vacuum%20filters%22&tags=comment",
+    "https://hn.algolia.com/api/v1/items/28113100",
+    "https://github.com/search?q=VacuumFilter&type=code",
+    "https://github.com/tum-db/partitioned-filters",
+    "https://db.in.tum.de/~bandle/papers/vldb21-partitionedFilters.pdf",
+    "https://github.com/FastFilter/fastfilter_cpp",
+    "https://github.com/TomerEven/Prefix-Filter/blob/main/README.md",
+    "https://github.com/opengauss-mirror/openGauss-server/blob/master/contrib/gv_index/filter.h",
+    "https://github.com/jerryp1/mapcomp/blob/main/mpc4j-common-tool/src/main/java/edu/alibaba/mpc4j/common/tool/filter/VacuumFilter.java"
+  ],
+  "confidence": 0.85
+}
