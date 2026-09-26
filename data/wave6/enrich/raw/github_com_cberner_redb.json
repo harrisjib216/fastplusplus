@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/cberner/redb",
+  "one_liner": "Pure-Rust embedded ACID key-value store on copy-on-write B+trees; beats RocksDB/SQLite on durable single-key commits and reads; LMDB still reads faster.",
+  "what_it_does": "redb is a single-file, crash-safe embedded key-value database for Rust. Data lives in typed tables (TableDefinition<K, V>) with a BTreeMap-like API (insert, get, range, retain, extract_if, entry, cursors), always inside transactions: one write transaction at a time plus any number of concurrent MVCC read transactions, with serializable isolation. It is not a drop-in for RocksDB or SQLite: there is no SQL, no column families or merge operators, and no C API. It adds savepoints and rollback, multimap tables, per-transaction durability (Immediate or None), and a pluggable StorageBackend trait with a file backend and an in-memory backend.",
+  "how_it_is_fast": "LMDB-style copy-on-write B+trees with MVCC: readers pin a root snapshot and never block the writer, and freed pages are recycled by epoch-based reclamation once no reader can see them. Durable commits default to '1-phase + checksum' (1PC+C): the tree is a Merkle tree of XXH3-128 page checksums, so a commit writes the new pages, flips one 'god byte' commit-slot bit and issues a single fsync with no separate WAL, which is where the single-key-commit win comes from. Unlike LMDB it does not use mmap; pages go through pread/pwrite and a userspace LRU page cache with a lock-striped read cache and write buffer (1 GiB by default). Fixed-width keys and values are stored without offset arrays, variable-length keys get shortest-separator prefixes in branch pages (4.3), and a stored tree length makes len() O(1).",
+  "when_to_use": [
+    "Rust services that make many small durable transactions (one or a few keys per fsync'd commit). The README run shows about 0.92 ms per single-key commit, against 1.6 ms for LMDB, 2.4 ms for RocksDB and 7.0 ms for SQLite.",
+    "Point and short-range reads on a working set that fits the cache, when you need an ordered store in memory-safe Rust. In-cache random reads ran about 2.6x faster than RocksDB and 3.8x faster than SQLite, and readers scale across threads without blocking the writer.",
+    "Apps that need O(1) len(), savepoints and rollback, typed tables or zero-copy value access (AccessGuard borrows from the page cache) in one self-contained file.",
+    "Builds that must avoid a C/C++ toolchain, or that target Windows, macOS, Linux (x86-64 and aarch64), WASI, or experimental no_std embedded targets (Cortex-M3 and up).",
+    "Custom storage, such as an in-memory database or block-level encryption, done by implementing StorageBackend. The maintainer suggests this route for encryption in issue #1091."
+  ],
+  "when_not_to_use": [
+    "When read throughput matters most: LMDB beat redb on every read row, by about 1.5-3.3x (for example 125 ms vs 410 ms for 32-thread random reads). libmdbx or LMDB are the better picks there.",
+    "Batch, bulk and delete-heavy workloads. RocksDB and fjall wrote 1,000-key batches 3.5-4.5x faster, removals took 23.3 s against 6.0-6.9 s for RocksDB and fjall, and LMDB bulk-loaded in 9.2 s against redb's 17.1 s.",
+    "Tight disk budgets. redb has no built-in compression, and its file was the largest in the run: 4.00 GiB uncompacted (RocksDB 893 MiB) and 1.69 GiB compacted (RocksDB 455 MiB). Long-running read transactions also make the file grow further.",
+    "Many concurrent writers or multi-process sharing. There is one writer per database, and multi-process single-writer or multi-writer modes exist only behind the experimental-multiprocess feature.",
+    "C++ codebases (you need your own FFI layer) and rotational disks. Open issue #1507 reports that since 4.2 each durable commit also writes a low-offset system page, costing about +26% commit time on an HDD. The reporter saw no cost on SSD or NVMe."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "none with default features; optional log, chrono and uuid features; libc on Linux, Apple and WASI targets for pread/pwrite and byte-range file locks",
+    "min_toolchain": "Rust 1.90 (edition 2024)",
+    "platforms": "Linux, macOS and Windows (CI on x86-64 plus Linux aarch64), WASI, wasm32-unknown-unknown (compile-checked), and no_std targets with atomic CAS under experimental-api-5",
+    "thread_safety": "Database is shared across threads. Any number of read transactions can run concurrently with each other and with the one active write transaction; begin_write() waits for the previous writer. Across processes, the default is one exclusive writer holding a file lock; single-writer and multi-writer sharing is experimental.",
+    "drop_in_for_baseline": "false — different API (typed Rust tables with no SQL, column families or merge operators) and its own file format; C++ callers must write an FFI shim"
+  },
+  "gotchas": [
+    "Default durable commits (1PC+C) rely on non-cryptographic XXH3 checksums. The design doc recommends set_two_phase_commit(true) when attacker-controlled data is stored.",
+    "Recovery after a crash is a full repair by default: redb walks the whole file to verify checksums and rebuild the allocator state, which the docs call 'very slow' for large databases. set_quick_repair(true) makes commits slower but recovery almost instant.",
+    "Durability::None commits are atomic but are lost on a crash until a later Durability::Immediate commit. compact() needs &mut Database and refuses to run while transactions or savepoints are live, and long-lived readers stop pages from being reused.",
+    "The 4.2 and 4.3 releases fixed several correctness bugs, including a commit that could be silently rolled back during recovery after check_integrity() had repaired the database, iterators that skipped entries after an error, and pages leaked by panics caught with catch_unwind. Run a current release."
+  ],
+  "pick_this_over_siblings_when": "Pick redb over libmdbx when you are in Rust and want a pure-Rust, memory-safe dependency with fast small durable commits; libmdbx (C, LMDB-derived) is the better choice when raw read speed or a native C/C++ API matters. TerarkDB is a RocksDB-compatible LSM fork for write-heavy, compression-sensitive workloads, which are exactly redb's weak spots (batch writes, removals, file size).",
+  "verified_claims_summary": "On the author's redb-bench-compare harness (Ryzen 9950X3D, Samsung 9100 PRO NVMe, 5M random entries with 24-byte keys and 150-byte values, 4 GiB cache, all engines driven from Rust), 1,000 fsync'd single-key commits took 920 ms for redb, against 2,432 ms for RocksDB (rust-rocksdb 0.24 OptimisticTransactionDB, lz4) and 7,040 ms for SQLite (rusqlite 0.38 bundled, synchronous=FULL and otherwise default journal and cache), and 1M in-cache random reads took 1,138 ms against 2,911 ms and 4,283 ms. LMDB (heed 0.22) won every read row, the rustc version and flags are not stated (the repo pins toolchain 1.90), and the current harness emits rows the README table lacks, so the table may predate it.",
+  "status_note": "Actively maintained (last commit 2026-09-24, 4.3.0 released 2026-09-14, about 11.9M crates.io downloads and 478 reverse dependencies), with a file format declared stable and a dual MIT/Apache-2.0 license; it is easy to add as a crate, but C++ can use it only through an FFI layer you write.",
+  "sources_read": [
+    "https://github.com/cberner/redb",
+    "https://github.com/cberner/redb#benchmarks",
+    "https://github.com/cberner/redb/blob/master/README.md",
+    "https://github.com/cberner/redb/blob/master/docs/design.md",
+    "https://github.com/cberner/redb/blob/master/Cargo.toml",
+    "https://github.com/cberner/redb/blob/master/rust-toolchain",
+    "https://github.com/cberner/redb/blob/master/CHANGELOG.md",
+    "https://github.com/cberner/redb/blob/master/.github/workflows/ci.yml",
+    "https://github.com/cberner/redb/blob/master/src/lib.rs",
+    "https://github.com/cberner/redb/blob/master/src/db.rs",
+    "https://github.com/cberner/redb/blob/master/src/transactions.rs",
+    "https://github.com/cberner/redb/blob/master/src/backends.rs",
+    "https://github.com/cberner/redb/blob/master/src/tree_store/page_store/cached_file.rs",
+    "https://github.com/cberner/redb/blob/master/src/tree_store/page_store/file_backend/mod.rs",
+    "https://github.com/cberner/redb/blob/master/src/tree_store/page_store/file_backend/optimized.rs",
+    "https://github.com/cberner/redb/blob/master/crates/redb-bench-compare/benches/lmdb_benchmark.rs",
+    "https://github.com/cberner/redb/blob/master/crates/redb-bench-compare/benches/common/mod.rs",
+    "https://github.com/cberner/redb/blob/master/crates/redb-bench-compare/Cargo.toml",
+    "https://github.com/cberner/redb/blob/master/crates/redb-bench/src/lib.rs",
+    "https://github.com/cberner/redb/issues/1098",
+    "https://github.com/cberner/redb/issues/1066",
+    "https://github.com/cberner/redb/issues/1094",
+    "https://github.com/cberner/redb/issues/1317",
+    "https://github.com/cberner/redb/issues/1091",
+    "https://github.com/cberner/redb/issues/1507",
+    "https://github.com/cberner/redb/issues?q=is%3Aopen",
+    "https://crates.io/api/v1/crates/redb",
+    "https://crates.io/api/v1/crates/redb/reverse_dependencies",
+    "https://www.redb.org/post/2023/06/16/1-0-stable-release/",
+    "https://hn.algolia.com/api/v1/search?query=redb&tags=story"
+  ],
+  "confidence": 0.8
+}
