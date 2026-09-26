@@ -1,44 +1,66 @@
 {
   "id": "https://github.com/tikv/titan",
-  "one_liner": "RocksDB plugin that stores large values in separate blob files (WiscKey-style) to cut write amplification versus plain RocksDB.",
-  "what_it_does": "Titan wraps RocksDB as a StackableDB (rocksdb::titandb::TitanDB) and moves values of at least min_blob_size (default 4 KB) out of the LSM tree into append-only blob files, leaving a small blob index in the SST. The API is the RocksDB API with TitanOptions/TitanCFOptions, so Put/Get/Delete/iterators/column families work unchanged, but Merge, SingleDelete and DisableFileDeletions return NotSupported. It is the value-separation engine inside TiKV.",
-  "how_it_is_fast": "Key-value separation from the WiscKey paper: compaction rewrites only keys and small blob indexes, not the large values, so write amplification and compaction I/O drop sharply for big values. Separation happens in TitanTableBuilder during flush/compaction, so the foreground write path stays RocksDB's. Blob-file garbage collection is driven by table-property collectors and flush/compaction listeners that track a per-file discardable ratio (default 0.5); optional Level Merge rewrites blobs during compaction of the last two levels to keep them sorted. Smaller SSTs also leave more block cache for index/filter/data blocks, which helps point reads.",
+  "one_liner": "RocksDB plugin that moves large values into separate blob files (WiscKey-style) to cut write amplification versus plain RocksDB.",
+  "what_it_does": "Titan wraps RocksDB as a StackableDB (rocksdb::titandb::TitanDB). It moves values of at least min_blob_size (default 4 KB) out of the LSM tree into append-only blob files and leaves a small blob index in the SST. You open it with TitanOptions/TitanCFOptions and then use the normal RocksDB calls (Put/Get/Delete, iterators, column families, checkpoints), but Merge, SingleDelete and DisableFileDeletions return NotSupported. It is the value-separation engine inside TiKV.",
+  "how_it_is_fast": "It uses key-value separation from the WiscKey paper: compaction rewrites only keys and small blob indexes, not the large values, so write amplification and compaction I/O drop for big values. TitanTableBuilder does the separation during flush and compaction, so the foreground write path (WAL plus memtable) stays RocksDB's. Blob garbage collection is driven by table-property collectors and flush/compaction listeners that track each blob file's discardable ratio (GC at 0.5 by default); optional Level Merge rewrites blobs while the last two LSM levels compact, which keeps them sorted for scans. The smaller LSM tree also leaves more block cache for index, filter and data blocks, which PingCAP credits for faster point reads.",
   "when_to_use": [
-    "Write- or update-heavy workloads with values of roughly 1 KB and up (PingCAP reports the gain grows with value size; 16 KB values benefit most).",
+    "Write- or update-heavy workloads with values of about 1 KB and up; PingCAP reports the gap over RocksDB widens as values grow, and its 16 KB tests gained most.",
     "RocksDB deployments limited by compaction I/O, write stalls or SSD wear from write amplification.",
-    "Point-lookup-dominated reads on large values where the base LSM tree shrinking to keys plus indexes lets more of it fit in block cache.",
-    "Mixed value sizes: values below min_blob_size stay inline in RocksDB, so only the large ones pay the blob indirection.",
-    "You already build against TiKV's RocksDB fork (tikv/rocksdb 8.10.tikv) or run TiKV."
+    "Point-lookup-heavy reads on large values, where an LSM tree of only keys and blob indexes fits better in block cache.",
+    "Mixed value sizes: values below min_blob_size stay inline in the SST, so only large values pay the extra blob-file read.",
+    "You already run TiKV or can build against TiKV's RocksDB fork (tikv/rocksdb branch 8.10.tikv)."
   ],
   "when_not_to_use": [
-    "Range-scan-heavy workloads: PingCAP says Titan underperforms RocksDB on range queries, and TiDB docs put the drop at 40% to a few times slower; each scanned value is an extra blob-file read.",
-    "Disk-space-constrained deployments: space amplification is higher than RocksDB (TiDB docs: can reach about twice RocksDB before GC catches up), and per-record blob compression compresses worse than RocksDB's per-block compression.",
-    "Small values (well under 1 KB): they stay inline, so you pay plugin complexity for no gain.",
-    "Workloads that need Merge operators or SingleDelete, which Titan rejects with NotSupported.",
-    "Projects pinned to upstream facebook/rocksdb: master uses the TiKV-fork-only kTypeTitanBlobIndex value type, so it does not build against or interoperate with upstream RocksDB."
+    "Range-scan-heavy workloads: PingCAP says Titan underperforms RocksDB on range queries and TiDB docs put the drop at 40% to a few times slower, because each scanned value is a separate blob-file read.",
+    "Disk-space-limited deployments: space amplification is higher than RocksDB (TiDB docs say it can reach about twice RocksDB), and per-record blob compression compresses worse than RocksDB's per-block compression.",
+    "Small values (well under 1 KB): they stay inline, so you take on the plugin's complexity for no gain.",
+    "Code that needs Merge operators, SingleDelete or batched MultiGet: Titan rejects the first two, and its MultiGet is a loop of single Gets.",
+    "Projects on upstream facebook/rocksdb: master uses the TiKV-fork-only kTypeTitanBlobIndex value type, so it does not build against upstream; RocksDB's own integrated BlobDB (enable_blob_files) gives the same key-value separation and supports Merge, SingleDelete and batched MultiGet."
   ],
   "integration": {
     "form": "static lib",
-    "dependencies": "RocksDB source tree (CMake clones tikv/rocksdb branch 8.10.tikv by default); optional snappy/lz4/zstd/zlib/bzip2, jemalloc; gflags for tools",
-    "min_toolchain": "C++17, CMake 3.10+",
-    "platforms": "not documented; build files handle x86-64 (SSE4.2), aarch64 and ppc64le like RocksDB, CI and production use is Linux (TiKV)",
-    "thread_safety": "Same model as RocksDB DB (concurrent reads/writes on one handle); repo carries a thread_safety_test",
-    "drop_in_for_baseline": "partial — same rocksdb::DB interface via StackableDB, but needs TiKV's RocksDB fork, rejects Merge/SingleDelete, and an on-disk Titan DB cannot simply be reopened by plain RocksDB (use blob_run_mode kFallback to rewrite values back into SSTs first)"
+    "dependencies": "RocksDB source tree (CMake clones tikv/rocksdb branch 8.10.tikv by default; each Titan branch pins a TiKV RocksDB fork branch); optional snappy, lz4, zstd, zlib, bzip2, jemalloc; gflags for the bench/stress tools",
+    "min_toolchain": "C++17, CMake 3.10+ (legacy CI config used g++-9 and clang)",
+    "platforms": "Not documented in README; build flags cover x86-64 (SSE4.2), aarch64 (armv8 CRC) and ppc64le, the legacy Travis config targeted Linux x86-64, Linux arm64 and macOS, and production use is Linux through TiKV",
+    "thread_safety": "Not separately documented; follows the rocksdb::DB model (one handle shared across threads), and thread_safety_test runs concurrent Put/Get/iteration with CompactRange and GC across column families",
+    "drop_in_for_baseline": "partial — same rocksdb::DB interface through StackableDB, but it needs TiKV's RocksDB fork, rejects Merge and SingleDelete, and a Titan data directory cannot be opened by plain RocksDB until blob_run_mode kFallback has rewritten the values back into SSTs through compaction"
   },
   "gotchas": [
-    "Blob files are not reclaimed until GC runs; space depends on blob_file_discardable_ratio and GC thread count (max_background_gc default 1).",
-    "MultiGet is a loop over single Gets and each Get without a snapshot takes a ManagedSnapshot; point reads also take several extra mutexes versus RocksDB (issue #139).",
-    "blob_run_mode kFallback / kReadOnly exist to migrate away; there is no direct rollback to plain RocksDB.",
-    "Open issues report crashes on missing blob files under races (#328, #186); check TiKV release notes before relying on a given branch."
+    "Space is reclaimed only when blob GC runs; blob_file_discardable_ratio and max_background_gc (default 1 thread) set how far disk use lags behind deletes and overwrites.",
+    "Point reads take several more mutexes than plain RocksDB (issue #139 counts 7 against 2), and a Get without a snapshot creates a ManagedSnapshot; the issue flags this as overhead in CPU-bound, in-memory workloads.",
+    "There is no direct rollback: switch blob_run_mode to kReadOnly or kFallback and let compaction inline values before you drop Titan.",
+    "Open issues report crashes or failed restarts from missing or double-deleted blob files (#328, #186), and the repo has no running public CI (only a legacy Travis config), so pin a branch that matches a TiKV release."
   ],
-  "pick_this_over_siblings_when": "Pick Titan over TerarkDB when values are large (>= 1 KB) and the bottleneck is write/compaction amplification rather than read QPS or compression ratio, and when you want a maintained plugin that tracks a recent RocksDB (8.10 fork) rather than a fork frozen near RocksDB 6.x.",
-  "verified_claims_summary": "PingCAP's April 2019 blog ran go-ycsb against TiKV on Titan versus TiKV on RocksDB (64 GB dataset, TiKV capped at 32 GB RAM, 1 KB and 16 KB values) on a 40-core Xeon E5-2630 v4 with 128 GB RAM and a SATA SSD, reporting about 70% higher load throughput and 180% higher update throughput, better point gets, worse range scans and slightly higher space use; compiler, flags and exact versions are not given and the numbers include TiKV's Raft log overhead.",
-  "status_note": "Maintained by the TiKV team at a slow cadence (last master commit 2026-04-29), Apache-2.0, and in production as TiKV's default engine for new clusters since v7.6.0, but usable outside TiKV only if you adopt TiKV's RocksDB fork.",
+  "pick_this_over_siblings_when": "Pick Titan over TerarkDB when values are large (1 KB and up) and the bottleneck is write/compaction amplification rather than read QPS or compression ratio, and when you want a plugin tracking a recent RocksDB (the TiKV 8.10 fork) rather than a full engine forked from RocksDB v5.18.3.",
+  "verified_claims_summary": "PingCAP's April 2019 blog ran go-ycsb against TiKV on Titan versus TiKV on RocksDB (64 GB dataset, TiKV capped at 32 GB RAM, 1 KB and 16 KB values) on a 40-core Xeon E5-2630 v4 with 128 GB RAM and a SATA SSD. It reports about 70% higher load throughput and 180% higher update throughput, better point gets, worse range scans and slightly higher space use; compiler, flags, versions and go-ycsb settings are not given, and the Raft log write in front of the engine dilutes the gain.",
+  "status_note": "Maintained by the TiKV team at a slow pace (last master commit 2026-04-29) under Apache-2.0, and enabled by default for new TiKV clusters since v7.6.0, but usable outside TiKV only if you adopt TiKV's RocksDB fork.",
   "sources_read": [
     "https://github.com/tikv/titan",
+    "https://github.com/tikv/titan/blob/master/include/titan/db.h",
+    "https://github.com/tikv/titan/blob/master/include/titan/options.h",
+    "https://github.com/tikv/titan/blob/master/CMakeLists.txt",
+    "https://github.com/tikv/titan/blob/master/cmake/rocksdb_flags.cmake",
+    "https://github.com/tikv/titan/blob/master/.travis.yml",
+    "https://github.com/tikv/titan/blob/master/src/db_impl.cc",
+    "https://github.com/tikv/titan/blob/master/src/table_builder.cc",
+    "https://github.com/tikv/titan/blob/master/src/blob_file_reader.cc",
+    "https://github.com/tikv/titan/blob/master/src/db_iter.h",
+    "https://github.com/tikv/titan/blob/master/src/thread_safety_test.cc",
+    "https://github.com/tikv/titan/issues",
+    "https://github.com/tikv/titan/issues/328",
+    "https://github.com/tikv/titan/issues/186",
+    "https://github.com/tikv/titan/issues/203",
+    "https://github.com/tikv/titan/issues/321",
+    "https://github.com/tikv/titan/issues/139",
+    "https://github.com/tikv/titan/commits/master",
     "https://pingcap.com/blog/titan-storage-engine-design-and-implementation/",
     "https://www.pingcap.com/blog/titan-storage-engine-design-and-implementation/",
-    "https://docs.pingcap.com/tidb/stable/titan-overview/"
+    "https://docs.pingcap.com/tidb/stable/titan-overview/",
+    "https://raw.githubusercontent.com/tikv/rocksdb/8.10.tikv/db/dbformat.h",
+    "https://raw.githubusercontent.com/facebook/rocksdb/main/db/dbformat.h",
+    "https://github.com/facebook/rocksdb/wiki/BlobDB",
+    "https://github.com/bytedance/terarkdb",
+    "https://hn.algolia.com/api/v1/search?query=titan%20rocksdb&tags=story"
   ],
-  "confidence": 0.7
+  "confidence": 0.75
 }
