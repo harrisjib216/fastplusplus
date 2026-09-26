@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/c4punks/cwist",
+  "one_liner": "Plain-C17 web framework and app server; about 2.1-2.3x Go net/http's plaintext req/s in one independent suite run.",
+  "what_it_does": "CWIST is a C web framework plus application server that ships its own HTTP/1.1, HTTP/2, HTTP/3 (lsquic), WebSocket and WebTransport stack, BoringSSL TLS with a one-call hybrid X25519MLKEM768 mode, and an embedded SQLite ORM. You register C callbacks on an Express-style router (cwist_app_get(app, \"/user/:id\", fn)) and call cwist_app_listen(); the handler fills a cwist_http_response. It is not a drop-in for Go net/http: it is a different language and API, and you build and link it as a static library.",
+  "how_it_is_fast": "By default it pre-forks one worker process per online core. Each worker is pinned to a CPU and has its own SO_REUSEPORT listen socket, and each worker runs its own reactor. The reactor uses io_uring through raw syscalls (epoll or kqueue as fallback) as a readiness notifier: it arms one-shot IORING_OP_POLL_ADD and runs the handler synchronously on the woken thread, with no completion-queue hand-offs. An optional IORING_OP_RECV path is also available. Responses are serialized straight into a per-connection output buffer and flushed in batches, and request and response share one arena. Request-line and header scans use SSE2/AVX2/NEON byte search.",
+  "when_to_use": [
+    "You want a C (not C++) HTTP server with high plaintext keep-alive throughput per core, and you can pin its workers to dedicated cores.",
+    "Many short, CPU-light handlers on Linux, where the io_uring reactor and prefork-per-core model pay off.",
+    "Holding very large numbers of mostly idle connections (SSE, WebSocket, long-polling): the README reports 1M loopback connections at about 244 MB peak RSS in reactor mode.",
+    "You need HTTP/3, WebTransport or post-quantum hybrid TLS in C without assembling lsquic, BoringSSL and routing yourself.",
+    "You need to link existing C/C++ libraries into the request path with no FFI layer."
+  ],
+  "when_not_to_use": [
+    "Production services that need API stability or a track record: the repo dates from January 2026, releases v3.1 to v3.7 shipped between August and September 2026, and the README says minor releases may change public APIs until 4.0.",
+    "Latency-SLO work at low concurrency: in the same suite run, CWIST's p99 at 64 connections was about 8.6 ms against net/http's 3.1 ms, even though its median was far lower (0.11 ms against 0.72 ms).",
+    "Blocking or slow handlers in the default reactor mode: the handler runs on the reactor thread, so a blocking handler stalls every connection on that worker.",
+    "HTTPS-heavy or long-idle keep-alive workloads: the README says the async path covers cleartext HTTP/1.x only, HTTPS still uses the thread-pool model for the request phase, and idle keep-alive connections are not yet reaped by a timer.",
+    "Windows targets: only Linux, macOS and BSD are documented."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "Vendored and built in-tree: BoringSSL, lsquic, libttak, SQLite3, cJSON, uriparser, cnats, multipart-parser-c. System libraries: zlib, zstd, brotli (libbrotlienc/libbrotlicommon). Optional: libnghttp2 (HTTP/2) and libcurl (RDBMS auto-mount probing). The link line also needs -lstdc++, and the suite build installs cmake.",
+    "min_toolchain": "C17 (-std=c17); GCC or Clang, with a separate tcc profile in the Makefile. The suite built it with Debian trixie's default GCC.",
+    "platforms": "Linux (io_uring with epoll fallback), macOS and FreeBSD (kqueue). SIMD scans have SSE2/AVX2, NEON, RVV, AltiVec and MSA paths with a scalar fallback. The default Makefile passes no -march, so x86-64 builds use the SSE2 path.",
+    "thread_safety": "Not documented as a contract. By default it forks one worker process per online core, so globals and in-process state are per worker and not shared. Within a worker, the classic mode (CWIST_C1M_MODE=0) runs one thread per connection, so handlers must be reentrant.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The docs and code disagree on the worker count. The README's env-var table says CWIST_WORKERS defaults to 1, but app.c defaults to the online core count; set CWIST_WORKERS explicitly.",
+    "An on-by-default response cache, Big Dumb Reply, can replay GET responses. It keys on method and path only, and it learns a response once the handler takes more than 10 ms and returns identical bytes twice. Entries live up to 300 s or 100,000 hits. Only responses carrying Vary are skipped, so per-user GET routes that are slow need Vary. The app.h field comment says this cache is 'never replayed by HTTP dispatch', but app.c serves hits from it.",
+    "The library build uses -Ofast with LTO; your own code is compiled with whatever flags you choose. Static linking pulls in each vendored component's license: Apache-2.0 for BoringSSL and cnats, BSD-3-Clause for uriparser and libttak.",
+    "The issue tracker shows a run of fixed security bugs in 2026: WebSocket RFC 6455 violations and OOM DoS, JWT algorithm confusion, HTTP/2 'Made You Reset', and a non-rotating TLS session-ticket key. Treat the protocol stack as young code."
+  ],
+  "pick_this_over_siblings_when": "In the same 2026-09-24 suite run, CWIST 3.6 led Drogon 1.9 by about 1.15-1.18x and led Agoo-C by about 2x at 64 connections, but only by about 1.01x at 512. Pick it over those two when you want plain C with built-in HTTP/3, WebTransport and PQ TLS. Pick Drogon (C++) or Lwan when maturity and a longer track record matter more than the last 15%.",
+  "verified_claims_summary": "Setup: the-benchmarker/web-frameworks run of 2026-09-24 (commit f673364), zrk closed-loop keep-alive load against empty or echo hello-world routes. The server was confined to 4 cores of a 16-CPU x86-64 Linux 7.2 host; the CPU model is unknown because the cpu_name field is hardcoded. Result: CWIST 3.6 (GCC -Ofast LTO build on Debian trixie, first-party-maintained entry app) averaged 148.7k/154.7k/151.2k req/s at 64/256/512 connections, against Go net/http (golang:1.27 image, GOAMD64=v3) at 71.5k/67.4k/67.2k req/s, which is 2.08-2.30x. Both servers were CPU-saturated, and neither had errors.",
+  "status_note": "Very actively developed: roughly weekly minor releases, last commit 2026-09-25, v3.7 is already out while v3.6 was benchmarked. MIT-licensed with 15 stars, and effectively one lead developer (gg582, 327 commits). Usable via make install, Homebrew or pkg-config, but pin an exact tag.",
+  "sources_read": [
+    "https://github.com/c4punks/CWIST",
+    "https://github.com/c4punks/CWIST/blob/main/README.md",
+    "https://github.com/c4punks/CWIST/blob/main/Makefile",
+    "https://github.com/c4punks/CWIST/blob/main/src/net/http/simd_parser.h",
+    "https://github.com/c4punks/CWIST/blob/main/src/sys/io/reactor.c",
+    "https://github.com/c4punks/CWIST/blob/main/src/net/http/async_server.c",
+    "https://github.com/c4punks/CWIST/blob/main/src/net/http/http.c",
+    "https://github.com/c4punks/CWIST/blob/main/src/net/http/writer_fast.c",
+    "https://github.com/c4punks/CWIST/blob/main/src/sys/app/app.c",
+    "https://github.com/c4punks/CWIST/blob/main/src/sys/app/worker_affinity.h",
+    "https://github.com/c4punks/CWIST/blob/main/src/sys/app/big_dumb_reply.c",
+    "https://github.com/c4punks/CWIST/blob/main/include/cwist/sys/app/app.h",
+    "https://github.com/c4punks/CWIST/blob/main/include/cwist/sys/app/big_dumb_reply.h",
+    "https://github.com/c4punks/CWIST/blob/main/src/sys/sys_info.c",
+    "https://github.com/c4punks/CWIST/issues",
+    "https://github.com/c4punks/CWIST/releases",
+    "https://github.com/c4punks/CWIST/graphs/contributors",
+    "https://github.com/c4punks/CWIST/commits/main/src/sys/app/app.c",
+    "https://github.com/the-benchmarker/web-frameworks/blob/f673364fb30748e5bb8e57319ec2772bc872f78a/c/cwist/main.c",
+    "https://github.com/the-benchmarker/web-frameworks/blob/f673364fb30748e5bb8e57319ec2772bc872f78a/c/cwist/config.yaml",
+    "https://raw.githubusercontent.com/the-benchmarker/web-frameworks/f673364fb30748e5bb8e57319ec2772bc872f78a/data.json"
+  ],
+  "confidence": 0.75
+}
