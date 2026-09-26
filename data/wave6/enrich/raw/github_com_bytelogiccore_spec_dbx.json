@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/bytelogiccore-spec/dbx",
+  "one_liner": "Beta pure-Rust HTAP embedded database whose key-value API edges out in-memory SQLite on a 10,000-row first-party benchmark.",
+  "what_it_does": "DBX (crate dbx-core) is a single-developer Rust embedded database. It combines a byte-string key-value API (insert/get/scan/range/delete on named tables, plus CAS helpers such as insert_if_not_exists and compare_and_swap) with its own SQL layer (sqlparser-based, returning Arrow RecordBatches), MVCC transactions, triggers, UDFs, a job scheduler, optional CUDA kernels and a QUIC-based replication/sharding 'grid'. You open it with Database::open(path) (returns Arc<Database>), open_safe/open_fast to pick a durability level, or Database::open_in_memory(). It is not a SQLite drop-in: it has a different API, its own SQL dialect and its own .wos/.wal files, with bindings for C (dbx.h), Python, Node and C#.",
+  "how_it_is_fast": "Writes land in a Tier-1 'Delta' store: one crossbeam SkipMap per table inside a DashMap. There is no SQL parsing, statement preparation or per-statement transaction on the KV path. When the global entry count reaches 10,000 (the default threshold, and exactly the benchmark size), insert() drains Delta into the WOS on the calling thread. For open_in_memory the WOS is a std BTreeMap per table behind one RwLock, so the benchmarked GET is essentially a BTreeMap lookup plus a Vec clone. The file-backed 'Native WOS' is a dirty buffer, an append-only WAL and a 4 KB-page SSTable with a sparse index and LRU page cache. The v0.2.0 'Fast-Path' changes the SQL executor (it skips the distributed DAG scheduler and mpsc channels), not the storage.",
+  "when_to_use": [
+    "Rust services that want an in-process, ordered byte-key/value store with named tables, CAS helpers and serde struct storage (DatabaseSerde), and that value a pure-Rust API over SQLite's maturity",
+    "Small, memory-resident datasets rebuilt at startup (open_in_memory or open_fast) where per-call SQL overhead would dominate. The only published comparison uses 10,000 short string pairs.",
+    "Prototypes that want KV, SQL, Arrow/Parquet and optional CUDA aggregation in a single crate, and can pin a 0.x beta version and read the source when behaviour is unclear",
+    "Replacing a naive rusqlite pattern (autocommit inserts, conn.execute/query_row re-preparing SQL on every call) where you control both sides and only need point get/put"
+  ],
+  "when_not_to_use": [
+    "Anything that relies on SQLite's durability record, stable file format or SQL compatibility. DBX is a 0.x beta from one developer with 390 total crates.io downloads, and v0.2.2 (13 Apr 2026) had to fix deletes that were never written to the WAL and get/delete calls routed to the wrong partition.",
+    "Large on-disk tables. Native WOS compaction reads the whole table's SSTable into a BTreeMap and rewrites it every 5,000 WAL entries, so write cost and peak memory grow with table size. Nothing above 10,000 rows is benchmarked.",
+    "Many concurrent readers on file-backed tables. Every get/scan that reaches a file-backed table's WOS takes that table's single Mutex. The in-memory WOS uses one RwLock for all tables, and secondary-index updates take an RwLock (README disclaimer).",
+    "Counts and small aggregates. The repo's own PERF_TRACKER measured SQLite SELECT count(*) at 5.66 us against 51 us for DBX. In the same run, file-backed per-row DBX inserts took 260.6 ms against 47.03 ms for rusqlite with a prepared statement.",
+    "Lean builds. The default dependencies cannot be turned off and include arrow/parquet 54, tokio, s2n-quic, sqlparser, zstd, reed-solomon-erasure and several crypto crates, even if you only use the KV API."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "arrow 54, parquet 54, tokio, s2n-quic + rcgen, sqlparser 0.52, dashmap, crossbeam-skiplist, rayon, zstd, reed-solomon-erasure, aes-gcm-siv/chacha20poly1305/hkdf/sha2, bincode, serde, cron, chrono, tempfile, and others (all non-optional); optional cudarc 0.19 (CUDA 12.5) behind the 'gpu' feature",
+    "min_toolchain": "Rust edition 2024 (so Rust 1.85+); no rust-version declared; the benchmarks used rustc 1.92.0",
+    "platforms": "Pure Rust. CI builds and tests on ubuntu-latest (x86-64) only, and the published benchmarks ran on Windows 11 x64. A prebuilt win32-x64-msvc Node binary is committed. macOS and aarch64 support are not documented. GPU paths need NVIDIA CUDA.",
+    "thread_safety": "Methods take &self, Database::open returns Arc<Database>, and the transactions guide shares one handle across threads. The Delta tier uses DashMap + SkipMap, the in-memory WOS one global RwLock, and the file WOS one Mutex per table. Snapshot isolation is claimed for begin_transaction(). Send/Sync bounds are not documented explicitly.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The MVCC tags can collide with user bytes. scan() treats values that start with [0x00,0x01] as MVCC values and strips those 2 bytes. It treats values that start with [0x00,0x02] as tombstones and drops the row. Keys of 10+ bytes that end in [0xDB,0x58] are parsed as versioned keys and lose their last 10 bytes. The get() fast path returns raw bytes, so get and scan can disagree on binary data. A source comment wrongly assumes binary data never starts with 0x00.",
+    "Database::open defaults to DurabilityLevel::Lazy. append_to_wal only requests an fsync at Full, so acknowledged writes can be lost on a crash. Use open_safe for per-write fsync. open_in_memory has no WAL at all.",
+    "insert() flushes Delta into the WOS synchronously on the caller's thread when the global entry count (all tables, overwrites included) reaches 10,000, which causes periodic latency spikes. Every insert also allocates a lossy UTF-8 copy of the key for partition routing.",
+    "The docs are inconsistent. The storage-layers guide still says the WOS is built on sled (removed in 0.2.0) and that Tier 1 is a BTreeMap (the code uses DashMap + SkipMap). The benchmarks page mixes v0.0.6 and v0.2.0 numbers. open_in_memory also spawns a background worker thread per database."
+  ],
+  "pick_this_over_siblings_when": "The other catalogued SQLite-beaters, CalicoDB (C++17 B+-tree, ~4.3x faster random reads), SNKV (1.6-2x at 1M records) and ForestDB (up to 8x reads), are measured at larger scale and on durable storage. Pick DBX only if you need a pure-Rust crate that bundles KV, SQL, Arrow/Parquet and optional CUDA, and you accept beta risk. For a proven on-disk KV store, prefer a sibling.",
+  "verified_claims_summary": "The only comparison is a first-party Criterion run (3 Apr 2026; rustc 1.92.0 release profile; Windows 11 x64, 16 GB, CPU unstated) on 10,000 short string pairs, DBX open_in_memory against rusqlite 0.32 bundled in-memory SQLite: INSERT 25.21 ms vs 29.4 ms (~1.17x), GET 2.84 ms vs 33.8 ms (~11.9x), SCAN 51 us vs 340 us. Only the INSERT row is a like-for-like (and modest) win. The SQLite harness autocommits every insert and re-prepares SQL on every insert and lookup (conn.execute/query_row), so GET mostly measures statement compilation. The 51 us SCAN figure matches the repo's PERF_TRACKER entry for a DBX SQL SELECT count(*) (where SQLite's count(*) took 5.66 us), not the bench's db.scan(), which copies all 10,000 pairs.",
+  "status_note": "Young single-author project: created Feb 2026, 197 commits, no issues ever filed, 4 stars. The last commit and 0.2.2 release were on 13 Apr 2026, and that commit's CI run failed in the Node-binding job. It is MIT-licensed (a donation appendix makes GitHub show NOASSERTION) and usable from crates.io, but it is too large and immature to vendor as a SQLite replacement.",
+  "sources_read": [
+    "https://github.com/bytelogiccore-spec/DBX",
+    "https://github.com/bytelogiccore-spec/DBX/blob/main/README.md",
+    "https://github.com/bytelogiccore-spec/DBX/blob/main/docs/english/benchmarks.md",
+    "https://github.com/bytelogiccore-spec/DBX/blob/main/core/dbx-benchmarks/benches/official_db_comparison.rs",
+    "https://github.com/bytelogiccore-spec/DBX/blob/main/core/dbx-benchmarks/benches/phase7_tiering_benchmarks.rs",
+    "https://github.com/bytelogiccore-spec/DBX/blob/main/PERF_TRACKER.md",
+    "https://github.com/bytelogiccore-spec/DBX/blob/main/CHANGELOG.md",
+    "https://github.com/bytelogiccore-spec/DBX/blob/main/Cargo.toml",
+    "https://github.com/bytelogiccore-spec/DBX/blob/main/core/dbx-core/Cargo.toml",
+    "https://github.com/bytelogiccore-spec/DBX/blob/main/LICENSE",
+    "https://github.com/bytelogiccore-spec/DBX/blob/main/.github/workflows/ci.yml",
+    "https://github.com/bytelogiccore-spec/DBX/blob/main/core/dbx-core/src/engine/crud.rs",
+    "https://github.com/bytelogiccore-spec/DBX/blob/main/core/dbx-core/src/engine/constructors.rs",
+    "https://github.com/bytelogiccore-spec/DBX/blob/main/core/dbx-core/src/engine/database.rs",
+    "https://github.com/bytelogiccore-spec/DBX/blob/main/core/dbx-core/src/engine/types.rs",
+    "https://github.com/bytelogiccore-spec/DBX/blob/main/core/dbx-core/src/engine/utilities.rs",
+    "https://github.com/bytelogiccore-spec/DBX/blob/main/core/dbx-core/src/storage/delta_store.rs",
+    "https://github.com/bytelogiccore-spec/DBX/blob/main/core/dbx-core/src/storage/memory_wos.rs",
+    "https://github.com/bytelogiccore-spec/DBX/blob/main/core/dbx-core/src/storage/native_wos/mod.rs",
+    "https://github.com/bytelogiccore-spec/DBX/blob/main/core/dbx-core/src/storage/native_wos/backend.rs",
+    "https://github.com/bytelogiccore-spec/DBX/blob/main/core/dbx-core/src/storage/native_wos/table_store.rs",
+    "https://github.com/bytelogiccore-spec/DBX/blob/main/core/dbx-core/src/transaction/mvcc/version.rs",
+    "https://github.com/bytelogiccore-spec/DBX/blob/main/docs/english/architecture.md",
+    "https://github.com/bytelogiccore-spec/DBX/blob/main/docs/english/guides/storage-layers.md",
+    "https://github.com/bytelogiccore-spec/DBX/blob/main/docs/english/guides/transactions.md",
+    "https://github.com/bytelogiccore-spec/DBX/blob/main/docs/english/getting-started.md",
+    "https://github.com/bytelogiccore-spec/DBX/issues",
+    "https://github.com/bytelogiccore-spec/DBX/pulls",
+    "https://github.com/bytelogiccore-spec/DBX/actions/workflows/ci.yml",
+    "https://github.com/bytelogiccore-spec/DBX/graphs/contributors",
+    "https://crates.io/api/v1/crates/dbx-core",
+    "https://hn.algolia.com/api/v1/search?query=bytelogiccore&tags=story",
+    "https://hn.algolia.com/api/v1/search?query=DBX%20HTAP%20embedded%20database%20Rust"
+  ],
+  "confidence": 0.8
+}
