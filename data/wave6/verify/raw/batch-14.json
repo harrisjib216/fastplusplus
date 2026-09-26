@@ -1,0 +1,62 @@
+[
+  {
+    "id": "https://github.com/jiacheng-wu/lipp",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "B",
+    "tier_reason": "The PVLDB 14(8) 2021 paper is peer-reviewed. Section 6.2 compares LIPP with STX B+Tree, ART, ALEX, PGM, Learned Index and BwTree, and it states GCC 9.0.1 at O3. It does not reach A: the CPU is given only as a '4.0 GHz Intel Core i7 (4 cores and 8 threads)' with no model number, and the comparison harness was never published (the repo holds only src/core and src/examples).",
+    "corrections": {
+      "caveats": "Single-threaded benchmarks only. Gains vary strongly by dataset: as low as 1.47x vs ALEX on the highly non-uniform Longlat dataset. The paper names no CPU model (only '4.0 GHz Intel Core i7') and its benchmark harness against the baselines is not public; the repo ships only the core header and examples. The GRE study (PVLDB 15(11) 2022) found and fixed two bugs in LIPP (merged as PRs #11/#12). It reports that the fixes gave slightly lower performance than the LIPP paper reported, and that LIPP's unified node design scales poorly with multiple threads. Repo unmaintained since Feb 2022."
+    },
+    "notes": "The numbers match Sections 6.2.1 and 6.2.2 exactly: 2.8x/6.3x/15.3x/9.8x read-only and 2.9x/13.5x/5.4x/3.7x read-write, plus the 1.47x Longlat figure. The metadata checks out: MIT, 63 stars, last commit 2022-02-07, not a fork. An independent third-party suite, GRE (github.com/gre4index/GRE, src/benchmark/microbench.cpp vs src/competitor/btree/btree.h = STX), states gcc 8.3.0 -O3 on a Xeon Platinum 8268 and shows LIPP/ALEX beating traditional indexes single-threaded. Its heatmap gives no numeric ratios, though, so I did not use it to keep tier A; enrichment could pull numbers from GRE runs.",
+    "urls_opened": [
+      "http://www.vldb.org/pvldb/vol14/p1276-wu.pdf",
+      "https://github.com/Jiacheng-WU/lipp",
+      "https://www.vldb.org/pvldb/vol15/p3004-wongkham.pdf",
+      "https://github.com/gre4index/GRE"
+    ]
+  },
+  {
+    "id": "https://github.com/microsoft/alex",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "B",
+    "tier_reason": "The peer-reviewed SIGMOD'20 paper (arXiv 1905.08898) shows ALEX beating STX B+Tree, ART, a 2-level RMI and a Model B+Tree on an Intel Core i9-9900K. It states no compiler or flags, and the repo's src/benchmark/main.cpp benchmarks ALEX alone with no baseline harness, so it cannot be A.",
+    "corrections": {
+      "compared_against_cpp_std_directly": false,
+      "workload": "Single-threaded throughput on 4 datasets with 8-byte keys: longitudes (1B keys), longlat (200M), lognormal (190M) and YCSB (200M, 80-byte payloads). Five workloads: read-only, read-heavy (95% reads/5% inserts), write-heavy (50/50), short range scans (95% scans/5% inserts) and write-only.",
+      "caveats": "The paper states hardware (i9-9900K, 64GB) but no compiler or optimization flags. The public repo's benchmark (src/benchmark/main.cpp) runs only ALEX, so the B+Tree/ART comparison cannot be reproduced from the repo. The baseline is STX B+Tree, not std::map. Later peer-reviewed work corroborates the win: LIPP (PVLDB'21) and GRE (PVLDB'22, gcc 8.3.0 -O3, Xeon Platinum 8268) found ALEX among the top single-threaded indexes against STX B+Tree/ART/HOT."
+    },
+    "notes": "All claimed ratios appear verbatim in Section 6 (4.1x/2.2x/2.9x/3.0x read-only; 4.0x/2.7x/2.7x read-write; index-size ratios). Two fields were wrong: compared_against_cpp_std_directly was set true, but the paper benchmarks STX B+Tree, not std::map; and the workload said all datasets were 200M keys, but longitudes is 1B and lognormal 190M. The metadata checks out: MIT, 701 stars, last commit 2024-03-12 (stale), not a fork.",
+    "urls_opened": [
+      "https://arxiv.org/pdf/1905.08898",
+      "https://github.com/microsoft/ALEX",
+      "https://www.vldb.org/pvldb/vol15/p3004-wongkham.pdf"
+    ]
+  },
+  {
+    "id": "https://github.com/flode/artsynchronized",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": false,
+    "evidence_tier_final": "B",
+    "tier_reason": "The peer-reviewed DaMoN 2016 paper benchmarks the synchronized ART variants against Masstree on a Xeon E5-2687W v3. It states no compiler or flags and publishes no comparison harness (the repo's example.cpp does not include Masstree), so B holds, but the claim was misstated.",
+    "corrections": {
+      "claimed_speedup": "On 50M random 8-byte integer keys, Optimistic Lock Coupling and ROWEX beat Masstree clearly (approximate values read off Figure 5, derived from page data). At 20 threads, lookups run at ~82-86M ops/s vs ~29M (~3x), inserts at ~56M vs ~24M (~2.3x), and removes at ~38M vs ~26M (~1.5x). The per-lookup cycle table gives OLC 348/418 cycles vs Masstree 982/1231 at 1/20 threads, ~2.8-2.9x fewer (derived from page data). The text says OLC needs 4.8x fewer instructions and 3.6x fewer L3 misses than Masstree. On string keys at 20 threads (Figure 7), synchronized ART beats Masstree only on genome inserts (~29M vs ~7M ops/s). Masstree is roughly on par for genome lookups and faster on both Wikipedia and URL.",
+      "workload": "Concurrent lookup, insert and remove throughput at 1-20 threads on 50M random 8-byte integer keys (low contention). A contention test runs 1 lookup thread and 1 insert+remove thread on 10M dense keys with Zipf skew. Lookup and insert run at 20 threads on three string datasets: genome (256K), Wikipedia titles (16M) and URLs (6.4M). The comparison covers the ART synchronization variants (lock coupling, Optimistic Lock Coupling, ROWEX, HTM) against Masstree.",
+      "caveats": "The paper itself says ART vs Masstree is not apples-to-apples. ART's big win is on short integer keys; on string keys at 20 threads, Masstree matches or beats synchronized ART everywhere except genome inserts, including Wikipedia and URL lookups and inserts. Synchronization costs ~65% vs unsynchronized ART single-threaded, falling to ~10% at 20 threads. Compiler and flags are not stated, and no benchmark harness against Masstree is published. Masstree is not one of the assignment's named baselines. The last commit (2026-05-25, authored 2026-05-24) fixes a new-delete-type-mismatch memory-corruption bug after ~4 years of inactivity, so treat 'active' loosely.",
+      "last_commit": "2026-05-25"
+    },
+    "notes": "The record's claim of 'roughly 2x on genome and URL' is wrong. In Figure 7, Masstree is faster on URL lookups and inserts, and genome lookups are close to a tie. The strong, supportable win is on integer keys (Figure 5 and the CPU-counter table). The LICENSE file is Apache-2.0 (gh reports NOASSERTION), stars are 129, and the repo is not a fork. GRE (PVLDB'22) independently lists ART-OLC, not Masstree, among its 24-thread winners, but I did not verify that GRE uses this repo's implementation.",
+    "urls_opened": [
+      "https://db.in.tum.de/~leis/papers/artsync.pdf",
+      "https://github.com/flode/ARTSynchronized",
+      "https://www.vldb.org/pvldb/vol15/p3004-wongkham.pdf"
+    ]
+  }
+]
