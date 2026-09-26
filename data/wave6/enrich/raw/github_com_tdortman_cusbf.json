@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/tdortman/cusbf",
+  "one_liner": "Header-only CUDA Super Bloom filter for DNA k-mers; 7.6-9.1x faster than cuCollections' GPU blocked Bloom on RTX PRO 6000.",
+  "what_it_does": "A GPU approximate-membership filter that indexes every k-mer of a nucleotide (or protein) sequence and answers, per k-mer window, whether it was inserted. The interface works on sequences, not keys: you insert and query std::string_view sequences, device spans, dense 2-bit packed buffers, record batches, or FASTA/FASTQ streams and files (gzip supported). Queries return one byte per k-mer or aggregate and per-record hit reports. k, s, m, hash count, CUDA block size and alphabet are compile-time template parameters (cusbf::Config<K,S,M,H>), the filter size in bits is the only runtime input, and fallible calls return cusbf::Result<T> (a cuda::std::expected wrapper).",
+  "how_it_is_fast": "It implements the Super Bloom filter: a minimizer hash picks one 256-bit shard per k-mer, so a super-k-mer (about 8.5 consecutive k-mers at k=31, m=16) hits the same shard, and the Findere scheme sets H bits for each of the k-s+1 overlapping s-mers. Each thread block loads a coalesced shared-memory tile of T+k-1 symbols; inserts OR together the masks of adjacent same-shard lanes with CUB HeadSegmentedReduce so only the run head issues four 64-bit atomicOr calls, and queries use __match_any_sync so one lane loads the shard (256-bit ld.global.nc on Blackwell) and shuffles it to its peers. Shards are split into four 64-bit sectors (hash i sets a bit in word i mod 4) using bit-slices of one 64-bit hash, with compile-time-unrolled loops. The paper's speed-of-light profile shows cuSBF compute-bound at about 85% SM throughput on insert, while cuco's blocked Bloom drops below 10% SM throughput once the filter outgrows L2.",
+  "when_to_use": [
+    "GPU-resident genomic pipelines that need k-mer presence tests over whole reads or genomes (contamination or host-read screening, read-classification pre-filters) with the sequence bytes already in device memory",
+    "DNA with k <= 32, ideally the paper's Pareto point k=31, s=28, m=16, H=4, and filters from hundreds of MiB to several GiB (benchmarked at 256 MiB and 8 GiB, 16 bits per inserted k-mer)",
+    "Append-only workloads that bulk-insert and then bulk-query, where throughput matters more than single-key latency",
+    "Discrete Ampere-or-newer NVIDIA GPUs with many SMs (the largest lead was on an RTX PRO 6000 Blackwell), or cache-coherent CPU-GPU systems such as GH200 when the input starts in host memory",
+    "When you want a lower false-positive rate than cuco's blocked Bloom at the same memory: README shows 0.848% vs 3.069% at 21.4 bits per k-mer"
+  ],
+  "when_not_to_use": [
+    "General keys (integers, strings, URLs): the API only indexes k-mers cut from sequences, with no per-key insert or contains",
+    "You need deletions, counting, merging two filters, or saving and loading a filter: none exist (the only reset is clear())",
+    "Host-resident input on a PCIe GPU: the paper measured an 87-94% throughput loss on the RTX PRO 6000 (6.3/7.1 GKmer/s host input vs 48.5/112 GKmer/s device-resident). On GH200 (HBM3), the lead over cuco shrinks to 1.37-2.36x, and cuSBF itself ran slower there than on the RTX PRO 6000",
+    "Tight false-positive budgets: at 2^31 bits Cuckoo-GPU has about 24x fewer false positives and the CPU Super Bloom about 30x fewer. A k-mer one base away from an indexed k-mer falls back to the single-s-mer false-positive rate",
+    "Non-Linux hosts, pre-Ampere GPUs, CUDA older than 13.1, or projects that need a mature dependency: v0.4.0, no git tags or releases, one main author, 7 stars"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "CUDA Toolkit 13.1+ (Thrust, CUB, libcu++ cuda::std::expected) and zlib (for gzip FASTX input; pulled in as a Meson subproject). Benchmarks and tests also pull cuCollections, Google Benchmark, GoogleTest, CLI11, saltsystemslab gpu-filters, Cuckoo-GPU and a vendored Rust CPU Super Bloom.",
+    "min_toolchain": "CUDA 13.1+ nvcc (-std=c++20 --expt-extended-lambda --expt-relaxed-constexpr); GCC or Clang host compiler with C++20 including std::format, which the headers call; Meson >= 1.3 plus Ninja for the bundled build",
+    "platforms": "Linux x86-64 or aarch64 with an NVIDIA GPU of compute capability 8.0+ (Ampere, Ada, Hopper, Blackwell; default gencode sm_80/sm_90/sm_120). WSL2 is described as a reasonable dev setup. Native Windows and macOS are not supported.",
+    "thread_safety": "Not documented. Host APIs, including const queries, reuse a mutable per-filter staging buffer, so serialize host calls on one filter object. Device inserts use atomicOr. Host bulk APIs synchronize the stream; the *_async device-span APIs leave ordering to the caller.",
+    "drop_in_for_baseline": "partial — it replaces cuco::bloom_filter only when the keys are k-mers of sequences. It takes sequences, not uint64 keys, and has a different API (insert_sequence/contains_sequence, FASTX readers, Result<T>). It does not use cuco's filter format."
+  },
+  "gotchas": [
+    "Capacity is rounded up to a power-of-two number of 256-bit shards, so a 5 GiB request allocates 8 GiB. You size the filter in bits yourself (the paper used 16 bits per inserted k-mer); there is no sizing helper based on item count or target FPR.",
+    "The headers have no canonical or reverse-complement k-mer handling, so the filter is strand-specific. Canonicalize yourself or insert both strands. Any non-ACGT byte (N, IUPAC codes) invalidates every k-mer spanning it, and those windows query as 0. A/C/G/T are case-insensitive.",
+    "Config limits: HashCount must be 4, 8, 12 or 16; k times bits-per-symbol must be <= 64 (k <= 32 for DNA, 12 for 5-bit protein); s and m must be <= k. Each Config is a separate type and kernel instantiation. The paper notes that larger alphabets force short minimizers and raise the FPR.",
+    "The constructor throws std::runtime_error through CUSBF_UNWRAP(clear()) if clear() fails, and the thrust allocation can throw; other calls return Result. The CUSBF_TRY/CUSBF_UNWRAP macros use GNU statement expressions. Per-k-mer queries produce one output byte per k-mer, about 3 GB of device memory for a 3.1B k-mer genome."
+  ],
+  "pick_this_over_siblings_when": "Pick it over Cuckoo-GPU (same author) for insert-heavy, duplicate-heavy genomic k-mer streams where deletions don't matter (80x to 3427x faster inserts, about 8x faster queries on the RTX PRO 6000), and pick Cuckoo-GPU for deletions, arbitrary 64-bit keys, or lower FPR at mid-size budgets. The CPU filters (CQF, Xor, BuRR, Prefix) are the better fit unless you are on an NVIDIA GPU with sequence data.",
+  "verified_claims_summary": "On an RTX PRO 6000 Blackwell (96 GB GDDR7, AMD EPYC 7713P host, CUDA 13.2, -O3), Google Benchmark runs of Config<31,28,16,4> at 16 bits per k-mer (256 MiB filter for C. elegans, 8 GiB for CHM13), with device-resident input and transfers untimed, showed cuSBF inserting 9.1x/8.2x and querying 7.7x/7.6x faster than cuco::bloom_filter<uint64_t> on its default policy, which was fed pre-packed 64-bit k-mers. The same unreviewed, first-party preprint reports only 1.37-2.36x on GH200.",
+  "status_note": "Active single-author research code (last commit 2026-09-26; versions 0.2.0 to 0.4.0 bumped in meson.build during Aug 2026 but never tagged), with 7 stars and no issues or PRs; BSL-1.0 and header-only, so it is easy to vendor at a pinned commit.",
+  "sources_read": [
+    "https://github.com/tdortman/cuSBF",
+    "https://github.com/tdortman/cuSBF#performance",
+    "https://github.com/tdortman/cuSBF/blob/main/include/cusbf/filter.cuh",
+    "https://github.com/tdortman/cuSBF/blob/main/include/cusbf/config.cuh",
+    "https://github.com/tdortman/cuSBF/blob/main/include/cusbf/filter_ref.cuh",
+    "https://github.com/tdortman/cuSBF/blob/main/include/cusbf/detail/kernels.cuh",
+    "https://github.com/tdortman/cuSBF/blob/main/include/cusbf/detail/filter_impl.cuh",
+    "https://github.com/tdortman/cuSBF/blob/main/include/cusbf/detail/filter_common.cuh",
+    "https://github.com/tdortman/cuSBF/blob/main/include/cusbf/detail/sequence_kmer.cuh",
+    "https://github.com/tdortman/cuSBF/blob/main/include/cusbf/Alphabet.cuh",
+    "https://github.com/tdortman/cuSBF/blob/main/include/cusbf/hashutil.cuh",
+    "https://github.com/tdortman/cuSBF/blob/main/include/cusbf/error.hpp",
+    "https://github.com/tdortman/cuSBF/blob/main/include/cusbf/cuda_error.hpp",
+    "https://github.com/tdortman/cuSBF/blob/main/include/cusbf/gzstreambuf.hpp",
+    "https://github.com/tdortman/cuSBF/blob/main/include/cusbf/superbloom_ffi.hpp",
+    "https://github.com/tdortman/cuSBF/blob/main/include/cusbf/detail/fastx_chunk.cuh",
+    "https://github.com/tdortman/cuSBF/blob/main/include/cusbf/detail/fastx_file_buffer.hpp",
+    "https://github.com/tdortman/cuSBF/blob/main/meson.build",
+    "https://github.com/tdortman/cuSBF/blob/main/meson.options",
+    "https://github.com/tdortman/cuSBF/blob/main/subprojects/cuco.wrap",
+    "https://github.com/tdortman/cuSBF/blob/main/.cargo/config.toml",
+    "https://github.com/tdortman/cuSBF/blob/main/benchmarks/filter_comparison.cu",
+    "https://github.com/tdortman/cuSBF/issues",
+    "https://github.com/tdortman/cuSBF/pulls",
+    "https://github.com/tdortman/cuSBF/commits/main",
+    "https://github.com/tdortman/cuSBF/tags",
+    "https://tdortman.github.io/cuSBF/",
+    "https://arxiv.org/abs/2606.24417",
+    "https://arxiv.org/pdf/2606.24417",
+    "https://hn.algolia.com/api/v1/search?query=cuSBF&restrictSearchableAttributes=url,title"
+  ],
+  "confidence": 0.8
+}

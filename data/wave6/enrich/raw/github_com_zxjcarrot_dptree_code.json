@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/zxjcarrot/dptree-code",
+  "one_liner": "Research persistent-memory index that buffers writes in DRAM; up to 1.82x faster point lookups than FAST+FAIR on Optane.",
+  "what_it_does": "DPTree is an ordered index for 8-byte integer keys on machines with both DRAM and persistent memory (Intel Optane). Writes go into a DRAM B+-tree protected by a PM write-ahead log. When that buffer reaches about 10% of the base tree (7% in the concurrent version), it is merged into a PM-resident linked list of leaves, which a DRAM radix tree (ART) indexes. The API is header templates with their own interface: `dtree::dpftree<K,V>` (single-threaded: insert, erase, lookup, lookup_range(start,end)) and `dptree::concur_dptree<K,V>` (insert, upsert, lookup, lookup_range(start,count)). It is not a std::map-style container and not a drop-in replacement for FAST+FAIR.",
+  "how_it_is_fast": "It spreads the cost of persistence over a batch of writes: each write costs one cache-line log append (clwb+sfence) plus a DRAM insert. The batch is then merged into PM leaves in place using coarse-grained versioning. Each leaf keeps two metadata copies, and one persisted global-version flip makes a whole merge visible, so the flushes inside the merge need no fences. That comes to 2.26 flushes per insert, against 4.35 for FAST+FAIR and 3.64 for FPTree (paper Table 1). Base-tree leaves are 256-slot hash tables using linear probing plus 1-byte fingerprints, with an order array for sorted scans. A lookup is usually a bloom-filter check on the buffer plus about 2 PM accesses. The concurrent version adds a hash-partitioned PM log with lock-free fetch-and-add appends, an Optimistic Lock Coupling (OLC) B+-tree buffer, RCU-style thread-local epoch words and a parallel background merge.",
+  "when_to_use": [
+    "Research or prototyping on Intel Optane DC PMem (App Direct / DAX) when you need a strong buffered-index baseline to compare against FAST+FAIR, FPTree or WORT.",
+    "Workloads dominated by point lookups, or by 50/50 read-update, on uniformly random 64-bit integer keys with 8-byte values. The paper shows 1.32-1.58x ReadOnly throughput over FAST+FAIR and 1.7-5.07x on ReadUpdate at 50M keys.",
+    "Insert-heavy workloads where the limit is PM write bandwidth or endurance rather than CPU: DPTree issues the fewest flushes and fences per insert of the indexes the paper measured.",
+    "As a readable, MIT-licensed reference for buffered/differential PM indexing (in-place merge, coarse-grained versioning, partitioned PM log) that you port into your own engine."
+  ],
+  "when_not_to_use": [
+    "Anything that needs real crash recovery. The public code has no recovery routine (issue #4, open since 2021 with no reply). It allocates its 'PM' with posix_memalign in ordinary DRAM and has no PM pool or allocator. The paper's validity-bit log, restart counters and pending-leaf list are also missing.",
+    "Scan-heavy workloads: scans are up to 1.1x slower than FAST+FAIR single-threaded, FAST+FAIR keeps the highest scan throughput in ScanInsert, and DPTree's scan throughput levels off after about 20 threads.",
+    "Keys that are not uint64: the code hard-codes 8-byte big-endian conversion (__builtin_bswap64). Issue #3 reports very low throughput and segfaults with double keys, and there is no string or variable-length key support.",
+    "Workloads with deletes under concurrency: concur_dptree exposes no erase, and the APEX authors likewise report that DPTree's code does not support delete, recovery or double keys.",
+    "Memory-constrained deployments or non-Optane hardware: 1.7 GB versus 1.26 GB for FAST+FAIR after 50M inserts (about 34% more, from the two metadata copies). Optane is discontinued, so the claimed advantage has no current target hardware."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "stx-btree (headers), Intel TBB (used by the bundled ARTOLC epoch code), tcmalloc_minimal, pthreads; you must also compile the bundled src/*.cpp, src/bloom.c and misc/ARTOLC/*.cpp. The paper's PM allocator (nvm_malloc) is not included.",
+    "min_toolchain": "C++11 with GCC (paper used g++ 6.4; CMake sets CMAKE_CXX_STANDARD 11 and -fpermissive); CMake 2.8+; README targets Ubuntu 18.04. The CMake default build type is RelWithDebInfo, not the paper's -O3.",
+    "platforms": "Linux x86-64 only. It needs CLWB (Skylake-SP or newer), SSE/AVX and -mrtm, and enables AVX2/AVX-512 flags by reading /proc/cpuinfo. The published numbers need Optane DC PMM in App Direct mode; without it everything runs in DRAM.",
+    "thread_safety": "dtree::dpftree is single-threaded with no locking. dptree::concur_dptree allows concurrent insert/upsert/lookup/lookup_range, using an OLC B+-tree, per-thread epoch words and a detached merge thread; writers block when the buffer fills while a previous merge is still running.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Stored values are shifted left one bit (the low bit is the tombstone flag), and lookup returns them still encoded, so callers must shift right by 1 (the test drivers call strip_upsert_value). Values are therefore limited to 63 bits. Also, concur_dptree::upsert's in-place base-tree update (update_if_found) writes the raw, unshifted value, which is inconsistent with the other paths.",
+    "dpftree::lookup does not check the tombstone bit in the DRAM buffer, so a key that was erased but not yet merged is still reported as found.",
+    "concur_dptree.hpp defines the non-inline function spin_until_no_ref in the header, so including it in more than one translation unit causes duplicate-symbol link errors. Its thread-local epoch words are static per template instantiation and register with only the first instance's managers, so do not run two instances of the same <K,V> in one process. The embedding program must also define the global int parallel_merge_worker_num.",
+    "The benchmark drivers default to dense keys 0..n-1; pass sparseKey=1 to get the random 64-bit keys the paper used. The public drivers cover only insert and search (plus single-thread scans); the YCSB mixes and the baseline harness are not published."
+  ],
+  "pick_this_over_siblings_when": "APEX is the only persistent-memory sibling. The APEX paper measured it beating DPTree (inserts up to 1.66x, lookups up to 3.2x, scans up to 1.83x), and APEX supports recovery, deletes and double keys, so default to APEX. Pick DPTree only if you want a non-learned design that does not depend on the key distribution (on the hard-to-fit FB dataset APEX's insert throughput was 42% below DPTree's) or you are studying buffered in-place PM merging. The DRAM-only siblings (ALEX, LIPP, HOT, ART) provide no persistence.",
+  "verified_claims_summary": "These numbers come from the authors' own PVLDB 13(4) paper: 2x Xeon Platinum 8263C with 512 GB Optane DC PMM (App Direct, ext4-DAX), g++ 6.4 -O3, threads pinned to one socket. With 25M-100M random 64-bit keys and 16-byte entries, single-threaded DPTree had 1.27-1.43x lower insert latency and up to 1.82x faster point lookups than FAST+FAIR, while scans were up to 1.1x slower. At 50M keys and up to 32 threads it reached up to 1.36x InsertOnly and 1.32-1.58x ReadOnly throughput over FAST+FAIR. FPTree was the authors' own reimplementation, the baseline harness is not public, and no stdlib comparison was made.",
+  "status_note": "Abandoned: the code was published in Sep 2020 and last touched 2021-07-28 (a build fix), and two 2021 issues (missing recovery code, crashes with double keys) are unanswered. It is MIT-licensed and about 6K lines, so treat it as a research reference for discontinued Optane hardware rather than a library to vendor.",
+  "sources_read": [
+    "https://github.com/zxjcarrot/DPTree-code",
+    "https://github.com/zxjcarrot/DPTree-code/blob/master/README.md",
+    "https://github.com/zxjcarrot/DPTree-code/blob/master/CMakeLists.txt",
+    "https://github.com/zxjcarrot/DPTree-code/blob/master/include/dptree.hpp",
+    "https://github.com/zxjcarrot/DPTree-code/blob/master/include/concur_dptree.hpp",
+    "https://github.com/zxjcarrot/DPTree-code/blob/master/include/util.h",
+    "https://github.com/zxjcarrot/DPTree-code/blob/master/include/btreeolc.hpp",
+    "https://github.com/zxjcarrot/DPTree-code/blob/master/include/art_idx.hpp",
+    "https://github.com/zxjcarrot/DPTree-code/blob/master/src/util.cpp",
+    "https://github.com/zxjcarrot/DPTree-code/blob/master/misc/ARTOLC/Epoche.h",
+    "https://github.com/zxjcarrot/DPTree-code/blob/master/test/dptree_test.cxx",
+    "https://github.com/zxjcarrot/DPTree-code/blob/master/test/concur_dptree_test.cxx",
+    "https://github.com/zxjcarrot/DPTree-code/issues/2",
+    "https://github.com/zxjcarrot/DPTree-code/issues/3",
+    "https://github.com/zxjcarrot/DPTree-code/issues/4",
+    "https://github.com/zxjcarrot/DPTree-code/commits/master",
+    "http://www.vldb.org/pvldb/vol13/p421-zhou.pdf",
+    "https://arxiv.org/pdf/2105.00683",
+    "https://hn.algolia.com/api/v1/search?query=DPTree%20persistent%20memory&tags=story"
+  ],
+  "confidence": 0.8
+}
