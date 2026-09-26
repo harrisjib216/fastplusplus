@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/treeform/flatty",
+  "one_liner": "Binary serializer for plain Nim types; ~38x faster serialize, ~36x faster deserialize than JSON-based std/marshal.",
+  "what_it_does": "flatty turns Nim values (numbers, strings, seqs, arrays, tuples, objects including private fields and object variants, refs, Table/OrderedTable/CountTable, HashSet, Option, distinct and range types) into a compact binary string and back. The API is two calls: `x.toFlatty()` returns a string and `s.fromFlatty(T)` rebuilds a `T`; there is no schema or IDL, because the Nim type is the schema. The package also ships binny (a side-effect-free StringStream replacement over a string), hashy (hash any object through its flatty bytes), hexprint and a UTF-16/UTF-32 encode module.",
+  "how_it_is_fast": "Encoding and decoding are generic overloads resolved at compile time per type, while std/marshal walks runtime type info (`typeinfo.Any`), writes JSON text and records every ref address in an IntSet. For seqs and arrays whose element type is 'flat' (supportsCopyMem, no pointers, variants, ranges or int-width mismatch), flatty writes a length prefix and moves the whole block with one copyMem; strings are also one copyMem, and decode allocates with newStringUninit/setLenUninit to skip zero-fill. Output is appended to a plain string with setLen plus copyMem instead of StringStream, values keep native little-endian layout with no byte swapping, and hot procs are `{.inline.}`.",
+  "when_to_use": [
+    "Nim-to-Nim messages or save files where both ends are built from the same type definitions, e.g. game state over UDP with netty plus supersnappy compression (the stack the README describes).",
+    "Payloads dominated by seqs/arrays of numbers or flat objects, which encode and decode as a single memcpy per container.",
+    "Snapshotting acyclic ref-object trees: about 2.3 ms to serialize an 11,125-node tree in the README benchmark.",
+    "Decoding untrusted network blobs: since the July 2026 hardening, every read is bounds-checked (also under -d:danger), length prefixes are validated before allocation, and a fuzzer runs in tests.",
+    "Hashing arbitrary nested Nim objects by content with the bundled hashy module."
+  ],
+  "when_not_to_use": [
+    "Data read by non-Nim programs: the format is defined only by Nim types, with no IDL and no other-language implementation (the JS target is Nim-compiled JS only).",
+    "Long-lived storage while types evolve: the README says there is no versioning, so any change to a type breaks reading old blobs.",
+    "Graphs with shared or cyclic refs: `toFlatty` on a ref writes a nil flag plus the value with no identity tracking, so shared refs come back as copies and cycles recurse until the stack overflows. std/marshal tracks ref addresses and keeps both.",
+    "Big-endian targets (compile-time error) or JS builds with int64/uint64 fields, which the README says are supported badly.",
+    "Polymorphic ref hierarchies or variants with more than one `case` discriminator: encoding follows the static type, and objvar.nim reads only the first discriminator (PR #36 for multiple/nested discriminators was closed unmerged)."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none (Nim standard library only)",
+    "min_toolchain": "Nim >= 2.0.0 (flatty.nimble); install with nimble or atlas",
+    "platforms": "Little-endian native targets only (compile error on big-endian); CI on Linux, macOS and Windows plus the Nim JS backend under Node; the decode stack guard is off on emscripten and unrecognized platforms",
+    "thread_safety": "Not documented. Procs work on caller-owned strings, and the only global state is a `{.threadvar.}` stack limit, so separate buffers on separate threads look safe by inspection.",
+    "drop_in_for_baseline": "partial — the call swap is one line (`$$x` to `x.toFlatty`, `to[T](s)` to `s.fromFlatty(T)`), but the binary format cannot read existing std/marshal JSON and does not preserve shared or cyclic refs"
+  },
+  "gotchas": [
+    "Blobs are build-dependent: `int`/`uint` and lengths use the target's native width unless both sides compile with the same -d:flatty32 or -d:flatty64, copyable seq/array elements are raw memory images (sizeof(T) each, padding included), and every enum is written as 8 bytes.",
+    "Malformed input raises FlattyError (bad length, count or enum), IndexDefect (truncation) or RangeDefect (range type out of bounds); the README tells you to catch both CatchableError and Defect.",
+    "The README benchmark predates the July 2026 hardening (PR #55), which itself reports ref-tree deserialize ~1.4-1.5x slower afterwards; serialize is unchanged.",
+    "Much of the gap to std/marshal is marshal's reflection, not binary vs text: in the same table jsony (JSON) serializes in 9.618 ms, ~8.9x faster than marshal, while the binary peer bingo is only ~16% slower than flatty on serialize (min)."
+  ],
+  "pick_this_over_siblings_when": "Every catalogued sibling targets another language (Rust, Go, C#, C++, Zig); none is a Nim library, so pick flatty inside a Nim-only system. Pick a cross-language schema format such as Bebop or SBE instead when non-Nim peers must read the data or the schema must evolve, since flatty has no IDL and no versioning.",
+  "verified_claims_summary": "The README's benchy table (100 runs each) for an 11,125-node ref-object tree shows serialize 2.265 ms vs 85.178 ms for std/marshal's JSON `$$` (~37.6x on min, ~38.6x on average) and deserialize 2.643 ms vs 148.723 ms (~56x on min, ~36x on average). Nim version, compiler flags and hardware are not stated (tests/config.nims only sets --path), and the numbers were recorded before the PR #55 hardening, so current deserialize is likely nearer 24-40x (derived from PR #55's 1.4-1.5x slowdown).",
+  "status_note": "Active: nimble version 0.4.0, last commit 2026-08-13, decode path fuzzed and hardened in July 2026; MIT, pure Nim with no dependencies, small enough to vendor.",
+  "sources_read": [
+    "https://github.com/treeform/flatty",
+    "https://github.com/treeform/flatty#speed",
+    "https://github.com/treeform/flatty/blob/master/README.md",
+    "https://github.com/treeform/flatty/blob/master/src/flatty.nim",
+    "https://github.com/treeform/flatty/blob/master/src/flatty/binny.nim",
+    "https://github.com/treeform/flatty/blob/master/src/flatty/objvar.nim",
+    "https://github.com/treeform/flatty/blob/master/src/flatty/hashy.nim",
+    "https://github.com/treeform/flatty/blob/master/flatty.nimble",
+    "https://github.com/treeform/flatty/blob/master/tests/bench.nim",
+    "https://github.com/treeform/flatty/blob/master/tests/bench_flatty_types.nim",
+    "https://github.com/treeform/flatty/blob/master/tests/config.nims",
+    "https://github.com/treeform/flatty/blob/master/tests/test_flatty.nim",
+    "https://github.com/treeform/flatty/blob/master/.github/workflows/build.yml",
+    "https://github.com/treeform/flatty/issues/33",
+    "https://github.com/treeform/flatty/issues/38",
+    "https://github.com/treeform/flatty/issues/40",
+    "https://github.com/treeform/flatty/pull/36",
+    "https://github.com/treeform/flatty/pull/46",
+    "https://github.com/treeform/flatty/pull/52",
+    "https://github.com/treeform/flatty/pull/55",
+    "https://github.com/treeform/flatty/pull/56",
+    "https://github.com/treeform/flatty/commit/4031efaa",
+    "https://github.com/treeform/flatty/commit/d9f0d0c3",
+    "https://nim-lang.org/docs/marshal.html",
+    "https://github.com/nim-lang/Nim/blob/devel/lib/pure/marshal.nim"
+  ],
+  "confidence": 0.8
+}
