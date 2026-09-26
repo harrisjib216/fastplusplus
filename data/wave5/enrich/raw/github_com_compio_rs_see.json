@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/compio-rs/see",
+  "one_liner": "Runtime-agnostic watch (latest-value broadcast) channel with sync and single-threaded variants; beats tokio::sync::watch at 1, 4 and 64 subscribers.",
+  "what_it_does": "Provides a single-value broadcast channel like tokio::sync::watch that does not need a tokio runtime; the tests use smol and compio, and the doctests use tokio. There are two modules with the same API: see::sync (Arc, parking_lot::RwLock, event-listener; Send + Sync) and see::unsync (Rc, RefCell, Cell, local-event; single thread only). Method names match tokio's watch (send, send_modify, send_if_modified, send_replace, subscribe, borrow, borrow_and_update, changed, wait_for, mark_changed, mark_unchanged, closed). The default `stream` feature adds into_stream(), which yields a clone of each new value.",
+  "how_it_is_fast": "The README does not say why see::sync beats tokio; the source copies tokio's own watch layout (an atomic version counter stepping by 2, the least significant bit as the closed flag, the value behind an RwLock). The visible difference is notification: each send makes one event-listener notify(usize::MAX), which takes one mutex, while tokio's BigNotify calls notify_waiters on 8 sharded Notify objects and locks each shard's waiter mutex on every send. see also skips tokio's cooperative-scheduling budget, and the lock is not the difference: the benchmark's tokio `full` feature turns on parking_lot, so both sides use parking_lot's RwLock. see::unsync gets its further 4-8x by replacing atomics and locks with Rc, RefCell and Cell.",
+  "when_to_use": [
+    "Code that runs on smol, compio or another non-tokio executor and needs tokio-style watch semantics (latest value, coalesced updates) without a tokio dependency.",
+    "Single-threaded or thread-per-core runtimes such as compio: use see::unsync. The README measures about 4.8 us vs 38.6 us per 1,000 SPSC messages against see::sync, and a 3.5 ns vs 14.3 ns borrow.",
+    "Send-heavy config or state broadcast with 1-4 subscribers, where the per-send cost dominates. The author measured 84.9 us vs 213.8 us per 1,000 sends of a 1 KB value to 1 subscriber.",
+    "Replacing tokio's watch in a library that must stay runtime-agnostic, where you control every changed() loop and can audit it."
+  ],
+  "when_not_to_use": [
+    "About 16 subscribers: in the author's own table tokio is faster (1.14 ms vs 1.52 ms). Scaling is not monotone, and there are no numbers above 64 subscribers or on a second CPU.",
+    "As a transparent drop-in inside existing tokio code. changed() has different semantics (see gotchas), there is no Receiver::is_closed, and the error and guard types differ.",
+    "Multi-threaded use where missing the final update is unacceptable. see::sync::Receiver::changed() has a check-then-listen window that can lose a wakeup (see gotchas). The tests use only single-threaded executors (compio::test, smol::block_on), with no loom or multi-thread stress tests.",
+    "When you need a mature dependency: version 0.1.2, 13 commits, 15 stars, about 12.9k crates.io downloads, and 2 reverse dependencies (openraft-rt-compio, and synchrony as an optional dependency).",
+    "When every message must arrive. Like any watch channel, see keeps only the latest value, so use an mpsc or broadcast channel instead."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "event-listener 5.4, parking_lot 0.12, local-event 0.1, futures-util 0.3 (alloc only), scopeguard 1.2, thiserror 2",
+    "min_toolchain": "Rust edition 2024 (so Rust 1.85+). No rust-version is declared, and CI tests nightly only (ubuntu-22.04).",
+    "platforms": "any (pure Rust, no platform-specific code); CI runs only on Linux x86-64",
+    "thread_safety": "see::sync: Sender and Receiver are Send + Sync when T is Send + Sync (Arc plus parking_lot::RwLock). see::unsync: Rc and RefCell, so !Send and !Sync, for one thread only.",
+    "drop_in_for_baseline": "partial — the method names match tokio::sync::watch, but changed(&self) does not mark the value seen (you must call borrow_and_update), changed() returns Err as soon as the sender drops even if an unseen value is pending (tokio returns Ok first), there is no Receiver::is_closed, and SendError, RecvError and Guard are different types"
+  },
+  "gotchas": [
+    "A tokio-style `while rx.changed().await.is_ok() { let v = rx.borrow(); ... }` loop becomes a busy spin. In see, only borrow_and_update, mark_unchanged and wait_for advance the receiver's version; changed() does not.",
+    "In see::sync, changed() loads the version, then calls Event::listen(), then awaits, without re-checking in between. event-listener's docs say a notification sent while no listener is registered 'simply gets lost', and tell you to re-check after listen(). tokio registers first and then checks. So a send that lands in that window can go unnoticed until the next send or until the sender drops. see's own Sender::closed() does use the double-check.",
+    "In see::unsync, Guard holds a RefCell Ref. If any task keeps a Guard alive (for example across an .await), send() on the same thread hits RefCell::borrow_mut and panics. In see::sync, the same pattern deadlocks on the non-reentrant parking_lot RwLock.",
+    "The `stream` feature uses unsafe code: it reuses the boxed future's allocation by comparing layouts and casting pointers (future_store.rs), and BoxedFutureStore has an unconditional `unsafe impl Sync`."
+  ],
+  "pick_this_over_siblings_when": "No sibling is a synchronization primitive: monoio, ringline, exec-rs and zokio replace the whole tokio runtime, while see replaces only the watch channel and runs on tokio, smol or compio. Pick it when the event loop is fine and the bottleneck, or the tokio dependency, is the watch channel.",
+  "verified_claims_summary": "In the author's Criterion benchmark (benches/comparison.rs, 'SPSC/MPSC Throughput') on an Intel Core i5-11300H with a tokio 1.48 multi-thread Runtime and an unpinned nightly rustc, one task sends 1,000 1 KB arrays to N receiver tasks: see::sync 84.9 us vs tokio::sync::watch 213.8 us at N=1 (the README says 2.3x, but its numbers give about 2.5x), 350.6 vs 388.6 us at N=4, 1.52 vs 1.14 ms at N=16 (tokio wins) and 2.17 vs 2.67 ms at N=64. Watch channels coalesce updates, and the receivers' marker byte ((999 as u8) = 231) also appears at i=231, 487 and 743, so the benchmark mostly measures send cost plus task spawn and wakeup, not per-message delivery.",
+  "status_note": "Active (v0.1.2 published 2026-08-20 under the compio-rs org, MIT OR Apache-2.0) and small enough to add or vendor, but young (0.1.x, 13 commits, 4 merged PRs, no issues filed) and not stress-tested across threads.",
+  "sources_read": [
+    "https://github.com/compio-rs/see",
+    "https://github.com/compio-rs/see#performance-advantages-sync-version",
+    "https://raw.githubusercontent.com/compio-rs/see/master/README.md",
+    "https://raw.githubusercontent.com/compio-rs/see/master/Cargo.toml",
+    "https://raw.githubusercontent.com/compio-rs/see/master/Cargo.lock",
+    "https://raw.githubusercontent.com/compio-rs/see/master/flake.nix",
+    "https://raw.githubusercontent.com/compio-rs/see/master/src/lib.rs",
+    "https://raw.githubusercontent.com/compio-rs/see/master/src/sync.rs",
+    "https://raw.githubusercontent.com/compio-rs/see/master/src/unsync.rs",
+    "https://raw.githubusercontent.com/compio-rs/see/master/src/state.rs",
+    "https://raw.githubusercontent.com/compio-rs/see/master/src/stream.rs",
+    "https://raw.githubusercontent.com/compio-rs/see/master/src/future_store.rs",
+    "https://raw.githubusercontent.com/compio-rs/see/master/benches/comparison.rs",
+    "https://raw.githubusercontent.com/compio-rs/see/master/benches/single_thread.rs",
+    "https://raw.githubusercontent.com/compio-rs/see/master/tests/compio_sync.rs",
+    "https://raw.githubusercontent.com/compio-rs/see/master/tests/smol.rs",
+    "https://raw.githubusercontent.com/compio-rs/see/master/.github/workflows/test.yml",
+    "https://raw.githubusercontent.com/compio-rs/see/master/LICENSE-MIT",
+    "https://github.com/compio-rs/see/tree/master/tests",
+    "https://github.com/compio-rs/see/tree/master/.github/workflows",
+    "https://github.com/compio-rs/see/pulls (via gh search issues --repo compio-rs/see --include-prs)",
+    "https://crates.io/api/v1/crates/see",
+    "https://crates.io/api/v1/crates/see/reverse_dependencies",
+    "https://raw.githubusercontent.com/tokio-rs/tokio/master/tokio/src/sync/watch.rs",
+    "https://raw.githubusercontent.com/tokio-rs/tokio/master/tokio/src/sync/notify.rs",
+    "https://raw.githubusercontent.com/tokio-rs/tokio/master/tokio/Cargo.toml",
+    "https://raw.githubusercontent.com/tokio-rs/tokio/master/tokio/src/loom/std/mod.rs",
+    "https://raw.githubusercontent.com/smol-rs/event-listener/master/src/lib.rs",
+    "https://raw.githubusercontent.com/smol-rs/event-listener/master/src/intrusive.rs",
+    "https://github.com/smol-rs/event-listener/tree/master/src",
+    "https://hn.algolia.com/api/v1/search?query=%22compio-rs%2Fsee%22"
+  ],
+  "confidence": 0.7
+}
