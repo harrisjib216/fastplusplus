@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/eclipse-zenoh/zenoh",
+  "one_liner": "Rust pub/sub and query protocol that can run with or without a broker; in one 2023 study it moved 10-65x Kafka's bitrate.",
+  "what_it_does": "Zenoh is a networking stack for publish/subscribe and query/reply on slash-separated key expressions with wildcards (e.g. robot/**). Nodes run as peers (direct mesh or clique), clients, or routers (the zenohd daemon). Optional storage plugins keep the most recent value per key in memory, RocksDB, InfluxDB, S3 or the filesystem. The API is its own: sessions, publishers, subscribers, queryables and builders. It does not speak Kafka's protocol and has no topics/partitions/offsets model; Rust is the reference implementation, with C (zenoh-c, or pure-C zenoh-pico), header-only C++17 (zenoh-cpp), Python, Java/Kotlin, Go and TypeScript bindings.",
+  "how_it_is_fast": "The wire protocol is compact: variable-length integer encoding, and key expressions are declared once and then sent as small numeric resource IDs. That gives a minimum of 5 bytes of overhead per message. A multi-stage transmission pipeline serializes many small messages into each frame (automatic batching), reuses pre-allocated batch buffers, and fragments large ones. The team says it keeps heap allocations off the critical path and limits async to the network-facing code, to keep future stack frames small. Payloads are zero-copy ZBytes. There is an opt-in shared-memory transport for same-host traffic and an opt-in io_uring receive path on Linux. In peer mode the broker hop disappears, and nothing is appended to a durable log on the data path.",
+  "when_to_use": [
+    "High-rate small messages (8 B to 8 KB) between services, sensors or robots. In the NTU test Zenoh passed 4M msg/s, while Kafka stayed at 56K-63K msg/s for payloads under 2 KB.",
+    "Latency-sensitive fan-out where losing the broker hop matters: 10 us (Zenoh P2P) vs 73 us (Kafka) single-machine median one-way latency with 64 B pings.",
+    "Topologies that span edge to cloud (robotics, V2X, IoT) and need to switch between peer-to-peer, client and routed modes without changing application code.",
+    "Large payloads between processes on the same host, using the opt-in shared-memory feature (reference-counted SHM buffers, automatic conversion to non-SHM when data leaves the host).",
+    "Mixed-language systems, including microcontrollers through zenoh-pico, that need one protocol from C/C++ through Python to Rust."
+  ],
+  "when_not_to_use": [
+    "You need Kafka's durable, replayable, partitioned log: retention, consumer groups, offsets, rewinds. Zenoh storages keep only the latest value per key. AdvancedPublisher history is an in-memory per-publisher cache (default depth 1) behind the unstable feature.",
+    "You depend on the Kafka ecosystem (existing clients, Connect, Streams, schema tooling). Zenoh is not wire- or API-compatible.",
+    "You need exactly-once or transactional delivery. The docs read for this entry do not cover either.",
+    "Large messages over slow or lossy links with default settings: the default Drop congestion control can discard multi-MB messages even without real congestion (open issue #2258).",
+    "You plan to size a deployment from the headline ratios. They come from 2023's 0.7.0-rc, which predates the 0.11 Tokio port and the 1.0 batching rework, and the benchmark code is gone."
+  ],
+  "integration": {
+    "form": "crate (Rust); zenoh-c builds a C library from the same Rust core; zenoh-cpp is header-only C++ over zenoh-c or zenoh-pico; zenohd router binary",
+    "dependencies": "tokio, rustls/tokio-rustls, quinn (QUIC), serde, lz4_flex, flume/crossbeam and others; the Cargo features transport_tcp/udp/tls/quic/ws/unixsock are on by default; shared-memory, uring, transport_serial/vsock/unixpipe and unstable are opt-in",
+    "min_toolchain": "Rust 1.75 (some dependencies may need newer; zenoh-pinned-deps-1-75 pins compatible versions); zenoh-cpp needs C++17",
+    "platforms": "Linux, macOS, Windows (all in CI); io_uring receive path is Linux-only; zenoh-pico covers microcontrollers",
+    "thread_safety": "Session is an Arc around shared state: cheap to clone and documented as shareable across tasks and threads. The API works both async (Tokio) and blocking (.wait()).",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Publications default to CongestionControl::Drop, so a full queue silently drops data. The benchmark used Block. BlockFirst was added to mitigate large-message drops.",
+    "Block can stall a router: open issue #1876 (still reported on 1.9.0) shows a router looping on 'Unable to push non droppable network message' when a link is cut or congested, without closing the transport.",
+    "Reliability::Reliable does not retransmit at the Zenoh layer; it only selects a reliable link such as TCP. Loss detection and recovery need AdvancedPublisher and AdvancedSubscriber, which are in the unstable API.",
+    "The express flag turns batching off: better latency, lower throughput. Batching behaviour changed with the 0.11 Tokio port and was reworked in 1.0, and 1.0 was not backward compatible with 0.11."
+  ],
+  "pick_this_over_siblings_when": "Pick Zenoh over Redpanda or Woodpecker when the job is moving live data with low latency, not keeping a durable log. Those two stay Kafka-style storage systems. Over TCPSHM, pick it when you need many-to-many routing, discovery and multiple languages rather than a single point-to-point C++ link with sub-microsecond latency.",
+  "verified_claims_summary": "A National Taiwan University team ran Zenoh 0.7.0-rc against a Kafka 3.2.1 broker driven by the Rust rdkafka 0.28.0 client (linger.ms=0, batch.size=400KB, acks=0, no compression) on a Ryzen 7 5800X fixed at 4.0 GHz with Ubuntu 20.04, reporting medians. Single-machine, Zenoh peer mode got 65x Kafka's bitrate at 8 B, 24x at 8 KB and 10x at 32 KB. Over 100 GbE, Zenoh reached ~50 Gbps P2P and ~34 Gbps brokered against Kafka's 5 Gbps. No compiler or flags are given, Kafka could not be run above 512 KB, the benchmark repo now returns 404, and the page's multi-machine iperf ceiling (44 Gbps) is below Zenoh's own 50 Gbps figure.",
+  "status_note": "Actively maintained Eclipse project (release 1.10.1 on 2026-09-07, last main commit 2026-09-15), dual Apache-2.0/EPL-2.0 licensed; use it as a Cargo dependency or through zenoh-c/zenoh-cpp, not as a small vendorable source drop.",
+  "sources_read": [
+    "https://github.com/eclipse-zenoh/zenoh",
+    "https://github.com/eclipse-zenoh/zenoh/blob/main/Cargo.toml",
+    "https://github.com/eclipse-zenoh/zenoh/blob/main/zenoh/Cargo.toml",
+    "https://github.com/eclipse-zenoh/zenoh/blob/main/zenoh/src/lib.rs",
+    "https://github.com/eclipse-zenoh/zenoh/blob/main/zenoh/src/api/session.rs",
+    "https://github.com/eclipse-zenoh/zenoh/blob/main/io/zenoh-transport/src/common/pipeline.rs",
+    "https://github.com/eclipse-zenoh/zenoh/blob/main/commons/zenoh-protocol/src/core/mod.rs",
+    "https://github.com/eclipse-zenoh/zenoh/blob/main/commons/zenoh-uring/README.md",
+    "https://github.com/eclipse-zenoh/zenoh/blob/main/zenoh-ext/src/advanced_publisher.rs",
+    "https://github.com/eclipse-zenoh/zenoh/blob/main/zenoh-ext/src/advanced_cache.rs",
+    "https://github.com/eclipse-zenoh/zenoh/blob/main/.github/workflows/ci.yml",
+    "https://github.com/eclipse-zenoh/zenoh/releases",
+    "https://github.com/eclipse-zenoh/zenoh/commits/main",
+    "https://github.com/eclipse-zenoh/zenoh/security/advisories",
+    "https://github.com/eclipse-zenoh/zenoh/issues/2258",
+    "https://github.com/eclipse-zenoh/zenoh/issues/1876",
+    "https://github.com/eclipse-zenoh/zenoh/issues/2721",
+    "https://github.com/eclipse-zenoh/zenoh/issues/2770",
+    "https://github.com/eclipse-zenoh/zenoh/issues?q=throughput",
+    "https://github.com/eclipse-zenoh/zenoh/issues?q=memory+leak",
+    "https://github.com/eclipse-zenoh/zenoh-cpp",
+    "https://raw.githubusercontent.com/zenoh-rs/zenoh-web/master/content/blog/2023-03-21-zenoh-vs-mqtt-kafka-dds.md",
+    "https://raw.githubusercontent.com/zenoh-rs/zenoh-web/master/content/blog/2021-07-05-zenoh-overhead.md",
+    "https://raw.githubusercontent.com/zenoh-rs/zenoh-web/master/content/blog/2021-07-13-zenoh-performance-async.md",
+    "https://raw.githubusercontent.com/zenoh-rs/zenoh-web/master/content/blog/2024-10-21-zenoh-firesong.md",
+    "https://raw.githubusercontent.com/zenoh-rs/zenoh-web/master/content/docs/manual/plugin-storage-manager.md",
+    "https://github.com/ZettaScaleLabs/zenoh-perf/tree/master/comparison",
+    "https://arxiv.org/abs/2303.09419"
+  ],
+  "confidence": 0.75
+}
