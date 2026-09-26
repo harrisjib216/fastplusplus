@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/andy-byers/calicodb",
+  "one_liner": "Small C++17 embedded transactional B+-tree key-value store modeled on SQLite's WAL design; beats SQLite on large-value reads and sequential fills.",
+  "what_it_does": "CalicoDB is a library that stores byte-string keys and values in named, nestable \"buckets\". Each bucket is an ordered B+-tree, and all buckets live in one database file, with sidecar -wal and -shm files while the database is open. The API follows LevelDB and BoltDB: DB::open, then db->view()/db->update() lambdas that receive a Tx, then Tx::main_bucket() with put/get/erase and bidirectional Cursors for range scans. Every call returns a Status and nothing throws. It is not a drop-in for SQLite: there is no SQL, schema, secondary index or C API, so SQLite data-access code must be rewritten against the bucket/cursor interface.",
+  "how_it_is_fast": "It is essentially SQLite's storage design without the SQL layer. It uses a B+-tree over slotted pages with a fixed-width indirection vector for in-node binary search, pointer-map pages that hold parent pointers so splits and merges don't rewrite child pages, overflow chains for large payloads, and a SQLite-style write-ahead log with a shared-memory WAL index. Dirty pages sit in a page cache (LevelDB-derived hash table plus LRU list; default 1024 pages) and go to the WAL only on commit or eviction; checkpoints write each unique page back once, sorted by page number. Sequential inserts take a split_nonroot_fast path that splits at the right edge instead of redistributing cells 50/50, and pivot keys are suffix-truncated (Bayer and Unterauer's simple prefix B-tree). The benchmark page credits the gap mainly to SQLite's higher per-operation RDBMS overhead; no per-benchmark profiling is published.",
+  "when_to_use": [
+    "Read-heavy embedded workloads with large (about 100 KB) values: readrand100K ran 58.8 vs 252.4 us/op on Linux (~4.3x, derived) and 79.2 vs 495.5 on macOS (~6.3x, derived); readseq100K was ~1.5x and ~2.7x faster (derived).",
+    "Bulk-loading sequential keys, especially in batched transactions: fillseqbatch ran 1.04 vs 2.03 us/op on Linux (~2.0x, derived) and 1.86 vs 4.57 on macOS (~2.5x, derived); single-op fillseq was ~1.3x and ~2.0x faster (derived).",
+    "A C++ program on Linux or macOS that uses SQLite only as an ordered, transactional key-value file and wants snapshot readers alongside one writer without a SQL layer.",
+    "Memory-constrained or no-exceptions builds: the library compiles with -fno-exceptions and -fno-rtti, handles malloc failure, supports 32-bit targets, and lets you plug in your own allocator (calicodb::configure), Env (filesystem/I/O) and Wal. It also has an in-memory mode (temp_database).",
+    "As a compact, well-documented modern C++ reimplementation of SQLite's B-tree and WAL architecture to study or fork."
+  ],
+  "when_not_to_use": [
+    "Production data. The README says it is 'not ready for production'. The v0.1.1 changelog records a WAL sync bug that 'would have likely resulted in data loss/corruption', and issue #118 says the file-format fuzzer 'produces crashes quickly' on corrupted files. There have been no commits since 2023-11-01.",
+    "Random-key inserts and overwrites: SQLite was faster on fillrandom (~1.09x Linux, ~1.05x macOS), fillrandbatch (~1.20x / ~1.31x), overwrite and overwritebatch (up to ~1.22x on macOS), and small-value readrandom on Linux (4.61 vs 4.27 us/op). All ratios are derived.",
+    "Per-commit durable writes on macOS: kSyncFull calls fcntl(F_FULLFSYNC). fillseqsync ran 1101 vs 291 us/op (~3.8x slower) and fillrandsync 1118 vs 214 (~5.2x slower) against the system SQLite, which the page says uses F_BARRIERFSYNC.",
+    "Windows or MSVC (CMake stops with a fatal error), network filesystems (the README at the benchmarked commit warns it will not work there), or platforms without shared-memory primitives, which only work in exclusive locking mode.",
+    "Workloads that need SQL, multiple concurrent writers, a stable on-disk format or API, or datasets that don't fit comfortably in one file. The README says it is 'only practical for datasets that can reasonably be stored in a single file', and each connection is single-threaded with blocking I/O."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none for the library (POSIX system calls only); tests need googletest (fetched by CMake FetchContent) and Python 3",
+    "min_toolchain": "C++17, CMake 3.14+, GCC 7+ or Clang 5+; MSVC not supported",
+    "platforms": "POSIX only: Linux and macOS are tested in CI (ubuntu-latest, macos-latest, gcc and clang). The -shm file must support mmap unless exclusive locking mode is used. The design doc and v0.2.0 notes claim 32-bit support. No Windows.",
+    "thread_safety": "A DB handle and every object derived from it are single-threaded, so give each thread or process its own DB (threads may share an Env). Across connections there is one writer plus concurrent snapshot readers, using SQLite WAL-style shm locks; contended calls return Status::busy(). calicodb::configure() is not thread safe.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The published numbers are for commit 30fe767 (2023-07-02, labelled 0.0.1). That predates v0.1.0, predates the v0.1.1 WAL sync fix, and used an older public API with no tx.h or bucket.h. The 54 later commits (nested buckets, a larger local cell size, corruption fixes) were never re-published. The linked raw CI output (actions run 5437371027) now returns 404, and the bench workflow builds CalicoDB from main, so rerunning it today will not reproduce those numbers.",
+    "SQLite is the system libsqlite3 that the runner links, driven through SQL statements with wal_autocheckpoint=4096. CalicoDB runs with its default auto_checkpoint of 1000 frames. The author's disclaimer says SQLite carries more per-operation overhead, so part of each 'win' is simply skipping SQL.",
+    "If a system call fails inside a read-write transaction, the Tx is poisoned: every call returns that error until you return from the update() lambda. commit() does not release file locks until the Tx is deleted, and only one Tx can be live per DB handle.",
+    "Handles are raw pointers you must delete yourself (DB, Tx, Bucket, Cursor), and Bucket handles must be deleted before their transaction ends. Page size (512 to 32768, default 4 KiB) is fixed when the database is created. The last connection to close checkpoints and unlinks the WAL."
+  ],
+  "pick_this_over_siblings_when": "Every catalogued sibling (for example Titan, ToplingDB, Nova-LSM and DiaLSM) is benchmarked against RocksDB and mostly targets LSM-scale write throughput; pick CalicoDB only when you want a tiny, dependency-free, single-file B+-tree with SQLite-style WAL transactions to replace SQLite as a plain key-value store, especially for large-value reads. Its evidence is one mixed-result CI run from 2023, weaker than most siblings'.",
+  "verified_claims_summary": "The author ported LevelDB's db_bench to both engines and ran it once in GitHub Actions CI (ubuntu-latest and macos-latest runners, CPU unstated, gcc Release build with no version given) at commit 30fe767. It compared CalicoDB 0.0.1 against SQLite 3.39.5 in WAL mode, with WITHOUT ROWID, 4 KiB pages, a 4 MB cache, exclusive locking and synchronous NORMAL (FULL for the *sync tests). CalicoDB won clearly on 100 KB-value reads (4.3x/6.3x random, 1.5x/2.7x sequential, Linux/macOS) and by about 2x on batched sequential fills. It was up to ~1.3x slower on random fills and overwrites and 3.8-5.2x slower on the macOS sync-write tests (all ratios derived from the page's microseconds-per-op table).",
+  "status_note": "Stale since 2023-11-01 (v0.2.0 plus 54 unreleased commits, 43 stars) and self-described as not production-ready. It is MIT-licensed and about 50 source files with no dependencies, so it can be vendored for experiments, but you would own maintenance and crash-safety validation.",
+  "sources_read": [
+    "https://github.com/andy-byers/CalicoDB",
+    "https://github.com/andy-byers/CalicoDB/blob/main/doc/design.md",
+    "https://github.com/andy-byers/CalicoDB/blob/main/doc/doc.md",
+    "https://github.com/andy-byers/CalicoDB/blob/main/CMakeLists.txt",
+    "https://github.com/andy-byers/CalicoDB/blob/main/include/calicodb/options.h",
+    "https://github.com/andy-byers/CalicoDB/blob/main/include/calicodb/db.h",
+    "https://github.com/andy-byers/CalicoDB/blob/main/include/calicodb/tx.h",
+    "https://github.com/andy-byers/CalicoDB/blob/main/include/calicodb/bucket.h",
+    "https://github.com/andy-byers/CalicoDB/blob/main/include/calicodb/config.h",
+    "https://github.com/andy-byers/CalicoDB/blob/main/src/tree.cpp",
+    "https://github.com/andy-byers/CalicoDB/blob/main/src/env_posix.cpp",
+    "https://github.com/andy-byers/CalicoDB/blob/main/src/bufmgr.h",
+    "https://github.com/andy-byers/CalicoDB/blob/main/src/pager.cpp",
+    "https://github.com/andy-byers/CalicoDB/blob/main/.github/workflows/bench.yml",
+    "https://github.com/andy-byers/CalicoDB/blob/main/.github/workflows/test.yml",
+    "https://github.com/andy-byers/CalicoDB/commit/30fe767249aebf155c7465271ffe54f03eea4bb0",
+    "https://github.com/andy-byers/CalicoDB/blob/30fe767249aebf155c7465271ffe54f03eea4bb0/README.md",
+    "https://github.com/andy-byers/CalicoDB/blob/30fe767249aebf155c7465271ffe54f03eea4bb0/src/tree.cpp",
+    "https://github.com/andy-byers/CalicoDB/compare/30fe767...main",
+    "https://github.com/andy-byers/CalicoDB/commits/main",
+    "https://github.com/andy-byers/CalicoDB/releases",
+    "https://github.com/andy-byers/CalicoDB/issues?q=is%3Aissue",
+    "https://github.com/andy-byers/CalicoDB/issues/106",
+    "https://github.com/andy-byers/CalicoDB/issues/118",
+    "https://github.com/andy-byers/CalicoDB/actions/runs/5437371027",
+    "https://github.com/andy-byers/leveldb/blob/db_bench_calicodb/benchmarks/results.md",
+    "https://github.com/andy-byers/leveldb/blob/db_bench_calicodb/benchmarks/db_bench_calicodb.cc",
+    "https://github.com/andy-byers/leveldb/blob/db_bench_calicodb/benchmarks/db_bench_sqlite3.cc",
+    "https://github.com/andy-byers/leveldb/blob/db_bench_calicodb/CMakeLists.txt",
+    "https://github.com/andy-byers/leveldb/commits/db_bench_calicodb",
+    "https://hn.algolia.com/api/v1/search?query=calicodb&tags=story",
+    "https://hn.algolia.com/api/v1/search?query=andy-byers&restrictSearchableAttributes=url"
+  ],
+  "confidence": 0.78
+}
