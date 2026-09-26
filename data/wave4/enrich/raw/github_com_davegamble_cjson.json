@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/davegamble/cjson",
+  "one_liner": "Two-file ANSI C DOM JSON parser/printer; parsed 13 of 14 paper benchmark files faster than nlohmann/json (2019).",
+  "what_it_does": "cJSON parses JSON text into a tree of heap-allocated `cJSON` nodes and prints trees back to text, all in one .c and one .h file written in C89. The API is plain C: cJSON_Parse / cJSON_ParseWithLengthOpts return a root that you free with cJSON_Delete, values are read through accessors such as cJSON_IsNumber, cJSON_GetObjectItemCaseSensitive and the cJSON_ArrayForEach macro, and trees are built with cJSON_Create* / cJSON_Add*ToObject. It is not a drop-in for nlohmann/json: there are no C++ value semantics, no mapping to user structs, and memory ownership is manual. The optional cJSON_Utils adds JSON Pointer, JSON Patch and JSON Merge Patch.",
+  "how_it_is_fast": "There is no SIMD and no structural-index pass: it is a byte-at-a-time recursive-descent parser that allocates nodes as it goes, storing arrays and objects as doubly linked lists (child/next/prev) with no key hashing or ordering. Strings are pre-scanned to the closing quote to size a single allocation and then unescaped in one copy; numbers are copied into a temporary buffer and converted with libc strtod, with the locale's decimal point substituted. The paper does not say why this beats nlohmann/json, and its harness times nlohmann's destructor but runs cJSON_Delete outside the timed region, which favors cJSON by an unmeasured amount.",
+  "when_to_use": [
+    "C or C89-only code bases (firmware, embedded, old toolchains) that need parse, modify and print in two vendorable files with swappable malloc/free hooks.",
+    "C++ projects that currently parse string-heavy documents (tweets, API payloads, gsoc-2018-style records) with nlohmann/json and can live with a C API; the 2019 table shows 2.6-4.4x on those files.",
+    "Small configuration or message documents (a few KB, objects with a handful of keys) where a simple mutable DOM matters more than GB/s.",
+    "Output-constrained targets: cJSON_PrintPreallocated prints into a caller buffer with no heap allocation, and CJSON_NESTING_LIMIT caps recursion depth at compile time."
+  ],
+  "when_not_to_use": [
+    "Number-heavy documents (canada, marine_ik, numbers, mesh): it roughly ties nlohmann/json at 0.06-0.07 GB/s, jsmn is about 9x faster on numbers, and since 1.7.19 parse_number mallocs a temporary buffer per number (PR #939), which the 2019 numbers (cJSON 1.7.10) do not reflect.",
+    "Throughput-critical parsing: RapidJSON beats it on 13 of 14 files in the same table, and sajson, gason and simdjson are faster on every file.",
+    "64-bit integers or exact integer round-trips: every number is a double, and valueint is a 32-bit int that saturates at INT_MAX/INT_MIN.",
+    "Large objects or arrays accessed by key or index: lookups walk a linked list (O(n) per key, O(n^2) for indexed array loops), and the maintainers declined a hash table (issue #436).",
+    "Untrusted input where strict validation and prompt security fixes matter: the README says most invalid UTF-8 is passed through, the paper lists cJSON among parsers lacking validation, and CVE-2026-67215/67216 (cJSON_Utils patch recursion, cJSON_Compare CPU cost) are open with no fixed release."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (C standard library only: string.h, stdio.h, math.h, stdlib.h, limits.h, ctype.h, float.h, locale.h)",
+    "min_toolchain": "C89/ANSI C compiler (built with -std=c89); CMake 3.5+ for the CMake build; README says not to compile it as C++",
+    "platforms": "any with IEEE 754 doubles; CI covers Linux and macOS (GCC and Clang) plus Visual Studio 2013/2015 on AppVeyor",
+    "thread_safety": "Not thread safe in general; safe only if cJSON_GetErrorPtr is never used (use return_parse_end instead), cJSON_InitHooks is called before any threads use cJSON, and setlocale is not called while cJSON calls are running.",
+    "drop_in_for_baseline": "false — it is a C library with manual ownership (cJSON_Delete, free printed strings) and linked-list nodes, whereas nlohmann/json is a C++ value type; porting means rewriting every access site."
+  },
+  "gotchas": [
+    "`type` is a bit field; test it with the cJSON_Is* functions, not ==. Adding an item to an array or object transfers ownership, so deleting it yourself afterwards is a double free.",
+    "cJSON_GetObjectItem is case-insensitive for legacy reasons; use the *CaseSensitive variants for standard behavior. With duplicate keys only the first match is returned.",
+    "cJSON_Parse ignores trailing data after the first value unless you call cJSON_ParseWithOpts with require_null_terminated=1. Number syntax is whatever strtod accepts from the run of [0-9+-.eE] characters, so non-RFC forms such as leading zeros pass.",
+    "With ENABLE_LOCALES (default ON) parsing and printing read localeconv() for the decimal point. Strings cannot contain NUL or \\u0000, and cJSON_PrintPreallocated needs 5 bytes more than the output length."
+  ],
+  "pick_this_over_siblings_when": "Pick cJSON over jsmn when you need an owned tree with unescaped strings plus a printer, since jsmn only tokenizes (though jsmn wins on numbers and github_events). Pick it over yyjson, sajson or gason only for C89 portability, a two-file vendor drop, or because it is already in your dependency tree; sajson and gason were faster on every Table 10 file.",
+  "verified_claims_summary": "Table 10 of Langdale and Lemire's simdjson paper (VLDB Journal 2019, arXiv 1902.08318) measured in-memory, single-threaded DOM parsing of 14 files with GCC 9.1 -O3 -march=native on a Skylake i7-6700: cJSON (1.7.10, the pinned submodule) ran 0.06-0.53 GB/s against nlohmann/json's 0.05-0.14 GB/s, winning 13 files and tying on mesh, with the widest gaps on string-heavy gsoc-2018 (0.53 vs 0.12) and twitter (0.33 vs 0.10). The harness excludes cJSON_Delete from the timed region but includes nlohmann's destructor, and the numbers predate 1.7.19's per-number allocation.",
+  "status_note": "The last release is 1.7.19 (2025-09-09) and a few fixes have landed since (latest 2026-09-16), but on 2026-09-16 a maintainer posted issue #1080 saying there is no response-time commitment and recommending forks; it is MIT and two files, so vendoring and patching locally is easy.",
+  "sources_read": [
+    "https://github.com/DaveGamble/cJSON",
+    "https://github.com/DaveGamble/cJSON/blob/master/README.md",
+    "https://github.com/DaveGamble/cJSON/blob/master/cJSON.c",
+    "https://github.com/DaveGamble/cJSON/blob/master/cJSON.h",
+    "https://github.com/DaveGamble/cJSON/blob/master/cJSON_Utils.h",
+    "https://github.com/DaveGamble/cJSON/blob/master/CHANGELOG.md",
+    "https://github.com/DaveGamble/cJSON/blob/master/SECURITY.md",
+    "https://github.com/DaveGamble/cJSON/blob/master/CMakeLists.txt",
+    "https://github.com/DaveGamble/cJSON/blob/master/.github/workflows/CI.yml",
+    "https://github.com/DaveGamble/cJSON/blob/master/appveyor.yml",
+    "https://github.com/DaveGamble/cJSON/releases",
+    "https://github.com/DaveGamble/cJSON/compare/v1.7.19...master",
+    "https://github.com/DaveGamble/cJSON/pull/939",
+    "https://github.com/DaveGamble/cJSON/issues/1080",
+    "https://github.com/DaveGamble/cJSON/issues/1073",
+    "https://github.com/DaveGamble/cJSON/issues/436",
+    "https://github.com/DaveGamble/cJSON/issues/1054",
+    "https://github.com/DaveGamble/cJSON/issues/956",
+    "https://github.com/DaveGamble/cJSON/commit/c69134d01746dcf551dd7724b4edb12f922eb0d1",
+    "https://arxiv.org/abs/1902.08318",
+    "https://arxiv.org/pdf/1902.08318v6",
+    "https://github.com/simdjson/simdjson_experiments_vldb2019/tree/master/results/skylake/comparison",
+    "https://github.com/simdjson/simdjson/blob/ab0e22a3169a038333a3ca9ae922571dbb18f5b1/benchmark/parsingcompetition.cpp",
+    "https://github.com/simdjson/simdjson/blob/ab0e22a3169a038333a3ca9ae922571dbb18f5b1/benchmark/benchmark.h",
+    "https://github.com/simdjson/simdjson/tree/ab0e22a3169a038333a3ca9ae922571dbb18f5b1/dependencies",
+    "https://github.com/miloyip/nativejson-benchmark"
+  ],
+  "confidence": 0.85
+}
