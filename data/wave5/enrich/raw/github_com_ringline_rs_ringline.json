@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/ringline-rs/ringline",
+  "one_liner": "Thread-per-core io_uring runtime for Rust servers: 4-71% faster than default tokio on TCP echo, -10% to +9% versus tuned tokio.",
+  "what_it_does": "A Rust async I/O runtime for Linux network servers and clients. Each CPU core gets one pinned worker with its own io_uring ring, connection table and single-threaded executor; an acceptor thread hands connections out round-robin. You implement an AsyncEventHandler trait: on_accept(Connection) returns one long-lived future per connection, which reads through with_data(|bytes| ParseResult::Consumed(n)) callbacks over kernel-provided buffers and writes with send/send_nowait. It is not a tokio drop-in (different API, !Send tasks), and it builds a mio (epoll/kqueue) backend instead on macOS, on pre-6.1 kernels or with the force-mio feature.",
+  "how_it_is_fast": "Mostly the thread-per-core scheduler, meaning no work-stealing and no task migration. The project's own 2x2 shows that a per-core tokio closes most of the gap, and ringline's epoll backend beats default tokio (451k vs 425k ops/s) even though it makes more syscalls. The io_uring backend adds multishot recv into ring-provided buffers, fixed (direct) file descriptors and SINGLE_ISSUER/DEFER_TASKRUN/COOP_TASKRUN rings. Sends and receives ride one batched io_uring_enter, so it makes 0.06 syscalls/op against tokio's 2.08 at 512 conns/256 B. It also uses SendMsgZc zero-copy for guard-backed sends of 4 KiB or more.",
+  "when_to_use": [
+    "Linux 6.1+ request/response servers (caches, protocol servers) with many connections and small-to-medium messages (256 B-4 KiB), where CPU per request and p50/p99 matter",
+    "Replacing a default multi-thread tokio service whose tokio-ecosystem dependencies you can drop; that is where the +27-71% echo and +30% Segcache gains were measured",
+    "Workloads that shard cleanly per core, where connection state never has to move between threads",
+    "Stacks that want the same per-core runtime for their outbound clients: the workspace ships Redis, memcache, HTTP/1.1-2-3, gRPC and QUIC crates on top of it"
+  ],
+  "when_not_to_use": [
+    "You already run tokio per-core or on tokio-uring: its lead there is about 0-10% (tokio-uring came within 4.7% at 512 conns/256 B), and it loses at 16 KiB with 64 or 512 connections",
+    "Byte-forwarding proxies with payloads of 16 KiB or more at moderate concurrency: splice-based tokio beat every ringline configuration by up to 10.3%",
+    "Code built on hyper, tonic, tower or tokio::sync: the APIs are incompatible, and tasks, channels and wakers only work within their own worker thread",
+    "Hosts or containers where seccomp, kernel.io_uring_disabled or a tight RLIMIT_MEMLOCK blocks or limits io_uring (open issue #426 is io_uring_setup failing with ENOMEM on CI runners)",
+    "Teams that need a stable API: it is pre-1.0, has had a breaking 0.x minor bump every 2-7 weeks (0.1.0 in April to 0.6.3 in September 2026), and has essentially one author"
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "io-uring 0.7 (Linux only), mio 1, rustls 0.23 (ring), bytes, crossbeam-channel, futures-io, metriken, libc, thiserror, pin-project-lite",
+    "min_toolchain": "Rust 1.88 (edition 2024)",
+    "platforms": "io_uring backend: Linux 6.1+ on x86_64 or aarch64; mio backend: macOS, other Unix and older Linux (no zero-copy send or NVMe passthrough)",
+    "thread_safety": "Thread-per-core. The handler type is Send (it is built once per worker), but connection futures, channels (Rc<RefCell>) and wakers are !Send and bound to their worker thread. Cross-thread signalling goes through WakeHandle/on_notify or spawn_blocking; ShutdownHandle stops all workers.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The backend is picked by build.rs from the build host's /proc kernel version. Building on a pre-6.1 kernel silently gives you a mio binary, and cross-compiles assume io_uring. Check ringline::backend() before you benchmark.",
+    "Its Waker pushes onto the calling thread's thread-local ready queue, so a foreign future completed from another OS thread (for example a tokio or futures channel) will not wake the ringline task. ConnStream (the futures-io AsyncRead/AsyncWrite adapter) panics if it is polled outside the ringline executor.",
+    "Capacity is fixed at config time. Exhausting the copy-send pool, zero-copy slab, task slab or timer slots returns an error rather than growing. Workers default to one per physical core, but its own sweep shows ops/core-s falling from 221k at 4 workers to 127k at 16 workers with 128 connections, so size the worker count to your concurrency.",
+    "It is young: recent fixes include io_uring dropping a response sent after the peer's FIN (#371) and merged-accept mode silently ignoring TCP_NODELAY, which made TLS accepts 29x slower (#460). The mio backend still makes 2.9x tokio's epoll syscalls (open issue #395)."
+  ],
+  "pick_this_over_siblings_when": "monoio is the closest catalogued sibling, also a Rust thread-per-core io_uring runtime, and its 1.86x is likewise against default tokio. Pick ringline when you want built-in rustls TLS, UDP/QUIC and protocol clients plus a mio fallback in one workspace, or a benchmark page that also reports results against tuned tokio. For C++ services, Seastar or uring_exec fill the same niche.",
+  "verified_claims_summary": "First-party two-machine TCP echo (Sept 2026, commit a685e16). The server ran 8 workers in a 24 vCPU Xeon VM guest with passed-through X710 40G NICs; no CPU model, rustc version or build flags are given. ringline beat the best of five tokio configurations in 13 of 16 cells (-10.3% to +8.9%) and default multi-thread tokio by 4% to 71%. An older Segcache GET run (June 2026, v0.1.3, Graviton4 c8g, 4 workers, 128 conns, 'stable' Rust) against a single tokio configuration showed about +30% throughput and 24-28% lower p50 at 256 B-1 KiB, a tie at 4 KiB, and a tie at open-loop saturation. Its harness branch no longer exists.",
+  "status_note": "Very active, with daily commits; crates.io has 0.6.3 with about 2.9k downloads, used mostly by the author's own sibling crates. Dual MIT/Apache-2.0 and easy to depend on, but pre-1.0, with frequent breaking releases and effectively one maintainer.",
+  "sources_read": [
+    "https://github.com/ringline-rs/ringline",
+    "https://github.com/ringline-rs/ringline/blob/main/README.md",
+    "https://github.com/ringline-rs/ringline/blob/main/BENCHMARKS.md",
+    "https://github.com/ringline-rs/ringline/blob/main/Cargo.toml",
+    "https://github.com/ringline-rs/ringline/blob/main/CHANGELOG.md",
+    "https://github.com/ringline-rs/ringline/blob/main/ringline/Cargo.toml",
+    "https://github.com/ringline-rs/ringline/blob/main/ringline/build.rs",
+    "https://github.com/ringline-rs/ringline/blob/main/ringline/README.md",
+    "https://github.com/ringline-rs/ringline/blob/main/ringline/ROADMAP.md",
+    "https://github.com/ringline-rs/ringline/blob/main/ringline/src/lib.rs",
+    "https://github.com/ringline-rs/ringline/blob/main/ringline/src/config.rs",
+    "https://github.com/ringline-rs/ringline/blob/main/ringline/src/runtime/handler.rs",
+    "https://github.com/ringline-rs/ringline/blob/main/ringline/src/runtime/stream.rs",
+    "https://github.com/ringline-rs/ringline/blob/main/ringline/src/runtime/waker.rs",
+    "https://github.com/ringline-rs/ringline/blob/main/ringline/src/runtime/channel.rs",
+    "https://github.com/ringline-rs/ringline/blob/main/ringline/src/wakeup.rs",
+    "https://github.com/ringline-rs/ringline/blob/main/ringline/tests/memlock_limit.rs",
+    "https://github.com/ringline-rs/ringline/blob/main/docs/architecture.md",
+    "https://github.com/ringline-rs/ringline/blob/main/docs/io-uring-primer.md",
+    "https://github.com/ringline-rs/ringline/blob/main/docs/syscalls-and-copies.md",
+    "https://github.com/ringline-rs/ringline/issues",
+    "https://github.com/ringline-rs/ringline/issues/426",
+    "https://github.com/ringline-rs/ringline/issues/395",
+    "https://github.com/ringline-rs/ringline/issues/460",
+    "https://github.com/ringline-rs/ringline/issues/371",
+    "https://github.com/ringline-rs/ringline/branches",
+    "https://api.github.com/repos/ringline-rs/ringline/contributors",
+    "https://crates.io/api/v1/crates/ringline",
+    "https://crates.io/api/v1/crates/ringline/reverse_dependencies",
+    "https://crates.io/api/v1/crates/ringline-momento",
+    "https://hn.algolia.com/api/v1/search?query=ringline&tags=story"
+  ],
+  "confidence": 0.75
+}

@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/squigglekernel/io_uring-http-benchmark",
+  "one_liner": "Single-route io_uring static HTTP server in C++20; 40-54% more req/s than tuned nginx serving one 10 KB file on loopback.",
+  "what_it_does": "uhttp is a research server that reads one file into memory at startup and answers HTTP/1.1 (and 1.0) GET requests for one configured path, with keep-alive and pipelining; any other path gets a 404, and any other method (including HEAD) gets a 400 and a close. It is a standalone executable configured by command-line flags, not a library and not a general nginx replacement. Most of the repository is the harness around it (interleaved wrk runs, client-saturation checks, perf profiling, per-feature ablation), built to measure how much of nginx's per-request cost on a small static payload comes from the epoll/syscall model.",
+  "how_it_is_fast": "Shared-nothing worker threads each own one io_uring ring (SINGLE_ISSUER + DEFER_TASKRUN, registered ring fd, CQ 4x the SQ) and use multishot accept into direct (fixed-file) descriptors plus multishot recv over a provided buffer ring, so a connection is accepted and read repeatedly without new submissions and completions are drained and acknowledged in batches. Each response is pre-serialised into one buffer, kept as two copies so only the Date field is patched once a second; SO_REUSEPORT with a classic-BPF steering program keeps each connection on the core that handled its SYN; and per-connection state is a packed 20-byte struct. perf puts syscall entry/exit at 0.07% of uhttp's cycles against 8.71% for nginx, and instructions per request at 17,583 vs 35,831. nginx still has the higher IPC (0.86 vs 0.64), so the author's own summary is that the gain comes from doing less work, not from doing it faster.",
+  "when_to_use": [
+    "Learning or prototyping io_uring networking: a small C++20 codebase (about 1,400 lines in src/) that shows multishot accept/recv, provided buffer rings, direct descriptors, DEFER_TASKRUN and generation-tagged user_data for recycled descriptor slots.",
+    "Measuring io_uring against nginx on your own kernel and hardware: the harness interleaves targets, gives the client 3x the server's cores, flags client-bound runs and reports server CPU microseconds per request.",
+    "A synthetic load-test target that must return one small fixed response at very high request rates on Linux 6.1+ where you control both ends.",
+    "Ablation studies: structural io_uring options are compile-time switches in src/config.hpp and bench/ablation.sh rebuilds and measures each one."
+  ],
+  "when_not_to_use": [
+    "Serving a real site or directory: one route, one file read at startup, GET only, exact path match (a query string gets 404), no MIME mapping, index files, Range or conditional requests.",
+    "Anything that needs TLS, HTTP/2 or HTTP/3, request bodies, access logging, config reload, IPv6 (the listener is AF_INET only) or idle/read timeouts; none are implemented, so idle or slow clients hold connection slots (default 4,096 per worker) indefinitely.",
+    "Shipping or vendoring code: there is no LICENSE file, and the repo has two commits (both 2026-08-17), no tests, no CI and 0 stars.",
+    "Low-concurrency tail-latency work: nginx had the better p99 at 64 connections (333 us vs 360 us).",
+    "As evidence that io_uring beats sendfile on a real network: every number is loopback, where nginx's sendfile zero-copy path gives no benefit, and the author says the NIC case was not tested."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "liburing (CMake asks for >= 2.5, but the code needs 2.6; see gotchas), pkg-config, CMake >= 3.20; wrk, nginx, perf and Python 3 only for the benchmark harness",
+    "min_toolchain": "C++20 compiler (make_unique_for_overwrite, std::span), CMake 3.20; compiler and version not documented. Kernel minimum not documented; the default ring flags need DEFER_TASKRUN (Linux 6.1+), or 6.0+ with --no-defer",
+    "platforms": "Linux only (io_uring, SO_ATTACH_REUSEPORT_CBPF); the Release build uses -march=native, so binaries are tied to the build CPU",
+    "thread_safety": "Not a library. Each worker thread owns its ring, connection table and buffers; the only shared state is an atomic stop flag",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Build floor is wrong: CMakeLists.txt accepts liburing >= 2.5, but server.cpp calls io_uring_register_napi(), which first appears in liburing 2.6's header (the 2.6 CHANGELOG adds NAPI busy-poll support), so a build against 2.5 should fail to compile.",
+    "Pipelining is capped at 32 queued responses per connection. From reading server.cpp, bytes beyond that are carried over and only parsed when the next recv completes, so a client that pipelines more than 32 requests in one write and then waits for all of them can stall.",
+    "It sends ETag, Last-Modified and 'Accept-Ranges: bytes' to match nginx's headers, but ignores If-None-Match, If-Modified-Since and Range and always returns a full 200. The file is never re-read, so edits need a restart.",
+    "The harness's `sudo bench/tune_system.sh apply` sets kernel.perf_event_paranoid=-1 and kernel.kptr_restrict=0 system-wide (plus the performance governor and larger backlogs) until you run `restore`."
+  ],
+  "pick_this_over_siblings_when": "Pick it over epoll-httpd when the question is specifically io_uring versus nginx's epoll model at 64-4,096 connections with perf-level attribution; epoll-httpd is the better base for real code because it is MIT-licensed and serves arbitrary files. For serving actual traffic, use H2O (static files, TLS, HTTP/2/3) or Sogou Workflow (C++ backend) instead.",
+  "verified_claims_summary": "On loopback, with 2 server workers pinned to 2 physical cores of an unnamed 8-core SMT 'mobile CPU' and wrk on the other 6, uhttp served a 10,240-byte file at 276-358k req/s against 184-256k for tuned nginx (reuseport, sendfile on or off, open_file_cache, logging off, same cores), +40% to +54% at 64-4,096 connections, as medians of 3 interleaved 45 s runs after a 15 s warmup. The build was CMake Release (-O3 -march=native, LTO) on a kernel with CONFIG_INIT_ON_ALLOC_DEFAULT_ON=y; compiler, kernel, nginx and wrk versions are not stated, and the raw CSVs are gitignored, so only the README's medians are published.",
+  "status_note": "A one-shot research dump (two commits on 2026-08-17, none since, no issues, releases or stars) with no LICENSE file, so it is reference-only: read it to learn the io_uring techniques, but do not copy or vendor it.",
+  "sources_read": [
+    "https://github.com/SquiggleKernel/io_uring-http-benchmark",
+    "https://github.com/SquiggleKernel/io_uring-http-benchmark/blob/main/README.md",
+    "https://github.com/SquiggleKernel/io_uring-http-benchmark/blob/main/CMakeLists.txt",
+    "https://github.com/SquiggleKernel/io_uring-http-benchmark/blob/main/.gitignore",
+    "https://github.com/SquiggleKernel/io_uring-http-benchmark/blob/main/src/config.hpp",
+    "https://github.com/SquiggleKernel/io_uring-http-benchmark/blob/main/src/conn.hpp",
+    "https://github.com/SquiggleKernel/io_uring-http-benchmark/blob/main/src/util.hpp",
+    "https://github.com/SquiggleKernel/io_uring-http-benchmark/blob/main/src/server.hpp",
+    "https://github.com/SquiggleKernel/io_uring-http-benchmark/blob/main/src/server.cpp",
+    "https://github.com/SquiggleKernel/io_uring-http-benchmark/blob/main/src/http.hpp",
+    "https://github.com/SquiggleKernel/io_uring-http-benchmark/blob/main/src/http.cpp",
+    "https://github.com/SquiggleKernel/io_uring-http-benchmark/blob/main/src/main.cpp",
+    "https://github.com/SquiggleKernel/io_uring-http-benchmark/blob/main/bench/run_bench.py",
+    "https://github.com/SquiggleKernel/io_uring-http-benchmark/blob/main/bench/nginx.conf",
+    "https://github.com/SquiggleKernel/io_uring-http-benchmark/blob/main/bench/ablation.sh",
+    "https://github.com/SquiggleKernel/io_uring-http-benchmark/blob/main/bench/profile.sh",
+    "https://github.com/SquiggleKernel/io_uring-http-benchmark/blob/main/bench/tune_system.sh",
+    "https://github.com/SquiggleKernel/io_uring-http-benchmark/blob/main/bench/gen_payload.py",
+    "https://github.com/SquiggleKernel/io_uring-http-benchmark/blob/main/bench/wrk_report.lua",
+    "https://github.com/SquiggleKernel/io_uring-http-benchmark/commits/main",
+    "https://github.com/SquiggleKernel/io_uring-http-benchmark/issues",
+    "https://api.github.com/repos/SquiggleKernel/io_uring-http-benchmark/license",
+    "https://github.com/axboe/liburing/blob/master/man/io_uring_setup.2",
+    "https://github.com/axboe/liburing/blob/master/man/io_uring_prep_recv.3",
+    "https://github.com/axboe/liburing/blob/master/man/io_uring_prep_accept.3",
+    "https://github.com/axboe/liburing/blob/master/man/io_uring_setup_buf_ring.3",
+    "https://github.com/axboe/liburing/blob/master/man/io_uring_register_ring_fd.3",
+    "https://github.com/axboe/liburing/blob/master/man/io_uring_register_napi.3",
+    "https://github.com/axboe/liburing/blob/master/man/io_uring_prep_send_zc.3",
+    "https://github.com/axboe/liburing/blob/master/CHANGELOG",
+    "https://github.com/axboe/liburing/blob/liburing-2.5/src/include/liburing.h",
+    "https://github.com/axboe/liburing/blob/liburing-2.6/src/include/liburing.h",
+    "https://hn.algolia.com/api/v1/search?query=io_uring-http-benchmark",
+    "https://hn.algolia.com/api/v1/search?query=SquiggleKernel"
+  ],
+  "confidence": 0.75
+}

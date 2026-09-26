@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/valyala/fasthttp",
+  "one_liner": "Zero-allocation HTTP/1.1 server and client for Go; about 5x faster per request than net/http in its own benchmarks.",
+  "what_it_does": "A replacement for net/http's HTTP/1.x server and client, for Go services where per-request CPU and allocations dominate. It is not a drop-in replacement. Handlers are func(*fasthttp.RequestCtx), not http.Handler. Headers, path and body come back as []byte, and there is no ServeMux, so you use fasthttp/router, Fiber or atreugo for routing. The package also has Client/HostClient/PipelineClient/LBClient, an FS static-file handler, prefork and reuseport listeners, fasthttpproxy, and fasthttpadaptor to wrap existing net/http handlers.",
+  "how_it_is_fast": "The main technique is object reuse. RequestCtx, Request/Response and the bufio readers and writers are recycled through sync.Pool and reset instead of reallocated. This is possible only because the API forbids keeping ctx after the handler returns, which net/http's Request lifetime does not allow. Headers are stored as a slice of key/value byte-slice pairs (argsKV), not net/http's map[string][]string of strings, so there is no per-header string conversion. Name case is normalized with 256-entry lookup tables, and unsafe b2s/s2b conversions avoid copies. Connections go to a FILO goroutine worker pool, where the most recently idle worker takes the next connection to keep caches warm. The whole response is buffered until the handler returns, and the flush is skipped while more pipelined requests are already in the read buffer.",
+  "when_to_use": [
+    "Go services that handle thousands of small-to-medium HTTP/1.1 requests per second, where pprof shows net/http allocations and GC as a top cost (the README's own condition for using it)",
+    "Proxies, gateways, ad or edge servers with very many keep-alive connections; the README cites VertaMedia production at up to 200K rps from more than 1.5M concurrent keep-alive connections per server",
+    "High-rate outbound calls to a few hosts: HostClient/PipelineClient run at 0 allocs/op and about 2.0-2.3x the net/http client over loopback TCP in the README benchmarks",
+    "Multi-core hosts where you can run one prefork/reuseport process per core with GOMAXPROCS=1. In TechEmpower R23 plaintext (verifier-derived), fasthttp-prefork reaches about 14.6M rps vs about 1.6M for Go net/http, but single-process fasthttp reaches only about 0.57M",
+    "You already use a framework built on it (Fiber, atreugo, Gearbox) and accept that it is a separate ecosystem from net/http"
+  ],
+  "when_not_to_use": [
+    "You need HTTP/2 or HTTP/3 served directly: fasthttp is HTTP/1.x only. The fasthttp/http2 add-on describes itself as 'Under construction' and has had no push since January 2022. Terminate h2 at a proxy instead",
+    "You depend on net/http middleware and libraries (http.Handler chains, httptest, oauth2 and similar). fasthttpadaptor converts handlers, but the README says to rewrite handlers natively to get the speed",
+    "Large or streaming bodies: bodies are buffered in memory by default (server MaxRequestBodySize default is 4 MiB; StreamRequestBody is opt-in). The README lists request and response streaming, and more HTTP corner cases, as net/http advantages",
+    "The handler, DB or serialization dominates: the README warns that a blind switch gives no boost. An independent 2022 real-network test (40-core Xeon Silver 4114, hey, 200-16000 keep-alive connections) measured only 30-70% more throughput than net/http",
+    "Internet-facing servers or clients on default settings: a maintainer says the defaults 'are about being fast', not safe. Read and write timeouts are unlimited by default, and Slowloris memory growth is still open (#2037). The client default has no response-body limit, so one huge Content-Length header can kill the process with an uncatchable OOM (#2344, closed with documentation only)"
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "github.com/klauspost/compress, github.com/molecule-man/go-brrr (brotli), github.com/valyala/bytebufferpool, golang.org/x/crypto, golang.org/x/net, golang.org/x/sys (golang.org/x/text indirect)",
+    "min_toolchain": "Go 1.26.0 (go.mod); README says the project supports the same Go versions as the Go team, and CI tests Go 1.26.x and 1.27.x",
+    "platforms": "Any Go target, pure Go. It has OS-specific listener and socket code for Linux, Darwin, Windows, AIX, Solaris, z/OS s390x and js/wasm. On Windows the FS handler has a path-traversal history (CVE-2022-21221; issue #1691, now blocked by rejecting '..' segments on Windows) and a maintainer has called Windows FS not production-safe",
+    "thread_safety": "Methods on Server, Client, HostClient and PipelineClient are safe to call from concurrent goroutines. Request, Response, RequestHeader, ResponseHeader and RequestCtx must not be used concurrently or copied. RequestCtx and its members must not be kept after the handler returns; only TimeoutError* may be called concurrently",
+    "drop_in_for_baseline": "partial — different handler signature (func(*RequestCtx)), []byte accessors, no ServeMux, and a different client API. fasthttpadaptor wraps net/http handlers, but that gives up much of the gain"
+  },
+  "gotchas": [
+    "Pooled objects: any []byte from ctx (Path(), Peek(), PostBody()) or a pointer to ctx kept after the handler returns is later overwritten, which causes data races or corrupt data. Copy the data out, or use TimeoutHandler/TimeoutError, and run the race detector",
+    "ctx.Done() closes only at server shutdown, not per request or on client disconnect, so it cannot be used to cancel a request",
+    "ReadBufferSize (default 4096) also caps total request-header size, so big cookies or long URIs fail with ErrSmallBuffer until you raise it. Pooled buffers stay allocated after load spikes, so RSS drops slowly (maintainer on #2037)",
+    "The response goes on the wire only after the handler returns. The flush is also skipped while pipelined requests are buffered; the code comment says this is an optimization for TechEmpower that 'could be argued as being wrong'. Exported UnsafeString/UnsafeBytes share memory, and mutating the bytes is undefined behavior"
+  ],
+  "pick_this_over_siblings_when": "Every catalogued sibling is a standalone parser component: picohttpparser and its forks or rewrites, httparse, iohttpparser, zttp/llhttp, Puma's http11_parser, plus URL and HPACK parsers in C, Rust, Zig, Python or Ruby. fasthttp is the only complete Go server and client, so pick it when you are in Go and want the whole request path to be faster. Pick httparse or a picohttpparser variant when you are writing your own server loop in Rust or C and need only a parser.",
+  "verified_claims_summary": "The project's own go test benchmarks run on an unnamed 'Intel Xeon CPU @ 2.20GHz' with no Go version stated. They push a small GET through in-memory fake connections with no real network. fasthttp takes 1418-3009 ns/op at 0 allocs vs net/http's 7151-17152 ns/op at 21-36 allocs (about 5.0-6.3x at GOMAXPROCS=1, 3.0-5.5x at GOMAXPROCS=4; derived). The client is 2.0-2.3x faster over loopback TCP and up to about 11.7x in memory. This measures the whole server path, not the parser alone, and one independent real-network test saw only 30-70% gains.",
+  "status_note": "Actively maintained: roughly monthly releases (v1.74.0 on 2026-09-07), last commit 2026-09-26, MIT, 23.5k stars. The API still changes between minor versions, and the security policy says the project currently skips CVE assignment.",
+  "sources_read": [
+    "https://github.com/valyala/fasthttp",
+    "https://github.com/valyala/fasthttp#http-server-performance-comparison-with-nethttp",
+    "https://github.com/valyala/fasthttp/blob/master/go.mod",
+    "https://github.com/valyala/fasthttp/blob/master/server.go",
+    "https://github.com/valyala/fasthttp/blob/master/workerpool.go",
+    "https://github.com/valyala/fasthttp/blob/master/header.go",
+    "https://github.com/valyala/fasthttp/blob/master/headerscanner.go",
+    "https://github.com/valyala/fasthttp/blob/master/http.go",
+    "https://github.com/valyala/fasthttp/blob/master/client.go",
+    "https://github.com/valyala/fasthttp/blob/master/coarsetime.go",
+    "https://github.com/valyala/fasthttp/blob/master/bytesconv_table_gen.go",
+    "https://github.com/valyala/fasthttp/blob/master/server_timing_test.go",
+    "https://github.com/valyala/fasthttp/blob/master/uri.go",
+    "https://github.com/valyala/fasthttp/blob/master/uri_windows.go",
+    "https://github.com/valyala/fasthttp/blob/master/fs.go",
+    "https://github.com/valyala/fasthttp/blob/master/fs_windows.go",
+    "https://github.com/valyala/fasthttp/blob/master/stackless/doc.go",
+    "https://github.com/valyala/fasthttp/blob/master/prefork/README.md",
+    "https://github.com/valyala/fasthttp/blob/master/SECURITY.md",
+    "https://github.com/valyala/fasthttp/blob/master/TODO",
+    "https://github.com/valyala/fasthttp/releases",
+    "https://github.com/valyala/fasthttp/issues/2037",
+    "https://github.com/valyala/fasthttp/issues/1608",
+    "https://github.com/valyala/fasthttp/issues/1691",
+    "https://github.com/valyala/fasthttp/issues/2344",
+    "https://github.com/valyala/fasthttp/issues/1975",
+    "https://github.com/valyala/fasthttp/pull/1986",
+    "https://github.com/valyala/fasthttp/pull/1698",
+    "https://github.com/advisories/GHSA-fx95-883v-4q4h",
+    "https://github.com/fasthttp/http2",
+    "https://hn.algolia.com/api/v1/search?query=fasthttp&tags=story",
+    "https://hn.algolia.com/api/v1/search?query=fasthttp%20net%2Fhttp&tags=comment",
+    "https://www.sobyte.net/post/2022-03/nethttp-vs-fasthttp/"
+  ],
+  "confidence": 0.8
+}
