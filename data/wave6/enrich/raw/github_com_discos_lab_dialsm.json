@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/discos-lab/dialsm",
+  "one_liner": "Hash-sharded LSM built on RocksDB 8.3.2 that reroutes writes around stalled shards, cutting write stalls ~94%. Code not released.",
+  "what_it_does": "DiaLSM ('Diamond-LSM') splits one logical LSM tree into N internal shards. Each shard is a separate RocksDB v8.3.2 instance with its own memtables, flush threads and leveled compaction, and a db_master class sits in front exposing Open/Close/Put/Get/Seek. Each key has a primary shard, hash(key) mod N. When that shard is stalled, the write goes to a non-stalled fallback shard and a small pointer (a 'Clue Entry') is left in the primary, so writes keep flowing instead of blocking. The paper also ran MariaDB/MyRocks on it but does not say how it was wired in, and as of 2026-09-26 the repo has only a README: no code, headers or build instructions.",
+  "how_it_is_fast": "The authors model the write-flush-compaction pipeline as an M/G/1 queue with vacations, where each vacation is a stall. The model says tuning one stage only moves stalls to another layer (a 'balloon effect'): this applies to ADOC's memtable/thread tuning and to RocksDB Sub-Compaction. With L independent shards, the chance that all of them stall at once falls roughly as alpha^L. A write to a stalled primary goes to the fallback shard with the smallest L0, then lowest memtable use, then smallest pending backlog, then smallest total size. It leaves a 20-byte Clue Entry (CE) in a 2MB reserved memtable area that stall thresholds ignore. CEs are pinned in L0 ('CE L0 capping') and mirrored in an in-memory CE cache so the extra hop stays cheap. Range scans run Seek/Next on all shards in parallel, which is where the large YCSB-E gains on long scans come from.",
+  "when_to_use": [
+    "Sustained write-heavy ingest with large values (the paper's best case is 8KB FillRandom), where RocksDB write stalls cap throughput and cause p99.99+ latency spikes.",
+    "Write-dominated mixes such as ReadRandomWriteRandom at 10% reads / 90% writes, or insert/update-heavy OLTP on MyRocks (Sysbench oltp_insert, oltp_write_only), on a many-core box with spare CPU. The paper gave DiaLSM 32 compaction threads split across shards.",
+    "Long range scans (1K-16K keys per scan), where parallel per-shard iteration gave 3.3x-8.9x over both ADOC and RocksDB.",
+    "Servers with several NVMe SSDs: shards can be spread across devices, and with 8KB values throughput kept scaling past 8 shards only when a second SSD was added.",
+    "As a reference design for LSM write-stall work (queueing model plus fallback redirection). Until code ships it is not a library you can adopt."
+  ],
+  "when_not_to_use": [
+    "Anything that needs working code now. The repo is one README commit saying source 'will be available soon', with no license.",
+    "Read-dominant or read-only workloads. YCSB-C is at parity with RocksDB and ADOC. At 90% reads / 10% writes, DiaLSM loses some throughput as shards grow while ADOC stays flat. On the fallback path a Get needs two shard reads.",
+    "Short scans with many shards: YCSB-E at the default scan length of 128 peaks at 4 shards (about 1.7x) and then declines as the cost of parallel iteration outweighs the gain.",
+    "Space- or CPU-constrained setups. Space amplification is 1.14x-1.5x with 2-16 shards (Table IV, millions of CEs), and DiaLSM uses more CPU than both baselines (Fig. 15).",
+    "Deployments that need the full RocksDB feature set (transactions, column families, snapshots, WAL durability, block cache) or elastic shard counts. Only Open/Close/Put/Get/Seek is described, every benchmark ran with WAL and block cache off, and hash-mod-N placement has no resharding or auto-tuning."
+  ],
+  "integration": {
+    "form": "Not released. The paper describes a modified RocksDB v8.3.2 source tree (a db_master class over N RocksDB instances), so expect a source-drop fork if it ships.",
+    "dependencies": "RocksDB v8.3.2 (DiaLSM is built on top of it); nothing else documented",
+    "min_toolchain": "Not documented for DiaLSM. Its base, RocksDB v8.3.2, requires C++17 (GCC >= 7, Clang >= 5).",
+    "platforms": "Evaluated only on x86-64 Linux (2x AMD EPYC 7352, CentOS 7, ext4, NVMe); nothing else documented",
+    "thread_safety": "Not documented. The benchmarks drive db_master from 10 concurrent I/O threads, while a 0.1s shard-state monitor, per-shard flush/compaction threads and optional rollback threads run in the background.",
+    "drop_in_for_baseline": "partial — it wraps N RocksDB instances behind a db_master API (Open/Close/Put/Get/Seek) and was run under MyRocks, but the paper covers no other RocksDB API, and with no code the compatibility cannot be checked"
+  },
+  "gotchas": [
+    "Every headline experiment ran with rollback disabled. Rollback is the step that moves redirected keys back to their primary shards. Turned on after an 850K-CE write burst, it added about 60s of delay before reads. Once CEs pass the default limit of 1M, rollback is forced and no new CEs are accepted, so write stalls come back.",
+    "The benchmark config is non-default for every system: write-stall throttling, WAL/commit logging and block cache all off. The RocksDB baseline was also reconfigured: 2m memtables of 512/m MB each and 32 compaction threads. The 2.4x/1.8x/2.2x/2.3x headlines are against ADOC, not stock RocksDB.",
+    "Crash recovery scans shards for redirected keys whose CE is missing and blocks user I/O while it runs. Because the WAL was off in all experiments, the cost with durability on was never measured.",
+    "Algorithm 1 bounds a range scan at Kstart + L and appends each shard's results with no merge step, even though global ordering is a stated design goal. YCSB-E ran with a single I/O thread 'to avoid the parallel processing overhead'."
+  ],
+  "pick_this_over_siblings_when": "MatrixKV also targets write stalls but needs NVM for its matrix container, while PebblesDB (fragmented LSM) and Titan (key-value separation for large values) change the on-disk layout. DiaLSM is the one to watch if you want to stay on plain NVMe with stock RocksDB format per shard and remove stalls by structure rather than tuning. Today, pick MatrixKV, PebblesDB or Titan when you need code you can run, since DiaLSM has none.",
+  "verified_claims_summary": "Setup: arXiv preprint (v1, 2026-09-13). Hardware: 2x AMD EPYC 7352, 256GB DRAM, one 3.84TB Samsung PCIe Gen3x4 NVMe, CentOS 7/ext4. Baselines: RocksDB v8.3.2 with Sub-Compaction and ADOC, all with throttling, WAL and block cache off. Results: on 8KB FillRandom, DiaLSM had up to 2.4x ADOC's throughput, 94.3% fewer stalls than both baselines, and about 50% lower mean/median latency than both. YCSB-E was about 1.7x over both at scan length 128 and 3.3x/5.7x/8.9x at 1K/4K/16K. Compiler and flags are not stated, and there is no artifact to reproduce the numbers.",
+  "status_note": "The repo was created 2026-09-13 with a single README commit (1 star, no license, no code); ICDE 2027 acceptance is author-claimed and not yet listed publicly. The lab's earlier DownForce paper did publish a GPL-2.0 RocksDB fork, so a release is plausible, but for now this is a paper to read, not a dependency.",
+  "sources_read": [
+    "https://github.com/DISCOS-LAB/DiaLSM",
+    "https://arxiv.org/abs/2609.14370",
+    "https://arxiv.org/pdf/2609.14370",
+    "https://github.com/DISCOS-LAB",
+    "https://github.com/DISCOS-LAB/DownForce",
+    "https://github.com/DISCOS-LAB/Resystance",
+    "https://hn.algolia.com/api/v1/search?query=%22DiaLSM%22&typoTolerance=false",
+    "https://icde2027.github.io/",
+    "https://icde2027.github.io/program.html",
+    "https://raw.githubusercontent.com/facebook/rocksdb/v8.3.2/HISTORY.md",
+    "https://raw.githubusercontent.com/facebook/rocksdb/v8.3.2/CMakeLists.txt"
+  ],
+  "confidence": 0.6
+}

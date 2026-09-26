@@ -1,0 +1,50 @@
+{
+  "id": "https://arxiv.org/abs/2506.04678",
+  "one_liner": "Research RocksDB variant that splits big values out at WAL-write time. Paper reports 7.6x RocksDB random-write throughput at 64KB.",
+  "what_it_does": "BVLSM is a research modification of RocksDB for big-value workloads such as multimedia objects and ML embeddings. The paper calls it a 'RocksDB-based LSM-Tree key-value separation mechanism' and evaluates it on RocksDB v9.7.3. On Put, any value above a size threshold (the paper's example is 4KB) is appended to a separate BValue file. Only a Key-ValueOffset record (offset, size, file path) goes to the WAL, MemTable and SSTables; smaller values stay inline. No code has been released, and the paper does not say whether it is a patch, plugin or fork, or which RocksDB APIs it keeps.",
+  "how_it_is_fast": "It moves WiscKey-style key-value separation from flush time, where BlobDB and WiscKey do it, to the write path before the WAL. MemTables then hold only pointers, so flushes are rarer, fewer WAL bytes are written, and compaction rewrites only keys plus pointers. That cuts write amplification and the L0-stall throughput dips seen in RocksDB. Separated values are spread by hash or round-robin across several BValue files, each meant to feed its own NVMe submission queue. The paper credits this for up to 40% more write throughput; its FIO microbenchmark (4 threads, 4KB) shows multi-queue 60.6% faster than single-queue. A BVCache (a fixed-size deque plus hash table, sized like one MemTable) keeps recently written entries to cut read latency on separated values.",
+  "when_to_use": [
+    "As a design reference if you maintain a RocksDB fork and want to separate values before the WAL rather than at flush.",
+    "Ingest of values of 16-64KB and up (images, embeddings, large log chunks) on NVMe, where RocksDB throughput flattens above 32KB and L0 stalls make it oscillate. The paper's gains are largest at 32-64KB.",
+    "Big-value writes that must use a synchronous WAL. Only pointer-sized records reach the WAL, and this is where the paper shows its largest relative gains: about 7x RocksDB on random writes and 4.1x on sequential writes.",
+    "As an argument when you evaluate BlobDB or Titan: flush-time separation still buffers full values in MemTables and the WAL."
+  ],
+  "when_not_to_use": [
+    "Any time you need running code. There is no public repository, license, build instructions or API, so you would have to reimplement it from an 8-page paper.",
+    "Small values. Values under the threshold (example 4KB) stay inline and take RocksDB's normal path, and nothing below 4KB was benchmarked.",
+    "Update- or delete-heavy or space-constrained workloads. The paper describes no garbage collection or space reclamation for BValue files and reports no space-amplification numbers. Integrated BlobDB and Titan both have GC.",
+    "Range-scan or iterator-heavy reads. No scan benchmark is reported, and any separated value missing from the BVCache costs an extra random read from a BValue file.",
+    "Anything with strict durability needs. No crash-recovery testing is reported. In WAL-disabled mode values sit in an in-memory buffer until a background thread writes them, and the paper does not say how those writes are ordered against MemTable flushes."
+  ],
+  "integration": {
+    "form": "none published: a paper-only design described as a modification inside RocksDB's write path; no source, library or binary",
+    "dependencies": "not documented (the experiments use RocksDB v9.7.3 as the underlying engine)",
+    "min_toolchain": "not documented (compiler and flags not stated)",
+    "platforms": "Tested only on x86-64 Linux (Xeon Gold 5218, Ubuntu 20.04, kernel 4.15) with a Samsung 990 EVO NVMe SSD. The multi-queue value store assumes NVMe; other devices are not evaluated.",
+    "thread_safety": "not documented (db_bench and YCSB thread counts are also not stated)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The 7.6x headline comes from the async-WAL mode (R-WA), but the design section defines only two modes: WAL-enabled (value fsync'd to its BValue file, then the pointer record written synchronously to the WAL, so two syncs per Put with no group commit described) and WAL-disabled (values buffered and written by a background thread). How async-WAL mode behaves is not described.",
+    "Write-time separation is not new inside RocksDB. The legacy StackableDB BlobDB wrote blob files synchronously in the write API. The RocksDB wiki says the integrated BlobDB moved to flush and compaction for consistency and large I/Os. The paper benchmarks only the integrated BlobDB and does not discuss the legacy one.",
+    "The paper contradicts itself in places. BVCache eviction is described as Most-Recent-Write-First, as LRU tail eviction, and as time- or frequency-based 'depending on system load'. The text says BlobDB cuts read latency by 35.5%, but Fig. 8 shows BlobDB at 29.1us vs RocksDB's 82.1us, i.e. 35.4% of RocksDB. The setup lists '1 immutable and 5 mutable MemTables'. A '2.49x BlobDB' figure appears in the FIO-only section.",
+    "The benchmark datasets are small relative to the host's 128GB RAM: 100GB for db_bench, and about 4GB for YCSB-A (500k x 8KB). So the YCSB read latencies were probably served largely from the page cache (my inference; the paper does not discuss caching)."
+  ],
+  "pick_this_over_siblings_when": "For large values you can actually deploy, use Titan (Apache-2.0 RocksDB plugin, commits as recent as September 2026) or RocksDB's integrated BlobDB. KVell, PebblesDB, MatrixKV and SplinterDB also ship code. BVLSM is the only catalogued entry that separates values before the WAL, so read it only as a design reference when your values are 32KB or more and ingest is bound by the synchronous WAL.",
+  "verified_claims_summary": "The authors ran db_bench on a Xeon Gold 5218 with 128GB DDR4 and a Samsung 990 EVO NVMe (Ubuntu 20.04): 100GB of data, 16B keys, 4-64KB values, against RocksDB v9.7.3 and BlobDB 'configured identically' (configs not published). With 64KB random writes they report 7.6x RocksDB and 1.9x BlobDB with async WAL, about 7x and 3x with sync WAL, and up to 8x and 2x with WAL off. YCSB-A with 8KB values gives insert, update and read latencies of 27.2%, 28.4% and 19.7% of RocksDB's, and a 100GB sustained 4KB-value write test averages 1.5x RocksDB and 2x BlobDB. Compiler, flags and thread counts are not stated, and nobody else has reproduced the results.",
+  "status_note": "Paper only: arXiv v2 from June 2025, peer-reviewed at IEEE HPCC 2025 (pp. 34-41, doi:10.1109/HPCC67675.2025.00037). There is no code, repository or license (the only GitHub hit for 'bvlsm' is an unrelated spam repo), and OpenAlex shows zero citations as of 2026-09-26, so it is usable only as a design reference.",
+  "sources_read": [
+    "https://arxiv.org/abs/2506.04678",
+    "https://arxiv.org/pdf/2506.04678",
+    "https://api.crossref.org/works/10.1109/hpcc67675.2025.00037",
+    "https://api.openalex.org/works/doi:10.1109/HPCC67675.2025.00037",
+    "https://api.openalex.org/works?search=BVLSM",
+    "https://github.com/search?q=BVLSM&type=repositories",
+    "https://github.com/search?q=BVCache&type=code",
+    "https://github.com/beanian67/bvlsmz",
+    "https://hn.algolia.com/api/v1/search?query=BVLSM",
+    "https://github.com/facebook/rocksdb/wiki/BlobDB",
+    "https://github.com/tikv/titan"
+  ],
+  "confidence": 0.6
+}

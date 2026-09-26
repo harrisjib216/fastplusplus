@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/dasebe/robinhoodcache",
+  "one_liner": "Research controller that resizes per-backend memcached partitions by request-blocking count, cutting request P99 versus one shared cache.",
+  "what_it_does": "RobinHood targets application servers where one user request fans out into many queries (about 50 on average in the paper) to different backends, so the request is only as fast as its slowest query. Each backend gets its own memcached partition (in the testbed, a separate memcached process and port per backend on every app server), and a controller keeps moving memory between partitions toward the backends that are currently causing slow requests. It is not a library or drop-in cache. It is a Docker Swarm testbed (Go app server, trace replayer, stats/RBC server, synthetic MySQL and matrix-multiply backends) plus a ~600-line Python 2 controller that drives memcached's text protocol (`cache_memlimit`, `slabs reassign`); to adopt it you port the controller and feed it per-request latency plus the ID of the slowest backend.",
+  "how_it_is_fast": "Every window (5 s in the paper) it 'taxes' 1% of every partition and hands the pooled space out in proportion to each backend's request blocking count (RBC): how often that backend produced the slowest query among requests whose latency lies between P98.5 and P99.5. A backend whose allocated space exceeds its used space by more than 30% has its RBC ignored, so space is not wasted on backends that already have high hit ratios. Since request P99 is almost entirely made of cache misses on whichever backend is overloaded at the moment, shifting cache from cache-rich to cache-poor backends lowers the miss load where it hurts. No cache operation gets faster; P99 hit latency actually rose 13-28% on the partitions being resized.",
+  "when_to_use": [
+    "Application-layer caches in front of many heterogeneous backends (databases, recommenders, KV stores) where each user request fans out into dozens of queries and you have a request-level P99 SLO.",
+    "Backend latency spikes caused by other tenants' load, not correlated with your own query rate, so hit-ratio-maximizing or static per-backend allocations do not react to them.",
+    "OneRF-style layouts where each app server queries only its local cache, and the cache can be resized online per partition (memcached with `cache_memlimit` and slab reassignment, or a cache you control).",
+    "You already log each request's latency and which backend's query was slowest, so computing the RBC is nearly free (paper: under 8 KB/s of stats per app server at 1000 requests/s).",
+    "As a reference design for tail-latency-driven cache allocation: the paper reports the best clairvoyant static split needs 73% more cache to give every backend its peak RobinHood allocation."
+  ],
+  "when_not_to_use": [
+    "You need a faster cache server or a better eviction policy. RobinHood only changes partition sizes; per-op throughput is memcached's, and hit P99 goes up 13-28% on partitions being resized.",
+    "Single-backend or low-fan-out workloads (nothing to rebalance), or backends that share one underlying storage bottleneck, which the paper says breaks its assumption of independent query latencies.",
+    "Production use as-is. The author says it is not production-ready and not running in production. The controller is Python 2, and the Dockerfiles use golang:1.8/1.9 with the removed go-wrapper script, the deprecated base/archlinux image and GOPATH builds with no go.mod.",
+    "Latency spikes shorter than a few seconds. Reallocation runs in 5 s windows, and moving 1% of a 32 GB cache (up to 327 1 MB pages) can take up to 5 s because of memcached lock contention.",
+    "When cache-rich backends cannot absorb extra misses: RobinHood raised query latency on the least-queried backend by up to 2.55x and by up to 61% on the top 5 backends."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "memcached (needs the cache_memlimit and slabs reassign commands; version not pinned, installed from Arch packages); Python 2 with a fork of pymemcache (bsb20/pymemcache: 1 commit adding slabs/cache_memlimit calls, 316 behind upstream) and requests; Go with bradfitz/gomemcache and go-sql-driver/mysql; MySQL and Docker Swarm plus a container registry for the full testbed",
+    "min_toolchain": "Python 2 (controller); Go 1.8/1.9 GOPATH-era builds (golang:1.8/1.9 images); authors used Docker 18.03 on Ubuntu 17.10",
+    "platforms": "Linux x86-64 in Docker Swarm (repo ships linux_amd64 prebuilt Go archives and a 9.6 MB appserver binary); other platforms not documented",
+    "thread_safety": "Controller holds a per-memcached-client lock and resizes partitions from parallel threads; the Go stats server reads its latency ring without a lock while another goroutine writes it. Nothing else is documented.",
+    "drop_in_for_baseline": "partial — runs on unmodified memcached, but replaces the single shared cache with one memcached partition per backend, needs the app server to report per-request latency and slowest-backend ID to a stats server, and adds a controller process per app server"
+  },
+  "gotchas": [
+    "The algorithm named \"robinhood\" in controller.py is a simple latency-sort heuristic (even split, double share to the highest-P99 backend), not the paper's algorithm. The RBC-proportional policies are the crit_path* variants: crit_path_window uses the paper's P98.5-P99.5 window, but the shipped example config selects crit_path (P99-P100) with a 1 s interval instead of 5 s.",
+    "Only a 2-backend example config and a small trace are published. The 20-backend configs and traces behind the paper are not (issue #4, unanswered), the simulator was never released (issue #3), and the Cliffhgr++/FAIR++/LAMA++ baselines are not labelled in the repo (issue #2, unanswered).",
+    "The controller disables memcached slab automove and shrinks partitions by randomly reassigning slab pages. memcached does not free pages immediately (multi-MB memory bursts, paper Sec. 5.6), and shrinking blocks some concurrent cache operations.",
+    "Each partition keeps a 30 MB floor and moves in 1 MB steps. The stats server keeps a fixed 10M-entry ring of queries plus requests (the paper says the last 1M requests) and copies and sorts all of it every 3 s."
+  ],
+  "pick_this_over_siblings_when": "S3-FIFO, SIEVE, LHD, AdaptSize and Hyperbolic Caching improve one cache's eviction or admission, and Pelikan/Segcache, Garnet and Dragonfly are faster cache servers. RobinHood leaves the cache alone and decides how much memory each backend's partition gets so that request P99 drops across a fan-out. Pick its approach when the tail comes from whichever backend is overloaded right now, not from cache speed or overall hit ratio; it can run on top of any resizable cache, including one of those.",
+  "verified_claims_summary": "On a 50-VM Azure D16 v3 testbed (2.4 GHz E5-2673v3, 16 app servers with 32 GB local memcached, 34 backend servers across 20 services, ~200k queries/s replaying Microsoft OneRF statistics with injected backend load spikes), RobinHood broke a 150 ms P99 request SLO under 0.3% of the time versus 30% for the next best policy, OneRFpolicy (one shared memcached cache per app server). The result is SLO attainment, not a speed ratio, and no compiler matters (Go + Python, versions not given); in other runs it was under 1.5% vs 38% (LAMA++) for fast load ramps and 5% vs 24% (TAO++) for random multi-backend spikes.",
+  "status_note": "Abandoned research testbed (last commit 2019-07-08, 53 commits, three open issues with no author reply), BSD-3-Clause; the core idea sits in ~600 lines of Python 2 that are easier to port than to run, because the full testbed needs Docker Swarm, a registry and dozens of VMs.",
+  "sources_read": [
+    "https://github.com/dasebe/robinhoodcache",
+    "https://github.com/dasebe/robinhoodcache/blob/master/README.md",
+    "https://github.com/dasebe/robinhoodcache/blob/master/nuapp/src/controller.py",
+    "https://github.com/dasebe/robinhoodcache/blob/master/nuapp/src/subquery/subquery.go",
+    "https://github.com/dasebe/robinhoodcache/blob/master/nuapp/src/appserver/app.go",
+    "https://github.com/dasebe/robinhoodcache/blob/master/go/src/statserver/statserver.go",
+    "https://github.com/dasebe/robinhoodcache/blob/master/nuapp/src/statquery/statquery.go",
+    "https://github.com/dasebe/robinhoodcache/blob/master/nuapp/src/parseCacheConfig.py",
+    "https://github.com/dasebe/robinhoodcache/blob/master/nuapp/Dockerfile",
+    "https://github.com/dasebe/robinhoodcache/blob/master/nuapp/src/requirements.txt",
+    "https://github.com/dasebe/robinhoodcache/blob/master/configs/example_config.tar.gz",
+    "https://github.com/dasebe/robinhoodcache/blob/master/docker_env.sh",
+    "https://github.com/dasebe/robinhoodcache/blob/master/push_images.sh",
+    "https://github.com/dasebe/robinhoodcache/blob/master/go/Dockerfile_requestor",
+    "https://github.com/dasebe/robinhoodcache/blob/master/go/Dockerfile_fback",
+    "https://github.com/dasebe/robinhoodcache/blob/master/swarm/robinhood-compose.yml",
+    "https://github.com/dasebe/robinhoodcache/issues/1",
+    "https://github.com/dasebe/robinhoodcache/issues/2",
+    "https://github.com/dasebe/robinhoodcache/issues/3",
+    "https://github.com/dasebe/robinhoodcache/issues/4",
+    "https://github.com/bsb20/pymemcache",
+    "https://www.usenix.org/system/files/osdi18-berger.pdf",
+    "https://news.ycombinator.com/item?id=18307077",
+    "https://news.ycombinator.com/item?id=32985096"
+  ],
+  "confidence": 0.8
+}
