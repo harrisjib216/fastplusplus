@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/chainedfilter/chainedfilter",
+  "one_liner": "SIGMOD'24 research code chaining approximate and exact filters for zero false positives on known negatives; beats RocksDB's Bloom P99.",
+  "what_it_does": "ChainedFilter answers membership queries when the positive set and the negatives you care about are both known at build time. Stage 1 is an approximate filter over the positives, and stage 2 records exactly which of stage 1's 'yes' answers are real, so the pair has zero false positives on those negatives while staying close to the information-theoretic space bound. The repo is reference code, not a library: src/Algorithm1.h is the static 'AND' version built from two Bloomier/xor-style filters, src/Algorithm2.h is a dynamic cascade of Bloom filters, and three self-contained experiment folders (static dictionary, random-access Huffman coding and Cuckoo-hash location prediction) each build a main.cpp from a Makefile. The interface is build(int* positives, n1, int* negatives, n0) plus query(int), not Bloom-style add/contains, and the paper's RocksDB integration is not included.",
+  "how_it_is_fast": "The paper's 'chain rule' shows that the space for exact membership factorizes as f(0,λ) = f(ε,λ) + f(0,ελ), so splitting the job into stages costs no extra space. Stage 1 is an approximate Bloomier (xor) filter with ⌊log2 λ⌋-bit fingerprints, built by hypergraph peeling with its 3 hash positions inside a window about 1/120 of the table (as in binary fuse filters), and stage 2 is a 1-bit exact Bloomier (retrieval) table that holds only the positives and stage 1's false positives and is probed only when stage 1 says yes. At λ=16 this gives 64% less space and 103% higher query throughput than a single exact Bloomier filter. The RocksDB gain is not a faster probe: each SSTable's filter (RocksDB's Bloom filter plus an Othello whitelist) is made exact with respect to keys in the later SSTables of the same level, so a lookup of an existing key reads at most one extra SSTable per level instead of up to N.",
+  "when_to_use": [
+    "Static exact membership or 1-bit retrieval over a closed universe, where every key that will ever be queried is known at build time and false positives are not acceptable (the paper's implicit static dictionary uses about 26% more space than the lower bound).",
+    "LSM-trees with many overlapping sorted runs in one level (tiered compaction, or a large L0) where the P99 latency of existing-key point lookups matters. Treat the paper's design (Bloom stage 1, Othello stage 2 whitelisting keys from later SSTables) as a blueprint to implement yourself; this repo has no code for it.",
+    "Cuckoo hash tables in slow or external memory: Algorithm 2, trained online, predicts which of the two tables holds each key. The paper reports 31% fewer external memory accesses at load 0.4 and zero mispredictions after 7 training rounds.",
+    "Random-access decoding of Huffman-coded data, where the paper reports 0.22 extra bits per item over the lower bound.",
+    "Studying the chain-rule construction before writing your own version on top of a maintained xor, binary-fuse or ribbon filter library."
+  ],
+  "when_not_to_use": [
+    "As a general Bloom filter replacement when negatives are unknown. False positives on never-seen keys are only as good as stage 1, and in the paper's RocksDB test, latency for non-existing keys at 16M items still rises depending on which SSTable reports the false positive.",
+    "Workloads with frequent inserts or deletes. Algorithm 1 is static and must be rebuilt, the paper says the chain rule does not hold for general dynamic membership, and the dynamic whitelist it suggests (Othello or Coloring Embedder) costs about 2.2-2.33 bits per item.",
+    "Anything that ships. There is no LICENSE file (all rights reserved), the repo has 3 commits from April 2023, and there are no tests and no build system beyond per-folder Makefiles. The code also has leaks and undefined behavior (see gotchas).",
+    "Keys that are not 32-bit ints, or large sets built on a tight memory budget. The code hashes only int keys, and a build keeps the full positive and negative arrays plus peeling scratch arrays in RAM; the paper notes peeling needs Ω(n log n) extra construction space.",
+    "Range queries: ChainedFilter handles point lookups only."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (C++ standard library, plus a bundled public-domain MurmurHash.h)",
+    "min_toolchain": "C++11 in practice: the Makefiles use g++ --std=c++11 -O3 -g, and the authors report g++ 7.5.0. The README says C++17, but Bloomier.h uses the 'register' keyword, which C++17 removed.",
+    "platforms": "Not documented. The code is plain scalar C++ with no SIMD or intrinsics, and it has only been run on x86-64 Ubuntu (Intel i9-10980XE).",
+    "thread_safety": "Not documented. Nothing is locked, and Algorithm 2's insert() and change() allocate new layers lazily, so treat it as single-threaded.",
+    "drop_in_for_baseline": "partial — it plays a Bloom filter's role, but build() needs the negative set up front, keys must be int, and the RocksDB drop-in from the paper is not published"
+  },
+  "gotchas": [
+    "build() signals failure with negative return codes (-1 to -6), not exceptions, and retries peeling with only a fixed list of 10 seeds. The 'memory' it returns is a computed bit count (slots × fingerprint length), while the tables are stored as int[] (32 bits per slot), and Algorithm 2 stores bool[] (1 byte per bit), so real RAM use is far above the reported filter space.",
+    "Undefined behavior: Algorithm 2's Layer never initializes its 'upper' pointer (or sum1) before 'upper==NULL' checks. In the Cuckoo experiment, CuckooHash::query_with_pre can fall off the end without returning, and query() reads an uninitialized variable.",
+    "Leaks: ~ChainedFilter calls ~Bloomier() directly instead of delete, each seed retry allocates a new Encoder without freeing the old one, error paths leak their scratch arrays, and the experiment mains call ~ChainedFilter() by hand. The experiment mains also declare multi-GB static arrays (for example, three int[2^27] arrays in the Static Dictionary experiment).",
+    "The headers define non-inline functions (MurmurHash32 is actually MurmurHash2, plus getp) and put 'using namespace std' at global scope, and both Algorithm1.h and Algorithm2.h declare 'class ChainedFilter'. You cannot include both in one translation unit, and including either from two .cpp files breaks the link. The faster interleaved variant, ChainedFilter_fast.h, ships but no main.cpp uses it, and the paper's experiments used 64-bit keys while the repo code hashes 32-bit ints."
+  ],
+  "pick_this_over_siblings_when": "Choose ChainedFilter's design over Xor Filter or BuRR only when you know the negative keys at build time and need zero false positives on them, as in an exact static dictionary or the paper's trick of excluding keys that live in later SSTables. For ordinary approximate membership, Xor Filter and BuRR are licensed, usable libraries built on the same peeling/retrieval ideas, and SuRF is the RocksDB choice when you need range queries.",
+  "verified_claims_summary": "The 36% figure comes from the SIGMOD 2024 paper, not from runnable repo code. RocksDB was set up with all SSTables in L0 and a 64MB write buffer, with 36-byte keys, 64-byte values and 16M items (1.6GB, 30 SSTables). P99 latency for existing-key point lookups was about 31us with RocksDB's own Bloom filter at the same filter space and under 20us with ChainedFilter (RocksDB's Bloom filter plus an Othello whitelist), on an Intel i9-10980XE with 128GB DRAM and g++ 7.5.0 -O3. The repo's runnable experiments cover only the static dictionary, Huffman and Cuckoo-hash results, and none of them runs a Bloom baseline.",
+  "status_note": "Abandoned after three commits in April 2023, with no license file. Treat it as a reference for reading the paper, not code you can vendor, and note that the RocksDB integration was never published.",
+  "sources_read": [
+    "https://github.com/ChainedFilter/ChainedFilter",
+    "https://api.github.com/repos/ChainedFilter/ChainedFilter/readme",
+    "https://api.github.com/repos/ChainedFilter/ChainedFilter/git/trees/HEAD?recursive=1",
+    "https://api.github.com/repos/ChainedFilter/ChainedFilter/issues?state=all",
+    "https://api.github.com/repos/ChainedFilter/ChainedFilter/commits",
+    "https://api.github.com/repos/ChainedFilter/ChainedFilter/forks",
+    "https://api.github.com/users/ChainedFilter/repos",
+    "https://raw.githubusercontent.com/ChainedFilter/ChainedFilter/main/src/Algorithm1.h",
+    "https://raw.githubusercontent.com/ChainedFilter/ChainedFilter/main/src/Algorithm2.h",
+    "https://raw.githubusercontent.com/ChainedFilter/ChainedFilter/main/src/Bloomier.h",
+    "https://raw.githubusercontent.com/ChainedFilter/ChainedFilter/main/src/MurmurHash.h",
+    "https://raw.githubusercontent.com/ChainedFilter/ChainedFilter/main/%20Static%20Dictionary/main.cpp",
+    "https://raw.githubusercontent.com/ChainedFilter/ChainedFilter/main/%20Static%20Dictionary/Makefile",
+    "https://raw.githubusercontent.com/ChainedFilter/ChainedFilter/main/%20Static%20Dictionary/include/ChainedFilter.h",
+    "https://raw.githubusercontent.com/ChainedFilter/ChainedFilter/main/%20Random%20Access%20Huffman%20Coding/main.cpp",
+    "https://raw.githubusercontent.com/ChainedFilter/ChainedFilter/main/%20Random%20Access%20Huffman%20Coding/Makefile",
+    "https://raw.githubusercontent.com/ChainedFilter/ChainedFilter/main/%20Random%20Access%20Huffman%20Coding/include/ChainedFilter.h",
+    "https://raw.githubusercontent.com/ChainedFilter/ChainedFilter/main/%20Random%20Access%20Huffman%20Coding/include/ChainedFilter_fast.h",
+    "https://raw.githubusercontent.com/ChainedFilter/ChainedFilter/main/%20Self-Adaptive%20Hashing/main.cpp",
+    "https://raw.githubusercontent.com/ChainedFilter/ChainedFilter/main/%20Self-Adaptive%20Hashing/include/CuckooHash.h",
+    "https://raw.githubusercontent.com/ChainedFilter/ChainedFilter/main/%20Self-Adaptive%20Hashing/include/ChainedFilter.h",
+    "https://arxiv.org/pdf/2308.13632",
+    "http://export.arxiv.org/api/query?id_list=2308.13632",
+    "https://hn.algolia.com/api/v1/search?query=ChainedFilter"
+  ],
+  "confidence": 0.72
+}
