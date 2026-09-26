@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/pelikan-io/pelikan",
+  "one_liner": "Rust cache-server framework whose pelikan-segcache speaks memcached's text protocol over Segcache, a TTL-segmented store with 5-byte-per-item metadata.",
+  "what_it_does": "Pelikan is a framework for building cache servers. Each server combines a wire protocol, a storage engine and a threading core taken from shared crates. The main product, pelikan-segcache, is a Memcached-like server: data commands use the memcache text protocol on port 12321, and stats and other admin commands use a separate port (9999). Configuration is TOML-file only. The storage engine is the separately published `segcache` crate from pelikan-io/cache-rs, which you can also embed as a library through a builder, `insert`, `get` and `cas`.",
+  "how_it_is_fast": "Segcache appends items to fixed-size segments (1 MiB by default). Each segment holds only items with similar TTLs, grouped into 1024 TTL buckets. Per-item metadata is therefore a 5-byte header plus an 8-byte hash slot, instead of Memcached's roughly 56 bytes of pointers, LRU links and timestamps. A whole expired segment is freed in one step. Eviction uses merge-based eviction, which scans a run of segments and copies only frequently used items (1-byte approximate frequency counter) into a new segment; S3-FIFO and simpler policies are optional. The Rust engine uses a lock-free 2-choice hash table of 64-byte buckets with SIMD tag scans (AVX2/NEON), and since segcache 0.4 (August 2026) N worker threads share one engine through `Arc` with no storage thread in between.",
+  "when_to_use": [
+    "Memcached-style look-aside caches with many small objects (tens to a few hundred bytes), where per-item metadata is a large share of DRAM.",
+    "Workloads where items carry TTLs and expired data should leave memory quickly (the paper's Twitter traces used TTLs from 2 minutes to 30 days).",
+    "Read-heavy traffic: the current engine's reads scale almost linearly (8.19x on 8 cores for uniform gets in the maintainers' own harness).",
+    "Teams that want to build a custom cache server in Rust from reusable protocol, storage and runtime crates, or embed the `segcache` crate directly."
+  ],
+  "when_not_to_use": [
+    "Write-heavy traffic, or traffic that overwrites the same keys often, on many cores. The maintainers measured writes to one shared engine at 0.82x of single-thread throughput on 8 cores: every writer in one TTL bucket reserves space at one shared tail segment (cache-rs issue #85, open). The 2021 Segcache blog already lists a very high overwrite rate as a weak spot.",
+    "Large objects, or data with no TTLs: the Segcache authors say these see limited benefit from the design.",
+    "When you are counting on the paper's multi-core numbers. The paper's C engine gave each thread its own active write segments; the Rust engine does not do this yet, and nobody has published a Rust Pelikan versus Memcached throughput result.",
+    "Code that uses `add` as a distributed lock or needs atomic add/replace: with more than one worker, two concurrent `add`s on one key can both return STORED (32.7% of hot-key races at 8 workers, in the maintainers' own test).",
+    "Risk-averse production use, or clients that need the memcached meta or binary protocol, `touch`/`gat`, or stats on the data port. The concurrent engine is about a month old. Its rollout found seven engine bugs (lost increments, a deadlock, resurrected deletes, false misses), and some correctness issues are still open (for example cache-rs #101, a false NotFound on cas). The server wires only the text protocol: get, set, add, replace, append, prepend, cas, incr, decr, delete, flush_all, version and quit."
+  ],
+  "integration": {
+    "form": "server binary built from a Cargo workspace (the Pelikan crates are not on crates.io); storage engine is the `segcache` crate (crates.io 0.4.x)",
+    "dependencies": "segcache 0.4.3 and keyvalue (pelikan-io/cache-rs), mio, rustls with AWS-LC (needs a C toolchain and cmake), metriken, clocksource, serde/toml",
+    "min_toolchain": "Rust stable, edition 2021; no MSRV declared; CI uses dtolnay/rust-toolchain@stable; cmake and a C compiler for AWS-LC",
+    "platforms": "CI builds on ubuntu-latest and macos-latest; SIMD tag scan on x86-64 (AVX2) and aarch64 (NEON) with a scalar fallback; Windows not documented",
+    "thread_safety": "Since segcache 0.4 the engine is Sync, and N worker threads share it through Arc and run requests in place. add/replace are check-then-act and can race; cas can fail with EXISTS when it races eviction relocation; flush_all runs as a single sweep on the admin thread before the reply.",
+    "drop_in_for_baseline": "partial — existing memcached text-protocol clients work for the core commands, but admin commands use a separate port, configuration is TOML rather than memcached flags, there is no meta or binary protocol, add/replace are not atomic across workers, and numeric-looking values are stored typed (`set 007` reads back `7`)."
+  },
+  "gotchas": [
+    "Rust Pelikan runs no periodic expiry. Expired items become invisible on access, and their memory comes back only under write pressure, so a lightly loaded server shows expired segments as used memory.",
+    "The hash table has a fixed size (`hash_power`, default 16 in code, 22 in the sample config) with no overflow chains. Set it too low and you lose capacity with no warning (issue #29 asks for a log message). Segment ids are 18 bits, and segments over 8 MiB used to alias item locations silently in release builds (cache-rs #79, closed 2026-08-20).",
+    "The engine metrics evict_time, expire_time and clear_time used a 1-second clock and reported 0 or exactly 1 s (cache-rs #75, fixed upstream). Check which segcache version you run before trusting them.",
+    "Some cited evidence does not match the code. The README's p999 < 5 ms at 1M QPS result (the Intel ADQ post, 2020) was measured on the C pelikan_twemcache slab server, not on Segcache or Rust. The segcache crate's docs/segcache.md still describes a single-threaded `&mut self` engine, although the 0.4 API takes `&self`."
+  ],
+  "pick_this_over_siblings_when": "Pick this over Garnet or KeyDB when you run a Memcached-protocol cache of many small TTL'd objects and memory per item costs more than the Redis data-structure features those two provide. Caffeine is an in-process JVM library rather than a network server, so it fits a different case.",
+  "verified_claims_summary": "The NSDI'21 paper replayed Twitter production traces against the storage layer only (no networking) on dual Xeon Gold 6230R hosts. The multi-thread test used trace c, with 7% writes. In it, the legacy C Segcache (twitter/pelikan, archived at thesys-lab/segcache) reached over 70 MQPS at 24 threads. Memcached 1.6.6 levelled off at 9 MQPS after 8 threads. On one thread, Segcache was up to 40% faster than Memcached. Compiler and flags are not stated. None of these numbers were measured on the current Rust code, which keeps the segment design and 5-byte metadata but not the per-thread write segments. The Rust engine's only published scaling data (i5-13500H E-cores, rustc 1.97.1, engine only) shows reads scaling 8.19x on 8 cores while writes do not scale.",
+  "status_note": "Active (commits in September 2026, Apache-2.0) and buildable with stable Rust, but multi-worker storage only landed in August 2026 on a young concurrent engine, and the peer-reviewed numbers belong to the unmaintained C code.",
+  "sources_read": [
+    "https://github.com/pelikan-io/pelikan",
+    "https://github.com/pelikan-io/pelikan/blob/main/Cargo.toml",
+    "https://github.com/pelikan-io/pelikan/blob/main/Cargo.lock",
+    "https://github.com/pelikan-io/pelikan/blob/main/config/segcache.toml",
+    "https://github.com/pelikan-io/pelikan/blob/main/src/config/src/seg.rs",
+    "https://github.com/pelikan-io/pelikan/blob/main/src/entrystore/src/segcache/mod.rs",
+    "https://github.com/pelikan-io/pelikan/blob/main/src/server/segcache/Cargo.toml",
+    "https://github.com/pelikan-io/pelikan/blob/main/src/server/segcache/src/lib.rs",
+    "https://github.com/pelikan-io/pelikan/blob/main/src/protocol/memcache/src/binary/mod.rs",
+    "https://github.com/pelikan-io/pelikan/blob/main/.github/workflows/cargo.yml",
+    "https://github.com/pelikan-io/pelikan/blob/main/docs/journal/2026-08-18-concurrent-segcache-conversion.md",
+    "https://github.com/pelikan-io/pelikan/blob/main/docs/superpowers/specs/2026-08-18-concurrent-segcache-conversion-design.md",
+    "https://github.com/pelikan-io/pelikan/issues/29",
+    "https://github.com/pelikan-io/pelikan/issues/127",
+    "https://github.com/pelikan-io/cache-rs",
+    "https://github.com/pelikan-io/cache-rs/blob/main/docs/segcache.md",
+    "https://github.com/pelikan-io/cache-rs/blob/main/crates/segcache/Cargo.toml",
+    "https://github.com/pelikan-io/cache-rs/blob/main/docs/journal/2026-08-25-segcache-read-write-scaling.md",
+    "https://github.com/pelikan-io/cache-rs/blob/main/benchmarks/segbench/README.md",
+    "https://github.com/pelikan-io/cache-rs/issues/85",
+    "https://github.com/pelikan-io/cache-rs/issues/91",
+    "https://github.com/pelikan-io/cache-rs/issues/101",
+    "https://github.com/pelikan-io/cache-rs/issues/79",
+    "https://crates.io/api/v1/crates/segcache",
+    "https://www.usenix.org/system/files/nsdi21-yang.pdf",
+    "https://github.com/Thesys-lab/Segcache",
+    "https://github.com/twitter/pelikan",
+    "https://pelikan.io/blog/segcache/",
+    "https://pelikan.io/blog/benchmark-adq/",
+    "https://www.usenix.org/conference/nsdi21/presentation/yang-juncheng",
+    "https://hn.algolia.com/api/v1/search?query=pelikan%20segcache&tags=story"
+  ],
+  "confidence": 0.8
+}
