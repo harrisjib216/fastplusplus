@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/gosuda/fluxmq",
+  "one_liner": "Single-binary Rust broker that speaks the Kafka wire protocol; claims ~29% more producer msg/s than Kafka 3.9.",
+  "what_it_does": "FluxMQ is a Rust broker (tokio) that listens on 9092 and implements enough of the Kafka wire protocol for stock Java (kafka-clients 4.1.0 in its tests) and Python kafka-python clients to produce, fetch and join consumer groups. Its API version registry advertises Produce v0-7, Fetch v0-11, Metadata v0-9, the group, offset, admin, SASL and transaction keys, while the README claims 20 fully implemented APIs. You run it as a server binary with CLI flags (TLS, ACL, replication, consumer groups). It is not a library, and there is no Kafka Connect, Streams or KSQL.",
+  "how_it_is_fast": "At HEAD, the produce path parses the record batch and appends the messages to a per-partition Vec<(Offset, Message)>. That Vec sits behind a parking_lot RwLock in a DashMap keyed by (topic, partition), and offsets are reserved with a Relaxed atomic fetch_add. No disk write, fsync or replication wait happens before the ack. The docs credit the gains to mmap segments with madvise(SEQUENTIAL/WILLNEED/HUGEPAGE), MS_ASYNC msync, 'SIMD' copies (really ptr::copy_nonoverlapping plus target-cpu=native) and zero-copy sendfile/io_uring. In the source I read, the mmap tier is only read on fetch, the disk-persistence Append command is never enqueued, and the io_uring/sendfile handler is marked dead_code. The measured speed therefore mostly reflects in-heap appends, plus mimalloc, fat LTO, codegen-units=1 and pipelined request handling.",
+  "when_to_use": [
+    "Local development or CI as a throwaway Kafka-protocol endpoint that starts in under a second, where losing every message on restart is acceptable",
+    "Studying how to implement the Kafka wire protocol (record-batch parsing, ApiVersions negotiation, consumer-group coordinator) in Rust",
+    "Producer-side load experiments with acks=1 against a single node, where only the client-to-broker protocol path matters",
+    "Environments with no JVM, where a small single binary matters more than retention, durability or ecosystem"
+  ],
+  "when_not_to_use": [
+    "Any workload that needs the data kept. Produced messages live only in process memory, and nothing on the produce path writes them to disk, so a restart or crash loses everything",
+    "Producers using acks=0. Both Kafka produce paths in the broker return before parsing or storing the batch when acks=0, so those messages are silently dropped (this is the config behind the docs' 601K msg/s 'MegaBatch' figure)",
+    "Long-running or high-volume topics. There is no retention or eviction on the in-memory Vec, so RSS grows with every produced byte and the 100-400 MB memory figures only hold for short runs",
+    "Multi-broker HA. With replication on, the leader produce path only logs a debug line ('In a full implementation, we'd wait for replication acknowledgments'), and the Java-client produce path in server.rs skips it entirely",
+    "Production use in general: one contributor (37 commits), 8 stars, no issues filed, no GitHub releases, no HN or third-party discussion found"
+  ],
+  "integration": {
+    "form": "Standalone server binary built from a Cargo workspace (core/). The crates.io 'fluxmq' crate is stale at 0.1.0 from 2025-09, while the repo is at 0.4.1.",
+    "dependencies": "tokio, dashmap, parking_lot, crossbeam, flume, memmap2, crc32fast/crc32c, lz4_flex, snap, flate2, zstd, rustls/tokio-rustls, mimalloc (default feature), optional tikv-jemallocator; io-uring crate on Linux, mach on macOS, winapi on Windows",
+    "min_toolchain": "The README says Rust 1.70+, but the workspace depends on rand 0.10.0, whose crates.io rust_version is 1.85 (edition 2024), so Rust 1.85+ in practice. Edition 2021.",
+    "platforms": "The release CI matrix builds x86_64 Linux (musl), x86_64 Windows (MSVC) and x86_64 macOS. .cargo/config.toml forces target-cpu=native for x86_64/aarch64 Linux and macOS and for x86_64 Windows. The io-uring feature needs Linux 5.1+ according to the docs. aarch64 builds from source are implied, not tested in CI.",
+    "thread_safety": "The broker serves many concurrent client connections on tokio, and per-partition state is guarded by DashMap plus RwLock. From reading the code, the offset is reserved before the write lock is taken, so concurrent producers to one partition could push batches out of offset order, which the binary-search fetch assumes cannot happen. Not documented or tested upstream.",
+    "drop_in_for_baseline": "partial — unmodified Kafka Java and Python clients connect on 9092 and can produce, fetch and use consumer groups, but there is no durable log, no retention, and no working replication. acks=0 data is discarded, protocol versions top out around the Kafka 2.8 era (Produce v7, Fetch v11), and Kafka's admin tooling, Connect and Streams are out of scope."
+  },
+  "gotchas": [
+    "acks=0 is a silent no-op: the server returns without storing the batch, so fire-and-forget benchmarks look fast because nothing is written",
+    "--data-dir is parsed and logged, but MessageHandler builds its storage with a hard-coded HybridStorage::new(\"./data\"), and --recovery-mode reloads directories that the produce path does not appear to write",
+    "The release profile sets panic = \"abort\", so any panic in a request handler kills the whole broker rather than one connection",
+    "The repo's .cargo/config.toml bakes in target-cpu=native, so a binary built on one machine may crash with SIGILL on an older CPU. The README install URL and support links still point to github.com/yourusername/fluxmq"
+  ],
+  "pick_this_over_siblings_when": "Redpanda is the catalogued Kafka-API alternative with fsync'd Raft storage and a production track record. Pick FluxMQ over it only for an ephemeral, in-memory Kafka-protocol stand-in or to study the codebase. Woodpecker (a durable log with object-storage backing) and Zenoh (a different pub/sub protocol) are not Kafka-wire drop-ins, so FluxMQ is only relevant among these when unmodified Kafka clients must connect.",
+  "verified_claims_summary": "docs/PERFORMANCE.md (dated 2025-11-24) reports 476K msg/s average and 554K peak for FluxMQ vs 370K for Apache Kafka. In the repo harness, that comes from 4 Java producer threads (kafka-clients 4.1.0) sending 100K messages of about 740 bytes with acks=1, 128 KB batches, linger 1 ms and no compression, which is only about 0.2 s of timed work. The harness's Kafka side is 3.9.0 in ZooKeeper mode with 3 partitions, 8 network / 16 IO threads, logs in /tmp and RF 1, but the page never ties the 370K figure to that setup. No CPU or OS is stated (an older doc says 'Apple Silicon M-series or Intel x86_64, 16GB+'), and no raw results are committed. The 0.002 ms 'latency' is duration divided by message count, not per-message ack latency. FluxMQ was storing messages only in heap memory while Kafka was writing its log, so this is not a like-for-like broker comparison.",
+  "status_note": "Active, single-author project (last commit 2026-03-20, MIT) that is easy to build and run but not usable where data must survive: treat it as experimental and verify durability yourself before relying on it.",
+  "sources_read": [
+    "https://github.com/gosuda/fluxmq",
+    "https://github.com/gosuda/fluxmq/blob/main/README.md",
+    "https://github.com/gosuda/fluxmq/blob/main/docs/PERFORMANCE.md",
+    "https://github.com/gosuda/fluxmq/blob/main/Cargo.toml",
+    "https://github.com/gosuda/fluxmq/blob/main/core/Cargo.toml",
+    "https://github.com/gosuda/fluxmq/blob/main/.cargo/config.toml",
+    "https://github.com/gosuda/fluxmq/blob/main/.github/workflows/release.yml",
+    "https://github.com/gosuda/fluxmq/blob/main/benchmark-suite/runners/run_comparison.sh",
+    "https://github.com/gosuda/fluxmq/blob/main/benchmark-suite/setup/install_kafka.sh",
+    "https://github.com/gosuda/fluxmq/blob/main/benchmark-suite/setup/configure_kafka.sh",
+    "https://github.com/gosuda/fluxmq/blob/main/benchmark-suite/README.md",
+    "https://github.com/gosuda/fluxmq/blob/main/fluxmq-java-tests/BENCHMARK_RULES.md",
+    "https://github.com/gosuda/fluxmq/blob/main/fluxmq-java-tests/pom.xml",
+    "https://github.com/gosuda/fluxmq/blob/main/fluxmq-java-tests/src/main/java/com/fluxmq/tests/MultiThreadBenchmark.java",
+    "https://github.com/gosuda/fluxmq/blob/main/fluxmq-java-tests/src/main/java/com/fluxmq/tests/ComprehensiveBenchmark.java",
+    "https://github.com/gosuda/fluxmq/blob/main/core/src/storage/mod.rs",
+    "https://github.com/gosuda/fluxmq/blob/main/core/src/broker/server.rs",
+    "https://github.com/gosuda/fluxmq/blob/main/core/src/broker/handler.rs",
+    "https://github.com/gosuda/fluxmq/blob/main/core/src/main.rs",
+    "https://github.com/gosuda/fluxmq/blob/main/core/src/performance/mod.rs",
+    "https://github.com/gosuda/fluxmq/blob/main/core/src/performance/mmap_storage.rs",
+    "https://github.com/gosuda/fluxmq/blob/main/core/src/protocol/kafka/api_versions.rs",
+    "https://github.com/gosuda/fluxmq/blob/main/core/src/replication/mod.rs",
+    "https://github.com/gosuda/fluxmq/blob/main/core/PERFORMANCE_BENCHMARK_RESULTS.md",
+    "https://github.com/gosuda/fluxmq/blob/main/docs/ARCHITECTURE.md",
+    "https://github.com/gosuda/fluxmq/commits/main",
+    "https://github.com/gosuda/fluxmq/issues",
+    "https://github.com/gosuda/fluxmq/tags",
+    "https://crates.io/api/v1/crates/fluxmq",
+    "https://crates.io/api/v1/crates/rand/0.10.0",
+    "https://crates.io/api/v1/crates/tokio/1.50.0",
+    "https://hn.algolia.com/api/v1/search?query=fluxmq&tags=story"
+  ],
+  "confidence": 0.7
+}

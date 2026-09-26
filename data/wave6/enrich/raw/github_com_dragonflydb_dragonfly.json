@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/dragonflydb/dragonfly",
+  "one_liner": "Multi-threaded, shared-nothing in-memory store that speaks the Redis and Memcached protocols; beats single-process Redis once there are many cores.",
+  "what_it_does": "A standalone server that implements the Redis RESP protocol (the README says about 185-190 commands, plus native JSON, search, Bloom and HLL families) and the Memcached text and meta protocol on a separate port. Existing Redis and Memcached clients connect unchanged. It is a vertically scaling alternative to a Redis process or Redis Cluster: one process uses every core, and MULTI/EXEC, Lua and multi-key commands keep single-node semantics. It is not a library you link against.",
+  "how_it_is_fast": "It uses a shared-nothing, thread-per-core design built on the helio fiber library, with io_uring by default and epoll on kernels older than 5.10. Each thread owns one shard of the keyspace, and cross-shard work goes by message passing instead of locks. Multi-key atomicity uses the VLL lock-manager scheme from the VLDBJ paper. The main index is Dashtable, an implementation of Dash (extendible hashing): a directory of fixed-size open-addressed segments of 56 buckets plus 4 stash buckets, 14 slots per bucket. Lookups compare 8-bit fingerprints with one SSE2 compare per bucket (sse2neon on aarch64). Growth splits one segment at a time instead of rehashing the whole table. Per-bucket version counters in the table metadata are what make fork-less point-in-time snapshots possible. The same bucket layout drives cache-mode eviction: items are bumped toward the front of their bucket, and the last slot of a stash bucket is evicted.",
+  "when_to_use": [
+    "A single large multi-core box (16+ vCPUs) where you would otherwise run many Redis shards or a Redis Cluster, and you want one endpoint where MULTI/EXEC, Lua and multi-key commands keep single-node semantics.",
+    "Unpipelined GET/SET at high server thread counts. In tidwall/cache-benchmarks (c8g.8xlarge, 16 server cores, pipeline 1) Dragonfly did about 2.9M GET/s against 1.3M for Redis 8.2.1 with io-threads.",
+    "Write-heavy Memcached-protocol traffic on a big instance. On c6gn.16xlarge the vendor measured 3.84M SET/s against 806K for Memcached.",
+    "Large datasets that snapshot often, where the copy-on-write memory spike from Redis fork is the problem. In the vendor's 5 GB BGSAVE test Redis peaked at about 3x Dragonfly's memory.",
+    "Many small keys where per-key overhead dominates. The Dashtable doc estimates 6-16 bytes of table overhead per item against 16-32 for the Redis dict. It measured 20M keys at 1 GB versus 1.73 GB on Redis 6."
+  ],
+  "when_not_to_use": [
+    "Small instances or few threads. On a 2-vCPU m5.large the vendor itself shows parity with Redis (GET 191K vs 194K). In tidwall's pipeline-1 runs Redis 8.2.1 with io-threads beat Dragonfly on GET at 1 and 3-8 threads (for example 1.51M vs 1.41M at 8).",
+    "As a read-heavy Memcached replacement. Memcached 1.6.38 posted higher GET throughput than Dragonfly in every tidwall configuration, and in the vendor's own table Memcached had the lower GET p99 (0.34 ms vs 1 ms).",
+    "Deep pipelining. At pipeline 10-50 on 16 threads, Garnet and Pogocache did roughly 3-4x Dragonfly's GET throughput in tidwall's runs. At pipeline 50 on 1 thread, Dragonfly's GET p99 was about 289 ms against about 15 ms for Redis.",
+    "Offering it as a hosted or managed service, or embedding it in an in-memory data store product. The BUSL-1.1 Additional Use Grant forbids both. Each version converts to Apache-2.0 on 2030-11-01 or four years after its release, whichever comes first.",
+    "Setups that need recent Redis features or files, or that let untrusted clients run EVAL. It cannot load the RDB v15 format from Redis 8.10 (#8361; the maintainer says it supports formats up to Redis 7). There is no SCRIPT KILL or lua-time-limit, so one infinite Lua script pins a thread until kill -9 (#8269). Cluster mode has no gossip protocol and needs an external cluster manager."
+  ],
+  "integration": {
+    "form": "standalone server binary (prebuilt binaries/containers or build from source); not a linkable library",
+    "dependencies": "Build: helio (git submodule: Boost.Fibers-based I/O over io_uring/epoll), Boost.Context, OpenSSL, libunwind, zlib, bison, CMake + Ninja; optional AWS/GCP clients, tiering, search and extension modules via build flags",
+    "min_toolchain": "C++20 (CMAKE_CXX_STANDARD 20), CMake 3.15+, g++ per build docs (minimum compiler version not documented); Linux kernel 5.10+ for io_uring (5.11+ advised), epoll fallback below",
+    "platforms": "Linux primary; build instructions also cover FreeBSD. x86-64 (SSE2/SSSE3 intrinsics), aarch64 (via sse2neon), plus RISC-V and s390x code paths",
+    "thread_safety": "Server process, so this is about command semantics rather than a thread-safety API. Each shard is owned by one thread with no mutexes on data. The docs claim atomicity and strict serializability for multi-key commands, MULTI/EXEC and Lua. Known exception: EXEC is not atomic under maxmemory (#8275).",
+    "drop_in_for_baseline": "partial — wire-compatible with Redis and Memcached clients. The gaps: a subset of commands (the README says roughly the Redis 5.0 API plus extensions); Lua scripts must declare their keys by default; there is no SCRIPT KILL; RDB loading only goes up to Redis 7 format (plus Valkey 9 since v2.0); cluster mode needs an external manager; and expiry precision and limits differ."
+  },
+  "gotchas": [
+    "maxmemory defaults to 80% of detected memory, and the server exits at startup if maxmemory is below 256 MB per proactor thread.",
+    "Lua scripts that touch undeclared keys fail by default. Allowing them (default_lua_flags=allow-undeclared-keys) runs the script as a GLOBAL transaction that locks every shard.",
+    "PEXPIRE/PSETEX deadlines above 2^28 ms (about 3.1 days) are silently rounded to the nearest second. Expiries are capped at about 8 years, strings at 256 MB, and hash-field TTLs have 1-second precision.",
+    "An HTTP console and /metrics are served on the main 6379 port by default; disable with --primary_port_http_enabled=false if the port is exposed. Several 2026 advisories include an unauthenticated heap overflow in the memcached reply builder (GHSA-9q98-cx72-pg45), so stay on current releases."
+  ],
+  "pick_this_over_siblings_when": "Pick Dragonfly over Pogocache, Pelikan/Segcache or Garnet when you need broad Redis data types and commands, replication, snapshots and single-node multi-key atomicity on one big box, not just raw GET/SET cache throughput. In tidwall's suite Pogocache beat it on GET in every configuration, and Garnet beat it in all but two configurations, by about 3x under pipelining. Against KeyDB, both are multithreaded Redis alternatives; Dragonfly is the actively released one (v2.0.0 on 2026-09-16), but its license is BUSL-1.1.",
+  "verified_claims_summary": "Vendor memtier_benchmark runs on AWS (instance types only; no CPU model, compiler, flags or baseline versions, and no published harness) show parity with single-threaded Redis on m5.large, about 1.4-1.5x on m5.xlarge, and 3.8M QPS on c6gn.16xlarge, which is the '25x a single Redis process' headline. The same runs show Memcached at 806K SET and 2.1M GET QPS against Dragonfly's 3.84M and 3.72M. Redis's 2022 rebuttal on the same instance, using a 40-shard Redis 7.0 Cluster, measured 18-40% more throughput than Dragonfly (GET pipeline 1: 4.43M vs 3.8M reproduced). tidwall's suite on ARM64 c8g.8xlarge with Dragonfly 1.30.3 gives mixed results: At pipeline 1, Dragonfly beats Redis 8.2.1 on GET at 2 and 10-16 threads, loses at 1 and 3-8 threads, and loses to Memcached on GET in every configuration.",
+  "status_note": "Very active (v2.0.0 released 2026-09-16, last push 2026-09-26, about 31.7k stars) and production-positioned. It is a BUSL-1.1 source-available server, not a library, so evaluate the license and a few days of your own workload (as the FAQ advises) before replacing Redis.",
+  "sources_read": [
+    "https://github.com/dragonflydb/dragonfly",
+    "https://github.com/dragonflydb/dragonfly#benchmarks",
+    "https://github.com/dragonflydb/dragonfly/blob/main/LICENSE.md",
+    "https://github.com/dragonflydb/dragonfly/blob/main/docs/dashtable.md",
+    "https://github.com/dragonflydb/dragonfly/blob/main/docs/df-share-nothing.md",
+    "https://github.com/dragonflydb/dragonfly/blob/main/docs/differences.md",
+    "https://github.com/dragonflydb/dragonfly/blob/main/docs/faq.md",
+    "https://github.com/dragonflydb/dragonfly/blob/main/docs/build-from-source.md",
+    "https://github.com/dragonflydb/dragonfly/blob/main/docs/memcached_benchmark.md",
+    "https://github.com/dragonflydb/dragonfly/blob/main/docs/cluster-mode.md",
+    "https://github.com/dragonflydb/dragonfly/blob/main/CMakeLists.txt",
+    "https://github.com/dragonflydb/dragonfly/blob/main/.gitmodules",
+    "https://github.com/dragonflydb/dragonfly/blob/main/src/core/dash_internal.h",
+    "https://github.com/dragonflydb/dragonfly/blob/main/src/core/sse_port.h",
+    "https://github.com/dragonflydb/dragonfly/blob/main/src/server/detail/table.h",
+    "https://github.com/dragonflydb/dragonfly/blob/main/src/server/table.h",
+    "https://github.com/dragonflydb/dragonfly/blob/main/src/server/db_slice.cc",
+    "https://github.com/dragonflydb/dragonfly/blob/main/src/server/dfly_main.cc",
+    "https://github.com/dragonflydb/dragonfly/blob/main/src/server/main_service.cc",
+    "https://github.com/dragonflydb/dragonfly/blob/main/src/server/script_mgr.cc",
+    "https://github.com/dragonflydb/dragonfly/blob/main/src/facade/memcache_parser.cc",
+    "https://github.com/dragonflydb/dragonfly/releases/tag/v2.0.0",
+    "https://github.com/dragonflydb/dragonfly/security/advisories",
+    "https://github.com/dragonflydb/dragonfly/issues/8269",
+    "https://github.com/dragonflydb/dragonfly/issues/8275",
+    "https://github.com/dragonflydb/dragonfly/issues/8361",
+    "https://github.com/dragonflydb/dragonfly/issues/6545",
+    "https://github.com/dragonflydb/dragonfly/issues?q=is%3Aissue+is%3Aopen+label%3Abug",
+    "https://github.com/romange/helio/blob/master/CMakeLists.txt",
+    "https://redis.io/blog/redis-architecture-13-years-later/",
+    "https://github.com/tidwall/cache-benchmarks",
+    "https://raw.githubusercontent.com/tidwall/cache-benchmarks/main/results/output.json",
+    "https://hn.algolia.com/api/v1/search?query=dragonfly%20redis&tags=story"
+  ],
+  "confidence": 0.8
+}
