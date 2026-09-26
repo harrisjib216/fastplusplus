@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/tafia/quick-xml",
+  "one_liner": "Rust StAX-style XML pull reader/writer; streams real-world XML 1.84x faster than libxml2 SAX, serializes 1.22x faster than pugixml.",
+  "what_it_does": "quick-xml is a pure-Rust XML pull parser (StAX model) plus an event writer. You call `read_event()` (borrowing from an in-memory `&str`/`&[u8]`) or `read_event_into(&mut buf)` (any `BufRead`, or tokio `AsyncBufRead` with `async-tokio`) and match on `Start`/`Empty`/`Text`/`End`/`CData`/`Comment`/`GeneralRef` events. You track depth yourself, and `NsReader` adds namespace resolution. There is no DOM tree and no XPath. An optional `serialize` feature maps XML to serde structs, and `Writer` emits events or builds elements with `create_element`.",
+  "how_it_is_fast": "The reader is a small state machine (text, reference, markup). It uses `memchr`'s vectorized byte search (`memchr2` for `<`/`&` in text, `memchr3` for `>` and the two quote characters inside tags) to jump between delimiters instead of stepping through bytes one at a time. Events are `Cow<str>` slices of the input or of one caller-reused buffer, so no tree and no per-node allocations are built. `BytesStart` stores only the raw tag and name length, so attributes are split only when you iterate `attributes()`. Entity unescaping and EOL/attribute normalization happen only when you call `xml_content()`/`normalized_value()`, and costly checks such as comment `--` validation are off by default.",
+  "when_to_use": [
+    "Rust code that streams large XML dumps (DBLP/OSM-style, 10-100 MB) and pulls out a subset of fields. On the ~10 MB real-world bucket the event loop ran 612 MB/s vs libxml2 SAX 332 and Expat 228.",
+    "Read-modify-write pipelines that transform a document event by event with `Reader` + `Writer`. Serialize measured 866 MB/s vs pugixml 708 and libxml2 499 on real-world files.",
+    "Memory-bound parsing. Peak RSS was 11.9 MB on the ~10 MB real-world bucket, vs 50.1 MB for pugixml DOM and 187 MB for libxml2 DOM.",
+    "Mapping config or API payloads straight onto Rust structs with the `serialize` (serde) feature, or streaming XML from sockets with `async-tokio`."
+  ],
+  "when_not_to_use": [
+    "You need a navigable tree or XPath. quick-xml builds neither, and pugixml wins every XPath Query bucket in the same suite. Its 'DOM Parse' wins are a bare event loop, not a tree.",
+    "C/C++ codebases. There is no C API, so you would need FFI/cxx glue around a Rust crate.",
+    "You need strict conformance: no DTD/schema validation, custom entities must be resolved by hand, and issue #848 lists well-formedness errors the reader does not report (multiple root elements, top-level text; `MissingEndTag` only from `read_to_end`). No W3C conformance suite runs in CI (#749).",
+    "Tiny documents. pugixml beat it on 1 KB DOM parse (1978 vs 659 MB/s, though near timer resolution).",
+    "You need a stable API across years. It is pre-1.0, with four breaking minor lines (0.39-0.42) in 2026 alone, and 0.42 moved the whole API from bytes to `&str` (see issue #782 on release churn)."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "memchr (required); optional: encoding_rs (`encoding`), serde (`serialize`/`serde-types`), tokio (`async-tokio`), document-features, arbitrary",
+    "min_toolchain": "Rust 1.86 (edition 2024) for 0.42.0; 0.41.x needs 1.79; 0.39.x and older 1.56",
+    "platforms": "any Rust target; `#![forbid(unsafe_code)]`, no platform-specific code in the crate itself (SIMD comes via memchr); CI runs Linux and Windows plus an i686 32-bit test subset",
+    "thread_safety": "not documented; `Reader`/`Writer` are plain owned structs with no global state, so use one reader per stream/thread",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "0.42.0 (2026-08-22) validates UTF-8 on every event. Non-UTF-8 input without the `DecodingReader` now returns `Error::Encoding`. The `encoding` feature handles only ASCII-compatible encodings, so UTF-16 needs `DecodingReader` or you get wrong events.",
+    "Pin >= 0.41.0. RUSTSEC-2026-0194 (O(N^2) duplicate-attribute check, 80k attributes about 6 s) and RUSTSEC-2026-0195 (unbounded `NsReader` namespace allocation, OOM demonstrated on Routinator) affect earlier versions.",
+    "`trim_text` has documented bugs. It trims text next to comments/PIs/CDATA that is real content, and it emits empty `Text(\"\")` events (#984). The reader also does no transparent EOL normalization (#1003). Trim or normalize per event instead.",
+    "The serde `overlapped-lists` feature can buffer without bound and go quadratic on hostile input. Set `event_buffer_size` if you enable it."
+  ],
+  "pick_this_over_siblings_when": "Pick quick-xml when you are in Rust and want a widely used (2,435 reverse dependencies), maintained streaming reader plus writer with serde support. For C++ streaming against libxml2 SAX, SpeedyXml avoids FFI. For C++ DOM trees, LightningXML or Parshred are the pugixml challengers, and simdxml targets XPath-style queries, which quick-xml does not do.",
+  "verified_claims_summary": "bemayer/xml-benchmark, run of 2026-09-01 on a GitHub Actions ubuntu-latest runner (CPU model unstated). quick-xml (version unpinned `*`, likely 0.42.0; stable rustc, LTO) was measured against pugixml master and Debian libxml2 2.9.14, both built with g++ 12.2 at -O3. On the ~10 MB DBLP/OSM bucket its `read_event_into` loop hit 612 MB/s vs libxml2 SAX 332 (1.84x) and serialized at 866 vs pugixml 708 (1.22x). The harness never touches attributes or unescapes text, so its 715 MB/s 'DOM' figure against pugixml's 598 (1.2x) is not a like-for-like tree build.",
+  "status_note": "Actively maintained (0.42.0 released 2026-08-22, last commit 2026-09-02) and MIT-licensed with about 434M crates.io downloads, but still pre-1.0 with frequent breaking API changes.",
+  "sources_read": [
+    "https://github.com/tafia/quick-xml",
+    "https://github.com/tafia/quick-xml/blob/master/README.md",
+    "https://github.com/tafia/quick-xml/blob/master/Cargo.toml",
+    "https://github.com/tafia/quick-xml/blob/master/Changelog.md",
+    "https://github.com/tafia/quick-xml/blob/master/src/lib.rs",
+    "https://github.com/tafia/quick-xml/blob/master/src/reader/mod.rs",
+    "https://github.com/tafia/quick-xml/blob/master/src/reader/slice_reader.rs",
+    "https://github.com/tafia/quick-xml/blob/master/src/reader/buffered_reader.rs",
+    "https://github.com/tafia/quick-xml/blob/master/src/reader/state.rs",
+    "https://github.com/tafia/quick-xml/blob/master/src/parser/mod.rs",
+    "https://github.com/tafia/quick-xml/blob/master/src/parser/element.rs",
+    "https://github.com/tafia/quick-xml/blob/master/src/events/mod.rs",
+    "https://github.com/tafia/quick-xml/blob/master/src/events/attributes.rs",
+    "https://github.com/tafia/quick-xml/blob/master/compare/README.md",
+    "https://github.com/tafia/quick-xml/blob/master/examples/README.md",
+    "https://github.com/tafia/quick-xml/blob/master/examples/custom_entities.rs",
+    "https://github.com/tafia/quick-xml/blob/master/.github/workflows/rust.yml",
+    "https://github.com/tafia/quick-xml/issues/848",
+    "https://github.com/tafia/quick-xml/issues/782",
+    "https://github.com/tafia/quick-xml/issues/1003",
+    "https://github.com/tafia/quick-xml/issues/749",
+    "https://github.com/tafia/quick-xml/issues?q=performance",
+    "https://github.com/tafia/quick-xml/issues?q=slow",
+    "https://bemayer.github.io/xml-benchmark/",
+    "https://github.com/bemayer/xml-benchmark/blob/main/benchmarks/quick-xml/src/main.rs",
+    "https://crates.io/api/v1/crates/quick-xml",
+    "https://github.com/rustsec/advisory-db/blob/main/crates/quick-xml/RUSTSEC-2026-0194.md",
+    "https://github.com/rustsec/advisory-db/blob/main/crates/quick-xml/RUSTSEC-2026-0195.md"
+  ],
+  "confidence": 0.75
+}
