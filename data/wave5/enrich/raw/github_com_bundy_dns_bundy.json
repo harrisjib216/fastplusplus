@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/bundy-dns/bundy",
+  "one_liner": "Bundy's unpublished l1cache experiment: pre-rendered wire-format DNS answer cache, claimed 180K vs 41K qps over BIND 9.9.2.",
+  "what_it_does": "Bundy is the community continuation of ISC's BIND 10: an authoritative DNS server (in-memory and SQLite3 backends, DNSSEC, DDNS, zone transfers) plus a recursive resolver that the man page calls an \"experimental proof of concept\" and that is only built with --enable-experimental-resolver. The catalogued result is not that shipped resolver. It comes from a 2013 design memo describing a cache-only server on the jinmei-l1cache branch, which answers cache hits from a (qname, qtype) hash table of pre-rendered responses. That branch is not in the repository, so there is no library, API or drop-in replacement to adopt. The shipped src/lib/cache uses an unbound-style message cache that points into an RRset cache and builds a Message object for each hit.",
+  "how_it_is_fast": "It is a full-response ('L1') cache. The hash table is keyed by (query name, type), and each entry holds the answer section already rendered in wire format (it assumes minimal-responses) plus the offset of each RR, so TTLs can be patched in place or RRs rotated. When neither is needed, a hit is just a hash lookup and a copy of the stored bytes: no RRset lookups, name compression or message rendering. It relies on skewed query popularity (in two datasets the top 10,000 queries covered about 80% of traffic), so the whole cache was about 5 MB, small enough for each process or thread to keep a private copy with no lock contention.",
+  "when_to_use": [
+    "As a design reference for a resolver or DNS front-end: put a small per-thread cache of pre-rendered answers in front of a shared record cache.",
+    "Traffic where most queries hit the cache and a few names dominate (the memo's data: top 10k names about 80% of queries) and answer-only minimal responses are acceptable.",
+    "Capacity planning: the memo's model A = rQ2/(rQ2 + Q1(1-r)) estimates what share of server time goes to cache hits at a given hit rate r (about 72-76% at r = 0.9 in its experiments).",
+    "Prototyping DNS features on the Bundy codebase, which its README recommends because much of it is Python."
+  ],
+  "when_not_to_use": [
+    "When you need runnable code: the benchmarked jinmei-l1cache branch is not published (the repo has 21 branches and none of them is l1cache), so it cannot be built or reproduced.",
+    "Production DNS of any kind: the README puts Bundy in 'hibernation' with no development and no security fixes and says not to use it in production, and open issue #110 proposes removing the resolver code entirely.",
+    "DNSSEC validation or full responses with authority and additional sections: the memo says the experiment 'skips some necessary features for a production server' and caches only the answer section.",
+    "Modern toolchains: open issues report build failures with Boost 1.60 (#102), Clang 8 on macOS 10.12 (#114, #115) and newer Python headers under -Werror (#123), and GCC 4.9 needs -std=c++11 (#119).",
+    "When you want a maintained resolver that beats BIND on cache-hit throughput: use Unbound."
+  ],
+  "integration": {
+    "form": "source-drop (the benchmarked l1cache code is unpublished; Bundy itself is an autotools-built daemon suite and requires shared libraries)",
+    "dependencies": "Boost headers (>=1.35; fails with 1.60 per #102), Botan >=1.8, log4cplus >=1.0.3, SQLite3 >=3.3.9, Python >=3.1 with dev headers; bundled ext/asio and ext/coroutine (BSL-1.0); googletest optional",
+    "min_toolchain": "C++03-era code; the guide lists tests with GCC 3.4.3-4.4.1, Clang++ 2.8 and Sun C++ 5.10; GCC 4.9 needs -std=c++11 (#119); recent Boost, Clang and Python fail to build per open issues",
+    "platforms": "The guide lists tested builds on Debian 6, Ubuntu 9.10, NetBSD 5, Solaris 10/11, FreeBSD 7/8, CentOS 5.3, macOS 10.6/10.7 and OpenBSD 5.1, on Sparc, i386 and amd64; the l1cache figure comes from one 2.20GHz AMD64 core only",
+    "thread_safety": "The shipped bundy-resolver runs a single asio IOService loop from main(). The memo proposes a private copy of the roughly 5 MB l1cache per process or thread to avoid contention; no locking design is documented.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The 180K qps figure is for a cache-only experiment answering hits. The author says a production version 'wouldn't be that fast' and only projects that more than 100K qps 'may not be very difficult' once recursion is included.",
+    "The fast path is a hash lookup plus a copy only when neither TTL adjustment nor RR rotation is needed; either one adds per-hit rewriting through the stored RR offsets.",
+    "Claims that it is 'much faster than other implementations that have full response cache' give no numbers or names, and the memo calls the comparison 'not entirely fair'. The memo's other experiments ran BIND 9.9.2 forward-only with crafted query data, but the setup for the 41K qps BIND run is not stated.",
+    "Do not mistake the shipped src/lib/cache for the benchmarked design: its TODO says the LRU hash table is not yet used, dump/load/resize are not implemented and DNSSEC AD flags are not set. The memo's links (lists.bundy.org, bundy.bundy.org wiki) are dead; the original 2012 ISC bind10-dev post survives but has no qps figures for this server."
+  ],
+  "pick_this_over_siblings_when": "Pick it only as a design idea for a per-thread pre-rendered answer cache. For a caching resolver you will actually run, Unbound is the maintained sibling that also beats BIND on cache-hit qps. Nail and Hickory DNS are the BIND alternatives with public code, but they target authoritative serving and query latency, not resolver caching.",
+  "verified_claims_summary": "A first-party design memo committed in December 2013 reports that an experimental cache-only server with fully rendered cached answers handled over 180K qps, against 41K qps for BIND 9.9.2 (about 4.4x), measured with a 'queryperf-like' tool on one core of a 2.20GHz AMD64 machine. It gives no CPU model, compiler, flags, query set or BIND configuration, and the benchmarked code is not public.",
+  "status_note": "The 2026 commits only edit README.org; the last code commit was 2017-05-10 and the README declares hibernation with no security fixes. The code is ISC-licensed (asio and coroutine are BSL-1.0), but the benchmarked l1cache implementation was never published, so there is nothing to vendor and the entry is usable only as a documented technique.",
+  "sources_read": [
+    "https://github.com/bundy-dns/bundy",
+    "https://github.com/bundy-dns/bundy/blob/master/README.org",
+    "https://github.com/bundy-dns/bundy/blob/master/doc/design/resolver/03-cache-algorithm",
+    "https://github.com/bundy-dns/bundy/blob/master/doc/design/resolver/README",
+    "https://github.com/bundy-dns/bundy/blob/master/doc/design/resolver/01-scaling-across-cores",
+    "https://github.com/bundy-dns/bundy/blob/master/src/lib/cache/TODO",
+    "https://github.com/bundy-dns/bundy/blob/master/src/lib/cache/message_cache.h",
+    "https://github.com/bundy-dns/bundy/blob/master/src/lib/cache/resolver_cache.h",
+    "https://github.com/bundy-dns/bundy/blob/master/src/lib/cache/message_entry.h",
+    "https://github.com/bundy-dns/bundy/blob/master/src/bin/resolver/bundy-resolver.xml",
+    "https://github.com/bundy-dns/bundy/blob/master/src/bin/resolver/main.cc",
+    "https://github.com/bundy-dns/bundy/blob/master/src/bin/resolver/resolver.cc",
+    "https://github.com/bundy-dns/bundy/blob/master/configure.ac",
+    "https://github.com/bundy-dns/bundy/blob/master/COPYING",
+    "https://github.com/bundy-dns/bundy/blob/master/INSTALL",
+    "https://github.com/bundy-dns/bundy/blob/master/doc/guide/bundy-guide.xml",
+    "https://github.com/bundy-dns/bundy/tree/master",
+    "https://github.com/bundy-dns/bundy/branches",
+    "https://github.com/bundy-dns/bundy/commits/master",
+    "https://github.com/bundy-dns/bundy/commits/master/doc/design/resolver/03-cache-algorithm",
+    "https://github.com/bundy-dns/bundy/commit/3677658ea0",
+    "https://github.com/bundy-dns/bundy/issues",
+    "https://github.com/bundy-dns/bundy/issues/102",
+    "https://github.com/bundy-dns/bundy/issues/108",
+    "https://github.com/bundy-dns/bundy/issues/110",
+    "https://github.com/bundy-dns/bundy/issues/119",
+    "https://github.com/bundy-dns/bundy/issues/123",
+    "https://github.com/jinmei?tab=repositories",
+    "https://github.com/jinmei/queryperfpp",
+    "https://github.com/isc-projects/bind10",
+    "https://github.com/search?q=l1cache&type=repositories",
+    "https://lists.isc.org/pipermail/bind10-dev/2012-July/003628.html"
+  ],
+  "confidence": 0.3
+}
