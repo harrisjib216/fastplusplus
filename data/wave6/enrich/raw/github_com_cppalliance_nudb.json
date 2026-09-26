@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/cppalliance/nudb",
+  "one_liner": "Header-only, insert-only on-disk hash table for SSDs; its own benchmark shows higher insert and large-DB fetch throughput than default-config RocksDB.",
+  "what_it_does": "NuDB is an embedded key/value store for write-once data such as content-addressable blobs keyed by a cryptographic digest. It uses three files: an append-only data file, a key file holding an on-disk hash table, and a log file for crash recovery. The API is small and not RocksDB-shaped: create<Hasher>(...) fixes the key size, block size and load factor up front, then basic_store/store::open, insert(key, data, bytes, ec), fetch(key, callback, ec) and close. There is no update, delete, iterator by key order, range scan, batch or transaction; errors are returned through boost::system error_code.",
+  "how_it_is_fast": "The key file is a bucketed linear-hashing table (Litwin/Larson): each bucket is one device block (default 4096 bytes) holding entries sorted by a 64-bit salted xxHash64, so a fetch is usually one pread of the bucket plus one pread of the value, with no LSM levels, compaction or read amplification that grows with DB size. Overflowing buckets spill to records appended to the data file and form a linked list. Inserts go to an in-memory pool and are committed about once per second by a background context thread using bulk sequential appends plus a rollback log, so writers do not wait for disk; readers take no locks while doing disk I/O.",
+  "when_to_use": [
+    "Write-once, read-many data with fixed-size keys, especially content-addressable storage keyed by a 32- or 64-byte hash (rippled/XRPL node store is the reference deployment, reported at over 3 TB and later over 10 TB).",
+    "Random point lookups over data sets much larger than RAM on SSD/NVMe, where you want roughly constant per-lookup I/O and memory use that does not grow with DB size.",
+    "Sustained single-writer ingestion where losing up to about one second of unflushed inserts on a crash is acceptable, but on-disk consistency after the crash is required (the log file rolls back partial commits).",
+    "Projects that want a header-only dependency and already build with Boost."
+  ],
+  "when_not_to_use": [
+    "Any workload that needs update, overwrite, delete, TTL or compaction: records are immutable, duplicate inserts fail with key_exists, and removing data means rewriting the whole DB offline (issue #98).",
+    "Range scans, prefix queries, ordered iteration or variable-length keys; the only iteration is a sequential walk of the data file in insertion order.",
+    "Spinning disks: the author says it 'will be extremely slow' on HDDs (issue #67).",
+    "Multi-process access or several store instances on the same files: the author says this is undefined behavior (issue #72).",
+    "Small data sets that fit in cache: in the project's own sample run RocksDB fetched about 2.1x faster at 100K keys."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "Boost 1.69+ (Boost.System and Boost.Thread must be linked; uses boost::optional, boost::shared_mutex); bench needs RocksDB, zlib and snappy; tests need Boost.Beast",
+    "min_toolchain": "README says C++11; the CMake build sets cxx_std_14. CI covered GCC 5-8 and Clang 6-8 on Ubuntu 16.04 plus VS2019; newer compilers not documented.",
+    "platforms": "64-bit Linux and other POSIX (pread/pwrite, posix_fadvise skipped on macOS) and Windows (win32_file); 32-bit correctness is an open issue (#2). SSD or other high-IOPS storage required.",
+    "thread_safety": "insert and fetch are safe to call concurrently with each other; open and close are not. Inserts are serialized by a mutex, fetches run concurrently. One process and one store instance per set of files.",
+    "drop_in_for_baseline": "false — different API and data model: fixed key size chosen at create time, insert-only, no delete/update/iterators/column families/snapshots, and no on-disk format compatibility with RocksDB."
+  },
+  "gotchas": [
+    "Inserts are buffered in memory and flushed about once per second by a background thread, so they are not durable when insert returns; call close (or context::flush in manual mode) to commit. The destructor calls close but discards the error.",
+    "Key size, block size, load factor, salt and hasher are fixed at create time; opening with a different Hasher fails the pepper check. Values must be 1 byte to 4 GB (zero-length values trip an assert, issue #101).",
+    "The fetch callback can run while an internal shared lock is held (when the key is still in the uncommitted insert pool), so a slow callback can stall the commit thread (issue #53).",
+    "Once a background commit fails, every later insert and fetch returns the same error until the DB is closed. Writers are throttled with 25 ms sleeps when the insert rate exceeds the measured flush rate beyond a 4 MB burst (set_burst); issue #83 traced rippled latency spikes to the earlier version of this logic."
+  ],
+  "pick_this_over_siblings_when": "Pick NuDB over SplinterDB, TerarkDB or Titan only when data is truly append-only with fixed-size hash keys and you want a small header-only engine with O(1) point lookups. For updates, deletes, range queries or a RocksDB-compatible API, those siblings (or RocksDB itself) are the better fit.",
+  "verified_claims_summary": "The project's bench.cpp inserts 64-byte random keys with 250-750-byte random values in single-threaded batches of 20,000, then fetches random existing keys, against RocksDB opened with default Options. The README 'sample output' shows NuDB at about 1.4-1.75x RocksDB insert ops/s at 100K and 1M keys and about 10-16x RocksDB fetch ops/s at 1M and 10M keys, but about 0.47x at 100K keys. Each cell is one 20,000-op batch; no CPU, SSD, compiler, flags or RocksDB version is given; NuDB's commit (close/reopen) is excluded from the timed insert loop; and RocksDB was not tuned (no bloom filter or block-cache settings).",
+  "status_note": "Stale: version 2.0.9 was cut in April 2025 after years of little activity, and the author calls it mature with 'nothing more to do'. BSL-1.0 and header-only, so easy to vendor, but CI targets old toolchains (GCC 8, Clang 8, Boost 1.69).",
+  "sources_read": [
+    "https://github.com/cppalliance/NuDB",
+    "https://github.com/cppalliance/NuDB/blob/master/README.md",
+    "https://github.com/cppalliance/NuDB/blob/master/bench/README.md",
+    "https://github.com/cppalliance/NuDB/blob/master/bench/bench.cpp",
+    "https://github.com/cppalliance/NuDB/blob/master/CHANGELOG.md",
+    "https://github.com/cppalliance/NuDB/blob/master/CMakeLists.txt",
+    "https://github.com/cppalliance/NuDB/blob/master/.drone.star",
+    "https://github.com/cppalliance/NuDB/blob/master/include/nudb/basic_store.hpp",
+    "https://github.com/cppalliance/NuDB/blob/master/include/nudb/impl/basic_store.ipp",
+    "https://github.com/cppalliance/NuDB/blob/master/include/nudb/context.hpp",
+    "https://github.com/cppalliance/NuDB/blob/master/include/nudb/xxhasher.hpp",
+    "https://github.com/cppalliance/NuDB/blob/master/include/nudb/impl/posix_file.ipp",
+    "https://github.com/cppalliance/NuDB/blob/master/include/nudb/native_file.hpp",
+    "https://github.com/cppalliance/NuDB/blob/master/include/nudb/version.hpp",
+    "https://github.com/cppalliance/NuDB/blob/master/include/nudb/_experimental/test/test_store.hpp",
+    "https://github.com/cppalliance/NuDB/issues/2",
+    "https://github.com/cppalliance/NuDB/issues/53",
+    "https://github.com/cppalliance/NuDB/issues/64",
+    "https://github.com/cppalliance/NuDB/issues/67",
+    "https://github.com/cppalliance/NuDB/issues/72",
+    "https://github.com/cppalliance/NuDB/issues/83",
+    "https://github.com/cppalliance/NuDB/issues/96",
+    "https://github.com/cppalliance/NuDB/issues/97",
+    "https://github.com/cppalliance/NuDB/issues/98",
+    "https://github.com/cppalliance/NuDB/issues/99",
+    "https://github.com/cppalliance/NuDB/issues/101"
+  ],
+  "confidence": 0.7
+}

@@ -1,0 +1,38 @@
+{
+  "id": "https://github.com/snapchat/keydb",
+  "one_liner": "Multithreaded C++ fork of Redis 6 that serves one dataset from several event-loop threads; claims ~7x Redis throughput under TLS.",
+  "what_it_does": "KeyDB is a Redis server fork that speaks the Redis protocol and aims to load Redis modules, Lua scripts and existing redis.conf files unchanged, so clients and tooling do not change. It adds server-side features Redis lacks: multithreaded request serving (server-threads), active-active/multi-master replication, subkey expiry (EXPIREMEMBER), non-blocking KEYS/SCAN via snapshots, direct S3 backups and an experimental RocksDB-backed FLASH tier.",
+  "how_it_is_fast": "It runs the normal Redis event loop (ae) on N threads; each connection is pinned to a thread at accept(), so network I/O, TLS and RESP parsing proceed in parallel while access to the shared hash table is serialized by one global lock. That lock is a fair ticket spinlock (fastlock, with an x86-64 assembly fast path) that falls back to a futex sleep after spinning, so short critical sections avoid syscalls. KEYS/SCAN and forks read from copy-on-write MVCC snapshots of the database instead of blocking the main dict.",
+  "when_to_use": [
+    "Redis workloads that are CPU-bound on protocol parsing, TLS or network copies on one core, where you want more ops/s from one node without resharding into a cluster",
+    "TLS-heavy deployments: KeyDB terminates TLS on every server thread, while Redis 6 io-threads could not be combined with TLS in the benchmarked version",
+    "Existing Redis 6.x deployments (RDB up to Redis 6 format, modules, Lua) that need a drop-in binary swap on Linux",
+    "Setups that want active-active (multi-master) replication or per-member expiry, which upstream Redis does not offer"
+  ],
+  "when_not_to_use": [
+    "New production deployments: no commits since April 2024, the lead developer left Snap in early 2025 and recommended moving to Valkey, and critical bug and crash reports (deadlocks, crashes) sit unanswered",
+    "Anything that needs Redis 7+ features or data: KeyDB cannot load RDB format version 10 (Redis 7 dumps) and lacks Redis 7 commands",
+    "Non-Linux hosts or ARM: multithreading relies on Linux SO_REUSEPORT load balancing; ARM builds have open startup-assert reports",
+    "Write-heavy workloads dominated by a few hot keys or long MULTI/EXEC transactions, since all threads contend on the single global data lock",
+    "FLASH storage: marked experimental/beta in the README and has open 100% CPU and crash reports"
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "Bundled: jemalloc, Lua, hiredis, linenoise, hdr_histogram, moodycamel concurrentqueue, RocksDB (submodule, FLASH only); system: OpenSSL (TLS on by default), libuuid, libcurl, zlib/bz2/zstd/lz4/snappy for RocksDB, nasm for the x86-64 spinlock",
+    "min_toolchain": "C++17 (-std=c++17) and C11/C99 for the C parts; GCC or Clang (clang builds use libc++); specific minimum compiler versions not documented",
+    "platforms": "Linux (x86-64 primary, assembly spinlock x86-64 only; aarch64 builds exist but have open crash reports); FreeBSD compile fixed in 6.3.4; macOS not supported for multithreaded serving",
+    "thread_safety": "Server process; internally uses a global spinlock around the keyspace, transactions hold it for the whole EXEC, and modules run under a GIL acquired only when all server threads are paused",
+    "drop_in_for_baseline": "partial — protocol, modules, scripts and Redis 6 config/RDB compatible, but no Redis 7+ commands or RDB v10, and Linux-only threading"
+  },
+  "gotchas": [
+    "server-threads should track NIC queue count, not core count; the README recommends 4 (default 2) and warns that too many threads hurt because the global lock is a spinlock",
+    "KeyDB expects exclusive use of the cores it is given; running memtier or the app on the same cores distorts results, and keydb-benchmark/redis-benchmark are too slow (single-threaded) to measure it",
+    "multi-master-no-forward yes loses data unless all masters form a full mesh; active replication has an open data-consistency report",
+    "The fork serializes all data access through one lock, so scaling comes from parallel I/O/TLS/parsing, not parallel command execution; gains shrink when commands are expensive"
+  ],
+  "pick_this_over_siblings_when": "No siblings catalogued yet.",
+  "verified_claims_summary": "KeyDB's own blog (Sept 2020) ran memtier_benchmark with --tls --threads=32 and default op mix from an AWS m5.8xlarge against m5.4xlarge servers: KeyDB with 16 server threads and TLS reached close to 1M ops/s versus ~130k ops/s for single-threaded Redis 6 with TLS (Redis 6 io-threads could not be used with TLS). CPU model, compiler, build flags and exact versions are not given, and Redis was not sharded or run as multiple instances.",
+  "status_note": "Stale: last commit April 2024, last release v6.3.4 (Oct 2023), lead maintainer departed and pointed users to Valkey; BSD-3-Clause source is usable but you would own the fork.",
+  "sources_read": [],
+  "confidence": 0.75
+}

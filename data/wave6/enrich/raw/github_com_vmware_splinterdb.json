@@ -1,0 +1,39 @@
+{
+  "id": "https://github.com/vmware/splinterdb",
+  "one_liner": "Embedded C key-value store for NVMe SSDs; ATC'20 paper reports 6-10x RocksDB insert throughput, 2-2.6x point queries.",
+  "what_it_does": "SplinterDB is a Linux-only embedded, ordered key-value store written in C and linked as a library (libsplinterdb.so/.a). The API in include/splinterdb/splinterdb.h covers create/open/close on a file or block device, insert, delete, update (blind merge messages through a user data_config), point lookup, and bounded forward/backward iterators. The iterator API is modeled on RocksDB's, but it is not a drop-in: the start key is fixed at iterator init (no Seek) and there are no column families, transactions or WriteBatch.",
+  "how_it_is_fast": "The core structure is the STBε-tree (size-tiered Bε-tree): a trunk tree of fanout 8-16 whose nodes point to immutable B-tree 'branches', each with a quotient filter in place of a Bloom filter. Size-tiering plus a flush-then-compact policy rewrite each key fewer times than leveled LSM compaction (about half RocksDB's write amplification in the paper) and let many small compactions run in parallel. A concurrent memtable and a user-level clock cache with distributed reader-writer locks remove the CPU and lock contention that the paper found keeps RocksDB at about 30% of Optane bandwidth.",
+  "when_to_use": [
+    "Write-heavy ingest of small pairs (e.g. 24B keys, 100B values) on fast NVMe, where RocksDB is CPU-bound rather than device-bound",
+    "Datasets much larger than RAM (the paper runs with memory at about 10% of the dataset) that need fast point lookups",
+    "Many-threaded clients: the paper shows point reads scaling to 18.5x at 24 threads on workload C",
+    "Workloads that can use blind updates (append, increment) through a custom data_config to skip read-modify-write",
+    "Research or prototype systems on Linux that can accept an unstable API and on-disk format"
+  ],
+  "when_not_to_use": [
+    "Production data that must survive a crash: crash recovery (log replay) is not wired up, so an uncleanly shut down database refuses to mount",
+    "Short range scans on small values: the paper measured YCSB E about 15% slower than RocksDB with 100B values",
+    "Anything needing transactions, atomic multi-put, range delete, fsync-on-commit, or a versioned on-disk format that survives upgrades",
+    "Non-Linux targets (macOS, Windows): not supported; it needs libaio",
+    "Space-constrained disks: size-tiering temporarily keeps several versions of a key until compaction, and disk size is fixed at create time"
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "libaio, libxxhash (libconfig-dev listed for the build/tests)",
+    "min_toolchain": "C (GNU extensions, _GNU_SOURCE); CI uses GCC 13 and Clang 19; headers are C++-compatible (extern \"C\")",
+    "platforms": "Linux only; x86-64 builds use -march=native (not portable binaries); non-x86 not documented as supported",
+    "thread_safety": "Thread-safe for multi-threaded use of one splinterdb handle; threads auto-register on first call. Only one process may open a database file/device. A lookup_result object is not thread-safe.",
+    "drop_in_for_baseline": "partial — iterator semantics mirror RocksDB's, but the API, config and data model differ (C API, start key fixed at iterator init, no column families, WriteBatch or transactions)"
+  },
+  "gotchas": [
+    "Default release build uses -O3 -ffast-math -flto and -march=native on x86-64, so a library built on one machine may fault on an older CPU",
+    "Configuration (cache size, data_config, etc.) is not fully stored in the database and has to be supplied again on every open",
+    "Iterators must be deinitialized; a live iterator can block inserts, deletes and close from the same thread",
+    "There is no public API to force the latest write to be durable"
+  ],
+  "pick_this_over_siblings_when": "Pick SplinterDB over NuDB, TerarkDB or Titan when the workload is small-pair random inserts plus ordered reads on NVMe and you can live with an experimental engine; Titan is the safer choice for large values on an existing RocksDB/TiKV stack, TerarkDB for a production RocksDB-compatible fork, and NuDB for append-only insert/fetch with no ordering.",
+  "verified_claims_summary": "The USENIX ATC'20 paper replayed YCSB-derived traces (load and A-F, 24B keys, 100B and 1KiB values) against an unnamed-version RocksDB and PebblesDB on a Dell R720 (32-core 2.0 GHz Xeon) with an Optane 905p SSD and a 4GiB cgroup memory cap; SplinterDB was 6-10x faster on inserts, 2-2.6x on point queries, about equal on short range scans, with half the write amplification. Compiler and flags were not given; the repo's tests/functional/ycsb_test.c is a trace replayer for SplinterDB, but the RocksDB side of the harness is not in the repo.",
+  "status_note": "Actively developed by VMware Research (checkpointing landed July 2026), Apache-2.0, but the maintainers say it is not for production before 1.0 and there are no releases.",
+  "sources_read": [],
+  "confidence": 0.8
+}
