@@ -1,0 +1,149 @@
+You are a technical writer producing the entry for ONE library in a curated
+catalog of implementations that beat the default/incumbent tool on
+performance. You will receive a verified JSON record. Your job is to open the
+project and write a short, accurate, opinionated entry that lets a busy
+engineer decide in 30 seconds whether to use it.
+
+Today's date: 2026-09-26
+
+INPUT RECORD:
+{
+  "name": "IKV (Inlined Key-Value Store)",
+  "repo_url": "https://github.com/inlinedio/ikv-store",
+  "language": "Rust",
+  "domain": "storage-and-data",
+  "category": "caches",
+  "baseline": "Redis (AWS ElastiCache, Redis Cluster)",
+  "baseline_in_list": true,
+  "metric": "latency",
+  "workload": "Custom Java multithreaded client (inlinedio/ikv-java-client benchmarks; JedisCluster for Redis) issuing blocking single-field GETs at fixed loads (25K/50K/100K/1M/3M QPS). It used 16 threads, 1M docs (~15 B keys, 3x50 B fields) and a 30 s window, against IKV embedded in the client process and a 16-shard ElastiCache Redis 7.1 cluster in the same AZ. A second test used tiered storage with Zipfian keys, 6000 B values and 16 IKV threads, against a 1-thread, 1-shard ElastiCache Redis.",
+  "claimed_speedup": "In-memory GET with 16 client threads over 1M docs (150 B values), at 100K QPS: IKV avg 3.13 us / p50 2.89 / p99 5.65 vs a 16-shard AWS ElastiCache Redis 7.1 cluster at avg 319 us / p50 305 / p99 514 (~100x lower latency, derived from page data). IKV also held 1M and 3M QPS, which Redis could not reach from the single client. In the tiered test (1:4 memory:data, Zipfian), IKV averaged 118.25 us vs 225.06 us for in-memory 1-shard Redis (~1.9x, derived from page data), but IKV's p99 was worse (747.65 us vs 348.88 us). The ~100x gap is mostly the network round trip that embedding removes (an in-process lookup vs a remote ElastiCache call over TCP), not a faster storage engine.",
+  "evidence_tier": "C",
+  "benchmark_url": "https://github.com/inlinedio/ikv-store#benchmarks--100x-faster-than-redis",
+  "baseline_stdlib": [],
+  "compiler_and_flags": null,
+  "hardware": "In-memory test: client and embedded IKV on AWS c5.4xlarge (16 vCPU, 32 GiB). Redis was AWS ElastiCache Redis 7.1 with 16 shards (1 primary, 0 replicas each) on cache.r5.xlarge nodes in the same AZ (us-west-2a). Tiered test: client on c5d.4xlarge (400 GiB local SSD) vs 1-shard ElastiCache cache.r6g.xlarge / cache.r6gd.xlarge. CPU model not stated.",
+  "compared_against_cpp_std_directly": null,
+  "license": "MIT",
+  "usability": "copyable",
+  "last_commit": "2024-05-14",
+  "maintenance_status": "stale",
+  "is_fork_of": null,
+  "stars_or_usage": "227 stars",
+  "has_code": true,
+  "tradeoffs": "IKV is an embedded/in-process library colocated with the application (no network hop) rather than a shared remote cache, so much of the 100x gap is network round-trip elimination rather than a faster core engine; eventual consistency instead of Redis's stronger read-after-write guarantees; requires a separate data-plane (streams/object storage) to keep embedded replicas in sync",
+  "caveats": "The full report (Google Doc, readable through its txt export) gives instance types but no CPU model, compiler or flags. The comparison is embedded (in-process, no network) vs networked (remote ElastiCache over TCP through the Jedis client). That makes it a valid deployment-architecture comparison for read-heavy, eventually consistent ML feature serving, but not a like-for-like engine comparison. Most of Redis's ~300 us is network round trip plus client overhead. A fair engine test would use Redis over localhost or a Unix socket, or another embedded KV. The tiered '2x faster than Redis' holds for average latency only: p99 is worse for IKV (747.65 vs 348.88 us). The tiered test used 16 IKV threads vs 1 Redis thread, and the report's text and table disagree on thread counts. A single client machine drove the load. The repo is stale (last commit 2024-05-14).",
+  "is_evidence_for_known": false,
+  "confidence": 0.55,
+  "id": "https://github.com/inlinedio/ikv-store",
+  "verification": {
+    "date": "2026-09-26",
+    "verdict": "downgrade",
+    "tier_before": "C",
+    "tier_reason": "First-party numbers. The README table and the linked Google Doc report give AWS instance types, dataset, thread counts and time windows. The benchmark tooling is public in inlinedio/ikv-java-client (src/main/java/io/inlined/benchmarks, MultiThreadedRunner, with a JedisCluster client for Redis), but no CPU model, compiler or flags are stated, so C.",
+    "notes": "Judgment on the embedded-vs-networked comparison: it is a legitimate real-use-case latency win, but '100x faster than Redis' mostly measures removing the network hop, not IKV's engine against Redis's engine. The claim is overstated as a library-speed claim. Tier stays C. I was able to read the Google Doc report, which fills in hardware and methodology. Metadata checks out: MIT, 227 stars, last commit 2024-05-14, stale, not a fork. Not notable (<1k stars), but it has real numbers against a named baseline, so it is not a reject.",
+    "urls_opened": [
+      "https://github.com/inlinedio/ikv-store",
+      "https://github.com/inlinedio/ikv-store#benchmarks--100x-faster-than-redis",
+      "https://docs.google.com/document/d/1aDsS0V-AybpvXEwblBlahGLpKH5NmUmi6mTWGsbABGk/export?format=txt",
+      "https://github.com/inlinedio/ikv-java-client",
+      "https://github.com/inlinedio/ikv-java-client/blob/master/src/main/java/io/inlined/benchmarks/README.md",
+      "https://github.com/inlinedio/ikv-java-client/blob/master/src/main/java/io/inlined/benchmarks/clients/RedisSingleGetDBClient.java"
+    ],
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true
+  }
+}
+
+SIBLING ENTRIES (same category, already catalogued):
+- Garnet (https://github.com/microsoft/garnet): beats Redis; Table 1 (normalized to Redis; the paper says Redis performs like Valkey and leaves it out of most runs, so the measured comparisons are against Valkey v8.1): no
+- Caffeine (https://github.com/ben-manes/caffeine): beats ConcurrentLinkedHashMap (LRU); Server-class (Xeon E5-2698B v3, 16 threads, bounded caches), GetPutBenchmark: 100% read 382.4M ops/s vs 313.9M (ConcurrentLinkedHashMap, ~1.2x) and 43.1M (Guava
+- Pelikan / Segcache (https://github.com/pelikan-io/pelikan): beats Memcached; NSDI'21 paper: close to 8x speedup over Memcached with 24 threads (Segcache over 70 MQPS vs Memcached 9 MQPS); up to 40% higher throughput than Memcached on a s
+- Pogocache (https://github.com/tidwall/pogocache): beats Redis, Memcached; cache-benchmarks results/output.json (median of 31 runs, pipeline 1, 8 server threads): Pogocache 1.2.0 GET 3,080,753 ops/s vs Redis 8.2.1 1,513,408 (~2.0x) and
+- Dragonfly (https://github.com/dragonflydb/dragonfly): beats Redis, Memcached; Vendor README: on c6gn.16xlarge, 25x the throughput of a single single-threaded Redis process, crossing 3.8M QPS. Vs Memcached on c6gn.16xlarge: SET 3,844K vs 8
+- KeyDB (https://github.com/Snapchat/KeyDB): beats Redis; over 7x faster than Redis when using TLS (KeyDB close to 1M ops/s with TLS at 16 server threads vs ~130k ops/s for Redis 6 with TLS); Redis with TLS drops 36% v
+
+=====================================================================
+PROCESS
+=====================================================================
+1. Open repo_url. Read the README, the main header/API surface, and the
+   benchmark page at benchmark_url. Skim the source enough to identify the
+   core technique (open addressing + SIMD probe groups, radix partitioning,
+   branchless binary search, io_uring, etc.).
+2. Check: header-only or built? Dependencies? Minimum language standard or
+   toolchain version? Platforms/architectures supported? Thread safety?
+   Exceptions? Allocator customization? ABI stability?
+3. Look for known failure modes: issues tagged "bug"/"performance", pathological
+   inputs the README warns about, CVEs, "not recommended for" notes.
+4. Identify 1–3 alternatives in the same category from the catalog
+   (the SIBLING ENTRIES listed under the input record) and say when you'd pick this one over them.
+5. Write the entry. Every claim you make must be traceable to something you
+   read this session. If you don't know, say "not documented" rather than
+   guessing.
+
+=====================================================================
+STYLE
+=====================================================================
+- Plain, direct, no marketing language. "2.3x faster lookups on 64-bit keys"
+  not "blazing fast".
+- Each field has a length cap. Respect it; brevity is the point.
+- Write for someone who knows the baseline well and has never heard of this.
+- Do not restate the JSON fields verbatim; they're rendered separately.
+
+=====================================================================
+OUTPUT — return ONLY this JSON object
+=====================================================================
+{
+  "id": "<repo canonical url>",
+  "one_liner": "<=20 words: what it is and what it beats",
+  "what_it_does": "2-4 sentences. The problem it solves and the API shape (drop-in? different interface?).",
+  "how_it_is_fast": "2-4 sentences. The core technique(s) that produce the speedup. Name the algorithm/idea so a reader can look it up.",
+  "when_to_use": [
+    "3-5 bullets, each a concrete situation: workload shape, key/value types, size ranges, latency vs throughput needs, platform"
+  ],
+  "when_not_to_use": [
+    "3-5 bullets: workloads where it loses or is risky, missing features, platform gaps, pathological cases, memory cost, maturity concerns"
+  ],
+  "integration": {
+    "form": "header-only | static lib | shared lib | crate | module | source-drop",
+    "dependencies": "none | list",
+    "min_toolchain": "e.g. C++17, GCC 9+, Rust 1.70",
+    "platforms": "e.g. x86-64 (AVX2 required), aarch64, any",
+    "thread_safety": "string or 'not documented'",
+    "drop_in_for_baseline": true | false | "partial — explain"
+  },
+  "gotchas": [
+    "0-4 bullets: surprising behavior, iterator invalidation rules, hash quality requirements, alignment needs, unsafe blocks, etc."
+  ],
+  "pick_this_over_siblings_when": "1-2 sentences comparing to the SIBLING ENTRIES listed under the input record, or 'no siblings catalogued yet'",
+  "verified_claims_summary": "1-2 sentences restating the benchmark result in your own words with the baseline, stdlib/compiler, and hardware, so the reader knows what was actually measured",
+  "status_note": "1 sentence on maintenance_status and usability, e.g. 'Abandoned since 2019 but MIT-licensed and small enough to vendor; last known-good compiler GCC 9.'",
+  "sources_read": ["every URL you opened"],
+  "confidence": 0.0-1.0
+}
+
+=====================================================================
+ORCHESTRATOR HARNESS NOTES (environment-specific; these override only
+the output-delivery rule above)
+=====================================================================
+- Tools: WebSearch and WebFetch (if they are not loaded yet, load them
+  with ToolSearch query "select:WebSearch,WebFetch"). The `gh` CLI is
+  authenticated; for GitHub repos prefer it over WebFetch:
+    gh api repos/OWNER/REPO/readme -H "Accept: application/vnd.github.raw"
+    gh api repos/OWNER/REPO/contents/PATH -H "Accept: application/vnd.github.raw"
+    gh api "repos/OWNER/REPO/git/trees/HEAD?recursive=1" --jq '.tree[].path'
+    gh search issues --repo OWNER/REPO "<terms>" --limit 20
+  Fetching content through gh counts as opening the github.com URL.
+- Do not clone repositories or build anything.
+- Never send the user's email address, name or any other personal identifier to an
+  outside service (URLs, headers, payloads). For APIs that want a User-Agent, such as
+  crates.io, use exactly: User-Agent: fastpp-research-bot/1.0
+- The record's `verification` block holds the verifier's notes; treat its
+  corrections as authoritative over older claims.
+- Budget: about 40 tool calls. Token cost is not a concern; read the source and
+  docs deeply enough to fill every field with evidence.
+- Deliver your output by writing the JSON object, and nothing else, to:
+    /path/to/fastpp/data/wave6/enrich/raw/github_com_inlinedio_ikv_store.json
+  Then check it parses:
+    python3 -c "import json,sys; json.load(open(sys.argv[1]))" /path/to/fastpp/data/wave6/enrich/raw/github_com_inlinedio_ikv_store.json
+- Your final reply to the orchestrator is one line: the entry name and your confidence.

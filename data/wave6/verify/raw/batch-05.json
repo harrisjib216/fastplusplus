@@ -1,0 +1,71 @@
+[
+  {
+    "id": "https://github.com/tidwall/pogocache",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": false,
+    "evidence_tier_final": "C",
+    "tier_reason": "tidwall/cache-benchmarks publishes its benchmark code (bench-all.sh, cmd/bench/main.go) and raw results (results/output.json), with the hardware (AWS c8g.8xlarge) and server versions stated. It lists no compiler or build flags, and Pogocache's own author wrote and ran it, so it is first-party with partial methodology (C, not B).",
+    "corrections": {
+      "claimed_speedup": "cache-benchmarks results/output.json (median of 31 runs, pipeline 1, 8 server threads): Pogocache 1.2.0 GET 3,080,753 ops/s vs Redis 8.2.1 1,513,408 (~2.0x) and memcached 1.6.38 2,601,307 (~1.18x); SET 2,948,581 vs Redis 1,669,915 (~1.8x) and memcached 1,271,805 (~2.3x) (ratios derived from page data). GET p99 is 0.119 ms vs Redis 0.207 ms and memcached 0.191 ms. CPU cycles/op are ~7,053 vs Redis ~9,957 and memcached ~13,400 (derived from page data: perf cycles / total ops). Pogocache beats both Redis and memcached on SET and GET at every thread count (1-16) and pipeline depth (1/10/25/50) in the suite. The figures 3,145,960 vs Redis 909,837 (~3.5x), 111us and 6968 cycles come from the hidden table in the Pogocache README. That table records the older July 2025 run (Pogocache v0.0.1, Redis 8.0.2; cache-benchmarks commit adc83b4) and is overstated against current results.",
+      "workload": "memtier_benchmark with 16 client threads x 16 connections (256 connections), each doing 100K SETs then 100K GETs with random 1-1024 B values. The server is pinned to cores 0-15 and configured with 1-16 I/O threads; memtier runs on cores 16-31. Pipelining is 1/10/25/50, over a local UNIX socket with persistence off, on AWS c8g.8xlarge (32-core ARM64). Each point is the median of 31 runs, with a warmup SET pass excluded.",
+      "caveats": "The suite is written and run by Pogocache's author (tidwall), so it is not independent. No compiler or build flags are stated for any server; only versions and commits are given. The headline table in the Pogocache README (~3.5x Redis) is stale: it comes from a July 2025 run with Redis 8.0.2. The current suite with Redis 8.2.1 shows ~2x on GET at 8 threads. The README claim 'faster than Garnet' holds only at low pipelining: at pipeline 25/50 Garnet beats Pogocache by a wide margin (e.g. 8 threads, pipeline 50: Garnet GET 29.5M vs Pogocache 11.4M ops/s). The cache-benchmarks repo has no license file."
+    },
+    "notes": "The claim is sound against the baselines: Pogocache beats Redis and memcached at every configuration in the suite. However, the record's numbers are the stale README figures, now replaced by the current output.json medians. The tier drops from B to C because the only benchmark is author-run and has no compiler or flags. Metadata checks out: MIT, 2,518 stars, last commit 2026-08-05, active, not a fork.",
+    "urls_opened": [
+      "https://github.com/tidwall/cache-benchmarks",
+      "https://github.com/tidwall/cache-benchmarks/blob/main/bench-all.sh",
+      "https://github.com/tidwall/cache-benchmarks/blob/main/config.jsonc",
+      "https://raw.githubusercontent.com/tidwall/cache-benchmarks/main/results/output.json",
+      "https://raw.githubusercontent.com/tidwall/cache-benchmarks/adc83b4d5be9af7fbda5ccf6db889ca1034e40e6/results/output.json",
+      "https://github.com/tidwall/pogocache"
+    ]
+  },
+  {
+    "id": "https://github.com/dragonflydb/dragonfly",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "First-party README numbers only. It gives memtier command lines and AWS instance types, but no CPU model, compiler, flags, Redis/Memcached versions or server configs, and no benchmark code is published. Redis's own 2022 reproduction on the same instance contradicts the headline.",
+    "corrections": {
+      "claimed_speedup": "Vendor README: on c6gn.16xlarge, 25x the throughput of a single single-threaded Redis process, crossing 3.8M QPS. Vs Memcached on c6gn.16xlarge: SET 3,844K vs 806K QPS (~4.8x) and GET 3,717K vs 2,100K QPS (~1.8x) (ratios derived from page data); Memcached had the lower GET p99 (0.34 ms vs 1 ms). Vs Redis on m5.large: about parity (SET 173K vs 159K; GET 191K vs 194K). Vs Redis on m5.xlarge: SET 279K vs 190K, GET 305K vs 220K. Memory: ~30% lower idle memory than Redis, and Redis peak during BGSAVE was almost 3x Dragonfly's. The 25x is contested. Redis's June 2022 rebuttal ran a 40-shard Redis 7.0 Cluster on the same c6gn.16xlarge and reported 18-40% MORE throughput than Dragonfly (e.g. GET pipeline 1: 4.43M vs 3.8M reproduced). The third-party tidwall/cache-benchmarks (c8g.8xlarge; Dragonfly 1.30.3 vs Redis 8.2.1 with io-threads) shows mixed results. Redis is faster at 8 server threads (GET 1.51M vs 1.41M), and Dragonfly is ~2.2x faster at 16 threads (GET 2.94M vs 1.32M). Memcached beats Dragonfly on GET at every thread count and pipeline depth.",
+      "caveats": "The 25x headline is a vendor claim against one single-threaded Redis process on a 64-vCPU instance, which is not how Redis is scaled. Redis's own 2022 test on the same c6gn.16xlarge with a 40-shard Redis 7.0 Cluster measured 18-40% higher throughput than Dragonfly. That test is also vendor-run and dates from 2022, against Dragonfly built on 2022-06-03. The README states no CPU model, compiler, flags or baseline versions, and publishes no benchmark code. The earlier caveat that tidwall/cache-benchmarks 'corroborates Dragonfly beating Redis/Memcached' is wrong. In that suite Dragonfly beats Redis 8.2.1 (io-threads) only at higher thread counts, loses to it at 8 server threads, and loses to memcached on GET in every configuration; that suite's author also makes the competing Pogocache. License is BUSL-1.1 (not OSI; Apache-2.0 on the Change Date of 2030-11-01, and production use is restricted for competing in-memory data store services)."
+    },
+    "notes": "The README numbers are transcribed accurately, but the headline overstates the win against a fairly configured Redis. Evidence from independent or third-party sources is contradictory or mixed. Tier stays C. The verdict is downgrade because the claim is overstated and the corroboration caveat was wrong. Metadata checks out: LICENSE.md is BSL 1.1 (gh reports NOASSERTION), 31,688 stars, last commit 2026-09-26, active.",
+    "urls_opened": [
+      "https://github.com/dragonflydb/dragonfly",
+      "https://github.com/dragonflydb/dragonfly#benchmarks",
+      "https://github.com/dragonflydb/dragonfly/blob/main/LICENSE.md",
+      "https://redis.io/blog/redis-architecture-13-years-later/",
+      "https://github.com/tidwall/cache-benchmarks",
+      "https://raw.githubusercontent.com/tidwall/cache-benchmarks/main/results/output.json"
+    ]
+  },
+  {
+    "id": "https://github.com/inlinedio/ikv-store",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "First-party numbers. The README table and the linked Google Doc report give AWS instance types, dataset, thread counts and time windows. The benchmark tooling is public in inlinedio/ikv-java-client (src/main/java/io/inlined/benchmarks, MultiThreadedRunner, with a JedisCluster client for Redis), but no CPU model, compiler or flags are stated, so C.",
+    "corrections": {
+      "claimed_speedup": "In-memory GET with 16 client threads over 1M docs (150 B values), at 100K QPS: IKV avg 3.13 us / p50 2.89 / p99 5.65 vs a 16-shard AWS ElastiCache Redis 7.1 cluster at avg 319 us / p50 305 / p99 514 (~100x lower latency, derived from page data). IKV also held 1M and 3M QPS, which Redis could not reach from the single client. In the tiered test (1:4 memory:data, Zipfian), IKV averaged 118.25 us vs 225.06 us for in-memory 1-shard Redis (~1.9x, derived from page data), but IKV's p99 was worse (747.65 us vs 348.88 us). The ~100x gap is mostly the network round trip that embedding removes (an in-process lookup vs a remote ElastiCache call over TCP), not a faster storage engine.",
+      "hardware": "In-memory test: client and embedded IKV on AWS c5.4xlarge (16 vCPU, 32 GiB). Redis was AWS ElastiCache Redis 7.1 with 16 shards (1 primary, 0 replicas each) on cache.r5.xlarge nodes in the same AZ (us-west-2a). Tiered test: client on c5d.4xlarge (400 GiB local SSD) vs 1-shard ElastiCache cache.r6g.xlarge / cache.r6gd.xlarge. CPU model not stated.",
+      "workload": "Custom Java multithreaded client (inlinedio/ikv-java-client benchmarks; JedisCluster for Redis) issuing blocking single-field GETs at fixed loads (25K/50K/100K/1M/3M QPS). It used 16 threads, 1M docs (~15 B keys, 3x50 B fields) and a 30 s window, against IKV embedded in the client process and a 16-shard ElastiCache Redis 7.1 cluster in the same AZ. A second test used tiered storage with Zipfian keys, 6000 B values and 16 IKV threads, against a 1-thread, 1-shard ElastiCache Redis.",
+      "caveats": "The full report (Google Doc, readable through its txt export) gives instance types but no CPU model, compiler or flags. The comparison is embedded (in-process, no network) vs networked (remote ElastiCache over TCP through the Jedis client). That makes it a valid deployment-architecture comparison for read-heavy, eventually consistent ML feature serving, but not a like-for-like engine comparison. Most of Redis's ~300 us is network round trip plus client overhead. A fair engine test would use Redis over localhost or a Unix socket, or another embedded KV. The tiered '2x faster than Redis' holds for average latency only: p99 is worse for IKV (747.65 vs 348.88 us). The tiered test used 16 IKV threads vs 1 Redis thread, and the report's text and table disagree on thread counts. A single client machine drove the load. The repo is stale (last commit 2024-05-14)."
+    },
+    "notes": "Judgment on the embedded-vs-networked comparison: it is a legitimate real-use-case latency win, but '100x faster than Redis' mostly measures removing the network hop, not IKV's engine against Redis's engine. The claim is overstated as a library-speed claim. Tier stays C. I was able to read the Google Doc report, which fills in hardware and methodology. Metadata checks out: MIT, 227 stars, last commit 2024-05-14, stale, not a fork. Not notable (<1k stars), but it has real numbers against a named baseline, so it is not a reject.",
+    "urls_opened": [
+      "https://github.com/inlinedio/ikv-store",
+      "https://github.com/inlinedio/ikv-store#benchmarks--100x-faster-than-redis",
+      "https://docs.google.com/document/d/1aDsS0V-AybpvXEwblBlahGLpKH5NmUmi6mTWGsbABGk/export?format=txt",
+      "https://github.com/inlinedio/ikv-java-client",
+      "https://github.com/inlinedio/ikv-java-client/blob/master/src/main/java/io/inlined/benchmarks/README.md",
+      "https://github.com/inlinedio/ikv-java-client/blob/master/src/main/java/io/inlined/benchmarks/clients/RedisSingleGetDBClient.java"
+    ]
+  }
+]
