@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/bodo-ai/bodo",
+  "one_liner": "Pandas-API DataFrame library and Numba-based JIT compiling pandas code to MPI-parallel native code; beats Polars on a UDF-heavy vendor benchmark.",
+  "what_it_does": "Bodo has two front ends over one C++/MPI runtime. Bodo DataFrames (`import bodo.pandas as pd`) is a lazy, pandas-compatible API that falls back to real pandas for unsupported calls. `@bodo.jit` compiles a whole pandas/NumPy function, written in a type-stable subset of Python, into a parallel binary, and BodoSQL adds a Calcite-based SQL engine. None of these replaces Polars: Polars code has to be rewritten as pandas code, and the headline benchmark numbers come from the JIT path, not from the DataFrames API this entry is named after.",
+  "how_it_is_fast": "The JIT path is built on Numba. After type inference, a distributed-analysis pass splits arrays and DataFrames into 1D blocks and emits SPMD code in which every MPI rank runs the same compiled function on its own chunk. Python UDFs such as the benchmark's hour-bucket function become native loops. The DataFrames API instead records a lazy plan, optimizes it with a vendored DuckDB optimizer (filter pushdown into Parquet, column pruning, join reordering), and runs it on C++ streaming operators, JIT-compiling UDFs where it can. Joins and group-bys are streaming hash operators: ankerl::unordered_dense tables, recursive hash partitioning with spill to disk, SIMD blocked Bloom filters as runtime join filters, and MPI shuffles between ranks. Against Polars, much of the gap comes from Polars running the same UDF row by row in Python through map_elements, which Polars' own docs call much slower than native expressions.",
+  "when_to_use": [
+    "Existing pandas pipelines over tens of millions to billions of rows that you want to speed up without porting them to Polars expressions. Bodo's own guide says to measure at more than 10M rows.",
+    "Jobs dominated by type-stable Python UDFs (Series.map, DataFrame.apply, groupby.agg with custom functions). Bodo compiles these to native code, while Polars would run them in Python via map_elements.",
+    "Multi-node scale-out in place of PySpark, Dask or Modin. On 4x r6i.16xlarge the vendor measured 17s for the taxi job, against 389s for PySpark and 915s for Dask.",
+    "Joins and group-bys larger than memory on one big machine, handled by streaming operators that spill to disk.",
+    "S3 Parquet, Iceberg or Snowflake ETL that benefits from filter pushdown and column pruning, or mixing SQL (BodoSQL) and pandas in one Python process."
+  ],
+  "when_not_to_use": [
+    "Small or laptop-scale data. In the repo's own table, Bodo DataFrames takes 10.2s on about 20M rows where Polars takes 4.7s, and 5.63s where Polars takes 1.24s on the smaller set. Spawning workers and loading JIT modules add a fixed cost.",
+    "Code already written as idiomatic Polars expressions. No published run compares Bodo with Polars without map_elements, so the 7-10x single-node gap is not established against native Polars.",
+    "Code that leans on pandas features Bodo lacks. An unsupported call falls back to pandas: the plan is executed, all data is gathered onto one core, and out-of-memory errors become a risk. Columns also cannot hold arbitrary Python objects or mixed types.",
+    "Dynamic Python on the JIT path. try/except, with, comprehensions, class definitions, **kwargs and heterogeneous lists or dicts are unsupported, and DataFrame schemas and groupby, merge or sort keys must be compile-time constants, or compilation fails.",
+    "Environments that need a conservative dependency set. pyarrow is pinned to 25.0.x and numba to <0.66, and the docs label the Bodo DataFrames API experimental. Decimal support in it arrived only in 2026.8 and is described as initial."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "pyarrow >=25.0,<25.1 (pinned), numba >=0.62,<0.66, pandas >=2.2, numpy >=1.24, mpi4py >=4.1, fsspec, cloudpickle, psutil, requests, pytz; an MPI runtime (MPICH vendored in the Linux build, openmpi on macOS, Intel MPI runtime on Windows); optional extras include s3fs, pyiceberg, snowflake-connector-python and sqlalchemy",
+    "min_toolchain": "Python 3.10+ (wheels for 3.10-3.14); Linux wheels are manylinux_2_27/2_28 (glibc 2.27+); macOS wheels target macOS 12+ on arm64",
+    "platforms": "PyPI 2026.8 wheels: Linux x86-64 and aarch64, macOS arm64, Windows x86-64. There is no macOS x86-64 wheel on PyPI for 2026.8, though the README still lists Mac x86 and calls Linux ARM 'coming soon'; conda-forge builds not checked. GPU execution for Bodo DataFrames is under development.",
+    "thread_safety": "not documented for Python threads; parallelism is multi-process MPI SPMD, with workers spawned on demand (count set by BODO_NUM_WORKERS)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "In the benchmark, time.time() is taken inside the function compiled with bodo.jit(cache=True), so JIT compilation time is not in Bodo's 27.71s. Bodo's caching doc shows compilation can dominate a first call: 4.6s uncached vs 0.5s cached in its example.",
+    "The two scripts read different S3 copies: Polars reads fhvhv_tripdata_rewrite/ (rewritten 'for consistent schema') and Bodo reads fhvhv_tripdata/. Bodo also ran on the Bodo Platform with a forked Arrow for faster Parquet reads. The vendor's Sept 2025 blog reports 39s for JIT and 40.5s for Bodo DataFrames against the same 282s Polars figure, not the chart's 27.71s.",
+    "Fallbacks only warn. A UDF that fails to compile raises BodoCompilationFailedWarning and runs in Python mode, and an unsupported API raises BodoLibFallbackWarning and collects data to one core. Watch logs for these warnings, or performance quietly degrades.",
+    "JIT scalar access on nullable data (S.iloc[i]) assumes the value is not NA and returns a neutral value (\"\" for strings) unless you check pd.isna first. Open issue #297 reports a wrong kmeans result because Numba does not recognize a prange array reduction."
+  ],
+  "pick_this_over_siblings_when": "Pick Bodo over chDB when you want to keep pandas code, including Python UDFs, and scale it across MPI nodes. Pick chDB when writing SQL against DataFrames in a single process is acceptable: it leads the ClickBench DataFrame view (x1.35 vs Polars x9.99). Umbra is a SQL DBMS, not a Python DataFrame library, so it competes only if the workload can move into a database.",
+  "verified_claims_summary": "Bodo's own taxi benchmark reads 1.04B FHVHV rows from S3 Parquet, joins them with a weather CSV, applies a Python hour-bucket UDF, runs groupby count/mean, sorts and writes Parquet. On one AWS r6i.16xlarge (32 physical cores, 512 GiB) the Bodo JIT path took 27.71s against 282.34s for Polars 1.25.2, about 10x (March 2025), with Polars running the UDF via map_elements. No CPU model, compiler or flags are given, results exist only as PNG charts, the repo's laptop tables show Bodo DataFrames slower than Polars, and a later vendor blog puts Bodo at 39-40.5s on the same single node (about 7x).",
+  "status_note": "Actively maintained: last commit 2026-09-25, roughly monthly releases, latest PyPI release 2026.8 on 2026-08-17. Apache-2.0 and installable with pip or conda, but the DataFrames API is still marked experimental; the JIT is the more mature path.",
+  "sources_read": [
+    "https://github.com/bodo-ai/Bodo",
+    "https://github.com/bodo-ai/Bodo/blob/main/README.md",
+    "https://github.com/bodo-ai/Bodo/tree/main/benchmarks/nyc_taxi",
+    "https://github.com/bodo-ai/Bodo/blob/main/benchmarks/nyc_taxi/README.md",
+    "https://github.com/bodo-ai/Bodo/blob/main/benchmarks/nyc_taxi/bodo/nyc_taxi_precipitation.py",
+    "https://github.com/bodo-ai/Bodo/blob/main/benchmarks/nyc_taxi/bodo/run_bodo.py",
+    "https://github.com/bodo-ai/Bodo/blob/main/benchmarks/nyc_taxi/polars/nyc_taxi_precipitation.py",
+    "https://github.com/bodo-ai/Bodo/blob/main/pyproject.toml",
+    "https://github.com/bodo-ai/Bodo/blob/main/docs/docs/api_docs/dataframe_lib/index.md",
+    "https://github.com/bodo-ai/Bodo/blob/main/docs/docs/about_bodo.md",
+    "https://raw.githubusercontent.com/bodo-ai/Bodo/main/docs/docs/guides/dataframes/dataframes_intro.md",
+    "https://github.com/bodo-ai/Bodo/blob/main/docs/docs/guides/jit_development/bodo_parallelism/not_supported.md",
+    "https://github.com/bodo-ai/Bodo/blob/main/docs/docs/guides/jit_development/diagnostics_and_troubleshooting/compilation.md",
+    "https://github.com/bodo-ai/Bodo/blob/main/docs/docs/guides/jit_development/performance/caching.md",
+    "https://raw.githubusercontent.com/bodo-ai/Bodo/main/docs/docs/guides/jit_development/bodo_parallelism/bodo_parallelism_basics.md",
+    "https://raw.githubusercontent.com/bodo-ai/Bodo/main/docs/docs/guides/installation_and_setup/install.md",
+    "https://raw.githubusercontent.com/bodo-ai/Bodo/main/docs/docs/release_notes/2026.08.md",
+    "https://raw.githubusercontent.com/bodo-ai/Bodo/main/bodo/libs/_join_hashing.h",
+    "https://raw.githubusercontent.com/bodo-ai/Bodo/main/bodo/libs/streaming/_join.h",
+    "https://raw.githubusercontent.com/bodo-ai/Bodo/main/bodo/libs/_stl.h",
+    "https://github.com/bodo-ai/Bodo/issues",
+    "https://github.com/bodo-ai/Bodo/issues/957",
+    "https://github.com/bodo-ai/Bodo/issues/326",
+    "https://github.com/bodo-ai/Bodo/issues/438",
+    "https://github.com/bodo-ai/Bodo/issues/297",
+    "https://pypi.org/pypi/bodo/json",
+    "https://www.bodo.ai/blog/python-dataframes-bodo-daft-polars-pyspark-dask-modin-ray-compete-for-your-nyc-taxi-fare",
+    "https://docs.pola.rs/api/python/stable/reference/expressions/api/polars.Expr.map_elements.html",
+    "https://hn.algolia.com/api/v1/search?query=bodo%20polars&tags=comment",
+    "https://hn.algolia.com/api/v1/search?query=bodo.ai&restrictSearchableAttributes=url"
+  ],
+  "confidence": 0.72
+}
