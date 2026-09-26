@@ -7,11 +7,11 @@ claim against the cited page before it was written up.
 
 ## Lists
 
-- [COPYABLE.md](COPYABLE.md): 430 entries under an OSI license or CC0. Code can be vendored or forked.
-- [REFERENCE.md](REFERENCE.md): 26 entries with no, unclear, or non-OSI license. Study the idea; don't copy the code.
-- [REJECTED.md](REJECTED.md): 7 candidates that failed verification.
+- [COPYABLE.md](COPYABLE.md): 564 entries under an OSI license or CC0. Code can be vendored or forked.
+- [REFERENCE.md](REFERENCE.md): 40 entries with no, unclear, or non-OSI license. Study the idea; don't copy the code.
+- [REJECTED.md](REJECTED.md): 10 candidates that failed verification.
 
-Tiers across both lists: A 175, B 44, C 231, D 6.
+Tiers across both lists: A 198, B 84, C 316, D 6.
 
 ## Evidence tiers
 
@@ -30,6 +30,12 @@ Ratios marked "(derived from page data)" were computed from numbers on the cited
 |---|---|---|---|---|---|---|
 | compression-and-encoding | general-lossless | 2 | 0 | 2 | 0 | 0 |
 | crypto-and-hashing | non-crypto-hashes | 2 | 1 | 1 | 0 | 0 |
+| networking-and-servers | dns-quic-http3 | 16 | 0 | 6 | 10 | 0 |
+| networking-and-servers | event-loops-io | 36 | 6 | 7 | 23 | 0 |
+| networking-and-servers | http-parsers | 23 | 5 | 1 | 17 | 0 |
+| networking-and-servers | http-servers-frameworks | 36 | 4 | 20 | 12 | 0 |
+| networking-and-servers | tls | 16 | 3 | 4 | 9 | 0 |
+| networking-and-servers | websocket-grpc-rpc | 21 | 5 | 2 | 14 | 0 |
 | numerics-and-science | blas-lapack | 1 | 1 | 0 | 0 | 0 |
 | parsing-and-text | csv-tabular | 11 | 2 | 0 | 9 | 0 |
 | parsing-and-text | lexers-tokenizers | 9 | 1 | 1 | 6 | 1 |

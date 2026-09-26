@@ -156,6 +156,2163 @@ Header-only 64-bit non-cryptographic hash + PRNG; about 9% faster bulk throughpu
 
 [repo](https://github.com/wangyi-fudan/wyhash) · [benchmark](https://github.com/rurban/smhasher)
 
+### networking-and-servers
+
+#### dns-quic-http3
+
+##### LSQUIC (LiteSpeed QUIC)  `C`  `MIT`  `active`  `Tier B`
+
+LiteSpeed's C QUIC + HTTP/3 client/server library; LSQUIC-to-LSQUIC bulk downloads beat quiche-to-quiche 1.2-1.5x at 10 Gbit/s.
+
+**Beats:** quiche — A peer-reviewed TUM study (IFIP Networking 2023) ran 8 GB HTTP/3 downloads over a direct 10 Gbit/s link between AMD EPYC 7543 hosts (Debian Bullseye, kernel 5.10) with Cubic/Reno. LSQUIC-LSQUIC pairs averaged 3004 Mbit/s vs 2506 for quiche-quiche (about 1.2x), even though that LSQUIC was an unoptimized Debug (-O0) GCC build and quiche was built with cargo --release. With a 32x larger UDP receive buffer, LSQUIC built Release -O3 -march=native and quiche built with target-cpu=native, the numbers were 3882 vs 2590 (about 1.5x). GCC and Rust versions are not recorded, and TCP/TLS reached 8010 Mbit/s on the same link. A 2026 follow-up (LSQUIC v4.2.0 vs quiche 0.23.2, Xeon Gold 6421N) measured a smaller lead, 3605 vs 3241 Mbit/s.
+
+**Known shortcoming:** No compiler version stated. In the artifact, the Fig. 3 LSQUIC binary was a Debug -O0 build against release-built quiche, so the published margin (about 1.2-1.5x goodput) is conservative.
+
+**Known shortcoming:** CMake builds Debug (-O0, ASan under clang) unless CMAKE_BUILD_TYPE is set, and the README does not set it; Release still keeps debug logging unless LSQUIC_LOWEST_LOG_LEVEL is defined. No UDP GSO/GRO (MsQuic reached 8250 vs 3605 Mbit/s in the NOMS 2026 study). The win holds only LSQUIC-to-LSQUIC (1186 Mbit/s with a quiche client). BBR weak at low RTT; sample sendmmsg paths fixed only in 4.7.1 (2026-05).
+
+**How:** The internals doc states the rule outright: 'performance trumps everything else'. On the send path, the engine interleaves packets from every connection into one batch and hands it to ea_packets_out, which makes sendmmsg-style sending possible. The batch grows toward 1024 while sends succeed and shrinks after a partial send. On the receive path, ACK merging combines consecutive ACK frames and processes them once per tick (the docs say this cuts ACK-processing calls 10-20x), and the delayed-ACK extension uses a PID controller to set packet tolerance. As a result the LSQUIC client sends far fewer ACKs: in the paper, quiche's client sent more than 16x as many. Other hot-path choices: fixed-size 'malo' pool allocators on 4 KB-aligned pages (the docs measured them 2.7x faster than malloc for 64-byte objects), stream data written straight into outgoing packets that are repackaged rather than rebuilt on loss, min-heap connection queues, and small 'mini' connections that handle the handshake.
+
+**Use it when:**
+- You need an HTTP/3 or raw QUIC server or client in C, with a production record behind it (it ships in LiteSpeed's web servers), and bulk transfer throughput matters.
+- You control both ends. The measured win is for LSQUIC-LSQUIC pairs: about 3.0 Gbit/s with default settings and about 3.9 Gbit/s after tuning, on a 10G link.
+- Your app runs a single-threaded event loop per engine (libevent/libev style) and wants to own its sockets, or plug in its own packet-buffer allocation. The tumi8 LSQUIC-DPDK fork, for example, rewrote LSQUIC's packet allocation to write into DPDK mbufs.
+- You want broad protocol coverage in one library: QUIC v2, compatible version negotiation, unreliable datagrams, ACK frequency, HTTP priorities, and WebTransport (a build option).
+- Receive-side CPU or ACK traffic is a concern. Its ACK policy sends far fewer ACKs than quiche's did in the paper.
+
+**Skip it when:**
+- Serving clients you don't control, especially quiche-based ones. An LSQUIC server with a quiche client reached only 1186 Mbit/s (1616 after tuning), under half of the reverse pairing. The authors blame how the two libraries' flow control interacts.
+- You want the kernel's UDP segmentation or receive offloads (GSO/GRO) to do the heavy lifting. The same group's NOMS 2026 follow-up reports that LSQUIC uses neither, and there MsQuic reached 8250 Mbit/s vs LSQUIC's 3605. Code search finds no UDP_SEGMENT or UDP_GRO in the repo.
+- You plan to run BBR on low-RTT links. The paper saw LSQUIC with BBR reach only 30-70% of its Cubic goodput, with extra retransmissions. The internals doc says BBRv1 'does not work well for very small RTTs', which is why the default adaptive mode picks Cubic below 1.5 ms RTT.
+- Heavy packet loss (4% or more). A user reported LSQUIC falling behind Linux TCP there (issue #142). It was closed as stale with no fix.
+- You want one engine shared across threads, a memory-safe implementation, or easy packaging. BoringSSL has to be built from source (it needs Go), and thread safety is not a documented guarantee.
+
+**Integration:** static lib (default) or shared lib (-DLSQUIC_SHARED_LIB=1), built with CMake · A TLS library: BoringSSL, built by hand (the README suggests tag 0.20250807.0). Since 4.3.2, CMake also detects an OpenSSL that exposes SSL_set_quic_tls_cbs, but the README does not document it. Also zlib and the ls-qpack and ls-hpack git submodules. libevent is needed only for the demo programs. Links with -lstdc++. · CMake 3.0+ for lsquic (current BoringSSL needs CMake 3.22 and Go). Builds with GCC, Clang or MSVC; no minimum C standard or compiler version is documented. · README 'tested on' list: Linux (i386, x86_64, ARM), FreeBSD i386, macOS x86_64, iOS ARM, Android ARM, Windows x86_64. CI runs on Linux, macOS, Windows and FreeBSD.
+
+**Vs siblings:** Pick LSQUIC when you want a mature C library with HTTP/3 built in, running over the normal kernel UDP stack, and you control both endpoints. Choose ngtcp2 or TQUIC if their catalogued wins over quiche on bulk transfer (ngtcp2, about 1.6x download) or request rate (TQUIC, about 2.4x) match your workload better. Choose the LSQUIC-DPDK fork if you can dedicate NICs to kernel bypass and need close to line rate (about 10.8 Gbit/s).
+
+**Gotchas:**
+- If CMAKE_BUILD_TYPE is not set, CMake builds Debug (-O0 -g3, plus AddressSanitizer when compiling with clang), and the README's build commands don't set it. The paper's baseline LSQUIC binary was built this way. Pass -DCMAKE_BUILD_TYPE=Release. Debug log calls stay compiled in even in Release unless you add -DLSQUIC_LOWEST_LOG_LEVEL=LSQ_LOG_INFO, which the CMakeLists leaves commented out.
+- Throughput depends on the UDP receive buffer size. With the 208 KiB Linux default the LSQUIC client dropped 11.4k packets. A larger SO_RCVBUF gave 8.7% more goodput and cut the client's ACKs from 180k to 46k.
+- Memory trade-offs: the malo pools never return their 4 KB pages until the allocator is destroyed, and the cached ACK used for merging takes 4 KB+, more than half the size of each full connection object.
+- The sendmmsg/recvmmsg paths in the sample programs (-g/-j), which people often copy, failed with EFAULT at the commit the paper used (issue #434, filed by the paper's authors). They were fixed only in 4.7.1 in May 2026 (PR #646). A separate sendmmsg buffer overrun for batches over 1024 was fixed in PR #607.
+
+**Status:** Actively maintained and MIT-licensed: 4.10.0 came out 2026-09-13, the last commit was 2026-09-20, and it has about 1.9k stars. Treat the source and headers as the reference, because the internals guide still describes v2.29.6 and the repo's contributor guidance warns the API reference can lag the headers.
+
+[repo](https://github.com/litespeedtech/lsquic) · [benchmark](https://arxiv.org/pdf/2309.16395)
+
+##### LSQUIC-DPDK (tumi8 kernel-bypass fork)  `C`  `MIT`  `active`  `Tier B`
+
+LSQUIC 4.2 fork with a zero-copy DPDK datapath; 1.3x kernel MsQuic (GSO+GRO) goodput on single-connection bulk downloads.
+
+**Beats:** msquic — Two bare-metal hosts (Intel Xeon Gold 6421N, 100 Gbit/s Intel E810, Debian 12, Linux 6.1, DPDK v24.11) each downloaded an 8 GiB file over one connection 50 times, with the same implementation on client and server. LSQUIC-DPDK averaged 10,756 Mbit/s (SD 39), against 8,250 for upstream MsQuic v2.4.8 on kernel UDP with GSO+GRO (1.30x) and 3,605 for upstream LSQUIC (2.98x). On SR-IOV VFs it averaged 11,019 against 8,118 for MsQuic-DPDK (1.36x). LSQUIC-DPDK was a GCC Release build (-O3, compiler version not stated). The kernel baselines came from a private CI with unpublished flags, and the runs used the hq-interop ALPN.
+
+**Known shortcoming:** Research kernel-bypass fork: needs DPDK or SR-IOV with dedicated NICs (tested on Xeon Gold 6421N with a 100G E810). The non-DPDK baseline builds are on a private GitLab and compiler versions are not pinned.
+
+**Known shortcoming:** Uses hq-interop, not h3. The run scripts build LSQUIC_O_FLAG (Cubic, flow-control windows) but never pass it, so the README settings are not what ran. The gain needs DPDK at both ends: DPDK client vs kernel LSQUIC server is 1.11x; vs a kernel MsQuic server it is 7370 Mbit/s, below MsQuic-to-MsQuic 8250. An unpublished XDP variant (7925) is also below kernel MsQuic. Pinned to LSQUIC v4.2.0 (misses later fixes incl. an ls-qpack use-after-free); modified engine API; DPDK datapath only in bin/ examples. Source issues: IPv4 UDP checksum 0, NULL peer context on IPv6 receive, TX drop callback leaks unsent mbufs, one port/lcore, fixed 256-entry peer table, x86-only (-mssse3). Frozen artifact since 2026-02.
+
+**How:** Kernel bypass with a run-to-completion busy-poll loop on one DPDK lcore: pull up to 32 packets per rte_eth_rx_burst, feed them to lsquic_engine_packet_in, tick the engine, then flush a 32-packet TX buffer, so there are no syscalls or socket copies. LSQUIC's packet-out memory interface (pmi_allocate) is redirected to hand out space inside hugepage mbufs just past the header offset, so packets are encrypted straight into NIC-visible buffers (zero-copy), and coalesced long-header packets share one mbuf. The paper's perf profile shows the packet-I/O share of CPU falling 90% on the server and 84% on the client, which leaves crypto and file I/O as the new bottlenecks. Upstream LSQUIC has no GSO/GRO, so the gain over it (2.98x) is much larger than over MsQuic, which already uses both offloads (1.30x).
+
+**Use it when:**
+- Point-to-point bulk transfers (multi-GiB, single connection) between hosts you control, with LSQUIC-DPDK at both ends: the 10.8 Gbit/s result is for a DPDK client talking to a DPDK server.
+- You already use LSQUIC and packet I/O limits you: upstream LSQUIC has no GSO/GRO, and this fork measured 2.98x its kernel goodput on the same hardware (10,756 vs 3,605 Mbit/s).
+- Linux x86-64 hosts with a DPDK-supported NIC (tested: Intel E810 on the ice PF or an iavf SR-IOV VF), hugepages, and a core you can give over to busy polling. SR-IOV lets the kernel keep the rest of the port and was slightly faster (11,019 Mbit/s).
+- Research or benchmarking of kernel-bypass QUIC: the Interop Runner configs, build scripts and raw per-run CSVs are public, so you can reproduce the numbers.
+
+**Skip it when:**
+- Only one side can run DPDK. An LSQUIC-DPDK client against a kernel LSQUIC server measured 3,991 vs 3,605 Mbit/s (1.11x). Against a kernel MsQuic server it reached 7,370 Mbit/s, below the 8,250 of plain MsQuic on both ends.
+- Internet-facing or production servers. The code is pinned to LSQUIC v4.2.0 (Feb 2025), 21 upstream releases behind v4.10.0. It lacks later fixes such as an ls-qpack use-after-free, rejection of conflicting Content-Length headers, and RST_STREAM stream-limit enforcement. It is research code with 0 stars.
+- Many concurrent connections or multi-core scaling. The code allows one engine on one worker lcore and one port (dpdk_init exits otherwise), and uses a fixed 256-entry peer table with linear lookup and no eviction. The client opens a single connection.
+- Your baseline is MsQuic with GSO+GRO and you cannot spare a NIC port or VF, hugepages, and a core that polls at 100%. The gain is only 1.30x there, and the paper concludes that GSO/GRO can match DPDK with far less intrusion.
+- Multi-hop or shared-bottleneck paths. With DPDK, 99% of LSQUIC's packets leave back-to-back, against 50% spaced at least 2.9 µs apart on the kernel path, so expect bursty traffic.
+
+**Integration:** source-drop · DPDK (artifact builds commit 1b3bf112; paper uses v24.11) found via pkg-config libdpdk; BoringSSL (artifact pins 0.20250212.0); zlib; CMake. Needs hugepages, root, and a NIC port or SR-IOV VF bound to a DPDK driver. The libevent requirement of upstream's examples is gone. · CMake 3.0+ (cmake_minimum_required 3.0...3.23); a C compiler that accepts -mssse3 (the artifact uses GCC from Debian 12 build-essential, version not stated); meson/ninja to build DPDK. · Linux x86-64 only as shipped (-mssse3 is hard-coded in bin/CMakeLists.txt); tested only on Intel E810 (ice PF, iavf VF) with Debian 12 / Linux 6.1. Upstream LSQUIC's other platforms do not apply to the DPDK binaries.
+
+**Vs siblings:** Pick it over quiche-DPDK and picoquic-DPDK when you want the highest measured kernel-bypass goodput. In the same testbed, LSQUIC-DPDK pairs reached 10,756 Mbit/s against 8,347 for the paper's updated picoquic-DPDK and 5,937 for quiche-DPDK, and 11,019 against 9,070 and 6,168 on SR-IOV. Pick upstream LSQUIC or ngtcp2 instead if you cannot dedicate a NIC port or VF, or you need a current, maintained QUIC stack.
+
+**Gotchas:**
+- API break against upstream LSQUIC: lsquic_engine_process_conns() and lsquic_engine_earliest_adv_tick() now take an explicit `now` argument, and pmi_allocate gains an is_long_hdr argument. The kernel-socket event loop and the md5/echo/duck/perf examples were removed, so only the DPDK http_client and http_server build.
+- IPv4 packets go out with a UDP checksum of 0, and the IP checksum is computed in software. No checksum or segmentation offloads are enabled; only MBUF_FAST_FREE is requested. The IPv6 receive path passes a NULL peer context to lsquic_engine_packet_in, so treat IPv6 as untested.
+- The custom TX error callback only prints 'PACKET DROPPED!' and does not free the unsent mbufs. Registering it replaces DPDK's default callback, which frees them, so a TX-queue overflow leaks mbufs from the 16,383-mbuf pool.
+- The client does no ARP resolution: pass the server (or gateway) MAC with -J and the client IP with -x (the error message wrongly says -b). The published runs used the hq-interop ALPN, not h3; the README says h3 and hq should perform alike and that the qif ALPN is untested.
+
+**Status:** A research artifact for a NOMS 2026 paper: the DPDK work (authored 2023-2025) landed in Feb 2026, the last commit is a README note on 2026-02-11, and no issues have been filed. MIT-licensed, and the DPDK glue (~1,500 lines) is small enough to copy, but it tracks LSQUIC v4.2.0 and has no upstream path.
+
+[repo](https://github.com/tumi8/lsquic-dpdk) · [benchmark](https://www.net.in.tum.de/fileadmin/bibtex/publications/papers/spaethj-noms2026.pdf)
+
+##### Nail (NailDNS demo server)  `C`  `MIT`  `abandoned`  `Tier B`
+
+295-line C authoritative DNS demo built on the Nail parser generator; ~2.9x BIND 9.9.5 qps in a 2014 loopback test.
+
+**Beats:** BIND — On one core of an Intel i7-3610QM over loopback, BIND's queryperf (at most 20 outstanding, 60 s, 7 runs each, April 2014, 0 lost queries) against a 50,000-name A-record zone with ~10% NXDOMAIN gave a median 139,215 qps for NailDNS vs 47,235 qps for BIND 9.9.5 (~2.9x), and mean RTT 0.139 ms vs 0.416 ms. NailDNS was built with -std=gnu99 -O3 on an unnamed compiler; BIND's build flags, thread count and named.conf are not published.
+
+**Known shortcoming:** A 2014 research demo DNS server (OSDI '14 Nail parser generator), not a production resolver; compared against BIND 9.9.5 on one laptop core. Abandoned since 2015-08. No compiler or BIND build stated.
+
+**Known shortcoming:** BIND configuration, thread count and build flags are not in the repo; an OSDI reviewer called the BIND comparison not apples-to-apples. The thesis 4.0x figure reuses the 2014 BIND column. Security: compression-pointer decoder precedence bug and no loop limit (#7, AFL hangs, fix PR #10 unmerged since 2020); generated stream_check can underflow and loop (#9); arena leaked per malformed packet. Demo server binds 127.0.0.1 only, no TCP/truncation, case-sensitive names, NXDOMAIN instead of NODATA, MX without preference, no hyphens in names, 4 MiB zone limit. Examples and tests fail to build (#5, #6, 2015).
+
+**How:** It does very little per packet: one thread in a blocking recvfrom/sendto loop, a per-packet bump-pointer arena (NailArena, 4 KiB blocks, freed in one call), and one lookup in an open-addressing hash table (djb2 hash, linear probing, 1.5x zone-count slots) built once at startup. Parsing and response serialization are generated top-down (PEG-style) C that bounds-checks each read and binds fields straight into plain structs; the paper describes a two-pass design (validate while recording a trace, then bind into the arena). No ACL, view, logging, or DNSSEC work sits on the hot path, and the paper itself only claims Nail's parsers are 'not a barrier to achieving good performance', not that they cause the speedup.
+
+**Use it when:**
+- Reproducing or studying the OSDI'14 result: grammar-generated parsing on a small static A-record zone, queried over loopback UDP on one core.
+- Learning how to express DNS wire format (count fields, label compression via a stream transform) as a declarative grammar that yields both a parser and a serializer.
+- A throwaway, fast stub responder for load-testing DNS clients in a lab, where the zone is a few MB of lowercase A/NS/CNAME names and RFC corner cases do not matter.
+- A starting point to copy for a tiny embedded authoritative responder, if you are prepared to fix the known compression and leak bugs yourself.
+
+**Skip it when:**
+- Any production or Internet-facing authoritative service: UDP only, no TCP fallback, never sets TC, no EDNS, no SOA/authority section, no DNSSEC, zone transfer, NOTIFY or TSIG, and the listen address is hard-coded to 127.0.0.1:53.
+- Untrusted input: the compression-pointer decoder can spin forever (issue #7; AFL-found hangs, fix PR #10 unmerged), generated code has an integer underflow that loops on short input (issue #9), and every malformed packet leaks its arena and output buffer because the error path skips the release calls.
+- Multi-core throughput: the server is a single blocking recvfrom loop with no threads or sockets sharding.
+- Real zones: the zone grammar accepts only lowercase a-z and 0-9 in names (no hyphens), only A/NS/MX/CNAME records, not RFC 1035 master-file syntax, and server.c reads at most 4 MiB of zone file (ZONESIZ).
+- Anything needing a working, maintained toolchain: no commits since 2015, and open issues report the examples fail with 'Syntax error in grammar' and the tests do not compile.
+
+**Integration:** source-drop · Generator: C++11 compiler (Makefile hard-codes clang/clang++), Boost, xxd; example Makefiles also call astyle. Generated C uses libc (malloc/realloc/memset) and setjmp/longjmp despite the README saying it uses no standard library. Server: POSIX sockets and err.h. · C gnu99 for the examples (generator C parts gnu11), C++11 for the generator; generated code uses GCC/Clang extensions (__builtin_expect, typeof). · Linux/POSIX UDP (author used Arch and Ubuntu); benchmarked only on x86-64. macOS builds needed the 2015 switch from GNU ld --format=binary to xxd (issue #2).
+
+**Vs siblings:** Unbound and Hickory DNS are complete DNS servers, and Bundy-DNS's l1cache branch reports a comparable ~4x-over-BIND gain (180K vs 41K qps) from pre-rendered answers. Pick NailDNS only to study or reuse grammar-generated DNS parsing or as a disposable lab responder; for actual serving pick one of those siblings by role.
+
+**Gotchas:**
+- Name matching is a case-sensitive memcmp plus a djb2 hash over raw bytes, so mixed-case queries (for example DNS 0x20 case randomization) get NXDOMAIN; a name that exists with a different record type also gets NXDOMAIN instead of NODATA.
+- The decompressor computes pointers as `highbyte & 63 << 8 | ...`, which drops the high 6 offset bits, and it has no loop limit; the paper's 4-hour Metasploit fuzz run did not catch it, but AFL did (PR #10).
+- MX answers carry only the target name with no 16-bit preference field, and every answer uses a hard-coded 60 s TTL.
+- The 2015 thesis reports a faster C++-backend NailDNS (median ~190.7K qps), but its BIND column is the identical 2014 data, not a fresh head-to-head run.
+
+**Status:** Abandoned since 2015-08-17 with the compression-hang fix (PR #10) unmerged since 2020; MIT-licensed and small enough to copy, but expect to repair the build and the DNS-compression code yourself.
+
+[repo](https://github.com/jbangert/nail) · [benchmark](https://github.com/jbangert/nail/blob/master/paper/osdi14/performance.tex)
+
+##### picoquic-DPDK (Tyunyayev kernel-bypass fork)  `C`  `MIT`  `abandoned`  `Tier B`
+
+Research fork of picoquic that swaps kernel UDP sockets for DPDK; about 3x picoquic single-connection goodput on 100 GbE.
+
+**Beats:** picoquic — In the CoNEXT-SW '22 paper, one QUIC connection downloads 20 GB with AES-128-GCM between two Xeon Silver 4314 @ 2.4 GHz hosts over a 100 Gbps link. On one core, picoquic-dpdk reached about 15.7 Gbps (read from Fig. 1) versus about 4.8 Gbps for kernel-socket picoquic, which is roughly the paper's stated 3x. It also beat quicly, msquic (10.6 Gbps with a 3-core pipeline) and quiche, and handled about 2x picoquic's handshake rate. The paper names no compiler; the repo's CMakeLists builds with -O3 -march=native.
+
+**Known shortcoming:** Needs DPDK kernel bypass (dedicated NIC, one core per connection in the paper). A later paper (arXiv:2309.16395) could not reproduce the reported goodput. No compiler or flags stated. Research code, last commit 2022; the paper's code lives at UCLouvain-ENSG/picoquic-dpdk, the IPNetworkingLab repo is an earlier thesis version.
+
+**Known shortcoming:** The 3x is read off a figure (~15.7 vs ~4.8 Gbps); kernel picoTLS over TCP with 2 cores reaches ~20 Gbps, beating it. The maintainer said in 2025 the test suite was never run and the base picoquic commit is arbitrary; many picoquic_ct failures and a demo segfault reported on Ubuntu 24.04. Enrichment confidence 0.35 (below the 0.4 flag threshold).
+
+**How:** Kernel bypass with DPDK. It busy-polls the NIC with rte_eth_rx_burst, so there are no interrupts, no syscalls, no sk_buff and no user/kernel copy. Packets move in batches: the paper receives up to 32 per burst, and the -@/-* flags set RX and TX batch sizes. picoquic writes each outgoing QUIC packet straight into the mbuf at the UDP-payload offset, headers are copied in front, and packets are queued with rte_eth_tx_buffer and flushed together. The paper's profile shows server I/O falling from 18.7% to 5.7% of CPU cycles, which leaves those cycles for crypto and protocol work.
+
+**Use it when:**
+- Lab or research testbed with a dedicated DPDK-capable NIC (the paper used 100 GbE between two Xeon Silver 4314 hosts) where you want one core to push one QUIC connection well past 10 Gbps.
+- Bulk single-connection downloads measured by goodput: the paper's 20 GB AES-128-GCM transfer reached roughly 15-16 Gbps on 1 core (read from Fig. 1), against about 5 Gbps for kernel-socket picoquic.
+- Handshake-rate experiments: up to 6000 zero-byte requests/s, about double stock picoquic in the paper.
+- You already have picoquic-based C code and want to measure how much of your cost is kernel I/O rather than crypto or protocol processing.
+- Multi-core server scale-out through RSS sharding (one picoquic context per lcore and queue), as long as you do not need connection migration or multipath.
+
+**Skip it when:**
+- Production or internet-facing services: abandoned since 2022, built on what the maintainer calls 'some random base git commit' of picoquic, and missing years of upstream fixes.
+- Anything without dedicated NIC access. The maintainer says it cannot run locally or without a real device, and it needs root, hugepages and a busy-polling core; a VM without SR-IOV or passthrough will not work.
+- Apps that need connection migration or multipath on the multi-threaded server; the README says the sharded mode does not support either.
+- You need numbers that others have reproduced. Jaeger et al. (IFIP Networking 2023) could not reach the reported picoquic goodput and could not easily reproduce the optimizations.
+- Throughput with 2 cores on kernel TCP is acceptable: in the same figure, picoTLS over kernel TCP with a 2-core pipeline reached about 20 Gbps, above picoquic-dpdk's 1-core result.
+
+**Integration:** source-drop · DPDK (libdpdk via pkg-config), picotls (a matching commit; a later ENSG commit says the picotls API changed), OpenSSL, pthreads · CMake 2.8.11+; C11/gnu99 GCC or Clang; CMakeLists hard-codes -O3 -march=native -msse4 · Linux with a DPDK-supported NIC; x86-64 as shipped (-msse4 in default flags); has #if branches for DPDK versions before and after 21.11
+
+**Vs siblings:** Pick it over upstream picoquic only when you control a DPDK NIC and need single-core goodput; upstream is maintained and uses kernel sockets. Against the tumi8 kernel-bypass forks (LSQUIC-DPDK, quiche-DPDK), pick this one if your code is already on picoquic's C API or you need its RSS-sharded multi-core server. Their results come from a different 10G testbed, so the numbers cannot be compared directly.
+
+**Gotchas:**
+- The built-in L2/L3 layer is minimal. It learns peer MACs from incoming packets into a fixed table (20 entries in this repo, 256 in the ENSG copy), ignores ICMPv4, and makes the client pass the server MAC with -A.
+- Unit tests are not maintained. The maintainer said in October 2025 that they never ran the test suite, and an Ubuntu 24.04 / DPDK 21.11.9 report shows many picoquic_ct failures and a segfault in the non-DPDK demo client.
+- The no-encryption (memcpy AEAD) variant used in the thesis measurements is not in either repo. It was a local patch to picotls aead_encrypt/aead_decrypt.
+- TX-ring overflow only prints 'PACKET DROPPED!' from the drop callback, and the RX loop polls forever, so each worker core sits at 100% even when idle.
+
+**Status:** Abandoned research code: this repo was last pushed 2022-06-01 and the paper-cited ENSG copy 2022-10-31. It is MIT-licensed, but you get it as a patched picoquic tree tied to 2022-era DPDK and picotls, not as a reusable library.
+
+[repo](https://github.com/UCLouvain-ENSG/picoquic-dpdk) · [benchmark](https://research.dial.uclouvain.be/bitstreams/acc87432-c1b7-4646-be09-8169627726d8/download)
+
+##### QUICHE (Google)  `C++`  `BSD-3-Clause`  `active`  `Tier B`
+
+Google's C++ QUIC/HTTP/3 stack behind Chrome; production A/B trials cut Search latency 8% (desktop) vs TLS/TCP.
+
+**Beats:** TCP+TLS (HTTPS over TCP, pre-QUIC production stack) — Google's SIGCOMM 2017 paper reports randomized, equal-size production A/B groups of Chrome (desktop) and Google Search/YouTube app (mobile) users, gQUIC version 35 vs a TLS/TCP control (TCP Fast Open enabled on servers), with over a billion samples collected December 2016 to January 2017: mean Search Latency fell 8.0% desktop and 3.6% mobile, mean Video Latency 8.0% and 5.3%, and mean Video Rebuffer Rate 18.0% and 15.3%. There is no lab setup, compiler, flags or hardware; all authors are Google employees, and the same paper reports about 2x server CPU vs TLS/TCP and possible losses above 100 Mbps.
+
+**Known shortcoming:** Evidence is Google's own 2016-17 measurement of gQUIC v35 (QUIC-crypto), a version no longer in the repo; no lab setup, compiler or hardware; the gain is protocol design (0-RTT, loss recovery), not faster code. The paper's own costs: server CPU ~2x TLS/TCP after optimization, little or negative gain above 100 Mbps or at a few ms RTT, 4.4% of video clients needed TCP fallback. 17 of 62 feature flags default differently outside Google (e.g. quic_default_to_bbr). The standalone Bazel build omits the GSO/sendmmsg batch writers and libevent; the bundled quic_server writes one packet per call and is 'not tuned for production'. No tags or releases, '*_unstable_api' targets, C++20 + Bazel 8.2.1, no CMake (#85), clang-14 unsupported (#141), GCC 13.3 build break (#155), little-endian only, Windows needs clang-cl (#100). Open robustness reports: QPACK blocked-decoding DoS (#105), remotely triggerable QUIC_BUG (#147), fuzzer null deref (#103), 31 open RFC 9000 conformance reports. No head-to-head with other QUIC stacks.
+
+**Independent measurement:** WWW'24 paper (arXiv 2310.09423): Chromium's QUIC stack (built on this code) trails TCP+TLS+HTTP/2 from about 500-600 Mbps; Chrome is 45.2% slower at 1 Gbps, with client CPU saturated on receive.
+
+**How:** The measured gain comes from the QUIC protocol, not from faster code: a 0-RTT handshake (about 88% of desktop QUIC connections in the paper) that removes the 2-3 RTT TCP+TLS setup, streams that don't head-of-line block each other, and loss recovery built on monotonically increasing packet numbers, which removes TCP's retransmission ambiguity and gives precise RTT samples; gains grow with RTT and in the latency tail. On the I/O side the code has Linux batch writers (UDP GSO via UDP_SEGMENT with optional SO_TXTIME release times, and sendmmsg), batched reads of 16 packets per call, UDP GRO and ECN receive support, and pacing with Cubic, BBRv1/v2/v3 and Prague congestion controllers. Google's own server CPU work described in the paper (hand-optimized ChaCha20, PACKET_RX_RING receive, cache-friendlier data structures) cut QUIC's server CPU from about 3.5x to about 2x that of TLS/TCP.
+
+**Use it when:**
+- You serve latency-sensitive HTTPS to clients on the public Internet, especially high-RTT or lossy (mobile, long-haul) users, where saving handshake round trips and avoiding head-of-line blocking is worth more than CPU per byte.
+- You want the QUIC stack Chrome actually runs, for interop with Chrome or for features other libraries lack or lag on: MASQUE proxying, WebTransport, Media over QUIC, BBRv2/v3.
+- You already build with Bazel and Abseil, or you embed through Envoy or Chromium, which provide the platform implementations and build files.
+- Video or streaming delivery where rebuffering matters: the paper's randomized trials showed 15-18% lower mean rebuffer rate for QUIC users.
+- You can dedicate engineering time to wiring your own event loop, batch packet writers and certificate handling around a large, fast-moving C++ codebase.
+
+**Skip it when:**
+- High-bandwidth, low-RTT paths (data centre, LAN, gigabit links). The paper saw little gain, and sometimes worse results than TCP, above about 100 Mbps or at a few ms RTT. An independent WWW'24 study found Chromium's QUIC stack (Chrome and the Chromium quic_client) falling behind TCP+TLS+HTTP/2 from about 500-600 Mbps, with Chrome 45.2% slower at 1 Gbps because receiver-side packet processing saturated the client CPU.
+- CPU-bound servers: even after optimization Google measured QUIC serving at about 2x the CPU of TLS/TCP, and UDP packet send/receive was one of the three main costs (with crypto and connection state).
+- Networks that block or throttle UDP: in Google's November 2016 data 4.4% of video clients could not use QUIC (mostly corporate firewalls), so you still need a TCP+TLS fallback path.
+- You want a small, stable C library with a CMake build, releases and a stable ABI. QUICHE has no tags or releases, marks its public Bazel targets *_unstable_api, and has no documented CMake/Make integration (issue #85 unanswered).
+- Big-endian targets, WebAssembly, or Windows with MSVC: the README says little-endian only, a WASM build attempt stalled on the protobuf dependency (issue #86), and the Windows build needs clang-cl (issue #100, open).
+
+**Integration:** source-drop / static lib: Bazel cc_library quiche_core, exported as //quiche:quiche_unstable_api; no releases or tags; Chromium (GN) and Envoy (Bazel) vendor the source · BoringSSL, Abseil, Protocol Buffers, googleurl (gurl; the README installs libicu-dev on Linux), zlib; MODULE.bazel also pulls quic-trace and anonymous-tokens; libevent optional (QUICHE_ENABLE_LIBEVENT); googletest, fuzztest and re2 for tests · C++20 (-std=c++20, -fno-rtti in .bazelrc), Bazel 8.2.1 (.bazelversion); README builds with clang + lld; maintainers say clang-14 is not supported (issue #141) and a GCC 13.3 build break is open (issue #155) · Little-endian only (README). Standalone binaries are documented for Linux; .bazelrc has a macOS config; Windows socket code exists but the build needs clang-cl (issue #100). The GSO and sendmmsg batch writers are in a linux_only source list.
+
+**Vs siblings:** Pick QUICHE over ngtcp2, LSQUIC, picoquic, TQUIC or quic-zig when you need Chrome's own stack (interop, MASQUE, WebTransport, MoQT) or already embed through Envoy or Chromium; those siblings are easier-to-embed C/C++/Zig libraries with measured bulk-throughput or request-rate wins over Cloudflare's Rust quiche, while QUICHE's catalogued win is protocol-level latency vs TCP+TLS with no lab throughput comparison against them.
+
+**Gotchas:**
+- Open-source flag defaults differ from Google's internal build: 17 of 62 feature flags in quiche_feature_flags_list.h have different internal and external values. For example quic_default_to_bbr is true internally but false in the open-source build, and gQUIC Q046 is disabled externally. The production numbers reflect Google's configuration, not the one you get.
+- The bundled quic_server and quic_client are test tools, and the standalone Bazel build does not compile the fast I/O paths: quiche/BUILD.bazel never uses the linux_only (GSO and sendmmsg batch writers) or libevent source lists. QuicServer writes one packet per call with QuicDefaultPacketWriter on the poll(2) event loop, and the paper itself says the test server and client are not tuned for production performance. Benchmarking those binaries understates the library; build the batch writers with your own build files and wire QuicGsoBatchWriter into your dispatcher.
+- The paper's numbers are from gQUIC version 35 with Google's QUIC-crypto handshake (December 2016 to January 2017). The repo now supports IETF QUIC v1 (RFC 9000), v2 (RFC 9369) and draft-29 with the TLS 1.3 handshake, plus gQUIC Q046, so the code version that was measured is no longer in the repo.
+- Robustness reports are open on GitHub: a QPACK blocked-decoding memory DoS that Google's bug bounty team rated below its security-bug threshold (issue #105), a QUIC_BUG in HTTP/3/WebTransport server streams that a remote client can trigger (#147), a fuzzer-found null dereference in client header parsing (#103), and 33 RFC 9000 conformance reports filed in May 2026 (#108-#140), 31 of them still open. GitHub PRs are not merged directly; changes go through Google's internal review.
+
+**Status:** Actively developed by Google (last commit 2026-09-25, about 900 stars) and BSD-3-Clause, but there are no releases and the APIs are explicitly unstable, so you pin a commit and track breaking changes.
+
+[repo](https://github.com/google/quiche) · [benchmark](https://storage.googleapis.com/gweb-research2023-media/pubtools/4102.pdf)
+
+#### event-loops-io
+
+##### aquatic (aquatic_udp)  `Rust`  `Apache-2.0`  `active`  `Tier A`
+
+Rust open UDP BitTorrent tracker (BEP 15) whose io_uring backend out-serves its own epoll path and opentracker.
+
+**Beats:** epoll (aquatic_udp's own mio backend, which uses epoll on Linux); also opentracker (C), which the bencher runs with 'listen.udp.workers N', so it uses N pthreads doing blocking recvfrom on one shared socket rather than its libowfat epoll event loop — The maintainer's aquatic_bencher (February 2024, commit 21a5301) drove loopback IPv4 UDP traffic from a load generator simulating 1M torrents and 2M peers, with about 100 announces per scrape, and pinned tracker and generator to CPUs with taskset on a Hetzner CCX63 (AMD EPYC 7003 Milan, 48 vCPUs, Linux 6.5.10). aquatic was built with rustc 1.76, thin LTO and target-cpu=native without AVX-512; opentracker was built with GCC 12.2 -O3 -march=native and ran N blocking-recvfrom worker threads. At 1 core the io_uring build served 226k responses/s against 187k for the mio (epoll) build and 191k for opentracker; at 16 cores it served 2.26M against 2.04M and 1.65M, and at 12 cores the mio build edged ahead.
+
+**Known shortcoming:** The opentracker baseline uses blocking-recv worker threads, not epoll; the real epoll comparison is aquatic's own mio backend, and io_uring is slightly slower than mio at 12 cores. io_uring is an experimental opt-in feature. CPU named only as AMD EPYC 7003 (Hetzner CCX63).
+
+**Known shortcoming:** The default mio build is about level with opentracker (0.98x) up to 4 cores; the lead needs the opt-in io_uring feature on Linux 6.0+, which has had UB fixes and never ran clean under ASan/valgrind. Benchmark (2024-02) predates the 2026 torrent-map rework; only release is 0.9.0. An unverified report (#257) claims opentracker far ahead at 50M peers. No passkeys, so unsuited to private trackers.
+
+**How:** N socket-worker threads each bind their own SO_REUSEPORT UDP socket (SO_REUSEPORT_LB on FreeBSD), so the kernel spreads packets across them and each request is handled to completion on the thread that received it. Swarm state is split into 16 parking_lot RwLock shards per IP version, and announces take an upgradable read lock so writes are brief. Torrents with 2 or fewer peers are stored inline in an ArrayVec with no heap allocation, and connection IDs are stateless keyed-BLAKE3 MACs instead of a connection table. The opt-in io_uring backend uses multishot RecvMsgMulti with a provided-buffer ring (buf_ring), registered file descriptors, batched SendMsg entries and a COOP_TASKRUN/SINGLE_ISSUER ring, which replaces the default mio/epoll path's per-packet recv/send syscalls with one submit_and_wait per batch.
+
+**Use it when:**
+- You run a public or high-traffic open UDP tracker on Linux and opentracker is the incumbent: in the maintainer's benchmark the io_uring build answered 1.19x to 1.37x more requests per second than opentracker at 1 to 16 cores.
+- Your kernel is Linux 6.0 or later and you can build with --features io-uring, which gained about 1.1x to 1.2x over the default epoll build at 1, 2, 4, 6, 8 and 16 cores.
+- You need to scale one tracker across many cores: the benchmark went from 226k responses/s at 1 core to 1.52M at 8 and 2.26M at 16.
+- You want Prometheus metrics, access lists, IPv4 plus IPv6 and scrape-statistics exports built in, without running a database.
+
+**Skip it when:**
+- You want a general event loop or async I/O library: this is a tracker application, and the io_uring machinery is not a reusable API.
+- You run a private tracker: there are no passkeys or per-user accounting (issue #214 is still an open discussion), download counts are always reported as 0, and the IP a client puts in its announce is ignored in favour of the packet's source IP.
+- You are on a pre-6.0 kernel or not on Linux: the io-uring feature fails to compile off Linux and fails a runtime probe on old kernels, which leaves the mio/epoll build. On the benchmark page that build was about 0.98x opentracker at 1, 2 and 4 cores and pulled ahead only from 6 cores.
+- You track very large swarms on constrained RAM: one unverified user report (issue #257, closed by its author six minutes after filing, with no maintainer reply) claims about 100k QPS and 13 GB RAM for aquatic against 800k QPS and 5 GB for opentracker at 50M peers on dual Xeon E5-2650 v2. The published benchmark simulated only 2M peers over loopback.
+- You need numbers that match the current code: the benchmark is from February 2024 (commit 21a5301), the torrent-map structures were reworked in May 2026, and the benchmark has not been rerun since.
+
+**Integration:** crate (mainly the standalone aquatic_udp binary; a lib target exposes config and run) · mio, socket2, parking_lot, hashbrown, crossbeam-channel, blake3, arrayvec, aquatic_udp_protocol (zerocopy); default features add mimalloc (needs cmake and a C compiler) and metrics/Prometheus; optional io-uring crate behind the io-uring feature · Rust stable (README recommends the latest; master declares no rust-version; the crates.io 0.9.0 release declares 1.64). The io-uring feature needs Linux 6.0+. · Unix-like: Linux (CI builds and tests, including with io-uring), macOS (CI build only), FreeBSD (SO_REUSEPORT_LB handling). The io_uring backend is Linux 6.0+ only. Any CPU architecture; the README recommends target-cpu=native without AVX-512.
+
+**Vs siblings:** Pick aquatic when you need a finished UDP tracker rather than a runtime to build one: monoio, libhv and PhotonLibOS are general-purpose I/O frameworks, and io_uring-echo-server is a TCP echo demo. Its io_uring-over-epoll gain (about 1.1-1.2x, measured on UDP inside one codebase) is smaller than monoio's 1.86x or the echo server's 1.4x on TCP ping-pong.
+
+**Gotchas:**
+- The default config sets socket_workers = 1. Set it to 0 (one per available vCPU) or to an explicit N, or you get single-core throughput.
+- io_uring requires both the cargo feature io-uring and network.use_io_uring (which defaults to true once the feature is compiled in). Kernel support is detected by probing for SendZc as a proxy for Linux 6.0, and ring submit errors are unwrapped, so they panic; since 0.9.0 any worker panic stops the whole process.
+- The io_uring backend is marked experimental. The 0.9.0 changelog lists 'Fix io_uring UB issues', the TODO notes that it has not yet run cleanly under valgrind or AddressSanitizer, and its unsafe buf_ring code is copied from a tokio-uring fork.
+- The default 8 MB socket receive buffer only takes effect if net.core.rmem_max allows it (the config docs call this a big factor in dropped packets). Master also carries unreleased breaking config changes (separate address_ipv4/address_ipv6) that differ from the 0.9.0 release.
+
+**Status:** Actively maintained by its author (last commit 2026-07-13) under Apache-2.0, and described as production-ready (explodie.org runs it at about 100k req/s), but the last tagged and crates.io release is 0.9.0 from 2024, so current fixes mean building from master.
+
+[repo](https://github.com/greatest-ape/aquatic) · [benchmark](https://github.com/greatest-ape/aquatic/blob/master/documents/aquatic-udp-load-test-2024-02-10.md)
+
+##### Condy  `C++`  `MIT`  `active`  `Tier A`
+
+Header-only C++20 coroutine runtime over io_uring: ~1.22x epoll TCP recv throughput, matches raw liburing, cheaper coroutines than Asio.
+
+**Beats:** epoll — On one Ryzen 9 7945HX machine (Linux 7.0, clang 18.1.3, Release build), a loopback TCP recv server pinned to one core with 16 client connections reached 2110 MB/s with Condy single-shot recv at 2048 B messages. That compares with 1734 MB/s for a plain level-triggered epoll+recv server (~1.22x), 1588 MB/s for Asio without io_uring (~1.33x), and near-parity between Condy multishot (2610 MB/s) and raw liburing (2560 MB/s). For 4 KB random O_DIRECT reads at QD 128, Condy reached 345K IOPS vs Monoio's 310K, and 598K with fixed files, registered buffers and IOPOLL, vs 601K for raw liburing and ~200K for libaio.
+
+**Known shortcoming:** Margins are modest (about 1.22x over epoll, 1.33x over Asio on recv); the '2x over Monoio' compares different setups (1.11x like-for-like). io_uring only, so Linux-only.
+
+**Known shortcoming:** Effectively Linux 6.0+ (always sets IORING_SETUP_SINGLE_ISSUER). Only matches raw liburing, so the gain over epoll is io_uring's; the epoll baseline is a plain one-recv-per-event loop and Asio ran without its io_uring backend. Single-threaded runtimes (one per core, shard yourself). GCC 15 regression (CI pins GCC 14); build.md pins a nonexistent v1.9 tag. 22 stars, v1.0 in 2026-01.
+
+**How:** It uses io_uring's completion model: the kernel performs the recv or read and posts a CQE, so there is no readiness notification followed by a separate recv syscall per event, as there is with epoll. Without SQPOLL, SQEs accumulate and go to the kernel in one io_uring_submit_and_wait call per loop iteration, and CQEs are reaped in batches. The ring is created with SINGLE_ISSUER and SUBMIT_ALL and its fd is registered. Each operation's state lives in its awaiter inside the coroutine frame, and the CQE's user_data is a tagged pointer to that state; the README says this removes nearly all heap allocations outside coroutine frames. The run queues are intrusive lists, and wakeups across runtimes use IORING_OP_MSG_RING. Most of the gain comes from exposing io_uring features (multishot recv with provided-buffer rings, fixed files, registered buffers, IOPOLL). Condy matches raw liburing rather than beating it.
+
+**Use it when:**
+- Linux TCP servers or proxies where you would otherwise hand-write an epoll loop and want straight-line coroutine code; the published recv test used 16 connections with 64 B to 2 KB messages.
+- High queue-depth NVMe reads with O_DIRECT, where fixed files, registered buffers and IOPOLL take Condy to raw-liburing IOPS (598K vs 601K for 4 KB random reads at QD 128).
+- Code that needs io_uring-only features (multishot accept/recv, provided-buffer rings, linked ops, zero-copy tx/rx, uring_cmd for ublk or NVMe passthrough) without hand-rolling liburing state machines.
+- Thread-per-core designs: one Runtime per core, with Channel and co_switch for handoff between cores.
+- Task-heavy code where Asio's coroutine overhead shows: 56 ns per spawn vs 373 ns for Asio, about 3.3 ns per switch, and 15x faster channel messaging than Asio in the author's benchmarks.
+
+**Skip it when:**
+- Cross-platform code (macOS, Windows, BSD) or Linux older than 6.0: it is io_uring-only, and the Runtime constructor throws if the ring cannot be created.
+- If you want a multithreaded, work-stealing executor. Each Runtime is single-threaded, and the author says to start one per core and shard the work yourself.
+- If you need a long production track record. The project has 22 stars, reached v1.0 in January 2026, and fixed deadlocks in August 2026 (#188 allow_exit+join, #189 CancelRequest) plus a nested-runtime panic (#177).
+- If you already use raw liburing and are happy with it. Condy only matches it (2610 vs 2560 MB/s multishot recv; 598K vs 601K IOPS), so you would gain ergonomics, not speed.
+- If you need protocol layers. It is a system-call layer, and the source tree has no HTTP, TLS or DNS support.
+
+**Integration:** header-only (CMake INTERFACE target `condy`; optional C++20 module target `condy_module`) · liburing >= 2.3. By default CMake downloads liburing 2.15 with FetchContent and links it statically; CONDY_LINK_LIBURING=OFF uses the system copy. · C++20, GCC or Clang. CI builds with GCC 14 and Clang, and pins GCC 14 because of a GCC 15 regression. CMake 3.13+ (the module needs CMake 3.28+ with Ninja and GCC 14+ or Clang 16+). In practice it needs Linux 6.0+, because IORING_SETUP_SINGLE_ISSUER is always set; no minimum kernel is documented. · Linux only (io_uring). CI runs on x86-64 Ubuntu runners plus a QEMU x86-64 job on the latest kernel (7.2); other architectures are not documented.
+
+**Vs siblings:** Pick Condy over Asio's io_uring backend when you are Linux-only and want io_uring-specific features (multishot recv, provided-buffer rings, fixed files/buffers, linked SQEs, zero-copy rx/tx) behind C++20 coroutines. Pick it over uring_exec because that stdexec-based library has been effectively archived since 2025. Monoio is the Rust equivalent: Condy's bench puts Condy 1.12x ahead of Monoio on single-shot recv and about even on spawn and switch cost.
+
+**Gotchas:**
+- The program terminates if a spawned Task is neither awaited nor detached, or if a detached task throws. Internal ring errors call panic_on instead of returning an error.
+- Runtime::run() does not return when idle unless allow_exit() has been called (sync_wait does this for you). Multishot operations deliver every result except the last to a callback, and only the final result resumes the coroutine.
+- Kernel/liburing skew: build.md warns that features compiled in from a newer liburing can fail at runtime on an older kernel, and SINGLE_ISSUER (Linux 6.0+) is set unconditionally.
+- Build: the default configure step downloads and builds liburing, which needs network access and make. The FetchContent snippet in build.md pins tag v1.9, but the newest tag is v1.8 (2026-07-24).
+
+**Status:** Actively developed and MIT-licensed. v1.0 shipped January 2026, v1.8 July 2026, and master is at v1.9 with commits through 2026-09-05, and std::execution support is in open PRs. It is header-only and easy to vendor, but young and lightly adopted (22 stars, one filed issue).
+
+[repo](https://github.com/condy-cpp/condy) · [benchmark](https://github.com/condy-cpp/condy/blob/master/docs/bench.md)
+
+##### gnet  `Go`  `Apache-2.0`  `active`  `Tier A`
+
+Pure-Go epoll/kqueue multi-reactor TCP/UDP framework; 1.4-1.95x Go net's packet rate on streaming 1KB echo.
+
+**Beats:** Go standard library net package (runtime netpoller over epoll) — The Oct 2021 chart in gnet-benchmarks (gnet v1.5.3 built with -tags=poll_opt, Go 1.17.2, GOMAXPROCS=8, 8 cores of an AMD EPYC 7K62, client and server on localhost) shows tcpkali streaming 1KB echo packet-rate estimates of 1.40-1.95x Go net across 1k-10k connections; later raw logs at 1000 connections (Dec 2021, and Jan 2022 labelled gnet v2) show about 1.36-1.41x more bytes echoed. A closed-loop Fortio ping-pong run in the same repo (Feb 2022, 1000 conns, 1KB) shows only 446k vs 389k QPS (1.15x), with better median but worse p99 latency.
+
+**Known shortcoming:** Only 1 of 8 chart numbers appears in any raw log, and the metric is tcpkali packet rate (streaming, no replies), not request QPS; the same repo's closed-loop ping-pong run shows ~1.15x QPS with worse p99 (15.8 vs 10.2 ms). Results not re-run since 2022-02. No backpressure (outbound buffers grow to OOM, #722); Conn methods are not concurrency-safe. Go, not C++.
+
+**How:** Multi-reactor design: N event-loop goroutines (one per CPU with WithMulticore, optionally pinned with WithLockOSThread) each own an epoll/kqueue fd and call epoll_wait/read/write directly via golang.org/x/sys/unix, bypassing the Go runtime netpoller and per-connection goroutines; with SO_REUSEPORT each loop gets its own listener, otherwise a main reactor accepts and load-balances (round-robin, least-connections, source-addr hash). Each loop reads into one shared buffer and passes OnTraffic a slice of it, so only unconsumed bytes are copied into a per-connection elastic ring buffer, and Write goes straight to the socket, spilling to an outbound buffer only on EAGAIN. After events the loop re-polls with a 0 ms timeout plus runtime.Gosched before blocking, and the poll_opt build tag (used in the benchmark) stores the connection's attachment pointer in epoll_event.data to skip the fd-to-conn map lookup.
+
+**Use it when:**
+- Go services holding thousands to 10k+ long-lived TCP connections with small messages (game servers, push/IM gateways, custom RPC or Redis-protocol servers) where per-connection goroutines and scheduler overhead dominate.
+- You own the wire protocol and are willing to write framing/codec code on top of Next/Peek/Discard.
+- Linux production using epoll (optionally built with -tags=poll_opt,gc_opt), or macOS kqueue.
+- Throughput per core matters more than tail latency, and handlers are short and non-blocking (blocking work goes to pkg/pool/goroutine, replies via AsyncWrite).
+- UDP servers that want SO_REUSEPORT fan-out across several event loops.
+
+**Skip it when:**
+- You need TLS, HTTP, WebSocket or gRPC out of the box: none is built in (TLS and io_uring are unchecked roadmap items), and the README says gnet's TechEmpower HTTP code is benchmark-only and not production-ready.
+- Existing net.Conn code or libraries (crypto/tls, net/http, bufio-based parsers) that you do not want to rewrite into callbacks; deadlines are unsupported.
+- Latency-sensitive request/response at moderate connection counts: the benchmark repo's own Fortio ping-pong run (1000 conns, 1KB) gives gnet only 1.15x Go net's QPS with a worse p99 (15.8 ms vs 10.2 ms).
+- Proxies or gateways relaying large streams to slow clients: there is no read backpressure, so outbound buffers grow until OOM (issue #722, closed as not planned).
+- Windows production: the README says the Windows build is for development and testing only.
+
+**Integration:** module · panjf2000/ants/v2 (goroutine pool), valyala/bytebufferpool, go.uber.org/zap, gopkg.in/natefinch/lumberjack.v2, golang.org/x/sys, golang.org/x/sync · Go 1.20 (go.mod; CI tests Go 1.20 and 1.26) · Linux (epoll; syscall defs for amd64, 386, arm, arm64, ppc64/ppc64le, riscv64, s390x, mips) and macOS (kqueue) tested in CI; FreeBSD/NetBSD/OpenBSD/DragonFly only cross-compiled in CI; Windows for dev/test only
+
+**Vs siblings:** Every catalogued sibling (libhv, PhotonLibOS, Seastar, monoio, uWebSockets, Asio io_uring, etc.) is C, C++ or Rust; pick gnet when the service must stay in Go and you want an epoll/kqueue reactor instead of goroutine-per-connection. If you can leave Go or want io_uring, which gnet lacks, the C/C++/Rust siblings are the comparison set.
+
+**Gotchas:**
+- Slices returned by Next/Peek point into the event loop's shared read buffer; copy them before passing to another goroutine or using them after Discard.
+- Calling Write or Context from your own goroutine produces 'fatal error: concurrent map read and map write' crashes (issues #741, #720, #632, #577); use AsyncWrite or SafeContext instead.
+- Anything that blocks in OnTraffic, OnOpen or an AsyncCallback (which runs on the loop) stalls every connection on that event loop.
+- Do not touch a Conn after OnClose: before a fix, fd reuse could send writes to a new connection (#621); open issue #765 reports Enroll blocking forever during shutdown and leaked dup'd fds on failed Enroll.
+
+**Status:** Actively maintained (v2.10.0 released 2026-07-03, 2 open issues/PRs) and Apache-2.0, usable as an ordinary Go module, but the published benchmarks date from 2021-2022 and have not been rerun on current gnet or Go.
+
+[repo](https://github.com/panjf2000/gnet) · [benchmark](https://github.com/gnet-io/gnet-benchmarks)
+
+##### monoio  `Rust`  `MIT OR Apache-2.0`  `active`  `Tier A`
+
+Thread-per-core Rust async runtime on io_uring (epoll/kqueue fallback); ~1.9x Tokio's peak echo QPS on 4 cores.
+
+**Beats:** epoll (via Tokio's mio-based reactor) — This is the maintainers' 2021 ping-pong echo benchmark: rust nightly-2021-11-26 release build with LTO, Linux 5.15.4, a Xeon Gold 5118 server with an X710 10GbE NIC, and the client on a separate machine. With 1 KiB messages on 4 server cores, Monoio peaked at 810,075 QPS against 434,565 for Tokio's multi-thread epoll runtime (1.86x) and 603,016 for Glommio. With 100 B messages on 16 cores it reached 2,802,033 against 917,419. Tokio ran as one unpinned work-stealing runtime with a single accept loop, while Monoio ran one pinned io_uring runtime per core with its own SO_REUSEPORT listener, so the numbers compare runtime architecture plus io_uring rather than io_uring against raw epoll; at 1 core the lead is ~1.15x.
+
+**Known shortcoming:** Thread-per-core io_uring runtime: tasks are not Send and are not work-stolen, so it is not a drop-in for Tokio. Benchmark is from 2021 (rust nightly-2021-11-26). Repository moved from bytedance to monoio-rs.
+
+**Known shortcoming:** Confounded benchmark: Tokio ran one work-stealing runtime with a single accept loop and no pinning, while monoio ran one pinned io_uring runtime per core with SO_REUSEPORT, so the 1.9-3x measures thread-per-core scheduling plus io_uring; at 1 core the lead is only ~1.15x, and Tokio wins at low concurrency. Last crates.io release 0.2.4 (2024-08); fixes only on master; a panic in a spawned task kills the runtime thread (#314).
+
+**How:** It uses completion-based I/O through io_uring. Reads and writes are pushed as SQEs and only submitted when the thread runs out of ready tasks, in one io_uring_enter call (submit_and_wait). Tokio's reactor instead does an epoll_wait and then one read/write syscall per ready socket. The thread-per-core scheduler keeps its state in thread-local Rc/UnsafeCell plus a local VecDeque task queue with no work stealing, so the hot path has no atomics or cross-thread locks. TcpListener sets SO_REUSEPORT by default, so each core accepts its own connections. Because the I/O API takes buffer ownership, the kernel can write straight into user buffers; the project's comparison doc says Glommio copies data at this point for compatibility.
+
+**Use it when:**
+- Linux 5.6+ servers with many concurrent connections per core, such as L4/L7 proxies, gateways and RPC front ends, where peak QPS or CPU per request matters. In the maintainers' echo test the lead over Tokio grows with core count: ~1.15x at 1 core, ~1.9x at 4 and ~3x at 16.
+- Work that shards evenly across cores (NGINX-style), where per-connection state never needs to leave its thread and you want Rc/RefCell instead of Arc/Mutex.
+- Fixed-load services where CPU headroom matters. At 384k QPS on 4 cores with 250 connections per core, Monoio used ~232% CPU against Tokio's ~390%.
+- Teams that develop on macOS or older kernels and deploy on io_uring Linux. The default FusionDriver probes io_uring opcode support at startup and otherwise falls back to epoll/kqueue with the same code (MONOIO_FORCE_LEGACY_DRIVER=1 forces the fallback).
+
+**Skip it when:**
+- Unbalanced or bursty per-connection load. There is no work stealing, and the README warns this can make it slower than Tokio because cores sit idle.
+- Low concurrency on a single core. In the project's own data Tokio had higher QPS up to 480 connections on 1 core (for example 166,938 vs 160,157 at 400 connections) and lower latency at 80 connections per core under fixed load, because io_uring submission latency is higher than epoll's.
+- Code built mainly on the Tokio ecosystem (tokio::spawn, tokio::sync, reqwest, tonic). Those crates need the poll-io feature (epoll readiness layered over io_uring) or monoio-compat (an extra buffer copy), and both give up most of the io_uring gain on those paths.
+- Windows, musl or Android targets. Windows is experimental (open issues #274, #403), 0.2.4 fails to compile for musl (#349), and there is an open Android build failure (#324).
+- Mixed CPU-heavy or blocking work. spawn_blocking needs the `sync` feature and by default runs on the calling thread (BlockingStrategy::ExecuteLocal), which stalls that core's I/O loop.
+
+**Integration:** crate · io-uring 0.6 (Linux), mio 0.8 (legacy epoll/kqueue driver), libc, socket2, bytes, pin-project-lite, rustc-hash, memchr, auto-const-array; optional: tokio (poll-io / tokio-compat), flume + threadpool + once_cell (sync), nix (utils: CPU pinning), tracing (debug), ctrlc (signal) · Rust 1.75 per the README; Cargo.toml sets no rust-version, and CI runs both stable and nightly. The opt-in `unstable` feature needs nightly. The io_uring driver needs Linux 5.6+; splice needs 5.7+, unlinkat/renameat 5.11+, mkdirat/symlinkat 5.15+. Wait-with-timeout uses ext_arg on 5.11+ and a TimeoutOp fallback otherwise. · Linux (io_uring or epoll) and macOS (kqueue). CI builds x86_64, aarch64, armv7, riscv64, s390x and loongarch64 Linux plus x86_64/aarch64 macOS. Windows support is experimental.
+
+**Vs siblings:** Pick Monoio for a general-purpose Rust network server that wants io_uring throughput from a full runtime (sockets, files, timers, and hyper/h2 via poll-io); PhotonLibOS is the nearest C++ equivalent. aquatic's own io_uring-vs-mio/epoll comparison shows only ~1.11x, so remember that Monoio's 2-3x multi-core lead over Tokio mixes io_uring with thread-per-core scheduling.
+
+**Gotchas:**
+- io_uring needs locked memory. With the common 64 KiB memlock default, reads and writes can fail with os error 105 'No buffer space available'. Raise memlock to at least 512 or unlimited. Ring entries default to 1024 (minimum 256); the in-flight op slab starts at 10x entries.
+- Dropping an in-flight I/O future does not reliably cancel it. The async-cancel feature queues a CancelOp, but the read may still complete and its data is then lost, for example in select!{read, timeout}. Keep the future alive, or use cancelable_read with a Canceller and check for ECANCELED (125).
+- A panic inside a spawned task kills the runtime thread; unlike Tokio it is not caught (issue #314). Timer APIs panic unless enable_timer() or timer_enabled = true is set.
+- TcpListener::bind turns on SO_REUSEPORT and SO_REUSEADDR by default, so a second process can quietly share the port; use bind_with_config to disable this. The `zero-copy` feature (MSG_ZEROCOPY) is documented as unstable and possibly slower.
+
+**Status:** Active but slow to ship: the repo is now github.com/monoio-rs/monoio (moved from bytedance/monoio) with commits through 2026-05-29, but the last crates.io release is still 0.2.4 from August 2024 (~1.58M downloads), so fixes made since then are only on git master, and open issue #398 asks whether the project is still maintained. It is MIT OR Apache-2.0 and usable as a crate today.
+
+[repo](https://github.com/monoio-rs/monoio) · [benchmark](https://github.com/monoio-rs/monoio/blob/master/.github/resources/benchmark/raw_data.txt)
+
+##### rsloop  `Rust`  `Apache-2.0`  `active`  `Tier A`
+
+Rust/PyO3 asyncio event loop on io_uring, IOCP or kqueue; beats uvloop on TLS, bulk and TCP round-trips, not plaintext WebSockets.
+
+**Beats:** uvloop (libuv-based asyncio event loop) — In the author's own harness (i9-9900K, Linux 7.0, CPython 3.14.7, release build with rustc 1.98.1 and fat LTO, uvloop 0.22.1, medians of 7 fresh-process runs), rsloop 0.1.52 did 5,000 sequential 1 KiB loopback round-trips in 83.3 ms vs 127.9 ms (1.53x), with rsloop on its native fast streams and uvloop on stdlib streams. A separate 16-connection sustained run of 0.1.49 gave 72,496 vs 26,226 ops/s on TLS HTTP (2.76x) and 2,010 vs 1,265 MiB/s on bulk transfer (1.59x), while uvloop won the plaintext WebSocket-library rows and the idle-wakeup latency gain was classed inconclusive.
+
+**Known shortcoming:** The TCP-roundtrip win uses rsloop's native fast streams while the other loops use stdlib streams; the author rates the idle-latency result inconclusive; uvloop-derivative zuvloop (not uvloop) beats it on callbacks and tasks.
+
+**Known shortcoming:** The 1.53x TCP round trip uses rsloop's native fast streams vs stdlib streams for the others (the same-streams run is unpublished), on one loopback connection in one process. Author-run benchmarks from two versions (0.1.52 small, 0.1.49 sustained) without core pinning; the only outside signal (author's March 2026 Show HN, early version) had uvloop 10-20% faster on FastAPI. Workload-dependent: loses to uvloop on plaintext websockets, aiohttp and Starlette WebSockets; zuvloop leads keep-alive; worst raw WebSocket p95. TLS runs in rustls on helper threads (likely cause of the 2.76x TLS lead, inference) and spins 50/30 us before parking, so it suffers under core contention. Narrower TLS: encrypted keys rejected, empty server ALPN (no h2), CERT_OPTIONAL treated as no client auth, client handshakes block in the default executor. Alpha: 0.1.34-0.1.45 refused pre-6.1 kernels and panicked without io_uring (#75), Windows 10 broken until 0.1.49 (#76); failures are Rust panics. README says Linux 6.1+ but master falls back to an unbenchmarked epoll path; docs cite crate 0.1.52 but crates.io stops at 0.1.44. glibc 2.39+ only, no musl; import patches asyncio and ssl.SSLContext; UDP, sendfile and sock_recvfrom/sendto are Python shims; no preexec_fn.
+
+**How:** Each loop runs a vendored single-threaded Rust runtime (vibeio): io_uring set up with SINGLE_ISSUER, COOP_TASKRUN and DEFER_TASKRUN on Linux (epoll via mio as fallback), IOCP on Windows, one-shot kqueue on macOS. On Unix a second runtime on the Python thread serves TCP protocol reads, so reads are not handed across threads. `call_soon` is a CPython FASTCALL descriptor that skips the argument tuple for zero or one argument, the ready queue drains in bounded batches, and before parking the loop busy-waits up to 50 us (reader workers 30 us) to catch ping-pong replies without a sleep/wake cycle. TLS is rustls on helper reader/writer threads instead of CPython's ssl module on the loop thread, which is the likely (undocumented) source of its TLS lead.
+
+**Use it when:**
+- Asyncio services that terminate or originate TLS (aiohttp, websockets, Starlette/uvicorn): with 16 connections on the author's i9-9900K, TLS HTTP ran 72,496 vs 26,226 ops/s on uvloop, and websockets over TLS 26,781 vs 14,872, with lower p95.
+- Bulk streaming over TCP (large bodies, proxies, file relays): 2,009.9 vs 1,264.9 MiB/s in 64 KiB chunks, with p95 15.1 ms vs 25.2 ms.
+- Latency-bound request/response code built on `asyncio.open_connection`/`start_server` without TLS, where the native fast-stream reader applies: 5,000 sequential 1 KiB loopback round-trips took 83.3 ms vs 127.9 ms.
+- Windows or macOS deployments that want a compiled asyncio loop: uvloop does not build on Windows, while rsloop ships win_amd64/win_arm64 and macOS 13+ wheels.
+- Free-threaded CPython 3.14t with one loop per thread: the extension declares gil_used = false, so separate loops on separate threads run concurrently.
+
+**Skip it when:**
+- Code bound by callback or task scheduling: rsloop is only 1.10x/1.05x ahead of uvloop on 200,000 callbacks and 50,000 tasks (47.77 vs 52.67 ms, 88.29 vs 92.85 ms), and zuvloop beats it on both (36.77, 82.21 ms).
+- Plaintext WebSocket or HTTP keep-alive servers: uvloop wins on websockets (25,800 vs 24,667), aiohttp WebSocket and Starlette WebSocket, zuvloop leads HTTP keep-alive, and rsloop's raw WebSocket p95 is the worst of the three (4.45 vs 3.87 ms). The author's March 2026 Show HN post (early version) likewise found uvloop 10-20% faster on a synthetic FastAPI run, with rsloop ahead only on p99.
+- CPU-limited containers or busy hosts: the loop spins before parking and TLS I/O, add_reader/add_writer watches and parts of the write path use helper threads. The benchmark page warns that rsloop 'has more to lose when cores are contended'.
+- TLS setups that need full OpenSSL SSLContext semantics: the rustls backend rejects encrypted private keys and sets an empty server ALPN list (so no h2 negotiation through its TLS server). On servers it treats CERT_OPTIONAL as no client auth (only CERT_REQUIRED verifies client certs), and a server context must call load_cert_chain() after rsloop is imported.
+- Conservative or legacy environments: it is an Alpha-classified 0.1.x project, and patch releases have broken platforms. 0.1.34-0.1.45 refused kernels older than 6.1 and panicked where io_uring was unavailable (issue #75, fixed in 0.1.46), and Windows 10 broke until 0.1.49 (issue #76). Linux wheels are manylinux_2_39 only (glibc 2.39+, no musllinux), and subprocess preexec_fn is unsupported.
+
+**Integration:** module (CPython extension wheel built from a Rust crate with PyO3/maturin). The crate is also on crates.io for Rust extensions that return asyncio awaitables, but only up to 0.1.44, while docs/rust-extensions.md asks for 0.1.52. · No Python runtime dependencies. Rust side (compiled into the wheel): pyo3 0.29, rustls 0.23 + rustls-native-certs, io-uring 0.7 (Linux), mio 1, socket2, crossbeam, async-std, tokio (io-util only), windows-sys, plus a vendored copy of the vibeio runtime. · CPython 3.10-3.15 (3.14t free-threaded supported). Source builds need Rust 1.98.1 (pinned in rust-toolchain.toml, edition 2024) and maturin >= 1.9.4. · Linux x86-64/aarch64 (wheels need glibc 2.39+). The README says Linux 6.1+, but master probes io_uring and falls back to mio/epoll, and that fallback path is not benchmarked. macOS 13+ x86-64/arm64 (kqueue). Windows 10+ x64/arm64 (IOCP; no arm64 wheel for cp310 or 3.14t). Other Unixes are refused at runtime.
+
+**Vs siblings:** Choose rsloop over uvloop on Windows or when TLS, bulk transfer or stream round-trips dominate; stay on uvloop for plaintext WebSocket/HTTP servers, full OpenSSL SSLContext behaviour and a longer production record. Against uringcore, the other Rust asyncio loop, rsloop is the practical choice: it supports ssl= (uringcore raises NotImplementedError), ships wheels for three OSes and CPython 3.10-3.15, and is actively released.
+
+**Gotchas:**
+- Import side effects: `import rsloop` patches asyncio.set_event_loop, and asyncio.open_connection/start_server (non-TLS streams then get a native PyFastStreamReader rather than asyncio.StreamReader). It also wraps ssl.SSLContext.load_cert_chain, load_verify_locations, load_default_certs and set_default_verify_paths. Set RSLOOP_USE_FAST_STREAMS=0 to keep stdlib streams.
+- The headline TCP-roundtrip win depends on those patched fast streams. The benchmark's --no-rsloop-fast-streams flag gives the like-for-like run, but no result from it is published.
+- Tunables are read from the environment once: RSLOOP_WAKE_SPIN_US (default 50, max 1000, 0 disables spinning), RSLOOP_READER_SPIN_US (30), RSLOOP_MAX_WRITE_BUFFER_BYTES (64 MiB) and RSLOOP_MAX_PENDING_TLS_HANDSHAKES (256). Inbound reads pause at 1 MiB buffered per connection and resume below 256 KiB.
+- Runtime-initialisation failures have shown up as Rust panics ('failed to initialize loop-thread vibeio runtime') rather than Python exceptions (issues #75, #76). A loop that is never close()d leaks its runtime at thread exit. Client TLS handshakes are blocking and run in the default executor.
+
+**Status:** Actively released (0.1.53 on PyPI 2026-09-15, 52 releases since 2026-03-21, 203 stars), almost entirely by one maintainer; Apache-2.0 with prebuilt wheels on PyPI and conda-forge, but still classified Alpha, and patch releases have carried breaking platform changes.
+
+[repo](https://github.com/RustedBytes/rsloop) · [benchmark](https://github.com/RustedBytes/rsloop/blob/master/docs/benchmarks.md)
+
+##### Arrakis  `C`  `MIT`  `abandoned`  `Tier B`
+
+Research OS (Barrelfish fork) giving apps direct SR-IOV NIC and storage queues; beat tuned Linux 3.8 I/O by 1.7-9x.
+
+**Beats:** epoll / Linux kernel I/O stack (Linux 3.8, Ubuntu 13.04, tuned ixgbe 3.17.3: sockets + epoll network path and VFS write/fsync storage path) — The OSDI'14 paper ran a single server (6-core Xeon E5-2430 at 2.2 GHz, Intel X520 10GbE, MegaRAID RS3DC040 with 1 GB flash-backed DRAM over a DC S3700 SSD) against Ubuntu 13.04 / Linux 3.8 with ixgbe 3.17.3 and RSS off. On one core, Redis 2.8.5 read-hit latency fell from 8.67 to 4.07 us and durable SET from 163.14 to 31.51 us, with about 9x SET throughput (read from the Fig. 6 bar chart, not tabulated). Other results: UDP echo 2.3x (POSIX) and 3.9x (native), memcached 1.7x on one core, haproxy 2.2x (2x against SEPOLL), and a raw-IP middlebox 2.6x. No compiler or flags are given, and the Arrakis Redis used Caladan (a 109-line change), so the benchmark is not an unmodified POSIX port.
+
+**Known shortcoming:** Research OS (a Barrelfish fork) requiring SR-IOV hardware; abandoned since 2014-05. Much of the Redis write gain comes from the storage path, not epoll. The ported Redis, memcached and haproxy used in the paper are not in the public repo.
+
+**Known shortcoming:** The public network stack (lib/arranet) is demo-grade: hardcoded ARP table of the authors' lab, UDP accepted only on ports 1234/11211/11212, fixed TCP window, no retransmission timer or congestion control found, only level-triggered epoll. The persistent-data library has only the log. Redis needed a 109-line change, and Caladan-on-Linux alone gave 5x of the 9x write gain. Baseline Linux 3.8 (2013).
+
+**How:** It uses kernel bypass with hardware protection: SR-IOV virtual functions and the VT-d IOMMU enforce isolation, so recv, send and epoll become library calls with no syscalls, no scheduler wakeups, no software demultiplexing and no socket locks. Per UDP echo, the paper's Table 1 measures 3.36 us on Linux, 1.44 us on Arrakis/P and 0.38 us on Arrakis/N. Each process owns its VNIC queues and runs its own lwIP-derived stack instance (Extaris in the paper, lib/arranet in the repo), so packets stay on the core that runs the app, and Arrakis/N also removes the two POSIX copies by handing out pointers into NIC buffers. On the storage side, the Caladan log persists each entry with one hardware write plus an end-of-entry marker and skips VFS, journal and inode work; this is where most of the Redis durable-write gain comes from (fsync 137.84 us vs 24.26 us).
+
+**Use it when:**
+- Studying, reproducing or extending the OSDI'14 control-plane/data-plane split. The tree has the 82599 SR-IOV PF/VF drivers, the VT-d driver, the Arranet stack, the TenaciousD log and the UDP echo benchmark from Sec 2 and 4.1.
+- Research prototypes on matching hardware (Intel 82599/X520 NIC, Intel MegaRAID RS3 controller, Xeon with VT-d) where you control the whole machine and can boot a Barrelfish-derived OS.
+- Small-message request/response servers with one process per core (UDP echo, binary-UDP memcached, Redis-style GET/SET) where per-packet kernel overhead dominates. The gain shrinks as per-request work grows and is gone at about 64 us of processing per packet (Fig. 4).
+- Append-only durable writes on a controller with a flash-backed write cache, where fsync overhead dominates latency. In the paper, Redis SET latency fell from 163 us to 31.5 us.
+
+**Skip it when:**
+- Any production service. Arrakis is an OS rather than a library: the last release is 2014-05-14, the project site is an archive, and it says Arrakis was merged back into Barrelfish in 2015.
+- Stock Linux hosts. Only the TenaciousD log builds on Linux (a POSIX AIO backend); the network path needs the Barrelfish-based OS, so for kernel bypass on Linux look at the maintained stacks listed as siblings.
+- Real TCP traffic over lossy or wide-area paths. Arranet advertises a fixed 11,680-byte window and does no Nagle; I found no retransmission timer or congestion control in arranet.c, and many socket calls and options hit assert(!"NYI").
+- Compute-heavy requests or many-core scaling. The advantage disappears at about 64 us of work per packet. Memcached gained 1.7x on one core, and Arrakis throughput dropped on 6 cores because of Barrelfish management processes.
+- Hardware outside the tested set. README_ARRAKIS lists only a Dell R520 with a Xeon E5-2430, an X520 and a MegaRAID RS3DC040. The 82599 can filter only on MAC and VLAN, so flows are split by a per-VNIC MAC and then filtered in software, and the RAID controller had no SR-IOV (its physical function was used).
+
+**Integration:** source-drop: the whole OS tree; apps are cross-compiled through a gcc wrapper and linked against static libs (libarranet.a, libposixcompat.a, libe10k_vf.a, libvfs.a) · Build: GCC 4.x, GNU binutils, GNU make, GHC plus Parsec (for the hake/Mackerel/Flounder tools). Hardware: SR-IOV NIC (Intel 82599/X520), Intel VT-d IOMMU, and an Intel MegaRAID RS3 for the storage path. Boot: a Multiboot bootloader that can load ELF64, or QEMU. · GCC 4.x (4.4.5 and 4.5.2 known to work), binutils 2.19, GHC 7.4 with Parsec 3.1 (May 2014 PRs patched the tools for GHC 7.6); modern toolchains not documented · x86-64 for the Arrakis additions; tested only on a Dell PowerEdge R520 (Xeon E5-2430) with an Intel X520 and a MegaRAID RS3DC040; boots under QEMU for development. Barrelfish's ARM/SCC ports are not documented for Arrakis.
+
+**Vs siblings:** Choose Arrakis over mTCP, F-Stack, Seastar or IX only to study or build on its design. Its storage half (per-app virtual storage areas plus a persistent log, measured against write+fsync) is something none of those siblings cover. For a network workload you actually need to run, the maintained sibling stacks are the practical choice, since Arrakis needs its own OS and 2014-era Intel NIC/RAID hardware.
+
+**Gotchas:**
+- arranet.c hardcodes lab settings: a static ARP table of the authors' machines (you must edit peers[] and peers_alloc) and an unconditional software UDP filter that accepts only destination ports 1234, 11211 and 11212.
+- The paper and the code use different names. The paper's Extaris stack is lib/arranet and its Caladan structures are lib/tenaciousd. Only the log is present (tenaciousd_log_trim asserts NYI; there is no persistent queue), and the ported Redis, memcached and haproxy are not in the tree.
+- Protocol mode is global to the process: socket() sets global TCP/UDP/raw accept flags, and the readiness checks branch on the TCP flag, so one process that mixes TCP and UDP sockets looks unsupported.
+- Read the numbers carefully. Linux had offloads Arrakis lacked (TSO/LRO, direct cache access, header split). But the baseline is Linux 3.8 sockets+epoll plus kernel fsync, Sec 4.4 says write latency improved by 63% while the abstract says 5x (Table 2 gives about 5.2x), and Caladan on Linux alone gave 5x of the 9x Redis write throughput.
+
+**Status:** Abandoned: the code is frozen at the 2014-05-14 release (last master commit 2014-05-22, a 2017 PR never merged), the project site is an archive saying Arrakis was merged into Barrelfish in 2015, and a 2016 'How to run Arrakis' issue got no guidance. It is MIT-licensed, but using it means building and booting a research OS with GCC 4.x/GHC 7.4 on 2014-era Intel hardware.
+
+[repo](https://github.com/UWNetworksLab/arrakis) · [benchmark](https://www.usenix.org/system/files/conference/osdi14/osdi14-paper-peter_simon.pdf)
+
+##### Caladan  `C`  `Apache-2.0`  `active`  `Tier B`
+
+Interference-aware core scheduler and kernel-bypass runtime; memcached 99.9% latency 52 us vs 580 ms under Parties* during GC.
+
+**Beats:** Parties (authors' reimplementation, 'Parties*', because the original source was unavailable); also compared with Linux (kernel TCP, BE task at SCHED_IDLE) and Shenango — OSDI '20 paper, run on one socket of a dual 12-core Xeon Broadwell server (exact model not given) with a 40 GbE ConnectX-5 and a kernel 5.2 patched for faster multicast IPIs, with security mitigations off and no compiler stated. With memcached 1.5.6 (USR mix, 800k req/s) next to a Boehm-GC PARSEC swaptions job, Caladan kept 99.9th-percentile latency (20 ms windows) near 52 us through GC cycles, while the authors' own Parties reimplementation (Parties*, given the same kernel-bypass runtime and hyperthreads) peaked at 580 ms (11,000x) and got 5% less batch throughput. Linux (kernel TCP on 5.4, BE at SCHED_IDLE) and Shenango appear only in a graph, where stream-DRAM interference raised each one's tail latency 235x and 6x over its own no-interference run. A microbenchmark comparing ksched with Linux syscalls showed 43x less scheduler work, 5x lower latency when moving 22 tasks, and 560k vs ~285k core reallocations/s.
+
+**Known shortcoming:** README says plain iokerneld runs Shenango's default scheduler, but main.c now picks the ias (Caladan) policy. The memory-bandwidth limit is hard-coded at 25,000 MB/s (tuned to the paper's machine); the controller needs PCM uncore access, and users hitting PCI-config (#21) or resctrl (#35) errors fell back to nobw, losing bandwidth-interference protection. Directpath (mlx5) is effectively required; without it one IOKernel core forwards all packets and isolation did not reproduce on 82599ES (#35). The paper's IPI speedup came from a patched 5.2 kernel; stock smp_call_function_many is costlier under interference. TCP has no congestion window or SACK and a fixed 300 ms RTO (FIXME): not for WAN or lossy links. x86-64 Linux, one NUMA node (numa policy experimental); ConnectX-3 dropped (#20); hyperthreading off asserts (#22); shared hyperthreads give no transient-execution protection (paper ran with Meltdown/MDS mitigations off). Default build uses -march=native -ffast-math and -muintr; apps must be rebuilt on every Caladan change (#30). setup_machine.sh reserves ~10 GB hugepages per node and makes /dev/ksched world-writable; 512 KB stack + 512 KB guard per green thread; dedicated scheduler core and root daemon; ksched is GPL. LC services must be ported; caladan-all artifact fails to compile (#30).
+
+**How:** Parties and Heracles partition hardware (Intel CAT/MBA) and adjust every ~500 ms or more. Caladan reallocates whole cores based on signals it reads every 10 us: the queueing delay of the oldest item in each core's runqueue, NIC RX, storage and timer queues (all in shared memory); global DRAM bandwidth from uncore counters, attributed to tasks by sampling per-core LLC misses; and how long each hyperthread has been on its current request. Three controllers act on these signals. The top-level allocator adds a core to any task over its queueing-delay threshold, the bandwidth controller takes one core per 10 us from the BE task with the most LLC misses while bandwidth is above a limit, and the hyperthread controller idles (mwait) the sibling of an LC request that runs past its threshold, a policy generalized from Elfen scheduling. KSCHED keeps these moves cheap: commands pass through per-core 64-byte shared-memory slots, one multicast IPI kicks many cores, calls are asynchronous, and signal delivery and affinity changes run on the target core. Runtime cores also send and receive their own packets (libibverbs/directpath), so the scheduler core does not forward traffic the way Shenango's did.
+
+**Use it when:**
+- A single-socket x86-64 server that colocates microsecond-scale LC services (memcached, RPC, NVMe block storage) with batch jobs whose memory-bandwidth or cache use changes in phases (garbage collection, video encoding, clustering), where 99.9th-percentile latency must stay in the tens of microseconds and batch work should still use the idle cycles.
+- Several LC and BE tasks on one box with hyperthreads left on. The paper ran 3 LC and 2 BE apps together at up to 230,000 core reallocations/s, with per-task knobs (runtime_qdelay_us, runtime_ht_punish_us, guaranteed vs burstable kthreads).
+- You control the whole machine and can give iokerneld a physical core, load a kernel module as root, reserve hugepages, and use an NVIDIA/Mellanox ConnectX-4 or newer NIC with directpath.
+- New C, C++ (gnu++20 bindings) or Rust-nightly services written as blocking green threads, or anything now on Shenango: Caladan is its maintained successor with the same runtime model.
+- Research on microsecond-scale scheduling: the IOKernel has pluggable policies (ias, simple, experimental numa), and test.sh runs it on a DPDK tap vdev with no real NIC.
+
+**Skip it when:**
+- You need Linux sockets, epoll/io_uring compatibility, TLS or HTTP, or want to keep an existing event-loop server unchanged. Nothing is drop-in: LC services must be ported to its green-thread API, and processes outside the runtime cannot be throttled.
+- Multi-socket or multi-tenant hosts. It cannot manage interference across NUMA nodes (the numa policy is described as incomplete and experimental), and sharing hyperthread siblings between tasks does nothing against transient-execution attacks; the paper also ran with Meltdown and MDS mitigations off.
+- WAN or lossy networks. The TCP stack has window scaling and fast retransmit, but I found no congestion-window or SACK code, and the retransmit timeout is fixed at 300 ms with a FIXME comment.
+- Hardware off the tested path: non-x86 CPUs, ConnectX-3 (dropped; issue #20, 2024), hyperthreading disabled in BIOS (open issue #22), or servers where PCM cannot reach the uncore counters. Non-directpath NICs (ixgbe, i40e and other DPDK PMDs) run, but the maintainers treat that as a testing setup, not a benchmarking one.
+- LC services that multiplex many connections per thread and cannot be restructured. Without a green thread per connection or per request, extra cores do not help, so the allocator cannot absorb load or interference.
+
+**Integration:** static lib · git submodules built by `make submodules`: DPDK 25.03 and rdma-core (both patched), Intel PCM (patched), and SPDK (only with CONFIG_SPDK=y). apt packages: libnl-3/libnl-route-3, libnuma, uuid, libssl, libaio, libcunit1, libclang, libncurses, meson, pyelftools and libarchive. Also the ksched kernel module (GPL; fake_idle.ko too when no cpuidle driver is loaded), 2 MB hugepages, the msr module, and the iokerneld daemon run as root. Rust nightly (bindgen 0.69) for loadgen and the Rust bindings. Mellanox OFED 4.6+ and DEVX-capable NIC firmware for directpath. · GCC by default, or clang with CONFIG_CLANG=y; C is -std=gnu11 and the C++ bindings need -std=gnu++20. The default build adds -muintr, -mxsavec and -mfsgsbase (set CONFIG_NO_UINTR=y for compilers without UINTR), and the default CONFIG_OPTIMIZE=y adds -march=native -flto=auto -ffast-math. No minimum compiler version is documented. Building ksched needs kernel headers. Tested on Ubuntu 18.04 (kernel 5.2) through 24.04 (kernel 6.8). · x86-64 Linux only (kernel 5.0+ for directpath). NICs: its own mlx5 driver for ConnectX-4 and newer is fastest; DPDK PMDs ixgbe, i40e, ice, bnxt, mana (Azure VMs are auto-detected), failsafe, mlx5 and tap are slower; no mlx4/ConnectX-3. It manages one NUMA node, with compile-time limits of 256 CPUs and 4 NUMA nodes. Memory-bandwidth control reads uncore counters through PCM.
+
+**Vs siblings:** Pick it over Shenango for any new work: same runtime model, still maintained, directpath removes the IOKernel packet bottleneck, and it adds memory-bandwidth and hyperthread interference control. Pick it over IX, mTCP, F-Stack or Demikernel when the goal is colocating microsecond-scale services with batch jobs on shared cores rather than peak throughput for one app on dedicated cores; if you only need a faster event loop on stock Linux sockets, the io_uring siblings (monoio, Condy) need no dedicated core, kernel module or porting.
+
+**Gotchas:**
+- The README says plain `sudo ./iokerneld` runs Shenango's default scheduler and `iokerneld ias` turns on interference control, but current iokernel/main.c picks ias when no policy is given; `simple` is the policy without interference control. The bandwidth controller has a hard-coded 25,000 MB/s default limit (IAS_BW_LIMIT, the paper's value, 70-80% of its test machine's capacity; override it with `bwlimit`). It also needs PCM uncore access, and users who hit 'Can not access server uncore PCI configuration space' (#21) or a resctrl conflict (#35) fell back to `nobw`, which turns off the protection against memory-bandwidth hogs.
+- Without directpath, the single IOKernel core both forwards packets and runs the controllers. A user on 82599ES NICs could not reproduce the interference isolation until moving to mlx5 with directpath (#35). Each directpath runtime must run as root with a unique IP.
+- The default CONFIG_OPTIMIZE=y builds with -march=native and -ffast-math, so binaries only run on the build machine's CPU type. Apps must be rebuilt whenever Caladan changes: a mismatched memcached build dropped every packet, and old host_mac/static_arp config lines break TCP on current versions (#30).
+- Setup is heavy: setup_machine.sh reserves 5,192 2 MB hugepages (~10 GB) on every NUMA node, sets THP to madvise and makes /dev/ksched world-writable, and each green thread reserves a 512 KB stack plus a 512 KB guard. The paper's multicast-IPI speedup came from a patched 5.2 kernel, but today's ksched uses the stock smp_call_function_many, which the paper says costs more under memory-bandwidth interference, so its KSCHED numbers may not carry over to stock kernels.
+
+**Status:** Actively maintained by the MIT authors (last main-branch commit 2026-05-10, maintainers reply to most issues, tested through Ubuntu 24.04/kernel 6.8) and Apache-2.0 with a GPL kernel module; it is a platform you deploy on a dedicated machine rather than a library to vendor, and the paper's artifact repo (caladan-all) has fallen behind the main repo.
+
+[repo](https://github.com/shenango/caladan) · [benchmark](https://www.usenix.org/system/files/osdi20-fried.pdf)
+
+##### Demikernel  `Rust`  `MIT`  `active`  `Tier B`
+
+Rust kernel-bypass library OS with a zero-copy, queue-based socket API over DPDK; 4-5x lower echo RTT than Linux sockets.
+
+**Beats:** Linux kernel sockets networking path — In the open-access SOSP'21 paper (Xeon Silver 4114 at 2.2 GHz, Mellanox CX-5 100 GbE, Arista switch; Linux tuned with pinned cores, real-time priority and the performance governor), a 64 B echo averaged 30.4 us RTT over POSIX sockets vs 6.0 us for Catnip UDP and 7.1 us for Catnip TCP (about 4.3-5x). A TURN UDP relay fell from 24.9/27.6 us (average/p99) to 13.9/14.9 us, and Redis in-memory peak throughput rose 20% with Catnip (2x with the RDMA LibOS). The paper gives no compiler version or flags, and the RDMA (Catmint) and SPDK (Cattree) LibOSes behind the 2x Redis and disk-logging results are no longer in the repository.
+
+**Known shortcoming:** Kernel-bypass library OS needing DPDK or RDMA NICs and applications ported to its API; competitive with, not faster than, other bypass stacks such as Caladan and eRPC. No toolchain or flags stated.
+
+**Known shortcoming:** Only the Catnip (DPDK) numbers apply to today's code: the RDMA (Catmint) and SPDK (Cattree) LibOSes behind the '2x Redis' and storage results are gone, and Catnap is now Rust. catnip panics with 'failed to clone mbuf' when the mempool runs out at ~150K req/s (#862); AArch64 build fails on -mavx (#1631); effectively Mellanox-only (#317, #1590); single RX/TX queue, no multi-core (#78); no IPv6, fragmentation, SACK or TCP timestamps. Last commit 2025-11, last crate release 2024-09. Needs pinned nightly Rust and makes mimalloc the global allocator; demi_sgaalloc fails above 64 KB (#1133).
+
+**How:** Catnip takes the kernel out of the data path. A DPDK poll-mode driver (rte_eth_rx_burst/tx_burst on a single RX/TX queue) feeds a user-level TCP stack (RFC 793/7323, Cubic congestion control) and UDP stack, and the whole request runs to completion on one core. I/O is zero-copy. Application buffers come from a DMA-capable pool (DPDK mbufs wrapped in reference-counted DemiBuffers). Push hands ownership to the stack, and use-after-free protection lets the app free a buffer right after pushing it. The paper measures Catnip's overhead at about 125 ns per UDP packet and 200 ns per TCP packet. Cooperative Rust async coroutines replace threads and interrupts, under a single-threaded scheduler that keeps readiness bits for 64 tasks per word so it can skip blocked ones. Even catnap cuts some latency by busy-polling epoll_wait with a zero timeout instead of sleeping.
+
+**Use it when:**
+- Microsecond-scale RPC, key-value cache or UDP relay servers on bare-metal or Azure hosts with Mellanox ConnectX-4/5/6 NICs and DPDK, where a 64 B round trip of about 6-7 us instead of about 30 us through the kernel matters.
+- Single-core, run-to-completion servers where you can dedicate a spinning core per instance and structure the main loop as pop, then wait_any, then push.
+- Apps that should run unchanged on plain Linux or Windows sockets (catnap) for development and CI, and switch to DPDK (catnip) in production by rebuilding with LIBOS=catnip.
+- Porting an epoll event loop (Redis-style) when you want zero-copy sends from the app heap without writing your own reference counting for in-flight buffers.
+
+**Skip it when:**
+- Multi-core scaling: each thread gets its own thread-local LibOS, catnip configures one RX and one TX queue, and multi-core support is still open (issue #78).
+- Throughput-bound work: in the paper Catnip (UDP) reached 70% of Caladan's peak throughput, and catnap gave 75-80% lower Redis peak throughput than stock Redis because it spends a core polling.
+- Protocol coverage: IPv6 (#935), IP fragmentation (#208), SACK (#183), TCP timestamps (#182), INADDR_ANY (#189) and port 0 (#582) wildcards are all open issues, and delayed ACKs and the ISN generator also have open issues.
+- NICs other than Mellanox, or AArch64: the catnip build only selects the mlx4 or mlx5 driver, other NICs need changes to device code (#317, #1590), and the DPDK bindings fail to build on AArch64 because of an unconditional -mavx flag (#1631).
+- Many connections at high load: open confirmed bug #862 reports catnip panicking with 'failed to clone mbuf' when the DPDK mempool runs out (reported at about 150K req/s over 100 connections).
+
+**Integration:** crate (rlib) and shared lib (cdylib with C headers in include/demi), built through make · catnip needs DPDK (scripts/build-install-dpdk.sh), a Mellanox mlx4 or mlx5 PMD, 2 MB hugepages and root. All LibOSes need a YAML config with local IP, MAC, interface, a static ARP table and, for DPDK, the NIC's PCI address. Windows catpowder needs XDP bindings. Rust crates include mimalloc (installed as the global allocator), futures, socket2, crossbeam-channel, flexi_logger, yaml-rust and x86. · Rust nightly (rust-toolchain pins nightly-2025-02-17; uses #![feature(allocator_api, hash_extract_if, test)]), edition 2021. Setup is documented for Ubuntu 22.04. · Linux x86-64 (catnap, catnip on Mellanox ConnectX with DPDK, catpowder via AF_PACKET) and Windows (catnap Winsock, catpowder XDP). The catnip build is broken on AArch64 (#1631), and there is no macOS support (#1506 open).
+
+**Vs siblings:** Pick Demikernel over Shenango or eRPC when you want one sockets-like TCP/UDP API that also runs on plain Linux and Windows sockets, and single-core zero-copy latency matters more than peak throughput. In the SOSP'21 echo test Catnip was 3.1 us faster than Shenango but 1.7 us slower than Caladan, and eRPC was 0.2 us faster than the RDMA LibOS. Drogon, H2O, Lwan and the other siblings are HTTP servers on kernel sockets; Demikernel has no HTTP layer at all.
+
+**Gotchas:**
+- demi_push is zero-copy: do not modify or free the scatter-gather memory until the push token completes. Use-after-free protection only delays a free and does not stop writes. Every SGA returned by pop must be freed with demi_sgafree.
+- demi_wait and demi_wait_any spin the calling thread, and catnap polls epoll with a zero timeout, so an idle server still uses 100% of a core. The paper notes this for catnap even with a single client.
+- Size limits: demi_sgaalloc fails above 64 KB (16-bit length, #1133), POP_SIZE_MAX is 8192 bytes, and an SGA holds at most 20 segments.
+- Linking the Rust crate makes mimalloc your process's #[global_allocator] (src/lib.rs), which conflicts with any allocator you set yourself. The demi_init man page still documents an old argc/argv signature, while the header takes a demi_args struct.
+
+**Status:** MIT-licensed Microsoft Research prototype that the README says comes with 'no guarantees'. The dev branch last changed on 2025-11-12, the crates.io release is 1.5.13 from September 2024, and a roadmap question (#1632) has no answer; treat it as vendorable research code, not a supported product.
+
+[repo](https://github.com/microsoft/demikernel) · [benchmark](https://irenezhang.net/papers/demikernel-sosp21.pdf)
+
+##### FlexTOE  `C`  `BSD-3-Clause`  `abandoned`  `Tier B`
+
+Netronome Agilio SmartNIC TCP offload engine running the established-connection data path on-NIC; beats Linux, TAS and Chelsio TOE.
+
+**Beats:** Linux host TCP stack, TAS (TCP Acceleration as an OS Service), and the Chelsio Terminator hardware TCP offload engine — NSDI'22, on two 20-core Xeon Gold 6138 hosts: FlexTOE on an Agilio CX40 40G NIC was compared with Linux kernel TCP, TAS (run on an Intel XL710 because of Agilio's slow DPDK driver) and the Chelsio T62100 kernel TOE, using identical app binaries and DCTCP. Memcached throughput reached up to 5.5x Linux, 4.9x Chelsio and 1.6x TAS, with the Agilio compute-bound at 12 host cores. With 250 cycles/RPC, RPC receive throughput was up to 4x Linux and 5.3x Chelsio, and 99.99th-percentile RTT was 3.2x lower than Chelsio. Firmware was built with NFP toolchain 6.1.0.1; the paper gives no host compiler flags, but the repo Makefiles use -O3 for host code and nfcc -O2 for firmware.
+
+**Known shortcoming:** Needs an Agilio SmartNIC for TCP offload. Median latency is higher than Chelsio/TAS (20 vs 14-16 us) and TAS scales connections 1.5x better; the 2.4x/4x figures are against TAS, the 5.5x against Linux. No benchmark code in the repo; abandoned since 2022-02.
+
+**Known shortcoming:** A TCP transport offload, not an HTTP server; never benchmarked with HTTP. Paper features missing from the repo (XDP/eBPF, tracepoints, tcpdump, connection splicing); the x86 and BlueField ports live only in branches of rajathshashidhara/tas. Firmware needs the private Netronome NFP SDK (#3) and fails on toolchain 6.4.0.24 (works on 6.1.0.1, #4). Socket shim intercepts only AF_INET SOCK_STREAM, masks EPOLLET, epoll_pwait returns EINVAL, sendfile asserts NYI. Hard limits: 16,384 flows, 32 app contexts, 8 KiB per-flow buffers. Project site misstates the 3.2x tail-latency cut as versus TAS (it is versus Chelsio).
+
+**How:** Offload removes almost all host TCP work: in the paper's Memcached profile the host spends 1.67k cycles per request, vs 3.34k for TAS, 8.89k for the Chelsio TOE and 12.13k for Linux. On the NIC, the data path is split into a pipeline (pre-processing, protocol, post-processing, DMA, context queue) mapped onto the NFP's wimpy 800 MHz flow-processing cores. Only the per-connection protocol stage is atomic. The other stages are replicated, and the whole pipeline is replicated across 4 flow-groups chosen by a 4-tuple hash, with segment sequencing and reordering (the NFP GRO block) to keep TCP in order. Near-memory hardware adds CAM-backed 16-entry LRU flow caches, an IMEM CRC-32 lookup table for connections, and a Carousel time-wheel scheduler on EMEM hardware queues. The paper's ablation credits pipelining with 46x over run-to-completion, 8 hardware threads with 2.25x, stage replication with 1.35x and four flow-group islands with 2x.
+
+**Use it when:**
+- You already run Netronome Agilio CX (NFP-4000) NICs and host CPU cycles spent in TCP limit a small-request server such as Memcached (32 B keys and values over persistent connections): up to 5.5x Linux and 1.6x TAS throughput.
+- Tail latency matters more than median latency for small RPCs: 99.99th-percentile RTT is 3.2x lower than the Chelsio T6 TOE and 50% lower than TAS.
+- You need existing POSIX-socket TCP binaries (not a new RPC API) to shed host TCP cost, and a few hundred to ~2K long-lived IPv4 connections fit in the NIC's CLS flow cache.
+- Lossy fabrics with pipelined small RPCs: at 2% loss, 64 B echo throughput is at least 2x TAS and an order of magnitude above Linux and Chelsio.
+- Research on programmable transport: the data path is split into C/NFP-assembly modules, so congestion-control or data-path changes need no ASIC respin.
+
+**Skip it when:**
+- Without an Agilio NFP-4000/6000 NIC (commodity NICs, cloud VMs, ARM hosts): the firmware and driver target only that hardware. The x86 and BlueField ports from the paper are not in this repo.
+- Median-latency-bound single small RPCs: 20 us median vs 14 us for Chelsio and 16 us for TAS (<256 B messages), because the multi-core NIC pipeline adds hops.
+- Many thousands of connections with little data in flight: TAS is 1.5x faster in the connection-scalability test, throughput drops 24% at 8K connections, and flow state is capped at 16,384 flows at compile time (FLEXNIC_PL_FLOWST_NUM).
+- Bulk streaming on lossy links or unidirectional large transfers: recovery is go-back-N with one out-of-order interval and no SACK, so Linux tolerates higher loss. Chelsio is 20% faster on unidirectional large RPCs.
+- Anything needing maintenance or vendor support: the code was released once in Feb 2022, and firmware builds depend on a proprietary NFP SDK pinned to toolchain 6.1.0.1.
+
+**Integration:** shared lib (libflextoe_interpose.so socket shim, plus libflextoe_sockets.so and a low-level libflextoe.so) + user-space control-plane daemon + out-of-tree UIO kernel module (flextoe_uio.ko) + NFP firmware (fastpath.fw); all built from source with make · Netronome Agilio SmartNIC (NFP-4000/6000) with the out-of-tree nfp driver, Board Support Package and private NFP SDK/toolchain (nfcc/nfas/nfld under /opt/netronome); uio module; 1G hugepages mounted at /dev/hugepages-1048576kB; pthread, librt, libdl, libm · Firmware: NFP toolchain 6.1.0.1 exactly (6.4.0.24 fails to build, issue #4). Host: any $(CC) (Makefiles use -g3 -O3 -Wall -pthread; no version stated). Linux kernel 4.8+. · Linux on x86-64 hosts (the host code uses x86 rdtsc inline asm; an ARM host needs porting per issue #2) with an Agilio CX NIC (default CHIP nfp-4xxx-b0); single 40GbE port in the paper
+
+**Vs siblings:** Choose FlexTOE over Shenango or Demikernel only when you have Agilio NICs and want TCP processing off the host cores entirely rather than on dedicated kernel-bypass cores. Choose it over eRPC when applications must keep POSIX TCP sockets instead of adopting a new RPC API. The HTTP frameworks listed (Drogon, H2O, Lwan, etc.) sit above the transport and are not alternatives; FlexTOE was never benchmarked with an HTTP workload.
+
+**Gotchas:**
+- The socket shim is incomplete: EPOLLET is silently masked to level-triggered, epoll_pwait returns EINVAL ('TODO'), sendfile hits assert("NYI"), SO_RCVBUF/SO_SNDBUF always report 1 MiB, TCP_NODELAY and SO_REUSEADDR are always on, and send paths may block on non-blocking sockets (TODO in transfer.c).
+- Features in the paper are not in the public repo: no XDP/eBPF, tracepoint, tcpdump or connection-splicing code. The x86 and BlueField pipeline ports live only on the 'pipeline' and 'bluefield-aarch64-pipeline' branches of the author's TAS fork (rajathshashidhara/tas).
+- Defaults are small and memory must be pinned: per-flow RX/TX buffers default to 8 KiB (--tcp-rxbuf-len/--tcp-txbuf-len), link bandwidth defaults to 40 Gbps, and socket buffers come from physically contiguous 1G hugepages (no IOMMU support). The NIC ACKs every segment (no delayed ACK), which quadruples packet rate on bidirectional bulk flows.
+- Bring-up is fragile: MAC-initialisation failures ('Service processor busy!') needed an NFP flash update or reboot (issue #1). The project site docs/index.html says the 3.2x tail cut is 'versus TAS', but the paper says 3.2x vs Chelsio and 50% vs TAS.
+
+**Status:** Abandoned research code: a single public release, last commit 2022-02-27, 4 issues all closed (maintainer still answered in Feb 2025). The code is BSD-3-Clause, and some Netronome-derived build files carry Apache-2.0/BSD-2-Clause headers. It cannot be built without Agilio hardware and the private NFP SDK, so it is not realistically vendorable.
+
+[repo](https://github.com/tcp-acceleration-service/FlexTOE) · [benchmark](https://www.usenix.org/system/files/nsdi22-paper-shashidhara.pdf)
+
+##### mTCP  `C`  `BSD-3-Clause`  `abandoned`  `Tier B`
+
+User-level, per-core TCP stack over DPDK/PSIO/netmap with an epoll-like API; beats Linux kernel sockets+epoll on short connections.
+
+**Beats:** epoll (Linux kernel TCP/IP stack) — NSDI'14 paper, one 8-core Xeon E5-2690 @ 2.90 GHz with an Intel 82599 10 GbE NIC, mTCP over PSIO on Linux 2.6.32, compiler not stated. In a 64 B one-message-per-connection server test at 8 cores, mTCP was 25x Linux 3.10.12 sockets+epoll with a shared listen socket, 5x Linux with SO_REUSEPORT and 3x MegaPipe; connection accept was 13x Linux, and lighttpd static-file serving was 3.2x/2.2x/1.5x Linux/REUSEPORT/MegaPipe.
+
+**Known shortcoming:** The headline 25x is against Linux 3.10.12 without SO_REUSEPORT; against Linux with SO_REUSEPORT it is 5x (3x vs MegaPipe). Needs DPDK/netmap-style NIC access (io_engine is GPL-2.0) and its own socket API, not a drop-in for epoll. Abandoned since 2019-11. No compiler or flags stated.
+
+**Known shortcoming:** mtcp_setsockopt silently ignores options (TCP_NODELAY, buffer sizes); open data race in RunMainLoop statics (#329). Worse than Linux on bulk transfers (no TSO/LRO) and higher median latency at 8K connections. IPv4/TCP only, DPDK pinned to v18.05, builds fail on Linux 5.x (#292, #310).
+
+**How:** Each core runs one mTCP thread next to one application thread. NIC RSS (with a symmetric key) keeps each flow on one core, so the flow hash table, TCB and buffer pools, socket-id space and accept queue are all per-core, and the app and stack communicate over lock-free single-producer/single-consumer job and event queues. Packet I/O and flow events are batched (the paper averages ~2,170 events per scheduling period), so one app/stack context switch covers many connections, replacing per-call syscalls. It also queues control and ACK packets ahead of data packets, uses preallocated hugepage-backed memory pools and cache-line-split TCBs, and runs retransmission timers in millisecond hash buckets.
+
+**Use it when:**
+- Research or reproduction work: studying kernel-bypass TCP, reproducing NSDI'14 numbers, or using a small C stack (about 11.5K LoC in the paper) as a baseline or a base to fork.
+- Many concurrent short connections with small messages (roughly 64 B to a few KiB) on a multicore Linux box, where accept()/epoll_wait()/write() syscall cost and a shared accept queue are the bottleneck.
+- HTTP load generation: epwget and the ported ab can saturate 10 GbE from fewer client machines (the paper cites more than a 4x cut in ab machines).
+- An existing epoll-based, event-driven C/C++ server you can port mostly by renaming calls, running on a dedicated Intel NIC (82599/X710 class) with its own cores and a pinned kernel/DPDK 18.05 environment.
+
+**Skip it when:**
+- Production services. There have been no master commits since 2019-11; kernel-5.x builds break in igb_uio and dpdk-iface-kmod (#292, #310); and one user measured a 16 ms 4 KiB ping-pong on direct 10G and called it not production-ready (#306).
+- Long-lived bulk transfers. In the paper, 8,000 connections each sending a 100 MiB file used 294% CPU versus 80% for Linux, because there is no TSO/LSO/LRO; socket buffers are also fixed-size (default 8 KiB) with no auto-tuning.
+- Low-concurrency or latency-critical RPC. Batching raised min/median latency (9 vs 0 ms and 13 vs 3 ms at 8K connections) even though mean and max fell, and the maintainer says batching can hurt latency at low concurrency (#289).
+- You need IPv6, UDP, real socket options, kernel services (netfilter/firewall, tc), or several processes sharing the NIC. mtcp_socket accepts only AF_INET/SOCK_STREAM, and the paper supports one application per NIC port.
+- Cloud VMs or non-Intel NICs. The tested NIC list is Intel only; VMs need SR-IOV VFs and code tweaks (#267); DPDK busy-polls one core per mTCP thread at 100% unless built with ENFORCE_RX_IDLE.
+
+**Integration:** static lib · One packet-I/O backend: DPDK (git submodule pinned to v18.05, plus the bundled dpdk-iface-kmod module), PSIO (GPL-2.0 ps_ixgbe driver), netmap, or openNetVM. Also libnuma, libpthread, librt, libgmp (DPDK/ONVM), kernel headers, hugepages and a NIC bound to igb_uio. Optional libccp (Rust toolchain) for CCP congestion control. · C built with GCC via autotools (-O3 -fgnu89-inline -Werror -m64); maintainer says clang was never really tested (#264). The DPDK path builds on kernels up to about 4.15 (fails on 5.3/5.9, #292/#310); PSIO needs Linux 2.6.32-2.6.38. · Linux x86-64 only (tested on Xeon E5-2690 / Core i7-3770). NICs: Intel 82598/82599 (ixgbe), I350 (igb), X710/X722 (i40e); RSS queue count must be >= MAX_CPUS (compile-time, default 16).
+
+**Vs siblings:** Pick mTCP over F-Stack only when you want a small, purpose-built short-connection stack to study, benchmark against, or fork. F-Stack ports the full FreeBSD 13 stack, ships Nginx/Redis integrations and an epoll/kqueue API, and was still getting commits in 2026-09, so it is the practical choice for production kernel bypass. IX's catalogued results use mTCP as a baseline, so mTCP is also the reference point when evaluating newer dataplanes.
+
+**Gotchas:**
+- mtcp_setsockopt() validates the socket id and returns 0 without doing anything, and mtcp_getsockopt() supports only SO_ERROR (api.c). TCP_NODELAY, SO_RCVBUF and similar options are silently ignored; buffer sizes come only from the config file (rcvbuf/sndbuf).
+- RSS core affinity is required: the NIC must provide one RSS queue per mTCP core, and clients should call mtcp_init_rss() so their source ports hash back to the calling core. The remote peer must have TCP timestamps enabled (README).
+- One user reports that mtcp_epoll_wait reports writability only once, as if edge-triggered, so mtcp_epoll_ctl had to be re-armed before every wait (#297, unresolved).
+- The stack shares the app's address space, so app bugs can corrupt TCP state (the paper calls this fate-sharing). Removing the igb_uio/ps_ixgbe driver while running makes the app panic, and the bundled ab-mtcp counts mTCP init time in its results, which understates throughput on short runs (#289).
+
+**Status:** Abandoned: master's last commit was 2019-11-18 and devel's 2020-01, with DPDK pinned at 18.05 and a 2024 'has development stopped?' issue left without a maintainer reply. The core is BSD-3-Clause and copyable, but io_engine is GPL-2.0 and reviving it on a modern kernel/DPDK means porting work.
+
+[repo](https://github.com/mtcp-stack/mtcp) · [benchmark](https://www.usenix.org/system/files/conference/nsdi14/nsdi14-paper-jeong.pdf)
+
+##### Shenango  `C`  `Apache-2.0`  `abandoned`  `Tier B`
+
+Kernel-bypass runtime reallocating cores every 5 us; ZygOS-level tail latency, 6.3x Linux DNS throughput, idle cores freed for batch jobs.
+
+**Beats:** ZygOS (a state-of-the-art kernel-bypass network stack) and standard Linux kernel networking — NSDI'19 paper, on one socket of a 12-core Xeon E5-2650v4 (all systems capped at 16 hyperthreads, 2 of them for the IOKernel) with an Intel 82599ES 10 GbE NIC, Ubuntu 18.04/kernel 4.15 and no compiler stated: memcached 1.5.6 (USR workload) next to PARSEC swaptions served over 5M requests/s at 37 us median and 93 us 99.9th percentile, about 1M requests/s more than ZygOS under the same latency bound, while leaving idle cycles to the batch job (ZygOS left none). Linux reached only ~0.8M requests/s even without batch work (and exceeded 2 ms 99.9th percentile at 0.4M with batch work), and ported gdnsd did 5.7M vs 0.9M UDP requests/s on Linux (6.33x).
+
+**Known shortcoming:** Research runtime needing a dedicated IOKernel core, DPDK NICs and applications ported to its threading API. The README says it is no longer maintained (successor: Caladan). No compiler versions or baseline flags stated.
+
+**Known shortcoming:** A kernel-bypass runtime with its own tcp_/udp_ API, no HTTP layer. TCP stack has no congestion control and no window scaling (#6). Rust bindings need a 2021 nightly (llvm_asm removed in 2022), which also blocks rebuilding the benchmark app (#10). Repo moved to DPDK 19.11 after the paper (18.11). Unmaintained since 2021 (notice added 2024-11). x86-64, one socket only; panics with hyperthreading off unless built with CORES_NOHT. Uncontended mutex slower than pthreads and Go in its own table. Apps must disable preemption around thread-local accesses. Caladan is the maintained successor.
+
+**How:** One busy-polling IOKernel core runs a congestion-detection check every 5 us: if any uthread or packet stays in a kthread's ring-buffer queue across two consecutive checks (current head vs previous tail, read from one shared cache line per kthread), the app gets one more core, and kthreads that find no work after local, hyperthread-sibling, random and all-kthread work stealing park and hand the core back. Cores are granted with eventfd wakeups plus sched_setaffinity and taken back with tgkill(SIGUSR1); a reallocation completes in 5.9 us, and the paper contrasts its 5 us balancing interval with 4 ms for Linux and 50 ms for Arachne. Inside the app, per-kthread runqueues with lock-free local wakeups, preallocated stacks, minimal register saves on cooperative yield, and stealing of packet/TCP processing across cores (dropping flow-consistent hashing, unlike ZygOS) keep scheduling cheap. Payloads are copied instead of zero-copy so Intel DDIO keeps packet buffers inside its LLC share.
+
+**Use it when:**
+- A single-socket x86-64 server that runs a latency-critical request/response service (1-10 us service times, memcached- or RPC-like) next to batch work, where you need 99.9th-percentile latency under ~100 us and want idle cores to go to the batch job.
+- Load that jumps within microseconds (the paper tests 100k to 5M requests/s steps) where static kernel-bypass provisioning such as ZygOS or IX would have to keep all cores spinning for peak load.
+- High-rate small UDP request/response services on one 10 GbE port (gdnsd port: 5.7M vs 0.9M requests/s on Linux).
+- Research or reproduction of the NSDI'19 results, or as a readable reference for microsecond-scale core allocation (the whole congestion check and grant loop is about 80 lines in iokernel/cores.c).
+- You can give a full physical core (2 hyperthreads) to iokerneld, run it as root, and bind the NIC to DPDK.
+
+**Skip it when:**
+- Any new deployment: the maintainers mark it unmaintained and point to Caladan, which adds directpath (IOKernel off the datapath), TCP window scaling, user-interrupt time slicing and interference mitigations.
+- WAN, lossy or high bandwidth-delay paths: the from-scratch TCP stack has flow control and fast retransmit but no congestion control and no window scaling.
+- Peak throughput at very short service times (<2 us): the single IOKernel core caps out around 6.5M packets/s and becomes the bottleneck; ZygOS reaches higher peak memcached throughput (at worse latency).
+- Multi-socket/NUMA use, VMs, non-x86 CPUs, hosts without hyperthreading, or NICs other than the tested Intel 82599ES and Mellanox ConnectX-3 Pro (ConnectX-5 patches exist): the IOKernel only manages cores on package 0 and panics if hyperthreads are off unless built with CORES_NOHT; VM support is an unanswered issue.
+- You need HTTP, TLS or BSD-socket compatibility: none is provided, and existing servers must be rewritten against tcp_*/udp_* calls.
+
+**Integration:** static lib · DPDK 19.11 as a git submodule with patched ixgbe/mlx4/mlx5 drivers (the paper used 18.11), libnuma, libdl, pthreads, 2 MB hugepages and System V shared memory (scripts/setup_machine.sh), a root-run iokerneld daemon; Mellanox OFED for Mellanox NICs; Rust bindings need bindgen 0.32 (clang) and a nightly toolchain · GCC with -std=gnu11 (runtime, IOKernel) and -std=gnu++11 (C++ bindings), -mssse3, -O3; no GCC version documented. Rust bindings use #![feature(llvm_asm)], which rustc nightly removed in January 2022, so a 2021 nightly is needed (issue #10 reports nightly-2021-06-06 works). Tested on Ubuntu 18.04, kernel 4.15. · x86-64 Linux only; single socket (package 0); hyperthreading required by default; Intel 82599ES (ixgbe) or Mellanox ConnectX-3 Pro/ConnectX-5 via DPDK
+
+**Vs siblings:** Pick Shenango over Demikernel or eRPC only when the goal is CPU efficiency, meaning microsecond-scale core reallocation among colocated apps behind a blocking-thread API, rather than the lowest per-request latency or RPC rate; for HTTP serving use Lwan or H2O, since Shenango has no HTTP layer. In practice, prefer its maintained successor Caladan.
+
+**Gotchas:**
+- TCP interop is limited: no window scaling (an mTCP client that assumed window scaling stalled because Shenango read its receive window as tiny, issue #6), no congestion control, and reader wakeups depend on the peer setting PSH or FIN.
+- Packet stealing and core changes reorder packets: under 0.07% arrive out of order with 1,200 connections and up to 3% with 24, with the runtime resequencing per socket under a lock (under 0.5% of cycles in the paper).
+- iokerneld pins itself to the first non-zero core of socket 0 and gives that core's hyperthread sibling to Linux and its control thread; running an app on a different NUMA node fails with 'base library per-thread init failed, ret = -12' (fix: numactl, issue #6), and setup_machine.sh reserves hugepages on node 0 only.
+- Not every primitive wins: in the paper's Table 2 an uncontended mutex costs 37 ns versus 30 ns for pthreads and 24 ns for Go; each uthread gets a 128 KB stack plus a 128 KB guard region.
+
+**Status:** Declared unmaintained by its authors (last code change 2021-03-25; README notice 2024-11-05) with Caladan as the active successor; Apache-2.0 (the unused ksched kernel module is GPL), so the code can be copied, but building it needs a patched DPDK 19.11 and a 2021 Rust nightly, which makes it research code, not a library to adopt.
+
+[repo](https://github.com/shenango/shenango) · [benchmark](https://www.usenix.org/system/files/nsdi19-ousterhout.pdf)
+
+#### http-parsers
+
+##### ada-rs  `Rust`  `MIT OR Apache-2.0`  `active`  `Tier A`
+
+Memory-safe Rust port of the Ada WHATWG URL parser; 7.4% faster than C++ Ada on a 9-URL corpus.
+
+**Beats:** ada-url (C++ Ada) — Divan medians for parse plus href on an Apple M5 Pro (macOS 26.5, arm64), Rust 1.97.1 / LLVM 22.1.8 with fat LTO: 1.041 µs vs 1.124 µs for C++ Ada 4.0.0 (called through the ada-url Rust wrapper) over 9 URLs, 244 ns vs 312 ns on the 5 normalized ones, a tie on the 4 complex ones, and 1.666 µs for Servo url. On all 891 WPT cases it is 0.6% faster overall (26.2% faster on invalid inputs, 0.4% slower with no base); the C++ compiler used to build Ada is not named.
+
+**Known shortcoming:** Small margins (7.4% overall vs C++ Ada; WPT margins small) and the C++ compiler used to build Ada is not named. A Rust port; for C++ use, Ada itself is the incumbent.
+
+**Known shortcoming:** Unfair WPT benchmark: ada-rs gets a pre-parsed base URL while C++ Ada re-parses the base string, and C++ Ada is called through a C-ABI wrapper with a heap-allocated result, so the 7.4%/21.7% margins are likely overstated. Only common URL shapes have a native fast path; everything else and all setters go through Servo's url crate. Declared MSRV 1.85 is wrong (let-chains need 1.88). Not on crates.io; two commits.
+
+**How:** Conservative validate-and-copy fast paths. For http(s) URLs that are already normalized, it finds delimiters with `memchr`/`memchr2`/`memchr3` (runtime-dispatched SIMD) and checks host bytes against a 256-entry const lookup table. It then copies the input into one `String` with a single allocation and records the offsets, lowercasing the host or inserting a missing `/` only when needed. More hand-written paths cover normalized file URLs, common authority URLs (credentials, ports, IPv4/IPv6, IDNA hosts via the `idna` crate), opaque URLs and simple relative references. Every other input goes to Servo's `url` crate, and ada-rs patches the result to match Ada's output, so the speedup only applies to inputs that hit a fast path.
+
+**Use it when:**
+- Pure-Rust services or tools that parse many URLs which are already normalized http(s) (logs, crawlers, proxies, analytics). This is the subset where it measured 21.7% faster than C++ Ada.
+- Codebases whose memory-safety policy rules out linking C++ Ada through FFI, but where Servo `url` is too slow (37.5% slower than ada-rs on the same 9-URL corpus).
+- Rust code that needs serialization matching Node.js/Ada. It passes the pinned WPT, Ada-extra, IDNA and setter fixtures, and differential tests compare 10,000 generated URLs and 5,000 SearchParams mutation sequences against C++ Ada.
+- Read-heavy use: parse once, then read components many times. Getters are checked slices of one buffer and do not allocate.
+
+**Skip it when:**
+- Setter-heavy workloads. Nine setters (protocol, username, password, host, hostname, port, pathname, search, hash) re-parse the whole href with Servo `url` and then rebuild the `Url`. No setter benchmarks are published.
+- Workloads full of unusual, relative or non-normalized inputs. On the full WPT fixture it is at parity with C++ Ada (0.6% faster overall, 0.4% slower with no base), and inputs that miss the fast paths run at roughly Servo `url` speed plus a copy.
+- C or C++ projects: there is no C ABI, so use Ada directly.
+- Production dependencies that need maturity: v0.1.0, two commits on one day (2026-07-28), one author, 0 stars, and not published on crates.io (git dependency only).
+- Small dependency trees: it wraps Servo `url` rather than replacing it, and also pulls in `idna`, `percent-encoding` and `memchr`, plus `urlpattern` if you enable URLPattern.
+
+**Integration:** crate (v0.1.0; not on crates.io, use a git dependency) · memchr 2.8, idna 1.1, percent-encoding 2.3, url 2.5.8 (Servo; default features off; used as the fallback parser and for form_urlencoded); optional: serde, urlpattern 0.6 (`url-pattern` feature), ada-url 4.0.0 (`bench-ada` feature, builds C++ Ada for tests and benches only) · Rust edition 2024. Cargo.toml declares rust-version 1.85, but the library uses let-chains, which became stable in Rust 1.88, so 1.88+ in practice. · Any Rust target with std. CI runs tests on Ubuntu, macOS and Windows (stable) plus Miri. memchr's SIMD dispatch covers x86-64, AArch64 and WebAssembly. Benchmarks were run only on an Apple M5 Pro (arm64).
+
+**Vs siblings:** Pick ada-rs over Ada (C++) when you work in Rust and want Ada-compatible output with no C++ toolchain or FFI; stay with Ada for C/C++ code, for production maturity, or for setter-heavy code. Compared with sorug (Rust, benchmarked only against Servo url) and lucid-url (mixed results against Ada), ada-rs is the one with a head-to-head benchmark and differential tests against C++ Ada, but its measured wins are small and mostly on normalized URLs.
+
+**Gotchas:**
+- It is a hybrid, not a full native port. ARCHITECTURE.md calls the Servo `url` fallback a 'correctness bridge' for states not yet handled natively. After the fallback, ada-rs fixes drive letters, file localhost, trailing spaces in opaque paths and `^` in paths so the output matches Ada.
+- The WPT benchmark treats the two parsers differently. benches/wpt.rs gives ada-rs an already-parsed `&Url` base, but gives C++ Ada the base as a string, and `ada_parse_with_base` parses that base again inside the C API. Each C++ Ada call also goes through the C ABI and heap-allocates an `ada::result` wrapper. Both effects favor ada-rs in the with-base, all-cases and invalid-case numbers.
+- `url.search_params()` returns a detached copy. Call `url.set_search_params(&params)` to apply changes; unlike JavaScript's `URL.searchParams`, the two are not kept in sync.
+- `set_max_input_length` is global and uses a Relaxed atomic. The default is u32::MAX (no limit).
+
+**Status:** New rather than proven: two commits on 2026-07-28 with green CI (Linux, macOS, Windows, Miri), v0.1.0, not on crates.io, 0 stars. It is dual MIT/Apache-2.0 and about 4,000 lines of safe Rust, so it is small enough to vendor, but treat it as an experiment.
+
+[repo](https://github.com/countradooku/ada-rs) · [benchmark](https://github.com/countradooku/ada-rs/blob/main/docs/BENCHMARKS.md)
+
+##### blazehttp  `Go`  `MIT`  `active`  `Tier A`
+
+Go HTTP/1.1+HTTP/2 server/client with zero-copy header parser; ~11-14% more HTTP/1.1 req/s than fasthttp (author's wrk runs).
+
+**Beats:** valyala/fasthttp — The author ran wrk -t4 -c128 -d10s once per case on a non-isolated 80-core Xeon E5-2698 v4 (Linux 5.15, Go 1.24.0, GOGC=100, build flags not stated). BlazeHTTP served 329.8k plaintext req/s vs 298.1k for fasthttp v1.69.0 (+10.6%), +11.9% on JSON and +13.6% on 1 KB POST echo. p50 latency was lower (179 vs 216 us), but p90/p99 were slightly higher. fasthttp ran with default settings and also wrote Server and Date headers that BlazeHTTP omits. The 2.1-5.3x header-parse speedups come from go test benchmarks in which fasthttp reads through a bufio.Reader over a fresh bytes.Reader (1 alloc/op) into its own header struct, while BlazeHTTP slices the input buffer. Treat them as upper bounds, not a like-for-like parser comparison.
+
+**Known shortcoming:** Code-reading findings (not run): header sections over 4 KB slice past the read buffer and panic with no recover, crashing the process; bodies beyond the first read get 400; leftover pipelined bytes are overwritten, so pipelining is broken despite the CHANGELOG. Lenient parser (smuggling risk): space before the colon trimmed ('Transfer-Encoding : chunked' counts), no token check on header names, control characters and bare LF in values kept, unparseable Content-Length ignored, last duplicate wins, only exact 'chunked', CRLF only. Benchmark asymmetry: fasthttp's default server emits Server and Date headers BlazeHTTP doesn't, and the header-parse micro-benchmark compares a copying bufio read against slicing, so 2.1-5.3x is an upper bound. README quick start calls functions that don't exist; timeouts default to zero despite slowloris claims; the fixed HTTP/2 worker pool refuses streams when its queue fills. Idle since 2026-02, 2 stars.
+
+**How:** The HTTP/1.1 parser is a plain scalar byte loop with zero copies. It scans for CRLFCRLF, then fills a fixed 128-entry array of key/value slices that point into the read buffer. While parsing, it records Content-Length, chunked and keep-alive using a switch on the first byte of the header name. It uses no SIMD and no bytes.IndexByte. Requests, responses and contexts are recycled with sync.Pool, and buffers come from a size-class pool (64 B to 64 KB). Responses are appended into one pooled buffer, and accepted sockets get TCP_NODELAY, plus TCP_QUICKACK on Linux. HTTP/2 uses a read loop, a fixed worker-goroutine pool (default NumCPU*256) and a write loop, with its own zero-allocation HPACK (hashed static-table lookup, ring-buffer dynamic table).
+
+**Use it when:**
+- You want an HTTP/2 or h2c server in Go with a fasthttp-style zero-allocation handler API. fasthttp has no HTTP/2. In the author's h2load runs, it served 1.6-2.3x the req/s of net/http.
+- You are prototyping or benchmarking small, keep-alive HTTP/1.1 request/response traffic (headers and bodies well under 4 KB, no pipelining), and a ~10% req/s gain over fasthttp matters.
+- You need a Go HTTP/2 client that presents browser-like JA3/JA4 and Akamai HTTP/2 fingerprints, with connection pooling, proxies (CONNECT, SOCKS5) and multiplexed DoBatch.
+- You want a small, readable reference for a zero-copy HTTP/1.1 head parser or a zero-allocation HPACK codec in Go to study or vendor.
+
+**Skip it when:**
+- Internet-facing HTTP/1.1 serving. In server/http1/handler.go at HEAD, readUntilComplete grows only a local copy of the 4 KB read buffer, so a header section over 4 KB makes the caller slice past its capacity. That is a panic, and no recover exists in the server or worker code. The function also returns as soon as CRLFCRLF arrives, so a body not already in that read gives ErrNeedMore, which ServeConn answers with 400 and a closed connection.
+- Clients that pipeline HTTP/1.1 requests. ServeConn copies the leftover bytes to the front of the buffer, but the next read writes over them from offset 0. The CHANGELOG still claims pipelining support.
+- Deployments behind a proxy, or anywhere request smuggling matters. The parser is lenient, with no strict mode (see gotchas).
+- HTTP/2 handlers that block (database or RPC calls). Requests go to a fixed worker pool with a queue of n*4. When the queue is full, new streams get REFUSED_STREAM instead of waiting.
+- Anything that needs a mature, supported library, or fasthttp middleware and routers. It has 2 stars, 1 fork and no issues. Development ran only 2026-02-22 to 2026-02-24. The API is not fasthttp-compatible.
+
+**Integration:** module (go get github.com/justIliane/blazehttp; packages server, server/http1, server/http2, client, pkg/header, pkg/hpack, ...) · refraction-networking/utls v1.8.2 (client fingerprinting); go.mod also requires valyala/fasthttp v1.69.0 (benchmarks/tests), with golang.org/x/{crypto,net,sys,text}, klauspost/compress and andybalholm/brotli as indirect dependencies · Go 1.24.0 (go.mod) · Pure Go with unsafe zero-copy string/[]byte conversions, so any Go target in principle. TCP_QUICKACK is set only on Linux (sockopt_linux.go). The benchmarks cover only Linux x86-64.
+
+**Vs siblings:** fasthttp is the only Go sibling. Pick blazehttp over it only if you need HTTP/2/h2c or a browser-fingerprinted client in a fasthttp-style API and can live with an unproven codebase. For plain HTTP/1.1, fasthttp's pipelining, large-request handling and long production record outweigh a ~10% req/s gain. For a standalone request-head parser, the long-established C and Rust siblings (picohttpparser, httparse) or iohttpparser's strict profile are the better-tested choices.
+
+**Gotchas:**
+- The README quick start calls server.New(), s.HandleHTTP2(...) and ListenAndServeTLS(":8443"), and none of these exist in the code. The real API is &server.Server{Addr, Handler, TLSConfig} with ListenAndServe(), ListenAndServeTLS() or ListenAndServeTLSCert(cert) (see examples/hello).
+- ReadTimeout, WriteTimeout and IdleTimeout default to zero, which means no deadlines. The README's slowloris 'Read timeouts' mitigation applies only if you set them. Responses carry no Date or Server header.
+- The parser is lenient. It trims spaces before the colon, so 'Transfer-Encoding : chunked' counts as TE. It does not validate header names as tokens or reject control characters, and it keeps a bare LF inside a value. It ignores an unparseable Content-Length instead of rejecting it, and the last duplicate Content-Length wins. It treats only an exact 'chunked' as chunked, so 'gzip, chunked' is not. It accepts only CRLF line endings and methods of A-Z only.
+- With HTTP1Handler left nil, every HTTP/1.1 request is copied into an http2.RequestCtx and back through a bridge. The HTTP/1.1 benchmark server set a native HTTP1Handler, so the published numbers do not include that copy.
+
+**Status:** MIT-licensed single-author project: created 2026-02-22, last push 2026-02-24, so seven months idle as of 2026-09-26 despite the 'active' label. Its one fork has the same HTTP/1.1 handler. pkg/header and pkg/hpack are small enough to vendor or study, but the HTTP/1.1 server needs its buffer-growth and pipelining bugs fixed before production use.
+
+[repo](https://github.com/justIliane/blazehttp) · [benchmark](https://github.com/justIliane/blazehttp#-performance)
+
+##### lucid-url  `Rust`  `MIT`  `active`  `Tier A`
+
+Dependency-free, safe-Rust WHATWG URL parser with Ada's API; faster than ada::url, slower than ada::url_aggregator and can_parse.
+
+**Beats:** ada-url (C++ Ada) — The benchmark links Lucid and amalgamated Ada b2c2d7f6 into one Google Benchmark binary and runs Ada's pinned 100,025-URL corpus, taking the mean of 5 reps. Setup: Apple M4, macOS 26.5, Rust 1.98.0 with target-cpu=native against Apple Clang 21 at -O3 -mcpu=native, LTO off on both sides, simdutf off. Result: Lucid `Url` parse+href 85.41 vs `ada::url` 108.54 ns/URL (1.27x); `UrlAggregator` 59.70 vs `ada::url_aggregator` 57.26 (Ada ~4% faster); can_parse 12.95 vs 11.25 (Ada ~15% faster). The raw JSON matches these numbers, shows zero validity or serialization disagreements, and records a 1-minute load average of ~4.5.
+
+**Known shortcoming:** Not faster than Ada in practice: the only win (1.27x) is owned Url against ada::url, Ada's heavier type; against ada::url_aggregator (what Ada's README uses) and on can_parse it is slower. The author says parsing showed no dependable across-the-board gain.
+
+**Known shortcoming:** Most setters (protocol, host, port, pathname) still reparse the whole URL; parsing with a base always takes the slow path; setting a non-default max input length disables all can_parse fast paths. Not on crates.io; no fuzzing; Apple M4 numbers only.
+
+**How:** Several fast paths run before a full parse. The first is a single-pass scanner for already-canonical http(s) URLs. It checks bytes against a 256-entry byte-class bitmask table, ANDing class bits for 8, 4 or 2 bytes at a time, and on success copies the input verbatim into the buffer and records offsets. Further direct paths cover ftp/ws/wss, common normalization (percent-encoding, dot segments, IPv4, IPv6, IDNA) and clean non-special URLs; anything else goes to a spec-literal state machine over a `Vec<char>`, whose result is re-serialized into the aggregator. There is no SIMD (the author dropped the hostname-SWAR and wider-scan-block experiments). The large setter gains come from rewriting only the affected byte range and shifting offsets instead of reparsing.
+
+**Use it when:**
+- You need WHATWG-conformant URL parsing in pure safe Rust, with no C++ toolchain, FFI or unsafe code, and want Ada's API shape and Ada-fixture conformance.
+- Getter-heavy code on `UrlAggregator`: component getters are borrowed slices of one buffer with no allocation.
+- Code that repeatedly rewrites the query, fragment or credentials of http(s)/ws/ftp URLs: these setters edit a range in place, at ~15 ns for an ASCII query and ~100 ns for a Unicode query on an M4. That is a Lucid before/after gain, not a comparison with Ada.
+- You are porting code built on Ada's multi-string `ada::url` and parse-plus-href cost matters: Lucid's `Url` took 85.41 vs 108.54 ns/URL. Lucid's own `UrlAggregator` is faster still, at 59.70.
+- Mostly absolute, canonical http(s) inputs such as crawled or logged URLs, which stay on the fastest scanner path.
+
+**Skip it when:**
+- Top parse or validation throughput: in the project's own run Ada's `url_aggregator` (57.26 vs 59.70 ns/URL) and `can_parse` (11.25 vs 12.95 ns/URL) are faster, and the README says parsing experiments 'did not show a dependable across-the-board gain'.
+- Hot relative-URL resolution: with a base, every call reparses the base href and runs the char-based state machine, skipping all fast paths. There is no benchmark for this case.
+- Hot hostname/host/port/pathname/protocol setters: they reparse the whole URL through the generic state machine and rebuild it. Before the range-edit work, query and credential setters on this same path took ~2.5-3.9 µs per call.
+- You need URLSearchParams, URLPattern, Ada's C API, a crates.io release or semver guarantees: none exist yet. The 0.1.0 release PR is still open.
+- Binary size or maturity matter: the native object is 45% larger than Ada's (462.1 vs 318.4 KiB, measured against an older Ada pin) because of built-in Unicode/IDNA tables. The repo is ~2 months old with 4 stars, and there is no fuzzing (the fuzz targets are out of scope and not in the tree).
+
+**Integration:** crate · none (std only; serde_json is dev-only) · Rust 1.87 (declared rust-version, edition 2024); CI only tests stable · any Rust target (pure safe Rust, no arch-specific code); CI tests Linux, macOS and Windows; published performance numbers cover only Apple M4 (aarch64)
+
+**Vs siblings:** Choose it over Ada (C++, or Ada's Rust bindings) only when pure safe Rust with no C++ build is worth ~4% slower aggregator parsing and ~15% slower can_parse. Over sorug, another pure-Rust WHATWG parser that is benchmarked against servo url rather than Ada, choose it when you want Ada's API and Ada's fixture suite; ada-rs publishes a larger lead over C++ Ada, but only on a 9-URL corpus.
+
+**Gotchas:**
+- `Url` only wraps `UrlAggregator`. Its owned getters (get_href, get_protocol, get_host, get_hostname, get_port, get_search, get_hash) clone into a new String on every call. The headline 1.27x win comes from this layout difference, and `UrlAggregator` is the faster type to use.
+- Only set_search/set_hash on special non-opaque URLs and set_username/set_password on special non-file URLs are in-place range edits. Every other setter, and those same setters on file, non-special or opaque URLs, reparses the whole buffer.
+- Setting `set_max_input_length` to anything except the default u32::MAX makes `can_parse` skip every fast path and run a full parse. The setting is global to the process.
+- The error type has a single `TypeError` variant ('invalid URL'), so it gives no detail on why a parse failed.
+
+**Status:** Active (created 2026-07-30, last commit 2026-09-07) and MIT-licensed, but not yet on crates.io, so use it as a git dependency. It is small, dependency-free safe Rust that can be vendored, and a daily CI job tracks Ada main's fixtures.
+
+[repo](https://github.com/lucid-softworks/url) · [benchmark](https://github.com/lucid-softworks/url/blob/main/README.md)
+
+##### picohttpparser AVX2 fork (vkrasnov)  `C`  `MIT OR Perl License (Artistic-1.0-Perl OR GPL-1.0-or-later), stated in source-file headers and README (no LICENSE file; GitHub spdx_id null); inherited unchanged from upstream`  `abandoned`  `Tier A`
+
+AVX2 bitmap rewrite of picohttpparser's header scanner; 1.7-1.8x the SSE4.2 PCMPESTRI version on Haswell.
+
+**Beats:** picohttpparser — On a Haswell i5-4278U with turbo off, built with GCC 4.9.2 -O3 -mavx2 -mbmi2, the AVX2 build parsed bench.c's 703-byte, 9-header request 1.79x faster than December 2014 picohttpparser's PCMPESTRI path (6.96M vs 3.90M per second, consistent with 10M iterations taking 1.436 s vs 2.564 s), and fukamachi.c's 430-byte request 1.68x faster (8.06M vs 4.81M). The fukamachi figures match a 100,000-iteration loop, so those runs lasted only about 12-21 ms; both tests repeatedly parse one complete, hot-cache request.
+
+**Known shortcoming:** An unmerged 2015 fork (upstream PR #10 closed 2020); the AVX2 path is not in upstream picohttpparser. Needs AVX2 and BMI2; measured on a Haswell laptop with gcc 4.9.2. Licence is MIT or Perl licence from the source headers (GitHub shows none).
+
+**Known shortcoming:** Correctness bugs in the AVX2 path (source reading, not run): an operator-precedence bug rejects bare-LF line endings and accepts lone CR/ESC/DEL as value terminators; the header-name scan never checks it stopped on ':' ('a\0b: c' parses as name 'a'); on truncated input it reads past the buffer and can advance past len instead of returning -2. CI never builds with -mavx2, so the AVX2 path is untested. 98 commits behind upstream, missing the 2023-2025 chunked-decoder hardening; GNU C/LP64 only. The AVX2 code is on the 'avx2' branch, not master.
+
+**How:** Upstream finds each delimiter with SSE4.2 PCMPESTRI. That instruction covers 16 bytes, has about 11 cycles of latency and runs once per token, so short header fields make the parser latency-bound (the blog puts the ceiling at about 1.45 bytes/cycle). The fork classifies 128 bytes at a time with plain AVX2 compare/and/or ops, treating bytes as signed so that 0x00-0x1F, ':', TAB and DEL can be tested without unsigned compares. It packs the results with PMOVMSKB into two 128-bit bitmaps, one for name/value delimiters and one for line ends, then walks them with TZCNT and reuses them across several headers before rescanning, which trades one latency-bound search per token for bulk, throughput-bound classification.
+
+**Use it when:**
+- Studying or porting the technique: the whole change is a single ~309-line diff to picohttpparser.c, a compact example of replacing per-token PCMPESTRI searches with 128-byte AVX2 bitmaps plus TZCNT.
+- Throughput experiments on x86-64 Haswell-or-newer CPUs where HTTP/1 header scanning dominates CPU time and requests run a few hundred bytes with many headers (the benchmark requests were 430 and 703 bytes, 9 headers each).
+- Parsing complete, well-formed header blocks from a trusted source (behind a proxy that already validated framing, or replaying captured traffic), where you can guarantee the whole header block is in the buffer before calling.
+- A/B testing against picohttpparser without touching call sites, because the four exported functions keep the 2014 upstream signatures.
+
+**Skip it when:**
+- Internet-facing servers parsing untrusted or partially received requests. Reading the code, malformed header names and values are accepted, and truncated input can move the cursor past len (see gotchas). The author's own PR says the code 'was not tested much, so it might contain some bugs'.
+- Peers that send bare-LF line endings: the AVX2 path returns -1 for them, while upstream and the fork's non-AVX2 path accept them.
+- Portable binaries: AVX2 is chosen at compile time with no runtime dispatch, so a -mavx2 build needs a Haswell-class CPU. Windows (LLP64), MSVC and C++ builds are also out because the code uses GNU inline asm, void* arithmetic and 64-bit unsigned long shifts.
+- Chunked bodies from untrusted peers: phr_decode_chunked is the 2014 code. It lacks upstream's 2023-2025 hardening (rejecting suspicious chunk sizes, capping chunk overhead, requiring CRLF in chunk headers) and has no phr_decode_chunked_is_in_data.
+- Anything that needs upstream's later fixes or testing: upstream is 98 commits ahead of the fork's base, including ASan/UBSan CI and MSVC/g++ build fixes.
+
+**Integration:** source-drop · none (libc plus <immintrin.h> intrinsics) · C with GNU extensions (void* arithmetic, AT&T inline asm) on GCC or Clang with -mavx2 (the published build used GCC 4.9.2 -O3 -mavx2 -mbmi2); not MSVC, not compilable as C++ · x86-64 with AVX2 and TZCNT (Haswell or newer) on an LP64 OS (Linux/macOS/BSD) for the fast path; other targets get the 2014 SSE4.2/scalar code
+
+**Vs siblings:** Choose it only when you specifically want picohttpparser's C API with this AVX2 bitmap design, for study or a controlled experiment. The siblings saw commits in 2025-2026: httpp (header-only C, which reports ~2.26x over picohttpparser on its own hardware), hparse (Zig SIMD, streaming) and picohttpparser-rs (a safe-Rust port that reports 133,352 differential cases matching the C original), so they are the better production picks.
+
+**Gotchas:**
+- The AVX2 code is only on the 'avx2' branch; 'master' is unmodified upstream from 2014-12-16. The Makefile and .travis.yml never pass -mavx2, so 'make test' only exercises the old code path.
+- The header-name scan stops at any byte 0x00-0x1F as well as ':' and never checks that it stopped on ':'. As a result 'a\0b: c' parses as name 'a' with value 'b: c' instead of returning -1, and by my reading the fork's own 'NUL/CTL in header name' tests would fail under -mavx2.
+- 'two_char & 0x0a == 0x0a' parses as 'two_char & 1' because == binds tighter than &. So bare-LF line endings are rejected, while a lone CR, ESC or DEL ends a header value instead of producing an error ('CTL in header value' test).
+- Despite the 128-byte window, callers need no buffer alignment (all loads are unaligned). For the final <128 bytes, though, the bitmap comes from an uninitialized 32-byte stack copy, zero padding or a stale upper half, and '*(unsigned short*)buf' reads 2 bytes. So by code reading, a truncated first parse (last_len=0) can advance past len instead of returning -2.
+
+**Status:** Abandoned since its single 2014-12-18 commit and never merged upstream (h2o/picohttpparser PR #10 closed in 2020). It is MIT/Perl dual-licensed and a single .c/.h pair, so it is easy to vendor, but treat it as a prototype that needs an audit and fuzzing before use.
+
+[repo](https://github.com/vkrasnov/picohttpparser) · [benchmark](https://blog.cloudflare.com/improving-picohttpparser-further-with-avx2/)
+
+##### picohttpparser-rs  `Rust`  `MIT`  `active`  `Tier A`
+
+Safe-Rust, ABI-identical rewrite of picohttpparser; beats scalar -O2 C only on header-heavy requests, loses on six of eight workloads.
+
+**Beats:** picohttpparser — One same-session, interleaved whole-loop timer run on a single i5-12400F under Windows compared the Rust cdylib (rustc 1.96.1, opt-level=2, LTO, CGU1) with picohttpparser f4d94b48 built by GCC 16.2.0 at -O2 (no SSE4.2, asserts live): Rust was faster on the 64x64 B-header request (0.68) and on the bench.c ~620 B request (0.83), and slower on typical (1.10), response (1.18), chunked (1.20), tiny (1.48) and malformed (1.81), with streaming at parity (1.02). Six of the eight rows are flagged for >5% trial spread, and against -O3 -march=native C at an older revision the bench.c request flips to C 1.45x faster.
+
+**Known shortcoming:** Mostly not faster: its two wins are only against picohttpparser built at -O2 with the SSE4.2 path off, 6 of 8 workloads are losses, 6 of 8 rows are flagged unstable (>5% spread), and in its own native-flags run C beats Rust 1.45x on the upstream request.
+
+**Known shortcoming:** Every Rust number went through a DLL while C was linked directly (different toolchains). The native-flags loss predates the SWAR change and was never re-run. The 'upstream segfaults' pitch is overstated: all divergences are caller mistakes and fuzzing found no crashes on either side. Written in about a day, not on crates.io, no CI, tested on one Windows machine; the only public API is unsafe extern "C".
+
+**How:** It is only faster on long header values, where get_token_to_eol runs a SWAR prescan: it loads 16 bytes as two u64 words, tests all 8 lanes of each word at once for any byte outside 0x20..0x7E, skips clean blocks and drops to the exact per-byte loop on a dirty one. C's scalar path (built without SSE4.2) checks one byte at a time in an 8x unrolled loop, so the SWAR scan wins on long runs of printable ASCII; the other change is a 256-entry tchar lookup table (measured ~11% faster than without it). The parser core has no unsafe code and uses bounds-checked .get() reads. Each export pays for catch_unwind, and in the benchmark each call also went through a DLL import hop; that fixed cost is why tiny and reject-fast inputs are slower.
+
+**Use it when:**
+- You link picohttpparser from C (or through FFI) and want a memory-safe parser behind the exact same ABI and behavior, with no changes at the call sites.
+- Requests with many long, plain-ASCII header values (the 64 headers x 64 B, ~4.9 KB case): ~828 vs ~1,218 ns/parse against -O2 scalar C (0.68 ratio). It still led at -O3 (0.82).
+- Header blocks like upstream bench.c's ~620 B / 11-header request, when your C build has no SSE4.2: ~166 vs ~201 ns/parse (0.83).
+- You want hardened failure on caller contract violations. Null outputs, last_len > len, or a corrupted chunked-decoder state give a defined -1/-2 instead of a segfault, an out-of-bounds read or a hang.
+
+**Skip it when:**
+- Speed is the goal and your picohttpparser is built with SSE4.2/-march=native. In the native tier (bench.c request), C with pcmpestri was 1.45x faster than Rust (~138 vs ~200 ns/parse). This was recorded at an earlier revision (935b176), before the 16-byte SWAR change, and never re-run.
+- Small or typical traffic: Rust was slower on tiny 37 B requests (1.48x), ~400 B requests (1.10x), ~150 B responses (1.18x) and 38 B chunked bodies (1.20x).
+- Reject-fast / DoS-filter paths: rejecting at byte 1 takes 1.81x as long (~5.7 vs ~3.1 ns). At opt-level=3 the Rust malformed path gets 1.68x worse, and the cause is still open.
+- You need production maturity. The code was written in about a day (2026-09-08/09). There is one author, 2 stars, no CI, no tags and no crates.io release. It was built and tested only on one Windows machine with rustc 1.96.1. No real consumer (H2O/Plack/Furl) has been integrated, only a loopback TCP harness and a ctypes harness.
+- Rust callers who want an idiomatic API: the only public interface is the unsafe extern "C" functions plus the repr structs, and the safe core modules are private.
+
+**Integration:** crate (cdylib + staticlib + rlib); not on crates.io, build from git · none · Rust edition 2024 (rust-version = 1.85 is a declared floor only; only rustc 1.96.1 was ever run) · Portable Rust with no arch intrinsics or SIMD. Layout asserts only on 64-bit targets. Tested only on Windows x86-64 (i5-12400F); 32-bit and non-Windows builds are not exercised.
+
+**Vs siblings:** The vkrasnov AVX2 fork (1.68-1.79x), httpp (~2.26x at -O3) and hparse (~12.5% wall-clock) are all reported faster than picohttpparser overall, while this one wins only on header-heavy inputs against scalar -O2 C. Pick it when you want memory-safe code behind picohttpparser's exact ABI and behavior; pick a sibling when speed is the goal.
+
+**Gotchas:**
+- The README's 'segfault' framing is about caller contract violations: null pointers, last_len > len, a forged decoder _state, and a NULL is_in_data query. Differential fuzzing of hostile bytes (~1.94M executions) recorded 0 crashes on either side.
+- Memory safety stops at the FFI seam. Each export builds a slice with slice::from_raw_parts(buf, len), so a wrong (buf, len) from the caller is still undefined behavior, exactly as in C.
+- Keep the pinned release profile (opt-level=2, LTO, codegen-units=1, overflow-checks off, panic=unwind). Raising opt-level to 3 regressed the malformed path 1.68x. A panic inside a parser is caught at the seam and returned as -1.
+- Every published Rust number came through the DLL, because MinGW ld could not link the MSVC-built staticlib. Rust callers linking the rlib get cross-crate inlining and will see different numbers.
+
+**Status:** Active but brand-new (created 2026-09-09; the last commit, 2026-09-11, was README-only), single-author, MIT and 1,527 lines with no dependencies, so it is easy to vendor, though it has no releases or CI and its author presents it as a correctness and safety experiment, not a speed claim.
+
+[repo](https://github.com/logicpl4gue/picohttpparser-rs) · [benchmark](https://github.com/logicpl4gue/picohttpparser-rs#speed)
+
+##### Ada (WHATWG URL parser)  `C++`  `Apache-2.0 OR MIT`  `active`  `Tier B`
+
+WHATWG-compliant C++20 URL parser used by Node.js; about 7.8x faster than libcurl's URL API on real-world URLs.
+
+**Beats:** libcurl URL parser — Ada's own Google Benchmark harness parses each URL in the top100 corpus and reads back the normalized href. The README reports 188 ns/URL for Ada, 664 for servo rust-url and 1471 for curl's `curl_url_set` + `curl_url_get`, on an 'Apple MacBook 2022' with LLVM 14 and unstated flags. The curl run reuses one handle but allocates the href string for every URL. The peer-reviewed paper shows the same gap on an AMD EPYC 7262 (GCC 11) and an Apple M2 (Apple/LLVM 14): above 3M and 5M URLs/s for Ada, against about 0.5M and nearly 1M for curl 7.81.0.
+
+**Known shortcoming:** The August 2026 SIMD fast paths are on main only, compiled with target('ssse3') and no runtime CPU check (possible fault on pre-SSSE3 x86-64); the ideas came from a WebKit/Bun change that claims to beat Ada 4.0.0. The curl comparison has curl allocate an href per URL while Ada returns a view. README Quick Start still points at v3.0.0. UTF-8 input only; ~500 KB library, mostly IDNA tables.
+
+**How:** The default `url_aggregator` writes the normalized URL into one `std::string` and tracks the components as 32-bit offsets. The buffer is reserved up front, rounded to the next power of two, so getters return `string_view`s and do no allocation. A fast path (`try_parse_simple_absolute` / `try_parse_simple_relative`) skips the full WHATWG state machine for URLs that are already canonical. On main, that path classifies 16 bytes at a time with nibble-table lookups (SSSE3 `pshufb` / NEON `tbl`, with an SSE2 fallback). Elsewhere Ada uses vectorized tab/newline scans (SSSE3, NEON, SSE2, LoongArch LSX, RISC-V RVV, and a 64-bit SWAR fallback), 256-entry constexpr lookup tables for delimiters and forbidden host code points, and a branchless perfect hash to detect special schemes. The paper reports up to 8x fewer instructions than curl and 3x fewer than servo rust-url.
+
+**Use it when:**
+- Servers, proxies, crawlers or log pipelines that normalize or validate millions of URLs and want output identical to a browser's or Node's `new URL()`.
+- Replacing a hot-path libcurl `CURLU` parse-plus-serialize step when WHATWG normalization (punycode hosts, percent-encoded paths) is acceptable or wanted.
+- Validation-only filtering with `ada::can_parse`: the v4 release post reports 28.1 ns/URL on a ~100k-URL dataset (Apple M5 Max).
+- Embedding a spec-compliant URL implementation in a JavaScript runtime or polyglot stack: Ada has a C API plus official Rust, Go, Python and Kotlin bindings.
+- Route matching with URLPattern or the experimental URLPattern list, with the regex engine of your choice plugged in.
+
+**Skip it when:**
+- You need RFC 3986 behavior or byte-exact round-trips. Ada rewrites hosts to punycode and percent-encodes paths, and it accepts a different set of URLs from curl (on the top100 corpus, curl rejects 130 URLs and Ada 26).
+- Your toolchain is older than C++20. The README lists GCC 12+, LLVM 14+ and Visual Studio 2022 as tested.
+- Your input is not UTF-8 (UTF-16 or Latin-1 strings from a JS engine, for example). The code base assumes UTF-8, and issue #77 about other encodings is still open.
+- Binary size is tight. An issue thread (#900) puts the compiled library at around 500 KB, mostly IDNA/Unicode tables. URLPattern can be turned off with `ADA_INCLUDE_URL_PATTERN=OFF`, but the maintainers say the Unicode support cannot be removed.
+- You need HTTP request-line or header parsing. Ada only parses URLs.
+
+**Integration:** static lib or shared lib (CMake, SOVERSION 4), or source-drop of the amalgamated ada.h + ada.cpp · none (simdutf is optional via ADA_USE_SIMDUTF; tests and benchmarks fetch their own dependencies through CPM) · C++20; tested with GCC 12+, LLVM 14+ and MSVC 2022; CMake 3.16+ · any C++20 target. SIMD paths: x86-64 (SSE2 baseline, SSSE3 scanners, optional AVX-512 BW/VL/VBMI2 IPv4 kernel chosen at compile time), aarch64 NEON, LoongArch LSX, RISC-V RVV, with a scalar SWAR fallback. CI covers Ubuntu x86-64 and ARM64, s390x and loongarch64 under QEMU, Windows MSVC/clang-cl, and macOS.
+
+**Vs siblings:** ada-rs (Rust) and lucid-url both benchmark against C++ Ada. They claim small wins on small corpora (7.4% on 9 URLs; 1.27x for Url but slower for UrlAggregator), and sorug is a Rust WHATWG parser measured only against servo url. Pick Ada when you need C/C++ integration, full web-platform-test compliance, fuzzing coverage and a production record (Node.js, Cloudflare Workers).
+
+**Gotchas:**
+- `url_aggregator` getters return `string_view`s into the internal buffer, and any setter invalidates them. The header warns against passing a getter's result into a setter on the same object without copying it first. C API `ada_string` values are borrowed in the same way.
+- Check the parse result before dereferencing it. The README calls `url->get_href()` on a failed parse unsafe.
+- `ada::set_max_input_length` is process-wide. When the limit is exceeded, the `void` setters (`set_search`, `set_hash`) do nothing and give no signal.
+- Release and main differ. v4.0.0 (2026-07-27) bumped SOVERSION to 4 and now rejects some inputs it used to accept. The README Quick Start still downloads v3.0.0 single-header files. The August 2026 SIMD fast-path work (PRs #1214/#1216) is on main only. On main, GCC/Clang x86-64 builds compile those scanners with `target("ssse3")`, and I found no runtime CPU check, so CPUs without SSSE3 may fault.
+
+**Status:** Actively maintained: last commit 2026-09-20, v4.0.0 released 2026-07-27, with ABI-check CI and fuzzing in CI (CIFuzz plus past OSS-Fuzz reports). It is dual-licensed Apache-2.0/MIT and easy to vendor as two amalgamated files.
+
+[repo](https://github.com/ada-url/ada) · [benchmark](https://github.com/ada-url/ada#readme)
+
+#### http-servers-frameworks
+
+##### CPV Framework  `C++`  `MIT`  `abandoned`  `Tier A`
+
+C++17 HTTP/1.1 web framework on Seastar's thread-per-core reactor; 5-14% more plaintext req/s than actix-web 2.0 at 100 connections.
+
+**Beats:** actix-web — The author's wiki run of 2020-01-21 was a single 4-core Xeon E31225 @ 3.10GHz host, with the server pinned to 1-2 cores and wrk/wrk2 pinned to cores 2-3 over loopback, best of 3. cpv-framework 0.2.0.0 (g++-9 Release, epoll backend) served a 'Hello World!' GET at 84.7k vs 80.5k req/s against actix-web 2.0.0 (cargo --release, rustc unstated) on 1 core/100 connections (~1.05x) and 170.6k vs 149.6k on 2 cores (~1.14x), lost at 2 cores/10k connections, and its 1.2-2x wins at 20k connections coincide with actix returning 158k-178k non-2xx responses; the fixed-rate wrk2 latencies were indistinguishable across all servers.
+
+**Known shortcoming:** Plain seastar-httpd, which it is built on, beats it in every throughput configuration on the same page; at 20000 connections actix-web returned many non-2xx responses, so those gaps are not clean. Abandoned since 2020-01.
+
+**Known shortcoming:** Plain seastar-httpd (its own base) beat it in all 6 throughput configs on the author's page. The actix-web comparison is weak: actix-web 2.0.0 only, cpv loses at 2 cores/10k conns, the 1.2-2x wins coincide with actix returning 158k-178k non-2xx responses, wrk and server on the same 4-core host, debug logging enabled for actix. Fixed-rate latency tests are client-bound and show no edge. Last code commit 2020-01; PPA builds only for Ubuntu 18.04 amd64; hello-world segfault report (#26) unanswered; no TLS, HTTP/2 or client.
+
+**How:** It inherits Seastar's shared-nothing, shard-per-core model: services are instantiated on every core with --smp and never shared, so the request path takes no locks and uses no atomics. Requests are parsed with a vendored Node.js http-parser 2.9.2, and the URL, headers, query values and body come out as cpv::SharedString, a reference-counted slice of the received seastar::temporary_buffer, so nothing is copied except in edge cases (headers split across packets, decoded query strings). Responses are built as cpv::Packet scatter lists of static and shared fragments and written with vectored I/O. Smaller tricks: a per-thread Date header cached per second, thread-local Reusable<T> free-list pools for per-request stream objects, and separate receive and reply loops per connection for pipelining, with a synchronous fast path when the flush future is already ready.
+
+**Use it when:**
+- You already run Seastar shard-per-core services on Linux and want routing, DI, static files and JSON on the same reactor, not a separate HTTP stack.
+- Small plaintext or JSON responses over keep-alive or pipelined HTTP/1.1 on a few pinned cores, where per-core req/s matters (84.7k req/s on one 2011-era Xeon core in the author's test).
+- You are willing to vendor it and port it yourself: 148 commented .cpp/.hpp files (~690 KB including the vendored http-parser and sajson) on a pinned 2019 Seastar snapshot.
+- As a reference design for zero-copy HTTP/1.1 parsing with ref-counted buffer slices and scatter-gather responses.
+
+**Skip it when:**
+- Anything that needs TLS, HTTP/2, an HTTP client or a reverse proxy: the 0.3 roadmap items (http client, ssl) never shipped, a reverse-proxy request (#15) was deferred to that release, and #17 (proxy, http2) is unanswered.
+- Production services that need maintenance: no code commits since 2020-01-21, packages exist only for Ubuntu 18.04 with Seastar 20191017.1, and an open 2022 issue (#26) reporting a segfault inside libCPVFramework.so when running the hello-world example has no maintainer reply.
+- Chasing maximum Seastar throughput: on the author's own page plain seastar-httpd beat cpv-framework in all six throughput configurations (e.g. 184.5k vs 170.6k req/s at 2 cores/100 connections).
+- Comparing with a current actix-web: only actix-web 2.0.0 was measured, and cpv-framework already lost at 2 cores/10k connections (136.7k vs 141.5k req/s).
+- macOS or Windows hosts, or code that can't be restructured into non-blocking future chains (C++20 coroutine support is only a backlog item).
+
+**Integration:** shared lib · Seastar (via pkg-config 'seastar'; the author's PPA ships snapshot 20191017.1); vendored Node.js http-parser 2.9.2 and sajson; GoogleTest for tests only · C++17, GCC 9 (g++-9), CMake 3.8+; library built with -O3 -flto and the gold linker · Linux only (the README says to use a Docker Ubuntu 18.04 image on Windows/macOS); Debian package is amd64 for Ubuntu 18.04 (bionic)
+
+**Vs siblings:** Pick it over Drogon, Crow or Oat++ only when your process is already a Seastar shard-per-core application and you'd rather maintain an abandoned framework than write routing on top of seastar-httpd. For a maintained C++ HTTP server with TLS, HTTP/2 or clients, Drogon, H2O or Sogou Workflow are the safer choices.
+
+**Gotchas:**
+- Keep-alive is dropped if a response has neither Content-Length nor chunked Transfer-Encoding, if Content-Length doesn't match the bytes written (logged as a warning), or if the handler didn't fully consume the request body.
+- Default per-request limits: 512 KB and 512 packets for headers plus initial body (exceeding either returns 400 and closes), a 60 s timeout applied to every read and write, and a queue of 100 pipelined requests per connection; change them via HttpServerConfiguration.
+- Reusable<T> keeps thread-local free lists (32768/sizeof(T) slots per type), and its header warns that keeping a Reusable<> alive after freeResources can segfault.
+- The handler docs still show the pre-0.2 signature (const HttpServerRequestHandlerIterator&), but 0.2 changed it to pass by value. Every connection close is logged at Info, so raising the default Notice-level console logger to Info floods output under connection churn.
+
+**Status:** Abandoned: the last code commit and 0.2 tag are from January 2020, and later pushes are only dependabot branches. It is MIT-licensed and small enough to vendor, but it is tied to GCC 9 and a 2019 Seastar snapshot, so expect to port it to current Seastar yourself.
+
+[repo](https://github.com/cpv-project/cpv-framework) · [benchmark](https://github.com/cpv-project/cpv-framework/wiki/Benchmark-Results)
+
+##### Granian  `Rust`  `BSD-3-Clause`  `active`  `Tier A`
+
+Rust (hyper + tokio) HTTP server for Python ASGI/WSGI/RSGI apps, with higher single-worker throughput than Uvicorn and Gunicorn.
+
+**Beats:** Uvicorn (httptools and h11 protocols) running on uvloop — The project's own benchmarks/vs.md (run 2026-08-05; Granian 2.8.1 built with maturin --release, jemalloc and fat LTO; Python 3.13; AMD Ryzen 7 5700X, Gentoo Linux) tested an ASGI GET returning a static 10 KB body. It used oha at 128 connections for 10 s, one worker and one runtime thread, HTTP/1.1, every async server on uvloop and Uvicorn's access log off. Granian reached 125,539 RPS vs 51,051 for Uvicorn+httptools (~2.46x) and 14,501 for Uvicorn+h11 (~8.66x). Each number is a single run, and the competing servers were whatever versions were latest on that date.
+
+**Known shortcoming:** The lead mostly vanishes on I/O-bound apps (10 ms waits at c=512: 45,859 vs Uvicorn+httptools 43,903 RPS; tie at 100 ms). Release builds use panic=abort, so any Rust panic kills a worker; two single-request crashes fixed in 2.7.4 (CVE-2026-42544 high, non-ASCII Sec-WebSocket-Protocol; CVE-2026-42545 medium, invalid WSGI header). A default pip install runs on stdlib asyncio (85,281 vs 127,962 RPS with uvloop). More runtime threads don't raise ASGI throughput; scale with workers. Gunicorn's ASGI worker wins 32-client WebSocket broadcast. --ssl-client-verify without --ssl-ca silently disables client-cert verification (#853 open). No default --workers-kill-timeout (hangs, #875; fixes in 2.8.0/2.8.2); backpressure limits connections, not requests; multi-worker respawn needs Linux 5.14+ with tcp_migrate_req. No trio/gevent; free-threaded Python experimental; Rust task impl disabled on 3.12+ after a leak (#500). First-party single runs with unpinned competitors.
+
+**How:** hyper does the HTTP parsing, connection handling, TLS and response writing in Rust on a tokio runtime (N single-threaded runtimes in `st` mode or one N-thread runtime in `mt` mode), so Python never touches sockets or protocol state. Each request goes to a dedicated interop thread through a crossbeam channel; that thread attaches to the interpreter only while it builds the scope dict and schedules the app coroutine on the asyncio loop via `call_soon_threadsafe`. ASGI `send`/`receive` return Rust-implemented awaitables (an asyncio.Future-like object, or an already-completed one when nothing needs to wait) instead of pure-Python futures. A single-message response goes to hyper as one `Full` body, and tokio streams pathsend files without calling into Python. In the benchmark both servers run on uvloop, so the gap is the server layer, not the event loop.
+
+**Use it when:**
+- Python ASGI services where the server's HTTP layer is a large share of per-request cost, such as fast handlers returning in-memory bodies. vs.md, 10 KB GET, one worker: 125,539 RPS vs 51,051 for Uvicorn+httptools.
+- WSGI apps (Django, Flask) now on Gunicorn gthread/gevent or uWSGI. vs.md, 10 KB GET at c64: Granian WSGI 125,824 RPS vs 9,175-12,204 for those servers.
+- Serving a Python app directly over HTTP/2. vs.md: 129,750 RPS vs 7,327 for Hypercorn.
+- Replacing the Gunicorn + uvicorn + httptools stack with one prebuilt wheel. Wheels cover Windows, aarch64/armv7 Linux, musl, PyPy 3.11 and free-threaded CPython 3.14t/3.15t.
+- Serving static assets or large files next to the app without passing them through Python (static-path mounts, pathsend streaming; ~50 KB file: 48,049 vs 30,004 RPS for Uvicorn+httptools).
+
+**Skip it when:**
+- I/O-bound apps whose handlers spend milliseconds waiting on a database or upstream. With 10 ms waits at c512, vs.md has Granian ASGI at 45,859 RPS vs 43,903 for Uvicorn+httptools (~4%), and 100 ms waits are a tie, so the app is the bottleneck.
+- Apps built on trio or gevent, or apps that need ASGI extensions Granian has not implemented (README; issue #93, TLS extension #788 still open).
+- Teams that need a pure-Python server they can patch or step through in a debugger. The README says Granian is not the choice for advanced debugging.
+- Heavy WebSocket broadcast with many clients per worker. At 32 clients, vs.md has Gunicorn's ASGI worker at 378,446 msg/s vs 338,230 for Granian ASGI and 341,182 for Granian RSGI.
+- Free-threaded Python in production. The README calls that support experimental and 'highly discouraged in production environments'.
+
+**Integration:** module · click at runtime. Optional extras: uvloop/rloop/winloop, watchfiles (reload), python-dotenv, setproctitle. Source builds need a Rust toolchain and maturin>=1.14 (PyO3 0.29, hyper 1.11, tokio 1.51, rustls via tls-listener). · Python 3.10+ (CPython 3.10-3.15, PyPy 3.11, free-threaded 3.14t/3.15t). Rust edition 2024 for source builds; minimum rustc version not documented. · Prebuilt wheels for Linux x86_64/aarch64/i686/armv7 (manylinux and musllinux), macOS x86_64/aarch64 and Windows x86_64. On Linux, multiple workers with respawn need kernel >= 5.14 and net.ipv4.tcp_migrate_req enabled, or queued connections can be dropped.
+
+**Vs siblings:** Pick Granian when the app is Python. The catalogued siblings (Ultimate Express for Node, Qbix for PHP, Drogon, Sogou Workflow and the other C++/Go/Rust servers) cannot host an ASGI/WSGI callable. Granian is built on the catalogued hyper crate, so if the service can be written in Rust, using hyper directly avoids the Python hop entirely.
+
+**Gotchas:**
+- Release builds set panic="abort", so any Rust panic kills the whole worker process. CVE-2026-42544 (high; a non-ASCII Sec-WebSocket-Protocol header) and CVE-2026-42545 (an invalid WSGI response header) were single-request worker crashes, fixed in 2.7.4. Stay current and consider --respawn-failed-workers (off by default).
+- A plain `pip install granian` runs on stdlib asyncio, because uvloop and rloop are extras. asyncio.md shows ASGI at 85,281 RPS on asyncio vs 127,962 on uvloop. Also, raising --runtime-threads did not raise ASGI throughput in concurrency.md (st 1→4 threads: 132,067→108,238 RPS); scale with --workers.
+- Backpressure limits accepted connections, not requests. Behind a reverse proxy that holds many keep-alive connections, a value below that count stops new connections being accepted (README warning). Also set --workers-kill-timeout, which has no default: #875 reported workers hanging forever on shutdown, and 2.8.0/2.8.2 shipped shutdown fixes.
+- Passing --ssl-client-verify without --ssl-ca only logs a warning and turns client-certificate verification off (issue #853, open), so a mistyped mTLS setup accepts unauthenticated clients.
+
+**Status:** Actively maintained: 2.8.3 shipped 2026-09-14, patch releases are frequent, and fixes usually land only on the latest minor. BSD-3-Clause, installed from PyPI wheels; the README lists production users including paperless-ngx, SearXNG, Weblate, Mozilla and Sentry.
+
+[repo](https://github.com/emmett-framework/granian) · [benchmark](https://github.com/emmett-framework/granian/blob/c0b1e0b9ba8349e2451b1b688037d8d79e4693b4/benchmarks/vs.md)
+
+##### Lithium (HTTP server / web framework)  `C++`  `MIT`  `active`  `Tier A`
+
+Header-only C++ HTTP server and async SQL toolkit on fibers; beat actix-web on TechEmpower DB tests only in Round 20.
+
+**Beats:** actix-web (best TechEmpower actix implementation in Round 20, actix-core; also actix-pg). H2O is a secondary comparison from the author's own statement. — TechEmpower Round 20 ran on Citrine: three Xeon Gold 5120 servers on 10 GbE. There lithium-postgres-batch (clang/LLVM 10, -O3 -march=native -flto, PGO, patched libpq) beat actix-core (Rust 1.44, target-cpu=native) by 1.31x on single query, about 1.7x on 20 queries and 1.44x on 20-query updates; Fortunes was a tie (0.95x-1.01x, depending on the time base) and JSON/plaintext were about equal. This is a historical result: the batch variant was withdrawn in 2022, and in Rounds 21-22 non-batched Lithium trails actix-http on every DB test.
+
+**Known shortcoming:** Historical result: the Round 20 win over actix-core (1.31-1.70x on single/multi-query and updates) came from the pipelined/batch database variant, which TechEmpower removed on 2022-05-31 (PR #7382) to comply with benchmark rules. It loses Fortunes (0.95x) and ties JSON/plaintext even in Round 20. Against actix-http it is slower on all database tests in Round 21 (0.66-0.75x) and Round 22 (0.80-0.91x), and below H2O in Rounds 22-23. The August 2020 continuous run behind the original claim is not archived.
+
+**Known shortcoming:** Correction: libpq pipeline mode did merge into PostgreSQL 14 (2021), co-credited to Lithium's author; the TechEmpower batch build used a pre-release patch and current Lithium master has no pipeline/batch code. The author removed the batch variant himself (PR #7382) to comply with rules that now require a Sync between pipelined queries; lithium_batch.cc pipelined many HTTP requests' queries on one PG connection per thread. Round 20 ratios depend on the time base (16 s vs 15 s windows): Fortunes is a tie at 0.95-1.01x, 20 queries 1.70-1.81x. Security: high-severity JSON stack-exhaustion DoS (GHSA-cv26-62rq-922g, fixed 2026-04-21), more fixes 2026-07-31, open HashDoS in hashmap_http_session (#138). Docs say s::threads but code reads s::nthreads. Blocking PQconnectdb on macOS/Windows; Windows unsupported; no HTTP/2 or WebSocket; no tagged releases; poor one-request-per-connection throughput (#122, unanswered); README still claims '#1 on TechEmpower'.
+
+**How:** Each worker thread runs its own edge-triggered epoll reactor (kqueue on macOS) on one shared listening socket. Every connection is a boost::context continuation (stackful coroutine), so handlers read like blocking code while socket and libpq I/O yield to the reactor. Responses collect in a 50 KB output buffer that is flushed only when the input buffer is empty, so HTTP/1.1-pipelined responses leave in one send; a helper thread rebuilds the Date header once per second. PostgreSQL uses non-blocking libpq with a per-connection prepared-statement cache. The Round 20 winner also pipelined queries from many requests over one connection per thread, using the pre-release libpq batch patch (v22) and clang -O3 -march=native -flto with two-pass PGO.
+
+**Use it when:**
+- Linux HTTP/1.1 service where you want top-tier plaintext/JSON throughput from a small C++ code base you can vendor as one header (Round 20: about 7.0M plaintext and 1.6M JSON req/s, network-bound).
+- Handlers that run simple PostgreSQL or MySQL queries, where you want async DB I/O written as straight-line code on fibers instead of callbacks or C++20 coroutines.
+- Prototyping JSON REST APIs in C++ with compile-time, symbol-based JSON binding, sessions and a small ORM, if a one-maintainer project is acceptable.
+- Studying HTTP and DB pipelining in C++: the TechEmpower code and the libpq batch experiments are public and short.
+
+**Skip it when:**
+- When DB-bound throughput against actix-web decides: in TechEmpower Rounds 21-22 Lithium reaches 0.66x-0.91x of actix-http on single query, 20 queries, Fortunes and updates, and it is below H2O on all DB tests in Rounds 22-23.
+- Internet-facing services that need a hardened parser: a high-severity JSON stack-exhaustion DoS (GHSA-cv26-62rq-922g) was fixed only on 2026-04-21, more security fixes landed 2026-07-31, and a HashDoS report on hashmap_http_session (#138) is open.
+- Workloads with one request per connection: open issue #122 (2022, no reply) reports slow responses and low CPU use once clients stop reusing keep-alive connections.
+- Windows (README: not supported; only unsupported wepoll code paths exist), and PostgreSQL on macOS, where connection setup falls back to a blocking PQconnectdb on the reactor thread.
+- Need for HTTP/2, HTTP/3 or WebSocket: there is no code or documentation for them in the repository.
+
+**Integration:** header-only · Boost.Context and Boost.LexicalCast, OpenSSL; libpq for PostgreSQL, MariaDB client for MySQL, SQLite3, libcurl for the HTTP client; optional li_symbol_generator tool to declare s:: symbols · C++17 (TechEmpower builds use -std=c++17; the repo's CMake now sets C++20); documented compilers G++ 9.2, Clang++ 9.0, Apple clang 12 · Linux (epoll, primary target), macOS (kqueue); Windows not supported per README
+
+**Vs siblings:** Pick Lithium over Drogon or Crow when you want a single-header framework with synchronous-looking fiber handlers and compile-time JSON/ORM binding, and can accept a one-maintainer project. For DB-heavy work, current TechEmpower data puts H2O and actix-web ahead of it.
+
+**Gotchas:**
+- The docs name the thread-count option s::threads, but http_serve reads s::nthreads, so the documented option has no effect and the server uses hardware_concurrency threads.
+- Fibers are cooperative: a blocking call in a handler (file read, synchronous DB connection, sleep) stalls every connection on that reactor thread.
+- You must declare symbols (by hand or with li_symbol_generator), and programs with several translation units need #define LI_EXTERN_GLOBALS in all but one file to avoid duplicate SQL globals.
+- The README and docs still claim '#1 on TechEmpower (composite score)'. That rests on the pipelined batch variant, which the author himself removed from TechEmpower in May 2022 to comply with the benchmark rules.
+
+**Status:** Active (security and vcpkg fixes through 2026-07-31), MIT-licensed and header-only, so it is easy to vendor; it has one main maintainer and no tagged releases.
+
+[repo](https://github.com/matt-42/lithium) · [benchmark](https://www.techempower.com/benchmarks/results/round20/ph.json)
+
+##### Ultimate Express  `JavaScript`  `Apache-2.0`  `active`  `Tier A`
+
+Express 4 API re-implemented on uWebSockets.js; README shows 3-12x Express req/s, but Node 24 narrows most gaps.
+
+**Beats:** Express.js (Node.js) — The README table (wrk -t1 -c200 -d60, one run, Node.js 20.17.0, Ubuntu 22.04, Ryzen 5 3600, measured around v1.2 in 2024 against an unstated Express 4.x) shows 3.10x (compressed small file) to 11.78x (route 999 of 1000) over Express, with 6.73x on a simple route. The project's own newer CI harness (benchmark/run.js, GitHub Actions ubuntu-latest, Node 24, wrk -t1 -c200 -d20) gave these results at the same commit 77ca8a2 on 2026-07-31: 2.57x hello-world, 11.64x routes-1000, 1.05x compression, and 0.69x (slower) for a 100-middleware chain.
+
+**Known shortcoming:** The README table (2024, Node 20.17, v1.2) is stale: after the project's own CI moved to Node 24 (2026-07-30), Express got much faster and the ratios fell to 2.6-4.1x hello-world, 1.0-1.1x compression-file, 0.53-0.73x on a 100-middleware chain (slower than Express), 0.89-1.04x on 512 KB JSON bodies and 0.70-1.37x streaming; only routes-1000 still wins big (7.9-11.9x). The maintainer opened #364 'UltimateExpress is officially pointless?' and there have been no commits since 2026-07-31. :param routes use the JS matcher, not native routing. Compatibility gaps: no node:http (Sentry tracing has no spans, #286), res.writableEnded never true (breaks pino-http, #372), 4 KB header limit vs Node's 16 KB, bodies read only for POST/PUT/PATCH, case-sensitive routing by default, express-async-errors doesn't work. uWebSockets.js comes from GitHub (not npm), glibc-only, Node 22/24/26 binaries only, no Bun. Express 4 API (fulmine.js covers Express 5).
+
+**How:** HTTP parsing, socket I/O and response writes run in uWebSockets.js (C++ via N-API); responses are written inside res.cork() batches with tryEnd/onWritable backpressure instead of Node's stream stack. At listen(), every route whose path is a plain string (no ':' params and no regex characters) under case-sensitive routing is registered on the native uWS router, with the middleware that matches it resolved once ahead of time; Express instead scans its layer stack on every request, which is why the 1000-route test shows the largest gain (about 11x). A handler simple enough to pass an acorn parse of its source (only res.set/status/send/end with req.query/req.params, no variables, calls or control flow) is compiled into a uWS DeclarativeResponse that is answered without entering JavaScript. Smaller wins: headers are materialised lazily, query strings go through fast-querystring, bodies are read only for POST/PUT/PATCH, and sendFile/static reads of files under 768 KB run on a worker thread (1 by default).
+
+**Use it when:**
+- An existing Express 4 app on Node 22 where per-process routing/dispatch overhead, not the database, limits req/s: the project's CI on Node 22 (April-July 2026) showed 6.3-8.2x Express on hello-world and 1.7-3.7x on express.static.
+- Large tables of plain string routes (hundreds to thousands of paths without ':' params): routes-1000 stays 7.9-11.9x ahead of Express even in the Node 24 CI runs of 2026-07-30/31.
+- Apps that must keep the Express 4 middleware and view-engine ecosystem but want HTTP/3 or native uWS WebSockets on the same port without a rewrite to hyper-express or raw uWS.
+- Linux x64/arm64 (glibc), macOS or Windows x64 deployments on Node 22, 24 or 26, the only targets the pinned uWebSockets.js v20.69.0 ships binaries for.
+
+**Skip it when:**
+- Node 24+ with ordinary handler chains: after the CI moved from Node 22 to 24 (2026-07-30), Express hello-world rose from about 7.6k-11k to 14.6k-43k req/s, while a contributor in #364 says µExpress stayed flat. As a result hello-world fell to 2.6-4.1x, compression-file to 1.0-1.1x, and a 100-middleware chain to 0.53-0.73x (slower than Express). The maintainer opened #364, 'UltimateExpress is officially pointless?', about this.
+- Large bodies and streaming: in the 2026 CI runs a 512 KB JSON body is 0.89-1.04x and streamed responses are 0.70-1.37x, so there is nothing to gain there.
+- Anything that instruments or needs node:http: Sentry tracing produces no spans (#286), http.on('upgrade') cannot be used, req.socket is a partial shim, and res.writableEnded never becomes true (#372, breaks pino-http).
+- Alpine/musl, Bun, odd Node releases (23/25) or Windows arm64: uWebSockets.js is glibc-only, has prebuilt binaries only for Node 22/24/26, and is pulled from GitHub rather than the npm registry (#231, #232, #258).
+- Express 5 codebases: the target is the Express 4 API (a contributor reports running an Express 5 app on it, but that is not claimed in the README); fulmine.js is the Express 5 variant.
+
+**Integration:** module (npm package ultimate-express, plain JavaScript, with a git dependency on the uWebSockets.js native addon) · uWebSockets.js v20.69.0 (github: dependency with prebuilt .node binaries), acorn, fast-querystring, fast-zlib, tseep, qs, plus Express helper packages (accepts, cookie, cookie-signature, etag, fresh, mime-types, proxy-addr, range-parser, statuses, type-is, vary, ...) · Node.js >= 22 (engines field); binaries exist for Node 22, 24 and 26 only. ultimate-express@2.1.0 is the last release for Node 19-21, and the node-v18 tag (1.4.10) covers Node 18. · Linux x64/arm64 (glibc only; no Alpine/musl), macOS x64/arm64, Windows x64; not Bun
+
+**Vs siblings:** Pick it over fulmine.js when the app is on the Express 4 API: fulmine.js is derived from µExpress, targets Express 5 only, and its README says Express 4 users should use ultimate-express. Pick either over Elysia (Bun) when you cannot leave Node.js or rewrite handlers.
+
+**Gotchas:**
+- Case-sensitive routing is on by default, unlike Express. Turning it off, or using ':param', wildcard or regex paths, drops those routes off the native uWS router onto the slower JS matcher. The README only mentions regex characters; the ':' exclusion is in src/router.js.
+- uWS caps request headers at 4096 bytes against Node's 16384; apps with large cookies or JWTs need the UWS_HTTP_MAX_HEADERS_SIZE environment variable.
+- Request bodies are read only for POST, PUT and PATCH. A DELETE, or a GET that carries a body, leaves req.body empty unless you add the method to the 'body methods' setting (the README says reading bodies costs about 15%).
+- Response extends Writable but end() bypasses Node's Writable state, so writableEnded/writableFinished stay false (#372). Reported quirks include 'close' not firing when no response is sent (#287) and morgan logging 200 where the client got a 304 (#206).
+
+**Status:** Maintained by one main author (dimdenGD, 808 commits) with contributors, v2.2.1 released 2026-07-30, about 34k npm downloads a month and Apache-2.0 (plus EXPRESS_LICENSE), but there have been no commits since 2026-07-31, the day the maintainer asked in #364 whether Node 24 made the project pointless.
+
+[repo](https://github.com/dimdenGD/ultimate-express) · [benchmark](https://github.com/dimdenGD/ultimate-express/blob/77ca8a2119b01e852d136cd8d5847cf29358a41c/README.md#performance-against-express)
+
+##### ActiveJ  `Java`  `Apache-2.0`  `active`  `Tier B`
+
+Java NIO event-loop platform whose HTTP server beat actix-web by ~9% on the-benchmarker's empty GET test.
+
+**Beats:** actix-web — On the-benchmarker/web-frameworks run of 2026-09-24 (develop commit f673364), ActiveJ 5.5 (MultithreadedHttpServerLauncher, workers = availableProcessors) served an empty GET / at 193,023 / 182,021 / 178,398 req/s at concurrency 64 / 256 / 512 vs actix-web 4.8 at 179,203 / 168,270 / 163,415 (+7.7% / +8.2% / +9.2%). Load came from zrk closed-loop keep-alive runs of 15 s (mean of 3) after a 5 s warmup, with both servers saturating about 4 pinned cores in Docker. The JVM was plain `java -jar` with no flags; the Java Dockerfile template defaults to an Eclipse Temurin 25 JRE and the benchmark pom targets release 25, although java/config.yaml says 21. Host metadata says 16 vCPU x86_64 but names an 'M1 Eight-Core Processor', so the exact CPU is unknown.
+
+**Known shortcoming:** The benchmark pom targets Java 25 and the Dockerfile uses Temurin 25, so the run likely used JDK 25, not the recorded Java 21. It benchmarks ActiveJ 5.5 (2023) with the 5.x API; 6.0 changed the API and has sat at rc2 since 2024-12, the last commit is 2026-01 and a release request (#326) got no reply. Margin over actix is small and run-dependent (+7.7-9.2% here, ~4% in the 2026-09-20 run), and actix has lower p99 at c=64 and c=256. 5 s warmup may be short for the JIT; the JVM ran with no flags. 'No third-party dependencies' is loose (slf4j-api; specializer and ASM for HTTP). Known issues: serializer fails on Java 21 class files with ASM 9.4 (#325); 6.0 listens on localhost by default (#290); TLS behind PrimaryServer NPE (#312); DNS client ignores hosts files and Kubernetes search domains (#315); WebSockets are single-thread with chained writes (#280); no OpenTelemetry context propagation (#338).
+
+**How:** Reactor pattern: each worker runs a single-threaded Eventloop over a java.nio Selector, and a PrimaryServer on its own loop accepts sockets and hands them round-robin to per-core worker HTTP servers, so the request path takes no locks and makes no thread hand-offs. Requests are parsed straight from pooled byte[] ByteBufs: the method is found by summing its bytes into a 128-slot table, header names are hashed case-insensitively (b | 0x20) to interned HttpHeader tokens, and connection state lives in a bit-flag byte. Each response is rendered into one pooled buffer sized by estimateSize() and sent in one socket write, and pipelined requests already in the read buffer are answered in one batched write. Buffers come from ByteBufPool (33 power-of-two slab classes) and are recycled, which keeps GC load low.
+
+**Use it when:**
+- You must stay on the JVM and want the most small-response HTTP throughput per core: ActiveJ was the top Java entry in the 2026-09-24 run (178.4k req/s at c=512 vs jooby 167.4k, Vert.x 145.5k, Undertow 129.8k, Spring 44.1k).
+- Many keep-alive connections with tiny, CPU-light responses (internal APIs, health or metrics endpoints, gateways) on a few pinned cores, where one event loop per core fits well.
+- You want a small embedded server without Spring or Netty: the README gives 1.4 MB JAR and 0.65 s cold start for its DI-based hello-world launcher.
+- You already use other ActiveJ parts (Inject, RPC, Serializer, CSP streams) and want one async model across them.
+
+**Skip it when:**
+- Handlers mostly do blocking work (JDBC, blocking SDKs): a blocked call stalls the whole worker loop and every connection on it, so you must offload to executors (BlockingServlet, Promise.ofBlocking).
+- You need a maintained release line: the last stable release is 5.5 (June 2023), 6.0 has been at rc2 since December 2024, and issue #326 asking for the next release has no maintainer reply.
+- You depend on the mainstream Java ecosystem: no Servlet/Jakarta API, and the OpenTelemetry Java agent does not propagate context automatically (open issue #338).
+- Server-push WebSocket traffic written from other threads: a WebSocket can only be used on its reactor thread and writes must be chained serially (issue #280, where the reporter moved to another library).
+- You are already on Rust: the lead over actix-web is 8-9% on one route that does no work, and only ~4% in the 2026-09-20 run.
+
+**Integration:** module · slf4j-api (logging facade, imported by Eventloop); the HTTP launcher also pulls activej-specializer, which needs ASM (asm, asm-commons: 9.4 in 5.5, 9.7.1 on master). HTTP core itself uses no other third-party libraries. · Java 8 for 5.5 (the benchmarked release); Java 17 for the 6.0 line (6.0-rc2, master 6.0-SNAPSHOT); Maven Central artifacts under io.activej · any JVM (pure java.nio Selector; no native epoll/io_uring transport documented)
+
+**Vs siblings:** Pick it when you must stay on the JVM: it is the only Java framework among the siblings that beat actix-web in this run. On the same run may_minihttp (194.4k), caprese (212.6k), ohkami-nio (181.8k) and httpbeast (175.5k) post equal or higher req/s at c=512. ActiveJ's data.json p99 at c=512 (2.95 ms) is far below caprese's (10.57 ms) and httpbeast's (11.26 ms).
+
+**Gotchas:**
+- 5.5 and 6.0 APIs differ: 5.5 uses AsyncHttpServer.create(...) and servlets that return HttpResponse directly, while 6.0 uses builders (HttpServer.builder, Eventloop.builder) and .toPromise(). The benchmark ran 5.5, not current master.
+- 5.5 pins ASM 9.4, and Serializer fails with 'Unsupported class file major version 65' on Java 21 class files until you override ASM to 9.5 or newer (issue #325).
+- In 6.0 the launcher's default listen address changed from *:8080 to localhost:8080, so IPv6 clients are refused until http.listenAddresses is set (issue #290). TLS behind PrimaryServer throws an NPE unless the worker servers also get the SSLContext (issue #312).
+- HttpClient's DnsClient defaults to Google Public DNS. It ignores /etc/hosts and Kubernetes resolv.conf search domains, so cluster short names fail (issue #315, open).
+
+**Status:** Slow-moving rather than active: occasional commits (last on 2026-01-09), no release since 6.0-rc2 (December 2024), last stable release 5.5 (June 2023). It is Apache-2.0 and published on Maven Central, so usable as a dependency.
+
+[repo](https://github.com/activej/activej) · [benchmark](https://github.com/the-benchmarker/web-frameworks/blob/f673364fb30748e5bb8e57319ec2772bc872f78a/data.json)
+
+##### Agoo-C  `C`  `MIT`  `abandoned`  `Tier B`
+
+Small C HTTP/1.1 and GraphQL server library built on Ruby Agoo's C core; ~2.1x Go net/http at 256+ connections.
+
+**Beats:** Go net/http — This is one the-benchmarker/web-frameworks run (develop-branch data.json, commit f673364, 2026-09-24) with zrk closed-loop keep-alive load averaged over GET /, GET /user/0 and POST /user. agoo-c v0.7.3 (library built with debug flags -g -Og, app with -O3, Debian trixie GCC) served 74,974 / 141,394 / 149,193 req/s at 64 / 256 / 512 connections. Go net/http (label 1.22, golang:1.27 image) served 71,499 / 67,382 / 67,239, making agoo-c 1.05x / 2.10x / 2.22x. The server was pinned to 4 cores of an unidentified 16-CPU x86-64 host running Linux 7.2, with the load generator on the other 12. At c=64 agoo-c used only 58% of its 4 cores, below the suite's 75% server-bound threshold, so that point does not measure the framework cleanly.
+
+**Known shortcoming:** The 2.1-2.2x over Go net/http is from the-benchmarker's develop-branch data with libagoo built in debug mode (-g -Og); master data shows 0.99-1.45x and older runs had it slower than net/http; the-benchmarker's CPU label and memory value are hardcoded, not measured, and each figure averages three routes. Abandoned since 2020-12.
+
+**Known shortcoming:** Vendors a 2019 snapshot of Ruby Agoo's C core: con.c has the unchecked Content-Length arithmetic that Ruby Agoo #139 (open) reports as a heap overflow, and gqleval.c lacks the GraphQL depth/fragment-cycle fix for CVE-2022-30288 (disputed; fixed in Ruby Agoo 2.14.3). The benchmark understates it: besides the -g -Og build, the Makefile never defines HAVE_SYS_EPOLL_H or PLATFORM_LINUX, so Linux builds use poll() with a 10 ms wait and skip TCP_QUICKACK. agoo_init zeroes thread_cnt, so non-quick hooks never run unless the caller sets it. Case-sensitive header lookup (lowercase content-length gets 411), no chunked request bodies, 8 KB header cap, no PATCH, no HTTP/2. OpenSSL build branch overwrites CFLAGS. CWIST beat it at every concurrency in the same run.
+
+**How:** A listener thread accepts connections, sets TCP_NODELAY and passes them through a fixed-size ring queue (atomic head/tail with a pipe for wakeups) to a pool of connection-loop threads. The pool size is online CPUs times agoo_io_loop_ratio (default 0.5; the benchmark app sets 1.0), and each thread runs its own poll() readiness loop. Hooks registered as 'quick' run inline on the IO thread, skipping the hop to eval threads. Responses are pre-serialized byte buffers with atomic reference counts, so a constant response can be built once and shared, and each loop recycles response objects from a free list. Parsing is minimal: strstr to find the end of the headers, a switch on the method's first letter, a linear list of glob routes, and a single malloc'd copy of the message with pointer slices into it instead of a header table. Pipelined requests are handled in a loop.
+
+**Use it when:**
+- A C program on Linux or macOS that needs an embedded HTTP/1.1 endpoint for trusted, internal traffic, with many keep-alive connections (256+, where it measured 2.1-2.2x Go net/http on 4 server cores)
+- Handlers cheap enough to run inline on IO threads as 'quick' hooks, ideally returning constant or precomputed responses that can be ref-counted and reused
+- You want a GraphQL endpoint (SDL schema, queries, mutations, introspection) from plain C with only pthread and libm as dependencies
+- A few routes plus a small set of static files, which it serves from an in-memory cache that re-stats files every 5 s
+- Studying or forking a compact accept-thread, IO-loop and ring-queue server design (37 .c files)
+
+**Skip it when:**
+- Internet-facing or untrusted clients. Content-Length is parsed with strtoul and added to the header length without an overflow check (the same pattern is reported as a heap overflow in Ruby Agoo issue #139). The GraphQL evaluator has no depth limit or fragment-cycle check (CVE-2022-30288, fixed upstream in Ruby Agoo 2.14.3, not here). There have been no commits since 2020-12-16.
+- Low concurrency: at 64 connections it was only 1.05x net/http and had a higher median latency (0.95 vs 0.72 ms)
+- You need HTTP/2 (issue #12, promised for early 2020 but never shipped), chunked request bodies, PATCH, headers over 8 KB, or strict HTTP header handling
+- Windows, or any project that needs a maintained dependency with security fixes. For those, use a maintained sibling; for Agoo's core specifically, the Ruby gem (v2.15.15, 2026) is the maintained home.
+- C++ codebases wanting an object API: it has only a C API with one process-wide agoo_server global, a blocking agoo_start that installs its own signal handlers, and agoo_respond calls exit() when out of memory
+
+**Integration:** static lib · pthread, libm; OpenSSL optional (make SSL=true, but the Makefile only looks under /usr/local/opt/openssl or /usr/local/openssl) · C11 with <stdatomic.h> (README: 'A C11 compiler or gcc-7'); the Makefile uses -std=gnu11 on Linux and -std=c11 on macOS · Linux and macOS only (the Makefile branches on uname; code uses POSIX poll, pipe and pthreads). CPU architecture requirements are not documented.
+
+**Vs siblings:** In the same 2026-09-24 run, CWIST (C) beat agoo-c at every concurrency: 148,679 vs 74,974 req/s at c=64, and roughly level at 512 (151,250 vs 149,193). Drogon led at c=64 (126,432) but trailed by 5-13% at 256/512 (134,984 / 131,608 vs 141,394 / 149,193). Pick agoo-c only if you want its built-in GraphQL server in a tiny C library and can accept an unmaintained 2019 core behind a trusted boundary.
+
+**Gotchas:**
+- agoo_init zeroes agoo_server.thread_cnt, and the examples always set it to 1 (this is not documented). With 0, no eval threads start, so non-quick hooks and the GraphQL routes (registered non-quick) are queued but never run. The eval queue has 1024 slots, and a push spins while it is full.
+- A plain `make` builds the library with debug flags (-g -Og). Use the top-level `make release` for -O3; the benchmark used the debug build. The Makefile never defines HAVE_SYS_EPOLL_H or PLATFORM_LINUX, so the Linux build uses the poll() path (10 ms max wait) and skips TCP_QUICKACK, even though the vendored code supports both.
+- Parser limits: headers must fit in 8 KB or you get 431. POST and PUT require a Content-Length or you get 411, and header lookup is a case-sensitive strncmp, so a lowercase 'content-length:' also gets 411. Only GET, POST, PUT, DELETE, HEAD, OPTIONS and CONNECT are accepted; anything else gets 400. The keep-alive idle timeout is hard-coded at 10 s.
+- The OpenSSL branch for /usr/local/openssl sets `CFLAGS= -DHAVE_OPENSSL_SSL_H`, which overwrites the other flags instead of appending, and neither branch finds a distro OpenSSL under /usr/include. Expect to edit the Makefile to get TLS.
+
+**Status:** Abandoned: the last commit is 2020-12-16 and the last tag v0.7.3 is from 2019-11-10. It is MIT-licensed and about 450 KB of C, so it can be vendored, but it carries a 2019 snapshot of Ruby Agoo's core without the later upstream crash and security fixes.
+
+[repo](https://github.com/ohler55/agoo-c) · [benchmark](https://github.com/the-benchmarker/web-frameworks/blob/f673364fb30748e5bb8e57319ec2772bc872f78a/data.json)
+
+##### Breeze  `Go`  `MIT`  `active`  `Tier B`
+
+Go web framework on the gnet event loop; about 2.5x Go net/http on hello-world HTTP/1.1 throughput.
+
+**Beats:** Go net/http — In the-benchmarker/web-frameworks develop run of 2026-09-24 (commit f673364; one run, Linux x86-64 host with 16 logical CPUs and an unmeasured CPU model, server limited to about 4 cores, Go 1.27 with GOAMD64=v3, closed-loop keep-alive load on hello-world routes), Breeze did 186,467 / 173,403 / 168,851 req/s at 64 / 256 / 512 connections vs 71,499 / 67,382 / 67,239 for the net/http entry (2.51-2.61x); it sent about 64-byte responses vs about 88 for net/http. The benchmark app uses the v1 import path and the v1 handler signature, so it almost certainly built v1.6.2 on upstream gnet, not the v2 that the label says.
+
+**Known shortcoming:** The benchmark app imports the v1 path and v1 handler type (no error return), so the run built v1.6.2 on upstream gnet v2.10.0, not the labelled '2.0' or the current v2 on the nelthaarion/gnet fork (from source, not built). p99 is worse than actix (5.79 vs 3.22 ms at c=512; 0.88 vs 0.39 ms at c=64), though far better than net/http. Responses are smaller (64 vs ~88 bytes, no Date header). HTTP/1.x only, no TLS, chunked uploads get 400, no http.Handler adapter. Inline execution by default, so blocking handlers stall the event loop unless marked HandleBlocking; opt-in SetZeroCopyHeaders leaves strings pointing into reused buffers; NewEventLoopWorkerPool can spawn unbounded goroutines under overload. No speedup on Windows (gnet falls back to goroutine-per-connection). Created 2025-10, one main author, breaking API changes, graceful shutdown only since 2026-09 (#56), dashboard login fields in URL (#51 open); engine is a 1-star gnet fork; README Go version disagrees with go.mod.
+
+**How:** gnet runs one epoll/kqueue event loop per core and pins each connection to one loop (round-robin), so there is no goroutine per connection. Non-blocking routes run inline on that event-loop goroutine and answer with a synchronous `Conn.Write`, which skips the worker-pool channel, two goroutine handoffs and an `AsyncWrite` poller wakeup. A hand-written HTTP/1.1 parser loops over pipelined requests in one read event and copies only the header block (none with the opt-in `SetZeroCopyHeaders`). Context, request, response and wire buffers are pooled, status lines and common header blocks are precomputed, and static paths resolve through a per-method map; the author's microbenchmarks put parse+route+serialize at about 325 ns with zero allocations.
+
+**Use it when:**
+- Go HTTP/1.1 API services whose handlers are CPU-only (in-memory lookups, small JSON) and where requests per core matter: in the 2026-09-24 the-benchmarker run it did 2.5-2.6x net/http and about 1.3x fasthttp on hello-world routes.
+- Internal services behind a proxy or load balancer that terminates TLS and speaks keep-alive or pipelined HTTP/1.1 to the backend.
+- Linux (or macOS/BSD) deployments, where gnet uses epoll/kqueue.
+- Teams that want one Go module with the router, WebSocket server/client, validation, OpenAPI docs and a dev dashboard already wired to the event-loop engine.
+- WebSocket hubs that live in the same process as the HTTP API; the README says upgraded connections skip HTTP parsing and messages arrive per-connection in FIFO order.
+
+**Skip it when:**
+- Handlers that mostly wait on databases or remote calls: these must be registered with `HandleBlocking` and go through the worker pool with `AsyncWrite`, which is the slower path that the benchmark did not measure.
+- You need the net/http ecosystem: `http.Handler` middleware, in-process TLS, HTTP/2, or chunked request uploads (requests with Transfer-Encoding get a 400).
+- Windows production: the author's changelog says gnet has no epoll/kqueue there and falls back to goroutine-per-connection.
+- Tail latency matters more than peak throughput: in the same run, p99 at 512 connections was 5.79 ms vs 3.22 ms for actix-web (net/http: 15.5 ms).
+- Risk-averse production: the repo was created in October 2025, one author wrote most commits, there were breaking API changes (v1 to v2 changed `HandlerFunc` to return `error`), graceful shutdown arrived only in September 2026, a dashboard security issue (#51, login fields leak into the URL) is open, and the engine is a 1-star personal fork of gnet.
+
+**Integration:** module · github.com/nelthaarion/gnet/v2 v2.2.0 (fork of panjf2000/gnet: 7 commits ahead, 0 behind), github.com/nelthaarion/ants/v2, goccy/go-json, andybalholm/brotli, golang-jwt/jwt/v5, gopkg.in/yaml.v3; v1.6.2 used upstream panjf2000/gnet v2.10.0 · Go 1.26.7 per go.mod on main (the README still says Go 1.25.13+, which is what v1.6.2 requires) · Linux, macOS and *BSD through gnet epoll/kqueue; Windows builds but gnet falls back to goroutine-per-connection there. Benchmarked only on Linux x86-64.
+
+**Vs siblings:** Choose it over fasthttp, the other catalogued Go option, if you want the higher measured throughput (168,851 vs 125,657 req/s at c=512 in the same run) plus built-in WebSocket/OpenAPI/dashboard, and can accept a young project with one main maintainer. If leaving Go is an option, hyper (166,617) and actix-web (163,415) matched it in that run with lower p99, so pick Breeze only to stay in Go.
+
+**Gotchas:**
+- Routes registered with `Handle` run on the event loop by default, so one slow call (SQL, file read, outbound HTTP) stalls every connection on that reactor. Mark such routes with `HandleBlocking`, or turn inline execution off globally.
+- With `SetZeroCopyHeaders(true)`, `Path` and header strings point into gnet's reused read buffer and are valid only until the handler returns. A retained string changes its contents without warning and can corrupt a map. Use `strings.Clone`, and check third-party middleware.
+- `New` needs a pool whose overflow policy is Spawn or Reject. `NewWorkerPoolWithConfig` defaults to Block, which can stall an event loop; `NewEventLoopWorkerPool` uses Spawn, which can create unbounded goroutines under sustained overload.
+- Protocol subset: HTTP/1.0 and 1.1 only, no server-side TLS (gnet has none), request Transfer-Encoding is rejected, responses carry no Date header, and dynamic `:param`/wildcard routes are matched by an ordered scan (the first-registered match wins).
+
+**Status:** Active (last push 2026-09-17, v2.1.0 tagged 2026-09-16), MIT, 215 stars, created October 2025, mostly one author. It installs as a normal Go module, but expect API churn between major versions.
+
+[repo](https://github.com/nelthaarion/breeze) · [benchmark](https://github.com/the-benchmarker/web-frameworks/blob/f673364fb30748e5bb8e57319ec2772bc872f78a/data.json)
+
+##### caprese  `Nim`  `MIT`  `active`  `Tier B`
+
+Nim HTTP/1.1 and WebSocket server with built-in TLS; about 30% more req/s than actix-web on an empty GET /.
+
+**Beats:** actix-web — In the-benchmarker/web-frameworks run of 2026-09-24 (commit f673364; GET / with an empty text body over keep-alive, zrk closed loop, mean of 3 runs), caprese 0.1 built with Nim 2.2 without TLS (-d:release --opt:speed plus -flto, per the Nim Dockerfile) did 233,622 / 222,921 / 212,564 req/s at c=64/256/512 against actix-web 4.8's 179,203 / 168,270 / 163,415 (30-32% more), and it was first of all frameworks at each level. Both servers used about 3.95 cores in Docker on one 16-vCPU x86_64 host whose CPU name reads 'M1 Eight-Core Processor'. Caprese sent about 118 bytes per response vs actix-web's 88, so the lead is not from a smaller response; its median latency was lower but its p99 was 3.3x higher at c=512.
+
+**Known shortcoming:** p99 is far worse than actix in the same run (10.6 vs 3.2 ms at c=512; 6.6 vs 0.39 ms at c=64) though the median is lower; may_minihttp and fulmine.js come within 4-9% of its throughput with ~4x lower p99. The benchmark app uses a tuned non-default config (no TLS library, activeHeader=true, InternalConnection) that turns the static response into a compile-time precomputed buffer with a Date header patched once a second. Mostly GET-only: the parser accepts only 'GET /' lines, POST is off and 'not yet implemented', no HEAD/PUT/DELETE, chunked, HTTP/2, QUIC, IPv6 or cookies. Linux and OpenBSD only (macOS build fails, #2; Windows 'a few years later', #1). Builds pull the latest HEADs of BearSSL/OpenSSL/LibreSSL/BoringSSL/Brotli/zopfli unless NOREMOTEUPDATE=1. Version 0.1.0 with no tags, one maintainer, a single 6,400-line server.nim; recent work goes to an experimental server2.
+
+**How:** Each worker thread (one per CPU by default) runs epoll_wait on one shared edge-triggered epoll set (kqueue on OpenBSD). The listening socket is registered with EPOLLEXCLUSIVE, clients come from a preallocated pool, and each client has its own spinlock. The request parser extracts only the headers declared at compile time (`httpHeader:` plus a few internal ones). It uses macro-generated 8-byte and 4-byte word compares (`cmpString`, and `cmpHeaderParam` with OR-0x20 case folding) and a computed-goto case per target header, and it stops scanning once every wanted header is found. With `activeHeader = true`, as in the benchmark app, a response built from a static string is a precomputed byte buffer (status line, headers, body); a background thread patches the Date field once per second into a double buffer.
+
+**Use it when:**
+- A Linux (or OpenBSD) service in Nim that pushes real-time messages to many WebSocket clients, especially fan-out by tag (for example, notifying every wallet that watches an address), which is the use case it was built for.
+- A small, fixed set of GET endpoints that return static or precomputed bodies over keep-alive, where throughput and median latency matter more than tail latency (median 2.17 ms vs actix-web 3.13 ms at c=512 in the benchmark run).
+- You want one statically linked binary that terminates TLS itself (BearSSL, OpenSSL, LibreSSL or BoringSSL chosen at compile time), does SNI, reloads Let's Encrypt certificates without a restart, embeds its static assets, and proxies a few paths to back ends, with no nginx in front.
+- Full-stack Nim projects that also generate their HTML (Karax) and minified JavaScript (Nim JS backend plus closure-compiler) in the same code base and binary.
+
+**Skip it when:**
+- Tail-latency-sensitive services: in the same run caprese's p99 was 10.6 ms vs actix-web 3.2 ms at c=512 and 6.6 ms vs 0.39 ms at c=64, so the throughput lead came with much more jitter.
+- General REST APIs: routing is GET-centric. POST is off by default, and enabling it prints the compile warning 'POST is not yet implemented.'; streamed large request bodies are not implemented, there are no PUT/DELETE/HEAD route helpers in the README, and Transfer-Encoding parsing is commented out. HTTP/2, QUIC, IPv6 and cookies are listed as not done.
+- macOS or Windows: only Linux and OpenBSD are supported. `nimble install` fails on macOS with "attempting to call undeclared routine: 'accept4'" (issue #2, open since 2024-12), and the maintainer puts Windows support 'a few years later' (issue #1).
+- Teams that need an ecosystem, middleware, API docs beyond one README, or versioned releases: the package has been version 0.1.0 with no tags or releases, has one maintainer, 84 stars and no pull requests.
+- Reproducible or audited builds: the nimble build hook runs `git submodule update --init --remote`, so it compiles the latest upstream HEADs of BearSSL, OpenSSL, LibreSSL, BoringSSL, Brotli and zopfli unless you set NOREMOTEUPDATE=1.
+
+**Integration:** module (nimble package; macros expand into your program; TLS, Brotli and zopfli C libraries are built from git submodules and statically linked) · Nim packages karax >= 1.2.3, regex, checksums; C libraries built from submodules: BearSSL, OpenSSL, LibreSSL, BoringSSL (all four are built unless NOSSL=1), Brotli, zopfli; the build needs git, automake, autoconf, libtool and cmake; Java and Maven only if you use the closure-compiler JavaScript minifier · Nim >= 1.6.4 per caprese.nimble, with --threads:on (compile error otherwise); README builds use --mm:orc; the benchmark used Nim 2.2 · Linux (epoll; Debian/Ubuntu recommended) and OpenBSD (kqueue); macOS build fails; no Windows. CPU architecture is not documented; the word-compare parser code reads 8-byte words, so 64-bit targets are implied
+
+**Vs siblings:** Over httpbeast, the other Nim entry: caprese did 212.6k vs 175.5k req/s at c=512 with similar p99 (10.6 vs 11.3 ms) and adds TLS, WebSocket and a proxy, so in Nim it is the faster choice. may_minihttp and fulmine.js were within 4-9% of caprese's throughput at c=512 with about 4x lower p99 (2.7-2.8 ms); pick them unless you are in Nim or need caprese's built-in TLS and WebSocket fan-out.
+
+**Gotchas:**
+- The benchmarked configuration is not the default: the-benchmarker app sets sslLib = None, activeHeader = true and connectionPreferred = InternalConnection, while the defaults are BearSSL, activeHeader = false and ExternalConnection (a different, throttled dispatch path). activeHeader only precomputes responses whose body is a compile-time static string.
+- By default responses carry no Date or Server header (headerDate and headerServer default to false); enable headerDate if clients or caches expect one.
+- Only headers declared in `httpHeader:` are parsed, and `reqHeader()` works only inside `routes:` because values point into the receive buffer. The request parser accepts only request lines that start with 'GET /' (POST, when enabled, takes a separate path); HEAD, PUT, DELETE or OPTIONS requests get a parse error.
+- connectionTimeout (default 120 s) is approximate: the README says disconnection happens between the set time and twice that time. clientMax (default 32000) client slots are preallocated at start-up.
+
+**Status:** Active single-maintainer project (near-daily commits up to 2026-08-04, recently on an experimental `server2` engine) but still version 0.1.0 with no tags or releases, so pin a git commit; MIT-licensed, and the core `server.nim` is a single 6,400-line file.
+
+[repo](https://github.com/zenywallet/caprese) · [benchmark](https://github.com/the-benchmarker/web-frameworks/blob/f673364fb30748e5bb8e57319ec2772bc872f78a/data.json)
+
+##### CWIST  `C`  `MIT`  `active`  `Tier B`
+
+Plain-C17 web framework and app server; about 2.1-2.3x Go net/http's plaintext req/s in one independent suite run.
+
+**Beats:** Go net/http — Setup: the-benchmarker/web-frameworks run of 2026-09-24 (commit f673364), zrk closed-loop keep-alive load against empty or echo hello-world routes. The server was confined to 4 cores of a 16-CPU x86-64 Linux 7.2 host; the CPU model is unknown because the cpu_name field is hardcoded. Result: CWIST 3.6 (GCC -Ofast LTO build on Debian trixie, first-party-maintained entry app) averaged 148.7k/154.7k/151.2k req/s at 64/256/512 connections, against Go net/http (golang:1.27 image, GOAMD64=v3) at 71.5k/67.4k/67.2k req/s, which is 2.08-2.30x. Both servers were CPU-saturated, and neither had errors.
+
+**Known shortcoming:** The ~2.1-2.3x over Go net/http is only for CWIST 3.6 on the-benchmarker's develop-branch data; runs with 3.4-3.5 (including master) show 1.04-1.08x. CWIST's lead developer maintains the suite entry, and its own README has it slightly behind Axum; the-benchmarker's CPU label and memory value are hardcoded, not measured, and each figure averages three routes. 15 stars.
+
+**Known shortcoming:** p99 worse than net/http at 64 connections (8.6 vs 3.1 ms) despite a lower median. A response cache ('Big Dumb Reply') is on by default and replays GET responses keyed on method+path once a handler is slow and deterministic; per-user GET routes need Vary. Docs contradict the code (CWIST_WORKERS default; cache replay). A blocking handler stalls its whole worker; HTTPS goes through a thread pool and idle keep-alive connections are not reaped. Weekly minor releases, API may break until 4.0, one lead developer; many 2026 security fixes (WebSocket DoS, JWT algorithm confusion, HTTP/2 Made You Reset, non-rotating TLS ticket key).
+
+**How:** By default it pre-forks one worker process per online core. Each worker is pinned to a CPU and has its own SO_REUSEPORT listen socket, and each worker runs its own reactor. The reactor uses io_uring through raw syscalls (epoll or kqueue as fallback) as a readiness notifier: it arms one-shot IORING_OP_POLL_ADD and runs the handler synchronously on the woken thread, with no completion-queue hand-offs. An optional IORING_OP_RECV path is also available. Responses are serialized straight into a per-connection output buffer and flushed in batches, and request and response share one arena. Request-line and header scans use SSE2/AVX2/NEON byte search.
+
+**Use it when:**
+- You want a C (not C++) HTTP server with high plaintext keep-alive throughput per core, and you can pin its workers to dedicated cores.
+- Many short, CPU-light handlers on Linux, where the io_uring reactor and prefork-per-core model pay off.
+- Holding very large numbers of mostly idle connections (SSE, WebSocket, long-polling): the README reports 1M loopback connections at about 244 MB peak RSS in reactor mode.
+- You need HTTP/3, WebTransport or post-quantum hybrid TLS in C without assembling lsquic, BoringSSL and routing yourself.
+- You need to link existing C/C++ libraries into the request path with no FFI layer.
+
+**Skip it when:**
+- Production services that need API stability or a track record: the repo dates from January 2026, releases v3.1 to v3.7 shipped between August and September 2026, and the README says minor releases may change public APIs until 4.0.
+- Latency-SLO work at low concurrency: in the same suite run, CWIST's p99 at 64 connections was about 8.6 ms against net/http's 3.1 ms, even though its median was far lower (0.11 ms against 0.72 ms).
+- Blocking or slow handlers in the default reactor mode: the handler runs on the reactor thread, so a blocking handler stalls every connection on that worker.
+- HTTPS-heavy or long-idle keep-alive workloads: the README says the async path covers cleartext HTTP/1.x only, HTTPS still uses the thread-pool model for the request phase, and idle keep-alive connections are not yet reaped by a timer.
+- Windows targets: only Linux, macOS and BSD are documented.
+
+**Integration:** static lib · Vendored and built in-tree: BoringSSL, lsquic, libttak, SQLite3, cJSON, uriparser, cnats, multipart-parser-c. System libraries: zlib, zstd, brotli (libbrotlienc/libbrotlicommon). Optional: libnghttp2 (HTTP/2) and libcurl (RDBMS auto-mount probing). The link line also needs -lstdc++, and the suite build installs cmake. · C17 (-std=c17); GCC or Clang, with a separate tcc profile in the Makefile. The suite built it with Debian trixie's default GCC. · Linux (io_uring with epoll fallback), macOS and FreeBSD (kqueue). SIMD scans have SSE2/AVX2, NEON, RVV, AltiVec and MSA paths with a scalar fallback. The default Makefile passes no -march, so x86-64 builds use the SSE2 path.
+
+**Vs siblings:** In the same 2026-09-24 suite run, CWIST 3.6 led Drogon 1.9 by about 1.15-1.18x and led Agoo-C by about 2x at 64 connections, but only by about 1.01x at 512. Pick it over those two when you want plain C with built-in HTTP/3, WebTransport and PQ TLS. Pick Drogon (C++) or Lwan when maturity and a longer track record matter more than the last 15%.
+
+**Gotchas:**
+- The docs and code disagree on the worker count. The README's env-var table says CWIST_WORKERS defaults to 1, but app.c defaults to the online core count; set CWIST_WORKERS explicitly.
+- An on-by-default response cache, Big Dumb Reply, can replay GET responses. It keys on method and path only, and it learns a response once the handler takes more than 10 ms and returns identical bytes twice. Entries live up to 300 s or 100,000 hits. Only responses carrying Vary are skipped, so per-user GET routes that are slow need Vary. The app.h field comment says this cache is 'never replayed by HTTP dispatch', but app.c serves hits from it.
+- The library build uses -Ofast with LTO; your own code is compiled with whatever flags you choose. Static linking pulls in each vendored component's license: Apache-2.0 for BoringSSL and cnats, BSD-3-Clause for uriparser and libttak.
+- The issue tracker shows a run of fixed security bugs in 2026: WebSocket RFC 6455 violations and OOM DoS, JWT algorithm confusion, HTTP/2 'Made You Reset', and a non-rotating TLS session-ticket key. Treat the protocol stack as young code.
+
+**Status:** Very actively developed: roughly weekly minor releases, last commit 2026-09-25, v3.7 is already out while v3.6 was benchmarked. MIT-licensed with 15 stars, and effectively one lead developer (gg582, 327 commits). Usable via make install, Homebrew or pkg-config, but pin an exact tag.
+
+[repo](https://github.com/c4punks/CWIST) · [benchmark](https://github.com/the-benchmarker/web-frameworks/blob/f673364fb30748e5bb8e57319ec2772bc872f78a/data.json)
+
+##### Drogon  `C++`  `MIT`  `active`  `Tier B`
+
+Async C++17/20 HTTP/1.1 web framework on an epoll reactor; ~1.8-2x Go net/http req/s on hello-world.
+
+**Beats:** Go net/http — In the-benchmarker/web-frameworks develop-branch run of 2026-09-24 (zrk closed-loop keep-alive, empty-body GET /, 15 s at 64/256/512 connections, server pinned to 4 cores of a 16-CPU x86-64 Linux 7.2 host of unknown CPU model), Drogon 1.9.13 (CMake Release, C++17, Debian trixie GCC 14) served 126K-135K req/s. Go net/http from the golang:1.27 image (labelled 1.22 in the data) served 67K-71K req/s, so Drogon was 1.77-2.00x faster; the master-branch run with the older zrk ramp method shows only about 1.2x.
+
+**Known shortcoming:** The 1.8-2.0x over Go net/http is from the-benchmarker's develop-branch data (2026-09-24); the master data with the older method shows only about 1.2x. The suite's CPU label is garbled, and the server is pinned to 4 cores.
+
+**Known shortcoming:** The benchmark's GET / is answered by a registerSyncAdvice hook before routing, filters and middleware, with Date and Server headers disabled: a best case, not a normal route. p99 at 64 connections 9.8 ms vs 3.05 ms for net/http. Open security reports: %00 in the path bypasses the static-file extension allowlist (#2591, fix PR #2600 unmerged); SQL injection via Mapper::orderBy() and the Criteria JSON constructor (#2575, #2576). No HTTP/2 server. Install docs say gcc 5.4 but C++17 with std::filesystem is required. Default is 1 IO thread; {param} routes are matched by a linear std::regex scan.
+
+**How:** It runs on trantor, a muduo-style one-event-loop-per-thread reactor: each IO thread owns an epoll (kqueue on macOS/BSD) loop, and on Linux each thread gets its own SO_REUSEPORT listening socket, so the kernel spreads accepts with no shared acceptor; cross-thread work is handed over through a lock-free task queue. Requests are parsed by a hand-written incremental HTTP/1.x state machine (CRLF scanning over a MsgBuffer) that drains every pipelined request from one read, and HttpRequestImpl objects are recycled per connection through a shared_ptr custom deleter. Exact-path routes are a hash-map lookup, and responses marked setExpiredTime(0) are rendered once and reused, with only the Date bytes patched once per second.
+
+**Use it when:**
+- High-request-rate HTTP/1.1 REST/JSON APIs written in C++ where per-request framework overhead matters: 126K-135K req/s for an empty GET on 4 pinned cores, about 1.8-2x Go net/http in the same run.
+- Many concurrent keep-alive or pipelined clients on Linux, where every IO thread has its own SO_REUSEPORT listener and epoll loop.
+- Services that want async PostgreSQL/MySQL/SQLite/Redis access, an ORM, sessions and WebSocket in one framework; FastDbClient runs DB IO on the HTTP threads to avoid thread hops.
+- C++20 codebases that want coroutine handlers (co_await on DB and HTTP-client calls) instead of nested callbacks.
+- Cross-platform builds (Linux, macOS, BSD, Windows, ARM); CI covers GCC 9-13, Clang 11-17, MSVC on Windows 2022 and macOS 14/15.
+
+**Skip it when:**
+- You need an HTTP/2 or HTTP/3 server: master speaks HTTP/1.0/1.1 only, and HTTP/2 exists only as a beta client (v1.10.0-beta.3).
+- Tail latency at modest concurrency matters more than peak req/s: in the same run Drogon's p99 at 64 connections was 9.8 ms, against 3.05 ms for net/http and 1.13 ms for Oat++, even though its median was 0.12 ms.
+- Handlers must call blocking libraries (sync DB drivers, sync HTTP clients, long CPU work): each loop is single-threaded, so you have to offload that work or rewrite it with async callbacks or coroutines.
+- Static-file serving or generated ORM RESTful controllers exposed to untrusted input without review: as of 2026-09-26 there are open reports of a %00 path-truncation bypass of the static-file extension allowlist (#2591; fix PR #2600 not merged) and of SQL injection via Mapper::orderBy() and the Criteria JSON constructor (#2575, #2576).
+- HTTP framing is not your bottleneck: the 2x is for an empty-body hello-world, the older-method master-branch run showed only about 1.2x, and header access copies into std::string maps (issue #2535).
+
+**Integration:** static lib (default; BUILD_SHARED_LIBS=ON builds a shared lib) · trantor (git submodule), jsoncpp >= 1.7, zlib, libuuid (or Boost.UUID). Optional: OpenSSL or Botan (HTTPS via trantor), Brotli, yaml-cpp, c-ares, libpq, MySQL/MariaDB client, SQLite3, hiredis · C++17 with a complete std::filesystem (CMake aborts otherwise); C++20 is auto-selected when <coroutine> exists and enables coroutines. CMake 3.5+. CI: GCC 9-13, Clang 11-17, MSVC (Windows 2022). The install doc still says gcc >= 5.4 and recommends 11+. · Linux (epoll), macOS/FreeBSD/OpenBSD (kqueue), HaikuOS and Windows per the README; x86-64 and ARM. The per-thread SO_REUSEPORT listeners are Linux-only; other OSes use one accept thread that hands connections to the IO loops.
+
+**Vs siblings:** Pick Drogon over Oat++ when you want built-in async DB/Redis clients, an ORM and more hello-world throughput (1.09-1.34x Oat++ in the same run), but note that Oat++ had much tighter p99 there. CWIST (C) was 15-18% faster than Drogon in that run, and the Crow and Lwan figures come from TechEmpower rather than this suite, so choose Drogon for its feature set plus competitive speed, not as the fastest server listed.
+
+**Gotchas:**
+- The benchmarked GET / never reaches the router: a registerSyncAdvice hook returns it before routing, filters and middleware run, and the config disables the Date and Server headers. A normal HttpController route does more work per request.
+- setThreadNum defaults to 1 IO thread, and 0 means std::thread::hardware_concurrency(). Set it explicitly, especially in CPU-limited containers (the benchmark used 0).
+- Paths are lowercased and matched case-insensitively. When the exact-path hash lookup misses, routes with {param} placeholders are found by a linear scan with std::regex_match over all regex routes, so cost grows with the number of parameterized routes.
+- Never block in a handler or DB callback: sleep or sync IO stalls every connection on that loop, and sync queries on a FastDbClient, which shares the HTTP IO threads, deadlock (threading FAQ, issue #1068).
+
+**Status:** Actively maintained (v1.9.13 released 2026-05-06, commits through 2026-09-16, 14.3k stars, 441 open issues and PRs) and MIT-licensed. It installs via CMake add_subdirectory or Conan, but it is a sizable library with trantor/jsoncpp/uuid/zlib dependencies, not something to vendor as a few files.
+
+[repo](https://github.com/drogonframework/drogon) · [benchmark](https://github.com/the-benchmarker/web-frameworks/blob/f673364fb30748e5bb8e57319ec2772bc872f78a/data.json)
+
+##### Elysia (Bun)  `TypeScript`  `MIT`  `active`  `Tier B`
+
+Bun-first TypeScript web framework; ties actix-web on a hello-world GET because Bun serves that route natively.
+
+**Beats:** actix-web — In the-benchmarker/web-frameworks run of 2026-09-24 (commit f673364; empty GET /, zrk closed-loop keep-alive, server limited to about 4 of 16 x86-64 cores on Linux 7.2, CPU model not recorded), Elysia 1.4 on Bun 1.4 (one process per CPU) did 172,228 / 174,958 / 173,877 req/s at c=64/256/512 vs actix-web 4.8 (Rust 1.98, LTO, opt-level 3) at 179,203 / 168,270 / 163,415, i.e. 0.96x-1.06x, and was 0.97x-0.995x in the two earlier snapshots: a tie. The Elysia route is a constant, so Bun served a pre-built Response without running Elysia code; the suite's raw-Bun entry, which uses a JavaScript callback per request, did 145,897 req/s at c=512.
+
+**Known shortcoming:** Not faster than actix: 0.96x/1.04x/1.06x at c=64/256/512 in the 2026-09-24 run and 0.5-3.5% slower at every level in the 2026-09-18 and 2026-09-20 runs, so a tie (verifier downgrade). Most of the speed is Bun's native HTTP server, not Elysia's code.
+
+**Known shortcoming:** The benchmark route runs no Elysia code per request: .get('/', '') is a constant that Elysia's default nativeStaticResponse turns into a pre-built Response dispatched natively by Bun.serve routes, so the number measures Bun's static dispatch (the suite's raw-Bun entry with a JS callback scores lower, 145,897 vs 173,877). On Node (elysia-node, same run) it does 48,128 req/s at c=512, ~0.29x actix. actix has lower p99 at c=64 (0.4 vs 0.7 ms). Handlers are compiled from source strings with new Function(): critical RCE via unescaped schema names/defaults (GHSA-gmm9-qwx3-2m3h, up to 1.4.29), cookie-config code injection (CVE-2025-66457); six advisories public since 2025-12, two critical. 1.4.18 recompiled handlers per request (3,853 vs 175,951 req/s, #1604, fixed 1.4.19). Open multipart memory leak (#1744); slow TypeScript IntelliSense on large apps (#1031); docs say aot defaults false but source enables it. 2.0 in beta; packages moving from @elysiajs to @elysia; SO_REUSEPORT multi-process only on Linux.
+
+**How:** On Bun, `listen()` hands every route to `Bun.serve({ routes })`, Bun's native router (built on uWebSockets' tree router). A handler given as a constant value, such as `.get('/', '')`, is turned into a pre-built `Response` (`nativeStaticResponse`, on by default) that Bun dispatches with zero allocation and without running any JavaScript per request. For function handlers, Elysia's JIT 'AOT' step (sucrose) reads each handler's source with `Function.prototype.toString()` to infer which of query/headers/body/cookie it uses, then emits a specialised handler compiled with `new Function()` that skips unused parsing. `SO_REUSEPORT` is on by default, so one Bun process per core can share a port.
+
+**Use it when:**
+- You already run Bun and want the lowest-overhead typed TypeScript framework: in the 2026-09-24 run elysia-bun did 173,877 req/s at c=512 vs hono-deno 130,540, fastify 68,128 and express 42,586.
+- Fixed-content endpoints (health checks, version strings, redirects) that Elysia can hand to Bun as static responses.
+- TypeScript teams that want one schema to drive runtime validation, OpenAPI docs and a typed frontend client without a codegen step.
+- Linux hosts where you can run one Bun process per core behind SO_REUSEPORT (cluster mode).
+
+**Skip it when:**
+- As a reason to move off actix-web: on this suite it ties (0.96x-1.06x across c=64-512, 0.97x-0.995x in two earlier snapshots), and actix had lower p99 at c=64 (0.4 ms vs 0.7 ms).
+- On Node.js: the same app through `@elysiajs/node` did 48,128 req/s at c=512, about 0.29x actix and 0.28x elysia-bun.
+- Handler-heavy services (DB calls, JSON bodies, validation): the benchmark route is a pre-built static response, so it gives no evidence about Elysia's per-request code path.
+- Very large typed APIs where editor speed matters: open issue #1031 reports 10-20 s IntelliSense delays; one reporter has 202 plugins and 1,168 endpoints.
+- Large multipart uploads through the built-in parser: open issue #1744 reports a memory leak on 1.4.22, and the form-data normalizer was quadratic in the number of fields until 1.4.29 (CVE-2026-56669).
+
+**Integration:** module (npm package `elysia`, ESM and CJS builds) · cookie, exact-mirror, fast-decode-uri-component, memoirist; peers @sinclair/typebox >=0.34 <1, file-type >=20, openapi-types >=12, exact-mirror; optional peers @types/bun >=1.2, typescript >=5.0; Node needs the @elysia/node adapter · Bun (peer @types/bun >=1.2; the benchmark used Bun 1.4); TypeScript >=5.0 for type-checking; package.json has no engines field · Wherever Bun runs (Elysia does not list platforms); Node.js via adapter; Cloudflare Workers adapter is experimental; SO_REUSEPORT port sharing works only on Linux per the deploy docs
+
+**Vs siblings:** Pick Elysia over hyper, Jooby or ActiveJ only when the service must be TypeScript on Bun; all four sit within about -4% to +9% of actix on this route. If raw JavaScript throughput is the only goal, fulmine.js posted more (203,996 req/s at c=512) in the same run.
+
+**Gotchas:**
+- Constant-value routes (`.get('/', '')`) become native Bun static Responses built once at `listen()`; that is exactly the-benchmarker's GET / route, so its numbers measure Bun's static dispatch. Any `onRequest` or trace hook, or a higher-order function, disables these native static routes app-wide.
+- AOT builds handlers as source strings run through `new Function()`. Unescaped schema property names and defaults allowed remote code execution (GHSA-gmm9-qwx3-2m3h, critical, <=1.4.29, listed as fixed in the 1.4.30 changelog); cookie config injection was CVE-2025-66457. Never build schemas from untrusted input and stay on >=1.4.30.
+- AOT can regress badly: issue #1604 measured 3,853 req/s with defaults vs 175,951 with `aot: false` on 1.4.18 because `fetch` was recompiled per request (fixed in 1.4.19).
+- Docs and code disagree: the configuration page says `aot` defaults to false, but the source enables it unless `ELYSIA_AOT=false`. Official packages moved from the `@elysiajs/*` npm scope to `@elysia/*` in 2026, and 2.0 is in beta (2.0.0-beta.19 on the npm `next` tag), so expect renames and breaking changes.
+
+**Status:** Actively maintained (1.4.30 released 2026-08-26, about 1.24M npm downloads a week, MIT), but 2.0 is in beta and there are six public security advisories since December 2025 (two critical) plus four more fixed in 1.4.30, so pin versions and track releases.
+
+[repo](https://github.com/elysiajs/elysia) · [benchmark](https://github.com/the-benchmarker/web-frameworks/blob/f673364fb30748e5bb8e57319ec2772bc872f78a/data.json)
+
+##### fulmine.js  `JavaScript`  `Apache-2.0`  `active`  `Tier B`
+
+Drop-in Express 5 replacement on uWebSockets.js; hello-world suite run: ~5x Express, 1.25x actix-web req/s.
+
+**Beats:** actix-web — In the-benchmarker/web-frameworks develop-branch run of 2026-09-24 (commit f673364), with the server pinned to 4 cores of an undisclosed 16-thread x86_64 Linux host and zrk driving a closed loop over keep-alive connections, fulmine.js 5.21 (Node 26, uWS 20.71.0, cluster: 'auto', etag off, declarative request values on) averaged 223,508 / 210,337 / 203,996 req/s over three hello-world routes at 64 / 256 / 512 connections vs actix-web 4.8 (Rust 1.98, lto=true, codegen-units=1) at 179,203 / 168,270 / 163,415, i.e. 1.25x. In the same run Express 5.2 reached 42,586 req/s at c=512 (fulmine 4.8x), and the plain uWebSockets.js entry, started with the suite's language-level 'node cluster.mjs' command instead of fulmine's own cluster: 'auto', reached 174,621 req/s; the older master snapshot (commit 0fccb1d, older method) puts fulmine only 1.04x-1.09x ahead of actix.
+
+**Known shortcoming:** The benchmark app uses non-default settings: etag and connection headers off, and 'declarative request values' compiles /user/:id into a response uWS answers without running JS (writing the parameter undecoded); the project's own #9 admits its CI benchmark measures a non-default path. It beats raw uWebSockets.js partly because the suites launch them differently (own cluster vs generic cluster.mjs). actix has lower p99 at c=64 and c=256. A Node framework compared with Rust actix: it replaces Express (~4.8x in the same run), not actix; the older snapshot shows only 1.04-1.09x. Very young (first npm release 2026-08-03, 58 versions, one maintainer, 18 stars); versions track Express rather than semver; CVE-2026-12590 (body-parser limit silently disabled) fixed only in 5.21.3 while the benchmark pins ~5.21.0. Needs glibc 2.38+ (no Alpine/bookworm), uWebSockets.js fetched from GitHub (not npm), Node 22/24/26 only; uWS drops uploads slower than 16 KB/s; no 1xx, trailers or HTTP/3.
+
+**How:** uWebSockets.js does HTTP parsing, socket I/O and route matching in C++: routes with plain or whole-segment-parameter paths are registered on the uWS native router, and the middleware chain in front of each route is resolved once at listen(), replacing Express's per-request linear scan of the layer stack. Per-request work is lazy: the body is not read unless a handler asks, headers are not copied out of uWS unless something reads them, and no Readable/Writable stream is built unless used. A handler that only calls res.status/set/type/send/json/end with literal arguments is parsed at registration (acorn over the function source) and compiled into a uWS DeclarativeResponse that C++ answers without entering JavaScript; the opt-in 'declarative request values' setting extends this to echoing a route parameter or query value. cluster: 'auto' forks one worker per usable core (cgroup CPU quota read first), each binding the port with SO_REUSEPORT, so no primary process relays connections the way Node's built-in cluster does.
+
+**Use it when:**
+- An existing Express 5 app where routing and dispatch, not the database or JSON.parse, is the bottleneck; the project's own CI (Node 26, self-reported) shows 1.2x-4.5x over Express on plain routing and 1.7x-5x on requests with a body.
+- Large route tables whose paths are plain strings or whole-segment parameters (/users/:id): the docs report 7x-22x over Express at 1,000 routes, because uWS matches in C++ while Express scans every layer.
+- Static or id-echo endpoints (health checks, fixed JSON) with no middleware in front and etag off, which compile to responses uWS answers with zero JavaScript per request.
+- Multi-core Linux hosts or containers where you want one Node process per core on one port without a primary relaying connections (cluster: 'auto', cgroup-aware).
+- Express apps that also need WebSockets served by the same native server (app.ws(), or socket.io via io.attachApp(app.uwsApp)).
+
+**Skip it when:**
+- As an alternative to actix-web: the 1.25x lead comes from a 3-route hello-world with fulmine-specific settings (etag off, connection headers off, declarative request values on), and actix-web still has the lower p99 latency at 64 and 256 connections in that run (0.39 vs 0.60 ms, 1.58 vs 2.38 ms).
+- Alpine/musl images, Debian bookworm images (node:26 and node:26-slim ship glibc 2.36; 2.38+ is required), Bun, Node 23/25, or builds that block git dependencies: uWebSockets.js is not on npm and is fetched from GitHub with git, and pnpm 10.26+ refuses it without an override.
+- Requests dominated by JSON.parse on large bodies, zlib, OpenSSL or large streams: the project's own docs cap the ratio versus Express at 1.0x-1.5x there.
+- Clients that upload slower than 16 KB/s (uWS drops them, not tunable from JavaScript), headers above 4 KB without UWS_HTTP_MAX_HEADERS_SIZE, or code that needs real 1xx responses (Early Hints, 100-continue), trailers or HTTP/3 (writeEarlyHints/addTrailers are no-ops; http3 is guarded off because the pinned uWS H3App segfaults on Linux).
+- Risk-averse production: one maintainer, first npm release 2026-08-03 with 58 versions in about seven weeks, 18 GitHub stars and ~3.4k npm downloads per month; minor releases may contain breaking changes, and CVE-2026-12590 (a body-parser limit that could be silently disabled) was fixed only in 5.21.3.
+
+**Integration:** module · uWebSockets.js v20.71.0 (native prebuilt binaries, installed from GitHub via git), acorn, fast-zlib, tseep, iconv-lite and Express's helper modules (accepts, qs, cookie, mime-types, proxy-addr, range-parser, type-is and others); optional peer @nestjs/platform-express >=10 · Node.js 22, 24 or 26 only (23 and 25 have no uWS binary); glibc 2.38+ on Linux; git available at npm install time · Linux (glibc 2.38+, not Alpine/musl), macOS, Windows; x64 and arm64; not Bun
+
+**Vs siblings:** Pick fulmine.js only when the code is already Node/Express and a rewrite is off the table; in the same 2026-09-24 run the compiled-language siblings are in the same range at c=512 (may_minihttp 194,372, ohkami nio 181,797, httpbeast 175,501, http.zig 171,398 req/s vs fulmine 203,996), and may_minihttp matches it at c=64 (223,705 vs 223,508) with about half the p99 latency (0.32 vs 0.60 ms). For a new service in Rust, Nim or Zig, those siblings give comparable throughput without Node, the native-addon install constraints, or a seven-week-old codebase.
+
+**Gotchas:**
+- The fast paths drop out silently: a route goes back to JavaScript routing if its path uses :from-:to, a *splat or {} groups, if a later route in the same router overlaps it, or if the request uses a different letter case; a compiled response also needs no middleware in front, literal arguments only, and etag off. Check with npx fulmine.js profile and pin it in CI with express.testing.expectNative / expectDeclarative.
+- 'declarative request values' (used by the benchmark app) writes route parameters undecoded, so a malformed percent-encoding gets no 400 and a repeated query key gives its first value, not an array; compiled routes also answer Connection: keep-alive to a client that sent Connection: close, and param echoes go out chunked.
+- Requests with untrustworthy framing (duplicate Content-Length, a Transfer-Encoding not ending in chunked, unknown or lowercase methods) are refused by closing the connection with no 400, as a request-smuggling guard over uWS's permissive parser.
+- http.createServer(app) works but runs through node:http at Express speed; app.listen() returns the app (which passes instanceof http.Server) but no 'connection'/'request'/'upgrade' events fire, and idle timeouts are set through uwsOptions.idleTimeout.
+
+**Status:** Actively developed (5.21.5 released 2026-09-23, 58 npm versions since 2026-08-03) but single-maintainer and very young; Apache-2.0 and installable from npm, with the major version tracking Express rather than semver, so pin the minor.
+
+[repo](https://github.com/nigrosimone/fulmine.js) · [benchmark](https://github.com/the-benchmarker/web-frameworks/blob/f673364fb30748e5bb8e57319ec2772bc872f78a/data.json)
+
+##### http.zig (httpz)  `Zig`  `MIT`  `active`  `Tier B`
+
+Zig HTTP/1.1 server library on epoll/kqueue; ties actix-web on hello-world req/s, leading ~5% only at 512 connections.
+
+**Beats:** actix-web — In the-benchmarker/web-frameworks run of 2026-09-24 (develop, commit f673364), httpz commit 52eb187 built with Zig 0.16.0 ReleaseFast averaged 146k/168k/171k req/s over three hello-world routes at 64/256/512 closed-loop keep-alive connections vs actix-web 4.8 (Rust 1.98, release, LTO) at 179k/168k/163k, i.e. 0.82x/1.00x/1.05x, with the server pinned to 4 cores of an undisclosed 16-thread x86_64 Linux host. The 2026-09-20 snapshot of the same httpz commit under an older load method showed 1.49x-1.64x, so the ratio depends on how the suite measures, not on httpz changes.
+
+**Known shortcoming:** The win over actix is marginal and method-dependent: 0.82x/1.00x/1.05x at c=64/256/512 in the 2026-09-24 run versus 1.49-1.64x for the same httpz commit in the 2026-09-20 snapshot with the older load method. p99 is 2.8-8.8x worse than actix (3.48/5.58/9.13 vs 0.39/1.58/3.22 ms) though p50 is lower. fulmine.js, may_minihttp, ohkami-nio and httpbeast all beat it at c=512 in the same run. No TLS (#148), HTTP/1.x only, and the README says it may never be fully HTTP/1.1 compliant (no Date header) and assumes a reverse proxy. The Zig 0.16 port on master is 'experimental'; ThreadSanitizer races and a corrupt-value panic under concurrent slow requests (#125) are open; Windows falls back to an easily DoS'd thread-per-connection mode (#182, #74). Header/param/query limits drop data silently; chunked bodies are fully buffered (#170); the router doesn't backtrack; default is 1 worker.
+
+**How:** N worker threads each run their own epoll (Linux) or kqueue (BSD/macOS) loop over one shared non-blocking listener (the epoll registration uses EPOLLEXCLUSIVE to limit thundering-herd wakeups) and parse requests incrementally into a pre-allocated per-connection Request.State buffer, so bytes that trickle in are not re-parsed. Parsed requests are queued, in batches of up to 16 to cut locking, to a separate thread pool that runs the action and writes the response with blocking writev, then hands the connection back to its worker through a handover list. Per-request memory comes from a FallbackAllocator: a thread-local fixed buffer (thread_pool.buffer_size) first, then the connection's retained arena, plus per-worker pools of large buffers, so the hot path rarely reaches the general-purpose allocator. The parser compares 4-byte words as u32 to match methods and the 'HTTP/1.x' version, and lower-cases header names in place.
+
+**Use it when:**
+- Your service is already in Zig and needs an HTTP/1.1 API server. In the 2026-09-24 run httpz reached 146k-171k req/s, while zzz, the other Zig framework in that run, reached 57k-69k req/s (derived from page data).
+- Deployment behind a reverse proxy such as nginx that terminates TLS and tolerates non-compliant upstreams. The README designs for this and recommends proxy-side timeouts.
+- Keep-alive REST/JSON traffic with small requests at high connection counts, where median latency matters. httpz's p50 was lower than actix-web's at every level: 0.29/1.22/2.52 ms vs 0.35/1.52/3.13 ms at c=64/256/512 (derived from page data).
+- Actions that make blocking calls, such as a pg.zig pool query. Actions run on a thread pool (default 32 threads) sized separately from the epoll workers, so a blocking action does not stall the event loop.
+- You want a bounded memory footprint you can size up front. The README gives a minimum-memory formula from thread_pool, workers and request buffer settings.
+
+**Skip it when:**
+- Tail latency matters. In the same run httpz's p99 was 3.48/5.58/9.13 ms vs actix-web's 0.39/1.58/3.22 ms at c=64/256/512, 2.8x-8.8x higher, and its c=64 throughput was 18% lower (derived from page data).
+- You need TLS, HTTP/2 or HTTP/3 in-process. The parser accepts only HTTP/1.0 and HTTP/1.1, and the owner said in issue #148 he would add TLS only if Zig's std gains a tls.Server.
+- Clients connect directly without a proxy. The README says httpz 'may never be fully HTTP/1.1 compliant' (e.g. no Date header), timeouts are effectively disabled by default, and non-epoll/kqueue platforms such as Windows use a thread-per-connection blocking mode the README calls easy to DoS.
+- You need a stable toolchain or proven concurrency. master targets Zig 0.16.0 and the README calls this port 'not well tested' and 'experimental'. Issue #125, open since 2025-05, reports ThreadSanitizer races and a 'switch on corrupt value' panic under 100 concurrent slow requests on an older version; a later comment traces a crash to epoll returning an fd closed in the previous batch.
+- Windows production use. Open issues report a service being killed (#182) and cross-thread websocket writes hanging in blocking mode (#74), and the owner says he cannot reproduce Windows problems.
+
+**Integration:** module (Zig package added with zig fetch and build.zig.zon; compiled from source) · metrics.zig and websocket.zig (Zig packages pinned in build.zig.zon); links libc (link_libc = true) · Zig 0.16.0 on master; zig-0.15 branch for Zig 0.15; dev branch tracks Zig master · Linux (epoll) and BSD/macOS (kqueue) in non-blocking mode; everything else, notably Windows, runs a thread-per-connection blocking mode
+
+**Vs siblings:** Pick httpz when the application is in Zig and you want a full-featured server library (router, middleware, WebSocket, test helpers) rather than a bare parser. If you are not tied to Zig, fulmine.js (204k), may_minihttp (194k), ohkami-nio (182k) and httpbeast (176k) all beat httpz's 171k req/s at c=512 in the same run, and fulmine.js, may_minihttp and ohkami-nio also had lower p99 (derived from page data).
+
+**Gotchas:**
+- res.body and res.header name/value slices must stay valid until the response is sent after the action returns. Allocate them from res.arena, or use res.headerOpts with dupe_name/dupe_value.
+- Limits drop data silently: headers beyond request.max_header_count (32), route params beyond max_param_count (10) and query params beyond max_query_count (32) are ignored. formData()/multiFormData() return nothing useful until max_form_count/max_multiform_count are set above their default of 0. All request headers must fit in request.buffer_size (4 KB default), else the request is rejected.
+- Chunked request bodies are always buffered fully in memory and ignore lazy_read_size (owner, issue #170). multiFormData() rewrites escaped field names inside the raw body in place, and each SSE stream from startEventStream runs on its own new thread.
+- Defaults are 1 epoll worker and 32 pool threads (config.zig); the benchmark set both to the CPU count, so tune workers.count before comparing. The router does not backtrack: with '/:any/users' and '/hello/users/test' registered, '/hello/users' matches nothing, and routes must be lowercase (README).
+
+**Status:** Actively maintained (last commit 2026-08-26, 1.6k stars) and MIT-licensed, consumed as a Zig package; the Zig 0.16 port on master is self-described as experimental, and older Zig versions live on zig-X.YY branches.
+
+[repo](https://github.com/karlseguin/http.zig) · [benchmark](https://github.com/the-benchmarker/web-frameworks/blob/f673364fb30748e5bb8e57319ec2772bc872f78a/data.json)
+
+##### httpbeast  `Nim`  `MIT`  `stale`  `Tier B`
+
+Minimal multi-threaded epoll/kqueue HTTP/1.1 server core for Nim; about 7% above actix-web at 256-512 connections on hello-world.
+
+**Beats:** actix-web — In the-benchmarker/web-frameworks develop-branch run of 2026-09-24 (commit f673364), httpbeast 0.4 built with Nim 2.2, --mm:refc, -d:release and LTO served 179k and 176k req/s at 256 and 512 keep-alive connections vs actix-web 4.8 (Rust 1.98, LTO) at 168k and 163k (1.07x), but was 7% slower at 64 connections (167k vs 179k). Each server was pinned to 4 cores of an undisclosed 16-thread x86_64 Linux host, and each figure is the average of three hello-world routes; the same data show httpbeast's p99 3.5-20x worse than actix's.
+
+**Known shortcoming:** p99 in the same run is 3.5-20x worse than actix (8.1/10.9/11.3 vs 0.40/1.58/3.22 ms at c=64/256/512) despite a lower median. Not hardened; the README says to put it behind a reverse proxy and a smuggling report (#95) was closed with that advice. Open bugs: a body longer than Content-Length asserts or hangs with assertions off (#21); GET with a body is never answered (#18); never closes connections and ignores Connection: close/HTTP/1.0, so ab hangs (#16); raw header strings can break Content-Length (#56). Threads under ORC (Nim 2's default) segfault (#80, #90); the benchmark builds with --mm:refc. The last tag v0.4.1 lacks later fixes, so nimble installs it unless #head is used (#91). sleepAsync timers don't wake the loop (capped one user at ~100 req/s, #84). No TLS (#11), HTTP/2, streamed/chunked request bodies (#74), WebSockets or Windows; 256-byte read buffer slows large bodies (#86). Stale since 2023-12. may_minihttp and fulmine.js beat it in the same run.
+
+**How:** Thread-per-core, shared-nothing: with --threads:on every thread opens its own listening socket with SO_REUSEPORT and runs its own Nim `selectors` loop (epoll on Linux, kqueue on macOS), so the kernel spreads accepts and no connection crosses threads. Reads are non-blocking until EAGAIN; end of headers is detected by checking only the last four bytes for CRLFCRLF, with a full scan only for body-carrying methods, and method/path/headers are parsed lazily from the raw buffer when the handler asks. Responses are copied straight into a per-connection send queue by a macro-unrolled append, the Date header is cached and refreshed by a one-second timer, TCP_NODELAY is set, and a handler may return a nil Future to skip asyncdispatch entirely. HTTP pipelining is supported for bodiless requests.
+
+**Use it when:**
+- You are writing a Nim web framework or a resource-constrained Nim service and want the raw HTTP/1.1 core that Jester and the Nim Forum run on.
+- Small plaintext/JSON endpoints on Linux (or macOS) behind nginx or another reverse proxy that terminates TLS and sanitizes requests.
+- Many keep-alive connections at moderate-to-high concurrency (256-512) where aggregate req/s matters more than tail latency.
+- Mostly synchronous handlers that can return a nil Future, or async handlers whose awaits are fd-based (sockets, addTimer).
+- Clients that pipeline GET requests.
+
+**Skip it when:**
+- Directly on the open internet: the README says it is not hardened and should sit behind a reverse proxy; a 2023 request-smuggling report (#95) was closed with that same advice, a body longer than its Content-Length trips an assertion (#21, open; with assertions off the connection waits forever), and a GET with a body is never answered (#18, open) because only POST/PUT/PATCH/CONNECT get a body scan.
+- Tail-latency-sensitive services: in the same 2026-09-24 run httpbeast's p99 was 8.1/10.9/11.3 ms at 64/256/512 connections vs actix-web's 0.40/1.58/3.22 ms, even though its median was lower.
+- You need TLS (#11, open since 2018), HTTP/2, streamed or chunked request bodies (#74, open), built-in WebSockets, or Windows (unsupported by design).
+- Nim 2 default ORC memory management with threads: random segfaults are reported (#80 open; #90 SIGSEGV on Nim 2.0 with Jester), and the benchmark itself builds with --mm:refc.
+- Large request bodies: reads go through a 256-byte stack buffer copied byte by byte into the connection string, and a user reported Vert.x faster with bodies over about 500 bytes (#86, open).
+
+**Integration:** module (Nimble package; about 720 lines of pure Nim source compiled into your program) · none beyond the Nim stdlib (selectors, asyncdispatch, net, posix); asynctools only for its tests · httpbeast.nimble says nim >= 0.18.0; CI tests Nim 1.4.8 and a Nim devel commit; code has a Nim 2 branch; benchmarked on Nim 2.2 with --mm:refc · Linux (epoll) and macOS (kqueue), CI on ubuntu-latest and macOS-latest; no Windows by design; multi-threading needs SO_REUSEPORT (where it is missing, as on WSL, it prints that it will not use all threads)
+
+**Vs siblings:** Pick httpbeast only when the service is written in Nim or you are building a Nim framework. In the same run may_minihttp (194k req/s at 512) and fulmine.js (204k) were faster and http.zig (171k) was comparable, so in Rust, JavaScript or Zig use those instead.
+
+**Gotchas:**
+- `nimble install httpbeast` resolves to tag v0.4.1: the v0.4.2 bump (Nov 2022) and the Dec 2023 startup-callback change (PR #89, cited in #80/#90 as the ORC crash fix) are untagged, so you need `httpbeast#head` (#91 open).
+- The server never closes a connection after responding: it ignores `Connection: close` and HTTP/1.0 semantics, so ApacheBench (`ab`) hangs (#16, open).
+- Timers created with `sleepAsync` do not wake the event loop (it waits on its own selector with no timeout), so `await sleepAsync(10)` capped a benchmark at ~100 req/s; fd-based `addTimer` fixed it (#84).
+- The `headers` argument of `send` is spliced in raw; a trailing or embedded blank CRLF shifts the body so Content-Length no longer matches (#56, open).
+
+**Status:** Stale since 2023-12-10 with the last tag at v0.4.1, but MIT-licensed, dependency-free and small enough (about 720 lines) to vendor; it is still Jester's non-Windows backend.
+
+[repo](https://github.com/dom96/httpbeast) · [benchmark](https://github.com/the-benchmarker/web-frameworks/blob/f673364fb30748e5bb8e57319ec2772bc872f78a/data.json)
+
+##### hyper  `Rust`  `MIT`  `active`  `Tier B`
+
+Rust's low-level HTTP/1 and HTTP/2 library under axum and warp; raw hyper roughly ties actix-web on minimal GET /.
+
+**Beats:** actix-web — the-benchmarker/web-frameworks run of 2026-09-24 (commit f673364): GET / with an empty body, zrk closed loop over keep-alive connections, 15 s at c=64/256/512, server pinned to about 4 cores of a 16-CPU x86-64 Linux host (real CPU model not stated), both apps built with Rust 1.98, LTO, codegen-units=1, panic=abort. Raw hyper with a hand-written match router did 173.6k / 168.8k / 166.6k req/s vs actix-web's 179.2k / 168.3k / 163.4k (0.97x / 1.00x / 1.02x); the earlier 1.11-1.16x lead comes from snapshots taken before the harness was changed to a sized, pinned closed-loop generator, which the suite says are not comparable, and each level is one stored sample, so run-to-run variance is unknown.
+
+**Known shortcoming:** The margin over actix flips between runs: 0.97x/1.00x/1.02x on 2026-09-24 but 1.11-1.16x in the two earlier runs. The suite's hyper app is raw hyper with a hand-written router, not a framework.
+
+**Known shortcoming:** The earlier 1.11-1.16x lead came from snapshots predating the suite's harness fix (67d90d2, 2026-09-15, 'Restore closed-loop zrk, size the generator'); the suite says revisions aren't comparable, and data.json stores one sample per level. p99 is worse than actix (2.55 vs 1.58 ms at c=256; 6.03 vs 3.22 ms at c=512). Version labels are floors (no Cargo.lock), so 'hyper 1.5' resolves to the newest compatible release. Raw hyper vs a full framework is apples-to-oranges: axum on hyper does 141,410 vs raw hyper's 166,617 req/s at c=512; may_minihttp and ohkami-nio beat hyper in the same run. The benchmark app enables experimental pipeline_flush(true) and sets no Timer, so the default header_read_timeout does nothing. h2 < 0.4.16 is affected by GHSA-q83h-524g-xf6h (unbounded empty DATA frames).
+
+**How:** Requests are parsed by httparse, a zero-copy push parser with SSE4.2, AVX2 and NEON backends plus a SWAR fallback; hyper keeps up to 100 header slots in a stack SmallVec, records header positions as indices, then freezes the read buffer into refcounted Bytes so the URI, header names and values share one allocation. The read buffer starts at 8 KiB and adapts (doubles when a read fills it, shrinks only after two consecutive short reads); the Date header is cached per thread and reformatted at most once per second; writes are either flattened into one buffer or queued for writev, and the opt-in pipeline_flush aggregates flushes across pipelined requests. In the benchmark most of the gap to frameworks is simply missing framework layers: in the same run axum 0.8, which is built on hyper, did 141,410 req/s at c=512 against raw hyper's 166,617.
+
+**Use it when:**
+- Building your own framework, reverse proxy, gateway or RPC layer on tokio where you need direct control of connections, upgrades and HTTP/2 rather than a router.
+- Small fixed-route services (health checks, sidecars, metrics or webhook endpoints) where a hand-written match router is enough and you want to skip framework overhead: raw hyper served 17-19% more req/s than axum 0.8 at every concurrency in the 2026-09-24 run.
+- You need both an HTTP client and server on the same stack (reqwest, axum and warp all sit on hyper), or HTTP/2 alongside HTTP/1.
+- You want throughput on par with actix-web while staying in the tokio/tower ecosystem.
+
+**Skip it when:**
+- You expect a throughput win over actix-web: under the suite's current method (sized generator, server at ~99% CPU) the result is 0.97x / 1.00x / 1.02x at c=64 / 256 / 512, which the suite itself says to treat as noise until repeated.
+- Tail latency under saturation matters: with equal medians, hyper's p99 was 2.55 ms vs actix-web's 1.58 ms at c=256 and 6.03 ms vs 3.22 ms at c=512 (8.45 vs 4.56 ms at c=512 in the 2026-09-20 snapshot too). actix-web runs one sequential worker per physical CPU; the hyper app uses tokio's multi-thread runtime.
+- You want routing, extractors, middleware, TLS and graceful shutdown out of the box; with raw hyper you assemble them from hyper-util, tower or your own code, and the hyper guide calls hyper-util less stable than hyper.
+- Very many mostly idle HTTP/1 connections on tight memory: each connection allocates an 8 KiB read buffer, and open issue #4060 reports header Bytes keeping large IO buffers alive in an h2-to-h1 proxy.
+
+**Integration:** crate · bytes, http, http-body, tokio (sync); with http1/server features also httparse, httpdate, itoa, atomic-waker, futures-core, smallvec, pin-project-lite; h2 for HTTP/2. In practice a server also needs hyper-util (TokioIo, auto HTTP/1+2, graceful shutdown), http-body-util and a tokio runtime. · Rust 1.63 MSRV (edition 2021), policy is to support compilers at least 6 months old; the benchmark used Rust 1.98 · any target std and tokio support; runtime-agnostic through hyper::rt Read/Write/Executor/Timer traits; httparse has x86-64 SSE4.2/AVX2 and aarch64 NEON paths with a SWAR fallback
+
+**Vs siblings:** Pick hyper over may_minihttp or ohkami's nio backend when you need a mature, widely deployed HTTP/1 + HTTP/2 client/server on tokio with tower/axum compatibility; if raw GET throughput on a Rust stack is the goal, those siblings did better in the same run (194,372 and 181,797 req/s at c=512 vs hyper's 166,617), and may_minihttp also had a p99 of 2.71 ms vs 6.03 ms.
+
+**Gotchas:**
+- The 30 s default header_read_timeout does nothing unless you set a Timer with Builder::timer; without hyper's unstable tracing feature there is not even a warning. The benchmark app sets no timer, so copying it leaves clients that send headers slowly with no time limit.
+- The benchmark app enables pipeline_flush(true), which hyper documents as 'Experimental, may have bugs' (default false); it also forces the flatten write strategy.
+- The suite's 'hyper 1.5' and 'actix 4.8' labels are Cargo version floors: only *.rs and Cargo.toml are copied into the image (no Cargo.lock), so each build resolves the newest compatible release (hyper 1.11.1 since 2026-08-28).
+- HTTP/2 goes through the h2 crate: advisory GHSA-q83h-524g-xf6h (2026-08-17, h2 < 0.4.16) allowed unbounded queues of empty DATA frames when request or response bodies are not drained. Upgrade h2 and drain bodies.
+
+**Status:** Actively maintained (v1.11.1 released 2026-08-28, commits up to 2026-09-26, about 950M crates.io downloads), MIT-licensed with a stable 1.x API, but the server plumbing you need beyond a raw connection lives in the faster-moving hyper-util.
+
+[repo](https://github.com/hyperium/hyper) · [benchmark](https://github.com/the-benchmarker/web-frameworks/blob/f673364fb30748e5bb8e57319ec2772bc872f78a/data.json)
+
+##### Jooby (Java)  `Java`  `Apache-2.0`  `active`  `Tier B`
+
+Java/Kotlin web framework on Netty (or Jetty/Undertow/Vert.x); ties actix-web on the-benchmarker's empty GET / test.
+
+**Beats:** actix-web — In the-benchmarker/web-frameworks run of 2026-09-24 (develop commit f673364), Jooby 4.5 (Java, jooby-netty, EVENT_LOOP, default headers off) served an empty GET / at 178,206 / 170,003 / 167,390 req/s at concurrency 64 / 256 / 512. actix-web 4.8 (Rust 1.98, release build, LTO) served 179,203 / 168,270 / 163,415, giving 0.99x / 1.01x / 1.02x, and two earlier runs gave 1.00-1.03x. Load came from zrk closed-loop keep-alive runs of 15 s after a 5 s warmup, with both servers saturating about 4 cores in Docker. The JVM ran as plain `java -jar` with no flags on JDK 25: the pom targets release 25, and the Dockerfile template falls back to JDK 25 images because the `version: 21` in java/config.yaml is only a metadata key. Host metadata says 16 vCPU x86_64, but the 'M1 Eight-Core Processor' name is hard-coded, so the CPU model is unknown.
+
+**Known shortcoming:** Parity with actix, within noise: 0.99x/1.01x/1.02x on 2026-09-24 and 1.00-1.03x in the earlier runs; the Kotlin variant is slower (0.94x at c=512).
+
+**Known shortcoming:** ActiveJ, the other JVM entry, was 7-8% faster in the same run. At c=64 p99 is 0.68 vs actix's 0.39 ms (p99.999 4.2 vs 1.4 ms). The benchmark config isn't Jooby's default: EVENT_LOOP set explicitly (default sends value-returning handlers to the worker pool), default headers off (no Date/Content-Type/Server), JDK NIO rather than the optional native epoll/io_uring transports. Effective JDK is 25 (pom release 25; 'version: 21' is only metadata), and a graalvm engine is also defined without saying which produced the row. Default worker pool is CPU x 8 on Netty (a 1 s sleep endpoint served 8 req/s vs Spring's 170, #3540). 4.x had a TechEmpower plaintext regression (#3770, fixed). Netty leak detection is turned off by default. Advisories: jooby-pac4j deserialization (GHSA-7c5v-895v-w4q5, 2025, high), assets path traversal and CRLF response splitting (2020). Evidence covers a single empty GET / only.
+
+**How:** jooby-netty is a thin layer over Netty 4.2. It uses one event loop per CPU (ioThreads = availableProcessors), the pooled ByteBufAllocator, TCP_NODELAY and an 8192 backlog, and picks its transport in the order io_uring > epoll > kqueue > JDK NIO, depending on which optional native jars are present. In EVENT_LOOP mode, which the benchmark uses, handlers run on the I/O thread with no hand-off to a worker pool. Hot-path tricks: a case-insensitive header multimap taken from Vert.x (HeadersMultiMap) that encodes straight into the output ByteBuf, a Date header string refreshed once a second by a background thread, exact-class checks before `instanceof` to avoid HotSpot's secondary-supertype cache contention (JDK-8180450, see SlowPathChecks), and Netty leak detection switched off by default. Routing is a port of go-chi's radix tree; static paths are checked first against unrolled 1-6-entry exact-match tables (a HashMap past that), which hold a precomputed match object per HTTP method.
+
+**Use it when:**
+- You are on the JVM and want plaintext or light-API throughput in the actix/hyper range. In the 2026-09-24 run Jooby (Java, Netty, EVENT_LOOP) was the second-fastest JVM entry at 167k req/s at c=512. ActiveJ led with 178k; Vert.x (145k), Undertow (130k), Quarkus (109k) and Spring Boot (44k) were all slower.
+- Your handlers are non-blocking (CompletableFuture, Reactor or RxJava types, Kotlin coroutines) and can stay on the event loop, and only a few routes need `dispatch { }` for JDBC or other blocking I/O.
+- You want a conventional framework (Guice/Avaje DI, Jackson, Hibernate/JDBI, OpenAPI generation, hot reload) rather than a bare async I/O toolkit, and want to keep the option to swap Netty for Jetty or Undertow later.
+- You run microservices where an empty or tiny response at high keep-alive concurrency dominates, and you can pin the ExecutionMode per route.
+
+**Skip it when:**
+- You want a speedup over actix-web. This is a tie (0.99-1.03x across three runs), so porting a Rust service to Jooby gains no throughput.
+- Tail latency matters at low concurrency. At c=64 in the same run, Jooby's p99 was 0.68 ms vs actix's 0.39 ms, and p99.999 was 4.2 ms vs 1.4 ms. At c=512 both were within 10%. The cause (JIT, GC or other) was not measured.
+- You plan to use the Kotlin DSL and expect the same numbers. The Kotlin variant (Gradle build, same Netty and EVENT_LOOP setup) ran at 0.92-0.94x actix even with -Xms2g -Xmx2g -XX:+UseParallelGC. The cause is not documented.
+- Your handlers block for a long time under the default settings. On Netty the worker pool is only CPU count x 8 threads: in issue #3540 a 1 s sleep endpoint served 8 req/s vs Spring's 170 until a cached or virtual-thread executor was supplied.
+- You need evidence beyond an empty GET. No JSON, DB, TLS or HTTP/2 comparison with actix is cited here. TechEmpower plaintext for 4.x regressed against 3.x in 2025 (issue #3770, since fixed), and fortunes lost some speed when a thread-local cache was removed.
+
+**Integration:** module (Maven Central: io.jooby:jooby plus exactly one server artifact, e.g. io.jooby:jooby-netty; Gradle and Maven plugins available) · jooby-netty: jooby core and Netty 4.2.18.Final (netty-handler, netty-codec-http, netty-codec-http2). netty-transport-native-epoll, -kqueue and -io_uring are optional, so you must add them yourself. Other server artifacts: jooby-jetty (Jetty 12.1.13), jooby-undertow (Undertow 2.4.3.Final) and jooby-vertx. jooby-kotlin provides the Kotlin DSL (built against Kotlin 2.4.20). · Java 21 for the 4.x line (maven.compiler.release 21). The benchmark app was compiled with release 25. · Any JVM 21+ platform. With jooby-netty, io_uring or epoll (Linux) and kqueue (macOS) are used only when their optional jars are present; otherwise JDK NIO is used.
+
+**Vs siblings:** ActiveJ, the other JVM sibling, was 7-8% faster in the same run (193k/182k/178k vs 178k/170k/167k req/s at c=64/256/512). Jooby is a mainstream framework (Netty, Jetty or Undertow, MVC annotations, OpenAPI, 50+ integration modules, Kotlin DSL), so pick it when ecosystem matters more than those few percent. Against hyper or actix-web it is a throughput tie, so pick it only if you are staying on the JVM.
+
+**Gotchas:**
+- The default ExecutionMode is DEFAULT, not EVENT_LOOP. Routes that return plain values (String, POJO) are sent to the worker pool, and only CompletableFuture, reactive or coroutine returns stay on the event loop. The benchmark numbers come from an explicit `runApp(args, new NettyServer(options), EVENT_LOOP, App::new)`, where any blocking call stalls an I/O thread.
+- The benchmark app also set `setDefaultHeaders(false)` (no Date, Content-Type or Server header) and depended only on jooby-netty. Netty therefore ran on JDK NIO, not native epoll or io_uring. A default Jooby app sends more headers per response.
+- NettyServer sets io.netty.leakDetection.level=DISABLED unless you pass that property, so ByteBuf leaks in your own Netty code go unreported. Header validation stays on unless -Dio.netty.disableHttpHeadersValidation=true is set; keep it on, because the project had a CRLF response-splitting advisory (GHSA-gv3v-92v6-m48j, 2020).
+- Only one server artifact may be on the classpath. The 4.x (Java 21) and 3.x lines are maintained in parallel, with separate docs at jooby.io and jooby.io/v3. jooby-pac4j had a high-severity deserialization advisory (GHSA-7c5v-895v-w4q5, 2025).
+
+**Status:** Actively maintained: last commit 2026-09-26, 7,400 commits, 5 open issues, 4.5.4 released 2026-07-29, and the 3.x line still patched (3.12.0 on 2026-08-07). Apache-2.0 on Maven Central, so it is an ordinary dependency.
+
+[repo](https://github.com/jooby-project/jooby) · [benchmark](https://github.com/the-benchmarker/web-frameworks/blob/f673364fb30748e5bb8e57319ec2772bc872f78a/data.json)
+
+##### may_minihttp  `Rust`  `Apache-2.0`  `active`  `Tier B`
+
+Bare-bones Rust HTTP/1.1 server on the may stackful-coroutine runtime; 1.19x actix-web on the-benchmarker's empty-body GET.
+
+**Beats:** actix-web — On the-benchmarker/web-frameworks develop-branch data.json of 2026-09-24 (GET / with empty body; zrk closed loop over keep-alive; 15 s; server container on ~3.95 cores at ~99% CPU saturation, load generator on separate cores), may_minihttp 0.1 served 194,372 req/s vs actix-web 4.8's 163,415 at 512 connections (1.19x) and 223,705 vs 179,203 at 64 connections (1.25x), fastest of the 31 Rust entries. All entries were built with Rust 1.98, may_minihttp with thin LTO, codegen-units 1, panic=abort and may's default features off. Host metadata says 16 vCPUs on x86_64 Linux but names the CPU 'M1 Eight-Core Processor', and the master-branch data.json the record links (2026-09-20, earlier revision) shows only 105,982 vs 99,835 (1.06x).
+
+**Known shortcoming:** The 1.19x holds on the suite's develop-branch data.json (2026-09-24); the linked master data.json is an older run where it is only 1.06x and mid-pack. Under the suite's earlier connection-per-request method it was the slowest Rust framework (#22); the lead needs keep-alive or pipelining. The benchmark build disables may's default features (no work stealing) and uses thin LTO, codegen-units 1, panic=abort. The crates.io release 0.1.11 (2024-09) kills connections with more than 16 request headers (#18, #26); fixes are master-only. A 17th response header or a malformed Content-Length panics (process abort under panic=abort). An unread request body is parsed as the next pipelined request, allowing request smuggling; no chunked bodies. No timeouts, size caps, Connection: close or HTTP/1.0 handling; no TLS (#8), HTTP/2, routing or streaming. may's fixed 32 KiB coroutine stacks segfault on overflow, blocking calls stall a worker and TLS-across-yield is UB, so tokio crates are effectively unusable. No Windows ARM64 (#11). Unsafe reads into uninitialized memory and unsynchronized Date-header rewrite on the hot path. Licence is MIT OR Apache-2.0.
+
+**How:** Each accepted connection runs in its own stackful coroutine. The loop drains the non-blocking socket into one reusable 32 KiB `BytesMut`, parses every complete pipelined request in it with `httparse` into a stack array of uninitialized header slots (16 by default), encodes all responses into a second reusable buffer, sends them with one write, and then parks on epoll/kqueue. Responses are assembled by hand: a fixed `Server: M` line, a Date string cached and refreshed every 500 ms by a background coroutine, and an itoa-formatted Content-Length, so the hot path allocates almost nothing. The author credits O(1) coroutine switches, a share-nothing mode (`HttpServiceFactory` uses the socket fd as the coroutine id, which pins each connection to one worker thread), near-SPSC scheduling when may's work-stealing default features are off, and avoiding malloc/free (issue #20); the-benchmarker build uses exactly that setup (`default-features = false`, thin LTO, codegen-units 1, panic=abort).
+
+**Use it when:**
+- Tiny hot endpoints (health checks, plaintext or JSON micro-APIs, internal HTTP RPC) served over long-lived keep-alive or pipelined connections, where per-request CPU cost dominates.
+- Services you are willing to write in synchronous style on the may runtime, using may-compatible clients (e.g. the author's may_postgres) instead of tokio crates.
+- Behind a TLS-terminating reverse proxy or load balancer on x86-64 or aarch64 Linux/macOS, where the proxy handles TLS, HTTP/2, timeouts and hostile clients.
+- When you want a server small enough (four compiled source files) to read the whole request path and vendor or patch it.
+
+**Skip it when:**
+- Apps that need routing, middleware, extractors, sessions, TLS, HTTP/2, WebSockets or streamed/chunked responses: none exist, and TLS was explicitly declined (issue #8). actix-web or ohkami provide these.
+- Workloads dominated by connection setup: under the-benchmarker's older connection-per-request method a user reported it as the slowest Rust framework (issue #22, Jan 2026), and the earlier master-branch data.json (2026-09-20) has it mid-pack at 105,982 req/s, only 1.06x actix-web.
+- Codebases built on tokio crates, thread-local storage or std blocking primitives: may's docs say blocking calls stall a worker thread, and TLS access across a coroutine yield can be undefined behavior.
+- Handlers with deep recursion or large stack frames: coroutine stacks are fixed-size (may default 0x1000 words, i.e. 32 KiB on 64-bit, and the TechEmpower example also uses 0x1000), and may's docs say overflow hits a guard page (segfault) or is UB.
+- Internet-facing without a proxy: the connection loop has no read/idle timeout, no request-size cap, no chunked request bodies and no `Connection: close`/HTTP/1.0 handling (every reply is HTTP/1.1 and the socket stays open).
+
+**Integration:** crate · may (stackful coroutine runtime; pulls generator, crossbeam, parking_lot, core_affinity, socket2, nix/libc or windows-sys), httparse, bytes, httpdate, itoa, once_cell, log · Not documented (no rust-version field); edition 2021. Master uses io::Error::other (Rust 1.74+), its CI Dockerfile uses Rust 1.88 for dev-dependencies, and the-benchmarker built it with Rust 1.98. · Per may: x86-64 Linux/Windows/macOS and aarch64 Linux/macOS. The build fails on Windows ARM64 (issue #11, open). Unix uses a non-blocking epoll/kqueue loop; Windows takes a simpler read + write_all path.
+
+**Vs siblings:** ohkami (nio backend) is the other catalogued Rust entry that beats actix-web in the same run, at 181,797 vs 194,372 req/s at c=512. Pick may_minihttp only when that ~7% and a synchronous coroutine model matter more than a real router, typed extractors and middleware. Pick it over Go's fasthttp or the C++ servers (Drogon, Workflow, H2O) when the service has to be Rust.
+
+**Gotchas:**
+- crates.io still ships 0.1.11 (2024-09-22). The configurable request-header limit (HttpServerWithHeaders/MaxHeaders) and owned (non-'static) response headers exist only on master. In 0.1.11, a request with more than 16 headers is a parse error that drops the connection (issues #18, #26). On master the HttpServiceFactory (share-nothing) path is still fixed at 16, and src/server_builder.rs and config.rs are not compiled (not listed in lib.rs) and carry a TODO.
+- A Response holds at most 16 headers because `Response::header` indexes a fixed array, so a 17th header panics. `req.body()` parses Content-Length with `unwrap()`, so a malformed value panics the connection's coroutine; under the panic='abort' profile that the repo and the-benchmarker use, that aborts the whole process.
+- A request body is drained only if the handler calls `req.body()` (BodyReader's Drop skips the unread rest). `Request` has no Drop, so an ignored POST body stays in the buffer and is parsed as the next pipelined request. That usually ends in a parse error that closes the connection before the earlier responses are flushed (the symptom in issue #18). If the body is itself valid HTTP, it runs as a second request. Only Content-Length bodies are supported.
+- Unsafe code on the hot path: socket reads land in uninitialized BytesMut capacity through transmute, and a background coroutine rewrites the cached Date header through an UnsafeCell with no synchronization. The runtime's dependencies have had RustSec advisories (generator RUSTSEC-2019-0020 and RUSTSEC-2020-0151, may_queue RUSTSEC-2020-0111), all patched in the versions may now uses.
+
+**Status:** Maintained but slow-moving (last commit 2026-05-06; the last crates.io release, 0.1.11, is from 2024-09, so recent fixes are master-only; one reverse dependency on crates.io). Dual MIT/Apache-2.0 per Cargo.toml and README (GitHub detects only Apache-2.0), and small enough to vendor.
+
+[repo](https://github.com/Xudong-Huang/may_minihttp) · [benchmark](https://github.com/the-benchmarker/web-frameworks/blob/master/data.json)
+
+##### micro-http (foldright)  `Rust`  `Apache-2.0`  `active`  `Tier B`
+
+Tiny tokio HTTP/1.1 server and web framework; matches actix-web on hello-world throughput, ahead ~2% only at 512 connections.
+
+**Beats:** actix-web — the-benchmarker/web-frameworks ran micro-web 0.3.0 from crates.io against actix-web 4.8 on 2026-09-24 (develop f673364). Setup: zrk closed-loop keep-alive, 15 s per level, averaging hello-world GET /, GET /user/0 and POST /user; both built with Rust 1.98, LTO, codegen-units=1 and panic=abort; server pinned to 4 cores of an undisclosed 16-thread x86-64 Linux host whose 'M1' CPU label is hard-coded. Results were 169,642 / 166,580 / 166,409 vs 179,203 / 168,270 / 163,415 req/s at 64 / 256 / 512 connections (0.95x / 0.99x / 1.02x), with micro-web's p99 1.6-1.9x higher (0.65 vs 0.40 ms at c=64, 6.03 vs 3.22 ms at c=512). The 1.11-1.17x lead cited elsewhere comes only from the superseded 2026-09-20 master snapshot.
+
+**Known shortcoming:** In the current run (2026-09-24) it is slower than actix at c=64 (0.95x) and c=256 (0.99x) and only 1.02x at c=512; the record cherry-picked c=512. Only the older 2026-09-20 snapshot (different method) shows 1.11-1.17x. The benchmark used micro-web 0.3 from crates.io (2025-10), not the repo head.
+
+**Known shortcoming:** p99 is 1.6-1.9x worse than actix at every concurrency (0.65 vs 0.40 ms at c=64; 6.03 vs 3.22 ms at c=512) with ~6x the stdev at c=512; hyper and ohkami-tokio beat it at all three levels. The benchmarked crates.io 0.3.0 buffers whole response bodies until the end (SSE arrives only on close; large streams sit in RAM); only unreleased git head streams. Git head's request body is a raw-pointer vtable with unsafe impl Send and no lifetime, so moving it into tokio::spawn can outlive its state (code reading). Not internet-safe: no TLS, HTTP/2/3 or WebSocket; no read/idle/header timeouts (slowloris); Connection: close ignored; body extractors unbounded; SIGINT only, no draining. Server::start panics if a tracing subscriber already exists; non-standard status codes panic via canonical_reason().unwrap(). Compression at level 9 checks the request's Content-Encoding, so pre-compressed bodies can be compressed twice. Non-optional zstd, brotli, flate2 and dhat dependencies. Alpha, one maintainer, 0 reverse dependencies; README Quick Start points at 0.1 (fails on Rust 1.92, #3). Licence is MIT OR Apache-2.0. The benchmark entry was added by the project's author.
+
+**How:** There is no novel technique; it is a thin layer over tokio that skips work. httparse parses each request head into a stack `MaybeUninit` header array (at most 64 headers). The head is then split off the read buffer once (`BytesMut::split_to().freeze()`), and the URI and every header value become ref-counted `Bytes` slices of it, built with unsafe `HeaderValue::from_maybe_shared_unchecked` to skip re-validation (the code comment credits this trick to actix). The Date header is formatted by a background task every 800 ms and shared through ArcSwap, accepted sockets get TCP_NODELAY, and each connection is one spawned task on the app's tokio runtime (the benchmark used the default multi-thread runtime). The benchmarked 0.3.0 encodes the whole response into a reused per-connection buffer (8 KB initial) and does one write plus flush per response; the unreleased git head (2026-08-01) sends head and body in one vectored write with no flush.
+
+**Use it when:**
+- Internal HTTP/1.1 text/JSON services behind a TLS-terminating reverse proxy, where hello-world throughput about equal to actix-web is enough (about 166-170k req/s on 4 pinned cores in the 2026-09-24 run).
+- Embedding an HTTP/1.1 endpoint over a custom transport: micro-http's `HttpConnection` takes any AsyncRead + AsyncWrite pair (for example a Unix socket or an in-memory duplex) and a `Handler` that returns `http::Response<B>` with `B: Body<Data = Bytes>`. Its core dependencies are small (httparse, http, bytes, tokio-util).
+- Studying or forking a compact HTTP/1.1 implementation (about 7,000 lines across both crates' src, including tests and doc comments) that covers chunked and Content-Length bodies in both directions plus Expect: 100-continue.
+- Prototypes that want axum-style extractor handlers (`async fn h(method: &Method, Json(u): Json<User>) -> String`) and can live with alpha-stage API churn.
+
+**Skip it when:**
+- You need a real throughput win over actix-web. In the current-method run it is 0.95x / 0.99x / 1.02x at 64 / 256 / 512 connections, its p99 latency is 1.6-1.9x worse at every concurrency, and hyper, ohkami and may_minihttp all beat it in the same run.
+- Directly internet-facing servers. It has no TLS, no HTTP/2 or HTTP/3, no read, idle or header timeouts (so it is exposed to slowloris), and no handling of `Connection: close`. The Bytes, String, Json and Form extractors also buffer the whole request body with no size limit.
+- Streaming responses (SSE, large downloads) on the crates.io release. 0.3.0 encodes every response frame into an in-memory buffer and writes it to the socket only when the body ends, so SSE events arrive only when the stream closes and large bodies sit fully in RAM. Only the unreleased git head streams.
+- Services that need graceful shutdown. `Server::start` stops accepting only on Ctrl-C (SIGINT); it does not handle SIGTERM and does not drain open connections.
+- Production use that needs maturity or lean builds. The README calls it alpha; it has one maintainer, 29 stars and 0 crates.io reverse dependencies; it has no tower middleware and no WebSocket/Upgrade support. micro-web always pulls in zstd (a C library), brotli, flate2 and the dhat heap profiler, none of them optional.
+
+**Integration:** crate · micro-http 0.3.0: tokio, tokio-util, httparse, http, http-body, http-body-util, bytes, futures, mime, thiserror, trait-variant, tracing, tracing-subscriber. micro-web 0.3.0 adds matchit, serde, serde_json, serde_urlencoded, serde_qs, flate2, zstd (C library), brotli, dhat, arc-swap, once_cell, async-trait, dynosaur, hlist2, tower-layer, pin-project-lite and faf-http-date, all non-optional. · Rust 1.90 (MSRV; edition 2024); CI tests 1.90, stable, beta and nightly · Anywhere tokio runs, in principle; CI covers ubuntu-latest only, and other platforms are not documented
+
+**Vs siblings:** In the same 2026-09-24 run, hyper 1.5 (also tokio) beat micro-web at all three concurrencies (173.6k / 168.8k / 166.6k vs 169.6k / 166.6k / 166.4k req/s), and may_minihttp (194k at c=512) and ohkami-nio (182k) were clearly faster. Pick micro-web only if you specifically want its small codebase and extractor-style API over hyper's bare service API; choose may_minihttp or ohkami for throughput and actix-web or hyper for maturity.
+
+**Gotchas:**
+- `Server::start()` installs its own global tracing subscriber at WARN level with `set_global_default(...).expect(...)`, so it panics if your app has already installed one. It also `unwrap()`s `set_nodelay` and address resolution. If you need control over these, drive micro-http's `HttpConnection` yourself.
+- The response header encoder calls `status.canonical_reason().unwrap()`, so a status code with no canonical reason (for example a custom 5xx/4xx) panics the connection task. Responses whose version is not HTTP/1.1 are rejected as Unsupported.
+- `EncodeDecorator` compresses gzip and deflate at `Compression::best()` (level 9), which is CPU-heavy, and turns the response into a chunked stream. It checks for Content-Encoding on the request rather than the response, so a body the handler has already compressed can be encoded twice.
+- Version trap. Published 0.3.0, the version the benchmark ran, buffers whole responses (see above). The git head fixes streaming, but since 2026-01-19 it passes the request body as a raw-pointer vtable (`unsafe impl Send for StreamingReqBody`), and `ReqBody` has no lifetime, so moving it out of the handler (for example into `tokio::spawn`) can outlive its backing state. The README Quick Start still pins `micro-web = "0.1"`, and 0.1.1 fails to compile on Rust 1.92 (issue #3).
+
+**Status:** Actively committed alpha with one maintainer: last commit 2026-08-01, but the last crates.io release is 0.3.0 from 2025-10-03, so the benchmark did not include the newer write-path change. Dual-licensed MIT OR Apache-2.0 per Cargo.toml and the README (GitHub shows only Apache-2.0).
+
+[repo](https://github.com/foldright/micro-http) · [benchmark](https://github.com/the-benchmarker/web-frameworks/blob/f673364fb30748e5bb8e57319ec2772bc872f78a/data.json)
+
+##### MoroJS engine (@morojs/engine)  `C++ (Node.js native addon via raw V8 bindings)`  `MIT`  `active`  `Tier B`
+
+C++ HTTP/1.1 and WebSocket server addon for Node.js, the engine under MoroJS; beat actix-web 1.11-1.14x on a hello-world shootout.
+
+**Beats:** actix-web — the-benchmarker/web-frameworks run of 2026-09-24 (develop f673364): zrk closed loop over keep-alive connections, 15 s per level, with each figure averaged over GET /, GET /user/0 and POST /user. The server was pinned to 4 cores of an undisclosed 16-thread x86_64 Linux host (the CPU name in the data is hard-coded). The raw engine as a Node 26 cluster (^1.1.6, most likely 1.1.7 because the run predates the 1.1.9 publish) did 203,452 / 187,047 / 182,455 req/s at c=64/256/512 against actix-web 4.8 (Rust 1.98, opt-level 3, LTO, codegen-units=1) at 179,203 / 168,270 / 163,415, or 1.14x / 1.11x / 1.12x with both about 99% CPU-saturated. The older-method 2026-09-20 snapshot showed only 1.03-1.05x, and the engine's author submitted the benchmark entry (PR #9801).
+
+**Known shortcoming:** The benchmark app answers GET / and POST /user entirely inside the C++ engine as static routes, so only /user/:id reaches JavaScript: tuned for the benchmark. Brand new (0 stars, ~723 npm downloads/month).
+
+**Known shortcoming:** The engine's author submitted its benchmark entry (the-benchmarker PR #9801, 2026-09-16) and the suite's CPU-saturation tasks (#9662); the 1.1.9 release note targets 'the benchmark shape every harness runs'. The engine version isn't pinned (^1.1.6; most likely 1.1.7 was tested). p99 is worse than actix at c=64 (0.72 vs 0.39 ms) and c=256 (2.42 vs 1.58 ms). Margin is 1.11-1.14x on 2026-09-24 but 1.03-1.05x on 09-20; fulmine.js was 10-12% faster in the same run. Created 2026-07-09, nine releases in 11 weeks, no external audit; THREAT_MODEL.md says to put a proxy in front of its TLS; maxConnections unlimited by default. Docs claim a 'SIMD-friendly' parser (it's scalar) and disagree on BoringSSL vs Node's OpenSSL. Before 1.1.7 promise-continuation responses could stall 5-29 s. V8 fast calls silently turn off on V8 mismatch and io_uring falls back to libuv under Docker's default seccomp (probe() reports both). Release flags: -std=c++20 -O3 -flto, clang PGO, -fno-exceptions -fno-rtti, -march=x86-64-v2/armv8.2-a.
+
+**How:** A batched boundary: one JS crossing delivers method index and path, and one corked call sends status, headers and body (the design doc says 2-4 crossings per request against about 10-20 for a general binding), with V8 Fast API call targets on the hot response functions. Fixed replies can skip JS entirely: setStaticRoute and (since 1.1.9) setParamRoute answer inside C++, and prepareResponse builds a header block once for reuse on each request. The warm path avoids allocation (reused per-connection scratch buffers and header strings, a Date header cached once per second, uv_try_write with no write-request allocation, one write for each pipelined batch), multi-core runs as SO_REUSEPORT workers, and release binaries are built with clang -O3 -flto plus PGO. The parser is a scalar, table-driven RFC 9112 parser: the source has no SIMD intrinsics, although DESIGN.md calls it 'SIMD-friendly'.
+
+**Use it when:**
+- You already run MoroJS on Node 20-26: this is its default engine, with automatic node:http fallback on unsupported platforms or ABIs.
+- Node.js HTTP/1.1 services where transport overhead dominates and many responses are fixed or echo one path segment, so static routes, parameter routes and prepared templates can answer without entering JS.
+- Pipelined HTTP/1.1 clients: the author's run (Apple M2 Ultra, wrk -c100, pipelined x10) shows raw engine 832,171 req/s vs raw uWebSockets.js 652,934; without pipelining the two were 108,446 vs 106,287.
+- You want native HTTPS/WSS termination plus WebSocket with permessage-deflate in one MIT npm package, with prebuilt binaries for glibc, musl, macOS and Windows x64.
+- Linux 6.1+ hosts with heavy keep-alive load where you can A/B the opt-in io_uring transport (MORO_ENGINE_TRANSPORT=uring).
+
+**Skip it when:**
+- Choosing a stack on this number alone: the win over actix-web comes from hello-world handlers where GET / and POST /user are engine static routes that never run JS. No data covers handlers that do real work in JS.
+- Tail-latency-sensitive services at low or medium concurrency: in the same run p99 was 0.72 ms vs actix 0.39 ms at c=64 and 2.42 vs 1.58 ms at c=256. It was lower only at c=512 (3.05 vs 3.22 ms).
+- You need HTTP/2, HTTP/3, multi-certificate SNI or OCSP stapling. The engine is HTTP/1.1 only; ALPN HTTP/2 is listed as in progress.
+- Direct internet exposure of the TLS and HTTP parsers without a proxy: no external security audit has been done, and THREAT_MODEL.md says to front it with a proxy or review it first. maxConnections defaults to unlimited.
+- Risk-averse production use: repo created 2026-07-09, one npm maintainer, 0 stars, 0 issues filed, 723 npm downloads in 30 days, nine releases in 11 weeks. Also not for streaming large uploads: request bodies are buffered in full before onRequest (10 MB default cap).
+
+**Integration:** module (npm meta package @morojs/engine with prebuilt .node binaries in per-platform optional packages, one for each Node ABI; source build via tools/build.mjs) · none at runtime beyond the per-platform binary package; links the libuv, OpenSSL and zlib inside the host Node binary. Source builds fetch Node headers and a sha-pinned v8-fast-api-calls.h. · Node.js >= 20 (ABIs 115/127/131/137/141/147 = Node 20/22/23/24/25/26). Source builds: C++20; the release lane uses clang-18 + lld for LTO/PGO, MSVC /std:c++20 on Windows. Minimum compiler version not documented. · darwin arm64/x64, linux x64/arm64 (glibc and musl), win32 x64. Release x64 binaries target -march=x86-64-v2 (SSE4.2/POPCNT) and arm64 targets armv8.2-a. The io_uring transport needs Linux 6.1+ and is opt-in. SO_REUSEPORT is POSIX-only (ignored on Windows).
+
+**Vs siblings:** In the same 2026-09-24 run, uWebSockets.js (189,157 / 178,265 / 174,621 req/s) was 4-8% behind, fulmine.js (223,508 / 210,337 / 203,996) was 10-12% ahead and Ultimate Express (179,836 / 170,080 / 165,795) was about 10% behind. Pick this engine when you use MoroJS or want its id-based native API with in-process TLS and automatic node:http fallback. Pick fulmine.js for the top raw number, or Ultimate Express if you need Express API compatibility.
+
+**Gotchas:**
+- Before 1.1.7, callbacks ran outside a Node callback scope. A response sent from a promise continuation could stall for 5-29 s, and under load none such completed. Use >= 1.1.7 and check probe().capabilities.callbackScope.
+- V8 Fast API targets install only when the running V8 major.minor matches the one the binary was built against. They apply only to Smi ids and sequential one-byte string bodies. Otherwise calls silently take the slower regular path; probe().fastApi reports why.
+- Static and parameter routes run no JS, so no middleware, logging or auth runs for them. Only an exact method match short-circuits (HEAD against a GET route reaches JS). A parameter segment is sent undecoded ('a%20b' stays 'a%20b').
+- The io_uring transport falls back to libuv silently under Docker's default seccomp profile, gVisor or kernels before 6.1. The default is still libuv because io_uring used more CPU per request in small-batch cases; check probe().transport.
+
+**Status:** Active: 1.1.9 released 2026-09-24, 45 commits since the repo was created on 2026-07-09. MIT, installable from npm with prebuilt binaries, but young, single-maintainer and not externally audited.
+
+[repo](https://github.com/Moro-JS/engine) · [benchmark](https://github.com/the-benchmarker/web-frameworks/blob/f673364fb30748e5bb8e57319ec2772bc872f78a/data.json)
+
+##### Oat++  `C++`  `Apache-2.0`  `active`  `Tier B`
+
+Zero-dependency C++ web framework (REST, DTO/JSON, Swagger, WebSocket) whose default server beat Go net/http ~1.5x on hello-world.
+
+**Beats:** Go net/http — In the-benchmarker/web-frameworks develop-branch run of 2026-09-24 (commit f673364), oatpp 1.3.1's Simple API served an empty GET / at 115.7K / 101.0K / 98.2K req/s over 64 / 256 / 512 keep-alive connections, against Go net/http ServeMux (labelled 1.22, built in the golang:1.27 image) at 71.5K / 67.4K / 67.2K, i.e. 1.62x / 1.50x / 1.46x. Both servers were CPU-bound on 4 pinned cores of a 16-CPU x86_64 host whose CPU model is garbled in the metadata; oatpp was built C++11, CMake Release, with Debian trixie's GCC (14.2 implied). The earlier master-branch run showed only 1.16-1.21x.
+
+**Known shortcoming:** The 1.46-1.62x over Go net/http is from the-benchmarker's develop-branch data; the '5 Million WebSockets' page names no baseline.
+
+**Known shortcoming:** The benchmark uses the Simple API HttpConnectionHandler (one detached thread per connection, blocking I/O), not the async server. p99.999 at c=512 is ~643 ms vs ~35 ms for net/http. Request headers over 4096 bytes close the connection with no response (1.3.1). A 404 or endpoint exception closes keep-alive. Workers pinned to CPUs 0..N-2; object counters stay on in Release. No HTTP/2 (#116). Unanswered out-of-bounds reports on DTO mapping (#1094-#1104); heap overflow #1007 fixed only on master. No release since 1.3.1 (2024-12); last commit 2025-11. oatpp.io/benchmark returns HTTP 500.
+
+**How:** The benchmarked app uses the Simple API: HttpConnectionHandler spawns one detached std::thread per accepted connection with blocking sockets, and that thread loops read-parse-route-respond for as long as keep-alive holds, with no event loop or cross-thread handoff per request. The header reader peeks into a reused per-connection buffer, finds the end of headers with a rolling 32-bit CRLFCRLF accumulator, and parses the start line and headers into zero-copy StringKeyLabel slices; routing is a per-method hash map followed by a linear pattern scan, and response headers go through a reused 2 KB-initial buffer. The Async API instead runs stackless coroutines (each act() returns an Action) on processor workers and parks I/O waits in edge-triggered, one-shot epoll or kqueue workers. The benchmark does not isolate why it beats Go (for example GC or scheduler cost); that is not documented.
+
+**Use it when:**
+- C++ REST/JSON services that want declarative endpoints, DTO mapping and Swagger docs without third-party libraries: the core links only the thread library (plus libatomic on Linux, ws2_32 on Windows).
+- Embedded, IoT and robotics targets, which the README names as its main use: a minimal app is about 1 MB, and known builds include OpenWRT boards with 64-128 MB RAM, Nvidia Jetson, Android and iOS.
+- Tens to a few hundred keep-alive connections on a few cores. In that range the Simple API measured 1.46-1.62x Go net/http req/s with lower p50 and p99 latency (p99 1.1 ms vs 3.1 ms at 64 connections, 9.4 ms vs 15.5 ms at 512).
+- Thousands of long-lived connections (WebSocket fan-out, streaming, 1K+ concurrent downloads) through the Async API, the case the README reserves it for. The project demoed 5 million WebSockets on one 16-vCPU server with 0.19.4 in 2019, with no baseline.
+- Codebases stuck on C++11/14: the 1.3.x line builds as C++11 with CMake 3.1.
+
+**Skip it when:**
+- Very high connection counts on the Simple API. It is thread-per-connection: throughput fell 15% from 64 to 512 connections, and p99.999 latency (the suite's percentile99999 field) hit about 643 ms at 512, where Go had about 35 ms, in the same run.
+- Maximum raw HTTP throughput: in the same 4-core run Drogon (126-135K req/s) and CWIST (149-155K) beat oatpp (98-116K).
+- Anything that needs HTTP/2 or HTTP/3. HTTP/2 has been requested since 2019 (issue #116, still open) and is not supported.
+- Parsing untrusted, deeply nested JSON on the 1.4.0-dev master branch. Fuzzing found a recursion stack overflow in the new json::Deserializer (#1037, open; a commenter says 1.3.1 is not affected), and several out-of-bounds reports against DTO mapping filed in August 2026 (#1094-#1104) have no maintainer reply.
+- Teams that need a fast-moving upstream: the last release is 1.3.1 (December 2024), 1.4.0 has been 'in development' since then, and the last commit was 2025-11-12.
+
+**Integration:** static lib (the CMake default; BUILD_SHARED_LIBS=ON gives a shared lib), installed and consumed via find_package(oatpp) · none beyond the standard library and threads (libatomic on non-Apple/MSVC/FreeBSD platforms, wsock32/ws2_32 on Windows); TLS, Swagger UI, zlib, SQLite/PostgreSQL/MongoDB and so on are separate oatpp-* modules · 1.3.x: C++11, CMake 3.1; master/1.4.0-dev: C++17, CMake 3.20 · Linux, BSD, macOS and Windows maintained; Android, iOS, OpenWRT, Jetson and NixOS are known builds. The async I/O worker uses epoll on Linux and kqueue on BSD/macOS
+
+**Vs siblings:** Drogon and CWIST posted 10-50% more req/s than oatpp in the same run, and Drogon stayed flatter as connections rose. Pick oatpp when a zero-dependency, C++11-capable build, a small footprint for embedded targets, or its built-in DTO/Swagger/ORM codegen matters more than peak throughput; at 64 connections it also had the lowest p99 of the three (1.1 ms vs Drogon 9.8 ms and CWIST 8.6 ms).
+
+**Gotchas:**
+- Request headers are capped at 4096 bytes in total by default (HttpProcessor::Config::headersReaderMaxSize). In 1.3.1, exceeding the cap makes the reader return -1 and the connection is dropped silently, with no 431 response.
+- An unmatched route (404) or any exception thrown from an endpoint or interceptor sets the connection to CLOSING, so every error response costs the client its keep-alive connection.
+- The Simple API pins every connection thread to CPUs 0..N-2 (N = std::thread::hardware_concurrency()), deliberately leaving one CPU free. To change this, set OATPP_THREAD_HARDWARE_CONCURRENCY or OATPP_COMPAT_BUILD_NO_SET_AFFINITY at build time. Thread stack size cannot be configured (issue #589, open).
+- Master (1.4.0-dev) breaks the 1.3 API: it requires C++17, moves headers (oatpp/core/* to oatpp/*, parser/json to json) and renames OATPP_LOGD to OATPP_LOGd with {} formatting; the README says to use the 1.3.0-latest tag for now. Per-object counters also stay on in Release builds unless you pass -DOATPP_DISABLE_ENV_OBJECT_COUNTERS=ON, which the benchmark build did not.
+
+**Status:** Active but slow-moving: Apache-2.0, 8.7k stars, last release 1.3.1 (Dec 2024), master (1.4.0-dev) last committed 2025-11-12, which makes it stale after 2026-11-12. Pin the 1.3.1 tag as the benchmark did.
+
+[repo](https://github.com/oatpp/oatpp) · [benchmark](https://github.com/the-benchmarker/web-frameworks/blob/f673364fb30748e5bb8e57319ec2772bc872f78a/data.json)
+
+##### ohkami (nio backend)  `Rust`  `MIT`  `active`  `Tier B`
+
+Rust HTTP/1.1 web framework whose nio thread-per-core build out-served actix-web by ~11% on an empty-route benchmark.
+
+**Beats:** actix-web — In the-benchmarker/web-frameworks develop-branch data.json (2026-09-24; zrk --closed, GET / with an empty body, keep-alive, 15 s), the server container was pinned to ~4 cores (98.7-98.8% CPU saturation for both frameworks) on a host whose metadata reads both 'M1 Eight-Core Processor' and x86_64. There, ohkami 0.24 on nio did 181,797 req/s at c=512 vs actix-web 4.8 at 163,415 (+11%), with +2.7% at c=64 and +11.6% at c=256; both were built with Rust 1.98, fat LTO, codegen-units=1 and panic=abort. The ohkami tokio build was only +3%, and the older master-branch data.json (updated 2026-09-20, an earlier method revision) had ohkami-nio behind actix (74,657 vs 99,835 req/s at c=512; 84,831 vs 115,638 at c=64), so the nio lead depends on the load model.
+
+**Known shortcoming:** The nio win holds on the suite's develop-branch run (2026-09-24: +2.7% to +11.6% over actix), but on the earlier master revision (2026-09-20) ohkami-nio trails actix badly (74,657 vs 99,835 req/s at c=512) while ohkami-tokio wins, so the result depends on the load model; the linked master data.json lacks the claimed numbers. nio is a thread-per-core async runtime on mio (0.1.x, one author), not a 'non-async runtime'. With rt_nio, handler Send/Sync bounds are dropped and the Router gets an unsafe impl Send/Sync while sessions run on several threads, so Rc/RefCell state compiles and can race. HTTP/1.1 reader does one read into a 2 KiB buffer (larger or split heads get 431), requires exactly ': ', rejects HTTP/1.0, discards pipelined requests; no chunked request bodies (#583), HTTP/2 or HTTP/3. At c=512 its p99 is higher than actix (3.94 vs 3.22 ms) with ~6x the stdev. Pre-1.0 (0.24.9) with breaking renames queued; router construction leaks memory on purpose (#643); Ubuntu-only CI. Benchmark builds: Rust 1.98, fat LTO, codegen-units 1, panic=abort.
+
+**How:** With rt_nio, the accept loop hands each connection to nio::spawn_pinned, which puts it on the least-loaded worker. conn.connect() then registers the socket with that worker's own mio reactor, so the connection's reads, writes and keep-alive timer stay on one thread with no work stealing, atomics or cross-thread wakeups (this is the 'thread-per-core' design in nio's announcement post). Ohkami's HTTP/1.1 path is its own code, not hyper: each connection reuses one 2 KiB read buffer, the request line and headers are parsed in place with header values borrowed as slices of that buffer, standard headers go in a byte-indexed fixed array, and routing uses a compressed radix tree of leaked static nodes. The tokio build runs the same request path on tokio's work-stealing scheduler and measured only ~3% over actix, so most of the margin follows the runtime choice.
+
+**Use it when:**
+- Linux HTTP/1.1 REST/JSON services with small requests over keep-alive connections, where you want more req/s per core than actix-web or hyper and can accept a pre-1.0 framework.
+- Handlers that are short and similar in cost, so pinning each connection to one nio worker (no migration, no stealing) does not create hot threads.
+- One handler/middleware codebase that must run on native servers, Cloudflare Workers (wasm32) and AWS Lambda, or where you want OpenAPI generated from handler types without macros.
+- When you will benchmark rt_nio against rt_tokio on your own traffic. Switching is one Cargo feature plus the main attribute (#[nio::main] vs #[tokio::main]).
+
+**Skip it when:**
+- You need HTTP/2 or HTTP/3 (README: not supported; TLS is HTTP/1.1-only), chunked request bodies (issue #583, open), or HTTP/1.0 clients (the reader requires 'HTTP/1.1' and answers 505).
+- CPU-heavy or uneven handlers on rt_nio. Pinned connections never move to another worker, so one slow handler stalls every connection on its worker. Tokio's work stealing is the safer default here.
+- Tail latency matters more than peak req/s. At c=512 ohkami-nio had a lower median than actix (2.45 vs 3.13 ms) but a higher p99 (3.94 vs 3.22 ms) and about 6x the standard deviation (1.08 vs 0.18 ms).
+- You need actix-web's maturity. Ohkami is 0.24.x with breaking renames queued (fang->middleware, claw->handler::component; issues #602/#603), has ~1.6k crates.io downloads in the last 90 days, and nio is a 0.1.x runtime (first stable release Jan 2026, ~7.7k downloads) with one listed author.
+- Choosing rt_smol for speed. smol::spawn runs on smol's global executor, which is single-threaded unless SMOL_THREADS is set. In the benchmark the smol build reached 53,077 req/s on ~1.15 of 4 cores.
+
+**Integration:** crate · ohkami_lib, ohkami_macros, byte_reader, serde, serde_json, http, base64, hmac, sha2, uuid, plus exactly one runtime crate chosen by feature (rt_nio pulls nio 0.1.3 with tokio-io traits; nio itself uses mio and crossbeam). Optional: rustls + anysc-rustls (tls), mews (ws), ohkami_openapi (openapi), tracing. · Rust edition 2024. README MSRV is 'latest stable', and CI runs stable and nightly. The benchmark built with Rust 1.98. · Native runtimes: CI runs only on ubuntu-latest for both ohkami and nio (mio-based); other OSes not documented. Also wasm32 via rt_worker (Cloudflare Workers) and AWS Lambda via rt_lambda.
+
+**Vs siblings:** In the same 2026-09-24 run, ohkami-nio (181.8k req/s at c=512) trailed may_minihttp (194.4k) but beat the C/C++ siblings measured there: CWIST 151.3k, Agoo-C 149.2k, Drogon 131.6k. Pick ohkami over may_minihttp when you need its framework layer (typed extractors, fangs, TLS, WebSocket, OpenAPI, Workers/Lambda targets), and over the C/C++ entries when you want a Rust codebase.
+
+**Gotchas:**
+- rt_nio soundness hole: SendSyncOnThreaded becomes a blanket impl when __rt_threaded__ is off, yet nio_rt.rs does 'unsafe impl Send/Sync for Router' and spawns sessions on several workers. Handler or Context state built on Rc, RefCell or Cell compiles and can race.
+- The native reader does one read() per request into the fixed buffer (request_bufsize, default 2 KiB) and parses only what arrived. A request head larger than the buffer or split across reads fails with 431 (raise OHKAMI_REQUEST_BUFSIZE). It also requires exactly ': ' after each header name, and bytes of a pipelined second request in the same read are zeroed, not queued.
+- Router construction leaks memory on purpose (Vec::leak for route nodes and allowed-method strings; issue #643, open). That is harmless for one long-lived server but accumulates if you rebuild Ohkami instances in-process (tests, hot reload).
+- GET, HEAD and OPTIONS requests with a nonzero Content-Length are rejected with 400. Config::default() ignores the OHKAMI_* environment overrides; use Config::new() if you want them.
+
+**Status:** Actively maintained (last commit 2026-08-25; latest crates.io release 0.24.9 on 2026-04-12, 78 versions since 2022) and MIT-licensed as an ordinary crate, but still pre-1.0 with open breaking-change issues. The nio runtime behind the headline number is Apache-2.0 and 0.1.x.
+
+[repo](https://github.com/ohkami-rs/ohkami) · [benchmark](https://github.com/the-benchmarker/web-frameworks/blob/master/data.json)
+
+##### uWebSockets.js  `JavaScript (Node.js bindings over a C++ core)`  `Apache-2.0`  `active`  `Tier B`
+
+Node.js addon running the uWebSockets C++ server behind JS callbacks; 2.6x Fastify, about 1.06x actix-web on hello-world.
+
+**Beats:** actix-web — In the-benchmarker/web-frameworks run of 2026-09-24 (zrk closed loop, hello-world GET/GET-param/POST routes averaged, server pinned to 4 cores of an undisclosed 16-thread x86-64 Linux host), uWebSockets.js v20.71.0 on Node 26 as a one-worker-per-core cluster with plain JS callbacks did 189,157 / 178,265 / 174,621 req/s at c=64/256/512 against 179,203 / 168,270 / 163,415 for actix-web 4.8 (Rust 1.98, LTO, codegen-units=1), 1.06-1.07x. Other snapshots gave 0.99-1.04x and 1.33-1.42x, so read it as parity with actix and roughly 2.6x Fastify and 4.1x Express in the same run; the README's '13x faster than Fastify' compares the author's microcached endpoint with an uncached Fastify hello-world.
+
+**Known shortcoming:** Results swing between runs of the same suite: 1.06-1.07x over actix on 2026-09-24, parity (0.99-1.04x) on 09-20, 1.33-1.42x on 09-18. Not on the npm registry (installs from GitHub tags). After this run the suite's app switched to a mode that answers in C++ without JavaScript (PR #9828), so later numbers aren't like-for-like. Distinct from the catalogued uWebSockets C++ core (own binding code and own actix comparison).
+
+**Known shortcoming:** Not an N-API binding: a raw V8/node.h addon with one prebuilt binary per Node ABI (Node 22/24/26 only; glibc Linux x64/arm64, macOS, Windows x64; no musl). Every C++-to-JS handler call goes through node::MakeCallback, which the maintainer names as the bottleneck (#1209, #1288); he says Bun's uWS fork now beats the addon 'by a wide margin' on WebSocket echo. The benchmark's EXPERIMENTAL_FASTCALL=1 flag is read nowhere (the send fast call has been disabled since v20.62.0). The actix lead is within run-to-run spread; the meaningful same-run result is ~2.6x Fastify and ~4.1x Express at c=512; fulmine.js (built on it) beat the raw binding. The README's '13x faster than Fastify' compares a microcached endpoint with uncached Fastify. A handler that returns without responding or onAborted() calls std::terminate() (uncatchable, #1296). v20.63.0 sent Latin-1 instead of UTF-8 until v20.65.0; the ESM wrapper is hard-coded (#1314). Licence: 'all rights reserved' with Apache-2.0 only where noticed; forks must rename.
+
+**How:** HTTP parsing, routing, TLS (BoringSSL), WebSocket framing and compression run in the uWebSockets C++ core, driven by Node's own libuv loop (built with LIBUS_USE_LIBUV, attached via node::GetCurrentEventLoop) and compiled with clang -O3 -flto. The binding keeps its own overhead small: req/res are clones of pre-built V8 object templates holding a raw pointer, incoming data arrives as zero-copy ArrayBuffers detached after the callback, and the synchronous part of each handler runs corked so its writes leave in one syscall. Two paths skip JS entirely: DeclarativeResponse compiles a response into opcodes that C++ replays per request, and v20.71.0 added experimental per-route microcaching with coalesced refreshes. What the binding costs is the C++-to-JS crossing: every handler call goes through node::MakeCallback, which the maintainer names as the main bottleneck (issues #1209, #1288).
+
+**Use it when:**
+- Node.js 22/24/26 services that must stay on Node and are bound by HTTP or WebSocket I/O: in the same 2026-09-24 run it did 174,621 req/s at c=512 against 68,128 for Fastify and 42,586 for Express on the same 4 cores.
+- WebSocket fan-out such as chat, game or market-data servers that need pub/sub, per-socket backpressure limits (maxBackpressure, closeOnBackpressureLimit, drain) and permessage-deflate options without extra packages.
+- Hot endpoints with static or templated answers (DeclarativeResponse), or idempotent 'dynamic but public' GET endpoints that tolerate brief staleness (experimental microcache; wired only for non-TLS App GET routes, expiry units not documented).
+- Teams that accept a low-level, callback-first API and will put their own routing and middleware conventions on top.
+
+**Skip it when:**
+- C++ programs: use the uWebSockets core directly. This repository adds only the V8 glue (src/addon.cpp and the *Wrapper.h files) on top of it.
+- Apps that need the Express/Connect middleware ecosystem, a fetch-style Request that survives await, or streams-based node:http compatibility. Ultimate Express or fulmine.js give that API on the same core.
+- Bun users or peak-JS-throughput chasers: the maintainer says Bun (built on a uWS fork) now beats this addon 'by a wide margin' on WebSocket echo, because every C++-to-JS call must go through node::MakeCallback (issue #1288).
+- Alpine/musl, Deno, Node versions other than 22/24/26, or 32-bit targets: only prebuilt glibc Linux x64/arm64, macOS x64/arm64 and Windows x64 binaries exist, one per Node ABI (127/137/147).
+- Organisations that require npm-registry packages, provenance, or a plain OSS licence: it installs from GitHub tags only, and the README says 'all rights reserved' except where an Apache-2.0 notice is given.
+
+**Integration:** module (prebuilt native .node addon plus uws.js loader, installed with npm from a GitHub tag; not on the npm registry) · none at runtime; the prebuilt binary statically bundles the uWebSockets/uSockets core, BoringSSL and lsquic (HTTP/3) · Node.js 22, 24 or 26 (v8 ABI 127/137/147); rebuilding from source needs clang-18 on Linux (clang on macOS/Windows), CMake, and C++20 · glibc Linux x86-64 and aarch64, macOS x86-64 and arm64 (macOS 12 target), Windows x86-64; not musl
+
+**Vs siblings:** Pick the raw binding over Ultimate Express or fulmine.js (Express-compatible layers on the same core) when you write to uWS's own API and need its WebSocket pub/sub and backpressure control; it is not automatically faster, since fulmine.js, which answers simple handlers without running JS, scored 203,996 req/s against this binding's 174,621 at c=512 in the same run. If you can leave Node, Elysia on Bun (173,877 req/s) runs a uWS fork without the MakeCallback toll.
+
+**Gotchas:**
+- A handler that returns without responding and without calling res.onAborted() makes the C++ core call std::terminate(); the process dies and process.on('uncaughtException') never fires (issue #1296). ASAN builds in the binaries-asan branch help locate such crashes.
+- req is unusable after the first await or after the handler returns, and res is unusable after end() or abort; both throw. onData/onDataV2 chunks and WebSocket message ArrayBuffers are detached after the callback, so copy them if you keep them.
+- Writes made after an await or from timers/DB callbacks must be wrapped in res.cork(); otherwise the addon prints a warning on each write and loses the one-syscall batching.
+- Performance tweaks have regressed before: v20.62.0 disabled the WebSocket.send V8 fast call after reports of broken apps, and the v20.63.0 string fast path sent Latin-1 bytes instead of UTF-8 until v20.65.0 reverted it. The ESM wrapper is hard-coded (open issue #1314), and the benchmark suite loaded 20.71.0 through CommonJS to avoid it.
+
+**Status:** Actively maintained by its original author (uWS dates from 2016, this binding from 2018; v20.71.0 released 2026-09-16, last push 2026-09-20). It ships only as GitHub-hosted prebuilt binaries tied to three Node majors, under an 'all rights reserved, Apache-2.0 where noticed' licence statement, and the maintainer has said the Node binding will eventually 'fade into the background' in favour of Bun.
+
+[repo](https://github.com/uNetworking/uWebSockets.js) · [benchmark](https://github.com/the-benchmarker/web-frameworks/blob/f673364fb30748e5bb8e57319ec2772bc872f78a/data.json)
+
+#### tls
+
+##### ChaChaCha  `C`  `Apache-2.0`  `active`  `Tier A`
+
+Experimental AVX-512 ChaCha20-Poly1305 assembly for x86-64 Linux; 19-48% fewer cycles/byte than OpenSSL's assembly on AMD Zen 5.
+
+**Beats:** OpenSSL ChaCha20/ChaCha20-Poly1305 (assembly and EVP), BoringSSL stitched AVX2 ChaCha20-Poly1305 — The author measured core cycles per byte (perf_event_open, one pinned core, best of 7 repetitions x 3 runs, 13-byte AAD, hot-cache loop over one buffer with a fixed key, round-trip check before timing) on AMD EPYC 9655 (Zen 5) and EPYC 4244P (Zen 4), with gcc -O2 C glue around hand-written assembly. Baselines were OpenSSL's vendored chacha-x86_64/poly1305-x86_64 assembly (commit bee02b7d) called directly, BoringSSL's stitched AVX2 AEAD and Intel IPsec-MB 3.0.0-dev. On Zen 5, AEAD seal used 19-45% fewer cycles per byte than OpenSSL's assembly across 1.2 KB-64 KiB bands and 49-57% fewer than BoringSSL; on Zen 4 it used 9-33% fewer than OpenSSL and roughly tied Intel IPsec-MB (-1.3% to +8.9%).
+
+**Known shortcoming:** Slower than OpenSSL assembly on small messages (64-256 B). Kernels only (not a TLS stack), x86-64 AVX2/AVX-512; a one-person project with 1 star.
+
+**Known shortcoming:** The fast AEAD path needs AVX2, BMI2, AVX-512F/BW/VL and IFMA; every other CPU (all AVX2-only machines, Skylake-SP Xeons) falls back to OpenSSL-derived ChaCha plus portable Poly1305, which is not benchmarked. Loses to OpenSSL at 64-256 B (20-24% slower seal on Zen 5, 9.5-23% on Zen 4) and to Intel IPsec-MB at 1200-1420 B. BoringSSL-style API, 12-byte nonce only, no XChaCha20. Exports CRYPTO_chacha_20, ChaCha20_ctr32 and OPENSSL_ia32cap_P, which can clash when statically linked beside OpenSSL/BoringSSL. README example links an archive the Makefile never builds; link order affects Zen 5 speed; Linux ELF only. The AVX-512 open path decrypts into the output before the tag check (zeroed on failure). One author, 3 commits, 1 star, no audit or fuzzing; tested only on AMD Zen 4/5; hot-cache single-buffer benchmark at batch-friendly lengths.
+
+**How:** It uses function stitching: raw ChaCha20 runs one extra block in scalar GPRs alongside 8 (AVX2, 9x) or 16 (AVX-512, 17x) vector blocks, and ChaCha20_32x interleaves two independent 16-block ZMM states to raise instruction-level parallelism from 4 to 8, reloading the initial state from broadcast memory operands so no registers are spilled. The AEAD is a BoringSSL/Cloudflare-style stitched loop ported to AVX-512: ChaCha on vector ports encrypts chunk i while two scalar mulx Poly1305 chains on the integer ports authenticate two contiguous 512-byte halves of chunk i-1, joined as A*r^32+B, with Intel IPsec-MB's staggered issue order. For 1025-2048-byte packets, 'key-mode' kernels (25x/33x) compute the counter-0 Poly1305 key block in scalar registers in the same call as the payload, which removes a second kernel launch the README puts at about 400 cycles. Tails larger than 768 bytes use an AVX-512 IFMA52 Poly1305 and a modular power ladder to merge the split accumulators.
+
+**Use it when:**
+- Linux x86-64 servers on AMD Zen 5 or Zen 4 (AVX-512F/BW/VL, AVX-512 IFMA and BMI2 present) where ChaCha20-Poly1305 record encryption is a measurable share of CPU time.
+- WireGuard, QUIC and TLS-record-sized payloads (about 1.2-1.5 KB) on Zen 5: seal takes 0.94 c/B against 1.72 for OpenSSL's assembly and 2.00 for BoringSSL's stitched AVX2 at 1360-1420 B.
+- Bulk ChaCha20 keystream of 4 KB or more with AVX-512: 0.36 c/B against 0.54 for OpenSSL's 16x kernel at 32-64 KiB on Zen 5.
+- A custom data plane (userspace VPN, own QUIC stack) that can call a raw C AEAD function directly instead of going through EVP.
+- As reference code for port-level stitching, dual-state ILP and single-dispatch key generation, to port into a maintained crypto library.
+
+**Skip it when:**
+- CPUs without AVX-512 IFMA (every AVX2-only machine, Skylake-SP-family Xeons): the AEAD then runs OpenSSL-derived ChaCha plus a portable C radix-2^26 Poly1305, a path result.md does not benchmark and that has no assembly Poly1305.
+- Messages of 256 bytes or less: Zen 5 seal is 20-24% slower than OpenSSL's assembly at 64-256 B (Zen 4: 9.5-23% slower), and fixed per-call cost is 762 cycles against 650.
+- Raw AVX-512 ChaCha20 at 1200-1420 B: it loses to Intel IPsec-MB by 4-8% on Zen 5 and 17-26% on Zen 4; on Zen 4 the AEAD only ties Intel at 4-9 KB (-1.3% at jumbo frames).
+- Production or compliance-bound systems: single author, 3 commits, no releases, no audit, fuzzing or FIPS story, hand-written crypto assembly; Intel CPUs, AVX-512 frequency effects and SMT neighbours are untested.
+- Non-Linux or non-x86-64 targets (macOS, Windows, ARM), or protocols needing XChaCha20 or extra_in: the build emits ELF only, the nonce is 12 bytes, and seal_scatter rejects extra_in.
+
+**Integration:** source-drop · none at runtime; the build needs GNU make, gcc, Perl (perlasm), NASM and GNU ld; `make test` also links OpenSSL libcrypto to cross-check results; the benchmark harness dlopens Intel's libIPSec_MB · gcc with GNU as 2.25+ (the inherited perlasm emits the AVX-512 paths only when it detects GNU as >= 2.25); exact gcc and NASM versions not documented · Linux x86-64 (ELF) only. The fast AEAD path needs AVX2, BMI2, AVX-512F/BW/VL and AVX-512 IFMA; benchmarked only on AMD Zen 4 and Zen 5; other x86-64 CPUs get the fallback
+
+**Vs siblings:** Pick ChaChaCha only when ChaCha20-Poly1305 record encryption itself is the bottleneck on AVX-512 IFMA x86 servers and you can call a raw AEAD function, as in a custom WireGuard or QUIC data plane. For a complete, maintained TLS stack pick AWS-LC or wolfSSL; for AES-GCM traffic, picotls's fusion engine is the equivalent stitched-AEAD choice.
+
+**Gotchas:**
+- Symbol clashes: the library exports CRYPTO_chacha_20 (a BoringSSL public name) and ChaCha20_ctr32, and defines OPENSSL_ia32cap_P unless built with -DCHACHA20_USE_OPENSSL_CAP. Static linking next to OpenSSL or BoringSSL can therefore fail; the repo's own Makefile renames the vendored OpenSSL symbols with -D flags for this reason.
+- The README example links build/chacha20poly1305.a, but the Makefile builds only build/aead512.o and build/chacha20poly1305.o (no archive target). The Makefile also warns that aead_mac_partial.o must stay before aead512_core.o in link order to avoid a Zen 5 MAC-drain alignment regression.
+- On the AVX-512 path, open decrypts into the output buffer before it compares the tag, and zeroes the buffer on failure. Check the return value before using the output.
+- Batch-boundary lengths (1024, 2048, 4096 B) flatter the kernels; the author says the 2048 B margin is about double the margin 200 B to either side. Benchmark at your real packet sizes.
+
+**Status:** Active but brand new: 3 commits between 2026-08-14 and 2026-09-21 by one author, 1 star, no releases or issues. Apache-2.0 with retained OpenSSL, BoringSSL/Cloudflare (ISC) and Intel (BSD-3) code, and small enough to vendor, but the crypto assembly is unaudited.
+
+[repo](https://github.com/soda4fries/ChaChaCha) · [benchmark](https://github.com/soda4fries/ChaChaCha/blob/master/result.md)
+
+##### rustls  `Rust`  `Apache-2.0 OR MIT OR ISC`  `active`  `Tier A`
+
+Memory-safe Rust TLS 1.2/1.3 library on AWS-LC crypto; beats OpenSSL 3.6.1 per core on handshakes, resumption and AES-GCM bulk.
+
+**Beats:** OpenSSL — The rustls maintainers ran single-threaded, in-memory client/server benchmarks on 2026-03-07. The machine was a bare-metal Xeon E-2386G (AVX-512, HT and frequency scaling off) on Debian 12. They compared rustls 0.23.37 with aws-lc-rs 1.16.0 (Rust 1.94.0) against OpenSSL 3.6.1 (default ./Configure; make, GCC 12.2 toolchain) driven by ctz/openssl-bench 82b86b22. rustls led on all 16 rows: AES-GCM bulk 1.11-1.27x, full handshakes 1.32-2.59x, resumptions 1.87-3.20x. The December 2023 run (0.22.0 vs 3.2.0) was mixed: rustls lost server RSA full handshakes (0.70-0.73x), receive throughput (0.83-0.93x) and ChaCha20 (0.56-0.58x), but used about 81% less memory at 10,000 sessions.
+
+**Known shortcoming:** rustls is itself one of the tls category's baselines; this entry documents its standing against OpenSSL only and must not be read as beating rustls. In the 2023 aochagavia run rustls was slower than OpenSSL on server-side full RSA handshakes (0.70x and 0.73x).
+
+**Known shortcoming:** First-party, in-memory benchmark on one AVX-512 Xeon E-2386G (no sockets or syscalls, no memory numbers in 2026). The rustls benchmark binary uses jemalloc while OpenSSL uses the system allocator (glibc malloc cut rustls send throughput 2.2-2.4x in 2023). The 2026 report omits ChaCha20-Poly1305, where rustls reached only 0.56-0.58x of OpenSSL in 2023. On ARM64 (Ampere Altra, 2024) bulk throughput was only 0.93-1.04x; BoringSSL still sends faster on x86. AES-GCM and server-RSA wins come from AWS-LC's AVX-512 code. Which API (buffered or unbuffered) the report used is unstated. The benchmarked 0.23.37 is affected by RUSTSEC-2026-0285 (0.23.13-0.23.44; use 0.23.45+). The default server session cache (Mutex around HashMap) took 11% of accept-thread time under churn (#2972). Not an OpenSSL drop-in: rustls-libssl is experimental and needs libcrypto; rustls-ffi has no ABI guarantee. No DTLS, renegotiation, TLS 1.0/1.1, FFDHE, custom extensions, server-side ECH or async private-key operations; 0.24 breaks the API and raises MSRV to 1.85.
+
+**How:** Primitive speed comes from AWS-LC through aws-lc-rs: its AVX-512F/VAES AES-GCM and AVX-512IFMA RSA (both contributed by Intel) explain the x86 bulk and server-RSA results. On ARM64, BoringSSL, AWS-LC and OpenSSL all run AES-256-GCM at 2264-2268 MB/s, so the lead over OpenSSL comes from the protocol layer. That layer is a sans-I/O design over caller buffers with a write-through "unbuffered" API, about 13 KiB per session against OpenSSL's 69 KiB. Tuning includes removing a receive-path memmove (PR #2155), packing several handshake messages into one record (#2041) and a cheaper extension representation (0.23.31). For many cores, configs are shared read-only in an Arc, and ticket-key rotation switched from a Mutex to a RwLock (TicketRotator, PR #2193, 0.23.17), which removes the lock contention the maintainers measured in OpenSSL 3.0/3.4. The reports do not name the component behind the handshake lead.
+
+**Use it when:**
+- Rust services that open or accept many TLS connections: per core on x86, full handshakes are 1.32-2.59x and resumptions 1.87-3.20x faster than OpenSSL 3.6.1
+- Many-core servers (80-core Ampere Altra tested): full TLS 1.3 handshakes and ticket resumption scale per thread with the tightest latency distribution of rustls, BoringSSL and OpenSSL 3.0/3.4. Use 0.23.17 or later
+- Servers that hold many concurrent sessions: 10,000 TLS 1.3 sessions peaked at 131,816 KiB against OpenSSL's 688,436 KiB (2023 run)
+- AES-GCM bulk transfer on AVX-512 x86 with the aws-lc-rs provider: 1.11-1.27x of OpenSSL 3.6.1 send/receive MB/s
+- ARM64 handshake-heavy loads: on an Ampere Altra, rustls 0.23.15 did 1.9-3.5x the full and resumed handshakes of OpenSSL 3.3.2
+
+**Skip it when:**
+- ChaCha20-Poly1305 bulk traffic: in the 2023 run rustls reached only 0.56-0.58x of OpenSSL 3.2.0 on AVX-512, because AWS-LC lacked OpenSSL's AVX-512 ChaCha path. The 2026 report drops the ChaCha row, although admin/bench-measure.mk still runs it
+- Bulk-throughput-bound ARM64 servers: on Ampere Altra (2024), rustls moved 0.93-1.04x of OpenSSL 3.3.2's MB/s. On x86, BoringSSL still sends faster (8,291.9 vs 8,133.85 MB/s, TLS 1.2 AES-128-GCM)
+- C/C++ code that needs an OpenSSL drop-in: rustls-libssl is experimental, covers only the libssl subset used by curl and nginx, and still needs OpenSSL's libcrypto. rustls-ffi has its own C API, gives no ABI-stability guarantee and recommends static linking
+- Protocols or features it refuses or lacks: TLS 1.0/1.1, SSLv3, renegotiation, finite-field DHE, custom extensions (SSL_CTX_add_custom_ext), DTLS (issue #40 open), server-side ECH, and deferred or async private-key operations (roadmap item #850)
+- High-churn servers with session-ID resumption on the default cache: ServerSessionMemoryCache is a Mutex around a HashMap and VecDeque. One quinn server spent 11% of accept-thread time in take() (#2972). The maintainers expect demanding users to supply their own store
+
+**Integration:** crate (Rust); C static or shared library via rustls-ffi; experimental libssl.so.3 shim via rustls-libssl · rustls itself: subtle, zeroize, rustls-pki-types, optional tracing and rustls-webpki (default) and optional brotli or zlib-rs for certificate compression. A crypto provider crate is required: rustls-aws-lc-rs (needs a C/C++ compiler to build aws-lc-sys, plus CMake and Go for FIPS) or rustls-ring. The benchmark binary also links tikv-jemallocator · Stable 0.23.x: Rust 1.71 (rust-version on crates.io). 0.24.0-dev on main: Rust 1.85, edition 2024. Add a C/C++ compiler for the aws-lc-rs provider; rustls-ffi needs Rust 1.73+ and cargo-c · The rustls core is platform-independent and no_std-capable. Real reach depends on the provider: aws-lc-rs runs on targets that both AWS-LC and Rust std support, and ring builds on more targets. Published benchmarks cover x86-64 (Xeon E-2386G, AVX-512) and aarch64 (Ampere Altra)
+
+**Vs siblings:** aws-lc-rs, ring and Graviola are crypto providers that plug into rustls, so they are not alternatives to it; aws-lc-rs is the default and the one benchmarked. Pick rustls over AWS-LC, wolfSSL, Fizz or picotls when you want a memory-safe TLS 1.2+1.3 stack in Rust (or through rustls-ffi) with top per-core handshake numbers. Pick those C/C++ libraries when you need an OpenSSL-style C API, and pick ztls only for Zig TLS 1.3 code that is bound by per-record latency.
+
+**Gotchas:**
+- The published numbers come from a benchmark binary with jemalloc as its global allocator. In the 2023 run, glibc malloc cut rustls+aws-lc send throughput 2.2-2.4x (2,847 vs 6,712 MB/s) because of page faults. Benchmark your own allocator
+- The benchmark is in-memory client-to-server with no sockets or syscalls. Since 0.23.31, TLS 1.3 uses X25519MLKEM768 by default, which cut rustls TLS 1.3 RSA client full handshakes 1.62x from 0.23.15 and sends larger messages
+- API churn: from 0.24 you must pass a CryptoProvider explicitly, the providers move out into separate crates (rustls-aws-lc-rs, rustls-ring), and main has a new read_tls/MessageHandler I/O API. Stable is still 0.23.x
+- Pin 0.23.45 or later. RUSTSEC-2026-0285 affects 0.23.13 through 0.23.44: TLS 1.3 handshake messages were accepted across key changes. The benchmarked 0.23.37 is affected. Earlier advisories: RUSTSEC-2024-0399 (panic in Acceptor::accept on a fragmented ClientHello, 0.23.13-0.23.17) and RUSTSEC-2024-0336 (complete_io infinite loop, before 0.23.5)
+
+**Status:** Very active: 0.23.45 shipped 2026-09-14 after roughly monthly 0.23.x releases, and 0.24 is in development with breaking API changes. It has about 945M crates.io downloads, a founder funded full-time through Prossimo, and a permissive Apache-2.0/MIT/ISC license.
+
+[repo](https://github.com/rustls/rustls) · [benchmark](https://rustls.dev/perf/2026-03-07-report/)
+
+##### ztls  `Zig`  `Apache-2.0`  `active`  `Tier A`
+
+Sans-I/O TLS 1.3 state machine in Zig; lower per-record latency than OpenSSL libssl (1.04-3.6x) and rustls on AES-GCM.
+
+**Beats:** OpenSSL libssl 3.6.3; rustls 0.23.4x — The comparison covers in-memory TLS 1.3 application-data rows with no sockets: ztls over caller buffers, libssl over memory-BIO pairs and rustls over Vec transfer buffers. ztls was built with Zig 0.15.2 ReleaseFast for the native CPU and linked the same OpenSSL 3.6.3 libcrypto as the libssl baseline; rustls 0.23.40/41 used its ring provider, not its default aws-lc-rs. In n=10 benchstat captures ztls beat libssl on all 45 rows on each host (c7i.2xlarge Xeon 8488C, c7g.2xlarge that lscpu identifies as Graviton3 although the docs say Graviton4, and an M1 Max), by +4% to +261%; the headline AES-128-GCM 1350B ping-pong measured 790.7 ns vs libssl 1820.5 ns and rustls 1447.5 ns.
+
+**Known shortcoming:** Uses OpenSSL 3.6.3 libcrypto for its crypto, so the win over libssl is TLS record-layer and wrapper overhead, not faster crypto. Loses to rustls by about 6% on x86 ChaCha20 at 1350 B; the handshake row is not like-for-like. Zig, pre-alpha, 7 stars.
+
+**Known shortcoming:** The rustls baseline is built with ring, not rustls 0.23's default aws-lc-rs. ztls and the libssl baseline share the same OpenSSL 3.6.3 libcrypto, so the win is record-layer overhead (no BIO copies or dispatch, in-place AEAD), not faster crypto. The handshake is slower than libssl (391.7 vs 354.9 us; rustls 147.5 us). Captures used Zig 0.15.2 and older revisions; current ztls needs Zig 0.16 and later handshake fixes were not re-benchmarked. libssl gets a warm-up round the others don't; transport APIs differ; hosts ran with ASLR disabled. 'Zero allocation' covers ztls's own code only (the OpenSSL backend allocates EVP_CIPHER_CTX and libcrypto allocates). Pre-alpha, single author, no release or audit; SECURITY.md says not to face real traffic; an internal review fixed a PSK server-auth bypass and an overflow DoS. Zig-only (C ABI is #30); TLS 1.3 only; Linux/macOS; no encrypted PEM, Ed25519 or P-521 server signing.
+
+**How:** Each direction's RecordLayer keeps an AEAD context that is keyed once when traffic keys are installed; per record it writes the 5-byte header, derives the nonce with one 12-byte vector XOR of IV and sequence number, encrypts or decrypts in place inside the caller's buffer, and returns a subslice (the inner content type is found by a last-byte fast path plus a SIMD scan over padding). That removes the BIO copies, per-record allocation and libssl's WPACKET / tls13_cipher / EVP_CIPHER_CTX_ctrl dispatch; with the OpenSSL backend a record costs one IV-only EVP_*Init_ex, two Update calls, Final and a tag ctrl on the same libcrypto primitive libssl uses (encryptPrepared also skips the one plaintext memcpy). On the x86_64 AES-128-GCM 1350B ping-pong row, perf counters show ztls at 42.7% of libssl's cycles/op and 54.8% of rustls's, with rustls's extra time in ChunkVecBuffer::write_to, memmove and malloc. The gain is record-layer overhead removal, not faster crypto.
+
+**Use it when:**
+- Zig servers, proxies or clients that already own their event loop (epoll, io_uring, kqueue via libxev, or blocking std.Io) and want TLS 1.3 without adopting a library's I/O model.
+- Small to MTU-sized AES-GCM records (16B-1350B) where per-record overhead dominates: on x86_64 AES-128-GCM, 202 ns vs libssl's 731 ns at 16B client-to-server, and 1.83x faster than rustls on 1350B ping-pong.
+- Many long-lived connections where per-connection memory matters: the post-handshake EstablishedSession measured 736 B (OpenSSL lane) to about 1.9 KB (AWS-LC/BoringSSL), with no ztls-owned heap state (a Zig 0.15.2 measurement the docs call historical).
+- Linux services that want a userspace TLS 1.3 handshake followed by a kernel kTLS data plane, using the ztls_ktls module rather than hand-coding the key handoff.
+- Designs that must keep the allocator out of TLS parsing, framing and transcript code, provided the libcrypto backend's own setup-time allocations are acceptable.
+
+**Skip it when:**
+- Anything carrying real traffic or secrets today: pre-alpha with no release tag, an API that changes without notice, and no external audit. SECURITY.md says not to use it in front of real traffic, and an internal review found and fixed a PSK server-auth bypass and an integer-overflow DoS.
+- You need TLS 1.2 fallback, DTLS, Windows, or a C/C++/Rust/Go caller. These are out of scope, and the C surface covers only the client lifecycle.
+- Handshake-bound workloads: there is no handshake speed claim. On the full-handshake row, which the project itself marks non-equivalent, ztls took 391.7 µs against libssl's 354.9 µs (libssl also verified CertificateVerify) and rustls's 147.5 µs (rustls skipped signature verification).
+- Tiny ChaCha20-Poly1305 records on x86_64: 50-56% slower than rustls at 16B and 128B, and about 6% slower at 1350B, because OpenSSL's EVP ChaCha20-Poly1305 path costs more than ring's for small inputs.
+- Server keys that need Ed25519 or P-521 CertificateVerify signing, rsa_pss_pss schemes, or encrypted PEM private keys. These fail at load or are not implemented.
+
+**Integration:** module · A libcrypto located via pkg-config: OpenSSL 3.x (all benchmarks used 3.6.3), AWS-LC (5.5.0 used in consumer gates) or BoringSSL; libxev only if ztls_xev is enabled. No minimum libcrypto version is documented. · Zig 0.16.0 (minimum_zig_version in build.zig.zon). The published benchmarks were built with Zig 0.15.2, which is no longer supported. · Linux and macOS; x86_64 and aarch64 were benchmarked (Xeon 8488C, Graviton3, Apple M1 Max). ztls_ktls is Linux-only and Windows is out of scope. Build for the native CPU (the default) for published performance.
+
+**Vs siblings:** Pick ztls when you write Zig, own your I/O loop, and your cost is per-record overhead on small AES-GCM records. The AWS-LC and wolfSSL entries measure full-handshake throughput under HAProxy, where ztls has no winning evidence, and ztls can itself link AWS-LC as its crypto backend. For C/C++ callers or production use, Fizz or picotls are the mature choices; picotls's fusion engine speeds up the AES-GCM primitive itself rather than the layers around it.
+
+**Gotchas:**
+- Every record-producing call sets a pending-write latch. Call completeWrite() only after the bytes are actually on the transport, or the next engine call returns error.PendingWrite. For partial or non-blocking writes, use the Outbox helper, which keeps the OutBuffer borrowed until the record drains.
+- Decryption happens in place. Application data is a slice into RecordBuffer storage and stays valid only until the next next()/writable() call, so copy it first. After error.AuthenticationFailed the buffer may hold unauthenticated plaintext on the OpenSSL backend; treat it as poisoned.
+- 'Zero allocation' covers only ztls's own code. The OpenSSL lane heap-allocates two EVP_CIPHER_CTX per record layer at key installation, key exchange and signing allocate inside libcrypto, and AWS-LC keeps per-thread RNG and error-queue state. Budget caller memory too: RecordBuffer's recommended storage is about 33 KiB and a ServerHandshake is about 19-21 KB.
+- Performance depends on the build target. The benchmark doc warns that generic or baseline CPU targets can select slower std.crypto paths; issue #138 measured +43.6% handshake cycles on a baseline build before SHA-2 moved to the backend. Ed25519 chain verification still runs on std.crypto.
+
+**Status:** Actively developed by a single author (last commit 2026-09-26, 7 stars, no release tag; depend on main or a commit hash). Apache-2.0, Zig 0.16-only, and pre-alpha by its own statement; known downstream use is limited to the author's z53 DNS forwarder and a private PlanetScale consumer called handoff.
+
+[repo](https://github.com/mattrobenolt/ztls) · [benchmark](https://github.com/mattrobenolt/ztls/blob/main/docs/research/PERFORMANCE.md)
+
+##### AWS-LC  `C`  `Apache-2.0 OR ISC for new AWS-LC code; the LICENSE file lists BoringSSL-derived code as ISC/Apache-2.0, OpenSSL-derived code as Apache-2.0, and bundled parts as MIT, BSD-3-Clause and CC0 (GitHub reports NOASSERTION)`  `active`  `Tier B`
+
+BoringSSL-derived, OpenSSL-1.1.1-API-compatible TLS/crypto library from AWS; out-scales OpenSSL 3.x in HAProxy handshakes and resumption.
+
+**Beats:** OpenSSL — HAProxy Technologies ran HAProxy 3.1-dev1 (gcc 11.4) on a 64-core Graviton4 r8g.16xlarge at 64 threads. For full RSA handshakes, AWS-LC v1.32.0 plus 30 commits did 63.1k new conn/s, against 48.3k for OpenSSL 1.1.1w, about 43k for OpenSSL 3.1-3.4-dev and about 21k for 3.0.x. For end-to-end ticket resumption, AWS-LC built as C11 reached about 183-186k conn/s, against 124k for OpenSSL 1.1.1w (with HAProxy's lightweight locks) and at most 28k for OpenSSL 3.x. AWS-LC's default C99 build of the time dropped to about 8.5k conn/s with pthread locks.
+
+**Known shortcoming:** Default builds collapsed to about 8.5k resumptions/s in the HAProxy test (worse than OpenSSL 1.1.1w and 3.1+) until rebuilt for C11; the 63.1k full-handshake figure is for v1.32.0+ built for C11, not 1.29.0 (45.7k). Test scripts and flags unpublished.
+
+**Known shortcoming:** Use v1.64.0 or later: pre-v1.34 releases forced C99 (lock-based refcounts) and a session-counter rwlock capped TLS 1.2 resumptions until v1.64.0. Not ABI-compatible with OpenSSL (recompile consumers) and lacks security levels, DHE, CCM, renegotiation, ENGINEs and TLS 1.3 stateful resumption. jitterentropy seeding raised startup to ~36 ms (#3180). Five advisories in 2026-03 (PKCS7_verify, CRL, AES-CCM timing, name constraints).
+
+**How:** For resumption scaling, shared objects are reference-counted with lock-free C11 atomic compare-and-swap (crypto/refcount_c11.c), and since PR #2786 (v1.64.0) the ticket session-hit counters use C++11 atomics. The resumption fast path therefore takes no locks. HAProxy's profiles of OpenSSL 3.x showed contention from locks and heavy atomic use. Full RSA handshakes are bound by Montgomery multiplication, and AWS-LC picks a kernel per microarchitecture at runtime. Cores it flags as having wide multipliers (Neoverse V1/V2/V3, Apple M) get the armv8 bn_mul_mont assembly and 8x-unrolled AES-GCM; narrow-multiplier NEON cores get s2n-bignum's formally verified Karatsuba multiply with bignum_emontredc_8n reduction. HAProxy's Graviton4 gain came from adding Neoverse V2 detection, which took RSA-2048 signing on Graviton4 from 930 to 1,398 ops/s (per the commit's own numbers).
+
+**Use it when:**
+- High-connection-rate TLS termination (load balancers, reverse proxies such as HAProxy) stuck on OpenSSL 3.x, where full handshakes or ticket resumption stop scaling past 16-32 threads
+- Many-core AWS Graviton or other Neoverse V1/V2 servers: AWS tests ARM optimizations on Graviton, and the published numbers are for Graviton4
+- OpenSSL-API codebases that need QUIC via the BoringSSL-style QUIC API without moving to BoringSSL's unstable API
+- Deployments that need a FIPS-validated module (FIPS branches) or post-quantum key exchange and signatures in the same library
+- Teams that can follow its live-at-head model and rebuild regularly
+
+**Skip it when:**
+- You need to replace the system OpenSSL under prebuilt binaries: AWS-LC is API-compatible but not ABI-compatible, so every consumer must be recompiled
+- You depend on OpenSSL features it lacks: security levels (@SECLEVEL is parsed and ignored), TLS compression, DANE, FFDH/DHE and CCM cipher suites, server-side renegotiation, ENGINEs, or stateful session resumption on TLS 1.3
+- You need a long-term-support branch: there is no general LTS, releases ship every 1-3 weeks, and only the FIPS branches have long support
+- Short-lived processes or fast-startup CLIs: in open issue #3180, jitterentropy seeding raised per-process startup from about 0.4 ms (v1.39) to about 36 ms (v1.71); the workaround is -DDISABLE_CPU_JITTER_ENTROPY=ON
+- Throughput-critical single primitives on some x86 CPUs: open issues report AES-GCM slower than BoringSSL on Zen3 (#2283) and SHA-2 slower than OpenSSL on Haswell and Zen3 (#3531, not reproduced by the maintainers)
+
+**Integration:** static lib or shared lib (CMake; separate libcrypto and libssl), with checked-in pre-generated sources for other build systems · Runtime: none beyond libc/pthreads. Build: CMake (CMakeLists requires 3.5+; BUILDING.md still says 3.0), Perl and Go 1.20+ unless you use the pre-generated sources, NASM on Windows · C compiler with C11 atomics (a C99 fallback exists but uses rwlock refcounting) and a C++11 compiler for libssl; GCC 4.1.3+, Clang, MSVC 2015+; CMake warns against GCC versions affected by GCC bug 95189 · CI-tested on Linux x86-64/aarch64/ppc/ppc64/ppc64le, macOS x86-64/aarch64, Windows x86-64, Android and iOS aarch64; best-effort on FreeBSD/OpenBSD/NetBSD, Linux arm32/x86/risc-v64/s390x/loongarch64, Windows aarch64, and experimental wasm32; assembly fast paths for x86-64 and aarch64
+
+**Vs siblings:** Pick it over wolfSSL when you want the fastest many-core result and an OpenSSL-1.1.1-style API to port to. In HAProxy's Graviton4 test, AWS-LC was about 6% ahead on full handshakes (63.1k vs 59.7k conn/s) and about 20% ahead on resumption once built as C11. wolfSSL was fast without any build tuning and offers support contracts. Pick it over Tempesta FW whenever you need a userspace library to link: Tempesta's TLS runs inside a Linux-kernel web accelerator and cannot be dropped into an application.
+
+**Gotchas:**
+- The lock-free refcounts only exist when compiled as C11 with lock-free atomics (crypto/internal.h). Releases before v1.34.0 (Aug 2024) forced -std=c99, and HAProxy saw resumption collapse to about 8.5k conn/s at 64 threads. CMake now try-compiles C11, but if you build from the pre-generated sources in your own build system, make sure C11 is on
+- Use v1.64.0 or later for ticket-heavy servers: until PR #2786 (Nov 2025), the session-hit counters took a pthread rwlock, and v1.62.0 managed 49k TLS 1.2 resumptions/s against OpenSSL 1.1.1's 208k on a 64-core EPYC (issue #2776)
+- ARM speedups depend on recognizing the core: Graviton4 (Neoverse V2) ran the slower kernels until July 2024 (commit d3fa1f2), so new or unlisted ARM cores may fall back the same way
+- The default CMake build is Debug with no optimization (pass -DCMAKE_BUILD_TYPE=Release). Memory returned by the library must be freed with OPENSSL_free, which zeroes it
+
+**Status:** Very active and AWS-maintained: v5.10.0 shipped 2026-09-23, releases come every 1-3 weeks, and s2n-tls and aws-lc-rs build on it. All code is under permissive licenses (Apache-2.0/ISC plus OpenSSL/BoringSSL-lineage terms). AWS published five advisories in March 2026 (PKCS7_verify, CRL-scope and X.509 validation bypasses, AES-CCM timing), so track releases.
+
+[repo](https://github.com/aws/aws-lc) · [benchmark](https://www.haproxy.com/blog/state-of-ssl-stacks)
+
+##### EverCrypt (HACL*) Curve25519 (Vale-optimized)  `C`  `Apache-2.0`  `active`  `Tier B`
+
+Formally verified C/asm crypto library; its ADX X25519 took about 4% fewer cycles than OpenSSL's ADX assembly.
+
+**Beats:** OpenSSL — Figure 9 of the IEEE S&P 2020 EverCrypt paper was measured on an Intel Kaby Lake i7-7560 with GCC 7.3 -O3 -march=native, with Hyper-Threading and Turbo off. EverCrypt's Low*+Vale X25519 took 113,614 cycles per scalar multiplication against 118,604 for OpenSSL's ADX assembly (commit e8fb288): about 4.2% fewer cycles, and about 1% fewer than Oliveira et al. (115,122). The other implementations ran in-kernel under kbench9000, but OpenSSL ran the 'same script' in user space, and the public kbench9000 x25519 branch has no OpenSSL harness.
+
+**Known shortcoming:** Only about 4% fewer cycles than OpenSSL for Curve25519 (113,614 vs 118,604); the paper's '3% over OpenSSL' refers to Oliveira et al. The public benchmark code has no OpenSSL run, and OpenSSL ran in user space while the others ran in the kernel. Its value is formal verification at near-OpenSSL speed.
+
+**Known shortcoming:** Small gain: ~4.2% fewer cycles than OpenSSL (113,614 vs 118,604) on one Kaby Lake i7-7560 against 2018-19 OpenSSL run in user space while the others ran in-kernel; the public kbench9000 harness has no OpenSSL and uses a median of 5,000 trials, not the paper's average of 1,000. Without ADX (including Haswell) or on non-x86 it falls back to portable radix-51 C, ~14% slower than OpenSSL. Forgetting EverCrypt_AutoConfig2_init() silently leaves the slow fallback on. In the paper's picoquic test EverCrypt's ChaCha20-Poly1305 was slower than OpenSSL's. No versioned C releases (hacl-packages last pushed 2025-04); changing code needs F*, Z3, KaRaMeL and Vale. Raw X25519 functions only, no EVP/TLS layer. Proofs trust the toolchain and inline-asm constraints (clobber issue with old GCC in the kernel, PR #501); NULL arguments unchecked (#327). Positive: Linux replaced its ADX Curve25519 with this code, measured within ~1.6% of the previous fastest ADX code.
+
+**How:** The fast back-end does field arithmetic mod 2^255-19 in radix-2^64 (four limbs) with Vale-verified x86-64 assembly. The assembly uses MULX (BMI2) and the two independent carry chains ADCX/ADOX (ADX), following Oliveira et al.'s ADX Curve25519. It adds fused fmul2/fsqr2 routines that multiply or square two field elements in one call. The Low* Montgomery ladder is specialised for clamped scalars: it starts with bit 254 set, runs 251 steps over bits 253..3 and ends with three doublings, which reduces conditional swaps. The paper credits these changes with beating Oliveira et al. by about 1%.
+
+**Use it when:**
+- X25519 key exchange (TLS 1.3, WireGuard/Noise, HPKE) on x86-64 CPUs with both BMI2 and ADX, when you want machine-checked memory safety, functional correctness and secret-independent timing without losing speed to hand-written ADX assembly.
+- C projects that can vendor a few generated .c/.S files (EverCrypt_Curve25519, Hacl_Curve25519_51/64, AutoConfig2, Vale cpuid and curve25519 asm, karamel headers) instead of linking all of libcrypto.
+- Mixed fleets that ship one binary: EverCrypt_Curve25519 checks CPUID at run time and uses the ADX path only where it is supported.
+- Kernel or other freestanding-style code: Linux carries a derivative (lib/crypto/x86/curve25519.h, copyright INRIA, CMU and Microsoft). When it replaced the previous ADX code, Donenfeld measured it within about 1.6% either way of that code on 10 Intel CPUs.
+
+**Skip it when:**
+- Raw speed is your only reason to switch. The measured gain over OpenSSL is about 4% on one Kaby Lake CPU against a 2018-19 OpenSSL build, and in the kernel tests it roughly ties the fastest unverified ADX code.
+- CPUs without ADX (for example Haswell, which has BMI2 only) and non-x86 targets. These fall back to portable radix-51 C, which Figure 9 puts at 135,636 cycles, about 14% slower than OpenSSL's ADX assembly (118,604). configure excludes Hacl_Curve25519_64.c on anything other than x64.
+- You need a TLS stack, the EVP interface, PEM/DER key handling or certificates. This repo provides primitives only.
+- Assuming the other primitives also beat OpenSSL. The paper says only that AES-GCM and ChaCha-Poly 'meet or exceed' OpenSSL. In its picoquic test, EverCrypt's ChaCha20-Poly1305 was slower (84.3 vs 90.9 MB/s).
+- You want versioned, supported C releases. The README calls this the research home and points production users to cryspen/hacl-packages, which was last pushed in April 2025. Changing the code itself needs F*, Z3, KaRaMeL and Vale.
+
+**Integration:** source-drop · No F*/Z3 needed to use dist/. You need the KaRaMeL runtime headers (dist/karamel) and Hacl_Krmllib. EverCrypt dispatch also needs EverCrypt_AutoConfig2.c and the Vale cpuid-x86_64-*.S. The fast path needs curve25519-x86_64-*.S or the GCC inline-asm header curve25519-inline.h. config.h is generated by dist/configure. The dist Makefile can build libevercrypt.a/.so. · C11 GCC/Clang for gcc-compatible (it uses VLAs; the Makefile passes -std=gnu11). MSVC needs the msvc-compatible dist, which uses external .asm instead of inline asm. configure disables addcarry intrinsics on GCC < 5.5 (bug 81300) and inline asm on one broken Apple clang build. The paper benchmarked with GCC 7.3. · Fast path: x86-64 with BMI2+ADX, with Linux, macOS, MinGW and MSVC assembly variants. Everywhere else, portable radix-51 C (best with 64-bit __int128; 32-bit uses emulated 128-bit arithmetic). configure also handles aarch64, ARMv7, s390x, ppc64le and x86.
+
+**Vs siblings:** Pick it over msotoodeh/curve25519 when you want proven correctness and constant-time guarantees for X25519, not just an unverified speed-tuned implementation. Pick AWS-LC or wolfSSL instead when you need a full TLS library with an OpenSSL-style API rather than a vendored primitive.
+
+**Gotchas:**
+- Call EverCrypt_AutoConfig2_init() before anything else. Otherwise the BMI2/ADX flags stay false and EverCrypt_Curve25519_* silently runs the slow portable path; the docs say skipping init means always getting the fallback.
+- Dispatch requires both BMI2 and ADX. A BMI2-only CPU such as Haswell gets the portable code; the Linux commit notes that 'haswell no longer benefits'.
+- ecdh returns false when the shared secret is all zeros (low-order peer key), so check the result; scalarmult does no such check. Clamping is implicit: the ladder reads only bits 3-253 and treats bit 254 as set. Open issue #1071, an unreviewed LLM audit, notes that the F* spec never calls decodeScalar.
+- The proofs trust F*, Z3, KaRaMeL, the C compiler and the inline-asm constraint strings. In 2021, imprecise clobber annotations in the Vale Curve25519 inline asm caused trouble with old GCC in the kernel (PR #501). NULL arguments are unchecked preconditions, not defensive checks (issue #327).
+
+**Status:** The research repo is actively maintained (last main commit 2026-04-10; Apache-2.0, with the generated C also MIT) and dist/ is easy to copy, but there are no versioned C releases, and the README sends production users to cryspen/hacl-packages, itself last pushed in April 2025.
+
+[repo](https://github.com/hacl-star/hacl-star) · [benchmark](https://project-everest.github.io/assets/evercrypt.pdf)
+
+#### websocket-grpc-rpc
+
+##### ActualLab.Rpc (part of ActualLab.Fusion)  `C#`  `MIT`  `active`  `Tier A`
+
+.NET RPC library (Fusion's transport) that multiplexes calls over one WebSocket; vendor loopback benchmark shows 5-8x grpc-dotnet call throughput.
+
+**Beats:** gRPC — The vendor's harness (Fusion.Samples src/RpcBenchmark) runs the ASP.NET Core server and the clients in one process over TLS on 127.0.0.1, on a Ryzen 9 9950X3D with Windows 11 and .NET 10.0.8. Worker count and concurrency are auto-tuned for each framework, and the best of 6 x 5 s runs is reported. ActualLab.Rpc (msgpack6c over WebSocket) did 9.91M/8.75M/6.04M calls/s on Sum/GetUser/SayHello vs grpc-dotnet's 1.28M/1.24M/1.16M (5.2-7.7x), and 1.4-2.3x more stream items/s. With the server limited to 4 CPUs in Docker, SayHello ran at 2.52M vs 399.32K calls/s (~6.3x) and Sum at 4.77M vs 437.85K (~10.9x, derived).
+
+**Known shortcoming:** Vendor-only evidence with no independent reproduction. Server and client run in one process over TLS to 127.0.0.1 on Windows loopback or Docker Desktop/WSL2, sharing 32 hardware threads. Each figure is the best of 6 x 5 s runs; localhost gRPC stream figures come from an earlier run and the Docker table keeps the better of two runs. The stream benchmark retunes RpcStream (BatchSize 200 for small items, AckPeriod 900, AckAdvance 1801) while gRPC sends one message per item, so part of the stream speedup is application-level batching; it uses the non-default msgpack6c serializer and WebSocket/HTTP-1.1 vs gRPC's HTTP/2. Benchmarks.md overstates grpc-dotnet as the fastest in grpc_bench #441 (it ranked 4th). Latency is measured at saturation, where gRPC had the lower p50 in Docker (SayHello 4.2 vs 6.4 ms). Oversized messages are dropped without an error reply; net472-to-net10 IList<string> deserialization fails (#60); .NET/TypeScript only, not gRPC wire-compatible.
+
+**How:** All calls from one client peer share one WebSocket. The frame-based writer (RpcFrameBasedTransport) drains a channel of queued messages, serializes them back-to-back into a pooled buffer, and flushes a frame when it reaches FrameSize (12,000 bytes by default) or when the queue is empty. Under load, many calls therefore go out in one write (opportunistic write coalescing, with no timer by default), and the next frame is serialized while the previous one flushes. Each call is a compact binary envelope (varint call IDs) with MessagePack or MemoryPack arguments, and proxies are source-generated (ActualLab.Interception: 1 allocation per call, no boxing); RpcStream<T> sends items in batches of up to 1024 under an ack-window flow control, where gRPC sends one protobuf message per item.
+
+**Use it when:**
+- Both ends are .NET (ASP.NET Core server; .NET, Blazor WebAssembly or MAUI clients), and you have many small unary calls where per-call overhead dominates. Sum/GetUser-sized payloads were 7-8x grpc-dotnet in the vendor localhost test.
+- Many concurrent callers share each connection. The writer batches whatever is queued into about 12 KB frames, so the gain grows with in-flight calls (the benchmark uses 200 concurrent tasks per client for calls).
+- Server streaming of small items (1-100 bytes each), for example telemetry or UI feeds. The vendor results were 1.7-2.3x gRPC on localhost and 2.1-3.0x in the 4-CPU Docker run.
+- A browser or TypeScript front end talks to a .NET back end and you would otherwise use gRPC-Web or SignalR. @actuallab/rpc uses the same wire format (json5np or msgpack6/msgpack6c).
+- You already use Fusion, or you plan to. Compute Service Clients add client-side caching with server-pushed invalidation on top of the same transport.
+
+**Skip it when:**
+- Polyglot systems. Only .NET and TypeScript implementations exist, contracts are C# interfaces, not .proto files, and gRPC clients, proxies and tooling cannot talk to it.
+- Large-payload streaming. The lead shrinks to 1.4x at 10 KB items on localhost (8.27 vs 5.86 GB/s) and to about 2x in Docker.
+- Workloads that care about single-call latency at low concurrency. The published latencies are measured at saturation, and in the 4-CPU Docker run gRPC had the lower p50 (SayHello 4.2 ms vs 6.4 ms; Sum 3.3 ms vs 3.5 ms), although ActualLab.Rpc had the lower p99 on Sum (12.8 ms vs 45.4 ms).
+- You need independent or Linux bare-metal numbers before you commit. All published results are the vendor's own, on Windows loopback and Docker Desktop/WSL2.
+- Payloads above 15.5 MiB per call, or older mixed-runtime clients that exchange interface-typed values. See gotchas.
+
+**Integration:** module: NuGet packages (ActualLab.Rpc for clients, ActualLab.Rpc.Server for ASP.NET Core hosting), with a Roslyn source generator (ActualLab.Generators) · ActualLab.Core, ActualLab.Interception, ActualLab.Generators (compile-time), MemoryPack (default serializer) or MessagePack-CSharp; System.IO.Pipelines package on pre-net9 targets; the server side needs ASP.NET Core · ActualLab.Rpc.csproj multi-targets netstandard2.0, netstandard2.1, netcoreapp3.1 and net5.0-net10.0; the HTTP/2 client transport needs net5+. The benchmark ran on .NET 10.0.8. · Any .NET runtime (server, Blazor WebAssembly, MAUI per README); Native AOT and trimming are supported (runtime codegen switches to interpreted expressions); TypeScript client via @actuallab/rpc
+
+**Vs siblings:** All other catalogued entries that beat gRPC are for Go (rpcx, Kitex, DRPC, cmd-stream, fRPC, Exposed), Rust (wtx) or C++ (brpc, grpcxx), so pick ActualLab.Rpc when both ends are .NET, or when a TypeScript client talks to a .NET server. Pick wtx or grpcxx instead if you must stay on the gRPC wire protocol.
+
+**Gotchas:**
+- Size limits (tightened in v14.2): a message whose argument data exceeds 15.5 MiB, or whose header or method reference exceeds 1 KiB, is dropped on receive with no error reply. The caller sees the call as never answered.
+- Abstract and interface-typed arguments and results are sent with a runtime type name (TypeRef). Open issue #60: a net472 client calling a net10 server that returns IList<string> fails with 'Type System.Collections.Generic.List`1[...], System.Private.CoreLib is not found'.
+- The format is chosen per connection (?f=key), and both peers must support it. The README says MemoryPack is the default and MessagePack (msgpack6c, used in the benchmark) needs runtime IL emit. The TypeScript client supports only JSON and MessagePack, with no MemoryPack and no polymorphism.
+- RpcStream defaults are BatchSize 64, AckPeriod 30 and AckAdvance 61. The benchmark server overrides them to BatchSize 200 for items under 50 bytes, AckPeriod 900 and AckAdvance 1801. Expect lower stream throughput without similar tuning.
+
+**Status:** Actively maintained: last commit 2026-09-15, about 5,500 commits, ActualLab.Rpc 14.4.16 on NuGet with ~663K total downloads. MIT-licensed and usable standalone from Fusion, but the published benchmarks were run on v14.0.17.
+
+[repo](https://github.com/ActualLab/Fusion) · [benchmark](https://github.com/ActualLab/Fusion.Samples/blob/master/Benchmarks.md (Run-RpcBenchmark.cmd section; rendered copy in https://github.com/ActualLab/Fusion/blob/master/docs/Performance.md))
+
+##### cmd-stream (with MUS codec)  `Go`  `MIT`  `active`  `Tier A`
+
+Go client/server framework sending typed Command objects over raw TCP/TLS; author benchmark shows 3.1-4.6x grpc-go echo QPS.
+
+**Beats:** gRPC (grpc-go, Protobuf) — The run is the author's own go-client-server-benchmarks: localhost on one Ryzen 7 PRO 5850U laptop, Go 1.24.1, grpc-go v1.80.0 vs cmd-stream v0.7.1, 4 KB I/O buffers for every framework, a 30 ms server sleep per echo, and every request fired at once in its own goroutine. Over 1-16 connections, cmd-stream/MUS reached 145k-289k QPS against grpc-go's 46k-77k (3.1-4.6x); the Protobuf codec gave 2.4-3.5x and JSON 1.5-2.5x. A fixed burst of 100,000 requests finished 2.7-3.4x faster (0.38-0.61 s vs 1.03-2.09 s).
+
+**Known shortcoming:** Go, not C++. The benchmark repo is run by the cmd-stream author, and most of the gain is raw TCP vs HTTP/2 (cmd-stream with Protobuf also beats gRPC), not the MUS codec. A 100,000-request run shows a smaller gap (about 2.7-3.4x).
+
+**Known shortcoming:** Only an author-run localhost benchmark on one laptop: all requests launched at once with a 30 ms server sleep, so it measures protocol overhead with huge numbers in flight (the author agreed on HN); the 'p99' column is p99.9 and includes queueing; 4 KB I/O buffers for all; tested v0.7.1; Kitex ran in gRPC-transport mode. Most of the gain is the raw-TCP transport, not MUS (Protobuf still 2.4-3.5x, JSON 1.5-2.5x over grpc-go). Not a gRPC drop-in: command pattern, Go-to-Go only, no gRPC/HTTP interop, codec registration and codegen. Server WorkersCount (default 8) caps concurrent connections; later connections queue. An Exec error closes the whole connection and fails every in-flight command. No server-side cancellation. No compression, retries or multi-server balancing. Unbounded goroutines per command and unlimited JSON/Protobuf lengths unless WithMaxLen is set; mutual TLS is the only auth. Pre-1.0 (v0.7.0 broke Cmd.Exec), one maintainer, no outside importers; client deadlock (#4) and keepalive-reconnect (#3) bugs fixed only in 2026.
+
+**How:** Each message on the connection is a varint sequence number, a type tag and the payload, with no HTTP/2 frames, HPACK headers or per-stream flow control, and many concurrent Commands share one connection. Writes go into a bufio.Writer, and a CAS flag coalesces flushes on both client and server, so concurrent senders on a connection share one Flush (one write syscall). The MUS codec (mus-stream-go) writes generated serializers straight into the stream, while the JSON and Protobuf codecs marshal into a temporary []byte first. The transport, not the codec, gives most of the gain: cmd-stream with the Protobuf codec still reaches 2.4-3.5x grpc-go QPS, and in the fixed run MUS used about 16 allocs and 3 KB per request against about 139 allocs and 12 KB for grpc-go.
+
+**Use it when:**
+- Go-only service-to-service links where you own both client and server and need neither gRPC interop nor gRPC tooling.
+- Throughput-bound fan-in with a very large number of small requests in flight at once (the benchmark used 17-1024 B payloads, all fired at once), where grpc-go's per-call CPU and allocation cost is the bottleneck.
+- Workloads that already fit a command/job model (sagas, persisted or replayable commands), or that need several Results per request without HTTP/2 streaming.
+- Teams that can add generated MUS serializers for peak speed. If you keep .proto messages, the Protobuf codec still measured 2.4-3.5x grpc-go in the author's run.
+
+**Skip it when:**
+- Polyglot systems or public APIs. It is Go-only with a custom wire format: no gRPC or HTTP interop, and no grpcurl, gRPC-Gateway or service-mesh support.
+- Latency-bound calls across a real network. The only published numbers are from localhost on one laptop, and the author agreed on HN that they measure protocol overhead, not network latency.
+- When you need built-in compression, application-level retries, server-side cancellation/deadline propagation, or multi-endpoint balancing. The author says on HN that compression and retries are not provided, and the other two are missing from the code: Sender dials a single address and ctx only bounds the client-side wait.
+- Servers exposed to untrusted clients without extra hardening. Every Command runs in its own goroutine with no per-connection concurrency limit, the JSON and Protobuf codecs accept any payload length unless WithMaxLen is set, and authentication is mTLS only.
+- Risk-averse production use. The API is pre-1.0 (v0.7.3) and v0.7.0 (May 2026) changed the Cmd.Exec signature. One maintainer wrote 234 of 236 commits, and pkg.go.dev lists no importers outside the author's own repos.
+
+**Integration:** module · mus-format/mus-stream-go, mus-format/common-go, ymz-ncnk/jointwork-go, plus one codec module (codec-json-go, codec-protobuf-go or codec-mus-stream-go; the Protobuf and MUS codecs need code generation) · Go 1.24.1 (go directive in go.mod) · Any Go target. Built on net.Conn: TCP, TLS and mutual TLS are documented, and NewClient accepts any net.Conn
+
+**Vs siblings:** Pick it over the Go siblings rpcx and Kitex (catalogued at 2.3-2.6x and 1.5-1.7x grpc-go, each on its own benchmark) when both ends are Go, you want the largest cut in per-request overhead, and you accept the command model. In its author's suite, cmd-stream/MUS reached 2.7-5.4x the QPS of Kitex run in gRPC-transport mode. Choose the gRPC-compatible siblings (grpcxx, wtx) or the C++ frameworks (brpc, SRPC) instead when you need cross-language clients or standard gRPC wire compatibility, which cmd-stream gives up.
+
+**Gotchas:**
+- Server WorkersCount (default 8) is the maximum number of connections served at once. Each worker owns one connection for that connection's whole life, and later connections wait in a queue. Size it to your total client connections, as the benchmark does (WorkersCount = client count). Sender defaults to a single connection (ClientsCount=1).
+- If Command.Exec returns an error, or the codec fails, the server closes the whole connection and every in-flight Command on it fails; the author's stress test uses a FailCmd to drop connections this way. Send application errors back as Result values instead.
+- Cancelling or timing out ctx on the client only abandons the wait (Forget); the server keeps running the Command. SendWithDeadline sets a socket write deadline and does not pass a deadline to the server.
+- Core client bugs were fixed only recently: a deadlock on unexpected results (#4, May 2026) and keepalive breaking reconnect (#3, Apr 2026). Codec modules are pseudo-versioned, so pin a matched release set from VERSIONS.md.
+
+**Status:** Maintained but quiet: the last commit on main is the v0.7.3 release (2026-05-07), and only dependabot PRs have arrived since. It is an MIT-licensed, go-gettable module, but pre-1.0 with frequent breaking releases and a single maintainer.
+
+[repo](https://github.com/cmd-stream/cmd-stream-go) · [benchmark](https://github.com/ymz-ncnk/go-client-server-benchmarks/blob/main/results/qps/qps.csv)
+
+##### Kitex  `Go`  `Apache-2.0`  `active`  `Tier A`
+
+ByteDance's Go RPC framework whose gRPC-compatible transport, built on the Netpoll event loop, out-serves grpc-go on small unary RPCs.
+
+**Beats:** gRPC (grpc-go) — In ByteDance's own kitex-benchmark (data from August 2022), a Kitex server on its gRPC transport was compared with a default grpc.NewServer() from grpc-go v1.42.0 on a 1KB protobuf echo. Both were built with Go 1.17.2 and default flags, on a Xeon Gold 5118 with the server pinned to 4 CPUs and the client to 16 on the same host over loopback. Kitex served 156,167 vs 103,178 QPS at 100 concurrent callers (1.51x) and 193,971 vs 114,054 at 1000 (1.70x). The Kitex side also used fastpb-generated codecs against standard protoc-gen-go code, so the measured gain is transport plus codec, not transport alone.
+
+**Known shortcoming:** Go, not C++. The 1.70x over grpc-go comes from 2022 data (kitex v0.3.5-pre, grpc-go v1.42.0, Go 1.17.2) and has not been re-run; the comparison is against grpc-go, not gRPC C++.
+
+**Known shortcoming:** Unary gRPC data last regenerated 2022-08 (kitex v0.3.5-pre vs grpc-go v1.42.0, Go 1.17.2). The 2024 streaming rerun (v0.11.3-pre vs grpc 1.66.2) shows 1.33-1.42x QPS but worse p99 from 400 streams up (8.12 vs 6.16 ms at 1000); its Go version is not actually stated. Transport and codec are mixed: Kitex used fastpb FastRead/FastWrite, grpc-go standard protoc-gen-go. First-party loopback runs with unequal client pools (6 vs 10 connections) and a per-call 1 s timeout context only on the grpc-go side. No in-process server TLS (Envoy sidecar or gonet; #1312, #952). Windows falls back to net and gRPC there is unsupported (#1154 panic open). Transport is a grpc-go v1.26 fork: streams stuck in flow control (#1865, open), close-of-closed-channel panic (#974). Proto3 only; Kitex Protobuf is not gRPC unless configured; stubs need the kitex tool. RPCInfo pooled (don't keep it); mutating a message during FastWrite panics. No independent benchmark.
+
+**How:** The gRPC transport (pkg/remote/trans/nphttp2) is grpc-go v1.26.0's HTTP/2 transport, forked onto Netpoll. Netpoll is ByteDance's epoll/kqueue event-loop network library, and it replaces Go's net package, which blocks one goroutine per connection. Netpoll reads into LinkBuffer, a linked buffer built from pooled blocks. A fork of golang.org/x/net/http2's framer parses frames straight out of that buffer, reuses frame objects, and batches writes into a per-connection buffer (32KB by default, allocated at twice that size). The poller calls epoll_wait with timeout 0 while events keep arriving and -1 when idle; ByteDance measured this as about 18% cheaper per call. In the benchmark, the Kitex stubs also used fastpb-generated FastRead/FastWrite codecs, which compute the size first and then write, rather than the standard protoc-gen-go code.
+
+**Use it when:**
+- Go services on Linux handling many small unary protobuf RPCs (around 1KB) where server CPU is the limit. With 4 server cores the benchmark showed 1.5-1.7x the QPS of grpc-go, and p99 fell from 3.15 to 1.73 ms at 100 concurrent callers.
+- You must stay on the gRPC wire protocol to interoperate with existing grpc-go or other-language clients, and you want governance (discovery, LB, retry, circuit breaking) built into the framework.
+- Streaming-heavy services: a December 2024 rerun against grpc-go v1.66.2 measured 1.33x the QPS of grpc-go streaming at 100 streams (377k vs 283k) while using less server CPU (296% vs 335%), and 1.42x at 1000 streams.
+- Organisations running Thrift and gRPC side by side that want one Go RPC stack and one server port for both.
+
+**Skip it when:**
+- Windows: Kitex falls back to Go's net package there because Netpoll does not support Windows. Maintainers say gRPC on Windows is unsupported, and an open issue (#1154) reports a server panic ('close of closed channel').
+- You need TLS or mTLS terminated in-process on the server. Netpoll has no TLS, the FAQ says Kitex does not natively support TLS, and there is no server gRPC TLS option. Maintainers point to an Envoy sidecar or to switching the server to the gonet transport, which gives up Netpoll. Clients get TLS only through WithGRPCTLSConfig.
+- Tail-latency-sensitive streaming at high fan-in: in the 2024 streaming CSV, Kitex's p99 is higher than grpc-go's from 400 concurrent streams up (8.12 vs 6.16 ms at 1000).
+- proto2 schemas: Kitex's Protobuf support is proto3-only.
+- Code built around grpc-go's API (grpc.Dial, grpc.NewServer, its ServerOptions and interceptors). Stubs must be regenerated with the kitex tool, and middleware must be ported to Kitex's model.
+
+**Integration:** module · cloudwego/netpoll, bytedance/gopkg, bytedance/sonic, cloudwego/frugal, fastpb, prutal, dynamicgo, thriftgo, golang.org/x/net, google.golang.org/protobuf and more (see go.mod). Code generation needs the kitex CLI plus protoc (Protobuf) or thriftgo (Thrift). · Go 1.20 (go.mod directive); the docs promise support for the latest three Go releases · Linux and macOS use Netpoll (epoll/kqueue). Windows compiles and runs since v0.4.0 but uses Go net, and gRPC there is unsupported per maintainers (issue #1154). CPU architecture limits are not documented.
+
+**Vs siblings:** Among Go options, pick Kitex over rpcx (its own binary protocol) or cmd-stream (MUS codec) when callers must keep speaking standard gRPC. Those siblings post bigger margins over grpc-go but abandon the gRPC wire format. wtx reports larger gains as a gRPC server but is Rust, and brpc and grpcxx are C++, so Kitex is the pick for a gRPC-compatible Go stack with governance included.
+
+**Gotchas:**
+- A Kitex Protobuf client sends Kitex Protobuf, not gRPC, unless the IDL has streaming methods or you set client.WithTransportProtocol(transport.GRPC). Pointing a default Kitex client at a grpc-go server therefore fails.
+- The HTTP/2 transport is a 2019-era fork (grpc-go v1.26.0 transport; x/net/http2 framer from Go 1.17.4), so upstream fixes do not arrive automatically. Open reports include streams stuck in flow control (writeQuota.get) and Send returning nil on a dead peer (#1865, v0.14.1). Server panics on client disconnect were reported through v0.11.3 (#974).
+- FastWrite computes the message size first and then serialises into a buffer of that size. If another goroutine mutates a request or response object in between, you get index-out-of-range or nil-pointer panics inside generated fastWriteField code; the docs classify this as a data race in user code that FastWrite exposes.
+- The client keeps GOMAXPROCS*3/2 HTTP/2 connections per target by default (grpc-go uses one ClientConn). The docs warn that resizing it with WithGRPCConnPoolSize can hurt performance.
+
+**Status:** Actively developed (v0.16.2 in May 2026, commits through 2026-09-22), Apache-2.0 and consumed as a normal Go module. However, the published unary gRPC numbers were last regenerated in August 2022; only the streaming comparison was rerun, in December 2024.
+
+[repo](https://github.com/cloudwego/kitex) · [benchmark](https://github.com/cloudwego/kitex-benchmark)
+
+##### rpcx  `Go`  `Apache-2.0`  `active`  `Tier A`
+
+Go RPC framework with its own binary TCP protocol and built-in service governance; 2.3-2.6x grpc-go throughput in author's benchmark.
+
+**Beats:** gRPC (grpc-go 1.39.0); also Go standard library net/rpc (Go 1.16.6) — The rpcx author's 2021 benchmark ran over loopback (Go 1.16.6, 2x Xeon Silver 4110, 32 threads), with 10M requests per run and 100-5000 concurrent callers sharing 10 client connections. rpcx 1.6.5 echoed a 581-byte gogofaster Protobuf message at 249-318k TPS, against 96-136k for grpc-go 1.39.0 (2.3-2.6x) and 189-219k for Go's net/rpc (1.3-1.5x), and at 5000 callers its mean/P99.9 latency was 15/52 ms against grpc-go's 40/294 ms. Earlier rounds by the same author show a smaller or reversed gap, and no independent reproduction was found.
+
+**Known shortcoming:** Go, not C++. Rounds of the author's own benchmark disagree: in 2018 Go's standard net/rpc beat rpcx, and in 2019/2020 gRPC led at 100-256 clients; the 2021 run gives about 2.3-2.6x over grpc-go.
+
+**Known shortcoming:** First-party benchmark only, with the gap varying a lot between rounds (grpc-go wins some 2019-2020 points; net/rpc beat rpcx in 2018); no independent reproduction. The benchmark no longer builds against HEAD (server.UsePool removed; WithPool since 1.8.0). Measured setup differs from defaults: Protobuf instead of the default MessagePack, near-empty handler, loopback. MaxMessageLength and MaxDecompressedLength default to 0 (unlimited), allowing memory or gzip-bomb attacks before auth. Pooled args/replies (every generated Protobuf message) are reset and returned to a sync.Pool when the handler returns, so handlers must not keep them. Not wire-compatible with gRPC; streaming is a raw net.Conn on a separate port. HEAD needs Go 1.26; the io_uring client is a stub; reuseport/Unix listeners don't build on Windows. Docs contradict on the stable branch and six site examples 404 (#945).
+
+**How:** Each call is one compact custom frame multiplexed by sequence id over a plain TCP connection. The frame is a 12-byte header (magic byte, version, flag bits, codec byte, 8-byte sequence id) followed by length-prefixed service path, method, metadata and payload, so there is no HTTP/2 framing, HPACK or flow-control windows as in grpc-go. Frames are encoded into size-classed sync.Pool buffers (512 B to 4 KB) and sent with a single conn.Write. Decoded arg/reply structs are recycled through per-type sync.Pools, and each request runs on its own goroutine or, optionally, a pond worker pool (WithPool). In the benchmark both sides used the same gogofaster-generated Protobuf code and 10 pooled client connections, so the gap comes from transport and framework overhead, not the codec.
+
+**Use it when:**
+- Go-to-Go services where you own both ends and want more unary RPC throughput than grpc-go for small (~0.5-1 KB) Protobuf messages at 100-5000 concurrent callers.
+- Teams that want Dubbo-like service governance (registry discovery, weighted/consistent-hash/geo/ping selection, failover, circuit breaking, backup requests) inside the RPC library rather than in a service mesh.
+- Code-first services: exposing existing Go methods as RPCs without writing .proto files, with the codec (Protobuf, MessagePack, JSON, raw bytes) chosen per client.
+- High-fan-in servers that care about tail latency: in the author's 2021 run, P99.9 at 5000 callers was 52 ms for rpcx and 294 ms for grpc-go.
+- Deployments that want to switch transports (TCP, Unix socket, QUIC, KCP, in-process memconn) without changing service code.
+
+**Skip it when:**
+- You need gRPC wire compatibility: grpc-web or browser clients, Envoy/Istio gRPC routing, polyglot clients generated from .proto, or standard gRPC health and reflection tooling. rpcx speaks only its own protocol.
+- APIs built on typed streaming: rpcx offers one-way calls, server-to-client push on the same connection and a StreamService that hands you a raw net.Conn on a separate port, but nothing like gRPC's typed client, server or bidirectional streams.
+- You need independently reproduced numbers. Every rpcx vs grpc-go result comes from the rpcx author, and the gap changes a lot between rounds: about 1.5x in 2018 (when Go's net/rpc beat rpcx), grpc-go ahead at some concurrency levels in 2019 and 2020, and 2.3-2.6x in 2021.
+- Handler-dominated or cross-network workloads: the verified gap is for a near-empty handler over loopback, and real processing time or network round trips shrink the framework's share of latency.
+- Servers exposed to untrusted peers on default settings: MaxMessageLength and MaxDecompressedLength default to 0 (unlimited), so a peer can force large allocations or gzip bombs before auth runs.
+
+**Integration:** module · About 35 direct Go modules at HEAD, including quic-go, kcp-go, godzie44/go-uring, smallnest/gordma, gogo/protobuf, google.golang.org/protobuf, apache/thrift, vmihailenco/msgpack, tinylib/msgp, go-redis, soheilhy/cmux, alitto/pond, rcrowley/go-metrics and rubyist/circuitbreaker. The etcd, ZooKeeper, Consul and Redis registries are separate rpcxio modules. · Go 1.26 at HEAD (go.mod declares go 1.26.0); the benchmarked rpcx 1.6.5 was built with Go 1.16.6 · Any Go target for TCP/HTTP. The reuseport and Unix-socket listeners are !windows only. The io_uring listener is Linux-only, and the client-side io_uring connection is a stub that falls back to TCP. QUIC, KCP and RDMA are behind build tags, and RDMA needs libibverbs on Linux.
+
+**Vs siblings:** Pick rpcx over Kitex (the other Go framework here) if you want a standard-netpoller Go stack with registry-based governance built in. In rpcx's own 2021 run, Kitex 0.0.3 reached 178-213k TPS with P99.9 up to 1,081 ms at 5000 clients, against 249-318k TPS and 52 ms for rpcx; current Kitex was not tested. Choose wtx or grpcxx instead if you must keep the gRPC wire protocol, and cmd-stream-go if you want a lean Go command transport (benchmarked at 1-16 clients) rather than a full microservice framework.
+
+**Gotchas:**
+- client.DefaultOption uses MessagePack, not Protobuf. The benchmark explicitly set option.SerializeType = protocol.ProtoBuffer. Plain structs under the default go through reflection-based vmihailenco/msgpack unless you generate tinylib/msgp code.
+- Arg and reply objects that implement Reset() (every generated Protobuf message does) are reset and returned to a sync.Pool as soon as the handler returns. Do not keep them or hand them to other goroutines.
+- Message size and decompressed size are unlimited by default. Set WithMaxMessageLength and WithMaxDecompressedLength on any server that accepts untrusted traffic.
+- APIs have churned. The 2021 benchmark server sets server.UsePool, which does not exist at HEAD (the pool is now the WithPool option, added in 1.8.0), and the etcd/ZooKeeper/Consul plugins moved to separate modules in 1.7-1.8, so older tutorials' imports break. The README names the stable branch as both v1.7.x and v1.9.4, and open issue #945 reports that six example links on the official site 404 because they point at a main branch instead of master.
+
+**Status:** Actively maintained (last commit 2026-09-03, tag v1.9.4, 8.3k stars, 4 open issues) and licensed Apache-2.0: GitHub's API says NOASSERTION, but the file is the standard Apache 2.0 text. It is an ordinary Go module, though HEAD now needs Go 1.26.
+
+[repo](https://github.com/smallnest/rpcx) · [benchmark](https://colobu.com/2021/08/01/benchmark-of-rpc-frameworks/)
+
+##### eRPC  `C++`  `Apache-2.0`  `stale`  `Tier B`
+
+Kernel-bypass C++ datacenter RPC library over DPDK UDP or InfiniBand, near FaSST/RDMA speed on lossy Ethernet.
+
+**Beats:** NSDI'19 paper baselines: FaSST RPCs and raw RDMA reads/writes (measured; eRPC is comparable but slightly slower), IX (per-core RPC rate quoted from the IX paper), NetChain and ZabFPGA replication (their published numbers), and the Cell RDMA B-tree (published numbers). The paper never benchmarks kernel TCP/UDP socket RPC or HERD. — In the NSDI'19 paper, one thread per node on 11 CloudLab CX4 nodes (25 GbE ConnectX-4 Lx, Xeon E5-2640 v4), with 32 B RPCs, batch size 3 and congestion control on, issued 4.96 Mrps and served as many, so about 10M RPCs/s per core. That is up to 18% below FaSST's numbers from the same CX3 InfiniBand cluster. Median latency was 2.3 µs against 2.0 µs for RDMA reads on CX5. The larger wins are comparisons across papers on different hardware, never re-measured: about 6.7x IX's published 1.5M 64 B RPCs/s, Raft at 5.5 µs against NetChain's published 9.7 µs, and roughly 10x lower GET latency than Cell. The paper names no compiler; the repo builds RelWithDebInfo with -march=native and -flto.
+
+**Known shortcoming:** Never benchmarked against kernel TCP/UDP RPC or gRPC; against FaSST and raw RDMA it is slightly slower (up to 18% lower per-thread rate, up to 800 ns more latency). Its wins over IX, NetChain and Cell use those papers' published numbers. Needs DPDK/RDMA NICs. Stale since 2024-05.
+
+**Known shortcoming:** Idle-latency bug: after more than 5 ms idle, requests are falsely retransmitted (timing-wheel reap walks slot by slot, stale timestamp in enqueue_request; #104, #116); fix PR #123 unmerged, workaround is to keep polling. ~10M RPC/s per core needs ~10 nodes all-to-all (8 outstanding per session); users saw 1.5 Mrps on two machines (#35) and 3.1 vs 5 Mrps on 10 nodes (#121). Compile-time limits: ~128 sessions per Rpc endpoint by default, DPDK MTU hard-coded 1024 B. x86-64 Linux only (rdtsc, -march=native; aarch64 #111), needs hugepages/root/DPDK 21.11 or rdma-core; Nexus segfaults with offline CPUs (#31). Go-back-N with 5 ms RTO: usable only up to ~0.01% loss. Not an HTTP server (no HTTP/TLS). Faster claims compare against numbers from other papers; up to 18% slower per thread than FaSST. Last commit 2024-05; authors point to microsoft/machnet.
+
+**How:** Each user thread polls its own NIC queue from userspace and runs short handlers to completion inside the event loop. Longer handlers can go to up to 8 eRPC background threads. The paper's common-case optimizations are zero-copy, single-DMA msgbufs (packet 1's header sits before the data and later headers go at the end), request handlers that read directly from the RX ring, preallocated MTU-sized responses, multi-packet RQ, and unsignaled, batched TX. The wire protocol is client-driven: a session's packet credits are capped near one bandwidth-delay product, and eRPC relies on large dynamic switch buffers so that loss stays rare. Congestion control is Timely plus a Carousel-style timing-wheel rate limiter. When a session is uncongested it skips the Timely update and the wheel and reads rdtsc once per batch, which cuts congestion-control overhead from 20% to 9%. The transports are picked at compile time through a template parameter (static polymorphism), so there are no virtual calls.
+
+**Use it when:**
+- Service-to-service or storage RPC where you own both ends and run on bare-metal Mellanox CX3–CX5 or other DPDK-capable 10 GbE+ NICs, and you want a few microseconds of median latency (paper: 2.3 µs on 40 GbE CX5, 3.7 µs on 25 GbE CX4)
+- Small, fixed-size requests (32 B class) at high rate: in the paper one core handles ~10M RPCs/s when it is both client and server in an all-to-all cluster of about 10 or more nodes
+- Replication or key-value work that would otherwise need RDMA or PFC: the paper runs a stock Raft port at 5.5 µs 3-way replication and Masstree at 2.7 µs median GET on lossy Ethernet
+- Bulk transfers up to 8 MB per message on a fast link: up to 75 Gbps on one core over 100 Gbps InfiniBand (raise the 1024 B DPDK MTU constant for bandwidth on Ethernet)
+- Research baselines where you need a general RPC layer within ~18% of FaSST's small-RPC rate and within 800 ns of RDMA-read latency
+
+**Skip it when:**
+- Anything that must speak HTTP or TLS, or talk to clients that are not eRPC: the UDP/IB wire protocol is custom, so it does not replace any of the HTTP servers in this category
+- Public-cloud VMs, containers, dev laptops, or setups without root: it needs hugepages (at least 1024 per NUMA node), DPDK owning the NIC port or ibverbs, and NIC flow steering. Only Azure accelerated networking is documented, and the author notes that cloud guests often lack flow steering (issue #44)
+- Low-rate or bursty callers that sleep between RPCs: latency grows with idle time (issues #104/#116), and the fix PR #123 is still unmerged
+- Non-x86 hosts: timing uses the rdtsc instruction via inline asm and the build uses -march=native. An aarch64 port needs patches and trips the TSC-frequency assert (issue #111, open)
+- Long-lived production dependencies: the last commit was 2024-05-09 and the authors now point new users to microsoft/machnet. Networks with more than ~0.01% loss or with packet reordering also hurt it: reordered packets are dropped and handled with go-back-N and a 5 ms RTO, and 8 MB throughput falls to 18 Gbps at 1e-4 loss
+
+**Integration:** static lib · DPDK 21.11 (dpdk transport; README says other versions are unsupported) or rdma-core/ibverbs (infiniband/RoCE transport); libnuma, pthread, rt; bundled gflags, HdrHistogram_c, googletest and asio headers; 2 MB hugepages; optional libpmem for some apps · C++11 (CMAKE_CXX_STANDARD 11), CMake with pkg-config for DPDK; author reports GCC 7.4 works (issue #33); builds with -Wall -Wextra -Werror -pedantic, so newer compilers may fail (issue #65 open) · Linux x86-64 only in practice (rdtsc inline asm, -march=native); NICs: Mellanox CX3–CX5 tested, any DPDK NIC with flow steering, Azure DPDK VMs; a WIN32 DPDK path exists in CMakeLists but is not documented; aarch64 unsupported
+
+**Vs siblings:** Pick eRPC over Demikernel, Shenango, or FlexTOE when both ends are your own C++ code and you want finished RPC semantics (at-most-once execution, loss recovery, congestion control, nested and background handlers) at millions of small RPCs per core. Pick those siblings when you need a TCP or sockets-style path that other software can talk to, such as Demikernel's DPDK TCP stack or Shenango serving memcached. The HTTP servers here (Drogon, H2O, Lwan, Crow) solve a different problem and are not alternatives.
+
+**Gotchas:**
+- Idle gaps inflate latency. TimingWheel::reap() advances one slot at a time with no fast-forward, and enqueue_request stamps a stale event-loop TSC, so a request after more than 5 ms idle is falsely retransmitted. The workaround is to keep calling run_event_loop_once() instead of sleeping. The fix is PR #123, open since 2026-08-06.
+- Most tuning is compile-time. kSessionReqWindow = 8 outstanding requests per session, kSessionCredits = 32, kNumRxRingEntries = 4096 (so about 128 sessions per Rpc before create_session returns -ENOMEM), kRpcRTOUs = 5000, and kMTU = 1024 B on DPDK. Two-machine tests do not reach the 10M RPC/s figure (issue #35: ~1.5 Mrps; issue #121: 3.1 vs 5 Mrps on 10 xl170 nodes).
+- Buffer ownership is strict. With kZeroCopyRX, a single-packet request buffer is valid only during the handler. A response must use the ReqHandle's pre_resp_msgbuf_ or dyn_resp_msgbuf_, not your own buffer, and eRPC owns request and response msgbufs until the continuation runs. Message size is capped at 8 MB.
+- Session setup goes over kernel UDP on the management network (ports 31850+n, reachable by hostname), not over the DPDK port. By default only one process can use a DPDK port; the multi-process daemon has been seen stuck in rte_eth_tx_burst (#118). The Nexus segfaults when CPUs are offline, for example with HT disabled (#31; the fix PR #36 has been open since 2019).
+
+**Status:** Stale since the last commit on 2024-05-09 (last release v0.2, 2021), with 19 open issues and 5 open PRs, including the unmerged idle-latency fix. The authors point new users to microsoft/machnet. It is Apache-2.0 (per LICENSE and README; GitHub shows NOASSERTION) and about 6,200 lines of C++ per the paper, so it can be vendored, but expect to own DPDK and rdma-core version pinning yourself.
+
+[repo](https://github.com/erpc-io/eRPC) · [benchmark](https://www.usenix.org/system/files/nsdi19-kalia.pdf)
+
+##### Homa (HomaModule) — Linux kernel implementation of the Homa RPC transport protocol  `C`  `BSD-2-Clause OR GPL-2.0+ (per-file SPDX headers on the module and benchmark sources; a few test/tool files are BSD-1-Clause or GPL-2.0; no top-level LICENSE file)`  `active`  `Tier B`
+
+Linux kernel module for Homa, a message-based datacenter RPC transport with far lower short-message tail latency than TCP.
+
+**Beats:** TCP (and DCTCP) — The USENIX ATC'21 paper compared this module (2021 code, Linux 5.4.80, MTU 3000) with Linux kernel TCP (TCP_NODELAY, per issue #51 and cp_node.cc) and DCTCP (ECN threshold 70 KB) on 40 CloudLab xl170 nodes (Xeon E5-2640v4, ConnectX-4 25 Gbps, one Mellanox 2410 switch). Under high load on workloads W2-W5, short-message P99 was 19-72x lower than TCP and 7-83x lower than DCTCP, and P50 was 3.5-7.5x and 2.7-3.8x lower. Best-case 100-byte RTT was 15.1 vs 23.4/24.1 us, and RPC rate was 1.6 vs 1.0 Mops/s. No compiler version or flags are stated. The author's unreviewed perf.txt log (Jan 2026, current code, 100 Gbps c6620, W4 at 80 Gbps) still shows short-message P99 of about 91-99 us for Homa versus 833-1272 us for TCP.
+
+**Known shortcoming:** A transport protocol, not a gRPC/Thrift library: compared against Linux TCP and DCTCP. The 7-83x P99 gains apply to short messages only (P50 3.5-7.5x). Paper numbers are from 2021 code on Linux 5.4.80; the module has since been heavily reworked for kernel upstreaming. Needs a kernel module and Homa-capable peers. No compiler or flags stated.
+
+**Known shortcoming:** The fast version exists only out of tree: the upstream netdev series (v20, 2026-09-14) is stripped to ~8k lines and its cover letter says performance is about the same as TCP; mainline has no net/homa. Needs jumbo frames, interrupt coalescing off, RPS on, RFS off, homa_qdisc on every tx queue, DSCP priority queues and TSO; software GSO is 'temporarily broken' and the TCP-hijacking fallback can be dropped by switch filters. Bulk throughput loses (10.0 vs 20.3 Gbps single-client 500 KB); messages capped at 1 MB. CPU cost high (~0.1 M req/s/core in the paper; polling costs 2-3 extra cores). Sharing hosts with TCP raises short-message P99 ~4x without homa_qdisc, ~30% with it. No encryption. Author notes grants get stranded at very high load (~60-70% of link bandwidth). The homa_send/recv/reply API in the record was removed in 2025 (now sendmsg/recvmsg with SO_HOMA_RCVBUF). No compiler/flags; latest data is the repo's perf.txt (2026-01: P99 ~91-99 us vs 833-1272 us for TCP).
+
+**How:** Receiver-driven flow control: a sender sends the first rtt_bytes of a message without asking, then sends more only when the receiver grants it. Receivers approximate SRPT (shortest remaining processing time first) with a bounded degree of overcommitment. Priorities are set through 8 switch priority queues keyed on DSCP bits, and a homa_prio daemon sets unscheduled-priority cutoffs from observed message sizes. A sender-side pacer/homa_qdisc keeps NIC queues short so small messages never wait behind large ones, and message framing removes TCP's head-of-line blocking. On the host side the ATC'21 paper credits most of the 100-byte RTT gain to busy-polling in recvmsg (~4 us) and SoftIRQ core selection (3-4 us), and higher RPC rate to GRO batching across RPCs.
+
+**Use it when:**
+- Datacenter request/response traffic where P99 latency of short messages (hundreds of bytes to a few KB) under 50-80% network load is what hurts, e.g. fan-out services and storage/cache RPC.
+- Mixed workloads with both short and long messages (the Montazeri W3-W5 shapes), where TCP's per-stream head-of-line blocking and switch queue buildup inflate tail latency.
+- Highly connected clusters: one Homa socket reaches every peer, and the paper puts per-peer state at about 200 bytes versus about 2000 bytes per open TCP socket.
+- You control the whole stack: Linux 6.17.8 (main) or RHEL 8/9.5 (branches) hosts, Mellanox ConnectX-4/5/6 or Intel E810 NICs, and top-of-rack switches you can configure for DSCP strict-priority queues.
+- Transport research or benchmarking: the repo ships the cp_node/cp_vs_tcp/cp_bench harness, timetrace tools and /proc/net/homa_metrics used to produce its published numbers.
+
+**Skip it when:**
+- Bulk or single-stream throughput. In the paper's Table 2, one client doing 500 KB RPCs gets 10.0 Gbps versus 20.3 Gbps for TCP. Messages are capped at HOMA_MAX_MESSAGE_LENGTH = 1,000,000 bytes, so large transfers must be chunked.
+- WAN or cross-datacenter links. The homa(7) man page says Homa is for RTTs of a few tens of microseconds and is not suitable for wide-area use.
+- Anywhere you cannot load an out-of-tree kernel module or configure switches: managed cloud VMs, unprivileged containers, macOS and Windows. Upstream Linux does not include it (no net/homa in mainline as of v7.3-rc4).
+- CPU-bound small-RPC servers. In the paper, 1.6 Mops/s used about 18 of 20 hyperthreads (~0.1 M req/s/core, versus ~10 M for kernel-bypass eRPC), and perf.txt (Sep 2025) says receive polling costs an extra 2-3 cores.
+- Hosts carrying heavy TCP traffic at the same time, or needing encryption. perf.txt (Jan 2026) shows Homa's short-message P99 rising about 4x when it shares hosts with TCP, and still about 30% worse with homa_qdisc. There is no TLS layer (grpc_homa supports only insecure channels).
+
+**Integration:** module · Kernel build tree/headers that match the running kernel (main: Linux 6.17.8; rhel8 and rhel9.5 branches; older linux_x.y branches are stale), a kernel built with IPv6 (Kconfig depends on IPV6), and root for insmod. The homa_prio user-space daemon (util/) is recommended. Full performance also needs switch priority queues, jumbo frames, and NIC TSO for Homa packets (Mellanox) or TCP hijacking. The optional C++ homa::receiver helper and homa.h UAPI header ship in the repo. · Module is built with kbuild and the kernel's own compiler/flags (no GCC version documented). util/ tools and homa_receiver.cc need g++ with -std=c++17. · Linux only. Tested on x86-64 (Intel xl170/c6620 and AMD c6525 CloudLab nodes per perf.txt); other architectures not documented. Verified NICs: Mellanox ConnectX-4/5/6 and Intel E810.
+
+**Vs siblings:** Pick HomaModule when tail latency of short RPCs under heavy network load is the problem and you can change host kernels and switch config. brpc, Kitex and rpcx win on QPS in user space but still run over TCP, so they keep its head-of-line blocking and congestion tails. grpc_homa is only a gRPC shim on top of this module, and its README says it has been unmaintained since late 2023 (gRPC 1.57, insecure channels only). Use it only if you must keep gRPC's API.
+
+**Gotchas:**
+- Out of the box, performance is poor until the host and network are tuned. That means jumbo frames, NIC interrupt coalescing off, RPS on and RFS off, homa_qdisc configured on each tx queue, switch DSCP priority mapping, and TSO. INSTALL.md says software GSO is 'temporarily broken', so on NICs that won't segment Homa packets the fallback is TCP hijacking. Hijacked packets masquerade as TCP and can be dropped by datacenter switch filters.
+- The API has changed repeatedly. Homa 2.0 (Dec 2022) moved to sendmsg/recvmsg with an app-supplied mmap'd buffer pool. homa_send/homa_recv/homa_reply were removed in May 2025, private-RPC flags changed in Mar 2025, and since Feb 2025 unbound sockets reject incoming requests. Netdev review is expected to change the API again.
+- Receive buffers are registered up front (page-aligned region, 'tens of MB'). recvmsg returns ENOMEM when the pool is exhausted, and bpages are only returned to Homa on the next recvmsg. Raising the 1 MB message cap means editing a static_assert and recompiling every app (issue #48).
+- The upstream series (v20, posted 2026-09-14) is stripped to about 8,000 of 20,000 lines, and its cover letter says its performance is 'about the same as TCP'. The fast paths (grant scheduling, qdisc, hijack, GRO offload) exist only in this out-of-tree repo. notes.txt also records grant 'stranding' under very high load in large clusters, capping throughput at about 60-70% of link bandwidth. One rtt_bytes value is used for all peers, and the SIGCOMM incast optimization is not implemented.
+
+**Status:** Actively maintained by John Ousterhout (last commit 2026-09-25, upstreaming in progress on netdev). BSD-2-Clause OR GPL-2.0+ via per-file SPDX headers, so it is copyable, but it is an out-of-tree kernel module that must be rebuilt and ported for each kernel version it runs on.
+
+[repo](https://github.com/PlatformLab/HomaModule) · [benchmark](https://www.usenix.org/system/files/atc21-ousterhout.pdf)
+
 ### parsing-and-text
 
 #### csv-tabular
@@ -7091,6 +9248,2864 @@ Staged, typed OCaml parser combinators (MetaOCaml) that beat ocamlyacc/ocamllex 
 [repo](https://github.com/yallop/ocaml-asp) · [benchmark](https://www.cl.cam.ac.uk/~jdy22/papers/a-typed-algebraic-approach-to-parsing.pdf)
 
 ## Permissive — Unverified claims (tier C/D)
+
+### networking-and-servers
+
+#### dns-quic-http3
+
+##### Bundy-DNS (l1cache experimental branch)  `C++`  `ISC`  `active`  `Tier C`
+
+Bundy's unpublished l1cache experiment: pre-rendered wire-format DNS answer cache, claimed 180K vs 41K qps over BIND 9.9.2.
+
+**Beats:** BIND — A first-party design memo committed in December 2013 reports that an experimental cache-only server with fully rendered cached answers handled over 180K qps, against 41K qps for BIND 9.9.2 (about 4.4x), measured with a 'queryperf-like' tool on one core of a 2.20GHz AMD64 machine. It gives no CPU model, compiler, flags, query set or BIND configuration, and the benchmarked code is not public.
+
+**Known shortcoming:** The benchmarked l1cache branch is not in the public repo, so the 4.4x over BIND 9.9.2 (single core, 2.2 GHz AMD64) cannot be reproduced. The project is in 'hibernation': last code commit 2017, later commits edit only the README.
+
+**Known shortcoming:** The shipped cache is a different, unfinished design (unbound-style message cache; LRU, dump/load and DNSSEC AD flags TODO) and the resolver is an experimental proof of concept (#110 proposes removing it). Build is broken on current toolchains (#102, #114, #115, #123). The benchmark gives no BIND setup, CPU, compiler or flags, and its links are dead. Enrichment confidence 0.3 (below the 0.4 flag threshold).
+
+**How:** It is a full-response ('L1') cache. The hash table is keyed by (query name, type), and each entry holds the answer section already rendered in wire format (it assumes minimal-responses) plus the offset of each RR, so TTLs can be patched in place or RRs rotated. When neither is needed, a hit is just a hash lookup and a copy of the stored bytes: no RRset lookups, name compression or message rendering. It relies on skewed query popularity (in two datasets the top 10,000 queries covered about 80% of traffic), so the whole cache was about 5 MB, small enough for each process or thread to keep a private copy with no lock contention.
+
+**Use it when:**
+- As a design reference for a resolver or DNS front-end: put a small per-thread cache of pre-rendered answers in front of a shared record cache.
+- Traffic where most queries hit the cache and a few names dominate (the memo's data: top 10k names about 80% of queries) and answer-only minimal responses are acceptable.
+- Capacity planning: the memo's model A = rQ2/(rQ2 + Q1(1-r)) estimates what share of server time goes to cache hits at a given hit rate r (about 72-76% at r = 0.9 in its experiments).
+- Prototyping DNS features on the Bundy codebase, which its README recommends because much of it is Python.
+
+**Skip it when:**
+- When you need runnable code: the benchmarked jinmei-l1cache branch is not published (the repo has 21 branches and none of them is l1cache), so it cannot be built or reproduced.
+- Production DNS of any kind: the README puts Bundy in 'hibernation' with no development and no security fixes and says not to use it in production, and open issue #110 proposes removing the resolver code entirely.
+- DNSSEC validation or full responses with authority and additional sections: the memo says the experiment 'skips some necessary features for a production server' and caches only the answer section.
+- Modern toolchains: open issues report build failures with Boost 1.60 (#102), Clang 8 on macOS 10.12 (#114, #115) and newer Python headers under -Werror (#123), and GCC 4.9 needs -std=c++11 (#119).
+- When you want a maintained resolver that beats BIND on cache-hit throughput: use Unbound.
+
+**Integration:** source-drop (the benchmarked l1cache code is unpublished; Bundy itself is an autotools-built daemon suite and requires shared libraries) · Boost headers (>=1.35; fails with 1.60 per #102), Botan >=1.8, log4cplus >=1.0.3, SQLite3 >=3.3.9, Python >=3.1 with dev headers; bundled ext/asio and ext/coroutine (BSL-1.0); googletest optional · C++03-era code; the guide lists tests with GCC 3.4.3-4.4.1, Clang++ 2.8 and Sun C++ 5.10; GCC 4.9 needs -std=c++11 (#119); recent Boost, Clang and Python fail to build per open issues · The guide lists tested builds on Debian 6, Ubuntu 9.10, NetBSD 5, Solaris 10/11, FreeBSD 7/8, CentOS 5.3, macOS 10.6/10.7 and OpenBSD 5.1, on Sparc, i386 and amd64; the l1cache figure comes from one 2.20GHz AMD64 core only
+
+**Vs siblings:** Pick it only as a design idea for a per-thread pre-rendered answer cache. For a caching resolver you will actually run, Unbound is the maintained sibling that also beats BIND on cache-hit qps. Nail and Hickory DNS are the BIND alternatives with public code, but they target authoritative serving and query latency, not resolver caching.
+
+**Gotchas:**
+- The 180K qps figure is for a cache-only experiment answering hits. The author says a production version 'wouldn't be that fast' and only projects that more than 100K qps 'may not be very difficult' once recursion is included.
+- The fast path is a hash lookup plus a copy only when neither TTL adjustment nor RR rotation is needed; either one adds per-hit rewriting through the stored RR offsets.
+- Claims that it is 'much faster than other implementations that have full response cache' give no numbers or names, and the memo calls the comparison 'not entirely fair'. The memo's other experiments ran BIND 9.9.2 forward-only with crafted query data, but the setup for the 41K qps BIND run is not stated.
+- Do not mistake the shipped src/lib/cache for the benchmarked design: its TODO says the LRU hash table is not yet used, dump/load/resize are not implemented and DNSSEC AD flags are not set. The memo's links (lists.bundy.org, bundy.bundy.org wiki) are dead; the original 2012 ISC bind10-dev post survives but has no qps figures for this server.
+
+**Status:** The 2026 commits only edit README.org; the last code commit was 2017-05-10 and the README declares hibernation with no security fixes. The code is ISC-licensed (asio and coroutine are BSL-1.0), but the benchmarked l1cache implementation was never published, so there is nothing to vendor and the entry is usable only as a documented technique.
+
+[repo](https://github.com/bundy-dns/bundy) · [benchmark](https://github.com/bundy-dns/bundy/blob/master/doc/design/resolver/03-cache-algorithm)
+
+##### dnspython  `Python`  `ISC`  `active`  `Tier C`
+
+Pure-Python DNS toolkit; gevent's wrapper for it beat gevent's c-ares resolver on the maintainer's macOS, but lost on Linux.
+
+**Beats:** c-ares — On one unspecified macOS machine with a local dnsmasq that caches everything, gevent's maintainer measured gevent's dnspython resolver ahead of gevent's c-ares resolver: about 2-4.4x on 300 sequential gethostbyname calls and 8.6-13x on 100 parallel greenlet lookups (Feb 2018, dnspython cache off, PyPy 2 5.10 and CPython 2.7/3.6/3.7b1), and 147 us vs 6.56 ms per lookup (about 45x) with gevent's bench_dns_resolver.py on CPython 3.7.0 (Oct 2018, LRUCache on). The result is contested: the same script on Linux Mint 19.1 (CPython 2.7.15rc1) gave c-ares 36.7 us vs dnspython 100 us (c-ares about 2.7x faster); dnspython's per-lookup time was similar on both machines (147 vs 100 us), and c-ares differed about 180x (6.56 ms vs 36.7 us), so the flip comes from c-ares on the macOS setup (all ratios derived from page data; no CPU models given).
+
+**Known shortcoming:** Contested and platform-dependent: the gevent maintainer's macOS runs (local caching dnsmasq) show dnspython 2-45x faster, but a Linux Mint rerun of the same script found c-ares 2.7-3.1x faster, an earlier Linux run ~17x faster, and the maintainer's own uncached test against 8.8.8.8 ~3x faster; dnspython's per-lookup time was similar on both machines while c-ares differed ~180x. It compares gevent's wrappers, not the libraries: gevent attaches a TTL LRU cache to dnspython (plain dnspython caches nothing), the harness builds a new c-ares channel inside every timed call while dnspython reuses a warm resolver, and dnspython's CNAME lookups are disabled. Data is 2018-19 (dnspython 1.15 era), never re-run; c-ares 1.31+ caches by default and gevent now bundles 1.34.5. gevent still labels its dnspython resolver experimental. dnspython itself does not read /etc/hosts (gevent's wrapper does). Versions before 2.6.1 are affected by CVE-2023-29483 (TuDoor DoS).
+
+**How:** There is no new algorithm; the measured win comes from how gevent uses dnspython. gevent attaches a TTL-respecting, thread-safe dns.resolver.LRUCache to one module-global dnspython resolver (dnspython caches nothing by default), so repeat lookups are answered in-process with no network round trip; the maintainer reported that turning the cache on cut the parallel run from 0.18-0.29 s to 0.05-0.07 s. Under gevent monkey-patching, dnspython's pure-Python sockets become cooperative, so 100 greenlet lookups overlap: on the maintainer's machine the parallel run took 16-22% of the sequential time, against 65-82% for c-ares. The benchmark harness also creates a new gevent c-ares Resolver, and so a new c-ares channel, inside every timed call, while each new dnspython Resolver reuses the shared, already-warm resolver.
+
+**Use it when:**
+- gevent programs that make many concurrent lookups, where the default threaded resolver is not acceptable and you have measured gevent's c-ares resolver as slow on your own platform (the published win is from macOS only).
+- Workloads that look up the same names many times, where an in-process cache that obeys DNS TTLs, can be sized (set_max_size) and can be flushed is useful.
+- Anything beyond A/AAAA lookups: arbitrary record types, zone transfers, dynamic updates, TSIG, EDNS0, DNSSEC, and DNS over HTTPS, TLS or QUIC through optional extras.
+- asyncio or Trio code that needs a native async resolver (dns.asyncresolver) instead of running getaddrinfo in a thread pool.
+- PyPy or other deployments where you want no C extension: dnspython has no required dependencies, and gevent's docs call its own c-ares resolver 'extremely experimental on PyPy' with possible interpreter crashes.
+
+**Skip it when:**
+- gevent services on Linux. The only independent rerun of gevent's script (Linux Mint 19.1, CPython 2.7.15rc1, gevent 1.3.7, local dnsmasq) had c-ares at 36.7 us vs dnspython at 100 us per sequential lookup and 32.8 vs 103 us in parallel, so c-ares was about 2.7-3.1x faster (derived from page data).
+- Uncached lookups against a remote resolver. In the PR's first test (100 lookups against 8.8.8.8), c-ares took 50-53 s and dnspython 156-162 s, so c-ares was about 3x faster; the same user's earlier Linux run with the older script had dnspython at 5.46 s vs c-ares at 0.31 s (best of 5).
+- When you need system resolution semantics. dnspython does not read /etc/hosts, and its README says socket.getaddrinfo() or socket.gethostbyname() is better for simple forward lookups.
+- CPU-bound, very high-rate resolution: every response is parsed in Python. Issue #259 showed large A/AAAA answers burning CPU in the old O(n^2) set code; the new set code fixed it, but parsing is still interpreted.
+- When you need a current number: all measurements are from 2018-2019 (dnspython 1.15-era on Python 2.7/3.6/3.7) and were never re-run. Since c-ares 1.31.0 the c-ares query cache is on by default (gevent now bundles c-ares 1.34.5), which removes the cache asymmetry the old runs depended on.
+
+**Integration:** module · none for the default install (standard library only). Optional extras: dnssec (cryptography), doh (httpcore2, httpx2, h2), doq (aioquic), idna, trio, wmi (Windows only). The benchmarked setup also needs gevent. · Python 3.10+ (dnspython 2.8.0 and 2.9.0 dev); Python 2 support ended with 1.16.0 · any platform with CPython 3.10+ (package classifiers list POSIX and Windows); gevent's changelog says the dnspython backend works on PyPy
+
+**Vs siblings:** The catalogued siblings are DNS servers (Unbound, Hickory DNS, Nail, Bundy-DNS, measured against BIND) and QUIC stacks, and none is a client-side Python resolver library. Pick dnspython when resolution or DNS message and zone handling must happen inside a Python process, and pair it with a local caching server such as Unbound; for native code or Linux gevent services, the c-ares baseline is the better-measured choice.
+
+**Gotchas:**
+- dnspython's resolver does not cache unless you assign a cache (resolver.cache = dns.resolver.LRUCache()). The gevent benchmark had gevent's LRUCache on, so direct dnspython users without a cache will not see those numbers.
+- gevent's wrapper adds its own hosts-file layer (reloaded every 300 s) and, by default, extra CNAME queries for aliases. gevent's benchmark turns the alias lookups off for dnspython because c-ares does not do them.
+- gevent still documents the dnspython resolver as '*experimental*' and says it 'may be removed or modified in the future'; errors and IPv6 scope-ID handling differ from the standard library.
+- Use 2.6.1 or later: CVE-2023-29483 (GHSA-3rq5-2g8h-59hc, the 'TuDoor' DoS through spoofed responses in the stub resolver) affects versions before 2.6.1.
+
+**Status:** Actively maintained (last commit 2026-09-26; latest PyPI release 2.8.0 on 2025-09-07, 2.9.0 in development) and ISC-licensed pure Python with no required dependencies, so it is easy to adopt; gevent still labels its dnspython backend experimental.
+
+[repo](https://github.com/rthalley/dnspython) · [benchmark](https://github.com/gevent/gevent/pull/1088)
+
+##### Hickory DNS (formerly Trust-DNS)  `Rust`  `MIT OR Apache-2.0`  `active`  `Tier C`
+
+Memory-safe Rust DNS server, resolver and protocol crates; matches BIND 9.11 on single-query UDP latency, within noise.
+
+**Beats:** BIND — In the author's 2017 libtest bench, one client sent serial UDP A queries for www.example.com over loopback to a local authoritative server with the same zone. TRust-DNS took 68,173 ns/iter (+/- 11,699) and BIND 9.11 took 69,576 (+/- 3,620), which is about 2% lower and within TRust-DNS's spread. TRust-DNS was a release build on an unstated nightly rustc. BIND was built with default configure (Apple LLVM 7.3.0, -g -O2), and both ran on an aging x86_64 macOS laptop (Darwin 16.1.0) with no CPU model given.
+
+**Known shortcoming:** Parity, not a win: 68,173 vs 69,576 ns/iter (~2%) is inside the reported +/-11,699 ns spread. Compared against BIND 9.11 built -g -O2 with Apple LLVM 7.3.0; no CPU or rustc version.
+
+**Known shortcoming:** Its own README says running the server in production is not recommended; an open issue reports ~50% query loss under dnsperf (#2613, possibly a debug build). The in-repo BIND comparison bench is stale (nightly-only, BIND benches ignored). Use >= 0.26.3: 0.26.2 fixed 38 advisories and 0.26.1 fixed an O(n^2) name-compression DoS (GHSA-q2qq-hmj6-3wpp). Not a drop-in for BIND (TOML config; no IXFR, NOTIFY or offline signing; recursor experimental).
+
+**How:** The 2017 work took allocations and copies off the UDP query hot path. `LowerName` stores names pre-lowercased, so case-insensitive comparison becomes a plain byte compare (the author's microbench fell from 255 to 7 ns for short names). `MessageResponse<'q, 'a>` borrows records from the zone instead of cloning them. The original query bytes are echoed rather than re-serialized, EDNS is streamed straight to the encoder, and the label-compression table was changed from `HashMap<Vec<String>, u16>` to buffer offsets. The server runs on a multi-threaded Tokio runtime (`--workers` defaults to the CPU core count) and spawns one task per UDP request.
+
+**Use it when:**
+- A Rust program needs an embedded authoritative DNS server or stub resolver as a library, instead of running and managing a separate BIND process.
+- Small to medium authoritative zones served from memory, zone files or SQLite, where latency equal to BIND is enough and memory safety is the main reason to switch.
+- In-process encrypted DNS transports (DoT, DoH, DoQ, DoH3) through rustls, using aws-lc-rs or ring as the crypto provider.
+- Dynamic update with SIG(0)/TSIG and a SQLite journal, plus online DNSSEC signing (NSEC/NSEC3) that re-signs zones on each update.
+- Replacing the OS resolver inside a Rust application with `hickory-resolver`, which also offers no_std support in `hickory-proto`.
+
+**Skip it when:**
+- You expect a speedup over BIND. The only evidence is one 2017 serial-latency microbench at about 2% (inside noise), with no qps or throughput numbers, and TCP, dynamic update and DNSSEC signing were not measured.
+- High-QPS production serving. The binary's README says 'running in production is not recommended'. Issue #2613 (open) reports about 50% query loss under dnsperf with 100 clients, and scalability testing (#2643) is still an open TODO.
+- Primary/secondary deployments that need IXFR (RFC 1995), NOTIFY (RFC 1996), offline zone signing or `named.conf` compatibility. The README lists all of these as not implemented.
+- Validating recursive resolution. The recursor is marked experimental, and most of the 38 advisories fixed in v0.26.2 hit DNSSEC validation, the recursor or the cache.
+- Stacks that cannot upgrade quickly. The project is pre-1.0 (main is 0.27.0-alpha.1), crates are regularly split, renamed or removed, and only the latest minor release gets security fixes.
+
+**Integration:** crate · tokio; rustls with aws-lc-rs or ring (crypto features only); optional quinn/h3 (DoQ/DoH3), h2/hyper (DoH), rusqlite with bundled SQLite (default `sqlite` feature in the binary), tikv-jemallocator (optional) · Rust 1.88 (workspace rust-version; the MSRV is guaranteed only for `--no-default-features` builds). The comparison bench needs nightly (`#![feature(test)]`). · CI runs on Linux, macOS and Windows (latest images). `hickory-proto` supports no_std and has a wasm-bindgen feature.
+
+**Vs siblings:** Pick Hickory over Unbound (about 3.4x BIND cache-hit qps) when you need an embeddable Rust library or in-process DoQ/DoH3 rather than a standalone high-throughput C resolver. Pick it over Nail and the Bundy-DNS l1cache branch (about 2.9x and 4.4x BIND throughput claims) when a maintained, published crate matters more than raw qps, because those two are research or experimental code.
+
+**Gotchas:**
+- Always benchmark `--release` builds. The first 2017 result (400 us vs 100 us) came from a debug binary, and the #2613 report was built with plain `cargo run`.
+- The in-repo `bin/benches/comparison.rs` is nightly-only and its BIND benches are `#[ignore]`d. They need `TDNS_BIND_PATH` pointing at a self-built named, and the named config path still points at the old `server/benches/` layout, so reproducing the BIND comparison probably needs path fixes.
+- Use v0.26.3 or later. v0.26.2 (2026-09-03) fixed 38 advisories, including DNSSEC proof forgery, zone-parser panics and DoH/DoQ memory exhaustion, and v0.26.3 fixed regressions it introduced. hickory-proto before 0.26.1 also has an O(n^2) name-compression CPU DoS (GHSA-q2qq-hmj6-3wpp) in the encoder path the 2017 work optimized.
+- Crypto features carry a provider suffix (`tls-ring` vs `tls-aws-lc-rs`, `dnssec-ring`, etc.). DNSSEC and encrypted transports are off until you enable one of them.
+
+**Status:** Actively maintained (pushed 2026-09-26; v0.26.3 released 2026-09-10) under MIT OR Apache-2.0 and published on crates.io. It is still pre-1.0, and its own server README advises against production use.
+
+[repo](https://github.com/hickory-dns/hickory-dns) · [benchmark](https://bluejekyll.github.io/blog/posts/making-trust-dns-fast/)
+
+##### ls-qpack  `C`  `MIT`  `active`  `Tier C`
+
+LiteSpeed's C QPACK (RFC 9204) codec. On one 2019 trace, its history-gated indexing out-compressed nghttp3 1.3-2.2x.
+
+**Beats:** nghttp3 (QPACK encoder compression ratio); nghttp2/nginx Huffman coder (shared HPACK/QPACK Huffman alphabet) — There are two first-party measurements. The first compares file sizes of encodings committed to qpackers/qifs for the Facebook response trace (351,937 bytes, 4 KB table): ls-qpack's Oct-2019 output was 0.16 of source bytes vs 0.21 for nghttp3's Feb-2019 draft-era output with blocked streams allowed, and 0.18 vs 0.39 without; this measures bytes, not speed, and was never re-run. The second times the Huffman coder that ls-qpack shares with ls-hpack, as standalone C built -O3 -DNDEBUG (median of 5; compiler and CPU not stated): the decoder was 1.15-1.96x faster than nginx 1.16.1, and the encoder was 1.11-2.12x faster than nginx, 1.18-3.59x faster than h2o and 2.37-5.77x faster than a 2016 nghttp2 encoder that nghttp2 replaced in Oct 2019.
+
+**Known shortcoming:** The speed evidence is the Huffman coder shared with ls-hpack, whose 2.37-5.77x encoder win is against 2016 nghttp2 code that nghttp2 rewrote nine days after the 2019 post (stale). The ls-qpack-specific evidence is a compression ratio vs nghttp3 (0.16-0.18 vs 0.21-0.39), not speed, and the nghttp3 encodings date from 2019-02 and were never re-run. The nginx Huffman comparisons still hold. No compiler named (Makefiles use -O3 -DNDEBUG).
+
+**Known shortcoming:** No runtime benchmark of the QPACK codec against nghttp3 exists; nghttp3 got its own table-driven Huffman coder a day after LiteSpeed's 2019 post and tuned decoding again in 2025. The compression-ratio figures are 2019 draft-era encodings (4 KB table, one trace), never re-run, measuring bytes not speed. The decoder deliberately accepts Sign=1 with Required Insert Count 0, which RFC 9204 forbids (#90). Recent security fixes: heap use-after-free present Oct 2020 to v2.6.5 (#87), double-free fixed v2.6.6, decoder hardening in v2.6.3, infinite loop on >65535-byte headers fixed v2.6.0 (#69); pylsqpack (aioquic) and msh3 still pin v2.6.2. Integration hazards: decoder capacity must match SETTINGS since v2.6.3, lsqpack_enc_cancel_header semantics changed in v2.7.0, fields over 64 KB need a rebuild with LSXPACK_MAX_STRLEN. 768 KB of Huffman tables; cmake_minimum_required(3.1) fails on CMake 4.x without a policy override; README still calls QPACK a draft. Unlike ls-hpack, the Huffman padding/UB fixes are in the tagged v2.6.3+.
+
+**How:** The compression edge comes from the encoder's 'mnemonic' indexing. The encoder keeps a FIFO ring of 32-bit XXH32 hashes of recently seen names and name+value pairs, and it inserts a field into the dynamic table only if that field was seen recently. The ring is resized to follow a running average of dynamic-table entries, and indexing is skipped when two literals would push the cumulative output/input ratio above 0.95. The speed claims come from the Huffman coder that ls-qpack shares with ls-hpack. It has a 65,536-entry two-byte encode table (hencs, 512 KB) and a decode table indexed by 16 bits (hdecs, 256 KB) that emits 1-3 bytes per lookup, with fallback to the byte-at-a-time encoder and the 4-bit state-machine decoder. Static-table matching uses seeded XXH32 into 512-slot arrays, and dynamic-table matching uses chained hash buckets by name and by name+value.
+
+**Use it when:**
+- You are adding HTTP/3 in C/C++ on a QUIC transport that has no QPACK of its own. ls-qpack is the QPACK layer inside lsquic, and msh3 uses it on top of MsQuic.
+- Header bytes on the wire matter more than codec CPU, for example on a server answering many requests per connection with repetitive but non-standard headers. With a 4 KB table on the Facebook response trace, it produced 0.16-0.18 of the source bytes, the best of the six encoders LiteSpeed compared.
+- You run with max_risked_streams=0 (no blocked streams). In that mode the 2021 comparison showed the widest gap: 0.18 vs 0.39 for nghttp3's 2019 encoding and 0.25-0.61 for the others.
+- You bridge HTTP/3 to HTTP/1.1. LSQPACK_DEC_OPT_HTTP1X writes 'name: value\r\n' straight into your buffer, and LSQPACK_DEC_OPT_HASH_NAME and LSQPACK_DEC_OPT_HASH_NAMEVAL fill in XXH32 hashes the caller can reuse.
+- You must feed header blocks as they arrive without buffering the whole HEADERS frame. The decoder is streaming and tracks dynamic-table IDs modulo 2*MaxEntries, so no counter can overflow.
+
+**Skip it when:**
+- You need evidence that it uses less CPU than nghttp3. No runtime benchmark of the QPACK codec exists. The Huffman timings compare against nginx, h2o and a 2016 nghttp2 encoder, and nghttp3 got its own table-driven Huffman encoder and decoder on 2019-10-04/05 (tuned again 2025-11-02), which were never compared.
+- You need strict RFC 9204 conformance testing. The decoder accepts Sign=1 when Required Insert Count is 0, which §4.5.1.2 forbids (#90, open). The maintainer keeps this on purpose because the MUST was added during AUTH48.
+- Your header names or values can exceed 64 KB. lsxpack_strlen_t is uint16 unless you build with LSXPACK_MAX_STRLEN=UINT32_MAX. Before v2.6.0, a header over 65535 bytes caused an infinite loop at 100% CPU (#69).
+- L2 cache or binary size is tight. The default build carries the same 768 KB of read-only Huffman tables as ls-hpack. CMake MinSizeRel sets LS_QPACK_USE_LARGE_TABLES=0 and falls back to the slower small-table paths.
+- You would use it through a pinned wrapper on untrusted input. pylsqpack and msh3 both pin v2.6.2 (1e9c5b8e59). That version predates the v2.6.3 hardening, the v2.6.5 fix for use-after-free #87 (introduced by baf1164 in Oct 2020) and the v2.6.6 double-free fix. The v2.6.3 hardening covers Huffman padding over 7 bits, WINR/WONR capacity checks, a shift UB, Header Ack for an in-progress block and ICI 32-bit overflow.
+
+**Integration:** static lib by default via CMake (BUILD_SHARED_LIBS=ON for a shared lib); installs the ls-qpack::ls-qpack CMake export and lsqpack.pc. Also works as a source-drop: lsqpack.c + huff-tables.h + lsqpack.h + lsxpack_header.h + xxhash. · xxHash, bundled in deps/xxhash and on by default (LSQPACK_XXH=ON), or external through the xxHash CMake config or pkg-config libxxhash. <sys/queue.h> (a wincompat copy is used on Windows/Emscripten). <math.h> (fabsf, round); lsqpack.pc lists no -lm. Tools and tests need getopt on Windows. · C99 ('vanilla C99' per README). CMakeLists declares cmake_minimum_required 3.1, which CMake 4.x rejects unless you pass -DCMAKE_POLICY_VERSION_MINIMUM=3.5. AppVeyor pins CMake 3.31.7 with VS 2017. · Linux, macOS, FreeBSD/OpenBSD/NetBSD, Windows (MSVC), MinGW and Emscripten (#72). s390x big-endian was fixed in 2025 (#76, #77). Portable scalar C with no SIMD, with 32- and 64-bit code paths. On Windows and on any OS outside the endian #if chain, __BYTE_ORDER is undefined and the little-endian Huffman table layout is used. On v2.7.0 only AppVeyor (Windows) reports CI status; .travis.yml (xenial, gcc-8) and .cirrus.yml (FreeBSD 13.3) exist but posted no status.
+
+**Vs siblings:** None of the catalogued siblings is a standalone QPACK codec. LSQUIC already embeds ls-qpack, ngtcp2 normally pairs with nghttp3, and the rest are transports or DNS servers. Pick ls-qpack when your QUIC stack needs a QPACK layer and smaller header bytes on the wire matter. On ngtcp2+nghttp3, the only case for switching is the 2019-era compression-ratio data, since no CPU comparison exists.
+
+**Gotchas:**
+- Pass lsqpack_dec_init the same table capacity you advertise in SETTINGS_QPACK_MAX_TABLE_CAPACITY, because MaxEntries and ID mapping derive from it. A 2022 change that tolerated a mismatch (#44) was reverted in v2.6.3 as invalid.
+- Do not free or modify the lsxpack_header inside dhi_process_header on versions before v2.6.5. Until then the library read name_len/val_len after the callback, a heap use-after-free (#87) that the still-open #38 described in 2021. OpenLiteSpeed did not free there, so the bug went unnoticed.
+- v2.7.0 changed lsqpack_enc_cancel_header: it now cancels header blocks that use the dynamic table. Encoder-stream bytes already produced must still be sent. Entries inserted for a cancelled block can pin the table if the peer never sends Insert Count Increment.
+- The CMake option LSQPACK_BIN defaults ON and builds and installs four tools: interop-encode, interop-decode, fuzz-decode and encode-int. On Windows this fails with FATAL_ERROR without getopt.h, so pass -DLSQPACK_BIN=OFF. No CMAKE_BUILD_TYPE is set by default. LSXPACK_MAX_STRLEN changes struct lsxpack_header's layout, so build the library and its callers with the same value.
+
+**Status:** Actively maintained: five releases from v2.6.3 (2026-06-15) to v2.7.0 (2026-07-30). Unlike ls-hpack, the Huffman-padding and shift-UB fixes are in a tagged release, and lsquic pins v2.7.0. MIT-licensed; one .c file, a 4.4 MB generated table header and bundled xxHash make it easy to vendor.
+
+[repo](https://github.com/litespeedtech/ls-qpack) · [benchmark](https://blog.litespeedtech.com/2021/04/05/qpack-mnemonic-technique/)
+
+##### mvfst  `C++`  `MIT`  `active`  `Tier C`
+
+Meta's C++ IETF QUIC transport (client+server) under Proxygen HTTP/3; cut Facebook-app tail latency 20% vs HTTP/2-over-TCP.
+
+**Beats:** HTTP/2 over TCP (Facebook's prior production transport stack) — Meta's staged production rollout of QUIC/HTTP-3 (mvfst + Proxygen, BBR as primary congestion control) in the Facebook app, against its prior HTTP/2-over-TCP stack, reported 20% lower tail latency (percentile unstated), 6% fewer request errors and 5% smaller response headers on dynamic requests, plus up to 22% better mean time between rebuffering, 8% fewer errors and 20% fewer stalls on video. No hardware, compiler, network mix or fixed workload is given, and app flow-control and bandwidth heuristics were retuned, so this measures the protocol switch, not mvfst's code speed.
+
+**Known shortcoming:** Evidence is Meta's 2020 production rollout (20% lower tail latency, 6% fewer errors, 5% smaller headers, up to 22% less video rebuffering vs HTTP/2 over TCP): wins for QUIC as a protocol, not a measure of mvfst's own code speed; the post says mvfst's CPU efficiency had to be optimized. No fixed workload or hardware. Repo moved to github.com/facebook/mvfst.
+
+**Known shortcoming:** The 2020 production A/B also retuned BBR, app flow control and bandwidth heuristics; no hardware, compiler, workload or tail percentile given; 5% smaller headers has no stated cause. Maintainers say HTTP/3 over mvfst has higher per-transaction CPU cost than TCP+HTTP/2 (#124) and tops out around >3 Gbps per stream per thread, 4-5 Gbps on 10G (#127). Over emulated GEO satellite links it does well as a server, poorly as a client (arXiv 2202.08228). Defaults aren't the production config: Cubic, pacing off, no GSO, 1252-byte UDP payload, 65 KiB per-stream and 1 MiB per-connection windows (#166). CVE-2021-24029 (assertion crash, CVSS 7.5), CVE-2025-30403 (heap overflow, CVSS 8.1, fixed v2025.07.07.00); replayed packets were re-processed until a 2026 fix (#428). README calls the API alpha; weekly date-tagged snapshots with no semver/ABI promise; heavy dependencies (folly, fizz, Boost, fmt, glog, gflags, OpenSSL); Linux 4.18+, CentOS 7/GCC 7 fail, macOS shared builds broken (#326); now C++20.
+
+**Independent measurement:** 'QUIC on the Highway' 10G study (arXiv 2309.16395, early-2023 builds): an mvfst client+server pair reached 1198 Mbit/s vs quiche 2506, LSQUIC 3004 and TCP/TLS 8010 Mbit/s; mvfst client to picoquic server only 52 Mbit/s.
+
+**How:** The measured gains are protocol-level: QUIC over UDP multiplexes streams without TCP's cross-stream head-of-line blocking, and Meta ran it with BBR as its primary congestion controller, retuning app flow-control limits and bandwidth-estimation heuristics that had been implicitly tuned for TCP. On the implementation side, the server uses a thread-local worker per core with connection IDs that encode host, worker and process IDs, so an L4 load balancer (Katran) and in-process routing avoid cross-thread handoff and survive zero-downtime restarts. Meta cut CPU cost with UDP GSO batching (also sendmmsg and sendmmsg+GSO writers), smoother userspace packet pacing, and reworked data structures for unacknowledged packets. Recent code adds an optional io_uring event-base backend, MSG_ZEROCOPY sends and an AF_XDP sender.
+
+**Use it when:**
+- HTTP/3 or custom QUIC for mobile apps (Android/iOS) on lossy or high-latency networks where tail latency, request errors and video rebuffering matter more than bulk throughput.
+- You already run Folly/Fizz/Proxygen, or will adopt them, and want the QUIC stack that serves Meta's own app traffic.
+- Large server fleets behind an L4 load balancer: connection-ID routing that works with Katran, per-worker CPU scaling, and APIs for zero-downtime socket takeover during restarts.
+- Congestion-control work: Cubic, NewReno, Copa, BBR, BBR2 and static-cwnd/none ship in-tree, a Custom controller type can be plugged in, and Meta's MVFST-RL reinforcement-learning congestion-control framework targets it.
+- Linux servers that can use GSO/sendmmsg batching, MSG_ZEROCOPY or the optional io_uring backend to lower per-packet syscall cost.
+
+**Skip it when:**
+- Maximum bulk throughput per core: in the 'QUIC on the Highway' 10G benchmark (early-2023 builds), an mvfst client+server pair reached 1198 Mbit/s vs 2506 for quiche and 3004 for LSQUIC (TCP/TLS: 8010). In 2020 the maintainers cited >3 Gbps single stream on one thread and 4-5 Gbps at best on 10G, limited by kernel copies and crypto.
+- CPU-constrained servers: a maintainer stated (2020) that HTTP/3 over mvfst is 'not less performant than TCP + HTTP/2, albeit at a higher per-transaction CPU cost'.
+- Small footprint, embedded use or a C ABI: it pulls in Folly, Fizz, Boost, fmt, glog, gflags and OpenSSL, has no C API, and builds are heavy (users report getdeps filling /tmp).
+- Old platforms: the build includes linux/if_xdp.h, so the maintainers require Linux 4.18+ (CentOS 7 fails), and GCC 7 toolchains fail on the dependencies.
+- You need a stable API or semver: the README calls the API alpha, and releases are weekly date-tagged snapshots (e.g. v2026.09.21.00) that must match folly/fizz snapshots.
+
+**Integration:** static lib (CMake builds per-module static libraries, or one monolithic shared libmvfst when building shared; shared builds have had macOS link failures) · folly, fizz (TLS 1.3), Boost >=1.69 (headers), fmt, glog, gflags, OpenSSL, Threads; optional liburing (io_uring backend) and libev (alternative event base). Built most easily with Meta's getdeps.py, which fetches and builds matching versions. · C++20 (top-level CMakeLists sets CMAKE_CXX_STANDARD 20), CMake 3.14+; minimum compiler versions not documented (GCC 7 fails). · Linux (4.18+ per maintainers; GSO, io_uring and AF_XDP are Linux-only), macOS and Windows (CI builds via getdeps), plus Android/iOS mobile build variants; architecture requirements not documented.
+
+**Vs siblings:** Pick mvfst over LSQUIC, ngtcp2, picoquic, TQUIC or quiche when you are on Meta's Folly/Fizz/Proxygen stack or need its fleet features (Katran-aware connection-ID routing, socket takeover, pluggable BBR/Copa); pick LSQUIC or ngtcp2 when goodput per core or a small C library matters. Like Google QUICHE's entry, its evidence is a production A/B against the operator's own TCP stack, not a cross-stack benchmark.
+
+**Gotchas:**
+- Defaults are not the tuned production setup: TransportSettings default to Cubic, pacingEnabled=false and batchingMode=NONE (no GSO). Maintainers say tperf defaults 'are not great' and need GSO, a large cwnd, large flow-control windows and more streams to reach Gbps rates.
+- The conservative default UDP send size (kDefaultV4UDPSendPacketLen = 1252 bytes) and small default flow-control windows (65 KiB per stream, 1 MiB per connection) cap throughput on high-bandwidth-delay links. One user got ~290 Mbit/s on a 500 Mbit/s emulated link until raising the receive window (#166).
+- Security history: CVE-2021-24029 (a crafted packet causes a crash via a failed assertion, CVSS 7.5) and CVE-2025-30403 (heap-buffer-overflow, CVSS 8.1, fixed in v2025.07.07.00). Until a 2026 fix, replayed packets were decrypted and processed again (#428). Track the weekly tags.
+- Performance depends on the peer: in the 10G study the mvfst-client/picoquic-server pair got only 52 Mbit/s, and over emulated GEO satellite links mvfst did well as a server but poorly as a client.
+
+**Status:** Actively developed by Meta (last push 2026-09-26, weekly date-tagged snapshots up to v2026.09.21.00) and MIT-licensed, but the README still calls the API alpha, and in practice it builds only with matching Folly/Fizz versions via getdeps.
+
+[repo](https://github.com/facebook/mvfst) · [benchmark](https://engineering.fb.com/2020/10/21/networking-traffic/how-facebook-is-bringing-quic-to-billions/)
+
+##### ngtcp2  `C`  `MIT`  `active`  `Tier C`
+
+Pure-C IETF QUIC transport library (RFC 9000); in one loopback harness, 1.5-2.1x quiche's bulk-transfer throughput.
+
+**Beats:** quiche — The run is victorstewart/quicperf's 2026-06-01 Linux loopback matrix. It used CUBIC for every library, one shared C++ harness with sendmmsg/GSO batching, -O3/native/LTO builds, ngtcp2 1.22.1 on BoringSSL and quiche 0.29.0 with fat LTO; the CPU model is not recorded and the tree was dirty. ngtcp2's p50 bulk throughput was 1.49-2.10x quiche's on the syscall backend (e.g. upload 31.0 vs 14.8 Gbps) and 1.35-1.71x on io_uring. In the same run it was 0.29-0.80x quiche on connect, request/response, stream-churn and DATAGRAM rates.
+
+**Known shortcoming:** Bulk-transfer only: in the same quicperf run ngtcp2 is slower than quiche on request/response, stream churn, small messages, 0-RTT, connect (0.41x), resumed connect and datagram rate. quicperf is a small personal harness with no CPU model, and the run came from a dirty working tree with uncommitted adapter edits.
+
+**Known shortcoming:** quicperf ran ngtcp2 and quiche unpaced (no ngtcp2_conn_update_pkt_tx_time; quiche's send_info.at ignored) and ngtcp2 with non-default settings (PMTUD off, payload shaping off, 1452-byte payload vs the 1200-byte default). Nobody explains why it is faster; batching is shared harness code. Benchmarked 1.22.1, upstream is 1.25.0. Two high-severity qlog CVEs (CVE-2024-52811, CVE-2026-40170, fixed in 1.22.1). ngtcp2_conn is not thread-safe (stated only in issue #1029). No multipath QUIC (#2318). LSQUIC beats it on upload-syscall and loss-recovery rows in the same run.
+
+**How:** Neither upstream nor the benchmark attributes the gap to a specific mechanism. The source shows copy-avoidance on both sides. In-order stream data goes to the recv_stream_data callback straight from the decrypted packet buffer, and only out-of-order data is copied into a reorder buffer (ngtcp2_rob). Outgoing stream data is borrowed from the application via ngtcp2_vec until acked_stream_data_offset fires, not copied into an internal send buffer. Internally it uses a deterministic paged skip list (ngtcp2_ksl), a Robin Hood open-addressing hash map with Fibonacci hashing (ngtcp2_map), and an object pool on a block allocator (ngtcp2_objalloc) to cut small-object malloc cost. In quicperf, sendmmsg and GSO batching live in the harness's shared C++ path for every library, so the measured gap reflects per-packet library cost, not socket I/O.
+
+**Use it when:**
+- Sustained bulk transfer (large downloads or uploads, several streams, or both directions at once): in quicperf it had the best p50 of all libraries on download, bidirectional (20.5 Gbps), multistream download and upload, and flow-control-limited rows.
+- C or C++ servers and clients that already own their event loop (epoll, io_uring, libev) and want a transport core with no external library dependencies.
+- Projects that must choose their TLS stack: BoringSSL/aws-lc, GnuTLS, wolfSSL, Picotls, LibreSSL, or OpenSSL >= 3.5 (experimental).
+- HTTP/3 clients built on nghttp3. curl documents ngtcp2 as its only non-experimental HTTP/3 backend; quiche is marked EXPERIMENTAL there.
+- Servers holding many mostly-idle connections: the run's lowest idle-footprint row was ngtcp2 over io_uring at about 76.5 KB per connection.
+
+**Skip it when:**
+- Connection-setup-heavy workloads: 113 vs 277 conn/s for quiche on fresh connects (0.41x) and 112 vs 301 on resumed connects (0.37x) in the same run.
+- Small request/response, stream churn or small-message rate: 51k vs 65k rps for quiche (0.80x). TQUIC (155k) and LSQUIC (119k) are far ahead in the same run.
+- High-rate unreliable DATAGRAM traffic: 1.50M vs 5.14M datagrams/s for quiche (0.29x).
+- Multipath QUIC: not supported (see open roadmap issue #2318).
+- Teams wanting a batteries-included stack: sockets, timers, pacing, CID-to-connection routing and TLS setup are all application code, and HTTP/3 needs a second library (nghttp3).
+
+**Integration:** static lib | shared lib · none for libngtcp2 itself. The crypto helper needs one TLS stack: BoringSSL/aws-lc, GnuTLS >= 3.7.5, wolfSSL >= 5.5.0, Picotls (pinned commit), LibreSSL >= 3.9.2, quictls (deprecated) or OpenSSL >= 3.5.0 (experimental). HTTP/3 needs nghttp3. The examples also need libev. · C11. README lists clang >= 19, gcc >= 15 and MSVC 2022 (1944) as known to work. Build with CMake >= 3.20, or autotools plus pkg-config >= 0.20. Only the examples need C++23. · Upstream CI covers Linux x86-64 and arm64, macOS, Windows x86/x64 (MSVC via vcpkg) and MinGW x86_64/i686 cross builds. No ISA-specific requirement is documented.
+
+**Vs siblings:** Pick ngtcp2 over quiche, picoquic, TQUIC and LSQUIC when multi-stream or bidirectional bulk throughput dominates. In the same quicperf run it beat LSQUIC's collapsed bidirectional and multistream rows (20.5 vs 2.1 Gbps bidirectional), though LSQUIC edged it on single-stream upload (33.5 vs 31.0 Gbps) and loss recovery (18.3 vs 17.4 Gbps). Choose TQUIC or LSQUIC for request/message rate, and picoquic or quic-zig for connection-setup rate.
+
+**Gotchas:**
+- Pacing is the application's job: call ngtcp2_conn_update_pkt_tx_time() after writing (ngtcp2_conn_write_aggregate_pkt() does this for you) and honor ngtcp2_conn_get_expiry2(). quicperf's ngtcp2 adapter never calls it, and its quiche adapter ignores send_info pacing, so the published numbers are unpaced.
+- The outgoing UDP payload is 1200 bytes by default and grows only through PMTUD. The benchmark turned PMTUD off and set no_tx_udp_payload_size_shaping=1 with a 1452-byte max_tx_udp_payload_size; stock settings will not match its numbers.
+- Send buffers are borrowed: memory passed to ngtcp2_conn_writev_stream() must stay valid until acked_stream_data_offset reports it acknowledged. If the server rejects 0-RTT data, the library does not resend it as 1-RTT; the application must reopen streams and write the data again.
+- Two high-severity CVEs were buffer overflows in the qlog code: CVE-2024-52811 (1.9.0, fixed in 1.9.1) and CVE-2026-40170 (<= 1.22.0, fixed in 1.22.1). Use >= 1.22.1 if you enable qlog.
+
+**Status:** Actively maintained (push on 2026-09-26, roughly monthly releases up to v1.25.0 on 2026-07-26, one open issue), MIT-licensed, and fuzzed and sanitizer-tested in CI; the benchmarked 1.22.1 is three minor releases behind, but its structs and functions are versioned (e.g. *_versioned entry points) to keep the ABI stable across releases.
+
+[repo](https://github.com/ngtcp2/ngtcp2) · [benchmark](https://github.com/victorstewart/quicperf/blob/main/docs/latest-results.md)
+
+##### picoquic  `C`  `MIT`  `active`  `Tier C`
+
+Minimal C QUIC/HTTP3 research stack; beats quiche by ~6-7% on bulk upload and connection setup in one loopback harness.
+
+**Beats:** quiche — The run is victorstewart/quicperf's 2026-06-01 loopback matrix: Linux, harness-owned UDP I/O, CUBIC, one pinned server thread, C++20 -O3 -march=native with LTO. The CPU model was not recorded and the harness tree was dirty. picoquic master 2b1e14d (picotls with fusion, OpenSSL 4.0.0) reached p50 upload of 15.82 vs 14.79 Gbps against quiche 0.29.0 (target-cpu=native, fat LTO) on syscall (1.07x, CI 1.061-1.076; picoquic had 2 client threads, quiche 4), 14.55 vs 13.76 Gbps on io_uring (1.06x), and 297 vs 277 handshakes/s (1.07x). It lost the other 18 of 21 publishable pairwise comparisons.
+
+**Known shortcoming:** Wins only 3 of 21 quicperf comparisons against quiche, each by 6-7%, and is 16-26x slower on multistream transfers. quicperf is a small personal harness with no CPU model, and its author also commits to picoquic.
+
+**Known shortcoming:** The benchmarked build used picotls fusion; since 2026-09-17 (commit 8b8c302) master defaults PTLS_WITH_FUSION OFF because fusion stubs crash connections, and no one has re-measured the ~6-7% upload margin with OpenSSL encryption. In the same quicperf run picoquic lost 18 of 21 comparisons to quiche, including multistream (16-26x slower), datagrams (57-71x, inconclusive rows) and idle memory (135 vs 125 KB per connection). 2026 crash fixes in multipath and qlog code (#2215, #2136, #2152, #2188). First GitHub release only on 2026-09-25.
+
+**How:** The docs describe copy avoidance on both paths. Senders can use a just-in-time API: `picoquic_mark_active_stream` plus the `prepare_to_send` callback, where the app writes straight into the packet being formatted via `picoquic_provide_stream_data_buffer`, so there is no per-stream queue copy. Acknowledged packet structures are recycled through a per-context free list. On receive, a decrypted packet is queued to the stream as-is (no second copy) when the stream frame is its last frame. `picoquic_prepare_next_packet_ex` can return a train of packets for a single UDP GSO `sendmsg`. The benchmarked build used picotls's x86-64 'fusion' AES-GCM engine (loaded only if `ptls_fusion_is_supported_by_cpu()`), and picoquic grows flow-control credit automatically by default because 'flow control tends to limit performance'.
+
+**Use it when:**
+- One or two long bulk streams per connection, especially client-to-server upload: 15.8 vs 14.8 Gbps (syscall) and 14.5 vs 13.8 Gbps (io_uring) over quiche on loopback.
+- Handshake-heavy loads where a small edge matters: 297 vs 277 full handshakes/s on syscall (the io_uring row was inconclusive).
+- Transport research or experimentation: multipath draft, ACK frequency, BDP and timestamp extensions, and pluggable congestion control (cubic, bbr, bbr1, c4, prague, newreno, fastcc). Virtual time lets you test deterministically on a simulator.
+- Embedding a small MIT-licensed C QUIC engine into your own event loop, io_uring or DPDK path, since the library never touches sockets or the clock itself.
+- Non-HTTP protocols over QUIC (for example DNS over QUIC via the companion quicdoq project) or WebTransport and HTTP datagrams via h3zero.
+
+**Skip it when:**
+- Many concurrent streams on one connection: multistream download was 0.55-0.67 Gbps and multistream upload 0.59 Gbps, against quiche's 11-15 Gbps (16-26x slower) in the same run.
+- RPC-style or lossy workloads: quiche beat it on request/response (0.92x syscall, 0.61x io_uring), small messages (0.67x), close/reset (0.66x), 0-RTT (0.86x) and loss recovery (7.6 vs 11.7 Gbps, 0.65x). Issues #1830 (Cubic stabilization after HyStart) and #1694 (HyStart vs Linux) are still open.
+- High-rate unreliable DATAGRAM traffic: 72k-91k datagrams/s vs quiche's ~5.1-5.2M. Both rows were inconclusive, but the gap is 57-71x.
+- Memory-constrained hosts carrying high-BDP flows: the docs warn of hundreds of MB per connection at gigabit rates unless you cap it, and idle footprint was 135 KB vs quiche's 125 KB per connection (syscall).
+- Production multipath: it tracks an evolving draft, and 2026 fixes for multipath and qlog crashes (NULL derefs #2215 and #2136, qlog double-free #2152, #2188) show that code is still settling.
+
+**Integration:** static lib (CMake target picoquic-core, plus optional picoquic-log and picohttp-core; shared libraries via BUILD_SHARED_LIBS since 2026-09-24) · picotls (required; -DPICOQUIC_FETCH_PTLS=Y fetches it) and OpenSSL 1.1.1/3.0 by default (the benchmark used 4.0.0). WITH_OPENSSL=OFF falls back to picotls minicrypto, whose AES-GCM the docs call 'very slow'. Threads required. Optional: MbedTLS, libaegis, liburing (WITH_IO_URING). · C11 with extensions, CMake 3.13+; Visual Studio 2017 solution on Windows · Linux, Windows, macOS, FreeBSD. CI runs on x86-64 VMs only; ARM32 and Apple M1 rely on user reports. The fusion AES-GCM engine is x86-64 only.
+
+**Vs siblings:** In the same quicperf run, ngtcp2 roughly doubles picoquic's bulk numbers (upload 31.0 vs 15.8 Gbps, download 18.2 vs 8.9-9.7 Gbps) and TQUIC leads on request rate (155k vs 59k rps), so choose those for raw throughput or RPC. Choose picoquic for its research extensions (multipath, BDP/timestamps, many congestion controllers, simulator) in a small MIT-licensed C codebase, or reach for its picoquic-DPDK fork if you can adopt kernel bypass.
+
+**Gotchas:**
+- Since commit 8b8c302 (2026-09-17), CMake defaults PTLS_WITH_FUSION=OFF because unimplemented fusion stubs in the vendored picotls crash real connections. The benchmarked build (2b1e14d, May 2026) had fusion on, so a current-master build encrypts through OpenSSL, and nobody has measured whether the upload margin survives that.
+- Cap memory up front with picoquic_set_cwin_max and picoquic_set_max_data_control. Flow-control credit already granted cannot be withdrawn, and out-of-order data holds whole received packets, so usage can exceed the flow-control limit when frames are small.
+- A custom loop must call picoquic_prepare_next_packet_ex often enough. In #2190 the maintainer traced stop-and-go throughput to ACK gaps growing to hundreds of ms (keep them under ~25 ms), and the socket-loop docs warn against long work inside callbacks.
+- Multithreaded servers keep resumption tickets and tokens per thread, and the ticket key is a per-process random value unless set in config. Resume/0-RTT across processes or hosts therefore needs a shared key, and clients only resume from the same thread.
+
+**Status:** Actively maintained under MIT: last push 2026-09-25, first GitHub release v2026.09.24.61fcd56, version string 1.1.53.0. It builds as a normal CMake library, but application docs are thin; the README points to picoquicdemo and the sample folder as the best starting points.
+
+[repo](https://github.com/private-octopus/picoquic) · [benchmark](https://github.com/victorstewart/quicperf/blob/main/docs/latest-results.md)
+
+##### quic-zig  `Zig`  `MIT`  `active`  `Tier C`
+
+Pure-Zig QUIC/HTTP/3/WebTransport stack; ~3% faster than quiche on handshake rate in one harness, slower almost everywhere else.
+
+**Beats:** quiche — quicperf (victorstewart/quicperf, loopback, CUBIC, CPU model not recorded) measured the quic-zig fork commit 97a7bec, built with Zig 0.16.0 ReleaseFast and -Dcpu=native, against quiche 0.29.0 built with fat LTO and target-cpu=native. On Connect, quic-zig reached 286 vs 277 conn/s p50 with the syscall backend (8 vs 16 client threads; pairwise ratio 0.968, CI 0.961-0.990) and 267 vs 258 conn/s with io_uring, but it lost to quiche in 21 of 23 pairwise comparisons, by up to ~21x.
+
+**Known shortcoming:** Not faster than quiche: its only win is connect rate (~3%, a scenario where all 12 libraries sit within 234-306/s), and quiche beats it in 21 of 23 comparisons, 13-21x on request, stream and resumption workloads. quicperf tested a fork commit, not upstream; the project claims nothing about performance.
+
+**Known shortcoming:** The repo's BENCHMARK.md (11,009 vs 1,114 req/s vs quiche) uses quiche's single-connection mio example on macOS, not a fair comparison. quicperf tested a May 2026 fork commit, 255 commits behind main. Low-level TlsConfig defaults skip_cert_verify to true (fix PR #12 open). Not production-ready; forked libxev; Zig 0.16.
+
+**How:** No documented technique explains the one win. On Connect, all 12 stacks fall between 234 and 306 conn/s, so the ~3% edge over quiche most likely reflects the harness, not quic-zig's design. The benchmarked May 2026 fork commit had none of upstream's later speed work. Upstream added that work in September 2026: a keyed AES-GCM context that sets up each key once, and a lower GHASH 8-way aggregation threshold (16 blocks instead of std's 84). Together these took encrypting a 1200 B packet on arm64 from 607 ns to 455 ns. Upstream also added sendmmsg plus UDP_SEGMENT (GSO) send batching to its own event loop, which quicperf bypasses because the harness owns the UDP I/O.
+
+**Use it when:**
+- You are writing in Zig and want QUIC, HTTP/3 or WebTransport built into your program with no C or Rust toolchain in the build.
+- You want a WebTransport or Media over QUIC server for browsers, with WebSocket fallback on the same port and event loop.
+- The workload is dominated by connection setup (full 1-RTT handshakes), where quic-zig roughly matches quiche and other stacks.
+- The traffic is mostly unreliable DATAGRAM frames: quicperf measured ~3.55M DATAGRAMs/s, second only to quiche's ~5.1M (quiche's rows are inconclusive).
+- You are doing QUIC research or prototyping and prefer a readable, spec-annotated codebase over peak throughput.
+
+**Skip it when:**
+- Request/response, stream-churn, small-message, 0-RTT or close/reset workloads: in quicperf, quic-zig levels off at ~3,700-3,900 ops/s against quiche's 46k-75k, so quiche is 13-20x faster.
+- Bulk transfer: quiche is 1.2-1.6x faster on upload and flow control and 3.5x faster on multistream download (3.17 vs 10.99 Gbps).
+- Session resumption: quicperf measured 14-15 conn/s against quiche's ~306. Quinn, noq, s2n-quic and Neqo show the same 14-15 plateau, so the harness may be part of the cause.
+- Many idle connections: quicperf measured ~464 KB per connection against quiche's ~125 KB (the row is inconclusive).
+- Production or internet-facing use: the README says 'Not production-ready' and that the public APIs may change. Contributed security-fix PRs (#6-#12) have been open since March 2026.
+
+**Integration:** module · libxev (pinned to the maintainer's fork, endel/libxev); no C libraries · Zig 0.16.0 (minimum_zig_version in build.zig.zon) · Linux, macOS, FreeBSD (src/sys.zig). Windows support is an open PR (#33). On x86-64, build with AES and PCLMUL CPU features (-Dcpu=native or x86_64_v3+aes+pclmul), or AES-GCM runs in software about 35x slower.
+
+**Vs siblings:** Pick quic-zig over ngtcp2, TQUIC or picoquic only when you need a pure-Zig stack with WebTransport and MoQ built in. For speed, ngtcp2 is ~1.5-2x quiche on bulk transfer and TQUIC is ~2.4x quiche on request rate in the same harness, while quic-zig trails quiche on both.
+
+**Gotchas:**
+- The low-level tls13.TlsConfig defaults skip_cert_verify to true, which skips chain and CertificateVerify checks. The high-level ClientConfig defaults it to false. PR #12 would change the low-level default and has been open since 2026-03-17.
+- On Linux the event loop uses epoll by default, not io_uring, because io_uring setup fails in some containers. On macOS it uses kqueue. Config.max_connections defaults to 256.
+- BENCHMARK.md shows 11,009 vs 1,114 req/s against quiche, but that quiche figure comes from quiche's example server with mio, which handles connections one after another, measured on macOS. quicperf finds quiche ~17x faster at request/response, so do not treat BENCHMARK.md as a like-for-like comparison.
+- The quicperf numbers come from victorstewart/quic-zig 97a7bec, whose base commit upstream main is now 255 commits ahead of. That base predates the AES-GCM and GSO changes, so current upstream may benchmark differently.
+
+**Status:** Actively developed (last push 2026-09-25) and MIT-licensed, but self-described as not production-ready, rebuilt with AI assistance in 2026, and pinned to a forked libxev and Zig 0.16.
+
+[repo](https://github.com/endel/quic-zig) · [benchmark](https://github.com/victorstewart/quicperf/blob/main/docs/latest-results.md)
+
+##### TQUIC  `Rust`  `Apache-2.0`  `active`  `Tier C`
+
+Tencent's Rust QUIC/HTTP3 library with C API: ~2.4x quiche on request and stream-churn rate, slower on bulk.
+
+**Beats:** quiche — quicperf is an independent C++ loopback harness: one pinned server thread, 16 client threads, CUBIC, TLS 1.3 through a shared BoringSSL build, p50 of 20 samples. In it, TQUIC at feature-branch commit 50f5a55 reached 2.36-2.40x quiche 0.29.0 on request/response, stream churn, small messages, 0-RTT and close/reset with the syscall backend. With io_uring the ratio was 3.0-3.4x, partly because quiche's own io_uring rows are slower than its syscall rows. TQUIC lost on every bulk row (0.76-0.96x), on resumed connect (0.72x) and on DATAGRAM rate (0.17x). Both libraries were built with -C target-cpu=native -C opt-level=3 and fat LTO; the CPU model is not recorded and the run came from a harness working tree with uncommitted changes.
+
+**Known shortcoming:** Request/response and small-message wins only (~2.4x); slower than quiche on every bulk-throughput row (0.76-0.96x), resumed connect (0.72x) and datagram rate (0.17x). Measured at a feature-branch commit, not a release, in a small personal harness with no CPU model.
+
+**Known shortcoming:** The benchmarked commit is on a DATAGRAM feature branch not in any release; last release v1.6.0 (2025-02). Open bugs: server OOM-killed serving a 30 MB file (#494), one bad packet fails process_connections for the whole endpoint under load (#459), TRACE logging crash (#500). No QPACK dynamic table, ECN or QUIC v2; idle memory per connection higher than quiche; C users must link the same BoringSSL build.
+
+**How:** Connections live in a slab indexed through FxHash CID routing tables. Each process_connections pass touches only connections marked 'tickable', meaning they have pending events. It then round-robins over 'sendable' connections and writes packets into a reusable buffer pool. Those packets go to the application's send callback in batches (send_batch_size, default 64), which fits sendmmsg-style I/O. Timers for all connections share one double-ended priority queue, and streams use FxHashMap indexes, bitflag state and per-urgency send queues. Neither TQUIC nor quicperf says which of these explains the ~2.4x request-rate gap over quiche, so the cause is not documented. The design shows no advantage on bulk-transfer paths.
+
+**Use it when:**
+- Single-threaded QUIC servers that handle many small request/response exchanges on fresh streams. quicperf measured 155k rps for TQUIC vs 119k for LSQUIC and 64.6k for quiche on one pinned server thread.
+- Workloads that open and close many short streams, such as RPC-style stream churn or close/reset cleanup: about 178k streams/s vs about 75k for quiche.
+- High-rate 0-RTT request/response after session resumption: 154k vs 65k rps for quiche.
+- You want a Rust QUIC stack with a C API that already handles CID routing, per-connection timers and send batching, so you don't have to write that code around quiche.
+- You need Multipath QUIC, BBRv3/COPA, or mobile targets (Android, iOS and HarmonyOS builds are documented).
+
+**Skip it when:**
+- Bulk transfer. In the same run TQUIC downloaded at 8.6 Gbps vs quiche 11.3, LSQUIC 16.4 and ngtcp2 18.2 Gbps, and it lost to quiche on every upload, bidirectional, multistream, loss-recovery and flow-control row (0.76-0.96x).
+- Unreliable DATAGRAMs (RFC 9221). They are not in develop or release v1.6.0 (issue #222 still open) and exist only on feature branches. Even the feature-branch build managed 0.89M vs 5.1M DATAGRAMs/s for quiche.
+- Workloads dominated by resumed connections: 216 vs 301 conn/s for quiche (syscall backend).
+- Memory-tight servers holding many idle connections: 146.6 KB vs 125.4 KB of RSS per idle connection compared with quiche (syscall). Issue #494 (tquic_server OOM-killed while serving a 30 MB file) is still open, and its fix PR #498 was closed without merging.
+- Full HTTP/3 feature coverage. The QPACK dynamic table is a TODO in qpack.rs (#225), and ECN (#224), QUIC v2 (#221), HTTP/3 trailers (#226) and async APIs (#23) are missing.
+
+**Integration:** crate; also static lib and shared lib (crate-type lib/staticlib/cdylib, C API enabled with --features ffi, header include/tquic.h) · BoringSSL (vendored git submodule built via CMake, or a prebuilt one via BORINGSSL_LIB_DIR); Rust crates ring, bytes, slab, rustc-hash, priority-queue, smallvec, lru, brotli, flate2 and others; optional serde (qlog feature) and sfv (h3 feature) · Rust 1.70 (Cargo rust-version), but the repo pins 1.90.0 in rust-toolchain.toml after recent toolchain breakages; the docs also require GCC 9.3+, CMake 3.22+ and git 2.0+ · Linux, macOS, FreeBSD, Windows, iOS, Android and HarmonyOS per the docs; open issues report no exported C symbols in the Windows static lib (#484) and a build failure on Apple M1 (#447)
+
+**Vs siblings:** Pick TQUIC over ngtcp2, LSQUIC or picoquic when one server thread must handle as many small requests or short streams as possible. In the same quicperf run it served 155k rps vs 119k for LSQUIC, 59k for picoquic and 51k for ngtcp2. Pick ngtcp2 or LSQUIC for bulk throughput (about 2x TQUIC's download rate), and quiche for DATAGRAM rate or resumed connects.
+
+**Gotchas:**
+- A packet-generation error on one connection makes process_connections return Err for the whole endpoint, and the remaining connections are not processed on that pass. Issue #459 reports repeated InternalError under 1.5-2 Gbps load.
+- The library does no GSO or sendmmsg itself. Each outgoing packet is a separate Vec<u8> in the batch handed to on_packets_send, so the batching only pays off if your callback does vectored or segmented sends.
+- tquic.h #includes openssl/ssl.h and exposes SSL_CTX (quic_tls_config_new_with_ssl_ctx). C/C++ consumers need BoringSSL headers and must link the same BoringSSL build as TQUIC.
+- The benchmarked build (50f5a55) is a DATAGRAM feature-branch commit, 1 ahead of and 3 behind develop. The published crate (v1.6.0, Feb 2025) cannot reproduce the DATAGRAM rows. quic_set_logger at TRACE level is reported to crash (#500).
+
+**Status:** Apache-2.0 (includes BSD/MIT-derived code) and usable as a vendored crate or static lib. Despite the 'active' label, there has been no release since v1.6.0 (2025-02-25), and develop has seen only toolchain fixes since August 2025 (last commit 2025-12-23).
+
+[repo](https://github.com/Tencent/tquic) · [benchmark](https://github.com/victorstewart/quicperf/blob/main/docs/latest-results.md)
+
+##### Unbound  `C`  `BSD-3-Clause`  `active`  `Tier C`
+
+NLnet Labs' validating, recursive, caching DNS resolver in C; the developer's 2008 changelog puts cache-hit throughput at ~3.4x BIND's.
+
+**Beats:** BIND — A 22 Feb 2008 developer Changelog entry reports 31,218 qps (Unbound) vs 8,988 qps (BIND) serving www.nlnetlabs.nl from cache, and 28,736 vs 8,269 qps with the DO bit set, about 3.4x. It also reports near parity with NSD on 100 NSEC3 NXDOMAIN queries (36,048 vs 35,183 qps). The BIND version, compiler, flags, CPU and load generator are not stated. An in-tree perf tool (testcode/perf.c) was written the week before, but the entry does not say it was used. The numbers came right after a round of cache-path optimizations and have not been rerun against modern BIND.
+
+**Known shortcoming:** The ~3.4x over BIND comes from a 2008 Changelog entry against a 2008 BIND; no modern comparison is cited.
+
+**Known shortcoming:** A recursive resolver, not an authoritative server (no dynamic update, AXFR/IXFR/NOTIFY serving). Heavy security churn: 1.25.2 fixed 24 CVEs and 1.26.1 fixed 9 (including a heap overflow with possible RCE, CVE-2026-81642); fixes land only in the latest release. Defaults are 1 thread and 4 MB caches; real memory can reach 2-2.5x the configured cache size.
+
+**How:** On a cache hit the worker thread hashes the query, looks it up in the message cache, locks the referenced RRsets and writes the reply straight from stored wire-format data. It does not enter the iterator/validator module stack (daemon/worker.c answer_from_cache). Both caches are 'slabhash' tables: several fixed-size LRU hash tables, each behind a spinlock, with an rwlock per entry. The number of slabs is set near num-threads to cut lock contention, and each RRset is stored as one contiguous block that messages reference by ID. Other per-thread tricks: an alloc cache that avoids the global malloc lock, NSD-style region allocators per query, and up to 100 UDP reads per readiness event (NUM_UDP_PER_SELECT). The built-in 'mini_event' loop is the default because the authors found it faster than libevent.
+
+**Use it when:**
+- Recursive or forwarding resolver for a LAN, ISP or host where most queries are cache hits. This is the path the 3.4x figure measures.
+- DNSSEC-validating resolution. The DO-bit cache-hit test kept roughly the same lead over BIND (28.7k vs 8.3k qps).
+- Multi-core Linux servers. Set num-threads to the core count and so-reuseport to yes; slabs then scale automatically. The docs say a forked (non-threaded) build is another 10-20% faster.
+- Applications that need validated DNS lookups in-process via libunbound, synchronous or asynchronous.
+- Resolvers that serve or forward DoT, DoH (libnghttp2) or DoQ (libngtcp2). These are optional build features.
+
+**Skip it when:**
+- You need an authoritative primary: dynamic updates or AXFR/IXFR/NOTIFY serving (doc/FEATURES). Keep BIND or NSD for that role.
+- You need current numbers. The only head-to-head is an unreproducible 2008 changelog note, and the repo has no recent BIND comparison.
+- Windows at high load. The maintainer recommends Linux or BSD for more capacity (issue #240), and the Windows outgoing-range default is 48.
+- Very large RPZ or auth-zone datasets where startup and reload time matter. Issue #998 'Unbound is slow at loading (big) auth/rpz zones' is open.
+- Low-volume DoT forwarding with many threads. One user measured 90 min for 11k sequential DoT lookups with 4-8 threads vs 30 min with 1 thread (issue #1452, open).
+
+**Integration:** daemon (unbound) plus shared/static library (libunbound); built from source with ./configure && make, widely distro-packaged · OpenSSL (libnettle allowed only with --with-libunbound-only), libexpat (for unbound-anchor), flex+bison when building from git; optional: libevent, libnghttp2 (DoH), libngtcp2 (DoQ), libhiredis (cachedb), libsodium (DNSCrypt), Python (pythonmod) · Portable C compiler; minimum C standard not documented; autoconf 2.56+ only if regenerating configure · Linux, FreeBSD and other BSDs, macOS, Solaris, Windows (reduced capacity); any CPU architecture (users run it on ARM64)
+
+**Vs siblings:** Pick Unbound when you need a production-grade, maintained, validating recursive resolver. NailDNS (Nail) is a demo server and Bundy-DNS's 180K qps l1cache is an experimental branch. Hickory DNS is the choice for a Rust/memory-safe stack, but its BIND comparison is only a single-query latency tie, while Unbound's evidence is an old first-party cache-throughput gap.
+
+**Gotchas:**
+- Defaults are conservative: num-threads 1, and msg-cache-size and rrset-cache-size are 4m each. Follow the performance how-to (threads = cores, rrset cache about 2x msg cache, larger so-rcvbuf/so-sndbuf) before judging speed.
+- The docs say malloc overhead can push real memory to 2-2.5x the configured cache sizes. In forked mode every process keeps its own cache.
+- The default build uses the built-in mini_event loop, which caps outgoing ports (outgoing-range default 960 vs 4096 with --with-libevent). doc/README still says libevent is the default, but configure.ac contradicts it.
+- Security churn is heavy: 1.25.2 (2026-07-22) fixed 24 CVEs and 1.26.1 (2026-09-16) fixed 9, including a DNSKEY heap overflow with possible RCE (CVE-2026-81642) and wildcard cache poisoning (CVE-2026-44690). SECURITY.md says fixes land only in the latest release, with no backports.
+
+**Status:** Actively maintained by NLnet Labs (1.26.1 released 2026-09-16, commits through 2026-09-22), BSD-3-Clause and packaged by most distros, so use it as a packaged service rather than vendoring it; stay on the latest release because security fixes are not backported.
+
+[repo](https://github.com/NLnetLabs/unbound) · [benchmark](https://github.com/NLnetLabs/unbound/blob/master/doc/Changelog)
+
+#### event-loops-io
+
+##### Apache Iggy (thread-per-core io_uring backend, v0.7.0)  `Rust`  `Apache-2.0`  `active`  `Tier C`
+
+Rust message-streaming server whose v0.7.0 rewrite on thread-per-core io_uring (compio) cuts tail latency versus its Tokio/epoll build.
+
+**Beats:** epoll (via Tokio, as used in Iggy v0.5.0) — The maintainers compared Iggy v0.5.0 (Tokio: epoll for sockets, a blocking thread pool for files) with v0.7.0 (compio io_uring, thread-per-core) using iggy-bench pinned-producer over TCP (1000-byte messages, 250 per batch, 1 GB/s rate limit) on AWS i3en.3xlarge (Xeon Platinum 8259CL, 12 vCPU, Ubuntu 24.04, kernel 6.17), with client and server on separate hosts. At 32x32, P99 fell from 4.52 to 1.82 ms, at 16x16 P99.99 fell from 86.3 to 7.17 ms, and fsync runs gained 18% throughput; the percentiles are averages of per-producer percentiles, each version ran on a different EC2 server/client pair on the same day, the toolchain and flags are not stated, and the two versions differ in far more than the I/O backend.
+
+**Known shortcoming:** In the fsync runs v0.7.0's median is ~2.3x worse than v0.5.0 (P50 1.53 to 3.54 ms at 16 partitions, 2.66 to 6.25 ms at 32), hidden because the blog tables start at P95. Baseline and new version ran on different EC2 server/client pairs (same type, day and kernel); the recorded hardware is the client host. 'P95/P99' are averages of per-producer percentiles, not percentiles over all requests. io_uring alone didn't deliver the gain: the intermediate thread-per-core io_uring build (v0.6.1-edge.4) had P99.99 of 208 ms vs 27.5 ms for v0.5.0; the win came with v0.7.0's shared-metadata redesign, so this is whole-server v0.5 vs v0.7, not epoll vs io_uring (Tokio's file I/O/fsync used a blocking thread pool). Toolchain/flags unstated. Non-fsync runs capped at 1 GB/s show no throughput gain. The benchmark uses pinned producers, the easiest case (balanced/keyed partitioning routes across cores). Needs Linux 5.19+; Docker needs seccomp=unconfined, unlimited memlock, SYS_NICE; Windows build broken; macOS startup panics (#3047, #3788); idle iowait artifact on 6.5+ (#3507). Server 0.9.0 (2026-09-18) is current.
+
+**How:** Completion-based io_uring replaces readiness-based epoll for sockets and, more importantly, replaces Tokio's blocking thread pool (up to 512 threads) for file writes and fsync. Each shard is a pinned thread that owns a set of partitions assigned by hash, so the data plane has no work stealing and no cross-thread locks; when a client writes to an explicit partition on the wrong shard, its TCP socket fd is handed to the owning shard. Stream and topic metadata has a single writer (shard 0) that publishes to the other shards through a left-right structure fed by flume channels (the 'shared something' design); the rings are created with IORING_SETUP_COOP_TASKRUN and no helper thread pool.
+
+**Use it when:**
+- You run Iggy on Linux (kernel 5.19+) and care about P99.9/P99.99 write latency more than peak throughput.
+- Many partitions and producers per node: the published gap grows from roughly even at 8 producers to 57-60% lower P95-P99 at 32 producers x 32 streams, with P50 also down from 2.21 to 0.77 ms there.
+- Durable writes with fsync on every batch where throughput and P95+ matter: the fsync runs show about 18% more throughput and about 45% lower P95 than the Tokio build.
+- Dedicated hosts where one pinned shard per core is acceptable and the kernel and seccomp policy allow io_uring.
+- You are on Iggy 0.5.x or earlier (Tokio) and want a lower write tail without changing client code.
+
+**Skip it when:**
+- Small deployments of about 8 partitions or producers: P95 and P99 were 8% and 3% worse than the Tokio build there; only P99.9 and above improved.
+- Median-sensitive fsync-per-batch writes: the dashboard reports show P50 rising from 1.53 to 3.54 ms (16 partitions) and from 2.66 to 6.25 ms (32 partitions) on v0.7.0, although mean and P95+ fell; the blog tables start at P95.
+- You need more peak throughput: the non-fsync comparisons were capped at 1 GB/s by the benchmark's rate limit, so no throughput gain is shown outside the fsync runs.
+- Skewed traffic with a few hot partitions: shards do not steal work, and the blog lists hot-shard balancing (e.g. splitting a partition across shards) as unsolved future work.
+- Native Windows (the v0.7.0 server has compile_error!("iggy-server doesn't support windows."); use WSL or Docker), containers with Docker's default seccomp profile, or kernels older than 5.19.
+
+**Integration:** built binary (iggy-server, Docker image apache/iggy); not a library · compio 0.18 with the io-uring driver (at tag server-0.7.0), left-right, flume, DashMap, mimalloc (default global allocator), hwlocality/hwloc for NUMA-aware core allocation · Rust 1.93.0 pinned by rust-toolchain.toml at tag server-0.7.0 (edition 2024; current master pins 1.98.0 with rust-version 1.95); Linux kernel 5.19+ per the Docker docs · Linux for io_uring; macOS builds use compio's non-io_uring driver and have had shard startup panics on some targets (Intel/Rosetta); native Windows unsupported at v0.7.0; CPU architecture requirements not documented
+
+**Vs siblings:** Pick Iggy when you want a finished message-log server that already applies the Seastar-style thread-per-core design in Rust; monoio or ringline are the runtimes to build your own io_uring server on, and Seastar is the C++ framework Iggy's design follows.
+
+**Gotchas:**
+- Docker needs --security-opt seccomp=unconfined (or a custom profile allowing io_uring_setup, io_uring_enter and io_uring_register) and --ulimit memlock=-1:-1; the README also lists --cap-add=SYS_NICE. The server prints these hints when ring creation fails with EPERM or ENOMEM.
+- Idle servers can show IO pressure (PSI) and iowait near 100% because shards parked in io_uring_enter are counted as iowait on kernels 6.5+. Issue #3507 (open) calls it cosmetic, but it breaks iowait-based alerting.
+- Socket migration only applies to explicit partition ids: Balanced and MessagesKey partitioning skip the fd handoff and are routed to the owning shard instead. The benchmark used pinned producers, which is the migration-friendly case.
+- io_uring alone did not produce the tail gain: the intermediate v0.6.1 shared-nothing build on the dashboard had P99.99 of 208 ms at 32x32 (v0.5.0: 27.5 ms). The drop came with v0.7.0's shared-metadata redesign.
+
+**Status:** Active Apache Software Foundation project (Apache-2.0) with daily commits; server 0.9.0 (September 2026) has since added VSR clustering on the same shard design, so v0.7.0 is no longer the latest release.
+
+[repo](https://github.com/apache/iggy) · [benchmark](https://iggy.apache.org/blogs/2026/02/27/thread-per-core-io_uring/)
+
+##### Asio io_uring backend (ASIO_HAS_IO_URING)  `C++`  `BSL-1.0`  `active`  `Tier C`
+
+Opt-in io_uring backend inside Asio/Boost.Asio that replaces the epoll reactor on Linux 5.10+ without API changes.
+
+**Beats:** epoll — In a 2021 comment on issue #401, the maintainer ran a single-threaded io_context over 100 rings of 3 pipes, passing a 13-byte message until each ring reached 10,000 iterations: 1.602 s wall-clock with epoll vs 1.158 s with the pre-release io_uring backend (about 1.38x), on Linux 5.10 with CPU, compiler and flags not stated. The io_uring figure leaves out kernel worker-thread CPU, and a 2022 WSL2 rerun (kernel 5.10.102.1, Boost 1.79) found epoll faster.
+
+**Known shortcoming:** Only evidence is a 2021 maintainer issue comment (~1.38x on a pipe-ring workload, Linux 5.10) with no CPU, compiler or flags; another commenter found epoll faster under WSL2. Opt-in via ASIO_HAS_IO_URING.
+
+**Known shortcoming:** The io_uring time excludes kernel worker-thread CPU (the maintainer says total CPU was higher than epoll). Open correctness issues: heap overflow when translation units disagree on ASIO_HAS_IO_URING (#1635), timer fires once (#1530), timer segfault (#1349). Compile-time selection with no runtime fallback if io_uring_queue_init fails.
+
+**How:** With epoll, each operation takes a readiness notification plus a separate read or write syscall. Here each async operation becomes a completion-based submission queue entry (SQE): IORING_OP_RECVMSG for receives, or READ_FIXED/WRITE_FIXED when buffers are registered. SQEs are batched: a posted submit operation flushes them, or they go out at once when 128 are pending (reactor/io_uring_submit_batch_size), so one io_uring_submit call covers many operations, and the run loop collects completions from the completion queue (CQ). An operation that returns would_block (for example, on an fd with O_NONBLOCK set) falls back to IORING_OP_POLL_ADD plus a non-blocking recv, which works like epoll.
+
+**Use it when:**
+- Existing Asio or Boost.Asio code on Linux 5.10+ where you want io_uring from a recompile rather than a rewrite, and to A/B test it against epoll by flipping two macros.
+- A single-threaded io_context (concurrency_hint 1) driving many descriptors with small messages; the maintainer's test (300 pipes, 13-byte messages) finished about 1.38x faster in wall-clock time.
+- Async file I/O through asio::stream_file / random_access_file, which require io_uring on Linux anyway.
+- Workloads that can pre-register buffers (register_buffers), so reads and writes use io_uring's fixed-buffer READ_FIXED/WRITE_FIXED path.
+
+**Skip it when:**
+- When total CPU matters more than wall-clock time: the maintainer notes the benchmark leaves out io_uring kernel worker-thread CPU, and total CPU use was higher than with epoll.
+- On virtualised or WSL2 hosts without measuring first: one user's WSL2 run of the same benchmark had epoll faster (2.97 s vs 3.66 s).
+- A multi-threaded io_context on the default single ring: all threads share one SQ/CQ behind a mutex, and the maintainer said the backend works best single-threaded. Per-thread rings (reactor/io_uring_ring_count) only arrived in 1.38.2 (July 2026), and no published benchmark covers them.
+- Timer-heavy code with io_uring as the default backend: open issues report a steady_timer firing only once (#1530) and a timer segfault (#1349), and #1235 reports UBSan errors when an io_context used with coroutines is destroyed.
+- Non-Linux platforms or kernels older than 5.10: the build hits a compile-time #error below 5.10, and other OSes keep their usual backends.
+
+**Integration:** header-only · liburing (headers at compile time, -luring at link time); Boost only if you use the Boost.Asio variant (BOOST_ASIO_HAS_IO_URING) · C++11 (Asio 1.29+); Linux kernel headers 5.10+; liburing (the io_uring_iowait option needs liburing 2.12+ and kernel 6.15+) · Linux 5.10+ only; the backend has no architecture-specific code
+
+**Vs siblings:** Pick it when you already have Asio or Boost.Asio code and want io_uring without a rewrite. For new io_uring-first code, uring_exec reports 1.27x-3.46x the ping-pong throughput of Asio's io_uring backend, and Condy's recv benchmark only measured Asio's epoll path (1588 MB/s vs Condy's 2110 MB/s).
+
+**Gotchas:**
+- Define ASIO_HAS_IO_URING the same way in every translation unit: it changes the recycling allocator's chunk_size (8 vs 4), and open issue #1635 reports a heap buffer overflow when units disagree. ASIO_ENABLE_VERSION_NAMESPACE puts the io_uring setting into the inline namespace name, so mismatched units do not share the same symbols.
+- Per the docs, ASIO_DISABLE_EPOLL on its own forces select. Only together with ASIO_HAS_IO_URING does it make io_uring the default (ASIO_HAS_IO_URING_AS_DEFAULT), and ASIO_HAS_IO_URING alone leaves sockets on epoll.
+- Each ring defaults to 16384 entries (reactor/io_uring_ring_size), which locks memory per ring; lower it where RLIMIT_MEMLOCK is small. If io_uring_queue_init fails, the service throws instead of falling back to epoll.
+- By default a thread waiting on the ring counts as iowait whenever SQEs are pending, including socket polls and timers, which inflates iowait metrics. Set reactor/io_uring_iowait=false (needs liburing 2.12+ and kernel 6.15+).
+
+**Status:** Actively maintained and BSL-1.0 licensed: the io_uring backend has shipped opt-in since Asio 1.21.0, 1.38.2 (July 2026) added multi-ring and batching settings, and one user reports four years of production use.
+
+[repo](https://github.com/chriskohlhoff/asio) · [benchmark](https://github.com/chriskohlhoff/asio/issues/401)
+
+##### Boost.Corosio  `C++`  `BSL-1.0`  `active`  `Tier C`
+
+Coroutine-only C++20 Boost-track networking library; 9-49% faster coroutine dispatch than Asio coroutines on Windows IOCP, socket I/O at parity.
+
+**Beats:** Asio (Boost.Asio coroutines and callbacks) — First-party report, Windows IOCP only, 3 s per benchmark; it names no CPU, compiler, flags or Asio version, and issue #352 dates the data to February 2026. Measured against Boost.Asio co_spawn/use_awaitable, spawning and running trivial coroutine tasks (capy::run_async vs co_spawn detached) was 9-49% faster, e.g. 2.35 vs 1.61 Mops/s for 4-thread concurrent post/run. Socket latency and HTTP throughput were within ~5%, and Corosio lost 64 KB bidirectional throughput by 2.5x.
+
+**Known shortcoming:** Benchmark data dates from 2026-02, IOCP only, with no CPU, OS build, compiler, Asio version or commit (#352 open; the Boost review's conditional acceptance lists current, reproducible measurements as open). The multi-thread scaling harness loops poll()+restart() from several threads, which Asio's docs forbid, and the headline scaling claim rests on it. Dispatch benchmarks spawn trivial coroutines, not socket I/O, on different context types. The report contradicts itself: Asio coroutines lead the 1-thread scaling row (1.78 vs 1.72 Mops/s) and the 4 KB one-way gap is ~11-13%, not 'within 5%'. Real losses: 64 KB two-way throughput 2.5x slower (2.18 vs 5.56-5.74 GB/s) and Asio callbacks beat it single-threaded (2.59 vs 1.71 Mops/s). No tags or releases; Corosio and Capy consumed from develop. Gotchas: a default io_context on multi-core machines silently disables the inline fast path; lockless tiers make cross-thread posting UB; delay()/timeout() terminate on non-io_context executors.
+
+**How:** The benchmark report does not say which mechanism produces the dispatch wins. The design docs point to native C++20 symmetric transfer: await_suspend and dispatch() return a coroutine_handle, so the compiler tail-calls the next coroutine. Asio's awaitable returns void and emulates this with a frame stack and a pump() loop. The executor is passed as an await_suspend parameter, not through thread-local storage. On IOCP, each posted coroutine becomes a completion packet (PostQueuedCompletionStatus) and is dispatched through a function pointer stored in the op; the hot path uses interlocked counters and takes a user-space mutex only on the deferred/fallback path. The epoll/kqueue/select backends add an adaptive 'speculative inline completion' budget, and an opt-in lockless tier matches Asio's UNSAFE concurrency hint.
+
+**Use it when:**
+- New C++20 coroutine networking code that would otherwise use Asio co_spawn/use_awaitable and spawns many small tasks: the report shows 1.71 vs 1.57 Mops/s for single-thread post and 2.14 vs 1.60 Mops/s for interleaved post/run on IOCP.
+- One io_context run by several threads on a dispatch-heavy workload: 1.54 vs 1.03 Mops/s at 8 threads, keeping 89% of 1-thread throughput vs 58% for Asio coroutines. Treat this as indicative only: in the harness, several threads loop poll()+restart() at once, and Asio's docs forbid calling restart() while other run/poll calls are still in progress.
+- You want one coroutine-native API across Windows IOCP, Linux epoll (io_uring optional), macOS/FreeBSD kqueue and a select fallback, with error codes in io_result and stop-token cancellation instead of completion tokens.
+- Strictly single-threaded event loops: `locking_mode::unsafe` drops all internal locks, which the docs say removes 15-25% of post/dispatch overhead.
+- Build time matters: in a Boost.Redis comparison posted during the Boost review, the Corosio-based client library built in 5.3 s vs 21.7 s for the Asio-based one.
+
+**Skip it when:**
+- Full-duplex bulk streaming (proxies, tunnels, replication links): at 64 KB buffers, bidirectional throughput was 2.18 GB/s vs 5.56 GB/s (Asio coroutines) and 5.74 GB/s (Asio callbacks). Corosio's combined throughput stays at its one-way rate, and the report suspects the read and write paths are serialized.
+- Callback-style Asio code or hot single-threaded dispatch: Asio callbacks post at 2.59 vs 1.71 Mops/s and do interleaved post/run at 2.88 vs 2.14 Mops/s. Corosio has no callback interface at all.
+- Linux- or macOS-specific performance decisions: no epoll, io_uring or kqueue numbers are published. The only report is IOCP data from February 2026.
+- Projects that need a versioned, stable API: there are no tags or releases, both Corosio and Capy are consumed from their develop branches, and the Boost review (September 2026) ended in conditional acceptance with benchmark and docs items still open.
+- Needs outside its scope: HTTP/WebSocket (use Boost.Http/Beast2), P2300 senders/receivers, raw sockets. TLS still has an open bug (#312, in-memory transport), and reviewers flagged verification gaps (#297, since closed).
+
+**Integration:** static lib (shared when BUILD_SHARED_LIBS is set) · Boost.Capy (develop branch), Threads, ws2_32 on Windows; optional liburing (io_uring backend) and OpenSSL or WolfSSL (TLS); the benchmarks also need Boost.Asio · C++20; GCC 12+, Clang 17+, MSVC 14.34+ (VS 2022 17.4+), latest Apple Clang; CMake 3.14+ · Windows (IOCP); Linux x86_64/ARM64 (epoll by default, io_uring optional); macOS ARM64 and FreeBSD (kqueue); select backend on Linux/macOS/FreeBSD
+
+**Vs siblings:** Pick Corosio over uring_exec or Condy (Linux io_uring only; they claim 1.27-3.46x and ~1.33x over Asio on socket ping-pong/recv) or PhotonLibOS (~1.05x over boost::asio) when you need a portable, Boost-track coroutine replacement for Asio that includes Windows IOCP, and your bottleneck is task dispatch across threads rather than socket bandwidth. For Linux socket throughput, pick uring_exec or Condy: Corosio's own report shows no socket-throughput gain over Asio.
+
+**Gotchas:**
+- A default-constructed io_context on a multi-core machine (concurrency_hint > 1) silently resets the inline-completion budgets from (2, 16, 4) to (0, 0, 0), which turns off the reactor's inline fast path. Pass explicit io_context_options to keep it. One note in the configuration page contradicts this.
+- Lockless tiers: under `unsafe`/`unsafe_io`, cancelling delay()/timeout() through a stop_token from another thread is undefined behavior. Under `unsafe`, DNS resolution and POSIX file open() return operation_not_supported. Before issue #310 was fixed, concurrency_hint == 1 silently enabled lockless mode.
+- delay()/timeout() awaited on an executor that does not belong to an io_context terminates the program. timeout() requires the inner result's payload type to be default-constructible.
+- The io_context must outlive every posted operation, and stop() abandons pending work instead of draining it. Join all threads that post to or run the context before destroying it.
+
+**Status:** Actively developed (created January 2026, last commit 2026-09-25) and BSL-1.0, but pre-release: no tags, both Corosio and Capy come from their develop branches, and Boost conditionally accepted it in September 2026 with an open item to make the benchmark report reproducible and current.
+
+[repo](https://github.com/cppalliance/corosio) · [benchmark](https://github.com/cppalliance/corosio/blob/develop/doc/modules/ROOT/pages/benchmark-report.adoc)
+
+##### BusterMQ  `Zig`  `Apache-2.0`  `active`  `Tier C`
+
+Zig thread-per-core io_uring server for the core NATS pub/sub protocol; ~1.4x Go nats-server publish rate in its own benchmark.
+
+**Beats:** NATS Server (nats-server, Go, epoll-based via Go's netpoller) — In a single first-party run on one AMD Ryzen 9 9950X over localhost (16 server threads and 16 client threads; 10 publishers, 10 subscribers, 10 subjects, 50M 128-byte messages sent open-loop, so the latencies are queueing delay at saturation), BusterMQ on the standard protocol published 2.98M msg/s at 4.03 GB/s with p50 11.43 ms, against Go nats-server's 2.16M msg/s, 2.94 GB/s and p50 55.70 ms (about 1.38x). The bench client spread BusterMQ connections across its per-worker ports (-w 16) while nats-server took all of them on 4222, the 6.78M msg/s (~3.1x) headline needs +ROUTE and its own client, and BusterMQ was built with Zig 0.15.2 ReleaseFast per the repo config while nats-server's version and config and the kernel are not stated.
+
+**Known shortcoming:** The 3.1x headline uses a non-standard +ROUTE protocol extension with a different client; like-for-like on the standard protocol it is ~1.38x (2.98M vs 2.16M msg/s), p50 11.43 vs 55.70 ms. nats-server version, compiler and flags not stated (repo pins Zig 0.15.2 release_fast). One commit; the author said on HN it is 'not a NATS replacement' and he has no time to maintain it; bustermq.sh no longer resolves (verifier downgrade).
+
+**Known shortcoming:** The listed repo is a third-party re-upload (not a GitHub fork) of a single-commit project whose original repo now 404s; the original author said on HN it is not a NATS replacement and won't be maintained. The 'standard' run spread BusterMQ's connections over 16 per-worker ports while nats-server took all on 4222 (SO_REUSEPORT 'broken on localhost'). Latencies are queueing delay at saturation (open-loop publishers, 1-in-100 sampling). Route modes deliver ~0.6-0.8% fewer messages than expected: the server silently drops on full 16 MB send buffers, full cross-worker queues or past 1,024 forwards per batch; no slow-consumer handling. NATS gaps: queue groups ignored (every member gets every message), HPUB rejected, no TLS or auth, 64 KB max payload, --host ignored (binds 0.0.0.0, IPv4 only), 64-worker cap, exact subscriptions matched only by 64-bit hash. README says Linux 5.10+ but zero-copy send needs 6.1; README says Bazel 8+ but 7.6.0 is pinned. Prefaults a 2 GB mbuf pool, ~1 GiB of SPSC queues at 16 workers, 16 MB per connection; subscription churn rebuilds every worker's routing cache under a global mutex.
+
+**How:** Thread-per-core: one worker per core, pinned with sched_setaffinity, each with its own io_uring ring (optional SQPOLL or --busy-poll spinning), its own SO_REUSEPORT listener, and its own clients and subscriptions. Reads land in 64 KB reference-counted mbufs from a prefaulted pool, and publishes needed on other cores are forwarded as offset descriptors over an N x N matrix of lock-free SPSC queues with eventfd wakeups, so the payload is not copied between cores. Sends are batched once per loop iteration per client, payloads of 4 KB or more go out as scatter-gather IORING_OP_SENDMSG_ZC straight from the shared mbuf, and subject lookup uses a 64-bit rapidhash key in a per-worker routing cache fronted by a 256-bit Bloom filter. The +ROUTE extension removes the cross-worker hop by steering each subscriber to the worker that owns its subject (subject hash mod worker count).
+
+**Use it when:**
+- Studying or prototyping thread-per-core io_uring broker design: the Zig source is compact and ships with a deterministic-simulation (VOPR-style) test harness.
+- Ephemeral core-NATS fan-out of small messages (the benchmark used 128 B) on one Linux box with dedicated cores, where at-most-once delivery with silent drops is acceptable.
+- Latency-sensitive fan-out on dedicated cores that can spin at 100% CPU: in the saturated benchmark, --busy-poll cut p99 from 92.55 ms to 21.22 ms and raised the publish rate from 2.98M to 4.72M msg/s over the standard mode.
+- Clients you control and can teach +ROUTE, with subjects that map cleanly to single workers; this was the fastest mode in the README (6.78M msg/s).
+
+**Skip it when:**
+- Production messaging. The project is a single 'first commit' tagged 0.1.0-alpha, and the author said on HN it is 'not a nats replacement' and that he has no time to maintain it. The original bustermq/bustermq repo and bustermq.sh are gone, and the catalogued URL is a third-party copy.
+- Anything that needs JetStream or persistence, queue groups, headers, TLS, auth, clustering or leaf nodes, or payloads over 64 KB (max_payload is 65536).
+- Workloads with heavy subscription churn, such as request/reply inboxes with unique subjects. The first SUB to a new subject on a worker, every wildcard SUB and each last UNSUB bump a global version under a mutex, and then every worker rebuilds its whole routing cache. UNSUB also linearly scans all of that worker's subscriptions.
+- Memory-constrained or container deployments. By default it prefaults a 2 GB mbuf pool, reserves an N x N matrix of 131,072-entry SPSC queues (about 1 GiB at 16 workers; derived from 256 queues x 131,072 x 32-byte descriptors) and reserves a 16 MB send buffer per connection.
+- Hosts with more than 64 hardware threads (worker bitmasks are u64), and kernels older than 6.1 if you publish payloads of 4 KB or more: that path uses IORING_OP_SENDMSG_ZC, which liburing documents as available since 6.1, while the README only asks for Linux 5.10+.
+
+**Integration:** source-drop (standalone server binary built with Bazel; no library API) · Bazel with rules_zig 0.12.2 (hermetic Zig toolchain), rules_cc, bazel_skylib, aspect_bazel_lib, rules_oci, rules_distroless; libc (-lc); freref/spsc-queue fetched at a pinned git commit; vendored rapidhash.h · Zig 0.15.2 (pinned in MODULE.bazel); .bazelversion pins Bazel 7.6.0 although the README says Bazel 8+ · Linux only (io_uring; README says 5.10+, but payloads of 4 KB or more need SENDMSG_ZC, available since 6.1). Bazel platforms are declared for x86-64 and aarch64, but it was benchmarked only on x86-64 (Ryzen 9 9950X). Listeners are IPv4 only.
+
+**Vs siblings:** Pick it only if you specifically need the NATS core wire protocol: it is the only catalogued entry that speaks NATS, but it is an unmaintained prototype. For a thread-per-core io_uring message system with persistence and an active project, Apache Iggy is the sibling to use; to build your own thread-per-core io_uring server, start from monoio or ringline instead.
+
+**Gotchas:**
+- Queue-group SUBs are parsed but the group is ignored, so every member gets every message instead of one of them. HPUB is rejected as an invalid command.
+- Messages are dropped silently, with only a stats counter bumped, when a client's 16 MB send buffer, a cross-worker SPSC queue, or the 1,024-forwards-per-read-batch limit is full. There is no slow-consumer disconnect. The optional --overflow queue (1,024 messages) gives up per-client ordering.
+- Exact subscriptions are keyed only by the 64-bit rapidhash of the subject, with identity equality and no string compare at delivery, so a hash collision would deliver to the wrong subscribers. The default starts one worker per detected CPU even though bitmasks cap it at 64 workers.
+- -h/--host is accepted but ignored (listeners always bind 0.0.0.0). All heap allocations, including the per-SUB subject and SID copies, go through std.heap.page_allocator.
+
+**Status:** One commit (2026-01-01), still 'active' only by the 12-month rule: the author disclaimed maintenance, the original repo and site are gone, and this URL is a third-party copy. It is Apache-2.0 and small enough to read or vendor as reference code, not as a maintained server.
+
+[repo](https://github.com/bpd1069/bustermq) · [benchmark](https://github.com/bpd1069/bustermq/blob/master/README.md)
+
+##### Hinsightd MT (hin10)  `C`  `BSD-3-Clause`  `stale`  `Tier C`
+
+Tiny multi-threaded io_uring HTTP/1.1 static-file server in C; edges nginx 1-16% on a 102-byte file, loses on larger files.
+
+**Beats:** nginx — These are the author's own ApacheBench runs from February 2024. The page describes them as open-request-close tests, with client and server on one 4-core, non-hyperthreaded machine; the CPU model, compiler and flags are not stated, and each figure is the best of several runs. hinsightd 0.10.2 served a 102-byte file at 124,046 req/s against nginx 1.25.3's 106,615 at -c 50 (about 1.16x), shrinking to about 1.01x at -c 750-1000. With sendfile disabled on every server it reached 0.68-0.82x nginx on the 89.7 kB jquery.js and about 0.75x on dynamic gzip.
+
+**Known shortcoming:** Mixed results: ~1.16x nginx on index.html at -c 50 falling to ~1.01x at -c 1000, slower on jquery.js (~0.68x) and gzip (~0.75x); the readme itself says 'almost nginx level'. Stale since 2024-07. Licence conflict: docs/LICENSE.txt is BSD-3-Clause, the readme says MIT.
+
+**Known shortcoming:** The README's Linux 5.6 floor is wrong: io_uring setup uses SINGLE_ISSUER (6.0) and COOP_TASKRUN (5.19); older kernels fall back to a lightly tested epoll path with blocking pread. No sendfile or splice (files go through ~8 KB buffers), hence 0.68-0.82x nginx on the 89.7 kB file. The gzip comparison may be unfair (hinsightd hard-codes zlib level 9; nginx's level is a hidden template variable, default 1). The small-file win shrinks from 1.16x at -c 50 to ~1.01x at -c 500-1000, best-of-N with client and server on one 4-core machine. CMake 3.17 declared but cmake_path needs 3.20. README warns DoS bugs are still likely; 2024 changelog fixes many use-after-free bugs; proxy keepalive 'bugged'; Podman needs seccomp=unconfined; post-v0.10.3 commits untagged and unbenchmarked; no FastCGI, HTTP/2 or multi-range; 2 stars.
+
+**How:** Each worker thread (one per core by default) owns a thread-local io_uring ring created with IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_COOP_TASKRUN. Each thread keeps one accept SQE outstanding on the shared listening socket and then handles that whole connection itself, so little is locked. Submissions are batched: one io_uring_submit per loop pass, and up to 64 CQEs reaped per wait. File open, read, send and close are all asynchronous io_uring operations. Bodies smaller than the ~8 KB buffer are condensed with the headers, and TCP_CORK is set only for larger bodies. That suits the connect-request-close pattern of the tiny-file test. There is no sendfile or splice: file data is read into user-space buffers and then sent, which is why it falls behind nginx on the 89.7 kB file.
+
+**Use it when:**
+- Serving tiny static files (a few hundred bytes) to many short-lived connections on a recent Linux kernel. The author's test puts it 7-16% ahead of nginx at 50-250 concurrent ab clients.
+- Studying or borrowing a compact per-thread io_uring accept/read/send loop in plain C. The core netcode is a few hundred lines per file, the project page says the binary is under 200 KB, and the licence is permissive (BSD-3-Clause text, readme says MIT).
+- Hobby or dev-box static hosting where one small binary with HTTPS, range and 304 support is enough and pre-1.0 software is acceptable.
+- A/B experiments of io_uring against epoll in the same server: --force_epoll switches the backend (the author says the epoll path is slower and not very well tested).
+
+**Skip it when:**
+- Files larger than a few KB. It has no sendfile, and on the 89.7 kB jquery.js it reached only 0.68-0.82x nginx's req/s, even with sendfile turned off in nginx to match.
+- CPU-bound dynamic compression: gzip of jquery.js ran at about 0.75x nginx (727 vs 973 req/s at -c 50), and compression is fixed at zlib level 9.
+- High concurrency: the tiny-file lead falls to about 1% at c=500-1000. That is within the noise of a best-of-N test with client and server on one machine.
+- Internet-facing production. The README warns that denial-of-service bugs are 'still likely present', and the 2024 changelog fixes several use-after-free bugs. Keepalive to reverse-proxy backends is marked 'bugged'. There is no FastCGI, no HTTP/2 and no multi-range support.
+- Non-Linux hosts, and container runtimes that block io_uring syscalls (the README says podman needs --security-opt seccomp=unconfined).
+
+**Integration:** Standalone server binary (hinsightd) built from source with CMake/Ninja. The build also produces and installs an undocumented libhin library with headers. This branch has no distro packages; a Dockerfile is provided. · liburing, zlib, pthreads, glibc or musl; OpenSSL or LibreSSL (on by default, can be turned off); libsystemd optional (off by default); CMake to build (the README uses Ninja). · Any C compiler with GNU extensions (__thread, _GNU_SOURCE). CMakeLists.txt declares CMake 3.17 but calls cmake_path unconditionally, and cmake_path needs CMake 3.20. The README says Linux >= 5.6, but the ring is created with IORING_SETUP_SINGLE_ISSUER (Linux 6.0+) and COOP_TASKRUN (5.19+). On older kernels ring setup fails and the server falls back to epoll. · Linux only (io_uring with an epoll fallback, statx, signalfd); glibc and musl. CPU architectures: not documented.
+
+**Vs siblings:** uWebSockets, libhv and io_uring-echo-server (frevib) are libraries or demos you build a server on, and F-Stack keeps nginx itself but moves its network path to DPDK. Pick hinsightd only if you want a ready-made, very small C static-file server whose per-thread io_uring loop you can read end to end. For real static serving, nginx remains the safer choice.
+
+**Gotchas:**
+- Kernel mismatch: the README says Linux >= 5.6, but io_uring setup requests IORING_SETUP_SINGLE_ISSUER (6.0+). On older kernels it logs 'io_uring_init failed' and every thread runs the slower, less-tested epoll path, where file reads become blocking pread calls.
+- The gzip comparison may not be like-for-like. hinsightd hard-codes deflateInit2(Z_BEST_COMPRESSION), while the benchmark's nginx.conf takes gzip_comp_level from a template variable whose value is not shown (nginx's default is 1).
+- The README lags the code. Its roadmap still says 'readd reverse proxy', but rproxy landed in April 2024 commits (after the benchmarks). It also says MIT while docs/LICENSE.txt holds BSD-3-Clause text.
+- The benchmarks cover 0.10.1 and 0.10.2 only. Later commits (reverse proxy, an SSL refactor, POST support, a global memory limit) are untagged and unbenchmarked.
+
+**Status:** Stale: last commit 2 July 2024 (last tag v0.10.3, Feb 2024), 2 GitLab stars, no issues filed, no packages for this branch. The code is permissively licensed and small enough to read or vendor, but treat it as an unmaintained hobby server.
+
+[repo](https://gitlab.com/tiotags/hin10) · [benchmark](https://tiotags.gitlab.io/blog/benchmark5.html)
+
+##### io_uring-echo-server (frevib)  `C`  `MIT`  `stale`  `Tier C`
+
+Single-threaded ~200-line C TCP echo server on liburing, benchmarked in 2020 against the same author's minimal epoll echo server.
+
+**Beats:** epoll — In February 2020 the io-uring-feat-fast-poll build (gcc -O2, compiler version unstated) served a peak of 216,637 req/s at 300 clients with 128-byte messages, against a peak of 152,561 for the author's epoll server (about 1.4x). At 1000 clients the gap was about 1.6x (173,343 vs 108,380), and at 1 client the two were equal. Each server was pinned to one isolated vCPU in a VMware Ubuntu 18.04 guest (patched Linux 5.6.0-rc1+) on a 6-core 2.6 GHz MacBook Pro. Load came from rust_echo_bench, a thread-per-connection blocking client doing 60-second closed-loop ping-pong runs on the same VM. Independent re-runs on Linux 5.8 in issue #8 did not reproduce the gap.
+
+**Known shortcoming:** Benchmarks the io-uring-feat-fast-poll branch, not master; the page reports the io_uring server locking up under sustained load. An echo-server demonstration, not a library.
+
+**Known shortcoming:** Not reproduced: in issue #8 three independent testers found io_uring equal to or slower than epoll on Linux 5.8. The benchmarked branch indexes buffers by fd without bounds checks and leaks fds; master has an open buffer-sharing data-corruption bug (#23) and crashes above ~1100 clients (#17). The author calls it a 'bare minimum show case'. Better as a learning reference than a performance claim.
+
+**How:** The epoll server calls epoll_wait and then does one recv() and one send() syscall per ready socket. The io_uring server queues accept/recv/send SQEs and submits a whole batch with one io_uring_enter per loop iteration; an strace in issue #8 shows about 60 SQEs submitted per call. It relies on IORING_FEAT_FAST_POLL: a recv on a socket with no data stays pending in the kernel and completes when data arrives, so the loop issues no separate poll requests (README v1.5: 'Remove all polling'). Master also switched to kernel-selected provided buffers (IORING_OP_PROVIDE_BUFFERS), which adds an extra provide-buffers SQE per message; the author says this lowered throughput, and the published numbers are from the earlier per-fd-buffer branch.
+
+**Use it when:**
+- Learning io_uring networking: a short, readable reference for an accept/recv/send completion loop, packing state into the 64-bit user_data, and provided buffers.
+- As the starting point for your own epoll-vs-io_uring A/B test on your own kernel and hardware, using the paired epoll-echo-server and rust_echo_bench. Plan to re-measure rather than trust the 2020 numbers.
+- Checking whether syscall batching helps a single-core ping-pong workload with hundreds of concurrent connections and small (128-1000 B) messages. That is where the 2020 page showed the gap (about 1.4-1.6x at 150-1000 clients), with no gain at 1 client.
+- Linux 5.7+ hosts only. Master exits at startup if IORING_FEAT_FAST_POLL or IORING_OP_PROVIDE_BUFFERS is missing.
+
+**Skip it when:**
+- Production serving. The author calls it 'only a bare minimum show case for io_uring... don't expect production-grade stability' (issue #17). It does not handle short sends, never checks io_uring_get_sqe for NULL, and calls exit(1) on -ENOBUFS.
+- Relying on the claimed speedup. In issue #8 (open since 2020, 26 comments), three independent commenters could not reproduce it. On Linux 5.8 (Fedora Rawhide; a 4-vCPU GCP VM), io_uring was equal to or slower than epoll, e.g. 227k vs 235k req/s, or within about +/-2k req/s with the winner alternating. The author replied that results 'most likely are different now'.
+- More than about 1000 concurrent clients. Issue #17 reports master crashing every time above 1100 clients on a 16-core AWS instance, and the benchmark page says both servers crash above about 2000 clients.
+- Multi-core scaling: it uses one thread and one ring with global buffers, and has no multi-threaded or SO_REUSEPORT mode.
+- As an example of current best-practice io_uring. It predates ring-mapped provided buffers (io_uring_register_buf_ring, Linux 5.19+) and multishot accept/recv (5.19/6.0), so it neither shows nor measures those.
+
+**Integration:** source-drop · liburing: a system install on master (the bundled copy was removed in 2021); the benchmarked io-uring-feat-fast-poll branch bundles its own liburing copy (liburing.spec there says 0.6) · C99 (designated initializers, for-loop declarations); built with $(CC) -Wall -O2 -D_GNU_SOURCE, and no compiler version is documented. Kernel: Linux 5.7+ for master; the benchmark ran on a patched 5.6.0-rc1+ (io_uring-task-poll branch) · Linux only; no architecture-specific code (the benchmark ran on x86-64)
+
+**Vs siblings:** Pick it only to study raw liburing socket calls in about 200 lines, or to seed a controlled io_uring-vs-epoll experiment. For anything that ships, monoio (Rust, thread-per-core) or PhotonLibOS (C++) are maintained io_uring runtimes with their own benchmarks (monoio vs Tokio/epoll on 4 cores; Photon vs boost::asio).
+
+**Gotchas:**
+- The published numbers come from the io-uring-feat-fast-poll branch, not master. That branch indexes fixed per-connection buffers and state by fd number (bufs[fd], conns[fd], 4096 slots, no bounds check). It also calls shutdown() but never close() on disconnect, so fds grow without limit until they overrun those arrays. Master fixed the fd leak in PR #14 (2022); the epoll baseline has the same shutdown-without-close pattern.
+- On the benchmarked branch the listen socket is SOCK_NONBLOCK, so an io_uring accept can complete with -EAGAIN. The code then queues a recv on that negative 'fd', indexing conns[] out of bounds, and re-arms accept. PR #6 (merged into master in 2020) says this caused extra CQEs on every loop and suggests it, plus a small queue, may explain the 'uninterruptible sleep' hang the benchmark page reports. The hang was never resolved.
+- On master, a read that fails or hits EOF re-provides the buffer ID taken from cqe->flags >> 16 without checking IORING_CQE_F_BUFFER. Buffer 0 can then be handed to two connections at once, and one client receives another's data (issue #23; fix PR #24 unmerged since June 2025).
+- Issue #9 argues the comparison is not like for like: the epoll server does recv/send serially on one thread, while io_uring SQEs may run concurrently on kernel iou-wrk worker threads. The page reports only req/s, not the total CPU used by either server.
+
+**Status:** Stale: the last commit (2024-01-20) was a small bug fix (PR #20), and the author says the project is 'quite stale' and he will only merge fixes. It is MIT-licensed and small enough to copy as a teaching skeleton, but it is not something to depend on.
+
+[repo](https://github.com/frevib/io_uring-echo-server) · [benchmark](https://github.com/frevib/io_uring-echo-server/blob/io-uring-feat-fast-poll/benchmarks/benchmarks.md)
+
+##### JUring  `Java`  `Unlicense`  `active`  `Tier C`
+
+Java FFM bindings to Linux io_uring (via liburing) for batched file reads/writes; beats FileChannel on small random reads.
+
+**Beats:** java.nio.channels.FileChannel (Java NIO) — These are first-party JMH results on an unnamed Linux machine; CPU, storage, kernel, JDK and JVM flags are not stated. For reads, 25 threads do buffered (not O_DIRECT) random reads over 2,211 files of 5 MiB each. JUring uses registered files with up to 256 in flight per thread; the FileChannel baseline does one synchronous read at a time into a new heap ByteBuffer. Results: +55% at 512B, +489% at 4KB, +23%/+16% at 16KB/64KB. The 4KB point implies about 55 GB/s, about 4x JUring's byte rate at other sizes, so it looks like a page-cache outlier. Writes (O_DIRECT in the current bench code) gain +123% to +246% single-threaded but lose up to 33% at 20 threads.
+
+**Known shortcoming:** Unequal read baseline: JUring keeps up to 256 reads in flight per thread in batches while FileChannel does one synchronous read at a time into a new heap buffer, so the table measures batching vs one syscall per read. The 489% headline implies ~55 GB/s at 4 KB (buffered reads over ~11.6 GB, cache state unstated), far above its other sizes (9.8-14.9 GB/s): likely a page-cache outlier. README write tables can't be reproduced from the current code (FileChannel write benchmarks commented out, JUring writes all at offset 0, 15 in flight not 256, buffer pinned to 4096, O_DIRECT unstated). CQE results are never checked, so failed operations count as throughput, and the library doesn't throw on errors (#17). '16KB' is 16,386 bytes; no CPU, storage, kernel, JDK or flags. No JNI (pure Java FFM over liburing-ffi.so). Needs JDK 25 (README says 22+), liburing 2.4+, kernel 6.0/6.1 for the benchmark ring flags; hardcodes liburing's struct io_uring layout. 0.1-SNAPSHOT, not on Maven Central, no CI. Code reading: not thread-safe, racy pool in JUringBlocking, full-queue null check can't work under FFM (likely JVM crash), poller spins a core with Thread.yield().
+
+**How:** Batching: the benchmark loop keeps up to 256 reads in flight per thread, submits every 64 SQEs with one io_uring_submit, and reaps completions in bulk with io_uring_peek_batch_cqe + io_uring_cq_advance. FileChannel does one pread-style syscall per call. Registered files (io_uring_register_files + IOSQE_FIXED_FILE) and optional registered buffers (read_fixed/write_fixed) cut per-op fd and buffer setup. Calls go through Java FFM downcalls into liburing-ffi.so, with hot functions (get_sqe, set_flags, submit, cqe_seen, cq_advance) marked Linker.Option.critical. Per-op user_data structs come from a malloc-backed pool ('ZeroGc' classes) and buffers are native, so the hot path avoids GC allocation.
+
+**Use it when:**
+- JVM service on Linux issuing many small random reads (512B-4KB) against a fixed set of files that can be opened once and registered with the ring (README: +55% at 512B, +489% at 4KB at 25 threads).
+- Code that can batch: tens to hundreds of operations in flight per thread, one submit per batch, completions reaped in bulk.
+- Single-threaded or lightly threaded writers (README: +123% to +246% at 1 thread, +33% to +77% at 8 threads below 64KB).
+- Workloads that open, read and close many files, where io_uring openat/close can be queued too (README: +13% to +48% vs FileChannel open/read/close).
+- Blocking-style code on virtual threads that wants io_uring reads behind a Future (README: +14% to +138% vs FileChannel on virtual threads).
+
+**Skip it when:**
+- Many concurrent writers or large writes: at 20 threads JUring ties at 512B and loses 2%, 16% and 33% at 4KB, 16KB and 64KB, and at 8 threads it loses 3% at 64KB.
+- One synchronous operation at a time: the gain comes from batching. In issue #34 a fork's 'JUring sync' took 0.68 ms vs 0.26 ms for standard O_DIRECT FileChannel on a 10-page write.
+- Portability: Linux only, needs liburing >= 2.4 installed (liburing-ffi.so), and pom.xml targets JDK 25.
+- You need a drop-in NIO API (FileChannel, AsynchronousFileChannel, ByteBuffer) or a supported artifact: it is 0.1-SNAPSHOT, has no releases, is not on Maven Central, has no CI config in the repo, and the README lists 'Simplicity (Working on this!)'.
+- Code that cannot manage native memory by hand: read/recv buffers are malloc'd and leak unless freeBuffer()/close() is called.
+
+**Integration:** source-drop (Maven project with JPMS module 'JUring', 0.1-SNAPSHOT; build the jar yourself, no published artifact) · liburing >= 2.4 on the host (loads liburing-ffi.so; FFI support arrived in liburing 2.4) and libc; no runtime Java dependencies (JMH, JUnit, AssertJ are test-scope) · JDK 25 per pom.xml (README says Java 22+); run with --enable-native-access; Linux kernel 5.1+ per README, 5.19+ for multishot accept, 6.0/6.1+ for the SINGLE_ISSUER/DEFER_TASKRUN flags the benchmarks use · Linux only; pure Java over FFM, so any arch with liburing-ffi (the devcontainer is arm64 Ubuntu 25.04); the benchmark machine is undocumented
+
+**Vs siblings:** Pick JUring only when you must stay on the JVM and your bottleneck is file I/O through FileChannel. The catalogued siblings (Condy, the Asio io_uring backend, monoio, uring_exec) are more mature native C++/Rust io_uring runtimes built mainly for network event loops, so in native code use them instead.
+
+**Gotchas:**
+- Errors are not thrown. Each Result carries the raw CQE result, so check for a negative errno yourself. Issue #17: a write on a read-only fd 'passes silently'; the maintainer closed it and left the check to callers. The benchmarks also count completions without checking results.
+- Ring capacity is not guarded: getSqe checks for Java null, but an FFM downcall returns MemorySegment.NULL. Queuing more than queueDepth operations before submit() likely hands liburing a NULL SQE and crashes the JVM (inferred from source).
+- JUringBlocking starts a platform poller thread per instance. With the default timeout it spins on Thread.yield(), which burns a core; the benchmark sets a 1 ms sleep instead.
+- The Java code hardcodes liburing's struct io_uring layout (LibUringDispatcher), so a liburing build with a different struct layout could break it; the tested liburing versions are not documented.
+
+**Status:** Active (socket support and readv merged May 2026, last commit 2026-05-07) but pre-release: 0.1-SNAPSHOT with no tags, no Maven Central artifact and no CI. The Unlicense public-domain dedication (no patent grant) makes its 80 main-source Java files easy to vendor.
+
+[repo](https://github.com/davidtos/JUring) · [benchmark](https://github.com/davidtos/JUring)
+
+##### libev  `C`  `BSD-2-Clause OR GPL-2.0-or-later`  `abandoned`  `Tier C`
+
+Small, embeddable C event loop with io, timer, signal, child and stat watchers; halves libevent 1.4's per-iteration cost when timers churn.
+
+**Beats:** libevent — The libev author ran a modified libevent bench.c: libev 3.31 vs libevent 1.4.3, both on epoll, gcc 4.2.3 -O3, Core2 Quad at 3.6 GHz, Linux 2.6.24. The runs covered 100-100,000 socket pairs with 100 or 1,000 active clients, taking the minimum of six runs. Without timeouts, total time per iteration was roughly halved, mostly from cheaper watcher setup, while poll time differed by under 5%. With per-socket idle timeouts, event processing was 2-3x faster. A 2011 rerun (libev 4.03 vs libevent 1.4.13 and 2.0.10) showed the same pattern, in charts only.
+
+**Known shortcoming:** The recorded repo is an unofficial mirror stuck at 4.22; upstream (software.schmorp.de) is at 4.33 (2020-03). The benchmark is libev's author's own, on a 'Core2 Quad at 3.6GHz' with gcc 4.2.3; without timeouts poll times differ from libevent by under 5%, the 2-3x gain is with idle timeouts.
+
+**Known shortcoming:** enki/libev is a stale mirror frozen at 4.22 (2015); upstream (CVS, dist.schmorp.de) is at 4.33 with small commits into 2026, so link upstream. The mirror lacks the 4.23-4.33 fixes (ev++.h fails under C++17, #15; timerfd time-jump detection; linuxaio/io_uring backends, which upstream documents as slower than epoll). The benchmark is from 2008 against libevent 1.4; its appendix says libevent 2.0.10 was a tiny bit slower, not closer, and nothing compares libev with libevent 2.1 or libuv (gevent finds libev and libuv roughly equal). Its 'latency' metric is CPU time per loop pass. Windows has only a select backend for sockets (docs advise another library above ~100 sockets); kqueue is the default only on NetBSD, so macOS/other BSDs use select/poll unless asked.
+
+**How:** Starting or stopping an io watcher only marks the fd in an fdchanges array. fd_reify then pushes the net change to the kernel once, before the next poll. The epoll backend also skips EPOLL_CTL_DEL and tags each event with a per-fd generation counter to drop stale events, so stopping and restarting a watcher usually costs no syscall. The benchmark page says libevent 1.4 calls epoll_ctl on every change. Timers live in a heap indexed by array position, so the next timer is O(1) and a reset (ev_timer_again) only moves the entry. The Changes file dates a 4-ary heap that caches expiry times in each node (EV_USE_4HEAP, EV_HEAP_CACHE_AT) to 3.41. The benchmark page calls it the 'upcoming 3.33', and the benchmarked 3.31 still used a binary heap. Per-fd state is a flat array indexed by fd, and pending watchers are kept in per-priority arrays.
+
+**Use it when:**
+- Linux servers holding 10k-100k connections, each with an idle timeout reset on activity. This was the benchmark's heaviest case: event processing 2-3x faster than libevent 1.4.3.
+- Code that starts, stops or re-arms many watchers per iteration. libev batches the changes before the poll, so each one does not cost an epoll_ctl.
+- Embedding a loop in a C/C++ program or a language runtime as a few source files with no dependencies. The EV Perl module, rxvt-unicode and gvpe embed it, and gevent uses it by default on CPython outside Windows.
+- You need more than fd readiness: wall-clock cron-style timers (ev_periodic), child-process reaping, inotify-backed file watching, signalfd/eventfd, one loop per thread with ev_async wakeups.
+- Existing libevent-1.4-API code that you want to try on libev by recompiling against libev's event.h.
+
+**Skip it when:**
+- Windows: only a select backend that handles sockets only. The docs say programs needing more than about a hundred sockets need a different implementation. gevent defaults to libuv there.
+- macOS and most BSDs: kqueue is used by default only on NetBSD. Without an explicit EVBACKEND_KQUEUE, macOS falls back to select and loses the O(active fds) scaling.
+- You want buffered sockets, DNS, HTTP or TLS in the same library (libevent, libuv, libhv). libev is only the loop.
+- Completion-based I/O: the upstream io_uring backend is documented as slower than epoll and is off by default. Readiness-model limits still apply.
+- You need a maintained dependency with measured wins against current libraries. There has been no release since 4.33 (2020), the GitHub mirror is frozen at 4.22, and nobody has benchmarked libev against libevent 2.1 or libuv. gevent reports libev and libuv as 'roughly the same'.
+
+**Integration:** source-drop (ev.c #includes the enabled backend files; add event.c for the libevent API) or an autotools-built static/shared lib · none beyond libc and the OS polling APIs (README: 'no dependencies'); older glibc may need -lrt for clock_gettime (Changes 4.18) · ISO C compiler; sources also compile as C++. The mirror's 4.22 ev++.h fails under C++17 because of dynamic exception specs (mirror issue #15). Upstream 4.25 removed them. · Linux (epoll; upstream 4.26+ adds optional linuxaio and io_uring backends), Solaris (event ports), NetBSD (kqueue), other BSDs and macOS (select/poll by default, kqueue opt-in), generic POSIX; Windows only via winsocket select, sockets only
+
+**Vs siblings:** Choose libev over picoev when you need exact timers and a broad watcher set. picoev claims to beat libev on a variant of this benchmark, but it keeps timeouts in a 1-second-granularity ring buffer and calls itself less mature. Choose libev over libhv when you want only a tiny, dependency-free loop to vendor. libhv is an actively developed cross-platform TCP/HTTP/WebSocket library benchmarked on throughput. For io_uring completion I/O, look at Condy or uring_exec instead.
+
+**Gotchas:**
+- After fork(), the child must call ev_loop_fork(), set EVFLAG_FORKCHECK, or use select/poll. Otherwise epoll/kqueue state is inherited and wrong.
+- Default error handling aborts. Unhandled syscall errors call the syserr callback, which prints and calls abort(). Usage errors are assert()s. The allocator callback returning NULL may abort.
+- Idle-timeout speed depends on the pattern. Stopping, setting and restarting a timer on every packet is the documented slow way. Use ev_timer_again, or one timer plus a linked list for millions of identical timeouts. In the benchmark, libev's libevent emulation (del+add, two heap operations per reset) was noticeably slower than the native API.
+- epoll quirks surface through libev: keep one watcher active per fd until close, avoid watchers on dup()'ed fds, and expect regular files to be rejected. The docs say select can match epoll up to about 100 fds.
+
+**Status:** The GitHub mirror is frozen at 4.22 (Dec 2015), and upstream (schmorp CVS, dist.schmorp.de) last released 4.33 on 2020-03-18, with only sporadic small CVS commits since (latest ev.c revision 2026-04-13). It is dual BSD-2-Clause/GPL-2.0 and designed to be vendored as a few C files, so take 4.33 from upstream rather than the mirror.
+
+[repo](http://software.schmorp.de/pkg/libev.html) · [benchmark](http://libev.schmorp.de/bench.html)
+
+##### libhv  `C`  `BSD-3-Clause`  `active`  `Tier C`
+
+Cross-platform C event-loop library with built-in HTTP/WebSocket/MQTT; ~1.4-1.6x libevent/libuv echo throughput, ties libev/asio.
+
+**Beats:** libevent, libuv — Setup: single-loop TCP echo servers on loopback, all written by the libhv author, driven by a libhv-based pingpong client sending 1 KB messages for 10 s. The README run (2021, 4 threads, 1000 connections, compiler and CPU not stated) measured libhv 215 MB/s vs libevent 157 and libuv 156 (~1.37x), with libev at 210. The 2026-09-25 GitHub Actions run I opened (ubuntu-24.04, gcc 13.3.0, distro libevent 2.1.12, libuv 1.48.0, libev 4.33, asio 1.28.1; 2 threads, 100 connections; CPU not logged) measured libhv 115 vs libevent 79 and libuv 77 (~1.46-1.49x), with libev and asio both at 118.
+
+**Known shortcoming:** README numbers are a manual 2021 run; current CI shows libhv about 1.4-1.7x faster than libevent and libuv but tied with libev and asio. The baseline echo servers and the load client (built on libhv) were written by the libhv author.
+
+**Known shortcoming:** The lead comes from the harness: libhv shares one read buffer and sends directly, while the author's libuv and libevent echo servers allocate per message; the libev server, written the same way, ties libhv. The io_uring backend (2026-03, off by default) only uses poll readiness and is not in a release. Three 2023 HTTP-layer CVEs (XSS, response splitting, CRLF injection) list no patched version; open ASan heap overflow in the optional DNS module (#851). Docs mostly in Chinese.
+
+**How:** All connections on one loop share a single 8 KB per-loop read buffer, and hio_write calls send() directly, copying only the unsent remainder into a per-connection queue on EAGAIN; a steady-state echo therefore does no heap allocation per message. The benchmark's libuv server instead mallocs a read buffer and a write request per echo, and its libevent server allocates an evbuffer per read. The libev server uses a static buffer plus direct send(), which is why libev ties libhv. Supporting pieces: an fd-indexed io array, min-heap timers, and priority-ordered pending callbacks over epoll, kqueue, event ports, wepoll or select.
+
+**Use it when:**
+- C or C++11 services that need one BSD-3 library for the event loop plus TCP/UDP, timers and HTTP/WebSocket/MQTT/Redis clients or servers, instead of stitching libuv or libevent to separate protocol libraries.
+- Many-connection request/response or proxy traffic with small messages (about 1 KB) where your current libuv/libevent code allocates per read or per write.
+- Code that must build on Linux, Windows, macOS, Android and iOS from one source tree (all five are built in CI) and cross-compile for ARM or MinGW.
+- C++ servers that want muduo-style one-loop-per-thread scaling through TcpServer::setThreadNum or EventLoopThreadPool with little code.
+
+**Skip it when:**
+- Existing libev or asio TCP code: in current CI libhv (115 MB/s) is level with libev and asio (both 118 MB/s), so porting buys no throughput.
+- You need to keep libevent or libuv call sites: there is no compatibility layer (issue #354 asked for one; only a partial sketch exists in comments), so every call site must be ported.
+- You want completion-based io_uring I/O: the io_uring backend (added 2026-03, off by default, needs liburing) only submits IORING_OP_POLL_ADD readiness polls and is not in any tagged release yet.
+- Untrusted input through the HTTP or DNS modules without your own review: three medium 2023 CVEs (CVE-2023-26146/26147/26148: XSS, response splitting, CRLF injection) are recorded for the HTTP layer, and an open report (#851, 2026-07) shows an ASan-confirmed heap overflow in protocol/dns.c (the WITH_PROTOCOL module, off by default).
+- Code that often starts, stops and destroys C++ TcpClient/UdpClient objects on a shared EventLoop from other threads: open issue #704 reports crashes on destruction and after repeated Stop/Start. Detailed docs are mostly Chinese (docs/cn).
+
+**Integration:** static lib or shared lib (both built by default via Makefile/configure, CMake or Bazel; also in vcpkg and xrepo) · none for the core; optional OpenSSL, GnuTLS or mbedTLS (TLS), nghttp2 (HTTP/2), liburing (io_uring backend), curl (deprecated), Lua, QuickJS, protobuf (hrpc) · C99 and C++11 (C++ layer optional via --without-evpp); GCC 4.8+ or MSVC 2015+; CMake 3.6+ · Linux (epoll, optional io_uring), Windows (wepoll over IOCP by default, else WSAPoll), macOS/BSD (kqueue), Solaris (event ports), Android, iOS; select fallback elsewhere
+
+**Vs siblings:** Pick libhv over uWebSockets when you need a general C event loop with TCP/UDP, timers and HTTP/WebSocket/MQTT/Redis clients on five platforms, not just a fast HTTP/WebSocket server. Pick it over PhotonLibOS (a C++ coroutine library whose catalogued win over asio is ~1.05x) when you want a plain C callback API; for io_uring-first designs, monoio (Rust) and the frevib echo server go further than libhv's poll-only io_uring backend.
+
+**Gotchas:**
+- The buffer passed to the read callback is the loop's shared read buffer. It is overwritten by the next read on any connection of that loop, so copy the data before storing or deferring it, or give the connection its own buffer with hio_set_readbuf.
+- Unsent data is copied into a per-connection write queue. Past 16 MB (max_write_bufsize default) hio_write closes the connection with ERR_OVER_LIMIT, so large senders need flow control through the write callback or hio_write_is_complete.
+- The hloop_post_event queue has no size limit (issue #818); the maintainer says to add your own cap if producers can outrun the loop.
+- hloop_new defaults to HLOOP_FLAG_AUTO_FREE, and the header forbids calling hloop_free on such a loop. For C++ TcpClient/UdpClient on an external loop, the maintainer advises heap allocation and deletion inside loop->runInLoop.
+
+**Status:** Actively maintained (last commit 2026-09-25) under BSD-3-Clause, but the last tagged release is v1.3.4 (2025-10-25), so the io_uring backend and Redis client exist only on master; the library itself is easy to build and vendor.
+
+[repo](https://github.com/ithewei/libhv) · [benchmark](https://github.com/ithewei/libhv/blob/master/README.md)
+
+##### may  `Rust`  `MIT OR Apache-2.0`  `active`  `Tier C`
+
+Rust stackful-coroutine runtime with Go-style go! and blocking-style I/O; its may_minihttp demo beat pre-1.0 tokio_minihttp by ~15% req/s.
+
+**Beats:** Tokio, pre-1.0 (tokio-core 0.1 / tokio-proto 0.1 era, via tokio_minihttp) — The author ran wrk (1 client thread, 200 connections, 10 s) against the hello-world servers of may_minihttp and tokio_minihttp with one server worker thread on an unspecified laptop: 116,182 vs 100,651 req/s (~1.15x), with lower average latency (1.70 ms vs 1.98 ms) but higher max latency (20.17 ms vs 12.53 ms); the Tokio side is tokio-core/tokio-proto 0.1 on futures 0.1, and neither rustc version nor CPU is stated. Independent TechEmpower data is framework-vs-framework, not a clean Tokio comparison: in R22 may-minihttp beat hyper and axum but only matched Tokio-based actix-server and ntex-plt on plaintext, while in R23 it led hyper, axum, ntex-plt and xitca-web on plaintext, JSON and fortunes (derived from raw data).
+
+**Known shortcoming:** The only first-party number (~1.15x, 116,182 vs 100,651 req/s) is against tokio_minihttp on tokio-core/futures 0.1, one worker on an unnamed laptop, no rustc version; the current example no longer sets one worker (default is num_cpus pinned workers). performace.md's Tokio 0.2 echo test is disowned by the author as old and unfair (#90); the request for a modern Tokio comparison (#72) has been open since 2019. TLS across a yield is UB (spawn is unsafe) and go! hides that unsafe block by design (#109); V8/JavaScriptCore code reportedly fails inside coroutines. Fixed 32 KiB stacks that don't grow (1M coroutines need 4+ GB); cooperative scheduling; no mode without work stealing (#90). Last crates.io releases lag master (may 0.3.51, 2025-05; may_minihttp 0.1.11, 2024-09).
+
+**Independent measurement:** TechEmpower Round 23 (framework vs framework, not a clean Tokio comparison; ranks derived from round23/ph.json raw data): may-minihttp ranked 1st of 518 on fortunes (1.33M rps), 2nd of 540 on JSON (3.10M vs hyper 2.89M) and 10th of 533 on plaintext (27.9M vs hyper 17.5M, ntex-plt 24.9M; plaintext looks network-bound). In Round 22 actix-server and ntex-plt matched it on plaintext.
+
+**How:** Each coroutine runs on its own mmap'd stack (default 4K words = 32 KiB on 64-bit, with a PROT_NONE guard page) and switches through a hand-written assembly register swap from the generator crate, so a read that would block parks only the coroutine until epoll (Linux), kqueue (macOS/BSD) or IOCP (Windows) reports the socket ready, and the worker switches to the next ready coroutine. N worker threads (default num_cpus, pinned to cores by default) each run their own event loop with a local work-stealing queue, and finished coroutines are recycled through a pool (default capacity 1000). may_minihttp adds request batching: it reads all available bytes into a 32 KiB buffer, decodes every pipelined request with httparse, encodes all responses into one buffer and, on Unix, issues a single non-blocking write before waiting on the socket again.
+
+**Use it when:**
+- You want Go-style thread-per-connection code in Rust (blocking reads/writes, mutexes, channels) at event-loop cost, without async/await function colouring.
+- HTTP/1.1 plaintext, JSON or Postgres-backed microservices where you control the whole stack: in TechEmpower Round 23 (Citrine, derived from raw data) may-minihttp ranked 1st of 518 on fortunes (1.33M rps), 2nd of 540 on JSON (3.10M vs hyper 2.89M, axum 2.71M) and 10th of 533 on network-bound plaintext (27.9M vs hyper 17.5M, axum 12.4M).
+- Porting an existing threaded, blocking Rust server where an async rewrite is too costly: swap std::net/std::sync for may::net/may::sync and wrap per-connection work in go!.
+- Many I/O-bound connections whose handlers need well under the 32 KiB default stack, on x86-64 or AArch64 Linux, macOS or Windows.
+
+**Skip it when:**
+- You depend on the Tokio ecosystem (hyper, axum, tonic, reqwest, sqlx): none of it runs on may's scheduler, and calling any thread-blocking API (std Mutex/Condvar, std::thread::sleep, blocking socket libraries) from a coroutine stalls the whole worker thread.
+- Millions of mostly idle tasks: every coroutine reserves a fixed stack that never grows (the author says 1M coroutines need at least 4 GB), while Tokio futures are stackless.
+- You need safe Rust to stay sound: touching thread-local storage across a yield is undefined behavior (libstd and C/C++ libraries use TLS), and open issue #109 argues go! hides the unsafe that spawn requires; the maintainer calls this intentional.
+- Deep recursion, large stack frames or heavy FFI engines: stack overflow hits the guard page and kills the process, and a user in #109 reports V8 and JavaScriptCore code silently not running or segfaulting inside coroutines.
+- Tail-latency-critical or thread-per-core designs: scheduling is cooperative (long CPU loops must call coroutine::yield_now()), there is no non-work-stealing mode and the author has no plan to add one (#90), and open issue #27 records much higher latency than Tokio in an early hyper port.
+
+**Integration:** crate · generator (stackful context switch), may_queue, crossbeam, parking_lot, socket2, core_affinity, smallvec, num_cpus, log, cfg-if; nix + libc on Unix; windows-sys on Windows. may_minihttp adds bytes, httparse, httpdate, itoa, once_cell. · Rust 2021 edition; may declares no rust-version, but its generator 0.8 dependency declares rust-version 1.73. README says stable, beta and nightly all work. · x86_64 Linux/Windows/macOS and AArch64 Linux/macOS per the README (the generator crate also covers armv7, riscv64, loongarch64, ppc64le, s390x Linux, but may does not list them). I/O backends: epoll (Linux/Android), kqueue (macOS/BSD), IOCP (Windows).
+
+**Vs siblings:** Pick may over monoio when you want multi-threaded work stealing and blocking-style std-like code on Linux, macOS and Windows rather than thread-per-core io_uring with async/await (monoio's own echo benchmark shows a larger 1.86x edge over Tokio, but may_minihttp has the stronger independent TechEmpower record). Pick it over futures-based Tokio challengers such as exec-rs or Rain when you would rather avoid async entirely; for C++, PhotonLibOS is the closest stackful-coroutine analogue.
+
+**Gotchas:**
+- go! wraps the unsafe coroutine::spawn in a hidden unsafe block, so safe-looking code can reach UB through TLS or FFI; call the unsafe spawn/Builder API directly if you want the unsafety visible.
+- Stack size is set in words, not bytes (set_stack_size(0x400) = 8 KiB on 64-bit). An odd stack size makes may pre-fill the stack and print the real usage when the coroutine exits; use it to tune. Functions with big stack frames such as std::io::copy are called out as risks.
+- may::config() (workers, stack size, pool capacity, worker pinning, poll timeout) takes effect only before the scheduler starts; workers are pinned to CPU cores by default (set_worker_pin(false) to turn it off).
+- An I/O-ready coroutine keeps reading until the socket returns WouldBlock before it yields, which the author links to latency jitter under load (#27).
+
+**Status:** Maintained (commits through 2026-08-03; latest crates.io releases may 0.3.51 on 2025-05-13 and may_minihttp 0.1.11 on 2024-09-22) and dual MIT/Apache-2.0 on crates.io; RustSec lists no advisory for may itself and old ones for its may_queue and generator dependencies are patched, but the documented TLS hazard (#6) and the open go! soundness issue (#109) make it better suited to controlled services than to general-purpose libraries.
+
+[repo](https://github.com/Xudong-Huang/may) · [benchmark](https://github.com/Xudong-Huang/may_minihttp)
+
+##### PhotonLibOS  `C++`  `Apache-2.0`  `active`  `Tier C`
+
+Alibaba's stackful-coroutine C++ I/O runtime (epoll/io_uring/kqueue); its echo server beats boost::asio on single-core QPS.
+
+**Beats:** boost::asio — Photon's first-party TCP echo test ran one server thread, 512-byte buffers, on 64-core 'Intel Platinum 2.70GHz' cloud VMs with kernel 6.x and a 32Gb network. With 4 streaming connections Photon reached 1604K QPS vs boost::asio's 634K (~2.5x); with 1000 ping-pong connections it reached 412K vs 393K (~1.05x). Photon used its default tcp socket on epoll and a CMake Release build (-O2 -DNDEBUG, plus SSE4.2 flags on x86-64 per CMakeLists.txt). The asio server code, the asio version and the compiler are not published.
+
+**Known shortcoming:** Ping-pong is only about 1.05x boost::asio (streaming about 2.5x). Only Photon's own test program is published, not the asio server; no compiler, flags or CPU model (cloud VMs).
+
+**Known shortcoming:** The benchmark used Photon's default epoll socket although its docs recommend io_uring for ping-pong. TLS adaptors do not validate certificate chains (#457, open). Pre-1.0 with recent serious scheduler and io_uring use-after-free bugs (fixed) and an open crash (#1093). Large CMake library needing openssl, zlib, libcurl and libaio; Linux/macOS only.
+
+**How:** The context switch uses context-aware context switching (CACS), described in the project's 'Stackful Coroutine Made Fast' paper. The x86-64 assembly saves only rbp and rsp, and the inline-asm call lists every other register as clobbered, so the compiler spills only the registers that are live at that call site. Each vCPU keeps a private, lock-free run queue (an intrusive list) and a min-heap sleep queue. The epoll, io_uring and kqueue backends register one-shot interests whose event data is the waiting coroutine's pointer, so an event wakes it through thread_interrupt() with no lookup. Sockets are non-blocking and try the syscall first, waiting only on EAGAIN (doio_once in net/basic_socket.h). Optional io_uring sockets, zero-copy send and F-Stack/DPDK backends sit behind the same interface.
+
+**Use it when:**
+- Moving thread-per-connection or blocking-style C++ server or storage code to high concurrency without rewriting it into callbacks. photon_std::thread, mutex and condition_variable are namespace-swap replacements for the std:: versions.
+- Linux TCP services where one core pushes a few high-throughput streams (multiplexed RPC or HTTP/2-like traffic): Photon's page shows about 2.5x boost::asio's per-core QPS in its 512-byte streaming echo test.
+- Storage or data-plane services that mix network and disk I/O (libaio/O_DIRECT, io_uring) and want one scheduler for both. This is its production origin at Alibaba Cloud storage (overlaybd, OSSFSv2).
+- You want to try io_uring, zero-copy TCP, RDMA (SMC-R/rsocket) or F-Stack/DPDK and SPDK backends without changing application code, since they sit behind the same socket and file interfaces.
+- Linux or macOS on x86-64 or ARM64, built with GCC 8-14 or Clang in C++14 or later.
+
+**Skip it when:**
+- Windows or RISC-V targets. The README lists only Linux and macOS; IOCP and MinGW code exists, but Windows support is still an open request (#396) and RISC-V is an open question (#1094).
+- You depend on the asio ecosystem (Beast, strands, completion tokens, C++20 awaitables, executors). Photon has no asio compatibility layer, so switching means a rewrite of the I/O layer.
+- Clients that must verify TLS certificates: open issue #457 says Photon's TLS adaptors do not validate the certificate chain.
+- Workloads with many connections and small request/response traffic, where the measured gain over asio is about 5% (412K vs 393K QPS). That is too small on its own to justify a runtime switch.
+- Code bases with heavy use of third-party blocking libraries, OpenMP or std::thread interop. Blocking calls stall every coroutine on that vCPU, and mixing threading models has caused crashes (#137). The library is also pre-1.0 (v0.9.6); recent fixes include critical work-stealing scheduler bugs (#1245) and an io_uring use-after-free (#1270), and a rare crash in prelocked_thread_interrupt is still open (#1093).
+
+**Integration:** static lib or shared lib: the CMake targets photon_static and photon_shared, pulled in with FetchContent or a git submodule · openssl, zlib, libcurl (on by default) and libaio on Linux; liburing, libfuse, libgsasl, e2fs, F-Stack/DPDK, SPDK and rdma-core are optional; tests need gflags and googletest. PHOTON_BUILD_DEPENDENCIES=ON builds these from source. · C++14 (PHOTON_CXX_STANDARD defaults to 14) and CMake 3.14+. CI runs GCC 8-14 on Linux (C++14 to C++23) and Apple Clang on macOS 15 (C++17). · Linux and macOS on x86-64 and ARM64. The x86-64 build passes -msse4.2 -mpopcnt -mcx16. The ARM64 build passes -mcpu=generic+crc+crypto+lse, except in MinSizeRel. The io_uring engine needs kernel 5.8+ and PHOTON_ENABLE_URING=ON. Windows is not listed as supported.
+
+**Vs siblings:** Pick Photon over libhv when you want blocking-style coroutine code plus disk I/O, RPC and HTTP in one C++ runtime rather than a callback event loop. Pick it over monoio when your code is C++; on Photon's own page it leads monoio per core (1604K vs 610K QPS streaming, 412K vs 400K ping-pong). io_uring-echo-server is a demo, not a library.
+
+**Gotchas:**
+- The default coroutine stack is 8 MB (virtual memory, committed lazily), with a minimum of 16 KB plus a guard page. The docs warn that stack overflow is not detected immediately and can trample memory, so avoid deep recursion. thread_create() mallocs a stack every time; use ThreadPool or pooled_stack_allocator for short-lived coroutines.
+- After photon::init(), do not make blocking calls on that OS thread. One blocking read() or std::mutex wait freezes every coroutine on the vCPU.
+- Join is off by default, and joinable threads leak if never joined. Calling thread_join() or thread_interrupt() on a thread that has already exited core-dumps.
+- Build your app and Photon with the same C++ standard. Open issue #277 notes that C++14 builds make the std library act as if it were in C++17 mode (to get string_view), which causes ABI inconsistency between binaries.
+
+**Status:** Actively maintained: v0.9.6 came out on 2026-08-21, the last commit was on 2026-09-25, and it has used stable release branches since 0.7. It is Apache-2.0 but still pre-1.0, and it is a large CMake-built library with OpenSSL, zlib, libcurl and libaio dependencies, not something you copy in as a few files.
+
+[repo](https://github.com/alibaba/PhotonLibOS) · [benchmark](https://photonlibos.github.io/docs/performance/network-performance)
+
+##### picoev  `C`  `BSD-3-Clause`  `abandoned`  `Tier C`
+
+Tiny C event loop (~1k lines; epoll/kqueue/select) that beat 2009-era libevent ~2x on libev's bench.c.
+
+**Beats:** libevent — The author's 2009 charts (libev's bench.c adapted for picoev: socketpairs, 1,000 active clients, 1k-100k fds, read off the archived images) show, at 100k fds, about 190k µs per run including re-registering every fd for picoev vs about 595k µs for libevent (~3.1x) and about 200k µs for libev native, and event processing of about 10.8k vs 22.5k µs (~2.1x; libev native ~12.1k). No compiler, flags, CPU, OS, backend, timer setting or library versions are given. An independent 2018 run (-Os, no hardware stated, 100k fds, 1 active) measured picoev at ~61k µs total vs ~123k µs for libevent and ~27.5k µs for libev.
+
+**Known shortcoming:** The README charts are dead on their original host (archived copies exist) and have unlabeled axes; no compiler, flags or CPU given. Minimal API, no Windows; mostly vendored by meinheld.
+
+**Known shortcoming:** The benchmark is not like-for-like: libevent/libev get randomized timeouts that go through a heap while picoev gets fixed ones, and picoev's epoll backend defers deletes; the libevent version and whether timers were on are not stated. picoev is only ~5-12% ahead of libev native on the charts. An independent run (bartman/event-loop-benchmark, 100k fds) has libev ~2.2x faster overall, with picoev fastest only on event processing. Code-reading bugs: kqueue backend ORs EVFILT_READ|EVFILT_WRITE into -1, so read-write registration drops the write filter; errors are assert()-only (fd >= max_fd writes out of bounds with NDEBUG, #6); EPOLLERR/EPOLLHUP-only events reach no callback; select backend ignores FD_SETSIZE; max_timeout=0 divides by zero. Windows init lacks a return; Makefile misspells DARWING_BUILD. No LICENSE file; last commit 2016, issues unanswered.
+
+**How:** Per-fd state (callback, argument, owning loop, watched events) lives in one flat array indexed directly by the fd number, so add, modify and dispatch are O(1) array accesses with no tree or hash. Timeouts use a coarse timing wheel: a ring of 128 bit vectors (one bit per fd) plus a second-level summary bitmap, so the expiry scan skips empty 16-fd words; bucket width is ceil(max_timeout/128) seconds. The epoll backend defers EPOLL_CTL_DEL and tries MOD before ADD, so a del-then-re-add costs one epoll_ctl (a new fd costs two), and the kqueue backend batches pending changes into the next kevent() wait call. Despite the PICOEV_SIMD_BITS constant, the timeout scan is scalar code; the source still says 'TODO use SIMD instructions'.
+
+**Use it when:**
+- Small single-purpose Unix servers (memcached-style protocol, proxy, WSGI front end) where you want an event loop you can read end to end: picoev.h plus the epoll backend is about 570 lines.
+- Many long-lived connections, each with one idle timeout, where 1-second (or coarser) timeout precision is fine. In the author's chart, setup and dispatch time grew no faster than libev's native API from 1k to 100k fds.
+- Linux epoll workloads that register and unregister the same fds often, because deferred deletes turn a del-then-add cycle into a single epoll_ctl.
+- One loop per thread with fds partitioned between loops, the design the author wrote it for (mycached), when 2009 libevent had no multithreading support.
+- As a starting point for your own event library; the author recommends it for exactly this.
+
+**Skip it when:**
+- You need sub-second or standalone timers, signals, child watchers, cross-thread wakeups, or buffered I/O, DNS or HTTP layers. None exist, and the author said sub-second timeouts would need 'something completely different' than the bit-vector ring.
+- Windows or io_uring. Windows works only through the select backend with an fd-to-SOCKET table (built with MinGW g++), there is no IOCP, and the io_uring request (issue #7, 2021) is unanswered.
+- macOS/BSD code that asks for PICOEV_READWRITE. The kqueue backend ORs EVFILT_READ (-1) with EVFILT_WRITE (-2), which yields -1, so only the read filter is registered (from reading the code; meinheld's vendored copy has the same line).
+- Unbounded or unknown fd counts. The fd table size is fixed at picoev_init(max_fd), and fd >= max_fd is caught only by assert() (issue #6 hit this). With NDEBUG, it writes out of bounds. The select backend never checks FD_SETSIZE.
+- You need maintained, documented code. The last code change is from 2015, there are no API docs (issue #4 asking for them is unanswered), and the only first-party benchmark is from 2009.
+
+**Integration:** source-drop · none (libc and the OS poller: epoll, kqueue or select; ws2_32 on Windows) · not documented; C with GCC/Clang extensions (__inline__, __attribute__((unused))). The header can be included from C++ (extern "C"), and the Windows example builds with MinGW g++. · Linux (epoll), macOS/FreeBSD (kqueue), other POSIX via select, Windows via select (2009 MinGW port; picoev_w32_init lacks a success return); no architecture-specific code
+
+**Vs siblings:** Against libev (catalogued), the author's own charts put picoev only about 5-12% ahead of libev's native API, and an independent 2018 run (bartman/event-loop-benchmark) had libev about 2.2x faster on total time. Pick picoev over libev, or over the maintained, cross-platform libhv, only when a roughly 1k-line, forkable fd-array loop matters more than features, maintenance and IOCP support.
+
+**Gotchas:**
+- Every argument check is an assert(). With NDEBUG, an out-of-range fd, adding an fd that is already registered, and epoll_ctl failures all go unreported. The epoll backend's update function always returns 0, so picoev_add never reports an epoll error.
+- picoev_create_loop(max_timeout) sets the wheel resolution to ceil(max_timeout/128) seconds, and longer per-fd timeouts silently clamp to the last bucket. max_timeout=0 gives resolution 0: picoev_set_timeout divides by zero, and the timeout scan loop never advances (base_time += 0).
+- Only EPOLLIN/EPOLLOUT (or the kqueue READ/WRITE filters) are mapped to callbacks. An EPOLLERR/EPOLLHUP-only event invokes nothing, so detect errors and hangups from read()/write() return values. picoev_del leaves the fd in the epoll set until its next event unless you build with PICOEV_EPOLL_DEFER_DELETES=0.
+- Global state has side effects. picoev_memalign calls rand() to scatter allocations, which perturbs the program's rand() sequence. The Makefile selects kqueue with the misspelled DARWING_BUILD, and its shared-library rule uses GNU ld's -soname. picoev_w32_init has no return statement on success.
+
+**Status:** Abandoned: the last code change is from 2015, the last commit (a README typo) from 2016-04-27, and three issues are unanswered. It is BSD-3-Clause via per-file headers (no LICENSE file) and about 965 lines, so it is easy to vendor; the living descendants are meinheld's modified vendored copy and V's vlib/picoev port.
+
+[repo](https://github.com/kazuho/picoev) · [benchmark](https://github.com/kazuho/picoev#readme)
+
+##### Rain  `C++`  `MIT`  `active`  `Tier C`
+
+Small header-only C++23 coroutine runtime for Linux: per-thread epoll loops with SO_REUSEPORT, ~1.13x Tokio req/s on one loopback test.
+
+**Beats:** Tokio — In one first-party loopback run on an AMD Ryzen 5 5600H (6C/12T), with wrk -t4 -c256 -d15s on the same host, Rain (4 SO_REUSEPORT loops, CMake Release, C++ compiler and version not stated) served a canned 'Hello, World!' HTTP/1.1 response at 247,283 req/s (max latency 9.31 ms) against 219,543 req/s (18.45 ms) for a default #[tokio::main] server built with cargo --release, LTO and codegen-units=1. The repo's own perf_matrix.sh says that default Tokio ran 12 workers to Rain's hard-coded 4, unpinned and without warmup, and its pinned thread-parity scenario has no published results; the README table was last edited 2026-04-29, before the June 2026 reactor and timer rewrites.
+
+**Known shortcoming:** Unequal threads, which the author's own perf_matrix.sh admits: the README run pits default #[tokio::main] (12 workers on the 5600H) against Rain's 4, unpinned, no warmup, wrk sharing the server CPUs; the fair configuration the script defines has no published results, so the ~1.13x is mostly scheduler configuration. Rain also uses 4 SO_REUSEPORT listeners (backlog 4096) vs Tokio's single accept loop. The numbers (2026-04-29) predate the 2026-06 hardening fixes (use-after-free, lost cross-core submits, late timer cascade) and the reactor/timer rewrite. README reproduction steps build the wrong directory; toolchain claim (Clang 17+) conflicts with CI notes. No work-stealing; each loop iteration scans all live tasks; mutex+condvar blocking pool; SIGPIPE ignored process-wide; reuse_port on by default lets a second instance silently split traffic. One author, no releases, idle since 2026-06-25 (CI with sanitizers, fuzzing and soak is solid).
+
+**How:** It is thread-per-core and shared-nothing: each loop binds its own SO_REUSEPORT listener (on by default), the kernel spreads incoming connections across them, and a task stays on the loop that accepted it, so there is no work-stealing and no cross-thread wakeup on the hot path. The reactor tries read()/write()/accept4() before suspending. Waiters are registered edge-triggered with EPOLLONESHOT in a vector indexed by fd instead of a hash map, so every blocked wait costs one epoll_ctl re-arm. The README attributes the gap over Tokio to skipping work-stealing and relying on kernel SO_REUSEPORT balancing.
+
+**Use it when:**
+- Linux servers with many similar, short request/response connections (HTTP keep-alive, small RPCs) where SO_REUSEPORT's kernel distribution keeps the loops evenly loaded
+- C++23 codebases that want coroutine networking from a small header-only runtime they can read end to end and vendor
+- Targets that stay on plain epoll because io_uring is unavailable or not wanted
+- Designs that want explicit placement (EventLoop::submit to a chosen loop) instead of a scheduler that migrates tasks on its own
+
+**Skip it when:**
+- Non-Linux targets: epoll, eventfd and signalfd are hard requirements
+- Skewed load (a few heavy connections or CPU-bound handlers): with no work-stealing, a busy connection monopolises its loop while other cores sit idle
+- Very high connection counts: every loop iteration runs std::erase_if over all live tasks, then takes a mutex and does an eventfd read() to drain the cross-core queue. The only published run used 256 connections
+- Stacks that need TLS, HTTP parsing, UDP or an ecosystem. net/ has TCP only, and fs/ is file I/O on the blocking pool, whose queue is a mutex + condvar Channel that the code itself calls architecture debt
+- Maturity-sensitive code: single author, no releases. Use-after-free bugs in block_on and in when_all/when_any, lost cross-core submits, and a timer cascade bug that fired timers a full wheel-lap late were fixed only in June 2026
+
+**Integration:** header-only · none beyond pthreads and Linux headers (CMake INTERFACE target rain_core; there are no install/export rules, so use add_subdirectory or add src/ to the include path) · C++23 with std::expected. The README says GCC 13+ or Clang 17+ and CMake 3.28+. CI builds with g++-14 and clang++-19, because the repo's CI notes say Clang 18 with libstdc++ 14 hides std::expected · Linux only (epoll, eventfd, signalfd); no architecture-specific code seen; CI runs on GitHub's ubuntu-24.04 runner
+
+**Vs siblings:** Pick Rain for a small, readable C++23 thread-per-core coroutine runtime on plain epoll; if io_uring is allowed, Condy (header-only C++20 over io_uring) or uring_exec are the C++ options. If the goal is beating Tokio, monoio (~1.9x Tokio peak echo QPS on 4 cores) and ringline carry much stronger evidence, and ringline's own 2x2 shows a per-core Tokio closes most of the gap, which suggests Rain's win over default Tokio is mostly a scheduler-configuration effect.
+
+**Gotchas:**
+- ListenOptions defaults to reuse_port=true and backlog=128. A second copy of the server on the same port binds silently and splits the connections; the author's perf_matrix.sh warns about this 'silent stacking'. The benchmark raises backlog to 4096
+- Executor::run() sets SIGPIPE to SIG_IGN for the whole process. Worker threads are not pinned to CPUs despite the 'per-core' naming, so use taskset or your own affinity code, as perf_matrix.sh does
+- co_await on a Task<T> whose T is not a Result is undefined behavior if the task was cancelled (task.hpp says so). unhandled_exception() replaces any exception with a generic 'unhandled exception' error and loses the original
+- The timer wheel ticks at 1 ms and documents a maximum delay of about 18.6 h, but schedule_at() neither clamps nor rejects longer delays, and the behavior for them is not documented
+
+**Status:** Single-author and MIT-licensed, small enough to vendor; last commit 2026-06-25 (about three months ago) with no tags, releases or outside issues, though CI runs the tests under ASan/UBSan and TSan plus a libFuzzer job and a nightly TSan soak.
+
+[repo](https://github.com/wzxzhuxi/Rain) · [benchmark](https://github.com/wzxzhuxi/Rain/blob/main/README_EN.md)
+
+##### ringline  `Rust`  `MIT OR Apache-2.0`  `active`  `Tier C`
+
+Thread-per-core io_uring runtime for Rust servers: 4-71% faster than default tokio on TCP echo, -10% to +9% versus tuned tokio.
+
+**Beats:** tokio (multi-thread work-stealing runtime, epoll/mio-based) — First-party two-machine TCP echo (Sept 2026, commit a685e16). The server ran 8 workers in a 24 vCPU Xeon VM guest with passed-through X710 40G NICs; no CPU model, rustc version or build flags are given. ringline beat the best of five tokio configurations in 13 of 16 cells (-10.3% to +8.9%) and default multi-thread tokio by 4% to 71%. An older Segcache GET run (June 2026, v0.1.3, Graviton4 c8g, 4 workers, 128 conns, 'stable' Rust) against a single tokio configuration showed about +30% throughput and 24-28% lower p50 at 256 B-1 KiB, a tie at 4 KiB, and a tie at open-loop saturation. Its harness branch no longer exists.
+
+**Known shortcoming:** Rust io_uring runtime compared with Tokio on its own page: +4% to +71% over default Tokio, and against best-tuned Tokio it loses by up to 10.3% in some rows. CPU named only as 'Xeon'; no rustc or flags; the cache-server benchmark branch no longer exists.
+
+**Known shortcoming:** Only ~0-10% ahead of well-configured tokio and behind at 16 KiB with 64/512 connections; the 4-71% lead is against default multi-thread tokio, and tokio-uring comes within 4.7%. Segcache is the only protocol-parsing benchmark, stale (v0.1.3) and its harness branch is gone. build.rs picks io_uring or epoll from the build host's kernel, so a build on a pre-6.1 kernel silently ships epoll. Wakers push onto the calling thread's queue, so wakeups from other OS threads are lost; does not fit hyper/tonic/tower. Fixed-capacity pools error when full; RLIMIT_MEMLOCK, seccomp or io_uring_disabled can block startup (#426). Pre-1.0 with breaking releases every 2-7 weeks, one main author. Recent bugs: lost response after peer FIN (#371, fixed), merged-accept ignored TCP_NODELAY (#460, fixed), epoll backend makes 2.9x tokio's syscalls (#395, open). Per-core throughput drops sharply with too many workers.
+
+**How:** Mostly the thread-per-core scheduler, meaning no work-stealing and no task migration. The project's own 2x2 shows that a per-core tokio closes most of the gap, and ringline's epoll backend beats default tokio (451k vs 425k ops/s) even though it makes more syscalls. The io_uring backend adds multishot recv into ring-provided buffers, fixed (direct) file descriptors and SINGLE_ISSUER/DEFER_TASKRUN/COOP_TASKRUN rings. Sends and receives ride one batched io_uring_enter, so it makes 0.06 syscalls/op against tokio's 2.08 at 512 conns/256 B. It also uses SendMsgZc zero-copy for guard-backed sends of 4 KiB or more.
+
+**Use it when:**
+- Linux 6.1+ request/response servers (caches, protocol servers) with many connections and small-to-medium messages (256 B-4 KiB), where CPU per request and p50/p99 matter
+- Replacing a default multi-thread tokio service whose tokio-ecosystem dependencies you can drop; that is where the +27-71% echo and +30% Segcache gains were measured
+- Workloads that shard cleanly per core, where connection state never has to move between threads
+- Stacks that want the same per-core runtime for their outbound clients: the workspace ships Redis, memcache, HTTP/1.1-2-3, gRPC and QUIC crates on top of it
+
+**Skip it when:**
+- You already run tokio per-core or on tokio-uring: its lead there is about 0-10% (tokio-uring came within 4.7% at 512 conns/256 B), and it loses at 16 KiB with 64 or 512 connections
+- Byte-forwarding proxies with payloads of 16 KiB or more at moderate concurrency: splice-based tokio beat every ringline configuration by up to 10.3%
+- Code built on hyper, tonic, tower or tokio::sync: the APIs are incompatible, and tasks, channels and wakers only work within their own worker thread
+- Hosts or containers where seccomp, kernel.io_uring_disabled or a tight RLIMIT_MEMLOCK blocks or limits io_uring (open issue #426 is io_uring_setup failing with ENOMEM on CI runners)
+- Teams that need a stable API: it is pre-1.0, has had a breaking 0.x minor bump every 2-7 weeks (0.1.0 in April to 0.6.3 in September 2026), and has essentially one author
+
+**Integration:** crate · io-uring 0.7 (Linux only), mio 1, rustls 0.23 (ring), bytes, crossbeam-channel, futures-io, metriken, libc, thiserror, pin-project-lite · Rust 1.88 (edition 2024) · io_uring backend: Linux 6.1+ on x86_64 or aarch64; mio backend: macOS, other Unix and older Linux (no zero-copy send or NVMe passthrough)
+
+**Vs siblings:** monoio is the closest catalogued sibling, also a Rust thread-per-core io_uring runtime, and its 1.86x is likewise against default tokio. Pick ringline when you want built-in rustls TLS, UDP/QUIC and protocol clients plus a mio fallback in one workspace, or a benchmark page that also reports results against tuned tokio. For C++ services, Seastar or uring_exec fill the same niche.
+
+**Gotchas:**
+- The backend is picked by build.rs from the build host's /proc kernel version. Building on a pre-6.1 kernel silently gives you a mio binary, and cross-compiles assume io_uring. Check ringline::backend() before you benchmark.
+- Its Waker pushes onto the calling thread's thread-local ready queue, so a foreign future completed from another OS thread (for example a tokio or futures channel) will not wake the ringline task. ConnStream (the futures-io AsyncRead/AsyncWrite adapter) panics if it is polled outside the ringline executor.
+- Capacity is fixed at config time. Exhausting the copy-send pool, zero-copy slab, task slab or timer slots returns an error rather than growing. Workers default to one per physical core, but its own sweep shows ops/core-s falling from 221k at 4 workers to 127k at 16 workers with 128 connections, so size the worker count to your concurrency.
+- It is young: recent fixes include io_uring dropping a response sent after the peer's FIN (#371) and merged-accept mode silently ignoring TCP_NODELAY, which made TLS accepts 29x slower (#460). The mio backend still makes 2.9x tokio's epoll syscalls (open issue #395).
+
+**Status:** Very active, with daily commits; crates.io has 0.6.3 with about 2.9k downloads, used mostly by the author's own sibling crates. Dual MIT/Apache-2.0 and easy to depend on, but pre-1.0, with frequent breaking releases and effectively one maintainer.
+
+[repo](https://github.com/ringline-rs/ringline) · [benchmark](https://github.com/ringline-rs/ringline/blob/main/BENCHMARKS.md)
+
+##### Seastar  `C++`  `Apache-2.0`  `active`  `Tier C`
+
+Shard-per-core C++ futures framework with optional DPDK userspace TCP; its memcached beat libevent-based stock memcached 2-4x (2015).
+
+**Beats:** libevent — Seastar's own Feb 2015 wiki benchmark ran its sample memcached app on the native TCP stack over DPDK. At 20 cores it did 4.43M ops/s, against 1.13M for stock memcached 1.4.17 multi-threaded (libevent, kernel TCP) and 2.28M for one single-threaded memcached process per core. Load came from memaslap (libmemcached 1.0.18) over back-to-back 40GbE XL710 links; the hosts were 2x Xeon E5-2695v3 machines running Fedora 21 / Linux 3.17. Compiler and flags are not stated, the result mixes kernel bypass with the reactor design (no Seastar posix-stack throughput is given), and the page itself calls the 2x multi-process comparison unfair.
+
+**Known shortcoming:** The 2015 memcached comparison runs Seastar over DPDK with its own TCP stack, so it is not a pure reactor-vs-libevent result; the page calls its 2x multi-process comparison 'not a fair comparison', and the threaded memcached it beats 4x suffers lock contention. Requires applications written to Seastar's futures and shared-nothing model. No compiler or flags stated.
+
+**Known shortcoming:** Open issues contradict the DPDK advantage: memcached with DPDK ran slightly slower than on the kernel stack (#192), and DPDK gave 5-10 Gbit/s vs 23 with io_uring (#2622). 4-5x lower I/O throughput with --overprovisioned (needed on shared hosts, #3202). Linux-only, C++23, owns main(), replaces malloc and grabs almost all RAM at startup.
+
+**How:** Shared-nothing thread-per-core design: memory is split per core (NUMA-aware), refcounts and shared_ptr are non-atomic, and cores talk only through explicit message queues (smp::submit_to / sharded<>::invoke_on), so the hot path takes no locks. Each core runs a polling reactor whose kernel backend is io_uring when the build and kernel support it, falling back to linux-aio and then epoll; tasks yield after a 500 µs task quota. The optional native stack is a per-core TCP/IP stack on DPDK poll-mode drivers, with zero-copy buffers in both directions and NIC hardware queues keeping each connection on one core. In the wiki's perf profile of the DPDK build, no kernel functions appear and about 30 packets are handled per processing round under load.
+
+**Use it when:**
+- You are writing a new, long-running C++ network or storage server on dedicated Linux machines and can give it every core and most of the RAM. ScyllaDB, Redpanda and Ceph Crimson are built this way.
+- Throughput has to keep scaling across many cores and NUMA sockets. In the benchmark, threaded memcached (libevent) stayed between 0.44M and 1.13M ops/s from 8 to 20 cores, while Seastar went from 2.15M to 4.43M.
+- Your data splits cleanly by key onto shards. The sample memcached hashes each key to an owning core and forwards requests with invoke_on.
+- You need network I/O, direct (O_DIRECT) disk I/O and CPU/I/O isolation (scheduling groups, the I/O scheduler) in one runtime.
+- You can dedicate DPDK-capable NICs with multiple hardware queues, plus hugepages, and want kernel networking out of the hot path.
+
+**Skip it when:**
+- You want to add an event loop to an existing app or library. Seastar owns main(), replaces malloc/operator new, and by default preallocates all RAM except max(1.5 GB, 7%). It is not embeddable the way libevent or libuv is.
+- Shared hosts, containers or laptops. The reactor busy-polls, so you have to run with --overprovisioned, and open issue #3202 (2026) reports about 4-5x lower single-shard I/O throughput with --overprovisioned or short idle polling.
+- Anything other than Linux. compatibility.md says only Linux is supported; there is no macOS, BSD or Windows support (Windows is an open feature request, #407).
+- Code that blocks or does long CPU work without yielding. A single task stalls its whole shard (a 'reactor stall'), and there is no preemption check between chained .then() continuations.
+- Expecting DPDK to be a free win. Open issue #192 (2016) measured Seastar memcached at 1.20M TPS with DPDK vs 1.23M with posix. Open issue #2622 (2025) saw 5-10 Gbit/s with DPDK vs 23 Gbit/s with the io_uring backend, and DPDK breaking above 16 connections. Open issue #383 (2018) reports 'sstring overflow' errors under load in the memcached app and half of stock memcached's throughput.
+
+**Integration:** static lib (the default; shared libs via BUILD_SHARED_LIBS). Built with configure.py/CMake and consumed with find_package(Seastar) or pkg-config. · Boost >=1.79 (filesystem, program_options, thread, unit_test_framework), c-ares >=1.13, fmt >=8.1.1, lz4 >=1.7.3, yaml-cpp >=0.5.1, protobuf >=2.5.0, lksctp-tools, ragel 6.10, valgrind headers; liburing >=2.0, hwloc >=1.11.2 and LTTng-UST are on by default; GnuTLS/OpenSSL for TLS; DPDK is optional (a bundled, customized submodule) · C++23 (or C++26). GCC or Clang, and only the last two major releases are supported (CI runs GCC 15/16 and Clang 21/22). CMake 3.13+. · Linux only. CI covers x86-64 and aarch64. The io_uring, linux-aio and epoll reactor backends are chosen automatically; the DPDK native stack is optional (the README recommends 10G/40G NICs with multiple hardware queues).
+
+**Vs siblings:** Pick Seastar over libhv or Asio's io_uring backend when you are building the entire server and want per-core sharding of memory, CPU and disk I/O, not just a faster loop to embed; those two are the better fit for adding an event loop to an existing program. Pick it over F-Stack or mTCP when you want one framework API that runs on the kernel stack (io_uring/epoll) or a DPDK userspace stack, rather than a DPDK stack with a socket/epoll-style API.
+
+**Gotchas:**
+- Memory: by default it takes almost all RAM at startup and splits it equally and statically across shards; limit it with -m or --reserve-memory. Freeing memory on a different shard works but is slow, so use foreign_ptr to return objects to their home shard.
+- Build mode matters a lot. The README says release is about 2x faster than dev, 150x faster than sanitize and 300x faster than debug, and warns that Seastar is 'more sensitive to allocators and optimizations than usual'.
+- Backend selection: the header comment says linux-aio is the default, but the code picks io_uring first when it is compiled in and detected. io_uring is skipped on kernels older than 5.17 with md RAID devices, and on kernels older than 5.12 when RLIMIT_MEMLOCK is under 8 MB. Open issue #2696 reports very poor write I/O with the default --poll-aio=1 on kernels up to 4.18 (RHEL 8).
+- No link/ABI compatibility between Seastar versions. Breaking changes go through Seastar_API_LEVEL (level 10 arrived in 2026-04), and before C++23, lambda coroutines passed to continuation APIs can dangle (the 'lambda coroutine fiasco' doc).
+
+**Status:** Actively maintained (last commit 2026-09-25, Apache-2.0, 9.4k stars, the runtime under ScyllaDB and Redpanda). It is a heavyweight framework you commit to, it needs the latest GCC/Clang and C++23, and the headline benchmark is 11 years old.
+
+[repo](https://github.com/scylladb/seastar) · [benchmark](https://github.com/scylladb/seastar/wiki/Memcached-Benchmark)
+
+##### see (see::sync)  `Rust`  `Apache-2.0 OR MIT`  `active`  `Tier C`
+
+Runtime-agnostic watch (latest-value broadcast) channel with sync and single-threaded variants; beats tokio::sync::watch at 1, 4 and 64 subscribers.
+
+**Beats:** tokio::sync::watch — In the author's Criterion benchmark (benches/comparison.rs, 'SPSC/MPSC Throughput') on an Intel Core i5-11300H with a tokio 1.48 multi-thread Runtime and an unpinned nightly rustc, one task sends 1,000 1 KB arrays to N receiver tasks: see::sync 84.9 us vs tokio::sync::watch 213.8 us at N=1 (the README says 2.3x, but its numbers give about 2.5x), 350.6 vs 388.6 us at N=4, 1.52 vs 1.14 ms at N=16 (tokio wins) and 2.17 vs 2.67 ms at N=64. Watch channels coalesce updates, and the receivers' marker byte ((999 as u8) = 231) also appears at i=231, 487 and 743, so the benchmark mostly measures send cost plus task spawn and wakeup, not per-message delivery.
+
+**Known shortcoming:** Likely lost-wakeup race in see::sync::Receiver::changed(): it checks the version, then listens and awaits with no re-check, which event-listener's docs warn loses notifications (tokio registers first); a receiver can miss the final update. changed() takes &self, doesn't mark the value seen, and errors as soon as the sender drops even with an unread value, so a tokio-style changed()+borrow() loop spins; no is_closed; only a partial drop-in. README's 2.3x at 1 subscriber is ~2.5x by its own numbers. The benchmark mostly measures send cost plus spawn/wakeup (watch keeps only the latest value; the u8 marker 231 recurs, so receivers can stop early); both sides use parking_lot. Tests only on single-threaded executors, no loom; nightly CI on one OS; no rust-version. see::unsync panics if a Guard is held while the thread sends (RefCell); the stream feature has unsafe box reuse and an unconditional unsafe impl Sync. v0.1.2, 13 commits.
+
+**How:** The README does not say why see::sync beats tokio; the source copies tokio's own watch layout (an atomic version counter stepping by 2, the least significant bit as the closed flag, the value behind an RwLock). The visible difference is notification: each send makes one event-listener notify(usize::MAX), which takes one mutex, while tokio's BigNotify calls notify_waiters on 8 sharded Notify objects and locks each shard's waiter mutex on every send. see also skips tokio's cooperative-scheduling budget, and the lock is not the difference: the benchmark's tokio `full` feature turns on parking_lot, so both sides use parking_lot's RwLock. see::unsync gets its further 4-8x by replacing atomics and locks with Rc, RefCell and Cell.
+
+**Use it when:**
+- Code that runs on smol, compio or another non-tokio executor and needs tokio-style watch semantics (latest value, coalesced updates) without a tokio dependency.
+- Single-threaded or thread-per-core runtimes such as compio: use see::unsync. The README measures about 4.8 us vs 38.6 us per 1,000 SPSC messages against see::sync, and a 3.5 ns vs 14.3 ns borrow.
+- Send-heavy config or state broadcast with 1-4 subscribers, where the per-send cost dominates. The author measured 84.9 us vs 213.8 us per 1,000 sends of a 1 KB value to 1 subscriber.
+- Replacing tokio's watch in a library that must stay runtime-agnostic, where you control every changed() loop and can audit it.
+
+**Skip it when:**
+- About 16 subscribers: in the author's own table tokio is faster (1.14 ms vs 1.52 ms). Scaling is not monotone, and there are no numbers above 64 subscribers or on a second CPU.
+- As a transparent drop-in inside existing tokio code. changed() has different semantics (see gotchas), there is no Receiver::is_closed, and the error and guard types differ.
+- Multi-threaded use where missing the final update is unacceptable. see::sync::Receiver::changed() has a check-then-listen window that can lose a wakeup (see gotchas). The tests use only single-threaded executors (compio::test, smol::block_on), with no loom or multi-thread stress tests.
+- When you need a mature dependency: version 0.1.2, 13 commits, 15 stars, about 12.9k crates.io downloads, and 2 reverse dependencies (openraft-rt-compio, and synchrony as an optional dependency).
+- When every message must arrive. Like any watch channel, see keeps only the latest value, so use an mpsc or broadcast channel instead.
+
+**Integration:** crate · event-listener 5.4, parking_lot 0.12, local-event 0.1, futures-util 0.3 (alloc only), scopeguard 1.2, thiserror 2 · Rust edition 2024 (so Rust 1.85+). No rust-version is declared, and CI tests nightly only (ubuntu-22.04). · any (pure Rust, no platform-specific code); CI runs only on Linux x86-64
+
+**Vs siblings:** No sibling is a synchronization primitive: monoio, ringline, exec-rs and zokio replace the whole tokio runtime, while see replaces only the watch channel and runs on tokio, smol or compio. Pick it when the event loop is fine and the bottleneck, or the tokio dependency, is the watch channel.
+
+**Gotchas:**
+- A tokio-style `while rx.changed().await.is_ok() { let v = rx.borrow(); ... }` loop becomes a busy spin. In see, only borrow_and_update, mark_unchanged and wait_for advance the receiver's version; changed() does not.
+- In see::sync, changed() loads the version, then calls Event::listen(), then awaits, without re-checking in between. event-listener's docs say a notification sent while no listener is registered 'simply gets lost', and tell you to re-check after listen(). tokio registers first and then checks. So a send that lands in that window can go unnoticed until the next send or until the sender drops. see's own Sender::closed() does use the double-check.
+- In see::unsync, Guard holds a RefCell Ref. If any task keeps a Guard alive (for example across an .await), send() on the same thread hits RefCell::borrow_mut and panics. In see::sync, the same pattern deadlocks on the non-reentrant parking_lot RwLock.
+- The `stream` feature uses unsafe code: it reuses the boxed future's allocation by comparing layouts and casting pointers (future_store.rs), and BoxedFutureStore has an unconditional `unsafe impl Sync`.
+
+**Status:** Active (v0.1.2 published 2026-08-20 under the compio-rs org, MIT OR Apache-2.0) and small enough to add or vendor, but young (0.1.x, 13 commits, 4 merged PRs, no issues filed) and not stress-tested across threads.
+
+[repo](https://github.com/compio-rs/see) · [benchmark](https://github.com/compio-rs/see#performance-advantages-sync-version)
+
+##### UCall (formerly ujrpc)  `C++`  `Apache-2.0`  `stale`  `Tier C`
+
+JSON-RPC 2.0 server library in C++ with C and Python APIs; io_uring backend beats FastAPI/uvicorn on small-call latency and throughput.
+
+**Beats:** epoll — The README table was measured in early 2023 on AWS c7g.metal (Graviton3), Ubuntu 22.10, Linux 5.19, with client processes on the same machine; examples/bench.py is the repo's Python harness. For a trivial 'sum' call, the C io_uring server does 22 us with one client and 231k rps with 32 clients. FastAPI/uvicorn does 1,203 us / 3,184 rps over REST (no connection reuse) and 86 us / 11,356 rps over WebSocket. The like-for-like, connection-reusing comparison is therefore about 3.9x latency and 20x throughput, not the 55x/72x headline. The build is CMake Release -O3; compiler, FastAPI and uvicorn versions are not stated.
+
+**Known shortcoming:** The ~55x/~72x headline compares UCall reusing connections against FastAPI REST, which does not; the fairer WebSocket pair gives about 3.9x latency and 20x throughput. The README's reproduce link is dead and the measured example was refactored. C++ engines behind a C API. Stale since 2025-09.
+
+**Known shortcoming:** Open issue #94: the io_uring example hangs or core-dumps under wrk on kernels 6.0/6.5 (fix PR #104 unmerged). Open issue #106 reports Release builds at about 1.7k rps, far below the README, with no maintainer reply. io_uring engine has no TLS and is IPv4 only; the POSIX engine is blocking, one connection at a time. Connections close after 100 exchanges by default. PyPI lags GitHub tags; a redesigned v1 has not shipped. Enrichment confidence 0.40.
+
+**How:** The Linux engine is a completion-driven io_uring state machine. It uses an SQPOLL kernel submission thread, direct descriptors (io_uring_prep_socket_direct, accept_direct and register_files_sparse), read_fixed into pre-registered 4 KiB input and output buffers per connection, linked timeouts on receives, and send_zc on kernels that support it (6.0+). Request bodies are parsed with simdjson's DOM parser, preallocated per thread and helped by buffer padding that avoids copies. HTTP headers go through picohttpparser, and replies are written into preallocated per-connection buffers without heap allocation on the small-message path. Worker threads busy-poll the completion queue instead of sleeping. Most of the headline gap over FastAPI comes from removing the Python/ASGI stack. UCall's own io_uring backend beats its blocking POSIX backend by about 2.8x (22 vs 62 us, 231k vs 79k rps).
+
+**Use it when:**
+- Very small, high-rate RPC calls (parameters and replies well under the 4 KiB per-connection fast-path buffer) where per-call overhead is most of the cost, such as internal lookup or scoring endpoints
+- You control the clients and can speak JSON-RPC 2.0 over persistent TCP or HTTP/1.1 connections, which is the setup where the io_uring engine posts its 22 us / 231k rps numbers
+- Linux 5.19+ hosts (the io_uring engine needs IORING_OP_SOCKET and accept_direct) where you can dedicate cores to busy-polling and the SQPOLL thread
+- Exposing cheap Python or C functions (the README's 'sum'-style endpoints) with far less serving overhead than FastAPI/uvicorn
+- Embedding a small JSON-RPC endpoint in a C/C++ service without taking on gRPC or protobuf tooling
+
+**Skip it when:**
+- Handlers that do heavy work, like model inference: serving overhead is noise there. Issue #108 measured flan-t5 behind UCall and FastAPI at about the same speed, and the maintainer confirmed that outcome is expected
+- You need TLS on the io_uring engine (only the POSIX engine links mbedTLS, and open PR #100 proposes dropping TLS), HTTP/2, WebSockets, REST routing or IPv6 (both engines bind AF_INET only)
+- You need concurrency off Linux 5.19+: the POSIX engine forces one thread, one connection at a time and one request per connection, using blocking accept/recv
+- Production reliability matters. Open issue #94 reports the io_uring example hanging or core-dumping under wrk on kernels 6.0 and 6.5, and its fix (PR #104, a zero-length send completion confusing the state machine) was never merged. Open issue #106 reports release-build throughput far below the README
+- Idle-CPU-sensitive or shared hosts: ucall_take_calls is an infinite busy loop with no shutdown path in the C API, and SQPOLL adds a spinning kernel thread
+
+**Integration:** static lib (CMake FetchContent; separate ucall_server_uring / ucall_server_posix libraries) or Python wheel (pip install ucall) · simdjson v3.1.6, liburing 2.3 (Linux), mbedTLS 3.4.0 (POSIX engine), unum-cloud forks of picohttpparser and Turbo-Base64, and cxxopts for the examples, all fetched by CMake. The Python package also needs numpy and pillow · C++17 (C99 header), CMake 3.20+ (pyproject asks for 3.22), built with -fno-exceptions. The io_uring engine needs Linux kernel 5.19+. Wheels need Python 3.9+ · io_uring engine: Linux only (x86-64 and aarch64 wheels). POSIX engine: Linux, macOS (x86-64/arm64) and Windows (winsock, AMD64 wheel). IPv4 only
+
+**Vs siblings:** Pick UCall over uWebSockets or libhv only when a bare JSON-RPC endpoint with batch calls, callable from C or Python, is all you need and you run Linux 5.19+. Those two are more general, more maintained HTTP/WebSocket servers with TLS and portable event loops. monoio, aquatic and io_uring-echo-server are runtimes or single-purpose servers rather than RPC frameworks.
+
+**Gotchas:**
+- The C API's io_uring defaults close a connection after 100 request/response exchanges (max_lifetime_exchanges=100) and cap connections at 1024, dismissing any beyond that. The shipped examples and the Python binding raise the exchange limit to UINT32_MAX. max_lifetime_micro_seconds is stored but never read
+- Each connection has fixed 4 KiB input and output buffers. Bodies larger than a page fall off the fast path to dynamic allocation plus a fresh simdjson parser per request. Python handlers that return non-JSON-native objects get a JSON-RPC 'Out of memory' error (issue #89), and dict/list parameters are rejected (issue #111)
+- ucall_add_procedure silently ignores registrations past max_callbacks-1, and method dispatch is a linear scan of the callback array
+- PyPI still ships 0.5.4 (March 2024) while GitHub is at v0.5.8. The README's reproduce link (tree/dev/examples/sum) is dead, and the benchmark code now lives in examples/login
+
+**Status:** Stale: the last commit (2025-09-16, v0.5.8) was a logging and docs change, the maintainer points users to a redesigned v1 that has not shipped, and known io_uring bugs are still open with their fix unmerged. It is Apache-2.0 and only a few thousand lines of core code, so it is small enough to vendor and patch.
+
+[repo](https://github.com/unum-cloud/UCall) · [benchmark](https://github.com/unum-cloud/UCall/blob/main/README.md)
+
+##### uringcore  `Rust`  `Apache-2.0`  `active`  `Tier C`
+
+Rust/PyO3 io_uring asyncio event loop; claims ~3x lower single-op latency than uvloop, but loses on gather(100).
+
+**Beats:** uvloop (built on libuv) — The 2.9-3.3x figures time one await (sleep(0), an uncontended Lock, an already-resolved Future) inside its own run_until_complete() call; uvloop sits at a flat 11-13 us on every such benchmark, slower than stock asyncio's 4-5 us, so the gap measures loop entry/exit cost, and in the committed run uringcore is only ~1.4x faster than stock asyncio (sleep(0) 3.56 vs 5.25 us) and slower than both on gather(100). The micro-runs used CPython 3.14.2 and Rust release flags (opt-level 3, LTO, 1 codegen unit) on an unnamed 'Linux 6.x' machine; the only hardware stated anywhere is ARCHITECTURE.md's TCP-echo run (AMD Ryzen 7 9700X, WSL2 kernel 6.6.87.2, Python 3.13.3, echo clients as threads in the same process), and VERIFY.md's pinned-CPU run shows parity with uvloop (5,573 vs 5,551 req/s).
+
+**Known shortcoming:** The 3x-over-uvloop claim measures loop start/stop overhead: each micro-benchmark wraps one await in its own run_until_complete, where uvloop (11-13 us) is slower than stock asyncio (4-5 us); against asyncio the gain is ~1.4x. Headline numbers disagree across README, final_comparison.txt and ARCHITECTURE.md. The committed run loses gather(100) (188 vs 116 us), sleep_conc_100 and call_later (186 vs 12.7 us), and crashed partway (sock_pair skipped, run aborted). 'Zero io_uring_enter' comes from SQPOLL moving work to a kernel polling thread. The TCP-echo run (Ryzen 7 9700X, WSL2) uses in-process client threads; the pinned run shows parity with uvloop (5,573 vs 5,551 req/s). 'Pure io_uring, no epoll' is false (waits in epoll on the eventfd, 10 ms cap). ssl= and sendfile raise NotImplementedError; sock_recv_into runs in a thread pool. PyPI stops at 0.9.1 with one wheel; needs Rust 1.85+ (badge says 1.70). Locks 32 MiB per loop (docs disagree), ENOMEM under low memlock. CI failures don't fail the build; one author, 2 stars, idle since 2026-01.
+
+**How:** Socket I/O is completion-based: recv, send, accept and connect go to the kernel as io_uring SQEs. It uses multishot recv and a provided-buffer ring on 5.19+, SEND_ZC on 6.0+, registered fixed files and IORING_OP_TIMEOUT timers, and it turns on SQPOLL by default so a kernel thread picks up submissions without io_uring_enter. Completions signal an eventfd registered with the ring, which the Python loop waits on with epoll; the ready queue, timer heap and futures live in Rust to cut per-callback interpreter work, and UDP sendto tries a direct non-blocking syscall first, using the ring only on EAGAIN. The headline single-op wins come from lower per-run_until_complete overhead, not from I/O; each task step still crosses the PyO3 boundary 8-12 times (ARCHITECTURE.md), which is why gather(100) is slower than uvloop.
+
+**Use it when:**
+- Linux 5.19+ hosts (6.0+ for SEND_ZC) where you control RLIMIT_MEMLOCK and seccomp, and you want to try io_uring under unmodified asyncio code.
+- Code that calls run_until_complete() many times on tiny coroutines (CLI tools, test suites, sync-to-async bridges): the committed run shows 3.1-3.6 us per call vs 4.3-5.3 us for stock asyncio and 11-13 us for uvloop.
+- Plain-TCP or UDP send-heavy services where syscall count or UDP sendto rate matters; the project reports ~831k vs ~550k sendto ops/s over stock asyncio (no hardware given; uvloop does not implement sock_sendto).
+- Experiments comparing readiness-based and completion-based I/O in Python: the code base is small, Apache-2.0, and ships its benchmark and strace scripts.
+
+**Skip it when:**
+- Fan-out workloads with many concurrent tasks: in the committed run gather(100) takes 188 us vs 116 us for uvloop and 170 us for stock asyncio, and sleep_conc_100 takes 277 us vs 154 us for uvloop.
+- Timer-heavy code: the committed call_later result is 186 us vs 12.7 us for uvloop; BENCHMARK.md's 13.5 us figure does not appear in any committed output.
+- TLS servers or clients: create_server, create_connection and create_unix_connection raise NotImplementedError('SSL not yet supported') for ssl=; only start_tls() wraps a transport through a memory BIO, and kTLS is not integrated.
+- Non-Linux, non-x86-64, or any Python other than 3.13 without a Rust 1.85+ toolchain: PyPI has only 0.9.1 with one cp313 manylinux_2_34 x86_64 wheel, and the 1.0.0 code in the repo (native scheduler, Jan 2026 benchmarks) is not published.
+- Anything that needs production maturity: one author, 2 stars, no issues ever filed, and the CI Python test steps end in '|| echo ... skipping', so failing tests do not fail the build.
+
+**Integration:** module (Python package with a Rust PyO3 cdylib extension, built with maturin) · Runtime: typing-extensions. Build: maturin>=1.4 and Rust crates pyo3 0.27, io-uring 0.7, libc, nix 0.30, parking_lot, crossbeam-queue, thiserror, tracing. · Python 3.10+; Rust 1.85+ (Cargo edition 2024; the README badge 'rust 1.70+' is stale); Linux kernel 5.11+ (5.19+ for multishot recv and provided buffers, 6.0+ for SEND_ZC) · Linux only. The only published wheel is CPython 3.13 x86_64 manylinux_2_34 (v0.9.1); other targets build from sdist or source.
+
+**Vs siblings:** Pick it over uvloop only on Linux when loop cost is dominated by short run_until_complete calls or uncontended asyncio primitives and you can accept beta TLS and pinned memory; for general servers uvloop is faster on fan-out and timers and far more mature. UCall also drives io_uring from Python but is its own RPC server API rather than an asyncio loop, and monoio or ringline are Rust runtimes that do not run asyncio code.
+
+**Gotchas:**
+- Each loop mmaps and mlocks its buffer pool with MAP_POPULATE. The code default is 4096 x 8 KiB = 32 MiB per loop; the README says 1024 x 64 KB and the package docstring 512 x 32 KB. A low RLIMIT_MEMLOCK makes loop creation fail with ENOMEM; tune URINGCORE_BUFFER_COUNT and URINGCORE_BUFFER_SIZE.
+- SQPOLL is on by default (try_sqpoll=True, 1 s idle timeout), so every loop gets a kernel polling thread that spins for up to one second after each submission. The '0 io_uring_enter' strace result moves that cost to a kernel thread; it does not remove it.
+- The README says 'pure io_uring, no epoll', but the Python loop blocks in select.epoll on the ring's eventfd and uses epoll for add_reader/add_writer. Its poll timeout is capped at 10 ms, so an idle loop wakes about 100 times per second.
+- The committed benchmark outputs show uringcore failing mid-suite: sock_pair skipped with 'No buffers available for recv' (final_comparison.txt), and the run aborted with "'RuntimeError' object is not callable" (final_report.txt).
+
+**Status:** Single-author, Apache-2.0 project whose last commit was 2026-01-11 (quiet for ~8.5 months); PyPI stops at 0.9.1 from 2025-12-28, so using the benchmarked 1.0.0 means building the repo with maturin and Rust 1.85+.
+
+[repo](https://github.com/ankitkpandey1/uringcore) · [benchmark](https://github.com/ankitkpandey1/uringcore#benchmarks)
+
+##### uvloop  `Python`  `Apache-2.0 OR MIT`  `active`  `Tier C`
+
+Cython/libuv replacement for CPython's default asyncio event loop; 2-4x echo throughput in its own 2016 benchmark.
+
+**Beats:** CPython asyncio default event loop (pure-Python SelectorEventLoop, epoll-backed on Linux) — MagicStack's own 2016 vmbench echo servers ran single-threaded in Docker (concurrency 10, 30 s runs, TCP_NODELAY) on a Xeon E5-1620 v2, Ubuntu, Python 3.5; compiler and flags are not given. Against the stdlib selector loop, uvloop measured about 2.5x (protocol API), 3.9x (sock_recv/sock_sendall) and 2.5x (streams) at 1 KiB, and about 1.4-1.8x at 100 KiB. A 2026 third-party run (rsloop's benchmark doc: i9-9900K, Linux, CPython 3.14.7, uvloop 0.22.1) still put uvloop ahead of stdlib asyncio, by less: 2.15x on callbacks, 1.62x on tasks and 1.19x on 1 KiB TCP streams round trips.
+
+**Known shortcoming:** Python, not C++ (it is a libuv binding for asyncio); the 2016 chart (Python 3.5) compares against CPython's default asyncio loop, and at 100 KiB messages the gain is only about 1.4-1.8x. No compiler or flags stated.
+
+**Known shortcoming:** Only first-party numbers are the 2016 chart (Python 3.5, Xeon E5-1620 v2, no compiler/flags), never re-run (#631). A 2026 third-party run (rsloop's docs, i9-9900K, CPython 3.14.7, uvloop 0.22.1) still has it ahead of stdlib asyncio but by less: 2.15x on callbacks, 1.62x on tasks, 1.19x on 1 KiB TCP stream round trips. Not fully drop-in: no Windows (#14), no loop.sendfile/sock_sendfile (#228), sock_recvfrom/sendto raise NotImplementedError, no Server.close_clients (#683) or happy_eyeballs_delay (#406), subprocess limits (#605 asks to qualify 'drop-in'). PyPI 0.22.1 (2025-10) lags master (free-threading race fix #720, eager_start, 2026 speedups). Open crashes: segfault under uvicorn (#706), debug-mode async-generator crash on 3.13/3.14 (#715), spawn can block the loop (#118). uvloop.install() deprecated from 3.12; policy get_event_loop() raises (#702). CPython only (PyPy #380, #537); loop methods not thread-safe.
+
+**How:** The loop's hot paths are compiled C instead of interpreted Python. A Cython loop drains the ready deque, Handle/TimerHandle objects come from 250-entry Cython freelists, and uv_run() runs with the GIL released while libuv waits in epoll/kqueue. Transport.write first tries a direct write() syscall for one buffer, or uv_try_write (scatter-gather) for several, and queues a uv_write only when the socket would block. Reads go into one preallocated 256,000-byte buffer per loop. TLS is a Cython port of asyncio's SSLProtocol over Python's ssl module, not libuv. The kernel side is the same readiness-based epoll/kqueue as the stdlib selector loop, so the gain comes from less per-event interpreter overhead, not a different I/O interface.
+
+**Use it when:**
+- Long-running asyncio network services on Linux or macOS (uvicorn/ASGI apps, aiohttp, websockets, custom asyncio.Protocol servers) where profiles show time in the event loop itself.
+- Many small messages or many callbacks/task switches: the 2016 chart shows the biggest gaps at 1 KiB (about 2.5x for the protocol API, 3.9x for sock_recv/sock_sendall), and a 2026 CPython 3.14.7 run still found 2.15x on 200k callbacks and 1.6x on 50k tasks.
+- Worker-thread hand-off via call_soon_threadsafe: a third-party benchmark (python-async-bench, Python version and hardware not stated) measured 3.47 s vs 5.88 s wall time for 250k messages.
+- You want a speedup from a one-line change with no rewrite, and your deployment can use the prebuilt wheels: CPython 3.8-3.14 including free-threaded 3.14t, manylinux/musllinux x86-64/aarch64, macOS x86-64/universal2.
+
+**Skip it when:**
+- Windows: setup.py refuses to build there ('uvloop does not support Windows at the moment'), and the request has been open since 2016 (#14). There you must use asyncio's own loops.
+- Code that needs loop.sendfile/sock_sendfile (open since 2019, #228), sock_recvfrom/sock_recvfrom_into/sock_sendto (these raise NotImplementedError), Server.close_clients from 3.13 (#683), or create_connection's happy_eyeballs_delay/interleave (not in the signature, #406).
+- Large-message, bulk or TLS-bound traffic, or apps whose own code dominates. At 100 KiB the first-party gap drops to about 1.4x (streams) and 1.8x (protocol). A 2026 Linux run on CPython 3.14.7 measured only 1.19x over stdlib asyncio for 1 KiB streams round trips. The 2016 blog itself found aiohttp's HTTP parser, not the loop, was the bottleneck.
+- PyPy, GraalPy or other non-CPython runtimes: the package declares CPython only, and PyPy install/import failures are open issues (#380, #537).
+- Deployments that need recent fixes from PyPI: 0.22.1 (2025-10-16) is still the latest release. The free-threading call_soon_threadsafe race fix (#720), eager_start support and the 2026 write-path/SSL speedups exist only on master. A segfault in __uv_close_handle_cb under uvicorn/FastAPI is still open (#706).
+
+**Integration:** module · none at runtime: libuv is vendored and built into the wheel. Source builds need Cython ~=3.1, setuptools>=60, packaging and a C compiler, plus autotools when building libuv from a git checkout. The --use-system-libuv option links against a system libuv instead. · CPython 3.8.1+ (wheels cp38-cp314 plus cp314t). A source build needs Cython ~=3.1 and a C compiler; it uses -O2 by default (override with UVLOOP_OPT_CFLAGS). · Linux (manylinux2014 and musllinux_1_2, x86-64 and aarch64) and macOS (x86-64, universal2). No Windows. CPython only.
+
+**Vs siblings:** Pick uvloop when you are staying in Python asyncio: it is the only catalogued entry that speeds up existing asyncio code without changing it. UCall beats FastAPI/uvicorn only by replacing the whole server stack with its own JSON-RPC server. libhv, libev and picoev are C event libraries (libhv even benchmarks ahead of libuv, which uvloop wraps) that help only if you leave Python.
+
+**Gotchas:**
+- Selecting the loop: uvloop.install() emits DeprecationWarning on 3.12+, and install() and EventLoopPolicy are removed for 3.16. The policy's get_event_loop() raises RuntimeError when no loop is set, where older stdlib policies created one (#702, open). Some libraries broke on this.
+- Debug mode (PYTHONASYNCIODEBUG=1 or debug=True) can crash during async-generator finalization on Python 3.13/3.14 (#715, open; one report says aarch64 only). Keep debug mode out of production.
+- Behavior differs from stdlib in edge cases. libuv's process spawn can briefly block the loop (#118, open since 2017), and one user reported responses being coalesced under uvicorn but not under stdlib asyncio (#631, open).
+- Memory is not necessarily lower: an HN user measured 204 MB vs 171 MB max RSS for 100k sleeping tasks under uvloop vs asyncio on an M1 Mac (anecdotal, CPython 3.12+).
+
+**Status:** Actively maintained (commits through 2026-07-14, CI on CPython 3.8-3.14t) but releases lag: 0.22.1 from 2025-10-16 is still the latest on PyPI. Dual Apache-2.0/MIT, installed as prebuilt wheels with no runtime dependencies.
+
+[repo](https://github.com/MagicStack/uvloop) · [benchmark](https://raw.githubusercontent.com/MagicStack/uvloop/master/performance.png)
+
+#### http-parsers
+
+##### fast-http  `Common Lisp`  `MIT`  `active`  `Tier C`
+
+Pure Common Lisp HTTP/1.x request/response parser; on SBCL its README shows it 1.25x faster than joyent's C http-parser.
+
+**Beats:** http-parser (joyent/http-parser) — The README times 100,000 parses of one 430-byte GET request (9 headers) with no callbacks: fast-http's low-level parse-request on SBCL 1.2.6 took 0.086 s (SBCL `time` real time) and joyent/http-parser took 0.108 s (timed with clock(); bench driver built with gcc -O3, http_parser.o via http-parser's own Makefile, which currently uses -O3 -DHTTP_PARSER_STRICT=0). That is 1.25x, run on Travis CI with no CPU model or gcc version given and never re-run since the 2014-era README; a 2014 third-party test (issue #8, macOS x86-64) found fast-http 2.5x faster than stock http-parser but 10% slower than a direct-threaded C variant (0.117 s vs 0.105 s), with a larger footprint (112-byte parser struct vs 32 stock / 48 tuned, and over 41 KB for the parse function alone vs about 13-15 KB for the whole C parser).
+
+**Known shortcoming:** The 1.25x is against joyent/http-parser (now unmaintained), SBCL 1.2.6 on Travis CI with no CPU and empty callbacks, never re-run against llhttp. A 2014 third-party test (#8) found it 2.5x faster than stock http-parser but 10% slower than a direct-threaded C variant, with a larger footprint (112-byte parser struct vs 32; 41+ KB for the parse function vs ~13 KB for the whole C parser). The Quicklisp dist (2026-01-01) ships the 2024-10 snapshot, which lacks v0.3.0's fixes for TE-TE and CL+TE request smuggling, conflicting duplicate Content-Length, huge chunk-size/Content-Length DoS and an out-of-bounds read in unhex-byte. Hot paths compiled with (safety 0); a 2017 memory-fault report under Woo (#30) is open. Streaming re-parses the leftover tail on each chunk (O(N^2) per its comments); the header limit counts lines, not bytes. Open bugs: responses without Content-Length or Transfer-Encoding fail (#46), 1 GiB multipart limit (#44), no QUERY method (#45). No LICENSE file (MIT in README/.asd), only old Travis CI, no releases.
+
+**How:** It is a hand-written byte-at-a-time state machine built from the proc-parse macros (with-octets-parsing, match-case). At compile time these expand into tagbody/go code, and fixed strings such as method names and the content-length, transfer-encoding and upgrade header names become a character trie of nested case dispatches instead of string compares. Hot functions are declared (optimize (speed 3) (safety 0)) with simple-byte-vector and fixnum type declarations, and helpers are inlined, so SBCL emits native code with no type checks; 128-entry lookup tables classify token and hex bytes. Callbacks receive offsets into the caller's buffer, so the low-level path allocates nothing (0 bytes consed over 100,000 parses in the README run).
+
+**Use it when:**
+- You are writing a Common Lisp HTTP/1.x server, client or proxy on SBCL and want a callback parser that does not allocate during header parsing.
+- You serve keep-alive or pipelined request streams (pipelining merged in 2023, PR #40) or need chunked-body decoding in Lisp.
+- You need streaming multipart/form-data parsing in Lisp via make-multipart-parser.
+- You already use the Woo server or the Dexador client, which use it (HN 2014 thread; issue #46), and want to call the parser directly.
+- Internet-facing use only on v0.3.0 (2026-04-06) or later, which adds request-smuggling and DoS hardening.
+
+**Skip it when:**
+- Any non-Lisp codebase. From C/C++ use llhttp or picohttpparser. The 1.25x claim is against http-parser, whose README now says it is not actively maintained (see issue #38), and the benchmark has never been re-run against llhttp.
+- A plain (ql:quickload :fast-http) from the Quicklisp 2026-01-01 dist installs fast-http-20241012-git. That snapshot predates v0.3.0's fixes for TE-TE and CL+TE request smuggling, conflicting duplicate Content-Length, chunk-size and Content-Length bignum DoS, and an out-of-bounds unhex-byte read. Pin git master or an ocicl snapshot of v0.3.0 or later.
+- HTTP clients that must read close-delimited responses (a body with no Content-Length and no Transfer-Encoding). Open issue #46 (Aug 2026) shows these fail with a misleading invalid-version error, for example through dex:get.
+- Large uploads through make-multipart-parser, which buffers each part body. Open issue #44 shows a 1 GiB upload failing with 'Buffer exceeded the limit: 1073741824'.
+- Methods outside its hard-coded list of 27, such as QUERY (open issue #45), or HTTP/2 and HTTP/3: it is HTTP/1.x only.
+
+**Integration:** module (ASDF system, installed with Quicklisp or ocicl) · alexandria, cl-utilities, proc-parse, babel, xsubseq, smart-buffer (plus log4cl only with the fast-http-debug feature); tests use prove and cl-syntax-interpol · Not documented. It needs an ANSI Common Lisp with ASDF. The benchmark used SBCL 1.2.6. The CI config (.travis.yml) lists SBCL, CCL, CLISP, ABCL and ECL, with an ECL load workaround in the .asd, and a LispWorks fix was merged in PR #33. · Any OS/arch its Lisp implementation supports; the speed claim applies only to SBCL native code
+
+**Vs siblings:** It is the only Common Lisp parser in this category, so pick it when your stack is Lisp (Woo, Clack, Dexador). For C/C++ the siblings are the real options: Puma's Ragel-based http11_parser shows a similar ~1.26x over the same deprecated http-parser, and milo or iohttpparser (vs llhttp) and httparse or thhp (vs picohttpparser) are measured against current baselines.
+
+**Gotchas:**
+- Hot paths are compiled with (safety 0), so the low-level API does not check argument types. Pass only simple (unsigned-byte 8) vectors and valid start/end. Before v0.3.0, unhex-byte read out of bounds on high bytes (commit 4d8cf4f), and a 2017 memory-fault report under Woo (issue #30) is still open.
+- Streaming is replay-based: when a chunk ends mid-token, parse-request signals eof, and make-parser copies the unconsumed tail from http-mark and re-scans it together with the next chunk. Code comments call this O(N^2), bounded only by caps of 1024 chunk-extension bytes and 16 chunk-size hex digits.
+- The header cap (+max-header-line+ = 1024) counts header lines, not bytes, so one huge header line is buffered until it ends. Enforce your own byte limit on the socket.
+- Since v0.3.0 a make-parser closure that has hit a parsing-error is poisoned and signals parser-poisoned on reuse, so create a fresh parser after an error. Duplicate headers are joined with ', ' in the hash table, and set-cookie values are a list.
+
+**Status:** Active in bursts (v0.3.0 on 2026-04-06 added smuggling and DoS hardening after a 2023-2026 gap; issues #44-#46 open) and MIT per README and .asd with no LICENSE file, but Quicklisp's current dist still ships the pre-0.3.0 2024-10-12 snapshot and the only CI config is the old .travis.yml.
+
+[repo](https://github.com/fukamachi/fast-http) · [benchmark](https://github.com/fukamachi/fast-http/blob/master/README.markdown)
+
+##### gunicorn_h1c  `C`  `MIT`  `active`  `Tier C`
+
+CPython C extension over vendored picohttpparser that parses HTTP/1.1 requests for Gunicorn; claims ~1.1-2.1x httptools throughput.
+
+**Beats:** httptools (MagicStack, llhttp-based) / CPython pure-Python HTTP parser — The README reports single-thread Python-loop throughput on an Apple M4 Pro: parse_request_fast ~2.5M req/s and a reused H1CProtocol on a simple GET ~4.7M req/s (209 ns/op), against httptools (llhttp) ~2.2M and a pure-Python parser ~150K, i.e. ~1.14x and ~2.1x httptools. Compiler, Python version and the httptools harness are not stated, the CHANGELOG's own note that reused H1CProtocol is only 7% faster than the pull API suggests the table rows use different requests, and on this ARM machine picohttpparser runs its scalar path.
+
+**Known shortcoming:** No harness for the httptools (~2.2M) or pure-Python rows; table rows disagree with the CHANGELOG, so like-for-like is unclear; compiler and Python version not stated. The README's NEON claim is false: arm64 (including the M4 Pro used) runs picohttpparser's scalar path; SIMD is SSE4.2 on x86 only. Importing it on free-threaded 3.13t/3.14t re-enables the GIL (#16, PR #18 open). One wheel on PyPI (cp314 macOS arm64); others need a C compiler (#1). parse_request_raw skips all validation; H1CProtocol can buffer without bound before the header block completes. 'Zero-copy' is overstated (headers and body chunks are copied). HttpRequest embeds ~8 KB and pins bytearray buffers. 0.6.x fixed several 2026 framing bugs (Upgrade bodies dropped in the ASGI worker); still Beta. Only a partial httptools replacement (different callbacks, no parse_url, no response parser). Adoption: Gunicorn 25+ uses it automatically via gunicorn[fast].
+
+**How:** The scanning is picohttpparser's: a stateless parser that finds token and field-value boundaries with SSE4.2 PCMPESTRI range matching (_mm_cmpestri) when built with -msse4.2, and an 8-byte-unrolled scalar loop otherwise. The wrapper's own speed comes from not building Python objects it does not need: parse_request_fast keeps pointers into the caller's buffer and creates method/path/header bytes only on first access, pulls Content-Length, chunked and Connection out in C during the parse, and H1CProtocol reuses one growable C buffer across keep-alive requests via reset(). There is no NEON code despite the README: on arm64 (including the Apple M4 Pro used for the numbers) the scalar path runs.
+
+**Use it when:**
+- You run Gunicorn 25+ (WSGI or ASGI workers) and want the faster parser: pip install gunicorn[fast] and it is picked up by http_parser='auto'.
+- A Python asyncio server whose data_received() currently feeds httptools, and you want callback parsing plus Gunicorn's limits and RFC 9110/9112 framing checks (duplicate Content-Length, CL+TE, bare CR in chunk extensions, duplicate Host) in C.
+- Header-heavy request handling where most requests only need method, path and a few framing headers, so parse_request_fast's lazy object creation saves allocations.
+- Code that needs a WSGI environ or ASGI scope built straight from a byte buffer without a Python-level header loop.
+
+**Skip it when:**
+- You need a verified speedup over httptools/llhttp: the ~2.2M req/s httptools row and the ~150K Pure Python row have no script in the repo, request shapes for most rows are not stated, and the only benchmark (benchmarks/bench_protocol.py) compares this library's own two APIs. Gunicorn's benchmarks/http_parser_benchmark.py also omits httptools.
+- Free-threaded CPython (3.13t/3.14t): the modules do not declare Py_mod_gil, so importing them re-enables the GIL; issue #16 reports this erases the gthread gain, and PR #18 adding support is still open.
+- Platforms without a C toolchain: PyPI has one wheel (cp314 macOS arm64); everything else, including Linux x86-64, builds from the sdist.
+- You need httptools' full surface: there is no callback response parser (parse_response returns a dict, no body decoding), no on_chunk_header/on_chunk_complete/on_status callbacks, and no parse_url.
+- Maturity-sensitive deployments: first release March 2026, Development Status 4 - Beta, and 0.6.x releases in 2026 still fixed framing bugs (e.g. 0.6.9: bodies of any request with an Upgrade header were silently dropped on Gunicorn's ASGI worker).
+
+**Integration:** module · none at runtime (vendored picohttpparser); C compiler and setuptools>=61 to build from sdist · Python 3.9+ (CI tests 3.13 and 3.14 only); any C compiler setuptools can drive, built with -O3 (plus -msse4.2 on x86) · Linux and macOS in CI; SIMD only on x86 built with SSE4.2, scalar picohttpparser path elsewhere (including arm64); Windows not tested
+
+**Vs siblings:** Pick it over zttp (the other Python-level httptools challenger in the catalog, which publishes a 14-workload comparison) when you are on Gunicorn or need Gunicorn-compatible limits, exceptions and WSGI/ASGI builders; pick zttp when you want a documented, reproducible margin over httptools. The C-level picohttpparser variants (vkrasnov AVX2 fork, httparse, hparse) are faster parsing cores but are not Python bindings.
+
+**Gotchas:**
+- x86 builds use -msse4.2 unconditionally, so a binary built on x86 needs an SSE4.2 CPU; on ARM the README's NEON claim is false and parsing is scalar.
+- parse_request_raw returns offsets only and skips every limit, RFC and framing check the other entry points run; do not feed it untrusted input without your own validation.
+- HttpRequest from parse_request_fast holds a buffer export on your input and embeds a 256-entry phr_header array (about 8 KB per object on 64-bit); keeping it alive pins a bytearray against resizing.
+- While in the header state, H1CProtocol buffers everything fed until the header block is complete; the request-line limit is only checked once a CRLF appears and field limits only after a full parse, so the caller must bound bytes per request. After completion, bytes are kept for remaining() up to limit_remaining (64 KB) and dropped by reset() unless you read them first (pipelining).
+
+**Status:** Active (v0.6.9, last commit 2026-08-23), MIT-licensed including the vendored picohttpparser, and shipped as Gunicorn's optional fast parser (~36.6K PyPI downloads/month) despite only 10 GitHub stars.
+
+[repo](https://github.com/benoitc/gunicorn_h1c) · [benchmark](https://github.com/benoitc/gunicorn_h1c#performance)
+
+##### hparse  `Zig`  `MIT`  `active`  `Tier C`
+
+Zig SIMD HTTP/1.x parser modeled on picohttpparser; about 1.14x faster than a gcc -O3 picohttpparser build on x86-64.
+
+**Beats:** picohttpparser — On an unnamed x86-64 Linux machine (author's `poop` run, 10M parses of one 430-byte GET with 9 headers, no compiler versions stated), hparse built with Zig ReleaseFast for the native CPU took 1.27 s and 5.38G cycles, against 1.45 s and 6.16G cycles for a vendored picohttpparser built with plain `gcc -O3` (probably without its SSE4.2 path) and 1.54 s for httparse 1.10: about 1.14x faster, at about 801 vs 3,470 instructions per parse (derived from page data). A third-party re-run on a Ryzen 7 8745HS gave 1.01 s against 1.14 s, but on Apple M3 and M4 Pro hparse is 1.5-1.6x slower than picohttpparser.
+
+**Known shortcoming:** Narrow, likely unfair win: 1.27 vs 1.45 s wall time against a picohttpparser built with plain gcc -O3, which probably drops its SSE4.2 fast path; no CPU model stated. About 1.5x slower than picohttpparser on Apple Silicon (#3).
+
+**Known shortcoming:** One-byte out-of-bounds read on truncated input in main (fix PR #7 unmerged and partial). Zig-only, no C interface; tested on Zig 0.15.1 only. Stricter than picohttpparser (rejects unknown methods, tabs in values, obs-fold) and looser in others (header-name bytes, empty request-target). No chunked decoder; rescans the whole buffer after each incomplete result. Last commit 2025-10.
+
+**How:** Delimiter and validity scans use Zig's portable `@Vector` SIMD: each chunk is compared against byte-range masks; the resulting bool vector is bitcast to an integer, and `@ctz` of its complement gives the offset of the first delimiter or invalid byte, so the cursor skips a whole chunk per step. Paths and header values use the target's suggested vector width (capped at 32 bytes, even on AVX-512), header names use a fixed 16-byte vector, and the tails fall back to 8-byte SWAR 'has byte less than n' bit tricks and then 256-entry lookup tables. Methods and the version are matched by loading 4 or 8 bytes as an integer and switching on magic constants such as 'GET ' and 'HTTP/1.1'; in the benchmark this comes to about 800 instructions per 430-byte request, against about 3,470 for the scalar picohttpparser build (derived from page data).
+
+**Use it when:**
+- You are writing a Zig server, proxy or client and want a zero-allocation, zero-copy HTTP/1.x head parser that tolerates partial reads from an event loop.
+- x86-64 Linux deployments built with ReleaseFast for the native CPU. The author's run and a third-party run on a Ryzen 7 8745HS both show 11-12.5% less wall time and cycles than picohttpparser on a 430-byte GET with 9 headers.
+- Traffic uses only the nine standard methods (GET, POST, HEAD, PUT, DELETE, CONNECT, OPTIONS, TRACE, PATCH) and HTTP/1.0 or 1.1, and parsing the request head is a measurable share of CPU.
+- You want one small MIT-licensed file (src/root.zig, about 1,100 lines including tests) to vendor and patch yourself, for example as the reference for a C++ port of the same @Vector/SWAR scan.
+
+**Skip it when:**
+- C or C++ codebases. There is no `export fn` or C header, so you would have to write a Zig shim that turns slices into pointer/length pairs and build it with Zig 0.15.
+- Apple Silicon and other aarch64 targets. In the maintainer's open issue #3, an M4 Pro runs hparse in 1.464 s against 0.965 s for picohttpparser, about 1.5x slower. PR #2 shows 2.015 s against 1.252 s on an M3.
+- Untrusted network input on unpatched main. Truncated requests can read one byte past the input slice (see gotchas), and the fix in PR #7 has not been merged.
+- Requests with extension methods (WebDAV PROPFIND, MKCOL, custom verbs), tabs inside header values, or obs-fold continuation lines. hparse returns `error.Invalid` for all of these, while picohttpparser accepts them.
+- You need chunked transfer-encoding decoding (`phr_decode_chunked`) or picohttpparser's `last_len` quick completeness check. hparse has neither, and it re-scans the whole buffer on every `error.Incomplete` retry.
+
+**Integration:** module · none (Zig std only) · Zig 0.15.x. CI pins 0.15.1, `minimum_zig_version` is not declared, and a PR to move to Zig 0.16.0 was closed without merging. · Any Zig target. CI runs tests on x86_64 Linux (gnu and musl), x86_64 Windows, and aarch64 and x86_64 macOS. Vector width is chosen at compile time from the target CPU, with SWAR and scalar fallbacks. Speed wins are shown only on x86-64; it is slower than picohttpparser on Apple Silicon.
+
+**Vs siblings:** Pick hparse only when you are already in Zig and want a native package; for C/C++, the vkrasnov AVX2 picohttpparser fork (1.68-1.79x, drop-in, but untouched since 2014) and httpp (header-only C, about 2.26x in its own benchmark) link directly and claim larger gains. picohttpparser-rs is the choice for a memory-safe Rust port that is differentially tested against the C original.
+
+**Gotchas:**
+- One-byte out-of-bounds read on truncated input. After a scan stops at the end of the buffer, `cursor.char()` is read without checking `idx < end`. This happens in parseHeader, at the top of the parseHeaders loop and in parsePath, so a partial request can inspect the byte just past your slice. Open PR #7 ('add cursor pos checks', July 2026) adds these checks for the header paths but not for parsePath. Until it is fixed, pad buffers or patch the source.
+- Validation is looser than picohttpparser in places. Header names accept any byte above 0x20 except ':' and DEL, rather than an RFC token table. An empty request-target (`GET  HTTP/1.1` with two spaces) is accepted, whereas picohttpparser rejects zero-length paths. Do not rely on it alone for request-smuggling defense.
+- Header values are not trimmed of trailing spaces, unlike picohttpparser, which strips trailing SP/HTAB. Tabs inside a value are rejected on purpose (commit 'don't allow tabs in header values').
+- Running out of `headers` slots returns `error.Invalid`, although the doc comment says `error.TooManyHeaders`. Size the array for your worst case. Returned slices point into your buffer, so keep it alive and unchanged while you use them.
+
+**Status:** Last commit 2025-10-24, with a July 2026 bounds-check fix (PR #7) still open and a Zig 0.16 bump (PR #6) closed unmerged, so treat it as lightly maintained; it is MIT-licensed and small enough to vendor as one Zig file, but C++ can only call it through a hand-written shim.
+
+[repo](https://github.com/nikneym/hparse) · [benchmark](https://github.com/nikneym/hparse/blob/main/bench/bench.txt)
+
+##### http.c3l  `C3`  `MIT`  `active`  `Tier C`
+
+Sans-IO streaming HTTP/1.1 request parser in C3; ties picohttpparser with callbacks, ~13% faster only when extracting nothing.
+
+**Beats:** picohttpparser — Author's own microbenchmark (bench/bench.c3): pico's classic browser GET request (9 headers, no body) parsed 5M times after warmup on one pinned x86-64 core with unstated CPU model, c3c -O3 against vendored picohttpparser built -O3 -msse4.2 (compiler versions not stated). Rounded results are pico ~112 ns/req, callback-driven http::parser ~112 ns (~99% of pico) and a callback-free run ~99 ns (~113%) that extracts no fields, so at equal output it is parity; the '~1.5x vs pico scalar build' claim has no numbers.
+
+**Known shortcoming:** The ~13% win comes from a run with no callbacks that extracts no fields while picohttpparser fills its header array; with equal output it is at parity (~99%). Project's own benchmark with rounded figures, no CPU or compiler versions. Written in C3.
+
+**Known shortcoming:** Validates less than picohttpparser (no token-character or control-byte checks, so NUL/DEL/stray CR pass), requests only, HTTP/1.0-1.1 only, and ships no C header or exported C API, so it is not usable from C/C++ as shipped. Linux/macOS only; one squashed commit, 3 stars.
+
+**How:** Delimiter finding uses a portable 16-byte vector byte search (`char[<16>]` equality compare, mask-to-int, count-trailing-zeros; SSE2 on x86-64, NEON on aarch64, no runtime CPU dispatch): first for LF, then for SP and ':' inside the completed line. Per the source, the request-line and header paths only check CRLF, the exact version string, whitespace before the colon and the framing headers; they skip picohttpparser's per-byte token-character and control-byte validation (which pico does with SSE4.2 PCMPESTRI range matching). Callbacks are coalesced to one indirect call per request line and per header, and the author attributes the whole gap between the callback-free run (~99 ns) and the full run (~112 ns) to that dispatch.
+
+**Use it when:**
+- Your server is written in C3 and needs an HTTP/1.1 request parser that handles fragmented reads without owning a buffer (raw recv loop, framed peek/consume, or in-memory buffer).
+- You want body framing (Content-Length, chunked with trailers), keep-alive and pipelining from one parser object instead of pairing pico's request parse with a separate chunked decoder.
+- Constant-memory request handling: the parser is a fixed-size value with no heap allocation (checked by a TrackingAllocator test), and bodies and multipart file uploads stream through callbacks, e.g. straight to disk.
+- You want built-in smuggling-related rejects: Content-Length plus Transfer-Encoding, non-final chunked, differing duplicate Content-Length, whitespace before the colon, obs-fold and bare LF, with configurable line-size and header-count limits.
+
+**Skip it when:**
+- C or C++ projects looking for a faster picohttpparser: at equal output the measured result is parity (~112 vs ~112 ns/req), and the library ships no C header or exported C API.
+- When the parser must reject bad bytes: method, target, header names and header values are not checked for token characters or control bytes (NUL, DEL, a stray CR inside a value pass through), unlike picohttpparser.
+- Response parsing or anything beyond HTTP/1.x: it parses requests only and accepts only the exact version strings HTTP/1.0 and HTTP/1.1.
+- Windows or targets other than Linux/macOS on x64/aarch64: those four are the only targets in manifest.json and CI.
+- Where maturity matters: v0.5.0 in source, 3 stars, one squashed commit, no tagged releases and no issue history.
+
+**Integration:** module (C3 .c3l library bundle, compiled from source) · none beyond the C3 standard library (picohttpparser is vendored only for the benchmark) · c3c; CI pins c3c v0.8.1 (project langrev 1); no minimum version documented · linux-x64, linux-aarch64, macos-x64, macos-aarch64 (per manifest.json); SIMD path is 16-byte vectors (SSE2/NEON), no -march=native needed
+
+**Vs siblings:** Pick it only when the host program is C3 and you want streaming body framing plus multipart in one zero-heap package. For a real speed margin over picohttpparser in C, the vkrasnov AVX2 fork (~1.7-1.8x) or httpp (~2.26x claimed) are stronger; in Rust use httparse or thhp; for a streaming C parser to replace llhttp, use iohttpparser.
+
+**Gotchas:**
+- Callback slices point into the caller's buffer and are valid only for the duration of the callback; copy anything you keep.
+- An incomplete line returns 0 bytes consumed and is rescanned from its start on the next call, so a slowly dripping line is scanned repeatedly up to max_line_size (8 KiB default); the benchmark uses one whole, hot-cache buffer and does not measure this.
+- The ~13% 'no cb' win registers no callbacks at all, so it extracts no method, path or headers, while pico fills its 32-entry header array in the same loop.
+- Errors come back as C3 faults from `execute`; call `reset()` before reusing the parser on the connection.
+
+**Status:** Active but new (single squashed commit pushed 2026-08-02, CI green on Linux and macOS, v0.5.0, no releases); MIT and only five source files, so easy to vendor into a C3 project but not usable from C/C++ without writing your own bindings.
+
+[repo](https://github.com/lsfratel/http.c3l) · [benchmark](https://github.com/lsfratel/http.c3l/blob/main/bench/README.md)
+
+##### httparse (Rust push parser for HTTP/1.x)  `Rust`  `MIT OR Apache-2.0`  `active`  `Tier C`
+
+Rust's standard zero-copy HTTP/1.x push parser; beats picohttpparser only when pico is built without SSE4.2.
+
+**Beats:** picohttpparser — In the maintainer's PR #40 (June 2018; rustc 1.27 nightly #[bench], lto=true, an unnamed CPU with SSE4.2), a ~700 B, 10-header browser GET took 451 ns with runtime detection and 405 ns with target-cpu=native, vs 492 ns for picohttpparser built via pico-sys without SSE4.2 (~1.09x / ~1.21x); the short request was 70 and 62 ns vs 72 ns. With SIMD off httparse lost (529 vs 492 ns), and a third party's equal-flags build (issue #85) had pico ~1.66x faster.
+
+**Known shortcoming:** Not faster when both sides are built fairly: the maintainer's 2018 win was against picohttpparser built without SSE4.2; with SIMD off httparse is slower on the realistic request, and a third-party run with pico built with SSE4 and LTO had pico about 1.66x faster (#85, open). The pico comparison was removed from the benches in 2022.
+
+**Known shortcoming:** The win over picohttpparser holds only when pico is built without SSE4.2 (pico-sys uses default cc flags). With SIMD off on both, pico wins the full request (PR #40, #38); the one equal-flags build had pico ~1.66x faster (#85, open). No CPU named, numbers from 2018, pico dropped from the benches in 2022 (PR #112). Open issue #222: allow_space_before_first_header_name(true) lets a whitespace-only first header line end the head with zero headers (smuggling hazard; option off by default). Master (MSRV 1.59, compile-time SIMD for no_std) is unreleased; last release v1.10.1 (2025-03). Versions before 1.9.5 had an unsound pointer::add. The 'sse42' path uses no SSE4.2-specific instructions.
+
+**How:** It validates request-target and header-value bytes with SIMD range checks (16 bytes per step in the 'sse42' path, which really uses max_epu8/cmpeq/movemask; 32 with AVX2; 16 with NEON) and finds the first delimiter with trailing_ones on the movemask, falling back to SWAR word-at-a-time checks (8 bytes in a usize using borrow tricks). On x86 with std it picks AVX2, SSE4.2 or SWAR at runtime and caches the choice in an AtomicU8, while -C target-cpu=native moves the choice to compile time and removes the dispatch branch. Smaller tricks: 'GET '/'POST' are matched as 4-byte arrays, 'HTTP/1.x' as one u64 compare, and a raw-pointer Bytes cursor skips per-byte bounds checks. It won PR #40 because picohttpparser only uses its PCMPESTRI path when compiled with __SSE4_2__ and has no runtime dispatch, and pico-sys built it without that flag.
+
+**Use it when:**
+- You are writing or tuning a Rust HTTP/1.x server, client or proxy and need the head parsed straight out of a read buffer with zero allocations. It is the parser underneath hyper, and its crate has ~742M downloads and 551 reverse dependencies.
+- You ship one generic x86-64 binary: runtime dispatch picks AVX2/SSE4.2 on its own. In PR #40 that took the ~700 B browser request from 529 ns (no SIMD) to 451 ns, against 492 ns for a default-built pico.
+- You can build per host with -C target-cpu=native: the dispatch moves to compile time. That gave 405 ns on the same request, and 62 vs 72 ns on the short one.
+- no_std or embedded targets: turn off the default 'std' feature. You get the SWAR fallback, which PR #123 measured at ~20% less time per request on x86_64 and ~40% less on Apple M1 than the old byte loop.
+- Parsing messy real-world responses: ParserConfig can skip invalid header lines, accept obsolete line folding, and accept multiple spaces in the request/status line.
+
+**Skip it when:**
+- Raw speed against picohttpparser under equal build flags. The one fair-build report (issue #85: pico built with -msse4 and cross-language LTO) measured pico at ~2900 MB/s vs httparse at 1751 MB/s, and the project removed pico from its benches in 2022 (PR #112), so there has been no head-to-head since.
+- Scalar-only builds on realistic requests: with both parsers' SIMD off, pico won 492 vs 529 ns (PR #40) and 405 vs 468 ns (PR #38). Those numbers predate the 2023 SWAR rewrite and were never re-run against pico.
+- Ring buffers or scattered iovecs: parse takes a single contiguous slice (issue #74 is open), so wrapped data has to be copied first.
+- Slow-drip or very large header blocks: every Partial re-parses from byte 0, and there is no last_len-style resume point. The docs (added 2026-02) warn that retry loops on a growing buffer can burn CPU fast, so cap head size and time yourself.
+- You need HTTP semantics rather than tokenizing: it does not validate Content-Length or Transfer-Encoding, frame bodies or look up headers. For chunked bodies it only parses the size line and has no phr_decode_chunked equivalent. The URI check is a loose byte-range test (0x21-0x7E, 0x80-0xFF) followed by UTF-8 validation.
+
+**Integration:** crate (crates.io 'httparse', pure Rust) · none (criterion and rand are dev-dependencies only) · Released v1.10.1: Rust 1.47 per CI, edition 2018, with a build.rs that probes rustc (NEON needs 1.59, otherwise SWAR). Unreleased master: rust-version 1.59, edition 2021, no build script. · Any Rust target. SIMD on x86/x86_64 (SSE4.2 or AVX2, detected at runtime with std or selected at compile time via target_feature) and on aarch64 with NEON; everything else uses SWAR. CI covers x86_64 in each SIMD mode, i686-musl, aarch64 and miri. The --cfg httparse_disable_simd flag forces SWAR.
+
+**Vs siblings:** Pick httparse when you are in Rust and want the maintained, fuzzed, ecosystem-default parser with runtime SIMD dispatch and no_std support; thhp only ties pico (4421 vs 4393 MB/s with +sse4.2), and picohttpparser-rs is a C-ABI safety rewrite that wins only on header-heavy inputs. If you need a margin over picohttpparser itself, the non-Rust siblings httpp (~2.26x), http.c3l (~13%) and hparse (~12.5% wall-clock) report larger ones but are far less deployed.
+
+**Gotchas:**
+- The header slice caps the header count. One header too many returns Error::TooManyHeaders rather than Partial. On Partial, Request fields can be half-filled (method set, path None), which is by design so callers can route early.
+- Types are asymmetric. path is &str, so a non-UTF-8 request-target fails as Error::Token. Header values are &[u8] with trailing whitespace trimmed. A reason phrase containing obs-text comes back as "". A bare LF is accepted as a line ending.
+- Open issue #222 (2026-07): with allow_space_before_first_header_name(true), a whitespace-only first header line ends the head with zero headers and leaves the real headers in the buffer, a request-smuggling hazard. The option is off by default.
+- Pin a recent version. 1.9.5 fixed an unsound pointer::add (PR #185) and a runtime-dispatch lowering problem that had made generic x64 builds 2-10x slower on small header microbenchmarks (PR #181). 1.10.0 tightened method tokens to RFC tchar (PR #190). Before master's PR #214, no_std builds always used SWAR even with target features set. Despite the lib.rs doc, unsafe is not confined to one submodule: it appears throughout lib.rs, iter.rs and simd/, every block carries a clippy-enforced SAFETY comment, and CI runs miri and cargo-fuzz.
+
+**Status:** Actively maintained (last commit 2026-06-30, last release v1.10.1 on 2025-03-03, so master's MSRV bump and no_std SIMD are unreleased), MIT OR Apache-2.0, dependency-free and effectively the Rust HTTP/1.x default, so it is safe to adopt; its speed edge over pico is the weak part, not its maturity.
+
+[repo](https://github.com/seanmonstar/httparse) · [benchmark](https://github.com/seanmonstar/httparse/pull/40)
+
+##### httpp  `C`  `MIT`  `active`  `Tier C`
+
+Single-header, zero-allocation C HTTP/1.1 request parser; ~2.26x picohttpparser's scalar build on one sample request, with far less validation.
+
+**Beats:** picohttpparser — This is the project's own benchmark: 10M parses x 5 runs of picohttpparser's classic 9-header 'hello-kitty' GET, timed with clock() and built with gcc 15.2.1 -O3 and no -march on an unspecified 'Ryzen 7' (4.79 GHz peak). httpp 2.0.0 took 1.12 s (~8.9M req/s) against picohttpparser's 2.54 s (~3.9M req/s), about 2.26x, while httpp 1.0.0 was slower than pico. Pico was built without -msse4.2, so its SSE4.2 path was off; it was cloned unpinned and built as a separate TU, and an earlier README run on the same stated hardware had pico at 4.91M req/s, a 1.83x ratio.
+
+**Known shortcoming:** The ~2.26x over picohttpparser is inflated: picohttpparser was built without -msse4.2 (scalar path), and httpp does far less validation (no token/control-character checks, no incomplete-request handling). CPU given only as 'Ryzen 7'; ignore the -O0 rows.
+
+**Known shortcoming:** The benchmark and README example no longer compile at HEAD (functions renamed). The ratio is unstable (1.83x on an earlier run, 2.26x later, with picohttpparser unpinned). Header lines are found with strstr, which ignores the length and can over-read non-NUL-terminated buffers; no 'incomplete' result, so truncated headers parse as success; over 20 headers is reported as malformed. HTTP/1.0 rejected by default. One author, last commit 2025-12.
+
+**How:** Zero-copy, zero-allocation parsing: v2.0.0 replaced v1.0.0's per-request malloc/realloc and per-header string copies with spans into the input and a caller-owned stack array, which is why v2 is ~3.1x faster than v1 at -O3 in the project's own table. Field and line boundaries are found with libc memchr (space, CR, ':') and strstr("\r\n") rather than a byte-at-a-time state machine, so scanning runs in glibc's SIMD string routines. It does almost no per-byte validation (no token/CTL tables, no incremental-parse state), so the hot path is delimiter search plus span bookkeeping. There is no hand-written SIMD.
+
+**Use it when:**
+- Small or hobby C servers where you control the client or sit behind a validating proxy, and want one dependency-free header with no heap use on the parse path.
+- The whole request is already in one NUL-terminated buffer, has at most ~20 headers, and you only need route, header and body spans.
+- Throughput-bound parsing of known-good HTTP/1.1 requests on x86-64/glibc, such as test harnesses, load generators or internal tooling.
+- You also want a trivial response serializer (status-text table plus header list to a malloc'd raw response) in the same file.
+- As a short, readable base to fork; the README explicitly invites changes such as replacing the fixed header array with a hash table.
+
+**Skip it when:**
+- Internet-facing servers: no token/CTL validation of the method, route or header names/values, whitespace before ':' is accepted, and duplicate Content-Length headers are not detected, so smuggling and injection defenses are left to you.
+- Incremental reads from a socket: there is no 'incomplete' result like pico's -2, and a header block cut mid-line returns success with the unterminated tail treated as the body.
+- Buffers that are not NUL-terminated (raw recv() buffers): header lines are found with strstr, which ignores n and can read past the end of the buffer.
+- HTTP/1.0 clients, pipelining or chunked bodies: HTTP/1.0 is rejected unless HTTPP_DONT_CHECK_VERSION is defined (then any 8-byte version string passes), the source says pipelined requests are 'not handled well', and chunked decoding is left to the caller.
+- Production dependencies in general: one maintainer, 9 stars, no issues ever filed, and the latest commit broke the README example and the v2 benchmark, which still call the removed httpp_init_req.
+
+**Integration:** header-only · none beyond libc (memchr, strstr, strncmp) and POSIX strncasecmp from <strings.h> · Not documented; the code uses C99 features (designated initializers, compound literals, stdbool) and a commit mentions C11 compatibility. The only compiler named is gcc 15.2.1, in the benchmarks. · Not documented; portable C with no arch-specific code, but it needs POSIX strncasecmp (MSVC/Windows is not addressed).
+
+**Vs siblings:** Pick httpp only for a tiny self-contained C header with a response builder when the input is known to be complete, well-formed and NUL-terminated; for a speedup that keeps pico's API, validation and -2 incremental parsing, the vkrasnov AVX2 fork (1.68-1.79x) is safer, picohttpparser-rs covers Rust, and hparse reports a smaller ~12.5% wall-time gain but ~4x fewer instructions than pico.
+
+**Gotchas:**
+- Body handling is 'lazy' by default: everything after the blank line is the body. HTTPP_CONSIDER_CONTENT_LENGTH makes it honor Content-Length (it mallocs and atol()s the value), and a Content-Length larger than the remaining buffer returns -1, not 'need more data'.
+- If there are more headers than the array capacity (default 20), the whole parse returns -1, which you cannot tell apart from a malformed request.
+- Methods outside the nine built-in ones become HTTPP_METHOD_UNKNOWN, and httpp_req_t has no method span, so the text of methods such as PROPFIND is lost. Methods over 10 bytes are rejected.
+- Spans are not NUL-terminated and point into your buffer, so the buffer must outlive the request; httpp_span_to_str returns a malloc'd copy. httpp_res_to_raw prints headers with %s, so response header strings must be NUL-terminated. The implementation also leaks unprefixed macros (LTRIM, RTRIM, SETSTR) and reserved __-prefixed names into the translation unit that defines HTTPP_IMPLEMENTATION.
+
+**Status:** The record says active, but the last commit was 2025-12-21, about 9 months ago (33 commits from one author since 2025-11-18). It is MIT-licensed and small enough (~730 lines) to vendor and audit; vendor the 2.0.0 release asset, since the init functions were renamed after it.
+
+[repo](https://github.com/cebem1nt/httpp) · [benchmark](https://github.com/cebem1nt/httpp#benchmark)
+
+##### iohttpparser (stateful-strict/lenient profiles)  `C`  `MIT`  `active`  `Tier C`
+
+Pull-based C23 HTTP/1.1 parser with strict framing checks; beats llhttp on header-heavy messages, not on tiny requests.
+
+**Beats:** llhttp — The project's own harness parses one standalone 33-703 byte message per iteration with fresh parser state (200,000 iterations, median of 5 runs). It was built with Clang 22.1.0 (CMake Release + ThinLTO, lld) and run on an 8-vCPU KVM guest that reports only a generic 'AMD EPYC Processor' (host SKU unknown). The best iohttpparser profile (usually stateful-strict) beat vendored llhttp 9.3.1 in 16 of 22 scenarios by 1.01-1.50x and lost the other 6 (down to 0.80x on req-small); llhttp registers no header callbacks in this harness, and framing semantics are not included in these parse-only numbers.
+
+**Known shortcoming:** llhttp 9.3.1 wins 6 of 22 scenarios (including req-small, 0.80x) and picohttpparser is faster in almost every scenario; each iteration parses one short message with a re-initialized parser. The CPU is a generic KVM 'AMD EPYC Processor' string.
+
+**Known shortcoming:** The 'SIMD-accelerated' claim is mostly hollow: the parse hot path uses memchr/SWAR and a lookup table, and the AVX2 backend is a scalar loop in 32-byte blocks. Several wins are 1-7%; the llhttp harness registers only on_message_complete while iohttpparser's framing checks are skipped. Needs C23 and GNU memrchr; SSE4.2/AVX2 options default ON (non-x86 must disable); first-use dispatch init is a data race; stateful parsing keeps raw pointers into earlier buffers. Single contributor, rc release only.
+
+**How:** The parser core uses block scans instead of llhttp's generated per-byte state machine. libc memchr finds each LF and header colon, and memrchr finds the space before the HTTP version. SWAR checks (8 bytes per 64-bit word, two words per loop iteration) reject control bytes and DEL in request targets and field values. A 256-entry token table is fused with the method/first-space search, methods resolve through a length switch plus memcmp, and results go straight into a caller-owned struct with no allocation or callbacks. The advertised SSE4.2 (PCMPESTRI) and AVX2 scanner is used only for token checks in the semantics layer, and the AVX2 path is a blocked scalar loop, so most of the SIMD comes from libc's memchr.
+
+**Use it when:**
+- C servers, proxies or HTTP firewalls on Linux x86-64 that call llhttp today and would prefer a pull API that returns a typed struct of zero-copy header spans.
+- Header-heavy HTTP/1.1 traffic (about 115-703 byte messages with many or long header values). This is where the benchmark shows 1.15-1.50x over llhttp, e.g. 7.72M vs 5.16M req/s on hdr-value-ascii-clean and 2.89M vs 1.93M on 32 minimal headers.
+- Security-boundary ingress that needs strict RFC 9112 framing. The strict profile rejects TE+CL, conflicting Content-Length, duplicate or missing Host, bare LF and obs-fold. In the project's chunked-request benchmark the semantics pass adds about 1 ns (130.66 vs 131.74 ns).
+- Event loops that read into one contiguous, growing buffer and want an explicit resumable parser state plus separate chunked and fixed-length body decoders.
+
+**Skip it when:**
+- When raw parse speed matters and you handle framing yourself: picohttpparser was 1.07-2.46x faster in 21 of the 22 scenarios on the same harness.
+- Tiny requests and request-line-dominated traffic: llhttp won req-small (49 bytes, 22.91M vs 18.36M req/s, 0.80x), req-line-only, req-line-connect, hdr-name-heavy, hdr-uncommon-valid and hdr-count-04-minimal. Wins on the other request-line cases are 1.01-1.07x, which is within noise on a shared VM.
+- Callback-driven streaming, ring buffers or scatter I/O: the API needs one contiguous accumulated buffer. Only HTTP/1.0 and 1.1 are parsed, and there is no llhttp-style pause/callback model.
+- Non-Linux or non-x86 targets, MSVC, or pre-C23 compilers. Only Linux x86-64 is tested, the build turns on -msse4.2/-mavx2 by default, and the code uses GNU memrchr under _GNU_SOURCE.
+- Anywhere that needs proven maturity: the only release is the pre-release 0.1.0-rc.2, from a single contributor, with 0 stars and no known third-party users or independent benchmark reproductions.
+
+**Integration:** static lib (a shared-lib target, CMake package and pkg-config file are also installed; six .c files of about 1.9k lines, small enough to vendor as a source drop) · none at runtime beyond a libc that provides memrchr (glibc/musl); CMake 3.25+ to build · C23 required (CMAKE_C_STANDARD 23; uses nullptr and [[nodiscard]]); CMake 3.25+. Developed and benchmarked with Clang 22.1.0, and GCC presets exist, but the minimum compiler version is not documented. · Linux x86-64 is the only tested platform (CI runs ubuntu-latest with an Oracle Linux 10 dev container). The IOHTTPPARSER_SIMD_SSE42/AVX2 options default ON and add -msse4.2/-mavx2, so other architectures must turn them OFF (inferred from CMakeLists; not documented). macOS and MSVC are not supported as-is because of memrchr and C23.
+
+**Vs siblings:** Pick it over the picohttpparser-class siblings (the vkrasnov AVX2 fork, hparse, http.c3l) only when you want framing semantics (TE/CL, Host, Connection, upgrade) and a chunked decoder in the same C library; for raw speed those siblings, or plain picohttpparser, win (pico is 1.07-2.46x faster than iohttpparser in 21 of 22 scenarios here). zttp is the llhttp alternative for Python code on httptools; iohttpparser is for C code that calls llhttp directly.
+
+**Gotchas:**
+- ihtp_request_t and ihtp_response_t each embed a fixed IHTP_MAX_HEADERS array (default 64, about 2 KB per struct), and the stateless wrappers memset the whole struct on every call. IHTP_MAX_HEADERS changes the struct layout, so the library and every translation unit that includes the headers must be built with the same value. The header comment names a nonexistent -DHP_MAX_HEADERS; the real macro is IHTP_MAX_HEADERS.
+- The stateful API stores header spans from earlier calls as raw pointers into your accumulated buffer, while its own cursor is only an offset. If you realloc or move that buffer between calls, parsing carries on without error but the earlier spans dangle.
+- The 'SIMD-accelerated' label mostly does not apply to the parse hot path. ihtp_parse_request/response/headers never call the scanner vtable, so throughput depends largely on your libc's memchr.
+- IHTP_POLICY_LENIENT relaxes only obs-fold, bare LF, TE+CL and spaces in the request target. The semantics stage still rejects HTTP/1.1 requests without Host, comma-list Content-Length (e.g. '5, 5') and Transfer-Encoding chains that do not end in chunked, and ihtp_decode_chunked() rewrites your buffer in place.
+
+**Status:** Pre-release only (v0.1.0-rc.2, 2026-03-14) from a single contributor, with no commits to main since 2026-03-14 (only Dependabot PRs and one maintainer PR open since); dual MIT OR LGPL-2.1-or-later and small enough to vendor on Linux x86-64.
+
+[repo](https://github.com/ioplane/iohttpparser) · [benchmark](https://github.com/ioplane/iohttpparser/blob/main/tests/artifacts/pmi-psi/runs/20260313T210231Z-3b9c398/summary.md)
+
+##### liburlparser (abspath fast-path vs ada)  `C++`  `BSD-3-Clause`  `active`  `Tier C`
+
+C++17 RFC 3986-style URL splitter with Public Suffix List domain extraction; its own parse+accessor loop runs ~1.25x ahead of ada.
+
+**Beats:** ada-url/ada (ada::url_aggregator) — The author's fair_compare.cpp interleaves old liburlparser, new liburlparser and unmodified ada::parse<ada::url_aggregator> in one process; each op parses one URL and reads 5 components, and the new build did ~7.4-7.8M ops/s against ada's ~6.0-6.1M (1.24-1.29x), while the pre-fix build did 0.90-0.91x. Only 'this machine, 3 runs' is stated (no CPU, compiler or flags), urls.txt is not shipped (probably the benchmarks/ corpus of 10k Majestic domains in four simple, clean-path shapes), and ada's side also does WHATWG validation and normalization, so the two sides do not do equal work.
+
+**Known shortcoming:** The abspath fast path is on master only (2026-09-18); the latest tag and PyPI release v2.0.0 has the old abspath (0.90-0.91x of ada) and master still reports 2.0.0, so builds cannot be told apart by version. Not equal work: its constructor only trims, splits and lowercases scheme/host (no percent-encoding, host validation or IDNA) while ada does full WHATWG processing. The unshipped corpus (probably regenerable) is 10k clean Majestic-domain URLs in 4 shapes, so the fast path always applies. No CPU, compiler or flags. Const accessors fill mutable caches without locks and psl::load_from_* swaps the shared table unguarded (undocumented). Semantics differ from ada (trailing-slash trimming, // collapsed, Unicode hosts verbatim, protocol()/query() without ':'/'?'). README says MIT but LICENSE holds pybind11's BSD-3 text. Needs Python 3 and CMake 3.19+ to configure; PyPI needs Python 3.10+ (README says 3.8). 21 stars, one main author, daily API changes.
+
+**How:** The url constructor copies every field once into one owned buffer and stores (offset, length) spans, so most accessors are string_view reads with no allocation. It finds '#', '?' and ';' with a compare-and-OR SIMD scan: AVX2 selected at runtime, SSE2 or NEON as the baseline, scalar code otherwise. The ada win comes from abspath(), which used to run a full dot-segment resolver on every call; a cheap path_is_already_normalized() pre-scan now copies clean paths through unchanged and caches the result. PSL lookups use a vendored ankerl::unordered_dense open-addressing map, and the project reports +67-70% on host extraction from that change.
+
+**Use it when:**
+- You need registrable-domain and public-suffix splitting (for example 'ee.aut.ac.ir' becomes domain 'aut', suffix 'ac.ir') together with basic URL component splitting in one C++ or Python library.
+- High-volume log or crawl processing of already-well-formed http(s) URLs, where you read scheme, host, path, query and fragment and do not need WHATWG canonicalization.
+- Python pipelines that use tldextract, tld or publicsuffix2 for domain extraction. The README (2022 run) reports 1.12 s for 10M hosts, against 29.23 s for tldextract and 1.50 s for PyDomainExtractor.
+- Code that must treat IPv4 and IPv6 hosts as typed addresses with integer conversion and arithmetic, not as domain names.
+
+**Skip it when:**
+- You need WHATWG URL Standard behavior (browser-equivalent parsing, percent-encoding of components, host validation, special-scheme rules). ada and its ports implement the standard. liburlparser is not documented as WHATWG-conformant, and its url constructor only trims, splits and lowercases the scheme and host.
+- You need the benchmarked speed from a released package. The abspath() fast path and cache landed on master on 2026-09-18. Tag v2.0.0 (2026-09-11), which is also the latest PyPI release, still has the old abspath() that returns std::string by value. That old build measured 0.90-0.91x of ada.
+- Input that is often messy or relative (dot-segments, repeated slashes, Unicode hosts). The published speed figures come from clean, simple URLs, where the fast path always applies.
+- Several threads reading one url or hostname object at the same time. The const accessors fill mutable caches (host_cache_, abspath_cache_, hostname's parsed fields) with no locking, and the docs do not address this.
+- Maturity-sensitive production use: 21 stars, one main author, v2.0.0 only weeks old, and daily API-changing commits (for example scp to scp_url renames and merged source files) in September 2026.
+
+**Integration:** static lib · none at runtime (PSL data embedded at compile time; vendored ankerl::unordered_dense header, MIT). Build needs CMake >= 3.19 and a Python 3 interpreter (find_package REQUIRED). Configure tries to download public_suffix_list.dat and falls back to the tracked copy. The Python module needs nanobind. · C++17, CMake 3.19+; Python binding: Python >= 3.10 per PyPI metadata (README still says >= 3.8) · Linux, macOS, Windows (CI matrix on ubuntu/macos/windows-latest). SIMD: x86-64 SSE2 baseline with runtime-dispatched AVX2, aarch64 NEON, scalar fallback elsewhere.
+
+**Vs siblings:** Pick it over Ada, ada-rs, lucid-url or sorug only when you need Public Suffix List domain and suffix splitting (none of those do it) and RFC 3986-level splitting is enough. When WHATWG-correct parsing or canonical href output matters, use Ada or one of its WHATWG ports.
+
+**Gotchas:**
+- abspath() and normalized() drop a trailing '/' on non-root paths ('/a/' becomes '/a') and collapse '//' ('/a//b' becomes '/a/b'). The header documents both as deliberate and as different from ada's normalize_url().
+- url parsing keeps Unicode hosts verbatim (ASCII-only per RFC 3986). Only idna::to_ascii() or url::normalized() convert them to Punycode, so 'café.com' and its xn-- form do not compare equal after a plain parse.
+- Master still reports URLPARSER_VERSION 2.0.0, but it differs from the v2.0.0 tag (abspath() now returns const std::string& and there are new APIs). You cannot tell the fast and slow builds apart by version number.
+- License is ambiguous. The README badge and text say MIT, but the LICENSE file is pybind11's BSD-3-Clause text with 'The Pybind Development Team' as copyright holder, and GitHub reports NOASSERTION.
+
+**Status:** Actively developed (near-daily commits through 2026-09-25) and small enough to vendor as one .cpp/.h pair, but the benchmarked fast path is on master only (not in v2.0.0 or on PyPI) and the MIT vs BSD-3-Clause license question should be settled before you copy it.
+
+[repo](https://github.com/MohammadRaziei/liburlparser) · [benchmark](https://github.com/MohammadRaziei/liburlparser/blob/master/benchmarks/cpp/abspath_fix_verification/README.md)
+
+##### ls-hpack (LiteSpeed HPACK)  `C`  `MIT`  `active`  `Tier C`
+
+LiteSpeed's C HPACK (RFC 7541) codec with 64K-entry two-byte Huffman tables; beat a 2016 nghttp2 Huffman encoder 2.4-5.8x.
+
+**Beats:** nghttp2 (HPACK); the numeric benchmark covers only nghttp2's HPACK Huffman encoder (nghttp2_hd_huffman.c at revision 0e1d0400d86a) — LiteSpeed's 2019 post timed only the Huffman string encoder, with each project's code extracted into standalone C: ls-hpack rev a1f1ea8ce298f against nghttp2 rev 0e1d0400d86a (2016, called through its nghttp2_bufs chain). Runs used fixed iteration counts on four inputs and report the median of 5, built -O3 -DNDEBUG with CPU and compiler not stated. Results: 2.37x on 'LiteSpeed' (8.67 vs 20.59 s), 5.77x on an 88-byte x-fb-debug value (5.25 vs 30.31 s), 4.46x when a backslash forces the fallback, and 5.61x on prose. The same run shows 1.11-2.12x over nginx 1.16.1 and 1.02-2.14x over ls-hpack's own previous encoder; the decoder post reports 1.15-1.96x over nginx 1.16.1 only.
+
+**Known shortcoming:** Evidence covers only the HPACK Huffman encoder (2.37-5.77x over a 2019 copy of nghttp2's), not full HPACK; the decoder post compares only against nginx. No CPU model or compiler version.
+
+**Known shortcoming:** The 2.37-5.77x claim is against a 2016 nghttp2 encoder; nghttp2 committed faster Huffman encoding and decoding five days after the 2019 post and changed decoding again in 2025, and nobody has re-run it. Against ls-hpack's own byte-at-a-time encoder the two-byte table gains only 1.02-2.14x, nothing under 14 bytes. Default build carries 768 KB of read-only tables. The latest tag v2.3.5 (what Bun pins) still accepts over-long EOS padding (#24) and has UBSan-found undefined behaviour (#26), fixed only on master. v2.3.4 and earlier stripped trailing whitespace from header names (#22). A plain cmake build is -O0 with ASan. No independent numbers.
+
+**How:** The Huffman encoder looks up the next two input bytes at once in a 65,536-entry table (hencs, 8 B per entry, 512 KB) that holds their combined code of up to 32 bits, and shifts it into a 64-bit accumulator. Pairs whose code would be longer are marked lens=64, and the encoder backs up and finishes with the byte-at-a-time loop. The Huffman decoder uses a 65,536-entry table (hdecs, 256 KB) indexed by 16 input bits that emits 1-3 bytes per lookup. It falls back to the classic 4-bit state-machine decoder for codes longer than 16 bits. Static-table matching hashes the name and the name+value with XXH32 (seed found by bin/find-xxh.c and shared with ls-qpack) into 512-slot index arrays. The dynamic table is two chained hash tables (by name and by name+value). The decoder can also hand those hashes and ready-made 'name: value\r\n' lines to the caller, so a proxy can skip rehashing and reformatting.
+
+**Use it when:**
+- You are building an HTTP/2 server, proxy or client in C/C++ that already handles framing and needs only HPACK. This is the codec shipped in LiteSpeed/OpenLiteSpeed and lsquic and vendored by Bun.
+- Your headers carry medium or long Huffman-coded values (tokens, cookies, base64 debug headers). On an 88-byte x-fb-debug value and on prose, the two-byte table ran 1.7-2.1x faster than ls-hpack's own byte-at-a-time encoder (derived from the post's numbers).
+- You proxy HTTP/2 to HTTP/1.1. With the defaults, the decoder writes 'name: value\r\n' straight into your buffer and fills in XXH32 name and name+value hashes that the encoder (or ls-qpack) can reuse.
+- You are on a 64-bit target with cache to spare. The 64-bit build flushes 8 output bytes per step; 32-bit builds take a 4-byte path.
+
+**Skip it when:**
+- You need a full HTTP/2 stack. ls-hpack does HPACK only: framing, flow control and RFC 9113 field-name validation must come from elsewhere. The maintainer says in #22 that validation does not belong in ls-hpack.
+- Memory or L2 cache is tight. The default build carries 768 KB of read-only Huffman tables (512 KB encoder + 256 KB decoder). The CMake MinSizeRel build sets LS_HPACK_USE_LARGE_TABLES=0 and falls back to the small tables and the slower paths.
+- You need the speedup to hold against current nghttp2. The only comparison used nghttp2 revision 0e1d0400d86a (2016). nghttp2 committed 'Faster huffman encoding' and 'Faster huffman decoding' on 2019-10-08, five days after LiteSpeed's post, and changed decoding again in 2025. No re-run exists, and the decoder was never compared with nghttp2 at all.
+- Your header values are short, or most headers hit the static table. On the 9-byte 'LiteSpeed' input the two-byte table gave nothing over ls-hpack's old encoder (8.67 s vs 8.80 s); the post says strings under 14 bytes see no speedup.
+- You must run a tagged release on untrusted input. v2.3.5 (the latest tag, and what Bun pins) still has a fast decoder that accepts EOS padding longer than 7 bits, against RFC 7541 §5.2 (#24), plus UBSan-found undefined behaviour (#26). Both were fixed only on master, on 2026-09-13.
+
+**Integration:** static lib via CMake (SHARED=1 for a shared lib) or source-drop (lshpack.c + deps/xxhash/xxhash.c, as Bun builds it) · xxHash (bundled in deps/xxhash; build xxhash.c yourself, set LSHPACK_XXH to compile it into the lib, or point XXH_INCLUDE_DIR at your own); <sys/queue.h> (a compat copy ships for musl/Windows) · Minimum C standard not documented; the code uses C99 designated array initializers. CI covers gcc-8 and clang (Travis), MSVC (AppVeyor) and FreeBSD 13.3 (Cirrus). CMakeLists declares 2.8, and modern CMake needs -DCMAKE_POLICY_VERSION_MINIMUM=3.5 (#21). · README lists Linux, FreeBSD and Windows as tested. musl works via compat/queue, OpenBSD via SIMPLEQ shims. 32- and 64-bit builds are handled. Portable scalar C with no SIMD. The encoder table's byte order comes from __BYTE_ORDER/__LITTLE_ENDIAN.
+
+**Vs siblings:** None of the catalogued http-parsers siblings do HPACK. picohttpparser and its forks, httparse, iohttpparser, zttp and the Puma parser all parse HTTP/1.x text, and Ada, lucid-url and sorug parse URLs. Pick ls-hpack when HTTP/2 header (de)compression is the bottleneck, and pair it with one of those for HTTP/1.x or URL work.
+
+**Gotchas:**
+- A plain `cmake .` without -DCMAKE_BUILD_TYPE=Release builds with -O0 -g3 -fsanitize=address and LS_HPACK_EMIT_TEST_CODE. Bun's build notes it had to pin Release because of this. The CMake file also has no install() rules (#21).
+- The compile-time macros LSHPACK_DEC_HTTP1X_OUTPUT and LSHPACK_DEC_CALC_HASH (both default 1) change decoder output: 4 extra bytes per header for ': ' and CRLF, plus hash computation. lshpack.h reads them, so the library and its callers must be built with the same values. Name and value lengths are uint16 unless LSXPACK_MAX_STRLEN=UINT32_MAX.
+- The encoder expects lowercase header names but does not enforce this (maintainer reply in #10). v2.3.4 and earlier silently stripped trailing whitespace from decoded names (#22, a regression per PR #23, fixed in v2.3.5).
+- The two-byte encoder table's layout is chosen with `#if __BYTE_ORDER == __LITTLE_ENDIAN`. On a toolchain that defines neither macro, both evaluate to 0 and the little-endian layout is picked, which is right only on little-endian targets.
+
+**Status:** Actively maintained by LiteSpeed: the last commits (2026-09-13) fix UB and RFC 7541 §5.2 padding handling, though the last tag, v2.3.5 (2026-05-24), predates them. MIT-licensed, and two .c files plus bundled xxHash make it easy to vendor at a pinned commit.
+
+[repo](https://github.com/litespeedtech/ls-hpack) · [benchmark](https://blog.litespeedtech.com/2019/10/03/fast-huffman-encoder/)
+
+##### milo  `Rust`  `ISC`  `active`  `Tier C`
+
+Strict Rust HTTP/1.1 parser (crate, C++ lib, WASM) meant to replace llhttp in Node.js; ~1.07x llhttp in one test.
+
+**Beats:** llhttp — The only comparison is one autocannon run (11 one-second samples) against a Node.js native-addon HTTP server, shown in the author's NodeConf EU 2023 deck: milo averaged 30,765 req/s vs 28,808 req/s for llhttp (about 1.07x, with stdev about 1.4k req/s for each). The deck gives no CPU, OS, compiler, flags or harness. The repo's current C++ harness (clang -O3 -march=native -flto for llhttp v9.3.1, target-cpu=native for milo, no callbacks enabled on either) and its WASM harness (vs undici's llhttp_simd.wasm) publish no results.
+
+**Known shortcoming:** Only evidence is one 11-sample autocannon run in the 2023 NodeConf EU deck (30,765 vs 28,808 req/s, ~1.07x), within noise (stdev ~1.4k each), with no CPU, OS, compiler or harness, and predating the 2026 SIMD rewrite. The same deck says milo is slower than llhttp as WebAssembly, the build Node/undici use. The repo's C++ and WASM harnesses publish no results and enable no callbacks. Open fuzzing reports: memory leak on invalid input (#15), OOM on malformed headers (#16); code reading suggests manage_unconsumed leaks leftover input on every partial parse. Each parser allocates a 64 KiB event buffer (contradicting 'very small footprint'), and parse() stops early without error when it fills. Pinned nightly Rust (stable PR #17 open). Stricter than llhttp (rejects HTTP/1.0, RTSP, obs-fold, bare LF/CR, GET/HEAD bodies), so only a partial drop-in. 219 crates.io downloads; README says 0.4.0 (current 0.8.0) and dependency-free (depends on memchr).
+
+**How:** It is a line-oriented state machine. Proc-macros (syn/quote) generate its states, matchers and byte lookup tables (token, request-target, quoted-string) at compile time. CR and separators are found with memchr/memchr2. Header lines are scanned 16 bytes at a time for CR and invalid control bytes, using SSE2 on x86-64, NEON on aarch64 and simd128 on wasm32, with a scalar fallback. The parser reports offsets into the caller's buffer instead of copying data; the one copy is an optional re-buffering of unconsumed input (manage_unconsumed). Since 0.8.0 events go to a 64 KiB per-parser buffer and callbacks are replayed from it at the end of parse().
+
+**Use it when:**
+- You want to embed a strict HTTP/1.1-only parser in Rust, C++ or JS/WASM, and rejecting obs-fold, bare LF/CR, HTTP/1.0, duplicate Content-Length, CL+TE together and GET/HEAD bodies is what you want (request-smuggling hardening).
+- You build natively (not WASM) and want a span/callback parser like llhttp, written in readable Rust instead of llparse-generated C.
+- You are evaluating the parser its author proposes as llhttp's successor in Node.js and can run the repo's benchmarks/cpp or benchmarks/wasm harness on your own hardware first.
+
+**Skip it when:**
+- Node.js/undici-style WASM deployments where speed is the reason to switch: the author's own 2023 deck says milo is slower than llhttp when compiled to WebAssembly, and no newer WASM numbers are published.
+- Servers that must accept HTTP/1.0 clients, RTSP, obs-fold or bare-LF peers. Milo rejects all of these by design and does not aim for llhttp behavioural compatibility.
+- Untrusted production traffic without your own fuzzing. Two fuzzing reports from 2026-06-08 are still open: #15, a memory leak on invalid input, and #16, OOM on malformed headers. The 0.x API also changed in five releases in June 2026.
+- Servers holding many idle connections: each parser allocates a 64 KiB event buffer, whereas the README describes the parser state as only a few dozen fields.
+- You only need an llhttp speedup you can verify: the single published comparison is a 7% gain within noise, from a 2023 build that predates the 2026 SIMD rewrite.
+
+**Integration:** crate (milo-parser) | static lib + header (libmilo.a, milo.h) | npm WASM module · memchr (runtime). Building the C++/WASM artifacts also needs cargo-make, cbindgen, the wasm32-unknown-unknown target and Binaryen wasm-opt. · The repo pins nightly Rust (rust-toolchain.toml; the C++/WASM tasks use -Z flags; PR #17 to build on stable is open). The crate is edition 2024 with no declared rust-version. C++ consumers compile with -std=c++11. The npm package needs Node >= 22.21.0. · any Rust target; hand-written SIMD paths for x86-64 (SSE2), aarch64 (NEON) and wasm32 (simd128), scalar fallback elsewhere
+
+**Vs siblings:** Pick milo over iohttpparser when you need Rust, C++ and WASM builds from one strict codebase aimed at Node.js; iohttpparser has much stronger published evidence against llhttp (median req/s over 22 scenarios). zttp and gunicorn_h1c are only relevant if you are in Python.
+
+**Gotchas:**
+- An incomplete line is left unconsumed: parse() returns fewer bytes than it was given. With manage_unconsumed on, milo copies the leftover bytes and prepends them on the next call. Reading parse.rs, the retained buffer is created with Vec::into_raw_parts and only rebuilt as a slice with from_raw_parts afterwards, which does not free it, so this mode appears to leak on every partial parse.
+- When the 64 KiB event buffer fills, parse() stops early without an error or pause; the caller must drain events and call parse() again.
+- Responses to HEAD require the caller to set skip_body; milo does not pair requests with responses. CONNECT responses likewise need application context.
+- WASM release builds use immediate-abort panics, so a panic traps with no message; the debug build is needed to diagnose errors.
+
+**Status:** Actively developed and ISC-licensed; v0.8.0 shipped 2026-06-25. Adoption is small (219 crates.io downloads in total, about 8k npm downloads in the last month) and GitHub issue search found no milo issues in nodejs/undici or the nodejs org. Treat it as pre-1.0 and experimental.
+
+[repo](https://github.com/ShogunPanda/milo) · [benchmark](https://raw.githubusercontent.com/ShogunPanda/talks/main/src/talks/milo/slides.yml)
+
+##### Puma http11_parser (Mongrel/Ragel-based HTTP/1.x parser)  `C`  `BSD-3-Clause`  `active`  `Tier C`
+
+Mongrel's Ragel-generated C request/header tokenizer, vendored in Puma; ~1.26x faster than joyent http_parser in a 2016 test.
+
+**Beats:** http-parser — A January 2016 one-off (jiakai1000/httpparsers) on an Intel Xeon E5-2407 @ 2.20GHz parsed the same 365-byte, 9-header GET 3M and 5M times. Puma's -G2 Ragel parser (2016 copy, Ruby hooks stripped) took 3.215 s and 5.36 s; joyent http_parser 2.6.0 in its default strict mode took 4.065 s and 6.78 s. That is about 1.07 us vs 1.36 us per parse, 1.26x. Timing used wall-clock `time ./a.out` with empty callbacks and a strcpy per iteration in both loops; the Makefile says gcc -O2, but no GCC version is given and it is not certain the recorded binary was built that way.
+
+**Known shortcoming:** Only evidence is a 2016 third-party repo (about 1.26x over http-parser, gcc -O2, no version); the recorded runs used a different binary than the Makefile's test target. Ruby server component; the Ragel parser is C.
+
+**Known shortcoming:** The benchmarked copy predates several grammar changes (2020-2022), and the baseline, joyent http-parser 2.6.0, is archived; http_parser tracks Content-Length/chunked/keep-alive while Puma's parser stops at the headers. Not standalone (includes ruby.h), writes into its input buffer, and needs the whole request so far on every call. PR #3815 experiments with replacing it with pure Ruby.
+
+**How:** Ragel compiles the regular grammar into a DFA, and Puma's Rakefile runs it with `-C -G2`, which emits goto-driven C: each state is a label with a switch on the current byte, so there are no transition tables and no function call per byte. Actions only store buffer offsets (MARK) and, at the end of each token, call a callback with a pointer and length into the caller's buffer, so nothing is copied. It also does less work than http_parser 2.6.0, which tracks Content-Length and the chunked/keep-alive/upgrade flags and ran with its default HTTP_PARSER_STRICT=1 in the benchmark. There is no SIMD; the scan is one byte at a time.
+
+**Use it when:**
+- Server or proxy code that only needs the request line and headers of HTTP/1.x requests tokenized from one contiguous buffer, and handles framing (Content-Length/chunked) itself
+- You want a small grammar you can audit and edit (method set, URI rules, header charset), then regenerate with Ragel; the same grammar also produces Puma's Java parser for JRuby
+- CGI/Rack-style servers that want header names upper-cased with '-' turned into '_' while parsing, the form Puma's HTTP_* env keys use
+- Replacing legacy joyent/nodejs http_parser on a request-only path with small header blocks (the benchmark used a 365-byte, 9-header GET), where 2016 data showed about 1.07 us vs 1.36 us per request
+
+**Skip it when:**
+- You need response parsing, body/chunked decoding, or keep-alive/upgrade semantics: http_parser and its successor llhttp provide these, and this parser leaves them to the caller
+- Streaming over non-contiguous reads: callbacks carry offsets into one growing buffer, so you must append every read to a single buffer and pass all of it again
+- Peak throughput on modern x86: no SIMD, and the only benchmark found is from 2016 against the now-archived nodejs/http-parser; nothing read compares it with picohttpparser or llhttp
+- Lenient intake of legacy clients: CRLF is required (bare LF rejected since the CVE-2021-41136 fix), obs-fold continuation lines are not in the grammar, and methods must be 1-20 chars of [A-Z0-9$-_.]
+- You want a versioned standalone library: it exists only as ext/puma_http11 inside the Ruby gem, and its header includes ruby.h
+
+**Integration:** source-drop · None for the generated C core once the ruby.h include and the VALUE request/body fields in http11_parser.h are removed (the benchmark repo did exactly this). Ragel is needed only to regenerate from the .rl files. Inside Puma the glue (puma_http11.c) links against the Ruby C API. · Any C compiler; plain portable C with no intrinsics (Puma's extconf builds with -Werror plus -Wno-implicit-fallthrough for the Ragel output). Regenerating needs Ragel with `-C -G2`; CI installs the distro ragel without pinning a version, and the benchmark author used Ragel 6.8. · any (byte-at-a-time C with no architecture-specific code; Puma's extconf also handles MinGW builds)
+
+**Vs siblings:** Pick it over the picohttpparser family (vkrasnov AVX2 fork, httpp, hparse) or llhttp-based parsers (iohttpparser, zttp) only when you want an editable Ragel grammar that generates both C and Java and does CGI-style header normalization during the parse. For raw speed use pico-style SIMD parsers, and for full HTTP/1.1 semantics and chunk-by-chunk streaming use llhttp/iohttpparser. None of these were benchmarked against Puma's parser in anything read.
+
+**Gotchas:**
+- It writes to the input even though execute takes `const char *`: the snake_upcase_field action casts away const and rewrites header-name bytes in place (a-z to A-Z, '-' to '_', '_' to ','). The buffer must be writable, and callbacks see normalized names, not the original bytes. Both benchmark loops strcpy the request into a fresh buffer on every iteration.
+- The length limits (header name 256 B, value 80 KB, URI 12 KB, query 10 KB, whole header 112 KB) are enforced in Puma's Ruby glue callbacks, not in the Ragel core. A standalone copy has no limits unless your callbacks add them.
+- The '_' to ',' rewrite, the header-value charset (any byte except CTLs, plus tab) and CRLF strictness came from hardening changes in 2020-2021: commit ad8197e4 'Reduce ambiguity of headers', the GHSA-48w2-rm65-62xx fix, and dc76d95b. The later CVE-2024-45614 underscore-header fix sits in the Ruby layer (allow_underscore_headers in client.rb). The 2016 benchmark copy predates all of them, and the current grammar has not been re-benchmarked.
+- After the blank line the parser stops (fbreak) and stores body_start; bytes of a pipelined next request or of the body are left to the caller.
+
+**Status:** Puma is actively maintained (last push 2026-09-16, BSD-3-Clause, 7.9k stars), but the grammar changes only for bug and security fixes (last .rl edit 2022-09), and an open experiment (issue #1889, PR #3815) looks at replacing it with pure-Ruby protocol-http1. Treat it as vendorable source rather than a library you depend on.
+
+[repo](https://github.com/puma/puma) · [benchmark](https://github.com/jiakai1000/httpparsers)
+
+##### sorug (WHATWG URL parser, Rust)  `Rust`  `MIT OR Apache-2.0`  `active`  `Tier C`
+
+Safe-Rust WHATWG URL parser with a zero-copy fast path for canonical URLs; 3.4-4.1x faster than the url crate on ASCII.
+
+**Beats:** url crate (servo/rust-url) — The README Criterion table (measured 2026-08-07 on 'Linux' with lto and codegen-units=1; no CPU model or rustc version given) shows sorug at 28.3, 56.0, 196 and 31.1 ns against url 2.5 at 97, 216, 248 and 129 ns on four single URLs, three of which are already canonical and hit the zero-allocation path; ada-url (Rust bindings to C++ Ada) falls between the two except on IDNA, where it is slowest. The project's own informational CI job (GitHub ubuntu-24.04 runner, rustc 1.98.1, 20 samples, 2026-09-20) shows the same ordering at about twice the absolute times: 3.5x, 4.4x, 1.16x and 4.1x faster than url, 1.66x on an 8-URL mixed batch, and 3.2x slower than url on a long-ACE IDN host.
+
+**Known shortcoming:** Part of the win comes from borrowing its input while servo/url always allocates a String; Ada is measured through its Rust FFI crate, not native C++. No CPU or rustc version. Created 2026-07.
+
+**Known shortcoming:** The README table omits the IDNA_Long_ACE case in the same benchmark, where sorug is 2.8-3.2x slower than url (about 11 us vs 3.6-4.0 us) in all three CI runs. Three of four README inputs are already canonical and take the zero-allocation borrowed path; on a mixed 8-URL batch the gain is ~1.6x over url and ~1.44x over ada-url. ada-url edges it on set_pathname. IDNA mapping is hand-written (NFKC + lowercase + special cases), backed by differential fuzzing. The ada numbers go through the Rust bindings, so they are not comparable with sibling entries that measure native C++ Ada. 0.1.0-0.6.2 released in nine days; 0 reverse dependencies. CI (GitHub ubuntu-24.04, rustc 1.98.1) reproduces the README ordering.
+
+**How:** A pre-pass (src/parser/fast.rs) handles absolute special URLs that have no base URL and are already canonical. It recognizes the scheme with one masked 64-bit little-endian compare (https://, http://, file:///, ftp://, ws(s)://). It finds delimiters with SWAR zero-byte detection (haszero(word ^ splat(c))) for spans under 64 bytes and memchr for longer ones, and checks each byte against 256-entry lookup tables. If nothing needs rewriting, the Url borrows the input string (Backing::Borrowed) and makes no heap allocation. The record is the href string plus eight u32 component offsets and a flag byte, like rust-url's layout. Any input that needs normalization falls through to a full WHATWG state machine that writes into an owned buffer. IDN labels made only of Latin-1 lowercase, CJK, kana or Hangul characters skip NFC and the Bidi/joiner checks and go straight to Punycode.
+
+**Use it when:**
+- High-volume parsing of already-normalized absolute http(s)/ws(s)/ftp/file URLs (crawl frontiers, access logs, config) where the source &str outlives the Url. This is the zero-allocation path, and the project's CI measured it at about 3.5-4.4x faster than url 2.5.
+- You need pure safe Rust. The main crate has forbid(unsafe_code) and needs no C++ toolchain, unlike the ada-url bindings.
+- no_std + alloc or wasm32-unknown-unknown targets that need WHATWG semantics. CI checks both.
+- You want Node/Ada/WPT-aligned results where rust-url differs, such as keeping empty file: path segments, rejecting an empty '@' authority, and stricter IDNA Bidi/joiner checks.
+- Mixed real-world URL streams, as long as you plan for roughly a 1.6x gain over url (the 8-URL batch in the project's CI) rather than the 3-4x single-URL headline.
+
+**Skip it when:**
+- Long or unusual IDN hosts. The IDNA_Long_ACE case, which the README table omits, took about 11 us in three CI runs, against 3.6-4.0 us for url and about 4.9 us for ada-url (2.8-3.2x slower than url). On the ordinary IDN case, the gain over url is only about 1.2x.
+- Inputs that are not canonical: uppercase scheme or host, explicit default ports, dot segments, backslashes, characters that need percent-encoding, IPv4-like hosts, or anything parsed against a base. These take the full parser and allocate, and the published numbers do not measure them.
+- Production code that needs a stable, proven dependency. It is on 0.x (minor bumps may break), has a single author, 1 star, 442 total downloads and 0 reverse dependencies, and went from 0.1.0 to 0.6.2 in nine days (2026-08-01 to 2026-08-09). 1.0 is held until the fuzz reliability clocks pass.
+- Code that must match rust-url output exactly, or that hands url::Url to other crates. The divergences are intentional and documented, and there is no url::Url conversion, so a crate that needs url::Url still has to re-parse the string.
+- You need URLPattern, an RFC 3986 mode, or detailed parse errors. The project lists these as non-goals, and ParseError stays Failure | InputTooLong through 1.0.
+
+**Integration:** crate · memchr 2.7 and unicode-normalization 0.1 (both no-default-features); optional serde 1 and http 1. build.rs generates IDNA range tables from the vendored Unicode 17.0.0 UCD files (about 1.2 MB of text shipped in the crate). A C cdylib/staticlib plus sorug.h is available from GitHub Releases only. · Rust 1.85 (edition 2024; MSRV checked in CI) · Any Rust target. SWAR is portable u64 code with no arch-specific intrinsics, and memchr picks SIMD itself. CI checks no_std on wasm32. File-path and socket helpers need std on unix, windows, redox, wasi or hermit. Prebuilt FFI binaries exist for linux-x86_64, macos-aarch64 and windows-x86_64.
+
+**Vs siblings:** Pick sorug over Ada (C++) or its ada-url Rust bindings when you want pure safe Rust with no C++ build, a rust-url-shaped API, and mostly canonical ASCII input that can stay borrowed. ada-rs and lucid-url are measured against native C++ Ada, while sorug's Ada numbers go through the ada-url FFI crate, so the numbers across these entries are not directly comparable; for IDN-heavy input or production-critical parsing, Ada's maturity is the safer choice.
+
+**Gotchas:**
+- The zero-copy result borrows the input. Storing it, returning it, or using FromStr/TryFrom<&str> (which call into_owned) allocates a copy, which gives back part of the benchmarked advantage.
+- The fast path runs only for Url::parse with no base URL. join() and parse_with_base always go through the full state machine and allocate.
+- UTS #46 value mapping is hand-written: NFKC plus to_lowercase plus a list of special cases. The Unicode 17 tables supply only membership (disallowed, Bidi, joiners), and the module doc calls the mapping 'deliberately small ... enough for the WPT urltestdata suite'. WPT and differential fuzzing against Node, Ada and rust-url are the safety net, so rare-script hosts could still diverge from ICU.
+- rust-url's host() returns a typed Host, but sorug's host() returns Option<&str>. Code ported by name hits type errors, and code that wants the typed value must call host_parsed().
+
+**Status:** Maintained but young. The last release is 0.6.2 (2026-08-09), the only commits since are bot refreshes of the WPT fixtures, the author has frozen features and performance work until a 1.0 that waits on 30 days of daily and 8 weeks of weekly fuzz runs passing, and daily fuzz and CI runs pass; dual MIT/Apache-2.0 on crates.io.
+
+[repo](https://github.com/hocestnonsatis/sorug) · [benchmark](https://github.com/hocestnonsatis/sorug#benchmarks)
+
+##### thhp (Totemo-Hayai HTTP Parser)  `Rust`  `MIT`  `abandoned`  `Tier C`
+
+Small zero-copy Rust HTTP/1.x parser; beats picohttpparser only on short requests (1.14-1.29x), ties or loses on realistic ones.
+
+**Beats:** picohttpparser — These are the author's own cargo +nightly #[bench] results (opt-level 3, LTO, codegen-units=1; nightly version, CPU and OS not stated). The baseline is picohttpparser as vendored in picohttpparser-sys 1.0, compiled by the cc crate with -msse4 and called over FFI, with httparse 1.3 as a third contestant. With RUSTFLAGS +sse4.2, the ~700-byte browser request took 159 vs 160 ns (a tie within noise) and the 56-byte request 35 vs 45 ns (~1.29x). With default flags the results were 198 vs 153 ns (pico ~1.29x faster) and 37 vs 42 ns (~1.14x). Each configuration is a single pasted run with no hardware stated and no third-party reproduction.
+
+**Known shortcoming:** Inconsistent: on the full request it is within noise of picohttpparser with SSE4.2 and about 0.77x without it; wins only on the short request. Rust, abandoned since 2018.
+
+**Known shortcoming:** Only consistent win is the 56-byte request (1.14-1.29x); on a ~700-byte request it ties with RUSTFLAGS +sse4.2 and loses without it (198 vs 153 ns). One first-party run, no CPU or rustc version; pico is called over FFI, which weighs most on the tiny request. Rejects all bytes >= 0x80 but accepts an empty method, target or header name; obs-fold rejected. Header Vec never grows (Vec::new() fails on the first header) and must be cleared before every parse/retry. No chunked decoder, no C ABI. Nightly needed for no_std and benches; untouched since 2018-12, 0 reverse dependencies.
+
+**How:** Character classes are 256-entry bool lookup tables (tchar, field-value and reason-phrase), scanned by a hand-unrolled 8-bytes-per-step loop (Scanner::read_while_continue_with), which is the same shape as pico's non-SSE path. Header values alone get an SSE4.2 path. PCMPESTRI (_mm_cmpestri with _SIDD_CMP_RANGES) scans 16-byte blocks for the first byte in 0x00-0x08, 0x0A-0x1F or 0x7F-0xFF, which is the same trick as pico's findchar_fast, and tails under 16 bytes fall back to scalar. Parsing is generic over the header collection and builds &str views with from_utf8_unchecked (sound because the tables admit ASCII only), so it monomorphizes and inlines fully under the bench profile's LTO with codegen-units=1. The README does not say why thhp wins on the short request. In the bench, pico is called over FFI, so its fixed per-call cost weighs more on a 56-byte request, and thhp never uses SIMD for the method, target or header names.
+
+**Use it when:**
+- A Rust server or proxy whose traffic is mostly small requests (tens of bytes, a few short headers). On the 56-byte request the README shows 35-37 ns for thhp vs 42-45 ns for picohttpparser (via FFI) and 41 ns for httparse 1.3.
+- You want a tiny parser to vendor and change: about 1.2k lines including tests, MIT, no runtime dependencies (arrayvec 0.4 is optional), and a simple Complete/Incomplete API over &str slices.
+- You control the x86-64 build and can pass RUSTFLAGS="-C target-feature=+sse4.2" (or an equivalent target-cpu). Only with that flag did the ~700-byte browser request reach parity with pico (159 vs 160 ns).
+- Internal or controlled traffic where a strict ASCII-only policy is acceptable or wanted: control bytes and all bytes >= 0x80 in the target, header values and reason phrase are rejected.
+
+**Skip it when:**
+- Realistic header-heavy browser requests on a default build. Without the explicit SSE4.2 flag, thhp took 198 ns vs pico's 153 ns (pico ~1.29x faster). With the flag, its 0.6% lead sits inside the +/-23 ns and +/-37 ns spreads.
+- Public-facing traffic that may carry raw UTF-8 or obs-text bytes in paths, cookies or header values. thhp returns InvalidPath or InvalidFieldValue on those, while the pico version it was benchmarked against allows bytes >= 0x80.
+- You need what pico or httparse provide beyond the head parser: chunked-body decoding, obs-fold continuation lines (rejected as InvalidFieldName), pico's last_len incremental re-check (thhp re-parses from byte 0 on every call), or a C ABI.
+- Anything that needs upkeep. The last commit and the 0.2.0 release are both from 2018-12-22. No issue or PR was ever filed, crates.io lists 0 reverse dependencies, no rust-version is declared, and the only CI was Travis in 2018.
+- Non-x86 or no_std targets: they get the scalar table path only (no NEON or AVX2), and no_std mode needs nightly because of #![feature(alloc)].
+
+**Integration:** crate (thhp 0.2.0 on crates.io; about 1.2k lines, easy to vendor) · none at runtime; optional arrayvec 0.4; build-dependency version_check 0.1 · Not declared. The library targeted stable Rust (2018 Travis matrix: stable/beta/nightly; the last commit dropped the 1.20.0 job). build.rs enables SIMD only on rustc >= 1.27. The code is 2015-edition with crate:: paths, which by inference needs rustc 1.30+. The benches (#![feature(test)]) and no_std mode need nightly. It was not rebuilt on a current rustc. · Any target for the scalar path. x86/x86-64 builds with the std feature get the SSE4.2 header-value path, chosen at runtime by is_x86_feature_detected!. No NEON or AVX2.
+
+**Vs siblings:** Among the Rust siblings, httparse is the default pick: it is maintained (last push 2026-06-30), has SSE4.2/AVX2/NEON/SWAR modules and supports no_std on stable. picohttpparser-rs wins only on header-heavy inputs and loses on tiny ones, while thhp is the reverse. Pick thhp only if you want a vendorable parser tuned for small requests (35-37 ns vs httparse 41 ns and pico 42-45 ns in its own 2018 bench); to beat pico in C by real margins, the vkrasnov AVX2 fork or httpp report much larger gains.
+
+**Gotchas:**
+- The Vec impl never grows: its capacity is the hard header limit, so Vec::new() fails with OutOfCapacity on the first header. The ArrayVec impl is fixed at 16 headers.
+- The returned headers slice is the whole collection, and headers pushed before an Incomplete result stay in it. Call headers.clear() before every parse and every retry, as the bench does, or you get stale or duplicate headers.
+- It is lenient in some places, per the code. An empty method (' / HTTP/1.1'), an empty target ('GET  HTTP/1.1') and an empty header name (':v') all parse successfully. Bare LF line endings are accepted, and header values keep their trailing whitespace. Responses must have a space after the 3-digit status, so 'HTTP/1.1 200\r\n' is rejected with InvalidStatusCode.
+- The SSE4.2 path covers only header values of 16 bytes or more, with a runtime feature check on each call. find_fast has no #[target_feature(enable = "sse4.2")], so without RUSTFLAGS the PCMPESTRI intrinsic is probably not inlined. That fits the slower 'implicit SSE4.2' full-request result (198 vs 159 ns).
+
+**Status:** Abandoned since 2018-12-22 (the date of both the last commit and the 0.2.0 release; 15 stars, ~5,000 all-time downloads, 0 reverse dependencies). It is MIT and small with no runtime dependencies, so it can be vendored, but nothing has built it since its 2018 Travis CI and it was not built for this entry.
+
+[repo](https://github.com/kei10in/thhp) · [benchmark](https://github.com/kei10in/thhp/blob/master/README.md#benchmark)
+
+##### zttp  `Zig`  `BSD-3-Clause`  `active`  `Tier C`
+
+Sans-IO HTTP/1.1 (plus HTTP/2, HTTP/3) parser for Python with a Zig core; out-parses httptools/llhttp on 13 of 14 microbenchmarks.
+
+**Beats:** llhttp (via MagicStack/httptools 0.8.0, the Python binding over llhttp) — The author's docs site ran a Python harness over 14 HTTP/1.1 request and response shapes (from wrk, TFB, httparse, pico/llhttp, browser, ingress and upload fixtures). It compared zttp's ReleaseSafe Zig core with httptools 0.8.0 (llhttp) on CPython 3.14 and an unspecified Apple Silicon machine; the page gives no Zig version, and the build pins 0.16.0. zttp parsed 1.04x-2.06x more messages/s on 13 workloads and ran 0.94x on 16x-pipelined TFB plaintext, with about 5% run-to-run spread. The repo's newer table (CPython 3.14.3, zttp 0.0.27.dev38, median of 15 interleaved batches), not yet deployed to the site, reports 1.01x-2.55x on all 14.
+
+**Known shortcoming:** Author's own benchmark on unspecified Apple Silicon against llhttp via httptools 0.8.0 (Python); pipelined requests are slower (0.94x). A Zig core with Python bindings, not a C/C++ library. The live docs page lags the repo's newer numbers.
+
+**Known shortcoming:** The harness favours zttp: in the timed loop zttp never builds header objects or reads bodies, while the httptools side builds tuples and concatenates; the fairer Uvicorn-shaped benchmark shows 1.16-1.52x. The HTTP/3 client does no certificate or hostname verification (#144). Self-described experimental, 0.0.x alpha.
+
+**How:** The HTTP/1.1 hot loops scan with Zig @Vector blocks. LF search uses std.mem.findScalarPos, which checks two SIMD vectors per iteration. Request-target and field-value checks skip whole clean blocks with lane compares, then fall back to comptime-built 256-entry character-class tables. Parse results are slices into one reused receive buffer that is compacted only past 64 KiB, and an incremental head scanner resumes at the first new byte when a head arrives in fragments. At the Python edge, headers stay in one packed HeaderBlock until you access them (no bytes object or tuple per header), each body span becomes a single Data event, and large Content-Length bodies can keep the Python-owned input span instead of being copied.
+
+**Use it when:**
+- A Python ASGI/HTTP server or proxy that drives httptools or h11 today and wants a pull-based sans-IO parser at native speed. The author's Uvicorn-shaped benchmark, which builds equivalent ASGI scopes, reports 1.16x-1.52x over httptools.
+- Request handling that reads only a few headers through get()/getall(): the lazy HeaderBlock never materializes the rest as Python objects.
+- Bodies arriving in many TCP-segment-sized pieces. The 16 KB upload fed in 1448-byte pieces is its largest published win (2.06x on the docs site, 2.55x in the repo's newer table).
+- One Python event API for both HTTP/1.1 and HTTP/2 (its own benchmark puts it 6.6x-50x ahead of the pure-Python h2), on Linux (glibc/musl, x86_64/aarch64), macOS or Windows (amd64/arm64) wheels.
+- Free-threaded CPython 3.14t/3.15t: wheels are built for those ABIs and the module declares it does not need the GIL.
+
+**Skip it when:**
+- Production services today: the README says it is experimental and not ready for production, the API may change at any time, the PyPI classifier is Alpha, and versions are still 0.0.x.
+- Heavily pipelined HTTP/1.1 (TechEmpower-style 16x pipelining): the published docs page has it 6% slower than httptools there. The repo's newer, not yet deployed table claims 1.25x faster.
+- Deployments that need to tune DoS limits: HTTP/1.1 and HTTP/2 limits (16 KiB line, 100 headers, 64 KiB header block, 8 MiB buffer) are hard-coded and cannot be set from Python (issue #49 is open).
+- HTTP/3 clients on untrusted networks: the QUIC/TLS client does no certificate chain or hostname verification (issue #144 is open), and THREAT_MODEL.md calls HTTP/3 the least battle-tested path.
+- Peers that need lenient parsing (bare LF, obs-fold, odd Content-Length forms), PyPy, or any consumer outside CPython: strictness toggles are not exposed to Python, and the only documented distribution is the CPython wheel/sdist.
+
+**Integration:** module · typing-extensions>=4.6 at runtime (despite the README's 'No dependencies'); a source build pulls ziglang==0.16.0 and hatch-ziglang as isolated build requirements, so no system Zig is needed · CPython 3.10-3.15, including free-threaded 3.14t/3.15t; source builds use the pinned Zig 0.16.0 · Wheels for manylinux_2_28 and musllinux_1_2 on x86_64 and aarch64, macOS 11+ on arm64 and x86_64, and Windows amd64 and arm64 (32-bit i686 skipped); the SIMD width comes from std.simd.suggestVectorLength for each target
+
+**Vs siblings:** The catalogued siblings (iohttpparser against llhttp; picohttpparser forks, httparse, hparse and http.c3l against picohttpparser) are native C/Rust/Zig/C3 parsers meant to be embedded in native code. Pick zttp only when the consumer is CPython and you want a pull-based sans-IO parser that also serializes messages and covers HTTP/2. For native servers, iohttpparser (llhttp baseline) or hparse (Zig) fit better.
+
+**Gotchas:**
+- The HTTP/1.1 microbenchmark times each parser's default API, and that favors zttp. zttp's timed loop never materializes headers and never reads Data payloads. The httptools harness appends a (name, value) tuple for every header and joins url and body with Python `+=`. That tilts the header-heavy and fragmented-body rows, so the Uvicorn-shaped scope benchmark (1.16x-1.52x) is the fairer comparison.
+- Strict by default, and Python cannot relax it: bare LF, obs-fold, lenient Content-Length, non-1*HEXDIG chunk sizes, missing or duplicate Host, and CL/TE conflicts all raise RemoteProtocolError, and that poisons the connection for good. Legacy clients that other parsers tolerate will be rejected.
+- zttp has no tunnel awareness. After Upgrade/CONNECT/101 you must stop feeding bytes as HTTP/1.1 and must not call start_next_cycle(); THREAT_MODEL.md calls this the highest-risk integration point. HTTP/1.0 keep-alive and chunked policy, timeouts, and connection caps are also left to the host. Parsing a response on a connection that never sent the request desyncs HEAD/1xx/204/304 framing.
+- Open bug #282 (2026-09-19): if an allocation fails while flushing HTTP/2 DATA, a later flush resends bytes that were already emitted and debits the flow-control window twice.
+
+**Status:** Actively developed (v0.0.34 on 2026-09-19, near-daily commits, 57 stars), BSD-3-Clause, pip-installable with prebuilt wheels, but self-described as experimental/Alpha with an unstable API.
+
+[repo](https://github.com/Kludex/zttp) · [benchmark](https://zttp.marcelotryle.com/reference/performance/)
+
+#### http-servers-frameworks
+
+##### aeronet  `C++`  `MIT`  `active`  `Tier C`
+
+C++23 HTTP/1.1, HTTP/2 and WebSocket server library; out-serves Go net/http and mostly Boost.Beast in first-party single-thread tests.
+
+**Beats:** Boost.Beast and Go net/http — The author's GitHub Actions dashboard (run of 2026-09-26) is a per-core test: every server is built with GCC in CMake Release on an ubuntu-latest runner (no CPU model or GCC version stated) and gets one thread (Go GOMAXPROCS=1, Beast one io_context thread), with wrk driving 30 s after a 5 s warmup at 10 and 100 connections. aeronet beat Go net/http in all 16 scenario/connection cells (for example 2.14x on static and 2.05x on routing at 10 connections) and Boost.Beast in 13 of 16, but lost to Beast on cpu at 10 connections and on static and routing at 100.
+
+**Known shortcoming:** Boost.Beast beats it in 3 of 16 cells (cpu at 10 connections, static and routing at 100). Project's own dashboard; GCC version not pinned.
+
+**Known shortcoming:** Security: before 1.5.0 (2026-08-20) CONNECT tunnelling was on and fail-open by default, making default servers unauthenticated open proxies (GHSA-m9r8-5wrg-mvh5, CVSS 8.6). The benchmark is single-core only (1 thread each; Go with GOMAXPROCS=1). The harness's Beast server sends files without sendfile (87 req/s at 10 connections), so several ratios against Beast reflect that server, not Beast; Beast wins 3 of 16 cells and Drogon wins static and files at 100 connections. wrk gets extra threads in some scenarios while the dashboard says 'Threads: 1'. LICENSE is MIT with the '[year] [fullname]' placeholder unfilled; vendored skarupke flat_hash_map has no licence. Created 2025-09, one main maintainer. Needs C++23 and CMake 3.28+; blocking handlers stall their event-loop thread; no HTTP/3.
+
+**How:** One edge-triggered epoll reactor per thread (kqueue on macOS, WSAPoll on Windows), scaled across cores with SO_REUSEPORT so each thread has its own listening socket and no shared accept lock. Requests are parsed in place: HttpRequestView fields are std::string_views into a pooled per-connection buffer, and CRLF scanning uses memchr. Responses are built in one contiguous buffer (status line, headers, body) and sent with writev plus TCP_CORK, with a Date header cached once per second; literal routes sit in a CityHash flat_hash_map and pattern routes in a radix tree. Linux-only extras include sendfile, kTLS and MSG_ZEROCOPY (128 KiB threshold).
+
+**Use it when:**
+- Linux C++ microservices that need HTTP/1.1, HTTP/2 (h2 and h2c), WebSocket and TLS from one library, with Kubernetes probes and (experimental) OpenTelemetry built in.
+- Header-heavy or body-heavy request handling: at 10 connections it served 2.75x Beast's req/s on the many-headers test and 6.9x on the 'body' POST test, and 3.0x and 9.4x Go net/http.
+- Replacing a hand-rolled Boost.Beast server when you want routing, middleware, compression and static-file serving without writing the asio plumbing yourself.
+- APIs with large route tables: in the 1,000-route test it did 57.6k req/s vs Beast's 48.0k and Go's 28.1k at 10 connections.
+- Projects already on C++23 (GCC 13+, Clang 21, MSVC 17.x) that can build with CMake 3.28+.
+
+**Skip it when:**
+- Static-file or tiny-response loads at high connection counts: at 100 connections Beast (96.4k) and Drogon (99.7k) beat it on the static test, and Beast won 1,000-route routing (100.8k vs 92.0k).
+- Toolchains below C++23, GCC 13 or CMake 3.28; the install guide says GCC 12 may lack needed C++23 features.
+- When you need a proven production track record: the project started in September 2025, has 44 stars, and one maintainer made 1,329 of about 1,358 commits.
+- When you need HTTP/3/QUIC (not in the feature matrix) or an async HTTP/2 client: the bundled HttpClient is synchronous and carries one HTTP/2 stream at a time.
+- Peak performance on macOS or Windows: kTLS, sendfile and MSG_ZEROCOPY are Linux-only, and Windows uses WSAPoll.
+
+**Integration:** static lib (default) or shared lib (AERONET_BUILD_SHARED=ON); experimental C++20 module interface · none for a plain HTTP build; optional OpenSSL 1.1.1/3.x (TLS, JWT), zlib or zlib-ng, zstd, brotli, spdlog, glaze, opentelemetry-cpp plus protobuf. Vendors amc, skarupke flat_hash_map and CityHash. · C++23, CMake 3.28+; tested GCC 13 and Clang 21, MSVC 17.x (VS 2022), Apple Clang from Xcode 15; modules need GCC 15 or Clang 18 · Linux x86-64 and aarch64 (primary, epoll); macOS arm64/x86-64 (kqueue); Windows x64 (WSAPoll)
+
+**Vs siblings:** Pick aeronet over Drogon or Crow when you need HTTP/2 and WebSocket in the same C++ library (the harness excludes Drogon and Crow from HTTP/2 runs for lack of support) and the header-, body- and route-heavy wins shown here matter. Pick Drogon for a longer production record and ecosystem (it also won static and files at 100 connections here), or libevhtp or Lwan if you want plain C.
+
+**Gotchas:**
+- Before 1.5.0, built-in CONNECT tunneling was on and fail-open by default, which made any default-config server an unauthenticated open proxy (GHSA-m9r8-5wrg-mvh5, CVSS 8.6). Use 1.5.0 or later, where an empty connectAllowlist disables CONNECT.
+- Handlers run on the reactor thread, so a blocking or CPU-heavy handler stalls every connection on that thread. Use coroutine handlers or push the work to other threads.
+- Request path, headers and body are string_views into the connection buffer. Copy anything you keep after the handler returns; in async handlers, co_await req.bodyAwaitable() before you read the body.
+- Date, Connection, Content-Length, Transfer-Encoding, Trailer, TE and Upgrade are reserved, and header names are forced to lower-case. header() scans and memmoves, so fill a response in order: status, headers, then body. Server move operations are not noexcept and throw if the server is running.
+
+**Status:** Active: commits on 2026-09-26 and releases v1.0.0 (January 2026) to v1.5.0 (August 2026). It is effectively a one-person project, and its MIT LICENSE file still has the '[year] [fullname]' placeholder (GitHub reports NOASSERTION); the README also lists vendored flat_hash_map code as having no license, so check with legal before you ship it.
+
+[repo](https://github.com/sjanel/aeronet) · [benchmark](https://sjanel.github.io/aeronet/benchmarks/)
+
+##### cinatra  `C++`  `MIT`  `active`  `Tier C`
+
+Header-only C++20 coroutine HTTP/1.1 server and client library. On the project's own plaintext test it beats nginx by about 3%.
+
+**Beats:** nginx — The project's doc reports wrk -t4 -c240 -d35s against GET /plaintext (13-byte body, same headers) on one 4-core 2.3 GHz Ubuntu cloud VM. CPU model not given; wrk ran on the same host over loopback. Builds used GCC 11 with -O3. Results: cinatra 247,841 req/s vs a tuned static-response nginx (return 200, reuseport, access_log off) at 239,629 req/s, about 3.4% more; Drogon 216,982; brpc 147,954 (on a different path). Separately, TechEmpower's Round 23 continuous run (Citrine, 2025-01-30, pipelined plaintext) had cinatra's best level at about 14.8M req/s (15.8M if a 15 s window is assumed), about 40th of 533 plaintext entries by my calculation from ph.json; TFB's nginx entry reached about 4.5M. At 16,384 connections cinatra logged 2,391 timeouts and 287 ms average latency.
+
+**Known shortcoming:** The +3.4% over nginx is one first-party run on a 4-core VM with no CPU model, wrk on the same host, nginx returning a fixed string: within run-to-run noise. The README's 8.15M req/s plaintext chart and 'rust vs cinatra pipeline' chart have no source, date or method. The benchmark doc's code doesn't match itself (port 9001 vs 8090) or the in-repo example (Date header off, CPU pinning). Pipelining: non-GET/HEAD requests followed by pipelined bytes get 405 and the rest is dropped; follow-on pipelined requests only match exact routes (:param/regex return 404). Exact-path handlers that throw return 503 with e.what() as the body (leaks internals); :param/regex handlers run outside the try/catch. HTTP/1.x only (HTTP/2 PR #748 open). Client-chosen CSESSIONID keys the shared session map, a hash-flooding risk (#752, fix #753 unmerged). GCC needs -fcoroutines and -fno-tree-slp-vectorize in Release; SSE4.2 path fails -Werror=array-bounds on GCC 13 (#707); bundled iguana clashes with yalantinglibs (#706).
+
+**Independent measurement:** TechEmpower Round 23 continuous run (Citrine, 2025-01-30, ph.json; rank derived): cinatra's best plaintext was ~14.8M req/s (15.8M on a 15 s window), roughly 40th of 533 entries and level with Drogon (14.7M); TechEmpower's nginx entry reached ~4.5M. At 16,384 connections cinatra had 2,391 timeouts and 287 ms average latency. The TechEmpower image is pinned to a Feb 2024 commit (c9bec308).
+
+**How:** The server runs one standalone-asio `io_context` per worker thread, with optional CPU pinning. One acceptor coroutine hands new sockets to those contexts in round-robin order. Each connection is a C++20 stackless coroutine, and a synchronous handler runs inline on that connection's IO thread, so the server never passes a request to another thread. Request heads are parsed by a vendored picohttpparser into `string_view`s held in a fixed array of 100 headers. The header scan has optional SIMD paths (SSE4.2 `PCMPESTRI`, AVX2, NEON) that you turn on at build time. Responses go out as one scatter-gather write or one string. The Date header comes from a per-thread string that is refreshed once per second. The responses to pipelined GET/HEAD requests are joined into a single `async_write`, and that helps a lot on pipelined plaintext tests.
+
+**Use it when:**
+- You write a C++20 service that needs an HTTP/1.1 endpoint and client inside the process, and you want coroutine handlers without adding a separately built framework (header-only, dependencies vendored).
+- Small responses at high request rates over keep-alive connections, especially pipelined GETs. That is the shape of both the project's wrk run and TechEmpower plaintext.
+- You want WebSocket, SSE, chunked, range and multipart handling, plus a basic RR/WRR/random proxy, from one library.
+- Cross-platform C++ code: CI covers Linux (GCC 11.2, Clang 14), macOS (AppleClang 14) and Windows (MSVC 19.33).
+
+**Skip it when:**
+- You need HTTP/2 or HTTP/3. Only HTTP/1.x ships, and the HTTP/2 pull request (#748) was still open on 2026-09-26.
+- You want to replace nginx as a TLS terminator, reverse proxy or static-file server. Only a fixed-string response was benchmarked. The proxy supports only RR, WRR and random balancing, and the static directory is read at startup (new files need a restart).
+- You would switch from nginx for throughput alone. The measured gain is 3.4% from one self-run on a 4-core VM that also ran wrk, which is within typical run-to-run noise.
+- Your toolchain lacks C++20 coroutines (older than GCC 10.2, Clang 13 or VS 2022), or your project already uses yalantinglibs or iguana. The bundled iguana submodule causes duplicate-definition errors with yalantinglibs (issue #706).
+- Your handlers block, such as synchronous DB calls. A blocking handler holds up every connection on its IO thread unless you wrap the work in `coro_io::post`.
+
+**Integration:** header-only · Standalone asio and async_simple, both vendored under include/. Optional: OpenSSL (CINATRA_ENABLE_SSL; the bundled CMake requires it on macOS), zlib (gzip), Brotli. The iguana git submodule is optional. · C++20 with coroutines: GCC 10.2+, Clang 13+ or Visual Studio 2022 (per the README). GCC also needs -fcoroutines, and Release builds need -fno-tree-slp-vectorize. · Linux, macOS, Windows. Scalar parser by default. Optional SSE4.2 or AVX2 on x86-64, or NEON on aarch64, chosen with ENABLE_SIMD (only one at a time).
+
+**Vs siblings:** Pick cinatra over Drogon when you want a header-only library with coroutine handlers and an HTTP client in the same package. On throughput the two are close: cinatra led by about 14% in the project's own doc run (247,841 vs 216,982 req/s), and in TechEmpower's Round 23 continuous plaintext run (2025-01-30) cinatra reached about 14.8M req/s against Drogon's 14.7M. If beating nginx is the main goal, Sogou Workflow and H2O are in the catalog with larger claimed margins over nginx than cinatra's 3%.
+
+**Gotchas:**
+- Pipelining works only for GET and HEAD. If a non-GET/HEAD request has more pipelined bytes behind it, the server replies 405 and discards the buffered remainder. Follow-on pipelined requests are matched only against exact routes, so `:param` and regex routes return 404 for them (coro_http_connection.hpp).
+- A handler registered on an exact path that throws produces a 503 whose body is `e.what()`, unless you install `set_error_handler`, so internal error text reaches clients by default. Handlers on `:param` and regex routes are called outside that try/catch.
+- GCC builds need -fcoroutines, plus -fno-tree-slp-vectorize in Release: build.cmake says SLP vectorization combined with coroutines causes a link error. The SSE4.2 parser path trips -Werror=array-bounds on GCC 13 (open issue #707).
+- Hash-flooding hardening is recent: #751, merged 2026-09-20, keys request-field maps with SipHash-2-4. Issue #752 is still open: when the application calls get_session(), a client-chosen CSESSIONID cookie becomes a key in the shared, mutex-guarded session map. The fix is PR #753, which was unmerged on 2026-09-26.
+
+**Status:** Actively maintained: 1.0.0 released 2026-04-29, last commit 2026-09-20 (hash-flooding hardening), about 2.18k stars, 38 open issues. MIT-licensed and header-only with vendored dependencies, so it is easy to vendor, but it requires a C++20 coroutine toolchain.
+
+[repo](https://github.com/qicosmos/cinatra) · [benchmark](https://github.com/qicosmos/cinatra/blob/master/lang/coroutine_based_http_lib.md)
+
+##### Crow  `C++`  `BSD-3-Clause`  `active`  `Tier C`
+
+Header-only C++17 Flask-style HTTP/WebSocket framework on Asio; a 2014 first-party /json run beat Go net/http by ~1.5x.
+
+**Beats:** Go net/http — Crow's original author ran a first-party test in October 2014 of the ipkn/crow code (submodule 3e5e91c, not today's CrowCpp/Crow) on TechEmpower's /json test, using an AWS c3.8xlarge with wrk on 8 cores. Crow did 136k-297k req/s against 93k-181k for TechEmpower's Go net/http code (GOMAXPROCS=NumCPU) at 16 to 16,384 connections, about 1.46x-1.64x, and was roughly level with Netty; the Go version, C++ compiler, flags and CPU model are not stated. A 2024 third-party run (Lemire, Crow 1.1.0, bombardier, 2x Xeon Gold 6338) measured 260k-380k req/s but included no Go baseline.
+
+**Known shortcoming:** Evidence is the author's 2014 spreadsheet (TechEmpower /json, 1.46-1.64x over Go net/http) with no compiler, flags or CPU and no independent re-run; Crow is not in TechEmpower rounds. The logo and graphics are under a separate all-rights-reserved copyright.
+
+**Known shortcoming:** The only Go comparison is the original author's 2014 test of ipkn/crow, not current CrowCpp; Go version, compiler, flags and CPU not stated; no independent re-run against Go. Current master sends no Date header (commented out), so responses do less work than Go's. No async handlers (#258); finishing a response from another thread double-frees (#843); responses written synchronously on the worker thread. No HTTP/2, chunked or streaming; no request-body size limit found. Unexplained drop to ~9.6k req/s when adding a header or returning JSON (#875; TCP_NODELAY off by default). Worker crashes at 10,000 connections (#791). Five advisories (four high: WebSocket auth bypass, FileStore path traversal) fixed only in v1.3.4 (2026-09-07). README still says C++11/14; C++17 required.
+
+**How:** It runs on (Boost.)Asio. One acceptor thread gives each new socket to whichever of the N-1 per-thread io_contexts has the fewest live connections, so each connection's parse, route, handle and write cycle stays on one thread. Requests are parsed from a fixed 4 KB per-connection buffer by an embedded copy of the Node.js http_parser, a callback state machine derived from nginx's parser. Routing uses a per-method trie that is path-compressed at startup, and URL parameter types are fixed at compile time (black_magic::get_parameter_tag), so arguments go straight through strtoll/strtoull/strtod. Responses go out as a single scatter/gather write of asio buffers that point at the cached status line, each header name and value, and the body, with no header string building.
+
+**Use it when:**
+- Adding a REST/JSON or WebSocket endpoint to an existing C++ application when you want Flask-style routes and URL parameters that are type-checked at compile time.
+- Short CPU-bound handlers on keep-alive HTTP/1.1, where per-request framework overhead dominates. That is the shape of the /json test where it beat TechEmpower's Go net/http code at every concurrency from 16 to 16,384.
+- Builds that want a header-only dependency (a single amalgamated header is available) needing only Asio headers, with OpenSSL and zlib opt-in.
+- Cross-platform services: CI builds GCC and Clang on Linux, Clang on macOS and MSVC on Windows; the docs list x86-64 and ARM64.
+- Serving behind a reverse proxy on a Unix domain socket (app.local_socket_path()).
+
+**Skip it when:**
+- Handlers that block on I/O (database calls, upstream HTTP). There are no native async handlers yet (README 'still in development', issue #258 open since 2021), and a blocking handler holds one of the hardware_concurrency()-1 worker threads.
+- You need HTTP/2 (issue #8, open since 2020), chunked responses (#1013 open) or streaming uploads. Request bodies are buffered whole into a std::string (#1064), and the parser path has no request-body size cap.
+- Very high connection counts. Open issue #791 reports 'Worker Crash: ... Transport endpoint is not connected' at 10,000 simultaneous connections, and file-descriptor exhaustion under floods only got accept back-off in v1.3.4 (#1188).
+- Internet-facing deployments that can't be kept current. v1.3.4 (2026-09-07) fixed five advisories, four rated high: a WebSocket global-middleware auth bypass, a WebSocket fragmented-payload limit bypass, JSON-depth stack overflow on Windows, and FileStore session path traversal.
+- You need a current, independent throughput figure. Crow is not in the TechEmpower rounds or in the-benchmarker's C++ set, and the Go comparison is from 2014.
+
+**Integration:** header-only · Standalone Asio headers (docs: 1.28 to 1.30) or Boost.Asio (Boost >= 1.64 with CROW_USE_BOOST); optional OpenSSL (CROW_ENABLE_SSL) and zlib (CROW_ENABLE_COMPRESSION); pthreads · C++17 (CMake sets CMAKE_CXX_STANDARD 17 and the setup docs require it, although the README still says 'modern C++ (11/14)'). The docs name g++ 9.4 and clang 10 as the CI compilers; CMake 3.15+ is needed only for install, tests or examples. · Linux x86-64 and ARM64 (docs), macOS (Clang, libc++/libstdc++) and Windows (MSVC) in CI; TCP or Unix domain sockets
+
+**Vs siblings:** Pick Crow over Drogon or Oat++ when you want a header-only framework whose only required dependency is Asio, with Flask-style routes that are type-checked at compile time. Prefer Drogon or Oat++ when you need a current third-party comparison against Go net/http: both have 2026 the-benchmarker results, while Crow's comparison is a 2014 first-party run.
+
+**Gotchas:**
+- The default log level is INFO, and at that level Crow logs a line for every request and every response. Call app.loglevel(crow::LogLevel::Warning) before measuring throughput.
+- Responses are written with a synchronous asio::write on the connection's worker thread (http_connection.h). A slow-reading client can therefore stall the other connections on that thread, and bodies above stream_threshold (1 MiB by default) are sent with the timeout timer cancelled.
+- In a 2024 report (#875, closed without a stated cause), a handler that added a header or returned crow::json fell to ~9.6k req/s at ~41 ms latency, versus ~335k req/s for a bare string. TCP_NODELAY is off unless you call app.tcp_nodelay(true) (available in v1.3.4), so benchmark your real handler both with and without it.
+- Current master sends no Date header: the code that wrote the per-thread cached Date is commented out in http_response.h. Add the header yourself if your clients or caches need it, and keep in mind that responses are a little lighter than those from servers that send Date, such as Go net/http.
+
+**Status:** Actively maintained by the CrowCpp community fork: v1.3.4 shipped 2026-09-07, the last commit was 2026-09-23, and there are ~5.0k stars. The code is BSD-3-Clause (the logo and graphics are separately all-rights-reserved) and header-only, so it is easy to vendor, but pin v1.3.4 or later for the September 2026 security fixes.
+
+[repo](https://github.com/CrowCpp/Crow) · [benchmark](https://docs.google.com/spreadsheets/d/1KidO9XpuwCRZ2p_JRDJj2aep61H8Sh_KDOhApizv4LE/edit?usp=sharing)
+
+##### epoll-httpd  `C++`  `MIT`  `active`  `Tier C`
+
+Small Linux-only C++17 static-file HTTP/1.1 server on raw epoll; ~1.4-1.6x single-worker nginx on 1-8 KB files.
+
+**Beats:** nginx — The author's bench/run.sh ran one ehttpd worker against one nginx worker (version not stated; sendfile, keep-alive and open-file cache on, logging and gzip off) on a 2-core Intel Xeon @ 2.10 GHz under Linux 6.18, with a single wrk thread at 50 connections for 10 s over loopback, and got 152,931 vs 96,792 req/s on 1 KB (1.58x; 1.51x-1.67x over four runs), 1.39x on 8 KB, 0.94x on 64 KB and under half nginx's RSS, built with -O2 -DNDEBUG on an unnamed compiler. The numbers are first-party, response headers were not equalized (ehttpd sends no Date header), and both of ehttpd's small-file rows sit near 151-153k req/s, which may mean the single wrk thread was close to its own limit.
+
+**Known shortcoming:** First-party benchmark: nginx version and compiler not named; load from a single wrk thread, and ehttpd's small-file rows plateau near 151-153k req/s, so the client may be the limit; ehttpd sends no Date header, so responses are not equalized. Single push of 13 commits (2026-08-08), no releases or issues, 0 stars. The file cache rechecks by fstat on the held descriptor, so files replaced by rename or deleted keep being served until eviction. With SO_REUSEPORT a second instance binds silently and splits traffic. On EMFILE/ENFILE the level-triggered listener likely spins (from code reading). No Range, If-Modified-Since ignored, no Date/Cache-Control, 14 MIME types, directory without slash gets 403, GET/HEAD only. open/pread/sendfile block the event-loop thread. No TLS, HTTP/2, IPv6; Linux only; parity with nginx at 64 KB.
+
+**How:** Each worker thread owns its own SO_REUSEPORT listener and edge-triggered epoll loop, so connections never cross threads and there are no locks (shared-nothing reactor-per-core). Bodies of 8 KB or less are pread into the response buffer and sent with the header in one send() call, which the author's threshold sweep measured at +44% at 1 KB and +26% at 8 KB over always using sendfile; larger bodies use sendfile(2). A per-worker open-file-descriptor cache (fstat revalidation on a 2 s TTL) removes open/fstat/close from hot requests, and a resumable byte-at-a-time parser records offsets and returns string_views, so parsing does no heap allocation.
+
+**Use it when:**
+- Serving a small set of hot, small (roughly 1-8 KB) static files over plain HTTP/1.1 on Linux, where per-request CPU cost is what limits you
+- Behind a TLS-terminating load balancer or CDN, as a minimal static origin that needs only GET/HEAD, keep-alive and ETag revalidation
+- Memory-constrained boxes or sidecars: the author measured 4.1-5.2 MB RSS under load vs 10.4-10.5 MB for single-worker nginx
+- As a readable reference for a reactor-per-core epoll/SO_REUSEPORT/sendfile server: about 1,700 lines of C++ plus about 820 lines of tests, with design notes, and CI runs ASan and TSan jobs
+
+**Skip it when:**
+- Payloads of 64 KB and up: the author measured parity with nginx (0.94x-1.02x), so there is nothing to gain
+- Anything beyond bare static files: no TLS, HTTP/2, request bodies (non-zero Content-Length gives 413, Transfer-Encoding gives 501), proxying, CGI, gzip, virtual hosts, access logs, IPv6 or non-Linux platforms
+- Media or download serving: no Range requests (per the source) and only 14 file extensions get a MIME type; .mp4, .pdf, .xml, .woff and others go out as application/octet-stream
+- Document roots larger than the page cache: open(), pread() and sendfile() run on the event-loop thread, so a cold disk read stalls every connection on that worker, and SO_REUSEPORT gives no work stealing
+- Production use that needs a track record: 0 stars, no releases or tags, no issues filed, and all 13 commits were pushed together on 2026-08-08
+
+**Integration:** source-drop · none beyond libc and pthreads; CMake 3.16+ to build; wrk and nginx only for the benchmark script · C++17, CMake 3.16; CI builds with the gcc and clang on GitHub's ubuntu-latest image (versions not pinned) · Linux only (epoll, sendfile, timerfd, eventfd, accept4, SO_REUSEPORT); IPv4 only
+
+**Vs siblings:** Pick it over uhttp when you cannot rely on io_uring: uhttp needs liburing 2.5+ and C++20, while ehttpd needs only epoll and C++17; uhttp's benchmark is stronger, though (wrk on 6 cores, 3 interleaved runs, byte-matched headers, +40-54% vs tuned nginx). Pick H2O instead whenever you need a real server (HTTP/2, experimental HTTP/3, library mode); the framework siblings (Drogon, Crow, Lwan, Sogou Workflow) serve dynamic handlers, which ehttpd does not have at all.
+
+**Gotchas:**
+- The file cache revalidates by fstat() on the descriptor it already holds, so a file replaced by rename (atomic deploys) or deleted keeps being served from the old inode until eviction or restart; only in-place edits that change mtime (second granularity) or size are picked up
+- Every worker binds with SO_REUSEPORT, so starting a second ehttpd on a port already in use does not fail; the kernel silently splits connections between the two processes (the author's integration test works around exactly this)
+- The listening socket is registered level-triggered and accept_batch() just returns on EMFILE/ENFILE, so running out of file descriptors likely makes the worker spin in epoll_wait at full CPU until descriptors free up (read from the code, not tested)
+- HTTP semantics are minimal: If-None-Match must equal the ETag string exactly (no list, W/ or *), If-Modified-Since is ignored although Last-Modified is sent, responses carry no Date or Cache-Control header, a directory path without a trailing slash returns 403 instead of a redirect, and keep-alive connections close after 10,000 requests
+
+**Status:** MIT-licensed and small enough to vendor, but all 13 commits landed in one push on 2026-08-08 (one passing CI run), with no releases, issues, later commits or Hacker News mentions, so 'active' is unproven.
+
+[repo](https://github.com/SapnilPatel/epoll-httpd) · [benchmark](https://github.com/SapnilPatel/epoll-httpd/blob/main/README.md)
+
+##### fasthttp (Go HTTP server/client package)  `Go`  `MIT`  `active`  `Tier C`
+
+Zero-allocation HTTP/1.1 server and client for Go; about 5x faster per request than net/http in its own benchmarks.
+
+**Beats:** Go net/http — The project's own go test benchmarks run on an unnamed 'Intel Xeon CPU @ 2.20GHz' with no Go version stated. They push a small GET through in-memory fake connections with no real network. fasthttp takes 1418-3009 ns/op at 0 allocs vs net/http's 7151-17152 ns/op at 21-36 allocs (about 5.0-6.3x at GOMAXPROCS=1, 3.0-5.5x at GOMAXPROCS=4; derived). The client is 2.0-2.3x faster over loopback TCP and up to about 11.7x in memory. This measures the whole server path, not the parser alone, and one independent real-network test saw only 30-70% gains.
+
+**Known shortcoming:** Go, not C++. The server benchmark uses in-memory fake connections; 'up to 10x' is the repo description (README says up to 6x server, 4x client). TechEmpower R23 is mixed: non-prefork fasthttp is below Go net/http on plaintext. Not a drop-in for net/http (different API, no HTTP/2).
+
+**Known shortcoming:** The server benchmark times the whole server path over in-memory fake connections, not HTTP parsing, so it is filed with the servers. An independent real-network test (2022, 40-core Xeon Silver 4114, hey) measured 30-70% over net/http, far below the README's 6x and the description's 10x. TechEmpower gains depend on prefork; single-process plaintext fell from 6.67M rps (2021) to 0.37M (2023), partly a per-request mutex fixed in PR #1986 (2025-04); the server skips flushing while pipelined requests are buffered, which its own comment calls arguably wrong. Defaults favour speed over safety: unlimited read/write timeouts, Slowloris memory growth open (#2037), client's unlimited response body allows an uncatchable OOM (#2344, docs-only fix); the project skips CVE assignment. HTTP/1.x only (http2 add-on abandoned 2022), bodies buffered in memory, not a drop-in for net/http. Keeping ctx or its []byte after the handler returns races. Windows FS handler path-traversal history (CVE-2022-21221, #1691 open). Needs Go 1.26+.
+
+**How:** The main technique is object reuse. RequestCtx, Request/Response and the bufio readers and writers are recycled through sync.Pool and reset instead of reallocated. This is possible only because the API forbids keeping ctx after the handler returns, which net/http's Request lifetime does not allow. Headers are stored as a slice of key/value byte-slice pairs (argsKV), not net/http's map[string][]string of strings, so there is no per-header string conversion. Name case is normalized with 256-entry lookup tables, and unsafe b2s/s2b conversions avoid copies. Connections go to a FILO goroutine worker pool, where the most recently idle worker takes the next connection to keep caches warm. The whole response is buffered until the handler returns, and the flush is skipped while more pipelined requests are already in the read buffer.
+
+**Use it when:**
+- Go services that handle thousands of small-to-medium HTTP/1.1 requests per second, where pprof shows net/http allocations and GC as a top cost (the README's own condition for using it)
+- Proxies, gateways, ad or edge servers with very many keep-alive connections; the README cites VertaMedia production at up to 200K rps from more than 1.5M concurrent keep-alive connections per server
+- High-rate outbound calls to a few hosts: HostClient/PipelineClient run at 0 allocs/op and about 2.0-2.3x the net/http client over loopback TCP in the README benchmarks
+- Multi-core hosts where you can run one prefork/reuseport process per core with GOMAXPROCS=1. In TechEmpower R23 plaintext (verifier-derived), fasthttp-prefork reaches about 14.6M rps vs about 1.6M for Go net/http, but single-process fasthttp reaches only about 0.57M
+- You already use a framework built on it (Fiber, atreugo, Gearbox) and accept that it is a separate ecosystem from net/http
+
+**Skip it when:**
+- You need HTTP/2 or HTTP/3 served directly: fasthttp is HTTP/1.x only. The fasthttp/http2 add-on describes itself as 'Under construction' and has had no push since January 2022. Terminate h2 at a proxy instead
+- You depend on net/http middleware and libraries (http.Handler chains, httptest, oauth2 and similar). fasthttpadaptor converts handlers, but the README says to rewrite handlers natively to get the speed
+- Large or streaming bodies: bodies are buffered in memory by default (server MaxRequestBodySize default is 4 MiB; StreamRequestBody is opt-in). The README lists request and response streaming, and more HTTP corner cases, as net/http advantages
+- The handler, DB or serialization dominates: the README warns that a blind switch gives no boost. An independent 2022 real-network test (40-core Xeon Silver 4114, hey, 200-16000 keep-alive connections) measured only 30-70% more throughput than net/http
+- Internet-facing servers or clients on default settings: a maintainer says the defaults 'are about being fast', not safe. Read and write timeouts are unlimited by default, and Slowloris memory growth is still open (#2037). The client default has no response-body limit, so one huge Content-Length header can kill the process with an uncatchable OOM (#2344, closed with documentation only)
+
+**Integration:** module · github.com/klauspost/compress, github.com/molecule-man/go-brrr (brotli), github.com/valyala/bytebufferpool, golang.org/x/crypto, golang.org/x/net, golang.org/x/sys (golang.org/x/text indirect) · Go 1.26.0 (go.mod); README says the project supports the same Go versions as the Go team, and CI tests Go 1.26.x and 1.27.x · Any Go target, pure Go. It has OS-specific listener and socket code for Linux, Darwin, Windows, AIX, Solaris, z/OS s390x and js/wasm. On Windows the FS handler has a path-traversal history (CVE-2022-21221; issue #1691, now blocked by rejecting '..' segments on Windows) and a maintainer has called Windows FS not production-safe
+
+**Vs siblings:** Every catalogued sibling is a standalone parser component: picohttpparser and its forks or rewrites, httparse, iohttpparser, zttp/llhttp, Puma's http11_parser, plus URL and HPACK parsers in C, Rust, Zig, Python or Ruby. fasthttp is the only complete Go server and client, so pick it when you are in Go and want the whole request path to be faster. Pick httparse or a picohttpparser variant when you are writing your own server loop in Rust or C and need only a parser.
+
+**Gotchas:**
+- Pooled objects: any []byte from ctx (Path(), Peek(), PostBody()) or a pointer to ctx kept after the handler returns is later overwritten, which causes data races or corrupt data. Copy the data out, or use TimeoutHandler/TimeoutError, and run the race detector
+- ctx.Done() closes only at server shutdown, not per request or on client disconnect, so it cannot be used to cancel a request
+- ReadBufferSize (default 4096) also caps total request-header size, so big cookies or long URIs fail with ErrSmallBuffer until you raise it. Pooled buffers stay allocated after load spikes, so RSS drops slowly (maintainer on #2037)
+- The response goes on the wire only after the handler returns. The flush is also skipped while pipelined requests are buffered; the code comment says this is an optimization for TechEmpower that 'could be argued as being wrong'. Exported UnsafeString/UnsafeBytes share memory, and mutating the bytes is undefined behavior
+
+**Status:** Actively maintained: roughly monthly releases (v1.74.0 on 2026-09-07), last commit 2026-09-26, MIT, 23.5k stars. The API still changes between minor versions, and the security policy says the project currently skips CVE assignment.
+
+[repo](https://github.com/valyala/fasthttp) · [benchmark](https://github.com/valyala/fasthttp#http-server-performance-comparison-with-nethttp)
+
+##### H2O  `C`  `MIT`  `active`  `Tier C`
+
+C HTTP/1, HTTP/2 and HTTP/3 web server and reverse proxy; 2016 charts show more req/s per core than nginx 1.9.
+
+**Beats:** nginx — Two 2015-2016 vendor charts, both from single-worker runs: a 612-byte static file with 250 clients (wrk for HTTP/1, h2load for HTTP/2) between two EC2 c3.8xlarge instances. Bar heights put nginx 1.9.10 vs H2O 1.7.0-beta4 at about 74K vs 108K (HTTP/1.1), 45K vs 79K (HTTP/1.1 TLS) and 77K vs 340K (HTTP/2 TLS) req/s per core. On an 8 Mbps/100 ms netem link, H2O 1.5.0 over HTTP/2 finished a test page 0.09-0.36 s sooner than nginx 1.9.5 and painted first sooner on Chrome 45 and Firefox 41, but not on Safari iOS 9.0.1 (2.01 s vs 1.85 s for nginx HTTP/1.1). No CPU model, compiler or build flags are given, and nginx ran with open_file_cache.
+
+**Known shortcoming:** The comparison page dates from 2016 (nginx 1.9.10, one worker each), with static-file numbers read off chart bars and no CPU, compiler or flags; on Safari iOS H2O's first paint (2.01 s) was slower than nginx over HTTP/1.1 (1.85 s).
+
+**Known shortcoming:** Benchmark is from 2015-2016 (H2O 1.5/1.7 vs nginx 1.9.x, one worker each), no CPU, compiler or flags; browser versions appear only in chart legends. The nginx config gist has no root directive in its TLS block (invalid as posted); an older chart ran nginx without open_file_cache. H2O's open-file cache holds file descriptors and is emptied every event-loop iteration, so it is not a memory-for-latency trade. No numbered release since 2019 (master is 'stable'). 14 security advisories, 5 from 2026 (4 high: HTTP/2 state amplification, QPACK stack overflow on musl, QUIC assertion failures, heap overrun), plus Rapid Reset and MadeYouReset. Default CMake build is -O2 without -msse4.2, so picohttpparser's SSE4.2 path is compiled out. File serving blocks a worker on page-cache misses unless file.io_uring (Linux, off by default) is enabled. CI on Ubuntu only; HTTP/3 still experimental.
+
+**How:** Each worker thread (default: one per CPU) runs its own epoll/kqueue event loop (h2o_evloop). Requests are parsed with PicoHTTPParser, which has an SSE4.2 PCMPESTRI range-scan path, and short-lived objects come from per-thread memory pools and recycling allocators. The open-file cache is a khash + LRU table of file descriptors, with stat, ETag and Last-Modified strings, that is cleared at the end of every event-loop iteration: repeat hits in one iteration skip open/fstat, and replaced files are seen on the next iteration. For page-load time, H2O fully implements HTTP/2 dependency and weight prioritization and sends CSS/JS first for browsers that do not use dependency priorities. On high-RTT, small-cwnd links it also keeps unsent data small with TCP_NOTSENT_LOWAT and TCP_INFO, so a higher-priority response can go out sooner. Newer optional paths include the picotls 'fusion' AES-GCM engine for QUIC, kTLS or MSG_ZEROCOPY TLS, and io_uring file reads.
+
+**Use it when:**
+- Serving many small static files over HTTP/2 + TLS on one box: the vendor chart shows about 340K vs 77K req/s per core against nginx 1.9.10 for a 612-byte file
+- HTTP/2 front ends for browsers on mobile or long-distance links, where priority handling and the TCP_NOTSENT_LOWAT latency tweak (Linux and macOS only) cut first-paint time
+- An HTTP/3/QUIC-capable origin or proxy on x86-64 Linux, using quicly/picotls with GSO and the AVX2/VAES fusion AES-GCM engine
+- C programs that need an embeddable HTTP/1-2-3 server library (libh2o) rather than a separate proxy process
+- Request logic in a small embedded scripting language (mruby Rack handlers) instead of writing C modules
+
+**Skip it when:**
+- You depend on the nginx ecosystem (third-party modules, Lua/njs, existing nginx.conf, ops tooling): none of it transfers, and you must rewrite the config in H2O's YAML
+- You need versioned, tagged releases: the project stopped cutting releases in April 2023 and treats every master commit as stable (the last tag is 'tag-no-more-releases'). You pin and track commits yourself
+- Security-sensitive edges with no capacity to patch fast: GitHub lists 14 advisories, including 5 in 2026 (4 high: HTTP/2 state amplification, a QPACK stack overflow on musl, QUIC assertion failures and a heap overrun), plus HTTP/2 Rapid Reset (2023) and MadeYouReset (2025)
+- Cold-storage file serving: file reads use pread/sendfile by default, which block the whole worker thread on a page-cache miss. Only file.io_uring (Linux, off by default) avoids that
+- Platforms other than Linux: CI runs only on Ubuntu 24.04. macOS and FreeBSD are covered by packages, and kTLS, io_uring and zerocopy TLS work only on Linux
+
+**Integration:** static lib (libh2o, or shared with BUILD_SHARED_LIBS=ON) plus a standalone server binary; built from source with CMake · Required: CMake, pkg-config, OpenSSL 1.0.2+ (LibreSSL and BoringSSL also build) and zlib. Optional: libuv 1.0+ (libh2o libuv binding), wslay (WebSocket), brotli, liburing, libaegis, and ruby + bison for mruby. picotls, quicly, picohttpparser, mruby, libyaml and neverbleed are vendored under deps/ · C99 (CMake adds -std=c99) with GCC or Clang; CMake 2.8.12 or newer; the Release build defaults to -O2 · Linux (the only CI target), macOS and FreeBSD (packages; kqueue backend), SunOS handled in CMakeLists. The fusion AES-GCM engine needs x86-64 with AVX2/AES-NI/PCLMUL/VAES; other features are architecture-neutral C
+
+**Vs siblings:** Pick H2O when you want a finished, config-driven nginx replacement for static files and reverse proxying with HTTP/2 prioritization and HTTP/3. Sogou Workflow, also catalogued against nginx, is a C++11 async task engine: you write server code on it, and its win is on small generated bodies. Lwan (catalogued as HTTP/1.1) and libevhtp suit embedding a lighter HTTP/1 server in your own program.
+
+**Gotchas:**
+- The default build has no -msse4.2, so PicoHTTPParser's SSE4.2 path (#ifdef __SSE4_2__) is compiled out unless you pass it in CMAKE_C_FLAGS (for example -march=native)
+- The open-file cache is emptied every event-loop iteration, and its capacity defaults to 2x http2-max-concurrent-requests-per-connection. It saves open(2) calls only within one iteration and is not a long-lived cache like nginx open_file_cache
+- tcp-reuseport is OFF by default, so all worker threads accept from one shared listening socket. Turn it on to spread accepts across threads
+- HTTP/3 is labelled experimental in the README, and most of the 2024-2026 advisories are in the QUIC/HTTP/3 and HTTP/2 code
+
+**Status:** Active (last commit 2026-09-10, 11.5k stars, MIT) and production-grade, but it ships from master with no numbered releases since 2019's v2.2.6/v2.3.0-beta2 and has a steady flow of HTTP/2 and QUIC CVEs, so plan to track master closely.
+
+[repo](https://github.com/h2o/h2o) · [benchmark](https://h2o.examp1e.net/benchmarks.html)
+
+##### libevhtp  `C`  `BSD-3-Clause`  `abandoned`  `Tier C`
+
+Archived C HTTP/1.1 server library on libevent; about 1.15x Boost.Beast's async example on one plaintext wrk test.
+
+**Beats:** Boost.Beast — One homemade wrk run (-c1000 -t10 -d30s, keep-alive, GET /text returning 'Hello, World!') against 4-CPU-limited Docker containers on an AMD 7840HS host measured the Ubuntu-packaged libevhtp 1.2.18 on libevent 2.1.12 (4 workers plus a listener) at 254k req/s. On the same setup the Boost 1.83 Beast http_server_async example measured 220k req/s. Both test servers were built with gcc/g++ -O2 from ubuntu:24.04 build-essential. The Beast example runs 4 threads on one shared io_context with per-connection strands, so part of the 1.15x gap may come from how that example is set up.
+
+**Known shortcoming:** Only evidence is a 0-star personal benchmark suite (gonwan/webframework-benchmark): 254k vs 220k req/s against Boost.Beast 1.83, about 1.15x, gcc -O2 with no compiler version.
+
+**Known shortcoming:** Archived with no maintained fork. The benchmarked 1.2.18 tag predates the long-URI parser fix (#128), and the develop fix adds a stray byte when a URI spans two reads (#131). Invalid Content-Length gets an empty reply (#161); cross-thread replies abort under load (#139); TLS with tiny bodies falls from 42,484 to 1,012 req/s (#160). No timeouts or body cap by default; the benchmark enabled every flag (SO_REUSEPORT, TCP_NODELAY, TCP_DEFER_ACCEPT). HTTP/1.x only. Build issues with self-built libevent and Oniguruma. The Beast baseline is the async example on one shared io_context, and libevhtp loses to nginx, actix, Drogon and gofiber in the same table.
+
+**How:** evhtp_use_threads_wexit() starts evthr workers, each running its own libevent event_base; the listener thread passes each accepted connection over an AF_UNIX socketpair to the worker with the smallest FIONREAD backlog, so a connection stays on one thread and takes no locks. Requests go through htparse, a byte-at-a-time state machine that checks URI characters against a 256-bit bitmap (usual[]) and acts on Connection, Content-Length and Transfer-Encoding while it parses the headers. Replies build the status line and headers with scatter-gather evbuffer iovecs and custom integer-to-ASCII code instead of printf formatting (tagged [PERF] in the ChangeLog). The benchmark server also set EVHTP_FLAG_ENABLE_ALL, which turns on SO_REUSEPORT, TCP_NODELAY and TCP_DEFER_ACCEPT.
+
+**Use it when:**
+- A C program already built around a libevent event_base needs an embedded HTTP/1.1 endpoint, such as an admin, metrics or small REST API.
+- Many keep-alive connections get small fixed responses on a few cores: the benchmark measured 254k req/s on 4 cores against 220k for the Beast async example.
+- Handlers can keep all per-connection work on the worker thread that owns the connection, like examples/thread_design.c does with async Redis on each worker's event_base.
+- You are willing to vendor and patch a frozen, BSD-3-Clause codebase of about 8.3k lines (evhtp.c, parser.c, thread.c). On Ubuntu 24.04, libevhtp-dev 1.2.18 also installs from apt.
+
+**Skip it when:**
+- You need HTTP/2, WebSocket or server-sent events: evhtp_proto has only HTTP/1.0 and 1.1, WebSocket support was never merged (#116), and the SSE question (#166) has no answer.
+- The server faces the internet without a hardened proxy in front. The repo is archived, so no security fixes will come. Parser issues are still open: #131, a URI split across two reads gains a stray character; #161, an invalid Content-Length gets an empty reply.
+- You serve HTTPS with real response bodies: #160 (open) reports 42,484 req/s falling to 1,012 req/s after adding an 11-byte body over TLS, and a fragmented output buffer is the suspected cause.
+- You want the highest throughput: in the same table nginx (336k), actix (334k), Drogon (320k) and gofiber with GOMAXPROCS=4 (272k) beat libevhtp, and bun ties it at 254k.
+- You want idiomatic, header-only C++ with Asio integration, or you target Windows: MinGW build steps are in the README, but Windows build issues #103, #141 and #142 are still open.
+
+**Integration:** static lib or shared lib (CMake add_library; distro packages ship a shared lib) · libevent 2.x (required). Optional: OpenSSL (TLS), pthreads (evthr thread pool), Oniguruma with its POSIX API (regex routes), jemalloc or tcmalloc (EVHTP_ALLOCATOR). · C99 gcc or clang, CMake 3.1+. The 1.2.18 CMakeLists calls find_package(LibEvent), which misses the CMake config of a self-built libevent 2.1.8 (#135). · Linux and other POSIX systems (pthreads, AF_UNIX socketpairs, ioctl FIONREAD). No SIMD or architecture-specific code. Windows only via MinGW, with open build issues.
+
+**Vs siblings:** Drogon is faster in the same gonwan table (320k vs 254k req/s) and gives a full C++ framework, so choose libevhtp over Drogon only when you need a plain C API that plugs into an existing libevent event_base. For a new C server, the H2O and Lwan entries have stronger published benchmarks and do not depend on an archived library.
+
+**Gotchas:**
+- Tag 1.2.18 (2019-02-06) is the version Ubuntu ships and the one benchmarked. It predates the develop-branch fixes for bytes skipped in long URIs (#128), and #131 reports that the develop fix adds a stray character instead. Pin a version and test long, fragmented request lines.
+- By default there are no read/write timeouts and no body-size cap (max_body_size 0 means unlimited). Set evhtp_set_timeouts and evhtp_set_max_body_size, or slow or huge requests hold connections.
+- EVHTP_FLAG_DEFAULTS turns on only 100-continue. SO_REUSEPORT, TCP_NODELAY and TCP_DEFER_ACCEPT stay off unless you enable them, and the benchmark enabled all of them.
+- Regex routes need Oniguruma built with --enable-posix-api=yes for onig 6.9.5_rev1 and later (#162). Otherwise CMake prints 'ONIGURUMA NOT FOUND, DISABLING REGEX SUPPORT' and builds without regex routes. evhtp_use_threads() is marked DEPRECATED in favor of evhtp_use_threads_wexit().
+
+**Status:** The repo is archived and read-only: last commit 2019-08-02, last tag 1.2.18. The original author's fork (ellzey/libevhtp) only merged upstream in 2025 and added no fixes. The BSD-3-Clause license and small C codebase make it practical to vendor and patch, but you would own every security fix.
+
+[repo](https://github.com/Yellow-Camper/libevhtp) · [benchmark](https://github.com/gonwan/webframework-benchmark)
+
+##### Pingora  `Rust`  `Apache-2.0`  `active`  `Tier C`
+
+Rust async framework for building HTTP proxies; replaced Cloudflare's NGINX-based edge proxy with less CPU, memory and TTFB.
+
+**Beats:** nginx — Cloudflare's 2022 blog compares production edge traffic on Pingora with its retired NGINX-based proxy: 5 ms lower median and 80 ms lower p95 TTFB, about 70% less CPU and 67% less memory for the same load, and one customer's upstream connection reuse rising from 87.1% to 99.92% (160x fewer new origin connections). These are unreproducible production aggregates with no hardware, compiler or methodology stated, and the blog attributes the latency gain to cross-thread connection sharing rather than faster code.
+
+**Known shortcoming:** No reproducible benchmark: the numbers are 2022 production aggregates with no hardware or method, and the blog attributes the TTFB gain to connection pools shared across threads, not faster code. An independent test (#372, 2024, wrk -c1000, 8 cores, pass-through proxy) found no gain over nginx (29,767 vs 30,014 req/s) at higher CPU (~70% vs ~50%) until upstream keepalive was on (~49-51K req/s); ab (HTTP/1.0) requests timed out. Five advisories: request smuggling (CVE-2025-4366, fixed 0.5.0), MadeYouReset HTTP/2 DoS (CVE-2025-8671, 0.6.0), critical request smuggling (CVE-2026-2833, CVE-2026-2835, CVSS 9.3, 0.8.0), cache poisoning from a Host-less default cache key (CVE-2026-2836, 0.8.0). Memory growth under load reported (#372, #447); empty pool entry leak (#748) fixed only in 0.9.0 (2026-09-04). A Rust library, not an nginx drop-in: no config language or static file serving (#40); pre-1.0 with breaking minors; caching experimental. No HTTP/3 (#95); macOS best-effort, Windows community-only; rustls option highly experimental.
+
+**How:** One multithreaded process on Tokio instead of NGINX's worker processes, so upstream connection pools are shared across all threads; Cloudflare says the TTFB gain comes from this connection reuse, not faster per-request code. The pool keeps a small lock-free hot queue (crossbeam ArrayQueue, 16 slots) per connection group in front of a mutex-protected map. pingora-runtime adds a non-work-stealing multi-thread runtime (N isolated single-threaded Tokio runtimes), and pingora-timeout replaces tokio::time::timeout with lazily-armed timers rounded to 10 ms ticks and shared across timeouts (claimed ~4 ns vs ~107 ns per iteration).
+
+**Use it when:**
+- Building a custom reverse proxy, API gateway or load balancer in Rust where routing, retry and header logic must be code rather than config
+- High-connection-count proxying to many origins where per-worker pools in NGINX give low upstream connection reuse and extra TLS handshakes
+- Replacing an OpenResty/Lua or C/C++ proxy module with memory-safe code while keeping phase-style request/response hooks
+- Linux x86_64 or aarch64 deployments that need zero-downtime binary upgrades via listening-socket handoff
+- gRPC and WebSocket proxying with pluggable TLS backends (OpenSSL, BoringSSL, s2n-tls)
+
+**Skip it when:**
+- You want a configurable server you run without writing Rust: there is no config language, static file serving (issue #40 still open) or module ecosystem comparable to nginx
+- Short-lived upstream connections or simple pass-through proxying: in one user's 8-core wrk test (issue #372) Pingora matched nginx at ~30K req/s but used ~70% CPU vs ~50%; it only pulled ahead (~50K req/s) with upstream keepalive, at ~80% CPU
+- You need HTTP/3/QUIC: issue #95 is still open and labeled 'Long Term Goal'
+- You need a stable API or non-Linux production: pre-1.0 (0.9.0, 2026-09-04) with breaking changes each minor release, caching labeled experimental, macOS best-effort and Windows community-only
+- Running versions before 0.8.0 on untrusted traffic: two critical request-smuggling CVEs (CVE-2026-2833, CVE-2026-2835) and a cache-poisoning CVE (CVE-2026-2836) were fixed only in 0.8.0
+
+**Integration:** crate · tokio, h2, httparse, http, bytes, parking_lot, crossbeam-queue, flate2/brotli/zstd and more; TLS via one feature: openssl (needs Perl), boringssl (needs Clang), s2n, or rustls (experimental) · Rust 1.85 (rolling 6-month MSRV; pingora-foundations needs 1.88) · Linux x86_64 and aarch64 (tier 1); other Unix incl. macOS best-effort with missing features; Windows preliminary/community-only
+
+**Vs siblings:** Pick Pingora over H2O or Sogou Workflow when the job is a programmable reverse proxy or load balancer and you want Rust memory safety plus upstream connection pools shared across threads; pick H2O for a configurable HTTP server with static files, or Workflow for a C++ server/client framework with a published QPS benchmark against nginx.
+
+**Gotchas:**
+- Only one TLS feature (openssl, boringssl, s2n, rustls) can be enabled at a time; with none, only plaintext HTTP is available, and rustls is marked highly experimental
+- Connection reuse is keyed on the full Peer (IP:port, scheme, SNI, client cert, verification and proxy settings); any difference means a separate pool, and idle_timeout 0 disables pooling
+- Before 0.8.0 the default cache key ignored the Host header (CVE-2026-2836); the default was removed and you must write your own cache key callback
+- Several users reported memory that grows under load and does not come back (issues #372, #447); a contributor suggested jemalloc, and an empty-PoolNode leak (#748) was fixed only in 0.9.0
+
+**Status:** Actively maintained by Cloudflare (0.9.0 released 2026-09-04, last commit 2026-09-11), Apache-2.0 and usable as crates today, but pre-1.0 with frequent breaking changes and a caching layer still labeled alpha/experimental.
+
+[repo](https://github.com/cloudflare/pingora) · [benchmark](https://blog.cloudflare.com/how-we-built-pingora-the-proxy-that-connects-cloudflare-to-the-internet/)
+
+##### Pipy  `C++`  `MIT`  `active`  `Tier C`
+
+C++ programmable proxy scripted in PipyJS; the vendor's single-core hello-world test shows 1.4-2.6x nginx keep-alive throughput.
+
+**Beats:** nginx — In the project's own 2022 wiki test (Pipy version not stated, no compiler flags or CPU model), nginx 1.18.0 (Ubuntu 21) and 1.20.2 (FreeBSD 13) were distro packages with 1 worker, running on the same 2 vCPU ARM64 VM as the client. wrk -c100 -t1 measured Pipy at 218,539 vs 82,759 req/s (2.6x) on Ubuntu and 281,176 vs 204,544 (1.37x) on FreeBSD, with ab short-lived connections a tie. The comparison is not like-for-like: Pipy's replies were ~74 bytes against nginx's ~249 (63-byte vs ~243-byte headers). fortio opened 10,000 sockets for nginx against 100 for Pipy, which fits nginx 1.18's default keepalive_requests of 100 and likely inflates the Ubuntu gap. The FreeBSD Pipy runs used the 8081 echo port (empty body), not the 8080 hello port.
+
+**Known shortcoming:** The 2.6x headline is the most favourable row on the project's own wiki page: FreeBSD wrk shows ~1.37x (281,176 vs 204,544), ab (one request per connection) is about even, and on Ubuntu fortio median latency is worse for Pipy. nginx ran the distro package with 1 worker and sent more header bytes per response. Old test (nginx 1.18/1.20, Ubuntu 21) on a 2 vCPU ARM64 VM with no CPU model, compiler or flags.
+
+**Known shortcoming:** Response sizes differ: Pipy's hello replies were ~74 bytes vs nginx's ~249 (63-byte vs ~243-byte headers), so nginx did 3.4x more header work. nginx 1.18 (the Ubuntu run) closes keep-alive connections after 100 requests by default (1000 from 1.19.10); fortio shows 10,000 sockets for nginx vs 100 for Pipy, which likely explains much of the 2.6x Ubuntu gap vs 1.37x on FreeBSD (inference). The FreeBSD Pipy runs hit the empty-body echo port 8081, not the 8080 hello service. Benchmark from 2022, Pipy version unstated, named script no longer exists, never re-run. LICENSE third-party list is stale (names Boost Asio and OpenSSL 1.1.1 while deps/ vendors Asio 1.28.0 and OpenSSL 3.2.0); PipyJS docs describe an expression-only language that the engine has outgrown; CMake defaults to Debug (only build.sh sets Release). Last release 1.5.14 (2025-09-18), 2026 commits mostly CI; no Windows binaries (#200).
+
+**How:** It is C++ built on standalone Asio (an epoll/kqueue reactor). Each worker thread owns its own io_context and its own loaded copy of the script, so threads share nothing, and --reuse-port (SO_REUSEPORT, or SO_REUSEPORT_LB on FreeBSD) lets the kernel spread connections across threads. Payload bytes sit in reference-counted 16 KB chunks that are sliced by views, and the HTTP/1 decoder is a hand-written byte-scanning state machine that passes body bytes on as chunk references instead of copying them. Chunks, views and other hot objects come from thread-local per-type free-list pools (pjs::Pool, with an atomic return list for frees from other threads), which keeps malloc off the hot path. PipyJS is an in-house tree-walking interpreter with reference counting and no JIT. In the benchmark the response was a Message built once at load time, so almost no script ran per request.
+
+**Use it when:**
+- You want an L4/L7 proxy, sidecar or gateway whose routing, auth and rewriting logic is written as code (JS-like expressions) rather than nginx directives or Lua, shipped as one ~10 MB binary with vendored dependencies.
+- Small edge, IoT or cheap ARM64 hosts where requests/s per core counts: the vendor's 1-worker test on a 2 vCPU ARM64 VM gave 218,539 vs 82,759 req/s on Ubuntu and 281,176 vs 204,544 on FreeBSD over keep-alive, at about 9.3 MB RSS (nginx 6.5-7.5 MB).
+- Keep-alive HTTP/1.1 traffic with small messages, where the vendor data also shows a lower saturated p50 (0.45 ms vs 1.20 ms on Ubuntu, 350 us vs 485 us on FreeBSD).
+- Proxying or converting between several protocols (HTTP/2, TLS, MQTT, Dubbo, Thrift, RESP, SOCKS) from one binary.
+- Scaling across many cores with --threads=N --reuse-port: the vendor's Pipy 0.90 test went from ~139k req/s on 1 thread to ~1.21M req/s on 12 threads (Xeon Gold 6144, no nginx comparison).
+
+**Skip it when:**
+- As a drop-in nginx web server: nginx.conf is not supported, static files go through script code (http.File), and I found no sendfile() use in Pipy's own src/.
+- Workloads with one request per connection: in the vendor's ab runs Pipy only ties nginx (59,698 vs 60,824 req/s on Ubuntu, 95,074 vs 93,680 on FreeBSD).
+- Latency at a fixed request rate: at 10k QPS (fortio) Pipy's p50 on Ubuntu was worse (1.851 ms vs 1.449 ms), and on FreeBSD it tied (506 vs 507 us).
+- You need Windows binaries or a standard JS runtime: maintainers said in issue #200 that there are no Windows builds, and PipyJS has no classes or prototypes, no BigInt or Symbol, and no npm ecosystem.
+- You need a large ecosystem or fast-moving project: 832 stars, last release 1.5.14 (2025-09-18), and the 2026 commits are mostly CI, TLS-cipher and admin fixes.
+
+**Integration:** standalone executable (proxy server); the CMake options PIPY_STATICLIB and PIPY_SHARED can also build it as a static or shared library · Vendored in deps/ and built in: standalone Asio 1.28.0, OpenSSL 3.2.0, zlib 1.3.1, Brotli 1.0.9, LevelDB 1.23, SQLite 3.43.2, yajl 2.1.0, libyaml 0.2.5, libexpat 2.2.6. There are options to use system zlib/OpenSSL or TongSuo. Node.js v12+ is needed only to build the admin GUI. · C++11 (CMake calls cxx_11()); Clang 5.0+ (build.sh defaults CC/CXX to clang); CMake 3.10+ per the README (the docs say 3.0+) · Linux (RHEL/CentOS, Fedora, Ubuntu, Debian, openEuler, OpenWrt, Deepin, Kylin), macOS, FreeBSD, OpenBSD, Android; x86-64, ARM64, LoongArch, Hygon. Release binaries: Linux x86-64/aarch64, macOS x86-64/aarch64, Android arm64, EL7 RPM. No Windows binaries.
+
+**Vs siblings:** Pick Pipy over Pingora when you want proxy logic you can script and hot-reload at runtime from a prebuilt binary, instead of compiling a Rust program against a framework. Pick H2O as an nginx-style origin/static server, and Sogou Workflow or cinatra to embed an HTTP server inside a C++ service; Pipy's niche is programmable proxying and protocol conversion.
+
+**Gotchas:**
+- CMakeLists.txt makes Debug the default build type. build.sh passes Release, but if you call CMake yourself, set -DCMAKE_BUILD_TYPE=Release or you will benchmark a debug binary.
+- The defaults are one worker thread and no SO_REUSEPORT. Multi-core throughput needs --threads=N, which the vendor pairs with --reuse-port. Run with no arguments, Pipy starts in repo mode with an admin service/UI on port 6060 (turn it off with --admin-port-off).
+- The PipyJS reference docs still describe an expression-only language with no if/for/try/class/import, but src/pjs/stmt.hpp implements If/For/Switch/Try/Import/Export statements, so the docs lag the engine. Strings are UTF-8 internally with code-point length ("😀".length is 1).
+- The third-party list in the LICENSE file (Boost Asio, OpenSSL 1.1.1o/1.1.1g) is out of date: deps/ vendors standalone Asio 1.28.0 and OpenSSL 3.2.0. Check notices yourself when redistributing.
+
+**Status:** Active but slow-moving: last release 1.5.14 (2025-09-18) with CI and small fixes into mid-2026. Pipy's own code is MIT; the vendored dependencies keep their own licenses (GitHub reports NOASSERTION). Prebuilt Linux and macOS binaries make it easy to try.
+
+[repo](https://github.com/flomesh-io/pipy) · [benchmark](https://github.com/flomesh-io/pipy/wiki/BENCHMARK-:-Pipy-as-Echo-server)
+
+##### Qbix Server (PHP webserver)  `PHP`  `MIT`  `active`  `Tier C`
+
+Pure-PHP HTTP/WebSocket server that forks copy-on-write workers after preloading the app, aimed at php-fpm's worker-count limit on I/O-bound PHP.
+
+**Beats:** php-fpm — First-party ab runs on an unnamed single-core container (PHP 8.3.6, Ubuntu 24, no CPU model) with a usleep(50000) handler at c=40 give php-fpm, held to 4 workers by an assumed 50 MB each in 200 MB, 78 req/s vs 1,060 req/s for Qbix persistent workers (~13.6x; the doc says 14x). That 1,060 cannot come from the stated setup, because at c=40 and at least 50 ms per request Little's law caps throughput at 40/0.05 = 800 req/s, and the docs variously give it as 40 or 100 workers, as '9x' with p50 56 ms, or as c=200; the doc's own c=200 run shows 358 vs 79 req/s (4.5x) with 200 workers.
+
+**Known shortcoming:** Single-core container, no CPU model, no benchmark harness in the repo. The doc gives two worker counts behind 1,060 req/s (40 in the table, 100 in the summary/README); with 40 workers the figure exceeds the doc's own 800 req/s ceiling (40 x 20 req/s). php-fpm's 4-worker cap comes from an assumed (unmeasured) 50 MB per worker, while the doc elsewhere says ~42 MB. At c=200 the gain is only 4.5x (358 vs 79 req/s); php-fpm is faster on CPU-bound work and nginx on static files. The README's '100x more traffic' is about workers fitting in memory, not measured throughput. Baseline php-fpm is outside the category's listed baselines.
+
+**Known shortcoming:** The headline 1,060 req/s cannot hold: ab at c=40 with a 50 ms sleep per request caps throughput at 800 req/s by Little's law, whatever the worker count; the docs report that number four inconsistent ways (40 vs 100 workers, '9x' with p50 56 ms, c=200). The only self-consistent figure is 358 vs 79 req/s (4.5x) at c=200 with 200 workers. Counter-evidence: a user's wrk c=100 echo test (#24) measured Qbix 134 vs php-fpm 9,127 req/s (fork-per-request defaults at the time); the project's own tables have fpm winning CPU-bound work and nginx static files. The docs mischaracterize php-fpm (claims it leaks globals and re-bootstraps; HN disputed, citing OPcache) and quote per-worker memory three ways. Without --workers it spawns up to nproc x 200 workers sized from /proc/meminfo (host RAM in containers); a user got 3,200 idle workers using 22 GB (#27). Weeks old (v1.0.0 2026-08-31, v2.0.0 2026-09-25); master process dying with exit 0 (#15), hangs under ab (#27), truncated downloads (#26). Code reading: pooled responses always Connection: close, REMOTE_ADDR hard-coded to 127.0.0.1, JSON worker IPC with 10 MB cap, json_encode on raw bodies may fail on binary output.
+
+**How:** Fork-after-preload: the parent bootstraps the framework once, then calls pcntl_fork(), so workers share its pages copy-on-write and pay only for pages they dirty (docs quote 120 KB-5 MB private per worker, measured with /proc/smaps_rollup, vs ~42 MB per fpm worker). More workers per GB means more blocking requests in flight, so the gain is concurrency under I/O wait, not per-request speed. In persistent ('octane') mode a worker loops and restores class statics from a Reflection snapshot between requests (~0.05 ms) instead of re-forking (~8.8 ms). A single-threaded parent event loop (stream_select, or epoll/kqueue through PHP 8.6 Io\Poll) passes requests to workers over Unix socket pairs as length-prefixed JSON.
+
+**Use it when:**
+- I/O-bound PHP (requests mostly wait on a database or API) on a RAM-limited Linux/macOS host where memory caps fpm's pm.max_children; the project's own c=200 test shows 3.4-8x fpm throughput with 200 workers vs 4.
+- You want HTTP, WebSocket/Socket.IO rooms and SSE from one PHP process, without separate Node, Redis pub/sub or supervisor processes.
+- Code you control and can audit for cross-request state (function-level statics, define(), unguarded class declarations), or scripts you can run in forkPerRequest mode.
+- Small PHP apps you want to ship as one bundled binary (PHP + SQLite + app code).
+
+**Skip it when:**
+- CPU-bound or trivial handlers: fpm wins in the project's own tables (CPU-only 3,940 vs 2,609 req/s; CPU c=1 5,048 vs 2,818), and a user in issue #24 measured 134 vs 9,127 req/s against fpm on an `echo 'OK'` script (defaults at the time, fork-per-request).
+- Static files: nginx did 50,742 vs 18,311 req/s in the same benchmark doc, and architecture.md itself recommends nginx or a CDN in front for static files.
+- Production or large-scale use: the project is weeks old (v1.0.0 on 2026-08-31, v2.0.0 on 2026-09-25, 7 releases in 4 weeks). Recent issues include the master process dying with exit code 0 (#15), hangs under ab (#27) and truncated large downloads (#26), and at least 10 compat PRs (#39-#48) are still open.
+- Legacy code that uses call_user_func('header', ...), eval(), code inside .phar files, or C extensions that send headers: the rewriter does not reach these, so they must go to php-cgi, which loses preload and COW. Fork-per-request mode measured only 96-115 req/s at 50 ms I/O.
+- Windows: there is no pcntl. PHP runs in php-cgi subprocesses without preload or COW, or through an experimental FFI fork that uses the undocumented ntdll RtlCloneUserProcess. The README links a Windows .exe that the v2.0.0 release does not include.
+
+**Integration:** standalone server application: qbixserver.php from a source checkout, a ~280 KB phar, or a bundled static binary (Linux x86-64/aarch64, macOS arm64). It is not a library and not a FastCGI backend. · PHP with ext-sockets. ext-pcntl is required for workers, COW and signals; ext-openssl for TLS. Optional: revolt/event-loop, amphp/http-server (HTTP/2), and ext-ffi + qbix_fork.dll on Windows. · PHP 8.1+ (composer.json). Benchmarks ran on PHP 8.3.6. epoll/kqueue needs PHP 8.6+ (Io\Poll); older versions use O(n) stream_select. · Linux x86-64/aarch64, macOS and FreeBSD with COW fork. Windows x64 through php-cgi subprocesses (no COW) or the experimental FFI fork. iOS/Android through embedded PHP runtimes.
+
+**Vs siblings:** Every sibling (fasthttp, Drogon, H2O, Sogou Workflow and the others) is a non-PHP server that means rewriting the app, and each serves plain HTTP far faster; this one's static-file path reached only 36% of nginx's throughput on the same box. Pick Qbix only when the constraint is keeping an existing blocking-I/O PHP codebase and raising in-flight requests per GB of RAM compared with php-fpm.
+
+**Gotchas:**
+- The docs disagree about the default mode: the README says persistent workers, while architecture.md, why.md and http.md say fork-per-request. In code, when pcntl is present and --workers is not set, it spawns max(4, min((RAM-1GB)/200KB, nproc*200)) persistent workers. RAM comes from /proc/meminfo MemTotal, which is usually host RAM inside a container. A user in issue #27 got 3,200 workers using 22 GB that served no requests. Always set --workers.
+- Persistent mode leaves define() constants, function-level statics, stream wrappers and C-extension state in place between requests. An inline class declaration fatals on the second request ('Cannot declare class'). Workers recycle every 1,000 requests by default (maxRequests). OPcache must stay off in CLI or use validate_timestamps=1, because it compiles rewritten source.
+- Pool-dispatched PHP responses always send Connection: close, so dynamic responses get no keep-alive (maintainer in #27; Pool.php sets _keepAlive false). Pool.php also hard-codes remoteAddr '127.0.0.1' for pooled script requests, and an open PR (#43) fixes SCRIPT_NAME being set to the script's basename.
+- Worker IPC is JSON. The worker exits on request messages over 10 MB, and writeMsg() calls json_encode() on the raw output body without an invalid-UTF-8 flag. Test binary (non-UTF-8) PHP output before relying on it; this comes from reading the code, not from a test.
+
+**Status:** Very active but very young: first HN post July 2026, v1.0.0 to v2.0.0 in under 4 weeks, 160 stars, and scope growing into mesh networking and mobile. It is MIT-licensed and runs as its own server process rather than a vendored library.
+
+[repo](https://github.com/Qbix/webserver) · [benchmark](https://github.com/Qbix/webserver/blob/main/docs/BENCHMARKS.md)
+
+##### Sogou C++ Workflow (HTTP Server)  `C++`  `Apache-2.0`  `active`  `Tier C`
+
+Sogou's C++11 async task engine; its embedded HTTP server hit ~2.2-2.6x nginx's QPS on small bodies (first-party test).
+
+**Beats:** nginx — The authors' 2020 test ran wrk from a second identical machine: Xeon E5-2630 v4 (40 cores), 192 GB RAM, 25 GbE, CentOS 7.8 with kernel 3.10, GCC 4.8.5; optimization flags were not stated, and the library's CMake default is RelWithDebInfo. It served a fixed random body with Date/Content-Type headers, with workflow on 16 pollers + 20 handlers and nginx on 40 workers. Read off the charts, at concurrency 256-2048 workflow reached ~490-530K QPS vs nginx's ~203-213K for 64 B/512 B bodies and ~426-458K vs ~180-205K for 4 KB (~2.2-2.6x), but the curves converge at 16-64 KB and nginx had lower latency at concurrency 512 with 16/32 KB bodies.
+
+**Known shortcoming:** The ~2.2-2.6x over nginx holds at small bodies only: all servers converge at 16-64 KB bodies, and at concurrency 512 with 16-32 KB bodies workflow latency is about 2x worse than nginx. The nginx config and brpc code are not published, and no optimization flags are stated (CMake default RelWithDebInfo).
+
+**Known shortcoming:** The benchmark server keeps the default max_connections=2000, below the 2048 concurrency point, and socket errors are not reported, so the 2048 figures are suspect. Body-length chart legends are mislabelled. The maintainer says the range was chosen as typical but favourable and that nginx degraded less above ~10K concurrency (#906). src/kernel/rbtree.c is GPL-2.0-or-later Linux code inside an Apache-2.0 repo. No HTTP/2; server-side pipelining rejected by design (#908). Single-process queue may cap near 1M QPS (#891). Versions before 1.1.0 carry an HTTP parser bug and a TLS concurrency bug.
+
+**How:** It is a single-process multi-reactor. N poller threads (mpoller, each fd pinned to poller fd % N) run edge-triggered epoll, or kqueue on BSD/macOS. Each poller reads into its own 256 KB buffer and runs the incremental protocol parser on the poller thread. Complete messages go through a two-list message queue (separate put/get mutexes; the consumer takes the whole list) to a pool of handler threads that run process(). Replies are sent with writev straight from the handler thread and only fall back to EPOLLOUT on EAGAIN. Timeouts sit in a per-poller red-black tree that drives one timerfd, and append_output_body_nocopy() avoids copying the body. In issue #688 the maintainer says the project uses no memory pool and no lock-free structures, and that removing the IO-to-handler queue would add only about 10%.
+
+**Use it when:**
+- C++ services that send many small (up to ~4 KB) dynamic HTTP responses over hundreds to ~2K keep-alive connections. This is where the first-party test showed ~2.2-2.6x nginx's QPS and lower latency.
+- Handlers that fan out to other backends (HTTP, Redis, MySQL, Kafka, custom TCP/TLV protocols) and need async composition that holds no thread while waiting, using series/parallel/DAG tasks instead of callback nesting.
+- Services that mix network IO with CPU work: compute queues and WFGoTask run in the same task graph as network tasks.
+- Linux deployments (the primary target; CI builds Ubuntu, Fedora and FreeBSD) where an Apache-2.0 C++11 library with no Boost/asio dependency is wanted. It is packaged as libworkflow-dev (Debian/Ubuntu) and workflow-devel (Fedora).
+
+**Skip it when:**
+- Large responses. In the benchmark, QPS converges with nginx at 16-64 KB bodies (~165K, ~88K, ~45K), and at concurrency 512 with 16/32 KB bodies workflow latency (~8/~18 ms) is about twice nginx's (~4/~9 ms).
+- Tens of thousands of concurrent connections. No data above 2048 concurrency is published. In issue #906 the maintainer says the published concurrency range (hundreds to a few thousand) was chosen as typical and favorable, and that nginx degraded less above ~10K in their own tests. The default max_connections is 2000.
+- You need HTTP/2, HTTP/3 or HTTP/1.1 pipelining. The source tree has no HTTP/2 code (issue #129 from 2020 only says it is planned). Server-side pipelining was rejected by design (issue #908): a pipelined connection got one response and was then closed.
+- You want a configurable nginx replacement for TLS termination, static files or reverse proxying. Workflow is a library, and all of that is C++ you write and maintain.
+- Handler code that blocks (synchronous DB drivers, sleeps, std::future). By default only 20 handler threads run process() and callbacks, and the FAQ warns that std::future can deadlock all of them. Use counter/timer/go tasks or WFFuture instead.
+
+**Integration:** static lib and shared lib (CMake or make; xmake and Bazel files included; distro packages libworkflow-dev / workflow-devel) · OpenSSL 1.1+ or BoringSSL (the nossl branch removes it), pthread; zlib, lz4, zstd and snappy only when the Kafka client is built · C++11 (the library builds with -std=c++11 -fno-exceptions, C sources -std=gnu90), CMake 3.10+; the benchmark used GCC 4.8.5 · Linux (epoll + timerfd), macOS and FreeBSD (kqueue), Android. Windows is a separate IOCP branch. The README claims any CPU (x86 32/64-bit, ARM of either endianness, Loongson).
+
+**Vs siblings:** Pick Workflow over H2O when the HTTP server is one piece of a C++ backend that also calls Redis/MySQL/Kafka/HTTP upstreams asynchronously. H2O's catalogued win over nginx is static-file serving, while Workflow's is small dynamic responses. Drogon, Crow and Oat++ are catalogued only against Go net/http on the-benchmarker, so Workflow is the only one in this group with a head-to-head against nginx, although that comparison is first-party.
+
+**Gotchas:**
+- WFServerParams.max_connections defaults to 2000. Past that, the server closes an idle keep-alive connection or refuses the new one with EMFILE. Raise it for high connection counts (issue #906). The published benchmark code used this default while testing 2048 concurrency.
+- The response is sent only after all tasks in the server task's series finish, and there is no reply(). Data passed to append_output_body_nocopy() must stay alive until the task callback.
+- The headline license is Apache-2.0, but src/kernel/rbtree.c is Linux-kernel code under a GPL v2-or-later header, and the repo ships LICENSE_GPLV2. Have the license reviewed before embedding it in proprietary binaries.
+- The library is compiled with -fno-exceptions, so do not let exceptions escape process() or callbacks. Tasks you create but never start must be released with dismiss().
+
+**Status:** Actively maintained: v1.1.0 was released 2026-08-10 after a run of fix releases (TLS concurrency, HTTP parser byte-by-byte bug, >2 GB size handling), with 14.4k stars and Debian/Fedora packages. The README says it serves Sogou's back-end services at more than 10 billion requests per day. It is Apache-2.0, apart from the GPL-headed rbtree.c.
+
+[repo](https://github.com/sogou/workflow) · [benchmark](https://github.com/sogou/workflow/blob/master/docs/benchmark.md)
+
+#### tls
+
+##### aws-lc-rs  `Rust`  `ISC AND (Apache-2.0 OR ISC)`  `active`  `Tier C`
+
+Rust crypto crate with a ring-style API over AWS-LC and optional FIPS module; beat OpenSSL in wtx handshake runs.
+
+**Beats:** OpenSSL — c410-f3r's wtx-bench timed whole processes: decode 3 PEM files, run one loopback TLS handshake in WTX, and exit (hyperfine mean of 10 runs). Builds used the Rust deploy profile (opt-level 3, fat LTO, 1 codegen unit; rustc and OpenSSL versions unstated) on a Ryzen 9 5900X under Fedora. aws-lc-rs (vendored AWS-LC) took 1.38-6.71 ms against 4.41-10.20 ms for OpenSSL, 1.30-3.44x faster (median about 2.95x) in all 45 combinations. OpenSSL's near-constant penalty is unexplained by the author, so this is weak evidence about crypto speed.
+
+**Known shortcoming:** aws-lc-rs is the Rust wrapper around AWS-LC (catalogued separately), so its speed is AWS-LC's. The only evidence times whole program runs (startup, PEM decoding, local TCP connect, one handshake); OpenSSL is a constant 2-5 ms slower in every combination, which looks like fixed startup/integration overhead rather than slower crypto (the author says the cause is unknown). rustc and OpenSSL versions/flags not stated. Trails ring and Graviola with RSA-PSS-SHA384 certificates.
+
+**Known shortcoming:** Adds no crypto of its own (every primitive is AWS-LC's); kept as AWS-LC's Rust binding. Loses to ring and Graviola with RSA-PSS certificates (6.4-6.7 ms vs 4.9-6.5 and 5.2-5.9). Binaries grow ~4 MB (up to 17 MB static MSVC, #745) and builds are several times slower than ring (#851); the size mode cuts footprint 60-70% but slows P-256 2-3x and P-384 3-6x. Jitter-entropy setup costs ~50 ms per process (Lambda cold-start regression #899; abort() in Windows VMs, #1072), avoidable only in non-FIPS builds. FIPS builds need CMake, Go and often bindgen/libclang; open build failures with old GCC cross-builds (#1022) and GCC 14+ FIPS (#569); no no_std. FIPS is a compile-time feature for the whole dependency graph (#1160), the certified module version is tied to the crate version, and the FIPS static library exists only for Linux/BSD x86_64/aarch64. The build silently links a system AWS-LC found via OPENSSL_DIR/pkg-config without rpath. ML-KEM decapsulation overflows macOS's 544 KiB default thread stack (#1101). Five 2026 aws-lc-sys advisories (AES-CCM timing; PKCS7, X.509, CRL bypasses) need aws-lc-sys 0.38/0.39+. ring-style API, no TLS/X.509 layer.
+
+**How:** The wrapper adds no crypto of its own. The speed is AWS-LC's: BoringSSL-derived assembly (AVX-512 AES-GCM routines on x86_64), vendored s2n-bignum assembly for X25519, Ed25519 and P-384 scalar multiplication, and large precomputed elliptic-curve tables. Rust calls go over thin FFI into a statically linked, symbol-prefixed library, initialized once through std::sync::Once. In the wtx benchmark OpenSSL carries an almost constant 2-5 ms extra per run, which points to OpenSSL setup or integration overhead rather than faster primitives. Against ring the times are close (1.38 vs 1.29 ms at the fastest point), except with RSA-PSS certificates, where ring and Graviola win.
+
+**Use it when:**
+- A Rust service that must use a FIPS-validated module: the `fips` feature links AWS-LC-FIPS 4.x (lab-tested and submitted to NIST) with the same API, and try_fips_mode() checks it at runtime.
+- rustls deployments that want post-quantum key exchange or the most complete provider: rustls recommends rustls-aws-lc-rs, and its ring provider has no post-quantum algorithms.
+- Porting ring 0.16/0.17 code that also needs AES-CBC/CTR, CMAC, AES key wrap or ML-KEM, which ring does not offer.
+- Handshake-heavy servers that use P-384 key agreement: in wtx it was fastest or near-fastest with secp384r1.
+- Mainstream targets (x86_64/aarch64 Linux, macOS, Windows) where a C compiler is available at build time.
+
+**Skip it when:**
+- no_std or embedded targets: the crate requires std.
+- Latency-critical handshakes with RSA-PSS certificates: in wtx aws-lc-rs took 6.4-6.7 ms, against 4.9-6.5 ms for ring and 5.2-5.9 ms for Graviola.
+- Size- or build-time-constrained builds: issue #745 (open) reports +4 MB (AWS SDK) up to +17 MB (MSVC static) and about 1.8 MiB more than ring on x86_64 Linux; a user reports builds several times slower than ring (#851). opt-level s/z (v1.18.0+) cuts the AWS-LC footprint 60-70% on x86_64, but P-256 becomes about 2-3x slower and P-384 about 3-6x slower.
+- Short-lived processes and cold starts: the guide gives a one-time jitter-entropy cost of about 50 ms per process, and #899 reports a ~1 s Lambda cold-start regression. AWS_LC_SYS_NO_JITTER_ENTROPY=1 removes it (non-FIPS only).
+- Old or unusual cross toolchains: #1022 (open) fails on aarch64 manylinux GCC 4.8.5 (no __ARM_ARCH), FIPS builds with GCC 14+ are still reported broken (#569), and Windows x86 needs NASM (x86-64 can opt into prebuilt NASM objects).
+
+**Integration:** crate · aws-lc-sys (bundled AWS-LC source built by a cc-crate build script; needs a C/C++ compiler, and NASM on Windows x86 unless prebuilt objects are allowed), zeroize, untrusted 0.7 (default ring-io/ring-sig-verify features). The `fips` feature swaps in aws-lc-fips-sys and always needs CMake and Go, plus bindgen/libclang except on 6 targets with pre-generated FIPS bindings. · Rust 1.71 (rust-version) and a C11 compiler by default; a few tier-3 targets (mips, aarch64-apple-tvos-sim) need nightly. · Built and tested on Linux (x86_64, aarch64, arm/armv7, i686, ppc/ppc64/ppc64le, riscv64gc, s390x, mips), macOS and iOS, Windows MSVC and GNU (x86, x86_64, aarch64), Android, FreeBSD, NetBSD, illumos and wasm32-emscripten. FIPS is a subset: Linux x86_64/aarch64/arm-musl/ppc, macOS x86_64/aarch64, Windows MSVC x86_64/aarch64, FreeBSD x86_64.
+
+**Vs siblings:** Choose it over ring or Graviola when you need FIPS, post-quantum KEM, extra primitives such as AES-CBC/CTR, CMAC or key wrap, or P-384-heavy handshakes. ring builds smaller and compiles faster, and ring and Graviola were faster with RSA-PSS certificates in wtx. Relative to the AWS-LC (C) and rustls entries, it is the Rust binding to AWS-LC and the crypto provider under rustls, not a competitor to them.
+
+**Gotchas:**
+- The build silently links a system AWS-LC if OPENSSL_DIR, OPENSSL_INCLUDE_DIR/OPENSSL_LIB_DIR or pkg-config points at a new-enough AWS-LC install. Dynamic linking embeds no rpath. Set AWS_LC_SYS_USE_SYSTEM=0 to force the vendored build, as the wtx benchmark did. With `fips`, detection may execute the candidate library.
+- FIPS is a compile-time Cargo feature. It unifies across the whole dependency graph, `fips` plus `non-fips` is a compile error, and the FIPS module version follows the crate version (module 3.0.x needs aws-lc-rs <1.18, 2.0.x needs <1.12), so pin the version to stay on a certified module. The FIPS static library is Linux/BSD x86_64/aarch64 only; other platforms get a shared library.
+- ML-KEM decapsulation (mlkem-native since aws-lc-sys 0.39) overflowed macOS's 544 KiB default non-main thread stack (#1101). Maintainers call this a configuration issue and advise 8 MiB thread stacks.
+- Jitter-entropy init can call abort(): #1072 (open) reports crashes in tree_jitter_initialize_once in Windows VMs, also seen in uv. The documented ~50 ms per-process cost does not appear in the wtx 1.4 ms whole-process runs, and the reason is not documented.
+
+**Status:** Active and widely used: v1.18.1 (2026-09-01), last commit 2026-09-17, about 237M crates.io downloads (88.6M in the last 90 days) and 366 reverse dependencies, under Apache-2.0 or ISC. Security fixes ship through aws-lc-sys (five 2026 RustSec advisories, patched in >=0.38/0.39), so keep the sys crate current.
+
+[repo](https://github.com/aws/aws-lc-rs) · [benchmark](https://c410-f3r.github.io/thoughts/tls-handshakes-measuring-the-performance-of-4-cryptography-libraries/)
+
+##### Cloudflare ChaCha20-Poly1305 (sslconfig OpenSSL patch)  `C`  `BSD-3-Clause`  `stale`  `Tier C`
+
+Cloudflare's 2016 OpenSSL 1.0.2 patch adding x86-64 ChaCha20-Poly1305 TLS suites; about 7% faster seal than OpenSSL 1.1.0-pre on Haswell.
+
+**Beats:** OpenSSL 1.1.0-pre ChaCha20-Poly1305 implementation — Cloudflare's 2016-04-04 post graphs cycles/byte for 'seal' with 13-byte AAD over 64 B-16 KB records on an unnamed Haswell (AVX2) against OpenSSL 1.1.0-pre: much lower at short records, slightly lower at long ones, 7% better on average, and under 2 cycles/byte at large sizes; it gives no compiler, flags or harness, and AES-GCM still wins above 320 bytes. For scale, OpenSSL's current asm headers list Haswell large-buffer costs of 1.23 cpb (ChaCha20, AVX2) plus 0.65 cpb (Poly1305, AVX2), about 1.9 cpb in two passes, so the long-record gap was always small.
+
+**Known shortcoming:** Correction: the stitched x86-64 ChaCha20-Poly1305 code was not merged into OpenSSL (OpenSSL still uses separate chacha/poly1305 modules); it went into BoringSSL (2017) and ring. Only the ossl102j patch (2016-10) contains the stitched code; the f/g patches current when the post appeared use Intel's 2014 separate kernels, and the post doesn't say which was graphed. Assembly files are Apache-2.0 (Cloudflare/Intel), not just BSD-3. The SSE path uses SSE4.1 instructions without a CPUID check (illegal-instruction crashes on Core 2 and AMD K8/K10, #51, #57, confirmed by the author); the AVX2 path uses MULX but only checks AVX2. With server cipher preference, ChaCha is chosen only as the client's first choice (#48). EVP expects an 8-byte sequence number prepended to the AAD, so RFC 7539 vectors can't be checked directly (#60). Portable C fallback reported broken in no-asm/32-bit builds (#26, #57). The long-record gain over OpenSSL's own asm (~1.9 cycles/byte on Haswell) was always small; cycles/byte hides AVX2 downclocking. Abandoned: last updated 2017-03, Cloudflare moved to BoringSSL (#78), OpenSSL 1.0.2 unsupported, README links a missing patch file.
+
+**How:** The 1.0.2j patch adds chacha20_poly1305_x86_64.pl by Vlad Krasnov. It is a 'stitched' one-pass seal/open with SSE and AVX2 paths. Poly1305 runs as 64-bit scalar multiplies (MULX on the AVX2 path) interleaved with the SIMD ChaCha20 rounds, so the MAC work overlaps the cipher work instead of taking a second pass over the data. It also has a special case for the 13-byte TLS AAD and hand-written tail code for remainders of 64 bytes or less, 65-128, 129-192 and 193-255 bytes, which targets short records. The earlier 1.0.2f/g patches (Feb 2016, current when the post appeared) used Intel's 2014 AVX/AVX2 ChaCha20 and Poly1305 kernels plus a Cloudflare scalar Poly1305 instead, and the post does not say which version it graphed.
+
+**Use it when:**
+- You maintain a TLS 1.2 server that is frozen on OpenSSL 1.0.2 (for example nginx built from source) and still need ChaCha20-Poly1305 suites, including the pre-RFC draft suites that 2016-era Chrome used.
+- Traffic has many small TLS records (under ~1.5 KB, for example with dynamic record sizing). The post reports its largest gain over OpenSSL 1.1.0-pre at short records.
+- You want ChaCha only for clients that rank it first (typically mobile clients without AES-NI), while AES-GCM clients keep AES-GCM. The patched ssl3_choose_cipher does exactly this.
+- You are studying or porting a stitched ChaCha20-Poly1305. The 1.0.2j assembly is a readable ancestor of the code BoringSSL (added 2017-01-23) and ring ship today.
+
+**Skip it when:**
+- Any new deployment. OpenSSL 1.1.0+ has native RFC ChaCha20-Poly1305, BoringSSL and ring carry the maintained descendant of this assembly with proper CPU checks, and OpenSSL 1.0.2 itself is out of public support.
+- x86-64 CPUs without SSE4.1 (Core 2 65nm such as Xeon X3220, AMD K8/K10). The 1.0.2j SSE path uses pshufb, pextrq and pinsrb with no CPUID check and dies with an illegal instruction (issues #51 and #57, confirmed by the author).
+- Architectures other than x86-64. Only portable C is provided there. Users reported compile errors without the asm (#26, older patch) and ChaCha failures in no-asm and 32-bit builds (#57, unconfirmed).
+- Bulk throughput on AES-NI hardware. The post's own graphs show AES-128-GCM and AES-256-GCM beating ChaCha20-Poly1305 on Haswell for records over 320 bytes.
+- OpenSSL 1.1.x. The 1.1.0 patch only changes cipher preference, and the author declined to port the draft suites (#78).
+
+**Integration:** source-drop · The exact OpenSSL 1.0.2f, 1.0.2g or 1.0.2j source tree (one patch per version) and Perl for perlasm. nginx or the app must be rebuilt or relinked against the patched OpenSSL. · The perlasm version checks emit the AVX2 path only with GNU as >= 2.22, clang >= 3.1, NASM >= 2.10 or ml64 >= 11. With older assemblers you get only the SSE path. On CentOS 6 binutils the 1.0.2g patch failed to assemble (#32). Compiler versions are not documented. · The assembly is x86-64 only: SSE4.1 is assumed, and the AVX2+MULX path is chosen on the AVX2 bit. Other architectures fall back to portable C. Windows builds had link problems (#43).
+
+**Vs siblings:** Pick it only if you are pinned to a patched OpenSSL 1.0.2 build and need ChaCha20-Poly1305 suites. Otherwise ChaChaCha reports beating both OpenSSL's asm and BoringSSL's stitched AVX2 ChaCha20-Poly1305 (this code's descendant), and AWS-LC or wolfSSL are maintained whole-library alternatives to OpenSSL.
+
+**Gotchas:**
+- CPU dispatch is incomplete. There is no SSE4.1 check (author, #57: 'requires SSE4, but it does not actually perform a CPUID check'), and the AVX2 path uses MULX (BMI2) while testing only the AVX2 bit. BoringSSL's descendant requires SSE4.1 and checks AVX2 && BMI2.
+- With server cipher preference on, ChaCha is chosen only when it is the client's first-listed suite (with a retry if nothing else matches). Earlier patch versions could refuse ChaCha entirely (#48). The author says to drop the ssl3_choose_cipher change if you want normal negotiation.
+- Only the RFC suites use the stitched assembly. Draft-suite traffic goes through the C glue plus separate ChaCha20 and Poly1305 kernels. The EVP interface expects an 8-byte TLS seq_num prepended to the AAD, so RFC 7539 test vectors cannot be checked directly (#60).
+- Licensing is mixed. The repo says BSD-3-Clause, but the assembly files carry Apache-2.0 headers (Cloudflare 2016, Intel 2014), and the patch edits OpenSSL-licensed files.
+
+**Status:** Stale historical reference, not a dependency. The ChaCha patches were last refreshed in Oct 2016 (1.0.2j) and Mar 2017 (1.1.0 preference tweak), later commits only touch config and CI, Cloudflare said in 2017 it had moved to BoringSSL, and the README still links to a patch file (openssl__chacha20_poly1305_cf.patch) that no longer exists.
+
+[repo](https://github.com/cloudflare/sslconfig) · [benchmark](https://blog.cloudflare.com/it-takes-two-to-chacha-poly/)
+
+##### curve25519 (mehdi sotoodeh / "Mehdi")  `C`  `MIT`  `abandoned`  `Tier C`
+
+C/x86-64-asm X25519 and Ed25519 library; precomputed fixed-base tables give 2.8x faster Ed25519 keygen than OpenSSL 1.1.1.
+
+**Beats:** OpenSSL 1.1.1 EVP_PKEY API: EVP_PKEY_ED25519 (CreateKeyPair, SignMessage via EVP_DigestSign) and EVP_PKEY_X25519 (CalculatePublicKey, CreateSharedKey via EVP_PKEY_derive) — In a June 2019 run of test/openssl_test.c (asm build, gcc -O2, OpenSSL 1.1.1, HP EliteBook 755 G5, Ubuntu 18.04.2, CPU model not given; minimum of 100 TSC reads), Ed25519 key-pair creation took 74,822 vs 210,738 TSC ticks (2.8x), the only like-for-like row. The 5.4x sign and 1.6x shared-key rows count OpenSSL's EVP_PKEY construction, which recomputes the public key, inside the timed loop, and the 0.66x public-key row timed the Montgomery-ladder function instead of the faster _fast comb path; the separate 5.3x-19.6x figures are against portable-C curve25519-donna on an i7-2670QM.
+
+**Known shortcoming:** The OpenSSL test puts OpenSSL's key-object setup inside the timed loop while the library uses a precomputed key, inflating the SignMessage and CreateSharedKey wins; only CreateKeyPair (2.8x) is clean, and X25519 public-key derivation is 51% slower. Compared against OpenSSL 1.1.1 on an unspecified laptop CPU. Abandoned since 2020-04.
+
+**Known shortcoming:** The OpenSSL comparison is not like-for-like: CalculatePublicKey times the plain ladder rather than the table-based _fast path, while OpenSSL uses a fixed-base table; OpenSSL 1.1.1's EVP_PKEY_new_raw_private_key recomputes the public key inside the timed loops and leaks EVP_PKEY objects. Adjusted, signing stays ~2.7x faster and key generation 2.8x, but the X25519 shared-secret ladder is ~15% slower than OpenSSL's derive. The headline 43k cycles is base-point multiplication, not a shared secret (~271k). Fixed-base multiplies index a 24 KB table with secret bits; protection relies on optional blinding, and the repo ships a public default blinder (custom tool's RNG read unchecked, #10). Not RFC-strict: verify skips S < L and point validation (malleable), X25519 accepts all-zero outputs, DH clamps the caller's key in place (#2). Donna baseline is the portable 32-bit version. Linux/Cygwin/MinGW Makefiles only; x86-64 asm without MULX/ADX. Unmaintained since 2020; no audit; predates OpenSSL 3.
+
+**How:** Fixed-base scalar multiplication uses what the author calls FOLDING, which is essentially a fixed-base comb (Lim-Lee style): the 256-bit scalar is cut into 8 limbs of 32 bits, and each bit-slice indexes a 256-entry hard-coded table (source/base_folding8.h) of precomputed sums of 2^(32i)*B, so a base-point multiply is 31 doublings plus 31 mixed additions in extended twisted-Edwards coordinates. Verification computes s*B - h*A jointly with the 8-fold base table plus a 16-entry 4-fold table built once per public key (ed25519_Verify_Init). Field multiply/square/add are hand-written x86-64 assembly on 4x64-bit limbs using plain MUL/ADC (no MULX/ADX/AVX). Variable-base X25519 (shared secret) is an ordinary Montgomery ladder and gets no comb speedup.
+
+**Use it when:**
+- Ed25519 keygen- or signing-heavy services on x86-64: 74,822 TSC ticks per key pair vs 210,738 for OpenSSL 1.1.1, and 78,628 per 32-byte-message signature (roughly 2.7x after removing OpenSSL's in-loop key rebuild; estimate).
+- Verifying many signatures from the same few public keys: call ed25519_Verify_Init once per key and reuse the context (about 103-111K cycles per check on an i7-2670QM in the README tables).
+- Generating ephemeral X25519 key pairs, provided you call curve25519_dh_CalculatePublicKey_fast (Edwards comb, about 43-48K cycles on i7-2670QM), not the plain ladder function.
+- Embedding a dependency-free MIT C implementation where you control the build: about 16 C sources/headers plus 7 x86-64 asm files.
+
+**Skip it when:**
+- X25519 shared-secret (variable-base) throughput: its ladder took 270,930 TSC ticks; subtracting OpenSSL's in-loop key construction (~208,714) from OpenSSL's 442,750 suggests OpenSSL 1.1.1's derive alone was faster (rough estimate).
+- When you need cache-timing-safe code without extra setup: fixed-base multiplies index the ~24 KB table directly by secret scalar bits; protection depends on blinding, which the X25519 _fast path cannot take per call.
+- Consensus or interop code needing RFC 8032 strict verification: Verify_Check does not check S < L or validate the public-key point, and CreateSharedKey does not reject all-zero output from small-order peer keys.
+- aarch64, macOS or other non-x86-64 targets: only portable C (32-bit limbs; README says asm is about 3x faster than C on 64-bit) and the Makefiles reject anything but Linux, Cygwin and MinGW.
+- Anything needing a maintained or audited library: no commits since 2020-04-20, open issues unanswered, no audit documented, and its OpenSSL comparison predates OpenSSL 3.x.
+
+**Integration:** static lib (libcurve25519.a portable C, libcurve25519x64.a asm) or source-drop · none at runtime (bundled SHA-512); build runs a bundled custom tool that generates custom_blind.h; OpenSSL 1.1.0+ only for the comparison test · Plain C with stdint types; GNU as (x86-64) or MASM for the asm build; documented builds: gcc 4.5.3 (Cygwin-32), VS2010, mingw GNU as 2.25; Makefiles use gcc and uname -o · x86-64 asm on Linux and Windows (no ADX/BMI2/AVX needed); portable C for 32-bit and other CPUs, big-endian via -DECP_CONFIG_BIG_ENDIAN; macOS not supported by the Makefiles (a user in issue #9 reports it works after header changes)
+
+**Vs siblings:** Pick it over EverCrypt/HACL* or AWS-LC only when Ed25519 keygen/sign speed on x86-64 matters more than assurance and you want a tiny MIT C drop-in outside any TLS stack; for X25519 shared secrets, EverCrypt's formally verified Vale code (about 114K cycles per scalar multiply on its own test machine) is the better pick, and AWS-LC or wolfSSL are the choice when you need a maintained full TLS library.
+
+**Gotchas:**
+- curve25519_dh_CalculatePublicKey and curve25519_dh_CreateSharedKey take a non-const secret key and clamp it in place (issue #2); the plain CalculatePublicKey is the slow ladder that lost to OpenSSL, while the _fast variant is the comb path.
+- Side-channel protection relies on blinding, not constant-time table access: pass a context from ed25519_Blinding_Init to CreateKeyPair/SignMessage to blind the scalar; with NULL, only a static build-time blinder randomizes the projective Z coordinate.
+- The repo ships a fixed source/custom_blind.h; the Makefile regenerates it with custom_tool on each build. Vendoring the .c files without that step ships a public blinder, and omitting custom_blind.c gives 'unresolved external symbol edp_custom_blinding' (issue #13). The tool's RNG reads /dev/urandom in text mode without checking the fread length (author agreed in issue #10).
+- ed25519_Verify_Init mallocs a context when passed NULL and returns NULL on failure; Verify_Check does not check for NULL, and you must call ed25519_Verify_Finish.
+
+**Status:** Abandoned (last commit 2020-04-20; a 2024 issue and a 2022 PR sit unanswered) but MIT-licensed and small enough to vendor; the OpenSSL comparison predates OpenSSL 3.x and no security audit is documented.
+
+[repo](https://github.com/msotoodeh/curve25519) · [benchmark](https://github.com/msotoodeh/curve25519/blob/master/README.md)
+
+##### Fizz  `C++`  `BSD-3-Clause`  `active`  `Tier C`
+
+Meta's C++ TLS 1.3 library built on folly; Meta reports ~10% more load-balancer throughput than its OpenSSL AsyncSSLSocket stack.
+
+**Beats:** OpenSSL (via folly's AsyncSSLSocket) — The README says, in text unchanged since commit 5a46d88 (2018-08-03), that Meta's internal load-balancer benchmarks showed about 10% higher throughput for Fizz than for its prior TLS stack on folly's AsyncSSLSocket (OpenSSL libssl), with less memory per connection. No OpenSSL version, cipher suite, record size, hardware, compiler or data is given, and the 2018 engineering blog repeats only 'approximately 10 percent higher throughput'. Fizz still uses OpenSSL for the ciphers, so the gain is in the record layer and buffer handling.
+
+**Known shortcoming:** The '10% higher throughput' claim is first-party (2018) with no methodology, against Facebook's 2018 OpenSSL-based AsyncSSLSocket; Fizz still uses OpenSSL libcrypto and libsodium, so the gain is in the TLS layer. TLS 1.3 only; depends on folly.
+
+**Known shortcoming:** The ~10% throughput claim has no data (OpenSSL version, cipher, record size, hardware, compiler) and no independent benchmark; the shipped benchmark tools have no published results. The crypto still comes from OpenSSL and libsodium; the gain is in the record layer and IOBuf handling. In-place encryption applies only to unshared buffers not split into records; forcing it with setEncryptInplace(true) overwrites plaintext of shared IOBufs. TLS 1.3 only, so TLS 1.2 clients need a fallback stack. Needs folly, fmt, glog, gflags, libevent, OpenSSL, libsodium, zlib, zstd; no C API (#71); weekly date tags, internals moving from exceptions to Status codes. CMake now requires C++20 (not C++14). Past remote DoS CVEs (2019-3560, 2019-11924, 2023-23759, fixed). Build failures on RISC-V (#161), PPC (#139), macOS Monterey (#151); kTLS experimental, Linux and AES-GCM only.
+
+**How:** The record layer works on chains of folly IOBufs (scatter/gather I/O). The AEAD encrypts in place when a buffer is unshared, appends the content-type byte and tag into existing tailroom, and writes the 5-byte record header into headroom reserved via setEncryptedBufferHeadroom, so a typical write avoids extra allocations and memcpys. Reads can use readv (ReadVec mode) or Linux TCP zero-copy receive (zeroCopyMemStore), and setDecryptInplace decrypts records inside the receive buffers. The crypto is unchanged: AES-GCM, ChaCha20-Poly1305, SHA-2, P-256/384/521 ECDHE and X.509 go through OpenSSL, while X25519 and the RNG come from libsodium. Any gain therefore comes from fewer copies and less per-connection state, not from faster ciphers.
+
+**Use it when:**
+- You already terminate TLS on folly AsyncSocket (Proxygen, mvfst, or custom folly servers) and want the TLS 1.3 stack Meta runs at scale; Meta's 2018 blog says it handles millions of TLS 1.3 handshakes per second.
+- Load balancers or proxies with many concurrent connections, where per-connection memory and copy overhead matter more than raw cipher speed.
+- You need handshake features that are awkward through libssl: future-based async certificate signing and ticket decryption (offload to a key server), 0-RTT with a sliding-Bloom replay cache, delegated credentials, ECH, or exported authenticators.
+- QUIC or custom protocols that need a TLS 1.3 handshake state machine with direct access to traffic secrets, not a byte-stream socket.
+- Linux servers on AES-GCM that want to hand the record layer to the kernel after the handshake (experimental kTLS support, TLS 1.3 AES-128/256-GCM only).
+
+**Skip it when:**
+- You must serve TLS 1.2 or older clients from one library: Fizz is TLS 1.3 only, and fallback means running OpenSSL libssl (for example AsyncSSLSocket) alongside it.
+- You are not already on folly: the build needs folly, fmt, glog, gflags, libevent, OpenSSL, libsodium, zlib and zstd, and the public API uses IOBuf, EventBase and AsyncTransport throughout.
+- You need a reproducible speedup before adopting: the only number is a first-party 2018 README sentence with no methodology, hardware, OpenSSL version or data, and no independent benchmark was found (HN, arXiv).
+- Your bottleneck is crypto primitives: bulk AEAD, hashing and P-curve ECDHE still run in OpenSSL libcrypto, so a faster libcrypto (e.g. AWS-LC) is a separate fix Fizz does not provide.
+- You need a C API or a stable ABI: a C ABI request (issue #71) is open, releases are weekly date tags built with getdeps, and core internals recently moved from exceptions to Status return codes.
+
+**Integration:** static lib or shared lib (CMake, exported as fizz::fizz); getdeps.py builds it together with its dependencies · folly, fmt, OpenSSL (libcrypto), libsodium, glog (default logging backend; XLOG or DISABLED selectable), gflags, libevent, zlib, zstd, Threads; optional liboqs >= 0.11.0 for ML-KEM hybrid groups and libaegis for the AEGIS cipher suites; GTest/GMock 1.8+ for tests · C++20 (CMakeLists.txt sets CMAKE_CXX_STANDARD 20 when unset), CMake 3.14+; the GitHub description and the 2018 blog still say C++14 · Linux, macOS and Windows (getdeps CI workflows for each); kTLS offload is Linux-only and experimental; open build issues on RISC-V (#161), PPC 8-byte atomics (#139), macOS Monterey (#151), and an open Android build question (#106)
+
+**Vs siblings:** Pick Fizz over picotls or ztls when your server already runs on folly/Proxygen/mvfst and you want Meta's production TLS 1.3 stack with async key offload and 0-RTT; picotls is the lighter C TLS 1.3 library (with the faster fusion AES-GCM), and ztls publishes per-operation numbers against OpenSSL where Fizz publishes none. Pick AWS-LC or wolfSSL instead when you need an OpenSSL-API-compatible libssl with TLS 1.2 and published HAProxy handshake results. Fizz can also run on top of a faster libcrypto rather than replace it.
+
+**Gotchas:**
+- In-place encryption is opportunistic: by default it applies only to a unique buffer that is not split into records. Writes over the 16 KB record size, or cloned/shared IOBufs, take the allocate-and-copy path. setEncryptInplace(true) forces it, but then silently overwrites the plaintext of any other IOBuf that shares the buffer.
+- The default ReadBuffer mode reads into 4000-byte allocations (minimum read 1460 bytes); the header warns this can raise memory use and blocks in-place decryption of shared buffers. ReadVec mode needs an IOVecQueueOps you supply.
+- Past remote DoS CVEs: CVE-2019-3560 (infinite loop in PlaintextRecordLayer, fixed v2019.03.04.00), CVE-2019-11924 (memory exhaustion from padding-only handshake fragments, fixed v2019.08.05.00) and CVE-2023-23759 (remotely triggerable CHECK crash when the second ClientHello changes the cipher list, fixed v2023.01.30.00). Track the weekly tags.
+- Issue #36 (open): if you list ChaCha20-Poly1305 as supported on a build whose OpenSSL lacks it, Fizz can still pick it and fail the handshake; a maintainer says the default config does not list it in that case.
+
+**Status:** Actively maintained by Meta: commits through 2026-09-26 and weekly date-tagged releases (latest v2026.09.21.00). It is BSD-3-Clause (the LICENSE file; GitHub shows NOASSERTION), but in practice usable only inside a folly/getdeps build.
+
+[repo](https://github.com/facebookincubator/fizz) · [benchmark](https://github.com/facebookincubator/fizz#performance)
+
+##### FreeBSD in-kernel TLS (kTLS) with NIC TLS offload  `C`  `BSD-2-Clause`  `active`  `Tier C`
+
+FreeBSD in-kernel TLS record encryption, optionally NIC-offloaded, keeping zero-copy sendfile for HTTPS; beats userspace OpenSSL SSL_write data paths.
+
+**Beats:** OpenSSL (conventional userspace TLS via SSL_write()/sendfile()) — Netflix's 2015 FreeBSD 10.1 prototype (Xeon E5-2650L appliance, nginx 1.5, AES-GCM, live traffic) served about 9 Gb/s versus about 8.5 Gb/s with nginx plus userspace OpenSSL (~1.06x), while still paying an extra OCF copy. Gallatin's EuroBSDCon 2022 ablation of the current code (AMD EPYC 7502P, 2x ConnectX-6 Dx, FreeBSD-current, nginx) reports 90 Gb/s at 80% CPU for userspace TLS via nginx thread pools (library not named), 240 Gb/s at 80% CPU for sendfile plus software kTLS (180 Gb/s with aesni), and 375 Gb/s at 53% CPU with NIC kTLS; no harness, client or compiler details are published.
+
+**Known shortcoming:** The record's evidence is the 2015 prototype (~1.06x); stronger current numbers are in Gallatin's EuroBSDCon 2022 slides (below), but the userspace TLS library is unnamed and part of the gain comes from sendfile, not kTLS; kTLS without sendfile is slower than userspace TLS (75 vs 90 Gb/s). 2026 security record on 15.x: local privilege escalation via the kTLS receive path (SA-26:26, CVE-2026-45257), remote kernel panic with crafted TLS 1.2 CBC records (SA-26:46, CVE-2026-49423); the SA-26:26 fix broke kTLS receive (bug 296498); open bugs: corrupted lighttpd SSL_sendfile downloads (295942), QAT panics (280037), 2021 memory leak (253281). NIC offload: mlx5en AES-GCM only, Chelsio T6 TLS 1.1/1.2 only, no ChaCha20 offload; retransmits refetch whole records and connections fall back to software past 2% retransmitted bytes (380 to 350 Gb/s at Netflix); early ConnectX-6 Dx firmware capped at 75 Gb/s. Keys set once per direction (rekeying must be off); kernel crypto bypasses OpenSSL providers (FIPS); FreeBSD only on direct-map architectures (not i386 GENERIC); no handshake speedup.
+
+**Independent measurement:** Netflix/Gallatin EuroBSDCon 2022 (people.freebsd.org/~gallatin/talks/euro2022.pdf; AMD EPYC 7502P, 2x ConnectX-6 Dx, nginx): userspace TLS via nginx thread pools without kTLS or sendfile 90 Gb/s at 80% CPU; sendfile + software kTLS 240 Gb/s at 80% CPU with ISA-L (180 Gb/s with aesni); NIC kTLS + sendfile 375 Gb/s at 53% CPU.
+
+**How:** At sendfile()/sosend() time the kernel frames TLS records into unmapped (M_EXTPG) mbufs, one per 16 KB record, which shortens socket-buffer chains about 6:1. The records are marked M_NOTREADY until a per-core pool of kernel threads encrypts them through crypto(9)/OCF (aesni, ISA-L kmod or QAT backends). This keeps Netflix's async zero-copy sendfile pipeline intact: no copy out to nginx, no userspace crypto buffer and no copy back into the kernel. In NIC (ifnet) inline mode, plaintext records reach the NIC through mbuf send tags and are encrypted during transmit DMA, so the CPU never reads or writes the payload; Netflix says this halves memory bandwidth (about 200 GB/s to about 100 GB/s at 400 Gb/s). A Chelsio TOE mode also exists.
+
+**Use it when:**
+- Static-file HTTPS or video serving on FreeBSD 13+ with a server that uses SSL_sendfile() (nginx 1.21.4+ with OpenSSL 3.0, lighttpd mod_openssl), where the box is memory-bandwidth or CPU bound at tens to hundreds of Gb/s.
+- Transmit-heavy AES-GCM TLS 1.2/1.3 traffic behind a NIC that does inline TLS: mlx5en (ConnectX-6 Dx class) or cxgbe (Chelsio T6/T7). Netflix measured 90 Gb/s at 68% CPU with software kTLS versus 35% CPU with T6 offload (2019), and 375 Gb/s at 53% CPU with ConnectX-6 Dx offload (2022).
+- Existing OpenSSL apps that only use SSL_read/SSL_write: setting SSL_OP_ENABLE_KTLS moves record crypto into the kernel with no other code change, though the large gains need sendfile.
+- Kernel consumers that must own TLS framing, such as FreeBSD NFS-over-TLS, and TLS receive offload on TOE or NIC hardware.
+
+**Skip it when:**
+- Workloads that cannot use sendfile. In Netflix's 2022 ablation, kTLS without sendfile served 75 Gb/s at 80% CPU, which is below the 90 Gb/s of plain userspace TLS on the same machine (NIC kTLS without sendfile: 95 Gb/s).
+- Handshake-bound or short-connection workloads: kTLS does nothing for key exchange, which stays in OpenSSL. Also avoid it for connections that must rekey: keys can be set only once per direction, so applications must disable rekeying.
+- Deployments that require FIPS-validated crypto through OpenSSL providers: with kTLS the kernel does the record crypto, bypassing providers (OpenSSL docs).
+- Lossy paths with NIC offload: a TCP retransmit forces the NIC to re-DMA the whole TLS record. The kernel moves a connection back to software TLS after 2% of its bytes are retransmitted (kern.ipc.tls.ifnet_max_rexmit_pct), and Netflix saw 380 to 350 Gb/s when about a third of connections moved to software.
+- Risk-averse or security-sensitive hosts, particularly with receive-side kTLS. 2026 brought FreeBSD-SA-26:26 (CVE-2026-45257, local file overwrite / privilege escalation via the RX path) and SA-26:46 (CVE-2026-49423, remote kernel panic via crafted TLS 1.2 CBC records). There is also an open report (bug 295942) of corrupted HTTPS downloads with lighttpd SSL_sendfile on FreeBSD 15.x.
+
+**Integration:** module (kernel feature: `options KERN_TLS`, already in GENERIC on amd64, arm64, riscv and powerpc64; used through a kTLS-aware TLS library or the TCP_TXTLS_ENABLE/TCP_RXTLS_ENABLE socket options) · FreeBSD kernel with KERN_TLS and unmapped mbufs enabled (kern.ipc.mb_use_ext_pgs); a userland TLS library for the handshake (OpenSSL 3.0+, base OpenSSL built WITH_OPENSSL_KTLS (default yes on amd64/aarch64/powerpc64/riscv64), or ports OpenSSL/GnuTLS with the KTLS option); optional crypto(9) driver (aesni, ISA-L kmod, QAT); optional offload NIC (cxgbe T6/T7, mlx5en ConnectX-6 Dx class) · FreeBSD 13.0 (first release with kTLS); OpenSSL 3.0+ for library support; nginx 1.21.4+ for SSL_sendfile · FreeBSD only, on architectures with a physical-memory direct map (ktls(4)): amd64, arm64, riscv64, powerpc64. i386 GENERIC does not include KERN_TLS. NIC offload needs Chelsio T6/T7 or Mellanox/NVIDIA ConnectX-6 Dx-class NICs with TXTLS4/TXTLS6 capability.
+
+**Vs siblings:** Siblings such as AWS-LC, wolfSSL, picotls fusion and ChaChaCha make the crypto or the handshake faster inside a userspace library, so every byte is still copied through userspace. kTLS removes those copies and can move bulk encryption onto the NIC while still using OpenSSL for the handshake. Pick it for high-bandwidth static-content serving on FreeBSD. Pick AWS-LC or wolfSSL for handshake-heavy load, and picotls fusion or ChaChaCha when you need a faster AEAD in portable userspace code.
+
+**Gotchas:**
+- Cipher coverage differs by mode. Software kTLS takes AES-GCM (TLS 1.2/1.3), AES-CBC with HMAC (TLS 1.0-1.2, can be turned off with kern.ipc.tls.cbc_enable) and ChaCha20-Poly1305 (TLS 1.2/1.3). mlx5en offloads only AES-GCM-128/256 on TLS 1.2/1.3, and cxgbe T6 only TLS 1.1/1.2 (no TLS 1.3). Anything else quietly falls back to software kTLS or userspace.
+- NIC offload performance depends on NIC firmware and the PCIe setup. The NIC keeps per-session state (about 400k sessions at 400 Gb/s) and pages it to host RAM. ConnectX-6 Dx pre-release firmware peaked at 125 Gb/s per NIC and sustained 75, and reached 190 only after firmware enabled Relaxed Ordering and TLS_OPTIMIZE. Ampere needed PCIe extended tags (240 to 320 Gb/s).
+- The software crypto backend matters: in the same Netflix ablation, sendfile+kTLS with ISA-L crypto did 240 Gb/s and with the stock aesni path 180 Gb/s, both at 80% CPU.
+- Security fixes have caused regressions. The June 2026 RX fix broke kTLS receive (EBADMSG) in 15.0-RELEASE-p10 (bug 296498, fixed in main on 2026-07-29 and merged to stable). Pin and test patch levels, and keep kern.ipc.tls.enable / rx_enable handy as kill switches.
+
+**Status:** Actively maintained in freebsd-src main (uipc_ktls.c last changed 2026-09-23), BSD-2-Clause, shipped since FreeBSD 13.0, in GENERIC and base OpenSSL by default on amd64/arm64/riscv/powerpc64 on current main, and run in production at Netflix; it is an OS feature you turn on rather than code you vendor, and 2026 brought two security advisories plus open receive/sendfile bugs.
+
+[repo](https://github.com/freebsd/freebsd-src) · [benchmark](https://people.freebsd.org/~rrs/asiabsd_2015_tls.pdf)
+
+##### Graviola  `Rust`  `Apache-2.0 OR ISC OR MIT-0`  `active`  `Tier C`
+
+Rust crypto on formally verified s2n-bignum assembly, a rustls backend; one-handshake processes ran 1.6-3.8x faster than OpenSSL-backed.
+
+**Beats:** OpenSSL — A third-party blog by the wtx author used hyperfine (10 runs after 10 warmups) on a Ryzen 9 5900X running Fedora (kernel 7.0.11) to time whole processes, each decoding PEM files, doing one TLS 1.3 handshake over loopback in wtx 0.49, and exiting; Graviola took about 1.26-5.90 ms and the OpenSSL backend 4.41-10.20 ms (the `openssl` 0.10 crate against unvendored system OpenSSL, version and rustc version not stated), so OpenSSL was 1.6-3.8x slower across 45 cipher, group and certificate combinations. OpenSSL was slowest in every combination, but Graviola was fastest in only 16 of 45, and the author cannot explain the near-constant 3.1-4.7 ms gap.
+
+**Known shortcoming:** Evidence is one personal blog (the wtx author): OpenSSL trails by a near-constant 3.1-4.7 ms in every combination, which fits a fixed per-process cost more than faster crypto (cause unknown to the author); Graviola is fastest in only 16 of 45 combinations. No rustc or OpenSSL version. Crypto primitives only, x86-64/aarch64.
+
+**Known shortcoming:** The gap to OpenSSL is a constant 3.1-4.7 ms in every combination, which looks like fixed process overhead rather than faster handshake math; the OpenSSL side is the openssl 0.10 crate linking Fedora's system OpenSSL (versions not stated), and current wtx dropped its OpenSSL backend, so the harness cannot be re-run. Not an OpenSSL replacement: no C API; it replaces ring/aws-lc-rs as a rustls provider. Every entry point asserts CPU features and panics without them (ADX/AVX2/BMI2 on x86_64, so no Haswell; VMs hiding ADX panic, #222); no Pi 4, RISC-V, 32-bit, wasm or no_std. Loses to aws-lc-rs on RSA-2048 signing (2,281 vs 5,276/s), ECDSA-P384, P-384 key exchange and bulk AES-256-GCM. Pre-1.0; no SHA-1, ML-DSA or RSA encryption; RSA key generation not side-channel safe. Valgrind needs a special build flag. MSRV differs between graviola (1.89) and rustls-graviola (1.85).
+
+**How:** The field and group arithmetic for P-256, P-384, X25519/Ed25519, the RSA bignums, the ML-KEM NTT and Keccak-f is AWS s2n-bignum's hand-written, formally verified assembly, which a script converts into Rust inline `asm!` so only rustc is needed. It uses Booth-encoded fixed windows for point multiplication (7-bit with a 148 KB precomputed table for the P-256 base point, 5-bit elsewhere) and a 4-bit fixed window with CRT for RSA. Other parts are tuned for specific CPU features: stitched by-8 AES-CTR plus by-8 GHASH, an optional AVX-512/VAES by-16 path chosen at runtime, SHA-NI and Arm SHA intrinsics, and 4-way AVX2 Keccak for ML-KEM sampling. In the handshake benchmark the lead over OpenSSL is a nearly constant 3.1-4.7 ms, which points to a fixed per-process cost on the OpenSSL side, not to faster handshake math.
+
+**Use it when:**
+- Rust services on rustls 0.23 whose handshakes use ECDSA-P256, X25519 or X25519MLKEM768. Graviola's own benchmark ranks it first in ECDSA-P256 signing (92,694 vs aws-lc-rs 85,967 sigs/s on a Ryzen 9 7940HS), X25519 (42,363 vs 42,038 kx/s) and ML-KEM-768 (33,520 vs 31,044 per s).
+- Builds that must avoid a C compiler, CMake or assembler, such as cross-compiling or hermetic cargo-only CI. The README says the crate builds in under one second with only rustc.
+- Short-lived processes such as CLIs, test harnesses and serverless cold starts that do one TLS 1.3 handshake. In the c410-f3r test on a Ryzen 9 5900X, a whole run took about 1.3-5.9 ms with Graviola and 4.4-10.2 ms with the OpenSSL backend.
+- Arm hosts with AES, SHA2 and PMULL (Apple M-series, Raspberry Pi 5). Graviola leads on aarch64 in ECDSA-P256 signing (84,286 vs aws-lc-rs 64,224 sigs/s on an M2) and in ML-KEM-768.
+- Cases where formally verified bignum and ECC code, constant-time table selection, Arm DIT and SIMD-register zeroing after secret operations matter more than FIPS certification.
+
+**Skip it when:**
+- Servers that sign handshakes with RSA keys. On x86_64, RSA-2048 signing runs at 2,280.7 sigs/s against 5,276.3 for aws-lc-rs. Issue #209 traces this to bignum_emontredc_8n.
+- P-384 certificates or key exchange. Graviola reaches roughly 56-68% of aws-lc-rs throughput here (ECDSA-P384 signing 9,175.8 vs 16,385 sigs/s; P384 kx 4,861.2 vs 7,197 kx/s). In the handshake blog, aws-lc-rs also beat it with P-384 certificates.
+- Bulk AES-256-GCM throughput. Graviola ranks third on x86_64 (8.79 vs 9.88 GiB/s for aws-lc-rs) and fourth on the M2 (5.25 GiB/s).
+- CPUs without ADX, AVX2 or BMI2, including Haswell, VMs that hide ADX (issue #222: an OVH VPS reported as 'Haswell, no TSX') and Raspberry Pi 4. Also RISC-V, 32-bit, wasm and no_std targets. None of these have a software fallback (issues #95, #57).
+- Projects that need the OpenSSL API or C ABI, FIPS, an audited and mature library (the README says 'very new, so exercise due caution'), QUIC through quinn (still unmerged, issue #98), SHA-1, ML-DSA or RSA encryption (a stated non-goal).
+
+**Integration:** crate · cfg-if, getrandom 0.3 (graviola); rustls 0.23.18+ (rustls-graviola). No C toolchain. · Rust 1.89, edition 2024 (graviola 0.4.1 rust-version); rustls-graviola 0.4.0 declares 1.85 but pulls in graviola 0.4.x · x86_64 with AES, PCLMULQDQ, AVX, AVX2, BMI1/BMI2, ADX (Broadwell / AMD Zen and later; AVX-512 AES-GCM path used when present); aarch64 with NEON, AES, PMULL, SHA2. Needs std.
+
+**Vs siblings:** Pick Graviola when you already use rustls in Rust and want a cargo-only build with top ECDSA-P256, X25519 and ML-KEM speed. Pick AWS-LC when you need an OpenSSL-style C API, FIPS, or fast RSA and P-384. Pick ztls or picotls fusion when the bottleneck is record or AEAD throughput, not handshakes.
+
+**Gotchas:**
+- An unsupported CPU does not return an error. Every public entry point runs `verify_cpu_features()`, and that function calls `assert!`, so the process panics on the first crypto call ('graviola requires adx CPU support'). Test on the real deployment hardware or VM type.
+- Valgrind does not emulate ADX (KDE bug 494162). Set the `VALGRIND_BUG_494162` environment variable at compile time (read by `option_env!`) to run under Valgrind.
+- RSA key generation is not side-channel safe. ECDSA uses hedged RFC 6979 nonces (extra random input), so repeated signatures of the same message differ.
+- GitHub shows the license as NOASSERTION. The real license is 'Apache-2.0 OR ISC OR MIT-0' (per Cargo.toml and SPDX headers), which license scanners that expect MIT or Apache may flag.
+
+**Status:** The project is active: last commit 2026-08-24, graviola 0.4.1 on crates.io (about 282k downloads), no RustSec advisories. It is pre-1.0 and describes itself as very new, and it is permissively licensed, so it is easy to adopt as a rustls provider but not yet a conservative choice.
+
+[repo](https://github.com/ctz/graviola) · [benchmark](https://c410-f3r.github.io/thoughts/tls-handshakes-measuring-the-performance-of-4-cryptography-libraries/)
+
+##### picotls "fusion" AES-GCM engine  `C`  `MIT`  `active`  `Tier C`
+
+x86-64 AES-GCM engine inside picotls, tuned for short QUIC packets; ~1.3x OpenSSL 1.1.1g throughput at 1440-byte records.
+
+**Beats:** OpenSSL — In the author's PR #310 chart, fusion (fusionbench.c, AES-128-GCM, 13-byte AAD) beats `openssl speed -aead` from OpenSSL 1.1.1g by 1.32-1.36x at 1440-byte blocks on a Core i5 9400, Ryzen 3 3200G and Core m3 6Y30. At 16 KB the gap is 1.01-1.15x, and on the m3 fusion is slightly behind OpenSSL's AES-GCM core-only figure (3.36e9 vs 3.41e9 B/s). The two sides used different harnesses, and no compiler or flags were given.
+
+**Known shortcoming:** The fusion AES-128-GCM win is 1.32-1.36x OpenSSL 1.1.1g at 1440-byte blocks but only 1.01-1.15x at 16 KB, against an old OpenSSL. x86-64 AES-NI/AVX2 only. No compiler or flags stated. Bundled crypto includes CC0 code (no patent grant).
+
+**Known shortcoming:** The fusion AES-GCM engine leaves aead_do_encrypt_v and the streaming encrypt callbacks as assert(!"FIXME") stubs (silently writing nothing under NDEBUG), so it is unsafe whenever picotls owns the TLS-over-TCP record layer; picoquic turned PTLS_WITH_FUSION off on 2026-09-17 (8b8c302) after QMux hit it. H2O uses fusion only for QUIC and the separate non-temporal engine for TCP. The lead over OpenSSL shrinks to 1.01-1.15x at 16 KB and fusion is slightly slower on a Core m3; the non-temporal engine was 84-102% of OpenSSL 1.1.1f with 128-bit instructions (1.67-1.90x only with VAES on Zen 3), all against 2020 OpenSSL, with no compiler or flags. The QUIC engine never uses VAES-256. CPU detection bugs: Windows tests the VMX bit instead of PCLMULQDQ, no XGETBV check, leaf-7 accepts VAES or VPCLMULQDQ alone; Valgrind issue #380 open. x86-64 only (#379). Intentional over-reads; unaligned edges read-modify-write whole 64-byte lines. No EVP interface. AES-256 now exists (the record's 'to-do' is outdated).
+
+**How:** It stitches AES-CTR and GHASH into a single loop written in C intrinsics (AES-NI + PCLMULQDQ): six AES blocks are in flight while AAD and ciphertext are multiplied into GHASH, so AAD processing and tag finalization overlap with payload encryption instead of running as separate phases. GHASH key powers are precomputed per context (sized for 1500-byte records, grown on demand), so each record needs only one GHASH reduction. When a record is short and an AES lane would sit idle, that lane computes the QUIC header-protection mask, which is why header protection is nearly free on the chart. The separate non-temporal TLS engine adds a 256-bit VAES/VPCLMULQDQ path and writes ciphertext with streaming stores, so data headed for the NIC does not pollute the cache.
+
+**Use it when:**
+- QUIC endpoints on x86-64 with AES-NI, PCLMULQDQ and AVX2 where packets are ~1200-1500 bytes and AES-GCM shows up in profiles; this is where the measured gain is 1.3x or more.
+- You already use picotls (H2O, quicly, picoquic) and can swap the AES-GCM cipher suites for the fusion ones after ptls_fusion_is_supported_by_cpu() returns true, as H2O does for its QUIC listeners.
+- QUIC stacks that want packet protection and header protection computed in one pass via the supplementary-encryption argument.
+- TLS-over-TCP senders doing zero-copy send, especially on CPUs without DDIO or with VAES (Zen 3+), via ptls_non_temporal_aes*gcm; this is H2O's ssl-zerocopy mode, which turns kTLS off.
+
+**Skip it when:**
+- Bulk TLS with 16 KB records: the gain over OpenSSL 1.1.1g shrinks to 1-15%, the non-temporal engine without VAES measured 84-102% of OpenSSL at 16 KB, and newer OpenSSL, BoringSSL or AWS-LC builds were never compared.
+- As the AEAD of any picotls connection where picotls owns the record layer (TLS over TCP, no update_traffic_key callback): ptls_fusion_aes*gcm leaves do_encrypt_v as an assert(!"FIXME") stub, and picotls calls it for every record. picoquic hit this in its QMux (QUIC over TLS/TCP) mode and turned fusion off.
+- Non-x86 targets (aarch64, Apple Silicon): there is no fusion code path, and issue #379 asking for one has been open since 2022.
+- Anything beyond AES-GCM: fusion has no ChaCha20-Poly1305, its AES-CTR cipher handles at most 16 bytes (header protection only), and its AES-ECB is encrypt-only.
+- Processes that must survive allocation failure: context creation and capacity growth assert on out-of-memory (and dereference NULL when built with NDEBUG).
+
+**Integration:** static lib (picotls-fusion target, built by CMake next to picotls-core; shared-library builds added 2026-09-25) · picotls-core; a full TLS stack also needs a picotls crypto binding (OpenSSL libcrypto or minicrypto) for key exchange, hashing and certificates · C99 compiler that accepts -mavx2 -maes -mpclmul -mvaes -mvpclmulqdq and compiles the 256-bit AES intrinsics (the CMake probe CC_HAS_AESNI256 turns WITH_FUSION off otherwise); MSVC via the picotlsvs projects · x86-64 only; at runtime it needs AES-NI, PCLMULQDQ and AVX2 (ptls_fusion_is_supported_by_cpu), and the non-temporal encrypt path uses VAES/VPCLMULQDQ when present
+
+**Vs siblings:** Pick fusion over AWS-LC, wolfSSL or stock OpenSSL when you are already on picotls/quicly and the hot path is per-packet QUIC AES-GCM on x86-64. Pick AWS-LC, wolfSSL or ztls when you need a complete TLS-over-TCP library, and ChaChaCha when you need ChaCha20-Poly1305.
+
+**Gotchas:**
+- ptls_fusion_aes128gcm/256gcm are QUIC-only. do_encrypt_v and the streaming init/update/final callbacks are assert(!"FIXME") stubs, and picotls.h says TLS-over-TCP ciphers MUST implement do_encrypt_v. With asserts on, any ptls_aead_encrypt_v call aborts; with NDEBUG it silently writes nothing. The picotls test suite skips multi-vector tests for these two algorithms, and picoquic master defaulted PTLS_WITH_FUSION to OFF on 2026-09-17 (commit 8b8c302).
+- Call ptls_fusion_is_supported_by_cpu() first: lib/fusion.c is compiled with AVX2/VAES flags, so an unsupported CPU faults. The Windows CPUID check tests ECX bit 5 (VMX) where PCLMULQDQ is bit 1, and neither path checks OS AVX state through XGETBV.
+- The QUIC engine never uses the 256-bit VAES path (the source says 'no support for aesni256 yet'), and non-temporal decryption is always 128-bit; only non-temporal encryption gets the VAES speedup.
+- The code reads past buffer ends on purpose (loadn128/256 are marked NO_SANITIZE_ADDRESS), and the non-temporal engine does a read-modify-write of the whole 64-byte line at unaligned output edges, so other threads must not write adjacent bytes during encryption. Valgrind noise from CPU detection (#380) is still open; a 2022 heap over-read in set_capacity (#418) was fixed.
+
+**Status:** Active (lib/fusion.c last changed May 2026, repo pushed 2026-09-25) and MIT, with Apache-2.0 also covering one OpenSSL-derived function, but the QUIC AEAD still ships unimplemented callbacks, and picoquic disabled fusion by default because of them.
+
+[repo](https://github.com/h2o/picotls) · [benchmark](https://github.com/h2o/picotls/pull/310)
+
+##### ring  `Rust`  `Apache-2.0 AND ISC (ring's own code ISC; BoringSSL-derived code Apache-2.0 per LICENSE-BoringSSL; once_cell polyfill Apache-2.0/MIT)`  `active`  `Tier C`
+
+Rust crypto-primitives crate (BoringSSL-derived C/asm) behind rustls; beat OpenSSL 1.5-3.7x on whole-process TLS handshake runs.
+
+**Beats:** OpenSSL — One blog benchmark by the WTX author timed whole processes with hyperfine (10 runs, mean): decode 3 PEM files, do one loopback TLS handshake in WTX, exit. It used a Rust 'deploy' profile (opt-level 3, fat LTO, codegen-units 1) with rustc and OpenSSL versions unstated, on a Ryzen 9 5900X under Fedora (kernel 7.0.11). Re-reading the SVG bars gives ring 1.29-6.49 ms vs OpenSSL 4.40-10.17 ms, 1.47-3.67x faster (median about 2.15x) in all 45 certificate/key-agreement/cipher combinations, but the gap is a near-constant 2.2-4.4 ms that the author could not explain, and ring was fastest of the four backends in only 16 of 45.
+
+**Known shortcoming:** The only evidence (c410-f3r WTX blog, numbers derived from SVG bar heights) times whole program runs; OpenSSL's constant 2-5 ms gap looks like startup/integration overhead rather than slower crypto. rustc and OpenSSL versions/flags not stated. ring is fastest of the four libraries in only 16 of 45 combinations and never with secp384r1 key exchange.
+
+**Known shortcoming:** P-384 runs on generic C math (no P-384 assembly), so with ECDSA-P384 certificates or secp384r1 key exchange ring took 1.4-2.2x as long as aws-lc-rs; it beats aws-lc-rs on RSA-PSS rows with X25519/secp256r1 (~0.71-0.79x the time). Only 10 runs per point. No release for 18 months (0.17.14, 2025-03-11) while main moved to Rust 1.85/edition 2024; release request #2840 open. The README calls it 'an experiment' and quotes BoringSSL's advice not to depend on it. No post-quantum key exchange (rustls recommends aws-lc-rs), P-521, finite-field DH, static-key ECDH, AES-CTR/CBC or FIPS validation. Advisories: RUSTSEC-2025-0009 (CVE-2025-4432, QUIC packet panic with overflow checks, fixed 0.17.12); versions before 0.17 unmaintained (RUSTSEC-2025-0010). Open bug #2868: ChaCha20-Poly1305 wrong output for 512+ byte messages under Rosetta on an Apple M5 (unconfirmed elsewhere; blocks the next release). x86-64 macOS deprecated (#2751); constant-time protections probably fail on WebAssembly/JIT targets; no blinding.
+
+**How:** Most hot paths are BoringSSL/OpenSSL-lineage perlasm assembly chosen at runtime by CPU feature detection: AES-NI+PCLMULQDQ+MOVBE stitched AES-GCM, an AVX2 VAES/VPCLMULQDQ AES-GCM path (added in 0.17.13, fixed in 0.17.14), vector-permutation (vpaes) and bitsliced AES fallbacks, SIMD ChaCha20-Poly1305, Montgomery-multiplication asm for RSA, and the Gueron-Krasnov (Intel) P-256 assembly. X25519 uses fiat-crypto field arithmetic (third_party/fiat), with an ADX assembly path on x86-64 (not Windows) and NEON on 32-bit ARM Linux/Android. In the cited benchmark, most of ring's lead over OpenSSL is a near-constant 2.2-4.4 ms extra per OpenSSL process that the benchmark author could not explain, so the result reflects integration and startup cost as much as primitive speed.
+
+**Use it when:**
+- Rust TLS clients/servers on rustls (or wtx) whose handshakes use X25519 or P-256 key agreement with Ed25519, ECDSA-P256 or RSA-PSS certificates: in the benchmark ring was fastest or within about 0.1 ms of the fastest backend on these rows (e.g. Ed25519 + X25519: 1.29-1.32 ms vs OpenSSL 4.40-4.73 ms).
+- RSA-PSS certificate handshakes: ring beat aws-lc-rs in every RSA-PSS row with X25519 or secp256r1 (about 0.71-0.79x of aws-lc-rs time, e.g. 1.76 vs 2.47 ms).
+- Rust binaries that must build with only cargo and a C compiler (no CMake, Go, Perl or NASM when using the crates.io package) on x86, x86-64, 32-bit ARM or aarch64, including cross-compiles and no_std (+alloc) targets.
+- Short-lived processes that open one TLS connection (CLIs, test harnesses), where the benchmark's whole-process time fell from about 4.4-10.2 ms with OpenSSL to 1.3-6.5 ms with ring.
+- Code that needs only primitives (AEAD for QUIC/Noise, HKDF, signature verification for webpki-style X.509) and benefits from a small, misuse-resistant API.
+
+**Skip it when:**
+- Anything P-384-heavy: with ECDSA-P384 certificates, or secp384r1 key agreement plus an ECDSA-P256/Ed25519 certificate, ring was 1.4-2.2x slower than aws-lc-rs (e.g. ECDSA-P384 + X25519 3.40 vs 1.79 ms); P-384 runs on portable C with generic bn_mul_mont_small Montgomery code, and the packaged sources have no P-384-specific assembly.
+- You need post-quantum key exchange (ML-KEM hybrids), P-521, finite-field DH, static-key ECDH, AES-CTR/CBC or streaming (pre-hashed) signing: none is offered; the rustls README says the ring provider 'does not support post-quantum algorithms', and P-521 and static-ECDH issues have been open since 2016-2023. No FIPS 140 validation is documented.
+- You need a steady release train: the last crates.io release is 0.17.14 (2025-03-11); main holds about 18 months of unreleased work and a 'Request for new release' issue has been open since 2026-05-12. The README now calls the project 'an experiment' and quotes BoringSSL's advice that third parties not depend on it.
+- x86-64 macOS or other lightly tested targets: issue #2751 (closed completed) deprecates x86-64 macOS because CI can no longer test ADX/AVX2/AVX-512 paths there; the README warns against toolchains or targets that BoringSSL does not support, and SIDE-CHANNELS.md says constant-time mitigations likely fail on WebAssembly/JIT targets and that ring uses no blinding.
+- Non-Rust callers wanting an OpenSSL replacement: there is no C API, no X.509/PEM handling and no TLS protocol code.
+
+**Integration:** crate · cfg-if, getrandom, untrusted; libc on ARM Linux/Android and Apple aarch64; windows-link on aarch64 Windows; build-time: cc crate plus a C (not C++) compiler that can assemble .S files. Building from Git additionally needs Perl, and NASM for Windows x86/x86-64. · Released 0.17.14: Rust 1.66 (crates.io rust_version). Current main: Rust 1.85, edition 2024. Windows needs Visual Studio 2022 Build Tools (plus the clang component for aarch64-pc-windows-msvc). · Assembly fast paths on x86, x86-64, 32-bit ARM and little-endian aarch64 (Linux, Android, Apple, Windows) with runtime CPU feature detection; portable fallbacks elsewhere, including wasm32 (wasm32_unknown_unknown_js feature) and no_std targets. x86-64 macOS deprecated (issue #2751).
+
+**Vs siblings:** Pick ring over aws-lc-rs when your handshakes use X25519/P-256 with Ed25519, ECDSA-P256 or RSA-PSS certificates and you want the simpler cargo-plus-C-compiler build; pick aws-lc-rs for P-384 or post-quantum key exchange (the rustls team recommends aws-lc-rs for features and performance). Graviola was fastest in as many combinations (16 of 45) as ring; ring is not an alternative to rustls but one of its crypto backends.
+
+**Gotchas:**
+- Pin >= 0.17.12: RUSTSEC-2025-0009 / CVE-2025-4432 lets a crafted QUIC packet panic HeaderProtectionKey::new_mask() when overflow checks are enabled (default in debug builds, opt-in for release); AES-GCM could also panic near 64 GB in one call. 0.16.x is marked unmaintained (RUSTSEC-2025-0010), and fixes are hard to backport before 0.17.10 because of the license change.
+- Open issue #2868 (2026-07): ChaCha20-Poly1305 produced wrong output for messages of 512 bytes and up in x86-64 builds under Rosetta on an Apple M5. It was not reproduced on M4 Pro or on an M5 Pro with newer macOS and is unresolved; the maintainer asked for M5 help with it to speed up the next release.
+- API shape differs from EVP: one-shot signing only (no separate digest step), in-place AEAD with the tag appended or separate, nonces from a NonceSequence unless you use LessSafeKey, and agree_ephemeral consumes the EphemeralPrivateKey.
+- Maintenance history: RUSTSEC-2025-0007 flagged ring unmaintained on 2025-02-20 and was withdrawn on 2025-02-22 after the rustls team got access; the advisory now says things are 'more-or-less back to how they were before'.
+
+**Status:** Main is active (last commit 2026-07-22) but the newest crates.io release, 0.17.14, dates from 2025-03-11; licensed Apache-2.0 AND ISC and very widely depended on (about 759M crates.io downloads), so it is safe to depend on from crates.io despite the README's 'experiment' wording.
+
+[repo](https://github.com/briansmith/ring) · [benchmark](https://c410-f3r.github.io/thoughts/tls-handshakes-measuring-the-performance-of-4-cryptography-libraries/)
+
+#### websocket-grpc-rpc
+
+##### brpc  `C++`  `Apache-2.0`  `active`  `Tier C`
+
+Baidu's C++ RPC framework built on bthread M:N scheduling; its 2016 benchmark shows 6-24x gRPC 0.11's QPS.
+
+**Beats:** gRPC — Baidu's own 2015 to January 2016 benchmark ran internal brpc r31906 against gRPC release-0_11 and an internal Apache Thrift 0.9.1 build (plus Baidu's UB, hulu-pbrpc and sofa-pbrpc), with no compiler or flags stated, on a 24-HT-core E5-2620 box and 1GbE/10GbE E5-2420/2620 clusters running Linux 2.6.32. Read off the charts, single-connection brpc did ~216k QPS vs gRPC's ~33k for 16 B echo requests on one machine, and ~950k vs ~39k server QPS with 32 cross-machine clients at 32 B (~24x); some gRPC requests timed out in the same-machine latency test.
+
+**Known shortcoming:** The charts date from January 2016 against gRPC release-0_11, so the 6.5-24x margins over gRPC reflect a very old gRPC. Thrift beats brpc at 1-8 client threads and beats single-connection brpc at requests of 16 KB and up.
+
+**Known shortcoming:** No gRPC streaming (#2791) and incomplete h2 flow control (#516), so only a partial gRPC replacement; C++ API is protobuf cc_generic_services, not gRPC stubs. Built-in services are on the main port by default; auth bypasses and parser bounds fixes landed only in 1.18.0 (2026-09). bthreads can migrate between pthreads, so thread_local values can change mid-function. Many English docs are stubs pointing to Chinese.
+
+**How:** Every request runs in its own bthread. bthread is an M:N user-space threading library: each pthread worker has its own run queue, idle workers steal work from others, and a futex-like 'butex' lets bthreads and pthreads wake each other. The edge-triggered epoll EventDispatcher does no reading itself. A per-fd atomic counter starts one bthread per readable fd, which makes dispatch wait-free, and even messages from the same fd are parsed in parallel, so one large or slow message does not hold up the others. Writers to a shared connection go through a wait-free MPSC linked list: the first writer does an atomic exchange on the write head and writes in place, later ones queue, and a KeepWrite bthread sends the rest in batches. With IOBuf (non-contiguous, zero-copy buffers), this lets one multiplexed connection scale with client threads.
+
+**Use it when:**
+- C++ backend services that fan out to many downstreams and see long-tail requests, where p99 of normal requests matters. In the benchmark's latency CDFs (1% of requests taking 5-15 ms), brpc's normal requests were barely affected, while sofa-pbrpc and hulu-pbrpc had 2.5-30% of normal requests disrupted and gRPC's timed out or went out of control.
+- Small-message (<8 KB) RPC at high concurrency (16+ client threads or many clients) over one multiplexed connection. That is where the benchmark gap over gRPC and Thrift is largest, and it grows with thread and client count.
+- Organizations that need one server to speak several protocols on one port (baidu_std, HTTP/h2+json, unary gRPC, Thrift, legacy Baidu nshead/UB), or a thread-safe client for redis, memcached or Thrift.
+- Teams that want built-in production tooling: /status, /vars (bvar), /rpcz tracing, CPU, heap and contention profilers, and adaptive concurrency limiting.
+- Bulk transfer with pooled connections (baidu-rpc_mc reached 2.3 GB/s on one machine in the benchmark), or RDMA transport (built with -DWITH_RDMA).
+
+**Skip it when:**
+- You need gRPC streaming (client, server or bidi) or the wider gRPC ecosystem. A maintainer confirmed in 2024 that bRPC does not support gRPC streaming (#2791), and the streaming requests #642, #843 and #1589, like the xDS request #2029, are still open.
+- Low client concurrency or large single-connection payloads. In the benchmark, Thrift and UB beat brpc at 1-8 client threads, and single-connection brpc fell below thrift_mc at 16 KB+ requests.
+- Windows targets, or production on macOS. Supported environments are Linux (and WSL), macOS and Docker, and the docs say macOS performance is worse than Linux and should not be used for performance-critical services.
+- Polyglot codebases that expect generated clients per language. Only the C++ implementation is open source; other languages must use HTTP/h2+json or unary gRPC.
+- Teams that cannot read Chinese or want a small dependency footprint. 33 of the 75 docs/en pages (including benchmark, load_balancing, flags, rpcz and the profilers) are stubs pointing to the Chinese version, and the build needs gflags, protobuf, leveldb, OpenSSL and zlib.
+
+**Integration:** static lib (shared lib also built by default) · gflags, protobuf (3.0+ per docs; abseil too when protobuf > 4.21; 1.18.0 adds protobuf v35), leveldb, OpenSSL (or BoringSSL), zlib, pthread/dl/rt; optional glog, thrift, snappy, gperftools/tcmalloc, libunwind (bthread tracer), RDMA libs · C++14 (C++17 when protobuf > 4.21); CMake requires GCC 5+ or Clang 3.5+ (docs prefer GCC 8.2+); CMake 3.16+, config_brpc.sh+make, Bazel, or vcpkg · Linux x86-64 (SSE4.2 enabled for CRC32C) and aarch64 in CI/docs; bthread context-switch code also covers i386, arm, loongarch64 and riscv64; macOS x86-64 and Apple Silicon (slower than Linux); Windows not listed as supported
+
+**Vs siblings:** Pick brpc over grpcxx when you need a whole framework (naming, load balancing, multi-protocol, profilers) on C++14 rather than a C++20 unary gRPC server. Pick it over rest_rpc (which measured 1.2-1.9x brpc on a 2019 same-machine echo test, but uses msgpack and has no gRPC or HTTP interop) when you need protobuf and gRPC compatibility. Against SRPC, per SRPC's own charts, brpc is slightly faster on one machine (~346k vs ~310k QPS) and slower across machines (~405k vs ~520k), so choose on ecosystem: brpc's Baidu protocols and tooling versus Sogou Workflow integration.
+
+**Gotchas:**
+- A bthread can resume on a different pthread after any blocking bthread call, so thread_local, __thread, pthread_getspecific and pthread_self() values can change mid-function. Use bthread-local storage (bthread_key_create), and don't hold a pthread mutex across an RPC. With GCC 4, the docs require -D__const__=__unused__ to avoid a stale-errno bug.
+- Built-in services (/status, /vars, /flags, profilers) are on by default and served on the main port (has_builtin_services=true, internal_port=-1). Set internal_port or disable them before exposing the server publicly. Auth bypasses around internal_port were fixed only in 1.18.0 (Sept 2026: #3308, #3511, #3525), and that release also fixed many parser bounds and out-of-bounds bugs, so don't run older versions on untrusted networks.
+- bRPC uses some protobuf internal APIs, so a protobuf upgrade can break it. 1.8.0+ no longer builds with protobuf 2.x, and .proto files need `option cc_generic_services = true`.
+- h2/gRPC flow control is incomplete. Issue #516 still lists as unfixed that a response larger than the peer's window gets RST_STREAM instead of waiting for WINDOW_UPDATE; users worked around it by raising the gRPC client's flow-control window. Client-request flow control arrived only in 1.18.0 (#3430).
+
+**Status:** Actively maintained Apache project (1.18.0 released 2026-09-17, commits as of 2026-09-26, 17.6k stars) under Apache-2.0. It is a built library with a real dependency chain, available through CMake, Bazel or vcpkg, and its benchmark page is a decade old and flags itself as possibly outdated.
+
+[repo](https://github.com/apache/brpc) · [benchmark](https://github.com/apache/brpc/blob/master/docs/cn/benchmark.md)
+
+##### DRPC  `Go`  `MIT`  `active`  `Tier C`
+
+Storj's small Go replacement for grpc-go, using its own framed protocol instead of HTTP/2; not wire-compatible with gRPC.
+
+**Beats:** gRPC — Go testing benchmarks in internal/grpccompat compare DRPC with grpc-go v1.64.0 (README refreshed 2024-05-31). Both run over an in-memory io.Pipe with one connection and one sequential caller, with DRPC using ManualFlush. Messages are a few bytes, 2 KiB or 1 MiB. Time per op fell 46-73% (unary 68-72%), throughput rose 86-263%, and allocations fell 83-97%. No hardware or Go version is stated, and the README says the environment was not controlled and neither side was tuned.
+
+**Known shortcoming:** Benchmark is in-process over io.Pipe, one connection, one sequential caller, DRPC with ManualFlush vs default grpc-go (v1.64.0, refreshed 2024-05); no hardware or Go version; the README says neither side was tuned. One RPC per connection at a time (semaphore of 1); concurrency needs drpcpool, yamux or QUIC, so multi-client QPS numbers of rpcx/Kitex/cmd-stream are not comparable. Cancelling a context mid-RPC closes the whole connection unless SoftCancel is set (#37 open since 2022, flaky pooled test). 4 MiB default message limit ('data overflow'). Not wire-compatible with gRPC (drpcmigrate.ListenMux helps migrate). Go only; C++/Rust/Node ports incomplete. v1.0.0 (2025-07) but README still says beta; original author left Storj; sparse commits.
+
+**How:** DRPC drops HTTP/2 (no HPACK, header parsing or flow-control windows). Each frame is a 1-byte header (control bit, 6-bit kind, done bit) plus protobuf varints for stream ID, message ID and length. There is no stream multiplexing: a size-1 semaphore allows one active RPC per connection, and the reader rejects stream IDs that do not increase, which keeps packet reassembly simple. The client marshals into one reused buffer per connection (MarshalAppend), so a unary call makes 7-9 allocations against 182-280 for grpc-go in the README table.
+
+**Use it when:**
+- Go-only services on protobuf and grpc-go where per-call CPU, allocations or GC pressure matter. Storj reported 81% of one storage node's heap in gRPC before switching.
+- Large messages of about 1 MiB, unary or streaming: the README shows about 3x grpc-go's throughput (for example 618 MB/s vs 1939 MB/s unary)
+- Custom or unusual transports, including reverse connections where the TCP client serves the RPCs, because DRPC only needs a byte stream
+- Builds sensitive to binary size or dependency count: go.mod has 3 requirements and the core is about 3,600 lines
+
+**Skip it when:**
+- Polyglot systems: only Go is complete. The C++, Rust and Node ports are marked Incomplete, and JS/web and Python support are open issues.
+- Many concurrent RPCs to one peer over a single connection: calls on one Conn are serialized, so you need drpcpool, a yamux-based third-party package or QUIC streams
+- Setups that need gRPC ecosystem features, such as built-in load balancing, name resolution, service config, or interop with gRPC proxies and non-Go gRPC clients
+- Network-bound workloads: the published speedup excludes the network, so end-to-end gains will be smaller
+
+**Integration:** module · github.com/zeebo/errs, google.golang.org/protobuf (github.com/zeebo/assert for tests) · Go 1.19 (go.mod); protoc plus protoc-gen-go-drpc for code generation · any Go target (pure Go)
+
+**Vs siblings:** Pick DRPC over rpcx, Kitex or cmd-stream when you want to keep your .proto files and grpc-go-shaped generated Go code with a 3-dependency core, rather than adopt a different framework or codec. Note that those siblings report multi-client QPS, while DRPC's numbers come from one in-process connection, so they are not directly comparable. If you must stay wire-compatible with existing gRPC clients, look at wtx (Rust) instead.
+
+**Gotchas:**
+- Canceling a context while its RPC is still unfinished closes the whole connection by default. drpcmanager.Options.SoftCancel sends a cancel message instead. Issue #37, open since 2022, reports pooled connections failing with context.Canceled after an earlier cancel.
+- Messages larger than 4 MiB fail with a 'data overflow' protocol error. Raise drpcwire.ReaderOptions.MaximumBufferSize to allow larger ones.
+- The published benchmark enables drpcstream ManualFlush. With it on, you must type-assert the stream and call RawFlush yourself, so default-config numbers may differ.
+- drpcpool caps how many idle connections it caches, but it does not limit concurrency, so a burst of concurrent calls dials a burst of connections
+
+**Status:** Maintained but slow-moving: v1.0.0 was tagged in 2025 and the last commit was 2026-08-18. The original author has left Storj, and Storj staff keep it going. It is MIT-licensed, pure Go and small enough to audit or vendor.
+
+[repo](https://github.com/storj/drpc) · [benchmark](https://github.com/storj/drpc#benchmarks)
+
+##### Exposed (reflectionless RPC for Go)  `Go`  `MIT`  `abandoned`  `Tier C`
+
+Go RPC library over one batched TCP connection, derived from valyala/fastrpc; README shows ~1.1-3x gRPC echo throughput.
+
+**Beats:** gRPC — The README's single table compares exposed with grpc-go (gRPC version, codecs and Go version unstated) on one Intel i7-7700HQ laptop with 8 GB RAM and client and server on the same machine. exposed wins 70 of 75 echo configurations with a median of ~1.4x op/s: ~1.15-1.45x at concurrency 1, up to ~3x at 8 B/5 clients/concurrency 5000 (1,003,452 vs 329,040 op/s). Six of those wins are 32/64 KiB rows at concurrency 50,000 where gRPC failed or collapsed (0-413 op/s). The gRPC harness was never published (issue #6 is open), and the in-repo echo benchmark uses a pass-through codec that skips serialization, so the comparison cannot be reproduced and may be codec-asymmetric.
+
+**Known shortcoming:** The gRPC harness was never published (#6 open); the repo's own echo benchmark uses a pass-through codec that skips serialization, so if the README table used it, exposed skipped encoding while gRPC paid for protobuf; gRPC and Go versions unstated. Wins are uneven: 70 of 75 rows (median ~1.4x), six of them where gRPC collapsed at 32/64 KiB and 50,000 concurrency; gRPC wins with 10 clients at concurrency 50/500 for small messages (e.g. 508,941 vs 301,884 op/s). Code-reading bugs: 'handler not found' is written to a shared context, so callers get an empty success; DoContext returns work items to the pool on cancel while still in use (can hit 'BUG:' panics); Client has no Close and leaks two goroutines; Call hard-codes 120 s; handlers get a nil Context; the README server example doesn't compile. 'Reflectionless' covers dispatch only (gogo codec panics without generated Unmarshal; JSON codec uses reflection). Global unsynchronized handler registry keyed by xxhash64 of names. No streaming (#9), gRPC interop, metadata or interceptors; 16 MiB frame cap. Last commit 2018-08, no go.mod, codegen tool unlicensed; derived from valyala/fastrpc.
+
+**How:** It keeps the valyala/fastrpc transport design. Each Client multiplexes every call over a single TCP connection tagged with 4-byte request IDs, with separate reader and writer goroutines and 64 KiB bufio buffers. The writer flushes only when its queue is empty (or after an optional MaxBatchDelay timer), so concurrent requests are coalesced into few syscalls and packets (write batching / pipelining). Framing is bare TLV (8-byte xxhash64 of the operation name + 4-byte length + payload; the response is payload + error) with no HTTP/2 frames or HPACK headers, dispatch is a map lookup on that hash with closure factories instead of reflection, requests/responses/work items are recycled through sync.Pool, and a 1-second coarse clock avoids per-request time.Now/SetDeadline calls. That fits the table's lower allocation and GC counts in most rows (e.g. 472 MB and 111 GCs vs 1.4 GB and 538 GCs).
+
+**Use it when:**
+- Go-to-Go internal calls where you own both ends and want fewer allocations and GCs than grpc-go for small (8 B-1 KiB) messages.
+- Few clients with many calls in flight (concurrency 500-50,000 per the README): its largest margins (~2-3x op/s, several-fold lower p99) come from 1-5 clients at those concurrency levels.
+- Throughput-oriented traffic where batching writes is acceptable; MaxBatchDelay trades per-call latency for fewer packets.
+- As a small (~2.2k lines of non-test Go) readable reference implementation of fastrpc-style pipelined RPC to vendor or study.
+
+**Skip it when:**
+- You need gRPC interop, non-Go clients, HTTP/2 proxies or load balancers, metadata/headers, interceptors, service discovery or streaming (the bidirectional-stream PR #9 was never merged).
+- Many client connections each running moderate concurrency: with 10 clients at concurrency 50 or 500, grpc-go won at 8 B and 128 B payloads (e.g. 508,941 vs 301,884 op/s at 8 B/500).
+- Messages over 16 MiB (hard MaxBytesSize frame limit), or 32-64 KiB payloads at concurrency 50,000, where the table shows multi-second latencies and only ~170 to ~3,300 op/s.
+- Anything that needs a maintained dependency: last commit 2018-08-02, no go.mod, 'publish benchmark code' and 'improve test coverage' issues still open, one HN post with 3 points and 0 comments, and the required `expose` codegen repo has no license file.
+- Server-side deadlines or cancellation: handlers are called with a nil *Context, and timeouts and cancellation exist only on the client side.
+
+**Integration:** module · github.com/cespare/xxhash, github.com/gogo/protobuf, github.com/golang/snappy, github.com/rs/zerolog, golang.org/x/net/trace; optional codegen via github.com/thesyncim/expose (unlicensed) plus gogoproto generation · Go 1.10+ per README (CI: Go 1.10.x and tip, 2018); no go.mod, so it resolves as pseudo-version v0.0.0-20180802170311-61b3f891f668; builds on current Go not verified · any Go target with net.Conn (TCP by default, custom dialer allowed); CI ran linux and osx
+
+**Vs siblings:** Rarely. rpcx (~2.3-2.6x grpc-go), Kitex (1.5-1.7x) and cmd-stream (~3-4.6x) are Go siblings with 2026 commits and similar or larger published margins, and DRPC describes itself as a drop-in gRPC replacement. Pick exposed only if you want to vendor a ~2.2k-line fastrpc-style transport and own its fixes.
+
+**Gotchas:**
+- Handlers and their argument/reply factories are stored in process-global maps keyed by xxhash64 of the operation name and shared by every Server in the process; a duplicate name (or hash collision) panics at registration.
+- The default protobuf codec panics ('compile with gogoproto') on messages without a generated Unmarshal method, and the JSON codec uses reflection-based encoding/json, so 'reflectionless' describes dispatch, not encoding.
+- From reading common.go: for an unknown operation the 'handler not found' error goes to a shared context (h.Response) instead of the request's (eh.Response), so the caller gets an empty reply with no error; with protobuf that decodes as a zero-value success.
+- Client has no Close(): each Client starts a connection worker and a stale-request sweeper goroutine that never exit. Call() hard-codes a 120 s deadline. DoContext returns its pooled work item on cancel while connection goroutines may still hold it, and the pooled item's context field is never cleared, which can reach 'BUG:' panics or disable deadline sweeping on reuse. The README server example (`resp.(*string) = req.(*string)`) does not compile.
+
+**Status:** Abandoned since 2018-08-02 (27 stars, no tagged releases, no go.mod) but MIT-licensed (dual copyright with fastrpc's author) and small enough to vendor; use it as a starting point, not a dependency, and note that the `expose` codegen tool carries no license.
+
+[repo](https://github.com/thesyncim/exposed) · [benchmark](https://github.com/thesyncim/exposed (README benchmark table))
+
+##### fRPC (frpc-go)  `Go`  `Apache-2.0`  `stale`  `Tier C`
+
+Go proto3 RPC generator that swaps gRPC's HTTP/2 and Protobuf for 8-byte-header TCP framing and Polyglot encoding.
+
+**Beats:** gRPC — These are first-party results from August 2022 code: fRPC on frisbee-go v0.6.0 against grpc-go v1.48.0 with a default grpc.NewServer(), a single-string-field echo proto, go.mod 'go 1.18', and the actual Go toolchain and flags not stated, on a bare-metal Debian 11 host with 2x AMD EPYC 7643 and 256 GB RAM over a local network. fRPC reached 112 vs 29 RPC/s per client at 32 B and 98 vs 29 at 512 B (8192 clients), 192 vs 65 at 128 KB (100 clients), and about 3.6 vs 1.7 GB/s at 1 MB (about 2.1x, although the page says 3-4x); server throughput was over 2M vs just under 500k RPC/s, and about 1.6M vs 400k with a 50 us sleep in the default goroutine-per-RPC mode.
+
+**Known shortcoming:** Benchmark measured 2022 code (frisbee-go v0.6.0 vs default grpc-go v1.48.0); the shipped release (frisbee v0.10.2) was never measured; toolchain and flags not stated. Headline numbers use SetConcurrency(1), where one slow handler stalls every RPC on the connection; the default mode appears only in the 50 us sleep test (~1.6M vs 400k RPC/s). Echo of a single string field, so Polyglot vs Protobuf is barely tested. The page's '3-4x' at 1 MB is ~2.1x by its own totals. No schema evolution (no field tags; regenerate both sides); oneof silently flattened. Not gRPC-compatible, Go-only, no load balancing, retries, status codes, interceptors or server-side deadlines. uint16 request ids per method wrap past 65,535 in-flight calls; no max message size (peer-declared 32-bit length); fixed 5 s deadlines and 500 ms ping not configurable. Docs outdated (Go 1.18 vs go.mod 1.22; streaming 'unsupported'). Last real code change 2024-11; README still says early Alpha.
+
+**How:** HTTP/2 framing is replaced by Frisbee's fixed 8-byte packet header (uint16 request id, uint16 operation, uint32 length) on a plain TCP or TLS net.Conn. Protobuf is replaced by Polyglot, which writes fields positionally with typed encode calls and no field tags. Packets and header buffers come from pools, and the unary server handler reuses the incoming packet as the response buffer. Writes go into a 64 KiB bufio.Writer that a separate flush goroutine drains, so many small RPCs are coalesced into fewer syscalls; the headline numbers also used the mode that runs handlers inline on each connection's goroutine instead of spawning one per RPC.
+
+**Use it when:**
+- Go-to-Go services you own on both ends, on a trusted network, where you want proto3 schemas without HTTP/2 and Protobuf overhead.
+- Many small, non-blocking unary RPCs per connection (echo, metrics, telemetry), where the single-goroutine-per-connection mode applies.
+- Thousands of concurrent client connections to one server; this is where the project's benchmark shows grpc-go's per-client throughput falling off hardest (112 vs 29 RPC/s per client at 8192 clients).
+- Protocols that mix request/reply with custom Frisbee messaging patterns (e.g. pub/sub) or hand the TCP connection to something else after the RPCs.
+
+**Skip it when:**
+- Any non-Go peer, browser, gRPC tooling (grpcurl, reflection) or gRPC-aware proxy or mesh: the wire format is Frisbee plus Polyglot, and the roadmap still lists JS/TS, Rust and WebSocket support as planned.
+- Rolling deploys where client and server run different schema versions: Polyglot encodes fields in declaration order with no tags, and the maintainers confirmed on HN (2022) that it lacks protobuf's forward/backward compatibility.
+- When you rely on gRPC features: there is no built-in load balancing or retries (per the roadmap), no status codes (errors go over the wire as Polyglot error values), no interceptor/metadata API, and no deadline propagation (ctx cancellation only stops the client waiting).
+- Untrusted or internet-facing peers: the 32-bit length field is honored with no max-message-size check, so the read buffer grows to whatever size the peer declares.
+- Anything needing an active upstream: the README calls it early Alpha, the last code change was November 2024, and later commits are only dependency bumps.
+
+**Integration:** module · Build time: protoc (proto3) and the protoc-gen-go-frpc plugin. Runtime (go.mod): github.com/loopholelabs/frisbee-go v0.10.2, github.com/loopholelabs/polyglot/v2, github.com/loopholelabs/logging. · Go 1.22 (go.mod and README badge; the docs site still says 1.18+) · Any platform Go supports, over any net.Conn transport; no OS- or CPU-specific code found
+
+**Vs siblings:** Pick fRPC over rpcx or cmd-stream when you want to keep proto3 files and grpc-go-shaped handler signatures while generating Go-only code. Its claimed gap over grpc-go (roughly 2-4x) is in the same band as rpcx (2.3-2.6x) and cmd-stream (3.2-4.6x), so let its alpha status and stale maintenance, not the numbers, decide.
+
+**Gotchas:**
+- The published numbers used SetConcurrency(1) (the benchmark server sets it unless sleeping), not the default of one goroutine per RPC. In that mode handlers run inline on the connection's read goroutine, so one slow handler stalls every RPC on that connection.
+- oneof is not rejected: the generator flattens it into ordinary struct fields and encodes all of them, with no 'which field is set' semantics. The README lists OneOf as unsupported.
+- Unary request ids are uint16, per method, per client, and wrap around. More than 65,535 concurrent in-flight calls to one method on one client can collide in the in-flight map.
+- Frisbee applies a fixed 5 s deadline (DefaultDeadline) to every socket read and write and sends a PING every 500 ms (DefaultPingInterval), and the generated fRPC API exposes neither. A write that cannot complete within 5 s closes the connection.
+
+**Status:** Stale: the last commit was 2025-09-22 (dependency bumps), the last release v0.10.2 on 2024-11-07, Dependabot PRs including a frisbee-go 0.11.0 bump sit unmerged, and the benchmark repo was archived on 2026-07-21. It is Apache-2.0 and small enough to vendor (Go templates plus a generator), but you also inherit frisbee-go and polyglot.
+
+[repo](https://github.com/loopholelabs/frpc-go) · [benchmark](https://frpc.io/performance/grpc-benchmarks)
+
+##### grpcxx  `C++`  `MIT`  `active`  `Tier C`
+
+Small C++20 unary-only gRPC server on nghttp2 and libuv; author's hello-world h2load runs show ~2.3-3x gRPC C++ throughput.
+
+**Beats:** gRPC — The author ran h2load (single client thread) against the unary helloworld example on an M1 Max MacBook Pro. grpcxx v0.2.0 (libuv, single-threaded) reached 452k req/s at 100 clients x 10 streams, against 142k for the gRPC C++ v1.48.4 callback server (~3.2x). The gRPC row comes from a 2023 run on a different M1 Max and macOS; the only same-machine comparison (PR #2) gives ~2.3-2.5x. Compiler and build flags are not stated for either side, and the repo's bench.sh builds through a Makefile that sets no CMAKE_BUILD_TYPE. grpcxx's 2b and 3b cells both plateau near 450k whatever the worker count, which suggests the load generator, not the server, sets the ceiling.
+
+**Known shortcoming:** The README's gRPC rows come from a different machine, macOS version and h2load settings; on the one same-machine comparison (PR #2) the gap is about 2.3-2.5x, not 3.2x. No compiler or flags stated.
+
+**Known shortcoming:** Server-only and unary-only: no streaming, TLS, client, deadlines or cancellation. SETTINGS_MAX_CONCURRENT_STREAMS is hard-coded to 10 (the benchmark sits exactly at it). Possible length-prefix decoding bugs for 32-64 KiB messages and split prefixes (source reading). Requests on a connection run serially; no round-trip tests.
+
+**How:** HTTP/2 framing is delegated to nghttp2 in its in-memory mode (nghttp2_session_mem_recv2 / mem_send2), driven by one libuv event loop that owns all socket I/O and wraps reads and writes in C++20 coroutines (Asio with coroutines is an optional, slower backend). Each read batch is parsed into complete requests and handed to a small mutex/condition-variable worker pool (or run inline when workers = 0). All HEADERS, DATA and trailer frames produced for that batch go into one buffer, which is flushed with a single uv_write. Dispatch is two hash lookups (service, then method) into std::function handlers, with no completion queues, call objects, interceptors, deadlines, TLS or compression on the path. No profile explaining the gap to gRPC C++ is published; PR #24 (keeping all I/O on one loop) is the change that pushed throughput past 400k req/s.
+
+**Use it when:**
+- Internal C++ unary services whose callers are ordinary gRPC stubs in any language, with TLS terminated by a proxy or sidecar (the author suggests Envoy in issue #29).
+- Small request/response messages at high request rates over many multiplexed HTTP/2 connections, the shape the published benchmark measures.
+- Builds where the full grpc++ dependency tree and its generated code are unwanted: grpcxx needs only nghttp2, libuv (or Asio) and protobuf, and generates one short header per .proto.
+- Programs that already run a libuv loop or use systemd socket activation: listen() returns the uv_loop_t, run() accepts a pre-bound socket, and shutdown uses std::stop_token.
+
+**Skip it when:**
+- Any client, server or bidirectional streaming RPC: not supported. The streaming request (issue #49) was moved to a discussion with no implementation.
+- You need in-process TLS/mTLS, ALTS, compression or auth plugins (TLS issue #47 is open; issue #29 confirms none are supported), or a gRPC client (issue #48 is open; the library is server-only).
+- Blocking or long-running handlers. A connection stops reading while its batch runs, so requests on one connection are processed one after another. With workers = 0 a slow handler stalls the whole I/O loop. There is no async handler API, grpc-timeout deadline or cancellation.
+- Large messages: the libuv backend reads through a fixed 1 KiB buffer (FIXME), and every chunk makes a round trip to a worker thread. No large-payload benchmark exists.
+- Windows with the default libuv backend: MSVC fails to build it (C2894), so CI builds only the Asio backend on Windows.
+
+**Integration:** static lib (shared with BUILD_SHARED_LIBS); CMake project consumed via FetchContent, or find_package after install; no distro packages · nghttp2 >= 1.64.0; libuv >= 1.51.0 (default) or Asio >= 1.28 / Boost.Asio >= 1.81 (GRPCXX_USE_ASIO); Protobuf >= 3.15 (must be installed on the system); fmt >= 11.1.4 for the protoc plugin. The default GRPCXX_HERMETIC_BUILD=ON fetches libuv, nghttp2 and fmt. · C++20, CMake >= 3.27. Clang/AppleClang builds add -fexperimental-library for std::stop_token. CI builds GCC and Clang on Ubuntu 26.04 and macOS, plus MSVC (Asio only). Minimum compiler versions are not documented. · Linux and macOS (CI); Windows only with the Asio backend; no architecture-specific code (benchmarks ran on Apple M1 Max, arm64)
+
+**Vs siblings:** Pick grpcxx over brpc when you want only a lean unary gRPC server that stock gRPC clients can call, not brpc's larger multi-protocol framework (brpc also serves h2/gRPC and adds clients, streaming RPC and load balancing). The SRPC and rest_rpc READMEs do not list gRPC wire support (SRPC lists SRPC/bRPC/Thrift/tRPC; rest_rpc has its own coroutine client), so choose them only when you control both ends. No benchmark compares grpcxx with any of the three.
+
+**Gotchas:**
+- SETTINGS_MAX_CONCURRENT_STREAMS is hard-coded to 10 per connection (FIXME in lib/grpcxx/h2/session.cpp). Clients that open more streams on one connection queue behind that limit.
+- Length-prefix parsing looks fragile (from reading the code; no issue filed). PR #51 masked only the last prefix byte, so bytes 1-3 still sign-extend from char on x86-64 and Apple arm64. That decodes request lengths with bit 15 or 23 set (for example 32-64 KiB) as huge values. A 5-byte prefix split across two reads is also appended incorrectly. In either case the handler can receive an empty or default request. Test with your real message sizes.
+- Handler exceptions derived from std::exception become INTERNAL status, including protobuf parse failures of bad input. Any other thrown type escapes a noexcept function and calls std::terminate. All grpc-* request headers (grpc-timeout, grpc-encoding) are ignored, and the compressed-flag byte is read but not used.
+- The test suite has no request/response round-trip test; test/uv/test_server.cpp notes testing was manual (Postman) until a client exists. Open issue #62: non-hermetic builds fail against system fmt 12.
+
+**Status:** Actively maintained (v0.7.0 in May 2026, last commit 2026-05-19) and MIT-licensed, but pre-1.0 with 115 stars, shipped only as source through CMake FetchContent, and with an open build break against fmt 12 in non-hermetic builds.
+
+[repo](https://github.com/uatuko/grpcxx) · [benchmark](https://github.com/uatuko/grpcxx#benchmarks)
+
+##### Machnet  `C++`  `MIT`  `active`  `Tier C`
+
+DPDK kernel-bypass messaging sidecar for cloud VMs; 2.6x lower median and 7.4x lower p99.9 RTT than Linux TCP.
+
+**Beats:** Linux kernel TCP/IP stack (sockperf with Nagle disabled for microbenchmarks; kernel-TCP builds of a FASTER KV server and of Hashicorp Raft's transport) — The source is the first-party arXiv v1 preprint (Feb 2025; the figures still say 'CNet'). Setup: a single-threaded 64 B echo between two Azure F8s_v2 VMs (8 vCPU, accelerated networking, Ubuntu 22.04.2, kernel 6.2, same AZ, no placement groups), with one pinned Machnet engine core, hugepages, and no isolcpus or IRQ steering. Machnet measured 27/32/49 us p50/p99/p99.9 against 70/134/365 us for kernel TCP via sockperf with Nagle off. A single-threaded FASTER GET server did 700K vs 210K RPS, and Go Raft had a 185 vs 282 us median. The compiler and CPU model are not stated, the FASTER and Raft ports are not in the repo, and the peer-reviewed ASPLOS '26 numbers were not checked.
+
+**Known shortcoming:** Main does not match the paper: RSS-- SYN spraying lives only on the stale rss_blast branch (main still uses the NIC RSS key, which the paper says some cloud vNICs can't support); blocking receive only on go-blocking; the 50 us control interval isn't shipped (slow timer is 1 s, shim polls with sleep(1)), so connect/listen likely take ~1 s, not ~1 ms. More than one engine thread breaks connect on main (#49), so the paper's 2 Mrps with 4 engines can't be reproduced. Same-subnet IPv4 only, no gateway routing (#50). Aborts on GCP gVNIC without TX checksum offload (#51), contrary to the paper's software fallback. Prototype transport: 'first-cut' Swift CC with a fixed 32-packet window, flows torn down after 3 RTOs without RST, plaintext UDP despite an 'end-to-end encrypted' header comment, copying send/recv, bare -1 on full ring. Last code change on main 2024-09 (2026 commits are README edits); TCP interop PRs unmerged. Tier C: preprint only, CPU/compiler not stated, FASTER and Raft ports absent, untuned Linux TCP baseline, ~2 us slower than eRPC at median.
+
+**How:** It uses DPDK kernel bypass with poll-mode drivers (netvsc on Azure, ENA, gVNIC, mlx5, ice/iavf). Each core runs one busy-polling engine thread with its own NIC RX/TX queue pair, and engines share no flow state, so the data path has no syscalls, interrupts or kernel TCP processing. The app and the stack talk through lock-free rings (jring, modelled on rte_ring) in hugepage shared memory. The paper puts each one-way crossing at ~250 ns, which accounts for most of Machnet's 2 us median gap to eRPC. The transport is a lightweight connection-oriented protocol with a 256-packet SACK bitmap, fast and RTO retransmit, and hardware IPv4/UDP checksum offload. Flows are pinned to an engine by picking UDP source ports whose Toeplitz RSS hash lands on that engine's queue. On main this uses the NIC's RSS key via rte_softrss. The paper's 'RSS--' SYN-spraying variant, for vNICs that hide the key, lives on the experimental rss_blast branch.
+
+**Use it when:**
+- Latency-critical request/response between services you own on Azure, AWS or GCP VMs in the same subnet and availability zone, where you can spare one engine core and a second NIC per VM. The paper's examples are KV serving (a single-threaded FASTER GET server at 700K vs 210K RPS) and Raft replication.
+- Small messages (64 B-32 KB) where kernel TCP tail latency dominates. The paper measured 64 B echo on Azure F8s_v2 at 27/32/49 us p50/p99/p99.9, against 70/134/365 us for Linux TCP.
+- Cloud VMs whose vNICs lack flow steering or RSS reconfiguration, where eRPC-, TAS- or Demikernel-style stacks will not run, or where several processes or languages (Go, Rust, C#, JS, C/C++) must share one DPDK NIC.
+- Small VMs where kernel-stack CPU is the bottleneck. At FASTER's peak the paper reports 2 cores busy with Machnet against all 8 with Linux TCP.
+
+**Skip it when:**
+- Any peer that is not running Machnet, such as browsers, third-party clients, or gRPC, HTTP and WebSocket ecosystems. TCP interop exists only as unmerged PRs #54-#56 (2026).
+- Traffic across subnets or regions. Maintainers confirm in issue #50 that Machnet only ARP-resolves hosts on the same subnet and cannot route via a gateway. It is IPv4-only.
+- Multi-engine scaling from main. Issue #49 reports machnet_connect failures with engine_threads > 1 (on AWS), and the maintainers point to the experimental rss_blast branch. The paper's 2 Mrps with 4 engines is not reproducible from main as shipped.
+- vNICs without IPv4+UDP TX checksum offload, such as GCP gVNIC gve 1.0.0 (issue #51). Main hits LOG(FATAL) in pmd.cc, even though the paper claims a software-checksum fallback on GCP.
+- Networks where you need a hardened transport. The Swift congestion-control block is marked 'first-cut' and never changes its 32-packet initial window. RTOs are checked by a 1 s slow timer, and a flow is torn down after 3 RTO retransmits with no RST sent. There is no encryption.
+
+**Integration:** shared lib (libmachnet_shim.so, C ABI) + separate sidecar process (prebuilt GHCR Docker image or CMake build) · DPDK 23.11.x (CMake requires libdpdk >=23.11 <24.0), rdma-core (stable-v40 built from source for Mellanox NICs), hugepages, and a dedicated second NIC bound to uio_hv_generic (Azure) or vfio-pci. Git submodules: glog, gflags, googletest, google benchmark, HdrHistogram_c, xxHash. Also needs nlohmann-json, libnl, libhugetlbfs and uuid-dev. The prebuilt image needs Docker and a GitHub PAT with read:packages. · C++20 for the sidecar and C11 for the shim, built with -fno-rtti -fno-exceptions. GCC 10+ (INTERNAL.md requires gcc-10 on Ubuntu 20.04; the docker image uses Ubuntu 22.04's default). CMake, plus Meson and Ninja for DPDK. · Linux only (the Windows port exists only on unmerged branches). x86-64, with docker-bake targets up to x86-64-v4, and arm64 images. Tested on Azure accelerated networking (CX4-Lx via netvsc), AWS ENA, GCP gVNIC, and bare-metal Intel E810 (ice/iavf), ConnectX and BlueField-2 (mlx5). The NIC must offer IPv4/UDP TX checksum offload.
+
+**Vs siblings:** Pick Machnet over eRPC on public-cloud VMs whose vNICs lack RSS reconfiguration or flow steering, or when several processes or languages must share one NIC. eRPC allows one process per NIC and was ~2 us faster at median in the same paper, so prefer eRPC on bare metal or RDMA. Choose HomaModule or grpc_homa for bare-metal clusters where you can load a kernel module, and brpc, Kitex or DRPC when peers must speak gRPC or HTTP or sit outside your fleet.
+
+**Gotchas:**
+- Connection setup on main is slow. machnet_connect and machnet_listen queue a control request, and the shim polls for the reply with sleep(1) between tries (up to 10). The engine only drains control requests on its slow timer, kSlowTimerIntervalUs = 1000000 (the code comment wrongly says '2ms'). Inferred from the code, expect about 1 s or more per connect or listen, not the ~1 ms the paper measured with a 50 us interval.
+- machnet_recv never blocks on main; it returns 0 when nothing is queued. The paper's blocking receive (sem_wait) exists only on the go-blocking branch, so apps busy-poll. The paper shows p99 spiking above 10 ms when several polling threads share one core.
+- Payloads are copied into and out of shared-memory buffers on every send and recv, so it is not zero-copy. machnet_send returns a bare -1 when the ring is full; there is no retry yet (a TODO), and errors are mostly undifferentiated -1 (issue #5).
+- The machnet.h and flow.h comments promise 'end-to-end encrypted' delivery, but main has no crypto code. Traffic is plaintext UDP with a Machnet header.
+
+**Status:** The repo counts as active only through README edits (Jan and Apr 2026) and open TCP PRs (Feb-Aug 2026). Main's code has not changed since the Sept 2024 build_shim.sh fix, and several paper features (RSS--, blocking recv, fast connection setup) live only on stale branches. Treat this MIT-licensed Microsoft Research code, with 162 stars and 13 open issues, as a prototype to vendor and patch, not a supported product.
+
+[repo](https://github.com/microsoft/machnet) · [benchmark](https://arxiv.org/pdf/2502.09281)
+
+##### nexus-async-rt / nexus-async-web  `Rust`  `Apache-2.0 OR MIT`  `active`  `Tier C`
+
+Sans-IO, zero-copy async WebSocket/REST library for Tokio; receives small TLS frames 2-3x faster than tokio-tungstenite.
+
+**Beats:** tokio-tungstenite (Tokio-based WebSocket library) — BENCHMARKS.md (perf_async_ws TLS loopback section, median of 3 runs of 200,000 messages, tls-0.7-refactor branch) reports client-side receive at 54 vs 177 ns/msg at 40B (~3.3x) and 134 vs 280 ns/msg at 128B (~2.1x) for nexus-async-web on a current_thread Tokio runtime vs tokio-tungstenite 0.26. Both clients run over tokio-rustls against the same server, which pre-encodes all frames and writes them in one burst; the test ran on a Core Ultra 7 165U, Linux 6.18, turbo on, and rustc 1.94.0 appears only in the workspace README. The page's '3-5x' holds only for the blocking nexus-net path (37/86 ns/msg), whose server runs on its own OS thread, while in both async rows the server task shares one thread with the client.
+
+**Known shortcoming:** The cited numbers are for nexus-async-web (a WebSocket library, running on Tokio) against tokio-tungstenite; the nexus-async-rt event loop is not in that table, so the entry is filed under WebSocket. '3-5x' holds only with the blocking path; the async path is ~3.3x at 40 B and ~2.1x at 128 B. The author marks nexus-async-rt experimental and no longer developed (verifier downgrade).
+
+**Known shortcoming:** Baseline is tokio-tungstenite 0.26 (current 0.30). nexus's borrowed zero-copy recv is compared with tokio-tungstenite's owned StreamExt::next, so part of the gap is API style; the owned WsStream adapter has no TLS numbers. Threading differs by row: async TLS rows run server and client on one current_thread runtime while the blocking row (behind the '3-5x' headline) uses a separate server thread, and the 'separate cores' claim doesn't hold for async rows. Client receive only, pre-encoded burst frames, numbers from a tls-0.7-refactor branch; the crate README gives different figures for the same test. Docs conflict on turbo (off vs on). recv returns Ok(None) both on EOF and on a full buffer (#614); no permessage-deflate; Nagle on by default; 1 MiB + 64 KiB buffers per connection. Published 0.10.0 (2026-06) lags main, which depends on the unpublished nexus-net-tokio.
+
+**How:** A single-frame message is parsed in place in a pre-allocated ReadBuf (1 MiB by default) and returned as a borrowed &str or &[u8], so the hot recv path does no per-message heap allocation. Only fragmented frames, or frames that span reads, are copied into a reusable assembly buffer. Unmasking uses SSE2/AVX2 XOR (runtime-detected on x86-64, a u64 scalar loop elsewhere), UTF-8 validation uses simdutf8, and handshake/HTTP parsing uses httparse. The benchmark's baseline loop calls tokio-tungstenite's StreamExt::next, which returns owned Message values, so part of the gap comes from a borrowed API versus an owned one, not from parsing alone; the nexus-async-rt executor plays no part in the cited TLS numbers, which run on Tokio.
+
+**Use it when:**
+- A Rust client that consumes high-rate wss:// feeds of small messages (tens to a few hundred bytes), such as exchange market data, where CPU cost per message matters.
+- A Tokio application that can adopt the split WsReader/WsWriter API and finish with each borrowed message before the next recv.
+- A service that also makes HTTP/1.1 REST calls to the same venue and wants pooled keep-alive connections (ClientPool, or AtomicClientPool across threads) sharing one request writer.
+- A small number of long-lived connections, where a 1 MiB read buffer per connection costs nothing that matters.
+- A dedicated-thread design that can use the blocking nexus-web/nexus-net client, which the page measures faster still (37/86 ns/msg over TLS).
+
+**Skip it when:**
+- Servers holding thousands of connections: the defaults allocate a 1 MiB read buffer and a 64 KiB write buffer per connection. Both can be shrunk, but no benchmark covers smaller buffers.
+- Peers that require permessage-deflate, which nexus-web does not support.
+- Code built around tokio-tungstenite's Stream/Sink and owned messages: nexus's WsStream adapter allocates per message, skips the recv-path tuning (max_read_size, compaction), and has no published TLS numbers.
+- Production use of the `nexus` backend: nexus-async-rt is marked experimental and not under active development, and its own README says to use Tokio.
+- Windows, which the workspace README lists as experimental; the nexus-async-rt backend is Unix-only.
+
+**Integration:** crate (nexus-async-web 0.10.0 on crates.io, published 2026-06-02; main has moved on and depends on nexus-net-tokio, which is not on crates.io) · nexus-web, nexus-net, nexus-pool; tokio (io-util, net, rt, time), futures-core/futures-sink; default TLS via tokio-rustls/rustls with aws-lc-rs; optional socket2, bytes, nexus-async-rt · Rust 1.94 (edition 2024) · Linux primary, macOS supported, Windows experimental (workspace README); SIMD unmasking on x86-64 (SSE2, AVX2 runtime-detected), scalar fallback on other architectures; nexus backend is Unix-only
+
+**Vs siblings:** sockudo-ws is the other Rust WebSocket entry and is benchmarked as a server against uWebSockets (~1.02-1.03x); pick nexus-async-web when you are the client of a few high-rate wss:// feeds on Tokio and want borrowed zero-copy receives plus a REST client built the same way. The RPC siblings (wtx gRPC, brpc, Kitex, rpcx, eRPC) solve a different problem.
+
+**Gotchas:**
+- A Message<'_> returned by recv borrows the reader's buffer; convert it to OwnedMessage if you need to keep it past the next recv.
+- WsReader::recv returns Ok(None) both on transport EOF and when the read buffer stays full after compaction, so an abnormal peer drop is not an error (open issue #614 tracks the same ambiguity in nexus-web's blocking stream).
+- WsStreamBuilder leaves Nagle on by default (nodelay false); call disable_nagle() for latency-sensitive use.
+- The tokio-rt and nexus features are mutually exclusive (compile_error!), and the nexus backend needs default-features = false plus an explicit nexus-* feature.
+
+**Status:** Actively developed (last commit 2026-09-25, 118 workspace stars, ~2.9k crates.io downloads plus ~440 under the old nexus-async-net name) and dual MIT/Apache-2.0; the Tokio backend is the supported path, while the nexus-async-rt backend is experimental and gets no new features.
+
+[repo](https://github.com/Abso1ut3Zer0/nexus) · [benchmark](https://github.com/Abso1ut3Zer0/nexus/blob/main/nexus-async-web/BENCHMARKS.md)
+
+##### rest_rpc  `C++`  `MIT`  `active`  `Tier C`
+
+Header-only C++20 coroutine RPC over raw TCP; its 2019 C++11 version beat brpc 1.2-1.9x on same-machine echo.
+
+**Beats:** brpc (Apache bRPC); gRPC only transitively, via brpc's own benchmark page — A 2019 first-party doc on the cpp11 branch tested the old C++11 rest_rpc against Apache brpc with echoes of 1K-64K strings, client and server on one i5-9400F 6-core machine (Ubuntu 18.04, g++ 8.2.0, CMake Release). With a single-thread client rest_rpc got 52,631 vs 41,667 QPS at 1K (~1.26x) and 16,949 vs 8,982 at 64K (~1.89x); with 6-20 client threads, in an undefined 'high-efficiency mode', it was 1.19-1.93x. Elapsed time was measured in whole seconds (200,000 QPS works out to 600,000 calls in 3 s), the benchmark code exists only as partial snippets, current master has no comparative numbers, and the README's 'far exceeds gRPC' was never measured.
+
+**Known shortcoming:** No direct measurement against gRPC: the README's 'far exceeds gRPC' leans on brpc's own benchmark. The only numbers are a 2019 first-party echo test against brpc (about 1.2-1.9x, i5-9400F, g++ 8.2.0) on the old C++11 branch, not the current C++20 master, and master's link to that doc is dead.
+
+**Known shortcoming:** Current master (a 2025 C++20 coroutine rewrite) has no benchmark numbers, no TLS or auth, allocates any claimed body length (memory-exhaustion risk), and serves one call at a time per connection. Numeric arguments travel as text (a lone double loses precision), a timed-out call closes the socket, and error responses throw instead of returning codes (source reading).
+
+**How:** The wire format is a fixed 32-byte binary header (magic, message type, 32-bit function id, sequence number, body length) plus the body, sent with one scatter-gather `async_write`. Function ids are compile-time 32-bit MD5 hashes of the function name, dispatched through an `unordered_map`. A single `std::string_view` argument or return value skips serialization and copying, and receive buffers grow without zero-fill (`resize_and_overwrite`, or a std::string private-member hack on older libraries). The server runs one asio `io_context` per thread with one C++20 coroutine per connection and TCP_NODELAY on by default. All of this describes current master; the 2019 benchmark ran the older C++11/msgpack code.
+
+**Use it when:**
+- Both client and server are C++20 code you own, and you want to turn existing functions into RPCs without .proto files, codegen or a build step.
+- Trusted-LAN or same-host links that move large strings or blobs, where passing `std::string_view` avoids serialization and copies (the README says multi-GB payloads are sent this way).
+- Internal tools, test harnesses or device-control links where you want to vendor headers only: asio and struct_pack ship in thirdparty/, so there is no brpc/protobuf/gflags dependency stack to build.
+- Simple server-to-client notifications, using the built-in topic publish/subscribe.
+
+**Skip it when:**
+- Across untrusted networks. Master has no TLS ('support ssl' is an unchecked TODO in C++20 rewrite PR #169) and no authentication, and the server allocates whatever uint64 `body_len` a request header claims, with no size cap.
+- Polyglot or interop setups. It is C++-only with a custom protocol and speaks neither gRPC nor brpc (a Python-support request, #158, is still open).
+- Many concurrent requests on one connection. Master runs one call at a time per connection: the client writes, then waits for the reply, and the server reads, runs the handler, writes, then reads again. A slow handler therefore blocks later calls on that connection, and sequence-number multiplexing exists only in unmerged PR #177.
+- Production-RPC needs such as load balancing, a client connection pool (also a TODO in #169), streaming (unmerged stream_api PR #173), service discovery or metrics.
+- If you picked it for the published speedup: those numbers are for the retired C++11 code (msgpack, future-based client), not current master. Master also needs GCC 12+, Clang 15+ or MSVC 2022.
+
+**Integration:** header-only · standalone asio 1.36.0 and the yalantinglibs struct_pack/reflection headers (both vendored under thirdparty/); a threads library · C++20; GCC 12+, Clang 15+, MSVC 2022 per the README · Linux, macOS and Windows (CI runs Ubuntu gcc/clang, macOS clang, and Windows MSVC in Debug only); architecture not restricted by the code. The wire header is host-endian unless both sides call enable_cross_ending(true).
+
+**Vs siblings:** Pick rest_rpc over brpc or SRPC when both ends are C++20 code you control and you want header-only, IDL-free function registration with nothing to build. Pick brpc (single/pooled/short connections, load balancers, protobuf services) or SRPC (SRPC/bRPC/Thrift/tRPC protocols, protobuf/Thrift IDL, HTTP+JSON, OpenTelemetry tracing) for production multi-service systems, and grpcxx when clients must speak standard gRPC.
+
+**Gotchas:**
+- A lone numeric argument or return value is sent as text: std::to_string going out, std::from_chars coming back (codec.h). Under C++20, a single double is therefore rounded to 6 decimal places (1e-9 arrives as 0). Multi-argument calls and structs use binary struct_pack.
+- A timed-out call (`call_for`; plain `call` defaults to 5 s) makes the watchdog close the socket, so every later call on that client fails until you reconnect.
+- The client decodes the response body as the declared return type even when the server reports an error such as no_such_function or function_exception. For non-string return types the error text fails to parse, so `co_await call` throws std::invalid_argument instead of returning `r.ec`. This comes from reading rpc_client.hpp; tests cover these error paths only at the router level.
+- Function ids are 32-bit MD5 hashes of the compiler-derived qualified name (__PRETTY_FUNCTION__/__FUNCSIG__). Both sides must declare the function with the same name and namespace, and a duplicate or colliding id throws std::invalid_argument at registration. Whether ids match across different compilers is not documented.
+
+**Status:** Active (master last commit 2026-06-23; multiplexing PR #177 opened 2026-09-03), MIT-licensed and header-only, so easy to vendor. The October 2025 C++20 rewrite (PR #169) changed the API and dropped SSL, so treat master as young code.
+
+[repo](https://github.com/qicosmos/rest_rpc) · [benchmark](https://github.com/qicosmos/rest_rpc/blob/cpp11/doc/%E5%8D%95%E6%9C%BA%E4%B8%8Arest_rpc%E5%92%8Cbrpc%E6%80%A7%E8%83%BD%E6%B5%8B%E8%AF%95.md)
+
+##### sockudo-ws  `Rust`  `MIT`  `active`  `Tier C`
+
+Rust WebSocket library (Tokio/Compio; HTTP/1.1, /2, /3) that self-reports 2-3% higher echo throughput than uWebSockets.
+
+**Beats:** uWebSockets — The authors ran the uSockets `load_test` client from denoland/fastwebsockets (one C event loop, text echo with one message in flight per connection) on an AMD Ryzen 9 7950X with Linux 6.18. sockudo-ws reached 222-233k msg/s against 217-228k for the uWebSockets v20.64 EchoServer at 512/1024 B and 100/500 connections, 1.02-1.03x. Neither side's compiler or flags are stated, the stated Rust 1.82 cannot build the edition-2024 crate, the sockudo-ws server and the modified cases are unpublished, and the numbers predate v2. Both servers sit near 230k in every case, which suggests (inference, not measured) that the single-threaded load generator is the ceiling.
+
+**Known shortcoming:** The 1.02-1.03x over uWebSockets is within noise and the comparison code is not public; the stated Rust 1.82 cannot build the crate (edition 2024 needs 1.85+), and the numbers have not changed since the first commit.
+
+**Known shortcoming:** The 1.02-1.03x edge over uWebSockets is inside the project's own +/-5% noise, dates from the initial commit (pre-v2), and the modified 512/1024 B cases and echo server were never published. Both servers sit near 217-233k msg/s in every case, suggesting the single-loop uSockets client is the ceiling. README says Rust 1.82 but edition 2024 needs 1.85+ (Autobahn 1.88+); repo builds use target-cpu=native and fat LTO, which dependents don't inherit. Its own audit shows parity with tokio-tungstenite at one message in flight; the 2-15x wins need feed()/flush() batching and predate the current API. README claims lock-free split streams but the writer uses Arc<tokio::sync::Mutex>. Recently fixed: permessage-deflate corruption (2.1.0), O(n*k) UTF-8 recheck DoS (2.0.2), unflushed pongs (#8). High API churn; the mimalloc feature sets a global allocator from inside the library.
+
+**How:** It copies uWebSockets' corking: frames collect in a 16 KiB write buffer and go out in one vectored `writev`, and echo replies queued with `feed()` are flushed once per read batch. Server payloads of 8 KiB or more are queued by reference, not copied. Unmasking uses AVX-512/AVX2/SSE2 kernels picked at runtime on x86-64 and an auto-vectorised 64-byte word loop elsewhere. Text is checked by simdutf8 in one incremental pass that fails fast mid-frame, and frames of 125 B or less take a parser fast path whose payloads are `Bytes` views into a 64 KiB receive buffer, with no copy.
+
+**Use it when:**
+- Rust services (Tokio or Compio) that terminate many browser or mobile WebSocket connections and want uWS-style corking and pub/sub fan-out without calling C++ through FFI.
+- Pipelined or bursty traffic with several messages in flight per connection, if you batch with `feed()` + `flush()`. The project's own harness showed about 2-15x the msg/s of tokio-tungstenite at depth 8-32 with 64-256 B messages (2x on one connection, 15x on 32 connections), but these are historical numbers from the older implicit-coalescing API and have not been re-run.
+- You need WebSocket over HTTP/2 Extended CONNECT or over HTTP/3/QUIC behind the same stream API as HTTP/1.1, including several WebSockets multiplexed on one connection.
+- Pusher-style realtime backends that need topic pub/sub with sender exclusion and Pusher socket IDs (Sockudo is built on it).
+- Replacing tokio-tungstenite in an Axum app when you want permessage-deflate modes with shared or windowed compressors, and keepalive that closes on a missed Pong.
+
+**Skip it when:**
+- Choosing it over uWebSockets for raw throughput. The 2-3% edge is self-reported, cannot be reproduced from published code, and is smaller than the ±5% run-to-run noise the project measured in its own harness.
+- Request/response traffic with one message in flight. The project's audit found it level with tokio-tungstenite there (158k vs 154-157k msg/s at 64 B with 8-32 connections), because syscalls and scheduler hops cost more than the codec.
+- Connection storms or fan-out to many connections, where the audit says Tokio's work-stealing scheduler, not the codec, is the limit and a thread-per-core runtime wins. On Compio, write coalescing, zero-copy sends and the shared-sink split writer are not implemented.
+- Conservative production use. It went from v1.0 to v2.1 in nine months and more breaking changes are waiting in Unreleased. Recent fixes include permessage-deflate stream corruption under context takeover (2.1.0), an O(n·k) UTF-8 re-check that let 4.5 MB of fragmented text pin a core for 30 s (2.0.2), and Pongs never flushed on read-only loops, which got clients dropped (2.0.0).
+
+**Integration:** crate · Always: bytes, httparse, http, base64, sha1, simdutf8, socket2, parking_lot, pin-project-lite, futures-core/sink. Default features add tokio + tokio-util, flate2 (zlib-rs backend) + libz-rs-sys, and fastrand. Optional: compio 0.19, h2, quinn/h3/h3-quinn + rustls, tokio-uring, axum/hyper, native-tls or tokio-rustls, ring/aws-lc-rs/openssl/sha1_smol, getrandom/rand, mimalloc. · Rust edition 2024, so rustc 1.85 or later. No rust-version is declared and CI uses latest stable. The bundled Autobahn run needs Rust 1.88+. The README's 'Rust 1.82' cannot build it. Nightly is needed only for extra SIMD targets and fuzzing. · x86-64 (AVX-512/AVX2/SSE2 masking chosen at runtime; no build-time CPU requirement) and aarch64 (NEON) on stable. CI covers only Linux x86-64 and arm64, and the audit ran on macOS arm64. Windows is not documented. arm, LoongArch, PowerPC and s390x SIMD need nightly, with a portable fallback otherwise. io_uring needs Linux 5.10+.
+
+**Vs siblings:** The catalogued siblings (Kitex, rpcx, brpc, SRPC, grpcxx, cmd-stream, Homa, and wtx's gRPC server) are RPC frameworks or transports for service-to-service calls. Pick sockudo-ws when the peer is a browser or any standard WebSocket client and you need pub/sub fan-out on Tokio or Compio. wtx is the nearest Rust sibling and has its own WebSocket implementation, but its catalogued evidence covers gRPC only.
+
+**Gotchas:**
+- `send()` flushes every frame. To get the batching behind the speed claims, use `feed()` and then `flush()` at batch boundaries. This is a recent contract change in Unreleased. On a unified stream, a write waiting on a slow reader does not advance Pong or idle processing, so one stalled peer can block a sequential fan-out loop.
+- The README's 'lock-free split streams, zero mutex contention' is out of date. The split writer now locks an `Arc<tokio::sync::Mutex>` shared with a per-connection driver task spawned by `split()`.
+- The `mimalloc` feature sets a `#[global_allocator]` inside the library. That forces mimalloc on your whole binary and clashes with any other global allocator. The `rustls-*` features no longer choose a crypto provider, so you must enable ring or aws-lc-rs on your own rustls dependency.
+- The repo builds with `-C target-cpu=native` (.cargo/config.toml) and a fat-LTO, codegen-units=1, panic=abort release profile. Dependents do not inherit these settings, so the published numbers may not match your build. Messages completed through the raw protocol API skip UTF-8 validation, and the repo's benchmark-shaped echo server (`examples/wtx_bench_echo.rs`) uses that path.
+
+**Status:** Actively developed (commits through 2026-09-26; v2.1.0 on crates.io with about 116k downloads; reverse dependencies include the Sockudo server crates and nautilus-network) and MIT-licensed. API churn is high and more breaking changes are waiting, so pin the version.
+
+[repo](https://github.com/sockudo/sockudo-ws) · [benchmark](https://github.com/sockudo/sockudo-ws#vs-uwebsockets-c)
+
+##### SRPC (Sogou C++ Workflow RPC)  `C++`  `Apache-2.0`  `active`  `Tier C`
+
+C++ RPC framework on Sogou Workflow speaking SRPC, Thrift-framed and bRPC wire protocols; ~1.6-2.8x Apache Thrift server QPS.
+
+**Beats:** Apache Thrift (binary protocol) — These are SRPC's own README charts from 2020, pre-open-source data. SRPC's async client drove empty-response echo servers, each with 16 IO and 16 handler threads, on a 2x8-core Xeon E5-2630 v3 with 128 GB and 10 GbE. srpc-std reached ~310k QPS vs ~145k for Apache Thrift TNonblockingServer (TBinaryProtocol) at 32 concurrent 1 KB requests on one machine (~2.1x), and ~470-520k vs ~167-220k across machines (~2.3-2.8x). The compiler and Thrift version are not stated; the build files show a CMake RelWithDebInfo build for SRPC and -O2 -g for the Thrift server.
+
+**Known shortcoming:** Slightly slower than brpc on same-machine tests (faster cross-machine). The Thrift baseline is Apache Thrift's TNonblockingServer built -O2 -g. No compiler version stated.
+
+**Known shortcoming:** The README charts predate the 2020 release; the maintainers' 2024 re-run shows srpc and pooled brpc at rough parity, and the ~2x over Thrift was never re-measured (only ~1.05-1.4x at 1-8 in-flight requests). No pipelining (one pooled connection per in-flight request). Partial Thrift compatibility, no gRPC or streaming. v0.10.5 (2026-09) fixed a missing meta_len bounds check.
+
+**How:** It runs on the Sogou C++ Workflow engine. Poller threads handle epoll/kqueue I/O and deserialize messages as bytes arrive, and a separate handler thread pool runs service methods and callbacks. Handlers never need to block a thread, because extra work goes into the request's SeriesWork as async tasks. Protobuf payloads are serialized through a ZeroCopyOutputStream straight into a chunked RPCBuffer (2 KB-256 KB pieces) that is handed to the socket as an iovec array for scatter-gather writes. Clients keep a keep-alive connection pool with one connection per in-flight request, and there is no pipelining. The README does not break down where the gap to Apache Thrift's TNonblockingServer comes from.
+
+**Use it when:**
+- You run Apache Thrift C++ servers with TBinaryProtocol over framed transport at 16+ concurrent requests: SRPC's ThriftServer speaks the same wire format, and its charts show ~2x server QPS at 32-256 concurrent 1 KB requests on one machine.
+- One handler implementation must be served over several protocols at once, such as Thrift framed for legacy clients, bRPC-std, and HTTP+JSON for other languages.
+- RPC handlers call other backends (HTTP, other RPCs, timers) and you want to do this without blocking threads, by pushing Workflow tasks onto ctx->get_series().
+- Unary RPC with tail-latency targets at a fixed load: the README's CDFs show srpc under ~170 us to p99.9 on one machine at 10k QPS, while Apache Thrift sits at ~235-480 us.
+- You want the framework to handle gzip/zlib/snappy/lz4 compression and OpenTelemetry/Prometheus trace and metrics reporting.
+
+**Skip it when:**
+- You need gRPC wire compatibility or streaming RPC. SRPC speaks neither: gRPC support is an open TODO (issue #85), and maintainers call the lack of streaming a weak spot (#230).
+- Your Thrift setup uses TMultiplexedProtocol, several services on one port with native Thrift clients, oneway methods, or a protocol other than binary. ThriftServer implements only binary protocol over framed or HTTP transport, serves one Thrift service per port (#394), and the generator skips oneway methods (#100).
+- Low concurrency or blocking callers. At 1-8 in-flight requests the chart shows srpc only ~1.05-1.4x ahead of Apache Thrift, and a blocking caller thread gets at most about 1/RTT calls per second (maintainer, #376).
+- Many small requests on NICs with a packets-per-second limit, such as virtio VMs. SRPC has no single-connection pipelining mode. One user measured 56-75k cross-VM QPS against the README's ~500k, and brpc's single-connection mode did better in that setup (#376).
+- Your team does not want Workflow's callback/task programming model or a dependency on the Workflow engine. The library is also built with -fno-exceptions.
+
+**Integration:** static lib + shared lib (libsrpc.a / libsrpc.so) plus the srpc_generator code generator; CMake or Bazel; Debian (sid) and Fedora packages · Sogou Workflow (git submodule, v1.1.0 as of 2026-09), Protobuf >= 3.5 with protoc, OpenSSL (>= 1.1 recommended), zlib, snappy >= 1.1.6, lz4 (snappy and lz4 from submodules or system) · C++17 on master since 2026-09-10 (protobuf 30+/abseil need it; earlier releases built as C++11/14); CMake >= 3.6; minimum compiler version not documented · Linux, macOS, Windows (needs Workflow's IOCP-based windows branch; srpc_tools unsupported there). Workflow claims x86 32/64-bit, big- and little-endian ARM, Loongson and Android.
+
+**Vs siblings:** Pick SRPC over brpc when you need Apache Thrift framed-binary and bRPC-std interoperability from one set of handlers plus Workflow's async task model. SRPC's charts show it roughly level with brpc (slower on one machine, faster across machines), but brpc offers streaming and a single-connection mode. Pick grpcxx if you need gRPC wire compatibility; among the catalogued siblings only SRPC is measured against Apache Thrift.
+
+**Gotchas:**
+- The README charts are from before the 2020 open-source release (maintainer, #376). In a 2024 re-run on a 10-core box (same machine, 32 B requests, brpc protocol), maintainers measured srpc and pooled brpc at rough parity: about 124k-172k QPS for every client/server pairing.
+- SRPC has two Thrift modes. ThriftServer/ThriftClient (tutorials 07/08) speak native Thrift framed. SRPCServer with Thrift IDL (tutorials 03/04) uses SRPC's private protocol and cannot talk to Apache Thrift peers (#351, #394).
+- The Thrift IDL parser is hand-written and has broken on real IDLs. It dropped Hbase.thrift method parameters (fixed in PR #352), and issue #392 (bad code for two-level namespaces) is still open. Test your .thrift files before committing to a port.
+- v0.10.5 (2026-09-15) added a missing check of meta_len against payload length in BRPC/TRPC message parsing, so upgrade if you face untrusted peers. Master now requires C++17, but the README quick-start still compiles with -std=c++11.
+
+**Status:** Actively maintained: v0.10.5 came out on 2026-09-15 with commits the same month. It is Apache-2.0 with 2.1k stars and is packaged in Debian and Fedora. It is a normal built library, but it pulls in the whole Workflow engine.
+
+[repo](https://github.com/sogou/srpc) · [benchmark](https://github.com/sogou/srpc/blob/master/README.md#benchmark)
+
+##### Volo (CloudWeGo Rust RPC framework)  `Rust`  `MIT OR Apache-2.0`  `active`  `Tier C`
+
+CloudWeGo's Rust Thrift/gRPC framework. Self-reports 350k QPS on a 4-core 1KB Thrift echo, about 1.5x Kitex's published pingpong number.
+
+**Beats:** Kitex (Go RPC framework implementing Thrift/gRPC protocols) — Volo's README self-reports 350k QPS for a 1KB Thrift echo with the server limited to 4 cores 'under the same test conditions as Kitex' (440k for an unreleased Monoio build), but names no CPU, rustc version, concurrency or connection mode. Kitex's matching 2022 report (Xeon Gold 5118, server 4 CPUs, Go 1.17.2) shows about 228-231k pingpong QPS, which makes Volo about 1.5x (derived from page data), while Kitex-MUX reaches 396-410k at 400-1000 concurrency.
+
+**Known shortcoming:** Self-reported 2022 numbers only: no CPU, rustc version, concurrency, connection mode or Kitex number, and no Volo results in the repo. The in-repo benchmark appears to be pingpong with a pooled client, so the fair Kitex comparison is Kitex pingpong (~229k, ~1.5x derived), not Kitex-MUX (396-410k, which beats Volo); the README never confirms it. The benchmark build enables unsafe-codec, which its docs say may cause UB on malformed Thrift messages, so the numbers may not reflect the safe default. The 440k Monoio build is unreleased (shipped crates are Tokio-only). No cap on client connections (only max_idle_per_key 10240 and idle timeout); #641 reports tens of thousands of TIME_WAIT sockets. No 32-bit x86 build (sonic-rs, #543); only Linux x86-64 fully tested. Pre-1.0 crates; registry integrations unfinished; volo-grpc has no benchmark. Default TTHeader<Framed<Binary>> codec is CloudWeGo-private (plain Apache Thrift servers need framed() or buffered()).
+
+**How:** The Thrift path uses a zero-copy codec. The encoder first computes the exact message size and reserves one buffer. It then splices large Bytes/FastStr fields into a LinkedBytes chain (the recommended threshold is 4KB) and flushes it with vectored writes (writev), while the decoder hands out Bytes::split_to slices of the read buffer instead of copying. An opt-in unsafe-codec feature switches to Pilota's unchecked binary protocol, and the in-repo benchmark turns it on. Static dispatch through AFIT/RPITIT middleware, per-connection Tokio tasks with pooled client connections, and a release profile with lto=true and codegen-units=1 keep framework overhead low; the README says it is 'basically negligible (excluding syscall overhead)' in production flame graphs.
+
+**Use it when:**
+- Writing Thrift RPC services in Rust, especially ones that must call or be called by Kitex (Go) services over TTHeader or Framed Binary.
+- Moving a CPU-bound Kitex Thrift service with small (~1KB) request/response bodies to Rust to raise per-core QPS.
+- Services whose governance (timeouts, load balancing including consistent hash, discovery) is written as statically dispatched middleware layers.
+- Same-host RPC, where Unix domain sockets or the optional shmipc shared-memory transport (built only on Linux in CI) avoid the TCP loopback path.
+
+**Skip it when:**
+- When you need a published head-to-head benchmark. The README gives only Volo's own QPS, with no CPU, rustc version, concurrency or connection mode and no Kitex number, and the repo has no committed Volo results.
+- gRPC-only services chosen for speed: volo-grpc is built on hyper/h2 and has no benchmark of its own.
+- When you need registries out of the box: the ROADMAP still lists etcd, ZooKeeper, Nacos, Polaris, Eureka and Consul discovery as not done (issues #71, #475).
+- 32-bit targets: volo-thrift pulls in sonic-rs, whose sonic-simd dependency fails on i686, and the maintainers have no plan for 32-bit (issue #543).
+- Very high fan-out clients that need a hard connection cap. The Thrift pool Config only has max_idle_per_key (default 10240) and an idle timeout, with no limit on total connections, and one user reported tens of thousands of TIME_WAIT sockets (open issue #641).
+
+**Integration:** crate · tokio, motore, pilota (IDL codegen and codec), metainfo, faststr, linkedbytes, socket2, nix, libc. volo-thrift adds sonic-rs; volo-grpc adds hyper 1.x, h2 and tower (tonic/tonic-web only for the optional grpc-web feature). TLS is optional via rustls (aws-lc-rs or ring) or native-tls, and shmipc is optional. · Rust 1.85.0 stable (workspace rust-version, edition 2024); CI tests on stable and nightly · Linux x86-64 is fully tested in CI. Linux aarch64, macOS and Windows are build/clippy-checked only (--no-test), and macOS and Windows are checked without shmipc. 32-bit x86 does not build (issue #543).
+
+**Vs siblings:** Pick Volo over Kitex when you want Rust and about 1.5x Kitex's pingpong QPS (Volo's 350k vs Kitex's published ~229k) while you stay wire-compatible with a Kitex/TTHeader fleet; Kitex-MUX's 396-410k is still higher. Pick it over SRPC or brpc when the stack is Rust rather than C++. For gRPC-only Rust servers, wtx has a direct grpc-go comparison and Volo does not.
+
+**Gotchas:**
+- The default codec is TTHeader<Framed<Binary>>, and TTHeader is a CloudWeGo-private header that only Volo and Kitex understand. Clients calling plain Apache Thrift servers need DefaultMakeCodec::framed() or ::buffered(). Servers auto-detect TTHeader, Framed, and Binary/Compact/FBThrift-compact, and the default max frame size is 16MB.
+- unsafe-codec (the benchmark build uses it) 'may cause undefined behavior if the thrift message is malformed'. unsafe_unchecked swaps unreachable!() for unreachable_unchecked. Keep both off on endpoints that receive untrusted input.
+- Multiplexing is behind the 'multiplex' feature, off by default, and documented as unstable with no backward-compatibility promise. The in-repo benchmark compiles it in but runs a pingpong pooled client with the Framed codec.
+- The 440k QPS figure is a Monoio-based internal build. The published crates are Tokio-only (monoio is not a workspace dependency), so expect the 350k-class number at most.
+
+**Status:** Actively maintained (last main commit 2026-08-31, volo-thrift 0.12.6 on crates.io with about 485k total downloads) and dual-licensed MIT OR Apache-2.0, but every crate is pre-1.0 and the performance text dates from 2022 and has not been re-run.
+
+[repo](https://github.com/cloudwego/volo) · [benchmark](https://github.com/cloudwego/volo#high-performance)
 
 ### parsing-and-text
 
@@ -14640,6 +19655,176 @@ Own-IDL C++/Java/Python serialization framework; bit-packed decode 1.2x-2.6x fas
 
 ## Copyleft
 
+### networking-and-servers
+
+#### event-loops-io
+
+##### uring_exec  `C++`  `MPL-2.0`  `active`  `Tier A`
+
+Header-only liburing adapter for stdexec (std::execution) senders; beats Asio's io_uring backend on loopback TCP ping-pong.
+
+**Beats:** Boost.Asio (io_uring backend) — Loopback TCP ping-pong on one AMD 5800H box (Linux 6.4.8, GCC 13.2 -O3, 16 KiB blocks, 5 s): a uring_exec echo server beat an Asio coroutine echo server built with ASIO_HAS_IO_URING and ASIO_DISABLE_EPOLL by 1.27x-3.46x across 2/4/8 threads and 10/100/1000 sessions (e.g. 4 threads/1000 sessions: 4.411 vs 1.275 GiB/s). The client was uring_exec's own ping in both cases, and there was one run per cell with no variance reported. A newer 10 s table in benchmarks/README adds Asio on epoll, which beats uring_exec at 10-100 sessions with 2+ threads.
+
+**Known shortcoming:** Beats Asio's io_uring backend (1.27-3.46x) but Asio on its default epoll backend beats uring_exec at low session counts (4 threads/100 sessions: 8.744 vs 3.226 GiB/s); the author says io_uring cannot beat epoll on the current kernel and calls the project effectively archived since 2025.
+
+**Known shortcoming:** Loopback benchmark with uring_exec's own client; its run() loop busy-polls (keeps a core busy when idle) while Asio threads block; single runs, no variance. Against Asio on epoll it loses in 5 of 6 rows at 10-100 sessions with 2-8 threads (epoll 1.4-3.2x faster). No TLS or multishot/zero-copy; noexcept constructor terminates if io_uring is unavailable.
+
+**How:** Each thread that calls run() lazily gets its own thread-local io_uring ring, created with IORING_SETUP_SINGLE_ISSUER and IORING_SETUP_COOP_TASKRUN, and all rings share one kernel worker pool through IORING_SETUP_ATTACH_WQ. Operation states are immovable and intrusive, with a per-object vtable for type erasure, and the CQE user_data points straight at them, so the library itself does no per-I/O heap allocation. Work scheduled from other threads goes through lock-free CAS intrusive queues split into 16 buckets that run threads drain by round-robin plus random pick. The default run loop submits without blocking, harvests completions in batches with io_uring_peek_batch_cqe (64 per batch, up to 512 per step) and calls yield() when idle instead of sleeping in the kernel. The author gives no explanation of why this beats Asio.
+
+**Use it when:**
+- Your code base already uses stdexec/P2300 senders and you want Linux socket or file I/O as composable senders with stop-token cancellation and when_any timeouts.
+- Many concurrent TCP connections (1,000-100,000) served by several threads on one box. The author's newer table has it beating Asio epoll there, e.g. 8 threads/10,000 sessions 6.662 vs 2.118 GiB/s.
+- A single-threaded event loop: at 1 thread it beat both Asio backends at every session count in the author's table (e.g. 100 sessions: 4.026 vs 3.600 io_uring, 3.052 epoll GiB/s).
+- You can give the event loop dedicated cores, because the default run loop polls and yields rather than blocking.
+- As a small, readable reference (about 1,600 lines of headers) for mapping io_uring onto sender/receiver before writing your own.
+
+**Skip it when:**
+- Few connections spread over several threads. In 5 of the 6 rows with 10-100 sessions and 2-8 threads, Asio's default epoll backend was 1.4-3.2x faster in the author's own table (4 threads/100 sessions: 8.744 vs 3.226 GiB/s), and the author says io_uring cannot beat epoll on the current kernel.
+- Production services that need a maintained dependency: the README calls it effectively archived since 2025, there is one author, the repo has only two test files and no CI config, and the build follows stdexec main, whose upstream changes have broken compilation (issue #2, the 2026-05 fix commit, a ~10x compile-time regression noted for ping_when_any).
+- You need TLS, DNS or higher-level socket types. The API is raw file descriptors, and the author says in issue #3 that async OpenSSL is out of scope (workarounds: poll-based SSL or kTLS).
+- You want advanced io_uring features: the sender list has no multishot accept/recv, provided buffer rings, registered files/buffers or zero-copy send.
+- Non-Linux targets, kernels older than about 6.1 (the recommended minimum), or environments where io_uring is disabled. Also workloads that cancel every I/O, since per-operation cancellation adds overhead according to the benchmarks README.
+
+**Integration:** header-only · stdexec (NVIDIA, tracked at main), liburing (link -luring, recent enough for io_uring_prep_futex_wait/bind), pthread; Asio only for the comparison benchmark · C++20; benchmarked with GCC 13.2; the benchmarks README says Clang also works (there is a clang-19 workaround commit) · Linux only (io_uring), kernel 6.1+ recommended; architecture support not documented (benchmarked on x86-64 AMD 5800H)
+
+**Vs siblings:** Pick uring_exec when you specifically want io_uring exposed as std::execution senders. For a maintained C++20-coroutine io_uring runtime that aims to cover most io_uring features and also posts wins over epoll and Asio, Condy is the safer choice. At low connection counts, stock Asio on epoll (or PhotonLibOS, which edges out boost::asio in its own ping-pong) is faster than uring_exec according to the author's own data.
+
+**Gotchas:**
+- The default run() never blocks in the kernel. It calls io_uring_submit without waiting, peeks the CQ and calls std::this_thread::yield() when nothing moved, so each run thread keeps a core busy even when idle. run_policy{.waitable=true} switches to io_uring_submit_and_wait.
+- An I/O sender submits its SQE to the thread-local ring of whichever thread calls start(). Hop onto the scheduler first (stdexec::schedule or starts_on, as every example does), or the operation sits in a ring that no run() loop drains.
+- Thread-local rings are keyed by the io_uring_exec constructor's call site through a template lambda parameter. The header warns that constructing it repeatedly at one site (e.g. in a loop) reuses the same per-thread ring, so treat it as a long-lived singleton. The constructor is noexcept, but ring setup throws std::system_error on failure, which means std::terminate if io_uring is unavailable.
+- async_read/async_write default to offset 0, so on a seekable file every call hits byte 0 unless you pass an offset. Errors arrive as set_error(exception_ptr to std::system_error), and -ECANCELED arrives as set_stopped.
+
+**Status:** The author declares it effectively archived since 2025 (the last commit, 2026-05-01, only follows stdexec API renames); it is header-only and MPL-2.0, so it is easy to vendor, but you inherit stdexec churn yourself.
+
+[repo](https://github.com/Caturra000/uring_exec) · [benchmark](https://github.com/Caturra000/uring_exec/blob/master/README.md)
+
+#### http-servers-frameworks
+
+##### Lwan  `C`  `GPL-2.0`  `active`  `Tier B`
+
+C HTTP/1.1 server and embeddable library; topped TechEmpower Round 10 JSON at ~5.8x Go net/http's throughput.
+
+**Beats:** Go net/http — TechEmpower Round 10 (April 2015), Peak Hosting dual-Xeon E5 v2 servers (40 hyperthreads) over 10 GbE, JSON-serialization test: Lwan rev 49607add (CMake Release, compiler not stated) peaked at 2,200,066 req/s at 256 connections, #1 of 145, versus 379,662 req/s for TFB's Go 1.4.2 net/http + encoding/json entry (5.8x); the ratio was 1.7x at 8 connections. In the same round's plaintext test the gap was ~2.6x (2,075,046 vs 799,052 req/s, Lwan #7, far behind ULib's 6.9M), and Lwan's JSON handler then built a ccan/json DOM per request, so the win comes from the server core, not from JSON encoding.
+
+**Known shortcoming:** The evidence is TechEmpower Round 10 (2015, Go 1.4.2 baseline), about 5.8x on JSON; no recent independent rounds are cited. No compiler or exact CPU model stated.
+
+**Known shortcoming:** Evidence is TechEmpower Round 10 (April 2015, Go 1.4.2); the maintainer reported a big regression in later preview rounds (#291). The 5.8x is the 256-connection best case (1.7x at 8, 2.6x at 32); plaintext in the same round is ~2.6x. September 2026 fixed an out-of-bounds read in the URL decoder (#380), request desynchronization via stale pipelining state (#381, #382) and a WebSocket worker spin (#383); lost/stuck socket reports still open. HTTP/1.x only, TLS experimental (Linux, TLS 1.2), no chunked uploads, 40 KB default body cap, >4 KB pipelined requests fail (#218). Default CMake build is Debug; Release uses -march=native; no coroutine stack guard page. GPL-2.0-or-later.
+
+**How:** One worker thread per online CPU, pinned using the sysfs thread_siblings topology, each with its own SO_REUSEPORT listening socket (with a CBPF steering filter where available) and its own edge-triggered epoll set; connection state lives in one preallocated array indexed by file descriptor. Every connection runs in a stackful coroutine switched by a hand-written x86-64/aarch64 swapcontext that skips floating-point registers and the signal mask, so handlers read like blocking code with no per-request thread or callback chain. The request parser dispatches on methods and headers by loading 2/4/8 bytes as integers (`STRING_SWITCH`), finds line ends with memchr/memmem, and decodes URLs with SSE/SWAR; idle keep-alive connections expire through a timeout queue driven by a timer wheel. Release builds add LTO and `-march=native`.
+
+**Use it when:**
+- Small, CPU-cheap HTTP/1.1 responses (JSON, plaintext, cached small files) at high connection counts, where per-request server overhead dominates; in Round 10 its lead over Go net/http grew from 1.7x at 8 connections to 5.8x at 256.
+- Linux x86-64 or aarch64 hosts where you build from source for the target CPU and want one pinned worker per core.
+- Embedding an HTTP endpoint in a C program via liblwan without a C++ runtime or an external event library.
+- Config-only static file or Lua serving: files under 16 KiB are mmap-cached with precompressed deflate/gzip/Brotli/zstd variants, and larger files go out via sendfile.
+- A fast backend stub or load target for benchmarking proxies and gateways (the README lists Kong, KrakenD and Istio using it this way).
+
+**Skip it when:**
+- You need HTTP/2 or HTTP/3: Lwan is HTTP/1.x only (issue #17, open since 2014).
+- You need production TLS: TLS is marked experimental, works only on Linux through kTLS (tls.ko plus mbedTLS), and supports TLSv1.2 only; the README suggests a separate terminator such as Hitch.
+- Uploads without Content-Length or of large size: a request body with no Content-Length gets 400 (no chunked request bodies), POST/PUT bodies are capped at 40,960 bytes by default, and issue #218 (open) reports pipelined requests over 4 KB failing.
+- An internet-facing edge that needs a hardened parser: September 2026 reports fixed request desynchronization via stale pipelined state (#381, #382), a WebSocket-FIN busy-spin that pinned a worker (#383), and an 8-byte out-of-bounds read in the SWAR URL decoder (#380); lost/stuck socket reports #348 and #353 remain open.
+- Proprietary software that ships the binary: Lwan is GPL-2.0-or-later, so distributing a program linked with liblwan carries GPL obligations (the README notes that only serving over HTTP does not).
+
+**Integration:** static lib or shared lib (liblwan-static / liblwan.so with installed headers), or the standalone `lwan` server binary · Required: CMake 3.20+ (CMakeLists.txt; the README still says 2.8) and one of zlib, zlib-ng or libdeflate. Optional: Lua 5.4, Brotli, zstd, mbedTLS (kTLS), mimalloc/jemalloc/tcmalloc, SQLite and MariaDB client (samples only); libucontext on architectures other than x86-64/aarch64. · C compiler that accepts -std=gnu11 (GCC or Clang; uses GNU extensions, inline assembly and linker sections) · Linux x86-64 is primary (CI build, tests, static analysis, OSS-Fuzz); FreeBSD and OpenBSD x86-64 build (epoll emulated on kqueue); aarch64 has a native context switch; other CPUs fall back to libucontext, which fails on Apple Silicon macOS (issue #366). Windows not documented.
+
+**Vs siblings:** Pick Lwan over Drogon, Crow, Oat++, CWIST or Agoo-C when you want a pure-C HTTP/1.1 server with the widest measured margin over Go net/http (5.8x in TFB JSON versus ~1.5x for Crow in the catalog), and GPL plus no HTTP/2 is acceptable. If you need HTTP/2 or production TLS, Lwan is the wrong choice; look at H2O or a C++ framework instead.
+
+**Gotchas:**
+- The default CMake build type is Debug, which logs every request while holding a lock; benchmark only with -DCMAKE_BUILD_TYPE=Release.
+- Release builds default to -march=native/-mtune=native (MTUNE_NATIVE=ON), so a binary can fail on other CPUs; pass -DMTUNE_NATIVE=OFF when packaging.
+- Coroutine stacks are fixed-size (4x SIGSTKSZ, 8x with Brotli, page-rounded) and in release builds come from the heap with no guard page, so deep recursion or large stack buffers in handlers can silently overflow (see issue #130).
+- At startup Lwan raises RLIMIT_NOFILE and preallocates max_file_descriptors (default 524288) x sizeof(struct lwan_connection); max_file_descriptors must be at least 10x threads. A crash when threads < online CPUs was fixed only on 2026-09-18.
+
+**Status:** Active (last commit 2026-09-22; latest tag v0.7, June 2025; September 2026 security reports were fixed within days), GPL-2.0-or-later, built from source with CMake or pulled as GHCR container images and Alpine/Arch/NixOS packages.
+
+[repo](https://github.com/lpereira/lwan) · [benchmark](https://www.techempower.com/benchmarks/results/round10/peak.json)
+
+#### tls
+
+##### wolfSSL  `C`  `GPL-3.0 (the LICENSING file lets certain listed projects, e.g. MariaDB and OpenVPN, use it under GPL-2.0 instead)`  `active`  `Tier B`
+
+Embedded-first C TLS 1.3 library, not an OpenSSL fork, that beat every OpenSSL version in HAProxy's 64-core Graviton4 tests.
+
+**Beats:** OpenSSL — HAProxy Technologies ran HAProxy 3.1-dev1 on a 64-core Graviton4 (AWS r8g.16xlarge, gcc 11.4, mid-2024) with wolfSSL 5.7.0 and with OpenSSL 1.1.1w, 3.0.x and 3.1-3.4-dev. At 64 threads wolfSSL handled 59.7k full RSA handshakes/s vs 48.3k for 1.1.1w, ~43k for 3.1+ and ~21k for 3.0.x, and ~150k end-to-end ticket resumptions/s vs 17.8k (1.1.1w with pthread locks), 23-28k (3.1+) and 1.6-3.7k (3.0.x). It was second to AWS-LC in both tests, and neither wolfSSL's build flags nor the test harness were published.
+
+**Known shortcoming:** GPL-3.0 (commercial licence otherwise), so not freely copyable into proprietary code. Test scripts and flags for the HAProxy benchmark unpublished.
+
+**Known shortcoming:** Benchmarked on 5.7.0 (mid-2024) with unpublished configure flags; a plain ./configure leaves the SP and CPU assembly off, and --enable-haproxy is not implied by distro builds. Use >= 5.9.4 for three High-severity certificate-verification CVEs (one widened in OpenSSL-compatible builds); open ASan use-after-free with HAProxy's test suite (#10123). Only ticket resumption was measured; session-ID resumption uses a global cache under one rwlock. AWS-LC beat it in both tests.
+
+**How:** Public-key math runs on wolfCrypt's 'SP' (single-precision) backend. This is generated code with a fixed size per key length (2048-bit RSA is 32 x 64-bit words) that does Karatsuba multiplication and Montgomery reduction in inline AArch64/x86-64 assembly (sp_arm64.c alone is ~7 MB). It is paired with ARMv8 Crypto Extension/NEON and AES-NI/AVX2/AVX-512 code for AES-GCM, SHA-2, ChaCha20-Poly1305 and X25519. For multi-core scaling, the manual says the library is 'thread safe by design' because it 'avoids global data', and reference counts use C11 <stdatomic.h> or GCC __atomic builtins (wc_port.h). In HAProxy's profiles, wolfSSL's resumption curve did not change between pthread locks and HAProxy's lightweight locks ('it clearly doesn't need locks'), while OpenSSL 1.1.1w and 3.x spent most of their CPU in pthread_rwlock calls and atomics.
+
+**Use it when:**
+- HAProxy, or another OpenSSL-API server that already has a wolfSSL port, taking many short-lived TLS connections on many cores, where OpenSSL 3.x lock and atomic contention caps throughput. At 64 threads HAProxy measured 59.7k vs ~43k RSA full handshakes/s (OpenSSL 3.1-3.4-dev) and ~150k vs 23-28k ticket resumptions/s.
+- Workloads heavy on ticket resumption, such as a proxy re-encrypting to backends or clients that reconnect often, where you want linear scaling to 64 cores without special lock builds.
+- Embedded, RTOS or kernel-module targets that need TLS 1.3/DTLS 1.3 in tens of kB. The repo ships ports for Zephyr, ESP-IDF, STM32, Renesas, NXP and others, custom allocators (wolfSSL_SetAllocators) and a static memory pool (WOLFSSL_STATIC_MEMORY).
+- You need a FIPS 140-3 validated module and a vendor that sells commercial licenses and support contracts (HAProxy notes an LTS period is 'probably negotiable').
+- Post-quantum TLS work: ML-KEM/ML-DSA with AVX-512/AArch64 assembly plus native Falcon and FrodoKEM, with no liboqs dependency as of 5.9.4.
+
+**Skip it when:**
+- You need a binary drop-in for libssl/libcrypto or exact OpenSSL behavior. The compatibility layer is a macro mapping, and HAProxy reports 'minor differences' and says deploying it 'requires a lot of testing and feature validation'.
+- Proprietary distribution without buying a commercial license: the code is GPL-3.0, and GPL-2.0 is allowed only for a named list of projects (MariaDB, OpenVPN, U-Boot from Cisco, ...).
+- You want the absolute top numbers on Graviton. AWS-LC (v1.32.0+30) beat it on full RSA handshakes (63.1k vs 59.7k/s), and AWS-LC built with C11 beat it by ~20% on resumption (183k/s).
+- You depend on distro packages and automatic OS security updates. HAProxy found that the Debian/Ubuntu wolfSSL packages lacked the HAProxy options and CPU optimizations it needed, so it had to build and maintain wolfSSL by hand.
+- You can't upgrade quickly. 5.9.4 (2026-09-25) fixed three High-severity certificate-verification CVEs, and one of them (CVE-2026-93302, trusted-peer CA check) widens to all CA loading in OPENSSL_COMPATIBLE_DEFAULTS builds, which --enable-haproxy, --enable-nginx, --enable-all and --enable-distro all turn on.
+
+**Integration:** static lib | shared lib (autotools ./configure or CMake; also source-drop with user_settings.h for IDE/RTOS builds) · none beyond libc (optional hardware or crypto-callback ports; the liboqs dependency was removed in 5.9.4) · ANSI C (a C89 build is supported via --enable-c89); autoconf/automake/libtool for git checkouts or CMake 3.16+ (CMake support described as 'still under development'); asm is auto-enabled only for GNU-C-compatible compilers; the benchmark used gcc 11.4 · any C target; assembly for x86-64 (AES-NI/AVX2/AVX-512), AArch64 (ARMv8 crypto extensions/NEON), ARM32/Thumb-2/Cortex-M, RISC-V 64 and PPC32/64; Linux, Windows, macOS/iOS, Android, many RTOSes and a Linux kernel module
+
+**Vs siblings:** Pick wolfSSL over AWS-LC when you need a small, embeddable or FIPS 140-3 stack across many CPUs and RTOSes, a vendor support contract, or good multi-core scaling from a default build (the AWS-LC versions tested needed CMAKE_C_STANDARD=11 to avoid lock collapse, since fixed upstream); pick AWS-LC for the highest Graviton numbers and an API descended from BoringSSL/OpenSSL. Tempesta FW is a complete web accelerator and DDoS-protection proxy rather than a library, so wolfSSL is the choice when you link TLS into your own server.
+
+**Gotchas:**
+- Speed depends on configure flags. The fixed-size SP assembly and the ARMv8/Intel assembly are off by default in a plain ./configure (--enable-sp, --enable-armasm and --enable-intelasm all default to disabled). You enable them with --enable-sp --enable-sp-asm, --enable-armasm/--enable-intelasm, or --enable-all-asm; configure.ac turns all-asm on automatically only under --enable-all/all-crypto on 64-bit GNU C. HAProxy did not publish the flags it used.
+- The ABI depends on the build configuration. configure generates wolfssl/options.h, which you must include before any other wolfSSL header (or define WOLFSSL_USE_OPTIONS_H). Struct layouts vary with options and between releases (5.9.4 changed OcspRequest, so code that embeds it must be rebuilt).
+- Unlike OpenSSL, a client verifies the server by default: without loaded CAs, connect fails with -188 (README Note 2). Static-key RSA/DH/PSK cipher suites are disabled unless you enable them with WOLFSSL_STATIC_* defines.
+- The benchmark only measured ticket resumption. Session-ID resumption goes through the process-global SessionCache under one rwlock unless ENABLE_SESSION_CACHE_ROW_LOCK is defined (ssl_sess.c). Issue #10123, still open, reports an ASAN use-after-free when HAProxy's vtest suite runs against wolfSSL master.
+
+**Status:** Actively maintained by wolfSSL Inc. (5.9.4 released and last commit 2026-09-25) under GPL-3.0 or a commercial license. It is production-usable, but you build it yourself with the right configure flags and must keep up with frequent security releases.
+
+[repo](https://github.com/wolfSSL/wolfssl) · [benchmark](https://www.haproxy.com/blog/state-of-ssl-stacks)
+
+#### websocket-grpc-rpc
+
+##### wtx (gRPC server)  `Rust`  `MPL-2.0`  `active`  `Tier A`
+
+Rust crate with its own HTTP/2 and gRPC stack. Its unary gRPC server served 3.7-5.5x grpc-go's req/s on HttpArena.
+
+**Beats:** gRPC (grpc-go, official google.golang.org/grpc implementation) — HttpArena ran a unary GetSum gRPC call over plaintext h2c, driven by h2load with 256 and 1024 connections, 100 streams each, 5 s runs, best of 3. The machine was a Threadripper PRO 3995WX, with the server pinned to 32 cores plus their SMT threads. wtx 0.49 (nightly Rust, target-cpu=native) served 3,990,708 req/s against grpc-go v1.72.0 (Go 1.24, default grpc.NewServer) at 720,798 req/s with 256 connections (5.5x). With 1024 connections it served 3,620,970 against 969,718 (3.7x). Two limits apply: wtx used about 64 logical CPUs against grpc-go's 44, and the two results come from different run dates (grpc-go on 2026-04-12, wtx re-validated on 2026-08-24).
+
+**Known shortcoming:** Rust. The wtx and grpc-go HttpArena runs were weeks apart, the author contributed the entry, and earlier wtx numbers were invalid (empty reply body, fixed in PR #1300). Several other entries (zix, cardigan, swerver) reach ~6.8-7.0M rps on the same board.
+
+**Known shortcoming:** Unary gRPC calls only, with hand-written service definitions (#231) and third-party message codegen. The author calls it a free-time project that probably shouldn't be used in production (#452); no security audit, including its own TLS 1.3. An independent grpc_bench run (discussion #559, 2026-04, Xeon Gold 6548N, wtx 0.40) had it behind go_grpc (93,004 vs 117,082 req/s at 4 CPUs) and tonic, while an earlier run (#547, Ryzen 5900X) had it ahead, so the result depends on environment. HttpArena p99 is 69.9 ms at 256 connections vs a 6.55 ms average, and grpc-go's p99 field repeats its average, so tail latency cannot be compared. Returning () or a string type from a handler silently sends an empty body with grpc-status 0 (behind the invalid HttpArena results fixed in PR #1300). Needs nightly Rust; 7 breaking releases in 3 months (benchmarked 0.49, current 0.52.1). Plain HTTP/2 is slower than hyper (4.08M vs 6.97M req/s). Missing crypto feature fails at runtime, not build time.
+
+**How:** Http2ServerFramework::run_in_threads uses a runtime-per-thread, shared-nothing design. It starts one single-threaded tokio LocalRuntime per available thread. Each runtime binds its own listener (SO_REUSEPORT is on by default) and runs its connection and stream tasks locally, so the hot path has no work-stealing and no cross-thread handoff. The HTTP/2 framing, HPACK and Huffman code are written in-house, and the response is built in the same buffer as the request, so a reply no larger than the request needs no new allocation. The benchmark binary also used target-cpu=native, thin LTO, codegen-units=1, panic=abort and wtx's optimizations-std feature (memchr, simdutf8, socket2).
+
+**Use it when:**
+- A Rust service whose hot path is small unary gRPC calls at very high request rates on a many-core Linux box. On HttpArena, wtx served 3.99M req/s against grpc-go's 0.72M with 256 h2c connections.
+- Workloads with hundreds to thousands of connections, each carrying many concurrent streams. These spread well across the per-thread listeners; the benchmark used 256-1024 connections with 100 streams each.
+- gRPC over TLS without a separate TLS stack: in HttpArena's unary-grpc-tls test, with wtx's own TLS 1.3, it reached 3.69M vs 0.70M req/s (256 connections) and 3.63M vs 0.93M (1024).
+- Internal services, prototypes or benchmark rigs where you control the .proto files and both ends, and you can type the service routes by hand.
+- Projects that want gRPC, HTTP/2, WebSocket and Postgres from one crate with a small dependency tree and fast builds. The README reports 2 required dependencies and a 6.53 s clean optimized build for the gRPC client.
+
+**Skip it when:**
+- You need server, client or bidirectional streaming RPCs. The gRPC module supports unary calls only.
+- You need generated service stubs or the usual gRPC ecosystem. Services must be typed by hand; the macro for this is still open issue #231. Reflection, health checking and interceptor libraries are not documented.
+- Production or security-sensitive systems. The README says wtx has had no security audit. In issue #452 (Nov 2025) the author calls it 'a fun project developed in my free-time that probably shouldn't be used in production' and advised a user to stay on tokio-tungstenite.
+- Small CPU budgets or strict tail-latency targets. In grpc_bench's 2026-04-23 run (wtx 0.40, 1-4 server CPUs, 1000 clients), wtx trailed go_grpc (93,004 vs 117,082 req/s at 4 CPUs) and tonic, and its p90 stayed at about 42 ms. On HttpArena its p99 was 69.93 ms at 256 connections (average 6.55 ms), and it used 727 MiB of memory against grpc-go's 310.5 MiB.
+- Teams that require stable Rust or a stable API. lib.rs enables nightly features, and crates.io lists 7 breaking minor releases (0.46 to 0.52) between 2026-05-16 and 2026-08-10.
+
+**Integration:** crate · For the benchmarked gRPC server: tokio, quick-protobuf, hashbrown, foldhash, plus memchr, simdutf8 and socket2 through optimizations-std. pb-rs (or another generator) is needed at build time to generate message types. TLS or other crypto needs one backend feature: crypto-ring (ring), crypto-alr (aws-lc-rs), crypto-graviola or crypto-ruco (RustCrypto). · Rust nightly only. lib.rs uses #![feature(random, return_type_notation)] even though crates.io lists rust-version 1.96. The repo pins nightly-2026-09-03, the crate uses edition 2024, and HttpArena built wtx 0.49 with nightly-2026-06-27. · The core is no_std + alloc, and the README says it works on embedded devices with a heap allocator. Targets with 16-bit pointers are not supported. The multi-threaded server needs std; the executors are tokio, wtx's own std executor, and embassy-net. Benchmarks exist only for x86-64 Linux.
+
+**Vs siblings:** Pick wtx when the service is written in Rust and must keep standard gRPC-over-HTTP/2 clients: its measured gain over grpc-go (3.7-5.5x) is larger than that of Kitex (1.5-1.7x) or rpcx (2.3-2.6x), both Go, though each was measured on a different harness. grpcxx is the closest C++ analogue that also speaks gRPC; brpc is the more mature C++ multi-protocol choice.
+
+**Gotchas:**
+- The response is built in the request buffer, and the handler's return type decides what happens to that buffer. ResFinalizer for () (and for &str, String and Vector) calls req.clear(). A handler that writes its reply into req.msg_data.body and returns () therefore sends an empty body with grpc-status 0. This bug invalidated wtx's own HttpArena entry until PR #1300; return StatusCode or VerbatimParams instead.
+- If no crypto backend feature is selected, crypto calls panic or halt at runtime instead of failing the build. TLS and secure cookies need one of crypto-ring, crypto-alr, crypto-graviola or crypto-ruco.
+- HTTP/2 has no HTTP/1.1 Upgrade path. Clients must use prior-knowledge h2c or ALPN over TLS. Stream prioritization and server push are not supported.
+- The README warns that wtx assumes the summed length of any number of slices cannot overflow. On 32-bit targets, oversized input can overflow and cause unexpected behavior. The docs also flag PlaintextCtx (the TLS config used for plain h2c) as dangerous if misconfigured.
+
+**Status:** Actively developed, almost entirely by one author (764 of about 790 non-bot commits; last commit 2026-09-08; 0.52.1 released 2026-08-14; about 70k crates.io downloads). The crate is MPL-2.0 and easy to depend on, but it is pre-1.0 with breaking releases every few weeks, nightly-only, unaudited, and its author does not recommend it for production.
+
+[repo](https://github.com/c410-f3r/wtx) · [benchmark](https://www.http-arena.com/data.json)
+
 ### numerics-and-science
 
 #### blas-lapack
@@ -15394,6 +20579,89 @@ CDF-model-based sort for numeric arrays, ~4x faster than std::sort on random dat
 [repo](https://github.com/anikristo/LearnedSort) · [benchmark](https://github.com/anikristo/LearnedSort/blob/master/plots/perf_charts.png)
 
 ## Copyleft — Unverified claims (tier C/D)
+
+### networking-and-servers
+
+#### tls
+
+##### Tempesta FW (Tempesta TLS)  `C`  `GPL-2.0`  `active`  `Tier C`
+
+Linux-kernel TLS 1.2 server stack in the Tempesta FW proxy; 6-83% more handshakes/s than Nginx+OpenSSL in vendor tests.
+
+**Beats:** OpenSSL — The authors' NetDev 0x14 (2020) paper ran TLS 1.2 ECDHE-ECDSA P-256 handshakes against Tempesta FW on Linux 5.7 and Nginx 1.19.1 + OpenSSL 1.1.1d, using tls-perf and wrk; on a 1-vCPU KVM guest (i7-6500U host, no vAPIC), Tempesta reached 2,180 vs 1,545 handshakes/s with 307 vs 1,340 ms average latency. On bare-metal Xeon E3-1240v5 limited to one physical core (2 hyperthreads) with 10GbE, it gained 83% on resumption but only 6% on new sessions (7,921 vs 7,426), with worse average, p95 and max latency; compiler and build flags are not given.
+
+**Known shortcoming:** First-party NetDev paper; on bare metal Nginx/OpenSSL had lower average and 95th-percentile latency, and Tempesta showed tail-latency spikes up to +3000%. In-kernel TLS tied to Tempesta FW, not a drop-in library. No compiler or flags stated.
+
+**Known shortcoming:** Not a drop-in for OpenSSL: an out-of-tree kernel module inside the Tempesta FW reverse proxy with no OpenSSL-compatible API. TLS 1.2 server-side only (TLS 1.3 open, #1031), secp256r1 and AES-GCM/CCM only (no ChaCha20). Needs a patched kernel, x86-64 with SSE4.2/BMI2/ADX, 8 GB RAM and huge pages. Mixes constant-time and non-constant-time code with RDRAND randomization. Self-described Beta.
+
+**How:** The handshake runs in SoftIRQ right after the TCP handshake, with a zero-copy state machine on skbs, so there are no user/kernel context switches, socket syscalls or extra copies. Hot paths make no heap allocations: each cipher suite has a precomputed 'MPI profile' that is copied in one shot, and temporary big integers come from per-CPU page pools. P-256 uses hand-written x86-64 BMI2/ADX Montgomery arithmetic (after Gueron-Krasnov) in Jacobian coordinates, with fixed-base comb tables (window 7) for m*G, RDRAND randomization in place of full constant-time table scans, and the Linux crypto API for AES-GCM/CCM. The paper reports 40x the original mbed TLS port's rate (2,180 vs 51 handshakes/s), but raw ECDSA/ECDHE op/s stay below OpenSSL's, so the gain over Nginx comes from where the code runs, not from faster math.
+
+**Use it when:**
+- Dedicated x86-64 Linux edge servers where full or resumed TLS handshakes/s is the bottleneck, for example short-lived HTTPS connections or TLS handshake floods (DDoS), and you can replace Nginx/HAProxy with Tempesta FW
+- Traffic dominated by session resumption through RFC 5077 session tickets: the paper measured 35,263 vs 19,203 conn/s (+83%) against Nginx/OpenSSL on bare metal
+- Small VMs without virtual APIC, where fewer VM exits matter: on a 1-vCPU KVM guest, the paper measured +41% handshakes/s and 77% lower average latency
+- ECDSA P-256 certificates with ECDHE P-256 and AES-GCM suites, serving HTTP/1.1 or HTTP/2 (the only ALPN protocols supported)
+- Deployments that want private and session keys held in non-swappable kernel memory, away from the application's address space
+
+**Skip it when:**
+- You need TLS 1.3, X25519, ChaCha20-Poly1305, P-384 or client-side TLS: only TLS 1.2 server-side with AES-GCM/CCM on secp256r1 is supported, and TLS 1.3 (issue #1031) is still open
+- You need a library to link into your own application or into Nginx/HAProxy: there is no OpenSSL-compatible API, and the kernel TLS socket API (issue #1433) is only a proposal
+- Bare-metal services that care about tail latency: in the paper, Nginx/OpenSSL had 50-170% lower average and p95 latency for new sessions, and Tempesta's max latency was up to 30x worse (28,262 vs 925 ms) under load
+- Non-x86-64 hardware (ARM/Graviton), CPUs without BMI2/ADX, or managed kernels: the product needs a patched kernel (linux-6.12.12-tfw for 0.9/master, 5.10.35-tfw for 0.8), at least 8 GB RAM, 2 MB huge pages and an RSS-capable NIC
+- RSA-certificate workloads (the docs say RSA isn't performance-optimized), or teams that cannot accept a Beta, GPLv2 in-kernel TLS stack that enlarges the kernel TCB
+
+**Integration:** module · Patched Linux kernel (tempesta-tech/linux-6.12.12-tfw for 0.9/master, linux-5.10.35-tfw for release-0.8); Linux crypto API for symmetric ciphers and hashes; build packages listed in the install docs include gcc, g++, libboost-all-dev, libssl-dev, libelf-dev, flex, bison and dwarves · not documented (no GCC version given); Ubuntu 24.04 is the preferred build and run environment; needs kernel headers and 35-40 GB of disk for the kernel build · x86-64 Linux only; SSE4.2, BMI2 and ADX are required by the Makefile. AVX2 is listed as required in the docs, and the Makefile warns not to use builds without it in production. Needs RDRAND and huge-page support.
+
+**Vs siblings:** AWS-LC and wolfSSL are user-space libraries that link into HAProxy or Nginx, support TLS 1.3 and ARM, and scale across many cores (their benchmarks use a 64-core Graviton4). Pick Tempesta only when you can replace the whole HTTPS proxy on dedicated x86-64 Linux and TLS 1.2 ECDSA-P-256 handshake cost per core is your limit, since its gain comes from kernel placement and its own crypto is slower than OpenSSL's.
+
+**Gotchas:**
+- Side-channel protection mixes constant-time code with non-constant-time code plus RDRAND randomization (as in mbed TLS) rather than OpenSSL's constant-time-everywhere approach. A CRYPTO_CONST_TIME build flag exists. On SRBDS-affected Intel CPUs, the microcode mitigation cuts RDRAND to about 3% of its original speed, and the requirements page says the mitigation is needed in public clouds.
+- Curve25519 source (tls/ec_25519.c) is present but marked 'slow and incomplete' and is not in the supported-curve list; secp256r1 is the only ECDHE curve offered.
+- Heavy public-key math runs in SoftIRQ with kernel_fpu_begin/end. The paper links this to tail-latency spikes and packet drops under heavy load on bare metal.
+- The master branch is a development (unstable) branch. The README says to use release-0.8 for a stable version, and the project calls itself Beta.
+
+**Status:** Actively developed (last commit 2026-09-25; Ubuntu 24 package release 0.8.2 in October 2025) but still self-described Beta; GPL-2.0 kernel module deployed as a complete reverse proxy, not a TLS library you can vendor into another program.
+
+[repo](https://github.com/tempesta-tech/tempesta) · [benchmark](https://netdevconf.info/0x14/pub/papers/35/0x14-paper35-talk-paper.pdf)
+
+#### websocket-grpc-rpc
+
+##### Lightstream  `Rust`  `MPL-2.0`  `active`  `Tier C`
+
+Rust/Python Arrow-table transport over raw TCP, QUIC, HTTP/2 and WebSocket; 1.06-1.71x Arrow Flight throughput between AWS hosts.
+
+**Beats:** Apache Arrow Flight (gRPC/HTTP2) — The project's own ECS rig ran 2x AWS i3en.12xlarge in one cluster placement group (50 Gbit/s): RAM-resident 1M-row tables in 4 shapes, warm median of 5 runs, Lightstream's parallel protocol over plaintext TCP vs arrow-flight 59.2 DoGet over tonic/HTTP/2 (8 MiB windows, default 2 MiB slicing, dictionary Resend), built with unpinned Rust nightly --release. Lightstream led in all 16 cells by 1.06x-1.71x, but its 1-stream cells (1.108-1.109 GiB/s, about 9.5 Gbit/s) sit at AWS's ~10 Gbps per-flow cap and its 16-stream cells (5.75-5.79 GiB/s, about 49.4-49.7 Gbit/s) sit at the link limit, so the ratios mostly show how far Flight falls short of the network ceiling; Lightstream's timing also includes a global reorder that Flight does not do.
+
+**Known shortcoming:** Lightstream's results sit at the network ceilings (1 stream ~9.5 Gbit/s = AWS per-flow cap; 16 streams ~49.5 Gbit/s = the 50 Gbit/s link), so the ratios mostly show how far Flight falls short of the link; no CPU-per-byte data. Framing differs: run.sh defaults to 8 MiB batches (its header comment says 0) while Flight slices at 2 MiB; the table doesn't say which was used. The benchmark image patches minarrow to a sibling checkout and uses an unpinned nightly. Lightstream pays for a global reorder Flight doesn't; latency chart is single-stream only. Nightly-only (allocator_api, portable_simd). Not a Flight drop-in: minarrow Table API, no Flight wire compatibility, parallel writer is plaintext TCP only (max 256 connections, u32 frames, 2 GiB virtual reservation per decoder). One maintainer, 41 stars, 938 downloads, 0.1-0.4 yanked; 0.7.0 can't read back Parquet-with-nulls from earlier releases. Doc errors (missing benchmarks/ path, 'cargo install' for a library).
+
+**How:** Each table goes on the wire as Arrow IPC inside a 5-byte TLV frame ([u8 tag][u32 LE length]) directly over TCP, skipping gRPC/HTTP/2 framing, protobuf FlightData wrapping and arrow-flight's default 2 MiB batch slicing. Buffers are minarrow 64-byte-aligned Vec64, and the receive path reads socket bytes straight into decoder-managed buffers from a reused per-stream arena, so steady-state decode does no per-batch allocation (per source comments). Parallel mode opens one TCP connection per stream, feeds them round-robin through bounded tokio channels (depth 8), decodes each connection on its own task, and restores global order by pulling connections in the same rotation, with no sort. The project publishes no profile that attributes the gain to any one of these parts.
+
+**Use it when:**
+- Bulk transfer of multi-MiB Arrow batches between Rust or Python services on a LAN/cluster, especially over one connection, where the published gain is largest (1.18x-1.71x at 1 stream).
+- You need one globally ordered table stream spread across several parallel TCP connections and do not want to write the merge yourself.
+- You want Arrow tables and typed Protobuf/MessagePack side messages on the same connection instead of hand-rolled adjacent-bytes framing.
+- You want one API to swap between TCP, UDS, QUIC, WebSocket, HTTP/2, stdio, Arrow IPC/Parquet files and mmap, and can build on nightly Rust or use the Python wheels.
+
+**Skip it when:**
+- You need Flight ecosystem interop (Flight SQL, DoPut/DoExchange, existing Flight clients/servers, GetFlightInfo endpoint discovery); Lightstream is not wire-compatible with Flight.
+- Your build must use stable Rust: the crate needs nightly (allocator_api, portable_simd via minarrow/vec64), and rust-toolchain.toml pins only channel = "nightly", no date.
+- The link is already the bottleneck: at 8-16 streams the published lead shrinks to 1.06x-1.26x, because both systems approach the 50 Gbit/s limit.
+- Small request/response RPC or general service APIs; this is a bulk columnar transport, not an RPC framework.
+- Production-critical paths that need a mature project: one maintainer, 41 stars, 0 issues ever filed, versions 0.1-0.4.x yanked on crates.io, and 0.7.0 cannot read Parquet files with nulls written by earlier releases.
+
+**Integration:** crate (also Python package lightstream-io) · tokio, futures-*, flatbuffers, minarrow 0.18, vec64, tracing, log; optional per feature: quinn, h2/http/bytes, tokio-tungstenite, wtransport, tokio-rustls (ring), prost, rmp-serde, zstd, snap, simd-json, tokio-uring · Rust nightly (edition 2024; unpinned nightly channel); no stable MSRV. Python >=3.9 for the wheels. · CI runs Linux x86-64, macOS x86-64/arm64 and Windows x86-64 (Windows without uds/mmap); io_uring and vmap64 are Linux-only; PyPI also ships manylinux aarch64 wheels. Published benchmarks are Linux x86-64 only.
+
+**Vs siblings:** The catalogued siblings (DRPC, fRPC, brpc, rpcx, cmd-stream) are general RPC frameworks benchmarked on small-message QPS against gRPC, and none carries Arrow tables natively. Pick Lightstream when the payload is bulk Arrow columnar data or you need ordered multi-connection streaming; pick DRPC, fRPC or brpc for many small request/response calls.
+
+**Gotchas:**
+- Ordered mode stalls on the slowest connection: a lagging stream holds back every table behind it (documented on SortBehaviour::Ordered), with 8 buffered frames per connection.
+- LightstreamParallelWriter caps at 256 connections (each connection announces its index as one byte), and each frame's payload length is a u32, so a single frame must stay under 4 GiB; split big tables into views.
+- Each streaming decoder reserves 2 GiB of virtual address space (tunable via LIGHTSTREAM_ARENA_CAPACITY); many parallel streams add up under strict overcommit or ulimit -v.
+- LightstreamParallelWriter::connect opens plain TcpStreams from a SocketAddr, and that file has no TLS variant; TLS exists on the single-connection TCP/WebSocket/HTTP/2 writers (tls feature) and in QUIC. The Rust README's 'cargo install lightstream' is wrong for a library crate; use cargo add.
+
+**Status:** Active (v0.7.0 released 2026-09-19; one maintainer, 7 self-merged PRs, 0 issues) and MPL-2.0 with file-level copyleft, so it is fine to link as a dependency, but it is pre-1.0, nightly-only and still making format-breaking changes.
+
+[repo](https://github.com/SpaceCell/lightstream) · [benchmark](https://github.com/SpaceCell/lightstream/blob/main/rust/README.md)
 
 ### parsing-and-text
 
