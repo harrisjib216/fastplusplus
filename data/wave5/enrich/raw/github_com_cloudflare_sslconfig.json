@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/cloudflare/sslconfig",
+  "one_liner": "Cloudflare's 2016 OpenSSL 1.0.2 patch adding x86-64 ChaCha20-Poly1305 TLS suites; about 7% faster seal than OpenSSL 1.1.0-pre on Haswell.",
+  "what_it_does": "A set of patches against OpenSSL 1.0.2f, 1.0.2g and 1.0.2j (the rest of the repo is Cloudflare's nginx cipher config). They add the pre-RFC draft (0xCC13-15) and RFC 7539 (0xCCA8-AE) ChaCha20-Poly1305 TLS 1.2 cipher suites, EVP_chacha20_poly1305() and EVP_chacha20_poly1305_draft() AEADs, and a server cipher-choice rule. You rebuild OpenSSL and relink nginx or your app against it. Applications reach the new suites through the normal cipher string, not a new API. The EVP cipher is shaped around TLS records: each EVP_Cipher call must come after an EVP_CTRL_AEAD_TLS1_AAD ctrl and handles one whole record plus its 16-byte tag.",
+  "how_it_is_fast": "The 1.0.2j patch adds chacha20_poly1305_x86_64.pl by Vlad Krasnov. It is a 'stitched' one-pass seal/open with SSE and AVX2 paths. Poly1305 runs as 64-bit scalar multiplies (MULX on the AVX2 path) interleaved with the SIMD ChaCha20 rounds, so the MAC work overlaps the cipher work instead of taking a second pass over the data. It also has a special case for the 13-byte TLS AAD and hand-written tail code for remainders of 64 bytes or less, 65-128, 129-192 and 193-255 bytes, which targets short records. The earlier 1.0.2f/g patches (Feb 2016, current when the post appeared) used Intel's 2014 AVX/AVX2 ChaCha20 and Poly1305 kernels plus a Cloudflare scalar Poly1305 instead, and the post does not say which version it graphed.",
+  "when_to_use": [
+    "You maintain a TLS 1.2 server that is frozen on OpenSSL 1.0.2 (for example nginx built from source) and still need ChaCha20-Poly1305 suites, including the pre-RFC draft suites that 2016-era Chrome used.",
+    "Traffic has many small TLS records (under ~1.5 KB, for example with dynamic record sizing). The post reports its largest gain over OpenSSL 1.1.0-pre at short records.",
+    "You want ChaCha only for clients that rank it first (typically mobile clients without AES-NI), while AES-GCM clients keep AES-GCM. The patched ssl3_choose_cipher does exactly this.",
+    "You are studying or porting a stitched ChaCha20-Poly1305. The 1.0.2j assembly is a readable ancestor of the code BoringSSL (added 2017-01-23) and ring ship today."
+  ],
+  "when_not_to_use": [
+    "Any new deployment. OpenSSL 1.1.0+ has native RFC ChaCha20-Poly1305, BoringSSL and ring carry the maintained descendant of this assembly with proper CPU checks, and OpenSSL 1.0.2 itself is out of public support.",
+    "x86-64 CPUs without SSE4.1 (Core 2 65nm such as Xeon X3220, AMD K8/K10). The 1.0.2j SSE path uses pshufb, pextrq and pinsrb with no CPUID check and dies with an illegal instruction (issues #51 and #57, confirmed by the author).",
+    "Architectures other than x86-64. Only portable C is provided there. Users reported compile errors without the asm (#26, older patch) and ChaCha failures in no-asm and 32-bit builds (#57, unconfirmed).",
+    "Bulk throughput on AES-NI hardware. The post's own graphs show AES-128-GCM and AES-256-GCM beating ChaCha20-Poly1305 on Haswell for records over 320 bytes.",
+    "OpenSSL 1.1.x. The 1.1.0 patch only changes cipher preference, and the author declined to port the draft suites (#78)."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "The exact OpenSSL 1.0.2f, 1.0.2g or 1.0.2j source tree (one patch per version) and Perl for perlasm. nginx or the app must be rebuilt or relinked against the patched OpenSSL.",
+    "min_toolchain": "The perlasm version checks emit the AVX2 path only with GNU as >= 2.22, clang >= 3.1, NASM >= 2.10 or ml64 >= 11. With older assemblers you get only the SSE path. On CentOS 6 binutils the 1.0.2g patch failed to assemble (#32). Compiler versions are not documented.",
+    "platforms": "The assembly is x86-64 only: SSE4.1 is assumed, and the AVX2+MULX path is chosen on the AVX2 bit. Other architectures fall back to portable C. Windows builds had link problems (#43).",
+    "thread_safety": "Not documented. State lives in the per-connection EVP_CIPHER_CTX, as in stock OpenSSL.",
+    "drop_in_for_baseline": "partial — for OpenSSL 1.0.2 it is a rebuild-time patch that adds suites and a TLS-record-only EVP_chacha20_poly1305(), and it also changes server cipher selection. It is not a replacement for OpenSSL 1.1.0's own ChaCha20-Poly1305 (the 1.1.0 patch is only the preference tweak)."
+  },
+  "gotchas": [
+    "CPU dispatch is incomplete. There is no SSE4.1 check (author, #57: 'requires SSE4, but it does not actually perform a CPUID check'), and the AVX2 path uses MULX (BMI2) while testing only the AVX2 bit. BoringSSL's descendant requires SSE4.1 and checks AVX2 && BMI2.",
+    "With server cipher preference on, ChaCha is chosen only when it is the client's first-listed suite (with a retry if nothing else matches). Earlier patch versions could refuse ChaCha entirely (#48). The author says to drop the ssl3_choose_cipher change if you want normal negotiation.",
+    "Only the RFC suites use the stitched assembly. Draft-suite traffic goes through the C glue plus separate ChaCha20 and Poly1305 kernels. The EVP interface expects an 8-byte TLS seq_num prepended to the AAD, so RFC 7539 test vectors cannot be checked directly (#60).",
+    "Licensing is mixed. The repo says BSD-3-Clause, but the assembly files carry Apache-2.0 headers (Cloudflare 2016, Intel 2014), and the patch edits OpenSSL-licensed files."
+  ],
+  "pick_this_over_siblings_when": "Pick it only if you are pinned to a patched OpenSSL 1.0.2 build and need ChaCha20-Poly1305 suites. Otherwise ChaChaCha reports beating both OpenSSL's asm and BoringSSL's stitched AVX2 ChaCha20-Poly1305 (this code's descendant), and AWS-LC or wolfSSL are maintained whole-library alternatives to OpenSSL.",
+  "verified_claims_summary": "Cloudflare's 2016-04-04 post graphs cycles/byte for 'seal' with 13-byte AAD over 64 B-16 KB records on an unnamed Haswell (AVX2) against OpenSSL 1.1.0-pre: much lower at short records, slightly lower at long ones, 7% better on average, and under 2 cycles/byte at large sizes; it gives no compiler, flags or harness, and AES-GCM still wins above 320 bytes. For scale, OpenSSL's current asm headers list Haswell large-buffer costs of 1.23 cpb (ChaCha20, AVX2) plus 0.65 cpb (Poly1305, AVX2), about 1.9 cpb in two passes, so the long-record gap was always small.",
+  "status_note": "Stale historical reference, not a dependency. The ChaCha patches were last refreshed in Oct 2016 (1.0.2j) and Mar 2017 (1.1.0 preference tweak), later commits only touch config and CI, Cloudflare said in 2017 it had moved to BoringSSL, and the README still links to a patch file (openssl__chacha20_poly1305_cf.patch) that no longer exists.",
+  "sources_read": [
+    "https://github.com/cloudflare/sslconfig",
+    "https://github.com/cloudflare/sslconfig/commits/master",
+    "https://github.com/cloudflare/sslconfig/tree/master/patches",
+    "https://raw.githubusercontent.com/cloudflare/sslconfig/master/README.md",
+    "https://raw.githubusercontent.com/cloudflare/sslconfig/master/patches/openssl__1.1.0_chacha20_poly1305.patch",
+    "https://raw.githubusercontent.com/cloudflare/sslconfig/master/patches/openssl__chacha20_poly1305_draft_and_rfc_ossl102j.patch",
+    "https://raw.githubusercontent.com/cloudflare/sslconfig/master/patches/openssl__chacha20_poly1305_draft_and_rfc_ossl102g.patch",
+    "https://raw.githubusercontent.com/cloudflare/sslconfig/master/patches/openssl__chacha20_poly1305_draft_and_rfc_ossl102f.patch",
+    "https://github.com/cloudflare/sslconfig/issues/26",
+    "https://github.com/cloudflare/sslconfig/issues/32",
+    "https://github.com/cloudflare/sslconfig/issues/48",
+    "https://github.com/cloudflare/sslconfig/issues/51",
+    "https://github.com/cloudflare/sslconfig/issues/52",
+    "https://github.com/cloudflare/sslconfig/issues/57",
+    "https://github.com/cloudflare/sslconfig/issues/60",
+    "https://github.com/cloudflare/sslconfig/issues/78",
+    "https://blog.cloudflare.com/it-takes-two-to-chacha-poly/",
+    "https://news.ycombinator.com/item?id=11421114",
+    "https://raw.githubusercontent.com/google/boringssl/main/crypto/cipher/asm/chacha20_poly1305_x86_64.pl",
+    "https://raw.githubusercontent.com/google/boringssl/main/crypto/cipher/internal.h",
+    "https://raw.githubusercontent.com/google/boringssl/main/gen/crypto/chacha20_poly1305_x86_64-linux.S",
+    "https://github.com/google/boringssl/commits/main/crypto/cipher_extra/asm/chacha20_poly1305_x86_64.pl",
+    "https://github.com/openssl/openssl/tree/master/crypto/chacha/asm",
+    "https://github.com/openssl/openssl/tree/master/crypto/poly1305/asm",
+    "https://raw.githubusercontent.com/openssl/openssl/master/crypto/chacha/asm/chacha-x86_64.pl",
+    "https://raw.githubusercontent.com/openssl/openssl/master/crypto/poly1305/asm/poly1305-x86_64.pl",
+    "https://github.com/briansmith/ring/tree/main/crypto/cipher/asm",
+    "https://openssl-library.org/policies/releasestrat/index.html"
+  ],
+  "confidence": 0.75
+}
