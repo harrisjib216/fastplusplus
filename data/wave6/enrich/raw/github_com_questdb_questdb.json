@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/questdb/questdb",
+  "one_liner": "Java/C++/Rust time-series database whose QWP protocol streams query results into Arrow 1.55x faster than ClickHouse's fastest client path.",
+  "what_it_does": "QuestDB is a standalone time-series SQL database (Docker, Homebrew or JAR/binaries) with time-series extensions such as SAMPLE BY, LATEST ON and ASOF JOIN. The entry here is about its egress path: since 10.0 (August 2026), the QuestDB Wire Protocol (QWP) runs over a WebSocket on port 9000 and streams SELECT results back as columnar batches. The Python client exposes them as Arrow record batches (db.query(sql).iter_arrow()), pandas or polars frames, or an Arrow C stream capsule. It is not a ClickHouse replacement at the wire or SQL level: you need a QuestDB client that speaks QWP (full support in Java, C/C++, Rust and Python), and other tools connect through PGWire, ILP or REST.",
+  "how_it_is_fast": "On the server, QwpResultBatchBuffer copies whole columns out of QuestDB's memory-mapped, time-partitioned native column pages into per-column native scratch buffers, then memcpys them into the wire buffer. The WebSocket header is patched in place afterwards, so the hot path makes no JVM heap allocations. SYMBOL columns go out as a connection-scoped delta dictionary: each string is sent once and each row carries only a varint id (4 bytes/row decoded, against 11.6 bytes for ClickHouse's plain UTF-8). Timestamps use Gorilla delta-of-delta encoding, zstd is optional, and batches hold up to 16,384 rows under credit-based flow control. On the client, the Python decoder releases the GIL and hands wide numeric buffers to Arrow by reference, so parallel reader threads scale as well as processes do (1.00x difference).",
+  "when_to_use": [
+    "Pulling tens of millions to billions of raw or downsampled time-series rows into Python (polars, pandas, pyarrow, DuckDB) for model training or feature pipelines, where moving the result set is the bottleneck rather than computing it.",
+    "Streaming consumers that need the first batch fast and flat client memory: 32 ms to the first Arrow batch, against 15.3 s and about 18 GB of client RAM for ClickHouse's buffered native execute() path.",
+    "Tables whose string columns are low-cardinality and can be stored as SYMBOL (tickers, order side, device or sensor IDs). Dictionary encoding brought the wire cost to 18.8 bytes/row, against 27.0 for ClickHouse native and 21.4 for ClickHouse Arrow.",
+    "Client and server on separate hosts on a fast network, with several parallel reader connections (the peak was about 12) and a working set that fits in the server's page cache.",
+    "Workloads that also need high-rate ordered or out-of-order ingestion and time-series SQL in the same engine. The vendor README reports TSBS ingestion of 8.59M rows/s against 1.75M for ClickHouse 26.7."
+  ],
+  "when_not_to_use": [
+    "General analytical query speed. On ClickBench (c7a.metal-48xl, both runs dated 2026-09-26), ClickHouse's hot-run total is 3.29 s against QuestDB's 5.40 s, and its cold-run total is 82.2 s against 502.2 s. The egress win does not carry over to query execution.",
+    "Storage- or RAM-constrained hosts. The native format is uncompressed: 15 GiB against ClickHouse's 6.0 GiB for the 500M-row trades table, and 72.9 GB against 9.5 GB on ClickBench. When the working set spilled out of page cache on a 16 GB box, egress fell to 41M rows/s, bound by EBS.",
+    "High-cardinality strings or wide tables. Most of the byte advantage comes from SYMBOL dictionaries, the post says the gap would narrow or disappear without them, and only one 5-column schema was tested.",
+    "Consumers that cannot speak QWP: Node.js (not yet supported), Go and .NET (beta), and Grafana, BI tools or Postgres drivers, which use PGWire and so get none of this speedup.",
+    "Crash-sensitive production egress on 10.0.x today. QWP egress is weeks old, and issue #7667 (open) reports a SIGSEGV in QwpResultBatchBuffer.emitColumnSlice on 10.0.1 that kills the whole JVM on a large 62-column read."
+  ],
+  "integration": {
+    "form": "standalone database server (Docker image, Homebrew, JAR/binaries), used through QWP client libraries",
+    "dependencies": "Server: none on the data path (native C++/Rust libraries are bundled in the JAR). Python client: questdb>=5.0 with numpy required; pyarrow and pandas are optional for to_arrow/iter_arrow/to_pandas, and polars/DuckDB read the result through the Arrow PyCapsule interface.",
+    "min_toolchain": "QuestDB server 10.0+ for QWP egress; building from source needs Java 25 and Maven 3; Python client 5.0 on Python >= 3.10 (the harness used 3.12).",
+    "platforms": "Bundled native libraries for linux x86-64, linux aarch64, macOS aarch64 and windows x86-64. On Intel Macs, Docker only. The benchmark ran on AWS m8gn.8xlarge/c8gn.8xlarge instances; the CPU model is not stated.",
+    "thread_safety": "Server handles many concurrent QWP connections. Python client: a reader lease has thread affinity (one lease per thread), and a QueryResult may be handed to another thread but used by only one thread at a time; concurrent consumption, cancel and close are unsupported. Network I/O and decoding release the GIL.",
+    "drop_in_for_baseline": "partial — not drop-in for ClickHouse. Different SQL dialect and storage engine, and QWP needs QuestDB's own clients. For Python code that already consumes Arrow batches, the change is limited to the connect/query calls."
+  },
+  "gotchas": [
+    "iter_arrow()/to_arrow() give each batch its own compacted SYMBOL dictionary, which a generic Arrow consumer then has to reconcile. When the destination is a dataframe, use to_polars()/to_pandas(), which intern the connection's dictionary once.",
+    "A QueryResult is single-use. Closing one before it is drained drops the pooled connection, so to stop early and keep the connection, call cancel() (which blocks while it drains) and then close().",
+    "Parquet-format partitions fall back to a per-row encode path with no columnar memcpy, so the published speed applies to QuestDB's native format. That path also has an open bug (#7507): IPv4 column-tops come back as 128.0.0.0 instead of NULL.",
+    "Several client-side decode steps are not zero-copy: nullable fixed-width columns, booleans, Gorilla timestamps, null bitmaps and zstd batches each take an extra pass. Only wide non-null numeric and VARCHAR buffers are adopted by reference."
+  ],
+  "pick_this_over_siblings_when": "Apache Doris, StarRocks and Umbra also beat ClickHouse, but on query-execution benchmarks (SSB, TPC-H, ClickBench). Pick QuestDB when the bottleneck is time-ordered ingestion plus shipping large result sets into Python/Arrow, not multi-table joins or aggregation throughput; for in-process SQL over dataframes, chDB fits better.",
+  "verified_claims_summary": "The test streamed the last 500M rows of a 5-column trades table from an m8gn.8xlarge server to a Python client on a c8gn.8xlarge over 100 Gbps, with 8 parallel readers. QuestDB 10.0.0 over QWP reached 220.4M rows/s. The ClickHouse baseline was the unversioned latest Docker image on defaults, with LowCardinality-as-Arrow-dictionary off. Its native TCP path via clickhouse-driver execute() across 8 processes reached 141.9M rows/s (1.55x slower, and it buffers the whole result), and Arrow-over-HTTP reached 93.8M (2.35x). A rebuilt 2B-row rig gave 291.9M vs 173.8M rows/s peak against peak (1.68x). This is a first-party informal test: no CPU model or JVM flags, one schema.",
+  "status_note": "Actively developed and Apache-2.0: 10.0.1 was released 2026-08-24, the last push was 2026-09-26, and the repo has 17.3k stars. QWP egress is new in 10.0, and replication/HA, RBAC, TLS and automatic cold tiering are in the paid Enterprise edition.",
+  "sources_read": [
+    "https://github.com/questdb/questdb",
+    "https://github.com/questdb/questdb/blob/master/core/README.md",
+    "https://github.com/questdb/questdb/releases",
+    "https://github.com/questdb/questdb/blob/master/core/src/main/java/io/questdb/cutlass/qwp/codec/QwpResultBatchBuffer.java",
+    "https://github.com/questdb/questdb/blob/master/core/src/main/java/io/questdb/cutlass/qwp/codec/QwpEgressFrameWriter.java",
+    "https://github.com/questdb/questdb/blob/master/core/src/main/java/io/questdb/cutlass/qwp/codec/QwpEgressConnSymbolDict.java",
+    "https://github.com/questdb/questdb/blob/master/core/src/main/java/io/questdb/cutlass/qwp/server/egress/QwpEgressUpgradeProcessor.java",
+    "https://github.com/questdb/questdb/blob/master/core/src/main/java/io/questdb/cutlass/qwp/server/egress/QwpEgressCompressionNegotiator.java",
+    "https://github.com/questdb/questdb/blob/master/core/src/main/java/io/questdb/cutlass/qwp/server/egress/QwpRowExceedsBufferException.java",
+    "https://github.com/questdb/questdb/blob/master/core/rust/qdbr/src/qwp_zstd.rs",
+    "https://github.com/questdb/questdb/issues/7667",
+    "https://github.com/questdb/questdb/issues/7507",
+    "https://github.com/questdb/questdb/issues/7556",
+    "https://questdb.com/blog/streaming-500-million-rows-into-apache-arrow/",
+    "https://questdb.com/blog/questdb-qwp-binary-wire-protocol/",
+    "https://questdb.com/blog/questdb-10-release/",
+    "https://github.com/javier/questdb_qwp_egress_to_arrow_perf",
+    "https://github.com/javier/questdb_qwp_egress_to_arrow_perf/blob/main/read_bench_questdb.py",
+    "https://github.com/javier/questdb_qwp_egress_to_arrow_perf/blob/main/docker-compose.yml",
+    "https://github.com/javier/questdb_qwp_egress_to_arrow_perf/blob/main/requirements.txt",
+    "https://github.com/questdb/py-questdb-client/blob/main/docs/sender.rst",
+    "https://github.com/questdb/py-questdb-client/blob/main/docs/installation.rst",
+    "https://raw.githubusercontent.com/ClickHouse/ClickBench/main/questdb/results/20260926/c7a.metal-48xl.json",
+    "https://raw.githubusercontent.com/ClickHouse/ClickBench/main/duckdb/results/20260511/c7a.metal-48xl.json",
+    "https://raw.githubusercontent.com/ClickHouse/ClickBench/main/clickhouse/results/20260926/c7a.metal-48xl.json",
+    "https://api.github.com/advisories?ecosystem=maven&affects=org.questdb:questdb",
+    "https://hn.algolia.com/api/v1/search?query=questdb%20arrow%20500%20million&tags=story"
+  ],
+  "confidence": 0.8
+}

@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/save-buffer/bloomfilter_benchmarks",
+  "one_liner": "Benchmark header of AVX2 bit-pattern Bloom filters: 19-22x a naive Bloom filter's throughput on small filters, at ~6% FPR.",
+  "what_it_does": "A single blog-companion header, bloom_filters.h, holding five Bloom filter structs: Basic, cache-blocked, 64-bit register-blocked (scalar and AVX2) and the headline PatternedSimdBloomFilter. They take precomputed hashes rather than keys: the scalar filters take two 32-bit hashes per call, while the AVX2 filters take a pointer to exactly 8 hashes and Query returns an 8-bit result mask. There is no hashing, deletion, serialization or merge, and the (n, eps) constructor is not a drop-in for any existing Bloom filter library.",
+  "how_it_is_fast": "Register blocking (Lang et al., VLDB 2019; Putze et al., 2010) maps each key to one 64-bit word, so an insert or query is one memory access plus one AND/compare. Instead of computing k bit positions, the Patterned variant uses 10 hash bits to pick one of 1024 overlapping 57-bit masks (4-5 bits set) from a 136-byte table and 6 more bits to rotate it ('mask rotation'), with the remaining bits picking the block, so one 64-bit hash is enough. The AVX2 path handles 8 hashes per call, using _mm256_i64gather_epi64 to read the mask table and, on query, the filter words.",
+  "when_to_use": [
+    "You are writing your own filter for a hash join or columnar scan and want a short, readable reference for the register-blocked bit-pattern design. It uses the same layout as Apache Arrow Acero's BlockedBloomFilter: 57-bit masks, 4-5 bits set, 1024 masks, 6-bit rotation.",
+    "Negative-heavy probe workloads on x86-64 with AVX2, where 5-7% false positives are acceptable because an exact check runs afterwards.",
+    "Filters that stay in cache. The checked-in results show the largest gain over Basic (19-20x) at 1K-16K keys, which is 2-32 KB of filter, and only 8-10x at 4M-67M keys.",
+    "Batch probing where the 64-bit hashes already sit in arrays whose length is a multiple of 8."
+  ],
+  "when_not_to_use": [
+    "You need a target false-positive rate. PatternedSimdBloomFilter ignores eps: it always allocates max(512, 8n) bits, rounded up to the next power of two strictly above that. It measured 6.0-6.9% FPR when asked for 1%.",
+    "Production use. This is benchmark code with no tests, no key hashing, no releases and no handling of batches that are not a multiple of 8. Its int sizing (8*n) overflows above about 2^28 (268M) keys.",
+    "Targets without x86-64 AVX2, or MSVC. The header includes <immintrin.h> unconditionally, uses __builtin_clz, and has no NEON path and no runtime CPU dispatch.",
+    "You need reproducible or shareable filters. Each instance seeds its mask table from std::random_device, so bit vectors differ between instances and processes. Arrow's version uses a fixed seed.",
+    "Using SimdBloomFilter (the plain AVX2 register-blocked variant) as is. Its block index (h1 & (num_blocks-1)) and its bit positions ((h1 + i*h2) & 63) both use the low 6 bits of h1, so keys in the same block share a bit offset. That plausibly explains the 7.4-9.8% FPR the author says he could not explain."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "None for bloom_filters.h beyond the standard library and <immintrin.h>. The bench/fpr harness bundles nanobench.h.",
+    "min_toolchain": "Not stated. Built with g++ 12.2.0 at -O3 -mavx2 with no -std flag, so GCC 12's default C++17. Needs GCC/Clang builtins (__builtin_clz).",
+    "platforms": "x86-64 only. The SIMD variants require AVX2 (gathers, variable shifts). No ARM/NEON and no runtime dispatch.",
+    "thread_safety": "Not documented. The code has no atomics or locks, so concurrent Insert calls race on the |= to shared words. Query only reads, so concurrent queries after the build should be safe.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The published numbers predate bug fixes. Every CSV comes from the initial commit of 2023-05-30. PR #1 (July 2024) fixed two bugs. First, PatternedSimdBloomFilter ANDed the hash with its own uninitialized variable instead of the 10-bit mask-index mask. Second, BlockedBloomFilter::Query read the filter's first 32 bytes instead of the key's block. No results have been published for the fixed code. The Blocked probe cost stays flat at ~27 cycles at every size, which is an artifact of the Query bug. The Patterned filter's ~6% FPR is consistent with a near-constant mask index: 64 rotations with about 4 keys per word.",
+    "Memory per key is not matched across variants. The Patterned sizing, 32 - __builtin_clz(m), doubles exact powers of two. At every benchmarked size (powers of 4) the Patterned filter therefore used 16 bits/key against Basic's 9.57, about 1.7x the memory for about 6x the FPR. A Hacker News commenter raised the equal-FPR question in 2023, and it got no reply.",
+    "The SIMD Insert and Query always read 8 hashes with unaligned 256-bit loads. Pad the input to a multiple of 8, or they read past the end.",
+    "Timings exclude hashing. The harness feeds pre-generated random 64-bit values as hashes, and the probe keys are fresh random values, so nearly all probes are negative lookups. Hashing real keys adds cost to every variant and narrows the speedup ratio."
+  ],
+  "pick_this_over_siblings_when": "Pick it only to study or copy the bit-pattern and mask-rotation trick in about 540 lines. For real use, Boost.Bloom's block<uint64_t,K> filters give the same one-word-per-key layout with FPR control and active maintenance, and the Impala-derived AVX2 blocked filter in efficient/cuckoofilter has been tested and benchmarked by independent researchers.",
+  "verified_claims_summary": "On the author's nanobench harness (i9-9900K, g++ 12.2.0, -O3 -mavx2, random 64-bit hashes, 1% FPR target), naive Basic cost 57-58 cycles/op at 1K keys and 254-266 at 67M, while the AVX2 Patterned filter cost 2.9-3.1 at 1K-16K keys (19-20x; the blog says 2.5 cycles and 22x) and 25-30 at 67M (8.8-10.3x). The Patterned filter's 6.0-6.9% FPR against Basic's ~1% was measured on pre-fix code and with different memory per key.",
+  "status_note": "Stale (five commits, last on 2024-07-15, 21 stars, no tests or releases) but MIT-licensed and small enough to vendor as a reference to re-benchmark, while Apache Arrow Acero's BlockedBloomFilter is a production implementation of the same design with AVX2 dispatch, prefetching and folding.",
+  "sources_read": [
+    "https://github.com/save-buffer/bloomfilter_benchmarks",
+    "https://github.com/save-buffer/bloomfilter_benchmarks/blob/master/README.md",
+    "https://github.com/save-buffer/bloomfilter_benchmarks/blob/master/bloom_filters.h",
+    "https://github.com/save-buffer/bloomfilter_benchmarks/blob/master/bench.cpp",
+    "https://github.com/save-buffer/bloomfilter_benchmarks/blob/master/fpr.cpp",
+    "https://github.com/save-buffer/bloomfilter_benchmarks/blob/master/build.sh",
+    "https://github.com/save-buffer/bloomfilter_benchmarks/blob/master/all_bench.csv",
+    "https://github.com/save-buffer/bloomfilter_benchmarks/blob/master/all_fpr.csv",
+    "https://github.com/save-buffer/bloomfilter_benchmarks/blob/master/patterned_register_blocked_simd_bench.csv",
+    "https://github.com/save-buffer/bloomfilter_benchmarks/blob/master/patterned_register_blocked_simd_fpr.csv",
+    "https://github.com/save-buffer/bloomfilter_benchmarks/commits/master",
+    "https://github.com/save-buffer/bloomfilter_benchmarks/pull/1",
+    "https://github.com/save-buffer/bloomfilter_benchmarks/blob/766caa0ebda6b57039357db634c09e1af9f86707/bloom_filters.h",
+    "https://github.com/save-buffer/bloomfilter_benchmarks/blob/766caa0ebda6b57039357db634c09e1af9f86707/build.sh",
+    "https://github.com/save-buffer/bloomfilter_benchmarks/forks",
+    "http://blog.krassovsky.com/bloom_filter.html",
+    "https://news.ycombinator.com/item?id=36119732",
+    "https://raw.githubusercontent.com/apache/arrow/main/cpp/src/arrow/acero/bloom_filter.h",
+    "https://raw.githubusercontent.com/apache/arrow/main/cpp/src/arrow/acero/bloom_filter.cc"
+  ],
+  "confidence": 0.75
+}
