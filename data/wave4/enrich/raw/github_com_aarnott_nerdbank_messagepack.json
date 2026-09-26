@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/aarnott/nerdbank.messagepack",
+  "one_liner": "NativeAOT-ready .NET MessagePack serializer; ~1.2x faster than MessagePack-CSharp on array-encoded small objects, ~5% slower on maps.",
+  "what_it_does": "A MessagePack serializer for .NET from a co-maintainer of MessagePack-CSharp, written as its successor. You put [GenerateShape] on the top-level partial type and call Serialize/Deserialize on a reusable MessagePackSerializer instance; referenced types need no attributes. It is not a drop-in replacement: the attributes, converter interface and option names differ, and the package ships Roslyn analyzers with code fixes that automate most of the migration. It adds async and streaming deserialization, reference preservation, skipping default values, retention of unknown properties, and secure-by-default deserialization.",
+  "how_it_is_fast": "Converters are built at runtime by a visitor over PolyType type shapes that are source-generated at compile time, so there is no reflection or Reflection.Emit. The docs credit this for faster startup, but no startup numbers are published. Property names are pre-encoded to raw msgpack bytes and copied with WriteRaw; on read, the UTF-8 name span is matched without decoding to a string, using a read-only SpanDictionary that indexes by key length first and falls back to a fastmod hash table. Arrays of float and double use SIMD byte-shuffle converters (AVX-512 VBMI, AVX2, SSSE3/Vector128), and PerfOverSchemaStability switches every object to the smaller, faster array encoding.",
+  "when_to_use": [
+    "Small POCOs in array encoding ([Key(n)] or PerfOverSchemaStability=true): the project's SimplePoco benchmark has a 101 ns vs 121 ns round trip against MessagePack-CSharp 3.1.7.",
+    "NativeAOT, trimmed or Unity IL2CPP apps that need MessagePack. The feature table marks MessagePack-CSharp as not NativeAOT-ready or trim-safe.",
+    "Deserializing untrusted msgpack. Secure defaults are on out of the box: SipHash comparers for hashed collections, a MaxDepth nesting limit, and rejection of duplicate property assignment.",
+    "Apps that need async or streaming deserialization, reference preservation or cycles, or round-tripping of unknown properties. MessagePack-CSharp has none of these.",
+    "Existing MessagePack-CSharp codebases that want to move off static resolver state: the analyzers and code fixes do most of the attribute rewrites."
+  ],
+  "when_not_to_use": [
+    "Map-encoded objects (property names on the wire) when throughput is the goal. On the same benchmark MessagePack-CSharp wins the round trip (148 vs 156 ns) and serialization (51.7 vs 57.8 ns).",
+    "You need LZ4 compression or typeless serialization (type names in the payload). Neither is supported; LZ4 is an open feature request (issue #34).",
+    "Your peers run MessagePack-CSharp and exchange DateTimeOffset, Guid, decimal, Int128/UInt128 or BigInteger. The encodings differ, and the docs say DateTimeOffset exchange corrupts data.",
+    "You don't need the MessagePack wire format and only want the fastest .NET serializer. MemoryPack and Nino report many-fold wins over MessagePack-CSharp on their own formats.",
+    "Latency-critical async paths. The docs say async APIs are slightly to dramatically slower than the sync ones, and a user-reported streaming case was 1.38x slower than MessagePack-CSharp before a fix (issue #253)."
+  ],
+  "integration": {
+    "form": "shared lib (NuGet package Nerdbank.MessagePack: managed assembly plus bundled Roslyn analyzers; companion SignalR, ASP.NET Core MVC and Godot packages)",
+    "dependencies": "PolyType (1.4.1 at HEAD, including its source generator), System.IO.Pipelines, Microsoft.VisualStudio.Validation; on netstandard2.0/net472 also Microsoft.Bcl.HashCode, System.Collections.Immutable, System.Text.Json",
+    "min_toolchain": "Library targets net8.0, net9.0, net472 and netstandard2.0. The docs recommend C# 14 (.NET 10 SDK or Visual Studio 2026); generic attributes such as [GenerateShapeFor<T>] need C# 12+.",
+    "platforms": "any .NET runtime; NativeAOT and trimming on .NET 8+; Unity (Mono and IL2CPP) via NuGetForUnity. SIMD primitive-array converters exist only in the .NET (not netstandard) build and use AVX-512 VBMI, AVX2 or Vector128 paths.",
+    "thread_safety": "MessagePackSerializer is immutable and thread-safe; the docs say to create one instance and reuse it. The library has no mutable statics.",
+    "drop_in_for_baseline": "partial — same msgpack spec, and it reads MessagePack-CSharp-written objects. The API and attributes differ, though: [GenerateShape] on partial types, and [PropertyShape] replaces [Key(\"name\")] and [IgnoreMember]. Analyzer code fixes automate the migration. MessagePack-CSharp cannot read some of its output."
+  },
+  "gotchas": [
+    "Guid, decimal, Int128/UInt128 and BigInteger are written as msgpack extension types by default, where MessagePack-CSharp uses bin/string. DateTimeOffset follows the spec, whereas MessagePack-CSharp does not. Check interop before mixing the two libraries.",
+    "PerfOverSchemaStability=true assigns array indices by declaration order. Adding, removing or reordering members, or toggling the flag itself, breaks previously serialized data unless every member has [Key].",
+    "The secure defaults cost some speed on trusted data. Collision-resistant hashing has a small deserialization cost; set ComparerProvider to null to turn it off. Map deserialization always runs duplicate-property detection.",
+    "Types with [GenerateShape] (and any containing types) must be declared partial. Constructing a serializer builds converters, so reuse one instance instead of creating one per call."
+  ],
+  "pick_this_over_siblings_when": "Pick it over MemoryPack or Nino when you need the standard MessagePack wire format (cross-language or existing msgpack peers), NativeAOT/Unity support, or secure deserialization of untrusted input. Those siblings are far faster but use their own binary formats. Among C# MessagePack options it is the only catalogued one with async/streaming reads and reference preservation.",
+  "verified_claims_summary": "The project's checked-in BenchmarkDotNet SimplePoco suite (.NET 10, BenchmarkDotNet 0.15.8, --job medium; CPU not disclosed) serializes and deserializes a two-property POCO (int + string) against MessagePack-CSharp 3.1.7 with Standard options. Array-encoded round trip: 101.37 vs 120.51 ns (~1.19x; serialize 38.75 vs 47.01 ns). Map-encoded round trip: 156.08 vs 148.36 ns (~5% slower). Allocations are equal (80 B round trip, 0 B serialize), and the docs themselves call steady-state throughput 'on par'.",
+  "status_note": "Actively maintained (v1.3.88 released 2026-09-22, pushes through 2026-09-26), MIT-licensed and on NuGet, but young (created Oct 2024, 175 stars) next to MessagePack-CSharp.",
+  "sources_read": [
+    "https://github.com/AArnott/Nerdbank.MessagePack",
+    "https://github.com/AArnott/Nerdbank.MessagePack/blob/main/README.md",
+    "https://aarnott.github.io/Nerdbank.MessagePack/docs/performance.html",
+    "https://github.com/AArnott/Nerdbank.MessagePack/blob/main/docfx/docs/performance.md",
+    "https://github.com/AArnott/Nerdbank.MessagePack/blob/main/docfx/includes/perf.md",
+    "https://github.com/AArnott/Nerdbank.MessagePack/blob/main/docfx/docs/features.md",
+    "https://github.com/AArnott/Nerdbank.MessagePack/blob/main/docfx/docs/security.md",
+    "https://github.com/AArnott/Nerdbank.MessagePack/blob/main/docfx/docs/migrating.md",
+    "https://github.com/AArnott/Nerdbank.MessagePack/blob/main/docfx/docs/unity.md",
+    "https://github.com/AArnott/Nerdbank.MessagePack/blob/main/docfx/docs/getting-started.md",
+    "https://github.com/AArnott/Nerdbank.MessagePack/blob/main/test/Benchmarks/SimplePoco.cs",
+    "https://github.com/AArnott/Nerdbank.MessagePack/blob/main/test/Benchmarks/PocoClass.cs",
+    "https://github.com/AArnott/Nerdbank.MessagePack/blob/main/test/Benchmarks/Benchmarks.csproj",
+    "https://github.com/AArnott/Nerdbank.MessagePack/blob/main/test/Benchmarks/update-benchmarks-report.ps1",
+    "https://github.com/AArnott/Nerdbank.MessagePack/blob/main/samples/cs/Performance.cs",
+    "https://github.com/AArnott/Nerdbank.MessagePack/blob/main/Directory.Packages.props",
+    "https://github.com/AArnott/Nerdbank.MessagePack/blob/main/global.json",
+    "https://github.com/AArnott/Nerdbank.MessagePack/blob/main/src/Nerdbank.MessagePack/Nerdbank.MessagePack.csproj",
+    "https://github.com/AArnott/Nerdbank.MessagePack/blob/main/src/Nerdbank.MessagePack/Converters/ObjectMapConverter%601.cs",
+    "https://github.com/AArnott/Nerdbank.MessagePack/blob/main/src/Nerdbank.MessagePack/Converters/PropertyCollisionDetection.cs",
+    "https://github.com/AArnott/Nerdbank.MessagePack/blob/main/src/Nerdbank.MessagePack/Converters/HardwareAccelerated.cs",
+    "https://github.com/AArnott/Nerdbank.MessagePack/blob/main/src/Nerdbank.MessagePack/Utilities/SpanDictionary.cs",
+    "https://github.com/AArnott/Nerdbank.MessagePack/blob/main/src/Nerdbank.MessagePack/SerializerConfiguration.cs",
+    "https://github.com/AArnott/Nerdbank.MessagePack/blob/main/src/Nerdbank.MessagePack/MessagePackSerializer.cs",
+    "https://github.com/AArnott/Nerdbank.MessagePack/blob/main/src/Nerdbank.MessagePack/ConverterCache.cs",
+    "https://github.com/AArnott/Nerdbank.MessagePack/blob/main/src/Nerdbank.MessagePack/StandardVisitor.cs",
+    "https://github.com/AArnott/Nerdbank.MessagePack/issues/253",
+    "https://github.com/AArnott/Nerdbank.MessagePack/issues?q=is%3Aissue+label%3Abug",
+    "https://github.com/AArnott/Nerdbank.MessagePack/releases"
+  ],
+  "confidence": 0.78
+}
