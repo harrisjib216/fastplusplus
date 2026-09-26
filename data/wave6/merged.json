@@ -2995,6 +2995,7 @@
     "id": "https://github.com/lorenzhs/burr"
   },
   {
+    "id": "paper:cuckoo-filter",
     "name": "Cuckoo Filter (efficient/cuckoofilter)",
     "repo_url": "https://github.com/efficient/cuckoofilter",
     "language": "C++",
@@ -3018,8 +3019,8 @@
     "is_fork_of": null,
     "stars_or_usage": "1013 stars",
     "has_code": true,
-    "tradeoffs": "Supports deletion unlike standard Bloom filters but load factor caps insert capacity (~95% full before insert failures); cuckoo filters are asymptotically worse in bits/item (O(log n)) than Bloom's O(1), though practically better for realistic table sizes with reasonably sized buckets; duplicate-heavy workloads (same item inserted >2b times) can fail.",
-    "caveats": "Peer-reviewed ACM CoNEXT'14 paper (Fan, Andersen, Kaminsky, Mitzenmacher) states hardware but not compiler/flags, so capped at Tier B rather than A even though the benchmark harness (bulk-insert-and-query.cc, conext-figure5.cc, conext-table3.cc) is public in the repo's benchmarks/ dir. README itself carries no numbers.",
+    "tradeoffs": "Supports deletion unlike standard Bloom filters, but load factor caps insert capacity (~95% full before insert failures); asymptotically worse in bits/item (O(log n)) than Bloom's O(1), though practically better for realistic table sizes with reasonably sized buckets; duplicate-heavy workloads (same item inserted >2b times) can fail insertion.",
+    "caveats": "Peer-reviewed ACM CoNEXT'14 paper (Fan, Andersen, Kaminsky, Mitzenmacher) states hardware but not compiler/flags, so capped at Tier B rather than A even though the benchmark harness (bulk-insert-and-query.cc, conext-figure5.cc, conext-table3.cc) is public in the repo's benchmarks/ dir. README itself carries no numbers; numbers above come from the paper.",
     "found_via": [
       "GitHub: gh search repos \"cuckoofilter\" language:C++ --sort stars"
     ],
@@ -3027,8 +3028,7 @@
     "confidence": 0.85,
     "assignment_ids": [
       "w6-filters-gh-cpp2"
-    ],
-    "id": "https://github.com/efficient/cuckoofilter"
+    ]
   },
   {
     "name": "Morton Filter",
@@ -3137,6 +3137,42 @@
       "w6-filters-papers"
     ],
     "id": "https://github.com/ribbonfilter/ribbongo"
+  },
+  {
+    "id": "paper:simd-blocked-bloom",
+    "name": "SIMD Blocked Bloom Filter (src/simd-block.h, Impala-derived)",
+    "repo_url": "https://github.com/efficient/cuckoofilter",
+    "language": "C++",
+    "domain": "storage-and-data",
+    "category": "probabilistic-filters",
+    "baseline": "Bloom filter",
+    "baseline_in_list": true,
+    "metric": "throughput",
+    "workload": "Same 192MB-filter, ~124M-key benchmark as the cuckoo filter paper's evaluation; blocked (one-cache-line-per-item) Bloom filter vs. standard Bloom filter, construction rate and lookup throughput across varying positive-query fraction, two-socket Intel Xeon testbed.",
+    "claimed_speedup": "Construction rate 7.64M keys/sec (best of all filters tested) vs 3.91M keys/sec for standard Bloom filter at 192MB (Table 3, ~1.95x, derived from page data); lookup throughput consistently ~4 MOPS higher than standard Bloom filter across the full range of query mixes because every query touches at most one cache line vs. potentially multiple cache misses for standard Bloom (Fig. 5 and Sec. 7.2 text).",
+    "evidence_tier": "B",
+    "benchmark_url": "http://www.cs.cmu.edu/~binfan/papers/conext14_cuckoofilter.pdf",
+    "baseline_stdlib": [],
+    "compiler_and_flags": null,
+    "hardware": "2x Intel Xeon L5640 @ 2.27GHz, 12MB L3 cache, 32GB DRAM",
+    "compared_against_cpp_std_directly": null,
+    "license": "Apache-2.0",
+    "usability": "copyable",
+    "last_commit": "2021-11-12",
+    "maintenance_status": "abandoned",
+    "is_fork_of": null,
+    "stars_or_usage": "1013 stars (host repo)",
+    "has_code": true,
+    "tradeoffs": "Higher false positive rate than standard Bloom at equal space (0.43% vs 0.19% at 13 bits/item, Table 3) because hashing items to one of many small per-block filters creates imbalanced \"hot\"/\"cold\" blocks even with strong hash functions; no deletion support.",
+    "caveats": "Same paper as the cuckoo-filter entry above; hardware stated, compiler/flags not stated in the paper text I read, capping at Tier B. Implementation credited by FastFilter/fastfilter_cpp's README as originating from https://github.com/apache/impala; this specific benchmarked copy lives at src/simd-block.h in efficient/cuckoofilter.",
+    "found_via": [
+      "GitHub: gh api repos/efficient/cuckoofilter/contents/src (found simd-block.h alongside cuckoofilter.h); cross-checked via FastFilter/fastfilter_cpp README credits section"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.75,
+    "assignment_ids": [
+      "w6-filters-gh-cpp2"
+    ]
   },
   {
     "name": "SuRF (Succinct Range Filter)",
@@ -3283,6 +3319,42 @@
       "w6-filters-papers"
     ],
     "id": "https://github.com/chainedfilter/chainedfilter"
+  },
+  {
+    "name": "GBF-NEON (Galois Bipartite Filter, Ribbon-filter variant)",
+    "repo_url": "https://github.com/ElVec1o/GBF-NEON",
+    "language": "C++",
+    "domain": "storage-and-data",
+    "category": "probabilistic-filters",
+    "baseline": "Bloom filter",
+    "baseline_in_list": true,
+    "metric": "latency",
+    "workload": "1M random uint64 keys, single machine, comparing the project's own Ribbon-filter-derived GBF against the project's own \"competent cache-line-aligned Blocked Bloom\" and a naive Bloom (k=6) implementation; query latency and false-positive rate measured via ./build/bench_vs.",
+    "claimed_speedup": "8.4 ns query latency (GBF) vs 16.4 ns (Blocked Bloom, 8.26 bits/key) and 17.6 ns (naive Bloom, k=6) \u2014 roughly 2x faster query latency at near-equal memory (8.52 vs 8.26 bits/key), with false positive rate 0.78% vs 2.90%/1.69% (README table, 'Head-to-head vs competent Blocked Bloom').",
+    "evidence_tier": "C",
+    "benchmark_url": "https://github.com/ElVec1o/GBF-NEON#head-to-head-vs-competent-blocked-bloom-buildbench_vs",
+    "baseline_stdlib": [],
+    "compiler_and_flags": null,
+    "hardware": "Apple M2 (Apple Silicon, NEON)",
+    "compared_against_cpp_std_directly": null,
+    "license": "MIT",
+    "usability": "copyable",
+    "last_commit": "2026-05-28",
+    "maintenance_status": "active",
+    "is_fork_of": null,
+    "stars_or_usage": "0 stars",
+    "has_code": true,
+    "tradeoffs": "Static only, no insert/erase after build; build time ~6x slower than Bloom (30ms vs ~4-7ms for 1M keys); no AVX-512 path shipped (x86 falls back to scalar, and author states x86 perf is unverified beyond CI correctness); power-of-2 partition sizing can over-allocate space up to ~30% at adversarial N.",
+    "caveats": "First-party, self-run benchmark (project's own bench_vs binary) with hardware stated (Apple M2) but no compiler version/flags given beyond '-DCMAKE_BUILD_TYPE=Release', and the Blocked Bloom baseline being compared against is the author's own implementation, not an established third-party library \u2014 caps this at Tier C. Brand-new (0-star) single-author project, README candidly notes 8 of 9 tried ideas failed; not independently reproduced.",
+    "found_via": [
+      "GitHub: gh search repos \"blocked bloom filter\" --sort stars"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.4,
+    "assignment_ids": [
+      "w6-filters-gh-cpp2"
+    ],
+    "id": "https://github.com/elvec1o/gbf-neon"
   },
   {
     "name": "Windowed Cuckoo Filter (WindowFilter, implements 'Smaller and More Flexible Cuckoo Filters')",
