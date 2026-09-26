@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/mohammadraziei/liburlparser",
+  "one_liner": "C++17 RFC 3986-style URL splitter with Public Suffix List domain extraction; its own parse+accessor loop runs ~1.25x ahead of ada.",
+  "what_it_does": "Splits a URL into scheme, userinfo, host, port, path, params, query and fragment. It classifies the host as hostname, IPv4 or IPv6 (a std::variant), and splits a hostname into subdomain, domain and suffix with an embedded Public Suffix List, which ada does not offer. The API is its own: urlparser::url(std::string_view) throws std::invalid_argument on bad input and exposes string_view accessors such as protocol(), host_text(), query() and fragment(), plus abspath() and normalized(). The same classes ship as a nanobind Python module (PyPI 'liburlparser') and a 'python -m liburlparser' CLI.",
+  "how_it_is_fast": "The url constructor copies every field once into one owned buffer and stores (offset, length) spans, so most accessors are string_view reads with no allocation. It finds '#', '?' and ';' with a compare-and-OR SIMD scan: AVX2 selected at runtime, SSE2 or NEON as the baseline, scalar code otherwise. The ada win comes from abspath(), which used to run a full dot-segment resolver on every call; a cheap path_is_already_normalized() pre-scan now copies clean paths through unchanged and caches the result. PSL lookups use a vendored ankerl::unordered_dense open-addressing map, and the project reports +67-70% on host extraction from that change.",
+  "when_to_use": [
+    "You need registrable-domain and public-suffix splitting (for example 'ee.aut.ac.ir' becomes domain 'aut', suffix 'ac.ir') together with basic URL component splitting in one C++ or Python library.",
+    "High-volume log or crawl processing of already-well-formed http(s) URLs, where you read scheme, host, path, query and fragment and do not need WHATWG canonicalization.",
+    "Python pipelines that use tldextract, tld or publicsuffix2 for domain extraction. The README (2022 run) reports 1.12 s for 10M hosts, against 29.23 s for tldextract and 1.50 s for PyDomainExtractor.",
+    "Code that must treat IPv4 and IPv6 hosts as typed addresses with integer conversion and arithmetic, not as domain names."
+  ],
+  "when_not_to_use": [
+    "You need WHATWG URL Standard behavior (browser-equivalent parsing, percent-encoding of components, host validation, special-scheme rules). ada and its ports implement the standard. liburlparser is not documented as WHATWG-conformant, and its url constructor only trims, splits and lowercases the scheme and host.",
+    "You need the benchmarked speed from a released package. The abspath() fast path and cache landed on master on 2026-09-18. Tag v2.0.0 (2026-09-11), which is also the latest PyPI release, still has the old abspath() that returns std::string by value. That old build measured 0.90-0.91x of ada.",
+    "Input that is often messy or relative (dot-segments, repeated slashes, Unicode hosts). The published speed figures come from clean, simple URLs, where the fast path always applies.",
+    "Several threads reading one url or hostname object at the same time. The const accessors fill mutable caches (host_cache_, abspath_cache_, hostname's parsed fields) with no locking, and the docs do not address this.",
+    "Maturity-sensitive production use: 21 stars, one main author, v2.0.0 only weeks old, and daily API-changing commits (for example scp to scp_url renames and merged source files) in September 2026."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none at runtime (PSL data embedded at compile time; vendored ankerl::unordered_dense header, MIT). Build needs CMake >= 3.19 and a Python 3 interpreter (find_package REQUIRED). Configure tries to download public_suffix_list.dat and falls back to the tracked copy. The Python module needs nanobind.",
+    "min_toolchain": "C++17, CMake 3.19+; Python binding: Python >= 3.10 per PyPI metadata (README still says >= 3.8)",
+    "platforms": "Linux, macOS, Windows (CI matrix on ubuntu/macos/windows-latest). SIMD: x86-64 SSE2 baseline with runtime-dispatched AVX2, aarch64 NEON, scalar fallback elsewhere.",
+    "thread_safety": "PSL singleton is lazily initialized via a function-local static (thread-safe init). No mutex anywhere: psl::load_from_path/load_from_string replace the shared table unguarded, and const accessors on url/hostname write mutable caches, so a shared object is not safe for concurrent reads. Otherwise not documented.",
+    "drop_in_for_baseline": "partial — it covers the same 'parse a URL, read components' job, but the API and semantics differ: protocol() has no trailing ':' and query() has no leading '?', while ada's get_protocol() and get_search() include them. Errors are exceptions, not ada::result. There is no WHATWG normalization, href or setters."
+  },
+  "gotchas": [
+    "abspath() and normalized() drop a trailing '/' on non-root paths ('/a/' becomes '/a') and collapse '//' ('/a//b' becomes '/a/b'). The header documents both as deliberate and as different from ada's normalize_url().",
+    "url parsing keeps Unicode hosts verbatim (ASCII-only per RFC 3986). Only idna::to_ascii() or url::normalized() convert them to Punycode, so 'café.com' and its xn-- form do not compare equal after a plain parse.",
+    "Master still reports URLPARSER_VERSION 2.0.0, but it differs from the v2.0.0 tag (abspath() now returns const std::string& and there are new APIs). You cannot tell the fast and slow builds apart by version number.",
+    "License is ambiguous. The README badge and text say MIT, but the LICENSE file is pybind11's BSD-3-Clause text with 'The Pybind Development Team' as copyright holder, and GitHub reports NOASSERTION."
+  ],
+  "pick_this_over_siblings_when": "Pick it over Ada, ada-rs, lucid-url or sorug only when you need Public Suffix List domain and suffix splitting (none of those do it) and RFC 3986-level splitting is enough. When WHATWG-correct parsing or canonical href output matters, use Ada or one of its WHATWG ports.",
+  "verified_claims_summary": "The author's fair_compare.cpp interleaves old liburlparser, new liburlparser and unmodified ada::parse<ada::url_aggregator> in one process; each op parses one URL and reads 5 components, and the new build did ~7.4-7.8M ops/s against ada's ~6.0-6.1M (1.24-1.29x), while the pre-fix build did 0.90-0.91x. Only 'this machine, 3 runs' is stated (no CPU, compiler or flags), urls.txt is not shipped (probably the benchmarks/ corpus of 10k Majestic domains in four simple, clean-path shapes), and ada's side also does WHATWG validation and normalization, so the two sides do not do equal work.",
+  "status_note": "Actively developed (near-daily commits through 2026-09-25) and small enough to vendor as one .cpp/.h pair, but the benchmarked fast path is on master only (not in v2.0.0 or on PyPI) and the MIT vs BSD-3-Clause license question should be settled before you copy it.",
+  "sources_read": [
+    "https://github.com/MohammadRaziei/liburlparser",
+    "https://github.com/MohammadRaziei/liburlparser/blob/master/README.md",
+    "https://github.com/MohammadRaziei/liburlparser/blob/master/benchmarks/cpp/abspath_fix_verification/README.md",
+    "https://github.com/MohammadRaziei/liburlparser/blob/master/benchmarks/cpp/abspath_fix_verification/fair_compare.cpp",
+    "https://github.com/MohammadRaziei/liburlparser/blob/master/benchmarks/OPTIMIZATION_NOTES.md",
+    "https://github.com/MohammadRaziei/liburlparser/blob/master/benchmarks/README.md",
+    "https://github.com/MohammadRaziei/liburlparser/blob/master/benchmarks/CMakeLists.txt",
+    "https://github.com/MohammadRaziei/liburlparser/blob/master/benchmarks/cpp/CMakeLists.txt",
+    "https://github.com/MohammadRaziei/liburlparser/blob/master/benchmarks/corpus/generate_corpus.py",
+    "https://github.com/MohammadRaziei/liburlparser/blob/master/benchmarks/cpp/bench.cpp",
+    "https://github.com/MohammadRaziei/liburlparser/blob/master/ARCHITECTURE.md",
+    "https://github.com/MohammadRaziei/liburlparser/blob/master/LICENSE",
+    "https://github.com/MohammadRaziei/liburlparser/blob/master/CMakeLists.txt",
+    "https://github.com/MohammadRaziei/liburlparser/blob/master/include/urlparser.h",
+    "https://github.com/MohammadRaziei/liburlparser/blob/master/src/urlparser.cpp",
+    "https://github.com/MohammadRaziei/liburlparser/blob/v2.0.0/src/urlparser.cpp",
+    "https://github.com/MohammadRaziei/liburlparser/blob/v2.0.0/include/urlparser.h",
+    "https://github.com/MohammadRaziei/liburlparser/blob/master/tests/cpp/perf_regression_guard.cpp",
+    "https://github.com/MohammadRaziei/liburlparser/blob/master/tests/cpp/fuzz_abspath.cpp",
+    "https://github.com/MohammadRaziei/liburlparser/blob/master/.github/workflows/cmake.yml",
+    "https://github.com/MohammadRaziei/liburlparser/blob/master/.github/workflows/wheels.yml",
+    "https://github.com/MohammadRaziei/liburlparser/blob/master/pyproject.toml",
+    "https://github.com/MohammadRaziei/liburlparser/issues?q=is%3Aissue",
+    "https://github.com/MohammadRaziei/liburlparser/pulls?q=is%3Apr",
+    "https://github.com/MohammadRaziei/liburlparser/releases",
+    "https://github.com/MohammadRaziei/liburlparser/commits/master",
+    "https://pypi.org/pypi/liburlparser/json",
+    "https://hn.algolia.com/api/v1/search?query=liburlparser"
+  ],
+  "confidence": 0.35
+}
