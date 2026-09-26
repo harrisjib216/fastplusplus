@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/tomereven/prefix-filter",
+  "one_liner": "Insert-only AVX-512 filter with a fixed ~0.37% false-positive rate; builds over 3.2x faster than cuckoo filters in similar space.",
+  "what_it_does": "An incremental approximate-membership filter for 64-bit integer keys: you can add keys and query them, but never delete. You size it once for a maximum key count, then call Add and Contain. The false-positive rate is fixed at about 2^-8 (0.37-0.39% measured). The wrapper's Remove throws std::runtime_error, and the code has no serialization API. It is not a drop-in for any Bloom or cuckoo library. The Prefix_Filter<Spare> class template lives in the benchmark file Tests/wrappers.hpp and is called through the fastfilter_cpp-style harness: FilterAPI<...>::ConstructFromAddCount, Add and Contain.",
+  "how_it_is_fast": "It has two levels, following the Bercea-Even (BE) filter. The first level is a table of 32-byte pocket dictionaries (Elias-Fano/quotienting encoding: Q=25 lists, 8-bit remainders, 25 slots per bin), which holds about 94% of the fingerprints. A small second-level 'spare' filter holds the rest; by default the spare is TwoChoicer, the authors' own vector quotient filter. When a bin is full, an insert evicts the largest fingerprint among the bin and the new key to the spare. This keeps the 'Prefix Invariant': each bin holds the smallest fingerprints mapped to it, so a query can tell from the bin alone whether it needs the spare. As a result, about 92% of negative queries touch one cache line; cuckoo filters and vector quotient filters touch two. Inside a bin, a query broadcasts the 8-bit remainder and runs one AVX-512 byte compare over the body. That answers most negatives without a Select (PDEP/TZCNT) on the 50-bit header.",
+  "when_to_use": [
+    "Filters built once for immutable data, such as per-run filters in an LSM tree, where build time matters and about 12 bits/key at about 0.4% false positives is acceptable.",
+    "Keys arrive one at a time and the filter fills to 90-95% of capacity. In the paper's tests, cuckoo filter inserts slow down more than 27x at high load, while prefix filter inserts decline only 1.9-2.8x from their plateau.",
+    "Mostly-negative lookups in front of a slow store, on filters larger than the last-level cache. Negative queries were 55% and 40% faster than CF-12 at 50% and 70% load.",
+    "Keys cannot all be gathered before building, which rules out static xor, binary fuse and ribbon filters.",
+    "Single-threaded use on Linux, on an Intel server CPU with full AVX-512 including VBMI (the paper used Ice Lake)."
+  ],
+  "when_not_to_use": [
+    "You need deletions or counting. The Prefix Invariant makes deletion impossible (paper Sec. 4.1), and Remove throws.",
+    "No AVX-512: AVX2-only x86, ARM or Apple Silicon. There is no scalar fallback, and the build fails with 'target specific option mismatch' on _mm256_permutexvar_epi8 (issue #1, open since 2024-01 with no fix).",
+    "Mostly-positive lookups on a full filter. At 100% load, positive queries are 28-40% slower than CF-12-Flex and 46-60% slower than CF-12. If raw speed matters more than space, the blocked Bloom filter is about 2x faster on every operation, at a 3-6x higher false-positive rate in the paper's configuration.",
+    "You need a tunable false-positive rate, or you don't know the key count. The 8-bit remainder fixes the rate near 0.37-0.39%. The spare is sized for the declared capacity, so going past it makes the spare insert fail and throw std::logic_error.",
+    "Concurrent writers. The code has no synchronization. The paper (Sec. 4.4) sketches per-bin locking but did not implement it."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "No external libraries. Tests/wrappers.hpp, which holds the Prefix_Filter class, also #includes the bundled Bloom, blocked Bloom and cuckoo filter headers. Python (matplotlib, pandas, brokenaxes) is needed only to plot results.",
+    "min_toolchain": "C++17 (CMAKE_CXX_STANDARD 17) and CMake 3.10+. The paper used GCC 10.3; the README says GCC 9.3 works, recommends newer releases, and names Clang as an option. CMake sets -march=native for everything.",
+    "platforms": "x86-64 Linux only. It needs AVX-512F/BW/VL plus VBMI (512-bit ops in the TwoChoicer spare, the 256-bit byte permute in the pocket dictionary) and BMI2 (PDEP/TZCNT/BZHI). The README says 'Intel. Support of AVX512 is a must.' Hash seeds are read from /dev/urandom.",
+    "thread_safety": "Not documented. The Add path has no locks or atomics, so treat each instance as single-writer. The paper's concurrent per-bin-locking design is not implemented.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Prefix_Filter and TC_shortcut own a raw posix_memalign buffer, free it in the destructor, and define no copy or move constructors. Copying one, for example by pushing it into a std::vector that reallocates, double-frees. Construct it in place or hold it through a pointer.",
+    "Capacity is a hard limit. The spare holds 1.08 x 5.86% / 0.935 of max_items. Once it is full, Add prints to stdout and throws std::logic_error. If allocation fails, Prefix_Filter calls exit(-3). TC_shortcut instead returns with an uninitialized buffer (its assert is compiled out under -DNDEBUG).",
+    "Add does not deduplicate: the paper assumes distinct keys, and inserting the same key twice uses two slots. Each instance seeds its Dietzfelbinger multiply-shift hash from /dev/urandom, so two filters over the same keys differ, and there is no way to persist or reload a filter.",
+    "The README's build steps clone TheHolyJoker/Prefix-Filter with -b master. That repo returns 404; the real source is TomerEven/Prefix-Filter, and its only branch is main."
+  ],
+  "pick_this_over_siblings_when": "Pick it over xor/binary fuse (xor_singleheader) or BuRR only when keys must be inserted one at a time. Those two are static and need the whole key set before building. When the key set is known up front, they are smaller: Xor8 is 9.8 bits/key and BuRR is under 1.5% over the optimum, while the prefix filter is 11.55-12.13 bits/key, about 3.6 bits over the optimum. They also run without AVX-512.",
+  "verified_claims_summary": "The paper's authors measured single-threaded runs on one Xeon Gold 6336Y (Ice Lake) core, built with GCC 10.3 using -Ofast -march=native, inserting 0.94*2^28 (about 252M) random 64-bit keys. The prefix filter built more than 3.2x faster than every cuckoo filter setup (Fan et al.'s own code and a flexible variant) and 1.39-1.46x faster than the authors' vector quotient filter, using 11.55-12.13 bits/key at a 0.37-0.39% false-positive rate. It won on negative queries against CF-12 at every load up to 95% (+55% at 50% load, +2.8% at 90%), but lost 46-60% to CF-12 on positive queries at full load. There is no C++ standard library baseline for this kind of structure.",
+  "status_note": "This is an abandoned research artifact: the last commit was 2022-09-12, and the one open issue (an AVX-512 build failure) has had no fix since 2024. It is Apache-2.0 per LICENSE.md (GitHub reports NOASSERTION) and about 4k lines, so it can be vendored. FastFilter/fastfilter_cpp carries a copy in its benchmark harness (added 2022-07-11), compiled only when AVX512BW/VL/CD/DQ are enabled.",
+  "sources_read": [
+    "https://github.com/TomerEven/Prefix-Filter",
+    "https://github.com/TomerEven/Prefix-Filter/blob/main/README.md",
+    "https://github.com/TomerEven/Prefix-Filter/blob/main/CMakeLists.txt",
+    "https://github.com/TomerEven/Prefix-Filter/blob/main/LICENSE.md",
+    "https://github.com/TomerEven/Prefix-Filter/blob/main/example.cpp",
+    "https://github.com/TomerEven/Prefix-Filter/blob/main/Tests/wrappers.hpp",
+    "https://github.com/TomerEven/Prefix-Filter/blob/main/Prefix-Filter/min_pd256.hpp",
+    "https://github.com/TomerEven/Prefix-Filter/blob/main/Prefix-Filter/min_pd256.cpp",
+    "https://github.com/TomerEven/Prefix-Filter/blob/main/TC-Shortcut/TC-shortcut.hpp",
+    "https://github.com/TomerEven/Prefix-Filter/blob/main/TC-Shortcut/tc-sym.hpp",
+    "https://github.com/TomerEven/Prefix-Filter/blob/main/hashutil.h",
+    "https://github.com/TomerEven/Prefix-Filter/blob/main/main-built.cpp",
+    "https://github.com/TomerEven/Prefix-Filter/blob/main/RunAll.sh",
+    "https://github.com/TomerEven/Prefix-Filter/issues/1",
+    "https://github.com/TomerEven/Prefix-Filter/commits/main",
+    "https://github.com/TheHolyJoker/Prefix-Filter",
+    "https://arxiv.org/pdf/2203.17139",
+    "https://github.com/FastFilter/fastfilter_cpp",
+    "https://github.com/FastFilter/fastfilter_cpp/blob/master/src/prefix/min_pd256.hpp",
+    "https://github.com/FastFilter/fastfilter_cpp/blob/master/benchmarks/filterapi.h",
+    "https://hn.algolia.com/api/v1/search?query=%22prefix%20filter%22&tags=story"
+  ],
+  "confidence": 0.86
+}
