@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/aws/aws-lc",
+  "one_liner": "BoringSSL-derived, OpenSSL-1.1.1-API-compatible TLS/crypto library from AWS; out-scales OpenSSL 3.x in HAProxy handshakes and resumption.",
+  "what_it_does": "AWS-LC is AWS's general-purpose libcrypto plus libssl. It was forked from BoringSSL in 2019 and keeps source compatibility with most of the OpenSSL 1.1.1 API: OPENSSL_VERSION_NUMBER reports 1.1.1, and the OPENSSL_IS_AWSLC macro tells the two apart. OpenSSL-based applications usually recompile against it after the fixes in PORTING.md. It also exposes BoringSSL-only APIs, such as the QUIC hooks (SSL_set_quic_method), CRYPTO_BUFFER certificate pools and asynchronous private-key methods, and adds FIPS builds, post-quantum algorithms and formally verified s2n-bignum assembly.",
+  "how_it_is_fast": "For resumption scaling, shared objects are reference-counted with lock-free C11 atomic compare-and-swap (crypto/refcount_c11.c), and since PR #2786 (v1.64.0) the ticket session-hit counters use C++11 atomics. The resumption fast path therefore takes no locks. HAProxy's profiles of OpenSSL 3.x showed contention from locks and heavy atomic use. Full RSA handshakes are bound by Montgomery multiplication, and AWS-LC picks a kernel per microarchitecture at runtime. Cores it flags as having wide multipliers (Neoverse V1/V2/V3, Apple M) get the armv8 bn_mul_mont assembly and 8x-unrolled AES-GCM; narrow-multiplier NEON cores get s2n-bignum's formally verified Karatsuba multiply with bignum_emontredc_8n reduction. HAProxy's Graviton4 gain came from adding Neoverse V2 detection, which took RSA-2048 signing on Graviton4 from 930 to 1,398 ops/s (per the commit's own numbers).",
+  "when_to_use": [
+    "High-connection-rate TLS termination (load balancers, reverse proxies such as HAProxy) stuck on OpenSSL 3.x, where full handshakes or ticket resumption stop scaling past 16-32 threads",
+    "Many-core AWS Graviton or other Neoverse V1/V2 servers: AWS tests ARM optimizations on Graviton, and the published numbers are for Graviton4",
+    "OpenSSL-API codebases that need QUIC via the BoringSSL-style QUIC API without moving to BoringSSL's unstable API",
+    "Deployments that need a FIPS-validated module (FIPS branches) or post-quantum key exchange and signatures in the same library",
+    "Teams that can follow its live-at-head model and rebuild regularly"
+  ],
+  "when_not_to_use": [
+    "You need to replace the system OpenSSL under prebuilt binaries: AWS-LC is API-compatible but not ABI-compatible, so every consumer must be recompiled",
+    "You depend on OpenSSL features it lacks: security levels (@SECLEVEL is parsed and ignored), TLS compression, DANE, FFDH/DHE and CCM cipher suites, server-side renegotiation, ENGINEs, or stateful session resumption on TLS 1.3",
+    "You need a long-term-support branch: there is no general LTS, releases ship every 1-3 weeks, and only the FIPS branches have long support",
+    "Short-lived processes or fast-startup CLIs: in open issue #3180, jitterentropy seeding raised per-process startup from about 0.4 ms (v1.39) to about 36 ms (v1.71); the workaround is -DDISABLE_CPU_JITTER_ENTROPY=ON",
+    "Throughput-critical single primitives on some x86 CPUs: open issues report AES-GCM slower than BoringSSL on Zen3 (#2283) and SHA-2 slower than OpenSSL on Haswell and Zen3 (#3531, not reproduced by the maintainers)"
+  ],
+  "integration": {
+    "form": "static lib or shared lib (CMake; separate libcrypto and libssl), with checked-in pre-generated sources for other build systems",
+    "dependencies": "Runtime: none beyond libc/pthreads. Build: CMake (CMakeLists requires 3.5+; BUILDING.md still says 3.0), Perl and Go 1.20+ unless you use the pre-generated sources, NASM on Windows",
+    "min_toolchain": "C compiler with C11 atomics (a C99 fallback exists but uses rwlock refcounting) and a C++11 compiler for libssl; GCC 4.1.3+, Clang, MSVC 2015+; CMake warns against GCC versions affected by GCC bug 95189",
+    "platforms": "CI-tested on Linux x86-64/aarch64/ppc/ppc64/ppc64le, macOS x86-64/aarch64, Windows x86-64, Android and iOS aarch64; best-effort on FreeBSD/OpenBSD/NetBSD, Linux arm32/x86/risc-v64/s390x/loongarch64, Windows aarch64, and experimental wasm32; assembly fast paths for x86-64 and aarch64",
+    "thread_safety": "SSL_CTX is thread-safe; an SSL connection must be used by one thread at a time. No locking callbacks are needed (OpenSSL's threading setup APIs are no-ops) because it calls pthreads or Windows primitives internally",
+    "drop_in_for_baseline": "partial — source-compatible with most of the OpenSSL 1.1.1 API but not ABI-compatible; several OpenSSL features and flags are absent or no-ops (see PORTING.md). A separate aws-lc-provider module (needs OpenSSL 3.5+ and a shared build) can serve crypto to unmodified OpenSSL 3 apps, but that path keeps OpenSSL's libssl and was not benchmarked"
+  },
+  "gotchas": [
+    "The lock-free refcounts only exist when compiled as C11 with lock-free atomics (crypto/internal.h). Releases before v1.34.0 (Aug 2024) forced -std=c99, and HAProxy saw resumption collapse to about 8.5k conn/s at 64 threads. CMake now try-compiles C11, but if you build from the pre-generated sources in your own build system, make sure C11 is on",
+    "Use v1.64.0 or later for ticket-heavy servers: until PR #2786 (Nov 2025), the session-hit counters took a pthread rwlock, and v1.62.0 managed 49k TLS 1.2 resumptions/s against OpenSSL 1.1.1's 208k on a 64-core EPYC (issue #2776)",
+    "ARM speedups depend on recognizing the core: Graviton4 (Neoverse V2) ran the slower kernels until July 2024 (commit d3fa1f2), so new or unlisted ARM cores may fall back the same way",
+    "The default CMake build is Debug with no optimization (pass -DCMAKE_BUILD_TYPE=Release). Memory returned by the library must be freed with OPENSSL_free, which zeroes it"
+  ],
+  "pick_this_over_siblings_when": "Pick it over wolfSSL when you want the fastest many-core result and an OpenSSL-1.1.1-style API to port to. In HAProxy's Graviton4 test, AWS-LC was about 6% ahead on full handshakes (63.1k vs 59.7k conn/s) and about 20% ahead on resumption once built as C11. wolfSSL was fast without any build tuning and offers support contracts. Pick it over Tempesta FW whenever you need a userspace library to link: Tempesta's TLS runs inside a Linux-kernel web accelerator and cannot be dropped into an application.",
+  "verified_claims_summary": "HAProxy Technologies ran HAProxy 3.1-dev1 (gcc 11.4) on a 64-core Graviton4 r8g.16xlarge at 64 threads. For full RSA handshakes, AWS-LC v1.32.0 plus 30 commits did 63.1k new conn/s, against 48.3k for OpenSSL 1.1.1w, about 43k for OpenSSL 3.1-3.4-dev and about 21k for 3.0.x. For end-to-end ticket resumption, AWS-LC built as C11 reached about 183-186k conn/s, against 124k for OpenSSL 1.1.1w (with HAProxy's lightweight locks) and at most 28k for OpenSSL 3.x. AWS-LC's default C99 build of the time dropped to about 8.5k conn/s with pthread locks.",
+  "status_note": "Very active and AWS-maintained: v5.10.0 shipped 2026-09-23, releases come every 1-3 weeks, and s2n-tls and aws-lc-rs build on it. All code is under permissive licenses (Apache-2.0/ISC plus OpenSSL/BoringSSL-lineage terms). AWS published five advisories in March 2026 (PKCS7_verify, CRL-scope and X.509 validation bypasses, AES-CCM timing), so track releases.",
+  "sources_read": [
+    "https://github.com/aws/aws-lc",
+    "https://github.com/aws/aws-lc/blob/main/README.md",
+    "https://github.com/aws/aws-lc/blob/main/BUILDING.md",
+    "https://github.com/aws/aws-lc/blob/main/PORTING.md",
+    "https://github.com/aws/aws-lc/blob/main/INCORPORATING.md",
+    "https://github.com/aws/aws-lc/blob/main/CMakeLists.txt",
+    "https://github.com/aws/aws-lc/blob/main/LICENSE",
+    "https://github.com/aws/aws-lc/blob/main/SECURITY.md",
+    "https://github.com/aws/aws-lc/blob/main/crypto/internal.h",
+    "https://github.com/aws/aws-lc/blob/main/crypto/refcount_c11.c",
+    "https://github.com/aws/aws-lc/blob/main/crypto/fipsmodule/cpucap/internal.h",
+    "https://github.com/aws/aws-lc/blob/main/crypto/fipsmodule/bn/montgomery.c",
+    "https://github.com/aws/aws-lc/blob/main/include/openssl/ssl.h",
+    "https://github.com/aws/aws-lc/blob/main/include/openssl/mem.h",
+    "https://github.com/aws/aws-lc/blob/main/docs/porting/functionality-differences.md",
+    "https://github.com/aws/aws-lc/blob/main/docs/porting/configuration-differences.md",
+    "https://github.com/aws/aws-lc/blob/main/docs/SymbolVersioning.md",
+    "https://github.com/aws/aws-lc/blob/main/provider/README.md",
+    "https://github.com/aws/aws-lc/commit/d3fa1f237b",
+    "https://github.com/aws/aws-lc/issues/1723",
+    "https://github.com/aws/aws-lc/pull/1729",
+    "https://github.com/aws/aws-lc/issues/2776",
+    "https://github.com/aws/aws-lc/pull/2786",
+    "https://github.com/aws/aws-lc/issues/3180",
+    "https://github.com/aws/aws-lc/issues/3531",
+    "https://github.com/aws/aws-lc/issues/2283",
+    "https://github.com/aws/aws-lc/security/advisories",
+    "https://github.com/aws/aws-lc/releases",
+    "https://www.haproxy.com/blog/state-of-ssl-stacks",
+    "https://github.com/aws/aws-lc-rs",
+    "https://github.com/aws/s2n-tls"
+  ],
+  "confidence": 0.8
+}
