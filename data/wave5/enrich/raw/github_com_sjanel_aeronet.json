@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/sjanel/aeronet",
+  "one_liner": "C++23 HTTP/1.1, HTTP/2 and WebSocket server library; out-serves Go net/http and mostly Boost.Beast in first-party single-thread tests.",
+  "what_it_does": "A batteries-included C++ server library: you build a Router (exact paths, {param} patterns with regex constraints, trailing wildcards), register lambdas that take an HttpRequestView and return an HttpResponse (or a coroutine RequestTask<HttpResponse>), and hand it to HttpServer, which runs N event-loop threads. TLS, HTTP/2, WebSocket, gzip/zstd/brotli, static files with range requests, CORS, rate limiting, Kubernetes probes, OpenTelemetry, a matching HTTP client and a JWT module are compile-time opt-in modules. It is a framework, not a drop-in for Beast's low-level asio message/stream toolkit or for Go's net/http.",
+  "how_it_is_fast": "One edge-triggered epoll reactor per thread (kqueue on macOS, WSAPoll on Windows), scaled across cores with SO_REUSEPORT so each thread has its own listening socket and no shared accept lock. Requests are parsed in place: HttpRequestView fields are std::string_views into a pooled per-connection buffer, and CRLF scanning uses memchr. Responses are built in one contiguous buffer (status line, headers, body) and sent with writev plus TCP_CORK, with a Date header cached once per second; literal routes sit in a CityHash flat_hash_map and pattern routes in a radix tree. Linux-only extras include sendfile, kTLS and MSG_ZEROCOPY (128 KiB threshold).",
+  "when_to_use": [
+    "Linux C++ microservices that need HTTP/1.1, HTTP/2 (h2 and h2c), WebSocket and TLS from one library, with Kubernetes probes and (experimental) OpenTelemetry built in.",
+    "Header-heavy or body-heavy request handling: at 10 connections it served 2.75x Beast's req/s on the many-headers test and 6.9x on the 'body' POST test, and 3.0x and 9.4x Go net/http.",
+    "Replacing a hand-rolled Boost.Beast server when you want routing, middleware, compression and static-file serving without writing the asio plumbing yourself.",
+    "APIs with large route tables: in the 1,000-route test it did 57.6k req/s vs Beast's 48.0k and Go's 28.1k at 10 connections.",
+    "Projects already on C++23 (GCC 13+, Clang 21, MSVC 17.x) that can build with CMake 3.28+."
+  ],
+  "when_not_to_use": [
+    "Static-file or tiny-response loads at high connection counts: at 100 connections Beast (96.4k) and Drogon (99.7k) beat it on the static test, and Beast won 1,000-route routing (100.8k vs 92.0k).",
+    "Toolchains below C++23, GCC 13 or CMake 3.28; the install guide says GCC 12 may lack needed C++23 features.",
+    "When you need a proven production track record: the project started in September 2025, has 44 stars, and one maintainer made 1,329 of about 1,358 commits.",
+    "When you need HTTP/3/QUIC (not in the feature matrix) or an async HTTP/2 client: the bundled HttpClient is synchronous and carries one HTTP/2 stream at a time.",
+    "Peak performance on macOS or Windows: kTLS, sendfile and MSG_ZEROCOPY are Linux-only, and Windows uses WSAPoll."
+  ],
+  "integration": {
+    "form": "static lib (default) or shared lib (AERONET_BUILD_SHARED=ON); experimental C++20 module interface",
+    "dependencies": "none for a plain HTTP build; optional OpenSSL 1.1.1/3.x (TLS, JWT), zlib or zlib-ng, zstd, brotli, spdlog, glaze, opentelemetry-cpp plus protobuf. Vendors amc, skarupke flat_hash_map and CityHash.",
+    "min_toolchain": "C++23, CMake 3.28+; tested GCC 13 and Clang 21, MSVC 17.x (VS 2022), Apple Clang from Xcode 15; modules need GCC 15 or Clang 18",
+    "platforms": "Linux x86-64 and aarch64 (primary, epoll); macOS arm64/x86-64 (kqueue); Windows x64 (WSAPoll)",
+    "thread_safety": "Each SingleHttpServer is single-threaded and runs handlers on its event-loop thread; change routes or config on a running server only through router()/postRouterUpdate()/postConfigUpdate(). HttpServer runs N such reactors with the same handlers, so state shared by handlers needs your own synchronization.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Before 1.5.0, built-in CONNECT tunneling was on and fail-open by default, which made any default-config server an unauthenticated open proxy (GHSA-m9r8-5wrg-mvh5, CVSS 8.6). Use 1.5.0 or later, where an empty connectAllowlist disables CONNECT.",
+    "Handlers run on the reactor thread, so a blocking or CPU-heavy handler stalls every connection on that thread. Use coroutine handlers or push the work to other threads.",
+    "Request path, headers and body are string_views into the connection buffer. Copy anything you keep after the handler returns; in async handlers, co_await req.bodyAwaitable() before you read the body.",
+    "Date, Connection, Content-Length, Transfer-Encoding, Trailer, TE and Upgrade are reserved, and header names are forced to lower-case. header() scans and memmoves, so fill a response in order: status, headers, then body. Server move operations are not noexcept and throw if the server is running."
+  ],
+  "pick_this_over_siblings_when": "Pick aeronet over Drogon or Crow when you need HTTP/2 and WebSocket in the same C++ library (the harness excludes Drogon and Crow from HTTP/2 runs for lack of support) and the header-, body- and route-heavy wins shown here matter. Pick Drogon for a longer production record and ecosystem (it also won static and files at 100 connections here), or libevhtp or Lwan if you want plain C.",
+  "verified_claims_summary": "The author's GitHub Actions dashboard (run of 2026-09-26) is a per-core test: every server is built with GCC in CMake Release on an ubuntu-latest runner (no CPU model or GCC version stated) and gets one thread (Go GOMAXPROCS=1, Beast one io_context thread), with wrk driving 30 s after a 5 s warmup at 10 and 100 connections. aeronet beat Go net/http in all 16 scenario/connection cells (for example 2.14x on static and 2.05x on routing at 10 connections) and Boost.Beast in 13 of 16, but lost to Beast on cpu at 10 connections and on static and routing at 100.",
+  "status_note": "Active: commits on 2026-09-26 and releases v1.0.0 (January 2026) to v1.5.0 (August 2026). It is effectively a one-person project, and its MIT LICENSE file still has the '[year] [fullname]' placeholder (GitHub reports NOASSERTION); the README also lists vendored flat_hash_map code as having no license, so check with legal before you ship it.",
+  "sources_read": [
+    "https://github.com/sjanel/aeronet",
+    "https://github.com/sjanel/aeronet/blob/main/README.md",
+    "https://github.com/sjanel/aeronet/blob/main/docs/INSTALL.md",
+    "https://github.com/sjanel/aeronet/blob/main/docs/FEATURES.md",
+    "https://github.com/sjanel/aeronet/blob/main/LICENSE",
+    "https://github.com/sjanel/aeronet/blob/main/VERSION",
+    "https://github.com/sjanel/aeronet/releases",
+    "https://github.com/sjanel/aeronet/issues",
+    "https://github.com/sjanel/aeronet/security/advisories/GHSA-m9r8-5wrg-mvh5",
+    "https://github.com/sjanel/aeronet/blob/main/benchmarks/scripted-servers/README.md",
+    "https://github.com/sjanel/aeronet/blob/main/benchmarks/scripted-servers/run_benchmarks.py",
+    "https://github.com/sjanel/aeronet/blob/main/benchmarks/scripted-servers/go_server.go",
+    "https://github.com/sjanel/aeronet/blob/main/benchmarks/scripted-servers/beast_server.cpp",
+    "https://github.com/sjanel/aeronet/blob/main/benchmarks/scripted-servers/aeronet_server.cpp",
+    "https://github.com/sjanel/aeronet/blob/main/.github/workflows/benchmarks-gh-pages.yml",
+    "https://github.com/sjanel/aeronet/blob/main/aeronet/http/include/aeronet/router.hpp",
+    "https://github.com/sjanel/aeronet/blob/main/aeronet/http/include/aeronet/http-response.hpp",
+    "https://github.com/sjanel/aeronet/blob/main/aeronet/server/src/http-parser.cpp",
+    "https://github.com/sjanel/aeronet/blob/main/aeronet/tech/include/aeronet/search-crlf.hpp",
+    "https://github.com/sjanel/aeronet/blob/main/aeronet/tech/include/aeronet/avx2.hpp",
+    "https://sjanel.github.io/aeronet/benchmarks/",
+    "https://hn.algolia.com/api/v1/search?query=aeronet%20http&tags=story",
+    "https://hn.algolia.com/api/v1/search?query=sjanel%2Faeronet"
+  ],
+  "confidence": 0.8
+}

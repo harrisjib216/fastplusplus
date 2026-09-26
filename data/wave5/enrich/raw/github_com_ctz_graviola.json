@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/ctz/graviola",
+  "one_liner": "Rust crypto on formally verified s2n-bignum assembly, a rustls backend; one-handshake processes ran 1.6-3.8x faster than OpenSSL-backed.",
+  "what_it_does": "Graviola provides the primitives that modern web TLS uses: X25519, P-256/P-384 ECDH, ML-KEM-768, ECDSA, Ed25519, RSA-PSS/PKCS#1 signing and verification, SHA-2/SHA-3, HMAC, and AES-GCM and (X)ChaCha20-Poly1305. The public Rust API is small and typed (for example `key_agreement::x25519::PrivateKey::new_random()`, `aead::AesGcm`, `signing::ecdsa::SigningKey`). The main use is the companion crate rustls-graviola: call `rustls_graviola::default_provider().install_default()` and rustls then runs on Graviola instead of ring or aws-lc-rs. It does not replace OpenSSL's C API or ABI; it replaces the crypto provider under a Rust TLS stack.",
+  "how_it_is_fast": "The field and group arithmetic for P-256, P-384, X25519/Ed25519, the RSA bignums, the ML-KEM NTT and Keccak-f is AWS s2n-bignum's hand-written, formally verified assembly, which a script converts into Rust inline `asm!` so only rustc is needed. It uses Booth-encoded fixed windows for point multiplication (7-bit with a 148 KB precomputed table for the P-256 base point, 5-bit elsewhere) and a 4-bit fixed window with CRT for RSA. Other parts are tuned for specific CPU features: stitched by-8 AES-CTR plus by-8 GHASH, an optional AVX-512/VAES by-16 path chosen at runtime, SHA-NI and Arm SHA intrinsics, and 4-way AVX2 Keccak for ML-KEM sampling. In the handshake benchmark the lead over OpenSSL is a nearly constant 3.1-4.7 ms, which points to a fixed per-process cost on the OpenSSL side, not to faster handshake math.",
+  "when_to_use": [
+    "Rust services on rustls 0.23 whose handshakes use ECDSA-P256, X25519 or X25519MLKEM768. Graviola's own benchmark ranks it first in ECDSA-P256 signing (92,694 vs aws-lc-rs 85,967 sigs/s on a Ryzen 9 7940HS), X25519 (42,363 vs 42,038 kx/s) and ML-KEM-768 (33,520 vs 31,044 per s).",
+    "Builds that must avoid a C compiler, CMake or assembler, such as cross-compiling or hermetic cargo-only CI. The README says the crate builds in under one second with only rustc.",
+    "Short-lived processes such as CLIs, test harnesses and serverless cold starts that do one TLS 1.3 handshake. In the c410-f3r test on a Ryzen 9 5900X, a whole run took about 1.3-5.9 ms with Graviola and 4.4-10.2 ms with the OpenSSL backend.",
+    "Arm hosts with AES, SHA2 and PMULL (Apple M-series, Raspberry Pi 5). Graviola leads on aarch64 in ECDSA-P256 signing (84,286 vs aws-lc-rs 64,224 sigs/s on an M2) and in ML-KEM-768.",
+    "Cases where formally verified bignum and ECC code, constant-time table selection, Arm DIT and SIMD-register zeroing after secret operations matter more than FIPS certification."
+  ],
+  "when_not_to_use": [
+    "Servers that sign handshakes with RSA keys. On x86_64, RSA-2048 signing runs at 2,280.7 sigs/s against 5,276.3 for aws-lc-rs. Issue #209 traces this to bignum_emontredc_8n.",
+    "P-384 certificates or key exchange. Graviola reaches roughly 56-68% of aws-lc-rs throughput here (ECDSA-P384 signing 9,175.8 vs 16,385 sigs/s; P384 kx 4,861.2 vs 7,197 kx/s). In the handshake blog, aws-lc-rs also beat it with P-384 certificates.",
+    "Bulk AES-256-GCM throughput. Graviola ranks third on x86_64 (8.79 vs 9.88 GiB/s for aws-lc-rs) and fourth on the M2 (5.25 GiB/s).",
+    "CPUs without ADX, AVX2 or BMI2, including Haswell, VMs that hide ADX (issue #222: an OVH VPS reported as 'Haswell, no TSX') and Raspberry Pi 4. Also RISC-V, 32-bit, wasm and no_std targets. None of these have a software fallback (issues #95, #57).",
+    "Projects that need the OpenSSL API or C ABI, FIPS, an audited and mature library (the README says 'very new, so exercise due caution'), QUIC through quinn (still unmerged, issue #98), SHA-1, ML-DSA or RSA encryption (a stated non-goal)."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "cfg-if, getrandom 0.3 (graviola); rustls 0.23.18+ (rustls-graviola). No C toolchain.",
+    "min_toolchain": "Rust 1.89, edition 2024 (graviola 0.4.1 rust-version); rustls-graviola 0.4.0 declares 1.85 but pulls in graviola 0.4.x",
+    "platforms": "x86_64 with AES, PCLMULQDQ, AVX, AVX2, BMI1/BMI2, ADX (Broadwell / AMD Zen and later; AVX-512 AES-GCM path used when present); aarch64 with NEON, AES, PMULL, SHA2. Needs std.",
+    "thread_safety": "not documented (safe Rust API; the crate does not state Send/Sync guarantees)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "An unsupported CPU does not return an error. Every public entry point runs `verify_cpu_features()`, and that function calls `assert!`, so the process panics on the first crypto call ('graviola requires adx CPU support'). Test on the real deployment hardware or VM type.",
+    "Valgrind does not emulate ADX (KDE bug 494162). Set the `VALGRIND_BUG_494162` environment variable at compile time (read by `option_env!`) to run under Valgrind.",
+    "RSA key generation is not side-channel safe. ECDSA uses hedged RFC 6979 nonces (extra random input), so repeated signatures of the same message differ.",
+    "GitHub shows the license as NOASSERTION. The real license is 'Apache-2.0 OR ISC OR MIT-0' (per Cargo.toml and SPDX headers), which license scanners that expect MIT or Apache may flag."
+  ],
+  "pick_this_over_siblings_when": "Pick Graviola when you already use rustls in Rust and want a cargo-only build with top ECDSA-P256, X25519 and ML-KEM speed. Pick AWS-LC when you need an OpenSSL-style C API, FIPS, or fast RSA and P-384. Pick ztls or picotls fusion when the bottleneck is record or AEAD throughput, not handshakes.",
+  "verified_claims_summary": "A third-party blog by the wtx author used hyperfine (10 runs after 10 warmups) on a Ryzen 9 5900X running Fedora (kernel 7.0.11) to time whole processes, each decoding PEM files, doing one TLS 1.3 handshake over loopback in wtx 0.49, and exiting; Graviola took about 1.26-5.90 ms and the OpenSSL backend 4.41-10.20 ms (the `openssl` 0.10 crate against unvendored system OpenSSL, version and rustc version not stated), so OpenSSL was 1.6-3.8x slower across 45 cipher, group and certificate combinations. OpenSSL was slowest in every combination, but Graviola was fastest in only 16 of 45, and the author cannot explain the near-constant 3.1-4.7 ms gap.",
+  "status_note": "The project is active: last commit 2026-08-24, graviola 0.4.1 on crates.io (about 282k downloads), no RustSec advisories. It is pre-1.0 and describes itself as very new, and it is permissively licensed, so it is easy to adopt as a rustls provider but not yet a conservative choice.",
+  "sources_read": [
+    "https://github.com/ctz/graviola",
+    "https://github.com/ctz/graviola/blob/main/README.md",
+    "https://github.com/ctz/graviola/blob/main/COMPATIBILITY.md",
+    "https://github.com/ctz/graviola/blob/main/graviola/Cargo.toml",
+    "https://github.com/ctz/graviola/blob/main/graviola/src/lib.rs",
+    "https://github.com/ctz/graviola/blob/main/graviola/src/low/entry.rs",
+    "https://github.com/ctz/graviola/blob/main/graviola/src/low/x86_64/cpu.rs",
+    "https://github.com/ctz/graviola/blob/main/graviola/src/low/aarch64/cpu.rs",
+    "https://github.com/ctz/graviola/blob/main/graviola/src/low/inline_assembly_safety.rs",
+    "https://github.com/ctz/graviola/blob/main/graviola/src/low/x86_64/curve25519_x25519.rs",
+    "https://github.com/ctz/graviola/blob/main/rustls-graviola/README.md",
+    "https://github.com/ctz/graviola/blob/main/rustls-graviola/Cargo.toml",
+    "https://github.com/ctz/graviola/blob/main/rustls-graviola/src/lib.rs",
+    "https://github.com/ctz/graviola/blob/main/rustls-graviola/src/kx.rs",
+    "https://github.com/ctz/graviola/blob/main/rustls-graviola/src/suites.rs",
+    "https://github.com/ctz/graviola/issues",
+    "https://github.com/ctz/graviola/issues/222",
+    "https://github.com/ctz/graviola/issues/209",
+    "https://github.com/ctz/graviola/issues/98",
+    "https://github.com/ctz/graviola/issues/95",
+    "https://github.com/ctz/graviola/issues/57",
+    "https://jbp.io/graviola/",
+    "https://c410-f3r.github.io/thoughts/tls-handshakes-measuring-the-performance-of-4-cryptography-libraries/",
+    "https://c410-f3r.github.io/thoughts/tls-handshakes-measuring-the-performance-of-4-cryptography-libraries/wtx-bench.tar.xz",
+    "https://github.com/c410-f3r/wtx/blob/wtx-v0.49.0/wtx/Cargo.toml",
+    "https://github.com/c410-f3r/wtx/blob/main/wtx/Cargo.toml",
+    "https://crates.io/api/v1/crates/graviola",
+    "https://crates.io/api/v1/crates/rustls-graviola",
+    "https://github.com/rustsec/advisory-db/tree/main/crates",
+    "https://hn.algolia.com/api/v1/search?query=graviola&tags=story"
+  ],
+  "confidence": 0.55
+}
