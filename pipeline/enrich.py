@@ -72,13 +72,14 @@ def main():
         ) or "none catalogued yet"
         record = {k: v for k, v in e.items() if k not in INTERNAL_FIELDS}
         out = (raw_dir / f"{slug(e['id'])}.json").resolve()
-        prompt = (template.replace("{TODAY}", today)
-                  .replace("{ENTRY_JSON}", json.dumps(record, indent=2)
-                           + "\n\nSIBLING ENTRIES (same category, already catalogued):\n" + sibling_text)
+        filled = (template.replace("{TODAY}", today)
                   .replace("{SIBLING_ENTRIES}", "the SIBLING ENTRIES listed under the input record"))
-        leftover = set(re.findall(r"\{([A-Z_]+)\}", prompt))
+        # check the template's own variables only; record text may contain braces like {N}
+        leftover = set(re.findall(r"\{([A-Z_]+)\}", filled)) - {"ENTRY_JSON"}
         if leftover:
             raise SystemExit(f"{e['id']}: unfilled variables {sorted(leftover)}")
+        prompt = filled.replace("{ENTRY_JSON}", json.dumps(record, indent=2)
+                                + "\n\nSIBLING ENTRIES (same category, already catalogued):\n" + sibling_text)
         prompt += "\n" + HARNESS.format(output_path=out)
         (prompts_dir / f"{slug(e['id'])}.txt").write_text(prompt)
         print(f"{slug(e['id'])}\t{e['name']}")
