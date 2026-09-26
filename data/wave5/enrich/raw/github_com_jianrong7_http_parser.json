@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/jianrong7/http-parser",
+  "one_liner": "Tiny zero-allocation Go HTTP/1.x request parser that records byte offsets; ~5-10x faster than net/http.ReadRequest, with far less validation.",
+  "what_it_does": "A single ~380-line Go file (package httpparser, no imports at all) that parses one HTTP/1.x request held entirely in a caller-owned []byte. You keep a Parser value, call Reset, then Parse(buf), which returns the bytes consumed, an error, or (0, nil) when more data is needed. Method, URI, Version, HeaderAt(i), ContentLength, IsChunked and Body return sub-slices of your buffer or plain ints. It is not a drop-in for net/http: there is no *http.Request, no header lookup by name, no URL parsing, no chunked decoding and no response parsing.",
+  "how_it_is_fast": "A hand-written, byte-at-a-time finite-state machine (one switch per byte, with no SIMD, SWAR or lookup tables) stores [start,end) offset spans in a fixed [64]Header array embedded in the Parser struct. Nothing reaches the heap, and Reset only zeroes counters. Content-Length and Transfer-Encoding are found by name length (14 or 17 bytes) followed by an ASCII case-insensitive compare; no other header is interpreted. Most of the gap versus net/http is work that this parser skips: http.ReadRequest reads the request line as a string through a textproto reader, checks validMethod, runs url.ParseRequestURI, builds the header map with readMIMEHeader, reconciles Host and sets up the body reader in readTransfer.",
+  "when_to_use": [
+    "Studying or prototyping a zero-copy Go request parser. It is ~380 readable lines with a unit-test and benchmark file, and the README lists its gaps honestly.",
+    "Trusted, well-formed HTTP/1.1 requests (internal tooling, load-generator harnesses, fixed clients) that arrive complete in one buffer, with at most 64 headers and bodies framed by Content-Length.",
+    "Hot paths that only need the method, raw URI and a few header spans, where net/http's per-request *http.Request, header map and URL parsing cost more than the work you actually do.",
+    "Small requests, where the reported gap is largest: ~10x for the 2-header cases, narrowing to ~5x at 8 headers."
+  ],
+  "when_not_to_use": [
+    "Any internet-facing server. The method (after its first byte), the URI, header values and the version are not validated, so CR, LF, NUL and other control bytes are accepted. CL/TE conflicts and duplicate Content-Length are not rejected (the last value wins), and an invalid Content-Length such as 'abc' or '+5' is silently treated as 'no body'.",
+    "Requests with an empty header value such as 'X-Foo:' or 'X-Foo: '. Traced from parser.go, the value state consumes the CR unchecked, so the next header line is swallowed into that value. If the empty header is the last one, Parse returns (0, nil) forever.",
+    "Chunked uploads, bare-LF clients or streaming bodies. A chunked request is 'complete' at the end of its headers with raw chunk framing left for you. Bare-LF lines are absorbed into the version or header value, or the request never completes; they are not rejected with an error, despite what the README says.",
+    "Large header blocks or long URIs where scan speed matters. It scans one byte at a time at 495-641 MB/s, while SIMD parsers in this category report GB/s (for example thhp at 4.4 GB/s with SSE4.2, on other hardware).",
+    "Anything that needs a dependency you can legally ship. There is no license, it is a single 'init' commit with 0 stars, and the module path is 'http-parser', not github.com/jianrong7/http-parser, so it cannot be fetched with go get."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (parser.go imports nothing, not even the standard library)",
+    "min_toolchain": "go.mod declares 'go 1.24.1', which Go 1.21+ toolchains enforce as a minimum. The code itself uses only basic language features. The toolchain used for the benchmarks is not documented.",
+    "platforms": "any GOOS/GOARCH (pure Go, no unsafe, no assembly); benchmarked only on an Apple M1 Pro",
+    "thread_safety": "Not goroutine-safe per Parser (the README calls it 'single-threaded' and the struct has no locking). The package has no mutable globals, so use one Parser per connection or goroutine.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Body() returns everything from the end of the headers to the end of the buffer, not ContentLength() bytes, so pipelined next requests or trailing garbage show up in the body. Slice with the returned n, or with bodyStart+ContentLength, yourself.",
+    "All accessors alias your buffer and are valid only while it is unchanged. Copy them before recycling a pooled read buffer. HeaderAt(i) does not check i against HeaderCount(), so an out-of-range index returns stale spans from an earlier request or panics.",
+    "Chunked detection is a case-insensitive substring match on the Transfer-Encoding value ('xchunkedx' counts). Header values keep trailing whitespace, and duplicate headers are stored separately.",
+    "Parse returns (0, nil) for incomplete input but keeps its state. Re-calling it with the grown, contiguous buffer resumes, but the whole request must end up in one slice, and a Content-Length that overflows int can make it wait forever or swallow the rest of the buffer."
+  ],
+  "pick_this_over_siblings_when": "The only Go sibling is blazehttp, a tier-A, zero-alloc header parser inside a full HTTP/1.1 and HTTP/2 server benchmarked against fasthttp. Pick blazehttp for anything real, and pick this one only as a ~380-line teaching or prototyping parser to copy (license permitting) when you want offsets without a framework. The C and Rust siblings (picohttpparser forks, httparse, thhp) are far more mature choices outside Go.",
+  "verified_claims_summary": "The author's go test -bench on an Apple M1 Pro (Go version and flags not stated) compares Parser.Parse against http.ReadRequest over a fresh 4 KB bufio.Reader per iteration: 133 vs 1,377 ns (2-header GET), 161 vs 1,602 ns (POST) and 374 vs 2,021 ns (8-header GET), with 0 vs 5,177-5,345 B/op. The POST case declares Content-Length: 27 but carries a 24-byte body, so on that row Parse returns (0, nil) 'incomplete' on every iteration and times only header parsing; net/http's Body.Close error is not checked either.",
+  "status_note": "The record says active, but the repo is a single 'init' commit from 2026-02-08, untouched for ~7.5 months, with 0 stars, 0 issues, no releases and no license. That makes it usable only as a reference to read, not as a dependency to vendor.",
+  "sources_read": [
+    "https://github.com/jianrong7/http-parser",
+    "https://raw.githubusercontent.com/jianrong7/http-parser/main/README.md",
+    "https://github.com/jianrong7/http-parser/tree/main/parser",
+    "https://raw.githubusercontent.com/jianrong7/http-parser/main/parser/parser.go",
+    "https://raw.githubusercontent.com/jianrong7/http-parser/main/parser/parser_test.go",
+    "https://raw.githubusercontent.com/jianrong7/http-parser/main/main.go",
+    "https://raw.githubusercontent.com/jianrong7/http-parser/main/go.mod",
+    "https://github.com/jianrong7/http-parser/issues",
+    "https://github.com/jianrong7/http-parser/pulls",
+    "https://api.github.com/graphql (repository jianrong7/http-parser: license, stars, commit history)",
+    "https://hn.algolia.com/api/v1/search?query=jianrong7&restrictSearchableAttributes=url",
+    "https://hn.algolia.com/api/v1/search?query=%22jianrong7%2Fhttp-parser%22",
+    "https://raw.githubusercontent.com/golang/go/master/src/net/http/request.go",
+    "https://raw.githubusercontent.com/h2o/picohttpparser/master/picohttpparser.h"
+  ],
+  "confidence": 0.7
+}
