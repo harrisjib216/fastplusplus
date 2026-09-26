@@ -1,0 +1,53 @@
+[
+  {
+    "id": "https://github.com/apache/iggy",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "First-party blog comparing v0.5.0 (Tokio, readiness/epoll-based) with v0.7.0 (compio thread-per-core io_uring). The linked dashboard reports (benchmarks.iggy.apache.org/api/benchmark/full/<uuid>) give the CPU (Intel Xeon Platinum 8259CL, AWS i3en.3xlarge), OS, kernel and exact iggy-bench commands, and the bench code is public in apache/iggy core/bench. Rust compiler version and build flags are stated nowhere, so it cannot be A, and being first-party it is not B.",
+    "corrections": {
+      "claimed_speedup": "32 producers x 32 streams (80 GB / 80M msgs, 1 GB/s rate limit): P95 3.77 -> 1.62 ms (+57%), P99 4.52 -> 1.82 ms (+60%), P999 5.43 -> 2.38 ms (+56%), P9999 27.52 -> 11.83 ms (+57%); 16x16: P95 2.52 -> 1.82 ms (+28%), P9999 86.30 -> 7.17 ms (+92%); 8x8: P95 1.36 -> 1.47 ms (-8%, worse), P99 1.52 -> 1.57 ms (-3%, worse), P9999 34.00 -> 6.51 ms (+81%). fsync 32 partitions: throughput 931 -> 1,102 MB/s (+18%), P95 33.98 -> 18.49 ms (+46%); fsync 16 partitions: 843 -> 992 MB/s (+18%), P95 18.00 -> 9.98 ms (+45%). Non-fsync throughput stays ~1,000 MB/s because the runs are rate-limited.",
+      "workload": "iggy-bench pinned-producer over TCP, 1000-byte messages, 250 msgs/batch: 8x8 (20 GB), 16x16 (40 GB) and 32 producers x 32 streams (80 GB / 80M msgs) at a 1 GB/s rate limit, plus unthrottled fsync (strong consistency) runs at 16 and 32 partitions; compares Iggy v0.5.0 (Tokio) with v0.7.0 (thread-per-core io_uring via compio)",
+      "hardware": "AWS i3en.3xlarge: Intel Xeon Platinum 8259CL @ 2.50GHz, 12 cores, ~93 GiB RAM, Ubuntu 24.04, kernel 6.17.0-1007-aws (from the linked benchmarks.iggy.apache.org report JSON)",
+      "compared_against_cpp_std_directly": false,
+      "last_commit": "2026-09-26",
+      "stars_or_usage": "4,954 stars",
+      "caveats": "First-party engineering blog; hardware/OS/kernel/bench commands confirmed through the dashboard report API, but the Rust toolchain and build flags are unstated. The baseline is Iggy's own earlier Tokio build (epoll readiness model), not a standalone epoll loop. Latency is compared at a fixed 1 GB/s rate limit, so throughput is equal by construction outside the fsync runs. At 8 producers, P95/P99 are slightly worse on v0.7.0 (-8%/-3%); the gains grow with partition count."
+    },
+    "notes": "All claimed numbers match the blog's 32x32 and fsync-32 tables exactly. The benchmark dashboard's JSON API (/api/benchmark/full/<uuid>) exposes hardware and params that the JS-rendered UI hid. The linked reports also include some 0.6.1-edge.4 runs.",
+    "urls_opened": [
+      "https://iggy.apache.org/blogs/2026/02/27/thread-per-core-io_uring/",
+      "https://github.com/apache/iggy",
+      "https://benchmarks.iggy.apache.org/api/benchmark/full/0ac461f6-59b3-4822-8de0-3bd1a662966e",
+      "https://benchmarks.iggy.apache.org/api/benchmark/full/2c6a0f6a-fb4d-4e84-8ac0-bfca60c75b21",
+      "https://benchmarks.iggy.apache.org/api/benchmark/full/402df805-94f3-4a78-9a2d-a4bda9d51655",
+      "https://benchmarks.iggy.apache.org/api/benchmark/full/481c7504-177a-4df8-b771-cda1edbeeaa0",
+      "https://benchmarks.iggy.apache.org/api/benchmark/full/48343378-1052-44a4-b1a6-0b06b9436127",
+      "https://benchmarks.iggy.apache.org/api/benchmark/full/54142b7a-8dfd-4803-8ff1-adb5bce8d5df",
+      "https://benchmarks.iggy.apache.org/api/benchmark/full/5f056d32-4856-461d-92c8-439e406cc49e"
+    ]
+  },
+  {
+    "id": "https://github.com/davidtos/juring",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "First-party README JMH tables against Java FileChannel, with public bench code at src/test/java/bench/random (read/ and write/). Hardware is only 'a Linux machine', and the JDK version and JVM flags are unstated, so it is C.",
+    "corrections": {
+      "claimed_speedup": "Reads, 25 threads, registered files vs pre-opened FileChannel: +55% at 512B (29,023 vs 18,769 ops/ms), +489% at 4KB (13,393 vs 2,275), +23% at 16KB, +16% at 64KB; open/read/close +13% to +48%; blocking + virtual threads +14% to +138%. Writes, single thread: +123% to +246% (4KB 860 vs 260 ops/ms, +231%); 8 threads +33% to +77% but -3% at 64KB; 20 threads 0% (512B), -2% (4KB), -16% (16KB), -33% (64KB), so FileChannel wins high-concurrency writes.",
+      "compared_against_cpp_std_directly": false,
+      "last_commit": "2026-05-07",
+      "caveats": "First-party README benchmark; no CPU model, JDK version or JVM flags stated (only 'a Linux machine', JMH, 2,211 ops/invocation, QD 256, random offsets). The headline 489% uses io_uring registered files vs pre-opened FileChannels at 25 threads. Writes lose to FileChannel at 20 threads by up to 33% (64KB). Unlicense is a public-domain dedication: no patent grant."
+    },
+    "notes": "The headline numbers (489%, 231%, 860 vs 260) are exact, but the record's 'reverses slightly (-2%) at 20+ threads' understates the write regression: the README shows -16% at 16KB and -33% at 64KB at 20 threads. So claimed_speedup was corrected and the verdict is downgrade, with the tier still C. baseline_in_list=false is correct: FileChannel is not among the event-loops-io baselines.",
+    "urls_opened": [
+      "https://github.com/davidtos/JUring",
+      "https://raw.githubusercontent.com/davidtos/JUring/master/README.md",
+      "https://github.com/davidtos/JUring/tree/master/src/test/java/bench/random"
+    ]
+  }
+]
