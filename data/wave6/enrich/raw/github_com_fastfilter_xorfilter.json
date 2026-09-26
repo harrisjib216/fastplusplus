@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/fastfilter/xorfilter",
+  "one_liner": "Pure-Go binary fuse and xor filters: static membership filters at ~9 bits/key (0.39% FPR) vs ~11.5 for Bloom.",
+  "what_it_does": "Builds an immutable approximate-membership filter from a []uint64 of already-hashed keys, then answers Contains(uint64) with no false negatives. The false-positive rate is fixed by the fingerprint width: 8-bit (~0.39%), 16-bit (~0.0015%) or 32-bit (not recommended by the README). The API is NewBinaryFuse[T](keys) or PopulateBinaryFuse8, a reusable BinaryFuseBuilder that cuts allocations across many builds, and Save/LoadBinaryFuse for a portable little-endian format; the older Xor8 (Populate) is still included. It is not a drop-in Bloom filter: there is no Add, no delete and no tunable rate, and you hash strings to 64 bits yourself.",
+  "how_it_is_fast": "Each key maps to three slots in three consecutive segments of a fingerprint array of about 1.125n entries (the binary fuse layout the paper builds from Dietzfelbinger and Walzer's work). Construction 'peels' the resulting 3-hypergraph by repeatedly removing slots that hold a single key, then assigns fingerprints in reverse order so that fp(x) = H[h0] xor H[h1] xor H[h2]. A query is one murmur-style mix, three loads and two xors, with no loop over k hash functions as in a Bloom filter. The Go build buckets keys by segment for cache locality, derives peeling indexes with branchless bit tricks and can reuse scratch buffers (Jan 2026 releases); only the 3-wise variant is implemented (arity is hard-coded to 3), not the paper's denser 4-wise variant (~8.6 bits/key).",
+  "when_to_use": [
+    "Static key sets, or sets rebuilt per batch, in Go: per-SSTable filters in an LSM store (Pebble uses it for sstable table filters), per-segment or per-partition indexes, shipped allow/deny lists.",
+    "Memory-bound deployments of roughly 100k+ keys, where the README's ~9 bits/key (8-bit) and ~18 bits/key (16-bit) figures hold and ~20% less space than a Bloom filter at the same FPR matters.",
+    "Read-heavy concurrent lookups: the built filter is immutable, so many goroutines can call Contains without locks.",
+    "Filters stored on disk or sent over the network: Save/LoadBinaryFuse use a portable little-endian format, and the README says the fingerprint arrays compress with gzip or zstd.",
+    "Services that build many filters: BinaryFuseBuilder reuses scratch slices to cut GC churn. Single-threaded build speed is roughly 28-57 M keys/s depending on CPU and set size (PR #54 benchmarks on M1, AMD Turin, Intel Emerald Rapids and Axion)."
+  ],
+  "when_not_to_use": [
+    "Sets that grow incrementally or need deletes: there is no Add or Remove, so any change means a full rebuild. A Bloom, cuckoo or quotient filter fits better.",
+    "Paths sensitive to build time or build memory. Building 1M keys allocated about 25 MB for a ~1.1 MB result (PR #48), and Pebble's wrapper budgets ~24 bytes per hash. On the same M1, a cache-line-blocked Bloom built at ~130 M keys/s vs ~36 M keys/s here (PR #48 note).",
+    "Small sets (a few thousand keys or fewer). The code's size factor rises to 1.25n at 10k keys and 1.375n at 1k keys, plus segment rounding, so most of the space edge over Bloom disappears. The paper notes xor filters can be smaller below ~20k keys.",
+    "FP rates other than 2^-8, 2^-16 or 2^-32: the width is fixed by the fingerprint type, and issue #19 (tunable rate) has been open since 2020. Ribbon filters are configurable.",
+    "Lowest possible query latency: in the paper's C++ runs, an AVX2 blocked Bloom filter queried faster than 3-wise binary fuse (one cache line vs three scattered loads)."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none at runtime (stdlib only; cespare/xxhash and testify are test-only)",
+    "min_toolchain": "Go 1.22 (go.mod); CI runs Go 1.22.x, plus 1.24.x for the big-endian job",
+    "platforms": "any Go target. CI covers linux, macOS and windows (amd64), linux/386, and ppc64 big-endian under QEMU; Drone builds arm and arm64. The package imports unsafe on every target.",
+    "thread_safety": "Built filters are immutable; the README says they are safe for concurrent queries. BinaryFuseBuilder is not documented as goroutine-safe, and filters built through it alias its buffers.",
+    "drop_in_for_baseline": "partial — the query semantics match a Bloom filter (no false negatives, Contains(uint64)), but the filter is built once from the full []uint64 of hashes, has no Add or Remove, and its FP rate is fixed at 2^-8, 2^-16 or 2^-32"
+  },
+  "gotchas": [
+    "NewBinaryFuse, PopulateBinaryFuse8 and Populate may sort and deduplicate your keys slice in place. Pass a copy if you need the original.",
+    "With BuildBinaryFuse, the returned filter's Fingerprints slice belongs to the builder and is overwritten by the next build. Copy it, or use one builder per live filter; Pebble guards its builders with sync.Pool and a mutex.",
+    "LoadBinaryFuse has no integrity check (per the README) and trusts the stored length and segment fields. Corrupted or untrusted input can trigger a huge allocation or an index-out-of-range panic in Contains, so add your own checksum.",
+    "Construction is randomized and returns 'too many iterations' after MaxIterations (1024, a mutable package-level var). Before the Jan 2026 fix (PR #50), some sizes near segment-length boundaries averaged ~110 retries; a 2023 false-negative bug on duplicate-heavy input (issue #35) is fixed. Use v0.5.1 or later. Xor8 has no Save/Load."
+  ],
+  "pick_this_over_siblings_when": "In Go, pick this for a static key set when you want the production-tested option (Pebble, Oracle Coherence Go client, MatrixOne) at fixed 8- or 16-bit FP rates. Pick go-qfext if you need inserts after the build, ribbonGo if you need arbitrary FP rates or lower space overhead (its README claims ~4.7% over the minimum at r=7, vs ~12.5% here), and xorf or xor_singleheader for the same algorithm in Rust or C.",
+  "verified_claims_summary": "The storage overheads over the information-theoretic minimum (13% binary fuse, 23% xor, 44% Bloom) and the 'more than twice as fast' build vs xor filters come from the authors' C++ fastfilter_cpp runs in JEA 2022 (GCC 10 -O3 -march=native, single-threaded, Intel i7-6700 Skylake, 100M random 64-bit keys), not from this Go code; the paper only says the Go port was checked qualitatively. The Go repo itself has only a README bits-per-key chart and construction benchmarks in PR threads (about 36 M keys/s at 1M keys on an Apple M1), with no head-to-head against a Go Bloom filter.",
+  "status_note": "Actively maintained: v0.5.1 was tagged 2026-01-26 after a Dec 2025-Jan 2026 run of build-speed and buffer-reuse PRs, one issue is open, and it is Apache-2.0 with under 1,000 lines of stdlib-only Go, easy to vendor.",
+  "sources_read": [
+    "https://github.com/FastFilter/xorfilter",
+    "https://github.com/FastFilter/xorfilter/blob/master/README.md",
+    "https://github.com/FastFilter/xorfilter/blob/master/binaryfusefilter.go",
+    "https://github.com/FastFilter/xorfilter/blob/master/binaryfusefilter8.go",
+    "https://github.com/FastFilter/xorfilter/blob/master/xorfilter.go",
+    "https://github.com/FastFilter/xorfilter/blob/master/xorfilter_definitions.go",
+    "https://github.com/FastFilter/xorfilter/blob/master/serialization.go",
+    "https://github.com/FastFilter/xorfilter/blob/master/serialization_le.go",
+    "https://github.com/FastFilter/xorfilter/blob/master/binaryfusefilter_test.go",
+    "https://github.com/FastFilter/xorfilter/blob/master/go.mod",
+    "https://github.com/FastFilter/xorfilter/blob/master/.github/workflows/test.yml",
+    "https://github.com/FastFilter/xorfilter/blob/master/.github/workflows/bigendian.yml",
+    "https://github.com/FastFilter/xorfilter/blob/master/.drone.yml",
+    "https://github.com/FastFilter/xorfilter/issues?q=is%3Aissue",
+    "https://github.com/FastFilter/xorfilter/issues/57",
+    "https://github.com/FastFilter/xorfilter/issues/47",
+    "https://github.com/FastFilter/xorfilter/issues/35",
+    "https://github.com/FastFilter/xorfilter/issues/30",
+    "https://github.com/FastFilter/xorfilter/issues/19",
+    "https://github.com/FastFilter/xorfilter/pull/54",
+    "https://github.com/FastFilter/xorfilter/pull/53",
+    "https://github.com/FastFilter/xorfilter/pull/52",
+    "https://github.com/FastFilter/xorfilter/pull/50",
+    "https://github.com/FastFilter/xorfilter/pull/48",
+    "https://github.com/FastFilter/xorfilter/pull/46",
+    "https://github.com/FastFilter/xorfilter/commits/master",
+    "https://github.com/FastFilter/xorfilter/releases",
+    "https://github.com/cockroachdb/pebble/blob/master/go.mod",
+    "https://github.com/cockroachdb/pebble/blob/master/sstable/tablefilters/binaryfuse/filter.go",
+    "https://export.arxiv.org/api/query?id_list=2201.01174",
+    "https://arxiv.org/pdf/2201.01174",
+    "https://hn.algolia.com/api/v1/search?query=binary%20fuse%20filters&tags=story",
+    "https://news.ycombinator.com/item?id=46658128"
+  ],
+  "confidence": 0.8
+}
