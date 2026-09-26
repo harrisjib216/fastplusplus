@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/baotonglu/apex",
+  "one_liner": "Persistent, concurrent learned index for Intel Optane PM; up to 3.8x faster inserts than FAST+FAIR and other PM B+-trees.",
+  "what_it_does": "APEX is Microsoft's ALEX updatable learned index reworked to live on Intel Optane DC Persistent Memory. Records and inner nodes sit in PM, so the index survives crashes and is ready again about 42 ms after a restart. Small metadata that can be rebuilt lives in DRAM. It is a class template alex::Apex<Key, Payload> over numeric keys of up to 8 bytes and 8-byte payloads, with bulk_load, insert, search, update, erase and range_scan_by_size behind a small virtual Tree interface. It does not replace any B+-tree or std::map API, and it owns one process-wide PMDK pool whose path is hard-coded.",
+  "how_it_is_fast": "Each data node's linear model predicts a slot (ALEX-style model-based search). ALEX's gapped arrays shift elements on insert; APEX instead uses probe-and-stash, which probes at most 16 slots (two 256-byte Optane XPLines) and then falls back to a stash array, so most inserts cost one PM write. DRAM-resident accelerators hold 1-byte fingerprints and overflow-bucket pointers for every 16 slots and compare them with SSE, which skips useless PM reads. Data nodes are capped at 256 KB (inner nodes at 16 MB) to keep structural changes cheap, and reads are lock-free, validated by one optimistic version lock per 256 records. Lazy recovery compares a global version number with per-node version numbers and defers repair work to the first access of each node.",
+  "when_to_use": [
+    "You already run Intel Optane DCPMM in App Direct mode and need a persistent, concurrent ordered index on 8-byte integer or double keys with 8-byte payloads (inline or pointer).",
+    "Point lookups, updates, deletes and short scans dominate, on keys that fit piecewise-linear models (geo coordinates, lognormal, YCSB-style IDs). In the paper, lookups scale almost linearly up to 24 physical cores.",
+    "Restart time matters: the paper measures about 42 ms recovery whether the index holds 50M or 150M keys, then under 0.35 s of warm-up with 24 threads (up to 5.2 s single-threaded).",
+    "You want a reference design or research baseline for persistent learned indexes (probe-and-stash, rebuildable DRAM accelerators, crash-consistent structural changes)."
+  ],
+  "when_not_to_use": [
+    "You have no Optane: 3D XPoint/Optane was discontinued in July 2022. On DRAM or a RAM disk APEX runs but its persistence buys nothing, so ALEX or LIPP is the simpler choice.",
+    "Your keys are hard to fit, like the FB user-ID set: there APEX inserts are 5.77% slower than LB+-Tree and 42% slower than DPTree, trees get deeper (3.13 levels on average) and scans slow down on long overflow buckets.",
+    "Your insert bursts split nodes heavily at high thread counts: with nearly full nodes at 24 threads, LB+-Tree beat APEX by 1.3x.",
+    "You need string or variable-length keys, duplicate keys, or payloads larger than 8 bytes. A static_assert limits keys to arithmetic types, and duplicates need a pointer to a linked list as the payload.",
+    "You need production-grade crash consistency: open issue #7 (2024) reports that searches can return inserts and updates that are not yet persisted. Also still open: inserting into an empty index hangs (#1) and an out-of-range insert pattern hits a 'Count error' exit (#3). A 2024 comment on issue #5 reports a bulk_load segfault; the issue was closed by its reporter with no fix."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "PMDK libpmemobj/libpmem from a pinned fork (HaoPatrick/pmdk, addr-patch branch; the allocator calls pmemobj_create_addr/pmemobj_open_addr) and XiangpengHao/epoch-reclaimer (headers, master branch), both fetched from GitHub at CMake configure time. The benchmark also links TBB, PAPI, tcmalloc_minimal and libnuma.",
+    "min_toolchain": "C++14 and CMake 3.12+. Tested only with GCC 10.2 on Linux 5.10.11; the README requires kernel >= 4.17 and glibc >= 2.29.",
+    "platforms": "x86-64 Linux only: needs the CLWB instruction (inline asm) and SSE/AVX2 intrinsics, and builds with -march=native. Persistence needs Optane DCPMM in App Direct mode on a DAX-mounted filesystem; the author suggests a RAM disk for functional testing without PM.",
+    "thread_safety": "Built for concurrent insert, search, update, erase and scan. Traversal and reads are lock-free and validated by per-256-record optimistic version locks. Node-level locks serialize structural changes. Epoch-based reclamation is opt-in on each call. Open issue #7 says reads can observe unpersisted writes, which breaks crash consistency.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The PM pool path (/mnt/pmem0/baotong/template.data), its 40 GB size and its fixed mapping address are constants in src/util/allocator.h, so you must edit them. There is one static pool per process, and if the pool file already exists the benchmark takes the recovery path, so delete it before a fresh run.",
+    "The headers define non-inline global variables and static data members (allocator.h, apex_base.h, apex.h), so include them from exactly one translation unit or expect duplicate-symbol link errors.",
+    "API semantics: insert does not overwrite an existing key (it returns false). range_scan_by_key is a stub that returns 0. range_scan_by_size allocates its result with new[] if you pass nullptr. Every call's epoch flag defaults to false, which skips the reclamation guard, so pass true under concurrency.",
+    "Erase never shrinks or merges nodes (merge() prints FATAL and exits), so deleted space is not reclaimed. size() is approximate because each thread batches its key-count updates in chunks of 2^19. Internal consistency checks call exit(-1) instead of returning an error."
+  ],
+  "pick_this_over_siblings_when": "Choose APEX over DPTree on PM when you need double keys, deletes, instant recovery and faster lookups and scans: per the APEX paper, DPTree's code lacks double keys, delete and recovery. DPTree still inserts about 42% faster on hard-to-fit data like FB. Without Optane persistence, use ALEX (the DRAM index APEX is built on) or LIPP instead.",
+  "verified_claims_summary": "These are the authors' single-thread microbenchmarks on a 24-core Xeon Gold 6252 with 768 GB Optane DCPMM in App Direct mode, compiled with GCC 10.2: 100M bulk-loaded 8-byte keys followed by 100M operations. APEX inserts are up to 3.8x faster than FAST+FAIR (up to 15x vs BzTree) and lookups up to 4.1x faster, but on FB inserts beat FAST+FAIR by only 1.18x and lose to LB+-Tree and DPTree. Every baseline is another PM tree, not a stdlib container, and the authors' modified competitor code is not in the repo, so the comparison cannot be rerun from public code.",
+  "status_note": "Abandoned: the last code change was in September 2021 (only README edits in 2023), a 2024 crash-consistency bug report is unanswered and a 2026 fix PR is unmerged. It is MIT-licensed but targets hardware discontinued in 2022, so treat it as a research reference rather than a dependency.",
+  "sources_read": [
+    "https://github.com/baotonglu/apex",
+    "https://github.com/baotonglu/apex/blob/main/CMakeLists.txt",
+    "https://github.com/baotonglu/apex/blob/main/build.sh",
+    "https://github.com/baotonglu/apex/blob/main/run.sh",
+    "https://github.com/baotonglu/apex/blob/main/src/tree.h",
+    "https://github.com/baotonglu/apex/blob/main/src/core/apex.h",
+    "https://github.com/baotonglu/apex/blob/main/src/core/apex_base.h",
+    "https://github.com/baotonglu/apex/blob/main/src/core/apex_nodes.h",
+    "https://github.com/baotonglu/apex/blob/main/src/util/allocator.h",
+    "https://github.com/baotonglu/apex/blob/main/src/util/utils.h",
+    "https://github.com/baotonglu/apex/blob/main/src/benchmark/main.cpp",
+    "https://github.com/baotonglu/apex/issues?q=is%3Aissue",
+    "https://github.com/baotonglu/apex/issues/1",
+    "https://github.com/baotonglu/apex/issues/2",
+    "https://github.com/baotonglu/apex/issues/3",
+    "https://github.com/baotonglu/apex/issues/4",
+    "https://github.com/baotonglu/apex/issues/5",
+    "https://github.com/baotonglu/apex/issues/6",
+    "https://github.com/baotonglu/apex/issues/7",
+    "https://github.com/baotonglu/apex/pull/9",
+    "https://github.com/baotonglu/apex/commits/main",
+    "https://arxiv.org/pdf/2105.00683",
+    "https://en.wikipedia.org/wiki/3D_XPoint",
+    "https://hn.algolia.com/api/v1/search?query=APEX%20learned%20index%20persistent%20memory&tags=story"
+  ],
+  "confidence": 0.85
+}
