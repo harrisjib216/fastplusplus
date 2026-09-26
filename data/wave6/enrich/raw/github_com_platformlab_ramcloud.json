@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/platformlab/ramcloud",
+  "one_liner": "Distributed, durable in-DRAM key-value store with kernel-bypass RPC; beats Redis 2.6 on read-heavy YCSB, not on writes.",
+  "what_it_does": "RAMCloud is a cluster storage system from Stanford. It keeps every object in the DRAM of many storage servers and replicates each write to disk or flash on other servers, recovering a crashed server's data in about 1-2 seconds. Clients use a C++ RamCloud class (with C, Java and Python 2 bindings) to create tables and read, write or remove opaque blobs by variable-length key (objects up to 1 MB). The API also has multiRead/multiWrite, version-conditional operations via RejectRules, atomic increments, secondary indexes, multi-object transactions and table enumeration. It is not a Redis replacement: there is no Redis protocol, no data structures and no scans, and running it takes a coordinator, storage servers and a ZooKeeper or LogCabin cluster.",
+  "how_it_is_fast": "The main latency technique is kernel bypass plus polling. InfRcTransport drives Mellanox NICs from user space through InfiniBand Verbs reliably-connected queue pairs, and both clients and servers busy-poll instead of taking interrupts or waking threads (the TOCS paper puts a condition-variable wakeup at about 2 us). On each server, one dispatch thread polls the NIC and hands each RPC to a worker thread. Objects live in log-structured memory: 8 MB segments built from 64 KB seglets, indexed by a hash table with cache-line buckets and one pointer per object. Two-level cleaning (in-memory segment compaction plus an LFS-style cost-benefit combined cleaner) runs in parallel threads, which keeps memory use at 80-90%. A write is acknowledged once it reaches the backups' in-memory buffers, and the backups write whole 8 MB segments sequentially later.",
+  "when_to_use": [
+    "Online requests that make long chains of dependent small reads (graph walks, multi-step lookups), where the TOCS paper's 4.7 us median read of a 100 B object over InfiniBand changes what is feasible",
+    "Small objects (about 100 B to 1 KB; it is tuned for a few hundred bytes or less) that must be durable and strongly consistent on write, replacing a memcached-plus-database cache-aside setup and its invalidation logic",
+    "Datacenters with InfiniBand (Mellanox ConnectX-2/3) or other kernel-bypass NICs and a spare core per server for polling",
+    "Datasets larger than one machine's DRAM that can be sharded into tables across many servers; batched multiRead reached about 6M objects/s from a single server in TOCS",
+    "Research or teaching on log-structured memory, fast crash recovery or microsecond RPC, where the code and papers are the reference implementation"
+  ],
+  "when_not_to_use": [
+    "Write-heavy workloads: on FAST '14 YCSB A and F, RAMCloud over kernel sockets trailed Redis, and with Verbs it only matched Redis at 75% memory use and was 25% slower on workload A at 90%",
+    "Commodity Ethernet with kernel TCP only: TOCS says the advantage 'drops significantly' on 1 Gb/s kernel TCP, and TcpTransport adds about 50-100 us over InfRcTransport",
+    "Caching use cases that need eviction or TTLs, range scans, or Redis data types: RAMCloud is a durable store with no eviction and no scans (YCSB E was omitted for this reason)",
+    "Anything that needs vendor support or a modern toolchain: support ended 2019-10-07, the wiki links a known build break on newer Ubuntu and OpenSuse (RAM-553), the Python bindings are Python 2 only, and there is no georeplication",
+    "Small or single-box deployments: it needs a coordinator, ZooKeeper or LogCabin, and storage servers with backup devices of about 2 x DRAM x replication factor, and it was only ever tested on an 80-node cluster"
+  ],
+  "integration": {
+    "form": "shared lib (libramcloud client library plus separate coordinator and storage-server daemons, built from source with GNU make)",
+    "dependencies": "Boost (program_options, filesystem, system), Google protobuf, pcrecpp, OpenSSL (libssl/libcrypto), ZooKeeper C client (on by default; LogCabin is an optional submodule), gtest submodule; optional libibverbs (auto-detected), DPDK, SolarFlare OpenOnload. At runtime it also needs a ZooKeeper or LogCabin cluster.",
+    "min_toolchain": "C++11 (GNUmakefile defaults to -std=c++11); the wiki lists GNU g++ 4.9.x, and the last CI config used g++ 5.4 on Ubuntu 16.04. Newer compilers are not documented.",
+    "platforms": "Linux only; x86-64 with SSE4.2 (the build defaults to -msse4.2 -march=native). Best on Mellanox InfiniBand with Verbs; DPDK, UDP and kernel TCP transports also exist.",
+    "thread_safety": "The client RamCloud object is not thread-safe; use one per thread. The server uses one polling dispatch thread plus worker threads, and its internal HashTable is documented as not thread-safe.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The default build is a debug/test build (DEBUG=yes: -DTESTING=1, -fno-builtin, no -O3), and the wiki warns this 'slows the system down considerably'. Build with DEBUG=no before measuring anything.",
+    "A coordinator started without -x (external storage) loses all cluster data if it crashes. The backup -f target is treated as a raw block device and overwritten, and undersized backup space (below about 2 x DRAM x replication factor) can eventually stop writes from being served.",
+    "Write durability assumes backups can flush their DRAM buffers after a power failure is detected (or that NVDIMMs are fitted); without that, a datacenter power loss can drop writes that were already acknowledged.",
+    "Servers busy-poll and use a full core even when idle. TOCS reports 30-100 us tail spikes (about 1 in 1,000 reads and 1 in 100 writes) when Linux deschedules the server threads, and the single dispatch thread caps small-read throughput at about 950K reads/s per server."
+  ],
+  "pick_this_over_siblings_when": "Garnet, Dragonfly and KeyDB are catalogued as Redis replacements and measured on ordinary server hardware, and MICA, MemC3 and Pelikan are single-node caches with eviction. Pick RAMCloud only when you need writes synchronously replicated before they are acknowledged, data sharded across many nodes' DRAM with 1-2 s crash recovery, and an InfiniBand or kernel-bypass fabric to realise the latency.",
+  "verified_claims_summary": "FAST '14 Figure 12 measured aggregate YCSB throughput from 24 client nodes against 12 storage nodes: 1 KB objects, triple replication, on an 80-node cluster (Xeon X3470, ConnectX-2 InfiniBand, Linux 2.6.32). The baselines were Redis 2.6.14 (AOF with 1 s fsync, asynchronous replicas) and HyperDex 1.0rc4, both over kernel sockets. RAMCloud beat Redis on the read-heavy workloads B, C and D, and its Verbs transport more than doubled read throughput versus its own kernel-socket runs, but it lost or tied on the write-heavy workloads A and F. Results are given only as bars, no compiler or flags are stated, and the caption gives both 100M and 10M for the key count (the TOCS rerun says 10M operations on 10M keys).",
+  "status_note": "Abandoned: the repo is marked 'No Longer Maintained', the wiki says support ended 2019-10-07 and the last commit was 2019-10-16. It is ISC-licensed but is about 100K lines of C++11 with Boost, protobuf and ZooKeeper dependencies, so it is a system to operate rather than something to vendor, and the last CI-tested toolchain is g++ 5.4 on Ubuntu 16.04.",
+  "sources_read": [
+    "https://github.com/PlatformLab/RAMCloud",
+    "https://github.com/PlatformLab/RAMCloud/blob/master/README.md",
+    "https://github.com/PlatformLab/RAMCloud/blob/master/GNUmakefile",
+    "https://github.com/PlatformLab/RAMCloud/blob/master/.travis.yml",
+    "https://github.com/PlatformLab/RAMCloud/blob/master/.gitmodules",
+    "https://github.com/PlatformLab/RAMCloud/blob/master/LICENSE",
+    "https://github.com/PlatformLab/RAMCloud/blob/master/misc/libmemcached_with_RAMCloud.txt",
+    "https://github.com/PlatformLab/RAMCloud/blob/master/src/RamCloud.h",
+    "https://github.com/PlatformLab/RAMCloud/blob/master/src/HashTable.h",
+    "https://github.com/PlatformLab/RAMCloud/blob/master/src/Crc32C.h",
+    "https://github.com/PlatformLab/RAMCloud/issues",
+    "https://github.com/PlatformLab/RAMCloud/pulls",
+    "https://github.com/PlatformLab/RAMCloud/commits/master",
+    "https://github.com/PlatformLab/RAMCloud/issues/19",
+    "https://github.com/PlatformLab/RAMCloud/issues/24",
+    "https://github.com/PlatformLab/RAMCloud/issues/26",
+    "https://github.com/PlatformLab/RAMCloud/issues/27",
+    "https://github.com/PlatformLab/RAMCloud/issues/28",
+    "https://github.com/PlatformLab/RAMCloud/issues/29",
+    "https://github.com/PlatformLab/RAMCloud/issues/36",
+    "https://www.usenix.org/system/files/conference/fast14/fast14-paper_rumble.pdf",
+    "https://web.stanford.edu/~ouster/cgi-bin/papers/ramcloud-tocs.pdf",
+    "https://ramcloud.atlassian.net/wiki/spaces/RAM/pages/6848532/Setting+Up+a+RAMCloud+Cluster",
+    "https://ramcloud.atlassian.net/wiki/rest/api/content/6848532?expand=body.storage",
+    "https://ramcloud.atlassian.net/wiki/rest/api/content/6848533?expand=body.storage",
+    "https://ramcloud.atlassian.net/wiki/rest/api/content/6848537?expand=body.storage",
+    "https://ramcloud.atlassian.net/wiki/rest/api/content/6848614?expand=body.storage",
+    "https://ramcloud.atlassian.net/wiki/rest/api/content?spaceKey=RAM&limit=200",
+    "https://hn.algolia.com/api/v1/search?query=RAMCloud&tags=story&hitsPerPage=10",
+    "https://hn.algolia.com/api/v1/items/18431140"
+  ],
+  "confidence": 0.8
+}
