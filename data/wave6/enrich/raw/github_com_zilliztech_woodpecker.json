@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/zilliztech/woodpecker",
+  "one_liner": "Go WAL library storing append-only logs on S3/object storage or local disk; vendor test shows 3.5-5.8x Kafka single-stream write throughput",
+  "what_it_does": "Woodpecker is the write-ahead log that replaced Kafka/Pulsar inside Milvus 2.6: named, strictly ordered append-only logs with one exclusive writer and any number of readers, persisted as segment files on S3-compatible object storage (MinIO, AWS S3, GCS, Azure Blob, Aliyun OSS, Tencent COS) or a local filesystem, with all metadata and coordination in etcd. It runs either embedded in your Go process (client plus LogStore in-process, the docs' 'MemoryBuffer' mode) or as a separate LogStore cluster that replicates each write to a 3- or 5-node quorum before offloading to object storage ('QuorumBuffer'/service mode). The API is its own Go interface (CreateLog/OpenLog, LogWriter.Write/WriteAsync, LogReader.ReadNext, Truncate), not the Kafka protocol: no topics/partitions, consumer groups or broker-side features.",
+  "how_it_is_fast": "Group commit: appends land in an in-memory sequential buffer (entries ordered by id, gaps held back) that is flushed when it hits an entry/byte cap or a timer (defaults 200 ms for object storage, 10 ms for local FS, 1 ms in service mode), turning many small writes into large sequential ones. On object storage each flush is cut into ~2 MB blocks uploaded as separate objects in parallel from a goroutine pool (maxFlushThreads, default 32) while acks are still released strictly in entry order; blocks of a sealed segment are later compacted into merged objects (up to segmentCompactionPolicy.maxBytes, default 2 MB). Local-FS mode appends CRC32-framed records to one segment file and fsyncs once per flushed block. Writer fencing uses object-store conditional PUT (If-None-Match) instead of lock round-trips where the backend supports it; the vendor frames the result as reaching 60-80% of each backend's raw bandwidth.",
+  "when_to_use": [
+    "A Go system (vector DB, database, event-sourced service) that needs an ordered, durable WAL and already runs etcd plus S3/MinIO, and you want to stop operating a Kafka or Pulsar cluster for it.",
+    "Bulk single-stream appends to S3 where ~100-200 ms commit latency is fine: the vendor measured 750 MB/s from one client/stream vs 130 MB/s for Kafka.",
+    "Single-node deployments on local disk that want fsync-acknowledged appends at millisecond latency (vendor: 450 MB/s at 1.8 ms).",
+    "Log retention priced at object-storage rates with stateless compute, where catch-up/replay reads can come straight from object storage.",
+    "Multi-AZ durability via the 3-replica quorum service mode (ack after 2 of 3 replicas, async flush to object storage), if you can run the extra LogStore service."
+  ],
+  "when_not_to_use": [
+    "You need the Kafka API or ecosystem (wire protocol, partitions, consumer groups, Connect/Streams, transactions): none of it exists here.",
+    "Latency-sensitive writes over object storage: the vendor's own table shows S3/MinIO modes at 166/184 ms vs Kafka 58 ms and Pulsar 35 ms, and the Milvus docs put embedded MemoryBuffer mode at 200-500 ms.",
+    "Self-hosted MinIO backends: the same table has Woodpecker at 71 MB/s, about half of Kafka's 130 MB/s.",
+    "Many concurrent producers into one log: each log has one exclusive writer (etcd session lock or conditional-write fence); in lock mode failover can wait up to the 10 s session TTL.",
+    "Risk-averse production outside Milvus: still v0.1.x, and a quorum-mode bug that lost acknowledged data after compaction (#320) was only fixed in September 2026."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "etcd (required; only metadata backend supported) plus an S3-compatible object store or local filesystem; Go deps include minio-go, Azure SDK, etcd client/server v3.5, gRPC, Prometheus, OpenTelemetry, zap and hashicorp/memberlist (service-mode gossip). Service mode also ships a LogStore server, Docker images, a Kubernetes operator and the wpcli admin tool.",
+    "min_toolchain": "Go 1.25 (go.mod declares go 1.25.0)",
+    "platforms": "Pure Go; Docker build images target Linux only (Ubuntu 20.04/22.04, Rocky Linux 8, Amazon Linux 2023); other OSes not documented",
+    "thread_safety": "Not documented per method. Cluster-wide there is one exclusive LogWriter per log, enforced by an etcd session lock or conditional-write fence; WriteAsync returns a per-message result channel; multiple independent readers per log are supported.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "License trap: the embedded client (woodpecker/client/logstore_client_local.go) imports the server/ package, which is AGPL-3.0-only or SSPL-1.0, so embedded mode compiles copyleft code into your binary; only the non-server packages are Apache-2.0.",
+    "Writers can be invalidated under you: when the etcd session expires writes fail with ErrLogWriterLockLost and the app must reopen a writer. With fencePolicy 'auto' on a new cluster, startup fails outright if the object store's conditional-write check fails; there is no silent fallback to locks.",
+    "Docs lag code: the README reader example calls OpenLogReader(ctx, start), but the interface is now OpenLogReader(ctx, from, readerBaseName), and the README config shows 4 MB flushes / 64 threads while current defaults are 2 MB / 32.",
+    "Open reader issues: ReadNext keeps serving data after the reader is closed (#277), and an idle tail reader polls etcd plus a quorum-wide RPC every 200 ms (#352)."
+  ],
+  "pick_this_over_siblings_when": "No siblings catalogued yet. Against the Kafka baseline, pick it only when you want an embeddable Go WAL on object storage rather than a general-purpose broker.",
+  "verified_claims_summary": "One first-party single-node, single-client, single-log-stream write test, published identically in the README, the Milvus docs and a May 2025 Milvus blog post. Woodpecker to local FS: 450 MB/s at 1.8 ms; to S3: 750 MB/s at 166 ms; to MinIO: 71 MB/s at 184 ms. Kafka: 129.96 MB/s at 58 ms; Pulsar: 107 MB/s at 35 ms. No CPU or instance type (only 'single EC2 instance' for the S3 ceiling), message size, batching, Go version, or Kafka/Pulsar settings (acks, fsync, replication) are given, the repo has no Kafka/Pulsar harness, and the numbers come from early-2025 development builds.",
+  "status_note": "Actively developed (v0.1.45 released 2026-09-21, releases roughly weekly) and shipped as the default WAL in Milvus 2.6+, but still pre-1.0. Client packages are Apache-2.0 and server/ is AGPL-3.0/SSPL, so embedding it in proprietary software needs legal review.",
+  "sources_read": [
+    "https://github.com/zilliztech/woodpecker",
+    "https://github.com/zilliztech/woodpecker/blob/master/README.md",
+    "https://github.com/zilliztech/woodpecker/blob/master/LICENSE.txt",
+    "https://github.com/zilliztech/woodpecker/blob/master/go.mod",
+    "https://github.com/zilliztech/woodpecker/blob/master/config/woodpecker.yaml",
+    "https://github.com/zilliztech/woodpecker/blob/master/server/README.md",
+    "https://github.com/zilliztech/woodpecker/blob/master/server/storage/codec/README.md",
+    "https://github.com/zilliztech/woodpecker/blob/master/server/storage/objectstorage/writer_impl.go",
+    "https://github.com/zilliztech/woodpecker/blob/master/server/storage/disk/writer_impl.go",
+    "https://github.com/zilliztech/woodpecker/blob/master/tests/benchmark/README.md",
+    "https://github.com/zilliztech/woodpecker/blob/master/docs/condition_write.md",
+    "https://github.com/zilliztech/woodpecker/blob/master/woodpecker/README.md",
+    "https://github.com/zilliztech/woodpecker/blob/master/woodpecker/woodpecker_embed_client.go",
+    "https://github.com/zilliztech/woodpecker/blob/master/woodpecker/client/logstore_client_local.go",
+    "https://github.com/zilliztech/woodpecker/blob/master/woodpecker/log/log_writer.go",
+    "https://github.com/zilliztech/woodpecker/blob/master/woodpecker/log/log_handle.go",
+    "https://github.com/zilliztech/woodpecker/releases",
+    "https://github.com/zilliztech/woodpecker/issues",
+    "https://github.com/zilliztech/woodpecker/issues/320",
+    "https://github.com/zilliztech/woodpecker/issues/277",
+    "https://raw.githubusercontent.com/milvus-io/milvus-docs/v3.0.x/site/en/reference/architecture/woodpecker_architecture.md",
+    "https://milvus.io/blog/we-replaced-kafka-pulsar-with-a-woodpecker-for-milvus.md",
+    "https://github.com/milvus-io/community/blob/master/blog/en/we-replaced-kafka-pulsar-with-a-woodpecker-for-milvus.md",
+    "https://hn.algolia.com/api/v1/search?query=woodpecker%20WAL"
+  ],
+  "confidence": 0.4
+}
