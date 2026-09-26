@@ -1,0 +1,93 @@
+[
+  {
+    "id": "https://github.com/emmett-framework/granian",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "A",
+    "tier_reason": "benchmarks/vs.md (run 2026-08-05, Granian 2.8.1, Python 3.13) lists Granian ASGI get 10KB c128 at 125,539 RPS vs Uvicorn H11 14,501 and Uvicorn Httptools 51,051. The harness is public (benchmarks/benchmarks.py, benchmarks/runbench.sh, benchmarks/envs/*.txt, benchmarks/app/). Build flags are stated (maturin --release --features jemalloc; Cargo release profile lto=fat, panic=abort) and so is the CPU (AMD Ryzen 7 5700X).",
+    "corrections": {
+      "benchmark_url": "https://github.com/emmett-framework/granian/blob/c0b1e0b9ba8349e2451b1b688037d8d79e4693b4/benchmarks/vs.md",
+      "baseline": "Uvicorn (httptools and h11 protocols) running on uvloop",
+      "baseline_in_list": false,
+      "compiler_and_flags": "Rust (rustc version not stated), built with `maturin build --release --features jemalloc` (benchmarks/runbench.sh); Cargo [profile.release] lto=\"fat\", panic=\"abort\", strip=true; .cargo/config.toml rustflags --cfg pyo3_disable_reference_pool; Python 3.13 venv",
+      "caveats": "First-party benchmark with a public harness. Granian's ASGI server also runs on uvloop in this test, so the gain is over Uvicorn's Python HTTP layer, not over uvloop itself. Single worker, single runtime thread (Granian ASGI in --runtime-mode st), HTTP/1.1, 10 KB static response; the third-party servers are the 'latest available version at the time of the run', not pinned. The lead shrinks when the app does I/O: ASGI with 10 ms waits at c512 gives 45,859 vs 43,903 RPS for Uvicorn Httptools (~1.04x); ~50 KB file responses give 48,049 vs 30,004 RPS (~1.6x) (derived from page data). Rust toolchain version not stated."
+    },
+    "notes": "Numbers and ratios match vs.md (8.66x over Uvicorn H11, 2.46x over Uvicorn Httptools, derived from page data). I changed the baseline from 'uvloop' to Uvicorn, because vs.md says every async server, Granian included, runs on uvloop; uvloop is the shared event loop, not what Granian beats. Metadata checks out: BSD-3-Clause, 5,673 stars, last commit 2026-09-13, not a fork, not archived.",
+    "urls_opened": [
+      "https://github.com/emmett-framework/granian",
+      "https://raw.githubusercontent.com/emmett-framework/granian/master/benchmarks/vs.md",
+      "https://raw.githubusercontent.com/emmett-framework/granian/master/benchmarks/runbench.sh",
+      "https://github.com/emmett-framework/granian/tree/master/benchmarks",
+      "https://github.com/emmett-framework/granian/blob/master/Cargo.toml",
+      "https://github.com/emmett-framework/granian/blob/master/.cargo/config.toml",
+      "https://github.com/emmett-framework/granian/blob/master/benchmarks/envs/asgi.txt",
+      "https://github.com/emmett-framework/granian/blob/master/benchmarks/envs/common.txt"
+    ]
+  },
+  {
+    "id": "https://github.com/dimdengd/ultimate-express",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "A",
+    "tier_reason": "The README table compares Express with µExpress on 8 scenarios. It states the load command (wrk -d 60 -t 1 -c 200), the runtime (Node.js 20.17.0; JavaScript has no compile flags) and the CPU (AMD Ryzen 5 3600). Each scenario name is a public test app under tests/tests/ (e.g. tests/tests/routing/simple-routes.js), runnable as either framework through tests/singular.js with tests/preload.cjs disabling process.exit. That the table was produced this way is my inference; the README does not name the script.",
+    "corrections": {
+      "benchmark_url": "https://github.com/dimdenGD/ultimate-express/blob/77ca8a2119b01e852d136cd8d5847cf29358a41c/README.md#performance-against-express",
+      "claimed_speedup": "README table (wrk -d 60 -t 1 -c 200, Node.js 20.17.0, Ryzen 5 3600): 3.10x-11.78x across 8 scenarios, e.g. routing/simple-routes 75.14k vs 11.16k req/s (6.73x), routing/lot-of-routes 54.57k vs 4.63k req/s (11.78x), middlewares/compression-file 14.92k vs 4.81k req/s (3.10x, the smallest gain). The express-static row's printed 4.87x is the MB/s throughput ratio; by req/s it is 32.45k vs 6.58k = 4.93x (derived from page data).",
+      "compiler_and_flags": "Node.js 20.17.0 (JavaScript, no compile step); µExpress runs on the uWebSockets.js native addon (C++). Scenario servers are likely started via tests/singular.js as `node -r ./tests/preload.cjs <scenario>` (inferred, not stated on the page)",
+      "workload": "wrk -d 60 -t 1 -c 200 against 8 single-process test apps from tests/tests/ (routing/simple-routes, routing/lot-of-routes, routing/some-middlewares, routers/nested-routers, middlewares/express-static, engines/ejs, middlewares/body-urlencoded, middlewares/compression-file), each run once as Express 4 and once as Ultimate Express (uWebSockets.js-based drop-in replacement) on Node.js 20.17.0, Ubuntu 22.04.",
+      "caveats": "First-party, single-machine, single-run numbers without repeated trials. They are old: the table rows were last edited 2024-09-26..2024-10-02 (compression row 2025-05-04), when µExpress was about v1.2 (package.json then pinned express ^4.19.2). The package is now 2.2.1 and requires Node >=22, and the table has not been re-run. The /benchmark directory (benchmark/run.js, added 2026-04-02) is a newer harness with different scenarios (hello-world, routes-1000, static-250kb, art-render, ...); it did not produce these numbers and its results are not published. The Express 4 minor version measured is not stated. The gains come from the uWebSockets.js C++ core. There are documented behavioural differences from Express (case-sensitive routing by default, a 4 KB default header limit vs Node's 16 KB, HTTPS via uwsOptions). The baseline (Express.js) is not one of the category's named baselines, so baseline_in_list=false."
+    },
+    "notes": "Downgraded because the record's range 4.87x-11.78x left out the 3.10x compression-file row. It also wrongly said the /benchmark directory produced the table. Tier A holds, since the scenario code is public and runtime, command and CPU are stated, but the table is about two years old and was measured on a v1.x release. Metadata checks out: Apache-2.0 (plus an EXPRESS_LICENSE for Express-derived code), 1,109 stars, last commit 2026-07-31, not a fork.",
+    "urls_opened": [
+      "https://github.com/dimdenGD/ultimate-express",
+      "https://raw.githubusercontent.com/dimdenGD/ultimate-express/main/README.md",
+      "https://raw.githubusercontent.com/dimdenGD/ultimate-express/main/benchmark/README.md",
+      "https://raw.githubusercontent.com/dimdenGD/ultimate-express/main/benchmark/run.js",
+      "https://github.com/dimdenGD/ultimate-express/blob/main/package.json",
+      "https://github.com/dimdenGD/ultimate-express/blob/52d9d72/README.md",
+      "https://github.com/dimdenGD/ultimate-express/blob/0eadc8c/tests/tests/routing/simple-routes.js",
+      "https://github.com/dimdenGD/ultimate-express/blob/0eadc8c/tests/singular.js",
+      "https://github.com/dimdenGD/ultimate-express/blob/0eadc8c/tests/preload.cjs",
+      "https://github.com/dimdenGD/ultimate-express/blob/0eadc8c/package.json"
+    ]
+  },
+  {
+    "id": "https://github.com/nelthaarion/breeze",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "B",
+    "tier_reason": "In the-benchmarker/web-frameworks data.json (develop, commit f673364, 2026-09-24), breeze (framework_id 577) scores 168,851 req/s at c=512 vs actix 163,415 and nethttp (Go net/http) 67,239. It leads both at every concurrency level. This is a well-known independent suite, but it is not tier A: the CPU model is not measured (the 'M1 Eight-Core Processor' string is hard-coded), and it is a single run.",
+    "corrections": {
+      "benchmark_url": "https://github.com/the-benchmarker/web-frameworks/blob/f673364fb30748e5bb8e57319ec2772bc872f78a/data.json",
+      "baseline": "Go net/http",
+      "claimed_speedup": "the-benchmarker/web-frameworks data.json of 2026-09-24 (develop, commit f673364): breeze 186,467 / 173,403 / 168,851 req/s at concurrency 64 / 256 / 512 vs Go net/http ('nethttp', Go 1.22 ServeMux) 71,499 / 67,382 / 67,239 = 2.61x / 2.57x / 2.51x, and vs actix (actix-web 4.8) 179,203 / 168,270 / 163,415 = 1.04x / 1.03x / 1.03x (derived from page data). The older master snapshot (2026-09-20, different method) gives 124,892 / 108,998 / 107,346 vs nethttp 96,149 / 85,406 / 83,964 (1.30x / 1.28x / 1.28x) and vs actix 115,638 / 102,329 / 99,835 (1.08x / 1.07x / 1.08x) (derived from page data).",
+      "workload": "the-benchmarker/web-frameworks develop-branch run of 2026-09-24 (commit f673364): hello-world handlers (empty body or echoed id), load from zrk --closed (a closed loop over keep-alive connections) at concurrency 64/256/512, headline req/s averaged over the suite's routes; the server container gets about 4 cores. Breeze app at go/breeze/main.go, with a NumCPU worker pool on its gnet-based engine.",
+      "compiler_and_flags": "Go 1.27 (golang:1.27 build image per go/config.yaml), CGO_ENABLED=1, GOAMD64=v3, `go get` then `go build -trimpath` (go/Dockerfile at f673364)",
+      "hardware": "Undisclosed x86_64 Linux host (Fedora 44 kernel 7.2.6-200.fc44), 16 logical CPUs, ~7.7 GB RAM reported. The cpu_name 'M1 Eight-Core Processor' in data.json is a hard-coded string, not a measured CPU model. data.json reports breeze using ~3.8 server cores (vs ~3.95 for actix and nethttp).",
+      "caveats": "The lead over actix-web is only 3-4%, within noise for a single-run shootout; the meaningful result is ~2.5x over Go's net/http, which is expected of an epoll event-loop engine over goroutine-per-connection. Breeze is built on a fork of gnet (github.com/nelthaarion/gnet/v2 v2.2.0, forked from panjf2000/gnet), which does the I/O. The suite's go/breeze/main.go imports the v1 module path github.com/nelthaarion/breeze while its go.mod requires breeze/v2 v2.0.8, so `go get` likely builds the latest v1 release (v1.6.x), not the '2.0' the label shows (inferred, not built). Breeze responses are smaller, about 64 bytes each vs about 88 for actix and nethttp (total_bytes_received / total_requests), so it likely sends fewer headers. Harness methods changed during 2026 and runs from different revisions do not compare. Low-star project (215 stars)."
+    },
+    "notes": "The record's numbers match breeze's own row. I switched the baseline to Go net/http (also a listed baseline, so baseline_in_list stays true), since the ~3% margin over actix is noise and the same data.json shows a clear 2.5x win over the Go stdlib server; the actix figures are kept in claimed_speedup. Metadata checks out: MIT, 215 stars, last commit 2026-09-17, not a fork, not archived.",
+    "urls_opened": [
+      "https://github.com/nelthaarion/breeze",
+      "https://raw.githubusercontent.com/nelthaarion/breeze/main/README.md",
+      "https://raw.githubusercontent.com/nelthaarion/breeze/main/go.mod",
+      "https://github.com/nelthaarion/breeze/blob/v1.6.2/go.mod",
+      "https://github.com/nelthaarion/breeze/blob/v2.0.8/go.mod",
+      "https://raw.githubusercontent.com/the-benchmarker/web-frameworks/f673364fb30748e5bb8e57319ec2772bc872f78a/data.json",
+      "https://raw.githubusercontent.com/the-benchmarker/web-frameworks/develop/data.json",
+      "https://raw.githubusercontent.com/the-benchmarker/web-frameworks/master/data.json",
+      "https://github.com/the-benchmarker/web-frameworks/blob/f673364fb30748e5bb8e57319ec2772bc872f78a/go/breeze/main.go",
+      "https://github.com/the-benchmarker/web-frameworks/blob/f673364fb30748e5bb8e57319ec2772bc872f78a/go/breeze/go.mod",
+      "https://github.com/the-benchmarker/web-frameworks/blob/f673364fb30748e5bb8e57319ec2772bc872f78a/go/breeze/config.yaml",
+      "https://github.com/the-benchmarker/web-frameworks/blob/f673364fb30748e5bb8e57319ec2772bc872f78a/go/nethttp/main.go",
+      "https://github.com/the-benchmarker/web-frameworks/blob/f673364fb30748e5bb8e57319ec2772bc872f78a/go/config.yaml",
+      "https://github.com/the-benchmarker/web-frameworks/blob/f673364fb30748e5bb8e57319ec2772bc872f78a/go/Dockerfile"
+    ]
+  }
+]
