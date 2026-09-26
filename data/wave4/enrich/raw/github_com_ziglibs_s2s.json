@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/ziglibs/s2s",
+  "one_liner": "Single-file Zig binary serializer driven by comptime type reflection; 1.1-2x faster round trips than zig-protobuf in one benchmark.",
+  "what_it_does": "s2s ('struct to stream') converts almost any runtime Zig value to a little-endian byte stream and back, using the Zig type itself as the schema. It handles ints, floats, bools, enums, tagged unions, optionals, arrays, vectors, structs, and pointers/slices, which it treats as owned tree data. The API is four free functions over std.Io.Writer/std.Io.Reader: serialize, deserialize (compile error if the type contains pointers), deserializeAlloc (allocates slices and pointers) and free. There is no IDL, codegen or per-field option, so it does not replace protobuf on the wire: only Zig code with a structurally identical type can read the bytes.",
+  "how_it_is_fast": "The encoder and decoder are specialized at compile time. serializeRecursive/recursiveDeserialize switch on @typeInfo(T) and unroll struct fields with `inline for`, so there are no field tags, names, varints or runtime reflection: each field is written as fixed-width little-endian bytes in declaration order and decoded in place into the destination struct. u8 slices and arrays take a fast path, one writeAll/readSliceAll. The only framing is an 8-byte comptime FNV-1a-64 hash of the type's structure, a u64 length before each slice, and a 1-byte flag or tag for optionals and unions. The price is size: in the benchmark, payloads were 1.14-1.72x larger than protobuf's.",
+  "when_to_use": [
+    "Both writer and reader are Zig programs built from the same type definitions, for example Zig-to-Zig IPC, caches, save files or messages inside a Zig-only system.",
+    "Record-shaped data with ints, floats, enums, nested structs and slices of structs. On the suite's document, event, message and telemetry fixtures the serialize+deserialize round trip was 1.4-2.0x faster than zig-protobuf.",
+    "You want no .proto file and no codegen step, because the Zig struct is the schema.",
+    "You want cheap detection of mismatched types: deserialize rejects a stream whose 8-byte type hash differs, with error.UnexpectedData, before it reads any fields.",
+    "Byte-heavy payloads ([]const u8, [N]u8), which s2s copies in bulk instead of element by element."
+  ],
+  "when_not_to_use": [
+    "Anything a non-Zig program must read, and long-lived or public formats. There is no spec beyond s2s.zig, the version is 0.0.1, the benchmark suite's docs call it 'not a public interchange standard', and in issue #7 the author says they want to change the format in a breaking way.",
+    "You need schema evolution. Adding, removing or retyping a field changes the type hash, so older data fails to decode with error.UnexpectedData. There are no defaults, optional fields or version numbers.",
+    "Wire size or many small strings matter. Fixed-width integers and a u64 length on every slice made payloads 1.14-1.72x larger than protobuf's. On the 'strings' fixture s2s was only 1.13x faster than protobuf overall, slower to serialize, and slower than zig-flatbuffers, msgpack.zig and serde.zig's MessagePack backend.",
+    "Untrusted input without a bounded or arena allocator. Slice lengths are read as u64 and passed straight to allocator.alloc, and fields already decoded are not freed when a later field fails.",
+    "Types it cannot handle: cyclic or shared graphs, sentinel-terminated slices ([:0]const u8), untagged or extern unions, many-item and C pointers, and custom per-type encoding (no hooks; issue #7 has been open since 2023)."
+  ],
+  "integration": {
+    "form": "module (one source file, s2s.zig; add it as a Zig package, where build.zig exposes module 's2s', or vendor the file)",
+    "dependencies": "none (Zig std only)",
+    "min_toolchain": "Zig 0.15.0 (build.zig.zon minimum_zig_version). PR #23 made it compile on 0.16-dev while keeping 0.15.0 support, and the benchmark used Zig 0.16.0. The code uses the std.Io.Reader/Writer API, so older Zig needs an older commit.",
+    "platforms": "Any Zig target (pure Zig, no architecture-specific code). The wire format is explicitly little-endian and usize is always encoded as u64; a usize value too large for a 32-bit target fails to decode with error.UnexpectedData.",
+    "thread_safety": "Not documented. The API is stateless free functions with no global state, so concurrent calls on separate streams need no locking.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The type hash covers field types and order but not field names. Renaming fields, or swapping two fields of the same type, is not detected, and old data then decodes into the wrong fields without any error.",
+    "Each top-level serialize() call writes its own 8-byte hash and calls flush() on the writer. Serializing many small records one call at a time costs 8 bytes and a flush per record, so wrap them in a slice or struct instead.",
+    "free() takes a pointer (`value: *T`) in s2s.zig, but the README shows `value: T`. Also, deserializeAlloc does not clean up partial allocations on error, so decode into an ArenaAllocator when input may be malformed.",
+    "Error-set and error-union fields are nominally supported, but their tests have been disabled as failing since 2024 (enable_failing_test = false). Odd-width integers are widened to the next whole byte (a u1 takes a full byte)."
+  ],
+  "pick_this_over_siblings_when": "No other Zig library is catalogued in this category. The siblings are Rust, Go, C#, C++, Java, Python and Nim libraries, so none of them is an option in a Zig codebase. Pick s2s when both ends are Zig and you want no schema or codegen step; if another language must read the bytes, use one of the cross-language schema formats listed or stay on protobuf.",
+  "verified_claims_summary": "In GLD.SerializerBenchmark run 2026-09-14-134825 (Zig 0.16.0 ReleaseFast, i7-12800H laptop on the powersave governor, Ubuntu 22.04), s2s 0.0.1's serialize+deserialize time for 100-instance batches beat Arwalk/zig-protobuf 5.0.0 on all five fixtures: document 1.88x, event 1.43x, message 1.43x, strings 1.13x, telemetry 1.99x (stream mode, all trials); single-instance cells gave 1.2-2.25x. This was one run, and protobuf's timed decode also copies the generated message into the suite struct. Serializing alone, s2s was slower than protobuf on 'strings' (36.8 vs 27.2 us per 100 instances).",
+  "status_note": "Nearly every commit since 2023 is a port to a new Zig version (latest 2026-04-30, targets Zig 0.15-0.16). It is still versioned 0.0.1, and the benchmark author's fairness-review request (issue #25) has had no reply. MIT-licensed, a single ~870-line file with no dependencies, easy to vendor.",
+  "sources_read": [
+    "https://github.com/ziglibs/s2s",
+    "https://github.com/ziglibs/s2s/blob/master/README.md",
+    "https://github.com/ziglibs/s2s/blob/master/s2s.zig",
+    "https://github.com/ziglibs/s2s/blob/master/build.zig",
+    "https://github.com/ziglibs/s2s/blob/master/build.zig.zon",
+    "https://github.com/ziglibs/s2s/issues",
+    "https://github.com/ziglibs/s2s/pulls",
+    "https://github.com/ziglibs/s2s/commits/master",
+    "https://github.com/ziglibs/s2s/issues/25",
+    "https://github.com/ziglibs/s2s/issues/15",
+    "https://github.com/ziglibs/s2s/issues/7",
+    "https://github.com/ziglibs/s2s/issues/3",
+    "https://github.com/leo-gan/GLD.SerializerBenchmark/blob/master/zig/src/extra.zig",
+    "https://github.com/leo-gan/GLD.SerializerBenchmark/blob/master/zig/src/data.zig",
+    "https://github.com/leo-gan/GLD.SerializerBenchmark/blob/master/zig/src/proto_ser.zig",
+    "https://github.com/leo-gan/GLD.SerializerBenchmark/blob/master/docs/zig/index.md",
+    "https://github.com/leo-gan/GLD.SerializerBenchmark/blob/master/dashboard/public/data/stats_zig_latest.json.gz",
+    "https://github.com/leo-gan/GLD.SerializerBenchmark/blob/master/dashboard/public/data/zig_latest.json.gz"
+  ],
+  "confidence": 0.78
+}
