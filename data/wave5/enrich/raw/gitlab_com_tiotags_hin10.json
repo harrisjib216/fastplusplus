@@ -1,0 +1,70 @@
+{
+  "id": "https://gitlab.com/tiotags/hin10",
+  "one_liner": "Tiny multi-threaded io_uring HTTP/1.1 static-file server in C; edges nginx 1-16% on a 102-byte file, loses on larger files.",
+  "what_it_does": "Hinsightd MT is a standalone HTTP/1.1 web server: the multi-threaded 0.10 branch of hinsightd. It serves static files with HTTPS/SNI, single-range requests, 304/ETag handling, on-the-fly deflate/gzip and access logs, and has had a basic reverse proxy since April 2024. You configure it with command-line flags or an ini file that uses the same directives (not nginx.conf), and a live console prompt accepts directives while it runs. The build also installs a libhin library and headers, but no library API is documented.",
+  "how_it_is_fast": "Each worker thread (one per core by default) owns a thread-local io_uring ring created with IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_COOP_TASKRUN. Each thread keeps one accept SQE outstanding on the shared listening socket and then handles that whole connection itself, so little is locked. Submissions are batched: one io_uring_submit per loop pass, and up to 64 CQEs reaped per wait. File open, read, send and close are all asynchronous io_uring operations. Bodies smaller than the ~8 KB buffer are condensed with the headers, and TCP_CORK is set only for larger bodies. That suits the connect-request-close pattern of the tiny-file test. There is no sendfile or splice: file data is read into user-space buffers and then sent, which is why it falls behind nginx on the 89.7 kB file.",
+  "when_to_use": [
+    "Serving tiny static files (a few hundred bytes) to many short-lived connections on a recent Linux kernel. The author's test puts it 7-16% ahead of nginx at 50-250 concurrent ab clients.",
+    "Studying or borrowing a compact per-thread io_uring accept/read/send loop in plain C. The core netcode is a few hundred lines per file, the project page says the binary is under 200 KB, and the licence is permissive (BSD-3-Clause text, readme says MIT).",
+    "Hobby or dev-box static hosting where one small binary with HTTPS, range and 304 support is enough and pre-1.0 software is acceptable.",
+    "A/B experiments of io_uring against epoll in the same server: --force_epoll switches the backend (the author says the epoll path is slower and not very well tested)."
+  ],
+  "when_not_to_use": [
+    "Files larger than a few KB. It has no sendfile, and on the 89.7 kB jquery.js it reached only 0.68-0.82x nginx's req/s, even with sendfile turned off in nginx to match.",
+    "CPU-bound dynamic compression: gzip of jquery.js ran at about 0.75x nginx (727 vs 973 req/s at -c 50), and compression is fixed at zlib level 9.",
+    "High concurrency: the tiny-file lead falls to about 1% at c=500-1000. That is within the noise of a best-of-N test with client and server on one machine.",
+    "Internet-facing production. The README warns that denial-of-service bugs are 'still likely present', and the 2024 changelog fixes several use-after-free bugs. Keepalive to reverse-proxy backends is marked 'bugged'. There is no FastCGI, no HTTP/2 and no multi-range support.",
+    "Non-Linux hosts, and container runtimes that block io_uring syscalls (the README says podman needs --security-opt seccomp=unconfined)."
+  ],
+  "integration": {
+    "form": "Standalone server binary (hinsightd) built from source with CMake/Ninja. The build also produces and installs an undocumented libhin library with headers. This branch has no distro packages; a Dockerfile is provided.",
+    "dependencies": "liburing, zlib, pthreads, glibc or musl; OpenSSL or LibreSSL (on by default, can be turned off); libsystemd optional (off by default); CMake to build (the README uses Ninja).",
+    "min_toolchain": "Any C compiler with GNU extensions (__thread, _GNU_SOURCE). CMakeLists.txt declares CMake 3.17 but calls cmake_path unconditionally, and cmake_path needs CMake 3.20. The README says Linux >= 5.6, but the ring is created with IORING_SETUP_SINGLE_ISSUER (Linux 6.0+) and COOP_TASKRUN (5.19+). On older kernels ring setup fails and the server falls back to epoll.",
+    "platforms": "Linux only (io_uring with an epoll fallback, statx, signalfd); glibc and musl. CPU architectures: not documented.",
+    "thread_safety": "Inside the server: one event loop and io_uring ring per thread in thread-local storage, each client stays on the thread that accepted it, and shared server, vhost and file-cache state uses locks and atomic helpers. libhin has no documented thread-safety contract.",
+    "drop_in_for_baseline": "partial: it replaces nginx only for plain static-file serving (plus a basic reverse proxy since April 2024). It has its own CLI/ini config with no nginx.conf compatibility, and lacks FastCGI, HTTP/2 and sendfile."
+  },
+  "gotchas": [
+    "Kernel mismatch: the README says Linux >= 5.6, but io_uring setup requests IORING_SETUP_SINGLE_ISSUER (6.0+). On older kernels it logs 'io_uring_init failed' and every thread runs the slower, less-tested epoll path, where file reads become blocking pread calls.",
+    "The gzip comparison may not be like-for-like. hinsightd hard-codes deflateInit2(Z_BEST_COMPRESSION), while the benchmark's nginx.conf takes gzip_comp_level from a template variable whose value is not shown (nginx's default is 1).",
+    "The README lags the code. Its roadmap still says 'readd reverse proxy', but rproxy landed in April 2024 commits (after the benchmarks). It also says MIT while docs/LICENSE.txt holds BSD-3-Clause text.",
+    "The benchmarks cover 0.10.1 and 0.10.2 only. Later commits (reverse proxy, an SSL refactor, POST support, a global memory limit) are untagged and unbenchmarked."
+  ],
+  "pick_this_over_siblings_when": "uWebSockets, libhv and io_uring-echo-server (frevib) are libraries or demos you build a server on, and F-Stack keeps nginx itself but moves its network path to DPDK. Pick hinsightd only if you want a ready-made, very small C static-file server whose per-thread io_uring loop you can read end to end. For real static serving, nginx remains the safer choice.",
+  "verified_claims_summary": "These are the author's own ApacheBench runs from February 2024. The page describes them as open-request-close tests, with client and server on one 4-core, non-hyperthreaded machine; the CPU model, compiler and flags are not stated, and each figure is the best of several runs. hinsightd 0.10.2 served a 102-byte file at 124,046 req/s against nginx 1.25.3's 106,615 at -c 50 (about 1.16x), shrinking to about 1.01x at -c 750-1000. With sendfile disabled on every server it reached 0.68-0.82x nginx on the 89.7 kB jquery.js and about 0.75x on dynamic gzip.",
+  "status_note": "Stale: last commit 2 July 2024 (last tag v0.10.3, Feb 2024), 2 GitLab stars, no issues filed, no packages for this branch. The code is permissively licensed and small enough to read or vendor, but treat it as an unmaintained hobby server.",
+  "sources_read": [
+    "https://gitlab.com/tiotags/hin10/-/raw/master/readme.md",
+    "https://gitlab.com/api/v4/projects/tiotags%2Fhin10",
+    "https://gitlab.com/api/v4/projects/48862888/repository/tree?recursive=true&per_page=100",
+    "https://gitlab.com/api/v4/projects/48862888/repository/tree?recursive=true&per_page=100&page=2",
+    "https://gitlab.com/api/v4/projects/48862888/repository/commits?per_page=10",
+    "https://gitlab.com/api/v4/projects/48862888/repository/tags",
+    "https://gitlab.com/api/v4/projects/48862888/issues?per_page=50&state=all",
+    "https://gitlab.com/tiotags/hin10/-/raw/master/CMakeLists.txt",
+    "https://gitlab.com/tiotags/hin10/-/raw/master/docs/changelog.md",
+    "https://gitlab.com/tiotags/hin10/-/raw/master/docs/LICENSE.txt",
+    "https://gitlab.com/tiotags/hin10/-/raw/master/src/hin/conf.h",
+    "https://gitlab.com/tiotags/hin10/-/raw/master/src/hin/hin.h",
+    "https://gitlab.com/tiotags/hin10/-/raw/master/src/netcode/uring.c",
+    "https://gitlab.com/tiotags/hin10/-/raw/master/src/netcode/hin.c",
+    "https://gitlab.com/tiotags/hin10/-/raw/master/src/netcode/server.c",
+    "https://gitlab.com/tiotags/hin10/-/raw/master/src/netcode/epoll.c",
+    "https://gitlab.com/tiotags/hin10/-/raw/master/src/netcode/pipe.c",
+    "https://gitlab.com/tiotags/hin10/-/raw/master/src/http/server/file.c",
+    "https://gitlab.com/tiotags/hin10/-/raw/master/src/http/utils/compress.c",
+    "https://gitlab.com/tiotags/hin10/-/raw/master/src/system/main.c",
+    "https://gitlab.com/tiotags/hin10/-/raw/master/src/system/limits.c",
+    "https://tiotags.gitlab.io/blog/benchmark5.html",
+    "https://tiotags.gitlab.io/blog/benchmark4.html",
+    "https://tiotags.gitlab.io/hinsightd/mt.html",
+    "https://tiotags.gitlab.io/assets/f/f1/nginx.conf",
+    "https://nginx.org/en/docs/http/ngx_http_gzip_module.html",
+    "https://man7.org/linux/man-pages/man2/io_uring_setup.2.html",
+    "https://cmake.org/cmake/help/latest/command/cmake_path.html",
+    "https://hn.algolia.com/api/v1/search?query=hinsightd",
+    "https://hn.algolia.com/api/v1/search?query=tiotags",
+    "https://hn.algolia.com/api/v1/items/38302070"
+  ],
+  "confidence": 0.45
+}

@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/moro-js/engine",
+  "one_liner": "C++ HTTP/1.1 and WebSocket server addon for Node.js, the engine under MoroJS; beat actix-web 1.11-1.14x on a hello-world shootout.",
+  "what_it_does": "A native Node.js addon (raw V8 bindings, not N-API) that parses HTTP/1.1, runs keep-alive, chunked bodies, WebSocket (optional permessage-deflate) and in-process TLS on Node's own libuv loop. It is not a Node http.Server replacement: the API is serve(callbacks) plus opaque request ids, with onRequest(reqId, methodIdx, path), lazy getters (getHeaders, getQuery, getBody) and one-shot respond(reqId, status, headers, body) or writeHead/write/end streaming. MoroJS uses it as its default transport and falls back to node:http when no prebuilt binary loads; standalone use means writing against this low-level id-based API.",
+  "how_it_is_fast": "A batched boundary: one JS crossing delivers method index and path, and one corked call sends status, headers and body (the design doc says 2-4 crossings per request against about 10-20 for a general binding), with V8 Fast API call targets on the hot response functions. Fixed replies can skip JS entirely: setStaticRoute and (since 1.1.9) setParamRoute answer inside C++, and prepareResponse builds a header block once for reuse on each request. The warm path avoids allocation (reused per-connection scratch buffers and header strings, a Date header cached once per second, uv_try_write with no write-request allocation, one write for each pipelined batch), multi-core runs as SO_REUSEPORT workers, and release binaries are built with clang -O3 -flto plus PGO. The parser is a scalar, table-driven RFC 9112 parser: the source has no SIMD intrinsics, although DESIGN.md calls it 'SIMD-friendly'.",
+  "when_to_use": [
+    "You already run MoroJS on Node 20-26: this is its default engine, with automatic node:http fallback on unsupported platforms or ABIs.",
+    "Node.js HTTP/1.1 services where transport overhead dominates and many responses are fixed or echo one path segment, so static routes, parameter routes and prepared templates can answer without entering JS.",
+    "Pipelined HTTP/1.1 clients: the author's run (Apple M2 Ultra, wrk -c100, pipelined x10) shows raw engine 832,171 req/s vs raw uWebSockets.js 652,934; without pipelining the two were 108,446 vs 106,287.",
+    "You want native HTTPS/WSS termination plus WebSocket with permessage-deflate in one MIT npm package, with prebuilt binaries for glibc, musl, macOS and Windows x64.",
+    "Linux 6.1+ hosts with heavy keep-alive load where you can A/B the opt-in io_uring transport (MORO_ENGINE_TRANSPORT=uring)."
+  ],
+  "when_not_to_use": [
+    "Choosing a stack on this number alone: the win over actix-web comes from hello-world handlers where GET / and POST /user are engine static routes that never run JS. No data covers handlers that do real work in JS.",
+    "Tail-latency-sensitive services at low or medium concurrency: in the same run p99 was 0.72 ms vs actix 0.39 ms at c=64 and 2.42 vs 1.58 ms at c=256. It was lower only at c=512 (3.05 vs 3.22 ms).",
+    "You need HTTP/2, HTTP/3, multi-certificate SNI or OCSP stapling. The engine is HTTP/1.1 only; ALPN HTTP/2 is listed as in progress.",
+    "Direct internet exposure of the TLS and HTTP parsers without a proxy: no external security audit has been done, and THREAT_MODEL.md says to front it with a proxy or review it first. maxConnections defaults to unlimited.",
+    "Risk-averse production use: repo created 2026-07-09, one npm maintainer, 0 stars, 0 issues filed, 723 npm downloads in 30 days, nine releases in 11 weeks. Also not for streaming large uploads: request bodies are buffered in full before onRequest (10 MB default cap)."
+  ],
+  "integration": {
+    "form": "module (npm meta package @morojs/engine with prebuilt .node binaries in per-platform optional packages, one for each Node ABI; source build via tools/build.mjs)",
+    "dependencies": "none at runtime beyond the per-platform binary package; links the libuv, OpenSSL and zlib inside the host Node binary. Source builds fetch Node headers and a sha-pinned v8-fast-api-calls.h.",
+    "min_toolchain": "Node.js >= 20 (ABIs 115/127/131/137/141/147 = Node 20/22/23/24/25/26). Source builds: C++20; the release lane uses clang-18 + lld for LTO/PGO, MSVC /std:c++20 on Windows. Minimum compiler version not documented.",
+    "platforms": "darwin arm64/x64, linux x64/arm64 (glibc and musl), win32 x64. Release x64 binaries target -march=x86-64-v2 (SSE4.2/POPCNT) and arm64 targets armv8.2-a. The io_uring transport needs Linux 6.1+ and is opt-in. SO_REUSEPORT is POSIX-only (ignored on Windows).",
+    "thread_safety": "Single-threaded per event loop: each thread (main or worker_threads) runs its own servers, request/WebSocket ids never cross threads, and there are no locks. For multi-core, run one engine per worker thread or process with reusePort.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Before 1.1.7, callbacks ran outside a Node callback scope. A response sent from a promise continuation could stall for 5-29 s, and under load none such completed. Use >= 1.1.7 and check probe().capabilities.callbackScope.",
+    "V8 Fast API targets install only when the running V8 major.minor matches the one the binary was built against. They apply only to Smi ids and sequential one-byte string bodies. Otherwise calls silently take the slower regular path; probe().fastApi reports why.",
+    "Static and parameter routes run no JS, so no middleware, logging or auth runs for them. Only an exact method match short-circuits (HEAD against a GET route reaches JS). A parameter segment is sent undecoded ('a%20b' stays 'a%20b').",
+    "The io_uring transport falls back to libuv silently under Docker's default seccomp profile, gVisor or kernels before 6.1. The default is still libuv because io_uring used more CPU per request in small-batch cases; check probe().transport."
+  ],
+  "pick_this_over_siblings_when": "In the same 2026-09-24 run, uWebSockets.js (189,157 / 178,265 / 174,621 req/s) was 4-8% behind, fulmine.js (223,508 / 210,337 / 203,996) was 10-12% ahead and Ultimate Express (179,836 / 170,080 / 165,795) was about 10% behind. Pick this engine when you use MoroJS or want its id-based native API with in-process TLS and automatic node:http fallback. Pick fulmine.js for the top raw number, or Ultimate Express if you need Express API compatibility.",
+  "verified_claims_summary": "the-benchmarker/web-frameworks run of 2026-09-24 (develop f673364): zrk closed loop over keep-alive connections, 15 s per level, with each figure averaged over GET /, GET /user/0 and POST /user. The server was pinned to 4 cores of an undisclosed 16-thread x86_64 Linux host (the CPU name in the data is hard-coded). The raw engine as a Node 26 cluster (^1.1.6, most likely 1.1.7 because the run predates the 1.1.9 publish) did 203,452 / 187,047 / 182,455 req/s at c=64/256/512 against actix-web 4.8 (Rust 1.98, opt-level 3, LTO, codegen-units=1) at 179,203 / 168,270 / 163,415, or 1.14x / 1.11x / 1.12x with both about 99% CPU-saturated. The older-method 2026-09-20 snapshot showed only 1.03-1.05x, and the engine's author submitted the benchmark entry (PR #9801).",
+  "status_note": "Active: 1.1.9 released 2026-09-24, 45 commits since the repo was created on 2026-07-09. MIT, installable from npm with prebuilt binaries, but young, single-maintainer and not externally audited.",
+  "sources_read": [
+    "https://github.com/Moro-JS/engine",
+    "https://github.com/Moro-JS/engine/blob/main/README.md",
+    "https://github.com/Moro-JS/engine/blob/main/docs/DESIGN.md",
+    "https://github.com/Moro-JS/engine/blob/main/docs/API.md",
+    "https://github.com/Moro-JS/engine/blob/main/docs/ROADMAP.md",
+    "https://github.com/Moro-JS/engine/blob/main/docs/THREAT_MODEL.md",
+    "https://github.com/Moro-JS/engine/blob/main/packages/engine/README.md",
+    "https://github.com/Moro-JS/engine/blob/main/packages/engine/package.json",
+    "https://github.com/Moro-JS/engine/blob/main/v1.1.7.md",
+    "https://github.com/Moro-JS/engine/blob/main/v1.1.8.md",
+    "https://github.com/Moro-JS/engine/blob/main/v1.1.9.md",
+    "https://github.com/Moro-JS/engine/blob/main/tools/build.mjs",
+    "https://github.com/Moro-JS/engine/blob/main/.github/workflows/release.yml",
+    "https://github.com/Moro-JS/engine/blob/main/src/http_parser.h",
+    "https://github.com/Moro-JS/engine/blob/main/src/server.h",
+    "https://github.com/Moro-JS/engine/blob/main/src/response_template.h",
+    "https://github.com/Moro-JS/benchmark",
+    "https://github.com/the-benchmarker/web-frameworks/pull/9801",
+    "https://github.com/the-benchmarker/web-frameworks/blob/f673364fb30748e5bb8e57319ec2772bc872f78a/data.json",
+    "https://raw.githubusercontent.com/the-benchmarker/web-frameworks/f673364fb30748e5bb8e57319ec2772bc872f78a/data.json",
+    "https://raw.githubusercontent.com/the-benchmarker/web-frameworks/f673364fb30748e5bb8e57319ec2772bc872f78a/javascript/morojs-engine/app.mjs",
+    "https://raw.githubusercontent.com/the-benchmarker/web-frameworks/f673364fb30748e5bb8e57319ec2772bc872f78a/javascript/morojs-engine/cluster.mjs",
+    "https://raw.githubusercontent.com/the-benchmarker/web-frameworks/f673364fb30748e5bb8e57319ec2772bc872f78a/javascript/morojs-engine/package.json",
+    "https://raw.githubusercontent.com/the-benchmarker/web-frameworks/f673364fb30748e5bb8e57319ec2772bc872f78a/javascript/morojs-engine/config.yaml",
+    "https://registry.npmjs.org/@morojs%2Fengine",
+    "https://registry.npmjs.org/@morojs%2Fengine-win32-x64",
+    "https://api.npmjs.org/downloads/point/last-month/@morojs%2Fengine"
+  ],
+  "confidence": 0.4
+}
