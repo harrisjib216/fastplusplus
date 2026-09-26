@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/embryo-labs/carmi",
+  "one_liner": "Header-only, updatable learned index (a cost-model-built RMI) for numeric keys that beats STX B+ Tree and ALEX on in-memory lookups.",
+  "what_it_does": "CARMI is an in-memory ordered index for numeric keys that replaces a B+ Tree's inner levels with small learned models (linear, piecewise-linear, histogram and binary-search nodes), with a cost model choosing the model for each node. CARMIMap<Key, Value> has a std::map-style interface (find, lower_bound/upper_bound, equal_range, insert, erase, at, operator[], bidirectional iterators). You build it in bulk from an initial dataset, optionally with sample insert keys that describe the expected workload. CARMIExternalMap indexes records that stay in a caller-owned sorted array, like a primary index: inserts take only a key for a record already appended to that array, and there is no erase.",
+  "how_it_is_fast": "Every node that holds a model is exactly 64 bytes, so each inner step costs at most one cache miss, and each leaf is a 'cache-friendly array' (a 64-byte header of block minimum keys over a few 256-byte sorted data blocks), so the last-mile search scans one block instead of doing RMI/ALEX-style error-bounded binary search. A cost model (measured per-node latency + lambda × space, with the entropy of child partition sizes as the measure of how well a node splits the data) drives a hybrid dynamic-programming/greedy construction that picks each subtree's node type and fanout. The result is a flat tree: average depth 2.1 in the paper, against 2.5 for ALEX and 7.3 for the B+ Tree. The piecewise-linear root also has a prefetch model, which issues __builtin_prefetch for the predicted data block while the leaf is being fetched.",
+  "when_to_use": [
+    "Single-threaded, in-memory ordered index over 64-bit numeric keys (double or uint64) with small fixed-size numeric values, at roughly 10^7-10^8 keys, where point lookups and short range scans dominate.",
+    "Real-world key sets whose CDF is locally non-linear (OSM coordinates, user IDs, timestamps), where RMI and ALEX degrade. The paper reports about 1.5x over ALEX on OSMC/Facebook read-only, and about 1.2x over a hand-tuned RMI on SOSD.",
+    "Mixed read/insert workloads (50/50, 95/5, inserts clustered in one key range) where you can bulk-load first and supply representative sample insert keys. The paper reports 2.2x over the B+ Tree and 3.0x over ALEX on write-heavy workloads.",
+    "Indexes that are rebuilt rarely (the authors suggest off-peak rebuilds), so a construction step of several minutes is acceptable in exchange for faster lookups.",
+    "Learned-index research or prototyping where you want an explicit time/space knob (lambda) and swappable node types."
+  ],
+  "when_not_to_use": [
+    "Any concurrent access. The headers contain no locks or atomics, and the paper describes read/write-lock concurrency only as a possible extension.",
+    "String, composite or other non-arithmetic keys or values. The paper states that only numeric key types are supported, and the code relies on DBL_MAX sentinels and key+1 arithmetic.",
+    "Memory-tight deployments. SOSD Table 4 shows CARMI at 3918/5481 MB (uint32/uint64) against 2472/3143 MB for RMI and 2657/3541 MB for the B+ Tree, over 2289/3052 MB of raw data. The headline '0.77x the B+ Tree's memory' comes only from the authors' own harness.",
+    "Fast startup or frequent rebuilds. Construction took 0.3-3.2 minutes on the 67M-key datasets, against about 10 s for STX B+ Tree and 20 s for ALEX.",
+    "Production code that needs a maintained dependency. The repo has had no commits since Jan 2022, has 10 stars, no releases, no CI, and its unit tests are commented out in CMakeLists.txt."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (C++ standard library only; the bundled STX B+ Tree and the ALEX/RadixSpline pointers exist only for the experiments)",
+    "min_toolchain": "C++17 (CMake sets CMAKE_CXX_STANDARD 17 and a Release build); no compiler versions documented",
+    "platforms": "Linux/macOS with GCC or Clang (__builtin_prefetch). A Windows branch uses _mm_prefetch, so x86 only there. No SIMD is required. The per-node latency constants in params.h are the authors' measurements; the repo tells you to re-run src/profiler on your own machine.",
+    "thread_safety": "Not thread-safe: no synchronization anywhere in the headers, and concurrency is listed only as future work.",
+    "drop_in_for_baseline": "partial — CARMIMap has the same method names as std::map/STX btree_map. It differs in four ways: it is meant to be bulk-built (optionally with a lambda cost weight and sample insert keys), it accepts only arithmetic keys and values, insert() does not reject duplicate keys, and max_size() is INT32_MAX."
+  },
+  "gotchas": [
+    "Empty slots are marked with static_cast<KeyType>(DBL_MAX), and values with static_cast<ValueType>(DBL_MAX). During construction, a value equal to that sentinel is treated as an insert placeholder. For integer types the cast is out of range (undefined behaviour), so keep keys and values away from the type's maximum and check what your compiler produces.",
+    "insert() has no existing-key check. It stores a second entry and returns true, where std::map would return false; erase(key) is documented as removing all entries with that key.",
+    "Block size, the DP/greedy switch threshold, external leaf capacity and the latency constants are all constexpr in params.h, which also has a global '#define DEBUG'. Tuning means editing the header. The repo defaults also differ from the paper's appendix (kAlgorithmThreshold 60000 vs kDPThreshold 512; external leaf capacity 1024 vs 512). The two-iterator constructor derives lambda from the data size, while the paper tuned lambda per dataset.",
+    "The README says to include ./include/carmi_common.h, but that file does not exist. Include carmi_map.h or carmi_external_map.h instead. The public experiment harness runs only CARMI (no B+ Tree/ALEX drivers), and the SOSD port is in neither this repo nor upstream learnedsystems/SOSD, so the comparisons cannot be reproduced out of the box."
+  ],
+  "pick_this_over_siblings_when": "Pick CARMI over PGM-index when you need an updatable, std::map-like container with values stored inline, tuned for skewed real-world keys, and you can accept more memory and minutes-long builds; PGM-index is maintained, orders of magnitude smaller and the better fit for static or space-critical use. Choose an ART (such as rafaelkallis/adaptive-radix-tree) instead when keys are byte strings or dense 32-bit IDs: SOSD's ART beat CARMI on face32 (182 vs 187 ns).",
+  "verified_claims_summary": "In the authors' own single-threaded runs on an AMD Ryzen 3700X (Ubuntu; compiler and flags not stated, the repo's CMake builds Release), over seven ~67M-key datasets and five 100K-operation workloads, CARMI averaged 2.2x (up to 4.2x) the throughput of STX B+ Tree with 512-byte nodes and 1.9x (up to 7.2x) that of ALEX, using about 0.77x the B+ Tree's memory. Ported to SOSD (200M-key amzn/face/wiki/osmc, 10M uniform lookups), it averaged about 1.2x faster than a tuned RMI, but ART was faster on face32 and RMI/RS came within about 1-5 ns on face64 and wiki; no std:: container was benchmarked.",
+  "status_note": "Abandoned since January 2022 (a single author, 10 stars, no issues filed), but it is MIT-licensed, header-only C++17 and small enough to vendor as research code: numeric keys only, single-threaded, parameters compiled in.",
+  "sources_read": [
+    "https://github.com/embryo-labs/CARMI",
+    "https://github.com/embryo-labs/CARMI/blob/master/README.md",
+    "https://github.com/embryo-labs/CARMI/blob/master/src/CMakeLists.txt",
+    "https://github.com/embryo-labs/CARMI/blob/master/src/include/params.h",
+    "https://github.com/embryo-labs/CARMI/blob/master/src/include/carmi_map.h",
+    "https://github.com/embryo-labs/CARMI/blob/master/src/include/carmi_external_map.h",
+    "https://github.com/embryo-labs/CARMI/blob/master/src/include/carmi.h",
+    "https://github.com/embryo-labs/CARMI/blob/master/src/include/base_node.h",
+    "https://github.com/embryo-labs/CARMI/blob/master/src/include/nodes/leafNode/cfarray_type.h",
+    "https://github.com/embryo-labs/CARMI/blob/master/src/include/nodes/rootNode/root_nodes.h",
+    "https://github.com/embryo-labs/CARMI/blob/master/src/include/func/find_function.h",
+    "https://github.com/embryo-labs/CARMI/blob/master/src/include/func/insert_function.h",
+    "https://github.com/embryo-labs/CARMI/blob/master/src/example/example.cpp",
+    "https://github.com/embryo-labs/CARMI/blob/master/src/experiment.cpp",
+    "https://github.com/embryo-labs/CARMI/blob/master/src/experiment/core.cpp",
+    "https://github.com/embryo-labs/CARMI/blob/master/src/experiment/experiment_params.h",
+    "https://github.com/embryo-labs/CARMI/blob/master/src/experiment/main_experiment.cpp",
+    "https://github.com/embryo-labs/CARMI/blob/master/src/experiment/functions.h",
+    "https://github.com/embryo-labs/CARMI/blob/master/alex/src.txt",
+    "https://github.com/embryo-labs/CARMI/blob/master/rs/src.txt",
+    "https://github.com/embryo-labs/CARMI/blob/master/stx_btree/src.txt",
+    "https://github.com/embryo-labs/CARMI/issues",
+    "https://github.com/embryo-labs/CARMI/pulls",
+    "https://github.com/embryo-labs/CARMI/forks",
+    "https://github.com/embryo-labs/CARMI/commits/master",
+    "https://arxiv.org/pdf/2103.00858",
+    "https://github.com/learnedsystems/SOSD",
+    "https://hn.algolia.com/api/v1/search?query=CARMI%20learned%20index&tags=story"
+  ],
+  "confidence": 0.8
+}
