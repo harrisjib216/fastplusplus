@@ -56,6 +56,8 @@ def apply(wave_dir, today):
     verified, rejected, unverified = [], [], []
     tier_moves, fixed_fields, verdict_counts = Counter(), Counter(), Counter()
     for eid, e in entries.items():
+        if decisions.get(eid, {}).get("decision") == "duplicate":  # same project already listed under another id
+            continue
         v = verdicts.get(eid)
         if v is None:
             unverified.append(eid)
