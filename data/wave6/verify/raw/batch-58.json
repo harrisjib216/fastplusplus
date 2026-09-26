@@ -1,0 +1,76 @@
+[
+  {
+    "id": "https://github.com/opencoff/go-sieve",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "A",
+    "tier_reason": "bench-results.md compares go-sieve with hashicorp/golang-lru v2.0.7 LRU and ARC (pinned in bench/go.mod). The public harness is bench/bench_test.go and bench/replay_test.go, driven by bench/Makefile (`go test -bench=. -benchmem -count=3`, plus `-tags=trace` for replay). The page states go1.26.3 darwin/arm64 and an Apple M4 (4P+6E, GOMAXPROCS=10), so code, compiler, flags and CPU are all present.",
+    "corrections": {
+      "claimed_speedup": "\"13x-55x faster than the better of LRU/ARC per trace\" for warm parallel Get (SIEVE k=1: 2.24-12.20 ns/op across 18 MSR/Meta traces, GOMAXPROCS=10). \"2.0x-6.1x faster\" for cold parallel mixed read+write replay (37.4-274.7 ns/op). In the synthetic micro-benchmark medians, Get_Parallel is 5.76 ns/op (Sieve) vs 144.2 (LRU) vs 144.9 (ARC), and Mixed_Parallel (60/30/10) is 70.99 vs 162.2 vs 211.8 ns/op. In the core-scaling sweep for Get_Parallel, Sieve goes from 14.93 ns/op (GOMAXPROCS=1) to 5.52 (4) and 7.53 (10), while LRU goes from 31.35 to 121.1 (4) and 182.1 (10).",
+      "compiler_and_flags": "go1.26.3 darwin/arm64. bench/Makefile runs `go test -bench=. -benchmem -count=3` for the synthetic set (make bench), `go test -tags=trace -bench=. -benchmem -count=1 -v` for trace replay (make trace), and a GOMAXPROCS sweep over 1 2 4 8 10 (make sweep). Run date 2026-06-10.",
+      "caveats": "All benchmarks were run by the repo author on one machine (Apple M4), with no independent confirmation, and the project is new with 41 stars. The speed win is about concurrent throughput, not hit ratio: at 10% cache size, ARC has the lowest miss ratio on 11 of 18 traces and LRU on 5, and SIEVE k=1 beats LRU on only 10 of 18. Single-threaded sequential replay is faster for LRU on 3 traces (block_traces_1, block_traces_2, msr_src1_0). Delete_Parallel is faster for LRU (69.54 vs 81.18 ns/op). At Zipf s=1.50 the Get advantage narrows to about 6% (94.19 vs 100.4 ns/op)."
+    },
+    "notes": "The headline 13-55x and 2-6x numbers match the page. The record's core-scaling sentence was wrong: 5.5 and 121.1 ns/op are the GOMAXPROCS=4 values, and at 10 cores the numbers are 7.53 (Sieve) vs 182.1 (LRU). The metadata (BSD-2-Clause, 41 stars, last commit 2026-09-08, not a fork) checks out.",
+    "urls_opened": [
+      "https://github.com/opencoff/go-sieve",
+      "https://github.com/opencoff/go-sieve/blob/main/bench-results.md",
+      "https://raw.githubusercontent.com/opencoff/go-sieve/main/README.md",
+      "https://raw.githubusercontent.com/opencoff/go-sieve/main/bench/Makefile",
+      "https://raw.githubusercontent.com/opencoff/go-sieve/main/bench/go.mod",
+      "https://raw.githubusercontent.com/opencoff/go-sieve/main/LICENSE"
+    ]
+  },
+  {
+    "id": "https://github.com/maypok86/otter",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "throughput.txt is raw `go test` output (code: benchmarks/throughput/bench_test.go, command in bench.sh: `go test -run='^$' -cpu=8 -bench . -timeout=0`) that names the CPU (Apple M1 Pro) and includes golang-lru rows. No Go toolchain version is recorded anywhere; benchmarks/go.mod gives only the minimum `go 1.24.0` and has no toolchain line. Under the orchestrator's Go rule (goccy/go-json, constmap, libjson), a missing toolchain version means first-party partial methodology, so C.",
+    "corrections": {
+      "claimed_speedup": "Zipf GetPutBenchmark port at -cpu=8 on an Apple M1 Pro. Reads=100%: otter 106,390,749 ops/s (9.399 ns/op) vs golang-lru 3,138,739 ops/s (318.6 ns/op), about 34x (derived from page data). Reads=75%/writes=25%: otter 78,478,946 vs golang-lru 2,906,471 ops/s, about 27x (derived from page data), with theine at 31,585,616 and ristretto at 24,927,336 (otter about 2.5-3.1x ahead). Reads=50%: otter 58,504,159 vs golang-lru 2,832,079 ops/s. Reads=25%: otter 30,237,769 vs 2,941,043. Writes=100%: otter 2,315,752 ops/s (431.8 ns/op) vs golang-lru 3,230,908 ops/s (309.5 ns/op), so golang-lru is about 1.4x faster on pure writes (derived from page data).",
+      "compiler_and_flags": "Go toolchain version not stated (benchmarks/go.mod declares only minimum go 1.24.0). Command per benchmarks/throughput/bench.sh: `go test -run='^$' -cpu=8 -bench . -timeout=0`.",
+      "stars_or_usage": "2,684 stars; README lists users Grafana, Centrifugo, FrankenPHP, Unkey, Nuclei",
+      "caveats": "These are first-party numbers from a single Apple M1 Pro run, committed 2025-06-13, and the Go toolchain version is not recorded. The win is read-heavy only: in the same throughput file, at writes=100% otter (2.32M ops/s) is slower than golang-lru (3.23M ops/s) and several other caches, so the 'faster than LRU' claim depends on the workload."
+    },
+    "notes": "The record said golang-lru was not in the 75/25 excerpt, but it is (2,906,471 ops/s). The record also put theine/ristretto at 1.2-3x behind otter at 75/25, but the file gives 2.5-3.1x. The pure-write inversion is on the same benchmark page, not only in the eviction benchmark. License Apache-2.0, last commit 2025-12-23 and not archived all check out.",
+    "urls_opened": [
+      "https://github.com/maypok86/otter",
+      "https://raw.githubusercontent.com/maypok86/otter/main/benchmarks/throughput/results/throughput.txt",
+      "https://raw.githubusercontent.com/maypok86/otter/main/benchmarks/throughput/bench.sh",
+      "https://raw.githubusercontent.com/maypok86/otter/main/benchmarks/go.mod",
+      "https://raw.githubusercontent.com/maypok86/otter/main/go.mod",
+      "https://raw.githubusercontent.com/maypok86/otter/main/README.md",
+      "https://raw.githubusercontent.com/maypok86/otter/main/LICENSE",
+      "https://maypok86.github.io/otter/performance/throughput/"
+    ]
+  },
+  {
+    "id": "https://github.com/arthurprs/quick-cache",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "B",
+    "tier_reason": "The README Benchmarks tables come from mokabench (moka-rs/mokabench, a competitor's public harness with quick_cache and hashlink features, built with `cargo build --release`). They compare QuickCache with LRU+Mutex (hashlink + std::sync::Mutex) on the ARC S3/DS1/SPC1 traces and name the CPU (i9-12900H). No rustc version or exact flags are given, so not A. B holds only as an independent third-party suite.",
+    "corrections": {
+      "claimed_speedup": "Trace 1 (ARC S3), capacity 100000: QuickCache 12.841% hit ratio in 2.196 s (1 client), 1.279 s (3 clients) and 0.798 s (6 clients), vs LRU+Mutex 2.327% hit ratio in 2.422 s (1 client only). That is about 5.5x the hit ratio and about 1.1x faster single-client wall time (derived from page data), not ~3x. Single-client wall time is mixed across the page: LRU+Mutex is faster at Trace 1 capacity 800000 (2.613 vs 3.207 s), Trace 2 (DS1) capacity 1000000 (8.901 vs 9.883 s) and Trace 3 (SPC1) capacity 2000000 (10.768 vs 14.611 s). The wall-time advantage comes from QuickCache's multi-client scaling, and LRU+Mutex was never run with more than one client.",
+      "baseline": "LRU+Mutex (hashlink crate LruCache + std::sync::Mutex)",
+      "workload": "mokabench (moka-rs/mokabench, third-party Rust cache benchmark harness) replaying the ARC-paper traces S3 (Trace 1), DS1 (Trace 2) and SPC1 (Trace 3) against QuickCache, LRU+Mutex (hashlink + std Mutex), TinyUFO and Mini Moka, at 1/3/6 clients (SPC1 1 client only) and three capacities per trace, on x64 Linux with an Intel i9-12900H CPU.",
+      "compiler_and_flags": "rustc version not stated; mokabench README builds with `cargo build --release` (feature flags such as -F quick_cache,hashlink), exact invocation for the README tables not given.",
+      "caveats": "The numbers were run and published by the quick-cache author, using mokabench, a harness from the competing Moka project that has only 10 stars (a niche suite). The rustc version and build flags are not stated. The main consistent win over LRU+Mutex is hit ratio (roughly 1.2-5.5x at small and medium capacities, equal at SPC1 capacity 30M). Single-client wall time is mixed, and LRU+Mutex is sometimes faster. The speed advantage shows up only with concurrency, and the LRU+Mutex baseline was not run concurrently."
+    },
+    "notes": "The record's '~3x faster wall time at 1 client' is wrong: the page gives 2.196 vs 2.422 s, about 10%. The tier stays B only if mokabench counts as a 'well-known independent suite' (lzbench/smhasher precedent). Given its 10 stars and the author running it, the orchestrator may prefer C. MIT license, 362 stars and last commit 2026-06-26 all check out.",
+    "urls_opened": [
+      "https://github.com/arthurprs/quick-cache",
+      "https://github.com/arthurprs/quick-cache#benchmarks",
+      "https://raw.githubusercontent.com/arthurprs/quick-cache/master/README.md",
+      "https://github.com/moka-rs/mokabench",
+      "https://raw.githubusercontent.com/moka-rs/mokabench/master/Cargo.toml",
+      "https://raw.githubusercontent.com/moka-rs/mokabench/master/README.md"
+    ]
+  }
+]
