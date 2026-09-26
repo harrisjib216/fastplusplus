@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/apache/fluss",
+  "one_liner": "Columnar (Arrow) streaming table storage for Flink/lakehouse; cuts bandwidth vs Kafka for wide tables with many column-selective consumers.",
+  "what_it_does": "Fluss is a distributed streaming storage service that stores schema-enforced tables instead of opaque byte topics. It has append-only Log Tables (the Kafka-topic equivalent, split into buckets that play the role of partitions) and Primary Key Tables with RocksDB-backed upserts, partial updates, point lookups and generated changelogs. You access it through its own Java client (Connection -> Table -> AppendWriter / LogScanner), Rust/Python/C++ clients, or Flink and Spark SQL connectors, not through the Kafka API. Data can be tiered to object storage and continuously copied into Paimon, Iceberg or Lance lake tables.",
+  "how_it_is_fast": "Clients batch rows into Arrow IPC record batches, compressed per column with ZSTD level 3 by default (the docs claim about a 5x ratio). Tablet servers append these batches unchanged to replicated log segments, using log and replication code adapted from Kafka. When a fetch carries a column projection, the server (FileLogProjection) reads each batch's Arrow metadata, rewrites it and sends only the selected columns' buffers as file-range slices, without decoding the rows. As a result, a consumer's network bytes scale with the columns it reads, not with the row width, and V1 batches also carry per-column statistics so whole batches can be skipped for filters. For tiered (cold) data the server returns only segment metadata and the client downloads the segments itself from object storage, which keeps backfills off broker NICs and page cache.",
+  "when_to_use": [
+    "Wide, schema'd event tables (tens to hundreds of columns) read by many downstream services that each need a few columns. Rednote's case had fan-out from 1x to about 1000x, and the docs claim about 80% less I/O when 80% of the columns are unused.",
+    "Flink or Spark SQL pipelines that want a streaming table with changelogs, primary-key upserts/partial updates and lookup joins, not a raw message bus.",
+    "Lakehouse stacks where the same stream should be tiered automatically into Paimon/Iceberg/Lance, with union reads of hot and historical data.",
+    "Pipelines where heavy historical replay or index rebuilds must not disturb latency-sensitive tail consumers. Tiered segments are fetched by clients straight from S3/HDFS/OSS, not through the tablet servers.",
+    "High-volume ingest at the scale of the case study (about 1 billion records / 10 TB per day into a single table), if you can run Java 11+ and ZooKeeper."
+  ],
+  "when_not_to_use": [
+    "Existing Kafka producers, consumers, Connect, Streams or ksqlDB applications. The fluss-kafka module only answers ApiVersions and every Produce/Fetch/group handler is an empty stub; umbrella issue #4185 (opened 2026-09-01) targets only basic Produce, and Kafka Fetch/consumer compatibility is listed as future work.",
+    "Schemaless or opaque payloads (serialized Avro/Protobuf blobs, arbitrary bytes), or consumers that always read every column. There the Arrow layout brings no pruning win, and the docs say ARROW is less efficient for full-row reads (the COMPACTED row format gives up pruning).",
+    "Cold or historical scans that need column pruning: the docs state remote-storage reads do not support it, and the client downloads whole tiered segment files to a local temp dir.",
+    "Workloads that depend on Kafka consumer groups with offset commits, idempotent or transactional producers, or exactly-once produce. None of these is documented for the Fluss client, which subscribes to buckets manually and polls.",
+    "Teams that want a small, mature ops footprint. It needs ZooKeeper 3.6+, a CoordinatorServer plus TabletServers and Java 11+ (17+ recommended). 1.0.0, the first major release, shipped on 2026-09-22, and there are about 1,030 open issues and PRs."
+  ],
+  "integration": {
+    "form": "module: a distributed server (CoordinatorServer + TabletServers, shipped as a binary tarball, Docker image or Helm chart) plus the Maven client artifact fluss-client; Rust crate fluss-rs; the Python (PyO3) and C++ (CMake) clients are built from source",
+    "dependencies": "ZooKeeper 3.6+ (required); optional remote storage (S3, HDFS, OSS, GCS, Azure, COS, OBS) for tiering; optional Flink/Spark for SQL access; optional Paimon/Iceberg/Lance for lake tiering. Bundles shaded Arrow 15, Netty 4.1, ZooKeeper client and frocksdb (RocksDB 6.20)",
+    "min_toolchain": "Java 11 runtime (binaries compiled for Java 11; Java 8 unsupported; Java 17+ recommended for performance); building needs Maven >= 3.8.6",
+    "platforms": "UNIX-like (Linux, macOS); building on Windows only via Cygwin/WSL",
+    "thread_safety": "Connection is thread-safe and should be shared. Table, Admin, MultiTable and BatchScanner instances are not thread-safe, so create one per thread. The docs say each MultiTable writer owns its own buffers and sender thread.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Column pruning works only with the default ARROW log format and only for data still on tablet-server disks. Tiered segments are downloaded whole (all columns) to client.scanner.io.tmpdir, so the bandwidth savings shrink for consumers that lag into remote storage.",
+    "Filter pushdown works per record batch using column statistics. It needs table.statistics.columns set before the data is written, it can return false positives (you must re-check each row), and BatchScanner does not support it.",
+    "Schemas are enforced. ALTER TABLE can only add columns (no nested-field or type changes); bucket count cannot change on non-partitioned tables (for partitioned tables it applies only to future partitions); partition columns must be STRING.",
+    "Replica truncation still uses the high watermark, not Kafka's KIP-101 leader epochs. Open issue #673 (since 2025-03) warns this can leave inconsistent or lost data after abnormal leader/follower exits. A separate open bug, #4027, reports that long-lived Admin clients keep failing after a coordinator failover."
+  ],
+  "pick_this_over_siblings_when": "Pick Fluss over Redpanda, AutoMQ or Pulsar only when consumers are schema-aware, column-selective readers of wide tables, especially Flink/lakehouse jobs: it is the only one of them that prunes columns on the server during streaming reads. If you need the Kafka wire API unchanged, Redpanda (Kafka API compatible, with large published p99.99 wins) or AutoMQ (a Kafka fork on S3 that claims 100% Kafka compatibility) is the safer choice.",
+  "verified_claims_summary": "Rednote's own production before/after on a real-time search/recommendation/ads indexing pipeline moved from Kafka to Fluss, published on the Fluss blog on 2026-08-18. It reports about 3x peak throughput, 30-90% less bandwidth on online workloads, about 30% less write CPU, about 50% less write traffic and 50-80% faster batch/incremental index builds. The post gives no Kafka version or config, hardware, cluster size, absolute rates or benchmark code. The migration also changed the data layout (Arrow with column pruning) and moved cold replay off the brokers, so this is a workload-shape win, not a like-for-like broker benchmark.",
+  "status_note": "Actively developed Apache top-level project (1.0.0 released 2026-09-22, last commit 2026-09-24, Apache-2.0). You deploy it as a cluster and use it through its clients or Flink/Spark connectors; it is not something to vendor.",
+  "sources_read": [
+    "https://github.com/apache/fluss",
+    "https://github.com/apache/fluss/blob/main/README.md",
+    "https://fluss.apache.org/blog/rednote-kafka-to-fluss-real-time-indexing/",
+    "https://github.com/apache/fluss/blob/main/website/docs/concepts/architecture.mdx",
+    "https://github.com/apache/fluss/blob/main/website/docs/table-design/data-formats.md",
+    "https://github.com/apache/fluss/blob/main/website/docs/table-design/table-types/log-table.md",
+    "https://github.com/apache/fluss/blob/main/website/docs/apis/index.md",
+    "https://github.com/apache/fluss/blob/main/website/docs/apis/client-support-matrix.md",
+    "https://github.com/apache/fluss/blob/main/website/docs/apis/java/index.md",
+    "https://github.com/apache/fluss/blob/main/website/docs/engine-flink/reads.md",
+    "https://github.com/apache/fluss/blob/main/website/docs/engine-flink/writes.md",
+    "https://github.com/apache/fluss/blob/main/website/docs/engine-flink/ddl.md",
+    "https://github.com/apache/fluss/blob/main/website/docs/install-deploy/deploying-distributed-cluster.md",
+    "https://github.com/apache/fluss/blob/main/website/docs/maintenance/tiered-storage/remote-storage.md",
+    "https://github.com/apache/fluss/blob/main/pom.xml",
+    "https://github.com/apache/fluss/blob/main/fluss-kafka/src/main/java/org/apache/fluss/kafka/KafkaRequestHandler.java",
+    "https://github.com/apache/fluss/blob/main/fluss-common/src/main/java/org/apache/fluss/record/FileLogProjection.java",
+    "https://github.com/apache/fluss/blob/main/fluss-client/src/main/java/org/apache/fluss/client/table/scanner/log/RemoteLogDownloader.java",
+    "https://github.com/apache/fluss/blob/main/fluss-client/src/main/java/org/apache/fluss/client/table/scanner/log/RemoteCompletedFetch.java",
+    "https://github.com/apache/fluss/releases/tag/v1.0.0",
+    "https://github.com/apache/fluss/issues/4185",
+    "https://github.com/apache/fluss/issues/486",
+    "https://github.com/apache/fluss/issues/673",
+    "https://github.com/apache/fluss/issues/674",
+    "https://github.com/apache/fluss/issues/4027",
+    "https://hn.algolia.com/api/v1/search?query=Fluss&tags=story",
+    "https://jack-vanlightly.com/blog/2025/9/2/understanding-apache-fluss",
+    "https://github.com/redpanda-data/redpanda",
+    "https://github.com/AutoMQ/automq"
+  ],
+  "confidence": 0.8
+}
