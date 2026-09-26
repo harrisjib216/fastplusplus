@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/re-esper/zenjson",
+  "one_liner": "Single-header, in-situ C++ JSON DOM parser/serializer in the gason style; parses 1.8-3.6x faster than RapidJSON.",
+  "what_it_does": "zenjson parses a mutable, NUL-terminated char buffer into a DOM (zjson::Document::parse returns an int error code) and serializes the DOM back to a caller buffer or std::string with dump(). Its API is not RapidJSON's. It looks like nlohmann/json: zjson::Json values are built from initializer lists, and operator[] reads or inserts members, with typed getters that take defaults (getString(\"opengl\")). It ships as one ~1,650-line header with no dependencies.",
+  "how_it_is_fast": "It parses in situ: strings and keys are pointers into the input buffer, which is unescaped in place and NUL-terminated, so no strings are copied. Following gason's design, each value is a NaN-boxed 8-byte word (type tag plus a 47-bit pointer in the NaN payload), and arrays and objects are singly linked node lists bump-allocated from an 8 KB-block arena that Document::parse resets and reuses. The parser is a single non-recursive loop with a fixed 32-entry explicit stack, a 256-entry character-class table, 4x-unrolled whitespace and string scans, an int32 fast path for integers up to 9 digits and a cheap, not correctly rounded float path (digits accumulated in a double, then multiplied by a tabulated power of ten); it uses no SIMD. Serialization uses Milo Yip's Grisu2 dtoa and a digit-pair lookup-table i32toa.",
+  "when_to_use": [
+    "Trusted, well-formed input (your own config, assets or service payloads) where you want a DOM that parses 1.8-3.6x faster than RapidJSON's insitu mode and 14-27x faster than nlohmann/json, in one vendored header.",
+    "Parse-then-read workloads where you own the input buffer, can let the parser overwrite it, and can keep it alive as long as the DOM.",
+    "Parsing many documents in sequence into one reused Document. The arena is reset and its blocks are recycled, so steady-state parses do little malloc work.",
+    "String- and small-integer-heavy documents like twitter.json or citm_catalog.json, where the author's table shows it within 1-3% of simdjson.",
+    "Builds where SIMD code paths are unwanted: the parser is plain scalar C++ with no intrinsics."
+  ],
+  "when_not_to_use": [
+    "Untrusted input or input that must meet the standard. The parser is lenient: it accepts trailing commas, // comments, raw control characters in strings, lone '-' or '.', leading zeros and unknown escapes. It does not validate UTF-8, it does not combine \\u surrogate pairs (it writes each half as a 3-byte sequence), and it ignores any bytes after the root. It also rejects scalar roots (ERROR_BAD_ROOT).",
+    "Exact numbers. Integers longer than 9 digits are stored as doubles, so 64-bit IDs above 2^53 lose precision. Decimal parsing is not correctly rounded. Exponents above 308 become infinity, which the serializer does not handle (it only asserts).",
+    "Documents nested deeper than 32 levels: the fixed parse stack returns ERROR_STACK_OVERFLOW.",
+    "Large objects or indexed access: members and elements are linked lists, so key lookup, getLength() and operator[](index) are O(n), and an index loop over an array is O(n^2).",
+    "Anything that needs a maintained dependency. The project has 8 commits made over 2019-09-15/16, no test suite in the tree, no issues or PRs, and only one Visual Studio benchmark."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (bundles Milo Yip's dtoa_milo Grisu2 code)",
+    "min_toolchain": "C++11 by inspection (initializer_list, enable_if, noexcept); only Visual Studio 2017 (v141) is documented or tested",
+    "platforms": "Not documented; benchmarked only on Windows x64. The code is scalar and portable in principle, but NaN-boxing needs heap pointers that fit in 47 bits, and this is only asserted in debug builds.",
+    "thread_safety": "Not documented. Separate Documents parse independently, but the serializer writes numbers through function-static scratch buffers, so concurrent dump() calls race even on different documents.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "operator[] inserts on a miss: reading json[\"missing\"] adds a null member (and index == length appends). Converting a missing string to std::string builds it from a null char*, which is undefined behavior; use getString(default) instead.",
+    "The DOM borrows the input buffer and the Document's arena. The buffer must outlive the DOM, and the next parse() on the same Document invalidates every earlier Json view. Document does not delete its copy constructor, so copying one frees the allocator twice.",
+    "The header defines jsonParse and freeCrtAllocatedValue without 'inline' (and, on GCC/Clang, parseStringInternal too), so including it from more than one .cpp should cause duplicate-symbol link errors. It also uses std::numeric_limits and std::string without including <limits> or <string>.",
+    "dump() pretty-prints by default (formatted = true, tab indents); pass false for compact output. The buffer overload returns false and reports the needed size when the buffer is too small. writeInt's static 10-byte buffer is one byte short for int32 values of -1,000,000,000 or less set through the API."
+  ],
+  "pick_this_over_siblings_when": "Pick it over gason, its credited inspiration with the same NaN-boxed, linked-list, in-situ design, when you also want a built-in serializer and nlohmann-style mutable syntax in one header. On parse speed alone, simdjson matched it on twitter/citm and was 1.46x faster on canada.json in zenjson's own table, and simdjson is strict and maintained. So choose zenjson only when you want a tiny vendored header for trusted input.",
+  "verified_claims_summary": "The test machine was the author's Core i7-7700K with Visual Studio 2017 x64 (Release /O2 per the committed .vcxproj), timing 1,000 iterations with clock(). zenjson parsed twitter, canada and citm_catalog 3.57x, 1.81x and 2.61x faster than RapidJSON's SSE2 ParseInsitu, ran within 1-3% of 2019-era simdjson on twitter and citm, and was 1.46x slower than simdjson on canada.json. The 2.64-4.25x stringify lead over RapidJSON is inflated, because the harness never clears RapidJSON's output buffer between iterations. No library versions and no Linux, GCC or Clang results are given.",
+  "status_note": "Abandoned since September 2019 (8 commits in two days, 8 stars, no tests), but MIT-licensed and small enough (~1,650-line single header) to vendor if you accept owning its conformance and correctness fixes.",
+  "sources_read": [
+    "https://github.com/re-esper/zenjson",
+    "https://github.com/re-esper/zenjson/blob/master/README.md",
+    "https://github.com/re-esper/zenjson/blob/master/benchmark/jsonbenchmark.cpp",
+    "https://github.com/re-esper/zenjson/blob/master/benchmark/jsonbenchmark.vcxproj",
+    "https://github.com/re-esper/zenjson/blob/master/zenjson/zenjson.h",
+    "https://github.com/re-esper/zenjson/blob/master/zenjson/base.h",
+    "https://github.com/re-esper/zenjson/blob/master/zenjson/value.h",
+    "https://github.com/re-esper/zenjson/blob/master/zenjson/allocator.h",
+    "https://github.com/re-esper/zenjson/blob/master/zenjson/deserialize.h",
+    "https://github.com/re-esper/zenjson/blob/master/zenjson/serialize.h",
+    "https://github.com/re-esper/zenjson/blob/master/zenjson/wrapper.h",
+    "https://github.com/re-esper/zenjson/blob/master/zenjson/dtoa_milo.h",
+    "https://github.com/re-esper/zenjson/blob/master/singleheader/zenjson.h",
+    "https://github.com/re-esper/zenjson/issues",
+    "https://github.com/re-esper/zenjson/pulls",
+    "https://github.com/re-esper/zenjson/commits/master",
+    "https://github.com/re-esper/zenjson/network/members",
+    "https://github.com/vivkin/gason/blob/master/README.md"
+  ],
+  "confidence": 0.8
+}
