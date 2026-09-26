@@ -1,0 +1,49 @@
+{
+  "id": "https://arxiv.org/abs/2608.22476",
+  "one_liner": "MIT research prototype: LLM agents generate query-specific accelerators that plug into DuckDB or PostgreSQL; claims 833x geomean over single-threaded DuckDB.",
+  "what_it_does": "You give JetStream a fixed set of SQL query templates, a target engine (DuckDB or PostgreSQL), a threading mode and whether persistent state is allowed. A staged agent pipeline (analysis, implementation, optimization, audit) writes one accelerator per query plus an engine-specific backend adapter. The pieces compile into a shared library that is exposed through the host's extension mechanism: a table function in DuckDB, an extension function in PostgreSQL (the paper's example is SELECT * FROM accel_qN_aux(...)). The host DBMS still owns storage, transactions and recovery, and queries without an accelerator run on it unchanged.",
+  "how_it_is_fast": "Almost all of the speedup comes from persistent, query-specific auxiliary state. This is generated sufficient statistics keyed on the query's parameters: per-month revenue for TPC-H Q14; per brand/container 2-D range trees over part size x quantity for Q19, so each predicate branch becomes one range-sum probe; a q-gram inverted index plus a baseline histogram with sparse corrections for Q13; dense-ID bitmaps for distinct counts in SEC-EDGAR Q1. A read then touches a few state partitions instead of scanning, joining and aggregating the base tables. Without that state, the generated kernels over native scans reach only 1.99x. Writes go through generated maintenance code, similar to incremental view maintenance. At pre-commit a per-accelerator cost model picks one of four actions (apply delta, rebuild the affected partitions, full rebuild, or invalidate and repair lazily), and the result is published optimistically under per-partition versions.",
+  "when_to_use": [
+    "A fixed set of parameterized analytical templates (reports, dashboards) runs repeatedly on DuckDB or PostgreSQL, and each query reduces to a small aggregate over parameters you can key state on.",
+    "The workload is read-heavy and writes arrive in batches. With TPC-H RF1/RF2 refreshes (about 0.1% of the database each) every 60 s, the workload geomean including maintenance was still 375x over DuckDB.",
+    "You want the existing DBMS to remain the single copy of the data, with ad-hoc SQL and transactions intact. GenDB and Bespoke OLAP instead rewrite storage or keep a second copy.",
+    "You are researching LLM-synthesized database specialization. The workflow is reusable: an external orchestrator owns the differential tests and A/B benchmarks so the coding agent cannot game them.",
+    "You have memory to spare. Stateful accelerators used 28.1 GB at TPC-H SF=20, against 10.3 GB for stateless."
+  ],
+  "when_not_to_use": [
+    "Anything production-bound. No code, license or release is public, so the only option is to reimplement the design from a v1 arXiv preprint with no venue.",
+    "Ad-hoc or exploratory SQL. Only the pre-declared templates are accelerated; every other query runs at plain DuckDB or PostgreSQL speed.",
+    "Memory-constrained hosts. At SF=20, stateful JetStream needs 28.1 GB, against 18.1 GB for GenDB, 16.12 GB for Bespoke OLAP and 10.3 GB for stateless JetStream.",
+    "Write-heavy workloads. The TPC-H geomean falls from 733x to 375x as refreshes go from every 300 s to every 60 s. On SEC-EDGAR with point writes every 0.5 s it is only 8.8x over DuckDB and 4.0x over PostgreSQL.",
+    "You only need faster execution without precomputation. Stateless accelerators give 1.99x, and that is against single-threaded DuckDB; multi-threaded DuckDB was not used as a baseline."
+  ],
+  "integration": {
+    "form": "not applicable: no artifact is released. Per the paper, generated accelerators compile into a shared library loaded as a DuckDB table function or a PostgreSQL extension function.",
+    "dependencies": "Not documented, since there is no code. The paper names these requirements: a host DBMS (DuckDB, version not stated, or PostgreSQL 18.4); a DuckDB patched with extra transaction hooks for stateful maintenance; and, for synthesis, GPT-5.6 Terra Pro through the OpenAI Agents SDK plus DeepSeek V4 Pro through the Codex exec harness.",
+    "min_toolchain": "not documented; the paper names no implementation language, compiler or flags",
+    "platforms": "Not documented. The only evaluation platform is x86-64 (2x Xeon Gold 6230).",
+    "thread_safety": "The paper describes a transactional protocol. Mutations are buffered transaction-locally and are invisible to other transactions. Maintenance is chosen at pre-commit, and each partition image is published optimistically only if its source version is still current. A conflict invalidates that partition, and reads fall back to base-table execution. Accelerators can be generated single- or multi-threaded, but the evaluation is single-threaded. Other concurrent-access guarantees are not documented.",
+    "drop_in_for_baseline": "partial: accelerators run inside DuckDB or PostgreSQL over their native tables, but the paper shows accelerated queries invoked through generated functions (SELECT * FROM accel_qN_aux(...)) rather than the original SQL; automatic routing of unchanged SQL is not described, and stateful mode on DuckDB needs a patched DuckDB"
+  },
+  "gotchas": [
+    "The Figure 6 numbers are warm reads with valid state and exclude the one-time state build. After an invalidation or a publish conflict, the affected queries run on the base-table fallback path until the state is repaired.",
+    "Correctness is checked empirically, not proven. It rests on differential tests against the host DBMS and an audit agent with extra hidden tests. Each query gets unique LLM-written code (plus maintenance logic) that someone has to review and own.",
+    "The geomean hides a wide spread. Section 3.4 reports about 8.6x best-valid for Q13 and about 2638x for Q19. The SEC-EDGAR figure plots only six selected queries (Q1-Q4, Q6, Q24) out of a 1000-query SQLSmith set.",
+    "The text and the Figure 6 legend disagree (833x vs 843x, and 3544x vs 3554x for PostgreSQL). The DuckDB baseline is single-threaded with no version given, while GenDB is plotted multi-threaded. Changing a template means re-running synthesis, which cost $41.63 for all 22 stateful TPC-H accelerators."
+  ],
+  "pick_this_over_siblings_when": "Sirius also speeds up DuckDB workloads, but as a GPU engine with public code that is about 5.5x faster at SF100 on general queries. Umbra and Velox are general-purpose engines. Pick JetStream's approach only for a fixed set of parameterized templates on DuckDB or PostgreSQL, where you will trade memory and a from-paper reimplementation for precomputed state; otherwise use one of the siblings.",
+  "verified_claims_summary": "On TPC-H SF=20 (all 22 queries, warm reads, state already built), stateful accelerators were 833x faster by geomean than single-threaded DuckDB and 3544x faster than PostgreSQL 18.4, on a 2x Xeon Gold 6230 server with 376 GiB RAM. Stateless accelerators were 1.99x faster, and with RF1/RF2 refreshes every 60, 120 or 300 s the geomean including maintenance was 375x, 629x or 733x. On SEC-EDGAR SF=3 it was 102x over DuckDB and 486x over PostgreSQL. No compiler, flags, DuckDB version or code are given.",
+  "status_note": "Reference only: an MIT CSAIL arXiv preprint (v1, 23 Aug 2026) with no code, license or release; a co-author's publication page links only the paper and BibTeX, so maintenance status is unknown.",
+  "sources_read": [
+    "https://arxiv.org/abs/2608.22476",
+    "https://arxiv.org/pdf/2608.22476",
+    "https://arxiv.org/html/2608.22476",
+    "https://hn.algolia.com/api/v1/search?query=JetStream%20Generating%20Query%20Accelerators",
+    "https://github.com/search?q=JetStream+query+accelerators&type=repositories",
+    "https://github.com/search?q=jetstream+duckdb+accelerator&type=repositories",
+    "https://api.github.com/users/geoffxy/repos",
+    "https://github.com/geoffxy/geoffxy.github.io/blob/HEAD/index.html",
+    "https://github.com/geoffxy/duckdb"
+  ],
+  "confidence": 0.7
+}
