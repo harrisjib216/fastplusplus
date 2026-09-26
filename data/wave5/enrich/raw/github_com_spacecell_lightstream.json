@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/spacecell/lightstream",
+  "one_liner": "Rust/Python Arrow-table transport over raw TCP, QUIC, HTTP/2 and WebSocket; 1.06-1.71x Arrow Flight throughput between AWS hosts.",
+  "what_it_does": "Lightstream moves Arrow tables between processes, services and files through one table-oriented reader/writer API across TCP, Unix sockets, HTTP/2, QUIC, WebSocket, WebTransport, stdio, files and mmap. Its own 'Lightstream protocol' multiplexes Arrow tables with Protobuf or MessagePack messages on one connection, and parallel writers fan tables across N TCP/QUIC/HTTP/2 connections with optional global reordering at the reader. It is not a drop-in for Arrow Flight: there is no GetFlightInfo/DoGet/DoPut, the Rust API takes minarrow Table/TableV values rather than arrow-rs RecordBatch, and Python gets ls.read()/ls.write() plus the Arrow PyCapsule stream protocol.",
+  "how_it_is_fast": "Each table goes on the wire as Arrow IPC inside a 5-byte TLV frame ([u8 tag][u32 LE length]) directly over TCP, skipping gRPC/HTTP/2 framing, protobuf FlightData wrapping and arrow-flight's default 2 MiB batch slicing. Buffers are minarrow 64-byte-aligned Vec64, and the receive path reads socket bytes straight into decoder-managed buffers from a reused per-stream arena, so steady-state decode does no per-batch allocation (per source comments). Parallel mode opens one TCP connection per stream, feeds them round-robin through bounded tokio channels (depth 8), decodes each connection on its own task, and restores global order by pulling connections in the same rotation, with no sort. The project publishes no profile that attributes the gain to any one of these parts.",
+  "when_to_use": [
+    "Bulk transfer of multi-MiB Arrow batches between Rust or Python services on a LAN/cluster, especially over one connection, where the published gain is largest (1.18x-1.71x at 1 stream).",
+    "You need one globally ordered table stream spread across several parallel TCP connections and do not want to write the merge yourself.",
+    "You want Arrow tables and typed Protobuf/MessagePack side messages on the same connection instead of hand-rolled adjacent-bytes framing.",
+    "You want one API to swap between TCP, UDS, QUIC, WebSocket, HTTP/2, stdio, Arrow IPC/Parquet files and mmap, and can build on nightly Rust or use the Python wheels."
+  ],
+  "when_not_to_use": [
+    "You need Flight ecosystem interop (Flight SQL, DoPut/DoExchange, existing Flight clients/servers, GetFlightInfo endpoint discovery); Lightstream is not wire-compatible with Flight.",
+    "Your build must use stable Rust: the crate needs nightly (allocator_api, portable_simd via minarrow/vec64), and rust-toolchain.toml pins only channel = \"nightly\", no date.",
+    "The link is already the bottleneck: at 8-16 streams the published lead shrinks to 1.06x-1.26x, because both systems approach the 50 Gbit/s limit.",
+    "Small request/response RPC or general service APIs; this is a bulk columnar transport, not an RPC framework.",
+    "Production-critical paths that need a mature project: one maintainer, 41 stars, 0 issues ever filed, versions 0.1-0.4.x yanked on crates.io, and 0.7.0 cannot read Parquet files with nulls written by earlier releases."
+  ],
+  "integration": {
+    "form": "crate (also Python package lightstream-io)",
+    "dependencies": "tokio, futures-*, flatbuffers, minarrow 0.18, vec64, tracing, log; optional per feature: quinn, h2/http/bytes, tokio-tungstenite, wtransport, tokio-rustls (ring), prost, rmp-serde, zstd, snap, simd-json, tokio-uring",
+    "min_toolchain": "Rust nightly (edition 2024; unpinned nightly channel); no stable MSRV. Python >=3.9 for the wheels.",
+    "platforms": "CI runs Linux x86-64, macOS x86-64/arm64 and Windows x86-64 (Windows without uds/mmap); io_uring and vmap64 are Linux-only; PyPI also ships manylinux aarch64 wheels. Published benchmarks are Linux x86-64 only.",
+    "thread_safety": "not documented; readers/writers are single-owner async objects driven with &mut self, and the parallel reader/writer spawn one tokio task per connection",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Ordered mode stalls on the slowest connection: a lagging stream holds back every table behind it (documented on SortBehaviour::Ordered), with 8 buffered frames per connection.",
+    "LightstreamParallelWriter caps at 256 connections (each connection announces its index as one byte), and each frame's payload length is a u32, so a single frame must stay under 4 GiB; split big tables into views.",
+    "Each streaming decoder reserves 2 GiB of virtual address space (tunable via LIGHTSTREAM_ARENA_CAPACITY); many parallel streams add up under strict overcommit or ulimit -v.",
+    "LightstreamParallelWriter::connect opens plain TcpStreams from a SocketAddr, and that file has no TLS variant; TLS exists on the single-connection TCP/WebSocket/HTTP/2 writers (tls feature) and in QUIC. The Rust README's 'cargo install lightstream' is wrong for a library crate; use cargo add."
+  ],
+  "pick_this_over_siblings_when": "The catalogued siblings (DRPC, fRPC, brpc, rpcx, cmd-stream) are general RPC frameworks benchmarked on small-message QPS against gRPC, and none carries Arrow tables natively. Pick Lightstream when the payload is bulk Arrow columnar data or you need ordered multi-connection streaming; pick DRPC, fRPC or brpc for many small request/response calls.",
+  "verified_claims_summary": "The project's own ECS rig ran 2x AWS i3en.12xlarge in one cluster placement group (50 Gbit/s): RAM-resident 1M-row tables in 4 shapes, warm median of 5 runs, Lightstream's parallel protocol over plaintext TCP vs arrow-flight 59.2 DoGet over tonic/HTTP/2 (8 MiB windows, default 2 MiB slicing, dictionary Resend), built with unpinned Rust nightly --release. Lightstream led in all 16 cells by 1.06x-1.71x, but its 1-stream cells (1.108-1.109 GiB/s, about 9.5 Gbit/s) sit at AWS's ~10 Gbps per-flow cap and its 16-stream cells (5.75-5.79 GiB/s, about 49.4-49.7 Gbit/s) sit at the link limit, so the ratios mostly show how far Flight falls short of the network ceiling; Lightstream's timing also includes a global reorder that Flight does not do.",
+  "status_note": "Active (v0.7.0 released 2026-09-19; one maintainer, 7 self-merged PRs, 0 issues) and MPL-2.0 with file-level copyleft, so it is fine to link as a dependency, but it is pre-1.0, nightly-only and still making format-breaking changes.",
+  "sources_read": [
+    "https://github.com/SpaceCell/lightstream",
+    "https://raw.githubusercontent.com/SpaceCell/lightstream/main/README.md",
+    "https://raw.githubusercontent.com/SpaceCell/lightstream/main/CHANGELOG.md",
+    "https://raw.githubusercontent.com/SpaceCell/lightstream/main/rust/README.md",
+    "https://raw.githubusercontent.com/SpaceCell/lightstream/main/rust/Cargo.toml",
+    "https://raw.githubusercontent.com/SpaceCell/lightstream/main/rust/rust-toolchain.toml",
+    "https://raw.githubusercontent.com/SpaceCell/lightstream/main/rust/src/lib.rs",
+    "https://raw.githubusercontent.com/SpaceCell/lightstream/main/rust/src/models/writers/parallel/lightstream.rs",
+    "https://raw.githubusercontent.com/SpaceCell/lightstream/main/rust/src/models/readers/parallel/lightstream.rs",
+    "https://raw.githubusercontent.com/SpaceCell/lightstream/main/rust/src/models/writers/tcp.rs",
+    "https://raw.githubusercontent.com/SpaceCell/lightstream/main/rust/src/models/sinks/table_sink.rs",
+    "https://raw.githubusercontent.com/SpaceCell/lightstream/main/rust/src/models/streams/tcp.rs",
+    "https://raw.githubusercontent.com/SpaceCell/lightstream/main/rust/src/models/frames/lightstream_message.rs",
+    "https://raw.githubusercontent.com/SpaceCell/lightstream/main/rust/src/traits/parallel_transport_reader.rs",
+    "https://raw.githubusercontent.com/SpaceCell/lightstream/main/rust/benches/README.md",
+    "https://raw.githubusercontent.com/SpaceCell/lightstream/main/rust/benches/ecs/README.md",
+    "https://raw.githubusercontent.com/SpaceCell/lightstream/main/rust/benches/ecs/Dockerfile",
+    "https://raw.githubusercontent.com/SpaceCell/lightstream/main/rust/benches/ecs/run.sh",
+    "https://raw.githubusercontent.com/SpaceCell/lightstream/main/rust/benches/ecs/source.rs",
+    "https://raw.githubusercontent.com/SpaceCell/lightstream/main/rust/benches/ecs/sink.rs",
+    "https://raw.githubusercontent.com/SpaceCell/lightstream/main/rust/benches/common/arrow_flight_bench.rs",
+    "https://raw.githubusercontent.com/SpaceCell/lightstream/main/.github/workflows/ci.yml",
+    "https://raw.githubusercontent.com/SpaceCell/lightstream/main/python/README.md",
+    "https://raw.githubusercontent.com/SpaceCell/lightstream/main/assets/full-results-table.png",
+    "https://raw.githubusercontent.com/SpaceCell/lightstream/main/assets/delivery-consistency.png",
+    "https://crates.io/api/v1/crates/lightstream",
+    "https://pypi.org/pypi/lightstream-io/json",
+    "https://docs.rs/crate/lightstream/latest",
+    "https://docs.rs/crate/lightstream/latest/status.json",
+    "https://hn.algolia.com/api/v1/search?query=lightstream%20arrow&tags=story",
+    "https://hn.algolia.com/api/v1/search?query=lightstream",
+    "https://hn.algolia.com/api/v1/search?query=spacecell",
+    "https://hn.algolia.com/api/v1/search?query=minarrow"
+  ],
+  "confidence": 0.6
+}
