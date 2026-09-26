@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/redpanda-data/redpanda",
+  "one_liner": "Kafka-API-compatible streaming broker in C++ on Seastar; vendor OMB runs show 12-70x lower p99.99 latency than Kafka.",
+  "what_it_does": "Redpanda is a single-binary broker that speaks the Kafka wire protocol. Existing Kafka clients (Apache Kafka Java, librdkafka, franz-go, Sarama, kafka-python, KafkaJS and others) connect unchanged, so you swap the broker cluster, not application code. It replaces ZooKeeper/KRaft and Kafka's ISR replication with per-partition Raft, and bundles a Go CLI (rpk), an HTTP proxy, a schema registry, tiered storage to object stores, Iceberg output and Wasm transforms. The docs list these Kafka features as unsupported: request_percentage quotas, the server-side half of KIP-890, more than one SCRAM mechanism per user, and topic/ACL CRUD through the HTTP proxy.",
+  "how_it_is_fast": "It uses a thread-per-core, shared-nothing design built on Redpanda's fork of the Seastar framework. There is one pinned reactor thread per core, memory is allocated up front and split per core, cores talk by message passing instead of locks, and all I/O runs as futures/coroutines rather than OS-scheduled threads. The storage layer skips the Linux page cache: segment_appender batches data into page-aligned chunks and issues Seastar dma_write calls with adaptive fallocate, and reads come from a per-shard LRU batch_cache that Seastar's memory reclaimer can shrink. There is no JVM, so no GC pauses (the vendor's stated cause of Kafka's tail latency). The build has Clang ThinLTO and PGO configurations.",
+  "when_to_use": [
+    "You already use Kafka clients and need low p99.9/p99.99 produce-to-consume latency with acks=all and fsync before ack (Redpanda's production default), on dedicated Linux hosts with local NVMe.",
+    "Moderate partition counts with well-batched producers, where you want fewer brokers and no JVM/GC tuning. The vendor ran 50 MB/s to 1 GB/s on 3 i3en brokers against 3-6 Kafka brokers.",
+    "You want one binary with built-in consensus (Raft; no ZooKeeper or KRaft controller quorum), plus schema registry, HTTP proxy and tiered storage, on x86-64 or Arm64 (the vendor claims about 2x the 50 MB/s workload on Arm is4gen.medium).",
+    "Local development and CI against the Kafka API: `rpk container start` brings up a local cluster via Docker (dev mode, not durable)."
+  ],
+  "when_not_to_use": [
+    "You would offer it to third parties as a hosted streaming or queuing service. BSL 1.1 forbids that until each release's change date (4 years), and enterprise features need an RCL license.",
+    "Many producers, many partitions, small batches or keyed records. Vanlightly's independent re-run saw about 24 s end-to-end latency with 50 producers, a cap near 330 MB/s with record keys (288 partitions, 100 producers) while Kafka reached the 500 MB/s target, and consumer backlogs that never drained under 800 MB/s-1 GB/s produce load. He attributes this to small 16 KB fsync'd writes across many partitions (about 200K fsyncs/s).",
+    "Long sustained runs or disks sitting at their retention limit: the same re-run measured p99 3.5 s and p99.99 up to 26 s after about 12 h, with step increases once retention kicked in. With acks=1 at NVMe saturation, Kafka reached 1900 MB/s against Redpanda's 1400 MB/s.",
+    "Shared or containerised hosts, macOS/Windows production, NFS or IPv6-only networks. It needs Linux (RHEL 8+/Ubuntu 20.04+, kernel 4.19+ recommended), x86-64 Westmere+ or aarch64, XFS/ext4 on local SSD, IPv4, and at least 2 GB RAM per core plus 2 MB per partition replica. Thread-per-core assumes it owns its cores.",
+    "You depend on Kafka request-rate quotas (request_percentage), KIP-890 server-side transaction defense, or several SCRAM mechanisms per user."
+  ],
+  "integration": {
+    "form": "standalone server binary (deb/rpm/tar.gz/Docker, amd64 and arm64), not a linkable library; built from source with Bazel",
+    "dependencies": "Nothing to install at runtime on Linux (Docker needed on macOS). Source build pins everything hermetically via Bazel: a Redpanda fork of Seastar, Boost, Abseil, fmt, protobuf, OpenSSL (+FIPS variant), liburing, lz4/zstd/snappy/zlib, c-ares, hwloc, re2, yaml-cpp, krb5, Avro, rapidjson, HdrHistogram and others, plus Go for rpk and Rust for some components.",
+    "min_toolchain": "C++23 with Clang + libc++ (hermetic LLVM 23.1.0-rc2 from Redpanda's llvm-project fork via toolchains_llvm), Bazel via bazelisk; Go and Rust toolchains are fetched by Bazel",
+    "platforms": "Linux x86-64 (Westmere or newer) and aarch64; RHEL/CentOS 8+ or Ubuntu 20.04+; XFS or ext4 on local SSD/NVMe (NFS unsupported); IPv4 required; macOS only as rpk + Docker for development; Windows not supported",
+    "thread_safety": "Not applicable to users (it is a server). Internally it is shared-nothing: one reactor thread per core, and cross-core work goes through message passing. Client-side thread safety is whatever your Kafka client library documents.",
+    "drop_in_for_baseline": "partial — wire-compatible with Kafka clients, so producer/consumer code works unchanged, but the broker is a different server: its own config keys and rpk tooling instead of kafka-*.sh, Raft instead of ISR, different fsync semantics, and a few Kafka features unsupported (request_percentage quotas, server-side KIP-890, multiple SCRAM mechanisms per user, topic/ACL CRUD via HTTP proxy)"
+  },
+  "gotchas": [
+    "Development mode (the default for rpk container/dev setups) skips fsync, runs --overprovisioned and turns off the tuners. rpk's own help says this gives 'unrealistically fast clusters and may result in data loss', so only benchmark in production mode after `rpk redpanda tune`.",
+    "write.caching / write_caching_default turns acks=all into 'acked by a majority in memory, fsync later' (flush.ms/flush.bytes), which is roughly Kafka's default durability. It is on by default in dev mode, off in production, and never applies to transactions or consumer offsets. Check which mode any comparison used.",
+    "Seastar's per-core heap fragments. The project's own guide says contiguous allocations over 128 KiB after startup can fail even when plenty of memory is free, and 'oversized allocation' bugs keep appearing (e.g. #22737, #18325). Memory is budgeted per core and per partition, so size RAM to cores × partitions.",
+    "Licensing is split: the core is BSL-1.1 (becomes Apache-2.0 four years after each release) and enterprise features are under the Redpanda Community License. GitHub reports no SPDX id, so automated license scanners may flag it."
+  ],
+  "pick_this_over_siblings_when": "Pick Redpanda over FluxMQ (a Rust Kafka-compatible broker claiming 20 implemented Kafka APIs, 8 stars) when you need a production-grade Kafka-protocol broker with Raft replication, tiered storage and years of regular releases. Pick it over Woodpecker (an embedded Go WAL on object storage with its own API, no topics or consumer groups) or Zenoh (a different pub/sub protocol) when your applications must keep speaking the Kafka API.",
+  "verified_claims_summary": "Redpanda's own 2022 OpenMessaging Benchmark (v22.2.2 vs Kafka 3.2.0, TLS+SASL-SCRAM, 1:1 read/write, 4 partitions per core, i3en brokers, 4x m5n.8xlarge clients, no CPU model or build/JVM flags given) measured p99.99 latency of 13.9 / 16.7 / 79.6 ms vs Kafka's 164.6 / 388.7 / 5509.7 ms at 50 MB/s, 500 MB/s and 1 GB/s. Kafka had 3/4/6 brokers against Redpanda's 3, ran on Java 11, and was set to fsync every batch (log.flush.interval.messages=1). A 2023 vendor rerun against Kafka 3.4 KRaft showed a similar pattern (p99.9 24.4 ms vs 98.0 ms on i3en.6xlarge, 3 vs 6+3 nodes). Confluent's Jack Vanlightly repeated the test on 3x i3en.6xlarge with Kafka at default durability and Java 17 and could not reproduce the gap, so treat 12-70x as a vendor best case.",
+  "status_note": "Very active (v26.2.2 and v26.1.17 released August 2026, 12.6k stars, 525 open issues) and shipped as prebuilt packages, so you deploy it as a server rather than vendor the code; read the BSL terms before offering it as a service.",
+  "sources_read": [
+    "https://github.com/redpanda-data/redpanda",
+    "https://github.com/redpanda-data/redpanda/blob/dev/CLAUDE.md",
+    "https://github.com/redpanda-data/redpanda/blob/dev/src/v/README.md",
+    "https://github.com/redpanda-data/redpanda/blob/dev/MODULE.bazel",
+    "https://github.com/redpanda-data/redpanda/blob/dev/.bazelrc",
+    "https://github.com/redpanda-data/redpanda/blob/dev/bazel/repositories.bzl",
+    "https://github.com/redpanda-data/redpanda/blob/dev/licenses/README.md",
+    "https://github.com/redpanda-data/redpanda/blob/dev/licenses/bsl.md",
+    "https://github.com/redpanda-data/redpanda/blob/dev/docs/writing-scalable-and-high-performance-code.md",
+    "https://github.com/redpanda-data/redpanda/blob/dev/src/v/storage/segment_appender.h",
+    "https://github.com/redpanda-data/redpanda/blob/dev/src/v/storage/segment_appender_chunk.h",
+    "https://github.com/redpanda-data/redpanda/blob/dev/src/v/storage/batch_cache.h",
+    "https://github.com/redpanda-data/redpanda/blob/dev/src/go/rpk/pkg/cli/redpanda/mode.go",
+    "https://github.com/redpanda-data/redpanda/blob/dev/src/go/rpk/pkg/config/config.go",
+    "https://github.com/redpanda-data/redpanda/issues/13824",
+    "https://github.com/redpanda-data/redpanda/issues?q=oversized+allocation",
+    "https://github.com/redpanda-data/redpanda/issues?q=label%3Aperformance+is%3Aopen",
+    "https://github.com/redpanda-data/redpanda/security-advisories",
+    "https://github.com/redpanda-data/redpanda/releases",
+    "https://redpanda.com/blog/redpanda-vs-kafka-performance-benchmark",
+    "https://redpanda.com/blog/kafka-kraft-vs-redpanda-performance-2023",
+    "https://jack-vanlightly.com/blog/2023/5/15/kafka-vs-redpanda-performance-do-the-claims-add-up",
+    "https://docs.redpanda.com/current/develop/kafka-clients/",
+    "https://docs.redpanda.com/current/deploy/redpanda/manual/production/requirements/",
+    "https://docs.redpanda.com/current/get-started/architecture/",
+    "https://docs.redpanda.com/current/develop/manage-topics/config-topics/",
+    "https://hn.algolia.com/api/v1/search?query=redpanda%20kafka&tags=story",
+    "https://github.com/gosuda/fluxmq"
+  ],
+  "confidence": 0.8
+}
