@@ -1,0 +1,47 @@
+[
+  {
+    "id": "paper:mycelium-te-lsm",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "The arXiv paper (v1, no journal-ref, 'source code is available but hidden due to anonymity') reports first-party YCSB results against RocksDB baselines. The CPU model, compiler and flags are not stated (only '2 CPUs, 16 cores each at 3.00 GHz'), so it cannot be A, and it is not shown to be peer-reviewed, so it cannot be B.",
+    "corrections": {
+      "claimed_speedup": "Up to 4.25x lower query latency (abstract: 'up to 425% improvements in read latency compared to RocksDB baseline') for Q2, a column-retrieving range query (max over a range). This is with the CONVERT transformer (JSON to FlatBuffers during compaction) against a RocksDB baseline that stores JSON. The split transformation gives 2.8x on Q2, and row-retrieving queries (Q6/Q7) get slower under split. Write-throughput overhead against RocksDB is 10.09% to 21.25% (Table 2): under 16% for a single transformation and about 20% for two. Secondary-index (augment) queries show gains of 'several hundred thousand times' only because plain RocksDB has to do full table scans.",
+      "workload": "RocksDB-based prototype that embeds split, convert (JSON to FlatBuffers) and augment (secondary index) transformations into compaction through cross-column-family 'Tierveling'. Measured: write throughput after a 100 GB preload (200M records of about 500 B), plus query latency (min/P25/P50/P75/max) for Q2 to Q7 (column-retrieving, row-retrieving and index point/range queries) with Zipfian keys, against RocksDB baselines.",
+      "has_code": true,
+      "caveats": "The headline metric is read/query latency, not throughput. The 4.25x win partly comes from a data-format change (JSON to FlatBuffers) that the baseline does not get. Row-retrieving queries are slower under the split transform, and the index-query gains compare against RocksDB full scans (not like-for-like). The CPU model, compiler and flags are not stated. The paper is an arXiv preprint with no journal-ref and says its code is 'hidden due to anonymity'. A probable anonymized review repo (github.com/anon-rev-repo/mycelium-anon, created 2026-07-27, 0 stars) describes Mycelium as a RocksDB-based LSM that piggybacks transformations on compaction and includes a YCSB harness under src/test/ycsb. The paper does not link it, it uses newer terminology (WHLSM, LSM-Grove, mRoutines), and it has no top-level license (only the vendored RocksDB licenses under src/lsm)."
+    },
+    "notes": "The numbers are on the page and the RocksDB comparison is real, so the tier C claim holds. The record's metric field says 'throughput' but the headline is latency; metric is not a correctable field, so the orchestrator may want to fix it by hand. repo_url could plausibly be set to https://github.com/anon-rev-repo/mycelium-anon (anonymous, unlicensed), but the paper does not link it, so attribution is inferred from its name and description.",
+    "urls_opened": [
+      "https://arxiv.org/abs/2506.08923",
+      "https://arxiv.org/pdf/2506.08923",
+      "https://github.com/anon-rev-repo/mycelium-anon"
+    ]
+  },
+  {
+    "id": "https://github.com/haoyuhuang/novalsm",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "B",
+    "tier_reason": "Upgraded from C to B. The arXiv page carries DOI 10.1145/3448016.3457297, and the paper states 'a shorter version of this paper appeared in ACM-SIGMOD 2021', so it is peer-reviewed. It shows the win against RocksDB and LevelDB. It is not A because the compiler version and flags are unstated, even though the code and experiment scripts are public (scripts/exp/nova_rocksdb_comparison.sh, nova_rocksdb_10servers.sh, plus the NovaLSM-YCSB-Client repo) and the CPU (Xeon E5-2650v2) is named. The >50x cap does not apply: against the named RocksDB baseline the reported gains are at most about 18x, and the 105x figure is against a single LevelDB instance, with an architectural explanation given.",
+    "corrections": {
+      "claimed_speedup": "2.3x to 18x higher throughput than LevelDB and RocksDB with a skewed (Zipfian) access pattern and a 2 TB database on 10 nodes (paper's contribution list), with comparable throughput under Uniform access. The 105x figure is not a distributed result. It comes from a single server with a 10 GB database on SW50 (50% scan/50% write) Zipfian, measured relative to ONE LevelDB instance (omega=1), and the paper gives 8x against LevelDB with 64 instances. The Figure 18a bar labels (LevelDB=1) put RocksDB at 6, RocksDB-tuned at 36 and RocksDB* (64 instances) at 73 against Nova-LSM's 105. That is roughly 17.5x, 2.9x and 1.4x over those RocksDB configurations (derived from page data).",
+      "workload": "YCSB RW50/SW50/W100 workloads (R100 also used for response times), 1 KB records, 10 GB to 2 TB databases, Uniform and Zipfian access, on 1 server and on 10 servers, with logging disabled for all systems. Nova-LSM (disaggregated LTC/StoC components over RDMA) is compared with LevelDB and RocksDB in single-instance, 64-instance and tuned-knob configurations on CloudLab APT c6220 nodes.",
+      "compiler_and_flags": "Not stated in the paper. The repo's CMakeLists.txt hard-codes /usr/bin/g++ (version unstated) with -std=c++11 -fexceptions -g, and the README build is a plain 'cmake . && make -j4' with no CMAKE_BUILD_TYPE. Build flags for the LevelDB/RocksDB baselines are unstated.",
+      "caveats": "Peer-reviewed (SIGMOD 2021, DOI 10.1145/3448016.3457297), but the compiler version and flags are unstated, and the repo's default build adds -g without an optimization level. The 105x figure is single-node and measured against a single untuned LevelDB instance; against 64-instance RocksDB* the same scenario is only about 1.4x (derived from page data). The abstract's 'several orders of magnitude' is not borne out by the figures. With Uniform access, throughput is comparable or lower: there is a 15% range-index overhead on SW50 single-node, and the paper reports 20-30% degradation on CPU-intensive uniform workloads. On tmpfs, RocksDB* beats Nova-LSM on SW50. The system needs RDMA/InfiniBand and was evaluated on dated HDD-based nodes with logging disabled. The code is an extension of LevelDB 1.22 (its CMake project is named leveldb), although it is not a GitHub fork."
+    },
+    "notes": "The prompt flagged the 105x figure. It is a single-server (10 GB, SW50 Zipfian) throughput ratio against one LevelDB instance, not a distributed result and not against RocksDB. The best RocksDB configuration in that cell (RocksDB*) is only about 1.4x behind, so claimed_speedup was rewritten. The last commit on the default branch (master) is 2021-06-20; the record's 2021-12-15 is the latest commit on the 'dbbench' branch (repo pushed_at), so I left it unchanged. Both dates mean abandoned. License BSD-3-Clause, 52 stars, not archived and not a fork: all confirmed.",
+    "urls_opened": [
+      "https://arxiv.org/abs/2104.01305",
+      "https://arxiv.org/pdf/2104.01305",
+      "https://github.com/HaoyuHuang/NovaLSM",
+      "https://raw.githubusercontent.com/HaoyuHuang/NovaLSM/master/CMakeLists.txt",
+      "https://raw.githubusercontent.com/HaoyuHuang/NovaLSM/master/build.sh",
+      "https://raw.githubusercontent.com/HaoyuHuang/NovaLSM/master/scripts/exp/nova_rocksdb_comparison.sh"
+    ]
+  }
+]
