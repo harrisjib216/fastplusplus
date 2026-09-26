@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/cmu-corgi/lhd",
+  "one_liner": "Trace-driven simulator for LHD, a size-aware eviction policy needing ~8x less cache than LRU for equal hit rate.",
+  "what_it_does": "LHD (Least Hit Density) is an eviction policy for key-value caches with variable-size objects. On each eviction it evicts the sampled object with the lowest predicted hits per byte of cache space-time. This repo is only the NSDI'18 simulator: a `repl::Policy` interface (`update()` on a reference, `replaced()` on an eviction, `rank()` to choose a victim) with two implementations, LHD and a linked-list LRU, run from a binary trace parser and a libconfig file. It is not a cache library and replaces nothing directly. RankCache, the memcached-based server that produced the throughput numbers, is not in this repo.",
+  "how_it_is_fast": "Hit density = hit probability / (object size x expected time in cache). It is estimated from online histograms of hit ages and eviction ages. There is one histogram per class, 16 last-hit-age classes x 16 app-id classes. The histograms are EWMA-decayed and turned into a rank table indexed by coarsened age, in one linear pass every 2^20 accesses. To evict, it samples ASSOCIATIVITY random objects plus the last 8 low-ranked admissions and evicts the lowest, so there is no global ordered list and eviction cost is constant. ASSOCIATIVITY is 32 in lhd.hpp; example.cfg and RankCache use 64. The throughput gain belongs to RankCache: because eviction is by sampling, a hit only writes a per-object timestamp. Evictions use memcached's version-check optimistic concurrency instead of the serialized list operations of LRU or the serialized evictions of CLOCK, and a compact separate tag array makes 64 samples cost about 4 cache misses.",
+  "when_to_use": [
+    "Deciding whether a size-aware policy would beat LRU on your own key-value traces, where object sizes vary from a few bytes to ~1 MB (the Memcachier trace had a 100 B median), before building anything.",
+    "Building your own sampled-eviction cache (Redis-style random sampling) and wanting a reference implementation of a principled ranking function to port; the core is about the first 200 lines of lhd.cpp.",
+    "Workloads that mix scans with Zipf-like reuse, or that show LRU performance cliffs: the paper shows LHD avoiding the cliffs that LRU, GDSF and Hyperbolic hit on MSR src1_0 at 96 MB and proj_2 at 128 MB.",
+    "Memory-bound cache tiers where hits per GB matter more than CPU per request: averaged across cache sizes, LHD+ had 45% fewer misses than LRU and 23-27% fewer than AdaptSize, GDSF and Hyperbolic.",
+    "Multi-tenant caches where each request carries an app or tenant id, since LHD+ also classifies objects by app id (hashed into 16 classes)."
+  ],
+  "when_not_to_use": [
+    "You need a working cache or a faster memcached now: this is a single-threaded simulator. The RankCache server behind the 8x/16x throughput numbers (built on memcached v1.4.33) is not published here.",
+    "Short traces or loop/scan-heavy traces. In open issue #1, Caffeine's author reports that the fixed 2^20-access reconfiguration interval gave 4% hit rate on a LIRS loop trace at cache size 512. Reconfiguring every 1,024 accesses raised that to 49.7%, but runtime rose from 2 s to 26 s. On his unit-size ARC and LIRS traces, LHD never had the best hit rate and was about on par with ARC at higher runtime cost.",
+    "Anything that needs TTL/expiry, deletes or concurrent access: the simulator has none of them. libCacheSim's port of this code aborts on short TTL configurations ('LHD does not support expiration').",
+    "Tight metadata budgets: the simulator allocates about 61 MB of fixed tables before any object is cached (256 classes x 20,000 ages x 3 float arrays), plus a 56-byte Tag struct (by field layout) and a std::unordered_map entry per object. RankCache reports 6.4 MB of rank tables plus 12.6 MB of counters per thread.",
+    "You need comparisons against strong modern baselines. The paper compares against list-based LRU, GDSF, Hyperbolic, AdaptSize and CLOCK, not ARC or TinyLFU. An HN commenter noted it also misses memcached's modified-2Q LRU, which was the default from 1.5.0."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "libconfig++ (linked with -lconfig++ and used for config parsing); otherwise the STL only. lhd.cpp depends on the simulator's own cache::Cache and parser::Request types.",
+    "min_toolchain": "C++14 (the Makefile runs g++ -std=c++14 -O3 -march=native -ffast-math -funroll-loops -mcmodel=medium -Wall -Werror). Supported compiler versions are not documented.",
+    "platforms": "Linux x86-64 as shipped: parser.hpp uses stat64 and ioctl, and the Makefile hard-codes -march=native and -mcmodel=medium. Other platforms are not documented.",
+    "thread_safety": "Not thread-safe. The simulator is single-threaded, and std::vector/std::unordered_map state is shared with no locks. The lock-free sampling design exists only in the unreleased RankCache.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "example.cfg sets repl.appClasses, ageCoarseningErrorTolerance, accsPerInterval and ewmaDecay, but the code never reads them. The real values are constexpr constants in lhd.hpp (16, 0.01, 2^20, 0.9). Only repl.type, cache.assoc, cache.admissionSamples, cache.capacity (in MB) and the trace.* keys are read.",
+    "Trace paths are hard-coded in cache.cpp (/n/memcachier/snia/msr/<file>.trace and others), so running your own trace means editing cache.cpp or matching one of the binary header formats in parser.hpp. The full-format reader loops back to the start of the file at EOF, objects over 1 MB are trimmed, and 74 B of memcached overhead is added to every object size.",
+    "rank() samples only 8 candidates until 50 reconfigurations (about 52M accesses) have passed, and explorer objects are admitted only during that window. The code comment calls this a warm-up hack that 'doesn't belong in a real system'. Age coarsening is re-tuned only at reconfigurations 5 and 25.",
+    "reconfigure() prints stats to stdout every 2^20 accesses, errors are handled with assert(), and std::hash<candidate_t> hashes only the object id and ignores appId."
+  ],
+  "pick_this_over_siblings_when": "Pick LHD only as a research reference, to test hit-density eviction on your own traces or to port its ranking into your own sampled cache. For something deployable, use Pelikan/Segcache (memcached replacement, about 8x Memcached's throughput at 24 threads) or Caffeine (JVM); for a simple, scalable replacement for LRU, use SIEVE. libCacheSim (the SIEVE entry) already includes this LHD code behind its common C API next to many other policies, and is the easier way to run it.",
+  "verified_claims_summary": "There are two separate results. First, an idealized simulation on a weeklong Memcachier trace and MSR block traces (512M requests after a 128M warm-up): on average LHD+ needed 8x less space than LRU to match hit rate, and 2.4x/2.5x/2.9x less than GDSF/Hyperbolic/AdaptSize. Second, RankCache, a modified memcached v1.4.33 that is not in this repo, was run on one server with the network bypassed, same-size objects and a synthetic Zipfian trace: at 16 threads it gave 8x (abstract) or 16x (intro) the throughput of list-based LRU, and 2x CLOCK at a 90% hit ratio. The paper gives no CPU, compiler or flags for these runs.",
+  "status_note": "Abandoned: one 'Initial LHD release' commit on 2018-07-23 and one open 2019 issue with no reply. It is MIT-licensed (with a request to cite the paper) and about 40 KB of source, so easy to vendor, but it is simulation code, not a cache library.",
+  "sources_read": [
+    "https://github.com/CMU-CORGI/LHD",
+    "https://github.com/CMU-CORGI/LHD/blob/master/README",
+    "https://github.com/CMU-CORGI/LHD/blob/master/lhd.hpp",
+    "https://github.com/CMU-CORGI/LHD/blob/master/lhd.cpp",
+    "https://github.com/CMU-CORGI/LHD/blob/master/repl.hpp",
+    "https://github.com/CMU-CORGI/LHD/blob/master/repl.cpp",
+    "https://github.com/CMU-CORGI/LHD/blob/master/cache.hpp",
+    "https://github.com/CMU-CORGI/LHD/blob/master/cache.cpp",
+    "https://github.com/CMU-CORGI/LHD/blob/master/parser.hpp",
+    "https://github.com/CMU-CORGI/LHD/blob/master/lru.hpp",
+    "https://github.com/CMU-CORGI/LHD/blob/master/candidate.hpp",
+    "https://github.com/CMU-CORGI/LHD/blob/master/config.hpp",
+    "https://github.com/CMU-CORGI/LHD/blob/master/rand.hpp",
+    "https://github.com/CMU-CORGI/LHD/blob/master/constants.hpp",
+    "https://github.com/CMU-CORGI/LHD/blob/master/Makefile",
+    "https://github.com/CMU-CORGI/LHD/blob/master/example.cfg",
+    "https://github.com/CMU-CORGI/LHD/blob/master/LICENSE",
+    "https://github.com/CMU-CORGI/LHD/issues/1",
+    "https://github.com/CMU-CORGI/LHD/commits/master",
+    "https://github.com/CMU-CORGI/LHD/forks",
+    "https://www.usenix.org/system/files/conference/nsdi18/nsdi18-beckmann.pdf",
+    "https://github.com/1a1a11a/libCacheSim/blob/develop/libCacheSim/cache/eviction/LHD/LHD_Interface.cpp",
+    "https://github.com/1a1a11a/libCacheSim/blob/develop/libCacheSim/cache/eviction/LHD/lhd.cpp",
+    "https://hn.algolia.com/api/v1/items/16825931"
+  ],
+  "confidence": 0.8
+}
