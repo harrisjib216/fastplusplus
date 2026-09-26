@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/microsoft/machnet",
+  "one_liner": "DPDK kernel-bypass messaging sidecar for cloud VMs; 2.6x lower median and 7.4x lower p99.9 RTT than Linux TCP.",
+  "what_it_does": "Machnet is a userspace network stack that runs as a separate process (usually its Docker image). It owns a second, dedicated vNIC that is unbound from the kernel and driven through DPDK. Applications link a small C shim (libmachnet_shim.so) and exchange whole messages with the sidecar over hugepage shared-memory rings, using a sockets-like API: machnet_init, then machnet_attach once per thread, then listen, connect, send/recv, and the scatter-gather forms sendmsg/recvmsg/sendmmsg. There are bindings for Go (cgo), Rust (crate `machnet` 0.1.9), C# and JS. It is not a drop-in replacement: the wire protocol is Machnet's own reliable, in-order, message-oriented transport over UDP/IPv4 (messages up to 8 MB), so both ends must run Machnet.",
+  "how_it_is_fast": "It uses DPDK kernel bypass with poll-mode drivers (netvsc on Azure, ENA, gVNIC, mlx5, ice/iavf). Each core runs one busy-polling engine thread with its own NIC RX/TX queue pair, and engines share no flow state, so the data path has no syscalls, interrupts or kernel TCP processing. The app and the stack talk through lock-free rings (jring, modelled on rte_ring) in hugepage shared memory. The paper puts each one-way crossing at ~250 ns, which accounts for most of Machnet's 2 us median gap to eRPC. The transport is a lightweight connection-oriented protocol with a 256-packet SACK bitmap, fast and RTO retransmit, and hardware IPv4/UDP checksum offload. Flows are pinned to an engine by picking UDP source ports whose Toeplitz RSS hash lands on that engine's queue. On main this uses the NIC's RSS key via rte_softrss. The paper's 'RSS--' SYN-spraying variant, for vNICs that hide the key, lives on the experimental rss_blast branch.",
+  "when_to_use": [
+    "Latency-critical request/response between services you own on Azure, AWS or GCP VMs in the same subnet and availability zone, where you can spare one engine core and a second NIC per VM. The paper's examples are KV serving (a single-threaded FASTER GET server at 700K vs 210K RPS) and Raft replication.",
+    "Small messages (64 B-32 KB) where kernel TCP tail latency dominates. The paper measured 64 B echo on Azure F8s_v2 at 27/32/49 us p50/p99/p99.9, against 70/134/365 us for Linux TCP.",
+    "Cloud VMs whose vNICs lack flow steering or RSS reconfiguration, where eRPC-, TAS- or Demikernel-style stacks will not run, or where several processes or languages (Go, Rust, C#, JS, C/C++) must share one DPDK NIC.",
+    "Small VMs where kernel-stack CPU is the bottleneck. At FASTER's peak the paper reports 2 cores busy with Machnet against all 8 with Linux TCP."
+  ],
+  "when_not_to_use": [
+    "Any peer that is not running Machnet, such as browsers, third-party clients, or gRPC, HTTP and WebSocket ecosystems. TCP interop exists only as unmerged PRs #54-#56 (2026).",
+    "Traffic across subnets or regions. Maintainers confirm in issue #50 that Machnet only ARP-resolves hosts on the same subnet and cannot route via a gateway. It is IPv4-only.",
+    "Multi-engine scaling from main. Issue #49 reports machnet_connect failures with engine_threads > 1 (on AWS), and the maintainers point to the experimental rss_blast branch. The paper's 2 Mrps with 4 engines is not reproducible from main as shipped.",
+    "vNICs without IPv4+UDP TX checksum offload, such as GCP gVNIC gve 1.0.0 (issue #51). Main hits LOG(FATAL) in pmd.cc, even though the paper claims a software-checksum fallback on GCP.",
+    "Networks where you need a hardened transport. The Swift congestion-control block is marked 'first-cut' and never changes its 32-packet initial window. RTOs are checked by a 1 s slow timer, and a flow is torn down after 3 RTO retransmits with no RST sent. There is no encryption."
+  ],
+  "integration": {
+    "form": "shared lib (libmachnet_shim.so, C ABI) + separate sidecar process (prebuilt GHCR Docker image or CMake build)",
+    "dependencies": "DPDK 23.11.x (CMake requires libdpdk >=23.11 <24.0), rdma-core (stable-v40 built from source for Mellanox NICs), hugepages, and a dedicated second NIC bound to uio_hv_generic (Azure) or vfio-pci. Git submodules: glog, gflags, googletest, google benchmark, HdrHistogram_c, xxHash. Also needs nlohmann-json, libnl, libhugetlbfs and uuid-dev. The prebuilt image needs Docker and a GitHub PAT with read:packages.",
+    "min_toolchain": "C++20 for the sidecar and C11 for the shim, built with -fno-rtti -fno-exceptions. GCC 10+ (INTERNAL.md requires gcc-10 on Ubuntu 20.04; the docker image uses Ubuntu 22.04's default). CMake, plus Meson and Ninja for DPDK.",
+    "platforms": "Linux only (the Windows port exists only on unmerged branches). x86-64, with docker-bake targets up to x86-64-v4, and arm64 images. Tested on Azure accelerated networking (CX4-Lx via netvsc), AWS ENA, GCP gVNIC, and bare-metal Intel E810 (ice/iavf), ConnectX and BlueField-2 (mlx5). The NIC must offer IPv4/UDP TX checksum offload.",
+    "thread_safety": "Use one channel per application thread (the README says to call machnet_attach in every thread). The send path uses a multi-producer ring. Receive uses a single-consumer ring, and each channel's control request id is a plain increment, so do not share a channel across threads for recv or connect. Control-socket requests are documented as thread-safe. Each engine's Run() loop is documented as not thread-safe; there is one thread per engine.",
+    "drop_in_for_baseline": "false. It replaces kernel TCP only between Machnet peers. Apps must be ported from BSD sockets to machnet_* message calls, and the wire protocol is Machnet-over-UDP, not TCP."
+  },
+  "gotchas": [
+    "Connection setup on main is slow. machnet_connect and machnet_listen queue a control request, and the shim polls for the reply with sleep(1) between tries (up to 10). The engine only drains control requests on its slow timer, kSlowTimerIntervalUs = 1000000 (the code comment wrongly says '2ms'). Inferred from the code, expect about 1 s or more per connect or listen, not the ~1 ms the paper measured with a 50 us interval.",
+    "machnet_recv never blocks on main; it returns 0 when nothing is queued. The paper's blocking receive (sem_wait) exists only on the go-blocking branch, so apps busy-poll. The paper shows p99 spiking above 10 ms when several polling threads share one core.",
+    "Payloads are copied into and out of shared-memory buffers on every send and recv, so it is not zero-copy. machnet_send returns a bare -1 when the ring is full; there is no retry yet (a TODO), and errors are mostly undifferentiated -1 (issue #5).",
+    "The machnet.h and flow.h comments promise 'end-to-end encrypted' delivery, but main has no crypto code. Traffic is plaintext UDP with a Machnet header."
+  ],
+  "pick_this_over_siblings_when": "Pick Machnet over eRPC on public-cloud VMs whose vNICs lack RSS reconfiguration or flow steering, or when several processes or languages must share one NIC. eRPC allows one process per NIC and was ~2 us faster at median in the same paper, so prefer eRPC on bare metal or RDMA. Choose HomaModule or grpc_homa for bare-metal clusters where you can load a kernel module, and brpc, Kitex or DRPC when peers must speak gRPC or HTTP or sit outside your fleet.",
+  "verified_claims_summary": "The source is the first-party arXiv v1 preprint (Feb 2025; the figures still say 'CNet'). Setup: a single-threaded 64 B echo between two Azure F8s_v2 VMs (8 vCPU, accelerated networking, Ubuntu 22.04.2, kernel 6.2, same AZ, no placement groups), with one pinned Machnet engine core, hugepages, and no isolcpus or IRQ steering. Machnet measured 27/32/49 us p50/p99/p99.9 against 70/134/365 us for kernel TCP via sockperf with Nagle off. A single-threaded FASTER GET server did 700K vs 210K RPS, and Go Raft had a 185 vs 282 us median. The compiler and CPU model are not stated, the FASTER and Raft ports are not in the repo, and the peer-reviewed ASPLOS '26 numbers were not checked.",
+  "status_note": "The repo counts as active only through README edits (Jan and Apr 2026) and open TCP PRs (Feb-Aug 2026). Main's code has not changed since the Sept 2024 build_shim.sh fix, and several paper features (RSS--, blocking recv, fast connection setup) live only on stale branches. Treat this MIT-licensed Microsoft Research code, with 162 stars and 13 open issues, as a prototype to vendor and patch, not a supported product.",
+  "sources_read": [
+    "https://github.com/microsoft/machnet",
+    "https://raw.githubusercontent.com/microsoft/machnet/main/README.md",
+    "https://raw.githubusercontent.com/microsoft/machnet/main/src/ext/machnet.h",
+    "https://raw.githubusercontent.com/microsoft/machnet/main/src/ext/machnet.c",
+    "https://raw.githubusercontent.com/microsoft/machnet/main/src/ext/machnet_common.h",
+    "https://raw.githubusercontent.com/microsoft/machnet/main/src/include/cc.h",
+    "https://raw.githubusercontent.com/microsoft/machnet/main/src/include/flow.h",
+    "https://raw.githubusercontent.com/microsoft/machnet/main/src/include/channel.h",
+    "https://raw.githubusercontent.com/microsoft/machnet/main/src/include/machnet_engine.h",
+    "https://raw.githubusercontent.com/microsoft/machnet/main/src/core/drivers/dpdk/pmd.cc",
+    "https://raw.githubusercontent.com/microsoft/machnet/main/src/apps/machnet/README.md",
+    "https://raw.githubusercontent.com/microsoft/machnet/main/src/apps/machnet/main.cc",
+    "https://raw.githubusercontent.com/microsoft/machnet/main/CMakeLists.txt",
+    "https://raw.githubusercontent.com/microsoft/machnet/main/src/CMakeLists.txt",
+    "https://raw.githubusercontent.com/microsoft/machnet/main/Makefile",
+    "https://raw.githubusercontent.com/microsoft/machnet/main/build_shim.sh",
+    "https://raw.githubusercontent.com/microsoft/machnet/main/CONTRIBUTING.md",
+    "https://raw.githubusercontent.com/microsoft/machnet/main/docs/PERFORMANCE_REPORT.md",
+    "https://raw.githubusercontent.com/microsoft/machnet/main/docs/INTERNAL.md",
+    "https://raw.githubusercontent.com/microsoft/machnet/rss_blast/src/include/machnet_engine.h",
+    "https://raw.githubusercontent.com/microsoft/machnet/rss_blast_measurement/src/include/machnet_engine.h",
+    "https://raw.githubusercontent.com/microsoft/machnet/go-blocking/src/ext/machnet.c",
+    "https://github.com/microsoft/machnet/issues/5",
+    "https://github.com/microsoft/machnet/issues/32",
+    "https://github.com/microsoft/machnet/issues/49",
+    "https://github.com/microsoft/machnet/issues/50",
+    "https://github.com/microsoft/machnet/issues/51",
+    "https://github.com/microsoft/machnet/issues",
+    "https://github.com/microsoft/machnet/pulls",
+    "https://github.com/microsoft/machnet/branches",
+    "https://arxiv.org/pdf/2502.09281",
+    "https://crates.io/api/v1/crates/machnet",
+    "https://hn.algolia.com/api/v1/search?query=machnet&tags=story",
+    "https://hn.algolia.com/api/v1/search?query=machnet%20dpdk&tags=comment"
+  ],
+  "confidence": 0.8
+}
