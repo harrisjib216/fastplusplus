@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/dasebe/adaptsize",
+  "one_liner": "Size-aware probabilistic admission for Varnish's memory cache; raises CDN object hit ratio 47-91% over stock LRU Varnish.",
+  "what_it_does": "AdaptSize is an admission policy for the small in-memory 'hot object cache' at the front of a CDN or reverse proxy. On each miss it decides whether the fetched object may enter the cache, admitting it with probability e^(-size/c): small objects almost always get in, and very large ones rarely do unless they are requested often. It ships as three patches to the Varnish 4.1.2 source, a VMOD whose autoparam.explru(Content-Length) you call from vcl_backend_response to mark a response uncacheable, and a separate tuner process that re-derives c from live traffic and pushes it into Varnish with varnishadm. Eviction is still Varnish's own LRU, and there is no library API outside Varnish.",
+  "how_it_is_fast": "The gain is in hit ratio, not CPU speed. Turning away large, rarely requested objects stops one big object from evicting thousands of small ones. To tune c, AdaptSize models each object as its own Markov chain over LRU positions, all linked by a single shared 'pushdown' rate (a mean-field / characteristic-time approximation). That turns the object hit ratio (OHR) into a closed-form function of c. Every ∆ requests (about 250K in the paper; in the code the interval grows with cache size), the tuner evaluates this curve using a Padé approximant for the exponential and a 20-step fixed-point solve, scans integer values of log2(c), then refines the best one with a golden-section search. This avoids the local optima that trap hill climbing with shadow caches. Statistics come from a read-only scan of Varnish's shared-memory log, so the request path only gains one random draw and one exp() call.",
+  "when_to_use": [
+    "Research or reproduction work on size-aware admission in a Varnish 4.1-based memory cache, driven by trace replay such as the author's webtracereplay tool.",
+    "A memory cache in front of a disk tier or origin where object sizes span many orders of magnitude (bytes to GBs, e.g. mixed web, video chunks and downloads), so large objects keep flushing out small ones. The paper's case is a 1.2 GiB hot object cache.",
+    "The cache is small relative to the working set. The paper's gains are largest near 1.2 GiB and fall to 13-14% over Varnish at 32 GiB (they hold when cache size and traffic grow together).",
+    "The traffic mix shifts during the day (e.g. web in the morning, web plus video in the evening), so any single size threshold is wrong part of the time and hill-climbing tuners get stuck.",
+    "You want a documented model for size-aware admission to port into your own cache. The Padé-approximated OHR(c) model and golden-section search fit in a few hundred lines of C."
+  ],
+  "when_not_to_use": [
+    "Production deployments. The README calls it a proof of concept that is not ready for production, the last commit was January 2018, it only targets Varnish 4.1.2 (released March 2016), and one of its Varnish patches comments out an internal VSL assertion as a 'pseudo bug fix'.",
+    "Your goal is throughput or latency on hits. Throughput matches stock Varnish (both peak at 17.5 Gb/s on hits) and never exceeds it. The paper's latency gains come from more hits and lighter disk-tier load, not from a faster request path.",
+    "You optimize byte hit ratio or origin/WAN bytes rather than object hit ratio. The paper shows no change in the disk tier's byte hit ratio, and the disks transfer about 30% more bytes, although disk utilization drops about 20%.",
+    "Object sizes fall in a narrow range. The admission curve only tells objects apart by size, so there is little to gain. This is inferred from the paper's motivation, not measured.",
+    "You use anything other than Varnish (Nginx, Memcached, Redis, CacheLib): there is no integration. One user who replicated it on their own datasets (issue #3) first saw it below LRU, S4LRU and LFU-DA; that was settled privately by email and the cause is not documented."
+  ],
+  "integration": {
+    "form": "source-drop (three patches to the Varnish 4.1.2 source + a Varnish VMOD built with autotools + a separate tuner daemon)",
+    "dependencies": "Varnish 4.1.2 source tree, patched and rebuilt from scratch (the tuner links Varnish's vut/libvarnish objects and libvarnishapi); autotools, libtool, pkg-config; libm, librt, pthread; varnishadm at runtime",
+    "min_toolchain": "C99/gnu99 with GCC. The tuner Makefile uses -std=gnu99 -O2 -Wall -Werror. The paper used gcc 4.4.7.",
+    "platforms": "Linux. It was tested on x86-64 RHEL 6.5 with kernel 2.6.32. Other platforms are not documented.",
+    "thread_safety": "The admission check runs in Varnish worker threads without locks. It reads the global opt_threshold parameter and calls drand48(), which glibc documents as MT-Unsafe (shared RNG state), so concurrent calls race on the generator state. The tuner is a single-threaded separate process that reads Varnish's log ring buffer read-only.",
+    "drop_in_for_baseline": "partial — it is Varnish itself plus one vcl_backend_response block and a sidecar tuner. Existing VCL keeps working, but you must rebuild Varnish 4.1.2 from patched source, and no other Varnish version is supported or documented."
+  },
+  "gotchas": [
+    "The tuner at HEAD does not compile. adaptsize.c calls fprint (a typo for fprintf) with a '%l' format under -Werror. Issue #6 has been open since 2019, with more reports in 2021. Fix the typo before building.",
+    "Cache-size units disagree. The README and usage text say the cachesize argument is in GB, but the code multiplies it by 1024*1024 (MiB) and rejects values <=1 or >1000. As written, the paper's 1.2 GiB cache cannot be entered correctly without editing the code.",
+    "The tuner identifies objects by atol() of the request URL; the header says 'ASSUMPTION: request URLs already hashed to UInt!'. Real URL paths all parse to 0 and are told apart only by size, so it only works with numeric-ID URLs like those from trace replay. Its statistics-tree comparator (cmp_key) still subtracts longs into an int, the same overflow that PR #5 fixed only in the shadow-cache comparator.",
+    "The VMOD computes exp(-r / opt_threshold) with integer operands (long / unsigned). The enforced admission probability is therefore the step function exp(-floor(size/c)), not the smooth e^(-size/c) that the tuner's model assumes. Responses without a numeric Content-Length (e.g. chunked) are always admitted."
+  ],
+  "pick_this_over_siblings_when": "Pick AdaptSize when the problem is admission of wildly varying object sizes in front of a Varnish-style LRU memory cache. Cacheus, LHD, S3-FIFO and SIEVE change eviction instead, and LRB is a simulator-based learned policy. To try the idea without Varnish 4.1.2, libCacheSim (home of the GL-Cache, S3-FIFO and SIEVE entries) and the author's webcachesim both ship C++ AdaptSize implementations (an admission module in libCacheSim, an AdaptSizeCache policy in webcachesim).",
+  "verified_claims_summary": "The NSDI'17 paper replays two private Akamai edge traces (Hong Kong and US, about 440-450M requests each) on a university testbed: FUJITSU CX250, dual Xeon E5-2670, 32 GiB RAM, RHEL 6.5, gcc 4.4.7 with unstated flags. With a 1.2 GiB hot object cache, AdaptSize-patched Varnish raised object hit ratio by 47% (HK) and 91% (US) over stock Varnish 4.1.2 (LRU, admits everything) and by 30-48% over offline-tuned Nginx 1.9.12. Hit-ratio variability fell 1.9x (HK) and 3.8x (US), and throughput stayed equal (17.5 Gb/s peak on hits; misses within the 95% CI). The README's separate example (OHR 0.42 to 0.66, variability 23% to 5%) does not appear in the paper.",
+  "status_note": "Abandoned since January 2018, with a build break open since 2019. The top level is BSD-2-Clause and the VMOD directory carries an Unlicense file. The code is small enough to read in an afternoon but is a self-described proof of concept tied to Varnish 4.1.2, so for new evaluations the C++ ports in libCacheSim or webcachesim are the practical route.",
+  "sources_read": [
+    "https://github.com/dasebe/AdaptSize",
+    "https://github.com/dasebe/AdaptSize/blob/master/README.md",
+    "https://github.com/dasebe/AdaptSize/blob/master/AdaptSizeLibrary/libadaptsize.h",
+    "https://github.com/dasebe/AdaptSize/blob/master/AdaptSizeTuner/adaptsize.c",
+    "https://github.com/dasebe/AdaptSize/blob/master/AdaptSizeTuner/Makefile",
+    "https://github.com/dasebe/AdaptSize/blob/master/AdaptSizeVmod/src/vmod_autoparam.c",
+    "https://github.com/dasebe/AdaptSize/blob/master/AdaptSizeVmod/src/vmod_autoparam.vcc",
+    "https://github.com/dasebe/AdaptSize/blob/master/AdaptSizeVmod/configure.ac",
+    "https://github.com/dasebe/AdaptSize/blob/master/AdaptSizeVmod/README.rst",
+    "https://github.com/dasebe/AdaptSize/blob/master/AdaptSizeVmod/LICENSE",
+    "https://github.com/dasebe/AdaptSize/blob/master/LICENSE",
+    "https://github.com/dasebe/AdaptSize/blob/master/VarnishPatches/cache_req_fsm.patch",
+    "https://github.com/dasebe/AdaptSize/blob/master/VarnishPatches/params.patch",
+    "https://github.com/dasebe/AdaptSize/blob/master/VarnishPatches/vsl_dispatch.patch",
+    "https://github.com/dasebe/AdaptSize/issues/2",
+    "https://github.com/dasebe/AdaptSize/issues/3",
+    "https://github.com/dasebe/AdaptSize/issues/6",
+    "https://github.com/dasebe/AdaptSize/pull/5",
+    "https://github.com/dasebe/AdaptSize/commit/cf27a9e",
+    "https://github.com/dasebe/AdaptSize/commit/d070ba0",
+    "https://github.com/dasebe/AdaptSize/commits/master",
+    "https://www.usenix.org/system/files/conference/nsdi17/nsdi17-berger.pdf",
+    "https://github.com/varnishcache/varnish-cache/blob/4.1/bin/varnishd/common/params.h",
+    "https://github.com/dasebe/webcachesim/blob/HEAD/caches/lru_variants.h",
+    "https://github.com/1a1a11a/libCacheSim/blob/HEAD/libCacheSim/cache/admission/adaptsize/adaptsize.h",
+    "https://man7.org/linux/man-pages/man3/drand48.3.html",
+    "https://hn.algolia.com/api/v1/search?query=AdaptSize&tags=story"
+  ],
+  "confidence": 0.85
+}
