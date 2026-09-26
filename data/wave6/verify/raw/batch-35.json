@@ -1,0 +1,71 @@
+[
+  {
+    "id": "paper:cuckoo-filter",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "B",
+    "tier_reason": "Peer-reviewed ACM CoNEXT'14 paper compares the cuckoo filter against a standard Bloom filter (Table 3, Figs. 4-5) on 2x Xeon L5640. It gives no compiler or flags, and the Bloom baselines are not in the repo's benchmarks/ (conext-figure5.cc and conext-table3.cc only exercise CuckooFilter), so it cannot be A.",
+    "corrections": {
+      "claimed_speedup": "Lookup throughput (Fig. 5, read from the plot): CF is ~12 MOPS at 0% and 100% positive queries and dips to ~10.5 MOPS at 50%. The standard Bloom filter falls from ~8.3 MOPS (0% positive) to ~4.9 MOPS (100% positive), so the CF advantage runs from ~1.45x to ~2.4x (derived from page data, plot-read). Construction is 5.00M keys/sec (CF) vs 3.91M keys/sec (BF) with all filters at 192MB, at 12.60 vs 13.00 bits/item and the same 0.19% FPR (Table 3; ~1.28x, derived from page data). On space, semi-sorted cuckoo filters need fewer bits/item than space-optimized Bloom filters when the target FPR is below 3% (crossover 7.2 bits/item, Fig. 4 and Sec. 6).",
+      "caveats": "Peer-reviewed ACM CoNEXT'14 paper (Fan, Andersen, Kaminsky, Mitzenmacher). It states the hardware (2x Xeon L5640) but not the compiler or flags. The repo's benchmarks/conext-figure5.cc and conext-table3.cc only benchmark CuckooFilter, so the Bloom-filter baseline code is not public. The current benchmarks/Makefile flags (-O3 -march=core-avx2) postdate the paper and could not have run on the Westmere testbed. The CF only ties the paper's blocked Bloom filter at 0% positive queries (~12 MOPS each); its win is over the standard Bloom filter and grows with the positive-query fraction. Per Sec. 6, the <3% FPR space advantage is stated for the semi-sorting variant. The README has no numbers. GitHub reports the license as NOASSERTION, but the LICENSE file is the Apache-2.0 text. Independent check: the Xor Filters paper (ACM JEA 2020, arXiv 1912.08258; i7-6700, GCC 8.1.0, -O3 -march=native) measures a modified Cuckoo 12 at 31 ns/query vs Bloom 12 at 40 ns (10M keys, 25% find). In the same paper the original implementation measures 30 ns at 20.1 bits/key (Table 4)."
+    },
+    "notes": "The CoNEXT paper's Table 3 and the 7.2-bit/3% crossover check out, but the Fig. 5 paraphrase was overstated: the CF is not flat at ~11 MOPS and the BF bottoms out near ~4.9 MOPS, not ~4. So the peak ratio is ~2.4x, not ~2.75x. Metadata verified: Apache-2.0 LICENSE file, last commit 2021-11-12 (abandoned), 1013 stars, not archived, not a fork.",
+    "urls_opened": [
+      "http://www.cs.cmu.edu/~binfan/papers/conext14_cuckoofilter.pdf",
+      "https://github.com/efficient/cuckoofilter",
+      "https://github.com/efficient/cuckoofilter/blob/master/LICENSE",
+      "https://github.com/efficient/cuckoofilter/tree/master/benchmarks",
+      "https://arxiv.org/pdf/1912.08258"
+    ]
+  },
+  {
+    "id": "paper:simd-blocked-bloom",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": false,
+    "numbers_found_on_page": false,
+    "evidence_tier_final": "B",
+    "tier_reason": "The CoNEXT'14 blk-BF (64-byte blocks, k=9) is not src/simd-block.h, which Jim Apple added to the repo in Dec 2016. The valid evidence is the peer-reviewed Xor Filters paper (ACM JEA 2020), which benchmarks this Impala-derived AVX2 blocked Bloom against standard Bloom filters with full methodology (i7-6700, GCC 8.1.0, -O3 -march=native, code in FastFilter/fastfilter_cpp benchmarks/bulk-insert-and-query.cc). The benchmarked copy is a modified one (non-power-of-2 sizes) in fastfilter_cpp, not this repo's file, so the tier is B rather than A.",
+    "corrections": {
+      "benchmark_url": "https://arxiv.org/pdf/1912.08258",
+      "claimed_speedup": "Xor Filters paper (Graf & Lemire, ACM JEA 2020), testing the Impala AVX2 blocked Bloom that is also used in efficient/cuckoofilter, modified for flexible sizes. Membership tests take 16 ns/query vs 31 ns (Bloom 8) and 40 ns (Bloom 12) at 10M keys with 25% find, and 20 ns vs 53 ns and 58 ns at 100M keys (Table 3; ~1.9-2.9x, derived from page data). Construction takes 10 ns/key vs 40 and 60 ns/key at 10M keys, and 20 ns/key vs 70 and 90 ns/key at 100M keys (Table 2). The trade-off is 10.7 bits/key at 0.94% FPP vs 0.31% for Bloom 12.",
+      "workload": "Single-threaded bulk construction and membership tests on 10M and 100M pseudo-random 64-bit keys (Murmur-finalizer hash), with 25% of queries on existing keys. Blocked Bloom (10.7 bits/key) is compared with standard Bloom filters at 8, 12 and 16 bits/key, using FastFilter/fastfilter_cpp benchmarks/bulk-insert-and-query.cc.",
+      "hardware": "Intel i7-6700 (Skylake) @ 3.4 GHz, 8 MB L3",
+      "compiler_and_flags": "GNU GCC 8.1.0, -O3 -march=native (per paper)",
+      "caveats": "The original record wrongly attributed the CoNEXT'14 paper's blk-BF numbers (Table 3's 7.64M keys/sec, the Fig. 5 '~4 MOPS' gap) to this code. The paper's blocked Bloom is its own 2014 implementation with 64-byte blocks and k=9. src/simd-block.h was added to efficient/cuckoofilter by Jim Apple in Dec 2016, two years later. This repo's own benchmarks/bulk-insert-and-query.cc header shows SimdBlock8 at ~55-75M adds/sec and ~58-75M finds/sec, vs Cuckoo12 at ~16-24M adds/sec and ~32-37M finds/sec. It includes no standard Bloom and no hardware (first-party, Tier C on its own). The peer-reviewed numbers come from a modified copy in FastFilter/fastfilter_cpp src/bloom/simd-block.h, credited there as 'from apache/impala (via the cuckoo filter)'. The filter needs AVX2 (x86-only) and has a higher FPR per bit than a standard Bloom filter."
+    },
+    "notes": "This is a real, well-known fast filter, but the record's evidence described a different implementation. It is replaced with the Xor Filters JEA 2020 comparison, which supports the win over standard Bloom with complete methodology. If the orchestrator re-points repo_url to FastFilter/fastfilter_cpp, the entry would qualify for Tier A. Host repo metadata was verified (Apache-2.0, last commit 2021-11-12, 1013 stars).",
+    "urls_opened": [
+      "http://www.cs.cmu.edu/~binfan/papers/conext14_cuckoofilter.pdf",
+      "https://github.com/efficient/cuckoofilter",
+      "https://github.com/efficient/cuckoofilter/commits/master/src/simd-block.h",
+      "https://github.com/efficient/cuckoofilter/blob/master/benchmarks/bulk-insert-and-query.cc",
+      "https://arxiv.org/pdf/1912.08258",
+      "https://api.crossref.org/works/10.1145/3376122",
+      "https://github.com/FastFilter/fastfilter_cpp"
+    ]
+  },
+  {
+    "id": "https://github.com/elvec1o/gbf-neon",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "These are first-party README numbers from the project's own src/bench_vs.cpp, run against the author's own Blocked Bloom and naive Bloom on an Apple M2. The flags (-O3 -march=native) are in CMakeLists.txt, but the compiler and version are not stated, so the evidence falls short of A. It is not peer-reviewed or third-party.",
+    "corrections": {
+      "compiler_and_flags": "-O3 -march=native (CMakeLists.txt GBF_BASE_FLAGS), CMAKE_BUILD_TYPE=Release; compiler/version not stated",
+      "workload": "1M random uint64 keys, queried with 1M positives and 1M negatives on one Apple M2 (src/bench_vs.cpp). GBF is compared with the project's own 64-byte cache-line Blocked Bloom (8 bits set per block) at 8.26 and 12 bits/key, and with a naive Bloom (k=6).",
+      "caveats": "First-party, self-run benchmark (src/bench_vs.cpp) on an Apple M2. Flags are -O3 -march=native from CMakeLists.txt; the compiler and version are not stated. The Blocked Bloom baseline is the author's own implementation, not an established library. At 1M keys (~1 MB) the filter is cache-resident, and build is ~6x slower than Blocked Bloom (30 vs 5 ms). The README's design-journey note says 8 ideas were tried, 7 failed and 1 shipped. The bench_vs.cpp header still says 'GBF v0.3'. The headline numbers are Apple-M2-only; x86 results exist only in CI artifacts. This is a Ribbon-filter variant, not a novel algorithm, from a brand-new (0-star) single-author project and not independently reproduced."
+    },
+    "notes": "README numbers match exactly: 8.4 ns vs 16.4/14.8/17.6 ns, and FPR 0.78% vs 2.90%/1.97%/1.69%. Metadata verified: MIT, created 2026-05-27, last commit 2026-05-28 (active), 0 stars, not a fork or archived.",
+    "urls_opened": [
+      "https://github.com/ElVec1o/GBF-NEON",
+      "https://github.com/ElVec1o/GBF-NEON#head-to-head-vs-competent-blocked-bloom-buildbench_vs",
+      "https://github.com/ElVec1o/GBF-NEON/blob/main/CMakeLists.txt",
+      "https://github.com/ElVec1o/GBF-NEON/blob/main/src/bench_vs.cpp"
+    ]
+  }
+]

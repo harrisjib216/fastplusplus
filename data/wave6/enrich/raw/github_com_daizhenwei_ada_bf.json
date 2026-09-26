@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/daizhenwei/ada-bf",
+  "one_liner": "Research Python for learned Bloom filters that tune hashing per classifier-score band, cutting FPR versus standard and learned Bloom filters.",
+  "what_it_does": "A membership filter where a pre-trained classifier's score s(x) decides how hard the backing Bloom filter checks each item. Ada-BF splits the score range into g groups that share one bit array and uses more hash functions for low-score groups (mostly non-members) and zero hashes for the top group, which is answered 'present' from the score alone; disjoint Ada-BF gives each group its own Bloom filter of a different size. This is not a library: the repo is five standalone argparse scripts (standard BF, learned BF, Ada-BF, disjoint Ada-BF, PLBF) that read a CSV of item, label and precomputed score, grid-search the hyperparameters, and print a false-positive count. There is no reusable insert/query API, no serialization, and no model-training code.",
+  "how_it_is_fast": "The win is FPR per bit, not speed. The learned Bloom filter (Kraska et al. 2018) uses a single score threshold; Ada-BF generalizes this to g score regions with K_j hash functions, fixing K_j - K_{j+1} = 1 and a non-key ratio m_j/m_{j+1} = c so that only (K_max, c) need tuning, with the aim of equalizing expected false positives m_j * alpha^K_j across groups. Disjoint Ada-BF sizes each group's filter from R_j/n_j - R_1/n_1 = (j-1)log(c)/log(0.618). Queries cost more than a plain Bloom filter: the NeurIPS version reports 3.39 (BF), 6.98 (LBF), 9.40 (Ada-BF) and 12.07 (disjoint Ada-BF) hash operations per query at 400Kb, on top of one classifier inference.",
+  "when_to_use": [
+    "Reproducing or teaching learned-filter results: the repo has BF, LBF, Ada-BF, disjoint Ada-BF and PLBF implementations that run on the same URL CSV.",
+    "A static key set, such as a URL blocklist or malware-hash list, where a small classifier's score separates members (high scores) from non-members (low scores) and bits stored or sent matter more than per-query CPU. The paper reports 40-50% less memory than an LBF at the same FPR.",
+    "Prototyping the score-banding idea before porting it to a real filter implementation; each script is 80-250 lines of plain numpy/pandas.",
+    "Distributing a filter to many servers where update size is the constraint (the NeurIPS fake-news experiment reports half the space of an LBF at equal FPR)."
+  ],
+  "when_not_to_use": [
+    "Any production or library use: there is no license, no API, and no persistence, every hash is a Python-level loop over sklearn's murmurhash3_32, and each bit is stored as a 64-bit numpy int.",
+    "Latency-sensitive lookups: every query needs a classifier inference (a 10-tree random forest in the URL experiment) plus about 2.8x the hash operations of a plain Bloom filter at 400Kb, and no timing benchmark exists.",
+    "Adversarial or drifting query streams: the FPR depends on non-key scores following the tuning distribution, and items above the top threshold are accepted without any hash check. The paper itself names adversarial examples and drift as weaknesses of learned filters.",
+    "Weak classifiers, or when you want the best learned filter: the later PLBF paper (arXiv 2006.03176) reports 9x lower FPR than AdaBF on URLs at 500Kb, and AdaBF needs 2.5x PLBF's space at FPR 0.001; on EMBER, where the model helps less, the gap was only 1.1x.",
+    "Dynamic sets: there are no deletes, and thresholds and filter sizes are tuned offline over the full key set, so changing the keys means retraining or re-scoring and rebuilding."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "numpy, pandas, scikit-learn (murmurhash3_32), matplotlib; scipy for PLBF.py; no requirements file",
+    "min_toolchain": "Not documented. The committed __pycache__ is CPython 3.7, and plt.style.use('seaborn-deep') needs matplotlib < 3.8, which removed the seaborn-<foo> styles.",
+    "platforms": "any (pure Python)",
+    "thread_safety": "not documented; single-threaded scripts with module-level state",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The scripts run everything at top level (argparse, CSV load, a histogram with plt.show() that writes Score_Dist.png to the working directory), so they cannot be imported as modules, and plt.show() blocks on GUI backends.",
+    "The README commands are partly broken. disjoint_Ada-BF.py requires --model_path, which the README omits, and it subtracts the model file size x8 from the budget while Ada-BF.py does not, so --size_of_Ada_BF means different things in the two scripts. PLBF.py reads a 'query' column that the shipped CSVs lack (open issue #1) and needs model pickles that are not in the repo.",
+    "Datasets/Malware_data.csv has the columns label,score,md5 with labels 0/1, but every script selects label == -1 and a 'url' column, so only URL_data.csv runs as-is. Even that file has 411,184 rows (66,385 malicious), not the paper's 485,730, so reruns will not match the paper's figures exactly.",
+    "Results are not reproducible run to run: hash seeds come from an unseeded randint and the 30% tuning sample is unseeded. The final FPR is measured on all negatives, including the tuning sample. Disjoint Ada-BF divides by only the below-threshold negatives, which overstates its printed FPR."
+  ],
+  "pick_this_over_siblings_when": "Every sibling (Xor, BuRR, Prefix, Vacuum, Morton, and so on) is a key-agnostic filter with a fixed space overhead that needs no model; BuRR's table puts Xor/Xor+ at 14-23% over the information-theoretic minimum, versus the roughly 44% the Ada-BF paper cites for a standard Bloom filter. Pick Ada-BF only to study or prototype a learned filter when a classifier cleanly separates members from non-members and you count the model's bytes in the budget; for anything you ship over a static set, use Xor or BuRR.",
+  "verified_claims_summary": "This is a numerical FPR-versus-bitmap-size comparison, not a timing benchmark. On a 485,730-URL Kaggle set, with a random forest whose 146Kb pickle is added to the standard BF's budget, Ada-BF cut FPR by 81% versus LBF/sandwiched LBF at 500Kb (disjoint Ada-BF: 84%) and reached about 0.35% FPR in 300Kb where LBF needed over 500Kb. On VirusShare MD5 data it needed about 150Kb versus about 300Kb for LBF at 0.2% FPR, and all learned filters were over 98% below the standard BF. No hardware, compiler or runtime is reported; the only cost figure is hash operations per query in the NeurIPS version.",
+  "status_note": "Abandoned: the last code change was PLBF.py on 2022-05-24, the two 2021 issues were never answered, and with no LICENSE file the code is study-only (17 stars, 7 forks).",
+  "sources_read": [
+    "https://github.com/DAIZHENWEI/Ada-BF",
+    "https://github.com/DAIZHENWEI/Ada-BF/blob/master/README.md",
+    "https://github.com/DAIZHENWEI/Ada-BF/blob/master/Ada-BF.py",
+    "https://github.com/DAIZHENWEI/Ada-BF/blob/master/Bloom_filter.py",
+    "https://github.com/DAIZHENWEI/Ada-BF/blob/master/disjoint_Ada-BF.py",
+    "https://github.com/DAIZHENWEI/Ada-BF/blob/master/learned_Bloom_filter.py",
+    "https://github.com/DAIZHENWEI/Ada-BF/blob/master/PLBF.py",
+    "https://github.com/DAIZHENWEI/Ada-BF/issues",
+    "https://github.com/DAIZHENWEI/Ada-BF/commits/master",
+    "https://raw.githubusercontent.com/DAIZHENWEI/Ada-BF/master/Datasets/URL_data.csv",
+    "https://raw.githubusercontent.com/DAIZHENWEI/Ada-BF/master/Datasets/Malware_data.csv",
+    "https://arxiv.org/pdf/1910.09131",
+    "https://export.arxiv.org/api/query?id_list=1910.09131",
+    "https://proceedings.neurips.cc/paper_files/paper/2020",
+    "https://proceedings.neurips.cc/paper_files/paper/2020/hash/86b94dae7c6517ec1ac767fd2c136580-Abstract.html",
+    "https://proceedings.neurips.cc/paper_files/paper/2020/file/86b94dae7c6517ec1ac767fd2c136580-Paper.pdf",
+    "https://export.arxiv.org/api/query?id_list=2006.03176",
+    "https://arxiv.org/pdf/2006.03176v2",
+    "https://hn.algolia.com/api/v1/search?query=%22Ada-BF%22",
+    "https://hn.algolia.com/api/v1/search?query=adaptive%20learned%20bloom%20filter",
+    "https://matplotlib.org/stable/api/prev_api_changes/api_changes_3.8.0.html"
+  ],
+  "confidence": 0.85
+}
