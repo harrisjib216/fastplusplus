@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/dvidelabs/flatcc",
+  "one_liner": "FlatBuffers schema compiler and runtime for pure C. Wire-compatible with Google's flatc, and roughly as fast as its C++ code.",
+  "what_it_does": "flatcc is a separate schema compiler, written in C, that reads the same .fbs schemas as Google's flatc. It generates C headers for reading, building, verifying and JSON parsing and printing, and the buffers it produces are standard FlatBuffers binaries. The API is a C interface built from macros, with names like `MyGame_Example_Monster_hp_add(B, 80)`, and a start/end stack-based builder. It is not a drop-in for flatc's C++ classes. Reading needs only the generated headers plus include/flatcc. Building, verifying and JSON need the small runtime library libflatccrt, or its src/runtime/*.c files compiled directly.",
+  "how_it_is_fast": "Reader accessors are generated as static inline functions that read fields straight out of the buffer through vtable offsets. They do no allocation, need no library, and let the compiler drop any code you don't use. The typeless builder keeps its internal stacks (vtable stack, data stack, frame stack, patch log) and a hash-table vtable-deduplication cache across builds: `flatcc_builder_reset` reuses that memory instead of freeing it. Output goes to an emitter that writes fixed-size pages (about 2.9 KB) in a ring buffer, not to one growing array. Vtables are clustered at the end of the buffer, and `create` calls and direct array copies skip the stack when no endian conversion is needed. The author attributes flatcc's encode edge to making fewer allocations. In the benchmark code, the C++ side constructs a fresh FlatBufferBuilder on every iteration, while the C side resets its builder.",
+  "when_to_use": [
+    "A pure-C codebase (embedded, firmware, C-only services) that needs to read or write FlatBuffers. Users report it working on ESP32/FreeRTOS with newlib and on Arduino.",
+    "Exchanging buffers with services that use Google's flatc in other languages, since flatcc produces the same wire format and flatc-compatible JSON.",
+    "Read-heavy paths: reads are zero-allocation inline accessors with no runtime library. Traversing the benchmark message takes about 29 ns/op.",
+    "Building many small buffers in a loop with one reused builder (`flatcc_builder_reset`), or streaming large buffers page by page through a custom emitter without holding the whole buffer in memory.",
+    "Schema-specific JSON-to-FlatBuffer parsing and printing in C. The generated parser and printer handle a 722-byte message in about 1.2-2.2 µs."
+  ],
+  "when_not_to_use": [
+    "A C++ project already using flatc and looking for speed. The results are a wash: encode is about 1.12x faster on the OS X run but about 3% slower on the repo's Ubuntu run, and decode is tied to about 8% faster.",
+    "You need a large serialization speedup over FlatBuffers. This is the same format with the same costs, and only a different wire format can change those.",
+    "Untrusted input where DAG blow-up matters. The verifier rejects cycles and caps nesting at about 100 levels, but unlike Google's verifier it does not limit the number of tables visited. Also, never modify an untrusted buffer in place, even after verifying it.",
+    "You want vectors sorted by key while building. The builder cannot sort; you have to cast the finished buffer to mutable and sort it afterwards (in-place heap sort, not stable), and only on trusted buffers.",
+    "You need a stable API across upgrades. Minor breaking changes to the header API happen occasionally, and generated code must match the include/flatcc version exactly."
+  ],
+  "integration": {
+    "form": "static lib (runtime libflatccrt, or compile src/runtime/*.c directly). Reading needs only generated headers plus include/flatcc. The flatcc code generator must be built first (CMake).",
+    "dependencies": "At runtime, none beyond the C runtime library. Building the flatcc tool needs CMake 3.16+ and Ninja or make.",
+    "min_toolchain": "C11 is the reference (C++11 or C++14 for C++ code that includes the generated headers). A portable header layer supports older compilers, and weekly CI covers GCC 4.4 and 9-15, Clang 5-22, and MSVC. `--pedantic` is not supported on GCC 8+.",
+    "platforms": "Any. Little-endian and big-endian hosts are supported (big-endian since 0.4.0, tested on AIX PowerPC and on s390x via QEMU, but not in regular CI). CI covers Linux x86-64 including 32-bit, macOS on Apple and Intel runners, and Windows with MSVC.",
+    "thread_safety": "Reading and verifying are safe from many threads because they mutate no state. A builder is not thread-safe, so use one builder per thread (doc/security.md).",
+    "drop_in_for_baseline": "partial: buffers, .fbs schemas and JSON are compatible with Google FlatBuffers, but the generated API is C, not flatc's C++ classes, so calling code has to be rewritten."
+  },
+  "gotchas": [
+    "The generated headers must come from the same flatcc version as include/flatcc and libflatccrt. A system-installed flatcc package can silently mismatch.",
+    "Builder errors are not checked by default (\"no hand holding\"). A missing required field asserts in debug builds but writes an incorrect table in release builds. Link libflatccrt_d while developing and run the verifier on your output.",
+    "The verifier requires the buffer to be aligned at its absolute memory address (e.g. 16-byte force_align fields). Plain malloc on 32-bit Windows gives only 8 bytes, so use `flatcc_builder_finalize_aligned_buffer` and `flatcc_builder_aligned_free`.",
+    "Reading and verifying expect a file_identifier by default. Buffers without one, which some other language bindings produce, fail unless you pass a null identifier to the `_with_identifier` variants. If tests segfault, check strict aliasing (`-fno-strict-aliasing`, or `-DPORTABLE_MEM_PTR_ACCESS=0`)."
+  ],
+  "pick_this_over_siblings_when": "Pick flatcc when you need actual FlatBuffers wire compatibility from C. Lite³, Karmem and YaFF report much larger wins over FlatBuffers, but each is its own format and cannot read or write existing FlatBuffers data. ProtoCache and hpp-proto target Protobuf and C++, not FlatBuffers from C.",
+  "verified_claims_summary": "Setup: Google's flatbench schema (a container of 3 tables with structs and strings, about 336-344 bytes), 1M iterations, -O3 -DNDEBUG, unnamed system cc/c++, on a 2.2 GHz Haswell Core i7 under OS X. flatcc encoded in 626 ns/op against 702 ns/op for flatc C++ (about 1.12x) and traversed in 28.7 vs 28.9 ns/op (a tie). The C++ baseline is a FlatBuffers 1.0.0 header from 2014 vendored in the repo, rebuilt with a fresh builder every iteration. The repo's Ubuntu run (hardware not stated) has flatcc about 3% slower on encode (531 vs 516 ns) and about 8% faster on decode (27.5 vs 30.0 ns).",
+  "status_note": "Actively maintained: v0.6.4 was released 2026-09-16, fixing parser overruns on adversarial schemas that had been reported as CVEs, and there are commits up to 2026-09-25. It is Apache-2.0 and small enough to vendor, and in 2026 the maintainer said the benchmark code is 'very old' and has not been updated (issue #382).",
+  "sources_read": [
+    "https://github.com/dvidelabs/flatcc",
+    "https://github.com/dvidelabs/flatcc/blob/master/README.md",
+    "https://github.com/dvidelabs/flatcc/blob/master/doc/benchmarks.md",
+    "https://github.com/dvidelabs/flatcc/blob/master/test/benchmark/README.md",
+    "https://github.com/dvidelabs/flatcc/blob/master/test/benchmark/benchout-ubuntu.txt",
+    "https://github.com/dvidelabs/flatcc/blob/master/test/benchmark/benchflatcc/benchflatcc.c",
+    "https://github.com/dvidelabs/flatcc/blob/master/test/benchmark/benchflatc/benchflatc.cpp",
+    "https://github.com/dvidelabs/flatcc/blob/master/test/benchmark/benchflatc/flatbuffers/flatbuffers.h",
+    "https://github.com/dvidelabs/flatcc/commits/master/test/benchmark/benchflatc/flatbuffers/flatbuffers.h",
+    "https://github.com/dvidelabs/flatcc/commits/master/test/benchmark/benchout-ubuntu.txt",
+    "https://github.com/dvidelabs/flatcc/blob/master/doc/security.md",
+    "https://github.com/dvidelabs/flatcc/blob/master/CHANGELOG.md",
+    "https://github.com/dvidelabs/flatcc/releases",
+    "https://github.com/dvidelabs/flatcc/blob/master/include/flatcc/flatcc_builder.h",
+    "https://github.com/dvidelabs/flatcc/blob/master/include/flatcc/flatcc_emitter.h",
+    "https://github.com/dvidelabs/flatcc/blob/master/CMakeLists.txt",
+    "https://github.com/dvidelabs/flatcc/blob/master/.github/workflows/weekly.yml",
+    "https://github.com/dvidelabs/flatcc/issues",
+    "https://github.com/dvidelabs/flatcc/issues/382",
+    "https://github.com/dvidelabs/flatcc/issues/272"
+  ],
+  "confidence": 0.85
+}
