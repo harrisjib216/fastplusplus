@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/enki/libev",
+  "one_liner": "Small, embeddable C event loop with io, timer, signal, child and stat watchers; halves libevent 1.4's per-iteration cost when timers churn.",
+  "what_it_does": "libev is a readiness-based event loop. You fill small C watcher structs (ev_io, ev_timer, ev_periodic, ev_signal, ev_child, ev_stat, ev_idle, ev_prepare/ev_check, ev_embed, ev_fork, ev_async), start them on a loop, and it runs your callbacks. The native ev_* API is not libevent's. An optional event.h layer emulates the libevent 1.4.1-beta API at source level only, and libev itself ships no buffer, DNS or HTTP code. It is built to be vendored: #include \"ev.c\" in one file with EV_STANDALONE and configure it with macros, or build it with autoconf.",
+  "how_it_is_fast": "Starting or stopping an io watcher only marks the fd in an fdchanges array. fd_reify then pushes the net change to the kernel once, before the next poll. The epoll backend also skips EPOLL_CTL_DEL and tags each event with a per-fd generation counter to drop stale events, so stopping and restarting a watcher usually costs no syscall. The benchmark page says libevent 1.4 calls epoll_ctl on every change. Timers live in a heap indexed by array position, so the next timer is O(1) and a reset (ev_timer_again) only moves the entry. The Changes file dates a 4-ary heap that caches expiry times in each node (EV_USE_4HEAP, EV_HEAP_CACHE_AT) to 3.41. The benchmark page calls it the 'upcoming 3.33', and the benchmarked 3.31 still used a binary heap. Per-fd state is a flat array indexed by fd, and pending watchers are kept in per-priority arrays.",
+  "when_to_use": [
+    "Linux servers holding 10k-100k connections, each with an idle timeout reset on activity. This was the benchmark's heaviest case: event processing 2-3x faster than libevent 1.4.3.",
+    "Code that starts, stops or re-arms many watchers per iteration. libev batches the changes before the poll, so each one does not cost an epoll_ctl.",
+    "Embedding a loop in a C/C++ program or a language runtime as a few source files with no dependencies. The EV Perl module, rxvt-unicode and gvpe embed it, and gevent uses it by default on CPython outside Windows.",
+    "You need more than fd readiness: wall-clock cron-style timers (ev_periodic), child-process reaping, inotify-backed file watching, signalfd/eventfd, one loop per thread with ev_async wakeups.",
+    "Existing libevent-1.4-API code that you want to try on libev by recompiling against libev's event.h."
+  ],
+  "when_not_to_use": [
+    "Windows: only a select backend that handles sockets only. The docs say programs needing more than about a hundred sockets need a different implementation. gevent defaults to libuv there.",
+    "macOS and most BSDs: kqueue is used by default only on NetBSD. Without an explicit EVBACKEND_KQUEUE, macOS falls back to select and loses the O(active fds) scaling.",
+    "You want buffered sockets, DNS, HTTP or TLS in the same library (libevent, libuv, libhv). libev is only the loop.",
+    "Completion-based I/O: the upstream io_uring backend is documented as slower than epoll and is off by default. Readiness-model limits still apply.",
+    "You need a maintained dependency with measured wins against current libraries. There has been no release since 4.33 (2020), the GitHub mirror is frozen at 4.22, and nobody has benchmarked libev against libevent 2.1 or libuv. gevent reports libev and libuv as 'roughly the same'."
+  ],
+  "integration": {
+    "form": "source-drop (ev.c #includes the enabled backend files; add event.c for the libevent API) or an autotools-built static/shared lib",
+    "dependencies": "none beyond libc and the OS polling APIs (README: 'no dependencies'); older glibc may need -lrt for clock_gettime (Changes 4.18)",
+    "min_toolchain": "ISO C compiler; sources also compile as C++. The mirror's 4.22 ev++.h fails under C++17 because of dynamic exception specs (mirror issue #15). Upstream 4.25 removed them.",
+    "platforms": "Linux (epoll; upstream 4.26+ adds optional linuxaio and io_uring backends), Solaris (event ports), NetBSD (kqueue), other BSDs and macOS (select/poll by default, kqueue opt-in), generic POSIX; Windows only via winsocket select, sockets only",
+    "thread_safety": "Functions are reentrant. There is no internal locking: separate loops can run in parallel threads, but calls on the same loop must be serialized by the caller. ev_async is the thread-safe wakeup.",
+    "drop_in_for_baseline": "partial: event.h emulates only the libevent 1.4.1-beta API at source level, not ABI level. Priorities are unsupported and ev_flags/EVLIST_* behave differently. There is no bufferevent/evdns/evhttp in libev. The fast path is the different native ev_* API."
+  },
+  "gotchas": [
+    "After fork(), the child must call ev_loop_fork(), set EVFLAG_FORKCHECK, or use select/poll. Otherwise epoll/kqueue state is inherited and wrong.",
+    "Default error handling aborts. Unhandled syscall errors call the syserr callback, which prints and calls abort(). Usage errors are assert()s. The allocator callback returning NULL may abort.",
+    "Idle-timeout speed depends on the pattern. Stopping, setting and restarting a timer on every packet is the documented slow way. Use ev_timer_again, or one timer plus a linked list for millions of identical timeouts. In the benchmark, libev's libevent emulation (del+add, two heap operations per reset) was noticeably slower than the native API.",
+    "epoll quirks surface through libev: keep one watcher active per fd until close, avoid watchers on dup()'ed fds, and expect regular files to be rejected. The docs say select can match epoll up to about 100 fds."
+  ],
+  "pick_this_over_siblings_when": "Choose libev over picoev when you need exact timers and a broad watcher set. picoev claims to beat libev on a variant of this benchmark, but it keeps timeouts in a 1-second-granularity ring buffer and calls itself less mature. Choose libev over libhv when you want only a tiny, dependency-free loop to vendor. libhv is an actively developed cross-platform TCP/HTTP/WebSocket library benchmarked on throughput. For io_uring completion I/O, look at Condy or uring_exec instead.",
+  "verified_claims_summary": "The libev author ran a modified libevent bench.c: libev 3.31 vs libevent 1.4.3, both on epoll, gcc 4.2.3 -O3, Core2 Quad at 3.6 GHz, Linux 2.6.24. The runs covered 100-100,000 socket pairs with 100 or 1,000 active clients, taking the minimum of six runs. Without timeouts, total time per iteration was roughly halved, mostly from cheaper watcher setup, while poll time differed by under 5%. With per-socket idle timeouts, event processing was 2-3x faster. A 2011 rerun (libev 4.03 vs libevent 1.4.13 and 2.0.10) showed the same pattern, in charts only.",
+  "status_note": "The GitHub mirror is frozen at 4.22 (Dec 2015), and upstream (schmorp CVS, dist.schmorp.de) last released 4.33 on 2020-03-18, with only sporadic small CVS commits since (latest ev.c revision 2026-04-13). It is dual BSD-2-Clause/GPL-2.0 and designed to be vendored as a few C files, so take 4.33 from upstream rather than the mirror.",
+  "sources_read": [
+    "https://github.com/enki/libev",
+    "https://github.com/enki/libev/blob/master/README",
+    "https://github.com/enki/libev/blob/master/Changes",
+    "https://github.com/enki/libev/blob/master/ev.pod",
+    "https://github.com/enki/libev/blob/master/ev.h",
+    "https://github.com/enki/libev/blob/master/ev.c",
+    "https://github.com/enki/libev/blob/master/ev_epoll.c",
+    "https://github.com/enki/libev/issues",
+    "https://github.com/enki/libev/issues/6",
+    "https://github.com/enki/libev/issues/12",
+    "https://github.com/enki/libev/issues/15",
+    "https://github.com/enki/libev/issues/16",
+    "https://github.com/enki/libev/pull/2",
+    "https://github.com/enki/libev/pull/8",
+    "http://libev.schmorp.de/bench.html",
+    "http://libev.schmorp.de/bench.c",
+    "http://software.schmorp.de/pkg/libev.html",
+    "http://dist.schmorp.de/libev/",
+    "http://cvs.schmorp.de/libev/",
+    "http://cvs.schmorp.de/libev/Changes",
+    "http://cvs.schmorp.de/libev/ev.pod",
+    "http://cvs.schmorp.de/libev/ev.h",
+    "http://cvs.schmorp.de/libev/ev.c?view=log",
+    "https://services.nvd.nist.gov/rest/json/cves/2.0?keywordSearch=libev&keywordExactMatch",
+    "https://hn.algolia.com/api/v1/search?query=libev&tags=story&hitsPerPage=20",
+    "https://hn.algolia.com/api/v1/search?query=libev%20libuv&hitsPerPage=15",
+    "https://hn.algolia.com/api/v1/items/6598527",
+    "https://www.gevent.org/loop_impls.html",
+    "https://github.com/bartman/event-loop-benchmark",
+    "https://github.com/kazuho/picoev",
+    "https://github.com/ithewei/libhv"
+  ],
+  "confidence": 0.82
+}
