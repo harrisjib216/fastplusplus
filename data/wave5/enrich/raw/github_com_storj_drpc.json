@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/storj/drpc",
+  "one_liner": "Storj's small Go replacement for grpc-go, using its own framed protocol instead of HTTP/2; not wire-compatible with gRPC.",
+  "what_it_does": "DRPC runs protobuf-defined services with unary, client-streaming, server-streaming and bidirectional calls over any io.ReadWriteCloser, such as TCP, TLS or a pipe. protoc-gen-go-drpc builds gRPC-shaped client and server stubs from your existing .proto files, so services register on drpcmux and clients wrap drpcconn.New(rawConn). DRPC clients and gRPC servers cannot talk to each other. drpcmigrate.ListenMux serves both on one port during a migration, and drpchttp lets Twirp and grpc-web clients call a DRPC server.",
+  "how_it_is_fast": "DRPC drops HTTP/2 (no HPACK, header parsing or flow-control windows). Each frame is a 1-byte header (control bit, 6-bit kind, done bit) plus protobuf varints for stream ID, message ID and length. There is no stream multiplexing: a size-1 semaphore allows one active RPC per connection, and the reader rejects stream IDs that do not increase, which keeps packet reassembly simple. The client marshals into one reused buffer per connection (MarshalAppend), so a unary call makes 7-9 allocations against 182-280 for grpc-go in the README table.",
+  "when_to_use": [
+    "Go-only services on protobuf and grpc-go where per-call CPU, allocations or GC pressure matter. Storj reported 81% of one storage node's heap in gRPC before switching.",
+    "Large messages of about 1 MiB, unary or streaming: the README shows about 3x grpc-go's throughput (for example 618 MB/s vs 1939 MB/s unary)",
+    "Custom or unusual transports, including reverse connections where the TCP client serves the RPCs, because DRPC only needs a byte stream",
+    "Builds sensitive to binary size or dependency count: go.mod has 3 requirements and the core is about 3,600 lines"
+  ],
+  "when_not_to_use": [
+    "Polyglot systems: only Go is complete. The C++, Rust and Node ports are marked Incomplete, and JS/web and Python support are open issues.",
+    "Many concurrent RPCs to one peer over a single connection: calls on one Conn are serialized, so you need drpcpool, a yamux-based third-party package or QUIC streams",
+    "Setups that need gRPC ecosystem features, such as built-in load balancing, name resolution, service config, or interop with gRPC proxies and non-Go gRPC clients",
+    "Network-bound workloads: the published speedup excludes the network, so end-to-end gains will be smaller"
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "github.com/zeebo/errs, google.golang.org/protobuf (github.com/zeebo/assert for tests)",
+    "min_toolchain": "Go 1.19 (go.mod); protoc plus protoc-gen-go-drpc for code generation",
+    "platforms": "any Go target (pure Go)",
+    "thread_safety": "Conn can be shared, but only one Invoke or stream is active at a time. Other callers block on a semaphore until it finishes or their context is canceled; nothing is multiplexed.",
+    "drop_in_for_baseline": "partial — generated Go client and server interfaces mirror grpc-go, so application code changes little. The wire protocol differs, so both ends must switch; drpcmigrate.ListenMux can serve gRPC and DRPC on one port during the move."
+  },
+  "gotchas": [
+    "Canceling a context while its RPC is still unfinished closes the whole connection by default. drpcmanager.Options.SoftCancel sends a cancel message instead. Issue #37, open since 2022, reports pooled connections failing with context.Canceled after an earlier cancel.",
+    "Messages larger than 4 MiB fail with a 'data overflow' protocol error. Raise drpcwire.ReaderOptions.MaximumBufferSize to allow larger ones.",
+    "The published benchmark enables drpcstream ManualFlush. With it on, you must type-assert the stream and call RawFlush yourself, so default-config numbers may differ.",
+    "drpcpool caps how many idle connections it caches, but it does not limit concurrency, so a burst of concurrent calls dials a burst of connections"
+  ],
+  "pick_this_over_siblings_when": "Pick DRPC over rpcx, Kitex or cmd-stream when you want to keep your .proto files and grpc-go-shaped generated Go code with a 3-dependency core, rather than adopt a different framework or codec. Note that those siblings report multi-client QPS, while DRPC's numbers come from one in-process connection, so they are not directly comparable. If you must stay wire-compatible with existing gRPC clients, look at wtx (Rust) instead.",
+  "verified_claims_summary": "Go testing benchmarks in internal/grpccompat compare DRPC with grpc-go v1.64.0 (README refreshed 2024-05-31). Both run over an in-memory io.Pipe with one connection and one sequential caller, with DRPC using ManualFlush. Messages are a few bytes, 2 KiB or 1 MiB. Time per op fell 46-73% (unary 68-72%), throughput rose 86-263%, and allocations fell 83-97%. No hardware or Go version is stated, and the README says the environment was not controlled and neither side was tuned.",
+  "status_note": "Maintained but slow-moving: v1.0.0 was tagged in 2025 and the last commit was 2026-08-18. The original author has left Storj, and Storj staff keep it going. It is MIT-licensed, pure Go and small enough to audit or vendor.",
+  "sources_read": [
+    "https://github.com/storj/drpc",
+    "https://raw.githubusercontent.com/storj/drpc/main/README.md",
+    "https://raw.githubusercontent.com/storj/drpc/main/go.mod",
+    "https://raw.githubusercontent.com/storj/drpc/main/doc.go",
+    "https://raw.githubusercontent.com/storj/drpc/main/drpcconn/conn.go",
+    "https://raw.githubusercontent.com/storj/drpc/main/drpcconn/README.md",
+    "https://raw.githubusercontent.com/storj/drpc/main/drpcmanager/manager.go",
+    "https://raw.githubusercontent.com/storj/drpc/main/drpcmanager/README.md",
+    "https://raw.githubusercontent.com/storj/drpc/main/drpcwire/packet.go",
+    "https://raw.githubusercontent.com/storj/drpc/main/drpcwire/doc.go",
+    "https://raw.githubusercontent.com/storj/drpc/main/drpcwire/reader.go",
+    "https://raw.githubusercontent.com/storj/drpc/main/drpcpool/README.md",
+    "https://raw.githubusercontent.com/storj/drpc/main/drpcstream/README.md",
+    "https://raw.githubusercontent.com/storj/drpc/main/drpcmigrate/README.md",
+    "https://raw.githubusercontent.com/storj/drpc/main/drpcserver/README.md",
+    "https://raw.githubusercontent.com/storj/drpc/main/drpcenc/README.md",
+    "https://raw.githubusercontent.com/storj/drpc/main/internal/grpccompat/benchmark_test.go",
+    "https://raw.githubusercontent.com/storj/drpc/main/internal/grpccompat/common_test.go",
+    "https://raw.githubusercontent.com/storj/drpc/main/internal/grpccompat/go.mod",
+    "https://raw.githubusercontent.com/storj/drpc/main/internal/grpccompat/README.md",
+    "https://github.com/storj/drpc/tree/main/internal/grpccompat",
+    "https://github.com/storj/drpc/wiki/Docs:-Wire-protocol",
+    "https://github.com/storj/drpc/tags",
+    "https://github.com/storj/drpc/commits.atom",
+    "https://github.com/storj/drpc/commit/94aa9aa61011ae6e7ed3d23a963ba67da97c1ccb.patch",
+    "https://github.com/storj/drpc/issues",
+    "https://github.com/storj/drpc/issues/14",
+    "https://github.com/storj/drpc/issues/37",
+    "https://github.com/storj/drpc/issues/39",
+    "https://github.com/storj/drpc/issues/56",
+    "https://www.storj.io/blog/introducing-drpc-our-replacement-for-grpc",
+    "https://storj.github.io/drpc/docs.html",
+    "https://hn.algolia.com/api/v1/search?query=drpc%20storj&tags=story",
+    "https://hn.algolia.com/api/v1/search?query=drpc&tags=comment&hitsPerPage=20"
+  ],
+  "confidence": 0.8
+}
