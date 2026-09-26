@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/mattrobenolt/ztls",
+  "one_liner": "Sans-I/O TLS 1.3 state machine in Zig; lower per-record latency than OpenSSL libssl (1.04-3.6x) and rustls on AES-GCM.",
+  "what_it_does": "ztls implements TLS 1.3 (client and server handshakes, record protection, KeyUpdate, PSK resumption, 0-RTT, client-certificate auth, hybrid ML-KEM groups, kTLS key export) as a state machine that does no I/O. You push wire bytes into a caller-owned RecordBuffer, hand each complete record to handleRecord or receiveApplicationData, and it writes outgoing records into caller-owned OutBuffers; a pending-write latch forces a completeWrite() call after every emitted record. It is not a libssl replacement: there is no SSL_read/SSL_write or BIO API, callers must be written in Zig (a partial, client-only C shim exists and the full C ABI is open issue #30), and optional modules add a blocking std.Io stream (ztls_std), a libxev adapter (ztls_xev) and a Linux kTLS data plane (ztls_ktls). AEAD, ECDHE, signatures and SHA-2 come from a linked libcrypto (OpenSSL, AWS-LC or BoringSSL).",
+  "how_it_is_fast": "Each direction's RecordLayer keeps an AEAD context that is keyed once when traffic keys are installed; per record it writes the 5-byte header, derives the nonce with one 12-byte vector XOR of IV and sequence number, encrypts or decrypts in place inside the caller's buffer, and returns a subslice (the inner content type is found by a last-byte fast path plus a SIMD scan over padding). That removes the BIO copies, per-record allocation and libssl's WPACKET / tls13_cipher / EVP_CIPHER_CTX_ctrl dispatch; with the OpenSSL backend a record costs one IV-only EVP_*Init_ex, two Update calls, Final and a tag ctrl on the same libcrypto primitive libssl uses (encryptPrepared also skips the one plaintext memcpy). On the x86_64 AES-128-GCM 1350B ping-pong row, perf counters show ztls at 42.7% of libssl's cycles/op and 54.8% of rustls's, with rustls's extra time in ChunkVecBuffer::write_to, memmove and malloc. The gain is record-layer overhead removal, not faster crypto.",
+  "when_to_use": [
+    "Zig servers, proxies or clients that already own their event loop (epoll, io_uring, kqueue via libxev, or blocking std.Io) and want TLS 1.3 without adopting a library's I/O model.",
+    "Small to MTU-sized AES-GCM records (16B-1350B) where per-record overhead dominates: on x86_64 AES-128-GCM, 202 ns vs libssl's 731 ns at 16B client-to-server, and 1.83x faster than rustls on 1350B ping-pong.",
+    "Many long-lived connections where per-connection memory matters: the post-handshake EstablishedSession measured 736 B (OpenSSL lane) to about 1.9 KB (AWS-LC/BoringSSL), with no ztls-owned heap state (a Zig 0.15.2 measurement the docs call historical).",
+    "Linux services that want a userspace TLS 1.3 handshake followed by a kernel kTLS data plane, using the ztls_ktls module rather than hand-coding the key handoff.",
+    "Designs that must keep the allocator out of TLS parsing, framing and transcript code, provided the libcrypto backend's own setup-time allocations are acceptable."
+  ],
+  "when_not_to_use": [
+    "Anything carrying real traffic or secrets today: pre-alpha with no release tag, an API that changes without notice, and no external audit. SECURITY.md says not to use it in front of real traffic, and an internal review found and fixed a PSK server-auth bypass and an integer-overflow DoS.",
+    "You need TLS 1.2 fallback, DTLS, Windows, or a C/C++/Rust/Go caller. These are out of scope, and the C surface covers only the client lifecycle.",
+    "Handshake-bound workloads: there is no handshake speed claim. On the full-handshake row, which the project itself marks non-equivalent, ztls took 391.7 µs against libssl's 354.9 µs (libssl also verified CertificateVerify) and rustls's 147.5 µs (rustls skipped signature verification).",
+    "Tiny ChaCha20-Poly1305 records on x86_64: 50-56% slower than rustls at 16B and 128B, and about 6% slower at 1350B, because OpenSSL's EVP ChaCha20-Poly1305 path costs more than ring's for small inputs.",
+    "Server keys that need Ed25519 or P-521 CertificateVerify signing, rsa_pss_pss schemes, or encrypted PEM private keys. These fail at load or are not implemented."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "A libcrypto located via pkg-config: OpenSSL 3.x (all benchmarks used 3.6.3), AWS-LC (5.5.0 used in consumer gates) or BoringSSL; libxev only if ztls_xev is enabled. No minimum libcrypto version is documented.",
+    "min_toolchain": "Zig 0.16.0 (minimum_zig_version in build.zig.zon). The published benchmarks were built with Zig 0.15.2, which is no longer supported.",
+    "platforms": "Linux and macOS; x86_64 and aarch64 were benchmarked (Xeon 8488C, Graviton3, Apple M1 Max). ztls_ktls is Linux-only and Windows is out of scope. Build for the native CPU (the default) for published performance.",
+    "thread_safety": "Core engines are plain mutable per-connection values with no documented internal locking. The ztls_std wrapper supports exactly one reader task and one writer task per connection (TX serialized by a mutex); multiple readers or writers are unsupported, and ztls_ktls assumes a single-threaded blocking caller.",
+    "drop_in_for_baseline": "false — a different API shape (records in, records out over caller-owned buffers, with an explicit completeWrite latch), Zig-only, and no libssl API or ABI compatibility"
+  },
+  "gotchas": [
+    "Every record-producing call sets a pending-write latch. Call completeWrite() only after the bytes are actually on the transport, or the next engine call returns error.PendingWrite. For partial or non-blocking writes, use the Outbox helper, which keeps the OutBuffer borrowed until the record drains.",
+    "Decryption happens in place. Application data is a slice into RecordBuffer storage and stays valid only until the next next()/writable() call, so copy it first. After error.AuthenticationFailed the buffer may hold unauthenticated plaintext on the OpenSSL backend; treat it as poisoned.",
+    "'Zero allocation' covers only ztls's own code. The OpenSSL lane heap-allocates two EVP_CIPHER_CTX per record layer at key installation, key exchange and signing allocate inside libcrypto, and AWS-LC keeps per-thread RNG and error-queue state. Budget caller memory too: RecordBuffer's recommended storage is about 33 KiB and a ServerHandshake is about 19-21 KB.",
+    "Performance depends on the build target. The benchmark doc warns that generic or baseline CPU targets can select slower std.crypto paths; issue #138 measured +43.6% handshake cycles on a baseline build before SHA-2 moved to the backend. Ed25519 chain verification still runs on std.crypto."
+  ],
+  "pick_this_over_siblings_when": "Pick ztls when you write Zig, own your I/O loop, and your cost is per-record overhead on small AES-GCM records. The AWS-LC and wolfSSL entries measure full-handshake throughput under HAProxy, where ztls has no winning evidence, and ztls can itself link AWS-LC as its crypto backend. For C/C++ callers or production use, Fizz or picotls are the mature choices; picotls's fusion engine speeds up the AES-GCM primitive itself rather than the layers around it.",
+  "verified_claims_summary": "The comparison covers in-memory TLS 1.3 application-data rows with no sockets: ztls over caller buffers, libssl over memory-BIO pairs and rustls over Vec transfer buffers. ztls was built with Zig 0.15.2 ReleaseFast for the native CPU and linked the same OpenSSL 3.6.3 libcrypto as the libssl baseline; rustls 0.23.40/41 used its ring provider, not its default aws-lc-rs. In n=10 benchstat captures ztls beat libssl on all 45 rows on each host (c7i.2xlarge Xeon 8488C, c7g.2xlarge that lscpu identifies as Graviton3 although the docs say Graviton4, and an M1 Max), by +4% to +261%; the headline AES-128-GCM 1350B ping-pong measured 790.7 ns vs libssl 1820.5 ns and rustls 1447.5 ns.",
+  "status_note": "Actively developed by a single author (last commit 2026-09-26, 7 stars, no release tag; depend on main or a commit hash). Apache-2.0, Zig 0.16-only, and pre-alpha by its own statement; known downstream use is limited to the author's z53 DNS forwarder and a private PlanetScale consumer called handoff.",
+  "sources_read": [
+    "https://github.com/mattrobenolt/ztls",
+    "https://github.com/mattrobenolt/ztls/blob/main/README.md",
+    "https://github.com/mattrobenolt/ztls/blob/main/docs/research/PERFORMANCE.md",
+    "https://github.com/mattrobenolt/ztls/blob/main/docs/USAGE.md",
+    "https://github.com/mattrobenolt/ztls/blob/main/PRODUCTION_READINESS.md",
+    "https://github.com/mattrobenolt/ztls/blob/main/SECURITY.md",
+    "https://github.com/mattrobenolt/ztls/blob/main/CHANGELOG.md",
+    "https://github.com/mattrobenolt/ztls/blob/main/build.zig.zon",
+    "https://github.com/mattrobenolt/ztls/blob/main/src/RecordLayer.zig",
+    "https://github.com/mattrobenolt/ztls/blob/main/src/aead.zig",
+    "https://github.com/mattrobenolt/ztls/blob/main/src/capi.zig",
+    "https://github.com/mattrobenolt/ztls/blob/main/src/memx.zig",
+    "https://github.com/mattrobenolt/ztls/blob/main/src/crypto/backend_openssl.zig",
+    "https://github.com/mattrobenolt/ztls/blob/main/src/crypto/c_openssl.zig",
+    "https://github.com/mattrobenolt/ztls/blob/main/docs/research/PROVIDER_INTERFACE.md",
+    "https://github.com/mattrobenolt/ztls/blob/main/bench/rustls/Cargo.toml",
+    "https://github.com/mattrobenolt/ztls/blob/main/bench/rustls/src/main.rs",
+    "https://github.com/mattrobenolt/ztls/blob/main/docs/research/perf/20260705-215953-ec2-c7i-2xlarge-row-perf/explanations/AppPingPong-TLS_AES_128_GCM_SHA256-1350.md",
+    "https://github.com/mattrobenolt/ztls/blob/main/docs/research/perf/20260705-215953-ec2-c7i-2xlarge-row-perf/explanations/AppClientToServer-TLS_CHACHA20_POLY1305_SHA256-16.md",
+    "https://github.com/mattrobenolt/ztls/blob/main/docs/research/perf/20260706-000535-ec2-c7i-2xlarge-handshake-row-perf/explanations/Handshake-TLS_AES_128_GCM_SHA256-1.md",
+    "https://github.com/mattrobenolt/ztls/blob/main/docs/research/perf/20260712-102422-ec2-c7i-2xlarge/benchstat.txt",
+    "https://github.com/mattrobenolt/ztls/blob/main/docs/research/perf/20260712-201912-ec2-c7g-2xlarge/metadata.txt",
+    "https://github.com/mattrobenolt/ztls/blob/main/docs/research/CONSUMER_GATE/20260920-launchpad-8814f1e/README.md",
+    "https://github.com/mattrobenolt/ztls/issues",
+    "https://github.com/mattrobenolt/ztls/issues/138",
+    "https://github.com/mattrobenolt/ztls/issues/106",
+    "https://github.com/mattrobenolt/z53",
+    "https://github.com/rustls/rustls/blob/v/0.23.40/rustls/Cargo.toml",
+    "https://hn.algolia.com/api/v1/search?query=ztls&tags=story",
+    "https://hn.algolia.com/api/v1/search?query=mattrobenolt%2Fztls"
+  ],
+  "confidence": 0.75
+}
