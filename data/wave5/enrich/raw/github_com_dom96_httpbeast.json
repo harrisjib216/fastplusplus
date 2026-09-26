@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/dom96/httpbeast",
+  "one_liner": "Minimal multi-threaded epoll/kqueue HTTP/1.1 server core for Nim; about 7% above actix-web at 256-512 connections on hello-world.",
+  "what_it_does": "A pure-Nim HTTP/1.1 server library. You pass a single `onRequest(req: Request): Future[void]` callback to `run()`, read `req.httpMethod`, `req.path`, `req.headers` and `req.body` (each an Option parsed on demand), and answer once with `req.send(code, body, headers)`. There is no routing, TLS, middleware, HTTP/2 or WebSocket layer; the README says to use Jester (built on httpbeast) unless you are writing your own framework or something resource-constrained. It is not a drop-in for actix-web: different language and a far lower-level, single-callback API.",
+  "how_it_is_fast": "Thread-per-core, shared-nothing: with --threads:on every thread opens its own listening socket with SO_REUSEPORT and runs its own Nim `selectors` loop (epoll on Linux, kqueue on macOS), so the kernel spreads accepts and no connection crosses threads. Reads are non-blocking until EAGAIN; end of headers is detected by checking only the last four bytes for CRLFCRLF, with a full scan only for body-carrying methods, and method/path/headers are parsed lazily from the raw buffer when the handler asks. Responses are copied straight into a per-connection send queue by a macro-unrolled append, the Date header is cached and refreshed by a one-second timer, TCP_NODELAY is set, and a handler may return a nil Future to skip asyncdispatch entirely. HTTP pipelining is supported for bodiless requests.",
+  "when_to_use": [
+    "You are writing a Nim web framework or a resource-constrained Nim service and want the raw HTTP/1.1 core that Jester and the Nim Forum run on.",
+    "Small plaintext/JSON endpoints on Linux (or macOS) behind nginx or another reverse proxy that terminates TLS and sanitizes requests.",
+    "Many keep-alive connections at moderate-to-high concurrency (256-512) where aggregate req/s matters more than tail latency.",
+    "Mostly synchronous handlers that can return a nil Future, or async handlers whose awaits are fd-based (sockets, addTimer).",
+    "Clients that pipeline GET requests."
+  ],
+  "when_not_to_use": [
+    "Directly on the open internet: the README says it is not hardened and should sit behind a reverse proxy; a 2023 request-smuggling report (#95) was closed with that same advice, a body longer than its Content-Length trips an assertion (#21, open; with assertions off the connection waits forever), and a GET with a body is never answered (#18, open) because only POST/PUT/PATCH/CONNECT get a body scan.",
+    "Tail-latency-sensitive services: in the same 2026-09-24 run httpbeast's p99 was 8.1/10.9/11.3 ms at 64/256/512 connections vs actix-web's 0.40/1.58/3.22 ms, even though its median was lower.",
+    "You need TLS (#11, open since 2018), HTTP/2, streamed or chunked request bodies (#74, open), built-in WebSockets, or Windows (unsupported by design).",
+    "Nim 2 default ORC memory management with threads: random segfaults are reported (#80 open; #90 SIGSEGV on Nim 2.0 with Jester), and the benchmark itself builds with --mm:refc.",
+    "Large request bodies: reads go through a 256-byte stack buffer copied byte by byte into the connection string, and a user reported Vert.x faster with bodies over about 500 bytes (#86, open)."
+  ],
+  "integration": {
+    "form": "module (Nimble package; about 720 lines of pure Nim source compiled into your program)",
+    "dependencies": "none beyond the Nim stdlib (selectors, asyncdispatch, net, posix); asynctools only for its tests",
+    "min_toolchain": "httpbeast.nimble says nim >= 0.18.0; CI tests Nim 1.4.8 and a Nim devel commit; code has a Nim 2 branch; benchmarked on Nim 2.2 with --mm:refc",
+    "platforms": "Linux (epoll) and macOS (kqueue), CI on ubuntu-latest and macOS-latest; no Windows by design; multi-threading needs SO_REUSEPORT (where it is missing, as on WSL, it prints that it will not use all threads)",
+    "thread_safety": "One selector and event loop per thread; a Request belongs to the thread and connection that produced it. `send` may be called only once per request and raises HttpBeastDefect on a stale request. The request-ID counter is a plain global incremented without atomics.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "`nimble install httpbeast` resolves to tag v0.4.1: the v0.4.2 bump (Nov 2022) and the Dec 2023 startup-callback change (PR #89, cited in #80/#90 as the ORC crash fix) are untagged, so you need `httpbeast#head` (#91 open).",
+    "The server never closes a connection after responding: it ignores `Connection: close` and HTTP/1.0 semantics, so ApacheBench (`ab`) hangs (#16, open).",
+    "Timers created with `sleepAsync` do not wake the event loop (it waits on its own selector with no timeout), so `await sleepAsync(10)` capped a benchmark at ~100 req/s; fd-based `addTimer` fixed it (#84).",
+    "The `headers` argument of `send` is spliced in raw; a trailing or embedded blank CRLF shifts the body so Content-Length no longer matches (#56, open)."
+  ],
+  "pick_this_over_siblings_when": "Pick httpbeast only when the service is written in Nim or you are building a Nim framework. In the same run may_minihttp (194k req/s at 512) and fulmine.js (204k) were faster and http.zig (171k) was comparable, so in Rust, JavaScript or Zig use those instead.",
+  "verified_claims_summary": "In the-benchmarker/web-frameworks develop-branch run of 2026-09-24 (commit f673364), httpbeast 0.4 built with Nim 2.2, --mm:refc, -d:release and LTO served 179k and 176k req/s at 256 and 512 keep-alive connections vs actix-web 4.8 (Rust 1.98, LTO) at 168k and 163k (1.07x), but was 7% slower at 64 connections (167k vs 179k). Each server was pinned to 4 cores of an undisclosed 16-thread x86_64 Linux host, and each figure is the average of three hello-world routes; the same data show httpbeast's p99 3.5-20x worse than actix's.",
+  "status_note": "Stale since 2023-12-10 with the last tag at v0.4.1, but MIT-licensed, dependency-free and small enough (about 720 lines) to vendor; it is still Jester's non-Windows backend.",
+  "sources_read": [
+    "https://github.com/dom96/httpbeast",
+    "https://github.com/dom96/httpbeast/blob/master/readme.md",
+    "https://github.com/dom96/httpbeast/blob/master/httpbeast.nimble",
+    "https://github.com/dom96/httpbeast/blob/master/src/httpbeast.nim",
+    "https://github.com/dom96/httpbeast/blob/master/src/httpbeast/parser.nim",
+    "https://github.com/dom96/httpbeast/blob/master/.github/workflows/main.yml",
+    "https://github.com/dom96/httpbeast/blob/master/tests/tester.nim",
+    "https://github.com/dom96/httpbeast/blob/master/tests/helloworld.nim",
+    "https://github.com/dom96/httpbeast/commits/master.atom",
+    "https://github.com/dom96/httpbeast/tags",
+    "https://github.com/dom96/httpbeast/issues",
+    "https://github.com/dom96/httpbeast/issues/11",
+    "https://github.com/dom96/httpbeast/issues/16",
+    "https://github.com/dom96/httpbeast/issues/18",
+    "https://github.com/dom96/httpbeast/issues/20",
+    "https://github.com/dom96/httpbeast/issues/21",
+    "https://github.com/dom96/httpbeast/issues/56",
+    "https://github.com/dom96/httpbeast/issues/78",
+    "https://github.com/dom96/httpbeast/issues/80",
+    "https://github.com/dom96/httpbeast/issues/84",
+    "https://github.com/dom96/httpbeast/issues/86",
+    "https://github.com/dom96/httpbeast/issues/90",
+    "https://github.com/dom96/httpbeast/issues/95",
+    "https://github.com/the-benchmarker/web-frameworks/blob/f673364fb30748e5bb8e57319ec2772bc872f78a/data.json",
+    "https://github.com/the-benchmarker/web-frameworks/blob/f673364fb30748e5bb8e57319ec2772bc872f78a/nim/httpbeast/server.nim",
+    "https://github.com/the-benchmarker/web-frameworks/blob/f673364fb30748e5bb8e57319ec2772bc872f78a/nim/httpbeast/config.yaml",
+    "https://github.com/the-benchmarker/web-frameworks/blob/f673364fb30748e5bb8e57319ec2772bc872f78a/nim/httpbeast/server.nimble",
+    "https://github.com/the-benchmarker/web-frameworks/blob/f673364fb30748e5bb8e57319ec2772bc872f78a/nim/Dockerfile",
+    "https://github.com/the-benchmarker/web-frameworks/blob/f673364fb30748e5bb8e57319ec2772bc872f78a/nim/config.yaml",
+    "https://github.com/dom96/jester/blob/master/jester.nimble",
+    "https://hn.algolia.com/api/v1/search?query=httpbeast",
+    "https://news.ycombinator.com/item?id=47501229",
+    "https://news.ycombinator.com/item?id=36958393"
+  ],
+  "confidence": 0.8
+}
