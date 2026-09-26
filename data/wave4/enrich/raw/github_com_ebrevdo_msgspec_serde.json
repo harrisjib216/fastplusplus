@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/ebrevdo/msgspec-serde",
+  "one_liner": "Rust-backed Python FlatBuffers codegen producing msgspec Structs; ~19-22x faster encode, ~11-12x faster decode than official Python FlatBuffers.",
+  "what_it_does": "Generates Python modules from FlatBuffers .fbs schemas with its own `msgspec_flatc generate` CLI (which needs flatc). Each table or struct becomes a mutable msgspec.Struct model plus a read-only lazy View class. You call `flatbuffer.encode(model)` and `flatbuffer.decode(buf, type=Model or ModelView)` instead of the flatc Python Builder/GetRootAs/Pack API. The output is standard FlatBuffers wire format: its benchmark decodes buffers across both implementations in both directions. It also ships JSON (sonic-rs) and MessagePack (rmp) codecs for any msgspec.Struct that holds NumPy arrays.",
+  "how_it_is_fast": "Each generated module embeds a schema 'plan', serialized as MessagePack, that a pyo3 Rust extension compiles once into a NativePlan. Encoding walks the Struct with the Rust `flatbuffers` 25.12.19 FlatBufferBuilder. It copies NumPy numeric vectors in bulk through the buffer protocol and sizes the output buffer up front from a stratified-sample estimate, so it skips the official Object API's per-field Python calls. Decoding to a model is a Rust walker with checked offset arithmetic that builds msgspec Structs and owning NumPy arrays directly. Lazy views are pure Python (struct.unpack_from with per-field caching, plus zero-copy read-only NumPy arrays for numeric vectors), which is why selected-field reads gain only ~1.2x.",
+  "when_to_use": [
+    "A Python 3.12+ codebase that already uses msgspec Structs and must exchange FlatBuffers with C++/Rust/Go producers or consumers.",
+    "The official Python Object API (Pack / InitFromPackedBuf) is your bottleneck for encoding or fully materializing FlatBuffers. The measured gains were ~19-22x on encode and ~11-12x on decode, from 100 to 1.1M logical elements.",
+    "Payloads dominated by large numeric vectors: views expose them as zero-copy NumPy arrays, and with 256-value vectors its FlatBuffers codec beat its own JSON and MessagePack codecs in both directions.",
+    "msgspec Structs with NumPy array fields sent over JSON or MessagePack. Its native codecs were ~1.2-4.5x faster than msgspec with enc/dec array hooks in the repo's 1,000-object benchmark.",
+    "Free-threaded CPython 3.14t: the extension declares gil_used=false, and CI asserts that the GIL stays disabled after import."
+  ],
+  "when_not_to_use": [
+    "Reading only a few fields from each buffer: views are pure Python and only ~1.2-1.3x faster than the official API.",
+    "JSON or MessagePack with small vectors or plain Python lists. With 16-value vectors its codecs took 1.3-2.3x as long as plain msgspec on Python lists (also behind orjson and ormsgpack), and it won only at 256-value vectors.",
+    "Schemas the generator rejects: unions with string or struct alternatives, duplicate-target union aliases, 64-bit offsets, or identical short names from different namespaces in one-file generation.",
+    "Python < 3.12, or platforms without prebuilt wheels. Wheels cover Linux and macOS on x86-64/aarch64 and Windows x86-64, with no Windows 3.14t wheel; building from the sdist needs a Rust toolchain.",
+    "Anything needing API stability: v0.1.x with 1 star, created 2026-08-25, and the docs call generated-code backward compatibility 'a goal rather than a guarantee'."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "flatbuffers>=24.3.25, msgspec>=0.19, numpy>=2; flatc only for generating modules from .fbs; building from source also needs Rust plus maturin>=1.10",
+    "min_toolchain": "Python 3.12+ (abi3-py312 wheels plus cp314t free-threaded wheels); Rust edition 2024 for source builds (no rustc version pinned)",
+    "platforms": "Prebuilt wheels: Linux x86-64 and aarch64 (manylinux 2_17), macOS x86-64 (10.12+) and arm64 (11.0+), Windows x86-64; free-threaded 3.14t wheels on every platform except Windows",
+    "thread_safety": "Views allow concurrent reads while the backing buffer is unchanged (two threads can both build the same cached field value). The extension is declared gil_used=false and CI checks that free-threaded builds keep the GIL off. Whether shared Encoder/Decoder instances are thread-safe is not documented.",
+    "drop_in_for_baseline": "partial — the wire format is standard FlatBuffers (the benchmark decodes buffers across both implementations in both directions), but you must regenerate code with msgspec_flatc and rewrite call sites from Builder/GetRootAs/Pack to encode()/decode() with Struct models and View classes"
+  },
+  "gotchas": [
+    "flatbuffer.encode() returns a read-only memoryview, not bytes; call bytes() when another API needs bytes.",
+    "Views borrow the input buffer, so mutating a backing bytearray or mmap while a view is live is unsupported. View numeric vectors are read-only little-endian arrays; to_model() copies them into writable native-dtype arrays.",
+    "Lazy views do not run __post_init__ validation. Only decoding into a model or subclass type, or calling to_model(), does.",
+    "In the JSON/MessagePack codecs, fields with unsupported annotations (dict, bytes, custom types) fall back to msgspec one field at a time. array_like=True, forbid_unknown_fields=True or a non-string tag sends the whole document through msgspec, and enc_hook/dec_hook run only for fallback fields. Generated modules raise GeneratedCodeVersionError when the runtime's major version differs."
+  ],
+  "pick_this_over_siblings_when": "Pick it over msgspec when you need FlatBuffers schemas and interop or large NumPy vectors inside msgspec Structs; plain msgspec stays faster for list-based JSON/MessagePack with small vectors. Karmem (Go, its own format) and flatcc (C) beat FlatBuffers outside Python; this is the only catalogued entry that speeds up standard-format FlatBuffers from Python.",
+  "verified_claims_summary": "First-party pyperf run (6 processes x 5 values, one isolated core of an Intel Core i7-8650U, Linux, CPython 3.13.5) on a Monster-style schema at 100, 5,408 and 1,118,720 logical elements, against the flatc 23.5.2-generated Python Object API on flatbuffers 25.12.19 fed NumPy arrays. The chart shows encode 18.7x/21.8x/20.7x and decode-to-model 10.6x/11.8x/11.6x faster, selected-field view reads 1.2-1.3x and full view traversal 1.4-2.8x faster (the prose rounds these to 20-22x, 11-13x, 1.2x and 1.5-2.9x). The speed comes from a release-mode Rust extension with no stated rustc version, and the baseline is pure-Python FlatBuffers, not the C++ library.",
+  "status_note": "Active but brand new: created 2026-08-25, v0.1.1 on PyPI 2026-08-30, last main commit 2026-09-10, 1 star, no issues and only Dependabot PRs. It is Apache-2.0 and pip-installable from prebuilt wheels, but expect generated-code churn.",
+  "sources_read": [
+    "https://github.com/ebrevdo/msgspec-serde",
+    "https://github.com/ebrevdo/msgspec-serde/blob/main/README.md",
+    "https://github.com/ebrevdo/msgspec-serde/blob/main/benchmarks.md",
+    "https://github.com/ebrevdo/msgspec-serde/blob/main/TUTORIAL.md",
+    "https://github.com/ebrevdo/msgspec-serde/blob/main/AGENTS.md",
+    "https://github.com/ebrevdo/msgspec-serde/blob/main/pyproject.toml",
+    "https://github.com/ebrevdo/msgspec-serde/blob/main/rust/Cargo.toml",
+    "https://github.com/ebrevdo/msgspec-serde/blob/main/rust/src/lib.rs",
+    "https://github.com/ebrevdo/msgspec-serde/blob/main/rust/src/plan.rs",
+    "https://github.com/ebrevdo/msgspec-serde/blob/main/rust/src/plan/decoding.rs",
+    "https://github.com/ebrevdo/msgspec-serde/blob/main/rust/src/plan/encoding.rs",
+    "https://github.com/ebrevdo/msgspec-serde/blob/main/src/msgspec_serde/_runtime.py",
+    "https://github.com/ebrevdo/msgspec-serde/blob/main/src/msgspec_serde/_flatbuffer.py",
+    "https://github.com/ebrevdo/msgspec-serde/blob/main/src/msgspec_serde/flatbuffer.py",
+    "https://github.com/ebrevdo/msgspec-serde/blob/main/benchmarks/_suite.py",
+    "https://github.com/ebrevdo/msgspec-serde/blob/main/benchmarks/benchmark.py",
+    "https://github.com/ebrevdo/msgspec-serde/blob/main/benchmarks/images/python-flatbuffers-comparison.png",
+    "https://github.com/ebrevdo/msgspec-serde/blob/main/benchmarks/images/idl-codec-comparison.png",
+    "https://github.com/ebrevdo/msgspec-serde/blob/main/benchmarks/images/msgspec-extended.png",
+    "https://github.com/ebrevdo/msgspec-serde/blob/main/.github/workflows/ci.yml",
+    "https://github.com/ebrevdo/msgspec-serde/blob/main/.github/workflows/release.yml",
+    "https://github.com/ebrevdo/msgspec-serde/issues",
+    "https://github.com/ebrevdo/msgspec-serde/pulls",
+    "https://github.com/ebrevdo/msgspec-serde/releases",
+    "https://github.com/ebrevdo/msgspec-serde/commits/main",
+    "https://pypi.org/pypi/msgspec-serde/json"
+  ],
+  "confidence": 0.8
+}
