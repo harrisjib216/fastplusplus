@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/cgcl-codes/e2cf",
+  "one_liner": "Growable cuckoo filter that extends buckets into adjacent memory; paper: up to 82% less query time than Dynamic Cuckoo Filter.",
+  "what_it_does": "E2CF is a research prototype of a dynamic (growable, deletable) approximate-membership filter for sets whose size is not known in advance. That is the case the same lab's Dynamic Cuckoo Filter (DCF) handles by chaining whole cuckoo filters, so every DCF query must probe each one. E2CF starts as one cuckoo filter and, as it fills, splits individual sub-filters in two so that each logical bucket keeps all its entries in adjacent memory. The code is a modified copy of the lab's DCF class (the header guard is still DYNAMICCUCKOOFILTER_H_): construct EECuckooFilter(item_count, fpr), then call insertItemNR (insert unless already present), queryItem and deleteItem on NUL-terminated strings. The declared insertItem(const char*) and compact() are never defined.",
+  "how_it_is_fast": "The core technique is entry-level extension. When a partial cuckoo filter (PCF) k at level l splits, its odd-indexed buckets move to a new PCF numbered k+2^l, and the freed entries merge into the neighbouring even bucket, so a logical bucket at level l is 2^l physically adjacent 4-slot buckets. A query hashes once, picks the PCF by index mod 2^l, and scans each of its two candidate runs sequentially with a 64-bit SWAR match (hasvalue12, from the Stanford bit-twiddling hacks). DCF instead makes two small random bucket reads per sub-filter. Asynchronous extension (each PCF splits on its own once its load passes a threshold or a kick chain fails) keeps memory close to DCF's. Fine-grained splitting moves buckets lazily during inserts, tracked by a per-bucket flag (a 4-bit level field in the code), so there is no stop-the-world rehash. By the paper's own cost model (Eq. 4-5), query memory traffic still grows linearly with the number of PCFs s (s/8 to s/2 cache lines, vs 2s for DCF), so the gain is a smaller constant, not O(1) lookups.",
+  "when_to_use": [
+    "Research or teaching: you want a compact reference for entry-level extension to set against DCF and the Dynamic Bloom Filter (DBF), and you will write your own benchmark harness. The lab's CGCL-codes/DCF repo carries both the DCF and DBF code that the paper compared against.",
+    "A deletable filter must grow several-fold from an unknown starting size, and lookup latency, not space, is the bottleneck. The paper's gains grow with the number of sub-filters (measured up to 32). With a single filter, E2CF is a plain cuckoo filter.",
+    "Lookup streams dominated by absent keys (the paper uses MAWI/WIDE network-traffic traces), where DCF must probe every sub-filter before it can answer 'no'. At s=32 the paper shows E2CF ahead of DCF and DBF at every negative-query mix from 0% to 100%.",
+    "Single-threaded x86-64 Linux code that can vendor about 1,200 lines of C++, fix it, and replace the per-operation OpenSSL SHA-1 with a fast non-cryptographic hash."
+  ],
+  "when_not_to_use": [
+    "Any production use as-is. Reading the code shows correctness bugs: CuckooFilter::queryImpl has no return statement on the 12-bit miss path (undefined behaviour, which is risky once you add -O2). insertItem returns true even when an insert or victim relocation failed. The destructor deletes PtoCF[128], one element past the 128-slot array.",
+    "Large or unbounded growth. Load-triggered splits happen only while countCF<16 and numCF+2^l<=16, kick-failure splits stop past slot 37, and the level is a 4-bit field in fixed 128-slot arrays. Beyond those limits, items are dropped while the call still reports success. Shrinking is not implemented: the paper describes merging sparse PCFs, but compact() has no definition.",
+    "When you need a specific false-positive rate. The fingerprint is 12 bits whatever FPR you pass, because every branch of the constructor's size switch sets 12 (the paper's experiments used 16). Each level also doubles the entries scanned, so by the paper's Eq. 7 the rate is about 2^(l+1)*4/2^12: roughly 0.2% with one PCF and about 3% with 16. The repo's default config asks for 0.05%.",
+    "Static or known-size sets. E2CF is only faster than other growable filters. A fixed cuckoo, Morton, Vacuum, Xor or BuRR filter sized for the peak is smaller or faster and better engineered.",
+    "Multithreaded access, big-endian or strict-alignment targets, binary keys containing NUL bytes (keys are hashed up to strlen), or builds against OpenSSL 1.1.0 or newer."
+  ],
+  "integration": {
+    "form": "source-drop (the makefile builds only the ./test driver; there is no library target, install step or package)",
+    "dependencies": "OpenSSL libcrypto (EVP SHA-1 in hashfunction.cpp, linked with -lssl -lcrypto), and it needs the pre-1.1.0 API: a stack-allocated EVP_MD_CTX and EVP_MD_CTX_cleanup",
+    "min_toolchain": "C++11 (makefile: /usr/bin/g++ -std=c++0x -Wall, with no -O flag) plus OpenSSL 1.0.x headers. The authors built on RHEL 6.2; the compiler version is not stated.",
+    "platforms": "Little-endian only (the code carries 'Little-Endian' comments and packs 12-bit fingerprints with unaligned 16/32/64-bit type-punned loads and stores). Only tested on x86-64 Linux. It uses no SIMD, only 64-bit SWAR.",
+    "thread_safety": "Not documented. Not thread-safe: level counters, split flags, the PCF pointer table and the heavy-load queue are unguarded mutable members, and kicks use global rand(). Queries read split state that inserts change, so even concurrent reads alongside a writer need an external lock.",
+    "drop_in_for_baseline": "partial — the constructor(capacity, fpr) and queryItem/deleteItem(const char*) match the lab's DynamicCuckooFilter class, but insertion goes through insertItemNR (insertItem(const char*) is declared and not defined), compact() is missing, and the fixed 12-bit fingerprint changes the false-positive behaviour"
+  },
+  "gotchas": [
+    "It does not build against current OpenSSL as written. hashfunction.cpp declares EVP_MD_CTX on the stack and calls EVP_MD_CTX_cleanup, and OpenSSL 1.1.0 (Aug 2016) made EVP_MD_CTX opaque and removed that call (use EVP_MD_CTX_new/free/reset). Every operation also computes a full SHA-1 and allocates a std::string before any filter work.",
+    "Buckets are 7 bytes (four 12-bit fingerprints plus a 4-bit level) but are read and written as unaligned 8-byte words. The last bucket's load runs one byte past the allocation. The split helper addBNewCF does *(uint64_t*)p &= 0xf0000000000000, which zeroes byte 7: the next bucket's level nibble and the low 4 bits of its first fingerprint.",
+    "test.cpp is not a benchmark. It records insert time only every 20,000,000 inserts and never increments its false-positive counter, most Metric fields are uninitialised, and the shipped config is 100 items. That is why result/result.txt holds garbage. The repo has no DCF or DBF code to compare against.",
+    "Headers leak: cuckoofilter.h does 'using namespace std;' and #defines MaxNumKicks 40, and EECuckooFilter.h relies on both (unqualified queue<int>). Split paths print to stdout with cout inside insert, and each CuckooFilter destructor frees the Bucket array but leaks the fingerprint storage."
+  ],
+  "pick_this_over_siblings_when": "Pick it only when the object of study is growable filters. It is the query-optimised successor to the sibling Dynamic Cuckoo Filter (DCF, same lab), and you would read the two side by side. For anything that ships, size a static filter for the peak and rebuild on growth: the efficient/cuckoofilter reference, Morton Filter (1.3-2.5x faster lookups than it) or Vacuum Filter if you need deletes, and Xor or BuRR for immutable sets.",
+  "verified_claims_summary": "The open-access HAL manuscript of the NPC 2020 paper (hal-03768761) names the baselines: DBF and the lab's own DCF, with m=2^22 buckets, b=4, α=0.9 and 16-bit fingerprints for E2CF and DCF, run on an Intel Xeon E5-2670 at 2.60GHz with 64 GB RAM over MAWI/WIDE traces and synthetic data, averaging five runs. It reports negative-query time up to 82% lower than DCF (85% vs DBF) with up to 32 sub-filters, instantaneous non-repeatable insert time up to 28% (45%) lower, cumulative insert time up to 22% (41%) lower, delete time up to 79% (84%) lower, and memory comparable to DCF. All results are plots with no tables, the compiler and flags are not stated, and the public repo (-O0 build, 12-bit fingerprints, no baseline) cannot reproduce them.",
+  "status_note": "Abandoned: one code upload plus README edits on 2020-08-28/29, 3 stars, no issues or releases, one fork identical to upstream and the other no longer reachable. It is Apache-2.0 and about 1,200 lines of library code, so it can be vendored as a design reference, but it needs an OpenSSL 1.0.x toolchain or a hash patch plus the bug fixes above before it is usable.",
+  "sources_read": [
+    "https://github.com/CGCL-codes/E2CF",
+    "https://github.com/CGCL-codes/E2CF#e2cf-the-entry-extensible-cuckoo-filter",
+    "https://github.com/CGCL-codes/E2CF/blob/master/README.md",
+    "https://github.com/CGCL-codes/E2CF/blob/master/makefile",
+    "https://github.com/CGCL-codes/E2CF/blob/master/src/EECuckooFilter.h",
+    "https://github.com/CGCL-codes/E2CF/blob/master/src/EECuckooFilter.cpp",
+    "https://github.com/CGCL-codes/E2CF/blob/master/src/cuckoofilter.h",
+    "https://github.com/CGCL-codes/E2CF/blob/master/src/cuckoofilter.cpp",
+    "https://github.com/CGCL-codes/E2CF/blob/master/src/test.cpp",
+    "https://github.com/CGCL-codes/E2CF/blob/master/src/hashfunction.h",
+    "https://github.com/CGCL-codes/E2CF/blob/master/src/hashfunction.cpp",
+    "https://github.com/CGCL-codes/E2CF/blob/master/src/bithack.h",
+    "https://github.com/CGCL-codes/E2CF/blob/master/src/linklist.h",
+    "https://github.com/CGCL-codes/E2CF/blob/master/src/uint.h",
+    "https://github.com/CGCL-codes/E2CF/blob/master/configuration/config.txt",
+    "https://github.com/CGCL-codes/E2CF/blob/master/configuration/config_Q.txt",
+    "https://github.com/CGCL-codes/E2CF/blob/master/result/result.txt",
+    "https://github.com/CGCL-codes/E2CF/blob/master/input/input100.txt",
+    "https://github.com/CGCL-codes/E2CF/commits/master",
+    "https://github.com/CGCL-codes/E2CF/issues?q=is%3Aissue",
+    "https://github.com/CGCL-codes/E2CF/forks",
+    "https://github.com/Horae20/E2CF",
+    "https://github.com/search?q=EECuckooFilter&type=code",
+    "https://github.com/CGCL-codes/DCF",
+    "https://github.com/CGCL-codes/DCF/blob/master/src/dynamiccuckoofilter.h",
+    "https://link.springer.com/chapter/10.1007/978-3-030-79478-1_32",
+    "https://api.crossref.org/works/10.1007/978-3-030-79478-1_32",
+    "https://api.semanticscholar.org/graph/v1/paper/DOI:10.1007/978-3-030-79478-1_32",
+    "https://inria.hal.science/hal-03768761/document",
+    "https://docs.openssl.org/1.1.1/man3/EVP_DigestInit/",
+    "https://raw.githubusercontent.com/openssl/openssl/OpenSSL_1_1_1-stable/doc/man3/EVP_DigestInit.pod",
+    "https://raw.githubusercontent.com/openssl/openssl/OpenSSL_1_1_1-stable/CHANGES",
+    "https://hn.algolia.com/api/v1/search?query=%22Entry-Extensible%20Cuckoo%20Filter%22",
+    "https://hn.algolia.com/api/v1/search?query=E2CF%20cuckoo"
+  ],
+  "confidence": 0.8
+}
