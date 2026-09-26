@@ -1,0 +1,68 @@
+{
+  "id": "https://sourceforge.net/projects/vtd-xml",
+  "one_liner": "Java XML parser building a compact offset/length token index, not a tree; beats libxml2 DOM parse, loses XPath.",
+  "what_it_does": "VTDGen takes the whole document as a byte[] (setDoc) and parse() turns it into a flat index of 64-bit token records plus per-depth element directories. You read it through VTDNav, a single-cursor navigator (toElement(FIRST_CHILD / NEXT_SIBLING / PARENT), getText, toString), and AutoPilot, an XPath 1.0 engine. XMLModifier makes byte-level inserts and deletes without re-serializing, and writeIndex/loadIndex save the parsed index to disk. It is not a DOM and has its own API, so it is not a drop-in for libxml2's xmlDoc tree. The same design is also ported to C, C++ and C#.",
+  "how_it_is_fast": "It uses non-extractive tokenization, which the project calls Virtual Token Descriptor (VTD). The raw bytes stay in memory undecoded, and each token becomes one 64-bit long: 4-bit type, 8-bit depth, 20-bit length and a 30/32-bit offset. These longs are appended to pooled long[] buffers, so parsing creates no node objects, no strings and almost no GC work. Random access comes from 'location caches': per-depth arrays whose entries pair an element's record index with the index of its first child. The FAQ puts these at about 10% of parse cost and total memory at 1.3-1.5x the document size. End tags are not stored, and setDoc_BR() reuses the buffers across parses.",
+  "when_to_use": [
+    "JVM services that parse many shallow (<255 levels) 100 KB-100 MB documents and read a few fields by navigation, where building DOM objects and the GC they cause is the cost. On bemayer/xml-benchmark its index build posted 0.54-239 ms vs libxml2's 0.87-647 ms, with the caveat that the file sets differ.",
+    "Replacing Xerces or JDK DOM in Java code that only reads. On the same page, VTD-XML's DOM Parse time is lower than Xerces's at every size (0.036 vs 0.232 ms at 1KB; 238.9 vs 489.0 ms at 100MB). Again the file sets differ.",
+    "Parse once, use many times: save the index with writeIndex() and reload it with loadIndex() so you do not re-tokenize the same large file.",
+    "Small edits or fragment cut/paste on large documents (XMLModifier, getElementFragment), which avoids a full DOM round trip and re-serialization.",
+    "Files larger than RAM, up to 256 GB, using the extended edition (VTDGenHuge in MEM_MAPPED mode), provided nesting stays at 30 levels or fewer."
+  ],
+  "when_not_to_use": [
+    "XPath-heavy workloads. On //*[@id] it was 6.8x-17x slower than libxml2 at every size (3837.5 vs 565.6 ms at 100MB), and slower than Xerces from 1MB up.",
+    "Deeply nested XML. The standard edition throws 'Depth exceeds MAX_DEPTH' past 254 levels, and the 256 GB extended edition allows only 30. The standard edition also caps documents at 2 GB, or 1 GB with namespaces on.",
+    "Tiny documents or short-lived processes. At 1KB it is 2.8x slower than libxml2, and its peak RSS on the page is 57 MB vs 5.4 MB (JVM baseline).",
+    "Anything that needs DTD-declared or external entities, schema validation or a W3C DOM API. The FAQ calls DTD and external entities effectively deprecated, VTDGen parses a DTD but does not resolve declared entities, and a DOM interface is ruled out.",
+    "Projects that cannot take GPLv2 plus patent notices and an unmaintained codebase. The last release was 2017, and bugs such as namespace shadowing in getElementFragmentNs (#13) are still open."
+  ],
+  "integration": {
+    "form": "module (Java jar, Maven Central com.ximpleware:vtd-xml 2.13.4); C, C++ and C# ports are source-drop from the repo",
+    "dependencies": "none (the 2.13.4 POM declares no dependencies)",
+    "min_toolchain": "Java; the FAQ lists Java 1.2 through 8 as tested, and the benchmark ran 2.13.4 on Temurin 21 JRE. The C port builds with a makefile, or with Visual Studio set to 'Compile as C'.",
+    "platforms": "any JVM; the C, C++ and C# ports cover Linux, Windows and .NET/Mono per the FAQ",
+    "thread_safety": "Not thread-safe per instance. VTDNav has exactly one cursor, and AutoPilot moves it. For parallel reads, give each thread its own navigator from duplicateNav() or cloneNav(), which share the read-only XML, VTD and location-cache buffers (the javadoc says this 'may be useful for parallel XPath evaluation'). VTDGen is per-parse state.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "parseFile(), parseGZIPFile() and similar catch IOException and ParseException, print them to System.out and return false. Use setDoc() + parse() if you need the exception.",
+    "Hard limits in VTDGen throw ParseException: depth 254, prefix 511 bytes, qualified name 2047 bytes, and 2 GB file size (1 GB with namespaces). Text tokens longer than 1M-1 bytes are split across several records.",
+    "The byte[] passed to setDoc() is the document. Records only point into it, so it must stay alive and unmodified for as long as the VTDNav is used.",
+    "toNormalizedString() collapses whitespace by design (issue #9); use toString(), or toRawString() to keep entities. Issue #6 reports toString() mishandling multibyte characters, with a fix promised for '2.13_2'."
+  ],
+  "pick_this_over_siblings_when": "Pick it only when you must stay on the JVM and want random access, a saved index or in-place byte edits. Every catalogued sibling is native: on the same bemayer page quick-xml's DOM Parse is faster than VTD-XML at every size, and RapidXml beats it at 1KB and 100MB. For XPath, prefer simdxml or libxml2 itself.",
+  "verified_claims_summary": "On bemayer/xml-benchmark's 2026-09-01 run (GitHub Actions ubuntu-latest, Docker, CPU not published), VTD-XML 2.13.4 on Temurin 21 (no JVM flags, parse(false), input array cloned inside the timed loop) built its token index 1.6x-4.9x faster than Debian libxml2 2.9.14's xmlParseMemory + xmlFreeDoc (C++ harness, -O3) at 100KB-100MB. VTD-XML's rows cover only the wide file because it rejects the deep files, while libxml2's rows also average in a deep file it halts at depth 256; VTD-XML also loses at 1KB (2.8x) and on XPath //*[@id] at every size (6.8x-17x).",
+  "status_note": "Abandoned: the last release is 2.13.4 (Maven Central, 2017) and the last commit on the maintainer's GitHub copy is 2018-06-28. The jar has no dependencies and is easy to adopt, but GPLv2 (commercial license on request), the listed US patents and a license-termination clause for parties in litigation with XimpleWare make it a legal-review item.",
+  "sources_read": [
+    "https://sourceforge.net/projects/vtd-xml/",
+    "https://vtd-xml.sourceforge.io/",
+    "https://vtd-xml.sourceforge.io/VTD.html",
+    "https://vtd-xml.sourceforge.io/faq.html",
+    "https://vtd-xml.sourceforge.io/benchmark1.html",
+    "https://vtd-xml.sourceforge.io/technical/0.html",
+    "https://github.com/jzhang2004/vtd-xml",
+    "https://github.com/jzhang2004/vtd-xml/blob/master/ximple-dev/com/ximpleware/VTDGen.java",
+    "https://github.com/jzhang2004/vtd-xml/blob/master/ximple-dev/com/ximpleware/VTDNav.java",
+    "https://github.com/jzhang2004/vtd-xml/blob/master/ximple-dev/com/ximpleware/extended/VTDGenHuge.java",
+    "https://github.com/jzhang2004/vtd-xml/blob/master/ximple-dev_c/vtd-xml/ReadMe.txt",
+    "https://github.com/jzhang2004/vtd-xml/issues?q=is%3Aissue",
+    "https://github.com/jzhang2004/vtd-xml/issues/3",
+    "https://github.com/jzhang2004/vtd-xml/issues/5",
+    "https://github.com/jzhang2004/vtd-xml/issues/6",
+    "https://github.com/jzhang2004/vtd-xml/issues/8",
+    "https://github.com/jzhang2004/vtd-xml/issues/9",
+    "https://github.com/jzhang2004/vtd-xml/issues/10",
+    "https://github.com/jzhang2004/vtd-xml/issues/12",
+    "https://github.com/jzhang2004/vtd-xml/issues/13",
+    "https://github.com/jzhang2004/vtd-xml/issues/15",
+    "https://bemayer.github.io/xml-benchmark/",
+    "https://github.com/bemayer/xml-benchmark/blob/main/benchmarks/vtd-xml/src/main/java/bench/Bench.java",
+    "https://github.com/bemayer/xml-benchmark/blob/main/benchmarks/vtd-xml/pom.xml",
+    "https://github.com/bemayer/xml-benchmark/blob/main/benchmarks/vtd-xml/Dockerfile",
+    "https://github.com/bemayer/xml-benchmark/blob/main/benchmarks/libxml2/bench.cpp",
+    "https://repo1.maven.org/maven2/com/ximpleware/vtd-xml/maven-metadata.xml",
+    "https://repo1.maven.org/maven2/com/ximpleware/vtd-xml/2.13.4/vtd-xml-2.13.4.pom"
+  ],
+  "confidence": 0.7
+}
