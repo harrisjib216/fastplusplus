@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/solenopsys/zig-pico",
+  "one_liner": "Pure-Zig port of picohttpparser's request parser. A self-run bench claims ~1.6x over scalar picohttpparser, but the baseline was not re-measured.",
+  "what_it_does": "Picozig parses an HTTP/1.x request line and headers into zero-copy slices that point into your buffer, with no allocation. The call is picozig.parseRequest(buf, *HttpRequest) -> i32 and uses picohttpparser's return convention: bytes consumed, -1 for a bad request, -2 for incomplete. It ports only phr_parse_request. There is no response parser, no headers-only parser, no chunked decoder and no last_len fast path. The package also ships an allocating HTTP response formatter and an RFC 1123 Date formatter, which are unrelated to the benchmark.",
+  "how_it_is_fast": "It uses the same scalar design as picohttpparser without SSE4.2: a stateless single pass over the buffer, a 256-entry comptime lookup table for header-name token characters, and a byte-by-byte printable-ASCII scan (c -% 0x20 < 0x5F) for header values. The only 'fast' helper, findCharFast, loads 16 bytes into a @Vector(16, u8) on x86-64/aarch64 but then tests each lane in a scalar loop. It has no vector compare and no PCMPESTRI, and it is only used for the method and path tokens. The README's 'without SSE4' means no hand-written SIMD. It does not mean a no-SSE4 build: zig run targets the host CPU by default, so LLVM was free to auto-vectorize with the benchmark machine's extensions.",
+  "when_to_use": [
+    "Reading or forking a compact example: about 275 lines of Zig in src/request/picozig.zig that map almost one-to-one onto picohttpparser's parse_request/parse_headers",
+    "Zig prototypes and internal services that want zero-allocation request parsing with no C in the build, where you control the clients and can hand the parser at least 100 header slots",
+    "Code that already calls picohttpparser's request API and wants the same i32 return convention in native Zig types instead of @cImport",
+    "Targets where you would build picohttpparser without SSE4.2 anyway (aarch64, other non-x86). The code is portable Zig, but no speed number exists for those targets"
+  ],
+  "when_not_to_use": [
+    "Internet-facing servers. The header array can overflow (see gotchas), request-line validation is looser than upstream, and there is no fuzzing or audit. The project has one contributor and 0 stars",
+    "You need responses, headers-only parsing, chunked transfer-encoding, or incremental re-parse with last_len. Only the request path is ported",
+    "You already build picohttpparser with SSE4.2 or use an AVX2 fork. The claim is only against the scalar build, and it was not measured on the same machine",
+    "Clients that send bare-LF line endings or several spaces between request-line tokens. Picozig returns -2 or -1 where picohttpparser accepts them",
+    "Anything that needs clear reuse terms. There is no license file, and the code is a translation of Perl/MIT-licensed picohttpparser without its copyright notice"
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none (Zig std only)",
+    "min_toolchain": "Zig 0.15.x in practice: the last commits port it to 0.15.1, and the response helper uses the 0.15 unmanaged ArrayList API. build.zig.zon still declares minimum_zig_version 0.14.0. Not verified on Zig 0.16.0 (released 2026-04-13)",
+    "platforms": "Any Zig target: pure Zig with no intrinsics and no syscalls in the parser. findCharFast uses 16-byte vectors on x86-64/aarch64 and 8-byte vectors elsewhere. Benchmarked only on x86-64 (AMD Ryzen 8845H)",
+    "thread_safety": "Not documented. From the source, parseRequest is stateless and writes only to the caller's HttpRequest and header array, so concurrent calls with separate outputs look safe",
+    "drop_in_for_baseline": "partial — it mirrors phr_parse_request's return codes and zero-copy output, but it is a Zig API with no C ABI. phr_parse_response, phr_parse_headers, phr_decode_chunked and the last_len argument are missing. It also ignores the caller's num_headers capacity"
+  },
+  "gotchas": [
+    "Header-array overflow: parseRequest ignores params.num_headers and slices the many-item pointer as headers[0..100]. A request with more headers than your array writes past its end, and Zig cannot bounds-check a [*]T slice in any build mode. The repo's own bench and a zig-httpuring test pass 32 slots, and test.zig passes 4-14. Always supply at least 100",
+    "Looser than picohttpparser on the request line. test.zig asserts success for an empty method (' / HTTP/1.0') and an empty target ('GET  HTTP/1.0'), where upstream test.c expects -1. The method is not checked against token characters, so ':GET' is accepted. Multiple spaces between tokens, which upstream accepts, are rejected",
+    "Header values keep trailing spaces and tabs (upstream trims them). A request whose final empty line is a lone LF at the end of the buffer returns -2 (incomplete) until more bytes arrive. test.zig asserts this for 'GET / HTTP/1.0\\nHost: example.com\\n\\n'",
+    "HttpRequest.body is never filled in. Errors come back only as i32 codes, because the internal ParseError is not surfaced. The bundled response formatter heap-allocates a StringHashMap and an ArrayList for every response"
+  ],
+  "pick_this_over_siblings_when": "Among the Zig siblings, hparse also beats picohttpparser and reports wall time, cycles and instructions against it, which makes it the better-evidenced choice. Picozig is mainly worth picking as a minimal, readable scalar translation of pico's request path to study or fork. For production use, the vkrasnov AVX2 fork, httparse or httpp (about 2.26x at -O3) have stronger benchmark evidence and more complete APIs.",
+  "verified_claims_summary": "src/request/bench.zig parses picohttpparser's bench.c 'kittyhell' request (10 headers, 32-slot array) 10 million times in one run, timed with a millisecond wall clock. Built with zig run -O ReleaseFast (Zig version not stated; the code targets 0.15.1) for the native CPU, it printed 5,086,000 requests/s on an AMD Ryzen 8845H mobile CPU. The '~3.2M headers/sec without SSE4' picohttpparser figure has no stated source and was not re-measured: upstream bench.c has no timer and was not run on that machine. The units also differ, so the ~1.6x is only indicative.",
+  "status_note": "Counts as active under the 12-month rule (last commit 2025-10-11, a port to Zig 0.15.1). In practice it is a 9-commit, single-author, unlicensed side project that only the author's own repos use (zig-httpuring and buddy-blocks, via a relative ../zig-pico path), so treat it as reference code rather than a dependency.",
+  "sources_read": [
+    "https://github.com/solenopsys/zig-pico",
+    "https://github.com/solenopsys/zig-pico/blob/master/readme.md",
+    "https://github.com/solenopsys/zig-pico/blob/master/build.zig",
+    "https://github.com/solenopsys/zig-pico/blob/master/build.zig.zon",
+    "https://github.com/solenopsys/zig-pico/blob/master/src/root.zig",
+    "https://github.com/solenopsys/zig-pico/blob/master/src/request/picozig.zig",
+    "https://github.com/solenopsys/zig-pico/blob/master/src/request/fast.zig",
+    "https://github.com/solenopsys/zig-pico/blob/master/src/request/bench.zig",
+    "https://github.com/solenopsys/zig-pico/blob/master/src/request/test.zig",
+    "https://github.com/solenopsys/zig-pico/blob/master/src/response/response-generator.zig",
+    "https://github.com/solenopsys/zig-pico/blob/master/src/response/date.zig",
+    "https://github.com/solenopsys/zig-pico/blob/master/.gitignore",
+    "https://github.com/solenopsys/zig-pico/commits/master (GraphQL: 9 commits, 0 issues, 0 PRs, 2 forks, no license)",
+    "https://github.com/TarasShu/zig-pico",
+    "https://github.com/ajafri2001/zig-pico",
+    "https://github.com/solenopsys (GraphQL repository listing)",
+    "https://github.com/solenopsys/zig-httpuring/blob/master/build.zig.zon",
+    "https://github.com/solenopsys/zig-httpuring/blob/master/src/http-request-parser.zig",
+    "https://github.com/solenopsys/zig-httpuring/blob/master/src/http-processor.zig",
+    "https://github.com/solenopsys/buddy-blocks/blob/master/build.zig.zon",
+    "https://github.com/solenopsys/zig-shock/blob/master/build.zig.zon",
+    "https://github.com/h2o/picohttpparser/blob/master/README.md",
+    "https://github.com/h2o/picohttpparser/blob/master/picohttpparser.c",
+    "https://github.com/h2o/picohttpparser/blob/master/test.c",
+    "https://github.com/h2o/picohttpparser/blob/master/bench.c",
+    "https://ziglang.org/download/index.json",
+    "https://hn.algolia.com/api/v1/search?query=picozig",
+    "https://hn.algolia.com/api/v1/search?query=zig-pico",
+    "https://hn.algolia.com/api/v1/search?query=solenopsys"
+  ],
+  "confidence": 0.8
+}
