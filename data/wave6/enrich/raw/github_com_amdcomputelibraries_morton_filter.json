@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/amdcomputelibraries/morton_filter",
+  "one_liner": "AMD Research's compressed, cache-line-blocked cuckoo filter with batched APIs; beats Fan et al.'s cuckoo filter on large, DRAM-resident filters.",
+  "what_it_does": "An approximate set-membership filter (insert, likely-contains, delete) that is a reworked cuckoo filter tuned to cut memory traffic when the filter is far bigger than the last-level cache. It is a header-only C++ template library: include morton_filter.h and use a preset such as CompressedCuckoo::Morton3_8 (3-slot buckets, 8-bit fingerprints), constructed with a slot count. The fast interface is batched (insert_many, likely_contains_many and delete_many take a std::vector<uint64_t> of keys and fill a std::vector<bool> status), with slower item-at-a-time insert, likely_contains and delete_item alongside. It can also grow in place by powers of two (double_capacity, quadruple_capacity, octuple_capacity) without the original keys, but only when resizing is enabled at compile time.",
+  "how_it_is_fast": "Each 512-bit (cache-line) block holds a compressed Fingerprint Storage Array (46 x 8-bit slots in Morton3_8), a Fullness Counter Array (64 x 2-bit counters for 64 logical 3-slot buckets) and a 16-bit Overflow Tracking Array. Buckets are logically underloaded but empty slots are not stored ('decoupled logical sparsity'), and a bucket's offset is found by a branchless popcount-based prefix sum over the counters. Insertions are heavily biased to the primary hash H1, and the OTA records overflows, so most lookups, positive or negative, touch one cache line (about 1.05 to 1.11 lines per query at 0.95 load in the paper). The alternate bucket is chosen with a bounded odd offset rather than Fan et al.'s XOR, which keeps both candidates on the same page (fewer TLB misses) and drops the power-of-two table size requirement; keys are processed in batches of 128 (the paper's Fig. 14 credits batching with about 2x and the popcount reduction with another 2x to 3x).",
+  "when_to_use": [
+    "Filters of hundreds of MB (the paper uses 128M slots, about 187 MB) that live in DRAM, where memory bandwidth rather than hashing limits throughput.",
+    "Workloads that can issue operations in batches of 128 uint64 keys, such as bulk loading or batched probes in a join or LSM lookup path.",
+    "Dynamic sets that need deletions and are filled to high load (0.75 to 0.95), where the paper measured inserts about 3x to 15x faster than a stock cuckoo filter.",
+    "Sets whose size you cannot predict and cannot rebuild from source keys: in-place 2x/4x/8x growth works without a backing store, at the cost of roughly one fingerprint bit of false-positive accuracy per doubling.",
+    "About 0.3% false-positive rate at about 11.7 bits/item (Morton3_8), or about 10 bits/item with Morton7_8, on AMD Zen-class CPUs where the paper's tuning was done."
+  ],
+  "when_not_to_use": [
+    "One-at-a-time queries. The README discourages them, and the Xor filter paper (i7-6700, GCC 8.1) measured Morton single queries at 47 and 65 ns/key (10M and 100M keys) against 31 and 38 ns for a 12-bit cuckoo filter and 23 and 32 ns for Xor8.",
+    "Intel servers without retuning: the paper's own Skylake-X run shows lookups only on par to 1.8x faster and inserts about 2/3 of the cuckoo filter's speed below 0.5 load. The Prefix Filter paper (Ice Lake) dropped Morton as strictly worse than the vector quotient filter.",
+    "Static sets built once: xor, binary fuse or ribbon filters use less space (Xor8 about 9.8 bits/key at a similar FPR) and query faster.",
+    "Production code that must be robust. The author calls it an academic prototype; errors, including allocation failure, call exit(1); the repo has no unit tests; nothing has been committed since December 2020.",
+    "MSVC or non-x86 builds: the code depends on __uint128_t and GCC vector extensions, the README says only g++ is supported (Clang fixes came in late 2020), and only x86-64 has been tested."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none for the filter itself; the benchmark harness clones Fan et al.'s cuckoofilter at a pinned commit and links -lcrypto",
+    "min_toolchain": "C++11 (Makefile uses -std=c++11), GCC with GNU extensions; the README recommends g++ 5.4 and reports a GCC 8.x slowdown; Clang fixes (the issue #2 128-bit-shift UB and a non-constexpr log2) landed only in the final Dec 2020 commit",
+    "platforms": "x86-64 is the only tested target (benchmarks built with -march=native -mpopcnt; BMI2 is used if present); no MSVC (__uint128_t, GCC vector extensions); other architectures not documented",
+    "thread_safety": "not documented; the code has no locks or atomics and uses the global rand() during evictions, so treat it as single-threaded or synchronize externally",
+    "drop_in_for_baseline": "partial: same operations as a cuckoo filter (insert, lookup, delete; delete only keys that were inserted), but a different API. Operations are batched over std::vector<uint64_t> with a std::vector<bool> status output, keys are uint64_t (32-bit only by editing CCF_KEY_SIZE), and the configuration is chosen through 17 template parameters or the preset typedefs."
+  },
+  "gotchas": [
+    "The batch loops always process full 128-key chunks and read keys[i..i+127]. If num_keys is not a multiple of 128 they read past the end of the input (a README known issue). insert_many always returns true, so check the status vector, which must be pre-sized.",
+    "There is no stash or victim cache. After 300 cuckoo kicks the insert returns false with the fingerprint it was carrying dropped, and that fingerprint can belong to an earlier key, which can cause a false negative. Deleting a key that was never inserted can also delete another key's fingerprint.",
+    "util.h and test_util.h define non-inline functions (operator<< for __uint128_t, Test::pass) in headers, so including the library from more than one .cc file gives duplicate-symbol link errors unless you patch them to inline.",
+    "The class owns raw aligned_alloc buffers and has a destructor but no copy constructor or assignment operator, so copying a filter double-frees. Resizing is compiled off in every preset (resizing_enabled = false), so double_capacity() calls exit(1) unless you flip it. Issue #4 (open since 2021): Morton1_8 fails to compile because of an over-broad static_assert."
+  ],
+  "pick_this_over_siblings_when": "Pick it over Xor/Binary Fuse and BuRR when the set changes after construction (they are static), and over Prefix Filter when you need deletions (Prefix Filter is insert-only by design). Its distinctive feature is in-place growth without the source keys; otherwise Vacuum Filter also supports deletions and reports about 25% less space than cuckoo filters, and the Prefix Filter authors found Morton strictly worse than the vector quotient filter on Intel Ice Lake.",
+  "verified_claims_summary": "In the VLDB'18 paper, on an AMD Threadripper 1950X fixed at 3.4 GHz (g++ 5.4.0, -Ofast -march=native, single-threaded, 128M-slot filters, average of 5 trials), Morton3_8 at 11.71 bits/item was 1.3x to 2.5x faster than Fan et al.'s 12-bit reference cuckoo filter on negative lookups, 1.6x to 2.4x on positive lookups, 0.9x to 15.5x on inserts and 1.3x to 1.6x on deletes, measured over load factors 0.05 to 0.95. The same paper's Skylake-X run shows smaller gains (lookups 1x to 1.8x, deletes about 1.2x, inserts about 0.67x to 3x), and a later deletion correctness fix cut peak Morton delete throughput from about 38 to about 28 MOPS, so current code may not reach the paper's delete numbers.",
+  "status_note": "Abandoned: the last commit is a December 2020 bug-fix merge (the author no longer has write access) and one issue remains open; the code is an MIT-licensed academic prototype that is small enough to vendor but needs local patches (the multiple-of-128 batch limit, inline fixes for the header ODR problem, and copy safety) before production use.",
+  "sources_read": [
+    "https://github.com/AMDComputeLibraries/morton_filter",
+    "https://github.com/AMDComputeLibraries/morton_filter/blob/master/README.md",
+    "https://github.com/AMDComputeLibraries/morton_filter/blob/master/morton_filter.h",
+    "https://github.com/AMDComputeLibraries/morton_filter/blob/master/compressed_cuckoo_filter.h",
+    "https://github.com/AMDComputeLibraries/morton_filter/blob/master/compressed_cuckoo_config.h",
+    "https://github.com/AMDComputeLibraries/morton_filter/blob/master/morton_sample_configs.h",
+    "https://github.com/AMDComputeLibraries/morton_filter/blob/master/vector_types.h",
+    "https://github.com/AMDComputeLibraries/morton_filter/blob/master/util.h",
+    "https://github.com/AMDComputeLibraries/morton_filter/blob/master/hash_util.h",
+    "https://github.com/AMDComputeLibraries/morton_filter/blob/master/test_util.h",
+    "https://github.com/AMDComputeLibraries/morton_filter/blob/master/benchmarking/Makefile",
+    "https://github.com/AMDComputeLibraries/morton_filter/blob/master/benchmarking/benchmark_mf.h",
+    "https://github.com/AMDComputeLibraries/morton_filter/commits/master",
+    "https://github.com/AMDComputeLibraries/morton_filter/issues/1",
+    "https://github.com/AMDComputeLibraries/morton_filter/issues/2",
+    "https://github.com/AMDComputeLibraries/morton_filter/pull/3",
+    "https://github.com/AMDComputeLibraries/morton_filter/issues/4",
+    "https://www.vldb.org/pvldb/vol11/p1041-breslow.pdf",
+    "https://arxiv.org/pdf/1912.08258",
+    "https://arxiv.org/pdf/2203.17139",
+    "https://github.com/FastFilter/fastfilter_cpp",
+    "https://hn.algolia.com/api/v1/search?query=morton%20filter&tags=story",
+    "https://news.ycombinator.com/item?id=19757797",
+    "https://news.ycombinator.com/item?id=19725282"
+  ],
+  "confidence": 0.82
+}
