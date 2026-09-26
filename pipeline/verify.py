@@ -70,6 +70,10 @@ def apply(wave_dir, today):
             "numbers_found_on_page": v.get("numbers_found_on_page"),
         }
         d = decisions.get(eid, {})
+        if d.get("decision") == "reject":  # evidence found invalid or fabricated after verification
+            e["verification"]["reject_reason"] = d.get("reason")
+            rejected.append(e)
+            continue
         if v["verdict"] == "reject":
             e["verification"]["reject_reason"] = v.get("reject_reason")
             if d.get("decision") != "keep":

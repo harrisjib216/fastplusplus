@@ -1190,6 +1190,69 @@
     }
   },
   {
+    "name": "Caladan",
+    "repo_url": "https://github.com/shenango/caladan",
+    "language": "C",
+    "domain": "networking-and-servers",
+    "category": "event-loops-io",
+    "baseline": "Parties (authors' reimplementation, 'Parties*', because the original source was unavailable); also compared with Linux (kernel TCP, BE task at SCHED_IDLE) and Shenango",
+    "baseline_in_list": false,
+    "metric": "latency",
+    "workload": "memcached 1.5.6 (Facebook USR mix, ~1 us service time) at 800,000 requests/s over TCP, colocated with swaptions-GC (a PARSEC job using the Boehm GC); 99.9th-percentile latency measured over 20 ms windows during a 120 s run. A second test colocated memcached with the stream-DRAM bandwidth antagonist and compared against Linux and Shenango (Fig. 4).",
+    "claimed_speedup": "Vs Parties* (memcached + swaptions-GC): 99.9% latency 11,000x lower during GC cycles ('reducing tail latency from 580 ms to 52 us'), and Parties* BE throughput averaged 5% less than Caladan's. Vs Linux and Shenango (constant stream-DRAM interference, Fig. 4): their tail latency rose 'up to 235x and 6x higher than without interference' and Shenango's throughput fell 75%. Caladan (and Parties*) kept similar tail latency with and without interference and achieved 'much higher throughput than Linux and Shenango' (graph only, no exact numbers). KSCHED vs a variant using Linux syscalls (sched_setaffinity/tgkill/eventfd): the Linux variant needs 43x more scheduling work and 5x the scheduling latency when moving 22 tasks, and bottlenecks at ~285,000 core reallocations/s vs Caladan's peak of 560,000 (at 0.65 MRPS).",
+    "evidence_tier": "B",
+    "benchmark_url": "https://www.usenix.org/system/files/osdi20-fried.pdf",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "Not stated in the paper. The current repo build (build/shared.mk) uses CC ?= gcc (CONFIG_CLANG=y switches to clang), -std=gnu11 for C and -std=gnu++20 for C++, and -O3 -DNDEBUG; CONFIG_OPTIMIZE=y adds -march=native -flto=auto -ffat-lto-objects -ffast-math. These are today's flags, not the 2020 evaluation build.",
+    "hardware": "Server with two 12-core (24-hyperthread) Intel Xeon Broadwell CPUs (exact model not stated) and 64 GB RAM, running Ubuntu 18.04 with kernel 5.2.0 modified for faster multicast IPIs (Linux baseline on kernel 5.4.0). Only socket 0 used; 40 Gb/s Mellanox ConnectX-5 NIC; 280 GB Intel Optane NVMe. Clients were quad-core machines with 10 Gb/s ConnectX-3 NICs behind a Mellanox SX1024 switch. TurboBoost, C-states, frequency scaling and THP were off, as were the Meltdown/MDS mitigations. Caladan ran with 22 guaranteed LC cores plus one physical core for the scheduler.",
+    "compared_against_cpp_std_directly": null,
+    "license": "Apache-2.0",
+    "usability": "copyable",
+    "last_commit": "2026-05-10",
+    "maintenance_status": "active",
+    "is_fork_of": null,
+    "stars_or_usage": "200 stars, 78 forks. Per the paper, it is derived from Shenango's open-source release (a new scheduler plus the ksched module).",
+    "has_code": true,
+    "tradeoffs": "Apps must link Caladan's own runtime (green threads, its own TCP/UDP stack) and are not Linux-compatible. A pthread shim runs PARSEC-style batch jobs unmodified, but network services have to be ported, and LC tasks must expose concurrency with a thread per connection or per request (the authors changed memcached this way). It takes one dedicated scheduler core (iokerneld, run as root), the ksched kernel module and hugepages. It runs best with its own mlx5 driver on ConnectX-4 or newer; DPDK PMDs work but are slower, and directpath needs Mellanox OFED, DEVX firmware and root. It is x86-64 Linux only, cannot manage interference across NUMA nodes, and its hyperthread co-scheduling does nothing about transient-execution attacks between sibling hyperthreads.",
+    "caveats": "The 11,000x figure is against the authors' own reimplementation of Parties, which they gave kernel-bypass networking and hyperthreads (hence 'Parties*'). It is a peak-window value taken only during GC cycles (580 ms vs 52 us), not a steady-state average; the separate 500,000x figure is convergence speed compared with Parties' published typical speed. The Linux and Shenango comparison exists only as a graph (Fig. 4): the 235x and 6x ratios compare those systems with and without interference, not with Caladan, and Caladan's throughput lead over Linux comes mostly from kernel-bypass networking. The Linux baseline also ran a different kernel (5.4.0 vs modified 5.2.0). Neither Parties* nor Linux is a listed event-loops-io baseline (libuv/libevent/epoll/io_uring). IX and Arachne appear in related work only and were not measured. No compiler or flags are given, and the CPU is named only as 'Xeon Broadwell'; security mitigations were disabled. The artifact repo (github.com/shenango/caladan-all, which has no license file) has a paper_experiments.py that drives only Caladan configurations (figure 7, 8, 9b ksched-vs-pinned, 9c and the memcached timeseries). Its helper code has partial linux/shenango configurations and a memcached-linux submodule, but there is no driver for the Parties*, Linux/Shenango (Fig. 4) or Linux-syscall-variant comparisons. These are 2020 numbers, and the code has changed a lot since then (current kernels 5.15/6.8, directpath, DPDK PMDs).",
+    "found_via": [
+      "seed-record pass: started from https://github.com/shenango/caladan (README); OSDI '20 paper PDF fetched directly from https://www.usenix.org/system/files/osdi20-fried.pdf; artifact at https://github.com/shenango/caladan-all"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.8,
+    "assignment_ids": [
+      "w5-seed-leads"
+    ],
+    "id": "https://github.com/shenango/caladan",
+    "verification": {
+      "date": "2026-09-26",
+      "verdict": "confirm",
+      "tier_before": "B",
+      "tier_reason": "Peer-reviewed OSDI '20 paper (osdi20-fried.pdf) states every claimed figure in the text: 11,000x and 580 ms vs 52 us against Parties*, 235x/6x/75% for Linux/Shenango, and 43x, 5x and 560k vs 285k for KSCHED vs Linux syscalls. It is not A because neither the paper nor the artifact gives a CPU model ('Xeon Broadwell') or compiler/flags, and the artifact has no driver for the baseline runs. I did not apply the >50x cap: the 11,000x is a GC-window tail-latency result explained by Parties' 500 ms adjustment interval, not a compiler-sensitive microbenchmark.",
+      "notes": "All numbers and hardware details match the OSDI '20 PDF. Metadata checked via GitHub GraphQL (REST was rate-limited): Apache-2.0, 200 stars, 78 forks, not a fork or archived, last commit 2026-05-10, so active. I set baseline_in_list to false to match wave 5 precedent (Shenango, Demikernel and FlexTOE with Linux-kernel baselines are false).",
+      "urls_opened": [
+        "https://www.usenix.org/system/files/osdi20-fried.pdf",
+        "https://github.com/shenango/caladan",
+        "https://github.com/shenango/caladan-all",
+        "https://raw.githubusercontent.com/shenango/caladan/main/build/shared.mk",
+        "https://raw.githubusercontent.com/shenango/caladan/main/README.md",
+        "https://raw.githubusercontent.com/shenango/caladan-all/master/README.md",
+        "https://raw.githubusercontent.com/shenango/caladan-all/master/paper_experiments.py",
+        "https://raw.githubusercontent.com/shenango/caladan-all/main/caladan_common.py",
+        "https://raw.githubusercontent.com/shenango/caladan-all/main/experiment.py",
+        "https://raw.githubusercontent.com/shenango/caladan-all/main/globals.py"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "baseline_in_list": true,
+      "claimed_speedup": "99.9% latency 11,000x lower than Parties* during GC cycles ('reducing tail latency from 580 ms to 52 us'), and BE throughput about 5% higher than Parties*. Against Linux and Shenango (constant stream-DRAM interference, Fig. 4): their tail latency rose 'up to 235x and 6x higher than without interference' and Shenango's throughput fell 75%, while Caladan kept similar tail latency with and without interference and 'much higher throughput than Linux and Shenango' (no exact numbers, graph only). KSCHED vs a variant using Linux syscalls (sched_setaffinity/tgkill/eventfd): the Linux variant needs 43x more scheduling work and 5x the scheduling latency when moving 22 tasks, and tops out at ~285,000 core reallocations/s vs Caladan's peak of 560,000.",
+      "compiler_and_flags": "Not stated in the paper. The current repo build (build/shared.mk) uses CC ?= gcc with -O3 -DNDEBUG (plus optional -march=native -flto -ffast-math when CONFIG_OPTIMIZE is set), -std=gnu11. These are today's flags, not the 2020 evaluation build.",
+      "caveats": "The 11,000x figure is against the authors' own reimplementation of Parties, which they gave kernel-bypass networking and hyperthreads (hence 'Parties*'). It is a peak-window value taken only during GC cycles (580 ms vs 52 us), not a steady-state average; the separate 500,000x figure is convergence speed compared with Parties' published typical speed. The Linux and Shenango comparison exists only as a graph (Fig. 4): the 235x and 6x ratios compare those systems with and without interference, not with Caladan, and Caladan's throughput lead over Linux comes mostly from kernel-bypass networking. The Linux baseline also ran a different kernel (5.4.0 vs modified 5.2.0). IX and Arachne appear in related work only and were not measured. No compiler or flags are given, and the CPU is named only as 'Xeon Broadwell'; security mitigations were disabled. The artifact repo (github.com/shenango/caladan-all, which has no license file) has scripts for the Caladan-only figures and the ksched-vs-pinned run, but none for the Parties*, Linux/Shenango (Fig. 4) or Linux-syscall-variant comparisons. These are 2020 numbers, and the code has changed a lot since then (current kernels 5.15/6.8, directpath, DPDK PMDs)."
+    }
+  },
+  {
     "name": "mTCP",
     "repo_url": "https://github.com/mtcp-stack/mtcp",
     "language": "C",
@@ -2700,65 +2763,6 @@
       "workload": "HTTP requests/second on a fanless Raspberry Pi 4, compared to Node.js (per README, linking to an external blog post)",
       "hardware": "Raspberry Pi 4 (fanless), per README context",
       "caveats": "The linked source blog post (levelup.gitconnected.com) returned HTTP 403 and could not be opened this session, so the '12x' figure is only verified as appearing in the uWebSockets README/READMORE.md, not independently confirmed at the source with full methodology; the main README also states 'Intellectual property, all rights reserved' alongside the Apache-2.0 notice, creating some licensing ambiguity despite GitHub detecting Apache-2.0."
-    }
-  },
-  {
-    "name": "zokio",
-    "repo_url": "https://github.com/louloulin/zokio",
-    "language": "Zig",
-    "domain": "networking-and-servers",
-    "category": "event-loops-io",
-    "baseline": "Tokio",
-    "baseline_in_list": true,
-    "metric": "throughput",
-    "workload": "Microbenchmarks of async_fn creation, await execution, task scheduling, memory allocation and I/O ops/sec, compared against stated approximate Tokio baseline figures",
-    "claimed_speedup": "Performance guide 'Tokio Baseline' ratios range from 1.52x to 96.4x: task scheduling 145M vs 1.5M ops/s (96.4x), memory allocation 16.4M vs 192K ops/s (85.4x), deep async workflows 1.4B vs ~25M (56x), await_fn 3.8B vs ~100M (38x), nested async 1.9B vs ~50M (page says 38x), async_fn creation 3.2B vs ~100M (32x), comprehensive 10M vs 1.5M (6.67x), concurrent async tasks 5.3M vs ~2M (2.65x), real I/O 22.8K vs ~15K ops/s (1.52x)",
-    "evidence_tier": "C",
-    "benchmark_url": "https://github.com/louloulin/zokio/blob/main/docs/en/performance.md",
-    "baseline_stdlib": [],
-    "compiler_and_flags": "Zig 0.14.0, -O ReleaseFast",
-    "hardware": "Apple M1 Pro (8-core, 3.2GHz), 32GB LPDDR5, macOS 14.0",
-    "compared_against_cpp_std_directly": null,
-    "license": "MIT",
-    "usability": "copyable",
-    "last_commit": "2025-07-22",
-    "maintenance_status": "stale",
-    "is_fork_of": null,
-    "stars_or_usage": "5 stars",
-    "has_code": true,
-    "tradeoffs": "Compile-time-heavy Zig async design; extremely low adoption (5 stars) for the scale of claims made.",
-    "caveats": "Where the Tokio baseline figures come from is unclear. Most are marked approximate. src/bench/tokio_runner.zig can generate and run a Tokio cargo bench, but it falls back to hard-coded 'literature baseline' values (task_scheduling 800K ops/s, memory_allocation 5M ops/s) that do not match the page's 1.5M/192K. Billions of ops/s for async_fn creation means sub-ns operations that were likely optimized away. The README cites an Apple M3 Pro while the guide says M1 Pro. Ratios above 50x are implausible, and realistic rows shrink to 1.5-6.7x. Treat with strong skepticism.",
-    "found_via": [
-      "GitHub: gh search code \"faster than tokio\" -> louloulin/zokio docs/en/performance.md"
-    ],
-    "is_evidence_for_known": false,
-    "confidence": 0.2,
-    "assignment_ids": [
-      "w5-event-loops-gh-any"
-    ],
-    "id": "https://github.com/louloulin/zokio",
-    "verification": {
-      "date": "2026-09-26",
-      "verdict": "downgrade",
-      "tier_before": "C",
-      "tier_reason": "The performance guide states Zig 0.14.0 -O ReleaseFast on an Apple M1 Pro, and comparison code exists (benchmarks/tokio_vs_zokio_direct_comparison.zig, src/bench/tokio_runner.zig). But the Tokio column is approximate ('~100M ops/sec') and not shown to come from a same-machine run, and the >50x ratios on microbenchmarks are implausible, so this is first-party and falls short of a reproducible A: tier C.",
-      "notes": "I downgraded because the record said '32x-96x across microbenchmarks', but the same page shows 1.52x-6.67x for real I/O, comprehensive and concurrent-task rows. The tier stays C. Metadata is correct: MIT, 5 stars, last commit 2025-07-22, stale, not a fork.",
-      "urls_opened": [
-        "https://github.com/louloulin/zokio",
-        "https://github.com/louloulin/zokio/blob/main/docs/en/performance.md",
-        "https://github.com/louloulin/zokio/tree/main/benchmarks",
-        "https://raw.githubusercontent.com/louloulin/zokio/main/benchmarks/tokio_vs_zokio_direct_comparison.zig",
-        "https://raw.githubusercontent.com/louloulin/zokio/main/src/bench/tokio_runner.zig",
-        "https://raw.githubusercontent.com/louloulin/zokio/main/src/bench/mod.zig",
-        "https://raw.githubusercontent.com/louloulin/zokio/main/README.md",
-        "https://raw.githubusercontent.com/louloulin/zokio/main/LICENSE"
-      ],
-      "page_compares_against_baseline": true,
-      "numbers_found_on_page": true
-    },
-    "corrected_fields": {
-      "claimed_speedup": "Claims 32x-96x faster than Tokio across microbenchmarks (e.g. task scheduling 145M ops/s vs ~1.5M ops/s; async_fn creation 3.2B ops/s vs ~100M ops/s)",
-      "caveats": "Tokio baseline numbers are given as approximate (\"~100M ops/sec\", \"~50M ops/sec\") rather than measured on the same hardware/run as the Zokio numbers; ratios of 32x-96x for what should be comparable primitive operations are implausible and likely compare non-equivalent workloads. Capped at tier C per the >50x implausibility rule; treat with strong skepticism."
     }
   },
   {
@@ -7166,6 +7170,74 @@
       "hardware": "Client pinned to 16 CPU cores, server pinned to 4 CPU cores (exact CPU model, OS, and Go version not stated in README or linked blog post)",
       "compiler_and_flags": null,
       "caveats": "Numbers were read off a chart image (docs/images/grpc_qps.png) rather than a tabulated CSV; CPU model, OS, and Go/compiler version are not stated, so this is the project's own benchmark with partial methodology, capped at tier C per the rules."
+    }
+  },
+  {
+    "name": "Machnet",
+    "repo_url": "https://github.com/microsoft/machnet",
+    "language": "C++",
+    "domain": "networking-and-servers",
+    "category": "websocket-grpc-rpc",
+    "baseline": "Linux kernel TCP/IP stack (sockperf with Nagle disabled for microbenchmarks; kernel-TCP builds of a FASTER KV server and of Hashicorp Raft's transport)",
+    "baseline_in_list": false,
+    "metric": "latency",
+    "workload": "Round-trip latency of 64 B echo messages between two Azure F8s_v2 VMs in the same availability zone, one message in flight (Fig. 10). Also a single-threaded FASTER KV server doing 100% GETs over 100M 8-byte keys (Fig. 6), and Hashicorp's Go Raft replicating 80 B commands across 3 VMs (Fig. 8).",
+    "claimed_speedup": "'Linux TCP's latency is 2.6x, 4.2x, and 7.4x higher than Machnet at median, p99, and p99.9' (64 B echo; Machnet median 27 us). FASTER KV: '3.3x higher throughput, with 700K RPS compared to Linux TCP's 210K RPS', and at 210K RPS a p99 of 50 us vs 250 us (80% lower), using 2 cores vs 100% of all 8 for Linux. Go Raft: 34% lower median latency and 37% lower p99 (p50 185 us vs 282 us, p99 625 us vs 1000 us).",
+    "evidence_tier": "C",
+    "benchmark_url": "https://arxiv.org/pdf/2502.09281",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "Not stated in the paper. The repo's src/CMakeLists.txt Release build uses C++20 with -O3 -DNDEBUG -fno-rtti -fno-exceptions and needs DPDK 23.11. The Docker image builds on Ubuntu 22.04 with build-essential; no compiler version is pinned.",
+    "hardware": "Azure F8s_v2 VMs (8 vCPUs, 16 GB DRAM) with accelerated networking, Ubuntu 22.04.2, Linux kernel 6.2, same region and availability zone, no proximity placement groups. Hugepages and pinned stack processes for the DPDK stacks; no isolcpus or IRQ steering. The CPU model is not stated. The repo's PERFORMANCE_REPORT lists the Azure F8s_v2 vNIC as CX4-Lx with the netvsc PMD.",
+    "compared_against_cpp_std_directly": null,
+    "license": "MIT",
+    "usability": "copyable",
+    "last_commit": "2026-04-21",
+    "maintenance_status": "active",
+    "is_fork_of": null,
+    "stars_or_usage": "162 stars, 33 forks. eRPC's README opens with a Dec 2023 news line telling users to check out Machnet.",
+    "has_code": true,
+    "tradeoffs": "Machnet runs as a separate busy-polling sidecar that takes at least one dedicated engine core. It needs a second, dedicated vNIC per VM that is unbound from the kernel, plus DPDK and hugepages; the prebuilt image comes from GHCR and needs a GitHub token. Apps use its own sockets-like shared-memory message API (machnet_attach/listen/connect/send/recv), not BSD sockets, so they must be ported (C shim with Go, Rust and JS bindings). Its reliable, connection-oriented message protocol only talks to other Machnet peers, so it cannot replace TCP for outside clients. In exchange it runs on basic cloud vNICs (Azure, AWS, GCP) without flow steering, and it supports multiple processes per NIC and blocking receives. Each shared-memory crossing costs ~250 ns, and new connections are handled on a 50 us periodic interval.",
+    "caveats": "The numbers come from arXiv v1 (Feb 2025, 'Fast Userspace Networking for the Rest of Us', where the figures still label the system 'CNet'). The arXiv API shows no later version as of 2026-09-26. That is a pre-review, first-party version. The peer-reviewed paper is 'Enabling Fast Networking in the Public Cloud', ASPLOS '26, pp. 679-696, DOI 10.1145/3779212.3790158, with a changed author list. Semantic Scholar and OpenAlex mark it Gold OA (CC-BY), and the Machnet docs site links it, but dl.acm.org returned 403 and the PoliMi IRIS record has no file, so the final numbers are unverified. That is why this is tier C; it would be B if the ASPLOS text keeps these comparisons. The Linux baseline is kernel TCP via sockperf, which is not a listed websocket-grpc-rpc baseline (gRPC/uWebSockets/Thrift). That baseline is untuned: Nagle is off, but busy-polling sockets, isolcpus and IRQ steering are not used (the paper omits isolcpus and interrupt steering for all stacks), while Machnet dedicates a polling core. Against eRPC (a known-list project, not a category baseline) Machnet is slower: its median and p99 are within 10% of eRPC and p99.9 within 23%, and its 27 us median is 2 us higher. gRPC was not measured; the paper only asserts that libraries on top of Linux TCP such as gRPC would be slower. Only one Azure region was used, and the paper says cross-cloud numbers are not comparable. The paper's Raft text says '37% lower median p99', and Fig. 8 shows p99 625 vs 1000 us. On the repo side, the benchmark apps in the tree are src/apps/msg_gen, src/apps/rocksdb_server (not in the paper) and bindings/go/msg_gen; the FASTER server and Raft port are not in the tree, and the Linux side used sockperf. The README headline (750K 1KB RPCs/s at 61 us P99.9) has no baseline.",
+    "found_via": [
+      "seed-record pass: https://github.com/microsoft/machnet (README), then docs/PERFORMANCE_REPORT.md (no baseline), the project site https://machnett.github.io/machnet-docs/ (links the ASPLOS '26 paper), and an arXiv API query 'machnet' that returned arXiv 2502.09281"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.7,
+    "assignment_ids": [
+      "w5-seed-leads"
+    ],
+    "id": "https://github.com/microsoft/machnet",
+    "verification": {
+      "date": "2026-09-26",
+      "verdict": "confirm",
+      "tier_before": "C",
+      "tier_reason": "arXiv 2502.09281v1 is a first-party, pre-review preprint. Its text and figures give every claimed number: 2.6x/4.2x/7.4x (Fig. 10: 70/134/365 us vs 27/32/49 us), FASTER 700K vs 210K RPS with p99 50 vs 250 us, and Raft p50 185 vs 282 us and p99 625 vs 1000 us. It is not A because the CPU model and compiler are not stated and the FASTER and Raft benchmark code is not public. The peer-reviewed ASPLOS '26 text could not be read, so tier B cannot be confirmed.",
+      "notes": "Every claimed number matches arXiv v1. I tried for a readable ASPLOS '26 copy: arXiv API (v1 only), ACM PDF (403), OpenAlex, Semantic Scholar, PoliMi IRIS (no file), Antichi's and Kaffes's pages and the Machnet docs site (links only to ACM). None had the full text, so tier stays C. Metadata checked via GitHub GraphQL: MIT, 162 stars, 33 forks, not a fork or archived, last commit 2026-04-21, so active.",
+      "urls_opened": [
+        "https://arxiv.org/pdf/2502.09281",
+        "https://export.arxiv.org/api/query?id_list=2502.09281",
+        "https://github.com/microsoft/machnet",
+        "https://raw.githubusercontent.com/microsoft/machnet/main/README.md",
+        "https://raw.githubusercontent.com/microsoft/machnet/main/src/CMakeLists.txt",
+        "https://raw.githubusercontent.com/microsoft/machnet/main/CMakeLists.txt",
+        "https://raw.githubusercontent.com/microsoft/machnet/main/docs/PERFORMANCE_REPORT.md",
+        "https://raw.githubusercontent.com/microsoft/machnet/main/dockerfiles/ubuntu-22.04.dockerfile",
+        "https://api.crossref.org/works?query.bibliographic=Enabling+Fast+Networking+in+the+Public+Cloud&rows=3",
+        "https://api.semanticscholar.org/graph/v1/paper/DOI:10.1145/3779212.3790158?fields=title,openAccessPdf,externalIds,url,isOpenAccess,venue,year",
+        "https://api.openalex.org/works/doi:10.1145/3779212.3790158",
+        "https://re.public.polimi.it/handle/11311/1314031",
+        "https://gianniantichi.github.io/publications/",
+        "https://www.cs.columbia.edu/~kkaffes/",
+        "https://machnett.github.io/machnet-docs/",
+        "https://raw.githubusercontent.com/erpc-io/eRPC/master/README.md"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "baseline_in_list": true,
+      "stars_or_usage": "162 stars, 33 forks. The task lead says the eRPC authors point new users to it.",
+      "caveats": "The numbers come from arXiv v1 (Feb 2025, 'Fast Userspace Networking for the Rest of Us', where the figures still label the system 'CNet'). That is a pre-review, first-party version. The peer-reviewed paper is 'Enabling Fast Networking in the Public Cloud', ASPLOS '26, pp. 679-696, with a changed author list (confirmed via Crossref, Semantic Scholar and PoliMi IRIS). Its full text could not be read because ACM DL returned 403 and IRIS has no file, so the final numbers are unverified. That is why this is tier C; it would be B if the ASPLOS text keeps these comparisons. The Linux baseline is untuned: Nagle is off, but busy-polling sockets, isolcpus and IRQ steering are not mentioned, while Machnet dedicates a polling core. Against eRPC (a listed baseline) Machnet is slower: its median and p99 are within 10% of eRPC and p99.9 within 23%, and its 27 us median is 2 us higher. gRPC was not measured; the paper only asserts that libraries on top of Linux TCP such as gRPC would be slower. Only one Azure region was used, and the paper says cross-cloud numbers are not comparable. On the repo side, only msg_gen is in the tree; the FASTER server and Raft port were not found, and the Linux side used sockperf. The README headline (750K 1KB RPCs/s at 61 us P99.9) has no baseline."
     }
   },
   {
