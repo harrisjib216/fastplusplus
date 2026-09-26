@@ -867,6 +867,542 @@ Userspace wrapper around Linux's io_uring ring-buffer syscall interface; beats l
 
 #### binary-schemas
 
+##### Bebop  `C#`  `Apache-2.0`  `active`  `Tier A`
+
+Schema-first binary serializer with C#, TypeScript, Rust and C++ codegen; its C# decoder beat Google.Protobuf and MessagePack 4-9x.
+
+**Beats:** Protocol Buffers, MessagePack — The run is ProgrammerAL/SerializationBenchmarks (BenchmarkDotNet 0.13.1 in Release, .NET 5.0.9 x64 RyuJIT, Ryzen 9 3950X, Windows, 2021). Bebop 2.2.6 decoded a complex record in 166 ns (struct) and 232 ns (message), against 1,051 ns for Google.Protobuf 3.17.3 and 1,585 ns for MessagePack-CSharp 2.3.75, and decoded a like-for-like two-int32 record in 11.9 ns against 85.5 ns for Protobuf. Serialize gains were smaller (1.07-3.9x over Protobuf). The complex schemas differ (Protobuf uses a string GUID and Timestamp sub-messages), which widens the complex-decode gap.
+
+**How:** The wire format uses fixed-width little-endian integers and IEEE floats. There are no varints and no per-field wire-type tags, so the C# runtime reads each value with one unaligned load (Unsafe.ReadUnaligned over a ReadOnlySpan<byte>) and writes it with WriteUnaligned. bebopc emits straight-line code for each type: a struct is a fixed sequence of reads with no tags or length prefix, and a message is a uint32 body length plus 1-byte field indices handled by a switch loop. The native guid type (16 raw bytes) and date type (8-byte tick count) need no string or sub-message conversion, and float arrays are block-copied through MemoryMarshal.AsBytes. It is not zero-copy: decode copies strings and byte arrays into managed objects.
+
+**Use it when:**
+- .NET 8+ services that decode many small or medium records where decode latency dominates. In the cited run, a two-int32 record decoded in 11.9 ns against 85.5 ns for Google.Protobuf.
+- Systems where several languages share one schema (C#, TypeScript, Rust, C/C++, Dart, Python), e.g. a browser client talking to a .NET server.
+- Record shapes that will never change, which you can declare as a struct. Structs are the fastest and most compact Bebop encoding (166 ns vs 232 ns for the message form on the complex decode).
+- Hot send paths that can reuse buffers: EncodeIntoBuffer(byte[]) sized by MaxByteCount and backed by ArrayPool avoids the allocation of the default Encode().
+- Payloads with many GUIDs, timestamps or float arrays. Bebop stores these natively instead of as strings or sub-messages.
+
+**Skip it when:**
+- You need Protobuf wire compatibility or the gRPC ecosystem. Bebop's format is its own.
+- Wire size matters for small integers. With fixed-width ints and no varints, a two-int32 record is 8 B (struct) or 15 B (message), against 6 B for Protobuf and 7 B for MessagePack; the simple record is 48-57 B against 42 B.
+- Allocation-sensitive code that serializes through the default Encode(). It starts from an empty buffer, doubles it as it grows, then copies with ToArray. The complex struct allocated 1,032 B, against 400 B for Protobuf and 304 B for MessagePack.
+- Big-endian hosts: the C# BebopReader and BebopWriter throw on them. Also .NET Framework or runtimes before .NET 8 on current 3.x packages.
+- Untrusted input, or reading one field of a large message. Decoders trust the uint32 length prefixes (generated C# allocates an array of the declared length before reading its elements), and no hardening guidance is documented. The maintainer also says Bebop is record-oriented, so it has no FlatBuffers-style partial reads.
+
+**Integration:** module: NuGet package `bebop` (C# runtime) plus the bebopc code generator (bebop-tools on NuGet, npm or cargo). The C++ runtime is a single header, Runtime/C++/src/bebop.hpp. · none at runtime (the bebop 3.2.3 nuspec lists no dependencies); code generation needs the bebopc binary · .NET 8: bebop 3.2.3 targets net8.0 and net9.0 and uses static abstract interface members. The C# getting-started page still lists .NET Framework 4.7.2 and .NET Core 3.1, which is out of date. Generated C++ needs C++17 (std::optional, std::variant); the runtime test builds with g++ -std=c++17. · Little-endian only in C#. bebopc ships prebuilt for Linux, macOS and Windows on x64 and arm64, plus a WASI .wasm build.
+
+**Vs siblings:** Pick Bebop over HyperSerializer when data crosses language boundaries or needs schema evolution. HyperSerializer is .NET-only and serializes types positionally with no contract, while Bebop generates code for six-plus languages from one .bop schema with versionable messages. Pick SBE instead for fixed-layout, low-latency financial messaging; its code generator runs as a Java jar, while bebopc is a native binary.
+
+**Gotchas:**
+- The C# BebopWriter.WriteDate converts a DateTime to whole milliseconds since the Unix epoch before writing 100 ns ticks. Sub-millisecond precision is lost on round-trip, and all dates come back as UTC.
+- Messages encode fields in declaration order. When an old reader hits an unknown field index, the generated decoder jumps to the end of the message, so it drops any known fields encoded after the new one. Field indices are also a single byte.
+- Structs cannot evolve. Adding or removing a field breaks every existing reader, per the docs.
+- TypeScript: encode() returns a subarray of a shared singleton BebopView, so the next encode overwrites earlier results unless you copy them (issue #209, open since 2022).
+
+**Status:** Active: last push 2026-02-17, latest release v3.2.3 on 2025-09-16, Apache-2.0, and the runtime has no dependencies. But the only independent numbers are from 2021 (Bebop 2.2.6 on .NET 5), and the docs lag the code: the supported .NET list is stale and the known-issues page reads 'TODO'.
+
+[repo](https://github.com/6over3/bebop) · [benchmark](https://github.com/ProgrammerAL/SerializationBenchmarks/blob/main/BenchmarkResults/Deserialize_Once_ComplexPocos.md)
+
+##### bilrost  `Rust`  `Apache-2.0`  `active`  `Tier A`
+
+Rust derive-based, protobuf-like binary encoding (a rewritten prost fork) that encodes and decodes faster than prost.
+
+**Beats:** Protobuf — In rust_serialization_benchmark (run 2026-09-10; rustc 1.100.0-nightly with LLVM 23.1.1, fat LTO; AMD EPYC 9V74, 4 vCPUs), bilrost 0.1016.1 encoded the log dataset in 300 µs (prepend) and 397 µs (forward encode). prost 0.14.4's encode-only time was 731 µs, so bilrost was 2.4x and 1.8x faster. It decoded in 2.12 ms vs 2.68 ms (1.26x). prost's 1.89 ms populate+encode figure includes converting into prost-generated types, which bilrost avoids because it derives directly on the native structs; bilrost also leads prost on mesh, minecraft_savedata and mk48 (serialize 1.2-2.4x, deserialize 1.05-1.76x) with 8-18% smaller output.
+
+**Known shortcoming:** The 6.3x serialize figure is against prost's populate+encode time; against encode-only it is about 2.4x. bilrost's author is a maintainer of the benchmark suite.
+
+**Known shortcoming:** A fork of prost (per its README, not marked on GitHub). The harness derives bilrost on the benchmark's own structs while prost converts into generated types; fair encode-only margin is 1.8-2.4x, and across datasets 1.2-2.4x serialize and 1.05-1.76x deserialize. bitcode, savefile, nanoserde, wincode and serde-zap serialize faster on log; its case is schema evolution and canonical decoding, not peak speed. One maintainer, pre-1.0, Ubuntu-only CI.
+
+**How:** Nested length-prefixed data is written back to front into a rope-like `ReverseBuffer`, so each sub-message's length is known once its bytes exist. That gives single-pass encoding with no repeated length measurement (the README says prost re-measures nested messages). Varints are a 9-byte-max bijective LEB128 variant. Encoding has a 1-byte fast path, then a hard-coded binary search on length feeding a const-generic unrolled writer; decoding uses a fully unrolled slice decoder split into 32-bit pieces. Borrowed decoding skips string allocation, which the README calls often more than half of decode cost, and field order is enforced by tag deltas, so no duplicate or merge handling is needed.
+
+**Use it when:**
+- Rust-only systems where you own both ends and want protobuf-style schema evolution (numbered fields, unknown fields skipped) without .proto files or generated types.
+- Deeply nested or many-field messages, where backward `prepend` encoding helps most: 2.4x faster than prost encode on log and mk48 in the shootout.
+- String-heavy payloads you can decode by borrowing: on log, bilrost's borrowed decode is 721 µs vs 2.12 ms owned (~2.9x). prost has no borrowed decoding in that table.
+- You need canonical bytes for hashing, signing or dedup: `#[bilrost(distinguished)]` reports or rejects non-canonical input.
+- no_std targets with an allocator (turn off the `std` feature; `hashbrown` feature for maps).
+
+**Skip it when:**
+- Anything that must talk protobuf (gRPC, other languages, existing .proto schemas). The wire format is incompatible, there is no schema DSL, only a Rust implementation exists, and there is no RPC support.
+- Throughput matters most and schema evolution does not: on the same log table bitcode (97 µs), savefile (155 µs) and nanoserde (191 µs) serialize 1.6-3.1x faster than bilrost's 300 µs prepend. postcard also decodes faster (1.74 vs 2.12 ms) and its output is smaller (725 KB vs 805 KB).
+- You need random access without decoding (zero-copy archives). Bilrost always decodes into structs; see rkyv.
+- You want JSON or text output from the same derive. It is not provided; the README says to use a separate tool such as serde.
+- Bus-factor concerns: one maintainer with no external backing (issue #5), 47 stars, pre-1.0 versioning with occasional API breaks (0.1016.0 raised the MSRV and removed hidden methods).
+
+**Integration:** crate · bytes (required); default features add bilrost-derive (syn 2/3, quote, proc-macro2, eyre, itertools) and thin-vec (detailed-errors); build-dep autocfg; optional arrayvec, bstr, bytestring, chrono, hashbrown, jiff, smallvec, smol_str, time, tinyvec for type support · Rust 1.68 (edition 2021; CI tests 1.68 and stable); `default-field-values` feature needs syn 3 and an unstable syntax · Pure Rust, no_std + alloc capable. The self-copy prepend optimization turns on automatically only on x86_64. CI runs Ubuntu only; macOS and Windows jobs are commented out.
+
+**Vs siblings:** bitcode, savefile, nanoserde and postcard all beat bilrost on the same log table, so pick bilrost over them when you need tag-numbered, protobuf-style forward/backward compatibility or canonical decoding rather than peak speed. Choose minicbor (similar log serialize speed, slower mesh decode 9.43 vs 5.83 ms) only if you need a standard CBOR wire format.
+
+**Gotchas:**
+- Forward `encode` and backward `prepend`/`encode_fast` perform differently by workload: prepend is 1.9x faster than encode on mk48 but slightly slower on mesh. `encode_fast` returns a possibly non-contiguous ReverseBuffer; use `encode_contiguous`/`into_vec` when you need one slice.
+- Collections in messages default to `unpacked` (one field per element); long numeric arrays should use `packed`. Packed and unpacked are not interchangeable on the wire, and oneof variants require packed.
+- Distinguished decoding is opt-in and unsupported for floats and HashMap/HashSet (hash collections are not canonical). `u8`/`i8` and `Vec<u8>` byte strings need explicit `varint`/`plainbytes` encodings per the type table.
+- Decoding has a fixed recursion limit of 100 nesting levels (the `no-recursion-limit` feature removes it). The crate uses some `unsafe` in its buffers; the `forbid-unsafe` feature swaps in safe code at some cost in speed.
+
+**Status:** Actively maintained by one author: last default-branch release commit 2026-08-14, 0.1016.1 published to crates.io 2026-08-27, about 148k downloads. Apache-2.0 and easy to adopt. Versioning is pre-1.0, but the author states the wire format is final and that it runs in production at Restate and Graft.
+
+[repo](https://github.com/mumbleskates/bilrost) · [benchmark](https://github.com/djkoloski/rust_serialization_benchmark)
+
+##### bitcode  `Rust`  `MIT OR Apache-2.0`  `active`  `Tier A`
+
+Rust-only columnar, bit-packed serializer; on string-heavy logs it encodes 5-14x faster than prost, FlatBuffers, Cap'n Proto, rmp-serde.
+
+**Beats:** Protobuf (prost 0.14.4; Google's protobuf 4.36.1-release crate also on the page), FlatBuffers (flatbuffers 25.12.19), Cap'n Proto (capnp 0.27.0), MessagePack (rmp-serde 1.3.1); all are the Rust crates for those formats, not the C++ libraries — Source: djkoloski/rust_serialization_benchmark, README run of 2026-09-10, 'log' dataset. bitcode 0.6.9 serialized in 96.8 µs, against 731 µs for prost 0.14.4 (encode only), 764 µs for FlatBuffers, 480 µs for capnp and 1.32 ms for rmp-serde. It deserialized into owned structs in 1.15 ms, against 2.68 ms for prost decode and 2.38 ms for rmp-serde, and its output was 703,710 B versus 884,628 B for protobuf. The run used rustc 1.100.0-nightly (LLVM 23.1.1) with LTO, -C target-cpu=native and criterion, with bitcode::Buffer reused across iterations, on a 2-core AMD EPYC 9V74 GitHub Actions VM. capnp and FlatBuffers have no owned deserialize, so only encode is directly comparable with them, and the ranking flips on the float-heavy 'mesh' dataset.
+
+**Known shortcoming:** Release builds on x86/x86_64/aarch64 use deliberate undefined behaviour (unsafe_wild_copy reads past short slices within a page; issue #50 open, opt-in PR #51 unmerged; disabled under miri and debug so tests never cover it); part of the log-dataset win depends on it. On float-heavy mesh, rkyv and wincode are about 8x faster. Derive and serde encodings are mutually incompatible, derive has no schema evolution or recursive types, and there is no decode allocation cap.
+
+**How:** The derive builds a struct-of-arrays encoder tree. Every instance of a field, such as every status code across a Vec of log records, goes into its own column, and each column is packed in one pass at the end. Integer columns get the narrowest byte width that fits the column maximum, optionally after subtracting the column minimum (frame-of-reference). Byte columns with a range under 16 are packed 2-8 values per byte (bools 8 per byte). Lengths take one byte with a 255 escape. Strings become one length column plus one concatenated byte blob, UTF-8-checked once with a SIMD ASCII fast path. Decoding validates every column up front in a `populate` pass, so the per-value decode loop has no bounds or error checks. The loops are written as fixed-size chunks for LLVM auto-vectorization, and short slices are copied with an over-reading fixed-size 'wild copy' instead of memcpy (see gotchas).
+
+**Use it when:**
+- Both ends are Rust and built from the same bitcode major version: game or app netcode (including Rust/WASM clients), IPC, internal caches and save files.
+- Many small records full of strings, small ints, enums and bools. bitcode had the fastest serialize of any crate on the page for 'log' (96.8 µs) and 'minecraft_savedata' (82.0 µs).
+- Bandwidth or storage matters, with or without compression afterwards. On 'log' it was 703,710 B raw and 227,322 B after zstd, against 884,628 B and 314,959 B for prost; its field-grouped layout is designed to compress well.
+- no_std targets that have alloc: std is a default feature you can turn off, and CI checks thumbv6m-none-eabi.
+- Decoding size-capped untrusted input: lengths and UTF-8 are validated, memory allocated stays proportional to input size, and CI runs cargo-fuzz.
+
+**Skip it when:**
+- Cross-language or long-lived data. There is no schema and no non-Rust implementation. The format may change at every major version, and there is no schema evolution: with derive, adding a field or an enum variant must be assumed to break old bytes.
+- Large arrays of floats or POD structs. On 'mesh', bitcode took 1.23 ms to serialize and 1.26 ms to deserialize. rkyv took 141.7/144.7 µs and wincode 147.9/144.4 µs; FlatBuffers (371 µs) and postcard (413 µs) also serialized faster.
+- You need zero-copy random access or partial reads. rkyv, FlatBuffers and Cap'n Proto access a buffer in ns, while bitcode always decodes the whole message, and a streaming API is an open request (issue #6).
+- Your policy forbids undefined behavior in dependencies. Release builds on x86, x86_64 and aarch64 read past the end of a slice inside the same page; issue #50 is open and PR #51, which would make this opt-in, is unmerged.
+- Recursive types with derive: not supported, and the compiler fails with a layout cycle. Serde models also fail if they use untagged, internally tagged or adjacently tagged enums, skip_serializing_if/default, or serde_json::Value; these panic with 'type changed'.
+
+**Integration:** crate · bytemuck (required); bitcode_derive proc-macro (default `derive` feature); optional: serde, arrayvec, glam, rust_decimal, time, uuid · Rust 1.70 for the published 0.6.9 (crates.io rust_version). An unreleased June 2026 commit on main raised rust-version to 1.88. · Any Rust target with alloc (std optional). CI tests x86_64 and i686 Linux, checks thumbv6m-none-eabi, and runs miri on big-endian powerpc64. The over-reading copy fast path is enabled only in x86, x86_64 and aarch64 release builds.
+
+**Vs siblings:** Pick bitcode over postcard or serde-zap when both ends are Rust and you want the fastest encode and smallest output on record-shaped data. On 'log' it encoded in 96.8 µs against 366.95 and 135.54 µs, and wrote 703,710 B against 724,953 and 741,295 B. Pick postcard if you need its documented, stable 1.0 wire format; pick rkyv or wincode for float/POD-heavy data or zero-copy access, where on 'mesh' they are about 8x faster than bitcode.
+
+**Gotchas:**
+- The 'wild copy' in src/derive/vec.rs reads a fixed [T; N] block past the end of short slices when the read stays inside the same 4 KiB page. The maintainers acknowledge this as UB on the wiki Security page. It is disabled under miri and debug_assertions, so the tests don't exercise the path that ships in release. PR #51 measured str-vec encode about 28% slower without it (98.5 vs 126.3 µs).
+- In release builds, Error is a zero-sized type whose message is just 'bitcode error', so you get no hint of which field or column failed. Only debug builds carry a reason string.
+- Derive (Encode/Decode) and serde (serialize/deserialize) produce different, incompatible bytes for the same type. For example, the serde path drops the SocketAddrV6 flowinfo and scope_id fields. Pick one path per message type.
+- There is no max-allocation knob, so cap the input slice length yourself. The Security wiki warns that enums with very unbalanced variant sizes, and structs whose fields are all #[bitcode(skip)], can make small inputs allocate a lot.
+
+**Status:** Actively maintained: last commit 2026-06-28, latest crates.io release 0.6.9 on 2025-12-18, about 10.1M downloads, and it is an ordinary crates.io dependency. It declares MIT OR Apache-2.0, but the repo ships only LICENSE-MIT.
+
+[repo](https://github.com/SoftbearStudios/bitcode) · [benchmark](https://github.com/djkoloski/rust_serialization_benchmark/blob/master/README.md)
+
+##### minicbor  `Rust`  `BlueOak-1.0.0`  `active`  `Tier A`
+
+no_std Rust CBOR codec whose derived encoders serialize 2.6-6.9x faster than rmp-serde (MessagePack); decoding is only on par.
+
+**Beats:** MessagePack — Source: djkoloski/rust_serialization_benchmark run of 2026-09-10 (Criterion; rustc 1.100.0-nightly, LLVM 23.1.1, bench profile with LTO; AMD EPYC 9V74, 4 vCPUs, Hyper-V guest). On the log dataset, minicbor 2.3.0 with derived Encode/Decode serialized into a preallocated slice in 405.77 us vs 1.3179 ms for rmp-serde 1.3.1 (~3.2x), and deserialized in 2.3448 vs 2.3829 ms (a tie). The same run puts it ~8.3x ahead of ciborium 0.2.2 on serialize and ~4.6x on deserialize.
+
+**Known shortcoming:** Beats rmp-serde (MessagePack) on serialize only (about 3.2x); deserialize is about equal, and msgpacker and zerompk beat minicbor in the same table.
+
+**Known shortcoming:** Only the native derive path with #[n(i)] indices was measured; minicbor-serde (a serde drop-in) was not. Deserialize ranges from 13% slower to 5% faster than rmp-serde. No deterministic CBOR (#58). Needs Rust 1.85. Blue Oak licence (maintainer declined MIT/Apache, #6) reports as NOASSERTION on GitHub, which may trip licence scanners. minicbor-serde breaks internally tagged enums with types like SocketAddr (#55).
+
+**Independent measurement:** rust_serialization_benchmark (2026-09-10): about 8.3x faster serialize and 4.6x faster deserialize than ciborium, the common Rust CBOR crate (derived from page data).
+
+**How:** It uses no special algorithm. The derived code calls concrete, type-specific Encoder/Decoder methods (Encoder::str, Decoder::u32) directly, with no serde Serializer/Visitor layer in between. The Encoder writes into a caller-supplied &mut [u8] or Vec<u8> using copy_from_slice/extend_from_slice and allocates nothing. The derive replaces field names with integer indices and by default encodes a struct as a CBOR array where position stands for the index, so no string keys are written or matched; &str and ByteSlice fields decode zero-copy from the input after UTF-8 checking. The benchmark does not show which of these produces the gap over rmp-serde.
+
+**Use it when:**
+- Encode-heavy paths such as logging, telemetry or snapshots now on rmp-serde. On all four shootout datasets, serialize time drops 2.6x (minecraft_savedata) to 6.9x (mesh), and 3.2x on string-heavy log records.
+- You already use CBOR through ciborium. On log it is ~8.3x faster to serialize and ~4.6x faster to deserialize, and the output is ~42% smaller (817,830 vs 1,407,835 bytes) because integer indices replace field names. Against cbor4ii, deserialize is ~1.8x faster and serialize is close (405.77 vs 471.14 us).
+- no_std or embedded targets. The core crate has no required dependencies, encodes into a fixed &mut [u8] without allocating, and CI builds it for aarch64-unknown-none.
+- Long-lived or cross-language data where you want a standard, self-describing format with protobuf-style evolution: unknown fields are skipped, a missing Option decodes as None, and indices let you rename freely.
+- Read paths that can borrow. Decoding into &str or ByteSlice borrows from the input: 1.0694 ms on log vs 2.3448 ms for owned decoding.
+
+**Skip it when:**
+- Decode-dominated workloads. Deserialize ranges from ~13% slower than rmp-serde (minecraft_savedata 2.6924 vs 2.3727 ms) to ~5% faster (mk48), so reads gain nothing.
+- You must emit MessagePack, or just want the fastest Rust MessagePack. msgpacker and zerompk beat it on the same log table (serialize ~266-269 us, deserialize 1.81-2.07 ms).
+- You need deterministic CBOR (RFC 8949 section 4.2) for hashing or signing. Floats are always written at their declared width and map keys are not sorted; the request is open as issue #58.
+- You want to keep plain serde derives. The measured numbers come from the native #[derive(Encode, Decode)] with #[n(i)] on every field, and minicbor-serde's speed is not in this benchmark.
+- Your toolchain is older than Rust 1.85 (the crate uses edition 2024; the maintainer declined 2021 support in #50), or your policy only allows MIT/Apache (the maintainer declined relicensing in #6).
+
+**Integration:** crate · none required; optional minicbor-derive (a proc-macro built on syn/quote/proc-macro2) via the 'derive' feature, 'half' for f16; minicbor-serde adds serde · Rust 1.85 (edition 2024). Cargo.toml has no rust-version field, and CI tests only stable and beta. · any; no_std core (CI builds for aarch64-unknown-none); 'alloc' and 'std' features add collections and std types; atomic impls are gated on target_has_atomic
+
+**Vs siblings:** Pick minicbor over postcard (366.95 us serialize on the same log table, about the same speed) or bitcode (96.821 us) when the bytes must be standard CBOR that other languages' decoders can read, with index-based field evolution. If the data never leaves Rust and throughput is the goal, bitcode, serde-zap, wincode and rkyv all post much faster serialize times on the same page.
+
+**Gotchas:**
+- Every field and variant needs an explicit index. The default array encoding writes a NULL byte for each None and each index gap, so use #[cbor(map)] for sparse types. Non-optional fields can never be removed, and a top-level enum is not forward-compatible: an unknown variant is an error unless the enum sits behind an Option field.
+- &[u8] and Vec<u8> encode as CBOR arrays of integers, not byte strings, unless you use ByteSlice/ByteVec or #[cbor(with = "minicbor::bytes")].
+- Without the 'alloc' feature, Decoder::skip cannot skip indefinite-length arrays or maps nested inside definite ones. An unknown field of that shape then fails decoding instead of being ignored.
+- minicbor-serde's Deserializer reports is_human_readable = false. Serde internally tagged enums holding types such as SocketAddr then fail to round-trip (issue #55, closed as a serde upstream problem).
+
+**Status:** Actively maintained. Release 2.3.0 shipped 2026-07-23 and the develop branch has commits through 2026-09-26; about 15.6M crates.io downloads and 185 reverse dependencies. Usability is copyable under Blue Oak 1.0.0, an OSI-approved permissive license, but GitHub reports it as NOASSERTION, which may trip license scanners.
+
+[repo](https://github.com/twittner/minicbor) · [benchmark](https://github.com/djkoloski/rust_serialization_benchmark)
+
+##### nanoserde  `Rust`  `MIT OR Apache-2.0`  `active`  `Tier A`
+
+Zero-dependency Rust derive serializer whose schemaless binary format encodes ~3.8x and decodes ~1.6x faster than prost on logs.
+
+**Beats:** Protobuf — The numbers come from djkoloski's rust_serialization_benchmark: Criterion, run 2026-09-10, rustc 1.100.0-nightly with LLVM 23.1.1, lto = true, on a 4-vCPU AMD EPYC 9V74 VM. On the log set nanoserde 0.2.1 serialized in 190.59 us against prost 0.14.4's 731.23 us encode-only (~3.8x; ~9.9x against populate+encode) and deserialized in 1.6898 ms against 2.6802 ms (~1.6x). It also beat prost on mesh (1.3246 ms vs 5.8939 ms serialize, 824.47 us vs 10.253 ms deserialize), minecraft_savedata and mk48; all of these compare Rust crates, not C++ libprotobuf.
+
+**Known shortcoming:** The 9.9x serialize figure is against prost's populate+encode time; against encode-only it is about 3.8x. wincode is faster in the same table.
+
+**Known shortcoming:** No schema evolution (positional fields, enum variants as declaration-order u16), so not a protobuf replacement; output is 18% larger than prost on log. Vec<T> of numbers is encoded element by element, about 9x slower than wincode and savefile on mesh. Decoders preallocate lengths read from input before bounds checks (crafted input can abort or panic; source reading). Lenient bool/Option decoding; u64 lengths truncate on 32-bit targets. nanoserde-derive is MIT-only and ships without a licence file (#156).
+
+**How:** There is no intermediate data model like serde's Serializer/Visitor layer. Each derive is a hand-written token parser that emits straight-line code calling ser_bin/de_bin on every field in declaration order. The wire format is the plain struct layout: integers and floats are fixed-width little-endian bytes appended with extend_from_slice, strings and collections get a u64 length prefix, Option is a 1-byte tag, and enum variants are a u16 index. There are no field tags, no varints and no pass to compute the size first. Decoding is a bounds-checked cursor (offset: &mut usize) over the input slice. That removes protobuf's per-field tag and varint work, at the cost of larger output than varint formats and no schema evolution.
+
+**Use it when:**
+- Rust-to-Rust messages or save files where both sides build from the same struct definitions and you want 3.8-6.5x faster encoding than prost without a .proto step (log 190.59 us vs 731.23 us; minecraft_savedata 165.05 us vs 1.0006 ms; mk48 701.90 us vs 4.5619 ms).
+- Game, wasm32 or small-binary projects where compile time and dependency count matter. The only dependency is nanoserde's own proc-macro crate, and CI builds wasm32-unknown-unknown, Windows (MSVC and GNU), macOS x86_64 and Linux.
+- no_std + alloc targets: turning off the default std feature builds the crate as no_std, without the HashMap/HashSet/SystemTime impls.
+- Records full of strings and structs (logs, player saves) where you also want JSON or RON from the same small dependency, and decode times around 1.5-1.7 ms on these datasets are acceptable.
+
+**Skip it when:**
+- Cross-language or long-lived data. Fields are positional with no tags, enum variants are u16 indices in declaration order, and the binary format does not support #[nserde(default)]. Adding, removing or reordering a field or variant makes previously written bytes unreadable.
+- Bulk numeric arrays or byte blobs. Vec<T> is encoded element by element, with no memcpy path for Vec<u8> or Vec<f32>. On the mesh dataset it serializes in 1.3246 ms, against 147.88 us for wincode and 142.33 us for savefile, and deserializes in 824.47 us against about 144 us.
+- Size-sensitive links. Fixed-width integers and 8-byte length prefixes make its log output 18% larger than prost's (1,045,784 vs 884,628 B) and about 1.5-1.9x larger than bitcode's on log and mk48 (703,710 B; 1,812,404 vs 971,318 B). Varint lengths (issue #97) would need a breaking major release.
+- Untrusted input. Vec, HashSet and HashMap decoding call with_capacity(len) with a length read from the input before checking that enough bytes remain. A crafted length prefix can therefore force a huge allocation (abort) or a capacity-overflow panic. This comes from reading the source; no fuzzing or advisory was found.
+- Zero-copy or streaming I/O. There is no borrowed (&str/&[u8]) decoding (the shootout marks Borrow as unsupported), and there is no io::Read/io::Write API: issue #23 is open, and the maintainers declined the change in #103.
+
+**Integration:** crate · none beyond its own nanoserde-derive proc-macro crate (no syn/quote/proc_macro2) · Rust 1.81 (rust-version in Cargo.toml), edition 2021; CI tests the no_std configuration on nightly only · any; the format is explicitly little-endian. CI builds x86_64 Linux, x86_64 Windows (MSVC and GNU), x86_64 macOS and wasm32-unknown-unknown, but runs tests only on x86_64 Linux
+
+**Vs siblings:** Pick nanoserde over wincode, savefile or bitcode when a dependency-free build tree and binary+JSON+RON in one crate matter more than the last 30-40% of speed. On log, wincode serializes in 137.05 us and deserializes in 1.4166 ms at the same output size (1,045,784 B), savefile serializes in 154.62 us, and bitcode is both faster (96.821 us / 1.1452 ms) and 33% smaller. For numeric arrays pick wincode or savefile; if you need schema evolution, stay on a tagged format.
+
+**Gotchas:**
+- Decoding is lenient: any non-zero byte decodes as bool true, and any Option tag other than 1 decodes as None, so corrupted input can be accepted instead of rejected.
+- usize and all lengths are written as u64. On 32-bit targets such as wasm32 the decoded value is cast with 'as usize', which silently truncates anything above u32::MAX.
+- An unknown enum discriminant is reported at offset 0 rather than its real position. Derive parse failures show up as proc-macro panics (unimplemented!) instead of errors pointing at the source.
+- crates.io is still at 0.2.1 (2025-03-22), the benchmarked version; master is at 0.2.2 and holds later fixes, such as the UnknownDiscriminant error and compile errors on unknown #[nserde] attributes, that are not published. nanoserde-derive is MIT-only while nanoserde is MIT OR Apache-2.0, and the published derive crate ships without a license file (issue #156).
+
+**Status:** Actively maintained (commits through September 2026, 911 stars, ~1.7M crates.io downloads), dual MIT/Apache-2.0 and small enough to vendor. However, the last crates.io release is 0.2.1 from March 2025, and the maintainer says they prioritize 'simple + no dependency + safe over as fast as possible'.
+
+[repo](https://github.com/not-fl3/nanoserde) · [benchmark](https://github.com/djkoloski/rust_serialization_benchmark)
+
+##### Nino  `C#`  `MIT`  `active`  `Tier A`
+
+C# source-generated binary serializer for .NET and Unity; beats MessagePack-CSharp and edges MemoryPack on its own microbenchmarks.
+
+**Beats:** MessagePack (MessagePack-CSharp, NuGet package 'MessagePack'); MemoryPack also compared — The project's docs page ran BenchmarkDotNet 0.14.0 ShortRun (3 iterations) on .NET 9.0.0 Arm64 RyuJIT with Server GC on an Apple M1. Serializing one mixed SimpleClass into a reused buffer took 128 ns for Nino, 1,757 ns for MessagePack-CSharp (13.68x) and 314 ns for MemoryPack (2.44x); deserializing took 424 ns, 2,185 ns (5.17x) and 804 ns (1.90x). The page gives no package versions, some rows have Error larger than the mean, and the struct-only rows (0.39–2.8 ns) sit at the timer floor.
+
+**Known shortcoming:** The published page came from an older 2025 version of the benchmark code, with only 3 iterations (BenchmarkDotNet ShortRun). Struct timings are under 3 ns, so the struct ratios mean little.
+
+**Known shortcoming:** No stable v4 release (4.0.0-beta.47; the docs warn against 3.9.x, the newest non-beta). C#-only wire format that follows CLR struct layout and has broken four times in v3; WEAK_VERSION_TOLERANCE changes the format. [NinoUtf8] likely truncates or throws on non-ASCII text (writes the UTF-16 char count as byte length; source reading). Reader trusts length headers; not hardened for untrusted input. No circular references (#132) or custom collection types (#166). Some benchmark rows have error larger than the mean; Nino ties MemoryPack on Vector4[].
+
+**How:** All code is generated at compile time, so there is no reflection. Unmanaged structs, and arrays or List<T> of unmanaged T, are copied as raw memory (Unsafe.WriteUnaligned, or MemoryMarshal.AsBytes plus CopyTo, with CollectionsMarshal.AsSpan for lists). Runs of up to 16 adjacent unmanaged fields in a class are packed into one sequential-layout NinoTuple struct and written with a single store. Strings are copied as raw UTF-16 bytes by default with no transcoding, fields are fixed-width with no varints or per-member keys, and polymorphic dispatch reads the type handle straight from the object header, then checks a 4-entry inline cache before falling back to a FastMap lookup.
+
+**Use it when:**
+- Both ends are C# (.NET 6/8 or Unity 2022.3+): game saves, C# client/server messages, IPC and local caches, where nothing else needs to read the bytes.
+- Payloads dominated by primitive fields, primitive arrays and List<T> of structs, where the memcpy paths do most of the work. The project page shows 13.68x faster serialize and 5.17x faster deserialize than MessagePack on a mixed class.
+- Allocation-sensitive hot paths: serialize into a reused NinoArrayBufferWriter and deserialize into existing objects with DeserializeRef or [NinoRefDeserialization].
+- Unity projects on IL2CPP, HybridCLR or ILRuntime that need interface or abstract-class polymorphism and Unity math types (Vector3, Quaternion, Matrix4x4).
+
+**Skip it when:**
+- Data that other languages or tools must read, or that must stay readable for years. The format is C#-only and follows CLR struct layout, and the Versioning page lists wire-format breaks at v3.0.0, 3.0.3, 3.2.0 and 3.3.4. The recovery path it gives is to keep a copy of the old generated deserializer.
+- Projects that need a stable release. v4 is still in beta (4.0.0-beta.47, Feb 2026), and the newest non-beta on NuGet is 3.9.17, a line the Quick Start page tells users not to use.
+- Untrusted input. The Reader does unchecked unaligned reads (Unsafe.ReadUnaligned before the span slice) and trusts length headers, and no hardening against hostile payloads is documented.
+- Object graphs with cycles (issue #132, open) or user-defined collection types, including List<T> subclasses. The maintainer says these are unsupported in v4 (issue #166, open).
+- Size-sensitive storage or links. Strings are UTF-16 unless marked [NinoUtf8], fields are fixed-width with struct padding, and no built-in compression is documented. The mixed SimpleClass payload is 1.13 KB, against 1.09 KB for MessagePack.
+
+**Integration:** shared lib (NuGet meta-package Nino = Nino.Serialization runtime + Nino.Generator Roslyn source generator; Unity via OpenUPM com.jasonxudeveloper.nino) · System.Buffers, System.Memory, System.Runtime.CompilerServices.Unsafe (NuGet). In Unity the generator needs Microsoft.CodeAnalysis. · The runtime targets net6.0, net8.0 and netstandard2.1 (the docs say .NET 5+ or .NET Standard 2.0+). You need a compiler and IDE with source-generator support (the generator is built against Roslyn 4.3), or Unity 2022.3+. .NET Framework is not supported. · Any .NET or Unity player platform, 32- and 64-bit (there are separate 32-bit copy paths). It assumes little-endian; big-endian needs a custom build with a define symbol.
+
+**Vs siblings:** MemoryPack is the closest sibling, with the same memcpy-style C# design. Pick Nino over it only if the 2.44x/1.90x SimpleClass serialize/deserialize margin on Nino's own page matters and you accept beta software; the two tie on Vector4[], and MemoryPack is the stable, much more widely used option (1.21.4, about 4.7k stars). Choose Nerdbank.MessagePack (MessagePack wire format) or Bebop (schema-based: C#, TypeScript, Rust, C++) when another language or tool must read the data.
+
+**Gotchas:**
+- [NinoUtf8] appears to be ASCII-only. Writer.WriteUtf8 writes the UTF-16 char count as the byte length and commits only that many bytes, and Reader.ReadUtf8 builds a string of that length, so non-ASCII text would be truncated or throw. The only unit test uses "Hello, World!". This comes from reading the code; it was not run.
+- Adding members requires the WEAK_VERSION_TOLERANCE symbol, which changes the wire format: data written with it cannot be read by builds without it, and the reverse. Deleting members is never allowed.
+- The wire layout is CLR memory layout, padding included: the int+DateTime SimpleStruct is 16 bytes. ValueTuple serializes differently on .NET Core and on Mono/Unity, per the Limitations page.
+- The docs lag the v4 code. The Basic Usage page shows Serializer.Serialize and Deserializer.Deserialize(data, out T), while the code uses NinoSerializer and NinoDeserializer. The Limitations page says to define BIG_ENDIAN, but Reader.cs and TypeCollector.cs check BIGENDIAN.
+
+**Status:** Active (last commit 2026-06-12, 649 stars, MIT) and installable from NuGet or OpenUPM, but v4 is still a beta (4.0.0-beta.47, Feb 2026) with a wire format that has broken across versions before.
+
+[repo](https://github.com/JasonXuDeveloper/Nino) · [benchmark](https://nino.xgamedev.net/en/perf/micro)
+
+##### postcard  `Rust`  `MIT OR Apache-2.0`  `active`  `Tier A`
+
+no_std serde binary format for Rust; serializes ~2x faster than prost/flatbuffers, ~3.6x faster than rmp-serde on log records.
+
+**Beats:** Protobuf (prost 0.14.4; Google's protobuf 4.36.1-release crate also on the page), FlatBuffers (flatbuffers 25.12.19), Cap'n Proto (capnp 0.27.0), MessagePack (rmp-serde 1.3.1); all are the Rust crates for those formats, not the C++ libraries — In djkoloski/rust_serialization_benchmark (run 2026-09-10; rustc 1.100.0-nightly, LTO, target-cpu=native, criterion; 2-vCPU AMD EPYC 9V74 GitHub runner VM), postcard 1.1.3 serialized the 'log' dataset into a preallocated slice in 366.95 us. The Rust-crate baselines took 731.23 us for prost encode (~2.0x), 763.63 us for flatbuffers (~2.1x), 480.15 us for capnp (~1.3x) and 1.3179 ms for rmp-serde (~3.6x). Owned deserialize took 1.7399 ms, against 2.6802 ms for prost decode (~1.5x) and 2.3829 ms for rmp-serde (~1.4x). Postcard also beats prost on the other three datasets, but flatbuffers serializes 'mesh' faster (371 vs 413 us).
+
+**Known shortcoming:** bitcode, serde-zap and wincode serialize the log dataset 2.7-3.8x faster on the same page, and on mesh postcard deserializes in 5.22 ms vs 144 us for wincode. Latest release 1.1.3 (2025-07) lags main; the default heapless-cas feature triggers RUSTSEC-2023-0089. No documented fuzzing and no panic-freedom guarantee on malformed input; flatten and skip_serializing_if break round-trips.
+
+**How:** The format carries no field tags, field names or struct lengths. A struct is its fields concatenated in declaration order. Integers wider than 8 bits are 7-bit-per-byte little-endian varints (LEB128-style, zigzag for signed), floats are raw little-endian bytes, and strings and sequences are a varint length followed by the bytes. Serialization is a plain serde walk: the Slice flavor writes through a raw-pointer cursor with one bounds check per push or memcpy. Deserialization reads from a borrowed slice cursor, so &str and &[u8] fields can borrow the input without copying. The README ranks CPU time last among its goals, after memory, code size and developer time, so the speed comes from the minimal format rather than from SIMD or special tuning.
+
+**Use it when:**
+- Rust-to-Rust messages between firmware and a host (no_std microcontroller to desktop or server) where both sides share one crate of serde types.
+- Small records with many short strings and small integers. On the 'log' dataset it serialized in about half prost's encode time, and its output was ~18% smaller (724,953 vs 884,628 bytes).
+- Serial, USB or radio links that need framing and integrity: the COBS and CRC32 flavors apply while serializing, and the slice or heapless outputs need no heap.
+- Reads where borrowing strings and bytes from the input is acceptable. The borrowed deserialize of 'log' took 577 us, against 1.74 ms for owned types.
+- Serde codebases that want to replace a self-describing format such as MessagePack (rmp-serde) with a smaller, faster format that has a written spec and a v1 stability promise.
+
+**Skip it when:**
+- Cross-language interop. There is no IDL, so every other language needs a hand-written implementation of the spec. Protobuf, FlatBuffers or Cap'n Proto are the safer choice there.
+- Evolving schemas. The format is not self-describing, so adding, removing or reordering fields breaks readers of the old layout, and the spec leaves compatibility to users.
+- Maximum CPU throughput on servers. On the same 'log' run, bitcode (96.8 us), serde-zap (135.5 us) and wincode (137.1 us) serialize 2.7-3.8x faster. On the float-heavy 'mesh' dataset, postcard deserializes in 5.22 ms, against 1.26 ms for bitcode and 144 us for wincode.
+- Random access into large buffers without decoding. Postcard always decodes the whole message; rkyv, FlatBuffers and Cap'n Proto offer zero-copy access instead.
+- Types that depend on self-describing serde features. deserialize_any returns WontImplement, and the Deserializer docs call internally tagged enums incompatible.
+
+**Integration:** crate · serde (default-features off) and cobs 0.3. The default feature heapless-cas pulls in heapless 0.7. Optional: embedded-io 0.4/0.6, crc, defmt, postcard-derive (MaxSize), nalgebra 0.33, enum-map 3. · Not documented: there is no rust-version in Cargo.toml or on crates.io. Edition 2021 implies Rust 1.56 or newer. CI builds on stable and uses nightly only for the docs build. · Any Rust target, including no_std. CI tests on x86-64 Linux and runs check/clippy builds for thumbv7em-none-eabi and riscv32i-unknown-none-elf (no atomics). usize is handled for 16-, 32- and 64-bit pointer widths.
+
+**Vs siblings:** Pick postcard when its embedded-first features matter (no_std with slice or heapless output, COBS/CRC framing flavors) or when you want its written, v1-stable wire spec. Its 'log' output is also compact: 724,953 bytes, against 703,710 for bitcode, 741,295 for serde-zap and 1,045,784 for wincode. If raw server-side CPU time is the goal, bitcode, serde-zap and wincode serialize the same dataset 2.7-3.8x faster, and rkyv gives zero-copy access.
+
+**Gotchas:**
+- Some serde attributes break it (tracking issue #125, open). serde(flatten) and serde(skip_serializing_if) break round-trips. serde(skip) on an enum variant that is not last silently shifts the discriminants. deserialize_any, deserialize_identifier and deserialize_ignored_any return Error::WontImplement.
+- Sequences and maps must report their exact length up front, or serialization fails with SerializeSeqLengthUnknown. collect_str runs the Display impl twice: once to count the length and once to write.
+- The default features pull in heapless 0.7 with 'cas', which triggers the RUSTSEC-2023-0089 atomic-polyfill 'unmaintained' warning (#223). heapless 0.9 support is on main but unreleased; the latest crates.io release is 1.1.3 from 2025-07-24 (#296).
+- Untrusted input: panic-freedom is not guaranteed and no fuzzing is documented (#48, open since 2021). A corrupted length prefix no longer drives a huge Vec preallocation, because the sequence size_hint is capped by the bytes remaining. A usize above u32::MAX sent from a 64-bit target fails to decode on a 32-bit one.
+
+**Status:** The repo is actively developed (last commit 2026-09-21, with postcard2 and schema-ng work under way), but the last postcard release is 1.1.3 from July 2025. It is a dual MIT/Apache-2.0 crate with about 66M downloads that you add as an ordinary Cargo dependency.
+
+[repo](https://github.com/jamesmunns/postcard) · [benchmark](https://github.com/djkoloski/rust_serialization_benchmark/blob/master/README.md)
+
+##### qdf (Quick Data Format)  `Go`  `MIT`  `active`  `Tier A`
+
+Go-only schemaless binary format: record batches 29-68% smaller than Protobuf, ~7x faster decode than encoding/json.
+
+**Beats:** Protocol Buffers, FlatBuffers, MessagePack (wire size); MessagePack and Go encoding/json (encode/decode speed) — On five batch fixtures (RTB, IoT, OTLP, Logs, Events) from the public bench/ suite (scripts/compare.sh, go test -bench -benchmem -count=6, default build, Go 1.26, i7-9750H darwin/amd64, dated 2026-06-01), qdf_compression's wire was 29-68% smaller than google.golang.org/protobuf and also smaller than FlatBuffers, msgpack and encoding/json. The speed wins are only against encoding/json v1 and vmihailenco/msgpack (5,000-user AD export: 7.9 ms decode vs 57.8 ms and 16.7 ms), and that AD harness times only qdf; protobuf and FlatBuffers still win raw decode, and the README's newer ubuntu-latest wire table (-24 to -77% vs protobuf) does not match the dated page.
+
+**Known shortcoming:** Against Protobuf the win is wire size only, not speed; its speed wins are against msgpack and Go's encoding/json. The Active-Directory json/msgpack timings have no public code for the json/msgpack side.
+
+**How:** It shrinks data across records instead of encoding each record on its own. Dense mode keeps an inline string-intern table (a flat open-addressed hash with linear probing): the first occurrence of a string is written in full and repeats become varint back-references, shortened further by Markov-0 repeat, move-to-front and Markov-1 successor predictors. Struct shapes are also interned, so field names go on the wire once. Slices of 16 or more homogeneous structs are transposed to columns once a 32-row sampling probe predicts at least a 10% saving. Each column then gets the smallest of frame-of-reference, delta+FOR, RLE, dictionary, patched FOR, Gorilla/Chimp128 XOR, ALP, FSST or alphabet packing. OptCompression adds an order-0 tANS/FSE entropy pass over the body. On decode, a cached per-type descriptor reads fields through unsafe.Pointer and field offsets instead of reflect.Value, which accounts for the speed gap over encoding/json and msgpack.
+
+**Use it when:**
+- Go-to-Go shipping or storage of batches (16+ rows) of same-shape records such as logs, OTLP spans, RTB bids and events, where strings and enum values repeat across rows and bytes on the wire or disk cost money. The author's fixtures came out 29-68% smaller than protobuf at OptCompression.
+- Replacing encoding/json or vmihailenco/msgpack inside a Go-only system without writing a schema. Existing json tags work, and OptBalanced was 2.1x smaller with ~7x faster decode than encoding/json on a 5,000-row AD export.
+- Numeric and time-series slices (metric series, sensor floats, monotonic timestamps, status-code columns), where QPack codecs pay off. One example: a 1024-element HTTP status column encodes to 99 bytes, against 4.1 KB of JSON.
+- Stored wide columnar batches that readers query by column or predicate. With OptColumnIndex plus Select/Where, decoding a subset skips unread columns and filtered rows; the author measured ~5x faster projection than a full decode.
+- Cold storage or archives where encode CPU is cheap and size matters. Use OptCompression there.
+
+**Skip it when:**
+- One small message at a time (RPC, single events). The docs say protobuf wins single-tiny-message size. Dense predictors and shape interning never amortise, and columnar needs at least 16 rows.
+- Cross-language contracts, or data that must stay readable for years. qdf is Go-only, alpha, pre-1.0 and has no backwards-compatibility promise, and the README says to pin a commit.
+- Paths bound by decode throughput or allocation, where protobuf or FlatBuffers is an option. The author concedes both win raw decode, and FlatBuffers wins encode allocation. In the buffer-reuse table, qdf_balanced and qdf_compression allocate more per encode than protobuf (RTB: 4.38-5.28 MB vs 2.51 MB per cycle).
+- Hot encode paths at OptCompression. It runs at ~70 MB/s on the IoT float batch against ~1100 MB/s for OptBalanced, and it encodes RTB slower than json/v2 defaults (1281 us vs 1238 us).
+- Zero-copy random field access into large mmap'd files. The README points to FlatBuffers or Cap'n Proto for that.
+
+**Integration:** module · none in the default build (stdlib only). go.mod lists modern-go/reflect2, imported only under -tags qdf_reflect2, and golang.org/x/sys, imported only under -tags qdf_simd on amd64 for CPUID. The optional cmd/qdfgen is a separate module that uses golang.org/x/tools. · Go 1.27 (go.mod declares `go 1.27.0`; the README badge and 'Requires Go 1.26' text are out of date) · amd64 and arm64 are the stated supported targets. The optional qdf_simd tag adds AVX2 asm on amd64 (CPUID-gated, with scalar fallback) and NEON integer decode on arm64. Other architectures compile a scalar stub.
+
+**Vs siblings:** greenpack and ZebraPack are the Go siblings: msgpack2-based, codegen-driven formats that target per-message marshal speed against protobuf and stay readable by any msgpack library. Pick qdf when you move batches of repetitive records from Go to Go and wire size matters more than per-message latency, because it compresses across records and needs no codegen or schema. JSON BinPack also wins on size but is schema-driven.
+
+**Gotchas:**
+- Each Marshal call starts with an empty intern table, so repeats are only deduplicated within one call. Cross-message dedup needs StreamEncoder, and streaming drops the whole-batch features (OptColumnIndex, Where/Select pushdown, the tANS/FSE pass).
+- WithNoCopy decodes strings and []byte as aliases of the input buffer. If that buffer is pooled or mutated (for example an HTTP request body), values silently corrupt and the race detector will not catch it. Likewise, UnmarshalBatch handles are undefined after Release in production builds.
+- Dense wire depends on emission order and is not byte-stable. Use OptSpeed or OptCanonical before hashing or signing it. Decoding into `any` gives uint64 for positive ints, and renaming a tag silently leaves the field empty for readers that still use the old name.
+- The wire format still changes. New codec forms make older decoders fail with ErrBadTag (for example the ALP reconstruction flag in PR #177), so upgrade readers before writers. The README says 'zero dependencies', but go.mod still requires reflect2 and x/sys; both are imported only behind build tags.
+
+**Status:** Actively developed by one author (HEAD committed 2026-09-18, tagged releases up to v0.1.3 on 2026-08-14, recurring self-audit PRs fixing overflow and corruption bugs). It is MIT-licensed and usable if you control both ends and pin a commit, but it is alpha with a moving wire format.
+
+[repo](https://github.com/alex60217101990/qdf) · [benchmark](https://github.com/alex60217101990/qdf/blob/main/docs/COMPETITIVE.md)
+
+##### Quarry  `C++`  `Apache-2.0`  `active`  `Tier A`
+
+Schema compiler emitting no-heap C99, C++20 and Python BRF codecs; its C decoder beats Protobuf C++ on large/nested payloads.
+
+**Beats:** Protocol Buffers (C++, including Arena allocation) — Quarry's public-API benchmark (GCC 13.3 Release -O3, GitHub-hosted AMD EPYC 7763, medians of 5 runs, against Protobuf C++ 3.21.12 distro build, default and Arena) shows Quarry C decoding the large workload at 0.85M ops/s vs 0.57M (~1.5x) in the README baseline (commit 04349e57) and 1.17M vs 0.57M (~2.0x) at HEAD 5c8adcde, plus 2.84M vs 1.76M nested decode (~1.6x) at HEAD, while losing telemetry encode/decode and large encode by 1.9-3.3x in the README table. Quarry C writes into caller-owned fixed buffers while Protobuf uses its allocating owning API, and the Arena harness deep-copies (`CopyFrom`) each record before serializing, so the wins partly measure the API and allocation model, not only codec speed.
+
+**Known shortcoming:** Borderline: Protobuf wins most benchmark rows; Quarry's C implementation is faster only on large-payload decode (~1.5-2x).
+
+**How:** The C path never touches the heap: decode validates the record and copies strings, bytes, arrays and nested records into inline fixed-capacity struct members sized from the schema bounds. Protobuf C++ allocates std::string/RepeatedField/sub-message storage for those fields on every parse, which largely explains Quarry C's large (~2.0x) and nested (~1.6x) decode wins at HEAD. The current wire format, BRF v2, is a schema-determined fixed-offset layout (16-byte header, presence bitmap, one slot per declared field in declaration order, fixed-width big-endian scalars inline, variable data behind 8-byte offset/length descriptors), so encoding is plain stores at known offsets with no per-scalar varint work. The cost is wire size, because absent fields still occupy their slots and nothing is varint-compressed.
+
+**Use it when:**
+- MCU-to-Linux or device-telemetry links where the embedded side needs a strict-C99, malloc-free codec with statically sized buffers; CI cross-builds the generated C for Cortex-M4 with arm-none-eabi-gcc.
+- Decode-heavy C code on records with many bounded strings, bytes, arrays or repeated nested records. At HEAD (CI run on 5c8adcde), Quarry C decodes the large workload at 1.17M ops/s against 0.57M for Protobuf C++, and the nested workload at 2.84M against 1.76M.
+- One schema shared by an embedded C producer and Python tooling. The README says C, C++ and Python encodings are verified byte-for-byte identical.
+- Teams whose Protobuf/Nanopb schemas are already fully bounded (`max_size`/`max_count`) and who want to evaluate a no-heap alternative using the descriptor-set translator.
+
+**Skip it when:**
+- Small or sparse messages. At HEAD, Protobuf C++ is ~2x faster on telemetry decode (13.5M vs 6.9M ops/s) and ~2.8x faster on stress decode (18.7M vs 6.6M). BRF v2 records are also much larger: 84 bytes vs Protobuf's 16 (telemetry) and 5 (stress), because every declared field gets a slot.
+- Bandwidth- or storage-bound links. Each record and each nested record carries its own 16-byte header, and the large workload is 1,771 bytes vs 1,425 for Protobuf at HEAD.
+- C++ call sites. The generated C++ API returns owning std::vector/std::string values and is slower than Protobuf C++ in every benchmark row, e.g. large decode 0.22M vs 0.57M ops/s.
+- Schemas that need Protobuf wire compatibility, oneof, maps, proto3 optional, recursive messages, nested arrays, unbounded strings/arrays or negative enum values. All of these are unsupported or rejected.
+- Persisted data or public protocols that need a stable format. The project is pre-1.0 (v0.1.30-rc.3) with a single maintainer and 4 stars. Its release notes say BRF v1 data from RC1 is not wire-compatible with RC2/RC3 (BRF v2).
+
+**Integration:** header-only runtime (`Quarry::runtime`, C++20 INTERFACE target; C codec primitives are `static inline` headers) plus generated .h/.c or .hpp per schema. The schema compiler is a built host tool. The generic QBS/BRF-inspection C runtime `Quarry::runtime_c` builds as a static lib, although its README calls it header-only. · Generated code and runtime: none beyond the C99 or C++20 standard library. The schema compiler needs libyaml, Protobuf (libprotobuf + protoc) and Abseil to build. · C99 for generated C; C++20 for the C++ runtime and the compiler; CMake 3.20+. CI uses GCC 13.3 on Ubuntu 24.04 and arm-none-eabi-gcc for Cortex-M4. · Any. The wire format is explicit big-endian with byte-wise, alignment-safe access. CI covers Linux x86-64 and a Cortex-M4 bare-metal cross-build; Windows and macOS are not in CI.
+
+**Vs siblings:** Pick Quarry over SBE, YaFF or ProtoCache only when you need strict-C99, no-heap generated code for a microcontroller plus a matching Python backend from the same schema. Those siblings report far larger margins over Protobuf (e.g. SBE ~6.75x faster decode, ProtoCache ~20x decode+traverse), while Quarry C wins only on large and nested decode and loses on small messages.
+
+**Gotchas:**
+- Generated C structs reserve worst-case capacity for every bounded field. The benchmark Workload struct is 3,576 bytes, against a 128-byte Protobuf message object. `_decode()` returns the whole record by value inside its result struct, so check stack budgets on MCUs.
+- Field indexes are compiler-assigned, not author-assigned tags as in Protobuf. BRF v2 places slots in schema declaration order, and the BRF spec defers schema-evolution rules to future work, so treat reordering or inserting fields as a wire break.
+- The README performance table comes from commit 04349e57 (Aug 2026), before the BRF v2 switch. At HEAD, telemetry encodes to 84 bytes, not 60, and the speeds differ. Use the CI `Benchmarks` artifact for current numbers.
+- The README's Cortex-M4F table reports 6,243 cycles for 500 encodes, about 12.5 cycles per 85-byte record. A Cortex-M4 cannot store 85 bytes in that time, so treat the table as unverified.
+
+**Status:** Actively developed by one maintainer (last push 2026-09-20, v0.1.30-rc.3 prerelease, 4 stars, no external issues) and Apache-2.0 and copyable, but pre-1.0 with a wire-format break already between RC1 and RC2.
+
+[repo](https://github.com/ip332/quarry) · [benchmark](https://github.com/ip332/quarry#performance--footprint)
+
+##### rkyv  `Rust`  `MIT`  `active`  `Tier A`
+
+Rust zero-copy serialization crate; faster serialize and in-place reads than Rust FlatBuffers, Cap'n Proto, prost and rmp-serde.
+
+**Beats:** Cap'n Proto, FlatBuffers, Protocol Buffers (via prost/protobuf crates), MessagePack (via rmp-serde/msgpacker/zerompk) — The source is rust_serialization_benchmark's CI run of 2026-09-10: rkyv 0.8.18 against the Rust crates capnp 0.27, flatbuffers 25.12.19, prost 0.14.4 and rmp-serde 1.3.1, built with rustc 1.100.0-nightly (LLVM 23.1.1), -C target-cpu=native and LTO, measured by Criterion on a 4-vCPU AMD EPYC 9V74 GitHub Actions VM. On the log dataset rkyv serialized in 178.87 µs, against 480.15 µs for capnp, 731.23 µs for prost, 763.63 µs for FlatBuffers and 1.318 ms for rmp-serde; it read unvalidated in 8.33 µs against 42.2 µs for FlatBuffers, and fully deserialized in 1.22 ms against 2.68 ms for prost decode. The baselines are Rust ports, not the C++ reference libraries, and the serialize loop reuses a pre-allocated 10 MB AlignedVec.
+
+**How:** Total zero-copy deserialization: the archived bytes are the in-memory representation, and internal references are relative pointers (RelPtr, a 32-bit offset from the pointer's own address by default). Access is therefore a pointer offset plus a cast (1.09 ns on every dataset), and it works on read-only memory-mapped buffers. Serialization is a single write-forward pass that places leaves first and the root last, using per-type resolvers and a reusable scratch arena instead of per-object heap allocations. Collections are archived as ready-to-query structures: a SwissTable hash map (SSE2/NEON group probing, target-independent FxHash) and a B-tree. The optional bytecheck validation is a separate upfront pass that checks bounds and subtree ranges without allocating.
+
+**Use it when:**
+- Both writer and reader are Rust and you load large read-mostly data (game assets, caches, precomputed indexes, memory-mapped files) where parse time dominates: access is constant-time and reads run in place (log dataset unvalidated read 8.33 µs vs 42.2 µs for Rust FlatBuffers).
+- You want to query archived HashMap/BTreeMap/Rc-shared data in place without rebuilding it; rkyv archives these natively, which Cap'n Proto and FlatBuffers do not.
+- Serialize-heavy Rust pipelines now using prost, rmp-serde, capnp or flatbuffers: 2.7x to 7.4x faster serialize on the log dataset, and faster on all four datasets.
+- Untrusted input that must still be checked: validated access on log costs 274 µs vs 2.14 ms for FlatBuffers validated. For data you trust (checksummed or signed, or your own files), unsafe access_unchecked removes that cost entirely.
+- no_std or no-alloc targets: the std and alloc features can be turned off, and CI cross-builds thumbv6m-none-eabi.
+
+**Skip it when:**
+- Any non-Rust producer or consumer, C++ included: there is no C API, and the project's own feature matrix lists cross-language support as 'no'.
+- You need schema evolution or forward/backward compatibility: the feature matrix says no. Archives stay readable only if the Rust type, the format-control features and a semver-compatible rkyv version are all unchanged. Versioning is manual, for example the AsBox wrapper trick in examples/backwards_compat.rs.
+- Wire size or bandwidth is the bottleneck: the log buffer is 1,011,488 B, against 703,710 B for bitcode, 784,997 B for rmp-serde and 884,628 B for prost. Unset fields, padding and pointers all take space.
+- You only need the fastest Rust round-trip into native types: bitcode beats rkyv on log serialize (96.8 µs vs 178.9 µs), on minecraft_savedata serialize (82.0 µs vs 212.5 µs) and on log deserialize (1.145 ms vs 1.219 ms).
+- Very large archives on the default 32-bit relative pointers: one user hit an 'out of range integral type conversion' panic at about 1.2 GB (issue #657). The fix is the pointer_width_64 feature, which changes the wire format.
+
+**Integration:** crate · munge, ptr_meta, rancor, rend and rkyv_derive (a proc-macro using syn 3) are always pulled in. The default bytecheck feature adds bytecheck; the alloc feature adds hashbrown 0.17. Optional integrations cover arrayvec, bytes, hashbrown, indexmap, smallvec, smol_str, thin-vec, tinyvec, triomphe and uuid. · Rust 1.81 (rust-version in Cargo.toml), edition 2021; CI tests stable, beta and nightly · Any Rust target. CI tests x86_64 Linux, aarch64 macOS and x86_64 Windows, and cross-builds i686, i586, armv7, aarch64 Linux and thumbv6m-none-eabi. The hash-table SIMD path uses SSE2 on x86/x86_64 and NEON on little-endian aarch64, with a generic fallback everywhere else.
+
+**Vs siblings:** Pick rkyv when both ends are Rust and you want zero-copy access to ordinary Rust types (Vec, String, HashMap, BTreeMap, Rc) without maintaining an IDL. Pick YaFF or ProtoCache (C++ flat formats for Protobuf schemas) or the multi-language Apache Fory when C++ or another language must read the data, or when you need schema evolution.
+
+**Gotchas:**
+- The headline access and read figures (1.09 ns, 8.33 µs) come from unsafe access_unchecked, which skips all validation. Running it on untrusted bytes is undefined behavior; use access/from_bytes with the bytecheck feature for untrusted data.
+- Alignment and placement: the default format is aligned, so buffers need proper alignment (AlignedVec, or 16-byte alignment is usually enough). access also expects the root object to end exactly at the end of the buffer, so a length prefix or trailing bytes break it.
+- Endianness, alignment and pointer-width features change the wire format for the whole dependency graph. As a 0.x crate, archives are only compatible across semver-compatible releases (0.7 and 0.8 cannot read each other).
+- Safety history: RUSTSEC-2026-0233, -0234 and -0235 covered use-after-free and out-of-bounds reads that crafted archives triggered through the safe validated APIs; all three were patched in 0.8.17. Still open: #685 (a validated IndexMap/IndexSet can panic on lookup, a denial-of-service risk) and soundness reports #696/#697 about safe custom trait impls. rkyv_dyn (trait objects) is commented out of the workspace and pinned at 0.8.0-rc.1.
+
+**Status:** Actively maintained by its original author: 0.8.18 shipped on crates.io 2026-08-05, commits continue through 2026-09-25, and the crate has about 161M downloads. It is MIT-licensed and used as a normal Cargo dependency; require >=0.8.17 for untrusted input.
+
+[repo](https://github.com/rkyv/rkyv) · [benchmark](https://github.com/djkoloski/rust_serialization_benchmark/blob/master/README.md)
+
+##### s2s (ziglibs)  `Zig`  `MIT`  `active`  `Tier A`
+
+Single-file Zig binary serializer driven by comptime type reflection; 1.1-2x faster round trips than zig-protobuf in one benchmark.
+
+**Beats:** Protocol Buffers (Arwalk/zig-protobuf 5.0.0, generated from the suite's shared benchmark_v2.proto); MessagePack (serde.zig 1.2.1 backend) also compared — In GLD.SerializerBenchmark run 2026-09-14-134825 (Zig 0.16.0 ReleaseFast, i7-12800H laptop on the powersave governor, Ubuntu 22.04), s2s 0.0.1's serialize+deserialize time for 100-instance batches beat Arwalk/zig-protobuf 5.0.0 on all five fixtures: document 1.88x, event 1.43x, message 1.43x, strings 1.13x, telemetry 1.99x (stream mode, all trials); single-instance cells gave 1.2-2.25x. This was one run, and protobuf's timed decode also copies the generated message into the suite struct. Serializing alone, s2s was slower than protobuf on 'strings' (36.8 vs 27.2 us per 100 instances).
+
+**Known shortcoming:** Unsafe for untrusted input: slice lengths go straight to allocator.alloc unbounded, and deserializeAlloc leaks already-allocated fields on failure. The type hash ignores field names, so renamed or swapped same-type fields decode silently into the wrong fields; no schema evolution. Payloads are 1.14-1.72x larger than protobuf's, and serialize alone loses to protobuf on 'strings'. Version 0.0.1; the author plans a breaking format change (#7). zig-flatbuffers and msgpack.zig match or beat it on some fixtures in the same suite.
+
+**How:** The encoder and decoder are specialized at compile time. serializeRecursive/recursiveDeserialize switch on @typeInfo(T) and unroll struct fields with `inline for`, so there are no field tags, names, varints or runtime reflection: each field is written as fixed-width little-endian bytes in declaration order and decoded in place into the destination struct. u8 slices and arrays take a fast path, one writeAll/readSliceAll. The only framing is an 8-byte comptime FNV-1a-64 hash of the type's structure, a u64 length before each slice, and a 1-byte flag or tag for optionals and unions. The price is size: in the benchmark, payloads were 1.14-1.72x larger than protobuf's.
+
+**Use it when:**
+- Both writer and reader are Zig programs built from the same type definitions, for example Zig-to-Zig IPC, caches, save files or messages inside a Zig-only system.
+- Record-shaped data with ints, floats, enums, nested structs and slices of structs. On the suite's document, event, message and telemetry fixtures the serialize+deserialize round trip was 1.4-2.0x faster than zig-protobuf.
+- You want no .proto file and no codegen step, because the Zig struct is the schema.
+- You want cheap detection of mismatched types: deserialize rejects a stream whose 8-byte type hash differs, with error.UnexpectedData, before it reads any fields.
+- Byte-heavy payloads ([]const u8, [N]u8), which s2s copies in bulk instead of element by element.
+
+**Skip it when:**
+- Anything a non-Zig program must read, and long-lived or public formats. There is no spec beyond s2s.zig, the version is 0.0.1, the benchmark suite's docs call it 'not a public interchange standard', and in issue #7 the author says they want to change the format in a breaking way.
+- You need schema evolution. Adding, removing or retyping a field changes the type hash, so older data fails to decode with error.UnexpectedData. There are no defaults, optional fields or version numbers.
+- Wire size or many small strings matter. Fixed-width integers and a u64 length on every slice made payloads 1.14-1.72x larger than protobuf's. On the 'strings' fixture s2s was only 1.13x faster than protobuf overall, slower to serialize, and slower than zig-flatbuffers, msgpack.zig and serde.zig's MessagePack backend.
+- Untrusted input without a bounded or arena allocator. Slice lengths are read as u64 and passed straight to allocator.alloc, and fields already decoded are not freed when a later field fails.
+- Types it cannot handle: cyclic or shared graphs, sentinel-terminated slices ([:0]const u8), untagged or extern unions, many-item and C pointers, and custom per-type encoding (no hooks; issue #7 has been open since 2023).
+
+**Integration:** module (one source file, s2s.zig; add it as a Zig package, where build.zig exposes module 's2s', or vendor the file) · none (Zig std only) · Zig 0.15.0 (build.zig.zon minimum_zig_version). PR #23 made it compile on 0.16-dev while keeping 0.15.0 support, and the benchmark used Zig 0.16.0. The code uses the std.Io.Reader/Writer API, so older Zig needs an older commit. · Any Zig target (pure Zig, no architecture-specific code). The wire format is explicitly little-endian and usize is always encoded as u64; a usize value too large for a 32-bit target fails to decode with error.UnexpectedData.
+
+**Vs siblings:** No other Zig library is catalogued in this category. The siblings are Rust, Go, C#, C++, Java, Python and Nim libraries, so none of them is an option in a Zig codebase. Pick s2s when both ends are Zig and you want no schema or codegen step; if another language must read the bytes, use one of the cross-language schema formats listed or stay on protobuf.
+
+**Gotchas:**
+- The type hash covers field types and order but not field names. Renaming fields, or swapping two fields of the same type, is not detected, and old data then decodes into the wrong fields without any error.
+- Each top-level serialize() call writes its own 8-byte hash and calls flush() on the writer. Serializing many small records one call at a time costs 8 bytes and a flush per record, so wrap them in a slice or struct instead.
+- free() takes a pointer (`value: *T`) in s2s.zig, but the README shows `value: T`. Also, deserializeAlloc does not clean up partial allocations on error, so decode into an ArenaAllocator when input may be malformed.
+- Error-set and error-union fields are nominally supported, but their tests have been disabled as failing since 2024 (enable_failing_test = false). Odd-width integers are widened to the next whole byte (a u1 takes a full byte).
+
+**Status:** Nearly every commit since 2023 is a port to a new Zig version (latest 2026-04-30, targets Zig 0.15-0.16). It is still versioned 0.0.1, and the benchmark author's fairness-review request (issue #25) has had no reply. MIT-licensed, a single ~870-line file with no dependencies, easy to vendor.
+
+[repo](https://github.com/ziglibs/s2s) · [benchmark](https://github.com/leo-gan/GLD.SerializerBenchmark/blob/master/dashboard/public/data/stats_zig_latest.json.gz)
+
+##### savefile  `Rust`  `MIT`  `active`  `Tier A`
+
+Rust derive-based, versioned binary format for saving structs to disk; serializes 4.7-41x faster than prost.
+
+**Beats:** Protobuf — Source: djkoloski/rust_serialization_benchmark, Criterion run of 2026-09-10 with rustc 1.100.0-nightly/LLVM 23.1.1 and lto = true, on a 4-vCPU AMD EPYC 9V74. It compares savefile 0.20.5 (save_noschema/load_noschema into a Vec/Cursor) with prost 0.14.4, the Rust protobuf crate, not C++ libprotobuf. Savefile serializes 4.7x (log), 7.4x (minecraft_savedata), 7.8x (mk48) and 41x (mesh) faster than prost encode. It deserializes 1.6x, 1.7x, 2.9x and 72x faster respectively. The mesh numbers come from memcpy of POD arrays and do not carry over to string-heavy data.
+
+**Known shortcoming:** Treats files as trusted (author, #12): the packed Vec<T> path has no overflow check on elem_size*num_elems, Vec<bool>/Vec<char> bytes are not validated, and length limits need the optional size_sanity_checks feature. The shootout used save_noschema/load_noschema, not the default schema-checking path. Big-endian effectively unsupported. wincode posts nearly identical times and sizes; savefile's distinguishing feature is built-in schema versioning.
+
+**How:** The format mostly mirrors memory: fixed-width little-endian primitives and u64 length prefixes. There are no varints, field tags or field numbers. The derive macro generates a `Packed` impl that uses offset_of!/size_of to check whether a type's fields are contiguous, in declaration order and free of padding. If they are, a struct is written with a single write_all of its memory region. A Vec<T> of such a type is written as a length plus one memcpy of its buffer, and read back by allocating the buffer and calling read_exact into it. Types that fail the check use generated per-field code built on byteorder. That is why mesh (a Vec of f32 triangles) runs at close to memcpy speed, while string-heavy data is limited by String allocation.
+
+**Use it when:**
+- Saving large in-memory Rust state to disk (game saves, caches, editor/project files) when newer builds must still load files written by older builds.
+- Data dominated by Vec<T> of padding-free POD structs or primitives (meshes, point clouds, integer tables). These take the memcpy path: 6 MB mesh in ~142 us each way. A user in issue #125 reports it is 'orders of magnitude' faster than bitcode for gigabyte-scale Vec-of-integer data.
+- The same Rust program writes and reads on little-endian hosts (x86-64, aarch64), and you want serialize throughput more than compact output.
+- You want the schema stored with the data and checked on load (the default save/load), so a mismatch produces a detailed error rather than garbage.
+
+**Skip it when:**
+- Cross-language interchange, RPC or a network wire format. The format is Rust-only with no IDL, and the author says there will never be other backends. Use protobuf or one of the Rust wire formats instead.
+- Untrusted input. The author has said files are treated as 'trusted' (issue #12), and length prefixes are unbounded unless you enable the `size_sanity_checks` feature (see gotchas).
+- Size-sensitive data made of strings or small integers. Fixed-width ints and 64-bit length prefixes produce 1,045,800 B on the shootout's log dataset, against 884,628 B for prost and 703,710 B for bitcode.
+- Zero-copy or borrowed deserialization. It cannot deserialize types that hold references (issue #18; shown as '†' in the shootout), so every String is allocated. Use rkyv for zero-copy access.
+- Forward compatibility (an old binary reading a newer file), shared or cyclic object graphs, trait objects, or big-endian targets. None of these are supported. Objects reachable by two paths are written twice.
+
+**Integration:** crate · Always required: byteorder, memoffset. Enabled by default: savefile-derive (syn/quote/proc-macro2), indexmap, arrayvec, smallvec, bit-vec, bit-set, parking_lot, chrono. Optional: bzip2 (`compression`), ring + rand (`encryption`), serde, nalgebra, egui types. · Rust 1.82 (rust-version in Cargo.toml; CI builds 1.82, stable and nightly). On nightly compilers, build.rs turns on the `nightly` feature, which uses specialization for better introspection. · Any Rust target in principle. The format is little-endian. I found no endianness guard on the primitive Packed impls used by the memcpy fast path, and the bit-vec features deliberately fail to compile on big-endian, so treat big-endian as unsupported.
+
+**Vs siblings:** On the same shootout, wincode posts nearly identical times and sizes and also supports borrowed decoding. bitcode gives much smaller output (703,710 B vs 1,045,800 B on log) and faster log deserialize, but is ~8.6x slower on mesh serialize (1.2265 ms vs 142.33 us). rkyv gives zero-copy access. Pick savefile when what you need is on-disk files with schema versioning built into the derive (added, removed and retyped fields, plus a stored schema that is checked on load) and memcpy-speed handling of large POD arrays.
+
+**Gotchas:**
+- The fast path is used only when a type has no padding at all, including trailing padding, and its fields sit in declaration order. repr(C) alone is not enough, and the docs say to add manual pad fields. Enums need #[repr(u8/u16/u32)] and variants of equal size. Otherwise savefile silently falls back to per-field code; #[savefile_require_fast] turns bad alignment into a compile error, but some other disqualifiers are only detected at runtime.
+- Corrupt or hostile files are a real risk. In the packed Vec<T> path, `elem_size * num_elems` is computed without an overflow check and a failed allocation panics. Bytes are read raw into Vec<bool>/Vec<char> without validation, although a scalar char is validated. The optional `size_sanity_checks` feature caps strings and non-packed Vecs at 1,000,000.
+- Versioning is manual. You bump one global version, tag every added or removed field, and keep removed fields as Removed<T>. The docs warn that 'If this is messed up, data corruption is likely.' save_noschema/load_noschema (the variant the benchmark uses) skip the schema check that would catch such a mismatch.
+- The crate is pre-1.0 and has broken APIs and formats before: 0.17 needed an upgrade guide, and an 0.17 beta corrupted 0.16 files (issue #44, fixed before release). Before 0.20.3, save_file/save_file_compressed/save_file_noschema did not flush their BufWriter, so write errors could go unreported.
+
+**Status:** Active and maintained by its author: 0.20.5 was released 2026-07-13, with ~197k crates.io downloads and CI covering nightly, stable, Rust 1.82 and Miri. Cargo.toml declares a dual MIT/Apache-2.0 license, but the repo ships only LICENSE-MIT. The crate is pre-1.0 and has a history of breaking API and format changes.
+
+[repo](https://github.com/avl/savefile) · [benchmark](https://github.com/djkoloski/rust_serialization_benchmark)
+
+##### serde-zap  `Rust`  `MIT OR Apache-2.0`  `active`  `Tier A`
+
+Serde-trait binary serializer for Rust; serializes string-heavy logs ~5.4x faster than prost, ~9.7x faster than rmp-serde.
+
+**Beats:** Protobuf (prost 0.14.4; Google's protobuf 4.36.1-release crate also on the page), FlatBuffers (flatbuffers 25.12.19), Cap'n Proto (capnp 0.27.0), MessagePack (rmp-serde 1.3.1); all are the Rust crates for those formats, not the C++ libraries — On the rust_serialization_benchmark page run of 2026-09-10, the 'log' dataset holds small, string-heavy HTTP request logs. serde-zap 0.1.1 serialized it into a preallocated buffer in 135.54 µs, against 731.23 µs for prost's encode-only step (~5.4x), 763.63 µs for FlatBuffers, 480.15 µs for Cap'n Proto and 1.3179 ms for rmp-serde. Owned deserialization took 1.7212 ms, against 2.6802 ms for prost decode-only (~1.6x). All entries are Rust crates, built with rustc 1.100.0-nightly (LLVM 23.1.1), lto = true and -C target-cpu=native. They were measured with criterion defaults on a 2-core/4-thread AMD EPYC 9V74 GitHub runner VM. The serde-zap author contributed the harness module (PR #151), and a suite maintainer reviewed it.
+
+**Known shortcoming:** Low notability (3 stars, about 500 crates.io downloads, first published 2026-07-31). Wire format not stable before 1.0; not self-describing and no schema evolution.
+
+**Known shortcoming:** bitcode beats it in every timing column and wincode in most; its niche is the fastest serializer through plain serde traits, and postcard ties it on mesh. pod_vec may not be portable between little- and big-endian hosts (source reading). No declared MSRV (needs about Rust 1.88); CI builds only on a pinned nightly. Untagged/internally tagged enums, flatten and skip_serializing_if break round-trips.
+
+**How:** Integers use bincode's tagged-prefix varint: values up to 250 take one byte, and larger values take a tag byte (251-254) and then a fixed-width little-endian integer. Decoding is one branch and one unaligned load, with no per-byte LEB128 loop. The reader and the writer are both raw-pointer cursors. Each read is one bounds check against an end pointer, and the Writer trait's reserve/commit puts varints and strings of up to 250 bytes straight into the output with one capacity check and one memcpy. Structs are bare field concatenations with no tags, names or offset tables, &str/&[u8] decode zero-copy from the input, and the error type is a 1-byte fieldless enum, so Result stays small on the #[inline(always)] hot paths.
+
+**Use it when:**
+- Rust-to-Rust messages, caches or IPC where the types already derive serde and you want faster serialization without new derive traits. On 'log' it serializes in 135.54 µs, against 366.95 µs for postcard on the same page.
+- Serialize-heavy streams of small, string-heavy records (logs, events, game state) written into a reused buffer with to_slice. This is the path the benchmark measures.
+- no_std or embedded targets: to_slice and from_bytes need no allocator (--no-default-features).
+- Readers that keep the input buffer alive and can borrow &str/&[u8] fields zero-copy (log borrow: 446.09 µs, against 577.43 µs for postcard).
+- Large Vec<f32> or other plain-old-data vectors where you can opt into pod_vec's single bulk memcpy. The benchmark harness does not exercise this path.
+
+**Skip it when:**
+- Cross-language interop, gRPC or schema evolution. Adding, removing or reordering fields breaks existing data, and there is no IDL. Stay with Protobuf, FlatBuffers or Cap'n Proto.
+- Persistent storage. The README says the wire format is not stable before 1.0, and the crate is at 0.1.1 with 3 stars, 515 downloads and no dependents on crates.io.
+- Random or partial access without decoding. On the same page, FlatBuffers, Cap'n Proto and rkyv access fields in nanoseconds, while serde-zap must decode the whole message.
+- Workloads bound by deserialization or by float arrays, if you can leave serde's traits. On 'log', bitcode deserializes in 1.1452 ms and wincode in 1.4166 ms, against serde-zap's 1.7212 ms. On 'mesh', FlatBuffers (371.26 µs), wincode (147.88 µs) and rkyv (141.74 µs) all serialize faster than serde-zap (412.92 µs).
+- Streaming protocols: from_reader reads to EOF before it decodes, and there is no incremental decoder and no built-in framing.
+
+**Integration:** crate (serde-zap on crates.io; #![no_std] with the features alloc and std, both on by default) · serde 1 (default-features = false) only; zstd is a dev-dependency · Not declared (Cargo.toml has no rust-version). Edition 2024 needs Rust 1.85+. The source uses let-chains (stream.rs) and usize::is_multiple_of (pod_vec.rs), which by our reading need Rust 1.88+. CI builds only on a pinned nightly (nightly-2026-07-15), so stable builds are not tested. · Any target that serde supports: pure Rust with no SIMD or arch-specific code, and no_std-capable. pod_vec's bulk-copy path runs only on little-endian hosts. The benchmark covers only x86_64 Linux, and CI (tests, Miri, 90 s libFuzzer runs) runs on Linux.
+
+**Vs siblings:** postcard also goes through serde's traits. Pick serde-zap over postcard when serialization time dominates (log 135.54 vs 366.95 µs, mk48 612.11 µs vs 1.5531 ms) and you can accept a younger format with no stability promise; deserialization is about a tie (1.7212 vs 1.7399 ms). bitcode is faster in every timing column on the same page and wincode in most, but both need their own derive traits, so pick serde-zap mainly to keep plain serde derives.
+
+**Gotchas:**
+- Because the format does not describe itself, some serde features fail at runtime. deserialize_any, deserialize_identifier and deserialize_ignored_any return Error::NotSupported, which breaks untagged and internally tagged enums. #[serde(flatten)] serializes through a map of unknown length, which returns Error::SeqLengthUnknown. #[serde(skip_serializing_if)] writes data that the same type cannot read back.
+- Errors are a fieldless enum. Custom serde messages collapse to Error::Custom, and there is no byte offset, so malformed input is hard to diagnose. from_bytes ignores trailing bytes; use take_from_bytes to get the remainder.
+- pod_vec needs you to write `unsafe impl Pod` correctly (repr(C), no padding, every bit pattern valid). Its data cannot be read by the stock Vec path. By our reading of the source, the bytes also depend on host endianness: little-endian hosts write a byte-length prefix plus raw memory, while big-endian hosts write an element-count prefix plus per-element encoding. So do not move pod_vec data between LE and BE machines, even though a code comment says the bytes are identical.
+- The benchmark times to_slice into a preallocated 10 MB buffer. to_vec also pays for Vec growth plus a final shrink_to_fit reallocation, and the page does not time that. full_vec caps its preallocated element count at the remaining input bytes, but the allocation can still be size_of::<T>() times the input size.
+
+**Status:** A young crate from one author: first release 2026-07-31, last commit and 0.1.1 release 2026-08-02, and no issues, PRs or dependents on crates.io yet. It is dual MIT/Apache-2.0, depends only on serde and has ten small source files, so it is easy to pin or vendor.
+
+[repo](https://github.com/xangelix/serde-zap) · [benchmark](https://github.com/djkoloski/rust_serialization_benchmark/blob/master/README.md)
+
+##### wincode  `Rust`  `Apache-2.0`  `active`  `Tier A`
+
+Bincode-1.x-compatible Rust serializer with in-place encoding; serializes 3.5-9.6x faster than the prost, FlatBuffers, capnp and rmp-serde crates on log data.
+
+**Beats:** Protobuf, FlatBuffers, Cap'n Proto, MessagePack — Data comes from djkoloski/rust_serialization_benchmark (run 2026-09-10, rustc 1.100.0-nightly, LLVM 23.1.1, lto, target-cpu=native, criterion, 2-core/4-thread AMD EPYC 9V74 VM). On the log dataset, wincode 0.6.1 `serialize_into` a pre-sized reused buffer took 137.05 µs, against 731.23 µs for prost 0.14.4 encode, 763.63 µs for flatbuffers 25.12.19, 480.15 µs for unpacked capnp 0.27.0 and 1.3179 ms for rmp-serde 1.3.1. Deserialize took 1.4166 ms vs 2.6802 ms for prost decode and 2.3829 ms for rmp-serde. These are the Rust crates for those formats, not the C++ libraries, and FlatBuffers/capnp have no deserialize row because they are zero-copy.
+
+**Known shortcoming:** bitcode beats it on the log and minecraft_savedata datasets (serialize and deserialize). Deserialization caps each sequence at 4 MiB by default, so large Vecs fail where bincode succeeds (#51, #90). Audits cover v0.1.2; current 0.6.1 is pre-1.0 with breaking minor releases. CI is Linux x86-64 only and zero-copy multi-byte integers need little-endian targets.
+
+**How:** The main idea is in-place initialization. `SchemaRead::read` writes each field straight into a `MaybeUninit<Dst>`, and `serialize` makes one `size_of` pass, allocates once, and writes into the Vec's spare capacity. There are no staging buffers and none of serde's construct-then-move copies. Each type has a compile-time `TypeMeta` (Static size + zero_copy flag). For static-size types and sequences, it opens an `as_trusted_for` window whose bounds are checked once. For padding-free `#[repr(C)]`/transparent structs, byte arrays and (on little-endian targets) integers and floats, a whole slice becomes a single memcpy, or a borrow of the input. Fixed-width integers keep that memcpy path open. The cost is a bigger wire format.
+
+**Use it when:**
+- You already use the bincode 1.x format (Solana accounts, transactions, on-chain data) and want a faster encoder that writes the same bytes.
+- Payloads are mostly fixed-size or POD data: arrays of f32/u64, `[u8; 32]` hashes and signatures, `#[repr(C)]` structs. Sequences become memcpy. On the mesh dataset it deserializes in 144.44 µs vs 10.253 ms for prost decode.
+- You want zero-copy borrows (`&[u8]`, `&[u8; N]`, `&PodStruct` via `ZeroCopy::from_bytes`) or in-place mutation of an encoded buffer (`from_bytes_mut`, `deserialize_mut`) without adopting rkyv or FlatBuffers.
+- Rust-only services where both ends are Rust types and you can write into a reused, pre-sized buffer with `serialize_into`.
+- no_std targets: `std` and `alloc` are optional features.
+
+**Skip it when:**
+- You need a schema/IDL, cross-language readers, or schema evolution (optional/added fields). The Rust type is the schema, as in bincode, and there is no versioning.
+- Wire size or bandwidth matters. On log it encodes 1,045,784 bytes vs 703,710 for bitcode, 724,953 for postcard, 784,997 for rmp-serde and 884,628 for prost. The cause is 8-byte fixed lengths on every string. The `VarInt` config shrinks this, but the docs say it hurts speed significantly and disables integer zero-copy.
+- Your data is string-heavy and speed is the only goal. bitcode beats it on log (96.821 µs vs 137.05 µs serialize, 1.1452 ms vs 1.4166 ms deserialize), and on minecraft_savedata (82.049 µs vs 132.62 µs serialize).
+- You need a stable API. It is pre-1.0 (0.6.1, Aug 2026): 0.5.0 shipped in March 2026 and 0.6.0 in July. The published audits (Neodyme, OtterSec) cover v0.1.2, not the current code.
+- Big-endian or non-x86 targets are a priority. Zero-copy of multi-byte integers works only on little-endian, and CI runs on ubuntu-latest (x86-64) only.
+
+**Integration:** crate · pastey, thiserror; optional wincode-derive (syn, quote, proc-macro2, darling) via `derive` feature; optional bytes, bv, bumpalo, ecow, indexmap, smallvec, uuid integrations · Rust 1.89 (edition 2024) · any Rust target; no_std supported; integer/float zero-copy only on little-endian; CI tests only on Linux x86-64 (plus Miri)
+
+**Vs siblings:** Choose it over bitcode or postcard when you must stay on the bincode 1.x wire format or want zero-copy/in-place mutation of POD data. bitcode is faster on string-heavy log data and ~33% smaller on the wire. wincode ties it on mk48 (518.04 µs vs 546.49 µs serialize) and is far faster on mesh (147.88 µs vs 1.2265 ms). Against serde-zap, serialize speed is the same on log (137.05 vs 135.54 µs) but wincode deserializes faster (1.4166 vs 1.7212 ms). Choose rkyv when you need to read fields without deserializing at all.
+
+**Gotchas:**
+- Every sequence has a default 4 MiB preallocation limit. Deserializing a larger `Vec` (e.g. 4 MiB + 1 byte of `Vec<u8>`) fails with `PreallocationSizeLimit` where bincode succeeds (issues #51, #90). Raise it through `Configuration` or `UseIntLen<_, N>`. The overall deserialization size limit is off by default.
+- `serialize_into` is not transactional. Dynamic types can leave a partial prefix in the destination buffer, and only static-size types are length-checked up front (issue #418, 'as intended'). Check `serialized_size` first when writing into fixed buffers.
+- `SchemaWrite`/`SchemaRead` are `unsafe` traits. A wrong manual `TYPE_META` (Static size or zero_copy) or a `pod_wrapper!` on a type with padding or invalid bit patterns is UB. Several unsoundness reports (#79-#82, #89) and an uninitialized-memory leak in `Cursor<Vec>` writers (#306, fixed May 2026) have been closed.
+- The `tag`/`tag_encoding` enum attributes and `UseIntLen` break bincode byte-compatibility. Trailing bytes are accepted by default.
+
+**Status:** Actively maintained by Anza (last master commit 2026-09-17, releases every few weeks), Apache-2.0, ~5.9M crates.io downloads and 196 reverse dependencies, mostly Solana crates; pre-1.0, so expect breaking minor releases.
+
+[repo](https://github.com/anza-xyz/wincode) · [benchmark](https://github.com/djkoloski/rust_serialization_benchmark/blob/master/README.md)
+
 ##### YaFF (Yet another Flat Format)  `C++`  `Apache-2.0`  `active`  `Tier A`
 
 Zero-copy wire format for existing .proto schemas. In-place field reads beat Protobuf parse-then-read ~25-50x and FlatBuffers ~2x.
@@ -903,7 +1439,627 @@ Zero-copy wire format for existing .proto schemas. In-place field reads beat Pro
 
 [repo](https://github.com/yandex/yaff) · [benchmark](https://github.com/yandex/yaff/blob/main/docs/benchmarks/access.md)
 
+##### 200sc/bebop (Go)  `Go`  `Apache-2.0`  `active`  `Tier B`
+
+Go code generator and runtime for the Bebop binary format; ~3x faster marshal/unmarshal than protobuf-go on a small struct.
+
+**Beats:** Protobuf — In alecthomas/go_serialization_benchmarks (SmallStruct: two strings, a time.Time, int32, bool, float64), 200sc/bebop v0.5.0 marshals in 94 ns/op and unmarshals in 112 ns/op, against 287/356 ns/op for protobuf-go (google.golang.org/protobuf v1.34.2), about 3.1x/3.2x. With buffer reuse it marshals in 52 ns/op, and against gogo/protobuf (115/166 ns/op) the margin is ~1.2x/1.5x. The Bebop payload is 55 bytes, against 51 for protobuf-go. All rows came from one user-generated run (PR #178, July 2025), and neither the CPU nor the Go version is stated.
+
+**Known shortcoming:** Dates are encoded as 100 ns ticks since 1970, while the Bebop spec and other runtimes count from 0001-01-01, so dates do not round-trip across languages. Generated decoders allocate the payload's uint32 array/map counts before bounds checks (a 4-byte input can request gigabytes). Native byte order via unsafe.Pointer, so big-endian output is wrong. Last functional release v0.6.2 (2024-07); benc and mus-go unsafe variants are faster in the same table.
+
+**How:** The Bebop wire format has no per-field tags and no varints: struct fields are concatenated fixed-width little-endian values, strings and arrays are a uint32 length plus payload, and messages add only a uint32 length and a 1-byte index per present field. The generated code is reflection-free, computes the exact encoded size up front with Size(), allocates once, and writes each integer with a direct unsafe.Pointer store into the byte slice (iohelp/bench_test.go compares this against encoding/binary.LittleEndian). MarshalBebopTo into a caller-owned buffer removes the output allocation (the 52 ns/op 'reuse' row). An optional -share-string-memory flag makes unmarshalled strings alias the input buffer instead of copying.
+
+**Use it when:**
+- Go services that exchange records with Bebop code in C#, TypeScript, Rust, Dart, Python or C/C++ generated by the upstream bebopc, where Go needs its own codec.
+- Hot paths that marshal many small, flat records and where protobuf-go's ~290/360 ns per marshal/unmarshal is visible; reusing an output buffer brings marshal to ~52 ns/op.
+- Fixed-layout records that never gain fields (Bebop 'struct', no per-field overhead), with 'message' reserved for records that must evolve.
+- Little-endian targets (amd64, arm64) and builds that can run a code-generation step; the module has no third-party dependencies.
+
+**Skip it when:**
+- You need protobuf wire or .proto compatibility, gRPC, or protobuf tooling: this is a different IDL and format. RPC/service definitions are not supported (issue #25 open), and upstream Bebop v3's breaking schema changes are not implemented (issue #40 open since March 2024).
+- Decoding untrusted input: generated UnmarshalBebop/DecodeBebop call make() with the uint32 array or map count read from the payload before checking it against the bytes that remain, so a 4-byte input can request a multi-gigabyte allocation.
+- Cross-language exchange of date fields: this project writes time.Time as UnixNano()/100 (100 ns ticks since 1970), while the Bebop spec and the upstream TypeScript and Rust runtimes use ticks since 0001-01-01 (offset 621355968000000000), so dates will not round-trip between runtimes. The repo's compatibility tests only compare schema acceptance with upstream bebopc, not bytes.
+- Big-endian GOARCHes (s390x, ppc64, mips): iohelp loads and stores integers in native byte order through unsafe.Pointer, so bytes would be wrong there. This is not documented, and CI runs only on ubuntu-latest.
+- Go-only data where raw speed is the goal: benc/usafe (121 ns total) and mus/unsafe_reuse (105 ns total) beat 200sc/bebop/reuse (162 ns) in the same table. Schemas also cannot use int8 or recursive structs (testdata/incompatible).
+
+**Integration:** module · none (go.mod has no require lines); generated code imports github.com/200sc/bebop and github.com/200sc/bebop/iohelp · Go 1.21 (go.mod and CI) · Pure Go, but correct output only on little-endian targets (amd64, arm64, etc.) because iohelp uses native-endian unsafe.Pointer loads and stores; CI tests ubuntu-latest only
+
+**Vs siblings:** Pick it over benc, mus-go, colfer or gencode when the schema must be shared with the canonical Bebop toolchain (the 6over3/bebop entry) in other languages. Those four sit in the same 80-125 ns/op marshal band, but their formats are Go-specific. If data never leaves Go, benc or mus-go are as fast or faster and avoid the date-encoding mismatch.
+
+**Gotchas:**
+- MarshalBebopTo does no size check (documented in io.go) and panics on a short buffer; call Size() first. The Must* methods from -generate-unsafe skip all bounds checks.
+- With -share-string-memory, decoded strings alias the input []byte, so reusing or mutating that buffer changes them.
+- Dates: the zero time.Time is written as 0 and 0 decodes to the zero time, so 1970-01-01T00:00:00Z comes back as time.Time{}. Decoded times are always UTC at 100 ns precision, and UnixNano is undefined before 1678 or after 2262.
+- The streaming EncodeBebop/DecodeBebop path is about 6x slower than the []byte methods (io.go). Nested-message DecodeBebop through a reader returned a false EOF until v0.6.1/v0.6.2 (issue #46, July 2024). The benchmark pins v0.5.0 but uses only the []byte path.
+
+**Status:** Apache-2.0 and dependency-free. The latest release is v0.6.2 (2024-07-05), and the only later commit is a one-line README change (May 2026), so treat it as stable but dormant, not actively developed; the runtime is small enough to vendor.
+
+[repo](https://github.com/200sc/bebop) · [benchmark](https://github.com/alecthomas/go_serialization_benchmarks/blob/master/report/data.js)
+
+##### Apache Thrift (binary protocol)  `C++`  `Apache-2.0`  `active`  `Tier B`
+
+Apache Thrift's C++ binary protocol: IDL-generated structs, fixed-width encoding; ~2.2x faster than msgpack-c in one round-trip test.
+
+**Beats:** MessagePack — In the third-party thekvs/cpp-serializers shootout (2019 README table: Thrift 0.12.0, msgpack-c 3.1.1, protobuf 3.7.0; C++14 CMake Release build, compiler unnamed in the current README; 'Intel Core i7', Ubuntu 16.04), round-tripping one ~17 KB record (1,000 int64 values plus 100 86-char strings) through TBinaryProtocolT<TMemoryBuffer> took 1190.22 ms in total, against 2560.6 ms for msgpack (~2.15x) and 2312.78 ms for protobuf (~1.94x). The Thrift loop even includes a copy of the output into a std::string each iteration. The stated 1,000,000 iterations would mean ~1.2 us per round trip, which looks too fast, so trust the ratios rather than the absolute times.
+
+**Known shortcoming:** Only the binary protocol wins in thekvs/cpp-serializers; thrift-compact (3474 ms) is slower than both protobuf and msgpack. The suite's stated 1,000,000 iterations look inconsistent with the published totals (ratios unaffected).
+
+**Known shortcoming:** Only evidence is a 2019 run of Thrift 0.12.0 (current v0.24.0 unmeasured) with an uneven harness: the msgpack path rebuilds an object tree and converts each iteration while Thrift reuses buffers and the destination struct. Binary encoding is about 27% larger than msgpack. TBinaryProtocol string and container limits default to unlimited; v0.24.0 fixes two C++ CVEs (CVE-2026-55969, CVE-2026-55970). cereal and YAS beat it in the same suite.
+
+**How:** The binary protocol writes every integer at fixed width in big-endian order (an i64 is a byte swap plus 8 bytes) and every string as a 4-byte length plus raw bytes, so encoding and decoding need no varint branches. TBinaryProtocolT is a template over the transport, so with TMemoryBuffer each field goes through TBufferBase's inline fast path: one bounds check and one memcpy. readStringBody() borrow()s the string straight from the buffer and assigns it, and the generated read() fills the typed struct directly, reusing the destination vectors' capacity. The msgpack-c path in the same harness unpacks into an intermediate msgpack::object tree and then convert()s it into the struct.
+
+**Use it when:**
+- You already have a Thrift IDL, or want one schema shared across C++ and other languages, and need fast round trips of C++ structs through in-memory buffers (cache blobs, queue payloads, stored records).
+- Records dominated by int64 arrays and medium-length strings, where CPU time matters more than bytes on the wire.
+- Hot loops that can reuse one TMemoryBuffer, one protocol object and one destination struct across calls, which is how the benchmark ran it.
+- You may later want RPC on the same types: the generated code and protocols plug into Thrift's client/server stack.
+
+**Skip it when:**
+- Size-sensitive storage or network links: the binary encoding was 17,017 B against msgpack's 13,402 B (~27% larger) in this test. TCompactProtocol is smaller (13,378 B) but took 3474 ms in the same run, slower than both msgpack and protobuf.
+- Schemaless or dynamic data, or data that arbitrary tools must read without an IDL. MessagePack is self-describing; Thrift binary is not.
+- Maximum raw C++ speed: in the same shootout cereal (1052 ms) and YAS (303 ms) were faster, and Cap'n Proto and FlatBuffers took 401 and 492 ms for a full build, serialize and deserialize cycle.
+- Untrusted input on older releases: 0.24.0 fixes C++ issues including CVE-2026-55969 (integer overflow in container size prechecks) and CVE-2026-55970 (heap over-read in THeaderTransport). Stay on a current release.
+- You want a small header-only dependency: this needs a built libthrift plus the thrift compiler in your build.
+
+**Integration:** static lib or shared lib (libthrift, chosen with CMake BUILD_SHARED_LIBS) plus the thrift code generator at build time · thrift compiler for code generation; libthrift links pthreads and librt, with OpenSSL for the SSL sockets (the CMake build skips SSL if OpenSSL is absent or disabled); Boost headers to build (TUuid is implemented on boost::uuids; Boost is not a runtime link dependency); libevent only for libthriftnb (non-blocking server); zlib only for thriftz · C++11 (CMake default CMAKE_CXX_STANDARD 11); C++03/C++98 dropped after 0.12.0. The benchmark built Thrift 0.12.0 with C++14. · Linux and other POSIX systems, Windows 7 or later (XP/Vista dropped after 0.12.0); byte order is fixed by the protocol (TNetworkBigEndian default, TLEBinaryProtocol for little-endian), so no architecture requirement is documented
+
+**Vs siblings:** Pick Thrift over cereal or Boost.Serialization when the same schema must be read from other languages or later carried over RPC; those two are C++-only. For C++-only data in this same test, cereal was a bit faster (1052 vs 1190 ms), is header-only and needs no IDL, and Boost.Serialization was a tie (1195 ms).
+
+**Gotchas:**
+- Generated code takes TProtocol* by default, so each readI64/readString call is a virtual dispatch into the templated protocol. `thrift --gen cpp:templates` generates templatized reader/writer methods instead. The benchmark used the default, non-templated output.
+- TBinaryProtocol's string and container size limits default to 0 (unlimited); only TConfiguration's max message size (100 MB default) bounds what a hostile length prefix can make it allocate. Call setStringSizeLimit/setContainerSizeLimit for untrusted data.
+- TMemoryBuffer::resetBuffer(buf, sz) defaults to the OBSERVE policy: it reads your memory in place without copying, so that memory must outlive the parse.
+- Fields marked `required` in the IDL make read() throw TProtocolException(INVALID_DATA) when absent, which limits later schema changes.
+
+**Status:** Actively maintained Apache-2.0 project (v0.24.0 released 2026-07-11, commits through 2026-09-24), but the only speed evidence is for 0.12.0 from 2019, so the current release has not been measured.
+
+[repo](https://github.com/apache/thrift) · [benchmark](https://github.com/thekvs/cpp-serializers)
+
+##### benc  `Go`  `MIT`  `stale`  `Tier B`
+
+Pure-Go raw binary serializer with optional schema codegen; hand-written benc code runs ~3.5x faster than protobuf-go on small structs.
+
+**Beats:** Protobuf — The source is alecthomas/go_serialization_benchmarks: a user-generated report regenerated in one run by its maintainer, with CPU model and Go version not stated. The suite pins benc v1.0.2, protobuf-go v1.34.2 and gogo v1.3.2. There, hand-written benc code for a 6-field struct (BirthDay stored as UnixNano int64) marshals in 81 ns vs 287 ns for protobuf-go and unmarshals in 103 vs 356 ns (~3.5x each), and both produce 51 bytes. The unsafe-string variant unmarshals in 41 ns with 0 allocs. The margin over gogo/protobuf is ~1.4x/1.6x, and the suite's own hand-rolled baseline (73/90 ns) is faster than benc.
+
+**Known shortcoming:** The shootout measured v1.0.2 (2023), whose API and wire format differ from the current v1.1.8; the current release and its codegen path are unmeasured. Open wire-compatibility bug: v1.1.8 dropped ZigZag from fixed-width signed ints, so v1.1.7 data decodes wrong (#13, no reply; grafana/walqueue pins v1.1.7). Source hazards: BufPool.Marshal returns a slice of a buffer already returned to sync.Pool, slice/map skipping scans for a 4-byte marker, truncated input can panic; no fuzz tests. Only about 1.4-1.6x over gogo/protobuf.
+
+**How:** There is no reflection and no per-field interface dispatch. The caller computes the exact size with Size* functions, allocates one buffer, and each field is written by an offset-threaded function `(n int, b []byte, v) int` that does manual little-endian byte stores behind Go bounds-check-elimination hints (`_ = u[7]`). Fixed-width ints and floats are written as raw 2/4/8 bytes, and lengths use LEB128 varints. In the std format there are no field tags or wire types to parse, so decoding just reads sequentially. The unsafe string variants alias the input buffer through `unsafe.String`, which makes unmarshal zero-allocation.
+
+**Use it when:**
+- Go-to-Go only (both writer and reader are your code) with small flat records, e.g. WAL/queue entries, cache values, KV-store values. Grafana's walqueue depends on benc.
+- Hot marshal/unmarshal paths where you are willing to hand-write field-by-field encode/decode against bstd primitives, which is the exact path benchmarked at ~81/103 ns vs protobuf-go's 287/356 ns.
+- Decode paths where the input buffer outlives the decoded struct, so the unsafe-string decoder (41 ns/op, 0 allocs in the report) can alias strings into it.
+- Go-only messages that need simple schema evolution (remove a field and reserve its ID), where bencgen's breaking-changes detector is enough and you don't need protobuf interop.
+
+**Skip it when:**
+- Cross-language or protobuf-interop traffic: bencgen's only --lang is `go`, and the wire format is benc's own.
+- Long-lived persisted data that must survive library upgrades. v1.1.8 silently changed the encoding of fixed-width signed ints (issue #13, open, no maintainer reply), and go.mod retracts four earlier releases for bugs.
+- Untrusted input. The repo has no fuzz tests. UnmarshalSlice/UnmarshalMap allocate whatever length the varint says. Skipping a reserved container loops `for b[n] != 1 || b[n+1] != 1` without a bounds check, so truncated data can panic.
+- When you expect the bencgen path to match the headline numbers: the report measured hand-written v1.0.2 std code. The tagged codegen format adds 2-3 tag bytes per field plus a HandleCompatibility check on decode, and it is not benchmarked.
+- When gogo/protobuf-level speed is already enough: against gogo (115/166 ns) the margin drops to ~1.4x/1.6x, and gogo keeps protobuf compatibility.
+
+**Integration:** module · golang.org/x/exp (constraints only); the bencgen CLI is needed only for the schema path · Go 1.22 (go.mod `go 1.22`; std uses range-over-int; CI runs Go 1.22) · any GOARCH (pure Go; a 32-bit build bug, issue #6, was fixed in v1.1.0); CI tests only ubuntu-latest
+
+**Vs siblings:** Against mus-go (also hand-written Go primitives), benc's safe path is a bit faster in the same report (184 vs 214 ns total), but mus/unsafe_reuse beats benc/usafe (105 vs 121 ns). Pick benc if you also want an optional schema/codegen layer with reserved IDs. Against schema-first colfer (238 ns total) and 200sc/bebop (206 ns), benc's measured edge applies only if you hand-write the code, because its own codegen path is unbenchmarked.
+
+**Gotchas:**
+- Wire break inside v1.1.x: v1.1.8 dropped ZigZag from MarshalInt64/Int32/Int16, so data written by v1.1.7 decodes wrong (int64 values come back doubled, issue #13). grafana/walqueue pins v1.1.7 with a replace directive for this reason.
+- The benchmarked code is benc v1.0.2 (Nov 2023; root package plus `bunsafe`, uint16 string-length prefixes, zigzag fixed ints). Its API and wire format differ from the current std package, and the current release is not in the report.
+- Marshal* functions panic if the buffer is too small, so always size first with Size*. Unsafe strings and UnmarshalBytesCropped alias the source buffer, so mutating or reusing it corrupts the decoded values.
+- Slices and maps end with a 4-byte 0x01010101 sentinel. SkipSlice/SkipMap, used when skipping reserved fields, scan for that pattern instead of using the length, so element data that contains it (e.g. four consecutive `true` bools) ends the skip early.
+
+**Status:** Stale: the last commit and release (v1.1.8) are from 2025-05-17, and an open wire-compatibility bug (#13, Aug 2025) has no maintainer response. It is MIT-licensed pure Go with the core std layer in one file, so pinning v1.1.7 or vendoring is practical.
+
+[repo](https://github.com/deneonet/benc) · [benchmark](https://github.com/alecthomas/go_serialization_benchmarks/blob/master/report/data.js)
+
+##### Boost.Serialization  `C++`  `BSL-1.0`  `active`  `Tier B`
+
+Boost's C++ object-graph serializer; its native binary archive round-tripped a ~17 KB record ~1.9x faster than Protobuf.
+
+**Beats:** Protobuf — Source: the third-party thekvs/cpp-serializers shootout, 2019 README table (boost 1.69.0 vs protobuf 3.7.0 and msgpack 3.1.1; Intel Core i7, Ubuntu 16.04; CMake Release build, clang 5.0.0 per the commit that published the table; standard library not stated). One record of 1,000 int64 plus 100 copies of an 86-char string (~17 KB) was round-tripped through a fresh binary_oarchive/binary_iarchive over stringstreams each iteration. Boost took 1195.04 ms total against 2312.78 ms for Protobuf (~1.9x) and 2560.6 ms for msgpack (~2.1x); nothing was compared against a std facility, and the '1,000,000 operations' label looks too large for these totals, though the ratios are unaffected.
+
+**Known shortcoming:** Incidental win in one suite (thekvs/cpp-serializers): its lead over protobuf was only about 1.14x in the README's pre-2019 table. The suite's stated iteration count looks inconsistent with its totals (ratios unaffected). No compiler named for the published table.
+
+**Known shortcoming:** The win over protobuf comes from raw fixed-width copying of vector<int64> against protobuf's varint encoding of negative values; largest payload in the table (17,470 B). Maintainer measured 14.2 us per ~70-byte message with a fresh archive vs 0.21 us shared (#347). Open insecure-deserialization report (#331); binary string load resizes to an unbounded length; native binary archives are not portable across platforms.
+
+**How:** Nothing in the library targets speed. It won this benchmark because the native binary archive does almost no encoding. basic_binary_oprimitive::save writes each primitive as sizeof(T) raw native bytes with a single streambuf sputn, with no varint or zigzag step. std::vector of arithmetic types takes the 'array optimization' path: use_array_optimization is keyed on is_bitwise_serializable, which defaults to is_arithmetic, so the whole buffer goes out in one save_binary call. The benchmark's Protobuf schema declares the ids as proto3 repeated int64, which Protobuf varint-encodes (negative values take all 10 bytes), so on this int-heavy record a fixed-width bulk copy beats encoding and decoding each value.
+
+**Use it when:**
+- C++-only persistence or checkpointing of existing class hierarchies that hold raw pointers, shared_ptr graphs or polymorphic base pointers, where mapping everything onto .proto messages would be a rewrite.
+- Records dominated by std::vector of arithmetic types (int64, double) written to binary_oarchive: the bulk save_binary path writes them as a single raw copy.
+- Many objects, or a few large ones, per archive (files, snapshots, bulk IPC), so the per-archive setup cost is amortized.
+- Codebases already built against Boost that need non-intrusive serialization of third-party types, or per-class versioning so old files still load.
+- Writer and reader on the same platform and ABI, which the native binary archive assumes.
+
+**Skip it when:**
+- Cross-language interchange, or wire contracts shared with other teams: there is no schema or IDL and no non-C++ reader. Stay on Protobuf, or see Thrift/hpp-proto.
+- Deserializing untrusted input such as network data from clients. Issue #331 (insecure deserialization leading to type and ownership confusion, reported against 1.89.0 and below) is still open with details withheld, and a negative-class-id check was only added in August 2026 (#332).
+- Small messages with one archive each. The maintainer measured 14.2 us per ~70-byte message with a fresh stream and archive per message versus 0.21 us with one shared archive (MSVC x64, issue #347), so setup dominates.
+- When wire size or top C++ speed matters. It had the largest payload in the benchmark's main table (17,470 B vs Protobuf 16,116 and msgpack 13,402), and in the same run cereal (1052 ms) and yas (302.7 ms) were faster.
+- Binary archives that must move across architectures. The native binary archive refuses to load when int/long/float/double sizes or endianness differ, and the portable binary archive lives only in the examples directory, without portable floating point.
+
+**Integration:** static lib or shared lib (compiled boost_serialization, plus boost_wserialization for wide-char archives), usually taken from a Boost distribution · Boost: array, assert, config, core, detail, integer, io, iterator, move, mpl, optional, predef, preprocessor, smart_ptr, spirit, type_traits, unordered, utility, variant (public); function (private) · C++11 (meta/libraries.json cxxstd 11); CI covers GCC 7-16, Clang 6-22, MSVC 14.3/14.5 and Apple Clang · Linux, macOS and Windows (MSVC, clang-win, MinGW GCC) in CI; the code is architecture-neutral, but native binary archives only load on a matching platform (sizes and endianness are checked in the header)
+
+**Vs siblings:** cereal ran the same benchmark slightly faster (1052 vs 1195 ms) and is header-only with no dependencies, but its docs say it does not serialize raw pointers or references. Pick Boost.Serialization when you need raw-pointer object graphs with address tracking or must read existing Boost archives; otherwise take cereal. Choose Apache Thrift binary (1190 ms, a tie here) or hpp-proto if you need an IDL or cross-language wire format.
+
+**Gotchas:**
+- Objects are tracked by memory address. Saving successive copies from the same stack variable silently writes only the first one (a const-reference static assert catches the common case, but not inside name-value pairs), and after loading into a temporary and moving it into a container you must call reset_object_address or pointer restoration breaks.
+- Polymorphic pointers must be registered or exported. BOOST_CLASS_EXPORT has to come after the archive headers are included, and each type needs exactly one BOOST_CLASS_EXPORT_IMPLEMENT. Getting this wrong fails at run time with unregistered_class, or with duplicate symbols at link time.
+- Binary archives need streams opened with std::ios::binary. Otherwise CRLF translation corrupts the archive, and the library cannot detect it until load (debug builds assert). By default each archive also writes a header and swaps in a codecvt facet; the no_header and no_codecvt flags turn these off.
+- Lengths read from the archive are trusted. The binary load of std::string reads a size_t and calls s.resize(l) with no bound, so a malformed or hostile archive can force a huge allocation.
+
+**Status:** Actively maintained (commits through 2026-09-25; Gennaro Prota took over maintenance in 2026 and has been closing old issues) and shipped in every Boost release under BSL-1.0. Easy to get from system Boost packages or the Boost CMake superproject, but it is a compiled library with about 20 Boost dependencies, not a single header you can vendor.
+
+[repo](https://github.com/boostorg/serialization) · [benchmark](https://github.com/thekvs/cpp-serializers)
+
+##### cereal  `C++`  `BSD-3-Clause`  `active`  `Tier B`
+
+Header-only C++11 serialization library whose binary archive round-tripped a 17 KB record ~2.2x faster than Protobuf in 2019.
+
+**Beats:** Protobuf — In thekvs/cpp-serializers (2019; cereal 1.2.2, protobuf 3.7.0, msgpack 3.1.1; CMake Release build, with clang 5.0.0 named by the README revision that published the table; an unspecified 'Intel Core i7' on Ubuntu 16.04), round-tripping one record of 1,000 int64 and 100 strings of 86 chars through cereal's BinaryOutputArchive/BinaryInputArchive took 1052.46 ms in total vs 2312.78 ms for Protobuf (~2.2x) and 2560.6 ms for msgpack (~2.4x), with no std:: baseline involved. Each cereal iteration builds a fresh std::ostringstream and std::stringstream and copies the buffer while the Protobuf loop reuses its message and string, so the stream overhead is inside cereal's number.
+
+**Known shortcoming:** Measured with the plain binary archive, which is not endian-portable. Last release v1.3.2 (2022). The suite's stated iteration count looks inconsistent with its totals (ratios unaffected).
+
+**Known shortcoming:** Unequal harness: each cereal iteration builds fresh string streams and copies the buffer while the protobuf loop reuses its message. Payload about 8% larger than protobuf; YAS is about 3.5x faster than cereal in the same table. Container sizes from the stream go straight to resize() by design (#103); open #629 (null dereference on untrusted XML) and CVE-2020-11104 (uninitialized padding). Master since 2024 is only compiler/CI fixes.
+
+**How:** Dispatch happens at compile time: SFINAE traits pick each type's member or free serialize/save/load, and variadic ar(...) calls inline down to the archive's primitive writers. The binary archive writes each arithmetic value's native bytes with one streambuf sputn/sgetn call, and a contiguous arithmetic vector or string is a uint64 length tag plus one bulk binary_data copy, with no field tags, no varint/zigzag coding and no per-element framing (the benchmark payload is exactly 8 + 1000x8 + 8 + 100x(8+86) = 17,416 bytes). Only shared_ptr targets are tracked (an address-to-id hash map), and version numbers are written only for types that opt in, so plain structs carry no metadata. Protobuf varint-encodes each int64 and tags each string, which makes its payload smaller (16,116 bytes) but its round trip slower here.
+
+**Use it when:**
+- C++-to-C++ data where both ends are built from the same code: checkpoints, caches, save state, or IPC between builds of one codebase
+- Records dominated by contiguous arithmetic vectors and strings, which take the single-memcpy path. The benchmark record was 1,000 int64 plus 100 strings of 86 chars.
+- Serializing existing STL-heavy types (maps, shared_ptr/unique_ptr, optional, variant) without writing a .proto file or adding a codegen step
+- Migrating off Boost.Serialization: the syntax is similar (CEREAL_CLASS_VERSION mirrors BOOST_CLASS_VERSION), there is no Boost dependency, and it ran slightly faster in the same shootout
+- When one serialize() function should also produce human-readable JSON or XML for debugging
+
+**Skip it when:**
+- Cross-language interchange or schema evolution. The binary format is positional and untagged, so reordering or changing fields breaks old data unless you opt into versioning. The docs say cereal was not designed as a robust long-term storage format.
+- Untrusted input (network peers, user files). Container sizes read from the stream go straight into resize(). The maintainer closed #103 saying cereal expects to produce its own data and will not add checks. #629 reports a null-pointer dereference loading untrusted XML (still open), and #870 reported a type-confusion bug in 1.3.2 and earlier (closed, details redacted).
+- Size-sensitive wire formats. Integers and length tags are fixed-width (uint64 size tags), so the benchmark payload was 17,416 bytes vs 16,116 for Protobuf and 13,402 for msgpack.
+- Chasing the fastest possible round trip. In the same table yas (302.7 ms) was ~3.5x faster than cereal. Cap'n Proto and FlatBuffers finished a build+serialize+deserialize cycle in 400.98 and 491.5 ms.
+- Raw-pointer or reference object graphs, and shared_ptr aliasing constructors. None of these are supported; Boost.Serialization handles raw pointers.
+
+**Integration:** header-only · none. The JSON and XML archives use bundled RapidJSON, RapidXML and base64 headers. Building the repo's own tests/sandbox needs Boost.Serialization unless SKIP_PERFORMANCE_COMPARISON or JUST_INSTALL_CEREAL is set. · C++11. The docs name g++ 4.7.3, clang++ 3.3 and MSVC 2013 or newer. CI covers g++ 4.7 and up, Xcode 15/16 clang and VS2013-2022. std::optional/std::variant support needs C++17. The CMake minimum is 3.6. · any with a conforming C++11 compiler (Linux, macOS, Windows in CI). BinaryArchive is native-endian, so use PortableBinaryArchive when data crosses endianness.
+
+**Vs siblings:** Pick cereal over Boost.Serialization when you want the same member serialize() style without Boost and can do without raw pointers; it was ~1.14x faster in the same table (1052.46 vs 1195.04 ms). Pick hpp-proto if you must keep Protobuf schemas or wire data, and Apache Thrift's binary protocol (1190.22 ms in the same table) if you need a schema shared with non-C++ code.
+
+**Gotchas:**
+- Versioning is opt-in and all-or-nothing per type. Loading data saved without a version through a versioned serialize function corrupts the load and will likely crash. Load with the same cereal version you saved with.
+- Archives are only guaranteed to have flushed when destroyed, and XML/JSON write nothing until then, so scope archives with RAII. Open file streams with std::ios::binary for binary archives.
+- Polymorphic pointers need CEREAL_REGISTER_TYPE and RTTI, and registration only binds to archives #included before it. Registering inside a Windows DLL needs CEREAL_REGISTER_DYNAMIC_INIT/CEREAL_FORCE_DYNAMIC_INIT. Errors throw cereal::Exception (a std::runtime_error), so exceptions must be enabled.
+- Known bugs: CVE-2020-11105 (shared_ptr ids keyed by raw address) is fixed only in 1.3.1+. CVE-2020-11104 (#625, open): long double writes uninitialized padding bytes. #880 (open, 2026): the bundled RapidJSON misparses some doubles under MSVC /O1 /GL /LTCG.
+
+**Status:** Lightly maintained (last release v1.3.2 in Feb 2022, master commits since 2024 are compiler and CI fixes with the latest on 2026-03-11, and an open issue asks for a new release), but it is BSD-3-Clause and header-only, so vendoring 1.3.2 or master is easy.
+
+[repo](https://github.com/USCiLab/cereal) · [benchmark](https://github.com/thekvs/cpp-serializers)
+
+##### colfer  `Go`  `CC0-1.0`  `active`  `Tier B`
+
+Schema-compiled binary format with generated C11, Go, Java and JavaScript code; beats protobuf-go and protobuf C++ 2-3x on small records.
+
+**Beats:** Protobuf — Go: the user-generated alecthomas/go_serialization_benchmarks report (no CPU model or Go version, last regenerated 2025-07-04) shows Colfer at 115 ns/op marshal and 123 ns/op unmarshal for the 6-field SmallStruct, against 287/356 ns/op for google.golang.org/protobuf v1.34.2 and 115/166 ns/op for gogo/protobuf v1.3.2. C: the project wiki reports c/bench/bench.cpp (Google Benchmark, -O3, Apple clang 15.0.0, Apple M1 iMac, libprotoc 24.4 generated C++ with no arena) at 9.19 vs 22.9 ns marshal (~2.5x) and 18.0 vs 40.8 ns unmarshal (~2.3x) for a 7-field record with one short string, from a single run with no variance given.
+
+**Known shortcoming:** Against gogo/protobuf on the same Go shootout, marshal is a tie (115 vs 115 ns/op) and unmarshal is only about 1.35x faster. CC0 gives no patent grant.
+
+**Known shortcoming:** Last release v1.8.1 (2020); last maintainer commit 2023-10. v1 readers reject unknown fields, so schemas are append-only. C API hazards: unmarshal does not reset absent fields, every string/list is malloc'd with no generated free and no NULL checks, marshal takes no buffer length, one generated pair per program; no C++ API. In the C bench FlatBuffers reads faster (6.69 vs 18.0 ns). 16th of 54 in the Go harness.
+
+**Independent measurement:** Colfer's C output against protobuf C++ (project wiki, code in c/bench/bench.cpp, -O3, Apple clang 15, Apple M1): marshal 9.19 vs 22.9 ns, unmarshal 18.0 vs 40.8 ns (about 2.5x and 2.3x, derived from page data). First-party.
+
+**How:** The compiler emits straight-line code specialized for each field, with no reflection, no descriptor tables and no runtime library. Fields must appear in schema order behind a 1-byte header (7-bit field index plus a flag), so unmarshal is one forward pass of `if (header == i)` checks, with no tag-dispatch loop and no unknown-field retention (unknown headers are rejected). Zero values are omitted, and the header flag picks a compact or fixed-width encoding per value (for example, a uint32 below 2^21 is a varint, larger values take 4 fixed big-endian bytes). T_marshal_len computes the exact size first, so marshal is a single pass into a preallocated buffer.
+
+**Use it when:**
+- You control both ends and want one schema shared by C, Go, Java and JavaScript code, with no runtime library to link.
+- Hot paths with small, flat records (a few ints, floats and short strings): the project's C benchmark encodes a 7-field record in 9.19 ns and decodes it in 18.0 ns on an Apple M1, against 22.9 ns and 40.8 ns for protobuf C++.
+- Go services that can drop protobuf wire compatibility: 115/123 ns/op marshal/unmarshal against 287/356 ns/op for protobuf-go in the go_serialization_benchmarks SmallStruct test.
+- Untrusted network or stream input: the parser enforces a serial size cap (default 16 MiB) and a list length cap (default 64Ki), the C parser has an AFL round-trip fuzz harness, and each message ends in 0x7f, so messages can be concatenated.
+- C or embedded code that wants plain C11 structs from a code generator instead of linking libprotobuf.
+
+**Skip it when:**
+- You need protobuf wire compatibility, gRPC, reflection or dynamic messages, or a JSON mapping.
+- Rolling upgrades where old readers see data from newer writers: v1 readers reject fields they do not know. Forward compatibility exists only on the unreleased v2 branch.
+- Schemas that need maps, enums, integer lists, oneof, default values, or more than 127 fields per struct.
+- Read-mostly access to large messages: C unmarshal copies every string into its own malloc. In the same C benchmark, FlatBuffers reads the record in 6.69 ns against 18.0 ns for Colfer, though FlatBuffers is slower to build (62.4 ns).
+- Go-only hot paths that want the fastest codec: mus-go, benc and 200sc/bebop beat Colfer in the same harness, and gogo/protobuf ties it on marshal (115 ns/op).
+
+**Integration:** source-drop · None for generated code (C: libc only; Go: standard library only). The colf compiler is a Go program (prebuilt releases, go get, Homebrew, or a Maven plugin for Java). Its go.mod also pulls gogo/protobuf and flatbuffers, which its benchmarks use. · C11 compiler (CI builds with clang -std=c11 -pedantic -Werror; the benchmark uses -std=c17 and C++17); C++ uses the C header, and there is no C++ class API. Compiler module needs go 1.18. CI uses JDK 17 for Java. · Any C11 target with 8-bit bytes (the header has #error otherwise), little- or big-endian (big-endian is detected by macros); Go, JVM/Android, Node.js/browsers.
+
+**Vs siblings:** Pick Colfer over hpp-proto when you do not need protobuf wire compatibility and want the same schema in C, Go, Java and JavaScript; pick hpp-proto to stay protobuf-compatible in C++. In Go-only code, mus-go, benc and 200sc/bebop are faster in the same harness (214, 184 and 206 ns/op total against Colfer's 238), so choose Colfer for its C, Java and JavaScript generators and its parser size limits, not for raw Go speed.
+
+**Gotchas:**
+- Unmarshal writes only the fields present in the serial. If you reuse a struct, absent fields keep stale values, so zero the struct first (C: calloc or memset; Go: *o = T{}). The Go benchmark harness does this. In C, an uninitialized .len field also makes marshal crash (issue #34).
+- C unmarshal mallocs every text, binary, list and nested struct. No free function is generated, malloc results are not checked for NULL, and a mid-message error leaves earlier allocations in the partial struct for the caller to free.
+- C T_marshal(o, buf) takes no buffer length. Size buf with T_marshal_len (it returns 0 and sets errno to EFBIG past the limits) or use colfer_size_max. The limits are global variables and the header guard is always COLFER_H, so each program gets one generated C pair. Go MarshalTo panics on a short buffer and fills nil entries of struct lists in the input.
+- Schema evolution is append-only: add new fields at the end and never remove fields (rename them to deprecate). C and Go do not validate UTF-8 in text fields. Java maps unsigned types to signed ones, and JavaScript 64-bit integers are limited to about 2^53.
+
+**Status:** Activity is low: the last tagged release is v1.8.1 (2020-06-18), the last maintainer commit is from 2023-10, and community fixes were merged in 2025-11 and 2026-02. The v2 format (forward compatibility; a C preview at 5.63/13.3 ns) sits unreleased on a branch last touched 2024-01. The code is CC0 public domain with no patent grant, and the generated code is small enough to vendor.
+
+[repo](https://github.com/pascaldekloe/colfer) · [benchmark](https://github.com/alecthomas/go_serialization_benchmarks/blob/master/report/data.js)
+
+##### msgp  `Go`  `MIT`  `active`  `Tier B`
+
+Go code generator for MessagePack; about 6-7x lower marshal/unmarshal latency than reflection-based vmihailenco/msgpack on the same wire format.
+
+**Beats:** MessagePack — Source: the user-generated go_serialization_benchmarks report (data.js last regenerated 2025-07-04, commit 833ed64040), on a 6-field SmallStruct (two strings, time.Time, int, bool, float64). msgp v1.1.8 took 134 ns/op to marshal (1 alloc, 128 B) and 200 ns/op to unmarshal (2 allocs, 32 B), against 921 ns/op (4 allocs) and 1216 ns/op (3 allocs) for vmihailenco/msgpack v5.3.5 (~6.9x and ~6.1x). Encoded size is 97 B vs 92 B, and the 5-byte gap matches msgp's 15-byte ext-5 time against a 10-byte standard timestamp (inferred). The run used a fresh buffer each call (MarshalMsg(nil)), with no reuse and no zero-copy. No CPU or Go version is given; the harness go.mod says go 1.22.4, and current msgp v1.6.4 is not measured.
+
+**Known shortcoming:** The shootout pins v1.1.8 (current v1.6.4 unmeasured) with a fresh buffer per call. Default time format is msgp's own extension type 5, not the standard -1 timestamp (use //msgp:newtime for cross-language). Generated UnmarshalMsg has no size limits unless //msgp:limit is set, and no depth guard for recursive types. benc, mus-go, colfer and 200sc/bebop are faster and about half the size in the same harness; msgp wins only if you need MessagePack on the wire.
+
+**How:** It generates code ahead of time, so there is no runtime reflection or interface boxing. The generated MarshalMsg first calls msgp.Require(b, Msgsize()) to grow the buffer once to a worst-case size. It then appends values, and the constant bytes (the map header and each MessagePack-encoded field-name key) are pre-encoded at generation time and emitted as literal `append(o, 0x.., ...)` runs. The generated UnmarshalMsg reads each key zero-copy (ReadMapKeyZC) and matches it with a compiled Go `switch` on msgp.UnsafeString(field), so there is no per-key map lookup or key allocation. It reuses the existing capacity of []byte fields. Wire-type dispatch uses a 256-entry prefix-byte table (`sizes [256]bytespec`) that gives type and size in constant time.
+
+**Use it when:**
+- Go services that read or write MessagePack with a fixed set of Go struct types, where encode/decode shows up in profiles (the shootout shows 134/200 ns vs 921/1216 ns on a 6-field struct).
+- You must keep the MessagePack wire format for other languages or stored data, but you want codegen speed instead of switching to protobuf or a Go-only format.
+- Hot paths that can reuse one []byte: MarshalMsg appends to the buffer you pass in, and the README says carefully written code can run with zero heap allocations.
+- Large objects (over about 2 KB) or streams: the README says the generated io.Reader/io.Writer methods use less memory and, at some size, run faster than the []byte methods.
+- TinyGo or microcontroller targets: CI runs TinyGo 0.41.1 tests, and the wiki recommends MarshalMsg/UnmarshalMsg there because they need no extra buffers.
+
+**Skip it when:**
+- Dynamic or unknown payloads (map[string]interface{}, polymorphic interface fields). Generated code gives little here, and interface{} encoding supports only built-ins and types with msgp methods (open issue #235: a []interface{} of tuple structs fails at runtime with 'type not supported').
+- You cannot add a `go generate` step, or your types embed structs from other packages. Generation is per file, and embedded structs from another package are ignored (open issue #271).
+- You control both ends and want the lowest Go latency and size. In the same harness, benc (81/103 ns, 51 B), mus-go (92/122 ns, 49 B) and colfer (115/123 ns, 51 B) are faster and about half of msgp's 97 B, because map-mode MessagePack writes every field name.
+- Untrusted input with default settings. The generated []byte UnmarshalMsg has no array/map size limit unless you add `//msgp:limit` or `limit=n` tags (v1.6.0+). The maintainer says there is no protection against deep recursion in recursive types (issue #411).
+- Maps with non-string keys, unless you opt in with the `//msgp:maps` directive (binkeys/shim/autoshim, v1.4.0+). By default msgp decodes only str/bin map keys.
+
+**Integration:** module (Go module: `go tool msgp` code generator plus runtime package github.com/tinylib/msgp/msgp) · Runtime: github.com/philhofer/fwd v1.2.0. Generator also: golang.org/x/tools v0.22.0 (golang.org/x/mod indirect). · Go 1.24 (go.mod). CI tests Go 1.24.x, 1.25.x and 1.26.x on ubuntu-latest, plus TinyGo 0.41.1 on x86_64. · Any Go target. Uses `unsafe` for []byte-to-string conversion unless built with the `purego` (or appengine) tag. File helpers use madvise/fallocate on Linux, with fallbacks on other systems. CI runs only on Linux.
+
+**Vs siblings:** Pick msgp over the Go codegen siblings benc, mus-go, colfer, gencode and 200sc/bebop when the bytes must stay standard MessagePack for interop with other languages or existing data. Those siblings are about 1.1-1.7x faster to marshal and about half the size in the same harness, but they use their own formats. Against the other MessagePack codegen in that report (shamaton/msgpackgen map mode, 242/358 ns), msgp is about 1.8x faster on marshal.
+
+**Gotchas:**
+- By default, time.Time is written as msgp's own extension type 5 (15 bytes), not the official MessagePack timestamp (-1). Other implementations will not read it as a timestamp. Add `//msgp:newtime` for cross-language output. Reads accept both types (wiki Type Mapping Rules).
+- Types from outside the processed file are assumed to implement the msgp interfaces. If they do not, the generated code fails to compile. Also run the generator on every file that holds referenced types.
+- The `zerocopy` field tag (v1.3.0+) makes decoded []byte fields alias the input buffer. Reusing or changing that buffer silently corrupts the decoded values.
+- Newer msgp versions can generate different code than older ones (README 'Status'). Regenerate after every upgrade, and do not mix _gen.go files from different generator versions.
+
+**Status:** Actively maintained (last commit 2026-09-21; v1.6.4 released 2026-04-14 after a run of feature releases in 2025), MIT-licensed, about 1.95k stars. No GitHub security advisories are published, and the README calls the runtime library mostly stable.
+
+[repo](https://github.com/tinylib/msgp) · [benchmark](https://github.com/alecthomas/go_serialization_benchmarks/blob/master/report/data.js)
+
+##### mus-go  `Go`  `MIT`  `active`  `Tier B`
+
+Go serialization primitives for the tagless MUS binary format; ~3x faster than protobuf-go on small structs, ~6x in unsafe mode.
+
+**Beats:** Protobuf — alecthomas/go_serialization_benchmarks report (data.js, regenerated 2025-07-04; no CPU listed; harness go.mod says Go 1.22.4) on a SmallStruct of two strings, a time, an int, a bool and a float64: hand-written mus-go v0.3.0 marshals/unmarshals in 92/122 ns/op against protobuf-go v1.34.2's 287/356 ns/op (~3.1x/2.9x), and the unsafe_reuse variant in 50/55 ns/op (~5.7x/6.5x) with 0 allocs. The author's own suite (Ryzen 7 PRO 5850U, Go 1.23.5, mus-go v0.6.2) shows a similar gap: 102.9 ns round trip vs 531.7 ns for protobuf and 192.5 ns for vtprotobuf.
+
+**Known shortcoming:** The shootout measured v0.3.0 (Go 1.22.4); current v0.10.2 has a different interface-based API and is unmeasured there. Only about 1.3x over gogo/protobuf in safe mode, which also uses unsafe for numbers. Source risks: unsafe numeric Marshal bounds-checks only the first byte (short buffer means out-of-bounds write) and writes host byte order although the spec says little-endian; ord slice/map Unmarshal allocate lengths read from input unless a validator is set. Pre-1.0 with breaking minor versions.
+
+**Independent measurement:** Author-maintained suite (Ryzen 7 PRO 5850U, Go 1.23.5, mus-go v0.6.2): 102.9 ns vs protobuf 531.7 ns and vtprotobuf 192.5 ns.
+
+**How:** The MUS format carries no field tags or type metadata, so the encoder writes values back to back and the decoder reads them positionally against a shared schema, with no tag dispatch and no reflection. Each field picks its own encoding: LEB128 varint (ZigZag for signed), fixed-width little-endian raw, or the unsafe package, which stores numbers with a pointer cast and returns strings that alias the input via unsafe.String (zero copy). A Size pass gives the exact buffer length, so a marshal costs one allocation, or none when the caller reuses a buffer.
+
+**Use it when:**
+- Go-to-Go RPC, IPC, queue or cache payloads where both ends share the same Go types and you control deployment of both.
+- Hot paths with small, flat structs where per-message latency and allocations matter: in the report, mus/unsafe_reuse does 50 ns marshal / 55 ns unmarshal with 0 allocs/op in both directions.
+- Compact payloads: no per-field tags, and varint keeps small integers to 1 byte (49 B vs protobuf-go's 51 B on the benchmark struct).
+- You want validation during unmarshal (length, element, key and value validators), Skip, or partial/out-of-order decoding.
+- Object graphs with shared or cyclic pointers, which the pm package preserves (pointer equality survives the round trip).
+
+**Skip it when:**
+- You need field-level schema evolution (old readers ignoring new fields, as Protobuf does): MUS is positional; versioning is by whole-type DTM versions plus migration functions.
+- You need interop with the Protobuf/gRPC ecosystem or non-Go peers that already speak Protobuf; the wire format differs.
+- Safe mode against other fast Go codecs: in the same report plain mus (214 ns total) trails benc (184) and ties 200sc/bebop (206), and beats gogo/protobuf (281) by only ~1.3x.
+- You want a stable API: the project is pre-1.0 (v0.10.2), interfaces changed between minors (issue #10), and SECURITY.md only supports v0.10.x.
+- Decoding untrusted input with the default ord slice/map serializers: they allocate make([]T, length) from the encoded length before reading elements unless you configure a length validator.
+
+**Integration:** module · github.com/mus-format/common-go, golang.org/x/exp (constraints); test-only: ymz-ncnk/assert, ymz-ncnk/mok; optional: mus-gen-go for code generation · Go 1.24 (go.mod; mus-gen also requires Go 1.24+) · any Go target (pure Go; README claims 32/64-bit compatibility); unsafe-package numbers use host byte order, so they match the little-endian spec only on little-endian CPUs
+
+**Vs siblings:** Pick mus-go over benc, gencode and 200sc/bebop (Go) when you can accept unsafe strings and buffer reuse: mus/unsafe_reuse is the fastest non-baseline row in the shared report (105 ns total, 0 allocs) ahead of benc/usafe (121 ns) and gencode/unsafe_reuse (152 ns). In safe mode it has no speed edge over benc or bebop; pick it then for per-field varint/raw choice, validators, Skip, pointer mapping and typed versioning.
+
+**Gotchas:**
+- unsafe numeric Marshal writes through *(*T)(unsafe.Pointer(&bs[0])) and bounds-checks only bs[0]: a too-short buffer gives an out-of-bounds write, not the panic the safe packages raise, and bytes come out in host order.
+- unsafe.String results alias the input buffer; mutating or reusing that buffer changes the decoded strings (the README warns about this). With buffer reuse, the next Marshal overwrites the previously returned slice.
+- In the current main branch, unsafe ByteSlice.Unmarshal still calls make([]byte, length) before returning the aliasing slice, so it is not zero-allocation.
+- The benchmark measured mus-go v0.3.0 (function-style API such as ord.MarshalString); v0.10.x uses mus.Serializer[T] values, so the harness code does not compile against current releases as-is.
+
+**Status:** Actively maintained (v0.10.2 released 2026-05-06, last main commit 2026-05-07), MIT-licensed pure Go with CI fuzzing and CodeQL, but pre-1.0 with API changes between minor versions.
+
+[repo](https://github.com/mus-format/mus-go) · [benchmark](https://github.com/alecthomas/go_serialization_benchmarks/blob/master/report/data.js)
+
+##### protostuff  `Java`  `Apache-2.0`  `stale`  `Tier B`
+
+Java serializer using a protobuf-style tagged binary format; serializes about 1.4x faster than protobuf-java but deserializes slower.
+
+**Beats:** Protobuf — On the eishay/jvm-serializers wiki (Home, edited 2023-10-08; Oracle JDK 11.0.19; 2.6 GHz 6-core Intel Core i7 on macOS/Darwin 21.6.0; JVM flags not stated), the media-content round trip with protostuff-generated code took 1,261 ns (ser 608 + deser 653) vs 1,402 ns for protobuf-java (875 + 527), about 1.11x overall. Serialization is ~1.44x faster and deserialization ~1.24x slower; both outputs are 242 bytes. The suite ships protobuf-java 3.6.1 and protostuff 1.5.9 jars, so newer protobuf-java releases are not measured.
+
+**Known shortcoming:** Small margin on the suite's current results (jvm-serializers wiki, 2023, JVM 11.0.19): about 1.11x total and 1.44x serialize over protobuf, and protobuf is faster at deserialize. The larger claim came from a 2017 staging page with no JVM or CPU stated.
+
+**Known shortcoming:** Protobuf compatibility is partial: map fields written with ProtobufIOUtil fail to parse in protobuf-java (#357, #362), proto3 backward compatibility is broken (#286), and the default format encodes nested messages as groups. JDK 17+ needs --add-opens, JDK 8 vs 21 String schemas differ (#371), no records support; last release 1.8.0 (2022-03). auto_load_polymorphic_classes is on by default. fury and colfer are more than 2x faster in the same suite.
+
+**How:** The native protostuff format marks each nested message with START_GROUP/END_GROUP tags instead of a length prefix. That lets the encoder stream a whole object tree in one pass, with no size-computation pass first (protobuf-java computes and memoizes every message's size before writing). Its protobuf-format writer (ProtobufOutput) is also single-pass: it reserves one byte for the nested length and back-patches it when the message is under 128 bytes; otherwise it splices a new segment holding the length varint into the LinkedBuffer chain. Output goes into reusable chained byte-array segments (LinkedBuffer). UTF-8 strings are sized and written in one step, using a worst-case size bound. Runtime schemas are cached per class and, on HotSpot, read and write fields through sun.misc.Unsafe offsets instead of reflection.
+
+**Use it when:**
+- JVM-to-JVM RPC or cache/datastore values where the hot path is serialization: 608 vs 875 ns to serialize the ~242-byte jvm-serializers media object, compared with protobuf-java.
+- You have existing Java POJOs and want protobuf-style tagged binary with schema evolution without writing .proto files or generating builder classes (protostuff-runtime; 1,389 ns total vs protobuf-java's 1,402 in the same run).
+- You must emit protobuf wire bytes from plain Java objects with simple proto2-style shapes (scalars, strings, nested and repeated messages): ProtobufIOUtil measured 1,248 ns total vs 1,402 ns for protobuf-java.
+- Object graphs with shared or cyclic references, which protobuf cannot encode: GraphIOUtil (protostuff-graph, 1,686 ns total in the same run).
+- One schema needs several formats (binary for services, JSON/YAML for debugging) through the pluggable format modules.
+
+**Skip it when:**
+- Deserialization-heavy workloads: in the same run protobuf-java deserialized faster (527 vs 653 ns).
+- Cross-language protobuf interop or strict proto3 compatibility: open issues report that map fields written by ProtobufIOUtil do not parse correctly in protobuf-java (#357, #362) and that proto3 backward compatibility is broken (#286). The default protostuff format uses groups for nested messages, so ordinary protobuf parsers cannot read it.
+- You want the fastest JVM binary serializer: in the same jvm-serializers table, fury (442-508 ns total) and colfer (633 ns) beat protostuff's 1,261 ns.
+- Modern JDKs and records: on JDK 17+ the runtime needs --add-opens for some JDK collection types (#360); JDK 8 and JDK 21 produce different String schemas, which breaks deserializing across JDKs (#371); Java records are unsupported (#313); and there has been no release since 1.8.0 (2022).
+- Untrusted input with polymorphic fields: the default runtime writes class names and auto-loads them on read (auto_load_polymorphic_classes=true).
+
+**Integration:** module (Maven jars: io.protostuff:protostuff-core plus protostuff-runtime; latest on Maven Central is 1.8.0) · protostuff-api and protostuff-core; the runtime adds protostuff-collectionschema. The JSON/YAML modules need Jackson; codegen needs protostuff-compiler or the Maven plugin. · Java 6 (the pom compiles with javac target 1.6; README says Java 1.6+); building needs Maven 3.2.3+. JDK 9+ support was added in 1.8.0; JDK 17+ may need --add-opens. · Any JVM. The runtime uses sun.misc.Unsafe when a Sun/HotSpot ReflectionFactory is present and otherwise falls back to plain reflection.
+
+**Vs siblings:** Pick it over Simple Binary Encoding or Apache Thrift when you want to serialize an existing Java object model, cycles included, without a separate IDL or flyweight codec; thrift-compact was also slower in the same table (1,483 vs 1,261 ns). If raw JVM speed matters more than protobuf-style evolution or wire compatibility, Fury/Apache Fory (442-508 ns) and colfer (633 ns) were over 2x faster in the same table.
+
+**Gotchas:**
+- toByteArray throws 'Buffer previously used and had not been reset' unless you call LinkedBuffer.clear() after each use; a buffer is not safe to share across threads.
+- Runtime-schema field numbers come from declaration order (parent class first) unless you use @Tag. Inserting or reordering fields, or changing a base class, silently breaks old data. Without @Tag the limit is 126 fields, and tag 127 is reserved.
+- Defaults chosen for protobuf compatibility lose information: null elements in collections are dropped, empty collections come back as null, and non-final POJO subclasses are not preserved. Enable preserve_null_elements / collection_schema_on_repeated_fields / morph_* (system properties or IdStrategy flags) to keep them; these change the wire output.
+- Polymorphic fields serialize the fully qualified class name, and auto_load_polymorphic_classes defaults to true, so input can make the runtime load classes by name. For untrusted data, pre-register your schemas and set it to false. No advisories are listed in the GitHub Advisory Database for protostuff-core or protostuff-runtime.
+
+**Status:** Stale: last commit 2025-04-02 (a null-check fix) and last Maven Central release 1.8.0 in March 2022, with open unanswered requests for a new release and JDK 21 support. It is Apache-2.0 and still a straightforward Maven dependency for Java 8/11 codebases.
+
+[repo](https://github.com/protostuff/protostuff) · [benchmark](https://github.com/eishay/jvm-serializers/wiki)
+
 #### json
+
+##### asdf (Mir/D)  `D`  `BSL-1.0`  `active`  `Tier A`
+
+D JSON library: parses to compact binary ASDF, binds typed structs; 1.16-1.46x faster than RapidJSON on kostya's JSON test.
+
+**Beats:** RapidJSON — kostya/benchmarks' Json test parses a pretty-printed file of 524,288 coordinate records and averages x/y/z, on an Intel Xeon E-2324G in Docker, reporting medians ± MAD. asdf 0.7.x (LDC 1.41.0, dub release-nobounds, -mcpu=native, binding into typed structs) took 0.133 s, against a full RapidJSON Document at 0.154 s (g++ 16.1) and 0.194 s (clang++ 22.1/libc++, -O3 -march=native -flto). Against RapidJSON's full-precision mode (0.212/0.262 s) the margin grows to about 1.6-2.0x.
+
+**Known shortcoming:** kostya pins asdf 0.7.x (latest v0.8.0). Two-pass design: the whole document is converted to ASDF binary first, and the benchmark averages coordinates as decoded, which explains its lower memory. Keys and numbers capped at 255 bytes; output buffer preallocated at 6x input; raw bytes >= 0x80 are not UTF-8-checked. SIMD only with LDC plus SSE4.2. D-only; thin maintenance (Travis/AppVeyor CI, mostly one maintainer).
+
+**How:** Parsing is a single goto-driven state machine. It turns JSON into ASDF, a length-prefixed binary format (a 1-byte type tag, uint32 lengths for strings, arrays and objects, and uint8 lengths for keys and numbers) written into one buffer allocated at 6x the input size. So there is no per-node allocation, and any subtree can be skipped by jumping over its length. With LDC and SSE4.2 enabled, strings and numbers are scanned 16 bytes at a time with PCMPISTRI; otherwise a 4x-unrolled lookup-table loop runs. Numbers stay as raw text until a field is bound, then go through Mir's precise decimal-to-float (`mir.bignum` decimalToFloatImpl), and struct binding is a compile-time-generated string switch over member keys, so undeclared keys are skipped without being decoded.
+
+**Use it when:**
+- You are writing D with LDC and need JSON bound straight into typed structs or classes, not into a generic DOM.
+- Large files or high-volume JSON Lines (`parseJsonByLine`) where you read a few fields per record: undeclared keys and subtrees are skipped via their length prefixes.
+- Reduce-while-parsing jobs: the kostya benchmark streams each coordinate into a `put()` sink (`@serdeLikeList` + `@serdeProxy`), so the array is never built. It used 61 MiB of extra memory vs RapidJSON's 123-129 MiB.
+- You need correctly rounded doubles. kostya's notes list default RapidJSON and non-Mir D parsers as inexact on numbers, and asdf goes through Mir's precise decimal-to-float path.
+- Filtering or reshaping JSON records (key-path lookup, `remove()` to set a deleted bit, re-emit) without fully decoding each one.
+
+**Skip it when:**
+- C or C++ projects: there is no C API, so use yyjson or simdjson instead.
+- Maximum throughput: on the same kostya test, simdjson On-Demand (0.060 s), DAW JSON Link (0.070-0.089 s) and Rust serde (0.103-0.110 s) are all faster than asdf's 0.133 s.
+- Inputs with object keys longer than 255 bytes, numbers longer than 255 characters, or strings, arrays or objects over 2^32-1 bytes: the parser rejects them with an error.
+- Untrusted input that needs strict validation: raw bytes >= 0x80 are not UTF-8-validated, and number tokens are only checked against the character set `+-.0-9eE` while parsing, with the full grammar checked only when a field is converted.
+- Formats beyond JSON (Ion, MsgPack, YAML, CBOR) or a mutable DOM (`AsdfNode` can hold arrays only as leaf values): the Mir author's mir-ion covers those, though its Ion DOM was slower on kostya (0.220 s). Also weigh maturity: this is mostly a one-maintainer project with legacy Travis/AppVeyor CI configs.
+
+**Integration:** module (dub package `asdf`; a meson.build is also provided) · mir-algorithm (>=3.10.43), which pulls in mir-core; the D runtime/GC and Phobos (std.experimental.allocator) · Not documented. It needs a D compiler (DMD or LDC), and the SSE4.2 fast path needs LDC. The legacy CI matrix tested DMD 2.095.1 and LDC 1.25.1 plus the latest releases. The benchmark used LDC 1.41.0 with asdf ~>0.7.17 (0.7.x). · x86-64, x86 and aarch64 (Linux and macOS in legacy Travis CI; Windows x64 in AppVeyor). SIMD is used only via SSE4.2 on x86 with LDC; every other target uses a scalar path.
+
+**Vs siblings:** Pick asdf when your code is D. On kostya's test it ties gason (0.127-0.133 s) and yyjson (0.131-0.132 s), binds straight into typed structs with precise float parsing, and uses the least extra memory of the three (61 MiB vs 97 and 229 MiB). From C or C++, use yyjson or simdjson (whose On-Demand API is about 2.2x faster here); the repo's own old Haswell benchmark shows asdf's raw parse beating sajson 1.3-2.5x on 10 of 11 files but losing on nested.json.
+
+**Gotchas:**
+- Struct fields are required by default. A missing key raises "non-optional member ... is missing" unless the field has `@serdeOptional`, while unknown keys are silently ignored.
+- `parseJson` allocates an output buffer of 6x the input length up front, from the GC by default. Pass a std.experimental.allocator allocator to control this.
+- `parseJsonByLine` reuses one buffer for every line, and by default silently skips invalid lines (`throwOnInvalidLines = No`). Values from `Asdf`, and strings from `@serdeScoped` or `const(char)[]` proxies, point into that buffer and become invalid once it moves on or is freed.
+- Floats: JSON `null` deserializes to NaN, the strings "nan" and "inf" are accepted, and `serializeToJson` writes NaN as the string "nan". A malformed float token throws a plain `Exception` ("Failed to deserialize number") instead of a SerdeException.
+
+**Status:** Low activity but still maintained by the Mir author: v0.8.0 was tagged 2025-11-06 after a compile fix, the package gets about 1.8k dub downloads a month, and it is BSL-1.0. However, CI still points at legacy Travis/AppVeyor, and the README's API-docs link (asdf.libmir.org) did not resolve on 2026-09-25.
+
+[repo](https://github.com/libmir/asdf) · [benchmark](https://github.com/kostya/benchmarks#json)
+
+##### Boost.JSON  `C++`  `BSL-1.0`  `active`  `Tier A`
+
+Mutable C++11 JSON DOM with an SSE2-assisted streaming parser; median ~2.6x faster parsing than nlohmann/json, roughly ties RapidJSON.
+
+**Beats:** nlohmann/json, RapidJSON — Boost's own bench/bench.cpp, last regenerated in October 2020 on an Intel i7-7700K under Windows 10 (gcc 8.1 -O3, clang 12 -O3, MSVC 19.26 /O2, SSE2), measured in-memory parse and serialize MB/s on 14 simdjson-corpus files against unpinned HEAD clones of RapidJSON and nlohmann/json. Boost.JSON beat nlohmann in all 42 parse cases (median ~2.6x) and all 42 serialize cases (median ~3.5x). Against RapidJSON the result is mixed: the default allocator won 20/42 parse cases, while the monotonic pool won 33/42 (median ~1.26x).
+
+**How:** The parser is a hand-written resumable state machine, templated on the handler, on each parse option and on a StackEmpty flag so the non-resuming path skips suspend-state checks, and it uses SSE2 16-byte scans (`_mm_cmpeq_epi8` plus `_mm_movemask_epi8`) to find quote, backslash and control characters, skip whitespace and count digits. `value_stack` buffers parsed elements and then builds each array, object and string with one exact-size allocation; with `monotonic_resource` (a bump-pointer arena whose deallocate is a no-op) and parser reuse, allocation cost almost disappears. The default 'imprecise' number mode scales the mantissa with a 618-entry power-of-10 table (precise mode uses a fast_float-derived `from_chars`). Serialization uses a 2-digit lookup table for integers and Boost.Charconv `to_chars` for doubles, and objects above a small size carry a hash index for O(1) average key lookup.
+
+**Use it when:**
+- You need a mutable DOM (edit it, build documents from scratch, pass `json::value` through library APIs) and nlohmann/json shows up in profiles. The vendor run was 2.1-38.7x faster at parsing and 1.7-9.3x faster at serializing across 14 files and 3 compilers.
+- Parse-then-discard workloads (request bodies, message payloads, config snapshots) where you can pass a `monotonic_resource` to `parse()`. That configuration beat RapidJSON's MemoryPoolAllocator in 33/42 parse cases (median ~1.26x), for example canada.json at 637-675 vs 490-641 MB/s.
+- Network code that receives JSON in chunks. `stream_parser::write_some` resumes across buffer boundaries; Boost's comparison page lists no incremental parsing for RapidJSON or nlohmann.
+- Codebases already on Boost (Asio/Beast) or with constraints such as `-fno-exceptions`, `error_code`/`system::result` APIs, arena or stack-buffer allocation (`static_resource`, `BOOST_JSON_STACK_BUFFER_SIZE`), or big-endian targets.
+- Mapping JSON straight to structs without building a DOM: `parse_into<T>` with Boost.Describe avoids the parse-then-`value_to` cost.
+
+**Skip it when:**
+- Maximum-speed read-only extraction from large documents: simdjson and yyjson are faster. In an independent MSVC 2022 run (Boost 1_90), Boost.JSON read a 540.82MB integer file in 2.269 s vs yyjson 1.007 s.
+- String-heavy input with the default allocator, compared with RapidJSON's CRT allocator: it loses on twitter.json (308-329 vs 406-423 MB/s) and random.json (171-180 vs 222-308 MB/s). Only the `monotonic_resource` configuration is reliably competitive with RapidJSON.
+- Hot paths that (de)serialize structs, where Glaze fits. In the maintainer's 2025 gcc run (issue #1102), Glaze direct parsing reached 1880 vs Boost.JSON direct 640 MB/s on citm_catalog, and direct serialization 8275 vs 2275 MB/s.
+- Projects that cannot take Boost dependencies. Standalone mode was removed in Boost 1.79, and the build pulls in Container, System, Charconv, Endian, Describe, Mp11 and others.
+- Numbers outside int64/uint64/double (no big-number or number-as-string mode; issue #872 is still open), binary formats such as CBOR (none in the tree), or heavy mutation of a document parsed into `monotonic_resource`, which never reclaims memory before it is destroyed.
+
+**Integration:** static lib or shared lib; header-only by including <boost/json/src.hpp> in exactly one TU (MSVC also needs BOOST_JSON_NO_LIB) · Boost: Assert, Charconv, Config, Container, ContainerHash, Core, Describe, Endian, Mp11, System, ThrowException (from build.jam); Boost.Container may need linking · C++11; README lists clang 3.8 and 4-23, gcc 5-16, MSVC 14.0-14.5 as tested (GCC <5 support ended in Boost 1.88) · any; SSE2 fast paths switch on automatically on x86/x64 (`__SSE2__`/`_M_X64`) with scalar fallbacks elsewhere; little- and big-endian via Boost.Endian
+
+**Vs siblings:** Choose Boost.JSON over simdjson or yyjson when you need a mutable, allocator-aware C++ DOM with chunked incremental parsing; simdjson's DOM is read-only and yyjson is a C API. Choose it over Glaze or reflect-cpp when you need a real DOM: in the maintainer's 2025 run, Boost.JSON pool parsing was 2-4x faster than `glz::json_t` (citm_catalog 1177 vs 328 MB/s). For direct struct mapping, Glaze is faster.
+
+**Gotchas:**
+- `parse_options::max_depth` defaults to 32, so more deeply nested documents fail to parse until you raise it.
+- The default `number_precision::imprecise` can lose precision on long mantissas; use `precise` for correctly rounded doubles at some speed cost. The published benchmark used imprecise mode, with RapidJSON also run without its full-precision flag.
+- Duplicate keys: the parser keeps the last occurrence, but constructing an `object` from an initializer list or range keeps the first. Doubles are always serialized in scientific notation (`chars_format::scientific`).
+- The allocator is `boost::container::pmr::memory_resource`, not `std::pmr` (a `std::pmr` resource needs an adapter; issue #583). `storage_ptr` is reference-counted, and `monotonic_resource` frees only on destruction.
+
+**Status:** Actively maintained: Boost 1.92.0 is tagged and the develop branch had commits on 2026-09-23. BSL-1.0 and ships in every Boost release, so its 479 GitHub stars understate real usage.
+
+[repo](https://github.com/boostorg/json) · [benchmark](https://www.boost.org/doc/libs/latest/libs/json/doc/html/benchmarks.html)
+
+##### cJSON  `C`  `MIT`  `active`  `Tier A`
+
+Two-file ANSI C DOM JSON parser/printer; parsed 13 of 14 paper benchmark files faster than nlohmann/json (2019).
+
+**Beats:** nlohmann/json (JSON for Modern C++) — Table 10 of Langdale and Lemire's simdjson paper (VLDB Journal 2019, arXiv 1902.08318) measured in-memory, single-threaded DOM parsing of 14 files with GCC 9.1 -O3 -march=native on a Skylake i7-6700: cJSON (1.7.10, the pinned submodule) ran 0.06-0.53 GB/s against nlohmann/json's 0.05-0.14 GB/s, winning 13 files and tying on mesh, with the widest gaps on string-heavy gsoc-2018 (0.53 vs 0.12) and twitter (0.33 vs 0.10). The harness excludes cJSON_Delete from the timed region but includes nlohmann's destructor, and the numbers predate 1.7.19's per-number allocation.
+
+**Known shortcoming:** Beats nlohmann/json on 13 of 14 files (one tie) and jsmn on 11 of 14 in the simdjson VLDB 2019 paper, but loses to RapidJSON on 13 of 14 (ahead only on gsoc-2018, 0.53 vs 0.51 GB/s). Pick it for portability and simplicity, not speed.
+
+**Known shortcoming:** Maintenance is at risk: on 2026-09-16 a maintainer said there is no commitment to answer issues or security reports and recommended forks (#1080). CVE-2026-67215 and CVE-2026-67216 are open with no fixed release (#1073). In the paper's harness cJSON_Delete is outside the timed region while nlohmann's tree is freed inside it. The paper measured 1.7.10; 1.7.19 mallocs per number (CVE-2023-26819 fix), possibly slower on number-heavy files. Loose validation (strtod number syntax, invalid UTF-8 passed through).
+
+**How:** There is no SIMD and no structural-index pass: it is a byte-at-a-time recursive-descent parser that allocates nodes as it goes, storing arrays and objects as doubly linked lists (child/next/prev) with no key hashing or ordering. Strings are pre-scanned to the closing quote to size a single allocation and then unescaped in one copy; numbers are copied into a temporary buffer and converted with libc strtod, with the locale's decimal point substituted. The paper does not say why this beats nlohmann/json, and its harness times nlohmann's destructor but runs cJSON_Delete outside the timed region, which favors cJSON by an unmeasured amount.
+
+**Use it when:**
+- C or C89-only code bases (firmware, embedded, old toolchains) that need parse, modify and print in two vendorable files with swappable malloc/free hooks.
+- C++ projects that currently parse string-heavy documents (tweets, API payloads, gsoc-2018-style records) with nlohmann/json and can live with a C API; the 2019 table shows 2.6-4.4x on those files.
+- Small configuration or message documents (a few KB, objects with a handful of keys) where a simple mutable DOM matters more than GB/s.
+- Output-constrained targets: cJSON_PrintPreallocated prints into a caller buffer with no heap allocation, and CJSON_NESTING_LIMIT caps recursion depth at compile time.
+
+**Skip it when:**
+- Number-heavy documents (canada, marine_ik, numbers, mesh): it roughly ties nlohmann/json at 0.06-0.07 GB/s, jsmn is about 9x faster on numbers, and since 1.7.19 parse_number mallocs a temporary buffer per number (PR #939), which the 2019 numbers (cJSON 1.7.10) do not reflect.
+- Throughput-critical parsing: RapidJSON beats it on 13 of 14 files in the same table, and sajson, gason and simdjson are faster on every file.
+- 64-bit integers or exact integer round-trips: every number is a double, and valueint is a 32-bit int that saturates at INT_MAX/INT_MIN.
+- Large objects or arrays accessed by key or index: lookups walk a linked list (O(n) per key, O(n^2) for indexed array loops), and the maintainers declined a hash table (issue #436).
+- Untrusted input where strict validation and prompt security fixes matter: the README says most invalid UTF-8 is passed through, the paper lists cJSON among parsers lacking validation, and CVE-2026-67215/67216 (cJSON_Utils patch recursion, cJSON_Compare CPU cost) are open with no fixed release.
+
+**Integration:** source-drop · none (C standard library only: string.h, stdio.h, math.h, stdlib.h, limits.h, ctype.h, float.h, locale.h) · C89/ANSI C compiler (built with -std=c89); CMake 3.5+ for the CMake build; README says not to compile it as C++ · any with IEEE 754 doubles; CI covers Linux and macOS (GCC and Clang) plus Visual Studio 2013/2015 on AppVeyor
+
+**Vs siblings:** Pick cJSON over jsmn when you need an owned tree with unescaped strings plus a printer, since jsmn only tokenizes (though jsmn wins on numbers and github_events). Pick it over yyjson, sajson or gason only for C89 portability, a two-file vendor drop, or because it is already in your dependency tree; sajson and gason were faster on every Table 10 file.
+
+**Gotchas:**
+- `type` is a bit field; test it with the cJSON_Is* functions, not ==. Adding an item to an array or object transfers ownership, so deleting it yourself afterwards is a double free.
+- cJSON_GetObjectItem is case-insensitive for legacy reasons; use the *CaseSensitive variants for standard behavior. With duplicate keys only the first match is returned.
+- cJSON_Parse ignores trailing data after the first value unless you call cJSON_ParseWithOpts with require_null_terminated=1. Number syntax is whatever strtod accepts from the run of [0-9+-.eE] characters, so non-RFC forms such as leading zeros pass.
+- With ENABLE_LOCALES (default ON) parsing and printing read localeconv() for the decimal point. Strings cannot contain NUL or \u0000, and cJSON_PrintPreallocated needs 5 bytes more than the output length.
+
+**Status:** The last release is 1.7.19 (2025-09-09) and a few fixes have landed since (latest 2026-09-16), but on 2026-09-16 a maintainer posted issue #1080 saying there is no response-time commitment and recommending forks; it is MIT and two files, so vendoring and patching locally is easy.
+
+[repo](https://github.com/DaveGamble/cJSON) · [benchmark](https://arxiv.org/abs/1902.08318)
+
+##### cpp-yyjson  `C++`  `MIT`  `active`  `Tier A`
+
+C++20 JSON DOM library: header-only API over a bundled SIMD-patched yyjson fork; reads 1.4-4.6x, writes 2.6-8.1x faster than RapidJSON.
+
+**Beats:** RapidJSON — Setup: Intel i9-12900K (P-cores only, Turbo off), Ubuntu 26.04, GCC 15.2.0 with -O3 -march=x86-64-v3 and LTO for both cpp-yyjson (AVX2 backend) and header-only RapidJSON 2025-02-26 (default Parse flags, RAPIDJSON_SSE42 not defined). Parsing and visiting every element of ten yyjson_benchmark documents was 1.4x (canada) to 4.6x (github_events) faster than RapidJSON, 2.31x time-weighted; re-serializing was 2.6-8.1x faster, 3.91x weighted. The verifier recomputed every ratio from the committed Google Benchmark logs, and the two largest documents (48.8 MB fgo, 66.4 MB otfcc) dominate the weighted totals.
+
+**Known shortcoming:** The benchmark enabled AVX2, x86-64-v3 and LTO, which a default user build does not; RapidJSON ran without its opt-in SSE whitespace skipping. The backend is a young single-maintainer fork of yyjson 0.13.0 with SIMD that upstream declined (yyjson PR #294), so upstream fixes must be carried by hand. x86-64 only for SIMD paths; the top ratios (4.6x read, 8.1x write) come from 9-19 us timings on a 0.1 MB document.
+
+**How:** Parsing and serialization are done by yyjson's DOM reader and writer, which run in a bundled fork of yyjson 0.13.0. The author added x86-64 changes to that fork after upstream declined them because upstream yyjson stays free of SIMD on purpose. The changes: SSE2/AVX2 scanning of strings 16 or 32 bytes at a time for quote, backslash, control or non-ASCII bytes (byte-shuffle table plus movemask); SIMD block copies of long strings on write; one vector compare to skip the predicted indentation of pretty-printed input; SWAR parsing of four decimal digits per step; and madvise(MADV_HUGEPAGE) on glibc blocks of 32 MiB or more, which cuts page faults. The benchmark compiles the backend together with the calling code under LTO; the author measures no overhead from the C++ layer itself.
+
+**Use it when:**
+- C++20 code that parses whole documents into a DOM and walks them, or builds documents and serializes them, where RapidJSON or nlohmann-json is the bottleneck. String-heavy documents (gsoc-2018, github_events) and indented ones gain the most.
+- x86-64 builds where you can set CPPYYJSON_ENABLE_AVX2=ON and call cpp_yyjson_enable_lto(). This is the configuration that was benchmarked.
+- Linux/glibc services that read or write documents of tens of MB. The huge-page advice gives 1.4-1.8x over upstream yyjson there; on other systems, reuse a pool_allocator instead.
+- Read-only input such as network buffers or const strings that you cannot pad or overwrite. On such input it read all ten test documents 1.06-1.65x faster than simdjson On Demand, whose time includes the copy and padding it needs.
+- Teams that want yyjson-level speed with idiomatic C++: ranges, std::optional accessors, RAII document lifetime and struct reflection for (de)serialization.
+
+**Skip it when:**
+- You need a SAX, streaming or incremental reader, or bounded memory on very large inputs. The documented API builds a full DOM only.
+- Access patterns with many lookups in large objects. Object find/contains/operator[] are O(N), and mutable array operator[] is O(N).
+- Toolchains older than C++20 with <ranges> and <format>. The minimum is GCC 13, LLVM 17 or AppleClang 16.
+- Non-x86 targets where you expect the headline numbers. The SIMD string and indentation paths are x86-64 only, huge pages work only on Linux/glibc, and no ARM results are published.
+- Strict dependency policies. The speed comes from a single-maintainer downstream fork: 14 commits on top of yyjson 0.13.0, written 2026-09-12 to 2026-09-23, that upstream declined to merge (ibireme/yyjson PR #294). Upstream security fixes must be carried over by hand, and the project has 95 stars.
+
+**Integration:** header-only C++ API plus a static lib (bundled yyjson backend compiled from src/yyjson.c); fully header-only over an external yyjson with -DCPPYYJSON_USE_BUNDLED_YYJSON=OFF · none with the bundled backend (yyjson.h and field_reflection.hpp ship in include/); external mode needs yyjson >= 0.6.0 (e.g. from vcpkg) · C++20 with <ranges> and <format>; CI tests GCC 13-16, LLVM 17-22, AppleClang 16/17/21, MSVC cl and clang-cl (windows-2022/2025); CMake adds /Zc:preprocessor for MSVC · CI covers x86-64 Linux and Windows and arm64 macOS. SIMD paths are x86-64 only: SSE2 by default, AVX2 opt-in with CPPYYJSON_ENABLE_AVX2=ON, after which the binary requires an AVX2 CPU. Huge-page advice works only on Linux with glibc.
+
+**Vs siblings:** Pick it over yyjson when you want a C++ API (ranges, std::optional, RAII, struct reflection) plus the fork's x86-64 SIMD and huge-page gains: 1.0-1.8x reads and 1.0-2.1x writes vs upstream yyjson 0.12.0. Pick it over simdjson when you also build, mutate or serialize JSON (simdjson has no serializer) or cannot supply a padded buffer. For fixed schemas mapped straight into structs, glaze skips the DOM step and is not in this benchmark, so measure both.
+
+**Gotchas:**
+- The default build is not the benchmarked build. AVX2 is OFF unless you set CPPYYJSON_ENABLE_AVX2=ON; it defaults to ON only for the repo's own benchmark build. LTO applies only after cpp_yyjson_enable_lto(target). With Clang 17 or older, or MSVC, every target that links cpp-yyjson then needs that call, or the link fails with 'file format not recognized'.
+- Errors are exceptions: read_error for invalid JSON, bad_cast for a failed conversion, std::out_of_range from const operator[] on a missing key, and std::runtime_error when a pool_allocator is too small. Non-const operator[] on a mutable object inserts a default value for a missing key, and emplace does not check for duplicate keys.
+- The *_ref classes and string_view results borrow from the document that owns them. Referenced (not copied) strings in built documents must outlive the document. Copying costs 2.5x on array_string, so referencing is faster when lifetimes allow it. stack_pool_allocator must outlive every value created with it.
+- Each yyjson::value/array/object owns a separate mutable document, so creating many small ones is expensive. The reference recommends tuple/pair construction and emplace(key, empty_object) over building nested objects separately and inserting them.
+
+**Status:** Active (v1.0.0 released 2026-09-24, CI on GCC/LLVM/AppleClang/MSVC) and MIT-licensed, bundled yyjson fork included, so it is easy to vendor. It is a single-maintainer project with 95 stars, and its SIMD backend is about two weeks old.
+
+[repo](https://github.com/yosh-matsuda/cpp-yyjson) · [benchmark](https://github.com/yosh-matsuda/cpp-yyjson/blob/main/docs/benchmark/README.md)
+
+##### gason  `C++`  `MIT`  `abandoned`  `Tier A`
+
+~450-line in-situ C++11 JSON DOM parser, 1.2-1.5x faster than default RapidJSON on kostya's number-heavy JSON test.
+
+**Beats:** RapidJSON — kostya/benchmarks (README update 2026-07-19; Intel Xeon E-2324G, Debian Docker, -O3 -march=native -flto=auto -std=c++23) parsed a generated file of 524,288 coordinate objects and averaged x/y/z. gason took 0.127 s vs 0.154 s for RapidJSON's default DOM Parse() with g++ 16.1 (1.21x), and 0.133 s vs 0.194 s with clang++ 22.1.8/libc++ (1.46x); gason parses in place, while the RapidJSON test copies strings and no ParseInsitu variant was run. The author's 2013-14 shootout against 2013 RapidJSON trunk (i7, clang-500) is mixed: gason is 2.4x faster on monster.json (924 vs 2210 us) but slower on big.json (20092 vs 18093 us).
+
+**Known shortcoming:** Unequal comparison: gason parses in place while kostya's RapidJSON harness uses the copying Parse() (no ParseInsitu row), and gason's number conversion is not correctly rounded. Fails many nativejson-benchmark conformance cases (25/34 validation, 26/66 double parsing). Open safety bugs: out-of-bounds read past the terminating NUL (#43, unsafe on untrusted input) and NaN-boxing that silently breaks with aarch64 tagged pointers (#36). Depth capped at 32, no integer type, no writer. Unmaintained since 2016.
+
+**Independent measurement:** kostya/benchmarks memory growth: gason 96.75 MiB vs RapidJSON 123.44, simdjson DOM 175.86, yyjson 229.38.
+
+**How:** It parses destructively in place. Strings are unescaped and NUL-terminated inside the source buffer and referenced by pointer, so string data is never copied. Every value is an 8-byte NaN-boxed double: numbers are stored as raw doubles, and every other type is a 4-bit tag plus a 47-bit pointer. Array and object members are singly-linked nodes of 16 or 24 bytes, taken from a bump-pointer zone allocator (4 KiB malloc'd blocks) and freed all at once. The parser is one non-recursive switch loop with a fixed 32-entry container stack. It converts numbers with a hand-rolled digit accumulator instead of strtod, which is fast but not correctly rounded.
+
+**Use it when:**
+- Parsing trusted JSON once when it already sits in a writable buffer you can give up, and a sequential walk of the tree is enough (for example, pulling fields or sums from a large data dump or config).
+- Number-heavy documents where approximate doubles are acceptable. kostya's generated file of 524,288 coordinate objects is this shape, and gason took 0.127 s there vs 0.154 s for RapidJSON (g++).
+- Memory-constrained parsing. In the same test, gason's RSS grew by 96.75 MiB, vs 123.44 MiB for RapidJSON, 175.86 MiB for simdjson DOM and 229.38 MiB for yyjson (g++/gcc).
+- Projects that want a tiny vendored parser: two files, about 450 lines, no dependencies, builds with -fno-exceptions -fno-rtti, on x86-64 or 32-bit targets.
+
+**Skip it when:**
+- Untrusted or validation-critical input. It accepts invalid JSON (trailing commas, {"a" null}, leading zeros, 0e, ["x"]]) and passes only 25 of 34 nativejson-benchmark validation cases. Open issue #43 (2026) reports reads past the terminating NUL when whitespace comes right before it, and the source confirms that path.
+- When numbers must be exact. Conversion is not correctly rounded: it passes 26 of 66 nativejson-benchmark double tests, 5e-324 parses as 0 and 1.7976931348623157e308 as inf. There is no integer type, so integers above 2^53 lose precision.
+- Platforms with tagged or wide pointers, such as Android on aarch64 with tagged heap pointers. NaN-boxing keeps only 47 pointer bits, so the type tag gets corrupted (open issue #36, seen on a Pixel 5). The guarding assert is compiled out in release builds, so the failure is silent.
+- Documents nested more than 32 levels deep: the stack size is fixed and the parse returns JSON_STACK_OVERFLOW. Also skip it when you need keyed or indexed access, DOM editing or JSON output; none of these exist, and objects are linear lists.
+- When peak speed matters most: simdjson On-Demand (0.060 s), DAW JSON Link (0.089 s) and simdjson DOM (0.107 s) all beat gason's 0.127 s in the same kostya test.
+
+**Integration:** source-drop · none · C++11. VS2012 fails to compile it (open issue #22); VS2013 and later are reported to work. kostya builds it with g++ 16.1 and clang++ 22.1.8 at -std=c++23. · 64-bit targets whose pointers fit in 47 bits (typical x86-64) and 32-bit targets (fixed in 2015). Broken on aarch64 with tagged heap pointers, e.g. Android (issue #36).
+
+**Vs siblings:** In kostya's test, simdjson is faster (On-Demand 0.060 s, DOM 0.107 s) and yyjson roughly ties gason (0.131 s vs 0.127 s). kostya flags gason's number parsing as inaccurate but not theirs, so choose gason only when a two-file, ~450-line vendorable parser with a smaller tree (96.75 MiB RSS growth vs 175-229 MiB) matters more than exact numbers, strict validation and maintenance.
+
+**Gotchas:**
+- The source buffer is overwritten, and every string points into it. Keep the buffer and the JsonAllocator alive for as long as you use any JsonValue; destroying the allocator invalidates the whole tree.
+- Array nodes are allocated without the key field, so reading node->key while iterating an array reads garbage. The README says only next and value are valid for arrays, and issue #38 hit this.
+- Strings are C strings: \u0000 truncates them, and a surrogate pair such as \uD834\uDD1E becomes two 3-byte sequences, which is invalid UTF-8. Raw non-ASCII bytes are not validated.
+- There is no length parameter, so the input must be NUL-terminated. Parsing stops after the first complete value and endptr points at the rest, so trailing data is not an error unless you check endptr yourself.
+
+**Status:** Abandoned: the last code fix was in 2016 and the last commit, in 2021, merged a typo fix, while 11 issues stay open, including tagged-pointer breakage, inexact numbers and an out-of-bounds read; it is MIT-licensed and small enough to vendor and patch yourself.
+
+[repo](https://github.com/vivkin/gason) · [benchmark](https://github.com/kostya/benchmarks#json)
+
+##### gjson  `Go`  `MIT`  `active`  `Tier A`
+
+Go library that reads single values from JSON by dot-path without unmarshalling; 3.2-5.7x lower latency than encoding/json structs.
+
+**Beats:** encoding/json — The numbers come from buger/jsonparser's suite (Go 1.26.3, Apple M4 Max arm64, median of 5 runs, gjson v1.19.0). gjson GetBytes path lookups took 402 / 2,241 / 22,756 ns/op on 190 B / 2.4 KB / 24 KB records, against 1,300 / 9,911 / 130,565 ns/op for encoding/json unmarshalling into a minimal struct (about 3.2x / 4.4x / 5.7x). The comparison is not like-for-like, because encoding/json decodes the whole document while gjson decodes only the requested fields and skips the rest. gjson's own first-party benchmark (M1 Max, Go 1.22) is consistent: 202.1 ns/op for one path versus 3,219 ns/op for a struct unmarshal.
+
+**Known shortcoming:** Not like-for-like: the encoding/json baseline decodes the whole document into a struct (and gjson's own benchmark adds a []byte copy per baseline iteration). GetBytes copies each result; each Get rescans from the start, so jsonparser EachKey wins on multi-field reads. Open 2026 reports: unbounded recursion and O(N^2) memory via @dig (#391), Result.Path panic on malformed JSON (#400), data race on global flags (#401). No validation in Get; numbers are float64 (integers above 2^53 lose precision).
+
+**How:** There is no DOM tree and no reflection. Get walks the input once, left to right, compares each object key with the current path component, and returns at the first match. Non-matching subtrees are skipped by parseSquash, which counts bracket depth using a 256-entry byte-class lookup table in a loop unrolled 8 bytes at a time (plain Go, with no SIMD or assembly). Results are substrings of the input (zero-copy for Get on a string, and unsafe string/[]byte casts avoid copying the input in GetBytes), and only the value being returned gets its string or number decoded.
+
+**Use it when:**
+- You need a few fields from JSON whose schema you don't want to model as Go structs, such as webhooks, third-party API responses or log records.
+- The documents range from hundreds of bytes to tens of KB and you read a handful of fields. The measured gain over encoding/json struct unmarshal grew from 3.2x at 190 B to 5.7x at 24 KB.
+- The query strings are written by developers and need to filter or reshape: array filters `#(...)`, wildcards, multipaths `{a,b}`, or modifiers such as `@reverse`, `@flatten` and `@keys`.
+- You scan newline-delimited JSON with the `..` path prefix or ForEachLine.
+- You target arm64 or any other Go platform. gjson is pure Go with no assembly, while simdjson-go needs AVX2+CLMUL on amd64 and has no fallback.
+
+**Skip it when:**
+- You read many unrelated fields from the same document. Every Get and every GetMany path rescans from the start. valyala/fastjson's README says it wins in this case because it parses once, and jsonparser's single-pass EachKey beat gjson on the 2.4 KB payload (1,657 vs 2,241 ns/op).
+- You need full decoding into typed structs, or encoding. gjson has no Unmarshal or Marshal; use Sonic, go-json or easyjson instead.
+- You have zero-allocation hot paths. GetBytes copies the returned Raw/Str, so fetching a large array subtree allocates its full size (28,672 B/op on the 24 KB payload). buger/jsonparser is 0 B/op and about 1.1x faster there.
+- You take untrusted JSON without calling Valid() first. Get does not validate, so malformed input gives unexpected results, and Result.Path panics on some malformed documents (issue #400, open).
+- Path strings come from untrusted users. Modifiers are on by default, and open issue #391 reports unbounded recursion on deep nesting and O(N^2) memory amplification through `@dig`. Four earlier DoS CVEs (CVE-2020-35380, -36066, -36067, CVE-2021-42836/42248) were fixed by v1.9.3.
+
+**Integration:** module · github.com/tidwall/match v1.1.1, github.com/tidwall/pretty v1.2.0 · Go 1.23 (go.mod; the All/Keys/Values iterators import the iter package) · any Go target (single-file pure Go, no assembly; uses unsafe for string/[]byte header casts)
+
+**Vs siblings:** Pick gjson over buger/jsonparser when you want the path/query language and typed Result conversions and can accept a few allocations and about 10% more time on large payloads (22,756 vs 20,114 ns/op). Pick it over Sonic, go-json or easyjson when you read a few fields instead of decoding the whole document: in the same suite it beat Sonic on medium (2,241 vs 2,703 ns/op) and large (22,756 vs 41,053) payloads. For many fields per document, valyala/fastjson parses once and also validates.
+
+**Gotchas:**
+- Duplicate keys: Get returns the first occurrence, encoding/json keeps the last, and ForEach yields every occurrence (issue #393, open). Two parsers reading the same input can disagree.
+- Numbers are stored as float64. Result.Num and Value() lose precision above 2^53 (issue #351); use Int()/Uint(), which read all 64 bits, or Raw. The scanner also treats tokens starting with i, I or N (NaN/Inf-style) as numbers.
+- Memory aliasing: Get on a string returns substrings that keep the whole input alive. GetBytes copies each result, and ParseBytes copies the entire input (it calls Parse(string(json))). To avoid the GetBytes copy, sub-slice the input using result.Index as the README shows.
+- Parse on an object or array sets Raw to everything from the opening bracket to the end of the input, trailing bytes included (issue #391). Don't log or echo Raw from a reused buffer.
+
+**Status:** Actively maintained by its original author (last commit 2026-08-28, v1.19.0, 15.6k stars) and MIT-licensed. It is a single-file pure-Go module with two small dependencies that is easy to vendor, but the repo has pull requests disabled and several 2026 bug and security reports (#391, #393, #400, #401) are still open.
+
+[repo](https://github.com/tidwall/gjson) · [benchmark](https://github.com/buger/jsonparser#benchmarks)
+
+##### jsmn  `C`  `MIT`  `abandoned`  `Tier A`
+
+C89 zero-allocation JSON tokenizer; beat nlohmann/json on 8 of 14 benchmark files but trails RapidJSON.
+
+**Beats:** nlohmann/json — The simdjson paper (Langdale and Lemire, VLDB Journal 2019, Table 10) ran jsmn from a 2018 commit (18e9fe4, default build without parent links, token array sized to the input) against nlohmann/json's full DOM parse on 14 files, single-threaded on an Intel i7-6700 (Skylake) with GCC 9.1 -O3 -march=native. jsmn was faster on 8 files (e.g. numbers 0.65 vs 0.06 GB/s, twitter 0.27 vs 0.10) and slower on 6 (e.g. canada 0.01 vs 0.05), about 1.5x by geomean, while RapidJSON insitu beat it on 13 of 14; a tokenizer against a DOM parser is not like-for-like.
+
+**Known shortcoming:** Mixed win only: in the simdjson VLDB paper it beats nlohmann/json on 8 of 14 files and loses to RapidJSON on 12 of 14. It is a tokenizer, not a full parser (no number or string decoding).
+
+**Known shortcoming:** The default build is quadratic: without -DJSMN_PARENT_LINKS each closing bracket scans back for its parent (canada.json runs at 0.01 GB/s; a 9 MB file took about 6 s in issue #36). Strict mode still accepts missing commas (#217) and stray ':' or ',' (#247). int offsets overflow above 2 GB. The benchmarked build is a 2018 commit; last release v1.1.0 (2019).
+
+**How:** It does much less work than a DOM parser: one byte-at-a-time pass through a switch-based state machine that records offsets only, with no heap allocation, copying, number or escape decoding, UTF-8 validation or SIMD. A `toksuper` index tracks the enclosing container. In the default build a closing bracket finds its parent by scanning the token array backwards, which is quadratic on containers with many container children. -DJSMN_PARENT_LINKS stores a parent index in each token (4 more bytes), so that walk is bounded by nesting depth.
+
+**Use it when:**
+- Microcontrollers (the README says it is tested on AVR and ARM) or builds with no heap and no libc, where one C89 header and a fixed stack array of 16-byte tokens (20 bytes with parent links) is all you can afford.
+- Small, known-schema messages such as config files or API responses where you extract a few fields and convert only those. The author's page reports good results on objects of about 4 KB.
+- Input that arrives in chunks over UART or a socket: call jsmn_parse again as bytes arrive until it stops returning JSMN_ERROR_PART, without building a tree.
+- A C or C++ hot path where nlohmann/json is the bottleneck, the documents are flat or shallow, and most values need no conversion. In the paper jsmn ran numbers.json at 0.65 vs 0.06 GB/s and github_events at 0.52 vs 0.09 GB/s.
+
+**Skip it when:**
+- Untrusted input that must be validated. Even with JSMN_STRICT it accepts missing commas (#217) and stray leading or trailing ':' or ',' (#247). The paper reports that it accepts [0e+]. It does not reject raw control characters in strings or check UTF-8.
+- Large nested documents in the default build. canada.json (GeoJSON coordinate arrays) tokenized at 0.01 GB/s, and issue #36 reports a 9 MB nested file taking about 6 s until JSMN_PARENT_LINKS was defined.
+- Server or desktop throughput. In the same table RapidJSON insitu, which builds a full DOM, is faster on 13 of 14 files (about 5x geomean). cJSON is faster on 11 of 14, and gason and sajson are faster on all 14.
+- Anything that needs lookup by key, DOM mutation, serialization, or decoded numbers and strings. You have to write that layer yourself.
+- Documents over 2 GB, because offsets are int and issue #44 shows negative end offsets on overflow. Also projects that need a maintainer: the last commit was 2021-10-14, with 100 open issues and 42 open PRs.
+
+**Integration:** header-only: a single jsmn.h. Define JSMN_HEADER in every .c file but one, or JSMN_STATIC to make the symbols static. · none. It includes only <stddef.h> and calls no libc functions. · Any C89 (ANSI C) compiler. It is usable from C++ through its extern "C" guard. · Any. It is plain portable C with no SIMD. The README says it is tested on x86/amd64, ARM and AVR, and library.json declares platforms "*" (PlatformIO).
+
+**Vs siblings:** Pick jsmn over gason, sajson or yyjson only when you need C89, no heap, no libc and a tiny footprint on a microcontroller: in the paper's Table 10, gason (0.71-1.1 GB/s) and sajson beat jsmn (0.01-0.65 GB/s) on every file, and yyjson is also ANSI C but validates to RFC 8259 and builds a full DOM with a custom allocator. If you want a real DOM without malloc, parsed into a buffer you supply, qajson4c is the closer fit.
+
+**Gotchas:**
+- JSMN_PARENT_LINKS changes the jsmntok_t layout. Every translation unit must be built with the same setting or you get memory corruption (#70). Without it, large nested inputs are quadratic.
+- Non-strict mode is the default. It accepts unquoted primitives, primitives as keys, and even arrays or objects as keys. That input can give a key a child count that breaks key/value pairing (#193), and the bundled jsondump example reads out of bounds on such trees (#125, #249). Bounds-check any token walk.
+- `size` counts direct children only (keys, for objects), and there is no next-sibling link, so skipping a nested value means walking its whole subtree. String tokens exclude the quotes but keep escapes raw. Primitives are untyped: you tell them apart by their first byte.
+- Parsing stops at the first NUL byte even if len is larger. On JSMN_ERROR_NOMEM, grow the token array while keeping its contents and call jsmn_parse again with the same parser. The simdjson benchmark avoided this by allocating one 16-byte token per input byte.
+
+**Status:** Abandoned: the last commit was 2021-10-14 and the last release v1.1.0 (June 2019), with 100 open issues and 42 open PRs, but it is an MIT-licensed single header with no dependencies that is easy to vendor and patch.
+
+[repo](https://github.com/zserge/jsmn) · [benchmark](https://arxiv.org/abs/1902.08318)
 
 ##### Jsonifier  `C++`  `MIT`  `active`  `Tier A`
 
@@ -940,6 +2096,82 @@ Header-only C++20 JSON library that binds to registered structs; 1.1-1.8x simdjs
 **Status:** Actively developed by a single maintainer (v1.0.2 released 2026-09-22, CI green on main), MIT-licensed and packaged in vcpkg; it is header-only but should be consumed through its CMake target rather than copied in by hand.
 
 [repo](https://github.com/nihilai-collective/Jsonifier) · [benchmark](https://github.com/nihilai-collective/Json-Performance/blob/main/Linux-Clang.md)
+
+##### jsoniter-scala  `Scala`  `MIT`  `active`  `Tier A`
+
+Scala macro-generated JSON codecs; decoding straight into case classes edged out RapidJSON's DOM (0.147 vs 0.154 s) in kostya/benchmarks.
+
+**Beats:** RapidJSON — In kostya/benchmarks' Json test (README update 2026-07-19, Xeon E-2324G, Debian Docker image), jsoniter-scala 2.39.1 was compiled with plain scalac 3.8.4 and run via the `scala` launcher (the README lists Java 24.0.2). It parsed the 524,288-record file and averaged x/y/z in 0.147 s. RapidJSON's DOM took 0.154 s with g++ 16.1.0 and 0.194 s with clang++ 22.1.8/libc++, both built with -O3 -march=native -flto: about 1.05x and 1.32x. The comparison is not like-for-like. jsoniter-scala decodes only x/y/z into case classes and skips the rest, while RapidJSON builds a full DOM with its default, less precise number parsing (RapidJSON Precise took 0.212/0.262 s). The JVM was warmed only by two tiny self-test documents.
+
+**Known shortcoming:** Skipped fields are not validated (skip() only balances brackets and quotes), so the kostya comparison against RapidJSON's full validated DOM is not like-for-like. Default limits reject maps/sets over 1024 entries and 308+ digit BigDecimal/BigInt (configurable); no input-length limit. Nested read/write on one thread needs the *Reentrant functions. SWAR, not SIMD; simdjson-java beats it on long ASCII strings and skipping.
+
+**How:** Black-box macros emit a specialized parser per type that reads UTF-8 bytes straight into constructor arguments, with no reflection, intermediate AST or hash maps. Keys go into a reused char buffer and are matched by sequential compares (up to 8 fields and 64 name chars) or by a @switch on a precomputed hash, and unknown fields are skipped by bracket/quote counting. Hot paths use SWAR word tricks through VarHandle byte-array views: 4-byte string scanning from borer, and 8-byte digit, java.time and UUID parsing from FastDoubleParser and simdjson ideas. Doubles take an exact pow10 fast path, then rust-lexical's 'moderate path' (multiplyHigh by precomputed power-of-10 mantissas), with Double.parseDouble only for near-halfway cases; output uses Schubfach/XJB shortest-double and James Anhalt integer printing, with parsers and writers pooled per thread in a ThreadLocal.
+
+**Use it when:**
+- Scala services on the JVM that decode and encode known schemas (case classes, sealed-trait ADTs, Option, collections) from byte arrays or streams, for example HTTP bodies via its tapir, sttp, http4s, pekko-http or zio-http integrations.
+- Large documents where you only need some fields. Unmapped fields are skipped without being materialized: in the benchmark the RSS increase was 25.62 MiB vs RapidJSON DOM's 123.44 MiB for 524,288 records.
+- Multi-GB top-level JSON arrays or NDJSON-like value streams, processed one element at a time with scanJsonArrayFromStream or scanJsonValuesFromStream without holding the whole input in memory.
+- Untrusted input where you want safe defaults: fail-fast validation, stack-less exceptions, BigDecimal/BigInt capped at 308 digits, map/set insert caps, recursive types disabled, and only a fixed set of classes instantiated.
+- Number-heavy payloads that need correctly rounded double parsing and shortest round-trip double output, or as a faster parse/serialize backend for existing circe or play-json code through the booster modules.
+
+**Skip it when:**
+- C or C++ code, which is where RapidJSON lives. On the same benchmark page, simdjson On-Demand (0.060 s), gason (0.127 s), yyjson (0.131 s) and Mir asdf (0.133 s) all beat it, and it uses more memory and energy than RapidJSON g++.
+- Schema-less or dynamic JSON that you need to query as a tree. The library has no AST of its own, so you need circe, dijon or play-json on top.
+- Short-lived CLI or cold-start serverless processes. Base RSS was 283.94 MiB vs 113.21 MiB for RapidJSON, energy was 7.89 J vs 6.61 J, and neither JVM startup nor full JIT warm-up is part of the measured result.
+- Payloads dominated by long ASCII strings, or where most of the input is skipped. The author reports that simdjson-java (JDK Vector API) beats it on long strings and on skipping (issue #650). It uses SWAR, not explicit SIMD.
+- Recursive or cyclic object graphs (only acyclic graphs; recursive types need an opt-in flag), and Scala 3 union types or complex opaque types, which need hand-written custom codecs.
+
+**Integration:** module (Maven Central jars: jsoniter-scala-core at runtime; jsoniter-scala-macros as a compile-internal/provided dependency) · Runtime: scala-library only on the JVM, plus scala-java-time on Scala.js and Scala Native. Macros are compile-time only. Optional: jsoniter-scala-circe (needs circe-core). · Scala 2.12, 2.13 or 3.3 LTS+; JDK 11+ (v2.13.5.2 was the last release for JDK 8); Scala.js 1.0+; Scala Native 0.5+ · Any JVM on JDK 11+ (architecture-independent bytecode), GraalVM native-image, Scala.js (browsers/Node; WASM builds are benchmarked), Scala Native 0.5+
+
+**Vs siblings:** It is the only JVM/Scala entry in this category, so choose it whenever the code is Scala: nothing else here runs there. In C/C++, glaze is the closest analogue (compile-time typed struct mapping), and simdjson, yyjson or gason are faster than jsoniter-scala on the same kostya page.
+
+**Gotchas:**
+- Nesting read/write calls on the same thread corrupts state because of the pooled reader/writer. For example, calling readFromString inside a scanJsonValuesFromStream callback breaks (README known issue 5, #923). Use the *Reentrant functions for all but the innermost call.
+- Unknown fields are skipped leniently by default. skip() only balances brackets and quotes and scans number-ish characters, so malformed JSON inside ignored fields can be accepted. Set skipUnexpectedFields=false to reject unknown fields instead of skipping them.
+- The safe defaults reject some valid data. A Map or Set with more than 1024 entries fails with 'too many map inserts'/'too many set inserts', and BigDecimal/BigInt values with 308+ digits fail, until you raise them via CodecMakerConfig. Duplicate keys throw, serializing null throws NPE, and total input length is not limited, so check it yourself (known issue 1).
+- The make() config is evaluated at compile time. It cannot depend on code in the same compilation module, and having two jsoniter-scala versions on the classpath gives 'Cannot evaluate a parameter of the make macro' errors. ADTs nested inside classes or functions can crash the compiler (#551), and escaped characters are not accepted inside numeric or java.time string values.
+
+**Status:** Actively maintained: v2.41.1 was released 2026-09-25, while the benchmark pinned 2.39.1. It is MIT-licensed, depended on by tapir, sttp, caliban and smithy4s, and patch versions are binary-compatible both ways (minor versions backward only, checked with MiMa).
+
+[repo](https://github.com/plokhotnyuk/jsoniter-scala) · [benchmark](https://github.com/kostya/benchmarks#json)
+
+##### jsonparser (buger)  `Go`  `MIT`  `active`  `Tier A`
+
+Zero-allocation, path-based JSON field extractor for Go; 3-6.5x faster than encoding/json struct unmarshal on the project's benchmarks.
+
+**Beats:** encoding/json — In the project's own benchmarks (Go 1.26.3, Apple M4 Max arm64, median of 5 `go test -bench` runs), reading username, id and slug from each array element of a 24KB Discourse-style payload took 20,114 ns/op with 0 allocations. encoding/json, unmarshalling into a minimal struct, took 130,565 ns/op with 147 allocations, a 6.5x gap. EachKey was about 5.7x faster on a 190B log record and about 6.0x faster on a 2.4KB record. The comparison is not like-for-like: jsonparser leaves values as undecoded []byte (the 0 B/op EachKey rows match the benchmark variants whose ParseString calls are commented out), while encoding/json builds Go strings.
+
+**Known shortcoming:** The zero-allocation README rows are the 'Manual' variants that never build Go strings, while encoding/json does. Comparison libraries are pinned to 2018-2019 versions despite the README's 'latest' claim. go test fails at HEAD on amd64 Linux (#288, no reply). Seven releases in four days (2026-07); pin v1.5.1+ (fixes a full-document scan) and note CVE-2026-32285 fixed in v1.1.2. Benchmarks are Apple M4 Max only; Get does not validate the rest of the input.
+
+**How:** It never builds a tree. searchKeys walks the bytes once, tracks only nesting depth, compares keys in place, skips non-matching objects and arrays whole with a brace/bracket counter (blockEnd), and returns as soon as the path matches. String ends are found with an 8-byte SWAR (SIMD-within-a-register) scan for quote/backslash, and the hot loops use gjson's single-comparison fast skip (byte > 0x5C) over non-structural bytes. Values are sub-slices of the input, key comparison uses unsafe []byte-to-string casts, and escaped keys are unescaped into a 64-byte stack buffer, so extraction allocates nothing; EachKey matches all requested paths in one scan instead of rescanning per Get.
+
+**Use it when:**
+- Pulling a few fields out of JSON whose schema is large, unknown or unstable (third-party API responses, log records), where defining structs for encoding/json is the cost you want to avoid.
+- GC-sensitive hot paths: Get and EachKey measured 0 B/op on all three benchmark payloads, versus 416-4,432 B/op for encoding/json struct unmarshal.
+- Reading several fields from one document with EachKey: one pass over the 2.4KB payload took 1,657 ns versus 9,911 ns for encoding/json, and it also beat gjson (2,241), easyjson (2,368) and sonic (2,703).
+- Arrays of records where you need one or two fields per element: EachArray plus Get on the 24KB payload took 20,114 ns versus 130,565 ns for encoding/json.
+- Multi-GB JSON files: ReaderParser reads from an io.Reader in 64 KiB chunks with a bounded sliding window (64 MiB by default) instead of loading the whole document.
+
+**Skip it when:**
+- You need most of the document as typed Go structs. There is no Unmarshal, and struct-binding libraries such as sonic (an encoding/json drop-in) or easyjson (code generation) fit that job better.
+- You need validation. Get stops at the first match and never checks the rest of the input, and getType labels any token starting with a digit or '-' as Number without checking its format.
+- Your code calls Get separately for each field on medium documents: on the 2.4KB benchmark Get (3,141 ns) was slower than gjson, easyjson and sonic, and only EachKey led.
+- You need decoded Go strings for most values. Get returns raw bytes with JSON escapes intact, and GetString/ParseString unescape but allocate, a cost the 0-alloc headline numbers leave out.
+- Your main job is writing or editing JSON. There is no encoder, and the README marks Set and Delete as experimental.
+
+**Integration:** module · none (standard library only; go.mod has no require lines) · go.mod declares Go 1.13; CI runs Go 1.25; the published benchmarks used Go 1.26.3 · Any Go target: pure Go with no assembly files. Unsafe string/[]byte casts are the default, with a safe fallback under the appengine/tinygo build tags. The published benchmarks are arm64 only (Apple M4 Max).
+
+**Vs siblings:** Pick it over gjson when allocations matter or you read many paths at once: in the repo's benchmarks jsonparser allocates 0 B/op everywhere against gjson's 64-28,672 B/op, and EachKey beats gjson on the small and medium payloads, though gjson's per-path Get is faster than jsonparser's Get at 2.4KB. Pick it over Sonic or easyjson only when you want a few fields rather than a typed struct, because those decode whole documents into structs.
+
+**Gotchas:**
+- Returned []byte values alias the input buffer. Capacity is clipped, so an append will not overwrite the input, but copy the values before you reuse or mutate the buffer. GetUnsafeString returns a string that stays valid only while the buffer lives and does not handle escapes.
+- Keys inside arrays are not searched unless you address the element with "[n]" or iterate with EachArray. When a key is duplicated, the first occurrence wins because searchKeys returns on the first match.
+- Use v1.5.1 or later. The v1.5.1 changelog fixes a stringEnd backslash scan that walked the rest of the document (128 us to 22 us on the 24KB payload). Versions up to v1.1.1 have denial-of-service advisories: CVE-2020-10675, CVE-2020-35381 and CVE-2026-32285, the last fixed in v1.1.2.
+- Seven releases (v1.3.0 to v1.6.1) shipped between 2026-07-27 and 2026-07-30 and added many APIs. Open issue #288 (filed 2026-08-04) reports that `go test` fails at HEAD on amd64 Linux (TestOracleSetPr286Regression) and that this blocks Debian packaging.
+
+**Status:** Active (last commit 2026-08-21), MIT-licensed, standard-library-only and a single package, so it is easy to vendor. Still, pin a version and run your own tests, given the July 2026 burst of seven releases and the open report of failing tests at HEAD (#288).
+
+[repo](https://github.com/buger/jsonparser) · [benchmark](https://github.com/buger/jsonparser#benchmarks)
 
 ##### LJSON  `C`  `MIT`  `active`  `Tier A`
 
@@ -978,6 +2210,82 @@ Pure-C JSON5 DOM/SAX library; its arena/in-situ modes parse up to 2.5x and print
 **Status:** Actively maintained by a single author: latest tag v5.0.3, last commit 2026-07-25, and 4 open issues, including #4 asking for configurable stdout error logging. It is MIT-licensed and small enough to vendor (two .c files), but v5 broke compatibility with v3.x.
 
 [repo](https://github.com/lengjingzju/json) · [benchmark](https://github.com/lengjingzju/json/blob/master/README.md)
+
+##### sajson  `C++`  `MIT`  `stale`  `Tier A`
+
+Single-header, in-situ C++11 JSON DOM parser; 1.1-1.8x faster than RapidJSON insitu in the simdjson paper.
+
+**Beats:** RapidJSON — The peer-reviewed simdjson paper (Skylake i7-6700, GCC 9.1 -O3 -march=native) compared a 2018-09-20 sajson snapshot using a pre-sized bounded buffer against RapidJSON 1.1.0 with UTF-8 validation. sajson parsed all 14 files at 0.62-1.2 GB/s, against 0.41-1.0 GB/s for RapidJSON insitu (1.1-1.8x) and 0.38-0.86 GB/s for RapidJSON default. yyjson's README independently shows twitter.json at 1.16 vs 0.77 GB/s (AMD EPYC 7R32, gcc 9.3) and 1.74 vs 0.75 GB/s (Apple A14, clang 12) against RapidJSON insitu. The author's own blog says the gap is small with GCC and large with MSVC and clang.
+
+**Known shortcoming:** The C++11 claim is broken on master: parse_flags is a constexpr static member without an out-of-class definition, giving link errors on GCC 9/10 (#48; fix PR #54 unmerged). Integers outside int32 silently become doubles (the paper says they are rejected). UTF-8 validation is partial, scalar roots are rejected, doubles are not always correctly rounded (#10), and checks are assert()-only. The paper benchmarked a 2018 snapshot in bounded_allocation mode. gason beats it on number-heavy files (canada, mesh). Parser unchanged since 2021-09.
+
+**Independent measurement:** yyjson README (independent of sajson): twitter.json sajson 1.16 vs RapidJSON insitu 0.77 GB/s on EPYC 7R32 with gcc 9.3, and 1.74 vs 0.75 GB/s on Apple A14 with clang 12; yyjson and simdjson are faster than sajson there.
+
+**How:** In single-allocation mode one buffer of one word per input byte holds both the parse stack, which grows up from the bottom, and the AST, which is written down from the top, so the hot path has no capacity checks. Values are tagged words with 3 low tag bits, and null/true/false take no storage. The parser is a goto-based state machine with an explicit stack (no recursion) and __builtin_expect branch hints. It scans strings 4 bytes per iteration through a 256-entry lookup table and drops to a slow path only for escapes or non-ASCII bytes. Strings are unescaped and NUL-terminated inside the input buffer, so no string copies are made. There is no SIMD, and numbers use a plain digit loop scaled by a power-of-10 table.
+
+**Use it when:**
+- Read-only, single-pass parsing of complete UTF-8 documents already in a writable buffer (file read, network receive buffer) where the buffer can outlive the parsed document.
+- String- and object-heavy payloads such as API responses and logs: the paper's gains over RapidJSON insitu include apache_builds 1.2 vs 0.80 GB/s and twitter 1.0 vs 0.72 GB/s.
+- Embedded, mobile or WebAssembly builds that need zero library allocations: bounded_allocation parses into a caller-owned size_t array, with no exceptions, RTTI or longjmp, and the README calls the code size suitable for Emscripten.
+- Code that needs random access into the parsed tree: O(1) array element access and key lookup (binary search above 100 keys), unlike linked-list DOMs.
+- Deeply nested or adversarial structure where native stack overflow is a concern: parsing uses O(1) C stack and has been fuzzed with AFL.
+
+**Skip it when:**
+- Payloads with 64-bit integers such as IDs: only int32 is stored as an integer, and larger values silently become doubles that lose precision above 2^53 (issue #39, open since 2017).
+- When strict conformance matters: UTF-8 validation is partial (it accepts overlong forms, encoded surrogates, code points above U+10FFFF and stray continuation-byte leads such as 0xb1 0x87), scalar roots like `42` are rejected (issue #46), and doubles are not always correctly rounded (issue #10; open PR #59 shows 1.65 parsing to the wrong neighbor).
+- When you must write, modify or stream JSON: there is no serializer, no mutable DOM and no incremental or SAX mode.
+- Large documents on memory-tight hosts in the fastest mode: single allocation reserves 8 bytes per input byte on 64-bit. Dynamic mode is 10-40% slower per the README, and in the paper it loses to RapidJSON insitu on 6 of 14 files.
+- Peak throughput or active maintenance: simdjson is 1.4-2.9x faster on the same 14 files, yyjson's README shows 1.80 vs 1.16 GB/s on twitter.json, and sajson's parser code has not changed since 2021.
+
+**Integration:** header-only · none (C++ standard library only; SAJSON_NO_STD_STRING removes the <string> dependency) · C++11 per README, and the Bazel library target uses -std=c++11. However, current master defines its lookup table as an in-class constexpr static member with no out-of-class definition. Issue #48 reports undefined-reference link errors from `g++-9 -g` and GCC 10 builds, and the repo's Bazel tests build with -std=c++17. Use C++17 or apply open PR #54. · any; portable scalar C++ with no SIMD. The SCons matrix builds gcc and clang for 32- and 64-bit; the header has MSVC-specific macros; the repo includes a Swift binding.
+
+**Vs siblings:** Over gason, pick sajson when you need indexed access (gason uses linked lists without random access) or parse string- and object-heavy data (paper: apache_builds 1.2 vs 0.91 GB/s, twitter 1.0 vs 0.80), but gason wins number-heavy files (canada 0.95 vs 0.76, mesh 0.77 vs 0.62). simdjson and yyjson are faster; yyjson also reads int64 exactly, and simdjson leaves the input untouched. Choose sajson over them only when a tiny single header with a zero-allocation bounded mode and O(1) indexed DOM access matters more than peak speed.
+
+**Gotchas:**
+- The input buffer is overwritten: escapes are decoded in place and the closing quote becomes NUL. The buffer must stay writable and alive for the document's lifetime, and embedded \u0000 truncates as_cstring() results.
+- Objects with more than 100 keys are sorted at parse time (by length, then bytes), so get_object_key(i) no longer follows document order unless SAJSON_UNSORTED_OBJECT_KEYS is defined, which makes all lookups linear. Duplicate keys are accepted without error.
+- Type and bounds checks are assert()-only: calling get_integer_value() on a double or indexing past get_length() is undefined behavior in NDEBUG builds. A missing key returns a null value.
+- Buffer sizes are in size_t words, not bytes (issue #51). A caller-supplied single_allocation buffer fails with ERROR_OUT_OF_MEMORY unless it has at least one word per input byte.
+
+**Status:** Stale: the last parser change was in September 2021 (a full int32 range fix), the 2025 commit only added Bazel support, and 8 issues plus 3 PRs are open. It is MIT-licensed and a single 2.6k-line header, so it is easy to vendor and patch.
+
+[repo](https://github.com/chadaustin/sajson) · [benchmark](https://arxiv.org/abs/1902.08318)
+
+##### segmentio/encoding (encoding/json replacement)  `Go`  `MIT`  `active`  `Tier A`
+
+Drop-in encoding/json replacement for Go that swaps reflection for unsafe-pointer codecs; ~1.7x marshal, ~5x unmarshal on typed structs.
+
+**Beats:** encoding/json — On one core of a Core i9-8950HK with Go 1.16.2, encoding the stdlib's code.json testdata from a typed struct took 3.82 ms vs 6.40 ms for encoding/json (~1.68x), and decoding it took 5.6 ms vs 28.1 ms (~5.0x) with about 99% fewer bytes and allocations; json-iterator v1.1.10 was ~1.6x slower on marshal and ~1.5x on unmarshal. HTML escaping was off on both sides, the segmentio decode used Parse with ZeroCopy while stdlib copied strings, and the numbers are a March 2021 re-run (PR #77) that has not been refreshed.
+
+**How:** Each Go type gets a codec of pre-built encode/decode closures that walk the value through unsafe.Pointer field offsets instead of reflect.Value; codecs sit in a copy-on-write map keyed by the type's runtime pointer and loaded through atomic.Pointer. Struct keys are matched with segmentio/asm keyset.Lookup, a SIMD compare (AVX on amd64, ASIMD on arm64) against 16-byte zero-padded field names, used when a struct has at most 32 fields and names are at most 16 bytes; otherwise a Go map is used. String escaping and closing-quote search use SWAR bit tricks on 8-byte words, and an up-front scan of the whole input for printable ASCII and backslashes lets most strings be taken verbatim. Decoding writes straight into typed struct fields, and the ZeroCopy flag (used in the published benchmark) lets strings alias the input buffer instead of allocating.
+
+**Use it when:**
+- High-volume services that decode JSON into concrete Go structs: the published ~5x unmarshal gain and ~99% allocation cut are on a struct target, and a user in issue #124 measured 1.8 us vs 9.2 us for stdlib on a small typed payload.
+- Codebases that want a speedup with no call-site changes and no build step: swap the import path, no code generation, no new API to learn.
+- Request-handler code where decoded values do not outlive the input buffer, so Parse(..., ZeroCopy) or Decoder.ZeroCopy() can skip string, Number and RawMessage copies.
+- Encode-heavy paths that can call Append into a reused buffer with EscapeHTML and SortMapKeys off (the configuration the benchmark measures); Marshal adds HTML escaping, map-key sorting and a final copy out of a pooled buffer.
+- Little-endian 64-bit targets (amd64, arm64), where keyset and base64 get SIMD paths and CI runs the test suite (ubuntu-latest, Go 1.23 and 1.24).
+
+**Skip it when:**
+- Decoding into interface{} or map[string]any: allocation dominates, and issue #124 measured parity with stdlib (6.5 us vs 6.4 us on a 552-byte document); v0.4.0+ also had a map[string]any allocation regression that PR #149 fixed in July 2025.
+- Token-level or streaming decoding: Decoder has no Token() or More() methods, cannot step through elements of a large top-level array, and buffers each whole value in memory (32 KiB minimum buffer, doubling).
+- Code that depends on exact stdlib output: time.Duration encodes as a quoted duration string instead of int64 nanoseconds (issue #90), Go 1.24 omitzero tags are ignored because only omitempty and string are parsed (issue #148), and error messages differ.
+- Big-endian or 32-bit targets: escapeIndex assumes little-endian byte order and emits unescaped quotes and backslashes on s390x (issue #170, open), and TestMarshalEmbeds fails on i386 and armhf (issue #158, open).
+- Decisions that need numbers on current Go: the only published head-to-head is Go 1.16.2 from March 2021, stdlib encoding/json has changed since, and CI only compares master against the PR head.
+
+**Integration:** module · github.com/segmentio/asm v1.1.3 (SIMD keyset, base64, ASCII validation; pulls golang.org/x/sys indirectly). The README's 'no dependencies outside the core runtime' line is out of date per go.mod. · Go 1.23 (go.mod); CI tests Go 1.23 and 1.24; README says versions outside Go's own support window are unlikely to get fixes · Any Go target through pure-Go fallbacks; SIMD paths on amd64 (AVX) and arm64 (ASIMD); open bugs on big-endian s390x (#170) and 32-bit i386/armhf (#158)
+
+**Vs siblings:** Pick it over easyjson when you want no code-generation step, and over Sonic when you want pure Go with no JIT and no Go-version gate (Sonic's README lists Go 1.18-1.27, excludes 1.24.0, and supports only amd64/arm64). Against go-json and json-iterator the only direct evidence is this README's 2021 run (~1.6x marshal, ~1.5x unmarshal over jsoniter v1.1.10), so benchmark your own types before choosing.
+
+**Gotchas:**
+- ZeroCopy, DontCopyString, DontCopyNumber and DontCopyRawMessage make decoded values alias the input []byte; reusing or mutating that buffer corrupts them. Plain Unmarshal copies, but the README benchmark used ZeroCopy.
+- Encoder.Encode shadows the writer error (`if _, err := enc.writer.Write(b); err != nil`), so the failing call returns nil and only the next Encode reports it (issue #139, still in master).
+- The internals rely on unsafe pointer arithmetic; issue #134 (open since 2023) reports an intermittent 'fatal error: found pointer to free object' under load that stopped after switching back to stdlib.
+- Before v0.5.4 a key with a trailing NUL ("field\u0000") matched struct field "field" because the SIMD keyset zero-pads keys (issue #161, fixed by PR #162 in March 2026); use v0.5.4 or later where exact key matching matters.
+
+**Status:** Active but slow-moving (latest release v0.5.4 on 2026-03-12, a few master commits per year, 21 open issues including correctness bugs), MIT-licensed, used in production at Segment, and installed as an ordinary Go module.
+
+[repo](https://github.com/segmentio/encoding) · [benchmark](https://github.com/segmentio/encoding/blob/master/README.md)
 
 ##### simd-json (Rust)  `Rust`  `MIT OR Apache-2.0`  `active`  `Tier A`
 
@@ -1055,6 +2363,45 @@ SIMD-accelerated JSON parser with full UTF-8 validation; ~4x faster than RapidJS
 
 [repo](https://github.com/simdjson/simdjson) · [benchmark](https://github.com/simdjson/simdjson#performance-results)
 
+##### simdjson-oxcaml (simdjson-ox)  `OCaml (OxCaml)`  `MIT`  `active`  `Tier A`
+
+Native OxCaml simdjson port: reusable tape mode 1.18x RapidJSON geomean; DOM mode 0.69x RapidJSON, 4.9x Yojson.
+
+**Beats:** RapidJSON — The author ran one benchmark on 2026-08-15: an i7-12700K pinned to one P-core, with the OxCaml 5.2.0+ox perf profile against C++ parsers built by GCC 15.2.1 in CMake Release under Google Benchmark. On 7 simdjson-data fixtures, the reusable tape mode averaged 1,247.7 MB/s geomean against RapidJSON DOM's 1,059.7 MB/s (about 1.18x) and won 4 of 7. The recommended DOM API reached 729.5 MB/s (about 0.69x RapidJSON), and C++ simdjson reached 3,344.5 MB/s. RapidJSON was run with default parse flags and a fresh Document per iteration, and was built without RAPIDJSON_SSE2/SSE42 or -march flags.
+
+**Known shortcoming:** The ~1.18x geomean win over RapidJSON comes only from the reusable tape mode, which still loses on canada, marine_ik and numbers; the recommended DOM API is slower than RapidJSON (729.5 vs 1059.7 MB/s geomean). The author notes the tape comparison is not strictly like-for-like, and the RapidJSON harness builds a fresh Document each iteration. Requires the OxCaml compiler.
+
+**Known shortcoming:** RapidJSON was built without -march or RAPIDJSON_SSE2/SSE42, so the 1.18x win is over a non-SIMD RapidJSON. 63-bit OCaml ints: larger int64/uint64 values silently become floats. Recursive stage 2 with no depth limit can overflow the native stack. Strings capped at 16 MB. x86-64 SSE only (no AVX2, runtime dispatch or ARM). Single author, 3 stars, no releases; errors carry no position.
+
+**How:** Stage 1 follows simdjson's structural indexing on 64-byte blocks (four SSE 16-byte vectors): nibble lookup tables (PSHUFB) classify bytes, simdjson's backslash-run subtraction trick finds escapes, a carry-less-multiply prefix-XOR builds in-string masks, and the lookup-4 algorithm validates UTF-8. Structural positions stay compressed as one 64-bit mask per 64 input bytes, which stage 2, a tail-recursive descent, walks with count-trailing-zeros while writing either the `Json.t` tree or a tape whose strings share one byte buffer, so the reusable tape path allocates zero OCaml words per parse. Numbers use an 8-digit SWAR batch and a native port of Lemire's fast_float (Clinger fast path plus a 64x64->128 multiply lowered to one x86 `mul`), with a strtod fallback. OxCaml's unboxed `int64#`/`float#`, `[@zero_alloc]` checks and `[@@builtin]` popcnt/ctz intrinsics keep the hot loops free of boxing.
+
+**Use it when:**
+- An OCaml service on x86-64 where Yojson or Jsont parsing is the bottleneck. On 100 KB-3 MB documents the DOM mode measured about 4.9x Yojson.Safe and 5.4x Jsont (geomean).
+- Hot loops that parse many documents and can consume each result right away. The reusable `Tape.Parser` allocates nothing in steady state and was the fastest OCaml mode at 1,248 MB/s geomean.
+- Object- and string-heavy JSON (API logs, catalogs, tweets). Tape mode beat RapidJSON on apache_builds, citm_catalog, gsoc-2018 and twitter.
+- Teams already on OxCaml who want SIMD parsing without C++ FFI. The only C code is a tiny linker stub.
+
+**Skip it when:**
+- Stock OCaml. It needs the OxCaml 5.2.0+ox compiler and Jane Street's `ocaml_simd`, and will not build on upstream OCaml.
+- ARM (Apple Silicon, Graviton). The SIMD code is x86 SSE only, there is no runtime CPU dispatch, and there is no AVX2 path yet.
+- Float-heavy documents such as GeoJSON or numeric arrays, if you hoped to beat RapidJSON. Tape mode lost to it on canada, marine_ik and numbers. In the DOM path the author measured about 42% of cycles going to GC/promotion on canada.json.
+- Cases that need error positions or messages, serialization, lazy On-Demand access, or exact integers beyond 63 bits.
+- Untrusted or deeply nested input in production. The parser has no nesting-depth limit, it is a single-author project with 3 stars and no releases, and it has no issue history to learn from.
+
+**Integration:** module (dune library `simdjson`, built from source; no tags or releases, and the generated opam file still has placeholder homepage and dev-repo URLs, so expect to pin from git) · ocaml_simd (sse, avx, ppx, sexp sublibraries), janestreet_shims, base, stdlib_upstream_compatible, ppx_expect and ppx_template (preprocess); one C stub file · OxCaml 5.2.0+ox (the setup script pins an OxCaml opam-repository commit), Dune 3.22 · x86-64 only. It uses SSE 128-bit vectors with PSHUFB lookups and a carry-less multiply; the exact minimum ISA is not documented. No ARM, and no AVX2 dispatch yet.
+
+**Vs siblings:** Pick it only when you must stay in OCaml/OxCaml with no C++ FFI. In the same run C++ simdjson was about 2.7x faster than its best mode and sajson about 1.3x faster. For C/C++, or where bindings are acceptable, simdjson or yyjson is the better choice. simd-json (Rust) and simdjson-go are the equivalent ports for other languages.
+
+**Gotchas:**
+- The tape returned by `Tape.Parser.parse` borrows the parser's buffers, in simdjson's `dom::parser` style. The next `parse` on that parser overwrites it. Use `Tape.parse` or `Tape.to_json` if you need to keep the result.
+- Integers are 63-bit OCaml ints. Values beyond that but within the int64/uint64 range come back silently as `Float`, which loses precision. Larger integers are rejected as `Invalid_json`.
+- Every parse failure is the single `Error Invalid_json`, with no position or category. Unimplemented paths and internal defects raise `Internal_error` instead. Stage 2 is recursive, and the design notes say pathologically nested input can overflow the native stack.
+- Tape format limits: strings are capped at 16 MB (24-bit length), string offsets and container end indexes are 32-bit packed fields, and container element counts saturate at 24 bits.
+
+**Status:** Actively developed by a single author (last commit 2026-08-23) and MIT-licensed. It is usable today by pinning the git repo into an OxCaml switch, but it has no releases and the author describes the tape API as experimental.
+
+[repo](https://github.com/artempyanykh/simdjson-oxcaml) · [benchmark](https://github.com/artempyanykh/simdjson-oxcaml/blob/main/docs/parser-benchmark-snapshot-2026-08-15.md)
+
 ##### Sonic  `Go`  `Apache-2.0`  `active`  `Tier A`
 
 ByteDance's JIT- and SIMD-accelerated Go JSON library; about 1.9-3.4x the throughput of encoding/json on amd64.
@@ -1090,6 +2437,45 @@ ByteDance's JIT- and SIMD-accelerated Go JSON library; about 1.9-3.4x the throug
 **Status:** Actively maintained by ByteDance/CloudWeGo: v1.15.4 was released 2026-09-11 and Go 1.27 support landed July 2026. The Apache-2.0 module is easy to adopt, but every new Go release needs a matching Sonic update because it depends on private runtime internals.
 
 [repo](https://github.com/bytedance/sonic) · [benchmark](https://github.com/bytedance/sonic/blob/main/README.md#benchmarks)
+
+##### ujson4c  `C`  `BSD-3-Clause`  `abandoned`  `Tier A`
+
+Small C decode-only JSON DOM (UltraJSON decoder plus arena allocator); 4-10% faster than RapidJSON on citm/twitter, slower on canada.
+
+**Beats:** RapidJSON — nativejson-benchmark's '1. Parse' test (JSON text to DOM), CSV committed 2016-09-09, Core i7-4980HQ @ 2.80 GHz, clang 7.0 on macOS, release build with full optimization and -march=native, testing ujson4c at its final commit e14f3fd: 1.841 vs 1.950 ms for RapidJSON on citm_catalog.json (~1.06x) and 1.114 vs 1.227 ms on twitter.json (~1.10x), but 5.990 vs 4.755 ms on canada.json (RapidJSON ~1.26x faster). RapidJSON's in-situ mode is faster than ujson4c on twitter (0.995 ms) and canada (5.197 ms) and slightly slower on citm (1.922 ms).
+
+**Known shortcoming:** Weak conformance in nativejson-benchmark (Parse Double 34/66, Parse String 5/9) and about 4x RapidJSON's memory. Unmaintained since 2014-04.
+
+**Known shortcoming:** Unsafe for untrusted input: stops at NUL rather than cbInput (over-read, #11), no NULL checks on failed decodes (#6) or malloc (#9), and it bundles UltraJSON decoder code with the patterns behind CVE-2022-31117 and CVE-2022-31116. UJObjectUnpack fills outputs in document order, not caller order (#7, #10). Parse plus full walk is slower than RapidJSON on citm (2.33 vs 2.11 ms, derived); peak memory 12.66 MB vs 1.13 MB. The Parse String 5/9 score is partly a harness artifact; Parse Double 34/66 is real.
+
+**How:** The decoder is hand-written recursive descent: a switch on the first byte picks the value parser, and a 256-entry lookup table classifies string bytes (plain, UTF-8 lead length, quote, escape, NUL). Every node comes from a bump (arena) allocator that starts with a 16 KB slab and doubles each new slab, so a whole document costs about 10 mallocs (AllocCount 10-11 in the benchmark vs 25-61 for RapidJSON) and is freed in one pass. Numbers take a fast path that is not correctly rounded: integers accumulate in a uint64, fraction digits (max 15) scale through a pow10 table and exponents call pow(); the strtod path (preciseFloat) is switched off by UJDecode. There is no SIMD.
+
+**Use it when:**
+- A C-only or legacy build that parses whole documents once and reads a handful of fields, where a four-file source drop with no dependencies is convenient.
+- Object-heavy documents with many short strings and integers (citm_catalog/twitter shape), where the 2016 benchmark puts its parse time 4-10% ahead of plain RapidJSON.
+- Code that wants wide strings anyway (for example Windows wchar_t APIs), so the UTF-8 to wchar_t conversion during parse is useful work rather than overhead.
+- Embedded or game code that wants to hand the parser its own initial buffer (1 KB minimum, stack is fine) plus malloc/free/realloc hooks through UJHeapFuncs.
+
+**Skip it when:**
+- Untrusted input: the parser stops at a NUL byte rather than at cbInput and reads past the end otherwise (issue #11), accessors crash on the NULL returned by a failed decode (issue #6), and the bundled decoder still has the code patterns fixed upstream in UltraJSON 5.4.0 as CVE-2022-31117 (double free when realloc fails) and CVE-2022-31116 (unpaired surrogates mis-decoded).
+- Float-heavy data or anything that needs exact doubles: canada.json parses about 1.26x slower than RapidJSON, nativejson-benchmark scores it 34/66 on Parse Double, integers beyond int64 are rejected, and some 20-digit values wrap silently (45913141877270640000.0 decodes as 9.0196537298515364e+18).
+- Workloads that walk the whole tree: its linked-list DOM made the benchmark's Statistics traversal 2.3-3.0x slower than RapidJSON (citm 0.488 vs 0.161 ms), so parse plus walk on citm totals 2.33 ms vs 2.11 ms for RapidJSON (derived from the same CSV).
+- Memory-constrained parsing: on citm_catalog it used 4,698,144 bytes (peak 12,656,672) vs RapidJSON's 1,123,008 (peak 1,131,472). wchar_t strings cost 4 bytes per character, and the first string in a large document allocates a scratch buffer of remaining input bytes x sizeof(wchar_t).
+- Anything that needs serialization, strict validation (it accepts trailing commas in objects, leading zeros, raw tabs and newlines in strings, and '0e'), or an upstream that fixes bugs: the repo is archived and the last commit is 2014-04-08.
+
+**Integration:** source-drop: copy src/ujdecode.c, src/ujdecode.h, 3rdparty/ultrajson.h and 3rdparty/ultrajsondec.c into your project (per the README) · none beyond the C standard library (math.h pow, strtod, wchar.h) · Not stated. The code needs C99 (stdint.h, // comments, inline) or a C++ compiler (the header wraps the API in extern "C"); MSVC is handled through _WIN32 typedefs and __fastcall. nativejson-benchmark built it with clang 7.0 in 2016; the last code change upstream was a clang -Wall -Wextra warning cleanup in 2013. · Any little- or big-endian target (ultrajson.h stops with #error if the byte order cannot be detected); no SIMD. The arena allocator does not align allocations, so nodes after some strings land on 4-byte (2-byte on Windows) boundaries: harmless on x86-64, undefined behavior in C and a risk on strict-alignment CPUs.
+
+**Vs siblings:** For new C code, yyjson is the better pick: it is also plain C, maintained, and parses about 2.3x faster than RapidJSON in-situ on twitter.json per its entry. In the same 2016 CSV ujson4c beats gason and sajson on citm_catalog (1.841 vs 2.105 and 1.981 ms) but loses to both on twitter (1.114 vs 1.013 and 0.901 ms), so choose it only if you already vendor it or need wchar_t output from a pure-C parser.
+
+**Gotchas:**
+- UJObjectUnpack assigns outputs in the order keys are found in the JSON, not the order of keyNames, so a missing or reordered key puts values in the wrong variables (issues #7 and #10; fix PR #3 was closed unmerged).
+- Pass a NUL-terminated buffer: cbInput is used only for the trailing-data check and scratch sizing, not as the parse bound (issue #11).
+- Check UJDecode's return before touching the tree: UJGetType, UJIsObject and UJObjectUnpack dereference the pointer with no NULL check (issue #6). There are no allocation checks either; a failed malloc of the default 16 KB heap or of a new slab is dereferenced (issue #9).
+- Strings are wchar_t, so \u0000 becomes an embedded NUL in a NUL-terminated wide string; UJIsInteger is declared as taking UJObject* (issue #4); nesting is capped at 1024 levels (JSON_MAX_OBJECT_DEPTH).
+
+**Status:** Archived (last commit 2014-04-08, nine open issues including crash and wrong-output bugs) and BSD-3-Clause per LICENSE.txt, although GitHub reports NOASSERTION and the decoder also carries MODP_ASCII and TCL-derived code notices; at about 2,300 lines in four files it is easy to vendor and patch, but you own every fix.
+
+[repo](https://github.com/esnme/ujson4c) · [benchmark](https://github.com/miloyip/nativejson-benchmark/blob/master/sample/performance_Corei7-4980HQ%402.80GHz_mac64_clang7.0.csv)
 
 ##### yyjson  `C`  `MIT`  `active`  `Tier A`
 
@@ -1129,6 +2515,46 @@ ANSI C JSON DOM library beating RapidJSON via single-file design, in-situ parsin
 
 [repo](https://github.com/ibireme/yyjson) · [benchmark](https://github.com/ibireme/yyjson#performance)
 
+##### zenjson  `C++`  `MIT`  `abandoned`  `Tier A`
+
+Single-header, in-situ C++ JSON DOM parser/serializer in the gason style; parses 1.8-3.6x faster than RapidJSON.
+
+**Beats:** RapidJSON — The test machine was the author's Core i7-7700K with Visual Studio 2017 x64 (Release /O2 per the committed .vcxproj), timing 1,000 iterations with clock(). zenjson parsed twitter, canada and citm_catalog 3.57x, 1.81x and 2.61x faster than RapidJSON's SSE2 ParseInsitu, ran within 1-3% of 2019-era simdjson on twitter and citm, and was 1.46x slower than simdjson on canada.json. The 2.64-4.25x stringify lead over RapidJSON is inflated, because the harness never clears RapidJSON's output buffer between iterations. No library versions and no Linux, GCC or Clang results are given.
+
+**Known shortcoming:** The RapidJSON stringify loop never clears its StringBuffer, so the baseline's time includes an ever-growing buffer and inflates the 2.64-4.25x stringify ratio. Parse is 1.81-3.57x over RapidJSON. MSVC 2017 only, third-party library versions unstated. Abandoned since 2019-09; 8 stars.
+
+**Known shortcoming:** Lenient, non-validating parser (trailing commas, comments, raw control characters, no UTF-8 validation, no surrogate pairing); integers over 9 digits stored as doubles and decimals not correctly rounded; hard nesting limit of 32. The header likely breaks in multi-file builds (non-inline definitions) and the serializer is not thread-safe (function-static buffers). operator[] inserts on missing keys; copying a Document double-frees. 8 commits, no tests.
+
+**How:** It parses in situ: strings and keys are pointers into the input buffer, which is unescaped in place and NUL-terminated, so no strings are copied. Following gason's design, each value is a NaN-boxed 8-byte word (type tag plus a 47-bit pointer in the NaN payload), and arrays and objects are singly linked node lists bump-allocated from an 8 KB-block arena that Document::parse resets and reuses. The parser is a single non-recursive loop with a fixed 32-entry explicit stack, a 256-entry character-class table, 4x-unrolled whitespace and string scans, an int32 fast path for integers up to 9 digits and a cheap, not correctly rounded float path (digits accumulated in a double, then multiplied by a tabulated power of ten); it uses no SIMD. Serialization uses Milo Yip's Grisu2 dtoa and a digit-pair lookup-table i32toa.
+
+**Use it when:**
+- Trusted, well-formed input (your own config, assets or service payloads) where you want a DOM that parses 1.8-3.6x faster than RapidJSON's insitu mode and 14-27x faster than nlohmann/json, in one vendored header.
+- Parse-then-read workloads where you own the input buffer, can let the parser overwrite it, and can keep it alive as long as the DOM.
+- Parsing many documents in sequence into one reused Document. The arena is reset and its blocks are recycled, so steady-state parses do little malloc work.
+- String- and small-integer-heavy documents like twitter.json or citm_catalog.json, where the author's table shows it within 1-3% of simdjson.
+- Builds where SIMD code paths are unwanted: the parser is plain scalar C++ with no intrinsics.
+
+**Skip it when:**
+- Untrusted input or input that must meet the standard. The parser is lenient: it accepts trailing commas, // comments, raw control characters in strings, lone '-' or '.', leading zeros and unknown escapes. It does not validate UTF-8, it does not combine \u surrogate pairs (it writes each half as a 3-byte sequence), and it ignores any bytes after the root. It also rejects scalar roots (ERROR_BAD_ROOT).
+- Exact numbers. Integers longer than 9 digits are stored as doubles, so 64-bit IDs above 2^53 lose precision. Decimal parsing is not correctly rounded. Exponents above 308 become infinity, which the serializer does not handle (it only asserts).
+- Documents nested deeper than 32 levels: the fixed parse stack returns ERROR_STACK_OVERFLOW.
+- Large objects or indexed access: members and elements are linked lists, so key lookup, getLength() and operator[](index) are O(n), and an index loop over an array is O(n^2).
+- Anything that needs a maintained dependency. The project has 8 commits made over 2019-09-15/16, no test suite in the tree, no issues or PRs, and only one Visual Studio benchmark.
+
+**Integration:** header-only · none (bundles Milo Yip's dtoa_milo Grisu2 code) · C++11 by inspection (initializer_list, enable_if, noexcept); only Visual Studio 2017 (v141) is documented or tested · Not documented; benchmarked only on Windows x64. The code is scalar and portable in principle, but NaN-boxing needs heap pointers that fit in 47 bits, and this is only asserted in debug builds.
+
+**Vs siblings:** Pick it over gason, its credited inspiration with the same NaN-boxed, linked-list, in-situ design, when you also want a built-in serializer and nlohmann-style mutable syntax in one header. On parse speed alone, simdjson matched it on twitter/citm and was 1.46x faster on canada.json in zenjson's own table, and simdjson is strict and maintained. So choose zenjson only when you want a tiny vendored header for trusted input.
+
+**Gotchas:**
+- operator[] inserts on a miss: reading json["missing"] adds a null member (and index == length appends). Converting a missing string to std::string builds it from a null char*, which is undefined behavior; use getString(default) instead.
+- The DOM borrows the input buffer and the Document's arena. The buffer must outlive the DOM, and the next parse() on the same Document invalidates every earlier Json view. Document does not delete its copy constructor, so copying one frees the allocator twice.
+- The header defines jsonParse and freeCrtAllocatedValue without 'inline' (and, on GCC/Clang, parseStringInternal too), so including it from more than one .cpp should cause duplicate-symbol link errors. It also uses std::numeric_limits and std::string without including <limits> or <string>.
+- dump() pretty-prints by default (formatted = true, tab indents); pass false for compact output. The buffer overload returns false and reports the needed size when the buffer is too small. writeInt's static 10-byte buffer is one byte short for int32 values of -1,000,000,000 or less set through the API.
+
+**Status:** Abandoned since September 2019 (8 commits in two days, 8 stars, no tests), but MIT-licensed and small enough (~1,650-line single header) to vendor if you accept owning its conformance and correctness fixes.
+
+[repo](https://github.com/re-esper/zenjson) · [benchmark](https://github.com/re-esper/zenjson/blob/master/README.md)
+
 ##### zzzJSON  `C`  `Public Domain (custom dedication in LICENSE: 'zzzjson is public domain. Do whatever you want with it.'; not a formal OSI/SPDX license)`  `abandoned`  `Tier A`
 
 Single-header C JSON DOM with lazy number parsing and arena allocation; ~1.3x faster parse+stringify than RapidJSON in its own benchmark.
@@ -1167,6 +2593,81 @@ Single-header C JSON DOM with lazy number parsing and arena allocation; ~1.3x fa
 
 [repo](https://github.com/dacez/zzzjson) · [benchmark](https://github.com/dacez/zzzjson/blob/master/README.md)
 
+##### JSONSki  `C++`  `MIT`  `stale`  `Tier B`
+
+Streaming JSONPath engine that skips irrelevant JSON with bit-parallel fast-forwarding; ~4.8x faster than simdjson parse+query (ASPLOS'22).
+
+**Beats:** RapidJSON, simdjson — In the ASPLOS'22 paper, measured on 2x Xeon E5-2620 v4 with G++ 7.4.0 -O3 on CentOS 7, single-threaded JSONSki averaged 0.40 s over 12 JSONPath queries on six ~1 GB single-record datasets. The baselines, timed end to end including parse or index build, were simdjson at 1.92 s (4.8x), Pison at 1.24 s (3.1x) and RapidJSON at 5.07 s (~12.7x, derived); JPStream was 12.3x slower. On small-record inputs JSONSki averaged 0.41 s, against 1.70 s for simdjson and 4.19 s for RapidJSON. Baseline versions are unstated (2020-era), the simdjson run used its parse-tree path, and the repo has no baseline harness, so the numbers cannot be reproduced from source.
+
+**Known shortcoming:** Unsafe on untrusted input: no validation, values and keys are copied into fixed 10,000- and 1,000-byte buffers without length checks, loaders write one byte past their allocations, and truncated or unbalanced JSON can loop forever. Object-member '.*' wildcards are not implemented despite the README; x86-64 AVX2+PCLMULQDQ only. The 4.8x over simdjson is against simdjson's DOM path, not its On-Demand at_path API. Source unchanged since 2023-09.
+
+**How:** The query becomes a small automaton that drives recursive-descent streaming. When the automaton is in an unmatched state, or the value's type cannot match, the engine jumps over whole objects, arrays or primitives without tokenizing them. The jumps use 'structural intervals': AVX2 compares build 64-bit bitmaps of one metacharacter per 64-byte word, a PCLMULQDQ prefix-XOR masks out bytes inside strings (the simdjson/Mison quote-and-escape technique), and interval bitmaps between successive '{' or '[' are counted with popcnt/lzcnt/ctz to find where the matching '}' or ']' falls. The paper reports that more than 95% of input bytes were fast-forwarded on all 12 queries. Bitmaps are built lazily per word, so no global index is kept.
+
+**Use it when:**
+- Pulling a few fields with a simple path (such as $[*].entities.urls[*].url) out of very large single JSON documents, 100 MB to tens of GB, where most of the bytes are irrelevant to the query
+- Memory-bound jobs: the paper measured about 1 GB total for a 1 GB input, against 2-3 GB for simdjson, RapidJSON and Pison. It scaled to a 72 GB single record, where RapidJSON and Pison ran out of memory and simdjson hit its 4 GB document limit
+- Newline-delimited JSON with records under about 1 MB each, one query per record, parallelized by giving each thread its own QueryProcessor (the paper's 16-thread small-record run scaled 10.3x)
+- Trusted, machine-generated, compact JSON (your own logs or data-lake dumps) on x86-64 Linux servers with AVX2
+- A research or prototype base when you want the fast-forward primitives (goOverObj, goToAryEnd, etc.) for custom one-pass analytics and are willing to edit the source
+
+**Skip it when:**
+- Untrusted or possibly malformed input. Nothing is validated, and several fixed-size buffers are filled with unchecked memcpy: 10,000 bytes per output match (mText) and 1,000 bytes per key (mKey). A large matched value or a long key corrupts the heap or object memory
+- You need more than the supported JSONPath subset. Recursive descent '..', filters, unions, negative indices and quoted/bracketed keys are unsupported, and there is one path per QueryProcessor. The parser gives no error for unsupported syntax and just builds a different automaton. The code also has no special case for an object-member '.*' wildcard (keys are memcmp'd literally), even though the README lists '*'
+- You need typed values, a DOM, mutation or serialization. The output is raw JSON text joined with ';', so values that contain ';' are ambiguous and every value still needs a real parser
+- ARM, Apple Silicon, or x86 without AVX2 and PCLMULQDQ. The code calls _mm256 and _mm_clmulepi64 intrinsics unconditionally and has no scalar fallback
+- Many-core processing of one huge record. JSONSki runs a single record on one thread, and the paper reports 16-thread speculative Pison was 48% faster on single large records
+
+**Integration:** source-drop · none (C++ standard library plus x86 intrinsics headers; -lpthread is linked but no threads are used) · C++11. The README requires g++ 7.4.0+, and the makefile compiles with -O3 -std=c++11 -mavx -mavx2 -msse4.2 -mpclmul. CircleCI builds with gcc 10. No CMake, library target or install rule: the makefile only builds the four examples, so you add the three src/*.cpp files to your own build · x86-64 only (AVX2 and PCLMULQDQ required). The README says Linux. The badge says linux-macos and a 2022 PR added macOS include guards, but the CI job named 'build-for-macos' actually runs in a Linux gcc10 Docker image
+
+**Vs siblings:** Over simdjson: pick JSONSki only for simple-path extraction from GB-scale trusted documents where memory or the 4 GB document limit matters. The paper's 4.8x was measured against simdjson building a parse tree, and current simdjson On-Demand has at_path() and for_each_at_path_with_wildcard(), plus validation, typed values, ARM support and active maintenance, so try it first. Over Pison (same lab): JSONSki is 3.1x faster single-threaded and needs no index memory, but Pison's speculative multi-threading wins on one huge record when you have 16 cores. Mison is paper-only.
+
+**Gotchas:**
+- Truncated or unbalanced JSON can hang. goOverObj, goOverAry, goToObjEnd and goToAryEnd wrap their word loop in while(true), so once word_id reaches the end of the input without finding the closing bracket they spin forever. Errors go to stdout ('pop out exception', 'additional [') and are not returned, and RecordSet::operator[] calls exit(0) on an out-of-range index
+- The loaders have memory bugs. loadSingleRecord writes its NUL one byte past the allocation when the file size is a multiple of 64. loadRecords allocates str.size() bytes and then strcpy's the terminator (one byte over), uses a 1 MB stack line buffer, silently splits lines longer than about 1 MB, and can overflow that buffer while padding lines near 1 MB. The QueryProcessor destructor free()s a buffer allocated with new[]
+- The text scanning is fragile. getElementType and getAttributeType skip only spaces, and tabs are never skipped anywhere, so a tab or newline after ':' can make an object be read as a primitive; feed minified JSON. Keys are compared as raw bytes, with no \uXXXX decoding and no escaped-quote handling in the key scanner
+- The headers are unhygienic. They use 'using namespace std' at global scope and unprefixed macros (OBJECT, ARRAY, KEY, NONE, SUCCESS, INVALID, and MAX_KEY_LENGTH defined twice, as 100 and 1000). The fast-forward functions the README documents are private members of QueryProcessor. getOutputMatchesNum() accumulates across runQuery calls because init() never resets mNumMatches
+
+**Status:** Stale: the source was last changed 2023-09-20 and later commits touch only README and LICENSE; there are no releases, no tests beyond running example1 in CI, and 3 closed PRs with no open issues. It is MIT-licensed and only 8 source files, so vendoring is easy, but plan to fix the buffer and termination bugs yourself.
+
+[repo](https://github.com/AutomataLab/JSONSki) · [benchmark](https://github.com/AutomataLab/JSONSki#performance-results)
+
+##### Pison  `C++`  `MIT`  `stale`  `Tier B`
+
+Multithreaded SIMD structural-index builder and path iterator for single huge JSON records; beats simdjson/RapidJSON end-to-end using 8 threads.
+
+**Beats:** RapidJSON, simdjson — The PVLDB'21 paper (G++ 7.4.0 -O3, CentOS 7, 16-core 2x Xeon E5-2620 v4) times index construction plus JSONPath queries over six ~1GB single-record datasets. Pison with 8 threads is 12.2X faster than RapidJSON, 4.6X faster than simdjson, and 4.2X faster than serial Pison. Serial Pison is roughly even with simdjson. The README's 5.4X (Server 1, 8 threads) and 3.1X (4-core Xeon E3-1240 v5, 4 threads) figures compare multithreaded Pison with single-threaded baselines whose 2020-era versions are not stated.
+
+**Known shortcoming:** The headline wins pit 8- or 4-thread Pison against single-threaded simdjson and RapidJSON; serial Pison is about even with simdjson, and the metric is end-to-end time, not throughput. Not a drop-in: bitmap index plus iterator, no DOM, no validation, raw value text. Memory-safety bugs from reading the source (one-byte overflows in the loaders, unchecked fixed-size position arrays), parallel state in statics so not thread-safe, CRLF input may misparse, nesting capped at 22 levels. Linux x86-64 AVX2 only. JSONSki from the same lab is about 3x faster.
+
+**How:** Each 64-byte word goes through bit-parallel steps taken from Mison and simdjson: AVX2 compare+movemask builds the structural-character bitmaps, carry arithmetic finds odd backslash runs, and a pclmulqdq prefix-XOR builds the string mask. Leveled bitmaps are then built word by word rather than step by step, which cuts memory traffic (the paper reports 40.8% less memory than step-by-step). To parallelize one record, Pison splits the text into per-thread chunks. Contradiction-based context inference (tokenize a chunk's first 64 bytes as inside-string and as outside-string; a token error rules one out) decides each chunk's string state. When inference fails, Pison speculates and repairs a wrong guess by flipping that chunk's string-mask bitmap. Per-chunk leveled bitmaps are then merged by re-basing their relative levels. Queries only build and touch the levels they need (level_num).
+
+**Use it when:**
+- Extracting a few paths (for example $.routes[*].legs[*].steps[*].distance.text) from one very large JSON document, from hundreds of MB to about 1GB, on a multi-core Linux x86-64 server where you can spend 4-8 cores to cut end-to-end latency.
+- Running several queries against the same large record: the index is built once and reused (the paper's Twitter workload shares one index across 8 queries).
+- Queries that only reach a few levels deep: pass level_num so bitmaps are built only for the depths the query touches.
+- Research or prototyping of Mison-style structural-index JSON analytics, where a small (about 3.3K lines) MIT codebase is easy to read and change.
+
+**Skip it when:**
+- You need a DOM, typed values, JSON validation, or serialization. Pison only finds raw value text, and index construction has no error path for malformed input.
+- Streams of many small records: the README reports only serial Pison there, example3 says parallel construction for record sets is 'TBD', and serial Pison is about even with simdjson (paper Table 5 sum 12.14s vs 11.9s).
+- Non-Linux or non-x86 targets: it requires AVX2 and pclmulqdq, uses pthread_setaffinity_np and malloc.h, and has no NEON or scalar fallback.
+- A single streaming query over a big file, where JSONSki (same lab) says it is about 3x faster than Pison. Also avoid it under tight memory: the paper's Figure 18 reports about 3.0GB average footprint for about 1GB records.
+- Production code that sees untrusted input. This is research-grade code with fixed-size buffers and no bounds checks. Parallel mode segfaulted at -O1 and above until a missing return was fixed in October 2023 (issue #2, PR #5).
+
+**Integration:** source-drop · none beyond pthreads and the C++ standard library · C++11; g++ 7.4.0+ (README); makefile uses -O3 -mavx -mavx2 -msse4.2 -mpclmul · Linux x86-64 only (AVX2 and pclmulqdq required; CPU pinning via pthread_setaffinity_np)
+
+**Vs siblings:** Pick Pison over simdjson or RapidJSON when the input is one very large JSON record, you need only a handful of paths, and you can spend 4-8 cores: the parallel index build is where its end-to-end win over simdjson comes from. For a single streaming query, JSONSki (same lab) reports about 3x faster than Pison. For general parsing, DOM access, or small documents, simdjson or yyjson are the safer picks.
+
+**Gotchas:**
+- getValue() returns a malloc'd copy of the raw text between structural characters, including leading whitespace and string quotes, and the caller must free() it. On some edge paths it returns the string literal "", and the examples' pattern `if (value) free(value)` would then free a literal.
+- Index depth is capped at MAX_LEVEL = 22, and deeper levels are silently left unindexed. down() skips only spaces and newlines before a nested value, so tabs or carriage returns there make it return false. The context-inference tokenizer treats a carriage return as a token error, so CRLF-formatted input may get the wrong string state in parallel mode (inferred from code, not documented).
+- Memory-safety edges: loadSingleRecord writes its NUL terminator one byte past the buffer when the file size is a multiple of 64. loadRecords strcpy's into a buffer with no room for the terminator and reads lines through a 1MB stack buffer. Iterator position arrays are fixed-size guesses with no bounds checks (for example 125,001 entries for getCopy() iterators).
+- Input must be padded to a multiple of 64 bytes, which RecordLoader does with 'd' filler. Worker i is pinned to CPU i (at most 70 threads). Chunk offsets and word loop counters are 32-bit int, so treat records over 2GB as untested in this code.
+
+**Status:** Stale research code: the last source fix was October 2023, the last commit (README only) was 2024-10-10, and two outside PRs are still open. It is MIT-licensed and about 3.3K lines, so vendoring and patching it is practical.
+
+[repo](https://github.com/AutomataLab/Pison) · [benchmark](https://github.com/AutomataLab/Pison#performance-results)
+
 #### reflection-and-codegen
 
 ##### Cista++  `C++`  `MIT`  `active`  `Tier A`
@@ -1203,6 +2704,45 @@ Header-only C++17 zero-copy serializer for native structs; beats cereal ~48x ser
 **Status:** Actively maintained: last commit 2026-09-25 (a bitvec fix), recent offset-container move and AMD GPU work, latest release v0.16 (2025-09-06). It is mostly one maintainer (547 commits by the author), MIT-licensed, and ships as a single header that is easy to vendor.
 
 [repo](https://github.com/felixguendling/cista) · [benchmark](https://github.com/felixguendling/cpp-serialization-benchmark#readme)
+
+##### simdjson experimental_json_builder (C++26 reflection-based JSON serializer)  `C++`  `Apache-2.0`  `active`  `Tier A`
+
+Obsolete 2024 prototype of a C++26 reflection JSON serializer; about 20x nlohmann/json throughput. Now part of simdjson's builder.
+
+**Beats:** nlohmann/json — Lemire's 2024-08-13 post serialized a Twitter-derived struct (a field subset of twitter.json) and a synthetic JSON-Generator dataset. On an Apple M3 Max: 1900 vs 100 MB/s (19x) and 1800 vs 50 MB/s (36x). On an unnamed Intel Ice Lake: 1800 vs 110 (16x) and 1400 vs 50 MB/s (28x). The baseline was nlohmann/json 3.10.5 (build a json tree, then dump()). Both sides were built with the Bloomberg clang-p2996 fork, Release (-O3), with libc++. MB/s is output bytes over mean time per call. The claims of 10-20% slower than hand-written code and 2x faster than reflect-cpp come with no published numbers.
+
+**Known shortcoming:** The repo says it is obsolete: the same reflection-based builder now ships in simdjson itself (generic/builder, benchmark/static_reflect). Requires the clang-p2996 reflection fork. The 'twice as fast as reflect-cpp' line has no published numbers.
+
+**Known shortcoming:** Emits invalid JSON for control characters (\x0000-style escapes) and for NaN/inf. string_builder::capacity_check doubles once regardless of write size, so a large string can write past the buffer (heap overflow; fixed in simdjson's version). Uses pre-standard reflection syntax (^T, <experimental/meta>) and probably does not build on current compilers. Use simdjson::to_json / string_builder in simdjson v4.0.0+ instead (enable SIMDJSON_STATIC_REFLECTION with a P2996 compiler).
+
+**How:** C++26 static reflection (P2996: nonstatic_data_members_of plus member splicing t.[:dm:]) unrolls each struct at compile time into a straight-line series of buffer appends, with no intermediate DOM. The intermediate DOM is where the nlohmann path spends its time. Each key is quoted and escaped at compile time (a consteval to_quoted_escaped), so at run time it is one memcpy of a constant. Everything goes into one reusable, doubling char buffer (string_builder): numbers through std::to_chars, and strings after a 16-byte SSE2/NEON scan that takes a plain memcpy fast path when nothing needs escaping.
+
+**Use it when:**
+- In production, use the successor, not this repo. simdjson v4.0.0+ has simdjson::to_json(obj) and string_builder `sb << obj`. On the latest release (v4.6.11), define SIMDJSON_STATIC_REFLECTION=1 or pass CMake -DSIMDJSON_STATIC_REFLECTION=ON, with a P2996 compiler (simdjson's p2996/ docker uses clang-p2996).
+- On simdjson master (unreleased as of 2026-09-26), reflection is auto-detected. Compiling with GCC 16 and `-std=c++26 -freflection` is enough. CMake gets SIMDJSON_STATIC_REFLECTION_MODE=AUTO|ON|OFF.
+- Throughput-bound output of plain aggregates (ints, floats, bools, std::string, std::vector, nested structs) to compact JSON, such as API responses or logs, where nlohmann's build-a-json-tree-then-dump() path is the bottleneck.
+- Reproducing or studying Lemire's August 2024 numbers, or learning how a minimal P2996 serializer works. json_builder.h is about 150 lines.
+
+**Skip it when:**
+- Any production build. The author declared the repo obsolete on 2025-10-28. It needs the 2024-era Bloomberg clang-p2996 fork with libc++, and the last code change was in September 2024.
+- Types beyond arithmetic, strings, indexable containers (size() plus operator[]) and aggregates. json_builder.h has no overloads for std::map, std::optional, enums or smart pointers, and it has no field renaming, skipping or pretty-printing. simdjson's successor has all of these (annotations like rename/skip, enums as strings, optional, fractured-JSON pretty printing).
+- Data whose strings contain control characters. The escape table emits "\x0000"-style sequences, which are not valid JSON; simdjson's version uses \u0000. NaN and infinity go through std::to_chars and come out as nan/inf, which are also not valid JSON.
+- Large string fields. string_builder::capacity_check doubles the capacity only once, whatever the size of the pending write. A single string bigger than the space left after one doubling (for example, a ~3 KB string into a fresh 1 KB builder) writes past the heap buffer. simdjson's version grows to max(2*capacity, position+needed).
+- When you need parsing or a DOM. This is a one-way struct-to-JSON writer, not a replacement for nlohmann::json values.
+
+**Integration:** header-only · The serializer headers need only the standard library plus <experimental/meta> from the clang-p2996 fork. The repo's CMake also fetches simdjson (builder_development_branch), nlohmann/json 3.10.5, reflect-cpp v0.13.0 (patched) and optionally corrosion/Rust for the benchmarks via CPM. · Bloomberg clang-p2996 fork (2024 snapshot, no version pinned) with -std=c++26 -freflection -stdlib=libc++. The code uses the pre-final single-caret ^T syntax and std::meta::reflect_value, so expect it not to build on compilers with final P2996 syntax (^^, <meta>). Open issue #45 notes the ^^ change. No released compiler is documented as working. · x86-64 (SSE2 escape path), aarch64 (NEON path), scalar fallback elsewhere. Benchmarked on Apple M3 Max and Intel Ice Lake. The README supports Linux/macOS via docker and recommends WSL on Windows.
+
+**Vs siblings:** Every C++ sibling here (Cista++, struct_pack, YAS, bitsery, FBE, ser20) targets binary formats, and SerialXML emits XML. Pick this family (in practice simdjson's builder) when the output must be JSON text from unannotated structs. ffjson is the Go analogue: it generates code ahead of time instead of using compile-time reflection.
+
+**Gotchas:**
+- The top-level CMakeLists.txt hardcodes CMAKE_C_COMPILER=clang and CMAKE_CXX_COMPILER=clang++, which overrides CC/CXX. It adds -freflection -stdlib=libc++ -std=c++26 through the INTERFACE target, so every consumer inherits libc++.
+- Before P1306 expansion statements existed, member iteration used a substitute()/replicator workaround. universal_formatter.h includes a non-existent string_builder.hpp and uses the removed name_of, so it is dead code.
+- Benchmark asymmetry: the nlohmann baseline builds a nlohmann::json object per record, then calls dump() into a fresh std::string. bench_fast_simpler reuses a warmed string_builder instead. The blog does not say which of the three reflection variants (reused builder, fresh std::string, assign) produced the headline MB/s.
+- string_builder throws std::runtime_error on capacity overflow and uses new[] (so std::bad_alloc is possible). There is no allocator customization.
+
+**Status:** Declared obsolete by its authors: only README edits since September 2024, and the 2025-10-28 notice says the functionality now lives in simdjson. It is Apache-2.0 and small enough to read or vendor for study, but for real use take simdjson >= 4.0.0's builder, which is actively maintained (v4.6.11 released 2026-09-05; builder commits through 2026-09-23).
+
+[repo](https://github.com/simdjson/experimental_json_builder) · [benchmark](https://lemire.me/blog/2024/08/13/reflection-based-json-in-c-at-gigabytes-per-second/)
 
 ##### struct_pack (yalantinglibs)  `C++`  `Apache-2.0`  `active`  `Tier A`
 
@@ -1280,6 +2820,43 @@ Header-only C++11 serializer with a Boost.Serialization-style API; its binary ar
 
 #### yaml-toml-xml
 
+##### chyaml  `C++`  `MIT`  `active`  `Tier A`
+
+C++20 YAML 1.2.2 parser/emitter whose 8-byte event tape builds about 2x faster than rapidyaml's arena tree on config-shaped YAML.
+
+**Beats:** rapidyaml — The author built both sides with MSVC 19.44 Release (/O2, LTCG on chyaml) on a Ryzen 9 9950X under Windows x64. Building chyaml's fast event tape over a 4.63 MB, 50,000-record generated file ran at about 391 MB/s, against 184 MB/s for rapidyaml 0.16.0 `parse_in_arena` into a Tree (2.13x), with 6.18 vs 81.49 MB of extra memory. An 8-shape generated matrix gave 1.16x (nested mappings) to 2.16x. These are first-party numbers from 2026-08-24, taken on code that predates the rewrite. They compare building the tape, without consuming any events, against building a full tree that includes an input copy, so treat 2x as an upper bound.
+
+**Known shortcoming:** The timed loop only builds the event tape and never consumes events, while rapidyaml's loop copies input and builds a full tree each iteration, so the ~2x is an upper bound. The fast path is never conformance-tested and, per the source, accepts invalid YAML such as 'key: a: b'; allow_duplicate_keys=false is ignored there. The rapidyaml comparison predates a ~1,000-line rewrite (2026-09-21) and was not re-run. Created 2026-08, one author, 0 stars.
+
+**How:** It parses in two tiers. A line-oriented fast builder accepts only a restricted subset: single-document block mappings and sequences, plain scalars, double-quoted scalars without escapes, scalar-only flow sequences, and comments. For each event it writes one 8-byte record (32-bit input offset plus 24-bit length and type bits) pointing into the borrowed input, with no copying, no unescaping and no line/column tracking; `next()` recovers line and column later with a monotonic scan. A 256-entry byte-class table sends the whole input to the complete recursive-descent parser on any tab, `& * ! { } [ ] | > '` or escaped quote. Colons are found with `memchr`, the tape is pre-reserved at input/6 records, and the DOM fast path preallocates the exact node count in an arena of 64-byte nodes, with stride hints for O(1) `at()`. It uses no SIMD, intrinsics or ISA flags.
+
+**Use it when:**
+- One sequential pass over large, generated config or data YAML (block maps and sequences of plain scalars, simple double-quoted strings, short flow sequences) where event throughput matters more than a tree.
+- Tight memory budgets: the fast tape reserves about 8 bytes per 6 input bytes and borrows the input. On the author's 3-8 MiB matrix inputs it used 4-10 MiB of extra memory, against 10-150 MiB for rapidyaml trees.
+- You want a self-contained, MIT-licensed C++20 YAML library in two files (chyaml.cpp and chyaml.hpp) with portable scalar code and no SIMD or `-march` requirements.
+- Long streams of many small, plain documents, where opt-in `parallel_documents` splits the work. The README reports about 2.4x with 8 workers on a 3.95 MB stream of 20,000 documents.
+
+**Skip it when:**
+- YAML with anchors or aliases, tags, block scalars (`|`, `>`), single-quoted or escaped strings, tabs, flow mappings, multi-line scalars or several documents. All of these leave the fast path, and there are no published complete-path-vs-rapidyaml numbers.
+- You need fast random access or editing. chyaml's DOM was never benchmarked against rapidyaml's tree, and `node::find()` walks a mapping's children linearly (no key index).
+- Strict validation of untrusted input. From reading the source, the fast builder accepts invalid lines such as `key: a: b` and `key: "a" "b"` as scalars instead of rejecting them. The 402-case conformance run goes through `stream_parser`, which never uses the fast path, and it checks only accept/reject, not the parsed events.
+- Production use that needs a track record. The repo was created 2026-08-24 and has 8 commits, one author, 0 stars and no tags or releases. A rewrite of about 1,000 lines landed 2026-09-21, after the rapidyaml numbers were taken.
+- Inputs of 4 GiB or more: offsets are 32-bit, so they are rejected.
+
+**Integration:** static lib (CMake builds `chyaml` STATIC from chyaml.cpp and exposes `chyaml::chyaml` for add_subdirectory). You can also copy in chyaml.cpp and chyaml.hpp. A `CHYAML_SHARED` export macro exists, but the CMake file does not build a shared target. · none for YAML; links Threads::Threads (std::thread backs parallel_documents). A rapidyaml 0.16.0 source tree is needed only for the optional comparison executables. · C++20, CMake 3.21+. The README says it is verified with MSVC 19.44, GCC 12.2 and Apple clang 17. · any (portable scalar C++20, no SIMD or ISA flags). Benchmarked on Windows x64 (Ryzen 9 9950X) and macOS on Apple M4 Max.
+
+**Vs siblings:** Pick chyaml over rapidyaml (catalogued, and chyaml's own baseline) only for a sequential pass over simple config-shaped YAML where retained memory matters most. Pick rapidyaml for a mature, fast tree over full YAML. fkYAML, PipeYAML and libfyaml were measured against yaml-cpp, and yam and yeptris against libyaml, so no direct comparison with chyaml exists; chyaml's case rests on its borrowed 8-byte tape, not on a head-to-head.
+
+**Gotchas:**
+- The rapidyaml comparison times only `event_parser::reset_borrowed()`, which builds the tape. It never calls `next()`, so event consumption and the line/column scan are excluded. rapidyaml's timed loop clears its tree and arena, copies the input into the arena and builds a full tree on every iteration. Both sides label MiB/s as "MB/s".
+- `allow_duplicate_keys = false` is ignored when input takes the fast path, because only the complete parser checks it. On the complete path the check scans the mapping once per key, so it is quadratic on wide mappings.
+- `*_borrowed` calls keep views into your buffer, so the buffer must stay alive and not move. Node handles must not outlive their `document`. The header says event views are valid only until the next `next()` or `clear()`.
+- On non-fast input, `event_parser` builds the full DOM plus a vector of event structs before returning the first event, and `stream_parser` parses every document up front, so neither one streams. `document::parse_*` keeps only the first document. The complete path does not catch `std::bad_alloc`. `parse_profile::compact` is undocumented; in the source its only effect is to skip the fast path.
+
+**Status:** Active but very young: last commit 2026-09-21, 8 commits, one author, 0 stars, no releases. It is MIT-licensed and small enough to vendor (two files); pin a commit.
+
+[repo](https://github.com/jiannanya/chyaml) · [benchmark](https://github.com/jiannanya/chyaml/blob/main/README.md)
+
 ##### fkYAML  `C++`  `MIT`  `active`  `Tier A`
 
 Header-only C++11 YAML 1.2 DOM parser/emitter that parses 7.3-7.7x faster than yaml-cpp in the project's benchmark.
@@ -1353,6 +2930,197 @@ Full-spec YAML 1.2/JSON parser and emitter in C, with 3.0-3.6x yaml-cpp's parse 
 **Status:** Actively maintained by its original author (commits through 2026-09-23, with a burst of fuzzing fixes in September 2026) and MIT-licensed, but 1.0 is still in beta, so build from a recent master commit rather than the v1.0.0-beta1 tag if you parse untrusted or large-mapping input.
 
 [repo](https://github.com/pantoniou/libfyaml) · [benchmark](https://github.com/fktn-k/fkYAML#benchmarking)
+
+##### LightningXML  `C++`  `MIT`  `active`  `Tier A`
+
+Header-only C++20 pull deserializer binding XML straight into structs; beats pugixml, RapidXML and libxml2 on every author benchmark.
+
+**Beats:** pugixml, RapidXML, libxml2 — The numbers come from the author's own Google Benchmark harness: AMD Ryzen 9 7950X3D, Ubuntu 24.04, Clang 19 -O3 with LTO on the bench binary, one pinned core, median of 15 runs. Each library fills the same records from the same ~0.1 KB-1 MB synthetic payloads. Per row, the conforming StrictParser beats the fastest competitor (pugixml v1.14, RapidXML from Boost 1.88 with parse_fastest, libxml2 v2.14.6) by 1.13x (Catalog, 1.74 vs 1.54 GB/s) up to ~7x (Large 10K users, 2.43 GB/s vs 340 MB/s), and the zero-copy default parser widens that to 1.6-9.7x. The Large-row gap is an unexplained outlier: pugixml drops from 1.46 GB/s on Flat to 311 MB/s there. No std-library baseline was measured and no independent reproduction exists.
+
+**Known shortcoming:** Not fully conforming despite the README: unmapped subtrees and DOCTYPE are only scanned structurally (end-tag names not matched), UTF-8 is never validated and namespaces are never resolved. Author's own benchmark on small synthetic in-cache payloads (about 0.1 KB-1 MB); the ~7x Large-row lead comes from pugixml and RapidXML slowing sharply there, unexplained. 1 star, Linux-only CI.
+
+**How:** It never builds a tree. It is a pull parser specialized per target type at compile time. Field names are FNV-1a hashed at compile time. A cyclic 'next expected field' hint table lets schema-ordered documents match each open tag with a compile-time-length memcmp (folded to word compares) and read the value straight into the member. Only a miss falls back to hash lookup, and the name is confirmed after the lookup. By default string members are std::string_view slices of the source buffer, so there is no allocation and no entity decoding. For types with up to 32 attribute fields, attributes are captured in one streamed, typed pass. Comments, CDATA and unmapped subtrees are skipped with libc memchr scans instead of being tokenized. Normalization and strict checks are template policy flags (ParserOptions) that compile away when off. There are no hand-written SIMD intrinsics; the memchr calls are the only vectorized code.
+
+**Use it when:**
+- Loading XML whose shape you know at compile time (configs, feeds, API payloads, XSD-defined formats) into typed C++ records, where 'pugixml parse, then walk the DOM' is the hot spot. On the author's table the default parser runs at 1.7-3.8 GB/s against pugixml's 0.3-1.5 GB/s on the same record-filling task.
+- Hot paths where the input buffer outlives the parsed objects, so std::string_view members give zero-copy extraction. Mix in std::string members only where you need owned copies.
+- Documents carrying a lot of content you ignore (comments, unmapped subtrees, long text): these are skipped with memchr. The comment-heavy row runs at 13.2 GB/s (8.2 GB/s strict) against pugixml's 2.9 GB/s.
+- Projects that already have an XSD: xsdgen emits the structs, enums, std::variant choices and XmlConstraints facet checks (enforced by xmlight::validate()), and the serializer round-trips the same types.
+- Small, many-message workloads (the 1-element 'Small' row is ~2 GB/s against pugixml's 0.8 GB/s) where DOM setup costs dominate.
+
+**Skip it when:**
+- You need a DOM, XPath, in-place editing, or to explore XML whose schema you do not know. There is no tree API, so pugixml or libxml2 remain the right tools.
+- Input that is not UTF-8 (UTF-16/32 and other declared encodings are rejected), namespace-aware processing (xmlns is never resolved and elements match on local name only), custom DTD entities (anything beyond the five predefined ones is ErrorCode::UndefinedEntity), or real XSD document validation (xs:union, xs:import, xs:any and complexContent restriction are unsupported by xsdgen).
+- Untrusted input where you rely on the parser to reject malformed XML. The default Parser skips entity decoding and three well-formedness checks. Even StrictParser only scans unmapped subtrees and DOCTYPE structurally, and no tier validates UTF-8 byte sequences.
+- Very large or streamed inputs. The parser takes the whole document as one std::string_view (no chunked or incremental feed is documented), and the published benchmarks use synthetic payloads of roughly 0.1 KB-1 MB that fit in cache.
+- Risk-averse production use. The project is single-author, was created in June 2026 and has 1 star with no outside issue reports. CI builds only GCC and Clang on ubuntu-latest, so MSVC, macOS and Windows are untested.
+
+**Integration:** header-only · none (standard library only; the optional xsdgen tool, tests and benchmarks are built with CMake 3.16+ and fetch GTest / Google Benchmark / competitors) · C++20 (uses concepts, <span>, <format>, <chrono> calendar types). The README says it was tested with Clang 19, and CI builds GCC and Clang on ubuntu-latest. A standard library with std::format is required. · Portable C++ with no intrinsics (uses libc memchr). Only Linux x86-64 (Ubuntu CI, Ryzen 9 7950X3D bench) is exercised; other OS/compilers are not documented.
+
+**Vs siblings:** Pick LightningXML over Parshred, libsimdxml, RapidXml or SpeedyXml when you want XML bound straight into typed C++ structs from a compile-time or XSD-generated mapping, with a matching serializer, rather than a faster general-purpose tree or event stream. Prefer simdxml for XPath-style queries over multi-GB files (its DBLP 5.1 GB runs); LightningXML's benchmarks stop around 1 MB.
+
+**Gotchas:**
+- std::string_view members alias the source buffer and are always raw, under every parser tier: '&amp;' stays literal and line endings are not normalized. Only std::string members receive decoded text under NormalizingParser/StrictParser, and the buffer must outlive every string_view.
+- Mixed content: when a comment, CDATA section, PI or unmapped child splits an element's text, a raw string member keeps only the last run. For example, '<desc>Price: <![CDATA[$5]]> only</desc>' yields " only". Use a normalizing parser with a std::string member if that matters.
+- Namespace prefixes are ignored for matching, so same-local-name elements from different namespaces bind to the same field and '<a:x>...</b:x>' is accepted. An std::optional attribute with an unparseable value is silently left empty instead of failing the parse.
+- Errors are reported as a bool plus parser.errorCode(); the header has no throw statements (container allocation can still throw std::bad_alloc). Nesting is capped at MAX_DEPTH = 256 and attributes per tag at 65,536, and arrField always serializes all N slots of a std::array.
+
+**Status:** Actively developed by a single author: v1.0.0 on 2026-07-01, then four releases through v1.3.0 on 2026-08-14, which fixed a long list of correctness and hostile-input issues and added a libFuzzer target. It is MIT-licensed and ships as a single header that is easy to vendor, but it has 1 star, no outside users or issue reports, and Linux-only CI.
+
+[repo](https://github.com/nemye/LightningXML) · [benchmark](https://github.com/nemye/LightningXML/blob/main/README.md)
+
+##### noyalib  `Rust`  `Apache-2.0 OR MIT`  `active`  `Tier A`
+
+Pure-Rust, zero-unsafe YAML 1.2 serde library that parses config-sized documents to a Value 1.11-1.36x faster than yaml-rust2.
+
+**Beats:** yaml-rust2 — The project's own criterion suite ran on an Apple M4 with Rust 1.95 stable (fat LTO, codegen-units=1, panic=abort) and parsed five fixtures (3-field doc to 29 KB 500-item list, plus a 4.4 KB k8s multi-doc) into a Value 1.11-1.36x faster than yaml-rust2's YamlLoader and 1.38-2.00x faster than serde_yaml_ng, yaml-spanned and serde-saphyr. A second dated run on an Apple A18 Pro with rustc 1.98 shows 1.21-3.31x over yaml-rust2 and 2.55-3.26x over serde-saphyr 1.2.0; neither run covers x86 or libyaml.
+
+**Known shortcoming:** The headline Apple M4 table is likely older than the current code (it still has a serde_yml column and credits FxHasher, both since changed); the dated A18 Pro table is the current evidence. The 4.2x/9.2x SIMD StructuralIter figure is a standalone microbenchmark that does not feed parsing. No x86 numbers, no libyaml or yaml-cpp comparison, fixtures stop at 29 KB (Value parse about 32-64 MB/s). Mapping keys are strings. 0.0.x with one main maintainer and about 40 round-trip bugs filed and fixed in 2026-08/09.
+
+**How:** The scanner hands out scalars as `Cow::Borrowed` when no escape forces a copy, and it finds delimiters with memchr's SSE2/NEON `memchr2`/`memchr3` plus a SWAR (8-byte `u64` stride) byte-set search for 4 or more needles. Integers are parsed by an 8-digits-per-`u64` SWAR decimal parser (measured 2.2-2.5x over `i64::from_str`), and the default `from_str` records no spans (docs: 34% less overhead). Typed `from_str::<T>` feeds parser events straight into the serde Visitor without building a Value AST (docs claim about 30% faster). The serializer's 3-4x lead over serde_yaml_ng comes from `itoa`/`ryu` direct-write buffers and fast detection of strings that need quotes.
+
+**Use it when:**
+- Rust services that load config-sized YAML (a few KB to about 30 KB: Kubernetes manifests, GitHub Actions workflows, app config) into serde structs or a dynamic Value, where parse latency is worth 1.1-1.4x over yaml-rust2 or about 1.4-2.0x over serde_yaml_ng and serde-saphyr.
+- Workloads that emit a lot of YAML: serializing a Value measured 3.00-4.34x faster than serde_yaml_ng on 3-field and 20-field documents.
+- Moving off archived serde_yaml or deprecated serde_yml to a pure-Rust, `#![forbid(unsafe_code)]` crate. The compat shim and the per-crate migration guides make this cheaper.
+- Parsing untrusted YAML. `ParserConfig::strict()` and `ParserLimits` cap depth, aliases, nodes, document size and more, and the docs report that billion-laughs input is rejected in under 3 us.
+- no_std + alloc (with atomic pointers) or wasm32 targets, or tools that need fast parsing plus comment-preserving CST edits from one crate.
+
+**Skip it when:**
+- You need to beat libyaml, yaml-cpp or rapidyaml. None of them was measured. Derived from the page data, the parse-to-Value rate is about 32-64 MB/s on an M4, and the project's POLICIES.md gives about 36 MB/s for Value and 50-80 MB/s for typed parsing.
+- You already use yaml-rust2 and parsing is not a bottleneck. The 1.11-1.36x (M4) gain means an API rewrite: there is no drop-in layer and no yaml-rust2 migration guide.
+- Large documents. The comparison fixtures top out at 29 KB, and no MB-scale comparison against other crates is published.
+- Code that relies on typed mapping keys. `Value::Mapping` is `IndexMap<String, Value>`, so integer, bool and complex keys are converted to strings unless you use `MappingAny`.
+- Risk-averse production use. The crate has one main maintainer (OpenSSF Code-Review 0 per its own ECOSYSTEM.md), uses 0.0.x versions where a patch bump may break, and dozens of serializer and CST round-trip bugs were filed between 2026-08-30 and 2026-09-10 (all closed by 2026-09-16).
+
+**Integration:** crate · Always: serde_core, indexmap, rustc-hash, hashbrown, libm, memchr, smallvec. On by default and removable: itoa, ryu, serde_ignored. Opt-in: rayon, tokio, miette, schemars/jsonschema, figment, garde, validator, sval and others. · Rust 1.86.0 (edition 2024). The `nightly-simd` feature needs nightly `portable_simd`; the `compare-saphyr` bench needs 1.88+. · any Rust target with no hand-written intrinsics (memchr SSE2/NEON plus portable SWAR). CI runs x86-64 Linux/macOS/Windows and aarch64 macOS/Linux; no_std builds for thumbv7em and riscv32imac; wasm32. Targets without atomic CAS (thumbv6m, AVR, MSP430) are unsupported.
+
+**Vs siblings:** It is the only Rust YAML library among the catalogued siblings, so pick it over rapidyaml, libfyaml, fkYAML or yeptris when you are in Rust and want serde binding and safe code without a C/C++ build. Those C/C++ siblings publish MB/s results against yaml-cpp or libyaml, and noyalib has never been measured against them.
+
+**Gotchas:**
+- `from_str` rejects multi-document input with a 'more than one document' error (since v0.0.29). Use `load_all_as` or `from_str_multi` where yaml-rust2's `load_from_str` returned every document.
+- The 4.2x / 9.2x `StructuralIter` result is a microbenchmark of a public primitive. `StructuralIter` does not appear in the scanner, scalar scanner or loader, so it does not contribute to the parse numbers, and the `simd` feature is a documented no-op.
+- YAML 1.2 semantics are the default: `yes`/`no`/`on`/`off` stay strings and bare `0644` is not octal. `ParserConfig::version(YamlVersion::V1_1)` or the `legacy_*` flags opt back in.
+- In the 0.0.x series the patch number is the breaking-change axis, including changes to Value shape or scalar resolution. Pin exact versions: three releases shipped on 2026-09-22 alone.
+
+**Status:** Actively developed (v0.0.51 on 2026-09-22), installs as an ordinary crate, and is dual MIT/Apache-2.0 per the README and Cargo.toml (the GitHub API lists only Apache-2.0), with 10 stars but about 541k crates.io downloads over the last 90 days.
+
+[repo](https://github.com/sebastienrousseau/noyalib) · [benchmark](https://github.com/sebastienrousseau/noyalib/blob/main/docs/BENCHMARKS.md)
+
+##### toml-spanner  `Rust`  `MIT OR Apache-2.0`  `active`  `Tier A`
+
+Arena-backed, span-preserving Rust TOML 1.1 library; parses ~9x and parse+deserializes ~3x faster than the `toml` crate.
+
+**Beats:** toml (toml-rs/toml, the de facto standard Rust TOML crate) — These are the author's own cycle/instruction-counter benchmarks on an AMD Ryzen 9 5950X (Linux 6.18). The README states rustc 1.94.1, but the repo's benchmark action runs `cargo +nightly run --release` with the default release profile and no LTO. toml-spanner 1.0.0 parsed zed/Cargo.toml in 24.5 us vs 228.5 us for toml 1.0.7 parsing into `toml::Table` with `fast_hash` on (~9.3x), and was 8.8-9.7x faster on two smaller configs. With deserialization into cargo's own lockfile/manifest types included, the lead shrinks to 2.9x (Cargo.lock, 1023.5 vs 2977.4 us) and 3.3x (Cargo.toml, 92.5 vs 309.4 us); none of this has been independently reproduced.
+
+**Known shortcoming:** Not a drop-in for serde users: typed deserialization uses its own FromToml trait. The 9x is parse-only; parse plus deserialize is 2.9-3.3x. Accepts integers beyond i64 that toml rejects; table lookups are linear; the 256 MiB input limit contradicts its 512 MiB docs. Heavy unsafe, validated by the author's Miri and fuzz runs. Young (1.0 in 2026-03, 33 stars).
+
+**How:** All tree nodes are allocated in a bump arena, and strings without escapes are borrowed zero-copy from the input, so parsing makes very few individual heap allocations. `Item` is 24 bytes: the type tag, container flags and span are bit-packed into two u32s. Tables are flat vectors kept in insertion order and searched linearly; once a table reaches 6 entries, one foldhash index for the whole parse, keyed on (the table's first-key offset, key), takes over, and `TableHelper` deserialization reuses that index and tracks consumed fields in a bitset. String bodies are scanned 8 bytes at a time with SWAR (SIMD-within-a-register) bit tricks to find delimiters, backslashes and control bytes; the changelog also credits pointer traversal, batched string reads and reduced LLVM IR.
+
+**Use it when:**
+- Rust tools that load TOML configs or manifests on a startup or hot path (CLIs, build tools, dev servers), where `toml` parse time is visible. On real Cargo.toml and tool config files the README shows ~9x faster parsing.
+- Linters, language servers and config validators that need exact source locations. Every parsed value keeps a byte span, and errors carry spans plus TOML paths and render through annotate-snippets or codespan-reporting.
+- Reporting every config mistake in one pass. Conversion errors accumulate in the `Document` context, and `parse_recoverable` continues past syntax errors (up to 25) instead of failing on the first.
+- Rewriting user-edited TOML while keeping comments and layout (`Formatting::preserved_from`), as a lighter option than toml_edit, which took ~12x longer to parse zed/Cargo.toml in the same table (306.6 vs 24.5 us).
+- Crates that care about build time or binary size. For a simplified Cargo.toml model, the author's separate build benchmark reports a 52 ms warm `cargo check` vs 169 ms for toml, and a 204 KB vs 500 KB stripped release binary.
+
+**Skip it when:**
+- Codebases built on serde `Deserialize`: `toml::from_str` call sites and serde-derived types must be ported to `#[derive(Toml)]` or hand-written `FromToml`. The `serde` feature only adds `Serialize` impls for `Item`/`Spanned`.
+- Workloads dominated by deserialization. The author calls the deserialization gains 'marginal', and the end-to-end lead over toml falls to 2.9x (Cargo.lock) and 3.3x (Cargo.toml).
+- Documents of 256 MiB or more. They are rejected with `FileTooLarge` because spans are 28-bit.
+- Dependency policies that forbid or strictly audit `unsafe`. The arena, packed items and tables rely heavily on unsafe code, and its safety rests on the author's Miri runs and fuzzing.
+- Risk-averse production use: the project is young (first release January 2026, 1.0 in March 2026) and has a small user base (33 stars, ~38.6k crates.io downloads, 6 reverse dependencies). `toml` is the ecosystem standard.
+
+**Integration:** crate · foldhash (required); optional: serde (Serialize impls), zmij (float formatting, enabled by `to-toml`), toml-spanner-macros (`derive` feature; the macro crate itself has no dependencies) · Rust 1.90 (edition 2024); the derive macro crate declares 1.84 · any: pure Rust with portable u64 SWAR and no arch-specific SIMD; 32-bit (i686) is tested under Miri
+
+**Vs siblings:** It is the only Rust library among the catalogued TOML parsers, so pick it for Rust code. teptris (C, vs toml++), TOMLDecoder (Swift) and go-toml v2 (Go) serve other languages and were measured against different baselines, so their speedups cannot be compared with this one.
+
+**Gotchas:**
+- The `Document` borrows both the input `&str` and the `Arena`. To keep parsed data past their lifetimes, convert it to your own types or use `OwnedItem`/`OwnedTable` (added in 1.0.2).
+- `Table::get` and `doc["key"]` scan linearly. The foldhash index speeds up only parsing and `TableHelper` extraction, so ad-hoc lookups on very wide tables are O(n).
+- `parse` rejects inputs of 1<<28 bytes (256 MiB) or more, but the `ErrorKind::FileTooLarge` docs and error message say 512 MiB.
+- Integers are stored as i128, so values outside the i64 range, which `toml` rejects, are accepted. The project's fuzz comparison against toml skips these as a known divergence; check with `as_i64` if you need 64-bit range.
+
+**Status:** Actively maintained (1.0.3 released 2026-06-17, one open issue), dual MIT/Apache-2.0, pure Rust with a single required dependency, so it is easy to adopt, but it is young and lightly used.
+
+[repo](https://github.com/exrok/toml-spanner) · [benchmark](https://github.com/exrok/toml-spanner#benchmarks)
+
+##### yam  `C`  `MIT`  `active`  `Tier A`
+
+Zero-copy C11 YAML 1.2 event parser and emitter with an SSE4.2 scanner; parses 1.6-13x faster than libyaml.
+
+**Beats:** libyaml — The author's make bench-compare harness parses the same ~10 MB inputs (generated block/mixed/JSON/config YAML, rapidyaml's real travis.yml, appveyor.yml and compile_commands.json files, and scalar-heavy text) into events with yam, libyaml 0.2.5 and libfyaml 0.9.6. It ran on one pinned core of an Intel Core Ultra 7 155H, with yam built by GCC 16.2 at -O2 and the other two linked as system libraries. yam measured 1.65x (anchored config) to 13.4x (multi-line double-quoted) over libyaml, e.g. 501 vs 149 MB/s on travis.yml. This is first-party and not independently reproduced.
+
+**Known shortcoming:** Any tag, anchor, alias, merge key or directive makes the parser restart in eager mode and buffer every event, so memory grows with the stream; the anchored input is the worst case (1.65x over libyaml). Default limit of 10,000 events (about 100-200 KB) stops larger files unless raised. SIMD is x86-only, input must be one in-memory UTF-8 buffer, and there is no Windows/MSVC support. Single author, 0 stars, created 2026-02.
+
+**How:** The scanner looks for structural bytes 16 at a time with SSE4.2 PCMPESTRI range compares and SSE2 compare-and-movemask. The SSE4.2 or scalar version is chosen once through function pointers set in a load-time constructor. Plain and quoted scalars that have no escapes or line breaks come back as zero-copy slices of the input. Block scalars, and quoted scalars with escapes or line breaks, are copied into a bump-allocated arena a line or a run at a time, not byte by byte. The parser is an incremental state machine; to decide whether a flow collection is a key, it looks ahead with a SIMD bitmask over 64-byte windows and caches the answer for nested collections, which keeps it linear.
+
+**Use it when:**
+- C or C++ code that walks YAML as an event stream (config loaders, CI and Kubernetes-style files, converters) and wants more throughput than libyaml's yaml_parser_parse.
+- Inputs dominated by long scalars: literal/folded block scalars and multi-line quoted strings measured 7-13x faster than libyaml, and 2-8x faster than rapidyaml's event parser.
+- JSON-like or compile_commands.json-style files that are already in memory (about 2.2 GB/s vs 226 MB/s for libyaml in the author's table).
+- You need strict YAML 1.2 conformance (all 308 valid and 94 invalid YAML Test Suite cases pass) plus a round-trip-safe emitter, on x86-64 Linux or macOS.
+
+**Skip it when:**
+- You want a document tree or DOM. yam only produces events, so you would build the tree yourself; libfyaml or rapidyaml give you one.
+- You need streaming input from a FILE*, a callback or a socket, or UTF-16/UTF-32 input. yam parses one contiguous UTF-8 buffer that has to stay alive, and emitter output goes to an in-memory buffer too.
+- The documents use anchors, tags, %TAG/%YAML directives, flow keys in block mappings, merge keys or alias resolution. Any of these makes the parser re-parse the whole stream in eager mode and buffer every event, so memory grows with the whole stream. The anchored 'config' benchmark shows the smallest gain (206 vs 125 MB/s, 1.65x).
+- Structure-heavy input with short keys and values, if C++ is an option: rapidyaml's event parser was 1.3-1.8x faster than yam on the generated block, mixed and JSON inputs.
+- You are risk-averse about maturity. The project was created in Feb 2026, has 0 stars and no external issues, and one maintainer. 1.0.0 is in the header and CHANGELOG, but the newest git tag is v0.3.1.
+
+**Integration:** static lib | shared lib (Makefile builds libyam.a and libyam.so.1 plus yam.pc; about 8 C files, easy to vendor) · none (libc only) · C11 with GCC or Clang (uses __attribute__((constructor)), target("sse4.2") and __builtin_cpu_supports; POSIX headers); tested with GCC and Clang on Linux and macOS; MSVC/Windows not documented · x86-64 uses SSE4.2 when the CPU has it, with a scalar fallback chosen at runtime, so no -march=native is needed. There is no NEON path, so aarch64 and other non-x86 targets run the scalar code. CI covers Linux and macOS.
+
+**Vs siblings:** Pick yam over libyaml or libfyaml when you want a plain C event API and more throughput: 1.6-3.4x on structure-heavy YAML and up to 13x on long scalars, with the same full test-suite conformance as libfyaml. Pick rapidyaml or chyaml instead if you are in C++ and your input is mostly short keys and values or you want a tree; also consider yeptris if you target Apple Silicon, since yam's SIMD is x86-only.
+
+**Gotchas:**
+- The parser stops with YAM_ERR_LIMIT after 10,000 events by default. The README says that is roughly 100-200 KB of dense YAML, and the author's benchmark sets it to 0. Call yam_parser_set_max_events() for large files.
+- An event pointer is valid only until the next yam_parse_next() call. The value/anchor/tag spans are not NUL-terminated and stay valid only while both the input buffer and the arena are alive.
+- It is stricter than libyaml, which implements YAML 1.1. Tabs as indentation, implicit keys spanning lines and similar input are errors. Schemas are opt-in, so scalars carry no resolved tag unless you set one. There is one deliberate leniency: a closing ] } or quote may sit at any indentation.
+- Eager mode (tags, anchors, merge or alias expansion) parses recursively at roughly 1 KB of stack per nesting level. If you raise max_depth or set it to 0 (default 256), deep input can overflow the stack.
+
+**Status:** Actively developed by a single author (last commit 2026-09-24, 1.0.0 with an ABI-stability promise declared in the CHANGELOG), fuzzed on every push and daily through ClusterFuzzLite, and MIT-licensed. It is small enough to vendor, but it has no track record of outside users yet.
+
+[repo](https://github.com/trans/yam) · [benchmark](https://github.com/trans/yam/blob/main/README.md)
+
+##### yxml  `C`  `MIT`  `abandoned`  `Tier A`
+
+Tiny (6 KB) malloc-free C streaming XML parser; about 2.2-2.4x faster than a stripped-down libxml2 on large dumps.
+
+**Beats:** libxml2 — This is the author's own 2013-era benchmark. Each program is statically linked against musl 0.9.13 with gcc 4.8.1 -O2, reads the whole file into memory, parses it, and is timed with `time` on a 3 GHz Core 2 Duo E8400 running Linux 3.10.7. yxml took 1.15 s vs 2.53 s for libxml2 2.9.1 (xmlTextReader, with most features configured out) on a 162 MiB Wikipedia abstract dump, and 0.74 s vs 1.75 s on a 94 MiB Discogs dump (about 2.2-2.4x); Expat 2.1.0 with no callbacks took 1.47 s and 1.09 s. At -Os, yxml falls behind Expat on the Wikipedia file (1.67 s vs 1.58 s).
+
+**Known shortcoming:** Not like-for-like: yxml does no validation and has no DTD support, libxml2 runs through xmlTextReader with most features off, and Expat runs with no callbacks. Each timing is one whole-process run on an old E8400 with gcc 4.8.1. In the -Os table yxml is slower than Expat on the Wiki file (1.67 vs 1.58 s). Abandoned since 2020-11.
+
+**Known shortcoming:** About 130-140 MiB/s on a 2008 E8400, well below the GB/s-class XML parsers in this category; pick it for size and simplicity. runbench.sh times each binary twice and the page does not say which run it shows. 'Extensively fuzzed' is unverifiable (no OSS-Fuzz). x->elem is not valid on YXML_ELEMEND (#7). Dormant rather than abandoned; issues are on code.blicky.net.
+
+**How:** The grammar is written as a hand-specified DFA in a small table file (yxml-states). A Perl script (yxml-gen.pl) compiles that table into a single switch statement inside yxml_parse(), which handles one byte per call with no lookahead, no input buffering, no tree building and no malloc. Open element, attribute and PI names are pushed onto a NUL-separated stack in a fixed buffer the caller supplies. Character data comes back through an 8-byte field rather than being copied into strings, and the five predefined entity names are matched by packing up to five chars into a uint64 and comparing integers. Much of the speedup comes from doing less work than libxml2: no DTD processing, no custom entities, no namespace handling and no duplicate-attribute check. There is no SIMD.
+
+**Use it when:**
+- Embedded or memory-constrained C targets that need to read XML with no heap use: about 6 KB of object code, and a 4-8 KiB name stack is enough for deep nesting according to the manual.
+- Incremental, event-driven parsing, such as bytes arriving on a socket or file chunks read in a loop. The parser keeps all state in yxml_t, so it can stop and resume at any byte boundary.
+- Pulling a few fields out of multi-hundred-MiB XML dumps in constant memory, where the caller buffers only the attributes or elements it needs.
+- C projects that currently link libxml2 or Expat only to check well-formedness and tokenize, and that would rather vendor two MIT-licensed files than depend on a library.
+- Untrusted input where DTD entity expansion is unwanted. yxml does not expand custom entities at all, so billion-laughs-style expansion cannot occur. The author says it is extensively fuzzed.
+
+**Skip it when:**
+- You need anything beyond tokenizing: DOM or tree access, XPath, XSLT, namespace resolution, or DTD or XML Schema validation. The page lists all of these as non-features.
+- Documents that define or use custom entities (<!ENTITY>), or that contain conditional sections in <!DOCTYPE>. These cause YXML_EREF or a parse error rather than being handled.
+- UTF-16 or other non-ASCII-compatible encodings. You must transcode to UTF-8 first, and yxml does not validate the encoding (garbage in, garbage out).
+- Maximum throughput on large in-memory documents. The per-byte call API and plain switch DFA work out to about 130-140 MiB/s on the author's 2008-era E8400 (derived from 162 MiB/1.15 s and 94 MiB/0.74 s). The benchmark never compared it against pugixml or RapidXML, and SIMD/DOM siblings report GB/s-class numbers on modern hardware (not directly comparable).
+- You need strict conformance or active upstream support. It does not check that attribute names are unique or that non-ASCII characters in names fall in the allowed Unicode ranges. There have been no commits since 2020, no tarball releases and no ABI stability promise.
+
+**Integration:** source-drop · none (libc only: stdint.h, stddef.h, string.h). Perl is needed only to regenerate yxml.c from yxml-states and yxml.c.in, and the generated yxml.c is committed. An optional Makefile builds libyxml.a. · C99 compiler: uses stdint.h and inline. yxml.h maps inline to __inline on MSVC, but strict C89 builds need a header tweak (open issue #6). The header has extern "C" guards for C++. · any: pure, byte-oriented portable C with no SIMD or architecture-specific code. The benchmark ran on x86-64 Linux with musl.
+
+**Vs siblings:** Among the libxml2 challengers (SpeedyXml-cpp 4.4x, libleptris 2.5-3.6x SAX, RapidXml DOM), pick yxml when footprint, zero allocation and byte-at-a-time incremental input matter more than peak throughput, for example on embedded targets or in socket-driven C code. When you need raw speed on big in-memory files or a DOM, the siblings report far higher numbers on newer hardware.
+
+**Gotchas:**
+- x->elem is valid only until the attribute list ends, not on YXML_ELEMEND. On <n/> inside <foo>, ELEMEND shows elem as 'foo'. The author confirmed in 2024 (issue #7) that this is a documented quirk, so keep your own stack of element names if you need the closing tag's name.
+- The name stack buffer has a fixed size and cannot grow. A deep nesting or a long element/attribute/PI name returns YXML_ESTACK. Budget 1 + depth*(max_name+1) + max_attr_or_pi_name+1 bytes.
+- Text arrives in tiny chunks, usually one byte per CONTENT/ATTRVAL token (up to a few bytes for '?x', ']]x' or UTF-8 from &#N;). Multibyte UTF-8 characters are split across calls, so the caller must concatenate them and should cap buffer growth.
+- Errors cannot be recovered from; you must re-init to parse a new document. A NUL byte is a syntax error. yxml_parse() cannot detect a missing or unclosed root element or an unterminated comment or PI, so always call yxml_eof() at the end. Duplicate attributes are silently allowed.
+
+**Status:** Dormant: there have been no commits since 2020-11-08 and no tarball releases, though the author still answered an issue in March 2024. It is MIT-licensed, designed to be vendored as two files, and ships inside FreeBSD pkg, getdns, Fuchsia (SVG) and RetroArch.
+
+[repo](https://g.blicky.net/yxml.git) · [benchmark](https://dev.yorhel.nl/yxml)
 
 ### stdlib-replacements
 
@@ -6652,6 +8420,591 @@ Apache Fory's C++ serializer for plain annotated structs, cross-language binary 
 
 [repo](https://github.com/apache/fory) · [benchmark](https://github.com/apache/fory/blob/main/docs/benchmarks/object-serialization/xlang/cpp/README.md)
 
+##### fernBuffer  `C`  `MIT`  `active`  `Tier C`
+
+Prototype bit-packed JSON encoder (C API over a C++17 core) that beats MessagePack on size for string- and key-heavy JSON.
+
+**Beats:** MessagePack — Only encoded byte size was measured: the 10 JSON files in benchmark/, compared with Python msgpack's defaults (floats packed as float64). Size is deterministic, so compiler and hardware do not matter, and I reproduced every number exactly (fernBuffer v1 release WASM under Node 24, msgpack 1.2.2). fernBuffer wins 6 of 10 (log -28%, flat records -47%, hex strings -46%, sparse nulls -54%, repeated strings -53%, deep nesting 18 vs 25 B) and loses 4 (floats +8%, ints +21%, bools +87%, tiny object 11 vs 10 B). The project publishes no speed numbers.
+
+**How:** It wins on size, not speed. The JSON tree is flattened into DFS-ordered (path, value) leaves, and each path is written as push/pop deltas against the previous path (trie-style prefix sharing), all in one unaligned bit stream. Lengths, token IDs and integer magnitudes use Fibonacci (Zeckendorf) universal codes. Strings and keys seen at least twice go into two dictionaries at the front of the stream. Hex text (whole even-length hex strings, or runs of 8 or more even hex chars inside a string) is packed 2:1 into raw bytes, and floats are stored as f32 when that round-trips exactly. Every leaf also pays schema ops plus a 2-bit type tag, which is why dense numeric and bool arrays come out larger than MessagePack's 1-byte fixint/true/false.
+
+**Use it when:**
+- Arrays of records or log lines where the same keys and string values repeat. In the repo's test files this was 28-54% smaller than Python msgpack: log entries 11,156 vs 15,465 B, flat records 2,171 vs 4,093 B, sparse nulls 903 vs 1,974 B, repeated strings 557 vs 1,178 B.
+- Payloads full of all-lowercase or all-uppercase hex strings (hashes, digests, hex IDs), which are stored as raw bytes: 1,898 vs 3,493 B on the hex_strings file.
+- Storing or shipping blobs where bytes cost more than CPU, and your data already exists as JSON text (the API takes and returns JSON strings).
+- Browser/JS experiments via the prebuilt Emscripten WASM build (fb.encode(obj) returns a Uint8Array, fb.decode returns an object), or as a reference design for bit-level JSON packing (delta paths, Fibonacci coding, token tables).
+
+**Skip it when:**
+- Numeric or boolean arrays. In the repo's own table it is larger than MessagePack on floats (+8%), ints (+21%) and bools (+87%), and the README reports [0..49] at ~2.19x MsgPack. Bool 'runs' are documented as N bits, but the encoder only ever emits one bool per field.
+- Any data that must round-trip exactly. Mixed-case hex-alphabet strings come back lowercased (tested: 'Cafe' -> 'cafe', 'Facade' -> 'facade'). Repeated uppercase hex values or GUID segments lose their case. Unsigned integers above INT64_MAX come back negative (18446744073709551615 -> -1).
+- Top-level scalars, {} or []: they encode fine but crash on decode (path.back() on an empty path, which is UB; the v1 WASM build traps 'memory access out of bounds').
+- Untrusted input, or latency/throughput-sensitive paths. The decoder is not hardened (UB on a pop from an empty path, LEB128 shifts past 64 bits) and there are no tests or fuzzing. Each call parses JSON text with nlohmann/json and writes one bit at a time. Wide objects scale quadratically: in the v1 WASM build, a 16k-key object took 232 ms to encode and 459 ms to decode, vs 1.9/3.1 ms for 1k keys.
+- Production use or large streams: the author labels it a prototype, there is no incremental/streaming decode (per the README), and the decoder reads the format version field but ignores it.
+
+**Integration:** source-drop (one C++17 translation unit, fernbuffer.cpp plus src/*.hpp, behind the C header fernbuffer.h); release v1 also ships a prebuilt Windows x64 DLL/CLI and an Emscripten WASM+JS build · nlohmann/json (vendored as src/json.hpp, uses ordered_json); C++ standard library, including exceptions, which are caught at the C boundary · C++17 (structured bindings; the build scripts pass /std:c++17 to MSVC from Visual Studio 2017+, and -std=c++17 -O3 to Emscripten). The Makefile needs GNU make with the Windows cmd shell. · Windows x64 (MSVC build scripts, found via vswhere) and WebAssembly (Emscripten). The header has GCC/Clang visibility macros, but no Linux/macOS build script is provided. Floats are memcpy'd in host byte order, so the format assumes little-endian.
+
+**Vs siblings:** Choose it over JSON BinPack only when you want schemaless JSON-in/JSON-out size reduction with no schema to write and can live with a prototype, since JSON BinPack's catalogued best-size results are schema-driven. For anything production-bound, numeric-heavy or needing exact round-trips, use JSON BinPack, qdf's compression tier or plain MessagePack. MTS-1 targets delta-encoded telemetry, not general JSON.
+
+**Gotchas:**
+- Hex detection is lossy. A string that is entirely hex characters and of even length (even 2 chars) is stored as bytes with a single upper/lower flag, so mixed case decodes as lowercase. Token-table hex entries drop the flag completely, so repeated uppercase hex decodes as lowercase.
+- Integers are handled as int64. uint64 values above 2^63-1 are silently reinterpreted as negative, and negating INT64_MIN in the encoder is signed overflow (UB; it happened to round-trip in the WASM build).
+- Decoding the output of a top-level scalar, empty object or empty array is undefined behavior; only non-empty objects and arrays at the root decode.
+- Both calls return heap buffers that must be freed with fernbuffer_free (the README warns that ctypes c_char_p leaks). The WASM wrapper round-trips through JSON.stringify/JSON.parse, so JS-side number formatting applies.
+
+**Status:** Single-author prototype: 3 commits, all on 2026-06-07, none since, one v1 release, no issues or PRs, 6 stars. It is MIT-licensed with under 40 KB of its own source plus vendored nlohmann/json, so it is easy to vendor, but treat it as a reference design rather than a production codec.
+
+[repo](https://github.com/Escartem/fernBuffer) · [benchmark](https://github.com/Escartem/fernBuffer#benchmark)
+
+##### flatcc  `C`  `Apache-2.0`  `active`  `Tier C`
+
+FlatBuffers schema compiler and runtime for pure C. Wire-compatible with Google's flatc, and roughly as fast as its C++ code.
+
+**Beats:** Google FlatBuffers (C++) — Setup: Google's flatbench schema (a container of 3 tables with structs and strings, about 336-344 bytes), 1M iterations, -O3 -DNDEBUG, unnamed system cc/c++, on a 2.2 GHz Haswell Core i7 under OS X. flatcc encoded in 626 ns/op against 702 ns/op for flatc C++ (about 1.12x) and traversed in 28.7 vs 28.9 ns/op (a tie). The C++ baseline is a FlatBuffers 1.0.0 header from 2014 vendored in the repo, rebuilt with a fresh builder every iteration. The repo's Ubuntu run (hardware not stated) has flatcc about 3% slower on encode (531 vs 516 ns) and about 8% faster on decode (27.5 vs 30.0 ns).
+
+**Known shortcoming:** Marginal win from 2015-2016 numbers: encode about 1.12x, decode tied, and the C++ builder is rebuilt each iteration while the C builder is reset. The repo's own Ubuntu run shows flatcc encode about 3% slower (531 vs 516 ns/op) and decode about 8% faster. No compiler named (system cc/c++, -O3 -DNDEBUG).
+
+**Known shortcoming:** Roughly equal to the baseline, not clearly faster: the C++ side uses a FlatBuffers 1.0.0 header from 2014, rebuilt per iteration, and the maintainer calls the benchmark 'very old' and expects current flatcc to be slightly slower (#382, 2026). Its value is FlatBuffers wire compatibility from C. Use >= 0.6.4 for the schema-parser buffer-overrun fixes; the verifier does not limit DAG blow-up as Google's does.
+
+**How:** Reader accessors are generated as static inline functions that read fields straight out of the buffer through vtable offsets. They do no allocation, need no library, and let the compiler drop any code you don't use. The typeless builder keeps its internal stacks (vtable stack, data stack, frame stack, patch log) and a hash-table vtable-deduplication cache across builds: `flatcc_builder_reset` reuses that memory instead of freeing it. Output goes to an emitter that writes fixed-size pages (about 2.9 KB) in a ring buffer, not to one growing array. Vtables are clustered at the end of the buffer, and `create` calls and direct array copies skip the stack when no endian conversion is needed. The author attributes flatcc's encode edge to making fewer allocations. In the benchmark code, the C++ side constructs a fresh FlatBufferBuilder on every iteration, while the C side resets its builder.
+
+**Use it when:**
+- A pure-C codebase (embedded, firmware, C-only services) that needs to read or write FlatBuffers. Users report it working on ESP32/FreeRTOS with newlib and on Arduino.
+- Exchanging buffers with services that use Google's flatc in other languages, since flatcc produces the same wire format and flatc-compatible JSON.
+- Read-heavy paths: reads are zero-allocation inline accessors with no runtime library. Traversing the benchmark message takes about 29 ns/op.
+- Building many small buffers in a loop with one reused builder (`flatcc_builder_reset`), or streaming large buffers page by page through a custom emitter without holding the whole buffer in memory.
+- Schema-specific JSON-to-FlatBuffer parsing and printing in C. The generated parser and printer handle a 722-byte message in about 1.2-2.2 µs.
+
+**Skip it when:**
+- A C++ project already using flatc and looking for speed. The results are a wash: encode is about 1.12x faster on the OS X run but about 3% slower on the repo's Ubuntu run, and decode is tied to about 8% faster.
+- You need a large serialization speedup over FlatBuffers. This is the same format with the same costs, and only a different wire format can change those.
+- Untrusted input where DAG blow-up matters. The verifier rejects cycles and caps nesting at about 100 levels, but unlike Google's verifier it does not limit the number of tables visited. Also, never modify an untrusted buffer in place, even after verifying it.
+- You want vectors sorted by key while building. The builder cannot sort; you have to cast the finished buffer to mutable and sort it afterwards (in-place heap sort, not stable), and only on trusted buffers.
+- You need a stable API across upgrades. Minor breaking changes to the header API happen occasionally, and generated code must match the include/flatcc version exactly.
+
+**Integration:** static lib (runtime libflatccrt, or compile src/runtime/*.c directly). Reading needs only generated headers plus include/flatcc. The flatcc code generator must be built first (CMake). · At runtime, none beyond the C runtime library. Building the flatcc tool needs CMake 3.16+ and Ninja or make. · C11 is the reference (C++11 or C++14 for C++ code that includes the generated headers). A portable header layer supports older compilers, and weekly CI covers GCC 4.4 and 9-15, Clang 5-22, and MSVC. `--pedantic` is not supported on GCC 8+. · Any. Little-endian and big-endian hosts are supported (big-endian since 0.4.0, tested on AIX PowerPC and on s390x via QEMU, but not in regular CI). CI covers Linux x86-64 including 32-bit, macOS on Apple and Intel runners, and Windows with MSVC.
+
+**Vs siblings:** Pick flatcc when you need actual FlatBuffers wire compatibility from C. Lite³, Karmem and YaFF report much larger wins over FlatBuffers, but each is its own format and cannot read or write existing FlatBuffers data. ProtoCache and hpp-proto target Protobuf and C++, not FlatBuffers from C.
+
+**Gotchas:**
+- The generated headers must come from the same flatcc version as include/flatcc and libflatccrt. A system-installed flatcc package can silently mismatch.
+- Builder errors are not checked by default ("no hand holding"). A missing required field asserts in debug builds but writes an incorrect table in release builds. Link libflatccrt_d while developing and run the verifier on your output.
+- The verifier requires the buffer to be aligned at its absolute memory address (e.g. 16-byte force_align fields). Plain malloc on 32-bit Windows gives only 8 bytes, so use `flatcc_builder_finalize_aligned_buffer` and `flatcc_builder_aligned_free`.
+- Reading and verifying expect a file_identifier by default. Buffers without one, which some other language bindings produce, fail unless you pass a null identifier to the `_with_identifier` variants. If tests segfault, check strict aliasing (`-fno-strict-aliasing`, or `-DPORTABLE_MEM_PTR_ACCESS=0`).
+
+**Status:** Actively maintained: v0.6.4 was released 2026-09-16, fixing parser overruns on adversarial schemas that had been reported as CVEs, and there are commits up to 2026-09-25. It is Apache-2.0 and small enough to vendor, and in 2026 the maintainer said the benchmark code is 'very old' and has not been updated (issue #382).
+
+[repo](https://github.com/dvidelabs/flatcc) · [benchmark](https://github.com/dvidelabs/flatcc/blob/master/doc/benchmarks.md)
+
+##### flatty  `Nim`  `MIT`  `active`  `Tier C`
+
+Binary serializer for plain Nim types; ~38x faster serialize, ~36x faster deserialize than JSON-based std/marshal.
+
+**Beats:** Nim std/marshal — The README's benchy table (100 runs each) for an 11,125-node ref-object tree shows serialize 2.265 ms vs 85.178 ms for std/marshal's JSON `$$` (~37.6x on min, ~38.6x on average) and deserialize 2.643 ms vs 148.723 ms (~56x on min, ~36x on average). Nim version, compiler flags and hardware are not stated (tests/config.nims only sets --path), and the numbers were recorded before the PR #55 hardening, so current deserialize is likely nearer 24-40x (derived from PR #55's 1.4-1.5x slowdown).
+
+**Known shortcoming:** Binary format measured against Nim's std/marshal, which writes JSON text, so the 37-56x gap is binary vs JSON. Ratios use minimum times (average-time deserialize is about 36x). No compiler, flags or hardware stated.
+
+**Known shortcoming:** The README table predates decode hardening (PR #55, 2026-07-14) that made ref-tree deserialize about 1.4-1.5x slower, so the current deserialize gap is likely about 24-40x (estimate). The gap mostly reflects std/marshal's reflection overhead; bingo, another binary Nim serializer, is only about 16% slower than flatty. Shared refs come back as copies and cyclic graphs overflow the stack on serialize. Little-endian only, int width depends on build flags, no versioning or IDL, no other-language implementation.
+
+**How:** Encoding and decoding are generic overloads resolved at compile time per type, while std/marshal walks runtime type info (`typeinfo.Any`), writes JSON text and records every ref address in an IntSet. For seqs and arrays whose element type is 'flat' (supportsCopyMem, no pointers, variants, ranges or int-width mismatch), flatty writes a length prefix and moves the whole block with one copyMem; strings are also one copyMem, and decode allocates with newStringUninit/setLenUninit to skip zero-fill. Output is appended to a plain string with setLen plus copyMem instead of StringStream, values keep native little-endian layout with no byte swapping, and hot procs are `{.inline.}`.
+
+**Use it when:**
+- Nim-to-Nim messages or save files where both ends are built from the same type definitions, e.g. game state over UDP with netty plus supersnappy compression (the stack the README describes).
+- Payloads dominated by seqs/arrays of numbers or flat objects, which encode and decode as a single memcpy per container.
+- Snapshotting acyclic ref-object trees: about 2.3 ms to serialize an 11,125-node tree in the README benchmark.
+- Decoding untrusted network blobs: since the July 2026 hardening, every read is bounds-checked (also under -d:danger), length prefixes are validated before allocation, and a fuzzer runs in tests.
+- Hashing arbitrary nested Nim objects by content with the bundled hashy module.
+
+**Skip it when:**
+- Data read by non-Nim programs: the format is defined only by Nim types, with no IDL and no other-language implementation (the JS target is Nim-compiled JS only).
+- Long-lived storage while types evolve: the README says there is no versioning, so any change to a type breaks reading old blobs.
+- Graphs with shared or cyclic refs: `toFlatty` on a ref writes a nil flag plus the value with no identity tracking, so shared refs come back as copies and cycles recurse until the stack overflows. std/marshal tracks ref addresses and keeps both.
+- Big-endian targets (compile-time error) or JS builds with int64/uint64 fields, which the README says are supported badly.
+- Polymorphic ref hierarchies or variants with more than one `case` discriminator: encoding follows the static type, and objvar.nim reads only the first discriminator (PR #36 for multiple/nested discriminators was closed unmerged).
+
+**Integration:** module · none (Nim standard library only) · Nim >= 2.0.0 (flatty.nimble); install with nimble or atlas · Little-endian native targets only (compile error on big-endian); CI on Linux, macOS and Windows plus the Nim JS backend under Node; the decode stack guard is off on emscripten and unrecognized platforms
+
+**Vs siblings:** Every catalogued sibling targets another language (Rust, Go, C#, C++, Zig); none is a Nim library, so pick flatty inside a Nim-only system. Pick a cross-language schema format such as Bebop or SBE instead when non-Nim peers must read the data or the schema must evolve, since flatty has no IDL and no versioning.
+
+**Gotchas:**
+- Blobs are build-dependent: `int`/`uint` and lengths use the target's native width unless both sides compile with the same -d:flatty32 or -d:flatty64, copyable seq/array elements are raw memory images (sizeof(T) each, padding included), and every enum is written as 8 bytes.
+- Malformed input raises FlattyError (bad length, count or enum), IndexDefect (truncation) or RangeDefect (range type out of bounds); the README tells you to catch both CatchableError and Defect.
+- The README benchmark predates the July 2026 hardening (PR #55), which itself reports ref-tree deserialize ~1.4-1.5x slower afterwards; serialize is unchanged.
+- Much of the gap to std/marshal is marshal's reflection, not binary vs text: in the same table jsony (JSON) serializes in 9.618 ms, ~8.9x faster than marshal, while the binary peer bingo is only ~16% slower than flatty on serialize (min).
+
+**Status:** Active: nimble version 0.4.0, last commit 2026-08-13, decode path fuzzed and hardened in July 2026; MIT, pure Nim with no dependencies, small enough to vendor.
+
+[repo](https://github.com/treeform/flatty) · [benchmark](https://github.com/treeform/flatty#speed)
+
+##### greenpack  `Go`  `MIT`  `active`  `Tier C`
+
+Go msgpack2 code generator with versioned, typed field names; ~15% faster writes than gogo/protobuf in author's 2017 benchmark.
+
+**Beats:** Protocol Buffers (Go implementations: gogo/protobuf gogofaster, golang/protobuf, DeDiS/protobuf); FlatBuffers Go and Cap'n Proto Go are also in the table — In the author's 2017 fork of alecthomas/go_serialization_benchmarks (6-field struct, 3.1 GHz Core i7 MacBook Pro 13", Go version unconfirmed; the header says 1.8beta2), GreenPackMarshal took 129 ns/op with 0 allocs, against 152 ns/op with 1 alloc (64 B) for gogo/protobuf's proto.Marshal. greenpack wrote into a reused 512-byte buffer while gogo allocated its output on every call. The 224 vs 240 ns/op read row is invalid because BenchmarkGreenPackUnmarshal calls ZebraPack's ZMarshalMsg/ZUnmarshalMsg.
+
+**Known shortcoming:** The benchmark's GreenPackUnmarshal row actually calls ZebraPack's ZUnmarshalMsg, so the read-side number is ZebraPack's code, not greenpack's (224 vs 236 ns is run-to-run noise on identical code). The write comparison reuses a 512-byte buffer while gogo proto.Marshal allocates per call.
+
+**How:** It uses reflection-free code generation inherited from tinylib/msgp. Marshal pre-sizes the output with the generated Msgsize() via msgp.Require, then writes each field key as a precomputed msgpack byte literal (`o = append(o, 0xae, 0x4e, ...)`) followed by a type-specific Append* call into a caller-supplied []byte. Repeated marshals into a reused buffer therefore allocate nothing. Unmarshal reads map keys zero-copy and dispatches through a compiled Go string switch to per-field decoders, mutates existing slices and maps in place, and zeroes missing fields by replaying a msgpack nil through the same switch (a fixed-size NilBitsStack) instead of allocating.
+
+**Use it when:**
+- Go services whose structs must be readable from Python, R or JS with a stock msgpack library and no generated code or schema file.
+- You want the Go struct definition to be the schema: no .proto/IDL, no protoc or C++ toolchain, just `//go:generate greenpack`.
+- Write-heavy paths that can reuse an output buffer: MarshalMsg(buf) appends into the caller's slice. The 2017 run measured 129 ns/op and 0 allocs/op for a 6-field struct.
+- Schemas that evolve over time: numbered zid fields, `deprecated` tombstones and conflict detection at generate time, plus signed/unsigned integer types that stock msgpack encoders lose.
+- Pipelines that need serialization hooks (PreSave/PostLoad, e.g. to flatten trees) or generated MariaDB read/write methods (`-sql mariadb`).
+
+**Skip it when:**
+- Wire size matters. Every key carries the field name, zid and type clue, so the benchmark struct encoded to ~142 bytes, against ~59 for ZebraPack (derived from the MB/s and ns/op columns). Use ZebraPack, `-omit-clue`/`-alltuple`, or protobuf instead.
+- You need C++ or other non-Go code generation. None exists; the author points C++ users to generic msgpack libraries (issue #16).
+- You are choosing it for faster reads than gogo/protobuf. The only published greenpack read number actually measured ZebraPack, and the author's 2024 CBOR comparison shows greenpack Unmarshal at 322 ns/op with 2 allocs/op.
+- Code that relies on generics or shared pointers. Type-parameterized fields are skipped unless you pass `-generics=true`, which the author says is much slower. Automatic pointer dedup has been off by default since v0.529.0 because of unresolved errors, and Marshal/Unmarshal never supported it.
+- You need a large-team maintenance guarantee. It is a single-author project; a report that map[int64]map[int8]T writes no data (#12) was closed without a fix.
+
+**Integration:** module · runtime package github.com/glycerine/greenpack/msgp (depends on glycerine/fwd, 4d63.com/tz); the generator also uses golang.org/x/tools and shurcooL/go-goon; goconvey for tests · Go 1.24.2 (go.mod directive) · any Go target; pure Go, uses unsafe string/slice casts (an appengine build tag provides a no-unsafe variant)
+
+**Vs siblings:** Pick greenpack over ZebraPack (same author: 120 vs 129 ns/op writes, ~59 vs ~142-byte payload) when other-language consumers must decode with any msgpack library and no schema, because greenpack data is fully self-describing. Pick ZebraPack or Karmem when raw Go speed or wire size matters more, and SBE, Bebop or Apache Fory (C++) for C++-side work, since greenpack has no C++ generator.
+
+**Gotchas:**
+- `-fast-strings` makes decoded strings alias the input buffer through unsafe, so that buffer must not be reused. In current master, msgp/read_bytes.go ReadStringBytes takes the zero-copy path only when `err != nil`, so successful reads still copy with string(v). Measure allocations yourself before relying on the zero-alloc claim.
+- Cross-language readers see extras. time.Time is msgpack extension type 5 (normalized to UTC), not the standard -1 timestamp, and time.Duration is extension 7. EncodeMsg streams also add an "@" struct-name key unless you pass `-no-structnames-onwire`; the MarshalMsg path does not.
+- All fields are omitempty by default, so zero values never reach the wire and absent keys decode as zero. The nil-replay stack that implements this is fixed at 8 nested struct levels (MaxNestedStructPointerDepth) and panics beyond that.
+- Go module versioning: tags were renamed to v0.xxx.0, and the proxy still reports the old non-module v5.1.2 as @latest. Pin an explicit v0.5xx.0 tag (tags go up to v0.541.0).
+
+**Status:** Actively maintained by its single author (last commit 2026-01-23, tags up to v0.541.0). MIT-licensed, pure Go, and used via go generate, so it is easy to adopt in Go projects.
+
+[repo](https://github.com/glycerine/greenpack) · [benchmark](https://github.com/glycerine/go_serialization_benchmarks#results)
+
+##### hpp-proto  `C++`  `MIT`  `active`  `Tier C`
+
+Wire-compatible C++23 Protobuf implementation; non-owning mode decodes and builds+serializes 1.5-1.9x faster than libprotobuf arenas.
+
+**Beats:** Protobuf (Google's C++ libprotobuf) — This is a first-party Google Benchmark run against Google protobuf 33.2 on an i9-11950H with gcc 13.3.0, plus an M1 Pro with Apple clang 17; the build flags are not stated. Decoding one ~220-byte GoogleMessage1 takes 141/160 ns (proto2/proto3) in hpp-proto's non-owning mode vs 210/252 ns for Google's arena mode, and set+serialize takes 99.6/121 vs 186/223 ns. Owning-mode decode is near parity (proto2 210 vs 215 ns), and Google wins serialize-only (64.5 vs 85.1 ns).
+
+**Known shortcoming:** Google protobuf wins serialize-only (Linux 64.5 vs 85.1 ns; Apple M1 Pro 75.1 vs 132 ns, proto2). Owning-mode decode is about parity (210 vs 215 ns); the 1.5-1.9x headline needs non-owning view semantics, and the non-owning set_message row assigns string_views to literals while Google copies. The README's FetchContent pin (2026-01-02) predates two fuzzer-found parser fixes (heap overflow, PR #199; crash, PR #200). Pre-1.0.
+
+**Independent measurement:** Code size: the Linux encode/decode test binary is 111,816 bytes vs 3,829,824 with static libprotobuf and 1,748,216 with libprotobuf-lite.
+
+**How:** Messages are plain structs. Field-number-to-member dispatch uses a consteval two-level 'masked lookup table', and varints go through the branch-predicted shift-mix decoder adapted from protobuf's varint_shuffle.h. Most of the headline gain comes from non_owning_traits: string, bytes and repeated fields become string_view/span views backed by the input buffer or a caller std::pmr arena, which removes per-field heap allocations and copies. Packed varint arrays are pre-sized by popcounting terminator bytes 8 at a time. The parser walks 16-byte overlapping 'slope' regions, or a caller-promised padded_input, so inner loops skip bounds checks; proto3 UTF-8 checks call simdutf's is_utf8, and serialization is two-pass with an external size cache in a 1 KiB stack-backed monotonic buffer.
+
+**Use it when:**
+- You exchange protobuf messages with existing libprotobuf or gRPC peers and want lower per-message C++ latency on small messages (the benchmark uses a ~220-byte GoogleMessage1) without changing the wire format.
+- Hot decode paths where the input buffer outlives the parsed message: non_owning_traits with a std::pmr::monotonic_buffer_resource decode in 141 ns vs 210 ns for Google arena (proto2, i9-11950H).
+- Build-then-send pipelines that fill a message and serialize it once: set+serialize takes 139 vs 185 ns (proto2, regular) and 99.6 vs 186 ns in non-owning vs arena mode.
+- Large packed numeric arrays or proto3 messages with long strings: a 1000-element packed uint64 decodes in 2511 vs 3852 ns CPU, and the raw Linux output shows proto3 decode with 512/2048-byte strings at 518 ns vs 1007 ns.
+- Binary-size-constrained or embedded targets: the Linux encode/decode test program is 111,816 bytes, against 3,829,824 for static libprotobuf and 1,748,216 for libprotobuf-lite.
+
+**Skip it when:**
+- Codebases that cannot move to C++23: it needs GCC 13+ or Clang 19+ (MSVC is also in CI) and CMake 3.25+.
+- Workloads dominated by re-serializing messages that are already built. Google wins serialize-only: proto2 64.5 vs 85.1 ns on the i9, and 75.1 vs 132 ns on the M1 Pro.
+- When you cannot guarantee buffer and arena lifetimes. Owning-mode decode is roughly even with Google on the small message (proto2 210 vs 215 ns), and the headline gains need view semantics that Google's arena mode does not use.
+- Large libprotobuf codebases that rely on the accessor API, Google-style reflection or Arena semantics: the generated types are different, so migrating means rewriting call sites. Text format is not documented.
+- Risk-averse production: the project is pre-1.0 (latest tag is the v1.0.0-beta.1 pre-release) with 43 stars, and fuzzing found a heap-buffer-overflow and a crash in the parser as recently as July and August 2026.
+
+**Integration:** header-only core (hpp_proto::hpp_proto) plus the protoc-gen-hpp plugin built from source; optional compiled hpp_proto::dynamic_message library · is_utf8 (simdutf) for UTF-8 validation; glaze for JSON; protoc for code generation. CPM fetches missing dependencies unless CPM_LOCAL_PACKAGES_ONLY=ON. gRPC is needed only for the adapter. · C++23 (README: Clang 19+ or GCC 13+), CMake 3.25+, protoc. CI also builds with MSVC and MinGW, and tests C++26 with Clang 22. · Portable C++. CI covers Linux x86-64 (GCC 13/14, Clang 20/22), macOS (macos-latest) and Windows (MSVC, MinGW); benchmarks were run on x86-64 and an Apple M1 Pro. No ISA is required: on x86-64, popcnt is detected at runtime.
+
+**Vs siblings:** Pick hpp-proto when you must keep the protobuf wire format and .proto schemas (existing peers, gRPC) and want a faster, smaller C++ codec. ProtoCache (a flat format for protobuf schemas, 132 vs 2620 ns decode+traverse), SBE and Apache Fory report bigger wins, but they use their own encodings, so every peer has to change.
+
+**Gotchas:**
+- non_owning_traits messages hold string_view/span into the input buffer or the alloc_from memory resource, and both must outlive the message. Map fields become key/value spans that are not deduplicated (the last duplicate wins). Mixing owning string_t with view-typed repeated_t leaks, because destructors never run.
+- padded_input requires at least 16 readable bytes past the payload, and the first padding byte must be 0. Passing it without those guarantees defeats the parser's bounds-check-free loops.
+- read_binpb/read_json report errors through a status and do not catch std::bad_alloc from containers. A failed parse may leave the target message partly modified.
+- The README's FetchContent snippet pins the v1.0.0-beta.1 commit (2026-01-02). That commit predates two ClusterFuzzLite-found fixes: a heap-buffer-overflow in segmented packed-varint decoding (PR #199, merged 2026-07-21) and a non-owning unknown-field crash (PR #200, 2026-08-03). Pin a newer commit.
+
+**Status:** Actively maintained (last main-branch commit 2026-08-03, fuzzed with ClusterFuzzLite, CI on Linux, macOS and Windows) but still pre-1.0 with 43 stars. It is MIT-licensed and consumable via FetchContent or the in-repo vcpkg port and conanfile.
+
+[repo](https://github.com/huangminghuang/hpp-proto) · [benchmark](https://github.com/huangminghuang/hpp-proto/blob/main/benchmarks/ReadMe.md)
+
+##### HyperSerializer  `C#`  `Apache-2.0`  `active`  `Tier C`
+
+Contract-less .NET binary serializer built on runtime-compiled Span/MemoryMarshal proxies; ~16x faster than protobuf-net and MessagePack-CSharp in its author's benchmark.
+
+**Beats:** Protocol Buffers (protobuf-net 3.1.26), MessagePack (MessagePack-CSharp 2.4.59) — The author's BenchmarkDotNet table (.NET 8.0.3 RyuJIT x64 AVX2, /p:Optimize=true, Intel Core i9-10980XE, Windows 11) shows 1M single-object serialize+deserialize round-trips of a 10-member POCO. HyperSerializer took 46.24 ms, against 98.81 ms for MemoryPack 1.9.16 (2.14x), 768.58 ms for MessagePack-CSharp 2.4.59 and 769.34 ms for protobuf-net 3.1.26 (both ~16.6x). Allocations were similar (~206 MB), except protobuf-net at 427 MB. The committed harness does not reproduce this exact table: its Test class has no string, and its loop and parameter setup differ. The '18x' and '3x vs Apex' figures come from an older chart with no environment listed.
+
+**How:** On the first use of each `T`, a static constructor reflects over the type and fills C# source templates to build a proxy class. It compiles that source at runtime with Roslyn (Microsoft.CodeAnalysis.CSharp, Release optimization), loads the assembly, and caches the Serialize/Deserialize delegates in the static generic class `HyperSerializer<T>`. The generated code computes the exact output length (fixed member sizes plus string and array byte counts) and allocates one `byte[]`. It then writes each member as raw memory with `MemoryMarshal.Write` and reads it back with `MemoryMarshal.Read`. Strings are block-copied as UTF-16 through `MemoryMarshal.Cast<char,byte>`, and value-type arrays are block-copied too. The format has no field tags, no varints, no UTF-8 transcoding and no per-member type markers. Its only framing is a 1-byte null flag for each nullable and a 4-byte length prefix for each string or array.
+
+**Use it when:**
+- Both ends run the same .NET 6-9 build (a shared DTO assembly) and exchange small, flat objects over a trusted link. The README names messaging between services behind a firewall as the target.
+- Short-lived caches of flat DTOs, in-process or remote, where you can flush the cache whenever a type changes.
+- Hot paths that serialize and deserialize one object at a time. The published run shows ~46 ns per round trip (derived: 46.24 ms / 1M) for a 10-member POCO with Guid, DateTime, decimal, TimeSpan, an enum and a string.
+- Bulk arrays of unmanaged structs, such as market ticks. Pass the whole `T[]` and it is stored as a length prefix plus one block copy (see test Test_Struct_Array_Should_Serialize and the author's advice in issue #8).
+- Types you cannot or will not annotate. No [ProtoContract], [MessagePackObject] or [Key] attributes are needed.
+
+**Skip it when:**
+- Persisted data, or services deployed on different schedules. The format is positional with no field IDs, so reordering, removing or retyping a member breaks reads. The README warns that mismatched bytes can decode into wrong values with no exception.
+- Any reader that is not .NET, or data exchanged across architectures. The bytes are raw CLR memory layout: Microsoft's docs say `MemoryMarshal.Write` copies private fields and implementation details. Byte order is the host's, strings are UTF-16, and no format spec exists.
+- Native AOT, trimmed or single-file apps. The library compiles C# with Roslyn at runtime, loads the result dynamically, and builds compiler references from `Assembly.Location`. Native AOT forbids dynamic loading, and single-file apps return an empty `Assembly.Location`.
+- Object graphs. Class-typed members and dictionaries are ignored, with no reference or cycle handling (issues #2 and #11), and a top-level `Dictionary<int,int>` throws (issue #1, open since 2022).
+- Processes where cold start or footprint matters. The first use of each type runs a Roslyn compilation, and the package depends on Microsoft.CodeAnalysis.CSharp. The repo does not document the compile cost.
+
+**Integration:** shared lib (NuGet package `HyperSerializer`, managed DLL) · Microsoft.CodeAnalysis.CSharp >= 4.9.2 (Roslyn, used at runtime to compile the per-type proxies) · .NET 6 (package targets net6.0, net7.0, net8.0, net9.0) · Any OS/architecture running .NET 6-9 with JIT and runtime assembly loading. Native AOT is not supported, and single-file publish is likely incompatible. The wire format uses host byte order.
+
+**Vs siblings:** Bebop is the only sibling with a C# result. Pick HyperSerializer over Bebop when you want no .bop schema and no bebopc codegen step and both ends are the same .NET types. Pick Bebop when TypeScript, Rust or C++ must read the data. rkyv and Apache Fory (C++) are measured outside .NET, so they matter here only if you are not locked to .NET.
+
+**Gotchas:**
+- The async methods are synchronous wrappers, and `SerializeAsync` also copies the result with `ToArray()`. In issue #8, calling SerializeAsync per record into a MemoryStream took 1,967 ms, against 528 ms for TeaFiles, on 3.02M structs. The author's fix was the sync `Span` API, or serializing the whole array in one call.
+- Setup runs in the static constructor of `HyperSerializer<T>`, so codegen failures surface as TypeInitializationException (issues #1 and #4). The generated deserializer calls `new()` and assigns every scanned member, and MemberTypeInfo.cs never checks CanWrite. So types appear to need a public parameterless constructor and settable members. Set `HyperSerializerSettings` before the first use of each type.
+- Member order is public fields first, then properties, in reflection order. Microsoft documents that GetProperties order is unspecified on .NET 6 and earlier and deterministic from .NET 7. In the current source, setting `SerializeFields = false` keeps fields and drops properties, which is the opposite of what the README describes.
+- The README says generic lists work, but `TypeSupport` compares against the open generic `typeof(IEnumerable<>)`, which a `List<int>` never equals. So List members appear to be skipped silently, and the V3 test that covers lists uses a comparison helper that cannot return false. Value-type arrays do round-trip (issue #5 regression test). Struct members must not contain references, because `MemoryMarshal.Write` throws ArgumentException for those.
+
+**Status:** Maintained but slow-moving. v1.6 (2025-11-05) only added net9.0; before it, the last code change was in April 2024. The repo has 85 stars, ~44k NuGet downloads and one open issue. Usable via NuGet under Apache-2.0 (the package ships an MIT License.txt), but its runtime Roslyn dependency rules out AOT and makes it heavier than its small source suggests.
+
+[repo](https://github.com/adam-dot-cohen/HyperSerializer) · [benchmark](https://github.com/adam-dot-cohen/HyperSerializer#benchmarks)
+
+##### Imprint  `Rust`  `MIT`  `stale`  `Tier C`
+
+Rust row format with a sorted field-offset directory, so records merge or project without decoding; ~4x faster than prost merges.
+
+**Beats:** Protobuf (Rust prost 0.12 implementation, per the since-removed benches/Cargo.toml) — In the author's Criterion run (PR #11, May 2025, Rust prost 0.12; CPU, compiler and flags not stated; the chart unit is ns), decoding a fake Product and Order, combining them and re-encoding took 3,454 ns with prost vs 797 ns with Imprint at the largest size (~4.3x, the README's '76%') and 1,004 vs 784 ns at the smallest. A contributor's rerun in PR #27, after merges became order-deterministic, gave 2,848 vs 692 ns (~4.1x) and 748 vs 642 ns (~1.17x); the projection chart has Imprint slower at size 1 and ~2.4x faster at size 10, although the prost projection re-encodes 5 fields against Imprint's 6.
+
+**Known shortcoming:** Baseline is Rust prost 0.12, not Google protobuf, and the protobuf merge path adds clones. Slower than prost at the smallest projection size. The comparison harness was deleted in PR #31 and survives only in history (commit f42484cf).
+
+**Known shortcoming:** Deserialize (248 vs 769 ns) times Imprint without decoding field values (author: 'best case'). The projection comparison favours prost (5 fields re-encoded vs 6 projected). Not on crates.io (the name belongs to an unrelated crate); git dependency only. Malformed input can panic; map bytes are not deterministic despite the README; project writes a 0xdeadbeef placeholder schema hash.
+
+**Independent measurement:** PR #11 (author): merge at size 1/5/10 prost 1003.50/2140.10/3453.90 ns vs Imprint 784.04/798.71/797.41 ns; serialize 355.53 vs 224.99 ns. PR #27 rerun (contributor, after deterministic merge): size 10 prost 2848 vs Imprint 692 ns, size 1 748 vs 642 ns.
+
+**How:** Each row has a 15-byte header and a directory of 7-byte entries (u16 field id, u8 type code, u32 payload offset) sorted by field id. A field is found by binary search, and its byte length is the gap to the next entry's offset. Merge sort-merges the two directories, copies each chosen field's payload bytes unchanged and rebases the offsets; projection walks the directory and copies the selected byte ranges into one pre-sized buffer. Neither path decodes strings or arrays or re-encodes anything, but that is what the prost baseline has to do (decode both messages into owned structs, clone, re-encode), so Imprint's cost follows field count while prost's follows content size. Reading a record parses the header and directory eagerly but keeps the payload as a zero-copy `Bytes` slice.
+
+**Use it when:**
+- Stream-join or enrichment stages that combine two rows with disjoint field ids and forward the result without reading most field values (the case the merge benchmark models).
+- Routing or filtering stages that project a few fields out of wide rows with long string or array values; the published gap grows with value size (size 10 projection: ~625 ns vs ~1530 ns for prost).
+- Pipelines that need a self-describing row that tools can inspect without generated code: every directory entry carries a type code, so a generic reader can print any record.
+- Rust projects where you control both producer and consumer and are willing to vendor a small library (about 1,900 lines of safe Rust including tests); an early Java port exists at agavra/imprint-java for JVM consumers.
+
+**Skip it when:**
+- Plain whole-message encode/decode. The only protobuf numbers for that (PR #11: serialize 225 vs 356 ns, 'deserialize' 248 vs 769 ns) time Imprint without decoding any field values, so they do not show a full-decode win.
+- Small records or small projections. At project_size_1 Imprint was slower than prost (~580 vs ~360 ns), and merge at size 1 was only ~1.2-1.3x faster.
+- Size-sensitive storage or network links. Each row carries a 15-byte header plus 7 bytes per field, and int32/int64 are always 4/8 fixed bytes with no varint or zigzag, so rows are larger than protobuf's ~1-byte tags plus varints.
+- Untrusted input. Reads do not validate directory offsets or ordering. A truncated array or map, or a header whose payload size is too large, reaches `bytes` accessors (`get_u8`, `slice`) that panic instead of returning an error. There is also no schema or type validation (issue #8).
+- Anything that needs a stable, published dependency. It is v0.1.0 with no releases or tags and is not on crates.io, where the `imprint` name belongs to an unrelated 2017 crate. The format was still changing in mid-2025 (2-byte ids and a mandatory directory landed in June 2025), and there have been no commits since 2025-07-15.
+
+**Integration:** crate (git dependency only; not published on crates.io) · bytes 1.5, thiserror 1.0 (dev-only: criterion, fake, proptest) · Rust edition 2024 (so Rust 1.85+); no rust-version declared · any: pure safe Rust with no `unsafe`, SIMD or platform-specific code; the wire format is little-endian via explicit LE accessors
+
+**Vs siblings:** Pick Imprint over rkyv or YaFF when the hot operation is combining or subsetting rows of different schemas and re-emitting bytes: their catalogued results measure serialize and field-read speed, not merging two records. For plain whole-message encode/decode against prost, rkyv or bilrost have wider numbers from the shared rust_serialization_benchmark log dataset.
+
+**Gotchas:**
+- Map fields are written by iterating a std `HashMap`, so two equal maps can serialize to different bytes. The README's byte-for-byte determinism holds only for rows without maps; PR #27 fixed payload order for merges only.
+- `project` sets the header's schema hash to the placeholder 0xdeadbeef (a TODO in ops.rs), and `merge` keeps the first record's schema id unchanged. The schema hash is wrong after either operation.
+- When both records have the same field id, `merge` silently keeps the first record's value and drops the second without checking types, so `a.merge(b)` differs from `b.merge(a)`. `ImprintWriter::add_field` lets the last write win.
+- The README type table lists date, time, timestamp, uuid and decimal (0xB-0xF), but the code implements only codes 0x0-0xA. The others are just reserved (PR #37), and reading one returns InvalidFieldType. The README's '3-5 bytes/field' directory overhead is also out of date: entries are 7 bytes.
+
+**Status:** Stale (about 26 commits from 5 contributors, last commit 2025-07-15, no releases; open issues for lazy directory parsing, zero-copy merge/project views and validation), but MIT-licensed, small and with only two runtime dependencies, so it is easy to vendor if you treat the format as unstable.
+
+[repo](https://github.com/agavra/imprint) · [benchmark](https://github.com/agavra/imprint#composition-join--merge)
+
+##### JSBT (@cheprasov/jsbt)  `TypeScript`  `MIT`  `active`  `Tier C`
+
+Schemaless JS-to-JS binary serializer that keeps object graphs and deduplicates repeated subtrees; much smaller than Protobuf on repetitive data.
+
+**Beats:** Protobuf — The size comparison with Protobuf comes only from README scenario 3: 10,000 repetitive objects encode, uncompressed, to 64,175 bytes with JSBT versus 3,108,000 with Protobuf (about 48x), 3,708,003 with MsgPack, 3,775,603 with CBOR and 4,680,335 with JSON. It was a single run 'on Node.js' with no Node version, hardware, or Protobuf library or schema stated, and the published harness (benchmarks/benchmark1.ts) runs only JSON and JSBT. In that harness's repeated dataset every field depends only on i mod 100 or i mod 3, so just 300 of the 10,000 records are distinct and the rest encode as short copy refs. The 48x therefore mostly measures whole-record dedup, not general compactness.
+
+**Known shortcoming:** Size-only win on a dataset built to favour deduplication (uncompressed sizes); the published harness runs only JSON and JSBT, so the Protobuf/MsgPack/CBOR rows cannot be reproduced. JSBT encodes about 10x slower than Protobuf on simple objects (31.51 vs 3.29 us/op). The README gives two different JSBT sizes.
+
+**Known shortcoming:** The 48x is mostly record dedup: only 300 of 10,000 benchmark records are distinct. Output is a one-char-per-byte JS string, not a Uint8Array. Copy refs are expanded on decode with no limit, so a small payload could decode into a very large heap. About 34 npm downloads a month.
+
+**How:** The size win comes from two dedup layers in the encoder, which is a form of content-addressed dedup or hash-consing. First, every value gets a ref ID, and a Map keyed by the value itself (object identity, or the value for longer strings, larger integers and floats) emits a short 'link' ref when that value appears again. Second, a Map keyed by each subtree's already-encoded bytes emits a 'copy' ref when an identical subtree was written before, but only if the ref is shorter than the bytes. Everything else is a 1-byte type/length tag followed by minimal little-endian bytes: variable-width integers, trimmed floats and UTF-8 strings. It is not faster: the encoder builds every subtree's encoding as a string and looks it up in a Map, which makes encoding about 10x slower than Protobuf on a flat object.
+
+**Use it when:**
+- Both ends are JS/TS and you control both: Node to Node, Node to browser, Web Workers or worker threads, Electron IPC.
+- Payloads are large arrays of records in which many sub-objects or whole records are exact duplicates (logs, market or order-book snapshots, analytics exports). Here dedup can cut wire or storage size by an order of magnitude or more compared with JSON, Protobuf or MsgPack.
+- You need to round-trip JS types that JSON drops (Map, Set, Date, BigInt, TypedArrays, undefined, NaN, -0) or object graphs with cycles and shared references, with identity preserved.
+- Snapshotting in-memory state (caches, graphs) where size at rest matters more than CPU time spent encoding.
+- You want compact binary without maintaining .proto schemas or a codegen step.
+
+**Skip it when:**
+- Cross-language or schema-evolution contracts: the only implementation is TypeScript/JavaScript. Use Protobuf, Avro or Thrift, as the README itself advises.
+- Latency- or CPU-bound paths with small or flat messages. On the README's flat-object test JSBT is about 9.6x slower to encode than Protobuf (31.51 vs 3.29 us/op), about 10.7x slower to decode (20.83 vs 1.95 us/op), and also larger (1,398 vs 1,017 bytes).
+- Large payloads with few repeats. The encoder keeps every subtree's encoded string as a Map key, so encode time and memory grow with payload size. The README reports about 1,029 ms per encode for its 10,000-object repeated dataset.
+- Decoding untrusted input. A copy ref is expanded by re-decoding the referenced byte range, and the code I read has no expansion limit, so a small payload can decode into a very large heap. The README's security notes do not mention this.
+- When you need a small decoded heap. Copy refs decode into fresh objects, so structural dedup shrinks only the wire or stored form. Only same-identity (link) refs stay shared after decode.
+
+**Integration:** module · none (runtime); devDependencies are the TypeScript, tsup and jest toolchain · ES2020 runtime (the tsup build targets es2020); TextEncoder is required for string encoding; package.json has no engines field; ships ESM and CJS builds with .d.ts typings · any JS runtime; the README names Node, browsers, Web Workers and Electron
+
+**Vs siblings:** Choose JSBT over the catalog's other size-focused entries only when both endpoints are JavaScript and you want no schema plus graph and identity preservation. JSON BinPack gets its size wins from a schema and was the smallest or tied-smallest on 27 documents, and qdf reports wire-size wins over protobuf on 5 batch fixtures; both results are broader than JSBT's single dataset, which favours dedup.
+
+**Gotchas:**
+- JSBT.encode returns a JS string with one char per byte (0-255), not a Uint8Array, and decode does not accept Uint8Array or ArrayBuffer. Byte output (encodeToBytes) and Uint8Array input exist only in the open, unmerged v1.4.0 PR #2. If the string goes through a UTF-8 path (for example Buffer.byteLength or a text frame), every byte at 0x80 or above becomes 2 bytes, so convert it as latin1/binary.
+- Integers beyond Number.MAX_SAFE_INTEGER throw, so use BigInt for them. Local (non-global) symbol keys on objects are not encoded.
+- Any object whose constructor.name is not 'Object' is treated as a class instance and serialized through toJSBT(), toJSON() or valueOf(). On decode, a class name with no registered factory comes back as a plain object carrying a non-enumerable __jsbtConstructorName.
+- During decode, ByteStream keeps every input byte in a JS number array so that copy refs can re-parse their byte slices. Expect decode-time memory well above the payload size.
+
+**Status:** Actively maintained by one person: v1.3.2 was released 2026-04-05, and an open v1.4.0 PR since 2025-12 adds Uint8Array I/O. It is MIT-licensed with zero runtime dependencies and installable from npm, but adoption is low (36 stars, about 34 npm downloads a month) and there are no independent benchmarks.
+
+[repo](https://github.com/cheprasov/ts-jsbt) · [benchmark](https://github.com/cheprasov/ts-jsbt#benchmarks)
+
+##### Karmem  `Go`  `BSD-3-Clause`  `abandoned`  `Tier C`
+
+Zero-copy, schema-compiled binary format for Go/TinyGo and WASM; own benchmark: 5-18x faster than FlatBuffers' Go implementation.
+
+**Beats:** FlatBuffers — The project's own benchmark encodes and decodes 1,000 monsters, each with a 100-element Vec3 path, on an Apple M1; toolchain versions are not stated, and FlatBuffers Go is v2.0.6. Natively, Karmem was ~5x faster to encode, ~18x faster to decode through the object API and ~9x faster to sum the paths with zero-copy readers (1.44 ms -> 0.16 ms); under TinyGo WASM on wazero the ratios were ~4.3x, ~27x and ~7.7x. The baseline is FlatBuffers' allocation-heavy Go object API (110k allocs/op on decode) with a similar but not identical schema, and no C++ implementation of either format was measured.
+
+**How:** Layouts are fixed when the schema is compiled. A table is a uint32 size header followed by fields at constant offsets, with no FlatBuffers-style vtable, so reading a field costs one comparison against the table size plus an unsafe load at a constant offset. Arrays come back as native Go slices built over the buffer from hand-made slice headers, so a loop over them is plain indexing; FlatBuffers Go's Path(&obj, j) does a vtable lookup and a vector dereference for every element. In the README's raw-struct comparison this read loop takes 160 µs against 154 µs for summing a plain Go struct. Object-API decode copies into the destination's existing slices and strings and grows them only when they are too short (0 allocs/op natively, against 110k for FlatBuffers' UnPackTo, which makes fresh slices and pointer structs). Encoding is one pass of typed unsafe stores and memcpy into a preallocated buffer, with no endianness conversion.
+
+**Use it when:**
+- A TinyGo or Go WASM module that exchanges structured data with a host or with other guests written in Zig, C, AssemblyScript or Odin, where everyone reads one encoded buffer in place.
+- Hot loops that repeatedly read a few fields or numeric arrays (e.g. Vec3 paths) out of large messages: Viewers hand back native slices over the buffer, with no per-element accessor calls.
+- Go code that decodes many messages of the same type into one reused destination struct (e.g. from a sync.Pool) and wants 0 allocations per decode natively.
+- Schemas made mostly of fixed-size numerics and bounded arrays ([N]T, [<N]T) that only ever add fields, with little-endian machines on both ends.
+
+**Skip it when:**
+- C++ codebases: there is no C++ generator, the C target is a C99 header that relies on GCC/Clang packed attributes, and nobody benchmarked FlatBuffers' C++ path against it.
+- Untrusted input: a malformed offset silently yields zero/default values instead of an error, and the README warns that shared offsets let a small message expand into large arrays under the Object API. The only mitigation offered is to use limited arrays and avoid the Object API.
+- Schemas that need unions, optional/nullable fields, arrays of strings, tables or arrays, field removal, or a JavaScript/TypeScript generator. None of these is supported, and the unions (#25) and array-of-strings (#98) issues are still open.
+- Projects that need a stable API or upstream fixes. The README says the API is unstable, the last code change was in Sep 2022, and the data-corruption report #102 has no reply. The package also panics at init on big-endian targets.
+- Choosing it for native Go speed on this evidence alone. The only comparison is the project's own benchmark against FlatBuffers' Go object API with a similar but not identical schema, and a request for an independent comparison (#31) was never resolved.
+
+**Integration:** module · Go runtime package (karmem.org/golang): stdlib only (errors, unsafe). The code generator (karmem.org/cmd/karmem) needs golang.org/x/crypto for blake2b packet IDs. Each other target needs its runtime file (c/karmem.h, zig/karmem.zig, assemblyscript/karmem.ts, swift, odin, dotnet). · Go 1.18 (go.mod; the generated code uses unsafe.Add). The README lists Go 1.19 / TinyGo 0.25.0, and CI used Go 1.18.4/1.19 and TinyGo 0.24.0. Other targets: Zig 0.10, AssemblyScript 0.20.16, Swift/SwiftWasm 5.7, .NET 7, C via Emscripten. · Little-endian 32- or 64-bit only (the package panics at init otherwise). Packed layouts put fields at unaligned offsets. Benchmarked on Apple M1 (native Go and wasm32-wasi under wazero); CI ran on linux/amd64.
+
+**Vs siblings:** Pick Karmem only for the job it was built for: a TinyGo/Go WASM module sharing one buffer with Zig, C, AssemblyScript or Odin code. For Go-only messaging, greenpack or ZebraPack are the catalogued Go options. For C++, YaFF (listed at ~2-2.5x faster flat reads than FlatBuffers) or SBE fit better, since Karmem has no C++ generator.
+
+**Gotchas:**
+- Open issue #102 (Dec 2023, no reply): the Go generator treats offset 0 as 'allocate here', so a root inline struct whose first field is another inline struct is allocated twice and decodes as zeros. The reporter's workaround is a dummy leading field.
+- Failures are silent. An out-of-bounds offset makes a Viewer point at a zeroed sentinel array, ReadAsRoot returns no error, and strings or arrays longer than their [<N] bound are truncated to N on read.
+- Viewer strings and slices alias the input buffer (zero-copy), so reusing or overwriting that buffer changes values you already hold. Without @packed(true), padding bytes are not cleared and can leak earlier buffer or system memory (README).
+- C runtime (c/karmem.h): the growable KarmemWriter calls realloc() with the requested total but records capacity as max(2x old, total), so later allocations can write past the heap block. The fixed writer, which the benchmark uses, avoids this. The runtime functions and the generated _Null array are non-static definitions in headers, so include them from only one translation unit.
+
+**Status:** Abandoned: last code change Sep 2022, last commit (a wazero bump) Mar 2023, latest tag v1.2.9 (Aug 2022), and a data-corruption report sits unanswered. It is BSD-3-Clause and the Go runtime is ~135 lines on the stdlib only, so vendoring it with the generated code is practical, but you inherit the generator's bugs.
+
+[repo](https://github.com/inkeliz/karmem) · [benchmark](https://github.com/inkeliz/karmem#benchmark)
+
+##### Lite³ (lite3)  `C`  `MIT`  `active`  `Tier C`
+
+Schemaless, JSON-compatible zero-copy C format: a B-tree in one mutable buffer; author runs beat FlatBuffers and simdjson.
+
+**Beats:** FlatBuffers — In the author's fork of the Cista++ graph benchmark (1,870 nodes; g++-11 CMake Release with liblite3 at -O2; CPU not stated), Lite³ serialize+deserialize takes 7.79 ms against 1887.49 ms for FlatBuffers. Nearly all of that gap is FlatBuffers serialize (1845.8 vs 3.02 ms), where its adapter builds per-edge tables through a std::map while the Lite³ adapter memcpys uint16 edge arrays as opaque byte blobs; deserialize (Lite³ copying out to std::vector against the FlatBuffers verifier) is 8.7x faster and traverse is about equal (79.4 vs 90.5 ms). The '120x' is find_tweet in the author's simdjson fork (448 ns vs 53,937 ns for simdjson On-Demand) on twitter.json already converted to Lite³, run on an x86-64 machine where simdjson picked its AVX-512 'icelake' kernel at ~3.8 GHz; model and conversion cost are not reported.
+
+**Known shortcoming:** The 242x headline is serialize+deserialize against a FlatBuffers adapter that builds through std::map while Lite3 copies pre-flattened arrays; deserialize alone is 8.7x, traverse is about even, and zpp::bits beats Lite3 overall. The 120x figure compares simdjson parsing JSON against Lite3 querying already-converted binary data. No CPU model stated.
+
+**Known shortcoming:** The 120x omits conversion: lite3_json_dec does a full yyjson parse first, so any JSON-ingest path cannot beat yyjson. Open fuzz-found misaligned-access report (#20) and no fuzz harness despite the untrusted-input claim. No releases or spec, API unstable, and a planned hash change will alter the wire format.
+
+**How:** Each object or array is a B-tree laid out inside one contiguous buffer with 32-bit relative offsets. A 96-byte node (1.5 cache lines) holds up to 7 sorted 32-bit DJB2 key hashes, 7 key-value offsets and 8 child offsets, so a lookup walks at most 9 nodes comparing integers, and macros compute the hashes of string-literal keys at compile time. Values carry a 1-byte type tag and store i64/f64 natively in little-endian, so reads return pointers into the buffer, fixed-size overwrites happen in place, and iterators issue __builtin_prefetch for the next nodes and entries. The benchmark wins come from skipping work rather than from SIMD: in the simdjson fork, find_tweet on the converted data runs about 4.9k instructions, against 764k for simdjson On-Demand parsing the JSON.
+
+**Use it when:**
+- C or C++ services that receive a message, read or change a few fields and forward it: gets and sets run on the received buffer, and sending is a memcpy with no re-serialize.
+- JSON-shaped data with no fixed schema, stored or sent in Lite³ form and queried selectively. The author's find_tweet run takes 448 ns against 53,937 ns for simdjson On-Demand on twitter.json (~632 kB), because the query reads only the nodes on its path.
+- Both ends are your own C/C++ code and CPU cost matters more than bytes on the wire, with JSON conversion still available for debugging and for existing JSON APIs.
+- Embedded or no-malloc code on little-endian 64-bit targets: the Buffer API never allocates, the core is 9.3 kB, and `make LITE3_JSON_LIBRARIES=0` leaves out yyjson and base64.
+- Cases where FlatBuffers' IDL, codegen and lock-step schema upgrades are the real pain, and O(log n) field access is acceptable.
+
+**Skip it when:**
+- Bandwidth- or storage-bound links. Every message carries its keys, the design page reports ~40% more bytes than JSON on the Twitter data, and the README says to pick Protocol Buffers if you are bandwidth-constrained. In the author's graph run it is 38.1 MB, against 25.3 MB for Cista++ offset slim and 37.8 MB for zpp::bits (FlatBuffers: 63.0 MB).
+- Data that arrives as JSON on every request. lite3_json_dec does a full yyjson parse and then rebuilds the tree as Lite³, so that path cannot beat yyjson, and the 120x query numbers leave out the conversion.
+- Fixed-schema hot paths that need O(1) field access or the lowest encode+decode time. FlatBuffers, Cap'n Proto and SBE offer O(1) reads, and in the author's own graph run zpp::bits (4.66 ms) and Cista++ offset slim (3.96 ms) beat Lite³ (7.79 ms) on serialize+deserialize.
+- Untrusted input in production today. A fuzz-found misaligned-access/undefined-behavior report (#20, April 2026) is still open, the repo has no fuzz harness, and there is no formal spec. The README calls the API unstable, and the author plans to replace the DJB2 hash, which would change the wire format.
+- Big-endian or 32-bit targets (big-endian is a compile error; 32-bit support is future work), messages over 4 GiB, objects or arrays over 2^26 entries, and non-C languages: the Python bindings are an open PR, and the C++ (1 star) and C# ports are third-party.
+
+**Integration:** static lib · none for the core. JSON conversion uses vendored yyjson and nibble_base64 (in lib/, MIT), on by default and removable with LITE3_JSON_LIBRARIES=0. The Makefile uses GNU nm/objcopy to prefix the vendored symbols with lite3_internal_ and installs a pkg-config file. · C11 with GNU extensions; the README requires GCC or Clang because of builtins. A C23-only label/declaration construct that broke GCC 9.4 and Clang 10 was fixed in PR #18. The headers have extern "C" guards, and the author's benchmark includes them from C++20 built with g++-11. · Little-endian only (big-endian fails with #error); needs int64_t and 8-byte doubles; 32-bit CPUs are listed as future work. The README says it has not been tested on ARM, and the header warns that the default LITE3_PREFETCHING can crash on non-x86 platforms near unmapped pages or on messages with invalid offsets. Published runs were on x86-64.
+
+**Vs siblings:** Pick Lite³ over schema-based siblings such as YaFF, ProtoCache or SBE only when a schema/IDL is unacceptable, when you must mutate a received buffer in place and send it on, or when you need a lossless JSON round trip. With a known schema, those siblings give O(1) or near-O(1) reads and smaller messages, and rkyv covers the same zero-copy niche in Rust.
+
+**Gotchas:**
+- Object keys are ordered by their 32-bit DJB2 hash, so iteration and JSON output do not keep insertion order (the README's own example prints "method" before "event"). The hash is unseeded (fixed start value 5381), and quadratic probing is capped at LITE3_HASH_PROBE_MAX = 128 attempts.
+- String and bytes results are generation-stamped references. Read them only through LITE3_STR()/LITE3_BYTES(), which return NULL after any mutation of the buffer; dereferencing .ptr directly is unsafe. PR #23 (merged Aug 2026) made mutations of nested objects invalidate these references too, and the message start must be 4-byte aligned.
+- A failed set can still write to the buffer and increase buflen. Overwriting a string or bytes value with a larger one appends it and never reclaims the old space. lite3.h has no key-delete call, and the only way to compact is to rewrite the message into a new buffer. The Context API grows by 4x via realloc, and its docs advise against it for latency-sensitive code unless you preallocate.
+- JSON conversion: unsigned integers above INT64_MAX silently become f64, nesting is capped at 32 levels, and bytes become base64 strings. Library error messages are off by default (LITE3_ERROR_MESSAGES), so failures show only as -1 plus errno.
+
+**Status:** Active (last commit 2026-08-06, created Nov 2025, 807 stars) and MIT, with a ~9.3 kB dependency-free C core that is easy to vendor. But there are no tagged releases or formal spec, only third-party ports exist outside C, and the API and wire format are declared unstable.
+
+[repo](https://github.com/fastserial/lite3) · [benchmark](https://github.com/fastserial/lite3#benchmarks)
+
+##### MemoryPack  `C#`  `MIT`  `active`  `Tier C`
+
+C# source-generated binary serializer that copies unmanaged data raw; ~1.7x faster than MessagePack-CSharp on objects, 40x+ on struct arrays.
+
+**Beats:** MessagePack-CSharp (MessagePack) and protobuf-net (Protobuf) — The README chart was run with BenchmarkDotNet on .NET 7 and a Ryzen 9 5950X, serializing into a reused ArrayBufferWriter; build flags are not stated. On the 47-field nested JsonResponseModel, MemoryPack serializes/deserializes in 13,176/24,540 ns against 22,961/39,420 ns for MessagePack-CSharp (~1.7x/1.6x) and 73,028/51,640 ns for protobuf-net (~5.5x/2.1x). On the panel labelled Vector3[10000] it takes 231/316 ns against MessagePack's 9,887/26,335 ns (~43x/83x). The checked-in SerializerTestBase builds 1,000 Vector3 elements, not 10,000, and the current Program.cs job uses 1 warmup and 1 iteration.
+
+**Known shortcoming:** Against MessagePack-CSharp on standard objects the gain is only about 1.74x serialize and 1.61x deserialize, not the README's 'x2~x5'; the 'x10' is against System.Text.Json. The large wins (42-83x) are for unmanaged-struct arrays copied as raw memory. No CPU or build configuration stated.
+
+**Known shortcoming:** The chart's Vector3[10000] label is likely wrong: the checked-in benchmark builds 1,000 elements, and 231 ns for 10,000 would imply about 520 GB/s. The current benchmark job uses one warmup and one iteration. Last library release 1.21.4 (2025-02); since then only CI work. Open: NullReferenceException on parallel Deserialize (#458), Native AOT crashes closed unfixed (#382, #414). Little-endian only.
+
+**How:** The format uses 'zero encoding'. It writes no field names or tags, members go in declaration order, ints are fixed-width little-endian (no varint), and the object header is a single member-count byte. Unmanaged structs and arrays of them are written with Unsafe.WriteUnaligned or one Unsafe.CopyBlockUnaligned (a memcpy) after a 4-byte length, which is why struct arrays are so much faster. Formatters are generated at compile time by the source generator (IMemoryPackable<T> with C# 11 static abstract members on net7.0+), with no reflection or IL.Emit. The writer is a ref struct that holds a `ref byte` into the destination span. The byte[] path reuses a [ThreadStatic] pinned ReusableLinkedArrayBufferWriter and allocates the result with GC.AllocateUninitializedArray. An optional UTF-16 string mode copies chars directly with no transcoding.
+
+**Use it when:**
+- .NET-to-.NET traffic where both ends compile the same C# types: MagicOnion RPC, Redis/cache values, ASP.NET Core bodies through MemoryPack.AspNetCoreMvcFormatter, or local save files.
+- Payloads dominated by blittable structs or large unmanaged arrays (Vector3[], matrices, numeric buffers, game state), where serialization becomes a memcpy.
+- Unity 2022.3.12f1+ projects, including IL2CPP, that need reflection-free serialization. The README reports 3-10x faster than JsonUtility.
+- Allocation-sensitive hot paths that write straight into PipeWriter/IBufferWriter<byte>, or that reuse objects and lists through Deserialize(ref value).
+- C# servers talking to browser clients, using the generated TypeScript serializer instead of JSON.
+
+**Skip it when:**
+- Cross-language or public interchange (other than the generated TypeScript). The format is not self-describing, decoding needs the C# type, and there is no IDL, so use Protobuf or MessagePack there.
+- Size-sensitive payloads full of small integers. Ints are always 4 bytes, against 1-5 bytes with varint in MessagePack or Protobuf, so MemoryPack payloads can be larger. The README suggests LZ4/Zstd/Brotli compression.
+- Schemas that must evolve freely. The default mode allows only appending members: no deletes, reorders or type changes. Full version tolerance needs GenerateType.VersionTolerant, which the README says serializes slower and gives slightly larger payloads.
+- Big-endian targets. The reference implementation assumes little-endian and does not byte-swap.
+- Native AOT deployments. Issues #382 and #414 report 'Failed to create generic virtual method implementation' crashes, and both were closed by the stale bot without a fix in MemoryPack.
+
+**Integration:** shared lib (NuGet: MemoryPack = MemoryPack.Core runtime + MemoryPack.Generator Roslyn source generator; optional MemoryPack.Streaming, MemoryPack.AspNetCoreMvcFormatter, MemoryPack.UnityShims; Unity via NuGetForUnity plus a git-URL package) · none on net7.0/net8.0; the netstandard2.1 target pulls System.Runtime.CompilerServices.Unsafe 6.0.0 and System.Collections.Immutable 6.0.0 · .NET Standard 2.1 (.NET 5/6) minimum, .NET 7+ recommended (targets net7.0, net8.0, netstandard2.1); Roslyn 4.3.1+ (VS 2022 17.3 / .NET SDK 6.0.401); Unity 2022.3.12f1+ · little-endian only (x86-64, arm64); .NET, Unity (IL2CPP included); Native AOT has open-ended crash reports
+
+**Vs siblings:** Nino and HyperSerializer both report beating MemoryPack in their own READMEs (Nino 2.44x/1.90x on SimpleClass; HyperSerializer 2.14x round-trip). Pick MemoryPack for its broader feature set (unions, version-tolerant and circular-reference modes, TypeScript generation, ASP.NET Core formatter, Unity shims) and larger user base. Pick Nerdbank.MessagePack or MessagePack-CSharp when you need MessagePack wire compatibility, and Bebop when you need a cross-language schema.
+
+**Gotchas:**
+- Member declaration order is the wire format. Reordering, deleting or retyping a member in the default mode breaks old data, and nothing on the wire detects it. The README recommends checking the generator's serialization-info output in CI.
+- Unmanaged structs are dumped as raw memory, padding included, and cannot take custom formatters (#440). Types with StructLayout.Auto, such as DateTimeOffset and ValueTuple, are not binary-compatible between .NET 7+ and Unity.
+- The netstandard2.1 and net7.0 builds do not mix. A MemoryPackable type compiled for netstandard2.1 and used from net7.0 throws TypeLoadException, so libraries must multi-target both.
+- Some collection formatters write BCL private fields through Unsafe.As view types (List<T>, Stack<T>, BitArray). Open issue #460 flags this as fragile on future runtimes.
+
+**Status:** MIT with 4,739 stars and a stable NuGet package. The last library release is 1.21.4 (Feb 2025), and every commit since (latest 2026-07-08) is CI/chore work, so treat it as maintenance mode. Bugs such as #458 remain open, and the Native AOT crash reports were closed as stale without a fix.
+
+[repo](https://github.com/Cysharp/MemoryPack) · [benchmark](https://github.com/Cysharp/MemoryPack#readme)
+
+##### Microsoft Bond (Compact Binary v1)  `C++`  `MIT`  `abandoned`  `Tier C`
+
+Discontinued Microsoft schema-based serializer whose Compact Binary wire format is smaller than FlatBuffers and unpacked Cap'n Proto.
+
+**Beats:** FlatBuffers, Cap'n Proto — This is a size-only result from jviotti/binary-json-size-benchmark, an archived suite run by the JSON BinPack author. It re-encoded 27 SchemaStore JSON documents with hand-written schemas, using Bond C++ 9.0.4 Compact Binary v1, flatc 1.12.0, capnp 0.8.0 and Python protobuf 3.15.3. Bond was smaller than FlatBuffers on 27 of 27 documents (JSON Resume: 2,256 vs 3,116 B), than unpacked Cap'n Proto on 26 of 27 and than packed Cap'n Proto on 21 of 27, but larger than Protobuf on 26 of 27 (summed: 7,456 vs 7,146 B). No speed was measured, and no compiler, flags or hardware are given.
+
+**Known shortcoming:** Not smaller than Protobuf: in the binary-json-size-benchmark suite Protobuf is smaller than Bond on 26 of 27 documents; Bond only beats FlatBuffers and Cap'n Proto on size. The suite is small and run by the author of a competing format (JSON BinPack), and its arXiv write-up is not peer-reviewed.
+
+**Known shortcoming:** Size-only win, no speed measured, and Bond decodes into STL structs rather than reading in place. The benchmark used Bond 9.0.4, which predates fixes for a CPU DoS, oversized allocations and deep-nesting stack overflows (11.0.1, 13.0.1); no security fixes since March 2025. Only Compact Binary v1 was measured.
+
+**Independent measurement:** Size totals over the 27 binary-json-size-benchmark documents (derived from page data): Bond 7,456 B vs FlatBuffers 12,452, Cap'n Proto 11,776 (packed 8,145), Protobuf 7,146, Thrift 7,091. Bond beats MessagePack on 25 of 27 documents. The suite's .bond schemas mark every field required, which works against Bond.
+
+**How:** This entry's win is about size, not speed. Compact Binary is a tagged format. Each field has a 1-byte header that packs a 5-bit type with a field id of 5 or less; ids up to 255 take 2 bytes. Unsigned integers are LEB128 varints and signed ones are zigzag-encoded first. Strings and containers carry varint counts, and a struct ends with a single BT_STOP byte instead of an offset table or vtable. FlatBuffers and Cap'n Proto spend bytes on alignment padding, pointers or vtables and fixed-width scalars so they can read without decoding, which is why Bond comes out smaller on small, text-heavy documents. Floats and doubles are still fixed 4/8-byte IEEE 754.
+
+**Use it when:**
+- FlatBuffers or Cap'n Proto payloads are too large for your RPC or storage and you don't need zero-copy reads. Summed over the 27 SchemaStore documents, Bond needed 7,456 B against 12,452 B for FlatBuffers and 11,776 B for unpacked Cap'n Proto.
+- You already have Bond schemas or stored Compact Binary data (common in Microsoft services) that you must keep reading and writing. C++ 13.0.1 is the final release.
+- You need one schema shared by C++, C#, Java and Python, with schema evolution through optional fields and defaults.
+- You want to transcode between protocols (for example Compact Binary to JSON) or pass data through without the struct definition, using bonded<T>/bonded<void>.
+- You store many records that share one schema. Simple Binary (untagged, with the runtime schema stored once) removes per-field tags, but this benchmark did not measure it.
+
+**Skip it when:**
+- Your goal is the smallest encoding. In the same suite Protobuf was smaller than Bond on 26 of 27 documents, Thrift Compact and unframed Avro were never larger, ASN.1 PER was larger only once, and JSON BinPack was smallest everywhere.
+- You need in-place or random access into the buffer, which is the reason to choose FlatBuffers or Cap'n Proto. Bond decodes the whole payload into STL structs, and this benchmark measured no speed at all.
+- You parse untrusted input. Bond gets no security fixes after March 2025. Releases 11.0.1 and 13.0.1 fixed CPU DoS, oversized-allocation and deep-nesting stack-overflow issues, and the benchmarked 9.0.4 predates those fixes.
+- Your data is mostly floating point. Doubles always take 8 bytes: the GeoJSON sample encoded to 298 B in Bond against 190 B as minified JSON.
+- You want a simple build. You need Boost, RapidJSON and the gbc compiler (built with Haskell Stack). The template-heavy code compiles slowly, and Bond's CMake files cannot be pulled in with add_subdirectory.
+
+**Integration:** header-only template core, plus a static lib (libbond, optional libbond_apply) when you use runtime-schema or bond.bond types; also needs a gbc codegen step with an optional per-schema _apply.cpp · Boost headers (1.61+ per the build docs), RapidJSON (git submodule, or an external copy via BOND_FIND_RAPIDJSON), and the gbc compiler. Building from source needs CMake 3.1+ and Haskell Stack 1.5.1+. A vcpkg 'bond' port also exists. · C++11. The changelog lists Clang 3.4+, GCC 4.7+ and MSVC 2013+ as minimums; the build README says features are limited to VS 2015 and that it was tested with Clang 3.8 and GCC 5.4. The final 13.0.1 added Boost 1.83 support. · Linux, macOS and Windows are documented. CPU architecture requirements are not documented. Compact Binary stores floats as little-endian IEEE 754.
+
+**Vs siblings:** Pick Bond only if you are already invested in Bond, or you need its multi-language schema evolution and transcoding and FlatBuffers/Cap'n Proto size is the complaint. For the fewest bytes, JSON BinPack (smallest on all 27 of the same documents) or a Protobuf-wire implementation such as hpp-proto is the better pick, since Protobuf was smaller than Bond on 26 of 27. For low-latency access, Simple Binary Encoding or the zero-copy siblings target speed, which Bond's catalogued result never measured.
+
+**Gotchas:**
+- The default CompactBinaryWriter/Reader version is v1. v2 adds struct length prefixes, which enable constant-time skipping and bonded<T> deserialization, but its two-pass encoding makes serialization up to 30% slower. Reader and writer must be constructed with the same version.
+- Fields marked 'required' are always written; only optional fields left at their default are omitted. The benchmark marked every field required: its one-false-bool document is 3 B in Bond and 0 B in proto3 Protobuf.
+- The protocol-selection macros (BOND_COMPACT_BINARY_PROTOCOL and similar) must be defined identically in every translation unit, or you get ODR violations. The docs strongly advise disabling MSVC link-time code generation.
+- Errors surface as C++ exceptions: bond::CoreException, bond::StreamException, std::bad_alloc when a payload declares huge containers, and std::range_error from JSON string conversion. The deserialization depth limit is set process-wide through bond::SetDeserializeMaxDepth.
+
+**Status:** Microsoft archived Bond when the open-source project ended on 31 March 2025, with no further bug or security fixes; the last C++ release was 13.0.1 (October 2024). It is MIT-licensed and still installable from source or vcpkg, but the Haskell-built gbc and the Boost dependency make vendoring much heavier than dropping in a header.
+
+[repo](https://github.com/microsoft/bond) · [benchmark](https://github.com/jviotti/binary-json-size-benchmark)
+
+##### msgspec  `Python (C extension)`  `BSD-3-Clause`  `active`  `Tier C`
+
+Python C-extension MessagePack/JSON codec with typed Struct decoding; ~2-2.6x faster round-trip than msgpack-python.
+
+**Beats:** msgpack (msgpack-python reference implementation) — The author's bench_encodings.py encodes and decodes a 1000-object File/Directory tree with timeit autorange. It compares msgspec 0.18.5 with msgpack-python 1.0.7 and ormsgpack 1.4.1 on CPython 3.11, on an unnamed '~2020 x86 Linux laptop'; the compiler and flags are not stated. msgpack-python takes 0.403 ms to encode and 0.799 ms to decode. Untyped msgspec takes 0.125 / 0.487 ms (3.2x / 1.6x, ~2.0x round-trip). msgspec with Struct schemas takes 0.112 / 0.348 ms (3.6x / 2.3x, ~2.6x round-trip); in that case the encoder receives Struct instances rather than dicts. Against ormsgpack, the Struct path is ~1.4x faster to encode and ~2.1x faster to decode. The page has not been re-run since 0.18.5, although the bench dependency group now pins msgpack 1.2.2 and ormsgpack 1.12.2.
+
+**Known shortcoming:** The published page is from msgspec 0.18.5 vs msgpack 1.0.7 and was never re-run. The 'structs' case converts data to Structs before timing, so msgspec encodes Structs while msgpack-python encodes dicts. Releases lag main (0.21.1 on PyPI; 0.22.0 changelog includes an Ext reference-leak fix, untagged). No streaming Unpacker/feed() equivalent (#498); map/ext keys raise TypeError instead of DecodeError (#1208).
+
+**How:** The whole codec is hand-written C (about 23k lines in _core.c). It encodes straight into a growable output buffer that grows 1.5x at a time; encode_into can write into a caller-owned bytearray instead. It decodes in a single pass directly into the final Python objects. Typed decoding is driven by a precompiled TypeNode, a 64-bit mask of accepted types plus constraint details. Validation is therefore a bit test during parsing, not a second pass over the decoded data as with cattrs or pydantic v1. When decoding a Struct, each map key is compared with memcmp against the struct's field-name tuple, starting just after the last field matched, so keys that arrive in field order match on the first compare. For dict decoding, short ASCII keys (fixstr, up to 31 bytes) are interned in a 512-slot string cache indexed by a murmur2 hash. Structs have a __slots__-style layout and are GC-tracked only when they reference containers (or never, with gc=False), which cuts collector work during large decodes.
+
+**Use it when:**
+- CPython services exchanging MessagePack whose schemas are known on both ends. Define Structs and reuse one Decoder per type: the author's benchmark shows ~3.6x faster encode and ~2.3x faster decode than msgpack-python.
+- Drop-in-ish speedup for untyped dict/list payloads currently going through msgpack.packb/unpackb: ~3.2x encode and ~1.6x decode with no schema at all.
+- Decoding untrusted MessagePack that you would validate anyway (types, Meta constraints, tagged unions). Validating during the decode replaces a separate pydantic or cattrs pass.
+- Large messages made of many small records: Structs with array_like=True (the docs claim ~2x faster decode and ~1.5x faster encode) and gc=False reduce message size, allocations and GC pauses.
+- Stacks that speak both JSON and MessagePack and want one set of types and hooks for both.
+
+**Skip it when:**
+- Streaming or incremental decoding of concatenated messages from a socket or file. There is no Unpacker/feed() API; issue #498 has been open since 2023, so you must frame the messages yourself.
+- Protocols where one field can hold either str or bin. Unions allow at most one str-like type (str, bytes, datetime, UUID, Enum, ...), so `str | bytes` is rejected (issue #973, open). Unions also allow only one int-like, one array-like and one object-like type, and several Structs in one union need tags.
+- Integers outside [-2**63, 2**64-1] in MessagePack, which the msgpack protocol path refuses to encode or decode.
+- Runtimes other than CPython 3.10+: there are no PyPy classifiers or wheels, and setup.py refuses to build for 32-bit Windows.
+- Cases where you need a cross-language schema IDL or codegen: the schema lives only in Python type annotations.
+
+**Integration:** module · none for MessagePack/JSON; PyYAML for YAML; tomli_w (plus tomli on Python < 3.11) for TOML · CPython 3.10+. The PyPI 0.21.1 wheels cover cp310-cp314 including free-threaded 3.14t; main adds 3.15/3.15t. A source build needs a C compiler; MSVC builds pass /std:c11 /experimental:c11atomics. · The 0.21.1 PyPI wheels cover manylinux and musllinux on x86_64/aarch64, macOS x86_64/arm64 and Windows AMD64/ARM64. riscv64 and Pyodide wasm32 wheels exist only in unreleased CI builds. There is no 32-bit Windows and no PyPy.
+
+**Vs siblings:** It is the only Python entry in this category. The MessagePack-focused siblings (msgp for Go; Nerdbank.MessagePack, Nino and MemoryPack for .NET) and the Rust crates (rkyv, bitcode, postcard) all target other runtimes, so pick msgspec whenever the codec runs in CPython. Its schema-from-types approach is closest in spirit to msgp's Go codegen. If you need a language-neutral schema IDL shared across services, look at an IDL-based sibling such as Bebop or SBE instead.
+
+**Gotchas:**
+- The MessagePack timestamp extension decodes to datetime.datetime, which has microsecond precision and covers years 1-9999. Valid timestamps outside that range, such as year 0 or 9999-12-31T23:59:59.999999999Z (which rounds to year 10000), fail to decode (issue #1181, closed as not planned).
+- Malformed input with a map or ext used as a map key raises a bare TypeError ('unhashable type: dict'), not msgspec.DecodeError (issue #1208, open on 0.21.1 and main). On untrusted input, catch both.
+- The top-level msgspec.msgpack.encode/decode functions allocate per-call state, and decoders are typed. For the benchmarked speed, create one Encoder and one Decoder per target type and reuse them.
+- encode_into grows the caller's bytearray to fit the largest message it has written and never shrinks it again. The docs warn that small messages may get slower with it.
+
+**Status:** Actively maintained by three listed maintainers (latest commit on main 2026-09-24), BSD-3-Clause and installable with pip or conda. However, the newest PyPI release and git tag is 0.21.1 (2026-04-12): the 0.22.0 section on main's changelog, dated 2026-08-11 and including a fix for a msgpack Ext reference leak, has no tag or PyPI release yet.
+
+[repo](https://github.com/msgspec/msgspec) · [benchmark](https://msgspec.dev/benchmarks)
+
+##### msgspec-serde  `Python`  `Apache-2.0`  `active`  `Tier C`
+
+Rust-backed Python FlatBuffers codegen producing msgspec Structs; ~19-22x faster encode, ~11-12x faster decode than official Python FlatBuffers.
+
+**Beats:** FlatBuffers (official Python API) — First-party pyperf run (6 processes x 5 values, one isolated core of an Intel Core i7-8650U, Linux, CPython 3.13.5) on a Monster-style schema at 100, 5,408 and 1,118,720 logical elements, against the flatc 23.5.2-generated Python Object API on flatbuffers 25.12.19 fed NumPy arrays. The chart shows encode 18.7x/21.8x/20.7x and decode-to-model 10.6x/11.8x/11.6x faster, selected-field view reads 1.2-1.3x and full view traversal 1.4-2.8x faster (the prose rounds these to 20-22x, 11-13x, 1.2x and 1.5-2.9x). The speed comes from a release-mode Rust extension with no stated rustc version, and the baseline is pure-Python FlatBuffers, not the C++ library.
+
+**Known shortcoming:** Speed comes from a Rust pyo3 extension with no rustc version stated. The page's chart shows lower figures than its text (encode 18.7-21.8x, decode 10.6-11.8x, full traversal only 1.4-2.8x) against the official Python FlatBuffers Object API, which is slow. Created 2026-08.
+
+**Known shortcoming:** Its JSON/MessagePack codecs are 1.3-2.3x slower than plain msgspec on 16-value vectors (orjson/ormsgpack also ahead) and win only at 256 values. Lazy views are pure Python (struct.unpack_from), so the ~1.2x selected-field gain is Python vs Python. Only v0.1.x on PyPI, no issues, no pinned rustc.
+
+**How:** Each generated module embeds a schema 'plan', serialized as MessagePack, that a pyo3 Rust extension compiles once into a NativePlan. Encoding walks the Struct with the Rust `flatbuffers` 25.12.19 FlatBufferBuilder. It copies NumPy numeric vectors in bulk through the buffer protocol and sizes the output buffer up front from a stratified-sample estimate, so it skips the official Object API's per-field Python calls. Decoding to a model is a Rust walker with checked offset arithmetic that builds msgspec Structs and owning NumPy arrays directly. Lazy views are pure Python (struct.unpack_from with per-field caching, plus zero-copy read-only NumPy arrays for numeric vectors), which is why selected-field reads gain only ~1.2x.
+
+**Use it when:**
+- A Python 3.12+ codebase that already uses msgspec Structs and must exchange FlatBuffers with C++/Rust/Go producers or consumers.
+- The official Python Object API (Pack / InitFromPackedBuf) is your bottleneck for encoding or fully materializing FlatBuffers. The measured gains were ~19-22x on encode and ~11-12x on decode, from 100 to 1.1M logical elements.
+- Payloads dominated by large numeric vectors: views expose them as zero-copy NumPy arrays, and with 256-value vectors its FlatBuffers codec beat its own JSON and MessagePack codecs in both directions.
+- msgspec Structs with NumPy array fields sent over JSON or MessagePack. Its native codecs were ~1.2-4.5x faster than msgspec with enc/dec array hooks in the repo's 1,000-object benchmark.
+- Free-threaded CPython 3.14t: the extension declares gil_used=false, and CI asserts that the GIL stays disabled after import.
+
+**Skip it when:**
+- Reading only a few fields from each buffer: views are pure Python and only ~1.2-1.3x faster than the official API.
+- JSON or MessagePack with small vectors or plain Python lists. With 16-value vectors its codecs took 1.3-2.3x as long as plain msgspec on Python lists (also behind orjson and ormsgpack), and it won only at 256-value vectors.
+- Schemas the generator rejects: unions with string or struct alternatives, duplicate-target union aliases, 64-bit offsets, or identical short names from different namespaces in one-file generation.
+- Python < 3.12, or platforms without prebuilt wheels. Wheels cover Linux and macOS on x86-64/aarch64 and Windows x86-64, with no Windows 3.14t wheel; building from the sdist needs a Rust toolchain.
+- Anything needing API stability: v0.1.x with 1 star, created 2026-08-25, and the docs call generated-code backward compatibility 'a goal rather than a guarantee'.
+
+**Integration:** module · flatbuffers>=24.3.25, msgspec>=0.19, numpy>=2; flatc only for generating modules from .fbs; building from source also needs Rust plus maturin>=1.10 · Python 3.12+ (abi3-py312 wheels plus cp314t free-threaded wheels); Rust edition 2024 for source builds (no rustc version pinned) · Prebuilt wheels: Linux x86-64 and aarch64 (manylinux 2_17), macOS x86-64 (10.12+) and arm64 (11.0+), Windows x86-64; free-threaded 3.14t wheels on every platform except Windows
+
+**Vs siblings:** Pick it over msgspec when you need FlatBuffers schemas and interop or large NumPy vectors inside msgspec Structs; plain msgspec stays faster for list-based JSON/MessagePack with small vectors. Karmem (Go, its own format) and flatcc (C) beat FlatBuffers outside Python; this is the only catalogued entry that speeds up standard-format FlatBuffers from Python.
+
+**Gotchas:**
+- flatbuffer.encode() returns a read-only memoryview, not bytes; call bytes() when another API needs bytes.
+- Views borrow the input buffer, so mutating a backing bytearray or mmap while a view is live is unsupported. View numeric vectors are read-only little-endian arrays; to_model() copies them into writable native-dtype arrays.
+- Lazy views do not run __post_init__ validation. Only decoding into a model or subclass type, or calling to_model(), does.
+- In the JSON/MessagePack codecs, fields with unsupported annotations (dict, bytes, custom types) fall back to msgspec one field at a time. array_like=True, forbid_unknown_fields=True or a non-string tag sends the whole document through msgspec, and enc_hook/dec_hook run only for fallback fields. Generated modules raise GeneratedCodeVersionError when the runtime's major version differs.
+
+**Status:** Active but brand new: created 2026-08-25, v0.1.1 on PyPI 2026-08-30, last main commit 2026-09-10, 1 star, no issues and only Dependabot PRs. It is Apache-2.0 and pip-installable from prebuilt wheels, but expect generated-code churn.
+
+[repo](https://github.com/ebrevdo/msgspec-serde) · [benchmark](https://github.com/ebrevdo/msgspec-serde/blob/main/benchmarks.md)
+
+##### Nerdbank.MessagePack  `C#`  `MIT`  `active`  `Tier C`
+
+NativeAOT-ready .NET MessagePack serializer; ~1.2x faster than MessagePack-CSharp on array-encoded small objects, ~5% slower on maps.
+
+**Beats:** MessagePack-CSharp — The project's checked-in BenchmarkDotNet SimplePoco suite (.NET 10, BenchmarkDotNet 0.15.8, --job medium; CPU not disclosed) serializes and deserializes a two-property POCO (int + string) against MessagePack-CSharp 3.1.7 with Standard options. Array-encoded round trip: 101.37 vs 120.51 ns (~1.19x; serialize 38.75 vs 47.01 ns). Map-encoded round trip: 156.08 vs 148.36 ns (~5% slower). Allocations are equal (80 B round trip, 0 B serialize), and the docs themselves call steady-state throughput 'on par'.
+
+**Known shortcoming:** Marginal, mixed win: array round-trip 1.19x faster than MessagePack-CSharp 3.1.7, but map round-trip about 5% slower; the project page itself calls throughput 'on par'. No CPU model stated.
+
+**Known shortcoming:** Narrow benchmark (one 2-property POCO) and the win is array mode only; map mode loses on serialize and round trip. Async APIs are slower than sync. Not a drop-in for MessagePack-CSharp: different API and attributes, no LZ4 or typeless mode, and DateTimeOffset, Guid, decimal, Int128 and BigInteger encode differently (the docs warn DateTimeOffset exchange corrupts data). Its case rests on NativeAOT support and secure defaults, not speed.
+
+**How:** Converters are built at runtime by a visitor over PolyType type shapes that are source-generated at compile time, so there is no reflection or Reflection.Emit. The docs credit this for faster startup, but no startup numbers are published. Property names are pre-encoded to raw msgpack bytes and copied with WriteRaw; on read, the UTF-8 name span is matched without decoding to a string, using a read-only SpanDictionary that indexes by key length first and falls back to a fastmod hash table. Arrays of float and double use SIMD byte-shuffle converters (AVX-512 VBMI, AVX2, SSSE3/Vector128), and PerfOverSchemaStability switches every object to the smaller, faster array encoding.
+
+**Use it when:**
+- Small POCOs in array encoding ([Key(n)] or PerfOverSchemaStability=true): the project's SimplePoco benchmark has a 101 ns vs 121 ns round trip against MessagePack-CSharp 3.1.7.
+- NativeAOT, trimmed or Unity IL2CPP apps that need MessagePack. The feature table marks MessagePack-CSharp as not NativeAOT-ready or trim-safe.
+- Deserializing untrusted msgpack. Secure defaults are on out of the box: SipHash comparers for hashed collections, a MaxDepth nesting limit, and rejection of duplicate property assignment.
+- Apps that need async or streaming deserialization, reference preservation or cycles, or round-tripping of unknown properties. MessagePack-CSharp has none of these.
+- Existing MessagePack-CSharp codebases that want to move off static resolver state: the analyzers and code fixes do most of the attribute rewrites.
+
+**Skip it when:**
+- Map-encoded objects (property names on the wire) when throughput is the goal. On the same benchmark MessagePack-CSharp wins the round trip (148 vs 156 ns) and serialization (51.7 vs 57.8 ns).
+- You need LZ4 compression or typeless serialization (type names in the payload). Neither is supported; LZ4 is an open feature request (issue #34).
+- Your peers run MessagePack-CSharp and exchange DateTimeOffset, Guid, decimal, Int128/UInt128 or BigInteger. The encodings differ, and the docs say DateTimeOffset exchange corrupts data.
+- You don't need the MessagePack wire format and only want the fastest .NET serializer. MemoryPack and Nino report many-fold wins over MessagePack-CSharp on their own formats.
+- Latency-critical async paths. The docs say async APIs are slightly to dramatically slower than the sync ones, and a user-reported streaming case was 1.38x slower than MessagePack-CSharp before a fix (issue #253).
+
+**Integration:** shared lib (NuGet package Nerdbank.MessagePack: managed assembly plus bundled Roslyn analyzers; companion SignalR, ASP.NET Core MVC and Godot packages) · PolyType (1.4.1 at HEAD, including its source generator), System.IO.Pipelines, Microsoft.VisualStudio.Validation; on netstandard2.0/net472 also Microsoft.Bcl.HashCode, System.Collections.Immutable, System.Text.Json · Library targets net8.0, net9.0, net472 and netstandard2.0. The docs recommend C# 14 (.NET 10 SDK or Visual Studio 2026); generic attributes such as [GenerateShapeFor<T>] need C# 12+. · any .NET runtime; NativeAOT and trimming on .NET 8+; Unity (Mono and IL2CPP) via NuGetForUnity. SIMD primitive-array converters exist only in the .NET (not netstandard) build and use AVX-512 VBMI, AVX2 or Vector128 paths.
+
+**Vs siblings:** Pick it over MemoryPack or Nino when you need the standard MessagePack wire format (cross-language or existing msgpack peers), NativeAOT/Unity support, or secure deserialization of untrusted input. Those siblings are far faster but use their own binary formats. Among C# MessagePack options it is the only catalogued one with async/streaming reads and reference preservation.
+
+**Gotchas:**
+- Guid, decimal, Int128/UInt128 and BigInteger are written as msgpack extension types by default, where MessagePack-CSharp uses bin/string. DateTimeOffset follows the spec, whereas MessagePack-CSharp does not. Check interop before mixing the two libraries.
+- PerfOverSchemaStability=true assigns array indices by declaration order. Adding, removing or reordering members, or toggling the flag itself, breaks previously serialized data unless every member has [Key].
+- The secure defaults cost some speed on trusted data. Collision-resistant hashing has a small deserialization cost; set ComparerProvider to null to turn it off. Map deserialization always runs duplicate-property detection.
+- Types with [GenerateShape] (and any containing types) must be declared partial. Constructing a serializer builds converters, so reuse one instance instead of creating one per call.
+
+**Status:** Actively maintained (v1.3.88 released 2026-09-22, pushes through 2026-09-26), MIT-licensed and on NuGet, but young (created Oct 2024, 175 stars) next to MessagePack-CSharp.
+
+[repo](https://github.com/AArnott/Nerdbank.MessagePack) · [benchmark](https://aarnott.github.io/Nerdbank.MessagePack/docs/performance.html)
+
 ##### ProtoCache  `C++`  `BSD-3-Clause`  `active`  `Tier C`
 
 Zero-copy flat binary format for Protobuf schemas; reads messages in place ~20x faster than Protobuf parse-and-traverse.
@@ -6724,6 +9077,42 @@ Code generator for FIX SBE fixed-layout binary messages; C++ flyweight codecs be
 
 [repo](https://github.com/aeron-io/simple-binary-encoding) · [benchmark](https://github.com/chronoxor/CppSerialization)
 
+##### ZebraPack  `Go`  `MIT`  `abandoned`  `Tier C`
+
+Go code generator for a msgpack2 format with integer field keys; marshals ~1.3-4x faster than Go protobuf libraries
+
+**Beats:** Protocol Buffers (golang/protobuf, gogo/protobuf, DeDiS/protobuf), Cap'n Proto (glycerine/go-capnproto v1, zombiezen capnproto2), FlatBuffers — These numbers come from the author's own fork of alecthomas/go_serialization_benchmarks, run around 2017 (header says Go 1.8beta2) on a 3.1 GHz Core i7 MacBook Pro 13". ZebraPack marshals a 6-field struct in 120 ns/op with 0 allocs, against 152 ns for gogoprotobuf (~1.27x), 379 ns for FlatBuffers, 498 ns for go-capnproto v1 and 500 ns for golang/protobuf (~4.2x); unmarshal is 236 ns against 701 ns for golang/protobuf (~3x). The comparison favours ZebraPack: it reuses a 512-byte buffer and one target struct and uses zero-copy strings, while the protobuf benchmarks allocate on every call. The table's 'GreenPack' unmarshal row actually calls ZebraPack's ZUnmarshalMsg, so its 224 vs 236 ns gap is run-to-run noise on identical code.
+
+**How:** The generated encoders use no reflection and call msgp.Append* directly. They append into the caller's buffer, which is pre-sized once from an upper-bound Msgsize, so marshaling allocates nothing. Each field key is a single byte (0x0-0x5 in the benchmark struct) instead of a string, so encoding writes fewer bytes and decoding switches on an integer instead of comparing strings. Decoding fills an existing struct in place. With `-fast-strings`, strings are unsafe casts that point into the input buffer (UnsafeZeroCopy), which removes the string allocations. The benchmark also used `-no-structnames-onwire`, which drops the struct-name field that ZebraPack otherwise writes under key -1 on every struct.
+
+**Use it when:**
+- Go-to-Go messaging or RPC with small, flat structs where write throughput and zero allocations matter (6-field struct: 120 ns/op marshal, 0 allocs)
+- You want your existing Go structs to be the schema, with no .proto/.capnp IDL and no protoc or C++ toolchain to maintain
+- Consumers in dynamic languages already have msgpack2 decoders and can load a separately shipped schema to turn integer keys back into field names
+- Decode-process-discard pipelines where input buffers are not reused while decoded values are still alive, so `-fast-strings` zero-copy is safe
+- Maintaining a legacy codebase that already emits ZebraPack data
+
+**Skip it when:**
+- New projects: the author's own repo description points to greenpack as the more recent alternative, and ZebraPack has had no commits since 2018-11-07
+- Read-heavy workloads: unmarshal (236 ns) only ties FlatBuffers (236) and gogoprotobuf (240), and is slower than Gencode (196) and go-capnproto v1 (210) in the same table
+- You need protobuf wire compatibility, gRPC tooling, or generated code for languages other than Go; other languages must adapt a msgpack2 library and load the schema themselves
+- Your protocol needs to tell a zero value from an absent field, or needs required fields: zero-valued fields are left off the wire and decode as zero
+- Deeply nested structs: the decoder's nil-tracking stack is fixed at 8 levels (MaxNestedStructPointerDepth) and panics if you go past it
+
+**Integration:** module (Go code-generator binary run via go generate, plus the runtime package github.com/glycerine/zebrapack/msgp that generated code imports) · runtime: github.com/philhofer/fwd; generator: golang.org/x/tools (go/loader, imports). There is no go.mod file (GOPATH-era). · Not documented. The benchmarks ran on Go 1.8beta2, and Travis CI targeted Go 1.x and tip in 2017. Builds on current Go releases were not checked. · Any Go target in principle. CI covered amd64 and 386. The unsafe string casts sit behind a !appengine build tag, and a safe appengine fallback file exists.
+
+**Vs siblings:** Against greenpack (same author, maintained into 2026, 129 ns marshal in the same table), ZebraPack gives a smaller wire and a ~7% write edge. The cost is that data is no longer self-describing (greenpack keeps name+zid+type in field names) and the project is abandoned, so for new Go code pick greenpack. Pick ZebraPack over zero-copy formats such as Karmem or FlatBuffers only when you need msgpack2 wire compatibility and Go structs as the schema.
+
+**Gotchas:**
+- Every field behaves as if it were omitempty: zero values are never written, so a decoder cannot tell 0/""/false from a missing field. The author confirmed this was deliberate in issue #10.
+- `-fast-strings` makes decoded strings point into the input []byte. If you reuse or mutate that buffer, strings you already decoded change silently. Copy them if you need them to outlive the buffer.
+- The published numbers depend on `-fast-strings -no-structnames-onwire`. By default the generator is not zero-copy and writes each struct's name under key -1, which costs time and bytes.
+- Non-pointer struct-valued fields were encoded incorrectly (inner fields dropped) until the final commit on 2018-11-07 (issue #10). Older vendored copies need that fix; the reporter's workaround was to use pointer fields.
+
+**Status:** Abandoned since 2018-11-07 and superseded by the author's greenpack. It is MIT-licensed and the runtime msgp package is small enough to vendor, but it has no go.mod, so treat it as legacy code rather than a new dependency.
+
+[repo](https://github.com/glycerine/zebrapack) · [benchmark](https://github.com/glycerine/go_serialization_benchmarks#results)
+
 #### json
 
 ##### easyjson  `Go`  `MIT`  `active`  `Tier C`
@@ -6763,6 +9152,118 @@ Go codegen tool producing reflection-free struct JSON marshalers; README (2016) 
 **Status:** Maintained but slow-moving: v0.9.2 (2026-03-14, added omitzero) followed v0.9.1 (2025-09), with ~100 open issues/PRs including 2022-era generics support; MIT, pure Go, and easy to vendor.
 
 [repo](https://github.com/mailru/easyjson) · [benchmark](https://github.com/mailru/easyjson/blob/master/README.md#benchmarks)
+
+##### fastgron  `C++`  `MIT`  `active`  `Tier C`
+
+C++20 simdjson-based CLI that flattens JSON into greppable gron assignments and back; ~50-80x faster than gron.
+
+**Beats:** gron — Single shell `time` runs on an M1 MacBook Pro (hardware named only in the headline; compiler not stated, CMakeLists forces -O3 -g) on the public ~190MB citylots.json: fastgron 0.447s vs Go gron --no-sort 36.705s (~82x) and fastgron --sort 1.464s vs default gron 1:25.80 (~59x), with gron using 117-189% CPU. Ungron of the 840MB gron file took 6.122s in the timing block (the README prose says 8s) while gron -u was killed after 1:07.75, and a single-path lookup took 0.176s vs jq 3.252s and jj 0.972s.
+
+**Known shortcoming:** No benchmark script, compiler or flags; single-machine README timings (M1 MacBook Pro) against gron, which is a slow Go baseline.
+
+**Known shortcoming:** Feature-frozen since v0.7.7 (2023-12); later commits are formatting/CI only. The gron -u baseline never finished, so ungron has no completed comparison. Loads the whole file (about 1.5x input RAM, #22); ungron of a ~9 GB file peaked at 19-39 GB (#19). Not a drop-in for gron: unsorted by default, -v means invert-match, --json/--values/-m/-k missing, bad input aborts with an uncaught simdjson error (#15). Vendored simdjson 3.1.8; no library API.
+
+**How:** Parsing uses simdjson's On-Demand API (vendored simdjson 3.1.8 with runtime CPU-kernel dispatch): SIMD stage-1 structural indexing, no DOM, and scalars are copied to the output as their raw JSON token text (`raw_json_token()`) with no number or string decode/re-encode. Each line is assembled with memcpy into a reusable path buffer (`growing_string`, which never shrinks) and a 1MB batched output buffer flushed with raw `write(2)`, avoiding per-line allocation and iostreams. The default output is unsorted document order; `--sort` buffers each object's children and `std::sort`s them by key, costing ~3x (1.464s vs 0.447s on citylots). Path queries (`-p`) iterate with On-Demand and print only the matching branches.
+
+**Use it when:**
+- Grepping or exploring JSON files from hundreds of MB to a few GB that fit in RAM, where gron takes tens of seconds to minutes (README: 190MB citylots.json in 0.45s vs 36.7s for gron --no-sort).
+- Shell pipelines like `fastgron big.json | rg pattern | fastgron -u` to cut a subset of a large document back out as JSON; the README ungrons an 840MB gron file in ~6s where gron -u was killed.
+- One-off path lookups in a big file from the shell with gron-style path output instead of jq syntax (0.176s vs jq 3.252s and jj 0.972s on citylots).
+- Replacing gron in interactive use or scripts that already pass `--no-sort` or do not depend on key order, on Linux, macOS (x86_64 and Apple Silicon) or Windows.
+
+**Skip it when:**
+- Inputs that do not fit comfortably in RAM: the whole file is loaded into a SIMD-padded buffer (no mmap; the author says simdjson's padding requirement blocks it), and a user measured ~1.5x the input size resident (issue #22); stdin input is read into a std::string and then copied again into a padded_string.
+- Ungronning very large gron files: ungron builds a full std::map/std::vector/std::variant tree, and a user measured 19GB peak on macOS and 39GB on Linux ungronning a ~9GB gron file (issue #19, v0.7.6 era).
+- Scripts that depend on gron's exact CLI or output: default output is unsorted (gron sorts by default), `-v` means invert-match rather than gron's `--values`, and gron's `--json`, `--values`, `-m` and `-k` are missing; gron's documented exit codes are not replicated.
+- Untrusted or possibly malformed input: parse errors surface as an uncaught `simdjson::simdjson_error` that aborts the process (issue #15 shows `terminate called after throwing ... SCALAR_DOCUMENT_AS_VALUE` on non-JSON input; main() has no try/catch), and GRON.md lists top-level scalar documents as unsupported (future work).
+- When you need an embeddable library or an actively developed tool: there is no library API (listed only as a future idea), and the last functional release is v0.7.7 (Dec 2023).
+
+**Integration:** source-drop (standalone CLI executable built with CMake; prebuilt Linux/macOS/Windows binaries on the v0.7.7 release, Homebrew `--build-from-source`, AUR `fastgron-git`, Nix flake); no library API · simdjson 3.1.8 (vendored amalgamation in extern/simdjson); optional libcurl for http/https input (the Windows release binary is built without it) · C++20 compiler and CMake 3.14+ (README says CMake 3.8+, but CMakeLists.txt sets cmake_minimum_required 3.14 and forces Release with -O3 -g plus $CXX_ARCH_FLAGS); release CI uses the default compiler on ubuntu-latest, MinGW on Windows and Homebrew LLVM 15 clang on macOS · Linux, macOS (universal x86_64 + arm64 build), Windows (MinGW); simdjson selects the SIMD kernel at runtime (`--simdjson-version` prints the detected one). The Windows fastgron.exe release is compiled with -march=icelake-client, with a separate -without-simd binary; the Ubuntu release binary needs glibc 2.34+ (issue #12, open).
+
+**Vs siblings:** Pick fastgron over simdjson when you want a ready-made shell tool rather than a library to embed (fastgron is simdjson plus a gron printer and has no API of its own), and over jist when you need the whole document flattened for grep or an ungron round trip rather than extracting one path from a multi-GB file. For in-process C++ JSON work, use simdjson or yyjson directly.
+
+**Gotchas:**
+- `-s` stream mode calls simdjson `iterate_many` with the default 1,000,000-byte batch size, and simdjson 3.1.8 documents that the batch must be larger than the largest document, so NDJSON records over ~1MB should fail (from source reading, not tested).
+- `--ungron -s` is meant to emit one JSON document per line, but print_json.cpp always separates object members with ",\n" even when newlines are turned off, so multi-key objects will span several lines (from source reading, not tested).
+- Keys and values are written as raw JSON source text, so escape sequences and number spellings (e.g. big integers, 1.0e10) pass through unchanged, and `--sort` orders by raw escaped key bytes. Color is on automatically when stdout is a TTY and switches to match highlighting when `-F` is used.
+- Ungron always emits object keys in sorted order (std::map), fills missing array indices with null, and had round-trip bugs fixed as late as v0.7.5-0.7.6 (issues #17, #19: dropped integer keys, doubled quotes, lost keys when one key was a prefix of another); parse_gron.cpp still carries a `TODO: implement escaping` comment.
+
+**Status:** MIT-licensed, 678 stars and not archived, but the last functional release is v0.7.7 (2023-12-06) and the 2024-2026 commits (latest 2026-07-04) are formatting, Nix-flake and CI changes, so treat it as feature-frozen yet usable via prebuilt binaries, Homebrew, AUR or Nix.
+
+[repo](https://github.com/adamritter/fastgron) · [benchmark](https://github.com/adamritter/fastgron#readme)
+
+##### fastjson (valyala)  `Go`  `MIT`  `active`  `Tier C`
+
+Pure-Go schemaless JSON parser/validator with a reusable zero-allocation value tree; ~4-15x faster than encoding/json (2019 numbers).
+
+**Beats:** encoding/json — The maintainer's README benchmark (2019, Go 1.12, linux/amd64, CPU not stated, GOMAXPROCS=1) has fastjson parsing canada/citm/twitter at 538-919 MB/s. encoding/json runs at 33-62 MB/s into map[string]interface{} (~15-16x slower) and 110-127 MB/s into an empty struct (~4-8x slower), and Validate beats json.Valid by 2.5-4.3x. The `fastjson` row only parses and checks the root type, so its strings and numbers are never decoded, while stdjson-map builds every value; the numbers have not been re-run on a newer Go.
+
+**How:** It is a hand-written, single-pass recursive-descent parser with no reflection and no interface{} boxing. Nodes come from a per-Parser slab ([]Value) that is reset and reused on every Parse, so steady-state parsing of small and medium documents shows 0 allocs/op; encoding/json into a map shows 51 to 392,539. The input is copied once into the Parser's buffer. After that, strings and numbers stay as raw substrings via unsafe string/[]byte casts: strings are unescaped lazily, in place, on first access, and numbers are converted only when a Get* accessor asks, through the bundled fastfloat fast path (which falls back to strconv). Objects are ordered key/value slices searched linearly, not hash maps.
+
+**Use it when:**
+- Hot-path services (RTB bidders, JSON-RPC, log/metrics ingestion) that read a handful of fields from schemaless or heterogeneous messages and today decode into map[string]interface{}. This is where the README shows the biggest gap (~15x).
+- High message rates of small-to-medium documents (the README fixtures run 190 B-28 KB) where GC pressure matters. With one Parser per goroutine or a ParserPool, steady-state parsing allocates nothing.
+- Reading many unrelated fields from one document. It parses once and then does path lookups, where gjson/jsonparser rescan the input for each field (README claim).
+- Fast strict validation of untrusted input with Validate/ValidateBytes (2.5-4.3x faster than json.Valid in the README), as long as you cap nesting depth yourself.
+- Targets where simdjson-go (needs AVX2+CLMUL) or Sonic (AMD64/ARM64 only) can't run. fastjson is plain Go with no assembly or JIT.
+
+**Skip it when:**
+- You decode into typed structs or marshal Go values. There is no reflection or codegen path, so use encoding/json, a drop-in replacement (go-json, Sonic, segmentio/encoding) or easyjson.
+- You need Parse alone to reject invalid JSON. Parser.Parse is lenient and accepts `1.0.1`, `[127.0.0.1]`, raw newlines inside strings, unknown escapes like `\c`, and NaN/Inf (issues #88, #119). Only Validate is strict, and running both costs a second pass.
+- Large or streamed documents. Input must be fully in memory (no io.Reader) and is copied into the Parser. The README bounds memory at sizeof(Value) times the input length; that is 80 bytes on 64-bit, computed from the struct layout. Users report OOMs, and 26 GB+ RSS on a 1.4 GB file, for inputs of 25 MB-1.4 GB (#101, #109).
+- You emit JSON for strict consumers or for signing. MarshalTo and Arena strings escape special characters with Go's strconv quoting, which can produce `\x14` or `\U000e0067` (invalid JSON) and does not byte-match encoding/json (#86, #90, #38). The fix PRs (#87, #127) are unmerged.
+- Objects with thousands of keys that you query repeatedly. Object.Get is a linear scan per lookup, so walk it once with Visit into your own map.
+
+**Integration:** module · none (stdlib only; ships its own fastfloat subpackage) · Go 1.24 per go.mod since v1.6.8 (Feb 2026); v1.6.4 and earlier declare Go 1.12, the version the README benchmarks used · Any Go target: pure Go with unsafe string/slice casts and no assembly. The legacy Travis config cross-builds linux, darwin, freebsd and windows, and 32-bit test fixes landed in 2021 (#60).
+
+**Vs siblings:** Pick it over simdjson-go (needs AVX2+CLMUL, no fallback) or Sonic's lazy ast.Node (JIT on AMD64/ARM64, falls back to encoding/json elsewhere) when you want lazy, schemaless field access from a small pure-Go dependency on any target. If you decode into structs, use go-json, jsoniter, segmentio/encoding or easyjson; fastjson can't.
+
+**Gotchas:**
+- Lifetime: every *Value, *Object and []byte you get back (GetStringBytes, Visit keys) points into the Parser's buffer and node slab. It becomes invalid on the next Parse or Scanner.Next, or after ParserPool.Put, and Arena values die on Arena.Reset. Copy out anything you keep; the README FAQ blames most crashes on this.
+- Reads mutate: Type(), Get*, StringBytes and Object.Get/Visit unescape strings and keys lazily in place. Sharing a parsed Value across goroutines is therefore a data race even if nobody writes.
+- Silent defaults and float rounding: Get* returns 0/nil/false for missing keys, wrong types or unparsable numbers (GetInt on `1.5` gives 0). fastfloat is not correctly rounded: `8.54E-4` becomes 0.0008539999999999999 and `2.0250405e+07` becomes 20250404.999999996 (#91, #110). Use Int()/Float64() when you need errors, or run strconv.ParseFloat on the raw number text from MarshalTo when you need exact values.
+- Depth and String(): Parse caps nesting at a hard-coded MaxDepth=300 (#65 asks for a knob). Validate has no cap and is reported to hang on 100,000 nested `[` (#64; fix PR #128 is open). Value.String() returns the JSON-encoded form with quotes, not the string's content.
+
+**Status:** MIT-licensed, zero-dependency and small enough to vendor. Issue #105 calls it feature-complete and maintained by the VictoriaMetrics team, and VictoriaMetrics pins v1.6.10. After no commits from Dec 2022 to Dec 2025, v1.6.8-v1.6.10 (Feb 2026) bumped go.mod to 1.24 and cleared GC-retained references, but the open PRs fixing known parse, escape and precision bugs are still unmerged as of Sep 2026.
+
+[repo](https://github.com/valyala/fastjson) · [benchmark](https://github.com/valyala/fastjson/blob/master/README.md)
+
+##### ffjson  `Go`  `Apache-2.0`  `abandoned`  `Tier C`
+
+Go code generator that emits static per-struct MarshalJSON/UnmarshalJSON methods to replace encoding/json's reflection-based codec.
+
+**Beats:** encoding/json — The README claims 2-3x over encoding/json for both marshal and unmarshal but gives no Go version, CPU or results table. First-party `make bench` code exists (tests/goser, tests/go.stripe). The 2014 launch post reports marshal-only gains of 1.91x (goser) and 2.11x (go.stripe) with no Go version or hardware. The independent go1.6 (Feb 2016, CPU not stated) table in the easyjson README gives single-goroutine ratios derived from page data: unmarshal 3.0x (regular) and 1.8x (small), marshal 1.1-1.7x, rising to about 2x with ffjson.Pool.
+
+**Known shortcoming:** The independent go1.6 table in the easyjson README shows only 1.1-1.7x single-goroutine marshal, and ffjson is slower than encoding/json for concurrent marshal without Pool (62 vs 124 MB/s) with far more allocations (153 vs 9 allocs/op). Passing a struct value instead of a pointer silently falls back to encoding/json. SetEscapeHTML only affects the fallback. Open bugs #202, #257, #260; no go.mod, CI covered only Go 1.10-1.12; easyjson unmarshals 2-3x faster.
+
+**How:** Codegen runs in two stages. It parses the file with go/ast, writes a temporary 'inception' main that imports the package, and runs it with `go run -a`. That program reflects over the real types and renders straight-line Go code, so reflection happens at generate time, not per call. The marshal code writes pre-quoted, pre-escaped field names as constants and merges adjacent constant writes. It formats numbers with fflib's own FormatBits2/AppendFloat and writes into power-of-two sync.Pool buffers (64 B to 512 KB). The unmarshal code drives a hand-written lexer derived from yajl, which uses 256-entry byte lookup tables for whitespace and string scanning. The generated state machine matches keys with a switch on the first byte plus bytes.Equal, falls back to case-insensitive fold functions, jumps to per-field handlers with goto, and skips unknown keys.
+
+**Use it when:**
+- An existing GOPATH-era Go codebase (Go 1.10-1.12, the versions CI covered) that already commits *_ffjson.go files and regenerates them through go:generate.
+- Unmarshal-heavy services decoding medium-sized documents into structs of concrete fields (strings, numbers, nested structs that also have ffjson code). The go1.6 table in the easyjson README shows about 3x over encoding/json on a 9 kB tweet payload.
+- Single-goroutine marshaling of kilobyte-plus payloads when you can call ffjson.Marshal and return buffers with ffjson.Pool. The same table shows about 1.6-2x over encoding/json there.
+- You need a transparent speedup behind the standard json.Marshaler/json.Unmarshaler interfaces, and you can accept a codegen step but no runtime dependency outside the Go standard library.
+
+**Skip it when:**
+- New projects. The last commit was in 2019, there are no tags or releases, and the repo root has no go.mod. The easyjson README says easyjson, which uses the same marshal codegen approach, unmarshals 2-3x faster than ffjson.
+- Structs with interface fields, custom marshalers, maps with complex values, inline struct types, or slices of slices/maps. These fall back to encoding/json (inline structs, slices of slices and slices of maps only in the decoder), and the README warns that interface fallbacks may be slower than json.Marshal.
+- Small payloads marshaled concurrently. In the easyjson go1.6 table, ffjson without Pool reached 62 MB/s on 80-byte payloads against 124 MB/s for encoding/json (about 0.5x). With Pool on ~500 kB payloads it reached 131 against 289 MB/s.
+- Allocation-sensitive code paths. The same table records 153 allocs/op for ffjson against 9 for encoding/json when marshaling the regular payload. Issue #256 (2019) measured 1044 vs 1052 ns/op and 7 vs 4 allocs/op against encoding/json.
+- Modern Go toolchains without re-benchmarking first. Every published number is from 2014-2016 or the 2019 issue #256, before later encoding/json work. Open issue #260 reports that `make test` fails on Go 1.16.
+
+**Integration:** module · none (Go standard library only; generated files import github.com/pquerna/ffjson/fflib/v1 at runtime) · Go 1.3+ for sync.Pool buffer pooling (a build-tagged stub covers older versions). CI tested Go 1.10.x/1.11.x and fuzzed on 1.12.x. No root go.mod; module import-path detection via `go list` was added in Aug 2019. · any Go target (pure Go, no unsafe, no assembly)
+
+**Vs siblings:** Every catalogued sibling (Cista++, struct_pack, YAS, bitsery, FBE, ser20, SerialXML, simdjson's experimental_json_builder) is a C++ library. Pick ffjson only when the codebase is Go and must keep encoding/json-compatible JSON. Even then, easyjson (not catalogued) claims faster unmarshal and better concurrency with the same codegen model.
+
+**Gotchas:**
+- The generated methods have pointer receivers (`func (j *T) MarshalJSON`), and ffjson.Marshal type-asserts its argument. Passing a struct value instead of &v silently falls back to encoding/json. Issue #256's 'ffjson is slower' benchmark called ffjson.Marshal(d) on a value.
+- Encoder.SetEscapeHTML only configures the wrapped encoding/json encoder. The fast path's WriteJson always escapes <, >, & and U+2028/U+2029.
+- Output is not always byte-identical to encoding/json. Open issue #202 reports `{ "a":...}` with a leading space when the last field is omitempty and empty. Open issue #257 reports a nil-pointer panic when unmarshaling *time.Time slice elements.
+- Codegen needs the package to compile. It creates an ffjson-inception* temp directory next to the input file, and struct types referenced across files must be generated in dependency order (README Tip 5). After ffjson.Pool(buf), do not touch buf, because other goroutines may reuse it.
+
+**Status:** Abandoned since the last master commit on 2019-09-30 (59 open issues, no tagged release), but Apache-2.0, pure Go with no dependencies and easy to vendor; last CI-tested toolchains were Go 1.10-1.12.
+
+[repo](https://github.com/pquerna/ffjson) · [benchmark](https://paul.querna.org/articles/2014/03/31/ffjson-faster-json-in-go/)
 
 ##### glaze  `C++`  `MIT`  `active`  `Tier C`
 
@@ -6876,6 +9377,81 @@ Rust JSON parser from Pydantic: borrowed-string DOM, pull iterator and Python pa
 
 [repo](https://github.com/pydantic/jiter) · [benchmark](https://github.com/mihailnica10/tegridy-benchie/blob/main/RESULTS.md)
 
+##### jsoncons  `C++`  `BSL-1.0`  `active`  `Tier C`
+
+Header-only C++ JSON/CBOR/MessagePack/BSON library whose DOM reads ~2x and writes ~2-4x faster than nlohmann/json in the author's benchmark.
+
+**Beats:** nlohmann/json — In the author's own json_benchmarks (single run; MSVC 17.14.16 /O2 /Ot /std:c++23preview; Lenovo ThinkPad X Extreme, CPU model not stated), parsing a 540.82 MB text+integer file from std::ifstream into jsoncons::json took 3.918 s vs 8.177 s for nlohmann::json (2.1x), and writing took 0.744 s vs 2.885 s (3.9x). On the 794.72 MB text+double file it was 8.879 s / 3.879 s vs 15.997 s / 7.165 s (1.8x both ways), and the same pages show yyjson, RapidJSON and Boost.JSON beating jsoncons on both read and write.
+
+**How:** The parser is a scalar, resumable, byte-at-a-time state machine that feeds a SAX-style visitor and reads streams in 16 KB chunks (no SIMD). The DOM decoder pushes members onto one flat stack and builds each object at end_object with a single std::sort on (key, index) into a sorted std::vector of key/value pairs, rather than allocating a std::map node per member; lookups are then std::lower_bound binary search. Values are 16 bytes: strings up to 13 chars are stored inline and longer strings take one header-plus-data allocation, which is why its DOM was among the smallest in the shootout (343 MB vs nlohmann 409 MB on the integer file). Doubles are printed with Grisu3, falling back to snprintf %.15g and then %.17g if the result does not round-trip, and parsed with std::from_chars where the config enables it.
+
+**Use it when:**
+- You use nlohmann/json and want a mutable DOM that reads 1.8-2.1x and writes 1.8-3.9x faster (author's large-file test) without switching to an immutable-document library.
+- Mixed-format pipelines: the same basic_json value and reflection traits read and write JSON, CBOR (including typed arrays and stringref), MessagePack, BSON, UBJSON and CSV.
+- Multi-GB JSON or unbounded streams: json_stream_cursor pull-parses in 16 KB chunks, and pipe filters let you skip events, so you never build the whole tree.
+- You need JSONPath, JMESPath or JSON Schema validation in the same dependency. Compiled expressions and json_schema objects are documented as immutable and thread-safe, so they can be shared across threads.
+- Memory-bound DOM work: the parsed 540 MB integer file took 343 MB, against nlohmann 409, Boost.JSON 502 and yyjson 871 MB in the same run. RapidJSON used a little less (332 MB).
+
+**Skip it when:**
+- Raw parse/serialize throughput is the goal. In the author's own shootout, yyjson reads the integer file 3.9x faster (1.007 s vs 3.918 s), and RapidJSON, Boost.JSON and glaze also read faster.
+- Building big objects by random-order insertion: json stores objects as a sorted vector, so each insert shifts elements. A user benchmark in issue #346 (still open) measured 1000 insert+erase at 11.75 ms vs nlohmann's 0.47 ms. ojson avoids sorting, but its find() is a linear scan.
+- Float-heavy input built with toolchains outside the std::from_chars auto-detection (GCC 11+ or MSVC 19.24+, C++17), where double parsing falls back to strtod. Separately, the 2016 nativejson-benchmark (clang 7) had an old jsoncons parsing canada.json slower than nlohmann (77.3 vs 55.6 ms).
+- You need a stable API. Recent minor releases renamed public types (1.9.0: string_source, order_preserving_policy, json_conv_traits; 1.8.0: json_pointer_arg), and 1.8.0 changed the basic_json copy constructor from shallow to deep copies of json_ref pointers, so pin a version.
+
+**Integration:** header-only · none (vcpkg port available; the optional extensions are in include/jsoncons_ext) · C++11. The std::from_chars number path needs C++17 with GCC 11+ or MSVC 19.24+, and the pmr:: aliases need std::pmr::polymorphic_allocator. README CI matrix: VS2019/2022, GCC 6-12, clang 3.9-15, Xcode 11-14. · any. Portable scalar code; the only intrinsics are optional F16C (half floats) and MSVC BMI2 mulx. CI runs on Windows x86/x64, Ubuntu x64 and macOS.
+
+**Vs siblings:** Pick jsoncons over yyjson, simdjson or Boost.JSON when you want one header-only dependency that covers a mutable DOM, struct mapping, pull streaming, the binary formats (CBOR/MessagePack/BSON) and JSONPath/JMESPath/Schema, with a DOM under half the size of yyjson's in the author's test. If you only need fast JSON parse/serialize, yyjson (3.9x faster read here), simdjson (read-only parsing) or Boost.JSON (1.7x faster read here) are the better picks.
+
+**Gotchas:**
+- Duplicate keys: the parsed json keeps the first occurrence. {"first":1,"second":2,"first":3} yields first == 1 (test parse_duplicate_names).
+- Lenient by default: allow_comments defaults to true, so /* */ and // comments are silently accepted. Set allow_comments(false) in json_options for strict parsing. max_nesting_depth defaults to 1024.
+- lossless_bignum defaults to true, so integers beyond 64 bits come back as strings tagged semantic_tag::bigint, and out-of-range floats as bigdec, not as doubles.
+- Errors are reported by exceptions (only some APIs return std::error_code). With -fno-exceptions or JSONCONS_NO_EXCEPTIONS, every throw becomes std::terminate.
+
+**Status:** Actively maintained (v1.9.0 released 2026-08-07, commits through 2026-09-22, OSS-Fuzz integrated, no NVD CVEs found for 'jsoncons'), and header-only under the Boost Software License 1.0, so you can vendor it by copying include/jsoncons (plus include/jsoncons_ext for the extensions).
+
+[repo](https://github.com/danielaparker/jsoncons) · [benchmark](https://github.com/danielaparker/json_benchmarks/blob/master/report/big.text.integer.md)
+
+##### JsonFusion  `C++`  `MIT`  `active`  `Tier C`
+
+Header-only C++23 reflection-based JSON parser that parses, validates and fills your structs in one pass, beating RapidJSON plus hand-written mapping.
+
+**Beats:** RapidJSON — These are the author's own README numbers. On an Apple M1 Max (macOS 26.1, GCC 14, 1M iterations), parse+validate+populate into structs ran 15-65% faster than RapidJSON DOM plus hand-written mapping in six small-message scenarios, and tied a hand-written RapidJSON SAX handler on static embedded config. On twitter.json (arm64 Ubuntu 24.04, GCC 14.3, CPU not named) it took 1020 vs 1620 us/iter (~1.6x) against RapidJSON ParseInsitu plus manual populate. On canada.json it loses (~15% slower parse+populate) unless floats are skipped. The README gives no compiler flags; the repo's scripts/run_benchmarks.sh builds in CMake Release mode, and each result is a single timed loop with no repeated runs.
+
+**Known shortcoming:** Loses on canada.json: about 15% slower than RapidJSON for parse-and-populate and about 80% slower than hand-written RapidJSON SAX for typed streaming. The '~60% faster' result skips float parsing, so it is not equal work. No optimization flags or build type stated; canada.json hardware not stated.
+
+**Known shortcoming:** Default float backend does not round-trip doubles exactly and is 2-5x slower than fast_float (#3), which causes the canada.json losses. Single timed loop per result, no warm-up. Unknown keys fail the parse by default while missing keys are silently accepted; tokens over 63 characters and skipped values nested beyond 64 levels fail. GCC 14+ or Clang 20+ only; one contributor, 15 stars.
+
+**How:** It wins by doing less work, not by scanning faster. One pass reads tokens straight into the destination fields: no DOM is allocated, no second traversal copies values out, and the validators are compile-time template options that turn into inline branches. Compile-time reflection (Boost.PFR) generates a parser for each struct type. An object key is read into a stack buffer sized to the longest known key and matched by linear comparison against a constexpr field table, and a std::bitset catches duplicate keys. Fields marked `skip` are syntax-checked without converting their numbers, which is the whole source of the canada.json win. The reader is plain scalar code over generic iterators with no SIMD, and the docs say the default in-house float parser is 2-5x slower than fast_float, which explains the losses on float-heavy data.
+
+**Use it when:**
+- Known-schema config, RPC, telemetry, log or event messages parsed straight into structs, where you would otherwise write RapidJSON DOM plus mapping code. The README reports 15-65% faster on six such small-message scenarios.
+- Microcontroller firmware (Cortex-M0+/M7, ESP32) built with -Os -fno-exceptions -fno-rtti and no heap. With std::array or char[N] fields the library allocates nothing, and the README reports 21.8 KB .text on Cortex-M7 for two models parsed and serialized.
+- Input that arrives in pieces (UART, socket, file iterator): forward-only iterators work, so you don't have to buffer the whole document first.
+- You need range, length and enum validation plus JSON-path error locations (e.g. $.statuses[3].user.name) in the same pass, or the same model over both JSON and CBOR.
+- Counting or filtering large documents where most values can be marked `skip` or consumed by a streaming consumer instead of stored.
+
+**Skip it when:**
+- Peak throughput on JSON already in memory with a fixed schema: the author's own table puts Glaze about 3x ahead on twitter.json (360 vs 1020 us/iter).
+- Float-heavy data or data that needs exact float values: canada.json parse-and-populate is ~15% slower than RapidJSON, and the default float backend is only accurate to within 1 ULP and does not round-trip doubles exactly (issue #3 is open).
+- You need a DOM, ad-hoc queries or schema-less editing. The README says in capitals that this is not a DOM library.
+- Toolchains other than GCC 14+ or Clang 20+ (MSVC is not supported), pre-C++23 codebases, or non-aggregate classes with custom constructors or virtual functions, unless you use GCC 16's C++26 reflection mode.
+- Teams that need a mature, widely used dependency: one contributor, 15 stars, and published benchmarks that no one else has reproduced. On 8-bit AVR its code is also larger than cJSON or jsmn.
+
+**Integration:** header-only · none required (Boost.PFR is bundled under include/). Optional: the yyjson library for YyjsonReader, rapidyaml for YAML, and the bundled fast_float/simdjson float headers for JSONFUSION_FP_BACKEND=1. · C++23 with GCC 14+ or Clang 20+ (MSVC not supported); the optional C++26 reflection mode needs GCC 16+ with -std=c++26 -freflection · any. There is no SIMD or architecture-specific code, and the README reports builds on x64, arm64 (Apple M1, Linux), ARM Cortex-M0+/M7, ESP32 (Xtensa LX6) and AVR ATmega2560 (the last needs avr-gcc 15 plus avr-libstdcpp).
+
+**Vs siblings:** Pick it over Glaze when you need forward-only or byte-by-byte input, no allocations inside the library, small -Os builds (the README reports 21.8 KB vs Glaze's 30.4 KB .text on Cortex-M7) or JSON-path errors; pick Glaze for raw speed, since it is ~3x faster on twitter.json. Against reflect-cpp it is slightly faster on twitter.json (1020 vs 1130 us/iter) and skips reflect-cpp's intermediate yyjson DOM. If you want a DOM or the fastest raw parse, simdjson or yyjson fit better.
+
+**Gotchas:**
+- Unknown JSON keys are a parse error (EXCESS_FIELD) unless the struct carries `allow_excess_fields`, and duplicate keys are always an error. Absent keys, by contrast, are not an error unless you add required<> or not_required<>, so a missing field is silently left untouched.
+- Integer fields reject numbers written with a decimal point or exponent (1.0, 1e3). Number tokens longer than 63 characters fail unless you raise JSONFUSION_NUMBER_BUF_SIZE. Skipping an unmodeled value nested more than 64 levels deep fails with SKIPPING_STACK_OVERFLOW (the MaxSkipNesting template parameter).
+- Doubles do not round-trip exactly with the default backend. To fix that, define JSONFUSION_FP_BACKEND=1 (fast_float, which loses constexpr) or parse through YyjsonReader (which adds a DOM allocation and a yyjson dependency).
+- Recursive model types fail a static_assert unless JSONFUSION_ALLOW_DYNAMIC_ERROR_STACK is defined. Streaming through true single-pass iterators such as std::istreambuf_iterator was broken by a peek-ahead bug reported in issue #4; the owner says it is fixed, but the issue is still open.
+
+**Status:** Actively maintained by a single author (v1.1.1 tagged 2026-08-06, 343 commits by one contributor, 15 stars). It is MIT-licensed, header-only and packaged for vcpkg, Conan and PlatformIO, so it is easy to vendor, but the API is young.
+
+[repo](https://github.com/tucher/JsonFusion) · [benchmark](https://github.com/tucher/JsonFusion/blob/master/README.md)
+
 ##### jsoniter (json-iterator/go)  `Go`  `MIT`  `abandoned`  `Tier C`
 
 Pure-Go encoding/json replacement with cached per-type codecs; ~1.8x faster typed-struct Unmarshal than encoding/json. Archived.
@@ -6911,6 +9487,617 @@ Pure-Go encoding/json replacement with cached per-type codecs; ~1.8x faster type
 **Status:** Archived by its owner and read-only (last code commit 2022-09-15, last release v1.1.12 in 2021). It is MIT-licensed and still builds and runs on current Go according to the benchmark, so it is fine to keep where it is already deployed, but go-json or Sonic are better choices for new adoption.
 
 [repo](https://github.com/json-iterator/go) · [benchmark](https://github.com/mihailnica10/tegridy-benchie/blob/main/RESULTS.md)
+
+##### libJSON (IgnacioPomar)  `C++`  `Unlicense`  `active`  `Tier C`
+
+Learning-project C++17 JSON DOM (shared_ptr nodes) that parses and walks 1.25-1.42x faster than nlohmann/json in its author's benchmark.
+
+**Beats:** nlohmann/json — The author's harness took the minimum of 30 sequential rounds in a CMake Release build with nlohmann/json 3.12.0 from Conan; compiler, flags and CPU are not stated. Parsing a random-walk OHLC document and walking the full DOM to sum open/high/low/close took libJSON 21.1 vs 26.4 us (10 candles), 2,632.2 vs 3,737.0 us (1,440) and 19,772.3 vs 27,254.9 us (10,080) against nlohmann/json. Caveat: each library parses its own writer's output. libJSON reads six-decimal doubles (about 10 characters each), while nlohmann/json reads its Grisu2 shortest-round-trip dump (about 17-18 characters for these values, roughly a third more bytes by my estimate), so part of the gap may come from input size rather than parser speed.
+
+**Known shortcoming:** Read-side only: about 1.25-1.42x faster than nlohmann/json at reading, but slower at writing; the author says they would pick glaze. No compiler, flags or CPU stated. 0 stars. Unlicense gives no patent grant.
+
+**Known shortcoming:** The read benchmark feeds each library its own writer's output: libJSON's six-decimal doubles are about 1.3-1.4x shorter than nlohmann's round-trip doubles, close to the claimed 1.25-1.42x win. Parser turns \n, \t etc. into plain letters, rejects 1e5, throws std::out_of_range on 64-bit integers; the serializer does not escape strings and writes doubles with %f (1e-7 becomes 0.000000). O(n^2) object building; no CI or conformance tests.
+
+**How:** Nothing exotic here. The parser is a hand-written, single-pass recursive-descent parser over a NUL-terminated char*. Objects are a flat std::vector<std::pair<std::string, shared_ptr>> searched by linear scan, and arrays are a std::vector<shared_ptr>. The author credits the read win to the 2026-09-22 switch to these vectors from the earlier unordered_map and list containers, while nlohmann/json stores objects in std::map by default. Serialization appends every node into one caller-owned buffer (appendTo). Each value is still its own make_shared heap node reached through virtual dispatch, which is why this was the slowest writer tested.
+
+**Use it when:**
+- Reading small, trusted, machine-generated JSON: configs, or a few thousand records of plain ASCII strings, 32-bit ints and doubles, where you want error codes instead of exceptions and no dependencies
+- Projects that need public-domain (Unlicense) code, can vendor six .cpp files, and would otherwise use nlohmann/json only to parse and walk a DOM
+- Code ported from Java's org.json that should keep the same put/get shape in C++17
+- Learning or teaching how a shared_ptr/virtual-dispatch DOM compares with arena- and variant-based DOMs; the repo includes a harness comparing five libraries
+
+**Skip it when:**
+- Anything where speed matters beyond beating nlohmann/json. In the author's own tables, RapidJSON, simdjson (DOM) and glaze json_t read 2-7x faster. libJSON is also the slowest writer, e.g. 32,568.2 vs 21,225.0 us against nlohmann/json on 10,080 candles
+- Untrusted or arbitrary input. There is no conformance test suite and no nesting-depth limit in the recursive parser, bytes after the root value are not checked, and an integer outside 32-bit int makes std::stoi throw std::out_of_range even though the API reports errors by code
+- Anywhere you need a faithful round-trip. Doubles are written with std::to_string at six fixed decimals, so 1e-7 is written as 0.000000. Strings and keys are written without escaping, so a value that contains a quote or backslash produces invalid JSON
+- Editing documents in place. There is no public way to overwrite or remove a field, and put() silently keeps the old value; the author's own usability annex points this out
+- Objects with many keys. Each insert checks for a duplicate by linear scan and get() is linear, so building a large object costs O(n^2) and each lookup costs O(n)
+
+**Integration:** static lib (a shared build is optional via Conan -o shared=True / BUILD_SHARED_LIBS) · none for the library; GoogleTest (via Conan) only for tests. The documented build uses CMake >= 3.21 and Conan 2.x, but the six .cpp files can be vendored directly · C++17 (the Conan recipe enforces cppstd 17); CMake 3.21+. No compiler versions are documented. Commit history targets Visual Studio 2017-2022, and the dev container uses GCC 12 on Debian 12 · any platform with a C++17 standard library (portable scalar code, no SIMD); only Windows/MSVC and Linux/GCC are evidenced in the repo
+
+**Vs siblings:** Choose it over Boost.JSON, jsoncons or cJSON, which also beat nlohmann/json in their catalogued benchmarks (Boost.JSON by ~3.3-3.5x on citm_catalog parse), only if you specifically want Unlicense code with a Java org.json-style API and error codes, and your inputs are small and trusted. For speed, conformance or editing, glaze, simdjson or yyjson are better picks; the author says he would use glaze himself.
+
+**Gotchas:**
+- Escape decoding is wrong: \n, \t, \r, \b and \f are stored as the plain letters n, t, r, b and f (JSONParser.cpp getStr). \uXXXX is decoded one code unit at a time, so UTF-16 surrogate pairs such as emoji are not combined, and the conversion uses std::wstring_convert, which has been deprecated since C++17
+- A number with an exponent but no fraction (1e5, 2E-3) is rejected with BAD_FORMAT_UNEXPECTED_VALUE, because the exponent is only parsed after a '.'
+- Copying a JSONObject or JSONArray shares its storage, which the author documents as a feature. Mutating a copy changes the original, and put(obj) stores a live handle rather than a snapshot
+- You must pick the root type before parsing (JSONObject or JSONArray), so a scalar or unknown-type root is unsupported. Parsing into a non-empty object appends to it, get() on a missing key allocates a fresh null node, and JSONArray::get(idx) has no bounds check
+
+**Status:** All recent activity is a one-day burst on 2026-09-22 (CMake/Conan build, GoogleTest, benchmarks, vector containers) after no commits since April 2024. It is Unlicense and only six .cpp files, so it is easy to vendor, but it is a self-described learning project with 0 stars, no CI and no external issues or PRs.
+
+[repo](https://github.com/IgnacioPomar/libJSON) · [benchmark](https://github.com/IgnacioPomar/libJSON/blob/main/README.md#how-does-it-compare)
+
+##### libjson (xnacly)  `Go`  `MIT`  `active`  `Tier C`
+
+Minimal pure-Go JSON parser with dot-path queries; parses about 2x faster than encoding/json into any by mutating input.
+
+**Beats:** encoding/json — On an AMD Ryzen 7 3700X (linux/amd64, Go version not stated), go test benchmarks parse a 50,000-element array of one of three self-written records. libjson.New was 1.94x, 2.29x and 2.43x faster than json.Unmarshal into any for the naive, escape-heavy and nested cases, with 2.1-3.1x fewer allocations, and the input copy libjson needs was excluded from timing. A hyperfine CLI run on generated 1MB-100MB files compared libjson's mmap FromFile with encoding/json's Decoder and measured 1.69x-1.81x faster wall-clock. Neither benchmark converts libjson's tree into Go values.
+
+**Known shortcoming:** Go toolchain version not stated (go.mod only sets a minimum), so not tier A. Author's own benchmark against encoding/json; 5 stars.
+
+**Known shortcoming:** Not like-for-like: libjson's timed step builds an internal tree while json.Unmarshal produces Go values (conversion never timed), its input copy is excluded, and the CLI benchmark mmaps for libjson only. The README advertises Compile and Set, which do not exist in v1.0.0. The custom float parser is not correctly rounded and loops once per exponent unit (1e999999999 costs about a billion iterations). Lax validation, no depth limit, Get panics on out-of-range indices; tagged-uintptr pointers likely abort under -race (inferred).
+
+**How:** A hand-written recursive-descent parser pulls tokens on demand from a lexer that returns start/end byte offsets rather than copies, and finds number characters with a 256-entry lookup table. Strings are zero-copy: escapes are decoded in place inside the input buffer (unescapeInPlace) and the bytes are aliased as a Go string through unsafe. Object keys are aliased the same way but never unescaped. Each value is a float64 plus a tagged pointer (a 3-bit kind in the low address bits) into chunked arenas of 256 nodes. Numbers use a custom non-allocating float parser instead of strconv.ParseFloat, and there is no reflection.
+
+**Use it when:**
+- Pulling a few fields by path out of large, trusted JSON documents (the README tests 1-100MB files) when you own the byte slice and can let the parser consume it.
+- Loading JSON files on Linux/macOS through FromFile, which maps the file MAP_PRIVATE/copy-on-write. This skips the io.ReadAll copy: 134MB/op vs 217MB/op for NewReader in the README, though it was about 17% slower in that microbenchmark.
+- Internal pipelines or generated data where input is known to be well-formed, so the lax validation below does not matter.
+- You want a small stdlib-only parser (about 1,040 lines of non-test Go) that you can vendor and read end to end, with no JIT or assembly.
+
+**Skip it when:**
+- You decode into structs or rely on struct tags, custom Unmarshalers or streaming. libjson has none of these. Use go-json, Sonic, easyjson or segmentio/encoding instead.
+- Untrusted input. The parser is recursive with no depth limit: PR #4's goal to replace recursion with an explicit stack was left unchecked. pow10 loops once per unit of exponent, so a number like 1e999999999 costs about a billion iterations. It accepts invalid JSON such as `-` (read as 0), `1-2` (read as 1), leading zeros and raw control characters inside strings. The README's RFC 8259 claim defers JSONTestSuite runs to 'the future'.
+- Numeric fidelity matters. The custom float parser multiplies a uint64 mantissa by a pow10 built from repeated *10 or /10, so results are not correctly rounded. Mantissas longer than about 19 digits overflow silently, and out-of-range exponents give ±Inf instead of an error. There is no UseNumber or int64 path. A Feb 2026 commit switched to strconv.ParseFloat as 'as fast but more correct', but the June 2026 redesign (v1.0.0) went back to the custom parser.
+- You need the whole document as plain Go values. Get[any](&doc, ".") runs a second full-tree conversion into map[string]any/[]any. Neither published benchmark times that step, so the ~2x margin over json.Unmarshal into any shrinks.
+- Maturity-sensitive production use. It has one author, 5 stars, a single v1.0.0 tag, and pkg.go.dev lists no known importers.
+
+**Integration:** module · none at runtime (stdlib only; stretchr/testify is used by tests) · Go 1.26.4 (go directive in go.mod) · Pure Go. FromFile uses syscall.Mmap under the `unix` build tag and falls back to io.ReadAll elsewhere. 64-bit targets only in practice: value.go keeps a 3-bit tag in node addresses, and on 32-bit targets some arena nodes are only 4-byte aligned (inferred from source, untested).
+
+**Vs siblings:** Rarely. valyala/fastjson has the same whole-document-plus-path-getter shape and is catalogued up to ~14.8x faster than encoding/json map decoding. gjson (3.2-4.4x) and buger/jsonparser (6.5x, zero alloc) skip full materialization, and go-json and Sonic are drop-ins for struct decoding. Pick libjson only if you want the smallest, most readable stdlib-only parser to vendor or study, and your input is trusted.
+
+**Gotchas:**
+- New consumes the input ('DO NOT REUSE'). Returned strings alias the buffer, or the mmap when you use FromFile, so strings you keep after doc.Close() point at unmapped memory. The Go benchmark copies the input before each New outside the timed region; a caller who needs the original bytes pays that copy.
+- JSONVal stores node pointers as uintptr and converts them back with unsafe.Pointer(v.Ptr &^ tagMask). The Go compiler's checkptr instrumentation, on by default under -race, -msan and -asan, throws 'pointer arithmetic result points to invalid allocation' for such a conversion into a heap object. Expect code that reads libjson strings, arrays or objects to abort under `go test -race` (inferred from Go compiler/runtime source, not run).
+- Get has sharp edges. An out-of-range array index panics because there is no bounds check. Keys that contain '.' cannot be addressed. A missing key or an index into an empty array returns null with no error. The path is re-parsed on every call. Every call rebuilds the requested subtree as fresh map[string]any/[]any. The libjson.Compile and libjson.Set APIs in the README do not exist in v1.0.0.
+- Object keys are not unescaped: {"a\u00e9":1} is stored under the literal key `a\u00e9`. Escaped surrogate pairs (e.g. \ud83d\ude00) are deliberately not merged, and each half goes through utf8.EncodeRune, which writes U+FFFD for surrogates. Duplicate keys silently keep the last value.
+
+**Status:** Active single-author project (last commit 2026-06-06, tagged v1.0.0, no open issues). MIT, stdlib-only and about 1k lines, so it is easy to vendor, but the README is ahead of the code (Compile/Set, JSONTestSuite) and a 7.6MB libjson.test binary is committed to the repo root.
+
+[repo](https://github.com/xnacly/libjson) · [benchmark](https://github.com/xnacly/libjson/blob/master/README.md)
+
+##### metajson (iod::metajson)  `C++`  `MIT`  `abandoned`  `Tier C`
+
+Header-only C++17 JSON codec for structs with compile-time-known shape; README claims up to 9x nlohmann/json, 2x RapidJSON.
+
+**Beats:** nlohmann/json, RapidJSON — The README claims up to 9x faster than nlohmann/json and 2x faster than RapidJSON, but publishes no results table, compiler or CPU. The public Google Benchmark sources (-O3 -march=native) time decoding a 3-field object and 60-element int/float arrays into C++ values, while the RapidJSON and nlohmann versions build a DOM and copy out of it; the author wrote in issue #1 that 'being fair was not the goal' and in issue #6 that nativejson-benchmark could not be implemented with metajson.
+
+**Known shortcoming:** The README says its numbers are not from a comprehensive benchmark; benchmark code exists but no results, hardware or compiler are published. Abandoned since 2019-11; the code lives on in matt-42/lithium.
+
+**Known shortcoming:** Unsafe on untrusted input: no buffer-end checks, a 50+ character key overflows a fixed buffer, string_view decoding loops forever on a backslash, keys match by prefix. Wrong numbers: -0.5 decodes as 0.5, integer parts overflow past ~2.1e9, exponents of 18+ give 0 or inf, 1e+5 rejected, floats written at 6 digits. No true/false/null, no std::map; non-inline header functions break multi-file builds; <experimental/tuple> is gone from current libc++. The author conceded 'being fair was not the goal' (#1). Use lithium's li::json (fixes these) or glaze/reflect-cpp.
+
+**How:** The schema is a compile-time template expression (one type per symbol, plus metamaps), so the decoder writes each value straight into the target member and the encoder walks the fields without building a tree; key lookup is a linear strncmp over the schema's members. Input is read through a pointer-bumping decode_stringstream over a string_view, and numbers use hand-rolled digit-accumulation parsers (integer part, fractional part divided by a power of ten, power-of-ten exponent) instead of strtod. Part of the gap to the baselines is work it skips: no buffer-end checks, no correctly rounded float parsing, and no skipping of unknown keys.
+
+**Use it when:**
+- Studying the compile-time-schema, no-DOM decoding idea in about 1,200 lines before adopting its maintained continuation, li::json in matt-42/lithium.
+- Decoding small, trusted, fixed-shape messages that your own code produces (a few int/string fields, flat int or float arrays) where every key is known in advance.
+- Older GCC 7/8 C++17 codebases that already use iod symbols and metamaps and want struct binding without a DOM.
+- Binaries that must stay small for a handful of message types: the README claims up to 8x smaller code than nlohmann/json, measured on one float-array decoder (issue #1).
+
+**Skip it when:**
+- Untrusted input. At HEAD, decode_stringstream never checks the buffer end, so truncated input or an unterminated string reads past the buffer. Keys of 50 or more characters write one byte past a 50-byte stack buffer, and decoding into std::string_view loops forever on any backslash. lithium fixed these in 2026; metajson never got the fixes.
+- Numbers you need exactly. Values between -1 and 0 decode as positive (-0.5 becomes 0.5), and li::json still has the same sign logic. The integer part of a float is parsed into an int and overflows past about 2.1e9. Exponents or fractional-digit counts of 18 or more hit a zero power of ten (1.5e-20 gives inf, 1e20 gives 0). '1e+5' is rejected. Floats are encoded with the default 6-digit ostream precision.
+- JSON from other producers or evolving schemas. Any key not in the schema fails the whole decode ('Unknown json key'). There is no true/false/null support (bool is written and read as 1/0). std::variant uses a custom {"idx":N,"value":...} wrapper, and std::map is not supported (issue #9, still open).
+- Dynamic or schema-less documents such as config files or arbitrary API payloads: there is no DOM or generic value type at all.
+- Current libc++ toolchains (Apple Clang, recent LLVM): the headers include <experimental/tuple>, which libc++ no longer ships, and nobody has maintained the code since 2019.
+
+**Integration:** header-only · The single header libraries/metajson/metajson.hh (last regenerated 2018-07) needs only the standard library. The modular headers at HEAD need the iod/symbol and iod/metamap headers from iodcpp/iod. The benchmarks need Google Benchmark, RapidJSON and nlohmann/json. · C++17 (-std=c++1z). The README lists GCC 7.1.1 and Clang 5.0.1. The code needs <experimental/tuple> (std::experimental::apply), which libstdc++ still ships and current libc++ does not. MSVC is not documented. · any (README: no architecture-specific code). Input must be a contiguous buffer (std::string, string_view or const char*); std::istream input is not supported.
+
+**Vs siblings:** glaze and reflect-cpp handle the same typed struct-binding workload, publish multi-document benchmarks (the catalog lists about 3.7x round-trip and about 2x over RapidJSON respectively), support full JSON literals and are maintained, so prefer them for real use. Pick metajson only to read a compact compile-time-schema decoder; if you like its API, use its continuation li::json (lithium_json.hh) instead.
+
+**Gotchas:**
+- Encoding copies: json_object_base::encode(O obj) and impl::json_encode(C&, O obj, ...) take the object by value, so every encode copies the struct, including each element of a vector of structs. Every std::string is also copied into a std::stringstream before escaping.
+- make_json_error, json_no_error and detect_encoding are non-inline functions defined in the header, so including metajson in more than one .cc file of the same binary gives duplicate-symbol link errors.
+- Every failed decode leaks memory: the parser allocates its error std::stringstream with new and never frees it (li::json later switched to unique_ptr).
+- Packaging drift: the README's install URL (raw.githubusercontent.com/iodcpp/metajson/master/metajson.hh) returns 404 since the 2019 'Prepare the merge' commit moved everything under libraries/metajson/. That single header is older than the 2019 modular headers, and the repo also carries committed a.out binaries and a 52 MB nlohmann_json.hpp.gch.
+
+**Status:** Abandoned since 2019-11-26 and MIT-licensed; the code moved into matt-42/lithium as li::json, which is still maintained (last push 2026-07-31) and received 2026 bounds-checking and security fixes that metajson never got, so metajson is small enough to vendor but only after you fix the parser bugs above.
+
+[repo](https://github.com/iodcpp/metajson) · [benchmark](https://github.com/iodcpp/metajson/blob/master/libraries/metajson/README.md)
+
+##### metal-json  `Rust`  `MIT`  `active`  `Tier C`
+
+Rust crate that parses JSON to a simdjson-format tape on Apple Silicon GPUs (Metal); beats C++ simdjson above ~4-5 MiB.
+
+**Beats:** simdjson — The author's bench report (2026-06-12) times parse-to-tape plus an identical stats walk for metal-json against vendored C++ simdjson v4.6.4 on one Apple M5 Max (128 GiB, macOS 26.5.1). simdjson ran its single-document DOM parser, built with -O3 -mcpu=native through the Rust cc crate (compiler version not stated), and both parsers were checked for bit-identical stats before timing. metal-json won 1.34x at 8 MiB rising to 2.71x at 512 MiB (7.51 vs 2.77 GB/s) on twitter-template expansions, and 1.42x on canada (2.1 MiB). It lost below about 4.3 MiB (0.12x at 0.6 MiB, 0.44x on citm_catalog), and non-twitter shapes were measured only at their small canonical sizes.
+
+**Known shortcoming:** Apple Silicon GPU (Metal) only; the win is on twitter-shaped data (canada is 1.42x). The simdjson baseline was built by the Rust cc crate's default compiler (unnamed) at -O3 -mcpu=native. First commit 2026-06; 18 stars.
+
+**Known shortcoming:** One CPU core against the whole GPU: simdjson ran a single-document DOM parse, and multi-core CPU parsing was never compared. GPU kernels are never tested in CI (hosted CI disables the GPU), only on the author's M5 Max. Effectively dormant: human commits only 2026-06-11 to 06-15, since then dependency bots. Built in about two days with AI co-authoring. Parser is not thread-safe to share.
+
+**How:** Stage 1 ports simdjson's bitmap tricks to Metal: backslash-run escape detection and a prefix-XOR in-string mask. Each GPU thread handles one 64-byte word using `uint2` bitmaps, because 64-bit operations are emulated on Apple's 32-bit ALUs, and state crosses chunk boundaries through reduce->spine->apply scans rather than decoupled look-back. Brackets are matched without a stack: a stable LSD counting sort of the structural characters by nesting depth puts each open/close pair next to each other, which also yields separator context and child counts. Apple GPUs have no fp64, so numbers use an integer-only Eisel-Lemire port; rare hard roundings and strings over 16 KiB are sent to CPU fixup lists. Unified memory shares both the input (`MTLBuffer bytesNoCopy`) and the output tape with the CPU without copies, and a buffer pool makes steady-state parses free of large allocations.
+
+**Use it when:**
+- Single JSON documents of roughly 8 MiB and up (dumps, exports, big API payloads) parsed on an Apple Silicon Mac. The author measured 1.34x over C++ simdjson at 8 MiB, rising to 2.06-2.71x at 100-512 MiB on twitter-shaped data.
+- Number-dense documents such as coordinate/GeoJSON arrays: canada.json (2.1 MiB) already parsed 1.42x faster than simdjson, below the twitter crossover.
+- Throughput-bound batch jobs that keep one `Parser` alive, so the Metal device, pipeline states and pooled buffers stay warm across parses.
+- Rust code that needs a fully materialized tape of a huge file (random access, O(1) subtree skips) rather than streaming extraction. In the same report it was about 3.5x faster than Rust simd-json at 512 MiB (7.51 vs 2.16 GB/s) and 1.35x faster at 4 MiB.
+
+**Skip it when:**
+- Small documents or per-request latency paths. Every parse pays about 0.5-0.9 ms of fixed dispatch/sync overhead: simdjson was about 8x faster on twitter.json (0.6 MiB), about 3x faster at 1 MiB, and 2.3x faster on citm_catalog (1.6 MiB).
+- Anything other than macOS on Apple Silicon: there is no Linux, Windows, x86 or discrete-GPU path. The only non-GPU backend is the slow `cpu-reference` oracle (0.23-0.36 GB/s). Inputs are also capped at 4 GiB - 65 bytes because tape and token indices are u32.
+- Typed deserialization of mid-size payloads. On a ~4 MiB corpus, serde_json straight into structs was about 2.5x faster end-to-end than metal-json's serde path (~972 vs ~384 MiB/s, both borrowed), because the GPU always builds the whole tape before any type-driven work.
+- Workloads where CPU cores can run in parallel (many documents, NDJSON). The baseline was a single simdjson DOM parse on one core (per the vendored simdjson.h, its threading applies only to parse_many lookahead). Multi-core CPU parsing was not compared.
+- Production dependencies that need a maintainer. The code was written over about two days in June 2026 and v0.1.0 has 83 crates.io downloads. Human commits stopped on 2026-06-15; only Renovate bumps have landed since. Hosted CI does not run the GPU kernels because GitHub's paravirtual Metal compiler crashes, so GPU tests run only on the author's hardware.
+
+**Integration:** crate · objc2, objc2-foundation, objc2-metal, block2, dispatch2, memmap2, thiserror; optional serde. The default build also needs the Xcode Metal toolchain (`xcrun metal`) unless the `runtime-shaders` feature is enabled. · Rust 1.95 (edition 2024; the repo pins 1.96.0). The default ahead-of-time shader build needs the Xcode Metal toolchain; `--features runtime-shaders` compiles MSL at runtime instead. Minimum macOS version is not documented. · macOS on Apple Silicon only (Metal GPU with unified memory); benchmarked only on an M5 Max
+
+**Vs siblings:** Pick it over simdjson only for single documents above roughly 5-8 MiB on an Apple Silicon Mac, when you want a full simdjson-style tape from Rust; below that, simdjson is faster and portable. Rust simd-json likewise beat it at 0.6-1.6 MiB (except number-heavy canada) but trailed about 3.5x at 512 MiB. For huge single records on multi-core CPUs, Pison (reported 3.1-5.4x over simdjson with 4-8 threads) and the query-oriented JSONSki are the portable alternatives, but neither was benchmarked against metal-json.
+
+**Gotchas:**
+- `Value::get` and `Value::at` scan the container's direct children linearly (nested containers are skipped in O(1)), so indexing a big array in a loop is quadratic; iterate with `elements()`/`entries()` instead. `len()` is O(1) except for containers with 16,777,215 or more children, where the saturated count forces a walk.
+- Duplicate keys stay on the tape and resolve three different ways: `Value::get` returns the first, serde into a map keeps the last, and serde into a struct fails with a 'duplicate field' error. Integers beyond u64 are stored as f64 (simdjson parity), so i128/u128 targets reject them, unlike serde_json.
+- The buffer pool grows to the high-water mark and never shrinks: after one huge parse, that memory stays held until the `Parser` and all its `Document`s are dropped. `parse` and `parse_file` copy the input once. Only `parse_aligned` (caller-held `AlignedInput`) and the `unsafe parse_file_mmap` are zero-copy, and the mmap path can SIGBUS if the file is truncated mid-parse.
+- The tape mirrors simdjson's layout except for string-buffer offsets, which are allocated by raw (escaped) length and leave zero-filled gaps, so code that walks simdjson's dense string buffer will not work unchanged. For distributed binaries, prefer `--features runtime-shaders`: the default build panics in build.rs when `xcrun metal` is missing. GPU wall times jitter up to 4x from power-state ramping, so benchmark with warm-up and medians.
+
+**Status:** Published as crate 0.1.0 (MIT; the README's 'MIT OR Apache-2.0' contradicts LICENSE and Cargo.toml); since 2026-06-15 only Renovate dependency bumps have landed (latest 2026-09-21) and a v0.1.1 release PR sits unmerged, so treat it as a finished, heavily tested experiment rather than an actively developed library.
+
+[repo](https://github.com/Brooooooklyn/metal-json) · [benchmark](https://github.com/Brooooooklyn/metal-json/blob/main/docs/parsing-json-on-an-apple-gpu.md)
+
+##### NetJSON  `C#`  `MIT`  `active`  `Tier C`
+
+C# JSON serializer that emits per-type IL at runtime; ~3.4x faster serialization than Json.NET in a 2014 benchmark.
+
+**Beats:** Json.NET (Newtonsoft.Json) — The README's ratios are serialization times from a 2014 theburningmonk SimpleSpeedTester run on one small object: NetJson 112.24 ms vs 380.59 ms for Json.NET 6.0.4 (~3.4x). Deserialization was 175.00 vs 437.53 ms (~2.5x), protobuf-net beat NetJSON on both, and no CPU, .NET runtime or build settings were given. The README's '1.6x faster than protobuf-net' comes from a separate undocumented log in which deserialization was a tie (252.18 vs 251.50 ms).
+
+**Known shortcoming:** The README ratios come from a 2014 blog run and are serialization-only (3.4x vs Json.NET); deserialization is about 2.5x. In that same table protobuf-net is faster than NetJSON, contradicting the README's '1.6x faster than protobuf-net'. No CPU or build configuration stated.
+
+**Known shortcoming:** Against System.Text.Json on .NET 5 (#238): about 2.3x faster on a 2-property object, but Utf8Json was faster still, and a contributor measured NetJSON 4.3-5.8x slower on object-typed data (Dictionary<string,object>, boxed int). Decimals are parsed through a double parser, losing precision. No type validation by design (#217) and past infinite loops on malformed JSON; not for untrusted input. No UTF-8/Span/Stream/async API; Reflection.Emit makes Native AOT unlikely.
+
+**Independent measurement:** NetJSON issue #238 (BenchmarkDotNet, .NET 5, i7-8650U): 2-property object serialize 219.8 ns vs System.Text.Json 503.0 ns and Utf8Json 150.8 ns.
+
+**How:** The first time it sees a type, it generates a specialized serializer/deserializer class with System.Reflection.Emit (a TypeBuilder in one shared dynamic assembly plus DynamicMethod stubs) and caches it in a static generic field, so later calls do no reflection. The generated code appends into a StringBuilder cached per thread, formats integers with a 4-digit lookup table into stackalloc buffers (IntUtility), and deserializes by walking the string with unsafe char* pointers and hand-written number parsers. Property names are matched by a generated chain of string.Equals checks. It deliberately skips type validation: the author declined type-mismatch checks for performance (issue #217).
+
+**Use it when:**
+- Hot paths that serialize small, statically typed POCOs through the generic Serialize<T>. In the author's .NET 5 BenchmarkDotNet run (issue #238, i7-8650U), a 2-property object took 219.8 ns vs 503.0 ns for System.Text.Json.
+- Legacy .NET Framework 3.5/4.0 code bases that need a faster JSON mapper than Json.NET. The 1.4.7 package still ships net35 and net40 builds.
+- Services that exchange JSON as .NET strings (UTF-16) rather than UTF-8 byte buffers.
+- Long-running processes with a fixed set of types, where the one-time IL-generation cost per type is paid back over many calls.
+- Trusted, well-formed payloads produced by your own systems.
+
+**Skip it when:**
+- Object-typed data such as Dictionary<string, object> with mixed values, or boxed values. A contributor's .NET 5 run in issue #238 measured NetJSON at 6.387 us vs 1.494 us for System.Text.Json on such a dictionary, and a boxed int at 937 ns vs 161 ns.
+- UTF-8 or stream pipelines such as ASP.NET Core request and response bodies. There is no byte[], Span, Stream or async API, and the TextReader overloads call ReadToEnd, so the whole payload is buffered (issue #232). Utf8Json beat NetJSON in the same #238 run (150.8 vs 219.8 ns).
+- Untrusted input. The parser skips type validation by design, and infinite loops on malformed JSON have been reported and fixed several times (#197, #217, #226).
+- High-precision decimal fields such as money: decimal values are parsed through a hand-written double parser (new Decimal(FastStringToDouble(...))), so digits beyond double precision are lost.
+- Native AOT, trimmed or other no-JIT targets: serializers are emitted with Reflection.Emit at runtime and there is no source generator.
+
+**Integration:** shared lib (NuGet package `NetJSON`, managed DLL). The library is five .cs files that need AllowUnsafeBlocks if you vendor them. · none on the net35 to net9.0 targets; the netstandard1.6/2.0 targets pull in the System.Reflection.Emit* packages, plus Microsoft.Extensions.DependencyModel on 1.6 · .NET Framework 3.5, .NET Standard 1.6 or .NET 5. The 1.4.7 package ships net35, net40, net462, net472, netstandard1.6, netstandard2.0 and net5.0 through net9.0 builds. · Any OS or architecture running a JIT-capable CLR with Reflection.Emit; the code uses unsafe pointers. Native AOT support is not documented, and it is unlikely to work because serializers are generated at runtime.
+
+**Vs siblings:** No .NET siblings are catalogued in this category: the listed JSON entries (simdjson, yyjson, Sonic, orjson, sonic-rs, etc.) serve C/C++, Go, Rust or Python. NetJSON matters only if you are on .NET and want typed POCO-to-string mapping, not a native parser behind bindings.
+
+**Gotchas:**
+- Defaults differ from Json.NET. SkipDefaultValue is true, so members holding 0, false or null are left out of the output. The wiki documents the default DateFormat as a "\Date(value)" form, not ISO 8601.
+- The global options (NetJSON.DateFormat, CaseSensitive and others, mostly [Obsolete]) are copied into a [ThreadStatic] NetJSONSettings.CurrentSettings the first time each thread uses it. Changing a static option later does not affect threads that have already serialized, so pass a NetJSONSettings instance instead.
+- The IncludeFields setter ignores its argument and always sets true, so public fields are serialized along with properties. The wiki still says the default is false.
+- GenerateTypesInto and GenerateAssembly can save a precompiled DLL only on .NET Framework. On .NET Standard and .NET 5+ the dynamic assembly is run-only, so the first-call IL-generation cost cannot be moved to build time.
+
+**Status:** Active but in single-maintainer bug-fix mode: releases are sporadic, and 1.4.7 (2026-09-05) fixed ISO DateTime formatting (#253, #254). It is MIT-licensed, has ~1.22M NuGet downloads and is easy to add from NuGet, but no UTF-8, Span or Stream support has landed.
+
+[repo](https://github.com/rpgmaker/NetJSON) · [benchmark](https://github.com/rpgmaker/NetJSON)
+
+##### orjson  `Rust`  `MPL-2.0 AND (Apache-2.0 OR MIT)`  `active`  `Tier C`
+
+CPython JSON extension in Rust (yyjson-backed parser) that serializes ~11-14x and parses ~2-6x faster than stdlib json.
+
+**Beats:** Python json (stdlib) — orjson's README times orjson 3.10.11 (the PyPI manylinux wheel on CPython 3.11.10, in a Fedora 42 container on an unnamed x86-64-v4 CPU) against stdlib json. It uses pytest-benchmark medians with GC disabled and includes .encode('utf-8') in the json.dumps timing: serialization was 11.1-13.6x faster and deserialization 2.2-6x faster across twitter, github, citm_catalog and canada.json. These numbers predate the float-formatter change in 3.11.7 and the serializer rewrite in 3.12.0, so the current release has not been measured this way.
+
+**How:** In loads, the input is checked as UTF-8 up front with simdutf8 (AVX2/NEON), and yyjson's reader then parses it into one pre-sized pool buffer (yyjson's own UTF-8 check is compiled out). A single walk of that DOM builds lists and dicts allocated at their final size, and object keys of 64 bytes or less come from a 2048-entry, direct-mapped cache keyed by xxh3-64, holding str objects whose hashes are already computed. In dumps, types are dispatched by exact type-pointer comparison, and on 64-bit builds CPython int/str internals are read directly. Output goes straight into a growing PyBytes buffer with no final copy. String escaping is scanned with SSE2 or with AVX-512VL masks detected at runtime, ints are formatted with itoap and floats with the zmij crate. Release builds use fat LTO, codegen-units=1 and PyMem_Malloc as the global allocator. The author says nightly Rust gives a significant speedup.
+
+**Use it when:**
+- CPython 3.10+ web and API services where json.dumps/json.loads take a measurable share of request time. On the twitter, github, citm_catalog and canada.json fixtures, README medians show dumps 11-14x faster and loads 2-6x faster.
+- Serializing dataclasses, datetimes, UUIDs, enums or numpy arrays without writing a default= hook. The README reports dataclasses about 40x faster than json + asdict(), and float64/int32/bool numpy arrays 10-14x faster with roughly 3-4x lower peak RSS.
+- Decoding many payloads that repeat the same short object keys (API records, structured logs). Keys of 64 bytes or less are served from a process-wide cache instead of being allocated each time.
+- Trust boundaries that need strict RFC 8259 and UTF-8 checking. On 342 JSONTestSuite + nativejson-benchmark fixtures, orjson accepted 0 invalid documents; stdlib json accepted 17.
+- Building responses from JSON that is already serialized (cache entries, JSONB columns), using orjson.Fragment instead of a loads/dumps round trip.
+
+**Skip it when:**
+- Code that relies on the rest of json's API: str output, indent other than 2, separators, ensure_ascii, cls=, object_hook/parse_float/parse_int (for example, Decimal), or file/NDJSON helpers. None of these are provided.
+- Data that must round-trip integers wider than 64 bits, lone surrogates, or NaN/Infinity. dumps raises on the first two and silently writes NaN/Infinity as null; loads rejects the NaN/Infinity tokens that stdlib accepts.
+- Runtimes other than CPython 3.10+ with the GIL. There is no support for PyPy, GraalPy or other implementations (build.rs refuses them), PEP 554 subinterpreters, or Android/iOS embedded builds. Free-threaded CPython is refused unless ORJSON_BUILD_FREETHREADED is set, and CI builds 3.15t but does not publish it. ppc64le/s390x wheels were dropped in 3.12.0.
+- Very large or deeply nested documents. loads allocates about 12 bytes of yyjson DOM per input byte before it builds any Python objects, has no streaming mode, and stops at 1024 nesting levels. dumps raises past 254 nested containers, while stdlib is bounded only by Python's recursion limit.
+- Non-Python consumers. orjson ships only as a Python module, with no Rust crate or C API, so Rust code would have to reach it through PyImport_*.
+
+**Integration:** module · none at runtime (numpy is optional and read through its array interface, not linked). For builds, Rust crates (pyo3-ffi, itoap, zmij, simdutf8, xxhash-rust, associative-cache, jiff-core, encoding_rs, bytecount, once_cell) plus vendored yyjson C. The PyPI sdist bundles all sources, so it can be built offline. · CPython 3.10-3.15. Building from source needs Rust 1.95+, a C compiler and maturin>=1,<2. Nightly Rust is recommended for speed; CI pins nightly-2026-08-01 alongside stable 1.95. · PyPI wheels for Linux x86_64/i686/aarch64/armv7, macOS x86_64/arm64 and Windows x86_64/i686/arm64. x86_64 wheels need only x86-64-v1 and switch to AVX-512VL paths at runtime (the AVX-512 paths are not built on macOS). aarch64 needs ARMv8-A. No ppc64le/s390x wheels since 3.12.0.
+
+**Vs siblings:** Pick orjson over ssrJSON (the other stdlib-json replacement here) when you need native dataclass/datetime/UUID serialization, `default`, Fragment, or wheels for x86-64-v1, 32-bit or armv7 targets. ssrJSON needs SSE4.2+ or aarch64 and a Clang build, but its README claims speed equal to or better than orjson on most cases, 1.4-10x faster numpy encoding, and a json-compatible, str-returning API. Pick orjson over jiter when you also need to serialize (jiter's Python package only parses). From C/C++, use yyjson directly: orjson's loads wraps yyjson's reader.
+
+**Gotchas:**
+- dumps serializes subclasses of str/int/dict/list/dataclass/enum natively and skips `default` for them. A redacting str subclass is written verbatim unless OPT_PASSTHROUGH_SUBCLASS is set (OPT_PASSTHROUGH_DATACLASS and OPT_PASSTHROUGH_DATETIME do the same for their types). A `default` that forgets to raise emits null.
+- The loads key cache (keys of 64 bytes or less, 2048 entries, process-global) is indexed by an unseeded xxh3-64 hash. On a hash match it returns the cached str without comparing bytes (src/deserialize/pyobject.rs), so in principle two distinct keys that collide would decode to the same key.
+- Output bytes change between releases: 3.11.7 changed float text (1.2e+30 instead of 1.2e30) and 3.12.0 rewrote serialization. The default key order is documented as unspecified. Pin the version if you have byte-exact golden tests.
+- Pin >=3.11.6. Two high-severity advisories covered unbounded recursion: CVE-2024-27454 / GHSA-pwr2-4v36-6qpr in loads, fixed in 3.9.15, and CVE-2025-67221 / GHSA-hx9q-6w63-j58v in dumps, fixed in 3.11.6.
+
+**Status:** Actively maintained by ijl (3.12.0 released 2026-08-14) and published as Production/Stable wheels, so usability is pip-install. GitHub issues and PRs are closed by policy, and the code is MPL-2.0 for parts of src/ with Apache-2.0 OR MIT for the rest.
+
+[repo](https://github.com/ijl/orjson) · [benchmark](https://github.com/ijl/orjson/blob/master/README.md#performance)
+
+##### pikkr  `Rust`  `MIT`  `abandoned`  `Tier C`
+
+Rust implementation of the Mison speculative JSON field extractor; pulls named fields 2-4x faster than serde_json in its benchmark.
+
+**Beats:** serde_json — The first-party rust-json-parser-benchmark reads a ~1.09 GB file (companies.json repeated 14 times; 263,214 lines averaging 4,160 bytes) line by line and times extraction of 1-16 paths per record. At 1 field, pikkr 0.16.0 reached 954 'mb/sec' untrained and 1,425 after 100 training records, vs 452 for serde_json 1.0.3; at 16 fields it reached 816 and 966 vs 232. The build used rustc 1.22.0-nightly (2017-09-07) with -C target-cpu=native on a 2-core 3.3 GHz Intel Core i7 MacBook Pro. Inside the timed region, the serde_json target (a DeserializeSeed that skips unwanted keys with IgnoredAny) builds a serde_json::Value for each hit and re-serializes it with to_string(), while pikkr returns borrowed slices. The 'mb/sec' figure uses 1024*1024 divisors, so it is really MiB/s.
+
+**Known shortcoming:** Dormant since 2017; open issue #76 says it does not build on Rust 1.80. Issue #9 shows it accepts invalid JSON such as {"x":0,} and returns "0,". Speculative parsing only pays off on repeated same-shape records.
+
+**Known shortcoming:** First-party benchmark favours pikkr: the serde_json side builds a Value per hit and re-serializes it inside the timed region, while pikkr returns borrowed unvalidated slices. The published 0.16.0 needs nightly (x86intrin); master's portable fallback was never released or benchmarked. Querying through arrays returns wrong slices (#72); only $.a.b object paths.
+
+**How:** It implements Mison (Li et al., VLDB 2017). SIMD byte compares (AVX2 through the x86intrin crate in the published crate) build bitmaps of backslashes, quotes, colons and braces. Bit tricks then turn those into a string mask and per-depth 'leveled colon bitmaps', a structural index that lets the parser hop between the colons at one nesting level and skip everything else. For the first train_num records ('basic parsing') it records which colon position each queried field sat at. After that, 'speculative parsing' checks only those positions and falls back to basic parsing on a miss. Values come back as slices, so nothing is allocated or unescaped per value.
+
+**Use it when:**
+- Large NDJSON or record-per-line scans (logs, event exports, analytics dumps) where you need a few fields from each record of a few KB and the records share one or a few layouts.
+- Projection or filter pushdown where raw JSON text is enough and you convert only the fields you keep, e.g. comparing an ID slice or passing a sub-object through verbatim.
+- Throughput-bound batch jobs on x86-64 CPUs with AVX2 where you can pin an old nightly toolchain or vendor and port the code.
+- As a small, readable Rust reference for Mison's leveled colon bitmaps and pattern-learning speculation, to port or vendor into your own code.
+
+**Skip it when:**
+- You need validation. Invalid JSON is accepted and stray bytes can end up in values: open issue #9 shows `{"x":0,}` returning `0,`.
+- You need fields inside arrays, array indexing, or wildcards. Queries support only `$.a.b` object paths, and a path through an array returns a wrong slice (open issue #72 gets `true}]`).
+- Records vary in layout or queried fields are often missing. Each speculation miss falls back to basic parsing, and position statistics are learned only during the training window, so layout drift after training keeps hitting the slow path.
+- You need a current toolchain. The published 0.16.0 depends on x86intrin, which uses nightly-only features. Issue #76 (2024) reports it does not build on Rust 1.80.0, and docs.rs failed to build it.
+- You need typed deserialization, serialization, or a DOM: this crate does not provide them.
+
+**Integration:** crate · fnv; x86intrin 0.4.x (always required in the published 0.16.0; optional behind the `avx-accel` feature on the unpublished git master) · Rust nightly for crates.io 0.16.0 (README pins rustc 1.22.0-nightly 2017-09-07). Issue #76 reports it fails on 1.80.0. The unpublished master's CI targeted stable, beta and nightly in 2017 without avx-accel, but this is not verified on current rustc. · x86-64 with AVX2 for the published 0.16.0, built with RUSTFLAGS="-C target-cpu=native". Git master adds a portable scalar SWAR emulation of the AVX2 ops when `avx-accel` is off; that path is not benchmarked.
+
+**Vs siblings:** For Rust, simd-json and sonic-rs are maintained and beat serde_json on full parsing, and sonic-rs builds on stable Rust with a `get` by pointer path that returns a raw LazyValue and handles array indices. Pick pikkr over them only to study or port Mison-style trained speculative skipping over many uniform records. In C++, the Mison paper entry and its structural-index successors Pison and JSONSki are the better starting points.
+
+**Gotchas:**
+- Results are raw JSON text. Strings include their quotes and escape sequences, and objects and arrays come back verbatim, so you still have to parse and unescape what you keep.
+- Keys are matched as raw bytes, and queries are split on '.'. You cannot query keys that contain a dot, and an escaped key in the data will not match its unescaped query.
+- One call handles exactly one JSON record, so you split the stream yourself; the benchmark splits on newlines with BufReader::lines.
+- crates.io 0.16.0 (2017-09-10) is older than the master branch. The AVX2-free fallback (PR #65, 2017-09-12) was never published. Cargo metadata says MIT/Apache-2.0, while the repo LICENSE and GitHub say MIT.
+
+**Status:** Abandoned since 2017-09-21: the last crates.io release was 0.16.0 on 2017-09-10, docs.rs failed to build it, and it has no crates.io reverse dependencies. It is MIT-licensed and small enough to vendor, but expect to port the x86intrin AVX2 path to std::arch (issue #71 already pointed to stdsimd) before it builds on a modern toolchain.
+
+[repo](https://github.com/pikkr/pikkr) · [benchmark](https://github.com/pikkr/rust-json-parser-benchmark)
+
+##### reflect-cpp  `C++`  `MIT`  `active`  `Tier C`
+
+C++20 reflection serializer that reads JSON into structs through embedded yyjson; claims ~2x hand-written RapidJSON, ~10x nlohmann/json.
+
+**Beats:** RapidJSON, nlohmann/json — The project's Google Benchmark code times reads of three datasets (canada, licenses, person) into typed structs. It compares rfl::json::read (yyjson backend) with hand-written nlohmann/json, RapidJSON (default non-insitu Parse), yyjson and simdjson on-demand code (simdjson is skipped under clang), built at -O2 Release. The runs happen in GitHub Actions: ubuntu-24.04 with gcc 11-14 and clang 16-18, macOS 15 and Windows MSVC, with no CPU model given. The only published result is prose ('usually about twice as fast' as RapidJSON, 'about 10 times faster' than nlohmann/json, slightly slower than simdjson and yyjson), because per-run numbers exist only in Actions job step summaries that could not be retrieved through the API or an anonymous fetch.
+
+**How:** The parsing is done by yyjson, which is vendored as version 0.12.0 and builds an immutable DOM. The README credits yyjson for the speed. reflect-cpp then walks that DOM once with code generated per struct. In C++20 mode, field names come from structured bindings plus parsing std::source_location::function_name() at compile time; C++26 mode uses P2996 std::meta instead. Each JSON key is compared (string_view ==) against the compile-time field names in a fold expression, and each value is placement-new'd straight into an uninitialized, aligned stack buffer of T through a view of member pointers, so no struct is default-constructed first. Writes build a yyjson mutable DOM, serialize it with yyjson_mut_write_opts and copy the result into a std::string.
+
+**Use it when:**
+- You now hand-write RapidJSON or nlohmann/json DOM-walking code to fill typed structs and want a one-line rfl::json::read<T> that the project says runs faster (its benchmark code needs about 50-90 lines per dataset for the other libraries).
+- Typed configs, API payloads and records where you also want validation (rfl::Validator, rfl::Email, rfl::Timestamp), all field errors collected into one message, and generated JSON Schema (rfl::json::to_schema<T>).
+- One struct model that must also go out as msgpack, flexbuffers, BSON, CBOR, YAML, Avro, Cap'n Proto or Parquet. The project's cross-format benchmarks rank flexbuffers, msgpack and yas fastest, ahead of JSON.
+- Workloads shaped like the benchmark: float-heavy arrays such as GeoJSON (canada), nested string-heavy records (licenses), or many small objects (person), parsed from an in-memory string.
+- C++20 codebases on GCC 11.4+, Clang 14+ or MSVC 17.8+ whose types are plain aggregates without user-declared constructors.
+
+**Skip it when:**
+- Peak parse throughput: the benchmark README says reflect-cpp is slightly slower than simdjson and yyjson used directly, so if you will hand-write the binding anyway, use those instead.
+- Untyped or schema-less JSON, or editing JSON in place: the tool maps into structs. rfl::Generic exists, but open issue #368 reports rfl::to_generic running more than 10x slower than rfl::json::write.
+- Very large or streaming inputs: read() parses the whole input into a yyjson DOM before it fills the struct, the istream overload first copies the whole stream into a std::string, and YYJSON_READ_INSITU is rejected. Peak memory is roughly input plus DOM plus output.
+- Build-time-sensitive projects with wide structs: issue #86 reports compiles going from seconds to minutes, a need for -fconstexpr-depth=1024/2048, and a roughly 130-member struct that was 'prohibitively long' to compile. Maintainers advise putting read/write calls in their own translation unit.
+- Types that are not simple aggregates in C++20 mode: custom constructors are unsupported, and C arrays and inheritance need -DREFLECT_CPP_C_ARRAYS_OR_INHERITANCE (fields must still all sit in one struct). The structured-binding path handles at most 256 fields.
+
+**Integration:** static lib (shared via REFLECTCPP_BUILD_SHARED). Also packaged for vcpkg and Conan, or as a source drop of include/ plus src/reflectcpp.cpp, src/reflectcpp_json.cpp and src/yyjson.c · JSON only: none external (yyjson, CTRE and enchantum are bundled). Every other format needs its own library, e.g. msgpack-c, yaml-cpp, libbson, flatbuffers, Apache Arrow or capnproto · C++20 with GCC 11.4+, Clang 14+ or MSVC 17.8 (19.38)+ and CMake 3.23. The optional C++26 reflection mode needs GCC 16.2+ with -freflection · Linux (CI: gcc 11-14 and clang 16-18), macOS 15 on arm64 and Intel (clang) and Windows (MSVC) all run in CI. No SIMD or ISA requirement is documented
+
+**Vs siblings:** Against yyjson or simdjson: pick reflect-cpp when you want typed struct binding without writing the DOM walk and can accept the small overhead its own README admits. Against glaze, the other reflection-based C++ option: the published figures come from different benchmarks and cannot be compared (glaze ~2.9x RapidJSON read, reflect-cpp 'about twice'), so choose reflect-cpp for its wide non-JSON format list (Avro, Cap'n Proto, Parquet, BSON, etc.) and pydantic-style validators rather than for raw read speed.
+
+**Gotchas:**
+- Open issue #719 (2026-08-27): rfl::json::read segfaults under GCC 12 at -O2 for some structs (internal linkage, an std::optional nested aggregate, 12+ fields). read_struct type-puns an unsigned char buffer as T. Workarounds reported: -fno-strict-aliasing, rfl::DefaultIfMissing, or GCC 11/14.
+- Unknown JSON keys are silently ignored by default. Add the rfl::NoExtraFields processor to reject them. Missing non-optional fields are errors unless you use DefaultIfMissing.
+- Errors: read returns rfl::Result and does not throw, but write() throws std::runtime_error when yyjson refuses to serialize. Open issue #421 reports Windows crashes on strings that are not UTF-8 (e.g. cp1251, some std::wstring or std::filesystem::path values).
+- In C++20 mode, enums reflect only values in [-256, 256] by default. Widen the range with RFL_ENUM_RANGE_MIN/RFL_ENUM_RANGE_MAX or rfl::config::enum_range<E>.
+
+**Status:** Actively maintained by getML (Code17 GmbH): last commit 2026-09-22, v0.25.0 released 2026-05-16, ~1.9k stars. MIT-licensed and available through vcpkg and Conan, so it is easy to adopt, though GCC 12 users should note open issue #719.
+
+[repo](https://github.com/getml/reflect-cpp) · [benchmark](https://github.com/getml/reflect-cpp/blob/main/benchmarks/README.md)
+
+##### simdjson-go  `Go`  `Apache-2.0`  `stale`  `Tier C`
+
+Go port of simdjson's SIMD parser for AVX2 amd64; builds a navigable tape 2.3-16.5x faster than encoding/json's interface{} decode.
+
+**Beats:** encoding/json — The README's benchcmp table compares simdjson.Parse building its tape (strings copied, ParsedJson reused) against encoding/json.Unmarshal into interface{} on 14 standard corpus files: speedups run from 2.34x (numbers) to 16.50x (gsoc-2018), with a geometric mean of ~6.4x, so the '10x' headline overstates the table, and the two sides do different work. A maintainer comment on issue #35 (2021-05-17) says the numbers came from an AMD Ryzen 3950 with Go 1.16.2 (GOMAXPROCS=32, and Parse overlaps its two stages on two goroutines for these >8 KB files); the table has not been re-run since.
+
+**How:** Stage 1 is simdjson's structural-indexing algorithm, translated from C intrinsics to Go assembly with c2goasm: for each 64-byte block it finds odd-length backslash runs, builds the in-string mask with a carry-less-multiply prefix-XOR (VPCLMULQDQ), classifies whitespace and structural characters with AVX2 (an AVX-512 variant is picked at runtime when AVX512F is present), and flattens the bitmask into uint32 incremental offsets. Stage 2 is a goto-based state machine in Go that consumes those offsets and writes a []uint64 tape with skip pointers over objects and arrays; it validates and unescapes strings in AVX2 assembly, and with WithCopyStrings(false) leaves them pointing into the input. For inputs over 8 KB the two stages run concurrently on two goroutines connected by a channel, and reusing the previous ParsedJson keeps each parse to a few dozen allocations. Numbers go through scalar strconv.ParseInt/ParseFloat rather than SIMD, which is why number-heavy files gain the least.
+
+**Use it when:**
+- Large in-memory documents (over 8 KB, so the two stages overlap) or NDJSON streams on x86-64 servers with AVX2+CLMUL (Intel Haswell or later, AMD Zen or later), where parse throughput is the bottleneck.
+- Pulling a few fields out of big, string- or structure-heavy payloads such as event feeds, API dumps or logs without building Go values, using FindElement or Object.ForEach with an onlyKeys filter. This input shape got 6.5-16.5x over encoding/json in the README table (twitter 11.3x, citm_catalog 12.5x, gsoc-2018 16.5x).
+- Filtering or rewriting NDJSON: ParseNDStream splits an io.Reader into ~10 MB chunks and parses them on (GOMAXPROCS+1)/2 goroutines, and DeleteElems, the Set* methods and MarshalJSON let you edit records and write them back out.
+- Storing parsed JSON for repeated reads. The Serializer shrank parking-citations-1M to 10.9-17.2% of the JSON size with compression and deserializes at 806-2334 MB/s (README), and it deserializes on any CPU.
+
+**Skip it when:**
+- You need struct binding or a drop-in Unmarshal. It has none, and converting the tape into your own structs or interface{} is extra work that the headline benchmark leaves out. In issue #91 a Nostr client was 5.5x slower than encoding/json (53.1 vs 9.6 ms) until it reused ParsedJson/Object/Array values. After that it was only modestly ahead of easyjson (8.1 vs 9.8 ms).
+- arm64 (Graviton, Apple Silicon), 386, gccgo, noasm/appengine builds, or x86 CPUs without AVX2+CLMUL. Parse returns 'Unsupported platform' or 'Host CPU does not meet target specs', with no pure-Go fallback, and a maintainer said an arm64 port 'will probably not be done in the scope of this project' (#51).
+- Number-heavy data (GeoJSON coordinates, meshes, numeric arrays): canada, marine_ik, mesh, mesh.pretty and numbers gained only 2.3-3.9x over encoding/json in the README table, because number conversion is scalar strconv.
+- Tiny messages, top-level scalars, or one giant array that does not fit in memory. A fresh parser carries ~96 KB of stage-1 index buffers plus a tape pre-sized to about 1.2x the input bytes. Parse rejects top-level null, true, false, numbers and strings (#59). It cannot lazily stream one huge array; only NDJSON streams (#87).
+- Untrusted input where strict validation matters. Open issue #96 (2026-07-31, unanswered) reports that \u escapes containing bytes 0x00-0x2F are accepted as digit 0: the digittoval DATA table in parse_string_amd64.s does skip offsets 0x40-0x6F. It also reports that the string-scan bound is passed to the assembly by address, so an unterminated string can be read past the intended window.
+
+**Integration:** module · github.com/klauspost/cpuid/v2 v2.2.10, github.com/klauspost/compress v1.18.0 (golang.org/x/sys indirect); no cgo · Go 1.22 per go.mod; CI tests 1.22.x-1.24.x; gc toolchain only (gccgo cannot build the Go assembly and reports an unsupported CPU) · x86-64 with AVX2 + CLMUL required (an AVX-512F stage-1 path is selected at runtime when available); other GOARCH values compile, but Parse, ParseND and ParseNDStream return an error; Serializer.Deserialize works everywhere
+
+**Vs siblings:** Over fastjson (valyala), which also parses into its own untyped value, pick simdjson-go for large or NDJSON input read from an io.Reader (fastjson's README says it cannot parse from a Reader, while ParseNDStream parses chunks in parallel) or when you want a compact binary serialized form. Pick Sonic, jsoniter or easyjson instead when you need to decode into Go structs, and Sonic also when you need arm64 (Go 1.20+).
+
+**Gotchas:**
+- WithCopyStrings(false) is the fast mode (Twitter 1327 vs 1073 MB/s in the README) but makes tape strings point into your input slice, so the buffer must stay alive and unmodified while the ParsedJson is in use. The default copies strings.
+- Always pass the previous *ParsedJson as `reuse`, since fresh parsers allocate index buffers and a tape every call. ParseND does not attach its internal parser to the returned value (Parse does), so reuse is largely ineffective for ParseND.
+- The latest tag, v0.4.5 (2023-03-13), is what `go get` resolves. It lacks later master fixes, including #92 (merged 2025-06-16): Object.ForEach with an onlyKeys filter consumed the next key after skipping a value. Pin a commit pseudo-version if you use that API.
+- Parse runs its two stages on two goroutines for inputs over 8 KB, so a per-call MB/s figure can use two cores while encoding/json uses one. Separately, the serializer uses //go:linkname to runtime.memhash, which ties it to Go runtime internals across toolchain upgrades.
+
+**Status:** Stale (last commit 2025-08-26, last tag v0.4.5 from March 2023; maintainers called it 'purpose built' and done in #86 and have not answered a July 2026 offer, #96, of fixes, ~35% faster parsing and a portable path from the data-bet fork), but it is Apache-2.0 pure Go plus assembly with two small dependencies, so it is easy to vendor or fork, and minio/minio (now archived) pins v0.4.5.
+
+[repo](https://github.com/minio/simdjson-go) · [benchmark](https://github.com/minio/simdjson-go/blob/master/README.md)
+
+##### simdjson_nodejs  `JavaScript (Node.js native addon binding to C++ simdjson)`  `Apache-2.0`  `abandoned`  `Tier C`
+
+Node.js N-API binding to C++ simdjson 0.9; lazyParse beats JSON.parse up to 2.3x by never building JS objects.
+
+**Beats:** V8 JSON.parse (Node.js built-in) — The first-party README table (Benchmark.js on a 2018 MacBook Pro, 2.3 GHz Core i9; Node/V8 and compiler versions not stated; addon built at -O3) times simdjson.lazyParse(str), which validates and builds a C++ tape with no JS objects, against JSON.parse(str), which builds the full object graph: 0.77x (twitter.json) to 2.30x (numbers.json), faster on 11 of 15 files, with 2.10x on the 190 MB sf_citylots.json. The results are noisy and fall short of the typings' claim: the same page's ops/sec block shows up to ±192.65% error on JSON.parse, an April 2020 run of the then-master by simdjson maintainer John Keiser (PR #36) had lazyParse slower on 6 of 15 files (mesh.json 0.56x), and the table's 0.20-0.87 GB/s for lazyParse is well below the '> 2.5GB/s' in index.d.ts.
+
+**Known shortcoming:** The benchmark compares lazyParse, which never builds JS objects, against JSON.parse; the full simdjson.parse is much slower (#5). Slower than JSON.parse on 3 of 15 files. Abandoned since 2023-02.
+
+**Known shortcoming:** An April 2020 run by a simdjson maintainer had lazyParse slower than JSON.parse on 6 of 15 files, and the README's JSON.parse figures carry up to +/-192% error. A bad key path aborts the Node process via an uncaught std::stoi exception (#46, open). Open lazyParse memory-leak report (#40); native memory is not reported to V8. If the native build is missing it silently patches the global JSON object. Vendors simdjson 0.9.x (upstream v4.6); open build failures on Windows, Apple Silicon with x86_64 Node, and Node 20.
+
+**How:** The vendored simdjson 0.9.x parses in two stages: a SIMD pass (AVX2, SSE4.2 or NEON, chosen at runtime) finds structural characters and validates UTF-8, then a second pass writes a compact 64-bit-word 'tape' of the document. lazyParse moves that parsed dom::document into a heap-allocated Napi::External and returns it with no per-value V8 allocation, while JSON.parse builds every object, array and string on the V8 heap. Most of the measured gain is that skipped object construction (issue #5): whenever this binding does build JS objects (parse(), or valueForKeyPath on a large subtree), it adds one property at a time through N-API and loses to JSON.parse.
+
+**Use it when:**
+- Large JSON strings (MBs to hundreds of MB) where you read only a few fields with valueForKeyPath. The README shows 2.10x on the 190 MB sf_citylots.json (710 vs 1492 ms).
+- Number-heavy or geometry documents such as canada.json, marine_ik.json, mesh.json and numbers.json, which the README shows at 1.9-2.3x JSON.parse.
+- Validation-only gates, where isValid(str) is enough and no JS object is needed. In the maintainer's 2020 run in issue #28 (200k iterations of a 25 KB document), isValid took 5.7 s against JSON.parse's 33.5 s.
+- An environment you can pin and that builds the addon: Linux x86-64 with a C++17 compiler and an older Node (CI only exercises Node 12.x).
+
+**Skip it when:**
+- You need the whole JS object. parse() and valueForKeyPath('') build it node by node through N-API: 1.7-4x slower than JSON.parse in issue #5's tables, and about 5x slower on a 25 KB document in issue #28.
+- Many small documents, such as HTTP request bodies of a few KB. Every call copies the JS string to UTF-8, may copy it again into a padded buffer, and allocates a fresh dom::parser, since reusing the parser was never done (open issue #35). Issues #28 and #42 report lazyParse slower than JSON.parse in this pattern.
+- String-heavy documents: on the README's own table lazyParse loses on twitter.json (0.77x), random.json (0.78x) and citm_catalog.json (0.93x).
+- Windows, Apple Silicon or current Node. Open issues report MSVC build failures (#44, #52), 'illegal hardware instruction' with an x86_64 Node on an Apple M2 Pro (#70), and node-gyp 6.1.0 failing on Node 20 (#71). There are no prebuilt binaries, and the npm tarball unpacks to 39 MB because the benchmark corpus ships with it (#54).
+- Production services that need a maintained dependency. Code has not changed since June 2021. A lazyParse memory-leak report (#40, confirmed by a second user in 2022) is still open. Bad key paths can abort the process (see gotchas).
+
+**Integration:** module (npm package `simdjson`, an N-API native addon compiled from source by an install script running `node-gyp rebuild`; no prebuilt binaries) · node-addon-api ^2.0.0. Building needs node-gyp, Python and a C++17 compiler. simdjson is vendored as the amalgamated simdjson.h/simdjson.cpp (0.9.x; the header declares SIMDJSON_VERSION 0.9.1). · A C++17 compiler (binding.gyp: -O3 -std=c++17, /std:c++17 on MSVC, C++ exceptions on) and a Node.js with N-API. There is no engines field. CI tests only Node 12.x on ubuntu-latest. · The vendored simdjson picks a kernel at runtime: x86-64 Haswell (AVX2) or Westmere (SSE4.2), ARM64 (NEON), PPC64, or a portable fallback. The README claims macOS, Linux and Windows, but the Windows (#44, #52) and Apple Silicon (#70) build/run failures are open. The /EHsc workaround for MSVC was suggested in #52 but never merged.
+
+**Vs siblings:** No other Node.js JSON parser is catalogued, and the siblings are libraries for other languages. If you can write your own N-API addon, calling current simdjson (the C++ sibling, v4.x) directly avoids this binding's per-call parser allocation, its DOM-only interface (no On-Demand) and its 2021-era code; orjson and ssrJSON are the Python counterparts and, unlike this binding, return full native objects faster than their stdlib.
+
+**Gotchas:**
+- Calling valueForKeyPath with a non-numeric segment where the document has an array (e.g. 'items.name' when items is an array) does not throw a catchable JS error. The binding queues a JS exception, keeps running, and calls std::stoi, whose std::invalid_argument is never caught, so the whole Node process aborts ('terminate called ... what(): stoi', issue #46, reproduced again in 2023).
+- Key paths are split on '.', '[' and ']' with strtok, and there is no escaping. Keys that contain those characters, such as '@avito-core/toggles:6.1.18' in issue #68, cannot be reached. Every valueForKeyPath call also rebuilds the selected subtree as fresh JS objects, so reading a large subtree costs as much as parse().
+- If build/Release/simdjson.node is missing (e.g. installed with --ignore-scripts), require('simdjson') silently returns the global JSON object with an isValid function added to it. The global JSON gets modified, and lazyParse is undefined.
+- It is stricter than JSON.parse and handles input differently. Integers outside the int64/uint64 range fail with a number error (JSON.parse returns an imprecise double), and nesting is capped at 1024 levels. Only JS strings are accepted, so a Buffer must be decoded and is then re-encoded to UTF-8 on every call. Object keys are passed as C strings, so a key containing \u0000 is truncated (a source TODO says 'not 8-bit clean'), and the C++ document's memory is never reported to V8 (no AdjustExternalMemory), so the GC does not see it.
+
+**Status:** Abandoned: code last changed on 2021-06-14 (npm 0.9.2, vendoring simdjson 0.9.x while upstream is at v4.6.11), later commits up to 2023-02-23 are dependabot merges only, and the fix PRs sit unmerged (#58 simdjson 2.2.2 was closed, #72 node-gyp is open), but it still gets about 46.8k npm downloads a month and is Apache-2.0 with about 150 lines of binding C++, so a fork onto current simdjson is practical.
+
+[repo](https://github.com/luizperes/simdjson_nodejs) · [benchmark](https://github.com/luizperes/simdjson_nodejs#benchmarks)
+
+##### sonic-rs  `Rust`  `Apache-2.0`  `active`  `Tier C`
+
+Serde-compatible Rust JSON library using SIMD; about 1.7-2.8x faster than serde_json at typed parsing on x86_64.
+
+**Beats:** serde_json — The numbers are first-party Criterion runs from the README, unchanged since late 2023 when the crate was about v0.3; the rustc, serde_json and simd-json versions are not stated. They were run on an Intel Xeon Platinum 8260 with -C target-cpu=native, LTO and jemalloc. Validated sonic_rs::from_slice parsed twitter.json into structs in 0.83 ms vs 1.38 ms for serde_json::from_str and 2.29 ms for from_slice, and parsed canada.json into an untyped Value in 4.96 ms vs 16.6-17.0 ms for serde_json; serde_json was about 2% faster at canada serialization.
+
+**How:** It does not use simdjson's two-stage structural-index/tape design. It is a single-pass recursive-descent parser that feeds serde visitors or the DOM directly, with no intermediate tape; the README credits this for beating simd-json on structs. SIMD (SSE2/AVX2 on x86_64, NEON on aarch64) speeds up the hot loops: string scanning with simdutf8 validation; whitespace skipping with simdjson's shuffle-table classifier and a cached 64-bit non-space bitmap; JSONSki-style bracket counting over a PCLMULQDQ prefix-XOR in-string mask, which skips whole containers for the get and lazy APIs; and a 32-byte copy-and-find escape loop on output. Numbers are parsed with 8-digit SWAR plus an Eisel-Lemire fast path and printed with zmij (Schubfach-based). The Value DOM uses a bumpalo arena, stores objects as flat key/value arrays instead of hash maps, and points strings into a padded copy of the input.
+
+**Use it when:**
+- Rust services on x86_64 built with AVX2+PCLMULQDQ enabled that deserialize multi-KB-to-MB payloads into serde structs. In the README, validated from_slice beats serde_json::from_str by 1.7-2.3x and serde_json::from_slice by 2.2-2.8x on twitter/citm_catalog/canada.
+- Parsing into an untyped DOM that is mostly read, not heavily key-searched. sonic_rs::Value parses 3.4-5.2x faster than serde_json::from_str into serde_json::Value on the Xeon, and 2.8-3.3x faster on Apple M1 Pro.
+- Pulling a few fields out of large documents you already trust. get_unchecked read a twitter.json field in 76.8 us vs 363 us for gjson, and get, get_many and the lazy iterators avoid building a DOM at all.
+- Serializing string-heavy data. twitter.json to_string took 390 us vs 797 us for serde_json (Value) and 448 vs 740 us (struct), thanks to the SIMD escape scan.
+
+**Skip it when:**
+- Small messages. In issue #150 a user's small-payload struct benchmark showed no gain over serde_json, and the maintainer answered that the JSON was too small to benefit from SIMD.
+- Portable x86_64 binaries built for the default baseline. The SIMD paths are chosen at compile time (cfg target_feature avx2+pclmulqdq), and there is no runtime CPU dispatch (issue #14 is still open). Without -C target-cpu=native or the matching target features you get the scalar fallback. A native build may not run on older CPUs.
+- Parsing untrusted, possibly deeply nested input into sonic_rs::Value, or using checked get_many on it. parser.rs has no depth guard, and 100,000 nested brackets abort the process with a stack overflow instead of returning an error (open issues #239 and #232). Typed serde deserialization is capped at 255 levels.
+- Non-mainstream targets. 32-bit x86 (i686) fails to build (open issues #228 and #231). RISC-V and other architectures use a scalar fallback that the README says may be 'very slower'.
+- Float-heavy serialization, or struct parsing on aarch64. serde_json matched or slightly beat it on canada.json serialization on both test CPUs. On M1 Pro, simd-json was faster at struct parsing of twitter and citm, and sonic-rs was only 1.1-1.7x ahead of serde_json::from_str.
+
+**Integration:** crate · ahash, bumpalo, bytes, cfg-if, faststr, itoa, ref-cast, serde, simdutf8, thiserror, zmij, plus in-repo sonic-number and sonic-simd · Stable Rust, edition 2021. No rust-version is declared. The code calls pointer expose_provenance (stable since Rust 1.84), so 1.84+ is inferred. The optional avx512 feature needs Rust 1.89+ and the avx512f target feature. · x86_64 (fast path needs compile-time AVX2 + PCLMULQDQ + SSE2) and aarch64 (NEON). wasm32 gets simd128 in the SIMD layer. Other targets use a scalar fallback, and i686 currently fails to build. CI covers Linux x86_64/arm64, macOS, Windows and wasm32-wasip1.
+
+**Vs siblings:** In Rust, pick it over simd-json for serde-struct parsing or a mutable DOM on x86_64. Its README shows it 1.3-2.0x faster there, and it parses from an immutable &[u8]/&str, while simd-json's serde entry point takes &mut [u8]. On Apple M1 Pro, simd-json ties or wins struct parsing. jiter's catalogued ~2x over serde_json comes from a different benchmark, and bytedance/sonic is the Go sibling built on the same ideas.
+
+**Gotchas:**
+- Object::get on a parsed Value is a linear scan (documented as O(n); issue #168 is open). Duplicate keys are all kept, and get returns the first. The migration guide flags duplicate-key handling as a difference from serde_json::Value.
+- The *_unchecked APIs are unsafe. from_slice_unchecked skips UTF-8 validation, and get_unchecked/to_object_iter_unchecked assume valid JSON ('may return unexpected result'). from_str already takes the same no-validation path internally, because &str is valid UTF-8. So the README's from_slice_unchecked timings are what from_str gets.
+- Release builds read SIMD vectors past the end of a string tail when the read stays within the same page (check_cross_page), and LLVM sanitizers flag this. Hence the sanitize feature, which the README says costs about 30% of serialize speed and should not be used in production.
+- A parsed Value keeps a padded copy of the whole input plus a bumpalo arena alive. Parsing reserves len/2+2 node slots, thread-local up to 3 MB and heap above that. Inputs of 4 GB or more are rejected.
+
+**Status:** Actively maintained under Apache-2.0: 0.5.9 and 0.5.10 shipped 2026-09-11, and the crate has about 6.8M crates.io downloads. It is usable today on stable Rust, but deep-nesting stack overflows and the i686 build failure are still open.
+
+[repo](https://github.com/cloudwego/sonic-rs) · [benchmark](https://github.com/cloudwego/sonic-rs/blob/main/README.md)
+
+##### sonnet  `Go`  `BSD-3-Clause`  `stale`  `Tier C`
+
+Pure-Go rewrite of encoding/json with the same API; decodes typed structs about 4x faster than the stdlib in author benchmarks.
+
+**Beats:** encoding/json — The author's own go test -bench run (one run per case, no benchstat; Intel Core i3-10110U, linux/amd64, GOMAXPROCS=4; Go version not stated, and the benchmark's go.mod says go 1.21.1) decoded canada_geometry into a typed struct at 271 MB/s vs 62.6 MB/s for encoding/json (about 4.3x) and citm_catalog at 512 vs 113 MB/s (about 4.5x), allocating 4.7x and 2x fewer bytes. The same run's simdjson-go and fastjson rows only parse and do not bind to structs, so they are not comparable, and sonnet's marshal gains over the stdlib were only 1.1-1.6x.
+
+**Known shortcoming:** Floats with 20+ significant digits decode to wrong values and the float32 maximum is rejected (#14, open); a panic on extreme exponents looks reachable (source reading). 32-bit builds fail (#13). Not a full drop-in: its own Number type and error types. Struct keys are matched only by a 32-bit seeded hash, so a colliding unknown key decodes into a field and bypasses DisallowUnknownFields. No up-front validation; no releases, last commit 2023-10. sonic beats it on every file.
+
+**Independent measurement:** sonnet benchmark (result.txt): fewest bytes allocated of any struct-binding decoder, e.g. 143 KB vs 669 KB for encoding/json on canada_geometry.
+
+**How:** It builds one decoder closure per reflect.Type, caches it in a copy-on-write map, and decodes in a single pass straight from the input bytes. Scanning works on 8 bytes at a time with SWAR (SIMD-within-a-register) bit tricks. That covers skipping whitespace, finding quote, backslash and control bytes inside strings, and testing and converting 8 ASCII digits in one step (Lemire's digit test plus a multiply-and-shift digit parser). Floats go through a Go port of the Eisel-Lemire algorithm from fast_double_parser, with an exact fast path for powers of ten up to 22, which is why float-heavy input speeds up the most. Struct keys are looked up in a per-struct perfect hash table (a 32-bit wyhash-style hash, with random seeds retried until no two fields collide), and read buffers are reused through size-classed sync.Pools.
+
+**Use it when:**
+- Decoding float-heavy documents into typed Go structs, such as GeoJSON coordinates or numeric arrays: 271 vs 63 MB/s on canada_geometry, behind only sonic in the author's run.
+- Workloads where GC pressure matters: it allocated the fewest bytes of any struct-binding decoder in the author's run (143 KB vs 669 KB for the stdlib and 648 KB for sonic on canada_geometry; 705 KB vs 1.44 MB and 2.6 MB on citm_catalog).
+- Builds that forbid unsafe, assembly, JIT or generated code but still want a 2-4x faster Unmarshal on 64-bit targets.
+- Code that already uses encoding/json's Unmarshal, Decoder and Marshal with struct tags, where you can pin or vendor a specific commit.
+
+**Skip it when:**
+- Untrusted or high-precision numeric input while issue #14 stays open. Floats with 20 or more significant digits decode to wrong values because the mantissa overflow check misses wraparound (33208771559017222000 comes out as about 1.476e19), float32 max 3.4028235e+38 is rejected, and extreme exponents can panic Lemire64 with an index out of range.
+- 32-bit targets: GOARCH=arm fails to compile because a constant 1<<'>' overflows int in compact.go (issue #13).
+- When raw speed matters most on amd64: sonic beat sonnet on every one of the six unmarshal files in sonnet's own benchmark, and goccy/go-json and segmentio/encoding beat it on citm_catalog and golang_source.
+- String-heavy or non-ASCII payloads: string_unicode unmarshal ran at 396 MB/s vs 2401 for sonic, 1861 for easyjson and 886 for goccy/go-json.
+- Marshal-heavy services or anything that needs an active maintainer: encode gains are only 1.1-1.6x over the stdlib, and there have been no commits, tags or releases since 2023-10-04.
+
+**Integration:** module · none (standard library only; go.mod has no requires) · Go 1.21 (go.mod 'go 1.21.0'; imports the stdlib slices package) · 64-bit GOARCH only in practice. It is pure Go with no unsafe or asm, so it does not depend on CPU features, but 32-bit builds (GOARCH=arm GOARM=7) fail to compile (issue #13).
+
+**Vs siblings:** Pick it over Sonic when you want pure Go with no unsafe and the smallest allocations, and can accept about 25-30% lower unmarshal throughput (271 vs 367 MB/s on canada, 512 vs 726 on citm). Sonnet's author says Sonic uses unsafe, skips UTF-8 validation and trades platform compatibility for speed. Pick it over goccy/go-json or segmentio/encoding mainly for float-heavy structs, where it was about 1.6-1.8x faster than both, because both beat it on citm_catalog and golang_source.
+
+**Gotchas:**
+- Struct keys are matched by their 32-bit seeded hash alone, and the key bytes are never compared. An unknown key that collides with a field's hash is decoded into that field and also gets past DisallowUnknownFields. This is rare because seeds are random per struct type, but it is not stdlib behavior.
+- Unmarshal skips the up-front validity scan (checkValid) that encoding/json runs, so a syntax error late in the input can leave the destination partly filled where the stdlib would leave it untouched (inferred from the code).
+- UseNumber stores sonnet.Number, not json.Number, in interface{} values, so existing type assertions on json.Number stop matching.
+- The rudderlabs/sonnet fork fixes issue #14 by sending every float through strconv.ParseFloat. That removes the Eisel-Lemire fast path, which is most of the canada_geometry speedup, so expect the fork to be slower on float-heavy input.
+
+**Status:** Stale: there have been no commits since 2023-10-04 and there is no tagged release (only the pseudo-version v0.0.0-20231004000330-239c7b6e4ce8), and a float-correctness bug and a 32-bit build failure are still open. It is BSD-3-Clause, uses only the standard library and has about 22 source files, so vendoring and patching it (or taking the rudderlabs fork's float fix) is practical.
+
+[repo](https://github.com/sugawarayuuta/sonnet) · [benchmark](https://github.com/sugawarayuuta/benchmark)
+
+##### ssrJSON  `C`  `MIT`  `active`  `Tier C`
+
+SIMD C extension replacing CPython's json.dumps/loads; README claims 4-31x faster dumps and 2-8x faster loads.
+
+**Beats:** Python json (stdlib) — These are first-party ssrjson-benchmark charts for v0.0.17 on Python 3.14 and an unnamed x86-64 AVX2 CPU; the Clang version and build flags for the measured ssrJSON are not stated, and the harness pins one core and interleaves libraries against stdlib json with compact separators. They show dumps-to-str 4.9x (simple_object_zh) to 23.1x (canada) and loads(str) 2.5x (twitter) to 7.8x (canada) faster than json, which the README rounds to 4-31x and 2-8x, with orjson at 1.80x (twitter loads str) and 16.67x (canada dumps str) on the same charts.
+
+**How:** Strings are processed directly in CPython's internal PEP 393 layout (ASCII/UCS1/UCS2/UCS4) by hand-written SIMD kernels for escape scanning, copying and width conversion. On x86-64 it compiles three copies of the core (SSE4.2, AVX2, AVX-512) and picks one at runtime; aarch64 uses NEON. dumps_to_bytes has its own SIMD UTF-8 encoder instead of CPython's cached PyUnicode_AsUTF8, and bytes input to loads is validated and transcoded with simdutf-style vector shapes plus Lemire's lookup4 UTF-8 validation, widening the output buffer in place. Floats are printed with xjb64/xjb32 shortest-round-trip formatting; integer printing, number parsing and the core parser come from yyjson; and object keys of 64 bytes or less are reused from a 512-slot xxHash64-indexed cache (orjson's short-key cache idea) to avoid allocating str objects.
+
+**Use it when:**
+- CPython 3.10-3.14 services on x86-64-v2+ or aarch64 where json.dumps/json.loads of plain dict/list/str/int/float/bool/None data shows up in profiles, and the code calls them with default options.
+- Encode-heavy workloads producing str: the v0.0.17 charts show dumps-to-str 7.5x (twitter.json) to 23x (canada.json) faster than json, and 1.2-2.0x ahead of orjson on the same charts.
+- Emitting UTF-8 bytes of non-ASCII text such as CJK strings: dumps_to_bytes on simple_object_zh.json is charted at 6.55x json vs 1.46x for orjson when the str objects have no UTF-8 cache (a fast-path probe, not real-world data).
+- Float/number-heavy documents and NumPy arrays: canada.json loads is 7.75x json vs orjson 4.28x on the charts, and the README's NumPy microbenchmark shows ndarray dumps_to_bytes 1.4-10x faster than orjson.
+- Parsing JSON that is already a Python str: loads(str) skips UTF-8 transcoding (twitter.json 2.54x json vs orjson 1.80x).
+
+**Skip it when:**
+- Code that relies on json options: sort_keys, default=, cls, separators, ensure_ascii=True, parse_float/parse_int and object_pairs_hook are ignored, and indent accepts only 2 or 4. Output ordering and escaping will differ from json.
+- Data outside the JSON core types: dict keys that are not str raise JSONEncodeError (json turns int keys into strings); datetime, dataclass, UUID, Decimal and similar objects raise 'Unsupported type to encode' with no default hook; ints outside the int64/uint64 range fail in dumps and silently become float in loads.
+- 32-bit targets, x86-64-v1 CPUs without SSE4.2, big-endian machines, PyPy or other non-CPython runtimes. musl Linux, glibc older than 2.34, Intel macOS and Python 3.15 get no wheel, so they must build from source with Clang and CMake 3.30+.
+- Risk-averse production: the project is beta (0.0.x, PyPI 'Development Status :: 4 - Beta'), has 39 stars, and 2026 releases fixed several memory-safety bugs (a NEON encoder heap overflow in 0.0.19 that 'all prior versions' should upgrade past, 1-byte heap overflows in 0.0.20/0.0.21, invalid reads in 0.0.23), although fuzzing and ASAN run in CI.
+- Free-threaded CPython with containers shared across threads: support is experimental. The encoder locks dicts/lists outer-to-inner and can deadlock against other lock orders, and the optional lock-free build crashes on concurrent mutation.
+
+**Integration:** module · none at runtime beyond CPython (NumPy optional, enabled explicitly via setup_numpy_types). Source build needs Clang (clang-cl on Windows), CMake >= 3.30 and C17/C++20; yyjson-derived code, xjb, xxHash and khash are vendored. · CPython 3.10+ (PyPI wheels for 3.10-3.14 and 3.14t; 3.15 is source-only). Source builds require Clang (minimum version not documented); GCC and plain MSVC are rejected by CMake. · x86-64-v2+ (SSE4.2 minimum; runtime dispatch to SSE4.2/AVX2/AVX-512) and aarch64 (NEON), 64-bit little-endian only. Wheels: manylinux_2_34 x86-64/aarch64, macOS arm64, Windows amd64.
+
+**Vs siblings:** Pick it over orjson, the other catalogued stdlib-json replacement, when you want json-style call signatures and str output, encode a lot of non-ASCII text or numeric/NumPy data, or want control over the UTF-8 cache: the same first-party charts put it 1.2-2.0x ahead of orjson on dumps-to-str and 1.1-1.8x on loads. Stay with orjson if you need default=, OPT_SORT_KEYS/OPT_NON_STR_KEYS, native datetime/dataclass/UUID serialization, x86-64-v1/32-bit/musl wheels or a more mature project; simdjson and yyjson are C/C++ parsers rather than Python modules, and ssrJSON reuses yyjson's parser and number code.
+
+**Gotchas:**
+- Unsupported kwargs are ignored, not rejected: dumps(obj, sort_keys=True) returns unsorted output and prints only a one-time stderr warning ('some options are not supported'). Call ssrjson.strict_argparse(True) to turn these into errors.
+- dumps_to_bytes writes CPython's per-str UTF-8 cache by default, so each non-ASCII str encoded keeps an extra UTF-8 copy alive until the str is freed. For one-shot encodes, disable it with ssrjson.write_utf8_cache(False) or is_write_cache=False. dumps_to_bytes also rejects lone surrogates (U+D800-DFFF), which dumps passes through.
+- loads turns out-of-range integers into float without an error, accepts NaN/Infinity in any letter case (but not 'inf'), and stops at 1024 levels of nesting (encode as well). object_hook/array_hook re-entrancy is capped at 32 nested decoder levels.
+- Memory footprint: each decoding context carries about 1 MB of scratch (two 512 KB string buffers), and the key cache holds references to up to 512 short key str objects between calls. Free-threaded builds allocate this per thread.
+
+**Status:** Actively maintained: 0.0.23 was released to PyPI on 2026-09-17, the same day as the last commit, and CI runs fuzzing and ASAN. It is still a beta 0.0.x project (39 stars, mostly one author with 230 of 246 commits), MIT-licensed and easiest to consume as PyPI wheels, since vendoring or source builds require Clang.
+
+[repo](https://github.com/Antares0982/ssrJSON) · [benchmark](https://github.com/Antares0982/ssrJSON/blob/main/README.md#how-fast-is-ssrjson)
+
+##### Tachyon JSON (Rust, TachyonConcepts)  `Rust`  `MIT`  `stale`  `Tier C`
+
+Tiny unsafe Rust JSON writer for compile-time-constant objects into a fixed stack buffer; claims 8 ns vs serde_json's 23 ns.
+
+**Beats:** serde_json — The README's only data is one pair of numbers: encoding {"message":"Hello, world!"} over 1,000,000 iterations took 23 ns with serde_json ('zero-copy') and 8 ns with Tachyon JSON (~2.9x, derived). No benchmark code, CPU, compiler or serde_json version is published (the repo's .cargo/config.toml sets target-cpu=native, opt-level=3), and the Tachyon side encodes a compile-time-constant object with escaping off, through copy paths specialized for this payload's 7- and 13-byte strings, so it is not a like-for-like comparison.
+
+**Known shortcoming:** No benchmark code in the repo; the Tachyon side uses a no-escape macro and unsafe encode, so it may skip escaping that serde_json does. 0 stars, stale since 2025-07.
+
+**Known shortcoming:** The benchmark is tuned to its own payload: tcopy! has hand-written paths for exactly 7- and 13-byte strings ('message', 'Hello, world!'), and the Tachyon side encodes a compile-time object with escaping off. Built for one TechEmpower-style /json endpoint. Most writes skip bounds checks (stack buffer overflow on larger output), the 7-byte path reads past the string, and keys are never escaped. NaN/inf print as invalid JSON. Writer only, compile-time objects only, no serde integration; 3 commits, no tests.
+
+**How:** There is no allocation and no serializer state: output goes into a caller-owned fixed-size array, and most writes (`write_char_fast`, `write_raw_bytes`, the `tcopy!` macro) skip bounds checks. With no_escape=true, string values are memcpy'd instead of scanned for characters to escape, and object keys are never escaped in either mode. `tcopy!` has hand-written fixed-width copy paths for exactly 7-byte strings (one unaligned u64 load/store) and 13-byte strings (u64 + u32 + 1 byte), the lengths of "message" and "Hello, world!" in the benchmark payload; numbers go through ryu. Because the benchmarked object is a compile-time constant, the runtime work is essentially copying 27 bytes.
+
+**Use it when:**
+- A fixed, string-only response known at compile time, such as the TechEmpower-style `/json` endpoint `{"message":"Hello, World!"}`. That is exactly how the author's own TachyonConcept web server uses it: `tachyon_object_noescape!` into a `TachyonBuffer<100>`.
+- Hot paths where you control every key and value and can guarantee they contain no `"`, `\` or control characters, so skipping escaping is correct.
+- Tiny outputs with a hard, known upper bound on size, so a stack buffer of size N can never be overrun.
+- As a reference for how far a hand-specialized, unchecked writer can drop below serde_json on a trivial payload. It is small enough to read in one sitting and borrow the idea from, rather than to depend on.
+
+**Skip it when:**
+- Serializing your own Rust structs or enums, or anything using serde derives: there is no Serialize integration and no parser at all.
+- Untrusted or arbitrary strings: object keys are never escaped, and with no_escape=true values are not either, so a `"` in the data produces invalid or injectable JSON.
+- Output whose size you cannot bound: braces, quotes, commas, unescaped bytes and `tcopy!` copies are unchecked, so going over N writes past the buffer (undefined behavior) rather than failing.
+- Integers above 2^53 or non-finite floats: Number is f64 only, and ryu's `format` prints NaN/inf/-inf, which are not valid JSON.
+- Anything that needs a maintained dependency: 3 commits all on 2025-07-21, no tests, no doc comments, no issues, 0 stars, no crates.io reverse dependencies.
+
+**Integration:** crate · ryu 1 · Rust 1.85+ implied by edition 2024 (no rust-version declared); the author's consumer project pins nightly · any per source (portable Rust, unaligned access via ptr::read_unaligned, no SIMD or arch intrinsics); the repo's .cargo/config.toml builds with target-cpu=native
+
+**Vs siblings:** sonic-rs is the catalogued serde_json alternative that covers serde into structs, an untyped Value, and both parsing and serialization, and simd-json (Rust), jiter and pikkr are catalogued for parsing. Pick Tachyon JSON only when you would otherwise hardcode the bytes of a fixed, trusted object in a bounded buffer; for any real data model, sonic-rs or serde_json itself is the safer choice.
+
+**Gotchas:**
+- Bounds checking is inconsistent. `write`/`write_str` (numbers, true/false/null, escape sequences) check capacity and set a private error flag, but `write_char_fast` and `tcopy!` do not. The error flag has no public getter, and `reset_pos()` does not clear it, so once it is set every later checked write on that buffer is silently dropped.
+- `tcopy!`'s 7-byte path reads 8 bytes from the source string and stores 8 bytes into the buffer, one past each. Reading past the end of a `&str` is undefined behavior in Rust even when it happens to work for literals in .rodata.
+- `FastStr::as_str(len)` is a safe fn that builds a `&'static str` from a raw pointer and any caller-supplied length, so safe code can trigger UB. A hand-built `TachyonObject` holds a raw pointer with no borrow on its pair array, so it can dangle.
+- `encode`, `as_slice` and `as_str` are `unsafe fn` with no documented safety contract, and `as_str` returns "" on invalid UTF-8. A top-level `Undefined` sets the error flag, while `Undefined` inside objects and arrays is silently skipped.
+
+**Status:** Stale since its single day of commits (2025-07-21), with ~900 crates.io downloads and nothing depending on it; it is MIT per LICENSE (Cargo.toml says MIT OR Apache-2.0) and small enough to vendor, but it is a companion to the author's web server that bills itself as 'powered by undefined behavior and bad ideas', which matches this code's unchecked writes.
+
+[repo](https://github.com/TachyonConcepts/TachyonJson) · [benchmark](https://github.com/TachyonConcepts/TachyonJson#-performance)
+
+##### zimdjson  `Zig`  `MIT`  `stale`  `Tier C`
+
+Zig port of simdjson with streaming and reflection decoding; its On-Demand parser beats simdjson on 3 of 5 author benchmarks.
+
+**Beats:** simdjson — The author ran their own Linux perf_event harness on a 3.30 GHz Skylake (model not given), with every contender built by `zig build --release=fast` (ReleaseFast, per scripts/bench_ondemand.py). simdjson v3.10.1 was compiled with Zig's bundled Clang, and the Zig version is not recorded. zimdjson's On-Demand FullParser beat simdjson On-Demand by about 1.5x on three extraction tasks over the 626 MB systemsPopulated.json (find-system ~1.74 vs ~1.17 GB/s, for example) but lost both twitter.json tasks. Throughput is file size divided by the mean wall time, including reading the file, over at least 3 runs and up to 10 s.
+
+**Known shortcoming:** Mixed against simdjson On-Demand: about 1.5x faster on find-system, top-factions and coordinates, but simdjson wins top-tweet and partial-tweets. CPU model, Zig version and optimize mode are not stated, and the two README charts disagree on the same task. Stale since 2025-04.
+
+**Known shortcoming:** Not like-for-like: the simdjson On-Demand harness loads a fresh padded_string inside every timed run while zimdjson reuses a presized buffer; zimdjson's DOM is slower than simdjson's on all 5 tasks. main builds only with Zig 0.14.0; the README's 0.1.1 pin predates the schema-mode fix (#8). No runtime CPU detection or scalar fallback (x86-64 AVX+PCLMUL or AArch64 only). Out-of-order field access runs at about 0.23 GB/s, slower than std.json.
+
+**How:** Stage 1 follows the Langdale-Lemire simdjson design. It classifies characters with nibble-lookup shuffles (inline vpshufb on x86-64, tbl on AArch64). It finds string spans by applying a carry-less-multiply prefix-XOR (vpclmulqdq) to the quote mask, plus odd/even backslash-run arithmetic. It then extracts structural positions into a u32 index with tzcnt/clz loops, processing two 64-byte masks per iteration on x86. On-Demand walks that index lazily and parses only the values you access; the number parser sits in modules named eisel_lemire, digit_comp and BigInt. StreamParser keeps the bytes and a u16/u32 chunk-relative index in mirrored ring buffers (memfd+mmap on POSIX, VirtualAlloc2 placeholders on Windows), which is how memory stays constant.
+
+**Use it when:**
+- A Zig program that pulls a few fields out of large JSON (hundreds of MB, such as the 626 MB EDSM systemsPopulated dump) and wants simdjson On-Demand behaviour without C++ interop.
+- A single JSON document too large to hold in memory, or over 4 GiB: StreamParser parses it with constant memory. The README lists this as a feature zimdjson adds on top of simdjson.
+- Decoding a known schema into Zig structs. In the author's twitter.json chart, Schema mode runs at ~1.07 GB/s, compared with ~0.83 GB/s for serde_json::from_str and ~0.33 GB/s for std.json.parseFromSlice.
+- Builds you control that target x86-64 with AVX/PCLMUL or AArch64, on Linux, macOS or Windows.
+
+**Skip it when:**
+- C or C++ codebases: use simdjson directly. In the author's own chart, simdjson won both twitter.json On-Demand tasks (~2.84 vs ~2.64 and ~2.82 vs ~2.43 GB/s) and all five DOM tasks (for example find-system ~0.90 vs ~0.80 GB/s).
+- Projects on Zig 0.15 or 0.16. main pins Zig 0.14.0 and its API is built on std.io.AnyReader. PR #11 reports that the 0.15.x branch still fails on 0.15.2, and the 0.16 port (PR #13) is unmerged.
+- Reading On-Demand fields in a different order from the document. The author's schema chart shows 'On-Demand, Unordered' at ~0.23 GB/s, slower than std.json. The README suggests switching to schema mode to avoid this.
+- Binaries that must run on unknown CPUs. SIMD features are fixed at compile time: there is no runtime dispatch (issue #4) and no scalar fallback (issue #3), targets without SIMD fail with a compile error, and architectures other than x86-64 and AArch64 hit @compileError.
+- Code that needs an active upstream. The last commit on main is from 2025-04-29 and the last tag, 0.1.1, is from 2025-03-23.
+
+**Integration:** module · None at runtime (Zig std only). simdjson v3.10.1, yyjson 0.10.0, a RapidJSON fork and test-data archives are lazy dependencies used only by the benchmarks and tests. · Zig 0.14.0 (minimum_zig_version in build.zig.zon; CI pins 0.14.0). Newer Zig versions need the unmerged 0.15.x branch or community PRs. · Linux, macOS and Windows (streaming needs Windows 10 or later). CPUs: x86-64 with AVX and PCLMULQDQ (VEX-encoded inline asm) or AArch64 (NEON tbl). Vector width comes from the compile target.
+
+**Vs siblings:** Pick zimdjson over simdjson only when your code is Zig or you need constant-memory streaming of one huge document. Pick it over yyjson when you touch only a few fields: in the author's chart, yyjson ran at 0.46-1.72 GB/s and zimdjson On-Demand at 1.59-2.64 GB/s. For Rust or C++, simd-json, simdjson, yyjson or glaze are the natural choices.
+
+**Gotchas:**
+- On-Demand checks only the parts of the document you read ('validate what you use'), so malformed JSON can parse without error. The OutOfOrderIteration misuse check exists only in Debug builds, so release builds do not report out-of-order access.
+- StreamParser returns error.StreamChunkOverflow in three cases: a string or number longer than the chunk (64 KiB by default), a whitespace run longer than the chunk, or a rewind past the current chunk. RawString values become invalid when the chunk advances, and asString results become invalid on the next parse. On macOS each ring buffer is asserted to be at most 4 MiB, which limits chunk_length.
+- The README's install line pins tag 0.1.1 (2025-03-23). That tag predates the fix for issue #8, where large structs in schema mode exceed the comptime backward-branch quota. The fix exists only on main (commit aa22af4).
+- The benchmark harness is not symmetric. For On-Demand, simdjson calls padded_string::load inside every timed run, allocating a new buffer each time, while zimdjson reuses a buffer pre-sized with expectDocumentSize. For DOM, simdjson uses parser.load. zimdjson DOM loses to simdjson DOM on all five tasks, so part of the ~1.5x On-Demand win on the 626 MB file may come from buffer allocation rather than parsing. This was not measured separately.
+
+**Status:** Stale: main was last touched on 2025-04-29 and the last tag is 0.1.1 (2025-03-23); Zig 0.15 and 0.16 ports sit in an unmerged branch and in community PRs. It is MIT-licensed pure Zig, so the practical path is to vendor it and pin Zig 0.14.
+
+[repo](https://github.com/EzequielRamis/zimdjson) · [benchmark](https://github.com/EzequielRamis/zimdjson#performance)
+
+##### qajson4c  `C`  `MIT`  `abandoned`  `Tier D`
+
+C99 JSON DOM parser building the whole tree in one caller-supplied buffer; claims lower parse memory than RapidJSON (unpublished).
+
+**Beats:** RapidJSON, nlohmann/json — Nothing has been measured. The README says qajson4c got top scores in nativejson-benchmark's Parse Memory, Memory Peak and AllocCount categories, but that suite's only published results (2016-09-09, clang 7.0, Core i7-4980HQ, mac64/mac32) predate the qajson4c integration (PR #78, merged 2017-05-05) and have no qajson4c row. No figures exist against RapidJSON or nlohmann/json on any compiler or hardware.
+
+**Known shortcoming:** No speed measurement: the README claim is qualitative and about memory, and nativejson-benchmark's only published results (2016-09-09) predate qajson4c joining the suite, so it has no row there. 10 stars.
+
+**Known shortcoming:** Lossy and lenient: doubles print with at most 10 significant digits (NaN/Inf become null); the default parser accepts trailing commas, leading + and zeros, and trailing garbage; objects over 2 members are re-sorted so key order is lost. Depth capped at 32, no inputs over 4 GiB, GCC/Clang only, wrong-type access aborts. Abandoned since 2019.
+
+**How:** It is built for low memory, not speed. The parse makes two passes. Pass one validates the input and counts nodes, long-string bytes and each container's member count, keeping the counts in the caller's buffer. Pass two writes the DOM into exactly that many bytes, so arrays and objects become plain C arrays with no per-node allocation and no slack. Each value is a 16-byte tagged cell on 64-bit (12 bytes on 32-bit), strings of up to 10 chars (6 on 32-bit) sit inside the cell, and in-situ mode points strings into the input instead of copying them. Objects with more than two members are sorted with qsort, so key lookup is a binary search.
+
+**Use it when:**
+- Firmware or other no-heap targets: parse into a static buffer after sizing it exactly with QAJ4C_calculate_max_buffer_size, or bound it by the formula nodes x 16 B plus the bytes of strings longer than 10 chars.
+- Read-mostly config, command or telemetry messages where you need O(1) array indexing and key lookup rather than a token stream.
+- Writable input buffers where copying strings is unaffordable: QAJ4C_parse_insitu leaves only the node cells in the DOM buffer.
+- Emitting small JSON documents without malloc: build with QAJ4C_Builder in a fixed buffer and stream them out through QAJ4C_print_callback (one char at a time) or QAJ4C_print_buffer_callback (chunks), for example to a UART.
+- Callers that need a parse error code plus the byte position of the failure (QAJ4C_error_get_errno / QAJ4C_error_get_json_pos).
+
+**Skip it when:**
+- Parsing where throughput matters: the input is scanned twice, numbers go through strtoul/strtod, there is no SIMD, and no timing against RapidJSON exists. yyjson and simdjson have published speed wins.
+- Round-tripping floating point: the printer formats doubles with "%1.10g" (at most 10 significant digits, so output is lossy), and NaN or Inf values print as null.
+- Documents nested deeper than 32 levels (max_depth = 32 is hard-coded, so deeper input fails with QAJ4C_ERROR_DEPTH_OVERFLOW), or inputs over 4 GiB (internal offsets are uint32_t).
+- Code that mutates or grows a parsed DOM: the parse result is const, and arrays and objects cannot be resized (calling set_object/set_array again wastes the old buffer space).
+- MSVC toolchains, or projects that need upstream fixes: the library is abandoned since 2019 and open bug #8 (the Builder's deduplicate mode asserts instead of overwriting) has no response.
+
+**Integration:** source-drop (qajson4c.c + qajson4c_internal.c and 3 headers); the bundled CMake also builds a static and a shared lib · none beyond the C standard library, whose calls are funneled through qajson_stdwrap.h so you can supply your own under NO_STDLIB · C99; GCC or Clang only (structs use __attribute__((packed, aligned))); CMake 2.8.12 for the bundled build; MSVC not supported (Windows via MinGW) · 32- and 64-bit targets where __WORDSIZE or _WIN32/_WIN64 is defined (otherwise #error). CI covered Linux x86-64 gcc (Travis) and Windows MinGW (AppVeyor). A 2019 branch commit mentions ARM test runs.
+
+**Vs siblings:** jsmn is also allocation-free C, but it only returns tokens; qajson4c gives you a real DOM with array indexing and binary-search key lookup inside one precisely sized buffer. Against yyjson or simdjson, which have measured speed wins over RapidJSON, pick qajson4c only when a computable memory bound with no heap matters more than throughput and you accept unmaintained code.
+
+**Gotchas:**
+- QAJ4C_parse is lenient by default: it accepts trailing commas, a leading '+', leading zeros and trailing garbage after the root value. Comments (/* */ and //) are accepted even in strict mode. Pass QAJ4C_PARSE_OPTS_STRICT to QAJ4C_parse_opt for tighter validation.
+- By default, parsed objects with more than 2 members are re-sorted (by key length, then bytes). Index iteration and printing then lose the input key order unless you pass QAJ4C_PARSE_OPTS_DONT_SORT_OBJECT_MEMBERS, and lookup with duplicate keys is undefined.
+- A type-mismatched accessor (for example QAJ4C_get_int on a string) calls the fatal-error hook, which by default calls raise(SIGABRT). The header comment says it prints to stderr. Check with is_* first, or register your own handler.
+- The pointer returned by QAJ4C_parse_dynamic is the start of the realloc'd buffer, and you must free() it; only the nativejson-benchmark harness shows this, not the README or header. In-situ parsing and the *_by_ref builder calls keep pointers into your strings, so those strings must outlive the DOM.
+
+**Status:** Abandoned: last master commit 2019-03-22 (iterative_parsing branch 2019-11-01), and nativejson-benchmark still points at the old USESystemEngineeringBV location (PR #122 unmerged). It is MIT-licensed, about 2.1k lines of C99 and easy to vendor, but GCC/Clang only.
+
+[repo](https://github.com/DeHecht/qajson4c) · [benchmark](https://github.com/miloyip/nativejson-benchmark)
 
 #### reflection-and-codegen
 
@@ -6986,7 +10173,195 @@ Schema-compiled binary serializer for C++ and eight other languages; about 4x lo
 
 [repo](https://github.com/chronoxor/FastBinaryEncoding) · [benchmark](https://github.com/chronoxor/CppSerialization#readme)
 
+##### ser20  `C++`  `BSD-3-Clause`  `stale`  `Tier C`
+
+C++20 fork of cereal with a buffered binary archive: 1.3-2.1x faster than cereal, 1.1-2.8x than Boost, on small-field data.
+
+**Beats:** cereal, boost::serialization — The repo's own sandbox/performance.cpp saves and loads the same data with Boost, cereal and ser20 binary archives to std::ostringstream/istringstream, averaged over 100 interleaved runs. The committed numbers show ser20 about 2.0x faster on save and 1.8x on load than cereal for vector<PoDStruct>, 2.1x/1.3x for map<string,PoDStruct>, and 1.85x/1.3x for the 'String' bar. That bar is most likely the vector<string> test, because a duplicate dict key overwrote the single-string entry, which was at parity. Against Boost the range is 1.1-2.8x, and bulk arithmetic vectors are at parity. Compiler, flags, CPU, library versions and the data size behind each bar are not stated, and no one has reproduced the results independently.
+
+**Known shortcoming:** The speedup over cereal only applies to the plain BinaryArchive (4 KiB write and read-ahead buffers); PortableBinaryArchive is unchanged and JSON/XML were not benchmarked. The read-ahead never returns unused bytes, so raw reads or back-to-back archives on one stream break, and pipe/socket reads can block. The plotted 'String' bar is likely vector<string>; a single large string is at parity. Not a pure rename: JSON/XML write 'ser20_class_version' and macros become SER20_*. First-party benchmark with no compiler, flags or CPU stated.
+
+**How:** cereal's BinaryArchive makes one streambuf sputn/sgetn call per primitive, so a vector of structs or a container of short strings pays that per-call stream overhead for every field. ser20's BinaryOutputArchive memcpys writes under 1 KiB into a 4 KiB buffer and flushes it at the end of each top-level archive call; this is write coalescing. BinaryInputArchive reads the stream in 4 KiB chunks and serves small loads from that buffer (read-ahead buffering). Dispatch functions are also marked always_inline + nodebug (SER20_HIDE_FUNCTION). Contiguous arithmetic vectors and single large strings already go out as one bulk write in both libraries, so they gain nothing.
+
+**Use it when:**
+- An existing cereal codebase on BinaryArchive where profiles show time in many small field writes: vectors of structs, map<string, struct>, many short strings. The repo's numbers show 1.8-2.1x faster saves and 1.3-1.8x faster loads than cereal on these.
+- Moving off boost::serialization to a cereal-style API. ser20 keeps cereal's Boost transition layer (operator&, is_loading/is_saving) and beat Boost 1.1-2.8x in the chart's struct, map and string categories.
+- The project is already on C++20 (GCC 10+, Clang 13+, AppleClang 15+, MSVC VS 2019/2022) and builds with CMake 3.20+ or Bazel bzlmod.
+- Saving to or loading from std::ostringstream/istringstream or file streams, where per-call streambuf overhead dominates.
+- You care about debug builds. The README claims smaller debug symbols and a better debugging experience because of nodebug/always_inline wrappers, and 25% faster compiles, but gives no data.
+
+**Skip it when:**
+- Bulk arithmetic payloads (vector<double>, vector<uint8_t>, one large std::string): the repo's own numbers show parity with cereal and Boost.
+- Types with virtual bases or heavy polymorphism: PoDChild (virtual base) loads were about 7% slower than cereal (26.27 vs 24.64).
+- Portable-binary, JSON or XML archives: only BinaryArchive has the buffer. PortableBinaryArchive still calls sputn/sgetn for every value, and no benchmarks exist for the other archives.
+- You need top throughput: the author says it is 'by far not the fastest serialization library out there'. It keeps cereal's per-field stream model and only batches it.
+- Maturity or untrusted input matter: single maintainer, 34 stars, v0.9.1, no commits since 2025-06-25, no issue tracker activity. Container loads resize() to the size stored in the archive with no bound, so a hostile archive can force huge allocations.
+
+**Integration:** static lib · None at runtime. It bundles rapidjson, rapidxml and base64 headers for the JSON/XML archives. Boost.Serialization is needed only for the optional comparison benchmark (SKIP_PERFORMANCE_COMPARISON=OFF). · C++20 with concepts (C++17 is rejected with #error). CI covers GCC 10/12/14, Clang 13/15/16/18, AppleClang via Xcode 15.4/16.2, and MSVC on windows-2019/2025. Needs CMake 3.20+ or Bazel (bzlmod). · Any platform with a C++20 compiler. CI runs on Ubuntu, macOS and Windows. BinaryArchive uses native endianness; PortableBinaryArchive handles endianness conversion.
+
+**Vs siblings:** Pick ser20 when you have cereal-style code, or need cereal features (polymorphic pointers, shared_ptr tracking, versioning, JSON/XML archives), and want a cheap speedup from a rename. For raw speed, bitsery and YAS report 3.5-10x wins over cereal and Boost in third-party suites, and Cista++ and struct_pack are different, much faster designs, but all of them are separate libraries with their own APIs.
+
+**Gotchas:**
+- BinaryInputArchive reads ahead in 4 KiB sgetn chunks and never gives unused bytes back (the destructor is defaulted). After a load, the istream position can be past the end of the archive. Unlike cereal, which reads exactly the bytes it needs, you cannot interleave raw reads or run back-to-back archives on the same stream. On a pipe or socket streambuf, a small load may block until 4 KiB or EOF arrives.
+- BinaryOutputArchive holds data in a 4 KiB buffer until the end of each top-level ar(...) call or until destruction. Writes of 1 KiB or more bypass the buffer. Stream write or read failures throw ser20::Exception.
+- Version numbers disagree: the CMake project says 1.4.0 (used for the find_package SameMajorVersion check), version.hpp says 0.9.1 and MODULE.bazel says 0.9.0. version.hpp warns that compatibility is not guaranteed across versions.
+- The C++20 module file (module/ser20.cppm) is marked experimental and is not wired into the CMake build. The README's '15% smaller' and 'compile up to 25% faster' claims have no published data.
+
+**Status:** Stale single-maintainer project (v0.9.1, last commit 2025-06-25, 34 stars, no issues filed). It is BSD-3-Clause and small (two .cpp files plus cereal-derived headers), so it is easy to vendor. Upstream cereal (4.7k stars) is still being pushed to as of 2026-03.
+
+[repo](https://github.com/royjacobson/ser20) · [benchmark](https://github.com/royjacobson/ser20#performance)
+
+##### SerialXML  `C++`  `MIT`  `active`  `Tier C`
+
+C++26 reflection-based struct-to-XML writer; author measures ~9.6x lower latency than Boost.Serialization/cereal XML archives.
+
+**Beats:** Boost.Serialization, cereal — In one first-party run on the author's Intel Core 7 240H laptop (DDR5-5600), with a GCC 16 toolchain and unstated flags, a small Order (id, customer, 3-field address, 3 line items, 4 int tags) was serialized 100,000 times. SerialXML took 822 ns per call, vs 7,899 ns for Boost.Serialization xml_oarchive and 7,946 ns for cereal XMLOutputArchive (~9.6x), and 1,585 ns for a hand-built pugixml tree (~1.9x). The outputs are not equivalent (cereal indents by default, and Boost and cereal add archive metadata and go through ostringstream), the harness never checks them, and from reading the source, SerialXML's output for this payload is truncated at the double unit_price element, so its number is not a like-for-like measurement.
+
+**Known shortcoming:** Benchmark likely invalid (found by reading the source, not run): add_child's floating-point branch drops original_size when resizing, truncating the whole output whenever a float/double child is written, and the benchmark payload has one (LineItem::unit_price) while the harness never checks output. Escaping bugs: the last SIMD block of long strings is never checked, and strings of 64+ characters lose or duplicate characters. Writer only (no parser), unlike the Boost.Serialization and cereal baselines. Needs GCC 16 with -freflection; BUILD_BENCHMARKS defaults ON.
+
+**How:** C++26 static reflection (P2996 `std::meta::members_of`/`annotations_of` plus `define_static_string`/`define_static_array`) works out every member's tag text, attribute prefix and handling mode at compile time. At runtime this leaves an unrolled `template for` sequence that memcpy's the precomputed tag literals and uses std::to_chars for numbers, all appended into one pre-reserved (4 KB) std::string through resize_and_overwrite. Escaping compares std::simd vectors against the five XML special characters to build a bitmask, sizes the output with popcount, jumps between hits with countr_zero and copies the clean runs with memcpy. There is no DOM, archive object or ostream. In the benchmark, by contrast, each Boost and cereal call builds an std::ostringstream and an archive, and the pugixml call builds a document tree before printing it.
+
+**Use it when:**
+- Write-only export of plain structs to XML text (reports, config dumps, service payloads), where annotations on the struct define the schema and nothing needs to read the XML back.
+- Latency-sensitive output of small records with integer and short-string fields: the author's Order payload (about 20 fields) took ~0.8 us per call, vs ~7.9 us with Boost or cereal XML archives and ~1.6 us with a hand-built pugixml tree.
+- Codebases already on GCC 16.1+ with -freflection, C++26 and CMake 4.3 `import std` that want to drop hand-written serialize() boilerplate.
+- Cases where a bad mapping should fail the build: conflicting annotations (attribute+unpack, attribute+cdata, cdata+raw, cdata+iteration and so on) are static_assert errors.
+
+**Skip it when:**
+- You need to parse or round-trip XML. There is no deserializer, so it cannot replace the load side of Boost.Serialization or cereal.
+- You use any toolchain other than GCC 16 with reflection (Clang, MSVC, older GCC, pre-C++26 code), or your build cannot consume C++ named modules and experimental `import std`.
+- Your data has floating-point child elements, strings of 64+ characters, or special characters near the end of strings at least one SIMD vector long. From reading the current source, these paths truncate, corrupt or leave text unescaped, and the tests do not cover them.
+- You need versioning or schema evolution, pointer tracking, polymorphism, or binary or JSON formats. None of these are documented.
+- You need something production-grade: one author, 0 stars, no tags or releases (CMake version 0.1.0.0), and a StructuralTuple dependency fetched from the main branch of another 0-star repo.
+
+**Integration:** module (C++ named module `serial_xml` compiled into a CMake STATIC library; consumed via FetchContent or cmake --install + find_package(SerialXML)) · StructuralTuple (EJainDev, MIT; found with find_package or fetched from its main branch with FetchContent); the standard library module (`import std`). Benchmarks, built by default, also need Boost.Serialization, cereal and pugixml v1.16 (fetched); tests need GoogleTest. · C++26 with -freflection; GCC 16.1+ (CI uses gcc:16.2.0); CMake 4.3+ with experimental import std (CMAKE_CXX_MODULE_STD); the presets use Ninja · Not documented. CI only exercises Linux x86-64 with GCC 16.2. Escape scanning uses std::simd at the target's native width, and the code uses std::aligned_alloc.
+
+**Vs siblings:** All catalogued siblings (bitsery, YAS, ser20, Cista++, struct_pack, FBE) are binary serializers benchmarked on binary output. Pick SerialXML only when the output must be XML text, you only ever write it, and you are on GCC 16 reflection; for round-trip, portability across compilers or production maturity, bitsery, YAS, ser20 or cereal itself are safer.
+
+**Gotchas:**
+- Floating-point child elements (from reading the code, not run): in add_child, the floating-point branch returns `combined_size + (ptr - buf)` to resize_and_overwrite without adding original_size. Any float or double emitted as a child element (including inside std::optional or a vector) therefore cuts the whole output down to its first few dozen bytes. Attributes and integers take correct paths. The bug is present both at the benchmark commit (2d679989) and at HEAD, and the benchmark's LineItem::unit_price is exactly such a member.
+- Escaping (from reading the code, not run): get_escape_bitmask never checks the last vector-width block of strings that are at least one vector long, because its tail loop runs `simd_size & 7` = 0 times, and for a string exactly one vector long it loads from before the buffer. Separately, copy_with_escapes offsets each 64-bit mask word by `i * 8` instead of `i * 64` and copies at most 63 characters per word. Strings of 64+ characters therefore come out with dropped or duplicated characters and are written past the resized length. The tests only use strings shorter than 40 characters.
+- Since 2026-09-05, reflection walks members_of rather than only data members. Any accessible const member function that returns a value and needs no arguments (getters, size(), empty()) is emitted as a child element; use [[=serial_xml::skip]] to suppress it.
+- CMake: BUILD_BENCHMARKS and BUILD_EXAMPLES default to ON, so FetchContent consumers must have Boost.Serialization and cereal installed unless they set BUILD_BENCHMARKS=OFF. The README's `release-gcc-16` preset does not exist (the real one is `release-gcc`). -freflection is added through directory-scoped CMAKE_CXX_FLAGS instead of a PUBLIC target option, so consuming targets probably need to add it themselves.
+
+**Status:** Actively developed by one author (repo created 2026-07-12, last commit 2026-09-07, GCC 16.2 CI passing) under MIT, but it has 0 stars, no tags or releases, and correctness gaps in the float and long-string paths, so treat it as experimental and pin a commit if you use it.
+
+[repo](https://github.com/EJainDev/SerialXML) · [benchmark](https://github.com/EJainDev/SerialXML/blob/main/README.md)
+
 #### yaml-toml-xml
+
+##### frxml  `C++`  `MIT`  `abandoned`  `Tier C`
+
+Archived zero-copy C++17 XML parser; its old chart shows ~1.8-9x faster than libxml2 DOM but slower than pugixml and RapidXML.
+
+**Beats:** libxml2 — The only evidence is a first-party chart (docs/Figure_1.png, Oct 2024) of the now-deleted frxml::doc DOM. It was run on pugixml-generated documents of 50-1000 elements with one attribute each and no text (about 0-330 KiB), with 3 google/benchmark iterations per size. Relative to frxml, libxml2's xmlReadMemory DOM took ~3.5x as long mid-range (~9x at the smallest sizes, ~1.8x at 260-290 KiB) and tinyxml2 ~2.6-5x, while pugixml (~0.8-0.9x) and RapidXML beat it at nearly every size. At 260-290 KiB every competitor's ratio drops at once, so frxml itself slowed ~2x in that band. frxml was built with -O3 -march=native, against distro-packaged competitors with unknown flags, and no compiler or CPU is stated. The harness's `if (!doc)` check can never fire because operator! tests an offset that is always >= 0. The legacy parser rejected character data outright (text between tags returns E_NO_BEGIN). By my reading, its tree index also left child elements out of each element's subtree size. So it did far less work than libxml2, and the result says nothing about XML that contains text.
+
+**Known shortcoming:** Slower than pugixml and RapidXML (about 2.4x slower at 260-290 KiB inputs); it only beats libxml2 (~1.8-9x) and tinyxml2 (~2.6-5x). The published chart is from the October 2024 code; the 2025 rewrite has no published results.
+
+**Known shortcoming:** The measured code no longer exists: the chart is of the 2024 frxml::doc DOM (deleted 2025-08-27), and the current header-only callback API has no numbers. The 2024 parser could not read text between tags and its harness could not detect a failed parse; frxml was built with -O3 -march=native against distro-packaged competitors. Current code misdetects CDATA and never matches end tags. Repo archived.
+
+**How:** It makes a single zero-copy pass that does very little per byte: names, attribute values and text come back as std::string_view slices of the input, with no entity decoding, no DTD or namespace handling, and (in the 2025 code) no end-tag matching. Delimiters are compile-time char packs (a GNU string-literal operator template plus fold expressions) and the callback is a non-type template parameter, so the scalar byte-at-a-time scan loops and the per-node dispatch inline completely; there is no SIMD, SWAR or memchr. The benchmarked 2024 code appended every node in pre-order to one geometrically growing std::vector of std::variant, where libxml2 and tinyxml2 allocate per node, which is also why it allocated less memory in the chart.
+
+**Use it when:**
+- Machine-generated XML you control (elements, attributes, comments, PIs, plain text) where you only need to tokenize it once, and libxml2's full DOM, dictionary and well-formedness checks cost more than you need
+- Allocation-free or arena-style code: parse<callback> never allocates, so you decide whether to keep records, copy them into your own buffer, or drop them
+- Small documents where libxml2 setup cost dominates: the 2024 chart shows the widest gap over libxml2 (~5-9x) below ~20 KiB, though that was the deleted frxml::doc API
+- Vendoring a tiny MIT-licensed tokenizer (four headers, ~14 KB, no dependencies) that you will read, fix and extend yourself
+
+**Skip it when:**
+- Any case where speed is the goal and pugixml or RapidXML is an option: both were faster than frxml in its own chart (~0.8-0.9x its time, ~0.4x at 260-290 KiB)
+- Real-world XML with DOCTYPE/ENTITY declarations, entities (&lt; and &#x20; stay raw), namespaces, CDATA (mis-detected, see gotchas), or whitespace around '=' in attributes (a = "x" fails with EXPECTED_QUOTE)
+- Untrusted or possibly malformed input: the 2025 parser does not check that end tags match (its comment says 'validation is for validator, not parser'), and the repo has no unit tests, fuzzing or CI, only a benchmark
+- Projects that need a maintained dependency: the repo is archived, has 1 star and no releases or tags, and its README usage example calls the deleted frxml::doc API
+- MSVC builds: the delimiter literals rely on a GNU string-literal operator template extension
+
+**Integration:** header-only (CMake INTERFACE target frxml; include frxml/frxml.h). The benchmarked 2024 version was a shared library. · none; google/benchmark, pugixml and tinyxml2 are git submodules used only by the benchmark · C++17 plus the GNU string-literal operator template extension (the code suppresses -Wgnu-string-literal-operator-template), so GCC or Clang in practice; CMake 3.27 for the repo build; compiler versions not documented · not documented; portable scalar code with no intrinsics; UTF-8 input only (no BOM); both harnesses assume a Unix-like host (run.sh, and -Wl,--wrap,malloc in the 2024 harness)
+
+**Vs siblings:** Almost never for speed. Catalogued siblings that beat libxml2 by more are RapidXml (externpro), which was also faster than frxml in frxml's own chart, and LightningXML, which also leads pugixml and RapidXML. Pick frxml only if you want a ~14 KB, allocation-free event tokenizer to vendor and extend yourself for machine-generated XML.
+
+**Gotchas:**
+- The code the chart measured is gone. The README figure and usage example (frxml::doc, which also references an undefined `error`) are for the Oct 2024 DOM, deleted on 2025-08-27. The head is a different callback API, and the 2025 harness that tests it has no published results.
+- The callback receives a pointer to a stack temporary, and each record's string_views point into your input. Copy node->size() bytes if you keep a record, and keep the input alive. Element::attrs() and children() are declared but never defined, so calling them fails to link.
+- CDATA detection is broken: after '<' the code matches "!CDATA[" instead of "![CDATA[", so a real <![CDATA[...]]> section becomes a bogus Element with no matching ETag. <!DOCTYPE ...> is likewise reported as an Element named "!DOCTYPE".
+- Header hygiene: node.h includes only <cstdint> but uses std::string_view, std::ostream and std::is_same_v, so include those headers before frxml/frxml.h. string.h defines a global SPACE macro. The CMake target calls target_compile_definitions(cxx_std_17), which defines a macro rather than requiring C++17, so set the standard yourself.
+
+**Status:** The author archived the repo after an Aug-Sep 2025 rewrite (last commit 2025-09-02; 1 star; no issues, releases, unit tests or CI). It is MIT-licensed and the head is four small headers that are easy to vendor, but the README's chart and example describe deleted code, and the current code has the parsing bugs listed above.
+
+[repo](https://github.com/Sharp0802/frxml) · [benchmark](https://github.com/Sharp0802/frxml/blob/master/docs/Figure_1.png)
+
+##### go-toml v2  `Go`  `MIT`  `active`  `Tier C`
+
+Pure-Go TOML 1.1 library with an encoding/json-style API; project benchmarks show 2.4-6.4x faster than BurntSushi/toml.
+
+**Beats:** BurntSushi/toml (the most widely used Go TOML library) — The README table comes from the project's own `go test -bench` harness (ci.sh benchmark -a: GOMAXPROCS=2, -count=10, benchstat sec/op ratios). The harness points the benchmark imports at go-toml v1 and at BurntSushi/toml, fetched with an unpinned `go get`. On the common cases, v2 beats BurntSushi by 2.4-2.6x on Marshal (5.0x for ReferenceFile/struct) and 5.9-6.4x on Unmarshal, with a 5.3x geomean over all 16 benchmarks. No Go version or CPU is stated for this table; PR #1067 separately measured old-v2 vs new-v2 on an Apple M1 Pro and a Threadripper PRO 3975WX with go1.26.4 (-53% and -56% geomean time).
+
+**Known shortcoming:** Latest tag v2.4.3 silently skips UnmarshalText on named scalar types (#1109, fixed on the branch but unreleased). v2.4.2 and earlier crash on deep nesting with an unrecoverable stack overflow (GHSA-frc4-6h9q-39fq). The internals were rewritten in v2.4.0 (2026-06) with several regressions since. The README table has no Go version or CPU, BurntSushi is unpinned, and all dataset benchmarks decode into interface{}. Not a drop-in for BurntSushi (no MetaData or Primitive).
+
+**How:** A from-scratch rewrite of the parser, decoder and encoder (PR #1067, June 2026) stores AST nodes in one reusable flat arena ([]Node with int32 handles). It scans comments and strings 8 bytes at a time with SWAR bit tricks (hasByteBelow/hasByteEqual on uint64 words), validates UTF-8 one run at a time, and returns strings without escapes as zero-copy subslices of the input. The decoder state (arena, duplicate-key tracker, scratch buffers) is reused through sync.Pool; key strings are interned; struct field lookups use a per-type plan cached in a sync.Map with a case-folded index; and each table header is resolved once, instead of re-walking from the root for every key. interface{}/map[string]interface{} targets use a fused single-pass scanner that builds Go maps directly, with no AST nodes for scalars, and the encoder caches per-type plans and pools its buffers (Marshal/ReferenceFile/struct went from 226 to 4 allocs/op).
+
+**Use it when:**
+- Go services and CLIs that load TOML config into structs where decode latency or allocations matter, e.g. Hugo-style batches of many small front-matter documents (Unmarshal/HugoFrontMatter: 5.9x vs BurntSushi in the README).
+- Decoding arbitrary TOML into map[string]interface{} or interface{} (Viper-style). This takes the fused no-reflection path, where the README's dataset benchmarks show 4.5-8.3x vs BurntSushi.
+- Catching config typos with DisallowUnknownFields, and giving users line/column errors (DecodeError) without writing your own.
+- Generating commented config templates (the `comment` tag and the `commented` option), or editing TOML in place while keeping comments (unstable/edit, not yet released).
+- Projects that want a stdlib-only dependency: go.mod has no requirements, the rewrite claims zero `unsafe`, and CI checks that the capslock capability baseline does not grow.
+
+**Skip it when:**
+- Code that relies on BurntSushi's MetaData (IsDefined, Undecoded, Keys, Type) or on Primitive/PrimitiveDecode for delayed decoding. go-toml v2's Decode returns only an error, and its RawMessage equivalent lives in the semver-exempt unstable package.
+- Named scalar types that implement encoding.TextUnmarshaler (e.g. `type Secret string`) on v2.4.0-v2.4.3: UnmarshalText is skipped silently (#1109). The fix (#1113), together with a MarshalText fix for named string types (#1114), is on the v2 branch but not in any tagged release as of 2026-09-25.
+- Untrusted input on v2.4.2 or earlier: deeply nested arrays or inline tables crash the whole process with an unrecoverable stack overflow (GHSA-frc4-6h9q-39fq, high). v2.4.3 fixes this with a nesting cap of 10000.
+- Very large or streamed inputs: Decoder.Decode reads the whole io.Reader into memory (io.ReadAll) before parsing, and there is no incremental decoding into values.
+- Risk-averse upgrades: v2.4.0 contains the June 2026 rewrite, and at least three regressions followed (#1075 broken encoder output, #1078 inline embedded structs not decoded, #1109). v2.3.x keeps the older implementation, which the pre-rewrite README measured at 2.0-5.0x vs BurntSushi on the common cases.
+
+**Integration:** module · none (go.mod declares no requirements; stdlib only) · go.mod: go 1.21.0; README supports the last two major Go releases; CI tests Go 1.25 and 1.26 (the rewrite PR also reports passing on go1.22) · any Go target: pure Go, no cgo, no unsafe; the word-at-a-time scanning uses portable binary.LittleEndian loads; CI runs on Ubuntu, Windows and macOS runners
+
+**Vs siblings:** It is the only Go entry among the TOML siblings: toml-spanner (Rust, vs the toml crate), teptris (C11, vs toml++) and TOMLDecoder (Swift Codable, vs toml++) are the picks in those languages. Choose go-toml v2 when the consumer is Go code that needs struct/map decoding through a familiar encoding/json-style API rather than an FFI parser.
+
+**Gotchas:**
+- All the dataset benchmarks (canada, twitter, citm_catalog, code, config, example) decode into interface{} and go through the dedicated fused path. EnableUnmarshalerInterface turns that path off, and struct targets use the reflect path, whose gain over the old v2 was smaller in PR #1067 (ReferenceFile/struct -45% time vs -67% for map).
+- Marshal writes strings as single-quoted literal strings unless they contain a newline or a single quote, and uses exact Go field names (e.g. `Version = 2`). Expect diffs in generated files after switching. The Marshal docs say nil interfaces and nil pointers are not supported, and uint64 values above MaxInt64 are rejected.
+- TOML local date-times decoded into time.Time are placed in time.Local. Use LocalDate/LocalTime/LocalDateTime to keep them unambiguous.
+- Open bug #1127: hex, octal and binary integers (0x10, 0o20, 0b10000) fail to decode into float64 fields, although they decode into interface{}. An independent GLD Serializer Benchmark run also reports spec-compliance misses for 2.4.3 (#1126, details only on its dashboard).
+
+**Status:** Actively maintained, MIT-licensed side project (single maintainer per SECURITY.md). The latest tag is v2.4.3 (2026-07-05); the v2 branch is 7 commits ahead with unreleased bug fixes (last commit 2026-07-18), and only the latest 2.x receives security support.
+
+[repo](https://github.com/pelletier/go-toml) · [benchmark](https://github.com/pelletier/go-toml/blob/v2/README.md#benchmarks)
+
+##### libleptris  `C`  `BSD-2-Clause`  `active`  `Tier C`
+
+C11 XML library (DOM, SAX, XPath 1.0, DTD, XSLT, C14N) that beats libxml2 on small-document parse and XPath latency.
+
+**Beats:** libxml2 — The first-party README tables were measured on Apple Silicon (model not stated) with clang -O3 -flto=thin against an unversioned Homebrew libxml2. They show SAX 2.5x on ~1 KB and 3.6x on ~5 KB, DOM parse 1.4x on ~5 KB, and XPath 1.3-4.0x in CPU time on 10 queries over a ~5 KB catalog, where the libxml2 harness recompiles each expression on every call. The project's macos-latest CI run 36132268169 (v1.9.243) shows smaller SAX margins (~2.0x small, ~1.3x medium, ~1.2x on the large file), DOM parse+root ~2.7x on ~10 KB, and XPath axes ~1.5-2x in CPU time with descendant::* at wall-time parity. No harness produces the ~25x attribute-set claim against pugixml.
+
+**How:** The DOM parser is a single-pass scanner modeled on pugixml. One fused SIMD pass copies the input and counts markup to size a single bulk arena block. Names and values are then NUL-terminated in place, text nodes are borrowed views with no per-node copy, and the scan uses byte-class lookup tables, NEON or runtime-dispatched AVX2 byte search, and 32-bit offset tree edges. XPath expressions compile to bytecode for a stack VM and live in a process-wide 16-slot cache. The VM has specialized axis opcodes and fused axis+predicate opcodes for [@attr], [@attr='lit'] and [N], plus a lazily built per-document element index (a preorder array with per-name and per-attribute buckets) that answers //name-style queries by bulk copy. SAX runs on one explicit streaming state machine, and a recorder batches events so FFI hosts pay one call per chunk instead of one per event.
+
+**Use it when:**
+- A C or C++ service that runs many XPath 1.0 queries over KB-to-low-MB documents. Per-query cost is sub-microsecond on a ~5 KB fixture (README: 1.3-4.0x vs libxml2), and leptris_xpath_compile removes the cache probe for hot expressions.
+- Streaming SAX over small messages (~1 KB), where libxml2 SAX2's fixed per-parse cost dominates. CI shows ~2x there; expect only ~1.1-1.3x on larger files.
+- You need libxml2's breadth (DTD validation, XInclude, C14N for XML signatures, XSLT 1.0) in one permissively licensed C library with no required runtime dependencies.
+- Documents too big for RAM: pull (leptris_pull_new_file) and iterparse keep memory bounded by the input slice or by the largest top-level subtree.
+- Ruby, Python or Rust apps that now reach libxml2 through Nokogiri or lxml and want a faster engine behind a plain C ABI.
+
+**Skip it when:**
+- Raw DOM parse throughput from C++. In the serialbench harness pugixml 1.16 parses 1.3-5.9x faster across 12 CI platforms (issue #1222, open) and leads parse+serialize and parse+XPath 2.2-4.4x (#1238). CI also has libxml2 ahead on full tree traversal (1.26 vs 1.57 us).
+- XSD validation: it is not implemented (tracking issue #1075 is open), while libxml2 has XSD 1.0. There is no XML Schema 1.1. XQuery is only a new 1.0-core layer (xquery.h), and the README still lists it as unsupported.
+- HTML throughput: the WHATWG parser trailed libxml2 htmlReadMemory 3.4-7x on x86 CI legs (#1218, open). The html4 (Nokogiri-compatible) mode is the faster path.
+- Risk-averse production. The repo has 1 star, was created in Nov 2025 and is at v1.9.244, with five releases on 2026-09-25 alone and empty-template CHANGELOG entries. It also has a record of fixed memory-safety regressions: heap corruption (#1038), a UAF (#1207), SAX attribute-buffer corruption (#625) and an XPath-variable thread race (#1079).
+- Long-lived documents with heavy mutation churn: there is no per-node free, so replaced or removed nodes stay in the pool until leptris_document_free.
+
+**Integration:** static lib (default); shared lib via LEPTRIS_BUILD_SHARED / BUILD_SHARED_LIBS; CMake package (find_package(leptris)) and pkg-config · None required. utf8proc (Unicode) and iconv (encoding conversion) are optional but default ON; turn both off for zero dependencies. Building needs CMake >= 3.20. Tests use Google Test and benchmarks use libxml2 and pugixml. · C11 (CMake enforces CMAKE_C_STANDARD 11 although the README says C99). CMake 3.20+. GCC, Clang, AppleClang, MinGW, or MSVC from VS2019 16.8. LTO is on by default for Release. · CI covers Linux x86-64 and aarch64, macOS arm64 and x86-64, Windows MSVC, 32-bit x86 (-m32) and s390x big-endian (qemu). NEON is used on aarch64 and AVX2 is dispatched at runtime on x86, with a scalar fallback.
+
+**Vs siblings:** Pick libleptris over RapidXml or SpeedyXml when you need a C ABI plus XPath, DTD, XInclude, C14N or XSLT, not just parse speed. Both are C++ parsers catalogued as beating libxml2 on raw parse (SpeedyXml 0.34 s vs 1.53 s on a 235 MiB document). For bulk XPath over GB-scale files, simdxml (2.6x pugixml on 5.1 GB DBLP) is the better pick.
+
+**Gotchas:**
+- leptris_parse_string copies the whole input, and the document keeps that copy until it is freed. leptris_parse_string_inplace skips the copy but writes NULs into your buffer, which must then outlive the document.
+- Whitespace-only text nodes are kept by default (libxml2 semantics). Pass LEPTRIS_PARSE_DROP_WS_TEXT to leptris_parse_string_flags to get pugixml's default or XML_PARSE_NOBLANKS behavior. Keeping those nodes alone costs 1.1-1.4x in parse time on pretty-printed input.
+- The XPath AST/bytecode cache is process-global and mutex-guarded with only 16 slots, so workloads with many distinct expressions miss it; compile hot expressions with leptris_xpath_compile. Nesting deeper than 256 levels is rejected by default (leptris_set_max_depth).
+- The docs disagree with the build. LICENSE.md is Ribose BSD-2-Clause, but README.adoc and vcpkg.json say MIT. The README lists distro packages (apt, brew, apk, MSYS2) as pending.
+
+**Status:** Very active: v1.9.244 shipped on 2026-09-25, with ~2,000 commits since the repo was created in Nov 2025. It builds with plain CMake under a permissive license. It is still a 1-star project with daily releases, so pin a version and benchmark your own corpus first.
+
+[repo](https://github.com/leptris/leptris) · [benchmark](https://github.com/leptris/leptris/blob/main/README.adoc)
 
 ##### libsimdxml  `C++`  `MIT`  `active`  `Tier C`
 
@@ -7061,6 +10436,45 @@ C++17 YAML parser/emitter with a yaml-cpp-style API; author reports ~10x faster 
 
 [repo](https://github.com/zhaoliangcn/PipeYAML) · [benchmark](https://github.com/zhaoliangcn/PipeYAML#performance-vs-yaml-cpp-08)
 
+##### quick-xml  `Rust`  `MIT`  `active`  `Tier C`
+
+Rust StAX-style XML pull reader/writer; streams real-world XML 1.84x faster than libxml2 SAX, serializes 1.22x faster than pugixml.
+
+**Beats:** libxml2 and pugixml — bemayer/xml-benchmark, run of 2026-09-01 on a GitHub Actions ubuntu-latest runner (CPU model unstated). quick-xml (version unpinned `*`, likely 0.42.0; stable rustc, LTO) was measured against pugixml master and Debian libxml2 2.9.14, both built with g++ 12.2 at -O3. On the ~10 MB DBLP/OSM bucket its `read_event_into` loop hit 612 MB/s vs libxml2 SAX 332 (1.84x) and serialized at 866 vs pugixml 708 (1.22x). The harness never touches attributes or unescapes text, so its 715 MB/s 'DOM' figure against pugixml's 598 (1.2x) is not a like-for-like tree build.
+
+**Known shortcoming:** In bemayer/xml-benchmark (1-star, unlicensed, no CPU model) quick-xml's 'DOM Parse' builds no tree: it runs the same event loop as its SAX row, so DOM ratios compare a tokenizer against full DOM builders. It loses 1 KB DOM parse to pugixml. Debian libxml2 2.9.14 stops at depth 256 on the deep files, which skews the libxml2 serialize rows. No XPath.
+
+**Known shortcoming:** The benchmark depends on quick-xml '*', so the measured version is unknown (probably 0.42.0), and it times the buffered copying read_event_into path, not zero-copy read_event. Require >= 0.41.0 for RUSTSEC-2026-0194 (O(N^2) duplicate-attribute check) and RUSTSEC-2026-0195 (unbounded NsReader allocation). Misses some well-formedness errors such as multiple roots (#848), no W3C conformance suite in CI, no line-ending normalization, no DTD or schema validation. Four breaking minor versions in 2026; MSRV 1.86.
+
+**How:** The reader is a small state machine (text, reference, markup). It uses `memchr`'s vectorized byte search (`memchr2` for `<`/`&` in text, `memchr3` for `>` and the two quote characters inside tags) to jump between delimiters instead of stepping through bytes one at a time. Events are `Cow<str>` slices of the input or of one caller-reused buffer, so no tree and no per-node allocations are built. `BytesStart` stores only the raw tag and name length, so attributes are split only when you iterate `attributes()`. Entity unescaping and EOL/attribute normalization happen only when you call `xml_content()`/`normalized_value()`, and costly checks such as comment `--` validation are off by default.
+
+**Use it when:**
+- Rust code that streams large XML dumps (DBLP/OSM-style, 10-100 MB) and pulls out a subset of fields. On the ~10 MB real-world bucket the event loop ran 612 MB/s vs libxml2 SAX 332 and Expat 228.
+- Read-modify-write pipelines that transform a document event by event with `Reader` + `Writer`. Serialize measured 866 MB/s vs pugixml 708 and libxml2 499 on real-world files.
+- Memory-bound parsing. Peak RSS was 11.9 MB on the ~10 MB real-world bucket, vs 50.1 MB for pugixml DOM and 187 MB for libxml2 DOM.
+- Mapping config or API payloads straight onto Rust structs with the `serialize` (serde) feature, or streaming XML from sockets with `async-tokio`.
+
+**Skip it when:**
+- You need a navigable tree or XPath. quick-xml builds neither, and pugixml wins every XPath Query bucket in the same suite. Its 'DOM Parse' wins are a bare event loop, not a tree.
+- C/C++ codebases. There is no C API, so you would need FFI/cxx glue around a Rust crate.
+- You need strict conformance: no DTD/schema validation, custom entities must be resolved by hand, and issue #848 lists well-formedness errors the reader does not report (multiple root elements, top-level text; `MissingEndTag` only from `read_to_end`). No W3C conformance suite runs in CI (#749).
+- Tiny documents. pugixml beat it on 1 KB DOM parse (1978 vs 659 MB/s, though near timer resolution).
+- You need a stable API across years. It is pre-1.0, with four breaking minor lines (0.39-0.42) in 2026 alone, and 0.42 moved the whole API from bytes to `&str` (see issue #782 on release churn).
+
+**Integration:** crate · memchr (required); optional: encoding_rs (`encoding`), serde (`serialize`/`serde-types`), tokio (`async-tokio`), document-features, arbitrary · Rust 1.86 (edition 2024) for 0.42.0; 0.41.x needs 1.79; 0.39.x and older 1.56 · any Rust target; `#![forbid(unsafe_code)]`, no platform-specific code in the crate itself (SIMD comes via memchr); CI runs Linux and Windows plus an i686 32-bit test subset
+
+**Vs siblings:** Pick quick-xml when you are in Rust and want a widely used (2,435 reverse dependencies), maintained streaming reader plus writer with serde support. For C++ streaming against libxml2 SAX, SpeedyXml avoids FFI. For C++ DOM trees, LightningXML or Parshred are the pugixml challengers, and simdxml targets XPath-style queries, which quick-xml does not do.
+
+**Gotchas:**
+- 0.42.0 (2026-08-22) validates UTF-8 on every event. Non-UTF-8 input without the `DecodingReader` now returns `Error::Encoding`. The `encoding` feature handles only ASCII-compatible encodings, so UTF-16 needs `DecodingReader` or you get wrong events.
+- Pin >= 0.41.0. RUSTSEC-2026-0194 (O(N^2) duplicate-attribute check, 80k attributes about 6 s) and RUSTSEC-2026-0195 (unbounded `NsReader` namespace allocation, OOM demonstrated on Routinator) affect earlier versions.
+- `trim_text` has documented bugs. It trims text next to comments/PIs/CDATA that is real content, and it emits empty `Text("")` events (#984). The reader also does no transparent EOL normalization (#1003). Trim or normalize per event instead.
+- The serde `overlapped-lists` feature can buffer without bound and go quadratic on hostile input. Set `event_buffer_size` if you enable it.
+
+**Status:** Actively maintained (0.42.0 released 2026-08-22, last commit 2026-09-02) and MIT-licensed with about 434M crates.io downloads, but still pre-1.0 with frequent breaking API changes.
+
+[repo](https://github.com/tafia/quick-xml) · [benchmark](https://bemayer.github.io/xml-benchmark/)
+
 ##### RapidXml  `C++`  `BSL-1.0 OR MIT`  `active`  `Tier C`
 
 Single-header in-situ C++ XML DOM parser from 2009; about 4x libxml2's DOM parse throughput on 10-100 MB inputs.
@@ -7132,6 +10546,82 @@ C++11 YAML 1.2/JSON parser and emitter that builds a zero-copy flat tree; ~25-30
 
 [repo](https://github.com/biojppm/rapidyaml) · [benchmark](https://raw.githubusercontent.com/biojppm/rapidyaml-data/master/bm/results/0.16.0-pre/linux-release/ryml-bm-parse-travis.txt)
 
+##### rusty_xml (Remade-With-Rust)  `Rust`  `MIT OR Apache-2.0`  `active`  `Tier C`
+
+Pure safe-Rust rewrite of libxml2 (parse, DOM, SAX, XPath, DTD, C14N) whose CLI parses faster than xmllint as shipped.
+
+**Beats:** libxml2 — This is an author-run, CLI-vs-CLI comparison on Windows: rxmlint 0.2.0 (release build, rustc not stated, linked with rusty_alloc) against a pinned MSVC build of libxml2 v2.15.3 xmllint on the system allocator. Both parsed with --noout --repeat, pinned to one core, measuring CPU time over 20 ABBA pairs; the CPU model is not stated. rusty_xml was 1.55x-2.31x faster on four files (83.25 vs 37.18 MB/s on big-attr), but with the same allocator on both sides it was only about 1.25x faster on big-attr and about 7% slower on big-300k. The slashdot row is inflated because xmllint re-reads the file on every repeat.
+
+**Known shortcoming:** About half the margin over libxml2 comes from its custom allocator (rusty_alloc), per the author: with the same allocator big-attr is 0.80x and big-300k is 1.07x of libxml2's time, so the parser alone is slower on big-300k. The comparison is CLI against CLI with different parse flags.
+
+**Known shortcoming:** The board measures 0.2.0; releases through 0.8.1 added conformance checks and were never re-benchmarked. Not reproducible from the repo (big-1m.xml missing, script covers other files), and the xmllint baseline differs about 1.86x between the author's two boards. The library sets no global allocator, so embedders get the same-allocator figures. '--stream' builds the full tree first. 1 star; all releases shipped within three days.
+
+**How:** About half of the published margin comes from the allocator. rxmlint uses rusty_alloc, a pure-Rust port of mimalloc, as its #[global_allocator], while xmllint runs on the system allocator. The rest comes from ordinary scanner work in the 0.2.0 performance release: character data and attribute values are copied in one pass per ASCII run instead of decoding each character, names are scanned in place as byte spans, UTF-8 decoding checks only the leading scalar (this fixed an O(n^2) re-validation), scratch attribute vectors are reused, and the arena DOM uses u32 NodeId handles. Allocations on the attribute-heavy file fell 72%. There is no SIMD and no string interning: every node and attribute still holds owned Strings, which explains why the allocator matters so much.
+
+**Use it when:**
+- You need libxml2's feature set (XPath 1.0, DTD validation, C14N/exclusive C14N, HTML parsing) in a Rust or wasm32 build with no C toolchain, no *-sys crate and #![forbid(unsafe_code)] throughout.
+- You parse untrusted XML and want no-network and no-XXE behaviour that cannot be switched off, plus bounded entity expansion.
+- Your binary already uses rusty_alloc (or you are willing to set it as the global allocator). The as-shipped 1.55x-2.31x DOM-parse gain over xmllint depends on it.
+- You parse attribute-heavy documents of hundreds of KB to MB into a DOM. big-attr.xml is the only large file that stays faster (about 1.25x) when both sides use the same allocator.
+- You are porting libxml2-based code to Rust and want the same function names and option bits.
+
+**Skip it when:**
+- You need a parser that is faster on its own merits. With the same allocator the author measures 0.80x on big-attr and 1.07x (slower) on big-300k, and the board has not been re-run since rxmlint 0.2.0. The 0.3.0 through 0.8.1 conformance releases have landed since then.
+- You need streaming or bounded memory. xml_reader_for_memory and rxmlint --stream build the whole tree and then walk it. Only the rusty_xml-specific XML_PARSE_NO_TREE flag with a SAX handler avoids building nodes.
+- You need XML 1.1, external entity or DTD loading, gzip input (XML_PARSE_UNZIP is not wired), or Shift_JIS/EUC-JP/ISO-2022-JP encodings. None of these are supported.
+- You need a C-ABI drop-in for libxml2 (the cdylib is a stub) or the full RelaxNG/XSD/Schematron validators (only working subsets exist).
+- You need a mature dependency. The repo was created 2026-08-27, versions 0.1.0 to 0.8.1 all shipped within three days, it has 1 star and about 268 crates.io downloads, and every commit since 0.8.1 has been a README edit.
+
+**Integration:** crate · none outside its own workspace crates for the library. rxmlint alone pulls in rusty_alloc-api (plus libc/windows-sys) through rusty_xml-alloc. cargo-deny bans *-sys crates and copyleft. · Rust 1.85 (MSRV), edition 2021 · Windows x86-64, Linux and macOS are built and tested in CI. The wasm32-unknown-unknown library passes cargo check in CI. No arch-specific code or SIMD.
+
+**Vs siblings:** Pick rusty_xml when you need libxml2's breadth (XPath, DTD validation, C14N, HTML) in memory-safe pure Rust. If raw parse speed is the goal, the C/C++ siblings beat libxml2 by much more: RapidXml at 1084.9 vs 278.8 MB/s DOM, SpeedyXml at 4.4x streaming, and libleptris at 1.4-3.6x.
+
+**Gotchas:**
+- The library never sets #[global_allocator]. Linked into your app on the system allocator, you get the same-allocator result (0.80x-1.07x of libxml2), not the headline 0.43x-0.64x.
+- xml_ctxt_use_options ORs in XML_PARSE_NONET | XML_PARSE_NO_XXE on every call, so documents that depend on external entities or DTDs cannot be loaded, even when you pass other flags.
+- Without NOENT, general entities are expanded where libxml2 keeps entity-reference nodes, and the internal DTD subset is serialized verbatim where C reorders it. Tree shape and byte output differ from xmllint in these two cases.
+- Since 0.2.0 the pub `name` field of #text/#comment/#cdata-section/#document nodes is an empty String. Use XmlDoc::name() to get the canonical name.
+
+**Status:** The last code release was 0.8.1 on 2026-08-29, and every commit since has been a README edit (the 'active installs' count is self-reported). It is MIT OR Apache-2.0, 100% safe Rust and on crates.io, but the whole project was written in under a month by a single maintainer org.
+
+[repo](https://github.com/Remade-With-Rust/rusty_xml) · [benchmark](https://github.com/Remade-With-Rust/rusty_xml/blob/main/bench/SIDE-BY-SIDE.md)
+
+##### simdxml  `Rust`  `MIT OR Apache-2.0`  `active`  `Tier C`
+
+Rust SIMD XML parser and XPath 1.0 engine using a flat structural index; beats pugixml on large, attribute-dense files.
+
+**Beats:** pugixml — All figures are the project's own hyperfine timings of whole processes: `sxq` (release build with LTO, rustc version unstated) against a small pugixml XPath shim built with `c++ -O2` against the system pugixml (1.14 per the author's blog). On an M4 Max that gave 3.2 s vs 8.3 s on 5.1 GB DBLP `//article` and 130 vs 174 ms on 195 MB PubMed, and on a Ryzen 9 3950X 14.7 vs 38.8 ms on a 10 MB attribute-heavy file. However, sxq used every core and, on DBLP and PubMed, printed only a match count, while the single-threaded pugixml shim printed every match's text, and pugixml wins PubMed `count()` and `contains()` outright.
+
+**How:** Parsing follows simdjson's stage-1 idea: 64-byte blocks are compared against `<`, `>`, `"` and `'` with AVX2, SSE4.2 or NEON and packed into u64 bitmaps, and quoted regions are masked with a prefix-XOR (PMULL carry-less multiply on ARM, a shift-XOR chain on x86). That classifier only runs when a 4 KB sample shows more than 5 quotes per tag; otherwise a memchr-based scanner jumps from `<` to `<`. The output is a struct-of-arrays index of about 16 bytes per tag, against about 35 bytes per DOM node. XPath then runs on CSR child arrays, pre/post-order numbering (O(1) ancestor tests), posting lists of interned tag names, and fused descendant scans; the CSR arrays are built lazily, only for multi-step paths. Files are mmap'd, and in the CLI anything of 1 MB or more is split at `>`...`<` boundaries, parsed on all cores, and merged in one sequential pass.
+
+**Use it when:**
+- Read-only XPath extraction from large, record-oriented dumps (hundreds of MB to multi-GB, e.g. DBLP or PubMed) on a multi-core machine. The author's blog puts the DBLP index at ~3.6 GB against ~7.9 GB for pugixml's DOM.
+- Attribute-dense XML such as SVG or flat attribute records. This is where the SIMD quote masking pays off: 1.7-2.6x over pugixml end-to-end and 4.0x over quick-xml parse-only on the project's 1 MB attribute-heavy file.
+- Shell pipelines that currently use `xmllint --xpath`. `sxq` is a jq-style CLI with count, raw, JSON and NUL-separated output, and the README reports it 6.4-17.5x faster than xmllint.
+- Querying the same big file repeatedly (a `.sxi` sidecar is reloaded by mmap, so there is no re-parse), or running one compiled query over thousands of small files (the batch API with a bloom-filter prescan).
+- Rust services, or Python/Elixir through the simdxml org's bindings, that need XPath 1.0 over trusted, well-formed UTF-8 input.
+
+**Skip it when:**
+- You need a DOM to edit or save, or pugixml's tree-navigation API. simdxml is a query-only index, and C++ callers would have to write their own FFI layer.
+- Untrusted, malformed or non-UTF-8 input. Upfront UTF-8 validation was removed for speed (commit 8a7fdd4), text is handed back through `from_utf8_unchecked`, and mismatched close tags are not detected (the `MismatchedCloseTag` error variant is never raised). DTDs are not processed, and only the five predefined entities and numeric entities are decoded.
+- Workloads dominated by `count()` / `contains()`, or small files. pugixml wins those PubMed queries (117 vs 133 ms, 148 vs 162 ms), and under 1 MB the README says all native tools are within startup noise.
+- XPath that depends on namespaces. `pfx:name` tests are matched against the literal tag text, with no prefix-to-URI resolution, so a document that uses a default namespace or a different prefix will not match.
+- Anything needing a maintained dependency. It has 14 stars and one main author; v0.1.0 through v0.2.1 all shipped on 26-27 March 2026 with no main-branch commits since, and a third-party fix for index corruption (PR #4) was withdrawn unmerged.
+
+**Integration:** crate · nom 7, thiserror 2, memchr 2, memmap2 0.9, xxhash-rust 0.8 (xxh3); the sxq CLI adds only memmap2 · Rust 1.75 (declared MSRV), edition 2021 · x86-64 (AVX2 or SSE4.2 detected at runtime, scalar fallback); aarch64 NEON (selected at compile time, and uses PMULL without a feature check); other targets use a scalar/memchr path
+
+**Vs siblings:** Parshred (C++20, AGPL-3.0: DOM/SAX/pull APIs, XPath, namespaces, DTD validation, W3C conformance in CI) and libsimdxml (a C++23 library with the same flat-index-plus-XPath-1.0 design, 1.15-1.24x pugixml on parse) are the native C++ options, and Parshred is the one to use for untrusted or namespace-heavy XML. Pick simdxml when you are in Rust or want a permissively licensed CLI for multi-core XPath extraction over multi-GB record dumps.
+
+**Gotchas:**
+- Quote state in the SIMD two-stage path is tracked across the whole document, not per tag. A lone `"` or `'` in text content (e.g. `don't`) masks every later `<` and `>`, silently dropping the rest of the document from the index. This affects only files routed to that path (more than 5 quotes per tag in the first 4 KB). The fix, PR #4 from June 2026, was withdrawn unmerged; it also reports phantom tags from `<` inside comments or CDATA on that same path.
+- On aarch64, `neon.rs` calls `vmull_p64` (PMULL) with no `target_feature` gate or runtime check. Per PR #4, this traps with an illegal instruction on ARMv8 cores that lack the crypto extension.
+- Depth limits, from reading the source (not tested). The sequential scanner keeps parents in a fixed 32-entry stack, so tags nested deeper than 32 get no parent pointer and child/parent steps below that depth can miss. The parallel merge uses a 4096-entry stack with no bounds guard, so deeper nesting panics.
+- `sxq` automatically switches to all-core parallel parsing for files of 1 MB or more; pass `-t 1` for a single-threaded comparison. Its parallel splitter accepts any `>` followed by `<`, which can fall inside a CDATA section that contains markup. `string-length()` counts bytes, not characters.
+
+**Status:** Listed as active, but every commit landed on 26-27 March 2026 (crates.io v0.1.0 through v0.2.1, about 5.7k downloads) and main has had nothing since. MIT OR Apache-2.0 is declared only in Cargo.toml and the README, with no LICENSE file, and it installs with `cargo add simdxml` or `cargo install simdxml-cli`.
+
+[repo](https://github.com/simdxml/simdxml) · [benchmark](https://github.com/simdxml/simdxml/blob/main/README.md)
+
 ##### SpeedyXml (SpeedyXml-cpp)  `C++`  `BSD-3-Clause`  `active`  `Tier C`
 
 C++20 streaming SAX-style XML push parser with zero-copy callbacks; author-measured 4.4x faster than libxml2's SAX2 streaming parser.
@@ -7167,6 +10657,234 @@ C++20 streaming SAX-style XML push parser with zero-copy callbacks; author-measu
 **Status:** Active but brand-new: the code history goes back to Feb 2025, it went public 2026-07-27 as v1.0.0, and the last commit is 2026-07-29. It is BSD-3-Clause and dependency-free, easy to vendor (two core files), fuzzed with libFuzzer and tested in CI under ASan/UBSan.
 
 [repo](https://github.com/tcShadowWalker/SpeedyXml-cpp) · [benchmark](https://github.com/tcShadowWalker/SpeedyXml-cpp#benchmark)
+
+##### teptris  `C`  `MIT`  `active`  `Tier C`
+
+C99 TOML parser/emitter with a zero-copy arena DOM; its own benchmarks show 5-8x toml++ parse throughput.
+
+**Beats:** toml++ (tomlplusplus) — First-party results on an Apple M1 Max (unnamed compiler; min-of-10 in-memory parse of nine seeded synthetic 0.25-1.5 MB files): early teptris (v0.1.0-era) ran 186-335 MB/s against toml++ v3.4.0's 22-60 MB/s (5.2-8.5x), and 2.7-3.6x the best of tomlc17, cpptoml and tomlc99. The latest ledger entry (v0.1.27, four shapes, 379-418 MB/s) puts it at 4.1-5.8x the best competitor. teptris is built with -O3 plus ThinLTO (and possibly PGO), while the header-only C++ competitors build at -O2, and the JSON artifact the ledger cites is empty. The project's own CI artifacts from GitHub macOS and Ubuntu runners (run 36075071946) show a wider margin: 8.7-28x toml++.
+
+**How:** One forward pass writes nodes of at most 64 bytes into a per-document bump arena (64 KiB blocks that double in size, a three-instruction inline allocation, and the whole tree freed at once), and table keys stay as views into the input instead of being copied. Each table is an insertion-order entry vector plus an open-addressing index with linear probing over FNV-1a hashes. The hash is computed during the bare-key scan and cached in the entry, and a missed probe reports its empty slot so the insert that follows skips a second walk. The common shapes have fused fast paths: bare `key = value` lines, bare dotted headers, plain integers of up to 18 digits (Horner's method), floats via Clinger's exact fast path (at most 15 digits, exponent within ±22) with Ryu s2d as fallback, string bodies via memchr plus a NEON/SSE2 escape and control-character check, and a SWAR ASCII skip during UTF-8 validation. The ledger records that wider SIMD kernels and word-at-a-time hashing lost on TOML's 3-10-byte tokens, and optional PGO added another 2-13%.
+
+**Use it when:**
+- Parsing large TOML files or many of them (hundreds of KB to MB, or bulk ingestion of manifests and lockfiles), where toml++'s 22-60 MB/s (project's M1 Max run) shows up in profiles. teptris ran 186-335 MB/s in that same run.
+- C code, or C++/FFI hosts that want a plain C ABI with opaque handles and status codes instead of C++17 templates and exceptions.
+- Read-mostly config access where the input buffer already outlives the parsed document (owned or mmap'd file contents), so zero-copy key views cost nothing.
+- Tables with tens of thousands of keys: its hash index keeps lookups O(1). In the same benchmark tomlc99 went quadratic (4.3-4.5 s on 60k keys) and tomlc17 rejected those tables ('table too large').
+- Ruby or Python services that need faster TOML loading, through the teptris-ruby and teptris-py bindings (ledger: 11-37x tomli and 1.6-124x tomlib on the project's corpus).
+
+**Skip it when:**
+- Format-preserving edits: the DOM keeps no comments or source formatting, and emit is canonical (hex, octal and binary integers become decimal; multi-line strings are written as single-line escaped strings).
+- Strict TOML 1.0 validation: the parser always accepts the 1.1 additions (\e, \xNN, optional seconds, newlines and trailing commas in inline tables), and teptris_options has no switch to turn them off. So files it accepts can fail in 1.0-only parsers.
+- Small-config latency: the C benchmark corpus is 0.25-1.5 MB of synthetic files, so the few-KB configs most programs load are not measured. Each document also mallocs its struct plus at least one 64 KiB arena block.
+- Memory-constrained or custom-allocator environments: the arena calls malloc directly and there is no allocator hook. The whole tree stays resident until teptris_document_free, and peak-memory measurement is listed as still open (TODO.impl/09).
+- Conservative production dependencies: the repo was created 2026-09-13 and has 0 stars. It has had 28 tags (v0.1.0-v0.1.27) in its first ten days and no issues from outside users. The README says 'stable C ABI', but the ABI and soname policy document (TODO.impl/10) is still pending.
+
+**Integration:** static lib (default) or shared lib (TEPTRIS_BUILD_SHARED) via CMake; ships install rules, a CMake package export and teptris.pc · none at runtime (Ryu is vendored); the tests fetch GoogleTest v1.17.0 unless BUILD_TESTING=OFF · C99 compiler and CMake 3.20+. project() also enables CXX, so a C++ compiler must be present at configure time (tests use C++11, benchmarks C++17). · x86-64 (SSE2 baseline) and aarch64 (NEON), with a scalar fallback elsewhere; CI builds and tests on Linux x86-64/arm64, macOS arm64/Intel and Windows x64/arm64 (MSVC)
+
+**Vs siblings:** No TOML sibling is catalogued yet. The siblings parse YAML (fkYAML, rapidyaml, libfyaml, yeptris) or XML (RapidXml, simdxml and others), so pick teptris whenever the input is TOML. If you already use the same org's yeptris or libleptris, it follows their conventions (C ABI with opaque handles, per-document arena, first-party perf ledger) and carries the same maturity caveats.
+
+**Gotchas:**
+- Table keys are views into your input buffer and are not NUL-terminated. Freeing or reusing the buffer before teptris_document_free leaves them dangling. String values are NUL-terminated arena copies.
+- teptris_parse sets *out even when it fails, so the error can be read. You must free the document on both paths. Only the first error is reported: line and column plus a message of up to 192 bytes.
+- The vendored Ryu code (src/teptris/common/ryu) is dual-licensed Apache-2.0 / Boost-1.0, not MIT, and the license files its headers point to are not in the repo.
+- Two float paths call strtod: values with more than 17 significant digits, and values Ryu s2d fails on. strtod follows the process LC_NUMERIC locale, so under a comma-decimal locale those values could misparse (inferred from the code, not tested). The public header still says 'Parse a TOML 1.0 document', and the GitHub description still says C11, while the build is C99 with 1.1 syntax accepted.
+
+**Status:** Actively developed (last push 2026-09-24) and MIT-licensed with CMake install targets, but pre-1.0 with 0 stars and no outside users visible yet: small enough to vendor, as long as you accept being an early adopter.
+
+[repo](https://github.com/leptris/teptris) · [benchmark](https://github.com/leptris/teptris/blob/main/benchmarks/LEDGER.md)
+
+##### TOMLDecoder  `Swift`  `MIT`  `active`  `Tier C`
+
+Swift TOML 1.1 parser and Codable decoder. In its author's harness, its lazy parse ran about 5x faster than toml++.
+
+**Beats:** toml++ — In the author's own Swift program (harness unpublished, snippets only; 2026-01-01 post released with 0.4.3), averaging 100 warm iterations on the 443,461-byte twitter.toml with CFAbsoluteTimeGetCurrent, TOMLDecoder's lazy `TOMLTable(source:)` took 1.232 ms vs 2.226 ms for tomlc99 `toml_parse` (1.81x) and 6.107 ms for toml++ `toml::parse` with exceptions via a C wrapper (4.96x). This compares a structure-only parse with toml++'s fully validated DOM, the wrapper's move-assign into a static table puts the previous DOM's teardown inside the timed window (our reading of the snippet), and no CPU, OS, compiler versions, flags or baseline versions are given.
+
+**Known shortcoming:** Not like-for-like: since 0.4 the timed TOMLTable(source:) parse is lazy (it records token offsets and does not check or convert leaf values), while toml++ builds a fully checked tree. The harness that compares against toml++ and tomlc99 is not public, and no CPU, compiler or flags are given.
+
+**Known shortcoming:** Invalid TOML can pass TOMLTable(source:): bad leaf values only error when read; full checking needs the expensive Dictionary(table) path. The toml++ timing includes freeing the previous tree. The 0.4 rewrite is young (0.4.5 fixed fuzz-found crashes). Read-only (no encoder) and requires Foundation. Enrichment confidence 0.4.
+
+**How:** Parsing is two-phase: `TOMLTable(source:)` does a lexing-level pass that checks only structure (syntax, table redefinition, duplicate keys) and records each leaf value as a token byte range in five flat index-linked arrays instead of nested dictionaries, deferring unescaping and number/date validation to the typed accessor that asks for the value. The hot loop reads an UnsafeBufferPointer over the String's contiguous UTF-8 (avoiding String-index bounds checks) and scans basic strings 8 bytes at a time with a SWAR has-byte test for quote, backslash and newline. Key lookups are linear scans filtered by a cheap packed/sampled UInt64 key hash and a per-table 64-bit Bloom mask, with array capacities pre-reserved from input size. Per the author, most of the 0.4.3 micro-optimizations were found by an AI coding agent iterating on package-benchmark instruction counts.
+
+**Use it when:**
+- Swift code on Apple platforms, Linux or Windows that loads TOML config into Codable types and wants a pure-Swift parser with no C/C++ dependency.
+- Large TOML documents (hundreds of KB, like the 443 KB twitter.toml fixture) where only some fields are read: untouched leaf values are tokenized but never validated or materialized.
+- Swift projects now calling tomlc99 or toml++ through C/C++ interop: the author measured 1.81x and 4.96x faster structural parses from Swift.
+- Code that wants strictly typed TOML access (Int64, Double, OffsetDateTime, LocalDate/LocalTime) and a choice of proleptic-Gregorian date conversion.
+
+**Skip it when:**
+- C or C++ programs: it is Swift-only, so toml++ or teptris stay the options there.
+- You need to write, edit or re-serialize TOML: it has no encoder, and `TOMLTable`'s Codable conformance throws `notReallyCodable` outside TOMLDecoder.
+- You need the whole document validated up front: `TOMLTable(source:)` accepts, for example, `x = foo` or a malformed date, and errors only when that value is read. Full checking needs `Dictionary(table)`, which the docs call expensive.
+- Untrusted or unusual input: the 0.4 rewrite is young. 0.4.5 (2026-07-11) fixed fuzzer-found traps such as `-=0` and wrongly rejected valid TOML 1.1 (`x = [[true]]`, `x = [[inf]]`). Tables with very many keys fall back to linear scans once the 64-bit Bloom mask saturates (inferred from source, not benchmarked).
+- Embedded Swift or Foundation-free builds: the module does `public import Foundation`. The trait to make it optional (issue #232, PR #316) is still open.
+
+**Integration:** module (SwiftPM package; also on the Bazel Central Registry as swift-tomldecoder) · Foundation only for the library target. The benchmark, swift-docc-plugin and SwiftFormat packages are pulled in only when env vars enable them. · Swift 6.0 (swift-tools-version 6.0; CI tests 6.0 and 6.3.3). Apple minimums are iOS 13, macOS 10.15, tvOS 13, watchOS 6 and visionOS 1. · macOS, iOS, tvOS, watchOS and visionOS (CI simulators), Ubuntu 24.04 and Windows 2025 in CI. WebAssembly is build-only (tests not run, issue #225). There is no architecture-specific code; the SWAR scan uses plain UInt64.
+
+**Vs siblings:** It is the only Swift TOML entry in the catalog, so pick it for Swift code. For C/C++ pick teptris (C99; its own benchmarks show 5.2-8.5x toml++ throughput with a full DOM and an emitter), for Rust toml-spanner, and for Go go-toml v2.
+
+**Gotchas:**
+- Errors come in two phases. A document can pass `TOMLTable(source:)` or start decoding and still throw later, from the accessor for a bad value. Only phase-1 errors are wrapped as `DecodingError.dataCorrupted` by `decode`.
+- Key strategies slow parsing: with `.convertFromSnakeCase` or `.custom`, every key is built as a String, transformed and rehashed during phase 1. The snake-case converter is marked `// TODO: make this fast`.
+- Possible trap with non-contiguous Strings, such as some bridged NSStrings. Parsing falls back to `withUTF8`, but TOMLDocument keeps the caller's original String, and the token accessors force-unwrap `utf8.withContiguousStorageIfAvailable`. This comes from reading TOMLDocument.swift and Token.swift and is not reported in issues. Passing a native String or Data avoids it.
+- Lookups by key (`string(forKey:)`, Codable containers) are linear scans of the table's entries, which the author chose deliberately. Cost per lookup grows with table width.
+
+**Status:** Active, single-maintainer, MIT (108 stars): 0.4.5 (2026-07-11) fixed fuzzer-found crashes and 0.4.4 added TOML 1.1.0 plus another 24% cut in twitter.toml parse instructions, but the API is pre-1.0 and 0.4.1 broke source compatibility with 0.3.x.
+
+[repo](https://github.com/dduan/TOMLDecoder) · [benchmark](https://duan.ca/2026/01/01/TOMLDecoder-Is-Faster-Than-C/)
+
+##### TupleMarkup (TML)  `C`  `MIT`  `abandoned`  `Tier C`
+
+Tiny C parser for TML, a bracket-based nested-list markup format; author claims ~5x libxml2's parse speed on equivalent data.
+
+**Beats:** libxml2 — The only figure is one unqualified sentence in tml-c/README (about 5x faster than libxml2 on the same data, with much less memory); no input file, libxml2 version, compiler, hardware or result table is published. Its likely source is an undocumented --benchmark flag in tools/tml-convert/tml-convert.c that times one xmlReadFile()+xmlFreeDoc()+xmlCleanupParser() against one tml_parse_file()+tml_free_doc() with clock() (file I/O included, no warm-up or repeats, gcc -std=c99 -O3), which pits a libxml2 DOM build of an XML file against parsing that file's TML conversion, which has no closing tag names.
+
+**Known shortcoming:** Its own format, not an XML parser: the libxml2 comparison times parsing an XML file against parsing its smaller TML conversion, once, with clock() and file I/O included, and no results are published. The README's C89 claim is false (GNU and C99 features). Words followed by CR/LF keep those bytes (commit 395ed74). Unbounded recursion, a one-byte over-read on truncated input, and the C++ header breaks the link when included in two files.
+
+**How:** The tokenizer works in place: each token is a pointer and length into the input buffer, and words are scanned with a hand-unrolled 8-way byte-compare loop that switches to a slower in-place escape-collapsing path only when it hits a backslash. The recursive-descent parser appends every node to one contiguous, doubling byte buffer (an arena) in a variable-length packed layout: a leaf shorter than 255 bytes gets a single header byte (its length, which is also the relative offset to its next sibling) plus its NUL-terminated string, and lists and long leaves get a 9-byte header (0xFF plus 32-bit first-child and next-sibling offsets). Parsing a document therefore takes a handful of allocations (input copy, doc struct, arena growth and shrink) instead of one per node, with no SIMD, encoding conversion, entity or namespace work. The format also has less to check, since it has only four reserved symbols and no closing tag names or attribute syntax.
+
+**Use it when:**
+- You control both the producer and the consumer and want a small, hand-editable nested-list format for configs or scene and asset descriptions (the README's OpenGL model example) instead of XML.
+- Memory-tight loaders: the whole tree sits in one buffer with 1 byte of overhead per short leaf and 10 bytes per list, and the README notes it is often smaller than the source text because indentation is discarded.
+- Load-once, forward-walk reads: first-child and next-sibling steps are O(1), and numeric lists such as vertex data go straight into arrays with tml_node_to_float_array/_int_array.
+- Selecting subtrees by shape, for example [position | \? \? \?] or [bold | \*], with the built-in wildcard matcher instead of hand-written tree walks.
+- Small C or C++ projects built with GCC or Clang that want four source files, only libc, and no build system.
+
+**Skip it when:**
+- You must read or write XML or talk to anything that does: it parses TML only, so every document has to be converted first (tml-convert does that with libxml2), and namespaces, DTDs, entities, XPath and validation have no TML equivalent.
+- Untrusted input: parsing, string conversion and pattern matching recurse once per nesting level with no depth limit; a word that runs to the end of the buffer (for example the truncated '[hello' from the tests) reads one byte past it; a failed realloc leaks the old arena. The code has had no fuzzing and no maintenance since 2013.
+- Random access or editing: tml_child_count and tml_child_at_index are O(n), nodes have no parent link, and there is no API to modify the tree; the only way to write it out is tml_node_to_markup_string into a fixed-size buffer.
+- Streaming or very large inputs: the whole file is read into memory, the arena starts at twice the input size, and 32-bit offsets cap parsed data at 4 GB.
+- Prose markup where line breaks matter, or files that start with a UTF-8 BOM: the BOM bytes are read as a word before the root '[' and parsing fails with 'Expecting opening bracket at start of file'.
+
+**Integration:** source-drop (tml_parser.c/.h and tml_tokenizer.c/.h; optional C++ wrapper tml-cpp/source/tml.hpp) · none beyond libc; the optional tools/tml-convert converter and benchmark need libxml2 · GCC or Clang. The README says any C89 compiler and the tests build with gcc -std=c89 -Wall, but tml_parser.c relies on GNU extensions (the old 'value: ""' initializer syntax and bare __inline__) and on C99 <stdbool.h>/<stdint.h>. tml-convert builds with gcc -std=c99 -O3. MSVC support is partial: a TML_INLINE macro exists, but tml_parser.c still needs patching. · any hosted C platform in principle (scalar code, no SIMD or OS calls); offsets are read and written through unaligned uint32_t* casts, which works on x86-64 and aarch64 but is undefined behavior and can trap on strict-alignment CPUs
+
+**Vs siblings:** Every XML sibling (RapidXml, SpeedyXml, LightningXML, libleptris, frxml) parses real XML, and RapidXml alone shows 1084.9 vs 278.8 MB/s against libxml2 in bemayer/xml-benchmark's 10 MB bucket, so if you need faster XML, pick one of those. Pick TML only if you can drop XML entirely and want a four-file C parser with a compact packed tree for your own data files.
+
+**Gotchas:**
+- The C word scanner stops at space, tab, brackets, '|' and backslash but not at CR or LF. The 2012-12-27 'Performance optimization' commit replaced isspace() with ' '/'\t' checks, so a word followed directly by a line break keeps it: 'test.' in the README's own markup example parses as "test.\n". atoi/atof don't mind, but string compares and pattern matches fail. Put a space before line ends or trim values.
+- tml_parse_in_memory rewrites your buffer while collapsing escape codes, so treat it as scratch; the other entry points copy the input first. Node strings live in the doc's arena and are freed by tml_free_doc. Peak heap is about 3x the input (a copy plus the 2x arena) until the final shrink.
+- A parse error still returns a doc: check doc->error_message, a static string with no line or column. NULL means only an allocation or file-open failure. The C++ wrapper throws bare const char* only on NULL, not on parse errors.
+- tml.hpp defines several TmlNode member functions outside the class without 'inline', so including it in more than one translation unit causes duplicate-symbol link errors. Its toString()/toMarkupString() silently truncate at MAX_TML_STRING_SIZE (4096), and the std::string pattern overloads re-parse the pattern on every call.
+
+**Status:** Abandoned since 2013-03-10 (no tags or releases; the one open issue is a 2013 offer to write a Java port), but it is MIT-licensed and about 1,270 lines in four C files, so it is easy to vendor as long as you fix bugs like the line-break word bug yourself.
+
+[repo](https://github.com/judnich/TupleMarkup) · [benchmark](https://github.com/judnich/TupleMarkup/blob/master/tml-c/README)
+
+##### xmloxide  `Rust`  `MIT`  `active`  `Tier C`
+
+Pure-Rust libxml2 reimplementation: parsing at libxml2 parity, self-reported 1.5-2.4x faster serialization and 1.1-2.7x faster XPath.
+
+**Beats:** libxml2 — The project's own Criterion benchmarks compare against libxml2 through the Rust libxml crate (0.3.8 in Cargo.lock), built with thin LTO and codegen-units=1; CPU, rustc and libxml2 versions are not stated, and the README numbers date from 2026-02-28, before 0.1.0, and were not re-run for 0.5.0. They show parsing at 0.89-1.12x libxml2 on five 4.9-374 KB documents, serialization 1.5-2.4x faster, and XPath 1.08-2.7x faster. The libxml2 side of the serialization benchmark adds xmlSaveToBuffer plus a CStr-to-String lossy copy. The XPath queries are unprefixed names on default-namespaced Atom and POM fixtures, so under XPath 1.0 rules libxml2 matches nothing while xmloxide matches by local name; the benchmark never checks that both sides return the same results.
+
+**Known shortcoming:** Parsing is not a win (faster on only 1 of 5 documents); the wins are serialization (1.5-2.4x) and XPath (1.1-2.7x), and libxml2 is called through the Rust libxml wrapper, which adds overhead on its side. The README's 2.7x XPath row is labelled with a different query than the code runs. No CPU, rustc or libxml2 version.
+
+**Known shortcoming:** The XPath comparison likely compares different outputs: the Atom and POM fixtures declare a default namespace, so under XPath 1.0 libxml2 should match nothing for the unprefixed queries while xmloxide matches on local name, and the bench never checks results (source reading). Serialization baseline includes libxml-crate copy overhead. README tables predate 0.3-0.5 parser and XPath changes. //X[pred] is likely rewritten to descendant::X[pred], wrong for positional predicates. Deeply nested XPath parentheses abort the process (#51). Enrichment confidence 0.5.
+
+**How:** The DOM is an arena: one Vec<NodeData> indexed by NonZeroU32 NodeIds with parent, first/last-child and sibling links. Serialization is a single pre-order walk that pushes into one String with a char-by-char escaper. The parser is hand-written recursive descent over UTF-8 bytes, with scalar bulk scans for text and attribute values, ASCII fast paths for names and built-in entities, and a byte pre-check for invalid characters; it uses no SIMD and no memchr. XPath fuses a `//` step and the child step after it into one descendant step, inlines name tests on the child and descendant axes, and short-circuits literal positional predicates. The README also claims string interning, but the tree does not use it: element names, prefixes and namespace URIs are owned Strings, and the Dict/SymbolId interner is referenced only in src/util/dict.rs.
+
+**Use it when:**
+- Rust (or C via the FFI) code that needs libxml2's breadth — validation, XPath, C14N, XInclude, catalogs, HTML — without linking the C library, which the README says has been unmaintained since December 2025.
+- Serialization-heavy pipelines (parse or build a DOM, then emit XML), where the README shows 1.5-2.4x faster output than libxml2 on 4.9-374 KB documents.
+- Parsing many independent documents across threads: there is no global init or state, and Document is Send + Sync.
+- Parsing XML and WHATWG HTML5 (100% of html5lib-tests) through one crate and one tree API; libxml2 has no HTML5 parser.
+- Workloads where parse speed only needs to match libxml2: parsing is 0.89-1.12x libxml2's speed on the project's own fixtures.
+
+**Skip it when:**
+- When raw parse throughput is the goal: 4 of 5 README parse benchmarks are 3-13% slower than libxml2, and faster Rust parsers exist.
+- Truly incremental parsing of large inputs: PushParser buffers all pushed data and parses only on finish(). Use SAX instead.
+- Evaluating untrusted XPath expressions: open issue #51 reports that a few thousand nested parentheses overflow the stack and abort the process in 0.5.0.
+- RelaxNG-heavy validation: issues #52-#57 are open (<div> not traversed, combine= ignored for same-named defines, prefixed-name shorthand not resolved, attributes behind <ref> in interleave never matched, no compact syntax).
+- XML 1.1, XSLT, custom entity loaders, custom error handlers, or code that dereferences libxml2 node structs: none of these are supported.
+
+**Integration:** crate (also a cdylib/staticlib through the Makefile with the `ffi` feature; the repo also has Python (PyO3) and WASM subcrates) · encoding_rs only for the library. The default `cli` feature pulls in clap, so library users should set default-features = false. Optional: serde, tokio (async), libxml (benchmarks only). · Rust 1.81 (MSRV, edition 2021) · Any Rust target as far as documented. The code is pure Rust and the parser scanner has no architecture-specific or SIMD paths; a WASM bindings subcrate exists.
+
+**Vs siblings:** Pick xmloxide over quick-xml or SupXML when you need libxml2's whole feature set (validation, XPath, C14N, XInclude, HTML4/HTML5, SAX/reader/push, C FFI) in safe Rust rather than raw speed: SupXML reports ~2.1x libxml2's DOM parse speed and quick-xml leads the bemayer benchmark, while xmloxide only matches libxml2 at parsing. Compared with rusty_xml, the other Rust libxml2 remake (1.55-2.31x on xmllint parse-noout), xmloxide's speed case rests on serialization and XPath, not parsing.
+
+**Gotchas:**
+- XPath name tests ignore namespaces unless you register prefixes. An unprefixed test like //entry matches on local name only (the matches_element_name fallback), so it finds Atom-namespaced <entry> elements where libxml2 and XPath 1.0 return an empty set. Namespace-sensitive queries ported from libxml2 can return different results.
+- Inferred from reading src/xpath/eval.rs, not run: try_fuse_descendant_child rewrites descendant-or-self::node()/child::X[pred] into descendant::X[pred] and copies the predicates unconditionally. //b[1] therefore looks like it returns only the first b in the document, not the first b child of each parent; XPath 1.0 §2.5 notes that //para[1] is not /descendant::para[1].
+- Default ParseOptions limits: nesting depth 256, 256 attributes per element, 10 MB per text node or attribute value, and 10,000 entity expansions. Large or unusual documents need these raised explicitly.
+- The API is pre-1.0 and changing. In 0.5.0 XPathValue::NodeSet switched to XPathNode entries, attribute paths stopped collapsing to String, and a new Expr::FilterPath variant was added. Use ≥0.5.0 anyway: 0.4.4 fixed CVE-2026-61727 (stack overflow from nested DTD content models), and 0.5.0 fixed an exponential-time entity recursion check.
+
+**Status:** Actively released: more than a dozen crates.io versions from 0.1.x (2026-03-01) to 0.5.0 (2026-08-08), about 57k downloads and 4 reverse dependencies. It is MIT-licensed, maintained by a single author with an AI coding agent (the repo carries CLAUDE.md and .claude/skills), and still pre-1.0 with recent breaking XPath changes.
+
+[repo](https://github.com/jonwiggins/xmloxide) · [benchmark](https://github.com/jonwiggins/xmloxide/blob/main/README.md)
+
+##### yeptris  `C`  `BSD-2-Clause`  `active`  `Tier C`
+
+C11 YAML 1.2 parser, DOM and emitter that parses 2-4x faster than libyaml on medium and large documents.
+
+**Beats:** libyaml — The quoted 2.2-3.6x (DOM) comes from the earliest table in the author's ledger: bench_matrix --quick on an unspecified Apple-silicon Mac, yeptris built Release+LTO against a static libyaml whose build flags are not stated. libyaml is timed as a bare event loop that builds no tree and includes parser teardown, while yeptris is timed without its free call. Later ledger entries and the README give 1.8-3.36x. The maintainer-linked serialbench C harness (2026-09-25, 8 CI runners, yeptris 0.6.21) broadly agrees on its 205 KB and 2.9 MB fixtures: parse 2.0-4.4x and parse+emit 1.4-3.9x libyaml. On its 163-byte fixture, yeptris was slower on 4 of 8 runners.
+
+**How:** A single-pass, non-recursive indent-stack state machine classifies each line once. For the common shapes (`key: value`, `- item`) it builds DOM nodes directly instead of emitting and dispatching events, and it validates and builds JSON-class flow spans in one fused walk. Byte scanning uses nibble-lookup stop-set classification and SWAR loops, with AVX2 or NEON kernels picked at runtime via cpuid. One SIMD pre-scan counts structural bytes so the node array and arena are sized up front. Scalars are zero-copy views into the input. Nodes are compact (48-56 bytes) with 32-bit offset links in one contiguous arena, anchors go through an open-addressing hash interner, and numbers use a Clinger-bounded float fast path plus simdjson-style eight-digit SWAR.
+
+**Use it when:**
+- C or C++ services that parse YAML configs or data files of roughly 200 KB to several MB, where the libyaml parse loop shows up in profiles. Both the author's ledger and the serialbench harness put yeptris at about 2-4x libyaml at these sizes.
+- You want a ready tree with map lookups that are O(1) after first use, instead of building your own tree from libyaml events.
+- Ruby or Python apps on Psych or PyYAML, both of which sit on libyaml. The yeptris gem and Python package present Psych- and PyYAML-compatible surfaces and bulk-drain events to avoid per-node FFI cost.
+- You need strict YAML 1.2 conformance (395/395 yaml-test-suite, JSONTestSuite strict) but also want an opt-in YAML 1.1 compat schema for Psych-style implicit typing.
+- Multi-document streams (logs, k8s manifests): iterparse and the recorder hold one document at a time, so memory is bounded by the largest document.
+
+**Skip it when:**
+- Tiny documents. On serialbench's 163-byte fixture, yeptris parse ran 0.14-1.78x libyaml and was slower on 4 of 8 CI runners. rapidyaml was faster than yeptris on 7 of 8 runners there, often by more than 2x.
+- Emit-heavy workloads where rapidyaml is an option. Open issue #352 tracks YAML generation 1.24-1.98x behind rapidyaml, and serialbench medium parse+emit runs 0.51-0.80x of rapidyaml.
+- Memory-tight services parsing untrusted input. The ledger measured DOM peak heap at 4.3-22.9x the input size (2026-09-02, before nodes shrank). Growth is capped at O(input), but the ledger says a 450 KB %TAG-expansion input can still drive about a 100 MB arena.
+- Code that needs a mature, audited dependency. The repo was created on 2026-08-29, has 0 stars and is at 0.6.x. The authors call the libyaml-shaped event adapter internal, a gem release was yanked (#392), and ABI-pinned layouts are still changing in lockstep with the bindings.
+- True streaming of one huge document, or a shared-library deployment. The recorder buffers until a document closes, and only the static library is installed (YEPTRIS_BUILD_SHARED is OFF).
+
+**Integration:** static lib · No runtime dependencies beyond pthreads (Threads::Threads). The build needs CMake 3.20+. Tests fetch GTest. Benchmarks can optionally link libyaml, rapidyaml or simdjson. · C11: it uses <stdatomic.h> and _Thread_local, and MSVC needs /experimental:c11atomics. CMake 3.20+. Tests and benchmarks need C++11 (C++20 under MSVC). Minimum GCC/Clang versions are not documented. · x86-64 (AVX2 kernels via runtime cpuid dispatch, with SSE2/scalar fallback) and aarch64 (NEON). Other targets use the scalar path. CI tests Linux x64/arm64, macOS arm64/x64 and Windows x64/arm64.
+
+**Vs siblings:** Pick yeptris over rapidyaml when you need a plain C API, full yaml-test-suite acceptance (the ledger records rapidyaml rejecting suite-valid inputs), 1.1-compat typing or the Ruby/Python bindings. Parse speed on 0.2-3 MB documents is roughly even (serialbench 0.68-1.96x of rapidyaml), but rapidyaml wins clearly on tiny documents and on emitting. Over libfyaml, pick it for speed; yeptris's own plan treats libfyaml as the conformance and diagnostics reference and estimates it at only ~1-1.5x libyaml, a figure not measured here.
+
+**Gotchas:**
+- yeptris_parse borrows the input. The buffer must outlive the document, and scalar values are length-delimited views, not NUL-terminated strings. Pull and iterparse event strings are valid only until the next call.
+- The default schema is YAML 1.2 Core, so yes/no/on/off stay strings and octal is 0o17. Pass YEPTRIS_SCHEMA_11_COMPAT to get libyaml/Psych-era implicit typing.
+- yeptris_node_seq_at/map_at cache the child list of only the last container indexed, under a mutex. Interleaving index calls across containers rebuilds the cache each time, so iterate with yeptris_node_children.
+- Free serialize buffers with yeptris_free: emit.h says the host free() is the wrong CRT on Windows, though docs/FFI.md still says libc free. The in-repo vcpkg port installs a LICENSE file the repo doesn't have (only LICENSE.md) and declares MIT, but the license is BSD-2-Clause.
+
+**Status:** Actively developed and BSD-2-Clause: v0.6.22 shipped 2026-09-25, about four weeks after the repo was created, with 0 stars but ~137k gem downloads. It builds as a dependency-free CMake static library, but the API and ABI are still settling and nothing has been independently audited.
+
+[repo](https://github.com/leptris/yeptris) · [benchmark](https://github.com/leptris/yeptris/blob/main/benchmarks/PERF-LEDGER.md)
+
+##### zxml  `Zig`  `MIT`  `active`  `Tier C`
+
+Zig DOM/streaming XML parser whose default permissive mode beats pugixml and rapidxml by 1.5-5.4x on real-world files.
+
+**Beats:** pugixml — In the author's stable-profile run on an i5-12450H (Linux 7.2, x86_64), zxml's default permissive DOM (Zig 0.16.0, ReleaseFast -Dcpu=native) beat the faster of pugixml (pinned git revision) and rapidxml 1.13 on all 24 headline fixtures. The C++ parsers were built with an unidentified system c++ driver at -O3 -DNDEBUG -march=native. The margin was 1.47-5.41x on the 15 real-world and pugixml-corpus files and reached 9.73x on synthetic exact-repeat inputs, and the mean was 3799.40 MiB/s vs 1312.83 for pugixml. The harness has three imbalances: pugixml's load_buffer copies the input on every iteration, pugixml builds comment/PI/declaration/doctype nodes while zxml's default stores none, and the validated DOM averages only 2037.12 MiB/s (about 1.55x pugixml).
+
+**Known shortcoming:** The 8.9-9.7x top of the range comes from two synthetic single-token files that hit special fast paths; on real-world and pugixml-corpus files it is 1.47-5.41x over the best of pugixml/rapidxml. Headline numbers use the permissive parser, which can reject valid XML; full-grammar mode is slower than pugixml on 2 files. The pugixml runner copies input inside the timed loop. The C++ baselines were built with an unnamed system c++ driver. 0 stars; the project's own VALIDATION.md reports FAIL on its speed targets.
+
+**Known shortcoming:** Most real-world fixtures are 0.2-23 KiB (largest about 2.1 MiB), so there is no evidence for large documents. Validated mode also loses to rapidxml on 5 of 14 real/corpus files. '112/112 conformance' is an in-house suite, not the W3C test suite, and there is no schema validation. No C ABI, DOM mutation or XPath; UTF-8 only; 4 GiB input cap by default. Default mode rewrites the source buffer on decode, so documents are not safe to share across threads. v0.1.0, one contributor.
+
+**How:** It builds a lazy, source-backed DOM. Each node stores only a parent index and one source span, and text nodes are marked by a reversed span instead of a kind field. Attributes are not tokenized during parsing; they are rescanned from the source when queried. Subtree and sibling bounds come from preorder parent links, so parsing writes little more than 12 bytes per node. In the default permissive mode, a start tag ends at the first '>' found by a SIMD scan (portable Zig @Vector: 32 bytes with AVX2, 16 bytes elsewhere), with quote parity checked in bulk instead of running a per-attribute state machine. Text runs are also found with vector compare masks, and the common <tag>text</tag> shape is special-cased with a u64 comparison of the first 8 name bytes. Node storage is pre-sized from a '<'-density sample, small documents start in a 64-node on-stack buffer, and inputs of 64 KiB or more that repeat one exact token take dedicated repeated-document paths, which produce the 8.9-9.7x synthetic results. Well-formedness validation (UTF-8 and XML character checks, duplicate-attribute filter, tag matching, reference checks) is a separate code path chosen at compile time, which is why it roughly halves throughput.
+
+**Use it when:**
+- Zig programs that parse many small-to-medium UTF-8 documents (RSS/Atom feeds, sitemaps, catalogs, config) into a read-only tree: 2.1-4.1x pugixml on the 0.2-23 KiB feed and catalog fixtures (derived from page data).
+- Trusted or producer-controlled XML where lenient parsing is acceptable and you can give the parser a mutable buffer that outlives the Document.
+- Read patterns that touch only a few attributes or text values: attribute scanning and entity decoding wait until you query them, so content you never read costs almost nothing.
+- Chunked or event-driven ingestion in Zig: the streaming parser takes cumulative buffers with save/restore, and it runs at 0.79-1.23x the DOM's throughput on the real-world fixtures (derived from page data).
+
+**Skip it when:**
+- C or C++ codebases: there is no C ABI or binding (build.zig exposes only a Zig module), so replacing pugixml means writing and maintaining a wrapper.
+- Untrusted input that must be well-formed: validate_well_formedness drops the mean to 2037.12 MiB/s. It then loses to pugixml on weekly_utf8.xml (0.57x) and synthetic_deep_tree.xml (0.89x), and to rapidxml on 5 of the 14 real or pugixml-corpus files that have a validated result (derived from page data).
+- Workloads that need DOM editing, XPath or non-UTF-8 input. zxml has no mutation API and no XPath. The source handles only UTF-8 (plus a UTF-8 BOM), with no transcoding found, while pugixml converts UTF-16/32 and Latin-1.
+- Very large documents: the largest real-world fixture is a ~2.1 MiB arXiv feed (3.2x pugixml), most real files are 0.2-23 KiB (sizes derived from latest.json), and default u32 indexes reject inputs over 4 GiB - 1 with InputTooLarge unless you build with -Dintlen=u64.
+- Production code that needs a track record: v0.1.0 in build.zig.zon, no tags or releases, one contributor, 0 stars, no issues or PRs ever filed, and it requires exactly the Zig 0.16 toolchain generation.
+
+**Integration:** module · none (Zig standard library only; the benchmarks use pugixml and rapidxml, fetched separately) · Zig 0.16.0 (minimum_zig_version in build.zig.zon; CI pins 0.16.0) · any Zig target. SIMD uses portable @Vector (32-byte with AVX2 on x86, 16-byte elsewhere). ReleaseSafe compile checks passed for x86_64/aarch64 Linux, Windows and macOS, RISC-V 64, PowerPC64, ARM and x86_64 FreeBSD. Benchmarks exist only for x86_64 (i5-12450H).
+
+**Vs siblings:** Pick zxml when you are working in Zig and want both a lazy DOM and an incremental streaming parser without C interop. In C++, the catalogued LightningXML (3.82 GB/s vs pugixml 1.46 GB/s on its flat workload) and Parshred (1.6-3.3x pugixml) link directly. simdxml suits XPath-style queries over multi-GB files, which zxml neither supports nor has measured.
+
+**Gotchas:**
+- The default ParseOptions{} is destructive: parse takes a []u8, and decoded accessors compact entity-containing values in place, so the original bytes are gone. Set non_destructive = true to parse a []const u8.
+- Permissive mode recovers silently. `<a><b></a>` and an unclosed `<a><b>` both parse without error, and unquoted attributes such as a=1 are accepted. A raw '>' inside a quoted attribute value, however, may be rejected; use &gt; or enable validation.
+- By default, whitespace-only text nodes are dropped, comments and PIs are not stored (include_misc_nodes = false), and DTD entities are not expanded (expand_dtd_entities = false, capped by max_entity_value_len when on). Decoded-value results may own memory and must be released with .free(allocator).
+- Without store_prev_sibling or store_last_child, prevSibling and lastChild scan forward from the parent, and nextSibling walks the current node's whole subtree. Backward or last-child navigation over wide or deep trees can be much slower than pugixml's linked nodes.
+
+**Status:** Actively developed by a single author (about 290 commits since April 2026, last commit 2026-09-09) but still unreleased at v0.1.0; it is MIT-licensed, pure Zig and easy to vendor as a module if you pin Zig 0.16.0.
+
+[repo](https://github.com/SmallThingz/zxml) · [benchmark](https://github.com/SmallThingz/zxml/blob/main/bench/README.md)
 
 ### stdlib-replacements
 
@@ -11007,6 +14725,46 @@ Bison-style generator that emits pthreads-parallel operator-precedence parsers, 
 
 ### serialization-and-formats
 
+#### binary-schemas
+
+##### gencode  `Go`  `GPL-2.0`  `abandoned`  `Tier B`
+
+Go code generator for a compact schema-driven binary format; marshals ~2.3x and unmarshals ~2.7x faster than protobuf-go.
+
+**Beats:** Protobuf — alecthomas/go_serialization_benchmarks measures a struct of two strings, a time.Time, an int, a bool and a float64 in a user-generated report that gives no Go version or CPU. There, gencode marshals in 122 ns/op and unmarshals in 132 ns/op, against 287/356 ns/op for protobuf-go (~2.3x/~2.7x), with 3 allocations each; gogo/protobuf on the same page is 115/166 ns/op. The gencode/unsafe_reuse row (reused buffer, -unsafe numeric stores, time as int64) reaches 48/104 ns/op, but protobuf-go has no matching buffer-reuse row.
+
+**Known shortcoming:** Not safe for untrusted input: Unmarshal has no bounds checks (truncated input panics, #20) and wire lengths go straight into make(). The generator does not build today without pinning andyleap/parser to db5a13a7cd46 (#29). The unsafe_reuse row mixes buffer reuse, unsafe numeric stores and a cheaper time encoding, and strings are still copied. Time values with LMT zone offsets fail to round-trip silently. No schema evolution; colfer, mus-go, benc and 200sc/bebop beat its safe path. Unclear whether GPL-2.0 covers generated code.
+
+**How:** The generator emits straight-line, type-specialized code with no reflection. The wire format is positional: fields are written in declared order with no field numbers or wire-type tags, so there are no tag bytes to write, read or switch on. Marshal runs Size() first and allocates the output once, or reuses the caller's buffer if it is big enough. Offsets of fixed-width fields are folded into constants at generation time (`buf[i+9]`), so a run of fixed fields becomes plain byte stores without advancing the index (the author explains this in issue #24). Ints are written little-endian by byte shifts, or with `-unsafe` as one unaligned native-endian pointer store; strings, slices and `v`-prefixed ints use LEB128 varints, with zigzag encoding for signed varints.
+
+**Use it when:**
+- Go-to-Go payloads (RPC messages, cache values, on-disk records) where you own both ends and regenerate both from one schema file; there is only a Go backend.
+- Small flat structs of ints, floats and short strings where per-message CPU cost matters: about 120-130 ns per marshal/unmarshal on the shootout's 6-field struct, against 287/356 ns for protobuf-go.
+- Structs made mostly of fixed-width numbers, where offsets fold to constants: in the author's README run (hardware not stated), an all-fixed 4-field struct deserializes in 20.7 ns/op.
+- Length-prefixed message streams over sockets or files: mark the struct `framed` to get Serialize(io.Writer)/Deserialize(io.Reader).
+- Messages that can be one of several struct types: a `union` field becomes a Go interface you can type-switch on, with a varint type tag on the wire.
+
+**Skip it when:**
+- Decoding untrusted or possibly truncated bytes. Unmarshal has no bounds checks and panics with 'index out of range' on truncated input (issue #20, open since 2018). Lengths read from the wire go straight into make(), so a hostile length can force a huge allocation.
+- Any schema evolution. The format is positional with no field numbers, defaults or unknown-field skipping, so adding, removing or reordering a field breaks existing data and older readers.
+- Cross-language use or map-heavy data. There is only a Go backend and no map type; PR #12, which added maps and C++, was never merged.
+- Anything that needs a maintained, easy-to-build tool. The last commit was 2017-11-24 and the repo has no go.mod. The generator no longer builds against the current andyleap/parser unless you pin the 2016 version (issue #29). The parser silently accepts a garbage schema (#19), and `[][N]byte` fields produce code that does not compile (#23).
+- Wire size against protobuf. On the shootout struct the safe variant encodes to 53 bytes, against 51 for protobuf-go.
+
+**Integration:** source-drop · The generated code imports only the Go standard library (io, time, unsafe) and needs no runtime package. The generator CLI depends on github.com/andyleap/parser, which must be pinned to db5a13a7cd46 from 2016 because the 2021 generics rewrite breaks the build (issue #29), and on github.com/kr/pretty. · Not documented. The repo predates Go modules and has no go.mod, and issue #23 reports use with go1.11. Building the generator with current Go needs a manual go.mod that pins andyleap/parser. · Default mode runs on any Go target because it uses explicit little-endian byte shifts. With -unsafe, fixed-width ints and floats use unaligned native-endian pointer loads and stores, so the wire format matches the safe mode only on little-endian hosts. PR #11 for big-endian support was never merged.
+
+**Vs siblings:** In the same shootout, colfer (115/123 ns), mus-go (92/122), benc (81/103) and 200sc/bebop (94/112) all beat gencode's 122/132 ns safe path, so pick gencode only for what they lack: tagged unions decoded to Go interfaces, a framed io.Reader/io.Writer API, or time kept with its zone offset (gencode's row is labelled fulltzoffset; mus and benc are labelled no time support). It is also a small, readable reference for how offset folding in a code generator works.
+
+**Gotchas:**
+- Unmarshal almost never returns an error. Only nested and framed paths return one (the framed length check returns io.EOF), and other malformed input panics. Wrap decoding of external bytes in recover().
+- `-unsafe` changes only fixed-width ints and floats; strings are still copied on unmarshal. The shootout labels its gencode/unsafe_reuse row as unsafe-string with full-tz-offset time. In fact that row's schema stores BirthDay as an int64 UnixNano, and it reuses a 1 KB marshal buffer, so its 48 ns marshal mixes three changes.
+- time fields reserve exactly 15 bytes for time.MarshalBinary, and the error from UnmarshalBinary is ignored. Current Go writes 16 bytes when a zone offset has leftover seconds (LMT zones), so those times fail to round-trip without any error.
+- Marshal(buf) writes into buf when its capacity is big enough and returns a slice of it, so the next Marshal into the same buffer overwrites earlier output. Size() also runs on every Marshal, which is an extra pass over strings and varints.
+
+**Status:** Abandoned since 2017-11-24, and the generator is GPL-2.0 (the project does not say whether that covers generated output). The generated code needs only the standard library, so you can vendor it once the generator is built with a pinned parser dependency, but treat it as a technique reference rather than a live dependency.
+
+[repo](https://github.com/andyleap/gencode) · [benchmark](https://github.com/alecthomas/go_serialization_benchmarks/blob/master/report/data.js)
+
 #### yaml-toml-xml
 
 ##### Parshred  `C++`  `AGPL-3.0-or-later`  `active`  `Tier A`
@@ -11863,6 +15621,134 @@ SQL/HTTP full-text and analytics search database, C++ core, positioned as a fast
 **Status:** Actively maintained (record's last_commit is current, large nightly/CI test matrix in .github/workflows) and free to install via package manager, Docker, or source build; GPL-3.0 licensing is the main friction point for proprietary embedding rather than any maturity concern.
 
 [repo](https://github.com/manticoresoftware/manticoresearch) · [benchmark](https://manticoresearch.com/blog/manticore-alternative-to-elasticsearch/)
+
+### serialization-and-formats
+
+#### binary-schemas
+
+##### JSON BinPack  `C++`  `AGPL-3.0-or-later`  `active`  `Tier C`
+
+JSON Schema-driven binary JSON format; its prototype matched or beat Protobuf, Avro, MessagePack on encoded size across 27 documents.
+
+**Beats:** Protocol Buffers, FlatBuffers, Cap'n Proto, MessagePack (and Apache Avro, Thrift, CBOR, BSON, UBJSON, Smile, FlexBuffers) — This is a size result only: on the author's json-size-benchmark (27 SchemaStore documents, one per JSON Taxonomy class), the archived TypeScript prototype (npm jsonbinpack 1.1.x) in schema-driven mode produced the smallest or tied-smallest uncompressed encoding against Protobuf 3.12.4, FlatBuffers 1.12.0, Cap'n Proto 0.7.0, MessagePack 1.0.0, Avro, Thrift, CBOR, BSON, UBJSON, Smile and FlexBuffers (e.g. ESLint config 64 B vs Avro 100 B, Protobuf 161 B, JSON 1,141 B), and it beat GZIP/LZ4/LZMA-compressed JSON on all 27 documents. Compiler and hardware are irrelevant for byte counts, no speed was measured, and the C++ code in this repo is not what was benchmarked.
+
+**Known shortcoming:** Not a speed win: its advantage is encoded size only (smallest or tied-smallest on all 27 documents in the benchmark), and its own README recommends FlatBuffers or Cap'n Proto when runtime speed matters. The size numbers come from the archived TypeScript proof of concept, not this C++ implementation, and the papers are arXiv preprints.
+
+**Known shortcoming:** The C++ implementation cannot yet produce the benchmarked schema-driven sizes: its compiler maps only integer, number and enum/const schemas, and object, array and string schemas fall back to schema-less encoding (maintainer, issue #896, Dec 2025). The benchmarked sizes come from the archived TypeScript prototype. Encoder and decoder bounds checks are assert() only, so release builds skip them, and there are no fuzz tests.
+
+**How:** It does not make serialization faster; it makes output smaller by turning schema constraints into bit-level choices. Bounded integers (minimum/maximum/multipleOf) become an offset from the minimum in one byte or a Base-128 varint (ZigZag when unbounded), enums become a one-byte or varint index (zero bytes for the first choice of a top-level enum), const costs zero bytes, and decimals become a ZigZag varint of their digits plus the decimal-point position instead of an 8-byte IEEE double. Strings of 3 or more bytes already seen in the stream become a backward offset (dedup cache capped at 20 MiB), and schema-less values pack a 3-bit type tag with a 5-bit small length or integer into one byte. The largest benchmark gaps, such as ESLint at 64 B schema-driven vs 969 B schema-less, come from schema-typed object and array encodings, which the C++ compiler does not generate yet.
+
+**Use it when:**
+- Payloads crossing metered, slow or lossy links (mobile, IoT, constrained radio), where bytes on the wire cost more than CPU cycles. This is the use case the README names.
+- Small to medium JSON messages, from tens of bytes to a few KB, where general-purpose compression does not pay off. On all 27 benchmark documents, the schema-driven output was smaller than JSON compressed with GZIP -9, LZ4 -12 or LZMA -9.
+- You already keep JSON Schema 2020-12 definitions (for example in OpenAPI or AsyncAPI) with tight constraints (bounded integers, enums, const, string length bounds) and want to reuse them instead of writing Protobuf or Avro schemas. That is the enum-heavy, Zod-generated-schema storage use case raised in issue #896.
+- Storing or sending many schema-conforming records where repeated string values dominate. Even schema-less, string deduplication gave TravisCI config 185 B vs MessagePack 627 B, and .NET project 748 B vs 919 B (benchmark page).
+- Integer, number and enum payloads you can encode with the C++ code today. For fully schema-driven objects, the benchmarked Apache-2.0 TypeScript prototype (npm jsonbinpack, archived) is the implementation that has those encoders.
+
+**Skip it when:**
+- Latency- or throughput-bound paths (IPC, intra-datacenter RPC, zero-copy reads). The README itself points these to FlatBuffers or Cap'n Proto. The repo has no speed benchmark, and decoding always builds a sourcemeta::core::JSON DOM.
+- You need the benchmark's schema-driven sizes from C++ today. The compiler maps only integer, number and enum/const schemas; object, array and string schemas fall back to schema-less encoding. The status page lists those mappers and nine object/array/string encodings as missing, and the e2e tests cover schema-less only ('TODO: Test schema-driven too'). The maintainer wrote in issue #896 that this repo is not at feature parity with the JS prototype.
+- Schemas that rely on $ref, allOf/anyOf/oneOf, if/then/else, dependentSchemas, unevaluated* or recursion. The project's status page lists all of these as not covered yet.
+- Decoding untrusted bytes. The README calls decoding non-conforming data undefined behavior. Index and range checks in the decoder are assert()s, which disappear in release builds (for example BYTE_CHOICE_INDEX indexes the choices vector unchecked). The repo has no fuzz tests.
+- Schema-less-only use as a MessagePack replacement for tiny documents: the gain is often zero. From the benchmark page data, schema-less mode ties MessagePack byte-for-byte on 10 of 27 documents (e.g. TSLint 51 B vs 51 B) and ESLint is 969 B vs 971 B. Also skip it for closed-source network services that cannot accept AGPL-3.0 and will not buy the commercial license.
+
+**Integration:** static lib or shared lib (CMake, BUILD_SHARED_LIBS), in two components: runtime (encoder/decoder) and compiler (schema to encoding) · Sourcemeta Core (json, uri, jsonpointer, jsonschema, numeric, regex, io) and Sourcemeta Blaze (alterschema, canonicalizer), both vendored and pinned by commit in DEPENDENCIES. Core in turn vendors PCRE2 and mimalloc, which is linked into executables on Linux/macOS unless SOURCEMETA_CORE_USE_SYSTEM_ALLOCATOR is set. · C++23 (CMAKE_CXX_STANDARD 23 from vendored Core defaults). The top level declares CMake 3.16, but vendored Core requires 3.24. CI builds on current GitHub runners with GCC and Clang on Ubuntu, Clang on macOS and MSVC on Windows. No minimum compiler versions are documented. · Linux, macOS, Windows per CI (static and shared builds, plus ASan/UBSan jobs). No architecture-specific code was seen in src/.
+
+**Vs siblings:** Pick it over fernBuffer or qdf when your data is already described by JSON Schema and you want the fewest bytes per small document from schema-level savings (enums, bounded integers, constants, string dedup), not a MessagePack-style or compression-tier layout. Pick Bebop, SBE, rkyv or YaFF instead when encode/decode latency is what you are buying, because JSON BinPack publishes no speed numbers at all.
+
+**Gotchas:**
+- The Encoder's string cache survives across write() calls. A string repeated in a later document on the same Encoder is written as a backward offset into an earlier document's bytes. Create a fresh Encoder per message if each message must decode on its own (inferred from runtime_encoder.h and cache.cc).
+- Resolving shared strings makes the Decoder seek backwards (InputStream::rewind calls seek), so it needs a seekable std::istream. Buffer forward-only socket data first.
+- Validate against the schema before encoding. The encoder checks bounds, multipleOf and string lengths with assert() only, so in NDEBUG builds an out-of-range value in an 8-bit encoding is silently cast to uint8_t instead of rejected. compile() also mutates the schema you pass in.
+- Sizes from this C++ repo won't match the published benchmark. The e2e fixtures show schema-less sizes equal to the prototype's on some documents (ESLint 969 B, package.json 1,957 B), slightly larger on others (GeoJSON 127 vs 117 B; JSON Resume 2,619 vs 2,612 B, where a TODO notes Smile's 2,613 B now wins) and smaller on Road Risk (254 vs 261 B). Wire compatibility with npm jsonbinpack 1.1.x is not documented.
+
+**Status:** Flagged active, but since late 2024 nearly all commits are Core/Blaze dependency bumps (last encoding work October 2024, README revised August 2026), with no tagged releases and a single contributor; the code is copyable under AGPL-3.0-or-later or a paid commercial license, and the benchmarked TypeScript prototype is archived but Apache-2.0.
+
+[repo](https://github.com/sourcemeta/jsonbinpack) · [benchmark](https://benchmark.sourcemeta.com/)
+
+#### json
+
+##### jist  `Rust`  `GPL-3.0`  `stale`  `Tier C`
+
+Rust CLI that pulls one value by exact key/index path from multi-GB JSON files, far faster than jq.
+
+**Beats:** jq — The author's single-run test on an Intel i7-12700H with 64 GB DDR5 used a generated, pretty-printed 3.3 GB array of 10M objects and extracted [9999999].bar.baz. jist's simdjson path took 2.05 s and 4.5 GB, against jq's 34.17 s and 18 GB (about 16.7x, 1600 vs 96 MB/s). On a 28.9 GB file the streaming lexer took 1:30 with 9.7 MB of memory while jq ran out of RAM. The jq and compiler versions are not stated. The repo's jist_vs_jq.png shows the jq run timed with /usr/bin/time -v (0:34.17, 18.2 GB max RSS) next to an earlier jist run of 10.21 s at 7.8 MB RSS on the same query, which matches the streaming lexer, so there is no screenshot of the 2.05 s simdjson run.
+
+**Known shortcoming:** Rust CLI whose speed comes from a bundled copy of simdjson (C++); for C++ use, take simdjson directly. Works on JSON array files, not NDJSON. GPL-3.0; stale since 2025-02; 23 stars.
+
+**Known shortcoming:** The ~16.7x ratio compares two different sessions (no screenshot of the 2.05 s run; the screenshot's own streaming run is about 3.3x faster than jq), and jq and compiler versions are unstated. The simdjson path loads the whole file (4.5 GB RSS on 3.3 GB). One path lookup per run, no filters; not a jq replacement. 'cargo install jist' installs an unrelated crate. Missing keys print an error with exit status 0; the streaming fallback fails on single-line files over 1 MB (source reading).
+
+**How:** For files under 4 GiB (u32::MAX bytes), a small C++ wrapper, called from Rust through autocxx/cxx, loads the whole file into a simdjson padded_string. It then runs simdjson 3.11.3 On Demand `document::at_path()`, which the header says supports only key and index paths that convert directly to JSON Pointer. The file gets SIMD structural indexing and lazy navigation that skips unrequested values without building a DOM, while jq builds a full tree (18 GB RSS for the 3.3 GB file). Larger files, or runs with -s, use a Rust fallback: the json-tools token lexer runs over 1 MB newline-aligned chunks, tracks depth and array-index counters, and reads the matched byte range back from the file by seeking to it. This keeps memory at about 10 MB but runs at about 300 MB/s.
+
+**Use it when:**
+- Scripts or ad-hoc shell work that need one known value (a token, a config field, the Nth record) from a JSON file of hundreds of MB to about 4 GB, and jq is slow or runs out of RAM
+- Files larger than RAM or larger than 4 GiB, where the streaming fallback holds memory near 10 MB and still ran the author's 28.9 GB file at 321 MB/s
+- Linux x86-64 machines where you can drop in the prebuilt v0.3 release binary rather than build the C++/Rust bridge
+- Pretty-printed or NDJSON-style input with regular line breaks, which matches the benchmark data and suits the streaming fallback's newline-aligned chunking
+- A quick schema summary of a JSON or NDJSON file (the schema feature is newer than the v0.3 binary, so this needs a source build)
+
+**Skip it when:**
+- Any real jq work: filters, select/map, wildcards, several outputs per run, reshaping or recursive descent. jist does exactly one key/index lookup
+- Memory-tight machines with files under 4 GiB: the simdjson path loads the whole file (4.5 GB RSS on the 3.3 GB benchmark). Use -s to force the ~300 MB/s streaming path
+- Minified single-line files (or single lines longer than 1 MB) in streaming mode. From reading buf_parser.rs, a 1 MB chunk with no newline returns 'result not found' instead of being processed (not tested)
+- Pipelines that rely on exit codes or on stdin streaming. On the simdjson path a missing key or parse error is printed to stdout as 'JSON error: ...' with exit status 0, and stdin is always read fully into memory even with -s
+- Projects that want a maintained, packaged tool: one author, 23 stars, no commits since 2025-02-15, GPL-3.0, and not on crates.io under this name
+
+**Integration:** static lib · Vendored amalgamated simdjson 3.11.3 (C++, compiled by build.rs). Crates: cxx, autocxx, json-tools, serde_json (preserve_order), clap, regex, futures, json_value_merge, lazy_static, log. Build-time: autocxx-build and miette. autocxx needs LLVM/libclang installed · Rust 2021 edition. Probably Rust 1.79+, because src/schema_parser.rs uses std::path::absolute; no MSRV is stated. A C++17 compiler (build.rs passes -std=c++17 or /std:c++17) and LLVM/libclang for autocxx are also needed. Compiler versions are not documented · Prebuilt binary is Linux x86-64 only (the jist.linux.x86_64 asset on v0.2 and v0.3). A source build should work wherever Rust, a C++17 compiler and libclang are available, but that is not documented or tested; build.rs has clang and MSVC flags. simdjson picks its SIMD kernel at runtime (no -march is set)
+
+**Vs siblings:** Pick jist over the catalogued simdjson library when you want a ready-made shell command instead of writing C++; its speed is simdjson On Demand's at_path, so inside a C++ or Rust program call simdjson (or simd-json/sonic-rs) directly. Pick it over fastgron when you know the exact path and want one value rather than a greppable flattening of the whole file; JSONSki and Pison are research libraries for large-record path queries, not end-user CLIs.
+
+**Gotchas:**
+- `cargo install jist` installs an unrelated crate: the crates.io name 'jist' belongs to a programming-language project (v0.1.9). Build from the repo or use the GitHub release binary
+- The v0.3 release binary (2025-01-11) predates the schema/NDJSON summarizer commits (from 2025-01-12), so it only does path search. The Cargo.toml version still says 0.1.0
+- Output is not jq -r output. String values come back with JSON escapes still in them, and leading/trailing quote characters are trimmed greedily: the repo's own unit test expects the value "\"q\"" to print as \"q\ . Objects and arrays are re-serialized compactly through serde_json
+- The simdjson path does not validate the whole document (simdjson's iterate docs say invalid JSON may not trigger an error), and the README says malformed input is tolerated in streaming mode as long as the target value is complete. From reading the code, the streaming path may also panic when a 1 MB chunk boundary splits a multi-byte UTF-8 character (not tested)
+
+**Status:** Stale: one author, last commit 2025-02-15, 0 open issues and only two self-merged PRs. It is usable today as a GPL-3.0 Linux x86-64 binary or a small (~63 KB of Rust) source build, but for anything beyond one-off lookups treat it as a personal tool.
+
+[repo](https://github.com/adelamodwala/jist) · [benchmark](https://github.com/adelamodwala/jist#benchmarks)
+
+#### yaml-toml-xml
+
+##### VTD-XML  `Java`  `GPL-2.0-or-later`  `abandoned`  `Tier C`
+
+Java XML parser building a compact offset/length token index, not a tree; beats libxml2 DOM parse, loses XPath.
+
+**Beats:** libxml2 — On bemayer/xml-benchmark's 2026-09-01 run (GitHub Actions ubuntu-latest, Docker, CPU not published), VTD-XML 2.13.4 on Temurin 21 (no JVM flags, parse(false), input array cloned inside the timed loop) built its token index 1.6x-4.9x faster than Debian libxml2 2.9.14's xmlParseMemory + xmlFreeDoc (C++ harness, -O3) at 100KB-100MB. VTD-XML's rows cover only the wide file because it rejects the deep files, while libxml2's rows also average in a deep file it halts at depth 256; VTD-XML also loses at 1KB (2.8x) and on XPath //*[@id] at every size (6.8x-17x).
+
+**Known shortcoming:** Rows do not compare the same files: VTD-XML refuses documents deeper than 254 levels, so its 100KB-100MB rows cover only the wide file, while libxml2's rows average in a deep file it truncates at depth 256. 6.8-17x slower than libxml2 on XPath at every size, and the suite's overall score ranks libxml2 above it. GPL-2.0-or-later with patent notices and a litigation-termination clause. Abandoned: last release 2.13.4 (2017), last commit 2018-06.
+
+**Known shortcoming:** JVM only; on the same page quick-xml's DOM parse is faster at every size and RapidXml wins at 1 KB and 100 MB, so pick VTD-XML only if you must stay on the JVM. The 256 GB memory-mapped edition (VTDGenHuge) caps depth at 30. parseFile() swallows exceptions and returns false. Open bugs in the GitHub copy (#6, #8, #13, #15) with no release after 2.13.4.
+
+**How:** It uses non-extractive tokenization, which the project calls Virtual Token Descriptor (VTD). The raw bytes stay in memory undecoded, and each token becomes one 64-bit long: 4-bit type, 8-bit depth, 20-bit length and a 30/32-bit offset. These longs are appended to pooled long[] buffers, so parsing creates no node objects, no strings and almost no GC work. Random access comes from 'location caches': per-depth arrays whose entries pair an element's record index with the index of its first child. The FAQ puts these at about 10% of parse cost and total memory at 1.3-1.5x the document size. End tags are not stored, and setDoc_BR() reuses the buffers across parses.
+
+**Use it when:**
+- JVM services that parse many shallow (<255 levels) 100 KB-100 MB documents and read a few fields by navigation, where building DOM objects and the GC they cause is the cost. On bemayer/xml-benchmark its index build posted 0.54-239 ms vs libxml2's 0.87-647 ms, with the caveat that the file sets differ.
+- Replacing Xerces or JDK DOM in Java code that only reads. On the same page, VTD-XML's DOM Parse time is lower than Xerces's at every size (0.036 vs 0.232 ms at 1KB; 238.9 vs 489.0 ms at 100MB). Again the file sets differ.
+- Parse once, use many times: save the index with writeIndex() and reload it with loadIndex() so you do not re-tokenize the same large file.
+- Small edits or fragment cut/paste on large documents (XMLModifier, getElementFragment), which avoids a full DOM round trip and re-serialization.
+- Files larger than RAM, up to 256 GB, using the extended edition (VTDGenHuge in MEM_MAPPED mode), provided nesting stays at 30 levels or fewer.
+
+**Skip it when:**
+- XPath-heavy workloads. On //*[@id] it was 6.8x-17x slower than libxml2 at every size (3837.5 vs 565.6 ms at 100MB), and slower than Xerces from 1MB up.
+- Deeply nested XML. The standard edition throws 'Depth exceeds MAX_DEPTH' past 254 levels, and the 256 GB extended edition allows only 30. The standard edition also caps documents at 2 GB, or 1 GB with namespaces on.
+- Tiny documents or short-lived processes. At 1KB it is 2.8x slower than libxml2, and its peak RSS on the page is 57 MB vs 5.4 MB (JVM baseline).
+- Anything that needs DTD-declared or external entities, schema validation or a W3C DOM API. The FAQ calls DTD and external entities effectively deprecated, VTDGen parses a DTD but does not resolve declared entities, and a DOM interface is ruled out.
+- Projects that cannot take GPLv2 plus patent notices and an unmaintained codebase. The last release was 2017, and bugs such as namespace shadowing in getElementFragmentNs (#13) are still open.
+
+**Integration:** module (Java jar, Maven Central com.ximpleware:vtd-xml 2.13.4); C, C++ and C# ports are source-drop from the repo · none (the 2.13.4 POM declares no dependencies) · Java; the FAQ lists Java 1.2 through 8 as tested, and the benchmark ran 2.13.4 on Temurin 21 JRE. The C port builds with a makefile, or with Visual Studio set to 'Compile as C'. · any JVM; the C, C++ and C# ports cover Linux, Windows and .NET/Mono per the FAQ
+
+**Vs siblings:** Pick it only when you must stay on the JVM and want random access, a saved index or in-place byte edits. Every catalogued sibling is native: on the same bemayer page quick-xml's DOM Parse is faster than VTD-XML at every size, and RapidXml beats it at 1KB and 100MB. For XPath, prefer simdxml or libxml2 itself.
+
+**Gotchas:**
+- parseFile(), parseGZIPFile() and similar catch IOException and ParseException, print them to System.out and return false. Use setDoc() + parse() if you need the exception.
+- Hard limits in VTDGen throw ParseException: depth 254, prefix 511 bytes, qualified name 2047 bytes, and 2 GB file size (1 GB with namespaces). Text tokens longer than 1M-1 bytes are split across several records.
+- The byte[] passed to setDoc() is the document. Records only point into it, so it must stay alive and unmodified for as long as the VTDNav is used.
+- toNormalizedString() collapses whitespace by design (issue #9); use toString(), or toRawString() to keep entities. Issue #6 reports toString() mishandling multibyte characters, with a fix promised for '2.13_2'.
+
+**Status:** Abandoned: the last release is 2.13.4 (Maven Central, 2017) and the last commit on the maintainer's GitHub copy is 2018-06-28. The jar has no dependencies and is easy to adopt, but GPLv2 (commercial license on request), the listed US patents and a license-termination clause for parties in litigation with XimpleWare make it a legal-review item.
+
+[repo](https://sourceforge.net/projects/vtd-xml/) · [benchmark](https://bemayer.github.io/xml-benchmark/)
 
 ### stdlib-replacements
 

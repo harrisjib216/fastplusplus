@@ -81,6 +81,83 @@ Research framework that decomposes regexes into reordered sub-matches via a band
 
 [repo](https://github.com/mush-zhang/Blare) · [benchmark](https://dl.acm.org/doi/10.1145/3589297)
 
+### serialization-and-formats
+
+#### binary-schemas
+
+##### Cornflakes  `Rust`  `no license`  `abandoned`  `Tier B`
+
+Rust research serialization library and kernel-bypass UDP stack that sends large fields zero-copy via NIC scatter-gather, beating Protobuf/FlatBuffers/Cap'n Proto.
+
+**Beats:** Protobuf, FlatBuffers and Cap'n Proto via the pure-Rust crates protobuf 3.0.3 (rust-protobuf), flatbuffers 2.1.2 and capnp 0.13.6 (cf-kv/Cargo.toml); Redis handwritten serialization for Table 3 — The SOSP 2023 paper runs a single-core Rust KV server on CloudLab c6525-100g machines (2x EPYC 7402P, ConnectX-5Ex 100 Gb, MTU 9000), with every system on the Cornflakes UDP stack and the pure-Rust protobuf 3.0.3, flatbuffers 2.1.2 and capnp 0.13.6 crates as baselines; the rustc version is not stated. Cornflakes served 366.5k vs 161.0-186.1k objects/s on the CDN image trace, delivered 15.4-45.9% more throughput on the Twitter trace (p99 about 52-61 us) and roughly tied on Google's small-field trace; in Redis, get/mget/lrange gained 15-40.1% over Redis's own handwritten serialization.
+
+**Known shortcoming:** Research prototype, abandoned since 2023-07. No win on small objects (paper Table 1). Baselines are the pure-Rust protobuf/flatbuffers/capnp crates, not the C++ libraries, and the Redis gains are against Redis's own handwritten serialization.
+
+**Known shortcoming:** Needs a kernel-bypass NIC datapath (mlx5); the Linux-socket datapath always copies. Single-core, single-jumbo-frame prototype with no segmentation or write protection for buffers in flight. Code defaults use a 256 B zero-copy threshold, while the paper's numbers use 512 B. C bindings exist but use from C++ is undocumented, and generated code fails for int32-only messages (issue #1, open since 2021).
+
+**How:** Protobuf, FlatBuffers and Cap'n Proto copy each bytes/string field into a contiguous buffer and then again into DMA memory; Cornflakes instead posts each pinned-memory field of 512 B or more as its own NIC scatter-gather entry (zero-copy transmit), and a per-buffer reference count keeps that memory alive until the DMA completes. A per-field size threshold, checked when the field's smart pointer (CFBytes/CFPtr) is constructed, chooses copy or zero-copy: smaller fields go into an arena-backed copy buffer, because below about 512 B the reference-count cache miss costs more than the memcpy. Serialize-and-send writes the packet header, the object header and the copied data into one entry and posts the zero-copy entries directly onto the NIC ring, with no intermediate scatter-gather array (a 7.7-17.4% throughput gain in the paper). All framing (a field bitmap plus u32 size/offset forward pointers) is at the front of the object, so each zero-copy field needs only one extra scatter-gather entry.
+
+**Use it when:**
+- Microsecond-scale datacenter services such as caches and KV stores that already run on kernel bypass with Mellanox ConnectX-5/6 or Intel E810 NICs, where serialization copies are a large share of CPU time per request.
+- Responses built from values of 512 B or more that already sit in pinned memory, e.g. a store that returns stored blobs. On the paper's CDN image trace (objects of 1 KB and up) it served 97-128% more objects/s than the three baselines.
+- Workloads that mix small and large values, like the Twitter cache trace (about 32% of requests are 512 B or more), where the hybrid copy/zero-copy path beat pure scatter-gather by 2.3-3.9% and beat the copy-based libraries by 15.4-45.9%.
+- Applications that never modify data in place while it is being sent, such as Redis-style stores, versioned stores, or code that updates by allocating and swapping pointers.
+- As a reference design and threshold-calibration method (paper Section 5) when adding zero-copy serialization to your own kernel-bypass stack.
+
+**Skip it when:**
+- Small-field workloads. On Google's field-size distribution (94.9% of fields are 512 B or less) it ties or slightly trails Protobuf (844.7 vs 852.5 k req/s at 1 value) and wins only at 1-8 and 1-16 values per list.
+- Standard Linux sockets. The linux-datapath returns usize::MAX as its copy threshold (always copies), and many of its functions are unimplemented!().
+- Messages larger than one jumbo frame. The prototype has no segmentation: the CDN benchmark split objects into sub-objects that fit a jumbo frame, and the copy path carries a 'doesn't work if buffer is > than an MTU' TODO.
+- Production or multicore use, or any need for Protobuf wire compatibility, proto2 required fields, or recursive pointer-based types (the author confirms in issue #7 that trees with pointers are not supported). The paper evaluates a single-core server and leaves multicore to future work.
+- Any project that needs a license: the repo has no LICENSE file.
+
+**Vs siblings:** Pick it over rkyv, or over FlatBuffers-family formats such as Karmem and Lite³, only when your bottleneck is the transmit-path memcpy on a kernel-bypass NIC and your fields are 512 B or larger. Those siblings speed up CPU encode/decode over any transport, but Cornflakes's gain comes from NIC scatter-gather and disappears for small fields or on normal sockets.
+
+**Gotchas:**
+- The kv app's --copy_threshold CLI default and the mlx5 datapath default are both 256 B, not the paper's 512 B. The experiment configs pass 512 explicitly (cornflakes-dynamic-512). The paper recommends re-measuring the threshold on your own NIC and CPU.
+- Zero-copy applies only to data inside the stack's registered pinned memory. For any other pointer, recover_metadata returns None and the field is copied without any warning.
+- Copied entries come before zero-copy entries on the wire. As a result, peers configured with different thresholds can serialize repeated elements in different orders.
+- Issue #1, open since 2021: the code generator emits code with lifetime errors for messages that contain only int32 fields.
+
+**Status:** Abandoned research prototype: the main branch was last committed on 2023-07-27 (the timetrace branch on 2024-01-19), and there is no LICENSE file, so use it as a reference design to study, not as a dependency.
+
+[repo](https://github.com/deeptir18/cornflakes) · [benchmark](https://people.eecs.berkeley.edu/~matei/papers/2023/sosp_cornflakes.pdf)
+
+#### json
+
+##### Mison (speculative structural-index JSON parser)  `C++`  `no license`  `unknown`  `Tier B`
+
+VLDB 2017 JSON parser (no public code) that jumps straight to queried fields; reports 5.5-9.1x over best of RapidJSON/Jackson/Gson.
+
+**Beats:** RapidJSON — The authors' own single-threaded benchmark ran field-projection queries on a 3.5 GHz Xeon E5-1620 v3 under Windows 10, with data preloaded into memory and no compiler or flags stated. On Twitter records, Mison was 5.5-9.1x faster than the best of Jackson, Gson and RapidJSON (all using their streaming APIs; Jackson, not RapidJSON, was the strongest), and about 2x faster than Jackson when all 31 GitHub fields were read. No one has reproduced the full parser; Sparser's authors reimplemented only the index step, found Mison over 2 GB/s per core and over 5x RapidJSON, and noted that the implementation 'is not open source'.
+
+**How:** First it builds a per-record structural index. AVX2 compares 32 bytes at a time against quote, backslash, colon and braces (and brackets or commas when arrays are queried), and the results become bitmaps. 64-bit bit tricks (x&(x-1), x&-x, x^(x-1), popcnt) then drop escaped quotes, build a string mask, and use a brace stack to split colons into 'leveled colon bitmaps', one per nesting depth, built only down to the deepest queried field. The k-th set bit therefore locates the k-th field's key/value boundary without tokenizing. Second, it parses speculatively. 'Pattern trees', trained on a sample (the first 1,000 records in the paper, keeping patterns seen more than 1% of the time), predict each queried field's ordinal position. The parser jumps there, checks that the key name matches, tries less frequent patterns if it doesn't, and falls back to scanning every colon at that level if none match. In the paper's Fig. 11, index-only (basic) Mison was 3.6x faster than Jackson and speculation raised that to 10.2x.
+
+**Use it when:**
+- In-memory scans of newline-delimited record streams where a query needs 1-2 fields out of dozens (the Twitter records had 25-30 top-level fields plus a 37-38-field user object). That is where the paper shows its 8-9x best case.
+- Record collections that share a few layouts in a stable field order, such as the paper's GitHub user records (31 fields, always in the same order) or Twitter's user field, which sat at position 11 in 80.7% of tweets and 12 in the rest. Speculation pays off there.
+- Selective filters that can be evaluated before projection. In the Spark TPC-H runs, queries with 0.5-3.7% selectivity on lineitem ran 16.3-32.5x faster with Mison than with Spark's Jackson path.
+- As a design reference for a query-on-raw-JSON engine. The leveled colon/comma bitmap index is implemented in C++ in AutomataLab/Pison (MIT). The full algorithm, including pattern-tree speculation, exists in the Rust crate pikkr (MIT).
+
+**Skip it when:**
+- You need a maintained library. No official code exists, and the reimplementations are research or hobby code: pikkr's last push was 2017, and its open issue #76 reports it doesn't build on Rust 1.80. The misosoup README says 'DO NOT use for production use'. gomison contains only a README and a LICENSE.
+- Full-document parsing, DOM building or serialization. With all 31 GitHub fields read, the lead over Jackson falls to about 2x. Mison has no writer and builds no tree.
+- Untrusted or possibly malformed input. The simdjson paper notes that Mison does not validate documents and assumes pure ASCII rather than UTF-8. pikkr, which follows the same design, accepts {"x":0,} and returns the value '0,'.
+- Highly irregular or schema-drifting data, optional fields, and arrays. In the paper, Q5 (a field with 7 root-level patterns) was slower, and Q6-Q8 needed Bloom filters or leveled comma bitmaps, which cut Mison's advantage.
+- Data you will query many times. The paper itself finds converting to Parquet faster (Spark+Parquet was 1.6x faster than Spark+Mison, geometric mean over TPC-H SF1, not counting about 100 s of conversion). A single huge JSON document is also a poor fit: Mison indexes each record serially, and Pison was built to parallelize that case.
+
+**Vs siblings:** For shipping code, use simdjson's On-Demand API: the simdjson paper says it follows Mison's structural-index outline but with branchless stage-1 code, and On-Demand skips fields you never access while validating the ones you use. Reach for Mison, in practice pikkr or Pison, only to study or reproduce pattern-tree speculation and leveled-bitmap projection. For full parsing or writing, yyjson or glaze fit better.
+
+**Gotchas:**
+- Keys are assumed unique within an object (the paper states this assumption), and input is assumed to be ASCII. Neither is checked.
+- A missing queried field makes Mison either skip the whole record or return null, depending on configuration. Choosing skip silently drops rows; the Anghagaed/MISON reimplementation lists exactly this as a known bug compared with Spark.
+- Speculation depends on a one-time training sample, and patterns below the weight threshold are pruned. The paper describes no retraining, so if the data layout drifts, every record falls back to the slower basic parse.
+- The training cost is included in the paper's timings, but the paper does not report how much of the total it is.
+
+**Status:** Nothing was ever released: the MSR page carries only the PDF, and Microsoft's FishStore used Mison in its SIGMOD 2019 paper but ships simdjson in the open-source repo, so treat Mison as a reference design whose nearest usable code is pikkr (Rust, MIT, dormant since 2017) or Pison (C++, MIT, index only, no speculation).
+
+[benchmark](http://www.vldb.org/pvldb/vol10/p1118-li.pdf)
+
 ### stdlib-replacements
 
 #### allocators
@@ -338,6 +415,123 @@ Bitstream-parallel text-processing framework whose LLVM-JIT'd SIMD kernel beat a
 **Status:** Abandoned on this mirror since 2021-08-10 (no evidence in this session of active development elsewhere) and usability is mixed: it's a research framework with no stable API, requiring a full LLVM/Boost/Z3 build toolchain rather than a library you can drop in.
 
 [repo](https://github.com/parabix/parabix-devel-mirror) · [benchmark](https://github.com/dakshkashyap/cmpt479-project-group8/blob/main/results/utf16_benchmark_apple_arm64_summary.md)
+
+### serialization-and-formats
+
+#### binary-schemas
+
+##### MTS-1 (Lightweight Delta-Encoded Telemetry Format)  `Rust`  `CC-BY-4.0`  `unknown`  `Tier C`
+
+Rust per-packet binary telemetry format (MTS-1/MWire) reporting ~5% smaller payloads than MessagePack on synthetic host metrics.
+
+**Beats:** MessagePack — The only claim is size: on a synthetic 10k-record set, per-packet MTS-1 totals 1,390,000 B vs 1,469,521 B for MessagePack (rmp-serde, structs as arrays) and 5,475,079 B for JSON (5.4% and 74.6% smaller), and the 20k and 50k sets scale linearly. Protobuf was not measured, and no compiler, hardware or timings are given. My arithmetic on the repo's generator reproduces the MessagePack and MTS-1 byte counts exactly for all three sizes.
+
+**Known shortcoming:** Size-only claim, no speed numbers. The benchmark generator runs with delta encoding off on synthetic sin/cos data at 1 s intervals, so the 139 B/record is the fixed packet size. The MessagePack baseline stores the UUID as a 36-char string; with a binary UUID MessagePack would be about 127 B and win (derived from the generator, not measured). No root LICENSE file although the README says MIT.
+
+**How:** The win is in size, not speed. Each present field is a 1-byte tag (3-bit type, 5-bit field number) followed by a fixed-width little-endian value, absent fields are skipped, and the UUID is stored as 16 raw bytes. In the paper's generator this gives a constant 139 B per record: a 2 B length prefix, 15 B header, 18 B device ID, 16 B UUID, 84 B payload and 4 B CRC. The 'delta' mode is change suppression: a delta packet or frame carries the new values of fields that changed (optionally only past a per-field epsilon), not arithmetic differences. Per-packet LZ4 (lz4_flex block mode) is optional.
+
+**Use it when:**
+- Reproducing or auditing the paper: the repo's generate_dataset binary and committed tele20k/tele50k files let you re-derive Table I byte counts.
+- Rust host agents sending fixed host metrics (CPU %, temperature, frequency, memory, disk, network counters, uptime) where you own both ends and want a checksummed packet with timestamp, sequence number and a LAN-proxy flag.
+- Slowly changing metric streams stored as JSON arrays, where the MTS1 stream mode stores field names once and writes only changed fields between snapshots (every 10th record by default).
+- As a small reference design for a telemetry packet layout: the core crate is about 100 KB of Rust in 7 files, with no unsafe code.
+
+**Skip it when:**
+- You need speed numbers. No encode or decode timings are published. The README's ~65,000 encode / ~112,000 decode records/s gives no hardware, method or baseline, and no results from the criterion comparison bench are published.
+- You want a fair size win over MessagePack. The 5.4% margin exists because the baseline stores the UUID as a 36-char hex string (38 B) while MTS-1 stores 16 raw bytes. By my arithmetic on the generator code (not a measurement), rmp-serde MessagePack with a binary UUID would be ~127 B per record vs MTS-1's 139 B.
+- C++ codebases, or platforms without prebuilt artifacts. It is Rust only, with no C/C++ API. The only prebuilt artifacts are a Windows x86-64 mwire.exe and a single PyPI wheel (magenta-telemetry 0.1.0, CPython 3.11 win_amd64). Nothing is published on crates.io.
+- Untrusted input. The decoders call `Vec::with_capacity` / `HashMap::with_capacity` with u32 counts read from the packet, and CRC32 is not authentication, so a crafted packet can request very large allocations.
+- Production dependencies. It is single-author code (5 stars, 6 commits from 2026-02-15 to 2026-03-01, no issues filed) with no root LICENSE file. The packet format has a fixed field table (numbers 0-31). A lost snapshot breaks delta reconstruction, and an epsilon above 0 makes delta mode lossy.
+
+**Vs siblings:** Pick it only if you want a ready-made, CRC-checked host-metrics packet in Rust. For compactness alone, JSON BinPack (smallest or tied-smallest across 27 documents) and qdf (IoT/OTLP batch fixtures) have broader size evidence, and fernBuffer's MessagePack comparison covers more data shapes.
+
+**Gotchas:**
+- The paper's 'delta-encoded' results do not use delta mode. generate_dataset.rs calls `encode()` on full records with `is_delta` false, so Table I measures plain fixed-width packets. The constant 139 B per record is therefore the natural packet size, not evidence of computed numbers.
+- The paper and the code describe different methods. The paper cites real Magenta samples at ~30 s intervals and deltas of c_i - c_(i-1). The generator uses sin/cos synthetic values at 1 s intervals with one device ID and UUID, and delta frames carry replacement values. The paper's 100-host example (1.95 GB vs 0.24 GB, '87.7%') also disagrees with its own 548 B vs 139 B per payload.
+- The two spec documents disagree. docs/FORMAT.md's type-ID table (e.g. 0x01 = Null) and its legacy flag bits do not match core/src/types.rs and encoder.rs, which follow FORMAT_SPEC.md (0x06 = Null, delta = flag bit 4). Treat the code as the spec.
+- Per-packet LZ4 makes these packets larger (2,794,270 vs 2,780,000 B on S2) because `compress_prepend_size` adds a 4-byte length and the ~84-byte payload barely compresses. Only the stream mode's whole-body LZ4 pays off: DISTRIBUTION_README reports 1,340,041 vs 4,440,224 B on a 25,957-record dataset.
+
+**Status:** Single-author research code behind a non-peer-reviewed January 2026 arXiv preprint: last commit 2026-03-01, one v1.0.0 Windows release, MIT according to the README and Cargo.toml but with no root LICENSE file; use it as a reference, not a maintained dependency.
+
+[repo](https://github.com/ndourc/mwire) · [benchmark](https://arxiv.org/abs/2601.01602)
+
+##### psio / pSSZ (successor to fracpack)  `C++`  `no license`  `active`  `Tier C`
+
+C++23 reflection-driven, SSZ-derived binary format with zero-copy views; author benchmarks show faster encode/decode than libprotobuf, capnp, FlatBuffers, msgpack.
+
+**Beats:** Protobuf, Cap'n Proto, FlatBuffers, MessagePack — On the author's own psio_bench_vs_externals harness (unspecified Apple M-series, llvm-clang 22.1, -O3 -DNDEBUG, library versions not stated), per-shape geomeans show libprotobuf 6.4x slower than pSSZ to decode and 43x slower to encode, FlatBuffers 1.23x slower to decode and 2.3x slower on a single-field view, and Cap'n Proto 5.4x slower to decode and 48x slower on a view. The comparison is weaker than it looks: the external encode cells include copying a native C++ struct into the library's builder or message, FlatBuffers and capnp 'decode' means materializing a native struct, the validate ratios are against psio's own re-implementations of those formats, and the anchor CSV is not committed.
+
+**Known shortcoming:** The validate ratios are against psio's own reimplementations of protobuf, flatbuffers and capnp, not the canonical libraries. The C++ core has no LICENSE file (only the Rust and npm manifests declare MIT). Published ratios are latency, measured on an unspecified Apple M-series chip.
+
+**Known shortcoming:** The competitor encode timings include copying a native struct into each library's builder, FlatBuffers/capnp 'decode' builds a full native struct, and the capnp view timing constructs a new reader per call, likely inflating the 43-82x and 47.57x ratios. Decode and view are unchecked (only validate reports errors). Verified only on macOS ARM64; host byte order only; requires C++23, Boost and Homebrew LLVM on macOS.
+
+**How:** Each record is a fixed region (scalars inline, one offset slot per variable field) followed by a dynamic region, so a field's position is a compile-time constant that a view reads with one load, and a variable field's size comes from the next offset instead of a length prefix. The offset width (1, 2 or 4 bytes) is chosen per type at compile time from length_bound and maxDynamicData annotations. Records marked definitionWillNotChange() (DWNC) drop the extensibility header, and a trivially copyable, unpadded DWNC record (or a vector of them) encodes and decodes as one memcpy. Validation is one bounds check per offset slot, with nesting depth capped at 64.
+
+**Use it when:**
+- C++23 services that exchange existing structs between processes you control, and want to serialize them with no separate IDL or codegen step.
+- Read-heavy paths that pull one field out of a validated buffer. The spec's view_one table shows 0.33-0.56 ns for pSSZ, against 0.58-3.46 ns for FlatBuffers and 17-28 ns for Cap'n Proto on the same shapes.
+- Content-addressed or signed payloads that need exactly one canonical byte sequence per value (spec §15).
+- Bulk arrays of fixed-layout records such as validator or tick lists. Marking the record DWNC and trivially copyable turns encode and decode into a memcpy.
+- Small bounded messages, where length_bound annotations shrink offset slots and headers to 1 or 2 bytes.
+
+**Skip it when:**
+- Integer-heavy or sparse payloads where wire size matters most. In the author's table Avro, MessagePack and Protobuf are 0.56-0.65x pSSZ's raw size. The gap narrows to 0.87-0.91x after zstd-1.
+- Streaming or incremental parsing. Offsets are container-relative, so the whole container must be in memory before any field can be read.
+- Polyglot systems. pSSZ exists only in C++ and Rust: JS/TS has no pSSZ, and no Python, Go or Java port exists. psio's own Protobuf, MessagePack, capnp and FlatBuffers codecs are covered by only two shared fixture records each.
+- Production code or code that parses untrusted input today. The library is at 0.1.0 with no tags or releases and no LICENSE file, and it has been verified only on macOS ARM64. Its own release checklist asks for sanitizer and fuzz jobs 'before accepting untrusted inputs'.
+- Builds with -fno-exceptions or for WASI guests. The docs say the exception-free profile is incomplete: headers still contain unguarded throws.
+
+**Vs siblings:** Pick pSSZ when both ends run C++ (or Rust) and you want one reflected struct declaration to give zero-copy single-field reads, canonical bytes and append-only schema evolution together, and you can accept a pre-release, unlicensed codebase. Pick hpp-proto if you must stay on the Protobuf wire, and rkyv for a Rust-only zero-copy codebase.
+
+**Gotchas:**
+- Only validate reports errors. error.hpp says decode and view accessors assume the input has already been validated, so call psio::validate<T>(psio::pssz{}, bytes) on every untrusted buffer first. The 64-level depth cap applies to validate, not to decode.
+- The offset width W is derived from the type and never stored on the wire. Changing a length_bound in a way that flips W, or adding definitionWillNotChange() to an existing record, silently breaks bytes that are already stored. Encoding more than maxDynamicData throws codec_exception.
+- Unknown trailing fields are silently dropped, strings are not checked for UTF-8 unless you use validate_strict (which also fully decodes), and appending a variant-typed field is not a safe evolution.
+- The spec promises single-pass encode, but the C++ encode entry point first runs size_of over the value and then writes into the pre-sized buffer with unchecked memcpy (fast_buf_stream).
+
+**Status:** Actively worked on (last push 2026-09-16) but pre-release, so treat it as a reference design rather than a dependency: version 0.1.0, 0 stars, no tags or releases, verified only on macOS ARM64, and no LICENSE file (the Rust and npm manifests declare MIT, while the C++ core declares no license).
+
+[repo](https://github.com/gofractally/psio) · [benchmark](https://github.com/gofractally/psio/blob/main/docs/format-comparison.md)
+
+#### yaml-toml-xml
+
+##### SupXML (sup-xml)  `Rust`  `Proprietary source-available (Supported Source; LICENSE requires a paid or free-tier license certificate to use the code; not OSI)`  `active`  `Tier C`
+
+Source-available Rust XML stack with a libxml2-compatible C ABI; the vendor reports ~2.1x median DOM-parse throughput over libxml2.
+
+**Beats:** libxml2 — This is a first-party bench (cargo bench -p sup-xml-bench --bench head_to_head). It compares sup-xml's bumpalo-arena DOM (parse_bytes_unchecked, default options, input copied into an owned buffer) with libxml2 xmlParseMemory plus xmlFreeDoc through FFI, taking best-of-N MiB/s per fixture. The 11 fixtures shown range from 1.61x to 3.75x, the claimed median over 21 is ~2.1x, and the XSTS 1.0 wall-clock is 2.86 s vs 6.81 s with libxml2's 3 timeouts excluded. No CPU, OS, rustc version, flags or libxml2 version is disclosed; build.rs links whatever libxml2 pkg-config or the macOS system provides, and the numbers have not been independently reproduced.
+
+**Known shortcoming:** Proprietary source-available licence (needs a licence certificate). The timed SupXML run skips UTF-8 validation (parse_bytes_unchecked) while libxml2 validates inside its timing, contradicting the page's 'matched contract' claim. No CPU, rustc or libxml2 version; the repo's own COMPARISON.md says only ~1.0-1.3x vs libxml2; the XSD validation text and table disagree. 1 star.
+
+**Known shortcoming:** The timed run also skips encoding sniffing and namespace processing (namespace_aware false) while libxml2 is namespace-aware; best-of-2, no warmup. The project's documents contradict each other (COMPARISON.md ~1.0-1.3x vs the docs page's ~2.1x; W3C suite 255/257 vs 244/257). By its own numbers quick-xml streams faster on 4 of 5 fixtures and its fastest DOM mode reaches about half of pugixml. The libxml2 C shim frees arenas only at thread exit and is off by default because linking it with real libxml2 is undefined behaviour. Parsing hard-fails without a licence certificate. Enrichment confidence 0.4.
+
+**How:** The tokenizer is a strict byte-level SAX reader built on memchr SIMD searches. Text runs scan for '<', '&' and ']' in one memchr3 pass. A start tag jumps to the first '>' and accepts it if a memchr2 count of both quote characters before it is even; otherwise it falls back to a quote-aware scan. XML Name characters are checked against 256-entry ASCII lookup tables. XML 1.0 §2.2 character validation is one upfront SWAR pass over the whole document (the has-zero-byte trick, 8 bytes per iteration) instead of per-token checks, and UTF-8 is validated with simdutf8 (AVX2/SSE4.2/NEON dispatch). The DOM uses libxml2-shaped nodes allocated in one bumpalo arena per document, so each node costs a pointer bump and the whole arena is freed at once. Strings are borrowed from the owned source buffer where possible. An opt-in parse_bytes_in_place mode decodes entities inside the input buffer to avoid copies.
+
+**Use it when:**
+- Rust services that need libxml2-class features (XSD 1.0 validation, XPath 1.0, XSLT, C14N for XML-DSig/SAML, recovery mode) without linking C, and that can get a Supso certificate: paid commercial, free 30-day evaluation, or free hobbyist for non-monetized projects
+- DOM-parsing UTF-8 documents from about 15 KB to 95 MB into an owned tree. The vendor's table shows 1.61x (pubmed) to 3.75x (Arabic gazali_maqasid_ar, 599 KB) over libxml2's xmlParseMemory; the largest gains are on text-heavy and non-ASCII documents
+- XSD pipelines with complex Microsoft-style particle and derivation schemas. On W3C XSTS 1.0, libxml2 goes quadratic and times out at 30 s on 3 schemas that SupXML compiles in under 1 ms, and total schema-compile time is 1.74 s vs 3.96 s
+- Browser or edge runtimes that need XML, XPath, XSLT, XSD or HTML parsing: it builds for wasm32-unknown-unknown with every feature except network-resolver
+- As a reference design for a strict, validating XML tokenizer built from memchr, SWAR and lookup tables
+
+**Skip it when:**
+- Any open-source, redistributable or unlicensed deployment. The LICENSE is proprietary Supported Source (not OSI), and every document-parse entry point returns a fatal error unless a valid certificate is found
+- Pure streaming or event workloads. The vendor's own page shows quick-xml faster on 4 of the 5 fixtures it lists (nasa 0.74x, swiss_prot 0.59x, wikipedia_ww2 0.11x), with only ~1.04x median across 21 fixtures at the matched contract
+- Maximum DOM speed on trusted input. Its own docs say parse_bytes_in_place with all four skip_* flags reaches 'roughly half of pugixml's throughput', and pugixml-beating siblings go further
+- HTML parsing for speed. It wraps html5ever and is at parity with libxml2 (~1.02x geomean on the docs page); COMPARISON.md even shows hn.html at 35 vs 45 MiB/s
+- Long-running processes that use the C-ABI shim on persistent threads, because per-document arenas are freed only at thread exit. Also note the maturity: 1 contributor, 1 GitHub star and 121 crates.io downloads
+
+**Vs siblings:** Choose it over yxml, quick-xml, xmloxide or rusty_xml only when you need libxml2's broader surface (XSD, XSLT, XPath, C14N, recovery) in memory-safe Rust or behind a libxml2 C ABI, and you are willing to license it. For plain streaming, quick-xml beats it on most fixtures in SupXML's own table. yxml offers a similar ~2.2-2.4x over libxml2 in a tiny C SAX parser. xmloxide is the other pure-Rust libxml2 reimplementation, catalogued at roughly libxml2 parity.
+
+**Gotchas:**
+- Runtime license gate: the first parse in a process looks for a certificate (SUPSO_LICENSE_PATH, ~/.supso/license_certificates/, ./.supso/license_certificates/). Without one, every parse returns a fatal error. An expired certificate only gets a logged grace period before parsing fails.
+- The headline benchmark is not symmetric. The timed sup-xml call is parse_bytes_unchecked, which skips encoding sniffing and SIMD UTF-8 validation (the harness checks UTF-8 outside the timer). It also runs with the default namespace_aware: false, so there is no xmlns scanning or QName resolution. libxml2's xmlParseMemory does detection and validation inside the timer and uses its namespace-aware SAX2 interface. Timing is best-of-N with no warmup (default N=2), and 'MB/s' is actually MiB/s.
+- The project's own documents disagree. COMPARISON.md gives ~1.0-1.3x median vs libxml2 against the docs page's ~2.1x. The README claims 255/257 on the W3C XML Conformance Suite, but the COMPARISON.md table shows 244/257. An XSD instance-validate time of 1.12 s vs 2.85 s is described as 'parity'. A bench comment still says gazali parses at ~14 MB/s vs libxml2's ~140 MB/s.
+- The defaults differ from libxml2: namespace_aware is false (set it true for prefixed XPath), there is a 1 MB entity-expansion cap and a depth limit of 256, and external DTDs are not loaded. The 'memory-safe' claim is scoped: unsafe code is allowed in the scanner, readers, parser, encoding and dom.rs, and the C shim is #![allow(unsafe_code)] even though CONTRIBUTING lists the shim among the forbid-unsafe modules.
+
+**Status:** The project is actively developed by a single maintainer (111 commits from one contributor; v1.3.0 released 2026-06-17; last commit 2026-06-20). It is reference-only here because the proprietary Supported Source license requires a paid or free-tier certificate, and parsing fails without one.
+
+[repo](https://github.com/SupsoOrg/sup-xml) · [benchmark](https://supso.org/projects/sup-xml/docs/reference/performance/)
 
 ### stdlib-replacements
 

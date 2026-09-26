@@ -7,11 +7,11 @@ claim against the cited page before it was written up.
 
 ## Lists
 
-- [COPYABLE.md](COPYABLE.md): 329 entries under an OSI license or CC0. Code can be vendored or forked.
-- [REFERENCE.md](REFERENCE.md): 21 entries with no, unclear, or non-OSI license. Study the idea; don't copy the code.
-- [REJECTED.md](REJECTED.md): 6 candidates that failed verification.
+- [COPYABLE.md](COPYABLE.md): 430 entries under an OSI license or CC0. Code can be vendored or forked.
+- [REFERENCE.md](REFERENCE.md): 26 entries with no, unclear, or non-OSI license. Study the idea; don't copy the code.
+- [REJECTED.md](REJECTED.md): 7 candidates that failed verification.
 
-Tiers across both lists: A 140, B 30, C 175, D 5.
+Tiers across both lists: A 175, B 44, C 231, D 6.
 
 ## Evidence tiers
 
@@ -39,10 +39,10 @@ Ratios marked "(derived from page data)" were computed from numbers on the cited
 | parsing-and-text | text-search-and-indexing | 8 | 3 | 0 | 5 | 0 |
 | parsing-and-text | unicode-utf8 | 10 | 5 | 0 | 5 | 0 |
 | runtime-and-systems | filesystems-and-io | 1 | 0 | 1 | 0 | 0 |
-| serialization-and-formats | binary-schemas | 4 | 1 | 0 | 3 | 0 |
-| serialization-and-formats | json | 12 | 7 | 0 | 5 | 0 |
-| serialization-and-formats | reflection-and-codegen | 5 | 2 | 1 | 2 | 0 |
-| serialization-and-formats | yaml-toml-xml | 8 | 3 | 0 | 5 | 0 |
+| serialization-and-formats | binary-schemas | 48 | 15 | 11 | 22 | 0 |
+| serialization-and-formats | json | 51 | 21 | 3 | 26 | 1 |
+| serialization-and-formats | reflection-and-codegen | 8 | 3 | 1 | 4 | 0 |
+| serialization-and-formats | yaml-toml-xml | 28 | 9 | 0 | 19 | 0 |
 | stdlib-replacements | allocators | 17 | 4 | 4 | 8 | 1 |
 | stdlib-replacements | async-tasks-threadpools | 8 | 5 | 1 | 1 | 1 |
 | stdlib-replacements | bitsets-and-succinct | 6 | 3 | 0 | 3 | 0 |
