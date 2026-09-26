@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/lance-format/lance",
+  "one_liner": "Rust columnar file and table format for AI/ML data, built for random row access where default-configured Parquet is slow.",
+  "what_it_does": "Lance is a file format, a table format (fragments, manifests, ACID versioning with time travel, tags and branches) and a catalog spec, implemented as the Rust `lance` crate with Python (`pylance`, PyO3) and Java (JNI) bindings. It is not a Parquet reader or writer: you convert data once (`lance.write_dataset` accepts a PyArrow Parquet dataset) and then read it through Lance, whose Python dataset is a `pyarrow.dataset.Dataset`, so pandas, DuckDB and Polars can query it. On top of plain scans it adds take-by-index/row-id (`Dataset::take`, `take_rows`, async on tokio), vector indexes (IVF_PQ, HNSW, RaBitQ), BM25 full-text and scalar indexes, and adding columns without rewriting the table.",
+  "how_it_is_fast": "The paper calls the idea 'adaptive structural encoding': each column page picks one of two layouts. Small values use mini-block: data is cut into power-of-two-count chunks of about 4-8 KiB (max 32 KiB) with Parquet-like repetition/definition levels, and 2 bytes of per-chunk metadata stay in an in-memory 'search cache', so a random read is one small chunk read plus decode. Large values use full-zip: rep/def levels are bit-packed into a 1-4 byte control word and zipped row-major in front of each value's transparently compressed bytes (bit-packing, FSST, per-value LZ4/zstd), with a repetition index of offsets, so a fixed-width value costs 1 IOP and a variable-width one 2 IOPs however deep the nesting. Values of about 1 MiB and up can go to an out-of-line blob layout. Dictionaries sit in the search cache, struct packing is opt-in, and a Linux io_uring reader is available via the `file+uring://` URI scheme.",
+  "when_to_use": [
+    "Fetching scattered rows by index or row id in batches of tens to hundreds from large tables on local NVMe or an NVMe cache: materializing search results, or shuffled training sampling through a torch `__getitems__` batch hook.",
+    "Tables that mix small scalars with large values (768-dim float32 embeddings of about 3 KiB, images, long text). Here Parquet with tiny pages would need about 20 bytes of page-offset-index RAM per page, or roughly 20 GiB per billion one-value pages per the paper, while full-zip needs no search cache.",
+    "Point reads into nested List/Struct columns: with the 2.1+ encodings, extra nesting levels add no IOPs, unlike Arrow-IPC-style layouts, which need one more IOP per validity or offsets buffer.",
+    "When you want vector/full-text/scalar indexes, versioning and cheap column backfills in the storage layer itself, used from Python alongside PyArrow, DuckDB or Polars."
+  ],
+  "when_not_to_use": [
+    "Pure OLAP scans and aggregations. The README's own preliminary table has Lance slightly slower than Parquet on analytics (2.7 vs 2.3 ms, 2.8 vs 2.5 ms), and the paper claims only scan performance 'equal to or greater than' Parquet 'in nearly all cases'.",
+    "One-row-at-a-time lookups or key-value-store latency targets. Issue #3983 (Lance 0.29, 54 KB values) measured point lookups 13x slower than LMDB, and 223x slower again with zstd. Maintainers blame per-take decoder/scheduler setup, and an open issue (#5068) traces about 60% of random-access latency to I/O-scheduler task overhead.",
+    "Interchange with the Parquet/Iceberg ecosystem. Lance files are not Parquet, so every reader needs a Lance library or connector, and older Lance releases cannot read newer data_storage_versions.",
+    "Risk-averse production writes without testing. Recent data-corruption bugs include compaction corrupting files (#8501, fixed Aug 2026) and sub-schema merge_insert corruption on format 2.2 (#6338, fixed); #8282 (merge_insert ordering invariant) is still open. pylance still carries the 'Development Status :: 3 - Alpha' classifier, and the repo shows about 1,281 open issues and PRs.",
+    "macOS on Intel: pylance 12.0.0 ships wheels only for macOS arm64, manylinux x86-64/aarch64 and Windows x86-64, so other platforms must build the Rust crate from source."
+  ],
+  "integration": {
+    "form": "crate (`lance` on crates.io); also the `pylance` Python wheel (PyO3, abi3) and Java JNI bindings",
+    "dependencies": "arrow-rs 58, DataFusion 54, object_store 0.14 and OpenDAL, tokio async runtime, AWS SDK (S3, DynamoDB), io-uring (Linux), plus many more workspace crates. Python: pyarrow>=14, numpy>=1.22, lance-namespace.",
+    "min_toolchain": "Rust 1.91 (workspace rust-version, edition 2024; the repo pins 1.97.0 for development); Python >=3.10",
+    "platforms": "Linux x86-64 and aarch64, macOS arm64, Windows x86-64 (pylance wheels). The io_uring reader is Linux-only (kernel 5.1+) and falls back to the normal local reader elsewhere.",
+    "thread_safety": "Documented as thread-safe: APIs can be called concurrently and tables shared across threads. Concurrent writers use optimistic concurrency with automatic retries on conflict. There are separate I/O (8 threads local, 64 cloud; LANCE_IO_THREADS) and compute (LANCE_CPU_THREADS) pools.",
+    "drop_in_for_baseline": "partial — not a Parquet reader/writer, so data must be converted; the Python dataset implements pyarrow.dataset.Dataset, so code that consumes PyArrow datasets (pandas, DuckDB, Polars) keeps working"
+  },
+  "gotchas": [
+    "The '100x vs Parquet' headline is a preliminary README table (Oxford Pet 'filter data': 3.9 ms Lance vs 553.7 ms Parquet) with no hardware, versions or Parquet settings. The paper shows parquet-rs going from 5,500 to 350,000 rows/s (over 60x) just by tuning it (8 KiB pages, compression and dictionary off, page offset index), and dictionary encoding alone dropped Parquet to 2% of ideal. Most of the headline gap is Parquet configuration.",
+    "Format versions matter. The code now defaults new datasets to 2.2, while 2.3/'next' is unstable with no compatibility guarantee, and the paper measured 2.1 while it was still experimental. Newer files are unreadable by older Lance, and one encoder fix (FixedSizeList with all-null inner values) makes new files require reader 11.1.0 or later; older readers panic on them instead of returning an error. Pin data_storage_version in mixed-version deployments.",
+    "Memory defaults are large: 1 GiB metadata cache, 6 GiB index cache, and a 2 GB io_buffer_size per scan, with scans able to use about 2x io_buffer_size plus batch_size x compute threads. Caches are not shared between separately opened tables, so open a table once and share it, or pass a common session.",
+    "The paper and current spec differ: the full-zip cutoff is 128 bytes in the paper but 256 bytes in today's encoding doc. Also, 2.1 trailed 2.0 on simple scalars because a whole mini-block must be decoded per value, and the fix that exploits transparent encodings in mini-blocks (#5066) is still open."
+  ],
+  "pick_this_over_siblings_when": "Pick Lance over Vortex (the other Parquet replacement here, catalogued on scan/write throughput ratios) when the workload is row fetches by index, vector or full-text search, and versioned AI/ML tables rather than raw scan and compression speed. Lance is storage, not a query engine, so it complements chDB, Velox or StarRocks rather than competing with them.",
+  "verified_claims_summary": "The LanceDB authors' arXiv paper (2504.15247, v1 April 2025, no journal reference) ran parallel 256-index takes for 10 s over random data with 10% nulls (about 1B rows for small types) on an i7-10700K with a Samsung 970 EVO Plus NVMe. Against parquet-rs v54 tuned to 8 KiB pages without compression or dictionary, Lance 2.1 'generally tie[s] or beat[s]' Parquet in rows/s with no single ratio given, and slightly trails Lance 2.0 on simple scalars. The 100x figure appears only in the README's preliminary Oxford Pet table, which gives no methodology.",
+  "status_note": "Very active (commits daily, 7.1k stars, Apache-2.0; crate and pylance 12.0.0 released 2026-09-17, 13.0 betas on main), but releases are frequent, pylance still calls itself Alpha, and only stable data_storage_versions carry a read-compatibility promise.",
+  "sources_read": [
+    "https://github.com/lance-format/lance",
+    "https://github.com/lance-format/lance/blob/main/README.md",
+    "https://github.com/lance-format/lance/blob/main/Cargo.toml",
+    "https://github.com/lance-format/lance/blob/main/rust-toolchain.toml",
+    "https://github.com/lance-format/lance/blob/main/python/pyproject.toml",
+    "https://github.com/lance-format/lance/blob/main/docs/src/format/file/versioning.md",
+    "https://github.com/lance-format/lance/blob/main/docs/src/format/file/encoding.md",
+    "https://github.com/lance-format/lance/blob/main/docs/src/guide/performance.md",
+    "https://github.com/lance-format/lance/blob/main/rust/lance-io/src/uring.rs",
+    "https://github.com/lance-format/lance/blob/main/rust/lance-file/src/version.rs",
+    "https://github.com/lance-format/lance/blob/main/rust/lance/src/dataset.rs",
+    "https://raw.githubusercontent.com/lance-format/lance/main/docs/src/images/lance_perf.png",
+    "https://github.com/lance-format/lance/issues/3981",
+    "https://github.com/lance-format/lance/issues/3983",
+    "https://github.com/lance-format/lance/issues/4374",
+    "https://github.com/lance-format/lance/issues/5066",
+    "https://github.com/lance-format/lance/issues/5067",
+    "https://github.com/lance-format/lance/issues/5068",
+    "https://github.com/lance-format/lance/issues/5069",
+    "https://github.com/lance-format/lance/issues?q=data+corruption",
+    "https://github.com/lance-format/lance/issues?q=random+access+performance",
+    "https://arxiv.org/abs/2504.15247",
+    "https://arxiv.org/pdf/2504.15247",
+    "https://export.arxiv.org/api/query?id_list=2504.15247",
+    "https://dblp.org/search/publ/api?q=adaptive+structural+encodings+lance&format=json",
+    "https://pypi.org/pypi/pylance/json",
+    "https://crates.io/api/v1/crates/lance",
+    "https://hn.algolia.com/api/v1/search?query=lancedb%20lance%20parquet&tags=story",
+    "https://hn.algolia.com/api/v1/items/36144450"
+  ],
+  "confidence": 0.8
+}
