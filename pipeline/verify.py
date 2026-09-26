@@ -24,6 +24,8 @@ def render(wave_dir, batch_size, today, assignments=None):
     raw_dir.mkdir(parents=True, exist_ok=True)
     done = {v["id"] for f in raw_dir.glob("batch-*.json") for v in json.loads(f.read_text())}
     done |= {i for f in prompts_dir.glob("batch-*.ids.json") for i in json.loads(f.read_text())}
+    # entries already folded into another id need no verifier
+    done |= {d["id"] for d in json.loads(DECISIONS.read_text()) if d.get("decision") == "duplicate"} if DECISIONS.exists() else set()
     entries = [e for e in json.loads((wave_dir / "merged.json").read_text()) if e["id"] not in done]
     if assignments:  # only entries found by these (finished) searches; drafts of running agents stay out
         entries = [e for e in entries if set(e.get("assignment_ids", [])) & set(assignments)]
