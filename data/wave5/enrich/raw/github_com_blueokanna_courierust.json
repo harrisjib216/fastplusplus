@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/blueokanna/courierust",
+  "one_liner": "Zero-dependency Rust HTTP/WebSocket stack; its WebSocket codec encodes small masked frames ~2.5x faster than tungstenite.",
+  "what_it_does": "Courierust is a from-scratch HTTP/1.1/2/3, TLS 1.2/1.3, gRPC and WebSocket stack with no third-party crates. Its WebSocket part (courierust_ws) is an RFC 6455 + RFC 7692 (permessage-deflate) codec and session state machine that builds under no_std + alloc. The default std feature adds a blocking client (`WebSocket::connect` over ws:// or wss://, using the crate's own TLS) and a server upgrade hook (`Handler::websocket` returning a `WsService`) on the crate's own thread-pool and select/poll server. The API is synchronous and different from tungstenite's, so it replaces neither tungstenite nor tokio-tungstenite in place.",
+  "how_it_is_fast": "Masking XORs 16-byte lanes against one precomputed u128 per key phase: 16 is a multiple of the 4-byte key, so every lane starts at the same phase and the loop autovectorizes in safe Rust (25-37 GB/s on the page). The per-byte `i & 3` key lookup does not vectorize. The masked writer masks in place into a reused staging buffer, while tungstenite 0.30's masked `format` allocates and masks a new copy of the payload for every frame. Other techniques: frames up to 64 KiB go out in one write syscall, payloads over 8 KiB are read straight into the message buffer, and the DEFLATE match-finder tables are reused for each message. The echo win over tokio-tungstenite comes from blocking threads against a 2-worker Tokio runtime, not from the codec, because sync tungstenite ties it (26.5 vs 26.5 us at 64 B).",
+  "when_to_use": [
+    "WebSocket clients that send many small masked frames (64 B-1 KiB) and where the CPU cost per frame matters: the page shows 15.2 vs 40.0 ns at 64 B and 1.3-1.5x at 1 KiB",
+    "Client uploads of large masked messages where allocation churn matters: courierust allocates 0 bytes per masked frame, while tungstenite allocates a full copy of the payload (1 MiB per 1 MiB message)",
+    "Threaded or blocking Rust programs outside Tokio that need lower small-message latency than tokio-tungstenite: 64 B echo 26.5 vs 37.2 us and 1 KiB echo 26.6 vs 39.0 us, the same as sync tungstenite",
+    "Builds that need a dependency-free or no_std + alloc WebSocket framing core, with strict RFC 6455 validation and incremental UTF-8 checks across fragments",
+    "Programs already on Courierust's HTTP server that need WebSocket on the same port; in the event-driven driver an idle socket costs a poller slot, not a thread"
+  ],
+  "when_not_to_use": [
+    "Async or Tokio code (axum, hyper, tokio-tungstenite users): there is no Future/Stream API, and the benchmark win against tokio-tungstenite is sync against async, not codec against codec",
+    "Bulk transfers of 256 KiB or more with Courierust at both ends: echo is 297.6 vs 165.0 us for tungstenite, and 16 KiB echo is 9% behind (39.3 vs 35.8 us)",
+    "Any product that could compete with Courierust: PolyForm Perimeter 1.0.1 has a noncompete clause and is not OSI-approved, so many OSS distributions and commercial networking products cannot ship it",
+    "WebSocket over HTTP/2 (RFC 8441) is not implemented. The encoder never uses context takeover, so compression ratio is lower on streams of small repetitive messages",
+    "Risk-averse production: the crate was first published 2026-08-21, has 5 stars, 990 crates.io downloads and no issues filed, and its TLS stack is from scratch with no documented third-party audit. Readiness uses select/poll only, and no epoll/kqueue/io_uring backend is documented"
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "none (zero third-party crates; tungstenite, tokio, hyper and other crates appear only in the separate, unpublished benches workspace)",
+    "min_toolchain": "Rust 1.78 (rust-version), edition 2021; the benches workspace needs a newer stable toolchain",
+    "platforms": "Windows (Winsock select) and POSIX (poll) for the std networking layer; the protocol core is no_std + alloc. Masking is portable safe Rust (u128 lanes, no intrinsics); supported CPU architectures are not documented",
+    "thread_safety": "The blocking Session and client WebSocket take &mut self. On the server, push from other threads goes through WsConn::sender() (WsSender) into a bounded send queue. The writer takes one lock per frame, and a shared close flag refuses writes that race a close. The crate root sets #![deny(unsafe_code)]",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The echo and push benchmarks start the server with `event_driven: false`. The README calls this one-job-per-connection model deprecated for production, so the default event-driven server path was not measured",
+    "On Windows, the client keeps `ClientConfig::read_timeout` (30 s by default) armed as SO_RCVTIMEO. The authors measured this at about 2x slower on 256 KiB bulk transfers; for bulk use, set `read_timeout: None` and rely on ping keepalive",
+    "In the event-driven driver, a bulk push loop inside `on_message` blocks the reactor worker, and the bounded send queue then closes the connection. Push fan-out from another thread with `WsConn::sender()`",
+    "The UTF-8 loss row in WS_BENCHMARK.md (1.9x slower than std) is stale. utf8.rs now hands the bulk scan to core::str::from_utf8, and COMPLEXITY.md reports 891.5 vs 890.3 ns (Windows); the Linux CI report gives a ratio of 1.04"
+  ],
+  "pick_this_over_siblings_when": "Among the siblings, uWebSockets (C++) is the WebSocket server to pick for raw server throughput. monoio or ringline are the picks when the Tokio runtime itself is the bottleneck, which is most of the gap measured here against tokio-tungstenite. Pick Courierust only for a dependency-free, blocking Rust WebSocket client or server where masked-encode cost and allocation per frame matter and the PolyForm license is acceptable.",
+  "verified_claims_summary": "WS_BENCHMARK.md reports one `cargo bench` release run (thin LTO, codegen-units=1) on a shared Windows machine with no CPU model or rustc version, against tungstenite 0.30 and tokio-tungstenite 0.30 in the same process: masked encode 15.2 vs 40.0 ns at 64 B, 9.5 vs 90-99 us at 256 KiB and parity at 16 KiB; loopback echo at 64 B is 26.5 us against 37.2 us for tokio-tungstenite (2 worker threads) and 26.5 us for sync tungstenite. The repo's own Linux CI report (commit d7d52b3, complexity bench) shows smaller or reversed codec gaps: 64 B masked encode 32.8 vs 40.8 ns (1.24x) and 256 KiB masked encode 100.0 vs 20.5 us (4.9x slower), in a noisy run.",
+  "status_note": "Actively developed: last commit 2026-09-15, 1.0.7 on crates.io (main is at 1.0.8) and a CI bench/interop/fuzz suite. Its PolyForm Perimeter 1.0.1 license bars competing products, so treat it as reference code to study unless your use clearly does not compete.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/blueokanna/Courierust/main/README.md",
+    "https://raw.githubusercontent.com/blueokanna/Courierust/main/Cargo.toml",
+    "https://raw.githubusercontent.com/blueokanna/Courierust/main/benches/WS_BENCHMARK.md",
+    "https://raw.githubusercontent.com/blueokanna/Courierust/main/benches/COMPLEXITY.md",
+    "https://raw.githubusercontent.com/blueokanna/Courierust/main/benches/Cargo.toml",
+    "https://raw.githubusercontent.com/blueokanna/Courierust/main/benches/src/ws.rs",
+    "https://raw.githubusercontent.com/blueokanna/Courierust/main/Github_Action_Benchmark.md",
+    "https://raw.githubusercontent.com/blueokanna/Courierust/main/.github/workflows/benchmark.yml",
+    "https://raw.githubusercontent.com/blueokanna/Courierust/main/LICENSE",
+    "https://raw.githubusercontent.com/blueokanna/Courierust/main/src/lib.rs",
+    "https://raw.githubusercontent.com/blueokanna/Courierust/main/src/courierust_ws/README.md",
+    "https://raw.githubusercontent.com/blueokanna/Courierust/main/src/courierust_ws/mod.rs",
+    "https://raw.githubusercontent.com/blueokanna/Courierust/main/src/courierust_ws/frame.rs",
+    "https://raw.githubusercontent.com/blueokanna/Courierust/main/src/courierust_ws/utf8.rs",
+    "https://github.com/blueokanna/Courierust/issues?q=is%3Aissue",
+    "https://crates.io/api/v1/crates/courierust",
+    "https://hn.algolia.com/api/v1/search?query=%22courierust%22&typoTolerance=false"
+  ],
+  "confidence": 0.45
+}
