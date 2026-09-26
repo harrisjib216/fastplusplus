@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/dicl/fast_fair",
+  "one_liner": "Crash-consistent persistent-memory B+-tree using failure-atomic in-place shifts; range scans 6-33% faster than FP-tree/wB+-tree (emulated PM).",
+  "what_it_does": "A research B+-tree for byte-addressable persistent memory (PM) that stays crash-consistent without logging or copy-on-write: it orders its 8-byte stores so that any torn intermediate state can be detected and tolerated by readers. The API is a small class, not a container: btree_insert(int64_t key, char* value), btree_search(key) returning the value pointer, btree_delete(key), and btree_search_range(min, max, buf), which fills a caller-supplied buffer with the values for keys strictly between min and max. The repo ships four variants of one header: single/ (no locks), concurrent/ (per-node std::mutex for writers, lock-free readers), and single_pmdk/ and concurrent_pmdk/ (nodes allocated in a libpmemobj pool; the concurrent PMDK variant takes pthread read locks in leaves). The non-PMDK variants allocate nodes in ordinary DRAM with posix_memalign and only simulate persistence cost with clflush.",
+  "how_it_is_fast": "FAST (Failure-Atomic ShifT) inserts into a sorted node by shifting entries right one 8-byte store at a time. It flushes only when the shift crosses a cache-line boundary, and a transiently duplicated pointer marks an in-flight shift that readers skip, so no undo/redo log is needed. FAIR (Failure-Atomic In-place Rebalancing) splits and merges nodes in place using B-link-style sibling pointers, and later traversals tolerate a half-finished split and repair it lazily. Keys stay sorted in small nodes (512 B by default) that are scanned linearly. That keeps range scans sequential and prefetcher-friendly, and it lets readers run lock-free by scanning in the direction given by a per-node switch_counter (the paper found linear search beat binary search below 4 KB nodes).",
+  "when_to_use": [
+    "Reproducing or baselining persistent-memory index research on 8-byte integer keys: DPTree, APEX and RECIPE all benchmark against this code.",
+    "Range-scan-heavy ordered index on PM with 64-bit integer keys: RECIPE's independent evaluation on real Optane DCPMM (16 threads, 64M keys) found FAST & FAIR beat P-ART, P-HOT, P-Masstree and P-BwTree on range scans.",
+    "Studying or prototyping log-free failure-atomic B+-tree techniques: each variant is a single ~1,000-line header that is easy to read and modify.",
+    "Read-mostly multi-threaded lookups where read-uncommitted visibility is acceptable: in the paper, lock-free search scaled about 11.7x from 1 to 16 threads on emulated PM."
+  ],
+  "when_not_to_use": [
+    "Holding data you cannot lose. Known correctness bugs: concurrent internal-node splits can place a key in the wrong node so it is never found (issue #5/PR #4, confirmed by the RECIPE authors, fix unmerged), the lock-free inner-node search can follow the wrong child (#16), concurrent range scans can return duplicate or unsorted results (#7), and RECIPE lost keys after consecutive crashes during split and merge.",
+    "Needing actual restart and recovery. single/ and concurrent/ keep nodes in volatile DRAM, and the PMDK variants segfault when reopening a pool that already holds data, because volatile lock pointers are stored inside persistent nodes (issue #12, open).",
+    "String or variable-length keys, upserts, or NULL or duplicate values: keys are int64_t only, values must be unique non-null char* pointers (NULL is the end-of-node sentinel), and there is no update operation.",
+    "Write-heavy or point-lookup-heavy workloads on real Optane: RECIPE measured P-ART up to 1.6x faster on write-heavy and P-HOT 1.5x faster on read-heavy YCSB, and 2.5-5x gaps with string keys. The catalogued DPTree and APEX also beat it.",
+    "Non-x86 targets or commercial use: the code uses x86-only inline asm (rdtsc, pause, clflush, mfence), and the source headers restrict use to non-commercial research despite the GPL-3.0 LICENSE file."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none for single/ (libc, -lrt -lm); pthread for concurrent/; libpmemobj (PMDK) for single_pmdk/ and concurrent_pmdk/",
+    "min_toolchain": "C++11 with GNU inline asm; the Makefiles use g++ -std=c++11 and the paper used g++ 4.8.2. The code uses the `register` storage class, which C++17 removed.",
+    "platforms": "x86-64 only (the ARM/non-TSO variant from the paper is not in the repo); Linux",
+    "thread_safety": "single/: none. concurrent/: writers take a per-node std::mutex and readers are lock-free at read-uncommitted isolation, and it must be built at -O0 because there are no atomics or compiler barriers. concurrent_pmdk/: pthread rwlocks, with readers taking read locks in leaves. Known concurrency bugs are listed above.",
+    "drop_in_for_baseline": "false (a research prototype with its own int64-key/char*-value API; the named baselines wB+-tree, FP-tree, WORT and SkipList are not in the repo)"
+  },
+  "gotchas": [
+    "The concurrent Makefiles compile with -O0 on purpose. The paper says -O3 reorders memory operations the lock-free reads depend on, because the read path uses plain loads with no std::atomic or compiler fences, so turning on optimization can silently break correctness.",
+    "btree.h defines globals (for example write_latency_in_ns) and non-inline member functions at namespace scope, plus `using namespace std;`. Include it in exactly one translation unit, or you get duplicate-symbol link errors.",
+    "Every flush is clflush fenced by mfence on both sides, with an rdtsc spin loop for emulated write latency (CPU_FREQ_MHZ is hard-coded to 1994). Keep write_latency_in_ns at 0 on real hardware, and expect no clwb/clflushopt.",
+    "Memory is never reclaimed: there is no btree destructor, merged nodes are only marked is_deleted, and concurrent deletes skip rebalancing entirely. btree_search_range writes into an unbounded caller buffer, and lookup misses print \"NOT FOUND\" to stdout."
+  ],
+  "pick_this_over_siblings_when": "Pick FAST+FAIR over DPTree, APEX or LB+-Tree only when you want a simple sorted-leaf PM B+-tree baseline, or a range-scan-heavy 64-bit-integer workload, and can live with research-grade code. DPTree has up to 1.82x faster lookups and APEX up to 3.8x faster inserts than FAST+FAIR, while LB+-Tree targets real 3D XPoint. For DRAM-only ordered indexes, prefer ALEX, LIPP, HOT or ART, since FAST+FAIR's flushes are pure overhead there.",
+  "verified_claims_summary": "In the FAST'18 paper (g++ 4.8.2 -O3 single-threaded on a Xeon E7-4809 v3, with PM emulated by Quartz at 300 ns), range queries over 10M random 8-byte keys in 1 KB nodes were 6-27% faster than FP-tree, 25-33% faster than wB+-tree and up to 20x faster than SkipList. Inserts were on par with FP-tree and WORT, and WORT won inserts at higher write latency. Concurrent results were measured at -O0 and are self-scaling only (11.7x search, 12.5x insert at 16 threads versus 7.7x and 4.4x for FP-tree and B-link tree); the baseline implementations are not published in the repo.",
+  "status_note": "Abandoned research code: the last master commit was 2020-06-12 (the issue-13 branch was last touched in 2021-03), and bug-fix PRs #4 and #15 remain unmerged. The LICENSE file is GPL-3.0 but every btree.h header grants only a non-commercial research license from UNIST, so clear the licensing before any product use.",
+  "sources_read": [
+    "https://github.com/DICL/FAST_FAIR",
+    "https://github.com/DICL/FAST_FAIR/blob/master/README.md",
+    "https://github.com/DICL/FAST_FAIR/blob/master/LICENSE",
+    "https://github.com/DICL/FAST_FAIR/blob/master/single/src/btree.h",
+    "https://github.com/DICL/FAST_FAIR/blob/master/single/src/test.cpp",
+    "https://github.com/DICL/FAST_FAIR/blob/master/single/Makefile",
+    "https://github.com/DICL/FAST_FAIR/blob/master/concurrent/src/btree.h",
+    "https://github.com/DICL/FAST_FAIR/blob/master/concurrent/src/test.cpp",
+    "https://github.com/DICL/FAST_FAIR/blob/master/concurrent/Makefile",
+    "https://github.com/DICL/FAST_FAIR/blob/master/single_pmdk/src/btree.h",
+    "https://github.com/DICL/FAST_FAIR/blob/master/single_pmdk/Makefile",
+    "https://github.com/DICL/FAST_FAIR/blob/master/concurrent_pmdk/src/btree.h",
+    "https://github.com/DICL/FAST_FAIR/blob/master/concurrent_pmdk/src/test.cpp",
+    "https://github.com/DICL/FAST_FAIR/blob/master/concurrent_pmdk/Makefile",
+    "https://github.com/DICL/FAST_FAIR/issues",
+    "https://github.com/DICL/FAST_FAIR/issues/16",
+    "https://github.com/DICL/FAST_FAIR/issues/13",
+    "https://github.com/DICL/FAST_FAIR/issues/12",
+    "https://github.com/DICL/FAST_FAIR/issues/10",
+    "https://github.com/DICL/FAST_FAIR/issues/7",
+    "https://github.com/DICL/FAST_FAIR/issues/6",
+    "https://github.com/DICL/FAST_FAIR/issues/5",
+    "https://github.com/DICL/FAST_FAIR/issues/3",
+    "https://github.com/DICL/FAST_FAIR/issues/2",
+    "https://github.com/DICL/FAST_FAIR/pull/4",
+    "https://github.com/DICL/FAST_FAIR/pull/15",
+    "https://github.com/DICL/FAST_FAIR/commits/master",
+    "https://www.usenix.org/system/files/conference/fast18/fast18-hwang.pdf",
+    "http://export.arxiv.org/api/query?search_query=ti:RECIPE+AND+ti:persistent&max_results=5",
+    "https://arxiv.org/pdf/1909.13670v4",
+    "https://hn.algolia.com/api/v1/search?query=FAST%20FAIR%20persistent%20B%2B-tree&tags=story"
+  ],
+  "confidence": 0.86
+}
