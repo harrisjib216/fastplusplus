@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/shogunpanda/milo",
+  "one_liner": "Strict Rust HTTP/1.1 parser (crate, C++ lib, WASM) meant to replace llhttp in Node.js; ~1.07x llhttp in one test.",
+  "what_it_does": "Parses HTTP/1.1 requests and responses incrementally and reports spans (offset, length) for the method, URL, headers, body data, chunk extensions and trailers. It delivers them through callbacks or through a parser-owned binary event buffer. It ships as the milo-parser crate (which also installs a CLI), a C++ header plus libmilo.a, and an npm WebAssembly package (@perseveranza-pets/milo, SIMD and no-SIMD builds). The API has the same shape as llhttp (create/parse/pause/resume/finish, span callbacks) but is not source- or behaviour-compatible: names, flags and error codes differ, and it rejects input that llhttp accepts.",
+  "how_it_is_fast": "It is a line-oriented state machine. Proc-macros (syn/quote) generate its states, matchers and byte lookup tables (token, request-target, quoted-string) at compile time. CR and separators are found with memchr/memchr2. Header lines are scanned 16 bytes at a time for CR and invalid control bytes, using SSE2 on x86-64, NEON on aarch64 and simd128 on wasm32, with a scalar fallback. The parser reports offsets into the caller's buffer instead of copying data; the one copy is an optional re-buffering of unconsumed input (manage_unconsumed). Since 0.8.0 events go to a 64 KiB per-parser buffer and callbacks are replayed from it at the end of parse().",
+  "when_to_use": [
+    "You want to embed a strict HTTP/1.1-only parser in Rust, C++ or JS/WASM, and rejecting obs-fold, bare LF/CR, HTTP/1.0, duplicate Content-Length, CL+TE together and GET/HEAD bodies is what you want (request-smuggling hardening).",
+    "You build natively (not WASM) and want a span/callback parser like llhttp, written in readable Rust instead of llparse-generated C.",
+    "You are evaluating the parser its author proposes as llhttp's successor in Node.js and can run the repo's benchmarks/cpp or benchmarks/wasm harness on your own hardware first."
+  ],
+  "when_not_to_use": [
+    "Node.js/undici-style WASM deployments where speed is the reason to switch: the author's own 2023 deck says milo is slower than llhttp when compiled to WebAssembly, and no newer WASM numbers are published.",
+    "Servers that must accept HTTP/1.0 clients, RTSP, obs-fold or bare-LF peers. Milo rejects all of these by design and does not aim for llhttp behavioural compatibility.",
+    "Untrusted production traffic without your own fuzzing. Two fuzzing reports from 2026-06-08 are still open: #15, a memory leak on invalid input, and #16, OOM on malformed headers. The 0.x API also changed in five releases in June 2026.",
+    "Servers holding many idle connections: each parser allocates a 64 KiB event buffer, whereas the README describes the parser state as only a few dozen fields.",
+    "You only need an llhttp speedup you can verify: the single published comparison is a 7% gain within noise, from a 2023 build that predates the 2026 SIMD rewrite."
+  ],
+  "integration": {
+    "form": "crate (milo-parser) | static lib + header (libmilo.a, milo.h) | npm WASM module",
+    "dependencies": "memchr (runtime). Building the C++/WASM artifacts also needs cargo-make, cbindgen, the wasm32-unknown-unknown target and Binaryen wasm-opt.",
+    "min_toolchain": "The repo pins nightly Rust (rust-toolchain.toml; the C++/WASM tasks use -Z flags; PR #17 to build on stable is open). The crate is edition 2024 with no declared rust-version. C++ consumers compile with -std=c++11. The npm package needs Node >= 22.21.0.",
+    "platforms": "any Rust target; hand-written SIMD paths for x86-64 (SSE2), aarch64 (NEON) and wasm32 (simd128), scalar fallback elsewhere",
+    "thread_safety": "Not documented. A Parser is a mutable #[repr(C)] struct holding raw pointers (context, events, unconsumed), so use one parser per connection and do not share it across threads.",
+    "drop_in_for_baseline": "partial: same callback-and-span model as llhttp, but different API names, error codes and flags, stricter acceptance rules, the caller must set skip_body for responses to HEAD, and there is no llhttp compatibility shim"
+  },
+  "gotchas": [
+    "An incomplete line is left unconsumed: parse() returns fewer bytes than it was given. With manage_unconsumed on, milo copies the leftover bytes and prepends them on the next call. Reading parse.rs, the retained buffer is created with Vec::into_raw_parts and only rebuilt as a slice with from_raw_parts afterwards, which does not free it, so this mode appears to leak on every partial parse.",
+    "When the 64 KiB event buffer fills, parse() stops early without an error or pause; the caller must drain events and call parse() again.",
+    "Responses to HEAD require the caller to set skip_body; milo does not pair requests with responses. CONNECT responses likewise need application context.",
+    "WASM release builds use immediate-abort panics, so a panic traps with no message; the debug build is needed to diagnose errors."
+  ],
+  "pick_this_over_siblings_when": "Pick milo over iohttpparser when you need Rust, C++ and WASM builds from one strict codebase aimed at Node.js; iohttpparser has much stronger published evidence against llhttp (median req/s over 22 scenarios). zttp and gunicorn_h1c are only relevant if you are in Python.",
+  "verified_claims_summary": "The only comparison is one autocannon run (11 one-second samples) against a Node.js native-addon HTTP server, shown in the author's NodeConf EU 2023 deck: milo averaged 30,765 req/s vs 28,808 req/s for llhttp (about 1.07x, with stdev about 1.4k req/s for each). The deck gives no CPU, OS, compiler, flags or harness. The repo's current C++ harness (clang -O3 -march=native -flto for llhttp v9.3.1, target-cpu=native for milo, no callbacks enabled on either) and its WASM harness (vs undici's llhttp_simd.wasm) publish no results.",
+  "status_note": "Actively developed and ISC-licensed; v0.8.0 shipped 2026-06-25. Adoption is small (219 crates.io downloads in total, about 8k npm downloads in the last month) and GitHub issue search found no milo issues in nodejs/undici or the nodejs org. Treat it as pre-1.0 and experimental.",
+  "sources_read": [
+    "https://github.com/ShogunPanda/milo",
+    "https://github.com/ShogunPanda/milo/blob/main/README.md",
+    "https://github.com/ShogunPanda/milo/blob/main/benchmarks/README.md",
+    "https://github.com/ShogunPanda/milo/blob/main/benchmarks/cpp/Makefile.toml",
+    "https://github.com/ShogunPanda/milo/blob/main/benchmarks/cpp/src/main.cc",
+    "https://github.com/ShogunPanda/milo/blob/main/benchmarks/wasm/Makefile.toml",
+    "https://github.com/ShogunPanda/milo/blob/main/rust-toolchain.toml",
+    "https://github.com/ShogunPanda/milo/blob/main/parser/Cargo.toml",
+    "https://github.com/ShogunPanda/milo/blob/main/parser/Makefile.toml",
+    "https://github.com/ShogunPanda/milo/blob/main/macros/Cargo.toml",
+    "https://github.com/ShogunPanda/milo/blob/main/docs/design.md",
+    "https://github.com/ShogunPanda/milo/blob/main/macros/README.md",
+    "https://github.com/ShogunPanda/milo/blob/main/parser/README.md",
+    "https://github.com/ShogunPanda/milo/blob/main/parser/src/parse.rs",
+    "https://github.com/ShogunPanda/milo/blob/main/parser/src/matchers.rs",
+    "https://github.com/ShogunPanda/milo/blob/main/parser/src/lib.rs",
+    "https://github.com/ShogunPanda/milo/blob/main/docs/rust.md",
+    "https://github.com/ShogunPanda/milo/blob/main/docs/cpp.md",
+    "https://github.com/ShogunPanda/milo/blob/main/docs/js.md",
+    "https://github.com/ShogunPanda/milo/blob/main/CHANGELOG.md",
+    "https://github.com/ShogunPanda/milo/issues",
+    "https://github.com/ShogunPanda/milo/issues/16",
+    "https://github.com/ShogunPanda/milo/issues/15",
+    "https://github.com/ShogunPanda/milo/issues/11",
+    "https://github.com/ShogunPanda/milo/issues/9",
+    "https://github.com/ShogunPanda/milo/pulls",
+    "https://github.com/ShogunPanda/milo/pull/17",
+    "https://github.com/ShogunPanda/milo/releases",
+    "https://raw.githubusercontent.com/ShogunPanda/talks/main/src/talks/milo/slides.yml",
+    "https://crates.io/api/v1/crates/milo-parser",
+    "https://api.npmjs.org/downloads/point/last-month/@perseveranza-pets/milo",
+    "https://registry.npmjs.org/@perseveranza-pets/milo/latest",
+    "https://hn.algolia.com/api/v1/search?query=milo%20http%20parser&tags=story",
+    "https://github.com/search?q=repo%3Anodejs%2Fundici+milo&type=issues"
+  ],
+  "confidence": 0.35
+}
