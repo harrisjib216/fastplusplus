@@ -18,13 +18,15 @@ DECISIONS = ROOT / "data" / "decisions.json"
 STRIP_FOR_VERIFIER = {"tradeoffs", "found_via", "assignment_ids", "domain", "is_evidence_for_known"}
 
 
-def render(wave_dir, batch_size, today):
+def render(wave_dir, batch_size, today, assignments=None):
     prompts_dir, raw_dir = wave_dir / "verify" / "prompts", wave_dir / "verify" / "raw"
     prompts_dir.mkdir(parents=True, exist_ok=True)
     raw_dir.mkdir(parents=True, exist_ok=True)
     done = {v["id"] for f in raw_dir.glob("batch-*.json") for v in json.loads(f.read_text())}
     done |= {i for f in prompts_dir.glob("batch-*.ids.json") for i in json.loads(f.read_text())}
     entries = [e for e in json.loads((wave_dir / "merged.json").read_text()) if e["id"] not in done]
+    if assignments:  # only entries found by these (finished) searches; drafts of running agents stay out
+        entries = [e for e in entries if set(e.get("assignment_ids", [])) & set(assignments)]
     # split batches get a letter suffix (batch-41b); number new batches after the highest numeric part
     first = 1 + max((int(re.match(r"\d+", p.stem.split("-")[1]).group()) for p in prompts_dir.glob("batch-*.txt")),
                     default=0)
@@ -116,10 +118,11 @@ def main():
     ap.add_argument("command", choices=["render", "apply"])
     ap.add_argument("wave_dir", type=Path)
     ap.add_argument("--batch-size", type=int, default=3)
+    ap.add_argument("--assignments", nargs="+", help="render only entries found by these assignment ids")
     args = ap.parse_args()
     today = json.loads((args.wave_dir / "assignments.json").read_text())["today"]
     if args.command == "render":
-        render(args.wave_dir, args.batch_size, today)
+        render(args.wave_dir, args.batch_size, today, args.assignments)
     else:
         apply(args.wave_dir, today)
 
