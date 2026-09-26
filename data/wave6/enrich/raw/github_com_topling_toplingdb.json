@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/topling/toplingdb",
+  "one_liner": "RocksDB 8.10 fork with a trie memtable and searchable compressed SSTs; about 5x RocksDB's in-cache random-read throughput.",
+  "what_it_does": "ToplingDB is Topling Inc's fork of RocksDB (db_bench reports 8.10.2). It keeps the rocksdb:: C++ API and Java binding but replaces the memtable, SST format and WAL/flush path with its own components, which you choose in a YAML/JSON 'SidePlugin' config file. Migrating means changing only Open/Close code: build a SidePluginRepo, call ImportAutoFile(conf) and OpenDB(&db), then use the usual DB* Get/Put/iterator calls. An embedded HTTP server shows DB internals, exports Prometheus metrics and lets you change options while the process runs.",
+  "how_it_is_fast": "ToplingZipTable SSTs pair a CO-Index (NestLoudsTrie, a nested LOUDS succinct trie mapping key to id) with PA-Zip (DictZipBlobStore, global-dictionary compression that can read one value directly). Both are searched while still compressed in mmap'd memory, so there is no block decompression or block cache, and uncompressed values go back to the caller zero-copy. The CSPP MemTable, a Crash-Safe Parallel Patricia trie, replaces the skiplist and uses integer offsets instead of pointers. So with memtable_as_log_index it can point into the WAL and be turned straight into an SST without a flush. Comparator calls are devirtualized and key-prefix caches were added in hot paths such as MergingIterator and FindFileInRange, which only works because these components are limited to bytewise key order.",
+  "when_to_use": [
+    "An existing RocksDB app on Linux x86-64 with bytewise-ordered keys where point lookups are CPU-bound and the data fits in RAM or page cache. The project's dashboard shows 3.7-5.0x single-thread readrandom (zipkeyvalue vs RocksDB v8.10/master across three suites) with 8-byte keys and 50-byte values.",
+    "Scan-heavy work on small values: readseq is 1.6-1.9x RocksDB v8.10, and scans that skip loading values (ToplingDB's lazy value load) reach 3.6-4.8x.",
+    "RAM- or disk-constrained nodes: in the fillrandom suite, zipkeyvalue used 0.56x RocksDB's disk and 18% of its RSS during readrandom. Page cache is counted separately.",
+    "Teams that want YAML/JSON-defined DB configuration, online option changes and Prometheus metrics built in, and can either license the Enterprise components or run the open-source distributed-compaction workers (topling-dcompact) to absorb compression CPU."
+  ],
+  "when_not_to_use": [
+    "You need a fully open-source build. The components that deliver the speedup, the ToplingZipTable builder (private topling-rocks) and the CSPP MemTable (private), ship only as precompiled 90-day trial objects. No published benchmark covers a build with both turned off.",
+    "Windows or macOS: the maintainer says ToplingDB currently supports only Linux (issues #66, #67). The released JNI jar contains only librocksdbjni-linux64.so.",
+    "Custom comparators: the CSPP MemTable supports only BytewiseComparator and ReverseBytewiseComparator, and the performance components are built around bytewise order.",
+    "Compaction- or write-bound workloads on few cores: compaction runs at 0.62x (fillrandom) and 0.30x (fillseq) of RocksDB v8.10, and ZipTable compression costs about 2x zstd CPU. In the project's dcompact run with the write side capped at 50% CPU, fillseq was 0.64x RocksDB v8.10 and fillrandom only about 1.0x.",
+    "Larger-than-memory datasets or apps that need recent upstream RocksDB features: every published run fits in cache, the code base tracks RocksDB 8.10.2, and dynamic column-family creation, user timestamps and wide columns are compiled out by default."
+  ],
+  "integration": {
+    "form": "static lib or shared lib built from source with make (install-dev-shared installs headers and the .so); also a JNI jar, and Rust bindings in a separate repo",
+    "dependencies": "libaio, gflags, zlib, bzip2, libcurl, liburing, snappy, jemalloc, lz4, zstd; the Makefile auto-clones rockside (Apache-2.0), topling-zip (BSD-3, with bundled boost headers and zstd), cspp-wbwi, topling-sst and topling-zip_table_reader, and downloads trial objects for the private components",
+    "min_toolchain": "C++17; gcc 8.3+ recommended, clang also works (C++20 with coroutines if USE_COROUTINES=1)",
+    "platforms": "Linux only. x86-64 builds use -march=haswell when the CPU has BMI2; the Makefile has aarch64 flags and the wiki quotes ARM CSPP numbers, but whether trial objects exist for each architecture is not documented",
+    "thread_safety": "Same model as RocksDB: one process opens a DB, and a DB* can be shared across threads without external locking, while Iterator and WriteBatch objects need external synchronization. CSPP is designed for parallel writers. The published benchmarks use one client thread.",
+    "drop_in_for_baseline": "partial — same rocksdb:: API and on-disk lineage, but you must open through SidePluginRepo plus a YAML/JSON file (or use the env-var 'Easy Migrate' path). Some RocksDB features are compiled out by default, the fast components require bytewise comparators, and memtable_as_log_index writes a WAL format that RocksDB cannot read."
+  },
+  "gotchas": [
+    "A default release make (DEBUG_LEVEL=0) tries an SSH clone of the private topling-rocks repo. If that fails, it silently wgets precompiled top_zip_table_builder.o and cspp_memtable.o from an Aliyun OSS bucket as 90-day trials. For a clean open build pass WITH_TOPLING_ROCKS=0 WITH_CSPP_MEMTABLE=0 together; CSPP cannot be on without topling-rocks. What the trial builder does after 90 days is not documented, though the ZipTable reader is open source.",
+    "Dynamic ColumnFamily creation (ROCKSDB_DYNAMIC_CREATE_CF), user-level key timestamps and wide columns are disabled at compile time by default. RocksDB code that calls CreateColumnFamily at runtime needs a rebuild with -DROCKSDB_DYNAMIC_CREATE_CF.",
+    "memtable_as_log_index is an immutable DB option with its own WAL format. All WALs must be flushed before you toggle it. A large WriteBatch can overflow the WAL mmap and fail with 'IO fenced off ... exceeds mmap size' unless max_total_wal_size is large enough.",
+    "CSPP reserves mem_cap of virtual address space per memtable (default 2G, max 16G). The wiki warns that on Linux, touching that memory when the system has no free RAM segfaults instead of returning an error, unless explicit commit (MADV_POPULATE_WRITE, kernel 5.14+) is used."
+  ],
+  "pick_this_over_siblings_when": "Pick ToplingDB over Titan when values are tiny and reads dominate: Titan's catalogued gains grow with value size, while ToplingDB's come from 50-byte-value lookups and scans. Pick it over research engines such as PebblesDB, KVell or SplinterDB when you want to keep RocksDB's API and feature set. Prefer those siblings or F2 for write-heavy or larger-than-memory work, where ToplingDB's compaction is slower and its gains are unmeasured.",
+  "verified_claims_summary": "The project's own GitHub Actions dashboard (run 34935695406, 2026-09-15) ran db_bench with 50M 8-byte keys and 50-byte values, one client thread, and the DB on /dev/shm fitting inside a 7.8 GiB block cache. Hardware was an AMD EPYC 7763 with 4 vCPU and 15.6 GiB RAM on Ubuntu 24.04, with release builds at -march=haswell and the compiler unstated. ToplingDB zipkeyvalue did 1.74M readrandom ops/s against 349K for RocksDB 8.10.2 (4.98x) and 379K for RocksDB master (4.58x), with 2.50x fillrandom, 1.57x readseq and 0.62x compaction speed. The sides are tuned differently: ToplingDB uses a tuned YAML (512 MB write buffer, CSPP memtable as WAL index, zero-copy reads), while RocksDB uses db_bench defaults plus an OPTIONS file that mainly sets the L0-none/Snappy/L6-Zstd compression ladder.",
+  "status_note": "Actively maintained by Topling Inc (pushes through 2026-09-20, CI benchmark runs through 2026-09-15, 1016 stars). Usability is mixed: it is Linux-only, and the components behind the headline numbers are proprietary trial binaries. The open parts keep RocksDB's GPLv2/Apache-2.0 dual license, so the license is no stricter than upstream's.",
+  "sources_read": [
+    "https://github.com/topling/toplingdb",
+    "https://github.com/topling/toplingdb/blob/memtable_as_log_index/README.md",
+    "https://github.com/topling/toplingdb/blob/memtable_as_log_index/README-zh_cn.md",
+    "https://github.com/topling/toplingdb/blob/memtable_as_log_index/Makefile",
+    "https://github.com/topling/toplingdb/blob/memtable_as_log_index/.github/workflows/db_bench-run.yml",
+    "https://github.com/topling/toplingdb/blob/memtable_as_log_index/.github/bench-conf/rocksdb_db_bench.ini",
+    "https://github.com/topling/toplingdb/issues",
+    "https://github.com/topling/toplingdb/issues/66",
+    "https://github.com/topling/toplingdb/issues/67",
+    "https://github.com/topling/toplingdb/issues/68",
+    "https://topling.github.io/toplingdb/",
+    "https://topling.github.io/toplingdb/runs/20260915-071823-plain-34935695406/raw/zipkeyvalue/db_bench-fillrandom.yaml",
+    "https://topling.github.io/toplingdb/runs/20260915-071823-plain-34935695406/raw/zipkeyvalue/db_bench-all.log",
+    "https://topling.github.io/toplingdb/runs/20260915-071823-plain-34935695406/raw/rocksdb-v8.10/db_bench-all.log",
+    "https://topling.github.io/toplingdb/dcompact/",
+    "https://github.com/topling/sideplugin-wiki-en/wiki/101",
+    "https://github.com/topling/sideplugin-wiki-en/wiki/ToplingZipTable",
+    "https://github.com/topling/sideplugin-wiki-en/wiki/CSPP-MemTable",
+    "https://github.com/topling/sideplugin-wiki-en/wiki/Devirtualization-And-Key-Prefix-Cache-Principle",
+    "https://github.com/topling/topling-zip_table_reader",
+    "https://github.com/topling/topling-zip_table_reader/blob/HEAD/src/table/top_zip_table.cc",
+    "https://github.com/topling/topling-zip_table_reader/blob/HEAD/src/table/top_zip_table_reader.cc",
+    "https://github.com/topling/topling-zip",
+    "https://github.com/topling/topling-dcompact",
+    "https://github.com/topling/rockside",
+    "https://github.com/topling/cspp-memtable",
+    "https://github.com/topling/topling-rocks",
+    "https://github.com/facebook/rocksdb/wiki/Basic-Operations"
+  ],
+  "confidence": 0.72
+}
