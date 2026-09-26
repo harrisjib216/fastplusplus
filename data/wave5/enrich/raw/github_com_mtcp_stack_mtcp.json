@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/mtcp-stack/mtcp",
+  "one_liner": "User-level, per-core TCP stack over DPDK/PSIO/netmap with an epoll-like API; beats Linux kernel sockets+epoll on short connections.",
+  "what_it_does": "mTCP replaces the kernel TCP/IP stack for one application. The app links libmtcp.a and talks to a dedicated NIC through DPDK, the PacketShader I/O engine (PSIO), netmap or openNetVM. The API mirrors BSD sockets and epoll with an mtcp_ prefix and an extra per-thread context argument (mtcp_accept(mctx, ...), mtcp_epoll_wait(mctx, ...)). It is a porting target, not a drop-in: the paper reports ~65 changed lines for lighttpd's socket and event calls (plus ~800 to make it multi-threaded) and 43 lines for SSLShader.",
+  "how_it_is_fast": "Each core runs one mTCP thread next to one application thread. NIC RSS (with a symmetric key) keeps each flow on one core, so the flow hash table, TCB and buffer pools, socket-id space and accept queue are all per-core, and the app and stack communicate over lock-free single-producer/single-consumer job and event queues. Packet I/O and flow events are batched (the paper averages ~2,170 events per scheduling period), so one app/stack context switch covers many connections, replacing per-call syscalls. It also queues control and ACK packets ahead of data packets, uses preallocated hugepage-backed memory pools and cache-line-split TCBs, and runs retransmission timers in millisecond hash buckets.",
+  "when_to_use": [
+    "Research or reproduction work: studying kernel-bypass TCP, reproducing NSDI'14 numbers, or using a small C stack (about 11.5K LoC in the paper) as a baseline or a base to fork.",
+    "Many concurrent short connections with small messages (roughly 64 B to a few KiB) on a multicore Linux box, where accept()/epoll_wait()/write() syscall cost and a shared accept queue are the bottleneck.",
+    "HTTP load generation: epwget and the ported ab can saturate 10 GbE from fewer client machines (the paper cites more than a 4x cut in ab machines).",
+    "An existing epoll-based, event-driven C/C++ server you can port mostly by renaming calls, running on a dedicated Intel NIC (82599/X710 class) with its own cores and a pinned kernel/DPDK 18.05 environment."
+  ],
+  "when_not_to_use": [
+    "Production services. There have been no master commits since 2019-11; kernel-5.x builds break in igb_uio and dpdk-iface-kmod (#292, #310); and one user measured a 16 ms 4 KiB ping-pong on direct 10G and called it not production-ready (#306).",
+    "Long-lived bulk transfers. In the paper, 8,000 connections each sending a 100 MiB file used 294% CPU versus 80% for Linux, because there is no TSO/LSO/LRO; socket buffers are also fixed-size (default 8 KiB) with no auto-tuning.",
+    "Low-concurrency or latency-critical RPC. Batching raised min/median latency (9 vs 0 ms and 13 vs 3 ms at 8K connections) even though mean and max fell, and the maintainer says batching can hurt latency at low concurrency (#289).",
+    "You need IPv6, UDP, real socket options, kernel services (netfilter/firewall, tc), or several processes sharing the NIC. mtcp_socket accepts only AF_INET/SOCK_STREAM, and the paper supports one application per NIC port.",
+    "Cloud VMs or non-Intel NICs. The tested NIC list is Intel only; VMs need SR-IOV VFs and code tweaks (#267); DPDK busy-polls one core per mTCP thread at 100% unless built with ENFORCE_RX_IDLE."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "One packet-I/O backend: DPDK (git submodule pinned to v18.05, plus the bundled dpdk-iface-kmod module), PSIO (GPL-2.0 ps_ixgbe driver), netmap, or openNetVM. Also libnuma, libpthread, librt, libgmp (DPDK/ONVM), kernel headers, hugepages and a NIC bound to igb_uio. Optional libccp (Rust toolchain) for CCP congestion control.",
+    "min_toolchain": "C built with GCC via autotools (-O3 -fgnu89-inline -Werror -m64); maintainer says clang was never really tested (#264). The DPDK path builds on kernels up to about 4.15 (fails on 5.3/5.9, #292/#310); PSIO needs Linux 2.6.32-2.6.38.",
+    "platforms": "Linux x86-64 only (tested on Xeon E5-2690 / Core i7-3770). NICs: Intel 82598/82599 (ixgbe), I350 (igb), X710/X722 (i40e); RSS queue count must be >= MAX_CPUS (compile-time, default 16).",
+    "thread_safety": "Per-thread by design: every call takes an mctx_t bound to one core's mTCP thread, and socket ids are local to that context, so a socket should only be used from its owning thread (cross-thread use asked in #303, unanswered). App-to-stack handoff uses lock-free SPSC queues. Open bug #329: static locals in RunMainLoop (core.c:787-788) are shared by all per-core mTCP threads, which is a data race on the RX path.",
+    "drop_in_for_baseline": "partial — the calls map 1:1 to BSD sockets and epoll (mtcp_socket/accept/read/write, mtcp_epoll_create/ctl/wait), but every call needs an mctx_t, ids are not kernel fds, the app must be restructured into one event loop per core, and mtcp_epoll only watches mTCP sockets and mtcp_pipe()s"
+  },
+  "gotchas": [
+    "mtcp_setsockopt() validates the socket id and returns 0 without doing anything, and mtcp_getsockopt() supports only SO_ERROR (api.c). TCP_NODELAY, SO_RCVBUF and similar options are silently ignored; buffer sizes come only from the config file (rcvbuf/sndbuf).",
+    "RSS core affinity is required: the NIC must provide one RSS queue per mTCP core, and clients should call mtcp_init_rss() so their source ports hash back to the calling core. The remote peer must have TCP timestamps enabled (README).",
+    "One user reports that mtcp_epoll_wait reports writability only once, as if edge-triggered, so mtcp_epoll_ctl had to be re-armed before every wait (#297, unresolved).",
+    "The stack shares the app's address space, so app bugs can corrupt TCP state (the paper calls this fate-sharing). Removing the igb_uio/ps_ixgbe driver while running makes the app panic, and the bundled ab-mtcp counts mTCP init time in its results, which understates throughput on short runs (#289)."
+  ],
+  "pick_this_over_siblings_when": "Pick mTCP over F-Stack only when you want a small, purpose-built short-connection stack to study, benchmark against, or fork. F-Stack ports the full FreeBSD 13 stack, ships Nginx/Redis integrations and an epoll/kqueue API, and was still getting commits in 2026-09, so it is the practical choice for production kernel bypass. IX's catalogued results use mTCP as a baseline, so mTCP is also the reference point when evaluating newer dataplanes.",
+  "verified_claims_summary": "NSDI'14 paper, one 8-core Xeon E5-2690 @ 2.90 GHz with an Intel 82599 10 GbE NIC, mTCP over PSIO on Linux 2.6.32, compiler not stated. In a 64 B one-message-per-connection server test at 8 cores, mTCP was 25x Linux 3.10.12 sockets+epoll with a shared listen socket, 5x Linux with SO_REUSEPORT and 3x MegaPipe; connection accept was 13x Linux, and lighttpd static-file serving was 3.2x/2.2x/1.5x Linux/REUSEPORT/MegaPipe.",
+  "status_note": "Abandoned: master's last commit was 2019-11-18 and devel's 2020-01, with DPDK pinned at 18.05 and a 2024 'has development stopped?' issue left without a maintainer reply. The core is BSD-3-Clause and copyable, but io_engine is GPL-2.0 and reviving it on a modern kernel/DPDK means porting work.",
+  "sources_read": [
+    "https://github.com/mtcp-stack/mtcp",
+    "https://github.com/mtcp-stack/mtcp/blob/master/README.md",
+    "https://github.com/mtcp-stack/mtcp/blob/master/LICENSE",
+    "https://github.com/mtcp-stack/mtcp/blob/master/.gitmodules",
+    "https://github.com/mtcp-stack/mtcp/blob/master/README.config",
+    "https://github.com/mtcp-stack/mtcp/blob/master/README.devel",
+    "https://github.com/mtcp-stack/mtcp/blob/master/apps/example/README",
+    "https://github.com/mtcp-stack/mtcp/blob/master/config/sample_mtcp.conf",
+    "https://github.com/mtcp-stack/mtcp/blob/master/mtcp/src/include/mtcp_api.h",
+    "https://github.com/mtcp-stack/mtcp/blob/master/mtcp/src/include/mtcp_epoll.h",
+    "https://github.com/mtcp-stack/mtcp/blob/master/mtcp/src/include/mtcp.h",
+    "https://github.com/mtcp-stack/mtcp/blob/master/mtcp/src/api.c",
+    "https://github.com/mtcp-stack/mtcp/blob/master/mtcp/src/core.c",
+    "https://github.com/mtcp-stack/mtcp/blob/master/mtcp/src/dpdk_module.c",
+    "https://github.com/mtcp-stack/mtcp/blob/master/mtcp/src/Makefile.in",
+    "https://github.com/mtcp-stack/mtcp/branches",
+    "https://github.com/mtcp-stack/mtcp/commits/master",
+    "https://github.com/mtcp-stack/mtcp/commits/devel",
+    "https://github.com/mtcp-stack/mtcp/issues",
+    "https://github.com/mtcp-stack/mtcp/issues/337",
+    "https://github.com/mtcp-stack/mtcp/issues/306",
+    "https://github.com/mtcp-stack/mtcp/issues/297",
+    "https://github.com/mtcp-stack/mtcp/issues/303",
+    "https://github.com/mtcp-stack/mtcp/issues/329",
+    "https://github.com/mtcp-stack/mtcp/issues/292",
+    "https://github.com/mtcp-stack/mtcp/issues/310",
+    "https://github.com/mtcp-stack/mtcp/issues/269",
+    "https://github.com/mtcp-stack/mtcp/issues/267",
+    "https://github.com/mtcp-stack/mtcp/issues/289",
+    "https://github.com/mtcp-stack/mtcp/issues/264",
+    "https://github.com/DPDK/dpdk/commit/a5dce55556286cc56655320d975c67b0dbe08693",
+    "https://www.usenix.org/system/files/conference/nsdi14/nsdi14-paper-jeong.pdf",
+    "https://github.com/F-Stack/f-stack"
+  ],
+  "confidence": 0.82
+}
