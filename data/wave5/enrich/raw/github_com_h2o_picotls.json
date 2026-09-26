@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/h2o/picotls",
+  "one_liner": "x86-64 AES-GCM engine inside picotls, tuned for short QUIC packets; ~1.3x OpenSSL 1.1.1g throughput at 1440-byte records.",
+  "what_it_does": "Fusion is an optional AES-GCM backend of the picotls TLS 1.3 library. You use it by putting its ptls_aead_algorithm_t objects into a ptls_cipher_suite_t: ptls_fusion_aes128gcm / ptls_fusion_aes256gcm for QUIC packet protection, and ptls_non_temporal_aes128gcm / 256gcm for TLS over TCP. A lower-level ptls_fusion_aesgcm_encrypt/decrypt API takes a raw __m128i counter plus an optional extra block to encrypt. It is not an OpenSSL EVP or libssl replacement; you only get it through picotls or code built on it (H2O, quicly, picoquic).",
+  "how_it_is_fast": "It stitches AES-CTR and GHASH into a single loop written in C intrinsics (AES-NI + PCLMULQDQ): six AES blocks are in flight while AAD and ciphertext are multiplied into GHASH, so AAD processing and tag finalization overlap with payload encryption instead of running as separate phases. GHASH key powers are precomputed per context (sized for 1500-byte records, grown on demand), so each record needs only one GHASH reduction. When a record is short and an AES lane would sit idle, that lane computes the QUIC header-protection mask, which is why header protection is nearly free on the chart. The separate non-temporal TLS engine adds a 256-bit VAES/VPCLMULQDQ path and writes ciphertext with streaming stores, so data headed for the NIC does not pollute the cache.",
+  "when_to_use": [
+    "QUIC endpoints on x86-64 with AES-NI, PCLMULQDQ and AVX2 where packets are ~1200-1500 bytes and AES-GCM shows up in profiles; this is where the measured gain is 1.3x or more.",
+    "You already use picotls (H2O, quicly, picoquic) and can swap the AES-GCM cipher suites for the fusion ones after ptls_fusion_is_supported_by_cpu() returns true, as H2O does for its QUIC listeners.",
+    "QUIC stacks that want packet protection and header protection computed in one pass via the supplementary-encryption argument.",
+    "TLS-over-TCP senders doing zero-copy send, especially on CPUs without DDIO or with VAES (Zen 3+), via ptls_non_temporal_aes*gcm; this is H2O's ssl-zerocopy mode, which turns kTLS off."
+  ],
+  "when_not_to_use": [
+    "Bulk TLS with 16 KB records: the gain over OpenSSL 1.1.1g shrinks to 1-15%, the non-temporal engine without VAES measured 84-102% of OpenSSL at 16 KB, and newer OpenSSL, BoringSSL or AWS-LC builds were never compared.",
+    "As the AEAD of any picotls connection where picotls owns the record layer (TLS over TCP, no update_traffic_key callback): ptls_fusion_aes*gcm leaves do_encrypt_v as an assert(!\"FIXME\") stub, and picotls calls it for every record. picoquic hit this in its QMux (QUIC over TLS/TCP) mode and turned fusion off.",
+    "Non-x86 targets (aarch64, Apple Silicon): there is no fusion code path, and issue #379 asking for one has been open since 2022.",
+    "Anything beyond AES-GCM: fusion has no ChaCha20-Poly1305, its AES-CTR cipher handles at most 16 bytes (header protection only), and its AES-ECB is encrypt-only.",
+    "Processes that must survive allocation failure: context creation and capacity growth assert on out-of-memory (and dereference NULL when built with NDEBUG)."
+  ],
+  "integration": {
+    "form": "static lib (picotls-fusion target, built by CMake next to picotls-core; shared-library builds added 2026-09-25)",
+    "dependencies": "picotls-core; a full TLS stack also needs a picotls crypto binding (OpenSSL libcrypto or minicrypto) for key exchange, hashing and certificates",
+    "min_toolchain": "C99 compiler that accepts -mavx2 -maes -mpclmul -mvaes -mvpclmulqdq and compiles the 256-bit AES intrinsics (the CMake probe CC_HAS_AESNI256 turns WITH_FUSION off otherwise); MSVC via the picotlsvs projects",
+    "platforms": "x86-64 only; at runtime it needs AES-NI, PCLMULQDQ and AVX2 (ptls_fusion_is_supported_by_cpu), and the non-temporal encrypt path uses VAES/VPCLMULQDQ when present",
+    "thread_safety": "not documented; each AEAD context is mutable per-connection state, and ptls_fusion_can_aesni256 is a process-wide global set during CPU detection",
+    "drop_in_for_baseline": "partial — drop-in only as a picotls cipher-suite AEAD, and the QUIC variant only where do_encrypt_v is never called; there is no EVP/libssl interface, so OpenSSL users must adopt picotls"
+  },
+  "gotchas": [
+    "ptls_fusion_aes128gcm/256gcm are QUIC-only. do_encrypt_v and the streaming init/update/final callbacks are assert(!\"FIXME\") stubs, and picotls.h says TLS-over-TCP ciphers MUST implement do_encrypt_v. With asserts on, any ptls_aead_encrypt_v call aborts; with NDEBUG it silently writes nothing. The picotls test suite skips multi-vector tests for these two algorithms, and picoquic master defaulted PTLS_WITH_FUSION to OFF on 2026-09-17 (commit 8b8c302).",
+    "Call ptls_fusion_is_supported_by_cpu() first: lib/fusion.c is compiled with AVX2/VAES flags, so an unsupported CPU faults. The Windows CPUID check tests ECX bit 5 (VMX) where PCLMULQDQ is bit 1, and neither path checks OS AVX state through XGETBV.",
+    "The QUIC engine never uses the 256-bit VAES path (the source says 'no support for aesni256 yet'), and non-temporal decryption is always 128-bit; only non-temporal encryption gets the VAES speedup.",
+    "The code reads past buffer ends on purpose (loadn128/256 are marked NO_SANITIZE_ADDRESS), and the non-temporal engine does a read-modify-write of the whole 64-byte line at unaligned output edges, so other threads must not write adjacent bytes during encryption. Valgrind noise from CPU detection (#380) is still open; a 2022 heap over-read in set_capacity (#418) was fixed."
+  ],
+  "pick_this_over_siblings_when": "Pick fusion over AWS-LC, wolfSSL or stock OpenSSL when you are already on picotls/quicly and the hot path is per-packet QUIC AES-GCM on x86-64. Pick AWS-LC, wolfSSL or ztls when you need a complete TLS-over-TCP library, and ChaChaCha when you need ChaCha20-Poly1305.",
+  "verified_claims_summary": "In the author's PR #310 chart, fusion (fusionbench.c, AES-128-GCM, 13-byte AAD) beats `openssl speed -aead` from OpenSSL 1.1.1g by 1.32-1.36x at 1440-byte blocks on a Core i5 9400, Ryzen 3 3200G and Core m3 6Y30. At 16 KB the gap is 1.01-1.15x, and on the m3 fusion is slightly behind OpenSSL's AES-GCM core-only figure (3.36e9 vs 3.41e9 B/s). The two sides used different harnesses, and no compiler or flags were given.",
+  "status_note": "Active (lib/fusion.c last changed May 2026, repo pushed 2026-09-25) and MIT, with Apache-2.0 also covering one OpenSSL-derived function, but the QUIC AEAD still ships unimplemented callbacks, and picoquic disabled fusion by default because of them.",
+  "sources_read": [
+    "https://github.com/h2o/picotls",
+    "https://github.com/h2o/picotls/blob/master/README.md",
+    "https://github.com/h2o/picotls/blob/master/include/picotls/fusion.h",
+    "https://github.com/h2o/picotls/blob/master/lib/fusion.c",
+    "https://github.com/h2o/picotls/blob/master/cmake/fusion.cmake",
+    "https://github.com/h2o/picotls/blob/master/CMakeLists.txt",
+    "https://github.com/h2o/picotls/blob/master/include/picotls.h",
+    "https://github.com/h2o/picotls/blob/master/lib/picotls.c",
+    "https://github.com/h2o/picotls/blob/master/t/fusion.c",
+    "https://github.com/h2o/picotls/blob/master/t/ptlsbench.c",
+    "https://github.com/h2o/picotls/pull/310",
+    "https://user-images.githubusercontent.com/41567/84847975-3ab46680-b08d-11ea-85a4-7c75adf86147.png",
+    "https://github.com/h2o/picotls/pull/384",
+    "https://user-images.githubusercontent.com/41567/167744223-1beb2f0c-cd63-42a2-b804-df005d3acbcb.png",
+    "https://github.com/h2o/picotls/pull/492",
+    "https://github.com/h2o/picotls/pull/602",
+    "https://github.com/h2o/picotls/issues/379",
+    "https://github.com/h2o/picotls/issues/380",
+    "https://github.com/h2o/picotls/issues/418",
+    "https://github.com/h2o/picotls/issues/450",
+    "https://github.com/h2o/picotls/commits/master/lib/fusion.c",
+    "https://github.com/private-octopus/picoquic/commit/8b8c302e9737a53312b41cf644cfe36662e0c6e2",
+    "https://github.com/private-octopus/picoquic/blob/master/picoquic/picoquic_ptls_fusion.c",
+    "https://github.com/private-octopus/picoquic/blob/master/picoquic/qmux.c",
+    "https://github.com/h2o/h2o/blob/master/src/main.c",
+    "https://hn.algolia.com/api/v1/search?query=%22picotls%22"
+  ],
+  "confidence": 0.75
+}
