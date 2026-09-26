@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/cuckoo-trie/cuckoo-trie-code",
+  "one_liner": "Research C ordered index storing a trie in a cuckoo hash table; faster DRAM-bound lookups than HOT, ARTOLC, STX B-tree.",
+  "what_it_does": "An in-memory ordered index for byte-string keys (up to 256 bytes) that supports insert, update, upsert, point lookup and sorted iteration from a start key. It is a C shared library (libcuckoo_trie.so) with its own API: ct_alloc(num_cells) creates a fixed-capacity table, and records are caller-owned ct_kv structs (key bytes followed by value bytes) that the trie references by pointer. It is not a container that mimics std::map or tlx::btree. The repo ships benchmark and test tools, and the paper's baselines and Redis sorted-set integrations live in a separate repo (other-benchmarked-indexes).",
+  "how_it_is_fast": "It stores the nodes of a path-compressed trie in a bucketized cuckoo hash table keyed by key prefix, so every node on a search path can be located from the key alone, with no pointer-chasing. A lookup therefore computes the prefix hashes up front and prefetches both candidate buckets for the next D=5 levels, keeping several DRAM misses in flight at once (memory-level parallelism). Each bucket is one 64-byte cache line holding four 15-byte entries that store no keys: a small tag, a 'color' and the parent's color identify each node, using peelable hashing. Keys are split into 5-bit symbols with BMI2 PDEP, and sorted iteration walks a linked list of leaves, prefetching the next leaf.",
+  "when_to_use": [
+    "Read-heavy point lookups (YCSB-B/C style) on a large in-memory ordered index that is far bigger than the LLC. The paper's datasets were 1 GB or more, and the lead over HOT, ARTOLC and STX grows with index size.",
+    "Keys that diverge early, i.e. short unique prefixes: random 8- or 16-byte keys, 64-bit encoded integers like the osm dataset, or short strings like the reddit usernames.",
+    "Linux x86-64 servers (Haswell or newer) where you can reserve 2 MB huge pages, run jemalloc with THP, and size the table ahead of time from a known key count.",
+    "Multi-threaded lookup-heavy services (lookups take no locks and scaled almost linearly on 28 cores), or systems like a Redis sorted set whose per-element work hides the leaf-list latency during scans.",
+    "As an MLP-aware research baseline or a design to port, not as a production dependency."
+  ],
+  "when_not_to_use": [
+    "Keys with long common prefixes, such as composite IDs or URLs. On az (average unique prefix 138 bits) it is slower than HOT and ARTOLC, because jump nodes save memory but not DRAM round trips.",
+    "Scan-heavy standalone workloads. On YCSB-E its scan throughput was the lowest of all indexes tested.",
+    "Workloads that need deletes, automatic growth, or top insert speed. Deletion and resizing are not implemented. ARTOLC inserts faster, and ARTOLC also wins YCSB-D, where recently inserted keys are served from cache.",
+    "Memory-constrained deployments. It uses up to 156% more memory than HOT and STX, although up to 28% less than ARTOLC and Wormhole.",
+    "Production use, non-Linux or non-x86 platforms, pre-Haswell CPUs, or keys over 256 bytes. The README says the code 'is not robust enough to be used as an index in your program'."
+  ],
+  "integration": {
+    "form": "shared lib (libcuckoo_trie.so from a plain Makefile; about 25 C files, small enough to vendor as a source-drop)",
+    "dependencies": "pthreads and Linux MAP_HUGETLB with 2 MB huge pages reserved in advance via nr_hugepages. jemalloc with MALLOC_CONF=thp:always is recommended for the caller's key/value memory (it is not linked by the library).",
+    "min_toolchain": "GCC 5.4+ (the authors tested GCC 5.4.0 and 7.5.0; GCC 4.8.5 fails because it lacks -march=haswell). Needs GNU C extensions (__uint128_t, x86 BMI builtins). Clang support is not documented.",
+    "platforms": "Linux x86-64 only, Haswell or newer (uses BEXTR, PDEP and BZHI via -march=haswell).",
+    "thread_safety": "The default build (#define MULTITHREADING in config.h) is thread-safe. Inserts, updates and lookups are linearizable, readers are lock-free using seqlock validation, and writers lock buckets. Each thread needs its own iterator, and range iteration is not atomic with respect to concurrent inserts. Removing MULTITHREADING builds a faster single-threaded version.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Capacity is fixed at ct_alloc and there is no resize. After an insert returns S_OVERFLOW, the result of every later operation except ct_free is undefined. Size the table up front: the API suggests 1.5N to 2N cells, the benchmark defaults to 2.5N, and the paper ran at 85% load.",
+    "ct_insert stores a pointer to your ct_kv without copying it. The record must not be freed or modified while it is in the trie, and ct_free does not free records. There is also no ct_iter_free; iterators are plain malloc'd.",
+    "ct_alloc returns NULL (and prints a message) if not enough 2 MB huge pages are reserved. Separately, jemalloc's THP silently falls back to 4 KB pages, costing throughput. Watch thp_fault_fallback in /proc/vmstat.",
+    "API.md says ct_insert aborts on a duplicate key, but the code returns S_ALREADYIN. The bucket-mix table uses a fixed seed (rand_seed(1)), so the table layout is not keyed per instance."
+  ],
+  "pick_this_over_siblings_when": "Pick it over HOT or ART Synchronized (OLC) for DRAM-resident, lookup-dominated work on keys with short unique prefixes (the paper measured +35% over HOT and +20% over ARTOLC on osm YCSB-C), and over the learned-index siblings (ALEX, LIPP, PGM, RMI), which were benchmarked on numeric keys, when you need variable-length byte keys. Stay with HOT for lower memory, long-common-prefix keys or scans, and with ART OLC for insert-heavy work or deletes.",
+  "verified_claims_summary": "In the SOSP'21 paper (arXiv 2201.09331, Sec. 6.2), single-threaded YCSB-C with uniform lookups on 200M osm keys ran up to 35%, 20%, 50% and 360% faster than HOT, ARTOLC, Wormhole and the TLX STX B+-tree respectively (not std::map), on a dual-socket Xeon Gold 6132 (Skylake, 2.6 GHz, Turbo and hyper-threading off, NUMA-interleaved) with GCC 7.5.0, jemalloc and 2 MB huge pages. Growing from 10M to 640M random 8-byte keys slowed HOT, ARTOLC and STX lookups by about 1.7x but the Cuckoo Trie by only 1.23x.",
+  "status_note": "Abandoned research code. There are three commits, all from the October 2021 public release, no maintained fork (only 0-star student forks from 2024-2026, whose epoch/resize PRs were closed unmerged), and the authors warn it is not production-robust; it is Unlicense (public domain) and small enough to vendor.",
+  "sources_read": [
+    "https://github.com/cuckoo-trie/cuckoo-trie-code",
+    "https://github.com/cuckoo-trie/cuckoo-trie-code/blob/main/README.md",
+    "https://github.com/cuckoo-trie/cuckoo-trie-code/blob/main/API.md",
+    "https://github.com/cuckoo-trie/cuckoo-trie-code/blob/main/Makefile",
+    "https://github.com/cuckoo-trie/cuckoo-trie-code/blob/main/config.h",
+    "https://github.com/cuckoo-trie/cuckoo-trie-code/blob/main/cuckoo_trie.h",
+    "https://github.com/cuckoo-trie/cuckoo-trie-code/blob/main/cuckoo_trie_internal.h",
+    "https://github.com/cuckoo-trie/cuckoo-trie-code/blob/main/key_object.h",
+    "https://github.com/cuckoo-trie/cuckoo-trie-code/blob/main/main.h",
+    "https://github.com/cuckoo-trie/cuckoo-trie-code/blob/main/main.c",
+    "https://github.com/cuckoo-trie/cuckoo-trie-code/blob/main/atomics.h",
+    "https://github.com/cuckoo-trie/cuckoo-trie-code/blob/main/util.c",
+    "https://github.com/cuckoo-trie/cuckoo-trie-code/blob/main/util.h",
+    "https://github.com/cuckoo-trie/cuckoo-trie-code/blob/main/compiler.h",
+    "https://github.com/cuckoo-trie/cuckoo-trie-code/blob/main/benchmark.c",
+    "https://github.com/cuckoo-trie/cuckoo-trie-code/commits/main",
+    "https://github.com/cuckoo-trie/cuckoo-trie-code/issues/1",
+    "https://github.com/cuckoo-trie/cuckoo-trie-code/pull/5",
+    "https://github.com/cuckoo-trie/cuckoo-trie-code/pull/7",
+    "https://github.com/cuckoo-trie/cuckoo-trie-code/forks",
+    "https://github.com/cuckoo-trie/other-benchmarked-indexes",
+    "https://arxiv.org/pdf/2201.09331",
+    "https://hn.algolia.com/api/v1/search?query=%22cuckoo%20trie%22"
+  ],
+  "confidence": 0.86
+}
