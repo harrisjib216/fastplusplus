@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/boostorg/bloom",
+  "one_liner": "Header-only C++11 Boost filter template whose cache-local block and SIMD multiblock subfilters run 2.6-5x faster than a classical Bloom filter.",
+  "what_it_does": "Boost.Bloom provides one class template, boost::bloom::filter<T, K, Subfilter, Stride, Hash, Allocator>, whose compile-time Subfilter picks the layout: the default block<unsigned char,1> is a classical Bloom filter, while block, multiblock, fast_multiblock32 and fast_multiblock64 confine each operation to one or a few adjacent words. The API looks like a container (insert, range insert, may_contain, bulk may_contain with a callback, |= and &= combination, clear, reset, and array() as a span for serialization), but it stores no elements and has no size() or erase. Capacity is fixed at construction and is given either in bits or as (expected n, target FPR).",
+  "how_it_is_fast": "It uses blocked Bloom filtering: block<Block,K'> sets all K' bits inside one hash-chosen Block (a uint64_t, or a 64-byte uint64_t[8]), so an operation touches one cache line instead of K scattered ones, while multiblock sets one bit in each of K' consecutive words (split-block layout; fast_multiblock32<8> matches the Impala uint32_t[8] bucket). Each element is hashed once: Lemire's fastrange picks the subarray, a multiplicative congruential generator (Steele-Vigna constant) re-mixes the hash, bit positions are sliced from it, and a 128-bit multiply-xor mix is applied first for hashes that do not avalanche, such as boost::hash<int>. The fast_multiblock variants build the bit masks with SIMD (AVX2 _mm256_sllv_epi32, an SSE2 float-exponent trick, or little-endian Neon). The core issues software prefetches for the target cache lines, and since Boost 1.90 bulk insert and bulk may_contain pipeline hashing and prefetching over batches of up to 64 elements, with branchless lookups for block and fast_multiblock.",
+  "when_to_use": [
+    "Filtering negative lookups in front of disk, network or database accesses, when you need tens to hundreds of millions of inserts or probes per second per core and can accept a higher FPR at the same bits/key (or spend a few extra bits/key to get it back).",
+    "Filters much larger than the CPU cache (N of 1M and up, tens of MB): the gap grows with size. At N=10M, c=16, GCC 14 x64, the classical filter takes 86.0 ns to insert and 95.7 ns per successful lookup vs 16.9/18.7 ns for block<uint64_t,6>.",
+    "Builds with AVX2 enabled (-mavx2, -march=native or /arch:AVX2), or AArch64 with Neon: fast_multiblock32<K'> gives the best speed/FPR mix. At N=1M on GCC 14 x64 it runs at 2.7-3.2 ns per operation at c=8-12 with 0.54% FPR at c=12, vs 1.05% for block<uint64_t,5>.",
+    "Batch workloads that can use insert(first,last) or bulk may_contain: the docs' GCC 14 x64 table at N=10M shows a further 1.2-3.5x for most configurations.",
+    "Projects already on Boost 1.89+ (or vcpkg boost-bloom or Conan) that want a maintained, allocator-aware, header-only C++11 filter with built-in capacity_for/fpr_for sizing helpers."
+  ],
+  "when_not_to_use": [
+    "When FPR per bit is the priority: at c=16, block<uint64_t,6> has 0.42% FPR vs 0.045% for the classical filter<int,11>. Use the classical config, a wider multiblock, or more bits/key.",
+    "When you need deletion, counting, growth, an element count, try_insert or a runtime K. The filter is insert-only with a fixed capacity and no size(); try_insert, size estimation and runtime K are listed only as future work.",
+    "Static key sets built once: the library's own future-work page says cuckoo and xor filters are 'more space efficient and potentially faster', and it offers neither.",
+    "Many threads writing to one filter: there are no atomic or concurrent insert operations, and thread safety is not documented.",
+    "When memory is not the constraint and keys are small: in the same benchmark, an exact boost::unordered_flat_set<int> looks up in 5.63/4.24 ns (successful/unsuccessful) at N=1M and 23.11/14.68 ns at N=10M. That is comparable to block filters (4.6 ns at c=8, N=1M; 18.7 ns at c=16, N=10M), though its inserts are much slower (38.9 and 58.1 ns)."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "Boost.Assert, Boost.Config, Boost.ContainerHash, Boost.Core, Boost.ThrowException, Boost.TypeTraits (all header-only, per CMakeLists.txt)",
+    "min_toolchain": "C++11. The docs say it is verified with GCC 4.8, Clang 3.9, VS2015 and later. It ships in Boost 1.89+, and bulk operations and branchless lookups need Boost 1.90+.",
+    "platforms": "Any (scalar fallback). SIMD paths are selected at compile time, with no runtime CPU dispatch: AVX2 for fast_multiblock32/64, SSE2 for fast_multiblock32, and little-endian Neon for fast_multiblock32. Benchmarks were published for x64, x86 and ARM64 (macOS).",
+    "thread_safety": "Not documented. The core uses no atomics, so concurrent inserts need external locking.",
+    "drop_in_for_baseline": "partial: filter<T,K> is itself a classical Bloom filter with insert/may_contain semantics, and moving to block or multiblock is a one-line typedef change. You must re-tune K' and capacity for the target FPR, the capacity argument is in bits, and saved bit arrays cannot be exchanged between configurations."
+  },
+  "gotchas": [
+    "The single-argument constructor takes bits, not elements: filter f(1'000'000) is 1M bits. The (n, fpr) overload with a tiny FPR can throw std::bad_alloc; the docs' example with 1E-50 needs about 1.4E12 bits.",
+    "SIMD selection depends on compile flags (__AVX2__, __SSE2__, little-endian __ARM_NEON). Without -mavx2 or -march=native, an x64 build falls back to the SSE2 fast_multiblock32 and to scalar multiblock<uint64_t> for fast_multiblock64. The AVX2 and SSE2 fast_multiblock32 code take different hash bits (per source), so an array saved from one build is not valid in another. The docs warn only that endianness must match.",
+    "fpr_for is an a-priori estimate that assumes n distinct inserts. Duplicates make it pessimistic (issue #19), and the docs say not to trust it after &= intersection.",
+    "Not every fast-looking option is faster. Plain multiblock<uint64_t,11> is slower than block<uint64_t,6> at c=16, N=1M (9.18 vs 5.02 ns insert). A Stride below the block size lowers FPR but allows unaligned accesses. Bulk mode can lose: 0.78x for classical successful lookup at c=8 in the docs' GCC 14 table."
+  ],
+  "pick_this_over_siblings_when": "Against the Impala-derived SIMD Blocked Bloom in efficient/cuckoofilter (one fixed AVX2-only uint32_t[8] bucket), pick this when you want the same layout via fast_multiblock32<8> plus SSE2, Neon and scalar fallbacks, a tunable K', allocator support and Boost/vcpkg/Conan packaging. Against Xor Filter, BuRR or other static filters, pick it when keys arrive incrementally and extra bits/key are acceptable.",
+  "verified_claims_summary": "In the project's own boost_bloom_benchmarks (GCC 14 x64, -O3 -march=native, unique random ints from splitmix64, single-threaded element-at-a-time loops, self-hosted runner with an unnamed CPU), at N=1M and equal bits/element (c=8-16) block<uint64_t,K> inserts in 3.99-5.55 ns vs 11.04-20.28 ns and looks up in 4.6-6.0 ns vs 12.1-22.0 ns for the classical filter<int,K> (about 2.6-4x), rising to about 5x for insert and successful lookup at N=10M, c=16 but only about 1.8x for unsuccessful lookup (18.7 vs 34.2 ns). The baseline is the library's own classical configuration, not another library, and block pays about 10x the FPR at c=16.",
+  "status_note": "Active: it went through Boost peer review in May 2025, first shipped in Boost 1.89 and gained bulk operations in 1.90, its last commit (2026-06-19) was CI upkeep with no bug issues open, and it is BSL-1.0 (stated in headers and README, with no root LICENSE file) and header-only via Boost, vcpkg or Conan.",
+  "sources_read": [
+    "https://github.com/boostorg/bloom",
+    "https://github.com/boostorg/bloom#readme",
+    "https://github.com/boostorg/bloom/blob/develop/doc/bloom/intro.adoc",
+    "https://github.com/boostorg/bloom/blob/develop/doc/bloom/primer.adoc",
+    "https://github.com/boostorg/bloom/blob/develop/doc/bloom/tutorial.adoc",
+    "https://github.com/boostorg/bloom/blob/develop/doc/bloom/configuration.adoc",
+    "https://github.com/boostorg/bloom/blob/develop/doc/bloom/implementation_notes.adoc",
+    "https://github.com/boostorg/bloom/blob/develop/doc/bloom/release_notes.adoc",
+    "https://github.com/boostorg/bloom/blob/develop/doc/bloom/future_work.adoc",
+    "https://github.com/boostorg/bloom/blob/develop/doc/bloom/benchmarks.adoc",
+    "https://github.com/boostorg/bloom/blob/develop/doc/bloom/reference/filter.adoc",
+    "https://github.com/boostorg/bloom/blob/develop/CMakeLists.txt",
+    "https://github.com/boostorg/bloom/blob/develop/meta/libraries.json",
+    "https://github.com/boostorg/bloom/blob/develop/include/boost/bloom/detail/core.hpp",
+    "https://github.com/boostorg/bloom/blob/develop/include/boost/bloom/fast_multiblock32.hpp",
+    "https://github.com/boostorg/bloom/blob/develop/include/boost/bloom/multiblock.hpp",
+    "https://github.com/boostorg/bloom/blob/develop/include/boost/bloom/detail/avx2.hpp",
+    "https://github.com/boostorg/bloom/blob/develop/include/boost/bloom/detail/neon.hpp",
+    "https://github.com/boostorg/bloom/blob/develop/include/boost/bloom/detail/fast_multiblock32_avx2.hpp",
+    "https://github.com/boostorg/bloom/blob/develop/include/boost/bloom/detail/fast_multiblock32_sse2.hpp",
+    "https://github.com/boostorg/bloom/blob/develop/benchmark/comparison_table.cpp",
+    "https://github.com/boostorg/bloom/issues?q=is%3Aissue",
+    "https://github.com/boostorg/bloom/pulls?q=is%3Apr",
+    "https://github.com/boostorg/bloom/issues/19",
+    "https://github.com/boostorg/bloom/issues/20",
+    "https://github.com/boostorg/bloom/issues/22",
+    "https://github.com/boostorg/bloom/issues/31",
+    "https://github.com/boostorg/boost_bloom_benchmarks#readme",
+    "https://github.com/boostorg/boost_bloom_benchmarks/blob/main/.github/workflows/benchmarks.yml",
+    "https://github.com/efficient/cuckoofilter/blob/master/src/simd-block.h"
+  ],
+  "confidence": 0.85
+}
