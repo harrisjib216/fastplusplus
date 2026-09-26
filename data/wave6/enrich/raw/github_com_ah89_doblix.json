@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/ah89/doblix",
+  "one_liner": "Research RocksDB fork replacing the SST index with a block-aware learned string index; paper: 2.21x read-only throughput vs RocksDB.",
+  "what_it_does": "DobLIX replaces RocksDB's per-SST binary-search index block with a learned index that is trained when each SST is built during flush or compaction. The same training step also decides where data blocks are cut, so a point lookup maps to exactly one bounded-size block. The public repo is a full RocksDB 5.1.2 tree with the change built into BlockBasedTableBuilder and BlockBasedTable::Get. It keeps the RocksDB C++ API, but it is a fork and not a plugin.",
+  "how_it_is_fast": "The index is a Radix String Spline: a trie of RadixSpline models, each built with Neumann and Michel's GreedySplineCorridor PLA over 8-byte big-endian key chunks, with common prefixes stripped at each node. The 'dual objective' is that a spline segment is also cut when its bytes would exceed a max block size. Each spline segment then becomes its own data block, so the model predicts the block directly and a Get reads one small block instead of searching an index block and then a possibly large data block. The paper also adds a Q-learning agent that picks PLA or piecewise regression (PRA), the error bound and the max block size, plus model-guided last-mile search inside the block, but none of these three are in the public code.",
+  "when_to_use": [
+    "Studying or prototyping learned indexes inside an LSM SST. learned_index/ is a compact header-only RadixSpline and Radix String Spline already wired into RocksDB's table builder and reader.",
+    "Read-only or read-mostly point-lookup workloads on small fixed-size keys where index lookup plus block load dominate Get latency. The paper reports 2.21x average RO throughput and 2.02x on YCSB B/C/D vs RocksDB's default index.",
+    "Read workloads with a larger block cache. The paper measured +81% over RocksDB at 512MB cache (RO, Zipfian, AMZN), where index cost is a larger share of each lookup.",
+    "Long string keys with shared prefixes. Prefix stripping per trie node gave a 25.9% smaller index at 64-byte keys and 1.32x-1.62x throughput on variable-size KV mixes modeled on UDB, ZippyDB and UP2X.",
+    "Only as a starting point you will port to a current RocksDB and complete yourself (the PRA model and RL tuner are missing)."
+  ],
+  "when_not_to_use": [
+    "Production use. The base is RocksDB 5.1.2, years behind current releases in fixes and features. The authors state in issue #2 that the public code is not the version used in the paper.",
+    "Write-heavy workloads. The paper's own WH gain over RocksDB is only 1.04x, and the builder buffers each whole SST in RAM before writing it (see gotchas).",
+    "Range-scan-heavy workloads. Iterators still use the regular binary-search index block. The paper's YCSB-E gain is 42.8%, and it notes all systems perform alike during the scan phase.",
+    "Existing RocksDB databases. The SST footer gains a third block handle and Get() always goes through the learned index. Reading SSTs written by stock RocksDB, and migrating them, is not documented.",
+    "Expecting workload-adaptive tuning. The RL tuner and PRA model are withheld, and the public builder hardcodes error bound 128 and a 4KB max block."
+  ],
+  "integration": {
+    "form": "static lib (the whole RocksDB 5.1.2 fork, built with CMake or Make; not a plugin or separable patch)",
+    "dependencies": "RocksDB 5.1.2 build deps per README: gflags, snappy, zlib, bzip2, lz4, zstd. No ML/RL libraries, since the tuner is not included.",
+    "min_toolchain": "CMakeLists sets -std=c++11. The paper used C++17 with GCC 9.4.0. Issue #1 reports the README build failing and was closed without a reply.",
+    "platforms": "Paper tested Linux x86-64 (Ubuntu 20.04). learned_index/ uses GCC/Clang builtins (__builtin_clz/__builtin_clzl), so MSVC is not supported as written. Other platforms are not documented.",
+    "thread_safety": "Inherits RocksDB's model (the DB handle is thread-safe). The per-SST model is built once in the table builder and only read after the table opens. Nothing DobLIX-specific is documented.",
+    "drop_in_for_baseline": "partial — same RocksDB C++ API, but it is a RocksDB 5.1.2 fork with a modified SST footer and an always-on learned-index Get path, not a patch or plugin for current RocksDB (the paper used 8.1.1)"
+  },
+  "gotchas": [
+    "BlockBasedTableBuilder::Add copies every key and value of the output SST into a std::vector<pair<string,string>>, plus another copy of each user key for training. Data blocks are only written in Finish(), so flush/compaction memory grows with SST size.",
+    "Data-block boundaries come from spline segments via a hardcoded FinalizeRSSModel(128, 4*1024), not from BlockBasedTableOptions::block_size. The only tuning is editing and recompiling.",
+    "The paper's last-mile optimizations are inactive in the public reader. GetKeyFromBlock computes a model search bound and prefix length, then ignores both and calls the standard BlockIter::Seek. The table-open loop that fills per-block key counts also never increments block_num, so those counts are wrong; this is harmless today only because nothing uses them.",
+    "Every RadixStringSplineNode constructor calls srand(time(NULL)), which reseeds the process-global C RNG on each SST build. The table reader also frees a new char[] buffer through std::unique_ptr<char>, a mismatched delete."
+  ],
+  "pick_this_over_siblings_when": "Pick DobLIX over write-focused siblings (PebblesDB, MatrixKV, Titan) only when the bottleneck is point-lookup index and block reads in a read-mostly RocksDB workload and you want to study learned SST indexes. For anything deployable, Titan is a maintained RocksDB plugin, and SplinterDB claims 2-2.6x faster point queries plus 6-10x faster inserts in a maintained codebase.",
+  "verified_claims_summary": "The PVLDB 2025 paper ran RocksDB 8.1.1 built with GCC 9.4.0 (C++17, flags not stated) and 4 background threads on a 64-core Threadripper Pro 5995WX with 256GB RAM and a Samsung 980 Pro NVMe, using SOSD datasets (64M 8-byte keys, 64-byte values) and 10M-operation Zipfian workloads; against RocksDB's default index it averaged 2.21x throughput on RO, 1.22x RH, 1.31x BA, 1.04x WH, 2.02x on YCSB B/C/D and +42.8% on YCSB-E. These numbers come from the unreleased paper build with the tuner and RocksDB 8.1.1, not the public repo.",
+  "status_note": "Stale research code drop (one code commit in Feb 2025, README edits to Sep 2025) whose Huawei authors say the tuner and PRA are withheld for confidentiality; it is BSD-3 with Facebook's old PATENTS grant, so read or copy learned_index/ but do not deploy it.",
+  "sources_read": [
+    "https://github.com/ah89/DobLIX",
+    "https://github.com/ah89/DobLIX/blob/main/README.md",
+    "https://github.com/ah89/DobLIX/tree/main/learned_index",
+    "https://github.com/ah89/DobLIX/blob/main/learned_index/rss.h",
+    "https://github.com/ah89/DobLIX/blob/main/learned_index/builder.h",
+    "https://github.com/ah89/DobLIX/blob/main/learned_index/radix_spline.h",
+    "https://github.com/ah89/DobLIX/blob/main/learned_index/string_serializer.h",
+    "https://github.com/ah89/DobLIX/blob/main/table/block_based_table_builder.cc",
+    "https://github.com/ah89/DobLIX/blob/main/table/block_based_table_reader.cc",
+    "https://github.com/ah89/DobLIX/blob/main/table/block_based_table_reader.h",
+    "https://github.com/ah89/DobLIX/blob/main/table/format.cc",
+    "https://github.com/ah89/DobLIX/blob/main/table/format.h",
+    "https://github.com/ah89/DobLIX/blob/main/include/rocksdb/version.h",
+    "https://github.com/ah89/DobLIX/blob/main/include/rocksdb/table.h",
+    "https://github.com/ah89/DobLIX/blob/main/CMakeLists.txt",
+    "https://github.com/ah89/DobLIX/issues/1",
+    "https://github.com/ah89/DobLIX/issues/2",
+    "https://arxiv.org/pdf/2502.05369",
+    "https://api.crossref.org/works/10.14778/3749646.3749667",
+    "https://hn.algolia.com/api/v1/search?query=DobLIX"
+  ],
+  "confidence": 0.85
+}
