@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/qbix/webserver",
+  "one_liner": "Pure-PHP HTTP/WebSocket server that forks copy-on-write workers after preloading the app, aimed at php-fpm's worker-count limit on I/O-bound PHP.",
+  "what_it_does": "It replaces nginx + php-fpm with one PHP CLI process (qbixserver.php). That process parses HTTP itself, serves static files from an in-memory cache, handles WebSocket/Socket.IO/SSE, and runs PHP scripts or framework front controllers in forked workers. It is not a library and not a FastCGI backend: you point it at a document root (for example `--root=public --preset=laravel`), and it reads .htaccess rewrites. Existing code runs through a source-rewriting compat layer that shims 27 builtins (header(), session_start(), setcookie(), ini_set(), ...) at include time.",
+  "how_it_is_fast": "Fork-after-preload: the parent bootstraps the framework once, then calls pcntl_fork(), so workers share its pages copy-on-write and pay only for pages they dirty (docs quote 120 KB-5 MB private per worker, measured with /proc/smaps_rollup, vs ~42 MB per fpm worker). More workers per GB means more blocking requests in flight, so the gain is concurrency under I/O wait, not per-request speed. In persistent ('octane') mode a worker loops and restores class statics from a Reflection snapshot between requests (~0.05 ms) instead of re-forking (~8.8 ms). A single-threaded parent event loop (stream_select, or epoll/kqueue through PHP 8.6 Io\\Poll) passes requests to workers over Unix socket pairs as length-prefixed JSON.",
+  "when_to_use": [
+    "I/O-bound PHP (requests mostly wait on a database or API) on a RAM-limited Linux/macOS host where memory caps fpm's pm.max_children; the project's own c=200 test shows 3.4-8x fpm throughput with 200 workers vs 4.",
+    "You want HTTP, WebSocket/Socket.IO rooms and SSE from one PHP process, without separate Node, Redis pub/sub or supervisor processes.",
+    "Code you control and can audit for cross-request state (function-level statics, define(), unguarded class declarations), or scripts you can run in forkPerRequest mode.",
+    "Small PHP apps you want to ship as one bundled binary (PHP + SQLite + app code)."
+  ],
+  "when_not_to_use": [
+    "CPU-bound or trivial handlers: fpm wins in the project's own tables (CPU-only 3,940 vs 2,609 req/s; CPU c=1 5,048 vs 2,818), and a user in issue #24 measured 134 vs 9,127 req/s against fpm on an `echo 'OK'` script (defaults at the time, fork-per-request).",
+    "Static files: nginx did 50,742 vs 18,311 req/s in the same benchmark doc, and architecture.md itself recommends nginx or a CDN in front for static files.",
+    "Production or large-scale use: the project is weeks old (v1.0.0 on 2026-08-31, v2.0.0 on 2026-09-25, 7 releases in 4 weeks). Recent issues include the master process dying with exit code 0 (#15), hangs under ab (#27) and truncated large downloads (#26), and at least 10 compat PRs (#39-#48) are still open.",
+    "Legacy code that uses call_user_func('header', ...), eval(), code inside .phar files, or C extensions that send headers: the rewriter does not reach these, so they must go to php-cgi, which loses preload and COW. Fork-per-request mode measured only 96-115 req/s at 50 ms I/O.",
+    "Windows: there is no pcntl. PHP runs in php-cgi subprocesses without preload or COW, or through an experimental FFI fork that uses the undocumented ntdll RtlCloneUserProcess. The README links a Windows .exe that the v2.0.0 release does not include."
+  ],
+  "integration": {
+    "form": "standalone server application: qbixserver.php from a source checkout, a ~280 KB phar, or a bundled static binary (Linux x86-64/aarch64, macOS arm64). It is not a library and not a FastCGI backend.",
+    "dependencies": "PHP with ext-sockets. ext-pcntl is required for workers, COW and signals; ext-openssl for TLS. Optional: revolt/event-loop, amphp/http-server (HTTP/2), and ext-ffi + qbix_fork.dll on Windows.",
+    "min_toolchain": "PHP 8.1+ (composer.json). Benchmarks ran on PHP 8.3.6. epoll/kqueue needs PHP 8.6+ (Io\\Poll); older versions use O(n) stream_select.",
+    "platforms": "Linux x86-64/aarch64, macOS and FreeBSD with COW fork. Windows x64 through php-cgi subprocesses (no COW) or the experimental FFI fork. iOS/Android through embedded PHP runtimes.",
+    "thread_safety": "No threads. A single-threaded event-loop parent runs the server, and concurrency comes from forked worker processes. The docs require that the parent opens no DB connections or other stateful resources before forking.",
+    "drop_in_for_baseline": "partial — it replaces the nginx + php-fpm pair as a whole (it reads .htaccess and has Laravel/Symfony/WordPress/Drupal presets), but it cannot sit behind nginx as a FastCGI replacement for fpm. Persistent mode also needs code with no cross-request state, and some calls bypass the shims."
+  },
+  "gotchas": [
+    "The docs disagree about the default mode: the README says persistent workers, while architecture.md, why.md and http.md say fork-per-request. In code, when pcntl is present and --workers is not set, it spawns max(4, min((RAM-1GB)/200KB, nproc*200)) persistent workers. RAM comes from /proc/meminfo MemTotal, which is usually host RAM inside a container. A user in issue #27 got 3,200 workers using 22 GB that served no requests. Always set --workers.",
+    "Persistent mode leaves define() constants, function-level statics, stream wrappers and C-extension state in place between requests. An inline class declaration fatals on the second request ('Cannot declare class'). Workers recycle every 1,000 requests by default (maxRequests). OPcache must stay off in CLI or use validate_timestamps=1, because it compiles rewritten source.",
+    "Pool-dispatched PHP responses always send Connection: close, so dynamic responses get no keep-alive (maintainer in #27; Pool.php sets _keepAlive false). Pool.php also hard-codes remoteAddr '127.0.0.1' for pooled script requests, and an open PR (#43) fixes SCRIPT_NAME being set to the script's basename.",
+    "Worker IPC is JSON. The worker exits on request messages over 10 MB, and writeMsg() calls json_encode() on the raw output body without an invalid-UTF-8 flag. Test binary (non-UTF-8) PHP output before relying on it; this comes from reading the code, not from a test."
+  ],
+  "pick_this_over_siblings_when": "Every sibling (fasthttp, Drogon, H2O, Sogou Workflow and the others) is a non-PHP server that means rewriting the app, and each serves plain HTTP far faster; this one's static-file path reached only 36% of nginx's throughput on the same box. Pick Qbix only when the constraint is keeping an existing blocking-I/O PHP codebase and raising in-flight requests per GB of RAM compared with php-fpm.",
+  "verified_claims_summary": "First-party ab runs on an unnamed single-core container (PHP 8.3.6, Ubuntu 24, no CPU model) with a usleep(50000) handler at c=40 give php-fpm, held to 4 workers by an assumed 50 MB each in 200 MB, 78 req/s vs 1,060 req/s for Qbix persistent workers (~13.6x; the doc says 14x). That 1,060 cannot come from the stated setup, because at c=40 and at least 50 ms per request Little's law caps throughput at 40/0.05 = 800 req/s, and the docs variously give it as 40 or 100 workers, as '9x' with p50 56 ms, or as c=200; the doc's own c=200 run shows 358 vs 79 req/s (4.5x) with 200 workers.",
+  "status_note": "Very active but very young: first HN post July 2026, v1.0.0 to v2.0.0 in under 4 weeks, 160 stars, and scope growing into mesh networking and mobile. It is MIT-licensed and runs as its own server process rather than a vendored library.",
+  "sources_read": [
+    "https://github.com/Qbix/webserver",
+    "https://raw.githubusercontent.com/Qbix/webserver/main/README.md",
+    "https://raw.githubusercontent.com/Qbix/webserver/main/docs/BENCHMARKS.md",
+    "https://raw.githubusercontent.com/Qbix/webserver/main/composer.json",
+    "https://raw.githubusercontent.com/Qbix/webserver/main/docs/architecture.md",
+    "https://raw.githubusercontent.com/Qbix/webserver/main/docs/why.md",
+    "https://raw.githubusercontent.com/Qbix/webserver/main/docs/reset.md",
+    "https://raw.githubusercontent.com/Qbix/webserver/main/docs/http.md",
+    "https://raw.githubusercontent.com/Qbix/webserver/main/docs/running.md",
+    "https://raw.githubusercontent.com/Qbix/webserver/main/docs/configuration.md",
+    "https://raw.githubusercontent.com/Qbix/webserver/main/docs/compatibility.md",
+    "https://raw.githubusercontent.com/Qbix/webserver/main/qbixserver.php",
+    "https://raw.githubusercontent.com/Qbix/webserver/main/src/Q/WebServer.php",
+    "https://raw.githubusercontent.com/Qbix/webserver/main/src/Q/WebServer/Pool.php",
+    "https://raw.githubusercontent.com/Qbix/webserver/main/src/Q/WebServer/Fork.php",
+    "https://raw.githubusercontent.com/Qbix/webserver/main/src/fork_shim.c",
+    "https://github.com/Qbix/webserver/issues/15",
+    "https://github.com/Qbix/webserver/issues/24",
+    "https://github.com/Qbix/webserver/issues/26",
+    "https://github.com/Qbix/webserver/issues/27",
+    "https://github.com/Qbix/webserver/pulls",
+    "https://github.com/Qbix/webserver/releases/tag/v2.0.0",
+    "https://hn.algolia.com/api/v1/search?query=qbix%20server&tags=story",
+    "https://hn.algolia.com/api/v1/search?query=Qbix%2Fwebserver",
+    "https://news.ycombinator.com/item?id=49749789"
+  ],
+  "confidence": 0.3
+}
