@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/valkey-io/valkey",
+  "one_liner": "BSD-licensed fork of Redis OSS 7.2 whose async I/O threads give ~37% more SET throughput than Redis 8.0.",
+  "what_it_does": "Valkey is an in-memory key/value data-structure server with scripting, modules, replication and cluster mode. It was forked from Redis OSS 7.2.4 just before Redis moved to source-available licenses. It speaks RESP2/RESP3, accepts Redis-style config files, reads and writes Redis OSS 7.2 RDB/AOF files, and supports the RedisModule_ API, so existing Redis clients and redis-cli work unchanged. You deploy it as a server; it is not a library you link against.",
+  "how_it_is_fast": "Valkey 8.0's async I/O threading (an AWS contribution) keeps all command execution on the single main thread but hands socket reads and RESP parsing, reply writes, epoll_wait and object frees to worker threads as jobs, scaling the number of active I/O threads with load (current unstable passes jobs over lock-free SPMC/MPSC/SPSC ring queues). Before running each batch of parsed commands, the main thread interleaves and prefetches the hash-table lookups for every key in the batch (\"memory access amortization\", memory_prefetch.c), so cache misses overlap instead of stalling one after another. AWS reports this cut lookupKey time by more than 80% and added almost 50% throughput. Valkey 8.1 also replaced the chained dict with a hash table of 64-byte, cache-line buckets (7 slots plus 1-byte secondary hashes, inspired by Swiss tables), which cuts a lookup to about two memory accesses and saves about 20 bytes per key.",
+  "when_to_use": [
+    "You run Redis OSS 7.2 or older on a box with 6-8+ cores and one instance is saturating its main thread on simple GET/SET. Turning on io-threads can take one node from roughly 240K to about 1M RPS (1 KB values) without sharding or pipelining.",
+    "Many concurrent connections (hundreds) with small or medium values (512 B-1 KB), where the network syscalls and parsing, not command logic, eat the CPU.",
+    "Memory-bound caches holding many small keys: the 8.1 hash table saves about 20 B per key (about 30 B per key with a TTL) over the old dict.",
+    "You need a permissively licensed (BSD-3-Clause) Redis-compatible server rather than Redis 8's RSALv2/SSPLv1/AGPLv3 choice.",
+    "Workloads that do not shard well, such as hot keys, large collections or same-slot multi-key operations, where a bigger, faster single shard helps."
+  ],
+  "when_not_to_use": [
+    "Small boxes (3-4 cores or fewer) or io-threads left at 1. Momento measured parity without I/O threads (239K vs 235K SET RPS), and the two were neck-and-neck until the 4th thread.",
+    "You depend on Redis CE 7.4+ or Redis 8.x. Their RDB files cannot be loaded by Valkey, and Redis 8's built-in Query Engine, JSON, time series, probabilistic types and vector sets are not part of the Valkey core server.",
+    "You need well beyond ~1M simple ops/s on one node. Command execution is still single-threaded, and designs that execute commands on multiple threads report higher per-node numbers.",
+    "Tail latency matters and connection counts are untuned. Going from 400 to 1024 connections doubled Valkey's p99 from 0.8 ms to 1.6 ms. At 256 connections with 6 threads, Redis 8.0's p99 (0.84 ms) was actually lower than Valkey's (0.93 ms).",
+    "Over-provisioning io-threads: open issue #4114 (2026-07) shows io-threads 8 running slower than io-threads 4 on a 32-core host, because idle I/O threads burn cycles in their polling loop."
+  ],
+  "integration": {
+    "form": "server binary built with make (CMake build is marked experimental); official valkey/valkey Docker images",
+    "dependencies": "Vendored in deps/: jemalloc (default allocator on Linux), Lua, libvalkey, linenoise, hdr_histogram, fpconv, lz4, fast_float. Optional: OpenSSL (TLS), librdmacm/libibverbs (experimental RDMA), libsystemd, static Zstandard >= 1.4.7, libbacktrace.",
+    "min_toolchain": "C compiler with gnu11 (C11 _Atomic). The Makefile probes for it and falls back to -std=c99. Default -O3.",
+    "platforms": "Linux, macOS, OpenBSD, NetBSD, FreeBSD; big- and little-endian; 32- and 64-bit; Solaris best effort. The hash table has x86 SIMD and ARM NEON paths; the TSC/CNTVCT hardware clock is used on x86-64 Linux and aarch64. RDMA is Linux-only and experimental.",
+    "thread_safety": "Network server: any number of clients, but every command runs on the main thread. I/O threads only do socket read/parse, write, polling and frees, so command semantics stay single-threaded and atomic, as in Redis.",
+    "drop_in_for_baseline": "partial — drop-in for Redis OSS 2.x-7.2.x (protocol, config, RDB/AOF, RedisModule_ API; `make install` creates redis-server/redis-cli symlinks), but not for Redis CE 7.4+/8.x data files or Redis 8's integrated modules"
+  },
+  "gotchas": [
+    "io-threads is off by default and must be set explicitly. The count includes the main thread (io-threads 9 = main thread + 8 I/O threads). valkey-benchmark also needs --threads, or it cannot show the gain.",
+    "With I/O threads on, the main and I/O threads busy-poll, so OS CPU usage reads near 100% even when the server is lightly loaded (issue #4001; noted in the 9.1 release post). Plan capacity with the main/I/O thread usage metrics added in 9.1.",
+    "INFO reports redis_version:7.2.4 for compatibility. Tools must read server_name/valkey_version to detect Valkey and its real version.",
+    "It shares Redis's Lua attack surface (CVE-2025-49844, a Lua use-after-free that can lead to RCE). 2026 brought several high-severity use-after-free advisories (TLS, stream deserialization, RDMA, the Lua debugger), plus an io-threads + TLS assertion crash (#4347, fixed), so stay on current patch releases (9.1.2 / 9.0.6 / 8.1.10, 2026-09-01)."
+  ],
+  "pick_this_over_siblings_when": "Pick Valkey over Dragonfly, Garnet or Pogocache when you want the actual Redis OSS codebase (same RDB/AOF files, config and module API), so migration is effectively an upgrade, and ~1M RPS per 8-vCPU node is enough. Garnet's paper uses Valkey 8.1 as the baseline it beats, and Pogocache reports ~2x Redis 8.2.1 GET throughput, so those win when raw per-node throughput matters more than byte-level Redis compatibility.",
+  "verified_claims_summary": "Momento, a vendor that sells Valkey-based services, ran the official Docker images valkey/valkey:8.1.1 and redis:8.0 (build flags not stated) on the same AWS Graviton4 c8g.2xlarge, both with io-threads 6, persistence off and 6 pinned cores, driven by valkey-benchmark with 1 KB values, a 3M-key keyspace, no pipelining and per-server tuned connection counts. Valkey reached 999.8K vs 729.4K SET RPS (~1.37x) at 0.8 vs 0.99 ms p99, and the post states +16% on GET; because Redis 8.0 has its own new I/O-threading implementation, this compares two threaded servers.",
+  "status_note": "Very active BSD-3-Clause server under LF Projects (commits on 2026-09-26, 9.2.0-rc1 on 2026-09-16, patch releases still shipping for the 8.0, 8.1, 9.0 and 9.1 lines, 27.3k stars) that you deploy, not a library you vendor.",
+  "sources_read": [
+    "https://github.com/valkey-io/valkey",
+    "https://github.com/valkey-io/valkey/blob/unstable/README.md",
+    "https://github.com/valkey-io/valkey/blob/unstable/src/io_threads.c",
+    "https://github.com/valkey-io/valkey/blob/unstable/src/memory_prefetch.c",
+    "https://github.com/valkey-io/valkey/blob/unstable/src/hashtable.c",
+    "https://github.com/valkey-io/valkey/blob/unstable/src/queues.h",
+    "https://github.com/valkey-io/valkey/blob/unstable/src/Makefile",
+    "https://github.com/valkey-io/valkey/blob/unstable/valkey.conf",
+    "https://github.com/valkey-io/valkey/releases",
+    "https://github.com/valkey-io/valkey/security/advisories",
+    "https://github.com/valkey-io/valkey/issues/4114",
+    "https://github.com/valkey-io/valkey/issues/4001",
+    "https://github.com/valkey-io/valkey/issues/2055",
+    "https://github.com/valkey-io/valkey/issues/4347",
+    "https://github.com/valkey-io/valkey/issues?q=io-threads",
+    "https://github.com/valkey-io/valkey-io.github.io/blob/main/content/blog/2024-07-07-unlock-one-million-rps.md",
+    "https://github.com/valkey-io/valkey-io.github.io/blob/main/content/blog/2024-09-13-unlock-one-million-rps-part2.md",
+    "https://github.com/valkey-io/valkey-io.github.io/blob/main/content/blog/2025-03-28-new-hash-table/index.md",
+    "https://github.com/valkey-io/valkey-io.github.io/blob/main/content/blog/2026-05-19-valkey-9-1-delivers-improvements-in-security-performance-and-more/index.md",
+    "https://github.com/valkey-io/valkey-doc/blob/main/topics/migration.md",
+    "https://github.com/redis/redis/releases/tag/8.0.0",
+    "https://www.gomomento.com/blog/valkey-turns-one-how-the-community-fork-left-redis-in-the-dust/",
+    "https://hn.algolia.com/api/v1/search?query=valkey%20redis%20benchmark&tags=story",
+    "https://hn.algolia.com/api/v1/items/45069760"
+  ],
+  "confidence": 0.82
+}
