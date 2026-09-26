@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/lsfratel/http.c3l",
+  "one_liner": "Sans-IO streaming HTTP/1.1 request parser in C3; ties picohttpparser with callbacks, ~13% faster only when extracting nothing.",
+  "what_it_does": "A zero-allocation, sans-IO HTTP/1.1 request parser (`http::parser`) plus a multipart/form-data parser (`http::multipart`) for C3 programs. You call `execute(bytes)` repeatedly; it fires callbacks (`on_request_line`, `on_header`, `on_body`, ...) with slices into your buffer, returns how many bytes it consumed, and you re-present the unconsumed tail with the next chunk. Unlike picohttpparser's one-shot `phr_parse_request`, it also does body framing (Content-Length, chunked with trailers), keep-alive and pipelining. It is not a drop-in: different language, push/callback API instead of filling caller arrays, and requests only (no response parser).",
+  "how_it_is_fast": "Delimiter finding uses a portable 16-byte vector byte search (`char[<16>]` equality compare, mask-to-int, count-trailing-zeros; SSE2 on x86-64, NEON on aarch64, no runtime CPU dispatch): first for LF, then for SP and ':' inside the completed line. Per the source, the request-line and header paths only check CRLF, the exact version string, whitespace before the colon and the framing headers; they skip picohttpparser's per-byte token-character and control-byte validation (which pico does with SSE4.2 PCMPESTRI range matching). Callbacks are coalesced to one indirect call per request line and per header, and the author attributes the whole gap between the callback-free run (~99 ns) and the full run (~112 ns) to that dispatch.",
+  "when_to_use": [
+    "Your server is written in C3 and needs an HTTP/1.1 request parser that handles fragmented reads without owning a buffer (raw recv loop, framed peek/consume, or in-memory buffer).",
+    "You want body framing (Content-Length, chunked with trailers), keep-alive and pipelining from one parser object instead of pairing pico's request parse with a separate chunked decoder.",
+    "Constant-memory request handling: the parser is a fixed-size value with no heap allocation (checked by a TrackingAllocator test), and bodies and multipart file uploads stream through callbacks, e.g. straight to disk.",
+    "You want built-in smuggling-related rejects: Content-Length plus Transfer-Encoding, non-final chunked, differing duplicate Content-Length, whitespace before the colon, obs-fold and bare LF, with configurable line-size and header-count limits."
+  ],
+  "when_not_to_use": [
+    "C or C++ projects looking for a faster picohttpparser: at equal output the measured result is parity (~112 vs ~112 ns/req), and the library ships no C header or exported C API.",
+    "When the parser must reject bad bytes: method, target, header names and header values are not checked for token characters or control bytes (NUL, DEL, a stray CR inside a value pass through), unlike picohttpparser.",
+    "Response parsing or anything beyond HTTP/1.x: it parses requests only and accepts only the exact version strings HTTP/1.0 and HTTP/1.1.",
+    "Windows or targets other than Linux/macOS on x64/aarch64: those four are the only targets in manifest.json and CI.",
+    "Where maturity matters: v0.5.0 in source, 3 stars, one squashed commit, no tagged releases and no issue history."
+  ],
+  "integration": {
+    "form": "module (C3 .c3l library bundle, compiled from source)",
+    "dependencies": "none beyond the C3 standard library (picohttpparser is vendored only for the benchmark)",
+    "min_toolchain": "c3c; CI pins c3c v0.8.1 (project langrev 1); no minimum version documented",
+    "platforms": "linux-x64, linux-aarch64, macos-x64, macos-aarch64 (per manifest.json); SIMD path is 16-byte vectors (SSE2/NEON), no -march=native needed",
+    "thread_safety": "not documented; each Parser is a self-contained value with no global state, so use one parser per connection",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Callback slices point into the caller's buffer and are valid only for the duration of the callback; copy anything you keep.",
+    "An incomplete line returns 0 bytes consumed and is rescanned from its start on the next call, so a slowly dripping line is scanned repeatedly up to max_line_size (8 KiB default); the benchmark uses one whole, hot-cache buffer and does not measure this.",
+    "The ~13% 'no cb' win registers no callbacks at all, so it extracts no method, path or headers, while pico fills its 32-entry header array in the same loop.",
+    "Errors come back as C3 faults from `execute`; call `reset()` before reusing the parser on the connection."
+  ],
+  "pick_this_over_siblings_when": "Pick it only when the host program is C3 and you want streaming body framing plus multipart in one zero-heap package. For a real speed margin over picohttpparser in C, the vkrasnov AVX2 fork (~1.7-1.8x) or httpp (~2.26x claimed) are stronger; in Rust use httparse or thhp; for a streaming C parser to replace llhttp, use iohttpparser.",
+  "verified_claims_summary": "Author's own microbenchmark (bench/bench.c3): pico's classic browser GET request (9 headers, no body) parsed 5M times after warmup on one pinned x86-64 core with unstated CPU model, c3c -O3 against vendored picohttpparser built -O3 -msse4.2 (compiler versions not stated). Rounded results are pico ~112 ns/req, callback-driven http::parser ~112 ns (~99% of pico) and a callback-free run ~99 ns (~113%) that extracts no fields, so at equal output it is parity; the '~1.5x vs pico scalar build' claim has no numbers.",
+  "status_note": "Active but new (single squashed commit pushed 2026-08-02, CI green on Linux and macOS, v0.5.0, no releases); MIT and only five source files, so easy to vendor into a C3 project but not usable from C/C++ without writing your own bindings.",
+  "sources_read": [
+    "https://github.com/lsfratel/http.c3l",
+    "https://github.com/lsfratel/http.c3l/blob/main/README.md",
+    "https://github.com/lsfratel/http.c3l/blob/main/bench/README.md",
+    "https://github.com/lsfratel/http.c3l/blob/main/bench/bench.c3",
+    "https://github.com/lsfratel/http.c3l/blob/main/bench/project.json",
+    "https://github.com/lsfratel/http.c3l/blob/main/bench/vendor/picohttpparser.c",
+    "https://github.com/lsfratel/http.c3l/blob/main/bench/vendor/picohttpparser.h",
+    "https://github.com/lsfratel/http.c3l/blob/main/src/parser.c3",
+    "https://github.com/lsfratel/http.c3l/blob/main/src/simd.c3",
+    "https://github.com/lsfratel/http.c3l/blob/main/src/helpers.c3",
+    "https://github.com/lsfratel/http.c3l/blob/main/src/version.c3",
+    "https://github.com/lsfratel/http.c3l/blob/main/src/multipart.c3",
+    "https://github.com/lsfratel/http.c3l/blob/main/manifest.json",
+    "https://github.com/lsfratel/http.c3l/blob/main/project.json",
+    "https://github.com/lsfratel/http.c3l/blob/main/.github/workflows/ci.yml",
+    "https://github.com/lsfratel/http.c3l/blob/main/tests/parser_test.c3",
+    "https://github.com/lsfratel/http.c3l/blob/main/tests/zero_alloc_test.c3",
+    "https://github.com/lsfratel/http.c3l/blob/main/fuzz/fuzz.c3",
+    "https://github.com/lsfratel/http.c3l/blob/main/examples/limits.c3",
+    "https://github.com/lsfratel/http.c3l/commits/main",
+    "https://github.com/lsfratel/http.c3l/issues",
+    "https://github.com/lsfratel/http.c3l/actions",
+    "https://github.com/lsfratel/http.c3l/tags"
+  ],
+  "confidence": 0.6
+}
