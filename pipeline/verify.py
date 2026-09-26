@@ -25,7 +25,9 @@ def render(wave_dir, batch_size, today):
     done = {v["id"] for f in raw_dir.glob("batch-*.json") for v in json.loads(f.read_text())}
     done |= {i for f in prompts_dir.glob("batch-*.ids.json") for i in json.loads(f.read_text())}
     entries = [e for e in json.loads((wave_dir / "merged.json").read_text()) if e["id"] not in done]
-    first = 1 + max((int(p.stem.split("-")[1]) for p in prompts_dir.glob("batch-*.txt")), default=0)
+    # split batches get a letter suffix (batch-41b); number new batches after the highest numeric part
+    first = 1 + max((int(re.match(r"\d+", p.stem.split("-")[1]).group()) for p in prompts_dir.glob("batch-*.txt")),
+                    default=0)
     template = TEMPLATE.read_text()
     for n, i in enumerate(range(0, len(entries), batch_size), first):
         batch = [{k: v for k, v in e.items() if k not in STRIP_FOR_VERIFIER} for e in entries[i:i + batch_size]]

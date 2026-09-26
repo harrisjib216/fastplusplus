@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/avl/savefile",
+  "one_liner": "Rust derive-based, versioned binary format for saving structs to disk; serializes 4.7-41x faster than prost.",
+  "what_it_does": "Savefile writes Rust structs and enums to any std::io::Write and reads them back from any std::io::Read, using its own binary format. It is aimed at persisting application state to disk and loading files written by older versions of the program. You add #[derive(Savefile)] and call save_file/load_file (or save/load, save_noschema/load_noschema) with a global version number. Schema changes are declared with field attributes such as #[savefile_versions], Removed<T> and #[savefile_versions_as]. There is no IDL and no codegen step, and it cannot read or write any other format.",
+  "how_it_is_fast": "The format mostly mirrors memory: fixed-width little-endian primitives and u64 length prefixes. There are no varints, field tags or field numbers. The derive macro generates a `Packed` impl that uses offset_of!/size_of to check whether a type's fields are contiguous, in declaration order and free of padding. If they are, a struct is written with a single write_all of its memory region. A Vec<T> of such a type is written as a length plus one memcpy of its buffer, and read back by allocating the buffer and calling read_exact into it. Types that fail the check use generated per-field code built on byteorder. That is why mesh (a Vec of f32 triangles) runs at close to memcpy speed, while string-heavy data is limited by String allocation.",
+  "when_to_use": [
+    "Saving large in-memory Rust state to disk (game saves, caches, editor/project files) when newer builds must still load files written by older builds.",
+    "Data dominated by Vec<T> of padding-free POD structs or primitives (meshes, point clouds, integer tables). These take the memcpy path: 6 MB mesh in ~142 us each way. A user in issue #125 reports it is 'orders of magnitude' faster than bitcode for gigabyte-scale Vec-of-integer data.",
+    "The same Rust program writes and reads on little-endian hosts (x86-64, aarch64), and you want serialize throughput more than compact output.",
+    "You want the schema stored with the data and checked on load (the default save/load), so a mismatch produces a detailed error rather than garbage."
+  ],
+  "when_not_to_use": [
+    "Cross-language interchange, RPC or a network wire format. The format is Rust-only with no IDL, and the author says there will never be other backends. Use protobuf or one of the Rust wire formats instead.",
+    "Untrusted input. The author has said files are treated as 'trusted' (issue #12), and length prefixes are unbounded unless you enable the `size_sanity_checks` feature (see gotchas).",
+    "Size-sensitive data made of strings or small integers. Fixed-width ints and 64-bit length prefixes produce 1,045,800 B on the shootout's log dataset, against 884,628 B for prost and 703,710 B for bitcode.",
+    "Zero-copy or borrowed deserialization. It cannot deserialize types that hold references (issue #18; shown as '†' in the shootout), so every String is allocated. Use rkyv for zero-copy access.",
+    "Forward compatibility (an old binary reading a newer file), shared or cyclic object graphs, trait objects, or big-endian targets. None of these are supported. Objects reachable by two paths are written twice."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "Always required: byteorder, memoffset. Enabled by default: savefile-derive (syn/quote/proc-macro2), indexmap, arrayvec, smallvec, bit-vec, bit-set, parking_lot, chrono. Optional: bzip2 (`compression`), ring + rand (`encryption`), serde, nalgebra, egui types.",
+    "min_toolchain": "Rust 1.82 (rust-version in Cargo.toml; CI builds 1.82, stable and nightly). On nightly compilers, build.rs turns on the `nightly` feature, which uses specialization for better introspection.",
+    "platforms": "Any Rust target in principle. The format is little-endian. I found no endianness guard on the primitive Packed impls used by the memcpy fast path, and the bit-vec features deliberately fail to compile on big-endian, so treat big-endian as unsupported.",
+    "thread_safety": "Not documented. The save/load functions take &mut Write/&mut Read and keep only per-call Serializer/Deserializer state; I found no global state.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The fast path is used only when a type has no padding at all, including trailing padding, and its fields sit in declaration order. repr(C) alone is not enough, and the docs say to add manual pad fields. Enums need #[repr(u8/u16/u32)] and variants of equal size. Otherwise savefile silently falls back to per-field code; #[savefile_require_fast] turns bad alignment into a compile error, but some other disqualifiers are only detected at runtime.",
+    "Corrupt or hostile files are a real risk. In the packed Vec<T> path, `elem_size * num_elems` is computed without an overflow check and a failed allocation panics. Bytes are read raw into Vec<bool>/Vec<char> without validation, although a scalar char is validated. The optional `size_sanity_checks` feature caps strings and non-packed Vecs at 1,000,000.",
+    "Versioning is manual. You bump one global version, tag every added or removed field, and keep removed fields as Removed<T>. The docs warn that 'If this is messed up, data corruption is likely.' save_noschema/load_noschema (the variant the benchmark uses) skip the schema check that would catch such a mismatch.",
+    "The crate is pre-1.0 and has broken APIs and formats before: 0.17 needed an upgrade guide, and an 0.17 beta corrupted 0.16 files (issue #44, fixed before release). Before 0.20.3, save_file/save_file_compressed/save_file_noschema did not flush their BufWriter, so write errors could go unreported."
+  ],
+  "pick_this_over_siblings_when": "On the same shootout, wincode posts nearly identical times and sizes and also supports borrowed decoding. bitcode gives much smaller output (703,710 B vs 1,045,800 B on log) and faster log deserialize, but is ~8.6x slower on mesh serialize (1.2265 ms vs 142.33 us). rkyv gives zero-copy access. Pick savefile when what you need is on-disk files with schema versioning built into the derive (added, removed and retyped fields, plus a stored schema that is checked on load) and memcpy-speed handling of large POD arrays.",
+  "verified_claims_summary": "Source: djkoloski/rust_serialization_benchmark, Criterion run of 2026-09-10 with rustc 1.100.0-nightly/LLVM 23.1.1 and lto = true, on a 4-vCPU AMD EPYC 9V74. It compares savefile 0.20.5 (save_noschema/load_noschema into a Vec/Cursor) with prost 0.14.4, the Rust protobuf crate, not C++ libprotobuf. Savefile serializes 4.7x (log), 7.4x (minecraft_savedata), 7.8x (mk48) and 41x (mesh) faster than prost encode. It deserializes 1.6x, 1.7x, 2.9x and 72x faster respectively. The mesh numbers come from memcpy of POD arrays and do not carry over to string-heavy data.",
+  "status_note": "Active and maintained by its author: 0.20.5 was released 2026-07-13, with ~197k crates.io downloads and CI covering nightly, stable, Rust 1.82 and Miri. Cargo.toml declares a dual MIT/Apache-2.0 license, but the repo ships only LICENSE-MIT. The crate is pre-1.0 and has a history of breaking API and format changes.",
+  "sources_read": [
+    "https://github.com/avl/savefile",
+    "https://github.com/avl/savefile/blob/master/README.md",
+    "https://github.com/avl/savefile/blob/master/savefile/src/lib.rs",
+    "https://github.com/avl/savefile/blob/master/savefile-derive/src/lib.rs",
+    "https://github.com/avl/savefile/blob/master/savefile/Cargo.toml",
+    "https://github.com/avl/savefile/blob/master/savefile-derive/Cargo.toml",
+    "https://github.com/avl/savefile/blob/master/Cargo.toml",
+    "https://github.com/avl/savefile/blob/master/savefile/build.rs",
+    "https://github.com/avl/savefile/blob/master/.github/workflows/rust.yml",
+    "https://github.com/avl/savefile/blob/master/CHANGELOG.md",
+    "https://github.com/avl/savefile/blob/master/savefile-test/fuzz/fuzz_targets/fuzz_target_1.rs",
+    "https://github.com/avl/savefile/issues",
+    "https://github.com/avl/savefile/issues/12",
+    "https://github.com/avl/savefile/issues/25",
+    "https://github.com/avl/savefile/issues/44",
+    "https://github.com/avl/savefile/issues/76",
+    "https://github.com/avl/savefile/issues/125",
+    "https://github.com/avl/savefile/pulls",
+    "https://github.com/avl/savefile/commits/master",
+    "https://github.com/djkoloski/rust_serialization_benchmark",
+    "https://github.com/djkoloski/rust_serialization_benchmark/blob/master/src/bench_savefile.rs",
+    "https://github.com/djkoloski/rust_serialization_benchmark/blob/master/src/datasets/mesh/mod.rs",
+    "https://github.com/djkoloski/rust_serialization_benchmark/blob/master/Cargo.toml",
+    "https://crates.io/api/v1/crates/savefile"
+  ],
+  "confidence": 0.82
+}

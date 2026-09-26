@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/artempyanykh/simdjson-oxcaml",
+  "one_liner": "Native OxCaml simdjson port: reusable tape mode 1.18x RapidJSON geomean; DOM mode 0.69x RapidJSON, 4.9x Yojson.",
+  "what_it_does": "A JSON parser written in OxCaml (Jane Street's OCaml fork with SIMD and unboxed types) that reimplements simdjson's algorithms natively rather than binding to the C++ library. The main API, `Simdjson.parse : string -> (Json.t, parse_error) result`, returns its own DOM type (`Int of int`, `Float of float#`, `Object of assoc array`, `Array of t array`), and a reusable `Simdjson.Parser` amortizes buffer allocation across parses. An experimental `Simdjson.Tape` module produces a simdjson-style packed int64 tape, either owned or borrowed from a reusable `Tape.Parser`. It only parses: there is no serializer and no On-Demand or streaming API.",
+  "how_it_is_fast": "Stage 1 follows simdjson's structural indexing on 64-byte blocks (four SSE 16-byte vectors): nibble lookup tables (PSHUFB) classify bytes, simdjson's backslash-run subtraction trick finds escapes, a carry-less-multiply prefix-XOR builds in-string masks, and the lookup-4 algorithm validates UTF-8. Structural positions stay compressed as one 64-bit mask per 64 input bytes, which stage 2, a tail-recursive descent, walks with count-trailing-zeros while writing either the `Json.t` tree or a tape whose strings share one byte buffer, so the reusable tape path allocates zero OCaml words per parse. Numbers use an 8-digit SWAR batch and a native port of Lemire's fast_float (Clinger fast path plus a 64x64->128 multiply lowered to one x86 `mul`), with a strtod fallback. OxCaml's unboxed `int64#`/`float#`, `[@zero_alloc]` checks and `[@@builtin]` popcnt/ctz intrinsics keep the hot loops free of boxing.",
+  "when_to_use": [
+    "An OCaml service on x86-64 where Yojson or Jsont parsing is the bottleneck. On 100 KB-3 MB documents the DOM mode measured about 4.9x Yojson.Safe and 5.4x Jsont (geomean).",
+    "Hot loops that parse many documents and can consume each result right away. The reusable `Tape.Parser` allocates nothing in steady state and was the fastest OCaml mode at 1,248 MB/s geomean.",
+    "Object- and string-heavy JSON (API logs, catalogs, tweets). Tape mode beat RapidJSON on apache_builds, citm_catalog, gsoc-2018 and twitter.",
+    "Teams already on OxCaml who want SIMD parsing without C++ FFI. The only C code is a tiny linker stub."
+  ],
+  "when_not_to_use": [
+    "Stock OCaml. It needs the OxCaml 5.2.0+ox compiler and Jane Street's `ocaml_simd`, and will not build on upstream OCaml.",
+    "ARM (Apple Silicon, Graviton). The SIMD code is x86 SSE only, there is no runtime CPU dispatch, and there is no AVX2 path yet.",
+    "Float-heavy documents such as GeoJSON or numeric arrays, if you hoped to beat RapidJSON. Tape mode lost to it on canada, marine_ik and numbers. In the DOM path the author measured about 42% of cycles going to GC/promotion on canada.json.",
+    "Cases that need error positions or messages, serialization, lazy On-Demand access, or exact integers beyond 63 bits.",
+    "Untrusted or deeply nested input in production. The parser has no nesting-depth limit, it is a single-author project with 3 stars and no releases, and it has no issue history to learn from."
+  ],
+  "integration": {
+    "form": "module (dune library `simdjson`, built from source; no tags or releases, and the generated opam file still has placeholder homepage and dev-repo URLs, so expect to pin from git)",
+    "dependencies": "ocaml_simd (sse, avx, ppx, sexp sublibraries), janestreet_shims, base, stdlib_upstream_compatible, ppx_expect and ppx_template (preprocess); one C stub file",
+    "min_toolchain": "OxCaml 5.2.0+ox (the setup script pins an OxCaml opam-repository commit), Dune 3.22",
+    "platforms": "x86-64 only. It uses SSE 128-bit vectors with PSHUFB lookups and a carry-less multiply; the exact minimum ISA is not documented. No ARM, and no AVX2 dispatch yet.",
+    "thread_safety": "Not documented. `Parser.t` and `Tape.Parser.t` own mutable buffers that are reused across calls, so use one per domain (inferred from the API). The one-shot `Simdjson.parse` creates its own buffers on every call.",
+    "drop_in_for_baseline": "false. RapidJSON is a C++ library. Within OCaml the result is a new `Json.t` AST, not Yojson's polymorphic variants, and there is no printer."
+  },
+  "gotchas": [
+    "The tape returned by `Tape.Parser.parse` borrows the parser's buffers, in simdjson's `dom::parser` style. The next `parse` on that parser overwrites it. Use `Tape.parse` or `Tape.to_json` if you need to keep the result.",
+    "Integers are 63-bit OCaml ints. Values beyond that but within the int64/uint64 range come back silently as `Float`, which loses precision. Larger integers are rejected as `Invalid_json`.",
+    "Every parse failure is the single `Error Invalid_json`, with no position or category. Unimplemented paths and internal defects raise `Internal_error` instead. Stage 2 is recursive, and the design notes say pathologically nested input can overflow the native stack.",
+    "Tape format limits: strings are capped at 16 MB (24-bit length), string offsets and container end indexes are 32-bit packed fields, and container element counts saturate at 24 bits."
+  ],
+  "pick_this_over_siblings_when": "Pick it only when you must stay in OCaml/OxCaml with no C++ FFI. In the same run C++ simdjson was about 2.7x faster than its best mode and sajson about 1.3x faster. For C/C++, or where bindings are acceptable, simdjson or yyjson is the better choice. simd-json (Rust) and simdjson-go are the equivalent ports for other languages.",
+  "verified_claims_summary": "The author ran one benchmark on 2026-08-15: an i7-12700K pinned to one P-core, with the OxCaml 5.2.0+ox perf profile against C++ parsers built by GCC 15.2.1 in CMake Release under Google Benchmark. On 7 simdjson-data fixtures, the reusable tape mode averaged 1,247.7 MB/s geomean against RapidJSON DOM's 1,059.7 MB/s (about 1.18x) and won 4 of 7. The recommended DOM API reached 729.5 MB/s (about 0.69x RapidJSON), and C++ simdjson reached 3,344.5 MB/s. RapidJSON was run with default parse flags and a fresh Document per iteration, and was built without RAPIDJSON_SSE2/SSE42 or -march flags.",
+  "status_note": "Actively developed by a single author (last commit 2026-08-23) and MIT-licensed. It is usable today by pinning the git repo into an OxCaml switch, but it has no releases and the author describes the tape API as experimental.",
+  "sources_read": [
+    "https://github.com/artempyanykh/simdjson-oxcaml",
+    "https://github.com/artempyanykh/simdjson-oxcaml/blob/main/README.md",
+    "https://github.com/artempyanykh/simdjson-oxcaml/blob/main/docs/parser-benchmark-snapshot-2026-08-15.md",
+    "https://github.com/artempyanykh/simdjson-oxcaml/blob/main/lib/simdjson.mli",
+    "https://github.com/artempyanykh/simdjson-oxcaml/blob/main/lib/parser.mli",
+    "https://github.com/artempyanykh/simdjson-oxcaml/blob/main/lib/parser.ml",
+    "https://github.com/artempyanykh/simdjson-oxcaml/blob/main/lib/tape.mli",
+    "https://github.com/artempyanykh/simdjson-oxcaml/blob/main/lib/scanner.mli",
+    "https://github.com/artempyanykh/simdjson-oxcaml/blob/main/lib/scanner.ml",
+    "https://github.com/artempyanykh/simdjson-oxcaml/blob/main/lib/simd_helpers.ml",
+    "https://github.com/artempyanykh/simdjson-oxcaml/blob/main/lib/numeric_helpers.ml",
+    "https://github.com/artempyanykh/simdjson-oxcaml/blob/main/lib/number_parsing.ml",
+    "https://github.com/artempyanykh/simdjson-oxcaml/blob/main/lib/decimal_float.ml",
+    "https://github.com/artempyanykh/simdjson-oxcaml/blob/main/lib/utf8_validator.ml",
+    "https://github.com/artempyanykh/simdjson-oxcaml/blob/main/lib/string_parsing.ml",
+    "https://github.com/artempyanykh/simdjson-oxcaml/blob/main/lib/parser_stubs.c",
+    "https://github.com/artempyanykh/simdjson-oxcaml/blob/main/lib/dune",
+    "https://github.com/artempyanykh/simdjson-oxcaml/blob/main/dune-project",
+    "https://github.com/artempyanykh/simdjson-oxcaml/blob/main/simdjson.opam",
+    "https://github.com/artempyanykh/simdjson-oxcaml/blob/main/.gitmodules",
+    "https://github.com/artempyanykh/simdjson-oxcaml/blob/main/AGENTS.md",
+    "https://github.com/artempyanykh/simdjson-oxcaml/blob/main/bench/cpp/parser_cpp_bench.cpp",
+    "https://github.com/artempyanykh/simdjson-oxcaml/blob/main/bench/cpp/CMakeLists.txt",
+    "https://github.com/artempyanykh/simdjson-oxcaml/blob/main/bench/parser_ocaml_bench.ml",
+    "https://github.com/artempyanykh/simdjson-oxcaml/blob/main/docs/parser-gc-investigation.md",
+    "https://github.com/artempyanykh/simdjson-oxcaml/blob/main/docs/things-to-try.md",
+    "https://github.com/artempyanykh/simdjson-oxcaml/blob/main/prd/tape-parser.md",
+    "https://github.com/artempyanykh/simdjson-oxcaml/blob/main/prd/tape-performance-investigation.md",
+    "https://github.com/artempyanykh/simdjson-oxcaml/blob/main/test/dom_unit_tests.ml",
+    "https://github.com/artempyanykh/simdjson-oxcaml/blob/main/test/conformance_jsonchecker.ml",
+    "https://github.com/artempyanykh/simdjson-oxcaml/issues",
+    "https://github.com/artempyanykh/simdjson-oxcaml/commits/main"
+  ],
+  "confidence": 0.85
+}

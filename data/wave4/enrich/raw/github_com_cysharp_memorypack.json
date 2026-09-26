@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/cysharp/memorypack",
+  "one_liner": "C# source-generated binary serializer that copies unmanaged data raw; ~1.7x faster than MessagePack-CSharp on objects, 40x+ on struct arrays.",
+  "what_it_does": "MemoryPack is a .NET/Unity binary serializer for plain C# classes, structs and records. You mark a type [MemoryPackable] and partial, and a Roslyn source generator writes its formatter at compile time. The API has the same shape as MessagePack-CSharp: MemoryPackSerializer.Serialize writes to byte[], IBufferWriter<byte> or Stream, and Deserialize reads from ReadOnlySpan<byte>, ReadOnlySequence<byte> or Stream. There is also a ref overload that overwrites an existing instance. The wire format is its own and is not compatible with MessagePack or Protobuf.",
+  "how_it_is_fast": "The format uses 'zero encoding'. It writes no field names or tags, members go in declaration order, ints are fixed-width little-endian (no varint), and the object header is a single member-count byte. Unmanaged structs and arrays of them are written with Unsafe.WriteUnaligned or one Unsafe.CopyBlockUnaligned (a memcpy) after a 4-byte length, which is why struct arrays are so much faster. Formatters are generated at compile time by the source generator (IMemoryPackable<T> with C# 11 static abstract members on net7.0+), with no reflection or IL.Emit. The writer is a ref struct that holds a `ref byte` into the destination span. The byte[] path reuses a [ThreadStatic] pinned ReusableLinkedArrayBufferWriter and allocates the result with GC.AllocateUninitializedArray. An optional UTF-16 string mode copies chars directly with no transcoding.",
+  "when_to_use": [
+    ".NET-to-.NET traffic where both ends compile the same C# types: MagicOnion RPC, Redis/cache values, ASP.NET Core bodies through MemoryPack.AspNetCoreMvcFormatter, or local save files.",
+    "Payloads dominated by blittable structs or large unmanaged arrays (Vector3[], matrices, numeric buffers, game state), where serialization becomes a memcpy.",
+    "Unity 2022.3.12f1+ projects, including IL2CPP, that need reflection-free serialization. The README reports 3-10x faster than JsonUtility.",
+    "Allocation-sensitive hot paths that write straight into PipeWriter/IBufferWriter<byte>, or that reuse objects and lists through Deserialize(ref value).",
+    "C# servers talking to browser clients, using the generated TypeScript serializer instead of JSON."
+  ],
+  "when_not_to_use": [
+    "Cross-language or public interchange (other than the generated TypeScript). The format is not self-describing, decoding needs the C# type, and there is no IDL, so use Protobuf or MessagePack there.",
+    "Size-sensitive payloads full of small integers. Ints are always 4 bytes, against 1-5 bytes with varint in MessagePack or Protobuf, so MemoryPack payloads can be larger. The README suggests LZ4/Zstd/Brotli compression.",
+    "Schemas that must evolve freely. The default mode allows only appending members: no deletes, reorders or type changes. Full version tolerance needs GenerateType.VersionTolerant, which the README says serializes slower and gives slightly larger payloads.",
+    "Big-endian targets. The reference implementation assumes little-endian and does not byte-swap.",
+    "Native AOT deployments. Issues #382 and #414 report 'Failed to create generic virtual method implementation' crashes, and both were closed by the stale bot without a fix in MemoryPack."
+  ],
+  "integration": {
+    "form": "shared lib (NuGet: MemoryPack = MemoryPack.Core runtime + MemoryPack.Generator Roslyn source generator; optional MemoryPack.Streaming, MemoryPack.AspNetCoreMvcFormatter, MemoryPack.UnityShims; Unity via NuGetForUnity plus a git-URL package)",
+    "dependencies": "none on net7.0/net8.0; the netstandard2.1 target pulls System.Runtime.CompilerServices.Unsafe 6.0.0 and System.Collections.Immutable 6.0.0",
+    "min_toolchain": ".NET Standard 2.1 (.NET 5/6) minimum, .NET 7+ recommended (targets net7.0, net8.0, netstandard2.1); Roslyn 4.3.1+ (VS 2022 17.3 / .NET SDK 6.0.401); Unity 2022.3.12f1+",
+    "platforms": "little-endian only (x86-64, arm64); .NET, Unity (IL2CPP included); Native AOT has open-ended crash reports",
+    "thread_safety": "The static MemoryPackSerializer keeps per-thread buffers and state in [ThreadStatic] fields, so concurrent calls from different threads are the intended use. Open issue #458 reports a NullReferenceException on parallel Deserialize, caused by a race in MemoryPackFormatterProvider.Register: Check<T>.registered is set before Cache<T>.formatter.",
+    "drop_in_for_baseline": "partial — same attribute-plus-static-Serialize/Deserialize shape as MessagePack-CSharp, but types must be declared partial with [MemoryPackable], the wire format is incompatible with MessagePack/Protobuf (stored data must be migrated), and non-C# consumers are lost"
+  },
+  "gotchas": [
+    "Member declaration order is the wire format. Reordering, deleting or retyping a member in the default mode breaks old data, and nothing on the wire detects it. The README recommends checking the generator's serialization-info output in CI.",
+    "Unmanaged structs are dumped as raw memory, padding included, and cannot take custom formatters (#440). Types with StructLayout.Auto, such as DateTimeOffset and ValueTuple, are not binary-compatible between .NET 7+ and Unity.",
+    "The netstandard2.1 and net7.0 builds do not mix. A MemoryPackable type compiled for netstandard2.1 and used from net7.0 throws TypeLoadException, so libraries must multi-target both.",
+    "Some collection formatters write BCL private fields through Unsafe.As view types (List<T>, Stack<T>, BitArray). Open issue #460 flags this as fragile on future runtimes."
+  ],
+  "pick_this_over_siblings_when": "Nino and HyperSerializer both report beating MemoryPack in their own READMEs (Nino 2.44x/1.90x on SimpleClass; HyperSerializer 2.14x round-trip). Pick MemoryPack for its broader feature set (unions, version-tolerant and circular-reference modes, TypeScript generation, ASP.NET Core formatter, Unity shims) and larger user base. Pick Nerdbank.MessagePack or MessagePack-CSharp when you need MessagePack wire compatibility, and Bebop when you need a cross-language schema.",
+  "verified_claims_summary": "The README chart was run with BenchmarkDotNet on .NET 7 and a Ryzen 9 5950X, serializing into a reused ArrayBufferWriter; build flags are not stated. On the 47-field nested JsonResponseModel, MemoryPack serializes/deserializes in 13,176/24,540 ns against 22,961/39,420 ns for MessagePack-CSharp (~1.7x/1.6x) and 73,028/51,640 ns for protobuf-net (~5.5x/2.1x). On the panel labelled Vector3[10000] it takes 231/316 ns against MessagePack's 9,887/26,335 ns (~43x/83x). The checked-in SerializerTestBase builds 1,000 Vector3 elements, not 10,000, and the current Program.cs job uses 1 warmup and 1 iteration.",
+  "status_note": "MIT with 4,739 stars and a stable NuGet package. The last library release is 1.21.4 (Feb 2025), and every commit since (latest 2026-07-08) is CI/chore work, so treat it as maintenance mode. Bugs such as #458 remain open, and the Native AOT crash reports were closed as stale without a fix.",
+  "sources_read": [
+    "https://github.com/Cysharp/MemoryPack",
+    "https://github.com/Cysharp/MemoryPack#readme",
+    "https://user-images.githubusercontent.com/46207/200979655-63ed38ae-dad2-4ca0-bbb7-9e0aa98914af.png",
+    "https://github.com/Cysharp/MemoryPack/blob/main/src/MemoryPack.Core/MemoryPack.Core.csproj",
+    "https://github.com/Cysharp/MemoryPack/blob/main/src/MemoryPack.Core/MemoryPackWriter.cs",
+    "https://github.com/Cysharp/MemoryPack/blob/main/src/MemoryPack.Core/MemoryPackReader.cs",
+    "https://github.com/Cysharp/MemoryPack/blob/main/src/MemoryPack.Core/Formatters/UnmanagedFormatter.cs",
+    "https://github.com/Cysharp/MemoryPack/blob/main/src/MemoryPack.Core/Formatters/ArrayFormatters.cs",
+    "https://github.com/Cysharp/MemoryPack/blob/main/src/MemoryPack.Core/MemoryPackSerializer.Serialize.cs",
+    "https://github.com/Cysharp/MemoryPack/blob/main/src/MemoryPack.Core/MemoryPackSerializer.Deserialize.cs",
+    "https://github.com/Cysharp/MemoryPack/blob/main/src/MemoryPack.Core/MemoryPackFormatterProvider.cs",
+    "https://github.com/Cysharp/MemoryPack/blob/main/src/MemoryPack.Generator/MemoryPack.Generator.csproj",
+    "https://github.com/Cysharp/MemoryPack/blob/main/sandbox/Benchmark/Benchmark.csproj",
+    "https://github.com/Cysharp/MemoryPack/blob/main/sandbox/Benchmark/Program.cs",
+    "https://github.com/Cysharp/MemoryPack/blob/main/sandbox/Benchmark/Benchmarks/SerializeTest.cs",
+    "https://github.com/Cysharp/MemoryPack/blob/main/sandbox/Benchmark/Benchmarks/DeserializeTest.cs",
+    "https://github.com/Cysharp/MemoryPack/blob/main/sandbox/Benchmark/Benchmarks/SerializerTestBase.cs",
+    "https://github.com/Cysharp/MemoryPack/blob/main/sandbox/Benchmark/Models/Vector3.cs",
+    "https://github.com/Cysharp/MemoryPack/blob/main/sandbox/Benchmark/Models/BinaryPackModels/JsonResponseModel.cs",
+    "https://github.com/Cysharp/MemoryPack/releases",
+    "https://github.com/Cysharp/MemoryPack/commits/main",
+    "https://github.com/Cysharp/MemoryPack/issues",
+    "https://github.com/Cysharp/MemoryPack/issues/460",
+    "https://github.com/Cysharp/MemoryPack/issues/458",
+    "https://github.com/Cysharp/MemoryPack/issues/452",
+    "https://github.com/Cysharp/MemoryPack/issues/440",
+    "https://github.com/Cysharp/MemoryPack/issues/401",
+    "https://github.com/Cysharp/MemoryPack/issues/414",
+    "https://github.com/Cysharp/MemoryPack/issues/382"
+  ],
+  "confidence": 0.8
+}
