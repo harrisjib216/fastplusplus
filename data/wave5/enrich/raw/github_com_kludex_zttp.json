@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/kludex/zttp",
+  "one_liner": "Sans-IO HTTP/1.1 (plus HTTP/2, HTTP/3) parser for Python with a Zig core; out-parses httptools/llhttp on 13 of 14 microbenchmarks.",
+  "what_it_does": "A CPython extension that parses and serializes HTTP without doing any I/O. You feed bytes with receive_event/receive_data and pull Request/Response/Data/EndOfMessage events (or the NEED_DATA sentinel) with next_event. To write, you call send_response/send_data/end_message and drain data_to_send(). The API is h11-shaped, not httptools-shaped: there is no protocol object with on_url/on_header/on_body callbacks, so moving off httptools means rewriting the glue. The same event API covers HTTP/2 (events carry stream_id; you send through Stream handles) and experimental HTTP/3 on a from-scratch QUIC stack, selected with protocol=.",
+  "how_it_is_fast": "The HTTP/1.1 hot loops scan with Zig @Vector blocks. LF search uses std.mem.findScalarPos, which checks two SIMD vectors per iteration. Request-target and field-value checks skip whole clean blocks with lane compares, then fall back to comptime-built 256-entry character-class tables. Parse results are slices into one reused receive buffer that is compacted only past 64 KiB, and an incremental head scanner resumes at the first new byte when a head arrives in fragments. At the Python edge, headers stay in one packed HeaderBlock until you access them (no bytes object or tuple per header), each body span becomes a single Data event, and large Content-Length bodies can keep the Python-owned input span instead of being copied.",
+  "when_to_use": [
+    "A Python ASGI/HTTP server or proxy that drives httptools or h11 today and wants a pull-based sans-IO parser at native speed. The author's Uvicorn-shaped benchmark, which builds equivalent ASGI scopes, reports 1.16x-1.52x over httptools.",
+    "Request handling that reads only a few headers through get()/getall(): the lazy HeaderBlock never materializes the rest as Python objects.",
+    "Bodies arriving in many TCP-segment-sized pieces. The 16 KB upload fed in 1448-byte pieces is its largest published win (2.06x on the docs site, 2.55x in the repo's newer table).",
+    "One Python event API for both HTTP/1.1 and HTTP/2 (its own benchmark puts it 6.6x-50x ahead of the pure-Python h2), on Linux (glibc/musl, x86_64/aarch64), macOS or Windows (amd64/arm64) wheels.",
+    "Free-threaded CPython 3.14t/3.15t: wheels are built for those ABIs and the module declares it does not need the GIL."
+  ],
+  "when_not_to_use": [
+    "Production services today: the README says it is experimental and not ready for production, the API may change at any time, the PyPI classifier is Alpha, and versions are still 0.0.x.",
+    "Heavily pipelined HTTP/1.1 (TechEmpower-style 16x pipelining): the published docs page has it 6% slower than httptools there. The repo's newer, not yet deployed table claims 1.25x faster.",
+    "Deployments that need to tune DoS limits: HTTP/1.1 and HTTP/2 limits (16 KiB line, 100 headers, 64 KiB header block, 8 MiB buffer) are hard-coded and cannot be set from Python (issue #49 is open).",
+    "HTTP/3 clients on untrusted networks: the QUIC/TLS client does no certificate chain or hostname verification (issue #144 is open), and THREAT_MODEL.md calls HTTP/3 the least battle-tested path.",
+    "Peers that need lenient parsing (bare LF, obs-fold, odd Content-Length forms), PyPy, or any consumer outside CPython: strictness toggles are not exposed to Python, and the only documented distribution is the CPython wheel/sdist."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "typing-extensions>=4.6 at runtime (despite the README's 'No dependencies'); a source build pulls ziglang==0.16.0 and hatch-ziglang as isolated build requirements, so no system Zig is needed",
+    "min_toolchain": "CPython 3.10-3.15, including free-threaded 3.14t/3.15t; source builds use the pinned Zig 0.16.0",
+    "platforms": "Wheels for manylinux_2_28 and musllinux_1_2 on x86_64 and aarch64, macOS 11+ on arm64 and x86_64, and Windows amd64 and arm64 (32-bit i686 skipped); the SIMD width comes from std.simd.suggestVectorLength for each target",
+    "thread_safety": "Every Connection method runs inside a CPython critical section on that connection object; HTTP/3 session-ticket paths also lock a module-level object. Concurrent calls on a shared connection are therefore serialized, and a test exercises this. The module declares Py_MOD_GIL_NOT_USED.",
+    "drop_in_for_baseline": "partial — it fills the same role as httptools in a Python server, but the interface is different: you pull events instead of passing a protocol object with on_* callbacks. Headers come back as a lazy HeaderBlock, and you must call start_next_cycle() between keep-alive messages, so the integration layer has to be rewritten."
+  },
+  "gotchas": [
+    "The HTTP/1.1 microbenchmark times each parser's default API, and that favors zttp. zttp's timed loop never materializes headers and never reads Data payloads. The httptools harness appends a (name, value) tuple for every header and joins url and body with Python `+=`. That tilts the header-heavy and fragmented-body rows, so the Uvicorn-shaped scope benchmark (1.16x-1.52x) is the fairer comparison.",
+    "Strict by default, and Python cannot relax it: bare LF, obs-fold, lenient Content-Length, non-1*HEXDIG chunk sizes, missing or duplicate Host, and CL/TE conflicts all raise RemoteProtocolError, and that poisons the connection for good. Legacy clients that other parsers tolerate will be rejected.",
+    "zttp has no tunnel awareness. After Upgrade/CONNECT/101 you must stop feeding bytes as HTTP/1.1 and must not call start_next_cycle(); THREAT_MODEL.md calls this the highest-risk integration point. HTTP/1.0 keep-alive and chunked policy, timeouts, and connection caps are also left to the host. Parsing a response on a connection that never sent the request desyncs HEAD/1xx/204/304 framing.",
+    "Open bug #282 (2026-09-19): if an allocation fails while flushing HTTP/2 DATA, a later flush resends bytes that were already emitted and debits the flow-control window twice."
+  ],
+  "pick_this_over_siblings_when": "The catalogued siblings (iohttpparser against llhttp; picohttpparser forks, httparse, hparse and http.c3l against picohttpparser) are native C/Rust/Zig/C3 parsers meant to be embedded in native code. Pick zttp only when the consumer is CPython and you want a pull-based sans-IO parser that also serializes messages and covers HTTP/2. For native servers, iohttpparser (llhttp baseline) or hparse (Zig) fit better.",
+  "verified_claims_summary": "The author's docs site ran a Python harness over 14 HTTP/1.1 request and response shapes (from wrk, TFB, httparse, pico/llhttp, browser, ingress and upload fixtures). It compared zttp's ReleaseSafe Zig core with httptools 0.8.0 (llhttp) on CPython 3.14 and an unspecified Apple Silicon machine; the page gives no Zig version, and the build pins 0.16.0. zttp parsed 1.04x-2.06x more messages/s on 13 workloads and ran 0.94x on 16x-pipelined TFB plaintext, with about 5% run-to-run spread. The repo's newer table (CPython 3.14.3, zttp 0.0.27.dev38, median of 15 interleaved batches), not yet deployed to the site, reports 1.01x-2.55x on all 14.",
+  "status_note": "Actively developed (v0.0.34 on 2026-09-19, near-daily commits, 57 stars), BSD-3-Clause, pip-installable with prebuilt wheels, but self-described as experimental/Alpha with an unstable API.",
+  "sources_read": [
+    "https://github.com/Kludex/zttp",
+    "https://github.com/Kludex/zttp/blob/main/README.md",
+    "https://zttp.marcelotryle.com/reference/performance/",
+    "https://github.com/Kludex/zttp/blob/main/docs/reference/performance.md",
+    "https://github.com/Kludex/zttp/blob/main/benchmarks/http1.py",
+    "https://github.com/Kludex/zttp/blob/main/pyproject.toml",
+    "https://github.com/Kludex/zttp/blob/main/src/core/scanner.zig",
+    "https://github.com/Kludex/zttp/blob/main/src/core/tables.zig",
+    "https://github.com/Kludex/zttp/blob/main/src/core/h1/reader.zig",
+    "https://github.com/Kludex/zttp/blob/main/src/core/h1/headers.zig",
+    "https://github.com/Kludex/zttp/blob/main/src/python/connection_obj.zig",
+    "https://github.com/Kludex/zttp/blob/main/src/python/module.zig",
+    "https://github.com/Kludex/zttp/blob/main/zttp/config.py",
+    "https://github.com/Kludex/zttp/blob/main/THREAT_MODEL.md",
+    "https://github.com/Kludex/zttp/blob/main/docs/architecture.md",
+    "https://github.com/Kludex/zttp/blob/main/docs/usage/install.md",
+    "https://github.com/Kludex/zttp/blob/main/docs/usage/http1.md",
+    "https://github.com/Kludex/zttp/blob/main/docs/reference/api.md",
+    "https://github.com/Kludex/zttp/blob/main/tests/test_free_threading.py",
+    "https://github.com/Kludex/zttp/issues",
+    "https://github.com/Kludex/zttp/issues/49",
+    "https://github.com/Kludex/zttp/issues/144",
+    "https://github.com/Kludex/zttp/issues/195",
+    "https://github.com/Kludex/zttp/issues/282",
+    "https://github.com/Kludex/zttp/commits/main",
+    "https://github.com/Kludex/zttp/releases",
+    "https://pypi.org/pypi/zttp/json"
+  ],
+  "confidence": 0.72
+}
