@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/ameetesh-a/vortexdb",
+  "one_liner": "Hobby C++17 WiscKey-style key-value store with nested sub-databases; beats LevelDB only on small-value new-key inserts.",
+  "what_it_does": "A single-author, Windows-oriented embedded key-value engine. Values go to an append-only value log (VLog); only keys and 16-byte value pointers live in a std::map memtable and in SSTables with a sparse index. Keys containing '/' are routed into child databases (\"sub-vortices\"), each a full engine instance with its own files. The API is one VortexDB class (put/get/del, get_range, get_prefix, compact, save_state/load_state) over std::string keys and values, plus an interactive shell and a plain-text TCP server on port 8080; it is not LevelDB-API compatible.",
+  "how_it_is_fast": "It uses WiscKey key/value separation: each put appends the entry to a 64 KB user-space buffer in front of 5 MB value-log segments and inserts a pointer into an in-memory std::map, so new-key ingest is buffered sequential appends with no compaction work during the run. A single global cuckoo filter (4 slots per bucket, 8-bit fingerprints) rejects most lookups of absent keys before the memtable or any SSTable is searched. Writes are pushed to the OS only with ofstream::flush; there is no fsync anywhere in the source.",
+  "when_to_use": [
+    "Reading or teaching a compact (about 2,000 lines) WiscKey-style engine: value log, sparse-index SSTables, cuckoo filter, heap-based merging iterator, stop-the-world compaction.",
+    "Windows desktop prototypes that want a filesystem-like hierarchical key namespace (root/users/configs) with a text TCP protocol and shell, where losing data is acceptable.",
+    "One-shot bulk loads of tens of thousands of new small keys (~8-byte keys, ~10-byte values) in one process, the only case where the author measured a win (~550k vs ~188k ops/s for LevelDB), and only if reads afterwards don't matter."
+  ],
+  "when_not_to_use": [
+    "Read-heavy workloads: in the author's small-value test, read hits took 0.063 ms vs LevelDB's 0.0008 ms and range scans 6.58 ms vs 0.17 ms.",
+    "Values of ~1 KB or more, which is where WiscKey is supposed to help: it lost every operation to LevelDB, including new writes (45,709 vs 95,153 ops/s).",
+    "Update-heavy workloads: overwriting a key that is still in the memtable forces a VLog buffer flush plus a VLog read, and small-value updates ran at 49,465 ops/s vs LevelDB's 188,215.",
+    "Anything that needs durability or integrity. There is no fsync. A CRC32 is written with every entry but never checked on read. compact() deletes the old VLog segments before renaming the new one. The memtable index (.idx) is saved only on flush or shutdown, and VLog replay runs only when the loaded index is empty.",
+    "Linux/macOS, concurrent readers, or production use: the server and shell need Winsock2, and the repo has no build system, tests, releases or filed issues (3 stars, one author)."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none for the engine (C++17 standard library incl. std::filesystem and std::shared_mutex); ws2_32 (Winsock2) for server.cpp/main.cpp",
+    "min_toolchain": "C++17; README names MSVC (Visual Studio 2019+) or MinGW g++ -std=c++17",
+    "platforms": "Windows (only documented platform; server is Winsock2). The engine files use only standard headers, but no non-Windows build is documented.",
+    "thread_safety": "One std::shared_mutex per database: writes take it exclusively, but get() holds only the shared lock while it flushes the writer, reopens file handles and edits the LRU cache, so concurrent readers race.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The cuckoo filter can give false negatives, which makes get() report an existing key as missing. It is fixed at 10,000 buckets x 4 slots and is never resized. Every put, updates included, adds another fingerprint. A fingerprint is dropped after 500 failed kicks, and the alternate-bucket formula ((i ^ h(fp)) % 10000) is not reversible for a non-power-of-two table. del() of a key that was never stored can also erase a colliding key's fingerprint. The benchmark used only 10,000 keys.",
+    "Every memtable read hit calls invalidate() on its VLog segment. That closes and reopens the file handle and walks the 2,000-entry LRU cache to evict that file's entries, which is why hot reads (0.059 ms) are barely faster than cold ones. Each range or prefix scan also deletes the writer and clears the whole cache.",
+    "get() returns the string \"ERROR: Key not found.\" instead of a status. Any key containing '/' is treated as a path and auto-creates a child database, so such keys can't be stored as plain keys. All files go into the process's current working directory as raw struct/size_t dumps.",
+    "MEMTABLE_LIMIT is a hard-coded const of 100,000, so the 1k and 10k benchmark runs needed source edits. compact() names each 100k-key SSTable chunk with a one-second timestamp, so two chunks written in the same second overwrite each other. The TCP server parses each 1,024-byte recv() as one command, so larger SETs get split. SAVE and LOAD, which copy and delete files, are served with no authentication on 0.0.0.0:8080."
+  ],
+  "pick_this_over_siblings_when": "Only for learning or a Windows toy project, since it is the only one of these with a nested sub-database namespace. For faster writes behind LevelDB's own include/ API pick HyperLevelDB, and for production WiscKey-style key/value separation pick Titan (a C++ RocksDB plugin) or Badger (Go).",
+  "verified_claims_summary": "The author ran an unpublished C++ chrono harness with 10,000 keys on an i5-12450HX laptop (Windows 11, NVMe, single-channel RAM) against LevelDB v1.23 and SQLite v3.51.3 (synchronous=OFF, in-memory journal), with the benchmark's compiler and flags not stated. VortexDB won only small-value (~8 B key, ~10 B value) new-key inserts, ~550k vs ~188k ops/s (~2.9x; ~536k vs ~186k with a 100k memtable), and lost updates, read hits, read misses and range scans to LevelDB, plus every operation with 1 KB values.",
+  "status_note": "The code is from an April 2026 burst of commits (the only later one, in May 2026, changed the license), with no tests, build files, releases or issues, and it is AGPL-3.0 even though the README badge and footer still say MIT, so vendoring its ~2,000 lines brings AGPL obligations.",
+  "sources_read": [
+    "https://github.com/AmeeteSh-A/VortexDB",
+    "https://github.com/AmeeteSh-A/VortexDB#-benchmarking--performance-analysis",
+    "https://github.com/AmeeteSh-A/VortexDB/blob/main/benchmark.md",
+    "https://github.com/AmeeteSh-A/VortexDB/blob/main/LICENSE",
+    "https://github.com/AmeeteSh-A/VortexDB/blob/main/src/vortex.h",
+    "https://github.com/AmeeteSh-A/VortexDB/blob/main/src/vortex.cpp",
+    "https://github.com/AmeeteSh-A/VortexDB/blob/main/src/vlog.h",
+    "https://github.com/AmeeteSh-A/VortexDB/blob/main/src/vlog.cpp",
+    "https://github.com/AmeeteSh-A/VortexDB/blob/main/src/sstable.h",
+    "https://github.com/AmeeteSh-A/VortexDB/blob/main/src/sstable.cpp",
+    "https://github.com/AmeeteSh-A/VortexDB/blob/main/src/cuckoo.h",
+    "https://github.com/AmeeteSh-A/VortexDB/blob/main/src/cuckoo.cpp",
+    "https://github.com/AmeeteSh-A/VortexDB/blob/main/src/manifest.h",
+    "https://github.com/AmeeteSh-A/VortexDB/blob/main/src/manifest.cpp",
+    "https://github.com/AmeeteSh-A/VortexDB/blob/main/src/server.h",
+    "https://github.com/AmeeteSh-A/VortexDB/blob/main/src/server.cpp",
+    "https://github.com/AmeeteSh-A/VortexDB/blob/main/src/main.cpp",
+    "https://github.com/AmeeteSh-A/VortexDB/commits/main",
+    "https://github.com/AmeeteSh-A/VortexDB/issues?q=is%3Aissue",
+    "https://github.com/AmeeteSh-A/VortexDB/releases",
+    "https://hn.algolia.com/api/v1/search?query=VortexDB&tags=story",
+    "https://github.com/dgraph-io/badger",
+    "https://github.com/tikv/titan",
+    "https://github.com/rescrv/HyperLevelDB"
+  ],
+  "confidence": 0.85
+}
