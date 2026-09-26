@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/unum-cloud/ustore",
+  "one_liner": "Closed-source NVMe KV engine (UDisk) behind UStore's open C API; vendor numbers show 2-7x RocksDB throughput.",
+  "what_it_does": "UStore (formerly UKV) is an Apache-2.0 C99 interface, with C++17, Python, Go and Java SDKs and an Arrow Flight server, that stores blob, document, graph and vector collections on interchangeable engines: UCSet (in-memory), LevelDB, RocksDB and UDisk. The API is not RocksDB's: each call takes one struct of strided key/value arrays, keys are signed 64-bit integers, values are capped at 4 GB, and output memory comes from arenas UStore owns. The speedup in this entry belongs to UDisk, a persistent transactional engine that Unum ships only as a prebuilt static library; the open repo holds the adapters and bindings, not UDisk itself.",
+  "how_it_is_fast": "Unum describes UDisk as a modified LSM tree built for NVMe block devices, with io_uring for partial kernel bypass, SPDK for full bypass, a custom internal filesystem and optional CUDA offload of background compactions. Its config offers posix, 'pulling' and 'polling' IO mechanisms with queue depths up to 4096, native fixed-size integer keys and optional fixed-size values. Batch reads go in as a group so the engine can reorder them and issue them asynchronously, which is where the widest gap over RocksDB's MultiGet shows up; none of this can be checked, because the source is closed.",
+  "when_to_use": [
+    "You have, or can negotiate, a UDisk binary from Unum and run Linux servers with several NVMe drives, where batched random reads and upserts of values around 1 KB dominate.",
+    "Keys are naturally 64-bit integers (row IDs, graph vertex IDs) and you can send batches of hundreds of keys per call instead of single Gets; batch read is the vendor's largest win (650K vs 4.5M ops/s).",
+    "You want one transactional C API over blobs, documents and graphs, with NetworkX- and Pandas-style Python front ends. You can start on the open UCSet or RocksDB engines and swap in UDisk later without changing application code."
+  ],
+  "when_not_to_use": [
+    "You need an engine you can build, audit or patch: UDisk is binary-only, and UStore's own engine table marks it as not open source.",
+    "Range-select-heavy workloads: in the vendor's own 10 TB run RocksDB did 5M ops/s against 2M for UDisk (then called UnumDB), and the README table leaves that row out.",
+    "Non-Linux targets, or code that relies on RocksDB features such as string keys with custom comparators, prefix seeks and column-family options. UDisk is Linux-only and links liburing, libnuma and libexplain.",
+    "You need durable writes by default. UStore turns durability off unless you pass ustore_option_write_flush_k, and its RocksDB adapter sets disableWAL whenever that flag is missing.",
+    "Production systems that need a live upstream: main was last committed 2023-08-18, and open bugs include the README's rocksdb.DataBase('/path') example failing to open (#434)."
+  ],
+  "integration": {
+    "form": "static lib (CMake builds ustore_embedded_<engine> static libraries; UDisk is a prebuilt static archive passed in through USTORE_ENGINE_UDISK_PATH)",
+    "dependencies": "UStore: Apache Arrow (plus Flight and Parquet), simdjson, yyjson, mongo-c-driver (BSON), PCRE2, fmt, mpack, nlohmann/json; optional jemalloc, oneTBB, Boost, OpenSSL. UDisk adds liburing, libnuma, libexplain, libdl and pthread.",
+    "min_toolchain": "C++17 and CMake 3.16+ (C99 for the C headers); no minimum compiler version documented",
+    "platforms": "UDisk: Linux only. UStore: Linux; the roadmap lists Arm and macOS builds as done. x86 builds hard-code -msse4.2 -mavx2 in CMake. PyPI 'ukv' 0.12.1 ships only manylinux x86_64 wheels for CPython 3.9 and 3.10.",
+    "thread_safety": "Per db.h, a database handle can be shared across threads between open and free. Transaction handles are not thread-safe and use optimistic concurrency control, and only one process may open an embedded database directory. UDisk caps concurrent accessor threads with its concurrency_limit setting.",
+    "drop_in_for_baseline": "partial — UStore can wrap RocksDB itself (as an OptimisticTransactionDB) behind its own API. Moving to UDisk still means adopting the ustore_* C API with integer keys; there is no RocksDB-compatible API and no support for RocksDB options files."
+  },
+  "gotchas": [
+    "The December 2022 table matches Unum's September 2022 10 TB post row for row except Batch Upsert. The post gives UDisk 117K ops/s on CPU and 182K with a GPU, not 260K, so no published run backs the ~4.6x upsert figure. The table also leaves out Initialization (603K vs 60M) and Range Select, where RocksDB won.",
+    "The setup favored UDisk. In the post each engine got 8 SSD partitions, but RocksDB can take at most 4 db_paths and ingested SSTs land on the first disk. The UCSB RocksDB adapter runs with the WAL disabled. In the earlier single-threaded 1 TB run the gaps were much smaller: random reads 175.7K vs 160.7K (~1.1x), batch insert 813K vs 690K (~1.2x).",
+    "Reproduction is blocked even with a binary. UCSB's cmake/ustore.cmake clones a 'main-dev' branch that no longer exists and passes -DUSTORE_ENGINE_NAME_UDISK_PATH, while UStore's CMake reads USTORE_ENGINE_UDISK_PATH. UCSB also has no license, and its committed RocksDB 10TB.cfg says 7.2.9 while the post says 6.29.3.",
+    "The PyPI package is 'ukv' (imported as ustore.*), not 'ustore'; issue #383 shows users confused by the ukv/ustore/ucset naming. Per #434, opening RocksDB works only when you pass a JSON config with create_if_missing, not a bare path."
+  ],
+  "pick_this_over_siblings_when": "Pick UDisk only if you have a commercial path to the binary and a batch-heavy, integer-keyed workload on Linux machines with several NVMe drives; for an engine you can build and audit, SplinterDB (6-10x faster inserts and 2-2.6x faster point queries than RocksDB), KVell or F2 (FASTER) have open code and better evidence. UStore's open parts only beat them if you want its multi-modal API over RocksDB or UCSet, not for speed.",
+  "verified_claims_summary": "These are vendor-run UCSB numbers: apart from Batch Upsert, the README rows match Unum's September 2022 10 TB run of RocksDB 6.29.3 against UDisk (then 'UnumDB'), with 8-byte integer keys, 1 KB values, compression off, no flushing, 64 client threads and 256-key batches on an AMD Threadripper PRO 3995WX with 1 TB RAM, 8x Samsung PM1733 NVMe and Ubuntu 22.04 (kernel 5.15, ext4); no compiler is stated, and the README table gives no setup at all. Under those conditions batch reads ran ~6.9x and point reads ~2.4x faster, scans tied, and RocksDB won range selects ~2.5x.",
+  "status_note": "Abandoned: main (the only branch) was last committed 2023-08-18 at v0.13.12, and neither UStore nor the placeholder UDisk repo links a public UDisk download, so the Apache-2.0 bindings still work with RocksDB, LevelDB and UCSet but the engine this entry measures is out of reach.",
+  "sources_read": [
+    "https://github.com/unum-cloud/UStore",
+    "https://github.com/unum-cloud/UStore/blob/main/README.md",
+    "https://github.com/unum-cloud/UStore/blob/main/benchmarks/README.md",
+    "https://github.com/unum-cloud/UStore/blob/main/CMakeLists.txt",
+    "https://github.com/unum-cloud/UStore/blob/main/VERSION",
+    "https://github.com/unum-cloud/UStore/blob/main/CHANGELOG.md",
+    "https://github.com/unum-cloud/UStore/blob/main/src/README.md",
+    "https://github.com/unum-cloud/UStore/blob/main/src/engine_rocksdb.cpp",
+    "https://github.com/unum-cloud/UStore/blob/main/docs/related.md",
+    "https://github.com/unum-cloud/UStore/blob/main/docs/architecture.rst",
+    "https://github.com/unum-cloud/UStore/blob/main/include/ustore/db.h",
+    "https://github.com/unum-cloud/UStore/blob/main/include/ustore/README.md",
+    "https://github.com/unum-cloud/UStore/commits/main",
+    "https://github.com/unum-cloud/UStore/releases",
+    "https://github.com/unum-cloud/UStore/issues",
+    "https://github.com/unum-cloud/UStore/issues/434",
+    "https://github.com/unum-cloud/UStore/issues/383",
+    "https://github.com/unum-cloud/UStore/issues/359",
+    "https://github.com/unum-cloud/UDisk",
+    "https://github.com/unum-cloud/UDisk/blob/main/README.md",
+    "https://github.com/unum-cloud/ucsb",
+    "https://github.com/unum-cloud/ucsb/blob/main/README.md",
+    "https://github.com/unum-cloud/ucsb/blob/main/bench/configs/rocksdb/10TB.cfg",
+    "https://github.com/unum-cloud/ucsb/blob/main/bench/configs/ustore/10TB.cfg",
+    "https://github.com/unum-cloud/ucsb/blob/main/cmake/ustore.cmake",
+    "https://github.com/unum-cloud/ucsb/blob/main/src/rocksdb/rocksdb.hpp",
+    "https://pypi.org/pypi/ukv/json",
+    "https://unum.cloud/post/2022-09-13-ucsb-10tb/",
+    "https://unum.cloud/post/2022-03-22-ucsb/",
+    "https://unum.cloud/post/2021-11-25-ycsb/",
+    "http://web.archive.org/web/20221228164250/https://unum.cloud/post/2022-09-13-ucsb-10tb/",
+    "http://web.archive.org/web/20230204190848/https://unum.cloud/post/2022-03-22-ucsb/"
+  ],
+  "confidence": 0.8
+}
