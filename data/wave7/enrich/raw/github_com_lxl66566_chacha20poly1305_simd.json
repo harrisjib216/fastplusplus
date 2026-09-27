@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/lxl66566/chacha20poly1305-simd",
+  "one_liner": "Pure-Rust (X)ChaCha20-Poly1305 with hand-written AVX-512/AVX2/SSE2/NEON kernels; beats RustCrypto everywhere, OpenSSL mainly on small messages.",
+  "what_it_does": "A from-scratch, performance-first rewrite of RustCrypto's chacha20poly1305 crate. It covers RFC 8439 ChaCha20-Poly1305 and XChaCha20-Poly1305, is no_std-capable, and has an optional zeroize feature. The native API is its own: ChaCha20Poly1305::new(key), encrypt_in_place_detached / decrypt_in_place_detached returning a 16-byte Tag, plus allocating encrypt/decrypt that use the upstream ciphertext||tag wire format. An optional `aead` feature adds newtype wrappers (AeadChaCha20Poly1305, AeadXChaCha20Poly1305) that implement the RustCrypto aead 0.6 KeyInit/AeadInOut traits, so generic code can swap it in.",
+  "how_it_is_fast": "The seal/open loop fuses ChaCha20 keystream generation, the message XOR and Poly1305 absorption, so the latency-bound MAC multiplies overlap with the throughput-bound cipher in the out-of-order window. ChaCha20 runs as 8-block batches: AVX2, or on AVX-512VL in YMM registers with single-instruction vprold rotations (chosen because Zen 4 double-pumps 512-bit ops). Poly1305 uses the Goll-Gueron 4-block batched algorithm on AVX2, a port of OpenSSL's radix-2^44 vpmadd52 8-lane path on AVX-512 IFMA CPUs, and 26-bit-limb lane-parallel code on NEON. Messages of 3 blocks or fewer take a small-message fast path, and backend dispatch is one cached relaxed AtomicU8 load per call.",
+  "when_to_use": [
+    "Pure-Rust ChaCha20-Poly1305 or XChaCha20-Poly1305 on x86-64 where you currently use RustCrypto chacha20poly1305: the author's Zen 4 numbers are about 2.8x faster at 16 B and about 6.2x at 1 MiB against RustCrypto's AVX-512 build.",
+    "Bulk sealing or opening of 4 KiB and larger buffers on x86-64 when you would otherwise use aws-lc-rs: about 1.2x faster at 4 KiB and about 1.4x at 64 KiB to 1 MiB, and 1.47x on 1 MiB open.",
+    "no_std or embedded-adjacent Rust builds that need an AEAD with no C toolchain (unlike aws-lc-rs or OpenSSL bindings), with a scalar fallback and compile-time backend pinning.",
+    "XChaCha20-Poly1305 (24-byte random nonces) at SIMD speed; the aws-lc-rs benchmark notes that aws-lc-rs has no XChaCha."
+  ],
+  "when_not_to_use": [
+    "Anywhere an audited implementation is required. The README says it was developed with AI assistance and has had no security audit, and the repo is about one month old, with four crate releases (0.1 to 0.3.1) in three days.",
+    "Small-message workloads (16 B to 1 KiB) where aws-lc-rs is an option: aws-lc-rs is faster at 16 to 256 B (about 0.8-0.94x for this crate) and roughly even at 512 B to 1 KiB.",
+    "Large-buffer workloads where you already link OpenSSL 3.x/4.x on an AVX-512 IFMA CPU: from 16 KiB up it only ties OpenSSL (1.03x down to 1.00x).",
+    "aarch64 production deployments: no NEON performance numbers are published, NEON correctness was checked only under QEMU user mode (500k differential cases), and CI runs only on ubuntu-latest x86-64 with nightly, and only on pull requests.",
+    "Callers who need AES-GCM or other AEADs; the crate supports only the ChaCha20-Poly1305 family."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "none by default; optional aead 0.6, bytes 1, getrandom 0.4, zeroize 1.8, hotpath 0.24",
+    "min_toolchain": "Rust 1.89 (edition 2024, rust-version in Cargo.toml); the author's benchmarks and CI use nightly",
+    "platforms": "x86-64 (SSE2 baseline; AVX2, AVX-512F+VL and AVX-512 IFMA picked at runtime), aarch64 (NEON), portable scalar fallback elsewhere",
+    "thread_safety": "Not documented explicitly. Per the source, the cipher only holds the 32-byte key (it is Copy unless zeroize is on), all methods take &self, and the backend cache is a global AtomicU8, so one instance can be shared across threads.",
+    "drop_in_for_baseline": "partial: it is not a drop-in for OpenSSL EVP (different language and API). Against RustCrypto chacha20poly1305 it is drop-in only through the optional `aead` feature's wrapper types (aead 0.6 traits), and the native API differs (new takes the key by value; detached methods return Result<Tag>)."
+  },
+  "gotchas": [
+    "Decryption is fused with authentication, as in BoringSSL: on a tag mismatch the in-place buffer holds unspecified (partly decrypted) bytes, so discard it on Err.",
+    "The IFMA Poly1305 file (src/poly1305/ifma.rs) is a port of OpenSSL's poly1305-x86_64.pl under Apache-2.0, so the crate-level 'MIT OR Apache-2.0' choice is effectively Apache-2.0 for that file.",
+    "The AVX-512 backend is on by default. Build with default-features = false (then re-enable std/alloc) to keep AVX-512 instructions out of the binary. Forcing a backend via RUSTFLAGS --cfg chacha20poly1305_backend removes the other kernels and assumes the CPU supports the chosen one.",
+    "The README usage snippet is out of date for 0.3.1 (it calls new(&key) and treats the result as a bare Tag); the lib.rs doctests show the current API. Tag comparison is a plain XOR-OR loop, not the `subtle` crate."
+  ],
+  "pick_this_over_siblings_when": "Pick it over libaegis, HiAE or Rocca when the wire format must stay standard RFC 8439 ChaCha20-Poly1305 or XChaCha, in pure Rust; those siblings are faster but use different, newer AEAD constructions. Pick hardware-rust-crypto instead when you need AES-256-GCM, or want formal-verification evidence instead of an unaudited AI-assisted codebase.",
+  "verified_claims_summary": "On an AMD Ryzen 9 7950X (Zen 4, Linux), the author measured in-place seal with 16 B AAD using Criterion (rustc 1.100-nightly, codegen-units=1, runtime dispatch; this crate picked its AVX-512 IFMA path). This crate took 126 ns at 16 B vs 396 ns for OpenSSL 4.1.0-dev EVP_chacha20_poly1305 (3.1x) and 408 vs 532 ns at 1 KiB (1.3x), and tied OpenSSL from 16 KiB to 1 MiB (about 188 us per MiB each, about 5.6 GB/s). The small-size gap is inflated: the C driver (cc -O2) re-runs EVP_EncryptInit_ex with cipher, key and nonce every iteration, and aws-lc-rs in the same Rust harness beats this crate below 1 KiB (119 vs 126 ns at 16 B).",
+  "status_note": "Active but brand new: the repo was created on 2026-08-26, last commit 2026-08-29, 0 stars, 0 issues and 108 crates.io downloads. It is dual MIT/Apache-2.0 (the IFMA file is Apache-2.0 only), and usable as a crate today, but unaudited and pre-1.0 with a fast-moving API.",
+  "sources_read": [
+    "https://github.com/lxl66566/chacha20poly1305-simd",
+    "https://github.com/lxl66566/chacha20poly1305-simd#performance",
+    "https://github.com/lxl66566/chacha20poly1305-simd/blob/main/README.md",
+    "https://github.com/lxl66566/chacha20poly1305-simd/blob/main/Cargo.toml",
+    "https://github.com/lxl66566/chacha20poly1305-simd/blob/main/build.rs",
+    "https://github.com/lxl66566/chacha20poly1305-simd/blob/main/perf/openssl_bench.c",
+    "https://github.com/lxl66566/chacha20poly1305-simd/blob/main/perf/openssl.csv",
+    "https://github.com/lxl66566/chacha20poly1305-simd/blob/main/perf/bench_results.json",
+    "https://github.com/lxl66566/chacha20poly1305-simd/blob/main/benches/aead.rs",
+    "https://github.com/lxl66566/chacha20poly1305-simd/blob/main/src/lib.rs",
+    "https://github.com/lxl66566/chacha20poly1305-simd/blob/main/src/aead.rs",
+    "https://github.com/lxl66566/chacha20poly1305-simd/blob/main/src/aead_compat.rs",
+    "https://github.com/lxl66566/chacha20poly1305-simd/blob/main/src/backend.rs",
+    "https://github.com/lxl66566/chacha20poly1305-simd/blob/main/src/backend/avx512.rs",
+    "https://github.com/lxl66566/chacha20poly1305-simd/blob/main/src/chacha/mod.rs",
+    "https://github.com/lxl66566/chacha20poly1305-simd/blob/main/src/chacha/avx512.rs",
+    "https://github.com/lxl66566/chacha20poly1305-simd/blob/main/src/poly1305/mod.rs",
+    "https://github.com/lxl66566/chacha20poly1305-simd/blob/main/src/poly1305/ifma.rs",
+    "https://github.com/lxl66566/chacha20poly1305-simd/blob/main/src/poly1305/avx2.rs",
+    "https://github.com/lxl66566/chacha20poly1305-simd/blob/main/.github/workflows/test.yml",
+    "https://api.github.com/repos/lxl66566/chacha20poly1305-simd",
+    "https://api.github.com/repos/lxl66566/chacha20poly1305-simd/issues?state=all",
+    "https://api.github.com/repos/lxl66566/chacha20poly1305-simd/commits",
+    "https://crates.io/api/v1/crates/chacha20poly1305-simd",
+    "https://hn.algolia.com/api/v1/search?query=chacha20poly1305-simd&tags=story"
+  ],
+  "confidence": 0.7
+}
