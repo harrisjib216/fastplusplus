@@ -1,0 +1,79 @@
+[
+  {
+    "id": "https://github.com/ji-peng/eng25519_artifact",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "A",
+    "tier_reason": "USENIX Security 2024 paper Tables 2-4 compare directly against OpenSSL 1.1.1 X25519/Ed25519 with GCC 9.2.0, -O2 and Xeon Platinum 8369B stated; the benchmark code (Crypto/Curve25519_AVX512IFMA/test.c, with OpenSSL's x86-64 asm and C code vendored in src/openssl_curve25519.*) is public in the artifact repo, so tier A stands.",
+    "corrections": {
+      "baseline": "OpenSSL 1.1.1 X25519 (x86-64 assembly, crypto/ec/asm/x25519-x86_64.pl) and Ed25519 (C implementation, crypto/ec/curve25519.c), extracted from OpenSSL_1_1_1-stable and compiled into the paper's benchmark harness; the TLS-level experiments use OpenSSL 1.1.1q",
+      "workload": "Warm-start CPU-cycle cost (2,000 warm-up runs, average of 20,000 runs) of X25519-KeyGen, Ed25519-Sign/Verify and fixed-point scalar multiplication on an Intel Xeon Ice Lake server. Only X25519-KeyGen is batched (8x1-way: eight keypairs per call). Ed25519-Sign (1x8-way) and Ed25519-Verify (1x2-way) run one operation per call and use AVX-512IFMA lanes internally. OpenSSL runs one operation at a time on scalar x86-64 code",
+      "compiler_and_flags": "GCC 9.2.0, -O2 (artifact CMake Release flags: -mavx512ifma -O2 -funroll-loops -m64 -march=native -mtune=native -fomit-frame-pointer -fwrapv); OpenSSL code extracted and built with the same options",
+      "caveats": "The 12.01x X25519-KeyGen ratio compares an 8-keypair batched call (60,479 cycles per 8 keys) with OpenSSL generating one keypair per call, so it measures throughput rather than single-operation latency. The Ed25519 ratios (3.79x and 3.33x) are per operation. The OpenSSL baseline is OpenSSL 1.1.1 code extracted and recompiled inside the authors' harness, not a stock or current OpenSSL build. Turbo Boost was left enabled (the authors argue it causes no significant jitter). The code needs an AVX-512IFMA CPU. End-to-end, the paper reports 25% and 35% more TLS 1.3 handshakes per second than the stock OpenSSL X25519 and P-256 configurations (1,707 vs 1,366 and 1,260 connections per second), far below the micro-benchmark ratios."
+    },
+    "notes": "All claimed ratios appear exactly in the paper: 12.01 (Table 2), 3.79 and 3.33 (Table 3), 8.06 (Table 4). The only fix needed was the workload: the record said Ed25519-Sign was 8-way batched, but it is a 1x8-way single-signature implementation. Metadata checks out: LGPL-3.0, 14 stars, last commit 2024-06-12 (stale), not archived, not a fork.",
+    "urls_opened": [
+      "https://ji-peng.com/uploads/usenix_security2024/paper.pdf",
+      "https://github.com/Ji-Peng/eng25519_artifact",
+      "https://raw.githubusercontent.com/Ji-Peng/eng25519_artifact/main/Crypto/Curve25519_AVX512IFMA/CMakeLists.txt",
+      "https://raw.githubusercontent.com/Ji-Peng/eng25519_artifact/main/Crypto/Curve25519_AVX512IFMA/test.c"
+    ]
+  },
+  {
+    "id": "https://github.com/fasthqc/hqc",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "A",
+    "tier_reason": "The report compares the patch against the HQC Round-2 optimized implementation. For the i5-8400H runs it states gcc 7.4.0. The benchmark code (Fast_Implementation/hqc-256-3/src/main_hqc.c plus script.sh, which runs the code without and then with the patch) is public, and the Makefile gives CFLAGS -O3 -std=c99 -mavx -mavx2, so tier A holds. It holds only narrowly: the headline i5-4690S numbers state no compiler, and the public harness covers only hqc-256-3.",
+    "corrections": {
+      "claimed_speedup": "The report states \"about 34 to 46%\" fewer clock cycles than the HQC Round-2 optimized implementation with both patches applied. On the i5-4690S (Table 4): keygen 34.9-42.8%, encryption 33.7-45.2%, decryption 45.0-46.3%. On the i5-8400H (Table 8): keygen 32.5-36.3%, encryption 30.9-37.9%, decryption 40.0-43.2%. As speed ratios this is about 1.45-1.86x (derived from page data). The vectorized sparse-dense multiplication alone is \"about 70-75%\" faster (Table 1). syndrome_gen drops from 400,209 to 18,101 cycles, about 22x (derived from page data).",
+      "compiler_and_flags": "gcc 7.4.0 (Ubuntu 7.4.0-1ubuntu1~18.04.1), stated only for the i5-8400H (patch v3) runs; no compiler is stated for the i5-4690S runs. Flags from Fast_Implementation/hqc-256-3/Makefile: -O3 -std=c99 -mavx -mavx2. Turbo Boost disabled.",
+      "workload": "Clock-cycle counts for HQC Round-2 keygen, encryption and decryption (KEM) across all six Round-2 parameter sets (N = 24677 to 70853). Each figure is the average over 50 random data sets of the minimum of 1,000 runs, after 1,000 warm-up runs. The report also micro-benchmarks sparse-dense polynomial multiplication and syndrome_gen.",
+      "caveats": "The report and code predate HQC's selection for NIST standardization and its later parameter and spec changes, and the project has been abandoned since 2020. The repo has no license. The public patched harness under Fast_Implementation covers only hqc-256-3; the README says the implementation 'moved to ARITH2020', and that folder holds per-table experiments. The report does not state whether the patched code is constant-time; the repo's ARITH2020/TABLE4 also ships a randomized FastConvolution variant. liboqs disabled HQC by default in 0.13.0 (April 2025) over a reported security flaw. It re-enabled HQC by default in 0.16.0 (July 2026) using the updated 20250822-spec implementation. None of this concerns this specific patch."
+    },
+    "notes": "The numbers are on the page, but the record's '35.1-46.3%' range was misstated: the true minimum on the i5-4690S is 33.7% (encryption, N = 24677), and the i5-8400H results (30.9-43.2%) were left out. The liboqs caveat was out of date (HQC is now re-enabled). The repo describes the code as the 'Arith 27 conference submission 16', but crossref turned up no published ARITH 2020 paper, so none is claimed.",
+    "urls_opened": [
+      "https://github.com/fasthqc/hqc/blob/master/report-23072019.pdf",
+      "https://raw.githubusercontent.com/fasthqc/hqc/master/report-23072019.pdf",
+      "https://github.com/fasthqc/hqc",
+      "https://raw.githubusercontent.com/fasthqc/hqc/master/Fast_Implementation/hqc-256-3/Makefile",
+      "https://raw.githubusercontent.com/fasthqc/hqc/master/Fast_Implementation/hqc-256-3/script.sh",
+      "https://raw.githubusercontent.com/fasthqc/hqc/master/Fast_Implementation/hqc-256-3/src/main_hqc.c",
+      "https://raw.githubusercontent.com/fasthqc/hqc/master/Fast_Implementation/hqc-256-3/Readme.md",
+      "https://raw.githubusercontent.com/fasthqc/hqc/master/Arith2020/Readme.md",
+      "https://raw.githubusercontent.com/fasthqc/hqc/master/Arith2020/TABLE4/Readme.md",
+      "https://github.com/open-quantum-safe/liboqs/releases/tag/0.13.0",
+      "https://github.com/open-quantum-safe/liboqs/releases/tag/0.14.0",
+      "https://github.com/open-quantum-safe/liboqs/releases/tag/0.16.0"
+    ]
+  },
+  {
+    "id": "https://github.com/shrec/ultrafastsecp256k1",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "A",
+    "tier_reason": "The benchmark JSON contains OpenSSL ECDSA_do_sign/ECDSA_do_verify and libsecp256k1 rows measured in the same harness, and states the compiler (GCC 14.2.0), flags (Release+LTO -O3 -flto -march=native; libsecp -O3 -march=native) and CPU (i5-14400F). The harness src/cpu/bench/bench_unified.cpp (with libsecp_provider.c) is public, so the result is first-party but reproducible: tier A.",
+    "corrections": {
+      "claimed_speedup": "Versus OpenSSL ECDSA_do_sign/ECDSA_do_verify on secp256k1: ECDSA sign 21.56x and verify 10.89x faster (FAST path), 21.70x for constant-time signing, and generator multiplication 44.53x (ratios printed on the page). Versus the in-tree libsecp256k1 (derived from page data): constant-time ECDSA sign about 1.52x (29,406.82 vs 19,311.25 ns), constant-time Schnorr sign about 1.48x (22,544.75 vs 15,232.60 ns), ECDSA verify about 1.13x (41,501.75 vs 36,772.26 ns) and Schnorr verify about 1.15x (42,088.13 vs 36,754.89 ns). The 19,441.6 ns figure the record labeled CT-vs-CT is actually the non-CT FAST sign. In Bitcoin Core bench_bitcoin ConnectBlock runs (README and docs/BITCOIN_CORE_BENCH_RESULTS.json, measured 2026-05-12, not this page) the gain is +0.9-1.5% with LTO and -0.5 to -1.0% without LTO.",
+      "last_commit": "2026-09-24",
+      "stars_or_usage": "55 stars; Bitcoin Core PR #35469 (opt-in secondary secp256k1 backend) was closed unmerged with a Concept NACK on 2026-06-05",
+      "caveats": "The benchmark is first-party and self-reported, with no third-party reproduction. The JSON does not record the OpenSSL version (system library). OpenSSL uses its generic prime-curve code for secp256k1, so the >10x OpenSSL ratios reflect a weak baseline; the relevant incumbent, libsecp256k1, is beaten by only about 1.1-1.5x in micro-benchmarks. In those comparisons libsecp256k1 was compiled without LTO while Ultra used LTO. The ConnectBlock gain is about 1% and needs LTO; without LTO it turns negative. That benchmark also reuses only 5 pubkeys, which the repo itself says inflates the ECDSA-verify share of the gain through caching. The repo's metadata admits an earlier benchmark file mislabeled the libsecp256k1 version (the actual version is a pre-v0.8.0 master snapshot, f9a944f). No external security audit exists; all audit evidence is self-generated. Bitcoin Core rejected the backend PR (#35469, Concept NACK, citing its human-review bar)."
+    },
+    "notes": "The OpenSSL ratios and the libsecp raw numbers are on the page. The ConnectBlock numbers come from the README and docs/BITCOIN_CORE_BENCH_RESULTS.json, not the benchmark_url. The record's last_commit of 2026-09-27 was the repo pushed_at timestamp; the default branch (main) last commit is 2026-09-24, and the dev branch has a commit from 2026-09-26. The 'proposed, not yet merged' Bitcoin Core wording was misleading because the PR was closed with a Concept NACK.",
+    "urls_opened": [
+      "https://github.com/shrec/UltrafastSecp256k1/blob/main/docs/bench_unified_2026-09-07_gcc14_x86-64.json",
+      "https://raw.githubusercontent.com/shrec/UltrafastSecp256k1/main/docs/bench_unified_2026-09-07_gcc14_x86-64.json",
+      "https://github.com/shrec/UltrafastSecp256k1",
+      "https://raw.githubusercontent.com/shrec/UltrafastSecp256k1/main/README.md",
+      "https://raw.githubusercontent.com/shrec/UltrafastSecp256k1/main/src/cpu/bench/bench_unified.cpp",
+      "https://raw.githubusercontent.com/shrec/UltrafastSecp256k1/main/docs/BITCOIN_CORE_BENCH_RESULTS.json",
+      "https://github.com/bitcoin/bitcoin/pull/35469"
+    ]
+  }
+]
