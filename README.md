@@ -7,11 +7,11 @@ claim against the cited page before it was written up.
 
 ## Lists
 
-- [COPYABLE.md](COPYABLE.md): 750 entries under an OSI license or CC0. Code can be vendored or forked.
-- [REFERENCE.md](REFERENCE.md): 71 entries with no, unclear, or non-OSI license. Study the idea; don't copy the code.
-- [REJECTED.md](REJECTED.md): 14 candidates that failed verification.
+- [COPYABLE.md](COPYABLE.md): 843 entries under an OSI license or CC0. Code can be vendored or forked.
+- [REFERENCE.md](REFERENCE.md): 86 entries with no, unclear, or non-OSI license. Study the idea; don't copy the code.
+- [REJECTED.md](REJECTED.md): 16 candidates that failed verification.
 
-Tiers across both lists: A 222, B 160, C 432, D 7.
+Tiers across both lists: A 253, B 192, C 476, D 8.
 
 ## Evidence tiers
 
@@ -28,8 +28,12 @@ Ratios marked "(derived from page data)" were computed from numbers on the cited
 
 | Domain | Category | Entries | A | B | C | D |
 |---|---|---|---|---|---|---|
-| compression-and-encoding | general-lossless | 2 | 0 | 2 | 0 | 0 |
-| crypto-and-hashing | non-crypto-hashes | 2 | 1 | 1 | 0 | 0 |
+| compression-and-encoding | general-lossless | 4 | 0 | 3 | 1 | 0 |
+| crypto-and-hashing | aead-and-ciphers | 17 | 7 | 4 | 6 | 0 |
+| crypto-and-hashing | crypto-hashes | 16 | 4 | 5 | 6 | 1 |
+| crypto-and-hashing | encoding | 25 | 8 | 1 | 16 | 0 |
+| crypto-and-hashing | non-crypto-hashes | 30 | 6 | 17 | 7 | 0 |
+| crypto-and-hashing | signatures-kem | 20 | 7 | 5 | 8 | 0 |
 | networking-and-servers | dns-quic-http3 | 16 | 0 | 6 | 10 | 0 |
 | networking-and-servers | event-loops-io | 36 | 6 | 7 | 23 | 0 |
 | networking-and-servers | http-parsers | 23 | 5 | 1 | 17 | 0 |

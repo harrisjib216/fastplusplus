@@ -4,6 +4,395 @@ No license, unclear/non-OSI license, mixed licensing, or paper-only. Study the i
 
 ## Verified
 
+### crypto-and-hashing
+
+#### aead-and-ciphers
+
+##### MORUS-1280  `C`  `no license`  `abandoned`  `Tier B`
+
+CAESAR-finalist AND/XOR/rotate AEAD in AVX2 C; edges out SUPERCOP AES-256-GCM on message-only and 64-byte inputs, loses elsewhere, and is broken.
+
+**Beats:** AES-256-GCM — eBACS (supercop-20260627) measured MORUS-1280-256 v1 (avx2 code, Debian clang 19.1.7 -march=native -O3) against SUPERCOP's fastest AES-256-GCM (Dolbeau's AES-NI intrinsics, clang -O2) on one Raptor Cove P-core of an Intel Core 5 210H. By median cycles/byte, MORUS wins 7 of 15 sections (long+0 encrypt 0.69 vs 1.07, 1.55x; long+long encrypt 0.66 vs 0.70, 1.06x; 64+64 1.11-1.18x), ties 1536+1536 encrypt (0.81 vs 0.82) and loses the other 7: long+long and 1536+1536 decrypt/forgery at about 0.85x, and AD-only (0+long) at about 0.5x.
+
+**Known shortcoming:** The 1.06x is cherry-picked: MORUS loses long-message decryption (0.67 vs 0.57 cycles/byte) and AD-only processing (~0.5x); it wins only long encryption with no AD (1.55x). Did not reach the CAESAR final portfolio; license unclear.
+
+**Known shortcoming:** Cryptographically broken: ePrint 2019/172 reduces attack cost to ~2^76, and Linux removed MORUS in 2019 as broken. Wins only 7 of 15 eBACS sections (loses 7, ties 1); AES-128-GCM (0.63) beats MORUS-1280-128 (0.67 cycles/byte). The mirrored code is v1, not the round-3 v2; plaintext is released before the tag check; unprefixed exported symbols; no license header.
+
+**How:** The state is five 256-bit words, one __m256i each, and every 32-byte block costs one state update: five chained rounds of XOR, AND, 64-bit-lane rotations (slli/srli/or) and _mm256_permute4x64_epi64 word rotations. The keystream is only S0 ^ rot192(S1) ^ (S2 & S3). There are no AES rounds, table lookups or GF(2^128) multiplications, and authentication comes from the same state update that encrypts, so no separate GHASH pass is needed. The rounds are serially dependent (round i reads round i-1's output), which caps it near 0.66-0.69 cycles/byte on long inputs. That is the designers' Haswell figure (0.69 cpb, gcc 4.8.1 -O3 -mavx2), and unlike AES-round designs it does not get faster with AES-NI or VAES.
+
+**Use it when:**
+- Reproducing or extending eBACS/SUPERCOP AEAD comparisons. supercop-20260627 still measures it, as both morus1280256v1 and morus1280256v2.
+- Cryptanalysis or teaching on non-AES AND/XOR/rotate stream-cipher AEADs, such as reproducing the linear-correlation attacks of Ashur et al. (ePrint 2018/464) or Shi et al. (ePrint 2019/172).
+- Studying SIMD mapping of a wide state: the avx2 (five __m256i), sse2 and portable ref64 versions of the same cipher sit side by side, and on this host they measure 4990, 6820 and 8569 cycles respectively in SUPERCOP's per-implementation timing column.
+- Checking legacy MORUS v1 (round 1/2) test vectors. This code produces v1 tags, which differ from v2.
+
+**Skip it when:**
+- Any production use. Shi et al. (CRYPTO 2019, ePrint 2019/172) found correlation-2^-38 trails in all full MORUS versions, which cuts the MORUS-1280-256 attack from 2^152 to about 2^76, far below its 256-bit confidentiality claim. Linux removed MORUS in July 2019 (commit 5cb97700beaa), calling it 'cryptographically broken'.
+- AD-heavy traffic. With AD only (0+long) it runs at 0.65 cycles/byte against 0.32-0.33 for AES-256-GCM, about 2x slower, and 1536+1536 decrypt/forgery is 0.82 against 0.70.
+- Decrypt-dominated bulk with AD: long+long decrypt and forgery are 0.67 against 0.57 cycles/byte (0.85x).
+- Seeking a faster AEAD on AES-NI CPUs. On the same page AES-128-GCM (0.63) already beats MORUS-1280-128 (0.67) on long+long encrypt, and AEGIS-128L runs at 0.21, about 3x faster.
+- Any setting where a nonce could repeat. The spec voids its claims under reuse, and Vaudenay and Vizar (ePrint 2017/1147) show universal forgery and decryption from about 20 nonce-reusing queries (worked out for MORUS-640, which has the same structure).
+
+**Vs siblings:** Practically never for new systems. On the same eBACS page, libaegis's AEGIS-128L (0.21) and AEGIS-128X2 (0.11 cycles/byte long+long) are 3-6x faster and maintained, Tiaoxin-346 (0.15) and AEZ (0.26) are also faster, and the bitsliced AEGIS sibling covers CPUs without AES-NI. Pick MORUS only to reproduce CAESAR-era or eBACS comparisons, or to study non-AES AND/rotate designs.
+
+**Gotchas:**
+- This is MORUS v1. Round-3 MORUS v2 changed tag generation and raised finalization from 8 to 10 steps, so v1 tags do not match v2 implementations. SUPERCOP's current morus1280256v2 is about 6% slower on 64+64 encrypt (4.49 vs 4.22 cycles/byte), which shrinks the short-message win over AES-256-GCM (4.70) to 1.05x.
+- morus_enc_aut_step and morus_dec_aut_step are declared plain (non-static) inline. Under C99 inline rules, an uninlined call has no external definition. eBACS's gcc -Os build fails to link for this reason, with undefined references to both functions. The file also exports unprefixed symbols (morus_stateupdate, morus_initialization and others), which eBACS flags as namespace violations and which collide if two MORUS variants are linked together. Make them static when vendoring.
+- Decrypt writes the plaintext into m before the tag check and does not wipe it on failure, although the spec says unverified plaintext must not be released. Key and state are never zeroized. The tag comparison itself is a branch-free sum loop.
+- Associated data goes through morus_enc_aut_step, which computes and discards a keystream block, so AD costs as much as message bytes. That explains the 2x loss on AD-only workloads.
+
+**Status:** Abandoned. The mirror is frozen at supercop-20160716 (its own open issue #4 calls it stale), no MORUS source file has a license header, and the algorithm was dropped from Linux in 2019 as broken, so this is for reference and study only.
+
+[repo](https://github.com/floodyberry/supercop) · [benchmark](https://bench.cr.yp.to/results-aead/amd64-freshwrap,big.html)
+
+##### Rocca (AES-based AEAD for 6G)  `C`  `CC BY (license of the ePrint 2022/116 paper; the reference implementation exists only in the paper's Appendix C)`  `abandoned`  `Tier B`
+
+AES-round-based 256-bit-key AEAD for 6G; ~5x OpenSSL AES-256-GCM at 16 KB on one laptop, much less elsewhere.
+
+**Beats:** OpenSSL AES-256-GCM / OpenSSL ChaCha20-Poly1305 — The authors built Rocca into OpenSSL 3.1.0-dev and ran it single-threaded on an Intel i7-1068NG7 with 13-byte AD; compiler and flags are not stated. Rocca reached 150.95 Gbps AEAD at 16 KB, versus 29.08 Gbps for OpenSSL AES-256-GCM and 7.60 for ChaCha20-Poly1305. These are numbers for the revised, key-feedforward Rocca; the peer-reviewed ToSC 2021 original reported 138.22 vs 30.59 / 7.57 Gbps, and on the paper's i9-11900 the margin shrinks to 175.12 vs 117.60 Gbps.
+
+**Known shortcoming:** Cited page's numbers are for the revised Rocca (2023 ePrint, key feed-forward), not the original ToSC 2021 design, which was attacked. Original: 138.22 vs AES-GCM 30.59 / ChaCha20-Poly1305 7.57 Gbps (ratios derived). OpenSSL baselines were not re-measured across revisions; on an i9-11900 the gain is only ~1.5x and Rocca loses to AES-GCM at 64 and 256 bytes. Code is C.
+
+**Known shortcoming:** The revised Rocca (source of the numbers) is also broken: ToSC 2024(2) (Takeuchi-Todo-Iwata) gives FROB collisions and nonce-misuse universal forgery; the Rocca-S IETF draft -06 expired. Loses at <= 256 B on the paper's i9-11900/M1/A15 and at 64 B on all 7 HiAE x86 CPUs; the OpenSSL GCM baseline varies 4x across the paper's CPUs (29.08 vs 117.60), inflating the 5.2x headline. No compiler or flags stated; reference code releases plaintext before the tag check. ericlagergren/rocca implements the original init without key feed-forward and has an untested tail-block bug.
+
+**Independent measurement:** ToSC 2021: 138.22 Gbps vs AES-256-GCM 30.59, ChaCha20-Poly1305 7.57 (Intel, AES-NI).
+
+**How:** The 1024-bit (128-byte) state holds eight 128-bit words, and each round spends 4 independent aesenc and 4 128-bit XORs, absorbing 32 bytes of message. Every aesenc sits on its own short critical path, so the round pipelines well on AES-NI or ARMv8 AES units. The designers found this layout by searching a wider space of round functions than Jean and Nikolic's (FSE 2016), including a cost-free word permutation. Each 32-byte ciphertext block adds only 2 more AES rounds for keystream, instead of the ~14 per 16 bytes that AES-256-CTR needs plus GHASH.
+
+**Use it when:**
+- Benchmarking or research on AES-round-function AEADs (AEGIS, Tiaoxin, Rocca-S, HiAE), where Rocca is a standard point of comparison.
+- Bulk AEAD of 8 KB and larger messages on AES-NI x86 or ARMv8 cores in a closed system you control at both ends. At 16 KB it led OpenSSL AES-256-GCM on every CPU in the paper, by 1.5x (i9-11900) to 5.9x (i9-10910), and on every x86 CPU in HiAE's independent tests (e.g. 250.16 vs 51.90 Gbps on a Ryzen 9 7950X).
+- Pre-VAES Intel servers (Cascade Lake, Haswell class), where HiAE's own Table 10 puts Rocca ahead of HiAE on large messages (Xeon Gold 6242R: 156.60 vs 133.19 Gbps AEAD at 16 KB).
+- Raw encryption-only use (keystream mode with no tag): 180.55 Gbps at 16 KB on the i7-1068NG7, versus 58.19 Gbps for AES-256-CTR.
+
+**Skip it when:**
+- Short messages (1 KB and under). Initialization and finalization each run 20 rounds, which the paper equates to about 1280 bytes of input per message. Rocca loses to AES-256-GCM at 256 B and 64 B on the paper's own i9-11900 (13.81 vs 15.57 and 3.68 vs 4.51 Gbps), Apple M1 and A15, and at 64 B on all seven x86 CPUs HiAE tested (e.g. 4.00 vs 12.57 Gbps on a Xeon W9-3495X).
+- Anywhere key commitment matters (multi-recipient, password-based or message-franking designs). Takeuchi, Todo and Iwata (ToSC 2024(2)) give concrete FROB colliding inputs against the designers' latest version and show that no Rocca version is committing-secure.
+- Settings where a nonce could repeat. The same paper shows universal forgery with practical data complexity under nonce misuse, even with an ideal keyed finalization. The original design also fell to a 2^128 full key recovery (Hosoyamada et al., ToSC 2022(3)).
+- Production or compliance use: no standard, no FIPS status, no maintained library. The design has been superseded by Rocca-S, whose IETF individual draft (draft-nakano-rocca-s-06) is marked expired and which also has practical committing attacks (ePrint 2024/901).
+- Interop with ericlagergren/rocca, the only standalone C implementation. It implements the pre-revision initialization, without the key feedforward (open issue #1 since 2024-10-28), so its ciphertexts do not match the revised cipher that produced the cited numbers.
+
+**Vs siblings:** libaegis is the deployable choice: it is maintained, and in HiAE's independent Table 10 AEGIS-128L beats Rocca at 1 KB and below on all seven x86 CPUs. HiAE is faster than Rocca on VAES-era CPUs, and Rocca is about 5x SNOW-V-GCM. Pick Rocca only for research baselines or large-message bulk encryption on pre-VAES Intel servers, and only if its committing and nonce-misuse weaknesses are acceptable.
+
+**Gotchas:**
+- Several incompatible 'Rocca' variants exist. The ToSC 2021 original has no key feedforward. The ePrint revision (last updated 2023-03-16) XORs the key into S[0] and S[4] after initialization; this is the version benchmarked at 150.95 Gbps. An intermediate version added a finalization key feedforward that was later removed. Rocca-S is a separate cipher with a 256-bit tag. Check test vectors against the exact version.
+- ericlagergren/rocca mishandles partial blocks: rocca_seal copies the tail from the start of the plaintext and AD (memcpy(tmp, plaintext, remain)) and writes the partial ciphertext to dst[0]. Any input longer than 32 bytes that is not a multiple of 32 is therefore processed wrongly, and its tests (64-byte plaintexts, AD of 18 or 32 bytes) never exercise that path.
+- The paper's streaming reference decrypts before the tag is checked and has no verify function. The caller must compute the tag with rocca_tag and compare it in constant time. Each encrypt or AD call zero-pads its own tail, so only the final chunk may be a non-multiple of 32 bytes.
+- The headline 5.2x rests on a weak baseline. OpenSSL AES-256-GCM measures 29.08 Gbps on the i7-1068NG7 but 117.60 on the paper's i9-11900 and 57.87 on its i9-12900K, and the baseline numbers are identical to two decimals across ePrint revisions whose OpenSSL version label changes.
+
+**Status:** Abandoned as a design, usable only as a reference. The authors' last revision is dated 2023-03-16, the successor Rocca-S's IETF draft is expired, and the only standalone C code (ericlagergren/rocca, BSD-3-Clause, 5 stars) was last committed 2022-01-28, implements the pre-revision cipher, and has an unanswered issue saying so.
+
+[benchmark](https://eprint.iacr.org/2022/116.pdf)
+
+##### SNOW-V-GCM  `C++`  `no license`  `unknown`  `Tier B`
+
+SNOW-V stream cipher plus GHASH AEAD; ~13% faster than OpenSSL AES-256-GCM at 16 KB on an i7-8650U laptop.
+
+**Beats:** OpenSSL AES-256-GCM — On one Intel i7-8650U laptop, single-threaded, with Visual Studio 2017 and 'most possible optimizations', the authors' C++ SNOW-V-GCM (AVX2/AES-NI/PCLMULQDQ intrinsics) reached 38.91 Gbps at 16 KB versus 34.42 Gbps for OpenSSL 3.0.0-dev (2019-04-01) AES-256-GCM asm. Both were measured with OpenSSL's own speed-loop code, reporting the best of several 1 to 3 second runs with key/IV setup per message. The curves cross near 2 KB, and AES-GCM leads below that.
+
+**Known shortcoming:** Compiler flags vague; the benchmark harness and PCLMULQDQ build are not public. The HiAE paper reports SNOW-V-GCM slower than AES-GCM on all modern x86 CPUs, and the original gain was only ~13% on large messages.
+
+**Known shortcoming:** Not faster on current CPUs: the authors' own SNOW-Vi paper (ePrint 2021/236) measures the SNOW-V keystream alone below OpenSSL AES-256-CTR on i7-1065G7, Ryzen 3600 and M1, and HiAE's Table 10 has SNOW-V-GCM slower than AES-GCM on all 7 x86 CPUs. No library: code exists only in paper appendices (GHASH extension not printed); the printed SIMD decrypt swaps arguments to SNOWV_ENCDEC, over-reads the tail, and the 32-bit reference tag compare is not constant-time.
+
+**How:** SNOW-V is an LFSR plus FSM stream cipher. It uses two full AES encryption rounds (_mm_aesenc_si128 with zero round keys) as the FSM nonlinearity, keeps the two 16-bit-cell LFSRs in two 256-bit AVX2 registers so that one update does 8 LFSR steps, and outputs 128 bits of keystream per clock. On the i7-8650U that keystream alone ran at 58.25 Gbps versus 35.06 Gbps for OpenSSL AES-256-CTR asm at 16 KB. Wrapped in a PCLMULQDQ GHASH, it fell to 38.91 Gbps: the authors did not stitch GHASH into the keystream loop the way OpenSSL's AES-GCM asm does, and they say an assembly version could do better.
+
+**Use it when:**
+- Research or interoperability work on the SNOW-V / 3GPP 256-bit algorithm candidates, where you need the published SNOW-V-GCM construction and its test vectors (Appendix C, Listing 3).
+- Bulk AEAD of large messages (4 KB and up) on AES-NI + AVX2 CPUs from the Skylake/Kaby Lake era without VAES, where the paper's own data shows a small edge over OpenSSL AES-256-GCM.
+- Platforms where AES-NI is missing: the paper argues SNOW-V stays usable with 16/32/64-bit registers while AES-256 becomes much slower, though it gives no SNOW-V-GCM numbers for that case.
+- As a baseline when benchmarking newer AES-round-based AEADs (Rocca, AEGIS, HiAE), which all compare against SNOW-V.
+
+**Skip it when:**
+- Messages of 1 KB or less: in the paper's own Table 3 OpenSSL AES-256-GCM wins at 1024 B (27.22 vs 26.16 Gbps), 256 B (17.32 vs 13.93) and 64 B (8.54 vs 5.16).
+- Modern CPUs with VAES/AVX-512 or Apple/AMD cores. In the authors' own SNOW-Vi paper, the SNOW-V keystream alone already loses to OpenSSL AES-256-CTR on an i7-1065G7 (58.52 vs 68.09 Gbps), a Ryzen 5 3600 (55.16 vs 68.84) and an Apple M1 (39.06 vs 58.61). HiAE's Table 10 has SNOW-V-GCM below OpenSSL 3.0 AES-256-GCM on all seven x86 CPUs it tested (e.g. 19.92 vs 51.90 Gbps on a Ryzen 9 7950X). HiAE's SNOW-V-GCM curve is nearly flat (13.04 Gbps at 16 KB vs 6.96 at 64 B on a Xeon W9-3495X), which points to a slow GHASH in that build, so that comparison probably understates the cipher.
+- Production code: there is no maintained open-source SNOW-V-GCM library. The one C++ library found with SNOW-V-GCM (Protocol++, jpgreninger/protocolpp) is commercially licensed, and the paper's benchmarked AVX2/PCLMULQDQ build and harness were never published.
+- Anything needing standards-track or FIPS-approved AEAD, nonce-misuse resistance or key commitment: it inherits every GCM restriction (unique IVs, SP 800-38D length limits) and adds SNOW-V's own limits of 2^64 keystream per key/IV and 2^64 IVs per key.
+- Threat models with power side channels on microcontrollers: SNOW-SCA (HOST 2024) recovers the full 256-bit SNOW-V key from an unprotected Cortex-M4 implementation with fewer than 50 traces per key byte.
+
+**Vs siblings:** Pick it over libaegis (AEGIS-128L, maintained, about 3x AES-256-GCM) or HiAE only when you specifically need SNOW-V compatibility for 3GPP-related work. On speed alone, HiAE's Table 10 puts AEGIS-128L, Rocca and HiAE roughly 4x to 21x ahead of SNOW-V-GCM at 16 KB on every CPU tested, although its ARM SNOW-V builds were SSE2NEON conversions.
+
+**Gotchas:**
+- The printed SIMD snowv_gcm_decrypt calls SNOWV_ENCDEC(snowv, ciphertext + i, plaintext + i), but the macro's signature is (snowv, out, in). As printed, it writes into the ciphertext buffer instead of producing plaintext. Fix it and check against the SNOW-V-GCM test vectors before any use.
+- The SIMD loops load and store whole 16-byte blocks, so a message whose length is not a multiple of 16 is over-read by up to 15 bytes. The output buffer must reserve length + 16 bytes, as the listing's comments say. Decrypt also subtracts 16 from ciphertext_sz without checking its size first.
+- H is the first keystream block of each (key, IV) pair, not a per-key constant as in AES-GCM. Any precomputed GHASH table of H powers must therefore be rebuilt for every message, which hurts short messages (derived from the mode definition).
+- The 32-bit reference decrypt compares the tag with an early-exit byte loop (not constant time) and calls exit(1) on failure. The SIMD version compares with _mm_test_all_zeros instead.
+
+**Status:** A paper-only design (ePrint 2018/1143, last revised 2019-08-27, CC BY) with no maintained implementation; the authors' 2021 SNOW-Vi paper and HiAE's 2025 benchmarks both show it losing to AES on newer CPUs, so treat it as a reference, not a deployable library.
+
+[benchmark](https://eprint.iacr.org/2018/1143.pdf)
+
+#### crypto-hashes
+
+##### j-lanes tree hashing mode and j-lanes SHA-256 (Gueron)  `any`  `no license`  `finished`  `Tier B`
+
+Tree-hash mode that runs one message as 4 interleaved SHA-256 lanes on AVX; 2-2.5x OpenSSL 1.0.1c, different digests.
+
+**Beats:** OpenSSL SHA-256 (v1.0.1c) — On a Core i7-3770 (Ivy Bridge; Hyper-Threading, Turbo and SpeedStep off; RDTSC, minimum of 5 runs of 100,000 iterations), AVX 4-lanes SHA-256 took 6.75 c/B at 2KB and 5.05 c/B at 128KB, against 13.27 and 12.78 c/B for OpenSSL 1.0.1c's serial SHA-256 (1.97-2.53x) and 10.45-10.09 c/B for the authors' improved n-SMS serial code (1.55-2x). No compiler or flags are given, and the outputs are j-lanes digests, not SHA-256 digests.
+
+**Known shortcoming:** New tree-hashing mode: digests differ from standard SHA-256, so it is not a drop-in replacement. Published in a weak venue (JIS 2013); measured on an i7-3770 (Ivy Bridge).
+
+**Known shortcoming:** No code, no compiler or flags. Compared against OpenSSL 1.0.1c on a 2012 CPU with no SHA-NI comparison (minio's Ryzen SHA-extension figure ~1.9 cycles/byte vs the paper's best 5.05, different CPUs). The 2012 paper and the 2014 spec (ePrint 2014/170) produce incompatible digests (per-lane IVs). Nearest shipping code, ISA-L mh_sha256, is not digest-compatible. Lead over BLAKE-512 only ~5-7%.
+
+**How:** Serial SHA-256 is one dependent chain of compression calls. Slicing turns one message into j independent messages, which the authors' S-HASH multi-buffer kernel runs with one slice per 32-bit lane of a 128-bit AVX register, so each SIMD Update compresses 4 blocks at once. For a 256x-byte message this costs 4x+7 Updates instead of 4x+1: one padding block per lane plus 3 serial Updates to wrap the 128 bytes of digests. The 4x bulk Updates run 4-wide. Word interleaving means plain sequential loads put each word in the right lane with no transpose. Without SIMD the mode loses: calling OpenSSL once per slice took 13.57 c/B against 12.87 c/B for plain OpenSSL at 8KB.
+
+**Use it when:**
+- You own both ends of the format and can define a new digest, for example signed boot or firmware images or an internal integrity manifest, and messages are at least a few KB. The paper measured 1.97x at 2KB rising to 2.53x at 128KB against OpenSSL 1.0.1c.
+- One long message at a time, where multi-buffer hashing (S-HASH) has nothing to run in parallel.
+- x86 cores with 128-bit or 256-bit SIMD but no SHA extensions (the paper used Ivy Bridge AVX; the 2014 follow-up also measured Haswell AVX2 with j=8).
+- As a design reference when specifying a SIMD-friendly tree mode: the 2014 spec gives slicing rules, IV derivation and test vectors.
+
+**Skip it when:**
+- Anywhere a standard SHA-256 value is expected: TLS, HMAC interop, signature schemes, Git or any content address shared with third parties. The digest is different by construction.
+- Short messages. The fixed wrap and per-lane padding cost is only amortized on longer inputs; the paper says gains are fully realized only for 'sufficiently long' messages, and Intel's similar Multi-Hash paper says benefits diminish below about 1KB.
+- When you need code today. Nothing was released. The nearest shipping code, Intel ISA-L crypto's mh_sha256 (16 word-interleaved segments), pads and wraps differently, so its digests are not j-lanes digests.
+- CPUs with SHA extensions. The paper predates them and never compares against them. minio/sha256-simd's README reports 1979 MB/s for SHA-extension SHA-256 on a 3.7 GHz Ryzen 7 2700X, about 1.9 c/B, well under the paper's best 4-lanes figure of 5.05 c/B. The CPUs differ, so treat that comparison as rough.
+- Settings that need a standardized or formally analysed mode. Security is argued only by pointing to general tree-hashing theory, and the author's own recommended j moved from 8 (2012) to 16 (2014).
+
+**Vs siblings:** Pick j-lanes over S-HASH only when there is a single long message in flight and you control the digest format. S-HASH needs many independent messages but keeps standard SHA-256 outputs. Against minio/sha256-simd, which is shipping Go code that produces standard digests (with SHA-extension, ARM64 and AVX-512 multi-buffer paths), j-lanes is only a design option for a new format on hardware without SHA instructions.
+
+**Gotchas:**
+- There are two incompatible versions. The 2012 mode uses the standard SHA-256 IV everywhere, while the 2014 spec prepends per-lane prefix blocks (lane index, j, a mode byte and 'SHA256'), which gives different IVs and different digests. Pin the spec version and j, because the digest depends on both.
+- The 2014 spec text slices by 32-bit words, but its j=4 test-vector lanes are interleaved in 64-byte blocks (lane 0 is message bytes 0-63, 256-319, 512-575 and 768-831). Resolve this against the vectors before implementing.
+- With j=4, a length not divisible by 256 bytes leaves at least one slice a different length and needs special last-Update handling (the paper calls the cost negligible). Very short messages give empty slices, which are hashed as the empty message. Choosing j above the SIMD width adds wrap Updates: at 8KB, 16-lanes needs 153 Updates against 135 for 4-lanes.
+- The SHA-3 comparison in Fig. 4 is close. At 8KB, 4-lanes SHA-256 took 5.46 c/B against 5.74 for 4-lanes BLAKE-512 and 5.82 for plain BLAKE-512, a margin of about 5-7%.
+
+**Status:** This is finished research: ePrint 2012/476, republished in Journal of Information Security 4(1):7-11 (2013, a SCIRP journal, 2 Crossref citations), plus a 2014 follow-up spec with test vectors (ePrint 2014/170, CC BY). No code or standard adoption turned up in the sources read, and the closest shipping relative, ISA-L's mh_sha256, is not digest-compatible.
+
+[benchmark](https://eprint.iacr.org/2012/476.pdf)
+
+##### KangarooTwelve (XKCP)  `C`  `CC0-1.0 for most files, with per-file exceptions: CRYPTOGAMS BSD-style/GPL (AVX2 and AVX-512 KeccakP-1600 asm), Apache-2.0 OR ISC OR MIT (ARMv8-A cores), and Brian Gladman's permissive license (brg_endian.h)`  `active`  `Tier B`
+
+Keccak team's C package; its KangarooTwelve XOF hashes long messages 5-8x faster than SHAKE128 via SIMD tree hashing.
+
+**Beats:** SHAKE128 (FIPS 202), SHA-256 and SHA-512, using the fastest implementations available to the authors, cross-checked with eBASH; 'often' OpenSSL for the traditional hashes — In the designers' peer-reviewed paper (ACNS 2018, Table 2; compiler not stated), single-core long-message KangarooTwelve ran at 0.55/1.22/1.44 cycles/byte on a Core i7-7800X (AVX-512), i5-6500 and i5-4570 (AVX2), against 4.28/5.56/7.09 for SHAKE128 and 6.65/6.91/9.27 for SHA-256 (the fastest implementations found, often OpenSSL, cross-checked against eBASH) on CPUs without SHA-NI. Independent eBASH 2026 runs at about 16 KiB show K12 about 1.8x faster than SHAKE128 but slightly slower than SHA-NI SHA-256 (2.47 vs 2.21 cycles/byte on Tiger Lake).
+
+**Known shortcoming:** KangarooTwelve's '2x SHAKE128' holds for low-end CPUs and short messages; on modern x86 eBASH shows it slower than SHA-NI SHA-256. The fast x86 assembly comes from CRYPTOGAMS under its own license, not CC0.
+
+**Known shortcoming:** K12 evidence is the designers' 2018 paper on pre-SHA-NI CPUs with no compiler stated; eBASH 2026 at ~16 KiB has K12 slower than SHA-NI SHA-256 (2.47 vs 2.21 cycles/byte Tiger Lake, 2.93 vs 2.02 Zen 4) and ~1.8x faster than SHAKE128. SIMD path engages only when one Update call carries >= 16/32/64 KiB; no multithreading API. Not FIPS-approved. Build needs xsltproc + GNU make; MSVC gets noAsm only. CVE-2022-37454 buffer overflow (fixed); open #171 UBSan misaligned loads in AVX2 times4.
+
+**Independent measurement:** ePrint 2016/770 (ACNS 2018) Table 2: K12 0.55/1.22/1.44 vs SHAKE128 4.28/5.56/7.09 cycles/byte.
+
+**Independent measurement:** eBASH ~16 KiB: K12 2.47 vs SHA-256 (SHA-NI) 2.21 cycles/byte (Tiger Lake); 2.93 vs 2.02 (Zen 4).
+
+**How:** It makes two changes to SHAKE128. First, the permutation is Keccak-p[1600] reduced to 12 rounds (TurboSHAKE), roughly halving the per-block cost. Second, a Sakura-coded tree mode cuts the input into 8 KiB leaves whose chaining values feed a final node, and 'kangaroo hopping' merges the first chunk into that final node so inputs of 8 KiB or less pay no tree overhead. Independent leaves go through 2-, 4- or 8-way parallel Keccak-p code (SSSE3/AVX2/AVX-512, chosen at runtime by the x86-64 target), where AVX-512 rotate and ternary-logic instructions and its 32 registers cut the instruction count further.
+
+**Use it when:**
+- You want to stay in the Keccak/SHA-3 family (same permutation and cryptanalysis track record, 128-bit claim like SHAKE128) but SHAKE128 is too slow: even serially (8 KiB or less), KT128 is about 1.8x faster than SHAKE128 (paper Table 2; eBASH gives 2.77 vs 4.98 cycles/byte at 1536 B on Tiger Lake).
+- Hashing large single buffers (tens of KiB and up) on x86-64 with AVX2 or AVX-512: the paper reports 1.22-1.44 cycles/byte on Skylake/Haswell and 0.55 on SkylakeX, against 4.28-7.09 for SHAKE128.
+- ARMv8.4-A cores with SHA-3 instructions (Apple A14/M1): the Keccak team reports 0.75 cycles/byte for KT128, 1.7x hardware SHA-256 (a first-party figure).
+- Protocols that want a standardized fast XOF with domain separation: KT128/KT256 are specified in RFC 9861.
+- Projects that also need other Keccak-team constructions (SHA-3, SHAKE, cSHAKE/KMAC, TurboSHAKE, Xoodyak) from one mostly CC0 code base.
+
+**Skip it when:**
+- Short to medium messages on x86 CPUs with SHA-NI: in eBASH 2026 at about 16 KiB, K12 takes 2.47 cycles/byte on Tiger Lake and 2.93 on Zen 4, against 2.21/2.02 for SHA-256, so it is slower than hardware SHA-256 there.
+- When FIPS 202 / FIPS 140 compliance is required: KT128 is not one of the six approved FIPS 202 instances, and its 12-round permutation has a smaller margin (the paper claims 7 of 12 rounds).
+- Streaming input in small pieces: the SIMD multi-leaf path runs only when a single Update call still holds 16/32/64 KiB of full 8 KiB leaves (2/4/8-way); 4-16 KiB reads fall back to serial speed.
+- When you need multi-core hashing out of the box: XKCP's K12 is single-threaded (SIMD only) and has no parallel API like BLAKE3's update_rayon.
+- MSVC/Windows builds: the fast x86 assembly uses GCC syntax, so MSVC needs the *noAsm targets, and libXKCP.dll does not link yet.
+
+**Vs siblings:** Pick K12 over BLAKE3 when you want to stay in the Keccak/SHA-3 family (RFC 9861, KT256 for 256-bit security) or target ARMv8.4-A SHA-3 hardware; pick BLAKE3 for peak speed at shorter lengths (1 KiB vs 8 KiB leaves), multithreading and a maintained Rust crate. Versus sha256-simd, ISA-L multi-buffer SHA, j-lanes and S-HASH, K12 fits when you can change the digest and hash single long messages, not many parallel SHA-256 streams.
+
+**Gotchas:**
+- Licensing is mixed: the AVX2/AVX-512 single-permutation Keccak-p assembly is CRYPTOGAMS (BSD-style or GPL), the ARMv8-A cores are Apache-2.0/ISC/MIT, and only the rest is CC0 (which gives no patent grant). Keep the LICENSE file when redistributing.
+- Past memory-safety bug: CVE-2022-37454 (GHSA-6w4m-2xhg-2658, critical) was a buffer overflow in the sponge queue when a partial input reached 2^32-200 bytes or more, fixed in commit fdc6fef. Open issue #171 (Aug 2026) reports UBSan misaligned loads in the AVX2 times4 code.
+- Makefile.build is XML that xsltproc expands into a makefile; there is no CMake or pkg-config support. Pick a SIMD-capable target (e.g. x86-64/libXKCP.a), because generic32/generic64 are plain C and will not reach the headline numbers.
+- Headline numbers are single-core and need very long messages: parallelism starts only after the first 8 KiB, and 4-way needs 5 chunks (40 KiB) on the paper's Skylake plot. eBASH's 16 KiB 'long message' metric therefore shows K12 near its serial speed.
+
+**Status:** Actively maintained by the Keccak team (commits through 2026-09-25, including recent alignment and aliasing fixes; 664 stars) and mostly CC0, but the fast x86 cores carry CRYPTOGAMS terms, so vendor it through the .pack targets or the trimmed XKCP/K12 repo and keep the LICENSE file.
+
+[repo](https://github.com/XKCP/XKCP) · [benchmark](https://eprint.iacr.org/2016/770.pdf)
+
+##### Simultaneous hashing of multiple messages / S-HASH (Gueron & Krasnov)  `any`  `no license`  `finished`  `Tier B`
+
+Multi-buffer SHA-256 that hashes 4 independent messages per AVX register with standard digests; 3.42x OpenSSL 1.0.1 on 4KB messages.
+
+**Beats:** OpenSSL SHA-256 (v1.0.1) — On a Core i5-2500 (Sandy Bridge, 3.3GHz; Turbo, HT and SpeedStep off; Fedora 16), 4-buffer AVX SHA-256 hashed 4KB chunks at 5.18-5.21 c/B from L1 through main memory. Serial OpenSSL 1.0.1 took 17.72-17.80 c/B (3.42x) and the authors' n-SMS took 11.68-11.81 c/B (2.25x). Hashing files from a two-SSD RAID0 at native clock gave 8.65 vs 19.55 c/B (2.26x) for eight equal 17.76MB files and 17.53 vs 30.32 c/B (1.73x) for 350 mixed-size files. No compiler or flags are stated.
+
+**Known shortcoming:** 3.42x holds for cached data only; the '~3x from disk' figure was measured with the CPU at 1.6 GHz (native 2.26x / 1.73x). OpenSSL later shipped its own multi-buffer SHA-256 (sha256-mb), so the baseline is superseded. JIS 2012.
+
+**Known shortcoming:** Paper has no code; shipping forms are ISA-L sha256_mb (submit/flush API), OpenSSL's internal sha256_multi_block (used only by TLS AES-CBC-HMAC multi-block) and minio's AVX-512 server. Needs a batch of independent messages: single-stream gains nothing and uneven sizes cut the gain to 1.73x. Linux dropped its AVX2 multibuffer SHA in 2018 (broken, real-world gains debated).
+
+**How:** This is SIMD across messages ('multi-buffer', first tried by Aciicmez in 2004 on Pentium 4 SSE2 for a 1.71x gain). Each lane holds one message's state, so one S-UPDATE compresses four 64-byte blocks from four messages with the same instruction stream. The scheduler runs min(remaining length)/64 blocks at a time, then finalizes or refills the lanes that ran out, and finishes any leftover buffers serially. The paper gives two reasons it falls short of 4x on Sandy Bridge: the scalar ALU path is faster than the SIMD unit, and each SHA-256 rotate costs two SIMD shifts plus an xor instead of one ROR.
+
+**Use it when:**
+- Many independent messages are ready at once and each needs a standard SHA-256 digest: boot-time integrity checks of OS components, dedup chunk fingerprints, file-tree manifests, or TLS/HMAC servers that batch work across connections (the paper's own scenarios).
+- Messages of similar length. Eight equal 17.76MB files reached 2.26x over OpenSSL from disk at native clock, against 1.73x for 350 mixed Windows driver files, because equal lanes finish together.
+- Data already in cache or RAM. On 4KB chunks, speed was flat at 5.18-5.21 c/B whether the data sat in L1, L2, LLC or main memory.
+- Wide-SIMD x86 without SHA extensions. AVX2 doubles the lane count to 8 and AVX-512 to 16. minio's README reports 3498 MB/s per core with 16-lane AVX-512 on a Xeon Platinum 8124M, 7.8x its AVX2 path.
+
+**Skip it when:**
+- One message at a time, or latency-bound single-stream hashing. Only one lane does useful work. For that, use a fast serial or SHA-extension SHA-256, or a tree mode such as j-lanes if you control the format.
+- Very uneven message sizes. Lanes stall until they are refilled and stragglers finish serially, which is why the mixed-size directory got only 1.73x.
+- Pipelines limited by I/O. At 3.3GHz, the 400MB/s SSD RAID0 equals about 7.15 c/B, so S-HASH reached 8.65 c/B from disk rather than 5.2. The abstract's '~6.73 c/B, almost 3x' needed the CPU down-clocked to 1.6GHz.
+- Small messages or thin batches. OpenSSL's multi-buffer notes say real-world gains on 2KB fragments are 75-130% on Haswell, against a 170% asymptotic figure. minio's README advises plain SHA-256 below about 1MB for its channel-scheduled server.
+- Code you would have to maintain yourself. Linux added AVX2 multibuffer SHA-256/512 in 4.8 (2016), then removed it in August 2018 because it was broken, too complex to maintain, and its 'performance benefits for real-world use cases are debatable'.
+
+**Vs siblings:** Choose S-HASH (in practice ISA-L's sha256_mb) over j-lanes when you have many independent messages and need interoperable standard SHA-256 digests. j-lanes speeds up a single message but changes the digest. In Go, minio/sha256-simd already ships the same multi-buffer idea as its AVX-512 server alongside a drop-in crypto/sha256 replacement, so use it rather than porting the paper.
+
+**Gotchas:**
+- Completion is decoupled from submission. ISA-L processes jobs out of order and returns a context only when its lane finishes, so callers must keep submitting or call flush to drain. The paper itself says the software needs restructuring to benefit.
+- The 2.25x figure is against the authors' own n-SMS serial code, which is also their OpenSSL RT #2784 patch, not against a third-party implementation. The 3.42x figure is against stock OpenSSL 1.0.1.
+- The disk results are in cycles/byte, so down-clocking flatters them. At 1.6GHz, S-HASH on the UNIFORM files is 6.73 c/B but only 226.73 MB/s, against 363.83 MB/s at 3.3GHz.
+- OpenSSL's sha256_multi_block is internal. It is used only by the AES-CBC-HMAC-SHA256 multi-block TLS cipher code and cannot be reached as a general multi-message digest API.
+
+**Status:** This is finished 2012 research (ePrint 2012/371, republished in Journal of Information Security 3(4):319-325, a SCIRP journal, 9 Crossref citations) with no code of its own. The technique is maintained in Intel ISA-L crypto (last push 2026-07) and survives inside OpenSSL's TLS multi-block path, while Linux dropped its copy in 2018.
+
+[benchmark](https://eprint.iacr.org/2012/371.pdf)
+
+#### encoding
+
+##### fastbase64 (lemire)  `C`  `no license`  `abandoned`  `Tier A`
+
+Archived research AVX2 base64 codec from the Muła–Lemire paper; roughly 7-11x faster than Chrome's scalar codec on Skylake.
+
+**Beats:** base64 (glibc/Linux base64 utility and Google Chrome's base64 implementation) — The paper measured on an i7-6700 Skylake at 3.4 GHz with Turbo off, GCC 5.3 -O3 -march=native, taking the minimum rdtsc count over 500 runs. There the AVX2 codec needs about 0.25 cycles/byte on large random inputs, against 2.7 (encode) and 1.8 (decode) for Chrome 56's modp_b64, and it decodes six real files at 0.21-0.27 cycles/byte against Chrome's 1.8-2.1 and Klomp AVX2's 0.43-0.53. In Turbo-Base64's independent 1 MB table (i7-9700K, gcc 11.2) fb64avx2 reaches 23,686/21,231 MB/s encode/decode against Chrome's 2,541/4,289, but by then it trails aklomp's b64avx2 (26,153/22,515).
+
+**Known shortcoming:** Research artifact of the Muła & Lemire paper (arXiv 1704.00605): numbers are from GCC 5.3 -O3 -march=native on an i7-6700 (Skylake, 2017). The Turbo-Base64 comparison figures come from a closed third-party harness (C-level on their own).
+
+**Known shortcoming:** Archived; README says research-only and points to simdutf. Strict input only (no whitespace, no URL-safe, length must be a multiple of 4); no runtime dispatch (SIGILL without AVX2); no gain under ~100 bytes. AVX-512BW encoder emits garbage on 64-byte input (#17, closed unfixed); NEON is decode-only and not built. In the independent Turbo-Base64 1 MB table it trails aklomp/base64 and Turbo-Base64 (23.7/21.2 vs 26.2/22.5 and 29.1/29.7 GB/s).
+
+**Independent measurement:** Turbo-Base64 1 MB table: fastbase64 23.7/21.2 GB/s enc/dec vs aklomp 26.2/22.5, TB64 29.1/29.7.
+
+**How:** Encoding: a vpshufb puts each 3-byte group into a 32-bit lane. A vpmulhuw/vpmullw multiply-shift then extracts all four 6-bit fields at once, and ASCII translation uses a saturating-subtract/compare range index into a 16-entry vpshufb offset table instead of a 64-byte lookup table. Decoding uses aqrit's nibble-LUT scheme: two vpshufb lookups on the high and low nibbles produce bitmasks whose vptest catches any invalid byte, and a third vpshufb supplies the per-range offset. Then vpmaddubsw + vpmaddwd pack four 6-bit values into 24 bits, and vpshufb + vpermd compact 32 characters into 24 bytes. The paper counts about 11 vector instructions per 24 input bytes for encoding and 14 per 32 for decoding, which is about 0.25 cycles/byte on Skylake. Tails shorter than 28 bytes (encode) or 45 characters (decode) go to the Chromium scalar code.
+
+**Use it when:**
+- Reproducing or extending Muła & Lemire (ACM TWEB 2018): this repo is the paper's artifact, with basic_benchmark.c, the test images and the rival codecs in one harness.
+- Reading a minimal reference of the AVX2 base64 kernels (about 200 lines in src/fastavxbase64.c) before porting the technique into your own code.
+- Only if you must vendor a tiny C kernel and cannot take simdutf: strict, padded, whitespace-free standard-alphabet data of about 200 bytes or more (data URIs, embedded images) on AVX2 x86-64 that you build for yourself.
+
+**Skip it when:**
+- Anything in production: the README says it is unmaintained research code and not for production, the repo is archived, and the author sends users to simdutf.
+- MIME/PEM or other input with line breaks or spaces, URL-safe alphabet, or missing padding: the Chromium fallback returns MODP_B64_ERROR and there are no options.
+- Short strings: the paper says that under about 100 bytes the AVX2 codec is no faster than scalar code.
+- The AVX-512BW encoder: issue #17 (2024) reports garbage output for a 64-byte input on Sapphire Rapids while still returning the expected length. It was closed without a fix.
+- Non-x86 targets: the POWER9 AltiVec port is only about 2-2.4x Chrome at 2 KB (decode 0.32 vs 0.65 ns/byte, encode 0.27 vs 0.66), the NEON file is decode-only and not built by the Makefile, and there is no aarch64 encoder.
+
+**Vs siblings:** For real use, pick simdutf (maintained descendant of this algorithm, runtime dispatch, whitespace and URL-safe support), aklomp/base64 (maintained C99 library that adopted these kernels) or Turbo-Base64 (29,086/29,748 MB/s vs fastbase64's 23,686/21,231 MB/s encode/decode in the same i7-9700K table). Pick fastbase64 only to reproduce the paper or to read the smallest reference version of the AVX2 kernels.
+
+**Gotchas:**
+- No CPU detection: fast_avx2_* crashes with SIGILL on CPUs without AVX2, and the Makefile builds everything with -march=native, so the binaries are not portable.
+- Each decode step stores 32 bytes but advances only 24, so the region past the current output position gets scratch bytes. By our reading this stays inside a buffer sized for the decoded output. On invalid input the function returns MODP_B64_ERROR after writing partial output.
+- The encoder's first load is a masked vpmaskmovd from str-4 (that lane is masked, so no fault per Intel docs). Turbo-Base64's source calls fastbase64 'unsafe, can reads/writes beyound i/o buffers'; we did not confirm that for the AVX2 path, and the unit tests cover only three fixed strings plus an invalid-character sweep.
+- Decoding requires a length that is a multiple of 4. The header says encode returns strlen+1, but the code returns strlen and writes a NUL terminator.
+
+**Status:** Archived, with the last commit on 2024-04-04; the README and issue #17 call it obsolete and point to simdutf. The LICENSE file is standard BSD-2-Clause text (GitHub shows NOASSERTION), so vendoring is allowed, but every fix is yours.
+
+[repo](https://github.com/lemire/fastbase64) · [benchmark](https://arxiv.org/abs/1704.00605)
+
+#### signatures-kem
+
+##### fasthqc/hqc (vectorized sparse-dense multiplication + syndrome generation)  `C`  `no license`  `abandoned`  `Tier A`
+
+AVX2 patch to the HQC Round-2 KEM's sparse-dense multiply and BCH syndrome step; 34-46% fewer cycles than the optimized reference.
+
+**Beats:** HQC NIST Round 2 optimized reference implementation (Aguilar-Melchior et al.); HQC is a KEM historically supported by liboqs — Against the HQC Round-2 optimized implementation on a 4th-gen Core i5-4690S (Turbo off, compiler not stated), both patches together cut keygen cycles 34.9-42.8%, encapsulation 33.7-45.2% and decapsulation 45.0-46.3% across all six parameter sets. On an i5-8400H with gcc 7.4.0 (-O3 -mavx2) the reductions were 30.9-43.2%, about 1.45-1.86x in speed. Each figure is the mean of per-dataset minimum cycle counts over 1,000 runs for 50 random data sets.
+
+**Known shortcoming:** Gain is 33.7-46.3% on i5-4690S and 30.9-43.2% on i5-8400H (not the claimed 35.1-46.3%); GCC 7.4.0 is stated only for the 8400H run. liboqs re-enabled HQC in 0.16.0, so the baseline has moved.
+
+**Known shortcoming:** Not constant-time: fastConvolutionMult indexes memory by secret positions and syndrome_gen2 branches on decoded bits (timing side channels); the Rand_FC variant shuffles with libc rand(). Not thread-safe (global scratch buffers); ~200 KB table never freed. No license, abandoned 2020, Round-2 HQC only (hqc-256-3); liboqs now ships the 2025-08-22 spec. Constant-time follow-up: Robert & Véron, JCE 2022.
+
+**How:** The 'fast convolution' keeps the sparse operand as a list of its w nonzero positions (67-153), so the product is the XOR of w copies of the dense polynomial, each shifted by one of those positions. Each shift is done with AVX2 256-bit shifts (_mm256_slli/srli_epi64 plus a carry from the neighboring word) and XORed into a double-length accumulator, followed by one vectorized reduction mod X^N-1; the baseline instead used an NTL-inspired vectorized multiply. syndrome_gen2 spreads the received BCH codeword bits into bytes with a shuffle and mask, then XOR-accumulates rows of a precomputed alpha^(ij) table, 16 syndromes per ymm register, instead of evaluating each syndrome separately in GF(2^10).
+
+**Use it when:**
+- Studying or reproducing HQC Round-2 performance on x86-64 with AVX2 (Haswell and later): keygen, encapsulation and decapsulation for N = 24,677-70,853.
+- As a reference technique for multiplying a sparse position list by a dense polynomial in F2[X]/(X^N-1), in quasi-cyclic code-based schemes where the sparse operand has weight around 100 and N is tens of thousands of bits. The report puts the multiplication alone at about 64-75% faster.
+- As a template for vectorized BCH syndrome computation with a precomputed power table (400,209 to 18,101 cycles, about 22x, for n1 = 766 in the report).
+
+**Skip it when:**
+- Anything deployed. The code is not constant-time: fastConvolutionMult indexes memory by the secret sparse positions (C256[vbi], tab[i64]), and syndrome_gen2 branches on bits of the decoded word.
+- Current HQC. This targets the Round-2 code base and its six parameter sets (hqc-128-1 ... hqc-256-3). liboqs now ships HQC-1/3/5 from the official 20250822-spec implementation (re-enabled by default in 0.16.0, July 2026), so the percentages and code will not carry over as-is.
+- Multi-threaded use. Scratch buffers (C2, TT, tmp8), syndrome_gen2's static tmp_array and the precomputed tables are process-global mutable state.
+- Any use that needs a license. The repo has no LICENSE file and has been abandoned since April 2020 (6 stars, no issues, no releases).
+- Non-x86 or pre-AVX2 CPUs; the Arith2020 experiments additionally need PCLMUL and, for several tables, the gf2x 1.2 library.
+
+**Vs siblings:** It is the only key-encapsulation and code-based post-quantum entry in this category. ENG25519 and UltrafastSecp256k1 are classical elliptic-curve code and VecFalcon is a post-quantum signature. Pick it only to study HQC or quasi-cyclic binary-polynomial arithmetic on AVX2; it is not a deployable alternative to any of them.
+
+**Gotchas:**
+- The PATCH2 syndrome path reads global tables that syndrome_gen_init() must fill first. Forgetting that call leaves them NULL. The init also prints to stdout and never frees its roughly 200 KB alpha^(ij) table (796 x 128 int16 for hqc-256-3).
+- Patches are switched on by rewriting src/patch.h, which script.sh overwrites with '#define PATCH' between builds. Building by hand gives whatever the header currently says.
+- The randomized FastConvolution variant (Arith2020 Rand_FC) shuffles the order of the sparse positions using libc rand(), which is not a cryptographic RNG, and it keeps the same position-indexed accumulator writes (C256[vbi]).
+- The report's 'speed-up %' is a reduction in cycles. 34-46% fewer cycles is about 1.45-1.86x in speed ratio, and the 70-75% figure applies to the multiplication kernel only, not the whole KEM.
+
+**Status:** Abandoned since April 2020 and unlicensed, and it patches a superseded Round-2 HQC code base with non-constant-time kernels. Read it for the technique; do not vendor it. The authors' later constant-time Karatsuba/Toom-Cook multiplication work (Robert & Véron, J. Cryptographic Engineering 2022) is the more relevant follow-up.
+
+[repo](https://github.com/fasthqc/hqc) · [benchmark](https://github.com/fasthqc/hqc/blob/master/report-23072019.pdf)
+
+##### ML-KEM AVX-512 optimization for TLS 1.3 (Zheng et al., Fudan University)  `C`  `no license`  `unknown`  `Tier B`
+
+Unreleased AVX-512 ML-KEM (ESORICS 2024) reporting 1.30-1.64x fewer cycles than pq-crystals AVX2 Kyber, but only 0.4-5.6% more TLS handshakes.
+
+**Beats:** pq-crystals Kyber 'standard' branch AVX2 implementation (FIPS 203 draft code, the paper's ref [5]) for ML-KEM cycle counts; liboqs 0.10.1 ML-KEM AVX2 via OQS-provider on OpenSSL 3.3.0-dev for TLS 1.3 handshakes/sec — On a 4-vCPU Alibaba c8i VM (Xeon Platinum 8475B, GCC 9.4.0, flags unstated, Turbo and HT on), the median over 100,000 runs shows the AVX-512 code using 1.30-1.64x fewer cycles than the pq-crystals 'standard'-branch AVX2 Kyber built with AVX-512 disabled (for example, ML-KEM-1024 encaps at 25,062 vs 41,162 cycles). Through liboqs 0.10.1, the OQS provider and OpenSSL 3.3.0-dev, openssl s_time handshakes/sec rose only about 0.4-5.6% in PQ-only and hybrid modes.
+
+**Known shortcoming:** No public code. Real baseline is the pq-crystals Kyber AVX2 implementation (liboqs is used only for the TLS integration); gain 1.30-1.64x on the KEM, but only ~0.4-5.6% end-to-end in TLS 1.3 (derived), and one Table 3 cell is slower. Needs AVX-512.
+
+**Known shortcoming:** Code still unreleased (cccccosine/Kyber_AVX512_32w is a different paper). Table 3's ML-KEM-1024/Dilithium5 cell looks like a copy error; the 3.5-4.9x batch keygen is not explained by Algorithm 4 as printed (it batches only SHA3-256(ek)). Measured on a 4-vCPU VM with Turbo and HT on, flags unstated, against FIPS 203 draft code. liboqs has no AVX-512 ML-KEM (it now uses mlkem-native).
+
+**Independent measurement:** ESORICS 2024: ML-KEM AVX-512 1.30-1.64x vs pq-crystals AVX2; TLS 1.3 handshake gain ~0.4-5.6%.
+
+**How:** Each 512-bit zmm register holds 32 signed 16-bit coefficients, so one polynomial fits in 8 registers. All 7 NTT layers are merged: coefficients load once, and shuffle16/8/4/2/1 permutes pair them up at each butterfly distance. The butterflies use signed Montgomery reduction (vpmullw/vpmulhw with twiddles premultiplied by q^-1), Barrett reduction (vpmulhw plus a shift), and lazy reduction in the inverse NTT. Keccak-p[1600] runs 8 states in parallel instead of AVX2's 4. Rejection sampling and CBD sampling use AVX-512 mask registers and compress-store, and pk/sk decode and decompress use the byte permute vpermb.
+
+**Use it when:**
+- As a design blueprint if you maintain an ML-KEM backend for AVX-512 x86 servers such as Sapphire Rapids and want roughly 1.3-1.6x over the pq-crystals AVX2 kernels.
+- TLS terminators or KEM key pools that can pre-generate ephemeral keys 8 at a time: batched keygen is reported at 2,804 / 4,866 / 7,394 cycles per key for ML-KEM-512/768/1024.
+- Capacity planning: the paper's handshake data shows faster KEM code barely moves openssl s_time throughput, which is useful evidence before spending effort on KEM kernels.
+- Research on IND-1-CCA KEMs for ephemeral TLS key exchange: TRH decaps is 5,666 vs 19,838 cycles for ML-KEM-512 (measured on the AVX2 code), with the same ciphertext size.
+
+**Skip it when:**
+- When you need something you can build or audit: the paper says 'we will later open source our code', and no repository was found as of 2026-09. The only public AVX-512 Kyber repo found (cccccosine/Kyber_AVX512_32w) is a different ISC 2024 multi-way paper.
+- CPUs without AVX-512: the design depends on 32 zmm registers, mask registers, compress-store and vpermb, and has no fallback path.
+- Hybrid-mode TLS (X25519/P-256 + ML-KEM) where you expect big handshake gains: Table 4 shows about 0.4-5.6% more connections/sec, because ECDH and signatures dominate.
+- Deployments that need final-FIPS 203 or CMVP conformance: the code was built on FIPS 203 draft base code, final-standard conformance is not documented, and the faster TRH/TCH variants are not ML-KEM at all.
+- One-off keygen latency: batching only pays off when the caller consumes 8 key pairs at once, which needs application or protocol changes.
+
+**Vs siblings:** It is the only catalogued AVX-512 ML-KEM result, so use it as a reference design; for runnable ML-KEM code, moduletto (NEON ML-KEM-512 on aarch64, benchmarked against liboqs 0.16.0) actually ships. The same group's Dilithium-AVX512 (the paper's ref [56]) has public code for the signature side, and ENG25519 (ref [55]) speeds up the X25519 half that this paper's own data shows dominates hybrid handshakes.
+
+**Gotchas:**
+- Table 3 anomaly: the AVX2 ML-KEM-1024/Dilithium5 cell (3191.46 conn/s) duplicates the Falcon512 cell, so AVX-512 appears slower there (2451.08). It also contradicts the paper's own statement that handshakes/sec drop as the security level rises, so it is likely a copy error and that column is unreliable.
+- The batch-keygen ratios printed in Table 2 (4.9x/4.2x/3.5x) are a bit higher than the same table's non-batched AVX-512 keygen implies (about 4.7x/4.0x/3.4x). Also, Algorithm 4 as printed batches only the final SHA3-256 over the 8 encapsulation keys while K-PKE.KeyGen runs in a loop, so the paper does not explain how per-key cost falls to 2,804 cycles.
+- The printed assembly has errors: Algorithm 2 (Gentleman-Sande butterfly) repeats 'vpmulhw %zmm\zh' on two lines where a low-half product with the zeta*q^-1 constant is needed, so do not transcribe the listings verbatim.
+- Noisy measurement setup: Turbo Boost and hyper-threading were left on, the host was a 4-vCPU cloud VM, and TLS client and server ran on the same machine. Handshake deltas of about 1-5% are within what such setups can drift.
+
+**Status:** Peer-reviewed (ESORICS 2024, LNCS pp. 123-143), but the promised code never appeared, liboqs has no AVX-512 ML-KEM from this work (it switched to mlkem-native in 2025), and there is no license or maintenance, so treat it as a paper-only reference design.
+
+[benchmark](https://arxiv.org/abs/2404.13544)
+
+##### Optimizing Dilithium Implementation with AVX2/AVX-512 (PSPM)  `C`  `no license`  `stale`  `Tier B`
+
+Research AVX2/AVX-512 Round 3 Dilithium code using PSPM-TEE sparse c·s multiplication; paper reports 1.6-2.9x fewer cycles than pq-crystals AVX2.
+
+**Beats:** pq-crystals/dilithium AVX2 implementation: the 'standard' branch (FIPS 204 ML-DSA) AVX2 code for the headline Table XI numbers, and the NIST Round 3 submission AVX2 code for Table IX. This is the upstream code that liboqs/PQClean also derive from; liboqs and PQClean were not benchmarked directly. — On one core of an Intel i7-11700F at 2.5 GHz (Turbo and HT off, Ubuntu 20.04, gcc 9.4.0 -O3 -march=native plus AVX-512 flags, median of 100000 runs), the paper's AVX-512 code needs 36.6-47.4% fewer cycles than the pq-crystals FIPS 204 AVX2 code (e.g. ML-DSA-44 KeyGen 47760 vs 84270 cycles, about 1.6-1.9x). It needs 50.0-65.1% fewer cycles than the Round 3 AVX2 code (about 2.0-2.9x). PSPM alone cuts the Dilithium3 c·s / c·e product by 47-66% versus NTT but only speeds up whole AVX2 signing by about 3-8%. The repo cannot reproduce the ML-DSA table or either full-scheme baseline.
+
+**Known shortcoming:** Repo holds Round 3 Dilithium only: no ML-DSA code behind the headline numbers and no pq-crystals baseline in the repo (retiered A to B on the peer-reviewed TDSC 2025 paper). Percentages are cycle-count reductions (~1.58-1.90x). No license: reference use only.
+
+**Known shortcoming:** PSPM is only called in dilithium5 AVX-512 signing (dilithium2 AVX-512 compiles it but never calls it; dilithium3 AVX-512 and all AVX2 trees lack it); PSPM-TEE alone gives only 3-8% AVX2 signing gain. By code reading, pspm_tee_z/r0 store abs() values into z/r0 that are then packed into the signature, so signatures may be wrong; speed tests never check the verify result and run 10,000 iterations vs the paper's 100,000. Object files and a ~20 MB binary are committed. A second anonymous repo (Dilithium-AVX512/Dilithium-AVX512) for the same paper is a plain AVX-512 port without these techniques and exports pq-crystals symbol names.
+
+**How:** PSPM (parallel small polynomial multiplication, from Zheng et al., ACSAC 2022) exploits the fact that the challenge c has only tau coefficients equal to ±1. It packs the small secret polynomials into a precomputed table, so c·s1 and c·s2 become tau shifted adds or subtracts instead of an NTT. PSPM-TEE adds 'tailored early evaluation': it checks the r0 norm before the z norm (r0 rejects more often) one polynomial at a time and aborts at the first failure. The paper credits most of the AVX-512 gain to other work: a 16-way AVX-512 NTT/NTT^-1 with merged layers, 8-way AVX-512 Keccak for matrix and vector sampling, vectorized rejection sampling and packing, and a 'tailored reduction' for q = 2^23 - 2^13 + 1 using AVX-512IFMA.
+
+**Use it when:**
+- Studying or porting PSPM-TEE: the repo's PSPMTEE.c shows a 64-coefficient-per-zmm int8-table version of the sparse c·s product with early norm checks
+- Reading reference AVX-512 kernels for Dilithium (16-way NTT in ntt512.c/inv_ntt512.c, 8-way SHAKE sampling in fips202x8.c and keccak8x.c) when writing your own ML-DSA backend
+- Checking the paper's component benchmarks: dilithium2_avx512/test/test_speed.c times PQClean ('clean') against the authors' ('xurq') Keccak permutation, matrix expansion, uniform_eta and uniform_gamma1 side by side
+- Research on Rocket Lake / Ice Lake-class CPUs with full AVX-512 (F/VL/CD/BW/DQ/VBMI/VBMI2), where the paper's i7-11700F numbers apply
+
+**Skip it when:**
+- Any production or FIPS 204 use: the repo is Round 3 Dilithium only (Dilithium2 sk = 2528 bytes) and does not include the ML-DSA code behind the headline Table XI numbers
+- Anywhere you need a license: there is no LICENSE file, so legally the code is reference-only even though parts derive from permissively licensed PQClean/NIST code
+- Code you would trust without re-testing. By reading (not running) it: only dilithium5_avx512 signing actually calls pspm_tee_r0/pspm_tee_z, and those functions store |value| (after _mm512_abs_epi32) into z and r0 before z is packed into the signature. The last 64-coefficient block is also loaded at offset N+182-j, versus 192 in pspm()
+- CPUs without AVX-512 (many client Intel parts, older AMD): the _avx512 trees are compiled with -mavx512f/vl/cd/bw/dq/vbmi/vbmi2, and the AVX2 trees gain only about 3-8% in signing from PSPM-TEE (paper Tables VII/X)
+- Side-channel-sensitive deployments: the paper says constant-time was 'not the focus', and PSPM-TEE branches on challenge coefficients and returns early from rejection checks
+
+**Vs siblings:** Dilithium-AVX512 (github.com/Dilithium-AVX512/Dilithium-AVX512) is catalogued from the same paper with the same numbers. It is a single pq-crystals-style tree with KAT files and a DILITHIUM_MODE switch, but it has no PSPM code. Pick this repo only when you want the PSPM-TEE source and the AVX2 variants; for a usable ML-DSA, neither sibling qualifies, and the Plantard-NTT codegen entry is the more rigorous (formally verified) option if you need portable speedups.
+
+**Gotchas:**
+- PSPM is not used in most trees: dilithium2_avx512 compiles PSPMTEE.c but signs with NTT, and dilithium3_avx512 plus all three _avx2 trees contain no PSPM code, although the paper describes PSPM-TEE for AVX2 and AVX-512
+- The test_speed harnesses never check verify's return value (the D5 AVX-512 harness even signs in place over its message buffer). They run NTESTS = 10000, not the paper's 100000 repetitions, so a passing speed run proves nothing about correctness
+- Build artifacts are committed (common/keccak/*.o and a roughly 20 MB 'our_3_avx512_test_speed' binary in dilithium3_avx512); rebuild from source rather than trusting them
+- The paper's text and tables disagree on where PSPM-TEE helps most: the text says 7.7% for Dilithium3, while Table VII shows 7.7% for Dilithium2 and 3.1% for Dilithium3
+
+**Status:** Stale research dump (10 commits, last 2025-07-16, 3 stars, no issues) with no license, so it is reference-only; treat it as a companion to the TDSC paper, not a library.
+
+[repo](https://github.com/xurq5953/Optimizing-Dilithium-Implementation-with-AVX2-512) · [benchmark](https://arxiv.org/abs/2306.01989)
+
 ### networking-and-servers
 
 #### dns-quic-http3
@@ -932,6 +1321,204 @@ Python solver for Partitioned Learned Bloom Filter parameters; the resulting des
 [repo](https://github.com/kapilvaidya24/PLBF) · [benchmark](https://arxiv.org/abs/2006.03176)
 
 ## Unverified claims (tier C/D)
+
+### crypto-and-hashing
+
+#### aead-and-ciphers
+
+##### HiAE (High-throughput Authenticated Encryption)  `C`  `no license`  `active`  `Tier C`
+
+Reference C code for HiAE, Huawei's AES-round AEAD; 2-6.6x OpenSSL AES-256-GCM on 16 KB messages on recent x86/ARM.
+
+**Beats:** OpenSSL AES-256-GCM — The comparison comes from the designers' non-peer-reviewed ePrint 2025/377, Table 10. It measures single-core AEAD encryption at 16 KB with 48-byte AD, built with -O3 and GCC 11.4 on the x86 machines. HiAE reached 340.02 Gbps against 51.90 for OpenSSL 3.0 AES-256-GCM on a Ryzen 9 7950X (about 6.6x), 253.19 vs 38.80 on an EPYC 9334, and 171.46 vs 36.49 on a Xeon W9-3495X. The GCM baseline swings widely (114.07 Gbps on an i7-11700, where HiAE's lead falls to about 2.2x), decryption was not measured, phones used a hand-written AES instead of OpenSSL, and the repo's harness times only HiAE.
+
+**Known shortcoming:** ePrint preprint only; the harness times HiAE alone (no OpenSSL code in the repo), so ratios against AES-GCM are derived from separately reported numbers. The repo has no license; hiae-aead/libhiae is an MIT-licensed alternative implementation. New 2025 design with little cryptanalysis yet.
+
+**Known shortcoming:** Designer's preprint measures encryption only; libhiae shows decryption ~35-45% slower. At 64 bytes OpenSSL AES-GCM beats HiAE on every CPU in the paper's Table 10, and AEGIS-128L beats it on all 7 x86 CPUs. Reference HiAE_AEAD_decrypt releases plaintext without checking the tag (RUP setting), where ePrint 2025/1180 (ToSC 2026) gives key recovery. Init changed Oct/Nov 2025, so current ciphertexts differ from the paper version; no runtime ISA dispatch; individual Internet-Draft only, not CFRG-adopted.
+
+**How:** HiAE is an NFSR-style stream cipher with a 2048-bit state (16 x 128-bit blocks). Each 16-byte block costs two AES rounds plus a few XORs, arranged in an 'XAXX' shape (AESL(a xor b) xor c xor d). That shape matches x86 aesenc and fuses well with ARM aese+aesmc, so neither ISA pays the extra XOR that aesenc-shaped designs such as AEGIS and Rocca pay on ARM. The keystream tap position was picked to leave four dependency-free rounds of parallelism during decryption. The code unrolls 16 state updates, so the shifting state costs no index arithmetic. On x86 with VAES and AVX-512 it switches to inline assembly that keeps all 16 state blocks in xmm0-xmm15 and uses xmm16-31 for message and ciphertext blocks. The paper says this is why older CPUs, where aesenc can only use xmm0-15, fall behind.
+
+**Use it when:**
+- Point-to-point links where you control both endpoints and messages are 1 KB or larger, on CPUs with VAES and AVX-512 (Ice Lake, Sapphire Rapids, Zen 4). In the designers' Table 10 at 16 KB AEAD, HiAE runs at 340.02 Gbps against 51.90 for OpenSSL 3.0 AES-256-GCM on a Ryzen 9 7950X, and 195.02 against 43.85 on a Xeon Gold 6326.
+- ARMv8/v9 servers and laptops with crypto extensions, where the gain over other AES-based AEADs is largest. On Kunpeng 920 at 16 KB, HiAE does 53.72 Gbps, against 23.11 for AEGIS-128L and 14.66 for OpenSSL AES-256-GCM. On Apple M3 Pro it does 189.19, against 70.95 for GCM.
+- Reproducing or extending the ePrint 2025/377 measurements on your own hardware. make benchmark times encryption-only, AEAD and MAC-only runs at 16 B to 16 KB.
+- Designs that want a 256-bit key-recovery target with a 128-bit tag and can guarantee unique nonces and verify-before-release decryption.
+
+**Skip it when:**
+- Interoperating with TLS, IPsec, QUIC or any existing protocol. HiAE has no RFC. Its specification is an individual Internet-Draft (draft-pham-cfrg-hiae-06, May 2026) that CFRG has not adopted.
+- Small messages. At 64 B, OpenSSL AES-256-GCM beats HiAE on every CPU in Table 10 where OpenSSL was used (7950X 18.35 vs 12.12 Gbps, M3 Pro 28.05 vs 9.72), and AEGIS-128L beats it on all seven x86 chips. On Kunpeng 920 and 920X, GCM still wins at 256 B. The fixed 32-round initialization and 32-round finalization dominate short messages.
+- x86 without VAES (Cascade Lake, Haswell). Rocca is faster there: 156.60 vs 133.19 Gbps on a Xeon Gold 6242R and 75.97 vs 63.90 on a Xeon E5-2620 v3, both at 16 KB AEAD.
+- Any setting where a nonce might repeat, unverified plaintext might be released, or an attacker can submit many forged decryptions. ePrint 2025/1180 (a minor revision of a ToSC 2026 paper) recovers the full 256-bit key with 2^128 data and at most 2^129 time using nonce-respecting decryption queries, and with only a small constant number of repeated nonces or unverified decryptions. The designers' rebuttal (2025/1235) says these settings are outside HiAE's model.
+- Decrypt-heavy workloads or shipping this repo. The paper benchmarks encryption only, while libhiae's own numbers show decryption about 35-45% slower (Zen 4 at 16 KB: 129.71 vs 222.32 Gbps). This repo also has no LICENSE file.
+
+**Vs siblings:** Use HiAE over Rocca, Rocca-S and AEGIS-128L for bulk (1 KB and up) traffic on ARM or VAES-capable x86, where Table 10 shows it ahead. Stay with Rocca on pre-VAES Xeons, with AEGIS-128L or AES-GCM for messages of 256 B or less, and with libaegis (RFC-published AEGIS, including the wider AEGIS-128X variants the HiAE paper never measured) when you need a standardized, licensed library. To deploy HiAE itself, take the MIT-licensed hiae-aead/libhiae rather than this repo. intel-ipsec-mb and SNOW-V-GCM target different needs: standard IPsec algorithms and a 5G-style stream cipher.
+
+**Gotchas:**
+- HiAE_AEAD_decrypt never checks the tag. It writes the plaintext, then overwrites the caller's tag buffer with the computed tag and always returns 0. The caller has to save the received tag first, compare the two in constant time, and wipe the plaintext on mismatch. As written, the API is the release-of-unverified-plaintext setting in which 2025/1180 recovers the key. libhiae's HiAE_decrypt does verify and returns non-zero on failure.
+- The algorithm changed after the paper. The October and November 2025 commits changed how key and nonce are loaded during initialization, and a July 2025 fix made finalization encode lengths in bits. Ciphertexts and tags from older checkouts will not match the current draft test vectors. The round count is the same, so throughput should be unaffected.
+- Building with -march=native on a VAES/AVX-512 machine emits EVEX instructions that fault on older x86 CPUs, and there is no CPUID check. Build per target, or use libhiae, which dispatches at run time.
+- Every HiAE_stream_encrypt, HiAE_stream_decrypt and HiAE_stream_proc_ad call pads its own trailing partial block. When streaming, every chunk except the last must therefore be a multiple of 16 bytes. The header does not document this; it follows from the code.
+
+**Status:** This is a 21-star designer reference repo, last changed 2025-11-11 to match the updated initialization and IETF test vectors. It has no LICENSE file, so it is study-only. For real use, take the MIT-licensed hiae-aead/libhiae (59 stars, pushed 2026-09-20), which adds runtime dispatch, tag verification and a portable fallback.
+
+[repo](https://github.com/Concyclics/HiAE) · [benchmark](https://eprint.iacr.org/2025/377.pdf)
+
+#### encoding
+
+##### Faster CRC32 on Apple M1 (dougallj, PMULL multi-chain)  `C++`  `no license`  `abandoned`  `Tier C`
+
+Single-file C++17 AArch64 CRC-32/CRC-32C kernel with 12 PMULL folding chains; about 2.5x zlib's crc32 on Apple M1.
+
+**Beats:** zlib crc32() function — On a 3.2 GHz Apple M1 the author measured zlib's crc32 (a separate, unpublished test of Apple's system zlib, version unknown) at about 30 GB/s; the companion 12-chain gist reached about 70-75 GB/s on a 2 MiB buffer (clang++ -std=c++17 -O3), and this cleaner template/asm version about 76 GB/s. corsix/fast-crc32 independently measured this gist at 77.55 GB/s on M1 (512 KiB default buffer) against 25.03 GB/s for Chromium zlib's scalar code and 26.57 GB/s for its vector code, but only 17.41 GB/s on Ampere Altra, where the Chromium scalar code wins at 22.68 GB/s.
+
+**Known shortcoming:** A gist, not a library: Apple M1 only (PMULL multi-chain), untouched since 2022-06-06. ~76 GB/s is this gist's own figure (70/75 GB/s from an earlier test gist); zlib is not in the harness, so the ~2.3x over zlib is derived. clang++ -O3.
+
+**Known shortcoming:** No license. Builds only with Apple clang as published (corsix had to add <cstring> and -flax-vector-conversions). Loses on Ampere Altra (17.41 vs 22.68 GB/s); inputs under 192 bytes take a serial path. Superseded by corsix/fast-crc32 (~85 GB/s on M1).
+
+**Independent measurement:** corsix/fast-crc32 independent run: 77.55 GB/s on M1 vs Chromium zlib 25-27 GB/s; Ampere Altra 17.41 vs 22.68 GB/s.
+
+**How:** It uses Intel's 2009 carry-less-multiply folding ("Fast CRC Computation for Generic Polynomials Using PCLMULQDQ") ported to ARM PMULL/PMULL2, but with 12 independent 16-byte accumulators (192 bytes per iteration) instead of the usual 4. The chain count is sized to M1 Firestorm's latency: the Apple core fuses PMULL/PMULL2 with a following EOR into one 3-cycle uop, so each chain costs 6 cycles and 2 fused uops, and 12 chains fill the 4-per-cycle SIMD pipes. The fold step is inline asm to keep valid fusion pairs. The final 128-to-32-bit reduction uses two CRC32X/CRC32CX instructions, or a Barrett reduction for other polynomials.
+
+**Use it when:**
+- Bulk CRC-32 or CRC-32C over large buffers (the author profiled 128 KB and up; the test harness uses 2 MiB) on Apple M-series cores, where the checksum is the throughput bottleneck, e.g. zip/PNG/gzip writers or storage checksums on macOS/iOS.
+- Studying or porting the N-chain PMULL+EOR folding technique: about 270 readable lines, with the constants derived by constexpr code rather than magic numbers.
+- Arbitrary reflected 32-bit CRC polynomials on AArch64: pass the polynomial as a template parameter (NO_CRC_INSNS builds without the ARMv8 CRC instructions, using a table plus Barrett reduction).
+
+**Skip it when:**
+- Non-Apple ARM cores. The PMULL+EOR fusion it depends on is, per the author, probably unique to Apple CPUs. corsix/fast-crc32 measured it at 17.41 GB/s on Ampere Altra, slower than Chromium zlib's scalar CRC32X loop at 22.68 GB/s.
+- x86 or any non-AArch64 target: there is no fallback path, since it includes arm_neon.h and uses PMULL inline asm unconditionally.
+- Small or latency-sensitive buffers. Below 192 bytes (after 16-byte alignment) it drops to a single serial CRC32X chain, and the author warns its 5 ops per 16 bytes (vs 3 for CRC32X) can hurt when the checksum shares the core with other work.
+- Shipping code that needs a clear license. The gist carries only an 'AS IS' warranty disclaimer and no license grant.
+- When you want the fastest M1 result: the author's 2024 update points to corsix/fast-crc32 at 85.05 GB/s vs 77.55 GB/s for this gist.
+
+**Vs siblings:** corsix/fast-crc32 is the direct successor: it ships explicit license files, is about 10% faster on M1 (85.05 vs 77.55 GB/s by blending EOR3 and CRC32X) and covers x86 and non-Apple ARM, while crc-fast and crc32fast are packaged libraries. Pick this gist only as a compact, readable C++17 reference for 12-chain PMULL+EOR folding; for shipping code use corsix/fast-crc32.
+
+**Gotchas:**
+- It does not build as-is outside Apple clang. corsix/fast-crc32's vendored copy had to rewrite the asm to standard syntax (`pmull v0.1q, %[val].1d, %[consts].1d`), add the missing `#include <cstring>` for memcpy, add an extern "C" wrapper, and compile with `-march=armv8-a+crypto+crc -flax-vector-conversions` under g++ on Linux.
+- Speed depends on fusion pairs, i.e. each PMULL immediately followed by its dependent EOR. The author reports about 70 GB/s without them and about 75 GB/s with them; the inline asm pins this order, so do not 'clean it up' into intrinsics without re-measuring.
+- The final fold from 12 accumulators to one is serial (about 72 cycles, per the author's TODO), a fixed cost per call on top of the small-buffer fallback.
+- This gist has no test or harness of its own. The companion gist's harness checks only one 2 MiB buffer against a slice-by-4 table, but corsix's bench.c (which checks every length from 1 to 4,160 bytes and every split point against a table CRC) runs this code before benchmarking it.
+
+**Status:** Abandoned: last edited 2022-06-06, and the author's 2024 blog update names corsix/fast-crc32 as the new state of the art. With no license grant it is a reference implementation, not code to vendor.
+
+[repo](https://gist.github.com/dougallj/263f132023f590aec31a11bbc746b897) · [benchmark](https://dougallj.wordpress.com/2022/05/22/faster-crc32-on-the-apple-m1/)
+
+#### signatures-kem
+
+##### GOLF: GPU-accelerated Optimization for Lattice-based FALCON  `CUDA`  `no license`  `unknown`  `Tier C`
+
+CUDA batch port of Falcon-512 signing and verification, one signature per GPU thread; 70x/369x the reference's published CPU throughput.
+
+**Beats:** Falcon reference implementation throughput as published on falcon-sign.info (Intel Core i5-8259U @ 2.3 GHz, TurboBoost off), cited as Fouque et al. (Ref) in Table II and not re-run by the authors; also prior CPU/GPU Falcon papers — On an RTX 4090 (CUDA 12.1, sm_89, -maxrregcount=127, 128x512 threads), GOLF measures 420,250 sign/s and 10,311,039 verify/s for Falcon, with parameters implied to be 512 by the baseline. That baseline (5,948.1 sign/s, 27,933.0 verify/s) was copied from falcon-sign.info for the reference implementation on an i5-8259U at 2.3 GHz with TurboBoost off and compiler flags not given, so 70.65x/369.13x compares a GPU batch against one CPU. On an A100 GOLF reaches 157,995 sign/s and 4,180,879 verify/s, which is 2.69x/1.53x over Lee et al.'s published A100 figures (not re-run).
+
+**Known shortcoming:** No public code. GPU vs CPU comparison: the 58.05x/73.14x ratios are against Nguyen et al. on an Apple M1, and the 70.65x/369.13x ratios against the reference use numbers copied from falcon-sign.info (i5-8259U, flags unknown). The ePrint page shows signing as 42.02 kops/s; the PDF says 420.25.
+
+**Known shortcoming:** Paper never names the parameter set (baseline is falcon-sign.info's Falcon-512 row) and its ratios are inconsistent (abstract 58x/73x vs Apple M1; 70.65x/369.13x vs reference; intro 387.84x). Batch latency ~156 ms. Side channels argued away, not measured. The possibly related russdrh/FP-GOLF repo (no license) reuses one salt across threads and its benchmark clones one key/message 65,536 times and checks only thread 0.
+
+**Independent measurement:** IEEE TIFS 2025: signing 420.25 kops/s; vs Nguyen et al. (M1) 58.05x/73.14x; vs reference 70.65x/369.13x.
+
+**How:** The main gain is coarse-grained parallelism: one thread per signature, 128 blocks x 512 threads (65,536 signatures per launch), with -maxrregcount=127 so that 512 threads fit in a block. A 2-threads-per-signature fine-grained variant that swaps data with __shfl_sync reached only 177,027 sig/s, against 361,726 for coarse-grained. Kernel fusion avoids repeated launches and global-memory round trips, and the recursive ffSampling is rewritten as an explicit stack-frame loop (Lee et al.'s method) so that NVCC will compile it. Finally, the FFT/iFFT butterfly units run in depth-first rather than layer-by-layer (breadth-first) order to shorten data reuse distance. This added 14.51% signing throughput (361,726 to 414,216 sig/s at 128x512) and, per Nsight, cut L2-to-DRAM traffic by 18%.
+
+**Use it when:**
+- Cloud or server backends that queue tens of thousands of Falcon-512 signatures at a time, where aggregate ops/s matters and roughly 156 ms of batch latency is acceptable (RTX 4090 figure).
+- Bulk Falcon-512 verification, e.g. checking large signature sets. Verification shows the largest gain (10.3M verify/s on an RTX 4090, about 6.4 ms batch latency) and needs no secret material on the GPU.
+- You are building your own GPU Falcon and want proven, simple tricks: one thread per signature, a stack-frame iterative ffSampling, and depth-first butterfly ordering for FFT/iFFT cache locality.
+- You need published RTX 4090 and A100 throughput numbers to size GPU capacity for Falcon against Lee et al.'s earlier GPU work.
+
+**Skip it when:**
+- Single-signature or latency-bound signing. Each 65,536-signature batch takes about 156 ms on an RTX 4090 (415 ms on an A100), while the CPU reference produces one Falcon-512 signature in about 0.17 ms (5,948 sign/s on an i5-8259U).
+- You need usable, licensed code. The paper links none. The candidate repo russdrh/FP-GOLF has no license, 0 stars and a single benchmark/KAT driver, and has per-thread indexing bugs (see gotchas).
+- Falcon-1024 or FIPS 206 FN-DSA interoperability. The paper never names a parameter set (its baseline row is Falcon-512), cites the 2018 NIST submission, and FP-GOLF hard-codes logn=9 (Falcon-512).
+- Shared or multi-tenant GPUs with side-channel concerns. The paper argues GPU global-memory side channels are 'not practical' rather than measuring leakage, and does not analyze the floating-point Gaussian sampler's timing on GPU.
+- Tight GPU memory. The FP-GOLF tree mode allocates 7,169 doubles (about 56 KB) of expanded key per thread, about 3.8 GB for its 65,536-thread batch, plus a 36 KB per-thread scratch union.
+
+**Vs siblings:** Pick GOLF over VecFalcon only when you have a CUDA GPU and large batches and need Falcon throughput far beyond a CPU core. VecFalcon (CPU SIMD, 1.13-1.59x faster signing, released code) is the practical choice for per-signature latency or deployable code. GRASP is the matching GPU batch design for SPHINCS+ and also ships no code; if you need working GPU Falcon code today, Lee et al.'s benlwk/Falcon-Mitaka (GPL-3.0, Falcon-512), the prior work GOLF benchmarks against, is released.
+
+**Gotchas:**
+- Headline ratios are easy to misread. The abstract's 58.05x/73.14x is against Nguyen et al.'s Apple M1 NEON code, not the reference. Against the reference (falcon-sign.info) the gain is 70.65x/369.13x, though the introduction says 387.84x. The ePrint web abstract prints 42.02 kops/s where the PDF says 420.25 kops/s.
+- Throughput depends heavily on batch size. Across nine grid/block configurations from 16,384 to 65,536 threads, the best signing throughput is 2.93x the worst (1.47x for verification). Keys are generated ahead of time and shipped to the GPU in bulk, and the paper does not say whether host-device copies are inside the timed region.
+- In FP-GOLF, the sign kernels read the 40-byte nonce (salt) with no per-thread offset, so every thread in a batch hashes and emits the same host-supplied salt. They also memmove thread 0's message into every signed-message output. Falcon (the paper's Algorithm 1) needs a fresh uniform salt per signature.
+- The FP-GOLF benchmark copies one key, one message, one seed and one nonce into all 65,536 slots, checks only thread 0's signature against the CPU result, and times kernel launch plus cudaDeviceSynchronize only. Its grid is 256x256, not the paper's 128x512.
+
+**Status:** This is a peer-reviewed reference design (IEEE TIFS vol. 20, pp. 9441-9453, 2025; ePrint revised 2025-08-15) with no linked code, license or maintenance. The first author's russdrh/FP-GOLF (3 commits on 2026-05-25, 0 stars, no license) contains the paper's depth-first FFT/iFFT loops (logm/loghm counters) and stack-based ffSampling, so it is probably related. It is unconfirmed as the paper's artifact and not usable as-is.
+
+[benchmark](https://eprint.iacr.org/2025/749)
+
+##### GRASP: GPU-based paRallel Accelerated SPHINCS+  `CUDA`  `no license`  `unknown`  `Tier C`
+
+Single-kernel CUDA SPHINCS+-SHA256-f-simple batch signer/verifier; 1.37-3.45x over Kim et al.'s GPU code, 1,820-3,659x the single-core reference.
+
+**Beats:** NIST PQC SPHINCS+ reference C code (version 3.0), SHA-256 simple fast parameter sets, run by the authors on a single core of an AMD Ryzen 5 5600G; also the open-source GPU SPHINCS+ of Kim et al. (re-run on the same GPU) plus prior GPU/FPGA works — On an RTX 4090, timing kernels only (host-device copies excluded, averaged over 1,000 runs, NVCC version and flags unstated), GRASP signs 146,363 / 82,621 / 40,489 and verifies 1,499,590 / 933,696 / 886,362 SPHINCS+-SHA256-128f/192f/256f-simple signatures per second. That is 3,114-3,659x (signing) and 1,820-2,029x (verification) the NIST reference C code v3.0 on one Ryzen 5 5600G core. The like-for-like result is 1.37-1.79x signing and 1.53-3.45x verification over Kim et al.'s open-source GPU code re-run on the same RTX 4090.
+
+**Known shortcoming:** No public code. The >1000x ratios compare an RTX 4090 against one Ryzen 5 5600G core running the NIST SPHINCS+ reference; the headline numbers exclude memcpy, and NVCC/CPU flags are not given. Against other GPU code (Kim et al., re-run on the same RTX 4090) the gain is 1.37-3.45x.
+
+**Known shortcoming:** Only SHA256-f-simple is measured; including memcpy, level-1 signing drops from 146k to 118k/s. Needs a 128x512 launch grid (128x64 reaches 45% of peak). Level-3 verify figure differs between text (1,408,846) and table (933,696). Baseline is the portable reference v3.0 on one core, with no optimized CPU build compared. SLH-DSA (FIPS 205) compatibility not documented.
+
+**Independent measurement:** IEEE TC 2026: signing 3659x/3178x/3115x, verifying 2029x/1898x/1820x vs SPHINCS+ ref v3.0 (1 core); 1.37-3.45x vs Kim et al. GPU.
+
+**How:** Kernel fusion runs FORS, WOTS+ and the MSS hypertree in a single CUDA kernel. This avoids the global-memory hand-offs of Kim et al.'s multi-kernel design. The thread-team size is chosen so that both the hypertree layer count d and the FORS tree count k divide evenly (gcd(22,33)=11), with one thread per layer or subtree, so no threads sit idle during node merging. When the root of the layer below is already known, WOTS+ signing is folded into that leaf's public-key chain computation, which removes about 33% of the hash calls for those leaves and cuts separate WOTS+ signings from d to t per thread. The n-byte hash blocks move with 16-byte int4 loads and stores at levels 1 and 5, and with int2 at level 3, where 24-byte blocks would misalign.
+
+**Use it when:**
+- High-volume SPHINCS+ signing on a data-center GPU (e.g. a code- or firmware-signing farm) that accepts SHA-256 fast-simple parameters: 146,363 / 82,621 / 40,489 signatures/s at levels 1/3/5 on an RTX 4090.
+- Mass verification of SPHINCS+-SHA256-f signatures: 1.5M/s at level 1 on an RTX 4090, one thread per signature.
+- A GPU signer that needs per-signature latency: the low-latency mode signs in 0.512 ms at level 1 (25 ms for the CPU reference, 4.8 ms for Kim et al.), at the cost of dropping to 19,521 ops/s.
+- Reference techniques for your own GPU or CPU hash-based signer. Kernel fusion, gcd-sized thread teams and merging WOTS+ signing into leaf keygen are all described in enough detail to reimplement, and the paper says the WOTS+ merge also helps CPU code.
+
+**Skip it when:**
+- You need code. None was released and there is no license. The only open GPU SPHINCS+ code found is Kim et al.'s kindongsy/TCAS-SPHINCSp_GPU, which is unlicensed and consists of per-security-level Visual Studio projects.
+- You need SHAKE, Haraka, 'robust' or small (s) parameter sets. Only SHA-256 fast-simple was measured; the claim that it is 'equally effective in all modes' is asserted, not benchmarked.
+- You need FIPS 205 SLH-DSA compliance. The work targets SPHINCS+ round 3 (reference code v3.0), and compatibility with the final SLH-DSA standard is not documented.
+- Small batches in the throughput mode. The peak needs a 128x512 grid; at 128x64, level-1 signing drops to 66.4 kops/s, 45% of the peak.
+- Sizing end-to-end PCIe throughput from the headline. It excludes host-device copies: with memcpy, RTX 4090 level-1 signing falls from 146,363 to 117,723 ops/s, and with-memcpy verification numbers are not reported.
+
+**Vs siblings:** Pick GRASP when you are committed to hash-based SPHINCS+ signatures and need GPU batch throughput. GOLF is the same group's GPU design for Falcon; it reaches 420k sign/s on the same RTX 4090 with 666-byte Falcon-512 signatures versus 17,088 bytes for SPHINCS+-128f, and it also ships no code. The CPU siblings (VecFalcon, ENG25519, UltrafastSecp256k1) release code and suit per-signature latency on CPUs.
+
+**Gotchas:**
+- Level-3 verification is reported inconsistently: the text says 1,408,846 ops/s, while Table VI and Fig. 13 say 933,696 (933.7 kops/s). The table value drives the 1897.76x and 1.80x ratios.
+- The 1,820-3,659x ratios are against the portable reference C code on one Ryzen 5 5600G core with unstated flags (40/26/13 sign/s, 739/492/487 verify/s). No optimized CPU SPHINCS+ implementation was compared.
+- The gap over Kim et al. shrinks with apples-to-apples conditions: 1.37/1.79/1.58x kernel-only on an RTX 4090 (Kim's open-source code re-run), 1.36/1.65/1.49x with memcpy, and 1.22/1.25/1.30x on an RTX 3090 against Kim's published with-memcpy figures.
+- The low-latency and high-throughput modes are separate thread configurations. Low-latency gives 5.5x lower throughput than Kim et al. on the RTX 4090, so pick one per deployment.
+
+**Status:** This is unreleased research code from a peer-reviewed paper (IEEE TC vol. 75 no. 4, pp. 1579-1592, 2026; ePrint revised 2025-01-16) with no repo, license or maintenance, so treat it as a technique reference only. Both the ePrint and the journal version are titled 'GRASP: Accelerating Hash-based PQC Performance on GPU Parallel Architecture'; the catalog name is the expanded acronym.
+
+[benchmark](https://eprint.iacr.org/2024/1030)
+
+##### moduletto (NEON i16 ML-KEM-512)  `Rust`  `PolyForm-Noncommercial-1.0.0`  `active`  `Tier C`
+
+Rust modular-arithmetic/NTT crate whose NEON ML-KEM-512 example edges out liboqs 0.16.0 on Apple M5 (~1.18x).
+
+**Beats:** liboqs 0.16.0 (ML-KEM-512, built from source at tag 0.16.0, Release, -O3 -march=native, on aarch64/Apple M5) — On an Apple M5 (macOS 25.5), the author's 10,000-iteration example times its NEON i16 ML-KEM-512 at 4.07/3.84/5.80 us (keygen/encaps/decaps, about 13.7-14.1 us per session), built with the Cargo release profile (LTO, codegen-units = 1) and an unstated rustc. That is compared with liboqs 0.16.0 built from source (-O3 -march=native) at 16.19 us, about 1.18x. The liboqs number comes from an unpublished C harness and is hardcoded in the example, so the comparison is first-party and not reproducible from the repo.
+
+**Known shortcoming:** liboqs and Kyber-ref times are hard-coded constants in examples/kyber_benchmark.rs, measured by a C harness that is not in the repo; rustc version not stated (retiered A to C). The '2.96x' is Kyber-ref vs liboqs, not moduletto (moduletto vs Kyber-ref is ~3.4-3.5x, derived). The KEM lives in an example, not the library; FIPS 203 conformant only since 2026-08-11. PolyForm-Noncommercial license: reference use only. NEON (aarch64) only.
+
+**Known shortcoming:** Security bug (found in enrichment, by code reading): the decapsulation mask `!(a^b).wrapping_neg()` evaluates to (a^b)-1 rather than 0x00/0xFF in all three backends, so a ciphertext differing in one byte can leak real-key bits into the implicit-rejection output; ACVP vectors did not catch it and it is not reported upstream. Do not use for real keys. No API (KEM lives in an example), not on crates.io, no zeroize or RNG. Library NTT converts i64/i16 on every call; the x86 i64 path is ~2x slower than liboqs.
+
+**How:** A pq-crystals-style int16 Montgomery NTT (R = 2^16, QINV = -3327) runs eight butterflies per NEON instruction (vmull_s16 / vmovn_s32 / vshrn_n_s32). The two narrow layers (len 4 and 2) are vectorised with uzp/zip deinterleaving, and lazy reduction plus a branchless rounding Barrett step removes per-layer reductions. Most of the session-level gain came from outside the NTT: grouped bit-packing codecs (43.6 to 27.7 us); a two-lane Keccak-f1600 that uses ARMv8.2 FEAT_SHA3 (EOR3/RAX1/XAR/BCAX) to pair independent SHAKE streams, with right-sized squeezing (to 16.1 us); and dropping round-3 Kyber's final KDF during the FIPS 203 fix (to 13.9 us).
+
+**Use it when:**
+- Studying how a Rust ML-KEM-512 reaches liboqs-level speed on Apple Silicon: int16 NEON NTT, uzp/zip narrow layers, two-lane FEAT_SHA3 Keccak
+- Non-commercial research or benchmarking on aarch64 with FEAT_SHA3 (Apple M-series), where the ~13.9 us session figure was measured
+- Needing a small no_std-capable NTT/ModN arithmetic crate for q = 3329 experiments, with Coq proofs of the Barrett and constant-time primitives and fuzz targets
+- Porting ideas (grouped codecs, streaming rejection sampler, paired Keccak lanes) into a permissively licensed ML-KEM implementation you write yourself
+
+**Skip it when:**
+- Any commercial product: PolyForm Noncommercial 1.0.0 forbids commercial use without a separate license
+- Production key exchange: the KEM is benchmark example code with no public KEM API, no RNG integration, no zeroization, no independent review, and the decapsulation mask defect listed under gotchas
+- x86-64 or other non-aarch64 targets: the NTT falls back to a portable i64 kernel and the i64 KEM backends measured 34.7-36.8 us on the M5, about 2x slower than liboqs
+- ML-KEM-768/1024: only the 512 parameter set (k = 2) is implemented
+- Needing a published package: the crate is not on crates.io (the README's moduletto = "0.1" snippet will not resolve), so it has to be a git dependency
+
+**Vs siblings:** Among the catalogued KEM/signature entries, this is the only ML-KEM one that times against liboqs on Apple Silicon NEON. sntrup is a usable, MIT/Apache crate for a different KEM (NTRU Prime) with a reproducible liboqs harness, and the Plantard-NTT paper targets formally verified NTTs compared against pq-crystals reference C. Pick moduletto only to learn aarch64 ML-KEM-512 optimisation techniques under a non-commercial license.
+
+**Gotchas:**
+- Decapsulation's constant-time equality mask is wrong in all three backends of the example (eq &= !(a ^ b).wrapping_neg() computes (a^b)-1 per byte, not 0x00/0xFF). A ciphertext whose only byte difference from the re-encryption is 0x02 yields mask 0x01, so the output mixes bits of the real key K' into the implicit-rejection key. The ACVP VAL vectors did not catch this. This is from reading the source; not reported upstream as of this review.
+- The library's NEON NTT takes and returns [ModN<3329>; 256] (i64 per coefficient) and converts to and from i16 on every call (about 30 ns each way, per the source comment), so building a KEM on the public API will not reach the example's numbers
+- Until 2026-08-11 the code implemented round-3 Kyber with a hardcoded zero implicit-rejection seed and eta1 = 2. The 2026-03-19 tables and the Platform Notes in BENCHMARKS.md describe that older, non-conformant code
+- The LibOQS (16.19 / 20.43 us) and Kyber-ref (47.87 us) figures are hardcoded constants printed by the example. Running it re-times only moduletto
+
+**Status:** One developer, 11 commits (the burst of 2026-08-11 changes delivered the FIPS 203 fixes and the speedups, and the last commit was 2026-09-03), no issues filed, not on crates.io, and noncommercial-licensed, so treat it as reference code to read, not a dependency.
+
+[repo](https://github.com/crabnebula-dev/moduletto) · [benchmark](https://github.com/crabnebula-dev/moduletto/blob/main/BENCHMARKS.md)
 
 ### networking-and-servers
 

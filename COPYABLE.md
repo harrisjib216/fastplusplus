@@ -44,6 +44,48 @@ In-memory block/frame compressor beating zlib deflate on speed, trading compress
 
 [repo](https://github.com/lz4/lz4) · [benchmark](https://github.com/lz4/lz4)
 
+##### zlib-ng  `C`  `Zlib`  `active`  `Tier B`
+
+Maintained zlib fork with SIMD deflate, inflate and CRC32/Adler32; about 2.2-2.5x faster compression and 1.5x faster decompression than zlib.
+
+**Beats:** zlib (including its CRC32/Adler32 checksum routines) — In the independent lzbench 2.0.1 table (gcc 14.2.0 with the Makefile's default -O3, one thread of an AMD EPYC 9554 at 3.10 GHz with turbo off, silesia.tar), zlib-ng 2.2.3 compressed 2.2x (-1), 2.5x (-6) and 2.4x (-9) faster than zlib 1.3.1 and decompressed 1.46-1.49x faster (471-518 vs 323-348 MB/s), with a much worse ratio at -1 and about equal ratios at -6 and -9. The README's '4x' only appears in the maintainers' own deflatebench runs (discussion #2022: 4.1-4.9x at level 6 on a Ryzen 8700GE and an i7-11700K, against a zlib develop build with unstated flags), and the CRC32/Adler32 speedups have no published numbers.
+
+**Known shortcoming:** README's '~4x faster than stock zlib' has no stated method and is not reproduced: independent lzbench shows ~2.2-2.5x compression and ~1.5x decompression. Hard fork of madler/zlib; zlib-compat mode needed for drop-in use. Found in wave 7 for its SIMD CRC32/Adler-32; filed under wave 9's general-lossless category.
+
+**Known shortcoming:** Level -1 ratio is ~22% worse (deflate_quick static Huffman); output bytes differ from zlib; deflate uses more memory (~350 KB); zlib-compat targets zlib 1.3.1. 2.3.1 had a Chorba CRC bug (wrong CRCs above 256 KB); newer inflate speedups are develop-only. No published numbers for the CRC32/Adler-32 gains. libdeflate is faster for whole-buffer decompression; zstd/LZ4 are faster if DEFLATE is not required.
+
+**Independent measurement:** lzbench (EPYC 9554, GCC 14.2): zlib-ng 2.2.3 vs zlib 1.3.1 ~2.2-2.5x compress, ~1.5x decompress.
+
+**How:** At first use, a runtime-filled function table (functable.c, using cpuid/hwcap) picks SIMD kernels for Adler32 (SSSE3 up to AVX512-VNNI, Neon dot-product), CRC32, compare256 match-length search, slide_hash and inflate's chunked match copy (chunkmemset). The CRC32 kernels are Intel's PCLMULQDQ/VPCLMULQDQ folding, a PMULL+EOR3 kernel from corsix/fast-crc32, and the Chorba algorithm (arXiv 2412.16398) for CPUs without carry-less multiply. Deflate swaps zlib's level-1 and level 3-6 match finders for Intel-derived strategies: deflate_quick (level 1 reads only the hash-chain head and emits static Huffman trees) and deflate_medium (levels 3-6). It also uses a 64K-entry Knuth multiplicative hash, and inflate adds a wider bit buffer and SIMD match copies.
+
+**Use it when:**
+- Servers, log shippers or batch jobs that must emit standard gzip/zlib/DEFLATE at levels 1-9 and are bound by compression CPU: independent lzbench numbers show 2.2-2.5x zlib 1.3.1's compression throughput.
+- Speeding up an existing zlib-linked application or a whole distro without code changes: build with ZLIB_COMPAT=ON and relink or LD_PRELOAD. Fedora 40 adopted zlib-ng-compat as its system zlib.
+- Code that runs crc32()/adler32() over large buffers (gzip trailers, PNG, zip, framing) on x86-64 with PCLMULQDQ/AVX2/AVX-512 or on aarch64 with PMULL, where the SIMD kernel is picked at runtime.
+- One portable binary for many CPUs: runtime dispatch covers x86, ARM, POWER, RISC-V, LoongArch, MIPS and IBM Z (including DFLTCC hardware deflate), so a baseline x86-64 build still uses AVX-512 where the CPU has it.
+- Latency-sensitive callers that want every allocation to happen in deflateInit/inflateInit. zlib-ng allocates one block at init and can then only fail at init.
+
+**Skip it when:**
+- You control both ends and do not need DEFLATE. In the same lzbench run, zstd 1.5.6 -1 compresses 2.1x faster than zlib-ng -1 (422 vs 202 MB/s), gives a much better ratio (34.64% vs 44.41%) and decompresses 2.9x faster (1347 vs 471 MB/s).
+- Level 1 when output size matters. zlib-ng -1 output is about 22% larger than zlib -1 on Silesia (44.41% vs 36.45%), because deflate_quick uses static Huffman trees. Use level 2 or higher.
+- Maximum whole-buffer decompression speed: libdeflate 1.23 (not catalogued) decompresses Silesia at 860-919 MB/s against zlib-ng's 471-518 MB/s in the same lzbench table, but libdeflate has no streaming API.
+- Tests, caches or golden files that depend on zlib's exact compressed bytes or lengths. PORTING.md says the output differs from zlib, and Z_DEFLATE_REPRODUCIBLE only guarantees identical output within an identical zlib-ng build.
+- Apps that feed zlib a fixed pre-sized zalloc pool (the nginx pattern): zlib-ng needs more memory, about 350 KB for deflate and 42 KB for inflate on 64-bit, because inflate always allocates the full window. The README also warns against manually replacing the system libz.
+
+**Integration:** static lib or shared lib (CMake or configure build; vcpkg port) · none at runtime (libc only). Tests use Google Test and benchmarks use Google Benchmark, both optional build options. · C11 by default (CMake also accepts C99); CMake 3.14+ for 2.3.x; the project wiki recommends GCC 8.5+, Clang 11+ and MSVC 2022 · x86/x86-64 (SSE2 through AVX-512/VNNI/VPCLMULQDQ, runtime-detected), ARM/aarch64 (ARMv6, Neon, ARMv8 CRC/PMULL, EOR3), POWER8/9, RISC-V (RVV, Zbc), LoongArch (LSX/LASX), MIPS MSA and IBM Z (VX, DFLTCC), with generic C fallbacks. CI runs on Linux, macOS and Windows.
+
+**Vs siblings:** Pick zlib-ng over zstd or LZ4 when the format must stay zlib/gzip/DEFLATE (HTTP gzip, PNG, zip, existing archives, readers you do not control) or when you want existing zlib callers to get faster with no code changes. If you control both ends, zstd -1 beats it on speed and ratio, and LZ4 decompresses about 8x faster (3716 vs 471 MB/s in lzbench) at a worse ratio.
+
+**Gotchas:**
+- The default CMake build is native mode (libz-ng, zlib-ng.h). You must pass ZLIB_COMPAT=ON to get a libz replacement. Linking a compat-mode zlib-ng into a process that also pulls in the system zlib through another library can crash or corrupt output (PORTING.md).
+- Skip 2.3.1: its Chorba CRC32 returned wrong CRCs for some inputs over 256 KB, which the 2.3.2 hotfix fixed. The latest release is 2.3.3 (Feb 2026). Newer work, such as PR #2353's inflate bit-refill change (about 13% faster inflate on Apple Silicon), exists only on the develop branch. Releases have lagged fixes before: the CVE-2022-37434 fix took about 7 months to ship.
+- MinGW-w64 GCC builds at -O0/-Og with AVX2/AVX-512 enabled crash in the chunkset code because of GCC PR54412 (misaligned vector spills); issue #1874 is still open. Workarounds are -O1 or higher, or -Wa,-muse-unaligned-vector-move.
+- Maintainers say zlib-ng uses a 4-byte minimum match where gzip allows 3, which can cost ratio on some binary data (#1922). A 2021 report (#947) found it slower than zlib on many tiny PNGs via LD_PRELOAD on a Raspberry Pi 4. The maintainers replied that zlib-ng is tuned for larger inputs.
+
+**Status:** Actively developed (last commit 2026-09-25; latest release 2.3.3 on 2026-02-03) under the permissive Zlib license, OSS-Fuzz-tested, and accepted as Fedora 40's system-wide zlib replacement (zlib-ng-compat).
+
+[repo](https://github.com/zlib-ng/zlib-ng) · [benchmark](https://github.com/inikep/lzbench#benchmarks)
+
 ##### Zstandard (zstd)  `C`  `BSD-3-Clause OR GPL-2.0-only`  `active`  `Tier B`
 
 General-purpose lossless compressor beating zlib/deflate on speed and ratio, with tunable levels and negative fast modes.
@@ -82,7 +124,1079 @@ General-purpose lossless compressor beating zlib/deflate on speed and ratio, wit
 
 ### crypto-and-hashing
 
+#### aead-and-ciphers
+
+##### AEZ (v4)  `C`  `Unlicense`  `abandoned`  `Tier A`
+
+Krovetz's AES-NI code for AEZ v4, a nonce-misuse-resistant AEAD, uses ~2.7x fewer cycles than AES-256-GCM, but v4 is broken.
+
+**Beats:** AES-256-GCM — The measurement is eBACS supercop-20260627 on 'freshwrap,big', an Intel Core 5 210H (Raptor Cove P-cores, 2.2 GHz). aezv4/aesni was built with clang 19.1.7 -march=native -O and aes256gcmv1 (fastest build: Dolbeau's AES-NI intrinsics) with clang -O2. Median long+long cost was 0.26 vs 0.70 cpb for encrypt (~2.7x) and 0.26 vs 0.57 for decrypt (~2.2x). Derived from the page data: message-only long+0 encrypt was 0.35 vs 1.07 cpb (~3.1x), 1536+1536 encrypt 0.31 vs 0.82 (~2.6x), and 64+64 encrypt 1.18 vs 4.70 (~4x).
+
+**Known shortcoming:** CAESAR candidate that did not reach the final portfolio; code lives only in SUPERCOP/eBACS. Decrypt gain is ~2.2x. The eBACS baseline's fastest AES-GCM is Dolbeau's AES-NI code (OpenSSL's wrapper is 1.46x slower), so ratios against OpenSSL look larger. 'Long' is the 2048-vs-128-byte differential.
+
+**Known shortcoming:** AEZ v4 is broken: Bonnetain et al. (2017) found offset collisions giving easy forgeries; only v5 fixes it (same speed, ~0.28 cycles/byte). The SUPERCOP code reads out of bounds (message +16 bytes, 16-byte nonce load, AD tail) and truncates lengths to 32 bits; eBACS flags it for timing leaks. Needs AES-NI + SSE4.1 (#error on MSVC); two-pass; birthday-bound key recovery; not standardized. AEGIS-128L is faster. Useful only as a benchmark reference.
+
+**Independent measurement:** eBACS: AEZ v4 0.26 vs AES-256-GCM 0.70 cycles/byte (aesni, clang 19.1.7 -O).
+
+**How:** It follows the designers' 'prove-then-prune' approach. The provably secure AES-based tweakable blockcipher is swapped for AES4 (four aesenc rounds keyed directly by the 128-bit subkeys I, J and L, with no key expansion) in most calls, and full 10-round AES is kept only for a few blocks per message. AEZ-core is an EME/OTR-style encipher-mask-encipher over pairs of blocks: five AES4 calls per 32 bytes, i.e. about 10 AES rounds per 16-byte block and close to AES-CTR cost, against 14 rounds plus a GHASH multiply per block for AES-256-GCM. Per-block offsets come from XE-style doubling in GF(2^128), and pass one keeps 16 blocks (8 independent pairs) in flight per iteration to saturate the AES-NI pipeline. AD goes through an AES4-based universal hash (0.17 vs 0.32 cpb for GCM on 0+long). Forgeries are rejected after the first pass (0.15 vs 0.26 cpb on long+long).
+
+**Use it when:**
+- Reproducing or analysing CAESAR-era eBACS/SUPERCOP AEAD results. It is a well-measured, readable (~900-line) AES-NI implementation of a wide-block AEAD.
+- As the starting point for studying or porting AEZ's AES4 + EME-style structure. For anything that encrypts real data, use the AEZ v5 code instead, which runs at essentially the same speed on the same page (0.28 vs 0.26 cpb long+long encrypt).
+- The use cases AEZ targets (with v5): nonce reuse or nonce-less designs where you need misuse resistance at roughly AES-CTR cost, messages that fit in memory, and small packets, where AEZ is about 4x cheaper than AES-256-GCM at 64+64 bytes (1.18 vs 4.70 cpb).
+- Decrypt paths that are flooded with forgeries: invalid ciphertexts are rejected at about half the cost of a valid decrypt (0.15 cpb long+long forgery).
+
+**Skip it when:**
+- Any real deployment. The v4 specification, which this code implements, has an offset-collision bug in its tweakable blockcipher: two different tweaks get the same offset. It was found by Bonnetain, Derbez, Duval, Jean, Leurent, Minaud and Suder (2017), who showed easy forgeries. The designers say this destroys authenticity (and probably privacy), and fixed it only in AEZ v5.
+- Protocols that need a standard, interoperable AEAD (TLS, IETF, FIPS). AEZ never became a standard and was not in the CAESAR final portfolio.
+- Streaming or online encryption, and messages of 4 GiB or more. As an MRAE scheme it needs two passes over the whole message, and this code converts lengths to 32-bit unsigned, so they silently truncate.
+- Builds without AES-NI + SSE4.1 or ARMv8 Crypto Extensions, including MSVC, where __AES__ is not defined. The file hits #error, and the portable ref implementation took about 70x longer than aesni in eBACS's test-time column.
+- High-volume keys or conservative security margins. Security holds only to the birthday bound, and key-recovery birthday attacks exist (Fuhr-Leurent-Suder 2015; Chaigneau-Gilbert 2016, which targets v4.1). The spec caps use at 2^48 bytes per key, and AEZ itself has no proof, because the AES4 substitution is heuristic.
+
+**Integration:** source-drop (a single crypto_aead/aezv4/aesni/encrypt.c plus api.h in SUPERCOP layout; outside SUPERCOP you must supply a crypto_aead.h shim) · none (a reference BLAKE2b is bundled and used only to derive subkeys from keys that are not 48 bytes) · C99 on GCC or Clang with -maes -msse4.1 (or -march=native) so that __AES__ is defined. eBACS builds it with Clang 19.1.7 and GCC 14.2.0 at -O/-O2/-O3/-Os; MSVC is unsupported. · x86-64 with AES-NI + SSSE3/SSE4.1; AArch64 with ARMv8 Crypto Extensions (__ARM_FEATURE_CRYPTO); anything else needs the slow portable ref implementation
+
+**Vs siblings:** Of the siblings measured on the same eBACS page, AEZ is the only one that is nonce-misuse-resistant, so it (as v5, not this v4 code) is the choice only when nonce reuse must be survivable. For pure speed, AEGIS-128L is faster (0.21 vs 0.26 cpb long+long encrypt; 0.97 vs 1.18 cpb at 64+64), and so is Tiaoxin-346 on encrypt (0.15 cpb).
+
+**Gotchas:**
+- Out-of-bounds reads. Encryption loads the 16 bytes after the end of the message and masks them off. The 12-byte nonce and the partial last AD block are fetched with full 16-byte loads. GCC 14 on eBACS warns about a read at offsets 33-48 of the 48-byte pad[] table. Pad your buffers, or expect ASan reports and possible faults at page boundaries.
+- The SUPERCOP wrapper hard-codes a 48-byte raw key (I||J||L, with no key schedule), a 12-byte nonce and a 16-byte tag. aez_hash handles only nonces and abytes up to 16 and a single AD string, although the spec allows vector AD and arbitrary lengths.
+- eBACS marks it 'T:' (constant time not declared as a goal; the build symbol is crypto_aead_aezv4_aesni_timingleaks_*), while the aes256gcmv1 baseline has no such mark.
+- Its ciphertexts do not match AEZ v5 or any other version: v5 changed the offset definition, so data encrypted with this code cannot be decrypted by v5 code.
+
+**Status:** The mirror is an abandoned 2016 snapshot of Krovetz's public-domain (Unlicense, and the spec says 'no AEZ-related patents have been or will be requested') code that current SUPERCOP still builds, so it is easy to copy, but it implements a spec the designers withdrew in March 2017, so treat it as a benchmark artifact and use AEZ v5 instead.
+
+[repo](https://github.com/floodyberry/supercop) · [benchmark](https://bench.cr.yp.to/results-aead/amd64-freshwrap,big.html)
+
+##### chacha20poly1305-simd  `Rust`  `MIT OR Apache-2.0`  `active`  `Tier A`
+
+Pure-Rust (X)ChaCha20-Poly1305 with hand-written AVX-512/AVX2/SSE2/NEON kernels; beats RustCrypto everywhere, OpenSSL mainly on small messages.
+
+**Beats:** OpenSSL EVP_chacha20_poly1305 (ChaCha20-Poly1305) — On an AMD Ryzen 9 7950X (Zen 4, Linux), the author measured in-place seal with 16 B AAD using Criterion (rustc 1.100-nightly, codegen-units=1, runtime dispatch; this crate picked its AVX-512 IFMA path). This crate took 126 ns at 16 B vs 396 ns for OpenSSL 4.1.0-dev EVP_chacha20_poly1305 (3.1x) and 408 vs 532 ns at 1 KiB (1.3x), and tied OpenSSL from 16 KiB to 1 MiB (about 188 us per MiB each, about 5.6 GB/s). The small-size gap is inflated: the C driver (cc -O2) re-runs EVP_EncryptInit_ex with cipher, key and nonce every iteration, and aws-lc-rs in the same Rust harness beats this crate below 1 KiB (119 vs 126 ns at 16 B).
+
+**Known shortcoming:** The OpenSSL driver re-keys on every iteration, inflating the small-message 2-3x wins; at 64 KiB and above it ties OpenSSL, and at tiny sizes it is 0.8-0.9x of aws-lc-rs. AI-assisted code with no audit. Rust-only.
+
+**Known shortcoming:** aws-lc-rs is faster below 1 KiB (119 vs 126 ns at 16 B). About a month old, 0 stars, AI-built and unaudited; tag comparison is a plain loop (no `subtle` constant-time crate); failed open leaves the buffer unspecified. No aarch64 numbers (NEON tested only under QEMU). The IFMA file is ported from OpenSSL, so that part is Apache-2.0 only.
+
+**How:** The seal/open loop fuses ChaCha20 keystream generation, the message XOR and Poly1305 absorption, so the latency-bound MAC multiplies overlap with the throughput-bound cipher in the out-of-order window. ChaCha20 runs as 8-block batches: AVX2, or on AVX-512VL in YMM registers with single-instruction vprold rotations (chosen because Zen 4 double-pumps 512-bit ops). Poly1305 uses the Goll-Gueron 4-block batched algorithm on AVX2, a port of OpenSSL's radix-2^44 vpmadd52 8-lane path on AVX-512 IFMA CPUs, and 26-bit-limb lane-parallel code on NEON. Messages of 3 blocks or fewer take a small-message fast path, and backend dispatch is one cached relaxed AtomicU8 load per call.
+
+**Use it when:**
+- Pure-Rust ChaCha20-Poly1305 or XChaCha20-Poly1305 on x86-64 where you currently use RustCrypto chacha20poly1305: the author's Zen 4 numbers are about 2.8x faster at 16 B and about 6.2x at 1 MiB against RustCrypto's AVX-512 build.
+- Bulk sealing or opening of 4 KiB and larger buffers on x86-64 when you would otherwise use aws-lc-rs: about 1.2x faster at 4 KiB and about 1.4x at 64 KiB to 1 MiB, and 1.47x on 1 MiB open.
+- no_std or embedded-adjacent Rust builds that need an AEAD with no C toolchain (unlike aws-lc-rs or OpenSSL bindings), with a scalar fallback and compile-time backend pinning.
+- XChaCha20-Poly1305 (24-byte random nonces) at SIMD speed; the aws-lc-rs benchmark notes that aws-lc-rs has no XChaCha.
+
+**Skip it when:**
+- Anywhere an audited implementation is required. The README says it was developed with AI assistance and has had no security audit, and the repo is about one month old, with four crate releases (0.1 to 0.3.1) in three days.
+- Small-message workloads (16 B to 1 KiB) where aws-lc-rs is an option: aws-lc-rs is faster at 16 to 256 B (about 0.8-0.94x for this crate) and roughly even at 512 B to 1 KiB.
+- Large-buffer workloads where you already link OpenSSL 3.x/4.x on an AVX-512 IFMA CPU: from 16 KiB up it only ties OpenSSL (1.03x down to 1.00x).
+- aarch64 production deployments: no NEON performance numbers are published, NEON correctness was checked only under QEMU user mode (500k differential cases), and CI runs only on ubuntu-latest x86-64 with nightly, and only on pull requests.
+- Callers who need AES-GCM or other AEADs; the crate supports only the ChaCha20-Poly1305 family.
+
+**Integration:** crate · none by default; optional aead 0.6, bytes 1, getrandom 0.4, zeroize 1.8, hotpath 0.24 · Rust 1.89 (edition 2024, rust-version in Cargo.toml); the author's benchmarks and CI use nightly · x86-64 (SSE2 baseline; AVX2, AVX-512F+VL and AVX-512 IFMA picked at runtime), aarch64 (NEON), portable scalar fallback elsewhere
+
+**Vs siblings:** Pick it over libaegis, HiAE or Rocca when the wire format must stay standard RFC 8439 ChaCha20-Poly1305 or XChaCha, in pure Rust; those siblings are faster but use different, newer AEAD constructions. Pick hardware-rust-crypto instead when you need AES-256-GCM, or want formal-verification evidence instead of an unaudited AI-assisted codebase.
+
+**Gotchas:**
+- Decryption is fused with authentication, as in BoringSSL: on a tag mismatch the in-place buffer holds unspecified (partly decrypted) bytes, so discard it on Err.
+- The IFMA Poly1305 file (src/poly1305/ifma.rs) is a port of OpenSSL's poly1305-x86_64.pl under Apache-2.0, so the crate-level 'MIT OR Apache-2.0' choice is effectively Apache-2.0 for that file.
+- The AVX-512 backend is on by default. Build with default-features = false (then re-enable std/alloc) to keep AVX-512 instructions out of the binary. Forcing a backend via RUSTFLAGS --cfg chacha20poly1305_backend removes the other kernels and assumes the CPU supports the chosen one.
+- The README usage snippet is out of date for 0.3.1 (it calls new(&key) and treats the result as a bare Tag); the lib.rs doctests show the current API. Tag comparison is a plain XOR-OR loop, not the `subtle` crate.
+
+**Status:** Active but brand new: the repo was created on 2026-08-26, last commit 2026-08-29, 0 stars, 0 issues and 108 crates.io downloads. It is dual MIT/Apache-2.0 (the IFMA file is Apache-2.0 only), and usable as a crate today, but unaudited and pre-1.0 with a fast-moving API.
+
+[repo](https://github.com/lxl66566/chacha20poly1305-simd) · [benchmark](https://github.com/lxl66566/chacha20poly1305-simd#performance)
+
+##### hardware-rust-crypto  `Rust`  `Apache-2.0`  `active`  `Tier A`
+
+Hardware-only AES-256-GCM/GCM-SIV crate for Rust with compact, zeroized key state; faster than ring and RustCrypto on Apple M4.
+
+**Beats:** ring (BoringSSL-derived) and RustCrypto aes-gcm crate — On one Apple M4 Max laptop (macOS, rustc 1.96.0, Criterion default release build, empty AAD), allocation-free AES-256-GCM encrypt_to took 26.8 ns at 16 B, 130.5 ns at 1 KiB and 1.77 us at 16 KiB (8.64 GiB/s), against ring 0.17's 57.8 ns, 216.6 ns and 2.38 us (6.41 GiB/s); decrypt_to was 1.79 vs 2.19 us at 16 KiB. It was 14x-43x faster than a default RustCrypto aes-gcm 0.10 build (software AES on aarch64), and 3.4x-5.0x faster than RustCrypto built with the armv8 cfgs from 256 B up but only about 1.3-1.7x at 16-64 B; ring was faster at key setup (86 vs 94 ns). These are single-run results with a stated +/-10% variance at sub-microsecond sizes, and no x86-64 numbers are published.
+
+**Known shortcoming:** Measured on Apple M4 Max only (no x86 numbers). Against RustCrypto's armv8 backend the gain is 3.4-5.0x only from 256 bytes (1.3-1.7x at 16-64 B). Vendors rand_aes and RustCrypto ghash/polyval. Rust-only.
+
+**Known shortcoming:** Headline ring comparison times ring's Vec reallocation; a fair comparison is only 1.2-1.5x (28.1 vs 41.6 ns at 16 B; 1.77 vs 2.08 µs at 16 KiB). The 14-43x over RustCrypto is an aarch64 default-build artifact. Single M4 laptop run (±10%), no x86 or VAES path. AES-256-GCM only with no software fallback; nonce is appended to the ciphertext (explicit nonce needs the hazmat feature); no AEAD traits. The 'audit' document is an AI review. 1 star, quiet since 2026-06-21.
+
+**Independent measurement:** Fair table (M4): 28.1 vs ring 41.6 ns at 16 B; 1.77 vs 2.08 µs at 16 KiB.
+
+**How:** The encrypt and decrypt loops are stitched: eight interleaved hardware AES-CTR chains (AESE/AESMC or AESENC) run in the same loop body as an eight-block aggregated GHASH. Eight precomputed Montgomery-form powers H^1..H^8 let eight carryless products be XOR-summed before one field reduction, so the AES and PMULL/PCLMULQDQ pipelines stay busy together. The round keys live in vector registers, the fused bulk path touches each byte once, and the *_to APIs do no heap allocation. Against default RustCrypto on aarch64, most of the gain comes simply from using hardware AES/PMULL where stock aes-gcm silently runs fixsliced software AES unless built with --cfg aes_armv8 --cfg polyval_armv8.
+
+**Use it when:**
+- Rust services on aarch64 (Graviton, Ampere, Apple Silicon) that use RustCrypto aes-gcm without the armv8 cfg flags: 14x-43x faster on M4 and no silent software-AES fallback.
+- Workloads that hold many AES-256-GCM keys in memory, such as key caches and guarded-page key stores, where the 368 B zeroize-on-drop key state (11 keys per 4 KiB page vs 4 for RustCrypto) and caller-controlled placement matter.
+- Encrypting records from 16 B to 16 KiB with AES-256-GCM, where the allocation-free encrypt_to beat ring on M4 at every size measured: about 1.2-1.5x in the fairest pre-sized-buffer comparison.
+- Applications that want the library to own GCM nonce generation (per-instance counter over an OS-random 96-bit salt, re-salted on fork), or that need nonce-misuse-resistant AES-256-GCM-SIV, which ring does not offer.
+- Teams that value published verification evidence: Kani, SAW, crux-mir, F*, Z3 proofs of the glue code, Wycheproof and NIST CAVP vectors, dudect timing tests, and Miri and sanitizers in CI.
+
+**Skip it when:**
+- On x86-64 servers without re-benchmarking. No x86-64 numbers are published, there is no VAES/VPCLMULQDQ wide path yet (listed as a follow-up), and on x86-64 stock RustCrypto already detects AES-NI at runtime, so the 14x-43x figure does not apply there.
+- When you need AES-128-GCM, other nonce or tag sizes, ChaCha20-Poly1305, or a fallback for CPUs without AES instructions (for example some embedded, older, or emulated targets). Construction fails on such CPUs.
+- When you need a drop-in for ring or the RustCrypto aead traits, such as TLS/QUIC record layers with explicit nonces. The explicit-nonce and detached seal/open APIs sit behind the non-default, doc(hidden) hazmat-explicit-nonce feature, and no aead trait impls are provided.
+- When compliance requires validated or independently audited crypto: the docs say it has had no independent third-party audit and has no CAVP/CMVP validation. The 'security audit' document is a multi-model agentic (AI) review.
+- Tiny-message decrypt, where the gain over ring is within noise: 33.6 vs 36.6 ns at 16 B, inside the author's stated +/-10% variance. The allocating decrypt is slower than ring's in-place open at 16-64 B.
+
+**Integration:** crate · getrandom 0.3, subtle 2.6, zeroize 1.8, libc 0.2 (Unix only, for pthread_atfork fork detection) · Rust 1.88 (edition 2021); requires std (uses Vec/Box, no no_std mode documented) · x86-64 with AES-NI + PCLMULQDQ; aarch64 with ARMv8 AES + PMULL; CI covers Linux x64/arm64, macOS arm64, Windows x64/arm64. Other CPUs fail at construction with UnsupportedCpu.
+
+**Vs siblings:** Pick it over libaegis, HiAE, or Rocca when you must keep standard AES-256-GCM (or GCM-SIV) wire compatibility with ring, OpenSSL, or RustCrypto peers; those siblings are faster but use different, newer AEAD constructions. Pick it over chacha20poly1305-simd when you need AES-GCM, compact placeable key state, or formal-verification evidence, and you run on hardware with AES and carryless-multiply instructions.
+
+**Gotchas:**
+- The envelope puts the nonce at the end (ciphertext||tag||nonce), not the common nonce||ciphertext||tag. Peers using other libraries must split it the same way.
+- Decrypt writes plaintext before the final tag check and zeroizes the plaintext-length prefix of the caller buffer on failure; do not read the output buffer on Err.
+- The headline ring encrypt benchmark times ring's seal_in_place_append_tag on an exact-capacity Vec clone, so the tag append reallocates inside the timed loop. The pre-sized nonce-appended table is fairer: 28.1 vs 41.6 ns at 16 B and 1.77 vs 2.08 us at 16 KiB.
+- It vendors code from rand_aes 0.7.0 and RustCrypto ghash 0.5.1 / polyval 0.6.2 (recorded in NOTICE), so upstream fixes do not flow in automatically. On aarch64, ARMv8.4 PSTATE.DIT is not set (a documented constant-time residual).
+
+**Status:** Released as 1.0.1 on 2026-06-20; last commit 2026-06-21, 1 star, no open issues, 3,375 crates.io downloads and one reverse dependency (pq-modern-rust-tls). It is Apache-2.0 and backed by an unusually heavy CI proof and test battery, but has not been independently audited and has been quiet for three months.
+
+[repo](https://github.com/godaddy/hardware-rust-crypto) · [benchmark](https://github.com/godaddy/hardware-rust-crypto/blob/main/docs/benchmarks.md)
+
+##### HiAE (libhiae)  `C`  `MIT`  `active`  `Tier A`
+
+Portable C library for the HiAE AES-round AEAD; about 3.8x OpenSSL AES-128-GCM encryption throughput on Apple M5 Max.
+
+**Beats:** OpenSSL AES-128-GCM / AES-256-GCM — The author's hiae-aead/benchmarks harness ran a vendored libhiae copy against OpenSSL 3.6.4 AES-128-GCM on an Apple M5 Max (macOS 26, Apple clang 21.0.0, -O3 -mcpu=native, median of three passes, 4096-byte-aligned buffers, with AD and tag). At 64 KB, HiAE encrypted at 266.7 Gbps vs 70.8 for GCM (~3.8x) and decrypted at 171.4 vs 70.2 (~2.4x). The ePrint 2025/377 figures (for example 340.02 vs 51.90 Gbps against OpenSSL 3.0 AES-256-GCM on a Ryzen 9 7950X with GCC 11.4 at 16 KB) measure the designers' separate Concyclics/HiAE code, not libhiae.
+
+**Known shortcoming:** jedisct1's own implementation (not a port of the designers' concyclics/hiae, listed separately); benchmark page numbers are his runs. The paper pair 269.01/84.09 compares encryption-only 1 KB against CTR, not AEAD against AEAD. HiAE is a 2025 design: reference decrypt-before-verify concerns and a ToSC 2026 key-recovery result in the release-unverified-plaintext setting (see the HiAE entry); individual Internet-Draft only.
+
+**Known shortcoming:** ePrint 2025/1180 (ToSC 2026) gives full key recovery from a few repeated nonces or from released unverified plaintext (nonce-respecting attack at 2^128 data). HiAE_decrypt leaves unverified plaintext in the output buffer on tag failure, and streaming decrypt releases plaintext before the tag check. Decrypt is 1.5-1.9x slower than encrypt. Software fallback is table-based AES (not bitsliced); MSVC cannot build the VAES path; CMake defaults to Debug.
+
+**Independent measurement:** hiae-aead/benchmarks: M5 266.7 vs AES-128-GCM 70.8 Gbps; 7950X AEAD 16 KB 340.02 vs GCM 51.90 Gbps (~6.6x).
+
+**How:** HiAE is a stream-cipher-style AEAD with a 2048-bit state of sixteen 128-bit words. Each 16-byte block costs two bare AES rounds plus a few XORs (the draft's 'XAXX' structure, arranged to suit both ARM AESE/AESMC and x86 AESENC), with no AES key schedule and no GHASH multiply. The code avoids physically rotating the state by using a cycling index (offset) and unrolls 16 blocks (256 bytes) per loop, so all 16 state words stay in registers. A load-time constructor picks a backend by CPU detection: ARMv8 AES, ARMv8 AES plus FEAT_SHA3 (EOR3 three-way XOR), x86 AES-NI+AVX, 'VAES+AVX512' (still 128-bit _mm_aesenc_si128 code, compiled for AVX-512 targets), WASM SIMD128, or a table-based software fallback.
+
+**Use it when:**
+- Bulk AEAD on Apple Silicon or other ARMv8 cores with AES and SHA3 extensions, when AES-GCM is the bottleneck. On an M5 Max at 64 KB, HiAE encrypts at 266.7 Gbps vs 70.8 for OpenSSL AES-128-GCM.
+- x86-64 servers and desktops with AVX-512 and VAES (the README's Zen 4 run: 251.7 Gbps encryption at 64 KB) in systems where you control both ends: storage, backups, internal links, high-rate tunnels.
+- Messages of several KB and up. Throughput climbs from about 131 Gbps at 1 KB to about 252 Gbps at 64 KB on Apple M4, and from 71 to 252 Gbps on Zen 4.
+- Encrypt-heavy workloads such as write-mostly storage or broadcast senders, since encryption runs 1.5-1.9x faster than decryption.
+- When you want 128-bit random nonces and a 256-bit key without GCM's 96-bit nonce limits (the draft caps a key at 2^64 messages).
+
+**Skip it when:**
+- Anywhere that needs interoperability, FIPS or a published standard. HiAE is only an individual IETF draft (rev 06, expires 2026-11-11), not an RFC, and there are no NIST or TLS registrations.
+- Systems where nonce reuse, release of unverified plaintext, or unlimited forged-decryption attempts are possible. ePrint 2025/1180 (Bille and Tischhauser, TOSC 2026) gives full key recovery from a small constant number of repeated nonces or unverified decryptions, plus nonce-respecting key recovery at 2^128 data and 2^129 time using decryption queries. The designers (ePrint 2025/1235) and the draft answer that repeated forgery attempts are outside the security model.
+- Decrypt-heavy or receive-side workloads. On the M5 Max, HiAE decrypts at 171.4 Gbps against 211.8 for AEGIS-128x2 (which decrypts as fast as it encrypts), and on Zen 4 HiAE decryption is 48% slower than its encryption.
+- CPUs without AES instructions. The fallback is a T-table soft AES (hardened by touching every cache line, not bitsliced), and the WASM scalar build uses plain table lookups. There is no constant-time bitsliced path like aegis-bitsliced.
+- Tiny messages or MSVC/gcc toolchains. Throughput is 4-16 Gbps at 16-64 B on M4, and the benchmark page's text tables give AES-GCM figures only at 64 KB. MSVC proper cannot build the VAES backend, and the README says gcc produces noticeably slower code than clang or zig cc.
+
+**Integration:** static lib or shared lib (Make, CMake with find_package(hiae), or zig build); also a source-drop of src/hiae/*.c or a single-file amalgamation (make amalgamate) · none (standard C library only) · C99, CMake 3.10+. clang or zig cc recommended, GCC 14+ if gcc must be used. CI builds with gcc, clang and MSVC (cl), and with Zig for wasm32-wasi. · x86-64 (AES-NI+AVX, or VAES+AVX-512F, chosen at runtime), aarch64 (ARMv8 AES, FEAT_SHA3 when present, detected via getauxval/sysctl), wasm32 (SIMD128/relaxed SIMD), portable software fallback elsewhere
+
+**Vs siblings:** Pick libhiae over Concyclics/HiAE when you want the same cipher as an MIT-licensed, runtime-dispatched library with streaming and MAC APIs and IETF test vectors; the designers' repo has no license. Pick it over libaegis only if you control both ends and mostly encrypt on ARM or AVX-512 x86 (266.7 vs 211.8 Gbps for AEGIS-128x2 on M5 Max). Otherwise AEGIS has an RFC, a bitsliced constant-time fallback, and decrypts as fast as it encrypts.
+
+**Gotchas:**
+- One-shot HiAE_decrypt writes plaintext into the output buffer before comparing tags and does not wipe it on failure; the header only says the output is 'undefined'. HiAE_stream_decrypt/HiAE_dec also return plaintext before the tag is checked. Given the RUP key-recovery attack, zero or discard that output yourself.
+- The low-level API needs every absorb/enc/dec call except the last to be a multiple of 16 bytes, needs the exact total lengths at finalize, and states must not be reused. HiAE_enc_partial_noupdate does not advance the state.
+- CMake defaults to a Debug build. Pass -DCMAKE_BUILD_TYPE=Release (-O3), or benchmarks will be far off.
+- HiAEx2/HiAEx4 are separate, non-spec ciphers that do not interoperate with HiAE. HiAEx4's C1 constant was fixed on 2026-09-18, which changed its outputs. The README says they need unique nonces even in MAC mode.
+
+**Status:** Actively maintained (v0.2.4 tagged 2026-07-17, commits through 2026-09-20, no open issues) and MIT-licensed, with a single-file amalgamation that makes vendoring trivial. It is essentially a one-maintainer, pre-1.0 project for a cipher that is still an individual draft.
+
+[repo](https://github.com/hiae-aead/libhiae) · [benchmark](https://github.com/hiae-aead/benchmarks#performance-results)
+
+##### LeMac  `C`  `CC0-1.0 (reference implementation) / MIT (bundled boppreh/aes component)`  `stale`  `Tier A`
+
+Designers' AES-NI C code for LeMac, a nonce-based AES-round MAC about 4-7x faster than AES-128-GCM's GHASH on long messages.
+
+**Beats:** AES-GCM in associated-data-only mode (GHASH/GMAC-style authentication), using Romain Dolbeau's public-domain AES-NI/PCLMUL implementation (benchmark/GCM/aesenc-int.c, from SUPERCOP), not OpenSSL — Peer-reviewed ToSC 2024(2) Table 4: gcc 12.2.0, -O3 -march=native, in-cache message, rdpmc, most frequent of 1000 runs. It measured LeMac-0 at 0.068 c/B against 0.286 for Romain Dolbeau's SUPERCOP AES-128-GCM (AD only) on a Xeon Gold 5320 at 256 kB, about 4.2x. The 2025 corrigendum re-measured the corrected LeMac at 0.079 vs 0.321 (Ice Lake), 0.069 vs 0.466 (Zen 3), 0.128 vs 0.637 (Haswell) and 0.126 vs 0.414 (Skylake). The GCM baseline is 128-bit PCLMULQDQ with 8-block aggregation, not VPCLMULQDQ or OpenSSL. Its timed call includes key expansion and H-power setup, while LeMac's key setup sits outside the timed loop, which mostly affects the 1 kB column.
+
+**Known shortcoming:** MAC only, not an AEAD. Baseline is Dolbeau's SUPERCOP AES-NI GHASH (AD-only GCM), not OpenSSL; the '60%' figure is against Jean-Nikolić, not GCM. Research code for a 2024 design with limited cryptanalysis.
+
+**Known shortcoming:** The 0.068 cycles/byte headline is LeMac-0 (the buggy original spec); the ToSC 2025(1) corrigendum re-measured fixed LeMac at 0.079 vs GCM 0.321 (~4.1x, Ice Lake) and 0.069 vs 0.466 (~6.8x, Zen 3); gain over Jean-Nikolić is ~39%, not 60%. Baseline GCM is SUPERCOP AES-128 with PCLMUL only (no VPCLMUL/OpenSSL) and times its key/H setup while LeMac's init is excluded. One-shot API, no verify function, x86 AES-NI only; unaligned __m128i casts (#5); padding differs from the paper (#2); duplicate global symbols between lemac.c and petitmac.c. Loses to AEGIS-128L-MAC at 256 B. Better-maintained ports: jedisct1/zig-lemac, pauldreik/lemac (C++20, arm64).
+
+**Independent measurement:** LeMac paper Table 4 (Xeon 5320, GCC 12.2 -O3 -march=native): 0.068 vs GCM AD-only 0.286 cycles/byte (~4.2x).
+
+**Independent measurement:** ToSC 2025(1) corrigendum: fixed LeMac 0.079 vs GCM 0.321 cycles/byte (Ice Lake); 0.069 vs 0.466 (Zen 3).
+
+**How:** LeMac's universal hash keeps a 9 x 128-bit state. Each 64-byte chunk updates it with 8 independent AESENC instructions, one per wire, with the message words used as AESENC round keys, plus only 4 128-bit XORs. That is 2 AES rounds per 16-byte block ('rate 2'). On Ice Lake and Zen, AESENC and XOR compete for ports 0/1, so the design caps XORs at half the AESENC count and avoids long dependency chains. The rate-2 floor there is 0.0625 c/B, and candidates were compiled and benchmarked automatically during the MILP security search to find one that nears it. GCM's GHASH instead spends carry-less multiplications and reductions on every 16-byte block.
+
+**Use it when:**
+- Authenticating large in-memory buffers (16 KB and up) on x86-64 servers with AES-NI, where you control both ends. In the 2025 corrigendum's rerun at 256 kB, corrected LeMac ran at 0.079 c/B against 0.321 for AES-128-GCM in AD-only mode on a Xeon Gold 5320 (about 4.1x), and 0.069 against 0.466 on a Zen 3 EPYC 7513 (about 6.8x).
+- As the MAC half of an encrypt-then-MAC design with a fast stream cipher, when GHASH or GMAC is the bottleneck. At 256 kB it also beats single-lane AEGIS-128L used for AD only (0.079 vs 0.195 c/B on Ice Lake) and Tiaoxin (0.123).
+- Keyed integrity checks of bulk data where unique 128-bit nonces are available, for the claimed 128-bit security. With repeated or fixed nonces, the paper claims security up to about 2^64 data.
+- Benchmarking AES-round MACs. The benchmark/ folder builds and times LeMac, LeMac-0, PetitMac, Jean-Nikolic, GCM, Rocca, Rocca-S, AEGIS-128/128L/128X2, Tiaoxin, HiAE, EliMAC and smac1x8 with rdpmc under one harness.
+
+**Skip it when:**
+- Short messages. At 1 kB, LeMac costs 0.285 c/B on Ice Lake, 3.6x its 256 kB rate. On Haswell at 1 kB it roughly ties Jean-Nikolic (0.460 vs 0.451) and Tiaoxin (0.494). zig-lemac's Zen 4 table has AEGIS-128L-MAC ahead at 256 B (40.4 vs 32.2 Gb/s).
+- Anything that needs encryption, an AEAD, or a standardized algorithm for TLS, IPsec or QUIC. LeMac is only a MAC, and this session found no standard or RFC for it.
+- Non-x86 targets or CPUs without AES-NI. The code uses only x86 intrinsics, with no fallback or runtime CPU check. PetitMac is the designers' pick for small cores (18.3 c/B on a Cortex-M4, using separate T-table code that is not in this repo). pauldreik/lemac supports arm64.
+- CPUs with VAES or AVX-512, if you want the most throughput. At 64 KiB on Zen 4, zig-lemac measured single-lane LeMac at 416.6 Gb/s, AEGIS-128X4-MAC at 439.7 and the 4-lane LeMac-X4 at 764.1. The parallel variants are only an unmerged PR here (#3, open since 2025-03).
+- Shipping this code as a library. The API is one-shot only, with no streaming and no verify or constant-time tag compare, and two correctness issues have gone unanswered (see gotchas).
+
+**Integration:** source-drop (single-file lemac.c or petitmac.c; the top-level Makefile builds lemac.so and petitmac.so only for the Python test harness) · none beyond libc and <immintrin.h>. The Python reference uses a bundled pure-Python AES (aes.py from boppreh/aes, MIT). The benchmarks need Linux, make, perf and optionally sudo. · GCC or Clang with AES-NI enabled (the Makefiles use -O3 -march=native). The code XORs __m128i values with ^ as a GNU vector extension, so MSVC is not supported as written. The paper used gcc 12.2.0. · x86-64 with AES-NI only. There is no ARM path, portable fallback or runtime dispatch. The benchmarks use getrandom, perf and Linux sysfs knobs.
+
+**Vs siblings:** Pick LeMac over libaegis, Rocca, Tiaoxin and AEZ when you need only authentication of long messages on AES-NI x86 and can pair it with your own cipher. At 256 kB it is 1.5-2.5x faster than their single-lane AD-only modes on Ice Lake. Pick libaegis, HiAE or intel-ipsec-mb when you need a complete AEAD, short-message speed, ARM support or a maintained library, and for a production LeMac prefer the maintained ports (jedisct1/zig-lemac, pauldreik/lemac for C++20) over this reference repo.
+
+**Gotchas:**
+- The famous 0.068 c/B was measured on LeMac-0, the version with the message-schedule error. The 2025 corrigendum's rerun of the corrected LeMac gives 0.079 c/B on Ice Lake and 0.069 on Zen 3, so the gain over Jean-Nikolic on Ice Lake is about 39%, not 60%. The designers no longer claim 128-bit security for LeMac-0 (proven bound 25 active S-boxes, only 20 without the linear-incompatibility constraints), yet benchmark/LeMac-0* is still in the tree. Use the root lemac.c.
+- lemac_AU and lemac_MAC cast uint8_t pointers for the message, key, nonce and tag to __m128i* and dereference them. That is undefined behaviour for unaligned buffers and can fault if the compiler emits aligned loads. Issue #5 (2026-08-20) is unanswered, so pass 16-byte-aligned buffers. The code also assumes a little-endian host and whole-byte message lengths.
+- Padding appends the byte 0x01 then zeros, while the paper writes M||10*. Issue #2 (2025-03) asking which is right is unanswered. Check test vectors before interoperating with the Zig or C++ ports.
+- lemac.c and petitmac.c both define global, non-static AES, AES_KS and AES_modified functions, so they cannot be linked into one binary as-is. AES_128_ASSIST is plain C99 `inline`, which can leave an unresolved symbol in unoptimised builds. Verifying a tag means recomputing it and comparing in constant time yourself.
+
+**Status:** Stale: the last commit (2025-07-10) merged Frank Denis's extra benchmarks. The repo has 2 stars, two unanswered issues and an open PR from 2025-03. The code is CC0 with the bundled Python AES under MIT, and lemac.c is about 7 KB, so it is easy to vendor. For maintained code, jedisct1/zig-lemac (MIT, pushed 2026-09-25) adds 2- and 4-lane variants, and pauldreik/lemac (C++20, BSL-1.0) covers x86-64 and arm64.
+
+[repo](https://github.com/AugustinBariant/Implementations_LeMac_PetitMac) · [benchmark](https://tosc.iacr.org/index.php/ToSC/article/download/11619/11111)
+
+##### ROCCA-S  `C`  `MIT`  `stale`  `Tier A`
+
+KDDI's reference C code for Rocca-S, a 256-bit-key AES-round AEAD; ~1.9-2.9x OpenSSL AES-128-GCM encryption throughput.
+
+**Beats:** OpenSSL AES-128-GCM — jedisct1's hiae-aead/benchmarks harness ran a reformatted copy of this reference, with an added ARM-crypto backend, against OpenSSL EVP AES-128-GCM at 64 KB with 48 B of AD and the tag included. On an M5 Max (Apple clang 21.0.0, OpenSSL 3.6.4, -O3 -mcpu=native, median of three passes) it reached 208.1/140.4 Gbps encrypt/decrypt vs 70.8/70.2 (~2.9x/2.0x), with keystream 228.8 vs AES-128-CTR 159.6. On a Ryzen 7 7700 locked at 3.8 GHz (clang 21.1.8, OpenSSL 3.5.5, -O3 -march=native) it reached 174.6/92.3 vs 92.7/92.9, so ~1.9x on encryption and parity on decryption. Note that this pits 256-bit-key Rocca-S against AES-128, not AES-256-GCM.
+
+**Known shortcoming:** Gain is asymmetric: on M5 2.9x encrypt but 2.0x decrypt, and on Zen 4 1.9x encrypt with decrypt at parity (92.3 vs GCM 92.9 Gbps). Compares a 256-bit-key cipher with AES-128-GCM (not like-for-like). Benchmark runs KDDI's reference plus an ARM port, not this repo as-is. ePrint 2024/901 gives a practical FROB committing attack on Rocca-S (no nonce-respecting key recovery or forgery known). IETF draft-nakano-rocca-s-06 is an individual draft, not adopted, expired 2026-08-01. 2 stars, stale since 2025-03-19. Zig/Rust ports by jedisct1 are folded into this entry.
+
+**Known shortcoming:** M5 numbers measure jedisct1's benchmark copy (which adds an ARM crypto backend), not KDDI's code, which has only x86 AES-NI or a leaky T-table fallback. On M5, HiAE and AEGIS-128X2 match or beat it. KDDI C API: rocca_decrypt never checks the tag (no constant-time verify), the key in the context is never wiped, and every call except the last must be a multiple of 32 bytes. The folded-in Rust crate (`rocca` 0.3.2) uses unprotected software AES on aarch64. Not key-committing.
+
+**Independent measurement:** hiae-aead/benchmarks: M5 encrypt 2.9x / decrypt 2.0x vs OpenSSL AES-128-GCM; Zen 4 encrypt 1.9x, decrypt 92.3 vs 92.9 Gbps.
+
+**How:** Rocca-S is an AEGIS-style stream AEAD built from bare AES rounds. The state is seven 128-bit words. Each 32-byte block is absorbed through six independent AESENC rounds, with state words or message halves as round keys, plus one XOR; the keystream costs two more rounds. That is 8 AES rounds per 32 bytes, against AES-128-GCM's 10 rounds per 16 bytes plus a GHASH multiply, and there is no key schedule. The rounds in each step are independent, so they pipeline on AES-NI or ARM AESE/AESMC units, and the macros keep the whole state in __m128i registers for an entire call. Decryption is slower because each plaintext block is only known after its keystream AES round, which adds a round of latency to the state-update chain.
+
+**Use it when:**
+- You need Rocca-S itself, for example to interoperate with KDDI's beyond-5G/6G experiments or with their Rocca-S forks of libsodium and msquic (yt-nakano/Rocca-S-libsodium, yt-nakano/Rocca-S-msquic).
+- Encrypt-heavy bulk AEAD on x86-64 with AES-NI, where you control both ends. At 64 KB on Zen 4 it encrypts at 174.6 Gbps vs 92.7 Gbps for OpenSSL AES-128-GCM.
+- Messages of several KB and up. The Zig port's M4 table climbs from 4.67 Gbps at 64 B to 70 Gbps at 1 KB and 190 Gbps at 64 KB.
+- Rust or Zig code that wants Rocca-S with a safe API: the `rocca` crate (no_std, in-place variants) or zig-rocca-s, which check the tag in constant time and overwrite the plaintext on failure.
+- As a known-answer reference: the gtest suite checks the draft's test vectors, which is useful for validating other implementations.
+
+**Skip it when:**
+- Decrypt-heavy or symmetric traffic. At 64 KB, decryption runs at 140.4 Gbps on M5 Max (1.48x slower than encryption), and on Zen 4 its 92.3 Gbps merely ties OpenSSL AES-128-GCM's 92.9 Gbps. AEGIS-128x2 decrypts at 213.1 Gbps on the same M5.
+- Anything that needs a standard, FIPS or interop. The spec is an individual draft that CFRG never adopted, it expired on 2026-08-01, and its IANA codepoint is still 'TBD'.
+- Settings that need key commitment, such as multi-key or password-derived decryption, partitioning-oracle exposure or message franking. ePrint 2024/901 gives practical committing attacks with a test vector. Nonce reuse leaks the XOR of the plaintexts (draft section 3.3).
+- ARM or other non-AES-NI targets with yt-nakano's code. There is no ARM crypto backend: the fallback is a T-table AES, which is slow and leaks through cache timing. The Rust crate likewise uses softaes's 'unprotected' tables on anything except x86 built with +aes, and that includes aarch64.
+- If you need a maintained C library. The reference has 2 stars, no CI and no releases, and its CMake test build hard-codes GCC 12 x86_64-linux-gnu include paths.
+
+**Integration:** source-drop (rocca-s_ref.c + rocca-s.h). The CMakeLists builds a shared lib with -O3 -march=native. The ports ship as a Rust crate (`rocca`) and a Zig package. · The library needs only libc, plus <immintrin.h> when __AES__ is defined. The bundled CMake unconditionally adds the test directory, which does find_package(GTest REQUIRED) and find_package(absl REQUIRED), so the stock build needs GoogleTest and Abseil. The Rust crate needs softaes on non-AES-NI targets. · C99 (the benchmark copy builds with -std=c99), CMake 3.14+, C++ for the tests. The Zig port tracks Zig 0.16/master (its benchmark uses std.Io). The Rust crate is edition 2018. · x86-64 with AES-NI, chosen at compile time via __AES__ (needs -maes or -march=native). Everything else, including aarch64, gets a portable T-table fallback. The ARM-crypto (vaeseq/vaesmcq) backend behind the M5 numbers exists only in the hiae-aead/benchmarks copy. The Zig port uses std.crypto.core.aes.Block. The Rust crate gets AES-NI only with RUSTFLAGS target-feature=+aes and falls back to soft AES elsewhere.
+
+**Vs siblings:** In the same hiae-aead harness, libhiae's HiAE beats Rocca-S at both encryption and decryption (266.7/171.4 Gbps on M5, 268.4/139.1 on Zen 4), and libaegis's AEGIS-128x2 ties it on encryption and decrypts 1.5x faster (211.8/213.1 on M5), and AEGIS also has a separate constant-time bitsliced implementation (aegis-bitsliced). Pick Rocca-S only when the protocol requires Rocca-S; the original Rocca entry is its predecessor, which has published key-recovery and forgery attacks on v2-v4.
+
+**Gotchas:**
+- rocca_decrypt writes plaintext without authenticating it. You must call rocca_tag, compare the 32-byte tag in constant time yourself, and erase the output on mismatch, as draft section 3.4 recommends. The context holds the raw key and is never wiped. The Zig and Rust ports do the comparison and fill the output with 0xaa on failure.
+- It is not a real streaming API. Each rocca_add_ad/rocca_encrypt/rocca_decrypt call zero-pads its trailing partial block and advances the state, so every call except the last must be a multiple of 32 bytes, and all AD must come before the first encrypt/decrypt. Nothing enforces either rule.
+- The backend is fixed at compile time. A generic x86-64 build without -maes silently falls back to the table-based AES. The Rust README likewise says to export RUSTFLAGS="-Ctarget-feature=+aes,+sse4.1" for decent x86 code.
+- Only 256-bit keys and 16-byte nonces are implemented. Draft-06 also allows 12-16-byte nonces and 128/192-bit keys with a key-length-dependent S[6], added after ePrint 2024/901. Zero-padding a short key into this code reproduces the older expansion that has equivalent keys, so derive 256 bits with a KDF instead.
+
+**Status:** The reference is stale: its last commit (2025-03-19) was a one-file update after the 2023 upload, and it has 2 stars and no issues. It is MIT-licensed and a single ~22 KB C file, so vendoring is easy. The maintained routes are jedisct1's MIT Zig port (21 stars, updated for Zig 0.16 in 2026) and the Rust crate `rocca` 0.3.2 (released 2026-09-25, ~7.7k downloads; Cargo.toml says MIT but the repo has no LICENSE file). yt-nakano's separate Rocca-SX repo (parallel SX2/SX4 variants, January 2026, no README) is a different, unspecified cipher.
+
+[repo](https://github.com/yt-nakano/rocca-s) · [benchmark](https://github.com/hiae-aead/benchmarks)
+
+##### libaegis (AEGIS-128L, AEGIS-128X/256X)  `C`  `MIT`  `active`  `Tier B`
+
+Portable C library for the AEGIS AEAD family (RFC 10032), roughly 3x AES-GCM throughput on AES-NI/VAES CPUs.
+
+**Beats:** AES-256-GCM (SUPERCOP aes256gcmv1; on this host the fastest implementation is Romain Dolbeau's VAES code; the OpenSSL wrapper 'opensslnew' is also measured and is slower) — On eBACS/SUPERCOP 20260831 (hertz, AMD Ryzen 7 7700 Zen 4, single core, clang -march=native -O2), long-message encryption with no AD costs 0.18/0.19/0.19 cycles/byte for SUPERCOP's aegis128l ('aesnib') vs 0.55/0.56/0.57 for the fastest aes256gcmv1 (Dolbeau's VAES code), about 2.9-3x, and aegis128x4 is about 0.07-0.08. That measures SUPERCOP's own AEGIS code, not libaegis. The author's ePrint 2023/523 (Zig reference code vs OpenSSL 3.1 AES-128-GCM, 16 KB, single core) reports 190 vs 81 Gbps on i9-13900K and 118 vs 37 on EPYC 7543. libaegis's own README chart (Zen 4, turbo off) shows aegis128l at 208 Gb/s vs 47.7 for BoringSSL AES-256-GCM.
+
+**Known shortcoming:** Independent eBACS numbers measure SUPERCOP's own AEGIS code, not libaegis (so tier B, not A). eBACS's fastest AES-GCM is Dolbeau's VAES code; OpenSSL's wrapper is slower, so ratios against 'OpenSSL AES-GCM' flatter it. eBACS 'long' figure is the 2048-vs-128-byte differential. AEGIS needs AES hardware instructions to be fast.
+
+**Known shortcoming:** X variants lose without VAES: AEGIS-128X2 is 25% slower on an i3-7130U (#16), and on M1 128X4 (97.68 Gb/s) trails 128L (114.61). aegis_init() is not thread-safe; incremental decryption releases plaintext before the tag is checked; NULL-nonce out-of-bounds read fixed only in 2026-09 (#35). Not interoperable with AES-GCM and not FIPS-approved. Paper 2023/523 measured Zig reference code vs OpenSSL 3.1, and the README chart baseline is BoringSSL.
+
+**Independent measurement:** eBACS: aegis128l 0.18-0.19 vs aes256gcmv1 0.55-0.57 cycles/byte (~3x). README (Zen 4): 208 vs BoringSSL AES-GCM 47.7 Gb/s.
+
+**Independent measurement:** eBACS hertz (Ryzen 7 7700): aegis128l 0.18/0.19/0.19 vs aes256gcmv1 0.55/0.56/0.57 cycles/byte.
+
+**How:** AEGIS is built from bare AES round functions (one AESENC per 128-bit state word per update, no key schedule), and AEGIS-128L absorbs 256 bits per update through 8 independent AES rounds that fill the AES pipelines. GCM needs a full 10/14-round AES block cipher plus a separate GHASH carry-less multiply. The X2/X4 modes run 2 or 4 AEGIS-128L/256 lanes side by side so VAES+AVX2 or AVX-512 can do 2-4 AES rounds per instruction. aegis_init() does runtime CPU detection and picks per-variant backends: AES-NI+AVX, VAES+AVX2, AVX-512 (with a narrow-AVX-512 path for AEGIS-256X4 on Zen 4), ARM NEON AES and FEAT_SHA3, POWER Altivec, WASM SIMD128, and a bitsliced constant-time software fallback.
+
+**Use it when:**
+- Bulk AEAD on x86-64 with AES-NI, or better VAES/AVX-512 (Zen 4, Ice Lake and later, Raptor Lake), where AES-GCM is the throughput bottleneck: disk/file encryption, backups, storage, high-rate tunnels.
+- Medium-to-large messages (KB to MB). eBACS shows about 0.19 cycles/byte for aegis128l vs 0.56 for the best AES-256-GCM on Zen 4, and the X4 variant reaches about 0.07.
+- Protocols you control on both ends, or TLS 1.3 stacks that already carry AEGIS suites (picotls, h2o, fizz are listed as users).
+- When you want random nonces without GCM's 96-bit limits: 128-bit nonces for AEGIS-128L/X (about 2^48 messages per key per RFC 10032), and 256-bit nonces for AEGIS-256/X with no practical limit.
+- Encrypted random-access files or databases: the RAF API gives chunked, authenticated, seekable read/write/truncate with caller-supplied I/O and RNG callbacks and no allocation.
+
+**Skip it when:**
+- When you need interoperability with existing AES-GCM peers, FIPS-validated modules, or standards that mandate GCM. AEGIS is an informational IRTF RFC, not a NIST mode.
+- CPUs without AES instructions (many microcontrollers, RISC-V without crypto extensions). The default soft backend is bitsliced and constant-time but slow, and upstream recommends aegis-bitsliced for those targets.
+- Picking an X variant blindly. Without VAES, AEGIS-128X2 was 25% slower than AEGIS-128L on an i3-7130U (issue #16), and on Apple M1 the README chart shows AEGIS-128X4 (97.68 Gb/s) below AEGIS-128L (114.61).
+- Protocols that need full commitment when attackers control associated data: RFC 10032 says AEGIS is only key-committing in the receiver-binding game and fully committing only if the AD is not attacker-controlled (hash the AD first otherwise).
+- Risk-averse deployments: AEGIS has a shorter cryptanalytic record than AES-GCM, and there have been recent memory-safety fixes (e.g. an out-of-bounds read in aegis256_stream() with a NULL nonce, fixed 2026-09).
+
+**Integration:** static lib or shared lib (zig build or CMake); source-drop also supported by copying src/ · none (libc only; freestanding on wasm32) · C99 via CMake 3.10+, or Zig 0.16.0+ for zig build. README says Zig or recent clang with -march=native produces faster code than gcc. MSVC and clang-cl have CI workflows. · x86 and x86-64 (AES-NI+AVX, VAES+AVX2, AVX-512 dispatched at runtime), aarch64 (NEON AES, FEAT_SHA3), POWER with Altivec+crypto, wasm32-freestanding (SIMD128/relaxed SIMD on by default), plus a portable software fallback for anything else
+
+**Vs siblings:** Pick libaegis over HiAE or Rocca when you want an algorithm with a published RFC 10032, shipping TLS users, and an MIT C library that runs on x86, ARM, POWER and WASM, rather than a research cipher whose best numbers depend on AVX-512 or ARM tuning. Pick it over aegis-bitsliced whenever the target has AES-NI, ARMv8 crypto or VAES. aegis-bitsliced only wins on AES-less hardware.
+
+**Gotchas:**
+- Forgetting aegis_init() still works but can be 'much slower': the default backend is chosen at compile time and may be the software path.
+- Incremental decryption returns plaintext from state_decrypt_update() before the tag is checked. The header says not to use it until state_decrypt_final() succeeds. The one-shot decrypt zeroes the output on tag failure.
+- mac_final()/encrypt_final() consume the state by design (issue #28). Clone the MAC state with *_mac_state_clone() before finalizing if you need to continue, and never reuse a (key, nonce) pair, even with a different tag length or AD.
+- Static linking alongside libsodium 1.0.21 once caused duplicate symbols (issue #30, fixed upstream). -Dfavor-performance / -DFAVOR_PERFORMANCE swaps the constant-time bitsliced soft AES for table lookups on CPUs without AES hardware.
+
+**Status:** Actively maintained (v0.10.6 released 2026-09-21, many 2026 releases, few open issues), MIT-licensed, and easy to vendor by copying src/; pre-1.0 versioning, and the project refuses AI-written contributions.
+
+[repo](https://github.com/aegis-aead/libaegis) · [benchmark](https://eprint.iacr.org/2023/523.pdf)
+
+#### crypto-hashes
+
+##### blake2b_simd / blake2s_simd  `Rust`  `MIT`  `active`  `Tier A`
+
+Rust BLAKE2b/2s/2bp/2sp crates with AVX2/SSE4.1 kernels; its BLAKE2b hashes about 1.8x faster than OpenSSL SHA-512 in its own benchmark.
+
+**Beats:** OpenSSL SHA-512 / OpenSSL SHA-1 (also compared to libsodium BLAKE2b) — The README's bench_multiprocess table comes from one Intel Core i5-8250U laptop, which has no SHA-NI: rustc 1.40.0 with cargo --release, OpenSSL 1.1.1d, libsodium 1.0.18, hashing 1 MB in-memory inputs in 100 processes across all 512 offsets. It shows BLAKE2b at 2.81 cpb against OpenSSL SHA-512 at 5.11 (1.82x), many::hash/BLAKE2bp at 1.43/1.44 cpb (about 3.5x vs SHA-512, 2.45x vs SHA-1 at 3.51), and only 1.09x over libsodium's BLAKE2b at 3.07. The harness itself prints GB/s, and the README does not say how it converted that to cycles per byte.
+
+**Known shortcoming:** Headline ratios are cross-algorithm (BLAKE2b/BLAKE2bp vs OpenSSL SHA-512/SHA-1); against libsodium's BLAKE2b the gain is only ~1.09x. Reported numbers are means, not medians. Rust-only.
+
+**Known shortcoming:** Same machine: BLAKE3 is ~3x faster. Single-message BLAKE2b has only an AVX2 kernel (no SSE); non-x86 targets use portable code with no NEON (#7: slower than blake2-rfc on Neoverse). Numbers are from 2020 on one machine. Rust only, no C ABI.
+
+**How:** The SIMD kernels are Rust intrinsic ports of Samuel Neves' blake2-avx2. Single-message BLAKE2b runs a one-lane AVX2 compression with row diagonalization and shift-or rotations; the code comments note these beat the byte-shuffle rotations on recent chips because of an LLVM bug, and LLVM turns them into AVX-512 rotates when that is enabled. The bigger win is multi-lane hashing: BLAKE2bp and many::hash_many transpose the state and message words of 4 independent BLAKE2b jobs (8 for BLAKE2s) across 256-bit AVX2 registers and compress them together, roughly doubling throughput over one-lane BLAKE2b. The best kernel is picked at runtime with is_x86_feature_detected!.
+
+**Use it when:**
+- Rust code on x86-64 with AVX2 that needs BLAKE2 specifically, for example Argon2, Zcash/halo2, Substrate or multihash compatibility (crates.io lists 234 reverse dependencies, including sp-crypto-hashing, rust-argon2 and ff).
+- Hashing many independent messages in batches of at least many::degree() (4 for BLAKE2b and 8 for BLAKE2s on AVX2), such as content-addressed chunks or Merkle leaves, where hash_many roughly doubles per-core throughput over one-at-a-time BLAKE2b.
+- Replacing SHA-512 or SHA-1 in a design you control, on CPUs without SHA-NI, where the README's 1 MB benchmark shows BLAKE2b at 2.81 cpb against OpenSSL SHA-512 at 5.11 cpb.
+- Keyed hashing or MAC use, via BLAKE2's built-in key/salt/personal parameters, which avoid HMAC's double hashing (the author's explanation in issue #32).
+- Embedded or no_std Rust that wants a spec-complete, fuzzed, portable BLAKE2 (CI covers armv7, aarch64, i586 and big-endian powerpc64/s390x).
+
+**Skip it when:**
+- Anywhere SHA-256/SHA-512/SHA-1 output is required (interop, FIPS, certificates, git objects). The digests differ, and BLAKE2bp/BLAKE2sp also differ from plain BLAKE2b/BLAKE2s.
+- New designs where you are free to pick a hash. BLAKE3, from the same author, ran at 0.95 cpb on the same laptop, about 3x faster than blake2b_simd's BLAKE2b at 2.81, and the author points users to it (issue #22).
+- ARM, POWER and other non-x86 targets. There is no NEON kernel, so every call uses the portable Rust code (MAX_DEGREE = 1), which issue #7 found slightly slower than blake2-rfc on a Neoverse N1.
+- x86 CPUs without AVX2 hashing a single message. Single-message BLAKE2b has only an AVX2 kernel (a code comment says the SSE compress1 was never ported), so SSE4.1-only machines fall back to portable code for plain BLAKE2b. SSE4.1 is only used for 2-way many/BLAKE2bp and for BLAKE2s.
+- C/C++ projects. There is no C header or FFI layer, so Neves' blake2-avx2 C code (the ancestor, vendored in benches/) or libsodium is the natural pick there.
+
+**Integration:** crate (blake2b_simd, blake2s_simd; CLI in blake2_bin) · arrayvec 0.7, constant_time_eq 0.4.2 (arrayref was removed in 1.0.5) · Rust edition 2024. CI's MSRV job builds with 1.85.1, but Cargo.toml declares no rust-version and the author does not treat MSRV bumps as breaking (issue #30). · x86/x86-64 with runtime AVX2 and SSE4.1 dispatch; all other targets use portable Rust (tested in CI on aarch64 macOS, armv7, aarch64 Linux, i586/i686, powerpc64 and s390x); no_std is supported
+
+**Vs siblings:** Pick this over BLAKE3 only when the BLAKE2 digest itself is required; BLAKE3 is about 3x faster on the same machine and has more SIMD backends. Over the SHA-256 siblings (sha2-with-c-intrinsic, ISA-L multi-buffer SHA, sha256-simd), pick it when you can drop SHA-2 compatibility and want a maintained, widely used Rust crate with built-in multi-message batching.
+
+**Gotchas:**
+- With default-features = false (no_std), runtime detection is off and only portable code runs, unless the build enables the CPU features at compile time, for example RUSTFLAGS="-C target-feature=+avx2" (per a guts.rs comment).
+- Params setters panic on out-of-range values (hash_length over 64, key over 64 bytes, and so on). Hash equality is constant-time, but as_bytes()/as_array() comparisons are not.
+- Debug builds are dramatically slower. In issue #22 a user measured 17 s in a debug build versus 158 ms with --release on an ~80 MB file.
+- BLAKE2bp throughput changes by several percent with the input buffer's offset modulo 512 bytes (issue #8), which is why the benchmark averages over all 512 offsets. Your allocator's alignment decides where you land.
+
+**Status:** Actively maintained, if slowly: v1.0.5 (2026-08-20) removed arrayref after its newest crates.io release turned out to be malicious, and there were dependency and edition updates in 2025-26. It is MIT, copyable, and has ~58M (blake2b_simd) and ~23M (blake2s_simd) downloads. The 2020 benchmark was never rerun, and the bench crate was bumped to edition 2024 without code changes; it still calls env::set_var outside an unsafe block, which that edition rejects, so it may not build unmodified (not verified by building).
+
+[repo](https://github.com/oconnor663/blake2_simd) · [benchmark](https://github.com/oconnor663/blake2_simd/blob/master/README.md)
+
+##### rscrypto  `Rust`  `MIT OR Apache-2.0`  `active`  `Tier A`
+
+Zero-dependency Rust crypto crate whose SIMD/asm SHA-2, SHA-3, BLAKE2 and AEADs beat RustCrypto, ring and aws-lc-rs in its benchmarks.
+
+**Beats:** Fastest external Rust implementation per case. SHA-256/384/512: RustCrypto sha2, aws-lc-rs (AWS-LC) and ring. SHA3-224/256/384/512: RustCrypto sha3. BLAKE2: RustCrypto blake2, plus dryoc for BLAKE2b. — On the 2026-08-18 eight-host Linux snapshot, rscrypto's fastest-external geomean was 1.27-1.30x on SHA-256/384/512 (against RustCrypto sha2, ring and aws-lc-rs), 2.27-2.38x on SHA3 (against RustCrypto sha3) and 1.07-1.13x on BLAKE2 (against RustCrypto blake2 and dryoc). The hosts were Zen4/Zen5, Graviton3/4, Power10, z16, Ice Lake and Sapphire Rapids, running commit 7eb44e9 built with nightly-2026-07-17, target-cpu=native and fat LTO, with Criterion over 0 B-1 MiB inputs. The AEAD geomeans, against RustCrypto, ring, aws-lc-rs and the aegis/ascon-aead crates, were 1.80x/1.83x (AES-128/256-GCM), 2.20x/2.34x (AES-GCM-SIV), 1.12x (ChaCha20-Poly1305), 1.43x (XChaCha20-Poly1305), 1.23x (AEGIS-256) and 1.39x (Ascon-AEAD128). OpenSSL itself was never measured.
+
+**Known shortcoming:** Rust-only; baselines are Rust crates (ring, aws-lc-rs, RustCrypto), not OpenSSL directly. The 'median 1.60/1.31/1.33x' figures are all-pairs geometric means; raw results for the cited 2026-08-18 run are no longer in the repo. Built with nightly and target-cpu=native.
+
+**Known shortcoming:** Own Digest/Aead traits (not a RustCrypto drop-in); unaudited, no FIPS; pre-1.0 API churn; main needs Rust 1.100 plus a nightly pin (published 0.9.0 needs 1.91). AEAD rows include a buffer copy; BLAKE2 rows are duplicated; OpenSSL is never measured. Single-message SHA-3 on x86/ARM and SHA-256 on POWER use portable Rust; no_std without target flags is portable only.
+
+**Independent measurement:** rscrypto CI geomeans vs fastest external Rust crate: SHA-2 1.27-1.30x, SHA-3 2.27-2.38x, BLAKE2 1.07-1.13x; AES-GCM 1.80-1.83x, GCM-SIV 2.20-2.34x, ChaCha20-Poly1305 1.12x, XChaCha20-Poly1305 1.43x, AEGIS-256 1.23x, Ascon-AEAD128 1.39x.
+
+**How:** Three-tier dispatch (compile-time target features, then cached runtime CPU detection, then portable Rust) routes each primitive to a per-ISA kernel. SHA-256 uses the Intel SHA extensions (SHA-NI) or the ARMv8 SHA2 instructions; SHA-512 uses AVX2/AVX-512VL kernels based on the Gueron-Krasnov two-block schedule; on s390x the IBM Z CPACF KIMD instruction runs SHA-2 and absorbs SHA-3 blocks in hardware. Single-message SHA-3 on x86-64 and AArch64 is portable Keccak-f[1600] using XKCP's 'Bebigokimisa' lane-complementing trick; the AVX-512 and ARM SHA3 kernels only serve two-state paired paths. On AEADs, Linux x86-64 gets in-house VAES-512 AES-GCM and GCM-SIV assembly (16-, 64- and 128-block variants) plus ChaCha20-Poly1305 assembly adapted from AWS-LC/BoringSSL, and BLAKE2 gets AVX2/AVX-512VL row-vectorized compression.
+
+**Use it when:**
+- You want one dependency-free, no_std-capable Rust crate for SHA-2, SHA-3, BLAKE2 and AEADs instead of mixing RustCrypto, ring and aws-lc-rs, and you can live with a pre-1.0 API.
+- SHA-3/SHAKE-heavy workloads: the fastest-external geomean is 2.27-2.38x over RustCrypto sha3, with zero losses in 88-104 rows per variant.
+- AES-GCM-SIV or AES-GCM on AVX-512/VAES x86-64 Linux: geomeans of 2.20x/2.34x (GCM-SIV) and 1.80x/1.83x (GCM) against the fastest of RustCrypto, ring and aws-lc-rs.
+- Mixed-ISA fleets that include IBM z16 (s390x) or POWER10, where it ships native kernels and posts its widest margins (2.77x per-host geomean on s390x).
+- Pure-Rust XChaCha20-Poly1305: 173 wins, 3 ties and 0 losses, a 1.43x geomean against RustCrypto (the only competitor benchmarked for it).
+
+**Skip it when:**
+- You need a third-party audit, FIPS 140-3 validation or a whole-crate constant-time guarantee. The README says it has none of these; constant-time claims are per operation and per target in ct.toml.
+- Your code is generic over RustCrypto's `digest`/`aead` traits or uses ring/aws-lc-rs types. rscrypto has its own traits and no dependencies, so every call site changes.
+- BLAKE2 or ChaCha20-Poly1305 alone would justify the switch. Their margins are thin (1.07-1.13x geomean, with roughly half the rows ties, e.g. blake2b256 101 wins, 99 ties).
+- You need a stable, slow-moving dependency. Versions 0.1 to 0.9 shipped in four months (May-Aug 2026), and main already requires Rust 1.100.0 and pins a nightly toolchain.
+- You would adopt the whole stack for ECDSA. P-256/P-384 loses overall (0.87x fastest-external geomean), and the 2026-08-18 run recorded a severe s390x signing regression.
+
+**Integration:** crate · none by default; optional getrandom (OS entropy), rayon (`parallel` BLAKE3/Argon2) and serde · Published 0.9.0 declares Rust 1.91 on crates.io. The main branch (README says 0.10, not yet published) declares rust-version 1.100.0 and edition 2024, and pins nightly-2026-09-25. · Portable Rust anywhere. Accelerated and tested on Linux x86-64, AArch64, POWER (ppc64le), IBM Z (s390x) and RISC-V, Windows x86-64, Apple Silicon macOS and wasm32 (simd128). Windows AArch64 is compile-only; x86_64-apple-darwin is unsupported.
+
+**Vs siblings:** Pick it over blake2b_simd, the official BLAKE3 crate or keccak-batch when you want one dependency-free crate covering SHA-2, SHA-3, BLAKE2/3 and AEADs, with runtime dispatch on x86, ARM, POWER and s390x. Stay with blake2b_simd or official BLAKE3 for a mature single-algorithm crate (rscrypto's BLAKE3 median against official blake3 is only 1.04x), and with hashtree or keccak-batch for batched many-message hashing.
+
+**Gotchas:**
+- no_std builds select kernels only from compile-time target features. Without -C target-cpu or target-feature flags they run portable Rust (no SHA-NI, VAES and so on). The published scorecard was built with -C target-cpu=native.
+- The `portable-only` feature only disables runtime detection. It does not remove the compiled SIMD/asm code or override compile-time target features.
+- Some paths stay portable by design: single-message SHA-3 on x86-64/AArch64 (the vector Keccak kernels are two-state only) and SHA-256 on POWER, where the vector kernel lost to portable Rust.
+- The 2026-08-18 AEAD rows time buffer restoration (copy-and-encrypt), and the BLAKE2 rows include duplicated cases. The maintainer flags both but has not recomputed those historical ratios. The newer 2026-09-14 run (19,614 cases) has no curated ratios yet.
+
+**Status:** Active single-author project: first release May 2026, 0.9.0 on crates.io in August 2026 (about 1.5k downloads), commits through 2026-09-26. It is MIT OR Apache-2.0 and usable as a crate today, but it is pre-1.0, unaudited and changing fast.
+
+[repo](https://github.com/loadingalias/rscrypto) · [benchmark](https://github.com/loadingalias/rscrypto/blob/main/benchmark_results/OVERVIEW.md)
+
+##### sha2-with-c-intrinsic (AWS Crypto Algorithms Group)  `C`  `Apache-2.0`  `abandoned`  `Tier A`
+
+C-intrinsics SHA-256/SHA-512 kernels from AWS; only the SHA-NI SHA-256 path beats OpenSSL's assembly, by 5-8%.
+
+**Beats:** OpenSSL SHA-256/SHA-512 x86-64 perlasm assembly (AVX and AVX2 paths, plus the SHA-NI path for SHA-256 only), copied into the repo from OpenSSL master as of Feb 24 2020 (README link text says 13c5d744, but the URL points to commit e32c608e) — benchmark_example.md was measured on one Dell XPS 13 7390 (Core i7-1065G7 Ice Lake, Turbo off, Ubuntu 18.04.2) with clang-9 at -O3 -march=native. Each cell is the minimum of 10 runs of 100-iteration rdtscp averages after 25 warm-up calls, and the C kernels and the OpenSSL asm (master e32c608e, Feb 24 2020) run through the same sha256() wrapper. Only SHA-256 on SHA-NI wins: 183,685 vs 198,528 cycles at 65,536 B (1.08x, about 2.80 vs 3.03 cycles/byte) and 424 vs 446 at 64 B (1.05x), tied at 32 B or less. Every AVX/AVX2/AVX-512 C path and all of SHA-512 lose to OpenSSL.
+
+**Known shortcoming:** Only the SHA-NI SHA-256 path wins (~5-8% over OpenSSL's asm at 64 KB); the AVX/AVX2 C paths are slower than OpenSSL. The authors state the C code is often slower than assembly and not meant for production. Abandoned since 2020.
+
+**Known shortcoming:** SHA-NI SHA-256 wins only 1.05-1.08x at 64 bytes and up and ties at 32 bytes or less; every AVX/AVX2/AVX-512 C path and all SHA-512 paths lose ~11-14% to OpenSSL. Built with -march=native and no runtime dispatch (SIGILL risk); the OpenSSL comparison toggles a global capability array (not thread-safe); little-endian only. One commit (2020), issues disabled; benchmark code, not a library.
+
+**How:** The one winning path uses the Intel SHA Extensions (_mm_sha256rnds2_epu32, _mm_sha256msg1/msg2_epu32), following Intel's reference flow with the 64 rounds fully unrolled through unroll pragmas, and clang-9 scheduling it at about 2.80 cycles/byte versus 3.03 for OpenSSL's perlasm SHA-NI. The AVX, AVX2 and AVX-512 paths use Gueron and Krasnov's parallelized message schedule (J Cryptogr Eng 2012), translated from OpenSSL perlasm. The sigma0/sigma1 schedule is vectorized 4 words at a time and computed for 2 blocks (AVX2) or 4 blocks (AVX-512) at once, with W+K stored for the later blocks, while the round function stays scalar. Those paths do not beat OpenSSL.
+
+**Use it when:**
+- As a readable reference or vendoring source for a SHA-NI SHA-256 compression function in C (one ~100-line file) when you want to avoid perlasm/.s files in a GCC or Clang build.
+- Long messages (64 B and up) on x86-64 CPUs with SHA-NI, where the C path measured 1.05x (64 B) to 1.08x (64 KiB) faster than OpenSSL's Feb-2020 SHA-NI assembly on Ice Lake.
+- Compiler research and codegen regression testing, the authors' stated purpose: compare clang/gcc output for the same algorithm against OpenSSL's hand-scheduled asm, with sanitizer builds and clang-tidy already wired in.
+- Teaching or porting the Gueron-Krasnov vectorized message-schedule technique to another language or ISA, using intrinsics instead of perl-generated assembly.
+
+**Skip it when:**
+- Production code. The README says it is 'designed to be used for benchmarking purposes only and not in final products'. It ships no library, has had a single commit (2020-05-31), and GitHub issues are disabled.
+- SHA-512 anywhere, or SHA-256 on CPUs without SHA-NI. Every C AVX/AVX2/AVX-512 path loses to OpenSSL's asm, for example SHA-256 AVX2 709,146 vs 620,729 cycles at 64 KiB (~14% slower) and SHA-512 AVX2 456,221 vs 402,204 (~13% slower). Even the AVX-512 C path (694,132) is slower than OpenSSL's AVX2 asm.
+- Tiny messages (32 B or less): the SHA-NI C path only ties (281 vs 280 cycles at 32 B, 288 vs 283 at 16 B).
+- Portable or distributed binaries. Everything is built with -march=native, SIMD support is detected by CMake try_run on the build host, and there is no runtime CPU dispatch.
+- Many independent messages. Multi-buffer designs such as ISA-L's hash several streams per core, while this code hashes one message at a time.
+
+**Integration:** source-drop (CMake project that builds only test/benchmark executables; no static or shared library) · OpenSSL libcrypto, linked statically, for the correctness tests and the asm comparison; the copied OpenSSL .s files (x86-64 Linux/macOS, armv8 Linux); CMake 3. The kernels themselves need only compiler intrinsics. · C99; CMake 3.0+; tested with gcc-9 and clang-9 (the compiler must support AVX2/AVX-512/SHA-NI intrinsics); clang-format-9/clang-tidy-9 for the dev scripts · x86-64 (generic, AVX, AVX2, AVX-512, SHA-NI for SHA-256 only) and aarch64 (generic, plus an ARMv8 SHA-256 extension C path; SHA-512 generic only); little-endian only; tested on Ubuntu 18.04; macOS x86-64 asm files included; no Windows/MSVC build
+
+**Vs siblings:** Pick it over ISA-L Crypto or the S-HASH/j-lanes multi-buffer work only when you need one message's standard SHA-256 digest from auditable C intrinsics rather than assembly; ISA-L is the production choice for many-stream throughput. Over sha256-simd (Go) the choice is simply C versus Go. BLAKE2/BLAKE3 siblings are faster, but only if you can change the hash.
+
+**Gotchas:**
+- The sha_impl_t enum members exist only if the build host passed CMake's try_run feature probes, so a binary built on a SHA-NI or AVX-512 machine can SIGILL elsewhere, and choosing a valid implementation is the caller's job.
+- The AVX2 kernel works on block pairs and routes an odd leftover block through the AVX kernel; the AVX-512 kernel works on 4-block groups. Short inputs therefore run slower on these paths than on plain AVX C (SHA-256 at 1 B: AVX 791, AVX2 821, AVX-512 879 cycles).
+- Finalization byte-swaps the state on the assumption of a little-endian host. The CMake endianness check uses message(FATAL ...) instead of FATAL_ERROR, so on a big-endian host it probably warns rather than stops.
+- sha256_update asserts data != NULL before it checks for zero length, so sha256(d, NULL, 0, impl) aborts in builds with asserts enabled, and the entry-point assert uses || and so misses a single NULL pointer. The compress functions also do aligned stores into the state and expect a 64-byte-aligned sha256_state_t if called directly.
+
+**Status:** Abandoned: a single initial commit on 2020-05-31, issues disabled, 21 stars, and never re-measured against OpenSSL 3.x. It is Apache-2.0, and the SHA-NI kernel is small enough to vendor; the last known-good compilers are gcc-9/clang-9.
+
+[repo](https://github.com/aws-samples/sha2-with-c-intrinsic) · [benchmark](https://github.com/aws-samples/sha2-with-c-intrinsic/blob/master/benchmark_example.md)
+
+##### sha256mb  `Go`  `MIT`  `active`  `Tier A`
+
+Go multi-buffer SHA-256 for batches of 33-byte pubkeys; its 4-lane ARMv8 kernel runs ~2.6x faster than crypto/sha256.Sum256 on M3.
+
+**Beats:** Go standard library crypto/sha256 (sha256.Sum256 called once per message; this is the package's 'scalar' backend) — The test hashed 6,144 random 33-byte messages at a 64-byte stride on an Apple M3 with Go 1.22.5 and GOMAXPROCS=1 (`BenchmarkHash33`, -count=8, median). The 4-lane `sha2x4` kernel reached 57.58M hashes/s (106.7 µs per call); the scalar backend, a plain loop over stdlib `crypto/sha256.Sum256` that already uses the ARMv8 SHA2 instructions, reached 21.55M (285.1 µs), about 2.6x (2.57-2.67x across thermal states). This is one author's local run; no other CPU, batch size or Go version has published ratios, and no comparison of HASH160 against btcutil is given.
+
+**Known shortcoming:** Go library; wins only on arm64 (amd64 runs scalar code). Baseline is a crypto/sha256 loop over independent messages; needs many messages in flight.
+
+**Known shortcoming:** Fixed 33-byte messages only (not a hash.Hash); fewer than 4 messages and the tail run scalar. One M3 laptop run (Go 1.22.5, n=6144 only), no small-n numbers. 0 stars, 3 commits (all 2026-05-31), v0.1.0 only.
+
+**How:** The ARMv8 SHA256H/H2/SU0/SU1 instructions are latency-bound, so a single message leaves the crypto pipeline idle. The generated assembly runs four independent messages as register-disjoint streams in lockstep, emitting each round group for all four lanes back-to-back so the out-of-order core overlaps them (multi-buffer or interleaved hashing). Every message is exactly 33 bytes, so each fits one pre-padded block: the padding bit and the 264-bit length are constant schedule words, and there is no generic padding, buffering or finalize code. The project publishes no ablation that separates the interleaving gain from the per-call `Sum256` overhead it also removes.
+
+**Use it when:**
+- Bitcoin/secp256k1 tooling on arm64 that hashes large batches of compressed public keys: address indexing, HASH160 derivation, key-space research.
+- arm64 hosts with the ARMv8 SHA-256 extension. Apple M-series is assumed to have it; Linux and BSD arm64 are gated on HWCAP. Only Apple M3 was actually benchmarked.
+- Throughput-bound loops with batches in the hundreds to thousands; the published point is n=6144 on one core. Calls are zero-allocation and goroutine-safe, so you can shard batches across cores.
+- Replacing a hot `for` loop of `sha256.Sum256` over fixed 33-byte slices at a stride of 33 bytes or more, when bit-identical output matters. It is tested against the stdlib oracle with fuzzing, race tests and poisoned inter-message padding.
+
+**Skip it when:**
+- amd64 or any non-arm64 target: no SIMD backend exists yet (AVX-512/SHA-NI are only planned), so it runs the stdlib scalar loop and gives no speedup.
+- Any message length other than exactly 33 bytes, streaming input, or code that expects `hash.Hash`: none of these are supported.
+- Tiny batches: n below 4 and the remainder after the last full group of 4 go through the scalar path, and no small-n numbers are published.
+- Dependencies that must be mature and reviewed: 0 stars, one author, three commits all on 2026-05-31 and nothing since, and only v0.1.0. The single measurement is a local Apple M3 laptop run on Go 1.22.5; other CPUs and Go versions are not measured.
+
+**Integration:** module · golang.org/x/sys (arm64 HWCAP detection outside Darwin). The hash160mb subpackage adds github.com/Asylian21/ripemd160-asm (same author, 0 stars). The module also requires golang.org/x/crypto. · Go 1.22 (go.mod; toolchain go1.22.5; CI runs 1.22.x) · The fast path needs arm64 with the ARMv8 SHA-256 extension (assumed on darwin/arm64, HWCAP-gated elsewhere). Every other GOARCH builds and runs the scalar crypto/sha256 loop. CI runs ubuntu amd64, ubuntu-24.04-arm and macos-14 arm64, and cross-compiles for 386 and ppc64le.
+
+**Vs siblings:** In Go on arm64 with many fixed 33-byte pubkeys, pick it over minio/sha256-simd: sha256-simd speeds up general single-stream hashing but has no batched fixed-length API. hashtree, Intel ISA-L multi-buffer SHA and Gueron's j-lanes/S-HASH use the same many-messages idea from C, with the catalogued numbers measured on x86, so prefer them on amd64, where sha256mb has no SIMD path.
+
+**Gotchas:**
+- Programmer errors panic instead of returning errors: n < 0, stride < 33, or a short src or dst.
+- The backend is chosen once at package init, and GOSHA256MB_FORCE can pin it. Unknown or unsupported values silently fall back to scalar, so check Backend() and Lanes() before trusting a benchmark.
+- On darwin/arm64 the SHA2 extension is assumed unconditionally, because x/sys/cpu reports no ARM64 flags there. Other arm64 platforms use HWCAP.
+- In hash160mb, the staged default grows its pooled digest buffer to the largest n ever used and keeps it. The fused kernel (GOHASH160MB_FORCE=fused) ties staged single-threaded and is about 3% slower at 8 threads.
+
+**Status:** The catalog marks it active, but it was released as v0.1.0 on 2026-05-31 in three commits and nothing has landed since. MIT-licensed and small enough to vendor (a few Go files plus a generated arm64 assembly kernel), but unproven: 0 stars, single author, no amd64 kernel.
+
+[repo](https://github.com/Asylian21/sha256mb) · [benchmark](https://github.com/Asylian21/sha256mb/blob/main/PERFORMANCE.md)
+
+##### BLAKE3  `Rust`  `CC0-1.0 OR Apache-2.0 OR Apache-2.0 WITH LLVM-exception`  `active`  `Tier B`
+
+Official Rust/C implementation of BLAKE3, a Merkle-tree hash/XOF/MAC about 4x faster than SHA-256 on long single-core inputs.
+
+**Beats:** SHA-256 and SHA3-256: the fastest of SUPERCOP's implementations, whose candidates include OpenSSL-backed ones. BLAKE2b is also compared. The project's own chart used OpenSSL 1.1.1d SHA-256/SHA3-256 and BLAKE2b via blake2b_simd. — On eBASH (SUPERCOP 20260831; single-core 'long message' = cycle difference between 18208- and 1824-byte inputs), the BLAKE3 avx512 build (Clang 14, -O3) on an Intel Core i7-1165G7 (Tiger Lake, AVX-512 + SHA-NI) takes a median 0.51 cycles/byte versus 2.21 for the fastest SHA-256 implementation, 5.50 for SHA3-256 and 2.99 for BLAKE2b (about 4.3x, 10.8x, 5.9x), and a Ryzen 7 7700 gives 0.60 vs 2.02 for SHA-256. The project's own 2020 chart (16 KiB, one thread, Xeon 8275CL without SHA-NI, OpenSSL 1.1.1d) shows about 14x over SHA-256, a gap that does not carry over to CPUs with SHA instructions.
+
+**Known shortcoming:** Headline chart is first-party with no rustc version. Independent eBASH figure is ~4.3x over SHA-256 per core (0.51 vs 2.21 cycles/byte), not the ~14x multi-threaded chart; SHA-NI SHA-256 narrows the gap further.
+
+**Known shortcoming:** Not compatible with SHA-2/SHA-3 digests. Short and mid-size messages lose to SHA-NI SHA-256 (eBASH 1536 B: 2.88 vs 2.34 cycles/byte on Tiger Lake, 3.76 vs 2.10 on Zen 4), and Apple Silicon hardware SHA-256 is faster (#315). The 10-20x headline needs multithreading/mmap or an old non-SHA-NI Xeon; single-core lead is ~3.4-4.3x on long messages. 1,912-byte hasher state; the Rust crate silently falls back to pure Rust without a C compiler; rayon mode is slower under 128 KiB.
+
+**Independent measurement:** eBASH (panther): BLAKE3 0.51 vs SHA-256 2.21 cycles/byte.
+
+**Independent measurement:** eBASH 1536-byte messages: BLAKE3 2.88 vs SHA-256 (SHA-NI) 2.34 cycles/byte (Tiger Lake); 3.76 vs 2.10 (Zen 4).
+
+**How:** The input is cut into 1 KiB chunks that form the leaves of a binary Merkle tree (derived from the Bao tree mode), so chunks are independent and the SIMD code compresses 4, 8 or 16 of them at once, one 32-bit word per vector lane (SSE4.1/AVX2/AVX-512). This 'word-based' parallelism is why throughput jumps between 2 and 16 KiB. The compression function is BLAKE2s's 32-bit ARX core, with rounds cut from 10 to 7 and a message schedule simplified to one repeated permutation. On x86-64, runtime CPU detection selects hand-written assembly, and optional Rayon (Rust) or oneTBB (C) spreads subtrees across cores.
+
+**Use it when:**
+- Content addressing, deduplication, build caches and file-integrity checks on inputs of several KiB or more, where you choose the hash (the README lists Cargo, ccache, Bazel, Nix, LLVM and OpenZFS as adopters).
+- x86-64 hosts with AVX2 or AVX-512: on eBASH, single-thread long-message cost is 0.51-0.60 cycles/byte, against 2.02-2.21 for SHA-NI SHA-256 and 5.5-6.5 for SHA3-256.
+- Hashing large in-memory buffers or files on many cores: update_rayon, update_mmap_rayon and blake3_hasher_update_tbb split the tree across threads, and the spec shows near-linear scaling up to 16 threads.
+- When you need a MAC, a KDF or arbitrary-length/seekable output and would otherwise layer HMAC/HKDF/SHAKE on a plain hash.
+- Verified streaming or incremental verification of large blobs through the tree structure (the Bao project).
+
+**Skip it when:**
+- Formats or protocols that mandate SHA-256/SHA-3 (FIPS-validated modules, TLS, X.509, existing on-disk or wire formats): the digest is not compatible.
+- Short and medium messages on CPUs with SHA-256 instructions. eBASH shows SHA-256 ahead at 576 and 1536 bytes on Tiger Lake (2.34 vs 2.88 cycles/byte at 1536 B) and on Zen 4 (2.10 vs 3.76), and issue #315 reports single-thread b3sum slower than `openssl sha256` on Apple Silicon.
+- Password storage or deriving keys from passwords: the README says to use Argon2 instead.
+- Low-end cores without wide SIMD: here BLAKE3 performs like BLAKE2s (spec Figure 5, ARM1176), and issue #403 reports the NEON build slower than the portable one on a Cortex-A9.
+- Multithreaded hashing of small inputs or of big files on spinning disks: update_rayon is slower than update below about 128 KiB on x86-64, and parallel mmap reads thrash HDDs (issue #31).
+
+**Integration:** crate (blake3, plus the b3sum CLI crate) and a C static/shared library, built with CMake or by compiling the .c/.S files directly · Rust: arrayvec, constant_time_eq, cfg-if, cpufeatures (x86 only). Optional: rayon-core, memmap2, digest, serde, zeroize. Build dependency: cc. C: none, with optional oneTBB for multithreading. · Rust 1.85 (edition 2024; CI builds on 1.85.1, but there is no formal MSRV policy). C: GCC, Clang or MSVC (tested in CI), CMake 3.9+. The TBB path needs a C++20 compiler and -fno-exceptions. · x86 and x86-64 (SSE2/SSE4.1/AVX2/AVX-512, runtime dispatch, assembly for Unix, Windows MSVC and Windows GNU). AArch64 NEON is on by default. ARMv7 NEON and WASM SIMD are compile-time opt-ins. Other targets use the portable fallback, and CI covers big-endian powerpc64 and s390x.
+
+**Vs siblings:** Pick BLAKE3 over sha256-simd, Intel ISA-L multi-buffer SHA, j-lanes or S-HASH when you are free to change the digest: those keep SHA-256 compatibility or need many independent buffers, while BLAKE3 parallelizes a single message. Pick it over KangarooTwelve (XKCP) for peak speed at shorter lengths (1 KiB vs 8 KiB leaves), built-in multithreading and keyed/KDF modes; pick K12 when you want a Keccak/SHA-3-family primitive.
+
+**Gotchas:**
+- The widely quoted 10-20x-over-SHA-256 figures come from multithreaded mmap hashing (b3sum's default) or from a 2019 Cascade Lake CPU without SHA-NI. The single-thread lead over hardware SHA-256 is about 3.4-4.3x at long lengths and turns into a loss around 0.5-1.5 KiB.
+- sizeof(blake3_hasher) is 1912 bytes on x86-64 because it holds a 55-entry chaining-value stack. That is large for per-object or on-stack state, and the C library does not implement the spec's reduced-maximum-length option.
+- The Rust build compiles C/assembly through cc. If no suitable C compiler (or no AVX-512-capable one) is found, it quietly falls back to a slower pure-Rust build. NEON on non-AArch64 targets and WASM SIMD are not runtime-detected: enabling them produces binaries that assume the feature.
+- Outputs shorter than 32 bytes give proportionally less security, and the XOF seek offset should not be treated as secret. Compare Hash values with the type's constant-time == rather than as byte slices.
+
+**Status:** Actively maintained (v1.8.7 released 2026-08-20, commits through 2026-09-10, about 189M crates.io downloads) and licensed CC0 or Apache-2.0 (with or without the LLVM exception), so the C files can be vendored into any build.
+
+[repo](https://github.com/BLAKE3-team/BLAKE3) · [benchmark](https://bench.cr.yp.to/results-hash/amd64-panther.html)
+
+##### LSH-256 / LSH-512 (Korean hash standard, TTAK.KO-12.0276)  `C`  `BSL-1.0 (the Crypto++ compilation is under the Boost Software License 1.0; individual files, including lsh256*/lsh512*.cpp, are placed in the public domain)`  `active`  `Tier B`
+
+Korean-standard LSH-256/LSH-512 hash; SUPERCOP's SIMD C code beats BLAKE2 and SHA-3 on long x86 messages.
+
+**Beats:** BLAKE2 (BLAKE2b vs LSH-512, BLAKE2s vs LSH-256) and SHA-3 (SHA3-512 / SHA3-256). Each eBASH row is the fastest SUPERCOP implementation of that function. For SHA-3 the winner is 'oncore64bits'; OpenSSL's SHA-3 is also measured and is 1.27-1.28x slower. — eBASH on alder (Intel Core i3-12100, Golden Cove, supercop-20260831), long-message medians: LSH-512 (NSR avx2 code, Clang 19.1.7 -O2) 2.14 cycles/byte vs BLAKE2b 3.36 and SHA3-512 11.25, and LSH-256 (ssse3, Clang -Os) 3.13 vs BLAKE2s 5.24 and SHA3-256 5.96. Each row is the fastest implementation+compiler pair SUPERCOP found for that function, picked by the time to hash 1536 bytes (for example 3854 cycles for LSH-512 avx2).
+
+**Known shortcoming:** The wins come from SUPERCOP's AVX2/SSSE3 LSH implementations, not Crypto++: SUPERCOP's 'cryptopp' LSH-512 is 2.92x slower and falls behind BLAKE2b. LSH loses at 64-byte messages, and BLAKE3 and SHA-NI SHA-256 are faster. Korean national standard with little use outside Korea.
+
+**Known shortcoming:** The fast code is NSR's 2016 C99 implementation under an MIT-style license (not Crypto++'s BSL-1.0 code). KS X 3262 designation not verified; KISA lists TTAK.KO-12.0276. Loses on short inputs and on Raspberry Pi 5 (ARM); each SUPERCOP folder builds for one CPU feature set with no runtime detection. Wide-pipe Merkle-Damgard; LSH-512 block is 256 bytes.
+
+**Independent measurement:** eBASH (alder): LSH-512 2.14 vs BLAKE2b 3.36, SHA3-512 11.25 cycles/byte; LSH-256 3.13 vs BLAKE2s 5.24, SHA3-256 5.96.
+
+**How:** LSH is an ARX design (add, rotate, xor) with a 16-word chaining value split into left/right halves and a wide-pipe Merkle-Damgard mode. The AVX2 LSH-512 code keeps the whole chaining value in four 256-bit registers and runs 28 steps using vector adds, shift-or rotations, byte-granular rotations via _mm256_shuffle_epi8 and word permutations via _mm256_permute4x64_epi64. Message expansion is vectorized the same way. The SSSE3 LSH-256 code does the same with 128-bit registers and pshufb over 26 steps, and on this CPU it edges out the AVX2 LSH-256 code (5231 vs 5401 cycles for 1536 bytes).
+
+**Use it when:**
+- A Korean-standard hash (LSH, TTAK.KO-12.0276) is required and you want the fastest known code for it on x86-64.
+- Long messages (576 bytes and up) on x86-64 with AVX2 that need a 512-bit digest: on alder LSH-512 runs 2.14 cycles/byte vs SHA-512 5.02 and SHA3-512 11.25.
+- AMD Zen 4, where the margin is larger: LSH-512 1.72 vs BLAKE2b 3.52 cycles/byte and LSH-256 2.61 vs BLAKE2s 5.53 (hertz, Ryzen 7 7700).
+- You want code that SUPERCOP lists with constant-time goals: both chosen implementations ship goal-constbranch/goal-constindex files recording a TIMECOP pass.
+
+**Skip it when:**
+- Short messages: at 64 bytes on alder LSH-512 (9.52) and LSH-256 (7.27 cycles/byte) lose to BLAKE2s (4.84), SHA-256 (4.69) and BLAKE3 (3.12). At 8 bytes they cost 60-77 cycles/byte.
+- When BLAKE3 or SHA-NI SHA-256 is acceptable: both beat LSH on long messages (alder BLAKE3 1.73, SHA-256 2.05; Zen 4 BLAKE3 0.60 cycles/byte).
+- ARM: on a Raspberry Pi 5 (Cortex-A76, supercop-20251222) LSH-512 only ties BLAKE2b (3.76 cycles/byte), LSH-256 is slower than BLAKE2s (6.88 vs 6.22), and SHA-256 with the ARMv8 crypto extensions (2.03) beats both.
+- You need broad interoperability or a long cryptanalysis record: LSH has few implementations and little outside analysis. A withdrawn 2015 ePrint (2015/494) showed free-start collisions on full LSH because it has no feed-forward, though this is not a practical collision on the standard hash.
+- You want a packaged, maintained library: the only one found is Crypto++, and SUPERCOP measures its LSH-512 at 2.92x slower than the NSR AVX2 code (11240 vs 3854 cycles for 1536 bytes).
+
+**Integration:** source-drop · none (compiler intrinsics headers only) · C99 compiler with SSSE3/AVX2 intrinsics (ifdefs also cover MSVC); SUPERCOP's fastest builds used Debian Clang 19.1.7 with -march=native · x86/amd64 per the architectures file; lsh512/avx2 needs AVX2, lsh256/ssse3 needs SSSE3; separate ref, sse2, xop and neon directories exist
+
+**Vs siblings:** Pick LSH over BLAKE3, blake2_simd, KangarooTwelve (XKCP) or SHA-NI SHA-256 only when LSH itself is mandated, or when you need a 512-bit digest on AVX2 x86 and cannot use BLAKE3. On alder BLAKE3 (1.73) and SHA-256 (2.05) are faster, while LSH-512 (2.14) beats BLAKE2b (3.36) and K12 (2.67).
+
+**Gotchas:**
+- Lengths are in bits: lsh512_update/lsh512_digest take databitlen (SUPERCOP's wrapper passes 8*inlen), so one call covers at most 512 MiB when size_t is 32 bits, and any update after a non-multiple-of-8 bit length returns LSH_ERR_INVALID_DATABITLEN.
+- Each SUPERCOP directory is a single ISA variant chosen at compile time (LSH_USE_AVX2); there is no CPUID dispatch, and lsh.h declares lsh_init_simd()/lsh_get_simd_type(), which the per-variant lsh-impl.c does not define. Call the lsh512_*/lsh256_* functions from lsh-impl.h and add your own dispatch.
+- The fastest variant differs by width and CPU. On alder, LSH-256's winner is ssse3, not avx2, and LSH-512's ssse3 code (5206 cycles) is no faster than ref (5203), so benchmark on your target instead of assuming AVX2 is best.
+- The comments are in Korean. The header says the output buffer must be aligned, but the code uses unaligned stores plus memcpy. lsh512_final wipes the context with a plain memset, which the compiler may remove.
+
+**Status:** The NSR code (2016, MIT-style permissive license, about 20-25 KB of C per variant) was added in supercop-20240625 and has not changed in the jedisct1 mirror since; it is small enough to vendor, and SUPERCOP itself is actively released (20260831).
+
+[repo](https://bench.cr.yp.to/supercop.html) · [benchmark](https://bench.cr.yp.to/results-hash/amd64-alder.html)
+
+#### encoding
+
+##### aklomp/base64 (SIMD Base64 C99 library)  `C`  `BSD-2-Clause`  `active`  `Tier A`
+
+Portable C99 SIMD base64 codec with runtime CPU dispatch; the Muła–Lemire paper measured its decoder about 4x faster than Chrome's.
+
+**Beats:** base64 — Muła & Lemire (ACM TWEB 2018) timed single-threaded decoding with error checking on six real files (1.4–330 KB) on an i7-6700 with Turbo Boost off, GCC 5.3 -O3 -march=native. Klomp's AVX2 decoder took about 0.43 cycles/byte on lena.jpg against 1.8 for Chrome's codec and 20 for the Linux kernel's. That is the pre-August-2017 range-compare version, which the paper found about 2x slower than its own AVX2 codec. The current decoder adopted the paper authors' LUT method in commit 0a69845 (+64% AVX2 decode on an i7-4870HQ, per the commit message). Turbo-Base64's 2022.02 run (i7-9700K, gcc 11.2, 1 MB) puts b64avx2 at 26.2/22.5 GB/s encode/decode against 2.5/4.3 GB/s for Chrome's codec, but that harness is not public.
+
+**Known shortcoming:** Tier A rests on the 2017 Muła & Lemire paper run (lemire/fastbase64 harness, GCC 5.3, i7-6700): AVX2 decode 0.43 cycles/byte vs Chrome 1.8 (~4.2x) and Linux 20. The Turbo-Base64 comparison page it cited is third-party with a closed harness.
+
+**Known shortcoming:** The paper's comparison used the pre-Aug-2017 range-compare decoder; commit 0a69845 later adopted the Muła/aqrit nibble-LUT decoder (+64% AVX2), so the paper's gap is stale. No whitespace skipping (#33), no base64url (#66), no canonical/padding check (#159/#160); OpenMP decoder accepts interior '=' (#158). Short strings 2-4x behind Turbo-Base64 (Turbo's table only). No AVX-512 decoder. Plain `make` builds only the scalar codec unless *_CFLAGS are set.
+
+**Independent measurement:** Muła & Lemire, ACM TWEB 2018: AVX2 decode 0.43 cyc/B vs Chrome 1.8, Linux 20 (i7-6700, GCC 5.3 -O3 -march=native).
+
+**How:** There are separate codecs for SSSE3, SSE4.1, SSE4.2, AVX, AVX2, AVX-512 (VL+VBMI, encode only), NEON32 and NEON64. On x86, the first init call picks one with CPUID/XGETBV and stores it in a global function-pointer pair. The AVX2 decoder turns 32 characters into 24 bytes per round. It uses Muła/aqrit's nibble-LUT method (the Aug 2017 rewrite): vpshufb lookups on the high and low nibbles validate the input (vptest sends any invalid byte to the scalar path), a third 'roll' vpshufb adds the per-range offset, and vpmaddubsw + vpmaddwd + vpshufb + vpermd pack the result, the same packing as Fig. 9 of Muła & Lemire. The AVX2 encoder uses hand-written inline asm on 64-bit GCC/Clang. The scalar fallback moves 32 or 64 bits per step through 12-bit encode and 32-bit decode tables, and an optional OpenMP build splits buffers of 20,000 bytes or more across threads.
+
+**Use it when:**
+- A C or C++ program that encodes or decodes large, clean standard-alphabet base64 blobs (tens of KB to MB: images, attachments with the line breaks already stripped, binary payloads) and today uses a scalar codec like Chrome's modp_b64, the Linux kernel's, or a hand-rolled table loop.
+- Binaries shipped to unknown x86 machines: one build carries SSSE3 through AVX-512 codecs and picks one at runtime. The CMake build turns all the x86 SIMD paths on by default.
+- Code with a GPL-3.0 problem: this is BSD-2-Clause, while Turbo-Base64, which beats it in Turbo-Base64's own tables, is GPL-3.0.
+- Chunked or streaming I/O (a socket or file read in blocks), where the stream_* API keeps partial quads between calls without buffering the whole input.
+- AArch64, including Apple M1 and Windows ARM64 (NEON64 support added in 2025). NEON is chosen at compile time, not detected at runtime.
+
+**Skip it when:**
+- Input containing whitespace or line breaks (MIME, PEM, 76-column output from GNU base64). Any character outside the alphabet makes decode fail. Whitespace skipping has been an open discussion since 2016 (#33), and the author said in reply to #33 that it is not currently planned.
+- base64url or other alphabets. Only '+/' is supported (#66, open since 2020); the SIMD code relies on arithmetic tied to the standard alphabet, so you would have to translate '-_' yourself before and after.
+- Many short strings (under about 100 bytes). In Turbo-Base64's 2022.02 run on an i7-9700K, b64avx2 manages 891/734 MB/s encode/decode on 4–16 byte strings against 2,330/2,161 MB/s for Turbo-Base64, and it stays about 2–4x behind up to 128 bytes. There is also no public way to skip the per-call dispatch (#65).
+- Strict validation. Decode does not check for canonical encoding (non-zero trailing bits pass, #159) and has no way to require or forbid padding (#160). The OpenMP decoder accepts '=' at the end of an interior slice (#158).
+- Peak throughput on AVX-512 or Apple Silicon. Decoding has no AVX-512 path (it reuses AVX2). On an M1, Turbo-Base64's table shows NEON64 at 19.1/12.5 GB/s against 24.0/15.4 GB/s for tb64v128.
+
+**Integration:** static lib (a single lib/libbase64.o from make) or static/shared library via CMake 3.10.2+; it can also be vendored as source · none (OpenMP optional) · C99 compiler. The x86 AVX dispatch needs GCC 4.2+ or Clang 3+ for inline xgetbv; MSVC goes through __cpuidex. The README recommends Clang over GCC for NEON and warns of a GCC 4.6 miscompile of vst4q_u8. · x86/x86-64 with runtime dispatch (SSSE3, SSE4.1, SSE4.2, AVX, AVX2, AVX-512 VL+VBMI encode); 32-bit ARM NEON and AArch64 NEON chosen at compile time (AArch64 NEON on by default in CMake, also on Windows ARM64); a portable 32/64-bit scalar path everywhere else, CI-tested on macOS arm64, Linux aarch64 and Windows ARM64 among others
+
+**Vs siblings:** Pick it over Turbo-Base64 when you need BSD-2-Clause rather than GPL-3.0 and mostly process long buffers, where the gap in Turbo's own 1 MB table is about 11% on encode and 32% on decode; Turbo wins clearly on short strings. Pick it over lemire/fastbase64 and base64simd, which are research code (fastbase64 is archived), when you want a maintained library with a streaming API, runtime dispatch and NEON. Pick simdutf's base64 instead when the input may contain whitespace or needs base64url.
+
+**Gotchas:**
+- A plain `make` builds only the scalar codec. You have to set AVX2_CFLAGS=-mavx2, SSSE3_CFLAGS=-mssse3 and so on, or the SIMD paths compile to stubs. CMake, by contrast, turns all the x86 SIMD paths on by default.
+- Passing any BASE64_FORCE_* flag re-runs codec selection and overwrites the process-wide codec for every thread. A forced codec that was not compiled in makes decode return -1 rather than falling back.
+- The SIMD loops store full 32-byte vectors while advancing the output by only 24 bytes (decode) and read 4 bytes before the current block (AVX2 encode). The library guards this internally, but output buffers should still get the margin the header asks for rather than exactly 3/4 or 4/3 of the input.
+- The installed bin/base64 conflicts with coreutils' /usr/bin/base64 when packaged (#154). Under CMake, the test suite runs every compiled-in codec and aborts with SIGILL on CPUs that lack an ISA it was built for (#152).
+
+**Status:** Maintained, slowly: the last release is v0.5.2 (Jan 2024), the last code change was NEON on Windows ARM64 (May 2025), and there have been only CI updates since. 37 issues are open, including recent validation-strictness reports. BSD-2-Clause, C99 and dependency-free, so it is easy to vendor; pybase64 wraps it, and ClickHouse integrated it (#65).
+
+[repo](https://github.com/aklomp/base64) · [benchmark](https://arxiv.org/pdf/1704.00605)
+
+##### base64-avx512 (Muła & Lemire)  `C`  `BSD-3-Clause`  `abandoned`  `Tier A`
+
+C artifact of the Muła–Lemire AVX-512 VBMI base64 codec; 10–20x faster than Chrome's table-driven codec.
+
+**Beats:** base64 (conventional/table-based scalar base64 codec, e.g. Chromium's) — The paper ran on an Intel i3-8121U (Cannon Lake, 3.2 GHz max) with GCC 9.1 -O3 -march=cannonlake, taking the median of 10 runs including call overhead. Encoding and decoding ran at about 40 GB/s for L2-resident inputs over 16 kB, against 1.5 GB/s (encode) and 2.6 GB/s (decode) for Chrome's table-based codec; the paper sums this up as a 10–20x gain. Real-file decode was 25–42 GB/s for in-cache images but only 9.5 GB/s, equal to memcpy, for a 34.9 MB zip. The paper's 150 GB/s figure is memcpy's L1 peak, not the codec.
+
+**Known shortcoming:** Research code for the paper (arXiv 1910.05109), not a packaged library; needs AVX-512 VBMI (Cannon Lake i3-8121U or newer). The quoted 150 GB/s is the memcpy L1 ceiling, not the codec's speed.
+
+**Known shortcoming:** The benchmarked `__unrolled` decoder resets its error vector every 256-byte block, so invalid characters in earlier blocks go unreported; padded input whose length is a multiple of 64 has '=' flagged invalid in the SIMD loop (from source). Decoder needs ~16 bytes of output slack; encoder returns void. Cascade/Cooper Lake lack VBMI (the paper and record are wrong on this); no fallback. 25-42 GB/s real-file figures are in-cache; a 34.9 MB file runs at memcpy speed (9.5 GB/s).
+
+**How:** Encoding takes three instructions per 48 input bytes. vpermb duplicates and reorders the input bytes, vpmultishiftqb moves the four 6-bit fields of each 24-bit group into separate bytes, and a second vpermb uses the 64-character alphabet held in one register as the lookup table. Decoding takes five instructions per 64 characters: vpermi2b does a 128-entry ASCII-to-6-bit lookup that flags invalid bytes with 0x80, vpternlogd ORs those flags into an error register that is checked once at the end (so the hot loop has no branch), vpmaddubsw and vpmaddwd pack the fields, and vpermb compacts the result to 48 bytes. The paper counts about 7x fewer instructions than the authors' earlier AVX2 codec for encoding and about 5x fewer for decoding.
+
+**Use it when:**
+- Bulk encode or decode of clean base64 (no line breaks, standard alphabet) on x86-64 CPUs with AVX-512 VBMI. GCC's -march lists include it for Cannon Lake, Ice Lake and AMD Zen 4.
+- Buffers from a few kB up to L2 size, or large data processed in cache-sized chunks. That is where the paper measured about 40 GB/s against 1.5–2.6 GB/s for Chrome's codec.
+- A fleet where you control the target CPU and can compile with a VBMI-capable -march and no dispatch layer.
+- As readable reference kernels (about 50 lines each) to port into your own codec or runtime-dispatch layer.
+
+**Skip it when:**
+- CPUs without VBMI: this includes AVX-512 parts such as Skylake-SP, Cascade Lake and Cooper Lake (GCC's ISA lists show no AVX512VBMI; the paper wrongly names Cascade and Cooper Lake), plus pre-Zen 4 AMD and all ARM. There is no fallback or CPU detection, so the code faults with an illegal instruction.
+- MIME, PEM or any line-wrapped input. The whitespace-skipping decoder has had an open 'despacing buggy' issue (#2, returns -1) since 2019.
+- Decoding untrusted input: in the decoder the benchmark uses, error checking is broken (see gotchas).
+- Production use that needs base64url, streaming, output-length helpers or a maintained API. simdutf and aklomp/base64 provide these.
+- Data far larger than cache: on a 34.9 MB zip the paper's AVX-512 decoder ran at memcpy speed (9.5 GB/s), against 8.3 GB/s for AVX2, so the gain over AVX2 largely vanishes once memory-bound.
+
+**Integration:** source-drop · none (tails fall back to bundled Chromium/modp_b64 scalar code, BSD-licensed) · C99 compiler with AVX-512 VBMI intrinsics. The README suggests GCC 8+ and the paper and Dockerfile used GCC 9.1. The despace variant also uses GCC builtins and BMI2 PEXT/PDEP. · x86-64 with AVX-512 F/BW/VBMI only; the Makefile hard-codes -march=cannonlake
+
+**Vs siblings:** Pick it only to study or vendor the paper's exact AVX-512 VBMI kernels. For production, simdutf's base64 cites this paper, runs an AVX-512 path on Ice Lake/Zen 4 behind runtime dispatch, and handles whitespace, url-safe input and strict or loose padding. aklomp/base64 offers runtime dispatch but only for AVX-512 encoding (its decoding reuses AVX2). base64simd and fastbase64 by the same authors cover AVX2-only machines.
+
+**Gotchas:**
+- The benchmarked decode_base64_avx512vbmi__unrolled overwrites its error register on every 256-byte iteration (errorvec = _mm512_ternarylogic_epi32(t0, t1, t2, OR_ALL) with no previous errorvec). Invalid characters in any 256-byte block except the last are therefore not reported. Use decode_base64_avx512vbmi or patch it.
+- From reading the source (not tested): the SIMD loop consumes every full 64-byte block and '=' decodes as invalid there, and only the sub-64-byte tail handles padding. So padded input whose length is an exact multiple of 64 appears to be rejected with -1.
+- Output buffers need slack. The decoder's 64-byte loop issues full 64-byte stores while advancing only 48 bytes, so allow about 16 bytes past the decoded size; Chromium's own sizing guidance allows only len*3/4. The encoder's tail goes through chromium_base64_encode, which writes a trailing NUL only when n % 48 != 0. The encoder returns nothing, so compute 4*ceil(n/3) yourself.
+- The paper's GB/s figures are normalized to base64 bytes, so the raw-binary rate for encoding is 3/4 of the quoted figure. The authors saw no AVX-512 downclocking on their Cannon Lake part but note that other Intel processors downclock.
+
+**Status:** A frozen paper artifact, abandoned since 2019-11 with one bug open since 2019. It is BSD-3-Clause and small enough to vendor; the last known-good toolchain is GCC 9.1 per its Dockerfile.
+
+[repo](https://github.com/WojciechMula/base64-avx512) · [benchmark](https://arxiv.org/abs/1910.05109)
+
+##### const-hex  `Rust`  `MIT OR Apache-2.0`  `active`  `Tier A`
+
+Rust hex codec with runtime-dispatched SIMD and const-fn API; near drop-in for `hex`, 6–100x faster on README benches.
+
+**Beats:** hex (Rust `hex` crate) — The README's libtest run used rustc 1.83.0-nightly (2024-10-03) on x86_64 Linux on an AMD Ryzen 9 7950X with the default bench profile. At 1 MB it shows decode 108,937 ns vs `hex` 6,409,294 ns (~59x), encode 30,716 ns vs 3,048,496 ns (~99x), and Display formatting ~158x faster than std. At 32 bytes the gap narrows to ~6x decode, ~7–8x slice encode and ~14x String encode (all derived from page data). The numbers predate the 2025–26 rewrites (divan/CodSpeed benches, single-pass AVX2 decode, NEON decode) and were not re-run.
+
+**Known shortcoming:** Rust-only; headline 10-50x is against the Rust `hex` crate, a slow scalar baseline, rather than other SIMD hex encoders.
+
+**Known shortcoming:** README numbers are from a 2024 nightly and stale (AVX2 validating decode and NEON decode added 2026-03). At 32 bytes the gap is only 6-14x; faster-hex is 6-12% faster on encode_to_slice at 2 kB and up; no AVX-512. Not a true drop-in for `hex`: serde adds a 0x prefix by default, decode strips 0x, own FromHexError type. Soundness issue #47 (safe Buffer API can produce invalid UTF-8 str) closed won't-fix.
+
+**How:** Encoding splits each byte into nibbles and maps them through a 16-entry table with one byte-shuffle (pshufb/_mm256_shuffle_epi8 on x86, vqtbl1q_u8 on NEON), then interleaves with unpack/zip. With AVX2 that turns 32 input bytes into 64 characters per step. Since 2026-03, x86 decoding validates and decodes in one pass using Muła & Langdale's 'validating hex parse' Algorithm #3: saturating adds map digits and letters to 0..15, anything invalid lands above 15 and trips the sign bit, and vpmaddubsw merges nibble pairs (hi*16+lo) before a pack/permute. Output goes straight into uninitialized capacity. The CPU path (AVX2, then SSSE3/SSE2, then a scalar lookup table) is picked at runtime via is_x86_feature_detected! or cpufeatures.
+
+**Use it when:**
+- Replacing `hex` on hot Rust paths that print or parse digests, keys or IDs; the README shows about 59x at 1 MB and still 6–14x at 32 bytes.
+- 0x-prefixed hex strings: prefixed encoders exist and decode strips the prefix for you.
+- Hex constants built at compile time (const_decode_to_array, const_encode) or allocation-free formatting of fixed-size arrays through Buffer<N>.
+- Code shipping to aarch64 (NEON) or wasm32 with simd128, where the README positions it ahead of faster-hex, which only optimizes x86.
+- no_std or embedded crates that still want a SIMD fast path; only cfg-if and cpufeatures are required.
+
+**Skip it when:**
+- When you must match `hex`'s serde wire format exactly: `#[serde(with = "const_hex")]` writes a 0x prefix (see gotchas).
+- Strict parsers that must reject a leading '0x'/'0X': decode, decode_to_slice and check strip it silently.
+- The last few percent of x86 slice-encode throughput: in the README's encode_to_slice rows faster-hex was 6–12% faster from 2 kB up. There is no AVX-512 path.
+- Code that needs every safe API to be sound: issue #47 shows safe Buffer methods producing an invalid-UTF-8 &mut str (UB under Miri), closed by the maintainer as 'too contrived' to fix.
+- Non-Rust projects: the siblings cover C++ and Node.
+
+**Integration:** crate · cfg-if; cpufeatures on x86/x86-64; optional serde_core (feature `serde`) and proptest (internal fuzzing) · Rust 1.64 (CI builds on 1.64, stable and nightly). The `core-error` feature needs Rust 1.81; the `nightly` and `portable-simd` features need nightly. · Any target. SIMD paths: x86/x86-64 (SSE2/SSSE3/AVX2, detected at runtime), aarch64 NEON, wasm32 with simd128, and std::simd on nightly; a scalar lookup table elsewhere.
+
+**Vs siblings:** For Rust, pick const-hex over fast-hex (zbjornson, C++/Node) and hx (a NEON table-lookup encode experiment). Its older AVX2 unchecked-decode path descends from fast-hex via faster-hex, and it is the only one of the three shipped as a maintained crate with runtime dispatch, validation and a `hex`-compatible API.
+
+**Gotchas:**
+- Serde: `#[serde(with = "const_hex")]` serializes with a leading "0x", unlike `hex` (issue #34). Use `const_hex::serde::no_prefix` (1.18.0+) to keep the old JSON. Deserialization accepts both forms.
+- Decode is more permissive than `hex`: a leading 0x/0X is stripped before validation, so '0x…' strings that `hex` treats as invalid now parse.
+- `ToHex` is deprecated (open issue #26). The maintainer says its iterator-of-char API forces slow one-item-at-a-time output and keeps it only for `hex` compatibility, so migrations surface deprecation warnings; use ToHexExt, encode_to_slice or display().
+- Buffer::as_mut_byte_array() followed by as_mut_str() lets safe code build a non-UTF-8 str (issue #47). The maintainer won't fix it, so don't write non-ASCII bytes through the byte-array view.
+
+**Status:** Actively maintained: 1.19.3 released 2026-09-16, MSRV 1.64 tested in CI along with Miri and fuzzing, dual MIT/Apache-2.0, ~60.5M downloads and 166 reverse dependencies. The `hex` baseline's last release was 0.4.3 in 2021-03.
+
+[repo](https://github.com/DaniPopes/const-hex) · [benchmark](https://raw.githubusercontent.com/DaniPopes/const-hex/master/README.md)
+
+##### crc32c (htot)  `C`  `BSD-3-Clause (crc32c/LICENSE, MIT copyright, with Intel slicing-by-8 under the same terms; the README says BSD 2-clause). crc32intelc.cc and crc32adler.cc are under the Zlib license, and crc_iscsi_v_pcl.asm is Intel BSD-3-Clause. GitHub's license API detects none.`  `abandoned`  `Tier A`
+
+C++ port of Intel's 3-way crc32q+pclmulqdq CRC-32C kernel that also runs on 32-bit x86; ~11x faster than slicing-by-8.
+
+**Beats:** CRC32 (CRC-32C/Castagnoli; SlicingBy8 software baseline is representative of the algorithm used by most CRC32 library implementations) — crc32cbench hashes one 4096-byte, 8-byte-aligned buffer repeatedly (so it stays in cache) and reports the median of 5 trials in MiB/s. The builds used g++ 6.3/7.2 with -O3 -flto -msse4.2 -mpclmul. On a 64-bit Haswell i7-4770, IntelC reached roughly 27,000 MiB/s (read off the log chart): 2.7x a single-stream crc32q loop, about 11x Intel's slicing-by-8 tables, about 1.2x Mark Adler's 3-way SSE4.2 code, and level with the Intel asm it ports. It was 8.8x slicing-by-8 on 32-bit Edison but lost to Hardware64 on 64-bit Silvermont Atoms.
+
+**Known shortcoming:** The ~58x headline is only against the bytewise Sarwate table; against Adler's slicing code it is ~1.2x and about equal to Intel's assembly. Old setup (i7-4770 Haswell, g++ 6.3/7.2). License is BSD-3 plus Zlib-licensed parts.
+
+**Known shortcoming:** Auto-dispatch never selects the IntelC kernel (picks Hardware64) and checks SSE4.2 but not PCLMUL. 32-bit CombineCRC inline asm writes input-only operands (latent miscompile); IntelAsm wrapper casts length to int. Throughput dips past the 216-byte threshold (third-party i7-8665U: 24.7 GB/s at 128 B, 16 GB/s at 256 B); slower than Hardware64 on Silvermont. CRC-32C only, x86 and GCC only, abandoned since 2017; superseded by corsix/fast-crc32 on 64-bit.
+
+**How:** The SSE4.2 crc32 instruction has 3-cycle latency but single-cycle throughput. Above 216 bytes the buffer is therefore cut into three equal segments of up to 1024 bytes (128 eight-byte words), and three independent crc32q streams run interleaved, unrolled with Duff's device. The three partial CRCs are then merged: two of them are carry-less-multiplied (pclmulqdq) by precomputed x^n mod P constants from a block-size-indexed table and XOR-folded into the third. This is the method of Intel's 2011 whitepaper 'Fast CRC Computation for iSCSI Polynomial Using CRC32 Instruction' (Gopal et al.). On 32-bit builds each crc32q becomes two crc32l, and the merge uses movd/pextrd.
+
+**Use it when:**
+- CRC-32C (iSCSI, ext4, Btrfs polynomial) on 32-bit i686 builds with SSE4.2 and PCLMULQDQ, such as Intel Edison or legacy 32-bit software, where the alternative is slicing-by-8 or a crc32l loop: 8.8x over SlicingBy8 on 32-bit Edison.
+- Buffers of roughly 1-8 KiB on 64-bit Haswell/Skylake-class desktop cores without AVX-512: about 2.7x a single-stream crc32q loop at 4 KiB on an i7-4770.
+- You want a readable C-level reference of Intel's 3-way crc32+pclmul CRC-32C algorithm to study or port, instead of the yasm assembly.
+- Comparing CRC-32C implementations: crc32cbench sweeps 16 B to 8 KiB, aligned and misaligned, across all eight bundled variants.
+
+**Skip it when:**
+- zlib/gzip/PNG/Ethernet CRC-32: it computes CRC-32C only, and issue #3 is a user tripped up by exactly this difference.
+- Silvermont-class Atoms (Edison in 64-bit mode, NUC E3815): the author's chart shows every 3-way path (Adler, IntelC, IntelAsm) slower there than the plain Hardware64 loop.
+- Small or mid-size messages: at 216 B and below it is a single crc32q stream. In a third-party i7-8665U run, throughput fell from about 24.7 GB/s at 128 B to about 16 GB/s at 256 B, right after the 3-way path starts.
+- Modern AVX-512/VPCLMULQDQ servers or aarch64: the corsix fast-crc32 README measures the pure three-way crc32 approach at about 15-24 GB/s, against 25-97 GB/s for its fusion and VPCLMULQDQ kernels. There is no ARM port.
+- MSVC or long-term maintenance needs: it relies on GCC __builtin_ia32_crc32* builtins, GNU inline asm and <cpuid.h>, and has been untouched since 2017.
+
+**Integration:** source-drop (crc32intelc.cc, logging/crc32intelc.h and the K constant table in crc32inteltable.cc; the Makefile only builds the test and benchmark executables) · none for IntelC; yasm only for the IntelAsm variant; the tests use the bundled stupidunit · Not documented. g++ with -msse4.2 -mpclmul (the chart shows g++ 6.3 and 7.2). The code is C++ (.cc) with GNU inline asm. · x86 only (i686 and x86-64), requiring SSE4.2 and PCLMULQDQ; the IntelAsm variant is 64-bit only
+
+**Vs siblings:** Pick it over fast-crc32 (corsix) only for 32-bit x86 or pre-AVX-512 Intel desktop chips where you want one small hand-written C++ file with no generator step; on 64-bit x86 corsix's fusion kernels supersede it and also cover aarch64. crc-fast offers runtime dispatch and many CRC widths, and crc32fast is Rust and computes zlib CRC-32, so neither replaces this for a C/C++ CRC-32C drop-in on 32-bit.
+
+**Gotchas:**
+- The auto-dispatch pointer `logging::crc32c` (detectBestCRC32C) picks Hardware64/Hardware32 on any SSE4.2 CPU and never IntelC. It also checks only SSE4.2, not PCLMULQDQ. Call crc32cIntelC directly and do your own feature check.
+- The kernels do no pre- or post-inversion. Without crc32cInit() and crc32cFinish() the results will not match standard CRC-32C test vectors (e.g. 0xE3069283 for '123456789').
+- The 32-bit CombineCRC inline asm writes to operands declared only as inputs (crc32l into crc2's register, pextrd into %1), which GCC's inline-asm rules forbid. It passed the repo's tests with g++ 6.3/7.2 but could miscompile under newer compilers.
+- The crc32cIntelAsm wrapper casts the size_t length to int, so that variant breaks on buffers of 2 GiB or more (IntelC keeps size_t).
+
+**Status:** Abandoned since 2017-11-01 (12 commits, no open issues, none of its 18 forks active after 2020), but small and permissively licensed (MIT-style BSD-3 LICENSE, with Zlib-licensed headers on crc32intelc.cc and crc32adler.cc) and easy to vendor. It was last known to work with g++ 7.2.
+
+[repo](https://github.com/htot/crc32c) · [benchmark](https://github.com/htot/crc32c#benchmarks)
+
+##### fast-crc32 (corsix) — novel CRC32/CRC32C SIMD kernels  `C`  `MIT OR Zlib`  `active`  `Tier A`
+
+Code generator emitting tuned CRC32/CRC32C C kernels (PCLMUL/VPCLMULQDQ/PMULL plus crc32 instruction) that beat Chromium zlib's SIMD CRC32.
+
+**Beats:** CRC32 — Single-core throughput on a 512 KiB buffer (the bench.c default; start offsets vary by up to 63 bytes unless --aligned; best of 40 rounds), everything built with gcc -O3 -march=native with no compiler version given. Each new kernel is compared with the fastest prior code on that CPU: dougallj's NEON CRC32 on M1 (77.55 to 85.05 GB/s, same zlib polynomial), the author's crc32_4k_fusion on a Xeon Silver 4214 Cascade Lake (25.32 to 31.55 GB/s CRC-32C), and Chromium zlib's AVX-512 CRC32 on Ice Lake (41.00 to 63.98 GB/s, cross-polynomial) and Sapphire Rapids (81.68 GB/s aligned or 65.20 unaligned, to 97.30 GB/s). An independent Tiger Lake benchmark (clang 23) confirms the win only from about 64 KiB up.
+
+**Known shortcoming:** Speedups are per-CPU against different baselines (Apple M1 vs dougallj's kernel; Ice Lake/Sapphire Rapids vs Chromium zlib CRC32), so no single headline ratio applies.
+
+**Known shortcoming:** A code generator plus sample kernels, not a library: one `crc32_impl` per build, no runtime CPU dispatch, and the best algorithm string differs per microarchitecture. The checked-in AVX-512 VPCLMULQDQ samples (the headline Ice Lake/SPR kernels) still use `_mm512_castsi128_si512`, giving wrong CRCs on clang 18/19 at -O0 (PR #1 fixed generate.c only; regenerate them). Loses on small buffers: a third-party Tiger Lake run has MariaDB's AVX-512 code ahead from 256 B to 8 KiB; wins only from ~64 KiB. The Ice Lake 56% compares CRC32C against zlib-polynomial CRC32 (same polynomial: 47.31 vs 41.00). Adopted by PostgreSQL and zlib-ng.
+
+**How:** It folds 16- or 64-byte vector accumulators with carry-less multiplication (PCLMULQDQ/VPCLMULQDQ on x86, PMULL on aarch64), as in Intel's CRC folding whitepaper. It uses three-way XOR (VPTERNLOGQ or EOR3) so each fold step needs fewer uops. The key idea is 'fusion' (from the author's crc32_4k_fusion post): while the vector folds process one part of the buffer, several independent scalar crc32 instruction streams process other parts on a different execution port, and the partial CRCs are merged with x^n mod P shift constants. Accumulator counts and load unrolling are tuned per microarchitecture so that enough streams are in flight to hide the latencies of the pmull+eor chain (6-7 cycles on M1 per the README) and of crc32 (3 cycles on Intel).
+
+**Use it when:**
+- Checksumming large buffers (tens of KiB to MiB: storage blocks, WAL/log segments, network payloads, file integrity) where CRC throughput per core is the bottleneck.
+- CRC-32C (iSCSI/ext4/Btrfs polynomial) on x86-64 with VPCLMULQDQ (Ice Lake, Sapphire Rapids, Zen 4): about 64-97 GB/s single core in the README.
+- zlib/gzip/PNG CRC-32 on aarch64 (Apple M1, Ampere Altra), where both scalar crc32 and PMULL paths exist: 85 GB/s on M1, 35.9 GB/s on Altra.
+- You want to vendor one dependency-free C file into a C/C++ codebase and already have (or can add) CPUID/HWCAP dispatch, as PostgreSQL and zlib-ng did.
+- CRCs with non-standard 32-bit polynomials (crc32k, crc32q or any hex polynomial) that still need PCLMUL-class speed.
+
+**Skip it when:**
+- Small inputs (under about 1-8 KiB). Most fusion kernels only enter the SIMD loop above a few hundred bytes (384 B for v4s5x3) and fall back to a byte/8-byte crc32 loop below that. A third-party Tiger Lake benchmark has MariaDB's AVX-512 CRC32C ahead of every corsix variant from 256 B to 8 KiB.
+- You need a ready-made library with runtime CPU detection, a build system, packaging or an API beyond one function; none is provided.
+- x86 zlib-polynomial CRC-32 where you expected the headline numbers: x86 has no scalar crc32 instruction for that polynomial, so the fusion kernels (all CRC-32C on x86) do not apply and only vector-only variants remain (e.g. 47.3 GB/s on Ice Lake).
+- Portability beyond x86-64/aarch64 little-endian with GCC/Clang: the generated NEON code uses GNU inline asm (MSVC ARM64 cannot compile it), and big-endian or 32-bit targets are not documented.
+- CRC-16/CRC-64 or reflected/non-reflected variants other than the bit-reflected 32-bit form; only 32-bit CRCs are generated.
+
+**Integration:** source-drop (one generated .c file per ISA/polynomial/algorithm) · none (compiler intrinsics headers only; the `-i none` target emits lookup tables instead) · Not documented. Built and benchmarked with gcc -O3 -march=native (version not stated). Needs GCC/Clang-style intrinsics and GNU inline asm for NEON. AVX-512 output uses _mm512_zextsi128_si512, which older compilers may lack. · x86-64 (SSE4.2+PCLMULQDQ minimum; AVX-512F/VL; AVX-512+VPCLMULQDQ on Ice Lake+/Zen 4), aarch64 (crypto+crc; EOR3 variants need armv8.2-a+sha3), and a portable table-driven `-i none` fallback
+
+**Vs siblings:** Pick it over crc-fast or crc32fast when you are in C/C++, want the highest large-buffer CRC-32C/CRC-32 throughput on a known CPU, and are happy to vendor one generated file and write your own dispatch. crc-fast gives packaged runtime dispatch and CRC-16/64 variants, and crc32fast is the idiomatic Rust choice. Pick it over htot/crc32c on any post-2017 CPU: its kernels are the successors to the Intel crc32+pclmul 3-way approach that htot ports, and they add VPCLMULQDQ/AVX-512 and aarch64.
+
+**Gotchas:**
+- The checked-in AVX-512 VPCLMULQDQ sample files (v4s5x3, v3s1_s3), which are the headline Ice Lake and Sapphire Rapids kernels, still use _mm512_castsi128_si512. PR #1 (from PostgreSQL developers) fixed only generate.c: the undefined upper bits gave wrong CRCs with clang 18/19 at -O0. Regenerate rather than copying the samples.
+- The best algorithm string differs per microarchitecture (v9s3x4e Cascade Lake, v4s5x3 Ice Lake, v3s1_s3 Sapphire Rapids, v1s3x3 Rome, v1s4x2 Milan, v3s2x4 Genoa). A kernel tuned for one CPU can be well off the pace on another, so run `make sweep`/autobench on your target.
+- The Ice Lake '56% faster' headline compares a CRC-32C kernel against Chromium's zlib-polynomial CRC-32. The same-polynomial generated equivalent is 47.31 GB/s against Chromium's 41.00.
+- Sapphire Rapids pays about 20% for unaligned 64-byte loads. The generated code aligns the pointer to 64 bytes with scalar crc32 steps first, but hand-edited copies must keep that prologue.
+
+**Status:** Small and low-churn: 6 commits, the last on 2025-11-27 adding the zlib license. Still counted as active, and adopted downstream by PostgreSQL (AVX-512 CRC32C path) and zlib-ng (ARMv8 PMULL+EOR3 CRC32, merged Dec 2025). MIT-or-zlib licensed; the generated output is trivial to vendor.
+
+[repo](https://github.com/corsix/fast-crc32) · [benchmark](https://github.com/corsix/fast-crc32#readme)
+
+##### GaspardPetit SIMD base64  `C++`  `BSD-3-Clause`  `active`  `Tier A`
+
+Small BSD-3 C/C++ Base64 codec with AVX2/NEON kernels; edges out aklomp/base64, simdutf and Turbo-Base64 at 32 KiB.
+
+**Beats:** base64 (aklomp/base64, the reference SIMD-accelerated C99 base64 codec) — In the author's base64-benchmark (32 B to 64 KiB, Release builds, default wrapper-inclusive reports), combined 32 KiB encode+decode on an i9-13900K with MSVC 19.51 /O2 /arch:AVX2 was 11.16 GB/s, against 10.21 for Turbo-Base64, 9.12 for aklomp/base64 and 9.08 for simdutf 9.2.0 (about 1.09-1.23x). The Ryzen 7 5700G (Clang 20.1) and M4 (AppleClang 21) runs led by only 1-3% (9.78 vs 9.49 GB/s aklomp; 7.60 vs 7.52 GB/s simdutf in the current page data, derived from the page's result files). Turbo-Base64 was not measured on Linux or macOS, and the README's macOS figure (7.179 GB/s, rank 2) is older than the refreshed page data.
+
+**Known shortcoming:** The benchmark suite (gaspardpetit/base64-benchmark) is by the same author as the winning codec (conflict of interest); margins over aklomp/base64 and Turbo-Base64 are ~9-22% and ratios are derived from the results page.
+
+**Known shortcoming:** New repo (0 stars, 1 tag, no fuzzing). Turbo-Base64 was not run on Linux/macOS, where the lead over aklomp/simdutf is only 1-3%; aklomp encodes faster on Linux at 32-64 KiB. Header-only build is scalar only (~2.7 GB/s); no AVX-512 or SSSE3 tier; MSVC ARM64 falls back to scalar; C++ decode silently accepts the URL-safe alphabet; no streaming API.
+
+**How:** The x86-64 backend follows the Muła/Lemire AVX2 recipe. Encoding unpacks 6-bit fields with vpmulhuw/vpmullw and translates them with a vpshufb offset table. Decoding packs with vpmaddubsw + vpmaddwd, and its validation hash tables are taken from simdutf (see THIRD_PARTY_NOTICES). The author's own gains are in scheduling and tails: four 24-byte encode blocks per iteration using overlapping 256-bit loads, four 32-byte decode blocks per iteration, errors accumulated in a vector and checked once at the end, separate checked/unchecked and standard/URL-safe loops, and hand-tuned short-length decoders for 24-84 characters. The portable scalar path uses a 64x64 two-character encode table (12 input bits per lookup) and four position-shifted 256-entry uint32 decode tables that are OR-ed together, with invalid characters caught by a single threshold compare per 12 characters.
+
+**Use it when:**
+- In-memory encode/decode of payloads from about 256 B to 64 KiB on AVX2 x86-64 or AArch64, where it led or tied the published combined-throughput rankings at 256 B, 1 KiB, 32 KiB and 64 KiB.
+- Decode-heavy workloads such as JSON/HTTP/JWT payloads. Its lead is clearer on decode (Linux 32 KiB: 18.15 vs 16.21 GB/s for aklomp) than on encode.
+- When you want Turbo-Base64-class AVX2 speed under a permissive license: in the benchmark README's table Turbo-Base64 is GPL-3.0, while this is BSD-3-Clause.
+- Portable or header-only builds where you cannot use intrinsics. The scalar path alone (2.66 GB/s combined at 32 KiB on Windows) beat every other architecture-neutral codec in the benchmark, e.g. Chromium modp_b64 at 1.96 GB/s.
+- When you need something easy to vendor: a handful of .c/.h files, BSD-3, no dependencies, and a GNU-coreutils-compatible CLI in the same repo.
+
+**Skip it when:**
+- On AVX-512 hardware, or when you need to be sure you have the fastest codec there. There is no AVX-512 backend, and none of the three benchmark CPUs (i9-13900K, Ryzen 7 5700G, Apple M4) exercises the AVX-512 kernels in simdutf or base64-avx512.
+- On x86-64 without AVX2 (pre-Haswell), 32-bit x86, or MSVC on ARM64. Dispatch only covers _M_X64 / __x86_64__ AVX2 and __aarch64__ NEON, and everything else gets the scalar path. There is no SSSE3/SSE4 middle tier like aklomp/base64 has.
+- Streaming or chunked encode/decode, or line-wrapped (MIME/PEM) input. The API is one-shot, and whitespace makes the decoder fail unless you first run base64_compact (which mutates your buffer). Only the CLI does chunking and wrapping.
+- Encode-only workloads on Linux or macOS: aklomp/base64 encoded faster at 32-64 KiB on the Ryzen 5700G (22.88 vs 21.21 GB/s at 32 KiB), and on the M4 the two were within 1%.
+- Production code that needs a track record. The repo was created 2026-09-14, has 0 stars, one tag (v1.0.0) and no fuzzing in CI (the CI runs CLI ctest and a GNU coreutils oracle on valid and garbage input), and all the performance evidence comes from the author's own benchmark.
+
+**Integration:** source-drop (compile base64.c or base64.cpp, plus base64_avx2.c with -mavx2 or /arch:AVX2, or base64_neon.c) or header-only (BASE64_HEADER_ONLY / BASE64_CPP_HEADER_ONLY, scalar only) · none (the C++ layer uses <string> and <stdexcept>; the CLI needs CMake 3.25+) · C99-style C (the CLI is built as C11); the C++ wrapper writes through std::string::data(), so it needs C++17. Benchmarked with MSVC 19.51, Clang 20.1 and AppleClang 21; runtime AVX2 dispatch needs MSVC x64 or GCC/Clang (__builtin_cpu_supports). · any (scalar); x86-64 with AVX2, detected at runtime including OS YMM-state support; AArch64 NEON selected at compile time
+
+**Vs siblings:** Pick it over Turbo-Base64 when you need a BSD license rather than GPL-3.0 and are fine with a slightly faster but unproven codec; pick it over aklomp/base64 or simdutf for in-memory AVX2/NEON decode of payloads up to 64 KiB. Stay with aklomp/base64 for streaming, SSSE3/AVX-512 tiers or maturity, and with simdutf for WHATWG forgiving-base64 (whitespace-tolerant) decoding or AVX-512 machines.
+
+**Gotchas:**
+- Header-only mode is always scalar, so you get about 2.7 GB/s and not the 10+ GB/s SIMD figures. The SIMD speed needs the compiled build with base64_avx2.c built using -mavx2 or /arch:AVX2 and linked in.
+- The C++ base64::decode calls base64url_decode, so it quietly accepts URL-safe and mixed alphabets. For strict standard-alphabet validation, use the C base64_decode.
+- base64_decode_unchecked checks only length and padding: invalid characters produce unspecified bytes. The scalar tail also does not appear to reject non-zero trailing bits, so non-canonical encodings decode instead of failing.
+- The checked SIMD decoder writes output before reporting an error, and its block stores reach up to 4 bytes past each block's decoded bytes. Size the output with base64_decoded_max_size() and treat the whole buffer as garbage on BASE64_ERROR. Input and output must not overlap.
+
+**Status:** Active as of 2026-09-18 (tag v1.0.0) and BSD-3-Clause with no dependencies, so it is easy to vendor, but it is a two-week-old, 0-star, single-author project whose only benchmark is also the author's.
+
+[repo](https://github.com/gaspardpetit/base64) · [benchmark](https://github.com/gaspardpetit/base64-benchmark#compared-implementations)
+
+##### pybase64  `Python`  `BSD-2-Clause`  `active`  `Tier A`
+
+Python base64 module replacement backed by the SIMD libbase64 codec; roughly 6.6x faster encode than the stdlib.
+
+**Beats:** base64 (Python standard library base64 module) — The package's own `pybase64 benchmark` CLI ran pybase64 1.5.0 (NEON path) against the stdlib base64 module in one Python 3.15.0rc1 process on an Apple M1 Max, using a 135,696-byte input and a build from Apple clang 21. b64encode ran at 17,492 vs 2,653 MB/s (~6.6x) and validate=True decode at 9,037 vs 2,656 MB/s (~3.4x). Non-validating decode was only ~1.17x faster, and two unpadded strict-decode configurations were slower than the stdlib. No x86 results are published.
+
+**Known shortcoming:** Python binding. The 3.4x decode figure needs validate=True; default decode is only ~1.17x over the stdlib and some configurations are slower than the stdlib.
+
+**Known shortcoming:** Default decode (validate=False) runs a scalar path (SIMD request #4 open since 2017); unpadded validate=True and ignorechars=b'' are slower than the CPython 3.15 stdlib; urlsafe_b64decode defaults to padded=False since 1.5.0 (slow path). An sdist built without CMake installs fine but silently runs at stdlib speed. No b32/b85/stream API. Numbers are M1 NEON only, one 136 KB buffer.
+
+**Independent measurement:** pybase64 README (M1, 136 KB): validate=True padded decode 5,974 vs stdlib 1,186 MB/s (~5x).
+
+**How:** The work is done by a bundled, statically linked copy of aklomp/libbase64. It picks a SIMD codec at import time from CPUID/XGETBV (SSSE3, SSE4.1, SSE4.2, AVX, AVX2 or AVX-512 VBMI) or NEON on ARM, and encodes or decodes a full vector of bytes per step using shuffle/lookup instructions instead of a per-byte table loop. With validate=True and padded input, decoding and validation happen in one SIMD pass. Other alphabets such as URL-safe are handled by an SSE2/NEON compare-and-blend pass that maps +/ to the alternate characters, applied in 16 KiB chunks around the standard codec. The GIL is released for the whole C loop.
+
+**Use it when:**
+- Python code that base64-encodes large binary payloads such as API responses, data URIs or attachments: b64encode measured 17,492 vs 2,653 MB/s on a 136 KB buffer.
+- Decoding well-formed, padded input where you can pass validate=True: 9,037 vs 2,656 MB/s for standard base64, and 5,974 vs 1,186 MB/s for the URL-safe alphabet.
+- Threaded or free-threaded (3.13t+) Python that decodes or encodes on many threads at once: the GIL is released, and the module declares Py_MOD_GIL_NOT_USED.
+- Deployments that need prebuilt wheels beyond x86-64: PyPI has 1.5.0 wheels for Linux aarch64, armv7l, ppc64le, s390x and riscv64 (glibc and musl), macOS arm64, Windows ARM64, iOS, Android and wasm32.
+
+**Skip it when:**
+- Your decode calls use the defaults (validate=False). That path is scalar, only 2,369 vs 2,030 MB/s (about 1.17x), and SIMD for it is still an open issue (#4, filed 2017).
+- Your input is unpadded and you need strict validation: validate=True with padded=False ran at 2,521 vs 2,655 MB/s, and URL-safe with ignorechars=b'' and padded=False at 2,201 vs 2,606 MB/s. Both are slower than CPython 3.15's stdlib.
+- You need base32, base16, base85, Ascii85, decodebytes or file/stream encode()/decode(). None of these are provided. A streaming API is only a discussion in open issue #914.
+- Your payloads are short, such as JWT-sized tokens. The only published benchmark uses a 135,696-byte buffer, so per-call overhead on small strings is not documented.
+- You build from source on hosts without CMake or a C compiler. Outside cibuildwheel the extension is optional, so the install succeeds but silently runs at stdlib speed.
+
+**Integration:** module · none at runtime (libbase64 is bundled as a git submodule and linked statically); source builds need a C compiler and CMake, and cannot use a system libbase64 because private internals are used (#911) · Python 3.9+ (classifiers cover CPython 3.9-3.15; PyPy and GraalPy wheels published); setuptools>=77 plus CMake for sdist builds · any platform CPython supports. SIMD is selected at runtime: x86/x86-64 SSSE3 through AVX2 and AVX-512 VBMI, NEON on 32/64-bit ARM. Other architectures (ppc64le, s390x, riscv64, wasm32) get libbase64's plain codec. Only Apple M1 (NEON) numbers are published.
+
+**Vs siblings:** Pick pybase64 when the calling code is Python and you want a pip-installable, stdlib-compatible API: it is a Python binding of aklomp/base64, so reach for that library (or simdutf / Turbo-Base64) directly only from C/C++. It is the only Python-callable base64 entry in the catalog.
+
+**Gotchas:**
+- Check pybase64.get_version(): it reports "C extension active - NEON/AVX2..." or "C extension inactive". The inactive fallback is just the stdlib with extra Python overhead.
+- Since 1.5.0, urlsafe_b64decode defaults to padded=False to match Python 3.15. It therefore takes the slow non-SIMD path (2,081 vs 1,031 MB/s) unless you call b64decode(s, b'-_', validate=True) on padded data.
+- 1.5.0 changed error behavior to track CPython 3.15. Non-ASCII str input is rejected even with validate=False. Excess or discontinuous padding raises binascii.Error. Accepting '+' or '/' alongside an alternate alphabet is deprecated and emits a warning.
+- Input buffers must be C-contiguous; non-contiguous memoryviews raise BufferError.
+
+**Status:** Actively maintained (commits through 2026-09-26, v1.5.0 released 2026-08-08, Production/Stable classifier) and BSD-2-Clause, with wheels for most platforms, so `pip install pybase64` is the normal route and vendoring is unnecessary.
+
+[repo](https://github.com/mayeut/pybase64) · [benchmark](https://raw.githubusercontent.com/mayeut/pybase64/master/README.rst)
+
+##### Faster Base64 Encoding/Decoding using AVX2 (base64simd)  `C++`  `BSD-2-Clause`  `stale`  `Tier B`
+
+Muła's research harness of SSE/AVX2/AVX-512/NEON/RVV base64 kernels; origin of the AVX2 algorithm measured 7-11x faster than Chrome's.
+
+**Beats:** base64 — The Chrome comparison comes from the Muła–Lemire paper, whose measured codec and harness live in lemire/fastbase64: on an i7-6700 Skylake at 3.4 GHz with Turbo off and GCC 5.3 -O3 -march=native, about 0.25 cycles/byte against Chrome's 2.7 (encode) and 1.8 (decode). This repo's own data compares only with its scalar code. On the same i7-6700, AVX2 encoding of 192 MiB is 4.39x faster than 64-bit scalar (GCC 5.3), and AVX2 decoding is 2.9x faster than improved scalar (GCC 5.4.1). On a Xeon W-2104 (GCC 8.1), AVX2 decodes at 0.22 cycles/op against 2.05 for scalar, and AVX512BW at 0.14.
+
+**Known shortcoming:** The paper's benchmark code and codec live in lemire/fastbase64, not this repo; this repo's own benchmark compares only against its own scalar code (2-4x encode, 2-2.7x decode). No tail/padding handling. Overlaps lemire/fastbase64.
+
+**Known shortcoming:** Research harness, not a codec: no tail or '=' handling, no API, errors are C++ throws, decode size must be a multiple of 32. AVX2 encoder over-reads 4 bytes past the last block. The 'AVX512BW' kernel actually needs VBMI (SIGILL, #5 open); RVV encoders mostly fail verification or crash (PR #10). No URL-safe alphabet (#7).
+
+**Independent measurement:** Own benchmark (i7-6700): encode 4.39x, decode 2.9x/7.0x vs its own scalar code.
+
+**How:** Encoding: a pshufb places each 3-byte group into a 32-bit lane, then vpmulhuw/vpmullw with constants 0x04000040 and 0x01000010 shift all four 6-bit fields at once. The 'pshufb improved' lookup then turns 6-bit values into ASCII by computing a range index and adding an offset taken from a 16-entry pshufb table. Decoding: the 'pshufb bitmask' lookup (aqrit's idea from issue #3) classifies each byte through high- and low-nibble pshufb tables, validates 32 bytes with a single test and adds the per-range offset. The 'multiply-add' pack uses pmaddubsw + pmaddwd to merge four 6-bit fields into 24 bits, and a pshufb compacts them. These are the techniques of the Muła–Lemire ACM TWEB paper; the repo also keeps the slower alternatives (naive, byte-blend, BMI2 pext packing) for comparison.
+
+**Use it when:**
+- Choosing or porting a base64 kernel for a specific ISA: variants are benchmarked side by side, with stored results for Westmere, Bulldozer, Haswell, Skylake, Knights Landing, Skylake-X, Cannon Lake and ARMv7.
+- Research or teaching alongside Muła's 0x80.pl articles and the 2018 paper: each lookup and pack idea is isolated in its own function.
+- Lifting one AVX2 or AVX-512 kernel (about 100 lines) into a codec of your own that already handles tails, padding and errors (BSD-2-Clause; issue #8 says the author is fine with reuse under Apache-2).
+- Experimenting with RISC-V Vector base64, including a whitespace-skipping RVV decoder added in 2024 (the author tested it only on the spike simulator; issue #9 has user numbers from C908/C920 boards).
+
+**Skip it when:**
+- As a base64 codec: no tail or '=' handling, no public API and no length helpers. The README's 'Known problems' section says so and recommends aklomp/base64 instead.
+- URL-safe alphabet or whitespace-tolerant decoding on x86: neither is implemented, and issue #7 (URL-safe) has been open since 2020.
+- Code built without exceptions or in C: invalid input is reported only by throwing a C++ exception.
+- RVV encoders: PR #10 (merged 2025) reports that on a Milk-V Jupiter board only a few RVV encode variants passed verify, and the others crashed on free() of the output buffer.
+- Assuming AVX-512 target names match hardware: issue #5 (still open) found that a kernel labelled AVX512BW used vpermb (AVX512VBMI) and crashed with SIGILL on Skylake-SP.
+
+**Integration:** source-drop (header-less .cpp kernels #included into benchmark programs) · none for the kernels; Python scripts only for result tables · C++14 (-std=c++14); GCC 5.3+ for the AVX-512 targets per the README; RVV needs a compiler with RVV intrinsics (-march=rv64gcv) · x86-64 (SSE4, AVX2+BMI2, AVX-512F/BW/VBMI/VL, AMD XOP); 32-bit ARMv7 NEON (Makefile uses -mfpu=neon); RISC-V RVV; the ISA is chosen at compile time only, with no runtime dispatch
+
+**Vs siblings:** Pick base64simd only to study or benchmark individual kernels across ISAs (x86 generations, XOP, Knights Landing, NEON, RVV) in one harness. To ship a codec, use simdutf (maintained, whitespace/URL-safe support, cites this paper, and its README lists Node.js, Bun, WebKit and Chromium as users), aklomp/base64 (the spec-complete codec this README recommends) or lemire/fastbase64 (the paper's exact AVX2 codec with the Chrome comparison harness).
+
+**Gotchas:**
+- The AVX2 encoder loads 16 bytes at i and at i+12 for every 24-byte block, so the last block reads 4 bytes past the end of the input. The harness pads its buffers; your code must do the same or handle the tail separately.
+- The 'speedup' columns are relative to the repo's own scalar code, not to Chrome or glibc. On the i7-6700, AVX2 encode is 4.39x the 64-bit scalar, and AVX2 decode is 2.9x the 'improved scalar' but 7.0x the plain scalar.
+- The BMI2 pext packing variants are slower than pure AVX2. On the Skylake decode run, AVX2 & BMI2 took 0.0199 against 0.0071 for AVX2 pshufb-bitmask/multiply-add.
+- The README lists no RISC-V support and does not describe the newer check_ws/benchmark_rvv targets; the Makefile is the real documentation.
+
+**Status:** Stale rather than dead: not archived, but the only activity since 2019 is 2024-25 RISC-V Vector work, with the last commit on 2025-02-21. The code is BSD-2-Clause and easy to copy kernel by kernel, but it is not a usable codec as-is.
+
+[repo](https://github.com/WojciechMula/base64simd) · [benchmark](https://arxiv.org/abs/1704.00605)
+
 #### non-crypto-hashes
+
+##### ChainHash  `C`  `MIT`  `active`  `Tier A`
+
+Keyed 64-bit carry-less universal hash with a Lean-proved collision bound; beats XXH3-64 on long in-cache inputs.
+
+**Beats:** XXH3-64 (xxHash) — SMHasher3 --test=Speed on 262,144-byte inputs, timed in the same binaries. On a Xeon Platinum 8375C KVM guest (GCC 11.5, ChainHash on its AVX-512/VPCLMULQDQ path, XXH3-64 on SMHasher3's avx512 path, best of two passes), ChainHash ran 28.31 vs 19.90 bytes per TSC tick (~1.42x). On an Apple M2 Pro (Apple Clang 17, -O3 -march=native+crypto, median of three gated passes) it ran 26.26 vs 13.04 bytes per calibrated cycle (~2.0x). The author ran all of it.
+
+**Known shortcoming:** Bulk-only win (28.31 vs 19.90 and 26.26 vs 13.04 GB/s against XXH3-64, ~1.4-2x); about 5x slower than XXH3 on 1-31 byte keys.
+
+**Known shortcoming:** The 1.42x Xeon result is AVX-512 against AVX-512 XXH3 in a VM; AVX2/SSE paths reach only ~16-17 bytes/TSC with no XXH3 comparison. Wins are for 256 KiB cache-resident inputs (8 MiB drops to ~10.3 bytes/TSC). Needs a 64-byte random key; the collision bound assumes inputs independent of the key (not a MAC). MSVC, ARM without crypto extensions and big-endian fall back to slow portable C. Repo is days old, single author, no outside benchmarks.
+
+**Independent measurement:** Own benchmark (M2, bench/build_m2.py flags): 28.31 vs XXH3-64 19.90; 26.26 vs 13.04.
+
+**How:** Each 256-byte block is a carry-less NH: pairs of 64-bit words are XORed with key words and multiplied in GF(2^64) with PCLMUL/VPCLMULQDQ/PMULL, one multiply per 16 bytes, and reduced once per block. Block values are combined by Horner evaluation in an independent key word. Because the multiplier is constant, four interleaved blocks per 1 KiB region run as four independent lazy chains with no shuffles, reductions or spills in the loop (18 wide multiplies per KiB on AVX-512). The loop structure follows Orson Peters's PolymurHash; the binary field, comb layout and finalizer are new.
+
+**Use it when:**
+- Hashing long in-memory buffers (roughly 1 KiB to a few hundred KiB): content fingerprints, chunk dedup and blob-keyed tables inside one process, where a random secret key is acceptable.
+- You need a provable collision bound for inputs chosen without knowledge of the key, for example to resist collision flooding when hash values are never revealed.
+- x86-64 with AVX-512 and VPCLMULQDQ (the Xeon 8375C figure: 28.31 vs XXH3-64's 19.90 B/TSC), or Apple M-series/AArch64 built with +crypto (26.26 vs 13.04 on M2 Pro).
+- Parallel hashing of one large buffer: chainhash_partial/chainhash_join combine splits at 1 KiB multiples into the same digest as a one-shot call.
+
+**Skip it when:**
+- Short keys: 1-31-byte inputs cost 155 TSC ticks per hash vs 29 for XXH3-64 on the Xeon (87 vs 25 on M2), and the README says fixed costs dominate below a few hundred bytes.
+- Unkeyed or public fingerprints, MACs, or any setting where an attacker sees hash values and then picks inputs: the bound is non-adaptive and the author states it is not a MAC or cryptographic digest.
+- x86 without AVX-512: the author's harness measured 16.83 B/TSC on the YMM path and 16.10 on XMM vs 27.72 on ZMM, and no XXH3 comparison exists for those paths. MSVC, big-endian, non-crypto AArch64 builds and other ISAs fall back to a bit-serial carry-less multiply with no published speed.
+- Out-of-cache streams: the design notes show 8 MiB inputs dropping to about 10.3 B/TSC on the Xeon, and XXH3 was not measured at that size.
+- Maturity-sensitive code: the repo was created 2026-09-18, has one author and 7 stars, and has no independent benchmarks or outside review yet.
+
+**Integration:** header-only · none (libc headers; immintrin.h/cpuid.h on x86, NEON intrinsics on AArch64) · C99 or C++11; x86 SIMD dispatch needs GCC or Clang target attributes (tested with GCC 11.5, Clang 21/22, Apple Clang 17) · x86-64 with run-time dispatch (AVX+PCLMUL, AVX2+VPCLMULQDQ, AVX-512F+VPCLMULQDQ); little-endian AArch64 with crypto extensions enabled at compile time; portable C elsewhere, with the same digest but much slower
+
+**Vs siblings:** Over xxHash (XXH3), rapidhash or wyhash: choose it only for bulk inputs on CLMUL/PMULL hardware when you also want a provable bound, since those siblings win clearly on short keys. Over UMASH and CLHash, the other carry-less universal hashes, it is about 2.4-2.5x faster in bulk on the Xeon (28.31 vs 11.33 and 11.86 B/TSC) and 1.7-1.8x on M2, with a machine-checked bound, but UMASH is much cheaper per short key (36 vs 155 ticks).
+
+**Gotchas:**
+- chainhash_key_from_seed (SplitMix64 from a 64-bit seed) exists for benchmarks, and SMHasher3 results use it. It does not supply the randomness the bound assumes: use chainhash_key_from_bytes with 64 OS-random bytes.
+- Key setup runs about 48 field products through the portable bit-serial multiply, and key expansion is outside every published timing, so re-keying per message adds cost. A stream holds a 1 KiB buffer plus a pointer to the key, and the key must outlive the stream.
+- The explicit backend entry points (chainhash_xmm/ymm/zmm/neon, chainhash_with_backend) are guarded only by assert(); with NDEBUG, an unsupported backend runs illegal instructions. Check chainhash_has_backend() first.
+- On AArch64 without -march=armv8-a+crypto (Apple: -march=native+crypto), the header silently uses the portable path. ChainHash-128 is slower than XXH3-128 on the Xeon (14.43 vs 19.82 B/TSC).
+
+**Status:** Brand new: created 2026-09-18, last commit 2026-09-23, 7 stars and no issues filed. The MIT single header ships frozen test vectors, Lean proofs and a full 200/200 SMHasher3 pass, so it is easy to vendor, but it has no track record or third-party benchmark yet.
+
+[repo](https://github.com/thomasahle/chainhash) · [benchmark](https://github.com/thomasahle/chainhash/blob/main/results/64/README.md)
+
+##### CLHash  `C`  `Apache-2.0`  `active`  `Tier A`
+
+Keyed 64-bit universal string hash built on carry-less multiply; about 40% faster than CityHash64 on inputs over 64 bytes.
+
+**Beats:** CityHash (CityHash64WithSeed, the paper's C port of v1.1.1); secondarily xxHash (xxh3) via SMHasher — In Lemire & Kaser (J. Cryptographic Engineering 2016), built with GCC 4.8 -O2 on a 3.4 GHz i7-4770 Haswell with Turbo Boost off, the 2015 research code took 0.16 cycles/byte vs 0.23 for the authors' C port of CityHash64WithSeed 1.1.1 on 4 kB inputs, and 0.45 vs 0.48 at 64 B. SMHasher3 (hardware not stated) gives CLHash 7.36 vs CityHash-64's 4.75 bytes/cycle in bulk. rurban SMHasher (Ryzen 5 3350G, compiler not stated) gives 22932.36 vs 20853.74 MiB/s for xxh3, but 67.22 vs 29.46 cycles/hash on small keys.
+
+**Known shortcoming:** Peer-reviewed win is over CityHash (0.16 vs 0.23 cycles/byte, GCC 4.8, i7-4770); against xxh3 the lead is only ~10% in SMHasher and it is ~2.3x slower on small keys. Needs CLMUL (PCLMULQDQ).
+
+**Known shortcoming:** Lead over xxh3 does not hold in SMHasher3 (XXH3-64 ~1.7x faster: 12.82 vs 7.36 bytes/cycle) and small keys are 2-3x slower. Weak quality: default build fails 186/250 SMHasher3 tests (BITMIX build 23, and BITMIX only applies up to 1 KB). C++ clhasher lacks a copy constructor (double free); empty input hashes to 0 for every key; key must be 16-byte aligned (assert only); no streaming (#3). The CityHash comparison is 2015 research code; the library was revived as v1.0.0 in May 2026.
+
+**Independent measurement:** Lemire & Kaser (peer-reviewed): CLHash 0.16 vs CityHash 0.23 cycles/byte on long strings (i7-4770, GCC 4.8 -O2).
+
+**Independent measurement:** SMHasher3: CLHash 7.36 vs XXH3-64 12.82 bytes/cycle bulk.
+
+**How:** The core is CLNH: each pair of 64-bit input words is XORed with key words and multiplied with a single PCLMULQDQ (PMULL on ARM), and the 128-bit products are XOR-accumulated without any reduction, because GF(2) arithmetic has no carries. Inputs over 1 KB are cut into 1 KB blocks whose CLNH results are chained by Horner's rule in GF(2^127), using a cheap 'lazy' reduction modulo 2^128+4+2 (two shifts and XORs). A final PSHUFB-table reduction modulo x^64+x^4+x^3+x+1 produces the 64-bit output. The paper puts the Haswell bound at one CLMUL per 16 bytes (0.125 cycles/byte) and measures 0.16.
+
+**Use it when:**
+- Bulk hashing of inputs from hundreds of bytes to many KB (documents, packets, file blocks), where cycles per byte matter more than per-call latency.
+- Replacing CityHash64 on Haswell-or-newer x64 for inputs over 64 bytes (paper: about 40% faster there, parity at 32 bytes or less).
+- You need a provable collision bound from a secret random key, not just a clean SMHasher run, e.g. hash tables or sketches fed by untrusted input that cannot observe hash values.
+- Mixed x86-64 and AArch64 fleets that need identical hashes: the README and known-answer tests guarantee bit-for-bit equal output on both.
+
+**Skip it when:**
+- Short keys: rurban SMHasher measures 67.22 cycles/hash on 1-31 byte keys vs 29.46 for xxh3; issue #6 found it slower than std::hash below about 192 bytes, and lengths that are not a multiple of 8 are slower still (issue #3).
+- When you need every output bit to behave randomly (e.g. using low bits directly as a table index): for short inputs the default build is linear in the input. SMHasher3 fails it on 186 of 250 tests (avalanche, BIC, Sparse, Text, Seed and more), and 23 even with CLHASH_BITMIX. rurban's BITMIX log also shows mass collisions in the Sparse, Permutation, TwoBytes and PerlinNoise keysets.
+- Hardware without carry-less multiply: builds only on x86 with PCLMULQDQ+SSE4.2 or AArch64 with the PMULL crypto extension; POWER and other targets hit an #error.
+- Streaming or multi-field hashing: there is no incremental API (issue #3, open since 2016), so fields must be concatenated first.
+- Pure bulk speed: the xxh3 win does not replicate. SMHasher3 measures 7.36 bytes/cycle vs XXH3-64's 12.82, and on rurban's table gxhash64 (48919.73 MiB/s) and falkhash (52401.48) more than double CLHash's 22932.36.
+
+**Integration:** source-drop (one .c + one .h) or static lib (CMake, find_package(clhash)) · none (C standard library only) · C99 compiler (C++11 for the clhasher wrapper; CMake 3.16 for the CMake build); GCC/Clang need -msse4.2 -mpclmul on x86 or -march=armv8-a+crypto on ARM; MSVC via the CMake Visual Studio generator · x86-64 with PCLMULQDQ + SSE4.2 (Haswell-class or newer for full speed); AArch64 with PMULL (Apple Silicon, Graviton, modern Cortex-A); CI covers Linux x64/ARM64, macOS ARM64, Windows MSVC
+
+**Vs siblings:** Pick CLHash over xxHash (XXH3), wyhash or rapidhash only when you want a proven universality bound from a random key, not for speed. XXH3 matches or beats it (rurban: CLHash about 10% faster in bulk; SMHasher3: XXH3-64 about 1.7x faster in bulk and 30.69 vs 48.19 cycles on 1-32 B keys), and gxhash or falkhash are over 2x faster in bulk.
+
+**Gotchas:**
+- Key handling: get_random_key_for_clhash() expands two seeds with xorshift128+, which is not a CSPRNG, and the source says the seeds must be non-zero. clhash() uses aligned 16-byte loads on the key, so a hand-built key must be 16-byte aligned, and the alignment check is only an assert().
+- The empty input hashes to 0 under every key (the known-answer vector in tests/unit.c; both the accumulator and the length term are zero).
+- The C++ clhasher frees its malloc'd key in its destructor but defines no copy constructor or assignment, so any copy (including copying a container that stores it) double-frees.
+- CLHASH_BITMIX (Murmur fmix64 finalizer) changes hash values and is applied only on the <=1024-byte path; inputs over 1 KB skip it.
+
+**Status:** Revived in May 2026 (tagged v1.0.0) after years of near-dormancy, adding an ARM PMULL port, CMake packaging and multi-OS CI; Apache-2.0, and only two files to vendor.
+
+[repo](https://github.com/simdhash/clhash) · [benchmark](https://arxiv.org/pdf/1503.03465)
+
+##### foldhash  `Rust`  `Zlib`  `active`  `Tier A`
+
+Seeded folded-multiply Rust hasher for in-memory HashMaps; about 4.6x lower geometric-mean time per op than SipHash-1-3.
+
+**Beats:** SipHash-1-3 (Rust std::collections::HashMap's default hasher) — The author's Criterion suite times one hash, a lookup miss, a lookup hit, or an insert into a 1,000-entry set, in ns per op. It covers 16 key distributions and compares foldhash 0.1.x with SipHash-1-3 (std RandomState), aHash 0.8.11 and fxhash 0.2.1 on stable Rust 1.80.1. Geometric means were 6.21 vs 28.70 ns on a Xeon Platinum 8481C, 6.00 vs 29.49 with target-cpu=native, and 4.41 vs 21.94 on an Apple M2, with SipHash last on almost every row. The only outside run is rapidhash's use of the same suite, which gives foldhash-f 4.83 vs 22.17 for SipHash on an M1 Max.
+
+**Known shortcoming:** Rust-only. Headline gain is against SipHash-1-3 (Rust std HashMap default, a keyed DoS-resistant hash); foldhash is non-cryptographic with only minimal DoS resistance.
+
+**Known shortcoming:** README benchmark is from the 0.1.x era and was not re-run after 0.2.0; the only outside run of the same suite (by rapidhash) has rapidhash faster (geomean 4.29 vs 4.83). Seed comes from ASLR/time, not the OS RNG; open #47: only 4 of 1024 seeds unique on reused threads; #50: 8 zero bytes vs 8 0xFF bytes collide at ~2^-26.6. Loses to fxhash on plain integers and to aHash (AES) on long strings.
+
+**Independent measurement:** README: Xeon geomean 6.21 vs SipHash 28.70 (Rust 1.80.1, benches/bench.rs).
+
+**Independent measurement:** rapidhash's run of foldhash's suite: rapidhash geomean 4.29 vs foldhash 4.83 (lower is faster).
+
+**How:** Every mixing step is one folded multiply: a 64x64->128-bit multiply whose two halves are XORed together, with each operand first XORed with a secret. Integer writes are packed into a 128-bit sponge, so one multiply absorbs up to 128 bits of u8-u64 fields. Strings of 16 bytes or less take one multiply over overlapping head and tail words. Longer strings take an out-of-line path with 2, 4 or 6 independent lanes (above 128 or 256 bytes) to hide multiply latency. The per-map state is an 8-byte seed plus a zero-sized handle to a global seed, so a HashMap<u32, u32> is 40 bytes against 48 with std's RandomState.
+
+**Use it when:**
+- Rust HashMap/HashSet keyed by integers, tuples or short strings where SipHash-1-3 shows up in profiles. On the Xeon 8481C table, a u64 lookup hit is 3.04 ns against 12.65 ns, and an English-word lookup hit is 8.62 ns against 21.35 ns.
+- Byte-string keys of 1 KB and up on builds without AES target features. Without target-cpu=native on the Xeon, hashing a 1 KB key takes 39.70 ns, against 86.00 ns for aHash and 280.74 ns for SipHash.
+- Integer keys where only the high bits vary (IDs shifted left, aligned addresses), where FxHash collapses. On the Xeon, a u64hibits lookup hit is 3.05 ns for foldhash and 58.47 ns for fxhash.
+- HyperLogLog, MinHash or other algorithms that need every output bit unbiased. Use foldhash::quality: the README says it passes SMHasher3 without failures, and on the Xeon it adds about 13% to the geometric mean (7.01 vs 6.21).
+- no_std, embedded or dependency-averse crates. It has zero dependencies and declares Rust 1.60 as its MSRV.
+
+**Skip it when:**
+- Tables fed by an interactive attacker who can observe timing or iteration order. The README says it makes no HashDoS claim against such attackers, and its seeds come from ASLR addresses, the clock and an allocator address, not the OS RNG.
+- Anything persisted, sent over the network or compared across machines. Output is unspecified across versions and platforms; FixedState gives different values on armv7 than on x86-64/aarch64 (issue #43), and byte loads use native endianness.
+- Plain random integer keys when you control the key distribution. FxHash is faster there (u64 hash only: 0.67 vs 0.79 ns on the Xeon, 0.41 vs 0.60 ns on the M2).
+- x86-64 builds with target-cpu=native that mostly hash medium or long strings. aHash's AES path wins there: 1 KB hash-only is 32.57 vs 40.56 ns, and URL-string lookups are 15.46 vs 17.42 ns.
+- When you want the fastest Rust in-memory hasher. rapidhash's own run of this benchmark suite (Apple M1 Max) gives rapidhash-f a geometric mean of 4.29 against 4.83 for foldhash-f, with most of the gain on strings.
+
+**Integration:** crate · none (the std feature is on by default; nightly is optional) · Rust 1.60 (rust-version in Cargo.toml for 0.2.0), edition 2021. The optional nightly feature needs a nightly compiler for hasher_prefixfree_extras. · Any Rust target, including no_std with default features off. The native 64x64->128 multiply is used on 64-bit targets other than sparc64/wasm64, and on wasm with wide-arithmetic. Other targets use a four-multiply 32-bit approximation. Targets without 8-bit atomics fall back to a fixed global seed.
+
+**Vs siblings:** Against aHash: foldhash has no dependencies, a smaller map (40 vs 64 bytes for HashMap<u32, u32>) and is faster unless you build with AES and hash long strings. Against rapidhash (Rust port): it is slightly slower on strings but is hashbrown's default and has a lower MSRV. Pick xxHash or wyhash whenever the hash must be stable across machines or versions, which foldhash explicitly is not.
+
+**Gotchas:**
+- Per-map seeds can repeat. Open issue #47 reports only 4 unique seeds across 1,024 fresh threads on an M1 Max, because OS thread reuse puts the stack address in the same place. The author called it legitimate; the fix PR #48 is still open.
+- Some fixed key pairs collide far more often than a 64-bit hash should. With 8-byte keys, all-zero vs all-0xFF collide for about 1 in 2^26.6 random seeds in both the fast and quality variants (issue #50; the author accepted the finding). The same issue shows 1u8/1u32/1u64 and (7u32, 9u32) vs a u64 hashing identically, because finish() ignores the sponge length. The author treats cross-type collisions as out of scope.
+- FixedState uses one seed for every map, which is trivially HashDoS-able. The docs warn it can go quadratic when you move entries from one map into another with the same fixed seed.
+- The README numbers come from the 0.1.x code (Rust 1.80.1, aHash 0.8.11). 0.2.0 (2025-08) reworked short- and long-string hashing, and bench.rs now includes rapidhash, but the published tables were not re-run.
+
+**Status:** Active but low-churn: 0.2.0 shipped 2025-08-23, the last commit was 2026-06-29, and 7 issues are open including the thread-seeding bug. Zlib-licensed with zero dependencies, about 606M crates.io downloads, and pulled in as hashbrown's default hasher.
+
+[repo](https://github.com/orlp/foldhash) · [benchmark](https://github.com/orlp/foldhash#performance)
+
+##### haya32x64  `C`  `Unlicense`  `active`  `Tier A`
+
+64-bit non-cryptographic hash built only from 32-bit operations. In pure JS it beats xxhash-wasm XXH64 on 4-8 byte keys.
+
+**Beats:** xxHash (XXH64, via xxhash-wasm) — On one AWS c8a.2xlarge (EPYC 9R45) and one c8g.2xlarge (Neoverse V2), Node.js 24.18 / V8 13.6, the author took medians of nine warmed public-API samples. The pure-JS engine hashed 4-byte Uint8Arrays in 22.9 / 34.0 ns vs 39.4 / 63.9 ns for xxhash-wasm 1.1.0 XXH64, about 1.7-1.9x (derived); at 8 B the gap is about 1.8-2.1x. XXH64 via wasm still led at 1 MiB (15,973 vs 10,971 MB/s hybrid on C8a) and on string inputs. Native SMHasher3 (GCC 15.2 -O3 -march=native) shows it far behind 64-bit-multiply hashes.
+
+**Known shortcoming:** Pure-JavaScript hash: its win (4-byte keys 22.9 vs 39.4 ns, derived) is only against xxhash-wasm's XXH64 inside JS; native XXH3 is far faster. New repo (last commit 2026-09-19).
+
+**Known shortcoming:** Wins only on 4-8 byte binary keys in JS (1.7-2.1x vs xxhash-wasm); the string API is ~4.5x slower than xxhash-wasm (TextEncoder) and it loses at 1 MiB. Far behind native hashes on 64-bit hosts (XXH3 60.59 vs 7.50 bytes/cycle). Digest still experimental (output of 128 B and up changed from v0.1 to v0.2); stated Cortex-M/RV32/GLSL targets untested. 0 stars, ~28 npm downloads/month, solo author, 7 weeks old.
+
+**How:** Short keys (8 bytes or less) take a dedicated path of two complete 32x32 products, and the JS engine keeps inputs under 16 bytes out of wasm. That avoids the JS-to-wasm copy and call overhead that xxhash-wasm pays on every call, and it avoids BigInt. Inputs of 128 bytes or more use a 'pair-lane' kernel: four lane pairs over 32-byte blocks, where each 8-byte stripe feeds one complete 32x32 multiply, m = (u0 + a) * (u1 + b), with the product's low and high words cross-fed back into the lanes. Per the author's profiling, that halves instructions per byte compared with the earlier one-multiply-per-word kernel. The 16-127-byte mid path absorbs 16-byte stripes through four multiply lanes plus a serial carry, and a two-round Feistel seed premix keeps all 64 seed bits.
+
+**Use it when:**
+- JavaScript hashing of very short binary keys (Uint8Array, 4-8 bytes) where you need 64 output bits without BigInt or wasm: 22.9 ns vs 39.4 ns for xxhash-wasm XXH64 at 4 B on EPYC 9R45
+- CSP-restricted or edge JS runtimes where WebAssembly may be unavailable: the pure-JS engine alone reaches about 3.9-4.5 GB/s at 1 MiB, over 100x the pure-JS xxhashjs XXH64 package (28-37 MB/s)
+- Cross-language digests that must match exactly between C, JS and wasm (bit-exact engines checked against 180 shared KAT vectors and a C-reference differential corpus)
+- 32-bit targets without a 64-bit multiply (Cortex-M, RV32) or shaders, which are the stated design targets; in native SMHasher3 it is the fastest 32-bit-arithmetic row listed (7.50 B/cycle vs t1ha0 5.21 and XXH-32 4.89 on C8a)
+- Content fingerprints or cache keys in mixed JS/C systems where Unlicense/public-domain licensing matters
+
+**Skip it when:**
+- Any native 64-bit C/C++ host: XXH3-64 runs at 60.59 vs 7.50 B/cycle bulk, and rapidhash, wyhash and a5hash-128 are also faster on both small keys and bulk. The README itself says to use a 64-bit-native hash there
+- JavaScript string keys: through the string API xxhash-wasm is about 4.5x faster (59.2 ns vs 267.9 ns for 8 ASCII chars on C8a) because haya32x64 runs TextEncoder first; cyrb53 is 6.5 ns if 53 bits are enough
+- Bulk JS hashing where wasm is allowed: at 1 MiB on C8a, xxhash-wasm XXH64 (15,973 MB/s) and hayahash64 wasm (16,034 MB/s) beat the haya32x64 hybrid (10,971 MB/s). With 64 KiB chunks, xxhash-wasm streaming is about 3.7x faster than haya32x64's pure-JS-only stream
+- Persisted digests that must stay stable: the digest is labeled experimental and frozen only at an interim verification value (0x431563D2). Output for inputs of 128 bytes or more already changed between published releases (v0.1.x to v0.2.0)
+- Hash tables keyed by attacker-controlled data, or any authentication use: it is non-cryptographic and makes no keyed collision-resistance claim
+
+**Integration:** header-only (C); npm module (ESM) for JavaScript · none (C: stddef.h, stdint.h, string.h only; npm package has no runtime dependencies) · C11 as tested in CI (GCC, Clang, MSVC /std:c11; the header also compiles as C++11/C++17); Node.js >= 18 for the npm package · any C target with uint64_t for the 32x32 product. CI covers x86-64, x86 ILP32, AArch64, big-endian s390x (qemu), MSVC x64 and wasm32. Endian-independent output. No Cortex-M, RV32 or GLSL builds are tested or shipped despite being the stated targets
+
+**Vs siblings:** Pick it over xxHash (XXH64 via xxhash-wasm, or xxhashjs) and over its sibling hayahash only for JS code that hashes very short byte keys with no BigInt and optionally no wasm, or for hardware with only 32-bit multiplies. On 64-bit native hosts, and for JS bulk or string hashing where wasm is allowed, xxHash (XXH3/XXH64) or hayahash wins.
+
+**Gotchas:**
+- Different digest from xxHash and from the same author's hayahash, so switching means migrating stored data. Digests of inputs 128 bytes and longer changed in v0.2.0 (pair-lane, then cross-feed kernel); digests under 128 bytes have been stable since the original 0xEAA8E435 version
+- The JS API returns [low32, high32] word pairs, not a BigInt or a 16-byte string; use haya32x64Hex/digestHex for hex. Strings passed to stream.update() are UTF-8 encoded one at a time, so a surrogate pair split across two calls hashes differently from the one-shot form
+- The hybrid engine copies every input of 16 bytes or more into one shared wasm memory that grows to the largest input seen and never shrinks (WebAssembly memory cannot shrink). Use haya32x64Pure or the ./pure export to avoid wasm entirely
+- The digest is defined only for lengths 0..UINT32_MAX. The C one-shot takes size_t but casts the length to 32 bits for the finalizer, and the streaming API requires the caller to keep the cumulative length within UINT32_MAX
+
+**Status:** Active (last default-branch commit 2026-09-19, mostly dependabot), with 0 stars and about 28 npm downloads in the past month. It is a roughly 7-week-old solo-author project at v0.2.0 with an experimental digest, though the Unlicense single header is trivial to vendor and has an unusually thorough CI and test suite.
+
+[repo](https://github.com/thevilledev/haya32x64) · [benchmark](https://github.com/thevilledev/haya32x64/blob/main/README.md)
+
+##### hayahash  `C`  `Unlicense`  `active`  `Tier A`
+
+Portable scalar 64/128-bit C hash; beats XXH3-64 by about 1.35x on 1 MiB bulk in SIMD-less wasm32.
+
+**Beats:** xxHash (XXH3-64 and XXH64) — One baseline wasm32 module (zig cc 0.16.0 -O3, no SIMD or wide-multiply instructions) was run under Node 26.7.0 / V8 14.6 on a bare-metal Apple M1 Pro, with timing loops inside wasm. At 1 MiB it measured hayahash64 23.55 GB/s and hayahash128 23.34, vs XXH3-64 17.41 and XXH64 14.71 (about 1.35x and 1.60x); XXH64 kept the lowest 4-8-byte chained latency. xxHash and rapidhash sources were pinned to upstream commits, and there is a single host and a single run record dated 2026-08-09.
+
+**Known shortcoming:** WebAssembly (wasm32) hash: beats XXH3/XXH64 only inside WASM (zig 0.16.0, Node 26.7.0); native XXH3-128 is faster in bulk. New, single-author repo.
+
+**Known shortcoming:** Win holds only for wasm32 without SIMD, from one run on an M1 Pro/V8 (2026-08-09); the harness drops xxHash from -msimd128 builds, so there is no comparison with SIMD XXH3 in WASM; XXH64 is faster at 4-8 byte chained latency. Pre-1.0: digests changed in 0.3.0 and 0.5.0, so do not persist hashes. 2 months old, 2 stars, ~250 crates.io and ~290 npm downloads/month.
+
+**How:** It uses only 64-bit multiplication mod 2^64: no 64x64->128 multiply, no SIMD and no AES, which is all that baseline wasm32 provides. XXH3 and rapidhash must emulate wide multiplication there. Inputs of 320 bytes or more run 8 independent lanes over 64-byte blocks, where each absorb is h = (h ^ (w + rotl(prev_w, 27))) * K, so the loop-carried chain is only add->mul. The 8 lanes then fold into 4, the tail uses overlapping wyhash-style reads, and inputs of 16 bytes or less take a dedicated two-multiply path. On Zen 4/5 with AVX-512DQ, GCC auto-vectorizes the bulk loop.
+
+**Use it when:**
+- Hashing inside WebAssembly without SIMD (browser or Node wasm32): at 1 MiB it measured 23.55 GB/s vs 17.41 for XXH3-64 and 14.71 for XXH64 on an M1 Pro under V8, and from 32-byte keys up it also had lower chained latency than both.
+- Systems that must compute the same digest in several languages or byte orders (for example a Go or Rust server and a browser client), with everyone pinned to the same hayahash version.
+- Chunked or streaming input where you want both a 64-bit and a 128-bit digest from one pass; on bulk input the 128-bit result costs only an extra finalizer (23.34 vs 23.55 GB/s in wasm).
+- Targets without a fast 64x64->128 multiply (wasm32, 32-bit or exotic CPUs, MIPS64), where wide-multiply hashes fall back to emulation.
+
+**Skip it when:**
+- Native x86-64/AArch64 builds where XXH3 is available: the author makes no native 64-bit competitive claim, and in the SMHasher3 128-bit shootout XXH3-128 has higher bulk throughput (12.64 vs 9.77 B/cycle on M1, 48.91 vs 31.02 on Zen 5).
+- Latency-critical keys of 4-16 bytes in wasm: XXH64 was faster at 4-8 bytes (5.9-6.0 vs 7.6-7.7 ns chained) and tied at 16 bytes.
+- Anything that persists digests (on-disk indexes, wire formats, caches shared across deploys): digests changed in 0.3.0 and 0.5.0 (2026-08-09) and can change again before 1.0.
+- Adversarial inputs or authentication: it is explicitly non-cryptographic, a secret seed only reduces HashDoS risk, and the design notes do not prove collision resistance for the full hash.
+- Teams that need a proven dependency: the repo is about two months old with 2 stars, a single maintainer and no externally filed issues.
+
+**Integration:** header-only · none · C11 as built in CI; also compiled as C++11 and C++17 with g++ and clang++, and MSVC x64 is conformance-tested. Ports: Zig 0.16, Java 17+, .NET 8+, CPython 3.9+, Swift 5.9+, GHC 8.10+ · any (portable scalar code); CI covers x86-64, AArch64, big-endian s390x, wasm32, MSVC x64 and MIPS64 n64
+
+**Vs siblings:** Over xxHash (XXH3-64/XXH64), pick it when the code runs as SIMD-less wasm32 or on hardware without wide multiply and keys are 32 bytes or more; natively, or for 4-16-byte keys, stay with xxHash. Over ChibiHash, which is in the same portable ordinary-multiply class, it was faster than ChibiHash v2 at every measured size on M1 and in wasm. Over haya32x64 by the same author, pick it when you are hashing bulk data through wasm or native code rather than tiny keys in pure JS.
+
+**Gotchas:**
+- len is a signed ptrdiff_t and must be non-negative; the pointer may be null only when len is 0.
+- hayahash128(...).lo is exactly hayahash64(...). Do not treat a 64-bit and a 128-bit digest of the same data as independent bits.
+- The streaming state is about 544 bytes (a 448-byte buffer plus lane words). Totals under 448 bytes stay buffered and go through the one-shot path when you call digest.
+- Speed depends on per-compiler dispatch shapes: GCC length tiers, Zen 4/5-only AVX-512DQ vectorization (without it Zen 5 bulk drops from about 61.6 to about 35 GB/s), and clang asm barriers. MSVC performance is untested. The wasm harness drops xxHash from -msimd128 builds, so there is no comparison against SIMD XXH3 in wasm.
+
+**Status:** Actively developed by one author (v0.6.0 on 2026-09-13, several fixes committed 2026-09-26), Unlicense and one copyable header. It is still pre-1.0 with unstable digests and little outside use: 2 stars, about 250 crates.io downloads, about 290 npm downloads in the last month.
+
+[repo](https://github.com/thevilledev/hayahash) · [benchmark](https://github.com/thevilledev/hayahash/blob/main/docs/benchmarks.md)
 
 ##### xxHash  `C`  `BSD-2-Clause (library xxhash.c/xxhash.h); xxhsum CLI is GPL-2.0-or-later`  `active`  `Tier A`
 
@@ -120,6 +1234,630 @@ SIMD-vectorized non-cryptographic hash family; XXH3 beats CityHash ~2.7x on in-R
 
 [repo](https://github.com/Cyan4973/xxhash) · [benchmark](https://github.com/Cyan4973/xxhash)
 
+##### a5hash  `C`  `MIT`  `active`  `Tier B`
+
+Tiny header-only C hash for hash-map keys; beats XXH64 and edges wyhash on short keys, but slow on bulk data.
+
+**Beats:** wyhash, xxHash (xxhash64) — SMHasher3's independent results page (Frank Wojcik's suite, testing a5hash v5.21) lists a5hash at 26.91 cycles/hash averaged over 1-31 byte keys, against 29.31 for wyhash v4.2 and 52.60 for XXH-64, and at 2.63 bytes/cycle for 256 KiB bulk input, against 6.98 and 3.99. The page names no CPU or compiler and converts to GiB/s at a nominal 3.5 GHz. The author's README has a first-party SMHasher3 run on a Xeon E-2386G under AlmaLinux 9.3 (compiler unstated) showing 11.50 cycles/hash against 18.10 for rapidhash and 21.31 for XXH3-64; std::hash itself was not benchmarked.
+
+**Known shortcoming:** Small-key speed only: on bulk data a5hash is slower than both baselines (SMHasher3 2.63 bytes/cycle vs wyhash 6.98 and XXH-64 3.99); use a5hash-128 (6.92) or another hash for long inputs.
+
+**Known shortcoming:** Third-party report (komihash#24, 2026-09-18, unanswered): a5hash128 17/25-byte input pairs collide for every seed, and a5hash64 weak-seed pair classes reach ~2^-38 versus the README's 2^-59 estimate. The author rates komihash as higher quality. Repo issues are disabled. Endian-dependent output, no streaming API. In rurban/smhasher (v5.13) it only ties wyhash (28.84 vs 28.91 cycles) and trails rapidhash (22.04).
+
+**Independent measurement:** SMHasher3 summary: small keys (1-32 B) 26.91 cycles/hash vs wyhash 29.31, XXH-64 52.60; bulk 2.63 B/cycle vs wyhash 6.98, XXH-64 3.99.
+
+**Independent measurement:** rurban/smhasher (a5hash v5.13): 28.84 cycles/hash vs wyhash 28.91, rapidhash 22.04. SMHasher3: a5hash128 (rh=NULL) 24.64 cycles, 6.92 B/cycle.
+
+**How:** Like wyhash, it is built on 64x64->128-bit multiplication. Unlike wyhash's multiply-and-fold (mum), it never XORs the product halves together during hashing: both halves become the next two state words, and adding the constants 0x5555... and 0xAAAA... after each 16-byte block lets the state recover if a product comes out zero. A key of 4-16 bytes is read as overlapping 32-bit loads from both ends, so a short key costs a couple of multiplies and no loop. The function is force-inlined and small (about 270-330 bytes of machine code per the README), so a seed of 0 or a compile-time-constant length folds away. The 64-bit bulk loop is one serial multiply chain at 16 bytes per step, which explains its low bulk speed; a5hash128 runs four independent multiply lanes over 64-byte blocks and reaches about 2.6x the bulk throughput.
+
+**Use it when:**
+- In-memory hash tables and maps keyed by short strings or small structs (about 1-32 bytes) where the cost of each hash call matters. SMHasher3 averages it at 26.91 cycles/hash over 1-31 byte keys, against 29.31 for wyhash and 52.60 for XXH64.
+- Key lengths mostly between 17 and 31 bytes. That is where its SMHasher3 lead over wyhash is largest (29-30 vs 33.75 cycles); at 16 bytes and below the two are within about 2.5 cycles.
+- You want a 64-bit hash that passes all 250 SMHasher3 tests at wyhash-level small-key cost. wyhash fails 15 of those tests (Permutation and SeedZeroes) and XXH64 fails 9.
+- A single dependency-free header that compiles as C99 or as any C++ dialect (pre-C++11 included) and inlines into the call site.
+- 32-bit embedded targets that only need a 32-bit hash: a5hash32() uses only 32x32->64 multiplies and passes all SMHasher3 tests at 25.81 cycles/hash.
+
+**Skip it when:**
+- Bulk data such as files, large buffers or checksums. In SMHasher3, plain a5hash() does 2.63 bytes/cycle, against 6.98 for wyhash, 3.99 for XXH64 and 12.82 for XXH3-64. Use a5hash128() or XXH3 instead.
+- Hashes that are stored, sent between machines or compared across builds. Output differs between big- and little-endian hosts by design, outputs have changed between releases (the 5.15 and 5.16 commits both say "changed output"), and there is no streaming API. The README itself recommends komihash when you need portable hashes.
+- Services exposed to hash flooding that rely on a secret seed. A third-party report filed 2026-09-18 (komihash issue #24, no reply when read) gives fixed 17- and 25-byte pairs on which a5hash128 collides for every seed. For 64-bit a5hash it gives weak-seed classes in which one specific pair collides with probability of at least about 2^-38. That is far above the 2^-59 to 2^-62 blinding-multiplication odds the README estimates.
+- When you need a clear, reproducible small-key win. Independent numbers are thin: SMHasher3's margin over wyhash is about 8%, and rurban/smhasher (which tested the older v5.13) puts a5hash at 28.84 cycles/hash, level with wyhash (28.91) and behind rapidhash (22.04).
+- Teams that want an upstream bug tracker and a review trail. The repo has issues and discussions disabled. The author has also said that a5hash's mathematical structure is of lower quality than komihash's, and that he rates komihash higher overall.
+
+**Integration:** header-only · none (string.h/stdint.h, plus intrin.h/immintrin.h under MSVC) · ISO C99, or any C++ (C++11 and later use noexcept/nullptr; older dialects use throw()). The README reports testing with GCC, Clang, MSVC and Intel C++. It uses __uint128_t, _umul128, _mulx_u64 or __umulh when available and falls back to portable 32-bit code. · any. Tested on x86, x86-64 and AArch64 (Apple Silicon) under Windows 11, AlmaLinux 9.3 and macOS 15.3.2. The 64-bit variants are slow on 32-bit CPUs (use a5hash32 there), and big-endian hosts produce different hash values.
+
+**Vs siblings:** Pick it over wyhash or xxHash (XXH64) only when almost every key is under about 32 bytes and you want a hash that passes all of SMHasher3. Once bulk throughput matters, wyhash, XXH3, AquaHash or Meow hash win clearly (6.98-15.84 vs 2.63 bytes/cycle). The original MuseAir's BFast variant (SMHasher3 row MuseAir.bfast: 26.28 cycles, 8.64 bytes/cycle) matches it on short keys and wins bulk, so a5hash's remaining edge over MuseAir is mostly smaller code and C99 portability.
+
+**Gotchas:**
+- In SMHasher3, a5hash128() with rh=NULL (the a5hash-128.64 row) beats plain a5hash() on both short keys (24.64 vs 26.91 cycles, and a flat 22 cycles for 20-31 bytes) and bulk data (6.92 vs 2.63 bytes/cycle). The author's case for a5hash() rests on forced inlining and small code size inside real hash maps, which a benchmark that calls through function pointers does not reward, so benchmark both in your own table. Remember that a5hash128 is the variant with the seed-independent 17-32 byte collision report.
+- Flooding resistance depends on how you seed it. The README requires a uniformly random 64-bit seed and hash outputs that are never exposed, and says a5hash32 (32-bit seed) should not be used in open systems.
+- Gains at the hash-map level are small. The README's own table (Xeon E-2386G) shows 11.50 vs 18.10-21.31 cycles/hash on small keys, but std::unordered_map run cost is only 404 vs 428-430 cycles/op against XXH3-64 and rapidhash (about 6%). Its parallel-hashmap init (294) is slower than komihash (285), rust-ahash-fb (286) and XXH3-64 (292).
+- The 64-bit variants are much slower on 32-bit CPUs, where the 64x64->128 multiply falls back to a multi-step routine built from 32-bit multiplies (adapted from Hacker's Delight). The README recommends a5hash32() on those targets.
+
+**Status:** Active single-author project: 36 releases between March and December 2025, last commit 2025-12-19, and releases 5.22-5.25 changed only macros and comments, so the v5.21 that SMHasher3 tested has the same hash output as today's header. It is one MIT header and trivial to vendor, but issues are disabled on the repo, so bug reports end up elsewhere (for example in the komihash tracker).
+
+[repo](https://github.com/avaneev/a5hash) · [benchmark](https://gitlab.com/fwojcik/smhasher3/-/blob/main/results/README.md)
+
+##### AquaHash  `C++`  `Apache-2.0`  `abandoned`  `Tier B`
+
+Single-header AES-NI 128-bit hash: about 4x XXH64 bulk throughput in SMHasher3, but fails 55/250 quality tests.
+
+**Beats:** xxHash (xxhash64) — SMHasher3's results summary (CPU and compiler not stated; GiB/s figures are converted at a nominal 3.5 GHz) measures AquaHash at 15.84 bytes/cycle bulk against 3.99 for XXH-64 (about 4x) and 12.82 for XXH3-64 (about 1.24x), and at 34.31 cycles average on 1-32-byte keys against 52.60 for XXH-64 and 29.31 for wyhash. The author's Skylake graph against xxhash64 and FarmHash gives no compiler or flags, and a 2019 third-party fork benchmark (clang 8) timed its aquahash command at 131.6 ms against 163.2 ms for xxhsum on a 100 MB+ file, about 1.24x including I/O.
+
+**Known shortcoming:** Unmaintained since 2019-03-06. Bulk lead over XXH3-64 is only ~1.24x (15.84 vs 12.82 bytes/cycle); on small keys it is slower than wyhash (34.31 vs 29.31 cycles). Needs AES-NI.
+
+**Known shortcoming:** Quality failures: SMHasher3 fails 55 of 250 tests, including full 128-bit collisions on Sparse/Cyclic/Permutation keys (405 in 22.4M 64-byte keys, 0 expected) and the Seed tests; issue #7 (open since 2019) reports 3,488,136 collisions vs ~312 expected. Header does not compile on GCC (__m128 vs __m128i, issue #1); Clang only. x86 AES-NI only, no fallback; returns __m128i and an unaligned store segfaults (#3); no 64-bit or std::hash adapter. Repo issues disabled; hungptit's fork has the GCC fix.
+
+**Independent measurement:** SMHasher3 summary: bulk 15.84 B/cycle vs XXH3-64 12.82, wyhash 6.98, XXH-64 3.99; small keys 34.31 cycles vs wyhash 29.31.
+
+**How:** Each 16-byte input block becomes the round key of a single AES round (_mm_aesenc_si128), so the whole per-block cost is one AES instruction. Keys of 64 bytes or more are spread across four independent 128-bit lanes (a 512-bit block), which keeps the AES units pipelined; the lanes are mixed and reduced with a few AES rounds only at the end. Keys under 64 bytes take a single-lane path: the 1-15-byte tail is XORed in with constant-padded vectors and three AES rounds finish the hash, with no cross-lane reduction. The author's blog gives 15 bytes/cycle bulk on Skylake and about 25 cycles per hash at the smallest key sizes.
+
+**Use it when:**
+- Non-adversarial bulk checksums, deduplication or content fingerprinting of large buffers on x86-64 with AES-NI, when bytes/cycle is the bottleneck (SMHasher3: 15.84 bytes/cycle vs 12.82 for XXH3-64 and 3.99 for XXH-64).
+- As a fast pre-filter where every hash match is confirmed by a byte comparison, so extra collisions cost time but never correctness.
+- Clang-built, x86-only codebases that want a tiny Apache-2.0 header with no dependencies to vendor and patch.
+- As a compact reference point when studying AES-round hash constructions next to Meow hash.
+
+**Skip it when:**
+- Hash tables, or any use that needs good distribution on structured keys. SMHasher3 finds full 128-bit collisions on the Sparse, Cyclic and Permutation keysets: for example, 405 collisions among 22.4M 64-byte keys with at most 3 bits set, where 0 are expected. An open 2019 issue (#7) reports 3,488,136 collisions in a brute-force test that should give about 312.
+- Short keys: its 34.31 cycles average on 1-32 bytes is slower than wyhash (29.31), XXH3-64 (30.69) and a5hash (26.91) in the same SMHasher3 table.
+- Untrusted input or HashDoS defence: the author says it is not suitable for cryptographic use, and it fails SMHasher3's Seed, SeedSparse and SeedBlockLen tests.
+- ARM or any CPU without AES-NI: the code calls x86 intrinsics directly and has no fallback path.
+- Anything that needs a maintained dependency or an unpatched GCC build: the upstream header does not compile with GCC (issue #1, open since 2019), issues are now disabled, and there have been no commits since 2019-03-06.
+
+**Integration:** header-only · None beyond the x86 intrinsic headers <smmintrin.h> and <wmmintrin.h>. · Not documented. The features used (constexpr, brace-initialised member arrays) need C++11, and the author says the code came from a C++17 codebase. The author says it compiles cleanly with Clang in strict mode. Upstream fails on GCC (reported on 4.9 and 8.2.1) because LargeKeyAlgorithm declares `__m128 block[4]` where `__m128i` is needed. AES codegen must be enabled (-maes or a suitable -march). MSVC is not documented. · x86/x86-64 with AES-NI only. There is no ARM or portable fallback.
+
+**Vs siblings:** Pick it over Meow hash or xxHash's XXH3 only when raw x86 bulk throughput on non-adversarial data matters more than hash quality: SMHasher3 puts AquaHash at 15.84 bytes/cycle against Meow's 12.43 and XXH3-64's 12.82, but Meow passes all 250 tests and XXH3 is portable and maintained. For short keys, wyhash and a5hash are both faster and better tested, so do not pick AquaHash there.
+
+**Gotchas:**
+- The result is a by-value __m128i. Writing it through a cast pointer into an unaligned buffer can crash: issue #3 reports SMHasher's BulkSpeed test segfaulting this way. Store it with _mm_storeu_si128.
+- Upstream has no std::hash-style adapter and no 64-bit output. For hash tables you must pull 64 bits out of the __m128i yourself (the hungptit fork adds such a wrapper).
+- After Finalize() the incremental object is in an undefined state and must be re-Initialize()d. Only an assert guards against double finalization, so release builds get no check.
+- Hash() switches from the small-key to the large-key algorithm at 64 bytes, and calling a component function directly outside its intended range gives values that differ from Hash(). Tail bytes are read through reinterpret_cast'ed uint64/32/16 pointers: these are unaligned, aliasing-violating loads that the author's x86 targets tolerate.
+
+**Status:** Abandoned since the 2019-03-06 v1.0 commit: issues are disabled and the GCC-build and collision-rate reports were never answered with fixes. It is Apache-2.0 and one 440-line header, so it is easy to vendor and patch; the hungptit fork already fixes the GCC error.
+
+[repo](https://github.com/jandrewrogers/AquaHash) · [benchmark](https://gitlab.com/fwojcik/smhasher3/-/blob/main/results/README.md)
+
+##### ChibiHash  `C`  `Unlicense`  `active`  `Tier B`
+
+82-line public-domain C header 64-bit hash; about 1.5x XXH64 bulk throughput and a third fewer cycles on short keys.
+
+**Beats:** xxHash (xxhash64), CityHash (city64) — The README table is the author's own SMHasher3 run (CPU, compiler and flags not stated, cycles scaled to 3.5 GHz). It shows ChibiHash v2 at 24.20 GiB/s bulk against 15.10 for xxhash64 and 18.30 for city64, and 34 cycles per small key against 50 and 47. The independent SMHasher3 results page (tool releases from 2025-10 to 2026-08, hardware also unstated) supports the ordering. It has ChibiHash2 at 6.15 bytes/cycle and 34.53 cycles, against 3.99/52.60 for XXH-64 and 4.75/51.89 for CityHash-64: about 1.5x and 1.3x faster in bulk, and about a third fewer cycles on 1-32 byte keys.
+
+**Known shortcoming:** Beats XXH64 and CityHash64 only; XXH3 is faster. Unlicense is declared in the source header only (no LICENSE file).
+
+**Known shortcoming:** README numbers are the author's own rdtsc run scaled to 3.5 GHz with no CPU or compiler named; independent SMHasher3 measures 20.3 GiB/s vs README 24.2. XXH3 is ~2.1x faster in bulk and rapidhash is faster everywhere. No seed randomization, no tags, v1 and v2 outputs differ. Streaming header lacks stdint/stddef includes.
+
+**Independent measurement:** SMHasher3: ChibiHash bulk 20.3 GiB/s (README claims 24.2).
+
+**How:** The bulk loop keeps four 64-bit lanes and eats 32 bytes per iteration. Each lane does (stripe + h[i]) * K, then adds a rotated copy of the stripe into the next lane, which breaks dependency chains so the four multiplies overlap. It uses only the low 64 bits of a 64x64 multiply, never a 128-bit product. Tails of fewer than 8 bytes are read with overlapping 4-byte loads, or first/middle/last bytes, in the style of wyhash, and the result goes through a short rotate-xor-multiply finalizer. Loads are shift-or byte assembly that GCC and Clang compile to one unaligned load on x86, so the output does not depend on endianness or alignment.
+
+**Use it when:**
+- C or C++ code on legacy XXH64 or CityHash64 that wants a smaller, faster replacement. On the independent SMHasher3 results page it hashes bulk data at 6.15 bytes/cycle, against 3.99 for XXH-64 and 4.75 for CityHash-64. It averages 34.53 cycles on 1-32 byte keys, against about 52 for both.
+- Hash tables, dedup or bloom filters over short string keys, as a drop-in upgrade from FNV-1a. On the same page FNV-1a-64 needs 73 cycles per short key and fails 230 of 235 tests; ChibiHash2 passes all 250.
+- Code that must give the same hash on every host, including big-endian, strict-alignment, WASM or embedded targets. It uses no intrinsics, no SIMD and no 128-bit multiply.
+- Projects that want to vendor a hash with no build system, no dependencies and no license paperwork. It is one public-domain header of about 80 lines.
+- Incremental hashing of data that arrives in pieces (network buffers, file chunks) without allocating. The streaming header keeps a 32-byte buffer, and a test checks it against the one-shot function for every split of inputs up to 256 bytes and for chunk sizes 1-65.
+
+**Skip it when:**
+- Hash tables exposed to attacker-chosen keys. There is no secret per-process key (the caller passes a plain uint64 seed), and the README itself says to use SipHash against collision attacks.
+- Maximum throughput on 64-bit CPUs. On the same SMHasher3 page, XXH3-64 does about 2.1x the bulk bytes/cycle (12.82 vs 6.15) and is a little faster on short keys (30.69 vs 34.53 cycles). rapidhash also passes all 250 tests and beats it on both (8.82 bytes/cycle, 30.41 cycles).
+- Checksums or fingerprints that need strong collision bounds or 128-bit output. There is only a 64-bit variant, the README warns that its minimal mixing should give more collisions than xxhash64, and the author's article says the design has no mathematical foundation and was tuned until the tests passed.
+- Persisted or cross-language hashes where the version can drift. v1 and v2 give different values and there are no tagged releases. The port list shows the Go, Python and constexpr-C++ ports still on v1, while the Rust, Zig, Haskell and Java (hash4j) ports are on v2.
+- Organizations that need a LICENSE file or a patent grant. The repo has no LICENSE file; the only license is an Unlicense public-domain dedication in the header comments.
+
+**Integration:** header-only · none (stdint.h and stddef.h only) · C99 (static inline, UINT64_C, for-loop declarations). It also compiles as C++: etc/test.cpp builds both headers with g++ -Wall -Wextra. · any; output is endianness-independent. It needs a 64-bit integer multiply, which is emulated and slower on 32-bit CPUs.
+
+**Vs siblings:** Pick ChibiHash over xxHash when you would otherwise ship XXH64: it is faster, much smaller and passes all 250 SMHasher3 tests where XXH-64 fails 9. Pick XXH3 when bulk speed matters most. Pick it over wyhash or rapidhash only when you need code that is portable, endian-neutral and free of 128-bit multiplies (the README footnotes that rapidhash needs the full 128-bit product), since rapidhash is faster on every SMHasher3 metric and wyhash fails 15 tests.
+
+**Gotchas:**
+- chibihash64-stream.h uses uint64_t, uint8_t and ptrdiff_t but includes neither <stdint.h> nor <stddef.h>. Include those, or chibihash64.h, first, or the header will not compile on its own.
+- chibihash64_append takes a non-const void *keyIn, so passing const buffers needs a cast: an error in C++ and a discarded-qualifier warning in C. The header's own usage example passes string literals.
+- The README's GiB/s numbers are SMHasher3 rdtsc cycles scaled to a nominal 3.5 GHz, not wall-clock time, and v1's article numbers came from the original SMHasher at 3 GHz (author, issue #6). The independent run shows 6.24 bytes/cycle, about 20.3 GiB/s, against the README's 24.20. Compare ratios, not absolute numbers.
+- The seed is the caller's responsibility. Every call with the same seed gives the same hash, so randomizing it per process or per table is up to you.
+
+**Status:** Single-author and quiet: v2 landed in Nov 2024 and the next activity was the streaming header in Apr 2026 (last commit 2026-04-21). There are no tagged releases, no open issues and 147 stars. The public-domain header is small enough to copy into a tree and freeze.
+
+[repo](https://github.com/N-R-K/ChibiHash) · [benchmark](https://github.com/N-R-K/ChibiHash)
+
+##### falkhash  `C`  `Unlicense`  `abandoned`  `Tier B`
+
+One-function AES-NI 128-bit hash for x86-64; 1.4-2.5x XXH3 bulk throughput, but 3-4x slower on small keys.
+
+**Beats:** xxHash (xxh3), wyhash, CityHash — rurban SMHasher (AMD Ryzen 5 3350G, 262144-byte keys, compiler not stated, prebuilt nasm object of the v1 asm) gives falkhash 52401.48 MiB/s vs xxh3 20853.74 (~2.5x), wyhash 22640.53 (~2.3x) and City128 14472.20 (~3.6x), but 122.70 vs 29.46 cycles/hash on small keys. SMHasher3 (hardware not stated) on the current v2 C code gives 18.43 bytes/cycle vs XXH3-64 12.82 (~1.4x), wyhash 6.98 (~2.6x) and CityHash-64 4.75 (~3.9x).
+
+**Known shortcoming:** SMHasher numbers test the old v1 prebuilt assembly object, not the repo's v2 C code; rated POOR quality. Small keys ~4x slower than xxh3. Needs AES-NI. Unlicense gives no patent grant.
+
+**Known shortcoming:** SMHasher3 on the repo's current v2 C code: 18.43 vs XXH3-64 12.82 bytes/cycle (~1.4x, not 2.5x); v2 fails 6/250 tests (Sparse). Inputs under 80 bytes are padded to 80, so small keys are 3-4x slower. Abandoned 2015; x86 AES-NI only; returns __m128i; falkhash.c contains a main(); PR #1 flagged v1 seed-independent collisions.
+
+**Independent measurement:** SMHasher3 (v2 C): falkhash 18.43 vs XXH3-64 12.82 bytes/cycle bulk.
+
+**How:** It consumes 80-byte chunks. Five unaligned 16-byte loads are XORed with the 128-bit seed and squeezed into one lane by a chain of AESENC rounds that uses the other four blocks as round keys, plus one more round keyed with the seed. The result is folded into the running hash with a single AESENC. Each AESENC is a full AES round (SubBytes, ShiftRows, MixColumns, key XOR) in one instruction, and per-chunk chains do not depend on the running hash, so from the source only one AESENC per 80 bytes sits on the loop-carried path. Four more seed-keyed AESENC rounds finalize, and the 0x50 chunk size was tuned for AMD family 15h, per the asm comment.
+
+**Use it when:**
+- Bulk hashing of large buffers (tens of KB and up: coverage bitmaps, file chunks, snapshots) on x86-64 with AES-NI, where bytes per cycle matter more than per-call latency.
+- Non-adversarial content fingerprinting that wants a native 128-bit result at bulk speed: SMHasher3 measures 18.43 bytes/cycle for v2 vs 12.82 for XXH3-64 and 12.43 for MeowHash.
+- Internal tools or experiments where copying one small public-domain function is easier than adding a dependency, and portability beyond x86 does not matter.
+
+**Skip it when:**
+- Short keys or hash-table lookups: every input under 80 bytes is zero-padded to a full 80-byte block, giving 85.87 cycles/hash on 1-32 B keys in SMHasher3 (XXH3-64: 30.69) and 122.70 vs 29.46 for xxh3 in rurban SMHasher. Issue #2, asking about 64-bit integer keys, is unanswered.
+- Anything adversarial or security-related: the README says it is not crypto and was made 'by randomly testing things until it passed all of smhasher's tests', and funny-falcon's PR #1 pointed out a route to seed-independent collisions in v1, and the suggested fix (XOR every block with the seed) went into v2.
+- When you need a clean quality record: v2 fails 6 of 250 SMHasher3 tests (Sparse), and rurban rates the v1 asm POOR, with full 64-bit collisions on sparse 160-bit and 512-bit keys. MeowHash passes all 250 SMHasher3 tests at 12.43 bytes/cycle.
+- Non-x86 targets or CPUs without AES-NI: there is no fallback path; it includes x86 intrinsics headers and needs -maes.
+- When you need a maintained, packaged library: no commits since November 2015, no header or build target, no tests beyond a benchmark main().
+
+**Integration:** source-drop (copy the falkhash() function out of falkhash.c) · none (C standard library plus compiler x86 intrinsics headers) · Any C compiler with AES-NI intrinsics; the README reports GCC 4.9.2, clang 3.5.0, MSVC 18.00 and 19.00 (VS2013/VS2015); GCC/Clang need -maes · x86 / x86-64 with AES-NI (designed for AMD64); no ARM or portable fallback
+
+**Vs siblings:** Among the catalogued AES-NI hashes, falkhash v2 is roughly tied with gxhash in bulk (SMHasher3 18.43 vs 19.56 bytes/cycle) but fails fewer tests (6 vs 25), and it is about 1.5x MeowHash's bulk speed. Pick it over them only for a tiny vendored C function on x86-64 with large inputs; pick MeowHash for a clean SMHasher3 record, and XXH3, wyhash or rapidhash for small keys or portability.
+
+**Gotchas:**
+- Hash values changed between v1 (hand-written asm) and v2 (C intrinsics). rurban's 52401.48 MiB/s figure is for the v1 asm object; SMHasher3 benchmarks both versions (v2: 18.43 bytes/cycle; v1: 19.88).
+- The result is an __m128i, not an integer: store it with _mm_storeu_si128, and take the low 64-bit lane if you need a size_t hash, as rurban's wrapper does. The buffer parameter is a non-const void*.
+- falkhash.c defines main(), so compiling the file as-is into a program or library clashes with your own main(); extract the function.
+- Length is folded into the seed (high lane = seed + len + 1), which is what keeps zero-padded tails of different lengths apart. The only key is a 64-bit seed XORed into every block, so there is no DoS-resistance claim.
+
+**Status:** Abandoned since November 2015 (48 stars, one unanswered 2023 issue), but Unlicense/public domain (no patent grant) and a hash function of about 80 lines that is trivial to vendor; the last compilers the author reports are GCC 4.9.2, clang 3.5.0 and MSVC 2015.
+
+[repo](https://github.com/gamozolabs/falkhash) · [benchmark](https://github.com/rurban/smhasher/blob/master/README.md)
+
+##### FarmHash  `C++`  `MIT`  `active`  `Tier B`
+
+Google's CityHash successor. Its SSE4.1 32-bit hash is 3.9x City32 and ~6% faster than XXH3 on large x86-64 inputs.
+
+**Beats:** CityHash, xxHash (xxh3) — rurban's SMHasher README table (AMD Ryzen 5 3350G, CMake Release with -march=native, compiler version not stated) measured rurban's vendored copy of Google FarmHash32WithSeed at 22,136 MiB/s on 262,144-byte keys. That compares with 20,854 MiB/s for xxh3 (~1.06x, 32-bit vs 64-bit output) and 5,746 MiB/s for City32 (~3.85x). The same run shows FarmHash32 slower than xxh3 on 1-32 byte keys (46.75 vs 29.46 cycles/hash) and the seeded 64/128-bit FarmHash variants slower than xxh3/xxh128. No C++ std hash was compared, and FarmHash's own README and NEWS give no numbers.
+
+**Known shortcoming:** Only FarmHash32 wins: FarmHash64/128 are slower than xxh3, CityHash64 and xxh128, and small keys are slower than xxh3. Real development stopped in 2019 (2026 commits only merge old PRs).
+
+**Known shortcoming:** Only FarmHash32 wins (low 32 bits of SSE4.1 farmhashte, SIMD only from 512 B); seeded Hash64 runs scalar farmhashna. Small keys lose (46.75 vs xxh3 29.46 cycles) and wyhash beats it in bulk and small keys in the same run. Hash* output varies with flags/platform/NDEBUG; wrong hashes on FreeBSD (#37); only Fingerprint* is stable. Compile-time dispatch only, no NEON; seed 0x2b091701 maps to 0; Hash128WithSeed template does not compile. Used by TensorFlow; BigQuery FARM_FINGERPRINT = Fingerprint64.
+
+**How:** On x86-64 builds with SSE4.1, Hash32 returns the low 32 bits of farmhashte::Hash64. For inputs of 512 bytes or more, its Hash64Long loop reads 256-byte blocks as sixteen unaligned 128-bit loads and mixes them across twelve SSE registers with 64-bit adds, XORs, _mm_mullo_epi32 multiplies and _mm_shuffle_epi8 byte shuffles. It then reduces the state with the scalar farmhashxo hash. Shorter inputs, and every seeded 64- or 128-bit call, run CityHash-lineage scalar code instead: farmhashxo/na use 64-bit multiply-rotate-xor mixing, farmhashcc is CityHash v1.1.1 and farmhashmk is Murmur3-style. The variant is chosen at compile time from the -msse4.1/-msse4.2/-maes/-mavx macros, and NEWS says AVX encoding makes the SIMD path slightly faster.
+
+**Use it when:**
+- You must reproduce existing FarmHash values, such as BigQuery's FARM_FINGERPRINT (documented as FarmHash Fingerprint64, 'will never change') or other Google/TensorFlow-derived data, where the Fingerprint* functions are the portable contract.
+- You are moving C++ code off CityHash and want the same one-shot API style: Fingerprint128/Hash128 keep CityHash128 v1.1.1 output, and Hash32 on an x86-64 SSE4.1 build is about 3.85x City32's bulk throughput in the same SMHasher run.
+- In-process 32-bit hashing of large buffers (512 B and up) on x86-64 machines you build for with -msse4.1 or -mavx, where the hash is never persisted or sent across machines.
+- You already vendor it, for example through TensorFlow, whose build files pull in farmhash, and a ~6% bulk edge over XXH3 is enough reason not to add another dependency.
+
+**Skip it when:**
+- Small keys: 46.75 cycles/hash on 1-32 byte keys vs 29.46 for xxh3, 28.91 for wyhash and 22.04 for rapidhash, and 258.73 vs 220.07 cycles in SMHasher's hash-map column against xxh3. It also compiles to 11,489 bytes of code vs 744 for xxh3.
+- You need 64- or 128-bit seeded output: seeded FarmHash64 (12,930 MiB/s) and FarmHash128 (14,454 MiB/s) lose to xxh3 (20,854) and xxh128 (19,260) on the same run, and FarmHash64 even loses to City64 (14,390).
+- Stored or cross-machine hashes built on Hash*: output depends on CPU flags, pointer width, endianness and NDEBUG. Issue #37 (open) reports wrong Hash64/Hash128 values on FreeBSD, and rurban calls FarmHash 'not portable, too machine specific'.
+- ARM/aarch64 or builds without SSE4.1: src/farmhash.cc has no NEON code and falls back to the scalar farmhashmk/farmhashxo paths, so the measured win does not apply. Big-endian is 'only lightly tested'.
+- You need streaming/incremental hashing, hash-flooding resistance, or an actively developed library: there is no incremental API, the README disclaims cryptographic use, there is no tagged release (issue #31), and there have been no substantive code changes since 2019.
+
+**Integration:** source-drop · none (standard C/C++ headers; x86 intrinsic headers only when SSE/AES/AVX flags are enabled). An optional autoconf build can `make install` a library. · Not documented. The code avoids C++11 requirements (it falls back to <algorithm> for std::swap) and assumes __builtin_expect unless FARMHASH_NO_BUILTIN_EXPECT is defined. Open issue #6 reports that gcc 4.3 and older lack <immintrin.h>. MinGW and clang+libc++ C++17 build fixes were merged in 2018-2019. · Any 32/64-bit platform that allows unaligned reads (per the header). The fast path is x86-64 with SSE4.1, and AVX is slightly better. 32-bit x86 uses SSE4.2 (+AES-NI) variants. Other targets, including aarch64, get scalar code. Built mainly for little-endian.
+
+**Vs siblings:** On the same rurban run, wyhash beats FarmHash32 on both bulk (22,641 MiB/s) and small keys (28.91 cycles), with 64-bit output and portable results. xxHash's XXH3 is much faster on small keys and portable, and gxhash, falkhash and CLHash are faster in bulk. Pick FarmHash only when you need FarmHash- or CityHash-compatible values (Fingerprint64 as in BigQuery, or Fingerprint128 = CityHash128 v1.1.1) or already vendor it.
+
+**Gotchas:**
+- Hash()/Hash32/Hash64/Hash128 values change with build flags and NDEBUG. Without NDEBUG, FARMHASH_DEBUG=1 and DebugTweak scrambles every Hash* result, so debug and release binaries disagree. Persist only Fingerprint32/64/128.
+- Seeded and unseeded entry points run different algorithms. On x86-64 with SSE4.1, Hash32 and Hash32WithSeed use the SIMD farmhashte core, but only for inputs of 512 bytes or more. Hash64 uses farmhashte only if SSE4.2 is also enabled, while Hash64WithSeed and Hash64WithSeeds always use scalar farmhashna, which is why SMHasher's seeded FarmHash64 has 42% lower bulk throughput than FarmHash32. rurban marks unseeded Hash64 POOR ('misses on final avalanche') and leaves it out of the table.
+- CPU selection happens at compile time only: there is no cpuid check and no multiversioning in src/farmhash.cc, despite the README's hint. FARMHASH_ASSUME_* forces a path, and a binary built with -mavx/-msse4.1 will fault on CPUs without them. Calling a variant namespace such as farmhashte:: when its features were not compiled in hits FARMHASH_DIE_IF_MISCONFIGURED, which deliberately writes to address len%17 and crashes.
+- Hash32WithSeed has a known bad seed: SMHasher's BadSeeds test shows seed 0x2b091701 with a 16-byte all-zero key hashing to 0 (FAIL). Separately, the header's template Hash128WithSeed(const Str&, seed) calls a nonexistent 3-argument Hash128 and will not compile if instantiated, so use the (const char*, size_t, uint128_t) overload.
+
+**Status:** Marked active only because of the commit date: the 2026-06-05 commits merge a 2020 README rename (#39) and a 2018 'remove using namespace std' fix (#25). The last substantive code change was in 2019, there is no release tag and 15 issues are open. It is MIT-licensed and small enough to vendor as two files (farmhash.cc is 11,840 lines, mostly generated self-test tables).
+
+[repo](https://github.com/google/farmhash) · [benchmark](https://github.com/rurban/smhasher/blob/master/README.md)
+
+##### gxhash  `Rust`  `MIT`  `active`  `Tier B`
+
+AES-round Rust hash: about 1.5-2.35x XXH3's bulk throughput in SMHasher suites, but slower than XXH3 on keys under 32 bytes.
+
+**Beats:** xxHash (XXH3) — Independent suites tested the 3.x algorithm; neither states compiler or flags. rurban SMHasher on a Ryzen 5 3350G measured gxhash64 at 48,920 MiB/s bulk against 20,854 MiB/s for C xxh3 (about 2.35x), but 36.61 vs 29.46 cycles/hash on small keys. SMHasher3 (hardware not stated in its summary) measured 19.14 vs 12.82 bytes/cycle for XXH3-64 (about 1.5x) and 37.35 vs 30.69 cycles on 1-32 byte keys. The first-party chart (BuildJet 2-vCPU x86_64, last regenerated 2025-05-18) is against the pure-Rust twox-hash 1.6.3 XXH3 port. Read from pixels, it shows roughly 2.6-3.3x at 4-128 B and 5-7x from 256 B to 32 KiB, and on the same chart T1ha0 roughly ties gxhash above 4 KiB.
+
+**Known shortcoming:** 'Fastest at all sizes' is false: slower than XXH3 on short keys (rurban smhasher 36.61 vs 29.46 cycles; SMHasher3 37.35 vs 30.69). Wins in bulk only (rurban ~2.35x, SMHasher3 ~1.5x). First-party chart uses the Rust twox-hash XXH3 port, not C XXH3. Needs AES hardware instructions.
+
+**Known shortcoming:** Released 3.x (crates.io 3.5.0) has seed-independent multicollisions (#83 open, explicit pairs posted 2026-09-18); the 4.0 rewrite claiming a fix changes hash values and is not yet on crates.io, and all independent numbers are for 3.x. Needs AES instructions (no fallback or WASM). Deliberate out-of-bounds read (Miri UB, #123); debug-assertion panic (#111). T1ha0 about ties it above 4 KiB.
+
+**Independent measurement:** rurban/smhasher: small keys 36.61 vs XXH3 29.46 cycles, bulk ~2.35x XXH3; SMHasher3: 37.35 vs 30.69 cycles, bulk ~1.5x.
+
+**How:** Each 16-byte block is absorbed into a 128-bit SIMD lane with a single keyless AES round (AESENC on x86, AESE+AESMC on ARM). Inputs over 128 bytes run 4, 8 or 16 independent lanes, so the AES units stay busy (instruction-level parallelism), and the lanes are then folded together in a tree. Inputs of 17-128 bytes are read with overlapping unaligned loads from both ends, which avoids masking. Inputs under 16 bytes use one 16-byte load that deliberately reads past the end of the slice when that stays inside the same 4 KiB page (the 'read beyond' trick), with the padding bytes set to the length. The large-input path is kept out of line (inline(never), extern "C" so vectors pass in registers), which keeps the inlined code at each call site small. The optional nightly 'hybrid' feature uses VAES+AVX2 to process two lanes per instruction.
+
+**Use it when:**
+- Bulk hashing of buffers from a few hundred bytes up (dedup chunks, content keys, large string keys) on x86-64 with AES-NI or AArch64 with AES. rurban SMHasher has gxhash64 at 48.9 GB/s against 20.9 GB/s for xxh3 on a Ryzen 5 3350G.
+- Rust applications (not libraries) built with target-cpu=native whose HashMap keys are mostly strings. In rapidhash's hash-table suite (target-cpu=native), gxhash beats foldhash-f on AMD EPYC 9R14 (geomean 5.01 vs 5.24) and Xeon 8488C (4.73 vs 4.88), and rapidhash's notes call it 'a great choice' for AES-guaranteed, string-heavy use.
+- When you need a 128-bit hash at 64-bit cost: gxhash128 has the same construction and cost as gxhash64.
+- Mixed x86/ARM fleets that need the same hash value on both (the stability tests cover aarch64, x86_64 and x86_64-hybrid), as long as everyone stays on one major version.
+
+**Skip it when:**
+- Workloads dominated by short keys (under about 32 bytes). SMHasher3 has gxhash-64 at 37.35 avg cycles for 1-32 bytes against 30.69 for XXH3-64, and rurban has 36.61 cycles/hash against 29.46 for xxh3 and 22.04 for rapidhash.
+- Libraries, portable binaries, WASM or CPUs without AES. Without aes+sse2 (x86) or aes+neon (ARM) it is a compile_error; there is no fallback (issue #47, open since 2023), no WASM support (#7, open), and no runtime CPU detection.
+- Tables keyed by attacker-controlled input. The released 3.x line (crates.io 3.5.0) has seed-independent multicollisions (#83, still open): explicit 24-byte and 15-vs-16-byte colliding pairs were posted 2026-09-18. The 4.0 rewrite says it fixes this, but it was merged 2026-09-26, is not on crates.io, and has no independent analysis yet.
+- Safety-critical code, or code that must run clean under Miri. The README says the crate is not intended for safety-critical use. Miri reported UB on keys shorter than 16 bytes in 3.5.0 (#123, closed as intended), and #111 (open) reports a panic under debug-assertions in release builds on Apple Silicon.
+- Quality-sensitive uses such as sketches or MinHash. The SMHasher3 port of 3.x passes 226/250 tests, failing Sparse, TwoBytes, SeedZeroes, SeedSparse and Seed; rurban's table flags it 'oob UB, AES only'.
+
+**Integration:** crate · rustversion 1.0 (compile-time proc macro; the README nevertheless advertises 0 dependencies); std optional (default feature) · Not declared (Cargo.toml has no rust-version). CI builds on Rust 1.65, 1.72 and 1.78. The hybrid feature requires nightly (feature(stdarch_x86_avx512)). · x86/x86-64 with AES-NI+SSE2 (uses SSSE3 when enabled); ARM/AArch64 with AES+NEON; hybrid needs x86-64 VAES+AVX2 on nightly. Any other target fails to compile.
+
+**Vs siblings:** Pick gxhash over xxHash (XXH3), wyhash or aHash when you are in Rust, can guarantee AES hardware, and mostly hash inputs of a few hundred bytes or more. There it is about 2.2-2.35x xxh3 and wyhash and about 5x ahash64 in rurban's bulk column. Prefer rapidhash or foldhash for libraries, portable builds and small-key or integer-heavy hash tables: rapidhash-f leads its native hash-table geomeans (e.g. 4.46 vs 4.73 on Xeon 8488C), and plain rapidhash passes all SMHasher3 tests.
+
+**Gotchas:**
+- Version skew: GitHub main is 4.0.0, merged 2026-09-26 with a new construction and new hash values, but crates.io still serves 3.5.0 (2025-03-11). The independent SMHasher/SMHasher3 numbers and the published collision pairs all concern 3.x.
+- The repo's .cargo/config.toml (target-cpu=native) applies only inside the repo. Dependents must set RUSTFLAGS themselves (-C target-feature=+aes,+sse2 or target-cpu=native), and native builds can SIGILL on older CPUs (closed #66 was a SIGILL report).
+- For inputs under 16 bytes it reads up to 15 bytes past the end of the slice (page-checked, now via inline asm so Miri no longer sees it). Tools that audit memory reads, and code with guard-page tricks, should know this.
+- Hashing through the Hasher trait gives different values from gxhash64/gxhash128 on the same bytes. Enabling the 'deterministic' feature anywhere in the dependency graph (Cargo unifies features) fixes GxBuildHasher's seed at 42 for every map.
+
+**Status:** Actively maintained by one author: the 4.0 rewrite (claimed 1.02-1.35x faster than 3.5.0 on an M5 Pro) landed on main 2026-09-26 but is not yet released. 3.5.0 has about 1.33M crates.io downloads; MIT-licensed, and the source is about 1,300 lines including tests, small enough to vendor, but 17 issues are open, including the DoS report #83.
+
+[repo](https://github.com/ogxd/gxhash) · [benchmark](https://github.com/rurban/smhasher)
+
+##### HalftimeHash  `C++`  `Apache-2.0`  `abandoned`  `Tier B`
+
+Keyed almost-universal C++ hash for long strings; ~1.3-1.4x xxh128 on 256 KiB inputs with AVX-512.
+
+**Beats:** xxHash (xxh128) — In the WADS 2021 paper's SMHasher speed test on 256 KiB strings on an Intel i7-7800X (AVX-512, Clang++ 11.0.1, SMHasher build flags unstated), HalftimeHash16 reached 16.9 bytes/cycle and HalftimeHash24 15.7, against 12.2 for xxh128 and 12.8 for xxh3 (about 1.39x and 1.29x over xxh128); HalftimeHash40 was slower at 10.0. The repo's own -O3 -march=native harness shows it beating clhash and UMASH only on inputs over about 1.5 KB. On an AMD EPYC 7R32 (no AVX-512), the paper reports up to 2x over clhash and UMASH using 256-bit blocks.
+
+**Known shortcoming:** 'Up to 2x' holds on AMD only; SMHasher shows HH16/HH24 ~1.3-1.4x over xxh128 (16.94/15.68 vs 12.16 bytes/cycle) and HH40 slower; flags for the xxh128 run unstated. Main branch untouched since 2022-05-28 (a supercop branch was updated 2025-03-08). Long-input hash: needs a large random key and is not suited to short keys.
+
+**Known shortcoming:** Wins only above ~1.5 KB (clhash/UMASH are faster below ~1 KB); keyed hash needs a ~69 KiB caller-supplied key; one-shot only. arm64 build broken on main (undeclared V2Neon/V3Neon/V4Neon, #1; fix PR #2 unmerged). A Sept 2026 audit (#3) found the advanced 24-byte functions collide at ~2^-32 rather than the claimed ~2^-96 (paper proof needs repair; public Style wrappers certified at 63 bits) and an out-of-bounds index in TabulateAfter.
+
+**Independent measurement:** HalftimeHash smhasher-speed.txt: HH16 16.94, HH24 15.68 vs xxh128 12.16 bytes/cycle.
+
+**How:** It builds on Nandi's Encode-Hash-Combine (EHC) and the Badger tree hash. Input blocks are expanded with a small erasure code, hashed with NH (32x32->64-bit multiplies on vector lanes), then combined by multiplying with small integer matrices implemented as shifts and adds, so extra output width costs few extra multiplications. Leaves feed a fanout-8 tree of NH nodes and a final Toeplitz NH plus tabulation step. There are no 64x64->128 or carryless multiplies, so every step maps onto SSE2/AVX2/AVX-512 _mul_epu32 (and NEON vmull_u32).
+
+**Use it when:**
+- Hashing long buffers (roughly 1.5 KB to a few MB) where throughput matters: in the repo's i7-7800X data HalftimeHash24 runs about 54 B/ns at 128-560 KB, against about 35 B/ns for clhash and UMASH.
+- When you need a keyed hash with a stated collision bound (universe collapsing before a short-input hash, one-time authentication, or DoS-resistant bucketing of large blobs) rather than an unkeyed heuristic hash.
+- x86-64 builds you compile with -march=native or an explicit AVX-512/AVX2 target; use Style512 on AVX-512 and Style256 on AVX2-only chips such as AMD Zen 2.
+- Targets without fast 64-bit widening multiply, since the design deliberately uses only 32x32->64-bit products.
+
+**Skip it when:**
+- Short keys and hash-table lookups: in the repo's size sweep HalftimeHash24 is slower than clhash and UMASH below about 1 KB (at 229 bytes, 10.9 B/ns vs 17.6 and 19.1), and every call reads from a large key array.
+- arm64 builds: on main the NEON dispatch references undeclared V2Neon/V3Neon/V4Neon, so example.cpp fails to compile with Apple clang 17 (issue #1; the fix in PR #2 is still unmerged).
+- Anything relying on the advanced 24-byte functions (advanced::V1<3> to V4<3>): an external audit (issue #3) shows Encode3 lacks its intended code distance, giving about 2^-32 collision probability for a specific message pair instead of about 2^-96.
+- When you need streaming/incremental hashing, a portable MSVC build, or runtime CPU dispatch; none are provided.
+- When you want an actively maintained dependency: no default-branch commit since 2022-05-28, and open correctness reports have no fixes merged.
+
+**Integration:** header-only · none (umash and StronglyUniversalStringHashing submodules are only for the benchmarks) · C++14 (Makefile uses -std=c++14); paper used Clang++ 11.0.1, repo also has GCC 10 result logs; relies on GCC/Clang vector-subscript extensions and #pragma GCC unroll · x86-64 (SSE2, AVX2 or AVX-512 selected at compile time) plus a scalar fallback; arm64 NEON path currently fails to compile on main
+
+**Vs siblings:** Pick it over UMASH or CLHash when inputs are consistently over about 1.5 KB and you can build for AVX2/AVX-512; those two are faster below about 1 KB and are better maintained. Pick xxHash (XXH3/XXH128) instead when you need a small seed, short-key speed, streaming or broad platform support, not a provable collision bound.
+
+**Gotchas:**
+- You must generate and keep about 69 KiB of random key material (kEntropyBytesNeeded). The example seeds it from a default-constructed mt19937_64, which is fixed and public; use a real random source if you need the collision guarantee.
+- The ISA is picked at compile time only; there is no runtime dispatch. Each Style function fixes its block width, so Style512 still works on AVX2 or SSE2 (emulated with repeated blocks) and gives the same outputs, only more slowly.
+- TabulateAfter indexes table[8*(i+1)] through a reference declared [1+width][256]. That is out-of-bounds by the C++ type rules, and UBSan flags it on a single Style64 call (issue #3), even though the tested builds compute the intended addresses.
+- The paper's headline bound (more than 83 bits for HalftimeHash24) rests on a proof that issue #3 says needs repair. The public Style wrappers were separately certified at a 63-bit bound, with input-length caps of about 2.76 GB x 1/2/4/8 for Style64/128/256/512.
+
+**Status:** No commits on main since 2022-05-28; the author replied on the September 2026 audit issues but merged no fixes. It is Apache-2.0 and about 1,200 lines in one header, so vendoring is easy, but apply the NEON dispatch fix (PR #2) yourself and avoid the advanced 24-byte functions.
+
+[repo](https://github.com/jbapple/HalftimeHash) · [benchmark](https://github.com/jbapple/HalftimeHash/blob/main/halftime-hash.tex)
+
+##### lanehash  `Rust`  `MIT OR Apache-2.0`  `active`  `Tier B`
+
+Rust SIMD non-cryptographic 64/128-bit hash with a C99 port. First-party Zen 4 numbers show 1.5-2.2x xxh3 at 1-64 KiB, but it is slower on tiny keys.
+
+**Beats:** xxHash (xxh3), rapidhash — The first-party harness on a Ryzen 5 7600 (cargo release, fat LTO, AVX-512 dispatch, rustc unstated, xxh3 from the xxhash-rust 0.8.18 crate) measured the default algorithm at 27.0 vs 18.5 B/cycle at 64 KiB (+46%) and 21.8 vs 12.8 at 4 KiB, but slower below 32 B. The repo's separate C-reference run (gcc 13) puts upstream C xxh3 at about 13 B/cycle at 64 KiB, so the Rust-port baseline does not look weak. The only independent data is rurban SMHasher (CMake Release, -march=native, compiler unstated), and it covers only the AES variant: 107,602 vs 45,762 MiB/s for xxh3 on an EPYC 9554P (about 2.35x).
+
+**Known shortcoming:** Only the maintainer's SMHasher runs exist (EPYC 9554P: AES variant 107,602 vs xxh3 45,762 MiB/s); the README's SMHasher row is not from the Ryzen 3350G it implies. Top speed needs the AES variant (hardware AES).
+
+**Known shortcoming:** Default-algorithm numbers are first-party only (Zen 4, rustc unstated); the only independent data (rurban) is for the AES variant, whose naming differs from the repo. crates.io has only 0.1.0 (root = AES function); README describes an unreleased 0.2 with a breaking output change. 1 star, created 2026-09-18. Slow on tiny keys and 65-128 B (70.6 vs xxh3 39.7 cycles); slower than xxh3 on 64 MiB DRAM-resident input.
+
+**Independent measurement:** Maintainer SMHasher run, EPYC 9554P: lanehash-AES 107,602 vs xxh3 45,762 MiB/s bulk.
+
+**How:** Inputs over 64 bytes are split into 64-byte stripes dealt round-robin to 8 independent chains of 8 64-bit lanes (512-byte blocks). Each lane step is an NH-32-style `x = A ^ w; A = x + lo32(x) * hi32(x)`, a 32x32->64 multiply that maps onto vector multiply units. Sixty-four independent lanes keep AVX-512/AVX2 pipelines busy and hide multiply latency. The lanes are merged with one extra step per chain and finished with 64x64->128 multiply-folds. Inputs of 0-64 bytes use a scalar wyhash/rapidhash-style 'protected mum' multiply-fold path. The AES variant replaces the lane step with AESENC rounds (two lanes per ymm with VAES), and the backend is detected once and cached in an atomic.
+
+**Use it when:**
+- Rust bulk hashing of 1 KiB-1 MiB buffers on x86-64 with AVX2/AVX-512: first-party Zen 4 numbers are 13.6 / 21.8 / 27.0 bytes/cycle at 1 / 4 / 64 KiB, against 6.3 / 12.8 / 18.5 for xxh3
+- Medium keys around 256 B in throughput mode: 42-45 cycles/hash vs 101 for xxh3 and 72 for rapidhash v3 on the same Ryzen 5 7600
+- Checksums or dedup keys that must be identical across x86, aarch64, wasm and C. Every backend and the C port are differentially tested against the scalar reference, and hash128 did 4 KiB page dedup in 526 cycles/page vs 588 for xxh3-128
+- Maximum bulk speed on VAES CPUs (Zen 4 class) via `lanehash::aes`: rurban SMHasher EPYC 9554P shows 107,602 MiB/s vs xxh3 45,762
+- A general Rust HashMap hasher: the author's map workloads show roughly half of std SipHash-1-3's cycles per op and parity with foldhash/rapidhash on string keys
+
+**Skip it when:**
+- Tiny keys: at 4-16 B it takes 11.4-12.0 cycles/hash vs 9.5-10.1 for xxh3 in throughput mode, and 25.4 vs 23.5 cycles for rapidhash v3 in dependent-chain latency
+- Latency-bound keys of 65-128 B: they switch to the long path, and latency-final.csv shows 70.6 cycles at 128 B vs 39.7 for xxh3 and 44.1 for rapidhash v3
+- DRAM-bound streaming such as big-file checksums: the README reports a 64 MiB checksum at 45.8 GB/s, below xxh3's 50.9 and gxhash's 49.9
+- Production code that needs a mature, reviewed format. The repo was created 2026-09-18 and has 1 star and one author, the crate-root algorithm was swapped a week later, 0.2.0 is still 'unreleased', and quality evidence is statistical only (SMHasher, SMHasher3, Miri) with no security claims
+- Scalar-only targets, or no_std builds without target-feature flags. Scalar execution is 'substantially slower', no_std x86-64 picks the backend at compile time only (SSE2 by default, about 14.5 B/cycle at 64 KiB), and the C port has no NEON backend
+
+**Integration:** crate · none at runtime (libc is a dev-dependency); an optional self-contained C99 source-drop lives in lanehash-c/ · Rust 1.89 (edition 2021); the C port is C99 for GCC/clang, with unsigned __int128 optional via LANEHASH_NO_INT128 · Any Rust target. SIMD backends: x86-64 SSE2/AVX2/AVX-512F (runtime-detected with std), aarch64 NEON, wasm32 SIMD128. The AES variant uses AES-NI/VAES/Armv8 AES, or T-table software AES elsewhere. The C port picks x86 SIMD at compile time and uses scalar code elsewhere.
+
+**Vs siblings:** Pick it over xxHash (xxh3) and rapidhash for 256 B-1 MiB buffers in Rust on AVX2/AVX-512 hardware, or when you need bit-identical results across x86, ARM, wasm and C. Pick it over gxhash when you cannot rely on AES, since the default algorithm needs none; with VAES, the AES variant only roughly ties gxhash (107,602 vs 103,530 MiB/s on EPYC 9554P).
+
+**Gotchas:**
+- Version mismatch: the README says `lanehash = "0.2"`, but crates.io only has 0.1.0 (2026-09-18, 15 downloads), whose crate root is the AES function. 0.2 changes the output of `lanehash::hash64`, so use a git dependency or pin exactly and check the verification values (0xD048C22B default, 0x9FF60BEF AES).
+- Naming confusion: rurban SMHasher's `lanehash64`/`lanehash128` rows are the AES variant (verification 0x9FF60BEF, log header 'AES lanes + mum short path'). The repo now uses `lanehash64` for the new default and `lanehash_aes64` for AES, and 'lanehash' rows in docs/bench/TABLES.md also mean AES.
+- HashMap output (FixedState/RandomState via LaneHasher) is a different function from hash64 and may change between minor releases. Do not persist it.
+- Without hardware AES, the AES variant falls back to T-table software AES (data-indexed table lookups), which is much slower. Use the default algorithm on such targets.
+
+**Status:** Brand new and in flux: created 2026-09-18, 1 star, last commit 2026-09-23, a breaking algorithm swap in its first week and 0.2.0 unpublished on crates.io. It is MIT OR Apache-2.0 with no dependencies, and the C99 port is small enough to vendor.
+
+[repo](https://github.com/ccipherx/lanehash) · [benchmark](https://github.com/ccipherx/lanehash/blob/main/README.md)
+
+##### Meow hash  `C`  `Zlib`  `abandoned`  `Tier B`
+
+128-bit AES-NI bulk hash for x86-64 file and asset hashing; about 3x XXH64's large-buffer throughput, roughly tied with XXH3.
+
+**Beats:** XXH64 (legacy xxHash), CityHash64, wyhash — SMHasher3 measured the bulk speed of its lightly modified MeowHash copy single-threaded on 262,017-262,144-byte keys at random alignment: 12.43 bytes/cycle (40.5 GiB/s at a nominal 3.5 GHz), against XXH-64 3.99, CityHash-64 4.75, wyhash 6.98 and XXH3-64 12.82. The copy is identical to upstream at seed 0 and adds a 64-bit seed in the nonce slot; CPU model and compiler are not named. Separately, xxHash's wiki (i7-9700K, clang 10, -O3 -mavx2) has Meow at 58.2 GB/s, about 3x XXH64's 19.4 GB/s and level with XXH3-AVX2's 59.4 GB/s.
+
+**Known shortcoming:** Beats only legacy XXH64/CityHash64/wyhash in bulk: in the same SMHasher3 table XXH3-64 is about as fast (12.82 vs 12.43 bytes/cycle), and short keys are ~2x slower. Security notice downgraded to level 1: do not use as a MAC. Needs AES-NI; last commit 2021-07-02.
+
+**Known shortcoming:** Cryptanalysed in 2021 (Schmidt-Nielsen): key-free differentials at 2^-45, key recovery at 2^49 and full 128-bit collisions (#80); treat as non-cryptographic only. Bulk-only speed: ~61.5 cycles on short keys vs ~30 for wyhash/XXH3, and XXH3 ties in bulk (xxHash wiki 59.4 vs 58.2 GB/s). v0.5 is x64 AES-NI only with no ARM/C fallback or runtime check (#86); reads past the buffer end (ASan, #79 wontfix). Stuck at the v0.5 'proposal' since 2021.
+
+**Independent measurement:** SMHasher3 summary: bulk 12.43 B/cycle vs XXH3-64 12.82, wyhash 6.98, CityHash-64 4.75, XXH-64 3.99.
+
+**Independent measurement:** xxHash wiki: XXH3 59.4 vs Meow 58.2 GB/s bulk.
+
+**How:** There are eight 128-bit accumulator lanes. Each 32-byte chunk drives two AES decryption rounds (aesdec) on two lanes, plus 64-bit adds and XORs into others of the same data reloaded at 1-byte offsets. The main loop consumes 256 bytes per iteration, which the authors describe as 16 AES rounds per 256 bytes, with a design target of 16 bytes/cycle. Above about 256 KB (0x3ff blocks) the loop switches to a variant with explicit prefetcht0 4 KB ahead. Tail bytes are fetched with one unaligned 16-byte load plus a pshufb/pand mask, which may read past the end of the buffer but never crosses a page. Finalisation is a fixed 12-step AES/add/xor shuffle that folds eight lanes into one, so every input under 32 bytes costs about the same (about 61 cycles).
+
+**Use it when:**
+- Change detection, deduplication and cache keys for large files or assets (tens of KB to GB) on x86-64 CPUs with AES-NI. SMHasher3 measures about 12.4 bytes/cycle at 256 KB, against 4.0 for XXH64 and 7.0 for wyhash.
+- Cases that need a full 128-bit hash of data you control, where accidental collisions must be negligible. Meow passes all 250 SMHasher3 tests at 32, 64 and 128 bits, while XXH3-128 fails 36 and AquaHash fails 55 in the same summary.
+- Replacing SHA-1 or MD5 used purely as a content fingerprint in a trusted build or asset pipeline, where there is no adversary.
+- Codebases that can vendor one zlib-licensed header and already compile with -maes -mssse3 (or MSVC on x64).
+
+**Skip it when:**
+- Hash-table keys or anything under about 64 bytes. SMHasher3 puts Meow at about 61.5 cycles/hash for 1-32 byte keys, against 29.3 for wyhash and 30.7 for XXH3-64.
+- Any adversarial setting: MACs, hash-flooding-resistant tables, or content addressing an attacker can influence. Peter Schmidt-Nielsen's 2021 cryptanalysis found a key-independent differential with probability about 2^-45, key recovery in about 2^49 queries, and SAT-built full 128-bit collisions for a known key (issue #80). The README downgraded v0.5 to 'level 1' and points to SipHash.
+- Non-x86 targets, CPUs without AES-NI, or code that needs runtime dispatch. v0.5 ships only the x64 AES-NI header, with no ARM, C or runtime-detection path (issue #86 is still open).
+- Projects that want a maintained dependency with a stable spec. v0.5 is still labelled a 'proposal' and never reached v1.0. The last code change was in 2021, and the NoHatCoder 0.6 candidates (#82) were never merged.
+- Plain bulk speed on modern x86 where XXH3 is an option. xxHash's own benchmark (i7-9700K, clang 10, -O3 -mavx2) has XXH3-AVX2 at 59.4 GB/s against Meow at 58.2 GB/s, and SMHasher3 has XXH3-64 at 12.82 against Meow's 12.43 bytes/cycle, with XXH3 about 2x faster on small inputs.
+
+**Integration:** header-only · none (compiler intrinsics headers <x86intrin.h> / <intrin.h> only) · C or C++ compiler with AES-NI and SSSE3/SSE4.1 intrinsics; build scripts use clang++ -O3 -maes -mavx (or -msse4) and MSVC cl -O2. GCC needs -maes -mssse3 at minimum or it fails with 'inlining failed ... target specific option mismatch' (#70). No minimum version is documented. · x86-64 with AES-NI (32-bit x86 compiles but is untested, and MeowU64From is broken there, #74); Windows/MSVC, Windows/clang, Linux/clang per README; no ARM or portable fallback in v0.5
+
+**Vs siblings:** Choose Meow over xxHash (XXH3/XXH128) or AquaHash when you hash large trusted buffers on x86-64 with AES-NI and want a 128-bit result that passes every SMHasher3 test; XXH3 matches its bulk speed but fails 27-36 SMHasher3 tests, and AquaHash is faster in bulk (15.84 bytes/cycle) but fails 55. Choose wyhash, rapidhash or a5hash for short keys and hash tables, and xxHash when you need portability, an integer seed or an actively maintained library.
+
+**Gotchas:**
+- Reads up to 15 bytes past the end of the input (without crossing a 4 KB page) and masks them off. ASan reports this as global-buffer-overflow (#79, closed as 'not a buffer overflow'); the PR to add an ASan guard (#83) is unmerged, so exclude the function from ASan yourself.
+- The input and seed parameters are non-const void* (a const PR was merged and then reverted, #71/#72; #78 is open), so C++ callers must cast away const.
+- Hash values changed between v0.2, v0.3, v0.4 and v0.5, and the archived mollyrocket.com/meowhash docs describe the older API (meow_intrinsics.h, MeowHash_Accelerated, an ARM and C version) that is not in the v0.5 header. The live site is gone (#87), and the .travis.yml still references the removed headers.
+- MeowU64From/MeowU32From require a compile-time-constant lane index (_mm_extract_epi64); on 32-bit builds the macro ignores the index and always returns the low 64 bits (#74, open).
+
+**Status:** Abandoned: the last commit (2021-07-02) only added the security notice, and v0.5 never left 'proposal' status. It is zlib-licensed, a single 744-line header that is easy to vendor, has 1.8k stars and 22 open issues, and is not archived.
+
+[repo](https://github.com/cmuratori/meow_hash) · [benchmark](https://gitlab.com/fwojcik/smhasher3/-/blob/main/results/README.md)
+
+##### MuseAir  `Rust`  `MIT OR Apache-2.0 for the Rust crate (Cargo.toml, README); CC0-1.0 for the algorithm and the museair.cpp reference (README)`  `active`  `Tier B`
+
+Portable wide-multiply Rust hash: about 1.9-2.2x XXH64 and 1.1-1.3x wyhash on bulk data; XXH3 is faster in SMHasher3.
+
+**Beats:** xxHash (XxHash64) and wyhash — The first-party Criterion bench (benches/hashes.rs) ran on a Ryzen 7 5700G locked at 4.0 GHz, with no rustc version stated and no custom Cargo profile (so no LTO). At 256 KiB it measured BFast at 32.33 and Standard at 28.06 GiB/s, against 14.76 for XXH64 via the Rust twox-hash 2.1.2 crate (about 2.2x and 1.9x) and 24.67 for wyhash-v4.2 via wyhash-final4 (about 1.31x and 1.14x). At 256 B the figures are 18.7 and 16.9 against 10.7 and 17.7. Independent SMHasher3 data for v0.3 (hardware not stated in its summary) points the same way, 8.64/7.19 bytes/cycle against 3.99 for XXH-64 and 6.98 for wyhash, but has XXH3-64 at 12.82.
+
+**Known shortcoming:** Small-key benchmark omits XXH64 and wyhash; SMHasher3 tested v0.3, not current v2. Numbers are in plot-bench-*.py scripts: BFast 32.33 / Std 28.06 GiB/s vs wyhash 24.67, XXH64 14.76.
+
+**Known shortcoming:** XXH3 beats it in SMHasher3 bulk (12.82 vs 8.64 bytes/cycle); slower than rapidhash at 16 bytes and below. SMHasher3 upstream carries deprecated v0.3, which has probability-1 seed-independent collisions (#3/#4); the v2 pass is self-run only, and a fixed 32-byte pair still collides for ~2^-17.45 of seeds; author says no further hardening. No BuildHasher; no standalone C/C++ (museair.cpp is an SMHasher3 plug-in). rustc/flags not stated.
+
+**Independent measurement:** plot-bench scripts: BFast 32.33, Std 28.06 GiB/s vs wyhash 24.67, XXH-64 14.76 (bulk).
+
+**Independent measurement:** SMHasher3: MuseAir 8.64 vs XXH3 12.82 bytes/cycle bulk.
+
+**How:** The core primitive is the 64x64->128-bit wide multiply used by wyhash, rapidhash and komihash, arranged as a 'circular accumulator'. Six u64 state words consume 96-byte chunks: each adjacent pair of words absorbs two input words and is multiplied, and the high half of each product feeds the next word, wrapping around. That costs one multiply and about three XORs per 16 bytes, and the six multiplies are independent enough for instruction-level parallelism without splitting the input into separate lanes. BFast overwrites state words with the product halves and unrolls two chunks per iteration. Standard subtracts the products into the state instead, so a zero product cannot erase it, at a cost of about 13% bulk speed (28.06 vs 32.33 GiB/s). Inputs of 32 bytes or less take a branch-light short path (three to five multiplies for the 64-bit hash).
+
+**Use it when:**
+- Persisted checksums or content keys that must match across platforms (file formats, protocols, dedup) where you would otherwise use XXH64. At 256 KiB on a Ryzen 7 5700G at 4.0 GHz it runs 28.06 (Standard) or 32.33 (BFast) GiB/s against 14.76 for XXH64.
+- Portable or no_std Rust targets where AES/SIMD hashes (gxhash, aHash's AES path) are not an option, or where you want compile-time hashing (const fn) and zero unsafe code.
+- Keys of 17-32 bytes. There BFast takes about 4.27-4.52 ns against about 5.3 ns for rapidhash-v3 in the first-party bench, and SMHasher3 (v0.3) puts its 1-32 byte average at 26.28 cycles against 30.69 for XXH3-64 and 29.31 for wyhash.
+- Checksums with a public or fixed seed, where blinding multiplication (a zero multiplicand wiping state) is a concern with wyhash/rapidhash. The Standard variant is designed to be immune, and BFast limits the damage to the most recent 8 bytes.
+- Cheap 128-bit output: MuseAir-128 matches the 64-bit version in bulk (28.07 vs 28.06 GiB/s at 256 KiB).
+
+**Skip it when:**
+- Hash tables fed untrusted keys on servers. There is a single seed and no secret, and the author says it is unsuitable for direct server use and points to foldhash/aHash (Rust) or wyhash/rapidhash (C/C++). A fixed 32-byte pair collides for about 2^-17.45 of random seeds on v2 (issue #4), and the author has said he will not investigate v2 further.
+- Maximum bulk throughput on SIMD/AES hardware. SMHasher3 has XXH3-64 at 12.82 bytes/cycle and gxhash-64 at 19.14, against 8.64 for MuseAir-BFast (v0.3).
+- Tiny keys (16 bytes or less). rapidhash-v3 takes 2.76-3.02 ns there, against 3.26-3.76 ns for MuseAir and 3.01-3.51 ns for BFast.
+- C/C++ projects. There is no standalone C/C++ library: museair.cpp is an SMHasher3 plug-in that needs SMHasher3's headers, and the third-party museair-cpp port predates v2.
+- Anything that needs a track record. It has 94 stars, about 24k downloads and a single author; the algorithm went v0.3 -> v1 (3 days) -> v2 in July 2026, and every crate version before 0.6.0 is yanked.
+
+**Integration:** crate · none (the default std feature is optional) · Rust 1.77.0 (declared rust-version; MSRV bumps are treated as breaking changes) · any Rust target; pure scalar code with no target features. Performance assumes a fast 64x64->128 multiply ('most 64-bit architectures'); 32-bit performance is not documented.
+
+**Vs siblings:** Pick MuseAir over wyhash or rapidhash when you need a portable, persisted checksum with a public seed: Standard is built to resist blinding multiplication, and BFast still edges rapidhash-v3 in bulk (32.33 vs 29.84 GiB/s at 256 KiB). Choose xxHash (XXH3) or gxhash for raw bulk speed on SIMD/AES hardware and foldhash or aHash for Rust HashMaps. If you want MuseAir itself, use this crate rather than the museair-cpp port, which was last pushed in Feb 2026, before v2 existed.
+
+**Gotchas:**
+- Only algorithm v2 (crate 0.6.0, 2026-07-13) is supported. The SMHasher3 upstream entry that most people cite (250/250 pass) measures the deprecated v0.3, which has seed-independent collisions with probability 1 (#3, #4). The 252/252 SMHasher3 pass for v2 comes from the author's own logs in results/.
+- 64-bit bfast::hash with a fixed seed: for 9-16 byte inputs there is always a fixed 8-byte prefix that makes bytes 9-16 irrelevant. The README says to use bfast::hash128_folded instead.
+- The 64-bit seed is spread into the long-input state by masking (seed & 0xAAAA..., seed & 0x5555...) rather than mixed in. orlp called this weak against side-channel seed recovery (#3), and a 40-byte pair collides for all 2^32 seeds whose 0xAAAA... bits are zero (#4).
+- The docs note that the incremental Hasher is slower than in-memory hashers when used behind std's Hasher trait, and you must write your own BuildHasher to use it in a HashMap.
+
+**Status:** The algorithm was finalized as v2 in July 2026 (last commit 2026-07-17), with output promised stable but no further hardening planned. The crate is dual MIT/Apache-2.0 (declared, with no LICENSE files in the repo) and the algorithm and museair.cpp are CC0. It is a single ~1,200-line file with zero dependencies, easy to vendor; 5 crates depend on it.
+
+[repo](https://github.com/eternal-io/museair) · [benchmark](https://github.com/eternal-io/museair/blob/master/results/plot-bench-bulkdata.py)
+
+##### NMHASH (NMHASH32X)  `C`  `BSD-2-Clause`  `stale`  `Tier B`
+
+Header-only 32-bit seeded C hash built on 16-bit SIMD multiplies; about 2x XXH64 bulk throughput with AVX2, weak SMHasher3 quality.
+
+**Beats:** xxHash64 — SMHasher3's 262,144-byte bulk test on a Ryzen 9 3950X pinned at 3.5 GHz measured the AVX2 build of NMHASH32 v2 at 25.44 GiB/s (7.81 bytes/cycle; NMHASH32X 25.50 GiB/s) against 13.02 GiB/s for XXH64, about 1.95x; the compiler and flags are not stated. rurban/smhasher's older v1 run shows only 12,676 vs 11,177 MiB/s, about 13%.
+
+**Known shortcoming:** The 25.44 GiB/s figure is nmhash32, not NMHASH32X, and there is no NMHASH64. SMHasher3 marks both as FAIL (nmhash32 172/250, nmhash32x 150/250 tests passed). rurban margin over xxHash64 is only ~13-17%.
+
+**Known shortcoming:** 32-bit output and 32-bit seed only (by design, issue #2). Scalar path type-puns and has uint16 x uint16 signed-overflow UB; wrong values on macOS arm64 (rurban #294); no NEON; SIMD level fixed at compile time. The rurban table (and the Fortran stdlib port) use v1, not current v2, so the ~13% rurban margin is stale; XXH3 is faster in the same run.
+
+**Independent measurement:** SMHasher3: nmhash32 25.44 vs XXH-64 13.02 GiB/s bulk.
+
+**How:** The bulk path keeps 64 lanes of 32-bit accumulators (two 128-byte arrays) and consumes 256 bytes per round. Each round uses only invertible xor/add, xorshift and 16x16->16 lane multiplies (_mm_mullo_epi16 / _mm256_ / _mm512_ variants), so one AVX2 instruction multiplies 16 lanes; the published speedup pits this vectorized build against a scalar XXH64. SSE2, AVX2 or AVX-512BW code is picked at compile time from predefined macros. The scalar fallback is written breadth-first so GCC can auto-vectorize it (the author puts this at about 80% of the hand-vectorized speed), and short keys take length-bucketed paths (0-4, 5-8, 9-32 and 33-255 bytes) with hash-prospector-style mixers.
+
+**Use it when:**
+- You need a seeded 32-bit hash over large buffers (256 B and up) on x86-64 and can build with -mavx2 or AVX-512BW. SMHasher3 measures about 7.8 bytes/cycle: roughly 2x XXH64 (3.99) and 3.9x XXH32 (2.00), the same-width baseline.
+- Short keys where 32 bits of output is enough: NMHASH32X averages 39.77 cycles/hash on 1-31-byte keys in SMHasher3, against 52.60 for XXH64 and 44.38 for XXH32. NMHASH32 is slower here, at 52.79.
+- Targets where 16-bit lane multiplies are cheap but wide multiplies are not. Apart from NMHASH32X's short-key paths, the core uses only 16x16->16 multiplies plus 32-bit add, xor and shift.
+- You want the same hash value on little- and big-endian machines. All loads go through NMH_readLE32/NMH_readLE16 byte-order normalization, and the Fortran stdlib port documents identical results on all architectures.
+
+**Skip it when:**
+- Quality-sensitive uses such as hash tables fed structured keys, sketches or dedup. SMHasher3 marks NMHASH FAIL with 78 of 250 tests failed and NMHASHX with 100 (Sparse, Permutation, TwoBytes, PerlinNoise, SeedBlockOffset and others), against 9 for XXH64. rurban's own nmhash32 log shows a 181x collision excess on PerlinNoise even though its table row lists no problems.
+- Anything that needs more than 32 bits, such as fingerprints, content addressing or very large tables. The author confirmed in issue #2 that both output and seed are fixed at 32 bits.
+- Non-x86 targets, especially Apple Silicon. There is no NEON path, and the scalar code produced wrong verification values for both variants on macos-14-arm64 in rurban/smhasher CI (issue #294).
+- Maximum throughput or small-key latency. In the same SMHasher3 run, XXH3-64 reaches 12.82 bytes/cycle (42.21 GiB/s), MeowHash.32 12.44 and AquaHash 15.84. On 1-31-byte keys wyhash (29.31 cycles) and a5hash (26.91) are much faster, and both fail fewer tests.
+- Portable x86 binaries: the SIMD level is fixed at compile time with no runtime CPU dispatch. An -mavx2 build will not run on pre-AVX2 CPUs, and a baseline build gets only 128-bit SSE2 lanes.
+
+**Integration:** header-only · none (stdint.h and string.h, plus x86 intrinsic headers when SSE2/AVX2 is enabled) · C99, or C++ (pre-C++11 handled via __STDC_CONSTANT_MACROS). Has code paths for GCC, Clang, MSVC, ICC and SDCC; no minimum compiler versions are documented. · Any target via the scalar path (little- or big-endian). Hand-written SIMD exists only for x86/x86-64 (SSE2, AVX2 or AVX-512BW, chosen at compile time); there is no NEON path.
+
+**Vs siblings:** Only when a seeded 32-bit hash built from 16-bit multiplies is a hard requirement on x86 and bulk speed matters more than SMHasher3 quality. Otherwise XXH3 (xxHash) is faster in the same run, wyhash and a5hash are faster on short keys, and SpookyHash (SpookyHash2-32) or MeowHash.32 give 32-bit output while passing every SMHasher3 test.
+
+**Gotchas:**
+- Outputs changed between NMH_VERSION 1 and 2 (the NMHASH32 verification value for rurban/smhasher went from 0x0DC5C2DC to 0x12A30553). rurban's published nmhash32 log and the Fortran stdlib port (pinned to commit a8913138) are both v1, so their numbers and hash values do not match the current header. Pin the version if you persist hashes.
+- The scalar path type-puns uint32_t accumulators through uint16_t pointers, and SMHasher3 tags the implementation FLAG_IMPL_TYPE_PUNNING. Its uint16_t*uint16_t compound multiplies promote to signed int and can overflow. PR #3 (Dec 2024) fixed that only in the avalanche function; the scalar 0-8, 9-255 and long-round paths still have it. rurban/smhasher now runs a nmhash32_broken() probe at startup because some compilers (macOS arm64) produce different results.
+- For inputs of 256 bytes or more, NMHASH32 and NMHASH32X run the same NMHASH32_long loop and differ only in the final avalanche, so choosing X only speeds up shorter keys. The last round rehashes the final 256 bytes and overlaps the previous block.
+- The SIMD path is selected from __AVX512BW__, __AVX2__ or __SSE2__, or from NMH_VECTOR set on the command line. For AVX2 builds the header comment recommends GCC's -mno-avx256-split-unaligned-load/-store flags.
+
+**Status:** Stale: the algorithm froze at v2 in June 2021, and the only later commit is a December 2024 UB fix from rurban. The code is BSD-2-Clause, a single 832-line header and easy to vendor, but it is used mainly by hash test suites and by a Fortran stdlib port of v1.
+
+[repo](https://github.com/gzm55/hash-garage) · [benchmark](https://github.com/fwojcik/smhasher3/blob/main/results/README.md)
+
+##### SeaHash  `Rust`  `MIT`  `stale`  `Tier B`
+
+Portable, no_std Rust 64-bit non-crypto hash; ~11x FNV-1a and ~16% over MurmurHash3 bulk, but slower than xxHash64/XXH3.
+
+**Beats:** FNV-1a / FNV-64 and MurmurHash3 (large-buffer bulk throughput); NOT xxHash, MetroHash or CityHash, which the independent SMHasher run shows are faster — The only independent numbers are from rurban/SMHasher, which tests a C port (seahash.c, seed XORed into lane a) on its default AMD Ryzen 5 3350G table with no compiler or flags stated. Bulk speed on 256 KiB keys was 8,240.58 MiB/s versus 754.70 for FNV1a (~11x) and 7,104.08 for Murmur3F (~1.16x), but it lost to xxHash64 (11,176.72) and xxh3 (20,853.74). On small keys it averaged 58.61 cycles/hash, beating FNV1a (75.28) but not Murmur3F (52.69); the Rust crate's own criterion bench times SeaHash alone.
+
+**Known shortcoming:** Not faster than xxHash: independent SMHasher (C port) has xxHash64 at 11,176 vs SeaHash 8,240 MiB/s, and MetroHash and CityHash64 also beat it; it only beats FNV (~11x) and Murmur3F (~1.16x bulk). Rust-only, stale since 2023-10-25 (though widely downloaded, ~153M on crates.io).
+
+**Known shortcoming:** Fails SMHasher's PerlinNoise seed/key test and its docs say the seed can be extracted (no HashDoS resistance); also loses to Murmur3F on small keys. Measured code is the C port, not the Rust crate. Keys not a multiple of 8 bytes cost ~61 cycles vs ~36-40; ~10% slower than SipHash on Cortex-A55 (#7). Unchanged since 2020 (v4.1.0); hash values stable only within a major version; no BuildHasher type (#14).
+
+**Independent measurement:** rurban/smhasher: SeaHash 8,240 vs xxHash64 11,176 MiB/s bulk.
+
+**How:** It reads 8 bytes per load and keeps four independent 64-bit lanes, consuming 32 bytes per loop iteration, so the four multiply chains can overlap through instruction-level parallelism; the lanes are only XOR-combined at the end with the length. Each lane update is XOR-then-diffuse, where the diffusion is a PCG-style permutation: multiply by 0x6eed0e9da4d94a4f, xor-shift by a data-dependent amount ((x >> 32) >> (x >> 60)), multiply again. The construction is a 4-lane, length-padded Merkle-Damgard scheme with no SIMD or hardware intrinsics, so its speed comes from scalar multiply throughput alone.
+
+**Use it when:**
+- You are replacing FNV-1a/FNV-64 or byte-at-a-time hashing of multi-KB buffers in Rust: SMHasher's bulk test puts it at about 8.2 GB/s versus about 0.75 GB/s for FNV.
+- You need a hash value that is the same on little- and big-endian and on 32- and 64-bit targets (for example content checksums or dedup keys persisted to disk), and you can pin the crate's major version.
+- no_std or embedded Rust where you want zero runtime dependencies, no unsafe SIMD paths, and a small auditable codebase.
+- You already have data or file formats keyed by SeaHash values and need a maintained-enough Rust implementation to keep reading them.
+
+**Skip it when:**
+- Raw speed is the goal: in the same SMHasher table xxHash64 (11,177 MiB/s), MetroHash64, City64 and XXH3 (20,854 MiB/s) are all faster in bulk, which contradicts the README's '3-20% faster than xxHash/MetroHash' claim.
+- Small keys: SMHasher averages 58.6 cycles/hash for 1-31 byte keys, worse than MurmurHash3F (52.7) and xxHash64 (49.7); keys whose length is not a multiple of 8 cost about 61 cycles versus 36-41 for 8/16/24/32-byte keys.
+- Anything exposed to attacker-chosen keys: the doc comment says the seed can be extracted with some computational work and tells you to use it only with a fallback such as SipHash; SMHasher also flags a PerlinNoise failure (seed/key collisions).
+- ARM targets without measuring first: open issue #7 reports it about 10% slower than SipHash on a Cortex-A55 (versus about 1.5x faster on an Intel Skylake), and the docs say non-ideal architectures lose up to 30-40%.
+- Projects that need an actively maintained crate: the last code change was December 2020 (v4.1.0, January 2021), and later commits only added the license text.
+
+**Integration:** crate · none (quickcheck and criterion are dev-dependencies only) · not documented (no rust-version or edition key in Cargo.toml, so edition 2015; the code uses const fn with let bindings, which needs a Rust from roughly 2019 onward) · any Rust target, no_std by default; tuned for 64-bit little-endian (32-bit targets split each 8-byte read into two u32 reads)
+
+**Vs siblings:** Pick it over xxHash, wyhash or the rapidhash Rust port only when you specifically need SeaHash-compatible or endian/width-independent persisted values from a dependency-free no_std Rust crate. Those siblings post roughly 1.4-2.7x its bulk throughput in the same SMHasher table, and for in-memory Rust HashMaps foldhash, rustc-hash or aHash are the catalogued choices.
+
+**Gotchas:**
+- Output is only promised to be stable within a major version: the docs say values change only on major bumps, and 4.0 changed the streaming hasher to fix chunking sensitivity (issues #1, #5). Pin the major version for anything persisted.
+- hash_seeded takes four u64 seeds that directly initialise the lanes. For inputs under 8 bytes, the input is XORed into lane a with the seed, so a key and a seed are interchangeable through XOR. Seeding is obfuscation, not DoS protection.
+- The streaming SeaHasher implements write_u8/u32/u64 and similar by routing the bytes through the generic byte-buffer path. Hashing integer keys in a HashMap therefore pays tail-buffer bookkeeping on every call.
+- The hot loops use unsafe raw-pointer reads (read_unaligned since the fix for issue #9). The benchmark tables in the docs (0.24 cycles/byte, CityHash 1.62 cpb, '2.5 GHz CPU') date from 2016 and give no compiler, flags or competitor code.
+
+**Status:** Stale: code last changed in December 2020 and v4.1.0 (January 2021) is the latest crate, yet it still has about 153M crates.io downloads; the crate is MIT, dependency-free and a few hundred lines, so it is easy to vendor.
+
+[repo](https://gitlab.redox-os.org/redox-os/seahash) · [benchmark](https://github.com/rurban/smhasher)
+
+##### SpookyHash V2 (Bob Jenkins' official repo)  `C++`  `Unlicense`  `active`  `Tier B`
+
+Bob Jenkins' own reference C++ SpookyV2, a 128-bit non-cryptographic hash about 1.2x faster than XXH64 on large buffers.
+
+**Beats:** xxHash64 (XXH64) — rurban/smhasher on its reference AMD Ryzen 5 3350G, with no compiler or flags stated, measured bulk speed on 256 KiB keys averaged over alignments 0-7, with MiB/s converted from bytes/cycle at a nominal 3 GHz. SpookyV2_64 ran at 13,401 MiB/s (4.68 B/cycle) against 11,177 MiB/s (3.91 B/cycle) for XXH64, about 1.2x, while XXH64 won the 1-31 byte small-key average (49.7 vs 56.2 cycles/hash) and XXH3 and City64 beat it on every column. The SpookyV2 code rurban built matches this repo's C++ (CRLF endings aside), and the README's own 19.5 GB/s at 16 KB (g++ -O3, unnamed machine) compares C++ only with the repo's Rust port.
+
+**Known shortcoming:** Small keys are slower than xxHash64 (56 vs 50 cycles in rurban/smhasher), and XXH3, wyhash and CityHash are faster in bulk. SMHasher3: the 128-bit output fails BIC on 3-28 byte keys and the 64-bit output fails 6 seed tests. Not seed-independent-collision resistant (non-cryptographic). Replaces the archived g1mv/spookyhash C port.
+
+**Known shortcoming:** Only ~1.2x over XXH64 in bulk; loses on 16-31 byte keys (66-71 vs 43-68 cycles). The Rust port is 2-29% slower than the C++. Unaligned reads (UB); header lacks an include guard and defines global typedefs; big-endian machines give different values. Last commit 2026-03-29.
+
+**Independent measurement:** rurban/smhasher: SpookyV2 13,401 vs xxHash64 11,177 MiB/s bulk.
+
+**How:** Inputs of 192 bytes or more go through Mix(), which runs 96-byte blocks over 12 independent 64-bit state words. Each 8-byte input word gets an add, two xors, a rotate and an add. With 12 lanes the CPU has a lot of instruction-level parallelism, using only add/xor/rotate: no SIMD and no multiplies. Jenkins says SSE2 and 64-bit-multiply versions were slower, and that about 12 variables was the sweet spot. Shorter inputs use a 4-word ShortMix/ShortEnd path that has a lower startup cost, and long inputs finish with three EndPartial rounds.
+
+**Use it when:**
+- Checksumming or fingerprinting large, cache-resident buffers (roughly 1 KB and up) on 64-bit little-endian CPUs. SpookyV2_64 averaged 13,401 MiB/s against 11,177 for XXH64 on 256 KiB keys in rurban/smhasher, and SMHasher3 shows 4.40 against 3.99 bytes/cycle.
+- You need a 128-bit result from plain, portable 64-bit integer code with no SIMD, AES or wide-multiply dependency, for example dedup keys or content IDs where 64-bit collision odds are too high.
+- You must reproduce existing SpookyV2 values, such as stored keys, Bloom filters or on-disk indexes. This repo is the author's reference: rurban/smhasher's SpookyV2 rows build byte-identical copies of cplus/SpookyV2.cpp/.h, and TestSpookyV2.cpp holds 512 expected Hash32 values.
+- Input arrives in fragments and you want the streaming result to match the one-shot hash. TestPieces checks every two-piece split of inputs up to 1 KB.
+- You want a seeded 32-bit hash that passes both suites: rurban lists no quality problems for SpookyV2_32, and SMHasher3 passes SpookyHash2-32 on all 250 tests.
+
+**Skip it when:**
+- Hash-table keys of 16-32 bytes. When the 16-byte branch into ShortMix kicks in, it jumps from about 41-46 to 66-71 cycles/hash, against 43-68 for XXH64. Overall it averages 56.2 against 49.7 cycles/hash over 1-31 byte keys, and 246 against 230 cycles/map (rurban).
+- New code that doesn't need SpookyV2-compatible values. XXH3 (20,854 MiB/s, 29.5 cycles/hash), wyhash (22,641) and rapidhash (21,514, 22.0 cycles/hash) beat it on both bulk and small keys in the same rurban table.
+- Anything adversarial, such as hash-flooding-exposed tables or integrity against an attacker. Jenkins' page says 'When NOT to use it: if you have an opponent', and warns that a resourceful opponent can build same-hash messages.
+- Portable persisted hashes across endianness, or strict-alignment CPUs. The page says big-endian machines are unsupported (they produce different values), and unaligned reads are enabled by default via a hard-coded #define in the .cpp.
+- Memory-bound streaming from RAM. Jenkins notes that uncached reads cap it below about 2 bytes/cycle on his machines, and the README's 16-way parallel run fell to 6.5 GB/s per process (105 GB/s total) against 19.5 GB/s single-process at 16 KB.
+
+**Integration:** source-drop (cplus/SpookyV2.h + SpookyV2.cpp; no build system in the repo, and an open PR #1 proposes CMake) · none (stddef.h, stdint.h, memory.h). The Rust translation in rust/ is a standalone Cargo package with no dependencies and is not published on crates.io. · Not stated. The library files use only pre-C++11 constructs plus <stdint.h> and an MSVC typedef branch. The test harness needs C++11 (<chrono>), and the README's timings used g++ -O3. The Rust port is edition 2021. · Designed for and tested on 64-bit little-endian x86. Big-endian runs but gives different values. Strict-alignment CPUs need ALLOW_UNALIGNED_READS edited to 0 in SpookyV2.cpp.
+
+**Vs siblings:** Pick it over xxHash (XXH3), wyhash or rapidhash only when you need SpookyV2-compatible values or a 128-bit result from multiply-free, SIMD-free code under a public-domain dedication, because those siblings are faster on both bulk and small keys. Against CityHash (City64 is faster in every rurban column but flagged 'Sparse, TwoBytes') or pengyhash (same 13.3-13.4 GB/s bulk but 74.8 against 56.2 cycles/hash on small keys), SpookyV2 has a clean rurban quality record and faster small keys than pengyhash.
+
+**Gotchas:**
+- Hash128's hash1/hash2 are in-out: they carry the seed in and the hash out. Reusing the same variables across calls silently chains seeds, which is exactly what TestSpookyV2's DoTimingSmall does, so the README's GB/s table measures dependent back-to-back calls.
+- SpookyV2.h has no include guard or #pragma once, and it puts global typedefs uint64/uint32/uint16/uint8 and an INLINE macro into every includer. That can clash with other code's typedefs, and a double include redefines the class.
+- Reads go through uint64*/uint32* casts on unaligned pointers via a union. That is undefined behaviour under strict C++ and UBSan (rurban lists 'Spooky' among misaligned-read hashes) and faults on strict-alignment hardware unless you flip the macro.
+- Don't use the two 64-bit halves of the 128-bit result as independent hashes for short keys. SMHasher3 fails SpookyHash2-128 on BIC for 3-28-byte keys (235/250 passed), while SpookyHash2-64 fails only SeedBIC/SeedBitflip on 3-11-byte keys (244/250).
+
+**Status:** The algorithm has been frozen since 2012. Its author curated the repo in commits from Dec 2025 to 29 Mar 2026 (V1 removed Feb 2026, Rust port added Mar 2026), and nothing has been committed since; PR #1 (CMake) has been unanswered since April. The two C++ files are Unlicense (public domain, no patent grant) and trivial to vendor. The Rust port was written by Claude, reproduces the C++ hashes, and runs about 2-6% slower from 256 B up and 10-29% slower below that in the README table.
+
+[repo](https://github.com/bobjen/spookyhash) · [benchmark](https://github.com/rurban/smhasher)
+
+##### UMASH  `C`  `MIT`  `active`  `Tier B`
+
+Keyed CLMUL-based C string hash with a proven almost-universal collision bound; 1.5-2.5x CityHash64 bulk throughput, roughly xxh3 parity.
+
+**Beats:** CityHash64 (City64); xxHash xxh3 at rough parity only — In rurban/smhasher's 256 KiB bulk test (CMake Release, -march=native, compiler unstated), umash64 did 21,964 MiB/s vs City64 14,390 on a Ryzen 5 3350G (about 1.5x), 40,087 vs 15,791 on an EPYC 9554P (2.5x) and 30,586 vs 16,062 on an i7-6820HQ (1.9x). Against xxh3 it is +5% on the 3350G and 12% and 31% slower on the other two. The README's headline 26,628 vs 20,854 MiB/s row compares runs converted at different clock rates, so it overstates the gap.
+
+**Known shortcoming:** The 28% win over xxh3 is a clock artifact (UMASH row at 3600 MHz, xxh3 row at '3 GHz'): ~6% by bytes/cycle and ~5% in the sortable Ryzen 3350G table, and it is slower than xxh3 on EPYC 9554P and an i7. Real margin is over CityHash64 (1.5-2.5x). Needs CLMUL.
+
+**Known shortcoming:** Requires CLMUL/PMULL; GCC-compatible compilers only (no MSVC); ABI not final. Small keys ~41 vs xxh3 ~29 cycles. Issue #40 (Sep 2026) reports a gap in the whitepaper's collision-bound proof (third-party proofs restore it in an ideal-key model); the Python reference fingerprint fails the bound. Low activity since 2022.
+
+**How:** It follows the UMAC/VHASH two-level design. 256-byte blocks are compressed by an 'OH' function that is mostly PH, a carry-less analogue of NH (XOR each 16-byte chunk with key words, then one PCLMULQDQ/PMULL per chunk). The last chunk goes through ENH, a 64x64->128 integer multiply. Block outputs feed a Horner polynomial hash modulo 2^61-1 with lazy reduction. Inputs of 8 bytes or less take a SplitMix64-style mixer, and inputs of 9-16 bytes take a single ENH multiply. From 1 KiB up, umash_long.inc switches to an AVX2 + VPCLMULQDQ routine picked at runtime through CPUID.
+
+**Use it when:**
+- Hash tables, sharding or sampling keyed with random per-process params, where you want a stated worst-case collision bound (below ceil(s/4096)*2^-55 for inputs of s bytes or fewer) instead of an empirical SMHasher pass
+- Content fingerprinting or dedup that needs 128-bit fingerprints with a collision bound below 2^-70 for inputs up to 5 GiB, made reproducible across runs with umash_params_derive and a per-program secret
+- Replacing CityHash64 in C on x86-64 with CLMUL or aarch64 with the crypto extension: 1.5-2.5x its bulk throughput in rurban SMHasher and slightly fewer cycles per small key
+- Streaming or chunked inputs: the sink API gives the same value as a one-shot hash, and a sink can be byte-copied to snapshot its state
+- Long buffers (1 KiB and up) on CPUs that report VPCLMULQDQ, where the AVX2 path gives the README's 10.9 bytes/cycle (39.5 GiB/s) on an EPYC 7713
+
+**Skip it when:**
+- Latency-bound small keys: rurban SMHasher shows about 41 cycles per 1-31 byte key against about 29 for xxh3 and wyhash and 22 for rapidhash on the Ryzen 5 3350G table
+- When you only want the most bulk throughput: it trails xxh3 by 12% on EPYC 9554P and 31% on i7-6820HQ, and the AES-based gxhash and lanehash rows are more than 2x faster
+- MSVC, big-endian, 32-bit targets, or CPUs without CLMUL/PMULL: umash.c stops with #error on an unsupported platform, and the README says only gcc-compatible compilers work
+- Adversaries who can learn or infer the params: the header says the bounds then no longer apply. It is not a MAC or PRF, and umash_params_derive with a NULL key uses the public default secret 'Do not use UMASH VS adversaries.'
+- Hash values persisted across library versions when params come from umash_params_prepare: the README says the ABI is not final and the same random bytes may produce different params later
+
+**Integration:** source-drop · none (Salsa20 for umash_params_derive is built in; systemtap sdt.h only if UMASH_STAP_PROBE is set) · gcc-compatible C compiler with GCC 5-era integer-overflow builtins and __uint128_t; C11 <stdatomic.h> for x86-64 dynamic dispatch; inline asm used on GCC 6+ / clang 10+ (optional). MSVC not supported · x86-64 with CLMUL (-mpclmul), plus a runtime-dispatched AVX2+VPCLMULQDQ path for inputs of 1 KiB or more; little-endian aarch64 with crypto extension (-march=armv8-a+crypto)
+
+**Vs siblings:** Pick UMASH over xxHash (xxh3), wyhash and rapidhash when a provable almost-universal bound or a 128-bit fingerprint with a stated collision probability matters more than small-key latency. Against CLHash, the other CLMUL almost-universal hash in the catalog, UMASH's case rests on its aarch64 PMULL port, incremental API and fingerprint mode.
+
+**Gotchas:**
+- The seed argument changes the output but carries no collision bound. Only randomly generated, secret umash_params give the guarantee.
+- umash_full(..., which=1) computes a full fingerprint and returns its second half, so it is as slow as umash_fprint.
+- The proof has a known gap. Open issue #40 (Sept 2026) shows the whitepaper's 'reduce mod 2^61-1 loses ~6 bits' step does not follow as written. Third-party paper proofs, only partly Lean-checked, restore the headline 64-bit and 128-bit bounds in an ideal full-key model that does not cover Salsa20-derived params. The maintainer acknowledged this and a doc update is pending.
+- The Python reference (umash_reference.py) uses one polynomial multiplier for both fingerprint halves, and issue #40 shows its fingerprint does not meet the 2^-83 bound. The C library uses two independent multipliers and is not affected.
+
+**Status:** Active but low-churn: the algorithm has been frozen since 2022 and 2025-2026 commits are warning fixes, formatting and test-dependency updates (last 2026-01-11). It is MIT-licensed and small enough to vendor (two C files plus an optional .inc), and a thin Rust wrapper, umash-rs, exists (2 stars, last push 2025-01).
+
+[repo](https://github.com/backtrace-labs/umash) · [benchmark](https://github.com/rurban/smhasher/blob/master/README.md)
+
+##### W1Hash  `C, Go`  `BSD-3-Clause`  `active`  `Tier B`
+
+A wyhash-derived 64-bit non-cryptographic hash, tuned to spend fewer cycles on 1-16 byte keys than wyhash v4.2.
+
+**Beats:** wyhash — In rurban/smhasher (table labeled AMD Ryzen 5 3350G, compiler and flags not stated), w1hash averaged 26.85 cycles/hash on 1-32 byte keys against wyhash v4.2's 28.91 (23.5-25.8 vs 27-28 at 1-16 bytes), but rapidhash v3 averaged 22.04, and w1hash's bulk throughput at 256 KB was 14,208 vs 22,640 MiB/s for wyhash. SMHasher3 found no average small-key win (29.34 vs 29.31 cycles) but better bulk (8.15 vs 6.98 bytes/cycle). The author's own chart (Core Ultra 7 155H, clang) shows about 12 vs 14-17 units at 1-16 bytes against a combined wyhash/rapidhash line, with XXH3 fastest above 16 bytes.
+
+**Known shortcoming:** Small-key win over wyhash only (rurban smhasher 1-16 B: 23.5-25.8 vs 27-28 cycles); rapidhash v3 is faster (~20 cycles) despite the author's chart, and bulk is ~37% slower than wyhash (14,208 vs 22,640 MiB/s). 4 stars.
+
+**Known shortcoming:** SMHasher3 marks it FAIL (TwoBytes 48 B: six 64-bit collisions; 249/250) and shows no small-key win there (29.34 vs wyhash 29.31 cycles), while bulk is better (8.15 vs 6.98 bytes/cycle), the opposite of rurban's result. rapidhash v3 and a5hash beat it and pass all tests. Reads past the end of the buffer with type-punned loads (ASan noise); non-int128 builds were broken until 2026-07-25; MSVC build lacks <intrin.h>.
+
+**Independent measurement:** rurban/smhasher: W1Hash avg small-key 26.85 vs wyhash v4.2 28.91 cycles/hash; bulk 14,208 vs 22,640 MiB/s.
+
+**Independent measurement:** SMHasher3: W1Hash FAIL (249/250); small keys 29.34 vs wyhash 29.31 cycles; bulk 8.15 vs 6.98 bytes/cycle.
+
+**How:** Keys of 0-16 bytes go through a per-length switch that loads the key in at most two reads, then run a single 64x64->128 multiply-and-fold (MUM) finalization. On x86-64 and AArch64, 3, 5, 6 and 7-byte tails use one wider load that may run past the end of the key, masked down, whenever that load stays inside the same 4 KB page. Longer inputs are consumed 16 bytes per MUM, with a 4-lane 64-byte loop above 64 bytes (wyhash v4.2 uses 3 lanes of 48 bytes). The seed and length are pre-mixed with one extra multiply at entry.
+
+**Use it when:**
+- Hash-table keys of 1-16 bytes (short strings, small IDs, packed structs) on x86-64 or AArch64, where rurban/smhasher measured 23.5-25.8 cycles/hash against wyhash v4.2's 27-28
+- Hashing 64-bit integer keys with the dedicated w1hash64() (two multiplies)
+- In-memory tables where the hash is never persisted, so the fact that its output differs from wyhash does not matter
+- Mixed C and Go code that needs the same hash value on both sides: the Go port is tested bit-for-bit against the C header through cgo
+
+**Skip it when:**
+- Bulk hashing (KB and up) as measured in rurban/smhasher: about 14.2 GB/s against wyhash's 22.6 GB/s, roughly 37% slower. SMHasher3 measured the opposite (8.15 vs 6.98 bytes/cycle), so check on your own hardware.
+- When rapidhash v3 or a5hash is an option: rapidhash v3 is faster at every 1-16 byte size in rurban/smhasher (about 20 vs 23.5-25.8 cycles/hash), and both pass all 250 SMHasher3 tests. w1hash does not.
+- When hash quality matters on sparse inputs: SMHasher3 fails w1hash on the TwoBytes keyset at 48-byte keys (6 full 64-bit collisions against 0 expected). Its small-key average there is 29.34 cycles, the same as wyhash's 29.31, so the short-key edge does not appear in that harness.
+- Any code running under AddressSanitizer or Valgrind, or any strictly portable C, because of the deliberate past-the-end reads (see gotchas)
+- Hash-flooding (HashDoS) resistance or anything cryptographic: it is a plain seeded non-cryptographic hash, and no security analysis is documented
+
+**Integration:** header-only (C, w1hash.h); Go module (github.com/peterrk/w1hash) · none · C: C99-level compiler (stdint.h, static inline), using __uint128_t, MSVC x64 _umul128, or a portable 32-bit multiply fallback. Go: 1.25 (go.mod declares go 1.25.0). · any. Fast unaligned-read paths are enabled on x86-64 and AArch64 (or with -DW1_LITTLE_ENDIAN_UNALIGNED_READ); other targets use byte-assembled little-endian reads. Go has hand-translated amd64 assembly and a pure-Go fallback on every other GOARCH.
+
+**Vs siblings:** Pick it over wyhash only for very short keys where you control persistence: it fails 1 SMHasher3 test against wyhash v4.2's 15, and rurban/smhasher shows 7-15% fewer cycles at 1-16 bytes. rapidhash (faster at small keys in rurban/smhasher and passes all SMHasher3 tests) and a5hash (26.91 cycles small-key average in SMHasher3, passes all tests) are generally the better choice, and w1hash's main remaining draws are its 1-4 byte speed in SMHasher3 and its matching Go port.
+
+**Gotchas:**
+- Past-the-end reads: on x86-64/AArch64 the C header, and the Go amd64 assembly, read up to 3 bytes beyond the key for 3/5/6/7-byte tails when the read stays within a 4 KB page. They also use unaligned type-punned loads (*(uint64_t*)p). SMHasher3 tags the implementation 'ub_reads' and FLAG_IMPL_READ_PAST_EOB. Expect ASan/UBSan/Valgrind reports.
+- Until 2026-07-25 (commit 68a6bf2, issue #1, still open) the portable multiply fallback declared a variable twice and did not compile on targets that have neither __int128 nor MSVC x64, such as 32-bit builds. Use a revision at or after that fix.
+- The MSVC x64 branch calls _umul128 without including <intrin.h>. MSVC users may need to include it before w1hash.h; the repo has no MSVC CI.
+- In Go, the tests and BenchmarkHash build only with cgo (they compare against the C header), the old purego build tag was removed in March 2026 so amd64 always uses assembly, and the benchmark times only w1hash itself (Go vs C), not any competitor.
+
+**Status:** The C algorithm dates from November 2024, a Go port was added in March 2026, and the last commit (a compile fix) landed on 2026-07-25. It is BSD-3-Clause, a single ~5 KB header that is trivial to vendor, and has very low adoption (4 stars) beyond its inclusion in rurban/smhasher and SMHasher3.
+
+[repo](https://github.com/PeterRK/w1hash) · [benchmark](https://github.com/rurban/smhasher/blob/master/README.md)
+
 ##### wyhash  `C`  `Unlicense`  `active`  `Tier B`
 
 Header-only 64-bit non-cryptographic hash + PRNG; about 9% faster bulk throughput than xxHash's XXH3.
@@ -155,6 +1893,295 @@ Header-only 64-bit non-cryptographic hash + PRNG; about 9% faster bulk throughpu
 **Status:** Actively maintained (last commit 2026-03-23; 19 open issues, not archived), and public-domain (Unlicense) so it costs nothing to vendor, but the author's own README states wyhash 'has evolved into rapidhash,' its designated successor, so new adopters are explicitly pointed elsewhere.
 
 [repo](https://github.com/wangyi-fudan/wyhash) · [benchmark](https://github.com/rurban/smhasher)
+
+#### signatures-kem
+
+##### Code Generation of Faster Formally Verified NTT with Plantard Reduction  `C`  `Apache-2.0`  `unknown`  `Tier A`
+
+Python generator emitting lazily-reduced Plantard NTTs (C/Jasmin) for ML-KEM/ML-DSA/FN-DSA; 1.5-2.5x faster than pq-crystals reference NTT.
+
+**Beats:** NIST PQC / pq-crystals reference C implementations of ML-KEM (Kyber ref) and ML-DSA (Dilithium ref) for end-to-end and NTT results, plus formosa-mlkem Jasmin (NTT only); mlkem-native/mldsa-native scalar C (OPT=0 AUTO=0) is compared only at NTT level — On an Intel Xeon E-2314 with turbo and HT off, using gcc 11.4 -O3 -fomit-frame-pointer, the generated NTT was dropped into the pq-crystals reference C. It cut forward/inverse NTT cycles by 1.83x/2.48x for ML-KEM, 1.73x/1.78x for ML-DSA and 1.47x/1.66x for FN-DSA-1024. End to end that gives 1.08x-1.32x (ML-KEM-512 decaps 162,047 to 122,499 cycles; ML-DSA-2 sign 1.26x). It is 1.26x/2.19x vs the formosa-mlkem Jasmin NTT and 0.86x/1.18x vs mlkem-native scalar C, and the artifact's kyber.csv/dilithium.csv/falcon1024.csv medians match the paper's tables.
+
+**Known shortcoming:** Code is an anonymous review artifact (anonymous.4open.science, Apache-2.0), not a maintained repo. Baseline is the pq-crystals reference C, not mlkem-native: forward NTT is 0.86x (slower) than mlkem-native. Scalar code only; no gain over AVX2 implementations.
+
+**Known shortcoming:** Wins only against the pq-crystals scalar reference (NTT 1.47-2.48x, end-to-end 1.08-1.32x); no SIMD backend (a Plantard AVX2 variant was 10-28% slower than Montgomery). Only the Jasmin ML-KEM NTT is formally proven; the C output, ML-DSA/FN-DSA outputs and the generator are unverified, and the README overclaims proof generation. The plantard_reduce() added to reduce.c has signed-overflow UB and the Makefiles lack -fwrapv. Not drop-in (poly.c edits, Montgomery-to-Plantard domain switch). Baseline harness ships with NTESTS 1000 vs 10000.
+
+**How:** It uses Plantard multiplication by a precomputed twiddle (Huang et al.). This needs one fewer multiplication per butterfly than Montgomery and leaves outputs in a tighter centered range, so fewer Barrett/Montgomery reduction passes are needed. At generation time, a static bound analyzer tracks per-layer coefficient growth: the CT butterfly grows additively and the GS plus-arm doubles. It inserts a reduction only on layers where the signed word would otherwise overflow. Per the paper, ML-KEM needs one reduction (inverse layer 3), ML-DSA none and FN-DSA-1024 several. Each layer is emitted as its own loop with len and k baked in as constants, so there is no runtime branch on the layer index.
+
+**Use it when:**
+- Scalar or portable ML-KEM/ML-DSA builds derived from the pq-crystals reference C, such as generic x86-64 packages that cannot assume AVX2 or other 64-bit targets, where the NTT is a measurable share of decapsulation or signing.
+- ML-DSA scalar code: the generated NTT beat mldsa-native's scalar C (OPT=0 AUTO=0) by 1.66x forward and 1.52x inverse in the paper's Table 2.
+- Generating an NTT for a new NTT-friendly modulus (q prime, n a power of two, n | q-1; complete or incomplete NTT) without hand-tuning where reductions go.
+- Verification or research work that needs a Plantard-based ML-KEM NTT with an EasyCrypt proof chain down to the formosa-mlkem spec (Jasmin backend, x86-64).
+
+**Skip it when:**
+- AVX2, AVX-512 or NEON-optimized ML-KEM/ML-DSA deployments: there is no vector backend. The authors measured their hand-tuned Plantard AVX2 about 10% (16-bit, ML-KEM) and 28% (32-bit, ML-DSA) slower than Montgomery AVX2.
+- When mlkem-native scalar C is the baseline: under gcc -O3 the generated ML-KEM forward NTT is slower (0.86x) because its 32-bit intermediate halves auto-vectorization lanes. Only the inverse wins (1.18x).
+- When you need a maintained, packaged library: the code exists only as an ephemeral double-blind anonymous.4open.science mirror with no releases, issue tracker or public git history.
+- When you need verified C: the C backend, the ML-DSA/FN-DSA outputs and the Python generator are all unverified. The paper also notes that constant-time behavior of the C depends on the compiler.
+- When you expect big whole-scheme wins: end-to-end gains are only 1.08x-1.32x because the NTT is a small share of total cycles (3,876 cycles of the roughly 91k-122k per ML-KEM-512 operation).
+
+**Integration:** source-drop · Generated C: none beyond <stdint.h> (__int128 when q >= 2^32). Generator: Python >= 3.9 with click, jinja2 and pycryptodome. Jasmin path: the Jasmin compiler. Proofs: EasyCrypt with the Jasmin library and an SMT solver. · Generator needs Python 3.9+. The C output was tested only with gcc 11.4 (-O3 -fomit-frame-pointer), and the L=64 path needs GCC/Clang __int128. The Jasmin output was built with Jasmin 2025.6.1 and clang-14. · Generated C is portable scalar code but was benchmarked only on x86-64 (Intel Xeon E-2314). Jasmin output is x86-64 only. No SIMD paths.
+
+**Vs siblings:** Dilithium-AVX512 (ML-DSA) and VecFalcon (Falcon signing) are vector-ISA implementations and win only where AVX-512/AVX2/NEON etc. are available. Pick this for scalar/portable ML-KEM or ML-DSA built on the pq-crystals reference, or when you need a verified ML-KEM NTT; no sibling covers ML-KEM (fasthqc is HQC).
+
+**Gotchas:**
+- The scalar plantard_reduce() added to reduce.c multiplies signed values that overflow (int32 x PLAN_QINV for Kyber, int64 x PLAN_QINV for Dilithium). That is undefined behavior in C, and the Makefiles do not pass -fwrapv. The generated plantard_mul_reduce in ntt.c avoids this with unsigned casts.
+- The README says the generator also produces the EasyCrypt proofs, but it only renders code templates. The paper lists proof emission as future work, and only the q=3329 ML-KEM Jasmin instance is proved.
+- analyzer.py computes the Plantard input range (plan_bnd), but its per-layer reduction decisions check only the signed storage bound. Outputs for new parameter sets should be tested, not assumed correct.
+- The shipped harnesses are asymmetric. The baseline kyber/dilithium test_speed.c keeps NTESTS 1000 and has no NTT+INVNTT row, while the Plantard variants use 10000. The paper states 10k iterations for all runs.
+
+**Status:** Maintenance is unknown: this is a double-blind review mirror of a 2026 ePrint preprint (not yet peer-reviewed), Apache-2.0 from 'Anonymous Authors', and no public git repo was found. The code is small enough to copy, but expect the link to expire.
+
+[repo](https://anonymous.4open.science/r/pkc_anonymous_artifact-8F22) · [benchmark](https://eprint.iacr.org/2026/1624)
+
+##### curve25519-voi  `Go`  `BSD-3-Clause`  `active`  `Tier A`
+
+Go Ed25519/X25519/sr25519 library ported from curve25519-dalek; ~1.9x faster signing, ~1.7x faster verification than Go 1.17 crypto/ed25519.
+
+**Beats:** Go standard library crypto/ed25519 and golang.org/x/crypto/curve25519 (X25519) for single operations; ed25519consensus (hdevalence) for batch verification, since stdlib has no batch verify; Cloudflare CIRCL also benchmarked — The author's in-repo go test benchmarks (Go 1.17, Intel i7-10510U at 1.80 GHz, turbo off, AVX2 assembly on) show Ed25519 Verify at 75 us versus 125 us for crypto/ed25519 (~1.67x) and Sign at 27.5 versus 52.7 us (~1.92x). X25519 ScalarBaseMult was 24 us versus 107 us for x/crypto (~4.5x), while ScalarMult was unchanged. Batch verification of 1,024 signatures was measured against ed25519consensus, not stdlib: 31.7 ms versus 61.8 ms (~1.95x). With assembly disabled (purego), Verify was 121 us versus stdlib's 181 us.
+
+**Known shortcoming:** Go library. The batch-verify gain (61.8 to 31.7 ms) is against ed25519consensus, not Go's stdlib; baselines are Go (stdlib, CIRCL), not OpenSSL or libsodium.
+
+**Known shortcoming:** All numbers are Go 1.17 on one 2021 laptop; the baseline has since moved (x/crypto/curve25519 now wraps crypto/ecdh) with no newer benchmark. X25519 variable-base scalar multiplication is no faster than x/crypto, and CIRCL is faster. Default Verify semantics differ from the stdlib; the stdlib-compatible preset cannot batch; one bad signature makes a batch slower than serial verification. No documented audit; CI is Go 1.18 amd64 only.
+
+**How:** On amd64 it runs dalek's AVX2 backend, rewritten as avo-generated Go assembly: four field elements in radix 2^25.5 are packed into YMM registers so Edwards point additions and doublings proceed four lanes at a time, and scalar field multiplication uses assembly taken from George Tankersley's ristretto255. Signing, keygen and X25519 ScalarBaseMult use a precomputed Edwards basepoint table (then convert to Montgomery form) instead of a Montgomery ladder. Single cofactored verification uses ABGLSV-Pornin multiplication, where 2-D lattice reduction shortens the scalars so fewer doublings are needed. Batch verification uses Straus's method for small batches and Pippenger multiscalar multiplication above an internal threshold, and can cache per-key NAF tables through ExpandedPublicKey.
+
+**Use it when:**
+- Go services whose throughput is bound by Ed25519 verification, such as consensus, gossip or transparency logs on AVX2 amd64: 75 us versus 125 us per verify in the author's Go 1.17 run.
+- Verifying hundreds to thousands of mostly valid signatures at once, where you need cofactored or ZIP-215 semantics: 1,024 signatures took 31.7 ms versus 61.8 ms with ed25519consensus, and 24.0 ms when the keys were pre-expanded.
+- Workloads that repeatedly verify against the same public keys, such as validator sets. An ExpandedPublicKey costs about 11.3 us and 1.5 KB to build and saves about 9 us per verify, so it pays for itself from the second verification.
+- Generating many X25519 key pairs (fixed-base ScalarBaseMult): 24 us versus 107 us with x/crypto on the benchmark machine.
+- Code that needs explicit, selectable Ed25519 acceptance rules (stdlib-compatible, FIPS 186-5/RFC 8032, ZIP-215) or sr25519/Merlin/ECVRF in Go without cgo.
+
+**Skip it when:**
+- X25519 Diffie-Hellman with arbitrary peer points (variable-base ScalarMult): 106 us versus 107 us with x/crypto, so there is no gain, and Cloudflare CIRCL (BMI2) was faster at 65 us.
+- You need signatures accepted exactly as crypto/ed25519 accepts them, and in batches: the default semantics differ from stdlib, and the stdlib-compatible preset cannot be batch-verified.
+- You need numbers for current Go: every figure is from Go 1.17 on one 2021 laptop CPU. The baselines have since changed (x/crypto/curve25519 is now a thin wrapper over crypto/ecdh), and the repo publishes no newer comparison.
+- Secret-key hygiene or constant-time guarantees on every target: the README says it makes no attempt at memory sanitisation, and warns that wasm gives no constant-time assurances.
+- Toolchains or platforms off the supported list: gccgo is rejected, Go 1.18+ is enforced, CI runs only Go 1.18 on amd64 (arm64 CI is open issue #66), and no external audit is documented (issue #3 was closed without a linked report).
+
+**Integration:** module · golang.org/x/crypto, golang.org/x/sys · Go 1.18+ with the gc compiler (enforced by a compile-time gate in internal/toolchain; go.mod still says go 1.17); the README says it tracks the latest two Go releases · 64-bit backend: amd64 (AVX2 assembly when available), arm64, ppc64, ppc64le, s390x; 32-bit backend: 386, arm, mips, mipsle, mips64, mips64le, riscv64, loong64, wasm; everything else unsupported
+
+**Vs siblings:** Pick it when you are in Go and want cgo-free Ed25519/X25519 with batch verification and configurable acceptance rules. ENG25519 (AVX-512 IFMA) and the SUPERCOP amd64-64-24k Ed25519 code are C/assembly aimed at raw cycles, and watsign targets JavaScript/wasm.
+
+**Gotchas:**
+- Default Verify is cofactored, rejects small-order and non-canonical A, rejects non-canonical R and requires S < L. Mixing it with crypto/ed25519 in a consensus system can split acceptance, so pin a preset explicitly.
+- BatchVerifier.Verify is only faster than serial verification when every signature is valid. One bad signature triggers per-entry re-verification, and VerifyBatchOnly just returns false without saying which entry failed.
+- A batch containing any entry with CofactorlessVerify (for example the StdLib preset) always returns false from VerifyBatchOnly, and AddWithOptions panics on nil options.
+- The deprecated ScalarMult writes all zeroes for low-order points; use X25519, which returns an error. Sign allocates (64 B, 1 alloc per call) where stdlib allocates nothing.
+
+**Status:** Slow but maintained: the last commit is 2025-11-14 (String methods on key types), preceded by feature work in 2022-2023. It is BSD-3-Clause, used by oasis-core, and has 89 known importers of primitives/ed25519 on pkg.go.dev.
+
+[repo](https://github.com/oasisprotocol/curve25519-voi) · [benchmark](https://github.com/oasisprotocol/curve25519-voi/blob/master/PERFORMANCE.md)
+
+##### libsecp256k1 (bitcoin-core/secp256k1)  `C`  `MIT`  `active`  `Tier A`
+
+Bitcoin Core's secp256k1-only C signature library; ECDSA verification 2.5-5.5x faster than the 2015-era OpenSSL it replaced.
+
+**Beats:** OpenSSL (ECDSA_verify / o2i_ECPublicKey on secp256k1) — Bitcoin Core's own PR #6954 (Nov 2015) reports ECDSA signature validation 2.5-5.5x faster than the OpenSSL it replaced, and the v0.12.0 release notes say over 5x on x86_64; OpenSSL version, compiler and CPU are not stated. Whole-node runs on one Xeon E31245 took IBD from about 7h37m to 3h48m (dbcache=3000), and a separate reindex fell from 8.0 h to 3.2 h. For a recent cross-check I derived ratios from UltrafastSecp256k1's 2026-09-07 benchmark JSON: on an i5-14400F with turbo off, GCC 14.2 -O3 -march=native, libsecp256k1 (Dec 2025 master) did verify in 41.5 us vs 400.3 us for system OpenSSL (version unrecorded; about 9.6x), sign in 29.4 vs 419.1 us (about 14x) and public-key generation in 21.1 vs 394.4 us (about 19x).
+
+**Known shortcoming:** Only numbers are first-party and old (2015): Bitcoin Core PR #6954 reports signature validation 2.5-5.5x faster than OpenSSL, and v0.12.0 notes >5x on x86-64; verification only, no compiler or flags. secp256k1 curve only (Bitcoin-specific), not a general ECDSA library.
+
+**Known shortcoming:** The in-repo OpenSSL benchmark was removed in 2021 (PR #983), so nothing current is in-tree; a modern ratio exists only in a competitor's (UltrafastSecp256k1) benchmark JSON (verify ~9.6x, sign ~14x, keygen ~19x vs an unrecorded OpenSSL version). Not a drop-in: own API, 32-byte caller-hashed messages, strict DER, low-S only; no public batch verification (#1087). Constant-time behaviour depends on the compiler (0.3.1/0.3.2 fixed Clang >= 14 / GCC 13 leaks; s390x non-CT #784). Pre-1.0 with repeated ABI breaks; default tables ~1 MiB static.
+
+**Known shortcoming:** OpenSSL's secp256k1 path is unoptimized and uses an old API, so the ~8-9x verify ratio reflects a weak baseline for this curve.
+
+**Independent measurement:** bitcoin/bitcoin PR #6954 (2015): ECDSA validation 2.5-5.5x faster than OpenSSL.
+
+**Independent measurement:** secp256k1-plugbench (public harness, default builds): independent run on Ryzen 9 3950X, GCC 12.2 ~9.0x ECDSA verify vs OpenSSL 3.5.0 (secp256k1 v0.7.0); maintainers' runs 8.3x (arm64, GCC 14.2) and 8.5x (5950X).
+
+**How:** Verification computes a*P + b*G in one pass using Strauss/Shamir interleaving over wNAF digits. It uses the curve's GLV endomorphism to split P's scalar into two ~128-bit halves, and reads multiples of G from a large static precomputed table (window 15 by default: two 512 KiB tables). Field elements use 5x52-bit limbs with lazy carries and __int128 multiplies, and inversions use a variant of Bernstein-Yang safegcd. The ECDSA r check runs in Jacobian coordinates with no inversion, and the subgroup check is skipped because the cofactor is 1. Signing and key generation use a constant-time signed-digit multi-comb (Hamburg, ePrint 2012/309) over an 86 KiB table with scalar blinding. There is no heap allocation and no per-curve dispatch.
+
+**Use it when:**
+- Verifying secp256k1 ECDSA or Schnorr signatures in bulk (block or transaction validation, indexers, exchanges, wallets). Bitcoin Core's switch made raw verification 2.5-5.5x faster and cut a full reindex from 8.0 h to 3.2 h.
+- Signing or deriving keys on shared or hostile hardware. Signing and key generation are constant-time with constant memory access, use RFC6979 deterministic nonces and support optional context blinding. That was Bitcoin Core's reason for moving signing off OpenSSL in v0.10.
+- Embedded or allocation-free builds. It needs only C89 with uint64_t, does no runtime heap allocation (preallocated and static contexts exist) and uses no floating point. Table sizes can be configured (signing table 2/22/86 KiB, verify window 2-24).
+- Bitcoin-protocol features that must match other implementations exactly: strict DER, lower-S only, x-only keys, MuSig2, BIP-324 ElligatorSwift and BIP-352 Silent Payments, all maintained by the same reviewers.
+
+**Skip it when:**
+- Any curve other than secp256k1 (P-256, Ed25519, ...), or anything beyond signatures, ECDH and key tweaks, such as TLS, X.509 or generic EC math. OpenSSL is still needed for those.
+- Large-batch verification where you want a batch API. There is no public batch-verify call (issue #1087 is still open); the multi-scalar Strauss/Pippenger code is internal only.
+- Signatures from systems that emit high-S or loosely encoded DER. Verify rejects high-S, so you must normalize first (which accepts malleable signatures) or copy the unsupported contrib/lax_der_parsing.c into your code.
+- Tight flash or RAM budgets with default settings. The verify tables are about 1 MiB of static data plus the 86 KiB signing table. Shrinking ECMULT_WINDOW_SIZE or ECMULT_GEN_KB costs speed.
+- Cases where the published speedup must reflect current OpenSSL on your CPU. The only first-party OpenSSL comparison dates from 2015 and covers verification only; the repo's in-tree OpenSSL benchmark was removed in 2021 (PR #983).
+
+**Integration:** static lib or shared lib (Autotools, or CMake 3.22+, which builds shared by default); can also be vendored as a git subtree like Bitcoin Core does, or embedded via the secp256k1_objs CMake object library · none at runtime; the build needs Autotools or CMake 3.22+ · C89/C90 compiler with uint64_t. The fast 64-bit path needs __int128, or MSVC 128-bit multiply on x86_64/arm64. Clang-cl is recommended on Windows. · Portable C. 64-bit targets use the 5x52 field and 4x64 scalar code; 32-bit targets use 10x26 and 8x32. Optional x86_64 scalar assembly (on by default where detected) and experimental ARM32 field assembly. Big-endian s390x has run in CI.
+
+**Vs siblings:** Pick it over UltrafastSecp256k1, the only same-curve sibling, when you want the reviewed implementation that Bitcoin Core deploys. Ultra's own benchmark shows only a 1.1-1.5x micro-benchmark gain over libsecp256k1 (Ultra built with LTO, libsecp256k1 without) and about 1% in ConnectBlock; it also had correctness fixes in Sep 2026 and was Concept-NACKed by Bitcoin Core. ENG25519 (Curve25519, AVX-512 IFMA) and the post-quantum siblings only matter if you can change the signature scheme.
+
+**Gotchas:**
+- secp256k1_ecdsa_verify rejects valid high-S signatures by design. secp256k1_ecdsa_signature_parse_der is strict, and lax BER-style parsing exists only as a copy-in contrib snippet with no stability promise.
+- When a caller passes an illegal argument, the default callback prints to stderr and calls abort(). Long-running services should install their own illegal/error callbacks, either per context or by link-time replacement.
+- Call secp256k1_context_randomize before signing or key generation to get side-channel blinding. secp256k1_context_static cannot sign, the ECDH module gets no blinding, and creating a context per operation is expensive.
+- Constant-time behaviour depends on the compiler. Releases 0.3.1 and 0.3.2 were security fixes for timing leaks introduced by Clang >=14 and GCC 13.1. s390x has a known non-constant-time scalar comparison (issue #784). With Clang, the x86_64 assembly makes scalar_mul about 25% slower than the plain C build (issue #1682).
+
+**Status:** Actively maintained: v0.8.0 shipped 2026-08-03, commits continue through 2026-09-25, and release tags are GPG-signed. MIT-licensed and easy to vendor. Still pre-1.0, and releases 0.3.0, 0.6.0, 0.7.0 and 0.8.0 each broke or trimmed the ABI, so pin a version.
+
+[repo](https://github.com/bitcoin-core/secp256k1) · [benchmark](https://delvingbitcoin.org/t/comparing-the-performance-of-ecdsa-signature-validation-in-openssl-vs-libsecp256k1-over-the-last-decade/2087)
+
+##### sntrup (Streamlined NTRU Prime, pure Rust)  `Rust`  `Apache-2.0 OR MIT`  `active`  `Tier A`
+
+Pure-Rust Streamlined NTRU Prime KEM: ties liboqs AVX2 on Zen 5 and beats liboqs portable C on Apple M2 1.2-2.7x.
+
+**Beats:** liboqs 0.13.0 via oqs-sys 0.11.0 (sntrup761: AVX2 SUPERCOP-derived backend on x86_64, portable C on aarch64) and PQClean sntrup761 clean C via pqcrypto-ntruprime 0.1.6 (avx2 feature off) — A public same-process Criterion 0.8.1 harness runs sntrup761 against liboqs 0.13.0 (oqs-sys 0.11.0) and PQClean clean C (pqcrypto-ntruprime 0.1.6, avx2 off), with one key reused per benchmark. On a Ryzen AI 9 HX 370 (Zen 5, one pinned core, rustc 1.98 nightly) against liboqs's AVX2 build, it measured 106.6/10.5/8.4 us vs 107.9/11.5/8.4 us for keypair/encaps/decaps, parity to about 9% faster, and 23-73x faster than PQClean. On an Apple M2 Max (rustc 1.97.1) against liboqs portable C, it measured 683.7 us vs 1.876 ms, 37.0 vs 52.7 us and 77.1 vs 91.8 us.
+
+**Known shortcoming:** On x86 (Zen 5) it is now at parity with liboqs AVX2 (0.99x/0.91x/1.00x keygen/encaps/decaps; keygen wins need AVX-512); the clear win is on aarch64 against liboqs's portable C (2.7x/1.42x/1.19x). Baseline is liboqs 0.13.0 via oqs-sys 0.11.0.
+
+**Known shortcoming:** Benchmark reuses one key, so per-key decode caches stay warm (the author notes it is not like-for-like); ephemeral keys cost ~2 µs more. AVX2-only keypair is 1.11x slower than liboqs. README's 'no_std' is false (uses std OnceLock and is_x86_feature_detected!); `--all-features` silently selects the scalar path. Unaudited (LLM audits only), one maintainer, 0 stars; only 2 external KATs (sntrup761 decaps).
+
+**Independent measurement:** sntrup bench: Zen 5 vs liboqs AVX2 0.99x/0.91x/1.00x; aarch64 vs liboqs portable C 2.7x/1.42x/1.19x.
+
+**How:** On x86_64, sntrup761 uses ports of the SUPERCOP/liboqs AVX2 techniques. The polynomial multiply uses Good's trick (3x512) with two 512-point NTTs over the NTT-friendly primes 7681 and 10753, recombined by CRT, in place of an O(p^2) schoolbook. Both ring inversions use constant-time Bernstein-Yang divstep (R/3 bitsliced), and the R/q divstep also has an AVX-512BW 32-lane kernel that liboqs lacks. Constant-weight sampling uses a djbsort crypto_sort_int32 port, and the variable-radix codecs are vectorised. aarch64 gets a NEON divstep, a schoolbook multiply spread over eight independent widening multiply-accumulate chains, and a NEON Batcher sort. Both architectures cache each key's decoded public polynomial and Hash4(pk), draw randomness in one bulk fill, and keep scratch on the stack with wide volatile wipes.
+
+**Use it when:**
+- Rust services that need sntrup761 (for example an OpenSSH-style sntrup761x25519 hybrid) without a C toolchain or FFI to liboqs
+- aarch64 servers or Apple Silicon, where liboqs and PQClean have no NEON sntrup path: measured 2.7x keypair, 1.42x encapsulation and 1.19x decapsulation on an M2 Max
+- Long-lived decapsulation keys that decapsulate many ciphertexts: the per-key decoded-polynomial cache is amortised, which is the pattern the benchmark measures
+- Needing sntrup653/857/953/1013/1277, which liboqs and pqcrypto-ntruprime do not provide
+- Code that must wipe secret-derived scratch (the C references do not), or wasm32 via the js feature
+
+**Skip it when:**
+- x86_64 stacks that already link liboqs: it is at parity at best (0.91-1.00x), and on AVX2-only CPUs without AVX-512 keypair measured about 1.11x slower than liboqs
+- Ephemeral single-use keys: the first encapsulate/decapsulate on a fresh key pays the public-key decode that the benchmark amortises (about 2 us of x86 decapsulation; the encapsulation-key cache was worth 12% on ARM)
+- Anything requiring an audited or certified KEM: the code is unaudited by its own warning, has one maintainer and 0 stars, and its reviews are LLM audits noted in the log and commits
+- no_std or embedded targets, despite the README claim (see gotchas)
+- Non-761 parameter sets or aarch64 where you expect the x86 sntrup761 numbers: the NTT, codec761, codec3, djbsort and bitsliced R/3 modules compile on x86_64 only, and the NTT multiply is used only for sntrup761, so the other sets and all of aarch64 run schoolbook multiplies
+
+**Integration:** crate · hex, rand 0.10, rand_chacha 0.10, sha2 0.11, subtle 2, thiserror 2, zeroize 1; optional getrandom 0.4 (js), kem 0.3 + hybrid-array + rand_core (kem), serde + serdect (serde) · Rust 1.95 (edition 2024; MSRV declared and CI-enforced) · x86_64 (AVX2, AVX-512F/BW/VL and AVX-VNNI detected at run time, scalar fallback); aarch64 (NEON); other targets scalar; wasm32-unknown-unknown with the js feature
+
+**Vs siblings:** Pick it over moduletto (ML-KEM-512 NEON code that is benchmark-example-only and PolyForm-Noncommercial) when you need a permissively licensed, published KEM crate with a reproducible same-process liboqs comparison, and specifically NTRU Prime. fasthqc/hqc is a research speedup of the HQC round-2 reference, a different KEM family and not a Rust library.
+
+**Gotchas:**
+- The README says no_std-compatible, but 0.4.0 has no #![no_std] attribute and unconditionally uses std::sync::OnceLock (key caches, the decode-plan cache) and std::is_x86_feature_detected!. The std/alloc features are empty markers.
+- `--all-features` turns on force-scalar and silently compiles out every SIMD kernel. Do not build release or CI binaries with it if you want the benchmarked speed.
+- Pin 0.4.0 or later: earlier releases had a non-canonical Barrett freeze that could produce rare invalid keys or ciphertexts on all six sets (fixed in 0.4.0), and sntrup953 misreduced about 0.7% of reductions before 0.3.0.
+- The only external known-answer vectors are two IETF-draft sntrup761 decapsulation cases. The other five sets rely on round-trip, implicit-rejection and SIMD-vs-scalar differential tests. The ChaCha20 state used by generate_key_deterministic is not wiped.
+
+**Status:** Active single-maintainer crate: v0.4.0 went to crates.io on 2026-08-05 with the whole optimisation campaign, about 2.8k total downloads, MIT OR Apache-2.0, no issues filed, and explicitly unaudited, so it is fine to adopt for sntrup761 in Rust if you accept that risk.
+
+[repo](https://github.com/mikelodder7/sntrup) · [benchmark](https://github.com/mikelodder7/sntrup/blob/main/benches/comparison/RESULTS.md)
+
+##### VecFalcon (Vectorized Falcon-Sign)  `C`  `MIT (root LICENSE). The C-FN-DSA-derived opt/ and ref/ directories carry the Unlicense. opt/fft_neon.c is Apache-2.0 (derived from GMUCERG Falcon_NEON).`  `active`  `Tier A`
+
+Falcon/FN-DSA signing with a batched SIMD Gaussian BaseSampler and RISC-V FFT; sign_core runs 1.13-1.59x faster than C-FN-DSA.
+
+**Beats:** C-FN-DSA (Thomas Pornin's FN-DSA/Falcon implementation, github.com/pornin/c-fn-dsa at commit 96e3b92), SHAKE256X4 variant — The paper compares median sign_core cycles of VecFalcon against C-FN-DSA commit 96e3b92, with both built at -O2 using the SHAKE256X4 PRNG (10,000 runs on x86 and ARM, 2,000 on RISC-V). Falcon-512 gains 1.13x (SSE2), 1.23x (AVX2) and 1.36x (AVX-512F) on an i7-11700K with GCC 13.3.0, 1.17x (NEON) on a Cortex-A72 with Clang 10, and 1.36-1.59x across RV64GC/GCB/GCV/GCVB on a SpacemiT X60 with GCC 13.2.0; Falcon-1024 gains 1.14-1.59x. Micro-benchmarks put the BaseSampler core (excluding PRNG) at 1.8-9.8x and the RVV FFT/iFFT at 4.1-4.7x faster than the reference, and the repo's raw speed files match the paper's Table 6.
+
+**Known shortcoming:** Research code (4 stars): sign_core speedup is per-signature cycle latency, not throughput; the 8.4x figure is the AVX2 BaseSampler core only (max 9.8x on AVX-512F), and full signing with PRNG gains only 1.3-2.7x over C-FN-DSA. Part of the gain comes from third-party Keccak and NG23 FFT code.
+
+**Known shortcoming:** Frozen on the Feb 2025 pre-draft C-FN-DSA: upstream changed key/signature formats and hashing in Jul 2026, so no FIPS 206 or current c-fn-dsa interop. Full fndsa_sign gains are small (Falcon-512: 1.09-1.23x x86, 1.12x NEON, 1.28-1.43x RISC-V). Not KAT-reproducible (AVX-512 build uses a different PRNG); one ISA per build, no runtime dispatch; RVV assumes VLEN=256; posix_memalign blocks MSVC; heap allocation per signing attempt with unchecked NULL; opt/ tests disable sampler/sign_core/KAT tests.
+
+**Independent measurement:** TCHES 2026 (ePrint 2025/1867) Tables 4-6: vs C-FN-DSA ref @96e3b92, GCC 13.3/Clang 10, -O2 -DFNDSA_SHAKE256X4=1; BaseSampler 8.4x AVX2 / 9.8x AVX-512F; signing 1.3-2.7x.
+
+**How:** Falcon's BaseSampler scans a 72-bit reverse cumulative distribution table (RCDT) inside SamplerZ and takes about 30% of signing time in the paper's profile. It is normally scalar because matching the known-answer tests (KATs) fixes the order in which PRNG output is consumed. VecFalcon drops that ordering and computes 16-64 samples at once in 32-bit SIMD lanes (three 24-bit limbs per value, with a compare/subtract/shift borrow chain). It folds the bimodal sign flip and the squaring into the same pass and buffers 128 samples in a per-signature GAUSSIAN0_STORE. On RISC-V it adds hand-written RVV FFT/iFFT that uses strided vlse64/vsse64 loads with 4+4 (Falcon-512) and 4+5 (Falcon-1024) layer merging, plus a 3-layer-merged scalar RV64D FFT. The rest of the gain comes from third-party Keccak and FFT code: XKCP 8-way Keccak on AVX-512 (as a SHAKE256X8 PRNG), Becker-Kannwischer hybrid 4-way Keccak and the Nguyen-Gaj NEON FFT on ARM, and the Zhang et al. RV64I/RV64IB Keccak on RISC-V.
+
+**Use it when:**
+- Falcon signing on RISC-V application cores with RVV 1.0 and VLEN=256 (SpacemiT X60 class): sign_core runs 1.58-1.59x faster, the largest gain in the paper.
+- Signing-latency-bound Falcon on x86-64 servers with AVX-512F or AVX2: sign_core runs 1.36x and 1.23x faster on Falcon-512 (full fndsa_sign about 1.23x and 1.18x).
+- You are porting Falcon signing to another SIMD ISA and want a worked, correctness-checked template for a batched RCDT BaseSampler or a deeply layer-merged double-precision FFT.
+- Your deployment only needs signatures that verify, not ones that match test vectors, and you control the signer's build flags and CPU target.
+
+**Skip it when:**
+- You need interoperability with FIPS 206 or current c-fn-dsa. The code is frozen on Feb 2025 pre-draft C-FN-DSA. In July 2026 upstream changed key and signature encodings, the public-key format, the signature norm bound and message hashing (an ML-DSA-style 'mu' value that includes a public-key hash), and it explicitly does not promise backward compatibility.
+- You need KAT reproducibility or identical output across builds: the vectorized sampler reorders PRNG use, and AVX-512F builds use a different PRNG (SHAKE256X8) from all other builds.
+- Keygen- or verify-heavy workloads: only signing was optimized, and verify cycles match the reference within noise in the repo's raw data.
+- You need portable binaries or Windows/MSVC builds. Each build targets one ISA with no runtime dispatch for the new sampler, the RVV code assumes VLEN=256 (the paper only suggests how to adapt it for VLEN=128 cores such as the C908), and the sample store is allocated with posix_memalign, which MSVC does not provide.
+- Production or no-heap embedded use: every signing attempt heap-allocates the ~1 KB sample store and never checks the allocation for NULL. The project is a 4-star paper artifact with no releases, issues or downstream users found.
+
+**Integration:** source-drop · None at runtime beyond libc (posix_memalign). The ARM and RISC-V paths add assembly files (.S) built by the C compiler. gperftools and pprof are needed only to reproduce the profiling table. · Not documented. Tested with GCC 13.3.0 (x86-64), Clang 10.0.0 (AArch64) and GCC 13.2.0 (RISC-V; needs -march=rv64gcv with RVV 1.0 support) · x86-64 (a separate build for each of SSE2, AVX2 and AVX-512F), AArch64 NEON (tested on Cortex-A72), RV64GC/RV64GCB, and RV64GCV/RV64GCVB with RVV 1.0 at VLEN=256 only. Linux-oriented (posix_memalign, perf-based cycle counting).
+
+**Vs siblings:** No siblings catalogued yet.
+
+**Gotchas:**
+- The headline numbers are for sign_core, which excludes hash-to-point and key decoding. Full fndsa_sign gains in the repo's raw files are smaller on Falcon-512: 1.09x SSE2, 1.18x AVX2, 1.23x AVX-512F, 1.12x NEON and 1.28-1.43x on RISC-V.
+- The x86 BaseSampler is selected at compile time (#if FNDSA_AVX512F / FNDSA_AVX2) and its AVX2/AVX-512 intrinsics lack upstream's per-function target attribute. The Makefile therefore compiles whole files with -mavx2 or -mavx512f (plus -mno-* flags to pin the ISA), and the binary needs that ISA at runtime. FNDSA_AVX2 still defaults to 1 on x86, so an SSE2 build must pass -DFNDSA_AVX2=0 -DFNDSA_SSE2=1.
+- opt/test_fndsa.c comments out test_sampler, test_sign_core, test_keygen_ref and test_kat, which ref/ still runs. Signing correctness rests on sign-then-verify self tests plus a subroutine-level BaseSampler comparison against the reference in profiling/ (make run_test).
+- The RISC-V benchmark reads cycles with rdcycle, which the README says traps with Illegal Instruction on newer kernels (e.g. 6.6.63); use perf stat as the RISC-V Makefile does.
+
+**Status:** This is a TCHES 2026 paper artifact whose last commit was 2025-12-05, with no releases, issues or forks. Its MIT, Unlicense and Apache-2.0 files make it copyable, but it is frozen on pre-draft C-FN-DSA code, so treat it as a source of techniques to port onto current c-fn-dsa rather than as a maintained library.
+
+[repo](https://github.com/Ji-Peng/VecFalcon) · [benchmark](https://eprint.iacr.org/2025/1867)
+
+##### Ed25519 (original amd64-64-24k SUPERCOP/eBATS submission)  `C`  `Public Domain`  `abandoned`  `Tier B`
+
+The original 2011 public-domain Ed25519 amd64 assembly in SUPERCOP. On Westmere it signs about 20x and verifies about 7.6x faster than OpenSSL-based P-256 ECDSA.
+
+**Beats:** OpenSSL ECDSA (NIST P-256), benchmarked as SUPERCOP/eBATS entry 'ecdonaldp256' (an OpenSSL-based ECDSA wrapper) — The paper (CHES 2011 / JCEN 2012) cites official eBATS reports on hydra2, a 2.4 GHz Intel Xeon E5620 (Westmere): 87548 cycles to sign and 273364 cycles to verify a short message. Against eBATS ecdonaldp256 (P-256 ECDSA; current eBATS shows it is an OpenSSL EC_KEY wrapper) at 1790936 and 2087500 cycles on the same machine, that is about 20.5x and 7.6x; the compiler is not stated. Current eBATS on 'alder' (Core i3-12100, SUPERCOP 20260831) shows the gap has narrowed. The fastest listed ed25519 is at a median of 27171 cycles to sign and 102613 to open, against 90965 and 248160 for ecdonaldp256 (about 3.3x and 2.4x).
+
+**Known shortcoming:** Ratios against 'OpenSSL' are derived: the paper compares eBATS implementations, and the Westmere figures likely come from amd64-51-30k rather than amd64-64-24k. The original 2011 code is superseded by later Ed25519 implementations (e.g. in libsodium, BoringSSL) and is no longer developed.
+
+**Known shortcoming:** Frozen 2011 source drop inside SUPERCOP; needs SUPERCOP glue (sha512, verify_32, randombytes); amd64 only. open.c checks only the top 3 bits of S, so S in [l, 2^253) is accepted; single verification is cofactorless while batch verification is cofactored, so they can disagree. Batch numbers are the authors' own. The gap to P-256 has narrowed: on eBATS alder the fastest Ed25519 is ~3.3x sign / ~2.4x verify over ecdonaldp256 (vs 20.5x / 7.6x on Westmere).
+
+**Independent measurement:** eBATS (alder): fastest Ed25519 ~3.3x sign, ~2.4x verify vs ecdonaldp256.
+
+**How:** Field elements mod 2^255-19 use five radix-2^51 limbs. This avoids the slow add-with-carry chains that radix 2^64 hits on Nehalem/Westmere, and reduction is folded into the 25-mul schoolbook product through multiplies by 19. amd64-64-24k keeps radix 2^64 for CPUs such as K10/Core 2. Signing computes rB as a signed radix-16 fixed-base sum (Pippenger-style) over a 30KB precomputed table. Constant-time lookups load every candidate entry and combine them arithmetically, at a bit under 1000 cycles per step plus about 21000 for the final inversion. Verification merges the inversion into the square root when decompressing points, runs a double-scalar multiplication with a=-1 Edwards formulas, and compares encodings so R is never decompressed. Batch verification checks a random linear combination (128-bit z_i) with the Bos–Coster multi-scalar method over a heap using Floyd's bottom-up root replacement.
+
+**Use it when:**
+- You want the canonical, public-domain Ed25519 code to study, benchmark against, or vendor into C on x86-64, and you control the SUPERCOP/NaCl-style glue (sha512, verify_32, randombytes)
+- Server-side verification of many signatures from many keys: the amd64 open_batch path handles up to 64 at a time. The paper measured under 134000 cycles per signature versus 273364 for single verification on Westmere
+- Designing a new protocol that is free to pick its signature scheme and wants small keys and signatures (32/64 bytes) and deterministic signing that needs no RNG
+- Side-channel-conscious signing on general-purpose CPUs: the authors state there are no secret-dependent branches or array indices, and SUPERCOP's goal files record a TIMECOP pass for amd64-51-30k (titan0, 2020)
+
+**Skip it when:**
+- Environments that must interoperate with ECDSA P-256 (X.509 PKI, FIPS-only policies, existing P-256 keys): Ed25519 is a different curve, key format and signature semantics, so there is no drop-in path
+- Non-x86-64 targets: both assembly variants are amd64-only (the 'architectures' file says amd64), and the software page calls the portable 'ref' 'slow'
+- Systems that need strict, consensus-grade validity rules. open.c rejects S only when its top 3 bits are set, so S values in [ℓ, 2^253) pass the check. Single verification is cofactorless (encoding of SB−hA must equal R), while the batch equation only guarantees 8SB = 8R + 8hA, so the two paths can disagree on crafted signatures
+- Production deployments that want a maintained library: this 2011 code is frozen, and SUPERCOP itself now carries lib25519-amd64, lib25519-ref10 and s2n implementations of the same primitive
+- Very long or streamed messages: the API takes the whole message in memory, copies it into the signed-message buffer, and for long messages the time is dominated by SHA-512
+
+**Integration:** source-drop · SUPERCOP/NaCl-provided crypto_hash_sha512, crypto_verify_32, randombytes and the crypto_sign.h namespace macros · C compiler plus an assembler for the qhasm-generated AT&T-syntax .S files (gcc or clang). The paper states no compiler; SUPERCOP's goal files show gcc -march=native -O3 builds · x86-64 only for amd64-51-30k and amd64-64-24k; the portable C ref/ref10 run anywhere but slowly
+
+**Vs siblings:** Pick this over ENG25519 when you need plain x86-64 Ed25519 without AVX-512IFMA hardware, or when public-domain provenance matters more than peak throughput. libsecp256k1 and UltrafastSecp256k1 fit only when you need secp256k1 interop, and FourQlib only when a non-standard curve is acceptable.
+
+**Gotchas:**
+- The 64-byte secret key is the 32-byte seed followed by the 32-byte public key. crypto_sign copies A from sk+32 instead of recomputing it, so never assemble sk from a separately stored or untrusted public key
+- crypto_sign_open needs an output buffer m of at least smlen bytes because it uses it as scratch. On failure it sets *mlen to (unsigned long long)-1 and zeroes m
+- open_batch calls randombytes and caps batches at 64. It verifies fewer than 3 signatures one by one and, on any failure, falls back to individual verification. The paper's batch figures were the authors' own and were 'not yet benchmarked by' eBATS
+- The Westmere numbers come from the radix-2^51 amd64-51-30k code; the paper says radix 2^64 (amd64-64-24k) bottlenecks on Nehalem/Westmere. SUPERCOP selects the fastest implementation per machine, so which one you get varies by CPU
+
+**Status:** Frozen 2011 research code (software page last revised 2017-01-22) that is still shipped and benchmarked in SUPERCOP 20260831. The promised NaCl integration never shipped: NaCl's latest release, 20110221, still ships a prototype crypto_sign and points to SUPERCOP. It is public domain and easy to copy for study, but a maintained descendant is the better production choice.
+
+[repo](https://ed25519.cr.yp.to/software.html) · [benchmark](https://ed25519.cr.yp.to/ed25519-20110926.pdf)
+
+##### FourQlib (SchnorrQ / FourQ curve arithmetic)  `C`  `MIT`  `abandoned`  `Tier B`
+
+Microsoft Research C library for FourQ ECDH and SchnorrQ signatures; up to 5.6x faster scalar multiplication than fast P-256 code.
+
+**Beats:** NIST P-256 (Gueron-Krasnov fast implementation, the code later merged into OpenSSL as nistz256) — In Table 5 of the ASIACRYPT 2015 paper (ePrint 2015/565), FourQlib 2.0 did a variable-base scalar multiplication in 72k cycles on a Sandy Bridge i7-2600 and 56k on a Haswell i7-4770 (TurboBoost off), against 400k and 312k for the Gueron-Krasnov P-256 code (about 5.6x), and one ephemeral DH round in 112k vs 490k cycles (4.4x). The P-256 figures were copied from the Gueron-Krasnov paper rather than re-run, no compiler or flags are given, the FourQ code then used no vector instructions, and the current v3.1 code has not been re-benchmarked against a baseline.
+
+**Known shortcoming:** FourQ is a non-standard curve (not NIST or IETF approved for TLS), so it cannot replace P-256 where interoperability matters. P-256 comparison figures are copied from the Gueron-Krasnov paper, not re-measured. ARM directories vendor LGPL-3.0 libopencm3.
+
+**Known shortcoming:** Linux and Windows only (macOS hits #error; x64 asm is Linux-only). Open #10: GCC 11.4.1 at -O2/-O3 fails the fp2 inversion test, unanswered. Code inactive since 2021, no releases or tags. Default build uses -march=native with AVX2/MULX (binaries not portable); TEMP_ZEROING off by default. Curve4Q Internet-Draft expired 2017.
+
+**How:** FourQ has two cheap endomorphisms, psi (from the Q-curve construction) and phi (from complex multiplication with discriminant -40), which allow a four-dimensional GLV decomposition of a 256-bit scalar into four 64-bit sub-scalars. After a constant-time recoding (the Faz-Hernandez/Longa/Sanchez GLV-GLS recoding), variable-base multiplication is 64 double-and-add steps over an 8-point table, using complete extended twisted Edwards formulas over the Mersenne prime 2^127-1, where reduction is very cheap. Fixed-base multiplication uses an LSB-set comb with an 80-point (7.5 KB) table, and verification uses interleaved wNAF with a 24 KB table. On x64 Linux the GF(p^2) arithmetic is hand-written assembly, whose AVX2 variant also uses MULX and ymm registers.
+
+**Use it when:**
+- You control both ends of the protocol (internal RPC, a device fleet, a research prototype) and want the fastest constant-time ECDH or signatures at the 128-bit security level, with no standards requirement.
+- Ephemeral Diffie-Hellman on x64 Linux, where scalar multiplication dominates the cost. The paper reports 30-40k cycles for fixed-base key generation and 50-72k cycles for variable-base multiplication on Broadwell through Sandy Bridge.
+- 32-bit ARM, NEON (Cortex-A7/A8/A9/A15) or Cortex-M4 targets, which have their own tuned code trees that share the same API.
+- Benchmarking or teaching endomorphism-accelerated ECC: the code is compact, comes with Magma scripts that check the paper's operation counts, and can be built with or without the endomorphisms (USE_ENDO).
+
+**Skip it when:**
+- Anything that needs interop or compliance, such as TLS, X.509, SSH, JOSE/COSE or FIPS 140. FourQ is not a NIST or IETF curve, and the Curve4Q Internet-Draft (draft-ladd-cfrg-4q-01) expired in 2017.
+- macOS or any OS other than Linux or Windows. FourQ.h stops with #error "Unsupported OS" unless __LINUX__ or __WINDOWS__ is defined, and the Mac issues #2 and #6 are unanswered.
+- Production use without your own validation. Open issue #10 (2024) reports that the GF(p^2) inversion test FAILS with GCC 11.4.1 at -O2/-O3 while clang 15 passes, and nobody from the project has replied.
+- SchnorrQ over large or streamed messages. Sign and Verify calloc a full copy of the message (SizeMessage+64 bytes, length typed as unsigned int), and there is no prehash or streaming API.
+- Hardened embedded deployments using the bundled side-channel tree as-is: FourQ_ARM_side_channel is labeled experimental and 'DO NOT USE AS IS IN PRODUCTION', and its SHA-512 is not DPA-protected.
+
+**Integration:** source-drop (the makefile builds the test binaries, and libFourQ.so with SHARED_LIB=TRUE; a Visual Studio 2015 solution builds FourQ.lib; no install target, CMake or pkg-config) · None external. Bundled public-domain SHA-512 and a /dev/urandom or BCryptGenRandom/RtlGenRandom RNG, both replaceable via macros in FourQ.h. The Cortex-M4 trees bundle libopencm3 (LGPL-3.0) and CC0 STM32 wrappers. · C with 128-bit integers (GCC/clang mode(TI)) or MSVC _umul128. Tested with Visual Studio 2015, GCC 4.9 and clang 3.8; GCC 11.4.1 at -O2/-O3 is reported to fail the fp tests. The makefile uses GNU sed -i. · Linux and Windows only. x64 has the optimized path (the default AVX2 assembly needs Haswell+ with BMI2 MULX, and assembly is Linux-only, so Windows gets the C path). ARMv8 64-bit has optimized C; x86 and 32-bit ARM use the portable C. ARMv6/ARMv7, NEON and Cortex-M4 have separate trees.
+
+**Vs siblings:** Choose FourQlib over the SUPERCOP Ed25519 code or ENG25519 only when you do not need Ed25519/X25519 compatibility and your CPUs lack AVX-512 IFMA. Its 2015 paper measured 2.2-2.9x faster variable-base multiplication than the Curve25519 code of that era, whereas ENG25519 speeds up the standard curves on IFMA hardware. Use libsecp256k1 for Bitcoin's secp256k1 and ocaml-curve448 if you need X448/Ed448.
+
+**Gotchas:**
+- ecc_mul takes a clear_cofactor flag. The high-level SecretAgreement calls clear the cofactor (x392) and reject a neutral-point result, but raw ecc_mul callers must pass true for any untrusted point. The ECDH output is only the 32-byte y-coordinate.
+- The default Linux build adds -march=native (EXTENDED_SET) and, on x64, AVX2+MULX assembly, so the binaries are not portable. Set EXTENDED_SET=FALSE and AVX2=FALSE (or GENERIC=TRUE) for distributable builds.
+- TEMP_ZEROING is commented out by default, so secret intermediates in scalar multiplication are not wiped. ecc_mul_double (used for verification) and point validation are explicitly non-constant-time and meant only for public inputs.
+- SchnorrQ signatures always end in a 0x00 byte because s < 2^246, and the verifier rejects anything else (issue #3). Secret keys are unclamped 256-bit hash outputs, and nonces are deterministic, as in EdDSA.
+
+**Status:** Abandoned: the last code change was the hash-to-curve addition on 2021-03-19, the last commit (2022-08-31) only added Microsoft's SECURITY.md, and there has never been a tagged release (issue #1). The MIT core is small enough to vendor, but plan on validating your own compiler and maintaining fixes yourself.
+
+[repo](https://github.com/microsoft/FourQlib) · [benchmark](https://eprint.iacr.org/2015/565.pdf)
 
 ### networking-and-servers
 
@@ -12467,6 +14494,1420 @@ Staged, typed OCaml parser combinators (MetaOCaml) that beat ocamlyacc/ocamllex 
 [repo](https://github.com/yallop/ocaml-asp) · [benchmark](https://www.cl.cam.ac.uk/~jdy22/papers/a-typed-algebraic-approach-to-parsing.pdf)
 
 ## Permissive — Unverified claims (tier C/D)
+
+### compression-and-encoding
+
+#### general-lossless
+
+##### libdeflate  `C`  `MIT`  `active`  `Tier C`
+
+Whole-buffer DEFLATE/zlib/gzip C library: about 2.6x zlib's decompression speed and 3.3x its level-6 compression, plus faster CRC-32.
+
+**Beats:** zlib crc32() — The only CRC-32 vs zlib figure is the author's own NEWS.md note for v1.12 (2022): about 67 GB/s vs 31 GB/s for Apple's system zlib (~2.2x) on large inputs on Apple M1, with no compiler, flags or input details. For DEFLATE, the independent lzbench 2.0.1 README (gcc 14.2.0, one thread of an AMD EPYC 9554 at 3.10 GHz with turbo off, silesia.tar) shows libdeflate 1.23 at level 6 compressing at 84.3 MB/s and decompressing at 912 MB/s, vs 25.3/344 for zlib 1.3.1 and 62.1/509 for zlib-ng 2.2.3; a 2023 TurboBench run on a Ryzen 6600HS shows the same ordering.
+
+**Known shortcoming:** Only CRC figure is first-party (NEWS.md v1.12: Apple M1 CRC-32 ~67 GB/s vs Apple zlib ~31, ~2.2x) with no compiler or flags. Whole-buffer API only (no streaming). Found in wave 7 for its CRC-32; filed under wave 9's general-lossless category.
+
+**Known shortcoming:** No streaming or zlib-compatible API (whole buffers only); compressor uses 668 KB-9 MB of memory; igzip beats it at level 1; no crc32_combine. zlib-ng's CRC is ~2x faster on pre-Rocket-Lake Intel AVX-512 (issue #338, by design). Open #288: decoder accepts some streams zlib rejects.
+
+**Independent measurement:** libdeflate NEWS v1.12: M1 crc32 ~67 GB/s vs Apple zlib ~31 GB/s.
+
+**Independent measurement:** lzbench (EPYC 9554) level 6: libdeflate decompress 912 vs zlib 344, zlib-ng 509 MB/s; compress 84.3 vs 25.3, 62.1 MB/s.
+
+**How:** The decompressor reads input and copies matches a word at a time and keeps a large bit buffer that needs refilling less often. It uses faster table-driven Huffman decoding with DEFLATE-specific tricks, and drops the branches needed to pause and resume because it only decodes whole buffers. On x86-64 a BMI2-compiled copy is picked at runtime. Each compressor level uses its own matchfinder: a hash table at level 1, hash chains with greedy/lazy/lazy2 parsing at 2-9, and binary trees with near-optimal (minimum-cost-path) parsing at 10-12, plus a block-splitting heuristic. CRC-32 uses carryless-multiply folding, chosen at runtime: PCLMULQDQ, then VPCLMULQDQ with 256- or 512-bit vectors (AVX2/AVX-512) on x86, and 12-way PMULL folding combined with crc32 instructions (plus EOR3 when SHA3 is present) on arm64. Other targets fall back to slice-by-8 tables.
+
+**Use it when:**
+- Chunked compression where each chunk fits in memory and its uncompressed size is stored separately: filesystem or block compression, BGZF genomics blocks (htslib probes for libdeflate by default), TIFF strips (libtiff), OpenEXR (bundles or finds libdeflate).
+- Decompression-heavy gzip/zlib workloads. In lzbench (EPYC 9554, Silesia, level 6 data) it decompresses at 912 MB/s against 344 for zlib 1.3.1 and 509 for zlib-ng 2.2.3.
+- Level 6-9 compression when the output must stay DEFLATE-compatible: 84.3 MB/s at level 6 vs 25.3 (zlib) and 62.1 (zlib-ng), at a slightly better ratio (31.85% vs 32.19% and 32.49%).
+- Smaller-than-zlib-9 DEFLATE output (for example PNG/ZIP assets built once and served many times). Level 12 reaches 30.52% vs 31.92% for zlib -9, at about 5 MB/s.
+- Replacing zlib crc32() in hot paths on CPUs with PCLMULQDQ or ARMv8 PMULL. On Apple M1 the author measured about 67 GB/s vs 31 GB/s for Apple's zlib.
+
+**Skip it when:**
+- Streaming data: a single large gzip stream, sockets, or input whose size is unknown. There is no streaming API (issue #19 is still open), and the bundled libdeflate-gzip 'needs a lot of memory to process large files'. zlib-ng fits there.
+- When you need a drop-in zlib API (deflateInit/inflate, z_stream). Code must be ported to libdeflate's own calls.
+- Maximum speed at the lowest levels. In a TurboBench run on a Ryzen 6600HS, ISA-L igzip level 1 compressed at 615 MB/s vs 289 for libdeflate level 1, with a worse ratio (36.9% vs 34.7%). If the format is not fixed, LZ4 or zstd beat any DEFLATE.
+- Memory-tight compression. A compressor takes about 668 KB at levels 2-9 and about 9 MB at levels 10-12 (issue #315); the author says this is more than zlib uses.
+- CRC-32 on Intel AVX-512 parts older than Rocket Lake or Sapphire Rapids (Skylake-SP through Tiger Lake). libdeflate deliberately avoids 512-bit vectors there, and the author says zlib-ng winning CRC-32 benchmarks on those chips 'is currently expected' (issue #338 measured about 2x).
+
+**Integration:** static lib or shared lib via CMake, or a source-drop (compile lib/*.c and lib/*/*.c directly, no configure step) · none for the library; the bundled benchmark/checksum test programs use zlib for comparison runs · C11 (since v1.26): gcc 4.9+, clang 3.9+ / Xcode 8+, MSVC 2019 16.8+; CMake 3.10+. Newer compilers enable more of the optimized code (the VPCLMULQDQ CRC paths need gcc 10+ or clang 6+ and are disabled under clang 18). · Any C11 target. Runtime-dispatched optimized paths exist for x86/x86-64 (PCLMULQDQ, VPCLMULQDQ AVX2/AVX-512, BMI2 decompression, AVX2/VNNI Adler-32) and arm64 (PMULL, CRC32, SHA3, NEON/dotprod), with some tuning for RISC-V and PowerPC. 32-bit ARM lost accelerated CRC-32 in v1.20. There are prebuilt 64-bit Windows binaries, and a freestanding build is supported.
+
+**Vs siblings:** Pick libdeflate over zlib-ng when you handle whole buffers and can adopt a new API. It decompresses about 1.8x faster than zlib-ng in lzbench, is faster at levels 6-9 with a slightly better ratio, and at level 1 matches zlib-ng's speed (207 vs 202 MB/s) with a much better ratio (34.7% vs 44.4%). Pick zlib-ng for streaming, zlib API compatibility, or CRC-32 on pre-Rocket-Lake Intel AVX-512 chips, and pick LZ4 or zstd whenever the output does not have to be DEFLATE/zlib/gzip.
+
+**Gotchas:**
+- Decompression wants the exact uncompressed size. Pass it as out_nbytes_avail with a NULL actual_out pointer to get LIBDEFLATE_SHORT_OUTPUT on a mismatch. With an unknown size you must guess a buffer and retry on LIBDEFLATE_INSUFFICIENT_SPACE, and the output buffer is undefined on any error.
+- libdeflate_gzip_decompress() stops after the first gzip member. Loop over libdeflate_gzip_decompress_ex() for multi-member files (pigz/BGZF output).
+- The compress functions return 0 when the output does not fit; store the chunk uncompressed in that case. Compressed bytes change between versions, so never test against golden output. The decompressor still accepts some malformed streams that zlib rejects (open issue #288).
+- v1.20-1.22 could compute wrong CRCs on AVX-512 machines in rare builds (clang -O0; old macOS register-corruption bug), fixed in 1.23. The README warns that many language bindings pin old versions.
+
+**Status:** Actively maintained by Eric Biggers (v1.26 released 2026-08-22, regular releases since 2016, about a dozen open issues), MIT-licensed, stable 1.x API, and easy to vendor because the sources compile without a configure step.
+
+[repo](https://github.com/ebiggers/libdeflate) · [benchmark](https://github.com/ebiggers/libdeflate/blob/master/NEWS.md)
+
+### crypto-and-hashing
+
+#### aead-and-ciphers
+
+##### Bitsliced AEGIS-128L / AEGIS-128X2 (constant-time, no-AES-NI platforms)  `C`  `MIT`  `active`  `Tier C`
+
+Constant-time bitsliced C AEGIS for CPUs without AES instructions; beats bitsliced AES-GCM by 1.4-6x.
+
+**Beats:** OpenSSL AES-GCM / BoringSSL AES-GCM (side-channel-protected/bitsliced builds) — In the author's own preprint (ePrint 2026/1338), measured on 16 KB messages, one core, wall-clock time with the tag included, against bitsliced AES-128-GCM (OpenSSL 3.3 on Cortex-A53, BoringSSL elsewhere): A53 423 vs 261 Mb/s; X60 193 (128L) / 333 (128X2) vs 137; U74 182 / 311 vs 130; WASM on M1 2241 / 2912 vs 480; Cortex-M4 185 vs 246 cycles/byte. Compilers and flags are not stated, and the repo's benchmark.zig times only AEGIS, not the AES-GCM baselines.
+
+**Known shortcoming:** ePrint preprint by the repo's author, not peer-reviewed; bench.zig times AEGIS only, no flags stated. The 333 figure on the X60 is AEGIS-128X2, not 128L; README WASM numbers differ from the paper.
+
+**Known shortcoming:** Thin or negative margins: on the X60, AEGIS-128L (193 Mb/s) is slower than unprotected OpenSSL AES-GCM (223); on Cortex-M4 185 vs 190 cycles/byte against fixsliced AES-GCM, while hardware AES-GCM on M4 runs at 46. Baselines are not in the repo harness; compilers/flags unstated. One-shot API only (no incremental, MAC or X4); exports the same symbol names as libaegis, so both cannot be linked together. 9 stars, no releases.
+
+**How:** An AEGIS-128L update applies one keyless AES round to all 8 state blocks at once, so a single message stream fills an 8-block bitsliced datapath. Bitsliced AES-CTR needs 8 independent counter blocks for that, and the paper reports AEGIS-128L needs 2.5x fewer parallel AES rounds per byte than bitsliced AES-128-CTR, with no GHASH multiply. The code uses Adomnicai and Peyrin's barrel-shiftrows representation with the Maximov-Ekdahl S-box circuit. It keeps the state bitsliced across init, AD, message and finalization, and computes the keystream directly in packed lanes with only a partial unpack. AEGIS-128X2 uses 64-bit words to update 16 blocks per round on 64-bit and WASM targets. With clang or GCC 12+, the S-box runs as 4x32-bit vectors on SSE2, NEON, AltiVec or WASM SIMD128.
+
+**Use it when:**
+- Timing-safe AEAD on ARM Cortex-A53-class or RISC-V cores without AES extensions (SiFive U74, SpacemiT X60), where the alternative is bitsliced OpenSSL/BoringSSL AES-128-GCM: 1.6x (A53) and 1.4-2.4x (RISC-V, X2 at the high end) on 16 KB messages.
+- WebAssembly builds with simd128 that must stay constant-time: the paper reports 2241-2912 Mb/s vs 480 Mb/s for bitsliced BoringSSL AES-GCM on an Apple M1 host.
+- Microcontrollers without an AES peripheral (Cortex-M4): 185 cycles/byte vs 246 for fixsliced AES-128-GCM with protected GHASH.
+- Mixed fleets already standardized on AEGIS, where some endpoints (IoT, WASM clients) lack AES hardware and others use libaegis or libsodium. Ciphertexts are the same RFC 10032 format.
+- Pure JS/TS via the companion js-aegis-aead port: 324 MB/s at 1 MB on Apple M5 Max/Bun, 1.8x noble AES-128-GCM and 1.3x noble ChaCha20-Poly1305.
+
+**Skip it when:**
+- Any CPU with AES-NI, ARMv8 Crypto or VAES. Use libaegis, whose README reports 100+ Gb/s for hardware-accelerated AEGIS-128L on Zen 4 and Apple M1. If you do not need side-channel protection, libaegis's unprotected table-based AEGIS-128L is also 1.85x (A53, 782 Mb/s) to 2.8x (U74, 507 Mb/s) faster than this code.
+- Microcontrollers with an AES accelerator: on the Flipper Zero Cortex-M4, hardware AES-GCM does 46 cycles/byte vs 185 here.
+- Workloads that need streaming or incremental encrypt/decrypt, AEGIS-MAC, a raw keystream, or the X4 variants. Only one-shot whole-buffer calls for 128L/128X2/256/256X2 exist.
+- Where the margin is thin: on SpacemiT X60, bitsliced AEGIS-128L (193 Mb/s) is slower than unprotected OpenSSL AES-GCM (223). On Cortex-M4 it is only about 3% ahead of fixsliced AES-GCM with a 4-bit-LUT GHASH (185 vs 190 cycles/byte). Very short messages are dominated by fixed init/finalization cost.
+- Risk-averse deployments: single-author code with 9 stars, no tagged releases and no issue history, backed only by a non-peer-reviewed preprint from the author.
+
+**Integration:** static lib (zig build) or source-drop (7 plain C files plus headers in src/) · none beyond libc (string.h/stdlib.h) · Zig build system; build.zig uses the b.addLibrary/root_module API, but no minimum Zig version is declared and there is no CMake. The vectorized S-box needs clang or GCC 12+, otherwise the scalar path is used. The C standard is not documented. · Portable C on 32- and 64-bit targets. The 64-bit doubled X2 layout is auto-selected on 64-bit and wasm, and 32-bit targets use two interleaved 32-bit states. The vector S-box covers SSE2, NEON, AltiVec and WASM simd128. Measured on Cortex-A53, Cortex-M4, SiFive U74, SpacemiT X60 and WASM.
+
+**Vs siblings:** Pick this over libaegis only when the target has no AES instructions and timing side channels matter; libaegis's own README recommends aegis-bitsliced for such environments. The HiAE, Rocca and intel-ipsec-mb figures in the catalog were all measured on hardware-AES x86 CPUs, so none of them addresses AES-less, constant-time targets.
+
+**Gotchas:**
+- Exports the same public symbols as libaegis (aegis128l_encrypt, aegis_verify_16, ...), so both cannot be linked into one binary without renaming.
+- On WebAssembly the vector path needs the simd128 target feature (e.g. -Dcpu=lime1+simd128). Without it, the README says the code runs 2-3.3x slower under wasmtime.
+- README WASM numbers (AEGIS-128L 3429, X2 3154 Mb/s) differ from the paper (2241 / 2912), including which variant wins. Benchmark your own target and build.
+- No incremental API, so whole messages must be in memory. On tag failure, decrypt zeroes the plaintext buffer and returns -1.
+
+**Status:** Actively maintained (last commit 2026-09-21, at least 100 commits since 2024-10) but untagged and lightly used. The LICENSE file is plain MIT (based on Adomnicai's MIT code) even though GitHub reports NOASSERTION, and the code is small enough to vendor.
+
+[repo](https://github.com/aegis-aead/aegis-bitsliced) · [benchmark](https://eprint.iacr.org/2026/1338.pdf)
+
+##### ChaCha20-BLAKE3  `Rust`  `MIT`  `active`  `Tier C`
+
+Rust committing AEAD (ChaCha20 + keyed-BLAKE3 MAC); about 2x RustCrypto XChaCha20-Poly1305 and AES-256-GCM on 1-10 MB messages.
+
+**Beats:** XChaCha20-Poly1305 and AES-256-GCM via RustCrypto's pure-Rust crates (chacha20poly1305 0.11.0-rc.2 and aes-gcm 0.11.0-rc.2 per benchmarks/Cargo.toml), not OpenSSL or libsodium — The README table is first-party, single-core encryption on a virtualized AMD EPYC 9R45 (AWS ma8.xlarge), with no flags or rustc version stated; the repo's make bench target and .cargo/config.toml both use target-cpu=native. At 1-10 MB it measured 3,297-3,353 MB/s, against 1,654-1,664 MB/s for RustCrypto XChaCha20-Poly1305 and 1,476-1,477 MB/s for RustCrypto AES-256-GCM (0.11.0-rc.2 crates). It wins at 64 KB (2,153 vs 1,636 and 1,475 MB/s) and loses at 64 B and 1 KB. The shipped criterion bench covers only 64 B-64 KB with a 128-byte AAD, so the 1 MB and 10 MB rows cannot be reproduced from it. The AES-GCM arm runs without the aes crate's VAES cfgs, which open issue #4 argues understates AES-GCM on Zen CPUs.
+
+**Known shortcoming:** Slower than XChaCha20-Poly1305 at small sizes (1.1-1.5x) and only ~2.2x faster than AES-GCM at 1-10 MB; the benchmark code stops at 64 KB, so the 1 MB/10 MB rows cannot be rerun from the repo; no rustc version. Non-standard AEAD construction (ChaCha20 + BLAKE3) with no external review.
+
+**Known shortcoming:** SIMD functions lack #[target_feature]: open PR #12 reports ~55 MB/s instead of ~1.2 GB/s in a non-native build. The crates.io crate is a third-party fork (paddor); upstream recommends a git dependency. Zeroization incomplete on the decrypt path; no streaming API; 32-byte tag; the Go port's nonce size (32) differs from the Rust version (24). AES-GCM comparison on ARM lacks VAES (#4).
+
+**How:** The bundled `chacha` crate computes ChaCha blocks in a word-sliced (one block per SIMD lane) layout: 16 blocks per iteration with AVX-512 (_mm512_rol_epi32 rotates), 8 with AVX2, and 4 with NEON or WASM simd128. A scalar fallback covers inputs under 128 bytes and machines without SIMD. Authentication uses the blake3 crate, whose x86_64 build defaults to hand-written SSE4.1/AVX2/AVX-512 assembly (NEON C intrinsics on aarch64), so the MAC also scales with vector width. In the author's table the RustCrypto baselines plateau near 1.5-1.7 GB/s from 64 KB up while this construction reaches 3.3 GB/s. A per-message BLAKE3 KDF call plus a MAC finalization makes it slower than both baselines at 64 B-1 KB.
+
+**Use it when:**
+- Rust code encrypting large one-shot buffers (64 KB and up, best at 1 MB and up), such as files, backups or object-storage blobs, where the author measured about 2x RustCrypto XChaCha20-Poly1305 and 2.2x RustCrypto AES-256-GCM.
+- Designs that use one long-lived key with random 24-byte nonces and want a committing AEAD; the README claims full context commitment.
+- Targets without AES hardware (microcontrollers, WASM with simd128, older ARM) when you control both ends of the channel and AES-GCM would be slow.
+- no_std builds: with default-features = false you still get the in-place detached API and compile-time SIMD selection.
+
+**Skip it when:**
+- Small messages. At 64 B-1 KB it is 1.1-1.5x slower than XChaCha20-Poly1305 and 2.5-5.2x slower than AES-256-GCM in the author's own table.
+- Interoperability or compliance needs (TLS, FIPS, JOSE/COSE). It is a non-standard construction specified only on the author's site, IANA/JOSE/COSE registration is still an open issue (#2), and the spec's KDF choice is questioned in open issue #11.
+- Portable x86-64 binaries built without -C target-cpu=native. The SIMD functions have no #[target_feature] attribute, and unmerged PR #12 reports about 55 MB/s instead of about 1.2 GB/s on an AVX2 i7-9750H as a result.
+- Streaming or larger-than-memory data. There is only a one-shot API (a streaming API is requested in open issue #1), and each call makes two passes over the buffer (encrypt, then MAC).
+- Machines with AES instructions where you just want the fastest AEAD. The AES-based siblings (AEGIS, HiAE, ROCCA-S) report tens to hundreds of Gbps, against about 3.3 GB/s here.
+
+**Integration:** crate (upstream recommends a git dependency on the main branch; the crates.io release is a third-party fork) · blake3 1.x (default features off, with neon and wasm32_simd; on x86_64 it builds hand-written assembly and on aarch64 the NEON code needs a C compiler), constant_time_eq 0.4, the in-repo `chacha` crate (path dependency), and optional zeroize 1. · Rust 1.85 (edition 2024, rust-version = "1.85") · x86_64: AVX2/AVX-512 chosen by runtime detection with the std feature, or by compile-time target features in no_std builds. aarch64: NEON assumed. wasm32: simd128 at compile time only. Everything else uses the portable scalar fallback.
+
+**Vs siblings:** Pick it over chacha20poly1305-simd when messages are large (64 KB and up), you want key commitment and random 24-byte nonces, and you do not need RFC 8439 wire compatibility; chacha20poly1305-simd is the better choice for small messages and standard ChaCha20-Poly1305. Over the AES-based siblings (libaegis, HiAE, ROCCA-S), pick it only when the target lacks AES instructions or you want one algorithm across microcontrollers, WASM and servers.
+
+**Gotchas:**
+- The crates.io crate chacha20-blake3 (0.9.11-0.10.0) is published by a third party from the paddor/chacha20-blake3 fork. That fork includes changes upstream has not merged: the target_feature fix, zeroization fixes, a Session API, and SSE2/AVX2 small-message paths. The upstream Cargo.toml is still at 0.9.11, so `cargo add` does not give you upstream.
+- Upstream's zeroize feature does not wipe everything. decrypt_in_place_detached never wipes kdf_out, Zeroizing::new(encryption_key).zeroize() wipes a copy of a Copy array, and the derived authentication-key copies are never wiped. The fork commit 'Zeroize all derived key material in AEAD' addresses this.
+- The tag is 32 bytes, 16 more than GCM or Poly1305. The Go port in skerkour/stdx-go (crypto/chacha20blake3) declares NonceSize = 32, while the Rust crate and that port's own error text say 24, so verify cross-language interop before you rely on it.
+- The maturity signals conflict. The author's January 2026 announcement title calls ChaCha20-BLAKE3 'stable and production-ready', but the bundled chacha crate's README says 'preliminary release, DO NOT USE IN PRODUCTION'. No third-party audit or cryptanalysis is documented.
+
+**Status:** The upstream repo is MIT-licensed with 103 stars; its last commit was 2026-01-15, and PR #12, the 2026-04 portable-build performance fix, has had no maintainer reply. The more recently updated crates.io release comes from a third-party fork, so 'active' is generous; pin a git revision or vendor the two small crates.
+
+[repo](https://github.com/skerkour/chacha20-blake3) · [benchmark](https://github.com/skerkour/chacha20-blake3#performance)
+
+##### Intel(R) Multi-Buffer Crypto for IPsec (intel-ipsec-mb)  `C`  `BSD-3-Clause`  `active`  `Tier C`
+
+Intel's x86-64 assembly packet-crypto library; batches many packets per SIMD pass; beat OpenSSL AES-CBC+HMAC-SHA-256 once.
+
+**Beats:** OpenSSL (AES-256-CBC+HMAC-SHA-256 throughput) and FreeBSD OpenCrypto Framework (OCF) default kernel crypto (AES-GCM / ChaCha20-Poly1305 VPN throughput) — The only comparison against OpenSSL is one sentence in Netgate's AsiaBSDCon 2023 paper. On an unnamed AVX2 host, IPsec-MB ran AES-256-CBC+HMAC-SHA-256 at 18.1 Gbps on 1400-byte blocks, against OpenSSL's best of 10.4 Gbps on 16 kB blocks (about 1.7x), with no CPU model, compiler, OpenSSL version or benchmark code given. The other gains are end-to-end iperf3 VPN throughput in FreeBSD-CURRENT VMs on a Ryzen 5 5600 (plus an Atom C3758 SG-8200), where Netgate's batching engine plus this library replaced FreeBSD's OCF. Those numbers measure the engine and the library together, not the library against OpenSSL.
+
+**Known shortcoming:** Only outside evidence is Netgate's AsiaBSDCon 2023 paper: 18.1 vs OpenSSL 10.4 Gbps for AES-CBC+HMAC with mismatched block sizes and no CPU model stated. x86-only (Intel/AMD with AES-NI/VAES).
+
+**Known shortcoming:** x86-64 only (Arm64 port declined, #145; a separate Arm fork exists). Job/burst API, not EVP; the in-repo OpenSSL provider is test-only, and QAT qat_sw uses it only for AES-GCM on AVX-512+IFMA CPUs. Decrypt jobs return the tag without checking it (caller must compare). SAFE_* defaults cost ~10% (#90). Last release v2.0 (Nov 2024); main is 3.0-dev and drops APIs. The only OpenSSL head-to-head is one Netgate sentence with an unnamed CPU and mismatched sizes (1400 B vs 16 kB).
+
+**Independent measurement:** Netgate AsiaBSDCon 2023: AES-CBC+HMAC 18.1 vs OpenSSL 10.4 Gbps; VPN throughput wins over FreeBSD OCF.
+
+**How:** The main technique is multi-buffer processing. Modes that are serial inside one message (AES-CBC encryption, HMAC-SHA, AES-XCBC/CMAC, ZUC, SNOW3G) are run across independent jobs held in SIMD lanes: x4 with SSE, x8 with AVX2 and x16 with AVX-512, so each packet's dependency chain overlaps with the others. Modes that parallelize within one message (GCM, CTR, CBC decryption) use single-buffer 'by8/by16/by32' kernels with VAES and VPCLMULQDQ. Cipher and hash work is also interleaved ('function stitching'). init_mb_mgr_auto picks the SSE, AVX2, AVX-512 or AVX10 code path at run time, and AES key schedules, HMAC ipad/opad states and GHASH key powers are computed once per session rather than per packet. In Netgate's measurement on an AVX2 host, serial AES-256-CBC+HMAC-SHA-256 ran at 5.4 Gbps and the multi-buffer path at 18 Gbps.
+
+**Use it when:**
+- IPsec gateways, VPN concentrators and DPDK/VPP data planes that always have many independent packets in flight and can keep the job queue full.
+- Legacy AES-CBC + HMAC-SHA1/SHA2 suites, which gain the most from multi-lane batching. Netgate measured 18.1 Gbps on 1400-byte packets against OpenSSL's best of 10.4 Gbps on 16 kB buffers.
+- 3GPP, DOCSIS or PON stacks that need ZUC-EEA3/EIA3, SNOW3G, KASUMI, the 5G NEA4/5/6 ciphers, DOCSIS AES/DES or PON CRC-BIP with SIMD multi-lane code. Few general crypto libraries ship these.
+- Async crypto engines, in the kernel or in userspace, that batch standard AEADs (AES-GCM, ChaCha20-Poly1305). Netgate's FreeBSD engine moved OpenVPN DCO AES-256-GCM from 6.0 to 10 Gbps async and IPsec-ESP AES-128-GCM from 4.46 to 7.68 Gbps, compared with FreeBSD's OCF.
+- Recent x86-64 servers with VAES, VPCLMULQDQ and AVX-512 or AVX10 (Ice Lake, Sapphire Rapids and later), where the by32 GCM and x16-lane paths are used. It is also a fit when you need a power-up self-test and ACVP harness for CAVP.
+
+**Skip it when:**
+- Any non-x86-64 target. INSTALL.md says compilation is 'x64 only', and the maintainers declined an Arm64 port (issue #145). Arm keeps a separate fork at gitlab.arm.com, and Netgate had to use ISA-L and OpenSSL code on ARM.
+- Low-rate or latency-bound traffic where one message is usually outstanding. Intel's white paper warns that calling flush after every submit is correct but slower than good single-buffer code, and that the design assumes flushes are rare.
+- Replacing OpenSSL EVP in a production application. The in-repo OpenSSL 3.x imb-provider is labeled 'evaluation, development, and benchmarking only'. The production route, QAT Engine's qat_sw, uses this library only for AES-GCM and requires AVX-512F, AVX512_IFMA, VAES and VPCLMULQDQ.
+- Single large AES-GCM or ChaCha20-Poly1305 buffers where OpenSSL is already in use. These AEADs are single-buffer multi-block here, as they are in OpenSSL's assembly, and no published head-to-head against OpenSSL shows a gain for them.
+- SM3/SM4 on CPUs without SM3NI/SM4NI. The maintainers say the base implementations are not optimized, and one VPP user saw about 200 Mbps (issue #152).
+
+**Integration:** shared lib (default) or static lib built with CMake (libIPSec_MB). CPack can produce DEB/RPM packages. The OS packages are installed under /usr/local/lib. · Build time: NASM and Perl (Perl generates the vendored OpenSSL ML-DSA/Keccak assembly). Run time: only the C library. Optional: Valgrind headers for the constant-time validation build, and libacvp 2.0+ for the ACVP test app. · CMake 3.16+. C11 (GCC and Clang build with -std=c11; MSVC and MinGW are supported). NASM 2.14+ is required; NASM 2.16 is needed for the AVX-IFMA paths and 2.16.02 for the SM3/SM4/SHA512-NI paths, otherwise those paths are skipped with a warning. · x86-64 only, on Linux, FreeBSD and Windows. Code paths are chosen at run time among SSE types 1-3 (minimum SSE4.2 + AES-NI + PCLMULQDQ), AVX2 types 1-4, AVX-512 types 1-2 and AVX10. This repo has no AArch64 support.
+
+**Vs siblings:** libaegis, HiAE, Rocca, SNOW-V-GCM and aegis-bitsliced are new AEAD algorithms, and both ends must implement them. Pick intel-ipsec-mb when you have to talk existing wire formats (AES-GCM, AES-CBC+HMAC, ChaCha20-Poly1305 or 3GPP ciphers) to standard IPsec, TLS or 5G peers on x86-64. If you control both endpoints and want raw per-byte AEAD speed, AEGIS or HiAE are faster designs.
+
+**Gotchas:**
+- Decryption never verifies the tag. For every AEAD and MAC, the decrypt/verify direction only writes the computed tag, and the caller must compare it in constant time. The library also does not enforce key/IV uniqueness and accepts GCM tags shorter than 96 bits.
+- SAFE_DATA, SAFE_PARAM and SAFE_LOOKUP are on by default and cost speed. One user measured about 10% slower AES-CBC/CTR on Broadwell after upgrading from v0.52 (issue #90), and the maintainers suggested turning off SAFE_DATA and SAFE_PARAM. SECURITY.md says no general side-channel protection was added. The optional Valgrind constant-time check covers only the job API.
+- The job pointer returned by submit or flush is valid only until the next get_next_job call. Jobs complete in submission order, so one slow lane holds back later jobs until you flush. Expanded keys and auth keys must be 16-byte aligned, and keys, HMAC pads and GHASH powers must be precomputed per session.
+- Main is 3.0.0-dev and the README says code from main is not fit for production. The last tagged release is v2.0 (November 2024), and 3.0 removes the wireless and CRC direct APIs, the QUIC API, SNOW-V, ZUC-256 and bit-length support.
+
+**Status:** Intel develops it actively (commits up to 2026-09-25) under BSD-3-Clause, plus Apache-2.0 for the vendored OpenSSL PQC code. Ship a tagged release (v2.0 is the last one, from November 2024, and is what DPDK 24.11 uses) rather than main, and expect API removals in 3.0.
+
+[repo](https://github.com/intel/intel-ipsec-mb) · [benchmark](https://2023.asiabsdcon.org/program/_p05b/paper.pdf)
+
+##### LeMac (pauldreik C++20 port)  `C++`  `BSL-1.0`  `stale`  `Tier C`
+
+C++20 library and lemacsum CLI for LeMac, an AES-round MAC measured at ~27x OpenSSL SHA-1 bulk throughput on Zen 4.
+
+**Beats:** SHA-1 (OpenSSL EVP) — The numbers are first-party and come from the README. On a Ryzen 9 7950X3D (Debian 13, compiler unnamed, Release build with per-file -maes / -mvaes -mavx512f -mavx512vl), the repo's benchmark gave LeMac oneshot 76.7 (256 kB) and 74.3 (1 MB) 'GiB/s' (median of 5), against about 2.8 GiB/s from `openssl speed -evp SHA1` on the same machine, roughly 27x, but that compares a keyed MAC with an unkeyed digest. benchmark.cpp actually prints bytes/s x 1e-9 under a 'GiB/s' label, so the LeMac figures are decimal GB/s (about 71 GiB/s), while the baselines (openssl speed, xxhsum -b, clhash's benchmark) come from outside tools with their own units.
+
+**Known shortcoming:** Implements the corrected LeMac (passes upstream v1 test vectors), but its README compares only against SHA-1 (~27x, derived), AES-128-ECB, clhash and xxh3 (LeMac ~16% slower than xxh3), not against a MAC incumbent such as GMAC/GHASH or AEGIS. Compiler for the main Zen 4 run unnamed. MAC only, not an AEAD.
+
+**Known shortcoming:** The default all-zero key and nonce (lemacsum, README example) gives no collision resistance per the paper, so it is not a SHA-1 substitute. finalize() mutates state with no reset; in release builds the nonce size is checked only by assert, so a short nonce reads out of bounds. Without AES hardware it calls std::abort (no fallback, no XGETBV check). The benchmark prints bytes/s x 1e-9 labelled 'GiB/s' (real ~71 GiB/s). v0.1, stale since 2025-06.
+
+**How:** LeMac is an AES-round universal hash from the paper's MILP-optimised framework. A 9 x 128-bit state plus a 4-register message schedule (RR, R0-R2) absorbs each 64-byte block with 8 independent AESENC instructions (2 AES rounds per 128-bit word) and a few XORs. That lets CPUs that issue two AESENC per cycle approach 4 cycles per 64 bytes, and the README measured 0.067 c/B. Tags use the EWCDM construction: four zero-block rounds, nine modified AES-128 calls over the state, and AES of the nonce, which gives the fixed ~2 KB-equivalent finalisation cost. On x86 the runtime dispatch chooses between a -maes build and a build of the same 128-bit intrinsics compiled with -mvaes -mavx512f -mavx512vl; there is no 256/512-bit multi-block AES. On arm64, AESENC is emulated as AESE(zero)+AESMC+EOR.
+
+**Use it when:**
+- Authenticating large buffers (16 KB and up) under a secret 128-bit key where GMAC or HMAC throughput is the bottleneck. The README measured about 74-77 GB/s single-core on a Ryzen 9 7950X3D and 43-48 GB/s on Apple M3/M4 at 256 KB-1 MB.
+- Integrity tags for storage or replication pipelines where both ends are your code and a unique nonce per message is available, since the paper claims 128-bit security only when nonces are respected.
+- Many messages under one key: build the keyed hasher once, then copy it or reset() it per message. Keying costs about 5 KB of hashing and finalisation about 2 KB.
+- C++20/CMake projects on x86-64 with AES-NI, or arm64 with crypto extensions (Linux, macOS Apple silicon, Windows), that want FetchContent/find_package integration, runtime CPU dispatch and a sanitizer-tested codebase instead of the upstream research C code.
+
+**Skip it when:**
+- As an unkeyed digest or 'cryptographic checksum' against adversaries, which is how lemacsum and the README example use it (all-zero key and nonce). The paper's UHF security 'only requires collision resistance on average over a random key', so with a public key there is no claimed collision resistance.
+- Non-adversarial fast checksums: xxh3/xxh128 is about 16% faster on the same Zen 4 (89 vs 77 GiB/s per README) and faster on the Pi 5 (13.2 vs 11.4 GiB/s).
+- Short messages without reuse. A fresh object costs about 5 KB of hashing to key, and on M4 a 1-byte oneshot runs at 0.021 GiB/s (0.049 us/hash), while 1 KB reaches only 17-23 GiB/s against about 48 GiB/s at 256 KB.
+- CPUs without AES-NI or ARMv8 crypto, and any other architecture. There is no software fallback: CMake stops with FATAL_ERROR on unknown architectures, and the constructor calls std::abort() on unsupported CPUs.
+- Interoperable or standardised MACs (protocols, FIPS). LeMac is a 2024 research design whose spec already changed once (LeMac-0 to LeMac, so values differ), and this port is a 4-star v0.1 that has had no commits since June 2025.
+
+**Integration:** static lib (CMake add_library; can also be installed with find_package config or packaged as Debian liblemac0/liblemac-dev) plus the lemacsum CLI · none for the library; CMake >= 3.23 to build; Catch2 v3 only for tests (vcpkg.json) · C++20; GCC 12+ / Clang 16+ on Linux (CI matrix covers g++ 12-14 and clang++ 16-18), Apple clang on macOS, MSVC for Windows amd64/arm64, and a MinGW cross-build · x86-64 with AES-NI (VAES+AVX512F+AVX512VL CPUs get the separately compiled fast path) and arm64 with ARMv8 AES (Linux via HWCAP_AES; Apple silicon and Windows arm64 are assumed and not checked). Nothing else.
+
+**Vs siblings:** Pick it over the upstream LeMac sibling (AugustinBariant/Implementations_LeMac_PetitMac: C/Python research code, AES-NI only, Makefile) when you need arm64/Windows support, a streaming C++ API, CMake packaging or a CLI; both implement the corrected LeMac and share test vectors. Pick it over libaegis (AEGIS-128L) only when you need a MAC and never encryption on AES-capable hardware: the LeMac paper measured 0.068 vs 0.195 c/B for AEGIS128L in AD-only mode on Ice Lake at 256 kB. For AEAD, portability without AES hardware or a mature, widely deployed codebase, libaegis wins.
+
+**Gotchas:**
+- Defaults are all-zero. LeMac() uses a zero key, and finalize()/oneshot(data) use a zero nonce. A fixed nonce puts you in the paper's nonce-misuse bound (attacks at about 2^64 data), and a known key voids the MAC's guarantees entirely.
+- finalize()/finalize_to() absorb the padding block and four zero blocks into the object's own state and do not reset it. Calling finalize() twice, or update() after it, silently gives a different tag, so reset() or use a fresh copy after each tag.
+- Nonce length is checked only by assert(nonce.size() == 16). In release builds a shorter span makes _mm_loadu_si128/vld1q_u8 read past its end, while a wrong key size does throw std::runtime_error.
+- Unsupported hardware aborts the process instead of throwing. x86 dispatch checks CPUID bits only (no XGETBV check that the OS enabled AVX-512 state). A CPU reporting VAES+AVX512F without AVX512VL maps to an unhandled 'vaes512' case and hits std::abort(), and Windows arm64 has no check at all.
+
+**Status:** Stale. v0.1, last commit 2025-06-17, 16 merged PRs, 15 of them by the author (macOS arm64 support came from one outside contributor), and no issues ever filed. It is BSL-1.0, about 2.2k lines of source, tested under ASan/UBSan in CI, and implements the corrected LeMac (tests assert the upstream 'LeMac' vectors, not LeMac-0), so it is easy to vendor if you accept pinning your own fork.
+
+[repo](https://github.com/pauldreik/lemac) · [benchmark](https://github.com/pauldreik/lemac)
+
+#### crypto-hashes
+
+##### blake2b-simd (Minio)  `Go`  `Apache-2.0`  `abandoned`  `Tier C`
+
+Archived Go BLAKE2b with AVX2/AVX/SSSE3 assembly, about 4x its pure-Go fallback and faster than 2016-era Go SHA-256/SHA-512.
+
+**Beats:** The package's own pure-Go BLAKE2b fallback (compress_generic.go, derived from dchest/blake2b), labelled 'go.txt' in the benchcmp output. Also compared against Go stdlib crypto/md5, crypto/sha1, crypto/sha256 and crypto/sha512. — These are first-party 2016 go test benchmarks with an unstated Go version (CI used Go 1.5/1.6). On a Xeon E5-2620 v3 the AVX2 path hashes 128 KiB at 918.93 MB/s versus 233.37 MB/s for the package's own pure-Go path (3.94x). AVX is 3.28x and SSE 2.85x on a 2.7 GHz MacBook Pro i7, with gains of only 1.7-1.9x at 64-128 B. A 1 MiB stdlib comparison on the Xeon gives 850.64 MB/s versus Go SHA-256 at 189.58, SHA-512 at 306.33 and MD5 at 607.48 MB/s, all before Go had SHA-NI or ARMv8 SHA acceleration.
+
+**Known shortcoming:** Go library, archived; last code change 2016-07-23. Baseline is its own pure-Go fallback and Go stdlib hashes (1 MiB messages), not OpenSSL; no Go version stated. Go's golang.org/x/crypto/blake2b has since gained its own AVX2 assembly.
+
+**Known shortcoming:** MinIO itself moved to golang.org/x/crypto/blake2b in 2018 (#29-#31); never benchmarked against x/crypto/blake2b (#32 open), OpenSSL or libb2. amd64 only: arm64/M1 falls back to pure Go (NEON request #15 open), and SSE2-only CPUs run no faster than codahale's package (#24).
+
+**How:** The BLAKE2b compression function is hand-written in Go assembly. The AVX2 path follows Samuel Neves' blake2-avx2 code: one YMM register holds a whole 4x64-bit row, so each G step works on four columns at once, and VPERMQ does the diagonalize/undiagonalize. The AVX and SSE paths follow the reference BLAKE2 sse/blake2b.c and use two XMM registers per row. The 32/24/16-bit rotations are done with PSHUFB/VPSHUFB byte shuffles, and the 63-bit rotation with add+shift+xor. The loop over 128-byte blocks runs inside the assembly, and the CPU check (CPUID/XGETBV) runs once at package init to pick AVX2, then AVX, then SSSE3, then generic Go.
+
+**Use it when:**
+- Legacy Go code that already imports it or dchest/blake2b, on amd64, where you want roughly 1.7x (64 B) to 3.9x (128 KiB) more BLAKE2b throughput with no API change.
+- Bulk checksums or bit-rot checks of large buffers (8 KiB and up) on AVX2 x86-64, where the SIMD path is 3-4x the pure-Go path in the README tables.
+- You need BLAKE2b's salt, personalization or tree-hashing parameters (as in bt2sum's tree mode). golang.org/x/crypto/blake2b only takes a size and a key.
+- Reading or benchmarking a small, self-contained reference for how BLAKE2b maps onto AVX2/SSSE3 in Go assembly.
+
+**Skip it when:**
+- New code: the repo is archived, and the Minio maintainers said in 2018 (issues #29-#31) that they had switched to golang.org/x/crypto/blake2b. That package has its own AVX2/AVX/SSE4 assembly and adds BLAKE2Xb and state (un)marshalling.
+- Non-amd64 targets such as arm64, Apple M1 or Graviton only get the generic Go code (the NEON request, issue #15, is still open). A 2021 HN user saw Go's hardware-accelerated SHA-1/SHA-256 reach about 2.5 GB/s on an M1, far above this package there.
+- Machines without SSSE3 or AVX, such as the SSE2-only Celeron in issue #24, where it ran at the same speed as the cgo codahale/blake2. On an Atom C2750 (issue #11) the SSE path reached only 59 MB/s at 128 KiB.
+- Small messages: the gain drops to 1.7-1.9x at 64-128 B, where per-call setup and finalization dominate.
+- You need encoding.BinaryMarshaler state snapshots, BLAKE2Xb/XOF output, BLAKE2s, or a tagged, module-aware release. None exist here; pkg.go.dev shows only the pseudo-version v0.0.0-...-3f5f724 from 2016-07-23.
+
+**Integration:** module (go get github.com/minio/blake2b-simd; no go.mod and no tagged releases, so it resolves to a 2016 pseudo-version) or source-drop (about 20 files) · none (Go standard library only) · Go gc toolchain. CI tested only Go 1.5/1.6 on Travis and AppVeyor, and support for modern Go is not documented. It uses old-style '// +build' constraints. The .s files are pre-assembled into BYTE sequences, so building does not need asm2plan9s; that tool is only for editing the assembly. · amd64 with runtime dispatch (AVX2 > AVX > SSSE3 > pure Go). Every other architecture gets the pure-Go path.
+
+**Vs siblings:** It is the only Go entry. blake2b_simd (oconnor663) is the Rust BLAKE2b to use outside Go, and BLAKE3 is much faster if you can change algorithms. Pick this over minio's own sha256-simd only when you need BLAKE2b digests on amd64 rather than SHA-256 compatibility or ARM64 acceleration.
+
+**Gotchas:**
+- The package name is blake2b but the import path ends in blake2b-simd, and it clashes with golang.org/x/crypto/blake2b. Importing both needs an alias, and the two have different constructor signatures: New512() here versus New512(key) (hash.Hash, error) in x/crypto.
+- New(c) writes Size=64 back into the caller's Config when c.Size is 0, and NewMAC panics instead of returning an error for invalid sizes or keys.
+- compress_amd64.go has no build constraint, while compress_noasm.go also defines compress under the 'noasm'/'appengine' tags. The documented '-tags noasm' escape hatch therefore looks like it would fail to compile on amd64, as would gccgo (cpuid.go is '!gccgo'). Not tested here.
+- The README benchmark names (BenchmarkHash*) no longer match benchmarks_test.go (BenchmarkSize*), and nothing in the repo benchmarks it against x/crypto/blake2b. Issue #32 (2018) asking for that comparison is still open.
+
+**Status:** Archived. The last code commit was 2016-07-23, and Minio itself moved to golang.org/x/crypto/blake2b in 2018. It is Apache-2.0, tiny and dependency-free, and pkg.go.dev still lists 314 known importers, so it is safe to vendor but should not be chosen for new work.
+
+[repo](https://github.com/minio/blake2b-simd) · [benchmark](http://web.archive.org/web/20181010233948/https://blog.minio.io/accelerating-blake2b-by-4x-using-simd-in-go-assembly-33ef16c8a56b)
+
+##### hashtree  `C`  `MIT`  `active`  `Tier C`
+
+Batched SHA-256 of many fixed 64-byte inputs for Merkle trees; ~4.7x OpenSSL's per-message SHA256() on AVX2.
+
+**Beats:** OpenSSL SHA-256 — The README's bench.c hashes 75,000 random 64-byte messages (a 4.8 MB buffer). On an unnamed AVX2 x86-64 CPU without SHA-NI, the AVX2 x8 kernel in one call took 6.519 ms vs 30.519 ms for OpenSSL SHA256() called once per message (~4.7x). On a board labelled 'Banana Pi BPI-R3 with a RISC-V processor', the single-buffer Zbb kernel took 109.4 ms vs OpenSSL's 465.4 ms (~4.25x). Both runs were built with -O3 via src/Makefile, with no compiler or OpenSSL versions stated. The x86 gain is mostly multi-buffer vs single-buffer; the RISC-V gain is scalar (Zbb rotates plus the precomputed padding schedule). The Cascade Lake (~12x) and Go-vs-Prysm (~6-11x) figures are not against OpenSSL.
+
+**Known shortcoming:** First-party README numbers on an unnamed x86 CPU (retiered B to C). Specialised for 64-byte-pair Merkle hashing (Ethereum SSZ), not general SHA-256. Prysm's go.mod requires OffchainLabs/hashtree v0.2.6 behind the opt-in --enable-hashtree flag; Nimbus references the Nim bindings.
+
+**Known shortcoming:** The x86 ~4.7x is batched AVX2 against per-message OpenSSL SHA256(), with no OpenSSL run on SHA-NI CPUs; the RISC-V ~4.25x is single-buffer Zbb. No compiler or OpenSSL version. Rust hash() is a safe fn without a length check (memory-unsafe from safe Rust); the dispatcher global is set lazily without synchronization; no audit. A scalar C fallback exists since PR #43.
+
+**How:** Multi-buffer SHA-256, taken from Intel's intel-ipsec-mb: 4, 8 or 16 independent messages are transposed into SIMD lanes (SSE/AVX x4, AVX2 x8, AVX-512 x16, NEON x4) and compressed together. On SHA-NI hardware it uses a 2-way interleaved SHA-NI kernel instead. Because every input is exactly 64 bytes, the second (padding) block is constant, so its message schedule is precomputed and stored as K+W constants (the `P`/`.LPADDING` tables), which skips that schedule on every hash. Kernels hand leftover blocks to the next narrower kernel (x16 to x8 to x4).
+
+**Use it when:**
+- Merkleizing large SSZ or Ethereum beacon-state trees, or any binary Merkle tree whose nodes are 32 bytes, when you can hand over a whole layer per call
+- x86-64 CPUs without SHA-NI but with AVX2 or AVX-512: the README measures about 4.7x over per-message OpenSSL SHA256() with AVX2 x8, and about 12x over its own single-block kernel with AVX-512 x16 on Cascade Lake
+- Throughput-bound batch hashing of thousands of 64-byte records where results must be byte-identical to standard SHA-256
+- RISC-V boards with Zbb, where the README shows about 4.25x over the system OpenSSL for 64-byte messages
+- Go, Rust or Nim codebases that need a vetted SHA-256 Merkle hasher; Prysm (behind its --enable-hashtree flag) and status-im/nim-ssz-serialization already consume it
+
+**Skip it when:**
+- Messages that are not exactly 64 bytes, or streaming or incremental hashing: there is no such API, so use OpenSSL or ISA-L
+- Hashing one pair at a time (naive recursive Merkleization): the single-block kernels run at OpenSSL speed, and the author says one-at-a-time use is 'essentially the same as openssl's'
+- SHA-NI CPUs where you expect a large gain over OpenSSL: the README gives no same-run OpenSSL number there, and OpenSSL also uses SHA-NI
+- Raspberry Pi 4 class NEON-only ARM: the x4 NEON kernel is only 27% faster than its x1 kernel, with no OpenSSL comparison
+- Settings that need audited crypto: the maintainer closed the audit request as won't-fix, and the only assurance cited is differential fuzzing (EF, Prysm, and the nim-ssz-serialization fuzz target)
+
+**Integration:** static lib (libhashtree.a plus hashtree.h, with pkg-config and `make install`); also a Go module with prebuilt .syso objects, the Rust crate hashtree-rs (builds the C library via make), and the Nim package hashtree_abi · none at runtime beyond stdint.h; cpuid.h on x86-64 builds; libm for benchmarks; optional OpenSSL (-lcrypto) for tests and benchmarks; the Go bindings need klauspost/cpuid/v2 · A GCC/GNU-as compatible compiler; CI also builds with clang on Linux and with Apple clang's integrated assembler on macOS. Rust edition 2021, Nim >= 1.6.0, Go 1.21/1.22 in CI (go.mod says 1.22.2). Minimum GCC or binutils versions are not documented. · x86-64 (SSSE3/AVX/AVX2/AVX-512F+VL/SHA-NI kernels), aarch64 (NEON x1/x4 and SHA2-extension kernels, including Apple Silicon), riscv64 (base, Zbb, and Zknh+Zbkb kernels, selected via Linux riscv_hwprobe), and a scalar C fallback elsewhere; Linux, macOS and Windows (MinGW; benchmarks do not build on Windows)
+
+**Vs siblings:** Pick it over Intel ISA-L Crypto's multi-buffer SHA when every input is a 64-byte node pair and you want one synchronous call with ARM/RISC-V kernels and Go/Rust/Nim bindings rather than a job-manager API for variable-length messages. Pick it over sha256mb or minio sha256-simd when you are outside Go or need AVX-512/SHA-NI paths, and over BLAKE3 when the protocol (e.g. Ethereum SSZ) mandates SHA-256.
+
+**Gotchas:**
+- No bounds checks: `in` must hold 64*count bytes and `out` 32*count bytes. The Rust `hash(out, chunks, count)` is a safe fn that does not check the slice lengths, so a wrong `count` is memory-unsafe from safe Rust. Its `init()` also declares a c_int return for a void C function, so the return value is meaningless.
+- Calling a named per-ISA kernel on a CPU without that ISA is undefined behavior (the header says so). Only `hashtree_hash` auto-detects, and on x86 it prefers SHA-NI x2 over AVX-512 x16 on purpose, because SHA-NI wins on small lists.
+- Toolchain fragility: v0.2.4 (PR #61) fixed wrong SHA results on the AArch64 path when built with Apple clang 21 (macOS 26.4). Issue #2 reported GNU as 2.39/2.40 looping forever on the asm macros. Prebuilt Go .syso objects triggered missing .note.GNU-stack linker warnings (issue #52, still open).
+- Go bindings: the assembly call cannot be preempted by the Go runtime, so before v0.2.6 (PR #71) one huge layer could stall every GC; calls are now capped at 2048 chunks. Open issue #48 reports erratic SHA-NI one-at-a-time timings on AMD.
+
+**Status:** Active: v0.2.6 was tagged 2026-09-22 with RISC-V, Apple clang and Go-GC fixes through 2026; the code is MIT-licensed and vendorable (about 16 C/asm sources with no runtime dependencies), and Prysm now depends on its Go bindings (opt-in flag) while status-im's nim-ssz-serialization uses the Nim ABI.
+
+[repo](https://github.com/OffchainLabs/hashtree) · [benchmark](https://github.com/OffchainLabs/hashtree/blob/main/README.md)
+
+##### Intel ISA-L Crypto (multi-buffer SHA)  `C`  `BSD-3-Clause`  `active`  `Tier C`
+
+Intel's SIMD multi-buffer SHA/MD5/SM3 hashing library; beats single-buffer SHA-256 throughput when many independent buffers are in flight.
+
+**Beats:** The best-known single-buffer SHA-256 of 2012. The whitepaper cites Intel's own 'Fast SHA-256 Implementations on Intel Architecture Processors' (Guilford, Yap, Gopal, May 2012; ref [4]). OpenSSL is not named. — Intel's own July 2012 whitepaper reports that SHA256x4 Multi-Hash (a non-standard 4-segment tree mode) hashed a 1 MB buffer at about 5 cycles/byte on one core of a Sandy Bridge Core i7-2600 with Turbo off. That was about 2.6x faster than Intel's best single-buffer SHA-256 of the day (not OpenSSL), and MD5 x8 was about 4.4x faster. The paper gives no compiler, flags or code version, the shipped mh_sha256 uses 16 segments rather than 4, and nothing is published for the standard-digest sha256_mb or against SHA-NI hardware.
+
+**Known shortcoming:** The cited paper covers Multi-Hash (a non-standard x4 digest), not the multi-buffer API; the ~2.6x baseline is Intel's own SHA-256 code, not OpenSSL. The repo ships sha256_mb_vs_ossl_perf.c but publishes no results. Gains need many independent buffers in flight.
+
+**Known shortcoming:** Only performance source is Intel's 2012 whitepaper on Sandy Bridge (pre-SHA-NI) for the non-standard SHA256x4 Multi-Hash; the standard sha256_mb API has no published numbers. Users report single-stream use slower than OpenSSL (#111: 1 GB SHA-256 3.36 s vs 2.48 s; #45: MD5 466 vs 787 MB/s), and the source itself notes SHA-NI beats SSE sha256_mb. SIMD lanes only help with >4 (SSE) / >6 (AVX-512) jobs in flight; x86 mh_sha256 has no SHA-NI path. Async submit/flush API with out-of-order completion, host-order digest words, 16-byte manager alignment, <4 GB per submit. Not standalone CMVP; no HMAC or SHA-3.
+
+**Independent measurement:** GitHub #111: 1 GB SHA-256 single stream 3.36 s vs OpenSSL 2.48 s; #45: MD5 466 vs OpenSSL 787 MB/s.
+
+**How:** It uses multi-buffer SIMD hashing: each vector lane runs the SHA-256 compression function on a different message, giving 4 messages per pass with SSE/AVX, 8 with AVX2 and 16 with AVX-512, and an out-of-order job scheduler keeps the lanes filled. On CPUs with SHA extensions the manager switches to SHA-NI x1/x2 kernels when few lanes are busy (thresholds are 4 lanes on the SSE path and 6 on the AVX-512 path; a source comment says 'shani is faster than sse sha256_mb'). Multi-Hash applies the same lane trick to a single buffer: it interleaves the buffer word by word into 16 segments, hashes them in parallel, then hashes the concatenated segment digests (a two-level tree hash). The kernels are hand-written NASM/gas assembly, chosen at runtime by CPUID dispatch.
+
+**Use it when:**
+- Storage, dedup or object-store pipelines that checksum many independent chunks or objects at the same time (Ceph and SPDK vendor it as a git submodule).
+- You can keep at least a lane-width of jobs in flight (4 for SSE, 8 for AVX2, 16 for AVX-512) and can handle jobs completing out of order.
+- AVX-512 x86 servers that regularly have more than 6 SHA-256 jobs active at once. Below that the manager falls back to SHA-NI single-buffer code anyway.
+- Legacy MD5/SHA-1 checksumming of many streams, where the dependency chain leaves scalar code furthest behind (the whitepaper reports its largest gain, ~4.4x, for MD5 x8).
+- mh_sha256, only in a closed system such as dedup fingerprints where both producer and verifier use Multi-Hash and buffers are 1 KB or larger.
+
+**Skip it when:**
+- Hashing one stream at a time with submit-then-flush. Users measured it slower than OpenSSL: 3.36 s vs 2.48 s for 1 GB of SHA-256 (issue #111) and 466 vs 787 MB/s for single-buffer MD5 (issue #45). The maintainer's answer is to keep multiple jobs in flight.
+- You need a fast standard SHA-256 of one large buffer. mh_sha256 digests are not interoperable, and on x86 mh_sha256 dispatches only SSE/AVX/AVX2/AVX-512 (no SHA-NI path).
+- Small messages with Multi-Hash. The whitepaper says the gains diminish for buffers below about 1 KB, and the maintainers say it needs blocks of about 1 KB.
+- macOS or Apple Silicon. They are not in CI (Linux x86-64/arm64/RISC-V and Windows are), and past issues report build failures on M1 (#86) and on macOS x86 (#88).
+- You need a certified or general-purpose crypto API. The README says it cannot achieve CMVP certification as a standalone module, and it has no HMAC, SHA-3 or BLAKE.
+
+**Integration:** static lib / shared lib (autotools, Makefile.unx, nmake on Windows; CMake experimental) · None at runtime beyond libc. The build needs NASM on x86-64 (gas on aarch64/RISC-V). OpenSSL is used only by the tests, perf harnesses and examples. · x86-64: NASM 2.14.01+ with GCC, Clang, ICC or MSVC 2019+. aarch64: gas 2.34+ and GCC 8+ (older gas needs --disable-sve2). RISC-V RVV: gas 2.39+ and GCC 12.1+. · x86-64 (SSE4 minimum for SIMD paths; AVX/AVX2/AVX-512/SHA-NI chosen at runtime), aarch64 (crypto extensions, SVE2), RISC-V 64 (RVV), and a portable C base elsewhere. 32-bit x86 was removed in v2.26.
+
+**Vs siblings:** Pick it over BLAKE3 or KangarooTwelve when the digest must stay standard SHA-256/SHA-1/MD5 because of a fixed protocol or on-disk format, and you have many independent buffers to batch. If you control the hash choice and need one big buffer hashed fast, BLAKE3 or K12 fits better. The j-lanes and S-HASH entries describe the same multi-lane ideas as papers; this is Intel's maintained, shipping C/asm implementation, and sha256-simd is the Go-ecosystem counterpart.
+
+**Gotchas:**
+- SHA-1/SHA-256 results come back as uint32 words in host order, so you must byte-swap them on little-endian to get the canonical digest, while MD5 comes back already byte-ordered (issue #121).
+- A context cannot be re-submitted until submit() or flush() hands it back, and contexts return out of order. Submitting LAST straight after FIRST without flushing looked like a wrong-hash bug to one user (#156). Redundant flush() calls are safe.
+- The manager must be 16-byte aligned (the tests use posix_memalign). A misaligned manager crashed the AVX2 flush under MSVC (#122). The mh_sha256 context is about 3.7 KB, and the header advises heap allocation.
+- Each submit/update call takes a uint32 length (under 4 GB per call). -flto needs -fno-strict-aliasing or tests can fail (#162, #165). The non-isal_-prefixed API has been deprecated since v2.25.
+
+**Status:** Actively maintained by Intel: v2.26.1 was released 2026-06-12, the last commit is 2026-07-23, and CI covers x86-64 Linux/Windows, arm64 and RISC-V. It is BSD-3-Clause and vendored by Ceph and SPDK, but it is an assembly-heavy built library rather than a file you can copy.
+
+[repo](https://github.com/intel/isa-l_crypto) · [benchmark](https://raw.githubusercontent.com/wiki/intel/isa-l_crypto/pdf/multi-hash-paper.pdf)
+
+##### libsodium (BLAKE2b)  `C`  `ISC`  `active`  `Tier C`
+
+libsodium's crypto_generichash BLAKE2b: ~1.2-2.7x OpenSSL EVP BLAKE2b-512 on 64 B-1 KB inputs, roughly even from 4 KB.
+
+**Beats:** OpenSSL BLAKE2b (EVP_blake2b512) — scc-tw/cryptobench-cpp (Google Benchmark, means of 5 repetitions) ran once on 2025-11-05 on an unnamed Apple Silicon MacBook Air, with no compiler recorded. It compared libsodium 1.0.20's one-shot crypto_generichash_blake2b (64-byte output) against OpenSSL 3.6.0's EVP_blake2b512 with a new EVP_MD_CTX per call: 577.8 vs 213.7 MB/s at 64 B (~2.7x), 1243.6 vs 650.3 at 256 B (~1.9x), 1307.0 vs 1107.2 at 1 KB (~1.18x), a tie at 4 KB, and 1349.3 vs 1402.7 at 16 KB, where OpenSSL is ~4% ahead. Both sides ran portable C compression on this ARM machine. The README claims identical flags, but libsodium was configured with CMAKE_C_FLAGS_RELEASE rather than the shared -march=native/-flto set.
+
+**Known shortcoming:** Evidence is an obscure suite (0 stars, one laptop run, no CPU model or compiler). The small-input win mostly reflects OpenSSL's per-hash EVP_MD_CTX_new/free and init overhead, and libsodium was not built with the suite's shared -march/-flto flags. Comparison is BLAKE2b vs SHA-2 (cross-algorithm).
+
+**Known shortcoming:** The small-message win is mostly harness overhead (OpenSSL creates/initializes/frees an EVP_MD_CTX per hash: 111 vs 300 ns at 64 B); libsodium has no NEON BLAKE2b, so both ran portable C on the Apple Silicon machine, and at 16 KB OpenSSL is 4% ahead. SIMD paths activate only after sodium_init(); default 32-byte output differs from a BLAKE2b-512 digest; KEYBYTES_MIN not enforced (#1131); static builds export blake2b_* symbols (#1434).
+
+**How:** sodium_init() picks a compression function via CPUID: Samuel Neves's AVX2 BLAKE2b (added in 1.0.9), then SSE4.1, SSSE3, or portable C (blake2b_compress_ref). There is no NEON path, so on the Apple Silicon machine that produced these numbers both libsodium and OpenSSL ran portable C compression. The gap there is call overhead. The one-shot function keeps its state on the stack with no allocation or provider lookup, while the harness's OpenSSL path runs EVP_MD_CTX_new, EVP_DigestInit_ex(EVP_blake2b512()), Final and free on every hash: about 111 ns vs 300 ns per 64-byte hash. At large sizes, libsodium's update copies every 128-byte block through its 256-byte internal buffer, whereas OpenSSL's blake2b_prov.c compresses runs of blocks straight from the input. That is consistent with OpenSSL pulling ahead by ~4% at 16 KB.
+
+**Use it when:**
+- Hashing many short inputs (64 B-1 KB), such as keys, IDs, short records or dedup fingerprints, where per-call overhead dominates. In this run, a 64-byte hash took ~111 ns vs ~300 ns through OpenSSL EVP with a fresh context.
+- Keyed BLAKE2b as a MAC or PRF, or salt/personalization for domain separation, through a one-call API with no context to manage.
+- x86-64 hosts with AVX2, where the runtime-dispatched AVX2 compression applies. The blake2b_simd README measured libsodium at 3.07 cycles/byte, only ~9% behind its own 2.81.
+- Projects that already link libsodium, or want one small dependency-free C library. The README lists Windows (MinGW/MSVC on x86, x64 and arm64), iOS, Android, JavaScript and WebAssembly.
+- Variable-length digests (for example the 32-byte default) where the length is a real BLAKE2b parameter, not a truncation.
+
+**Skip it when:**
+- Bulk hashing of large buffers. From 4 KB up it only ties OpenSSL, and at 16 KB it is ~4% slower (1349 vs 1403 MB/s). BLAKE2b has no NEON path, so ARM gets portable C.
+- Maximum-throughput hashing. BLAKE3 is a different and much faster hash, and blake2b_simd adds BLAKE2bp and multi-message hashing; libsodium offers neither parallel mode.
+- Code that already reuses its OpenSSL digest context. The small-message win largely comes from the harness allocating and freeing an EVP_MD_CTX on every hash, and reused contexts were not measured.
+- Code that selects algorithms by name through OpenSSL's EVP/provider layer. libsodium's API is fixed-function, so swapping it in means touching call sites.
+- Wherever the only evidence you would rely on is this benchmark. It is one laptop run from a 0-star repo, with no CPU model or compiler recorded, and libsodium was built with different CFLAGS than the other libraries.
+
+**Integration:** static lib or shared lib (autotools configure/make, build.zig, or MSVC solutions from VS2010 to VS2026), also consumable as a Zig dependency · none · Not documented as a single minimum. It ships autotools, Zig and MSVC (vs2010-vs2026) build files, and 1.0.21 fixed builds with GCC on aarch64 and gcc 4.x. · Any (Linux, macOS, Windows x86/x64/arm64, iOS, Android, JavaScript/WebAssembly). BLAKE2b SIMD runs only on x86/x86-64 (AVX2 > SSE4.1 > SSSE3, runtime-dispatched); ARM and everything else use portable C.
+
+**Vs siblings:** Pick libsodium when you need standard, keyed or personalized BLAKE2b from C/C++ (or any of its language bindings) inside a stable, dependency-free library. blake2b_simd is Rust and ~9% faster on AVX2, with BLAKE2bp and many-message hashing; minio/blake2b-simd is Go-only; BLAKE3 is far faster but produces different digests. Take one of those when throughput matters more than BLAKE2b compatibility or a C API.
+
+**Gotchas:**
+- Call sodium_init() first. The compression pointer starts as blake2b_compress_ref and is switched to AVX2/SSE4.1/SSSE3 only inside sodium_init(), so skipping it silently leaves x86 on the portable C path.
+- Output length is a BLAKE2b parameter, not a truncation. crypto_generichash's default 32-byte digest is BLAKE2b-256 and will not equal the first 32 bytes of EVP_blake2b512's output; request 64 bytes to match OpenSSL.
+- BYTES_MIN (16) and KEYBYTES_MIN (16) are documented minimums that are not enforced: the code accepts any output of 1-64 bytes and keys of 0-64 bytes (issue #1131). crypto_generichash_final() returns -1 if called twice, and it wipes the state.
+- Static builds export internal blake2b_init/blake2b_init_key symbols, which can clash with other embedded BLAKE2 copies. Issue #1434 reports this with static Qt 6.8.1 on wasm, and the maintainer says Qt fixed it on its side.
+
+**Status:** Actively maintained: 1.0.22 was released 2026-04-09, commits run to 2026-09-22, and it has ~14k stars. The library is ISC-licensed with no dependencies, and security fixes go to the stable branch first. The BLAKE2b code has been essentially unchanged for years (the AVX2 path dates to 1.0.9), and ARM still has no SIMD path for it.
+
+[repo](https://github.com/jedisct1/libsodium) · [benchmark](https://github.com/scc-tw/cryptobench-cpp/blob/main/result.json)
+
+##### sha256-simd (minio)  `Go`  `Apache-2.0`  `abandoned`  `Tier C`
+
+Go SHA-256 using SHA-NI, ARMv8 SHA2 and 16-lane AVX-512; once beat crypto/sha256, now only its multi-buffer mode might.
+
+**Beats:** Go crypto/sha256 (stdlib) — The only comparison with Go crypto/sha256 is an ARM64 benchcmp on a 1.2 GHz Cortex-A53 (Pine64), using an unstated Go version that predates the stdlib's ARMv8 SHA2 code: 638.23 vs 6.05 MB/s at 1 MB (105x) and 8.38x at 8 bytes. The x86 figures (AVX-512 3498 MB/s on a 3.0 GHz Xeon Platinum 8124M, 7.8x, which is multi-buffer throughput across 16 lanes on one core; SHA-NI 1975 MB/s on a Ryzen 7 2700X, 3.84x) are measured against the package's own since-deleted AVX2 path, with no Go version or flags given.
+
+**Known shortcoming:** Go library. x86 7.8x / 3.84x ratios are against its own AVX2 code, not Go's stdlib; the only stdlib comparison is ARM64 against an old Go. Go's stdlib now has arm64 SHA2 and SHA-NI paths and matches or beats this package on M1 (issue #76).
+
+**Known shortcoming:** Go's stdlib caught up (SHA-NI since Go 1.21, ties or wins on M1 per #76); the maintainer says to use the stdlib unless you need NewAvx512Server; the AVX2 path was deleted in 2021 (#57). On CPUs without SHA extensions Sum256 runs pure-Go generic code, slower than stdlib asm. Non-preemptible asm causes ~29 ms GC stop-the-world on 64 MiB writes. AVX-512 server has no CPU check (SIGILL, #35), leaks a polling goroutine and does not copy caller slices. MinIO itself no longer depends on it.
+
+**How:** The x86 path uses the Intel SHA Extensions (SHA256RNDS2-based rounds, contributed by Kristofer Peterson), and the ARM path uses the ARMv8 Cryptography Extensions instructions sha256h/sha256h2/sha256su0/sha256su1. The AVX-512 path is a port of intel-ipsec-mb's sha256_x16_avx512. It transposes 16 independent 64-byte message blocks across 16 ZMM registers and runs the rounds for all 16 messages at once (multi-buffer hashing), while a Go channel scheduler fills lanes and masks off lanes that run out of data. The older SSSE3/AVX/AVX2 paths (after Guilford et al.) were deleted in 2021 because the pure-Go code had become faster.
+
+**Use it when:**
+- amd64 servers with AVX-512 (F/DQ/BW/VL) that hash many independent, similar-length, MB-scale messages concurrently, e.g. object-store multipart parts or dedupe chunks, and can route them through a shared Avx512Server. This is the one mode with no stdlib equivalent.
+- Batch or Merkle-style hashing on AVX-512 hardware, but only after benchmarking Avx512Server against current crypto/sha256 yourself, since no such comparison has been published.
+- Builds stuck on Go toolchains older than 1.21 running on SHA-NI CPUs (the README names AMD Ryzen and Intel Celeron J3455), where the stdlib's amd64 code lacks SHA-NI.
+
+**Skip it when:**
+- New()/Sum256 on Go 1.21+ amd64 or any recent Go on arm64. The stdlib uses the same instructions, and in issue #76 (Go 1.25.5, Apple M1 Max) it ties or wins at every size from 64 B up (1084 vs 793 MB/s at 64 B, 2414 vs 2352 MB/s at 1 MB). The maintainer's advice is 'just use stdlib unless you use NewAvx512Server'.
+- CPUs without SHA-NI or ARMv8 SHA2. New() then just returns crypto/sha256, but Sum256 runs the package's pure-Go block function rather than the stdlib's assembly, because the SSSE3/AVX/AVX2 code was removed in 2021 (#57; #58 reported a one-third throughput drop on an i7-3770K).
+- Small messages or single streams on the AVX-512 path. The README says messages under ~1 MB are better served by the regular hash because of scheduling overhead, and all 16 lanes need concurrent messages of similar length to pay off.
+- Latency-sensitive services that make large single Write calls. The SHA-NI/ARM assembly processes the whole buffer without preemption, and PR #77 (closed unmerged, Aug 2026) measured a 29 ms GC stop-the-world pause for a 64 MiB Write, which crypto/sha256 avoids by feeding at most 64 KiB per call.
+- FIPS/BoringCrypto builds: in #64, goboringcrypto did not recognize the package's hash and hmac.New panicked.
+
+**Integration:** module (Go package github.com/minio/sha256-simd) · github.com/klauspost/cpuid/v2 (v2.2.3); golang.org/x/sys (indirect) · go.mod declares Go 1.17; CI last tested Go 1.18-1.20; assembly only with the gc compiler (gccgo, appengine and the noasm tag fall back to pure Go) · amd64 (SHA-NI; the AVX-512 server needs AVX512F/DQ/BW/VL), arm64 (ARMv8 SHA2, detected via cpuid or /proc/cpuinfo on Linux); other architectures build with the pure-Go fallback
+
+**Vs siblings:** The catalogued siblings are Gueron's j-lanes and S-HASH (simultaneous multi-message) SHA-256 papers, benchmarked against OpenSSL and catalogued without a code repository. Pick this when you want that multi-buffer idea as working Go code that yields standard per-message SHA-256 digests; j-lanes' tree-hashing mode yields different digests.
+
+**Gotchas:**
+- NewAvx512Server does not check the CPU. Without AVX-512 the process dies with SIGILL (#35). The package's AVX-512 feature flag is unexported, so the caller must detect AVX-512 itself and also use amd64 build tags, because the function is undefined on other architectures (#73).
+- Each Avx512Server starts a goroutine that never exits (there is no Close) and, while idle, loops on a 1 µs time.After timer.
+- Avx512Digest.Write passes slices, including the digest's own 64-byte carry buffer, to the server goroutine without copying and can return before they are hashed. The tests only use fresh, 64-byte-aligned buffers, so reusing a buffer or making unaligned writes before Sum looks unsafe from the source.
+- Unlike crypto/sha256, an Avx512Digest is finalized by Sum: later Writes return an error until Reset, and a second Sum returns the cached result.
+
+**Status:** Flagged abandoned: no commits since 2023-02-22, a 2026 PR fixing GC pauses was closed unmerged, maintainers have told users since 2021 to prefer the stdlib except for the AVX-512 server, and MinIO's own current go.mod no longer lists it. It is Apache-2.0 and small, so vendoring just the AVX-512 server is feasible.
+
+[repo](https://github.com/minio/sha256-simd) · [benchmark](https://github.com/minio/sha256-simd/blob/master/README.md)
+
+##### Intel Cryptography Primitives Library  `C`  `Apache-2.0`  `active`  `Tier D`
+
+Intel's C crypto-primitives library (ex-IPP Crypto) with SHA-NI/AVX2/AVX-512 SHA-1/2/3 kernels; claimed but unbenchmarked alternative to OpenSSL.
+
+**Beats:** OpenSSL SHA-2/SHA-3 (implied incumbent only; no published comparison against it) — Nothing has been measured publicly. The README, OVERVIEW, BUILD and CHANGELOG say only 'fast' and 'optimized performance for SHA3-...', with no hardware, compiler or baseline named. The repo ships a perfsys tool (ps_ippcp) to benchmark its own functions but publishes no results and no OpenSSL comparison, so any speedup over OpenSSL SHA-2/SHA-3 is unverified.
+
+**Known shortcoming:** No published performance numbers anywhere (the perfsys tool ships without results), so there is no measured speedup. Not FIPS 140-3 validated as claimed: FIPS-compliant with CAVP certificates only. Listed as a notable, widely used library (e.g. QAT_Engine submodule).
+
+**Known shortcoming:** By source reading: the first ippsHashMethod_SHA256_TT() call returns a non-SHA-NI update and later calls switch a shared static, so a cached method pointer may skip SHA-NI; issue #93: calling the getter in a hot loop wrecks multithreaded scaling. No public multi-buffer SHA-2/3 API (multi-buffer is SM3 only). x86 only; not an EVP drop-in; `int` lengths.
+
+**How:** The library contains several builds of each function: generic, SSE4.2 (y8), AVX2 (l9), AVX-512 Skylake (k0), AVX-512 Ice Lake (k1) and AVX10.2 (d1). A dispatcher picks one per CPU at init, and a second layer of feature checks turns on SHA-NI, the SHA512 and SM3 instructions (Lunar Lake/Arrow Lake), VAES and similar extensions. SHA-2 comes as hand-written NASM kernels: an AVX2 message schedule (pcpsha256l9as.asm), a SHA-NI path (pcpsha256nias.asm) and a SHA512-instruction path (pcpsha512l9ni.asm). SHA-3/SHAKE on AVX-512 builds use an assembly Keccak that keeps all 25 lanes in xmm0-xmm24 and uses vpternlogq/vprolq, with a 4-way variant used internally for SHAKE.
+
+**Use it when:**
+- x86-64 C/C++ code that already uses IPP-style APIs or needs SHA-2, SHA-3/SHAKE, SM3, AES, RSA/ECC and ML-KEM/ML-DSA from one Apache-2.0 vendor library
+- Deployments on recent Intel parts where the SHA-NI, SHA512 or SM3 instruction paths and the AVX-512 Keccak kernel apply
+- Projects that need CAVP-tested algorithm implementations (certificates listed for the AVX-512 builds) and FIPS self-test hooks, and will do their own CMVP module validation
+- Kernel-mode or footprint-sensitive builds: supports non-PIC static builds, per-ISA single-CPU libraries, and a custom-library tool that trims unused functions
+
+**Skip it when:**
+- When you need a measured win over OpenSSL: no published first- or third-party SHA-2/SHA-3 numbers exist, and OpenSSL also dispatches at runtime to SHA-NI/AVX2 assembly
+- Hashing many independent streams in parallel: there is no public multi-buffer SHA-2/SHA-3 API (the multi-buffer library covers SM3 mb16 plus public-key and SM4 operations); see ISA-L Crypto for multi-buffer SHA
+- Non-x86 targets (ARM, RISC-V) or macOS: code paths are x86 only, and the 1.4.0 changelog says it removed outdated macOS-specific code; validated on RHEL 8 and Windows Server 2022
+- If you need a drop-in or a FIPS 140-3 certificate: the API is not EVP-compatible, and README_FIPS says the library is 'FIPS-Compliant' (CAVP only), not CMVP-certified
+- Lightweight builds: needs CMake, NASM and Python, plus OpenSSL 3.5.7+/BoringSSL/Tongsuo unless the multi-buffer part is disabled
+
+**Integration:** static lib and shared lib (CMake; can also be pulled in via add_subdirectory) · Build: CMake 3.18+, NASM (3.01 tested), Python 3.12; OpenSSL 3.5.7+/BoringSSL/Tongsuo only for the crypto_mb multi-buffer part (drop with -DNO_CRYPTO_MB=TRUE) · C; tested with GCC 8.5-16.1, Clang 16/21, MSVC 19.44 (VS 2022), Intel oneAPI icx 2026.2 · x86-64 Linux/Windows (32-bit IA-32 deprecated); ISA paths y8 SSE4.2, l9 AVX2, k0/k1 AVX-512, d1 AVX10.2, plus a generic mx build; crypto_mb k1 also validated on FreeBSD
+
+**Vs siblings:** Choose it over ISA-L Crypto or sha2-with-c-intrinsic when you want one maintained Intel library that covers single-stream SHA-2 (SHA-NI and SHA512-instruction paths), SHA-3/SHAKE and SM3 alongside ciphers and PQC, with CAVP certificates. Use ISA-L Crypto for multi-buffer throughput across many streams, and BLAKE3/KangarooTwelve if you can change the hash function.
+
+**Gotchas:**
+- Fetch the hash-method pointer once, outside hot loops: calling ippsHashMethod_SHA256_TT() per hash writes a shared static and collapsed multi-thread scaling on a 24-core Xeon (issue #93)
+- In the develop source, the first call to ippsHashMethod_SHA256_TT() ends with the non-SHA-NI update routine; only later calls switch it to SHA-NI, and all states share that static. So a pointer fetched once may not use SHA-NI; benchmark it
+- Update/Message lengths are int, so feed inputs over 2 GiB in chunks; the non-_rmf hash APIs are slated for removal in 3.0.0 (issue #107)
+- develop is an unstable snapshot; production code lives on cryptography-primitives_<release> branches. Pin a release, and use -DIPPCP_FIPS_MODE=on for the FIPS self-test build
+
+**Status:** Actively maintained by Intel (last commit 2026-09-25, v2.4.0 changelog, 3.0.0 API cleanup under discussion) under Apache-2.0, so usable in proprietary code. It is a large build, not something to vendor as a snippet.
+
+[repo](https://github.com/intel/cryptography-primitives)
+
+#### encoding
+
+##### base64-turbo (hacer-bark)  `Rust`  `0BSD`  `active`  `Tier C`
+
+0BSD Rust base64 crate with AVX2/AVX-512 VBMI/NEON kernels; 2.7-6x the default base64 crate, roughly ties Turbo-Base64.
+
+**Beats:** base64 (RFC 4648) codecs: Turbo-Base64 (C, the prior fastest known codec) and the Rust default `base64` crate 0.23 (its SIMD path on by default), plus base64-simd and base64-ng, all in the same harness — In the author's criterion harness (random input, one core, encode GiB/s counted on raw bytes and decode on base64 text, rustc and C compiler versions not stated), at 64 KiB base64-turbo runs 81.6/106.5 GiB/s on AWS c8a.large (EPYC 9R45, Zen 5) and 25.7/36.9 on c7i.large (Xeon 8488C). The base64 crate 0.23 manages 13.5/27.9 and 8.9/13.7 (about 6.0x/3.8x and 2.9x/2.7x). Turbo-Base64, built from upstream source with its own per-file flags and default partial-validation mode, and timed with the author's own C-side harness, comes in essentially level at 80.7/107.8 and 18.2/38.5.
+
+**Known shortcoming:** No rustc or C compiler version stated (retiered A to C). Against Turbo-Base64 it is about a tie and decodes slower; the real win is over the Rust `base64` crate (~2.7-6x).
+
+**Known shortcoming:** Only ties Turbo-Base64 in cache and loses at 10 MB on c8a (-28% encode, -22% decode); loses 32-byte decode to base64-simd; on c7i at 10 MB only 1.07-1.2x over the base64 crate. Tiny adoption (1 author, 2 stars, ~3.6k downloads, 0 reverse deps); breaking 0.4.0 to 0.5.0 twelve days apart. MSRV 1.93 / edition 2024; no SSE or WASM kernel; NEON 'not production-ready'; custom alphabets fall back to scalar; decode_slice rejects exact-size buffers.
+
+**How:** The AVX2 kernel ports aklomp/base64's approach: Mula/Lemire nibble-lookup validation for decode, and an offset-load encode loop with a single-LUT character map. The ALU work is interleaved across ports 0/1/5 so vpshufb on port 5 is not the bottleneck. The AVX-512 VBMI kernel encodes 48 bytes in three ops (vpermb gather, vpmultishiftqb to pull out all eight 6-bit fields, vpermb through the alphabet). It decodes with vpermi2b over a 128-entry reverse LUT and folds validity into a single vpternlogd OR tree, while k-masked passes handle the 1-31 byte tail without a scalar handoff. Both x86 kernels switch to non-temporal stores above 5/8 of the CPUID-reported last-level cache, and the CPU tier is cached in one atomic byte, so dispatch costs a single load per call.
+
+**Use it when:**
+- Rust services on AVX-512 VBMI x86 (the author measured Zen 5 EPYC 9R45 and Sapphire Rapids) that encode/decode payloads of about 512 B to 1 MiB. On c8a.large at 64 KiB it runs 81.6/106.5 GiB/s against 13.5/27.9 for the base64 crate 0.23, whose SIMD path is on by default. It peaks at 123.0/118.1 GiB/s at 4 KiB.
+- You want a faster base64 crate replacement for STANDARD or URL_SAFE (JWTs, URLs) with a permissive 0BSD license and unsafe SIMD backed by Kani proofs, MIRI, MSan and 250M+ fuzz iterations. The AVX2 box (c7i.large) still shows 2.7-2.9x at 64 KiB.
+- Custom alphabets (bcrypt/crypt(3) and similar) at full vector speed, but only on AVX-512 VBMI; AVX2 and NEON fall back to scalar for them.
+- no_std x86 targets that still want runtime-dispatched SIMD (0.5.0 detects through cpufeatures), or audit-sensitive builds that set --cfg base64_turbo_backend="soft" to get a #![forbid(unsafe_code)] scalar-only crate.
+
+**Skip it when:**
+- Your toolchain is older than Rust 1.93 or can't use edition 2024. The README also says the MSRV is pinned by Kani's bundled rustc and won't be lowered.
+- Mostly multi-MB, DRAM-resident buffers. At 10 MB on c8a, Turbo-Base64 is about 28% faster encoding and 22% faster decoding (37.7/55.8 vs 29.4/45.7 GiB/s). On c7i at 10 MB it is only 1.2x/1.07x ahead of the base64 crate (10.9/14.2 vs 8.9/13.3), with everyone near memcpy.
+- Many tiny (about 32 B) decodes: base64-simd wins there (7.6 vs 5.8 GiB/s on c8a, 4.1 vs 3.6 on c7i), and Turbo-Base64 wins 32 B encode.
+- x86 without AVX2 (there is no SSE kernel), WASM SIMD, or other non-x86/non-ARM targets, which all run scalar only. The README FAQ calls NEON best-effort, not production-ready, with no Kani proofs, and says it may be deprecated.
+- You need a long-maintained dependency: one author, repo created Jan 2026, 2 stars, about 3.6k crates.io downloads, no reverse dependencies, and breaking 0.4.0/0.5.0 releases 12 days apart in Sept 2026. There is no C API either, so C/C++ callers would need their own FFI shim.
+
+**Integration:** crate · cpufeatures 0.3 on x86/x86-64 only; none elsewhere · Rust 1.93 (edition 2024) · x86/x86-64: AVX-512 VBMI or AVX2 picked at runtime, else scalar. aarch64: NEON picked at compile time (best-effort). Everything else: safe scalar. No SSE or WASM SIMD kernels.
+
+**Vs siblings:** In Rust, pick it over vb64 (std::simd; its blurb reports 1.2-2.5x over the base64 crate) or the base64 crate itself when throughput on AVX2/AVX-512 VBMI matters. Pick it over Turbo-Base64 when you need a permissive license instead of GPL-3, validation of every byte, base64url/no-pad/custom alphabets, or verified Rust memory safety at roughly equal in-cache speed. Stay with Turbo-Base64 for DRAM-sized buffers on Zen 5 or when calling from C, and use simdutf for whitespace-tolerant forgiving decoding.
+
+**Gotchas:**
+- decode_slice returns BufferTooSmall unless the output holds decoded_len_estimate bytes, which can be up to 2 more than the real decoded length, so an exactly sized buffer is rejected.
+- STANDARD/URL_SAFE require canonical padding, and the *_PAD_INDIFFERENT engines decode on the scalar path only. For a misplaced '=', whether you get InvalidLength or InvalidCharacter is deliberately unspecified and depends on the kernel, so check is_err() and don't match the variant.
+- 0.5.0 removed the avx2/avx512-vbmi/simd/neon Cargo features, so builds that name them fail. Backend narrowing is now a RUSTFLAGS --cfg that applies to the whole dependency graph, and base64_turbo_backend="avx512" on a CPU without VBMI falls back to scalar, not AVX2. --no-default-features now means no_std with SIMD, not scalar-only.
+- The README's API-stability paragraph still promises compatibility 'throughout the 0.4.x lifecycle' while the crate is already at 0.5.0, so pin exact versions.
+
+**Status:** Actively developed by a single author (0.5.0 released 2026-09-19; Kani, MIRI and test CI green) and 0BSD-licensed. Adoption is tiny and the API broke twice in September 2026, so vendor or pin it.
+
+[repo](https://github.com/hacer-bark/base64-turbo) · [benchmark](https://github.com/hacer-bark/base64-turbo#benchmarks)
+
+##### Chorba (table-less CRC32)  `C`  `Zlib`  `stale`  `Tier C`
+
+Table-less software CRC-32 using sparse zero polynomials; about 2x zlib 1.3.1.1's braided CRC on large buffers.
+
+**Beats:** zlib (zlib 1.3.1.1 CRC32 'braiding' implementation) — A single-author arXiv v1 preprint timed 1,000 iterations of IEEE CRC-32 over xorshift buffers on an AMD Ryzen 5 5600, an AWS t4g.micro (Graviton2) and a Raspberry Pi 4. Builds used gcc -O3 (version unstated), and the baseline was zlib 1.3.1.1's braided crc32(). Results exist only as seconds-per-TiB plots: the text lists sizes up to 512 MiB, but the plots stop at 256 MiB. They show the best non-destructive variant at roughly 2.2x braiding on Ryzen and about 3x on the two ARM systems at 16 MiB and above, which is consistent with the abstract's '100%'. A separate 5-20% gain is claimed for grafting the method onto AVX1 PCLMUL folding.
+
+**Known shortcoming:** arXiv preprint with no venue; GCC version unstated. Against PCLMUL/AVX code the gain is only 5-20%, and only where those instructions are the baseline; the big wins are over table-driven CRC32 on CPUs without carry-less multiply. Adopted by zlib-ng.
+
+**Known shortcoming:** Repo is stale with no correctness tests; its 118960 variant keeps the `+60` zeroing bound that produced wrong CRCs at 615,336-byte lengths in zlib-ng (#2029; fixed to +64 in PR #2033, 2.3.2 hotfix), so use zlib-ng 2.3.2+ instead. Numbers exist only as plots (~2.2x over braiding on Ryzen, ~3x on Graviton2/RPi4 at 16 MiB and up); Graviton2's native CRC32 instruction is still ~2x faster. The paper's AVX2/AVX-512 code is not in the repo; little-endian only, int indices overflow above 2 GiB.
+
+**How:** A zero polynomial Z(x) satisfies Z(x) mod G(x) = 0, so XORing it into the message leaves the CRC unchanged. Choosing one with few terms, such as x^14870 + x^22 + x^11 + x^7 + 1 with exponents scaled from bits to 64-bit words, cancels each input word by XORing shifted copies of it into a few words roughly 118.8-119 KB further ahead (hence the variant name 118960). The main loop is then plain 64-bit shifts and XORs, with no table loads and no serial dependency on the CRC register. Non-destructive variants keep these forward contributions in a 128 KiB power-of-two ring buffer (the wrap is a bitmask); destructive variants XOR them straight into the caller's buffer. The last ~72 bytes go through a 256-entry Sarwate table, and on x86 the same shift/XOR steps are interleaved between PCLMUL folds.
+
+**Use it when:**
+- You need a portable C CRC-32 for buffers of about 240 KB or more on 64-bit CPUs where CLMUL/PMULL or CRC32 instructions are unavailable or not allowed. At 16-256 MiB the paper's plots show chorba_118960_nondestructive at roughly 2.2x (Ryzen 5 5600) and 3x (Graviton2, Raspberry Pi 4) the throughput of zlib 1.3.1.1 braiding (plot readings are approximate).
+- Cortex-A72-class boards such as the Raspberry Pi 4. The paper calls the non-destructive 118960 variant the best performer there, and its plot shows it at or slightly ahead of zlib's native-CRC32-instruction path for 16 MiB and larger.
+- You already link zlib-ng 2.3.2 or later. You get Chorba automatically as the fallback ahead of braiding, with the bug fixes applied, which is better than copying this repo.
+- You checksum data you own and can overwrite, as in cksum-style tools. On Ryzen and Graviton2 the destructive variants ran close to, or at, the hardware-accelerated reference speed in the plots.
+- You want reference code for porting the zero-polynomial idea to other CRC widths; the paper lists CRC-32-XFER and CRC-64-ISO as future work.
+
+**Skip it when:**
+- Your CPU has CRC32 or carry-less-multiply instructions you can use. On Graviton2, zlib's native-CRC32 path plotted at ~55-75 s/TiB against ~150 for the best non-destructive Chorba, and the Chorba+PCLMUL tweak adds only 5-20%. The abstract's 'on par with hardware' claim holds in the plots only for some variants and CPUs.
+- Your messages are small. Below 238,432 bytes everything falls back to chorba_small, which is only ~1.15x braiding at 64 KiB on the Ryzen plot, and the README says braiding is faster below 256 bytes.
+- You would ship this repo's code in production. It is stale (last commit 2024-12-27) and has no correctness tests. Its 118960 variant still zeroes the ring buffer with a '+ 60' bound; zlib-ng changed that to '+ 64' in PR #2033 to fix wrong CRCs at lengths such as 615,336 bytes (zlib-ng #2029, shipped in the 2.3.2 hotfix).
+- You target big-endian or 32-bit systems. The code does little-endian 64-bit loads with no byte-swapping. zlib-ng needed a big-endian fix (#1891) and a separate 32-bit small variant; this repo has neither.
+- You care about memory or per-call cost, or run on a Pi-class memory system. Each large non-destructive call mallocs and zeroes 128 KiB, which the paper says outweighs the gains for smaller messages. The 733112 variants run ~1.5x (destructive) and ~2.4x (non-destructive) slower than braiding on the Raspberry Pi 4 plot.
+
+**Integration:** source-drop · none for the CRC functions themselves, except that the caller must define the 256-entry `crc32_table` they reference as extern (test_crc.h supplies it); the benchmark harness needs the zlib_braiding and zlib_slicing submodules, and the latter uses an SSH (git@github.com) URL · not documented; C99-style C that the Makefile hard-codes to gcc -O3 (version unstated), with -mno-avx on x86-64; chorba_pclmul needs GCC/Clang `#pragma GCC target("pclmul,avx")` and x86intrin.h · generic variants assume a 64-bit little-endian CPU (tested on x86-64 Ryzen, Graviton2 aarch64 and Raspberry Pi 4); chorba_pclmul needs x86-64 with PCLMULQDQ and AVX; configure calls lscpu, so the build is Linux-oriented; the AVX2/AVX-512 variants benchmarked in the paper are not in the repo
+
+**Vs siblings:** The catalogued CRC siblings (corsix fast-crc32, dougallj's M1 PMULL code, crc32fast, crc-fast, klauspost/crc32, komrad36/CRC, htot crc32c) get their headline numbers from CLMUL/PMULL or CRC32 instructions and win by a wide margin wherever those exist. Pick Chorba, preferably through zlib-ng, only for the no-hardware-assist case, where it is the fastest portable C CRC-32 in the catalog relative to zlib's braiding.
+
+**Gotchas:**
+- Conditioning differs from zlib: the functions take and return the un-inverted register, so a standard CRC-32 is f(0xFFFFFFFF, buf, len) ^ 0xFFFFFFFF. Passing a zlib-style running CRC directly gives wrong results.
+- The *_destructive variants overwrite the input buffer. Only the *_nondestructive variants and chorba_standard leave the data intact.
+- Loop indices are `int` while len is size_t, so a single call over 2 GiB overflows. Loads are unaligned type-punned `*(uint64_t*)` casts, which is alignment and strict-aliasing UB in ISO C (zlib-ng's port feeds the unaligned head through braid first). The 128 KiB malloc is not NULL-checked.
+- 'Table-less' describes only the bulk loop: the tail (up to ~72 bytes) still uses a 1 KiB Sarwate table. The harness prints the CRC but never compares it with zlib, so the repo does not verify correctness.
+
+**Status:** Stale research code (last commit 2024-12-27, 6 stars) under the permissive zlib license, fine to copy but unmaintained and missing later fixes. Use zlib-ng 2.3.2+ (WITH_CRC32_CHORBA on by default) for a maintained, bug-fixed version.
+
+[repo](https://github.com/samrussell/chorba) · [benchmark](https://arxiv.org/abs/2412.16398)
+
+##### crc-fast (Rust core, C/C++ compatible) — generic SIMD CRC-16/32/64  `Rust`  `MIT OR Apache-2.0`  `active`  `Tier C`
+
+Rust SIMD CRC library with a C ABI, covering every catalogued CRC-16/32/64 variant plus custom parameters; beats table-driven CRC crates.
+
+**Beats:** CRC32 — The author's own Criterion runs (random 1 KiB and 1 MiB buffers, release profile with LTO, rustc version not stated) give about 111 GiB/s CRC-32/ISCSI and about 88 GiB/s CRC-32/ISO-HDLC at 1 MiB on an EC2 c7i metal Sapphire Rapids using the AVX-512 VPCLMULQDQ path, and about 94-99 GiB/s on Apple M3 Ultra/M4 Max. The '>220X' figure divides these by a one-line '~0.5 GiB/s' claim for the `crc` crate that the repo never benchmarks, on unstated hardware. The README's link to that section points to a heading that does not exist.
+
+**Known shortcoming:** Benchmark measures crc-fast only: the ~0.5 GiB/s crc-crate baseline behind the '>220x' claim is an unmeasured one-liner, so the ratio is unsupported (retiered A to C).
+
+**Known shortcoming:** 111 GiB/s is the project's own number only. No AVX2+VPCLMULQDQ tier (Zen 3/Alder Lake fall back to SSE; PR #56 open); no_std on x86_64 broken in 1.10.0 (#57); slow checksum_combine (#59); FFI returns 0 on error. Idle since 2025-12-27 with its spin 0.10.0 dependency yanked (#53) and 2026 PRs unmerged. combine.rs is zlib-licensed (PR #41).
+
+**How:** Uses PCLMULQDQ/PMULL polynomial folding from Intel's 'Fast CRC Computation for Generic Polynomials Using PCLMULQDQ' paper, folding 8 blocks at a time rather than 4, with per-algorithm fold constants. That makes one kernel work for any polynomial, including forward CRCs, which pay an extra byte-shuffle. On x86_64 it widens to 512-bit VPCLMULQDQ with AVX-512 ternary XOR, and on aarch64 it uses the SHA3 EOR3 three-way XOR. For CRC-32C (x86 and aarch64) and CRC-32/ISO-HDLC (aarch64 only), it 'fuses' SIMD CLMUL folding with the native CRC32 instructions (corsix/dougallj technique). The kernel is chosen once at runtime from CPUID/HWCAP and cached in a OnceLock.
+
+**Use it when:**
+- You need a CRC variant other than plain CRC-32 accelerated: CRC-64/NVME (the AWS S3 checksum), CRC-64/XZ or ECMA-182, CRC-32/BZIP2 or MPEG-2, CRC-16 protocols, or a custom polynomial via `CrcParams`.
+- Bulk checksumming of buffers 1 KiB and up on AVX-512 + VPCLMULQDQ servers (Sapphire Rapids, Genoa) or Apple M3/M4 and Graviton4 with SHA3, where the published 1 MiB rates are about 54-111 GiB/s.
+- Parallel or distributed checksumming where per-chunk CRCs are merged with `checksum_combine` (for example multipart uploads).
+- C, C++ or PHP code that wants one prebuilt shared or static library covering many CRC variants instead of vendoring per-variant kernels.
+
+**Skip it when:**
+- x86_64 CPUs with VPCLMULQDQ but no AVX-512 (Zen 3, Alder Lake to Meteor Lake clients, Sierra Forest) fall back to the 128-bit SSE PCLMULQDQ kernel. An AVX2 tier is only an open PR (#56), so the headline numbers do not apply there.
+- no_std on x86_64: 1.10.0 fails to compile because avx512.rs imports `std::arch` (issue #57; the fix, PR #42, is unmerged). no_std builds also have no runtime CPU detection and use only compile-time target features.
+- Workloads that combine many checksums in a hot loop: `checksum_combine` is slow (issue #59 measured 13.6 ms for 256 CRC-64 combines; PR #60 reports about 125 us per combine at 1 MiB length on Zen 3). Precomputation fixes are open, not merged.
+- Small messages (<1 KiB): no published numbers below 1 KiB. On x86 the CRC-32/ISO-HDLC 1 KiB rate (~28 GiB/s on SPR) is well under half the 1 MiB rate because there is no native instruction to fuse with.
+- If you need prompt dependency and security maintenance: no commits since 2025-12-27, a yanked `spin` 0.10.0 dependency (#53) and 2026 dependency-bump PRs are unaddressed, and a contributor has started a fork, calling the author inactive.
+
+**Integration:** crate (also builds cdylib + staticlib with generated C header libcrc_fast.h) · spin 0.10 (on x86/x86_64/aarch64); digest 0.10 (pulled in by the default std/alloc features); hashbrown 0.16 only with the `cache` feature · Rust 1.89 for 1.10.0 (1.9.x and earlier: Rust 1.81); stated MSRV policy is stable minus 2 · x86_64 (SSE4.1+PCLMULQDQ baseline, AVX-512VL+VPCLMULQDQ fast path), x86 (SSE PCLMULQDQ), aarch64 (PMULL; SHA3/EOR3 preferred); table fallback elsewhere, tested on wasm32, Cortex-M and RISC-V32
+
+**Vs siblings:** Pick it over crc32fast when you need anything besides CRC-32/ISO-HDLC (CRC-32C, CRC-64/NVME, forward or custom CRCs), or a C ABI. For plain CRC-32 on AVX2-only VPCLMULQDQ x86, crc32fast 1.5.1+ has a 256-bit path that crc-fast lacks. Pick it over corsix fast-crc32 or htot crc32c when you want one runtime-dispatched package for many variants rather than C source kernels for CRC-32/CRC-32C only, which crc-fast's fusion paths borrow from.
+
+**Gotchas:**
+- `checksum()` and `Digest::finalize()` return u64 for every width, so CRC-16/32 results need a cast.
+- The C API returns 0 on error (null pointer, bad params, file I/O failure), and 0 is also a valid CRC, so check `crc_fast_get_last_error()`, which is thread-local. The header's error enum constants are unprefixed (`Success`, `NullPointer`, ...) and can collide in C.
+- Default features include `ffi` and `panic-handler`. no_std binaries must set default-features = false, or they get the crate's `loop {}` panic handler and, with alloc, a stub global allocator that always returns null.
+- Uses a lot of `unsafe` intrinsics (checked with Miri on x86_64 and libFuzzer). 1.4.0 raised SIGILL on non-AVX-512 CPUs, including via aws-sdk-s3 (issue #14, fixed in 1.4.1), so require >=1.4.1.
+
+**Status:** Widely deployed (about 56M crates.io downloads; reverse deps include aws-smithy-checksums, object_store and uucore) and dual MIT/Apache-2.0, though src/combine.rs carries Mark Adler's zlib-licensed code (PR #41). It counts as active under the 12-month rule, but there have been no commits since the 1.10.0 release on 2025-12-27, and 2026 issues and fix PRs are unanswered.
+
+[repo](https://github.com/awesomized/crc-fast-rust) · [benchmark](https://github.com/awesomized/crc-fast-rust#readme)
+
+##### crc32fast (Rust CRC32 SIMD)  `Rust`  `MIT OR Apache-2.0`  `active`  `Tier C`
+
+Rust CRC-32 (IEEE) crate that picks PCLMULQDQ, VPCLMULQDQ or ARMv8 CRC32 kernels at runtime; beats the table-driven `crc` crate.
+
+**Beats:** CRC32 — The only comparison against `crc` is a 1.0.0-era README table: crc 1.8.1 at 207 MB/s, the crc32fast table baseline at 1,499 MB/s and PCLMULQDQ at 7,314 MB/s. It states no CPU, compiler or input size, and the current Criterion bench does not include `crc`. Newer maintainer-run self-comparisons in PR #56 (EC2 Sapphire Rapids, before the final tuning) give 1 MiB at 25.0 GB/s (SSE), 51.0 (AVX2) and 68.6 (AVX-512), and an AMD EPYC 7763 went from 11.0 to 24.2 GB/s with the AVX2 path.
+
+**Known shortcoming:** README comparison table is 2018-era (crc 1.8.1 at 207 MB/s vs 1,499 / 7,314 MB/s); the current benchmark no longer includes the crc crate. Rust-only.
+
+**Known shortcoming:** CRC-32 IEEE only. SIMD paths need rustc >= 1.89 (wide x86) / >= 1.80 (aarch64); 1.87 regression (#48); no_std detection is compile-time only; debug builds are slow. aarch64 uses the scalar crc32 instructions only (no PMULL). reset() drops the initial value.
+
+**Independent measurement:** PR #56 self-run (Sapphire Rapids, 1 MiB): SSE 25.0, AVX2 51.0, AVX-512 68.6 GB/s.
+
+**How:** On x86 it uses carry-less-multiply folding from Intel's Gopal et al. 2009 paper 'Fast CRC Computation for Generic Polynomials Using PCLMULQDQ': 4 streams with SSE, 8 streams with AVX2+VPCLMULQDQ from 256 B, and 16 streams with AVX-512 from 2 KiB, plus a clmul fold for the final partial block. On aarch64 it uses the hardware `crc32d` instruction with three interleaved accumulators, rejoined by GF(2) CRC combination, to hide instruction latency on inputs of 1.5 KiB and up. Everything else uses a slicing-by-16 table ('baseline'). The kernel is chosen by runtime CPU detection when a `Hasher` is constructed.
+
+**Use it when:**
+- Any Rust code computing zlib/gzip/PNG/zip CRC-32. It is already a transitive dependency of flate2, png, zip, image and zlib-rs, so using it directly adds nothing.
+- Streaming or chunk-parallel checksums: `Hasher::update` over pieces, then merge per-chunk results with `Hasher::combine` (table-driven x^2^n combine).
+- Mixed x86 fleets. The same binary uses SSE PCLMULQDQ on older CPUs, 256-bit VPCLMULQDQ on AVX2-only parts (Zen 3, Alder Lake) and 512-bit on AVX-512 parts; the maintainer measured 25.0 / 51.0 / 68.6 GB/s at 1 MiB on Sapphire Rapids.
+- Short or odd-length buffers of 16 B or more: since 1.5.1 the clmul path goes down to 16 bytes, which PR #56 reports as 3.3-7.2x faster than before for 16-127 B inputs.
+- Projects that need a low MSRV (1.63) or embedded/wasm builds, where the portable slicing-by-16 fallback is enough.
+
+**Skip it when:**
+- You need CRC-32C (iSCSI/ext4), CRC-64, CRC-16 or a custom polynomial. It is IEEE-only, and the request for other polynomials has been open since 2019 (#9); use crc-fast or a crc32c crate.
+- no_std builds lose runtime detection, so SIMD is used only if the matching target features are enabled at compile time; otherwise you get the table baseline.
+- Old or specific toolchains: before rustc 1.89 the VPCLMULQDQ paths are silently compiled out, before 1.80 aarch64 has no hardware path, and on rustc 1.87 a compiler regression made the specialized path slower than baseline (#48).
+- Unoptimized debug builds are very slow (a user saw about 2 MB/s on M1 before 1.3.1, and wasm debug builds slowed zip decompression 150x), so give this dependency an opt-level in the dev profile.
+- Peak aarch64 throughput: the ARM path uses only the scalar CRC32 instruction, with no PMULL folding or CRC+CLMUL fusion (the corsix/crc-fast technique), and the repo publishes no aarch64 numbers.
+
+**Integration:** crate · cfg-if 1.0 · Rust 1.63 (MSRV); rustc 1.80+ for the aarch64 CRC path and 1.89+ for the AVX2/AVX-512 VPCLMULQDQ paths, detected by build.rs · any; accelerated on x86/x86_64 (SSE2+SSSE3+SSE4.1+PCLMULQDQ base; AVX2 or AVX-512F with VPCLMULQDQ for the wide paths) and aarch64 (CRC extension); CI cross-tests i686, aarch64, riscv64gc and s390x, and checks wasm32
+
+**Vs siblings:** Pick it over crc-fast when you only need IEEE CRC-32 in Rust and want one tiny dependency, MSRV 1.63 and the crate the ecosystem already uses, or when you run on AVX2-only VPCLMULQDQ x86 (Zen 3, Alder Lake), where crc-fast has no 256-bit tier. Choose crc-fast, corsix fast-crc32 or htot crc32c for CRC-32C, other widths, or a C/C++ interface.
+
+**Gotchas:**
+- `Hasher::reset()` sets the state to 0 and discards any initial value passed to `new_with_initial`.
+- It implements `core::hash::Hasher` (`finish` returns the CRC as u64). Do not use it as a HashMap hasher: the output is 32 bits and it is not DoS-resistant.
+- `hash()` builds a new `Hasher` per call, which runs CPU feature detection (about 14 ns on an EPYC 7763 per PR #56). For many tiny buffers, build one `Hasher` and clone it.
+- Throughput is not monotonic in size. Around the stride edges the maintainer still measured AVX-512 at 31.1 GB/s against AVX2 at 47.0 GB/s for 2303 B inputs on Sapphire Rapids, and there is no `std::io::Write` impl (#30 open).
+
+**Status:** Actively maintained: 1.5.1 (2026-08-22) added the VPCLMULQDQ and ARM 3-way paths, 1.5.2 shipped 2026-09-12 and the last commit is 2026-09-21. It is dual MIT/Apache-2.0 with about 712M downloads and 1,296 reverse dependencies (flate2, png, zip, image, parquet, zlib-rs), so it is the de facto Rust CRC-32.
+
+[repo](https://github.com/srijs/rust-crc32fast) · [benchmark](https://github.com/srijs/rust-crc32fast#readme)
+
+##### Fast CRC32 (Sarwate / Slicing-by-8 / Slicing-by-16)  `C++`  `Zlib`  `abandoned`  `Tier C`
+
+Portable table-driven CRC-32 (zlib polynomial) in C++. Slicing-by-8/16 runs about 3.7-8.5x faster than a byte-wise Sarwate loop.
+
+**Beats:** Classic byte-wise Sarwate table-lookup CRC32 (the author's own crc32_1byte reimplementation). The page says zlib and PHP use this algorithm, but zlib's crc32() itself is not benchmarked. — The author's blog table times CRC-32 over a 1 GiB buffer on a Core i7 860 (2.8/3.2 GHz) with GCC 4.7 and Visual C++ 2010 (exact flags not stated): 1,800/1,400 MB/s for slicing-by-8, 3,000/2,000 for slicing-by-16 and 3,200/2,000 with prefetch. The reference is his own byte-wise Sarwate loop at 375 MB/s, about 3.7-8.5x (derived). zlib's actual crc32() was never benchmarked.
+
+**Known shortcoming:** Baseline is the author's own bytewise Sarwate loop, not zlib's crc32() (which has used slicing since 1.2.0 in 2003 and braiding since 1.2.12), so the 3.7-8.5x does not apply against zlib. Table predates the Makefile's -O3 (added 2016); flags unstated. Abandoned since 2021-09-29; hardware CRC (SSE4.2/PCLMUL) implementations are much faster.
+
+**Known shortcoming:** Unaligned uint32_t* casts (UB; faults on strict-alignment cores); `__BYTE_ORDER` #error on macOS (PR #12 open); no extern "C". On a Pi 2 (ARMv7) only 1.7-2.2x over bytewise, and slicing-by-16 without prefetch is slower than slicing-by-8. 7 issues/PRs unanswered; the test allocates 1 GiB (bad_alloc on 32-bit).
+
+**How:** Slicing-by-N (Intel's slicing-by-8 generalized to 16 by Bulat Ziganshin) replaces Sarwate's one serial table lookup per byte with N independent lookups into N precomputed 256-entry tables per 4/8/16-byte word. That breaks the byte-to-byte dependency chain, so the CPU can issue the loads in parallel: about 1-1.5 cycles/byte vs about 8 for Sarwate on a Core i7 860. The slicing-by-16 loop is unrolled 4x, and a variant issues __builtin_prefetch/_mm_prefetch 256 bytes ahead, which the page credits with a little under 10% on that CPU. The tables are compile-time constants (up to 16 KB), so there is no runtime initialization.
+
+**Use it when:**
+- Portable software CRC-32 (zlib/PNG/gzip-compatible) with no intrinsics, assembler or SIMD, on any ISA including big-endian, when PCLMULQDQ/ARMv8-CRC code paths are unavailable or not allowed
+- Embedded or memory-tight targets where you trade table size for speed: half-byte needs 64 bytes of table, Sarwate 1 KB, slicing-by-4/8/16 4/8/16 KB; there are Arduino sketches and blog cycle counts for the ATmega
+- Replacing a hand-rolled byte-wise CRC loop in legacy C++: slicing-by-16 was about 8x faster on a 2010-era x86 desktop (375 MB/s to 3,000 MB/s with GCC 4.7)
+- Chunked or multi-threaded CRC of large buffers, using crc32_combine() to merge per-chunk CRCs (the repo includes a std::thread example)
+- Learning or teaching CRC implementation tradeoffs: the blog documents each algorithm step by step with code and measurements
+
+**Skip it when:**
+- Modern x86-64 or ARMv8 servers and desktops: carry-less-multiply or hardware CRC libraries (crc32fast pclmulqdq, corsix fast-crc32, zlib-ng, Chromium zlib) run many times faster, and this library has no hardware path at all
+- As a claimed upgrade over zlib's crc32(): zlib has used a four-bytes-at-a-time (BYFOUR) loop since 1.2.0 (2003) and braided CRC since 1.2.12 (2022, '1.5 to 3' times faster per its ChangeLog). The page's 'zlib' baseline is really a Sarwate loop, and no comparison against actual zlib exists
+- CRC-32C (Castagnoli, iSCSI/ext4/SSE4.2) or any other polynomial: the tables are hard-coded for 0xEDB88320
+- Small-core ARM without verification: a user's Raspberry Pi 2 (ARMv7) run in issue #16 measured 101 MB/s for Sarwate vs only 172-218 MB/s for the slicing variants (about 1.7-2.2x), and slicing-by-16 without prefetch was slower than slicing-by-8 there
+- Projects that need an actively maintained dependency: no commits since 2021-09-29, and seven issues/PRs are open without response, including build and portability fixes
+
+**Integration:** source-drop · none (stdint.h, cstddef; sys/param.h on non-Windows for __BYTE_ORDER; xmmintrin.h for prefetch under MSVC with SSE2) · Any C++ compiler for the library, which uses no C++11 features in Crc32.cpp (default arguments and <cstddef> make it C++-only). Measured with GCC 4.7 and Visual C++ 2010; the multithreaded test needs C++11 (std::thread, auto) · any; little- and big-endian paths for slicing-by-4/8/16; Windows ARM64 fixed in 2021; Arduino sketch ports; no SIMD or hardware-CRC path on any architecture
+
+**Vs siblings:** Pick it over crc32fast, corsix fast-crc32, komrad36/CRC or the dougallj PMULL kernel only when you need plain portable C++ with no SIMD or hardware dependency, or a tiny-table variant for microcontrollers. Chorba is the newer table-less software alternative that beats zlib's braided CRC. htot/crc32c computes the different CRC-32C polynomial.
+
+**Gotchas:**
+- The slicing functions cast the void* input straight to const uint32_t* with no alignment prologue. Misaligned buffers (for example from chunked processing) rely on the CPU tolerating unaligned loads, which is UB in C++ and can fault on strict-alignment cores; the author only warns that 'performance might suffer'
+- Non-Windows builds need __BYTE_ORDER from <sys/param.h> or stop with #error; an open 2022 PR reports macOS failing this way and proposes falling back to __BYTE_ORDER__
+- Crc32.h itself #defines all four CRC32_USE_LOOKUP_TABLE_* switches, so shrinking the 16 KB table for embedded use means editing the header, not passing -U flags
+- crc32_combine() uses the older pigz/zlib GF(2) matrix-squaring method on every call; zlib 1.2.12 made combines about 200x faster with precomputed tables. The bundled Crc32Test allocates 1 GiB and throws std::bad_alloc on 32-bit boards (issue #16)
+
+**Status:** Abandoned (last commit 2021-09-29, open PRs unanswered). The code is Zlib-licensed, two files, dependency-free and trivially vendorable, but it predates hardware-accelerated CRC and was last tuned for 2010-2015 compilers and CPUs.
+
+[repo](https://github.com/stbrumme/crc32) · [benchmark](https://create.stephan-brumme.com/crc32/)
+
+##### fast-base64 (mitschabaude)  `JavaScript/WebAssembly`  `MIT`  `abandoned`  `Tier C`
+
+Hand-written WebAssembly SIMD base64 codec for JS (browser/Node/Deno); beats pure-JS base64 loops, not native Buffer.
+
+**Beats:** The package's own pure-JS port (fast-base64/js), which the README says is 'the fastest existing JS implementation', plus native atob()/btoa() through its own fast-base64/nano wrapper — The README claims about 20x over its own pure-JS port on the first 100 kB and 2-3x on the first 100 MB, plus 0.06 ms vs 5 ms to decode 10 kB against the atob wrapper. It gives no hardware, runtime version or results table, and its harness times one cold call per variant with performance.now(). In our warm-loop re-run on Node 24.18 / Apple M1 Pro (100 kB-10 MB), the Wasm build beat the JS port by about 2.1x on decode (0.74-0.77 vs 0.35-0.37 GB/s) and 3.7-4.6x on encode (1.4-2.3 vs 0.38-0.52 GB/s), not 20x, and Node's Buffer beat both.
+
+**Known shortcoming:** JavaScript/WASM, not C++. 'Fastest JS' baseline is the project's own fast-base64/js; the nano (atob/btoa) comparison is 3-100x. First-party numbers only; ~6k npm downloads/week.
+
+**Known shortcoming:** Encoder overrun bug (reproduced on Node 24): toBase64 on a 28,086-byte input fails with 'memory access out of bounds'. No input validation (invalid characters, newlines and base64url produce silent garbage). The 20x claim was not reproduced: warm runs on M1 Pro show WASM ~2x decode / ~4x encode over its own JS, and Node's Buffer is 5-10x faster than both. Abandoned since 2022-01; ESM-only with broken types (#6); native Uint8Array.fromBase64 is Baseline since 2025-09.
+
+**How:** The kernels are hand-written WebAssembly text using 128-bit Wasm SIMD. Each iteration loads 16 base64 characters and maps them to 6-bit values with a branchless piecewise-linear formula (lane compares turned into add/subtract masks, no lookup table). It packs the bits with i32x4 shifts and masks and uses i8x16.swizzle to compact 16 chars into 12 bytes; encoding runs the same steps in reverse. String/byte conversion goes through TextEncoder.encodeInto/TextDecoder, a cached compiled module plus one shared WebAssembly.Memory avoid re-instantiating per call, and it skips input validation entirely.
+
+**Use it when:**
+- Browser code that encodes or decodes 100 kB-100 MB base64 payloads on engines without native Uint8Array.fromBase64/toBase64, where the fallback would be atob/btoa plus char-code loops.
+- Trusted, well-formed standard-alphabet base64 with no line breaks, such as data your own code produced, because the fast path does no validation.
+- Cross-runtime ESM code (browser plus Deno) that wants one small API without depending on Node's Buffer.
+- Bundle-size-sensitive pages: the default build is about 1.9 kB minzipped, and `/js` is about 600 bytes if you need a synchronous API.
+
+**Skip it when:**
+- Node.js. In our warm-loop run on Node 24.18 (Apple M1 Pro), Buffer.from(s, 'base64') decoded about 10x faster than the default Wasm build (7.4 vs 0.76 GB/s of output at 1 MB), and Buffer#toString('base64') encoded 2.5-7x faster.
+- Runtimes with native Uint8Array.fromBase64/toBase64 (MDN: Baseline since September 2025). The native API also validates input, skips whitespace and supports base64url.
+- Untrusted input. Invalid characters silently decode to garbage (issue #4, confirmed by the author): '@@@@' gave [16,65,4] with no error, and 'SGVs\nbG8=' gave 'Hel9±¼' instead of 'Hello'.
+- Small payloads, or hot paths that need a synchronous call. The fast build is async-only, and the README itself says typical apps will not notice the gap versus the 147-byte atob wrapper.
+- Projects that need a maintained dependency. The last commit and npm release (0.1.8) are from 2022-01-04, and the 2023-2024 issues on validation, ESM typings and maintenance are unanswered.
+
+**Integration:** module · none · An ES module environment with WebAssembly and TextEncoder/TextDecoder. The fast path needs Wasm SIMD and falls back to scalar Wasm, with a console.warn, if instantiation fails. The package is ESM-only: package.json exports only an 'import' condition, so there is no CommonJS require. · Browsers, Node and Deno (deno.land/x/fast_base64) for the default build. The README says `/small` and `/nano` have no Node support.
+
+**Vs siblings:** aklomp/base64, fastbase64, Turbo-Base64, base64-turbo, vb64 and simdutf are native C/C++/Rust codecs running at several to 100+ GB/s, and none ships as a drop-in JS package for a browser page. Pick fast-base64 only when you need a ready-made web JS/Wasm package for trusted data; if you control native code, simdutf (which validates) is the better choice.
+
+**Gotchas:**
+- Encoder overrun bug: the SIMD encoder stores whole 16-byte vectors without padding its output allocation, so it writes up to 12 bytes past it. In our run on Node 24.18, toBase64 of a 28,086-byte input on fresh module memory threw 'RuntimeError: memory access out of bounds', because the allocation exactly fills the 64 KiB Wasm page. By our reading of the code it can also overwrite an adjacent in-flight allocation.
+- The variants disagree on base64url. `/js` decodes '-' and '_' as 62/63, but the default SIMD path turns them into garbage ('-_-_' gave [197,236,94] instead of [251,255,191]), so run fromUrl() first.
+- Only '=' is stripped before decoding, so whitespace or newlines (for example MIME-wrapped base64) corrupt the output without raising an error.
+- The TypeScript types are not wired into the package.json `exports` map (open issue #6), so ESM + TS type resolution can fail. The repo's correctness check (test-base64.js) never exercises the default SIMD toBase64.
+
+**Status:** Abandoned (last commit and npm 0.1.8 on 2022-01-04; issues from 2023-2024 unanswered) yet still about 6,000 npm downloads a week; it is MIT-licensed and small enough to vendor, but you would need to patch the encoder overrun and add validation yourself.
+
+[repo](https://github.com/mitschabaude/fast-base64) · [benchmark](https://github.com/mitschabaude/fast-base64#readme)
+
+##### fast-hex (zbjornson)  `C++`  `MIT`  `active`  `Tier C`
+
+AVX2 hex encoder/decoder for C++ and Node.js, self-reported ~11-12x faster than its own scalar lookup-table codec.
+
+**Beats:** hex (scalar hex string encode/decode) — The README's ~12.5x decode and ~11.5x encode are ratios against the library's own scalar LUT functions. It gives no CPU, compiler, input size or raw throughput, and there is no C++ harness. The only raw figures are in Book1.xlsx (sheet 3, Node ops/s on the '1.6M' rows): 812 scalar LUT vs 1726 'vec8' on V8 strings (2.12x) and 1466 vs 18549 on Buffers (12.65x), while the plain 'vec' column shows 1.9x and 5.7x; 'vec8' matches no function in the published source.
+
+**Known shortcoming:** Decode 'node' baseline is the addon's own scalar lookup-table code, not Node's built-in Buffer hex; last code change 2022-09 (only dependabot commits since).
+
+**Known shortcoming:** Headline ratios (2.12x string / 12.65x buffer) come from a 'vec8' spreadsheet column that matches no shipped function; the shipped 'vec' path measures 1.9x / 5.7x. The only npm release (1.0.0, 2017) predates the #4 fix, so its encodeHexVec is wrong for bytes >= 0x80. No input validation, no CPU dispatch (AVX2 only), lowercase-only encoding; addon lacks a destination size check. Needs GCC 4.9+, not 4.8.
+
+**Independent measurement:** Author's Book1.xlsx, shipped 'vec' path: 1.9x (string) / 5.7x (buffer) vs Node scalar.
+
+**How:** The decoder loads 64 hex characters per iteration into two AVX2 registers, uses vpshufb to split high-nibble and low-nibble characters into 16-bit lanes, and converts ASCII to nibble values branchlessly as 9*(c>>6) + (c & 0xF) (vpsraw + vpmaddubsw + vpaddw), then recombines with shift/or, vpackuswb and vpermq to store 32 bytes. The encoder zero-extends 16 bytes to 16-bit lanes (vpmovzxbw), splits nibbles with a shift plus a byte shuffle, and maps each nibble to its ASCII digit with one vpshufb against a 16-entry '0'-'f' table, writing 32 characters per iteration. Skipping validation keeps both loops branch-free; leftover bytes fall back to scalar code.
+
+**Use it when:**
+- Bulk hex conversion of large, trusted buffers (KB to MB) on x86-64 CPUs with AVX2, e.g. ingesting or emitting hex-encoded blobs or large batches of digests.
+- C/C++ projects that can vendor two source files and compile them with -mavx2 / -march=haswell (or /arch:AVX2 on MSVC) for a fixed, known-AVX2 deployment target.
+- Decoding mixed-case hex (A-F and a-f both accepted) where the producer is trusted or the input was validated upstream.
+- As a small, readable reference kernel (about 270 lines of intrinsics) to adapt into your own hex codec, e.g. adding validation or runtime dispatch.
+
+**Skip it when:**
+- Untrusted input: invalid characters silently become garbage bytes and there is no error return; the README says validation is not implemented.
+- Portable binaries or non-x86 targets: there is no runtime CPU dispatch and no SSE, AVX-512 or NEON path; the AVX2 functions exist only when the whole file is compiled with AVX2 enabled, and only the scalar functions remain otherwise.
+- Node.js from npm: the only release (fast-hex 1.0.0, 2017-10-30) ships the sign-extending byte2nib that issue #4 showed mis-encodes bytes >= 0x80 (0x80 -> "8f"), fixed in git only in 2019. The addon's binding.gyp also builds with -march=native and calls the AVX2 functions unconditionally, so it will not compile on a non-AVX2 build host.
+- Short inputs: under 16 bytes (encode) or 64 characters (decode) everything runs on the scalar tail, so there is no gain. For V8 strings the README reports only ~2.12x, because copying the string out of V8 dominates.
+- When you need upper-case hex output: both encoders emit lower-case only.
+
+**Integration:** source-drop (src/hex.h + src/hex.cc); optional Node.js native addon built with node-gyp · none for C++ (compiler intrinsics headers only); the Node addon needs nan and node-gyp · README lists GCC 4.8+, Clang 3.4+, MSVC 2015+ and ICC 16+, but hex.cc uses a C++14 digit separator (0b11'01'10'00), which GCC supports only from 4.9, so in practice C++14 mode and GCC 4.9+ · x86-64 with AVX2 (Haswell or later) for the vector paths; the scalar functions compile anywhere
+
+**Vs siblings:** No other hex codec is catalogued; the siblings are base64 and CRC libraries, so pick this when the format must be hex. If you control the format, a base64 sibling such as aklomp/base64 expands data 4/3x instead of 2x and does runtime CPU feature detection on x86 with scalar and NEON codecs, none of which this library has.
+
+**Gotchas:**
+- len is the byte count (half the hex-string length) for both encode and decode. Passing the character count to decodeHexVec over-reads src and over-writes dest; the author clarified this in 2019 after a user in issue #4 hit it.
+- Invalid input is not rejected. The vector path computes 9*(c>>6) + (c & 0xF) for any byte, and the LUT path ORs a 0xFF sentinel into the output, so non-hex characters decode to some byte without any error.
+- Node addon: decodeHexVec writes inputLength/2 bytes into the destination typed array without checking its size, drops the last character of odd-length input, and for a two-byte (UTF-16) string or a non-string argument it leaves the source pointer uninitialized (it only prints a message).
+- Tests are thin: test.js checks one 43-byte vector against the scalar paths. benchmark/hex-decode.js calls decodeHexBMI, which the addon no longer exports, and hex-encode.js benchmarks an all-zero buffer.
+
+**Status:** Code last changed 2022-09-19 (outside-contributor AVX2 guards and a -Wnarrowing fix), and the only 2026 activity is Dependabot lodash bumps in /benchmark, so it is effectively dormant; it is MIT-licensed and small enough to vendor and audit, but use the git source, not npm 1.0.0.
+
+[repo](https://github.com/zbjornson/fast-hex) · [benchmark](https://github.com/zbjornson/fast-hex#readme)
+
+##### fasthex  `Rust`  `Apache-2.0`  `active`  `Tier C`
+
+Rust CLI hex dumper that uses multiple threads, SIMD and mmap to dump large files far faster than xxd, hexyl and hexdump.
+
+**Beats:** xxd — These are the author's own hyperfine wall-clock numbers, from the README table last changed 2026-06-12. Dumping a 1.5 GiB file to /dev/null took 0.78 s for fasthex against 43.62 s for xxd, 53.14 s for hexyl --color=never and 116.03 s for hexdump. That is about 1.9 GiB/s input for fasthex vs about 35 MiB/s for xxd (derived). A 69 GiB file took ~1 min vs ~1 h 30 m for hexyl. The rig is an Intel T-series desktop: the gist says 'i5-7700T', which is not a real SKU, and earlier README revisions say i5-7500T. It had 16 GB RAM and a 990 Pro NVMe, and ran with no Rust version, build flags, tool versions or benchmark script published. After the 3 warmups the 1.5 GiB file most likely sits in page cache, so the result compares parallel SIMD formatting against single-threaded formatters, not I/O.
+
+**Known shortcoming:** A hex-dump CLI (Rust), not a library. The >50x win combines rayon multithreading and AVX2 against single-threaded xxd; stdin and multi-file input take the single-threaded path. The benchmark predates the current code: the stated 'i5-7700T' is a typo for the i5-7500T in the older README, and the 69 GiB run used u32 offsets that wrap (wrong output). vmsplice is used only for regular-file/FIFO stdout, so writes to /dev/null are plain write() calls. No unit tests, ~100 unsafe blocks; versions 0.3.23-0.3.27 yanked; default output is not xxd's layout.
+
+**How:** When given a single mmap-able file, it maps the file and has rayon format output chunks in parallel (about 16 MiB of output per chunk in the current code). A separate writer thread drains finished buffers while the next chunk is formatted, using a 6-buffer pool. Hot rows are formatted with hand-written x86-64 intrinsics: AVX-512BW, then AVX2 at 32 bytes (2 rows) per call, then SSSE3/SSE4.1 at 16 bytes. Kernels are chosen at runtime with is_x86_feature_detected, and a std::simd nibble-LUT kernel is used on nightly builds. On Linux it also calls madvise(MADV_SEQUENTIAL/WILLNEED/HUGEPAGE) and writes through a private pipe with vmsplice+splice when stdout is a regular file or FIFO.
+
+**Use it when:**
+- Dumping very large files (hundreds of MiB to tens of GiB) on a multi-core x86-64 Linux box, where xxd (~35 MiB/s in the README run) takes minutes
+- Producing canonical hex+ASCII dumps into a file or pipe for grep/diff, where the vmsplice/splice path and parallel formatting both apply
+- Quick -p plain-hex or -i C-array generation from big binaries when xxd is the bottleneck
+- Interactive `fasthex file | less` on huge files, where it keeps up with paging far better than single-threaded dumpers
+
+**Skip it when:**
+- Scripts that parse xxd's exact output: the default layout is hexdump -C style, not xxd's `7f45 4c46` 2-byte grouping, and -p writes the whole file as one unbroken hex line (xxd -p wraps at 60 hex chars), so it is not byte-compatible.
+- Input from stdin or several files concatenated: that goes through the single-threaded streaming path (4 MiB buffers, no rayon), so most of the headline speedup does not apply
+- Small files or `-w` squeeze / `-m` max-lines runs: squeeze and max-lines force a serial path, and on small inputs thread and mmap setup costs are all overhead
+- When correctness matters more than speed: the ~4,650-line main.rs has no unit tests (only a CI smoke check of -p against od on 4 KiB of random data), about 100 `unsafe` uses, and SECURITY.md itself lists 'SIMD paths producing different results than the scalar fallback' as a risk
+- Non-Linux or non-x86 hosts: the zero-copy output, MADV_HUGEPAGE and the hand-written intrinsics are Linux- or x86-64-only. aarch64 and macOS builds exist but get the portable or scalar kernels and plain writes. Windows is not in the release matrix.
+
+**Integration:** crate · memmap2 0.9, rayon 1.12, libc 0.2, clihelp 0.1 (binary crate; install via `cargo install fasthex`, AUR fasthex / fasthex-bin, Nix flake, or GitHub release binaries) · Rust edition 2024 (so 1.85+). crates.io releases are built and smoke-tested on stable; rust-toolchain.toml pins nightly, which enables the std::simd portable_simd kernel detected by build.rs. · Release binaries for x86_64/aarch64 Linux (gnu and musl) and x86_64/aarch64 macOS. SIMD kernels need x86-64 (SSSE3/SSE4.1 minimum, AVX2/AVX-512BW used if present); vmsplice/splice and MADV_HUGEPAGE are Linux-only. Windows is not documented.
+
+**Vs siblings:** The hex siblings (const-hex, zbjornson fast-hex, eddieantonio's hx NEON kernel) are in-process encode/decode libraries that produce bare hex strings. Pick fasthex when you want a ready-made xxd/hexdump-style CLI dump of big files with offsets and an ASCII panel. Pick const-hex or fast-hex when you need hex encoding inside your own Rust or C++ code.
+
+**Gotchas:**
+- The README says the zero-copy path works 'regardless of what stdout is (/dev/null, ...)', but the code only enables vmsplice/splice when stdout is a regular file or FIFO. /dev/null is a character device, so the benchmark runs used plain write(), which is already almost free on /dev/null.
+- The input is mmap'd with memmap2 (`unsafe Mmap::map`). Truncating or rewriting the file while it is being dumped can SIGBUS the process or give inconsistent output.
+- The octal and minimal fast paths only engage while displayed offsets stay at or below 0xFFFFFFFF, so dumps of files over 4 GiB in those modes fall back to slower kernels. Older versions, including the one that ran the 69 GiB benchmark, wrapped offsets past 4 GiB.
+- Default colouring is `auto`: on a TTY it emits ANSI colours and takes the slower coloured path. Use --color=never for apples-to-apples timing. The FASTHEX_DEFAULT_OPTS environment variable is silently prepended to argv.
+
+**Status:** Actively developed by a single author: first commit 2026-04, last commit 2026-09-18, crates.io 0.3.28 with 451 downloads and 13 stars. Several releases were yanked (0.3.23–0.3.27) after stable-build breakage, and the benchmarks predate much of the current code. It is Apache-2.0 and easy to install from crates.io or AUR, but it is young and has little test coverage.
+
+[repo](https://github.com/CallMeAlphabet/fasthex) · [benchmark](https://github.com/CallMeAlphabet/fasthex#benchmarks)
+
+##### klauspost/crc32 (2025 AVX-512 revival)  `Go`  `BSD-3-Clause`  `stale`  `Tier C`
+
+Fork of Go's hash/crc32 adding an AVX-512 VPCLMULQDQ path that roughly doubles IEEE CRC32 throughput on inputs of 1 KB and up.
+
+**Beats:** CRC32 (Go standard library hash/crc32, IEEE polynomial - the same checksum family zlib's crc32() implements) — On an AMD Ryzen 9 9950X, go test -bench BenchmarkCRC32 (IEEE, 512 B-32 KB, aligned and offset-by-1 buffers) measured 45.6-48.6 GB/s for the AVX-512 path at 1-32 KB, against 19.9-21.9 GB/s for the stdlib-derived SSE4.1/PCLMULQDQ kernel it replaces (2.09x-2.35x), and 1.00x at 512 B and below. The Go toolchain version and flags are not stated. The author's upstream Go CL on the same CPU reported a similar 2.10x-2.44x.
+
+**Known shortcoming:** No Go version or flags stated (retiered A to C). The 'old' baseline is Go stdlib's SSE4.1/PCLMULQDQ path, not an AVX2 one; gains need AVX-512 (VPCLMULQDQ). Go-only.
+
+**Known shortcoming:** Superseded: the same AVX-512 IEEE code was merged into Go's stdlib hash/crc32 (golang/go 18dbe5b, shipped in go1.26.0), so it only helps projects pinned to Go 1.23-1.25. The Castagnoli AVX-512 kernel ships disabled (`if false`); a 1 KB gate per Write call means small chunked writes see no gain. Not a full drop-in (distinct Table type, no Clone()).
+
+**How:** It uses carry-less-multiply folding from Intel's 'Fast CRC Computation for Generic Polynomials Using PCLMULQDQ' paper, widened from 128-bit XMM to 512-bit ZMM registers. Each loop iteration folds 64 bytes with two VPCLMULQDQ ops and merges them with a three-way XOR in one VPTERNLOGD. The 512-bit accumulator is then split into four 128-bit lanes and handed to the existing SSE tail and Barrett reduction. Below 1024 bytes it falls back to the stdlib SSE4.1/PCLMULQDQ kernel, and to slicing-by-8 below 64 bytes.
+
+**Use it when:**
+- Go services on Go 1.23-1.25 that compute IEEE CRC32 (gzip, zip, PNG, Ethernet-style checksums) over buffers of 1 KB or more on x86-64 CPUs with AVX-512 VPCLMULQDQ
+- Checksumming large blobs in single calls (file chunks, network payloads, object-store parts), where the author measured 45-48 GB/s against about 20-22 GB/s on a Ryzen 9 9950X
+- When you want a pure-Go (no cgo) path that is bit-identical to hash/crc32, with the only change being the import line
+
+**Skip it when:**
+- You build with Go 1.26 or newer: the same AVX-512 IEEE code was merged into the standard library's hash/crc32 (golang/go commit 18dbe5b, present in go1.26.0, absent in go1.25.0), so this package adds nothing but a dependency
+- CRC32C (Castagnoli) or Koopman workloads: the Castagnoli AVX-512 kernel ships disabled (an 'if false' guard, with a comment saying it is not significantly faster even on Zen 5), so those polynomials run at stdlib speed
+- Short inputs or streaming with small Write calls: the AVX-512 path is chosen per call only when len(p) >= 1024, so 15 B-512 B checksums and sub-1 KB chunked writes see 1.00x
+- CPUs without AVX-512 (older x86, arm64, ppc64le, s390x, loong64): you get the stdlib-derived code paths and no speedup
+- Code that needs hash.Cloner: the Go 1.25+/1.26 stdlib digest has a Clone() method and this package's digest does not
+
+**Integration:** module · golang.org/x/sys (v0.34.0, used for CPU feature detection via x/sys/cpu) · Go 1.23 (go.mod declares go 1.23.0; CI tests 1.23.x and 1.24.x) · any Go target. The AVX-512 speedup needs x86-64 with AVX512F, AVX512VL and AVX512 VPCLMULQDQ. Other targets use stdlib-derived assembly (amd64 SSE4.1/SSE4.2/PCLMULQDQ, arm64, ppc64le, s390x, loong64) or a generic Go fallback.
+
+**Vs siblings:** Pick this when you are in Go, cannot move to Go 1.26 yet, and want CRC32 with no cgo. crc-fast (Rust core with a C API) and corsix/fast-crc32 (C kernels) are the choice for peak GB/s or CRC32C outside Go, and crc32fast is the Rust-native option. Their multi-stream kernels go well beyond this package's single-accumulator AVX-512 loop.
+
+**Gotchas:**
+- The AVX-512 decision is made on each Update/Write call's length, not on the total stream length. A hash.Hash32 fed 512-byte chunks never uses the fast path, so batch writes into 1 KB+ slices.
+- The README warns that AVX-512 'may be slower to ramp up' for cold or short bursts, and says the published benchmarks, which run hot back-to-back loops, do not show this.
+- CI runs 'go test -tags=noasm', but no source file honors a noasm tag, so there is no build tag to force the portable path on amd64.
+- The 2025 rebase onto Go 1.24 source dropped the old gccgo/App Engine build constraints (earlier PRs #8 and #12). Non-gc toolchains are not tested.
+
+**Status:** The last commit and v1.3.0 tag are from 2025-07-22. The same author got the identical change into Go's hash/crc32 two days later (in Go 1.26), so this BSD-3-Clause module now mainly serves projects pinned to Go 1.23-1.25 and is effectively superseded rather than abandoned.
+
+[repo](https://github.com/klauspost/crc32) · [benchmark](https://raw.githubusercontent.com/klauspost/crc32/master/README.md)
+
+##### komrad36/CRC ("Golden" hardware-accelerated CRC32)  `C++`  `MIT`  `abandoned`  `Tier C`
+
+x86-64 CRC-32C in one function: three interleaved SSE4.2 crc32 streams recombined with PCLMULQDQ, ~2.9x a single-stream crc32 loop.
+
+**Beats:** The author's own C++/asm reimplementations of bitwise (naive) and slicing-by-1..16 tabular CRC-32C, plus a single-stream SSE4.2 _mm_crc32_u64 loop. zlib is never mentioned or tested. — The README table comes from CRC/main.cpp, which times each method on the same 900 KiB mt19937 buffer for 20-10000 runs and converts wall-clock ns to 'bits/cycle' by assuming a 4 GHz clock. The CPU is described only as a 'high-end modern x86 CPU', and the compiler is unstated; the repo's project is MSVC v142 /O2 /arch:AVX2. Golden's 62 bits/cycle (about 31 GB/s under the 4 GHz assumption) compares with 21.3 for a single-stream 8-byte crc32 loop (~2.9x) and 8.0 for slicing-by-16 (~7.75x), all of them the author's own implementations rather than zlib or a named library. Independently, corsix measured the same three-way structure at 53.7-56.5 bits/cycle (27-33 GB/s) on 4 KiB buffers across Broadwell, Skylake and Ice Lake, and 23.5 GB/s on AMD Rome.
+
+**Known shortcoming:** Computes CRC-32C (Castagnoli), not zlib's CRC-32. 'Golden' is three crc32-instruction streams combined with CLMUL, not PCLMULQDQ folding. CPU unnamed; bits/cycle figures assume 4 GHz. MSVC /O2 /arch:AVX2.
+
+**Known shortcoming:** Default output is not standard CRC-32C: the initial/final inversion is commented out (issue #2). Tabular fallback options 9/10 underflow the length on inputs not a multiple of 8/16 and read far past the buffer. No CPU feature check, MSVC-only project, no tests, 32-bit length. corsix measured the same 3-way design at ~54-57 bits/cycle versus ~93 for corsix's fused kernel.
+
+**Independent measurement:** corsix/fast-crc32 notes: 3-way crc32+CLMUL design ~54-57 bits/cycle vs corsix fusion ~93; HN user reports ~32 GB/s on i7-4770K.
+
+**How:** A single _mm_crc32_u64 chain is latency-bound (3-cycle latency, 1-per-cycle throughput on Intel), which caps it at about 21.3 bits/cycle. Golden splits each block of up to 6 KiB into three equal parts and runs three independent crc32 chains in parallel. It then merges them by carry-less multiplying (PCLMULQDQ) the A and B partial CRCs with precomputed constants CRC(x^k) from a 256-entry LUT, and folds the result into C's last 8-byte word with one more crc32. Block sizes are dispatched through a fully unrolled 255-case switch generated by 'doubler' macros (765 crc32 instructions), and a multiply-shift (x*2731>>16) replaces division by 24. The technique matches Intel's 2011 'Fast CRC Computation for iSCSI Polynomial Using CRC32 Instruction' whitepaper, and the README derives it from first principles.
+
+**Use it when:**
+- x86-64 code that must checksum KB-to-MB buffers with CRC-32C (the iSCSI/ext4/Btrfs polynomial) and is limited by a plain _mm_crc32_u64 loop. Here Golden measured 62 vs 21.3 bits/cycle, and an HN user reported ~32 GB/s on an i7-4770K.
+- You want a small MIT-licensed function to vendor (one .cpp, a 2 KB LUT, no dependencies) rather than a library with a build system.
+- Game-engine style integrity checks (save data, cooked assets, memory-stomp detection), which are the author's stated use case. Use the 2-way option_14_golden_amd on AMD Jaguar consoles, where crc32 reciprocal throughput is 2 cycles.
+- Learning or teaching CRC optimization: the README walks from bitwise CRC through slicing-by-N to the parallel crc32 + CLMUL recombine, and HN commenters cite it as the standard overview.
+
+**Skip it when:**
+- You need IEEE CRC-32 (zlib, gzip, PNG, ZIP, Ethernet). The x86 crc32 instruction hard-codes the Castagnoli polynomial, and the author confirms in issue #2 that Golden cannot be changed to match zlib. Use a PCLMULQDQ-folding implementation such as crc32fast, klauspost/crc32 or crc-fast instead.
+- You want the fastest CRC-32C on current x86. corsix's 'fusion' of crc32 and pclmulqdq streams measured ~93 bits/cycle against ~54-57 for this three-way design on Broadwell/Skylake/Ice Lake, and corsix/fast-crc32 AVX-512 kernels reach 97.30 GB/s on Sapphire Rapids.
+- Short messages. Below LEAF_SIZE (144 bytes on Intel, 112 on AMD) it only runs the plain 8-byte crc32 loop, so there is no gain over the single-stream baseline, and there is also a byte-wise alignment prologue.
+- Non-x86 targets, or binaries that must run on CPUs without SSE4.2 and PCLMULQDQ. There is no runtime dispatch or portable fallback in the Golden files, and the tabular options are demo code (see gotchas). On ARM, see dougallj's M1 gist or corsix/fast-crc32.
+- You need a maintained, tested library. The only build is a Windows VS2019 solution, there are no unit tests (main.cpp just prints each option's CRC for visual comparison), and the last commit was in April 2021.
+
+**Integration:** source-drop (copy golden_intel.cpp or golden_amd.cpp; the repo itself is a Visual Studio benchmark solution, not a library) · none (compiler intrinsics from <immintrin.h> only) · The repo builds with Visual Studio 2019 (v142 toolset) for x64; options 1-4 need MASM. Golden itself is C++11-level code (constexpr, a default argument). The README discusses GCC and other compilers' codegen, but only MSVC project files ship; with GCC or Clang you would need -msse4.2 -mpclmul or equivalent (inferred, not tested). · x86-64 only, with SSE4.2 (crc32) and PCLMULQDQ. It uses _mm_crc32_u64 and pointer-to-uint64_t casts, so the solution's Win32 configurations cannot build it. The Intel variant is tuned for crc32 at 3-cycle latency and 1/cycle throughput, the AMD variant for Jaguar's 1 per 2 cycles.
+
+**Vs siblings:** Pick it when you want the most readable, easily vendored x86-64 CRC-32C (one MIT-licensed function) together with the best-known derivation of the three-way crc32 + CLMUL technique. For more throughput use corsix/fast-crc32. For IEEE CRC-32 or ARM use crc32fast, crc-fast or klauspost/crc32. htot/crc32c wraps Intel's original crc_iscsi_v_pcl assembly for the same algorithm, adds a 32-bit port and is BSD-2-licensed.
+
+**Gotchas:**
+- The shipped code does not produce standard CRC-32C. golden_intel.cpp and golden_amd.cpp start from prev and return the raw register with the ~ lines commented out, while the README's listing inverts both. Issue #2 shows 'hello-world' giving 1585878819 here against 4099351003 from htot/crc32c; the author's answer was to uncomment those two lines.
+- The tabular 'portable' options are demos. Options 9 and 10 loop while (bytes) { ...; bytes -= 8 or 16; } on a uint32_t, so any length that is not a multiple of 8 or 16 wraps around and reads far past the buffer; the issue #2 reporter hit a segfault going down this path. They also read native-endian 32-bit words and apply no init or final XOR.
+- There is no CPU feature check: calling Golden on a CPU without SSE4.2/PCLMULQDQ faults with an illegal instruction. The provided Release x64 project compiles everything with /arch:AVX2, so rebuild with a lower /arch before targeting AVX-only CPUs such as Jaguar, which option 14 exists for.
+- The length is a uint32_t, so each call handles under 4 GiB; chain larger buffers through prev. Loads are type-punned (*(uint64_t*)p), and for n == 256 the _mm_loadu_si128 of g_lut_intel[n-1] nominally reads 8 bytes past the 256-entry LUT, although only the low 8 bytes are used.
+
+**Status:** Abandoned since 2021-04-25 (the last commits were typo and comment fixes, and the one open issue is corsix's 2022 'alloy' note), but MIT-licensed and small enough to vendor: copy golden_intel.cpp, decide on the ~init/~final lines, and compile with SSE4.2 and PCLMUL enabled.
+
+[repo](https://github.com/komrad36/CRC) · [benchmark](https://github.com/komrad36/CRC#readme)
+
+##### simdutf Base64 (WHATWG forgiving-base64, ignorable-character SIMD decoding)  `C++`  `Apache-2.0 OR MIT`  `active`  `Tier C`
+
+SIMD WHATWG forgiving-base64 codec in the simdutf C++ library; its fastbase64 CLI decodes 100 MB 3.5–27x faster than system base64.
+
+**Beats:** base64 — The only first-party numbers are end-to-end CLI timings from scripts/base64bench.sh: the median of 10 runs on random 1/10/100 MB files, fastbase64 (no wrapping) against the OS base64. At 100 MB, decode is 52.7 vs 1,433.5 ms on an Apple M4 Max (macOS base64) and 84.4 vs 291.8 ms on a Xeon Gold 6548N (GNU base64), with no compiler or flags stated. Each timing includes a python3 interpreter start (the script timestamps with `python3 -c`), and on Linux GNU base64 decodes its own 76-column wrapped output. Separately, Lemire's in-browser test (Apple M4, 64 KiB blocks) has Chrome, whose V8 Uint8Array base64 builtins call simdutf, at 19 GB/s encode and 4.6 GB/s decode, against 0.34/0.40 GB/s for the older Firefox.
+
+**Known shortcoming:** Base64 speed evidence is first-party only (README performance table; ratios derived: ~27x on M4 Max, ~3.5x on Xeon 6548N for 100 MB decode); the Authorea base64 paper could not be retrieved.
+
+**Known shortcoming:** The only first-party base64 numbers come from a CLI script whose timings include python3 start-up, so the 1 MB rows are mostly noise; no compiler or flags, and the Linux comparison is not like-for-like (GNU base64 decodes its own 76-column wrapped output). No library-level head-to-head published. Default decoding is loose (missing padding and extra bits accepted; strict is opt-in); the fast decode path is not bounds-checked; no constant-time decode (#426). Widely deployed: V8's Uint8Array base64 calls simdutf.
+
+**Independent measurement:** Lemire browser test (Apple M4): Chrome (simdutf) 19 / 4.6 GB/s vs older Firefox 0.34 / 0.40 GB/s.
+
+**How:** The decoder works on 64-character blocks. vpshufb/vqtbl nibble lookups (aqrit's delta/check tables) classify each byte as a base64 digit, ASCII whitespace or garbage, giving 64-bit whitespace and error masks. A block with no whitespace is translated and packed straight to 48 bytes, and long clean inputs take a two-block fast path. A block with whitespace is compacted (animetosho-style pshufb stream compaction on SSE/AVX2/NEON, vpcompressb on AVX-512 VBMI2) into a 384-byte stack buffer that is decoded in 64-byte groups, so sparse newlines never drop the loop to scalar code. The encoder uses Muła's pshufb lookup and inserts line feeds in-register. The best kernel is chosen at runtime (SSE/Westmere, AVX2/Haswell, AVX-512/Ice Lake on x86), and there are separate NEON, RVV, LoongArch LSX/LASX and POWER source files.
+
+**Use it when:**
+- Decoding web-style base64 (atob semantics, data: URLs, JSON fields, MIME/PEM text with line breaks) where the input may contain spaces or newlines that would force a strict SIMD codec to reject it or fall back to scalar.
+- When you need base64url, padding control, strict canonical checks (BASE64_EXTRA_BITS) or chunked decoding (stop_before_partial plus base64_to_binary_details) in one library. These are the functions that Node.js atob and V8's Uint8Array.fromBase64/toBase64 call.
+- Encoding MIME-style wrapped output directly (binary_to_base64_with_lines) rather than encoding and then inserting newlines in a second pass.
+- Replacing the base64 CLI on files of 10 MB or more: in the README's run, 100 MB decodes in 52.7 ms against 1,433.5 ms for macOS base64 on an M4 Max, and in 84.4 ms against 291.8 ms for GNU base64 on a Xeon Gold 6548N.
+- Projects that already link simdutf, or C++17 projects that can vendor the two-file amalgamation built with --with-base64 to leave out the UTF code.
+
+**Skip it when:**
+- Small one-off CLI jobs: at 1 MB, fastbase64 and the system tool are at parity in the README table (e.g. 13.7 vs 12.8 ms decode on Linux), because process startup dominates.
+- When you need strict RFC 4648 rejection by default. The default loose mode ignores whitespace, accepts missing padding, and decodes 'ZXhhZg==', 'ZXhhZg' and 'ZXhhZh==' to the same bytes. You must pass last_chunk_handling_options::strict to reject the last two.
+- Pure-C codebases without a C++17 toolchain: the C API (C11) is a thin wrapper over the C++ build and is labelled experimental.
+- Decoding secrets where timing side channels matter (for example PEM private keys): a constant-time decoder was requested and closed without one (#426), and the lookup and compaction paths depend on the data.
+- Short, whitespace-heavy inputs through base64_to_binary_safe (the README says a few dozen characters with 5% whitespace can be nearly 3x slower), or through atomic_base64_to_binary_safe, which is 1.5–1.8x slower at every size.
+
+**Integration:** static lib or shared lib via CMake, or source-drop (single-header amalgamation: simdutf.h + simdutf.cpp, optionally base64-only) · none (Python 3 only to regenerate the amalgamation; can even build without libstdc++ via SIMDUTF_NO_LIBCXX, experimental) · C++17 with GCC, Clang or MSVC (GCC on Windows unsupported); CMake 3.18+; the AVX-512 kernels need GCC 8+, Clang 6+ or VS 2022 plus binutils 2.30+; the C API needs C11; the compile-time _base64 literal needs C++23 · x86-64 with runtime dispatch (SSE, AVX2, AVX-512 with VBMI2 on Ice Lake/Zen 4+), AArch64 NEON, RISC-V RVV (only when compiled with -march=rv64gcv), LoongArch LSX/LASX (LASX dispatch only with GCC 15+), POWER, and a scalar fallback everywhere else
+
+**Vs siblings:** Pick simdutf over aklomp/base64, Turbo-Base64 or lemire's fastbase64 when the input can contain whitespace or needs base64url, strict/loose padding control, or JavaScript-compatible semantics; aklomp/base64 rejects any non-alphabet byte and supports only '+/'. Stay with aklomp/base64 for a small C99 dependency on clean input, or Turbo-Base64 for raw speed on short clean strings when GPL-3.0 is acceptable. No library-level head-to-head against either has been published; simdutf's benchmark_base64 includes libbase64, but the README gives no results.
+
+**Gotchas:**
+- base64_to_binary and base64_to_binary_details do not check bounds. The output must be at least maximal_binary_length_from_base64() bytes (or binary_length_from_base64() when the input has whitespace), or the docs warn of a buffer overflow; use base64_to_binary_safe when capacity is fixed.
+- result.count means different things depending on the function: base64_to_binary gives the error position or the bytes written, _safe gives the input consumed with the output length returned by reference, and _details returns both. On error, the fast paths may not have decoded everything before the bad character unless you pass decode_up_to_bad_char=true, which is slower (#847, open).
+- The *_accept_garbage options silently skip non-alphabet bytes and stop at the first '='.
+- There is no streaming state object. Chunked encoding must feed multiples of 3 bytes, and chunked decoding carries the unconsumed tail over with stop_before_partial; tools/fastbase64.cpp is the reference pattern.
+
+**Status:** Very active: release v9.2.1 on 2026-09-23, commits the same day as this review, a fuzzing setup, and 54 open issues. Dual Apache-2.0/MIT and embedded in Node.js, V8/Chromium, Bun, Cloudflare workerd and others, so the base64 path gets heavy production use. Only benchmarks/competition is research-only code.
+
+[repo](https://github.com/simdutf/simdutf) · [benchmark](https://github.com/simdutf/simdutf#performance)
+
+##### sse4_crc32  `C++`  `MIT`  `abandoned`  `Tier C`
+
+Node.js native addon computing CRC-32C with the SSE4.2 crc32 instruction, 2.5-3.7x faster than its own slice-by-8 fallback.
+
+**Beats:** CRC32 — These are the author's own single-pass process.hrtime timings from `node benchmark` (current README, rewritten 2018-05-29), run on an unspecified 'Intel Core i7' MacBook Air (the current README says 16 GB RAM) with no compiler or optimisation level stated. The SSE4.2 path took 4.32 ms vs 10.73 ms for the addon's own slice-by-8 table on 10,000 calls over a fixed ~1 KiB buffer (~2.5x), and 60.19 ms vs 225.46 ms over 10,000 random 0–64 KiB buffers (~3.7x, roughly 5.4 vs 1.5 GB/s derived). Both figures include N-API call overhead, and there is no comparison against zlib or any external CRC library.
+
+**Known shortcoming:** Node.js native addon; numbers are from 2018 and ratios are derived. Baseline is its own slice-by-8 software CRC-32C, not a named library. Last commit 2022-03-27. ~952k npm downloads/month.
+
+**Known shortcoming:** Single-chain _mm_crc32_u64 loop is latency-bound (~3x below the 3-way designs); arm64 uses the table path only; 6.0.1 breaks on M1. The JS rows labelled CRC-32C use an IEEE crc32 package (#82). CRC-32C only (not a zlib drop-in); node-gyp build at install, no prebuilt binaries; dead since 2022-03. Most downloads (~146k/week) come via fast-crc32c pinning 6.0.1.
+
+**How:** On x86 it calls the SSE4.2 CRC32 instruction through the `_mm_crc32_u8/u32/u64` intrinsics. It byte-steps to 8-byte alignment, then feeds 8 bytes per instruction in a single dependent chain, then handles the u32/u16/u8 tail. The file is compiled separately with -msse4.2 and selected at load time by a CPUID leaf-1 ECX bit-20 check. The fallback is Mark Adler's slicing-by-8 table method (8x256 uint32 tables). There is no multi-stream interleaving or PCLMULQDQ folding, so it runs well below the instruction's peak throughput.
+
+**Use it when:**
+- Node.js services that must produce CRC-32C specifically, such as iSCSI/SCTP/ext4-style checksums or cloud-storage object checksums. Old issue titles show gcloud/Google Cloud Storage client users pulling it in, and today most installs arrive through the fast-crc32c wrapper.
+- Checksumming medium-to-large Buffers (KiB to tens of KiB each) on x86-64, where the README run shows ~5 GB/s against ~1.5 GB/s for the table path (derived, 0–64 KiB random buffers)
+- Incremental or streamed checksums of files and network data via `fromStream()` or chained `calculate(chunk, prevCrc)`
+- Environments where a node-gyp native build at install time is acceptable and you want an automatic software fallback instead of a crash on non-SSE4.2 CPUs
+
+**Skip it when:**
+- You need zlib/PNG/gzip-compatible CRC-32 (IEEE polynomial 0xEDB88320): this computes only CRC-32C (0x82F63B78) and will produce different values
+- ARM hosts (Apple Silicon, Graviton): only the software table path is built there, with no ARMv8 CRC32C instructions. Version 6.0.1, still the most-downloaded, fails to load on arm64 at all (issue #84, fixed in 7.0.0).
+- Installs without a C++ toolchain and Python (Alpine or slim Docker images, locked-down CI): the install script is `node-gyp rebuild` and no prebuilt binaries ship. Build and load failures (Windows, Docker 'Exec format error') fill the issue tracker.
+- Maximum throughput on large buffers: the single-chain `_mm_crc32_u64` loop is latency-bound. Interleaved or folded kernels such as komrad36/CRC (~3x per cycle) or corsix fast-crc32 go considerably faster.
+- Anything needing maintenance guarantees or CRC combine: the last release (7.0.0) was 2022-03-27, CI covers only Node 10–16, and `crc32_combine`-style merging is an open request (issue #73)
+
+**Integration:** module · bindings ^1.3.0, node-addon-api ^1.3.0; build-time node-gyp with Python and a C++ compiler (compiled on npm install) · package.json says Node >=4, but it is N-API based and CI tests only Node 10.x–16.x; any C++ compiler that supports node-addon-api and -msse4.2 (Xcode settings target macOS 10.7+) · x86/x86-64 for the hardware path (SSE4.2, Nehalem or later), with runtime CPUID fallback; other architectures, including arm64 since 7.0.0, get the software table path only. CI runs macOS and Ubuntu; Windows build settings exist but are not in the current CI.
+
+**Vs siblings:** Pick it when you need CRC-32C from JavaScript on Node with zero integration work. The C/C++/Rust siblings (crc32c by htot, komrad36/CRC, corsix fast-crc32, crc-fast) are much faster kernels but are not Node packages. komrad36's own numbers put a plain 8-byte hardware CRC loop, which is exactly what this addon does, at ~21 bits/cycle against ~62 for its interleaved 'Golden' kernel. If you are not tied to Node, or you need IEEE CRC-32, use crc-fast, crc32fast or klauspost/crc32 instead.
+
+**Gotchas:**
+- The README's JavaScript comparison rows are labelled CRC-32C but use the `crc32` npm package, which computes IEEE CRC-32 (issue #82, still open). Only the native table-vs-SSE4.2 rows are a like-for-like comparison.
+- Strings are UTF-8-encoded and copied into a std::string before hashing. Pass Buffers to avoid the copy and to get the CRC of the exact bytes you mean.
+- The table fallback XORs raw 8-byte words into the CRC and indexes low byte first, which appears to assume little-endian hosts despite a source comment claiming it works on all platforms
+- fast-crc32c 2.0.0 pins `sse4_crc32 ^6.0.1`, so most installs (~146k/week on 6.0.1 vs ~3.2k on 7.0.0) never get the arm64 fix. index.js also checks `process.NODE_ENV` rather than `process.env.NODE_ENV`, so the debug exports (`sse42_crc`, `table_crc`, `hardware_support`) are always present.
+
+**Status:** Abandoned: the last master commit and the 7.0.0 npm release are 2022-03-27, with dependabot PRs left open since 2023. It still gets about 950k npm downloads a month, mostly the older 6.0.1 pulled in by fast-crc32c. It is MIT-licensed, and its few hundred lines of C++ are easy to vendor.
+
+[repo](https://github.com/anandsuresh/sse4_crc32) · [benchmark](http://engineering.voxer.com/2013/12/02/hardwareaccelerated-crc32-for-nodejs/)
+
+##### vb64 (Rust std::simd Base64 codec)  `Rust`  `Apache-2.0`  `stale`  `Tier C`
+
+Nightly-only std::simd Base64 codec that decodes 2-2.5x faster than the base64 crate on AVX2. It no longer builds.
+
+**Beats:** base64 (marshallpierce/rust-base64 crate) — The author's Criterion bench decodes and encodes 256 test vectors of up to about 500 B with vb64 and with base64 0.21.5 BASE64_STANDARD (which validates more strictly), allocating a fresh Vec each call. On an unnamed Zen 2 CPU with AVX2 on nightly rustc (flags not stated), the README graph shows decode at about 22 vs 55 ns for the smallest inputs and 135 vs 325 ns at 500 B (2-2.5x); encode is 1.2-1.5x with no graph. One HN commenter reported identical speedups on Zen 3 and 1.4-2x on an M1.
+
+**Known shortcoming:** Stale since 2023-11-26. Benchmark graph covers decode only, inputs up to ~500 bytes, times in ns; target-cpu/build-std flags are only recommended in the README, not pinned. Nightly-Rust portable-SIMD crate.
+
+**Known shortcoming:** Does not build on nightly since Dec 2023 (issue #2); fix PR #3 is unmerged and portable-simd PR #485 (Oct 2025) removed LaneCount, which vb64 imports. Lax decoder accepts missing padding, nonzero trailing bits and len%4==1 inputs that the base64 crate's STANDARD engine rejects, so the benchmark is partly unfair. Standard alphabet only, no URL-safe/whitespace handling or error offsets. AVX2 chosen at compile time; needs -Zbuild-std for the fast swizzle. Maintained alternative: base64-simd (Nugine/simd).
+
+**How:** Decode classifies each ASCII byte with the perfect hash (c >> 4) - (c == '/') (credited to WojciechMula/base64simd issue #3). It then uses that hash as a swizzle_dyn (pshufb) index into an 8-entry offset table to get the sextets. Validity is checked with two 16-entry nibble lookup tables (the author calls it an exact bloom filter), and any error is reported only after the loop, so the hot loop is branchless. Four sextets are packed into three bytes by widening to u16, applying per-lane shifts [2,4,6,8], then a rotate/OR and one static shuffle (trick credited to Danila Kutenin); encode reverses these steps with a saturating-subtract perfect hash. Short tails are built into a padded vector from overlapping unaligned u64/u32 loads (Abseil style) instead of Simd::gather_or. Decode uses 32-byte vectors when compiled with AVX2 and 16 otherwise; encode always uses 16.
+
+**Use it when:**
+- As a reference design: a compact, heavily commented portable-SIMD Base64 codec (perfect-hash classify, nibble-LUT validation, u16 shift-pack) to port into your own Rust or C++ code.
+- Decoding many short (under about 500 B) standard-alphabet Base64 strings, such as blobs inside JSON, where per-call latency matters and you can vendor the code and patch it for your nightly.
+- x86-64 builds with AVX2 enabled at compile time (-Ctarget-cpu=native or +avx2) and -Zbuild-std, which is where the 2-2.5x decode gain was measured.
+- Apple M-series/aarch64 only if you accept informal evidence: one HN commenter reported 1.4x decode gains rising to 2x at 110 B on an M1.
+
+**Skip it when:**
+- Any build on current Rust. It has failed to compile on nightly since about 2023-12-08 (issue #2: Swizzle2/Which removed), and the fix PR #3 has sat unmerged since Feb 2024. portable-simd PR #485 (Oct 2025) also removed the LaneCount/SupportedLaneCount types that vb64 imports, so PR #3 alone is no longer enough.
+- You need the URL-safe alphabet, no-pad or strict-canonical modes, MIME line wrapping or whitespace skipping, or the position of the bad byte. None of these are implemented.
+- Validating untrusted or signed data where canonical form matters. The decoder accepts input the base64 crate's STANDARD engine rejects: missing padding, non-zero trailing bits, and even length%4==1 (its own test asserts that 'A==' decodes OK).
+- Portable x86-64 binaries without AVX2 at compile time. There is no runtime dispatch; the README says SSSE3-only decode merely ties the base64 crate and encode is 'much worse'. std's swizzle_dyn falls back to a scalar loop unless SSSE3/AVX2 are enabled when std is built.
+- Large-buffer throughput or anything maintained. There are no numbers above about 500 B; base64-simd (Nugine/simd) picks SIMD at runtime and was last committed 2026-08-30.
+
+**Integration:** crate (vb64 0.1.2) or source-drop · none at runtime (dev-only: base64 0.21.5, criterion 0.4) · Rust nightly with #![feature(portable_simd)] from about Nov 2023 (rust-toolchain.toml says unpinned 'nightly'); broken on nightly from 2023-12-08 onward · Any std::simd target in principle. Performance is documented only for x86-64 AVX2 (Zen 2) and SSSE3, plus an informal M1 report. The AVX2 decode path is chosen at compile time via cfg!(target_feature = "avx2"), with no runtime detection.
+
+**Vs siblings:** No siblings catalogued yet. Outside the catalog, base64-simd (Nugine/simd: runtime SIMD selection, about 155M crates.io downloads, active in 2026) is the maintained option; pick vb64 only as a reference design or for code you will vendor and maintain.
+
+**Gotchas:**
+- The decoder is lenient. It strips up to two trailing '=' and never checks length%4 or zeroes in the trailing bits, so several different strings decode to the same bytes, and some invalid lengths decode to an extra byte.
+- Errors are deferred by design: invalid input is reported only after the whole buffer is processed, as a bare Error. To find the offending byte you have to rescan the input yourself.
+- Output writes are full N-byte unaligned SIMD stores into reserved slack: each call reserves decoded/encoded length + 16 or 32 extra bytes, using raw pointers and unsafe set_len. The tree has no fuzz targets (tests are 256 random vectors, all-0xFF inputs of 0-500 bytes, and an alphabet sweep).
+- Without -Zbuild-std and AVX2 at compile time you silently get a slower path, because std docs say swizzle_dyn's implementation is fixed when std is built. The author calls the near constant-time behaviour on valid input accidental, not a guarantee.
+
+**Status:** Stale since 2023-11-26: the maintainer has not responded to the build-fix PR since Feb 2024, and the crate cannot compile on any recent nightly, so treat it as about 760 lines of Apache-2.0 reference code to vendor and patch, not as a dependency.
+
+[repo](https://github.com/mcy/vb64) · [benchmark](https://github.com/mcy/vb64#readme)
+
+#### non-crypto-hashes
+
+##### aHash  `Rust`  `MIT OR Apache-2.0`  `active`  `Tier C`
+
+Keyed AES-round Rust hasher for in-memory HashMaps; about 11x faster than SipHash-1-3, claims wins over xxh3/wyhash.
+
+**Beats:** xxHash (XXH3 via xxhash-rust) and wyhash; also SipHash-1-3, the Rust std HashMap default — The project's Criterion bench hashes a u64 and a 1 KB string through each crate's Rust BuildHasher with fat LTO; xxh3 goes through xxhash-rust's streaming Xxh3Builder. Its sheet reports aHash 0.87/19.98 against xxh3 11.88/114.14, wyhash 1.53/53.13 and SipHash-1-3 9.70/219.13, with units unlabelled (probably ns) and no rustc version or CPU stated. Independent data backs only the SipHash gap (foldhash's benchmark: 1.23 vs 9.09 ns per u64 on a Xeon 8481C with Rust 1.80.1); rurban SMHasher on a Ryzen 5 3350G puts ahash64 bulk speed at 9.9 GB/s, about half of xxh3 and wyhash.
+
+**Known shortcoming:** Independent rurban SMHasher contradicts the bulk claim (ahash64 9.9 GB/s vs xxh3 20.9 and wyhash 22.6 GB/s); aHash wins only small keys, slightly. hashbrown's default hasher only until v0.15 (2024-10, replaced by foldhash), never std's default; no CPU/rustc stated.
+
+**Known shortcoming:** Claim to beat xxh3/wyhash is contradicted: rurban SMHasher (Ryzen 5 3350G) bulk ahash64 9.9 GB/s vs xxh3 20.9 and wyhash 22.6; foldhash beats aHash on most map workloads, and hashbrown 0.15 switched its default to foldhash. AES path needs the aes target feature at compile time (no runtime detection, #104): a default x86-64 build silently uses the ~2x slower fallback. Output is not stable across CPUs, flags, compiler channel or versions. Open #292 (2026-09): a fixed 56-byte pair collides for ~2^-19.4 of keys on the AES path. Slow maintenance (last commit 2025-11, 35 open issues).
+
+**Independent measurement:** rurban/smhasher (Ryzen 5 3350G): ahash64 bulk 9.9 GB/s vs xxh3 20.9, wyhash 22.6. foldhash bench (Xeon 8481C): 1.23 vs SipHash-1-3 9.09 ns/u64.
+
+**How:** When built with the aes target feature, each 16-byte block goes through one AES decryption round (aesdec) in one lane and an SSSE3 byte shuffle plus 64-bit add in a second lane. Inputs over 64 bytes are consumed 64 bytes per iteration across four independent AES lanes, and finish folds 256 bits of state to 64 with up to three AES rounds. Lengths are dispatched through a branch tree (<=8, 9-16, 17-32, 33-64, >64) that reads overlapping head and tail words instead of looping over bytes. Without AES it falls back to a 'folded multiply' (64x64->128-bit multiply, then XOR of the two halves); on nightly, min_specialization gives primitive keys a one-multiply hasher.
+
+**Use it when:**
+- Rust HashMap/HashSet with string or byte-slice keys from about 16 bytes to a few KB, where SipHash-1-3 shows up in profiles: the project's FAQ table (i7-6700) has 1 KB strings at 25.4 ns against 254 ns for SipHash-1-3.
+- Maps that ingest untrusted keys (request fields, user IDs), where you want per-map random keys rather than an unkeyed hash like FxHash or FNV.
+- Builds where you control RUSTFLAGS and can enable -C target-feature=+aes or target-cpu=native on x86-64. The AES path is about 2x faster than the fallback on 1 KB strings (25.4 vs 54.6 ns in the FAQ table).
+- Integer keys with structured low bits (multiples of 1024, aligned pointers) where FxHash collapses into a few buckets.
+- no_std targets that still need a keyed hasher: turn off std and use compile-time-rng or explicit seeds (RandomState::with_seeds).
+
+**Skip it when:**
+- Anything persisted, sent over the network or compared across machines or builds. The output changes with CPU features, target-cpu flags, stable vs nightly and crate version; issue #236 was closed as intended behaviour.
+- Security-relevant hashing (MACs, checksums, content addressing). It is not cryptographic. A key-recovery attack using only collision checks was fixed in 0.8.4 (#163). An open report from 2026-09 (#292) shows a fixed 56-byte pair colliding for about 2^-19.4 of random keys on the AES path, against 2^-64 for an ideal keyed hash.
+- Default builds without the aes target feature (baseline x86-64, wasm, 32-bit targets). There is no runtime CPU detection (open #104), so these builds silently get the slower multiply fallback.
+- Small integer keys. FxHash is faster on u64 in aHash's own sheet (0.71 vs 0.87). foldhash's benchmark (Xeon 8481C and Apple M2, Rust 1.80.1) has foldhash ahead on most hash-table workloads (geomean 6.21 vs 8.74 ns without target-cpu=native), with aHash winning only medium-to-long strings when AES is on.
+- Bulk hashing of large buffers. Independent rurban SMHasher numbers (Ryzen 5 3350G) have ahash64 at 9.9 GB/s against 20.9 GB/s for xxh3 and 22.6 GB/s for wyhash.
+
+**Integration:** crate · cfg-if, zerocopy 0.8, once_cell (most targets); getrandom 0.3 through the default runtime-rng feature; optional const-random, serde, portable-atomic; build dependency version_check · Rust 1.60 declared (rust-version), but the default runtime-rng feature pulls in getrandom 0.3, which declares Rust 1.63; specialization turns on automatically on nightly · Any Rust target through the fallback, including no_std. The AES path runs on x86/x86-64 and AArch64 only when compiled with the aes target feature; 32-bit ARM also needs nightly plus the nightly-arm-aes feature.
+
+**Vs siblings:** Pick aHash over xxHash or wyhash when you are in Rust, hashing short-to-medium HashMap keys that may come from hostile input, and want per-map random keys. aHash's own page says wyhash has fixed strings that reset its state. Pick xxHash (XXH3) or wyhash when you need output that is stable across machines and versions, when you work in C/C++, or for bulk throughput, where rurban SMHasher puts both about 2x ahead of ahash64.
+
+**Gotchas:**
+- ahash::RandomState holds four u64 keys (32 bytes), so ahash::HashMap<u32, u32> is 64 bytes against 48 for std's HashMap, according to foldhash's README.
+- build.rs turns on min_specialization whenever the compiler is nightly, and there is no opt-out (open #238). The same code therefore takes different paths, and gives different hash values, on stable and nightly.
+- The 0.8.12 patch release moved to getrandom 0.3, which broke some wasm/js builds (open #274). The workaround is to disable default features and use compile-time-rng or explicit seeds.
+- Users have reported slowdowns between patch releases (0.8.6 to 0.8.7, about 1.6x on an Apple M1 Pro) and with target-cpu=native on AMD Ryzen (open #194 and #190). Pin the version and benchmark on your own hardware.
+
+**Status:** Maintained but slow-moving: last release 0.8.12 (May 2025), last commit Nov 2025, 35 open issues including the getrandom breakage and a new collision report; dual MIT/Apache-2.0 and ubiquitous (about 790M crates.io downloads), though hashbrown replaced it with foldhash as its default hasher in 0.15.
+
+[repo](https://github.com/tkaitchuck/aHash) · [benchmark](https://github.com/tkaitchuck/aHash/blob/master/compare/readme.md)
+
+##### CircleHash64f  `Go`  `Apache-2.0`  `active`  `Tier C`
+
+Pure-Go seeded 64-bit hash from Abseil's wyhash-style design; beats seeded XXH3 5-13% at 4-128 B, 1.4-1.8x at 192-256 B.
+
+**Beats:** XXH3 (xxHash) — The claim is the author's README table, repeated in the v0.2.0 release notes, which add that it came from `go test -bench=. -count=20` plus benchstat. It shows seeded CircleHash64f at 1.34-15.0 GB/s against an unnamed seeded XXH3 at 1.21-8.19 GB/s on 4-256-byte inputs, under Go 1.17.7 on darwin_amd64 with an Intel i7-1068NG7. That works out to 1.05-1.13x at 4-128 B and 1.44x/1.83x at 192/256 B. The benchmark code is not published, and the rurban/smhasher README has no CircleHash row, so the speed and SMHasher-pass claims are first-party only.
+
+**Known shortcoming:** Real gain over XXH3 ranges 1.05x-1.83x (only 1.05x at 16 bytes); no benchmark code published, and the XXH3 implementation used is not named (i7-1068NG7). Go library.
+
+**Known shortcoming:** Gain is only 1.05-1.13x at 4-128 bytes; the 1.83x rests on the 256-byte row where XXH3 itself dips. Seed-independent multicollisions (from code reading, confirmed with a port against the repo's test vectors): a word equal to pi1 zeroes the multiply, so 9-16 byte inputs starting with pi1 hash to 0 under any seed, so it is not HashDoS-safe. The fx and 128-bit variants have been unpublished since 2022; code frozen at v0.3.0; only linux_amd64 officially supported; used in production by onflow/atree.
+
+**How:** Every mixing step is the wyhash/Abseil multiply-fold: a 64x64->128-bit multiply via math/bits.Mul64, with the high and low halves XORed together. Tails use overlapping unaligned reads (two 4-byte reads for 4-8 B, two 8-byte reads for 9-16 B, three single bytes for 1-3 B), so there are no per-byte loops. Inputs of 64 bytes or less go through a separate function that has only a 16-byte loop. Longer inputs run a 64-byte loop with four independent multiplies over two state lanes. It is plain Go with no assembly: the Go 1.17+ file reads words through unsafe pointers using little-endian byte shifts, and a build-tagged reference file covers older Go.
+
+**Use it when:**
+- Pure-Go code without cgo that hashes short keys (mostly <=256 bytes) and needs a seeded 64-bit digest that is identical across processes, machines and library versions, for example on-disk hash-ordered maps or persistent indexes. onflow/atree, the Flow blockchain's storage layer, uses it this way and falls back to BLAKE3 on collisions.
+- Replacing SipHash as the seeded hash in a Go hash structure: the README table shows 3.7-6.8x SipHash's throughput at 4-256 B.
+- Hashing pairs of uint64 (composite IDs, slab/index pairs) with Hash64Uint64x2, without building a byte slice. The digest equals Hash64 of the 16-byte little-endian encoding.
+- Teams that must audit their hash: about 200 lines of optimized Go plus a 129-line reference implementation, pi-derived constants, and compatibility tests over roughly 600,000 digests on 0-16384-byte inputs.
+
+**Skip it when:**
+- Hashes that never leave the process, such as in-memory Go maps and sets. The runtime map and hash/maphash already handle those with per-process random seeds. CircleHash's niche is the case maphash cannot cover, because maphash seeds cannot be serialized or recreated in another process.
+- Keys an attacker can choose, or anywhere HashDoS resistance matters. The seed does not prevent seed-independent multicollisions (see gotchas). The CircleHash64fx variant meant to fix this, which also adds a 128-bit seed, has been an open, unpublished issue (#15) since March 2022.
+- Bulk data or inputs well above 512 bytes. The author says CircleHash64 is ideal for <=512 B and publishes no numbers above 256 B, and there is no SIMD path. XXH3's SIMD long-input code is the better fit there.
+- Codebases outside Go. There is no official C, C++ or Rust port, and porters have asked for simple known-answer test vectors with data (issue #23, open since 2022) because the published tests only check SHA-512 checksums over thousands of digests.
+- Anything that needs 128-bit digests: CircleHash128fx (issue #16) is also unpublished.
+
+**Integration:** module · none (Go standard library only: math/bits, unsafe) · Go 1.17 for the optimized path (go.mod: go 1.17); a build-tagged reference implementation serves Go 1.16 and older. CI tests Go 1.17 and 1.22-1.25. · Only linux_amd64 is officially supported per the README, though CI also runs macOS, Ubuntu and Windows. The code is pure Go and builds words from bytes in little-endian order, so digests should not depend on host endianness.
+
+**Vs siblings:** Pick it when you are in pure Go and need a stable, seeded, persistable 64-bit digest of short keys without cgo. wyhash and xxHash/XXH3 are the C originals of the same ideas; in C or C++ use them directly, or rapidhash, which has a Rust port. In Rust, foldhash, aHash and rapidhash are the in-language choices and are the better fits there.
+
+**Gotchas:**
+- Multiply-by-zero weakness, confirmed with a Python port of the source that matches the repo's 65,536-digest known-answer checksum: when an 8-byte little-endian word that is XORed with the constant pi1 (0x13198A2E03707344) equals pi1, the product is zero. Every 9-16-byte input whose first 8 bytes are pi1 hashes to 0 under every seed, including Hash64Uint64x2(pi1, x, seed). A 16-byte block that starts with pi1 also erases all earlier input and the seed, so same-length inputs that share everything after that block collide for all seeds. The README describes CircleHash64fx as the fix, but fx is not shipped.
+- The README says CircleHash64fx 'will replace CircleHash64f as the default', and issue #25 plans an API refactor before v1.0. Hash64 is documented as CircleHash64f-compatible, so pin v0.3.0 and add a regression test on digests if they are persisted (onflow/atree does both).
+- Methodology: no Benchmark functions are published. The README table's XXH3 implementation is unnamed; the author's earlier atree#103 evaluation used github.com/zeebo/xxh3. The table's XXH3 throughput falls from 11.6 GB/s at 128 B to 8.19 GB/s at 256 B, which accounts for most of the headline 1.83x. The author's atree write-up says such slowdowns at larger sizes 'are not a typo'.
+- The Go 1.17+ file uses unsafe pointer arithmetic to read slice and string data. Hash64 on a nil or empty slice is safe because no bytes are read.
+
+**Status:** The algorithm and code are frozen since v0.3.0 (March 2022; the last source edit was lint in August 2024), and 2025-2026 commits are dependabot/CI bumps. Still, it is Apache-2.0 with zero dependencies, digests are declared stable, and it runs in production in onflow/atree and the wider Flow Go stack, so depending on or vendoring v0.3.0 is low-risk. The promised fx and 128-bit variants remain unpublished.
+
+[repo](https://github.com/fxamacker/circlehash) · [benchmark](https://github.com/fxamacker/circlehash/blob/main/README.md)
+
+##### MetroHash  `C++`  `Apache-2.0`  `abandoned`  `Tier C`
+
+2015 family of machine-generated 64/128-bit non-cryptographic hashes pitched as a faster CityHash; now outpaced by XXH3 and wyhash.
+
+**Beats:** CityHash (City64/City128/City128crc) — The author's 2015 post gives only relative figures against CityHash in an unspecified 'Haswell test environment', with no CPU model, compiler, flags or harness: Metro64 is 50% faster than City64 on bulk data and 15% on small keys, Metro128 25%/60% faster than City128, and Metro128crc 30%/80% faster than City128crc. Independent rurban SMHasher tables (262,144-byte bulk, 1-31-byte small keys; compiler not stated in what I read) show much smaller, mixed bulk gaps: metrohash64 vs City64 is -1% on a Ryzen 5 3350G, +18% on an EPYC 9554P and +2% on an i7-6820HQ, metrohash128 vs City128 is +10%/-6%/-3%, metrohash128crc_1 vs CityCrc128 ranges from -33% (Ryzen) to +41% (i7), and small keys take about 11-19% fewer cycles.
+
+**Known shortcoming:** Evidence is the author's blog; unmaintained since 2018-10-23. Independent SMHasher shows only a small gap over CityHash on small and mixed inputs, and modern hashes (xxh3, wyhash, rapidhash) are faster.
+
+**Known shortcoming:** Unaligned reinterpret_cast loads (UB) and little-endian-only output (ClickHouse's vendored copy fixes both with memcpy + byteswap). XXH3 is ~2.5x faster in bulk (EPYC) and wyhash is faster too: use only for compatibility with existing MetroHash data. CRC variant is x86 SSE4.2 only; README wrongly says header-only; no build system.
+
+**How:** The bulk loop reads 32-byte stripes into four 64-bit accumulator lanes, each running a multiply-rotate-add step (v[i] += load64 * k_i; v[i] = rotr(v[i], 29) + v[j]) that gives the CPU instruction-level parallelism; on Hacker News, Yann Collet (Cyan4973) noted how close this structure is to xxHash64. Tails are consumed in straight-line 16/8/4/2/1-byte steps with a short rotate-multiply finalizer, which keeps small-key cost low. The constants and rotation amounts came from the author's automated generate-and-analyze search (a gradient-descent process over about 100,000 compute hours, per the blog), and the crc variants replace the multiplies in the bulk loop with SSE4.2 _mm_crc32_u64.
+
+**Use it when:**
+- You must reproduce MetroHash values that are already stored or computed elsewhere. ClickHouse vendors a copy in contrib/libmetrohash, and there are ports such as java-metrohash.
+- Replacing City64/City128 in existing x86-64 C++ code. You get a small, dependency-free function (about 620-880 bytes of object code in SMHasher's size column) and roughly 11-19% fewer cycles per hash on 1-31-byte keys.
+- You need a seeded 128-bit non-crypto hash with a streaming Update/Finalize API, for example hashing a file or message that arrives in chunks.
+- x86-64 servers with SSE4.2 hashing large buffers to 128 bits: metrohash128crc_1 beat CityCrc128 by 35-41% in bulk throughput on SMHasher's EPYC 9554P and i7-6820HQ runs (but see the Ryzen caveat below).
+
+**Skip it when:**
+- New code picking a fast hash. On the same SMHasher EPYC 9554P table, xxh3 does 45,762 MiB/s against metrohash64's 18,558 (about 2.5x) and 20.6 against 29.6 cycles per small key. wyhash is also faster (24,519 MiB/s, 18.9 cycles).
+- Hash tables exposed to attacker-chosen keys. There is no DoS-resistance claim, and the author states that 'resistance to cryptanalysis was not a design criterion'.
+- Big-endian or strict-alignment targets, or builds run under UBSan, unless you patch it: upstream does unaligned reinterpret_cast loads and emits host-endian output.
+- Portable builds that compile every source file. metrohash128crc.cpp includes <nmmintrin.h> and needs SSE4.2, so it fails on ARM and other non-x86 targets (open PR #19 would skip it). ARM was never a generation target.
+- Workloads that need top statistical quality. SMHasher flags metrohash64 for UB, LongNeighbors and BIC (max bias 0.061, FAIL), flags metrohash128 for UB and LongNeighbors, and leaves MetroHash off its list of fastest x86-64 hashes without quality problems.
+
+**Integration:** source-drop · none (the CRC variant needs SSE4.2 intrinsics via <nmmintrin.h>) · Not documented. The code is plain C++ using <stdint.h>/<cstring>, and I saw no C++11 features. There is no build system upstream, and the CMake PRs #9, #12 and #17 were never merged. The CRC file needs -msse4.2 or an equivalent flag. · Targets x86-64: the author says the functions are optimized for modern Intel with no attempt at portability. The non-CRC 64/128-bit code compiles anywhere but assumes little-endian and cheap unaligned loads. The CRC variant is x86-64 with SSE4.2 only. Big-endian was never tested.
+
+**Vs siblings:** Pick MetroHash only when you need compatibility with existing MetroHash-hashed data, or want a minimal change from CityHash on x86-64. For new work, xxHash (XXH3) and wyhash are faster in the same SMHasher tables, FarmHash is CityHash's own successor, and the same author's later AquaHash (AES-intrinsic, 128-bit) supersedes it on AES-capable CPUs.
+
+**Gotchas:**
+- The upstream read_u64/u32/u16 functions dereference reinterpret_cast pointers, which is unaligned, strict-aliasing UB and is flagged 'UB' by SMHasher. ClickHouse's vendored platform.h replaces them with memcpy plus a big-endian byteswap, and that is the copy to vendor.
+- The output is a memcpy of the internal little-endian state, and testvector.h states that 'the hash assumes a little-endian architecture'. The same input therefore hashes differently on big-endian machines.
+- The README says the implementations are 'fully contained by their respective headers', but they are not: you must compile metrohash64.cpp and metrohash128.cpp (and metrohash128crc.cpp for CRC). The legacy _1/_2 free functions take a 32-bit seed and produce different values from the MetroHash64/128 classes.
+- After Finalize() an instance must be re-Initialize()d, or Update()/Finalize() behavior is undefined. The header also notes that the one-shot Hash() can be significantly faster than incremental use.
+
+**Status:** Abandoned (last commit 2018-10-23, an Apache-2.0 relicense ahead of a v2.0 that never shipped; issues disabled; four CMake/portability PRs unmerged since 2019; the author calls it 'not an active project'), but it is small, dependency-free and Apache-2.0, so it is easy to vendor, ideally from ClickHouse's memcpy-patched copy.
+
+[repo](https://github.com/jandrewrogers/MetroHash) · [benchmark](http://www.jandrewrogers.com/2015/05/27/metrohash/)
+
+##### rapidhash (Rust port)  `Rust`  `MIT OR Apache-2.0`  `active`  `Tier C`
+
+Rust rapidhash (wyhash successor): portable 64-bit hasher, faster than XXH64/wyhash and faster than XXH3 up to about 4 KB inputs.
+
+**Beats:** xxHash (XXH64, XXH3-64, via the Rust twox-hash 2.1.1 crate) and wyhash (Rust wyhash crate 0.6.0) — The author ran cargo criterion benchmarks (opt-level 3, fat LTO, codegen-units=1, rustc version not stated), portable and with target-cpu=native, on M1 Max, Graviton3, EPYC 9R14 and Xeon 8488C, against Rust crates (twox-hash XXH3-64/XXH64 driven through the Hasher trait, wyhash, foldhash, gxhash, and others). The SVG-derived Xeon 8488C portable figures, which are approximate, are about 30.5 vs 25.0 GB/s over XXH3-64 at 4 KB and about 31.6 vs 32.2 at 64 KB, while XXH3 wins from 4 KB up on EPYC 9R14. The foldhash-suite geometric mean is 4.52 vs 4.95 for foldhash-f and 20.24 for SipHash.
+
+**Known shortcoming:** No rustc version or flags stated; figures read from SVG charts are approximate. Baselines are Rust ports (twox-hash, wyhash crate), not the C originals. XXH3 wins large inputs on x86 (EPYC 64 KB: ~51 vs ~31 GB/s; Xeon about a tie).
+
+**Known shortcoming:** Only minimal DoS resistance: collisions are constructible when the secrets are known. The `fast`/`quality` hasher outputs may change between minor versions and across platforms; only the v1/v2/v3 algorithms are stable. XXH3 baseline is used through Rust's Hasher trait.
+
+**How:** The core step is the wyhash-family folded multiply (MUM): a 64x64->128-bit multiply whose low and high halves are XORed (`rapid_mix`), one per 16 input bytes. Inputs of 16 bytes or less take two overlapping unaligned reads and a single multiply-finish. Inputs of 17-48 bytes stay on a short path. Inputs over 400 bytes go to an out-of-line cold path that runs 7 independent multiply lanes over 224-byte blocks for instruction-level parallelism. The Rust hasher also buffers integer writes in a 128-bit 'sponge', a construction borrowed from foldhash, so a tuple of small ints costs one mix. It relies on `#[inline(always)]` hot paths, `#[cold]`/`#[inline(never)]` long paths and bounds-check elision.
+
+**Use it when:**
+- HashMap/HashSet keys that are short strings, UUIDs, URLs or mixed structs. In the Xeon 8488C foldhash suite, hash-only strenglishword costs 1.75 vs 3.54 for foldhash-f and 9.51 for SipHash (lower is better).
+- Replacing Rust's default SipHash-1-3 when you only need minimal HashDoS resistance: suite geometric mean 4.52 vs 20.24 for SipHash on Xeon 8488C (portable build).
+- Libraries and apps that must build on any target without AES-NI/NEON or target-cpu flags (x86-64, aarch64, 32-bit, wasm, no_std), where gxhash will not compile.
+- Stable, cross-language digests (for example, Rust and C++ services agreeing on a key hash) via `rapidhash::v3`, including streaming and `Read`-based file hashing.
+- Input sizes from a few bytes to about 4 KB, where it beats the twox-hash XXH3-64 and XXH64 and wyhash crates in the author's charts.
+
+**Skip it when:**
+- Bulk hashing of large buffers on x86, especially AMD. In the author's own EPYC 9R14 chart, XXH3-64 wins from 4 KB up (about 51.4 vs 31.1 GB/s at 64 KB), and on Xeon 8488C the two tie at 64 KB. Use XXH3 or gxhash for checksumming large blobs.
+- Keys chosen by an attacker who can observe outputs or timings. The README calls it only 'minimally DoS resistant', and seed-independent collisions can be built for inputs over 16 bytes when the secrets are known, which is the case for C++-compatible default secrets. Use SipHash there.
+- Anything that persists, shares or compares RapidHasher/RandomState outputs across processes, platforms or crate versions. That output may change in minor releases, and 32-bit targets take a different multiply path.
+- Pure small-integer keys where FxHash is acceptable: fxhash is faster on u32/u64 hash-only (0.53 vs 0.66). But fxhash falls apart on high-bit-only u64 keys (46.99 vs 2.15 lookup-hit), so rapidhash is the safer default.
+- Cryptographic uses of any kind (MACs, content addressing against adversaries, signatures).
+
+**Integration:** crate · rustversion (always); optional getrandom 0.3/0.4 (getrandom_03/getrandom_04 features) and rand_core 0.9 (deprecated rng feature) · Rust 1.71.0 (MSRV); optional `nightly` feature for write_str/likely hints · any. no_std capable and needs no SIMD/AES. Tuned for x86-64 and aarch64. 32-bit and wasm use an XOR-approximated 128-bit multiply for the in-memory hasher; wasm uses a 'COMPACT' loop.
+
+**Vs siblings:** Over foldhash when string-heavy keys dominate (roughly 2x on short strings in the suite) or when you also need stable/streaming hashes. Over gxhash when you cannot guarantee AES instructions or target-cpu=native. Over aHash when you want portable output (suite geomean 4.52 vs 6.33). Over wyhash, whose mixing it shares, because it is faster on medium and large inputs (about 31.6 vs 19.3 GB/s at 64 KB on Xeon 8488C). Prefer xxHash XXH3 for multi-KB bulk hashing on x86.
+
+**Gotchas:**
+- Two output contracts: only `rapidhash::v1/v2/v3` functions are guaranteed stable (and C++-compatible only with `RapidSecrets::seed_cpp`/DEFAULT_RAPID_SECRETS); `fast`/`quality` hashers may change output in any minor release.
+- `fast::` skips the final avalanche mix. Use `quality::` when statistical quality matters, such as HyperLogLog, MinHash or low-bit bucketing.
+- Without the `std` feature, RandomState seeds only from the stack address (ASLR). On wasm32-unknown-unknown, HashDoS resistance needs `getrandom_04` plus getrandom's wasm_js backend.
+- 4.0.0 changed rapidhash_v3 micro/nano output for 5-7 byte inputs, following the C++ V3 re-release. Hashes persisted by 3.x for those lengths do not match.
+
+**Status:** Actively maintained: v4.5.1 released 2026-07-03, about 39.5M crates.io downloads (23.5M recent), fuzzed and cross-tested against the C++ reference. It is dual MIT/Apache-2.0 and a one-maintainer project, with a planned 5.0 that removes deprecated features and `Copy` on state types.
+
+[repo](https://github.com/hoxxep/rapidhash) · [benchmark](https://github.com/hoxxep/rapidhash/blob/master/docs/bench_hash_x86_64_intel_xeon_8488c.svg)
+
+##### rustc-hash (FxHash)  `Rust`  `Apache-2.0 OR MIT`  `active`  `Tier C`
+
+rustc's own tiny multiply-based hasher and FxHashMap/FxHashSet aliases. Much faster than std SipHash-1-3 on integer-heavy keys, but not DoS-resistant.
+
+**Beats:** SipHash-1-3 (Rust std DefaultHasher, the default hasher of std::collections::HashMap/HashSet) — In Feb 2020 rustc maintainer N. Nethercote rebuilt rustc with every FxHashMap/FxHashSet switched to std's DefaultHasher (SipHash-1-3) and ran rustc-perf locally. Every `check` benchmark regressed by 3.9%-84.7% (per-benchmark averages 5.9%-63.6%). That baseline included his proposed SipHasher integer speedups (rust PR #69152), which were never merged. Against unpatched std he reported check-clean slowdowns of 4.3%-128.6%. Hardware, compiler flags and the rustc-perf metric were not stated. The test used the old Firefox-derived FxHash. The current 2.x algorithm was only shown to be 'slightly better' for rustc (rust-timer perf runs), with no standalone numbers.
+
+**Known shortcoming:** Only numbers are first-party and old: rust-lang/rust#69153 (Feb 2020) shows every rustc-perf benchmark slower without FxHash (4.3-128.6% vs std SipHash; the often-quoted 3.9-84.7% used an unmerged patched SipHash), measured on the pre-2.0 algorithm with no CPU, flags or metric stated. Not DoS-resistant; weak on some key distributions (rustc-specific tuning).
+
+**Known shortcoming:** Linear hash: open #45 shows reinserting keys in another Fx map's iteration order is ~8-9x slower (10M keys) and seeding does not help. 2.0's rotate-20 caused a ~3x rustc blow-up (rust#135477); 2.1.1's rotate-26 mitigates only up to ~2^26 entries. Output not stable across versions or targets; no benchmarks in the repo.
+
+**Independent measurement:** rust-lang/rust#69153 (Feb 2020, same author): rustc-perf check-clean builds 4.3-128.6% slower with std SipHash-1-3 than with FxHash (3.9-84.7% against a patched SipHash from #69152 that was never merged).
+
+**How:** Each integer write is one add and one multiply, `hash = (hash + x) * K`, with K a Steele–Vigna MCG multiplier. This makes a polynomial hash over the Hasher's write calls. finish() is a single rotate_left(26) (15 on 32-bit), which moves the well-mixed high bits of the product into the low bits hashbrown uses as its bucket index. Byte strings and slices are first compressed to one u64 by a small wyhash-style routine: 16-byte chunks go through a 64x64->128 folded multiply (lo ^ hi) in two independent lanes. There is no per-map state and all functions are small #[inline] code. A single-integer key costs roughly one multiply plus a rotate, against SipHash-1-3's multi-word state setup and rounds.
+
+**Use it when:**
+- Hash maps/sets in compilers, analyzers, graph code or ECS-style code keyed by integers, IDs, pointers/interned handles or small tuples of them, where profiling shows hashing is hot.
+- Internal tables whose keys are never controlled by an attacker (build tools, offline batch jobs, single-user CLIs).
+- When you want deterministic iteration order within one build and platform and no per-map seed (FxBuildHasher is zero-sized, so the map carries no hasher state).
+- no_std or embedded targets that need a tiny dependency-free Hasher (disable default features).
+- Workloads shaped like rustc's own. In rustc profiling cited in PR #37, the four most common hash-call shapes, each 1-3 integer writes, made up about 74% of calls.
+
+**Skip it when:**
+- Any map keyed by untrusted input (network, user-supplied strings). It has no HashDoS resistance, and the hash is linear, so colliding keys are easy to construct, even by accident.
+- Building one large map by inserting keys in another Fx map's iteration order, as in serde/bincode deserialization or cloning via iteration. Issue #45 (open since 2.0; a 2026 comment says it still bites) reports about 8-9x slowdowns at 10M u64 keys, and random seeding does not help because the hash is linear in the seed.
+- Very large tables of low-entropy keys such as aligned pointers. The fixed rotate only spreads entropy well up to about 2^26 buckets. In 2.0 the rotate of 20 caused a roughly 3x rustc compile-time blowup on one large project (rust#135477), which 2.1.1 only mitigated.
+- When you need hash values that are stable across crate versions or targets. 2.x changed the output in minor releases (issue #58), and 32-bit, sparc64 and wasm64 use a different byte-hash path (issue #73).
+- String-heavy or long-key workloads, where general-purpose hashers are a better fit. Even for integer keys, Nethercote's microbenchmark showed std HashMap (with his unmerged SipHash patch) slightly ahead of the old FxHashMap, because it had fewer collisions.
+
+**Integration:** crate · none by default; optional rand 0.9 (feature `rand`) · Rust 1.77 (rust-version in Cargo.toml since 2.1.2), edition 2021; `nightly` feature needs a nightly compiler · any; fast 64x64->128 multiply path on 64-bit targets such as x86-64 and aarch64; 32-bit decomposed fallback on 32-bit targets, sparc64 and wasm64 without wide-arithmetic. CI covers Linux/macOS/Windows plus Miri on x86_64, i686, mips and mips64 (big-endian).
+
+**Vs siblings:** Choose rustc-hash over foldhash (same designer; per-map random seed, stronger finalizer, geometric mean 6.21 vs SipHash's 28.70 on its Xeon suite) when keys are trusted integers or pointers and you want the fewest instructions per hash, a zero-sized hasher and deterministic output. Choose foldhash or aHash (keyed, AES-accelerated, some DoS resistance) when keys are strings, externally supplied, or bulk-reinserted between maps. xxHash, rapidhash and wyhash are byte-stream hashers rather than Rust Hasher-trait integer mixers, so they are not direct substitutes here.
+
+**Gotchas:**
+- The default seed is 0, so hashing 0 gives 0 and leading zero writes vanish: (0u64, x) hashes the same as x alone. The polynomial structure also gives easy wrapping collisions: (a, b) and (a+1, b-K) collide.
+- The `nightly` feature makes write_length_prefix a no-op for speed. As the source comment says, nested collections of non-byte-slice elements then lose prefix-freeness and can collide when only the split point differs.
+- The name is historical. 2.x is Orson Peters' polynomial hash, not the Firefox rotate-xor-multiply FxHash, so older quality critiques and benchmarks (aHash's compare page, foldhash's `fxhash` column, which uses the separate fxhash 0.2.1 crate) do not describe it exactly.
+- The repo has no benchmarks by design: benchmarks PR #50 was closed because rustc-perf is the only yardstick. 1.2.0 was yanked for no_std breakage.
+
+**Status:** Actively maintained under the rust-lang org (2.1.3 released 2026-07, last commit 2026-07-18). It is dual Apache-2.0/MIT with no unsafe code and no default dependencies, so it is trivial to depend on or vendor. Its design goals are strictly 'whatever makes rustc faster', not general-purpose quality or output stability.
+
+[repo](https://github.com/rust-lang/rustc-hash) · [benchmark](https://github.com/rust-lang/rust/issues/69153#issuecomment-589338446)
+
+##### SmolRapidhash (Unity/Burst port of rapidhash)  `C#`  `MIT`  `active`  `Tier C`
+
+A single-file C#/Burst port of rapidhash V3 for Unity. On large buffers it is about 1.6-2.3x faster than Unity.Collections' Burst xxHash3.
+
+**Beats:** xxHash (XXH3, via Unity.Collections xxHash3) — The author's editor harness (Assets/HashBenchmark.cs, the large-input part of the xxHash/rapidhash bench, 256 B to 128 MB, best-of-rounds MB/s) compared Burst rapidhash with Unity.Collections' Burst xxHash3 in Unity 2022.3 and 6.3. It adds native C numbers from the upstream bench, built with VS 2022 17.14.23 on the Ryzen 5950X and Xcode 16.1 on the M4 Max (flags unstated). Read from the charts, Burst rapidhash plateaus near 38 vs 24 GB/s on the Ryzen and 63-68 vs 28-29 GB/s on the M4 Max. Against native C XXH3 it only ties from 16 KB up on the Ryzen (and trails beyond 32 MB), and on the M4 Max it only wins from about 2-8 KB up, depending on Unity version, so 'always faster' holds only Burst-vs-Burst.
+
+**Known shortcoming:** No compiler flags stated and the native benchmark harness is not in the repo; XXH3 comparison exists only as chart PNGs, where native XXH3 about ties rapidhash on Ryzen at 16 KB and above.
+
+**Known shortcoming:** 'Always faster' holds only Burst-vs-Burst; against native C XXH3 it ties on Ryzen at 16 KB and above, trails above 32 MB, and on M4 wins only from ~2-8 KB up. Nothing under 256 B benchmarked. No seed, public secrets, no streaming or 128-bit output. One-day v0.1.0 with no tests or test vectors; matches upstream rapidhash rev 92731ee by code reading only.
+
+**How:** It is the wyhash-family folded multiply (MUM): a 64x64->128-bit multiply with the halves XORed. The multiply comes from Burst's `Common.umul128` intrinsic, so each 16 input bytes cost one native `mul`. Inputs over 112 bytes run 7 independent multiply lanes per 112-byte block for instruction-level parallelism. Inputs of 16 bytes or less use two overlapping unaligned reads and one final mix. Unity.Collections' XXH3 port, by the author's account, runs 30-40% below native C, and this port does not show that penalty.
+
+**Use it when:**
+- Content hashing of large buffers inside Unity (mesh/texture/asset bytes, serialized blobs, cache or dedup keys of 1 KB and up), where you would otherwise call Unity.Collections xxHash3.Hash64.
+- Apple Silicon, where the gap is largest: on the M4 Max chart, Burst rapidhash plateaus around 63-68 GB/s vs about 28-29 GB/s for Burst XXH3.
+- Burst jobs that need an allocation-free, stateless 64-bit non-cryptographic hash over NativeArray or raw pointers.
+- Matching hashes produced by native C/C++ tooling that calls rapidhash V3's default `rapidhash()` with seed 0. By code comparison the port follows upstream, but no test vectors ship with it.
+
+**Skip it when:**
+- Small keys (ints, small structs, short strings for NativeHashMap): nothing under 256 B was benchmarked. At 256 B, Burst rapidhash reaches only about 10-16 GB/s, against about 26 GB/s for native C rapidhash on the Ryzen.
+- Hashing untrusted input (server-side player data): there is no seed parameter and the secrets are fixed public constants, so the published seed-independent collisions for inputs over 16 bytes apply directly.
+- Streaming or incremental hashing, 128-bit output, or the rapidhash micro/nano variants: only the one-shot 64-bit function is ported.
+- Buffers far larger than cache on x86: from 32 MB up, everything is memory-bound (about 19-22 GB/s), and native XXH3 is slightly ahead at 64-128 MB on the Ryzen 5950X.
+- Projects that need a maintained, tested dependency: 8 commits made in one day, version 0.1.0, no tests and no issue history.
+
+**Integration:** source-drop · com.unity.burst (1.8.23 in the lock file) for Common.umul128; engine Unity.Collections.LowLevel.Unsafe/NativeArray; 'allow unsafe code' enabled · Unity 2022.3 (benchmarked 2022.3.62f3 and 6.3) with Burst 1.8.23; package.json declares unity 6000.0 · little-endian only, per the source header; benchmarked only on Windows x64 (Ryzen 5950X) and macOS arm64 (M4 Max); other Burst targets not documented
+
+**Vs siblings:** It is the only catalogued rapidhash/XXH3-class hasher that runs as plain Burst C# inside Unity. The C xxHash/wyhash/rapidhash libraries and the Rust crates (hoxxep rapidhash, foldhash, gxhash) need a native plugin, which gives better small-input speed if you can ship one. Pick it over Unity.Collections' built-in xxHash3 when inputs are about 1 KB or larger and you need neither seeds nor streaming.
+
+**Gotchas:**
+- `Hash64<T>(ref T)` and the array/span overloads hash the raw bytes of T, including any struct padding. Values that compare equal can hash differently unless padding is deterministic.
+- Only `Hash64(void*, long)` carries [BurstCompile]. Performance when Burst compilation is disabled or unavailable is not documented, and the umul128 intrinsic is the reason Burst is required.
+- package.json requires unity 6000.0 but the repo's project is 2022.3.62f3. On 2022.3, copy SmolRapidhash3.cs instead of installing the package.
+- The benchmark calls into Burst through a delegate from a non-Burst MonoBehaviour, and small sizes include that overhead. Unity 6.3 is noticeably faster than 2022.3 below 8 KB, for example about 16 vs 8 GB/s at 256 B on the M4 Max.
+
+**Status:** A one-day project (all 8 commits on 2026-03-07, v0.1.0, 17 stars, no issues) that is not otherwise maintained. It is MIT-licensed and one short C# file, so treat it as a reviewed snippet to vendor rather than a dependency.
+
+[repo](https://github.com/aras-p/UnitySmolRapidhash) · [benchmark](https://github.com/aras-p/UnitySmolRapidhash/blob/main/readme.md)
+
+#### signatures-kem
+
+##### FN-DSA (Rust, Falcon-based post-quantum signatures)  `Rust`  `Unlicense`  `active`  `Tier C`
+
+Pure-Rust, no_std FN-DSA (Falcon) post-quantum signatures whose author reports faster signing and keygen than OpenSSL RSA-2048.
+
+**Beats:** OpenSSL RSA-2048 signing — The README reports FN-DSA-512 at 8.91M keygen, 1.13M sign and 63.3K verify cycles on an Intel i5-8259U with Rust 1.97.1 (AVX2 path), plus tables for a Cortex-A76 and a SiFive U74, all from the repo's cargo benches. The RSA-2048 comparison is prose only: parity for verify, about 2.5x faster signing and much faster keygen on x86_64, and about 8x faster signing on the Cortex-A76. No RSA cycle counts, OpenSSL version or flags are given, and the benches never run OpenSSL.
+
+**Known shortcoming:** The OpenSSL RSA-2048 comparison is prose only (8x signing on Cortex-A76, 2.5x on x86, verify at parity) with no RSA cycle counts or flags. Written before any FN-DSA draft standard was published ('best guess' implementation), so outputs may not match the final FIPS 206. Unlicense: no patent grant.
+
+**Known shortcoming:** Benchmarks never run OpenSSL; rdtsc timing with Turbo state unstated. Keys and signatures may change before 1.0 (pre-FIPS 206 draft of 2026-07-22). 32-bit x86 SSE2 sampler bug affected crate 0.3.0 (fixed in 0.4.0, 2026-03-11). Still pinned to rand_core 0.6 (PR #10 open).
+
+**How:** Keygen is a Rust port of Pornin's ntrugen (ePrint 2023/290). It solves the NTRU equation with fixed-point and 31-bit-prime RNS integer arithmetic instead of the slower code in the original Falcon submission. Signing follows Falcon's sign_dyn: it builds the FFT-domain Gram matrix and runs fast Fourier sampling with a constant-time discrete Gaussian sampler, using hardware f64 through SSE2 on x86_64 or NEON on aarch64. Verification needs only integer NTT arithmetic mod q = 12289. On x86/x86_64 a second AVX2 code path is chosen at runtime through cpufeatures; the README says it almost halves keygen and verify cost compared with SSE2 and helps signing only slightly.
+
+**Use it when:**
+- Rust services or firmware that need a post-quantum signature with small outputs: 666-byte signatures and 897-byte public keys at FN-DSA-512, per the README size table.
+- Verify-heavy x86_64 workloads: about 63K cycles per verify (47K when reusing a decoded key) on an i5-8259U, which the README puts on par with OpenSSL RSA-2048 verify.
+- Replacing RSA-2048 signing on ARM servers or SBCs: the README reports signing about 8x faster than OpenSSL RSA-2048 on a Cortex-A76 (1.15M cycles per FN-DSA-512 signature).
+- Signing many messages with one key: keeping a decoded SigningKey instance saves roughly 13-26% per signature in the README tables ('+sign' column).
+- no_std or embedded targets that only verify: depend on fn-dsa-vrfy alone, which uses integer arithmetic only.
+
+**Skip it when:**
+- Anything that needs long-term interoperability now: no FN-DSA draft existed when the README was written, the 2026-07-22 release implements the author's 'best guess' at FIPS 206, and keys and signatures may break again before 1.0.
+- Code that expects an OpenSSL, EVP or X.509 drop-in: this is a different algorithm with its own key and signature formats and a Rust-only API.
+- Workloads dominated by key generation where latency matters: FN-DSA-512 keygen costs about 8.9M cycles (34.5M for 1024) on x86_64 and 40M+ on a SiFive U74, far slower than its sign or verify.
+- Threat models needing strict constant-time on non-x86_64/aarch64 targets: those use a software floating-point emulation that the author calls best-effort and warns recent compilers may make variable-time.
+- Projects that have moved to rand_core 0.9 or 0.10: the crate still requires rand_core 0.6 traits, and the PR to update (#10) is open.
+
+**Integration:** crate · rand_core 0.6, zeroize 1.8, cpufeatures 0.2 (x86/x86_64 only) · Rust 1.82 (declared rust-version), edition 2021 · Any Rust target (no_std); tuned paths for x86/x86_64 (SSE2 plus runtime-detected AVX2), aarch64/arm64ec (NEON), riscv64 (RV64GC with D; optional div_emu/sqrt_emu for cores with variable-time FP divide/sqrt); other targets use integer-emulated floating point
+
+**Vs siblings:** Pick it over VecFalcon when you need a maintained, complete keygen/sign/verify library in Rust: VecFalcon reports 1.13-1.59x faster Falcon-512 sign_core than the C twin of this code, but it only vectorizes signing and is a research artifact. Pick it over the libsecp256k1 and UltrafastSecp256k1 entries only if you need post-quantum security, because those classical ECDSA libraries have smaller keys and signatures but no quantum resistance.
+
+**Gotchas:**
+- Sign contexts are large: a SigningKey for degree 1024 takes about 114 kB (82 kB with the small_context feature, which costs about 25% more signing time). Box it rather than putting it on a small stack.
+- keygen() panics through assert! if logn is outside the generator's range, and sign() returns None only for an invalid key. Output slices must be exactly sign_key_size, vrfy_key_size or signature_size bytes.
+- 32-bit x86 builds of crate 0.3.0 contain a Gaussian-sampler bug in the SSE2 path (z2 used where z1 should be), fixed on 2026-03-11 and first released in 0.4.0. Avoid 0.3.x on i686.
+- The benchmarks read rdtsc (TSC reference ticks, not core cycles) with lfence and report the median of 10 batches of 1,000 operations; the README does not say whether Turbo Boost was disabled. Also, the AVX2 kernels are unsafe fns that are sound only behind the runtime check.
+
+**Status:** Active single-author project by Thomas Pornin (last commit 2026-07-30, crate fn-dsa 0.4.0 at about 107K downloads), Unlicense (public-domain dedication, no patent grant), and deliberately pre-1.0 until FIPS 206 is final; a C twin (pornin/c-fn-dsa) reproduces the same test vectors.
+
+[repo](https://github.com/pornin/rust-fn-dsa) · [benchmark](https://github.com/pornin/rust-fn-dsa#performance)
+
+##### ocaml-curve448  `OCaml (C backend via FFI)`  `ISC`  `active`  `Tier C`
+
+OCaml X448/Ed448 library whose optional fiat-crypto C backend roughly matches OpenSSL 3.6.4 on X448 and Ed448 signing; verification is slower.
+
+**Beats:** OpenSSL 3.6.4 (`openssl speed`, EVP Ed448/X448) — These are the author's best-of-three one-second single-operation timings of the C backend through the OCaml bindings (dune release profile, OCaml's :standard C flags, compiler not named), next to `openssl speed` for OpenSSL 3.6.4 on the same machines. On an Apple M1 Pro (OCaml 5.4.1), X448 took 130 vs 133 us, Ed448 sign 64 vs 60 us and verify 203 vs 141 us. On a Ryzen AI 9 HX PRO 370 under Linux (OCaml 5.5.1), X448 took 93 vs 115 us, sign 48 vs 111 us and verify 152 vs 121 us. So X448 ranges from a tie to a 1.24x win, signing is mixed, and verification always loses.
+
+**Known shortcoming:** New (created 2026-09-13), not on opam. Compiler/version unstated (dune default flags); the OCaml FFI harness is compared against `openssl speed`, so harnesses differ; Ed448ph not benchmarked; results against OpenSSL 3.6 are mixed.
+
+**Known shortcoming:** OCaml-only library (no C API); 2 weeks old, one author, unaudited. Mixed against OpenSSL: X448 ties on M1 (130 vs 133 µs) and is 1.24x on Ryzen; signing 7% slower on M1; verification always slower (1.26-1.44x, constant-time). The Ryzen 2.3x signing win is doubtful (OpenSSL's sign time there equals its verify time, unexplained). Now on opam (curve448 0.1.0, 2026-09-19).
+
+**How:** Field arithmetic mod 2^448 - 2^224 - 1 is fiat-crypto v0.1.6's formally verified unsaturated-Solinas code: eight 56-bit limbs, with products in unsigned __int128. Above that, hand-written C provides a BoringSSL-style X448 Montgomery ladder (448 constant-time swap-and-step iterations), complete HWCD extended-coordinate edwards448 formulas, and a signed radix-16 fixed-base comb over a 14x8 precomputed table of about 21 KB (112 mixed additions and 28 doublings). All of it is one translation unit, so the compiler inlines across layers, and it is called through [@@noalloc] externals to keep OCaml FFI overhead small. Verification deliberately reuses the constant-time scalar multiplications instead of a variable-time double-scalar multiplication, which is why it loses to OpenSSL there.
+
+**Use it when:**
+- OCaml services that must speak X448 or Ed448, such as TLS 1.3 x448 key shares, HPKE DHKEM(X448) or Ed448 X.509 certificates, and want an API that matches mirage-crypto-ec instead of binding OpenSSL.
+- X448 key exchange on x86-64. On a Ryzen AI 9 HX PRO 370 the C backend took 93 us against 115 us for `openssl speed` (about 1.24x). On an Apple M1 Pro the two are even (130 vs 133 us).
+- Signing-heavy Ed448 workloads on x86-64. The project measured 48 us against OpenSSL's 111 us on the Ryzen, but that OpenSSL figure is unexplained (see gotchas), and on the M1 Pro OpenSSL signs faster (60 vs 64 us).
+- Code that wants constant-time scalar multiplication everywhere, including verification, and C field arithmetic with machine-checked proofs (fiat-crypto) plus Valgrind-checked constant-time paths under GCC and Clang.
+- Any 64-bit OCaml target where the C backend cannot build (MSVC) or no C is wanted. The pure-OCaml backend runs the same algorithms and API about 2-3x slower.
+
+**Skip it when:**
+- Verification-heavy workloads such as checking many Ed448 certificates or signatures. Verify is 1.44x slower than OpenSSL on the M1 Pro (203 vs 141 us) and 1.26x slower on the Ryzen (152 vs 121 us), and batch verification is not provided.
+- When you are free to choose the curve. On the same machines, mirage-crypto-ec's X25519 takes 30/21 us and Ed25519 signs in 39/27 us, roughly 3-4x faster than X448/Ed448 here.
+- C or C++ projects looking for a faster OpenSSL replacement. There is no C API, header install or ABI; the C code exists only to back the OCaml bindings.
+- Production use that needs audited or battle-tested code. The project is about two weeks old: 11 commits, one author, 0 stars and no issues, and SECURITY.md says it is not independently audited.
+- 32-bit targets, js_of_ocaml or MSVC. The C backend needs a 64-bit GCC or Clang with unsigned __int128, and the OCaml backend needs 63-bit ints.
+
+**Integration:** module (opam package curve448 with dune sublibraries curve448.ocaml and curve448.c; the C part is a header source-drop compiled into one stub file) · mirage-crypto-rng >= 2.0.1, used for key generation and itself built with C stubs. fiat-crypto p448, plus code adapted from BoringSSL and tiny_sha3, is vendored in lib/c/native. · OCaml 4.14.0+, Dune 3.6+, opam 2.0. For curve448.c, a 64-bit GCC or Clang with unsigned __int128; the constant-time checks name GCC 13.3/16.2 and Clang 18.1/22.1. MSVC builds fall back to the OCaml backend. · The C backend builds on amd64, arm64, power, s390x and riscv (64-bit, non-MSVC). CI covers Linux only; macOS and Windows are not in CI, although the M1 Pro benchmark ran on macOS. The C code has no SIMD or runtime dispatch.
+
+**Vs siblings:** None of the catalogued signature siblings cover Curve448: ENG25519 is X25519/Ed25519 with AVX-512 IFMA, libsecp256k1 and UltrafastSecp256k1 are secp256k1 ECDSA, and the rest are post-quantum. Pick this only when a protocol requires X448 or Ed448 and you are in OCaml; if the curve is your choice, the Curve25519 options are several times faster.
+
+**Gotchas:**
+- The project's figures and OpenSSL's come from different harnesses. The project uses an OCaml gettimeofday loop through the FFI; OpenSSL uses `openssl speed`, with no build flags or compiler named for either side. OpenSSL's Ryzen Ed448 sign time (111 us, nearly its 121 us verify time and almost twice its M1 sign time) is not explained, and the 2.3x signing lead depends on it.
+- Small-order Ed448 public keys (four encodings) are accepted as RFC 8032 allows, and under such a key a forged signature verifies for every message. Protocols that need a signature to bind an honest key must reject those encodings themselves.
+- The C stubs never release the runtime lock, so hashing a very long message for Ed448 blocks other threads in that domain. Secrets sit in ordinary OCaml strings the GC may copy, and C temporaries in the lower-level helpers are not wiped.
+- The v0.1.0 tarball on opam predates the 2026-09-23 fixes. The one in PR #3 (Int_val truncation of phflag in the C stubs) could not be reached through the public API, which only passes 0 or 1.
+
+**Status:** Active and brand new (created 2026-09-13; v0.1.0 tagged 2026-09-18; last commit 2026-09-26), with one maintainer, 0 stars and several recent PRs marked as generated with Claude Code. Contrary to the README and the record, curve448.0.1.0 has been in opam-repository since 2026-09-19 (PR #30768), and the same author's hpke 0.3.0 depends on it. The license is ISC AND MIT, so it is copyable.
+
+[repo](https://github.com/thevilledev/ocaml-curve448) · [benchmark](https://github.com/thevilledev/ocaml-curve448/blob/main/docs/performance.md)
+
+##### Snowshoe (catid/snowshoe)  `C++`  `BSD-3-Clause`  `abandoned`  `Tier C`
+
+Constant-time EC scalar multiplication on a custom 2^127-1 GLS curve, claimed 4-8x faster than OpenSSL 1.0.1e P-256.
+
+**Beats:** OpenSSL 1.0.1e (NIST P-256 elliptic-curve math, ecp_nistp256.c) — Snowshoe side: median of 10,000 RDTSC samples with Turbo Boost off, clang++ -m64 -O4, on Sandy Bridge i5-2557M and i5-2500S. ec_mul_gen took about 60k cycles, ec_mul about 131k and ec_simul about 192k, or 22.4 us for keygen and 49.3 us for EC-DH on the 2.7 GHz iMac. OpenSSL side: the author reports 'roughly 100 usec' for keygen (4x slower) and 'roughly 400 usec' for EC-DH (8x slower) from OpenSSL 1.0.1e's make tests with the ectest.c timing macros, on an unnamed machine with no harness in the repo. Two further caveats on that run. First, the ecp_nistp256.c path the README names is gated by ec_nistp_64_gcc_128, which OpenSSL 1.0.1e's Configure disables by default, and the README does not say it was enabled. Second, the '~6x' headline chains Kasper's P-224-only paper (which claims 'up to 4 times faster' atomic operations, not 3x) with a cycle-count projection. A 2020 third-party MSVC reproduction measured 2-2.5x more cycles than the README.
+
+**Known shortcoming:** Abandoned since 2018; non-standard curve (not usable where P-256/Ed25519 interoperability is required). OpenSSL was 4x/8x slower per the README, but the OpenSSL machine and flags are unstated and there is no harness; other research code (Longa's FourQ, Kummer, Hamburg's work) is faster on some operations.
+
+**Known shortcoming:** The author said in 2020 (issue #4) not to use it and to pick more active projects; an MSVC 2019 build took 2-2.5x the README's cycle counts (unresolved). OpenSSL 1.0.1e's ecp_nistp256 path was off by default and the README does not say it was enabled. The '6x' relies on Käsper's paper, which covers P-224 only and claims up to 4x. README EdDSA timings use fake hashes (no hashing cost); not in eBACS; FourQlib is faster (~72k vs ~131k cycles, cross-paper).
+
+**How:** Field arithmetic is in Fp^2 over the Mersenne prime 2^127-1: reduction is a shift and add, multiplies use x86-64 64x64->128 instructions (GCC/Clang __uint128_t plus AT&T inline asm), and Fp^2 multiplication uses 3 Fp multiplies (Karatsuba). Points use extended twisted Edwards coordinates (Hisil et al.) with complete formulas. A 2-dimensional GLS endomorphism (Galbraith-Lin-Scott), with Smith's short lattice basis, splits the 252-bit scalar into two ~126-bit halves, which are then recoded with GLV-SAC (Faz-Hernandez/Longa/Sanchez, 'Keep Calm and Stay with One'). The halves are evaluated with 2-bit windows and masked constant-time table lookups. Fixed-base multiplication uses an LSB-set comb (w=6, v=7) over static precomputed tables. The whole library compiles as one translation unit so the compiler can inline everything.
+
+**Use it when:**
+- Studying or teaching constant-time GLS/GLV-SAC scalar multiplication: the README derives the curve, endomorphism, decomposition and base point in detail, with MAGMA scripts, and the code is about 5.3k heavily commented lines.
+- Closed systems where you control both endpoints and already depend on Snowshoe or Tabby, and interoperability with standard curves does not matter.
+- As a historical reference point when benchmarking 2013-era 128-bit-security EC implementations on x86-64 (Sandy Bridge figures published with methodology).
+- Experiments that need a fast, allocation-free, constant-time variable-base mul or double-base simul on x86-64 built with GCC or Clang.
+
+**Skip it when:**
+- Any new production system: in 2020 the author told a user who could not reproduce the benchmarks, 'These days I'd recommend not to use this library and instead use one of the more active projects' (issue #4).
+- Anything that must interoperate with P-256, X25519/Ed25519 or secp256k1. The curve is non-standard, public keys are 64-byte uncompressed (X,Y), and there is no ASN.1, EVP or ECDSA layer.
+- MSVC or Intel C++ builds of the source. The README says these compilers are unsupported, and a 2020 MSVC 2019 x64 build measured 2-2.5x more cycles than the README on the same Sandy Bridge class of CPU (issue #4, never resolved).
+- Non-x86-64 targets where speed matters. The fast paths are x86-64 inline asm plus native 128-bit integers; 32-bit and ARM builds exist (a 2014 commit and a Makefile target hardwired to a local toolchain path) but have no published numbers.
+- When you need the fastest or best-reviewed option. The README's own comparison table shows Longa's GLV-GLS code and 'Kummer strikes back' beating it on several operations, and the author's handshake constructions had no security proof (issue #1). The README also says there is no blinding against power analysis.
+
+**Integration:** static lib (build src/snowshoe.cpp, one translation unit, or link the prebuilt bin/libsnowshoe.a / libsnowshoe.lib) or source-drop · libcat (catid/libcat git submodule, pinned; per-file BSD-style headers but no repo-level LICENSE file) for platform macros, 128-bit math, endian and secure-erase helpers. The caller must supply the RNG and any hash function. · GCC or Clang with __uint128_t for full speed (Makefile default: clang++ -m64 -O4; the README says Clang generates better code). No C++ standard is stated. MSVC and Intel C++ are unsupported for compiling, but MSVC can link a MinGW/LLVM-built .lib. · x86-64 is the primary target; its fast paths use inline asm. A little-endian fast path is included and big-endian loads/saves are handled. A 32-bit mode was added in March 2014 via emulated 128-bit math, and there is an ARM cross-compile target. Only the x86-64 builds have benchmarks (macOS and Windows).
+
+**Vs siblings:** FourQlib uses the same design ideas (Fp^2 over 2^127-1, twisted Edwards, endomorphism decomposition), adds a 4-dimensional decomposition, and is maintained. Its catalog entry reports about 72k cycles for variable-base multiplication on Sandy Bridge, against Snowshoe's about 131k (a comparison across different pages), so pick FourQlib when you want speed with that design. Pick the Ed25519, libsecp256k1 or curve25519-voi entries for standard, interoperable curves; Snowshoe only makes sense as a readable reference implementation or for existing Snowshoe/Tabby deployments.
+
+**Gotchas:**
+- Call snowshoe_init() at startup and check its return value. It checks struct sizes and the library version, and runs a power-on self-test meant to catch compilers that build the 128-bit math but produce wrong results (the source names Intel C++).
+- Scalars must satisfy 0 < k < q, and input points are validated. Every multiply returns non-zero on bad input, and you must check it because this is the defence against invalid-point attacks. mul, simul and simul_gen compute 4*k*P (cofactor clearing); mul_gen multiplies by 4 only when its mul4 flag is set.
+- simul_gen is explicitly not constant-time. Use it only with public inputs, such as signature verification.
+- The README's 'EdDSA sign/verify' timings come from tests/snowshoe_test.cpp, which uses fake hashes ('to avoid implementing Skein'). They leave out hashing cost and are not directly comparable to full Ed25519 or ECDSA timings.
+
+**Status:** Abandoned: the last code change was in March 2014 (a BSD-3-Clause LICENSE was added in February 2018), and in 2020 the author recommended more active projects instead. It is small and permissively licensed enough to vendor for study, but it is not advisable for new production use.
+
+[repo](https://github.com/catid/snowshoe) · [benchmark](https://github.com/catid/snowshoe/blob/master/README.md)
+
+##### UltrafastSecp256k1  `C++`  `MIT`  `active`  `Tier C`
+
+C++20 secp256k1 ECDSA/Schnorr engine: about 1.5x faster CT signing and 1.1x faster verify than libsecp256k1, and 11-22x faster than OpenSSL.
+
+**Beats:** OpenSSL (ECDSA_do_sign/ECDSA_do_verify, secp256k1); also benchmarked against libsecp256k1 (bitcoin-core) — The project's own bench_unified was run with GCC 14.2.0 Release+LTO (-O3 -march=native) on an i5-14400F with turbo off and a pinned core, taking the median of 11 passes. CT ECDSA sign took 19.3 us, versus 29.4 us for an in-tree libsecp256k1 snapshot (f9a944f, compiled without LTO) and 419 us for system OpenSSL ECDSA_do_sign (version not recorded). ECDSA verify took 36.8 us, versus 41.5 us and 400 us. Bitcoin Core's bench_bitcoin ConnectBlock shrinks the advantage to +0.9-1.5% with LTO.
+
+**Known shortcoming:** Headline 'CT' figure (19,441.6 ns) is actually the fast, variable-time path; the constant-time path is 1.52x slower. ConnectBlock numbers come from the README, not the benchmark page. Bitcoin Core PR #35469 to adopt it was closed with a Concept NACK.
+
+**Known shortcoming:** Against the real incumbent, libsecp256k1, gains are only 1.1-1.5x in microbenchmarks, and Bitcoin Core ConnectBlock improves ~1% with LTO and is slower without. No third-party audit; Sep 2026 fixes for Schnorr batch verify accepting invalid signatures (#400), wrong sqrt on ~18% of inputs (#402) and wrong Pippenger points (#401). Fast k*G builds a ~250 MB table on first use and caches it under ~/.cache. The 21.56x-vs-OpenSSL signing ratio uses the variable-time `fast` path (constant-time ratio 21.70x vs OpenSSL, but see docs contradictions). Benchmark build set experimental REPSEARCH_* flags not in public sources (retiered A to C).
+
+**How:** Field elements use 5x52-bit limbs (FE52, needs __int128), with optional x86-64 BMI2/ADX assembly and safegcd (Bernstein-Yang) inversion. Verification uses a Strauss/Shamir dual multiplication: GLV endomorphism split plus wNAF, precomputed w=15 odd-multiple tables for G and 2^128*G (8192 entries each, built on the first verify), and an effective-affine (isomorphic-curve) w=5 table for the public key. Constant-time signing uses a libsecp-style signed-digit multi-comb for k*G (11 blocks x 32 entries, Hamburg encoding) with AVX2-vectorized constant-time table scans. The variable-time k*G path uses a large windowed fixed-base table.
+
+**Use it when:**
+- Signing-heavy x86-64 services (wallet signers, Taproot key-path and script-path signing) where roughly 1.5x lower CT sign latency than libsecp256k1 matters and you can build with LTO. bench_bitcoin shows +10% on SignTransaction and +35% on SignSchnorrWithMerkleRoot.
+- Code that currently does secp256k1 ECDSA through OpenSSL's generic EC code (ECDSA_do_sign/ECDSA_do_verify): about 11x faster verify and 22x faster sign, with no OpenSSL dependency.
+- Projects that need many secp256k1 protocols in one library (MuSig2, FROST, BIP-352 Silent Payments scanning, Ethereum ecrecover, BIP-32), optionally with GPU batch verify or scanning. Sparrow's Frigate uses it for Silent Payments scanning.
+- Polyglot stacks that want one engine behind the C ABI through its Python, Node.js, Rust, Go, C#, Java or Swift bindings.
+- Differential testing or evaluation of an alternative backend for code written against libsecp256k1, using the link-time shim.
+
+**Skip it when:**
+- Consensus-critical block validation. The real bench_bitcoin ConnectBlock gain is only +0.9-1.5% with LTO and 0.5-1.0% slower without LTO. Bitcoin Core closed the backend PR (#35469) with a Concept NACK because it lacked human review.
+- Anywhere that requires an independent security audit. None exists, all audit evidence is self-generated, and serious correctness bugs were fixed as recently as September 2026: Schnorr batch verify accepted invalid signatures (#400), FieldElement::sqrt was wrong for about 18% of inputs (#402), and Pippenger MSM returned wrong points (#401).
+- Memory- or startup-constrained processes that use the variable-time k*G path. By default it builds a window_bits=18 fixed-base table of about 250 MB (about 5 s of arithmetic) on first use and caches it to a per-user cache directory. Bitcoin Core backend mode uses a compiled-in w=8 table instead.
+- Browser/WASM, where the README calls CT evidence incomplete, and iOS builds via SPM or CocoaPods, which have CT guards disabled.
+- Protocols that need libsecp256k1-identical ECDSA nonces with ndata, or custom noncefp callbacks. The shim rejects custom noncefp, and its nonce bytes differ unless you build with SECP256K1_SHIM_RFC6979_COMPAT=ON.
+
+**Integration:** static lib (CMake-built libfastsecp256k1; optional libufsecp C ABI library and a libsecp256k1-compatible shim target) · None for the CPU build (no Boost or OpenSSL). The GPU backends need the CUDA toolkit, an OpenCL runtime or the Metal SDK. OpenSSL is used only by the benchmark. · C++20 and CMake 3.18+. The README says GCC 11+, Clang 15+ or MSVC 2022. The FAQ says GCC 10+ or Clang 14+, and the shim README says GCC 13+ or Clang 16+. · x86-64 (the optional asm needs BMI2/ADX; AVX2 is used for CT lookups when available), ARM64, RISC-V RV64GC, Android, iOS, WASM (experimental), ESP32 and STM32. GPU: CUDA 12+, OpenCL, Metal. ROCm/HIP is not validated.
+
+**Vs siblings:** None of the siblings is an alternative for the same curve. ENG25519 does X25519/Ed25519, fasthqc is the HQC KEM and VecFalcon is Falcon signing. Pick this one only when the protocol requires secp256k1 ECDSA or BIP-340 Schnorr, as Bitcoin and Ethereum do.
+
+**Gotchas:**
+- `secp256k1::ecdsa_sign()` in the fast namespace is variable-time: it has data-dependent branches in scalar reduction and the source says not to use it with real keys. Production signing must call `ct::ecdsa_sign` (the C ABI and shim already do). The 21.56x OpenSSL 'FAST' sign ratio was measured on this unsafe path; the CT ratio is 21.70x.
+- The first variable-time k*G call can take seconds and write a file of about 250 MB (cache_w18.bin) under ~/.cache/secp256k1, ~/Library/Caches or %LOCALAPPDATA%. Set SECP256K1_FIXED_BASE_DISK_CACHE=OFF to prevent this. The precompute path can throw std::runtime_error.
+- The speedups depend on LTO and a locked CPU frequency. Without LTO, ConnectBlock is slower. In an unlocked-frequency run, libsecp256k1 was 7.5% faster on ConnectBlockAllEcdsa; the repo calls that result a measurement artifact.
+- The docs contradict each other. For example, the shim README still shows CT ECDSA sign 9% slower than libsecp256k1 and cites 'OpenSSL 3.x', while the canonical benchmark shows 1.52x faster and does not record the OpenSSL version. The verify tables (about 1.3 MB) stay allocated at exit and trigger leak checkers unless you call release_process_resources().
+
+**Status:** Actively developed: v4.6.0 was released 2026-09-24 and the dev branch has commits through 2026-09-26. It is MIT-licensed and ships as CMake builds plus apt, brew, pip, npm and NuGet packages. Adoption is thin (55 stars, one publicly known production adopter) and there is no third-party audit.
+
+[repo](https://github.com/shrec/UltrafastSecp256k1) · [benchmark](https://github.com/shrec/UltrafastSecp256k1/blob/main/docs/bench_unified_2026-09-07_gcc14_x86-64.json)
+
+##### watsign  `WebAssembly (WAT) + JavaScript`  `MIT`  `stale`  `Tier C`
+
+WebAssembly port of TweetNaCl Ed25519 sign/verify for browsers, Node and Deno; ~4-6x faster than tweetnacl-js warmed up.
+
+**Beats:** tweetnacl-js (Ed25519 sign/verify) — Setup: Intel i7-10700, Chromium 93 driven by puppeteer 10.4.0 via chrode 0.3.3, mean of 50 runs after 50 warm-ups, in October 2021. watsign signed and verified a 10-byte message in 0.67/1.11 ms and an ~80 KB message in 0.96/1.28 ms. tweetnacl-js 1.0.3 took 2.86/5.65 and 5.70/7.21 ms (4.3-5.9x slower) and noble-ed25519 1.2.6 took 1.00/3.09 and 1.27/3.24 ms (1.3-2.8x slower). The '33x' and '17x' cold-start figures are single first-call samples (tweetnacl sign of the long message at 43.88 ms vs 1.32 ms; noble short sign at 53.17 ms vs 2.99 ms).
+
+**Known shortcoming:** WebAssembly/JS only. The 33x cold-start figure is a single sample; warm gain is 4-6x over tweetnacl-js (a slow pure-JS baseline). No engine flags; ~154 npm downloads/month; stale.
+
+**Known shortcoming:** Benchmark is from Oct 2021 (Chromium 93) against noble-ed25519 1.2.6 (current @noble/ed25519 is 3.2.0) and never against native Web Crypto Ed25519 (now in Chrome 137+, Firefox 129+, Safari 17+, Node 16.17+). sign() lacks a secret-key length check (WASM out-of-bounds error, #3); verify lacks the S<L check, so malleated signatures are accepted; the wrapper uses eval (breaks strict CSP / Chrome MV3, #4). Only 2 fixed test identities, no RFC 8032 vectors.
+
+**How:** It runs the same TweetNaCl algorithms: 16-limb radix-2^16 field elements mod 2^255-19, and a constant-time cswap double-and-add over extended twisted Edwards coordinates for both fixed-base and variable-base scalar multiplication, with no precomputed tables. The gain comes from moving limb arithmetic from tweetnacl-js's Float64Array math to Wasm i64 integer ops. The 16x16 schoolbook field multiply is fully unrolled, which the source calls 'the hottest path of the entire library'. SHA-512 is delegated to the native Web Crypto or Node implementation instead of JS, which widens the gap on long messages. Shipping precompiled Wasm avoids JIT warm-up, hence the large first-call ratios.
+
+**Use it when:**
+- You use tweetnacl-js only for Ed25519 signatures and must support runtimes without native Web Crypto Ed25519 (Chrome before 137, Firefox before 129, Safari before 17)
+- Cold-start-sensitive pages that sign or verify once right after load (e.g. an auth token): the README shows first-call sign/verify of 1.3-3 ms vs 8-44 ms for tweetnacl-js
+- Verifying signatures over large payloads (tens of KB) in the browser, where native SHA-512 helps: ~5.6-5.9x vs tweetnacl-js on an ~80 KB message
+- Bundle-size-sensitive front ends that need only signing: 7.4 kB min+gz vs 10.6 kB for tweetnacl-js (which also includes box/secretbox)
+- You want TweetNaCl's constant-time design (no secret-dependent branches or memory access), not the BigInt field arithmetic of noble-ed25519 v1
+
+**Skip it when:**
+- Modern targets with native Web Crypto Ed25519 sign/verify (Chrome 137+, Firefox 129+, Safari 17+, Node 16.17+, Deno 1.26+); watsign was never benchmarked against these native paths
+- Strict-CSP pages or Chrome MV3 extensions: the watever-js-wrapper glue calls indirect eval on the JS import strings, and issue #4 (open) reports it failing in MV3
+- Synchronous code paths, X25519/box/secretbox, batch verification or other curves: none are provided
+- Choosing between it and today's @noble/ed25519 (3.2.0): the noble comparison used noble-ed25519 1.2.6 from 2021, so the '1.2-3x faster than noble' claim is outdated
+- Consensus-critical or compliance-driven use: there is one maintainer, the project has been stale since 2024-04, it has no audit, it gets ~154 npm downloads/month, and verification inherits TweetNaCl's non-strict rules
+
+**Integration:** module (ESM-only npm package; Wasm embedded as base64 in the JS; Deno can import mod.js from raw.githubusercontent.com or use npm:watsign) · watever-js-wrapper ^0.3.2 at runtime, plus the platform's Web Crypto (crypto.subtle SHA-512, getRandomValues) or node:crypto · Node >= 16 (package engines); ESM ('type': 'module'); browsers need WebAssembly and Web Crypto SHA-512; rebuilding needs the author's watever WAT bundler (0.5.2) · Any JS runtime with WebAssembly: modern browsers, Node >= 16, Deno
+
+**Vs siblings:** The catalogued siblings (ENG25519 AVX-512IFMA, SUPERCOP amd64-64-24k Ed25519, libsecp256k1, UltrafastSecp256k1) are native C or assembly and cannot run inside a browser or Deno sandbox. Pick watsign only when Ed25519 must run in JS or Wasm; on servers, use those native libraries or the runtime's built-in crypto.
+
+**Gotchas:**
+- sign() does not check the secret-key length: the 64-byte check exists only as a comment in sign.wat. Passing the wrong value (e.g. the whole key pair) gives 'RuntimeError: memory access out of bounds' (issue #3) instead of tweetnacl's 'bad secret key size'. verify and the keyPair functions do validate sizes.
+- verify ports TweetNaCl's check (unpack A, reduce H, compute [H](-A) + [S]B, compare with R) without rejecting non-canonical S >= L, so it is not a strict RFC 8032 verifier and accepts malleated signatures just as tweetnacl-js does.
+- Tests only cover two fixed identities cross-checked against tweetnacl-js; there are no RFC 8032 or Wycheproof vectors. Version 0.1.6 fixed a byte-widening bug in i8_to_i64 that had corrupted the hash reduction, so avoid anything older than 0.1.6 (latest is 0.1.9).
+- Timing uses performance.now() around awaited calls, so the async hop through the Web Crypto promise is included; cold-start numbers are single samples that the README itself says vary between runs.
+
+**Status:** Stale: the WAT core last changed in October 2021 (v0.1.6), and the latest release, v0.1.9 (2024-04-15), only fixed TypeScript exports. Two issues are open, including the CSP/MV3 breakage. It is MIT-licensed and small, but edits require the author's watever toolchain, and native Web Crypto Ed25519 now covers most of its use case.
+
+[repo](https://github.com/mitschabaude/watsign) · [benchmark](https://github.com/mitschabaude/watsign/blob/main/README.md)
 
 ### networking-and-servers
 
@@ -26515,6 +29956,176 @@ Own-IDL C++/Java/Python serialization framework; bit-packed decode 1.2x-2.6x fas
 
 ## Copyleft
 
+### crypto-and-hashing
+
+#### aead-and-ciphers
+
+##### Tiaoxin-346  `C`  `GPL-2.0-or-later`  `abandoned`  `Tier A`
+
+Tiaoxin-346, an AES-round AEAD with 3 AES rounds per 16 bytes in AES-NI C; 1.8-5.6x faster than SUPERCOP's AES-256-GCM, unmaintained.
+
+**Beats:** AES-256-GCM — eBACS (supercop-20260627, page dated 2026-09-25) measured tiaoxinv2/nim, built with gcc 14.2.0 -march=native -O2, against SUPERCOP's fastest AES-256-GCM (Dolbeau's AES-NI intrinsics, Debian clang 19.1.7 -O2) on one Raptor Cove P-core of an Intel Core 5 210H. Median cycles/byte were 0.15 vs 0.70 on long+long encrypt (4.7x) and 0.28 vs 0.57 on decrypt/forgery (2.0x). Across all 15 sections the gain ranges from 1.8x (long+0 decrypt, 0.44 vs 0.81) to 5.6x (long+0 encrypt, 0.19 vs 1.07, a row flagged noisy).
+
+**Known shortcoming:** CAESAR third-round candidate not in the final portfolio; code only in SUPERCOP. Decrypt gain is only ~2.0x (encrypt 0.15 vs 0.70 cycles/byte). GPL-2.0+.
+
+**Known shortcoming:** CAESAR round 3 (v2.1), not a finalist; 128-bit key, so against AES-128-GCM it is 4.2x encrypt / 1.8x decrypt. Decrypt bug (also in the reference): `clen -= 16; if (clen < 0)` on an unsigned length never fires, so inputs under 16 bytes read/write out of bounds; aligned loads on caller buffers; memcmp tag check; plaintext released before verification. Nonce reuse gives master-key recovery in 30 queries (ePrint 2017/1147). AEGIS-128X2 is faster in every section.
+
+**Independent measurement:** eBACS: Tiaoxin-346 0.15 vs AES-256-GCM 0.70 cycles/byte (nim, GCC 14.2 -O2).
+
+**How:** The state is three shift registers of 3, 4 and 6 128-bit words (T3, T4, T6). Each 32-byte block feeds M0 into T3, M1 into T4 and M0^M1 into T6, costing 6 aesenc calls with no data dependencies between them. They pipeline through the AES-NI unit and hide its 7-8 cycle latency, which the spec cites as the reason for the wider state. Ciphertext comes from a cheap output function (6 XOR, 2 AND per 32 bytes), the code unrolls 128 bytes per loop iteration, and AD is absorbed with the same update but no output function. Decryption is slower because M1's recovery depends on the freshly recovered M0 before the state can absorb them (DECRYPTION_ROUND), which lengthens the critical path.
+
+**Use it when:**
+- Encrypt-heavy bulk AEAD on AES-NI x86 in a closed system where you control both ends: long+long encrypt 0.15 vs 0.70 cycles/byte (4.7x) and 1536+1536 encrypt 0.20 vs 0.82 (4.1x) against SUPERCOP's fastest AES-256-GCM.
+- Authenticating large AD with little or no message: 0+long is 0.11-0.12 against 0.32-0.33 cycles/byte (about 2.7-2.9x), though eBACS flags these rows as noisy.
+- Short messages despite the setup cost: initialization plus finalization is worth about 1120 bytes of message (per the spec), yet 64+64 still measures 1.25-1.33 against 4.70-5.13 cycles/byte (about 3.8x).
+- As a research baseline for AES-round AEADs (AEGIS, Rocca, HiAE) or for cryptanalysis: weak-key distinguishers on 8-round Tiaoxin (ToSC 2021(2), ePrint 2021/187) and quantum hidden-shift state recovery (ToSC 2024, ePrint 2023/1306) both target it.
+
+**Skip it when:**
+- Anything that needs a standardized or vetted AEAD. Tiaoxin was CAESAR round 3 only, has no library adoption, and a GitHub repository search finds only two 0-star repositories named tiaoxin. The only optimized code is GPL-2.0-or-later.
+- Anywhere a nonce could repeat. The update and initialization are invertible, so recovering the state recovers the master key. Vaudenay and Vizar (ePrint 2017/1147) recover the key with 30 nonce-reusing queries, and Kales, Eichlseder and Mendel (ePrint 2017/1137) give an implemented nonce-misuse key recovery. For AES-GCM, reuse enables forgery and CPA decryption rather than key recovery.
+- Decrypt-dominated traffic sized from the headline: decrypt and forgery are only 1.8-2.2x AES-256-GCM (long+long 0.28 vs 0.57, long+0 0.44 vs 0.81).
+- When AEGIS is available. On the same page AEGIS-128X2 (0.11 cycles/byte long+long) beats Tiaoxin in every section, and AEGIS-128L decrypts faster (0.21 vs 0.28 long+long, 0.23 vs 0.44 long+0).
+- CPUs without AES-NI. The only fallback is the table-lookup ref variant (sboxes.h), about 13.6x slower in SUPERCOP's timing column (21560 vs 1589 cycles) and exposed to classic T-table cache-timing leaks.
+
+**Integration:** source-drop (tiaoxin-optimized.c/.h, encrypt.c and api.h; you supply crypto_aead.h or call tiaoxin_optimized_encrypt/decrypt directly) · none beyond libc (string.h, stdlib.h) and the SSE2/SSSE3/AES-NI intrinsic headers · GCC or clang with -maes -mssse3, or -march=native on an AES-NI CPU. eBACS's fastest build is gcc 14.2.0 -march=native -mtune=native -O2; Debian clang 19.1.7 builds are 4-10% slower, and clang -mcpu=native fails to compile (always_inline _mm_shuffle_epi8/_mm_aesenc_si128 without ssse3/aes). The designer used gcc 4.8.1 -O3 -msse2 -maes -mavx -march=native. · x86-64 with AES-NI and SSSE3 (nim variant; only amd64 results were checked). The ref variant is portable C with table-based AES.
+
+**Vs siblings:** Choose it over libaegis only for the peak single-stream encrypt rate on a pre-VAES AES-NI core, where it beats AEGIS-128L (0.15 vs 0.21 cycles/byte long+long). AEGIS-128L wins on decrypt, AEGIS-128X2 wins everywhere on this Raptor Cove host, and libaegis is maintained and MIT-licensed. Against the MORUS-1280 and AEZ entries from the same mirror, Tiaoxin is 4.4x and 1.7x faster on long+long encrypt, and unlike MORUS it has no published break of the full cipher in the nonce-respecting setting.
+
+**Gotchas:**
+- Decrypt does 'clen -= 16; if (clen < 0) return -1;' on an unsigned long long, so the check never fires. A ciphertext shorter than 16 bytes wraps clen to about 2^64 and the loop reads c and writes m out of bounds. Check clen >= 16 before calling; the table-based ref variant has the same code.
+- The load macro is _mm_load_si128, an aligned load, applied directly to the caller's key, nonce, AD, message and ciphertext pointers. Unaligned buffers are undefined behavior and can fault, so switch it to _mm_loadu_si128 when vendoring.
+- The tag is checked with memcmp, which is not constant-time. Plaintext is written to m before verification and not wiped on failure, although the spec's security goals assume only 'false' is returned.
+- The key is 128 bits (CRYPTO_KEYBYTES 16), so the AES-256-GCM baseline is not like-for-like. Against aes128gcmv1 on the same page the gain is 4.2x encrypt (0.15 vs 0.63) and 1.8x decrypt (0.28 vs 0.50). The exported tiaoxin_optimized_encrypt/decrypt symbols are unprefixed (flagged by eBACS as namespace violations) and collide with tiaoxinv1's identical names.
+
+**Status:** Abandoned. The mirror is frozen at supercop-20160716 (its open issue #4 says to fetch SUPERCOP from bench.cr.yp.to instead), but the GPL-2.0-or-later nim file is about 16 KB and easy to vendor if copyleft and the bugs above are acceptable.
+
+[repo](https://github.com/floodyberry/supercop) · [benchmark](https://bench.cr.yp.to/results-aead/amd64-freshwrap,big.html)
+
+#### non-crypto-hashes
+
+##### pengyhash  `C`  `GPL-3.0`  `abandoned`  `Tier B`
+
+Tiny multiply-free 64-bit ARX hash; its v0.2 beat xxHash64 bulk speed in rurban/smhasher, current v0.3 does not.
+
+**Beats:** xxHash64 — rurban/smhasher's 262,144-byte bulk test on its reference Ryzen 5 3350G (logs normalized to 3 GHz; compiler and flags unstated) measured pengyhash v0.2 at 13,347 MiB/s against 11,177 MiB/s for xxHash64. That is ~19%, or ~9% against xxHash64's best alignment (12,263 MiB/s), since xxHash64 drops to 10,125 MiB/s at alignments 4-7. SMHasher3 on a Ryzen 9 3950X pinned at 3.5 GHz measured the current v0.3 at 12.47 GiB/s vs 13.02 GiB/s for XXH64, about 4% slower.
+
+**Known shortcoming:** Wins on rurban/smhasher only (13,347 vs 11,177 MiB/s); SMHasher3 has it ~4% slower than XXH64 (12.47 vs 13.02 GiB/s). GPL-3.0.
+
+**Known shortcoming:** The ~19% win over XXH64 is for v0.2; current v0.3 is ~4% slower than XXH64 in SMHasher3, and small keys are slow (89.81 vs 52.60 cycles). v0.3 has unsequenced-modification UB (s[1]/s[3], issue #2 open since 2023); license changed to GPL-3.0 in v0.3 (v0.2 was BSD-2). Seed applied only at finalization, giving 64-bit SeedBlockLen collisions on 16-31 byte keys. Abandoned since 2022-11.
+
+**Independent measurement:** SMHasher3: pengyhash 12.47 vs XXH-64 13.02 GiB/s.
+
+**How:** It uses no multiplications. The state is four 64-bit words updated with add-rotate-xor (ARX) steps, 32 input bytes per iteration, in two cross-coupled chains (s0/s1 and s2/s3), with every input word added twice per block. The last 0-31 bytes are packed into four words and mixed by six fixed finalization rounds, the only place the seed enters. There is no SIMD; speed comes from cheap scalar ALU ops and instruction-level parallelism.
+
+**Use it when:**
+- You want a very small, portable 64-bit hash with no multiplies, for example on cores where 64x64 multiplication is slow. The whole algorithm is about 25 lines of add, rotate and xor.
+- Hashing medium-to-large buffers (KBs and up) where scalar XXH64-class throughput is enough: about 3.8 bytes/cycle for v0.3 in SMHasher3, about 4.7 for v0.2 in rurban/smhasher.
+- You need the same output on little- and big-endian hosts. v0.3 assembles words byte by byte in little-endian order, and SMHasher3 registers it as endian-independent with identical LE/BE verification values.
+- You must match hash values already produced by rurban/smhasher or the Fortran stdlib pengy_hash; that requires the v0.2 code (BSD-2-Clause), not the current repo.
+
+**Skip it when:**
+- Short keys such as hash-table strings or integers: SMHasher3 averages 89.81 cycles/hash on 1-31-byte keys (about 116 at 8-16 bytes), against 52.60 for XXH64 and 29.31 for wyhash. rurban/smhasher shows 74.79 vs 49.67 for xxHash64.
+- Expecting to beat XXH64 with the code you download today: the current v0.3 runs about 4% slower than XXH64 in SMHasher3 (12.47 vs 13.02 GiB/s). xxh3 and wyhash are about 1.6-1.7x faster in bulk in the rurban table.
+- Proprietary or permissively licensed products: v0.3 is GPLv3, unlike most peer non-crypto hashes. Only the older v0.2 is BSD-2-Clause.
+- Seeded use that relies on the seed to separate hash families. The seed is mixed in only during finalization, and SMHasher3's SeedBlockLen test finds full 64-bit collisions on 16-31-byte keys (126 found where 0 are expected) when seed and key blocks vary together.
+- Code that must be well-defined C: v0.3 has an unsequenced read and write of the same state word, reported in 2023 (issue #2) and unanswered, in a repo abandoned since November 2022.
+
+**Integration:** source-drop · none (stdint.h, stddef.h) · C99 (stdint.h); no compiler versions documented · any (portable scalar C, no intrinsics); v0.3 output is endian-independent, v0.2 (memcpy loads) is not
+
+**Vs siblings:** Rarely. SpookyHash (SpookyV2_64) matches its rurban bulk speed (13,401 vs 13,347 MiB/s), and xxHash (XXH3) and wyhash are about 1.6-1.7x faster in bulk and much faster on short keys, so pengyhash only wins if a tiny multiply-free ARX hash with endian-independent output (v0.3) is itself the requirement.
+
+**Gotchas:**
+- Undefined behavior in v0.3. Statements such as s[1] = (s[0] += (s[1] += V64(p+8)) + V64(p)) ^ rotl(s[1],14) read and modify s[1] without a sequence point (GCC -Wsequence-point), so the hash can change with the compiler's evaluation order. SMHasher3 ships a rewrite with explicit sequencing whose verification value (0x861A1254) matches the repo's own v0.3 log. Use that form.
+- v0.2 and v0.3 give different hashes, and the published ~19% win over xxHash64 was measured on v0.2 (rurban/smhasher bundles v0.2, verification 0x1FC2217B; v0.3 is 0x861A1254). v0.2 also reads input with native-endian memcpy, so its values differ on big-endian machines, which the Fortran stdlib documents for its port.
+- The license changed from BSD-2-Clause (v0.2) to GPLv3 (v0.3) in the same commit that changed the algorithm, so older attributions citing BSD for pengyhash.c at master (rurban issue #210, Fortran stdlib docs) now point at GPLv3 code.
+- Every call runs six full finalization rounds regardless of length, so there is a fixed ~68-116-cycle cost per hash even for 1-byte keys (SMHasher3: 67.63 cycles at 1 byte).
+
+**Status:** Abandoned: the last commit (v0.3 and the GPLv3 relicense) was November 2022, and a 2023 undefined-behavior report is unanswered. The two small files are trivial to vendor, but pick v0.2 (BSD-2-Clause) or SMHasher3's sequenced v0.3 rewrite deliberately, based on your license and output-compatibility needs.
+
+[repo](https://github.com/tinypeng/pengyhash) · [benchmark](https://github.com/rurban/smhasher/blob/master/README.md)
+
+#### signatures-kem
+
+##### ENG25519 (Curve25519_AVX512IFMA)  `C`  `LGPL-3.0`  `stale`  `Tier A`
+
+AVX-512IFMA X25519/Ed25519 code plus an OpenSSL 1.1.1 ENGINE; beats OpenSSL's x86-64 Curve25519 code 3.3-12x on throughput.
+
+**Beats:** OpenSSL 1.1.1 X25519 (x86-64 assembly, crypto/ec/asm/x25519-x86_64.pl) and Ed25519 (C implementation, crypto/ec/curve25519.c), extracted from OpenSSL_1_1_1-stable and compiled into the paper's benchmark harness; the TLS-level experiments use OpenSSL 1.1.1q — Warm-start cycle counts were measured with GCC 9.2.0 -O2 on an Alibaba Cloud Xeon Platinum 8369B (Ice Lake, Turbo on), against OpenSSL 1.1.1's X25519 assembly and Ed25519 C code extracted into the same harness. The results: batched X25519-KeyGen 60,479 cycles per 8 keys vs 90,809 per key (12.01x throughput); Ed25519 sign 24,723 vs 93,606 cycles (3.79x) and verify 81,506 vs 271,445 (3.33x); fixed-base scalar multiplication 8.06x. Against Faz-Hernandez's AVX2 code the margins shrink to 1.18x for sign and 1.33x for verify, and end-to-end TLS 1.3 handshakes improved only 25%.
+
+**Known shortcoming:** Only X25519 key generation is 8-way batched; Ed25519 Sign (1x8) and Verify (1x2) are single-operation paths, and the Ed25519 baseline is OpenSSL's C code.
+
+**Known shortcoming:** Needs AVX-512 IFMA (built with -march=native, no fallback); speedups are warm-start, cold runs are 1.6-3.8x slower without a warm-up thread. Built as an OpenSSL 1.1.1 ENGINE: the ENGINE API was deprecated in 3.0 and removed in 4.0.0 (Apr 2026). X25519 derive is Hisil et al.'s code (only 1.47x) and lacks the all-zero shared-secret check OpenSSL does. Against Faz-H AVX2 it is only 1.18x sign / 1.33x verify; never compared with Intel crypto_mb (#1). Stale since 2024-06.
+
+**How:** Field elements mod 2^255-19 are stored in radix 2^51 (five limbs) to fit the 52-bit vpmadd52luq/vpmadd52huq multiply-add instructions, and field arithmetic runs 8x1-way: eight independent field elements across the eight 64-bit lanes of a zmm register. The paper's 'maximize transferable parallelism' idea carries that 8-way parallelism up the stack. KeyGen runs eight independent fixed-base scalar multiplications per call (8x1 -> 8x1 -> 8x1), Sign spreads one table-based fixed-base scalar multiplication over 8 lanes (8x1 -> 8x1 -> 1x8), and Verify uses a 2x4-way window-based double-point scalar multiplication (8x1 -> 2x4 -> 1x2, window width 5). The ENGINE's X25519-Derive is not the authors' code but a wrapper around Hisil et al.'s AVX-512F 4-way Montgomery ladder.
+
+**Use it when:**
+- TLS 1.3 servers whose throughput is limited by handshakes, running OpenSSL 1.1.1 on Intel Xeons with AVX-512IFMA (Ice Lake or newer) and using X25519 key exchange with Ed25519 certificates. The paper measured 25% more handshakes per second than stock X25519 (1,707 vs 1,366) and 24-41% higher DoT peak throughput.
+- Bulk generation of ephemeral X25519 keypairs, where eight keypairs per call fits naturally (key pools, precomputed keypairs for session setup).
+- Services that sign a lot of Ed25519 on AVX-512IFMA servers: about 24.7k cycles per signature, versus 93.6k for OpenSSL 1.1.1's C code.
+- A reference design for AVX-512IFMA Curve25519 arithmetic, with CryptoLine-verified field routines, or for handling the cold start of AVX-512 units in latency-sensitive code.
+
+**Skip it when:**
+- CPUs without AVX-512IFMA, which includes AVX2-only parts, Cascade Lake and Cooper Lake Xeons (per the paper) and ARM. There is no fallback path, and the build uses -march=native.
+- OpenSSL 3.x or 4.x stacks. The ENGINE API was deprecated in OpenSSL 3.0, and OpenSSL 4.0.0 (April 2026) removed engine support, so ENG25519 would have to be ported to the provider API.
+- Workloads dominated by X25519 shared-secret derivation. The authors did not beat prior work there: the ENGINE's derive is Hisil et al.'s code at 61,867 cycles, only 1.47x OpenSSL 1.1.1.
+- Clients or lightly loaded servers. Cold AVX-512 units made the primitives 1.6-3.8x slower in the paper's DoT test, and the fix is a helper thread that keeps the vector unit awake.
+- Production code that needs maintained, audited crypto. This is a research artifact, stale since June 2024, with no releases. Only the field arithmetic is formally verified, and the authors never benchmarked it against Intel's own AVX-512IFMA multi-buffer crypto_mb Curve25519 code (issue #1).
+
+**Integration:** shared lib (OpenSSL 1.1.1 ENGINE loaded via openssl.cnf); the raw primitives are a source-drop with no library target (their CMake builds only a benchmark executable) · OpenSSL 1.1.1 (1.1.1q recommended; needed for SHA-512 and the ENGINE API), CMake 3.10+; the DoT experiments also use unbound · GCC 9.2.0 tested (C with inline AVX-512IFMA intrinsics plus GNU assembler files), built with -O2 -mavx512ifma -march=native · x86-64 Linux with AVX-512IFMA required (Intel Cannon Lake/Ice Lake or later, not Cascade/Cooper Lake); tested on Ubuntu (20.04 recommended for the DoT experiments)
+
+**Vs siblings:** Pick it when you specifically need faster X25519/Ed25519 for TLS 1.3 on AVX-512IFMA servers. UltrafastSecp256k1 targets secp256k1 ECDSA (Bitcoin-style signing), fasthqc/hqc is a post-quantum code-based KEM, and VecFalcon (same first author) speeds up Falcon post-quantum signing, so none of them substitutes for Curve25519.
+
+**Gotchas:**
+- X25519 keygen through the ENGINE does not compute a fresh key per call. It hands out keys from a pool held in OpenSSL secure heap: 128 X25519 keypairs refilled by 16 batch calls, and 8 for Ed25519. Each refill stalls roughly 0.22-0.33 ms, according to the paper.
+- The ENGINE's X25519 derive never checks for an all-zero shared secret; its provider returns success unconditionally. The OpenSSL X25519() it replaces returns failure on an all-zero output.
+- The published speedups are warm-start numbers (2,000 warm-up runs). Cold-start cost in real TLS traffic is 1.6-3.8x higher unless you run the authors' timer_warmup or heuristic_warmup helper pinned to the sibling hyperthread, which also works against the CPU's power saving.
+- After the ENGINE's reference count drops to zero, the global lock is freed and never recreated, because the init is guarded by run_once. Re-initializing the ENGINE in the same process therefore fails.
+
+**Status:** Stale research artifact (last commit June 2024, no releases, one open issue). It is LGPL-3.0, and the primitives are small enough to vendor, but the ENGINE is tied to an API that OpenSSL deprecated in 3.0 and removed in 4.0.
+
+[repo](https://github.com/Ji-Peng/eng25519_artifact) · [benchmark](https://ji-peng.com/uploads/usenix_security2024/paper.pdf)
+
+##### Falcon-Mitaka GPU (High Throughput Lattice-based Signatures on GPUs)  `CUDA`  `GPL-3.0`  `stale`  `Tier B`
+
+Batched CUDA Falcon-512/Mitaka-512 sign and verify; the paper reports 8.8-18.5x sign and 105-149x verify throughput over CPU AVX2 Falcon.
+
+**Beats:** Falcon NIST-submission AVX2-optimized CPU implementation (Fouque et al. [4]); Mitaka is compared only against its FP64 reference C. liboqs was not benchmarked. — The TPDS 2024 paper (Tables 5-6, CUDA 11, averaged over 30 runs, batch K=16,384) reports Falcon-512 at 27,908 sign/s and 1,913,380 verify/s on an RTX 3080, and 58,595 and 2,721,562 on an A100. Against the Falcon AVX2 CPU rates of 3,167 sign/s and 18,230 verify/s, that is 8.8x/105x (RTX 3080) and 18.5x/149x (A100); Falcon-1024 comes out at 5.35x/66x and 13.2x/114x. The CPU model, thread count and compiler for the AVX2 baseline are never stated. The paper's own 'vs AVX2' ratios are really against the FP64 reference, and its AVX2 Falcon-512 sign rate (3,167/s) is oddly below the FP64 reference's (3,587/s).
+
+**Known shortcoming:** GPU vs CPU: the AVX2 baseline's compiler, flags, CPU and thread count are unstated. The paper's ratios do not match its own tables (7.78x/52.43x are vs the FP64 reference; 20.03x/29.51x are Mitaka vs FP64). Real Falcon-512 RTX 3080 vs AVX2 is 8.81x/104.96x (derived).
+
+**Known shortcoming:** Benchmark harness only: hard-coded keys/seeds/nonces, no keygen or API, no cudaFree or error checks. ffSampling seeds every block from slot 0, so real per-signature seeds would share sampler randomness; norm-failed signatures are not retried; Mitaka PRNG keys come from rand(). Small batches lose: K=32 on an RTX 3080 gives 2,000 signs/s (16 ms), below the CPU AVX2 3,167/s. Repo's Mitaka verify now uses an integer NTT (Nov 2023) while the paper measured FP64. Falcon-512 only, sm_86, GPL-3.0.
+
+**Independent measurement:** TPDS 2024 tables: Falcon-512 on RTX 3080 vs AVX2 CPU 8.81x / 104.96x (derived).
+
+**How:** The work is split coarse- then fine-grain. K signatures run as K CUDA blocks, and inside each block the polynomial work is spread over threads (N/4 threads for the shared-memory FFT, N/2 for the NTT mod 12289, N for coefficient-wise ops), with small kernels fused under COMB_KER. Falcon's recursive ffSampling is rewritten as an iterative loop over an explicit stack (ffSampling_fft_dyntree), which avoids CUDA dynamic parallelism. That loop still runs one thread per signature and dominates signing time (65.8% of Falcon-512 CPU signing time per the paper's Table 1). Mitaka's sampler is split into a bulk ChaCha20 random-byte phase (N threads per signature) and a per-coefficient discrete-Gaussian phase, so Mitaka signing is fully data-parallel. Falcon verification runs entirely on integer NTT kernels, which is why the verify gains are much larger than the sign gains.
+
+**Use it when:**
+- Server-side bulk Falcon-512 verification with thousands of pending signatures on an NVIDIA GPU: on the RTX 3080 the paper reports 1.07M verifies/s at K=1024 (0.95 ms per batch) and 1.91M/s at K=16,384, against 18,230/s for the AVX2 CPU code.
+- Throughput-bound batch signing when latency of tens to hundreds of ms per batch is acceptable. On the A100, Falcon-512 reaches 58,595 signs/s at K=16,384 (280 ms per batch).
+- Comparing Mitaka with Falcon for parallel hardware: Mitaka-512 signing is 2.7-2.8x faster than Falcon-512 at K=16,384 on the RTX 3080 and A100.
+- Starting point for GPU FN-DSA/Falcon research (GPL-3.0): the iterative ffSampling, shared-memory FFT/NTT kernels and kernel-fusion patterns can be reused.
+
+**Skip it when:**
+- Latency-bound or small-batch signing. At K=32 on the RTX 3080, Falcon-512 signs only 2,000/s with 16 ms batch latency, below the paper's own CPU AVX2 figure of 3,167/s.
+- Anything production-like. Keys, seeds and nonces are test vectors, there is no keygen or real API, failed norm checks are not retried, the Mitaka sampler keys come from libc rand(), and there are no CUDA error checks or cudaFree calls.
+- Falcon-1024, Mitaka-1024 or FIPS 206 FN-DSA: only the 512 variants are in the repo, even though the paper benchmarks the 1024 variants.
+- Consumer or inference GPUs with weak FP64. Falcon signing is FP64-bound, so the A100 signs about 2.1x faster than the RTX 3080 at K=16,384, and the paper notes FP64 runs at 1/32 of the int32 rate on the RTX 3080 and T4.
+- Proprietary products that cannot accept GPL-3.0 copyleft, or settings that need side-channel review. The paper does not discuss constant-time or GPU timing leakage.
+
+**Integration:** source-drop · CUDA runtime (cudart) only · nvcc from CUDA 11.7 (Falcon Makefile) or CUDA 12.1 (Mitaka Makefile) with gcc as the host compiler; the paper lists CUDA 11 · NVIDIA GPUs. Both Makefiles hard-code -arch sm_86, and the README says it is tested on the RTX 3080 and A100; the paper also ran it on V100 and T4. No CPU fallback.
+
+**Vs siblings:** Pick it over GOLF when you need GPU Falcon code you can actually read and run. GOLF reports far higher Falcon throughput (420k sign/s on an RTX 4090), but no repository is catalogued for it. Pick VecFalcon instead when you care about per-signature latency on a CPU (SSE2/AVX2/AVX-512/NEON/RVV, 1.1-1.6x over c-fn-dsa); pick this one only for large GPU batches or to evaluate Mitaka.
+
+**Gotchas:**
+- ffSampling_fft_dyntree loads the sampler SHAKE state from scA[0..24] (batch slot 0) in every block instead of scA[bid*25+i]. With real per-signature seeds, every signature in a batch would draw the same sampler randomness; the harness hides this because all slots use the same seed.
+- A signature that fails the norm bound is not regenerated. is_short_half_gpu/check_norm only set a flag or printf 'short half detected', whereas the reference implementation restarts sampling.
+- The repo's Mitaka verify defaults to an integer NTT path added in November 2023 (FLOAT_VER is off), while the paper's Mitaka verify numbers used FP64 FFT, so re-runs will not match Table 5. Mitaka also allocates a BATCH×512×512-byte PRNG buffer, 256 MiB at BATCH=1024 and 4 GiB at 16,384.
+- Reported throughput includes host-device copies. Falcon rebuilds the full basis (complete_private) and the LDL tree for every signature, with no expanded-key fast path.
+
+**Status:** Stale: 9 commits, the last on 2023-11-14 (Mitaka integer verify), 5 stars and no issues. It is GPL-3.0 and small enough to copy as research code, but it needs a real API, key and nonce handling, and the RNG and retry bugs fixed before any real use.
+
+[repo](https://github.com/benlwk/Falcon-Mitaka) · [benchmark](https://eprint.iacr.org/2023/399.pdf)
+
 ### networking-and-servers
 
 #### event-loops-io
@@ -27856,6 +31467,212 @@ Rust exact-membership filter (partitioned two-level Ribbon cascade) that replace
 [repo](https://github.com/mozilla/clubcard) · [benchmark](https://github.com/mozilla/clubcard#application-to-crlite-and-performance)
 
 ## Copyleft — Unverified claims (tier C/D)
+
+### crypto-and-hashing
+
+#### aead-and-ciphers
+
+##### stdx-go ChaCha20 (Go simd/archsimd)  `Go`  `MIT (per LICENSE.txt and GitHub detection); the README contradicts this, saying 'The code is licensed under AGPL-3.0 (see LICENSE.txt)'`  `active`  `Tier C`
+
+Go ChaCha20 stream cipher written with experimental simd/archsimd (AVX2/AVX-512/NEON); claims 7.5x over x/crypto's scalar amd64 path.
+
+**Beats:** golang.org/x/crypto/chacha20 (the Go project's x/crypto module, not the std library proper). It is pure-Go scalar on amd64: the package has assembly only for arm64, ppc64x, s390x and loong64. — The author's blog reports XORKeyStream on 1 MB at 7,517.67 MB/s against 1,005.23 MB/s for golang.org/x/crypto/chacha20 (about 7.5x). The CPU is named only as an AMD EPYC Zen5-family part, with Go 1.27, GOEXPERIMENT=simd and GOAMD64=v4. On an unnamed arm64 host the result is 1,349.27 against 1,390.28 MB/s, i.e. no gain. These page numbers were not re-verified because kerkour.com was not fetched, but the public bench_test.go matches the described setup: 64 B to 1 MB, with a fresh cipher per iteration for both sides. The amd64 baseline is x/crypto's pure-Go scalar fallback. Nothing was compared against OpenSSL, libsodium or existing SIMD Go ChaCha20 code such as aead/chacha20 (AVX2 assembly), which stdx-go itself vendors as crypto/chacha.
+
+**Known shortcoming:** The 7.5x is SIMD against x/crypto/chacha20's pure-Go scalar code on amd64 (no assembly there); on arm64, where x/crypto has NEON assembly, there is no gain. Only the author's blog with a CPU family, no model (retiered B to C). README says 'NOT SAFE FOR PUBLIC USE'; license conflict (LICENSE.txt MIT vs README AGPL-3.0).
+
+**Known shortcoming:** Needs Go 1.27 with the experimental GOEXPERIMENT=simd (unstable API); backend files lack the goexperiment build tag, so it likely does not build without it. Raw keystream only; SetCounter allows counter rollback (x/crypto panics); tail padded to a full 8/16-block batch. Untagged, 3 stars.
+
+**How:** It generates many blocks at once with SIMD, written in Go's experimental simd/archsimd intrinsics rather than assembly. On amd64, the AVX-512 path computes 16 blocks (1 KiB) per iteration in a word-sliced layout, using VPROLVD rotates and a two-stage in-register transpose. The AVX2 path computes 8 blocks (512 B) in the column-major layout of the classic chachaAVX2_amd64.s: VPSHUFB byte shuffles do the 16- and 8-bit rotations, and the transpose is fused into the stores. arm64 uses a 4-block NEON path with VTBL rotations. The large amd64 gain exists mainly because x/crypto/chacha20 ships no amd64 assembly, so this is 8- to 16-way SIMD measured against one-block-at-a-time scalar Go.
+
+**Use it when:**
+- Pure-Go (no cgo) code on amd64 that XORs large ChaCha20 keystreams, roughly 4 KiB and up, where the 8- and 16-block batches are fully used. Examples: bulk file or stream encryption.
+- AVX-512 x86 servers such as Zen4/Zen5, where the 16-block path engages for inputs over 256 bytes. The 7.5x headline at 1 MB was measured on an AMD EPYC Zen5-family CPU.
+- Building your own ChaCha20-based construction when you can pin Go 1.27+ with GOEXPERIMENT=simd. The repo's own ChaCha20-BLAKE3 Go port does exactly this.
+- Protocols that need the original DJB ChaCha20 (64-bit counter, 8-byte nonce), which x/crypto/chacha20 does not expose.
+
+**Skip it when:**
+- Production or security-sensitive code. The author calls the code not production-ready, the repo README says 'NOT SAFE FOR PUBLIC USE', and there are no tagged releases.
+- arm64 (Graviton, Apple silicon). x/crypto already has NEON assembly there, and the author's own numbers put this package at about 97% of x/crypto's speed.
+- When you need authenticated encryption. There is no ChaCha20-Poly1305 or XChaCha20 here, so use golang.org/x/crypto/chacha20poly1305 or one of the AEAD siblings.
+- Builds that must stay on stable Go without experiments. simd/archsimd is still experimental in Go 1.27, and the release notes say its API is 'not yet considered stable', so a later Go release can break this code.
+- Messages of 64 bytes or less. They take the portable scalar path on every architecture, and no gain is documented for them.
+
+**Integration:** module (package github.com/skerkour/stdx-go/chacha20 inside the multi-package stdx-go module); vendoring the 7 non-test source files as a source-drop is more practical · Standard library plus the experimental simd/archsimd package (GOEXPERIMENT=simd). Tests and benchmarks also import golang.org/x/crypto/chacha20. Requiring the module pulls in stdx-go's go.mod, which has 25 direct requirements (pgx, minio-go, quic-go, wazero and others), though the chacha20 package itself imports none of them. · Go 1.27 (per go.mod), with GOEXPERIMENT=simd on amd64 and arm64. The blog run also used GOAMD64=v4; that detail was not re-verified. · amd64: runtime dispatch picks AVX-512 for inputs over 256 B, AVX2 for inputs over 64 B, and scalar otherwise. arm64: NEON for inputs over 64 B. Every other GOARCH uses portable scalar Go.
+
+**Vs siblings:** All catalogued siblings are C or Rust AEADs (chacha20poly1305-simd, libaegis, the Rust ChaCha20-BLAKE3 and others), so pick this only when you need a raw ChaCha20 keystream in pure Go on amd64 without cgo. For an authenticated Go construction from the same author, use the repo's crypto/chacha20blake3, which wraps this package; for a standardized AEAD, stay with x/crypto/chacha20poly1305 or a sibling.
+
+**Gotchas:**
+- The amd64 and arm64 backend files import simd/archsimd with no goexperiment.simd build tag; only chacha20_test.go has one. Without GOEXPERIMENT=simd, the package should therefore fail to compile on those architectures instead of falling back to the scalar code.
+- SetCounter lets you move the counter backward, while x/crypto's SetCounter panics on rollback to prevent accidental keystream reuse. Here, misuse silently reuses keystream.
+- The tail of each call is always padded to a full SIMD batch. A 257-byte input on an AVX-512 CPU still computes 16 blocks (1 KiB) of keystream, and 65-511 bytes on AVX2 still computes 8 blocks, so gains at mid sizes are smaller than the 1 MB headline.
+- The license is ambiguous: LICENSE.txt and GitHub say MIT, but the README says 'licensed under AGPL-3.0'. Settle this before vendoring.
+
+**Status:** Actively developed: 15 commits to the chacha20 path from 2026-07-23 to 2026-08-24. It is untagged, has 3 stars, is self-described as not production-ready and depends on an experimental Go feature; it is small enough to vendor for experiments once the MIT-versus-AGPL license question is settled.
+
+[repo](https://github.com/skerkour/stdx-go/tree/main/chacha20) · [benchmark](https://kerkour.com/golang-chacha20-encryption-simd-archsimd)
+
+#### crypto-hashes
+
+##### keccak-batch  `Rust`  `AGPL-3.0`  `active`  `Tier C`
+
+Rust crate that hashes 2/4/8 equal-length inputs at once with SIMD Keccak-256; ~5.5x per hash over keccak-asm (README).
+
+**Beats:** keccak-asm (assembly Keccak-256 backend behind Alloy's asm-keccak feature) and tiny-keccak scalar implementation — The crate's own perf example, run with cargo --release on an unnamed 'Zen-class AVX-512 part', measured 8-wide batched Keccak-256 at ~5.4x (64 B) and ~4-5x (4 KiB) per hash over its scalar path; open PR #15 names the maintainer's Zen 4 host as a Ryzen 9 7940HS and puts width-8 at ~3.5 us per 64 hashes. The tiny-keccak parity and keccak-asm comparisons (~1.3x over scalar; batch ~5.5x over keccak-asm) come from an unpublished same-binary harness; the public examples/perf.rs and benches/keccak.rs time only the crate's own scalar vs batch.
+
+**Known shortcoming:** Created 2026-07-02, ~3.2k downloads. CPU given only as 'Zen-class'; the keccak-asm/tiny-keccak comparison exists only in README prose, not in perf.rs or the benchmark code.
+
+**Known shortcoming:** README ratios do not compose (5.4x / 1.3x is ~4.2x, but it claims 5.5x over keccak-asm) and the external baselines come from an unpublished harness; hardware unnamed (PR #15 hints Ryzen 9 7940HS). Equal-length batches only (panics otherwise); single hashes run scalar; legacy Keccak-256 (0x01 padding), not SHA-3; aarch64 capped at 2-wide. AGPL; 1 star, 1 reverse dependency; MSRV 1.92.
+
+**How:** It does not speed up a single Keccak-f[1600] permutation. It runs one independent state per SIMD lane: 8 states in AVX-512 zmm registers, 4 with AVX2, 2 with SSE2/NEON/wasm simd128. The permutation is written once, generic over a small Lane trait (xor, andnot, rotate, splat, load, store). The 25-lane state is passed by value and rho/pi is unrolled so LLVM can keep the lanes in vector registers. The maintainers' disassembly (PRs #7 and #15) shows the AVX-512 build already fuses chi/theta into vpternlogq and turns the rotates into immediate vprolq. Spilling from register pressure on the 25-lane state is the remaining bottleneck, and the gather/scatter transpose costs about 9%.
+
+**Use it when:**
+- Merkle/BMT levels, proof systems or sampling loops that hash many independent 64-byte (one-permutation) inputs in Ethereum/Swarm Keccak-256
+- x86-64 servers with AVX-512F (8-wide, ~5.4x over the crate's scalar path at 64 B) or AVX2 (4-wide, ~3.1x at 64 B)
+- Bulk hashing of equal-length blocks up to multi-KiB (README reports ~4-5x at 4 KiB, 8-wide)
+- wasm with simd128 enabled at build time, where the 2-wide path took the 64-byte hash from ~379 ns to ~222 ns under wasmtime
+- Rust code already generic over digest::Digest or alloy's Keccak256 shape that also needs a batch entry point
+
+**Skip it when:**
+- Single-message or latency-bound hashing: keccak256/Keccak256 run the scalar path, which the README puts at parity with tiny-keccak and ~1.3x slower than keccak-asm
+- Inputs of mixed lengths: a batch absorbs in lockstep and panics on unequal lengths, so you must bucket inputs by length yourself
+- FIPS-202 SHA3-256, SHAKE or other Keccak widths: only legacy-padded Keccak-256 with a 32-byte output is implemented
+- Proprietary or closed-source products: AGPL-3.0-or-later copyleft, and there is no C/C++ API
+- aarch64 servers looking for more than 2-wide: aarch64 is fixed at NEON width 2, and there is no SVE path or use of the ARMv8.2 SHA3 instructions
+
+**Integration:** crate · digest 0.11 (optional, default-on feature 'digest'); otherwise none (std required: dispatch uses is_x86_feature_detected!, std::env and a std atomic) · Rust 1.92 (edition 2024) · x86-64 (SSE2 baseline 2-wide; AVX2 4-wide; AVX-512F+AVX2 8-wide, runtime-detected), aarch64 (NEON 2-wide), wasm32 (2-wide only with +simd128 at compile time, else scalar), other targets scalar
+
+**Vs siblings:** Pick it over KangarooTwelve/XKCP when you must keep Ethereum/Swarm Keccak-256 output and want a native Rust crate. XKCP also ships parallel Keccak-p[1600] times2/times4 kernels, but in C. BLAKE3 or blake2_simd are faster choices only when you are free to change the hash function.
+
+**Gotchas:**
+- The detected width and the KECCAK_BATCH_NO_AVX512 / KECCAK_BATCH_NO_AVX2 caps are read once and cached per process, so set the env vars before the first hash
+- keccak256_many::<1> is a compile error, but keccak256_many_into accepts a count of 0 or 1 and runs the scalar path
+- The README numbers don't compose: ~5.4x over scalar divided by keccak-asm's ~1.3x over scalar gives ~4.2x, yet the README claims ~5.5x over keccak-asm
+- AVX-512 kernels require only avx512f (plus avx2 for batch tails); on parts where AVX-512 downclocks, the README suggests capping to AVX2
+
+**Status:** Active but very young: created 2026-07-02, one crates.io release (0.1.0, ~3.2k downloads, single reverse dependency nectar-primitives), last main commit 2026-07-24, README still says pre-release. AGPL-3.0-or-later limits use to copyleft-compatible projects.
+
+[repo](https://github.com/nxm-rs/keccak-batch) · [benchmark](https://github.com/nxm-rs/keccak-batch/blob/main/README.md)
+
+#### encoding
+
+##### hx (binary-to-hex-simd, NEON table lookup)  `Rust`  `GPL-3.0`  `abandoned`  `Tier C`
+
+Hobby Rust crate that hex-encodes bytes with an AArch64 NEON tbl lookup in inline asm, ~7.9x its own scalar loop.
+
+**Beats:** naive byte-by-byte hex encoding — On an Apple M1 MacBook (on battery, not a quiet machine), nightly cargo bench over 12 MiB of random bytes measured the repo's own branchy scalar loop at 14.86 ms per iteration (0.79 GiB/s), the std::simd arithmetic version at 3.39 ms (3.46 GiB/s) and the NEON tbl asm at 1.88 ms (6.24 GiB/s). That is about 7.9x and 4.4x over scalar, with a best single run of 6.53 GiB/s. The rustc version and flags are not given, and nothing was compared against the hex crate, const-hex or std formatting.
+
+**Known shortcoming:** Baseline is the author's own naive scalar loop (7.9x derived); NEON table lookup on M1 only, noisy benchmark; nightly Rust with no rustc version stated.
+
+**Known shortcoming:** NEON asm reads out of bounds (`ldp q0,q1,[src],#16` loads 32 bytes but advances 16, overrunning the input by 16 bytes) and writes registers declared input-only (UB per the Rust Reference). AArch64 asm has no cfg gate, and current nightly moved SimdPartialOrd, so it likely does not build unmodified. GPL-3.0, not on crates.io, uppercase only, one test vector; const-hex uses the same NEON tbl technique on stable Rust.
+
+**How:** The neon_tbl loop takes 16 input bytes per iteration. It splits them into high-nibble and low-nibble vectors (ushr #4 and and 0x0F), interleaves those into output order with zip1/zip2, then runs two tbl.16b lookups against the 16-byte table "0123456789ABCDEF" held in a register, and writes all 32 output bytes with one stp. This is the standard SIMD shuffle-table hex encoder (pshufb on x86), hand-written as Rust inline asm; the first len % 16 bytes are converted scalar before the loop. The portable_simd variant computes digits arithmetically instead (a nibble >= 10 compare selects an offset of 'A'-10 or '0', which is then added) on std::simd u8x16 and interleaves the results. The baseline pushes two bytes per input byte into a Vec, with one branch per nibble.
+
+**Use it when:**
+- Learning material: about 100 lines that show a NEON tbl hex encoder, Rust inline asm (asm!, clobber_abi, post-indexed ldp/stp) and a cargo bench harness comparing it with std::simd and scalar code on the same 12 MiB input.
+- Reproducing or extending the M1 experiment (0.79 -> 3.46 -> 6.24 GiB/s) on an AArch64 machine with a Rust nightly toolchain.
+- As a sketch to port the five-instruction core (ushr/and/zip/tbl/stp) into your own code after fixing the over-read and asm-operand issues listed under gotchas, and only if GPL-3.0 is acceptable for the copied code.
+
+**Skip it when:**
+- Any production use. The sibling const-hex uses the same NEON technique (vqtbl1q_u8 lookup plus vzipq_u8) through intrinsics on stable Rust 1.64+, with runtime NEON detection, x86 SIMD paths, lower- and upper-case output, validated decoding and an MIT OR Apache-2.0 license.
+- x86-64 or other non-AArch64 targets. neon_tbl.rs is compiled unconditionally and contains AArch64 asm, and to_ascii_hex picks the backend with cfg!() (both branches are compiled), so as written the crate should fail to build there even though a portable_simd fallback exists. This is inferred from the source and was not tested.
+- Stable Rust, or a current nightly without edits. lib.rs needs #![feature(portable_simd)] and #![feature(test)], and portable_simd.rs imports std::simd::SimdPartialOrd, which current nightly docs list only under std::simd::cmp and the prelude. No toolchain is pinned and there is no Cargo.lock.
+- Projects under MIT, Apache or other permissive licenses, because the code is GPL-3.0.
+- When you need lower-case hex (what the hex crate and {:02x} produce), decoding, or an allocation-free API.
+
+**Integration:** source-drop (an unpublished crate named hx; it could be used as a git dependency) · None at runtime. Dev-dependencies are fastrand 1.8 and lazy_static 1.4. Cargo.toml also declares a cc 1.0.78 build-dependency, but the tree has no build.rs; it is left over from a C extension removed in January 2023. · Rust nightly, edition 2021, with the portable_simd and test features. The nightly version is not pinned; the code comments date it to 2023-01-24. · In practice AArch64 with NEON only; benchmarked on an Apple M1. The portable_simd path is written for any target but cannot be reached on non-AArch64 targets while neon_tbl is compiled unconditionally.
+
+**Vs siblings:** Only as a teaching reference. For real code pick const-hex (the same NEON tbl technique plus x86 SIMD and decoding on stable Rust, permissively licensed), or fast-hex (zbjornson) for C++ on AVX2. hx's only unique value is its side-by-side comparison of std::simd and hand-written NEON asm.
+
+**Gotchas:**
+- The asm loop loads with `ldp q0, q1, [src], #16`, which reads 32 bytes but advances only 16, and q1 is never used. The last iteration therefore reads 16 bytes past the end of the input slice. That is an out-of-bounds read that can fault when the input ends at a page boundary, and it also doubles load traffic.
+- The asm post-increments the source and destination pointers and decrements the length counter in operands declared only as in(reg). The Rust Reference says registers not declared as outputs must hold the same value on exit, or behavior is undefined. The code only works when register allocation happens to overlap those inputs with clobber_abi("C") lateouts, which the Reference says code should not rely on.
+- Test coverage is one 57-byte vector checked across all three implementations plus two 4-byte doc-tests, which never reach the SIMD loop. There are no fuzz, property, empty-input or unaligned-length tests.
+- Every benchmark iteration includes allocating a fresh 24 MiB output String, the reported GiB/s counts input bytes, and there is only a single noisy laptop run with no rustc version or flags.
+
+**Status:** Abandoned: 26 commits between 2023-01-22 and 2023-01-25, with 0 stars, forks, issues or PRs. It is GPL-3.0, unpublished, and needs nightly Rust (probably with edits) to build today, so treat it as a reference rather than a dependency.
+
+[repo](https://github.com/eddieantonio/binary-to-hex-simd) · [benchmark](https://github.com/eddieantonio/binary-to-hex-simd#readme)
+
+##### Turbo-Base64  `C`  `GPL-3.0`  `active`  `Tier C`
+
+GPL-3 C base64 codec with SSSE3/AVX2/AVX-512 VBMI/Neon kernels; author's tables beat Chrome's codec 7-11x, aklomp 11-70%.
+
+**Beats:** base64 (RFC 4648 encode/decode) — These are the author's own tables, and the competitor harness is not published. On an i7-9700K with gcc 11.2 (2022), the AVX2 path encodes/decodes a 1 MB buffer at 29.1/29.7 GB/s, against 2.5/4.3 for Google Chrome's codec (about 11.4x/6.9x) and 26.2/22.5 for aklomp AVX2; the Ryzen 9 7950X AVX-512 VBMI figures (77.6/76.7 GB/s) have no external row. As a partial outside check, base64-turbo's criterion harness (upstream per-file flags, default partial-check build) measured it at 80.7/107.8 GiB/s at 64 KiB on Zen 5 EPYC 9R45, against 13.5/27.9 for Rust's base64 crate.
+
+**Known shortcoming:** First-party numbers from a harness (xtb64.mak / xb64test.h) that is not public, with no compiler flags stated. Earlier ratio mixed 7950X numbers with an i7 Chrome row; corrected i7 1 MB figures: 29,086/29,748 MB/s vs Chrome 2,541/4,289 (~11.4x encode, ~6.9x decode).
+
+**Known shortcoming:** GPL-3.0. Codec untouched since 2023-08 (2025-26 commits are contributor build fixes); open ASan issue #26 (encoder over-read/over-write) unanswered since 2024-09. Default build validates only part of the input (AVX2 main loop checks 1 of 4 vectors); the CMake FULLCHECK option is a no-op typo, only `make FULLCHECK=1` validates fully. Lazy CPU dispatch is not thread-safe. No base64url, whitespace or streaming. ClickHouse dropped it in 2023 (GPL, init race) for aklomp/base64.
+
+**Independent measurement:** base64-turbo (hacer-bark) harness, Zen 5, 64 KiB: Turbo-Base64 80.7 / 107.8 GiB/s enc/dec.
+
+**How:** The SIMD kernels follow Mula and Lemire's AVX2 base64 method (arXiv 1704.00605, cited in the source): pshufb splits 3-byte groups, mulhi/mullo shifts unpack 6-bit fields, and a pshufb offset table maps them to ASCII. Decode uses aqrit's hashed-LUT variant (avg_epu8 + two pshufb lookups), with maddubs/madd to pack 6-bit values back into bytes. The AVX-512 VBMI path does encode with vpermb + vpmultishiftqb, per Mula's AVX-512 notes. Loops are unrolled 128-256 bytes with software prefetch. By default only part of the input is validated (in the AVX2 main loop, 1 of every 4 32-byte vectors), which removes most of the check work. The fast scalar path (tb64x) uses an 8 KB 12-bit encode table and four 1 KB decode tables.
+
+**Use it when:**
+- x86-64 servers with AVX-512 VBMI (Ice Lake or later, Zen 4/5) moving 10 KB to multi-MB standard-base64 blobs, where GPL-3 or a commercial license is acceptable. The author's Ryzen 9 7950X table shows 77.6/76.7 GB/s at 1 MB, against 45.3/46.7 GB/s for its own AVX2 path. On Zen 5 in base64-turbo's harness it still leads at 10 MB (37.7/55.8 vs 29.4/45.7 GiB/s).
+- AVX2-only machines where you want more than aklomp/base64 or fastbase64 give. On the author's i7-9700K, tb64v256 beats aklomp b64avx2 by 11%/32% (encode/decode) at 1 MB and 18%/70% at 50 KB.
+- Apple M1 or other aarch64 targets built with clang: the M1 50 KB table shows 24.0/15.4 GB/s against aklomp's neon64 at 19.1/12.5.
+- CPUs with no usable SIMD path (the RISC-V build is scalar only): the tb64x scalar codec runs 6.5/5.5 GB/s at 1 MB on the i7-9700K, against Chrome's scalar codec at 2.5/4.3.
+
+**Skip it when:**
+- You can't ship GPL-3 and won't buy a license. ClickHouse dropped it for aklomp/base64 in Sept 2023 (PR 54119) over GPL-3 and its non-thread-safe initialization, and accepted slower base64 in exchange.
+- You need base64url (JWT, URLs), MIME/PEM line breaks, whitespace tolerance or forgiving decoding. None is supported, and tb64dec rejects any input over 20 bytes whose length is not a multiple of 4.
+- You rely on the decoder to reject every malformed input. The default build checks only part of the input, so corrupted characters in the unchecked parts decode to garbage without an error. Full checking needs make FULLCHECK=1, and the CMake FULLCHECK option is broken (it defines DB64CHECK instead of B64CHECK).
+- Memory-safety-sensitive code run under ASAN/fuzzers with exact-size buffers. Open issue #26 (Sept 2024, no reply) reports tb64enc reading past in+inlen and writing past tb64enclen(inlen) for inlen=94.
+- You need independently reproducible cross-library numbers. The competitor harness (xtb64.mak, xb64test.h) is not in the repo, and the README tables were last updated in Aug 2023.
+
+**Integration:** static lib or shared lib (make builds libtb64.a/libtb64.so; the CMake target is turbo::base64); a handful of .c files, so a source-drop also works · none (libc only) · C (no standard stated). The README lists GCC>=4.6 or Clang>=3.2 on x86, GCC>=6.3 or Clang>=6.0 on aarch64, Xcode>=9, VS2017 and ppc64le GCC>=8. The AVX-512 file needs -mavx512vbmi support; otherwise build with NAVX512=1. The CMake build needs 3.15+. · x86/x86-64 with runtime dispatch (scalar, SSSE3, AVX, AVX2, AVX-512 VBMI); aarch64 Neon and ppc64le Power9 Altivec chosen at compile time; s390x and big-endian are supported; RISC-V gets only the scalar plus generic v128 build
+
+**Vs siblings:** Pick it over aklomp/base64 (BSD-2; ClickHouse's 2023 replacement) or the research codecs fastbase64/base64simd only when you need the last 10-70% of AVX2 throughput, or its AVX-512 VBMI path, on standard-alphabet data and GPL-3 or a commercial license is fine. In Rust, base64-turbo (0BSD, fully validated, base64url) ties it in cache and trails only on DRAM-sized buffers; simdutf is the choice for base64url or forgiving decoding.
+
+**Gotchas:**
+- Buffers: tb64enc does not write a trailing NUL, so allocate tb64enclen(n)+1 if you terminate the output yourself (issue #23). Open issue #26 shows it can also touch bytes past both buffer ends, so leave slack.
+- Validation is partial unless you build with FULLCHECK=1 through make. A return of 0 means both 'invalid' and 'empty input'. Unpadded inputs of 20 bytes or fewer are decoded best-effort (ClickHouse PR 54119 notes this), while longer ones are rejected.
+- tb64ini(0,1) turns on the short-string AVX2 mode (_tb64v256*). Its decoder skips most checks and may read up to 32 bytes past the input end, and a ClickHouse bug (PR 31797) had this path leaking the next string's bytes into encoded output. The mode is ignored on AVX-512 machines.
+- On x86-64 the CMake build compiles the scalar core with -march=native, so the library it produces may not run on older CPUs; the makefile does not do this. README MB/s figures are counted on base64-text size for both encode and decode (issue #11), so raw-byte throughput is 0.75x.
+
+**Status:** The codec itself has not changed since the Aug 2023 release. Later commits (2025-2026) are contributor build fixes for Apple Silicon and RISC-V, and the 2024 ASAN report is still unanswered. It is GPL-3 with a commercial license on request, and small enough to vendor if the license works for you.
+
+[repo](https://github.com/powturbo/Turbo-Base64) · [benchmark](https://github.com/powturbo/Turbo-Base64#benchmark-incl-the-best-simd-base64-libs)
+
+#### non-crypto-hashes
+
+##### MuseAir (C++ port)  `C++`  `GPL-3.0`  `active`  `Tier C`
+
+GPL-3.0 C++20 header port of deprecated MuseAir v0.4-rc4. Ties wyhash in bulk, slower on short keys.
+
+**Beats:** wyhash — The only performance data is the author's own SMHasher3 speed runs, shown as PNG charts, on an i7-12700K under Windows/MSYS with GCC 11.3.0 (flags not stated; GiB/s at a nominal 3.5 GHz). They show MuseAir at parity with wyhash v4.2 in bulk (about 33-34 GiB/s), BFast at about 42 GiB/s (about 1.2x, colour-ambiguous), and both slower than wyhash and rapidhash on 1-31-byte keys. The charts predate the current code and may not be of this port at all. SMHasher3's public results (MuseAir v0.3 bfast 8.64 bytes/cycle vs wyhash 6.98) come from a different, CC0 implementation of an older algorithm version.
+
+**Known shortcoming:** C++ port of eternal-io/museair (listed separately). Its own chart shows it slower than wyhash/rapidhash on 1-31 byte keys and only about equal to wyhash in bulk (BFast ~42 vs ~34 GiB/s, read from chart); README's 33.2 GiB/s does not match the chart. GCC 11.3 MSYS, flags not stated. License is inconsistent (badge GNU, README MIT, LICENSE file GPL-3.0): treat as GPL-3.0.
+
+**Known shortcoming:** Ports algorithm v0.4-rc4; the upstream CHANGELOG (Jul 2026) says all pre-v2 versions are compromised, and the port's 17-32 byte path has the same seed-free collision structure (code reading); v0.4-rc4 128-bit failed SMHasher3. Charts predate the 2026-02 rewrite and the log builds SMHasher3's own museair.cpp, so they may not measure this port. README claims asm/SIMD but the code has none. 7 stars, 4 commits, no CI or tests. Use eternal-io/museair v2 (CC0) instead.
+
+**How:** The core is scalar 64x64->128-bit multiplication (__uint128_t, or _umul128 on MSVC x64) with no SIMD or assembly, despite the README's claims. Inputs over 96 bytes go through a six-word 'ring accumulator'. Each 16-byte step XORs two input words into adjacent state words, wide-multiplies them, and feeds the low/high halves into the next word, so the six multiplies per 96 bytes run in parallel through instruction-level parallelism. Standard mode adds the product into the state (+=); BFast overwrites it (=), which saves work but loses protection against 'blinding multiplication' (a zero multiplicand wiping state). Inputs of 32 bytes or less take a branchy short path with two to four wide multiplies, and 33-96 bytes take an unrolled partial-body path.
+
+**Use it when:**
+- You specifically want MuseAir v0.4-rc4 hash values in a C++20 codebase that can accept GPL-3.0, for example to match outputs from a system already pinned to that version.
+- Bulk hashing of trusted, non-adversarial buffers of a few hundred bytes and up with the BFast variant. The author's i7-12700K chart shows about 42 GiB/s (at a nominal 3.5 GHz) against about 34 GiB/s for wyhash v4.2, though the chart's line colours are ambiguous and predate the current code.
+- Portable scalar hashing on any 64-bit compiler with __uint128_t; there are no CPU-feature requirements such as AES-NI or AVX2.
+
+**Skip it when:**
+- Any new use. Upstream's CHANGELOG says a seed-independent trivial-collision flaw (eternal-io/museair#3, July 2026) means 'all previous versions of the algorithm are deprecated, and should be considered compromised'. The fixed algorithm is v2; this port is still on v0.4-rc4. The port's 17-32-byte short path has the flawed structure: the second 16 bytes pass through seed-free multiplies and are XORed into the state, so colliding pairs can be built for every seed.
+- The 128-bit output. Upstream says the v0.4-rc4 128-bit variant 'had insufficient output diffusion and actually failed the SMHasher3 test suite', and the fix came in a later version.
+- Hash-table keys and short strings (1-31 bytes). By the port's own chart, MuseAir and BFast take more cycles than wyhash and rapidhash at nearly every length: about 18.6 vs 15.1 at 1-4 bytes, 14.6 vs 11.0 at 12-16 bytes, and about 35-45 vs 27 at 17-31 bytes.
+- Proprietary or permissively licensed products. The LICENSE file and the header are GPL-3.0, even though the README says MIT; upstream's own museair.cpp reference is CC0.
+- Projects that need a maintained, tested dependency. The repo has 7 stars and 4 commits, no releases, no tests beyond a main.cpp verification-code check, and no CI (the README's CI badge points to a workflow that does not exist).
+
+**Integration:** header-only · none (standard library only; <intrin.h> on MSVC x64) · C++20 (uses <bit> std::endian/std::rotl, [[likely]]); the demo CMakeLists needs CMake 3.10+. The repo topics say cpp17, but the code needs C++20. · Any 64-bit target with __uint128_t (GCC/Clang) or MSVC x64 _umul128; a 32x32 fallback exists for others. Big-endian needs the caller to pass ByteSwap=true. Only x86-64 Windows/MSYS results are shown.
+
+**Vs siblings:** Rarely. For MuseAir itself, prefer the upstream eternal-io/museair (Rust crate 0.6.0 or its CC0 museair.cpp reference, both algorithm v2 with the collision fix). For short keys in C/C++, wyhash, rapidhash and a5hash are faster, and a5hash posts 26.91 SMHasher3 cycles against wyhash's 29.31. Pick this port only if you must reproduce v0.4-rc4 outputs from a C++20 header and GPL-3.0 is acceptable.
+
+**Gotchas:**
+- The README contradicts the code in several places. It says MIT, but the LICENSE file is GPL-3.0. It mentions 'platform-specific assembly' and 'SIMD', but there is none. It describes BlindFast as trading 'accuracy'; in fact BFast gives up blinding-multiplication resistance, and upstream notes that 64-bit BFast has a fixed 8-byte prefix that makes bytes 9-16 irrelevant for 9-16-byte inputs.
+- The benchmark charts were last updated in the June 2025 commit, before the February 2026 rewrite to 0.4-rc4. The SMHasher3 build log shown compiles SMHasher3's own hashes/museair.cpp, and nothing shows that this port's header was the code measured. The README's '33.2 GiB/s' also disagrees with the chart.
+- ByteSwap is not auto-detected. The README example always uses hash<false>, so on big-endian hosts it produces different values from the little-endian reference unless you pass std::endian::native != std::endian::little, as main.cpp does.
+- hash() and hash_128() are non-const, non-static member functions, so they cannot be called on a const MuseAir object. Correctness is checked only by self-generated verification codes in main.cpp, which the README does not cross-reference with upstream.
+
+**Status:** Nominally active (last commit 2026-02-23), but a one-person GPL-3.0 port stuck on algorithm v0.4-rc4, which upstream deprecated as compromised in July 2026; small enough to vendor, but the upstream CC0 v2 code is the better starting point.
+
+[repo](https://github.com/Twilight-Dream-Of-Magic/museair-cpp) · [benchmark](https://github.com/Twilight-Dream-Of-Magic/museair-cpp)
 
 ### networking-and-servers
 
