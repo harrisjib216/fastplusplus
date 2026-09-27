@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/gaspardpetit/base64",
+  "one_liner": "Small BSD-3 C/C++ Base64 codec with AVX2/NEON kernels; edges out aklomp/base64, simdutf and Turbo-Base64 at 32 KiB.",
+  "what_it_does": "One-shot RFC 4648 Base64 encode/decode into caller-provided buffers, with no heap allocation in the C API. The C API is base64_encode / base64url_encode / base64_decode (standard alphabet only) / base64url_decode (accepts both alphabets, even mixed) / base64_decode_unchecked, plus base64_compact and base64_decode_whitespace to strip bytes 0x00-0x20 in place before decoding. Errors come back as BASE64_ERROR ((size_t)-1). A thin C++ layer (base64::encode/decode on std::string) throws std::invalid_argument or returns bool. It is not a drop-in for aklomp/base64: that library's API is streaming with a codec-selection flag; this one is plain one-shot calls.",
+  "how_it_is_fast": "The x86-64 backend follows the Muła/Lemire AVX2 recipe. Encoding unpacks 6-bit fields with vpmulhuw/vpmullw and translates them with a vpshufb offset table. Decoding packs with vpmaddubsw + vpmaddwd, and its validation hash tables are taken from simdutf (see THIRD_PARTY_NOTICES). The author's own gains are in scheduling and tails: four 24-byte encode blocks per iteration using overlapping 256-bit loads, four 32-byte decode blocks per iteration, errors accumulated in a vector and checked once at the end, separate checked/unchecked and standard/URL-safe loops, and hand-tuned short-length decoders for 24-84 characters. The portable scalar path uses a 64x64 two-character encode table (12 input bits per lookup) and four position-shifted 256-entry uint32 decode tables that are OR-ed together, with invalid characters caught by a single threshold compare per 12 characters.",
+  "when_to_use": [
+    "In-memory encode/decode of payloads from about 256 B to 64 KiB on AVX2 x86-64 or AArch64, where it led or tied the published combined-throughput rankings at 256 B, 1 KiB, 32 KiB and 64 KiB.",
+    "Decode-heavy workloads such as JSON/HTTP/JWT payloads. Its lead is clearer on decode (Linux 32 KiB: 18.15 vs 16.21 GB/s for aklomp) than on encode.",
+    "When you want Turbo-Base64-class AVX2 speed under a permissive license: in the benchmark README's table Turbo-Base64 is GPL-3.0, while this is BSD-3-Clause.",
+    "Portable or header-only builds where you cannot use intrinsics. The scalar path alone (2.66 GB/s combined at 32 KiB on Windows) beat every other architecture-neutral codec in the benchmark, e.g. Chromium modp_b64 at 1.96 GB/s.",
+    "When you need something easy to vendor: a handful of .c/.h files, BSD-3, no dependencies, and a GNU-coreutils-compatible CLI in the same repo."
+  ],
+  "when_not_to_use": [
+    "On AVX-512 hardware, or when you need to be sure you have the fastest codec there. There is no AVX-512 backend, and none of the three benchmark CPUs (i9-13900K, Ryzen 7 5700G, Apple M4) exercises the AVX-512 kernels in simdutf or base64-avx512.",
+    "On x86-64 without AVX2 (pre-Haswell), 32-bit x86, or MSVC on ARM64. Dispatch only covers _M_X64 / __x86_64__ AVX2 and __aarch64__ NEON, and everything else gets the scalar path. There is no SSSE3/SSE4 middle tier like aklomp/base64 has.",
+    "Streaming or chunked encode/decode, or line-wrapped (MIME/PEM) input. The API is one-shot, and whitespace makes the decoder fail unless you first run base64_compact (which mutates your buffer). Only the CLI does chunking and wrapping.",
+    "Encode-only workloads on Linux or macOS: aklomp/base64 encoded faster at 32-64 KiB on the Ryzen 5700G (22.88 vs 21.21 GB/s at 32 KiB), and on the M4 the two were within 1%.",
+    "Production code that needs a track record. The repo was created 2026-09-14, has 0 stars, one tag (v1.0.0) and no fuzzing in CI (the CI runs CLI ctest and a GNU coreutils oracle on valid and garbage input), and all the performance evidence comes from the author's own benchmark."
+  ],
+  "integration": {
+    "form": "source-drop (compile base64.c or base64.cpp, plus base64_avx2.c with -mavx2 or /arch:AVX2, or base64_neon.c) or header-only (BASE64_HEADER_ONLY / BASE64_CPP_HEADER_ONLY, scalar only)",
+    "dependencies": "none (the C++ layer uses <string> and <stdexcept>; the CLI needs CMake 3.25+)",
+    "min_toolchain": "C99-style C (the CLI is built as C11); the C++ wrapper writes through std::string::data(), so it needs C++17. Benchmarked with MSVC 19.51, Clang 20.1 and AppleClang 21; runtime AVX2 dispatch needs MSVC x64 or GCC/Clang (__builtin_cpu_supports).",
+    "platforms": "any (scalar); x86-64 with AVX2, detected at runtime including OS YMM-state support; AArch64 NEON selected at compile time",
+    "thread_safety": "Not documented. The functions are stateless and write only to caller buffers, and the MSVC AVX2-detection cache uses InterlockedCompareExchange, so concurrent calls on distinct buffers look safe from reading the code.",
+    "drop_in_for_baseline": "partial — equivalent padded RFC 4648 output and one-shot semantics, but a different API from aklomp/base64 (no streaming state, no codec flags, no line handling), so call sites need rewriting."
+  },
+  "gotchas": [
+    "Header-only mode is always scalar, so you get about 2.7 GB/s and not the 10+ GB/s SIMD figures. The SIMD speed needs the compiled build with base64_avx2.c built using -mavx2 or /arch:AVX2 and linked in.",
+    "The C++ base64::decode calls base64url_decode, so it quietly accepts URL-safe and mixed alphabets. For strict standard-alphabet validation, use the C base64_decode.",
+    "base64_decode_unchecked checks only length and padding: invalid characters produce unspecified bytes. The scalar tail also does not appear to reject non-zero trailing bits, so non-canonical encodings decode instead of failing.",
+    "The checked SIMD decoder writes output before reporting an error, and its block stores reach up to 4 bytes past each block's decoded bytes. Size the output with base64_decoded_max_size() and treat the whole buffer as garbage on BASE64_ERROR. Input and output must not overlap."
+  ],
+  "pick_this_over_siblings_when": "Pick it over Turbo-Base64 when you need a BSD license rather than GPL-3.0 and are fine with a slightly faster but unproven codec; pick it over aklomp/base64 or simdutf for in-memory AVX2/NEON decode of payloads up to 64 KiB. Stay with aklomp/base64 for streaming, SSSE3/AVX-512 tiers or maturity, and with simdutf for WHATWG forgiving-base64 (whitespace-tolerant) decoding or AVX-512 machines.",
+  "verified_claims_summary": "In the author's base64-benchmark (32 B to 64 KiB, Release builds, default wrapper-inclusive reports), combined 32 KiB encode+decode on an i9-13900K with MSVC 19.51 /O2 /arch:AVX2 was 11.16 GB/s, against 10.21 for Turbo-Base64, 9.12 for aklomp/base64 and 9.08 for simdutf 9.2.0 (about 1.09-1.23x). The Ryzen 7 5700G (Clang 20.1) and M4 (AppleClang 21) runs led by only 1-3% (9.78 vs 9.49 GB/s aklomp; 7.60 vs 7.52 GB/s simdutf in the current page data, derived from the page's result files). Turbo-Base64 was not measured on Linux or macOS, and the README's macOS figure (7.179 GB/s, rank 2) is older than the refreshed page data.",
+  "status_note": "Active as of 2026-09-18 (tag v1.0.0) and BSD-3-Clause with no dependencies, so it is easy to vendor, but it is a two-week-old, 0-star, single-author project whose only benchmark is also the author's.",
+  "sources_read": [
+    "https://github.com/gaspardpetit/base64",
+    "https://github.com/gaspardpetit/base64/blob/main/README.md",
+    "https://github.com/gaspardpetit/base64/blob/main/base64.h",
+    "https://github.com/gaspardpetit/base64/blob/main/base64.c",
+    "https://github.com/gaspardpetit/base64/blob/main/base64.hpp",
+    "https://github.com/gaspardpetit/base64/blob/main/base64.cpp",
+    "https://github.com/gaspardpetit/base64/blob/main/base64_avx2.c",
+    "https://github.com/gaspardpetit/base64/blob/main/base64_avx2.h",
+    "https://github.com/gaspardpetit/base64/blob/main/base64_neon.c",
+    "https://github.com/gaspardpetit/base64/blob/main/THIRD_PARTY_NOTICES.md",
+    "https://github.com/gaspardpetit/base64/blob/main/.github/workflows/cli.yml",
+    "https://github.com/gaspardpetit/base64/blob/main/cli/README.md",
+    "https://github.com/gaspardpetit/base64/blob/main/cli/CMakeLists.txt",
+    "https://github.com/gaspardpetit/base64/blob/main/cli/tests/test_api.c",
+    "https://github.com/gaspardpetit/base64/commits/main",
+    "https://github.com/gaspardpetit/base64/tags",
+    "https://github.com/gaspardpetit/base64-benchmark",
+    "https://github.com/gaspardpetit/base64-benchmark#compared-implementations",
+    "https://github.com/gaspardpetit/base64-benchmark/commits/main",
+    "https://github.com/gaspardpetit/base64-benchmark/issues",
+    "https://gaspardpetit.github.io/base64-benchmark/",
+    "https://gaspardpetit.github.io/base64-benchmark/result/encode-msvc1951.js",
+    "https://gaspardpetit.github.io/base64-benchmark/result/decode-msvc1951.js",
+    "https://gaspardpetit.github.io/base64-benchmark/result/encode-clang20.js",
+    "https://gaspardpetit.github.io/base64-benchmark/result/decode-clang20.js",
+    "https://gaspardpetit.github.io/base64-benchmark/result/encode-clang21-macos.js",
+    "https://gaspardpetit.github.io/base64-benchmark/result/decode-clang21-macos.js",
+    "https://github.com/aklomp/base64"
+  ],
+  "confidence": 0.62
+}
