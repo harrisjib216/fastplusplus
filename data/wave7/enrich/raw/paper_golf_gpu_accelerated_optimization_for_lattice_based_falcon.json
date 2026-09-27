@@ -1,0 +1,57 @@
+{
+  "id": "https://doi.org/10.1109/TIFS.2025.3599681",
+  "one_liner": "CUDA batch port of Falcon-512 signing and verification, one signature per GPU thread; 70x/369x the reference's published CPU throughput.",
+  "what_it_does": "GOLF is an IEEE TIFS 2025 paper (ePrint 2025/749) that ports the Falcon reference implementation to CUDA for server-side batch signing and verification. Every GPU thread runs a whole sign or verify on its own key and message slot, and the code is fused into just three __global__ kernels (keygen, sign, verify), with everything else as __device__ functions. The paper publishes no code or API. The only candidate code is the first author's unlicensed russdrh/FP-GOLF repo (May 2026). It exposes NIST-KAT-style kernels (crypto_expand_gpu, crypto_sign_tree_gpu / crypto_sign_dyn_gpu, crypto_sign_open_gpu) over flat per-thread device buffers, so it is not a drop-in for the CPU crypto_sign API.",
+  "how_it_is_fast": "The main gain is coarse-grained parallelism: one thread per signature, 128 blocks x 512 threads (65,536 signatures per launch), with -maxrregcount=127 so that 512 threads fit in a block. A 2-threads-per-signature fine-grained variant that swaps data with __shfl_sync reached only 177,027 sig/s, against 361,726 for coarse-grained. Kernel fusion avoids repeated launches and global-memory round trips, and the recursive ffSampling is rewritten as an explicit stack-frame loop (Lee et al.'s method) so that NVCC will compile it. Finally, the FFT/iFFT butterfly units run in depth-first rather than layer-by-layer (breadth-first) order to shorten data reuse distance. This added 14.51% signing throughput (361,726 to 414,216 sig/s at 128x512) and, per Nsight, cut L2-to-DRAM traffic by 18%.",
+  "when_to_use": [
+    "Cloud or server backends that queue tens of thousands of Falcon-512 signatures at a time, where aggregate ops/s matters and roughly 156 ms of batch latency is acceptable (RTX 4090 figure).",
+    "Bulk Falcon-512 verification, e.g. checking large signature sets. Verification shows the largest gain (10.3M verify/s on an RTX 4090, about 6.4 ms batch latency) and needs no secret material on the GPU.",
+    "You are building your own GPU Falcon and want proven, simple tricks: one thread per signature, a stack-frame iterative ffSampling, and depth-first butterfly ordering for FFT/iFFT cache locality.",
+    "You need published RTX 4090 and A100 throughput numbers to size GPU capacity for Falcon against Lee et al.'s earlier GPU work."
+  ],
+  "when_not_to_use": [
+    "Single-signature or latency-bound signing. Each 65,536-signature batch takes about 156 ms on an RTX 4090 (415 ms on an A100), while the CPU reference produces one Falcon-512 signature in about 0.17 ms (5,948 sign/s on an i5-8259U).",
+    "You need usable, licensed code. The paper links none. The candidate repo russdrh/FP-GOLF has no license, 0 stars and a single benchmark/KAT driver, and has per-thread indexing bugs (see gotchas).",
+    "Falcon-1024 or FIPS 206 FN-DSA interoperability. The paper never names a parameter set (its baseline row is Falcon-512), cites the 2018 NIST submission, and FP-GOLF hard-codes logn=9 (Falcon-512).",
+    "Shared or multi-tenant GPUs with side-channel concerns. The paper argues GPU global-memory side channels are 'not practical' rather than measuring leakage, and does not analyze the floating-point Gaussian sampler's timing on GPU.",
+    "Tight GPU memory. The FP-GOLF tree mode allocates 7,169 doubles (about 56 KB) of expanded key per thread, about 3.8 GB for its 65,536-thread batch, plus a 36 KB per-thread scratch union."
+  ],
+  "integration": {
+    "form": "source-drop (paper only; the unconfirmed candidate russdrh/FP-GOLF is a Makefile project that builds one KAT/benchmark executable, kat512double_gpu, not a library)",
+    "dependencies": "CUDA runtime (cudart). The FP-GOLF build also needs gcc for the CPU reference files and includes cufft.h in fft_gpu.cu.",
+    "min_toolchain": "Paper: NVCC from CUDA 12.1 with -rdc=true -arch sm_89 -maxrregcount=127. FP-GOLF README: CUDA 12.x (12.8 default), GCC with C99, Ubuntu 20.04+. Its Makefile uses -rdc=true -arch sm_80 -use_fast_math, but the fpr arithmetic uses explicit __dadd_rn/__dmul_rn.",
+    "platforms": "NVIDIA GPUs only. The paper tested an RTX 4090 (sm_89, with a Ryzen 7 5700G host) and an A100. The FP-GOLF README lists sm_70/sm_80/sm_86 targets. Linux host.",
+    "thread_safety": "Not documented. Each GPU thread works on its own key/message/output slot, and there is no host-side API, stream handling or batching layer.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Headline ratios are easy to misread. The abstract's 58.05x/73.14x is against Nguyen et al.'s Apple M1 NEON code, not the reference. Against the reference (falcon-sign.info) the gain is 70.65x/369.13x, though the introduction says 387.84x. The ePrint web abstract prints 42.02 kops/s where the PDF says 420.25 kops/s.",
+    "Throughput depends heavily on batch size. Across nine grid/block configurations from 16,384 to 65,536 threads, the best signing throughput is 2.93x the worst (1.47x for verification). Keys are generated ahead of time and shipped to the GPU in bulk, and the paper does not say whether host-device copies are inside the timed region.",
+    "In FP-GOLF, the sign kernels read the 40-byte nonce (salt) with no per-thread offset, so every thread in a batch hashes and emits the same host-supplied salt. They also memmove thread 0's message into every signed-message output. Falcon (the paper's Algorithm 1) needs a fresh uniform salt per signature.",
+    "The FP-GOLF benchmark copies one key, one message, one seed and one nonce into all 65,536 slots, checks only thread 0's signature against the CPU result, and times kernel launch plus cudaDeviceSynchronize only. Its grid is 256x256, not the paper's 128x512."
+  ],
+  "pick_this_over_siblings_when": "Pick GOLF over VecFalcon only when you have a CUDA GPU and large batches and need Falcon throughput far beyond a CPU core. VecFalcon (CPU SIMD, 1.13-1.59x faster signing, released code) is the practical choice for per-signature latency or deployable code. GRASP is the matching GPU batch design for SPHINCS+ and also ships no code; if you need working GPU Falcon code today, Lee et al.'s benlwk/Falcon-Mitaka (GPL-3.0, Falcon-512), the prior work GOLF benchmarks against, is released.",
+  "verified_claims_summary": "On an RTX 4090 (CUDA 12.1, sm_89, -maxrregcount=127, 128x512 threads), GOLF measures 420,250 sign/s and 10,311,039 verify/s for Falcon, with parameters implied to be 512 by the baseline. That baseline (5,948.1 sign/s, 27,933.0 verify/s) was copied from falcon-sign.info for the reference implementation on an i5-8259U at 2.3 GHz with TurboBoost off and compiler flags not given, so 70.65x/369.13x compares a GPU batch against one CPU. On an A100 GOLF reaches 157,995 sign/s and 4,180,879 verify/s, which is 2.69x/1.53x over Lee et al.'s published A100 figures (not re-run).",
+  "status_note": "This is a peer-reviewed reference design (IEEE TIFS vol. 20, pp. 9441-9453, 2025; ePrint revised 2025-08-15) with no linked code, license or maintenance. The first author's russdrh/FP-GOLF (3 commits on 2026-05-25, 0 stars, no license) contains the paper's depth-first FFT/iFFT loops (logm/loghm counters) and stack-based ffSampling, so it is probably related. It is unconfirmed as the paper's artifact and not usable as-is.",
+  "sources_read": [
+    "https://eprint.iacr.org/2025/749",
+    "https://eprint.iacr.org/2025/749.pdf",
+    "https://api.crossref.org/works/10.1109/tifs.2025.3599681",
+    "https://falcon-sign.info/",
+    "https://github.com/russdrh/FP-GOLF",
+    "https://github.com/russdrh/FP-GOLF/blob/main/README.md",
+    "https://github.com/russdrh/FP-GOLF/commits/main",
+    "https://github.com/russdrh/FP-GOLF/blob/main/FP-GOLF/Makefile",
+    "https://github.com/russdrh/FP-GOLF/blob/main/FP-GOLF/test/PQCgenKAT_sign_gpu.cu",
+    "https://github.com/russdrh/FP-GOLF/blob/main/FP-GOLF/GPU/api_gpu.cuh",
+    "https://github.com/russdrh/FP-GOLF/blob/main/FP-GOLF/GPU/nist_gpu.cu",
+    "https://github.com/russdrh/FP-GOLF/blob/main/FP-GOLF/GPU/sign_gpu.cu",
+    "https://github.com/russdrh/FP-GOLF/blob/main/FP-GOLF/GPU/fft_gpu.cu",
+    "https://github.com/russdrh/FP-GOLF/blob/main/FP-GOLF/GPU/fpr_gpu.cuh",
+    "https://github.com/russdrh/FP-GOLF/blob/main/FP-GOLF/GPU/rng_gpu.cu",
+    "https://github.com/russdrh/FP-GOLF/blob/main/FP-GOLF/GPU/katrng_gpu.cu",
+    "https://github.com/benlwk/Falcon-Mitaka",
+    "https://github.com/search?q=falcon+gpu&type=repositories"
+  ],
+  "confidence": 0.7
+}

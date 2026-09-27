@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/fasthqc/hqc",
+  "one_liner": "AVX2 patch to the HQC Round-2 KEM's sparse-dense multiply and BCH syndrome step; 34-46% fewer cycles than the optimized reference.",
+  "what_it_does": "This is a 2019 research patch (Bessonov, Robert and Véron) for the NIST Round-2 HQC optimized implementation, a code-based post-quantum KEM. It replaces two profiled hotspots: sparse_dense_mul, which multiplies a low-weight secret or error vector by a dense polynomial mod X^N-1, and the BCH decoder's syndrome_gen. The crypto_kem_keypair/enc/dec API is unchanged and, per the report, the output is KAT-identical; the patch is applied at compile time by #including patch.c and patch2.c into hqc.c and bch.c under PATCH/PATCH2 macros. Only hqc-256-3 is packaged as a ready tree; the other parameter sets exist only in per-table experiment folders under Arith2020.",
+  "how_it_is_fast": "The 'fast convolution' keeps the sparse operand as a list of its w nonzero positions (67-153), so the product is the XOR of w copies of the dense polynomial, each shifted by one of those positions. Each shift is done with AVX2 256-bit shifts (_mm256_slli/srli_epi64 plus a carry from the neighboring word) and XORed into a double-length accumulator, followed by one vectorized reduction mod X^N-1; the baseline instead used an NTL-inspired vectorized multiply. syndrome_gen2 spreads the received BCH codeword bits into bytes with a shuffle and mask, then XOR-accumulates rows of a precomputed alpha^(ij) table, 16 syndromes per ymm register, instead of evaluating each syndrome separately in GF(2^10).",
+  "when_to_use": [
+    "Studying or reproducing HQC Round-2 performance on x86-64 with AVX2 (Haswell and later): keygen, encapsulation and decapsulation for N = 24,677-70,853.",
+    "As a reference technique for multiplying a sparse position list by a dense polynomial in F2[X]/(X^N-1), in quasi-cyclic code-based schemes where the sparse operand has weight around 100 and N is tens of thousands of bits. The report puts the multiplication alone at about 64-75% faster.",
+    "As a template for vectorized BCH syndrome computation with a precomputed power table (400,209 to 18,101 cycles, about 22x, for n1 = 766 in the report)."
+  ],
+  "when_not_to_use": [
+    "Anything deployed. The code is not constant-time: fastConvolutionMult indexes memory by the secret sparse positions (C256[vbi], tab[i64]), and syndrome_gen2 branches on bits of the decoded word.",
+    "Current HQC. This targets the Round-2 code base and its six parameter sets (hqc-128-1 ... hqc-256-3). liboqs now ships HQC-1/3/5 from the official 20250822-spec implementation (re-enabled by default in 0.16.0, July 2026), so the percentages and code will not carry over as-is.",
+    "Multi-threaded use. Scratch buffers (C2, TT, tmp8), syndrome_gen2's static tmp_array and the precomputed tables are process-global mutable state.",
+    "Any use that needs a license. The repo has no LICENSE file and has been abandoned since April 2020 (6 stars, no issues, no releases).",
+    "Non-x86 or pre-AVX2 CPUs; the Arith2020 experiments additionally need PCLMUL and, for several tables, the gf2x 1.2 library."
+  ],
+  "integration": {
+    "form": "source-drop (compile-time patch over the HQC Round-2 optimized source tree)",
+    "dependencies": "OpenSSL libcrypto (SHA-512 wrapper; the NIST rng/seedexpander in lib/), make, gcc; gf2x 1.2 for the Arith2020 TABLE1/2/3/5 experiments",
+    "min_toolchain": "C99; gcc 7.4.0 tested; flags -O3 -std=c99 -mavx -mavx2",
+    "platforms": "x86-64 with AVX2 required (the Arith2020 folders also need PCLMUL); benchmarked on Intel Core i5-4690S and i5-8400H, the latter with gcc 7.4.0 on Ubuntu 18.04",
+    "thread_safety": "Not thread-safe: file-scope global scratch buffers in patch.c, a static buffer in syndrome_gen2, and global GF/alpha tables that must be initialized once by calling syndrome_gen_init() from main.",
+    "drop_in_for_baseline": "partial — keeps the NIST crypto_kem_* API and KAT-identical output for the Round-2 hqc-256-3 code, but only as a patch to that obsolete code base, not to any current HQC implementation"
+  },
+  "gotchas": [
+    "The PATCH2 syndrome path reads global tables that syndrome_gen_init() must fill first. Forgetting that call leaves them NULL. The init also prints to stdout and never frees its roughly 200 KB alpha^(ij) table (796 x 128 int16 for hqc-256-3).",
+    "Patches are switched on by rewriting src/patch.h, which script.sh overwrites with '#define PATCH' between builds. Building by hand gives whatever the header currently says.",
+    "The randomized FastConvolution variant (Arith2020 Rand_FC) shuffles the order of the sparse positions using libc rand(), which is not a cryptographic RNG, and it keeps the same position-indexed accumulator writes (C256[vbi]).",
+    "The report's 'speed-up %' is a reduction in cycles. 34-46% fewer cycles is about 1.45-1.86x in speed ratio, and the 70-75% figure applies to the multiplication kernel only, not the whole KEM."
+  ],
+  "pick_this_over_siblings_when": "It is the only key-encapsulation and code-based post-quantum entry in this category. ENG25519 and UltrafastSecp256k1 are classical elliptic-curve code and VecFalcon is a post-quantum signature. Pick it only to study HQC or quasi-cyclic binary-polynomial arithmetic on AVX2; it is not a deployable alternative to any of them.",
+  "verified_claims_summary": "Against the HQC Round-2 optimized implementation on a 4th-gen Core i5-4690S (Turbo off, compiler not stated), both patches together cut keygen cycles 34.9-42.8%, encapsulation 33.7-45.2% and decapsulation 45.0-46.3% across all six parameter sets. On an i5-8400H with gcc 7.4.0 (-O3 -mavx2) the reductions were 30.9-43.2%, about 1.45-1.86x in speed. Each figure is the mean of per-dataset minimum cycle counts over 1,000 runs for 50 random data sets.",
+  "status_note": "Abandoned since April 2020 and unlicensed, and it patches a superseded Round-2 HQC code base with non-constant-time kernels. Read it for the technique; do not vendor it. The authors' later constant-time Karatsuba/Toom-Cook multiplication work (Robert & Véron, J. Cryptographic Engineering 2022) is the more relevant follow-up.",
+  "sources_read": [
+    "https://github.com/fasthqc/hqc",
+    "https://github.com/fasthqc/hqc/blob/master/Readme.md",
+    "https://github.com/fasthqc/hqc/blob/master/report-23072019.pdf",
+    "https://raw.githubusercontent.com/fasthqc/hqc/master/report-23072019.pdf",
+    "https://raw.githubusercontent.com/fasthqc/hqc/master/Fast_Implementation/hqc-256-3/Readme.md",
+    "https://raw.githubusercontent.com/fasthqc/hqc/master/Fast_Implementation/hqc-256-3/Makefile",
+    "https://raw.githubusercontent.com/fasthqc/hqc/master/Fast_Implementation/hqc-256-3/script.sh",
+    "https://raw.githubusercontent.com/fasthqc/hqc/master/Fast_Implementation/hqc-256-3/ccount.h",
+    "https://raw.githubusercontent.com/fasthqc/hqc/master/Fast_Implementation/hqc-256-3/src/main_hqc.c",
+    "https://raw.githubusercontent.com/fasthqc/hqc/master/Fast_Implementation/hqc-256-3/src/patch.h",
+    "https://raw.githubusercontent.com/fasthqc/hqc/master/Fast_Implementation/hqc-256-3/src/patch.c",
+    "https://raw.githubusercontent.com/fasthqc/hqc/master/Fast_Implementation/hqc-256-3/src/patch2.c",
+    "https://raw.githubusercontent.com/fasthqc/hqc/master/Fast_Implementation/hqc-256-3/src/parameters.h",
+    "https://raw.githubusercontent.com/fasthqc/hqc/master/Fast_Implementation/hqc-256-3/src/hqc.c",
+    "https://raw.githubusercontent.com/fasthqc/hqc/master/Fast_Implementation/hqc-256-3/src/bch.c",
+    "https://raw.githubusercontent.com/fasthqc/hqc/master/Fast_Implementation/hqc-256-3/src/vector.c",
+    "https://raw.githubusercontent.com/fasthqc/hqc/master/Fast_Implementation/hqc-256-3/src/gf2x_avx2.c",
+    "https://raw.githubusercontent.com/fasthqc/hqc/master/Fast_Implementation/hqc-256-3/src/kem.c",
+    "https://raw.githubusercontent.com/fasthqc/hqc/master/Arith2020/Readme.md",
+    "https://raw.githubusercontent.com/fasthqc/hqc/master/Arith2020/TABLE1/Readme.md",
+    "https://raw.githubusercontent.com/fasthqc/hqc/master/Arith2020/TABLE2/Toom3/Readme.md",
+    "https://raw.githubusercontent.com/fasthqc/hqc/master/Arith2020/TABLE2/Toom3Rec/Readme.md",
+    "https://raw.githubusercontent.com/fasthqc/hqc/master/Arith2020/TABLE4/Readme.md",
+    "https://raw.githubusercontent.com/fasthqc/hqc/master/Arith2020/TABLE5/Readme.md",
+    "https://raw.githubusercontent.com/fasthqc/hqc/master/Arith2020/TABLE6/Readme.md",
+    "https://raw.githubusercontent.com/fasthqc/hqc/master/Arith2020/TABLE5/Constant_Time_AVX_HQC_gf2x/README",
+    "https://raw.githubusercontent.com/fasthqc/hqc/master/Arith2020/TABLE6/Constant_Time_AVX_HQC_FC/README",
+    "https://raw.githubusercontent.com/fasthqc/hqc/master/Arith2020/TABLE6/Constant_Time_AVX_HQC_FC/hqc-128-1/src/gf2x_avx2.c",
+    "https://raw.githubusercontent.com/fasthqc/hqc/master/Arith2020/TABLE6/Constant_Time_AVX_HQC_Rand_FC/hqc-128-1/src/gf2x_avx2.c",
+    "https://api.archives-ouvertes.fr/search/?q=halId_s:hal-03520854&fl=abstract_s,doiId_s,title_s&wt=json",
+    "https://api.archives-ouvertes.fr/search/?q=authFullName_t:%22Pascal%20V%C3%A9ron%22%20AND%20(HQC%20OR%20%22sparse%22%20OR%20convolution)",
+    "https://github.com/open-quantum-safe/liboqs/releases/tag/0.13.0",
+    "https://github.com/open-quantum-safe/liboqs/releases/tag/0.16.0"
+  ],
+  "confidence": 0.75
+}
