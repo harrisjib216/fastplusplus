@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/twilight-dream-of-magic/museair-cpp",
+  "one_liner": "GPL-3.0 C++20 header port of deprecated MuseAir v0.4-rc4. Ties wyhash in bulk, slower on short keys.",
+  "what_it_does": "This is a single-header C++20 reimplementation (MuseAir.hpp) of eternal-io's MuseAir, a portable non-cryptographic 64/128-bit hash built on wide multiplication. You create a stateless object, MuseAir<BlindFast>, and call hash<ByteSwap>(ptr, len, seed64, out) for a 64-bit result or hash_128<ByteSwap>(...) for a 16-byte result. Setting BlindFast=true selects the faster 'BFast' variant. It is not a drop-in for wyhash's wyhash(key, len, seed, secret) API: there is no secret parameter, the result comes back through a void* out pointer, and the byte-swap choice is a template parameter the caller must set. The current code tracks upstream algorithm version 0.4-rc4 (commit 'update to 0.4-rc4', 2026-02-23).",
+  "how_it_is_fast": "The core is scalar 64x64->128-bit multiplication (__uint128_t, or _umul128 on MSVC x64) with no SIMD or assembly, despite the README's claims. Inputs over 96 bytes go through a six-word 'ring accumulator'. Each 16-byte step XORs two input words into adjacent state words, wide-multiplies them, and feeds the low/high halves into the next word, so the six multiplies per 96 bytes run in parallel through instruction-level parallelism. Standard mode adds the product into the state (+=); BFast overwrites it (=), which saves work but loses protection against 'blinding multiplication' (a zero multiplicand wiping state). Inputs of 32 bytes or less take a branchy short path with two to four wide multiplies, and 33-96 bytes take an unrolled partial-body path.",
+  "when_to_use": [
+    "You specifically want MuseAir v0.4-rc4 hash values in a C++20 codebase that can accept GPL-3.0, for example to match outputs from a system already pinned to that version.",
+    "Bulk hashing of trusted, non-adversarial buffers of a few hundred bytes and up with the BFast variant. The author's i7-12700K chart shows about 42 GiB/s (at a nominal 3.5 GHz) against about 34 GiB/s for wyhash v4.2, though the chart's line colours are ambiguous and predate the current code.",
+    "Portable scalar hashing on any 64-bit compiler with __uint128_t; there are no CPU-feature requirements such as AES-NI or AVX2."
+  ],
+  "when_not_to_use": [
+    "Any new use. Upstream's CHANGELOG says a seed-independent trivial-collision flaw (eternal-io/museair#3, July 2026) means 'all previous versions of the algorithm are deprecated, and should be considered compromised'. The fixed algorithm is v2; this port is still on v0.4-rc4. The port's 17-32-byte short path has the flawed structure: the second 16 bytes pass through seed-free multiplies and are XORed into the state, so colliding pairs can be built for every seed.",
+    "The 128-bit output. Upstream says the v0.4-rc4 128-bit variant 'had insufficient output diffusion and actually failed the SMHasher3 test suite', and the fix came in a later version.",
+    "Hash-table keys and short strings (1-31 bytes). By the port's own chart, MuseAir and BFast take more cycles than wyhash and rapidhash at nearly every length: about 18.6 vs 15.1 at 1-4 bytes, 14.6 vs 11.0 at 12-16 bytes, and about 35-45 vs 27 at 17-31 bytes.",
+    "Proprietary or permissively licensed products. The LICENSE file and the header are GPL-3.0, even though the README says MIT; upstream's own museair.cpp reference is CC0.",
+    "Projects that need a maintained, tested dependency. The repo has 7 stars and 4 commits, no releases, no tests beyond a main.cpp verification-code check, and no CI (the README's CI badge points to a workflow that does not exist)."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (standard library only; <intrin.h> on MSVC x64)",
+    "min_toolchain": "C++20 (uses <bit> std::endian/std::rotl, [[likely]]); the demo CMakeLists needs CMake 3.10+. The repo topics say cpp17, but the code needs C++20.",
+    "platforms": "Any 64-bit target with __uint128_t (GCC/Clang) or MSVC x64 _umul128; a 32x32 fallback exists for others. Big-endian needs the caller to pass ByteSwap=true. Only x86-64 Windows/MSYS results are shown.",
+    "thread_safety": "Not documented; the class has no data members and the hash functions touch only locals and constexpr constants, so concurrent calls are safe by inspection.",
+    "drop_in_for_baseline": "false — different API (object + template flags, void* output, single 64-bit seed, no secret) and different hash values from wyhash; a wrapper function is needed."
+  },
+  "gotchas": [
+    "The README contradicts the code in several places. It says MIT, but the LICENSE file is GPL-3.0. It mentions 'platform-specific assembly' and 'SIMD', but there is none. It describes BlindFast as trading 'accuracy'; in fact BFast gives up blinding-multiplication resistance, and upstream notes that 64-bit BFast has a fixed 8-byte prefix that makes bytes 9-16 irrelevant for 9-16-byte inputs.",
+    "The benchmark charts were last updated in the June 2025 commit, before the February 2026 rewrite to 0.4-rc4. The SMHasher3 build log shown compiles SMHasher3's own hashes/museair.cpp, and nothing shows that this port's header was the code measured. The README's '33.2 GiB/s' also disagrees with the chart.",
+    "ByteSwap is not auto-detected. The README example always uses hash<false>, so on big-endian hosts it produces different values from the little-endian reference unless you pass std::endian::native != std::endian::little, as main.cpp does.",
+    "hash() and hash_128() are non-const, non-static member functions, so they cannot be called on a const MuseAir object. Correctness is checked only by self-generated verification codes in main.cpp, which the README does not cross-reference with upstream."
+  ],
+  "pick_this_over_siblings_when": "Rarely. For MuseAir itself, prefer the upstream eternal-io/museair (Rust crate 0.6.0 or its CC0 museair.cpp reference, both algorithm v2 with the collision fix). For short keys in C/C++, wyhash, rapidhash and a5hash are faster, and a5hash posts 26.91 SMHasher3 cycles against wyhash's 29.31. Pick this port only if you must reproduce v0.4-rc4 outputs from a C++20 header and GPL-3.0 is acceptable.",
+  "verified_claims_summary": "The only performance data is the author's own SMHasher3 speed runs, shown as PNG charts, on an i7-12700K under Windows/MSYS with GCC 11.3.0 (flags not stated; GiB/s at a nominal 3.5 GHz). They show MuseAir at parity with wyhash v4.2 in bulk (about 33-34 GiB/s), BFast at about 42 GiB/s (about 1.2x, colour-ambiguous), and both slower than wyhash and rapidhash on 1-31-byte keys. The charts predate the current code and may not be of this port at all. SMHasher3's public results (MuseAir v0.3 bfast 8.64 bytes/cycle vs wyhash 6.98) come from a different, CC0 implementation of an older algorithm version.",
+  "status_note": "Nominally active (last commit 2026-02-23), but a one-person GPL-3.0 port stuck on algorithm v0.4-rc4, which upstream deprecated as compromised in July 2026; small enough to vendor, but the upstream CC0 v2 code is the better starting point.",
+  "sources_read": [
+    "https://github.com/Twilight-Dream-Of-Magic/museair-cpp",
+    "https://github.com/Twilight-Dream-Of-Magic/museair-cpp/blob/main/README.md",
+    "https://github.com/Twilight-Dream-Of-Magic/museair-cpp/blob/main/MuseAir.hpp",
+    "https://github.com/Twilight-Dream-Of-Magic/museair-cpp/blob/main/main.cpp",
+    "https://github.com/Twilight-Dream-Of-Magic/museair-cpp/blob/main/CMakeLists.txt",
+    "https://github.com/Twilight-Dream-Of-Magic/museair-cpp/blob/main/LICENSE",
+    "https://github.com/Twilight-Dream-Of-Magic/museair-cpp/commits/main",
+    "https://github.com/Twilight-Dream-Of-Magic/museair-cpp/commit/cb28d23",
+    "https://github.com/Twilight-Dream-Of-Magic/museair-cpp/commit/11b93d3",
+    "https://github.com/Twilight-Dream-Of-Magic/museair-cpp/commit/0c16a4a",
+    "https://github.com/Twilight-Dream-Of-Magic/museair-cpp/issues/1",
+    "https://raw.githubusercontent.com/Twilight-Dream-Of-Magic/museair-cpp/main/images/Bulk%20Speed%20Test%20-%20GiBsec%20vs%20Alignment%20for%20wyhash%2C%20rapidhash%2C%20MuseAir%2C%20and%20MuseAir-BFast.png",
+    "https://raw.githubusercontent.com/Twilight-Dream-Of-Magic/museair-cpp/main/images/Small%20Key%20Speed%20Test%20-%20Cycles%20per%20Hash%20vs%20Key%20Size%20%5B1%2C%2031%5D-byte%20keys.png",
+    "https://github.com/eternal-io/museair",
+    "https://github.com/eternal-io/museair/blob/master/README.md",
+    "https://github.com/eternal-io/museair/blob/master/CHANGELOG.md",
+    "https://github.com/eternal-io/museair/blob/master/museair.cpp",
+    "https://github.com/eternal-io/museair/issues/3",
+    "https://github.com/eternal-io/museair/commits/master",
+    "https://gitlab.com/fwojcik/smhasher3/-/raw/main/hashes/museair.cpp",
+    "https://gitlab.com/fwojcik/smhasher3/-/raw/main/results/README.md"
+  ],
+  "confidence": 0.75
+}
