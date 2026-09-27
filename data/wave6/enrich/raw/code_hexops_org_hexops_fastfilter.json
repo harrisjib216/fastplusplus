@@ -1,0 +1,63 @@
+{
+  "id": "https://code.hexops.org/hexops/fastfilter",
+  "one_liner": "Zig binary fuse and xor filters; binary fuse builds 1.7-3.8x faster than xor, with smaller filters and equal lookups.",
+  "what_it_does": "Static approximate-membership filters over u64 keys, generic over fingerprint width: BinaryFuse(u8/u16/u32) (alias BinaryFuse8) and Xor(T) (aliases Xor8, Xor16). You init() with a capacity, populate() once from a slice or populateIter() from a wrap-around iterator, then call contain(key) -> bool. There are no inserts or deletes; to change the set you build a new filter. Keys of other types must be hashed to u64 first, and serialization means copying the struct fields yourself (no built-in format).",
+  "how_it_is_fast": "Binary fuse filters (Graf & Lemire, arXiv 2201.01174) map each key to 3 slots in three consecutive power-of-two segments, a spatially coupled 'fuse' layout after Dietzfelbinger & Walzer. That lets the array hold about 1.125n slots instead of the xor filter's 1.23n (9.0 vs 9.84 bits/key at 8-bit fingerprints). Construction groups hashes by segment (high hash bits), peels the 3-hypergraph with a queue of cells hit by a single key and assigns fingerprints in reverse. Its per-slot scratch is a 1-byte count, an 8-byte xor-of-hashes and a 4-byte queue entry, vs xor's 16-byte sets plus 16-byte queue and stack entries, hence 22 vs 52 MiB peak at 1M keys. A query is one murmur64 mix, a 64x64->128 multiply-high and 3 XORed loads, the same work as an xor filter, so lookups tie.",
+  "when_to_use": [
+    "A Zig codebase that needs a read-only membership pre-check (a skip-the-disk or skip-the-network test) over a key set that is rebuilt in batches rather than updated.",
+    "Build time and build memory matter: BinaryFuse8 populated 1M keys in 37.5 ms vs 103.4 ms for Xor8 and 100M in 7.4 s vs 28.0 s (2019 MacBook Pro), using roughly 23 vs 55 bytes/key of scratch.",
+    "You want about 0.39% false positives at about 9.0 bits/key (BinaryFuse8). BinaryFuse(u16) gives about 0.0015% at 18 bits/key, and BinaryFuse(u32) gives effectively zero at 36 bits/key.",
+    "The key set is too large to keep as a contiguous array: populateIter streams keys from any iterator. You can also give the filter storage and the build scratch separate std.mem.Allocator instances, for example an mmap-backed one for scratch."
+  ],
+  "when_not_to_use": [
+    "You need inserts, deletes or incremental growth: the filters are immutable, so use a cuckoo or quotient filter instead.",
+    "You expect faster lookups than an xor filter: contains() measured 24.0 vs 25.0 ns at 1M keys and 145 vs 153 ns at 100M. At 10M+ keys with 16/32-bit fingerprints, lookups cost 100-175 ns, dominated by 3 random memory loads.",
+    "You are not writing Zig: the library exports no C ABI. Use FastFilter/xor_singleheader for C/C++, xorf for Rust or FastFilter/xorfilter for Go. For 100M+ key xor builds, the README itself points to the C library's xor8_buffered_populate, which is not implemented here.",
+    "Memory-tight or huge builds: peak build scratch for BinaryFuse8 is about 2 GiB at 100M keys, on top of the finished filter (and the keys, unless you stream them). init() computes the slot count as a u32, so a single filter tops out at about 3.8 billion keys.",
+    "You need minimum space or a stable toolchain. Arity is hard-coded to 3, so the 4-wise variant that the paper puts within 8% of the lower bound is not available, and ribbon filters such as BuRR get closer. The code also tracks Mach-nominated Zig nightlies, currently 0.16.0-dev."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none (Zig std only)",
+    "min_toolchain": "Zig 2026.4.10-mach (identical to 0.16.0-dev.3142+5ccfeb926), per build.zig.zon's mach_zig_version and meant to be installed via anyzig. benchmark.zig uses std.Io and std.process.Init, so older Zig will not build the whole package. The last tag, v0.11.0, targets Zig 0.12.0-dev.706.",
+    "platforms": "Any Zig target: pure scalar Zig with no SIMD or intrinsics (it uses a u128 multiply-high). The CI config targets Linux x86-64 only, and the README benchmarks ran on macOS and Windows x86-64.",
+    "thread_safety": "Not documented. By inspection, contain() takes *const Self and writes nothing, so concurrent lookups on a built filter look safe. populate() mutates the filter and uses caller-provided scratch.",
+    "drop_in_for_baseline": "partial — inside this library, BinaryFuse(T) has the same init/populate/populateIter/contain/deinit/sizeInBytes API as Xor(T), so switching is a one-line type change. The serialized fields differ (segment fields instead of blockLength), and it is not a drop-in for the C xor_singleheader or any non-Zig code."
+  },
+  "gotchas": [
+    "The README install snippet uses github.com/hexops/fastfilter/archive/$LATEST_COMMIT.tar.gz, but the archived GitHub repo's HEAD now contains only a README saying 'Moved to https://code.hexops.com/hexops/fastfilter' (which 301s to code.hexops.org). Point build.zig.zon at the Forgejo repo instead. The README's exe.addModule build snippet also predates the current build API.",
+    "Xor(T) requires unique keys and returns error.KeysLikelyNotUnique after 100 seeds otherwise; run AutoUnique first. BinaryFuse(T) deduplicates automatically.",
+    "Custom populateIter iterators must return null at the end and then restart from the first key, because construction rescans on every seed retry. This is enforced only in Debug builds (a panic); ReleaseFast does not check it.",
+    "Seeds come from a fixed SplitMix64 starting constant, so builds are deterministic and the caller cannot supply a seed. Calling populate() with zero keys returns before the seed or fingerprints are set, so contain() on an empty BinaryFuse reads uninitialized allocator memory. The tests pass only because page_allocator returns zeroed pages."
+  ],
+  "pick_this_over_siblings_when": "Pick it when your code is Zig and you want iterator-based population with separate filter and scratch allocators. Otherwise use a sibling: FastFilter/xor_singleheader (the C reference it ports, which also has buffered xor construction) for C/C++, xorf for Rust, FastFilter/xorfilter for Go, and BuRR or a ribbon filter when bits/key matters more than build speed.",
+  "verified_claims_summary": "The README's own harness (src/benchmark.zig, Zig 0.12.0-dev.706, -O ReleaseFast) builds over consecutive keys 0..N-1 and probes random, nearly all-miss u64s. On a 2019 MacBook Pro (2.3 GHz 8-core Core i9), BinaryFuse8 populates 1M/100M keys in 37.5 ms/7.4 s vs 103.4 ms/28.0 s for Xor8 (~2.8x/~3.8x); on a Ryzen 9 3900X the gaps are ~1.7x/~2.8x, and lookups tie. Both sides are this library's own Zig code, with nothing measured against the C reference, Bloom or cuckoo filters, and the tables predate the current benchmark.zig, which drops the fuse rows and parses only --num-trials.",
+  "status_note": "Maintained only through Zig-version bumps: the last algorithm fix was v0.10.2, the changelog stops at v0.11.0, and the last commit (April 2026) moved to Zig 2026.4.10-mach. It lives on a self-hosted Forgejo with no issues, PRs or CI runs, next to an archived GitHub mirror with issues disabled. It is dual MIT/Apache-2.0 and about 70 KB of dependency-free Zig, so vendoring src/ is easy.",
+  "sources_read": [
+    "https://code.hexops.org/hexops/fastfilter",
+    "https://code.hexops.org/hexops/fastfilter/raw/branch/main/README.md",
+    "https://code.hexops.org/api/v1/repos/hexops/fastfilter",
+    "https://code.hexops.org/api/v1/repos/hexops/fastfilter/git/trees/main?recursive=true",
+    "https://code.hexops.org/api/v1/repos/hexops/fastfilter/commits?limit=15",
+    "https://code.hexops.org/api/v1/repos/hexops/fastfilter/issues?state=all&type=issues",
+    "https://code.hexops.org/api/v1/repos/hexops/fastfilter/pulls?state=all",
+    "https://code.hexops.org/api/v1/repos/hexops/fastfilter/actions/tasks",
+    "https://code.hexops.org/api/v1/repos/hexops/fastfilter/tags",
+    "https://code.hexops.org/hexops/fastfilter/raw/branch/main/src/binaryfusefilter.zig",
+    "https://code.hexops.org/hexops/fastfilter/raw/branch/main/src/xorfilter.zig",
+    "https://code.hexops.org/hexops/fastfilter/raw/branch/main/src/main.zig",
+    "https://code.hexops.org/hexops/fastfilter/raw/branch/main/src/util.zig",
+    "https://code.hexops.org/hexops/fastfilter/raw/branch/main/src/unique.zig",
+    "https://code.hexops.org/hexops/fastfilter/raw/branch/main/src/benchmark.zig",
+    "https://code.hexops.org/hexops/fastfilter/raw/branch/main/build.zig",
+    "https://code.hexops.org/hexops/fastfilter/raw/branch/main/build.zig.zon",
+    "https://code.hexops.org/hexops/fastfilter/raw/branch/main/.forgejo/workflows/ci.yml",
+    "https://code.hexops.com/hexops/fastfilter",
+    "https://github.com/hexops/fastfilter",
+    "https://github.com/hexops/fastfilter/blob/main/README.md",
+    "https://machengine.org/docs/nominated-zig/",
+    "https://arxiv.org/abs/2201.01174",
+    "https://hn.algolia.com/api/v1/search?query=hexops%20fastfilter&restrictSearchableAttributes=url"
+  ],
+  "confidence": 0.85
+}
