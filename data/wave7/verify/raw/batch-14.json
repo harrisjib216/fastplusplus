@@ -1,0 +1,59 @@
+[
+  {
+    "id": "https://github.com/hacer-bark/base64-turbo",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "The README Benchmarks table and the checked-in raw criterion output (benches/results/c8a-large-latest.txt, c7i-large-latest.txt) match the claim. The harness is public (benches/encoding_bench.rs; Turbo-Base64 is built through benches/tb64-sys/build.rs), the flags are in code and both CPUs are named. But neither the rustc version nor the C compiler version is stated anywhere (only MSRV 1.93, and the repro script installs whatever rustup stable is current), so by batch precedent this is first-party with partial methodology: C, not A.",
+    "corrections": {
+      "baseline": "base64 (RFC 4648) codecs: Turbo-Base64 (C, the prior fastest known codec) and the Rust default `base64` crate 0.23 (its SIMD path on by default), plus base64-simd and base64-ng, all in the same harness",
+      "claimed_speedup": "At 64 KiB (encode/decode, GiB/s): base64-turbo 81.6/106.5 vs Turbo-Base64 80.7/107.8 on AWS c8a.large (AMD EPYC 9R45), and 25.7/36.9 vs 18.2/38.5 on c7i.large (Xeon Platinum 8488C). Against the default `base64` crate it is 81.6/106.5 vs 13.5/27.9 (c8a) and 25.7/36.9 vs 8.9/13.7 (c7i), which is about 6.0x/3.8x and 2.9x/2.7x (derived from page data). The c8a sweep peaks at 123.0 GiB/s encode and 118.1 GiB/s decode at 4 KiB. At that size the raw output has Turbo-Base64 decode at 119.7, so decode is still marginally behind (raw file).",
+      "compiler_and_flags": "rustc version not stated (MSRV 1.93; the reproduction steps install the current rustup stable). `cargo bench` uses the default bench profile (opt-level 3, no custom RUSTFLAGS or target-cpu; kernels are picked at runtime). Criterion runs with a 5 s warm-up. The README says 15 s of measurement, but encoding_bench.rs actually uses 8/10/12 s depending on the size tier. Turbo-Base64 is compiled through the cc crate in benches/tb64-sys/build.rs with -O3 -DNDEBUG -fstrict-aliasing (-falign-loops on gcc) and upstream's per-file -march flags (ssse3, corei7-avx, haswell, skylake-avx512 -mavx512vbmi). The C compiler and its version are not stated.",
+      "caveats": "0BSD carries no explicit patent grant. Results against Turbo-Base64 are mixed. At 64 KiB base64-turbo wins encode but is slightly slower on decode on both machines. Turbo-Base64 also wins 32 B encode, and on c8a it pulls ahead once the data no longer fits in cache (README: about 28% faster encode and 22% faster decode at 10 MB). The clear win is over the Rust default `base64` crate. The author wrote the C-side timing harness and calls those margins 'directional'. Neither the rustc nor the C compiler version is stated. The 100+ GiB/s peaks need AVX-512 VBMI and hold only at 4 KiB. The project is very new with little visibility (2 stars, repo created 2026-01-20), and no one has reproduced the results independently."
+    },
+    "notes": "The numbers are all real and traceable to the raw criterion files, and 0BSD license, 2 stars and last commit 2026-09-19 all check out. The drop to C is only because no compiler versions are given. The stronger headline is the ~3-6x over the default `base64` crate. Against Turbo-Base64 it is roughly a tie.",
+    "urls_opened": [
+      "https://github.com/hacer-bark/base64-turbo",
+      "https://github.com/hacer-bark/base64-turbo#benchmarks",
+      "https://github.com/hacer-bark/base64-turbo/blob/main/Cargo.toml",
+      "https://github.com/hacer-bark/base64-turbo/blob/main/CHANGELOG.md",
+      "https://github.com/hacer-bark/base64-turbo/blob/main/benches/encoding_bench.rs",
+      "https://github.com/hacer-bark/base64-turbo/blob/main/benches/results/c8a-large-latest.txt",
+      "https://github.com/hacer-bark/base64-turbo/blob/main/benches/results/c7i-large-latest.txt",
+      "https://github.com/hacer-bark/base64-turbo/blob/main/benches/tb64-sys/README.md",
+      "https://github.com/hacer-bark/base64-turbo/blob/main/benches/tb64-sys/build.rs"
+    ]
+  },
+  {
+    "id": "https://github.com/htot/crc32c",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "A",
+    "tier_reason": "Upgraded from C. The README ratios are there verbatim, and the linked chart (crc32c-benchmarks.png, 4096-byte aligned buffer) names the CPUs (i7-4770, Atom E3815 NUC, Edison) and the compilers (g++ 6.3 and g++ 7.2). The benchmark code is public (crc32c/crc32cbench.cc), and the flags are in crc32c/Makefile (-O3 -DNDEBUG -flto -msse4.2 -mpclmul). It runs against the incumbent software CRC-32C (Sarwate, Intel slicing-by-8) and Mark Adler's widely used SSE4.2 code, so it meets A.",
+    "corrections": {
+      "claimed_speedup": "README, 4096-byte buffer, 64-bit i7-4770: SlicingBy8 is 5.1x faster than Sarwate, Hardware64 is 4.2x faster than SlicingBy8, and IntelC is 2.7x faster than Hardware64. Chaining those gives IntelC roughly 58x over the byte-at-a-time Sarwate (derived from page data). On 32-bit Edison, IntelC is 8.8x faster than SlicingBy8. Against the strongest bundled incumbent, Mark Adler's SSE4.2 crc32c, the log-scale chart shows IntelC only modestly ahead (roughly 1.2x on 64-bit i7-4770, read off the chart), and about level with Intel's own asm (IntelAsm), which it is ported from.",
+      "compiler_and_flags": "g++ 6.3 (i7-4770 32- and 64-bit, Edison) and g++ 7.2 (i7-4770 64-bit, NUC E3815), per the chart labels. crc32c/Makefile uses -O3 -DNDEBUG -flto -msse4.2 -mpclmul, plus -m32/-m64 when CPU_TYPE is set. Intel's crc_iscsi_v_pcl.asm is assembled with yasm. DEBUG=TRUE builds with -g -O0.",
+      "hardware": "Intel Core i7-4770 (Haswell; 32- and 64-bit builds), Intel Atom E3815 (NUC, 64-bit) and Intel Edison (x86-32 and x86-64), per the chart labels",
+      "workload": "crc32cbench (crc32c/crc32cbench.cc) on a 4096-byte aligned buffer, as charted; the program also sweeps 16 B to 8 KiB. It compares Sarwate, SlicingBy4, SlicingBy8, Hardware32, Hardware64 (SSE4.2 crc32), Adler (Mark Adler's 3-way crc32), IntelC (this project's C port of Intel's crc32 + pclmulqdq code) and IntelAsm (Intel's original asm).",
+      "license": "BSD-3-Clause (crc32c/LICENSE, MIT copyright, with Intel slicing-by-8 under the same terms; the README says BSD 2-clause). crc32intelc.cc and crc32adler.cc are under the Zlib license, and crc_iscsi_v_pcl.asm is Intel BSD-3-Clause. GitHub's license API detects none.",
+      "caveats": "All the implementations compared are bundled in this repo: evanjones' Sarwate and slicing-by-4/8, Mark Adler's SSE4.2 code, and Intel's asm. The headline ~58x is against byte-at-a-time Sarwate. Against Adler's hardware crc32c the gain is only modest, and IntelC merely matches Intel's own asm, which it ports. The main contribution is portable C that also runs on 32-bit. On 64-bit Edison and the NUC E3815 (Silvermont), the 3-way crc32q+pclmul paths (Adler, IntelC, IntelAsm) are slower than plain Hardware64. The IntelC path only pays off above 216 bytes. It computes CRC-32C (Castagnoli) only, not the zlib/gzip CRC-32. The code is actually C++ (.cc) with inline asm, and the last commit was in 2017."
+    },
+    "notes": "Tier raised to A because the chart names the CPU and g++ versions and the Makefile holds the flags. The honest incumbent win is small (IntelC is roughly 1.2x over Adler and about level with Intel's asm). The ~58x is only against Sarwate. 96 stars, not archived, not a fork, last commit 2017-11-01 (abandoned) all verified. The record's language 'C' should really be C++, and the '~500MHz' Edison clock is not on the page.",
+    "urls_opened": [
+      "https://github.com/htot/crc32c",
+      "https://github.com/htot/crc32c#benchmarks",
+      "https://raw.githubusercontent.com/htot/crc32c/master/crc32c-benchmarks.png",
+      "https://github.com/htot/crc32c/blob/master/crc32c/LICENSE",
+      "https://github.com/htot/crc32c/blob/master/crc32c/Makefile",
+      "https://github.com/htot/crc32c/blob/master/crc32c/crc32cbench.cc",
+      "https://github.com/htot/crc32c/blob/master/crc32c/crc32intelc.cc",
+      "https://github.com/htot/crc32c/blob/master/crc32c/crc32adler.cc",
+      "https://github.com/htot/crc32c/blob/master/crc32c/crc32intelasm.cc",
+      "https://github.com/htot/crc32c/blob/master/crc32c/crc_iscsi_v_pcl.asm"
+    ]
+  }
+]
