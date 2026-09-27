@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/hacer-bark/base64-turbo",
+  "one_liner": "0BSD Rust base64 crate with AVX2/AVX-512 VBMI/NEON kernels; 2.7-6x the default base64 crate, roughly ties Turbo-Base64.",
+  "what_it_does": "A Rust crate (base64-turbo 0.5.0 on crates.io) for RFC 4648 base64. It ships const engines STANDARD, URL_SAFE, their _NO_PAD variants and *_PAD_INDIFFERENT, plus Engine::custom over any 64-character printable-ASCII alphabet (a const fn whose ~12 KiB tables are built at compile time). Each engine has encode() -> String, decode() -> Result<Vec<u8>, Error>, allocation-free encode_slice/decode_slice, and appending encode_string/decode_vec. The slice APIs and all SIMD kernels work under no_std. Output is byte-compatible with the base64 crate and the method names match, but Engine is its own concrete struct with its own Error enum, and there are no streaming Read/Write adapters.",
+  "how_it_is_fast": "The AVX2 kernel ports aklomp/base64's approach: Mula/Lemire nibble-lookup validation for decode, and an offset-load encode loop with a single-LUT character map. The ALU work is interleaved across ports 0/1/5 so vpshufb on port 5 is not the bottleneck. The AVX-512 VBMI kernel encodes 48 bytes in three ops (vpermb gather, vpmultishiftqb to pull out all eight 6-bit fields, vpermb through the alphabet). It decodes with vpermi2b over a 128-entry reverse LUT and folds validity into a single vpternlogd OR tree, while k-masked passes handle the 1-31 byte tail without a scalar handoff. Both x86 kernels switch to non-temporal stores above 5/8 of the CPUID-reported last-level cache, and the CPU tier is cached in one atomic byte, so dispatch costs a single load per call.",
+  "when_to_use": [
+    "Rust services on AVX-512 VBMI x86 (the author measured Zen 5 EPYC 9R45 and Sapphire Rapids) that encode/decode payloads of about 512 B to 1 MiB. On c8a.large at 64 KiB it runs 81.6/106.5 GiB/s against 13.5/27.9 for the base64 crate 0.23, whose SIMD path is on by default. It peaks at 123.0/118.1 GiB/s at 4 KiB.",
+    "You want a faster base64 crate replacement for STANDARD or URL_SAFE (JWTs, URLs) with a permissive 0BSD license and unsafe SIMD backed by Kani proofs, MIRI, MSan and 250M+ fuzz iterations. The AVX2 box (c7i.large) still shows 2.7-2.9x at 64 KiB.",
+    "Custom alphabets (bcrypt/crypt(3) and similar) at full vector speed, but only on AVX-512 VBMI; AVX2 and NEON fall back to scalar for them.",
+    "no_std x86 targets that still want runtime-dispatched SIMD (0.5.0 detects through cpufeatures), or audit-sensitive builds that set --cfg base64_turbo_backend=\"soft\" to get a #![forbid(unsafe_code)] scalar-only crate."
+  ],
+  "when_not_to_use": [
+    "Your toolchain is older than Rust 1.93 or can't use edition 2024. The README also says the MSRV is pinned by Kani's bundled rustc and won't be lowered.",
+    "Mostly multi-MB, DRAM-resident buffers. At 10 MB on c8a, Turbo-Base64 is about 28% faster encoding and 22% faster decoding (37.7/55.8 vs 29.4/45.7 GiB/s). On c7i at 10 MB it is only 1.2x/1.07x ahead of the base64 crate (10.9/14.2 vs 8.9/13.3), with everyone near memcpy.",
+    "Many tiny (about 32 B) decodes: base64-simd wins there (7.6 vs 5.8 GiB/s on c8a, 4.1 vs 3.6 on c7i), and Turbo-Base64 wins 32 B encode.",
+    "x86 without AVX2 (there is no SSE kernel), WASM SIMD, or other non-x86/non-ARM targets, which all run scalar only. The README FAQ calls NEON best-effort, not production-ready, with no Kani proofs, and says it may be deprecated.",
+    "You need a long-maintained dependency: one author, repo created Jan 2026, 2 stars, about 3.6k crates.io downloads, no reverse dependencies, and breaking 0.4.0/0.5.0 releases 12 days apart in Sept 2026. There is no C API either, so C/C++ callers would need their own FFI shim."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "cpufeatures 0.3 on x86/x86-64 only; none elsewhere",
+    "min_toolchain": "Rust 1.93 (edition 2024)",
+    "platforms": "x86/x86-64: AVX-512 VBMI or AVX2 picked at runtime, else scalar. aarch64: NEON picked at compile time (best-effort). Everything else: safe scalar. No SSE or WASM SIMD kernels.",
+    "thread_safety": "Engines are immutable consts/statics. The CPU tier and LLC size are cached in AtomicU8/AtomicUsize with Relaxed ordering (a race just computes the same value twice), so any thread can use them concurrently.",
+    "drop_in_for_baseline": "partial — output is byte-identical to the base64 crate's for STANDARD/URL_SAFE and the method names match, but types, error enum and buffer-size rules differ and there are no streaming adapters; against Turbo-Base64 (C) there is no C API at all"
+  },
+  "gotchas": [
+    "decode_slice returns BufferTooSmall unless the output holds decoded_len_estimate bytes, which can be up to 2 more than the real decoded length, so an exactly sized buffer is rejected.",
+    "STANDARD/URL_SAFE require canonical padding, and the *_PAD_INDIFFERENT engines decode on the scalar path only. For a misplaced '=', whether you get InvalidLength or InvalidCharacter is deliberately unspecified and depends on the kernel, so check is_err() and don't match the variant.",
+    "0.5.0 removed the avx2/avx512-vbmi/simd/neon Cargo features, so builds that name them fail. Backend narrowing is now a RUSTFLAGS --cfg that applies to the whole dependency graph, and base64_turbo_backend=\"avx512\" on a CPU without VBMI falls back to scalar, not AVX2. --no-default-features now means no_std with SIMD, not scalar-only.",
+    "The README's API-stability paragraph still promises compatibility 'throughout the 0.4.x lifecycle' while the crate is already at 0.5.0, so pin exact versions."
+  ],
+  "pick_this_over_siblings_when": "In Rust, pick it over vb64 (std::simd; its blurb reports 1.2-2.5x over the base64 crate) or the base64 crate itself when throughput on AVX2/AVX-512 VBMI matters. Pick it over Turbo-Base64 when you need a permissive license instead of GPL-3, validation of every byte, base64url/no-pad/custom alphabets, or verified Rust memory safety at roughly equal in-cache speed. Stay with Turbo-Base64 for DRAM-sized buffers on Zen 5 or when calling from C, and use simdutf for whitespace-tolerant forgiving decoding.",
+  "verified_claims_summary": "In the author's criterion harness (random input, one core, encode GiB/s counted on raw bytes and decode on base64 text, rustc and C compiler versions not stated), at 64 KiB base64-turbo runs 81.6/106.5 GiB/s on AWS c8a.large (EPYC 9R45, Zen 5) and 25.7/36.9 on c7i.large (Xeon 8488C). The base64 crate 0.23 manages 13.5/27.9 and 8.9/13.7 (about 6.0x/3.8x and 2.9x/2.7x). Turbo-Base64, built from upstream source with its own per-file flags and default partial-validation mode, and timed with the author's own C-side harness, comes in essentially level at 80.7/107.8 and 18.2/38.5.",
+  "status_note": "Actively developed by a single author (0.5.0 released 2026-09-19; Kani, MIRI and test CI green) and 0BSD-licensed. Adoption is tiny and the API broke twice in September 2026, so vendor or pin it.",
+  "sources_read": [
+    "https://github.com/hacer-bark/base64-turbo",
+    "https://github.com/hacer-bark/base64-turbo#benchmarks",
+    "https://github.com/hacer-bark/base64-turbo/blob/main/Cargo.toml",
+    "https://github.com/hacer-bark/base64-turbo/blob/main/CHANGELOG.md",
+    "https://github.com/hacer-bark/base64-turbo/blob/main/build.rs",
+    "https://github.com/hacer-bark/base64-turbo/blob/main/src/lib.rs",
+    "https://github.com/hacer-bark/base64-turbo/blob/main/src/engine.rs",
+    "https://github.com/hacer-bark/base64-turbo/blob/main/src/cpu.rs",
+    "https://github.com/hacer-bark/base64-turbo/blob/main/src/error.rs",
+    "https://github.com/hacer-bark/base64-turbo/blob/main/src/simd.rs",
+    "https://github.com/hacer-bark/base64-turbo/blob/main/benches/encoding_bench.rs",
+    "https://github.com/hacer-bark/base64-turbo/blob/main/benches/results/c8a-large-latest.txt",
+    "https://github.com/hacer-bark/base64-turbo/blob/main/benches/results/c7i-large-latest.txt",
+    "https://github.com/hacer-bark/base64-turbo/blob/main/benches/tb64-sys/README.md",
+    "https://github.com/hacer-bark/base64-turbo/blob/main/benches/tb64-sys/build.rs",
+    "https://github.com/hacer-bark/base64-turbo/blob/main/benches/tb64-sys/src/lib.rs",
+    "https://github.com/hacer-bark/base64-turbo/blob/main/.github/workflows/tests.yml",
+    "https://github.com/hacer-bark/base64-turbo/issues",
+    "https://github.com/hacer-bark/base64-turbo/pulls",
+    "https://github.com/hacer-bark/base64-turbo/actions",
+    "https://github.com/hacer-bark/base64-turbo/graphs/contributors",
+    "https://crates.io/api/v1/crates/base64-turbo",
+    "https://crates.io/api/v1/crates/base64-turbo/reverse_dependencies",
+    "https://hn.algolia.com/api/v1/search?query=base64-turbo&hitsPerPage=10",
+    "https://github.com/powturbo/Turbo-Base64"
+  ],
+  "confidence": 0.8
+}

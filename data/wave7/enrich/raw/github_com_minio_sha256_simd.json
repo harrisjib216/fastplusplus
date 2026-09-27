@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/minio/sha256-simd",
+  "one_liner": "Go SHA-256 using SHA-NI, ARMv8 SHA2 and 16-lane AVX-512; once beat crypto/sha256, now only its multi-buffer mode might.",
+  "what_it_does": "A Go package that mirrors crypto/sha256's New() and Sum256 (hash.Hash, with MarshalBinary state in the stdlib format). At init it uses klauspost/cpuid to pick its own SHA-NI assembly on amd64 or ARMv8 SHA2 assembly on arm64; otherwise New() simply returns crypto/sha256.New(). Separately, and on amd64 only, NewAvx512Server() starts a goroutine that batches blocks from many NewAvx512(server) digests into one 16-lane AVX-512 kernel. That is an explicit, different API; New() never uses it.",
+  "how_it_is_fast": "The x86 path uses the Intel SHA Extensions (SHA256RNDS2-based rounds, contributed by Kristofer Peterson), and the ARM path uses the ARMv8 Cryptography Extensions instructions sha256h/sha256h2/sha256su0/sha256su1. The AVX-512 path is a port of intel-ipsec-mb's sha256_x16_avx512. It transposes 16 independent 64-byte message blocks across 16 ZMM registers and runs the rounds for all 16 messages at once (multi-buffer hashing), while a Go channel scheduler fills lanes and masks off lanes that run out of data. The older SSSE3/AVX/AVX2 paths (after Guilford et al.) were deleted in 2021 because the pure-Go code had become faster.",
+  "when_to_use": [
+    "amd64 servers with AVX-512 (F/DQ/BW/VL) that hash many independent, similar-length, MB-scale messages concurrently, e.g. object-store multipart parts or dedupe chunks, and can route them through a shared Avx512Server. This is the one mode with no stdlib equivalent.",
+    "Batch or Merkle-style hashing on AVX-512 hardware, but only after benchmarking Avx512Server against current crypto/sha256 yourself, since no such comparison has been published.",
+    "Builds stuck on Go toolchains older than 1.21 running on SHA-NI CPUs (the README names AMD Ryzen and Intel Celeron J3455), where the stdlib's amd64 code lacks SHA-NI."
+  ],
+  "when_not_to_use": [
+    "New()/Sum256 on Go 1.21+ amd64 or any recent Go on arm64. The stdlib uses the same instructions, and in issue #76 (Go 1.25.5, Apple M1 Max) it ties or wins at every size from 64 B up (1084 vs 793 MB/s at 64 B, 2414 vs 2352 MB/s at 1 MB). The maintainer's advice is 'just use stdlib unless you use NewAvx512Server'.",
+    "CPUs without SHA-NI or ARMv8 SHA2. New() then just returns crypto/sha256, but Sum256 runs the package's pure-Go block function rather than the stdlib's assembly, because the SSSE3/AVX/AVX2 code was removed in 2021 (#57; #58 reported a one-third throughput drop on an i7-3770K).",
+    "Small messages or single streams on the AVX-512 path. The README says messages under ~1 MB are better served by the regular hash because of scheduling overhead, and all 16 lanes need concurrent messages of similar length to pay off.",
+    "Latency-sensitive services that make large single Write calls. The SHA-NI/ARM assembly processes the whole buffer without preemption, and PR #77 (closed unmerged, Aug 2026) measured a 29 ms GC stop-the-world pause for a 64 MiB Write, which crypto/sha256 avoids by feeding at most 64 KiB per call.",
+    "FIPS/BoringCrypto builds: in #64, goboringcrypto did not recognize the package's hash and hmac.New panicked."
+  ],
+  "integration": {
+    "form": "module (Go package github.com/minio/sha256-simd)",
+    "dependencies": "github.com/klauspost/cpuid/v2 (v2.2.3); golang.org/x/sys (indirect)",
+    "min_toolchain": "go.mod declares Go 1.17; CI last tested Go 1.18-1.20; assembly only with the gc compiler (gccgo, appengine and the noasm tag fall back to pure Go)",
+    "platforms": "amd64 (SHA-NI; the AVX-512 server needs AVX512F/DQ/BW/VL), arm64 (ARMv8 SHA2, detected via cpuid or /proc/cpuinfo on Linux); other architectures build with the pure-Go fallback",
+    "thread_safety": "A digest is not safe for concurrent use, as with any hash.Hash. One Avx512Server is meant to be shared, with each goroutine holding its own NewAvx512(server) digest (maintainer in #73); the server itself runs as a single goroutine.",
+    "drop_in_for_baseline": "partial — New(), Sum256, Size, BlockSize and stdlib-compatible MarshalBinary/UnmarshalBinary mirror crypto/sha256, but there is no New224/Sum224, and the AVX-512 speedup needs the separate amd64-only NewAvx512Server/NewAvx512 API"
+  },
+  "gotchas": [
+    "NewAvx512Server does not check the CPU. Without AVX-512 the process dies with SIGILL (#35). The package's AVX-512 feature flag is unexported, so the caller must detect AVX-512 itself and also use amd64 build tags, because the function is undefined on other architectures (#73).",
+    "Each Avx512Server starts a goroutine that never exits (there is no Close) and, while idle, loops on a 1 µs time.After timer.",
+    "Avx512Digest.Write passes slices, including the digest's own 64-byte carry buffer, to the server goroutine without copying and can return before they are hashed. The tests only use fresh, 64-byte-aligned buffers, so reusing a buffer or making unaligned writes before Sum looks unsafe from the source.",
+    "Unlike crypto/sha256, an Avx512Digest is finalized by Sum: later Writes return an error until Reset, and a second Sum returns the cached result."
+  ],
+  "pick_this_over_siblings_when": "The catalogued siblings are Gueron's j-lanes and S-HASH (simultaneous multi-message) SHA-256 papers, benchmarked against OpenSSL and catalogued without a code repository. Pick this when you want that multi-buffer idea as working Go code that yields standard per-message SHA-256 digests; j-lanes' tree-hashing mode yields different digests.",
+  "verified_claims_summary": "The only comparison with Go crypto/sha256 is an ARM64 benchcmp on a 1.2 GHz Cortex-A53 (Pine64), using an unstated Go version that predates the stdlib's ARMv8 SHA2 code: 638.23 vs 6.05 MB/s at 1 MB (105x) and 8.38x at 8 bytes. The x86 figures (AVX-512 3498 MB/s on a 3.0 GHz Xeon Platinum 8124M, 7.8x, which is multi-buffer throughput across 16 lanes on one core; SHA-NI 1975 MB/s on a Ryzen 7 2700X, 3.84x) are measured against the package's own since-deleted AVX2 path, with no Go version or flags given.",
+  "status_note": "Flagged abandoned: no commits since 2023-02-22, a 2026 PR fixing GC pauses was closed unmerged, maintainers have told users since 2021 to prefer the stdlib except for the AVX-512 server, and MinIO's own current go.mod no longer lists it. It is Apache-2.0 and small, so vendoring just the AVX-512 server is feasible.",
+  "sources_read": [
+    "https://github.com/minio/sha256-simd",
+    "https://github.com/minio/sha256-simd/blob/master/README.md",
+    "https://github.com/minio/sha256-simd/tree/master",
+    "https://github.com/minio/sha256-simd/blob/master/go.mod",
+    "https://github.com/minio/sha256-simd/blob/master/sha256.go",
+    "https://github.com/minio/sha256-simd/blob/master/cpuid_other.go",
+    "https://github.com/minio/sha256-simd/blob/master/sha256block_amd64.go",
+    "https://github.com/minio/sha256-simd/blob/master/sha256block_amd64.s",
+    "https://github.com/minio/sha256-simd/blob/master/sha256block_arm64.go",
+    "https://github.com/minio/sha256-simd/blob/master/sha256block_other.go",
+    "https://github.com/minio/sha256-simd/blob/master/sha256blockAvx512_amd64.go",
+    "https://github.com/minio/sha256-simd/blob/master/sha256blockAvx512_amd64_test.go",
+    "https://github.com/minio/sha256-simd/blob/master/sha256block_amd64_test.go",
+    "https://github.com/minio/sha256-simd/blob/master/sha256_test.go",
+    "https://github.com/minio/sha256-simd/blob/master/.github/workflows/go.yml",
+    "https://github.com/minio/sha256-simd/commits/master",
+    "https://github.com/minio/sha256-simd/issues?q=is%3Aissue+OR+is%3Apr",
+    "https://github.com/minio/sha256-simd/issues/35",
+    "https://github.com/minio/sha256-simd/pull/49",
+    "https://github.com/minio/sha256-simd/pull/57",
+    "https://github.com/minio/sha256-simd/issues/58",
+    "https://github.com/minio/sha256-simd/issues/64",
+    "https://github.com/minio/sha256-simd/issues/65",
+    "https://github.com/minio/sha256-simd/issues/73",
+    "https://github.com/minio/sha256-simd/issues/76",
+    "https://github.com/minio/sha256-simd/pull/77",
+    "https://github.com/golang/go/commit/7b8a7f8272fd1941a199af1adb334bd9996e8909",
+    "https://github.com/golang/go/commits/master/src/crypto/sha256/sha256block_amd64.s",
+    "https://go.dev/doc/go1.21",
+    "https://raw.githubusercontent.com/minio/minio/master/go.mod",
+    "https://raw.githubusercontent.com/minio/minio-go/master/go.mod"
+  ],
+  "confidence": 0.8
+}

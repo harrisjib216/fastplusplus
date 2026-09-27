@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/zbjornson/fast-hex",
+  "one_liner": "AVX2 hex encoder/decoder for C++ and Node.js, self-reported ~11-12x faster than its own scalar lookup-table codec.",
+  "what_it_does": "Converts bytes to lower-case hex text and hex text (either case) back to bytes. For C++ it is two files (src/hex.h, src/hex.cc) of C-style free functions over caller-allocated buffers, e.g. decodeHexVec(dest, src, len) and encodeHexVec(dest, src, len), where len always counts bytes (half the hex length); scalar variants decodeHexLUT, decodeHexLUT4 and encodeHex share the same signature. A Nan-based Node.js addon exposes decodeHexVec(outTypedArray, stringOrBuffer) and encodeHexVec(buffer) -> string.",
+  "how_it_is_fast": "The decoder loads 64 hex characters per iteration into two AVX2 registers, uses vpshufb to split high-nibble and low-nibble characters into 16-bit lanes, and converts ASCII to nibble values branchlessly as 9*(c>>6) + (c & 0xF) (vpsraw + vpmaddubsw + vpaddw), then recombines with shift/or, vpackuswb and vpermq to store 32 bytes. The encoder zero-extends 16 bytes to 16-bit lanes (vpmovzxbw), splits nibbles with a shift plus a byte shuffle, and maps each nibble to its ASCII digit with one vpshufb against a 16-entry '0'-'f' table, writing 32 characters per iteration. Skipping validation keeps both loops branch-free; leftover bytes fall back to scalar code.",
+  "when_to_use": [
+    "Bulk hex conversion of large, trusted buffers (KB to MB) on x86-64 CPUs with AVX2, e.g. ingesting or emitting hex-encoded blobs or large batches of digests.",
+    "C/C++ projects that can vendor two source files and compile them with -mavx2 / -march=haswell (or /arch:AVX2 on MSVC) for a fixed, known-AVX2 deployment target.",
+    "Decoding mixed-case hex (A-F and a-f both accepted) where the producer is trusted or the input was validated upstream.",
+    "As a small, readable reference kernel (about 270 lines of intrinsics) to adapt into your own hex codec, e.g. adding validation or runtime dispatch."
+  ],
+  "when_not_to_use": [
+    "Untrusted input: invalid characters silently become garbage bytes and there is no error return; the README says validation is not implemented.",
+    "Portable binaries or non-x86 targets: there is no runtime CPU dispatch and no SSE, AVX-512 or NEON path; the AVX2 functions exist only when the whole file is compiled with AVX2 enabled, and only the scalar functions remain otherwise.",
+    "Node.js from npm: the only release (fast-hex 1.0.0, 2017-10-30) ships the sign-extending byte2nib that issue #4 showed mis-encodes bytes >= 0x80 (0x80 -> \"8f\"), fixed in git only in 2019. The addon's binding.gyp also builds with -march=native and calls the AVX2 functions unconditionally, so it will not compile on a non-AVX2 build host.",
+    "Short inputs: under 16 bytes (encode) or 64 characters (decode) everything runs on the scalar tail, so there is no gain. For V8 strings the README reports only ~2.12x, because copying the string out of V8 dominates.",
+    "When you need upper-case hex output: both encoders emit lower-case only."
+  ],
+  "integration": {
+    "form": "source-drop (src/hex.h + src/hex.cc); optional Node.js native addon built with node-gyp",
+    "dependencies": "none for C++ (compiler intrinsics headers only); the Node addon needs nan and node-gyp",
+    "min_toolchain": "README lists GCC 4.8+, Clang 3.4+, MSVC 2015+ and ICC 16+, but hex.cc uses a C++14 digit separator (0b11'01'10'00), which GCC supports only from 4.9, so in practice C++14 mode and GCC 4.9+",
+    "platforms": "x86-64 with AVX2 (Haswell or later) for the vector paths; the scalar functions compile anywhere",
+    "thread_safety": "Not documented. The functions are stateless and only read static const tables, so concurrent calls on separate buffers look safe from the source.",
+    "drop_in_for_baseline": "partial — same buffer-to-buffer shape as a scalar hex codec, but it does no validation, encodes lower-case only, takes len in bytes rather than characters, and requires non-overlapping src/dest (__restrict__), so in-place decoding is not allowed"
+  },
+  "gotchas": [
+    "len is the byte count (half the hex-string length) for both encode and decode. Passing the character count to decodeHexVec over-reads src and over-writes dest; the author clarified this in 2019 after a user in issue #4 hit it.",
+    "Invalid input is not rejected. The vector path computes 9*(c>>6) + (c & 0xF) for any byte, and the LUT path ORs a 0xFF sentinel into the output, so non-hex characters decode to some byte without any error.",
+    "Node addon: decodeHexVec writes inputLength/2 bytes into the destination typed array without checking its size, drops the last character of odd-length input, and for a two-byte (UTF-16) string or a non-string argument it leaves the source pointer uninitialized (it only prints a message).",
+    "Tests are thin: test.js checks one 43-byte vector against the scalar paths. benchmark/hex-decode.js calls decodeHexBMI, which the addon no longer exports, and hex-encode.js benchmarks an all-zero buffer."
+  ],
+  "pick_this_over_siblings_when": "No other hex codec is catalogued; the siblings are base64 and CRC libraries, so pick this when the format must be hex. If you control the format, a base64 sibling such as aklomp/base64 expands data 4/3x instead of 2x and does runtime CPU feature detection on x86 with scalar and NEON codecs, none of which this library has.",
+  "verified_claims_summary": "The README's ~12.5x decode and ~11.5x encode are ratios against the library's own scalar LUT functions. It gives no CPU, compiler, input size or raw throughput, and there is no C++ harness. The only raw figures are in Book1.xlsx (sheet 3, Node ops/s on the '1.6M' rows): 812 scalar LUT vs 1726 'vec8' on V8 strings (2.12x) and 1466 vs 18549 on Buffers (12.65x), while the plain 'vec' column shows 1.9x and 5.7x; 'vec8' matches no function in the published source.",
+  "status_note": "Code last changed 2022-09-19 (outside-contributor AVX2 guards and a -Wnarrowing fix), and the only 2026 activity is Dependabot lodash bumps in /benchmark, so it is effectively dormant; it is MIT-licensed and small enough to vendor and audit, but use the git source, not npm 1.0.0.",
+  "sources_read": [
+    "https://github.com/zbjornson/fast-hex",
+    "https://github.com/zbjornson/fast-hex#readme",
+    "https://github.com/zbjornson/fast-hex/tree/master",
+    "https://github.com/zbjornson/fast-hex/blob/master/src/hex.h",
+    "https://github.com/zbjornson/fast-hex/blob/master/src/hex.cc",
+    "https://github.com/zbjornson/fast-hex/blob/master/src/strdecode.cc",
+    "https://github.com/zbjornson/fast-hex/blob/master/binding.gyp",
+    "https://github.com/zbjornson/fast-hex/blob/master/package.json",
+    "https://github.com/zbjornson/fast-hex/blob/master/test.js",
+    "https://github.com/zbjornson/fast-hex/blob/master/benchmark/hex-decode.js",
+    "https://github.com/zbjornson/fast-hex/blob/master/benchmark/hex-encode.js",
+    "https://github.com/zbjornson/fast-hex/blob/master/benchmark/package.json",
+    "https://github.com/zbjornson/fast-hex/commits/master",
+    "https://github.com/zbjornson/fast-hex/commit/7b26210",
+    "https://github.com/zbjornson/fast-hex/issues?q=is%3Aissue+OR+is%3Apr",
+    "https://github.com/zbjornson/fast-hex/issues/2",
+    "https://github.com/zbjornson/fast-hex/issues/3",
+    "https://github.com/zbjornson/fast-hex/issues/4",
+    "https://github.com/zbjornson/fast-hex/issues/8",
+    "https://raw.githubusercontent.com/zbjornson/fast-hex/master/Book1.xlsx",
+    "https://registry.npmjs.org/fast-hex",
+    "https://registry.npmjs.org/fast-hex/-/fast-hex-1.0.0.tgz",
+    "https://gcc.gnu.org/projects/cxx-status.html",
+    "https://github.com/aklomp/base64#readme"
+  ],
+  "confidence": 0.8
+}
