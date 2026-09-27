@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/bpmcginley/tessera",
+  "one_liner": "Small .NET 9 columnar library whose sorted merge-sweep as-of join is about 14x faster than pandas.merge_asof on 1M x 1M rows.",
+  "what_it_does": "Tessera is an in-memory C# library for market-data time series, built around one operation: the as-of join (attach the prevailing quote to each trade). Data lives in immutable Table objects made of typed Column<T> arrays. AsOfJoin.Join supports backward, forward and nearest directions, an inclusive tolerance window and allowExactMatches, modelled on pandas merge_asof. It also has Bars.Ohlcv (ticks to OHLCV+VWAP bars), a stable SortByTime, string-to-int-code factorizers and five SIMD column ops (Add/Sub/Mul/Div/Sum). It is a separate .NET API, not a pandas replacement.",
+  "how_it_is_fast": "It uses a sort-merge as-of join. Because both inputs are globally sorted by time, one right-side cursor only moves forward while the left rows are walked. A per-group 'last seen row' array indexed directly by the dense int symbol code replaces any per-row search, so the join is a single O(n+m) pass. Output is a gather through an int32 match-index array allocated uninitialized, which is why the result costs only about 11.4 MB. Current pandas main also does a single sorted sweep (Cython asof_join_backward_on_X_by_Y) but keys it with a khash int64 hash table and adds validation and DataFrame overhead. So the win over pandas comes from direct array indexing and lower constant factors, not from better asymptotics. The O(n+m) vs O(n log m) framing applies only to the repo's own C# binary-search baseline.",
+  "when_to_use": [
+    "A .NET 9 backtester or tick-processing service that must attach the prevailing quote to each trade, in memory, on arrays in the ~1M-row range",
+    "Feeds already sorted by time with int64 nanosecond timestamps and a modest, dense symbol universe (the benchmark uses 500 symbols)",
+    "You need pandas-style backward, forward or nearest as-of semantics with tolerance and allowExactMatches, but inside a C# process without Python",
+    "You want a short, readable implementation to vendor and adapt: the core is a handful of source files with no runtime dependencies",
+    "Building OHLCV+VWAP bars from ticks in the same process (supported, but not benchmarked)"
+  ],
+  "when_not_to_use": [
+    "Your pipeline is in pandas or Python: there are no Python bindings, and moving DataFrames into .NET plus factorizing keys is outside the benchmarked time",
+    "General dataframe work: there are no equality joins, group-by, filters, expression layer or file readers and writers in the source tree",
+    "Data larger than RAM: memory-mapped, out-of-core columns are an unchecked roadmap item",
+    "Production-critical use: all 7 commits landed within about a day (2026-06-26 to 06-27), with AI co-author trailers. It has 1 star, no releases, no NuGet package and no issues filed, so there is no outside usage signal",
+    "Very high-cardinality or sparse keys: the group table is sized to max code + 1 on every join (twice for nearest), and CombineCodes throws if the product of cardinalities overflows int32. The sweep is single-threaded"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none for Tessera.Core (BenchmarkDotNet 0.14.0 for the benchmarks, xunit 2.9.2 for the tests)",
+    "min_toolchain": ".NET 9 SDK (targets net9.0 with LangVersion latest; uses C# collection expressions and static abstract interface members)",
+    "platforms": "any platform .NET 9 runs on. The as-of join is scalar code; VectorOps uses the portable System.Numerics.Vector<T>, whose width depends on hardware (the comments cite 4 doubles on AVX2 and 8 on AVX-512)",
+    "thread_safety": "not documented. The operations are static methods over immutable Tables with no shared state, but Column.Values hands out the mutable backing array, and tables share arrays",
+    "drop_in_for_baseline": "partial: it follows pandas merge_asof semantics (directions, tolerance, allowExactMatches, ties to backward on nearest) but is a C# API. It needs time as long ns, int32 dense 'by' codes and pre-sorted input, and tolerance=0 means something different"
+  },
+  "gotchas": [
+    "Sortedness is not validated. Unsorted or only per-group-sorted time columns give silently wrong matches, whereas pandas raises 'left keys must be sorted'. Run Table.SortByTime first; it is a comparison-delegate Array.Sort whose cost is not in the benchmark",
+    "tolerance <= 0 means no limit, while in pandas tolerance=0 is valid (non-negative) and restricts matches to equal timestamps",
+    "Unmatched rows get NaN only for double and float columns. Int and long 'bring' columns get 0 (a test asserts this), which cannot be told apart from real zeros. There is no null mask",
+    "Both sides must use one shared code mapping (Categoricals.FactorizeShared). Factorizing each table separately silently mismatches symbols, and a negative code would index out of range"
+  ],
+  "pick_this_over_siblings_when": "Pick Tessera when you need an as-of join on in-memory arrays inside a .NET process. Pick QuestDB when the data already lives in a time-series database (its SQL ASOF JOIN supports ON keys and TOLERANCE), and data.table when you work in R (rolling joins via roll=TRUE/'nearest'). chDB and cuDF (cudf.pandas) are better when you want to keep a pandas-shaped workflow rather than port to C#.",
+  "verified_claims_summary": "Synthetic data: 1M trades and 1M quotes over 500 symbols, pre-sorted, with int symbol codes. BenchmarkDotNet (.NET 9 Release) reports a mean of 10.8 ms for Tessera's backward join, against 82.9 ms for a hand-written C# per-symbol binary-search join (~7.7x). A separate Python script times a single pandas.merge_asof call with perf_counter after a 1,000-row warm-up and gets 152.8 ms (~14x). The two sides generate the same data shape with different RNGs (System.Random vs numpy), not identical rows. Pandas, NumPy and Python versions and the CPU are not stated beyond 'single dev laptop'.",
+  "status_note": "The repo is technically 'active', but its whole history spans about one day (last commit 2026-06-27). It is MIT-licensed and small enough to copy the few source files, but it is not published to NuGet and several unrelated 'Tessera' packages already exist there.",
+  "sources_read": [
+    "https://github.com/bpmcginley/Tessera",
+    "https://github.com/bpmcginley/Tessera#results",
+    "https://github.com/bpmcginley/Tessera/blob/main/src/Tessera.Core/AsOfJoin.cs",
+    "https://github.com/bpmcginley/Tessera/blob/main/src/Tessera.Core/Columns.cs",
+    "https://github.com/bpmcginley/Tessera/blob/main/src/Tessera.Core/Table.cs",
+    "https://github.com/bpmcginley/Tessera/blob/main/src/Tessera.Core/Categoricals.cs",
+    "https://github.com/bpmcginley/Tessera/blob/main/src/Tessera.Core/Sorting.cs",
+    "https://github.com/bpmcginley/Tessera/blob/main/src/Tessera.Core/Bars.cs",
+    "https://github.com/bpmcginley/Tessera/blob/main/src/Tessera.Core/VectorOps.cs",
+    "https://github.com/bpmcginley/Tessera/blob/main/src/Tessera.Core/Tessera.Core.csproj",
+    "https://github.com/bpmcginley/Tessera/blob/main/bench/Tessera.Benchmarks/Program.cs",
+    "https://github.com/bpmcginley/Tessera/blob/main/bench/Tessera.Benchmarks/Tessera.Benchmarks.csproj",
+    "https://github.com/bpmcginley/Tessera/blob/main/bench/python/merge_asof_bench.py",
+    "https://github.com/bpmcginley/Tessera/blob/main/tests/Tessera.Tests/Tessera.Tests.csproj",
+    "https://github.com/bpmcginley/Tessera/blob/main/tests/Tessera.Tests/AsOfJoinTests.cs",
+    "https://github.com/bpmcginley/Tessera/blob/main/tests/Tessera.Tests/AsOfDirectionTests.cs",
+    "https://github.com/bpmcginley/Tessera/commits/main",
+    "https://github.com/bpmcginley/Tessera/issues",
+    "https://github.com/bpmcginley/Tessera/releases",
+    "https://azuresearch-usnc.nuget.org/query?q=Tessera&take=10",
+    "https://raw.githubusercontent.com/pandas-dev/pandas/main/pandas/core/reshape/merge.py",
+    "https://raw.githubusercontent.com/pandas-dev/pandas/main/pandas/_libs/join.pyx",
+    "https://raw.githubusercontent.com/Rdatatable/data.table/master/man/data.table.Rd",
+    "https://github.com/questdb/documentation/blob/main/documentation/query/sql/asof-join.md",
+    "https://hn.algolia.com/api/v1/search?query=bpmcginley%20Tessera&restrictSearchableAttributes=url",
+    "https://hn.algolia.com/api/v1/search?query=Tessera%20merge_asof"
+  ],
+  "confidence": 0.8
+}

@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/mpope9/efuse_filter",
+  "one_liner": "Erlang/Elixir NIF wrapping FastFilter's C binary fuse8 filter; static membership filter beating BEAM Bloom libraries on lookup latency.",
+  "what_it_does": "It builds an immutable approximate-membership filter from a full list of Erlang terms and answers contain/2 queries. The filter uses 8-bit fingerprints, so the false-positive rate is about 0.39% with no false negatives. The API is the fuse8 module: new/1 hashes keys with erlang:phash2, new/2 with `none` takes your own non-negative 64-bit integer hashes, new_empty/add/finalize accumulate keys incrementally, and to_bin/from_bin give a portable binary that contain can query directly. It is not a drop-in replacement for a Bloom library, because nothing can be added after the build; the README says it is almost API-compatible with the same author's exor_filter.",
+  "how_it_is_fast": "It is a binary fuse filter (Graf & Lemire, 'Binary Fuse Filters: Fast and Smaller Than Xor Filters'). Each key goes through a seeded murmur64 finalizer and maps to three slots in adjacent segments of a byte array. A lookup XORs those three bytes and compares the result with the key's fingerprint, so every query is exactly three memory reads with no loop over k hash functions. The array is built by hypergraph peeling and takes about 9 bits per key at large n (size factor max(1.125, 0.875 + 0.25*ln(10^6)/ln n) in the vendored header). Against Bloomex and Blex, most of the measured gap comes from running the probe in C instead of BEAM code. Each contain is still one NIF call, about 140 ns per lookup at 1M keys in the author's run (derived; this includes Enum and fun-call overhead).",
+  "when_to_use": [
+    "A read-mostly deny list, seen-ID set or cache pre-check in an Erlang/Elixir service, built once from a known key set (thousands to tens of millions of keys) and queried from many processes.",
+    "You already have well-distributed 64-bit integer hashes and can use new/2 with `none`. That is the benchmarked mode, and it keeps the false-positive rate near 0.39% at millions of keys.",
+    "You want to ship or persist the filter. to_bin produces a 28-byte little-endian header plus the fingerprint array, and contain queries that binary in place without deserializing it.",
+    "You are replacing Bloomex or Blex and lookup latency is the bottleneck. At 1M keys the author's benchmark shows about 6x and 9x faster lookups, and about 2.8x over the Rust-NIF erbloom (ratios derived)."
+  ],
+  "when_not_to_use": [
+    "The set changes. There is no insert or delete after finalize, so every update is a full rebuild. The rebuild needs roughly 32 bytes per key of transient C memory (derived from the key buffer plus populate's scratch arrays), on top of the Erlang list and the `sets` dedup copy.",
+    "Default hashing on large sets. erlang:phash2/1 returns only 27-bit values (0..2^27-1), so any non-member whose phash2 value collides with a member's is a false positive. The derived effective rate is ~1.1% at 1M keys and ~7.8% at 10M, against 0.39% for the filter alone. Use `none` with a 64-bit hash instead.",
+    "You need a false-positive rate below ~0.4%. Only fuse8 is exposed (no fuse16); exor_filter offers xor16.",
+    "Filters come from untrusted sources. The NIF checks only that the binary length matches its ArrayLength field (its minimum-size check is 16 bytes, for a 28-byte header) and never validates the segment fields, so a crafted binary can drive out-of-bounds reads inside the VM.",
+    "You need a maintained dependency. There has been a single 0.1.0 release (2021), and the vendored binaryfusefilter.h predates two upstream fixes: guards for 0-2-key sets (2021-08-21/22), and a construction retry path that did not reset its state or reseed (2022-03-23, commit ed27385)."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "None at runtime, because FastFilter's binaryfusefilter.h is vendored. Building needs make (gmake on FreeBSD) and a C99 compiler, run by a rebar3 pre-compile hook.",
+    "min_toolchain": "Erlang/OTP 24+ (per the README; it uses sets version 2), rebar3 or Mix, and a C99 compiler with __uint128_t (GCC or Clang)",
+    "platforms": "rebar3 build hooks exist only for Linux, macOS, FreeBSD and Solaris, so there is no Windows build. It is 64-bit only in practice because it needs __uint128_t, and the macOS Makefile defaults target x86_64 only.",
+    "thread_safety": "Not documented. Built filters are immutable NIF resources or binaries and contain only reads them, so concurrent lookups from many processes look safe (inferred from the source).",
+    "drop_in_for_baseline": "partial — it is not API-compatible with Bloomex, Blex or erbloom. It needs the whole key set before the build, cannot add keys afterwards, and has no FPR parameter. The README says it is almost API-compatible with exor_filter (xor8/xor16)."
+  },
+  "gotchas": [
+    "NIF errors are stored in the record instead of being returned. new(List, none) only checks that some element is an integer (lists:any), so a mixed list or negative integers produce a #fuse8{} whose reference is {error, convert_to_uint64_t_error}. The first contain on that record raises case_clause. A negative integer key passed to contain on a `none` filter also raises case_clause.",
+    "A serialized filter built with `none` must be queried with contain/4 (..., none) or reloaded with from_bin/2. contain/2 and contain/3 on a binary always apply phash2, which gives silent false negatives.",
+    "The helper named over_100k matches on 10_001, so builds of more than 10,000 elements (not 100k, as its doc says) run on a dirty CPU scheduler. Smaller builds and every contain call run on normal schedulers; open issue #4 proposes a dirty contain for large filters.",
+    "On macOS the Makefile's default CFLAGS and LDFLAGS hard-code `-arch x86_64`. An Apple Silicon (arm64) BEAM therefore needs those variables overridden before the NIF will load (inferred from the Makefile, not tested)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over exor_filter (same author, xor8/xor16 NIF) when you want the smaller binary fuse layout and fuse8's error rate is good enough; the xorfilter entry cites ~13% over the information-theoretic bound, against ~23% for xor filters. The shared benchmark's ~9% lookup edge over xor8 at 1M keys is confounded, because only fuse8 skipped phash2. Choose exor_filter for 16-bit fingerprints, a custom hash function or a lower-memory incremental build, and outside the BEAM use the upstream C header (xor_singleheader) or xorf/xorfilter directly.",
+  "verified_claims_summary": "The author's own Benchee suite ran on an Intel Core i5-7267U laptop under macOS with Elixir 1.12.2 and OTP 24.0.5; the NIF was built with the Makefile's -O3 defaults and the compiler version is not stated. 10,000 positive lookups of pre-hashed integers took 1.42 ms on a 1M-key fuse8 filter, against 4.01 ms for the Rust-NIF erbloom (~2.8x), 8.87 ms for Bloomex and 13.17 ms for Blex. At 10M keys it was 1.54 ms against 15.24 ms and 18.47 ms (~9.9x and ~12x); all ratios are derived. Only fuse8 skipped phash2, the Bloom filters ran at looser 10% and 1% FPRs, and the 'erbloom 10M' row was really built from 10k keys.",
+  "status_note": "Abandoned: there has been one hex release (0.1.0, 2021-08-08, ~300 downloads), the last commit was 2021-08-17, and in November 2024 the author wrote that it had been 'quite a while' since he last touched it. It is Apache-2.0 and about 1,150 lines of C and Erlang, so vendoring it is realistic, and the Zabrane/efuse_filter fork carries an unmerged update to the latest upstream header.",
+  "sources_read": [
+    "https://github.com/mpope9/efuse_filter",
+    "https://github.com/mpope9/efuse_filter/blob/main/c_src/fuse_filter_nif.c",
+    "https://github.com/mpope9/efuse_filter/blob/main/c_src/binaryfusefilter.h",
+    "https://github.com/mpope9/efuse_filter/blob/main/c_src/Makefile",
+    "https://github.com/mpope9/efuse_filter/blob/main/src/fuse8.erl",
+    "https://github.com/mpope9/efuse_filter/blob/main/src/efuse_filter.erl",
+    "https://github.com/mpope9/efuse_filter/blob/main/src/efuse_filter.app.src",
+    "https://github.com/mpope9/efuse_filter/blob/main/rebar.config",
+    "https://github.com/mpope9/efuse_filter/blob/main/test/efuse_filter_test.erl",
+    "https://github.com/mpope9/efuse_filter/issues/4",
+    "https://github.com/mpope9/efuse_filter/issues/5",
+    "https://github.com/mpope9/efuse_filter/pulls?q=is%3Apr",
+    "https://github.com/mpope9/efuse_filter/commits/main",
+    "https://github.com/mpope9/efuse_filter/forks",
+    "https://github.com/mpope9/efuse_filter/compare/main...Zabrane:efuse_filter:main",
+    "https://hex.pm/api/packages/efuse_filter",
+    "https://repo.hex.pm/tarballs/efuse_filter-0.1.0.tar",
+    "https://github.com/mpope9/exor_bechmark#benchee-output",
+    "https://github.com/mpope9/exor_bechmark/blob/master/lib/exor_benchmark.exs",
+    "https://github.com/mpope9/exor_bechmark/blob/master/mix.lock",
+    "https://github.com/FastFilter/xor_singleheader/blob/master/include/binaryfusefilter.h",
+    "https://github.com/FastFilter/xor_singleheader/commits/master/include/binaryfusefilter.h",
+    "https://github.com/FastFilter/xor_singleheader/commit/ed27385e1ca4a67abfc17ecd0da13045fe244ba8",
+    "https://github.com/FastFilter/xor_singleheader/issues/27",
+    "https://github.com/FastFilter/xor_singleheader/issues/44",
+    "https://github.com/FastFilter/xor_singleheader/issues/77",
+    "https://github.com/mpope9/exor_filter",
+    "https://github.com/mpope9/exor_filter/issues",
+    "https://github.com/mpope9/exor_filter/blob/master/c_src/Makefile",
+    "https://www.erlang.org/doc/apps/erts/erlang.html"
+  ],
+  "confidence": 0.7
+}
