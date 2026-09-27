@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/wojciechmula/base64-avx512",
+  "one_liner": "C artifact of the Muła–Lemire AVX-512 VBMI base64 codec; 10–20x faster than Chrome's table-driven codec.",
+  "what_it_does": "This is the reference code for the paper 'Base64 encoding and decoding at almost the speed of a memory copy' (Software: Practice and Experience, 2020). It exposes bare C functions, not a library: encode_base64_avx512vbmi/encode_base64_avx512vl(dst, src, n) return void, and decode_base64_avx512vbmi(dst, src, n) (plus an __unrolled variant and a _despace variant that skips ' ', '\\n', '\\r') returns the decoded length or (size_t)-1. Only the standard '+/' alphabet with '=' padding is wired up. Leftover bytes go to a bundled copy of Chromium's scalar modp_b64 codec, and the Makefile builds only the unit-test and benchmark binaries.",
+  "how_it_is_fast": "Encoding takes three instructions per 48 input bytes. vpermb duplicates and reorders the input bytes, vpmultishiftqb moves the four 6-bit fields of each 24-bit group into separate bytes, and a second vpermb uses the 64-character alphabet held in one register as the lookup table. Decoding takes five instructions per 64 characters: vpermi2b does a 128-entry ASCII-to-6-bit lookup that flags invalid bytes with 0x80, vpternlogd ORs those flags into an error register that is checked once at the end (so the hot loop has no branch), vpmaddubsw and vpmaddwd pack the fields, and vpermb compacts the result to 48 bytes. The paper counts about 7x fewer instructions than the authors' earlier AVX2 codec for encoding and about 5x fewer for decoding.",
+  "when_to_use": [
+    "Bulk encode or decode of clean base64 (no line breaks, standard alphabet) on x86-64 CPUs with AVX-512 VBMI. GCC's -march lists include it for Cannon Lake, Ice Lake and AMD Zen 4.",
+    "Buffers from a few kB up to L2 size, or large data processed in cache-sized chunks. That is where the paper measured about 40 GB/s against 1.5–2.6 GB/s for Chrome's codec.",
+    "A fleet where you control the target CPU and can compile with a VBMI-capable -march and no dispatch layer.",
+    "As readable reference kernels (about 50 lines each) to port into your own codec or runtime-dispatch layer."
+  ],
+  "when_not_to_use": [
+    "CPUs without VBMI: this includes AVX-512 parts such as Skylake-SP, Cascade Lake and Cooper Lake (GCC's ISA lists show no AVX512VBMI; the paper wrongly names Cascade and Cooper Lake), plus pre-Zen 4 AMD and all ARM. There is no fallback or CPU detection, so the code faults with an illegal instruction.",
+    "MIME, PEM or any line-wrapped input. The whitespace-skipping decoder has had an open 'despacing buggy' issue (#2, returns -1) since 2019.",
+    "Decoding untrusted input: in the decoder the benchmark uses, error checking is broken (see gotchas).",
+    "Production use that needs base64url, streaming, output-length helpers or a maintained API. simdutf and aklomp/base64 provide these.",
+    "Data far larger than cache: on a 34.9 MB zip the paper's AVX-512 decoder ran at memcpy speed (9.5 GB/s), against 8.3 GB/s for AVX2, so the gain over AVX2 largely vanishes once memory-bound."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (tails fall back to bundled Chromium/modp_b64 scalar code, BSD-licensed)",
+    "min_toolchain": "C99 compiler with AVX-512 VBMI intrinsics. The README suggests GCC 8+ and the paper and Dockerfile used GCC 9.1. The despace variant also uses GCC builtins and BMI2 PEXT/PDEP.",
+    "platforms": "x86-64 with AVX-512 F/BW/VBMI only; the Makefile hard-codes -march=cannonlake",
+    "thread_safety": "not documented; from reading the source, the codec functions touch only constant tables and caller buffers, so concurrent calls on separate buffers look safe",
+    "drop_in_for_baseline": "partial — decode mirrors chromium_base64_decode (size_t return, (size_t)-1 on error), but encode returns void, the SIMD loops need extra output slack, and there is no length helper or alphabet option"
+  },
+  "gotchas": [
+    "The benchmarked decode_base64_avx512vbmi__unrolled overwrites its error register on every 256-byte iteration (errorvec = _mm512_ternarylogic_epi32(t0, t1, t2, OR_ALL) with no previous errorvec). Invalid characters in any 256-byte block except the last are therefore not reported. Use decode_base64_avx512vbmi or patch it.",
+    "From reading the source (not tested): the SIMD loop consumes every full 64-byte block and '=' decodes as invalid there, and only the sub-64-byte tail handles padding. So padded input whose length is an exact multiple of 64 appears to be rejected with -1.",
+    "Output buffers need slack. The decoder's 64-byte loop issues full 64-byte stores while advancing only 48 bytes, so allow about 16 bytes past the decoded size; Chromium's own sizing guidance allows only len*3/4. The encoder's tail goes through chromium_base64_encode, which writes a trailing NUL only when n % 48 != 0. The encoder returns nothing, so compute 4*ceil(n/3) yourself.",
+    "The paper's GB/s figures are normalized to base64 bytes, so the raw-binary rate for encoding is 3/4 of the quoted figure. The authors saw no AVX-512 downclocking on their Cannon Lake part but note that other Intel processors downclock."
+  ],
+  "pick_this_over_siblings_when": "Pick it only to study or vendor the paper's exact AVX-512 VBMI kernels. For production, simdutf's base64 cites this paper, runs an AVX-512 path on Ice Lake/Zen 4 behind runtime dispatch, and handles whitespace, url-safe input and strict or loose padding. aklomp/base64 offers runtime dispatch but only for AVX-512 encoding (its decoding reuses AVX2). base64simd and fastbase64 by the same authors cover AVX2-only machines.",
+  "verified_claims_summary": "The paper ran on an Intel i3-8121U (Cannon Lake, 3.2 GHz max) with GCC 9.1 -O3 -march=cannonlake, taking the median of 10 runs including call overhead. Encoding and decoding ran at about 40 GB/s for L2-resident inputs over 16 kB, against 1.5 GB/s (encode) and 2.6 GB/s (decode) for Chrome's table-based codec; the paper sums this up as a 10–20x gain. Real-file decode was 25–42 GB/s for in-cache images but only 9.5 GB/s, equal to memcpy, for a 34.9 MB zip. The paper's 150 GB/s figure is memcpy's L1 peak, not the codec.",
+  "status_note": "A frozen paper artifact, abandoned since 2019-11 with one bug open since 2019. It is BSD-3-Clause and small enough to vendor; the last known-good toolchain is GCC 9.1 per its Dockerfile.",
+  "sources_read": [
+    "https://github.com/WojciechMula/base64-avx512",
+    "https://raw.githubusercontent.com/WojciechMula/base64-avx512/master/README.md",
+    "https://api.github.com/repos/WojciechMula/base64-avx512/git/trees/HEAD?recursive=1",
+    "https://raw.githubusercontent.com/WojciechMula/base64-avx512/master/Makefile",
+    "https://raw.githubusercontent.com/WojciechMula/base64-avx512/master/Dockerfile",
+    "https://raw.githubusercontent.com/WojciechMula/base64-avx512/master/include/encode_base64_avx512vbmi.h",
+    "https://raw.githubusercontent.com/WojciechMula/base64-avx512/master/include/decode_base64_avx512vbmi.h",
+    "https://raw.githubusercontent.com/WojciechMula/base64-avx512/master/include/decode_base64_avx512vbmi_despace.h",
+    "https://raw.githubusercontent.com/WojciechMula/base64-avx512/master/include/encode_base64_avx512vl.h",
+    "https://raw.githubusercontent.com/WojciechMula/base64-avx512/master/include/decode_base64_avx512vbmi__unrolled.h",
+    "https://raw.githubusercontent.com/WojciechMula/base64-avx512/master/include/chromiumbase64.h",
+    "https://raw.githubusercontent.com/WojciechMula/base64-avx512/master/src/base64/encode_base64_avx512vbmi.c",
+    "https://raw.githubusercontent.com/WojciechMula/base64-avx512/master/src/base64/encode_base64_avx512vl.c",
+    "https://raw.githubusercontent.com/WojciechMula/base64-avx512/master/src/base64/decode_base64_avx512vbmi.c",
+    "https://raw.githubusercontent.com/WojciechMula/base64-avx512/master/src/base64/decode_base64_avx512vbmi__unrolled.c",
+    "https://raw.githubusercontent.com/WojciechMula/base64-avx512/master/src/base64/decode_base64_tail_avx512vbmi.c",
+    "https://raw.githubusercontent.com/WojciechMula/base64-avx512/master/src/base64/decode_base64_avx512vbmi_despace.c",
+    "https://raw.githubusercontent.com/WojciechMula/base64-avx512/master/src/base64/chromiumbase64.c",
+    "https://raw.githubusercontent.com/WojciechMula/base64-avx512/master/src/unit.c",
+    "https://raw.githubusercontent.com/WojciechMula/base64-avx512/master/src/benchmark.c",
+    "https://raw.githubusercontent.com/WojciechMula/base64-avx512/master/scripts/setupfortesting/README.md",
+    "https://github.com/WojciechMula/base64-avx512/issues?q=is%3Aissue",
+    "https://github.com/WojciechMula/base64-avx512/issues/2",
+    "https://arxiv.org/pdf/1910.05109",
+    "https://github.com/aklomp/base64",
+    "https://github.com/simdutf/simdutf",
+    "https://gcc.gnu.org/onlinedocs/gcc/x86-Options.html",
+    "https://hn.algolia.com/api/v1/search?query=base64%20almost%20the%20speed%20of%20a%20memory%20copy&tags=story",
+    "https://news.ycombinator.com/item?id=21459839"
+  ],
+  "confidence": 0.85
+}
