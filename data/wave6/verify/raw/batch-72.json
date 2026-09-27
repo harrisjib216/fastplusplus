@@ -1,0 +1,71 @@
+[
+  {
+    "id": "https://github.com/rabbitmq/rabbitmq-server",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "docs/02-latency.md has exactly the 500 msg/s row: RabbitMQ p50 2.6 ms vs Kafka 6.5 ms, p99.9 11.1 vs 11.0 ms. The harness is public (src/brokerlab/, results/latency/), but it is a personal 0-star repo, not a peer-reviewed paper or a well-known suite, and methodology.md gives only 'Apple Silicon' with no chip model, so it is not B or A.",
+    "corrections": {
+      "caveats": "Single laptop, single node each, RF=1 with no replication tested. Results depend as much on the client libraries (confluent-kafka/librdkafka vs pika's blocking adapter) as on the brokers. The page itself says Kafka's low-rate floor is its configured linger.ms=5 batching delay ('a dial, not a property'), which accounts for most of the p50 gap. The win exists only at 500 msg/s. At 2,000 and 8,000 msg/s one pika publisher with confirms topped out near 1,100 msg/s (p50 8.9 s and 65.5 s, a load-generator backlog), while Kafka kept up with a p50 of 4.4 ms and 3.4 ms. RabbitMQ 4 classic queues only. Exact CPU model not given ('Apple Silicon'). The benchmark repo is a 0-star personal project, though its methodology is unusually rigorous: repeated runs, a documented coordinated-omission fix, and committed raw JSON results."
+    },
+    "notes": "The numbers are accurate, but the record overstates the tier: a personal benchmark repo is not a 'well-known independent third-party suite', so the tier is C. The license API returns NOASSERTION. The LICENSE file says the core and tier-1 plugins are MPL-2.0 and some OCF files are Apache-2.0, so the license stays copyable. Stars (13,880) and last commit (2026-09-26) are verified.",
+    "urls_opened": [
+      "https://github.com/i-safonoff/broker-tradeoffs/blob/main/docs/02-latency.md",
+      "https://github.com/i-safonoff/broker-tradeoffs",
+      "https://github.com/i-safonoff/broker-tradeoffs/blob/main/docs/methodology.md",
+      "https://github.com/rabbitmq/rabbitmq-server",
+      "https://github.com/rabbitmq/rabbitmq-server/blob/main/LICENSE"
+    ]
+  },
+  {
+    "id": "https://github.com/cloudamqp/lavinmq",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "The CloudAMQP/LavinMQ customer story (2024-10-25, DAT Systems) quotes 5 GB to under 40 MB of memory 'in an instance in a development environment', consume times 3x lower and publish times 300x better than 'our previous Kafka integration'. These are first-party testimonial numbers with no methodology or sizing, so the tier is C.",
+    "corrections": {
+      "workload": "Elixir/Broadway messaging platform (DAT Systems, serving LWMC's 16,000+ employees over WhatsApp/Telegram/WeChat). The memory figure comes from a local development install of LavinMQ next to the local Kafka. The 3x/300x figures compare production on a serverless (managed, provider unnamed) Apache Kafka service with CloudAMQP's hosted LavinMQ service.",
+      "caveats": "First-party case study (a customer testimonial on the vendor's own site) with no hardware or instance sizing for either side and no independent reproduction. The memory figure is explicitly from a development instance. The production baseline was an unnamed serverless/managed Kafka service that had reliability problems ('broker not found', 'leader missing'), not a tuned self-hosted Kafka, so the 300x publish-time gain likely reflects provider, network and client differences more than the broker. The growth from ~4,000 to 50,000+ messages a day is business growth, not a performance measurement."
+    },
+    "notes": "The quotes match. The baseline was 'serverless Apache Kafka' (unnamed provider), which weakens the comparison, but tier C is already right. Metadata is verified: Apache-2.0, 1,018 stars, last commit 2026-09-25.",
+    "urls_opened": [
+      "https://lavinmq.com/blog/dat-systems-user-story",
+      "https://github.com/cloudamqp/lavinmq"
+    ]
+  },
+  {
+    "id": "https://github.com/nats-io/nats-server",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "A",
+    "tier_reason": "Upgraded from C. COMPARISON.md's steady-state table has Kafka p50 7.2-7.8 / p99 12.7-13.5 / p999 14.0-19.1 ms vs NATS 0.5 / 0.9 / 2.8 ms. The harness is public (bench/steady.go, bench/nats_adapter.go, bench/kafka_adapter.go, run via `go run . -mode=steady` in the Makefile). LEARNINGS.md states the Go 1.25 toolchain with default build flags, the Apple M4 CPU, and the pinned images nats:2.10-alpine and cp-kafka:7.6.1, which meets the A criteria as applied to go-sieve in batch 58.",
+    "corrections": {
+      "hardware": "Apple M4 (10 cores, 16GB RAM), macOS 26.5; containers under OrbStack (Docker 29.4.0, linux/arm64) with a VM of 10 CPUs / ~7.8GB; all brokers single-node, unreplicated, sharing the host with each other and the load generator",
+      "compiler_and_flags": "Bench client: Go 1.25 toolchain (bench/go.mod go 1.25.0), run with `go run .` from the Makefile (default flags), franz-go v1.21.4, nats.go v1.52.0, HdrHistogram-go v1.2.0. Brokers are prebuilt Docker images nats:2.10-alpine (-js) and confluentinc/cp-kafka:7.6.1 (Apache Kafka 3.6, KRaft).",
+      "workload": "Single-node docker-compose deployment (Kafka 3.6 via cp-kafka 7.6.1 in KRaft mode vs NATS 2.10 with JetStream enabled), single partition/stream, no replication, small JSON payloads. Steady-state mode: producer paced at 500 msg/s with the consumer already tailing, 5s warm-up plus a 20s measurement window. Native Go clients: franz-go with default producer settings (no ProducerLinger set) for Kafka, and nats.go JetStream PublishAsync with an explicit-ack consumer for NATS. Latency measured with HdrHistogram.",
+      "caveats": "Benchmark repo has 0 stars and no license and is a personal project. Single node, single partition, no replication, 20s windows at one light load (500 msg/s). The repo's own burst-mode latency numbers are called 'not meaningful' by its author, so only the steady-state numbers are used here. LEARNINGS.md says these were stable within ~5% across repeated runs. Much of Kafka's ~7 ms p50 is probably the franz-go v1.21.4 default producer linger of 10 ms (pkg/kgo/config.go), which the bench never overrides, so the 14x median gap partly reflects a client default rather than the broker. Older broker versions (NATS 2.10, Kafka 3.6). Not independently reproduced elsewhere.",
+      "stars_or_usage": "20,771 stars"
+    },
+    "notes": "The record's caveats were wrong in two places: LEARNINGS.md does name the CPU (Apple M4), and the author reports repeated runs, not a single run. With the Go toolchain, run command, CPU and pinned images all stated, tier A applies. Flag for the orchestrator: the franz-go default 10 ms linger likely inflates Kafka's latency at this low rate.",
+    "urls_opened": [
+      "https://github.com/nipunnair/streaming-showdown/blob/main/COMPARISON.md",
+      "https://github.com/nipunnair/streaming-showdown",
+      "https://github.com/nipunnair/streaming-showdown/blob/main/LEARNINGS.md",
+      "https://github.com/nipunnair/streaming-showdown/blob/main/Makefile",
+      "https://github.com/nipunnair/streaming-showdown/blob/main/bench/kafka_adapter.go",
+      "https://github.com/nipunnair/streaming-showdown/blob/main/bench/nats_adapter.go",
+      "https://github.com/nipunnair/streaming-showdown/blob/main/bench/steady.go",
+      "https://github.com/nipunnair/streaming-showdown/blob/main/bench/go.mod",
+      "https://github.com/nipunnair/streaming-showdown/blob/main/docker-compose.nats.yml",
+      "https://github.com/nipunnair/streaming-showdown/blob/main/docker-compose.kafka.yml",
+      "https://raw.githubusercontent.com/twmb/franz-go/v1.21.4/pkg/kgo/config.go",
+      "https://github.com/nats-io/nats-server"
+    ]
+  }
+]
