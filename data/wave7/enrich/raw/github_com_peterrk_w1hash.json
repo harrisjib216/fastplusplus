@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/peterrk/w1hash",
+  "one_liner": "A wyhash-derived 64-bit non-cryptographic hash, tuned to spend fewer cycles on 1-16 byte keys than wyhash v4.2.",
+  "what_it_does": "A single-header C hash (w1hash.h) exposing w1hash(key, len), w1hash_with_seed(key, len, seed) and w1hash64(x) for 8-byte integers, plus a Go module github.com/peterrk/w1hash with Hash, HashWithSeed and Hash64. It is a one-shot hash with no streaming API and a 64-bit output. The README warns it does not produce wyhash's output, so swapping it in changes every stored or persisted hash value.",
+  "how_it_is_fast": "Keys of 0-16 bytes go through a per-length switch that loads the key in at most two reads, then run a single 64x64->128 multiply-and-fold (MUM) finalization. On x86-64 and AArch64, 3, 5, 6 and 7-byte tails use one wider load that may run past the end of the key, masked down, whenever that load stays inside the same 4 KB page. Longer inputs are consumed 16 bytes per MUM, with a 4-lane 64-byte loop above 64 bytes (wyhash v4.2 uses 3 lanes of 48 bytes). The seed and length are pre-mixed with one extra multiply at entry.",
+  "when_to_use": [
+    "Hash-table keys of 1-16 bytes (short strings, small IDs, packed structs) on x86-64 or AArch64, where rurban/smhasher measured 23.5-25.8 cycles/hash against wyhash v4.2's 27-28",
+    "Hashing 64-bit integer keys with the dedicated w1hash64() (two multiplies)",
+    "In-memory tables where the hash is never persisted, so the fact that its output differs from wyhash does not matter",
+    "Mixed C and Go code that needs the same hash value on both sides: the Go port is tested bit-for-bit against the C header through cgo"
+  ],
+  "when_not_to_use": [
+    "Bulk hashing (KB and up) as measured in rurban/smhasher: about 14.2 GB/s against wyhash's 22.6 GB/s, roughly 37% slower. SMHasher3 measured the opposite (8.15 vs 6.98 bytes/cycle), so check on your own hardware.",
+    "When rapidhash v3 or a5hash is an option: rapidhash v3 is faster at every 1-16 byte size in rurban/smhasher (about 20 vs 23.5-25.8 cycles/hash), and both pass all 250 SMHasher3 tests. w1hash does not.",
+    "When hash quality matters on sparse inputs: SMHasher3 fails w1hash on the TwoBytes keyset at 48-byte keys (6 full 64-bit collisions against 0 expected). Its small-key average there is 29.34 cycles, the same as wyhash's 29.31, so the short-key edge does not appear in that harness.",
+    "Any code running under AddressSanitizer or Valgrind, or any strictly portable C, because of the deliberate past-the-end reads (see gotchas)",
+    "Hash-flooding (HashDoS) resistance or anything cryptographic: it is a plain seeded non-cryptographic hash, and no security analysis is documented"
+  ],
+  "integration": {
+    "form": "header-only (C, w1hash.h); Go module (github.com/peterrk/w1hash)",
+    "dependencies": "none",
+    "min_toolchain": "C: C99-level compiler (stdint.h, static inline), using __uint128_t, MSVC x64 _umul128, or a portable 32-bit multiply fallback. Go: 1.25 (go.mod declares go 1.25.0).",
+    "platforms": "any. Fast unaligned-read paths are enabled on x86-64 and AArch64 (or with -DW1_LITTLE_ENDIAN_UNALIGNED_READ); other targets use byte-assembled little-endian reads. Go has hand-translated amd64 assembly and a pure-Go fallback on every other GOARCH.",
+    "thread_safety": "Stateless pure functions with no globals, so concurrent use is safe. Not stated in the docs; follows from the code.",
+    "drop_in_for_baseline": "partial: the call shape matches wyhash (key, len, seed -> uint64), but outputs differ from wyhash and there is no secret-array parameter, so it only replaces wyhash where hashes are never stored or compared across versions"
+  },
+  "gotchas": [
+    "Past-the-end reads: on x86-64/AArch64 the C header, and the Go amd64 assembly, read up to 3 bytes beyond the key for 3/5/6/7-byte tails when the read stays within a 4 KB page. They also use unaligned type-punned loads (*(uint64_t*)p). SMHasher3 tags the implementation 'ub_reads' and FLAG_IMPL_READ_PAST_EOB. Expect ASan/UBSan/Valgrind reports.",
+    "Until 2026-07-25 (commit 68a6bf2, issue #1, still open) the portable multiply fallback declared a variable twice and did not compile on targets that have neither __int128 nor MSVC x64, such as 32-bit builds. Use a revision at or after that fix.",
+    "The MSVC x64 branch calls _umul128 without including <intrin.h>. MSVC users may need to include it before w1hash.h; the repo has no MSVC CI.",
+    "In Go, the tests and BenchmarkHash build only with cgo (they compare against the C header), the old purego build tag was removed in March 2026 so amd64 always uses assembly, and the benchmark times only w1hash itself (Go vs C), not any competitor."
+  ],
+  "pick_this_over_siblings_when": "Pick it over wyhash only for very short keys where you control persistence: it fails 1 SMHasher3 test against wyhash v4.2's 15, and rurban/smhasher shows 7-15% fewer cycles at 1-16 bytes. rapidhash (faster at small keys in rurban/smhasher and passes all SMHasher3 tests) and a5hash (26.91 cycles small-key average in SMHasher3, passes all tests) are generally the better choice, and w1hash's main remaining draws are its 1-4 byte speed in SMHasher3 and its matching Go port.",
+  "verified_claims_summary": "In rurban/smhasher (table labeled AMD Ryzen 5 3350G, compiler and flags not stated), w1hash averaged 26.85 cycles/hash on 1-32 byte keys against wyhash v4.2's 28.91 (23.5-25.8 vs 27-28 at 1-16 bytes), but rapidhash v3 averaged 22.04, and w1hash's bulk throughput at 256 KB was 14,208 vs 22,640 MiB/s for wyhash. SMHasher3 found no average small-key win (29.34 vs 29.31 cycles) but better bulk (8.15 vs 6.98 bytes/cycle). The author's own chart (Core Ultra 7 155H, clang) shows about 12 vs 14-17 units at 1-16 bytes against a combined wyhash/rapidhash line, with XXH3 fastest above 16 bytes.",
+  "status_note": "The C algorithm dates from November 2024, a Go port was added in March 2026, and the last commit (a compile fix) landed on 2026-07-25. It is BSD-3-Clause, a single ~5 KB header that is trivial to vendor, and has very low adoption (4 stars) beyond its inclusion in rurban/smhasher and SMHasher3.",
+  "sources_read": [
+    "https://github.com/PeterRK/w1hash",
+    "https://github.com/PeterRK/w1hash/blob/main/README.md",
+    "https://github.com/PeterRK/w1hash/blob/main/benchmark.png",
+    "https://github.com/PeterRK/w1hash/blob/main/w1hash.h",
+    "https://github.com/PeterRK/w1hash/blob/main/w1hash_amd64.go",
+    "https://github.com/PeterRK/w1hash/blob/main/w1hash_amd64.s",
+    "https://github.com/PeterRK/w1hash/blob/main/w1hash_generic.go",
+    "https://github.com/PeterRK/w1hash/blob/main/w1hash_test.go",
+    "https://github.com/PeterRK/w1hash/blob/main/go.mod",
+    "https://github.com/PeterRK/w1hash/blob/main/internal/cgotest/cgo.go",
+    "https://github.com/PeterRK/w1hash/commits/main",
+    "https://github.com/PeterRK/w1hash/commit/3bc9da17",
+    "https://github.com/PeterRK/w1hash/commit/68a6bf2c",
+    "https://github.com/PeterRK/w1hash/issues/1",
+    "https://github.com/rurban/smhasher/blob/master/README.md",
+    "https://github.com/rurban/smhasher/blob/master/doc/w1hash.txt",
+    "https://github.com/rurban/smhasher/blob/master/doc/wyhash.txt",
+    "https://github.com/rurban/smhasher/blob/master/doc/rapidhash.txt",
+    "https://github.com/fwojcik/smhasher3",
+    "https://github.com/fwojcik/smhasher3/blob/main/hashes/w1hash.cpp",
+    "https://github.com/fwojcik/smhasher3/blob/main/results/README.md",
+    "https://github.com/fwojcik/smhasher3/blob/main/results/raw/w1hash.txt",
+    "https://github.com/fwojcik/smhasher3/blob/main/results/raw/wyhash.txt",
+    "https://github.com/fwojcik/smhasher3/blob/main/results/raw/rapidhash.txt"
+  ],
+  "confidence": 0.8
+}
