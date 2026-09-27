@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/callmealphabet/fasthex",
+  "one_liner": "Rust CLI hex dumper that uses multiple threads, SIMD and mmap to dump large files far faster than xxd, hexyl and hexdump.",
+  "what_it_does": "fasthex is a standalone command-line hex dumper (`fasthex [options] file`). Its default output is a hexdump -C style canonical view (8-digit offset, 16 hex bytes, |ASCII| panel), not xxd's grouped 2-byte layout. It also has flags that mirror xxd and hexdump: -p (plain hex), -i (C include array, 12 bytes per line like xxd -i), -r (reverse to binary), -o/-d/-b (octal, decimal, binary), -w (squeeze repeated rows), hexdump-style -e format strings, colour schemes and borders. It is a tool, not a library; there is no API to call from other code.",
+  "how_it_is_fast": "When given a single mmap-able file, it maps the file and has rayon format output chunks in parallel (about 16 MiB of output per chunk in the current code). A separate writer thread drains finished buffers while the next chunk is formatted, using a 6-buffer pool. Hot rows are formatted with hand-written x86-64 intrinsics: AVX-512BW, then AVX2 at 32 bytes (2 rows) per call, then SSSE3/SSE4.1 at 16 bytes. Kernels are chosen at runtime with is_x86_feature_detected, and a std::simd nibble-LUT kernel is used on nightly builds. On Linux it also calls madvise(MADV_SEQUENTIAL/WILLNEED/HUGEPAGE) and writes through a private pipe with vmsplice+splice when stdout is a regular file or FIFO.",
+  "when_to_use": [
+    "Dumping very large files (hundreds of MiB to tens of GiB) on a multi-core x86-64 Linux box, where xxd (~35 MiB/s in the README run) takes minutes",
+    "Producing canonical hex+ASCII dumps into a file or pipe for grep/diff, where the vmsplice/splice path and parallel formatting both apply",
+    "Quick -p plain-hex or -i C-array generation from big binaries when xxd is the bottleneck",
+    "Interactive `fasthex file | less` on huge files, where it keeps up with paging far better than single-threaded dumpers"
+  ],
+  "when_not_to_use": [
+    "Scripts that parse xxd's exact output: the default layout is hexdump -C style, not xxd's `7f45 4c46` 2-byte grouping, and -p writes the whole file as one unbroken hex line (xxd -p wraps at 60 hex chars), so it is not byte-compatible.",
+    "Input from stdin or several files concatenated: that goes through the single-threaded streaming path (4 MiB buffers, no rayon), so most of the headline speedup does not apply",
+    "Small files or `-w` squeeze / `-m` max-lines runs: squeeze and max-lines force a serial path, and on small inputs thread and mmap setup costs are all overhead",
+    "When correctness matters more than speed: the ~4,650-line main.rs has no unit tests (only a CI smoke check of -p against od on 4 KiB of random data), about 100 `unsafe` uses, and SECURITY.md itself lists 'SIMD paths producing different results than the scalar fallback' as a risk",
+    "Non-Linux or non-x86 hosts: the zero-copy output, MADV_HUGEPAGE and the hand-written intrinsics are Linux- or x86-64-only. aarch64 and macOS builds exist but get the portable or scalar kernels and plain writes. Windows is not in the release matrix."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "memmap2 0.9, rayon 1.12, libc 0.2, clihelp 0.1 (binary crate; install via `cargo install fasthex`, AUR fasthex / fasthex-bin, Nix flake, or GitHub release binaries)",
+    "min_toolchain": "Rust edition 2024 (so 1.85+). crates.io releases are built and smoke-tested on stable; rust-toolchain.toml pins nightly, which enables the std::simd portable_simd kernel detected by build.rs.",
+    "platforms": "Release binaries for x86_64/aarch64 Linux (gnu and musl) and x86_64/aarch64 macOS. SIMD kernels need x86-64 (SSSE3/SSE4.1 minimum, AVX2/AVX-512BW used if present); vmsplice/splice and MADV_HUGEPAGE are Linux-only. Windows is not documented.",
+    "thread_safety": "Not applicable (CLI process). Internally it uses rayon's global pool for formatting plus one writer thread; there is no documented flag to set the thread count.",
+    "drop_in_for_baseline": "partial — it replaces xxd/hexdump for viewing and has xxd-like -p/-i/-r flags, but the default output format differs from xxd, and flag semantics are its own"
+  },
+  "gotchas": [
+    "The README says the zero-copy path works 'regardless of what stdout is (/dev/null, ...)', but the code only enables vmsplice/splice when stdout is a regular file or FIFO. /dev/null is a character device, so the benchmark runs used plain write(), which is already almost free on /dev/null.",
+    "The input is mmap'd with memmap2 (`unsafe Mmap::map`). Truncating or rewriting the file while it is being dumped can SIGBUS the process or give inconsistent output.",
+    "The octal and minimal fast paths only engage while displayed offsets stay at or below 0xFFFFFFFF, so dumps of files over 4 GiB in those modes fall back to slower kernels. Older versions, including the one that ran the 69 GiB benchmark, wrapped offsets past 4 GiB.",
+    "Default colouring is `auto`: on a TTY it emits ANSI colours and takes the slower coloured path. Use --color=never for apples-to-apples timing. The FASTHEX_DEFAULT_OPTS environment variable is silently prepended to argv."
+  ],
+  "pick_this_over_siblings_when": "The hex siblings (const-hex, zbjornson fast-hex, eddieantonio's hx NEON kernel) are in-process encode/decode libraries that produce bare hex strings. Pick fasthex when you want a ready-made xxd/hexdump-style CLI dump of big files with offsets and an ASCII panel. Pick const-hex or fast-hex when you need hex encoding inside your own Rust or C++ code.",
+  "verified_claims_summary": "These are the author's own hyperfine wall-clock numbers, from the README table last changed 2026-06-12. Dumping a 1.5 GiB file to /dev/null took 0.78 s for fasthex against 43.62 s for xxd, 53.14 s for hexyl --color=never and 116.03 s for hexdump. That is about 1.9 GiB/s input for fasthex vs about 35 MiB/s for xxd (derived). A 69 GiB file took ~1 min vs ~1 h 30 m for hexyl. The rig is an Intel T-series desktop: the gist says 'i5-7700T', which is not a real SKU, and earlier README revisions say i5-7500T. It had 16 GB RAM and a 990 Pro NVMe, and ran with no Rust version, build flags, tool versions or benchmark script published. After the 3 warmups the 1.5 GiB file most likely sits in page cache, so the result compares parallel SIMD formatting against single-threaded formatters, not I/O.",
+  "status_note": "Actively developed by a single author: first commit 2026-04, last commit 2026-09-18, crates.io 0.3.28 with 451 downloads and 13 stars. Several releases were yanked (0.3.23–0.3.27) after stable-build breakage, and the benchmarks predate much of the current code. It is Apache-2.0 and easy to install from crates.io or AUR, but it is young and has little test coverage.",
+  "sources_read": [
+    "https://github.com/CallMeAlphabet/fasthex",
+    "https://github.com/CallMeAlphabet/fasthex/blob/main/README.md",
+    "https://github.com/CallMeAlphabet/fasthex/blob/main/Cargo.toml",
+    "https://github.com/CallMeAlphabet/fasthex/blob/main/build.rs",
+    "https://github.com/CallMeAlphabet/fasthex/blob/main/rust-toolchain.toml",
+    "https://github.com/CallMeAlphabet/fasthex/blob/main/src/main.rs",
+    "https://github.com/CallMeAlphabet/fasthex/blob/main/.github/workflows/release.yml",
+    "https://github.com/CallMeAlphabet/fasthex/blob/main/.github/workflows/publish.yml",
+    "https://github.com/CallMeAlphabet/fasthex/blob/main/.github/SECURITY.md",
+    "https://github.com/CallMeAlphabet/fasthex/commits/main",
+    "https://github.com/CallMeAlphabet/fasthex/commits/main/README.md",
+    "https://github.com/CallMeAlphabet/fasthex/commit/4910fae",
+    "https://github.com/CallMeAlphabet/fasthex/commit/1d5c0a1",
+    "https://raw.githubusercontent.com/CallMeAlphabet/fasthex/35e9e8a/README.md",
+    "https://raw.githubusercontent.com/CallMeAlphabet/fasthex/0f39dce/README.md",
+    "https://github.com/CallMeAlphabet/fasthex/issues",
+    "https://gist.github.com/CallMeAlphabet/4b7022c4b1a8849e6943526de6a23582",
+    "https://crates.io/api/v1/crates/fasthex",
+    "https://hn.algolia.com/api/v1/search?query=fasthex&tags=story",
+    "https://aur.archlinux.org/rpc/v5/info?arg[]=fasthex&arg[]=fasthex-bin"
+  ],
+  "confidence": 0.6
+}

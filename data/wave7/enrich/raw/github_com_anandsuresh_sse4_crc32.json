@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/anandsuresh/sse4_crc32",
+  "one_liner": "Node.js native addon computing CRC-32C with the SSE4.2 crc32 instruction, 2.5-3.7x faster than its own slice-by-8 fallback.",
+  "what_it_does": "An npm package (`sse4_crc32`) that gives JavaScript a CRC-32C (Castagnoli) checksum over Buffers or strings, backed by a C++ N-API addon. The API is `calculate(bufOrString, initialCrc?)`, which returns a uint32 Number and can be chained for incremental CRCs, plus `fromStream(readable, initialCrc?)`, a Writable that exposes `.crc` on 'finish'. When the CPU lacks SSE4.2, or on non-x86 hosts, it transparently uses a table-driven software CRC-32C. It is not a replacement for zlib/IEEE CRC-32: the polynomial is different and it produces different values.",
+  "how_it_is_fast": "On x86 it calls the SSE4.2 CRC32 instruction through the `_mm_crc32_u8/u32/u64` intrinsics. It byte-steps to 8-byte alignment, then feeds 8 bytes per instruction in a single dependent chain, then handles the u32/u16/u8 tail. The file is compiled separately with -msse4.2 and selected at load time by a CPUID leaf-1 ECX bit-20 check. The fallback is Mark Adler's slicing-by-8 table method (8x256 uint32 tables). There is no multi-stream interleaving or PCLMULQDQ folding, so it runs well below the instruction's peak throughput.",
+  "when_to_use": [
+    "Node.js services that must produce CRC-32C specifically, such as iSCSI/SCTP/ext4-style checksums or cloud-storage object checksums. Old issue titles show gcloud/Google Cloud Storage client users pulling it in, and today most installs arrive through the fast-crc32c wrapper.",
+    "Checksumming medium-to-large Buffers (KiB to tens of KiB each) on x86-64, where the README run shows ~5 GB/s against ~1.5 GB/s for the table path (derived, 0–64 KiB random buffers)",
+    "Incremental or streamed checksums of files and network data via `fromStream()` or chained `calculate(chunk, prevCrc)`",
+    "Environments where a node-gyp native build at install time is acceptable and you want an automatic software fallback instead of a crash on non-SSE4.2 CPUs"
+  ],
+  "when_not_to_use": [
+    "You need zlib/PNG/gzip-compatible CRC-32 (IEEE polynomial 0xEDB88320): this computes only CRC-32C (0x82F63B78) and will produce different values",
+    "ARM hosts (Apple Silicon, Graviton): only the software table path is built there, with no ARMv8 CRC32C instructions. Version 6.0.1, still the most-downloaded, fails to load on arm64 at all (issue #84, fixed in 7.0.0).",
+    "Installs without a C++ toolchain and Python (Alpine or slim Docker images, locked-down CI): the install script is `node-gyp rebuild` and no prebuilt binaries ship. Build and load failures (Windows, Docker 'Exec format error') fill the issue tracker.",
+    "Maximum throughput on large buffers: the single-chain `_mm_crc32_u64` loop is latency-bound. Interleaved or folded kernels such as komrad36/CRC (~3x per cycle) or corsix fast-crc32 go considerably faster.",
+    "Anything needing maintenance guarantees or CRC combine: the last release (7.0.0) was 2022-03-27, CI covers only Node 10–16, and `crc32_combine`-style merging is an open request (issue #73)"
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "bindings ^1.3.0, node-addon-api ^1.3.0; build-time node-gyp with Python and a C++ compiler (compiled on npm install)",
+    "min_toolchain": "package.json says Node >=4, but it is N-API based and CI tests only Node 10.x–16.x; any C++ compiler that supports node-addon-api and -msse4.2 (Xcode settings target macOS 10.7+)",
+    "platforms": "x86/x86-64 for the hardware path (SSE4.2, Nehalem or later), with runtime CPUID fallback; other architectures, including arm64 since 7.0.0, get the software table path only. CI runs macOS and Ubuntu; Windows build settings exist but are not in the current CI.",
+    "thread_safety": "Calls are synchronous and stateless apart from a process-global slicing-by-8 table filled at module init. There is no async or worker offload, so big buffers block the event loop. Multi-worker-thread use is not documented.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The README's JavaScript comparison rows are labelled CRC-32C but use the `crc32` npm package, which computes IEEE CRC-32 (issue #82, still open). Only the native table-vs-SSE4.2 rows are a like-for-like comparison.",
+    "Strings are UTF-8-encoded and copied into a std::string before hashing. Pass Buffers to avoid the copy and to get the CRC of the exact bytes you mean.",
+    "The table fallback XORs raw 8-byte words into the CRC and indexes low byte first, which appears to assume little-endian hosts despite a source comment claiming it works on all platforms",
+    "fast-crc32c 2.0.0 pins `sse4_crc32 ^6.0.1`, so most installs (~146k/week on 6.0.1 vs ~3.2k on 7.0.0) never get the arm64 fix. index.js also checks `process.NODE_ENV` rather than `process.env.NODE_ENV`, so the debug exports (`sse42_crc`, `table_crc`, `hardware_support`) are always present."
+  ],
+  "pick_this_over_siblings_when": "Pick it when you need CRC-32C from JavaScript on Node with zero integration work. The C/C++/Rust siblings (crc32c by htot, komrad36/CRC, corsix fast-crc32, crc-fast) are much faster kernels but are not Node packages. komrad36's own numbers put a plain 8-byte hardware CRC loop, which is exactly what this addon does, at ~21 bits/cycle against ~62 for its interleaved 'Golden' kernel. If you are not tied to Node, or you need IEEE CRC-32, use crc-fast, crc32fast or klauspost/crc32 instead.",
+  "verified_claims_summary": "These are the author's own single-pass process.hrtime timings from `node benchmark` (current README, rewritten 2018-05-29), run on an unspecified 'Intel Core i7' MacBook Air (the current README says 16 GB RAM) with no compiler or optimisation level stated. The SSE4.2 path took 4.32 ms vs 10.73 ms for the addon's own slice-by-8 table on 10,000 calls over a fixed ~1 KiB buffer (~2.5x), and 60.19 ms vs 225.46 ms over 10,000 random 0–64 KiB buffers (~3.7x, roughly 5.4 vs 1.5 GB/s derived). Both figures include N-API call overhead, and there is no comparison against zlib or any external CRC library.",
+  "status_note": "Abandoned: the last master commit and the 7.0.0 npm release are 2022-03-27, with dependabot PRs left open since 2023. It still gets about 950k npm downloads a month, mostly the older 6.0.1 pulled in by fast-crc32c. It is MIT-licensed, and its few hundred lines of C++ are easy to vendor.",
+  "sources_read": [
+    "https://github.com/anandsuresh/sse4_crc32",
+    "https://github.com/anandsuresh/sse4_crc32/blob/master/README.md",
+    "https://github.com/anandsuresh/sse4_crc32/blob/master/index.js",
+    "https://github.com/anandsuresh/sse4_crc32/blob/master/package.json",
+    "https://github.com/anandsuresh/sse4_crc32/blob/master/binding.gyp",
+    "https://github.com/anandsuresh/sse4_crc32/blob/master/common.gypi",
+    "https://github.com/anandsuresh/sse4_crc32/blob/master/Makefile",
+    "https://github.com/anandsuresh/sse4_crc32/blob/master/src/crc32c.cpp",
+    "https://github.com/anandsuresh/sse4_crc32/blob/master/src/sse42.cpp",
+    "https://github.com/anandsuresh/sse4_crc32/blob/master/src/sse42.h",
+    "https://github.com/anandsuresh/sse4_crc32/blob/master/src/table.cpp",
+    "https://github.com/anandsuresh/sse4_crc32/blob/master/.github/workflows/test.yml",
+    "https://github.com/anandsuresh/sse4_crc32/blob/master/test/index.test.js",
+    "https://github.com/anandsuresh/sse4_crc32/blob/master/benchmark/index.js",
+    "https://github.com/anandsuresh/sse4_crc32/blob/master/benchmark/single_fixed_size_buffer.benchmark.js",
+    "https://github.com/anandsuresh/sse4_crc32/blob/master/benchmark/multiple_random_size_buffers.benchmark.js",
+    "https://github.com/anandsuresh/sse4_crc32/issues",
+    "https://github.com/anandsuresh/sse4_crc32/issues/82",
+    "https://github.com/anandsuresh/sse4_crc32/issues/84",
+    "https://github.com/anandsuresh/sse4_crc32/issues/79",
+    "https://github.com/anandsuresh/sse4_crc32/issues/73",
+    "https://github.com/anandsuresh/sse4_crc32/pulls",
+    "https://github.com/anandsuresh/sse4_crc32/pull/89",
+    "http://engineering.voxer.com/2013/12/02/hardwareaccelerated-crc32-for-nodejs/",
+    "https://archive.org/wayback/available?url=engineering.voxer.com/2013/12/02/hardwareaccelerated-crc32-for-nodejs/",
+    "https://registry.npmjs.org/sse4_crc32",
+    "https://registry.npmjs.org/fast-crc32c/latest",
+    "https://api.npmjs.org/downloads/point/last-month/sse4_crc32",
+    "https://api.npmjs.org/downloads/point/last-month/fast-crc32c",
+    "https://api.npmjs.org/versions/sse4_crc32/last-week"
+  ],
+  "confidence": 0.65
+}
