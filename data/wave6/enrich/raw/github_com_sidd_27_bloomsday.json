@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/sidd-27/bloomsday",
+  "one_liner": "Safe-Rust Parquet-style split-block Bloom filter whose inlined, auto-vectorized lookups ran ~2.3x faster than sbbf-rs in its own benchmark.",
+  "what_it_does": "A Rust implementation of the Parquet Split Block Bloom Filter (SBBF) in about 110 lines of library code plus tests. Each key sets one bit in each of eight 32-bit words of a single 256-bit block, using the same salt constants and block mapping as the Parquet spec and sbbf-rs. You size it with `BlockedBloomFilter::new(entries, fpr)`, then either call `insert_key`/`may_match_key`, which hash any `Hash` type through xxh64, or call `insert_hash`/`may_match_hash` with your own 64-bit hash. Unlike sbbf-rs, whose API is unsafe raw-pointer calls on a buffer you allocate, it owns its storage and exposes only safe methods. It has no delete, union, clear, count, FPR estimate or raw-bitset export; serde derive is optional.",
+  "how_it_is_fast": "The filter math is the same as sbbf-rs. A multiply-shift fastrange of the top 32 hash bits picks a 32-byte block, and eight salted multiplies of the low 32 bits each pick one bit per word, so a probe touches a single block within one cache line. The difference is code generation. bloomsday's probe is an `#[inline(always)]` safe iterator fold that LLVM can inline into the caller's loop and auto-vectorize (the README cites vpand/vpor/vpsllv under AVX2). sbbf-rs selects an AVX2, SSE4.1 or fallback kernel at runtime and calls it through a `&'static dyn` trait object, which the compiler cannot inline. The measured gap therefore reflects dispatch and inlining overhead rather than a better filter layout.",
+  "when_to_use": [
+    "Hot-loop membership probes on pre-computed 64-bit hashes, such as join or scan pre-filters and dedup checks, where the probe loop can be inlined and each probe should touch one 32-byte block.",
+    "x86-64 binaries you build yourself with AVX2 enabled (`-C target-cpu=native` or `-C target-feature=+avx2`) for known server hardware.",
+    "You want sbbf-rs's split-block bit layout (a given hash sets the same bits in the same block) behind a safe, owning Rust API instead of unsafe calls on a raw buffer.",
+    "FPR targets around 1%: the 10 bits/key it picks there gives about 1.26% FPR according to the Parquet spec's table.",
+    "You are willing to vendor about 110 lines of safe code or pin a git dependency, because nothing is published on crates.io."
+  ],
+  "when_not_to_use": [
+    "Portable binaries built for baseline x86-64 or for ARM. The README warns that without AVX2-class target features the code may fall back to scalar. sbbf-rs detects AVX2/SSE4.1 at runtime and also ships NEON and WASM kernels.",
+    "Tight FPR targets. Sizing uses the classic ceil(-ln p / ln^2 2) bits/key, which undersizes a split-block filter. Per the Parquet spec, a 0.01% request gets 20 bits/key, which is about 0.04% (4x over), and a 10% request gets 5 bits/key, which is about 18%.",
+    "Concurrent writers (insert takes &mut self and there is no atomic variant), or any need for deletion, counting, union, or Parquet-compatible serialized bitsets.",
+    "no_std or embedded targets: it requires std, while sbbf-rs supports no_std.",
+    "Production dependencies that need a track record. It has one author and 9 commits over three days in February 2026, with no CI, no LICENSE file and no crates.io release."
+  ],
+  "integration": {
+    "form": "crate (git-only, not on crates.io; the README's `bloomsday = \"0.1.0\"` line does not resolve); small enough to source-drop",
+    "dependencies": "xxhash-rust 0.8 (xxh32/xxh64/xxh3 features enabled, only xxh64 used); optional serde 1.0 behind the `serde` feature; requires std",
+    "min_toolchain": "Rust 1.85+ (edition 2024); no rust-version/MSRV declared",
+    "platforms": "Pure safe Rust, so any std target compiles. Performance depends on auto-vectorization with AVX2-class target features. The repo's .cargo/config.toml (`+avx2,+fma`, `target-cpu=native`) applies only to cargo runs inside the repo, not to crates that depend on it, so downstream users must set their own flags. Only x86 AVX2 speed is claimed; ARM/NEON behavior is not documented.",
+    "thread_safety": "Not documented. From the API: inserts take &mut self and lookups take &self, and the struct is a plain Vec with no interior mutability. Read-only lookups through shared references from many threads should be fine (auto Send/Sync, inferred), but concurrent inserts need external locking.",
+    "drop_in_for_baseline": "partial — it uses the same SBBF algorithm, salts and block mapping as sbbf-rs, but the API differs. bloomsday is an owning safe struct, while sbbf-rs is unsafe FilterFn calls on a caller-allocated, 64-byte-aligned buffer. insert returns nothing, where sbbf-rs's insert returns whether the hash was already present. There is no raw-buffer access, so filter bytes cannot be exchanged with sbbf-rs or Parquet."
+  },
+  "gotchas": [
+    "The key API hashes through Rust's std `Hash` trait. Its docs say the data fed to a Hasher is not portable across platforms and, for most std types, not stable across compiler versions. A filter serialized after `insert_key` may not match after a rebuild or on another platform. Use `insert_hash` with a stable hash of your own for anything you persist.",
+    "The README table predates the 2026-02-06 'safety first' commit. That commit replaced `get_unchecked` with checked indexing in both hot paths, adding a bounds check per probe, and the numbers were not re-measured afterwards.",
+    "An invalid fpr (<= 0 or >= 1) silently falls back to 10 bits/key instead of returning an error. `new(0, _)` still allocates one block.",
+    "Despite the 'cache-line' naming, blocks are 32 bytes (half a 64-byte line), with 32-byte alignment. serde output is the struct's own shape (word arrays plus num_blocks and seed), not the Parquet bitset format."
+  ],
+  "pick_this_over_siblings_when": "Pick it over fastbloom (on crates.io, works with any hasher, and has AtomicBloomFilter for concurrent inserts) only when you specifically want the Parquet/sbbf-rs split-block layout for pre-hashed u64 keys and can build with AVX2; bloomsday once wrote a fastbloom comparison but removed it without publishing results. For a static key set where memory matters, xorf or pleat need fewer bits per key.",
+  "verified_claims_summary": "The README's Criterion table (CPU and rustc not stated; repo flags at the time were +avx2,+fma with target-cpu=haswell) times 1,000 pre-hashed xxh64 lookups into a 1M-key filter at 10 bits/key (~1.25 MB). Negative lookups took ~1.17 µs and positive ~1.26 µs, vs ~2.81 and ~2.93 µs for sbbf-rs 0.2.8 called through its dyn-dispatched FilterFn, or about 1.2 vs 2.8 ns per lookup. Each iteration repeats the same 1,000 hashes, so only about 32 KB of blocks is touched and stays cache-hot; the table also predates the bench's shrink to 10k keys and the switch to bounds-checked code, so `cargo bench` at HEAD does not reproduce it.",
+  "status_note": "Listed as active, but all 9 commits landed 2026-02-04 to 2026-02-06 with nothing since; it has 14 stars, no issues and no CI, and MIT is declared only in Cargo.toml, so treat it as a small, safe, copyable reference to vendor rather than a maintained dependency.",
+  "sources_read": [
+    "https://github.com/sidd-27/Bloomsday",
+    "https://github.com/sidd-27/Bloomsday#performance",
+    "https://github.com/sidd-27/Bloomsday/blob/master/src/lib.rs",
+    "https://github.com/sidd-27/Bloomsday/blob/master/Cargo.toml",
+    "https://github.com/sidd-27/Bloomsday/blob/master/.cargo/config.toml",
+    "https://github.com/sidd-27/Bloomsday/blob/master/benches/comparison.rs",
+    "https://github.com/sidd-27/Bloomsday/commits/master",
+    "https://github.com/sidd-27/Bloomsday/commit/11f16a91",
+    "https://github.com/sidd-27/Bloomsday/commit/2de41178",
+    "https://github.com/sidd-27/Bloomsday/blob/3e3c423a/src/lib.rs",
+    "https://github.com/sidd-27/Bloomsday/blob/3e3c423a/benches/comparison.rs",
+    "https://github.com/sidd-27/Bloomsday/blob/3e3c423a/.cargo/config.toml",
+    "https://github.com/sidd-27/Bloomsday/blob/3e3c423a/README.md",
+    "https://github.com/sidd-27/Bloomsday/blob/d7565a26/README.md",
+    "https://github.com/sidd-27/Bloomsday/blob/6dda3d50/README.md",
+    "https://github.com/sidd-27/Bloomsday/blob/bcd7cb84/README.md",
+    "https://github.com/sidd-27/Bloomsday/blob/bcd7cb84/benches/comparison.rs",
+    "https://github.com/sidd-27/Bloomsday/blob/ea15abbb/README.md",
+    "https://github.com/sidd-27/Bloomsday/blob/2de41178/README.md",
+    "https://github.com/sidd-27/Bloomsday/issues",
+    "https://crates.io/api/v1/crates/bloomsday",
+    "https://crates.io/api/v1/crates/sbbf-rs",
+    "https://github.com/ozgrakkurt/sbbf-rs",
+    "https://github.com/ozgrakkurt/sbbf-rs/blob/HEAD/src/lib.rs",
+    "https://github.com/ozgrakkurt/sbbf-rs/blob/HEAD/src/arch/mod.rs",
+    "https://github.com/ozgrakkurt/sbbf-rs/blob/HEAD/src/arch/x86.rs",
+    "https://raw.githubusercontent.com/apache/parquet-format/master/BloomFilter.md",
+    "https://doc.rust-lang.org/std/hash/trait.Hash.html",
+    "https://blog.rust-lang.org/2025/02/20/Rust-1.85.0/",
+    "https://doc.rust-lang.org/cargo/reference/config.html",
+    "https://github.com/tomtomwombat/fastbloom",
+    "https://hn.algolia.com/api/v1/search?query=bloomsday%20bloom%20filter&tags=story"
+  ],
+  "confidence": 0.8
+}
