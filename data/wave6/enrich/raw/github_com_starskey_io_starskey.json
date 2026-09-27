@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/starskey-io/starskey",
+  "one_liner": "Small pure-Go LevelDB/WiscKey-style LSM key-value store; its own bench beats fsync-per-op RocksDB but loses to LMDB.",
+  "what_it_does": "An embedded key-value library for Go. You open a directory with starskey.Open(&Config{...}) and call Put/Get/Delete, Range, FilterKeys, PrefixSearch, LongestPrefixSearch and DeleteByRange/ByFilter/ByPrefix, plus BeginTxn/Commit and a bbolt-style Update(func(*Txn) error). It is not a RocksDB drop-in: there are no iterators, snapshots, column families, merge operators or write batches, and Range and the prefix calls return only the values as [][]byte, without keys. Keys are ordered with bytes.Compare, and empty keys or values are rejected.",
+  "how_it_is_fast": "A write appends a BSON-encoded record to a paged WAL and inserts into an in-memory T-tree memtable. By default the WAL is fsynced only by a background ticker every 256 ms, and that accounts for most of the benchmark gap to RocksDB, Pebble and Badger, which fsync every op. Once the memtable passes FlushThreshold it is written out as a sorted run with keys and values in separate klog/vlog files (WiscKey-style key-value separation), and leveled partial compaction merges half of a full level into the next, running synchronously inside the Put that crossed the threshold. Optional per-SSTable Bloom filters (xxh3) or a trie filter the project calls SuRF (map-per-node trie nodes, not the paper's succinct encoding) let reads skip SSTables. There is no block index, so a lookup that reaches an SSTable scans its key log linearly.",
+  "when_to_use": [
+    "Studying or forking a compact LSM: about 2.8k lines in one file plus small pager, T-tree, Bloom and trie-filter packages, MPL-2.0 and easy to vendor.",
+    "Small Go datasets that mostly stay in the memtable, with small records (key plus value under roughly 100 bytes so each serialized record fits one 128-byte page), where losing up to ~256 ms of acknowledged writes on a crash is acceptable.",
+    "Single-process, write-mostly tools that want built-in helpers like PrefixSearch, LongestPrefixSearch or DeleteByPrefix without writing iterator code."
+  ],
+  "when_not_to_use": [
+    "Workloads that overwrite or delete keys and expect the latest value back. From the code, Get scans each level's SSTables oldest-first and returns the first hit, and mergeTables keeps duplicate keys instead of dropping superseded versions, so once two versions are on disk the older one can win. No test overwrites a key across flushes.",
+    "Records over 128 bytes. The pager splits any record larger than the 128-byte page into up to 128 chunks, each written as its own 144-byte page with a separate stat, seek and write, so a ~1 KB value takes ~116 pages (~16 KB on disk). Past 16 KiB a chunk no longer fits its page and copy() truncates it, which corrupts the value. This comes from reading pager.go; I did not run it.",
+    "Read-heavy data larger than the memtable. A Get that misses the memtable deserializes every klog record of each candidate SSTable, and Bloom filters are off in the README's example config.",
+    "Concurrent services. One global sync.Mutex (not an RWMutex) serializes every read, write and scan, and flush plus recursive compaction run inline in the caller's Put.",
+    "Strict durability or real ACID. Fsync happens only in the background; a flush truncates the WAL without first fsyncing the new SSTable; and a transaction writes one WAL record per op with no commit marker, so a crash mid-commit can replay a partial transaction."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "github.com/klauspost/compress (S2/Snappy), go.mongodb.org/mongo-driver (BSON record encoding), github.com/zeebo/xxh3, github.com/cespare/xxhash/v2; no cgo",
+    "min_toolchain": "Go 1.24 (go.mod); CI workflow uses Go 1.23",
+    "platforms": "Pure Go, so in principle any Go target; CI tests only ubuntu-latest and no platform support is documented",
+    "thread_safety": "Safe to share across goroutines through a single global sync.Mutex that serializes all operations (read locks were tried and reverted in PR #37); each Txn has its own mutex.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Delete is Put(key, 0xDEADBEEF), so storing that exact 4-byte value makes a key read as deleted. Range also returns the raw tombstone bytes for keys deleted but not yet flushed, because memtable range results are not tombstone-filtered.",
+    "Transactions are weaker than the README's 'fully serializable' claim. Txn.Put's rollback writes a tombstone instead of restoring the old value. Txn.Delete on a memtable-resident key re-puts its current value instead of a tombstone. Txn.Get reads outside the DB lock, so Update read-modify-write can lose updates. A failed Commit calls Rollback while still holding the non-reentrant DB mutex, which deadlocks.",
+    "Most OptionalConfig knobs are ignored: the memtable always uses the package-level TTreeMin/TTreeMax, every pager uses the package-level PageSize, and Bloom filters use the package-level BloomFilterProbability. Passing any OptionalConfig leaves BackgroundFSync at its zero value (false), which turns off fsync entirely (only transaction commits still fsync) rather than making writes synchronous.",
+    "An unset Permission defaults to decimal 750 (octal 01356), not 0750. Logging: true calls log.SetOutput on Go's global logger, sending the whole process's log output into the DB's .log file. Without it, the engine writes every open, flush and compaction line to the standard logger."
+  ],
+  "pick_this_over_siblings_when": "Badger is the mature Go implementation of the same WiscKey key-value-separation idea, and Pogreb is the Go option for read-heavy point lookups. Pick Starskey over them only when you want a small, readable LSM to study or fork, not for data you can't afford to lose or read back stale.",
+  "verified_claims_summary": "The starskey-io/bench README reports one single-threaded run of 10,000 random 33-38-byte keys and values on an unnamed 'crappy 4 year old system': Starskey took 53.3 ms to write, 4.8 ms to get and 28.9 ms to delete, against RocksDB's 286.9, 10.1 and 283.1 ms (about 5.4x, 2.1x and 9.8x). The Go engines were timed by wall clock and RocksDB/LMDB by C clock() in a harness built without an -O level. The comparison is not like-for-like: RocksDB, Pebble and Badger fsync every op, while Starskey (v0.1.8, 64 MB flush threshold) fsyncs every 256 ms in the background and never flushes during the 10K ops, so all three Starskey timings measure WAL appends plus an in-memory T-tree. LMDB beats Starskey on all three operations and BBolt beats it on get and delete; the README's '400k+ ops per second' has no supporting benchmark.",
+  "status_note": "Single-maintainer project with no commits since 2025-03-19 (latest tag v0.1.9) and no open issues. It is MPL-2.0 and small enough to vendor, but the correctness problems above make it a study codebase rather than a production store, despite the author calling it production-ready in issue #48.",
+  "sources_read": [
+    "https://github.com/starskey-io/starskey",
+    "https://github.com/starskey-io/starskey/blob/master/README.md",
+    "https://github.com/starskey-io/starskey/blob/master/starskey.go",
+    "https://github.com/starskey-io/starskey/blob/master/starskey_test.go",
+    "https://github.com/starskey-io/starskey/blob/master/pager/pager.go",
+    "https://github.com/starskey-io/starskey/blob/master/pager/pager_test.go",
+    "https://github.com/starskey-io/starskey/blob/master/ttree/ttree.go",
+    "https://github.com/starskey-io/starskey/blob/master/surf/surf.go",
+    "https://github.com/starskey-io/starskey/blob/master/bloomfilter/bloomfilter.go",
+    "https://github.com/starskey-io/starskey/blob/master/go.mod",
+    "https://github.com/starskey-io/starskey/blob/master/.github/workflows/starskey_ci.yml",
+    "https://github.com/starskey-io/starskey/issues?q=is%3Aissue",
+    "https://github.com/starskey-io/starskey/issues/26",
+    "https://github.com/starskey-io/starskey/issues/27",
+    "https://github.com/starskey-io/starskey/issues/30",
+    "https://github.com/starskey-io/starskey/issues/31",
+    "https://github.com/starskey-io/starskey/issues/32",
+    "https://github.com/starskey-io/starskey/issues/48",
+    "https://github.com/starskey-io/starskey/pull/36",
+    "https://github.com/starskey-io/starskey/pull/37",
+    "https://github.com/starskey-io/starskey/tags",
+    "https://github.com/starskey-io/starskey/commits/master",
+    "https://github.com/starskey-io/bench#starsky-benchmarker",
+    "https://github.com/starskey-io/bench/blob/master/main.go",
+    "https://github.com/starskey-io/bench/blob/master/go.mod",
+    "https://hn.algolia.com/api/v1/search?query=starskey&tags=story"
+  ],
+  "confidence": 0.7
+}
