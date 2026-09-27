@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/dilithium-avx512/dilithium-avx512",
+  "one_liner": "AVX-512 port of the pq-crystals Round3 Dilithium AVX2 code; the paper reports about 2x fewer cycles than AVX2.",
+  "what_it_does": "This is a C and assembly implementation of Round3 CRYSTALS-Dilithium (modes 2/3/5) that swaps the pq-crystals AVX2 kernels for AVX-512 ones. It keeps the pq-crystals API unchanged: pqcrystals_dilithiumN_avx2_keypair/_signature/_verify/_open, with the same key and signature sizes, selected at compile time with -DDILITHIUM_MODE. It is Round3 Dilithium (32-byte tr), not FIPS 204 ML-DSA. The ML-DSA code behind the paper's headline numbers is not in the repo.",
+  "how_it_is_fast": "The forward NTT, inverse NTT and pointwise Montgomery multiplication are hand-written zmm assembly. They process 16 coefficients per register and merge NTT layers to cut loads and stores; the paper's Table VIII gives 494 vs 1,326 cycles against the 4-way AVX2 NTT. ExpandA, ExpandS and ExpandMask sample 8 polynomials at once with an 8-way AVX-512 Keccak (XKCP KeccakP-1600-times8-SIMD512). Rejection sampling uses the vpcompressd compress-store instead of AVX2 lookup-table shuffles, and decompose, power2round, make_hint and use_hint are vectorized with AVX-512. The paper also credits PSPM-TEE (parallel small polynomial multiplication with tailored early evaluation) and an AVX-512IFMA 'tailored reduction', but neither is in the repo: sign.c computes c·s1, c·s2 and c·t0 with NTTs, and there are no vpmadd52 instructions.",
+  "when_to_use": [
+    "Studying or benchmarking AVX-512 Dilithium on an AVX-512 x86-64 machine: a readable 16-lane zmm NTT, 8-way SHAKE sampling and compress-store rejection sampling.",
+    "Reusing the ideas (not the code, since there is no license) in your own ML-DSA implementation when keygen/sign/verify latency on AVX-512 servers is the bottleneck and roughly 2x over AVX2 matters.",
+    "Legacy systems pinned to Round3 Dilithium2/3/5 that already link the pq-crystals AVX2 API and run only on AVX-512 hardware, as an experiment.",
+    "Reproducing or comparing against the Zheng et al. AVX-512 Dilithium results (IEEE TDSC 2025)."
+  ],
+  "when_not_to_use": [
+    "You need FIPS 204 ML-DSA. The repo implements only Round3 Dilithium, whose keys and signatures are not ML-DSA compatible.",
+    "Production or redistribution. There is no LICENSE, the README is a single title line, the org is anonymous, the paper never links the repo, and nothing has been committed since July 2023.",
+    "CPUs without AVX-512F/BW/DQ/VL. There is no runtime dispatch or AVX2 fallback, and the Makefile builds with -march=native.",
+    "Side-channel-sensitive deployments. The paper says constant-time was not the focus, and no constant-time testing is documented.",
+    "You expect the paper's exact cycle counts. The repo lacks PSPM-TEE and the IFMA reduction, so its results may differ from Tables IX and XI."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none for the SHAKE build (the 8-way Keccak is vendored under keccak8x/); OpenSSL libcrypto only for the PQCgenKAT_sign targets",
+    "min_toolchain": "C compiler with AVX-512F/BW/DQ/VL intrinsics plus the GNU assembler for AT&T-syntax .S files; the paper used gcc 9.4.0 at -O3",
+    "platforms": "x86-64 with AVX-512F/BW/DQ/VL (tested only on a Rocket Lake i7-11700F); Linux assumed by the getrandom/rdtsc harness",
+    "thread_safety": "Not documented. The code keeps the pq-crystals pattern of stack-only state with const tables and no mutable globals outside DBENCH builds, and randombytes() uses getrandom() on Linux.",
+    "drop_in_for_baseline": "partial — same function names, namespaces and key/signature sizes as pq-crystals Round3 AVX2, so it can replace that code, but not link alongside it (symbols collide). It is not a drop-in for the FIPS 204 ML-DSA 'standard' branch."
+  },
+  "gotchas": [
+    "The symbol prefixes are unchanged from pq-crystals (pqcrystals_dilithium2_avx2_*, pqcrystals_dilithium_fips202_avx2_*), so linking it next to another pq-crystals-derived Dilithium causes duplicate-symbol errors.",
+    "The Makefile's 'shared' target references fips202x4.c and f1600x4.S, which are not in the repo, and the AES-variant targets are commented out, so only the SHAKE test binaries build as shipped.",
+    "Keygen, sign and verify each put the full K×L expanded matrix on the stack (56 KB for Dilithium5), which is too much for small thread stacks.",
+    "The repo holds debug leftovers: zhaocuowu.txt (a byte dump of a secret key) and a committed test/test_speed2 binary. Simple poly ops (reduce, caddq, add, chknorm) are still AVX2 code."
+  ],
+  "pick_this_over_siblings_when": "Pick it over the Plantard-reduction NTT code generator when you are on AVX-512 hardware and care about raw ML-DSA/Dilithium speed rather than formal verification or portability: that sibling reports only 1.26x sign over scalar pq-crystals ref, while this reports about 2x over AVX2. VecFalcon, GOLF and the other siblings target different schemes (Falcon, SPHINCS+, ECC, HQC), so choose between them by scheme, not speed.",
+  "verified_claims_summary": "Authors' own measurements on an Intel i7-11700F (Rocket Lake, 2.5 GHz, TurboBoost and Hyper-Threading off), gcc 9.4.0 -O3 -march=native, median of 100,000 runs. Against pq-crystals Round3 AVX2, Dilithium2/3/5 used 2.25-2.87x fewer keygen cycles, 2.00-2.31x fewer sign cycles and 2.22-2.41x fewer verify cycles. Against the pq-crystals 'standard'-branch AVX2 code, the unreleased FIPS 204 ML-DSA-44/65/87 versions were 1.65-1.84x (keygen), 1.58-1.78x (sign) and 1.83-1.90x (verify). Part of the larger Round3 gap is a slower baseline: level-3 AVX2 keygen takes 246,988 cycles in Round3 vs 144,114 in ML-DSA.",
+  "status_note": "Abandoned: 11 commits, all between 13 and 18 July 2023, 0 stars, no license, and a one-line README. Treat it as an unlicensed research reference that is not safe to vendor.",
+  "sources_read": [
+    "https://github.com/Dilithium-AVX512/Dilithium-AVX512",
+    "https://github.com/Dilithium-AVX512/Dilithium-AVX512/blob/main/Makefile",
+    "https://github.com/Dilithium-AVX512/Dilithium-AVX512/blob/main/sign.c",
+    "https://github.com/Dilithium-AVX512/Dilithium-AVX512/blob/main/poly.c",
+    "https://github.com/Dilithium-AVX512/Dilithium-AVX512/blob/main/polyvec.c",
+    "https://github.com/Dilithium-AVX512/Dilithium-AVX512/blob/main/ntt.S",
+    "https://github.com/Dilithium-AVX512/Dilithium-AVX512/blob/main/rejsample.c",
+    "https://github.com/Dilithium-AVX512/Dilithium-AVX512/blob/main/fips202x8.h",
+    "https://github.com/Dilithium-AVX512/Dilithium-AVX512/blob/main/api.h",
+    "https://github.com/Dilithium-AVX512/Dilithium-AVX512/blob/main/test/test_speed.c",
+    "https://arxiv.org/pdf/2306.01989v3",
+    "https://arxiv.org/pdf/2306.01989v1",
+    "https://arxiv.org/abs/2306.01989",
+    "https://api.crossref.org/works/10.1109/TDSC.2025.3575915"
+  ],
+  "confidence": 0.8
+}

@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/benlwk/falcon-mitaka",
+  "one_liner": "Batched CUDA Falcon-512/Mitaka-512 sign and verify; the paper reports 8.8-18.5x sign and 105-149x verify throughput over CPU AVX2 Falcon.",
+  "what_it_does": "Two standalone CUDA benchmark programs (falcon_gpu and mitaka_gpu) sign and then verify a batch of messages, one CUDA block per signature (BATCH defaults to 1024). There is no library API or key generation. crypto_sign(h_sm, h_m) and crypto_ver() copy the same hard-coded test-vector secret key, seed, nonce and fixed 33-byte message into every batch slot, time the run with CUDA events, and in DEBUG builds check that every slot's output matches slot 0. Only Falcon-512 and Mitaka-512 are released, and Mitaka signatures come out as raw double-precision polynomials rather than an encoded signature.",
+  "how_it_is_fast": "The work is split coarse- then fine-grain. K signatures run as K CUDA blocks, and inside each block the polynomial work is spread over threads (N/4 threads for the shared-memory FFT, N/2 for the NTT mod 12289, N for coefficient-wise ops), with small kernels fused under COMB_KER. Falcon's recursive ffSampling is rewritten as an iterative loop over an explicit stack (ffSampling_fft_dyntree), which avoids CUDA dynamic parallelism. That loop still runs one thread per signature and dominates signing time (65.8% of Falcon-512 CPU signing time per the paper's Table 1). Mitaka's sampler is split into a bulk ChaCha20 random-byte phase (N threads per signature) and a per-coefficient discrete-Gaussian phase, so Mitaka signing is fully data-parallel. Falcon verification runs entirely on integer NTT kernels, which is why the verify gains are much larger than the sign gains.",
+  "when_to_use": [
+    "Server-side bulk Falcon-512 verification with thousands of pending signatures on an NVIDIA GPU: on the RTX 3080 the paper reports 1.07M verifies/s at K=1024 (0.95 ms per batch) and 1.91M/s at K=16,384, against 18,230/s for the AVX2 CPU code.",
+    "Throughput-bound batch signing when latency of tens to hundreds of ms per batch is acceptable. On the A100, Falcon-512 reaches 58,595 signs/s at K=16,384 (280 ms per batch).",
+    "Comparing Mitaka with Falcon for parallel hardware: Mitaka-512 signing is 2.7-2.8x faster than Falcon-512 at K=16,384 on the RTX 3080 and A100.",
+    "Starting point for GPU FN-DSA/Falcon research (GPL-3.0): the iterative ffSampling, shared-memory FFT/NTT kernels and kernel-fusion patterns can be reused."
+  ],
+  "when_not_to_use": [
+    "Latency-bound or small-batch signing. At K=32 on the RTX 3080, Falcon-512 signs only 2,000/s with 16 ms batch latency, below the paper's own CPU AVX2 figure of 3,167/s.",
+    "Anything production-like. Keys, seeds and nonces are test vectors, there is no keygen or real API, failed norm checks are not retried, the Mitaka sampler keys come from libc rand(), and there are no CUDA error checks or cudaFree calls.",
+    "Falcon-1024, Mitaka-1024 or FIPS 206 FN-DSA: only the 512 variants are in the repo, even though the paper benchmarks the 1024 variants.",
+    "Consumer or inference GPUs with weak FP64. Falcon signing is FP64-bound, so the A100 signs about 2.1x faster than the RTX 3080 at K=16,384, and the paper notes FP64 runs at 1/32 of the int32 rate on the RTX 3080 and T4.",
+    "Proprietary products that cannot accept GPL-3.0 copyleft, or settings that need side-channel review. The paper does not discuss constant-time or GPU timing leakage."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "CUDA runtime (cudart) only",
+    "min_toolchain": "nvcc from CUDA 11.7 (Falcon Makefile) or CUDA 12.1 (Mitaka Makefile) with gcc as the host compiler; the paper lists CUDA 11",
+    "platforms": "NVIDIA GPUs. Both Makefiles hard-code -arch sm_86, and the README says it is tested on the RTX 3080 and A100; the paper also ran it on V100 and T4. No CPU fallback.",
+    "thread_safety": "Not documented. Each crypto_sign/crypto_ver call allocates its own pinned-host and device buffers and never frees them, and there is no stream or concurrency handling.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "ffSampling_fft_dyntree loads the sampler SHAKE state from scA[0..24] (batch slot 0) in every block instead of scA[bid*25+i]. With real per-signature seeds, every signature in a batch would draw the same sampler randomness; the harness hides this because all slots use the same seed.",
+    "A signature that fails the norm bound is not regenerated. is_short_half_gpu/check_norm only set a flag or printf 'short half detected', whereas the reference implementation restarts sampling.",
+    "The repo's Mitaka verify defaults to an integer NTT path added in November 2023 (FLOAT_VER is off), while the paper's Mitaka verify numbers used FP64 FFT, so re-runs will not match Table 5. Mitaka also allocates a BATCH×512×512-byte PRNG buffer, 256 MiB at BATCH=1024 and 4 GiB at 16,384.",
+    "Reported throughput includes host-device copies. Falcon rebuilds the full basis (complete_private) and the LDL tree for every signature, with no expanded-key fast path."
+  ],
+  "pick_this_over_siblings_when": "Pick it over GOLF when you need GPU Falcon code you can actually read and run. GOLF reports far higher Falcon throughput (420k sign/s on an RTX 4090), but no repository is catalogued for it. Pick VecFalcon instead when you care about per-signature latency on a CPU (SSE2/AVX2/AVX-512/NEON/RVV, 1.1-1.6x over c-fn-dsa); pick this one only for large GPU batches or to evaluate Mitaka.",
+  "verified_claims_summary": "The TPDS 2024 paper (Tables 5-6, CUDA 11, averaged over 30 runs, batch K=16,384) reports Falcon-512 at 27,908 sign/s and 1,913,380 verify/s on an RTX 3080, and 58,595 and 2,721,562 on an A100. Against the Falcon AVX2 CPU rates of 3,167 sign/s and 18,230 verify/s, that is 8.8x/105x (RTX 3080) and 18.5x/149x (A100); Falcon-1024 comes out at 5.35x/66x and 13.2x/114x. The CPU model, thread count and compiler for the AVX2 baseline are never stated. The paper's own 'vs AVX2' ratios are really against the FP64 reference, and its AVX2 Falcon-512 sign rate (3,167/s) is oddly below the FP64 reference's (3,587/s).",
+  "status_note": "Stale: 9 commits, the last on 2023-11-14 (Mitaka integer verify), 5 stars and no issues. It is GPL-3.0 and small enough to copy as research code, but it needs a real API, key and nonce handling, and the RNG and retry bugs fixed before any real use.",
+  "sources_read": [
+    "https://github.com/benlwk/Falcon-Mitaka",
+    "https://github.com/benlwk/Falcon-Mitaka/blob/main/README.md",
+    "https://github.com/benlwk/Falcon-Mitaka/blob/main/falcon-gpu-512/Makefile",
+    "https://github.com/benlwk/Falcon-Mitaka/blob/main/falcon-gpu-512/main.cu",
+    "https://github.com/benlwk/Falcon-Mitaka/blob/main/falcon-gpu-512/include/cuda_kernel.cuh",
+    "https://github.com/benlwk/Falcon-Mitaka/blob/main/falcon-gpu-512/src/cuda_kernel.cu",
+    "https://github.com/benlwk/Falcon-Mitaka/blob/main/falcon-gpu-512/src/ffSampling.cu",
+    "https://github.com/benlwk/Falcon-Mitaka/blob/main/falcon-gpu-512/src/fft.cu",
+    "https://github.com/benlwk/Falcon-Mitaka/blob/main/falcon-gpu-512/src/common.cu",
+    "https://github.com/benlwk/Falcon-Mitaka/blob/main/falcon-gpu-512/include/fpr.cuh",
+    "https://github.com/benlwk/Falcon-Mitaka/blob/main/mitaka-gpu-512/Makefile",
+    "https://github.com/benlwk/Falcon-Mitaka/blob/main/mitaka-gpu-512/main.cu",
+    "https://github.com/benlwk/Falcon-Mitaka/blob/main/mitaka-gpu-512/include/cuda_kernel.cuh",
+    "https://github.com/benlwk/Falcon-Mitaka/blob/main/mitaka-gpu-512/src/cuda_kernel.cu",
+    "https://github.com/benlwk/Falcon-Mitaka/blob/main/mitaka-gpu-512/src/samplerZ.cu",
+    "https://github.com/benlwk/Falcon-Mitaka/commit/0bacd49",
+    "https://eprint.iacr.org/2023/399.pdf",
+    "https://eprint.iacr.org/2023/399",
+    "https://api.crossref.org/works/10.1109/TPDS.2024.3367319"
+  ],
+  "confidence": 0.8
+}
