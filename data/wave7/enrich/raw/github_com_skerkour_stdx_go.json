@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/skerkour/stdx-go",
+  "one_liner": "Go ChaCha20 stream cipher written with experimental simd/archsimd (AVX2/AVX-512/NEON); claims 7.5x over x/crypto's scalar amd64 path.",
+  "what_it_does": "A raw ChaCha20 keystream cipher (no Poly1305, no AEAD) that implements cipher.Stream. NewIetf gives the RFC 8439 layout (12-byte nonce, 32-bit counter), NewDjb gives the original DJB layout (8-byte nonce, 64-bit counter), and HChaCha20 is exported. The API is close to golang.org/x/crypto/chacha20 but not a drop-in: constructors take fixed-size [32]byte/[12]byte arrays and return a Cipher value with no error, there is no 24-byte XChaCha20 constructor, and SetCounter takes a uint64. It lives in the author's grab-bag stdx-go module, where the Go ChaCha20-BLAKE3 AEAD (crypto/chacha20blake3) is built on top of it.",
+  "how_it_is_fast": "It generates many blocks at once with SIMD, written in Go's experimental simd/archsimd intrinsics rather than assembly. On amd64, the AVX-512 path computes 16 blocks (1 KiB) per iteration in a word-sliced layout, using VPROLVD rotates and a two-stage in-register transpose. The AVX2 path computes 8 blocks (512 B) in the column-major layout of the classic chachaAVX2_amd64.s: VPSHUFB byte shuffles do the 16- and 8-bit rotations, and the transpose is fused into the stores. arm64 uses a 4-block NEON path with VTBL rotations. The large amd64 gain exists mainly because x/crypto/chacha20 ships no amd64 assembly, so this is 8- to 16-way SIMD measured against one-block-at-a-time scalar Go.",
+  "when_to_use": [
+    "Pure-Go (no cgo) code on amd64 that XORs large ChaCha20 keystreams, roughly 4 KiB and up, where the 8- and 16-block batches are fully used. Examples: bulk file or stream encryption.",
+    "AVX-512 x86 servers such as Zen4/Zen5, where the 16-block path engages for inputs over 256 bytes. The 7.5x headline at 1 MB was measured on an AMD EPYC Zen5-family CPU.",
+    "Building your own ChaCha20-based construction when you can pin Go 1.27+ with GOEXPERIMENT=simd. The repo's own ChaCha20-BLAKE3 Go port does exactly this.",
+    "Protocols that need the original DJB ChaCha20 (64-bit counter, 8-byte nonce), which x/crypto/chacha20 does not expose."
+  ],
+  "when_not_to_use": [
+    "Production or security-sensitive code. The author calls the code not production-ready, the repo README says 'NOT SAFE FOR PUBLIC USE', and there are no tagged releases.",
+    "arm64 (Graviton, Apple silicon). x/crypto already has NEON assembly there, and the author's own numbers put this package at about 97% of x/crypto's speed.",
+    "When you need authenticated encryption. There is no ChaCha20-Poly1305 or XChaCha20 here, so use golang.org/x/crypto/chacha20poly1305 or one of the AEAD siblings.",
+    "Builds that must stay on stable Go without experiments. simd/archsimd is still experimental in Go 1.27, and the release notes say its API is 'not yet considered stable', so a later Go release can break this code.",
+    "Messages of 64 bytes or less. They take the portable scalar path on every architecture, and no gain is documented for them."
+  ],
+  "integration": {
+    "form": "module (package github.com/skerkour/stdx-go/chacha20 inside the multi-package stdx-go module); vendoring the 7 non-test source files as a source-drop is more practical",
+    "dependencies": "Standard library plus the experimental simd/archsimd package (GOEXPERIMENT=simd). Tests and benchmarks also import golang.org/x/crypto/chacha20. Requiring the module pulls in stdx-go's go.mod, which has 25 direct requirements (pgx, minio-go, quic-go, wazero and others), though the chacha20 package itself imports none of them.",
+    "min_toolchain": "Go 1.27 (per go.mod), with GOEXPERIMENT=simd on amd64 and arm64. The blog run also used GOAMD64=v4; that detail was not re-verified.",
+    "platforms": "amd64: runtime dispatch picks AVX-512 for inputs over 256 B, AVX2 for inputs over 64 B, and scalar otherwise. arm64: NEON for inputs over 64 B. Every other GOARCH uses portable scalar Go.",
+    "thread_safety": "Not documented. A Cipher is mutable stream state (the counter plus up to 63 bytes of buffered keystream), so use one instance per goroutine, as with x/crypto.",
+    "drop_in_for_baseline": "partial — it implements cipher.Stream, and its tests check output against x/crypto/chacha20. But the constructors differ (NewIetf(key [32]byte, nonce [12]byte) returns a value with no error, versus NewUnauthenticatedCipher(key, nonce []byte) (*Cipher, error)), there is no 24-byte XChaCha20 nonce, and SetCounter takes a uint64 and allows rollback."
+  },
+  "gotchas": [
+    "The amd64 and arm64 backend files import simd/archsimd with no goexperiment.simd build tag; only chacha20_test.go has one. Without GOEXPERIMENT=simd, the package should therefore fail to compile on those architectures instead of falling back to the scalar code.",
+    "SetCounter lets you move the counter backward, while x/crypto's SetCounter panics on rollback to prevent accidental keystream reuse. Here, misuse silently reuses keystream.",
+    "The tail of each call is always padded to a full SIMD batch. A 257-byte input on an AVX-512 CPU still computes 16 blocks (1 KiB) of keystream, and 65-511 bytes on AVX2 still computes 8 blocks, so gains at mid sizes are smaller than the 1 MB headline.",
+    "The license is ambiguous: LICENSE.txt and GitHub say MIT, but the README says 'licensed under AGPL-3.0'. Settle this before vendoring."
+  ],
+  "pick_this_over_siblings_when": "All catalogued siblings are C or Rust AEADs (chacha20poly1305-simd, libaegis, the Rust ChaCha20-BLAKE3 and others), so pick this only when you need a raw ChaCha20 keystream in pure Go on amd64 without cgo. For an authenticated Go construction from the same author, use the repo's crypto/chacha20blake3, which wraps this package; for a standardized AEAD, stay with x/crypto/chacha20poly1305 or a sibling.",
+  "verified_claims_summary": "The author's blog reports XORKeyStream on 1 MB at 7,517.67 MB/s against 1,005.23 MB/s for golang.org/x/crypto/chacha20 (about 7.5x). The CPU is named only as an AMD EPYC Zen5-family part, with Go 1.27, GOEXPERIMENT=simd and GOAMD64=v4. On an unnamed arm64 host the result is 1,349.27 against 1,390.28 MB/s, i.e. no gain. These page numbers were not re-verified because kerkour.com was not fetched, but the public bench_test.go matches the described setup: 64 B to 1 MB, with a fresh cipher per iteration for both sides. The amd64 baseline is x/crypto's pure-Go scalar fallback. Nothing was compared against OpenSSL, libsodium or existing SIMD Go ChaCha20 code such as aead/chacha20 (AVX2 assembly), which stdx-go itself vendors as crypto/chacha.",
+  "status_note": "Actively developed: 15 commits to the chacha20 path from 2026-07-23 to 2026-08-24. It is untagged, has 3 stars, is self-described as not production-ready and depends on an experimental Go feature; it is small enough to vendor for experiments once the MIT-versus-AGPL license question is settled.",
+  "sources_read": [
+    "https://github.com/skerkour/stdx-go",
+    "https://github.com/skerkour/stdx-go/tree/main/chacha20",
+    "https://github.com/skerkour/stdx-go/blob/main/README.md",
+    "https://github.com/skerkour/stdx-go/blob/main/LICENSE.txt",
+    "https://github.com/skerkour/stdx-go/blob/main/go.mod",
+    "https://github.com/skerkour/stdx-go/blob/main/chacha20/chacha20.go",
+    "https://github.com/skerkour/stdx-go/blob/main/chacha20/chacha20_amd64.go",
+    "https://github.com/skerkour/stdx-go/blob/main/chacha20/chacha20_avx512.go",
+    "https://github.com/skerkour/stdx-go/blob/main/chacha20/chacha20_arm64.go",
+    "https://github.com/skerkour/stdx-go/blob/main/chacha20/chacha20_generic.go",
+    "https://github.com/skerkour/stdx-go/blob/main/chacha20/chacha20_simd.go",
+    "https://github.com/skerkour/stdx-go/blob/main/chacha20/hchacha20.go",
+    "https://github.com/skerkour/stdx-go/blob/main/chacha20/bench_test.go",
+    "https://github.com/skerkour/stdx-go/blob/main/chacha20/chacha20_test.go",
+    "https://github.com/skerkour/stdx-go/blob/main/chacha20/chacha20_ietf_test.go",
+    "https://github.com/skerkour/stdx-go/blob/main/chacha20/chacha20_djb_test.go",
+    "https://github.com/skerkour/stdx-go/blob/main/chacha20/chacha20_djb_amd64_test.go",
+    "https://github.com/skerkour/stdx-go/blob/main/crypto/chacha20blake3/chacha20_blake3.go",
+    "https://github.com/skerkour/stdx-go/commits/main/chacha20",
+    "https://github.com/skerkour/stdx-go/issues",
+    "https://github.com/skerkour/stdx-go/tags",
+    "https://github.com/golang/crypto/tree/master/chacha20",
+    "https://github.com/golang/crypto/blob/master/chacha20/chacha_generic.go",
+    "https://github.com/golang/crypto/blob/master/chacha20/chacha_noasm.go",
+    "https://hn.algolia.com/api/v1/items/49362187",
+    "https://hn.algolia.com/api/v1/search?query=chacha20%20simd%20go&tags=story",
+    "https://go.dev/doc/go1.27"
+  ],
+  "confidence": 0.65
+}

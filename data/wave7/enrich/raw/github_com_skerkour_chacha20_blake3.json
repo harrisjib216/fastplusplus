@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/skerkour/chacha20-blake3",
+  "one_liner": "Rust committing AEAD (ChaCha20 + keyed-BLAKE3 MAC); about 2x RustCrypto XChaCha20-Poly1305 and AES-256-GCM on 1-10 MB messages.",
+  "what_it_does": "An authenticated cipher of the author's own design. A keyed-BLAKE3 KDF expands the key and a 24-byte nonce into a ChaCha20 key and 8-byte nonce plus a MAC key. The data is encrypted with the original DJB ChaCha20 (64-bit counter), then authenticated with keyed BLAKE3 over aad || len || ciphertext || len, producing a 32-byte tag. The API is its own and does not implement RustCrypto's aead traits: ChaCha20Blake3::new([u8; 32]), encrypt/decrypt returning Vec (needs the alloc feature), and no_std-friendly encrypt_in_place_detached/decrypt_in_place_detached. Its output does not interoperate with XChaCha20-Poly1305 or AES-GCM.",
+  "how_it_is_fast": "The bundled `chacha` crate computes ChaCha blocks in a word-sliced (one block per SIMD lane) layout: 16 blocks per iteration with AVX-512 (_mm512_rol_epi32 rotates), 8 with AVX2, and 4 with NEON or WASM simd128. A scalar fallback covers inputs under 128 bytes and machines without SIMD. Authentication uses the blake3 crate, whose x86_64 build defaults to hand-written SSE4.1/AVX2/AVX-512 assembly (NEON C intrinsics on aarch64), so the MAC also scales with vector width. In the author's table the RustCrypto baselines plateau near 1.5-1.7 GB/s from 64 KB up while this construction reaches 3.3 GB/s. A per-message BLAKE3 KDF call plus a MAC finalization makes it slower than both baselines at 64 B-1 KB.",
+  "when_to_use": [
+    "Rust code encrypting large one-shot buffers (64 KB and up, best at 1 MB and up), such as files, backups or object-storage blobs, where the author measured about 2x RustCrypto XChaCha20-Poly1305 and 2.2x RustCrypto AES-256-GCM.",
+    "Designs that use one long-lived key with random 24-byte nonces and want a committing AEAD; the README claims full context commitment.",
+    "Targets without AES hardware (microcontrollers, WASM with simd128, older ARM) when you control both ends of the channel and AES-GCM would be slow.",
+    "no_std builds: with default-features = false you still get the in-place detached API and compile-time SIMD selection."
+  ],
+  "when_not_to_use": [
+    "Small messages. At 64 B-1 KB it is 1.1-1.5x slower than XChaCha20-Poly1305 and 2.5-5.2x slower than AES-256-GCM in the author's own table.",
+    "Interoperability or compliance needs (TLS, FIPS, JOSE/COSE). It is a non-standard construction specified only on the author's site, IANA/JOSE/COSE registration is still an open issue (#2), and the spec's KDF choice is questioned in open issue #11.",
+    "Portable x86-64 binaries built without -C target-cpu=native. The SIMD functions have no #[target_feature] attribute, and unmerged PR #12 reports about 55 MB/s instead of about 1.2 GB/s on an AVX2 i7-9750H as a result.",
+    "Streaming or larger-than-memory data. There is only a one-shot API (a streaming API is requested in open issue #1), and each call makes two passes over the buffer (encrypt, then MAC).",
+    "Machines with AES instructions where you just want the fastest AEAD. The AES-based siblings (AEGIS, HiAE, ROCCA-S) report tens to hundreds of Gbps, against about 3.3 GB/s here."
+  ],
+  "integration": {
+    "form": "crate (upstream recommends a git dependency on the main branch; the crates.io release is a third-party fork)",
+    "dependencies": "blake3 1.x (default features off, with neon and wasm32_simd; on x86_64 it builds hand-written assembly and on aarch64 the NEON code needs a C compiler), constant_time_eq 0.4, the in-repo `chacha` crate (path dependency), and optional zeroize 1.",
+    "min_toolchain": "Rust 1.85 (edition 2024, rust-version = \"1.85\")",
+    "platforms": "x86_64: AVX2/AVX-512 chosen by runtime detection with the std feature, or by compile-time target features in no_std builds. aarch64: NEON assumed. wasm32: simd128 at compile time only. Everything else uses the portable scalar fallback.",
+    "thread_safety": "Not documented. ChaCha20Blake3 holds only the 32-byte key and every method takes &self, so one instance can be shared across threads; the inner ChaCha state is created per call.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The crates.io crate chacha20-blake3 (0.9.11-0.10.0) is published by a third party from the paddor/chacha20-blake3 fork. That fork includes changes upstream has not merged: the target_feature fix, zeroization fixes, a Session API, and SSE2/AVX2 small-message paths. The upstream Cargo.toml is still at 0.9.11, so `cargo add` does not give you upstream.",
+    "Upstream's zeroize feature does not wipe everything. decrypt_in_place_detached never wipes kdf_out, Zeroizing::new(encryption_key).zeroize() wipes a copy of a Copy array, and the derived authentication-key copies are never wiped. The fork commit 'Zeroize all derived key material in AEAD' addresses this.",
+    "The tag is 32 bytes, 16 more than GCM or Poly1305. The Go port in skerkour/stdx-go (crypto/chacha20blake3) declares NonceSize = 32, while the Rust crate and that port's own error text say 24, so verify cross-language interop before you rely on it.",
+    "The maturity signals conflict. The author's January 2026 announcement title calls ChaCha20-BLAKE3 'stable and production-ready', but the bundled chacha crate's README says 'preliminary release, DO NOT USE IN PRODUCTION'. No third-party audit or cryptanalysis is documented."
+  ],
+  "pick_this_over_siblings_when": "Pick it over chacha20poly1305-simd when messages are large (64 KB and up), you want key commitment and random 24-byte nonces, and you do not need RFC 8439 wire compatibility; chacha20poly1305-simd is the better choice for small messages and standard ChaCha20-Poly1305. Over the AES-based siblings (libaegis, HiAE, ROCCA-S), pick it only when the target lacks AES instructions or you want one algorithm across microcontrollers, WASM and servers.",
+  "verified_claims_summary": "The README table is first-party, single-core encryption on a virtualized AMD EPYC 9R45 (AWS ma8.xlarge), with no flags or rustc version stated; the repo's make bench target and .cargo/config.toml both use target-cpu=native. At 1-10 MB it measured 3,297-3,353 MB/s, against 1,654-1,664 MB/s for RustCrypto XChaCha20-Poly1305 and 1,476-1,477 MB/s for RustCrypto AES-256-GCM (0.11.0-rc.2 crates). It wins at 64 KB (2,153 vs 1,636 and 1,475 MB/s) and loses at 64 B and 1 KB. The shipped criterion bench covers only 64 B-64 KB with a 128-byte AAD, so the 1 MB and 10 MB rows cannot be reproduced from it. The AES-GCM arm runs without the aes crate's VAES cfgs, which open issue #4 argues understates AES-GCM on Zen CPUs.",
+  "status_note": "The upstream repo is MIT-licensed with 103 stars; its last commit was 2026-01-15, and PR #12, the 2026-04 portable-build performance fix, has had no maintainer reply. The more recently updated crates.io release comes from a third-party fork, so 'active' is generous; pin a git revision or vendor the two small crates.",
+  "sources_read": [
+    "https://github.com/skerkour/chacha20-blake3",
+    "https://github.com/skerkour/chacha20-blake3#performance",
+    "https://github.com/skerkour/chacha20-blake3/blob/main/Cargo.toml",
+    "https://github.com/skerkour/chacha20-blake3/blob/main/chacha20-blake3/Cargo.toml",
+    "https://github.com/skerkour/chacha20-blake3/blob/main/chacha20-blake3/README.md",
+    "https://github.com/skerkour/chacha20-blake3/blob/main/chacha20-blake3/chacha20_blake3.rs",
+    "https://github.com/skerkour/chacha20-blake3/blob/main/chacha20-blake3/tests/mod.rs",
+    "https://github.com/skerkour/chacha20-blake3/blob/main/chacha/Cargo.toml",
+    "https://github.com/skerkour/chacha20-blake3/blob/main/chacha/README.md",
+    "https://github.com/skerkour/chacha20-blake3/blob/main/chacha/src/lib.rs",
+    "https://github.com/skerkour/chacha20-blake3/blob/main/chacha/src/chacha_avx512.rs",
+    "https://github.com/skerkour/chacha20-blake3/blob/main/chacha/src/chacha_avx2.rs",
+    "https://github.com/skerkour/chacha20-blake3/blob/main/chacha/src/chacha_neon.rs",
+    "https://github.com/skerkour/chacha20-blake3/blob/main/benchmarks/Cargo.toml",
+    "https://github.com/skerkour/chacha20-blake3/blob/main/benchmarks/benches/encrypt.rs",
+    "https://github.com/skerkour/chacha20-blake3/blob/main/benchmarks/benches/chacha.rs",
+    "https://github.com/skerkour/chacha20-blake3/blob/main/Makefile",
+    "https://github.com/skerkour/chacha20-blake3/blob/main/.cargo/config.toml",
+    "https://github.com/skerkour/chacha20-blake3/blob/main/.github/workflows/test.yml",
+    "https://github.com/skerkour/chacha20-blake3/blob/main/.github/workflows/benchmarks.yml",
+    "https://github.com/skerkour/chacha20-blake3/issues?q=is%3Aissue",
+    "https://github.com/skerkour/chacha20-blake3/pull/12",
+    "https://github.com/skerkour/chacha20-blake3/branches",
+    "https://github.com/paddor/chacha20-blake3",
+    "https://github.com/paddor/chacha20-blake3/commit/9a4fc2b5ec925bc7d80f11cbd99e1934a08f1327",
+    "https://crates.io/api/v1/crates/chacha20-blake3",
+    "https://crates.io/api/v1/crates/chacha20-blake3/versions",
+    "https://crates.io/api/v1/crates/chacha12-blake3",
+    "https://github.com/BLAKE3-team/BLAKE3/blob/master/Cargo.toml",
+    "https://github.com/skerkour/stdx-go/blob/main/crypto/chacha20blake3/chacha20_blake3.go",
+    "https://hn.algolia.com/api/v1/items/46644084",
+    "https://hn.algolia.com/api/v1/items/39204412"
+  ],
+  "confidence": 0.7
+}
