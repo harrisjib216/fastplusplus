@@ -1,0 +1,73 @@
+{
+  "id": "https://github.com/samrussell/chorba",
+  "one_liner": "Table-less software CRC-32 using sparse zero polynomials; about 2x zlib 1.3.1.1's braided CRC on large buffers.",
+  "what_it_does": "This is the reference code for the arXiv paper: a set of C functions that compute the IEEE/gzip CRC-32 of a buffer. The bulk loop uses no lookup tables and no carry-less-multiply or CRC instructions. Every variant has the signature uint32_t f(uint32_t crc, char* buf, size_t len); chorba_standard calls chorba_118960_nondestructive for inputs of 238,432 bytes or more and chorba_small_nondestructive below that. An optional chorba_pclmul applies the idea to an x86 PCLMUL/AVX folding loop. The repo is a benchmark harness (test_crc plus zlib submodules), not a library, and the maintained form of the algorithm is zlib-ng 2.3+, where it is built by default (WITH_CRC32_CHORBA=ON).",
+  "how_it_is_fast": "A zero polynomial Z(x) satisfies Z(x) mod G(x) = 0, so XORing it into the message leaves the CRC unchanged. Choosing one with few terms, such as x^14870 + x^22 + x^11 + x^7 + 1 with exponents scaled from bits to 64-bit words, cancels each input word by XORing shifted copies of it into a few words roughly 118.8-119 KB further ahead (hence the variant name 118960). The main loop is then plain 64-bit shifts and XORs, with no table loads and no serial dependency on the CRC register. Non-destructive variants keep these forward contributions in a 128 KiB power-of-two ring buffer (the wrap is a bitmask); destructive variants XOR them straight into the caller's buffer. The last ~72 bytes go through a 256-entry Sarwate table, and on x86 the same shift/XOR steps are interleaved between PCLMUL folds.",
+  "when_to_use": [
+    "You need a portable C CRC-32 for buffers of about 240 KB or more on 64-bit CPUs where CLMUL/PMULL or CRC32 instructions are unavailable or not allowed. At 16-256 MiB the paper's plots show chorba_118960_nondestructive at roughly 2.2x (Ryzen 5 5600) and 3x (Graviton2, Raspberry Pi 4) the throughput of zlib 1.3.1.1 braiding (plot readings are approximate).",
+    "Cortex-A72-class boards such as the Raspberry Pi 4. The paper calls the non-destructive 118960 variant the best performer there, and its plot shows it at or slightly ahead of zlib's native-CRC32-instruction path for 16 MiB and larger.",
+    "You already link zlib-ng 2.3.2 or later. You get Chorba automatically as the fallback ahead of braiding, with the bug fixes applied, which is better than copying this repo.",
+    "You checksum data you own and can overwrite, as in cksum-style tools. On Ryzen and Graviton2 the destructive variants ran close to, or at, the hardware-accelerated reference speed in the plots.",
+    "You want reference code for porting the zero-polynomial idea to other CRC widths; the paper lists CRC-32-XFER and CRC-64-ISO as future work."
+  ],
+  "when_not_to_use": [
+    "Your CPU has CRC32 or carry-less-multiply instructions you can use. On Graviton2, zlib's native-CRC32 path plotted at ~55-75 s/TiB against ~150 for the best non-destructive Chorba, and the Chorba+PCLMUL tweak adds only 5-20%. The abstract's 'on par with hardware' claim holds in the plots only for some variants and CPUs.",
+    "Your messages are small. Below 238,432 bytes everything falls back to chorba_small, which is only ~1.15x braiding at 64 KiB on the Ryzen plot, and the README says braiding is faster below 256 bytes.",
+    "You would ship this repo's code in production. It is stale (last commit 2024-12-27) and has no correctness tests. Its 118960 variant still zeroes the ring buffer with a '+ 60' bound; zlib-ng changed that to '+ 64' in PR #2033 to fix wrong CRCs at lengths such as 615,336 bytes (zlib-ng #2029, shipped in the 2.3.2 hotfix).",
+    "You target big-endian or 32-bit systems. The code does little-endian 64-bit loads with no byte-swapping. zlib-ng needed a big-endian fix (#1891) and a separate 32-bit small variant; this repo has neither.",
+    "You care about memory or per-call cost, or run on a Pi-class memory system. Each large non-destructive call mallocs and zeroes 128 KiB, which the paper says outweighs the gains for smaller messages. The 733112 variants run ~1.5x (destructive) and ~2.4x (non-destructive) slower than braiding on the Raspberry Pi 4 plot."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none for the CRC functions themselves, except that the caller must define the 256-entry `crc32_table` they reference as extern (test_crc.h supplies it); the benchmark harness needs the zlib_braiding and zlib_slicing submodules, and the latter uses an SSH (git@github.com) URL",
+    "min_toolchain": "not documented; C99-style C that the Makefile hard-codes to gcc -O3 (version unstated), with -mno-avx on x86-64; chorba_pclmul needs GCC/Clang `#pragma GCC target(\"pclmul,avx\")` and x86intrin.h",
+    "platforms": "generic variants assume a 64-bit little-endian CPU (tested on x86-64 Ryzen, Graviton2 aarch64 and Raspberry Pi 4); chorba_pclmul needs x86-64 with PCLMULQDQ and AVX; configure calls lscpu, so the build is Linux-oriented; the AVX2/AVX-512 variants benchmarked in the paper are not in the repo",
+    "thread_safety": "not documented; each call keeps its state in locals and a per-call malloc'd buffer and only reads the global table, so calls look reentrant, but destructive variants overwrite the caller's buffer",
+    "drop_in_for_baseline": "partial — produces the same CRC-32 as zlib's crc32(), but the signature is (uint32_t, char*, size_t) with no header. The functions work on the raw register without zlib's ~ pre/post conditioning (the harness wraps zlib as crc32(crc ^ 0xffffffff, ...) ^ 0xffffffff for comparison). zlib-ng 2.3+ is the real drop-in."
+  },
+  "gotchas": [
+    "Conditioning differs from zlib: the functions take and return the un-inverted register, so a standard CRC-32 is f(0xFFFFFFFF, buf, len) ^ 0xFFFFFFFF. Passing a zlib-style running CRC directly gives wrong results.",
+    "The *_destructive variants overwrite the input buffer. Only the *_nondestructive variants and chorba_standard leave the data intact.",
+    "Loop indices are `int` while len is size_t, so a single call over 2 GiB overflows. Loads are unaligned type-punned `*(uint64_t*)` casts, which is alignment and strict-aliasing UB in ISO C (zlib-ng's port feeds the unaligned head through braid first). The 128 KiB malloc is not NULL-checked.",
+    "'Table-less' describes only the bulk loop: the tail (up to ~72 bytes) still uses a 1 KiB Sarwate table. The harness prints the CRC but never compares it with zlib, so the repo does not verify correctness."
+  ],
+  "pick_this_over_siblings_when": "The catalogued CRC siblings (corsix fast-crc32, dougallj's M1 PMULL code, crc32fast, crc-fast, klauspost/crc32, komrad36/CRC, htot crc32c) get their headline numbers from CLMUL/PMULL or CRC32 instructions and win by a wide margin wherever those exist. Pick Chorba, preferably through zlib-ng, only for the no-hardware-assist case, where it is the fastest portable C CRC-32 in the catalog relative to zlib's braiding.",
+  "verified_claims_summary": "A single-author arXiv v1 preprint timed 1,000 iterations of IEEE CRC-32 over xorshift buffers on an AMD Ryzen 5 5600, an AWS t4g.micro (Graviton2) and a Raspberry Pi 4. Builds used gcc -O3 (version unstated), and the baseline was zlib 1.3.1.1's braided crc32(). Results exist only as seconds-per-TiB plots: the text lists sizes up to 512 MiB, but the plots stop at 256 MiB. They show the best non-destructive variant at roughly 2.2x braiding on Ryzen and about 3x on the two ARM systems at 16 MiB and above, which is consistent with the abstract's '100%'. A separate 5-20% gain is claimed for grafting the method onto AVX1 PCLMUL folding.",
+  "status_note": "Stale research code (last commit 2024-12-27, 6 stars) under the permissive zlib license, fine to copy but unmaintained and missing later fixes. Use zlib-ng 2.3.2+ (WITH_CRC32_CHORBA on by default) for a maintained, bug-fixed version.",
+  "sources_read": [
+    "https://github.com/samrussell/chorba",
+    "https://github.com/samrussell/chorba/blob/master/README.md",
+    "https://github.com/samrussell/chorba/blob/master/LICENSE",
+    "https://github.com/samrussell/chorba/blob/master/chorba_standard.c",
+    "https://github.com/samrussell/chorba/blob/master/chorba_small_nondestructive.c",
+    "https://github.com/samrussell/chorba/blob/master/chorba_118960_nondestructive.c",
+    "https://github.com/samrussell/chorba/blob/master/chorba_118960_destructive.c",
+    "https://github.com/samrussell/chorba/blob/master/chorba_pclmul.c",
+    "https://github.com/samrussell/chorba/blob/master/chorba_end.c",
+    "https://github.com/samrussell/chorba/blob/master/pclmul.c",
+    "https://github.com/samrussell/chorba/blob/master/braiding.c",
+    "https://github.com/samrussell/chorba/blob/master/test_crc.c",
+    "https://github.com/samrussell/chorba/blob/master/test_crc.h",
+    "https://github.com/samrussell/chorba/blob/master/run_tests.sh",
+    "https://github.com/samrussell/chorba/blob/master/Makefile.in",
+    "https://github.com/samrussell/chorba/blob/master/configure",
+    "https://github.com/samrussell/chorba/blob/master/.gitmodules",
+    "https://raw.githubusercontent.com/samrussell/chorba/master/figures/amdryzen.png",
+    "https://raw.githubusercontent.com/samrussell/chorba/master/figures/t4g.png",
+    "https://raw.githubusercontent.com/samrussell/chorba/master/figures/rpi4.png",
+    "https://arxiv.org/pdf/2412.16398",
+    "https://github.com/zlib-ng/zlib-ng/pull/1837",
+    "https://github.com/zlib-ng/zlib-ng/pull/2033",
+    "https://github.com/zlib-ng/zlib-ng/pull/1915",
+    "https://github.com/zlib-ng/zlib-ng/pull/1891",
+    "https://github.com/zlib-ng/zlib-ng/issues/2029",
+    "https://github.com/zlib-ng/zlib-ng/issues/1910",
+    "https://github.com/zlib-ng/zlib-ng/issues/1926",
+    "https://github.com/zlib-ng/zlib-ng/releases",
+    "https://github.com/zlib-ng/zlib-ng/releases/tag/2.3.2",
+    "https://github.com/zlib-ng/zlib-ng/blob/develop/CMakeLists.txt",
+    "https://github.com/zlib-ng/zlib-ng/blob/develop/arch/generic/crc32_chorba_c.c",
+    "https://github.com/zlib-ng/zlib-ng/blob/develop/crc32_chorba_p.h"
+  ],
+  "confidence": 0.75
+}

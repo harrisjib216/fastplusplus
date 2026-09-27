@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/mayeut/pybase64",
+  "one_liner": "Python base64 module replacement backed by the SIMD libbase64 codec; roughly 6.6x faster encode than the stdlib.",
+  "what_it_does": "pybase64 is a CPython/PyPy extension package that exposes the same functions and keyword arguments as the stdlib base64 \"modern interface\": b64encode, b64decode, standard_/urlsafe_ helpers and encodebytes. It adds b64encode_as_string (returns str) and b64decode_as_bytearray, plus a `pybase64` CLI with encode, decode and benchmark subcommands. If the compiled extension is missing, a pure-Python fallback delegates to the stdlib, so the same code still runs.",
+  "how_it_is_fast": "The work is done by a bundled, statically linked copy of aklomp/libbase64. It picks a SIMD codec at import time from CPUID/XGETBV (SSSE3, SSE4.1, SSE4.2, AVX, AVX2 or AVX-512 VBMI) or NEON on ARM, and encodes or decodes a full vector of bytes per step using shuffle/lookup instructions instead of a per-byte table loop. With validate=True and padded input, decoding and validation happen in one SIMD pass. Other alphabets such as URL-safe are handled by an SSE2/NEON compare-and-blend pass that maps +/ to the alternate characters, applied in 16 KiB chunks around the standard codec. The GIL is released for the whole C loop.",
+  "when_to_use": [
+    "Python code that base64-encodes large binary payloads such as API responses, data URIs or attachments: b64encode measured 17,492 vs 2,653 MB/s on a 136 KB buffer.",
+    "Decoding well-formed, padded input where you can pass validate=True: 9,037 vs 2,656 MB/s for standard base64, and 5,974 vs 1,186 MB/s for the URL-safe alphabet.",
+    "Threaded or free-threaded (3.13t+) Python that decodes or encodes on many threads at once: the GIL is released, and the module declares Py_MOD_GIL_NOT_USED.",
+    "Deployments that need prebuilt wheels beyond x86-64: PyPI has 1.5.0 wheels for Linux aarch64, armv7l, ppc64le, s390x and riscv64 (glibc and musl), macOS arm64, Windows ARM64, iOS, Android and wasm32."
+  ],
+  "when_not_to_use": [
+    "Your decode calls use the defaults (validate=False). That path is scalar, only 2,369 vs 2,030 MB/s (about 1.17x), and SIMD for it is still an open issue (#4, filed 2017).",
+    "Your input is unpadded and you need strict validation: validate=True with padded=False ran at 2,521 vs 2,655 MB/s, and URL-safe with ignorechars=b'' and padded=False at 2,201 vs 2,606 MB/s. Both are slower than CPython 3.15's stdlib.",
+    "You need base32, base16, base85, Ascii85, decodebytes or file/stream encode()/decode(). None of these are provided. A streaming API is only a discussion in open issue #914.",
+    "Your payloads are short, such as JWT-sized tokens. The only published benchmark uses a 135,696-byte buffer, so per-call overhead on small strings is not documented.",
+    "You build from source on hosts without CMake or a C compiler. Outside cibuildwheel the extension is optional, so the install succeeds but silently runs at stdlib speed."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none at runtime (libbase64 is bundled as a git submodule and linked statically); source builds need a C compiler and CMake, and cannot use a system libbase64 because private internals are used (#911)",
+    "min_toolchain": "Python 3.9+ (classifiers cover CPython 3.9-3.15; PyPy and GraalPy wheels published); setuptools>=77 plus CMake for sdist builds",
+    "platforms": "any platform CPython supports. SIMD is selected at runtime: x86/x86-64 SSSE3 through AVX2 and AVX-512 VBMI, NEON on 32/64-bit ARM. Other architectures (ppc64le, s390x, riscv64, wasm32) get libbase64's plain codec. Only Apple M1 (NEON) numbers are published.",
+    "thread_safety": "Functions are stateless and release the GIL during encoding and decoding. Free-threaded builds are supported since 1.4.0 (Py_MOD_GIL_NOT_USED). 1.5.0 fixed a thread-safety bug in codec selection, which is now mutex-protected.",
+    "drop_in_for_baseline": "partial — same names and arguments for b64encode/b64decode, standard_*, urlsafe_* and encodebytes, but no b32/b16/b85/a85/z85, decodebytes or file functions, and the big decode speedup requires changing call sites to validate=True"
+  },
+  "gotchas": [
+    "Check pybase64.get_version(): it reports \"C extension active - NEON/AVX2...\" or \"C extension inactive\". The inactive fallback is just the stdlib with extra Python overhead.",
+    "Since 1.5.0, urlsafe_b64decode defaults to padded=False to match Python 3.15. It therefore takes the slow non-SIMD path (2,081 vs 1,031 MB/s) unless you call b64decode(s, b'-_', validate=True) on padded data.",
+    "1.5.0 changed error behavior to track CPython 3.15. Non-ASCII str input is rejected even with validate=False. Excess or discontinuous padding raises binascii.Error. Accepting '+' or '/' alongside an alternate alphabet is deprecated and emits a warning.",
+    "Input buffers must be C-contiguous; non-contiguous memoryviews raise BufferError."
+  ],
+  "pick_this_over_siblings_when": "Pick pybase64 when the calling code is Python and you want a pip-installable, stdlib-compatible API: it is a Python binding of aklomp/base64, so reach for that library (or simdutf / Turbo-Base64) directly only from C/C++. It is the only Python-callable base64 entry in the catalog.",
+  "verified_claims_summary": "The package's own `pybase64 benchmark` CLI ran pybase64 1.5.0 (NEON path) against the stdlib base64 module in one Python 3.15.0rc1 process on an Apple M1 Max, using a 135,696-byte input and a build from Apple clang 21. b64encode ran at 17,492 vs 2,653 MB/s (~6.6x) and validate=True decode at 9,037 vs 2,656 MB/s (~3.4x). Non-validating decode was only ~1.17x faster, and two unpadded strict-decode configurations were slower than the stdlib. No x86 results are published.",
+  "status_note": "Actively maintained (commits through 2026-09-26, v1.5.0 released 2026-08-08, Production/Stable classifier) and BSD-2-Clause, with wheels for most platforms, so `pip install pybase64` is the normal route and vendoring is unnecessary.",
+  "sources_read": [
+    "https://github.com/mayeut/pybase64",
+    "https://github.com/mayeut/pybase64/blob/master/README.rst",
+    "https://github.com/mayeut/pybase64/blob/master/src/pybase64/__init__.py",
+    "https://github.com/mayeut/pybase64/blob/master/src/pybase64/_pybase64.c",
+    "https://github.com/mayeut/pybase64/blob/master/src/pybase64/_pybase64_get_simd_flags.c",
+    "https://github.com/mayeut/pybase64/blob/master/src/pybase64/_fallback.py",
+    "https://github.com/mayeut/pybase64/blob/master/src/pybase64/__main__.py",
+    "https://github.com/mayeut/pybase64/blob/master/setup.py",
+    "https://github.com/mayeut/pybase64/blob/master/pyproject.toml",
+    "https://github.com/mayeut/pybase64/blob/master/.gitmodules",
+    "https://github.com/mayeut/pybase64/blob/master/SECURITY.md",
+    "https://github.com/mayeut/pybase64/blob/master/docs/intro.rst",
+    "https://github.com/mayeut/pybase64/blob/master/docs/api.rst",
+    "https://github.com/mayeut/pybase64/blob/master/.github/workflows/benchmark.yml",
+    "https://github.com/mayeut/pybase64/issues",
+    "https://github.com/mayeut/pybase64/issues/4",
+    "https://github.com/mayeut/pybase64/issues/680",
+    "https://github.com/mayeut/pybase64/issues/911",
+    "https://github.com/mayeut/pybase64/issues/914",
+    "https://pypi.org/pypi/pybase64/json"
+  ],
+  "confidence": 0.85
+}
