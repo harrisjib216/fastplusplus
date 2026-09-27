@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/mitschabaude/fast-base64",
+  "one_liner": "Hand-written WebAssembly SIMD base64 codec for JS (browser/Node/Deno); beats pure-JS base64 loops, not native Buffer.",
+  "what_it_does": "Converts base64 strings to Uint8Array and back in browsers, Node and Deno. The default export is async (`await toBytes(str)`, `await toBase64(bytes)`) because it lazily instantiates a Wasm module. Subpath imports give a non-SIMD Wasm build (`/small`), a synchronous pure-JS port (`/js`) and a 147-byte atob/btoa wrapper (`/nano`), all with the same two function names. The fast path handles only the standard alphabet; `/url` adds string-rewriting helpers for base64url.",
+  "how_it_is_fast": "The kernels are hand-written WebAssembly text using 128-bit Wasm SIMD. Each iteration loads 16 base64 characters and maps them to 6-bit values with a branchless piecewise-linear formula (lane compares turned into add/subtract masks, no lookup table). It packs the bits with i32x4 shifts and masks and uses i8x16.swizzle to compact 16 chars into 12 bytes; encoding runs the same steps in reverse. String/byte conversion goes through TextEncoder.encodeInto/TextDecoder, a cached compiled module plus one shared WebAssembly.Memory avoid re-instantiating per call, and it skips input validation entirely.",
+  "when_to_use": [
+    "Browser code that encodes or decodes 100 kB-100 MB base64 payloads on engines without native Uint8Array.fromBase64/toBase64, where the fallback would be atob/btoa plus char-code loops.",
+    "Trusted, well-formed standard-alphabet base64 with no line breaks, such as data your own code produced, because the fast path does no validation.",
+    "Cross-runtime ESM code (browser plus Deno) that wants one small API without depending on Node's Buffer.",
+    "Bundle-size-sensitive pages: the default build is about 1.9 kB minzipped, and `/js` is about 600 bytes if you need a synchronous API."
+  ],
+  "when_not_to_use": [
+    "Node.js. In our warm-loop run on Node 24.18 (Apple M1 Pro), Buffer.from(s, 'base64') decoded about 10x faster than the default Wasm build (7.4 vs 0.76 GB/s of output at 1 MB), and Buffer#toString('base64') encoded 2.5-7x faster.",
+    "Runtimes with native Uint8Array.fromBase64/toBase64 (MDN: Baseline since September 2025). The native API also validates input, skips whitespace and supports base64url.",
+    "Untrusted input. Invalid characters silently decode to garbage (issue #4, confirmed by the author): '@@@@' gave [16,65,4] with no error, and 'SGVs\\nbG8=' gave 'Hel9±¼' instead of 'Hello'.",
+    "Small payloads, or hot paths that need a synchronous call. The fast build is async-only, and the README itself says typical apps will not notice the gap versus the 147-byte atob wrapper.",
+    "Projects that need a maintained dependency. The last commit and npm release (0.1.8) are from 2022-01-04, and the 2023-2024 issues on validation, ESM typings and maintenance are unanswered."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none",
+    "min_toolchain": "An ES module environment with WebAssembly and TextEncoder/TextDecoder. The fast path needs Wasm SIMD and falls back to scalar Wasm, with a console.warn, if instantiation fails. The package is ESM-only: package.json exports only an 'import' condition, so there is no CommonJS require.",
+    "platforms": "Browsers, Node and Deno (deno.land/x/fast_base64) for the default build. The README says `/small` and `/nano` have no Node support.",
+    "thread_safety": "Single-threaded JS. All concurrent async calls in one realm share one module-level WebAssembly.Memory with a bump allocator (closed issue #2 was about concurrent calls overwriting each other's memory). Worker use is not documented beyond the author's comment in issue #3 that the main version should work in all JS environments.",
+    "drop_in_for_baseline": "partial — all four variants export the same toBytes/toBase64 names, but the default returns Promises while the `/js` and `/nano` baselines are synchronous, so switching means adding await."
+  },
+  "gotchas": [
+    "Encoder overrun bug: the SIMD encoder stores whole 16-byte vectors without padding its output allocation, so it writes up to 12 bytes past it. In our run on Node 24.18, toBase64 of a 28,086-byte input on fresh module memory threw 'RuntimeError: memory access out of bounds', because the allocation exactly fills the 64 KiB Wasm page. By our reading of the code it can also overwrite an adjacent in-flight allocation.",
+    "The variants disagree on base64url. `/js` decodes '-' and '_' as 62/63, but the default SIMD path turns them into garbage ('-_-_' gave [197,236,94] instead of [251,255,191]), so run fromUrl() first.",
+    "Only '=' is stripped before decoding, so whitespace or newlines (for example MIME-wrapped base64) corrupt the output without raising an error.",
+    "The TypeScript types are not wired into the package.json `exports` map (open issue #6), so ESM + TS type resolution can fail. The repo's correctness check (test-base64.js) never exercises the default SIMD toBase64."
+  ],
+  "pick_this_over_siblings_when": "aklomp/base64, fastbase64, Turbo-Base64, base64-turbo, vb64 and simdutf are native C/C++/Rust codecs running at several to 100+ GB/s, and none ships as a drop-in JS package for a browser page. Pick fast-base64 only when you need a ready-made web JS/Wasm package for trusted data; if you control native code, simdutf (which validates) is the better choice.",
+  "verified_claims_summary": "The README claims about 20x over its own pure-JS port on the first 100 kB and 2-3x on the first 100 MB, plus 0.06 ms vs 5 ms to decode 10 kB against the atob wrapper. It gives no hardware, runtime version or results table, and its harness times one cold call per variant with performance.now(). In our warm-loop re-run on Node 24.18 / Apple M1 Pro (100 kB-10 MB), the Wasm build beat the JS port by about 2.1x on decode (0.74-0.77 vs 0.35-0.37 GB/s) and 3.7-4.6x on encode (1.4-2.3 vs 0.38-0.52 GB/s), not 20x, and Node's Buffer beat both.",
+  "status_note": "Abandoned (last commit and npm 0.1.8 on 2022-01-04; issues from 2023-2024 unanswered) yet still about 6,000 npm downloads a week; it is MIT-licensed and small enough to vendor, but you would need to patch the encoder overrun and add validation yourself.",
+  "sources_read": [
+    "https://github.com/mitschabaude/fast-base64",
+    "https://github.com/mitschabaude/fast-base64/blob/main/README.md",
+    "https://github.com/mitschabaude/fast-base64/blob/main/wasm.js",
+    "https://github.com/mitschabaude/fast-base64/blob/main/wasm-tools.js",
+    "https://github.com/mitschabaude/fast-base64/blob/main/wat/base64-simd.wat",
+    "https://github.com/mitschabaude/fast-base64/blob/main/js.js",
+    "https://github.com/mitschabaude/fast-base64/blob/main/small.js",
+    "https://github.com/mitschabaude/fast-base64/blob/main/nano.js",
+    "https://github.com/mitschabaude/fast-base64/blob/main/url.js",
+    "https://github.com/mitschabaude/fast-base64/blob/main/util.js",
+    "https://github.com/mitschabaude/fast-base64/blob/main/mod.ts",
+    "https://github.com/mitschabaude/fast-base64/blob/main/wasm-inline.js",
+    "https://github.com/mitschabaude/fast-base64/blob/main/build-lib.js",
+    "https://github.com/mitschabaude/fast-base64/blob/main/dist/wasm.js",
+    "https://github.com/mitschabaude/fast-base64/blob/main/test-base64.js",
+    "https://github.com/mitschabaude/fast-base64/blob/main/types/index.d.ts",
+    "https://github.com/mitschabaude/fast-base64/blob/main/types/js.d.ts",
+    "https://github.com/mitschabaude/fast-base64/blob/main/package.json",
+    "https://github.com/mitschabaude/fast-base64/blob/main/LICENSE.md",
+    "https://github.com/mitschabaude/fast-base64/commits/main",
+    "https://github.com/mitschabaude/fast-base64/issues?q=is%3Aissue",
+    "https://github.com/mitschabaude/fast-base64/issues/2",
+    "https://github.com/mitschabaude/fast-base64/issues/3",
+    "https://github.com/mitschabaude/fast-base64/issues/4",
+    "https://github.com/mitschabaude/fast-base64/issues/5",
+    "https://github.com/mitschabaude/fast-base64/issues/6",
+    "https://registry.npmjs.org/fast-base64",
+    "https://api.npmjs.org/downloads/point/last-week/fast-base64",
+    "https://hn.algolia.com/api/v1/search?query=fast-base64&restrictSearchableAttributes=url",
+    "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Uint8Array/fromBase64"
+  ],
+  "confidence": 0.8
+}

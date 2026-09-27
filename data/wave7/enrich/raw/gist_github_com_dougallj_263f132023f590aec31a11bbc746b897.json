@@ -1,0 +1,48 @@
+{
+  "id": "https://gist.github.com/dougallj/263f132023f590aec31a11bbc746b897",
+  "one_liner": "Single-file C++17 AArch64 CRC-32/CRC-32C kernel with 12 PMULL folding chains; about 2.5x zlib's crc32 on Apple M1.",
+  "what_it_does": "Computes CRC-32 (zlib/PNG/gzip polynomial) or CRC-32C over a byte buffer on 64-bit ARM, reaching about 76 GB/s on an M1. It exposes two free C++ functions, `uint32_t crc32(uint32_t crc, uint8_t *p, size_t size)` and `crc32c(...)`, with zlib-style semantics: start from 0 and chain by passing the previous result back in. They wrap a template `generic_crc32<Poly, NumChains>` that computes all folding constants at compile time for any reflected 32-bit polynomial. It is a demo gist, not a packaged library.",
+  "how_it_is_fast": "It uses Intel's 2009 carry-less-multiply folding (\"Fast CRC Computation for Generic Polynomials Using PCLMULQDQ\") ported to ARM PMULL/PMULL2, but with 12 independent 16-byte accumulators (192 bytes per iteration) instead of the usual 4. The chain count is sized to M1 Firestorm's latency: the Apple core fuses PMULL/PMULL2 with a following EOR into one 3-cycle uop, so each chain costs 6 cycles and 2 fused uops, and 12 chains fill the 4-per-cycle SIMD pipes. The fold step is inline asm to keep valid fusion pairs. The final 128-to-32-bit reduction uses two CRC32X/CRC32CX instructions, or a Barrett reduction for other polynomials.",
+  "when_to_use": [
+    "Bulk CRC-32 or CRC-32C over large buffers (the author profiled 128 KB and up; the test harness uses 2 MiB) on Apple M-series cores, where the checksum is the throughput bottleneck, e.g. zip/PNG/gzip writers or storage checksums on macOS/iOS.",
+    "Studying or porting the N-chain PMULL+EOR folding technique: about 270 readable lines, with the constants derived by constexpr code rather than magic numbers.",
+    "Arbitrary reflected 32-bit CRC polynomials on AArch64: pass the polynomial as a template parameter (NO_CRC_INSNS builds without the ARMv8 CRC instructions, using a table plus Barrett reduction)."
+  ],
+  "when_not_to_use": [
+    "Non-Apple ARM cores. The PMULL+EOR fusion it depends on is, per the author, probably unique to Apple CPUs. corsix/fast-crc32 measured it at 17.41 GB/s on Ampere Altra, slower than Chromium zlib's scalar CRC32X loop at 22.68 GB/s.",
+    "x86 or any non-AArch64 target: there is no fallback path, since it includes arm_neon.h and uses PMULL inline asm unconditionally.",
+    "Small or latency-sensitive buffers. Below 192 bytes (after 16-byte alignment) it drops to a single serial CRC32X chain, and the author warns its 5 ops per 16 bytes (vs 3 for CRC32X) can hurt when the checksum shares the core with other work.",
+    "Shipping code that needs a clear license. The gist carries only an 'AS IS' warranty disclaimer and no license grant.",
+    "When you want the fastest M1 result: the author's 2024 update points to corsix/fast-crc32 at 85.05 GB/s vs 77.55 GB/s for this gist."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (arm_neon.h, plus arm_acle.h unless NO_CRC_INSNS)",
+    "min_toolchain": "C++17 (inline constexpr variables, if constexpr); written for clang: the inline asm uses Apple-dialect mnemonics (`pmull.1q`, `eor.16b`) and the code relies on implicit NEON vector-type conversions. The companion test gist builds with `clang++ -std=c++17 -O3`, clang version not stated.",
+    "platforms": "AArch64 with the crypto (PMULL) and, by default, CRC extensions; tuned for Apple M1 (Firestorm). Other AArch64 cores run it correctly but lose the fusion advantage.",
+    "thread_safety": "Reentrant by code reading: a pure function over its arguments, with only constexpr tables and no mutable global state. Not documented by the author.",
+    "drop_in_for_baseline": "partial — same zlib crc32 semantics (initial value 0, pre/post inversion, chainable calls), but the signature takes a non-const `uint8_t*` and `size_t` instead of zlib's `(uLong, const Bytef*, uInt)`. It is an unnamespaced C++-linkage function also named crc32, and there is no crc32_combine or other zlib API."
+  },
+  "gotchas": [
+    "It does not build as-is outside Apple clang. corsix/fast-crc32's vendored copy had to rewrite the asm to standard syntax (`pmull v0.1q, %[val].1d, %[consts].1d`), add the missing `#include <cstring>` for memcpy, add an extern \"C\" wrapper, and compile with `-march=armv8-a+crypto+crc -flax-vector-conversions` under g++ on Linux.",
+    "Speed depends on fusion pairs, i.e. each PMULL immediately followed by its dependent EOR. The author reports about 70 GB/s without them and about 75 GB/s with them; the inline asm pins this order, so do not 'clean it up' into intrinsics without re-measuring.",
+    "The final fold from 12 accumulators to one is serial (about 72 cycles, per the author's TODO), a fixed cost per call on top of the small-buffer fallback.",
+    "This gist has no test or harness of its own. The companion gist's harness checks only one 2 MiB buffer against a slice-by-4 table, but corsix's bench.c (which checks every length from 1 to 4,160 bytes and every split point against a table CRC) runs this code before benchmarking it."
+  ],
+  "pick_this_over_siblings_when": "corsix/fast-crc32 is the direct successor: it ships explicit license files, is about 10% faster on M1 (85.05 vs 77.55 GB/s by blending EOR3 and CRC32X) and covers x86 and non-Apple ARM, while crc-fast and crc32fast are packaged libraries. Pick this gist only as a compact, readable C++17 reference for 12-chain PMULL+EOR folding; for shipping code use corsix/fast-crc32.",
+  "verified_claims_summary": "On a 3.2 GHz Apple M1 the author measured zlib's crc32 (a separate, unpublished test of Apple's system zlib, version unknown) at about 30 GB/s; the companion 12-chain gist reached about 70-75 GB/s on a 2 MiB buffer (clang++ -std=c++17 -O3), and this cleaner template/asm version about 76 GB/s. corsix/fast-crc32 independently measured this gist at 77.55 GB/s on M1 (512 KiB default buffer) against 25.03 GB/s for Chromium zlib's scalar code and 26.57 GB/s for its vector code, but only 17.41 GB/s on Ampere Altra, where the Chromium scalar code wins at 22.68 GB/s.",
+  "status_note": "Abandoned: last edited 2022-06-06, and the author's 2024 blog update names corsix/fast-crc32 as the new state of the art. With no license grant it is a reference implementation, not code to vendor.",
+  "sources_read": [
+    "https://gist.github.com/dougallj/263f132023f590aec31a11bbc746b897",
+    "https://gist.github.com/dougallj/a15a0feac92e2126932b0fbe1de7863d",
+    "https://dougallj.wordpress.com/2022/05/22/faster-crc32-on-the-apple-m1/",
+    "https://github.com/corsix/fast-crc32",
+    "https://github.com/corsix/fast-crc32/blob/main/README.md",
+    "https://github.com/corsix/fast-crc32/blob/main/third_party/dougallj.cpp",
+    "https://github.com/corsix/fast-crc32/blob/main/third_party/Makefile",
+    "https://github.com/corsix/fast-crc32/blob/main/Makefile",
+    "https://github.com/corsix/fast-crc32/blob/main/bench.c",
+    "https://hn.algolia.com/api/v1/items/31469295"
+  ],
+  "confidence": 0.82
+}
