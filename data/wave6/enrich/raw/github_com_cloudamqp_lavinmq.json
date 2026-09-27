@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/cloudamqp/lavinmq",
+  "one_liner": "AMQP 0-9-1/MQTT 3.1.1 broker in Crystal with a very small RAM footprint; one customer replaced managed Kafka with it.",
+  "what_it_does": "A standalone message broker from CloudAMQP (84codes) that speaks AMQP 0-9-1 and MQTT 3.1.0/3.1.1. It supports exchanges, dead-lettering, TTL, priority and delayed queues, deduplication, shovels and federation, plus append-only 'stream queues' that consumers read from an offset (x-stream-offset) with age- or size-based retention. It does not speak the Kafka protocol, so moving off Kafka means new client code and a different consumption model (AMQP queues and exchanges instead of partitioned topics). Clustering uses one leader that replicates every change to its followers, with etcd handling leader election and the in-sync replica set.",
+  "how_it_is_fast": "Storage is disk-first. Each queue is a series of 8 MB segment files mapped with mmap (MAP_SHARED). A publish is a memcpy appended to the last segment. Consumers read the segments sequentially. An ack writes a 4-byte position to a per-segment ack file, and a segment is deleted once every message in it is acked. Messages are not cached on the heap: the OS page cache does the caching and madvise(DONTNEED) releases pages, so resident memory stays flat as queues grow (the README says 25 MB of RAM with 100M messages enqueued). Publisher confirms are group-committed: one syncfs(2) call on a dedicated thread flushes every pending confirm in a batch. The code is compiled by LLVM to a native binary and uses a fiber/CSP event loop for I/O.",
+  "when_to_use": [
+    "You use Kafka as a plain work or event queue at modest volume (the case study ran ~4,000 to 50,000 messages a day) and the JVM broker's memory or operational weight is the main cost.",
+    "You run RabbitMQ-style AMQP 0-9-1 workloads and want the same client libraries with lower RAM: the README lists 35 MB for 1,000 queues and 70 MB for 1,000 connections.",
+    "Queues sometimes build very deep backlogs and you do not want broker RAM to grow with queue depth (messages live in mmap'd segments and the page cache).",
+    "You want one small broker for both IoT MQTT 3.1.1 devices and AMQP backend consumers, or a replayable stream at moderate scale with header, key-value or geo filtering on the server.",
+    "You run on small instances: vendor lavinmqperf runs show ~570k msg/s at 16 B with one producer and one consumer on a t4g.micro (2 vCPU, 1 GiB)."
+  ],
+  "when_not_to_use": [
+    "You depend on the Kafka API or its ecosystem (Connect, Streams, existing Kafka clients) or on partitioned topics with consumer-group rebalancing. LavinMQ is not wire-compatible.",
+    "You need write throughput spread across nodes. The cluster has a single leader that takes all writes and replicates everything to followers, so adding nodes adds redundancy, not capacity.",
+    "You need AMQP 1.0, MQTT 5 or MQTT QoS 2. QoS 2 publishes are downgraded to QoS 1, and only AMQP 0-9-1 and MQTT 3.1.x are listed.",
+    "You need long-term or tiered log retention. Blob/S3 storage for streams is still an open feature request (#1070), so the log is bounded by local disk.",
+    "You need mature failure handling in clustered mode. Open issues include a leader that never fails over when its disk stalls (#2151) and a stream-replay memory spike that killed a production node (#2226)."
+  ],
+  "integration": {
+    "form": "standalone server binary (deb/rpm packages, Homebrew, AUR, Docker image cloudamqp/lavinmq)",
+    "dependencies": "Runtime: libssl and liblz4 (per the Dockerfile); etcd for clustering. Build: Crystal plus the shards amqp-client, amq-protocol, systemd, lz4 and mqtt-protocol.",
+    "min_toolchain": "Crystal 1.21.0 to build from source (shard.yml); prebuilt packages need no toolchain",
+    "platforms": "Linux (x86-64 and arm64; vendor benchmarks run on Graviton), macOS via Homebrew, Windows only through WSL. The syncfs group commit is Linux-only; other OSes fall back to a global sync().",
+    "thread_safety": "Server process that serves concurrent clients on fibers. Parts have been multi-threaded since 2.4.0 (Crystal execution contexts), and the confirm/syncfs loop runs on its own isolated thread.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Confirm semantics changed in 2.9.0 (2026-06). Confirms now wait for a filesystem-wide syncfs and, in a cluster, for every in-sync follower. Before that, the broker confirmed once the message was in the mmap. The October 2024 case study predates this change, and --no-sync gets the speed back at the cost of durability.",
+    "The mmap-per-segment design has sharp edges: SIGBUS when bursts of writes hit mapped pages right after a disk-full alarm clears (#2180), an open use-after-munmap SIGSEGV when stream retention runs during delivery (#2181), and one CPU core pinned during queue churn on Linux 7.0 to 7.1.8 on arm64 (a kernel bug, #2259).",
+    "Write amplification: page-granular mmap writes plus a syncfs per confirm batch produced 30-200x more disk writes than network bytes received in the reporter's clusters (#2176). This matters on IOPS-billed volumes.",
+    "Requeue and redelivery state lives only in memory. After a restart the redelivered flag and x-delivery-count reset, so a poison message can dodge x-delivery-limit (#1911). Stream consumers also inherit a default prefetch of 65,535."
+  ],
+  "pick_this_over_siblings_when": "Pick LavinMQ over Redpanda, AutoMQ or Fluvio when you are willing to leave the Kafka protocol for AMQP routing (exchanges, DLX, TTL, priority and delayed queues) and want the smallest footprint. Pick it over RabbitMQ when you want the same AMQP 0-9-1 clients with a single-binary, low-RAM broker and can live without AMQP 1.0, MQTT 5 or QoS 2 and with a younger clustering implementation.",
+  "verified_claims_summary": "The only evidence against Kafka is a customer story on the vendor's blog (DAT Systems, 25 Oct 2024, Elixir/Broadway clients). It reports memory falling from 5 GB to under 40 MB on a development instance, consume times 3x lower and publish times 300x better than its earlier integration with an unnamed serverless Kafka service that had 'broker not found' and 'leader missing' errors. No hardware, sizing, Kafka configuration or method is given, so read these numbers as a migration anecdote, not a benchmark.",
+  "status_note": "Very active: v2.10.0 shipped on 2026-09-25 after 2.9.3 on 2026-09-09, with frequent patch releases. It is Apache-2.0 and deployed as a packaged server, and CloudAMQP sells a hosted version.",
+  "sources_read": [
+    "https://github.com/cloudamqp/lavinmq",
+    "https://github.com/cloudamqp/lavinmq/blob/main/README.md",
+    "https://github.com/cloudamqp/lavinmq/blob/main/CONTRIBUTING.md",
+    "https://github.com/cloudamqp/lavinmq/blob/main/shard.yml",
+    "https://github.com/cloudamqp/lavinmq/blob/main/CHANGELOG.md",
+    "https://github.com/cloudamqp/lavinmq/blob/main/Makefile",
+    "https://github.com/cloudamqp/lavinmq/blob/main/Dockerfile",
+    "https://github.com/cloudamqp/lavinmq/blob/main/src/lavinmq/mfile.cr",
+    "https://github.com/cloudamqp/lavinmq/blob/main/src/lavinmq/message_store.cr",
+    "https://github.com/cloudamqp/lavinmq/blob/main/src/lavinmq/persister.cr",
+    "https://github.com/cloudamqp/lavinmq/blob/main/src/lavinmq/vhost.cr",
+    "https://github.com/cloudamqp/lavinmq/blob/main/src/lavinmq/amqp/queue/durable_queue.cr",
+    "https://github.com/cloudamqp/lavinmq/blob/main/src/lavinmq/config/options.cr",
+    "https://github.com/cloudamqp/lavinmq/blob/main/docs/streams.md",
+    "https://github.com/cloudamqp/lavinmq/blob/main/docs/publisher-confirms.md",
+    "https://github.com/cloudamqp/lavinmq/issues/2226",
+    "https://github.com/cloudamqp/lavinmq/issues/2180",
+    "https://github.com/cloudamqp/lavinmq/issues/2176",
+    "https://github.com/cloudamqp/lavinmq/issues/2151",
+    "https://github.com/cloudamqp/lavinmq/issues/2181",
+    "https://github.com/cloudamqp/lavinmq/issues/2228",
+    "https://github.com/cloudamqp/lavinmq/issues/1911",
+    "https://github.com/cloudamqp/lavinmq/issues/2259",
+    "https://github.com/cloudamqp/lavinmq/releases",
+    "https://github.com/cloudamqp/lavinmq-benchmark",
+    "https://github.com/cloudamqp/lavinmq-benchmark/blob/main/results/v2.9.3/throughput.md",
+    "https://github.com/cloudamqp/lavinmq-benchmark/blob/main/results/v2.9.3/latency_P99.md",
+    "https://github.com/cloudamqp/lavinmq-benchmark/blob/main/results/lavinmq_throughput.md",
+    "https://lavinmq.com/blog/dat-systems-user-story",
+    "https://hn.algolia.com/api/v1/search?query=LavinMQ&tags=story",
+    "https://news.ycombinator.com/item?id=47933145",
+    "https://news.ycombinator.com/item?id=39959686"
+  ],
+  "confidence": 0.72
+}
