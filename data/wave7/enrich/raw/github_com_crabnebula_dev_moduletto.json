@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/crabnebula-dev/moduletto",
+  "one_liner": "Rust modular-arithmetic/NTT crate whose NEON ML-KEM-512 example edges out liboqs 0.16.0 on Apple M5 (~1.18x).",
+  "what_it_does": "The library crate provides a const-generic ModN<N> scalar type (variable-time and constant-time variants, moduli below 2^31) and a Kyber-parameter (q = 3329, n = 256) negacyclic NTT with forward/inverse transforms and NTT-based polynomial multiply. The ML-KEM-512 KEM that produces the headline number is not a library API: it lives in examples/kyber_benchmark.rs, with its own i16 polynomial types, NEON NTT module and Keccak code, and it exposes only internal keygen/encaps/decaps functions that take caller-supplied seeds. It is not a drop-in for liboqs's OQS_KEM interface.",
+  "how_it_is_fast": "A pq-crystals-style int16 Montgomery NTT (R = 2^16, QINV = -3327) runs eight butterflies per NEON instruction (vmull_s16 / vmovn_s32 / vshrn_n_s32). The two narrow layers (len 4 and 2) are vectorised with uzp/zip deinterleaving, and lazy reduction plus a branchless rounding Barrett step removes per-layer reductions. Most of the session-level gain came from outside the NTT: grouped bit-packing codecs (43.6 to 27.7 us); a two-lane Keccak-f1600 that uses ARMv8.2 FEAT_SHA3 (EOR3/RAX1/XAR/BCAX) to pair independent SHAKE streams, with right-sized squeezing (to 16.1 us); and dropping round-3 Kyber's final KDF during the FIPS 203 fix (to 13.9 us).",
+  "when_to_use": [
+    "Studying how a Rust ML-KEM-512 reaches liboqs-level speed on Apple Silicon: int16 NEON NTT, uzp/zip narrow layers, two-lane FEAT_SHA3 Keccak",
+    "Non-commercial research or benchmarking on aarch64 with FEAT_SHA3 (Apple M-series), where the ~13.9 us session figure was measured",
+    "Needing a small no_std-capable NTT/ModN arithmetic crate for q = 3329 experiments, with Coq proofs of the Barrett and constant-time primitives and fuzz targets",
+    "Porting ideas (grouped codecs, streaming rejection sampler, paired Keccak lanes) into a permissively licensed ML-KEM implementation you write yourself"
+  ],
+  "when_not_to_use": [
+    "Any commercial product: PolyForm Noncommercial 1.0.0 forbids commercial use without a separate license",
+    "Production key exchange: the KEM is benchmark example code with no public KEM API, no RNG integration, no zeroization, no independent review, and the decapsulation mask defect listed under gotchas",
+    "x86-64 or other non-aarch64 targets: the NTT falls back to a portable i64 kernel and the i64 KEM backends measured 34.7-36.8 us on the M5, about 2x slower than liboqs",
+    "ML-KEM-768/1024: only the 512 parameter set (k = 2) is implemented",
+    "Needing a published package: the crate is not on crates.io (the README's moduletto = \"0.1\" snippet will not resolve), so it has to be a git dependency"
+  ],
+  "integration": {
+    "form": "crate (git only; also builds cdylib/rlib); the ML-KEM-512 code is a source-drop from examples/kyber_benchmark.rs",
+    "dependencies": "subtle 2.6 (core_hint_black_box); optional wasm-bindgen, web-sys, libm. The KEM example also needs sha3 0.10 (asm) and std; the hybrid example needs aes-gcm",
+    "min_toolchain": "Not documented (no rust-version field; edition 2021). Fuzzing needs nightly, and the Coq proofs need Rocq 9.0+ and OCaml 5.0+",
+    "platforms": "aarch64 (NEON i16 NTT; the two-lane Keccak needs FEAT_SHA3, runtime-detected); x86-64 and others use a portable i64 scalar path; wasm32 via the wasm feature; no_std supported",
+    "thread_safety": "Not documented. Library functions are pure over stack arrays with no shared mutable state. The example caches the FEAT_SHA3 probe in an AtomicU8",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Decapsulation's constant-time equality mask is wrong in all three backends of the example (eq &= !(a ^ b).wrapping_neg() computes (a^b)-1 per byte, not 0x00/0xFF). A ciphertext whose only byte difference from the re-encryption is 0x02 yields mask 0x01, so the output mixes bits of the real key K' into the implicit-rejection key. The ACVP VAL vectors did not catch this. This is from reading the source; not reported upstream as of this review.",
+    "The library's NEON NTT takes and returns [ModN<3329>; 256] (i64 per coefficient) and converts to and from i16 on every call (about 30 ns each way, per the source comment), so building a KEM on the public API will not reach the example's numbers",
+    "Until 2026-08-11 the code implemented round-3 Kyber with a hardcoded zero implicit-rejection seed and eta1 = 2. The 2026-03-19 tables and the Platform Notes in BENCHMARKS.md describe that older, non-conformant code",
+    "The LibOQS (16.19 / 20.43 us) and Kyber-ref (47.87 us) figures are hardcoded constants printed by the example. Running it re-times only moduletto"
+  ],
+  "pick_this_over_siblings_when": "Among the catalogued KEM/signature entries, this is the only ML-KEM one that times against liboqs on Apple Silicon NEON. sntrup is a usable, MIT/Apache crate for a different KEM (NTRU Prime) with a reproducible liboqs harness, and the Plantard-NTT paper targets formally verified NTTs compared against pq-crystals reference C. Pick moduletto only to learn aarch64 ML-KEM-512 optimisation techniques under a non-commercial license.",
+  "verified_claims_summary": "On an Apple M5 (macOS 25.5), the author's 10,000-iteration example times its NEON i16 ML-KEM-512 at 4.07/3.84/5.80 us (keygen/encaps/decaps, about 13.7-14.1 us per session), built with the Cargo release profile (LTO, codegen-units = 1) and an unstated rustc. That is compared with liboqs 0.16.0 built from source (-O3 -march=native) at 16.19 us, about 1.18x. The liboqs number comes from an unpublished C harness and is hardcoded in the example, so the comparison is first-party and not reproducible from the repo.",
+  "status_note": "One developer, 11 commits (the burst of 2026-08-11 changes delivered the FIPS 203 fixes and the speedups, and the last commit was 2026-09-03), no issues filed, not on crates.io, and noncommercial-licensed, so treat it as reference code to read, not a dependency.",
+  "sources_read": [
+    "https://github.com/crabnebula-dev/moduletto",
+    "https://github.com/crabnebula-dev/moduletto/blob/main/README.md",
+    "https://github.com/crabnebula-dev/moduletto/blob/main/BENCHMARKS.md",
+    "https://github.com/crabnebula-dev/moduletto/blob/main/Cargo.toml",
+    "https://github.com/crabnebula-dev/moduletto/blob/main/LICENSE",
+    "https://github.com/crabnebula-dev/moduletto/blob/main/src/lib.rs",
+    "https://github.com/crabnebula-dev/moduletto/blob/main/src/ntt.rs",
+    "https://github.com/crabnebula-dev/moduletto/blob/main/src/modn.rs",
+    "https://github.com/crabnebula-dev/moduletto/blob/main/src/modn_ct.rs",
+    "https://github.com/crabnebula-dev/moduletto/blob/main/examples/kyber_benchmark.rs",
+    "https://api.github.com/repos/crabnebula-dev/moduletto/commits",
+    "https://api.github.com/repos/crabnebula-dev/moduletto/issues?state=all",
+    "https://crates.io/api/v1/crates/moduletto",
+    "https://github.com/denjell/circlecimal",
+    "https://hn.algolia.com/api/v1/search?query=moduletto"
+  ],
+  "confidence": 0.8
+}

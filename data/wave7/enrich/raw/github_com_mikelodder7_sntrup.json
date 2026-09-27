@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/mikelodder7/sntrup",
+  "one_liner": "Pure-Rust Streamlined NTRU Prime KEM: ties liboqs AVX2 on Zen 5 and beats liboqs portable C on Apple M2 1.2-2.7x.",
+  "what_it_does": "A pure-Rust implementation of the Streamlined NTRU Prime KEM for all six parameter sets (sntrup653 to sntrup1277), including sntrup761, the set OpenSSH uses. The API is typed: SntrupKem::generate_key(rng) or generate_key_deterministic(seed), EncapsulationKey::encapsulate(rng) and DecapsulationKey::decapsulate(ct), which always returns a key (implicit rejection). There are byte conversions via AsRef/TryFrom, optional serde, and optional implementations of the RustCrypto `kem` crate traits. It replaces liboqs/PQClean through a Rust API, not the OQS_KEM C interface.",
+  "how_it_is_fast": "On x86_64, sntrup761 uses ports of the SUPERCOP/liboqs AVX2 techniques. The polynomial multiply uses Good's trick (3x512) with two 512-point NTTs over the NTT-friendly primes 7681 and 10753, recombined by CRT, in place of an O(p^2) schoolbook. Both ring inversions use constant-time Bernstein-Yang divstep (R/3 bitsliced), and the R/q divstep also has an AVX-512BW 32-lane kernel that liboqs lacks. Constant-weight sampling uses a djbsort crypto_sort_int32 port, and the variable-radix codecs are vectorised. aarch64 gets a NEON divstep, a schoolbook multiply spread over eight independent widening multiply-accumulate chains, and a NEON Batcher sort. Both architectures cache each key's decoded public polynomial and Hash4(pk), draw randomness in one bulk fill, and keep scratch on the stack with wide volatile wipes.",
+  "when_to_use": [
+    "Rust services that need sntrup761 (for example an OpenSSH-style sntrup761x25519 hybrid) without a C toolchain or FFI to liboqs",
+    "aarch64 servers or Apple Silicon, where liboqs and PQClean have no NEON sntrup path: measured 2.7x keypair, 1.42x encapsulation and 1.19x decapsulation on an M2 Max",
+    "Long-lived decapsulation keys that decapsulate many ciphertexts: the per-key decoded-polynomial cache is amortised, which is the pattern the benchmark measures",
+    "Needing sntrup653/857/953/1013/1277, which liboqs and pqcrypto-ntruprime do not provide",
+    "Code that must wipe secret-derived scratch (the C references do not), or wasm32 via the js feature"
+  ],
+  "when_not_to_use": [
+    "x86_64 stacks that already link liboqs: it is at parity at best (0.91-1.00x), and on AVX2-only CPUs without AVX-512 keypair measured about 1.11x slower than liboqs",
+    "Ephemeral single-use keys: the first encapsulate/decapsulate on a fresh key pays the public-key decode that the benchmark amortises (about 2 us of x86 decapsulation; the encapsulation-key cache was worth 12% on ARM)",
+    "Anything requiring an audited or certified KEM: the code is unaudited by its own warning, has one maintainer and 0 stars, and its reviews are LLM audits noted in the log and commits",
+    "no_std or embedded targets, despite the README claim (see gotchas)",
+    "Non-761 parameter sets or aarch64 where you expect the x86 sntrup761 numbers: the NTT, codec761, codec3, djbsort and bitsliced R/3 modules compile on x86_64 only, and the NTT multiply is used only for sntrup761, so the other sets and all of aarch64 run schoolbook multiplies"
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "hex, rand 0.10, rand_chacha 0.10, sha2 0.11, subtle 2, thiserror 2, zeroize 1; optional getrandom 0.4 (js), kem 0.3 + hybrid-array + rand_core (kem), serde + serdect (serde)",
+    "min_toolchain": "Rust 1.95 (edition 2024; MSRV declared and CI-enforced)",
+    "platforms": "x86_64 (AVX2, AVX-512F/BW/VL and AVX-VNNI detected at run time, scalar fallback); aarch64 (NEON); other targets scalar; wasm32-unknown-unknown with the js feature",
+    "thread_safety": "Not documented. Key types hold std::sync::OnceLock caches and the CPU probes are cached in atomics, so keys can be shared across threads and a first-use race is resolved by OnceLock",
+    "drop_in_for_baseline": "partial: the sntrup761 key and ciphertext sizes match liboqs (the harness asserts this) and the IETF-draft decapsulation KATs pass, but the interface is a typed Rust API, not liboqs's OQS_KEM C ABI"
+  },
+  "gotchas": [
+    "The README says no_std-compatible, but 0.4.0 has no #![no_std] attribute and unconditionally uses std::sync::OnceLock (key caches, the decode-plan cache) and std::is_x86_feature_detected!. The std/alloc features are empty markers.",
+    "`--all-features` turns on force-scalar and silently compiles out every SIMD kernel. Do not build release or CI binaries with it if you want the benchmarked speed.",
+    "Pin 0.4.0 or later: earlier releases had a non-canonical Barrett freeze that could produce rare invalid keys or ciphertexts on all six sets (fixed in 0.4.0), and sntrup953 misreduced about 0.7% of reductions before 0.3.0.",
+    "The only external known-answer vectors are two IETF-draft sntrup761 decapsulation cases. The other five sets rely on round-trip, implicit-rejection and SIMD-vs-scalar differential tests. The ChaCha20 state used by generate_key_deterministic is not wiped."
+  ],
+  "pick_this_over_siblings_when": "Pick it over moduletto (ML-KEM-512 NEON code that is benchmark-example-only and PolyForm-Noncommercial) when you need a permissively licensed, published KEM crate with a reproducible same-process liboqs comparison, and specifically NTRU Prime. fasthqc/hqc is a research speedup of the HQC round-2 reference, a different KEM family and not a Rust library.",
+  "verified_claims_summary": "A public same-process Criterion 0.8.1 harness runs sntrup761 against liboqs 0.13.0 (oqs-sys 0.11.0) and PQClean clean C (pqcrypto-ntruprime 0.1.6, avx2 off), with one key reused per benchmark. On a Ryzen AI 9 HX 370 (Zen 5, one pinned core, rustc 1.98 nightly) against liboqs's AVX2 build, it measured 106.6/10.5/8.4 us vs 107.9/11.5/8.4 us for keypair/encaps/decaps, parity to about 9% faster, and 23-73x faster than PQClean. On an Apple M2 Max (rustc 1.97.1) against liboqs portable C, it measured 683.7 us vs 1.876 ms, 37.0 vs 52.7 us and 77.1 vs 91.8 us.",
+  "status_note": "Active single-maintainer crate: v0.4.0 went to crates.io on 2026-08-05 with the whole optimisation campaign, about 2.8k total downloads, MIT OR Apache-2.0, no issues filed, and explicitly unaudited, so it is fine to adopt for sntrup761 in Rust if you accept that risk.",
+  "sources_read": [
+    "https://github.com/mikelodder7/sntrup",
+    "https://github.com/mikelodder7/sntrup/blob/main/README.md",
+    "https://github.com/mikelodder7/sntrup/blob/main/Cargo.toml",
+    "https://github.com/mikelodder7/sntrup/blob/main/CHANGELOG.md",
+    "https://github.com/mikelodder7/sntrup/blob/main/benches/comparison/RESULTS.md",
+    "https://github.com/mikelodder7/sntrup/blob/main/benches/comparison/README.md",
+    "https://github.com/mikelodder7/sntrup/blob/main/benches/comparison/Cargo.toml",
+    "https://github.com/mikelodder7/sntrup/blob/main/benches/comparison/benches/implementations.rs",
+    "https://github.com/mikelodder7/sntrup/blob/main/src/lib.rs",
+    "https://github.com/mikelodder7/sntrup/blob/main/src/cpu.rs",
+    "https://github.com/mikelodder7/sntrup/blob/main/src/types.rs",
+    "https://github.com/mikelodder7/sntrup/blob/main/src/wipe.rs",
+    "https://github.com/mikelodder7/sntrup/blob/main/src/rq/encoding.rs",
+    "https://github.com/mikelodder7/sntrup/blob/main/tests/kat.rs",
+    "https://github.com/mikelodder7/sntrup/blob/main/tests/kem.rs",
+    "https://github.com/mikelodder7/sntrup/blob/main/.github/workflows/sntrup.yml",
+    "https://api.github.com/repos/mikelodder7/sntrup/commits",
+    "https://api.github.com/repos/mikelodder7/sntrup/issues?state=all",
+    "https://crates.io/api/v1/crates/sntrup",
+    "https://crates.io/api/v1/crates/sntrup/versions"
+  ],
+  "confidence": 0.8
+}

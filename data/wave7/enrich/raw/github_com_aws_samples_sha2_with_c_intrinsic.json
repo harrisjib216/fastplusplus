@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/aws-samples/sha2-with-c-intrinsic",
+  "one_liner": "C-intrinsics SHA-256/SHA-512 kernels from AWS; only the SHA-NI SHA-256 path beats OpenSSL's assembly, by 5-8%.",
+  "what_it_does": "Nir Drucker and Shay Gueron (AWS) rewrote OpenSSL-style SHA-256 and SHA-512 compression kernels as C intrinsics (generic, AVX, AVX2, AVX-512 and x86 SHA-NI, plus an ARMv8 SHA-256 extension path) so compiler writers can compare the generated code with hand-written assembly. The public header exposes only one-shot sha256(dgst, data, len, impl) and sha512(...). The caller passes an explicit sha_impl_t, and padding, finalization and the init/update/final steps are static-inline internals, not an exported streaming API. The CMake project builds only a test binary or a speed binary; there is no library target.",
+  "how_it_is_fast": "The one winning path uses the Intel SHA Extensions (_mm_sha256rnds2_epu32, _mm_sha256msg1/msg2_epu32), following Intel's reference flow with the 64 rounds fully unrolled through unroll pragmas, and clang-9 scheduling it at about 2.80 cycles/byte versus 3.03 for OpenSSL's perlasm SHA-NI. The AVX, AVX2 and AVX-512 paths use Gueron and Krasnov's parallelized message schedule (J Cryptogr Eng 2012), translated from OpenSSL perlasm. The sigma0/sigma1 schedule is vectorized 4 words at a time and computed for 2 blocks (AVX2) or 4 blocks (AVX-512) at once, with W+K stored for the later blocks, while the round function stays scalar. Those paths do not beat OpenSSL.",
+  "when_to_use": [
+    "As a readable reference or vendoring source for a SHA-NI SHA-256 compression function in C (one ~100-line file) when you want to avoid perlasm/.s files in a GCC or Clang build.",
+    "Long messages (64 B and up) on x86-64 CPUs with SHA-NI, where the C path measured 1.05x (64 B) to 1.08x (64 KiB) faster than OpenSSL's Feb-2020 SHA-NI assembly on Ice Lake.",
+    "Compiler research and codegen regression testing, the authors' stated purpose: compare clang/gcc output for the same algorithm against OpenSSL's hand-scheduled asm, with sanitizer builds and clang-tidy already wired in.",
+    "Teaching or porting the Gueron-Krasnov vectorized message-schedule technique to another language or ISA, using intrinsics instead of perl-generated assembly."
+  ],
+  "when_not_to_use": [
+    "Production code. The README says it is 'designed to be used for benchmarking purposes only and not in final products'. It ships no library, has had a single commit (2020-05-31), and GitHub issues are disabled.",
+    "SHA-512 anywhere, or SHA-256 on CPUs without SHA-NI. Every C AVX/AVX2/AVX-512 path loses to OpenSSL's asm, for example SHA-256 AVX2 709,146 vs 620,729 cycles at 64 KiB (~14% slower) and SHA-512 AVX2 456,221 vs 402,204 (~13% slower). Even the AVX-512 C path (694,132) is slower than OpenSSL's AVX2 asm.",
+    "Tiny messages (32 B or less): the SHA-NI C path only ties (281 vs 280 cycles at 32 B, 288 vs 283 at 16 B).",
+    "Portable or distributed binaries. Everything is built with -march=native, SIMD support is detected by CMake try_run on the build host, and there is no runtime CPU dispatch.",
+    "Many independent messages. Multi-buffer designs such as ISA-L's hash several streams per core, while this code hashes one message at a time."
+  ],
+  "integration": {
+    "form": "source-drop (CMake project that builds only test/benchmark executables; no static or shared library)",
+    "dependencies": "OpenSSL libcrypto, linked statically, for the correctness tests and the asm comparison; the copied OpenSSL .s files (x86-64 Linux/macOS, armv8 Linux); CMake 3. The kernels themselves need only compiler intrinsics.",
+    "min_toolchain": "C99; CMake 3.0+; tested with gcc-9 and clang-9 (the compiler must support AVX2/AVX-512/SHA-NI intrinsics); clang-format-9/clang-tidy-9 for the dev scripts",
+    "platforms": "x86-64 (generic, AVX, AVX2, AVX-512, SHA-NI for SHA-256 only) and aarch64 (generic, plus an ARMv8 SHA-256 extension C path; SHA-512 generic only); little-endian only; tested on Ubuntu 18.04; macOS x86-64 asm files included; no Windows/MSVC build",
+    "thread_safety": "Not documented. The C paths are reentrant, keeping their context on the stack with no globals. The OPENSSL_* comparison paths set and clear a process-global OPENSSL_ia32cap_P_local/OPENSSL_armcap_P_local around each call, so running them concurrently is a data race.",
+    "drop_in_for_baseline": "partial — produces standard SHA-256/SHA-512 digests, checked against OpenSSL for every length 0-1000 B plus 100,000 Monte Carlo cases, but the API is a one-shot sha256(dgst, data, len, impl) with an explicit implementation enum rather than OpenSSL's SHA256()/EVP interfaces, and there is no streaming update API"
+  },
+  "gotchas": [
+    "The sha_impl_t enum members exist only if the build host passed CMake's try_run feature probes, so a binary built on a SHA-NI or AVX-512 machine can SIGILL elsewhere, and choosing a valid implementation is the caller's job.",
+    "The AVX2 kernel works on block pairs and routes an odd leftover block through the AVX kernel; the AVX-512 kernel works on 4-block groups. Short inputs therefore run slower on these paths than on plain AVX C (SHA-256 at 1 B: AVX 791, AVX2 821, AVX-512 879 cycles).",
+    "Finalization byte-swaps the state on the assumption of a little-endian host. The CMake endianness check uses message(FATAL ...) instead of FATAL_ERROR, so on a big-endian host it probably warns rather than stops.",
+    "sha256_update asserts data != NULL before it checks for zero length, so sha256(d, NULL, 0, impl) aborts in builds with asserts enabled, and the entry-point assert uses || and so misses a single NULL pointer. The compress functions also do aligned stores into the state and expect a 64-byte-aligned sha256_state_t if called directly."
+  ],
+  "pick_this_over_siblings_when": "Pick it over ISA-L Crypto or the S-HASH/j-lanes multi-buffer work only when you need one message's standard SHA-256 digest from auditable C intrinsics rather than assembly; ISA-L is the production choice for many-stream throughput. Over sha256-simd (Go) the choice is simply C versus Go. BLAKE2/BLAKE3 siblings are faster, but only if you can change the hash.",
+  "verified_claims_summary": "benchmark_example.md was measured on one Dell XPS 13 7390 (Core i7-1065G7 Ice Lake, Turbo off, Ubuntu 18.04.2) with clang-9 at -O3 -march=native. Each cell is the minimum of 10 runs of 100-iteration rdtscp averages after 25 warm-up calls, and the C kernels and the OpenSSL asm (master e32c608e, Feb 24 2020) run through the same sha256() wrapper. Only SHA-256 on SHA-NI wins: 183,685 vs 198,528 cycles at 65,536 B (1.08x, about 2.80 vs 3.03 cycles/byte) and 424 vs 446 at 64 B (1.05x), tied at 32 B or less. Every AVX/AVX2/AVX-512 C path and all of SHA-512 lose to OpenSSL.",
+  "status_note": "Abandoned: a single initial commit on 2020-05-31, issues disabled, 21 stars, and never re-measured against OpenSSL 3.x. It is Apache-2.0, and the SHA-NI kernel is small enough to vendor; the last known-good compilers are gcc-9/clang-9.",
+  "sources_read": [
+    "https://github.com/aws-samples/sha2-with-c-intrinsic",
+    "https://github.com/aws-samples/sha2-with-c-intrinsic/blob/master/README.md",
+    "https://github.com/aws-samples/sha2-with-c-intrinsic/blob/master/benchmark_example.md",
+    "https://github.com/aws-samples/sha2-with-c-intrinsic/tree/master",
+    "https://github.com/aws-samples/sha2-with-c-intrinsic/blob/master/include/sha.h",
+    "https://github.com/aws-samples/sha2-with-c-intrinsic/blob/master/include/internal/defs.h",
+    "https://github.com/aws-samples/sha2-with-c-intrinsic/blob/master/include/internal/avx_defs.h",
+    "https://github.com/aws-samples/sha2-with-c-intrinsic/blob/master/include/internal/avx2_defs.h",
+    "https://github.com/aws-samples/sha2-with-c-intrinsic/blob/master/include/internal/sha256_defs.h",
+    "https://github.com/aws-samples/sha2-with-c-intrinsic/blob/master/include/internal/measurements.h",
+    "https://github.com/aws-samples/sha2-with-c-intrinsic/blob/master/src/sha256.c",
+    "https://github.com/aws-samples/sha2-with-c-intrinsic/blob/master/src/sha512.c",
+    "https://github.com/aws-samples/sha2-with-c-intrinsic/blob/master/src/sha256_compress_x86_64_sha_ext.c",
+    "https://github.com/aws-samples/sha2-with-c-intrinsic/blob/master/src/sha256_compress_x86_64_avx2.c",
+    "https://github.com/aws-samples/sha2-with-c-intrinsic/blob/master/src/sha256_compress_x86_64_avx512.c",
+    "https://github.com/aws-samples/sha2-with-c-intrinsic/blob/master/src/sha256_compress_x86_64_avx_helper.c",
+    "https://github.com/aws-samples/sha2-with-c-intrinsic/blob/master/src/openssl/README.md",
+    "https://github.com/aws-samples/sha2-with-c-intrinsic/blob/master/src/openssl/openssl_cpu_globals.c",
+    "https://github.com/aws-samples/sha2-with-c-intrinsic/blob/master/tests/main_speed.c",
+    "https://github.com/aws-samples/sha2-with-c-intrinsic/blob/master/tests/main_tests.c",
+    "https://github.com/aws-samples/sha2-with-c-intrinsic/blob/master/CMakeLists.txt",
+    "https://github.com/aws-samples/sha2-with-c-intrinsic/blob/master/cmake/arch.cmake",
+    "https://github.com/aws-samples/sha2-with-c-intrinsic/blob/master/cmake/compilation-flags.cmake",
+    "https://github.com/aws-samples/sha2-with-c-intrinsic/blob/master/cmake/sources.cmake",
+    "https://github.com/aws-samples/sha2-with-c-intrinsic/commits/master",
+    "https://github.com/aws-samples/sha2-with-c-intrinsic/issues",
+    "https://github.com/aws-samples/sha2-with-c-intrinsic/pulls?q=is%3Apr",
+    "https://github.com/aws-samples/sha2-with-c-intrinsic/forks",
+    "https://hn.algolia.com/api/v1/search?query=sha2-with-c-intrinsic"
+  ],
+  "confidence": 0.85
+}
