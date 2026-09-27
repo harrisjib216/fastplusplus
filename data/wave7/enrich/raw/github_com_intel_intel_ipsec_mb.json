@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/intel/intel-ipsec-mb",
+  "one_liner": "Intel's x86-64 assembly packet-crypto library; batches many packets per SIMD pass; beat OpenSSL AES-CBC+HMAC-SHA-256 once.",
+  "what_it_does": "A C library with hand-written NASM kernels for the bulk crypto in IPsec, TLS, 3GPP/5G radio, DOCSIS and PON: AES-GCM/CCM/CBC/CTR, ChaCha20-Poly1305, HMAC-SHA1/SHA2/SHA3, ZUC, SNOW3G, KASUMI, SM3/SM4, CRCs, plus ML-KEM/ML-DSA taken from OpenSSL. The main interface is not a per-call EVP-style API. You allocate an IMB_MGR, take IMB_JOB slots from it, fill in cipher, hash, keys and buffer pointers, and submit them one at a time (job API) or in bursts of up to 128 (burst API). Finished jobs come back in submission order, often after later submits, and flush forces out whatever is still queued. There are also direct one-shot calls for some algorithms, such as imb_aes256_gcm_enc and the imb_chacha20_poly1305_* functions. Most users reach it through DPDK, FD.io/VPP or Intel's QAT Engine.",
+  "how_it_is_fast": "The main technique is multi-buffer processing. Modes that are serial inside one message (AES-CBC encryption, HMAC-SHA, AES-XCBC/CMAC, ZUC, SNOW3G) are run across independent jobs held in SIMD lanes: x4 with SSE, x8 with AVX2 and x16 with AVX-512, so each packet's dependency chain overlaps with the others. Modes that parallelize within one message (GCM, CTR, CBC decryption) use single-buffer 'by8/by16/by32' kernels with VAES and VPCLMULQDQ. Cipher and hash work is also interleaved ('function stitching'). init_mb_mgr_auto picks the SSE, AVX2, AVX-512 or AVX10 code path at run time, and AES key schedules, HMAC ipad/opad states and GHASH key powers are computed once per session rather than per packet. In Netgate's measurement on an AVX2 host, serial AES-256-CBC+HMAC-SHA-256 ran at 5.4 Gbps and the multi-buffer path at 18 Gbps.",
+  "when_to_use": [
+    "IPsec gateways, VPN concentrators and DPDK/VPP data planes that always have many independent packets in flight and can keep the job queue full.",
+    "Legacy AES-CBC + HMAC-SHA1/SHA2 suites, which gain the most from multi-lane batching. Netgate measured 18.1 Gbps on 1400-byte packets against OpenSSL's best of 10.4 Gbps on 16 kB buffers.",
+    "3GPP, DOCSIS or PON stacks that need ZUC-EEA3/EIA3, SNOW3G, KASUMI, the 5G NEA4/5/6 ciphers, DOCSIS AES/DES or PON CRC-BIP with SIMD multi-lane code. Few general crypto libraries ship these.",
+    "Async crypto engines, in the kernel or in userspace, that batch standard AEADs (AES-GCM, ChaCha20-Poly1305). Netgate's FreeBSD engine moved OpenVPN DCO AES-256-GCM from 6.0 to 10 Gbps async and IPsec-ESP AES-128-GCM from 4.46 to 7.68 Gbps, compared with FreeBSD's OCF.",
+    "Recent x86-64 servers with VAES, VPCLMULQDQ and AVX-512 or AVX10 (Ice Lake, Sapphire Rapids and later), where the by32 GCM and x16-lane paths are used. It is also a fit when you need a power-up self-test and ACVP harness for CAVP."
+  ],
+  "when_not_to_use": [
+    "Any non-x86-64 target. INSTALL.md says compilation is 'x64 only', and the maintainers declined an Arm64 port (issue #145). Arm keeps a separate fork at gitlab.arm.com, and Netgate had to use ISA-L and OpenSSL code on ARM.",
+    "Low-rate or latency-bound traffic where one message is usually outstanding. Intel's white paper warns that calling flush after every submit is correct but slower than good single-buffer code, and that the design assumes flushes are rare.",
+    "Replacing OpenSSL EVP in a production application. The in-repo OpenSSL 3.x imb-provider is labeled 'evaluation, development, and benchmarking only'. The production route, QAT Engine's qat_sw, uses this library only for AES-GCM and requires AVX-512F, AVX512_IFMA, VAES and VPCLMULQDQ.",
+    "Single large AES-GCM or ChaCha20-Poly1305 buffers where OpenSSL is already in use. These AEADs are single-buffer multi-block here, as they are in OpenSSL's assembly, and no published head-to-head against OpenSSL shows a gain for them.",
+    "SM3/SM4 on CPUs without SM3NI/SM4NI. The maintainers say the base implementations are not optimized, and one VPP user saw about 200 Mbps (issue #152)."
+  ],
+  "integration": {
+    "form": "shared lib (default) or static lib built with CMake (libIPSec_MB). CPack can produce DEB/RPM packages. The OS packages are installed under /usr/local/lib.",
+    "dependencies": "Build time: NASM and Perl (Perl generates the vendored OpenSSL ML-DSA/Keccak assembly). Run time: only the C library. Optional: Valgrind headers for the constant-time validation build, and libacvp 2.0+ for the ACVP test app.",
+    "min_toolchain": "CMake 3.16+. C11 (GCC and Clang build with -std=c11; MSVC and MinGW are supported). NASM 2.14+ is required; NASM 2.16 is needed for the AVX-IFMA paths and 2.16.02 for the SM3/SM4/SHA512-NI paths, otherwise those paths are skipped with a warning.",
+    "platforms": "x86-64 only, on Linux, FreeBSD and Windows. Code paths are chosen at run time among SSE types 1-3 (minimum SSE4.2 + AES-NI + PCLMULQDQ), AVX2 types 1-4, AVX-512 types 1-2 and AVX10. This repo has no AArch64 support.",
+    "thread_safety": "One IMB_MGR per thread. The header says an IMB_MGR 'is owned by a single thread', and the 2012 white paper says the routines are not thread-safe, so any locking has to live above them. The process-wide fallback of imb_get_errno() is shared between threads. ML-KEM/ML-DSA contexts must not be shared between threads either.",
+    "drop_in_for_baseline": "partial — the native job/burst manager API is nothing like OpenSSL EVP. It becomes swappable only through a framework plug-in: DPDK cryptodev PMDs, the FD.io/VPP ipsecmb engine, QAT Engine qat_sw (AES-GCM only, AVX-512+IFMA+VAES required), or a custom engine such as Netgate's FreeBSD OCF replacement. The in-repo OpenSSL 3.x provider is for testing only."
+  },
+  "gotchas": [
+    "Decryption never verifies the tag. For every AEAD and MAC, the decrypt/verify direction only writes the computed tag, and the caller must compare it in constant time. The library also does not enforce key/IV uniqueness and accepts GCM tags shorter than 96 bits.",
+    "SAFE_DATA, SAFE_PARAM and SAFE_LOOKUP are on by default and cost speed. One user measured about 10% slower AES-CBC/CTR on Broadwell after upgrading from v0.52 (issue #90), and the maintainers suggested turning off SAFE_DATA and SAFE_PARAM. SECURITY.md says no general side-channel protection was added. The optional Valgrind constant-time check covers only the job API.",
+    "The job pointer returned by submit or flush is valid only until the next get_next_job call. Jobs complete in submission order, so one slow lane holds back later jobs until you flush. Expanded keys and auth keys must be 16-byte aligned, and keys, HMAC pads and GHASH powers must be precomputed per session.",
+    "Main is 3.0.0-dev and the README says code from main is not fit for production. The last tagged release is v2.0 (November 2024), and 3.0 removes the wireless and CRC direct APIs, the QUIC API, SNOW-V, ZUC-256 and bit-length support."
+  ],
+  "pick_this_over_siblings_when": "libaegis, HiAE, Rocca, SNOW-V-GCM and aegis-bitsliced are new AEAD algorithms, and both ends must implement them. Pick intel-ipsec-mb when you have to talk existing wire formats (AES-GCM, AES-CBC+HMAC, ChaCha20-Poly1305 or 3GPP ciphers) to standard IPsec, TLS or 5G peers on x86-64. If you control both endpoints and want raw per-byte AEAD speed, AEGIS or HiAE are faster designs.",
+  "verified_claims_summary": "The only comparison against OpenSSL is one sentence in Netgate's AsiaBSDCon 2023 paper. On an unnamed AVX2 host, IPsec-MB ran AES-256-CBC+HMAC-SHA-256 at 18.1 Gbps on 1400-byte blocks, against OpenSSL's best of 10.4 Gbps on 16 kB blocks (about 1.7x), with no CPU model, compiler, OpenSSL version or benchmark code given. The other gains are end-to-end iperf3 VPN throughput in FreeBSD-CURRENT VMs on a Ryzen 5 5600 (plus an Atom C3758 SG-8200), where Netgate's batching engine plus this library replaced FreeBSD's OCF. Those numbers measure the engine and the library together, not the library against OpenSSL.",
+  "status_note": "Intel develops it actively (commits up to 2026-09-25) under BSD-3-Clause, plus Apache-2.0 for the vendored OpenSSL PQC code. Ship a tagged release (v2.0 is the last one, from November 2024, and is what DPDK 24.11 uses) rather than main, and expect API removals in 3.0.",
+  "sources_read": [
+    "https://github.com/intel/intel-ipsec-mb",
+    "https://github.com/intel/intel-ipsec-mb/blob/main/README.md",
+    "https://github.com/intel/intel-ipsec-mb/blob/main/INSTALL.md",
+    "https://github.com/intel/intel-ipsec-mb/blob/main/SECURITY.md",
+    "https://github.com/intel/intel-ipsec-mb/blob/main/ReleaseNotes.md",
+    "https://github.com/intel/intel-ipsec-mb/blob/main/lib/intel-ipsec-mb.h",
+    "https://github.com/intel/intel-ipsec-mb/blob/main/lib/CMakeLists.txt",
+    "https://github.com/intel/intel-ipsec-mb/blob/main/lib/cmake/unix.cmake",
+    "https://github.com/intel/intel-ipsec-mb/blob/main/perf/README.md",
+    "https://github.com/intel/intel-ipsec-mb/blob/main/examples/burst-app/README.md",
+    "https://github.com/intel/intel-ipsec-mb/blob/main/test/imb-provider/README.md",
+    "https://github.com/intel/intel-ipsec-mb/releases",
+    "https://github.com/intel/intel-ipsec-mb/issues/90",
+    "https://github.com/intel/intel-ipsec-mb/issues/99",
+    "https://github.com/intel/intel-ipsec-mb/issues/112",
+    "https://github.com/intel/intel-ipsec-mb/issues/145",
+    "https://github.com/intel/intel-ipsec-mb/issues/152",
+    "https://github.com/intel/intel-ipsec-mb/issues/154",
+    "https://github.com/intel/intel-ipsec-mb/wiki/doc/fast-multi-buffer-ipsec-implementations-ia-processors-paper.pdf",
+    "https://2023.asiabsdcon.org/program/_p05b/paper.pdf",
+    "https://github.com/intel/QAT_Engine",
+    "https://github.com/intel/QAT_Engine/blob/master/docs/qat_sw.md",
+    "https://github.com/intel/QAT_Engine/blob/master/docs/features.md"
+  ],
+  "confidence": 0.75
+}
