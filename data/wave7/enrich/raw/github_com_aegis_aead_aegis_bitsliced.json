@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/aegis-aead/aegis-bitsliced",
+  "one_liner": "Constant-time bitsliced C AEGIS for CPUs without AES instructions; beats bitsliced AES-GCM by 1.4-6x.",
+  "what_it_does": "Implements the AEGIS-128L, AEGIS-128X2, AEGIS-256 and AEGIS-256X2 AEADs (RFC 10032) without AES hardware and without secret-indexed table lookups, so timing does not depend on key or data. The API is one-shot only: aegis128l_encrypt/decrypt and *_detached variants, 16- or 32-byte tags, the same function names as libaegis, and no init call. There is no incremental, MAC or keystream API. Output is standard AEGIS, so it interoperates with libaegis, libsodium and other RFC 10032 implementations, but not with AES-GCM.",
+  "how_it_is_fast": "An AEGIS-128L update applies one keyless AES round to all 8 state blocks at once, so a single message stream fills an 8-block bitsliced datapath. Bitsliced AES-CTR needs 8 independent counter blocks for that, and the paper reports AEGIS-128L needs 2.5x fewer parallel AES rounds per byte than bitsliced AES-128-CTR, with no GHASH multiply. The code uses Adomnicai and Peyrin's barrel-shiftrows representation with the Maximov-Ekdahl S-box circuit. It keeps the state bitsliced across init, AD, message and finalization, and computes the keystream directly in packed lanes with only a partial unpack. AEGIS-128X2 uses 64-bit words to update 16 blocks per round on 64-bit and WASM targets. With clang or GCC 12+, the S-box runs as 4x32-bit vectors on SSE2, NEON, AltiVec or WASM SIMD128.",
+  "when_to_use": [
+    "Timing-safe AEAD on ARM Cortex-A53-class or RISC-V cores without AES extensions (SiFive U74, SpacemiT X60), where the alternative is bitsliced OpenSSL/BoringSSL AES-128-GCM: 1.6x (A53) and 1.4-2.4x (RISC-V, X2 at the high end) on 16 KB messages.",
+    "WebAssembly builds with simd128 that must stay constant-time: the paper reports 2241-2912 Mb/s vs 480 Mb/s for bitsliced BoringSSL AES-GCM on an Apple M1 host.",
+    "Microcontrollers without an AES peripheral (Cortex-M4): 185 cycles/byte vs 246 for fixsliced AES-128-GCM with protected GHASH.",
+    "Mixed fleets already standardized on AEGIS, where some endpoints (IoT, WASM clients) lack AES hardware and others use libaegis or libsodium. Ciphertexts are the same RFC 10032 format.",
+    "Pure JS/TS via the companion js-aegis-aead port: 324 MB/s at 1 MB on Apple M5 Max/Bun, 1.8x noble AES-128-GCM and 1.3x noble ChaCha20-Poly1305."
+  ],
+  "when_not_to_use": [
+    "Any CPU with AES-NI, ARMv8 Crypto or VAES. Use libaegis, whose README reports 100+ Gb/s for hardware-accelerated AEGIS-128L on Zen 4 and Apple M1. If you do not need side-channel protection, libaegis's unprotected table-based AEGIS-128L is also 1.85x (A53, 782 Mb/s) to 2.8x (U74, 507 Mb/s) faster than this code.",
+    "Microcontrollers with an AES accelerator: on the Flipper Zero Cortex-M4, hardware AES-GCM does 46 cycles/byte vs 185 here.",
+    "Workloads that need streaming or incremental encrypt/decrypt, AEGIS-MAC, a raw keystream, or the X4 variants. Only one-shot whole-buffer calls for 128L/128X2/256/256X2 exist.",
+    "Where the margin is thin: on SpacemiT X60, bitsliced AEGIS-128L (193 Mb/s) is slower than unprotected OpenSSL AES-GCM (223). On Cortex-M4 it is only about 3% ahead of fixsliced AES-GCM with a 4-bit-LUT GHASH (185 vs 190 cycles/byte). Very short messages are dominated by fixed init/finalization cost.",
+    "Risk-averse deployments: single-author code with 9 stars, no tagged releases and no issue history, backed only by a non-peer-reviewed preprint from the author."
+  ],
+  "integration": {
+    "form": "static lib (zig build) or source-drop (7 plain C files plus headers in src/)",
+    "dependencies": "none beyond libc (string.h/stdlib.h)",
+    "min_toolchain": "Zig build system; build.zig uses the b.addLibrary/root_module API, but no minimum Zig version is declared and there is no CMake. The vectorized S-box needs clang or GCC 12+, otherwise the scalar path is used. The C standard is not documented.",
+    "platforms": "Portable C on 32- and 64-bit targets. The 64-bit doubled X2 layout is auto-selected on 64-bit and wasm, and 32-bit targets use two interleaved 32-bit states. The vector S-box covers SSE2, NEON, AltiVec and WASM simd128. Measured on Cortex-A53, Cortex-M4, SiFive U74, SpacemiT X60 and WASM.",
+    "thread_safety": "Not documented. There is no init call and no mutable global state (only a never-written volatile optimization blocker in tag comparison), so the one-shot functions look reentrant on inspection.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Exports the same public symbols as libaegis (aegis128l_encrypt, aegis_verify_16, ...), so both cannot be linked into one binary without renaming.",
+    "On WebAssembly the vector path needs the simd128 target feature (e.g. -Dcpu=lime1+simd128). Without it, the README says the code runs 2-3.3x slower under wasmtime.",
+    "README WASM numbers (AEGIS-128L 3429, X2 3154 Mb/s) differ from the paper (2241 / 2912), including which variant wins. Benchmark your own target and build.",
+    "No incremental API, so whole messages must be in memory. On tag failure, decrypt zeroes the plaintext buffer and returns -1."
+  ],
+  "pick_this_over_siblings_when": "Pick this over libaegis only when the target has no AES instructions and timing side channels matter; libaegis's own README recommends aegis-bitsliced for such environments. The HiAE, Rocca and intel-ipsec-mb figures in the catalog were all measured on hardware-AES x86 CPUs, so none of them addresses AES-less, constant-time targets.",
+  "verified_claims_summary": "In the author's own preprint (ePrint 2026/1338), measured on 16 KB messages, one core, wall-clock time with the tag included, against bitsliced AES-128-GCM (OpenSSL 3.3 on Cortex-A53, BoringSSL elsewhere): A53 423 vs 261 Mb/s; X60 193 (128L) / 333 (128X2) vs 137; U74 182 / 311 vs 130; WASM on M1 2241 / 2912 vs 480; Cortex-M4 185 vs 246 cycles/byte. Compilers and flags are not stated, and the repo's benchmark.zig times only AEGIS, not the AES-GCM baselines.",
+  "status_note": "Actively maintained (last commit 2026-09-21, at least 100 commits since 2024-10) but untagged and lightly used. The LICENSE file is plain MIT (based on Adomnicai's MIT code) even though GitHub reports NOASSERTION, and the code is small enough to vendor.",
+  "sources_read": [
+    "https://github.com/aegis-aead/aegis-bitsliced",
+    "https://github.com/aegis-aead/aegis-bitsliced/blob/master/README.md",
+    "https://github.com/aegis-aead/aegis-bitsliced/blob/master/LICENSE",
+    "https://github.com/aegis-aead/aegis-bitsliced/blob/master/build.zig",
+    "https://github.com/aegis-aead/aegis-bitsliced/blob/master/src/include/aegis.h",
+    "https://github.com/aegis-aead/aegis-bitsliced/blob/master/src/include/aegis128l.h",
+    "https://github.com/aegis-aead/aegis-bitsliced/blob/master/src/common.h",
+    "https://github.com/aegis-aead/aegis-bitsliced/blob/master/src/common.c",
+    "https://github.com/aegis-aead/aegis-bitsliced/blob/master/src/aes-bs8.h",
+    "https://github.com/aegis-aead/aegis-bitsliced/blob/master/src/aegis128l.c",
+    "https://github.com/aegis-aead/aegis-bitsliced/blob/master/src/aegis128x2.c",
+    "https://github.com/aegis-aead/aegis-bitsliced/blob/master/src/aegis128x2_64.c",
+    "https://github.com/aegis-aead/aegis-bitsliced/blob/master/src/test/benchmark.zig",
+    "https://github.com/aegis-aead/aegis-bitsliced/blob/master/src/test/main.zig",
+    "https://github.com/aegis-aead/aegis-bitsliced/commits/master",
+    "https://github.com/aegis-aead/aegis-bitsliced/issues",
+    "https://github.com/aegis-aead/aegis-bitsliced/pulls",
+    "https://github.com/aegis-aead/aegis-bitsliced/releases",
+    "https://eprint.iacr.org/2026/1338.pdf",
+    "https://eprint.iacr.org/2026/1338",
+    "https://github.com/jedisct1/js-aegis-aead",
+    "https://github.com/jedisct1/js-aegis-aead/blob/main/README.md",
+    "https://github.com/aegis-aead/libaegis/blob/main/README.md",
+    "https://github.com/aegis-aead/libaegis/blob/main/src/common/softaes.c"
+  ],
+  "confidence": 0.82
+}
