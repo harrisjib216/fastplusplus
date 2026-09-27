@@ -82,7 +82,7 @@ def apply(wave_dir, today):
                 rejected.append(e)
                 continue
             e["verification"]["reject_overridden"] = d.get("reason")
-        for field in ("domain", "category", "repo_url", "has_code", "language"):
+        for field in ("domain", "category", "repo_url", "has_code", "language", "name"):
             if d.get(field):
                 e[field] = d[field]
         for field, value in (v.get("corrections") or {}).items():

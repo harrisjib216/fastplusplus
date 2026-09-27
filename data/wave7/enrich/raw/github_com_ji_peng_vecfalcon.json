@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/ji-peng/vecfalcon",
+  "one_liner": "Falcon/FN-DSA signing with a batched SIMD Gaussian BaseSampler and RISC-V FFT; sign_core runs 1.13-1.59x faster than C-FN-DSA.",
+  "what_it_does": "This is the research artifact for a TCHES 2026 paper. It is a patched copy of Thomas Pornin's C-FN-DSA (Falcon-512/1024, pre-standard FN-DSA, commit 96e3b92) with a faster signing path on x86 (SSE2, AVX2, AVX-512F), AArch64 NEON and 64-bit RISC-V (RV64GC, with or without the B and V extensions). It keeps C-FN-DSA's fndsa.h API (fndsa_keygen, fndsa_sign and fndsa_verify on encoded keys, plus _seeded and _temp variants), so code that calls C-FN-DSA still links. For a given seed, though, it produces different signatures than both default Falcon and C-FN-DSA's SHAKE256X4 variant. The repo ships ref/ and opt/ source trees and per-platform Makefiles that build test and benchmark binaries, not a library.",
+  "how_it_is_fast": "Falcon's BaseSampler scans a 72-bit reverse cumulative distribution table (RCDT) inside SamplerZ and takes about 30% of signing time in the paper's profile. It is normally scalar because matching the known-answer tests (KATs) fixes the order in which PRNG output is consumed. VecFalcon drops that ordering and computes 16-64 samples at once in 32-bit SIMD lanes (three 24-bit limbs per value, with a compare/subtract/shift borrow chain). It folds the bimodal sign flip and the squaring into the same pass and buffers 128 samples in a per-signature GAUSSIAN0_STORE. On RISC-V it adds hand-written RVV FFT/iFFT that uses strided vlse64/vsse64 loads with 4+4 (Falcon-512) and 4+5 (Falcon-1024) layer merging, plus a 3-layer-merged scalar RV64D FFT. The rest of the gain comes from third-party Keccak and FFT code: XKCP 8-way Keccak on AVX-512 (as a SHAKE256X8 PRNG), Becker-Kannwischer hybrid 4-way Keccak and the Nguyen-Gaj NEON FFT on ARM, and the Zhang et al. RV64I/RV64IB Keccak on RISC-V.",
+  "when_to_use": [
+    "Falcon signing on RISC-V application cores with RVV 1.0 and VLEN=256 (SpacemiT X60 class): sign_core runs 1.58-1.59x faster, the largest gain in the paper.",
+    "Signing-latency-bound Falcon on x86-64 servers with AVX-512F or AVX2: sign_core runs 1.36x and 1.23x faster on Falcon-512 (full fndsa_sign about 1.23x and 1.18x).",
+    "You are porting Falcon signing to another SIMD ISA and want a worked, correctness-checked template for a batched RCDT BaseSampler or a deeply layer-merged double-precision FFT.",
+    "Your deployment only needs signatures that verify, not ones that match test vectors, and you control the signer's build flags and CPU target."
+  ],
+  "when_not_to_use": [
+    "You need interoperability with FIPS 206 or current c-fn-dsa. The code is frozen on Feb 2025 pre-draft C-FN-DSA. In July 2026 upstream changed key and signature encodings, the public-key format, the signature norm bound and message hashing (an ML-DSA-style 'mu' value that includes a public-key hash), and it explicitly does not promise backward compatibility.",
+    "You need KAT reproducibility or identical output across builds: the vectorized sampler reorders PRNG use, and AVX-512F builds use a different PRNG (SHAKE256X8) from all other builds.",
+    "Keygen- or verify-heavy workloads: only signing was optimized, and verify cycles match the reference within noise in the repo's raw data.",
+    "You need portable binaries or Windows/MSVC builds. Each build targets one ISA with no runtime dispatch for the new sampler, the RVV code assumes VLEN=256 (the paper only suggests how to adapt it for VLEN=128 cores such as the C908), and the sample store is allocated with posix_memalign, which MSVC does not provide.",
+    "Production or no-heap embedded use: every signing attempt heap-allocates the ~1 KB sample store and never checks the allocation for NULL. The project is a 4-star paper artifact with no releases, issues or downstream users found."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "None at runtime beyond libc (posix_memalign). The ARM and RISC-V paths add assembly files (.S) built by the C compiler. gperftools and pprof are needed only to reproduce the profiling table.",
+    "min_toolchain": "Not documented. Tested with GCC 13.3.0 (x86-64), Clang 10.0.0 (AArch64) and GCC 13.2.0 (RISC-V; needs -march=rv64gcv with RVV 1.0 support)",
+    "platforms": "x86-64 (a separate build for each of SSE2, AVX2 and AVX-512F), AArch64 NEON (tested on Cortex-A72), RV64GC/RV64GCB, and RV64GCV/RV64GCVB with RVV 1.0 at VLEN=256 only. Linux-oriented (posix_memalign, perf-based cycle counting).",
+    "thread_safety": "Not documented. No mutable globals were found. Sampler state and its heap-allocated store live per call, so concurrent calls on separate buffers look safe.",
+    "drop_in_for_baseline": "partial — it keeps C-FN-DSA's fndsa.h API (commit 96e3b92) and its signatures verify, but output differs for a given seed, each build targets one ISA, and the code predates c-fn-dsa's July 2026 FN-DSA-draft format changes"
+  },
+  "gotchas": [
+    "The headline numbers are for sign_core, which excludes hash-to-point and key decoding. Full fndsa_sign gains in the repo's raw files are smaller on Falcon-512: 1.09x SSE2, 1.18x AVX2, 1.23x AVX-512F, 1.12x NEON and 1.28-1.43x on RISC-V.",
+    "The x86 BaseSampler is selected at compile time (#if FNDSA_AVX512F / FNDSA_AVX2) and its AVX2/AVX-512 intrinsics lack upstream's per-function target attribute. The Makefile therefore compiles whole files with -mavx2 or -mavx512f (plus -mno-* flags to pin the ISA), and the binary needs that ISA at runtime. FNDSA_AVX2 still defaults to 1 on x86, so an SSE2 build must pass -DFNDSA_AVX2=0 -DFNDSA_SSE2=1.",
+    "opt/test_fndsa.c comments out test_sampler, test_sign_core, test_keygen_ref and test_kat, which ref/ still runs. Signing correctness rests on sign-then-verify self tests plus a subroutine-level BaseSampler comparison against the reference in profiling/ (make run_test).",
+    "The RISC-V benchmark reads cycles with rdcycle, which the README says traps with Illegal Instruction on newer kernels (e.g. 6.6.63); use perf stat as the RISC-V Makefile does."
+  ],
+  "pick_this_over_siblings_when": "No siblings catalogued yet.",
+  "verified_claims_summary": "The paper compares median sign_core cycles of VecFalcon against C-FN-DSA commit 96e3b92, with both built at -O2 using the SHAKE256X4 PRNG (10,000 runs on x86 and ARM, 2,000 on RISC-V). Falcon-512 gains 1.13x (SSE2), 1.23x (AVX2) and 1.36x (AVX-512F) on an i7-11700K with GCC 13.3.0, 1.17x (NEON) on a Cortex-A72 with Clang 10, and 1.36-1.59x across RV64GC/GCB/GCV/GCVB on a SpacemiT X60 with GCC 13.2.0; Falcon-1024 gains 1.14-1.59x. Micro-benchmarks put the BaseSampler core (excluding PRNG) at 1.8-9.8x and the RVV FFT/iFFT at 4.1-4.7x faster than the reference, and the repo's raw speed files match the paper's Table 6.",
+  "status_note": "This is a TCHES 2026 paper artifact whose last commit was 2025-12-05, with no releases, issues or forks. Its MIT, Unlicense and Apache-2.0 files make it copyable, but it is frozen on pre-draft C-FN-DSA code, so treat it as a source of techniques to port onto current c-fn-dsa rather than as a maintained library.",
+  "sources_read": [
+    "https://github.com/Ji-Peng/VecFalcon",
+    "https://github.com/Ji-Peng/VecFalcon/blob/main/README.md",
+    "https://github.com/Ji-Peng/VecFalcon/blob/main/LICENSE",
+    "https://github.com/Ji-Peng/VecFalcon/blob/main/opt/LICENSE",
+    "https://github.com/Ji-Peng/VecFalcon/blob/main/opt/README.md",
+    "https://github.com/Ji-Peng/VecFalcon/blob/main/opt/Makefile",
+    "https://github.com/Ji-Peng/VecFalcon/blob/main/opt/Makefile.armv8a",
+    "https://github.com/Ji-Peng/VecFalcon/blob/main/opt/Makefile.rv",
+    "https://github.com/Ji-Peng/VecFalcon/blob/main/opt/fndsa.h",
+    "https://github.com/Ji-Peng/VecFalcon/blob/main/opt/inner.h",
+    "https://github.com/Ji-Peng/VecFalcon/blob/main/opt/sign_sampler.c",
+    "https://github.com/Ji-Peng/VecFalcon/blob/main/opt/sign_core.c",
+    "https://github.com/Ji-Peng/VecFalcon/blob/main/opt/sign_inner.h",
+    "https://github.com/Ji-Peng/VecFalcon/blob/main/opt/sha3.c",
+    "https://github.com/Ji-Peng/VecFalcon/blob/main/opt/util.c",
+    "https://github.com/Ji-Peng/VecFalcon/blob/main/opt/test_fndsa.c",
+    "https://github.com/Ji-Peng/VecFalcon/blob/main/ref/test_fndsa.c",
+    "https://github.com/Ji-Peng/VecFalcon/blob/main/opt/speed_fndsa_11700k.txt",
+    "https://github.com/Ji-Peng/VecFalcon/blob/main/ref/speed_fndsa_11700k.txt",
+    "https://github.com/Ji-Peng/VecFalcon/blob/main/opt/speed_fndsa_cortex_a72.txt",
+    "https://github.com/Ji-Peng/VecFalcon/blob/main/ref/speed_fndsa_cortex_a72.txt",
+    "https://github.com/Ji-Peng/VecFalcon/blob/main/opt/speed_fndsa_x60.txt",
+    "https://github.com/Ji-Peng/VecFalcon/blob/main/ref/speed_fndsa_x60.txt",
+    "https://github.com/Ji-Peng/VecFalcon/issues?q=is%3Aissue",
+    "https://github.com/Ji-Peng/VecFalcon/commits/main",
+    "https://eprint.iacr.org/2025/1867",
+    "https://eprint.iacr.org/2025/1867.pdf",
+    "https://api.crossref.org/works/10.46586/tches.v2026.i1.302-324",
+    "https://github.com/pornin/c-fn-dsa",
+    "https://github.com/pornin/c-fn-dsa/commits/main",
+    "https://hn.algolia.com/api/v1/search?query=VecFalcon",
+    "https://hn.algolia.com/api/v1/search?query=%22Vectorized%20Falcon%22",
+    "https://github.com/search?q=gaussian0_rvv_bisq&type=code"
+  ],
+  "confidence": 0.8
+}
