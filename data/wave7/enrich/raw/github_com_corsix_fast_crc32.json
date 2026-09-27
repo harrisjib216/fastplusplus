@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/corsix/fast-crc32",
+  "one_liner": "Code generator emitting tuned CRC32/CRC32C C kernels (PCLMUL/VPCLMULQDQ/PMULL plus crc32 instruction) that beat Chromium zlib's SIMD CRC32.",
+  "what_it_does": "A small C program (generate.c) takes an ISA, a polynomial and a terse algorithm string such as `-i avx512_vpclmulqdq -p crc32c -a v4s5x3` and prints one self-contained C file. That file exports `uint32_t crc32_impl(uint32_t crc, const char* buf, size_t len)`, which uses zlib-style semantics (inversion on entry and exit, chainable across calls). The repo also ships a benchmark harness (bench.c, autobench.c with a `make sweep` search over configurations) and five pre-generated sample kernels. It is not a packaged library: you generate or copy the variant that suits your CPU and wire up your own CPU dispatch.",
+  "how_it_is_fast": "It folds 16- or 64-byte vector accumulators with carry-less multiplication (PCLMULQDQ/VPCLMULQDQ on x86, PMULL on aarch64), as in Intel's CRC folding whitepaper. It uses three-way XOR (VPTERNLOGQ or EOR3) so each fold step needs fewer uops. The key idea is 'fusion' (from the author's crc32_4k_fusion post): while the vector folds process one part of the buffer, several independent scalar crc32 instruction streams process other parts on a different execution port, and the partial CRCs are merged with x^n mod P shift constants. Accumulator counts and load unrolling are tuned per microarchitecture so that enough streams are in flight to hide the latencies of the pmull+eor chain (6-7 cycles on M1 per the README) and of crc32 (3 cycles on Intel).",
+  "when_to_use": [
+    "Checksumming large buffers (tens of KiB to MiB: storage blocks, WAL/log segments, network payloads, file integrity) where CRC throughput per core is the bottleneck.",
+    "CRC-32C (iSCSI/ext4/Btrfs polynomial) on x86-64 with VPCLMULQDQ (Ice Lake, Sapphire Rapids, Zen 4): about 64-97 GB/s single core in the README.",
+    "zlib/gzip/PNG CRC-32 on aarch64 (Apple M1, Ampere Altra), where both scalar crc32 and PMULL paths exist: 85 GB/s on M1, 35.9 GB/s on Altra.",
+    "You want to vendor one dependency-free C file into a C/C++ codebase and already have (or can add) CPUID/HWCAP dispatch, as PostgreSQL and zlib-ng did.",
+    "CRCs with non-standard 32-bit polynomials (crc32k, crc32q or any hex polynomial) that still need PCLMUL-class speed."
+  ],
+  "when_not_to_use": [
+    "Small inputs (under about 1-8 KiB). Most fusion kernels only enter the SIMD loop above a few hundred bytes (384 B for v4s5x3) and fall back to a byte/8-byte crc32 loop below that. A third-party Tiger Lake benchmark has MariaDB's AVX-512 CRC32C ahead of every corsix variant from 256 B to 8 KiB.",
+    "You need a ready-made library with runtime CPU detection, a build system, packaging or an API beyond one function; none is provided.",
+    "x86 zlib-polynomial CRC-32 where you expected the headline numbers: x86 has no scalar crc32 instruction for that polynomial, so the fusion kernels (all CRC-32C on x86) do not apply and only vector-only variants remain (e.g. 47.3 GB/s on Ice Lake).",
+    "Portability beyond x86-64/aarch64 little-endian with GCC/Clang: the generated NEON code uses GNU inline asm (MSVC ARM64 cannot compile it), and big-endian or 32-bit targets are not documented.",
+    "CRC-16/CRC-64 or reflected/non-reflected variants other than the bit-reflected 32-bit form; only 32-bit CRCs are generated."
+  ],
+  "integration": {
+    "form": "source-drop (one generated .c file per ISA/polynomial/algorithm)",
+    "dependencies": "none (compiler intrinsics headers only; the `-i none` target emits lookup tables instead)",
+    "min_toolchain": "Not documented. Built and benchmarked with gcc -O3 -march=native (version not stated). Needs GCC/Clang-style intrinsics and GNU inline asm for NEON. AVX-512 output uses _mm512_zextsi128_si512, which older compilers may lack.",
+    "platforms": "x86-64 (SSE4.2+PCLMULQDQ minimum; AVX-512F/VL; AVX-512+VPCLMULQDQ on Ice Lake+/Zen 4), aarch64 (crypto+crc; EOR3 variants need armv8.2-a+sha3), and a portable table-driven `-i none` fallback",
+    "thread_safety": "Not documented. Generated functions are pure (inputs plus const tables, no mutable globals), so concurrent calls are safe by construction.",
+    "drop_in_for_baseline": "partial — same (crc, buf, len) signature and pre/post inversion as zlib crc32(), but the function is named crc32_impl, one file covers only one polynomial and ISA, and there is no runtime CPU dispatch, so you must rename it and add feature checks."
+  },
+  "gotchas": [
+    "The checked-in AVX-512 VPCLMULQDQ sample files (v4s5x3, v3s1_s3), which are the headline Ice Lake and Sapphire Rapids kernels, still use _mm512_castsi128_si512. PR #1 (from PostgreSQL developers) fixed only generate.c: the undefined upper bits gave wrong CRCs with clang 18/19 at -O0. Regenerate rather than copying the samples.",
+    "The best algorithm string differs per microarchitecture (v9s3x4e Cascade Lake, v4s5x3 Ice Lake, v3s1_s3 Sapphire Rapids, v1s3x3 Rome, v1s4x2 Milan, v3s2x4 Genoa). A kernel tuned for one CPU can be well off the pace on another, so run `make sweep`/autobench on your target.",
+    "The Ice Lake '56% faster' headline compares a CRC-32C kernel against Chromium's zlib-polynomial CRC-32. The same-polynomial generated equivalent is 47.31 GB/s against Chromium's 41.00.",
+    "Sapphire Rapids pays about 20% for unaligned 64-byte loads. The generated code aligns the pointer to 64 bytes with scalar crc32 steps first, but hand-edited copies must keep that prologue."
+  ],
+  "pick_this_over_siblings_when": "Pick it over crc-fast or crc32fast when you are in C/C++, want the highest large-buffer CRC-32C/CRC-32 throughput on a known CPU, and are happy to vendor one generated file and write your own dispatch. crc-fast gives packaged runtime dispatch and CRC-16/64 variants, and crc32fast is the idiomatic Rust choice. Pick it over htot/crc32c on any post-2017 CPU: its kernels are the successors to the Intel crc32+pclmul 3-way approach that htot ports, and they add VPCLMULQDQ/AVX-512 and aarch64.",
+  "verified_claims_summary": "Single-core throughput on a 512 KiB buffer (the bench.c default; start offsets vary by up to 63 bytes unless --aligned; best of 40 rounds), everything built with gcc -O3 -march=native with no compiler version given. Each new kernel is compared with the fastest prior code on that CPU: dougallj's NEON CRC32 on M1 (77.55 to 85.05 GB/s, same zlib polynomial), the author's crc32_4k_fusion on a Xeon Silver 4214 Cascade Lake (25.32 to 31.55 GB/s CRC-32C), and Chromium zlib's AVX-512 CRC32 on Ice Lake (41.00 to 63.98 GB/s, cross-polynomial) and Sapphire Rapids (81.68 GB/s aligned or 65.20 unaligned, to 97.30 GB/s). An independent Tiger Lake benchmark (clang 23) confirms the win only from about 64 KiB up.",
+  "status_note": "Small and low-churn: 6 commits, the last on 2025-11-27 adding the zlib license. Still counted as active, and adopted downstream by PostgreSQL (AVX-512 CRC32C path) and zlib-ng (ARMv8 PMULL+EOR3 CRC32, merged Dec 2025). MIT-or-zlib licensed; the generated output is trivial to vendor.",
+  "sources_read": [
+    "https://github.com/corsix/fast-crc32",
+    "https://github.com/corsix/fast-crc32#readme",
+    "https://github.com/corsix/fast-crc32/blob/main/Makefile",
+    "https://github.com/corsix/fast-crc32/blob/main/third_party/Makefile",
+    "https://github.com/corsix/fast-crc32/blob/main/LICENSE.md",
+    "https://github.com/corsix/fast-crc32/blob/main/generate.c",
+    "https://github.com/corsix/fast-crc32/blob/main/bench.c",
+    "https://github.com/corsix/fast-crc32/blob/main/autobench.c",
+    "https://github.com/corsix/fast-crc32/blob/main/sample_avx512_vpclmulqdq_crc32c_v4s5x3.c",
+    "https://github.com/corsix/fast-crc32/blob/main/sample_avx512_vpclmulqdq_crc32c_v3s1_s3.c",
+    "https://github.com/corsix/fast-crc32/blob/main/sample_avx512_crc32c_v9s3x4e.c",
+    "https://github.com/corsix/fast-crc32/blob/main/sample_neon_crc32_v3s4x2e_v2.c",
+    "https://github.com/corsix/fast-crc32/blob/main/sample_neon_eor3_crc32_v9s3x2e_s3.c",
+    "https://github.com/corsix/fast-crc32/commits/main",
+    "https://github.com/corsix/fast-crc32/pull/1",
+    "https://github.com/corsix/fast-crc32/issues/2",
+    "https://github.com/corsix/fast-crc32/issues/3",
+    "https://github.com/zlib-ng/zlib-ng/pull/2023",
+    "https://raw.githubusercontent.com/postgres/postgres/master/src/port/pg_crc32c_sse42.c",
+    "https://www.corsix.org/content/fast-crc32c-4k",
+    "https://github.com/chirizxc/crc32c-benchmark",
+    "https://hn.algolia.com/api/v1/search?query=corsix%20crc32&tags=story"
+  ],
+  "confidence": 0.85
+}
