@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/facebook/rocksdb",
+  "one_liner": "RocksDB's built-in key-value separation: large values go to blob files, cutting compaction write amp versus stock leveled RocksDB.",
+  "what_it_does": "A set of column-family options (enable_blob_files, min_blob_size, blob_file_size, blob_compression_type, plus blob GC settings) that make RocksDB store values at or above a size threshold in separate append-only blob files. The SST then keeps only a small BlobIndex pointer holding file number, offset, size and compression type. It uses the ordinary rocksdb::DB API, so Put/Get/MultiGet, iterators, Merge, transactions, checkpoints and backup keep working, and most blob options can be changed at runtime with SetOptions. It is not the legacy StackableDB-based rocksdb::blob_db::BlobDB, which the wiki describes as FIFO/TTL-oriented, slower, and expected to be deprecated.",
+  "how_it_is_fast": "It uses WiscKey-style key-value separation. Compactions sort and rewrite keys plus small pointers instead of the large values, so write amplification drops and compaction keeps up with ingest, which removes the write stalls that throttle stock leveled compaction under heavy overwrites. Blob files are written by the background flush and compaction threads, one writer per file, using large I/Os and doing compression off the foreground path; they are also tracked in the MANIFEST as part of the Version, so the read path is mostly lock-free. Garbage collection piggybacks on compaction: live blobs in the oldest blob_garbage_collection_age_cutoff fraction of blob files are relocated as their keys pass through compaction, and files holding nothing but garbage are dropped whole. This avoids WiscKey's GC, which issues a Get plus a Put for every blob it checks.",
+  "when_to_use": [
+    "Write-heavy or overwrite-heavy workloads with large values, where leveled compaction's write amp or write stalls cap throughput. The 2021 tests saw write-side wins at every value size from 1KB to 1MB.",
+    "Flash-endurance- or bandwidth-sensitive deployments. The blog measured 75-90% lower write amp than leveled across its overwrite and mixed read/write phases.",
+    "Point lookups on large values. The blog found BlobDB matched or beat leveled (up to 1.4x) for larger values, because the LSM holding only keys and pointers stays small.",
+    "Cases where you would otherwise switch to universal compaction only for lower write amp. The RocksDB team recommends BlobDB with leveled compaction instead, which read up to 5.6x faster than universal in their tests.",
+    "Large-value TTL or size-budget workloads on FIFO compaction. Since 11.0, FIFO can trim by combined SST and blob bytes, and a KV-ratio intra-L0 picker is built specifically for BlobDB."
+  ],
+  "when_not_to_use": [
+    "Small values (1KB-4KB) with range scans. The blog's own results show BlobDB behind leveled on scan workloads at those two sizes, since each value costs an extra indirection into a blob file.",
+    "Tight disk budgets. Overwritten or deleted blobs stay on disk until GC relocates them. GC is off by default, space comes back only in whole-blob-file increments (blob_file_size), and lowering space amp costs extra write amp.",
+    "Insert-only or sequential-key loads. With GC on, the default 0.25 age cutoff kept relocating blobs in a pure-insert test, giving write amp of 7+ (issue #11570; the maintainer's advice is to disable GC). An independent 2025 paper (BVLSM, RocksDB 9.7.3) also found BlobDB slower than stock RocksDB on sequential writes and on sustained 4KB random writes.",
+    "Deployments relying on multiple cf_paths/db_paths, RepairDB/ldb repair, or secondary instances. Blob files always go to the first cf path (open issue #8535, confirmed in blob_file_builder.cc). Repair drops blob files from the MANIFEST, so the next open deletes them and loses the data (open issues #13884 and #13090). The wiki lists secondary instances and blob-file ingestion as unsupported.",
+    "Very large values under sustained overwrite. The blog's own overwrite runs were stall-free at every size except the largest, 1MB."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (part of librocksdb itself; turned on per column family through options, not a separate component)",
+    "dependencies": "None required. zlib, bzip2, lz4, snappy and zstd are optional, for blob_compression_type; gflags is needed only for the tools (db_bench, ldb).",
+    "min_toolchain": "C++20: GCC 11+ or Clang 10+, per INSTALL.md (which still lists Visual Studio 2017+ for Windows)",
+    "platforms": "Per INSTALL.md: Linux, macOS, FreeBSD, OpenBSD, Windows (CMake/vcpkg), iOS, AIX and Solaris SPARC. No BlobDB-specific platform limits are documented. The published benchmark ran on x86-64 (Skylake DE).",
+    "thread_safety": "Same as RocksDB: one process per DB, enforced by an OS file lock. A rocksdb::DB can be shared across threads without external locking, but Iterator and WriteBatch objects need external synchronization. A custom BlobFilePartitionStrategy (used by blob direct write) must be thread-safe and must not throw.",
+    "drop_in_for_baseline": "partial — same rocksdb::DB API and database. Setting enable_blob_files (plus min_blob_size) on an existing column family moves values out as later flushes and compactions rewrite them. It is not a drop-in for the legacy rocksdb::blob_db::BlobDB (the release notes said at launch there was no migration path), and repair, multi-path storage and secondary instances do not handle blob files."
+  },
+  "gotchas": [
+    "min_blob_size defaults to 0, so enable_blob_files=true on its own sends every non-empty value to a blob file. Set a threshold.",
+    "enable_blob_garbage_collection defaults to false. blob_garbage_collection_force_threshold=0.0 passes validation but makes an idle DB compact forever (open issue #15256, Sept 2026). blob_cache cannot be changed through SetOptions.",
+    "Recent open bugs: MultiGet with value_size_soft_limit keeps returning Aborted when the first key's value is in a blob file, so the documented retry loop never ends (#15247). Another open issue reports FIFO max_data_files_size dropping far more data than its budget (#15252). A blob GC compaction failure (#14897) is fixed per the HISTORY.md 11.9.0 entry, but the newest tagged GitHub release is 11.8.1.",
+    "Blob direct write (experimental, 2026) writes large values straight to blob files on the write path. Its v1 cannot recover still-active direct-write blob files by WAL replay after a crash, and it requires the ordered single-memtable-writer path, so no allow_concurrent_memtable_write, pipelined, unordered or two_write_queues writes."
+  ],
+  "pick_this_over_siblings_when": "No siblings catalogued yet. Compared with the baseline, pick it over stock leveled RocksDB when values are large and writes or overwrites dominate, and over universal compaction when you wanted universal only for its lower write amp.",
+  "verified_claims_summary": "RocksDB's own 2021 blog post ran a customized version of its standard benchmark suite: 1 TB of raw values, 1KB-1MB values, six load/overwrite/read phases, on a build equivalent to 6.18.1 and an 18-core Skylake DE @ 1.6GHz with 64GB RAM and two M.2 SSDs in RAID0; the compiler and flags are not stated. Against stock leveled compaction it reported 2.3-4.7x faster initial load, 2.1-3.5x higher overwrite throughput with 75-78% less write amp, and up to 1.4x faster reads for large values, but it lost on range scans at 1KB and 4KB; an independent 2025 paper (BVLSM: RocksDB 9.7.3, Xeon Gold 5218, NVMe, authors of a competing design) implies about 4x over stock RocksDB for 64KB random writes with async WAL, but only about 0.4-0.6x on sequential writes.",
+  "status_note": "Actively developed inside RocksDB: HISTORY.md shows 11.11.0 on 2026-09-21 with blob and wide-column work, and blob direct write and FIFO KV-ratio compaction landed in 2026. It is in production use and dual-licensed Apache-2.0/GPLv2, but you adopt it as a RocksDB configuration, not as a component you can vendor on its own.",
+  "sources_read": [
+    "http://rocksdb.org/blog/2021/05/26/integrated-blob-db.html",
+    "https://github.com/facebook/rocksdb/wiki/BlobDB",
+    "https://github.com/facebook/rocksdb",
+    "https://github.com/facebook/rocksdb/blob/main/include/rocksdb/advanced_options.h",
+    "https://github.com/facebook/rocksdb/blob/main/INSTALL.md",
+    "https://github.com/facebook/rocksdb/blob/main/HISTORY.md",
+    "https://github.com/facebook/rocksdb/blob/main/db/blob/blob_index.h",
+    "https://github.com/facebook/rocksdb/blob/main/db/blob/blob_file_builder.cc",
+    "https://github.com/facebook/rocksdb/blob/main/db/compaction/compaction_iterator.cc",
+    "https://github.com/facebook/rocksdb/wiki/Basic-Operations",
+    "https://github.com/facebook/rocksdb/releases",
+    "http://rocksdb.org/blog/2026/06/20/blob-direct-write-partitioned-blob-files.html",
+    "http://rocksdb.org/blog/2026/06/20/fifo-kv-ratio-compaction.html",
+    "https://github.com/facebook/rocksdb/issues/13884",
+    "https://github.com/facebook/rocksdb/issues/15256",
+    "https://github.com/facebook/rocksdb/issues/15247",
+    "https://github.com/facebook/rocksdb/issues/14897",
+    "https://github.com/facebook/rocksdb/issues/11570",
+    "https://github.com/facebook/rocksdb/issues/12208",
+    "https://github.com/facebook/rocksdb/issues/8535",
+    "https://github.com/facebook/rocksdb/issues/13090",
+    "https://github.com/facebook/rocksdb/issues/12503",
+    "https://github.com/facebook/rocksdb/issues/13590",
+    "https://arxiv.org/abs/2506.04678",
+    "https://arxiv.org/pdf/2506.04678v2",
+    "https://hn.algolia.com/api/v1/search?query=integrated%20blobdb",
+    "https://export.arxiv.org/api/query?search_query=abs:%22key-value%20separation%22"
+  ],
+  "confidence": 0.8
+}
