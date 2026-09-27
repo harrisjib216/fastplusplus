@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/fxamacker/circlehash",
+  "one_liner": "Pure-Go seeded 64-bit hash from Abseil's wyhash-style design; beats seeded XXH3 5-13% at 4-128 B, 1.4-1.8x at 192-256 B.",
+  "what_it_does": "A small Go package with three one-shot functions: Hash64([]byte, seed), Hash64String(string, seed) and Hash64Uint64x2(a, b, seed). Each returns a 64-bit CircleHash64f digest. It is built for short keys (the author says <=512 bytes) that need a seeded, deterministic digest that stays the same across processes and releases; the v0.3.0 release notes declare CircleHash64f digests stable. It is a different algorithm from XXH3, so digests differ. It has no hash.Hash64/streaming interface and no 128-bit output.",
+  "how_it_is_fast": "Every mixing step is the wyhash/Abseil multiply-fold: a 64x64->128-bit multiply via math/bits.Mul64, with the high and low halves XORed together. Tails use overlapping unaligned reads (two 4-byte reads for 4-8 B, two 8-byte reads for 9-16 B, three single bytes for 1-3 B), so there are no per-byte loops. Inputs of 64 bytes or less go through a separate function that has only a 16-byte loop. Longer inputs run a 64-byte loop with four independent multiplies over two state lanes. It is plain Go with no assembly: the Go 1.17+ file reads words through unsafe pointers using little-endian byte shifts, and a build-tagged reference file covers older Go.",
+  "when_to_use": [
+    "Pure-Go code without cgo that hashes short keys (mostly <=256 bytes) and needs a seeded 64-bit digest that is identical across processes, machines and library versions, for example on-disk hash-ordered maps or persistent indexes. onflow/atree, the Flow blockchain's storage layer, uses it this way and falls back to BLAKE3 on collisions.",
+    "Replacing SipHash as the seeded hash in a Go hash structure: the README table shows 3.7-6.8x SipHash's throughput at 4-256 B.",
+    "Hashing pairs of uint64 (composite IDs, slab/index pairs) with Hash64Uint64x2, without building a byte slice. The digest equals Hash64 of the 16-byte little-endian encoding.",
+    "Teams that must audit their hash: about 200 lines of optimized Go plus a 129-line reference implementation, pi-derived constants, and compatibility tests over roughly 600,000 digests on 0-16384-byte inputs."
+  ],
+  "when_not_to_use": [
+    "Hashes that never leave the process, such as in-memory Go maps and sets. The runtime map and hash/maphash already handle those with per-process random seeds. CircleHash's niche is the case maphash cannot cover, because maphash seeds cannot be serialized or recreated in another process.",
+    "Keys an attacker can choose, or anywhere HashDoS resistance matters. The seed does not prevent seed-independent multicollisions (see gotchas). The CircleHash64fx variant meant to fix this, which also adds a 128-bit seed, has been an open, unpublished issue (#15) since March 2022.",
+    "Bulk data or inputs well above 512 bytes. The author says CircleHash64 is ideal for <=512 B and publishes no numbers above 256 B, and there is no SIMD path. XXH3's SIMD long-input code is the better fit there.",
+    "Codebases outside Go. There is no official C, C++ or Rust port, and porters have asked for simple known-answer test vectors with data (issue #23, open since 2022) because the published tests only check SHA-512 checksums over thousands of digests.",
+    "Anything that needs 128-bit digests: CircleHash128fx (issue #16) is also unpublished."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none (Go standard library only: math/bits, unsafe)",
+    "min_toolchain": "Go 1.17 for the optimized path (go.mod: go 1.17); a build-tagged reference implementation serves Go 1.16 and older. CI tests Go 1.17 and 1.22-1.25.",
+    "platforms": "Only linux_amd64 is officially supported per the README, though CI also runs macOS, Ubuntu and Windows. The code is pure Go and builds words from bytes in little-endian order, so digests should not depend on host endianness.",
+    "thread_safety": "Not documented. The API is stateless pure functions with no mutable package-level state (from source), so concurrent calls should be safe.",
+    "drop_in_for_baseline": "partial — the call shape matches a one-shot seeded 64-bit XXH3 call (bytes or string plus a uint64 seed returns a uint64), but digests differ, so every persisted hash changes. There is no streaming/hash.Hash64 interface and no 128-bit variant."
+  },
+  "gotchas": [
+    "Multiply-by-zero weakness, confirmed with a Python port of the source that matches the repo's 65,536-digest known-answer checksum: when an 8-byte little-endian word that is XORed with the constant pi1 (0x13198A2E03707344) equals pi1, the product is zero. Every 9-16-byte input whose first 8 bytes are pi1 hashes to 0 under every seed, including Hash64Uint64x2(pi1, x, seed). A 16-byte block that starts with pi1 also erases all earlier input and the seed, so same-length inputs that share everything after that block collide for all seeds. The README describes CircleHash64fx as the fix, but fx is not shipped.",
+    "The README says CircleHash64fx 'will replace CircleHash64f as the default', and issue #25 plans an API refactor before v1.0. Hash64 is documented as CircleHash64f-compatible, so pin v0.3.0 and add a regression test on digests if they are persisted (onflow/atree does both).",
+    "Methodology: no Benchmark functions are published. The README table's XXH3 implementation is unnamed; the author's earlier atree#103 evaluation used github.com/zeebo/xxh3. The table's XXH3 throughput falls from 11.6 GB/s at 128 B to 8.19 GB/s at 256 B, which accounts for most of the headline 1.83x. The author's atree write-up says such slowdowns at larger sizes 'are not a typo'.",
+    "The Go 1.17+ file uses unsafe pointer arithmetic to read slice and string data. Hash64 on a nil or empty slice is safe because no bytes are read."
+  ],
+  "pick_this_over_siblings_when": "Pick it when you are in pure Go and need a stable, seeded, persistable 64-bit digest of short keys without cgo. wyhash and xxHash/XXH3 are the C originals of the same ideas; in C or C++ use them directly, or rapidhash, which has a Rust port. In Rust, foldhash, aHash and rapidhash are the in-language choices and are the better fits there.",
+  "verified_claims_summary": "The claim is the author's README table, repeated in the v0.2.0 release notes, which add that it came from `go test -bench=. -count=20` plus benchstat. It shows seeded CircleHash64f at 1.34-15.0 GB/s against an unnamed seeded XXH3 at 1.21-8.19 GB/s on 4-256-byte inputs, under Go 1.17.7 on darwin_amd64 with an Intel i7-1068NG7. That works out to 1.05-1.13x at 4-128 B and 1.44x/1.83x at 192/256 B. The benchmark code is not published, and the rurban/smhasher README has no CircleHash row, so the speed and SMHasher-pass claims are first-party only.",
+  "status_note": "The algorithm and code are frozen since v0.3.0 (March 2022; the last source edit was lint in August 2024), and 2025-2026 commits are dependabot/CI bumps. Still, it is Apache-2.0 with zero dependencies, digests are declared stable, and it runs in production in onflow/atree and the wider Flow Go stack, so depending on or vendoring v0.3.0 is low-risk. The promised fx and 128-bit variants remain unpublished.",
+  "sources_read": [
+    "https://github.com/fxamacker/circlehash",
+    "https://github.com/fxamacker/circlehash/blob/main/README.md",
+    "https://github.com/fxamacker/circlehash/blob/main/circlehash64.go",
+    "https://github.com/fxamacker/circlehash/blob/main/circlehash64_ref.go",
+    "https://github.com/fxamacker/circlehash/blob/main/utils.go",
+    "https://github.com/fxamacker/circlehash/blob/main/salts.go",
+    "https://github.com/fxamacker/circlehash/blob/main/go.mod",
+    "https://github.com/fxamacker/circlehash/blob/main/circlehash64_test.go",
+    "https://github.com/fxamacker/circlehash/blob/main/.github/workflows/ci.yml",
+    "https://github.com/fxamacker/circlehash/commits/main",
+    "https://github.com/fxamacker/circlehash/issues/15",
+    "https://github.com/fxamacker/circlehash/issues/16",
+    "https://github.com/fxamacker/circlehash/issues/17",
+    "https://github.com/fxamacker/circlehash/issues/23",
+    "https://github.com/fxamacker/circlehash/issues/25",
+    "https://github.com/fxamacker/circlehash/pull/8",
+    "https://github.com/fxamacker/circlehash/releases/tag/v0.3.0",
+    "https://github.com/fxamacker/circlehash/releases/tag/v0.2.0",
+    "https://github.com/fxamacker/circlehash/releases/tag/v0.1.0",
+    "https://github.com/onflow/atree/blob/main/go.mod",
+    "https://github.com/onflow/atree/blob/main/hash.go",
+    "https://github.com/onflow/atree/blob/main/map.go",
+    "https://github.com/onflow/atree/issues/103",
+    "https://github.com/onflow/atree/issues/199",
+    "https://github.com/onflow/atree/issues/243",
+    "https://github.com/zeebo/xxh3",
+    "https://raw.githubusercontent.com/rurban/smhasher/master/README.md",
+    "https://raw.githubusercontent.com/golang/go/master/src/hash/maphash/maphash.go",
+    "https://hn.algolia.com/api/v1/search?query=circlehash"
+  ],
+  "confidence": 0.55
+}

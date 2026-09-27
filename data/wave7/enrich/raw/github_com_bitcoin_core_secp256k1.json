@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/bitcoin-core/secp256k1",
+  "one_liner": "Bitcoin Core's secp256k1-only C signature library; ECDSA verification 2.5-5.5x faster than the 2015-era OpenSSL it replaced.",
+  "what_it_does": "A C library for ECDSA and BIP-340 Schnorr signatures, key generation, key tweaking, ECDH and public-key recovery, on the secp256k1 curve only. It is not a drop-in for OpenSSL's ECDSA/EVP calls. You create one context, parse keys and signatures into opaque 64-byte structs, and call functions such as secp256k1_ecdsa_sign and secp256k1_ecdsa_verify on 32-byte message hashes that you compute yourself. Optional modules add MuSig2 (BIP-327), ElligatorSwift (BIP-324) and Silent Payments (BIP-352).",
+  "how_it_is_fast": "Verification computes a*P + b*G in one pass using Strauss/Shamir interleaving over wNAF digits. It uses the curve's GLV endomorphism to split P's scalar into two ~128-bit halves, and reads multiples of G from a large static precomputed table (window 15 by default: two 512 KiB tables). Field elements use 5x52-bit limbs with lazy carries and __int128 multiplies, and inversions use a variant of Bernstein-Yang safegcd. The ECDSA r check runs in Jacobian coordinates with no inversion, and the subgroup check is skipped because the cofactor is 1. Signing and key generation use a constant-time signed-digit multi-comb (Hamburg, ePrint 2012/309) over an 86 KiB table with scalar blinding. There is no heap allocation and no per-curve dispatch.",
+  "when_to_use": [
+    "Verifying secp256k1 ECDSA or Schnorr signatures in bulk (block or transaction validation, indexers, exchanges, wallets). Bitcoin Core's switch made raw verification 2.5-5.5x faster and cut a full reindex from 8.0 h to 3.2 h.",
+    "Signing or deriving keys on shared or hostile hardware. Signing and key generation are constant-time with constant memory access, use RFC6979 deterministic nonces and support optional context blinding. That was Bitcoin Core's reason for moving signing off OpenSSL in v0.10.",
+    "Embedded or allocation-free builds. It needs only C89 with uint64_t, does no runtime heap allocation (preallocated and static contexts exist) and uses no floating point. Table sizes can be configured (signing table 2/22/86 KiB, verify window 2-24).",
+    "Bitcoin-protocol features that must match other implementations exactly: strict DER, lower-S only, x-only keys, MuSig2, BIP-324 ElligatorSwift and BIP-352 Silent Payments, all maintained by the same reviewers."
+  ],
+  "when_not_to_use": [
+    "Any curve other than secp256k1 (P-256, Ed25519, ...), or anything beyond signatures, ECDH and key tweaks, such as TLS, X.509 or generic EC math. OpenSSL is still needed for those.",
+    "Large-batch verification where you want a batch API. There is no public batch-verify call (issue #1087 is still open); the multi-scalar Strauss/Pippenger code is internal only.",
+    "Signatures from systems that emit high-S or loosely encoded DER. Verify rejects high-S, so you must normalize first (which accepts malleable signatures) or copy the unsupported contrib/lax_der_parsing.c into your code.",
+    "Tight flash or RAM budgets with default settings. The verify tables are about 1 MiB of static data plus the 86 KiB signing table. Shrinking ECMULT_WINDOW_SIZE or ECMULT_GEN_KB costs speed.",
+    "Cases where the published speedup must reflect current OpenSSL on your CPU. The only first-party OpenSSL comparison dates from 2015 and covers verification only; the repo's in-tree OpenSSL benchmark was removed in 2021 (PR #983)."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (Autotools, or CMake 3.22+, which builds shared by default); can also be vendored as a git subtree like Bitcoin Core does, or embedded via the secp256k1_objs CMake object library",
+    "dependencies": "none at runtime; the build needs Autotools or CMake 3.22+",
+    "min_toolchain": "C89/C90 compiler with uint64_t. The fast 64-bit path needs __int128, or MSVC 128-bit multiply on x86_64/arm64. Clang-cl is recommended on Windows.",
+    "platforms": "Portable C. 64-bit targets use the 5x52 field and 4x64 scalar code; 32-bit targets use 10x26 and 8x32. Optional x86_64 scalar assembly (on by default where detected) and experimental ARM32 field assembly. Big-endian s390x has run in CI.",
+    "thread_safety": "Documented in secp256k1.h: a created context can be used from many threads at once. Calls that take a non-const context (destroy, randomize, setting callbacks) need exclusive access, so randomize once at creation or guard it with a read-write lock.",
+    "drop_in_for_baseline": "partial — it performs the same secp256k1 ECDSA sign/verify/keygen math, but through its own C API (context object, opaque 64-byte key and signature structs, caller-hashed 32-byte messages), with strict DER parsing and lower-S-only verification. Code that calls OpenSSL ECDSA_do_verify or EVP must be rewritten."
+  },
+  "gotchas": [
+    "secp256k1_ecdsa_verify rejects valid high-S signatures by design. secp256k1_ecdsa_signature_parse_der is strict, and lax BER-style parsing exists only as a copy-in contrib snippet with no stability promise.",
+    "When a caller passes an illegal argument, the default callback prints to stderr and calls abort(). Long-running services should install their own illegal/error callbacks, either per context or by link-time replacement.",
+    "Call secp256k1_context_randomize before signing or key generation to get side-channel blinding. secp256k1_context_static cannot sign, the ECDH module gets no blinding, and creating a context per operation is expensive.",
+    "Constant-time behaviour depends on the compiler. Releases 0.3.1 and 0.3.2 were security fixes for timing leaks introduced by Clang >=14 and GCC 13.1. s390x has a known non-constant-time scalar comparison (issue #784). With Clang, the x86_64 assembly makes scalar_mul about 25% slower than the plain C build (issue #1682)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over UltrafastSecp256k1, the only same-curve sibling, when you want the reviewed implementation that Bitcoin Core deploys. Ultra's own benchmark shows only a 1.1-1.5x micro-benchmark gain over libsecp256k1 (Ultra built with LTO, libsecp256k1 without) and about 1% in ConnectBlock; it also had correctness fixes in Sep 2026 and was Concept-NACKed by Bitcoin Core. ENG25519 (Curve25519, AVX-512 IFMA) and the post-quantum siblings only matter if you can change the signature scheme.",
+  "verified_claims_summary": "Bitcoin Core's own PR #6954 (Nov 2015) reports ECDSA signature validation 2.5-5.5x faster than the OpenSSL it replaced, and the v0.12.0 release notes say over 5x on x86_64; OpenSSL version, compiler and CPU are not stated. Whole-node runs on one Xeon E31245 took IBD from about 7h37m to 3h48m (dbcache=3000), and a separate reindex fell from 8.0 h to 3.2 h. For a recent cross-check I derived ratios from UltrafastSecp256k1's 2026-09-07 benchmark JSON: on an i5-14400F with turbo off, GCC 14.2 -O3 -march=native, libsecp256k1 (Dec 2025 master) did verify in 41.5 us vs 400.3 us for system OpenSSL (version unrecorded; about 9.6x), sign in 29.4 vs 419.1 us (about 14x) and public-key generation in 21.1 vs 394.4 us (about 19x).",
+  "status_note": "Actively maintained: v0.8.0 shipped 2026-08-03, commits continue through 2026-09-25, and release tags are GPG-signed. MIT-licensed and easy to vendor. Still pre-1.0, and releases 0.3.0, 0.6.0, 0.7.0 and 0.8.0 each broke or trimmed the ABI, so pin a version.",
+  "sources_read": [
+    "https://github.com/bitcoin-core/secp256k1",
+    "https://github.com/bitcoin-core/secp256k1/blob/master/README.md",
+    "https://github.com/bitcoin-core/secp256k1/blob/master/include/secp256k1.h",
+    "https://github.com/bitcoin-core/secp256k1/blob/master/CHANGELOG.md",
+    "https://github.com/bitcoin-core/secp256k1/blob/master/SECURITY.md",
+    "https://github.com/bitcoin-core/secp256k1/blob/master/CMakeLists.txt",
+    "https://github.com/bitcoin-core/secp256k1/blob/master/src/ecmult_gen_impl.h",
+    "https://github.com/bitcoin-core/secp256k1/blob/master/src/ecmult_impl.h",
+    "https://github.com/bitcoin-core/secp256k1/blob/master/contrib/lax_der_parsing.h",
+    "https://github.com/bitcoin-core/secp256k1/issues/736",
+    "https://github.com/bitcoin-core/secp256k1/pull/983",
+    "https://github.com/bitcoin-core/secp256k1/issues/1682",
+    "https://github.com/bitcoin-core/secp256k1/issues/1700",
+    "https://github.com/bitcoin-core/secp256k1/issues/784",
+    "https://github.com/bitcoin-core/secp256k1/issues/1769",
+    "https://github.com/bitcoin-core/secp256k1/issues?q=batch+verification",
+    "https://github.com/bitcoin-core/secp256k1/issues?q=label%3Abug+is%3Aopen",
+    "https://github.com/bitcoin-core/secp256k1/issues?q=label%3Aside-channel+is%3Aopen",
+    "https://github.com/bitcoin-core/secp256k1/issues?q=label%3Aperformance+is%3Aopen",
+    "https://github.com/bitcoin/bitcoin/pull/6954",
+    "https://raw.githubusercontent.com/bitcoin/bitcoin/v0.12.0/doc/release-notes.md",
+    "https://raw.githubusercontent.com/bitcoin/bitcoin/v0.10.0/doc/release-notes.md",
+    "https://raw.githubusercontent.com/bitcoin/bitcoin/v0.12.0/src/secp256k1/src/bench_verify.c",
+    "https://raw.githubusercontent.com/shrec/UltrafastSecp256k1/main/docs/bench_unified_2026-09-07_gcc14_x86-64.json",
+    "https://hn.algolia.com/api/v1/search?query=libsecp256k1%20openssl"
+  ],
+  "confidence": 0.8
+}
