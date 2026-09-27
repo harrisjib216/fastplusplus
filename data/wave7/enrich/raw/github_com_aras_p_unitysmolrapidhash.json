@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/aras-p/unitysmolrapidhash",
+  "one_liner": "A single-file C#/Burst port of rapidhash V3 for Unity. On large buffers it is about 1.6-2.3x faster than Unity.Collections' Burst xxHash3.",
+  "what_it_does": "Ports the default rapidhash V3 function (the COMPACT loop, the FAST mix, seed 0) from Nicoshev/rapidhash rev 92731ee to Burst-compiled unsafe C# for Unity. It exposes a static `Rapidhash3.Hash64` returning a 64-bit ulong, with overloads for `void*`+length, `ref T`, `T[]`, `Span<T>` and `NativeArray<T>`, where T is unmanaged. The shape mirrors Unity.Collections' `xxHash3.Hash64`, but the return type is ulong rather than uint2. It ships as a UPM package, but the whole thing is one C# file you can copy.",
+  "how_it_is_fast": "It is the wyhash-family folded multiply (MUM): a 64x64->128-bit multiply with the halves XORed. The multiply comes from Burst's `Common.umul128` intrinsic, so each 16 input bytes cost one native `mul`. Inputs over 112 bytes run 7 independent multiply lanes per 112-byte block for instruction-level parallelism. Inputs of 16 bytes or less use two overlapping unaligned reads and one final mix. Unity.Collections' XXH3 port, by the author's account, runs 30-40% below native C, and this port does not show that penalty.",
+  "when_to_use": [
+    "Content hashing of large buffers inside Unity (mesh/texture/asset bytes, serialized blobs, cache or dedup keys of 1 KB and up), where you would otherwise call Unity.Collections xxHash3.Hash64.",
+    "Apple Silicon, where the gap is largest: on the M4 Max chart, Burst rapidhash plateaus around 63-68 GB/s vs about 28-29 GB/s for Burst XXH3.",
+    "Burst jobs that need an allocation-free, stateless 64-bit non-cryptographic hash over NativeArray or raw pointers.",
+    "Matching hashes produced by native C/C++ tooling that calls rapidhash V3's default `rapidhash()` with seed 0. By code comparison the port follows upstream, but no test vectors ship with it."
+  ],
+  "when_not_to_use": [
+    "Small keys (ints, small structs, short strings for NativeHashMap): nothing under 256 B was benchmarked. At 256 B, Burst rapidhash reaches only about 10-16 GB/s, against about 26 GB/s for native C rapidhash on the Ryzen.",
+    "Hashing untrusted input (server-side player data): there is no seed parameter and the secrets are fixed public constants, so the published seed-independent collisions for inputs over 16 bytes apply directly.",
+    "Streaming or incremental hashing, 128-bit output, or the rapidhash micro/nano variants: only the one-shot 64-bit function is ported.",
+    "Buffers far larger than cache on x86: from 32 MB up, everything is memory-bound (about 19-22 GB/s), and native XXH3 is slightly ahead at 64-128 MB on the Ryzen 5950X.",
+    "Projects that need a maintained, tested dependency: 8 commits made in one day, version 0.1.0, no tests and no issue history."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "com.unity.burst (1.8.23 in the lock file) for Common.umul128; engine Unity.Collections.LowLevel.Unsafe/NativeArray; 'allow unsafe code' enabled",
+    "min_toolchain": "Unity 2022.3 (benchmarked 2022.3.62f3 and 6.3) with Burst 1.8.23; package.json declares unity 6000.0",
+    "platforms": "little-endian only, per the source header; benchmarked only on Windows x64 (Ryzen 5950X) and macOS arm64 (M4 Max); other Burst targets not documented",
+    "thread_safety": "Stateless static functions with no shared data, so safe to call concurrently. Not documented explicitly.",
+    "drop_in_for_baseline": "partial — the call shape matches Unity.Collections xxHash3.Hash64(ptr, len), but it returns ulong instead of uint2, takes no seed, and produces different hash values, so stored XXH3 hashes do not carry over."
+  },
+  "gotchas": [
+    "`Hash64<T>(ref T)` and the array/span overloads hash the raw bytes of T, including any struct padding. Values that compare equal can hash differently unless padding is deterministic.",
+    "Only `Hash64(void*, long)` carries [BurstCompile]. Performance when Burst compilation is disabled or unavailable is not documented, and the umul128 intrinsic is the reason Burst is required.",
+    "package.json requires unity 6000.0 but the repo's project is 2022.3.62f3. On 2022.3, copy SmolRapidhash3.cs instead of installing the package.",
+    "The benchmark calls into Burst through a delegate from a non-Burst MonoBehaviour, and small sizes include that overhead. Unity 6.3 is noticeably faster than 2022.3 below 8 KB, for example about 16 vs 8 GB/s at 256 B on the M4 Max."
+  ],
+  "pick_this_over_siblings_when": "It is the only catalogued rapidhash/XXH3-class hasher that runs as plain Burst C# inside Unity. The C xxHash/wyhash/rapidhash libraries and the Rust crates (hoxxep rapidhash, foldhash, gxhash) need a native plugin, which gives better small-input speed if you can ship one. Pick it over Unity.Collections' built-in xxHash3 when inputs are about 1 KB or larger and you need neither seeds nor streaming.",
+  "verified_claims_summary": "The author's editor harness (Assets/HashBenchmark.cs, the large-input part of the xxHash/rapidhash bench, 256 B to 128 MB, best-of-rounds MB/s) compared Burst rapidhash with Unity.Collections' Burst xxHash3 in Unity 2022.3 and 6.3. It adds native C numbers from the upstream bench, built with VS 2022 17.14.23 on the Ryzen 5950X and Xcode 16.1 on the M4 Max (flags unstated). Read from the charts, Burst rapidhash plateaus near 38 vs 24 GB/s on the Ryzen and 63-68 vs 28-29 GB/s on the M4 Max. Against native C XXH3 it only ties from 16 KB up on the Ryzen (and trails beyond 32 MB), and on the M4 Max it only wins from about 2-8 KB up, depending on Unity version, so 'always faster' holds only Burst-vs-Burst.",
+  "status_note": "A one-day project (all 8 commits on 2026-03-07, v0.1.0, 17 stars, no issues) that is not otherwise maintained. It is MIT-licensed and one short C# file, so treat it as a reviewed snippet to vendor rather than a dependency.",
+  "sources_read": [
+    "https://github.com/aras-p/UnitySmolRapidhash",
+    "https://raw.githubusercontent.com/aras-p/UnitySmolRapidhash/main/readme.md",
+    "https://api.github.com/repos/aras-p/UnitySmolRapidhash",
+    "https://api.github.com/repos/aras-p/UnitySmolRapidhash/commits?per_page=20",
+    "https://api.github.com/repos/aras-p/UnitySmolRapidhash/git/trees/HEAD?recursive=1",
+    "https://github.com/aras-p/UnitySmolRapidhash/issues",
+    "https://github.com/aras-p/UnitySmolRapidhash/pulls",
+    "https://github.com/aras-p/UnitySmolRapidhash/blob/main/Packages/org.nesnausk.smol-rapidhash/Scripts/SmolRapidhash3.cs",
+    "https://github.com/aras-p/UnitySmolRapidhash/blob/main/Assets/HashBenchmark.cs",
+    "https://github.com/aras-p/UnitySmolRapidhash/blob/main/Packages/org.nesnausk.smol-rapidhash/package.json",
+    "https://github.com/aras-p/UnitySmolRapidhash/blob/main/Packages/org.nesnausk.smol-rapidhash/SmolRapidhash.asmdef",
+    "https://github.com/aras-p/UnitySmolRapidhash/blob/main/Packages/manifest.json",
+    "https://github.com/aras-p/UnitySmolRapidhash/blob/main/Packages/packages-lock.json",
+    "https://github.com/aras-p/UnitySmolRapidhash/blob/main/ProjectSettings/ProjectVersion.txt",
+    "https://raw.githubusercontent.com/aras-p/UnitySmolRapidhash/main/shot-graph-ryzen5950x.png",
+    "https://raw.githubusercontent.com/aras-p/UnitySmolRapidhash/main/shot-graph-m4max.png",
+    "https://raw.githubusercontent.com/Nicoshev/rapidhash/92731ee/rapidhash.h",
+    "https://liams.website/articles/seed-independent-collisions-on-wyhash-and-rapidhash"
+  ],
+  "confidence": 0.75
+}

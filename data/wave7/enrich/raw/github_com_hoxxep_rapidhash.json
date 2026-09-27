@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/hoxxep/rapidhash",
+  "one_liner": "Rust rapidhash (wyhash successor): portable 64-bit hasher, faster than XXH64/wyhash and faster than XXH3 up to about 4 KB inputs.",
+  "what_it_does": "A pure-Rust, no_std-capable implementation of Nicolas De Carli's rapidhash, the official successor to wyhash. It exposes two APIs. The in-memory API (`fast::`/`quality::` RapidHasher, RandomState, GlobalState, SeedableState, and RapidHashMap/RapidHashSet) implements `std::hash::Hasher`/`BuildHasher` for HashMap and HashSet. The portable API (`v1`/`v2`/`v3` functions, `RapidStreamHasherV3`, and file/`Read` hashing) gives outputs that are stable and bit-compatible with the C++ reference. A `cargo install rapidhash` CLI hashes files or stdin.",
+  "how_it_is_fast": "The core step is the wyhash-family folded multiply (MUM): a 64x64->128-bit multiply whose low and high halves are XORed (`rapid_mix`), one per 16 input bytes. Inputs of 16 bytes or less take two overlapping unaligned reads and a single multiply-finish. Inputs of 17-48 bytes stay on a short path. Inputs over 400 bytes go to an out-of-line cold path that runs 7 independent multiply lanes over 224-byte blocks for instruction-level parallelism. The Rust hasher also buffers integer writes in a 128-bit 'sponge', a construction borrowed from foldhash, so a tuple of small ints costs one mix. It relies on `#[inline(always)]` hot paths, `#[cold]`/`#[inline(never)]` long paths and bounds-check elision.",
+  "when_to_use": [
+    "HashMap/HashSet keys that are short strings, UUIDs, URLs or mixed structs. In the Xeon 8488C foldhash suite, hash-only strenglishword costs 1.75 vs 3.54 for foldhash-f and 9.51 for SipHash (lower is better).",
+    "Replacing Rust's default SipHash-1-3 when you only need minimal HashDoS resistance: suite geometric mean 4.52 vs 20.24 for SipHash on Xeon 8488C (portable build).",
+    "Libraries and apps that must build on any target without AES-NI/NEON or target-cpu flags (x86-64, aarch64, 32-bit, wasm, no_std), where gxhash will not compile.",
+    "Stable, cross-language digests (for example, Rust and C++ services agreeing on a key hash) via `rapidhash::v3`, including streaming and `Read`-based file hashing.",
+    "Input sizes from a few bytes to about 4 KB, where it beats the twox-hash XXH3-64 and XXH64 and wyhash crates in the author's charts."
+  ],
+  "when_not_to_use": [
+    "Bulk hashing of large buffers on x86, especially AMD. In the author's own EPYC 9R14 chart, XXH3-64 wins from 4 KB up (about 51.4 vs 31.1 GB/s at 64 KB), and on Xeon 8488C the two tie at 64 KB. Use XXH3 or gxhash for checksumming large blobs.",
+    "Keys chosen by an attacker who can observe outputs or timings. The README calls it only 'minimally DoS resistant', and seed-independent collisions can be built for inputs over 16 bytes when the secrets are known, which is the case for C++-compatible default secrets. Use SipHash there.",
+    "Anything that persists, shares or compares RapidHasher/RandomState outputs across processes, platforms or crate versions. That output may change in minor releases, and 32-bit targets take a different multiply path.",
+    "Pure small-integer keys where FxHash is acceptable: fxhash is faster on u32/u64 hash-only (0.53 vs 0.66). But fxhash falls apart on high-bit-only u64 keys (46.99 vs 2.15 lookup-hit), so rapidhash is the safer default.",
+    "Cryptographic uses of any kind (MACs, content addressing against adversaries, signatures)."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "rustversion (always); optional getrandom 0.3/0.4 (getrandom_03/getrandom_04 features) and rand_core 0.9 (deprecated rng feature)",
+    "min_toolchain": "Rust 1.71.0 (MSRV); optional `nightly` feature for write_str/likely hints",
+    "platforms": "any. no_std capable and needs no SIMD/AES. Tuned for x86-64 and aarch64. 32-bit and wasm use an XOR-approximated 128-bit multiply for the in-memory hasher; wasm uses a 'COMPACT' loop.",
+    "thread_safety": "Not documented explicitly. RapidHasher is a small Copy value (seed, &secrets, u128 sponge) with no shared mutable state. Under std, RandomState seeding uses a thread-local counter; v4.5.0/4.5.1 fixed duplicate seeds across recycled thread stacks and on std-without-atomics targets.",
+    "drop_in_for_baseline": "partial — as a HashMap BuildHasher it replaces twox-hash's BuildHasherDefault<XxHash3_64/XxHash64> or wyhash's builder with a one-line type change, but it is a different algorithm: it cannot reproduce stored XXH3/XXH64 digests or interoperate with C xxHash."
+  },
+  "gotchas": [
+    "Two output contracts: only `rapidhash::v1/v2/v3` functions are guaranteed stable (and C++-compatible only with `RapidSecrets::seed_cpp`/DEFAULT_RAPID_SECRETS); `fast`/`quality` hashers may change output in any minor release.",
+    "`fast::` skips the final avalanche mix. Use `quality::` when statistical quality matters, such as HyperLogLog, MinHash or low-bit bucketing.",
+    "Without the `std` feature, RandomState seeds only from the stack address (ASLR). On wasm32-unknown-unknown, HashDoS resistance needs `getrandom_04` plus getrandom's wasm_js backend.",
+    "4.0.0 changed rapidhash_v3 micro/nano output for 5-7 byte inputs, following the C++ V3 re-release. Hashes persisted by 3.x for those lengths do not match."
+  ],
+  "pick_this_over_siblings_when": "Over foldhash when string-heavy keys dominate (roughly 2x on short strings in the suite) or when you also need stable/streaming hashes. Over gxhash when you cannot guarantee AES instructions or target-cpu=native. Over aHash when you want portable output (suite geomean 4.52 vs 6.33). Over wyhash, whose mixing it shares, because it is faster on medium and large inputs (about 31.6 vs 19.3 GB/s at 64 KB on Xeon 8488C). Prefer xxHash XXH3 for multi-KB bulk hashing on x86.",
+  "verified_claims_summary": "The author ran cargo criterion benchmarks (opt-level 3, fat LTO, codegen-units=1, rustc version not stated), portable and with target-cpu=native, on M1 Max, Graviton3, EPYC 9R14 and Xeon 8488C, against Rust crates (twox-hash XXH3-64/XXH64 driven through the Hasher trait, wyhash, foldhash, gxhash, and others). The SVG-derived Xeon 8488C portable figures, which are approximate, are about 30.5 vs 25.0 GB/s over XXH3-64 at 4 KB and about 31.6 vs 32.2 at 64 KB, while XXH3 wins from 4 KB up on EPYC 9R14. The foldhash-suite geometric mean is 4.52 vs 4.95 for foldhash-f and 20.24 for SipHash.",
+  "status_note": "Actively maintained: v4.5.1 released 2026-07-03, about 39.5M crates.io downloads (23.5M recent), fuzzed and cross-tested against the C++ reference. It is dual MIT/Apache-2.0 and a one-maintainer project, with a planned 5.0 that removes deprecated features and `Copy` on state types.",
+  "sources_read": [
+    "https://github.com/hoxxep/rapidhash",
+    "https://raw.githubusercontent.com/hoxxep/rapidhash/master/README.md",
+    "https://api.github.com/repos/hoxxep/rapidhash",
+    "https://api.github.com/repos/hoxxep/rapidhash/commits?per_page=5",
+    "https://api.github.com/repos/hoxxep/rapidhash/releases?per_page=5",
+    "https://api.github.com/repos/hoxxep/rapidhash/git/trees/HEAD?recursive=1",
+    "https://github.com/hoxxep/rapidhash/blob/master/Cargo.toml",
+    "https://github.com/hoxxep/rapidhash/blob/master/CHANGELOG.md",
+    "https://github.com/hoxxep/rapidhash/blob/master/rapidhash/Cargo.toml",
+    "https://github.com/hoxxep/rapidhash/blob/master/rapidhash/src/lib.rs",
+    "https://github.com/hoxxep/rapidhash/blob/master/rapidhash/src/fast.rs",
+    "https://github.com/hoxxep/rapidhash/blob/master/rapidhash/src/quality.rs",
+    "https://github.com/hoxxep/rapidhash/blob/master/rapidhash/src/util/mix.rs",
+    "https://github.com/hoxxep/rapidhash/blob/master/rapidhash/src/inner/mix_np.rs",
+    "https://github.com/hoxxep/rapidhash/blob/master/rapidhash/src/inner/rapid_hasher.rs",
+    "https://github.com/hoxxep/rapidhash/blob/master/rapidhash/src/inner/rapid_const.rs",
+    "https://github.com/hoxxep/rapidhash/blob/master/rapidhash/src/inner/seeding.rs",
+    "https://github.com/hoxxep/rapidhash/blob/master/rapidhash/src/v3/mod.rs",
+    "https://github.com/hoxxep/rapidhash/blob/master/rapidhash/src/v3/rapid_const.rs",
+    "https://github.com/hoxxep/rapidhash/blob/master/rapidhash-bench/benches/bench/basic.rs",
+    "https://github.com/hoxxep/rapidhash/blob/master/docs/run_benchmarks.sh",
+    "https://raw.githubusercontent.com/hoxxep/rapidhash/master/docs/bench_hash_x86_64_intel_xeon_8488c.txt",
+    "https://raw.githubusercontent.com/hoxxep/rapidhash/master/docs/bench_hash_x86_64_intel_xeon_8488c.svg",
+    "https://github.com/hoxxep/rapidhash/issues",
+    "https://github.com/hoxxep/rapidhash/issues/90",
+    "https://github.com/hoxxep/rapidhash/issues/46",
+    "https://github.com/hoxxep/rapidhash/issues/59",
+    "https://crates.io/api/v1/crates/rapidhash",
+    "https://liams.website/articles/seed-independent-collisions-on-wyhash-and-rapidhash"
+  ],
+  "confidence": 0.8
+}
