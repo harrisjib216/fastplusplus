@@ -1,0 +1,53 @@
+{
+  "id": "https://arxiv.org/abs/2605.23815",
+  "one_liner": "Paper-only RocksDB v8.10 extension replacing SkipList memtable and fence-pointer index with learned indexes; up to 1.77x reads.",
+  "what_it_does": "MountDB is a McGill research extension of RocksDB v8.10.0 that replaces only RocksDB's index components. The Memtable's SkipList becomes an ALEX+ learned index whose leaves point at the arena-stored records, and each SST's fence pointer table becomes a block-aware PGM index. The paper keeps RocksDB's read and write paths, SST data-block layout, Bloom filters and compaction, and it benchmarks through the stock db_bench. No code has been released, so today it is a design you would have to reimplement, not a library you can link.",
+  "how_it_is_fast": "In memory it uses ALEX+ (the concurrent variant of ALEX, with gapped arrays and model-based placement) plus 'skeletonization': every 10 flushes (phi=10) a background task bulk-loads ALEX+ from the immutable Memtable's sorted keys and strips payloads, counters and locks. New Memtables then start from that model hierarchy and gap bitmap instead of cold. Without this, a 64 MB ALEX+ Memtable is flushed about every 0.4 s, before it converges, and ends up no better than SkipList. On disk, PGM (Fence) trains a PGM-index with epsilon=1 on only the first key of each block. A lookup therefore predicts a block and reads it together with both neighbours in one FilePrefetchBuffer I/O, and the resulting index is about 172 KB per 64 MB SST, versus 296 KB for RocksDB's fence table.",
+  "when_to_use": [
+    "You are designing or evaluating learned indexing inside an LSM store and want a worked recipe (an ALEX+ Memtable with skeleton reuse, and PGM over fence keys) that leaves RocksDB's SST and block format unchanged.",
+    "Read-heavy RocksDB workloads with numeric 8-byte keys and a mostly cached working set: up to 1.77x over RocksDB on read-only, and 1.34-1.52x over all baselines when the data is fully cached.",
+    "Small values (16-64 B): up to 2.8x read and about 1.5x write throughput over RocksDB at the smallest sizes, and 1.3-1.6x reads on the mixed-size UDB, ZippyDB and UP2X traces.",
+    "Write-heavy ingest with smooth or slowly shifting key distributions, where the reused skeleton stays accurate: up to 1.3x write-only, and 0.95-1.05 vs 0.6-0.7 Mops/s (98 s vs 161 s) in the microbenchmark that cycles through six distributions."
+  ],
+  "when_not_to_use": [
+    "You need working code. Nothing is released: the lead author's GitHub has only an unmodified RocksDB fork and a DobLIX port, so you would reimplement MountDB against RocksDB internals yourself.",
+    "String or variable-length keys: the design and evaluation cover numeric keys only, and learned string indexing is left to future work.",
+    "I/O-bound reads: with use_direct_reads, throughput was 'virtually the same' across all systems, and with only 10% of the data cached the gain shrinks to 1.2-1.3x.",
+    "Irregular key distributions or abrupt distribution shifts: write gains narrow to about 1.2x on OSM, and a never-refreshed skeleton lost throughput when the distribution changed.",
+    "Production use: it is an unreviewed preprint pinned to RocksDB v8.10.0, evaluated with compression disabled, and it never discusses deletes, recovery or the rest of RocksDB's feature surface."
+  ],
+  "integration": {
+    "form": "source-drop (unreleased; described as a patched RocksDB v8.10.0 that swaps the Memtable index and the SST index block)",
+    "dependencies": "not documented (unreleased). Per the paper: RocksDB v8.10.0, ALEX+ (the 'alexol' concurrent ALEX in the GRE benchmark repo, which has no license file) and the PGM-index (Apache-2.0).",
+    "min_toolchain": "not documented (no compiler, version or flags are given)",
+    "platforms": "not documented. It was evaluated only on x86-64 (2x Xeon E5-2690 v4, 126 GB RAM, 500 GB NVMe SSD, Ubuntu 22.04.5).",
+    "thread_safety": "Per the paper, the ALEX+ Memtable supports concurrent reads and inserts (an optimistic lock per data node, shared-exclusive locks on internal nodes). It was run with 16 client threads and 8 compaction threads, and skeleton building runs as a background task during flush. None of this can be checked without code.",
+    "drop_in_for_baseline": "partial — explain: it is designed to keep RocksDB's API, read and write paths and SST data-block format, and it replaces only the Memtable index and the SST index block. But no code exists, keys must be numeric, and the paper does not say whether its SSTs stay readable by stock RocksDB."
+  },
+  "gotchas": [
+    "The abstract's 'up to 1.5x write, 2.1x read' is measured against DobLIX and TridentKV (the 2.1x only at the smallest value size), not against RocksDB. Against stock RocksDB at the default 100 B values the figures are 1.3x write-only, 1.44x balanced and 1.77x read-only.",
+    "PGM (Fence) always reads three blocks (the predicted one plus or minus one), so MountDB cuts the maximum block size to a third of the default. The paper says the baselines had identical Memtable, cache and compaction settings, but it does not say whether their block size was matched.",
+    "Skeletons are a partial deep copy of the previous Memtable's ALEX+ nodes (keys and gap bitmap, with null payloads). Their memory cost is not quantified, and the refresh interval phi=10 was chosen empirically.",
+    "The authors ported the DobLIX and TridentKV baselines from RocksDB 5.x to 8.10.0 themselves, and the DobLIX code lacks its paper's RL tuner, so the learned-LSM comparisons are against reduced versions."
+  ],
+  "pick_this_over_siblings_when": "Compared with Bourbon, MountDB's design also speeds up writes (Bourbon indexes only the disk component and depends on WiscKey's key-value separation) and keeps RocksDB's SST format, but Bourbon ships an artifact and MountDB ships none. If you need something runnable against RocksDB today, the practical routes are TerarkDB (a RocksDB fork with code) or building directly on the ALEX and PGM-index libraries.",
+  "verified_claims_summary": "The authors ran db_bench on a 2x Xeon E5-2690 v4 machine with an NVMe SSD (16 client threads, 64 MB Memtables, compression off, 8-byte keys and 100-byte values, about 55 GB and 500M operations per dataset). They report up to 1.3x write-only, 1.44x balanced and 1.77x read-only throughput over stock RocksDB v8.10.0, rising to 2.8x for reads at 16 B values. No compiler or flags are given, and no independent reproduction exists.",
+  "status_note": "This is an arXiv preprint from McGill (v1, 22 May 2026; not peer-reviewed as of 2026-09-26) with no released code or license, so it is a reference design only, and its maintenance status is unknown.",
+  "sources_read": [
+    "https://arxiv.org/abs/2605.23815",
+    "http://export.arxiv.org/api/query?id_list=2605.23815",
+    "https://arxiv.org/pdf/2605.23815v1",
+    "https://api.crossref.org/works?query.bibliographic=MountDB+learned+indexing+RocksDB&rows=5",
+    "https://hn.algolia.com/api/v1/search?query=%22MountDB%22",
+    "https://hn.algolia.com/api/v1/search?query=2605.23815",
+    "https://github.com/search?q=MountDB&type=repositories",
+    "https://github.com/ShubhamVashisth7",
+    "https://github.com/ShubhamVashisth7/rocksdb",
+    "https://github.com/ShubhamVashisth7/DobLIX/tree/copilot/integrate-learned-index-in-rocksdb",
+    "https://github.com/theoanab",
+    "https://github.com/gre4index/GRE",
+    "https://github.com/gvinciguerra/PGM-index",
+    "https://github.com/microsoft/ALEX"
+  ],
+  "confidence": 0.55
+}

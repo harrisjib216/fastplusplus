@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/cockroachdb/pebble",
+  "one_liner": "Go LSM key-value store that replaced RocksDB inside CockroachDB; meets or beats RocksDB on YCSB in vendor benchmarks.",
+  "what_it_does": "Pebble is an embedded, ordered, LSM-based key-value store written in Go. It descends from golang/leveldb and keeps RocksDB's file formats and concepts: atomic and indexed batches, bounded and prefix iterators, snapshots, merge operators, range deletions, range keys, SST ingestion and checkpoints. The API is Go-native (pebble.Open(dir, *Options), Set/Get/Delete, NewBatch, NewIter), and Get returns a value plus a closer that you must release. It is not a drop-in for RocksDB: it implements only the feature set CockroachDB needs, v1 can open RocksDB 6.2.1 databases only within that subset, and v2 and later cannot open RocksDB databases at all.",
+  "how_it_is_fast": "RocksDB groups concurrent commits into leader/follower batch groups. Pebble instead copies each batch into the WAL buffer under a short mutex, applies it to the lock-free memtable skiplist concurrently, and publishes visible sequence numbers in order through a lock-free single-producer multi-consumer commit queue, which removes the group-concatenation copy and most thread handoffs. The block cache is split into 4 x NumCPU CLOCK-Pro shards whose memory comes from C malloc, outside the Go heap so the GC never scans it; the vendor post credits this cache concurrency for the ~1.85x gap on read-only YCSB C. Smaller contributors: L0 sublevels with flush splitting, a copy-on-write B-tree for file metadata, delete-only compactions under range tombstones, block-property filters that skip blocks, separate flush and compaction pacing, and on newer formats columnar sstable blocks and value separation into blob files; inside a Go program it also avoids a cgo crossing on every call.",
+  "when_to_use": [
+    "A Go service that needs an embedded ordered KV store with RocksDB-style semantics (snapshots, range deletes, merge operators, SST ingestion, prefix bloom filters) without calling C++ through cgo on every operation or maintaining a C++ build.",
+    "Read-heavy, highly concurrent workloads whose working set fits in the block cache. This is where the storage-only comparison showed its largest gain (~1.85x on YCSB C).",
+    "Write-heavy LSM workloads where read amplification in L0 hurts during write bursts: L0 sublevels and flush splitting target exactly this case.",
+    "Large block caches (tens of GB) in a Go process. Cache and memtable memory live outside the Go heap, which avoids the ~2x RSS blowup the docs describe for GC-managed caches.",
+    "You want an engine that has been the production default of CockroachDB since v20.2 (Nov 2020), with metamorphic and crash testing plus nightly benchmarks."
+  ],
+  "when_not_to_use": [
+    "C, C++ or Rust applications: it is a Go library with no C/C++ API, so from those languages RocksDB (or a RocksDB derivative) remains the practical choice.",
+    "You need RocksDB features Pebble omits: column families, transactions, backups, universal or FIFO compaction, tailing iterators, persistent cache, plain or hash table formats, sub-compactions.",
+    "Migrating an existing RocksDB database: v2+ refuses RocksDB-generated DBs, the path runs through v1 plus format-major-version upgrades, and the README warns that unsupported RocksDB features can silently corrupt data.",
+    "Storage-bound or out-of-cache workloads, or when judging end-to-end impact: the published comparison covers only in-memory datasets, and at the CockroachDB cluster level the gain was about 0-7% (workload E tied).",
+    "You depend on direct I/O or io_uring. Neither is part of the design: an io_uring prototype is only an open issue (#4684), and in a 2020 HN thread a maintainer said direct I/O hurt performance in their experiments."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "Go modules only, including DataDog/zstd (cgo) or a pure-Go zstd fallback without cgo, golang/snappy, minio/minlz, cockroachdb/errors, cockroachdb/swiss, prometheus client_golang, xxhash/xxh3, google/btree. cgo is optional: with it, cache and memtable buffers come from C malloc; without it, from Go sync.Pool size classes.",
+    "min_toolchain": "Go 1.23 for the v2.1.7 tag (module path github.com/cockroachdb/pebble/v2); master's go.mod requires Go 1.25.3 and uses the unsuffixed path; CI runs Go 1.26",
+    "platforms": "PR CI: Linux amd64 (including no-cgo and race builds) and macOS 14. Nightly: Linux 386, Linux arm64, Windows, and s390x under qemu (big-endian).",
+    "thread_safety": "Get and NewIter are safe from concurrent goroutines, and concurrent commits go through the commit pipeline. A Batch is not safe for concurrent use (use one per goroutine). The DB must not be closed while any iterator is open.",
+    "drop_in_for_baseline": "partial — the Go API mirrors RocksDB concepts and v1 can read RocksDB 6.2.1-format DBs within CockroachDB's feature subset, but there is no C++ API and v2+ cannot open RocksDB databases"
+  },
+  "gotchas": [
+    "Get returns (value, closer, err), and you must call closer.Close(). Cache blocks are reference-counted, manually allocated memory, so a missed Close is a real leak rather than garbage the GC will collect.",
+    "Defaults are small and conservative: 8 MB block cache, 4 MB memtable, and FormatMajorVersion defaults to the oldest supported format (FormatFlushableIngest). Columnar blocks and value separation stay off until you ratchet the format, and ratcheting is permanent.",
+    "Batches are capped at 4 GB, and indexed batches need extra skiplist memory beyond that. The docs point to DB.Ingest of prebuilt sstables for larger atomic writes.",
+    "The docs lag the code: the README's format table ends at FormatColumnarBlocks, while master defines newer formats (FormatValueSeparation, FormatV2BlobFiles, and others). Open issues include SST corruption reports on GCP Hyperdisk (#5726), an unexplained CRC32C mismatch (#6175) and an iterator-state bug in DeletableValueMerger (#6168)."
+  ],
+  "pick_this_over_siblings_when": "Pick Pebble over the other Go stores in the catalog, Badger and the lookup-focused Pogreb, when you need full RocksDB-style LSM semantics (range tombstones, merge operators, snapshots, SST ingestion) and CockroachDB's production track record, even though Badger's catalogued speedups over RocksDB are much larger. In C++ services, a RocksDB-derived option like Speedb or the Titan plugin keeps you inside the RocksDB ecosystem.",
+  "verified_claims_summary": "A 2020-09-15 Cockroach Labs post shows unlabeled YCSB bar charts: on a 3-node CockroachDB cluster (A-F) Pebble beat RocksDB by about 0-7% (E tied), and in a storage-engine-only run through the public cmd/pebble YCSB tool (A-E) by about 1.2-1.3x, with about 1.85x on read-only C, all on in-memory datasets. The post names no CPU, instance type, Go or RocksDB version, or flags (RocksDB was presumably 6.2.1, the last version CockroachDB used), and it lists avoiding the cgo boundary as an advantage, so part of the gap may be call overhead; the project's nightly benchmark page tracks Pebble alone, with no RocksDB line.",
+  "status_note": "Actively maintained (last master commit 2026-09-10, v2.1.7 tagged 2026-08-24, release branches through crl-release-26.2) and usable as an ordinary BSD-3-Clause Go module, though its roadmap and format changes follow CockroachDB's needs.",
+  "sources_read": [
+    "https://github.com/cockroachdb/pebble",
+    "https://github.com/cockroachdb/pebble/blob/master/README.md",
+    "https://github.com/cockroachdb/pebble/blob/master/docs/rocksdb.md",
+    "https://github.com/cockroachdb/pebble/blob/master/docs/memory.md",
+    "https://github.com/cockroachdb/pebble/blob/master/go.mod",
+    "https://github.com/cockroachdb/pebble/blob/v2.1.7/go.mod",
+    "https://github.com/cockroachdb/pebble/blob/master/internal/cache/clockpro.go",
+    "https://github.com/cockroachdb/pebble/blob/master/internal/cache/cache.go",
+    "https://github.com/cockroachdb/pebble/blob/master/internal/manual/manual.go",
+    "https://github.com/cockroachdb/pebble/blob/master/internal/manual/manual_cgo.go",
+    "https://github.com/cockroachdb/pebble/blob/master/internal/manual/manual_nocgo.go",
+    "https://github.com/cockroachdb/pebble/blob/master/db.go",
+    "https://github.com/cockroachdb/pebble/blob/master/batch.go",
+    "https://github.com/cockroachdb/pebble/blob/master/iterator.go",
+    "https://github.com/cockroachdb/pebble/blob/master/options.go",
+    "https://github.com/cockroachdb/pebble/blob/master/format_major_version.go",
+    "https://github.com/cockroachdb/pebble/blob/master/cmd/pebble/ycsb.go",
+    "https://github.com/cockroachdb/pebble/blob/master/bench/ycsb.go",
+    "https://github.com/cockroachdb/pebble/blob/master/.github/workflows/ci.yaml",
+    "https://github.com/cockroachdb/pebble/blob/master/.github/workflows/tests.yaml",
+    "https://github.com/cockroachdb/pebble/blob/master/.github/workflows/s390x.yaml",
+    "https://github.com/cockroachdb/pebble/tags",
+    "https://github.com/cockroachdb/pebble/issues?q=is:open+label:C-bug",
+    "https://github.com/cockroachdb/pebble/issues?q=is:open+label:C-performance",
+    "https://github.com/cockroachdb/pebble/issues?q=is:open+corruption",
+    "https://www.cockroachlabs.com/blog/pebble-rocksdb-kv-store/",
+    "https://cockroachdb.github.io/pebble/",
+    "https://hn.algolia.com/api/v1/search?query=pebble%20rocksdb&tags=story",
+    "https://news.ycombinator.com/item?id=24484320"
+  ],
+  "confidence": 0.8
+}
