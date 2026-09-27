@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/jbapple/halftimehash",
+  "one_liner": "Keyed almost-universal C++ hash for long strings; ~1.3-1.4x xxh128 on 256 KiB inputs with AVX-512.",
+  "what_it_does": "HalftimeHash is a header-only C++ family of seeded hash functions with a provable collision bound (almost-universal), meant for collapsing long strings (the header says >1KB) into short hash values. The easy API is four one-shot functions, HalftimeHashStyle64/128/256/512(entropy, input, length), each returning a uint64_t; the caller must supply a random key array of kEntropyBytesNeeded bytes (8,866 64-bit words, about 69 KiB). Wider 16/24/32/40-byte outputs exist only in the halftime_hash::advanced namespace. It is not a drop-in for XXH3/XXH128: there is no seed-only mode, no streaming state and no 128-bit easy API.",
+  "how_it_is_fast": "It builds on Nandi's Encode-Hash-Combine (EHC) and the Badger tree hash. Input blocks are expanded with a small erasure code, hashed with NH (32x32->64-bit multiplies on vector lanes), then combined by multiplying with small integer matrices implemented as shifts and adds, so extra output width costs few extra multiplications. Leaves feed a fanout-8 tree of NH nodes and a final Toeplitz NH plus tabulation step. There are no 64x64->128 or carryless multiplies, so every step maps onto SSE2/AVX2/AVX-512 _mul_epu32 (and NEON vmull_u32).",
+  "when_to_use": [
+    "Hashing long buffers (roughly 1.5 KB to a few MB) where throughput matters: in the repo's i7-7800X data HalftimeHash24 runs about 54 B/ns at 128-560 KB, against about 35 B/ns for clhash and UMASH.",
+    "When you need a keyed hash with a stated collision bound (universe collapsing before a short-input hash, one-time authentication, or DoS-resistant bucketing of large blobs) rather than an unkeyed heuristic hash.",
+    "x86-64 builds you compile with -march=native or an explicit AVX-512/AVX2 target; use Style512 on AVX-512 and Style256 on AVX2-only chips such as AMD Zen 2.",
+    "Targets without fast 64-bit widening multiply, since the design deliberately uses only 32x32->64-bit products."
+  ],
+  "when_not_to_use": [
+    "Short keys and hash-table lookups: in the repo's size sweep HalftimeHash24 is slower than clhash and UMASH below about 1 KB (at 229 bytes, 10.9 B/ns vs 17.6 and 19.1), and every call reads from a large key array.",
+    "arm64 builds: on main the NEON dispatch references undeclared V2Neon/V3Neon/V4Neon, so example.cpp fails to compile with Apple clang 17 (issue #1; the fix in PR #2 is still unmerged).",
+    "Anything relying on the advanced 24-byte functions (advanced::V1<3> to V4<3>): an external audit (issue #3) shows Encode3 lacks its intended code distance, giving about 2^-32 collision probability for a specific message pair instead of about 2^-96.",
+    "When you need streaming/incremental hashing, a portable MSVC build, or runtime CPU dispatch; none are provided.",
+    "When you want an actively maintained dependency: no default-branch commit since 2022-05-28, and open correctness reports have no fixes merged."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (umash and StronglyUniversalStringHashing submodules are only for the benchmarks)",
+    "min_toolchain": "C++14 (Makefile uses -std=c++14); paper used Clang++ 11.0.1, repo also has GCC 10 result logs; relies on GCC/Clang vector-subscript extensions and #pragma GCC unroll",
+    "platforms": "x86-64 (SSE2, AVX2 or AVX-512 selected at compile time) plus a scalar fallback; arm64 NEON path currently fails to compile on main",
+    "thread_safety": "Not documented; the functions keep no state beyond a caller-owned const key array, so concurrent calls look safe",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "You must generate and keep about 69 KiB of random key material (kEntropyBytesNeeded). The example seeds it from a default-constructed mt19937_64, which is fixed and public; use a real random source if you need the collision guarantee.",
+    "The ISA is picked at compile time only; there is no runtime dispatch. Each Style function fixes its block width, so Style512 still works on AVX2 or SSE2 (emulated with repeated blocks) and gives the same outputs, only more slowly.",
+    "TabulateAfter indexes table[8*(i+1)] through a reference declared [1+width][256]. That is out-of-bounds by the C++ type rules, and UBSan flags it on a single Style64 call (issue #3), even though the tested builds compute the intended addresses.",
+    "The paper's headline bound (more than 83 bits for HalftimeHash24) rests on a proof that issue #3 says needs repair. The public Style wrappers were separately certified at a 63-bit bound, with input-length caps of about 2.76 GB x 1/2/4/8 for Style64/128/256/512."
+  ],
+  "pick_this_over_siblings_when": "Pick it over UMASH or CLHash when inputs are consistently over about 1.5 KB and you can build for AVX2/AVX-512; those two are faster below about 1 KB and are better maintained. Pick xxHash (XXH3/XXH128) instead when you need a small seed, short-key speed, streaming or broad platform support, not a provable collision bound.",
+  "verified_claims_summary": "In the WADS 2021 paper's SMHasher speed test on 256 KiB strings on an Intel i7-7800X (AVX-512, Clang++ 11.0.1, SMHasher build flags unstated), HalftimeHash16 reached 16.9 bytes/cycle and HalftimeHash24 15.7, against 12.2 for xxh128 and 12.8 for xxh3 (about 1.39x and 1.29x over xxh128); HalftimeHash40 was slower at 10.0. The repo's own -O3 -march=native harness shows it beating clhash and UMASH only on inputs over about 1.5 KB. On an AMD EPYC 7R32 (no AVX-512), the paper reports up to 2x over clhash and UMASH using 256-bit blocks.",
+  "status_note": "No commits on main since 2022-05-28; the author replied on the September 2026 audit issues but merged no fixes. It is Apache-2.0 and about 1,200 lines in one header, so vendoring is easy, but apply the NEON dispatch fix (PR #2) yourself and avoid the advanced 24-byte functions.",
+  "sources_read": [
+    "https://github.com/jbapple/HalftimeHash",
+    "https://github.com/jbapple/HalftimeHash/blob/main/README.md",
+    "https://github.com/jbapple/HalftimeHash/blob/main/halftime-hash.hpp",
+    "https://github.com/jbapple/HalftimeHash/blob/main/halftime-hash.h",
+    "https://github.com/jbapple/HalftimeHash/blob/main/halftime-hash.cpp",
+    "https://github.com/jbapple/HalftimeHash/blob/main/example.cpp",
+    "https://github.com/jbapple/HalftimeHash/blob/main/Makefile",
+    "https://github.com/jbapple/HalftimeHash/blob/main/smhasher-speed.txt",
+    "https://github.com/jbapple/HalftimeHash/blob/main/.gitmodules",
+    "https://github.com/jbapple/HalftimeHash/blob/main/deny-list.txt",
+    "https://github.com/jbapple/HalftimeHash/blob/main/halftime-hash.tex",
+    "https://github.com/jbapple/HalftimeHash/blob/main/plot.gnu",
+    "https://github.com/jbapple/HalftimeHash/blob/main/adu-full-001.txt",
+    "https://github.com/jbapple/HalftimeHash/issues/1",
+    "https://github.com/jbapple/HalftimeHash/issues/3",
+    "https://github.com/jbapple/HalftimeHash/pull/2",
+    "https://github.com/jbapple/HalftimeHash/commits/main",
+    "https://github.com/jbapple/HalftimeHash/branches",
+    "https://thomasahle.com/blog/adversarial-examples-for-hashes/"
+  ],
+  "confidence": 0.8
+}
