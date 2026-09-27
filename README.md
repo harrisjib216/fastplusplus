@@ -7,11 +7,11 @@ claim against the cited page before it was written up.
 
 ## Lists
 
-- [COPYABLE.md](COPYABLE.md): 564 entries under an OSI license or CC0. Code can be vendored or forked.
-- [REFERENCE.md](REFERENCE.md): 40 entries with no, unclear, or non-OSI license. Study the idea; don't copy the code.
-- [REJECTED.md](REJECTED.md): 10 candidates that failed verification.
+- [COPYABLE.md](COPYABLE.md): 750 entries under an OSI license or CC0. Code can be vendored or forked.
+- [REFERENCE.md](REFERENCE.md): 71 entries with no, unclear, or non-OSI license. Study the idea; don't copy the code.
+- [REJECTED.md](REJECTED.md): 14 candidates that failed verification.
 
-Tiers across both lists: A 198, B 84, C 316, D 6.
+Tiers across both lists: A 222, B 160, C 432, D 7.
 
 ## Evidence tiers
 
@@ -71,6 +71,14 @@ Ratios marked "(derived from page data)" were computed from numbers on the cited
 | stdlib-replacements | smart-pointers-and-refcount | 7 | 3 | 1 | 3 | 0 |
 | stdlib-replacements | sorting | 18 | 6 | 0 | 12 | 0 |
 | stdlib-replacements | string-search-and-hashing | 9 | 5 | 1 | 3 | 0 |
+| storage-and-data | caches | 38 | 1 | 17 | 20 | 0 |
+| storage-and-data | columnar-analytics | 33 | 4 | 12 | 17 | 0 |
+| storage-and-data | embedded-kv | 41 | 4 | 12 | 25 | 0 |
+| storage-and-data | embedded-kv-lsm | 1 | 0 | 0 | 1 | 0 |
+| storage-and-data | filters-bloom-cuckoo-xor | 1 | 0 | 1 | 0 | 0 |
+| storage-and-data | indexes | 33 | 3 | 20 | 10 | 0 |
+| storage-and-data | message-queues-logs | 28 | 2 | 2 | 24 | 0 |
+| storage-and-data | probabilistic-filters | 42 | 10 | 12 | 19 | 1 |
 | toolchain-and-build | build-systems | 5 | 1 | 0 | 4 | 0 |
 | toolchain-and-build | compile-caching-and-distribution | 4 | 0 | 0 | 4 | 0 |
 | toolchain-and-build | compilers-frontends | 4 | 0 | 1 | 3 | 0 |

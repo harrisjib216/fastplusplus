@@ -496,6 +496,441 @@ SIMD quaternary-interpolation search over sorted 16-bit arrays in 16-element blo
 
 [repo](https://github.com/lemire/Code-used-on-Daniel-Lemire-s-blog) · [benchmark](https://lemire.me/blog/2026/04/27/you-can-beat-the-binary-search/)
 
+### storage-and-data
+
+#### caches
+
+##### Cacheus  `Python`  `reference (no LICENSE file found in repo)`  `stale`  `Tier B`
+
+Research Python simulator of Cacheus (FAST'21), a learned two-expert page-cache eviction policy that competes with ARC/LIRS/DLIRS on hit rate.
+
+**Beats:** LRU — Only simulated hit rate was measured, in Python, with no compiler, hardware or throughput numbers. The study ran 17,766 simulations on 329 one-day block-I/O traces from 5 datasets at 6 cache sizes (0.05%-10% of footprint). In paired t-tests over the paper's 30 workload/cache-size combinations, Cacheus C3 is distinctly best in 47%, indistinguishable from the best of ARC/LIRS/DLIRS/LeCaR in about 40%, and worse in 13%. The extremes are +38.32 absolute hit-rate points vs ARC (CloudPhysics, 10%) and -15.12 vs DLIRS (MSR, 5%). The paper gives no isolated Cacheus-vs-LRU number; LRU appears only in the compared set and the ranking study.
+
+**Known shortcoming:** 'Best on the majority of workloads' is overstated: the paper has it distinctly best on 47%, tied on ~40% and worse on 13%; the 38.32% is an absolute hit-rate difference vs ARC; Python simulator (verifier downgrade).
+
+**Known shortcoming:** Hit rate only, from a pure-Python simulator; no throughput or hardware, no isolated vs-LRU number. Does not run as shipped (example.config is invalid JSON; run_alg.py raises TypeError for Cacheus). Code differs from the paper (fixed learning-rate init, global np.random.seed(123)); per-request list append grows memory with trace length.
+
+**Known shortcoming:** Metadata is 3.3x LRU's (SIEVE paper); the S3-FIFO paper finds Cacheus often trails ARC-class algorithms. No LICENSE; reuse via the libCacheSim C port (Apache-2.0 since 2026-09). Issue #16 unanswered.
+
+**How:** The gain is hit rate, not speed. Following LeCaR, it uses online regret minimization: on each eviction it samples one of two experts by weight, and when a missed key is found in an expert's eviction history (each N/2 entries), that expert's weight is multiplied by exp(-learning_rate). Expert one is SR-LRU (scan-resistant LRU): the cache is split into a reuse partition R and a small scan-resistant partition SR that new keys enter, evictions come only from SR, and the partition sizes adapt when demoted or new items are re-referenced. Expert two is CR-LFU (churn-resistant LFU), an LFU heap that breaks frequency ties by evicting the most recently used key, which pins a stable subset during churn. The learning rate itself is tuned every N requests by stochastic hill climbing and resets after 10 degrading windows, so no hyperparameters are hand-set.
+
+**Use it when:**
+- Reproducing the FAST'21 results, or using Cacheus as a baseline in cache-policy research on block-storage traces (FIU and MSR readers are built in)
+- Estimating, before any native implementation, whether a fixed-size page or block cache (buffer cache, SSD or flash cache tier) would gain hit rate from an adaptive recency/frequency policy
+- Workloads that shift between scan, churn, LRU-friendly and LFU-friendly phases, with caches small relative to footprint (the paper tests 0.05%-10%)
+- When you want LeCaR-style learned eviction without hand-tuning the learning or discount rate
+- As a readable reference to port; for reusable code, use libCacheSim's Apache-2.0 C port (Cacheus.c, SR_LRU.c, CR_LFU.c)
+
+**Skip it when:**
+- Any throughput- or latency-sensitive path: it is pure Python with an O(log N) LFU heap update on every hit and no concurrency, and no throughput numbers are published
+- Variable-size objects (web, CDN, key-value caches): the simulator counts unit-size 4 KiB pages and the cache size is in pages
+- Memory-constrained caches: the paper states about 2N metadata entries (N resident plus N history), and the SIEVE paper (NSDI'24) puts Cacheus per-object metadata at 3.3x LRU's
+- Workloads where most objects are requested exactly twice with a gap: the S3-FIFO paper (SOSP'23) names Cacheus among partitioned policies that handle this badly at small cache sizes, and found Cacheus often less competitive than traditional algorithms such as ARC in its broad simulations
+- Code reuse in products: the repo has no LICENSE file
+
+**Vs siblings:** Pick Cacheus over SIEVE, S3-FIFO and GL-Cache (all in libCacheSim, which also carries a Cacheus port) only when the target is a unit-size block or page storage cache with mixed scan and churn phases, and hit rate matters more than CPU and metadata cost. For throughput, simplicity or web/KV traces, use SIEVE or S3-FIFO. For a production in-process cache, use Caffeine or W-TinyLFU. For variable-size objects, use LHD, AdaptSize or LRB.
+
+**Gotchas:**
+- Won't run out of the box: example.config is invalid JSON (trailing comma in the alecar6 block) and doesn't list cacheus, and run_alg.py still calls the constructor and request() with one argument, which raises TypeError for Cacheus
+- The code differs from the paper. It starts the learning rate deterministically at sqrt(2 ln 2 / N) rather than a random value in [0.001, 1], and the constructor calls np.random.seed(123), which resets numpy's global RNG for anything else in the process. libCacheSim's port says it follows the paper instead, so results from the two can differ.
+- Memory grows with trace length: the learning-rate updater appends to a list on every request, even with visualization turned off
+- SR-LRU and CR-LFU are not separate modules. They are inlined in cacheus.py (s = R, q = SR, and the heap's tie-break in Cacheus_Entry.__lt__). Open issue #16 (June 2025, no reply) asks where they are, so readers can mistake the code for plain LRU+LFU.
+
+**Status:** Stale research code: cacheus.py last changed in April 2021 (bug fixes) and the repo last changed in October 2023. With no LICENSE it is reference-only; the maintained, Apache-2.0 route is libCacheSim's C port (relicensed September 2026), though that port has open TODOs such as 'this function may not work' in Cacheus_to_evict.
+
+[repo](https://github.com/sylab/cacheus) · [benchmark](https://www.usenix.org/system/files/fast21-rodriguez.pdf)
+
+##### Masstree  `C++`  `MIT plus two clauses taken from the W3C license (no use of the copyright holders' names in publicity without prior written permission; title to copyright stays with the holders). It is a custom text, not a verbatim OSI/SPDX license; GitHub reports NOASSERTION.`  `stale`  `Tier B`
+
+Concurrent in-memory trie of B+-trees with ordered range scans; authors measured 1.5-3.7x Redis 2.4 throughput on 16 cores.
+
+**Beats:** Redis — In the authors' EuroSys 2012 paper, on 16 cores of a 2.4 GHz AMD Opteron 8431 server with networking and logging on, the full Masstree server did 9.10M uniform gets/s against 5.97M for 16 Redis 2.4.5 processes, 5.84M puts/s against 2.97M, and 6.05-9.86M against 2.13-2.70M on Zipfian MYCSB-A/B/C (about 1.5-3.7x), while memcached 1.4.8 was 7.4% faster on uniform gets. No compiler or flags are given, the baselines date from 2011, and the paper itself calls the comparisons 'not entirely fair'.
+
+**Known shortcoming:** Numbers are from the EuroSys'12 paper vs Redis 2.4.5 and memcached 1.4.8 (2012 versions); the license is MIT plus W3C-style publicity clauses (custom).
+
+**Known shortcoming:** Against memcached it is only +7.4% on uniform gets (the 2.5x figure is the authors' own hash table inside Masstree's framework). x86-only inline asm (arm64 PR #31 open since 2018); a source drop with no install/lib, and embedders must define epoch globals and run rcu_quiesce or memory is never freed. Open bugs: scan race (#33), empty leftmost leaves not freed (#43), reads outside the key buffer / possible segfault (#42). Stale since 2023-10; own protocol, no TTL or eviction (not Redis-compatible).
+
+**How:** Keys are cut into 8-byte slices stored as byte-swapped 64-bit integers, so each trie layer is a fanout-15 B+-tree that compares keys with plain integer compares (the paper credits this with 13-19%) and compares a long shared prefix only once per layer. Nodes are four cache lines and are prefetched whole before use, so each level costs about one DRAM latency. Readers use optimistic concurrency control (they check per-node version counters, take no locks and never write shared memory), while writers lock only the nodes they touch, publish a leaf insert in one step through a 64-bit permutation field, and free nodes through epoch-based (RCU-like) reclamation. The paper's factor analysis also credits a fast allocator and 2 MB superpages with a 27-37% gain.
+
+**Use it when:**
+- You need an ordered in-memory index with range scans that many threads share, for example the index layer of an in-memory database or transactional store where a hash table cannot serve scans.
+- Access is skewed (Zipfian) on a multicore box. At the paper's highest skew (delta=9), one shared Masstree delivered 3.5x the throughput of 16 hard-partitioned instances, which stall on the hot partition.
+- Keys share long prefixes (URLs, hierarchical or composite keys). The trie layers compare each 8-byte slice once instead of re-comparing the whole key at every tree level.
+- Workloads are small-key, small-value and read-heavy on x86-64 Linux. The paper measured 9-10M gets/s on 16 cores with networking and logging included.
+- You want a reference design or research baseline. HN commenters note Masstree became a standard comparator in key-value store papers.
+
+**Skip it when:**
+- You want a Redis replacement. It has no RESP protocol, rich data types, TTLs or eviction (none found in the source), replication or clustering, and mtd is a research-grade server.
+- You only do point lookups on uniform keys. The paper's own concurrent hash table reached 2.5x Masstree's throughput, 16 hard-partitioned Masstrees beat the shared tree by 1.5x on uniform gets, and memcached 1.4.8 was 7.4% faster on uniform gets.
+- You target anything other than x86. The master branch hard-codes x86 inline asm (pause, mfence, prefetcht0, bswapq, rdtsc), and its acquire/release fences are compiler-only barriers that rely on x86 ordering. The arm64 port (PR #31) has been open and unmerged since 2018.
+- You need an actively maintained dependency. The last commit was 2023-10-12, it has one old tag (v0.9.0) and no GitHub releases, and 9 issues remain open, including a scan race (#33) and empty leftmost leaves that are not freed after deleting all keys (#43).
+- Your legal review cannot approve a custom license. It is MIT plus W3C-style publicity and title clauses, and GitHub shows NOASSERTION.
+
+**Vs siblings:** Pick Masstree over MICA or MemC3 when you need ordered keys and range scans: both are hash-based, and MICA's paper reports 75.5-76.9 Mops against Masstree's 16.5 on tiny point operations. Prefer it over Garnet, Dragonfly or Valkey only if you are building your own storage engine and want an embeddable concurrent ordered index rather than a maintained server that speaks the Redis protocol.
+
+**Gotchas:**
+- Embedding it means defining the globals the library expects (globalepoch, active_epoch and recovering, as unit-mt.cc does), creating a threadinfo per thread, and advancing epochs or calling rcu_quiesce regularly. Without that, freed nodes accumulate in per-thread limbo lists.
+- Key handling does intentional 'sloppy' reads that can touch up to 8 bytes outside the key buffer (the preconditions are documented in string_slice.hh). Open issue #42 reports a possible segfault for key lengths that are not a multiple of 8, so pad key buffers and expect sanitizer reports.
+- The write API is low-level. tcursor.find_insert() or find_locked() locks the leaf, you write lp.value(), and lp.finish(+1/0/-1, ti) must always be called because it applies the insert or remove and releases the lock.
+- Assertions are compiled in by default. The README says to build with ./configure --disable-assertions before measuring performance, and the tree's node allocations go through the threadinfo pool allocator, so the malloc you link affects results.
+
+**Status:** Stale (last commit 2023-10-12, no GitHub releases, arm64 PR never merged) and under a custom MIT-plus-W3C-clause license, so treat it as a reference design to study, or to vendor after legal review, rather than a maintained dependency.
+
+[repo](https://github.com/kohler/masstree-beta) · [benchmark](https://pdos.csail.mit.edu/papers/masstree:eurosys12.pdf)
+
+#### columnar-analytics
+
+##### Databend  `Rust`  `Apache-2.0 (core) + Elastic-2.0 (enterprise code: src/query/ee, src/meta/ee, src/bendsave, ee_main.rs binaries), per the repo LICENSE file`  `active`  `Tier B`
+
+Rust SQL data warehouse over object storage; ~1.6x faster than DuckDB on ClickBench hot runs on 192-vCPU hardware.
+
+**Beats:** DuckDB — ClickBench runs 43 queries on the 100M-row hits table, both engines on the same AWS c7a.metal-48xl (AMD EPYC 9R14, 192 vCPU). Databend v0.9.53-nightly (a prebuilt musl binary from Feb 2023, run 2026-09-26) sums best-of-3 per query to 9.91s, against 15.70s for the official prebuilt DuckDB CLI on its native .db file (run 2026-05-11, version not recorded): ~1.6x, faster on 35/43 queries, ~1.75x geomean using ClickBench's +10ms shift. c6a.metal looks similar (10.65s vs 17.32s), but c6a.4xlarge reverses (41.93s vs 26.25s), cold sums favour DuckDB everywhere, and neither side states compiler or flags.
+
+**Known shortcoming:** ClickBench still pins a v0.9.53-nightly build from 2023-02; loses on c6a.4xlarge and on cold runs. Enterprise directories are Elastic-2.0 (mixed license).
+
+**Known shortcoming:** ClickBench pins v0.9.53-nightly (2023-02); current v1.2.x was never tested vs DuckDB. Setups are unequal (the Databend daemon keeps caches across tries and the table is CLUSTER BY sorted, while DuckDB runs a fresh CLI per try on an unsorted table); the 1.75x geomean includes ClickBench's +10 ms shift. Open wrong-result/spill bugs (#20512, #20511, #20568); VACUUM, streams, MVs, masking and encryption are Elastic-2.0 licensed features; nightly-only releases, Linux binaries only.
+
+**How:** Fuse storage prunes before reading. A snapshot points to segments, segments point to Parquet blocks, and multi-level min/max statistics prune segments and then blocks; per-block bloom indexes (xor8 by default, binary fuse32 as an option, from the xorf crate) skip blocks on equality predicates, and CLUSTER BY keys keep data sorted so range filters touch few blocks. Execution is a multi-threaded processor-graph pipeline (processors signal NeedData, NeedConsume, Sync or Async events to an executor), with GROUP BY and joins on a linear-probing hash table ported from ClickHouse's C++ implementation. On ClickBench the biggest gaps over DuckDB (5-9x on Q20-Q22 and Q28, 3-5x on the ORDER BY ... LIMIT queries Q24-Q27) are on point-lookup, LIKE and top-N queries, which fits pruning; that link is my inference. The heavy GROUP BY queries are close to even.
+
+**Use it when:**
+- You want a shared, multi-user SQL warehouse over S3/GCS/Azure, with storage separate from compute, rather than an in-process library.
+- Repeated (hot) analytic queries on very large machines: ClickBench hot totals beat DuckDB ~1.6x on c7a.metal-48xl (192 vCPU) and c6a.metal.
+- Selective queries on large fact tables: point lookups on high-cardinality columns (bloom index), tenant/date range filters that match a CLUSTER BY key, and top-N ORDER BY ... LIMIT.
+- You need concurrent query serving from one process: ClickBench's concurrent test recorded 11.99 QPS over 10 connections with 0 errors (DuckDB's CLI entry skips this test).
+- You want Snowflake-style features self-hosted: snapshot-based time travel, stages/COPY loading, and external Parquet/ORC/Iceberg/Paimon tables (the repo has storage crates for each).
+
+**Skip it when:**
+- Mid-size machines: on c6a.4xlarge (16 vCPU) Databend's hot total is 41.93s vs DuckDB's 26.25s, and 9 queries are more than 1.5x slower (for example the REGEXP_REPLACE query Q29: 11.9s vs 6.5s).
+- Cold or first-touch queries: DuckDB wins the cold-run sums on every machine checked (162.8s vs 184.9s on c7a.metal-48xl, 115.2s vs 182.7s on c6a.4xlarge).
+- Embedded analytics inside a C/C++/Rust app or notebook where DuckDB's library and extension ecosystem is the point. Databend only embeds via Python, and the full product needs two daemons.
+- Joins or NOT IN subqueries that spill under memory pressure. Open bugs as of Sept 2026: #20512 (a spilling hash join fails once max_hash_join_spill_level >= 2), #20511 (NOT IN returns rows when a NULL is present and the mark join spills) and #20568 (duplicate rows from predicate pushdown into a RIGHT JOIN anti-join). There are 45 open C-bug issues.
+- You need everything under an OSI license: VACUUM, streams, materialized views, data masking, row access policies, storage encryption, attach table and workload groups are enterprise features that need a license key and fall under the Elastic-2.0 code paths.
+
+**Vs siblings:** Apache DataFusion shows the same ~1.6x over DuckDB on ClickBench c7a.metal-48xl, but it is an embeddable Apache-2.0 Rust library for building an engine. Pick Databend when you want a finished multi-user warehouse on object storage with time travel. For in-app embedding, DataFusion or chDB fit better, and Doris or StarRocks are the MPP-warehouse alternatives whose catalogued evidence is against ClickHouse, not DuckDB.
+
+**Gotchas:**
+- The ClickBench result comes from v0.9.53-nightly (Feb 2023), which ClickBench's install script pins. Current v1.2.9xx builds are not in that comparison, so today's numbers could be higher or lower.
+- The benchmark setups differ. Databend is a long-lived server that keeps its in-process caches between the 3 tries, and its hits table is CLUSTER BY (CounterID, EventDate, UserID, EventTime, WatchID). DuckDB's entry starts a fresh `duckdb hits.db` process for every try (BENCH_RESTARTABLE=no), so its hot runs only get a warm OS page cache, and its table has no sort key. Against that, Databend's times include a curl HTTP round-trip.
+- Releases are almost all -nightly tags (about daily). The last non-nightly release is v1.2.881 (2026-04-17), so pin exact versions.
+- Changing bloom_index_type with ALTER TABLE affects only new writes, so old and new filter types coexist until the data is rewritten. binary_fuse32 is about 4x larger than xor8.
+
+**Status:** Actively developed (default-branch commits daily, last push 2026-09-26, 9.45k stars) but shipped almost entirely as nightlies, and an Apache-2.0 core with Elastic-2.0 enterprise directories makes usability 'mixed'.
+
+[repo](https://github.com/databendlabs/databend) · [benchmark](https://github.com/ClickHouse/ClickBench (data.generated.js: databend/results/20260926/c7a.metal-48xl.json vs duckdb/results/20260511/c7a.metal-48xl.json))
+
+##### Firebolt Core  `C++`  `Elastic License 2.0`  `active`  `Tier B`
+
+Firebolt's free self-hosted distributed SQL engine (ClickHouse-derived runtime); beats DuckDB on ClickBench hot runs, roughly ties ClickHouse.
+
+**Beats:** DuckDB and ClickHouse via the ClickBench leaderboard (Firebolt wins vs DuckDB on hot runs; roughly ties ClickHouse hot and trails it cold and on Combined) — ClickBench's 43 queries, run on single AWS instances (c6a, c7a and Graviton4 c8g families) with the hits dataset ingested into a managed table (PRIMARY INDEX CounterID, EventDate, UserID, EventTime, WatchID) and result, subresult and scan caches disabled (2026-08-29 image engine:dev, compiler and flags undisclosed). Hot runs beat native DuckDB by about 1.6x (geomean) on c6a.4xlarge (hot sums 15.6 s vs 26.3 s; ClickHouse 18.0 s) and about 3-3.8x on metal-class machines. They roughly tie ClickHouse, while cold runs trail both, so the June 2025 '#1 on ClickBench' claim no longer holds.
+
+**Known shortcoming:** '#1 on ClickBench' is a vendor June-2025 claim that no longer holds: hot runs are ~1.6-3.8x faster than DuckDB but cold runs 1.6-2.3x slower; about parity hot vs ClickHouse and behind it cold and combined. Closed ELv2 binary (ClickBench tags it a ClickHouse derivative).
+
+**Known shortcoming:** SECURITY: the engine HTTP endpoint has no auth or TLS. Closed binary only (Docker image, ELv2, non-OSI; the repo holds deploy scripts and notices). A ~0.47 s/query cold floor (vs ClickHouse ~1 ms); on machines with 32 GB or less, ClickBench's concurrency test errors 30-57% (vs ClickHouse 0.1%) and 7-18 of 43 queries return no result on small instances. One write transaction per engine; a DoS fix (#59) left metadata broken. Needs Linux 6.1+ io_uring, seccomp=unconfined and 8 GiB memlock; releases are 'preview RC'; stats.elapsed understates by up to 3.6x; errors come back as HTTP 200.
+
+**How:** Per Firebolt's CDMS 2022 paper ('Assembling a Query Engine From Spare Parts'), the runtime is a hard fork of ClickHouse's vectorized execution engine. The planner, forked from HPI's Hyrise, does cost-based join reordering, and a custom shuffle-based distributed executor replaced ClickHouse's distributed layer so that large-large joins and high-cardinality GROUP BYs scale out. Managed tables are immutable tablets sorted on a PRIMARY INDEX, with a sparse index of one mark per 8,192-row granule (found by binary search), per-tablet min/max statistics, min/max data-skipping indexes, Roaring-bitmap inverted indexes and aggregating indexes, and the scan refines a selection vector one predicate at a time so wide columns are decoded only for rows that survive. I/O goes through io_uring, and tablets are cached on local SSD with prefetching; none of this can be checked in source, because only the binary is published.
+
+**Use it when:**
+- Repeated, dashboard-style aggregations over one large fact table on a big-RAM machine where hot-cache latency matters: its ClickBench hot-run sum on c8g.metal-48xl is 2.66 s, vs 3.14 s for ClickHouse and 11.29 s for DuckDB.
+- Queries that filter or join on a sort key, where the sparse primary index, data-skipping, inverted and aggregating indexes can prune most granules before any column data is read.
+- You want one engine that runs as a single Docker container on a laptop and scales to a multi-node cluster with shuffle joins and distributed aggregations, all in a Postgres-style SQL dialect.
+- Ad-hoc SQL over Parquet or Iceberg in S3/GCS (or S3-compatible stores such as MinIO or R2) without a separate load pipeline.
+- Self-hosting inside your own product is acceptable under Elastic License 2.0, which bars only offering it as a competing hosted service.
+
+**Skip it when:**
+- Cold or first-touch latency matters: after a restart, each ClickBench query except Q1 took at least ~0.47 s (vs ~0.001 s minimum for ClickHouse and 0.04-0.09 s for DuckDB), which makes the cold geomean 1.6-2.3x slower than DuckDB's.
+- Machines with 32 GB of RAM or less under concurrent load. In ClickBench's 10-connection concurrency test, 30% (c6a.4xlarge) and 57% (c8g.4xlarge) of queries errored, vs 0.1% for ClickHouse. 18 of 43 queries returned no result on c6a.large (4 GB) and 7 on c6a.xlarge (8 GB). The README recommends at least 16 GB.
+- You need an embeddable in-process library (DuckDB, DataFusion), or you must build, audit, patch or vendor the engine: it is a closed binary under a non-OSI license.
+- Write-concurrent workloads: only one write transaction can be active per engine at a time, and a second concurrent write returns an error.
+- Networks you don't trust, or restricted hosts. The engine's HTTP endpoint has no built-in authentication or TLS, and a large-DDL bug (issue #59) left metadata unusable after the fix. It needs Linux 6.1+ io_uring, seccomp=unconfined and an 8 GiB memlock ulimit, and Docker Desktop for Mac 4.42.1-4.43.1 cannot run it.
+
+**Vs siblings:** Pick it over Apache DataFusion or Databend when you want a ready-made scale-out server with a Postgres dialect and index-driven pruning, and closed source is acceptable. Its c7a.metal-48xl hot-run sum (3.11 s, 2026-08-29) is about a third of the catalogued DataFusion (9.78 s) and Databend (9.91 s) figures for that machine, though from different run dates. Choose DataFusion if you need Apache-licensed code you can embed or modify, and note that Umbra and ClickHouse still lead it on the ClickBench Combined score.
+
+**Gotchas:**
+- Errors come back as a JSON body with an 'errors' key, even with HTTP 200. During startup the port answers 'Cluster not yet healthy' at HTTP 200, so readiness checks must inspect the result body rather than the status code.
+- The response's statistics.elapsed understates query time by up to 3.6x on high-core machines, because the trailing statistics chunk is sent tens of milliseconds after the rows. ClickBench measures client wall-clock time for this reason.
+- ClickBench runs with enable_result_cache, enable_subresult_cache and enable_scan_cache set to false 'so timings are real'. Set these explicitly in your own benchmarks, or repeated queries may measure cache hits.
+- The HTTP protocol is stateless: the current database and explicit transactions are carried by echoing the Firebolt-Update-Parameters / Firebolt-Remove-Parameters response headers back as query-string parameters, so naive clients silently lose that state.
+
+**Status:** Actively maintained by Firebolt (repo commits through 2026-08-13; engine releases labelled 'preview release candidate', default tag :dev). Free to self-host under Elastic License 2.0, but the GitHub repo holds only deployment scripts, examples and license notices; the engine is a closed binary you cannot build, patch or vendor.
+
+[repo](https://github.com/firebolt-db/firebolt-core) · [benchmark](https://benchmark.clickhouse.com/)
+
+##### Umbra  `C++`  `proprietary`  `active`  `Tier B`
+
+Closed-source TU Munich research SQL database (HyPer successor) that runs ClickBench about 2.4x faster than ClickHouse on one node.
+
+**Beats:** ClickHouse — ClickBench's GitHub Actions automation ran the vendor's umbradb/umbra:26.09 image (submitted in PR #2066 by Umbra team member Tobias Schmidt) on one AWS c6a.4xlarge over the 100M-row hits table, untuned. Summing each query's best hot run over 43 queries gives 7.41s for Umbra, 18.03s for ClickHouse (2026-09-26, about 2.4x) and 26.25s for DuckDB (2026-05-11); cold sums are 47.3s vs 114.2s. ClickHouse wins only Q2 hot (1 ms vs 4 ms), and compiler and flags are unknown because only the binary is tested.
+
+**Known shortcoming:** Closed-source binary (Docker 26.09), proprietary licence, no flags; ClickBench sums check out (7.41 vs ClickHouse 18.03 vs DuckDB 26.25 s; faster on 40/43 queries) but a concurrent-test error ratio of 0.547 is reported (verifier downgrade from A).
+
+**Known shortcoming:** Evaluation-only licence ('not for production purposes'), closed-source binary. Fails on small machines (c6a.large 14/43 and t3a.small 17/43 queries fail with allocation errors, where ClickHouse runs all 43). ClickBench concurrency test (10 connections, 600 s): 54.7% of queries error on c6a.4xlarge and 58.8% on c8g.4xlarge, with no logged cause. The ClickBench maintainer found silent NULL rows for unimplemented functions, hard-coded memory settings, and a failed bulk load that left a partial table with fake-fast timings. Not a ClickHouse drop-in (Postgres wire protocol and dialect); arm64 images only since 26.01.
+
+**How:** Umbra compiles each query into code organised around the data flow. It uses its own lightweight intermediate representation (IR), generates machine code directly so execution starts almost immediately (the 'Flying Start' backend, with 'FireARM' for AArch64), and hands only long-running pipeline steps to the LLVM optimizing compiler (adaptive compilation). Work is spread across cores with morsel-driven parallelism. Storage sits on a buffer manager derived from LeanStore with variable-size pages (64 KiB minimum, power-of-two size classes), pointer swizzling and optimistic versioned latches, and the CIDR 2020 paper measures its overhead at under 6% on average versus flat memory-mapped tables. Strings use 16-byte headers that store strings of 12 bytes or fewer inline and keep a 4-byte prefix for longer ones.
+
+**Use it when:**
+- Single-node ad-hoc analytical SQL over a wide table of about 100M rows (filtered counts, GROUP BY, COUNT(DISTINCT), LIKE '%x%' scans, top-N) when hot-query latency matters: on ClickBench it beats ClickHouse on 40 of 43 queries, often by 2-18x.
+- Machines with plenty of RAM: on c6a.metal it completes all 43 queries with a 3.8s hot sum and no concurrent-test errors.
+- Loading Parquet into a compressed table: ClickBench ingests the 14 GB hits.parquet through the umbra.parquetview table function in 163s and stores it in 8.3 GB with zstd (ClickHouse: 182s, 9.4 GB).
+- Join-heavy analytical SQL: the CIDR 2020 paper reports geometric-mean speedups of 3.0x over HyPer and 4.6x over MonetDB on the Join Order Benchmark (2.3x over MonetDB on TPC-H SF10).
+- Research or benchmarking where you want a state-of-the-art compiled engine as a reference point behind a PostgreSQL endpoint and running a Docker container is fine.
+
+**Skip it when:**
+- Production use: the license in the Docker image says the software is 'intended strictly for internal evaluation and review purposes and not for production purposes'. The commercial product from the same group is CedarDB.
+- Small-memory machines: in the 2026-09-18 ClickBench run, 14 of 43 queries failed on c6a.large with 'ERROR: unable to allocate memory' (mostly COUNT(DISTINCT) and big GROUP BYs), and 17 failed on t3a.small. ClickHouse finished all 43 on c6a.large. Earlier 16 GB runs also failed during data load.
+- Many concurrent clients on mid-size boxes: in ClickBench's 10-connection, 600-second test, 54.7% of attempted queries errored on c6a.4xlarge (58.8% on c8g.4xlarge; ClickHouse 0.1%). The log does not say why.
+- Anything that needs source code, patches, audits, embedding in-process or a distributed or replicated cluster: it is a proprietary, binary-only, single-node server.
+- ClickHouse-specific workloads: it speaks PostgreSQL SQL and wire protocol, not ClickHouse SQL, HTTP or native protocol, and has no MergeTree-style engines.
+
+**Vs siblings:** Pick Umbra for the fastest single-node SQL engine behind a PostgreSQL endpoint when an evaluation-only, closed-source license is acceptable. Pick chDB (in-process ClickHouse for Python) or Bodo (compiled Python DataFrames) when you need open source, production use, or execution inside a Python process.
+
+**Gotchas:**
+- In May 2026 the ClickBench maintainer found that Umbra silently returns a NULL row for unimplemented functions (e.g. regexp_substr), with no error, so a query can look like a microsecond-fast success. The note was removed in the 26.09 update, and whether it was fixed is not documented.
+- When memory ran out during bulk load, the load transaction errored partway through but the harness carried on, leaving a partial table that gave implausibly fast timings. Check row counts after loading.
+- The ClickBench maintainer found memory settings hardcoded in the binary (shared_buffers 128MB, work_mem 4MB): 'SET work_mem' is rejected and ALTER SYSTEM is 'not implemented yet'. The only runtime knob in ClickBench's scripts is the ASYNCIO=0 environment variable.
+- It needs raised container limits: Docker Hub's quick-start sets nofile=1048576 and memlock=8 GiB, and ClickBench runs it --privileged with unlimited memlock.
+
+**Status:** Actively released, with roughly monthly Docker tags from 25.01 to 26.09 (pushed 2026-09-16). It is a research project whose license allows only internal evaluation, so use it as a reference point and look at CedarDB for a supported product.
+
+[benchmark](https://github.com/ClickHouse/ClickBench/blob/main/umbra/results/20260918/c6a.4xlarge.json (baselines in the same repo: clickhouse/results/20260926/c6a.4xlarge.json and duckdb/results/20260511/c6a.4xlarge.json))
+
+#### embedded-kv
+
+##### mpedb  `Rust`  `LicenseRef-mpedb-1.0 (custom source-available license: free except a one-time USD 0.07/device fee for organizations over $5B revenue/valuation)`  `active`  `Tier A`
+
+Rust embedded SQL database (mmap'd copy-on-write B+tree, MVCC, sqlite3 C-API shim) that beats SQLite on in-process point operations.
+
+**Beats:** SQLite — The author's mpedb-bench harness ran once on 2026-07-23 on an Apple M3 Pro (11 cores, macOS 26.6), built with rustc 1.96.0 --release, thin LTO and codegen-units=1. It measured mpedb 0.1.0 against bundled SQLite 3.45.0 through rusqlite 0.31 (STRICT table, prepare_cached) on a 50,000-row table. Warm PK point-select ran at 1.98M vs 320k ops/s non-durable (tmpfs; SQLite journal=MEMORY, sync=OFF) and 1.94M vs 762k durable (mpedb wal vs SQLite WAL, sync=FULL plus fullfsync), and point-insert at 231k vs 115k, with SQLite ahead on durable update, single-client durable insert and the deferred-fsync class. A same-day 2-core AMD EPYC-Milan Linux run shows point-select at 490k vs 80k.
+
+**Known shortcoming:** The 'volume-backed' 490,310 vs 79,619 figure is a separate Linux EPYC run; SQLite wins some durable-mode cells; custom non-OSI license.
+
+**Known shortcoming:** LICENSE: custom non-OSI terms charging $0.07 per device (counting server-connected devices, claimed retroactively), so not freely usable. The 6.2x headline is inflated (SQLite's 'none' class ran journal MEMORY + sync OFF, 2.4x slower than its own WAL; uneven arms); durable single-writer ties or loses on M3 and SQLite is 4.4x ahead in the deferred-fsync class; the bench is v0.1.0 while releases are at v0.3.1. File size is fixed at create (DbFull); a stalled reader can wedge writers; the SQLite shim covers ~50 of 300 functions with no-op hooks and unenforced READONLY; v0.3.x releases ship no assets; a single-author 'research project'.
+
+**How:** SQL is compiled once into a content-hashed plan, so the hot path is execute(hash, params) with no parsing or statement lookup. Rows live in an LMDB-style copy-on-write B+tree inside a MAP_SHARED mmap'd file, with double-buffered meta pages. A read is an in-process walk over mapped pages under an MVCC snapshot, pinned in a lock-free reader table of packed {pid, seq} slots, so readers never take the writer lock. Writers enqueue into a shared-memory intent ring; whoever holds the single writer lock drains it in key-locality order and commits the batch with one meta flip and one flush (group commit). durability=wal appends lean records (only touched COW pages, with node free space elided) using one pwrite plus one fdatasync. The repo's own bisect credits the 1.26M to 1.98M ops/s point-select jump on the M3 to one plan-cache and parameter-resolution commit (7fb0d53).
+
+**Use it when:**
+- Several processes on one host (workers, CLI tools, notebooks) writing one local database file, where SQLite gives you SQLITE_BUSY and retry loops. The README's fork test (none-class, median of 3) shows 250-302k writes/s for mpedb vs 79-90k for SQLite WAL with a 60 s busy_timeout.
+- Read-heavy primary-key lookups through prepared plans on a table that fits in the mapped file. M3: 1.98M vs 320k ops/s in the non-durable config and 1.94M vs 762k in the durable WAL config.
+- Readers that must keep going while a writer is active. M3 commit-class: 2.41M vs 1.32M reads/s against SQLite WAL, with durable write rates about equal (345 vs 338/s).
+- Batched durable writes with durability=wal: 29.7k vs 27.4k rows/s at 100 rows/commit on the M3, and the README reports a larger lead on Linux.
+- Development and test: running an existing Django or CPython sqlite3 suite through the shim as a stricter 'second opinion' before deploying to PostgreSQL. This is the use the author recommends, rather than replacing SQLite.
+
+**Skip it when:**
+- Single-writer durable workloads. On the M3 it ties or loses: durable insert 328 vs 353 ops/s, update 300 vs 392, and deferred-fsync inserts (mpedb async vs SQLite synchronous=NORMAL) 19,720 vs 86,062, so SQLite is 4.4x faster there. The default-style durability=commit manages only 143 ops/s.
+- Production or long-lived deployments. The author calls it a 'personal research project' and 'not production-hardened'. It has one author, 11 stars and no externally filed issues, and the author names the multi-process write path, where harnesses found a leak (#37), an atomicity hole (#119) and a shared-page corruption (#160), as the part to be sceptical about.
+- Organizations that need OSI licensing or have more than $5B revenue or valuation. The custom license charges USD 0.07 per device, counted per device connecting to servers backed by it, with a five-year tail. It claims to apply retroactively to every prior version and says ambiguities resolve in the licensor's favour.
+- Full libsqlite3 fidelity. Only about 50 of roughly 300 C functions are exported. Commit, update and authorizer hooks and tracing are silent no-ops, custom VFS (such as encryption) and loadable extensions are refused, SQLITE_OPEN_READONLY is not enforced, and writes to ATTACHed databases are refused. The pip module passed only 2/89 of sqlitedict's tests and 67/87 of diskcache's at 0.1.3, and PY-COMPAT.md lists an overlay INSERT OR REPLACE duplicate (#133) as a wrong answer.
+- Windows, NFS or containers. On Windows the contended-insert cell is about 4x worse relative to SQLite than on Linux, with the cause unknown. Network filesystems are unsupported. Attaching from a different PID namespace is refused, and the platform table says nothing has run on Linux aarch64.
+
+**Vs siblings:** Among the SQLite-baseline siblings (CalicoDB, ForestDB, ZoneTree, BTreePlus, DBX, CacheAdvance), pick mpedb when you want to keep SQL and existing libsqlite3/Python sqlite3 code while gaining multi-process writers and faster point reads. The others expose key-value or custom APIs, so adopting them means rewriting the data layer. Prefer them when a plain KV API is enough and you need a conventional license or a longer track record.
+
+**Gotchas:**
+- The file size is fixed at creation: it is fallocate'd from size_mb, the shim defaults are 64 MiB file-backed and 16 MiB in-memory, and it never grows. Exceeding it gives DbFull or SQLITE_FULL. A reader that is alive but stalled (SIGSTOP, debugger, a long scan) pins its snapshot and can eventually stall every writer with DbFull, because snapshot eviction is only half built.
+- Pick durability deliberately. `commit` (msync data, then meta) costs two device flushes, and on macOS each is a full F_FULLFSYNC, so it runs at about half the speed of `wal`. The benchmark page calls `wal` the like-for-like comparand. The data file and its -wal sidecar must be copied together for snapshots.
+- The benchmark arms are not symmetric. mpedb shares one handle across threads and uses execute(hash); the batched-insert cell uses the typed insert_row, bypassing SQL, while SQLite gets one connection per thread and prepared SQL. WAL auto-checkpoint is deferred out of the timed cells for both engines. SQLite's none-class mode is journal_mode=MEMORY with synchronous=OFF, a rollback-journal setup in which SQLite's own point-select is 2.4x slower than in its WAL setup. That inflates the 6.2x headline and produces the pathological 180 reads/s read-while-write cell, which the author labels as such.
+- The README's prebuilt-shim install line points at releases/latest, but v0.3.0 and v0.3.1 have no assets attached and the filename says 0.2.1. v0.2.9 has no macOS build either, so on current releases you build the shim with cargo.
+
+**Status:** Actively developed by a single author: the repo was created 2026-07-13, the last commit was 2026-08-28, and the latest release is v0.3.1 (2026-08-22, also on PyPI), not the 0.2.1 in the record. The benchmark measured 0.1.0 and has not been re-run on 0.3.x. The author describes it as a research project rather than production software, and it ships under a custom non-OSI source-available license.
+
+[repo](https://github.com/punnerud/mpedb) · [benchmark](https://github.com/punnerud/mpedb/blob/main/crates/mpedb-bench/RESULTS-macos-apple-m3-pro-11c.md)
+
+##### BVLSM  `C++`  `no license`  `unknown`  `Tier B`
+
+Research RocksDB variant that splits big values out at WAL-write time. Paper reports 7.6x RocksDB random-write throughput at 64KB.
+
+**Beats:** RocksDB — The authors ran db_bench on a Xeon Gold 5218 with 128GB DDR4 and a Samsung 990 EVO NVMe (Ubuntu 20.04): 100GB of data, 16B keys, 4-64KB values, against RocksDB v9.7.3 and BlobDB 'configured identically' (configs not published). With 64KB random writes they report 7.6x RocksDB and 1.9x BlobDB with async WAL, about 7x and 3x with sync WAL, and up to 8x and 2x with WAL off. YCSB-A with 8KB values gives insert, update and read latencies of 27.2%, 28.4% and 19.7% of RocksDB's, and a 100GB sustained 4KB-value write test averages 1.5x RocksDB and 2x BlobDB. Compiler, flags and thread counts are not stated, and nobody else has reproduced the results.
+
+**Known shortcoming:** The '7x/3x over RocksDB' was wrong: the 3x is against BlobDB with a synchronous WAL. IEEE HPCC 2025; no code.
+
+**Known shortcoming:** Paper only: no code, license or repo (a GitHub 'bvlsmz' result is spam); 0 citations. No GC or space reclamation for BValue files; no scan, crash-recovery or space-amplification tests. The 7.6x headline comes from an async-WAL mode the design section never defines; sync mode does two syncs per Put.
+
+**Known shortcoming:** Write-time key-value separation is not novel (legacy StackableDB BlobDB did it) and the paper does not discuss it. Internal contradictions (BVCache eviction policy, BlobDB read-latency percentages, MemTable counts). Datasets (~4 GB YCSB) are small against 128 GB RAM, so reads are likely page-cached. No compiler, flags or thread counts.
+
+**How:** It moves WiscKey-style key-value separation from flush time, where BlobDB and WiscKey do it, to the write path before the WAL. MemTables then hold only pointers, so flushes are rarer, fewer WAL bytes are written, and compaction rewrites only keys plus pointers. That cuts write amplification and the L0-stall throughput dips seen in RocksDB. Separated values are spread by hash or round-robin across several BValue files, each meant to feed its own NVMe submission queue. The paper credits this for up to 40% more write throughput; its FIO microbenchmark (4 threads, 4KB) shows multi-queue 60.6% faster than single-queue. A BVCache (a fixed-size deque plus hash table, sized like one MemTable) keeps recently written entries to cut read latency on separated values.
+
+**Use it when:**
+- As a design reference if you maintain a RocksDB fork and want to separate values before the WAL rather than at flush.
+- Ingest of values of 16-64KB and up (images, embeddings, large log chunks) on NVMe, where RocksDB throughput flattens above 32KB and L0 stalls make it oscillate. The paper's gains are largest at 32-64KB.
+- Big-value writes that must use a synchronous WAL. Only pointer-sized records reach the WAL, and this is where the paper shows its largest relative gains: about 7x RocksDB on random writes and 4.1x on sequential writes.
+- As an argument when you evaluate BlobDB or Titan: flush-time separation still buffers full values in MemTables and the WAL.
+
+**Skip it when:**
+- Any time you need running code. There is no public repository, license, build instructions or API, so you would have to reimplement it from an 8-page paper.
+- Small values. Values under the threshold (example 4KB) stay inline and take RocksDB's normal path, and nothing below 4KB was benchmarked.
+- Update- or delete-heavy or space-constrained workloads. The paper describes no garbage collection or space reclamation for BValue files and reports no space-amplification numbers. Integrated BlobDB and Titan both have GC.
+- Range-scan or iterator-heavy reads. No scan benchmark is reported, and any separated value missing from the BVCache costs an extra random read from a BValue file.
+- Anything with strict durability needs. No crash-recovery testing is reported. In WAL-disabled mode values sit in an in-memory buffer until a background thread writes them, and the paper does not say how those writes are ordered against MemTable flushes.
+
+**Vs siblings:** For large values you can actually deploy, use Titan (Apache-2.0 RocksDB plugin, commits as recent as September 2026) or RocksDB's integrated BlobDB. KVell, PebblesDB, MatrixKV and SplinterDB also ship code. BVLSM is the only catalogued entry that separates values before the WAL, so read it only as a design reference when your values are 32KB or more and ingest is bound by the synchronous WAL.
+
+**Gotchas:**
+- The 7.6x headline comes from the async-WAL mode (R-WA), but the design section defines only two modes: WAL-enabled (value fsync'd to its BValue file, then the pointer record written synchronously to the WAL, so two syncs per Put with no group commit described) and WAL-disabled (values buffered and written by a background thread). How async-WAL mode behaves is not described.
+- Write-time separation is not new inside RocksDB. The legacy StackableDB BlobDB wrote blob files synchronously in the write API. The RocksDB wiki says the integrated BlobDB moved to flush and compaction for consistency and large I/Os. The paper benchmarks only the integrated BlobDB and does not discuss the legacy one.
+- The paper contradicts itself in places. BVCache eviction is described as Most-Recent-Write-First, as LRU tail eviction, and as time- or frequency-based 'depending on system load'. The text says BlobDB cuts read latency by 35.5%, but Fig. 8 shows BlobDB at 29.1us vs RocksDB's 82.1us, i.e. 35.4% of RocksDB. The setup lists '1 immutable and 5 mutable MemTables'. A '2.49x BlobDB' figure appears in the FIO-only section.
+- The benchmark datasets are small relative to the host's 128GB RAM: 100GB for db_bench, and about 4GB for YCSB-A (500k x 8KB). So the YCSB read latencies were probably served largely from the page cache (my inference; the paper does not discuss caching).
+
+**Status:** Paper only: arXiv v2 from June 2025, peer-reviewed at IEEE HPCC 2025 (pp. 34-41, doi:10.1109/HPCC67675.2025.00037). There is no code, repository or license (the only GitHub hit for 'bvlsm' is an unrelated spam repo), and OpenAlex shows zero citations as of 2026-09-26, so it is usable only as a design reference.
+
+[benchmark](https://arxiv.org/abs/2506.04678)
+
+#### indexes
+
+##### LB+-Trees (persistent B+-Tree optimized for 3D XPoint memory)  `C++`  `no license`  `abandoned`  `Tier B`
+
+Persistent B+-Tree for Intel Optane PM; 1.12-2.92x faster inserts than WB+-Tree and FP-Tree, similar lookups.
+
+**Beats:** WB+-Tree and FP-Tree (state-of-the-art NVM-optimized persistent B+-trees) — On a dual-socket Cascade Lake-SP with 512GB Optane DC PM (fsdax, Linux 4.9.135), each tree was bulkloaded with 2 billion 8B/8B entries and then given 50K-300K random or monotonic inserts. LB+-Tree beat WB+-Tree and FP-Tree, implemented in the same framework, by 1.12-2.92x (up to 2.69x with 1-16 threads), with lookups and deletes on par; the paper gives no compiler or flags and the baseline code is not public. The independent VLDB'22 'Part Two' evaluation (Xeon Gold 6242R, GCC 11.1, PMDK) also found it the best performer in most cases, but only after its authors fixed persistence and added scans.
+
+**Known shortcoming:** The Get/Put numbers are vs a divided skip list, not WB+-tree/FP-tree; search is on par; baseline source missing; abandoned since 2020-09. Requires 3D XPoint persistent memory.
+
+**Known shortcoming:** Not a library: a benchmark executable with main(); API is bulkload/lookup/insert/del only (no scan, update or recovery). The RTM retry loop has no fallback and hangs if TSX is off (#1, #7); needs Optane with clwb. Read-uncommitted bug (#2) and signed-overflow search bug (PR #5) with fixes unmerged since 2021; no license ('TBD'); 8 B integer keys only. The independent VLDB'22 study confirms the best multi-threaded inserts (2.09x FPTree) but ~30% slower scans.
+
+**How:** Entry moving: Optane write cost depends on how many 64B lines are written, not how many words change. So when an insert lands in a slot outside the header line, the code also moves entries out of line 0 into free slots in the target line. Later inserts then find a free slot next to the header and need only one clwb'd line (the paper derives at least 1.35x fewer line writes per insert in a stable tree). Logless leaf split: each leaf has two alternative sibling pointers and an alt bit, and one 8-byte NVM atomic write of the header word flips alt and the bitmap after the new node is persisted, so there is no write-ahead log as in WB+-Tree and FP-Tree. It also uses 256B nodes matching Optane's internal 256B access size, FP-Tree-style DRAM inner nodes, 14 one-byte fingerprints probed with a single SSE _mm_cmpeq_epi8, and Intel RTM transactions plus a per-leaf lock bit so that clwb/sfence run outside the transaction.
+
+**Use it when:**
+- Benchmarking or studying persistent B+-Trees on Intel Optane DC PM in App Direct/fsdax mode with 8-byte integer keys and 8-byte values or pointers
+- Insert-heavy workloads with full leaves (frequent splits) or monotonic, hot-spot inserts such as time-ordered keys: this is where the paper shows 2.2-2.9x over WB+-Tree and FP-Tree
+- Multi-threaded insert or update throughput on one socket: the independent VLDB'22 'Part Two' evaluation found its inserts scale best, 2.09x faster than FPTree and 1.55-3.07x faster than ROART, DPTree and PACTree
+- As a strong baseline to beat in new PM-index work (APEX and the 'Part Two' evaluation both use it)
+
+**Skip it when:**
+- Anything in production: there is no license, no crash-recovery code, no range scan, a known read-uncommitted bug and no HTM fallback path
+- Machines without Optane (discontinued) or without working Intel TSX/RTM plus clwb: TSX is off by default in Linux according to the author, and the code does not run correctly without it
+- Scan-heavy workloads: the 14-entry 256B leaves made scans about 30% slower than FPTree single-threaded, and much worse multi-threaded, in the independent evaluation, and the repo has no scan anyway
+- Variable-length or string keys: the repo only handles 8-byte keys, the paper's X-Engine/Memcached key-pointer variant is not published, and an independent test found pointer chasing dominates, with trie-based ROART winning
+- Lookup-dominant or instant-restart needs: search only matches WB+-Tree and FP-Tree, APEX searches up to 3.9x faster, and restart must rebuild the DRAM inner nodes, whereas FAST+FAIR and APEX recover in under a second
+
+**Vs siblings:** Pick LB+-Tree over FAST+FAIR or DPTree when multi-threaded insert or update throughput on Optane with DRAM inner nodes matters most and you can live with a rebuild at restart and a TSX dependency. Pick it over APEX when keys are hard for learned models to fit or splits are frequent: APEX was 5.8% slower on the FB dataset for inserts and 1.3x slower with intensive splits at 24 threads. For everything else APEX is faster (up to 2.7x inserts and 3.9x lookups) and FAST+FAIR recovers instantly.
+
+**Gotchas:**
+- If _xbegin() fails, the code just jumps back and retries with no bound and no lock fallback, so with TSX disabled every operation spins forever (issues #1 and #7). The author's fix is the boot options tsx=on tsx_async_abort=off mds=off, which also switch off the MDS mitigation.
+- Two community fixes have been open and unmerged since 2021. PR #6 fixes read-uncommitted isolation by releasing the lock with a non-temporal store. PR #5 fixes a signed overflow in the inner-node binary search (r = key - p->k(m)) that UBSAN caught and that can misroute keys.
+- LEAF_SIZE is hard-wired to 256B (#error otherwise), so the paper's multi-256B 'distributed headers' variant is not in the repo. The fptree-src and wbtree-src baselines are also missing (issue #4).
+- A user reported that bulkload must run before inserts to initialise the tree. Issue #8 (unanswered) reports that the first store to each DAX page aborts RTM after a restart, and that recycled NVM nodes are neither zeroed nor persistently allocated.
+
+**Status:** Abandoned: six commits on 2020-09-06, fix PRs open since 2021, no license file (the headers say 'LICENSE TBD'), and it is tied to discontinued Optane and TSX hardware, so treat it as a reference design to study rather than code to vendor.
+
+[repo](https://github.com/schencoding/lbtree) · [benchmark](http://www.vldb.org/pvldb/vol13/p1078-liu.pdf)
+
+#### probabilistic-filters
+
+##### Adaptive Learned Bloom Filter (Ada-BF)  `Python`  `no license`  `abandoned`  `Tier B`
+
+Research Python for learned Bloom filters that tune hashing per classifier-score band, cutting FPR versus standard and learned Bloom filters.
+
+**Beats:** Bloom filter — This is a numerical FPR-versus-bitmap-size comparison, not a timing benchmark. On a 485,730-URL Kaggle set, with a random forest whose 146Kb pickle is added to the standard BF's budget, Ada-BF cut FPR by 81% versus LBF/sandwiched LBF at 500Kb (disjoint Ada-BF: 84%) and reached about 0.35% FPR in 300Kb where LBF needed over 500Kb. On VirusShare MD5 data it needed about 150Kb versus about 300Kb for LBF at 0.2% FPR, and all learned filters were over 98% below the standard BF. No hardware, compiler or runtime is reported; the only cost figure is hash operations per query in the NeurIPS version.
+
+**Known shortcoming:** Gains are mostly over other learned Bloom filters and are in FPR/memory, not speed; abandoned since 2022-05.
+
+**Known shortcoming:** Not a library: five argparse Python scripts with no API, persistence or license; bits stored as 64-bit numpy ints; hashing in Python loops. Queries cost more (classifier inference plus 9.40/12.07 hashes vs 3.39 for a Bloom filter at 400 Kb) and there is no timing benchmark.
+
+**Known shortcoming:** README commands are partly broken (disjoint mode needs --model_path; PLBF 'query' KeyError, issue #1; model pickles absent); only the URL dataset runs (the malware CSV has the wrong label/column format) and it has 411,184 rows vs the paper's 485,730. Needs matplotlib <3.8. Unseeded hashes; the final FPR includes tuning negatives and the disjoint FPR denominator is wrong. Superseded: the PLBF paper reports 9x lower FPR than Ada-BF on URLs at 500 Kb.
+
+**How:** The win is FPR per bit, not speed. The learned Bloom filter (Kraska et al. 2018) uses a single score threshold; Ada-BF generalizes this to g score regions with K_j hash functions, fixing K_j - K_{j+1} = 1 and a non-key ratio m_j/m_{j+1} = c so that only (K_max, c) need tuning, with the aim of equalizing expected false positives m_j * alpha^K_j across groups. Disjoint Ada-BF sizes each group's filter from R_j/n_j - R_1/n_1 = (j-1)log(c)/log(0.618). Queries cost more than a plain Bloom filter: the NeurIPS version reports 3.39 (BF), 6.98 (LBF), 9.40 (Ada-BF) and 12.07 (disjoint Ada-BF) hash operations per query at 400Kb, on top of one classifier inference.
+
+**Use it when:**
+- Reproducing or teaching learned-filter results: the repo has BF, LBF, Ada-BF, disjoint Ada-BF and PLBF implementations that run on the same URL CSV.
+- A static key set, such as a URL blocklist or malware-hash list, where a small classifier's score separates members (high scores) from non-members (low scores) and bits stored or sent matter more than per-query CPU. The paper reports 40-50% less memory than an LBF at the same FPR.
+- Prototyping the score-banding idea before porting it to a real filter implementation; each script is 80-250 lines of plain numpy/pandas.
+- Distributing a filter to many servers where update size is the constraint (the NeurIPS fake-news experiment reports half the space of an LBF at equal FPR).
+
+**Skip it when:**
+- Any production or library use: there is no license, no API, and no persistence, every hash is a Python-level loop over sklearn's murmurhash3_32, and each bit is stored as a 64-bit numpy int.
+- Latency-sensitive lookups: every query needs a classifier inference (a 10-tree random forest in the URL experiment) plus about 2.8x the hash operations of a plain Bloom filter at 400Kb, and no timing benchmark exists.
+- Adversarial or drifting query streams: the FPR depends on non-key scores following the tuning distribution, and items above the top threshold are accepted without any hash check. The paper itself names adversarial examples and drift as weaknesses of learned filters.
+- Weak classifiers, or when you want the best learned filter: the later PLBF paper (arXiv 2006.03176) reports 9x lower FPR than AdaBF on URLs at 500Kb, and AdaBF needs 2.5x PLBF's space at FPR 0.001; on EMBER, where the model helps less, the gap was only 1.1x.
+- Dynamic sets: there are no deletes, and thresholds and filter sizes are tuned offline over the full key set, so changing the keys means retraining or re-scoring and rebuilding.
+
+**Vs siblings:** Every sibling (Xor, BuRR, Prefix, Vacuum, Morton, and so on) is a key-agnostic filter with a fixed space overhead that needs no model; BuRR's table puts Xor/Xor+ at 14-23% over the information-theoretic minimum, versus the roughly 44% the Ada-BF paper cites for a standard Bloom filter. Pick Ada-BF only to study or prototype a learned filter when a classifier cleanly separates members from non-members and you count the model's bytes in the budget; for anything you ship over a static set, use Xor or BuRR.
+
+**Gotchas:**
+- The scripts run everything at top level (argparse, CSV load, a histogram with plt.show() that writes Score_Dist.png to the working directory), so they cannot be imported as modules, and plt.show() blocks on GUI backends.
+- The README commands are partly broken. disjoint_Ada-BF.py requires --model_path, which the README omits, and it subtracts the model file size x8 from the budget while Ada-BF.py does not, so --size_of_Ada_BF means different things in the two scripts. PLBF.py reads a 'query' column that the shipped CSVs lack (open issue #1) and needs model pickles that are not in the repo.
+- Datasets/Malware_data.csv has the columns label,score,md5 with labels 0/1, but every script selects label == -1 and a 'url' column, so only URL_data.csv runs as-is. Even that file has 411,184 rows (66,385 malicious), not the paper's 485,730, so reruns will not match the paper's figures exactly.
+- Results are not reproducible run to run: hash seeds come from an unseeded randint and the 30% tuning sample is unseeded. The final FPR is measured on all negatives, including the tuning sample. Disjoint Ada-BF divides by only the below-threshold negatives, which overstates its printed FPR.
+
+**Status:** Abandoned: the last code change was PLBF.py on 2022-05-24, the two 2021 issues were never answered, and with no LICENSE file the code is study-only (17 stars, 7 forks).
+
+[repo](https://github.com/DAIZHENWEI/Ada-BF) · [benchmark](https://arxiv.org/abs/1910.09131)
+
+##### ChainedFilter  `C++`  `no license`  `abandoned`  `Tier B`
+
+SIGMOD'24 research code chaining approximate and exact filters for zero false positives on known negatives; beats RocksDB's Bloom P99.
+
+**Beats:** Bloom filter — The 36% figure comes from the SIGMOD 2024 paper, not from runnable repo code. RocksDB was set up with all SSTables in L0 and a 64MB write buffer, with 36-byte keys, 64-byte values and 16M items (1.6GB, 30 SSTables). P99 latency for existing-key point lookups was about 31us with RocksDB's own Bloom filter at the same filter space and under 20us with ChainedFilter (RocksDB's Bloom filter plus an Othello whitelist), on an Intel i9-10980XE with 128GB DRAM and g++ 7.5.0 -O3. The repo's runnable experiments cover only the static dictionary, Huffman and Cuckoo-hash results, and none of them runs a Bloom baseline.
+
+**Known shortcoming:** The RocksDB benchmark code isn't in the repo; no licence (reference only); abandoned since 2023-04.
+
+**Known shortcoming:** No LICENSE; three commits in April 2023; reference code only. The RocksDB P99 code (Bloom + Othello) is not in the repo, so the 36% is paper-only. Zero false positives hold only for negatives known at build time; unknown keys still see the Bloom FPR, and Algorithm 1 is static (rebuild on change).
+
+**Known shortcoming:** int32 keys only (the paper used 64-bit); reported bits ignore int[]/bool[] storage, so real RAM is far larger. UB (uninitialised 'upper' in Algorithm 2, a cuckoo function missing a return), leaks, non-inline header functions, duplicate ChainedFilter class; 'register' contradicts the README's C++17 claim and the Makefiles use c++11.
+
+**How:** The paper's 'chain rule' shows that the space for exact membership factorizes as f(0,λ) = f(ε,λ) + f(0,ελ), so splitting the job into stages costs no extra space. Stage 1 is an approximate Bloomier (xor) filter with ⌊log2 λ⌋-bit fingerprints, built by hypergraph peeling with its 3 hash positions inside a window about 1/120 of the table (as in binary fuse filters), and stage 2 is a 1-bit exact Bloomier (retrieval) table that holds only the positives and stage 1's false positives and is probed only when stage 1 says yes. At λ=16 this gives 64% less space and 103% higher query throughput than a single exact Bloomier filter. The RocksDB gain is not a faster probe: each SSTable's filter (RocksDB's Bloom filter plus an Othello whitelist) is made exact with respect to keys in the later SSTables of the same level, so a lookup of an existing key reads at most one extra SSTable per level instead of up to N.
+
+**Use it when:**
+- Static exact membership or 1-bit retrieval over a closed universe, where every key that will ever be queried is known at build time and false positives are not acceptable (the paper's implicit static dictionary uses about 26% more space than the lower bound).
+- LSM-trees with many overlapping sorted runs in one level (tiered compaction, or a large L0) where the P99 latency of existing-key point lookups matters. Treat the paper's design (Bloom stage 1, Othello stage 2 whitelisting keys from later SSTables) as a blueprint to implement yourself; this repo has no code for it.
+- Cuckoo hash tables in slow or external memory: Algorithm 2, trained online, predicts which of the two tables holds each key. The paper reports 31% fewer external memory accesses at load 0.4 and zero mispredictions after 7 training rounds.
+- Random-access decoding of Huffman-coded data, where the paper reports 0.22 extra bits per item over the lower bound.
+- Studying the chain-rule construction before writing your own version on top of a maintained xor, binary-fuse or ribbon filter library.
+
+**Skip it when:**
+- As a general Bloom filter replacement when negatives are unknown. False positives on never-seen keys are only as good as stage 1, and in the paper's RocksDB test, latency for non-existing keys at 16M items still rises depending on which SSTable reports the false positive.
+- Workloads with frequent inserts or deletes. Algorithm 1 is static and must be rebuilt, the paper says the chain rule does not hold for general dynamic membership, and the dynamic whitelist it suggests (Othello or Coloring Embedder) costs about 2.2-2.33 bits per item.
+- Anything that ships. There is no LICENSE file (all rights reserved), the repo has 3 commits from April 2023, and there are no tests and no build system beyond per-folder Makefiles. The code also has leaks and undefined behavior (see gotchas).
+- Keys that are not 32-bit ints, or large sets built on a tight memory budget. The code hashes only int keys, and a build keeps the full positive and negative arrays plus peeling scratch arrays in RAM; the paper notes peeling needs Ω(n log n) extra construction space.
+- Range queries: ChainedFilter handles point lookups only.
+
+**Vs siblings:** Choose ChainedFilter's design over Xor Filter or BuRR only when you know the negative keys at build time and need zero false positives on them, as in an exact static dictionary or the paper's trick of excluding keys that live in later SSTables. For ordinary approximate membership, Xor Filter and BuRR are licensed, usable libraries built on the same peeling/retrieval ideas, and SuRF is the RocksDB choice when you need range queries.
+
+**Gotchas:**
+- build() signals failure with negative return codes (-1 to -6), not exceptions, and retries peeling with only a fixed list of 10 seeds. The 'memory' it returns is a computed bit count (slots × fingerprint length), while the tables are stored as int[] (32 bits per slot), and Algorithm 2 stores bool[] (1 byte per bit), so real RAM use is far above the reported filter space.
+- Undefined behavior: Algorithm 2's Layer never initializes its 'upper' pointer (or sum1) before 'upper==NULL' checks. In the Cuckoo experiment, CuckooHash::query_with_pre can fall off the end without returning, and query() reads an uninitialized variable.
+- Leaks: ~ChainedFilter calls ~Bloomier() directly instead of delete, each seed retry allocates a new Encoder without freeing the old one, error paths leak their scratch arrays, and the experiment mains call ~ChainedFilter() by hand. The experiment mains also declare multi-GB static arrays (for example, three int[2^27] arrays in the Static Dictionary experiment).
+- The headers define non-inline functions (MurmurHash32 is actually MurmurHash2, plus getp) and put 'using namespace std' at global scope, and both Algorithm1.h and Algorithm2.h declare 'class ChainedFilter'. You cannot include both in one translation unit, and including either from two .cpp files breaks the link. The faster interleaved variant, ChainedFilter_fast.h, ships but no main.cpp uses it, and the paper's experiments used 64-bit keys while the repo code hashes 32-bit ints.
+
+**Status:** Abandoned after three commits in April 2023, with no license file. Treat it as a reference for reading the paper, not code you can vendor, and note that the RocksDB integration was never published.
+
+[repo](https://github.com/ChainedFilter/ChainedFilter) · [benchmark](https://arxiv.org/abs/2308.13632)
+
+##### Partitioned Learned Bloom Filter (PLBF)  `Python`  `no license`  `abandoned`  `Tier B`
+
+Python solver for Partitioned Learned Bloom Filter parameters; the resulting design uses less space than Bloom, sandwiched LBF, Ada-BF.
+
+**Beats:** Bloom filter — ICLR 2021 paper (arXiv 2006.03176v2, Section 4.1), Python simulations with an sklearn random-forest model counted at its pickle size, k=5, N=1000, and an idealized 'optimal' backup filter (standard Bloom size / log2 e) for every learned variant. At 400/500/3000 Kb on synthetic/URLs/EMBER, PLBF had 22x/26x/3x lower FPR than sandwiched LBF and 8.5x/9x/1.9x lower than Ada-BF; to reach FPR 0.001, sandwiched LBF needed 8.8x/3.3x/1.2x and Ada-BF 6x/2.5x/1.1x PLBF's space. There are no compiler, hardware or query-latency numbers, and the comparison against a standard Bloom filter appears only as a plot (Appendix E.1, Fig. 4).
+
+**Known shortcoming:** The repo is only the algorithm file with no license (all rights reserved); abandoned since 2022-06. Venue is ICLR 2021.
+
+**Known shortcoming:** The repo is only a parameter solver (thresholds and per-region FPR) with no filter or query code; importing it runs a demo. Well-separated scores (the strong-model case PLBF targets) crash with a math domain error (log 0). It implements Algorithm 2 with <=100 chunks while the paper benchmarked Algorithm 3 with N=1000. Gains are space vs learned variants, no latency numbers; CLBF reports PLBF reject is 14.6x on average (up to 65x) slower. atsukisato/FastPLBF (MIT) is a runnable alternative.
+
+**How:** The gain is in space, not speed. With boundaries fixed, the KKT conditions give each region's optimal FPR as f_i = F * g_i / h_i (the region's share of keys divided by its share of non-key queries), and the space saved against a plain Bloom filter works out to c * |S| * KL(g||h) minus the model size. So the thresholds come from a dynamic program over a discretized score axis that maximizes the KL divergence between region-level key and non-key distributions (O(N^2 k)). Algorithm 1 then caps any f_i >= 1 at 1 (no filter in that region) and re-solves the rest; the paper finds that 4-6 regions are enough.
+
+**Use it when:**
+- Static key sets that come with predictive features and a classifier that separates keys from non-keys well, such as malicious-URL or malware blocklists. The large paper wins (3.3x-8.8x less space than sandwiched LBF at FPR 0.001) came from models with F1 of 0.97-0.99.
+- You have a representative sample of non-key queries (for example, historical query logs). The solver estimates the non-key score distribution from it, and the target FPR holds only in expectation over that distribution.
+- Filter size is the binding constraint (for example, a blocklist shipped to clients or edge nodes) and each query can afford a model inference.
+- You already run a sandwiched or Ada-BF-style learned filter and want principled thresholds and per-region FPRs instead of heuristics. The solver is about 200 lines of plain Python and easy to port.
+- Studying the algorithm: this is the authors' own reference code for Algorithm 1 and the KL-divergence DP.
+
+**Skip it when:**
+- Keys with no learnable signal (random IDs, bare hashes). The model adds bytes without adding divergence. Even EMBER, with a model at F1 0.85, needed only 1.1x-1.2x less space than the learned baselines at FPR 0.001.
+- Latency-sensitive query paths. Every query pays for model inference (a random forest in the paper) plus a filter probe, and the paper reports no query-time numbers. The CLBF paper (arXiv 2502.03696v2) measures PLBF reject time at about 14.6x slower on average, and up to 65x slower, than its cascaded design.
+- Dynamic sets or query distributions that drift. Any change means retraining the model and re-solving, there is no insert or delete path, and queries aimed at high-score regions can push the FPR above target.
+- Production use of this repo as-is. It has no license and no filter implementation, and it crashes (ValueError: math domain error) when any score chunk contains no keys, which happens with exactly the well-separated models PLBF is meant for. For runnable code, use atsukisato/FastPLBF (MIT).
+- Workloads that want a plain, fast, model-free AMQ in C/C++. Xor filters sit only 14-23% above the space lower bound (figures from the catalog's BuRR entry), and ribbon filters sit lower still, all without a model.
+
+**Vs siblings:** Over Ada-BF: same learned-filter setup, but PLBF picks thresholds and FPRs by optimization and needed 1.1x-6x less space at FPR 0.001 in the paper. Over CLBF: only when you want the simpler PLBF formulation and query latency does not matter, since CLBF reports up to 17% less memory and much faster rejects than PLBF. For key sets with no learnable signal, Xor Filter or BuRR is the better pick, and for working PLBF code start from FastPLBF rather than this solver.
+
+**Gotchas:**
+- Importing plbf_algo runs the module-level demo: it generates about 200k normal samples, solves for K=5 at FPR 0.1 and prints the result. Strip the bottom block before importing it as a library.
+- Crashes on well-separated scores: the DP calls math.log(delta_G/delta_H), so a score chunk with zero keys raises ValueError and a chunk with zero non-keys divides by zero. Reproduced here with keys in [0.8,1] and non-keys in [0,0.3], and again with Gaussians at 0.9/0.1 and 0.1/0.1. FastPLBF's DP guards both cases.
+- Not the benchmarked algorithm. The repo runs Algorithm 2 (relaxed-DP thresholds, then the Algorithm 1 fix-up) over at most 100 quantile chunks. Paper Section 4.1 used Algorithm 3 (search over the last region's boundary, O(N^3 k)) with N=1000, which the Fast PLBF paper says takes over 3 minutes at k=5. Expect results somewhat off the paper's curves.
+- Inputs must be Python lists of scores in [0,1]; with numpy arrays, key_scores+non_key_scores would add elementwise instead of concatenating. Several regions can come back with FPR 1 (the demo returns [..., 1, 1]); those regions accept everything and should be merged. The README's 'ICLR 2020' is wrong: the paper appeared at ICLR 2021.
+
+**Status:** Abandoned: six commits, all on 2022-06-29, 7 stars, zero issues, no license, and the experiment code was never released. Treat it as an algorithm reference and use the MIT-licensed atsukisato/FastPLBF (NeurIPS 2023; its PLBF class builds real backup Bloom filters) as the runnable base.
+
+[repo](https://github.com/kapilvaidya24/PLBF) · [benchmark](https://arxiv.org/abs/2006.03176)
+
 ## Unverified claims (tier C/D)
 
 ### networking-and-servers
@@ -1457,6 +1892,779 @@ Fixed-size, heapless C++17 delegate beating std::function's invocation speed by 
 **Status:** Abandoned since the last commit on 2022-07-27; usability is 'reference' because the custom header license is not OSI-approved, though the code is small (~350 lines) and easy to vendor or re-license by copying and adapting.
 
 [repo](https://github.com/bdiamand/Delegate) · [benchmark](https://github.com/jamboree/CxxFunctionBenchmark#sample-result)
+
+### storage-and-data
+
+#### caches
+
+##### Dragonfly  `C++`  `BUSL-1.1`  `active`  `Tier C`
+
+Multi-threaded, shared-nothing in-memory store that speaks the Redis and Memcached protocols; beats single-process Redis once there are many cores.
+
+**Beats:** Redis, Memcached — Vendor memtier_benchmark runs on AWS (instance types only; no CPU model, compiler, flags or baseline versions, and no published harness) show parity with single-threaded Redis on m5.large, about 1.4-1.5x on m5.xlarge, and 3.8M QPS on c6gn.16xlarge, which is the '25x a single Redis process' headline. The same runs show Memcached at 806K SET and 2.1M GET QPS against Dragonfly's 3.84M and 3.72M. Redis's 2022 rebuttal on the same instance, using a 40-shard Redis 7.0 Cluster, measured 18-40% more throughput than Dragonfly (GET pipeline 1: 4.43M vs 3.8M reproduced). tidwall's suite on ARM64 c8g.8xlarge with Dragonfly 1.30.3 gives mixed results: At pipeline 1, Dragonfly beats Redis 8.2.1 on GET at 2 and 10-16 threads, loses at 1 and 3-8 threads, and loses to Memcached on GET in every configuration.
+
+**Known shortcoming:** The 25x is against a single-threaded Redis process; Redis's 2022 rebuttal ran a 40-shard Redis cluster on the same c6gn.16xlarge and got 18-40% more throughput than Dragonfly. In the tidwall cache-benchmarks suite Redis wins at 8 threads, Dragonfly leads ~2.2x only at 16 threads, and memcached wins GET in every config. BUSL-1.1 licence (not OSI) (verifier downgrade).
+
+**Known shortcoming:** On few cores it ties or loses: about equal to Redis on m5.large; in the tidwall suite Redis 8.2.1 wins at 1 and 3-8 threads and Dragonfly only leads at 16 threads (2.94M vs 1.32M). memcached beats it on GET in every tidwall config, Pogocache in every config and Garnet in all but two. Deep pipelines are weak (1-thread GET p99 ~289 ms vs Redis ~15 ms). BUSL-1.1 forbids hosted/managed services and embedding in in-memory store products (becomes Apache-2.0 on 2030-11-01 or 4 years after release). Compatibility gaps: no SCRIPT KILL (#8269), no Redis 8.10 RDB v15 (#8361), EXEC not atomic under maxmemory (#8275), Lua undeclared keys blocked by default, cluster needs an external manager. Needs >=256 MB per thread or exits; PEXPIRE above 2^28 ms rounds to 1 s; HTTP console on port 6379; a 2026 advisory fixed an unauthenticated heap overflow in the memcached reply builder.
+
+**How:** It uses a shared-nothing, thread-per-core design built on the helio fiber library, with io_uring by default and epoll on kernels older than 5.10. Each thread owns one shard of the keyspace, and cross-shard work goes by message passing instead of locks. Multi-key atomicity uses the VLL lock-manager scheme from the VLDBJ paper. The main index is Dashtable, an implementation of Dash (extendible hashing): a directory of fixed-size open-addressed segments of 56 buckets plus 4 stash buckets, 14 slots per bucket. Lookups compare 8-bit fingerprints with one SSE2 compare per bucket (sse2neon on aarch64). Growth splits one segment at a time instead of rehashing the whole table. Per-bucket version counters in the table metadata are what make fork-less point-in-time snapshots possible. The same bucket layout drives cache-mode eviction: items are bumped toward the front of their bucket, and the last slot of a stash bucket is evicted.
+
+**Use it when:**
+- A single large multi-core box (16+ vCPUs) where you would otherwise run many Redis shards or a Redis Cluster, and you want one endpoint where MULTI/EXEC, Lua and multi-key commands keep single-node semantics.
+- Unpipelined GET/SET at high server thread counts. In tidwall/cache-benchmarks (c8g.8xlarge, 16 server cores, pipeline 1) Dragonfly did about 2.9M GET/s against 1.3M for Redis 8.2.1 with io-threads.
+- Write-heavy Memcached-protocol traffic on a big instance. On c6gn.16xlarge the vendor measured 3.84M SET/s against 806K for Memcached.
+- Large datasets that snapshot often, where the copy-on-write memory spike from Redis fork is the problem. In the vendor's 5 GB BGSAVE test Redis peaked at about 3x Dragonfly's memory.
+- Many small keys where per-key overhead dominates. The Dashtable doc estimates 6-16 bytes of table overhead per item against 16-32 for the Redis dict. It measured 20M keys at 1 GB versus 1.73 GB on Redis 6.
+
+**Skip it when:**
+- Small instances or few threads. On a 2-vCPU m5.large the vendor itself shows parity with Redis (GET 191K vs 194K). In tidwall's pipeline-1 runs Redis 8.2.1 with io-threads beat Dragonfly on GET at 1 and 3-8 threads (for example 1.51M vs 1.41M at 8).
+- As a read-heavy Memcached replacement. Memcached 1.6.38 posted higher GET throughput than Dragonfly in every tidwall configuration, and in the vendor's own table Memcached had the lower GET p99 (0.34 ms vs 1 ms).
+- Deep pipelining. At pipeline 10-50 on 16 threads, Garnet and Pogocache did roughly 3-4x Dragonfly's GET throughput in tidwall's runs. At pipeline 50 on 1 thread, Dragonfly's GET p99 was about 289 ms against about 15 ms for Redis.
+- Offering it as a hosted or managed service, or embedding it in an in-memory data store product. The BUSL-1.1 Additional Use Grant forbids both. Each version converts to Apache-2.0 on 2030-11-01 or four years after its release, whichever comes first.
+- Setups that need recent Redis features or files, or that let untrusted clients run EVAL. It cannot load the RDB v15 format from Redis 8.10 (#8361; the maintainer says it supports formats up to Redis 7). There is no SCRIPT KILL or lua-time-limit, so one infinite Lua script pins a thread until kill -9 (#8269). Cluster mode has no gossip protocol and needs an external cluster manager.
+
+**Vs siblings:** Pick Dragonfly over Pogocache, Pelikan/Segcache or Garnet when you need broad Redis data types and commands, replication, snapshots and single-node multi-key atomicity on one big box, not just raw GET/SET cache throughput. In tidwall's suite Pogocache beat it on GET in every configuration, and Garnet beat it in all but two configurations, by about 3x under pipelining. Against KeyDB, both are multithreaded Redis alternatives; Dragonfly is the actively released one (v2.0.0 on 2026-09-16), but its license is BUSL-1.1.
+
+**Gotchas:**
+- maxmemory defaults to 80% of detected memory, and the server exits at startup if maxmemory is below 256 MB per proactor thread.
+- Lua scripts that touch undeclared keys fail by default. Allowing them (default_lua_flags=allow-undeclared-keys) runs the script as a GLOBAL transaction that locks every shard.
+- PEXPIRE/PSETEX deadlines above 2^28 ms (about 3.1 days) are silently rounded to the nearest second. Expiries are capped at about 8 years, strings at 256 MB, and hash-field TTLs have 1-second precision.
+- An HTTP console and /metrics are served on the main 6379 port by default; disable with --primary_port_http_enabled=false if the port is exposed. Several 2026 advisories include an unauthenticated heap overflow in the memcached reply builder (GHSA-9q98-cx72-pg45), so stay on current releases.
+
+**Status:** Very active (v2.0.0 released 2026-09-16, last push 2026-09-26, about 31.7k stars) and production-positioned. It is a BUSL-1.1 source-available server, not a library, so evaluate the license and a few days of your own workload (as the FAQ advises) before replacing Redis.
+
+[repo](https://github.com/dragonflydb/dragonfly) · [benchmark](https://github.com/dragonflydb/dragonfly#benchmarks)
+
+##### EloqKV  `C++`  `GPL-2.0-only OR AGPL-3.0-only`  `active`  `Tier C`
+
+Multi-threaded Redis-API distributed KV database with ACID transactions; vendor benchmark shows about 4.5-8.5x single-threaded Redis throughput.
+
+**Beats:** Redis — EloqData's own August 2024 post (now only on the Wayback Machine) tested EloqKV 0.7.4 with WAL and data store off against Redis 7.2.5 (persistence off, no io-threads) and DragonflyDB 1.21.2. Server: one AWS c7g.8xlarge Graviton. Client: memtier_benchmark on a c6gn.8xlarge. Workload: 128-byte values, 5M keys, 128-1024 connections, 300 s runs. Read by eye from the charts, Redis stays near 200K ops/s while EloqKV rises from about 950K to 1.7M ops/s (roughly 4.5-8.5x), and at 1024 connections P999 is about 3 ms for EloqKV versus 11-12 ms for Redis. No compiler or build flags are given, and the page itself says Redis would normally run as a multi-instance cluster on such a machine.
+
+**Known shortcoming:** First-party benchmark in which Redis ran without io-threads; chart values are approximate. The tx_service core is BSL-licensed (usability mixed).
+
+**Known shortcoming:** LICENSE CHANGE: the required data_substrate core moved from GPL/AGPL to BSL 2.0 on 2026-01-27 (non-production, non-commercial use only until 2031), so a source build is not production-usable without a commercial agreement. Benchmark is a vendor 2024 v0.7.4 run (Wayback copy) read off charts; Redis single-threaded without io-threads; Dragonfly slightly faster.
+
+**Known shortcoming:** 178 commands at HEAD (no Streams/HLL/Geo/RENAME/COPY/RESP3/Functions/SCRIPT KILL). Default eloqkv.ini has enable_wal=off (not durable out of the box) and one replica (no auto-failover). Open bugs: MULTI aborts on first error (#502), no Lua timeout (#507), replay TTL/key-length bugs (#503/#504/#498), Jepsen stall (#188). Linux only; io_uring default needs --privileged in Docker.
+
+**How:** It uses a thread-per-core, shared-nothing design. Keys are partitioned (Redis CRC16 hash slots) into one CcShard per core, and each shard is driven by one TxProcessor. Work for another shard is passed to that shard as a message, not done under a lock, so each shard's state has a single writer. With external processing on (the CMake default), brpc worker N runs the processing round for shard N, so a command can be parsed and executed on the same worker without a thread hand-off. Each shard also allocates from its own mimalloc heap. Networking uses io_uring by default; the 2024 benchmark post said io_uring networking was missing then and that EloqKV was bound by the network stack. The margin over Redis comes mostly from using all 32 vCPUs where Redis runs commands on one thread.
+
+**Use it when:**
+- You want one large multi-core Redis-API node instead of running a Redis Cluster, and the traffic is mostly simple string, hash, list, set or sorted-set commands. The benchmark used 128-byte values, 5M keys and 128-1024 connections.
+- You need real multi-key atomicity: BEGIN/COMMIT/ROLLBACK sessions, MULTI/EXEC that rolls back on error, or Lua scripts that read and create keys across nodes without hash-tag co-location.
+- You want Redis-API data that survives power loss (WAL on) and can be larger than RAM, with cold data on local disk or object storage. A metadata store is a better fit than a throwaway cache.
+- You run on Linux x86-64 or ARM64 (the benchmark host was Graviton) and can use the Ubuntu 24.04 release tarballs or a privileged Docker container.
+
+**Skip it when:**
+- Production or commercial use of a build from this repo without a deal with EloqData. On 2026-01-27 the required data_substrate/tx_service submodule moved from GPLv2/AGPLv3 to a 'Business Source License 2.0' text. That license allows only non-production, non-commercial use until the 2031-01-08 change date.
+- Apps that need commands with no handler registered in src/redis_service.cpp at HEAD: Streams (XADD), HyperLogLog (PFADD), Geo, RENAME, COPY, OBJECT, WAIT, TOUCH, RANDOMKEY, FUNCTION/FCALL, BZPOPMIN/BZPOPMAX and HELLO (so no RESP3). The vendor compatibility page also marks ACL users, CLIENT TRACKING, MONITOR and SCRIPT KILL as unsupported.
+- Pure in-memory cache throughput is the only goal. In EloqData's own test DragonflyDB was slightly ahead on every workload, with lower P999 latency on the read-only and mixed runs.
+- Code that depends on exact Redis semantics. On the first runtime error, MULTI/EXEC aborts the whole transaction (#502). OCC conflicts make MULTI and Lua re-run from the start, so a PUBLISH inside a script can be delivered twice (#500). Pub/Sub is best-effort, process-local plus forwarding, and not scoped by namespace (#499).
+- You need proven HA and correctness under faults. The shipped eloqkv.ini says node_group_replica_num currently supports only 1, which means no automatic failover. An internal Jepsen run that ended with no responsive nodes is still open (#188).
+
+**Vs siblings:** Pick EloqKV over Dragonfly, Valkey or KeyDB when you need ACID BEGIN/COMMIT/ROLLBACK, cross-node transactions without hash tags, or durable larger-than-RAM data behind the Redis API. For a pure in-memory cache, Dragonfly was slightly faster than EloqKV even in EloqData's own benchmark.
+
+**Gotchas:**
+- The shipped eloqkv.ini sets enable_wal = off, so a default install is not durable even though durability is the headline feature. The README's docker-compose example turns it on with -enable_wal=true.
+- Lua has no time limit and there is no SCRIPT KILL, so one infinite EVAL pins a worker and holds its locks indefinitely (#507). Scripts are also re-run in full on OCC conflicts.
+- The EVALSHA script cache is per process and not replicated, so EVALSHA must reach a node that has already seen the script body.
+- Open replay and serialization bugs filed in June 2026: SET ... KEEPTTL loses the TTL on WAL replay (#504); SET over a non-string key stores an empty value on replay paths (#503); keys are serialized with a uint16 length although MAX_KEY_SIZE allows 32 MB (#498).
+
+**Status:** Actively developed (release 1.3.8 on 2026-09-09, nightly builds, last push 2026-09-17, 1.5k stars), but usability is mixed. The Redis layer is GPLv2 or AGPLv3, while the mandatory Data Substrate core is BSL 2.0 limited to non-production use until 2031. The benchmarked 0.7.4 is two years older than current builds.
+
+[repo](https://github.com/eloqdata/eloqkv) · [benchmark](http://web.archive.org/web/20260616115015/https://eloqdata.com/blog/2024/08/17/benchmark-single-node)
+
+##### W-TinyLFU (C++ header-only, based on the TinyLFU paper)  `C++`  `reference (no LICENSE file in vimpunk/w-tinylfu)`  `abandoned`  `Tier C`
+
+Small C++ header-only W-TinyLFU cache: frequency-sketch admission in front of segmented LRU, for higher hit ratios than plain LRU.
+
+**Beats:** LRU — This C++ port has no benchmark of its own. The only evidence is hit-ratio plots in the TinyLFU paper (arXiv 1512.00727v2), which the authors produced with a Java prototype and with Caffeine 2.0 on Zipf 0.7/0.94, SPC1-like and real traces. There, W-TinyLFU with a 1% window tied or beat LRU, ARC and LIRS on most traces, but OLTP, F1 and F2 needed a 20-40% window, which this port cannot configure. Hit ratio does not depend on hardware, and no compiler, hardware or throughput figures exist for this code.
+
+**Known shortcoming:** 'Best on every trace' is overstated: the default 1% window loses on OLTP/F1/F2 traces (needs 20-40%); the ~89% figure is memory saved vs a strawman sketch, not a gain over LRU. No licence (reference only), last commit 2018-10, not thread-safe (verifier downgrade).
+
+**Known shortcoming:** No benchmark of its own; hit-ratio figures come from the paper (Java prototype and Caffeine). The window is fixed at 1% with no adaptation, while the paper's OLTP/F1/F2 traces needed 20-40%. Not thread-safe, no HashDoS guard (issue #1 open since 2017), abandoned 2018.
+
+**Known shortcoming:** The frequency sketch hashes raw key bytes, so std::string or padded keys hash wrongly and admission quietly degrades. From code reading (not run): capacity 1 and change_capacity shrinking hit UB on an empty probationary list; 1L/0xfL shifts are UB where long is 32-bit (Windows). README says C++11 but a constexpr loop needs C++14; missing <cstdint> etc. may break GCC 13+. No LICENSE file, but every header carries an MIT-style notice.
+
+**How:** The gain is in hit ratio, not per-operation speed. A count-min sketch of 4-bit counters (four counters per key, packed sixteen to a 64-bit word, following Caffeine) estimates each key's recent frequency. Once about 10x capacity increments have been recorded, every counter is halved (the paper's 'reset' aging). New keys go into an LRU window sized at 1% of capacity. The window's LRU victim is admitted into a 99% segmented LRU (80% protected, 20% probationary) only if its estimated frequency is strictly higher than that of the probationary segment's LRU victim; otherwise the newcomer is dropped. Each get() pays a std::map lookup, a std::list splice, four sketch increments and a shared_ptr copy, so it costs more per call than a hand-rolled LRU. A Bloom-filter 'doorkeeper' header ships in the repo but is not wired in.
+
+**Use it when:**
+- Single-threaded, or externally locked, in-process C++ object caches where plain LRU loses hit ratio to scans or to skewed (Zipf-like) traffic full of one-time keys.
+- Keys that are integers or padding-free POD ids. The sketch hashes the key's raw bytes, so only these keys hash consistently.
+- Expensive or large values (the repo's test caches 4 KB objects), where each extra hit is worth more than the policy's per-operation overhead (map lookup, list splice, sketch updates), and where returning shared_ptr keeps an evicted value alive while a caller still uses it.
+- As a readable reference (under 900 lines across four headers, including license text) to vendor and harden when you need W-TinyLFU in C++ and cannot use the JVM.
+- Frequency-skewed workloads like the paper's search-engine, DS1 and SPC1-like traces, where the fixed 1% window tied or beat LRU, ARC and LIRS.
+
+**Skip it when:**
+- Multithreaded access without your own lock. Even get() mutates the LRU order and the sketch, and a single global mutex serializes every operation.
+- Recency-heavy or 'sparse burst' workloads such as the paper's OLTP, F1 and F2 traces, which needed a 20-40% window. This port hard-codes a 1% window and an 80/20 split, with no hill-climbing adaptation of the kind Caffeine now does.
+- Untrusted or adversarial keys. There is no HashDoS protection: Caffeine's random admission of 'warm' candidates is missing, and issue #1 has been open since 2017.
+- std::string keys, or structs with pointers or padding. Equal keys hash differently, so admission decisions silently degrade.
+- Windows/MSVC builds, caches bounded by bytes or needing expiry, or latency-critical hot paths. Every insert does three heap allocations (std::map node, std::list node, make_shared block) and stores two copies of the key, and no throughput benchmark exists.
+
+**Vs siblings:** On the JVM, use Caffeine: it is the canonical W-TinyLFU, with an adaptive window, HashDoS jitter and concurrency. For offline trace studies, libCacheSim (SIEVE's repo) already ships WTinyLFU.c next to SIEVE, LRU and ARC. Pick this one only when you want a tiny dependency-free C++ W-TinyLFU object to embed in a single-threaded component with integer keys and are prepared to fix its edge cases. If you mainly need a simpler, better-than-LRU C++ policy, SIEVE or LHD have stronger evidence.
+
+**Gotchas:**
+- The sketch hashes the key's raw object bytes (Jenkins one-at-a-time over reinterpret_cast<const char*>(&key)), not std::hash. For std::string, or any key holding pointers or padding, the caller's key and the cache's stored copy can hash differently, so frequency comparisons turn into noise and nothing reports it.
+- Capacity edge cases (found by reading the code, not by running it): with capacity 1 the main SLRU gets 0 slots, and the second insert reads the victim of an empty probationary list, which is undefined behavior. Shrinking with change_capacity() can hit the same path when the protected segment holds more entries than the new capacity. change_capacity() also clears the sketch and, because is_full uses >=, evicts one entry more than needed.
+- insert() on an existing key only swaps the value. It does not refresh recency or bump the sketch; only get() records accesses. If the window is full it runs an eviction first anyway, so an update can shrink a full cache by one entry.
+- Portability: uint32_t, std::enable_if, std::max, std::min and std::hash are used without including <cstdint>, <type_traits>, <algorithm> or <functional>. The code relies on transitive includes of the kind GCC 13 removed from libstdc++. The hit and miss counters are plain int and overflow after 2^31.
+
+**Status:** Abandoned: the last commit was 2018-10-24, there are no releases, and six issues opened in 2017-2018 are still open, including HashDoS protection and 'Thorough testing required'. GitHub detects no license and there is no LICENSE file, but every header carries an MIT-style permission notice (Copyright 2017 mandreyel), so it is best treated as a small reference to vendor and fix rather than a dependency.
+
+[repo](https://github.com/vimpunk/w-tinylfu) · [benchmark](https://arxiv.org/pdf/1512.00727)
+
+#### columnar-analytics
+
+##### FireDucks  `Python (compiler-generated C++ backend)`  `BSD-3-Clause`  `active`  `Tier C`
+
+NEC's closed-source drop-in for pandas: lazy IR optimization plus multithreaded Arrow kernels; first-party TPC-H SF10 claims 141x.
+
+**Beats:** pandas — FireDucks' own TPC-H SF10 run (22 queries written in pandas by the FireDucks team and executed through the import hook) on an AWS m7i.8xlarge (Xeon Gold 6526Y, 32 cores, 512 GB, Ubuntu 24.04, performance governor) reports an average 141x speedup over pandas excluding I/O and 55x including Parquet I/O, against DuckDB 109x/61x and Polars 58x/50x, so DuckDB wins once I/O counts. No library versions, compiler flags or independent reproduction exist, and result checking is off by default in the harness; in Nov 2024 the Polars author ran an earlier FireDucks through the same harness (including I/O, Polars-generated data, his own unstated hardware) and got slower times than Polars on q1-q9 (e.g. q9 58.6 s vs 1.68 s) and a std::length_error crash on q10.
+
+**Known shortcoming:** First-party benchmark from NEC with binary-only wheels (the GitHub repo is an issue tracker, no public source); no compiler/flags and unpinned versions.
+
+**Known shortcoming:** Closed engine (32 MB .so with MLIR+TFRT+Arrow, no SBOM; GPU backend enterprise-only). Pins pandas<2.4 and pyarrow 21.0.x exactly (pyarrow CVE issue #81 unanswered); no release since 1.4.4 (2025-12). Loops/apply/fallbacks are slower than pandas (its own PyData 2025 slides, #73); memory blowups and failed end-to-end runs (#73, #80). The harness's result check is off by default; in Polars' author's Nov 2024 run of the same harness an older FireDucks was slower than Polars on q1-q9 and crashed on q10. Lazy semantics: late errors, different merge row order, isinstance(pandas.DataFrame) is False.
+
+**How:** Each pandas call adds an op to a dataframe-specific intermediate representation. The wheel bundles LLVM/MLIR and TFRT and its extension exports MLIR symbols. A compiler pass optimizes that IR before it runs: projection pushdown (drop unused columns before sort, merge or groupby), predicate pushdown (filter before merge), pattern rewrites such as where().groupby() into filter-then-groupby, and caching of intermediate results. The default 'dfkl' backend then runs the ops as multithreaded C++ kernels over Apache Arrow columns, adding its own parallelism on top of Arrow compute, where pandas runs single-threaded; data is treated as immutable and column buffers are shared rather than copied.
+
+**Use it when:**
+- Existing vectorized pandas pipelines (read_parquet/read_csv, filter, merge, groupby-agg, sort) that you cannot afford to rewrite in Polars or SQL; try it by running the script under `python -m fireducks.pandas`.
+- Multi-GB in-memory tables on many-core Linux x86-64 boxes (the headline run used 32 cores and TPC-H SF10), where pandas' single-threaded execution is the bottleneck.
+- Code with a poorly ordered data flow, such as filtering after a merge, sorting whole frames, or selecting columns late. FireDucks' own talk says query-optimizing engines gain most here, because pushdown fixes the order automatically.
+- CPU-only machines where cudf.pandas is not an option; Apple Silicon (macOS 14+ arm64) is also supported, as experimental since 1.2.7.
+
+**Skip it when:**
+- Loop-heavy code (iterrows, apply, row-wise loc/iloc, NumPy calls on frames). FireDucks' own PyData 2025 talk rates this code 'Slower' than pandas, UDFs in apply are not compiled, and users report 2-3x slowdowns there (issue #73).
+- Workloads that hit unimplemented APIs. Fallbacks convert data to pandas and back and cache copies: users report memory growth that crashed a server (#73), and higher memory, longer runtime and failed end-to-end runs versus pandas on 1.4.3 (#80, Dec 2025).
+- Modern or locked-down stacks. 1.4.4 requires pandas <2.4 (pandas 3.0.x is current) and pyarrow 21.0.x exactly; an issue asking for pyarrow >=23.0.1 to fix CVE-2026-25087 (#81, June 2026) has no reply. It does not support Python 3.14, native Windows, Linux aarch64 or glibc <2.28.
+- Environments that must audit or vendor code. The engine is a 32 MB closed-source .so from NEC, with no SBOM or build provenance, and the FAQ says no organization offers paid support. The GPU backend is enterprise-only.
+- Remote or fsspec inputs (s3://, http URLs), non-default read_parquet arguments, and pandas subclassing or extension dtypes: all of these fall back to pandas or are out of scope.
+
+**Vs siblings:** Pick FireDucks over cuDF (cudf.pandas) when there is no NVIDIA GPU or the pandas code has an unoptimized data flow, because cuDF executes eagerly and FireDucks reorders lazily. Pick it over chDB when the code must stay pandas rather than become SQL. Prefer cuDF or chDB when you need an open-source, auditable engine or current pandas/pyarrow versions.
+
+**Gotchas:**
+- Lazy execution makes per-step timings meaningless. A user's '30,713x faster sort' (#72) and a 'slow head()' (#48) were both deferred work. Use FIREDUCKS_FLAGS="--benchmark-mode" or call ._evaluate() before timing.
+- try/except KeyError around df[col] may not fire, because the lookup runs later. Use `if col in df` (non-lazy) or ._evaluate().
+- Fallbacks are silent by default. Set FIREDUCKS_FLAGS="-Wfallback" to log them, and "--trace=3 --trace-file=-" for a per-kernel/fallback time profile.
+- Memory is held longer than in pandas: column buffers are shared via shared_ptr until every referencing frame dies, the Arrow memory pool does not return freed memory to the OS promptly, and fallback caching can grow memory until gc.collect() runs. A delayed-deallocation bug was fixed in 1.4.0 (#69, #49).
+
+**Status:** Rated active from its roughly monthly PyPI releases through 1.4.4 (2025-12-02), though none has shipped in the ~10 months since, the GitHub repo is only an issue tracker, and a pyarrow CVE issue is unanswered. Usability is 'reference': the engine is BSD-3-licensed on paper but ships as a binary-only wheel you can neither audit, patch nor vendor.
+
+[repo](https://github.com/fireducks-dev/fireducks) · [benchmark](https://fireducks-dev.github.io/docs/benchmarks/)
+
+##### JetStream  `C++`  `no license`  `unknown`  `Tier C`
+
+MIT research prototype: LLM agents generate query-specific accelerators that plug into DuckDB or PostgreSQL; claims 833x geomean over single-threaded DuckDB.
+
+**Beats:** DuckDB — On TPC-H SF=20 (all 22 queries, warm reads, state already built), stateful accelerators were 833x faster by geomean than single-threaded DuckDB and 3544x faster than PostgreSQL 18.4, on a 2x Xeon Gold 6230 server with 376 GiB RAM. Stateless accelerators were 1.99x faster, and with RF1/RF2 refreshes every 60, 120 or 300 s the geomean including maintenance was 375x, 629x or 733x. On SEC-EDGAR SF=3 it was 102x over DuckDB and 486x over PostgreSQL. No compiler, flags, DuckDB version or code are given.
+
+**Known shortcoming:** Paper only: no code, compiler or flags. The baseline is single-threaded DuckDB; the figure legend says 843x while the text says 833x (also 3544x vs PostgreSQL).
+
+**Known shortcoming:** The 833x needs persistent per-query state (range trees, q-gram index, bitmaps); stateless it is only 1.99x, and memory rises to 28.1 GB vs 10.3 GB. Writes erode the gain (733x to 375x as the refresh interval drops from 300 s to 60 s; point writes 8.8x). Needs patched DuckDB transaction hooks and queries go through an accel_qN_aux() table function, so it is not a drop-in; the SEC figure plots only 6 selected queries.
+
+**How:** Almost all of the speedup comes from persistent, query-specific auxiliary state. This is generated sufficient statistics keyed on the query's parameters: per-month revenue for TPC-H Q14; per brand/container 2-D range trees over part size x quantity for Q19, so each predicate branch becomes one range-sum probe; a q-gram inverted index plus a baseline histogram with sparse corrections for Q13; dense-ID bitmaps for distinct counts in SEC-EDGAR Q1. A read then touches a few state partitions instead of scanning, joining and aggregating the base tables. Without that state, the generated kernels over native scans reach only 1.99x. Writes go through generated maintenance code, similar to incremental view maintenance. At pre-commit a per-accelerator cost model picks one of four actions (apply delta, rebuild the affected partitions, full rebuild, or invalidate and repair lazily), and the result is published optimistically under per-partition versions.
+
+**Use it when:**
+- A fixed set of parameterized analytical templates (reports, dashboards) runs repeatedly on DuckDB or PostgreSQL, and each query reduces to a small aggregate over parameters you can key state on.
+- The workload is read-heavy and writes arrive in batches. With TPC-H RF1/RF2 refreshes (about 0.1% of the database each) every 60 s, the workload geomean including maintenance was still 375x over DuckDB.
+- You want the existing DBMS to remain the single copy of the data, with ad-hoc SQL and transactions intact. GenDB and Bespoke OLAP instead rewrite storage or keep a second copy.
+- You are researching LLM-synthesized database specialization. The workflow is reusable: an external orchestrator owns the differential tests and A/B benchmarks so the coding agent cannot game them.
+- You have memory to spare. Stateful accelerators used 28.1 GB at TPC-H SF=20, against 10.3 GB for stateless.
+
+**Skip it when:**
+- Anything production-bound. No code, license or release is public, so the only option is to reimplement the design from a v1 arXiv preprint with no venue.
+- Ad-hoc or exploratory SQL. Only the pre-declared templates are accelerated; every other query runs at plain DuckDB or PostgreSQL speed.
+- Memory-constrained hosts. At SF=20, stateful JetStream needs 28.1 GB, against 18.1 GB for GenDB, 16.12 GB for Bespoke OLAP and 10.3 GB for stateless JetStream.
+- Write-heavy workloads. The TPC-H geomean falls from 733x to 375x as refreshes go from every 300 s to every 60 s. On SEC-EDGAR with point writes every 0.5 s it is only 8.8x over DuckDB and 4.0x over PostgreSQL.
+- You only need faster execution without precomputation. Stateless accelerators give 1.99x, and that is against single-threaded DuckDB; multi-threaded DuckDB was not used as a baseline.
+
+**Vs siblings:** Sirius also speeds up DuckDB workloads, but as a GPU engine with public code that is about 5.5x faster at SF100 on general queries. Umbra and Velox are general-purpose engines. Pick JetStream's approach only for a fixed set of parameterized templates on DuckDB or PostgreSQL, where you will trade memory and a from-paper reimplementation for precomputed state; otherwise use one of the siblings.
+
+**Gotchas:**
+- The Figure 6 numbers are warm reads with valid state and exclude the one-time state build. After an invalidation or a publish conflict, the affected queries run on the base-table fallback path until the state is repaired.
+- Correctness is checked empirically, not proven. It rests on differential tests against the host DBMS and an audit agent with extra hidden tests. Each query gets unique LLM-written code (plus maintenance logic) that someone has to review and own.
+- The geomean hides a wide spread. Section 3.4 reports about 8.6x best-valid for Q13 and about 2638x for Q19. The SEC-EDGAR figure plots only six selected queries (Q1-Q4, Q6, Q24) out of a 1000-query SQLSmith set.
+- The text and the Figure 6 legend disagree (833x vs 843x, and 3544x vs 3554x for PostgreSQL). The DuckDB baseline is single-threaded with no version given, while GenDB is plotted multi-threaded. Changing a template means re-running synthesis, which cost $41.63 for all 22 stateful TPC-H accelerators.
+
+**Status:** Reference only: an MIT CSAIL arXiv preprint (v1, 23 Aug 2026) with no code, license or release; a co-author's publication page links only the paper and BibTeX, so maintenance status is unknown.
+
+[benchmark](https://arxiv.org/abs/2608.22476)
+
+##### tickdb (DerekNest)  `Rust`  `no license`  `active`  `Tier C`
+
+Rust tick-trade store: delta-of-delta/varint+zstd segments ~20% smaller than Parquet+zstd, but slower than DuckDB on ingest and all queries.
+
+**Beats:** Parquet (zstd-compressed) — The author's BENCHMARKS.md (2 runs on 2M synthetic Binance-style trades, hardware not stated, release profile with opt-level 3 and thin LTO) reports 6.50 bytes/trade vs 8.13 for Parquet written by DuckDB COPY with ZSTD, about 20% smaller. DuckDB reading that Parquet wins every query (OHLCV ~1.5x, VWAP ~190-240x, top-10 ~55-115x), and DuckDB's CSV load is ~2.7x faster at ingest. Neither side is tuned: each query is timed once, the Parquet file sets only COMPRESSION ZSTD and leaves column types to read_csv_auto, and the synthetic data (i.i.d. sides, uniform qty, 950-1050 ms between trades despite a '~1ms' comment) was never replaced with the real Binance run the docs describe.
+
+**Known shortcoming:** NOT FASTER: the only win is storage (6.50 vs 8.13 B/trade, ~20% smaller than Parquet+zstd); ingest is ~2.7x slower and every query is slower than DuckDB (the author's own doc says 1.5-240x). No license.
+
+**Known shortcoming:** The 'includes durability' excuse is false (both tickdb bench paths use FsyncPolicy::Never); mmap is not zero-copy (segments are copied to the heap); FORMAT.md says CRC-32C but the code computes IEEE CRC-32; DESIGN.md still claims a ~3x OHLCV win withdrawn by BENCHMARKS.md. Synthetic data only; Parquet side untuned; each query timed once; single-threaded; two commits, 0 stars, ~0.8 GB repo of committed build files.
+
+**How:** It is not faster; its only win is size, from how each 65,536-row block is encoded: it stores timestamps as delta-of-delta + zigzag + LEB128 varints (a byte-aligned simplification of Gorilla), rescales prices to a common decimal exponent and delta + zigzag varint-codes the mantissas, stores sizes and trade_ids as plain varints and side as run-length pairs, then zstd-compresses the block at level 3. Reads are slow by construction: every query decompresses and decodes all five columns of each block (no projection pushdown), the 'mmap' reader copies each whole segment into a heap Vec, and the kernels are single-threaded scalar loops (OHLCV does one BTreeMap insert per row). The author credits DuckDB's vectorized engine for the gap.
+
+**Use it when:**
+- As readable reference code for a trade-specific block codec (DoD timestamps, decimal-mantissa delta prices, RLE side, zstd) that reached 6.50 bytes/trade on the author's 2M-row synthetic set, vs 8.13 for Parquet+zstd written by DuckDB.
+- To study a small end-to-end storage engine in Rust: CRC-framed WAL with EveryWrite/EveryNMs/Never fsync policies, a manifest updated by atomic rename, immutable segments with zone maps, size-tiered compaction and crash-recovery tests.
+- To learn Raft testing: an I/O-free RaftNode::step state machine driven by a seeded fault-injection simulator (drop, delay, duplicate, partition, crash). The README reports 1,000 seeds with zero invariant violations.
+- As design input only, when bytes per trade in cold storage matter more than query or ingest speed and you will write your own implementation. The code has no license.
+
+**Skip it when:**
+- Any query-speed goal. DuckDB over the same Parquet file was about 1.5x faster on 1-minute OHLCV, 190-240x faster on VWAP and 55-115x faster on top-10. Polars also beat it on VWAP.
+- Ingest-bound pipelines: 7.32M rows/s (one run) vs 20.05-20.67M rows/s for DuckDB's CSV load. BENCHMARKS.md excuses this by saying tickdb pays for durability, but both tickdb bench paths open the engine with FsyncPolicy::Never.
+- Production use or code reuse: no license, 2 commits (both 2026-07-04), 0 stars, no releases, not on crates.io, and the author calls it a portfolio project. The Dockerfile says it has never been built.
+- Data outside the fixed trade schema. There are no dynamic or optional columns, the CLI's CSV parser expects Binance aggTrades columns, qty is stored as 8-decimal fixed point (extra digits are truncated), and there is no Parquet or Arrow file import.
+- Concurrent readers or writers. Engine is documented as single-threaded, so callers must serialize access (the server wraps it in a Mutex), and queries run on one thread.
+
+**Vs siblings:** Practically never for real workloads. Among catalogued Parquet alternatives, Vortex, BtrBlocks and FastLanes report faster writing or decoding than Parquet, and QuestDB is a real time-series engine for tick data. Pick tickdb only as a compact, readable Rust example of a trade-specific codec together with a WAL, compaction and Raft simulation.
+
+**Gotchas:**
+- Segments are not really zero-copy mmap. MmapSegment::open copies the whole mapped file into a Vec (mmap.to_vec()), and Engine::scan collects each segment's decoded batches into a Vec before yielding them, so RAM use grows with segment size.
+- FORMAT.md says checksums are CRC-32C (Castagnoli), but the code uses crc32fast, which computes standard CRC-32 (IEEE). An independent reader built from FORMAT.md would reject every block.
+- The docs contradict each other. DESIGN.md Phase 4 still says tickdb is ~3x faster than DuckDB on OHLCV and only 3-4x slower on VWAP and top-N, and agg.rs says the kernels hit a >=100M rows/s/core target. The later BENCHMARKS.md withdraws the OHLCV win and measures 15-34M rows/s.
+- The repo has about 24.5k build-artifact files committed under target/ and no .gitignore, and GitHub reports about 0.8 GB of disk usage, so a clone is heavy.
+
+**Status:** Dormant single-drop portfolio repo (2 commits on 2026-07-04, none since) with no license, so the code is reference-only and cannot legally be reused.
+
+[repo](https://github.com/DerekNest/tickdb) · [benchmark](https://github.com/DerekNest/tickdb/blob/main/docs/BENCHMARKS.md)
+
+#### embedded-kv
+
+##### BTreePlus  `C#`  `MIT for the Community Edition NuGet package (binary only) and the demo/docs repo; the engine source is not published; the Pro/Enterprise Edition is proprietary (private NuGet feed plus license token)`  `active`  `Tier C`
+
+Binary-only fixed-width B+Tree index for .NET; vendor claims 4.4-7x faster bulk inserts than SQLite (paid Pro build).
+
+**Beats:** SQLite — According to the vendor's NuGet README (the only evidence), the paid BTreePlus Pro, using 32 KB pages on NVMe under .NET 9.0/Linux, bulk-inserted 4M rows in 1.03 s vs 4.53 s for SQLite (4.4x) and 1B rows in 346 s vs 2410 s (7x), with no CPU, SQLite pragmas, batching method or harness published. A separate i9-13900 + Samsung 990 PRO run loaded 1B 14-byte records in 5m10s vs PostgreSQL's 6m08s (~1.19x throughput), labelled 'WAL enabled for both engines' even though the same README says BTreePlus has no WAL.
+
+**Known shortcoming:** Binary-only NuGet (engine source not published); the fast numbers come from the closed paid Pro build, and the README's Community 3.26x conflicts with the vendor PDF.
+
+**Known shortcoming:** The engine is a binary-only NuGet DLL (MIT covers the free binary and docs only) and the 4.4x/7x claims are for the paid Pro build. In 1.3.1 the constructor forces enableCache=false, so the demo/PDF's enableCache:true is silently ignored. No WAL/journal, yet the PostgreSQL bench is labelled 'WAL enabled for both'; no CPU/pragmas/harness for the SQLite table. One Monitor lock per tree serializes readers and writers; fixed-capacity errors; the release DLL ships a test/fuzz class and a hard-coded /home/mmh log path; 9 stars.
+
+**How:** It has no SQL or VM layer: fixed-width key/value slots sit directly in fixed-size pages (pageSize x 512 bytes, up to 64 KB) and are compared as raw bytes. The vendor attributes the headline numbers mainly to a write-back page cache with deferred flush: dirty pages are written at Commit(), at a byte watermark or by a ~1 s auto-commit, and the PDF gives ~3.16M inserts/s with the cache on vs ~418K/s with it off. Other speed paths are an append fast path for monotonically increasing keys (TryAppendFastPath in the DLL), a bottom-up BulkLoad into an empty tree (0.90 leaf fill) and FNV-1a hash sharding across several trees (ShardManager) for parallel batch inserts. It also has no journal (no WAL or rollback journal), so it avoids the double write SQLite pays for crash safety.
+
+**Use it when:**
+- A .NET process that needs a local sorted index over fixed-width keys (big-endian Int64 IDs, Unix timestamps, padded product codes) with small fixed-size values, e.g. a POS/kiosk secondary index or a log keyed by sequence number.
+- Loading tens of millions to billions of fixed-width records in key order when losing uncommitted work on a crash is acceptable. This is the shape of the published SQLite and PostgreSQL runs.
+- Hot-path point lookups that must not allocate: Find writes into a caller-supplied Span<byte>, so a SQL engine's parsing and row materialisation are avoided.
+- You are prepared to evaluate and license the commercial Pro Edition. Every published speedup is for that build (page cache plus Bulk Insert), not for the free package.
+
+**Skip it when:**
+- You need source you can audit, patch or vendor. The engine is closed, and the MIT license covers only the free binary and the docs.
+- You need crash-safe atomic commits. The NuGet README says it is 'not journaling-based' and has no WAL: power loss during a write can lose the latest uncommitted operation, and consistency is promised only after a successful Commit().
+- Variable-length keys or values, secondary queries, multi-statement transactions, or concurrent readers. Each tree has one Monitor lock that serialises Find, Insert, Erase and Commit.
+- You expect the free Community build to be fast. The vendor calls it 'not optimized for speed' (page cache disabled, ~418K inserts/s in the PDF), so the 4.4x/7x figures do not apply to it.
+- Production-critical use generally. It has 9 GitHub stars, zero issues, one Show HN post with no comments and no independent benchmarks. The release DLL even ships its delete/rebalance test suite as a public class (DeleteEdgeCases) with a hard-coded /home/mmh/... log path and 'ROUTING BUG DETECTED' repro strings.
+
+**Vs siblings:** For .NET, ZoneTree (MIT, source on GitHub, a transactional ACID LSM engine that also reports beating SQLite) is the default pick. Choose BTreePlus only if you want a minimal fixed-width B+Tree file with a published on-disk format that third-party readers can parse, and you are willing to license the closed Pro build to get the advertised speed.
+
+**Gotchas:**
+- In the public 1.3.1 DLL the BTree constructor overwrites the enableCache argument with false (visible in the IL), so CreateOrOpen(..., enableCache: true), as used in the GitHub demo and the PDF, is silently ignored. A public SetUseCache(bool) method with no license check exists, but its behaviour in the free build is not documented.
+- The docs contradict each other and the binary. The GitHub README shows a new BTree(path, keyLength, ...) constructor in namespace BTreePlus that the DLL does not use (it is mmh.BTree with static factories), and it credits the Community Edition with the cache-on 3M-inserts-in-0.95 s result. The NuGet README lists Erase as free, while NOTICE.md and the PDF call it Enterprise-only. The DLL publicly exposes Erase, BulkLoad, FindRangeValues, PageCache and ShardManager anyway.
+- Plan capacity up front. max_recs sizes the page allocation table (PAT), and the DLL has 'PAT is full (fixed size)' and 'PAT exhausted after second grow' errors. In-memory trees are capped by the MemoryStream size limit. Count is an int that is recomputed across all leaf pages on each call.
+- Ordering is raw byte order. Integers must be written big-endian and right-aligned, and strings zero-padded, or range order is wrong. The format spec says over-long keys are truncated to keylen, so distinct long keys can collide.
+
+**Status:** Maintained: NuGet 1.3.1 shipped in December 2025 and the GitHub docs were updated 2026-01-23 by a single vendor (MMH Systems), but usability is mixed: the free MIT package is binary-only with its page cache forced off, and the advertised speed needs a closed commercial license.
+
+[repo](https://github.com/koyllis/BTreePlus) · [benchmark](https://www.nuget.org/packages/BTreePlus)
+
+##### CompassDB  `C++`  `no license`  `unknown`  `Tier C`
+
+Paper-only RocksDB-derived KV engine that replaces SST indexes with in-memory two-tier perfect hashing; reports 2.5-4x RocksDB YCSB point-op throughput.
+
+**Beats:** RocksDB — The DiPeak authors ran YCSB with 16 threads on a Dell T440 (Xeon Silver 2.40 GHz, exact model not given; 128GB RAM; Samsung PM9A3 NVMe; Ubuntu 20.04 ext4). They loaded 200M 20B/1KB records and ran 100M operations with O_DIRECT, compression off, and 4x128MB memtables, against RocksDB 7.9.2 and PebblesDB commit 703bd0 (2019). Bar labels give CompassDB vs RocksDB of 122.7 vs 33.8 KOPS on A (3.6x), 186.3 vs 42.1 on B (4.4x), 137.0 vs 54.2 on C (2.5x), 262.7 vs 74.4 on D (3.5x), 98.4 vs 24.1 on F (4.1x) and 2.08 vs 11.04 on E (5x slower). Compiler and flags are not stated, and nobody else has reproduced the results.
+
+**Known shortcoming:** The 5-17x is against PebblesDB, not SplinterDB. The claimed SIGMOD/PACMMOD venue could not be found in Crossref, so this is an arXiv-only vendor preprint; no code.
+
+**Known shortcoming:** Loses YCSB-E about 5x (2.08 vs 11.04 KOPS; scans become random reads in hash order). Lopsided baseline: RocksDB 7.9.2 with a 32 MB cache under O_DIRECT and no stated Bloom filter, while CompassDB keeps its whole index in RAM (measured ~29-34 B/key including memtables, vs a 6.5 B/key estimate). Internal mismatches (text 5.5x vs bars ~3.5x on D; duplicated figure bars); deletes leave tombstones until GC; AVX2/x86 only.
+
+**How:** Each TPH (the SSTable replacement) carries a global perfect-hash table that maps a key's 64-bit hash to a 1-byte signature (a Bloom-filter substitute with about 1/255 false positives) plus the ID of the piece file holding the key. Each piece has a local perfect-hash table that maps the key to a block offset, and because both tables stay in RAM (estimated at about 6.5 bytes per key), a Get costs two in-memory lookups and one disk read. Compaction writes only new or changed keys into a new delta piece file and leaves unchanged keys where they are, and 'hash range' mode partitions each level by a 32-bit key hash so every compaction touches a fixed number of TPHs (similar to PebblesDB's guards). The perfect hash is CPHash, a mix of CHD and PTHash (dense and sparse buckets, parameter reuse, load factor 0.9), and its construction uses AVX2 with Lemire's fastmod and is split into 64 parallel segments.
+
+**Use it when:**
+- As a design reference if you maintain a RocksDB fork whose traffic is mostly point Get/Put/update (YCSB A, B, C, D, F shapes) on NVMe, with a dataset much larger than RAM.
+- Read-heavy point lookups where RocksDB index and filter blocks miss cache and cost extra I/Os. The design aims for one device read per Get. The paper reports about 3x lower read amplification (about 10 vs about 32 for RocksDB with 20B keys and 128B values) and 8.5x db_bench readrandom throughput at 200M keys.
+- Point-read workloads with 1KB-50KB values. The perfect-hash index size depends on key count, not data size, and read-only YCSB-C reports 3.6x RocksDB at 1KB and 7.2x at 50KB (my reading of the Fig. 10b bar labels).
+- SSD write-endurance-sensitive loads with random inserts. Delta piece files avoid rewriting unchanged keys, and the paper reports write amplification of 4.34 vs about 10.6-11 for RocksDB and PebblesDB at 500M keys. For read-mostly data, 'one level' mode reports 15x lower write amplification than RocksDB (100M keys, 1KB values).
+- If you are evaluating CHD or PTHash as a replacement for an SST index, CPHash's dense/sparse bucketing, parameter reuse, AVX2 fastmod and per-segment parallel build are documented well enough to copy.
+
+**Skip it when:**
+- Whenever you need something to run. There is no public repository, binary, license, API reference or build instructions, and GitHub has only unrelated 'compassdb' projects.
+- Range scans and iterators. On YCSB-E, CompassDB gets 2.08 KOPS vs RocksDB's 11.04 (about 5x slower), with average read latency of 8.0ms vs 1.5ms. Data is stored in hash order, so scans go through a sorted key-location array (8 bytes per key, sampled every 64 keys) and one random read per key.
+- Memory-constrained hosts or very large key counts with small values. The one-I/O guarantee requires every global and local index to stay in RAM, and memory grows with key count. The paper measured 1.7GB at 50M keys and 2.9GB at 100M keys (about 29-34 bytes per key in total, including memtables), well above its 6.5 bytes-per-key estimate.
+- Workloads heavy in deletes or overwrites under a tight space budget. A deleted key keeps a placeholder in the global index until its old piece file is garbage-collected. Each TPH holds up to 16 piece files by default (configurable up to 1024), so stale versions accumulate, and every compaction reads all piece files of the TPH. The paper's local-index sizing assumes 1.7x space amplification.
+- Non-x86 targets, or any production decision based on these numbers. Perfect-hash construction uses AVX2 and no other ISA is mentioned. The results are first-party vendor numbers that nobody has reproduced.
+
+**Vs siblings:** You can't pick it for deployment, because there is no code. For deployable point-lookup speedups over RocksDB, use SplinterDB (2-2.6x point queries, about 2x lower write amplification, open source), KVell, or F2/FASTER. DobLIX is the closest code-available idea: it also swaps RocksDB's SST index, for a learned one. Read CompassDB only as the catalogued reference for putting perfect hashing plus delta piece files in place of SSTs, when scans do not matter.
+
+**Gotchas:**
+- The baseline setup is lopsided. RocksDB 7.9.2 and PebblesDB got a 32MB LRU block cache under O_DIRECT, while CompassDB runs with no block cache but keeps its whole perfect-hash index in RAM (about 1.3GB even at the estimated 6.5 bytes per key for 200M keys). The paper says other RocksDB options stayed at defaults and argues against a '10-bit Bloom filter default'. But RocksDB 7.9.2's BlockBasedTableOptions::filter_policy defaults to nullptr, so whether the YCSB baseline had Bloom filters at all is not stated.
+- The numbers disagree with each other. The text claims 5.5x over RocksDB on YCSB-D, but the bar labels read 262.67 vs 74.37 KOPS, which is about 3.5x. The 1KB point in the Workload-C value-size sweep (122.7/33.79/11.86) exactly repeats the Workload-A bars rather than the Workload-C bars (137.01/54.24/24.84). The advantage over RocksDB also does not grow steadily with value size, as the text says: it is 4.2x at 300B, 2.5x at 10KB and 7.2x at 50KB.
+- The manuscript reads like a draft. It still carries the ACM template's placeholder running header 'Trovato et al.', it cites a 'Table 5.5-1' that does not exist, and two background paragraphs appear twice. It is arXiv v1 only, and the claimed SIGMOD/PACMMOD publication does not appear in Crossref.
+- The benchmark used 'hash range' mode, where TPHs are partitioned by a hash of the key rather than by key order. I infer, though the paper does not say so, that a range scan must visit every TPH on every level. That fits the YCSB-E loss, which the paper leaves as future work.
+
+**Status:** Paper only: arXiv v1 (26 Jun 2024), with no later version and no journal reference. It is absent from Crossref's PACMMOD records (551 since June 2025), so the claimed SIGMOD publication is unverified. OpenAlex lists only the arXiv version, with zero citations. There is no repository or license, DiPeak's homepage (an enterprise LLM data-intelligence vendor) shows no CompassDB material in its static HTML, and maintenance is unknown, so it is usable only as a design reference.
+
+[benchmark](https://arxiv.org/abs/2406.18099 (arXiv v1 preprint, 26 Jun 2024; no journal reference listed))
+
+##### DiaLSM  `C++`  `no license`  `active`  `Tier C`
+
+Hash-sharded LSM built on RocksDB 8.3.2 that reroutes writes around stalled shards, cutting write stalls ~94%. Code not released.
+
+**Beats:** RocksDB — Setup: arXiv preprint (v1, 2026-09-13). Hardware: 2x AMD EPYC 7352, 256GB DRAM, one 3.84TB Samsung PCIe Gen3x4 NVMe, CentOS 7/ext4. Baselines: RocksDB v8.3.2 with Sub-Compaction and ADOC, all with throttling, WAL and block cache off. Results: on 8KB FillRandom, DiaLSM had up to 2.4x ADOC's throughput, 94.3% fewer stalls than both baselines, and about 50% lower mean/median latency than both. YCSB-E was about 1.7x over both at scan length 128 and 3.3x/5.7x/8.9x at 1K/4K/16K. Compiler and flags are not stated, and there is no artifact to reproduce the numbers.
+
+**Known shortcoming:** The 2.4x/1.8x/2.2x gains are against ADOC, not RocksDB; against RocksDB it is ~50% lower latency, 94.3% fewer stalls and 8.9x on YCSB-E. 'ICDE 2027' is an author claim only (conference in May 2027, no accepted list yet). The repo is README-only (verifier downgrade).
+
+**Known shortcoming:** The repo is README-only: no code, no license. The big wins (2.4x/1.8x/2.2x/2.3x) are vs ADOC, not stock RocksDB, and all runs disable throttling, WAL and block cache. Rollback is off in the main runs; above 1M compaction entries rollback is forced and stalls return. Space amplification 1.14-1.5x; more CPU.
+
+**Known shortcoming:** Read-heavy: parity on YCSB-C, loses throughput beyond a few shards at 90% reads; short scans peak at 4 shards. The paper's API is only Open/Close/Put/Get/Seek, the scan algorithm shows no merge step, no resharding. ICDE 2027 acceptance is author-claimed only (program page 404).
+
+**How:** The authors model the write-flush-compaction pipeline as an M/G/1 queue with vacations, where each vacation is a stall. The model says tuning one stage only moves stalls to another layer (a 'balloon effect'): this applies to ADOC's memtable/thread tuning and to RocksDB Sub-Compaction. With L independent shards, the chance that all of them stall at once falls roughly as alpha^L. A write to a stalled primary goes to the fallback shard with the smallest L0, then lowest memtable use, then smallest pending backlog, then smallest total size. It leaves a 20-byte Clue Entry (CE) in a 2MB reserved memtable area that stall thresholds ignore. CEs are pinned in L0 ('CE L0 capping') and mirrored in an in-memory CE cache so the extra hop stays cheap. Range scans run Seek/Next on all shards in parallel, which is where the large YCSB-E gains on long scans come from.
+
+**Use it when:**
+- Sustained write-heavy ingest with large values (the paper's best case is 8KB FillRandom), where RocksDB write stalls cap throughput and cause p99.99+ latency spikes.
+- Write-dominated mixes such as ReadRandomWriteRandom at 10% reads / 90% writes, or insert/update-heavy OLTP on MyRocks (Sysbench oltp_insert, oltp_write_only), on a many-core box with spare CPU. The paper gave DiaLSM 32 compaction threads split across shards.
+- Long range scans (1K-16K keys per scan), where parallel per-shard iteration gave 3.3x-8.9x over both ADOC and RocksDB.
+- Servers with several NVMe SSDs: shards can be spread across devices, and with 8KB values throughput kept scaling past 8 shards only when a second SSD was added.
+- As a reference design for LSM write-stall work (queueing model plus fallback redirection). Until code ships it is not a library you can adopt.
+
+**Skip it when:**
+- Anything that needs working code now. The repo is one README commit saying source 'will be available soon', with no license.
+- Read-dominant or read-only workloads. YCSB-C is at parity with RocksDB and ADOC. At 90% reads / 10% writes, DiaLSM loses some throughput as shards grow while ADOC stays flat. On the fallback path a Get needs two shard reads.
+- Short scans with many shards: YCSB-E at the default scan length of 128 peaks at 4 shards (about 1.7x) and then declines as the cost of parallel iteration outweighs the gain.
+- Space- or CPU-constrained setups. Space amplification is 1.14x-1.5x with 2-16 shards (Table IV, millions of CEs), and DiaLSM uses more CPU than both baselines (Fig. 15).
+- Deployments that need the full RocksDB feature set (transactions, column families, snapshots, WAL durability, block cache) or elastic shard counts. Only Open/Close/Put/Get/Seek is described, every benchmark ran with WAL and block cache off, and hash-mod-N placement has no resharding or auto-tuning.
+
+**Vs siblings:** MatrixKV also targets write stalls but needs NVM for its matrix container, while PebblesDB (fragmented LSM) and Titan (key-value separation for large values) change the on-disk layout. DiaLSM is the one to watch if you want to stay on plain NVMe with stock RocksDB format per shard and remove stalls by structure rather than tuning. Today, pick MatrixKV, PebblesDB or Titan when you need code you can run, since DiaLSM has none.
+
+**Gotchas:**
+- Every headline experiment ran with rollback disabled. Rollback is the step that moves redirected keys back to their primary shards. Turned on after an 850K-CE write burst, it added about 60s of delay before reads. Once CEs pass the default limit of 1M, rollback is forced and no new CEs are accepted, so write stalls come back.
+- The benchmark config is non-default for every system: write-stall throttling, WAL/commit logging and block cache all off. The RocksDB baseline was also reconfigured: 2m memtables of 512/m MB each and 32 compaction threads. The 2.4x/1.8x/2.2x/2.3x headlines are against ADOC, not stock RocksDB.
+- Crash recovery scans shards for redirected keys whose CE is missing and blocks user I/O while it runs. Because the WAL was off in all experiments, the cost with durability on was never measured.
+- Algorithm 1 bounds a range scan at Kstart + L and appends each shard's results with no merge step, even though global ordering is a stated design goal. YCSB-E ran with a single I/O thread 'to avoid the parallel processing overhead'.
+
+**Status:** The repo was created 2026-09-13 with a single README commit (1 star, no license, no code); ICDE 2027 acceptance is author-claimed and not yet listed publicly. The lab's earlier DownForce paper did publish a GPL-2.0 RocksDB fork, so a release is plausible, but for now this is a paper to read, not a dependency.
+
+[repo](https://github.com/DISCOS-LAB/DiaLSM) · [benchmark](https://arxiv.org/abs/2609.14370)
+
+##### LUDA  `C++`  `no license`  `unknown`  `Tier C`
+
+Paper-only LevelDB 1.22 fork that moves most compaction work to an NVIDIA GPU; about 2x LevelDB/RocksDB YCSB-A throughput, but only under heavy CPU contention.
+
+**Beats:** LevelDB — The HUST authors ran YCSB-A (50/50 update/read) with 16 B keys and 128 B-1 KB values: 10M pairs loaded (about 5 GB), then 10M operations, with 4 MB memtables/SSTs, 4 KB blocks and 10-bit Bloom filters. They compared against LevelDB 1.22 and RocksDB 6.4.6 (4 threads), on a 4-core/8-thread Xeon E5-1620 v4 with 64 GB RAM, a GTX 1080Ti, an Optane 900p and Ubuntu 16.04 with CUDA 10.1, and used stress-ng to load the CPU to 0/40/80%. At 80% stress and 1 KB values, LUDA got about 2x the throughput of both baselines: RocksDB kept about 30% of its unstressed throughput and LUDA/LevelDB about 70%, and running time grew by 100 s for LUDA vs 203 s for LevelDB. With a free CPU, RocksDB was fastest. Host compiler and flags are not stated, and nobody else has reproduced the results.
+
+**Known shortcoming:** The 2x appears only with 80% of CPU consumed by stress-ng; with free CPU RocksDB is fastest. No public code (the linked repo is github.com/anonymous) and no peer-reviewed version.
+
+**Known shortcoming:** Sorting still runs on the CPU and every SST crosses SSD to host to GPU; uses more CPU than LevelDB. Baselines ran defaults (LevelDB 1.22 uses Snappy while LUDA has none, so compression may be unequal); at 128 B it compacts ~2x LevelDB's data due to a prototype shortcut, inflating the data-speed metric. Draft errors in the arXiv v1; later GPU-compaction papers (gLSM TOS'24, RGKV TC'25, GPComp) are better references.
+
+**How:** Compaction is split into three GPU phases that can run in parallel. An 'unpack' kernel runs per input SST, verifying each data block's CRC32 and rebuilding the prefix-compressed keys. It stores values in a KV pair buffer and emits small <key, value_offset> tuples. Packing uses three kernels: 'shared_key' rebuilds prefix-shared keys per 4 KB block, 'encode' copies values in and computes CRC32 per block, and 'filter' builds the Bloom filter block. Finished data blocks are sent back to the host with cudaMemcpyAsync while the filter is still being built. The merge-sort itself is not done on the GPU: the tuples are copied to the host, deduplicated and sorted on the CPU, then copied back (the 'cooperative sort'). Values move only twice ('lazy value movement'), and every SST goes SSD -> host RAM -> GPU and back, with no GPUDirect Storage.
+
+**Use it when:**
+- As a design reference for moving LSM compaction CPU work (block CRC, prefix-key decode/encode, Bloom filter build) onto a GPU, on hosts where other tenants leave the KV store about 20% of the CPU. That is the only setting where it beat both baselines by about 2x.
+- Write-heavy or mixed (YCSB-A-shaped) workloads on very fast storage (the paper used an Intel Optane 900p), with a small host CPU (4 cores / 8 threads) and a spare NVIDIA GPU. In that setup LevelDB-style compaction is CPU-bound.
+- When steady 99th-percentile write latency under a LevelDB-style engine matters more than peak throughput. With no CPU stress, the paper's Fig. 12 shows LUDA with the lowest and flattest p99 of the three stores after a short warm-up spike. Under 80% CPU stress, its average write latency rose by only 7 us.
+- As a starting point for reading the later GPU-compaction papers that cite it (gLSM in ACM TOS 2024, RGKV in IEEE TC 2025, GPComp in TPDS 2025, gParaKV, GCLComp). gLSM's abstract adds a GPU-oriented radix sort and key-value separation, the two costs LUDA leaves on the CPU and the PCIe bus.
+
+**Skip it when:**
+- Whenever you need something to run. There is no source, binary, license or build instructions. GitHub searches for LUDA and for GPU LevelDB/LSM compaction find nothing, and the footnote's github.com/anonymous link is a dead placeholder.
+- Hosts with free CPU. With no CPU stress, stock RocksDB 6.4.6 (4 threads) finished the 5 GB YCSB-A run fastest at every value size and LUDA came second. In the one-hour 50 GB run, RocksDB with 4 background jobs also had the shortest running time.
+- Read-dominated workloads. LUDA does not touch the read path, and the paper blames part of its throughput loss under CPU stress on reads that get less CPU time.
+- Machines without an NVIDIA CUDA GPU, or where the extra PCIe traffic and host CPU cost matter. LUDA used more CPU than LevelDB because data moves back and forth between CPU and GPU, and every compaction stages SSTs in host RAM.
+- Workloads that need compressed SSTs or low SSD write amplification. Snappy is not implemented. Because the prototype triggers compaction only when L0 is full and does not flush the immutable memtable first, it compacts about 2x as much data as LevelDB at 128 B values.
+
+**Vs siblings:** You can't pick it for deployment, because there is no code. For a code-available LevelDB-lineage speedup, use HyperLevelDB (about 3.4x LevelDB on 100M writes). To cut compaction work itself, use PebblesDB (guards) or MatrixKV/SpanDB on fast storage. Read LUDA only as the catalogued reference for offloading compaction to a GPU when the host CPU is contended.
+
+**Gotchas:**
+- The headline depends on the scenario. 'Up to 2x higher throughput' comes from the 80% stress-ng setting (20% of a 4-core CPU left) at 1 KB values. The text gives no numbers for the other cells, and Fig. 7/8 bars carry no value labels.
+- The '2x data processing speed' / 'compaction speed 1x faster than LevelDB' claim divides compaction bytes by running time. Part of those bytes is extra work the prototype creates for itself: it compacts about 2x LevelDB's data at 128 B values. The '46% less running time' at 1 KB does not say which CPU-stress level it refers to.
+- The compression settings may favor LUDA. All stores ran with 'default parameters', and LevelDB 1.22's default is kSnappyCompression whenever it is built with libsnappy, but LUDA does no compression at all. The paper does not say whether the baselines were built with Snappy, so their CPU budget may include compression work that LUDA skips.
+- The manuscript has draft errors. The 50 GB run is called '0.1 billion' pairs in Section IV-A but '0.1 million' in IV-D. The text cites Fig. 9 (latency) for running times that are in Fig. 8. It is an arXiv v1 (7 Apr 2020) only, with no peer-reviewed version in Crossref.
+
+**Status:** Paper only: arXiv v1 (April 2020) with no later version, no journal reference and no public repository or license, so maintenance is unknown and it is usable only as a design reference. Semantic Scholar lists about 21 citing papers, including newer GPU-compaction systems (gLSM, RGKV, GPComp) that are better starting points today.
+
+[benchmark](https://arxiv.org/abs/2004.03054)
+
+##### Mycelium (TE-LSM)  `C++`  `no license`  `unknown`  `Tier C`
+
+RocksDB fork that splits columns, re-encodes values or builds secondary indexes during compaction, for faster analytic reads than RocksDB.
+
+**Beats:** RocksDB — The test machine had two 16-core 3.0 GHz CPUs, 128 GB RAM and SATA SSDs on Ubuntu 20.04; the paper does not name the CPU model, compiler, flags or RocksDB version. After a 100 GB preload of 200M records, Mycelium's JSON-to-FlatBuffers transform cut latency 4.25x on Q2 (MAX over a key range, Zipfian keys) against RocksDB storing JSON, and split cut it 2.8x; single transforms cost 10-15% of write throughput and split+convert cost 21%. The index-query wins are measured against RocksDB full scans, and the paper's setup text is internally inconsistent (32 vs 50 columns per row, stated as about 500 B).
+
+**Known shortcoming:** The 4.25x is Q2 query latency after converting JSON to FlatBuffers during compaction, not throughput; writes cost 10-21% more. Only a probable anonymous code repo (anon-rev-repo/mycelium-anon, no licence) and no link from the paper.
+
+**Known shortcoming:** The paper links no repo; attribution to anon-rev-repo/mycelium-anon is inferred (one squashed commit, 0 stars, no top-level license). Its Scan ignores begin_key and the column list, and split-row reassembly is commented out, so the paper's Q2-Q7 are not reproducible as shipped.
+
+**Known shortcoming:** Column-family tree updates are not atomic (separate LogAndApply per family); delete scans the whole index family; the index misses memtable/L0. Build needs Arrow (not in README), experiment scripts are missing, an x86-64 re2 path is hard-coded, errors exit(1). Paper is inconsistent (32 vs 50 columns per row); 4.25x is only vs a JSON baseline and row queries are slower under split.
+
+**How:** Compaction already reads every record from its SST files and writes it back out. Mycelium does the transformation during that same pass, adding in-memory CPU work but no extra read I/O (the paper calls this 'transformation-embedded compaction'). A cross-column-family compaction writes the source family's merged L0 runs into a destination family's L0, and 'Tierveling' uses tiering for compactions that transform data and leveling for identity compactions. Reads speed up because they touch less data: a column-group split cuts the bytes read and deserialized by single-column queries, JSON-to-FlatBuffers made SSTs 34.76% smaller, and a secondary index replaces a full table scan.
+
+**Use it when:**
+- Research or prototyping, when you want to measure whether ETL done during compaction (column-group splitting, format conversion, index building) beats a separate pipeline on your own write-heavy data.
+- Write-heavy ingest of wide rows (the paper uses rows of about 500 B with 32-50 columns) where later reads project one or a few columns or aggregate over key ranges. On a range MAX query, split gave 2.8x and JSON-to-FlatBuffers gave 4.25x.
+- Values arrive as text JSON and you can accept about 15% lower write throughput to have them stored in a compact binary format.
+- You need lookups on a non-key attribute and can accept an index that covers only data already compacted out of L0. The paper measured about 10% write-throughput cost for this.
+
+**Skip it when:**
+- Production, or anywhere you need clear licensing. The paper does not link any code. The probable repo is an anonymous single-commit snapshot with no top-level license.
+- Row-retrieving workloads (SELECT * point or range queries). Under the split transform, the point query (Q7) was slower than plain RocksDB at most percentiles, and the range query (Q6) had worse tail latency.
+- Systems bound by write throughput. Each transformation cost 10-21% of RocksDB's write throughput in the paper, and each extra cross-column-family compaction adds write amplification (the cost model's WA + n).
+- Delete-heavy tables with a secondary index. In the repo, every Delete scans the whole secondary-index column family to find matching entries.
+- Workloads that need read-your-writes through the index. Index entries are created only when data leaves L0, and IndexRead never checks the memtable or L0.
+
+**Vs siblings:** Every catalogued sibling (KVell, MatrixKV, PebblesDB, SplinterDB, Nova-LSM, NuDB, Titan) speeds up the write or key-lookup path. Mycelium is the only one that reshapes data for column-projection and non-key reads, so consider it only when those reads are the bottleneck. For anything you will ship, Titan (large values) and SplinterDB or PebblesDB (write-heavy loads) have public, licensed code.
+
+**Gotchas:**
+- In the probable repo, MymBroker::Scan ignores begin_key (it calls SeekToFirst) and ignores the column list, and the code that reassembles split rows in Read/Scan is commented out. The paper's Q2-Q7 query paths therefore cannot be reproduced from this harness as shipped.
+- Updates across the tree family are not atomic. The manifest edit for the source column family and the edit for each destination family are separate LogAndApply calls. Delete propagation issues a separate Delete per derived column family, and failures are logged and skipped. Crash consistency is not documented.
+- Secondary-index keys are field values converted to strings and joined with '%%' and '$$$KEY$$$'. Numeric fields go through std::to_string, so the index sorts lexicographically rather than numerically, and values that contain the separators are ambiguous.
+- Error paths print FATAL and call exit(1) instead of returning a status. More than 4 transformers, or transformer and SchemaDescriptor counts that don't match, throw std::runtime_error. The top-level CMakeLists also copies experiment/*.sh scripts that are not in the repo.
+
+**Status:** Research prototype only: an arXiv v1 preprint (June 2025, UC Santa Cruz) whose code is 'hidden due to anonymity'. The probable code is an anonymous review repo (one squashed commit on 2026-07-27, 0 stars, no top-level license) that has already moved to newer names (WHLSM, LSM-Grove, mRoutines), so treat it as a reference, not a dependency.
+
+[benchmark](https://arxiv.org/abs/2506.08923)
+
+##### ToplingDB  `C++`  `GPL-2.0 OR Apache-2.0`  `active`  `Tier C`
+
+RocksDB 8.10 fork with a trie memtable and searchable compressed SSTs; about 5x RocksDB's in-cache random-read throughput.
+
+**Beats:** RocksDB — The project's own GitHub Actions dashboard (run 34935695406, 2026-09-15) ran db_bench with 50M 8-byte keys and 50-byte values, one client thread, and the DB on /dev/shm fitting inside a 7.8 GiB block cache. Hardware was an AMD EPYC 7763 with 4 vCPU and 15.6 GiB RAM on Ubuntu 24.04, with release builds at -march=haswell and the compiler unstated. ToplingDB zipkeyvalue did 1.74M readrandom ops/s against 349K for RocksDB 8.10.2 (4.98x) and 379K for RocksDB master (4.58x), with 2.50x fillrandom, 1.57x readseq and 0.62x compaction speed. The sides are tuned differently: ToplingDB uses a tuned YAML (512 MB write buffer, CSPP memtable as WAL index, zero-copy reads), while RocksDB uses db_bench defaults plus an OPTIONS file that mainly sets the L0-none/Snappy/L6-Zstd compression ladder.
+
+**Known shortcoming:** The fair figure is zipkeyvalue 4.98x; the 13.5x zipkeyonly result stores values uncompressed. The ZipTable builder and CSPP memtable that produce the speedups are private and shipped as 90-day trial binaries; compiler not stated.
+
+**Known shortcoming:** The default make silently downloads the private ZipTable/CSPP trial object files; behaviour after the 90-day expiry is undocumented. Linux only (#66, #67); only bytewise/reverse comparators; dynamic column families, user timestamps and wide columns are compiled out by default; its WAL format differs from RocksDB's.
+
+**Known shortcoming:** Compaction is slower (0.30-0.62x; with distributed compaction fillseq 0.64x, fillrandom ~1.0x). Unequal tuning: ToplingDB uses a tuned YAML (512 MB write buffer, memtable as WAL index) while RocksDB runs db_bench defaults, and the data fits in cache. License is RocksDB's GPLv2/Apache-2.0 dual license.
+
+**How:** ToplingZipTable SSTs pair a CO-Index (NestLoudsTrie, a nested LOUDS succinct trie mapping key to id) with PA-Zip (DictZipBlobStore, global-dictionary compression that can read one value directly). Both are searched while still compressed in mmap'd memory, so there is no block decompression or block cache, and uncompressed values go back to the caller zero-copy. The CSPP MemTable, a Crash-Safe Parallel Patricia trie, replaces the skiplist and uses integer offsets instead of pointers. So with memtable_as_log_index it can point into the WAL and be turned straight into an SST without a flush. Comparator calls are devirtualized and key-prefix caches were added in hot paths such as MergingIterator and FindFileInRange, which only works because these components are limited to bytewise key order.
+
+**Use it when:**
+- An existing RocksDB app on Linux x86-64 with bytewise-ordered keys where point lookups are CPU-bound and the data fits in RAM or page cache. The project's dashboard shows 3.7-5.0x single-thread readrandom (zipkeyvalue vs RocksDB v8.10/master across three suites) with 8-byte keys and 50-byte values.
+- Scan-heavy work on small values: readseq is 1.6-1.9x RocksDB v8.10, and scans that skip loading values (ToplingDB's lazy value load) reach 3.6-4.8x.
+- RAM- or disk-constrained nodes: in the fillrandom suite, zipkeyvalue used 0.56x RocksDB's disk and 18% of its RSS during readrandom. Page cache is counted separately.
+- Teams that want YAML/JSON-defined DB configuration, online option changes and Prometheus metrics built in, and can either license the Enterprise components or run the open-source distributed-compaction workers (topling-dcompact) to absorb compression CPU.
+
+**Skip it when:**
+- You need a fully open-source build. The components that deliver the speedup, the ToplingZipTable builder (private topling-rocks) and the CSPP MemTable (private), ship only as precompiled 90-day trial objects. No published benchmark covers a build with both turned off.
+- Windows or macOS: the maintainer says ToplingDB currently supports only Linux (issues #66, #67). The released JNI jar contains only librocksdbjni-linux64.so.
+- Custom comparators: the CSPP MemTable supports only BytewiseComparator and ReverseBytewiseComparator, and the performance components are built around bytewise order.
+- Compaction- or write-bound workloads on few cores: compaction runs at 0.62x (fillrandom) and 0.30x (fillseq) of RocksDB v8.10, and ZipTable compression costs about 2x zstd CPU. In the project's dcompact run with the write side capped at 50% CPU, fillseq was 0.64x RocksDB v8.10 and fillrandom only about 1.0x.
+- Larger-than-memory datasets or apps that need recent upstream RocksDB features: every published run fits in cache, the code base tracks RocksDB 8.10.2, and dynamic column-family creation, user timestamps and wide columns are compiled out by default.
+
+**Vs siblings:** Pick ToplingDB over Titan when values are tiny and reads dominate: Titan's catalogued gains grow with value size, while ToplingDB's come from 50-byte-value lookups and scans. Pick it over research engines such as PebblesDB, KVell or SplinterDB when you want to keep RocksDB's API and feature set. Prefer those siblings or F2 for write-heavy or larger-than-memory work, where ToplingDB's compaction is slower and its gains are unmeasured.
+
+**Gotchas:**
+- A default release make (DEBUG_LEVEL=0) tries an SSH clone of the private topling-rocks repo. If that fails, it silently wgets precompiled top_zip_table_builder.o and cspp_memtable.o from an Aliyun OSS bucket as 90-day trials. For a clean open build pass WITH_TOPLING_ROCKS=0 WITH_CSPP_MEMTABLE=0 together; CSPP cannot be on without topling-rocks. What the trial builder does after 90 days is not documented, though the ZipTable reader is open source.
+- Dynamic ColumnFamily creation (ROCKSDB_DYNAMIC_CREATE_CF), user-level key timestamps and wide columns are disabled at compile time by default. RocksDB code that calls CreateColumnFamily at runtime needs a rebuild with -DROCKSDB_DYNAMIC_CREATE_CF.
+- memtable_as_log_index is an immutable DB option with its own WAL format. All WALs must be flushed before you toggle it. A large WriteBatch can overflow the WAL mmap and fail with 'IO fenced off ... exceeds mmap size' unless max_total_wal_size is large enough.
+- CSPP reserves mem_cap of virtual address space per memtable (default 2G, max 16G). The wiki warns that on Linux, touching that memory when the system has no free RAM segfaults instead of returning an error, unless explicit commit (MADV_POPULATE_WRITE, kernel 5.14+) is used.
+
+**Status:** Actively maintained by Topling Inc (pushes through 2026-09-20, CI benchmark runs through 2026-09-15, 1016 stars). Usability is mixed: it is Linux-only, and the components behind the headline numbers are proprietary trial binaries. The open parts keep RocksDB's GPLv2/Apache-2.0 dual license, so the license is no stricter than upstream's.
+
+[repo](https://github.com/topling/toplingdb) · [benchmark](https://topling.github.io/toplingdb/)
+
+##### UStore (UDisk engine)  `C++`  `Apache-2.0`  `abandoned`  `Tier C`
+
+Closed-source NVMe KV engine (UDisk) behind UStore's open C API; vendor numbers show 2-7x RocksDB throughput.
+
+**Beats:** RocksDB — These are vendor-run UCSB numbers: apart from Batch Upsert, the README rows match Unum's September 2022 10 TB run of RocksDB 6.29.3 against UDisk (then 'UnumDB'), with 8-byte integer keys, 1 KB values, compression off, no flushing, 64 client threads and 256-key batches on an AMD Threadripper PRO 3995WX with 1 TB RAM, 8x Samsung PM1733 NVMe and Ubuntu 22.04 (kernel 5.15, ext4); no compiler is stated, and the README table gives no setup at all. Under those conditions batch reads ran ~6.9x and point reads ~2.4x faster, scans tied, and RocksDB won range selects ~2.5x.
+
+**Known shortcoming:** The UDisk engine behind the numbers is closed source and binary-only; the table does not state the dataset size.
+
+**Known shortcoming:** The README table comes from a 2022-09 10 TB post (Threadripper 3995WX, 8x PM1733, RocksDB 6.29.3 without WAL, 64 threads); the 260K batch-upsert figure matches no run (the post says 117K CPU, 182K GPU). The table omits Range Select, where RocksDB wins 5M vs 2M; RocksDB was capped at 4 db_paths; a 1 TB single-thread run shows reads only ~1.1x.
+
+**Known shortcoming:** Cannot be reproduced: the UCSB benchmark's cmake clones a deleted main-dev branch and passes the wrong UDisk path variable, and UCSB has no license. UDisk has no public download; Linux only. Durability is off by default and the RocksDB adapter disables WAL. Abandoned since 2023-08; bug #434 (README RocksDB open fails).
+
+**How:** Unum describes UDisk as a modified LSM tree built for NVMe block devices, with io_uring for partial kernel bypass, SPDK for full bypass, a custom internal filesystem and optional CUDA offload of background compactions. Its config offers posix, 'pulling' and 'polling' IO mechanisms with queue depths up to 4096, native fixed-size integer keys and optional fixed-size values. Batch reads go in as a group so the engine can reorder them and issue them asynchronously, which is where the widest gap over RocksDB's MultiGet shows up; none of this can be checked, because the source is closed.
+
+**Use it when:**
+- You have, or can negotiate, a UDisk binary from Unum and run Linux servers with several NVMe drives, where batched random reads and upserts of values around 1 KB dominate.
+- Keys are naturally 64-bit integers (row IDs, graph vertex IDs) and you can send batches of hundreds of keys per call instead of single Gets; batch read is the vendor's largest win (650K vs 4.5M ops/s).
+- You want one transactional C API over blobs, documents and graphs, with NetworkX- and Pandas-style Python front ends. You can start on the open UCSet or RocksDB engines and swap in UDisk later without changing application code.
+
+**Skip it when:**
+- You need an engine you can build, audit or patch: UDisk is binary-only, and UStore's own engine table marks it as not open source.
+- Range-select-heavy workloads: in the vendor's own 10 TB run RocksDB did 5M ops/s against 2M for UDisk (then called UnumDB), and the README table leaves that row out.
+- Non-Linux targets, or code that relies on RocksDB features such as string keys with custom comparators, prefix seeks and column-family options. UDisk is Linux-only and links liburing, libnuma and libexplain.
+- You need durable writes by default. UStore turns durability off unless you pass ustore_option_write_flush_k, and its RocksDB adapter sets disableWAL whenever that flag is missing.
+- Production systems that need a live upstream: main was last committed 2023-08-18, and open bugs include the README's rocksdb.DataBase('/path') example failing to open (#434).
+
+**Vs siblings:** Pick UDisk only if you have a commercial path to the binary and a batch-heavy, integer-keyed workload on Linux machines with several NVMe drives; for an engine you can build and audit, SplinterDB (6-10x faster inserts and 2-2.6x faster point queries than RocksDB), KVell or F2 (FASTER) have open code and better evidence. UStore's open parts only beat them if you want its multi-modal API over RocksDB or UCSet, not for speed.
+
+**Gotchas:**
+- The December 2022 table matches Unum's September 2022 10 TB post row for row except Batch Upsert. The post gives UDisk 117K ops/s on CPU and 182K with a GPU, not 260K, so no published run backs the ~4.6x upsert figure. The table also leaves out Initialization (603K vs 60M) and Range Select, where RocksDB won.
+- The setup favored UDisk. In the post each engine got 8 SSD partitions, but RocksDB can take at most 4 db_paths and ingested SSTs land on the first disk. The UCSB RocksDB adapter runs with the WAL disabled. In the earlier single-threaded 1 TB run the gaps were much smaller: random reads 175.7K vs 160.7K (~1.1x), batch insert 813K vs 690K (~1.2x).
+- Reproduction is blocked even with a binary. UCSB's cmake/ustore.cmake clones a 'main-dev' branch that no longer exists and passes -DUSTORE_ENGINE_NAME_UDISK_PATH, while UStore's CMake reads USTORE_ENGINE_UDISK_PATH. UCSB also has no license, and its committed RocksDB 10TB.cfg says 7.2.9 while the post says 6.29.3.
+- The PyPI package is 'ukv' (imported as ustore.*), not 'ustore'; issue #383 shows users confused by the ukv/ustore/ucset naming. Per #434, opening RocksDB works only when you pass a JSON config with create_if_missing, not a bare path.
+
+**Status:** Abandoned: main (the only branch) was last committed 2023-08-18 at v0.13.12, and neither UStore nor the placeholder UDisk repo links a public UDisk download, so the Apache-2.0 bindings still work with RocksDB, LevelDB and UCSet but the engine this entry measures is out of reach.
+
+[repo](https://github.com/unum-cloud/UStore) · [benchmark](https://github.com/unum-cloud/UStore/blob/main/benchmarks/README.md)
+
+#### indexes
+
+##### MountDB (learned indexing integrated into RocksDB)  `C++ (no code released)`  `no license`  `unknown`  `Tier C`
+
+Paper-only RocksDB v8.10 extension replacing SkipList memtable and fence-pointer index with learned indexes; up to 1.77x reads.
+
+**Beats:** RocksDB v8.10.0 (plus the learned-index LSMs DobLIX and TridentKV, ported to RocksDB 8.10.0) — The authors ran db_bench on a 2x Xeon E5-2690 v4 machine with an NVMe SSD (16 client threads, 64 MB Memtables, compression off, 8-byte keys and 100-byte values, about 55 GB and 500M operations per dataset). They report up to 1.3x write-only, 1.44x balanced and 1.77x read-only throughput over stock RocksDB v8.10.0, rising to 2.8x for reads at 16 B values. No compiler or flags are given, and no independent reproduction exists.
+
+**Known shortcoming:** arXiv preprint with no code. The abstract's 1.5x/2.1x is vs DobLIX/TridentKV; vs RocksDB it is up to 1.77x reads (2.8x at small values) and ~1.3x writes.
+
+**Known shortcoming:** Numeric keys only, compression off, pinned to RocksDB 8.10; deletes and recovery are not discussed. With direct I/O all systems are about equal and with 10% cached the gain is 1.2-1.3x; block size was cut to a third for the 3-block read and it is unclear whether baselines matched. Baselines were ported by the authors (DobLIX without its RL tuner); the lead author's GitHub has only a plain RocksDB fork and a DobLIX port.
+
+**How:** In memory it uses ALEX+ (the concurrent variant of ALEX, with gapped arrays and model-based placement) plus 'skeletonization': every 10 flushes (phi=10) a background task bulk-loads ALEX+ from the immutable Memtable's sorted keys and strips payloads, counters and locks. New Memtables then start from that model hierarchy and gap bitmap instead of cold. Without this, a 64 MB ALEX+ Memtable is flushed about every 0.4 s, before it converges, and ends up no better than SkipList. On disk, PGM (Fence) trains a PGM-index with epsilon=1 on only the first key of each block. A lookup therefore predicts a block and reads it together with both neighbours in one FilePrefetchBuffer I/O, and the resulting index is about 172 KB per 64 MB SST, versus 296 KB for RocksDB's fence table.
+
+**Use it when:**
+- You are designing or evaluating learned indexing inside an LSM store and want a worked recipe (an ALEX+ Memtable with skeleton reuse, and PGM over fence keys) that leaves RocksDB's SST and block format unchanged.
+- Read-heavy RocksDB workloads with numeric 8-byte keys and a mostly cached working set: up to 1.77x over RocksDB on read-only, and 1.34-1.52x over all baselines when the data is fully cached.
+- Small values (16-64 B): up to 2.8x read and about 1.5x write throughput over RocksDB at the smallest sizes, and 1.3-1.6x reads on the mixed-size UDB, ZippyDB and UP2X traces.
+- Write-heavy ingest with smooth or slowly shifting key distributions, where the reused skeleton stays accurate: up to 1.3x write-only, and 0.95-1.05 vs 0.6-0.7 Mops/s (98 s vs 161 s) in the microbenchmark that cycles through six distributions.
+
+**Skip it when:**
+- You need working code. Nothing is released: the lead author's GitHub has only an unmodified RocksDB fork and a DobLIX port, so you would reimplement MountDB against RocksDB internals yourself.
+- String or variable-length keys: the design and evaluation cover numeric keys only, and learned string indexing is left to future work.
+- I/O-bound reads: with use_direct_reads, throughput was 'virtually the same' across all systems, and with only 10% of the data cached the gain shrinks to 1.2-1.3x.
+- Irregular key distributions or abrupt distribution shifts: write gains narrow to about 1.2x on OSM, and a never-refreshed skeleton lost throughput when the distribution changed.
+- Production use: it is an unreviewed preprint pinned to RocksDB v8.10.0, evaluated with compression disabled, and it never discusses deletes, recovery or the rest of RocksDB's feature surface.
+
+**Vs siblings:** Compared with Bourbon, MountDB's design also speeds up writes (Bourbon indexes only the disk component and depends on WiscKey's key-value separation) and keeps RocksDB's SST format, but Bourbon ships an artifact and MountDB ships none. If you need something runnable against RocksDB today, the practical routes are TerarkDB (a RocksDB fork with code) or building directly on the ALEX and PGM-index libraries.
+
+**Gotchas:**
+- The abstract's 'up to 1.5x write, 2.1x read' is measured against DobLIX and TridentKV (the 2.1x only at the smallest value size), not against RocksDB. Against stock RocksDB at the default 100 B values the figures are 1.3x write-only, 1.44x balanced and 1.77x read-only.
+- PGM (Fence) always reads three blocks (the predicted one plus or minus one), so MountDB cuts the maximum block size to a third of the default. The paper says the baselines had identical Memtable, cache and compaction settings, but it does not say whether their block size was matched.
+- Skeletons are a partial deep copy of the previous Memtable's ALEX+ nodes (keys and gap bitmap, with null payloads). Their memory cost is not quantified, and the refresh interval phi=10 was chosen empirically.
+- The authors ported the DobLIX and TridentKV baselines from RocksDB 5.x to 8.10.0 themselves, and the DobLIX code lacks its paper's RL tuner, so the learned-LSM comparisons are against reduced versions.
+
+**Status:** This is an arXiv preprint from McGill (v1, 22 May 2026; not peer-reviewed as of 2026-09-26) with no released code or license, so it is a reference design only, and its maintenance status is unknown.
+
+[benchmark](https://arxiv.org/abs/2605.23815)
+
+##### PGM++ (adaptive search-strategy PGM-index)  `C++`  `no license`  `stale`  `Tier C`
+
+Research patch to PGM-index static lookups: hybrid branchless/linear segment search plus cost-model epsilon tuning, up to 2.31x faster.
+
+**Beats:** PGM-index — The PVLDB 2025 paper reports up to 2.31x faster lookups than the original PGM-Index and up to 1.56x faster than CDFShop-tuned RMI at comparable index size. It tested 4 SOSD datasets (fb and wiki at 200M uint64 keys, books and osm at 800M) plus 3 synthetic sets, on an i7-13700K and 2x EPYC 7413 with g++ 11.4 and on an Apple M3 with clang++ 15; the body gives 1.2x-2.2x over PGM at equal eps_l. There is no stdlib or B+-tree baseline in the static comparison, and optimization flags are unstated. The public harness times 5,000 lookups per round, each wrapped in its own high_resolution_clock pair, and its documented build has no -O flag, while the paper's text says 100M lookups.
+
+**Known shortcoming:** Code exists at qyliu-hkust/bench_search but has no LICENSE (usability mixed) and is stale since 2025-02; the documented builds pass no -O flag, so published numbers may be -O0; paper in PVLDB 18(9) 2025.
+
+**Known shortcoming:** The in-repo 'PGM' baseline sets linear_search_threshold=0 (always std::upper_bound) whereas upstream PGM linear-scans at eps <= 32, so the baseline is not upstream's code path. The code implements only part of the paper (layer bypassing commented out; no cost-model tuner, DPGM++ or last-mile linear scan). Branchless lower/upper_bound never return end (keys above the max get the last element; untested because queries use existing keys). The harness times 5k lookups per round individually while the paper says 100M; RMI still wins on normal/lognormal; code stale since 2024-10.
+
+**How:** The paper finds PGM lookups are memory-bound and dominated by the internal error-bounded searches, which take 69-81% of lookup time in its Table 7. Upstream does these with std::upper_bound once eps_i is above a small threshold. PGM++ replaces them with a CMOV-style branchless binary search (base = base[half-1] < k ? base + half : base), falls back to a linear scan for tiny ranges, and uses the branchless search for the last-mile step too; per the Table 9 ablation, removing this makes lookups 39-60% slower. The paper adds two more pieces: 'layer bypassing', which starts the descent at the first level whose child level is dense (12-22% in the same ablation), and a calibrated cost model that estimates leaf-segment count from gap mean/variance via kernel change-point detection on a 0.05% sample and then picks the eps_i with the lowest modeled lookup cost.
+
+**Use it when:**
+- You already use the static pgm::PGMIndex on sorted 64-bit integer keys and profiling shows the internal segment search dominates. Porting the ~20-line branchless bound from exp_pgm/search_algo.h is the cheap change behind the paper's 1.2x-2.2x at equal eps_l.
+- Read-only lookups over large in-memory sorted arrays (200M-800M uint64 keys in the paper) where you want a learned index with a guaranteed maximum error instead of RMI's data-dependent error (the paper measured RMI max error up to 1.77M positions on osm).
+- Tight index-memory budgets: the paper reports a 0.1 MB PGM++ beating a 100+ MB CDFShop-tuned RMI on the wiki dataset.
+- Reproducing or extending the study. exp_pgm/main.cpp sweeps the full eps_l x eps_i grid over {4..1024}, and exp_rmi/ holds the pre-generated CDFShop RMI models for all 7 datasets.
+- Hosts with relatively low memory latency. On osm the average gain over PGM was 1.78x on the i7-13700K and Apple M3 but only 1.32x on the EPYC 7413 server.
+
+**Skip it when:**
+- As a production dependency. This is a benchmark harness with no LICENSE for the PGM++-specific files, no tests, no build system beyond a one-line g++ command, and no code changes since 2024-10-02.
+- Updatable workloads. The repo contains only the static PGMIndex; the paper's DPGM++ is not published there, and even in the paper ALEX has the highest throughput on every mix except write-heavy (80%) and write-only.
+- Keys that follow smooth normal or lognormal distributions: in the paper, CDFShop-tuned RMI (with cubic-spline models) beats both PGM and PGM++ there.
+- Code that probes keys larger than the maximum indexed key, or that relies on getting end(): the branchless helpers never return the end iterator (see gotchas).
+- If you need upstream's other structures (DynamicPGMIndex, compressed/bucketing/Elias-Fano variants, multidimensional). Only pgm_index.h and piecewise_linear_model.h are vendored.
+
+**Vs siblings:** Pick it over the PGM-index sibling only when you want PGM's guaranteed error bound with faster static lookups and are willing to vendor unlicensed research code, or just port its branchless search. CHT (which reports 1.7-2.5x over PGM), RadixSpline and RMI are different static designs, RMI still wins on normal/lognormal keys, and ALEX or LIPP are the choice when you need inserts.
+
+**Gotchas:**
+- search::lower_bound_branchless and upper_bound_branchless never return end. When every element in the range is below (or not above) the key, they return the last element instead. I checked a Python port of the exact loops against bisect on 20k random cases, and every mismatch was this end case. The benchmark only queries existing keys, so this path is never exercised.
+- Build flags: the README command and exp_rmi/Makefile_all pass no -O flag, so the documented builds compile both PGM and PGM++ at -O0, and the paper does not state flags. Re-measure at -O2/-O3 before trusting the ratios.
+- The artifact's 'original PGM' baseline is PGMIndex<..., false, 0, float>. linear_search_threshold=0 forces std::upper_bound on every internal level, whereas upstream master linear-scans when EpsilonRecursive <= 8*64/sizeof(Segment) = 32. For eps_i of 4-32 the in-repo baseline is therefore not upstream's code path.
+- The code covers only part of what the paper's ablation credits. Layer bypassing is commented out in segment_for_key (start_level is computed but unused), the last-mile search has no linear-scan branch, and the KCPD/cost-model tuner is absent.
+
+**Status:** Stale, low-adoption research artifact: 6 stars, code last touched 2024-10-02 (README 2025-02-01), no LICENSE for the PGM++ files (the vendored PGM headers keep Apache-2.0), and upstream PGM-index issue #58, which proposed upstreaming it, has had no reply since 2024-10-20.
+
+[repo](https://github.com/qyliu-hkust/bench_search) · [benchmark](https://www.vldb.org/pvldb/vol18/p2886-liu.pdf)
+
+#### message-queues-logs
+
+##### Harper (formerly HarperDB)  `JavaScript (unverified - Harper's source is not public; only the benchmark harness is)`  `The Harper Pro image under test is Elastic-2.0 (source-available, non-OSI; source at github.com/HarperFast/harper-pro). The open-source Harper core (github.com/HarperFast/harper) is Apache-2.0, and the benchmark harness is Apache-2.0.`  `active`  `Tier C`
+
+Node.js runtime fusing RocksDB-backed tables, app code and MQTT/WebSocket pub/sub; vendor benchmark: lower latency than Kafka stacks at ≤1k events/s.
+
+**Beats:** Apache Kafka (plus Postgres/Redis/Debezium/Kafka Streams ecosystem, workload-dependent) — This is a Harper-affiliated whole-stack benchmark run in one OrbStack VM on an Apple Silicon Mac (24 GB, 8 vCPU; chip not stated). It pits a 3-node Harper Pro cluster (digest-pinned image, RocksDB default) against 3 Kafka brokers at RF=3 plus Postgres/Debezium/Redis/Kafka Streams as each workload needs. Harper's p50 was 9.4 ms vs 876 ms with Go glue, or 523 ms with language-matched Node glue, which the authors' own decision log adopts as the headline (~56x, not ~100x); 12.5 ms vs 165 ms on W2; 1.05 s vs 3.65 s on W3 freshness; and 1.4 ms vs 57 ms on W4 at 1,000 events/s, while Kafka Streams won point lookups (2.75 ms vs 17 ms). The runs were short (15-30 s at 10-1,000 events/s, 3 paired runs, one run per stack for W3), W1 delivered only 83-84% on both stacks although the README says 100%, and a containerized Harper W4 variant cut the W4 gap to about 10-20x.
+
+**Known shortcoming:** Vendor benchmark on an Apple Silicon M-series OrbStack VM; the open-source core is Apache-2.0 but harper-pro features are Elastic-licensed.
+
+**Known shortcoming:** The W1 ~100x is stale (its own decision log says ~56x); runs are tiny (15-30 s, 3 runs, W3 one run) and W1 delivered only 83-84% on both stacks (the README says 100%). Harper's notify is an awaited HTTP call in the handler, not durable, and per-thread load produced 7-21x duplicate notifies; the containerized MQTT variant is ~10-20x, not 40x. Replication is only in Harper Pro (ELv2); subscriptions can drop up to 88.5% of intermediate changes under burst (#2483), bad for CDC/log use; not a Kafka-protocol drop-in.
+
+**How:** The speedup comes from removing hops. The durable write, the enrichment lookups and the downstream notify all run in one process against embedded RocksDB (the `@harperfast/rocksdb-js` native binding; LMDB is the legacy engine), with a WeakRef-based LRU record cache, so there is no network or serialization step between database, cache and broker. Subscribers are fed from the audit (transaction) log: each 'committed' event schedules one `setImmediate` pass that walks the log and dispatches to per-key subscriber maps on every worker thread. Bursts collapse into one pass, and a QoS 0 MQTT frame is encoded once and shared by all matching subscribers. In the benchmark, the conventional stack pays for Debezium's WAL polling (the authors estimate 100-300 ms, not measured) and for a 50 ms Kafka consumer batch window, and Harper's MQTT path has neither.
+
+**Use it when:**
+- Write-then-notify or filtered fan-out at tens to about 1,000 events/s, where you would otherwise wire up Postgres + Debezium + Kafka + Redis. The benchmark measured 9.4 ms vs 523 ms p50 at 50 events/s and 12.5 ms vs 165 ms at 10 events/s.
+- Pushing live state to browsers or devices over MQTT or WebSockets when the consumer needs the latest value per key, not every intermediate change.
+- Live dashboards with windowed aggregates at low per-key event rates, where Kafka Streams' suppress-until-window-close holds back results (W3 freshness: 1.05 s vs 3.65 s p50, 1.56 s vs 13.6 s p95).
+- Node.js teams that want the database, API and pub/sub in one deployable unit, and that accept Harper Pro (Elastic-2.0) or Harper Fabric for multi-node.
+
+**Skip it when:**
+- Throughput-bound log ingestion at 10^5-10^6 events/s. The benchmark never ran a steady state above about 1,000 events/s, and its authors expect Kafka to win or tie on real multi-node hardware.
+- CDC, event sourcing or audit consumers that need every change. Record subscriptions over in-process subscribe(), SSE and MQTT coalesce intermediate updates under burst writes, dropping up to 88.5% at threads: 4, with no gap marker (harper#2483, open).
+- Point reads against live aggregates. Kafka Streams Interactive Queries answered in 2.75 ms p50 vs Harper's 17 ms through a REST endpoint.
+- Stacks that depend on Kafka clients, Connect, Streams or Schema Registry, because Harper does not speak the Kafka protocol.
+- When you need OSI-licensed multi-node replication. Replication ships in Harper Pro under Elastic-2.0, which forbids offering it as a hosted or managed service.
+
+**Vs siblings:** Choose Harper over standalone brokers such as NATS JetStream, RabbitMQ or Mosquitto when the broker would otherwise sit beside a separate database and cache, and your app logic can run as Node.js inside the same process. Choose Redpanda or AutoMQ instead when you need Kafka API compatibility and Kafka-scale throughput.
+
+**Gotchas:**
+- In the benchmark's Harper handlers, async work fired after the handler returned was cancelled (most fire-and-forget notifies were dropped). The harness therefore awaits an outbound HTTP notify inside the request. That notify is logged on failure and never retried, unlike the durable Debezium-to-Kafka path it is compared against.
+- Resource modules load once per worker thread. A table.subscribe-based notifier fired about 7 times per node (21 times across 3 nodes), and W3 window-close notifies fired 2-21 times. At benchmark time there was no leader-election or compare-and-swap primitive to deduplicate them.
+- Durability comparable to Kafka's acks=all must be opted into per request with `this.getContext().replicatedConfirmation = N`, where N counts peers. The default is async replication, and the MQTT broker has no per-write confirmation.
+- Several subscription bugs are open: ending a subscription during fan-out makes the next subscriber miss that event (#2771), deletes are reported as empty puts or bare nulls (#2738, #2438), and startTime replay drops events committed after the audit cursor ends (#2311).
+
+**Status:** The core is under active development: v5.2.14 and v5.3.0-beta.3 were released 2026-09-25, and the repo has 941 open issues and 90 stars. The core is Apache-2.0, but the replication behind the benchmarked 3-node setup is Elastic-2.0 Harper Pro, and the benchmark repo is a 0-star snapshot created and last pushed on 2026-05-28.
+
+[repo](https://github.com/HarperFast/harper) · [benchmark](https://github.com/HarperFast/kafka-v-harper-perf-test/blob/main/README.md)
+
+##### Redpanda  `C++`  `BUSL-1.1 (core; converts to Apache-2.0 four years after each release) + Redpanda Community License (enterprise features); GitHub reports no SPDX id`  `active`  `Tier C`
+
+Kafka-API-compatible streaming broker in C++ on Seastar; vendor OMB runs show 12-70x lower p99.99 latency than Kafka.
+
+**Beats:** Apache Kafka — Redpanda's own 2022 OpenMessaging Benchmark (v22.2.2 vs Kafka 3.2.0, TLS+SASL-SCRAM, 1:1 read/write, 4 partitions per core, i3en brokers, 4x m5n.8xlarge clients, no CPU model or build/JVM flags given) measured p99.99 latency of 13.9 / 16.7 / 79.6 ms vs Kafka's 164.6 / 388.7 / 5509.7 ms at 50 MB/s, 500 MB/s and 1 GB/s. Kafka had 3/4/6 brokers against Redpanda's 3, ran on Java 11, and was set to fsync every batch (log.flush.interval.messages=1). A 2023 vendor rerun against Kafka 3.4 KRaft showed a similar pattern (p99.9 24.4 ms vs 98.0 ms on i3en.6xlarge, 3 vs 6+3 nodes). Confluent's Jack Vanlightly repeated the test on 3x i3en.6xlarge with Kafka at default durability and Java 17 and could not reproduce the gap, so treat 12-70x as a vendor best case.
+
+**Known shortcoming:** Vendor benchmark; Confluent's 2023 re-run (Vanlightly) disputes it. Kafka ran on 4-6 nodes vs Redpanda's 3 in the vendor setup. BUSL-1.1 plus Redpanda Community License (not OSI).
+
+**Known shortcoming:** The 70x is the vendor's best case (Kafka forced to fsync per batch, Java 11, more nodes); Vanlightly's re-run did not reproduce it. Degrades under load in that re-run: 50 producers ~24 s end-to-end, keyed ~330 MB/s vs Kafka 500, 12 h p99.99 of 26 s, backlogs that never drain. BSL-1.1 forbids offering it as a hosted streaming service. Linux only, takes over cores, needs ~2 GB RAM per core; dev mode skips fsync. Kafka wire-compatible but missing request_percentage quotas, server-side KIP-890 and multiple SCRAM credentials per user.
+
+**How:** It uses a thread-per-core, shared-nothing design built on Redpanda's fork of the Seastar framework. There is one pinned reactor thread per core, memory is allocated up front and split per core, cores talk by message passing instead of locks, and all I/O runs as futures/coroutines rather than OS-scheduled threads. The storage layer skips the Linux page cache: segment_appender batches data into page-aligned chunks and issues Seastar dma_write calls with adaptive fallocate, and reads come from a per-shard LRU batch_cache that Seastar's memory reclaimer can shrink. There is no JVM, so no GC pauses (the vendor's stated cause of Kafka's tail latency). The build has Clang ThinLTO and PGO configurations.
+
+**Use it when:**
+- You already use Kafka clients and need low p99.9/p99.99 produce-to-consume latency with acks=all and fsync before ack (Redpanda's production default), on dedicated Linux hosts with local NVMe.
+- Moderate partition counts with well-batched producers, where you want fewer brokers and no JVM/GC tuning. The vendor ran 50 MB/s to 1 GB/s on 3 i3en brokers against 3-6 Kafka brokers.
+- You want one binary with built-in consensus (Raft; no ZooKeeper or KRaft controller quorum), plus schema registry, HTTP proxy and tiered storage, on x86-64 or Arm64 (the vendor claims about 2x the 50 MB/s workload on Arm is4gen.medium).
+- Local development and CI against the Kafka API: `rpk container start` brings up a local cluster via Docker (dev mode, not durable).
+
+**Skip it when:**
+- You would offer it to third parties as a hosted streaming or queuing service. BSL 1.1 forbids that until each release's change date (4 years), and enterprise features need an RCL license.
+- Many producers, many partitions, small batches or keyed records. Vanlightly's independent re-run saw about 24 s end-to-end latency with 50 producers, a cap near 330 MB/s with record keys (288 partitions, 100 producers) while Kafka reached the 500 MB/s target, and consumer backlogs that never drained under 800 MB/s-1 GB/s produce load. He attributes this to small 16 KB fsync'd writes across many partitions (about 200K fsyncs/s).
+- Long sustained runs or disks sitting at their retention limit: the same re-run measured p99 3.5 s and p99.99 up to 26 s after about 12 h, with step increases once retention kicked in. With acks=1 at NVMe saturation, Kafka reached 1900 MB/s against Redpanda's 1400 MB/s.
+- Shared or containerised hosts, macOS/Windows production, NFS or IPv6-only networks. It needs Linux (RHEL 8+/Ubuntu 20.04+, kernel 4.19+ recommended), x86-64 Westmere+ or aarch64, XFS/ext4 on local SSD, IPv4, and at least 2 GB RAM per core plus 2 MB per partition replica. Thread-per-core assumes it owns its cores.
+- You depend on Kafka request-rate quotas (request_percentage), KIP-890 server-side transaction defense, or several SCRAM mechanisms per user.
+
+**Vs siblings:** Pick Redpanda over FluxMQ (a Rust Kafka-compatible broker claiming 20 implemented Kafka APIs, 8 stars) when you need a production-grade Kafka-protocol broker with Raft replication, tiered storage and years of regular releases. Pick it over Woodpecker (an embedded Go WAL on object storage with its own API, no topics or consumer groups) or Zenoh (a different pub/sub protocol) when your applications must keep speaking the Kafka API.
+
+**Gotchas:**
+- Development mode (the default for rpk container/dev setups) skips fsync, runs --overprovisioned and turns off the tuners. rpk's own help says this gives 'unrealistically fast clusters and may result in data loss', so only benchmark in production mode after `rpk redpanda tune`.
+- write.caching / write_caching_default turns acks=all into 'acked by a majority in memory, fsync later' (flush.ms/flush.bytes), which is roughly Kafka's default durability. It is on by default in dev mode, off in production, and never applies to transactions or consumer offsets. Check which mode any comparison used.
+- Seastar's per-core heap fragments. The project's own guide says contiguous allocations over 128 KiB after startup can fail even when plenty of memory is free, and 'oversized allocation' bugs keep appearing (e.g. #22737, #18325). Memory is budgeted per core and per partition, so size RAM to cores × partitions.
+- Licensing is split: the core is BSL-1.1 (becomes Apache-2.0 four years after each release) and enterprise features are under the Redpanda Community License. GitHub reports no SPDX id, so automated license scanners may flag it.
+
+**Status:** Very active (v26.2.2 and v26.1.17 released August 2026, 12.6k stars, 525 open issues) and shipped as prebuilt packages, so you deploy it as a server rather than vendor the code; read the BSL terms before offering it as a service.
+
+[repo](https://github.com/redpanda-data/redpanda) · [benchmark](https://redpanda.com/blog/redpanda-vs-kafka-performance-benchmark)
+
+##### SocketPro  `C++`  `no license`  `abandoned`  `Tier C`
+
+C++ async RPC framework with a built-in persistent server queue; the vendor claims 3.6-54x RabbitMQ's enqueue/dequeue speed.
+
+**Beats:** RabbitMQ — The vendor's 2016 study (PDF in the repo, HTML archived in 2020) enqueued and dequeued 100,000 persistent 200/1024/10240-char messages with the RabbitMQ .NET tutorial clients (RabbitMQ version, compiler and flags not stated). On one i7-4770 running Windows 8.1, SocketPro was 3.6-26x faster (200-char dequeue 14,129 -> 544 ms). Across 1 Gbps to a 4 GB Xeon E5-2630 v2 Windows Server 2012R2 VMware broker it was 4.3-10.9x faster on enqueue and 9.8-54x on dequeue (200-char dequeue 44,400 -> 820 ms), with RabbitMQ's consumer limited to prefetch 1 and per-message acks. A separate 2017 in-repo study against Kafka 0.10.1.1 (acks=1, Ubuntu 16.04, i7-4770, 7200-rpm HDD) reported SocketPro about 20-25% faster at writing medium and large messages, but Kafka about 20% faster on unbatched 4-32 B messages.
+
+**Known shortcoming:** The live evidence page is gone (DNS dead); only a 2020 Wayback copy remains. No LICENSE file and the core ships as prebuilt binaries. Baseline is RabbitMQ, outside the category's list.
+
+**Known shortcoming:** The 54x is mostly a configuration artifact: the in-repo RabbitMQ consumer uses prefetch=1 with a manual ack per message (one round trip each, ~444 us/msg flat across sizes) and no publisher confirms. SocketPro's queue defaults to memory-cached and the bench server never flushes, so its 'durable' numbers aren't disk-committed. An in-repo 2017 Kafka comparison (0.10.1.1, percentages only) has Kafka ~20% faster on unbatched 4-32 B messages and SocketPro ~20-25% faster on medium/large. Closed binary core (.dll/.so), 'enterprise license', x86-64 Linux/Windows only; proprietary non-AMQP protocol; abandoned since 2023-02; vendor site dead.
+
+**How:** Requests are pipelined: a client keeps sending without waiting for replies, and both the client and server cores merge pending requests and results into full TCP packets. The vendor calls this 'inline batching', and Nagle's algorithm is disabled. Each Dequeue returns a batch of messages (16 KB by default, 32 KB in the benchmark server), and the benchmark keeps three Dequeue requests in flight so that disk reads, network transfer and client parsing overlap. On the server, enqueues under 4 KB run on the main thread to avoid a thread handoff, and EnqueueBatch commits many messages as one job. Two more factors matter. Queue writes default to oMemoryCached, which buffers them in process memory (revision 6.0.2.5), with FlushQueue pushing them to the OS cache or disk. The storage engine lives in the closed-source server core binary, so its file format and indexing cannot be inspected.
+
+**Use it when:**
+- You already build on SocketPro RPC (C++, .NET, Java, Python or Node.js) and want a work queue served from the same server process and port, without running a separate broker.
+- Windows or x86-64 Linux hosts where producers stream many 200 B-1 KB messages and consumers drain in bulk, especially over higher-latency links where pipelining hides round trips. The vendor's largest gains are in this range.
+- Producers must not lose messages during broker or network outages. An optional client-side queue file backs up every request and replays it after reconnect, and the tutorial shows this surviving repeated server kills.
+- You are maintaining or re-measuring a legacy UDAParts deployment. The in-repo qperf drivers (C++, C#, Java, RabbitMQ C#) and the Kafka command lines let you rerun the comparisons.
+
+**Skip it when:**
+- You need AMQP, MQTT or the Kafka protocol, exchange or topic fan-out semantics, clustering or quorum queues, or ecosystem tooling such as a management UI. None of these exist, and the only way to interoperate is through SocketPro adapters.
+- You need license-clear or auditable code. There is no LICENSE file, the client and server cores ship only as prebuilt .dll/.so files, and the changelog mentions an 'enterprise license'. Only the adapters and plugins such as the queue come as source.
+- Tiny (4-32 B) messages without manual batching: the vendor's own 2017 Kafka study found Kafka about 20% faster at both writing and reading them. In that study, cross-machine dequeue of medium and large messages was roughly equal to Kafka.
+- You need maintained software or other platforms. The last commit was in February 2023, issues #3 and #4 (2017, 2019) have no replies, there are no GitHub releases, and binaries exist only for x86-64 Linux, Windows x86/x64 and a Windows CE client. There are none for macOS or aarch64.
+- You need per-message disk durability by default. Queues default to oMemoryCached, and a signal handler writes cached messages to the file on shutdown. Behavior on kill -9 or power loss is not documented.
+
+**Vs siblings:** The siblings replace Kafka, NATS or ZeroMQ (Redpanda, Woodpecker, FluxMQ, Zenoh, Wisp, TCPSHM), and none targets RabbitMQ-style work queues. Pick SocketPro only if you are committed to its RPC framework and want the queue inside that server. For a maintained, durable, open log use Redpanda, and for crash-recoverable broker-less C++ point-to-point messaging use MIT-licensed TCPSHM.
+
+**Gotchas:**
+- The benchmark is not like-for-like. The RabbitMQ consumer in samples/qperf/rabbitmq/Program.cs sets BasicQos prefetch=1 and acks every message manually, so it pays one round trip per message. Cross-machine RabbitMQ dequeue took 44.4 s for 200-char and 45.4 s for 1024-char messages (about 444 us per message, flat with size), which fits that bottleneck. RabbitMQ enqueue timing stops when the BasicPublish loop returns (no publisher confirms), while SocketPro's waits for every server reply.
+- The benchmark servers (cperf sq_server.cpp and the C# sq_server) never call FlushQueue or SetOptimistic, so the 'durable' SocketPro numbers ran at the oMemoryCached default. Call FlushQueue(key, cb, tagOptimistic::oDiskCommitted) when you need data committed to disk.
+- Dequeue is batch-and-repeat: your DDequeue callback must re-issue Dequeue while messageCount > 0, and throughput depends on keeping 2-3 requests in flight. The consumer must deserialize payloads with the same types and order the producer used (CUQueue), because there is no schema.
+- The plugin opens every queue with a hard-coded ttl of 120 hours (StartQueue(key, 120*3600)), and what expires is not documented. CloseQueue fails with QUEUE_DEQUEUING while messages are mid-dequeue, and the plugin drops all queue handles when its last client disconnects.
+
+**Status:** Abandoned: the last commit is 2023-02-16 (v6.4), udaparts.com no longer resolves and old issues have no replies. With no license and a closed binary core, it is a reference design, not something you can legally vendor or patch.
+
+[repo](https://github.com/udaparts/socketpro) · [benchmark](https://web.archive.org/web/20200210003353/http://www.udaparts.com/document/articles/fastsocketpro.htm)
+
+##### Wisp  `Rust`  `no license`  `active`  `Tier C`
+
+Experimental Rust server speaking the NATS Core client protocol; about 3.7-4.4x nats-server throughput on 1,000-subscriber loopback fan-out.
+
+**Beats:** NATS — Setup: a single shared Ryzen 7 9700X Linux host over loopback, with server and nats.go client pinned to disjoint 4-core sets, 1 publisher and 1,000 subscriber connections receiving 100,000 x 128 B messages (100M deliveries). Median of 3 runs: Wisp 9.02M deliveries/s vs 2.07M for nats-server 2.14.6 (4.37x), using 87 vs 371 server CPU-seconds; the rustc version is not stated. That build predates the slow-consumer limits, headers, auth/TLS and metrics. Later sessions on the same host measured 4.39x, 3.89x and 3.70x (9.21 vs 2.49M/s at commit 26d0376). The latest committed build (8.45M/s fan-out) has not been rerun against NATS.
+
+**Known shortcoming:** Numbers match (vs NATS 2.14.6, Ryzen 9700X, public harness) but rustc version unstated, 2 stars, no licence (reference only); Rust, not C++ (verifier downgrade from A).
+
+**Known shortcoming:** The 4.37x was measured before limits/TLS/auth/metrics were added; later same-host runs gave 4.39x/3.89x/3.70x and the latest build's fan-out wasn't re-run vs NATS. 8 publishers to 1 subscriber: older builds dropped the subscriber at the cap in 6/10 runs; the batched build passes but uses ~1.35x NATS's CPU and 73 vs 21 MiB RSS. Roughly parity on 1:1 small messages; ~7.5% behind NATS past 100k subjects; any SUB/UNSUB clears the account plan cache. No clustering, JetStream, NKeys or JWT; Unix only; needs rustc 1.88+ (unstated); TLS/auth throughput unmeasured. One author, v0.1.0, 27 of 48 commits in one day.
+
+**How:** For each subject it builds a dispatch plan (the matching subscriptions plus a pre-encoded `MSG subject sid` header prefix per subscriber) and caches it in a bounded, sharded FIFO cache with generation-number invalidation. A per-connection last-subject cache sits in front of that, so hot publishes skip the submap subject trie entirely. Payloads are refcounted `bytes::Bytes` slices of the 64 KiB socket read buffer, shared by every recipient (zero-copy fan-out), and are parsed with a memchr line scan and a fast-path PUB parser. Each connection has its own Tokio writer task, which swaps the pending queue out from under the mutex in O(1), encodes up to 64 KiB or 1,024 messages into one contiguous buffer and writes it, flushing as soon as the queue drains with no idle timer. Single-subscriber subjects also get producer-side batching: up to 1,024 deliveries are pre-encoded into one wire frame and admitted with one lock acquisition. The global allocator is jemalloc and the hash maps use ahash.
+
+**Use it when:**
+- Your clients already speak NATS Core and the load is high fan-out transient pub/sub: one publisher to hundreds or thousands of subscriber connections on a subject, with small (64-128 B) payloads, where nats-server CPU is the limit. At 1,000 subscribers it measured 3.7-4.4x the deliveries/s with roughly a quarter of the server CPU-seconds (87 vs 371) and lower peak RSS (61 vs 93 MiB).
+- Many-subject publishing where the hot subject set fits the dispatch cache (100,000 plans per account by default). The 5,000-subject wildcard case measured about 5.1M deliveries/s vs 1.9-2.0M for NATS, using about a third of the CPU.
+- A single-node, at-most-once Core broker on Linux/Unix where you can live without clustering, for example in-host or in-rack telemetry fan-out, or a local stand-in for nats-server in tests.
+- Idle request/reply over loopback: p50 about 17 us vs 19-20 us for NATS. The gain is small but it has held in every session.
+- As a reference design for a NATS-protocol server in Rust. The harness is reproducible, and the reports keep failed runs and regressions.
+
+**Skip it when:**
+- You need clustering, leafnodes or gateways, JetStream or any persistence/replay, KV or object store, NKeys/JWT operator mode, auth callouts, account imports/exports, or queue-name-specific and dynamic response permissions. None of these are implemented.
+- Any production or redistribution use. There is no LICENSE file, so default copyright applies. It is also a single-author 0.1.0 project with 2 stars, no releases or tags, no issue history, and 27 of its 48 commits landed on one day (2026-09-08).
+- Many publishers into one subscriber under sustained load. Earlier builds disconnected the subscriber at the pending-message cap in 6 of 10 runs of 100M messages. The current batched build completed 5 of 5, but still uses about 1.35x NATS server CPU (50 vs 37 CPU-s per 100M) and 73 vs 21 MiB peak RSS.
+- One publisher to one subscriber with small messages: this is roughly parity (0.97x-1.07x across sessions). Larger-payload results have swung between sessions, from -34% and -49% at 1 KiB and 8 KiB in the first run to +2% to +12% later.
+- Workloads with subscription churn or cold subjects. Any SUB or UNSUB invalidates every cached plan in that account. Past the 100,000-subject cache it ran about 7.5% behind NATS (1.76 vs 1.90M msg/s). TLS- or auth-enabled throughput has never been measured.
+
+**Vs siblings:** Pick Wisp only if your clients already speak NATS Core and you need single-node, non-durable fan-out with far less broker CPU than nats-server. Zenoh is the closest sibling for transient pub/sub but has its own protocol and API. TCPSHM targets point-to-point RTT. Redpanda, FluxMQ and Woodpecker fit when you need a persistent, replayable log, which Wisp does not have.
+
+**Gotchas:**
+- Slow consumers: a recipient that exceeds 64 MiB or 524,288 pending messages, or misses the 10 s write deadline, loses its whole connection and its queued output. If the 1 GiB aggregate output budget runs out, the recipient that cannot reserve space is closed, which can be a healthy peer rather than the largest backlog. In the stall test a subscriber survived a 400 ms read pause but was dropped at 550 ms; NATS lasted until 400-700 ms.
+- Any SUB or UNSUB bumps a per-account generation counter, and that invalidates every cached dispatch plan in the account. Subscription churn therefore turns unrelated hot subjects cold.
+- Batched single-subscriber deliveries wait in the publisher connection until a flush point and count against no pending limit until admitted. Prometheus publication and delivery counters can lag by up to 1,023 publications per publisher. Fan-out and queue-group paths skip batching and still admit each message separately.
+- The WISP_WRITEV_FLUSH_THRESHOLD_BYTES setting does not use writev: the writer copies each batch into one contiguous buffer. On SIGHUP, any change to the security or client-CA file, even formatting only, disconnects every client. The monitoring HTTP listener has no authentication or TLS.
+
+**Status:** Actively developed as of 2026-09-08 but single-author and unlicensed. Treat it as reference-only: you can read and benchmark it, but there is no grant to reuse or redistribute the code.
+
+[repo](https://github.com/iamd3vil/wisp) · [benchmark](https://github.com/iamd3vil/wisp/blob/main/profiling/compare/fanout1000/REPORT.md)
+
+#### probabilistic-filters
+
+##### Binary Fuse Filter demo (FastFilter/FilterPassword)  `C++`  `no license`  `stale`  `Tier C`
+
+Demo CLI pair that builds an mmap-queried binary fuse filter over HaveIBeenPwned SHA1 prefixes, with a Bloom filter for comparison.
+
+**Beats:** Bloom filter — The data comes from single CLI runs on an undisclosed machine and compiler (the Makefile builds with c++ -O3 -std=c++11) over the first 10M 64-bit prefixes of the HIBP v4 ordered-by-count SHA1 list. binaryfuse8 took 0.420 s of CPU time to construct vs 0.613 s for a classic unblocked k=8, 12-bit/key Bloom filter, and wrote 11.27 MB vs 15.00 MB, at a slightly higher false-positive rate (2^-8 ≈ 0.39% vs about 0.32% for the Bloom filter, measured by a user in issue #4). Only the build-time and size figures stand. The one-shot query timings include open and mmap, and the binary fuse query hit a since-fixed header-parsing bug and gave a wrong answer.
+
+**Known shortcoming:** A demo program rather than a library; ratios are derived from README numbers; the CI badge machine differs from the benchmark machine.
+
+**Known shortcoming:** The README query numbers are void: they predate a header-parse fix (2021-11, #6), and binaryfuse8 then gave a false negative for SHA1('123456'); README keys are 17 hex chars while the current query tool accepts exactly 16. Timing is clock() CPU time over open+mmap+one lookup. build_filter's realloc passes an element count as bytes, so input beyond 629,145,600 lines overflows the heap (current HIBP ~1B lines). No LICENSE; demo only (use xor_singleheader).
+
+**How:** The default filter is an 8-bit binary fuse filter (Graf & Lemire, arXiv 2201.01174), taken from the pinned xor_singleheader submodule. Each key is mixed with a murmur64 finalizer and mapped to 3 byte slots in 3 adjacent segments. A lookup XORs those 3 bytes against the key's fingerprint, so it always costs exactly 3 memory reads. The table has about 1.125 slots per key (about 9 bits/key at 10M keys; the README's file is 11.27 MB). Construction peels a 3-uniform hypergraph, like xor filters, but first bucket-sorts the hashes by segment block so memory accesses stay local. The bloom12 baseline is fastfilter_cpp's classic unblocked Bloom filter: 12 bits/key, k=8 double-hashed probes into random 64-bit words, so a positive lookup can take up to 8 cache misses and the file is 15 MB.
+
+**Use it when:**
+- You want a small, readable end-to-end example of building a static membership filter offline and querying it through mmap without loading it into RAM.
+- Offline or batch screening of password hashes against an HIBP-style list, where a ~0.4% false-positive rate (2^-8 for binaryfuse8) is acceptable and an exact lookup follows on a hit.
+- Comparing the file size and build time of binaryfuse8, binaryfuse16, xor8 and bloom12 on your own 64-bit-keyed data with one tool (-f picks the filter type, -V checks for false negatives and estimates the false-positive rate).
+- Sets of tens to a few hundred million keys on a Linux or macOS box with plenty of RAM for the one-time build.
+
+**Skip it when:**
+- Anything you ship or depend on: the maintainer calls it a demonstration and not a library (README, issue #9), and the repo has no LICENSE file. Build on xor_singleheader instead; the maintainer says it is Apache-licensed.
+- Sets that change: the filter is build-once and immutable, with no insert or delete.
+- Build machines with little RAM: construction needs up to ~64 bytes/key (README), the full list is said to need 64 GB, and build_filter reserves a fixed ~5 GB key buffer (600*1024*1024 uint64 slots) whatever -m is set to.
+- Current full HIBP dumps (issue #9 puts them near 1 billion records): past 629,145,600 input lines, read_data grows the buffer with realloc(array, array_capacity), which passes an element count as a byte count, so the buffer shrinks and later writes overflow the heap. HIBP also no longer ships the ordered-by-count 7z file the README tells you to download (issue #9).
+- Measuring or serving high query throughput: query_filter answers one key per process, and there is no batch or server mode (issue #1 has been open since 2019).
+- Windows: the README expects Linux or macOS, and the code uses POSIX getline, getopt and mmap.
+
+**Vs siblings:** Pick it only as a runnable, HIBP-shaped reference for the build-once, mmap-and-query pattern. For code you ship, use Xor Filter (xor_singleheader), which this repo wraps and which has built-in serialize/deserialize, or xorfilter (Go) or xorf (Rust) in those languages. Use Boost.Bloom if you need incremental inserts or a cache-blocked Bloom filter, which is a stronger baseline than the unblocked bloom12 used here.
+
+**Gotchas:**
+- The README benchmark block was written on 2021-06-03 (commit 202f2180), before commit c5eac973 (2021-11-01, issue #6) fixed query_filter so it reads SegmentLengthMask from the binary fuse file header. In that block, binaryfuse8 answers 'Surely not in the set' for 7C4A8D09CA3762AF, the SHA1 prefix of '123456', which the README's own full-list example reports as present. It also 'expects' 11,206,692 bytes for a file it wrote as 11,272,228 bytes. That query result is a false negative from the old bug, so the 241 us vs 344 us comparison is void.
+- The example query keys in the README have 17 hex characters (7C4A8D09CA3762AF6). The current query_filter rejects any key that is not exactly 16 characters, so the README output cannot be reproduced as written.
+- The timings use clock(), which is CPU time, not wall time. 'Processing time' and 'Expected number of queries per second' cover fopen, the header read, mmap and page-faulting a single lookup. They do not measure lookup cost; a bulk benchmark with the same filter family cited in issue #1 reports about 50 ns per query.
+- Latent limits in the pinned xor_singleheader: key counts go through uint32_t parameters, so more than 4,294,967,295 keys would be silently truncated. Its duplicate-removal qsort comparator also casts a uint64_t difference to int, which is not a valid ordering if 64-bit prefixes ever collide. The same comparator is still on upstream master.
+
+**Status:** Stale: the last commit is 2024-12-09 (a dependency tidy and a CMake file), the repo has 50 stars and no LICENSE, and the maintainer describes it as a demonstration, so read it for the pattern and build on xor_singleheader.
+
+[repo](https://github.com/FastFilter/FilterPassword) · [benchmark](https://github.com/FastFilter/FilterPassword#performance-comparisons)
 
 ### toolchain-and-build
 
