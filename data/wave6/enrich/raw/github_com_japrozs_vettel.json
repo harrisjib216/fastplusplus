@@ -1,0 +1,56 @@
+{
+  "id": "https://github.com/japrozs/vettel",
+  "one_liner": "A ~300-line C CLI key-value store on one flat text file; its README times it slightly faster than redis-cli.",
+  "what_it_does": "vettel is one main.c that builds a `vt` CLI, which runs an editline REPL or a single command via `vt -c \"<cmd>\"`. It supports set, get, list and delete/del; help and info only print placeholder text. All data lives in one hard-coded file, $HOME/.store.vt, one `key:value` line per record. It is not a library or a server: there is no C API and no network protocol, because an earlier TCP server (port 7072) and a daemon were deleted in the 'change vettel API' commit (bc7526e).",
+  "how_it_is_fast": "It has no speed technique. `set` scans the whole store file line by line to reject a duplicate key and then appends one line with fopen(\"a\"); `get` is the same O(n) scan. It 'wins' only because each benchmarked call is a short-lived process doing a local file append, while redis-cli also pays a TCP connect and a request/response round trip to a Redis server, and process creation dominates both timings (5.10 s vs 6.27 s sys time). The one comment on the Feb 2023 Show HN post made the same O(n) point and expected Redis to win by a wide margin with more data.",
+  "when_to_use": [
+    "Reading ~300 lines of C to learn how a naive flat-file key-value CLI works (parsing, append-only writes, rewrite-on-delete)",
+    "A personal shell scratchpad of at most a few hundred string keys on a single-user macOS machine, where losing data is acceptable",
+    "A teaching example of benchmark pitfalls: timing process spawn plus a local file append against a client/server network round trip"
+  ],
+  "when_not_to_use": [
+    "As a Redis replacement or as a cache: there is no server, no network protocol, no data types, no TTL, no eviction and no memory bound",
+    "Any store past a few hundred keys: every set and get is a full linear scan of the file, and delete rewrites the whole file",
+    "Concurrent writers: there is no file locking, so check-then-append can create duplicate keys, and a delete's read-truncate-rewrite can drop a concurrent append",
+    "Anything that needs durability: there is no fsync, and delete opens the store with mode \"w\" (truncating it) before writing it back, so a crash mid-delete can empty the store",
+    "Production or security-sensitive use: the C has undefined behavior (see gotchas), was built at -O0, and has no tests, CI, releases or issue tracker activity"
+  ],
+  "integration": {
+    "form": "source-drop (one main.c that builds a CLI executable, out/vt; a prebuilt out/vt binary is committed; there is no library API)",
+    "dependencies": "libedit (editline/readline.h, -ledit). make.sh hard-codes MacPorts paths under /opt/local.",
+    "min_toolchain": "Not documented. make.sh uses clang with -Wall -Wextra -pedantic, no -std and no -O flag. The code needs POSIX getline, BSD/GNU vasprintf and the non-standard `uint` type.",
+    "platforms": "Only macOS (MacPorts) has a build script, and the author's benchmark machine is a 2012 Intel MacBook Pro. Linux and Windows are not documented; glibc would likely need _GNU_SOURCE for vasprintf.",
+    "thread_safety": "Not documented. It runs one command per process with no locking of the shared $HOME/.store.vt file.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "delete matches by prefix: delete_key uses strncmp with strlen(key), so `del user` also removes `user1`, `username` and so on (get uses an exact comparison)",
+    "set is insert-only and errors with 'a record with key ... already exists', so an update means delete then set. Every command exits with status 0, even on errors and misses, so scripts must parse stdout.",
+    "Parsing is fragile: keys containing ':' break the key:value format, values are split on spaces and rejoined with single spaces, and the code relies on overlapping sprintf plus an uninitialized malloc buffer in delete (undefined behavior)",
+    "get_store_path calls fclose() on a NULL FILE* when the store file does not exist yet. That is undefined behavior and likely crashes the first run, after which the empty file exists."
+  ],
+  "pick_this_over_siblings_when": "Pick it only when you want a tiny, readable toy. For an embedded, serverless local store that really beats Redis on local get latency, use python-diskcache. For a faster Redis-protocol server, use Valkey, Pogocache or Dragonfly.",
+  "verified_claims_summary": "A Python script ran os.system 1000 times. Each call started a shell, which ran either `vt -c \"set k v\"` (an unoptimized clang build appending to ~/.store.vt) or `redis-cli set k \"v\"` (default host, so a local Redis server; the Redis version, build and persistence settings are unstated). A single run, timed with fish's `time` on a MacBook Pro 13-inch Mid 2012 (2.5 GHz dual-core Core i5, 16 GB DDR3, macOS 10.15.7), took 10.72 s vs 13.26 s: about 10.7 ms vs 13.3 ms per key, or 1.24x (derived). This measures process-spawn plus IPC overhead, not the throughput of either store.",
+  "status_note": "Abandoned since 2023-02-12 after 12 commits, with no releases, no issues and one fork that has no later pushes; the code is MIT-licensed and readable in minutes but not usable as a real store.",
+  "sources_read": [
+    "https://github.com/japrozs/vettel",
+    "https://github.com/japrozs/vettel/blob/master/README.md",
+    "https://github.com/japrozs/vettel/blob/master/main.c",
+    "https://github.com/japrozs/vettel/blob/master/make.sh",
+    "https://github.com/japrozs/vettel/blob/master/benchmarks/vettel.py",
+    "https://github.com/japrozs/vettel/blob/master/benchmarks/redis.py",
+    "https://github.com/japrozs/vettel/blob/master/benchmarks/data.py",
+    "https://github.com/japrozs/vettel/blob/master/LICENSE",
+    "https://raw.githubusercontent.com/japrozs/vettel/master/assets/my_machine.png",
+    "https://github.com/japrozs/vettel/commits/master",
+    "https://github.com/japrozs/vettel/commit/bc7526e",
+    "https://github.com/japrozs/vettel/commit/2d5d6d7",
+    "https://github.com/japrozs/vettel/issues",
+    "https://github.com/japrozs/vettel/releases",
+    "https://github.com/japrozs/vettel/forks",
+    "https://github.com/mobiliodevelopment/vettel",
+    "https://hn.algolia.com/api/v1/search?query=vettel%20key%20value&tags=story",
+    "https://news.ycombinator.com/item?id=34760870"
+  ],
+  "confidence": 0.85
+}
