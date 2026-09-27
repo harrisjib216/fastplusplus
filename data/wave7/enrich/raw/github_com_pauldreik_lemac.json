@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/pauldreik/lemac",
+  "one_liner": "C++20 library and lemacsum CLI for LeMac, an AES-round MAC measured at ~27x OpenSSL SHA-1 bulk throughput on Zen 4.",
+  "what_it_does": "This is a packaged C++20 implementation of LeMac, the AES-based nonce MAC of Bariant et al. (ToSC 2024, corrected in the 2025 corrigendum), and it produces 16-byte tags. lemac::LeMac takes an optional 16-byte key. It offers update()/finalize(nonce) for streaming and a const oneshot(data, nonce), plus reset() and cheap copies so one keyed object can be reused. The repo also builds lemacsum, a sha256sum/xxhsum-style file checksummer. It is not a SHA-1 replacement: it is a keyed MAC with a different API and security model, not an unkeyed collision-resistant digest.",
+  "how_it_is_fast": "LeMac is an AES-round universal hash from the paper's MILP-optimised framework. A 9 x 128-bit state plus a 4-register message schedule (RR, R0-R2) absorbs each 64-byte block with 8 independent AESENC instructions (2 AES rounds per 128-bit word) and a few XORs. That lets CPUs that issue two AESENC per cycle approach 4 cycles per 64 bytes, and the README measured 0.067 c/B. Tags use the EWCDM construction: four zero-block rounds, nine modified AES-128 calls over the state, and AES of the nonce, which gives the fixed ~2 KB-equivalent finalisation cost. On x86 the runtime dispatch chooses between a -maes build and a build of the same 128-bit intrinsics compiled with -mvaes -mavx512f -mavx512vl; there is no 256/512-bit multi-block AES. On arm64, AESENC is emulated as AESE(zero)+AESMC+EOR.",
+  "when_to_use": [
+    "Authenticating large buffers (16 KB and up) under a secret 128-bit key where GMAC or HMAC throughput is the bottleneck. The README measured about 74-77 GB/s single-core on a Ryzen 9 7950X3D and 43-48 GB/s on Apple M3/M4 at 256 KB-1 MB.",
+    "Integrity tags for storage or replication pipelines where both ends are your code and a unique nonce per message is available, since the paper claims 128-bit security only when nonces are respected.",
+    "Many messages under one key: build the keyed hasher once, then copy it or reset() it per message. Keying costs about 5 KB of hashing and finalisation about 2 KB.",
+    "C++20/CMake projects on x86-64 with AES-NI, or arm64 with crypto extensions (Linux, macOS Apple silicon, Windows), that want FetchContent/find_package integration, runtime CPU dispatch and a sanitizer-tested codebase instead of the upstream research C code."
+  ],
+  "when_not_to_use": [
+    "As an unkeyed digest or 'cryptographic checksum' against adversaries, which is how lemacsum and the README example use it (all-zero key and nonce). The paper's UHF security 'only requires collision resistance on average over a random key', so with a public key there is no claimed collision resistance.",
+    "Non-adversarial fast checksums: xxh3/xxh128 is about 16% faster on the same Zen 4 (89 vs 77 GiB/s per README) and faster on the Pi 5 (13.2 vs 11.4 GiB/s).",
+    "Short messages without reuse. A fresh object costs about 5 KB of hashing to key, and on M4 a 1-byte oneshot runs at 0.021 GiB/s (0.049 us/hash), while 1 KB reaches only 17-23 GiB/s against about 48 GiB/s at 256 KB.",
+    "CPUs without AES-NI or ARMv8 crypto, and any other architecture. There is no software fallback: CMake stops with FATAL_ERROR on unknown architectures, and the constructor calls std::abort() on unsupported CPUs.",
+    "Interoperable or standardised MACs (protocols, FIPS). LeMac is a 2024 research design whose spec already changed once (LeMac-0 to LeMac, so values differ), and this port is a 4-star v0.1 that has had no commits since June 2025."
+  ],
+  "integration": {
+    "form": "static lib (CMake add_library; can also be installed with find_package config or packaged as Debian liblemac0/liblemac-dev) plus the lemacsum CLI",
+    "dependencies": "none for the library; CMake >= 3.23 to build; Catch2 v3 only for tests (vcpkg.json)",
+    "min_toolchain": "C++20; GCC 12+ / Clang 16+ on Linux (CI matrix covers g++ 12-14 and clang++ 16-18), Apple clang on macOS, MSVC for Windows amd64/arm64, and a MinGW cross-build",
+    "platforms": "x86-64 with AES-NI (VAES+AVX512F+AVX512VL CPUs get the separately compiled fast path) and arm64 with ARMv8 AES (Linux via HWCAP_AES; Apple silicon and Windows arm64 are assumed and not checked). Nothing else.",
+    "thread_safety": "Not documented. oneshot() is const and leaves the object untouched (arm64 works on an internal copy), so one keyed object can serve concurrent oneshot calls. update/finalize/reset mutate state, so each thread needs its own copy. CPU detection is cached in function-local statics.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Defaults are all-zero. LeMac() uses a zero key, and finalize()/oneshot(data) use a zero nonce. A fixed nonce puts you in the paper's nonce-misuse bound (attacks at about 2^64 data), and a known key voids the MAC's guarantees entirely.",
+    "finalize()/finalize_to() absorb the padding block and four zero blocks into the object's own state and do not reset it. Calling finalize() twice, or update() after it, silently gives a different tag, so reset() or use a fresh copy after each tag.",
+    "Nonce length is checked only by assert(nonce.size() == 16). In release builds a shorter span makes _mm_loadu_si128/vld1q_u8 read past its end, while a wrong key size does throw std::runtime_error.",
+    "Unsupported hardware aborts the process instead of throwing. x86 dispatch checks CPUID bits only (no XGETBV check that the OS enabled AVX-512 state). A CPU reporting VAES+AVX512F without AVX512VL maps to an unhandled 'vaes512' case and hits std::abort(), and Windows arm64 has no check at all."
+  ],
+  "pick_this_over_siblings_when": "Pick it over the upstream LeMac sibling (AugustinBariant/Implementations_LeMac_PetitMac: C/Python research code, AES-NI only, Makefile) when you need arm64/Windows support, a streaming C++ API, CMake packaging or a CLI; both implement the corrected LeMac and share test vectors. Pick it over libaegis (AEGIS-128L) only when you need a MAC and never encryption on AES-capable hardware: the LeMac paper measured 0.068 vs 0.195 c/B for AEGIS128L in AD-only mode on Ice Lake at 256 kB. For AEAD, portability without AES hardware or a mature, widely deployed codebase, libaegis wins.",
+  "verified_claims_summary": "The numbers are first-party and come from the README. On a Ryzen 9 7950X3D (Debian 13, compiler unnamed, Release build with per-file -maes / -mvaes -mavx512f -mavx512vl), the repo's benchmark gave LeMac oneshot 76.7 (256 kB) and 74.3 (1 MB) 'GiB/s' (median of 5), against about 2.8 GiB/s from `openssl speed -evp SHA1` on the same machine, roughly 27x, but that compares a keyed MAC with an unkeyed digest. benchmark.cpp actually prints bytes/s x 1e-9 under a 'GiB/s' label, so the LeMac figures are decimal GB/s (about 71 GiB/s), while the baselines (openssl speed, xxhsum -b, clhash's benchmark) come from outside tools with their own units.",
+  "status_note": "Stale. v0.1, last commit 2025-06-17, 16 merged PRs, 15 of them by the author (macOS arm64 support came from one outside contributor), and no issues ever filed. It is BSL-1.0, about 2.2k lines of source, tested under ASan/UBSan in CI, and implements the corrected LeMac (tests assert the upstream 'LeMac' vectors, not LeMac-0), so it is easy to vendor if you accept pinning your own fork.",
+  "sources_read": [
+    "https://github.com/pauldreik/lemac",
+    "https://github.com/pauldreik/lemac/blob/main/README.md",
+    "https://github.com/pauldreik/lemac/blob/main/include/lemac.h",
+    "https://github.com/pauldreik/lemac/blob/main/src/lemac.cpp",
+    "https://github.com/pauldreik/lemac/blob/main/src/lemac_aesni_impl.h",
+    "https://github.com/pauldreik/lemac/blob/main/src/lemac_aesni.h",
+    "https://github.com/pauldreik/lemac/blob/main/src/lemac_aesni_128.cpp",
+    "https://github.com/pauldreik/lemac/blob/main/src/lemac_aesni_full.cpp",
+    "https://github.com/pauldreik/lemac/blob/main/src/x86_capabilities.cpp",
+    "https://github.com/pauldreik/lemac/blob/main/src/arm64_capabilities.cpp",
+    "https://github.com/pauldreik/lemac/blob/main/src/lemac_arm64_v8A.cpp",
+    "https://github.com/pauldreik/lemac/blob/main/src/main.cpp",
+    "https://github.com/pauldreik/lemac/blob/main/CMakeLists.txt",
+    "https://github.com/pauldreik/lemac/blob/main/benchmark/benchmark.cpp",
+    "https://github.com/pauldreik/lemac/blob/main/test/tests.cpp",
+    "https://github.com/pauldreik/lemac/blob/main/test/CMakeLists.txt",
+    "https://github.com/pauldreik/lemac/blob/main/vcpkg.json",
+    "https://github.com/pauldreik/lemac/blob/main/debian/changelog",
+    "https://github.com/pauldreik/lemac/blob/main/lemacsum.1",
+    "https://github.com/pauldreik/lemac/blob/main/.github/workflows/sanitizers.yml",
+    "https://github.com/pauldreik/lemac/blob/main/.github/workflows/ubuntu.yml",
+    "https://github.com/pauldreik/lemac/commits/main",
+    "https://github.com/pauldreik/lemac/pulls?q=is%3Apr",
+    "https://github.com/AugustinBariant/Implementations_LeMac_PetitMac",
+    "https://github.com/AugustinBariant/Implementations_LeMac_PetitMac/blob/main/README.md",
+    "https://api.crossref.org/works/10.46586/tosc.v2024.i2.35-67",
+    "https://api.crossref.org/works/10.46586/tosc.v2025.i1.623-628",
+    "https://tosc.iacr.org/index.php/ToSC/article/download/11619/11111"
+  ],
+  "confidence": 0.8
+}

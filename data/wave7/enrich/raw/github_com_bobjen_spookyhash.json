@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/bobjen/spookyhash",
+  "one_liner": "Bob Jenkins' own reference C++ SpookyV2, a 128-bit non-cryptographic hash about 1.2x faster than XXH64 on large buffers.",
+  "what_it_does": "This is the canonical source of SpookyHash V2 (2012), published by its author and linked from burtleburtle.net as the source-controlled home. The API is a C++ class. Static SpookyHash::Hash128(msg, len, &h1, &h2) takes a 128-bit seed in through the two pointers and writes the hash back through them; Hash64(msg, len, seed) and Hash32 keep the low bits. A SpookyHash object provides Init/Update/Final for fragmented input and gives the same result as the one-shot call. It is not a drop-in for XXH64 because the hash values differ, there is no C linkage, and the streaming API is shaped differently.",
+  "how_it_is_fast": "Inputs of 192 bytes or more go through Mix(), which runs 96-byte blocks over 12 independent 64-bit state words. Each 8-byte input word gets an add, two xors, a rotate and an add. With 12 lanes the CPU has a lot of instruction-level parallelism, using only add/xor/rotate: no SIMD and no multiplies. Jenkins says SSE2 and 64-bit-multiply versions were slower, and that about 12 variables was the sweet spot. Shorter inputs use a 4-word ShortMix/ShortEnd path that has a lower startup cost, and long inputs finish with three EndPartial rounds.",
+  "when_to_use": [
+    "Checksumming or fingerprinting large, cache-resident buffers (roughly 1 KB and up) on 64-bit little-endian CPUs. SpookyV2_64 averaged 13,401 MiB/s against 11,177 for XXH64 on 256 KiB keys in rurban/smhasher, and SMHasher3 shows 4.40 against 3.99 bytes/cycle.",
+    "You need a 128-bit result from plain, portable 64-bit integer code with no SIMD, AES or wide-multiply dependency, for example dedup keys or content IDs where 64-bit collision odds are too high.",
+    "You must reproduce existing SpookyV2 values, such as stored keys, Bloom filters or on-disk indexes. This repo is the author's reference: rurban/smhasher's SpookyV2 rows build byte-identical copies of cplus/SpookyV2.cpp/.h, and TestSpookyV2.cpp holds 512 expected Hash32 values.",
+    "Input arrives in fragments and you want the streaming result to match the one-shot hash. TestPieces checks every two-piece split of inputs up to 1 KB.",
+    "You want a seeded 32-bit hash that passes both suites: rurban lists no quality problems for SpookyV2_32, and SMHasher3 passes SpookyHash2-32 on all 250 tests."
+  ],
+  "when_not_to_use": [
+    "Hash-table keys of 16-32 bytes. When the 16-byte branch into ShortMix kicks in, it jumps from about 41-46 to 66-71 cycles/hash, against 43-68 for XXH64. Overall it averages 56.2 against 49.7 cycles/hash over 1-31 byte keys, and 246 against 230 cycles/map (rurban).",
+    "New code that doesn't need SpookyV2-compatible values. XXH3 (20,854 MiB/s, 29.5 cycles/hash), wyhash (22,641) and rapidhash (21,514, 22.0 cycles/hash) beat it on both bulk and small keys in the same rurban table.",
+    "Anything adversarial, such as hash-flooding-exposed tables or integrity against an attacker. Jenkins' page says 'When NOT to use it: if you have an opponent', and warns that a resourceful opponent can build same-hash messages.",
+    "Portable persisted hashes across endianness, or strict-alignment CPUs. The page says big-endian machines are unsupported (they produce different values), and unaligned reads are enabled by default via a hard-coded #define in the .cpp.",
+    "Memory-bound streaming from RAM. Jenkins notes that uncached reads cap it below about 2 bytes/cycle on his machines, and the README's 16-way parallel run fell to 6.5 GB/s per process (105 GB/s total) against 19.5 GB/s single-process at 16 KB."
+  ],
+  "integration": {
+    "form": "source-drop (cplus/SpookyV2.h + SpookyV2.cpp; no build system in the repo, and an open PR #1 proposes CMake)",
+    "dependencies": "none (stddef.h, stdint.h, memory.h). The Rust translation in rust/ is a standalone Cargo package with no dependencies and is not published on crates.io.",
+    "min_toolchain": "Not stated. The library files use only pre-C++11 constructs plus <stdint.h> and an MSVC typedef branch. The test harness needs C++11 (<chrono>), and the README's timings used g++ -O3. The Rust port is edition 2021.",
+    "platforms": "Designed for and tested on 64-bit little-endian x86. Big-endian runs but gives different values. Strict-alignment CPUs need ALLOW_UNALIGNED_READS edited to 0 in SpookyV2.cpp.",
+    "thread_safety": "The static Hash128/64/32 functions keep no global state and are reentrant. A SpookyHash streaming object is plain mutable state and needs one instance per thread (not documented beyond the code).",
+    "drop_in_for_baseline": "partial — Hash64(msg, len, seed) has the same shape as XXH64(input, len, seed), but the values differ, the streaming API (Init/Update/Final on a class) differs from XXH64_state_t, and it is C++-only with no C linkage"
+  },
+  "gotchas": [
+    "Hash128's hash1/hash2 are in-out: they carry the seed in and the hash out. Reusing the same variables across calls silently chains seeds, which is exactly what TestSpookyV2's DoTimingSmall does, so the README's GB/s table measures dependent back-to-back calls.",
+    "SpookyV2.h has no include guard or #pragma once, and it puts global typedefs uint64/uint32/uint16/uint8 and an INLINE macro into every includer. That can clash with other code's typedefs, and a double include redefines the class.",
+    "Reads go through uint64*/uint32* casts on unaligned pointers via a union. That is undefined behaviour under strict C++ and UBSan (rurban lists 'Spooky' among misaligned-read hashes) and faults on strict-alignment hardware unless you flip the macro.",
+    "Don't use the two 64-bit halves of the 128-bit result as independent hashes for short keys. SMHasher3 fails SpookyHash2-128 on BIC for 3-28-byte keys (235/250 passed), while SpookyHash2-64 fails only SeedBIC/SeedBitflip on 3-11-byte keys (244/250)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over xxHash (XXH3), wyhash or rapidhash only when you need SpookyV2-compatible values or a 128-bit result from multiply-free, SIMD-free code under a public-domain dedication, because those siblings are faster on both bulk and small keys. Against CityHash (City64 is faster in every rurban column but flagged 'Sparse, TwoBytes') or pengyhash (same 13.3-13.4 GB/s bulk but 74.8 against 56.2 cycles/hash on small keys), SpookyV2 has a clean rurban quality record and faster small keys than pengyhash.",
+  "verified_claims_summary": "rurban/smhasher on its reference AMD Ryzen 5 3350G, with no compiler or flags stated, measured bulk speed on 256 KiB keys averaged over alignments 0-7, with MiB/s converted from bytes/cycle at a nominal 3 GHz. SpookyV2_64 ran at 13,401 MiB/s (4.68 B/cycle) against 11,177 MiB/s (3.91 B/cycle) for XXH64, about 1.2x, while XXH64 won the 1-31 byte small-key average (49.7 vs 56.2 cycles/hash) and XXH3 and City64 beat it on every column. The SpookyV2 code rurban built matches this repo's C++ (CRLF endings aside), and the README's own 19.5 GB/s at 16 KB (g++ -O3, unnamed machine) compares C++ only with the repo's Rust port.",
+  "status_note": "The algorithm has been frozen since 2012. Its author curated the repo in commits from Dec 2025 to 29 Mar 2026 (V1 removed Feb 2026, Rust port added Mar 2026), and nothing has been committed since; PR #1 (CMake) has been unanswered since April. The two C++ files are Unlicense (public domain, no patent grant) and trivial to vendor. The Rust port was written by Claude, reproduces the C++ hashes, and runs about 2-6% slower from 256 B up and 10-29% slower below that in the README table.",
+  "sources_read": [
+    "https://github.com/bobjen/spookyhash",
+    "https://github.com/bobjen/spookyhash/blob/main/README.md",
+    "https://github.com/bobjen/spookyhash/blob/main/LICENSE",
+    "https://github.com/bobjen/spookyhash/blob/main/cplus/SpookyV2.h",
+    "https://github.com/bobjen/spookyhash/blob/main/cplus/SpookyV2.cpp",
+    "https://github.com/bobjen/spookyhash/blob/main/cplus/TestSpookyV2.cpp",
+    "https://github.com/bobjen/spookyhash/blob/main/rust/Cargo.toml",
+    "https://github.com/bobjen/spookyhash/blob/main/rust/src/lib.rs",
+    "https://github.com/bobjen/spookyhash/blob/main/rust/src/main.rs",
+    "https://github.com/bobjen/spookyhash/commits/main",
+    "https://github.com/bobjen/spookyhash/commit/57ca2624",
+    "https://github.com/bobjen/spookyhash/pull/1",
+    "https://burtleburtle.net/bob/hash/spooky.html",
+    "https://raw.githubusercontent.com/rurban/smhasher/master/README.md",
+    "https://raw.githubusercontent.com/rurban/smhasher/master/doc/SpookyV2_64.txt",
+    "https://raw.githubusercontent.com/rurban/smhasher/master/doc/xxHash64.txt",
+    "https://raw.githubusercontent.com/fwojcik/smhasher3/main/results/README.md",
+    "https://raw.githubusercontent.com/fwojcik/smhasher3/main/results/raw/SpookyHash2-64.txt",
+    "https://raw.githubusercontent.com/fwojcik/smhasher3/main/results/raw/SpookyHash2-128.txt",
+    "https://crates.io/api/v1/crates/spookyhash",
+    "https://hn.algolia.com/api/v1/search?query=bobjen%20spookyhash"
+  ],
+  "confidence": 0.8
+}
