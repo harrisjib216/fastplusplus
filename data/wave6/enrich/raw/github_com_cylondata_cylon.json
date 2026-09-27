@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/cylondata/cylon",
+  "one_liner": "C++/Arrow distributed-memory dataframe engine on MPI/UCX/Gloo that scales join, groupby and aggregation past serial pandas.",
+  "what_it_does": "Cylon (libcylon) runs relational dataframe operators on Apache Arrow tables in bulk-synchronous-parallel style: one process per core, each holding a row partition, with mpirun launching the job. Examples are join, groupby, sort, unique, set ops, slice/head/tail and CSV/Parquet I/O. The C++ API is free functions such as Join/DistributedJoin, DistributedSort, DistributedUnique and HashGroupBy over cylon::Table plus a CylonContext, and they return a Status. Most users go through the pycylon DataFrame, which looks like pandas but is not a drop-in: distributed calls take an explicit env=CylonEnv(...), and the paper puts pandas operator coverage at about 25%.",
+  "how_it_is_fast": "Operators are built from BSP patterns. Shuffle-Compute hash-partitions rows (MurmurHash3 mod P), runs an all-to-all shuffle and then a local operator; Combine-Shuffle-Reduce pre-aggregates first, MapReduce-style; sort uses sample sort with regular sampling. The local operators are single-threaded C++ over Arrow columns: ska::bytell_hash_map row-index groupby, hash (std::unordered_multimap) or sort joins, and Arrow Compute where it fits. The speedup over pandas comes mainly from spreading work over hundreds of MPI ranks; at parallelism 1 the paper claims only 'on par or better than pandas'.",
+  "when_to_use": [
+    "Joins or groupbys over roughly 10^8-10^9+ rows that don't fit comfortably in one pandas process, and you have a multi-node Linux/HPC cluster with MPI (ideally InfiniBand) already allocated to you",
+    "BSP/mpirun batch pipelines where pandas-like data prep feeds MPI-based ML (e.g. PyTorch distributed) in the same processes, without a Spark/Dask scheduler",
+    "High-cardinality key-based operations (the paper's C=0.9 worst case), where hash shuffle-compute scaled up to 256 ranks in the paper",
+    "Low-cardinality groupby, where the combine-shuffle-reduce (mapred) groupby shrinks the shuffle a lot. The variant is chosen by the caller (pycylon groupby_type), not automatically.",
+    "C++ codebases already on Arrow that want distributed relational operators with a pluggable transport (MPI, Gloo, UCX/UCC)"
+  ],
+  "when_not_to_use": [
+    "Single machine, or only a few cores: at parallelism 1 the paper claims only parity-or-better with pandas, and a single-node engine will usually do better",
+    "Workloads that need broad pandas API coverage: coverage was about 25% at publication, and window and transpose operators were not implemented then",
+    "Multi-tenant, elastic or fault-tolerant environments: the paper says execution needs dedicated resources and has no fault tolerance, and Release 2.0 checkpointing is labelled experimental",
+    "Very small per-rank partitions: in the paper, wall time went back up from 256 to 512 ranks once communication dominated",
+    "Teams that need prebuilt binaries: the only conda package (cylondata/pycylon 0.4.0) is linux-64 from 2021, so current code (Arrow 16.1, Release 2.0) has to be built from source"
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "Apache Arrow C++ (CMake pins 16.1.0; conda env pins pyarrow/libarrow 16.1.0), MPI (required even for other transports), glog; optional UCX/UCC, Gloo, Redis (hiredis, redis++), CUDA/cuDF for GCylon; Python bindings need Cython, NumPy <2.0 and pandas >=2.0,<2.2.3",
+    "min_toolchain": "C++17 (CMAKE_CXX_STANDARD 17), CMake 3.17+; CI uses GCC 11 on Ubuntu 22.04; the docs still say C++14 and CMake 3.16.5 (stale)",
+    "platforms": "Linux x86-64 is the primary target (README: 'only works on Linux'). There is a macOS conda env pinned to Arrow 9 and a Windows env file, but no current CI for either. SIMD level is set at build time: SSE4.2 by default, AVX2/AVX512 optional.",
+    "thread_safety": "Not documented. The model is one single-threaded process per core. CylonContext::GetNextSequence is a plain non-atomic int32 increment, so don't share a context across threads.",
+    "drop_in_for_baseline": "partial: pycylon.DataFrame mirrors pandas method names (merge, join, groupby, sort_values, drop_duplicates) but covers only a subset, needs an explicit env for distributed ops and must be launched under mpirun; the C++ API has nothing in common with pandas"
+  },
+  "gotchas": [
+    "The default join algorithm is SORT, both in the C++ JoinConfig and in pycylon merge/join (algorithm=\"sort\"). Request the hash join explicitly (JoinAlgorithm::HASH / algorithm=\"hash\"). The multi-column hash join also returns Invalid on chunked arrays.",
+    "hash_groupby.cpp is marked 'todo handle chunked arrays', and its aggregation loop reads only chunk(0) of each value column. Combine chunks (arrow::Table::CombineChunks) before grouping.",
+    "Distributed sort throws 'empty vector passed onto merge' when any rank's partition is empty, which is common after a filter (open issues #664 and #611).",
+    "Errors come back as Status, except that JoinConfig's constructor throws a raw string literal. That size check runs after std::move of the shadowed parameters, so it never fires, and mismatched key lists are reported later by Join()."
+  ],
+  "pick_this_over_siblings_when": "Pick Cylon over cuDF (cudf.pandas), data.table or chDB when the data and compute must span many CPU nodes under MPI rather than one GPU or one machine. Pick it over Bodo DataFrames when you want an Apache-2.0 C++ library of explicit Arrow operators with swappable transports, not a pandas-API/JIT layer.",
+  "verified_claims_summary": "PPAM 2022 (arXiv 2209.06146), Fig. 3: strong scaling on 10^9 rows of two uniform-random int64 columns (C=0.9) on 15 Xeon Platinum 8160 nodes (up to 40 cores each, 40 Gbps InfiniBand). Cylon (GCC 9.4, OpenMPI 4.1, Arrow 5.0; optimization flags not stated) is plotted against serial pandas 1.4, Dask 2022.1 and Modin 0.12, with speedup over pandas drawn only as log-scale dotted lines. The gains come from 1-512 ranks versus one pandas process, time rises again at 512, and at one rank Cylon is described only as 'on par or better than pandas'.",
+  "status_note": "Active but research-driven: Release 2.0 (2026-03-12) added mostly experimental features (Rust port, checkpointing, WASM, SIMD), and CI still runs on feature branches in 2026-09. However, docs, conda packages (0.4.0) and many 2021-2023 issues are stale; Apache-2.0 and buildable from source with CMake, but not small enough to vendor casually.",
+  "sources_read": [
+    "https://github.com/cylondata/cylon",
+    "https://github.com/cylondata/cylon/blob/main/README.md",
+    "https://github.com/cylondata/cylon/blob/main/cpp/CMakeLists.txt",
+    "https://github.com/cylondata/cylon/blob/main/cpp/CMake/Modules/SetupCxxFlags.cmake",
+    "https://github.com/cylondata/cylon/blob/main/cpp/src/cylon/table.hpp",
+    "https://github.com/cylondata/cylon/blob/main/cpp/src/cylon/join/join_config.hpp",
+    "https://github.com/cylondata/cylon/blob/main/cpp/src/cylon/join/hash_join.cpp",
+    "https://github.com/cylondata/cylon/blob/main/cpp/src/cylon/join/join.cpp",
+    "https://github.com/cylondata/cylon/blob/main/cpp/src/cylon/groupby/hash_groupby.hpp",
+    "https://github.com/cylondata/cylon/blob/main/cpp/src/cylon/groupby/hash_groupby.cpp",
+    "https://github.com/cylondata/cylon/blob/main/cpp/src/cylon/arrow/arrow_partition_kernels.cpp",
+    "https://github.com/cylondata/cylon/blob/main/cpp/src/cylon/ctx/cylon_context.hpp",
+    "https://github.com/cylondata/cylon/blob/main/cpp/src/cylon/ctx/cylon_context.cpp",
+    "https://github.com/cylondata/cylon/blob/main/python/pycylon/pycylon/frame.py",
+    "https://github.com/cylondata/cylon/blob/main/conda/environments/cylon.yml",
+    "https://github.com/cylondata/cylon/blob/main/conda/environments/cylon_MacOS.yml",
+    "https://github.com/cylondata/cylon/blob/main/.github/workflows/c-cpp.yml",
+    "https://github.com/cylondata/cylon/pull/694",
+    "https://github.com/cylondata/cylon/issues",
+    "https://github.com/cylondata/cylon/issues/664",
+    "https://github.com/cylondata/cylon/issues/611",
+    "https://github.com/cylondata/cylon/issues/626",
+    "https://github.com/cylondata/cylon/issues/679",
+    "https://github.com/cylondata/cylon/actions",
+    "https://github.com/cylondata/cylon_experiments",
+    "https://cylondata.org/docs/",
+    "https://api.anaconda.org/package/cylondata/pycylon",
+    "https://arxiv.org/abs/2209.06146",
+    "https://arxiv.org/pdf/2209.06146"
+  ],
+  "confidence": 0.8
+}
