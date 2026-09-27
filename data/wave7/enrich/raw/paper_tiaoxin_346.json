@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/floodyberry/supercop",
+  "one_liner": "Tiaoxin-346, an AES-round AEAD with 3 AES rounds per 16 bytes in AES-NI C; 1.8-5.6x faster than SUPERCOP's AES-256-GCM, unmaintained.",
+  "what_it_does": "Tiaoxin-346 (Ivica Nikolic) is a nonce-based AEAD with a 128-bit key, 128-bit nonce and 128-bit tag. It reached the third round of CAESAR (use case 2, high performance) but was not a finalist. It is a new cipher, not an AES-GCM implementation, so its ciphertexts are incompatible with GCM. The catalogued crypto_aead/tiaoxinv2/nim code is a thin encrypt.c wrapper that maps SUPERCOP's one-shot crypto_aead_encrypt/crypto_aead_decrypt onto tiaoxin_optimized_encrypt/decrypt in tiaoxin-optimized.c, with the 16-byte tag appended. The spec states that v1.0, v2.0 and v2.1 are the same algorithm, so this is the final cipher.",
+  "how_it_is_fast": "The state is three shift registers of 3, 4 and 6 128-bit words (T3, T4, T6). Each 32-byte block feeds M0 into T3, M1 into T4 and M0^M1 into T6, costing 6 aesenc calls with no data dependencies between them. They pipeline through the AES-NI unit and hide its 7-8 cycle latency, which the spec cites as the reason for the wider state. Ciphertext comes from a cheap output function (6 XOR, 2 AND per 32 bytes), the code unrolls 128 bytes per loop iteration, and AD is absorbed with the same update but no output function. Decryption is slower because M1's recovery depends on the freshly recovered M0 before the state can absorb them (DECRYPTION_ROUND), which lengthens the critical path.",
+  "when_to_use": [
+    "Encrypt-heavy bulk AEAD on AES-NI x86 in a closed system where you control both ends: long+long encrypt 0.15 vs 0.70 cycles/byte (4.7x) and 1536+1536 encrypt 0.20 vs 0.82 (4.1x) against SUPERCOP's fastest AES-256-GCM.",
+    "Authenticating large AD with little or no message: 0+long is 0.11-0.12 against 0.32-0.33 cycles/byte (about 2.7-2.9x), though eBACS flags these rows as noisy.",
+    "Short messages despite the setup cost: initialization plus finalization is worth about 1120 bytes of message (per the spec), yet 64+64 still measures 1.25-1.33 against 4.70-5.13 cycles/byte (about 3.8x).",
+    "As a research baseline for AES-round AEADs (AEGIS, Rocca, HiAE) or for cryptanalysis: weak-key distinguishers on 8-round Tiaoxin (ToSC 2021(2), ePrint 2021/187) and quantum hidden-shift state recovery (ToSC 2024, ePrint 2023/1306) both target it."
+  ],
+  "when_not_to_use": [
+    "Anything that needs a standardized or vetted AEAD. Tiaoxin was CAESAR round 3 only, has no library adoption, and a GitHub repository search finds only two 0-star repositories named tiaoxin. The only optimized code is GPL-2.0-or-later.",
+    "Anywhere a nonce could repeat. The update and initialization are invertible, so recovering the state recovers the master key. Vaudenay and Vizar (ePrint 2017/1147) recover the key with 30 nonce-reusing queries, and Kales, Eichlseder and Mendel (ePrint 2017/1137) give an implemented nonce-misuse key recovery. For AES-GCM, reuse enables forgery and CPA decryption rather than key recovery.",
+    "Decrypt-dominated traffic sized from the headline: decrypt and forgery are only 1.8-2.2x AES-256-GCM (long+long 0.28 vs 0.57, long+0 0.44 vs 0.81).",
+    "When AEGIS is available. On the same page AEGIS-128X2 (0.11 cycles/byte long+long) beats Tiaoxin in every section, and AEGIS-128L decrypts faster (0.21 vs 0.28 long+long, 0.23 vs 0.44 long+0).",
+    "CPUs without AES-NI. The only fallback is the table-lookup ref variant (sboxes.h), about 13.6x slower in SUPERCOP's timing column (21560 vs 1589 cycles) and exposed to classic T-table cache-timing leaks."
+  ],
+  "integration": {
+    "form": "source-drop (tiaoxin-optimized.c/.h, encrypt.c and api.h; you supply crypto_aead.h or call tiaoxin_optimized_encrypt/decrypt directly)",
+    "dependencies": "none beyond libc (string.h, stdlib.h) and the SSE2/SSSE3/AES-NI intrinsic headers",
+    "min_toolchain": "GCC or clang with -maes -mssse3, or -march=native on an AES-NI CPU. eBACS's fastest build is gcc 14.2.0 -march=native -mtune=native -O2; Debian clang 19.1.7 builds are 4-10% slower, and clang -mcpu=native fails to compile (always_inline _mm_shuffle_epi8/_mm_aesenc_si128 without ssse3/aes). The designer used gcc 4.8.1 -O3 -msse2 -maes -mavx -march=native.",
+    "platforms": "x86-64 with AES-NI and SSSE3 (nim variant; only amd64 results were checked). The ref variant is portable C with table-based AES.",
+    "thread_safety": "Not documented. In the nim code all state and constants are locals, with no mutable globals, so separate calls are reentrant.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Decrypt does 'clen -= 16; if (clen < 0) return -1;' on an unsigned long long, so the check never fires. A ciphertext shorter than 16 bytes wraps clen to about 2^64 and the loop reads c and writes m out of bounds. Check clen >= 16 before calling; the table-based ref variant has the same code.",
+    "The load macro is _mm_load_si128, an aligned load, applied directly to the caller's key, nonce, AD, message and ciphertext pointers. Unaligned buffers are undefined behavior and can fault, so switch it to _mm_loadu_si128 when vendoring.",
+    "The tag is checked with memcmp, which is not constant-time. Plaintext is written to m before verification and not wiped on failure, although the spec's security goals assume only 'false' is returned.",
+    "The key is 128 bits (CRYPTO_KEYBYTES 16), so the AES-256-GCM baseline is not like-for-like. Against aes128gcmv1 on the same page the gain is 4.2x encrypt (0.15 vs 0.63) and 1.8x decrypt (0.28 vs 0.50). The exported tiaoxin_optimized_encrypt/decrypt symbols are unprefixed (flagged by eBACS as namespace violations) and collide with tiaoxinv1's identical names."
+  ],
+  "pick_this_over_siblings_when": "Choose it over libaegis only for the peak single-stream encrypt rate on a pre-VAES AES-NI core, where it beats AEGIS-128L (0.15 vs 0.21 cycles/byte long+long). AEGIS-128L wins on decrypt, AEGIS-128X2 wins everywhere on this Raptor Cove host, and libaegis is maintained and MIT-licensed. Against the MORUS-1280 and AEZ entries from the same mirror, Tiaoxin is 4.4x and 1.7x faster on long+long encrypt, and unlike MORUS it has no published break of the full cipher in the nonce-respecting setting.",
+  "verified_claims_summary": "eBACS (supercop-20260627, page dated 2026-09-25) measured tiaoxinv2/nim, built with gcc 14.2.0 -march=native -O2, against SUPERCOP's fastest AES-256-GCM (Dolbeau's AES-NI intrinsics, Debian clang 19.1.7 -O2) on one Raptor Cove P-core of an Intel Core 5 210H. Median cycles/byte were 0.15 vs 0.70 on long+long encrypt (4.7x) and 0.28 vs 0.57 on decrypt/forgery (2.0x). Across all 15 sections the gain ranges from 1.8x (long+0 decrypt, 0.44 vs 0.81) to 5.6x (long+0 encrypt, 0.19 vs 1.07, a row flagged noisy).",
+  "status_note": "Abandoned. The mirror is frozen at supercop-20160716 (its open issue #4 says to fetch SUPERCOP from bench.cr.yp.to instead), but the GPL-2.0-or-later nim file is about 16 KB and easy to vendor if copyleft and the bugs above are acceptable.",
+  "sources_read": [
+    "https://github.com/floodyberry/supercop",
+    "https://github.com/floodyberry/supercop/issues/4",
+    "https://raw.githubusercontent.com/floodyberry/supercop/master/crypto_aead/tiaoxinv2/nim/tiaoxin-optimized.c",
+    "https://raw.githubusercontent.com/floodyberry/supercop/master/crypto_aead/tiaoxinv2/nim/tiaoxin-optimized.h",
+    "https://raw.githubusercontent.com/floodyberry/supercop/master/crypto_aead/tiaoxinv2/nim/encrypt.c",
+    "https://raw.githubusercontent.com/floodyberry/supercop/master/crypto_aead/tiaoxinv2/nim/api.h",
+    "https://raw.githubusercontent.com/floodyberry/supercop/master/crypto_aead/tiaoxinv2/designers",
+    "https://raw.githubusercontent.com/floodyberry/supercop/master/crypto_aead/tiaoxinv2/ref/tiaoxin-tablebased.c",
+    "https://bench.cr.yp.to/results-aead/amd64-freshwrap,big.html",
+    "https://bench.cr.yp.to/web-impl/amd64-freshwrap,big-crypto_aead-tiaoxinv2.html",
+    "https://bench.cr.yp.to/web-impl/amd64-freshwrap,big-crypto_aead-aes256gcmv1.html",
+    "https://competitions.cr.yp.to/caesar-submissions.html",
+    "https://competitions.cr.yp.to/round2/tiaoxinv2.pdf",
+    "https://competitions.cr.yp.to/round3/tiaoxinv21.pdf",
+    "https://eprint.iacr.org/2017/1147",
+    "https://eprint.iacr.org/2017/1147.pdf",
+    "https://eprint.iacr.org/2017/1137",
+    "https://eprint.iacr.org/2017/1137.pdf",
+    "https://eprint.iacr.org/2021/187",
+    "https://eprint.iacr.org/2023/1306",
+    "https://eprint.iacr.org/search?q=tiaoxin",
+    "https://github.com/search?q=tiaoxin&type=repositories"
+  ],
+  "confidence": 0.85
+}

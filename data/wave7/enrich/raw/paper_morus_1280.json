@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/floodyberry/supercop",
+  "one_liner": "CAESAR-finalist AND/XOR/rotate AEAD in AVX2 C; edges out SUPERCOP AES-256-GCM on message-only and 64-byte inputs, loses elsewhere, and is broken.",
+  "what_it_does": "MORUS-1280-256 (Hongjun Wu and Tao Huang) is a nonce-based AEAD with a 256-bit key, 128-bit nonce, 128-bit tag and 1280-bit state. It is a different cipher from AES-GCM, not an implementation of it, and its ciphertexts cannot interoperate with GCM. The catalogued code is a single file, crypto_aead/morus1280256v1/avx2/morus1280256v1avx2.c, which exposes SUPERCOP's one-shot crypto_aead_encrypt/crypto_aead_decrypt (the tag is appended, so clen = mlen + 16) and includes the harness-generated crypto_aead.h. The same directory holds sse2, ref64 and ref variants. All of them implement MORUS v1 (CAESAR rounds 1-2), not the round-3 MORUS v2.",
+  "how_it_is_fast": "The state is five 256-bit words, one __m256i each, and every 32-byte block costs one state update: five chained rounds of XOR, AND, 64-bit-lane rotations (slli/srli/or) and _mm256_permute4x64_epi64 word rotations. The keystream is only S0 ^ rot192(S1) ^ (S2 & S3). There are no AES rounds, table lookups or GF(2^128) multiplications, and authentication comes from the same state update that encrypts, so no separate GHASH pass is needed. The rounds are serially dependent (round i reads round i-1's output), which caps it near 0.66-0.69 cycles/byte on long inputs. That is the designers' Haswell figure (0.69 cpb, gcc 4.8.1 -O3 -mavx2), and unlike AES-round designs it does not get faster with AES-NI or VAES.",
+  "when_to_use": [
+    "Reproducing or extending eBACS/SUPERCOP AEAD comparisons. supercop-20260627 still measures it, as both morus1280256v1 and morus1280256v2.",
+    "Cryptanalysis or teaching on non-AES AND/XOR/rotate stream-cipher AEADs, such as reproducing the linear-correlation attacks of Ashur et al. (ePrint 2018/464) or Shi et al. (ePrint 2019/172).",
+    "Studying SIMD mapping of a wide state: the avx2 (five __m256i), sse2 and portable ref64 versions of the same cipher sit side by side, and on this host they measure 4990, 6820 and 8569 cycles respectively in SUPERCOP's per-implementation timing column.",
+    "Checking legacy MORUS v1 (round 1/2) test vectors. This code produces v1 tags, which differ from v2."
+  ],
+  "when_not_to_use": [
+    "Any production use. Shi et al. (CRYPTO 2019, ePrint 2019/172) found correlation-2^-38 trails in all full MORUS versions, which cuts the MORUS-1280-256 attack from 2^152 to about 2^76, far below its 256-bit confidentiality claim. Linux removed MORUS in July 2019 (commit 5cb97700beaa), calling it 'cryptographically broken'.",
+    "AD-heavy traffic. With AD only (0+long) it runs at 0.65 cycles/byte against 0.32-0.33 for AES-256-GCM, about 2x slower, and 1536+1536 decrypt/forgery is 0.82 against 0.70.",
+    "Decrypt-dominated bulk with AD: long+long decrypt and forgery are 0.67 against 0.57 cycles/byte (0.85x).",
+    "Seeking a faster AEAD on AES-NI CPUs. On the same page AES-128-GCM (0.63) already beats MORUS-1280-128 (0.67) on long+long encrypt, and AEGIS-128L runs at 0.21, about 3x faster.",
+    "Any setting where a nonce could repeat. The spec voids its claims under reuse, and Vaudenay and Vizar (ePrint 2017/1147) show universal forgery and decryption from about 20 nonce-reusing queries (worked out for MORUS-640, which has the same structure)."
+  ],
+  "integration": {
+    "form": "source-drop (one .c file plus api.h; you must supply your own crypto_aead.h or rename the two entry points)",
+    "dependencies": "none beyond libc (string.h) and compiler intrinsics (immintrin.h)",
+    "min_toolchain": "A C compiler with AVX2 intrinsics. eBACS builds it with Debian clang 19.1.7 (fastest at -O3) and gcc 14.2.0. The gcc -Os build fails to link, and the clang -mcpu=native build fails without AVX2 enabled. The designers used gcc 4.8.1 -O3 -mavx2. An MSVC shim for inline/align is present but untested here.",
+    "platforms": "x86-64 with AVX2 (avx2 variant). The sse2 variant covers any SSE2 x86-64 CPU, and ref64/ref are portable C. None needs AES-NI. The length encoding type-puns to little-endian 64-bit words.",
+    "thread_safety": "Not documented. In the code, all state is on the stack of each call and there are no mutable globals, so separate calls are reentrant.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "This is MORUS v1. Round-3 MORUS v2 changed tag generation and raised finalization from 8 to 10 steps, so v1 tags do not match v2 implementations. SUPERCOP's current morus1280256v2 is about 6% slower on 64+64 encrypt (4.49 vs 4.22 cycles/byte), which shrinks the short-message win over AES-256-GCM (4.70) to 1.05x.",
+    "morus_enc_aut_step and morus_dec_aut_step are declared plain (non-static) inline. Under C99 inline rules, an uninlined call has no external definition. eBACS's gcc -Os build fails to link for this reason, with undefined references to both functions. The file also exports unprefixed symbols (morus_stateupdate, morus_initialization and others), which eBACS flags as namespace violations and which collide if two MORUS variants are linked together. Make them static when vendoring.",
+    "Decrypt writes the plaintext into m before the tag check and does not wipe it on failure, although the spec says unverified plaintext must not be released. Key and state are never zeroized. The tag comparison itself is a branch-free sum loop.",
+    "Associated data goes through morus_enc_aut_step, which computes and discards a keystream block, so AD costs as much as message bytes. That explains the 2x loss on AD-only workloads."
+  ],
+  "pick_this_over_siblings_when": "Practically never for new systems. On the same eBACS page, libaegis's AEGIS-128L (0.21) and AEGIS-128X2 (0.11 cycles/byte long+long) are 3-6x faster and maintained, Tiaoxin-346 (0.15) and AEZ (0.26) are also faster, and the bitsliced AEGIS sibling covers CPUs without AES-NI. Pick MORUS only to reproduce CAESAR-era or eBACS comparisons, or to study non-AES AND/rotate designs.",
+  "verified_claims_summary": "eBACS (supercop-20260627) measured MORUS-1280-256 v1 (avx2 code, Debian clang 19.1.7 -march=native -O3) against SUPERCOP's fastest AES-256-GCM (Dolbeau's AES-NI intrinsics, clang -O2) on one Raptor Cove P-core of an Intel Core 5 210H. By median cycles/byte, MORUS wins 7 of 15 sections (long+0 encrypt 0.69 vs 1.07, 1.55x; long+long encrypt 0.66 vs 0.70, 1.06x; 64+64 1.11-1.18x), ties 1536+1536 encrypt (0.81 vs 0.82) and loses the other 7: long+long and 1536+1536 decrypt/forgery at about 0.85x, and AD-only (0+long) at about 0.5x.",
+  "status_note": "Abandoned. The mirror is frozen at supercop-20160716 (its own open issue #4 calls it stale), no MORUS source file has a license header, and the algorithm was dropped from Linux in 2019 as broken, so this is for reference and study only.",
+  "sources_read": [
+    "https://github.com/floodyberry/supercop",
+    "https://github.com/floodyberry/supercop/issues/4",
+    "https://raw.githubusercontent.com/floodyberry/supercop/master/crypto_aead/morus1280256v1/avx2/morus1280256v1avx2.c",
+    "https://raw.githubusercontent.com/floodyberry/supercop/master/crypto_aead/morus1280256v1/avx2/api.h",
+    "https://raw.githubusercontent.com/floodyberry/supercop/master/crypto_aead/morus1280256v1/designers",
+    "https://raw.githubusercontent.com/floodyberry/supercop/master/crypto_aead/morus1280256v1/sse2/morus1280256v1sse2.c",
+    "https://raw.githubusercontent.com/floodyberry/supercop/master/crypto_aead/morus1280256v1/ref64/morus1280256v1opt64.c",
+    "https://raw.githubusercontent.com/floodyberry/supercop/master/crypto_aead/morus1280256v1/ref/encrypt.c",
+    "https://bench.cr.yp.to/results-aead/amd64-freshwrap,big.html",
+    "https://bench.cr.yp.to/web-impl/amd64-freshwrap,big-crypto_aead-morus1280256v1.html",
+    "https://bench.cr.yp.to/web-impl/amd64-freshwrap,big-crypto_aead-morus1280256v2.html",
+    "https://bench.cr.yp.to/web-impl/amd64-freshwrap,big-crypto_aead-aes256gcmv1.html",
+    "https://competitions.cr.yp.to/caesar-submissions.html",
+    "https://competitions.cr.yp.to/round3/morusv2.pdf",
+    "https://eprint.iacr.org/2018/464",
+    "https://eprint.iacr.org/2019/172",
+    "https://eprint.iacr.org/2017/1147",
+    "https://eprint.iacr.org/2017/1147.pdf",
+    "https://eprint.iacr.org/2017/1137",
+    "https://eprint.iacr.org/2017/1137.pdf",
+    "https://eprint.iacr.org/search?q=morus",
+    "https://github.com/torvalds/linux/commit/5cb97700beaa"
+  ],
+  "confidence": 0.85
+}
