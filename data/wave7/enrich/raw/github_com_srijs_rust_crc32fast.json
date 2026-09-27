@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/srijs/rust-crc32fast",
+  "one_liner": "Rust CRC-32 (IEEE) crate that picks PCLMULQDQ, VPCLMULQDQ or ARMv8 CRC32 kernels at runtime; beats the table-driven `crc` crate.",
+  "what_it_does": "Computes the CRC-32/ISO-HDLC checksum (reflected 0xEDB88320) used by zlib, gzip, PNG and zip, and only that polynomial. There are two entry points: `crc32fast::hash(&[u8]) -> u32`, and a streaming `Hasher` with `new`, `new_with_initial`, `new_with_initial_len`, `update`, `finalize`, `reset` and `combine`. `Hasher` keeps state in finalized form, so it chains like zlib's `crc32(crc, buf)`, and it also implements `core::hash::Hasher`. Its output matches the `crc` crate's CRC_32_ISO_HDLC, but the API is different.",
+  "how_it_is_fast": "On x86 it uses carry-less-multiply folding from Intel's Gopal et al. 2009 paper 'Fast CRC Computation for Generic Polynomials Using PCLMULQDQ': 4 streams with SSE, 8 streams with AVX2+VPCLMULQDQ from 256 B, and 16 streams with AVX-512 from 2 KiB, plus a clmul fold for the final partial block. On aarch64 it uses the hardware `crc32d` instruction with three interleaved accumulators, rejoined by GF(2) CRC combination, to hide instruction latency on inputs of 1.5 KiB and up. Everything else uses a slicing-by-16 table ('baseline'). The kernel is chosen by runtime CPU detection when a `Hasher` is constructed.",
+  "when_to_use": [
+    "Any Rust code computing zlib/gzip/PNG/zip CRC-32. It is already a transitive dependency of flate2, png, zip, image and zlib-rs, so using it directly adds nothing.",
+    "Streaming or chunk-parallel checksums: `Hasher::update` over pieces, then merge per-chunk results with `Hasher::combine` (table-driven x^2^n combine).",
+    "Mixed x86 fleets. The same binary uses SSE PCLMULQDQ on older CPUs, 256-bit VPCLMULQDQ on AVX2-only parts (Zen 3, Alder Lake) and 512-bit on AVX-512 parts; the maintainer measured 25.0 / 51.0 / 68.6 GB/s at 1 MiB on Sapphire Rapids.",
+    "Short or odd-length buffers of 16 B or more: since 1.5.1 the clmul path goes down to 16 bytes, which PR #56 reports as 3.3-7.2x faster than before for 16-127 B inputs.",
+    "Projects that need a low MSRV (1.63) or embedded/wasm builds, where the portable slicing-by-16 fallback is enough."
+  ],
+  "when_not_to_use": [
+    "You need CRC-32C (iSCSI/ext4), CRC-64, CRC-16 or a custom polynomial. It is IEEE-only, and the request for other polynomials has been open since 2019 (#9); use crc-fast or a crc32c crate.",
+    "no_std builds lose runtime detection, so SIMD is used only if the matching target features are enabled at compile time; otherwise you get the table baseline.",
+    "Old or specific toolchains: before rustc 1.89 the VPCLMULQDQ paths are silently compiled out, before 1.80 aarch64 has no hardware path, and on rustc 1.87 a compiler regression made the specialized path slower than baseline (#48).",
+    "Unoptimized debug builds are very slow (a user saw about 2 MB/s on M1 before 1.3.1, and wasm debug builds slowed zip decompression 150x), so give this dependency an opt-level in the dev profile.",
+    "Peak aarch64 throughput: the ARM path uses only the scalar CRC32 instruction, with no PMULL folding or CRC+CLMUL fusion (the corsix/crc-fast technique), and the repo publishes no aarch64 numbers."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "cfg-if 1.0",
+    "min_toolchain": "Rust 1.63 (MSRV); rustc 1.80+ for the aarch64 CRC path and 1.89+ for the AVX2/AVX-512 VPCLMULQDQ paths, detected by build.rs",
+    "platforms": "any; accelerated on x86/x86_64 (SSE2+SSSE3+SSE4.1+PCLMULQDQ base; AVX2 or AVX-512F with VPCLMULQDQ for the wide paths) and aarch64 (CRC extension); CI cross-tests i686, aarch64, riscv64gc and s390x, and checks wasm32",
+    "thread_safety": "Not documented explicitly. `Hasher` is a plain Clone value with no global mutable state (CPU detection uses std's cached feature macros), so one hasher per thread is safe.",
+    "drop_in_for_baseline": "partial — same CRC-32/ISO-HDLC value as the `crc` crate's CRC_32_ISO_HDLC and zlib crc32(), but the API differs (`hash()`/`Hasher` instead of `Crc::<u32>::new(&CRC_32_ISO_HDLC)`)"
+  },
+  "gotchas": [
+    "`Hasher::reset()` sets the state to 0 and discards any initial value passed to `new_with_initial`.",
+    "It implements `core::hash::Hasher` (`finish` returns the CRC as u64). Do not use it as a HashMap hasher: the output is 32 bits and it is not DoS-resistant.",
+    "`hash()` builds a new `Hasher` per call, which runs CPU feature detection (about 14 ns on an EPYC 7763 per PR #56). For many tiny buffers, build one `Hasher` and clone it.",
+    "Throughput is not monotonic in size. Around the stride edges the maintainer still measured AVX-512 at 31.1 GB/s against AVX2 at 47.0 GB/s for 2303 B inputs on Sapphire Rapids, and there is no `std::io::Write` impl (#30 open)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over crc-fast when you only need IEEE CRC-32 in Rust and want one tiny dependency, MSRV 1.63 and the crate the ecosystem already uses, or when you run on AVX2-only VPCLMULQDQ x86 (Zen 3, Alder Lake), where crc-fast has no 256-bit tier. Choose crc-fast, corsix fast-crc32 or htot crc32c for CRC-32C, other widths, or a C/C++ interface.",
+  "verified_claims_summary": "The only comparison against `crc` is a 1.0.0-era README table: crc 1.8.1 at 207 MB/s, the crc32fast table baseline at 1,499 MB/s and PCLMULQDQ at 7,314 MB/s. It states no CPU, compiler or input size, and the current Criterion bench does not include `crc`. Newer maintainer-run self-comparisons in PR #56 (EC2 Sapphire Rapids, before the final tuning) give 1 MiB at 25.0 GB/s (SSE), 51.0 (AVX2) and 68.6 (AVX-512), and an AMD EPYC 7763 went from 11.0 to 24.2 GB/s with the AVX2 path.",
+  "status_note": "Actively maintained: 1.5.1 (2026-08-22) added the VPCLMULQDQ and ARM 3-way paths, 1.5.2 shipped 2026-09-12 and the last commit is 2026-09-21. It is dual MIT/Apache-2.0 with about 712M downloads and 1,296 reverse dependencies (flate2, png, zip, image, parquet, zlib-rs), so it is the de facto Rust CRC-32.",
+  "sources_read": [
+    "https://github.com/srijs/rust-crc32fast",
+    "https://github.com/srijs/rust-crc32fast#readme",
+    "https://github.com/srijs/rust-crc32fast/blob/master/Cargo.toml",
+    "https://github.com/srijs/rust-crc32fast/blob/master/build.rs",
+    "https://github.com/srijs/rust-crc32fast/blob/master/src/lib.rs",
+    "https://github.com/srijs/rust-crc32fast/blob/master/src/specialized/mod.rs",
+    "https://github.com/srijs/rust-crc32fast/blob/master/src/specialized/pclmulqdq.rs",
+    "https://github.com/srijs/rust-crc32fast/blob/master/src/specialized/aarch64.rs",
+    "https://github.com/srijs/rust-crc32fast/blob/master/src/baseline.rs",
+    "https://github.com/srijs/rust-crc32fast/blob/master/src/combine.rs",
+    "https://github.com/srijs/rust-crc32fast/blob/master/benches/bench.rs",
+    "https://github.com/srijs/rust-crc32fast/blob/master/.github/workflows/ci.yml",
+    "https://github.com/srijs/rust-crc32fast/commits/master",
+    "https://github.com/srijs/rust-crc32fast/issues",
+    "https://github.com/srijs/rust-crc32fast/issues/13",
+    "https://github.com/srijs/rust-crc32fast/issues/24",
+    "https://github.com/srijs/rust-crc32fast/issues/30",
+    "https://github.com/srijs/rust-crc32fast/issues/41",
+    "https://github.com/srijs/rust-crc32fast/issues/48",
+    "https://github.com/srijs/rust-crc32fast/issues/51",
+    "https://github.com/srijs/rust-crc32fast/pull/56",
+    "https://crates.io/api/v1/crates/crc32fast",
+    "https://crates.io/api/v1/crates/crc32fast/reverse_dependencies",
+    "https://hn.algolia.com/api/v1/search?query=crc32fast&tags=(story,comment)"
+  ],
+  "confidence": 0.85
+}
