@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/jedisct1/libsodium",
+  "one_liner": "libsodium's crypto_generichash BLAKE2b: ~1.2-2.7x OpenSSL EVP BLAKE2b-512 on 64 B-1 KB inputs, roughly even from 4 KB.",
+  "what_it_does": "libsodium is a general-purpose C crypto library (a portable NaCl fork). Its crypto_generichash API, and the explicit crypto_generichash_blake2b variant, is BLAKE2b (RFC 7693) with a 1-64-byte output (docs say 16-64, default 32) and an optional key of up to 64 bytes for PRF/MAC use. The blake2b-specific functions add a 16-byte salt and personalization string. There is a one-shot call and an init/update/final streaming API on a caller-owned 384-byte opaque state. It is not an EVP-style interface: the calls are fixed-function, with no algorithm registry and no BLAKE2s, BLAKE2bp, BLAKE2X or tree mode.",
+  "how_it_is_fast": "sodium_init() picks a compression function via CPUID: Samuel Neves's AVX2 BLAKE2b (added in 1.0.9), then SSE4.1, SSSE3, or portable C (blake2b_compress_ref). There is no NEON path, so on the Apple Silicon machine that produced these numbers both libsodium and OpenSSL ran portable C compression. The gap there is call overhead. The one-shot function keeps its state on the stack with no allocation or provider lookup, while the harness's OpenSSL path runs EVP_MD_CTX_new, EVP_DigestInit_ex(EVP_blake2b512()), Final and free on every hash: about 111 ns vs 300 ns per 64-byte hash. At large sizes, libsodium's update copies every 128-byte block through its 256-byte internal buffer, whereas OpenSSL's blake2b_prov.c compresses runs of blocks straight from the input. That is consistent with OpenSSL pulling ahead by ~4% at 16 KB.",
+  "when_to_use": [
+    "Hashing many short inputs (64 B-1 KB), such as keys, IDs, short records or dedup fingerprints, where per-call overhead dominates. In this run, a 64-byte hash took ~111 ns vs ~300 ns through OpenSSL EVP with a fresh context.",
+    "Keyed BLAKE2b as a MAC or PRF, or salt/personalization for domain separation, through a one-call API with no context to manage.",
+    "x86-64 hosts with AVX2, where the runtime-dispatched AVX2 compression applies. The blake2b_simd README measured libsodium at 3.07 cycles/byte, only ~9% behind its own 2.81.",
+    "Projects that already link libsodium, or want one small dependency-free C library. The README lists Windows (MinGW/MSVC on x86, x64 and arm64), iOS, Android, JavaScript and WebAssembly.",
+    "Variable-length digests (for example the 32-byte default) where the length is a real BLAKE2b parameter, not a truncation."
+  ],
+  "when_not_to_use": [
+    "Bulk hashing of large buffers. From 4 KB up it only ties OpenSSL, and at 16 KB it is ~4% slower (1349 vs 1403 MB/s). BLAKE2b has no NEON path, so ARM gets portable C.",
+    "Maximum-throughput hashing. BLAKE3 is a different and much faster hash, and blake2b_simd adds BLAKE2bp and multi-message hashing; libsodium offers neither parallel mode.",
+    "Code that already reuses its OpenSSL digest context. The small-message win largely comes from the harness allocating and freeing an EVP_MD_CTX on every hash, and reused contexts were not measured.",
+    "Code that selects algorithms by name through OpenSSL's EVP/provider layer. libsodium's API is fixed-function, so swapping it in means touching call sites.",
+    "Wherever the only evidence you would rely on is this benchmark. It is one laptop run from a 0-star repo, with no CPU model or compiler recorded, and libsodium was built with different CFLAGS than the other libraries."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (autotools configure/make, build.zig, or MSVC solutions from VS2010 to VS2026), also consumable as a Zig dependency",
+    "dependencies": "none",
+    "min_toolchain": "Not documented as a single minimum. It ships autotools, Zig and MSVC (vs2010-vs2026) build files, and 1.0.21 fixed builds with GCC on aarch64 and gcc 4.x.",
+    "platforms": "Any (Linux, macOS, Windows x86/x64/arm64, iOS, Android, JavaScript/WebAssembly). BLAKE2b SIMD runs only on x86/x86-64 (AVX2 > SSE4.1 > SSSE3, runtime-dispatched); ARM and everything else use portable C.",
+    "thread_safety": "Per the docs, all functions are thread-safe once sodium_init() has returned, and sodium_init() is safe to call repeatedly and from several threads. Hash states are caller-owned.",
+    "drop_in_for_baseline": "partial: it produces the same RFC 7693 BLAKE2b digest as EVP_blake2b512 if you ask for 64 bytes of output, but through a different C API, and the default output is 32 bytes"
+  },
+  "gotchas": [
+    "Call sodium_init() first. The compression pointer starts as blake2b_compress_ref and is switched to AVX2/SSE4.1/SSSE3 only inside sodium_init(), so skipping it silently leaves x86 on the portable C path.",
+    "Output length is a BLAKE2b parameter, not a truncation. crypto_generichash's default 32-byte digest is BLAKE2b-256 and will not equal the first 32 bytes of EVP_blake2b512's output; request 64 bytes to match OpenSSL.",
+    "BYTES_MIN (16) and KEYBYTES_MIN (16) are documented minimums that are not enforced: the code accepts any output of 1-64 bytes and keys of 0-64 bytes (issue #1131). crypto_generichash_final() returns -1 if called twice, and it wipes the state.",
+    "Static builds export internal blake2b_init/blake2b_init_key symbols, which can clash with other embedded BLAKE2 copies. Issue #1434 reports this with static Qt 6.8.1 on wasm, and the maintainer says Qt fixed it on its side."
+  ],
+  "pick_this_over_siblings_when": "Pick libsodium when you need standard, keyed or personalized BLAKE2b from C/C++ (or any of its language bindings) inside a stable, dependency-free library. blake2b_simd is Rust and ~9% faster on AVX2, with BLAKE2bp and many-message hashing; minio/blake2b-simd is Go-only; BLAKE3 is far faster but produces different digests. Take one of those when throughput matters more than BLAKE2b compatibility or a C API.",
+  "verified_claims_summary": "scc-tw/cryptobench-cpp (Google Benchmark, means of 5 repetitions) ran once on 2025-11-05 on an unnamed Apple Silicon MacBook Air, with no compiler recorded. It compared libsodium 1.0.20's one-shot crypto_generichash_blake2b (64-byte output) against OpenSSL 3.6.0's EVP_blake2b512 with a new EVP_MD_CTX per call: 577.8 vs 213.7 MB/s at 64 B (~2.7x), 1243.6 vs 650.3 at 256 B (~1.9x), 1307.0 vs 1107.2 at 1 KB (~1.18x), a tie at 4 KB, and 1349.3 vs 1402.7 at 16 KB, where OpenSSL is ~4% ahead. Both sides ran portable C compression on this ARM machine. The README claims identical flags, but libsodium was configured with CMAKE_C_FLAGS_RELEASE rather than the shared -march=native/-flto set.",
+  "status_note": "Actively maintained: 1.0.22 was released 2026-04-09, commits run to 2026-09-22, and it has ~14k stars. The library is ISC-licensed with no dependencies, and security fixes go to the stable branch first. The BLAKE2b code has been essentially unchanged for years (the AVX2 path dates to 1.0.9), and ARM still has no SIMD path for it.",
+  "sources_read": [
+    "https://github.com/jedisct1/libsodium",
+    "https://github.com/jedisct1/libsodium/blob/master/README.markdown",
+    "https://github.com/jedisct1/libsodium/blob/master/src/libsodium/include/sodium/crypto_generichash_blake2b.h",
+    "https://github.com/jedisct1/libsodium/blob/master/src/libsodium/include/sodium/crypto_generichash.h",
+    "https://github.com/jedisct1/libsodium/blob/master/src/libsodium/crypto_generichash/blake2b/ref/generichash_blake2b.c",
+    "https://github.com/jedisct1/libsodium/blob/master/src/libsodium/crypto_generichash/blake2b/ref/blake2b-ref.c",
+    "https://github.com/jedisct1/libsodium/blob/master/src/libsodium/crypto_generichash/blake2b/ref/blake2.h",
+    "https://github.com/jedisct1/libsodium/blob/master/src/libsodium/crypto_generichash/blake2b/ref/blake2b-compress-ref.c",
+    "https://github.com/jedisct1/libsodium/blob/master/src/libsodium/crypto_generichash/blake2b/ref/blake2b-compress-avx2.c",
+    "https://github.com/jedisct1/libsodium/blob/master/src/libsodium/sodium/core.c",
+    "https://github.com/jedisct1/libsodium/blob/master/ChangeLog",
+    "https://github.com/jedisct1/libsodium/releases",
+    "https://github.com/jedisct1/libsodium/tags",
+    "https://github.com/jedisct1/libsodium/issues?q=blake2b",
+    "https://github.com/jedisct1/libsodium/issues?q=neon",
+    "https://github.com/jedisct1/libsodium/issues/949",
+    "https://github.com/jedisct1/libsodium/issues/1131",
+    "https://github.com/jedisct1/libsodium/issues/1434",
+    "https://github.com/jedisct1/libsodium/issues/1471",
+    "https://doc.libsodium.org/hashing/generic_hashing",
+    "https://doc.libsodium.org/usage",
+    "https://github.com/scc-tw/cryptobench-cpp",
+    "https://github.com/scc-tw/cryptobench-cpp/blob/main/result.json",
+    "https://raw.githubusercontent.com/scc-tw/cryptobench-cpp/main/result.json",
+    "https://raw.githubusercontent.com/scc-tw/cryptobench-cpp/main/README.md",
+    "https://raw.githubusercontent.com/scc-tw/cryptobench-cpp/main/cmake/FetchLibsodium.cmake",
+    "https://raw.githubusercontent.com/scc-tw/cryptobench-cpp/main/src/adapters/libsodium_adapter.cpp",
+    "https://raw.githubusercontent.com/scc-tw/cryptobench-cpp/main/src/adapters/openssl_adapter.cpp",
+    "https://raw.githubusercontent.com/scc-tw/cryptobench-cpp/main/src/benchmarks/hash_benchmarks.cpp",
+    "https://raw.githubusercontent.com/openssl/openssl/master/providers/implementations/digests/blake2b_prov.c"
+  ],
+  "confidence": 0.75
+}
