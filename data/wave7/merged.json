@@ -434,20 +434,20 @@
     "id": "https://github.com/intel/intel-ipsec-mb"
   },
   {
-    "name": "blake2_simd (blake2b_simd / blake2s_simd)",
+    "name": "blake2b_simd / blake2s_simd",
     "repo_url": "https://github.com/oconnor663/blake2_simd",
     "language": "Rust",
     "domain": "crypto-and-hashing",
     "category": "crypto-hashes",
-    "baseline": "OpenSSL SHA-512 / OpenSSL SHA-1",
+    "baseline": "OpenSSL SHA-512 / OpenSSL SHA-1 (also compared to libsodium BLAKE2b)",
     "baseline_in_list": true,
     "metric": "throughput",
-    "workload": "Long in-memory inputs hashed with various hash functions (BLAKE3, blake2s_simd, blake2b_simd variants, libsodium BLAKE2b, OpenSSL SHA-1/SHA-512), median cycles-per-byte reported by the bench_multiprocess sub-crate averaging over many runs.",
-    "claimed_speedup": "blake2b_simd BLAKE2b: 2.81 cpb vs OpenSSL SHA-512: 5.11 cpb (~1.8x faster, derived from page data); blake2b_simd many::hash / BLAKE2bp: 1.43-1.44 cpb vs OpenSSL SHA-512 5.11 cpb (~3.5x, derived) and vs OpenSSL SHA-1 3.51 cpb (~2.4-2.5x, derived). Also beats libsodium's own BLAKE2b (3.07 cpb) by a smaller margin.",
+    "workload": "Hashing long inputs in memory, averaged over many runs (benches/bench_multiprocess), comparing BLAKE2b/BLAKE2s AVX2 SIMD implementations against native OpenSSL and libsodium hash functions via FFI",
+    "claimed_speedup": "blake2b_simd BLAKE2b: 2.81 cpb vs OpenSSL SHA-512: 5.11 cpb (~1.8x); vs OpenSSL SHA-1: 3.51 cpb (~1.25x); vs libsodium BLAKE2b: 3.07 cpb (~1.09x). blake2s_simd many::hash: 1.31 cpb, blake2b_simd many::hash: 1.43 cpb",
     "evidence_tier": "A",
-    "benchmark_url": "https://github.com/oconnor663/blake2_simd/blob/master/README.md#performance",
+    "benchmark_url": "https://github.com/oconnor663/blake2_simd/blob/master/README.md",
     "baseline_stdlib": [],
-    "compiler_and_flags": "rustc 1.40.0, clang 9.0.1 (clang used to build the OpenSSL/libsodium comparison bindings); `cargo run --release`",
+    "compiler_and_flags": "rustc 1.40.0, clang 9.0.1, cargo +nightly bench --all-features",
     "hardware": "Intel Core i5-8250U (Kaby Lake Refresh)",
     "compared_against_cpp_std_directly": false,
     "license": "MIT",
@@ -457,15 +457,17 @@
     "is_fork_of": null,
     "stars_or_usage": "144 stars",
     "has_code": true,
-    "tradeoffs": "Different hash algorithm (BLAKE2 vs SHA-2/SHA-1), so not a drop-in replacement -- callers must accept BLAKE2 digests instead of SHA output. Rust crate; usable from C++ only via FFI/cbindgen, not a native C/C++ API. libsodium versions used (1.0.18) and OpenSSL (1.1.1.d) are from 2019.",
-    "caveats": "Benchmark numbers are from ~2019/2020 (rustc 1.40, OpenSSL 1.1.1.d, libsodium 1.0.18); OpenSSL has since gained further SHA-NI/AVX-512 tuning in 3.x so the exact margin vs current OpenSSL is unverified, though BLAKE2's structural throughput advantage over SHA-2 on non-SHA-NI-favorable inputs is well established. Single-machine, single-run-class result (Tier A on methodology completeness, not independently reproduced elsewhere).",
+    "tradeoffs": "Pure Rust with dynamic AVX2 CPU-feature detection at runtime; SIMD kernel is a Rust port of Samuel Neves' sneves/blake2-avx2 C code. Not C++-native (usable from C++ only via FFI/cbindgen), no_std support optional. Benchmark numbers are from 2019-2020 hardware (i5-8250U, OpenSSL 1.1.1d), so absolute cycles/byte on current CPUs/OpenSSL 3.x will differ, though the relative BLAKE2b-vs-SHA-512 gap is architectural and should persist.",
+    "caveats": "Benchmark table is several years old (OpenSSL 1.1.1d, rustc 1.40.0) and was run on the author's own laptop rather than a dedicated benchmark server; comparison against libsodium BLAKE2b (same algorithm) is a much smaller win (~9%) than against OpenSSL SHA-512 (different algorithm family, ~1.8x), so the headline number depends heavily on which baseline is emphasized.",
     "found_via": [
-      "GitHub: gh api graphql search type:REPOSITORY q=\"blake2 openssl faster in:readme\""
+      "GitHub: gh api graphql search type:REPOSITORY q=\"blake2 openssl faster in:readme\"",
+      "crates.io API query q=blake2 -> blake2b_simd/blake2s_simd crate description 'a pure Rust BLAKE2b implementation with dynamic SIMD', then opened linked GitHub repo README"
     ],
     "is_evidence_for_known": false,
-    "confidence": 0.7,
+    "confidence": 0.75,
     "assignment_ids": [
-      "w7-crypto-gh-cpp2"
+      "w7-crypto-gh-cpp2",
+      "w7-crypto-registry"
     ],
     "id": "https://github.com/oconnor663/blake2_simd"
   },
@@ -762,6 +764,42 @@
     "id": "https://github.com/xkcp/xkcp"
   },
   {
+    "name": "keccak-batch",
+    "repo_url": "https://github.com/nxm-rs/keccak-batch",
+    "language": "Rust",
+    "domain": "crypto-and-hashing",
+    "category": "crypto-hashes",
+    "baseline": "keccak-asm (assembly Keccak-256 backend behind Alloy's asm-keccak feature) and tiny-keccak scalar implementation",
+    "baseline_in_list": false,
+    "metric": "throughput",
+    "workload": "Batched Keccak-256 hashing of 64-byte inputs (Merkle/BMT-node hot path) and 4 KiB inputs, comparing SIMD-batched (SSE2/NEON/wasm, AVX2, AVX-512) lane widths against the crate's own scalar path and against keccak-asm/tiny-keccak, via `cargo run --release --example perf`",
+    "claimed_speedup": "8-wide AVX-512 batch: ~5.4x (64-byte) / ~4-5x (4 KiB) over own scalar path; scalar path is at parity with tiny-keccak; keccak-asm is ~1.3x faster than scalar; 8-wide batch is still ~5.5x faster per hash than keccak-asm",
+    "evidence_tier": "C",
+    "benchmark_url": "https://github.com/nxm-rs/keccak-batch/blob/main/README.md",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "cargo run --release --example perf; KECCAK_BATCH_NO_AVX512 / KECCAK_BATCH_NO_AVX2 env flags to cap backend",
+    "hardware": "\"Zen-class AVX-512 part\" (exact CPU model not stated)",
+    "compared_against_cpp_std_directly": false,
+    "license": "AGPL-3.0",
+    "usability": "copyable",
+    "last_commit": "2026-07-24",
+    "maintenance_status": "active",
+    "is_fork_of": null,
+    "stars_or_usage": "1 star",
+    "has_code": true,
+    "tradeoffs": "Pre-release (marked pre-release in repo badge), only implements legacy 0x01-padding Keccak-256 (not full SHA3-256 with 0x06 padding), AGPL-3.0 copyleft license restricts embedding in proprietary C++ code without a compatible C API wrapper, no C/C++ bindings provided (Rust crate only, though a cdylib could be built).",
+    "caveats": "Very new (created 2026-09-24), essentially a single-author, 1-star, pre-release project; benchmark hardware is described only as \"a Zen-class AVX-512 part\" rather than an exact CPU model, and baseline is the crate's own scalar implementation plus two other Rust crates rather than OpenSSL/XKCP directly, so this falls short of Tier A/B. Numbers are self-reported with partial methodology.",
+    "found_via": [
+      "crates.io API query q=keccak avx -> keccak-batch crate description 'Batched Keccak-256 (legacy 0x01 padding) with runtime-dispatched SIMD', then opened linked GitHub repo README"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.35,
+    "assignment_ids": [
+      "w7-crypto-registry"
+    ],
+    "id": "https://github.com/nxm-rs/keccak-batch"
+  },
+  {
     "name": "sha256-simd (minio)",
     "repo_url": "https://github.com/minio/sha256-simd",
     "language": "Go",
@@ -796,6 +834,42 @@
       "w7-crypto-papers"
     ],
     "id": "https://github.com/minio/sha256-simd"
+  },
+  {
+    "name": "Intel Cryptography Primitives Library",
+    "repo_url": "https://github.com/intel/cryptography-primitives",
+    "language": "C",
+    "domain": "crypto-and-hashing",
+    "category": "crypto-hashes",
+    "baseline": "OpenSSL SHA-2/SHA-3 (generic implementation, no CPU-specific dispatch)",
+    "baseline_in_list": true,
+    "metric": "throughput",
+    "workload": "No benchmark numbers published in the repository; README/OVERVIEW.md only describe runtime CPU dispatching (SSE4.2/AVX2/AVX-512/AVX10.2 code paths) for SHA-1/224/256/384/512, SHA3-224/256/384/512, SHAKE128/256, MD5, SM3 and other primitives, marketed as 'a secure, fast and lightweight library ... highly-optimized for various Intel CPUs'",
+    "claimed_speedup": "unquantified (\"fast and lightweight\", CPU-specific optimized code paths incl. SHA-NI); no numbers found in README, OVERVIEW.md, or BUILD.md",
+    "evidence_tier": "D",
+    "benchmark_url": null,
+    "baseline_stdlib": [],
+    "compiler_and_flags": null,
+    "hardware": null,
+    "compared_against_cpp_std_directly": null,
+    "license": "Apache-2.0",
+    "usability": "copyable",
+    "last_commit": "2026-09-25",
+    "maintenance_status": "active",
+    "is_fork_of": null,
+    "stars_or_usage": "388 stars; formerly Intel IPP Cryptography (intel/ipp-crypto), FIPS 140-3 validated, used across Intel's oneAPI/toolchain ecosystem",
+    "has_code": true,
+    "tradeoffs": "C API with a runtime CPU-feature dispatcher (multiple codepaths compiled in, best one selected at init); large surface area beyond just hashing (AES, RSA, ECC, PQC, etc.); Intel-specific tuning means gains are concentrated on Intel CPUs with AVX-512/SHA-NI, may not help on AMD or older hardware.",
+    "caveats": "No first-party benchmark numbers found anywhere in the repo despite extensive searching (README, OVERVIEW.md, BUILD.md); the 'fast' claim is unquantified marketing language. Included only as a single Tier-D entry per the rules because the project is Intel-authored, FIPS-validated, and widely referenced in Intel's own crypto tooling. Rename from intel/ipp-crypto to intel/cryptography-primitives should be tracked so it isn't confused with a different project.",
+    "found_via": [
+      "gh search repos 'sha256 sha-ni intrinsics' surfaced Intel SHA-NI discussion; direct lookup of gh api repos/intel/ipp-crypto redirected to intel/cryptography-primitives"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.3,
+    "assignment_ids": [
+      "w7-crypto-registry"
+    ],
+    "id": "https://github.com/intel/cryptography-primitives"
   },
   {
     "name": "aklomp/base64 (SIMD Base64 C99 library)",
