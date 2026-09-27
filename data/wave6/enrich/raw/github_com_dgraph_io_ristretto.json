@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/dgraph-io/ristretto",
+  "one_liner": "Concurrent in-process Go cache with TinyLFU admission and cost-based eviction; ~3x a mutex-wrapped groupcache LRU's throughput in its own benchmarks.",
+  "what_it_does": "Ristretto is a bounded in-memory cache library for a single Go process. Dgraph built it for Dgraph and Badger after its mutex-guarded LRU cache became a contention point. The v2 API is generic: NewCache(&Config[K,V]{NumCounters, MaxCost, BufferItems}), then Get, Set(key, value, cost), SetWithTTL, Del, Wait, Close and IterValues, with OnEvict/OnReject/OnExit callbacks and optional Metrics. Capacity is a cost budget (bytes or any unit you pick), not an item count, and Set is asynchronous and allowed to drop new items.",
+  "how_it_is_fast": "Values live in 256 RWMutex-sharded Go maps keyed by a 64-bit hash (runtime memhash via go:linkname for strings and []byte, the integer itself otherwise). Gets record accesses into striped, lossy sync.Pool ring buffers (BP-Wrapper-style batching), and those batches reach the policy through a non-blocking channel that drops them when full. New Sets go into a 32K-slot buffered channel drained by one goroutine and are dropped rather than block when it is full, so no caller waits on the policy lock. The policy is TinyLFU admission (a 4-row count-min sketch of 4-bit counters, a bloom-filter doorkeeper and periodic halving) paired with SampledLFU eviction (sample 5 resident keys, evict the lowest estimated frequency); the README FAQ credits the throughput to batching and eventual consistency.",
+  "when_to_use": [
+    "A Go service where many goroutines hit a skewed (Zipf-like) key set and a single mutex around an LRU (groupcache/lru, hashicorp/golang-lru) is the bottleneck: the project's charts show that baseline flat at about 16-20M ops/s while Ristretto reaches about 55-65M at 16-64 goroutines.",
+    "Byte-budgeted caches with variable-size values: Set takes a per-item cost, one large valuable item can evict several small ones, and a Cost func can compute cost lazily only for sets that are not dropped.",
+    "Frequency-biased workloads (search, database page caches, analytics), where TinyLFU admission keeps one-hit wonders out; the README Search (ARC-S3) chart shows 48% vs 23% for the LRU at 500k capacity.",
+    "Cache-aside use where losing an occasional insert is acceptable, because hot items are Set repeatedly and eventually get admitted.",
+    "You want per-item TTL, eviction/rejection callbacks for manual memory management, and a small per-entry footprint (keys are not stored, only hashes)."
+  ],
+  "when_not_to_use": [
+    "You need every Set to land, or read-your-writes: new items can be dropped at the set buffer or rejected by TinyLFU, and a Get straight after Set can miss unless you call Wait().",
+    "Recency-biased or loop/LRU-friendly workloads: the 2019 blog says Ristretto 'suffers' on the CODASYL (ARC-OLTP) trace because LFU fits it badly, and otter's hit-ratio page says it may struggle on recency-biased workloads.",
+    "You size the cache by item count (cost=1) and leave IgnoreInternalCost false: every item is also charged unsafe.Sizeof(storeItem[V]), so the cache holds far fewer items than MaxCost. A user running the project's own ARC-S3 bench at MaxCost 500000 got a 1.05% hit ratio vs ~50% on the README chart (issue #336), and issue #363 reports near-zero hit ratios in third-party benchmarks.",
+    "You need the highest read throughput among Go caches: in otter's third-party benchmark (Apple M1, 8 goroutines, cost configuration corrected) Ristretto did about 32.8M ops/s on 100% reads vs otter's 195M, and fell behind ccache on the 75%-read and 75%-write mixes.",
+    "You need to list keys, exact key equality or a networked/distributed cache: only a 64-bit hash plus a 64-bit xxhash conflict hash is stored, iteration gives values only, and the library is single-process."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "cespare/xxhash/v2, dgryski/go-farm, dustin/go-humanize, golang.org/x/sys (testify for tests); optional jemalloc via cgo behind the 'jemalloc' build tag, used only by the z package",
+    "min_toolchain": "go.mod declares go 1.24.0 (toolchain go1.25.0); the README still says Go 1.21+",
+    "platforms": "Any Go target in principle: pure Go plus go:linkname into runtime internals (memhash, fastrand, nanotime). The z package has per-OS mmap files (linux, darwin, windows, plan9, js, wasip1) and amd64 assembly with a generic fallback, and recent releases fixed 32-bit, s390x and riscv64 builds. CI runs only on ubuntu-latest.",
+    "thread_safety": "Documented as safe to use one Cache from any number of goroutines. Internally it uses 256 RWMutex-sharded maps plus one global policy mutex. Clear is documented as non-atomic and assumes no concurrent Get/Set.",
+    "drop_in_for_baseline": "partial — it fills the same role as groupcache/lru but has a different API: a Config with NumCounters, MaxCost and BufferItems, a cost argument on Set, sets that may be dropped, eventually consistent visibility (Wait), and a required Close. Existing call sites need rewriting."
+  },
+  "gotchas": [
+    "MaxCost includes internal per-item overhead unless IgnoreInternalCost is true. This default arrived in PR #195 (Sep 2020), after the README charts were made; the project's own cachebench adapter still calls Set(key, v, 1) without that flag.",
+    "Set returning true does not mean the item was admitted: TinyLFU can still reject it later. Updates to existing keys are applied immediately, but new keys only appear after the background goroutine processes them.",
+    "Each cache starts background goroutines and a TTL ticker, so always call Close. Del does a blocking send into the set buffer, so under heavy load it can wait for the drainer. Expired entries are swept in 5 s buckets by default but are also filtered out on Get.",
+    "Collision handling depends on key type: integer keys are their own hash with no conflict check, string/[]byte keys add an xxhash conflict hash, and a custom KeyToHash that returns 0 as the second value disables the check. The memhash seed changes per process, so hashes are not persistent."
+  ],
+  "pick_this_over_siblings_when": "Otter's own benchmarks put it well ahead of Ristretto on read throughput and on hit ratio for recency-biased traces (W-TinyLFU), so otter is the better general-purpose Go default. Pick Ristretto for a byte-cost budget with minimal per-entry memory, or for insert-heavy traffic where dropped sets are acceptable (otter measured Ristretto at 15-22M inserts/s vs its own 2.4-3.3M and attributes the gap to dropped inserts); over go-sieve or golang-fifo, which are count-bounded SIEVE/FIFO caches, it adds cost-weighted eviction, TTL and eviction callbacks.",
+  "verified_claims_summary": "Dgraph's own cachebench compared Ristretto with golang/groupcache/lru behind a sync.Mutex (plus BigCache, FreeCache, FastCache and goburrow). The 2020 README charts show ~3x the LRU's throughput at 16-64 goroutines on Mixed 25% writes/75% reads (~57M vs ~18M ops/s at 64) and ~3.3x on Zipfian read-only and write-only runs, while freecache wins Mixed at 4 goroutines and fastcache wins writes at 4-12. The only hardware named is an Intel Core i7-8700K with 16 GB, in the 2019 blog; the Go version, build flags and Ristretto version are not stated (cachebench has no go.mod), and the charts predate the September 2020 change that charges internal per-item cost by default.",
+  "status_note": "Actively maintained (v2.4.2 on 2026-07-07, last commit 2026-09-21) and an Apache-2.0 `go get` module, though third-party reports of low hit ratio (#363) and policy-lock contention (#483, with fix PR #489 still open) remain unresolved.",
+  "sources_read": [
+    "https://github.com/dgraph-io/ristretto",
+    "https://github.com/dgraph-io/ristretto/blob/main/README.md",
+    "https://github.com/dgraph-io/ristretto/blob/main/go.mod",
+    "https://github.com/dgraph-io/ristretto/blob/main/cache.go",
+    "https://github.com/dgraph-io/ristretto/blob/main/policy.go",
+    "https://github.com/dgraph-io/ristretto/blob/main/store.go",
+    "https://github.com/dgraph-io/ristretto/blob/main/ring.go",
+    "https://github.com/dgraph-io/ristretto/blob/main/sketch.go",
+    "https://github.com/dgraph-io/ristretto/blob/main/ttl.go",
+    "https://github.com/dgraph-io/ristretto/blob/main/z/z.go",
+    "https://github.com/dgraph-io/ristretto/blob/main/z/rtutil.go",
+    "https://github.com/dgraph-io/ristretto/blob/main/z/calloc_jemalloc.go",
+    "https://github.com/dgraph-io/ristretto/blob/main/CHANGELOG.md",
+    "https://github.com/dgraph-io/ristretto/blob/main/.github/workflows/ci-ristretto-tests.yml",
+    "https://github.com/dgraph-io/ristretto/issues/363",
+    "https://github.com/dgraph-io/ristretto/issues/336",
+    "https://github.com/dgraph-io/ristretto/issues/483",
+    "https://github.com/dgraph-io/ristretto/issues/369",
+    "https://github.com/dgraph-io/ristretto/issues/431",
+    "https://github.com/dgraph-io/ristretto/issues/380",
+    "https://github.com/dgraph-io/ristretto/pull/195",
+    "https://github.com/dgraph-io/ristretto/pull/318",
+    "https://github.com/dgraph-io/ristretto/releases",
+    "https://github.com/dgraph-io/dgraph-benchmarks/blob/main/cachebench/ristretto/cache.go",
+    "https://discuss.dgraph.io/raw/5102",
+    "https://maypok86.github.io/otter/performance/throughput/",
+    "https://maypok86.github.io/otter/performance/hit-ratio/",
+    "https://maypok86.github.io/otter/performance/memory-consumption/"
+  ],
+  "confidence": 0.75
+}
