@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/komiya-atsushi/xor-filter",
+  "one_liner": "Small Java xor filter (8/16-bit) built on Guava Funnels; about 2x faster Long-key queries than Guava BloomFilter at equal FPR.",
+  "what_it_does": "This is a static approximate-membership filter for the JVM. XorFilter.build(funnel, collection, strategy) hashes a whole in-memory key set once and returns an immutable filter. Its mightContain(T) / test(T) never returns a false negative, and the false-positive rate follows from the fingerprint width: about 2^-8 (~0.39%) for MURMUR128_XOR8 and about 2^-16 for MURMUR128_XOR16. It uses Guava's Funnel abstraction and implements java.util.function.Predicate, so the query side of Guava BloomFilter code ports easily. There is no put(), though; writeTo/readFrom serialize the filter.",
+  "how_it_is_fast": "It implements Graf & Lemire's xor filter (arXiv 1912.08258), a Dietzfelbinger-Pagh / Bloomier-style construction. Each key maps to three slots, one in each third of an array of about 1.23n+32 fingerprints, and a query is just fingerprint == B[h0] ^ B[h1] ^ B[h2]: exactly three array reads, with multiply-shift range reduction instead of division. Both this library and Guava's BloomFilter (MURMUR128_MITZ_64 strategy) compute one Guava murmur3_128 per query. Guava then tests numHashFunctions bits by double hashing, with a 64-bit modulo per probe; the xor filter adds one MurmurHash3 fmix64 and the three reads. Because the expensive hash is shared, the gap shrinks when hashing dominates (1.97x for Long keys vs 1.34x for 20-character strings). Construction is hypergraph peeling: a queue of singleton slots, a stack, then back-assignment, retried with a new seed if peeling fails.",
+  "when_to_use": [
+    "JVM service with a static key set built once, queried many times and shipped as bytes, e.g. a nightly blocklist, known-ID set or per-segment key set.",
+    "You already use Guava Funnels/BloomFilter and want about 2x faster Long-key queries at the same ~0.39% FPR with about 15% less memory (XOR8: 9.84 vs 11.55 bits/key).",
+    "You need a very low FPR. XOR16 vs Guava Bloom at fpp 0.002% ran 2.6x faster on Long keys (16,976 vs 6,535 q/ms) at 19.69 vs 22.52 bits/key.",
+    "Workloads with many positive lookups, where a Bloom filter must test all k bits while the xor filter always does exactly three reads.",
+    "You want a tiny, auditable piece of code to vendor: two source files (about 516 lines), Java 8, Guava as the only dependency."
+  ],
+  "when_not_to_use": [
+    "Keys arrive incrementally, or the set changes: there is no put/remove/merge, so every change means rebuilding from a complete in-memory Collection. Guava BloomFilter supports put/putAll.",
+    "You need it as a Gradle/Maven dependency. me.k11i:xor-filter was published only to Bintray, which is gone, and Maven Central has no me.k11i artifacts. FastFilter/fastfilter_java is maintained (Apache-2.0, pushed 2026-07) and adds binary fuse and xor+ filters, but it takes pre-hashed long keys.",
+    "Space is the priority. There is no binary fuse or xor+ variant, so XOR8 costs 9.84 bits/key at 100k keys, and the fixed +32-slot overhead inflates tiny filters.",
+    "Very large sets under tight heap. Construction holds all keys plus temporary arrays of roughly 35 bytes/key: sorted hashes, per-slot xor and count, queue, and stack (derived from the source). Bloom filters build by streaming.",
+    "Long or expensive-to-hash keys (e.g. strings), where the query gain falls to about 1.34x and may not justify adopting unmaintained code with no issue history and tests only at 5,000-10,000 keys."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "Guava (built against 28.2-jre; uses Funnel, HashFunction, Hashing.murmur3_128)",
+    "min_toolchain": "Java 8 (0.1.1 was built with sourceCompatibility 8; 0.1.0 targeted Java 11)",
+    "platforms": "any JVM",
+    "thread_safety": "Not documented. After build() the filter is immutable (final fields, read-only query path), so concurrent mightContain calls appear safe; build() uses only local state.",
+    "drop_in_for_baseline": "partial — same Guava Funnel and mightContain/Predicate query API as Guava BloomFilter, but built once from a full Collection (no put/putAll, no expectedInsertions or fpp knobs; FPR fixed by 8- or 16-bit fingerprints) with an incompatible serialized format"
+  },
+  "gotchas": [
+    "writeTo/readFrom wrap the caller's stream in try-with-resources and close it. writeTo also emits one byte/short per call through DataOutputStream, so wrap file or socket streams in a BufferedOutputStream.",
+    "build() on an empty collection throws ArrayIndexOutOfBoundsException, because HashedElements reports size 1 for zero keys. The peeling queue is a fixed n+1 ring buffer with no overflow check; in a Python port of the construction loop, sets under ~32 keys peeled on only ~20-50% of seeds vs ~95% for larger sets. Such sets need extra retries but still come out correct.",
+    "The serialized bytes store strategy, seed and capacity but not the Funnel. readFrom must get the identical Funnel (including charset) or it silently returns false negatives. readFrom also trusts the header (strategy index, capacity), so untrusted bytes can throw or allocate up to 2^31 slots.",
+    "The default build() seeds from ThreadLocalRandom, so identical inputs give different bytes; pass rngSeed for reproducible artifacts. The code relies on Guava APIs flagged unstable (the source suppresses UnstableApiUsage)."
+  ],
+  "pick_this_over_siblings_when": "Every catalogued xor/binary-fuse sibling targets another runtime: xor_singleheader (C), xorfilter (Go), xorf (Rust), exor_filter (Erlang) and BinaryFuseFilter (.NET). Pick this one only when you need a pure-JVM xor filter keyed through Guava Funnels. If native code or another language is an option, those siblings are maintained and offer binary fuse filters, which sit within 13% of the space lower bound vs 23% for xor, per the Go sibling.",
+  "verified_claims_summary": "This is first-party JMH (Gradle jmh plugin 0.5.0 defaults, time unit ms) on an undisclosed JVM and CPU. Each filter was built from 8,192 keys (every other of 16,384 pregenerated keys) and queried round-robin over all 16,384, so half the queries hit, everything stayed cache-resident, and hashing went through Guava 28.2 murmur3_128 for both filters. XOR8 did 17,458 vs 8,879 queries/ms against Guava BloomFilter at fpp 0.389% for boxed Long keys (1.97x) and 7,122 vs 5,318 for 20-character strings (1.34x). A separate 100,000-key run gave 9.84 vs 11.55 bits/key serialized (1.17x smaller). All ratios are derived from the README tables.",
+  "status_note": "Abandoned since January 2020 (v0.1.1, zero issues ever filed); the Bintray-hosted artifact no longer resolves, but the MIT-licensed code is two small files that are easy to vendor.",
+  "sources_read": [
+    "https://github.com/komiya-atsushi/xor-filter",
+    "https://github.com/komiya-atsushi/xor-filter#benchmark",
+    "https://github.com/komiya-atsushi/xor-filter/blob/develop/CHANGELOG.md",
+    "https://github.com/komiya-atsushi/xor-filter/blob/develop/build.gradle",
+    "https://github.com/komiya-atsushi/xor-filter/blob/develop/gradle.properties",
+    "https://github.com/komiya-atsushi/xor-filter/blob/develop/.circleci/config.yml",
+    "https://github.com/komiya-atsushi/xor-filter/blob/develop/src/main/java/me/k11i/xorfilter/XorFilter.java",
+    "https://github.com/komiya-atsushi/xor-filter/blob/develop/src/main/java/me/k11i/xorfilter/MurmurHashFinalizer.java",
+    "https://raw.githubusercontent.com/komiya-atsushi/xor-filter/develop/src/test/java/me/k11i/xorfilter/XorFilterTest.java",
+    "https://raw.githubusercontent.com/komiya-atsushi/xor-filter/develop/src/jmh/java/me/k11i/xorfilter/QueryBenchmark.java",
+    "https://raw.githubusercontent.com/komiya-atsushi/xor-filter/develop/src/jmh/java/me/k11i/xorfilter/FppAndSerializationSize.java",
+    "https://github.com/komiya-atsushi/xor-filter/pulls?q=is%3Apr",
+    "https://repo1.maven.org/maven2/me/k11i/xor-filter/",
+    "https://repo1.maven.org/maven2/me/k11i/",
+    "https://search.maven.org/solrsearch/select?q=g:me.k11i&rows=20&wt=json",
+    "https://jcenter.bintray.com/me/k11i/xor-filter/0.1.1/xor-filter-0.1.1.pom",
+    "https://dl.bintray.com/komiya-atsushi/maven/",
+    "https://raw.githubusercontent.com/google/guava/v28.2/guava/src/com/google/common/hash/BloomFilterStrategies.java",
+    "https://arxiv.org/abs/1912.08258",
+    "https://github.com/FastFilter/fastfilter_java",
+    "https://raw.githubusercontent.com/FastFilter/fastfilter_java/master/README.md"
+  ],
+  "confidence": 0.8
+}

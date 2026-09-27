@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/rdatatable/data.table",
+  "one_liner": "R's in-memory data.frame replacement with C/OpenMP radix grouping and joins; ~3-4x faster than pandas on db-benchmark groupby.",
+  "what_it_does": "data.table is an R package that extends data.frame with a DT[i, j, by] query form (WHERE, SELECT, GROUP BY), columns added or updated by reference with :=, keyed and indexed joins (rolling, non-equi, overlap, update-on-join), dcast/melt reshaping, and the parallel fread/fwrite CSV reader and writer. It does not replace pandas: it is an R API, so the pandas comparison is a choice between language ecosystems for in-memory tabular work. The Python port (pydatatable) is a separate project.",
+  "how_it_is_fast": "Ordering and grouping use forder.c, a parallel MSD byte-wise radix sort built on Terdiman/Herf float twiddling; it skips unused byte buckets, packs compressed keys across byte boundaries and splits skewed groups in parallel (an earlier version became base R's radix sort). 'GForce' rewrites simple j expressions (sum, mean, min, max, median, var, sd, prod, first, last, head, tail, .N) into C kernels (gsumm.c) that scatter rows into per-thread batches keyed by the high and low 16-bit halves of the group id and aggregate them in parallel, with no R evaluation per group. Joins are multi-column binary searches over sorted keys (bmerge.c), and := writes columns in place with no copy.",
+  "when_to_use": [
+    "You work in R and run grouped aggregations over roughly 10M to 1B+ in-memory rows. On db-benchmark it was 2.4-5.1x faster than pandas by geometric mean per dataset, and joins were 4.9-6.4x faster.",
+    "Time-series or interval work that needs rolling (last observation carried forward, or nearest), non-equi or overlap-range joins, which pandas covers only partly (merge_asof).",
+    "Memory-constrained pipelines where in-place column updates (:=, set*) avoid the copies that data.frame or dplyr would make.",
+    "Production R code that needs a stable dependency: it depends on base R only, supports back to R 3.5.0 (2018), and keeps a careful API lifecycle.",
+    "Fast CSV ingest and export via fread/fwrite (memory-mapped, multithreaded), even if the rest of your stack is not data.table."
+  ],
+  "when_not_to_use": [
+    "Your stack is Python. There is no drop-in path from pandas, and the fastest single-node engines are elsewhere. On the same c6id.metal machine type (different batches), DuckDB was ~9.8x and Polars ~2.3x faster than data.table by geometric mean over the 6 groupby questions they share on 100M rows.",
+    "Tables over 2^31-1 rows. There is no long-vector support (issue #3957, open since 2019), and fread can build a larger table that then fails on print or subset (#7438).",
+    "j expressions that GForce cannot rewrite, such as arbitrary R functions or combined expressions, especially with many groups. These run single-threaded R code per group (#5200). It is the one db-benchmark groupby question where pandas wins: max(v1)-min(v2) by id3, 5.72s vs 5.04s.",
+    "Many tiny queries in a loop. The R-level dispatch overhead of [.data.table can dominate on small inputs (#5636, #5650 report single-column/single-row subsets far slower than base R). At 10M rows with 2 id1 groups, the lead over pandas shrinks to 1.65x geomean and q1 is roughly a tie.",
+    "Larger-than-RAM data. It is purely in-memory with no out-of-core or streaming execution."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none beyond base R (Imports only the base packages methods, stats, utils); OpenMP optional at build time",
+    "min_toolchain": "R >= 3.5.0 plus a C compiler to build from source (CRAN ships binaries); OpenMP needed for multithreading, and Apple clang lacks the runtime (install libomp or use LLVM/GCC per the Installation wiki)",
+    "platforms": "any platform R/CRAN supports (Linux, macOS, Windows; x86-64 and arm64). Without OpenMP it runs single-threaded.",
+    "thread_safety": "Internally multithreaded via OpenMP. Every parallel region uses num_threads(getDTthreads()), which defaults to 50% of logical CPUs (setDTthreads, R_DATATABLE_NUM_THREADS, OMP_THREAD_LIMIT honored). It switches to single-threaded inside forked children (mclapply, foreach) and by default restores afterwards. The R-level API is single-threaded like R itself.",
+    "drop_in_for_baseline": "partial — it is an R package, not a Python library, so pandas code must be rewritten in R and DT[i, j, by] syntax. Only the concepts (group-by, merge, pivot) carry over."
+  },
+  "gotchas": [
+    "GForce only recognises its listed functions used standalone in j. In CRAN releases through 1.18.6.1, max(x) - min(x) is not optimised and falls back to per-group R evaluation. The unreleased 1.18.99 NEWS says arithmetic on GForce calls and type conversions such as sum(as.numeric(x)) now optimise.",
+    "Default threads are 50% of logical CPUs. The benchmark called setDTthreads(0L), all 128 logical CPUs, so out-of-the-box runs on a big box use half the threads the published numbers used.",
+    ":= and set* modify in place, so any other variable that shares the table sees the change (use copy()). data.table sorts strings in C locale, which can differ from base R's order().",
+    "Correctness regression: grouped sum() on an integer64 column containing NA gave silently wrong results under GForce until the fix in 1.18.2.1 (Jan 2026, #7571). Use 1.18.2.1 or later."
+  ],
+  "pick_this_over_siblings_when": "Among catalogued pandas-beaters, pick data.table when you are in R and want an in-memory dataframe with ordered, rolling and non-equi joins and in-place updates, on CPU only. Pick chDB (embedded ClickHouse SQL) or cuDF.pandas (needs an NVIDIA GPU) to stay in Python, and DataFusion if you want an embeddable SQL engine; on db-benchmark DataFusion was ~6.9x faster than data.table on the shared groupby questions.",
+  "verified_claims_summary": "On db-benchmark (DuckDB Labs, batch 2025-02-10, AWS c6id.metal: Xeon Platinum 8375C, 128 cores, 250GB), data.table 1.16.99 dev with setDTthreads(0) against pandas 2.2.3 (pyarrow CSV reader, categorical ids) on 100M rows and 100 groups: 'sum v1 by id1' took 0.456-0.524s vs 1.525-1.528s (3.3x), and all 10 groupby questions were 4.2x faster by geometric mean (9/10 wins), recomputed from time.csv. No compiler or flags are published, and the 1B-row out-of-memory gap belongs to the original 125GB H2O node: on c6id.metal, pandas 2.2.2 finished 9-10 of 10 1B-row questions in 2024 (q1 ~17.2s vs data.table 5.1s in a later batch).",
+  "status_note": "Actively maintained (CRAN 1.18.6.1 published 2026-08-24, master commit 2026-09-10, NumFOCUS-sponsored), MPL-2.0; install from CRAN, though the benchmark numbers come from unreleased dev builds and pandas has not been re-run since Feb 2025.",
+  "sources_read": [
+    "https://github.com/Rdatatable/data.table",
+    "https://github.com/Rdatatable/data.table/blob/master/README.md",
+    "https://github.com/Rdatatable/data.table/blob/master/DESCRIPTION",
+    "https://github.com/Rdatatable/data.table/blob/master/src/forder.c",
+    "https://github.com/Rdatatable/data.table/blob/master/src/gsumm.c",
+    "https://github.com/Rdatatable/data.table/blob/master/src/openmp-utils.c",
+    "https://github.com/Rdatatable/data.table/blob/master/src/bmerge.c",
+    "https://github.com/Rdatatable/data.table/blob/master/src/fread.c",
+    "https://github.com/Rdatatable/data.table/blob/master/man/datatable-optimize.Rd",
+    "https://github.com/Rdatatable/data.table/blob/master/man/openmp-utils.Rd",
+    "https://github.com/Rdatatable/data.table/blob/master/NEWS.md",
+    "https://github.com/Rdatatable/data.table/tags",
+    "https://github.com/Rdatatable/data.table/issues/3957",
+    "https://github.com/Rdatatable/data.table/issues/5200",
+    "https://github.com/Rdatatable/data.table/issues/5650",
+    "https://github.com/Rdatatable/data.table/issues/7438",
+    "https://github.com/Rdatatable/data.table/issues?q=label%3Aperformance+is%3Aopen",
+    "https://github.com/Rdatatable/data.table/wiki/Installation",
+    "https://cran.r-project.org/web/packages/data.table/index.html",
+    "https://duckdblabs.github.io/db-benchmark/",
+    "https://raw.githubusercontent.com/duckdblabs/db-benchmark/main/time.csv",
+    "https://raw.githubusercontent.com/duckdblabs/db-benchmark/main/logs.csv",
+    "https://github.com/duckdblabs/db-benchmark/blob/main/datatable/groupby-datatable.R",
+    "https://github.com/duckdblabs/db-benchmark/blob/main/pandas/groupby-pandas.py"
+  ],
+  "confidence": 0.8
+}

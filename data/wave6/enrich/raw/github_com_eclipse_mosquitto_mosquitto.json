@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/eclipse-mosquitto/mosquitto",
+  "one_liner": "Lightweight C MQTT broker; one 2023 vendor study measured ~2.7x lower 64 B latency than Kafka, but lower message rate.",
+  "what_it_does": "Mosquitto is a small MQTT 3.1/3.1.1/5.0 broker written in C. It ships with the libmosquitto C library, a mosquittopp C++ wrapper, and the mosquitto_pub, mosquitto_sub and mosquitto_rr command-line tools. Clients publish to hierarchical topics and the broker forwards each message to matching subscribers, with support for wildcards, retained messages, QoS 0/1/2, shared subscriptions and bridging to other brokers. It does not implement Kafka's API: moving to it means replacing Kafka producers and consumers with MQTT clients and giving up partitions, offsets and replay.",
+  "how_it_is_fast": "The broker is a single-threaded, non-blocking reactor. One process multiplexes every socket through epoll on Linux, kqueue on BSD and macOS, or poll elsewhere, so the publish path has no locks and no hand-offs between threads. Subscriptions are held in a topic tree with one uthash table per level; the '+' and '#' wildcard children are found by precomputed hash values. Each published message is stored once and reference-counted across subscriber queues rather than copied. Nothing is written to disk on the hot path, because built-in persistence is a periodic snapshot. At QoS 0, which is what the study measured, there are no acks either.",
+  "when_to_use": [
+    "Small-message pub/sub (up to about 32 KiB) where broker-relayed latency matters: the study measured 27 us on one host and 45 us over 100 GbE, against Kafka's 73 and 84 us.",
+    "IoT and edge telemetry that needs the MQTT standard, so any off-the-shelf MQTT client or device can connect to one small C broker with TLS, websockets and ACL/password/dynamic-security plugins.",
+    "Live fan-out where each hop only needs QoS 0/1/2 delivery and there is no need to reread history.",
+    "Many publishers feeding a few subscribers. To scale out, the maintainer recommends running several independent brokers behind a load balancer (#3356).",
+    "Replacing Kafka where it was only ever used as a low-latency message bus and retention or replay were never needed."
+  ],
+  "when_not_to_use": [
+    "You need a durable, partitioned, replayable log with consumer offsets. Mosquitto has none of these. Built-in persistence snapshots every 1800 s by default, so a crash loses everything since the last snapshot. The docs recommend plugin-based persistence (persist-sqlite) instead.",
+    "Your workload is a high rate of small messages. In the study Kafka held 53-62K msg/s below 2 KiB against Mosquitto's 32-38K msg/s, and Zenoh and Cyclone DDS were one to two orders of magnitude faster than both.",
+    "Your payloads are larger than 32 KiB. Mosquitto's bitrate collapsed beyond 32 KiB (the record's table data puts Kafka about 16x ahead at 64 KiB), and the multi-machine test failed above 64 MiB.",
+    "You need more than one CPU core per broker, or high availability. The broker is single-threaded (maintainer, #2182), and clustering is explicitly not planned for the core (#3356); users run 14 instances behind HAProxy instead (#3574).",
+    "You need end-to-end delivery guarantees. QoS covers a single hop only. Once max_queued_messages (default 1000) is reached, the broker silently drops messages while still sending PUBACK (#3687), and control packets such as UNSUBACK can also be dropped when the queue is full (#3542, open)."
+  ],
+  "integration": {
+    "form": "Standalone broker daemon built with make or CMake. Client side: libmosquitto as a shared or static C library, plus the mosquittopp C++ wrapper. The benchmark used the Paho MQTT C client, not libmosquitto.",
+    "dependencies": "cJSON is required on current master (2.1). Optional: OpenSSL (TLS), c-ares (SRV lookups), libmicrohttpd (HTTP API), sqlite3 (persist-sqlite plugin), libedit (mosquitto_ctrl shell), pthreads (client-library threading) and xsltproc/docbook (man pages). uthash and utlist are bundled.",
+    "min_toolchain": "C99 (-std=gnu99 in the Makefile build); CMake 3.24+ for the CMake build on current master",
+    "platforms": "Linux (epoll), macOS and BSD (kqueue, added in 2.1), Windows (up to 8192 connections where supported), with AIX linker scripts in the tree. Plain C with no architecture-specific code paths found.",
+    "thread_safety": "The broker runs one single-threaded event loop per process. libmosquitto is thread safe, except for mosquitto_lib_init, when built with threading support and after the application calls mosquitto_threaded_set; without threading support it is not guaranteed to be safe.",
+    "drop_in_for_baseline": "false — it speaks a different wire protocol (MQTT, not the Kafka protocol), has no partitions, consumer offsets or log replay, and its MQTT v5 shared subscriptions do round-robin load balancing, which is not the same as Kafka consumer groups."
+  },
+  "gotchas": [
+    "The benchmark set max_inflight_messages and max_queued_messages to unlimited; the defaults are 20 and 1000. The maintainer warns that unlimited means storing unlimited messages per client, and on a single-threaded broker that can push CPU and memory to their limits (#2182).",
+    "Since 2.1, max_packet_size defaults to 2,000,000 bytes (earlier versions allowed up to the 256 MB MQTT limit). Clients sending larger packets are disconnected unless you raise the limit, and v3.1.1 clients cannot be told about it.",
+    "set_tcp_nodelay defaults to false. Messages sent back to back can hit Nagle-style delays of about 40 ms (#433); enable the option for latency-sensitive traffic.",
+    "Version 2.0.15, the one benchmarked, is affected by CVE-2023-28366, CVE-2023-0809 and CVE-2023-3592, all fixed in 2.0.16. Use 2.0.23 or 2.1.x, and re-benchmark, because 2.1 also changed defaults and allocation behaviour."
+  ],
+  "pick_this_over_siblings_when": "The same study found Zenoh ahead of Mosquitto on throughput (33x at 8 KB, 6x at 32 KB) and Cyclone DDS ahead on latency (8 us vs 27 us on one host). Pick Mosquitto when you specifically need standard MQTT, with its client ecosystem and simple brokered deployment. Pick Redpanda, Pulsar or AutoMQ when you actually need Kafka's durable log.",
+  "verified_claims_summary": "A 2023 arXiv preprint (v1, not peer-reviewed) by the ZettaScale Zenoh team and National Taiwan University compared Mosquitto 2.0.15 with Paho C 1.3.11 clients at QoS 0 (inflight and queue limits unlimited) against Kafka 3.2.1 with the rdkafka 0.28.0 client (acks=0, linger.ms=0, no compression). It ran on a Ryzen 7 5800X fixed at 4.0 GHz under Ubuntu 20.04, on one host and over 100 GbE, gave no compiler or flags, and its harness repo now returns 404. Mosquitto won 64 B ping-pong latency (27 vs 73 us on one host, 45 vs 84 us networked) and won bitrate only around 16-32 KiB payloads (about 8-9 Gbps vs Kafka's 3-5 Gbps). Kafka had the higher message rate for small payloads and far higher bitrate from 64 KiB up to 512 KiB, where its client stopped working.",
+  "status_note": "Actively maintained Eclipse project: latest tag v2.1.2 (2026-02-09), with 2.1.3 fixes queued and master commits through 2026-09-03. Dual-licensed EPL-2.0 or BSD-3-Clause, with binaries on mosquitto.org and a vcpkg port; it is meant to be deployed as a service rather than vendored.",
+  "sources_read": [
+    "https://github.com/eclipse-mosquitto/mosquitto",
+    "https://github.com/eclipse-mosquitto/mosquitto/blob/master/README.md",
+    "https://github.com/eclipse-mosquitto/mosquitto/blob/master/ChangeLog.txt",
+    "https://github.com/eclipse-mosquitto/mosquitto/blob/develop/ChangeLog.txt",
+    "https://github.com/eclipse-mosquitto/mosquitto/blob/master/src/mux_epoll.c",
+    "https://github.com/eclipse-mosquitto/mosquitto/blob/master/src/subs.c",
+    "https://github.com/eclipse-mosquitto/mosquitto/blob/master/src/database.c",
+    "https://github.com/eclipse-mosquitto/mosquitto/blob/master/src/loop.c",
+    "https://github.com/eclipse-mosquitto/mosquitto/blob/master/src/mosquitto.c",
+    "https://github.com/eclipse-mosquitto/mosquitto/blob/master/src/mosquitto_broker_internal.h",
+    "https://github.com/eclipse-mosquitto/mosquitto/blob/master/include/mosquitto/libmosquitto.h",
+    "https://github.com/eclipse-mosquitto/mosquitto/blob/master/config.mk",
+    "https://github.com/eclipse-mosquitto/mosquitto/blob/master/CMakeLists.txt",
+    "https://github.com/eclipse-mosquitto/mosquitto/blob/master/man/mosquitto.conf.5.xml",
+    "https://github.com/eclipse-mosquitto/mosquitto/tags",
+    "https://github.com/eclipse-mosquitto/mosquitto/commits/master",
+    "https://github.com/eclipse-mosquitto/mosquitto/issues/3574",
+    "https://github.com/eclipse-mosquitto/mosquitto/issues/3687",
+    "https://github.com/eclipse-mosquitto/mosquitto/issues/3542",
+    "https://github.com/eclipse-mosquitto/mosquitto/issues/2182",
+    "https://github.com/eclipse-mosquitto/mosquitto/issues/433",
+    "https://github.com/eclipse-mosquitto/mosquitto/issues/3356",
+    "https://arxiv.org/pdf/2303.09419v1",
+    "https://export.arxiv.org/api/query?id_list=2303.09419",
+    "https://github.com/ZettaScaleLabs/zenoh-perf"
+  ],
+  "confidence": 0.6
+}
