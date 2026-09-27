@@ -1,0 +1,55 @@
+[
+  {
+    "id": "https://github.com/skerkour/stdx-go",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": null,
+    "numbers_found_on_page": null,
+    "evidence_tier_final": "C",
+    "tier_reason": "These are first-party numbers from the author's own blog. The benchmark code is public (chacha20/bench_test.go, which runs golang.org/x/crypto/chacha20 against the SIMD version at 64 B to 1 MB), but the CPU is named only as a family, not a model. Nothing is peer-reviewed or independent, so tier B does not apply; this is C.",
+    "corrections": {
+      "baseline": "golang.org/x/crypto/chacha20 (the Go project's x/crypto module, not the std library proper). It is pure-Go scalar on amd64: the package has assembly only for arm64, ppc64x, s390x and loong64.",
+      "compiler_and_flags": "Go 1.27 (per go.mod). GOAMD64=v4 GOEXPERIMENT=simd on amd64 and GOEXPERIMENT=simd on arm64, as reported from the blog (not re-verified). Run with `go test -bench=. -benchmem` on chacha20/bench_test.go.",
+      "license": "MIT (per LICENSE.txt and GitHub detection); the README contradicts this, saying 'The code is licensed under AGPL-3.0 (see LICENSE.txt)'",
+      "caveats": "This is a first-party blog benchmark by the library's author. The CPU is named only as a family ('AMD EPYC Zen5'), and the arm64 host is not named. On amd64 the baseline golang.org/x/crypto/chacha20 has no SIMD assembly (pure-Go scalar code), so the 7.5x is SIMD against scalar code. On arm64, where x/crypto does have NEON assembly, the SIMD version shows no gain. It is not benchmarked against OpenSSL or libsodium. The package lives in a grab-bag repo that the README labels 'NOT SAFE FOR PUBLIC USE', and it needs the experimental GOEXPERIMENT=simd with Go 1.27. The license is conflicting: LICENSE.txt is MIT, but the README says AGPL-3.0."
+    },
+    "notes": "I did not fetch kerkour.com (the site asks not to be scraped), so the page numbers (7,517.67 vs 1,005.23 MB/s; 1,349.27 vs 1,390.28 MB/s) are not verified. HN item 49362187 carries the '7.5x faster encryption in Go' headline, and the repo bench confirms the x/crypto baseline and the input sizes. Metadata checked: MIT per GitHub, 3 stars, not a fork, last commit 2026-08-25 (the chacha20 path was last touched 2026-08-24).",
+    "urls_opened": [
+      "https://github.com/skerkour/stdx-go",
+      "https://github.com/skerkour/stdx-go/tree/main/chacha20",
+      "https://github.com/skerkour/stdx-go/blob/main/chacha20/bench_test.go",
+      "https://github.com/skerkour/stdx-go/blob/main/README.md",
+      "https://github.com/skerkour/stdx-go/blob/main/LICENSE.txt",
+      "https://github.com/skerkour/stdx-go/blob/main/go.mod",
+      "https://github.com/golang/crypto/tree/master/chacha20",
+      "https://hn.algolia.com/api/v1/items/49362187"
+    ]
+  },
+  {
+    "id": "https://github.com/skerkour/chacha20-blake3",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "The README Performance table gives first-party throughput against RustCrypto XChaCha20-Poly1305 and AES-256-GCM on an EPYC 9R45. The criterion bench code is public (benchmarks/benches/encrypt.rs). No rustc version is stated, and the shipped bench stops at 64 KB, so the 1 MB and 10 MB rows cannot be reproduced from it. That makes it C, not A.",
+    "corrections": {
+      "claimed_speedup": "Against XChaCha20-Poly1305: about 1.3x at 64 KB (2,153 vs 1,636 MB/s) and about 2x at 1 to 10 MB (3,297 to 3,353 vs 1,654 to 1,664 MB/s). Against AES-256-GCM: about 1.5x at 64 KB (2,153 vs 1,475 MB/s) and about 2.2x at 1 to 10 MB (3,297 to 3,353 vs 1,476 to 1,477 MB/s). All ratios derived from page data. It is slower at small sizes: about 1.1 to 1.5x slower than XChaCha20-Poly1305 (64 B: 103 vs 116 MB/s; 1 KB: 523 vs 767 MB/s) and about 2.5 to 5.2x slower than AES-256-GCM (64 B: 103 vs 540 MB/s; 1 KB: 523 vs 1,287 MB/s).",
+      "baseline": "XChaCha20-Poly1305 and AES-256-GCM via RustCrypto's pure-Rust crates (chacha20poly1305 0.11.0-rc.2 and aes-gcm 0.11.0-rc.2 per benchmarks/Cargo.toml), not OpenSSL or libsodium",
+      "compiler_and_flags": "No rustc version is stated. The table does not state flags. The repo Makefile `bench` target runs RUSTFLAGS=\"-C target-cpu=native --cfg chacha20_force_avx2\" cargo bench (criterion 0.5), and .cargo/config.toml also sets target-cpu=native. The aes_avx256/aes_avx512 cfgs are commented out.",
+      "caveats": "The benchmark is first-party. The README calls all three implementations, including ChaCha20-BLAKE3 itself, 'pure-Rust, non-optimized'. The shipped criterion bench (benchmarks/benches/encrypt.rs) covers 64 B to 64 KB and passes a 128-byte AAD on every call, so the README's 1 MB and 10 MB rows are not produced by the current bench code. The AES-256-GCM arm is RustCrypto aes-gcm without the VAES cfgs enabled, which may explain its low throughput of about 1.5 GB/s. No rustc version is stated, and nothing is compared against OpenSSL or libsodium. The author remarks cited earlier (an optimized build being about 30% faster, and surprise at AES-GCM being slow) are not in the README and were not verified, because kerkour.com was not fetched."
+    },
+    "notes": "The README numbers match the record's figures. The only error was in the slowdown clause, where 'about 2 to 5x slower than both' is wrong: against XChaCha20-Poly1305 it is only 1.1 to 1.5x slower. Metadata checked: MIT, 103 stars, not a fork, not archived, last commit 2026-01-15, active.",
+    "urls_opened": [
+      "https://github.com/skerkour/chacha20-blake3",
+      "https://github.com/skerkour/chacha20-blake3#performance",
+      "https://github.com/skerkour/chacha20-blake3/blob/main/Makefile",
+      "https://github.com/skerkour/chacha20-blake3/blob/main/.cargo/config.toml",
+      "https://github.com/skerkour/chacha20-blake3/blob/main/benchmarks/Cargo.toml",
+      "https://github.com/skerkour/chacha20-blake3/blob/main/benchmarks/benches/encrypt.rs",
+      "https://github.com/skerkour/chacha20-blake3/blob/main/Cargo.toml",
+      "https://hn.algolia.com/api/v1/items/46644084",
+      "https://hn.algolia.com/api/v1/items/39204412"
+    ]
+  }
+]
