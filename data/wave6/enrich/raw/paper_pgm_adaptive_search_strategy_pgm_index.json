@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/qyliu-hkust/bench_search",
+  "one_liner": "Research patch to PGM-index static lookups: hybrid branchless/linear segment search plus cost-model epsilon tuning, up to 2.31x faster.",
+  "what_it_does": "PGM++ is a modified copy of gvinciguerra's static PGMIndex for sorted uint64 keys, written for a PVLDB 2025 paper and shipped only as benchmark code in exp_pgm/. It keeps upstream's search(key) -> ApproxPos{pos, lo, hi} API and adds search_data(begin, key), which also runs the last-mile search and returns an iterator into your array. The class gains two template parameters (BranchLessSearch, linear_search_threshold) inserted before Floating, so upstream code that passes Floating as the 4th argument will not compile unchanged. The paper also describes a cost-model tuner that picks (eps_i, eps_l) for a space budget, but that tuner is not in the repo.",
+  "how_it_is_fast": "The paper finds PGM lookups are memory-bound and dominated by the internal error-bounded searches, which take 69-81% of lookup time in its Table 7. Upstream does these with std::upper_bound once eps_i is above a small threshold. PGM++ replaces them with a CMOV-style branchless binary search (base = base[half-1] < k ? base + half : base), falls back to a linear scan for tiny ranges, and uses the branchless search for the last-mile step too; per the Table 9 ablation, removing this makes lookups 39-60% slower. The paper adds two more pieces: 'layer bypassing', which starts the descent at the first level whose child level is dense (12-22% in the same ablation), and a calibrated cost model that estimates leaf-segment count from gap mean/variance via kernel change-point detection on a 0.05% sample and then picks the eps_i with the lowest modeled lookup cost.",
+  "when_to_use": [
+    "You already use the static pgm::PGMIndex on sorted 64-bit integer keys and profiling shows the internal segment search dominates. Porting the ~20-line branchless bound from exp_pgm/search_algo.h is the cheap change behind the paper's 1.2x-2.2x at equal eps_l.",
+    "Read-only lookups over large in-memory sorted arrays (200M-800M uint64 keys in the paper) where you want a learned index with a guaranteed maximum error instead of RMI's data-dependent error (the paper measured RMI max error up to 1.77M positions on osm).",
+    "Tight index-memory budgets: the paper reports a 0.1 MB PGM++ beating a 100+ MB CDFShop-tuned RMI on the wiki dataset.",
+    "Reproducing or extending the study. exp_pgm/main.cpp sweeps the full eps_l x eps_i grid over {4..1024}, and exp_rmi/ holds the pre-generated CDFShop RMI models for all 7 datasets.",
+    "Hosts with relatively low memory latency. On osm the average gain over PGM was 1.78x on the i7-13700K and Apple M3 but only 1.32x on the EPYC 7413 server."
+  ],
+  "when_not_to_use": [
+    "As a production dependency. This is a benchmark harness with no LICENSE for the PGM++-specific files, no tests, no build system beyond a one-line g++ command, and no code changes since 2024-10-02.",
+    "Updatable workloads. The repo contains only the static PGMIndex; the paper's DPGM++ is not published there, and even in the paper ALEX has the highest throughput on every mix except write-heavy (80%) and write-only.",
+    "Keys that follow smooth normal or lognormal distributions: in the paper, CDFShop-tuned RMI (with cubic-spline models) beats both PGM and PGM++ there.",
+    "Code that probes keys larger than the maximum indexed key, or that relies on getting end(): the branchless helpers never return the end iterator (see gotchas).",
+    "If you need upstream's other structures (DynamicPGMIndex, compressed/bucketing/Elias-Fano variants, multidimensional). Only pgm_index.h and piecewise_linear_model.h are vendored."
+  ],
+  "integration": {
+    "form": "source-drop (loose headers in exp_pgm/: pgm_index.h, piecewise_linear_model.h, search_algo.h; no packaging)",
+    "dependencies": "none beyond the C++ standard library; OpenMP is optional (with -fopenmp construction runs in parallel on up to 20 threads; without it a #pragma message is emitted and construction is single-threaded)",
+    "min_toolchain": "C++17 (README builds with g++ -std=c++17; the paper used g++ 11.4 and clang++ 15)",
+    "platforms": "x86-64 and aarch64 as tested in the paper (i7-13700K, EPYC 7413, Apple M3); no intrinsics are required (the __builtin_prefetch path is compiled out by default); Windows not documented",
+    "thread_safety": "not documented; lookups do not mutate the index, but search_data() is declared non-const, so it cannot be called on a const PGMIndex",
+    "drop_in_for_baseline": "partial: same search()/ApproxPos semantics as upstream PGMIndex, but the template parameter list changes and only the static index is included"
+  },
+  "gotchas": [
+    "search::lower_bound_branchless and upper_bound_branchless never return end. When every element in the range is below (or not above) the key, they return the last element instead. I checked a Python port of the exact loops against bisect on 20k random cases, and every mismatch was this end case. The benchmark only queries existing keys, so this path is never exercised.",
+    "Build flags: the README command and exp_rmi/Makefile_all pass no -O flag, so the documented builds compile both PGM and PGM++ at -O0, and the paper does not state flags. Re-measure at -O2/-O3 before trusting the ratios.",
+    "The artifact's 'original PGM' baseline is PGMIndex<..., false, 0, float>. linear_search_threshold=0 forces std::upper_bound on every internal level, whereas upstream master linear-scans when EpsilonRecursive <= 8*64/sizeof(Segment) = 32. For eps_i of 4-32 the in-repo baseline is therefore not upstream's code path.",
+    "The code covers only part of what the paper's ablation credits. Layer bypassing is commented out in segment_for_key (start_level is computed but unused), the last-mile search has no linear-scan branch, and the KCPD/cost-model tuner is absent."
+  ],
+  "pick_this_over_siblings_when": "Pick it over the PGM-index sibling only when you want PGM's guaranteed error bound with faster static lookups and are willing to vendor unlicensed research code, or just port its branchless search. CHT (which reports 1.7-2.5x over PGM), RadixSpline and RMI are different static designs, RMI still wins on normal/lognormal keys, and ALEX or LIPP are the choice when you need inserts.",
+  "verified_claims_summary": "The PVLDB 2025 paper reports up to 2.31x faster lookups than the original PGM-Index and up to 1.56x faster than CDFShop-tuned RMI at comparable index size. It tested 4 SOSD datasets (fb and wiki at 200M uint64 keys, books and osm at 800M) plus 3 synthetic sets, on an i7-13700K and 2x EPYC 7413 with g++ 11.4 and on an Apple M3 with clang++ 15; the body gives 1.2x-2.2x over PGM at equal eps_l. There is no stdlib or B+-tree baseline in the static comparison, and optimization flags are unstated. The public harness times 5,000 lookups per round, each wrapped in its own high_resolution_clock pair, and its documented build has no -O flag, while the paper's text says 100M lookups.",
+  "status_note": "Stale, low-adoption research artifact: 6 stars, code last touched 2024-10-02 (README 2025-02-01), no LICENSE for the PGM++ files (the vendored PGM headers keep Apache-2.0), and upstream PGM-index issue #58, which proposed upstreaming it, has had no reply since 2024-10-20.",
+  "sources_read": [
+    "https://github.com/qyliu-hkust/bench_search",
+    "https://github.com/qyliu-hkust/bench_search/blob/main/README.md",
+    "https://github.com/qyliu-hkust/bench_search/blob/main/exp_pgm/main.cpp",
+    "https://github.com/qyliu-hkust/bench_search/blob/main/exp_pgm/pgm_index.h",
+    "https://github.com/qyliu-hkust/bench_search/blob/main/exp_pgm/piecewise_linear_model.h",
+    "https://github.com/qyliu-hkust/bench_search/blob/main/exp_pgm/search_algo.h",
+    "https://github.com/qyliu-hkust/bench_search/blob/main/exp_pgm/utils.h",
+    "https://github.com/qyliu-hkust/bench_search/blob/main/exp_rmi/Makefile_all",
+    "https://github.com/qyliu-hkust/bench_search/blob/main/data/gen_data.sh",
+    "https://github.com/qyliu-hkust/bench_search/blob/main/data/gen_normal.py",
+    "https://github.com/qyliu-hkust/bench_search/commits/main",
+    "https://www.vldb.org/pvldb/vol18/p2886-liu.pdf",
+    "https://arxiv.org/abs/2410.00846",
+    "https://github.com/gvinciguerra/PGM-index",
+    "https://github.com/gvinciguerra/PGM-index/tree/master/include/pgm",
+    "https://raw.githubusercontent.com/gvinciguerra/PGM-index/master/include/pgm/pgm_index.hpp",
+    "https://raw.githubusercontent.com/gvinciguerra/PGM-index/master/include/pgm/piecewise_linear_model.hpp",
+    "https://github.com/gvinciguerra/PGM-index/issues/58",
+    "https://hn.algolia.com/api/v1/search?query=PGM%2B%2B&tags=story",
+    "https://hn.algolia.com/api/v1/search?query=%22Why%20Are%20Learned%20Indexes%20So%20Effective%22"
+  ],
+  "confidence": 0.8
+}
