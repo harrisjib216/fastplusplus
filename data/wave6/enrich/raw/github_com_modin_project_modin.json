@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/modin-project/modin",
+  "one_liner": "Parallel, partitioned pandas API on Ray, Dask or MPI; wins over pandas on heavy single ops, loses on small ones.",
+  "what_it_does": "Modin reimplements the pandas API as modin.pandas, so the usual adoption path is to swap the import. The docs also support converting only a hot section with modin.pandas.io.from_pandas(df) and turning the result back with .modin.to_pandas(). Data is split into a grid of partitions that are pandas DataFrames held in the engine's object store (Ray by default, or Dask or MPI through unidist), and work runs on one machine or a cluster. Methods Modin has not parallelized fall back to real pandas and issue a warning.",
+  "how_it_is_fast": "Modin gets no faster kernels. It runs ordinary pandas code on many partitions at once in worker processes, which sidesteps pandas' single thread and the GIL. A query compiler maps pandas calls onto a small dataframe algebra: map, MapReduce-style reduce, full-axis (whole row or column) functions and shuffles. groupby.apply(), transform() and rolling() always use a range-partitioning shuffle, which moves each group into one partition so the Python UDF runs per partition in parallel. That is how the benchmark's iterrows-heavy UDF gained about 8x. Low-cardinality groupby aggregations use MapReduce, merge defaults to a broadcast join, and Ray can spill the object store to disk for data larger than memory.",
+  "when_to_use": [
+    "A pandas pipeline where one or a few operations dominate the runtime and each already takes more than about 5 s in pandas, especially groupby().apply() with an arbitrary Python UDF. The benchmark's 258 s groupby.apply dropped to 31-35 s.",
+    "Row-wise or column-wise apply(), groupby().rolling() and large read_csv on multi-GB data. The author's chart shows 6.2x for apply, 4.3x for groupby-rolling, 2.0x for merge and 1.7x for read_csv on 8 cores, conversion time included.",
+    "Machines with at least 4 cores / 8 threads and 32 GB RAM (the blog's stated minimum), or an existing Ray/Dask cluster you want to point pandas code at without rewriting it.",
+    "Data somewhat larger than RAM on a single node, using Ray object-store spilling to disk, when you must keep the pandas API.",
+    "Keeping the rest of the workflow in plain pandas and converting only the hot block (from_pandas ... to_pandas). In the benchmark this mixed mode beat a full import swap end to end: 40.8 s vs 55.0 s, against 263.5 s for pandas."
+  ],
+  "when_not_to_use": [
+    "Short operations or many small ones. In the benchmark, every non-groupby stage got slower under full Modin (read and preprocess 1.0 s to 6.2 s, fit/predict 2.6 s to 7.4 s). A 10,000-iteration Python for-loop over df filters went from 79 s in pandas to 905 s in Modin, about 11x slower (0.007 s vs 0.09 s per iteration).",
+    "Vectorized analytical queries on modest data or few cores. Issue #6948 reported TPC-H Q1/Q6 at SF1 slower than pandas on a 4-core box, and a maintainer then reproduced poor results up to SF10 on a 16-core machine. He traced it to deferred-execution metadata being materialized sequentially.",
+    "Stacks on pandas 3.x or new Python versions. setup.py pins pandas >=2.2,<2.4 and CI tests only Python 3.9-3.11.",
+    "Long-lived production code that needs an active upstream. The last release was 0.37.1 on 2025-10-02 and the only later commit is a typo fix (2026-02-10). Issue #7704 (July 2026), which asks whether the project will be archived, has no reply, and correctness bug reports from Nov-Dec 2025 (#7690-#7694) have no response.",
+    "Code that needs bit-for-bit pandas results. The troubleshooting guide documents per-partition dtype inference differences in read_csv, and range-partitioned groupby on multiple keys may return unsorted results even with sort=True (#6875)."
+  ],
+  "integration": {
+    "form": "module (pure-Python package `modin` on PyPI/conda-forge; engines installed as extras: modin[ray], modin[dask], modin[mpi], modin[all])",
+    "dependencies": "pandas>=2.2,<2.4, numpy>=1.22.4, fsspec, psutil, packaging, typing-extensions; plus one engine: ray>=2.10,<3 with pyarrow>=10.0.1, or dask/distributed>=2.22, or unidist[mpi] (needs a system MPI implementation installed first)",
+    "min_toolchain": "Python >=3.9 (CI runs 3.9 by default and 3.10/3.11 on scheduled runs; newer versions are not in CI); pandas 2.2-2.3 only",
+    "platforms": "Linux, macOS and Windows via pip (per README; CI clean-install on Ubuntu and Windows); single node or multi-node Ray/Dask/MPI clusters",
+    "thread_safety": "Not documented. The docs strongly advise against combining Modin with Python multiprocessing, because it duplicates Ray clusters and causes undefined behavior, and they say that changing the engine after the first operation is undefined behavior.",
+    "drop_in_for_baseline": "partial: the import swap works for most code (the README badge shows 90.8% DataFrame and 88.05% Series API coverage), but uncovered methods silently fall back to single-threaded pandas at a conversion cost, passing pandas objects into Modin calls slows them down or raises an error, and some results differ (read_csv dtypes, groupby sort order)"
+  },
+  "gotchas": [
+    "Default-to-pandas is a performance cliff. An unimplemented method gathers the whole partitioned frame into one pandas DataFrame, runs it single-threaded, then re-partitions it, and the only signal is a warning.",
+    "Benchmarking is tricky. Execution is deferred on Ray, so call modin.utils.execute(df) before stopping a timer. The first operation also pays engine start-up and worker warm-up (the troubleshooting guide's 'poor performance of the first operation'), so warm up before timing.",
+    "Partitioning needs tuning on wide or square frames. NPartitions caps splits per axis, so a square frame gets NPartitions^2 blocks: the docs' 112-core example has 12,544 partitions and 10x df.abs() taking 23.64 s, versus 0.25 s after setting NPartitions to sqrt(cores). Frames can also become unbalanced after many column inserts, which needs df._repartition().",
+    "merge defaults to a broadcast join that turns the right frame into pandas and ships it to every left row partition. Put the smaller frame on the right, or set cfg.RangePartitioning, which covers only left/inner joins on a single `on` column."
+  ],
+  "pick_this_over_siblings_when": "Pick Modin over cuDF (cudf.pandas) when you have no NVIDIA GPU, and over FireDucks when you need Apache-2.0 source, Windows or a multi-node Ray/Dask cluster, or when your hot spot is a Python-UDF groupby.apply, which Modin runs in parallel and FireDucks' own catalog entry lists as slower than pandas. For vectorized TPC-H-style pipelines, Xorbits (which claims ~4x faster than Modin at SF100), FireDucks or chDB are likely the better choice.",
+  "verified_claims_summary": "The benchmark is a single timed run from a first-party blog post by Modin contributor dchigarev (Mar 2024). A simplified Kaggle customer-segmentation script ran a groupby(['CustomerID','StockCode']).apply() with an iterrows-based UDF: pandas 2.2.1 took 257.6 s, Modin 0.28.0 on Ray 2.9.1 took 35.0 s when only that block was wrapped (about 7.4x, conversions and Ray start-up included) and 30.7 s under a full import swap (8.4x by arithmetic; the table labels it 8.56x). The machine was an 8-core/16-thread Xeon W-2245 with 64 GB on Ubuntu 22.04 and Python 3.9.18; there are no compiler flags (pure Python), and the dataset size is not stated.",
+  "status_note": "The record says active, but development has effectively stalled: the last release was 0.37.1 (Oct 2025), the only commit since is a Feb 2026 typo fix, and a July 2026 issue asking about archival has no reply. It is Apache-2.0, pure Python and pip-installable today, but it is pinned to pandas <2.4.",
+  "sources_read": [
+    "https://github.com/modin-project/modin",
+    "https://github.com/modin-project/modin/blob/main/setup.py",
+    "https://github.com/modin-project/modin/blob/main/docs/supported_apis/defaulting_to_pandas.rst",
+    "https://github.com/modin-project/modin/blob/main/docs/usage_guide/optimization_notes/index.rst",
+    "https://github.com/modin-project/modin/blob/main/docs/usage_guide/optimization_notes/range_partitioning_ops.rst",
+    "https://github.com/modin-project/modin/blob/main/docs/getting_started/faq.rst",
+    "https://github.com/modin-project/modin/blob/main/docs/getting_started/troubleshooting.rst",
+    "https://github.com/modin-project/modin/blob/main/docs/getting_started/why_modin/out_of_core.rst",
+    "https://github.com/modin-project/modin/blob/main/docs/development/architecture.rst",
+    "https://github.com/modin-project/modin/blob/main/modin/core/storage_formats/pandas/query_compiler.py",
+    "https://github.com/modin-project/modin/blob/main/.github/workflows/ci.yml",
+    "https://github.com/modin-project/modin/commits/main",
+    "https://github.com/modin-project/modin/releases",
+    "https://github.com/modin-project/modin/issues/6948",
+    "https://github.com/modin-project/modin/issues/7704",
+    "https://github.com/modin-project/modin/issues/7693",
+    "https://github.com/modin-project/modin/issues?q=slower+than+pandas",
+    "https://pypi.org/pypi/modin/json",
+    "https://dchigarev.github.io/modin_perf_examples/gh_page_1.html",
+    "https://github.com/dchigarev/modin_perf_examples",
+    "https://github.com/dchigarev/modin_perf_examples/blob/master/gh_page_1/customer_segmentation_simplified.py",
+    "https://github.com/dchigarev/modin_perf_examples/blob/master/requirements.txt",
+    "https://raw.githubusercontent.com/dchigarev/modin_perf_examples/master/docs/imgs/img2_customer_segmentation_pandas_vs_modin.jpg",
+    "https://raw.githubusercontent.com/dchigarev/modin_perf_examples/master/docs/imgs/img3_customer_segmentation_mixed_pandas_modin.jpg",
+    "https://raw.githubusercontent.com/dchigarev/modin_perf_examples/master/docs/imgs/img4_heavy_operations.jpg",
+    "https://raw.githubusercontent.com/dchigarev/modin_perf_examples/master/docs/imgs/img6_modin_in_a_for_loop.jpg"
+  ],
+  "confidence": 0.8
+}
