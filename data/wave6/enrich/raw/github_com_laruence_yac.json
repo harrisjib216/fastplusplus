@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/laruence/yac",
+  "one_liner": "PHP extension: lock-free shared-memory key/value cache for FPM workers on one host, replacing local Memcached/APCu without a network hop.",
+  "what_it_does": "Yac is a C extension for PHP (PECL/PIE) that keeps a user-data cache in a shared-memory segment created at module startup and inherited by every forked PHP-FPM worker, so any worker on the machine can read what another wrote. Its API is a `Yac` class with memcached-like add/set/get/delete/has/flush plus info/dump, multi-key array forms, TTL in seconds and a per-instance key prefix. It is not the Memcached client API, so application code or a framework adapter has to call it. The benchmarked setup used the author's separate wp-yac-cache plugin, a WordPress object-cache.php drop-in that maps wp_cache_* onto Yac.",
+  "how_it_is_fast": "It removes the network: a get() is a MurmurHash64A lookup into a fixed power-of-two slot table in already-mapped memory. It probes at most 4 slots (home slot plus an odd stride) and copies the value out, with no socket, loopback TCP round trip or protocol encoding. Concurrency is lock-free. Each slot has a seqlock-style version counter: readers snapshot it and retry, and writers claim it with a CAS, giving up after 30 spins. Values sit in ring segments handed out by a CAS bump pointer. On every read a full CRC-32C check (SSE4.2 or ARMv8 hardware, detected at runtime) turns recycled or torn blocks into misses instead of taking a lock. Small scalars and strings up to 7 bytes are embedded in the slot's pointer word, and values that fit beside the key in the 48-byte key area are stored inline, so neither needs a value block. Values over 4K are LZ4-compressed by default.",
+  "when_to_use": [
+    "A single PHP-FPM host, or a few independent ones, where Memcached or Redis on localhost serves only as a same-machine cache: the WordPress object cache, config, routing tables, rendered fragments.",
+    "Requests that do dozens to hundreds of cache gets each, where localhost TCP round trips per get add up. This is the WordPress case: about 19% more RPS even though the ceiling is set by PHP and MySQL.",
+    "Read-heavy access (the project's own benchmark uses 100:1 read:write) with many small values. Ints, bools, null and strings of 7 bytes or less live in the slot and skip value allocation entirely.",
+    "You would rather not run, secure and monitor a cache daemon, and losing the cache on every php-fpm restart is acceptable.",
+    "PHP 7.0-8.5 on Linux x86-64/ARM64 or Windows (both covered by CI), in NTS or ZTS builds."
+  ],
+  "when_not_to_use": [
+    "Several web nodes that must see each other's writes or invalidations. Each host's segment is private, so a delete or flush on one node never reaches the others.",
+    "Sharing between unrelated processes such as cron jobs, standalone CLI scripts or a second FPM master. Only the process that created the segment and its forked children can attach to it (issue #124), and CLI is disabled by default.",
+    "Write-heavy or hot-key write workloads. set() returns false when it loses the slot CAS race, and the README says to avoid several processes setting the same key at once. The WordPress drop-in's incr/decr is a non-atomic get-then-set, so counters lose updates under concurrency.",
+    "Keys over 48 bytes (PSR-16 requires 64, issue #83), values over 64 MB raw or 1 MB after compression, or incompressible values above the compression threshold, where set() fails if LZ4 would make them bigger.",
+    "Risk-averse production that needs a long-settled engine. The storage layer was largely rewritten in Aug-Sep 2026 (2.4.0-2.4.2): 2.4.2 fixed a get() crash under concurrency and a flush() race that could leave a slot permanently unusable. In 2021 (issue #122) the author said the older partial-CRC Yac 'has a certain probability of error'."
+  ],
+  "integration": {
+    "form": "shared lib (PHP extension yac.so/.dll, installed via PECL, PIE or phpize; the WordPress path adds the wp-yac-cache plugin, which deploys wp-content/object-cache.php)",
+    "dependencies": "none required (LZ4 is bundled, or a system LZ4 via --with-system-lz4); optional msgpack, igbinary or json serializers. The WordPress plugin needs PHP 7.2+ and WordPress 5.6+.",
+    "min_toolchain": "PHP 7.0+ (package.xml; CI builds 7.0 through 8.5). A C compiler with the GCC/Clang __atomic/__sync builtins, or MSVC; configure fails otherwise. Needs mmap(MAP_ANON) or SysV shm.",
+    "platforms": "Linux x86-64 and ARM64 (CI, including a 30-second 16-worker concurrency hammer on both), Windows x64 and x86 (named file mapping), macOS (the author's benchmark machine, not in CI). Hardware CRC-32C is used when SSE4.2 or ARMv8 CRC is detected at runtime, with a slicing-by-8 software fallback otherwise.",
+    "thread_safety": "Safe across processes and ZTS threads through lock-free per-slot version counters (seqlock-style) with CAS claims, a CAS bump allocator and CRC-32C validation on every read. Writes can fail under contention and return false, and the README advises retrying and avoiding concurrent writers on the same key.",
+    "drop_in_for_baseline": "partial — it is neither wire- nor API-compatible with Memcached, so code must call the Yac class, whose add/set/get/delete-with-TTL semantics resemble memcached's. For WordPress, the wp-yac-cache drop-in replaces the Memcached object-cache drop-in with no code changes. However, wp_cache_flush_group only clears the request-local copy, and wp_cache_flush wipes the whole host's Yac memory."
+  },
+  "gotchas": [
+    "Yac::flush() (and so wp_cache_flush()) invalidates the entire shared segment on the host, across every prefix and every app attached to the same PHP master. delete() only writes a tombstone, and memory comes back only when the value ring wraps around.",
+    "Without a default argument, get() returns false for both a miss and a stored false; pass a sentinel default (2.4.0+) to tell them apart. Since 2.4.0, multi-get omits missing keys instead of returning false placeholders, so code that reads $result[$key] directly can raise warnings. The WordPress drop-in writes a stored false as 0.",
+    "In the WordPress drop-in, keys over the 48-byte budget have their key part replaced by a 32-bit crc32b hash and are not re-checked on read. Two long keys in the same group can therefore collide and silently return each other's value. A birthday estimate (derived, not documented) is about a 1% chance with ~10K live long keys in one group. Do not set yac.serializer=json for WordPress either: objects come back as arrays and cause fatal errors.",
+    "Capacity is fixed at startup. keys_memory_size sets the slot count (8M is about 64K slots), and each key can only occupy its 4 probe slots, so live entries can be kicked long before the table fills. A value bigger than one 4M+ segment fails (the 'fails' counter goes up). Size both pools from info() hit, kick and recycle counters."
+  ],
+  "pick_this_over_siblings_when": "Pick Yac when the application is PHP-FPM. It is the only catalogued Memcached-beater whose cache lives in memory shared across forked PHP workers; CacheLib (in-process C++) and python-diskcache (in-process Python) are the equivalents for other runtimes. Stay with a networked cache such as Memcached, Pogocache or Dragonfly when more than one host has to share entries or invalidations.",
+  "verified_claims_summary": "On the author's WordPress site (laruence.com; an 8-core/31 GB server running PHP 8.1 FPM behind Nginx; CPU model and compiler flags not stated), swapping the Memcached object-cache drop-in (memcached on localhost:11211) for the Yac drop-in raised full-homepage throughput from about 118.5 to about 141.5 RPS (+18.6% to +20.1%). It also cut p50 latency by about 16-17% at 20, 50 and 100 concurrent ab clients, with both setups capped by PHP rendering and MySQL; a fixed 10,000-request run gave +17.6%. Yac's own microbenchmark (16 forked workers, 100:1 read:write, Apple M5 Pro, PHP 8.5) reports 170-727x more aggregate ops/s than per-worker TCP connections to a local memcached 1.6.45, which mostly measures the removed loopback round trip rather than cache mechanics.",
+  "status_note": "Actively maintained by the original author: 2.4.2 stable released 2026-09-10, 2.5.0-dev on master, commits through 2026-09-24. Core is PHP-3.01 licensed (GitHub shows NOASSERTION) and the WordPress plugin is GPLv2-or-later. Install from PECL or PIE rather than vendoring, and expect fast-moving internals after the 2026 storage rewrite.",
+  "sources_read": [
+    "https://github.com/laruence/yac",
+    "https://github.com/laruence/yac/blob/master/README.md",
+    "https://github.com/laruence/yac/blob/master/bench/README.md",
+    "https://github.com/laruence/yac/blob/master/bench/mp_bench.php",
+    "https://github.com/laruence/yac/blob/master/storage/yac_storage.c",
+    "https://github.com/laruence/yac/blob/master/storage/yac_storage.h",
+    "https://github.com/laruence/yac/blob/master/storage/yac_atomic.h",
+    "https://github.com/laruence/yac/blob/master/storage/allocator/yac_allocator.c",
+    "https://github.com/laruence/yac/blob/master/php_yac.h",
+    "https://github.com/laruence/yac/blob/master/config.m4",
+    "https://github.com/laruence/yac/blob/master/RELEASE_NOTES.md",
+    "https://github.com/laruence/yac/blob/master/package.xml",
+    "https://github.com/laruence/yac/blob/master/.github/workflows/linux.yml",
+    "https://github.com/laruence/yac/blob/master/.github/workflows/hammer.yml",
+    "https://github.com/laruence/yac/blob/master/.github/workflows/windows.yml",
+    "https://github.com/laruence/yac/issues",
+    "https://github.com/laruence/yac/issues/132",
+    "https://github.com/laruence/yac/issues/128",
+    "https://github.com/laruence/yac/issues/125",
+    "https://github.com/laruence/yac/issues/124",
+    "https://github.com/laruence/yac/issues/122",
+    "https://github.com/laruence/yac/issues/83",
+    "https://github.com/laruence/wp-yac-cache",
+    "https://github.com/laruence/wp-yac-cache/blob/master/README.md",
+    "https://github.com/laruence/wp-yac-cache/blob/master/object-cache.php",
+    "https://github.com/laruence/wp-yac-cache/blob/master/docs/blog-yac-object-cache.md",
+    "https://hn.algolia.com/api/v1/search?query=laruence%20yac&tags=story",
+    "https://hn.algolia.com/api/v1/items/49680028"
+  ],
+  "confidence": 0.78
+}
