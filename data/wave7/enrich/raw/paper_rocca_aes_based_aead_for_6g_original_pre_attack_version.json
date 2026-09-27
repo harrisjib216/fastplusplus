@@ -1,0 +1,59 @@
+{
+  "id": "https://eprint.iacr.org/2022/116",
+  "one_liner": "AES-round-based 256-bit-key AEAD for 6G; ~5x OpenSSL AES-256-GCM at 16 KB on one laptop, much less elsewhere.",
+  "what_it_does": "Rocca (University of Hyogo and KDDI Research, IACR ToSC 2021(2), FSE 2022) is a new nonce-based AEAD, not an AES-GCM implementation, with a 256-bit key, 128-bit nonce and 128-bit tag, aimed at 100+ Gbps single-core software encryption for beyond-5G/6G links. It cannot interoperate with AES-GCM peers. The only first-party code is the C/AES-NI reference in Appendix C of ePrint 2022/116: a streaming rocca_init / rocca_add_ad / rocca_encrypt / rocca_decrypt / rocca_tag API over a rocca_context. The paper also defines a raw encryption-only mode with no AD and no tag.",
+  "how_it_is_fast": "The 1024-bit (128-byte) state holds eight 128-bit words, and each round spends 4 independent aesenc and 4 128-bit XORs, absorbing 32 bytes of message. Every aesenc sits on its own short critical path, so the round pipelines well on AES-NI or ARMv8 AES units. The designers found this layout by searching a wider space of round functions than Jean and Nikolic's (FSE 2016), including a cost-free word permutation. Each 32-byte ciphertext block adds only 2 more AES rounds for keystream, instead of the ~14 per 16 bytes that AES-256-CTR needs plus GHASH.",
+  "when_to_use": [
+    "Benchmarking or research on AES-round-function AEADs (AEGIS, Tiaoxin, Rocca-S, HiAE), where Rocca is a standard point of comparison.",
+    "Bulk AEAD of 8 KB and larger messages on AES-NI x86 or ARMv8 cores in a closed system you control at both ends. At 16 KB it led OpenSSL AES-256-GCM on every CPU in the paper, by 1.5x (i9-11900) to 5.9x (i9-10910), and on every x86 CPU in HiAE's independent tests (e.g. 250.16 vs 51.90 Gbps on a Ryzen 9 7950X).",
+    "Pre-VAES Intel servers (Cascade Lake, Haswell class), where HiAE's own Table 10 puts Rocca ahead of HiAE on large messages (Xeon Gold 6242R: 156.60 vs 133.19 Gbps AEAD at 16 KB).",
+    "Raw encryption-only use (keystream mode with no tag): 180.55 Gbps at 16 KB on the i7-1068NG7, versus 58.19 Gbps for AES-256-CTR."
+  ],
+  "when_not_to_use": [
+    "Short messages (1 KB and under). Initialization and finalization each run 20 rounds, which the paper equates to about 1280 bytes of input per message. Rocca loses to AES-256-GCM at 256 B and 64 B on the paper's own i9-11900 (13.81 vs 15.57 and 3.68 vs 4.51 Gbps), Apple M1 and A15, and at 64 B on all seven x86 CPUs HiAE tested (e.g. 4.00 vs 12.57 Gbps on a Xeon W9-3495X).",
+    "Anywhere key commitment matters (multi-recipient, password-based or message-franking designs). Takeuchi, Todo and Iwata (ToSC 2024(2)) give concrete FROB colliding inputs against the designers' latest version and show that no Rocca version is committing-secure.",
+    "Settings where a nonce could repeat. The same paper shows universal forgery with practical data complexity under nonce misuse, even with an ideal keyed finalization. The original design also fell to a 2^128 full key recovery (Hosoyamada et al., ToSC 2022(3)).",
+    "Production or compliance use: no standard, no FIPS status, no maintained library. The design has been superseded by Rocca-S, whose IETF individual draft (draft-nakano-rocca-s-06) is marked expired and which also has practical committing attacks (ePrint 2024/901).",
+    "Interop with ericlagergren/rocca, the only standalone C implementation. It implements the pre-revision initialization, without the key feedforward (open issue #1 since 2024-10-28), so its ciphertexts do not match the revised cipher that produced the cited numbers."
+  ],
+  "integration": {
+    "form": "source-drop (C listing in Appendix C of ePrint 2022/116). A third-party alternative is ericlagergren/rocca: include/rocca.h plus src/rocca.c, with one-shot rocca_seal/rocca_open, BSD-3-Clause, original Rocca only.",
+    "dependencies": "none beyond libc and compiler intrinsics (immintrin.h). ericlagergren/rocca also uses memset_s from the optional C11 Annex K.",
+    "min_toolchain": "Not documented. The paper never states a compiler or flags. ericlagergren/rocca builds its tests with -O2 -maes and passes the Apple-clang-only '-arch x86_64' flag, which suggests it was developed on macOS.",
+    "platforms": "x86-64 with AES-NI and SSE2 (the paper's Appendix C). The paper also benchmarks ARM NEON + AES builds on Apple M1, A15 and Snapdragon 888 but does not print them. ericlagergren/rocca supports x86-64 (SSE2 + AES) and ARMv8 (NEON + Crypto) and fails with #error elsewhere.",
+    "thread_safety": "Not documented. The reference keeps all state in a caller-owned rocca_context, and ericlagergren/rocca keeps it on the stack per call with only const globals, so separate contexts share nothing.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Several incompatible 'Rocca' variants exist. The ToSC 2021 original has no key feedforward. The ePrint revision (last updated 2023-03-16) XORs the key into S[0] and S[4] after initialization; this is the version benchmarked at 150.95 Gbps. An intermediate version added a finalization key feedforward that was later removed. Rocca-S is a separate cipher with a 256-bit tag. Check test vectors against the exact version.",
+    "ericlagergren/rocca mishandles partial blocks: rocca_seal copies the tail from the start of the plaintext and AD (memcpy(tmp, plaintext, remain)) and writes the partial ciphertext to dst[0]. Any input longer than 32 bytes that is not a multiple of 32 is therefore processed wrongly, and its tests (64-byte plaintexts, AD of 18 or 32 bytes) never exercise that path.",
+    "The paper's streaming reference decrypts before the tag is checked and has no verify function. The caller must compute the tag with rocca_tag and compare it in constant time. Each encrypt or AD call zero-pads its own tail, so only the final chunk may be a non-multiple of 32 bytes.",
+    "The headline 5.2x rests on a weak baseline. OpenSSL AES-256-GCM measures 29.08 Gbps on the i7-1068NG7 but 117.60 on the paper's i9-11900 and 57.87 on its i9-12900K, and the baseline numbers are identical to two decimals across ePrint revisions whose OpenSSL version label changes."
+  ],
+  "pick_this_over_siblings_when": "libaegis is the deployable choice: it is maintained, and in HiAE's independent Table 10 AEGIS-128L beats Rocca at 1 KB and below on all seven x86 CPUs. HiAE is faster than Rocca on VAES-era CPUs, and Rocca is about 5x SNOW-V-GCM. Pick Rocca only for research baselines or large-message bulk encryption on pre-VAES Intel servers, and only if its committing and nonce-misuse weaknesses are acceptable.",
+  "verified_claims_summary": "The authors built Rocca into OpenSSL 3.1.0-dev and ran it single-threaded on an Intel i7-1068NG7 with 13-byte AD; compiler and flags are not stated. Rocca reached 150.95 Gbps AEAD at 16 KB, versus 29.08 Gbps for OpenSSL AES-256-GCM and 7.60 for ChaCha20-Poly1305. These are numbers for the revised, key-feedforward Rocca; the peer-reviewed ToSC 2021 original reported 138.22 vs 30.59 / 7.57 Gbps, and on the paper's i9-11900 the margin shrinks to 175.12 vs 117.60 Gbps.",
+  "status_note": "Abandoned as a design, usable only as a reference. The authors' last revision is dated 2023-03-16, the successor Rocca-S's IETF draft is expired, and the only standalone C code (ericlagergren/rocca, BSD-3-Clause, 5 stars) was last committed 2022-01-28, implements the pre-revision cipher, and has an unanswered issue saying so.",
+  "sources_read": [
+    "https://eprint.iacr.org/2022/116",
+    "https://eprint.iacr.org/2022/116.pdf",
+    "https://eprint.iacr.org/archive/versions/2022/116",
+    "https://tosc.iacr.org/index.php/ToSC/article/download/8904/8480",
+    "https://api.crossref.org/works/10.46586/tosc.v2021.i2.1-30",
+    "https://api.crossref.org/works/10.46586/tosc.v2022.i3.123-151",
+    "https://api.crossref.org/works/10.46586/tosc.v2024.i2.85-117",
+    "https://api.crossref.org/works/10.46586/tosc.v2024.i1.135-157",
+    "https://eprint.iacr.org/2024/901",
+    "https://eprint.iacr.org/search?q=Rocca",
+    "https://eprint.iacr.org/2025/377.pdf",
+    "https://github.com/ericlagergren/rocca",
+    "https://github.com/ericlagergren/rocca/blob/main/include/rocca.h",
+    "https://github.com/ericlagergren/rocca/blob/main/src/rocca.c",
+    "https://github.com/ericlagergren/rocca/blob/main/src/rocca_amd64.h",
+    "https://github.com/ericlagergren/rocca/blob/main/test/test.c",
+    "https://github.com/ericlagergren/rocca/blob/main/test/Makefile",
+    "https://github.com/ericlagergren/rocca/issues/1",
+    "https://github.com/jedisct1/zig-rocca-s",
+    "https://datatracker.ietf.org/api/v1/doc/document/draft-nakano-rocca-s/"
+  ],
+  "confidence": 0.8
+}

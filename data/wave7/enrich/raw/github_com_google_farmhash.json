@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/google/farmhash",
+  "one_liner": "Google's CityHash successor. Its SSE4.1 32-bit hash is 3.9x City32 and ~6% faster than XXH3 on large x86-64 inputs.",
+  "what_it_does": "FarmHash is Google's family of non-cryptographic string hashes (Geoff Pike, v1.1, 2015), shipped as two files: src/farmhash.h and src/farmhash.cc. The API is free functions in namespace util (renamable via NAMESPACE_FOR_HASH_FUNCTIONS) that take (const char*, size_t). Hash32, Hash64, Hash128, their WithSeed forms and Hash() may change across platforms, compiler flags and NDEBUG. Fingerprint32, Fingerprint64 and Fingerprint128 are 'forever-fixed', and templates accept std::string-like types. It is one-shot only, with no streaming state, and it is not a drop-in for CityHash or XXH3 names or values, except that Hash128/Fingerprint128 reproduce CityHash128 v1.1.1.",
+  "how_it_is_fast": "On x86-64 builds with SSE4.1, Hash32 returns the low 32 bits of farmhashte::Hash64. For inputs of 512 bytes or more, its Hash64Long loop reads 256-byte blocks as sixteen unaligned 128-bit loads and mixes them across twelve SSE registers with 64-bit adds, XORs, _mm_mullo_epi32 multiplies and _mm_shuffle_epi8 byte shuffles. It then reduces the state with the scalar farmhashxo hash. Shorter inputs, and every seeded 64- or 128-bit call, run CityHash-lineage scalar code instead: farmhashxo/na use 64-bit multiply-rotate-xor mixing, farmhashcc is CityHash v1.1.1 and farmhashmk is Murmur3-style. The variant is chosen at compile time from the -msse4.1/-msse4.2/-maes/-mavx macros, and NEWS says AVX encoding makes the SIMD path slightly faster.",
+  "when_to_use": [
+    "You must reproduce existing FarmHash values, such as BigQuery's FARM_FINGERPRINT (documented as FarmHash Fingerprint64, 'will never change') or other Google/TensorFlow-derived data, where the Fingerprint* functions are the portable contract.",
+    "You are moving C++ code off CityHash and want the same one-shot API style: Fingerprint128/Hash128 keep CityHash128 v1.1.1 output, and Hash32 on an x86-64 SSE4.1 build is about 3.85x City32's bulk throughput in the same SMHasher run.",
+    "In-process 32-bit hashing of large buffers (512 B and up) on x86-64 machines you build for with -msse4.1 or -mavx, where the hash is never persisted or sent across machines.",
+    "You already vendor it, for example through TensorFlow, whose build files pull in farmhash, and a ~6% bulk edge over XXH3 is enough reason not to add another dependency."
+  ],
+  "when_not_to_use": [
+    "Small keys: 46.75 cycles/hash on 1-32 byte keys vs 29.46 for xxh3, 28.91 for wyhash and 22.04 for rapidhash, and 258.73 vs 220.07 cycles in SMHasher's hash-map column against xxh3. It also compiles to 11,489 bytes of code vs 744 for xxh3.",
+    "You need 64- or 128-bit seeded output: seeded FarmHash64 (12,930 MiB/s) and FarmHash128 (14,454 MiB/s) lose to xxh3 (20,854) and xxh128 (19,260) on the same run, and FarmHash64 even loses to City64 (14,390).",
+    "Stored or cross-machine hashes built on Hash*: output depends on CPU flags, pointer width, endianness and NDEBUG. Issue #37 (open) reports wrong Hash64/Hash128 values on FreeBSD, and rurban calls FarmHash 'not portable, too machine specific'.",
+    "ARM/aarch64 or builds without SSE4.1: src/farmhash.cc has no NEON code and falls back to the scalar farmhashmk/farmhashxo paths, so the measured win does not apply. Big-endian is 'only lightly tested'.",
+    "You need streaming/incremental hashing, hash-flooding resistance, or an actively developed library: there is no incremental API, the README disclaims cryptographic use, there is no tagged release (issue #31), and there have been no substantive code changes since 2019."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (standard C/C++ headers; x86 intrinsic headers only when SSE/AES/AVX flags are enabled). An optional autoconf build can `make install` a library.",
+    "min_toolchain": "Not documented. The code avoids C++11 requirements (it falls back to <algorithm> for std::swap) and assumes __builtin_expect unless FARMHASH_NO_BUILTIN_EXPECT is defined. Open issue #6 reports that gcc 4.3 and older lack <immintrin.h>. MinGW and clang+libc++ C++17 build fixes were merged in 2018-2019.",
+    "platforms": "Any 32/64-bit platform that allows unaligned reads (per the header). The fast path is x86-64 with SSE4.1, and AVX is slightly better. 32-bit x86 uses SSE4.2 (+AES-NI) variants. Other targets, including aarch64, get scalar code. Built mainly for little-endian.",
+    "thread_safety": "Not documented. By inspection the hash functions are stateless: they read only const input and static const constants, so concurrent calls are safe. The optional FARMHASHSELFTEST self-test writes to stdout and calls std::exit().",
+    "drop_in_for_baseline": "partial — Fingerprint128/Hash128 equal CityHash128 v1.1.1 (rurban's FarmHash128 verification value 0x305C0D9A matches City128), and farmhashcc::Hash32 is 'equivalent to CityHash32 (v1.1.1)'. The fast Hash32 and the Hash64 variants produce different values from CityHash and XXH3, use different function names, and have no streaming API."
+  },
+  "gotchas": [
+    "Hash()/Hash32/Hash64/Hash128 values change with build flags and NDEBUG. Without NDEBUG, FARMHASH_DEBUG=1 and DebugTweak scrambles every Hash* result, so debug and release binaries disagree. Persist only Fingerprint32/64/128.",
+    "Seeded and unseeded entry points run different algorithms. On x86-64 with SSE4.1, Hash32 and Hash32WithSeed use the SIMD farmhashte core, but only for inputs of 512 bytes or more. Hash64 uses farmhashte only if SSE4.2 is also enabled, while Hash64WithSeed and Hash64WithSeeds always use scalar farmhashna, which is why SMHasher's seeded FarmHash64 has 42% lower bulk throughput than FarmHash32. rurban marks unseeded Hash64 POOR ('misses on final avalanche') and leaves it out of the table.",
+    "CPU selection happens at compile time only: there is no cpuid check and no multiversioning in src/farmhash.cc, despite the README's hint. FARMHASH_ASSUME_* forces a path, and a binary built with -mavx/-msse4.1 will fault on CPUs without them. Calling a variant namespace such as farmhashte:: when its features were not compiled in hits FARMHASH_DIE_IF_MISCONFIGURED, which deliberately writes to address len%17 and crashes.",
+    "Hash32WithSeed has a known bad seed: SMHasher's BadSeeds test shows seed 0x2b091701 with a 16-byte all-zero key hashing to 0 (FAIL). Separately, the header's template Hash128WithSeed(const Str&, seed) calls a nonexistent 3-argument Hash128 and will not compile if instantiated, so use the (const char*, size_t, uint128_t) overload."
+  ],
+  "pick_this_over_siblings_when": "On the same rurban run, wyhash beats FarmHash32 on both bulk (22,641 MiB/s) and small keys (28.91 cycles), with 64-bit output and portable results. xxHash's XXH3 is much faster on small keys and portable, and gxhash, falkhash and CLHash are faster in bulk. Pick FarmHash only when you need FarmHash- or CityHash-compatible values (Fingerprint64 as in BigQuery, or Fingerprint128 = CityHash128 v1.1.1) or already vendor it.",
+  "verified_claims_summary": "rurban's SMHasher README table (AMD Ryzen 5 3350G, CMake Release with -march=native, compiler version not stated) measured rurban's vendored copy of Google FarmHash32WithSeed at 22,136 MiB/s on 262,144-byte keys. That compares with 20,854 MiB/s for xxh3 (~1.06x, 32-bit vs 64-bit output) and 5,746 MiB/s for City32 (~3.85x). The same run shows FarmHash32 slower than xxh3 on 1-32 byte keys (46.75 vs 29.46 cycles/hash) and the seeded 64/128-bit FarmHash variants slower than xxh3/xxh128. No C++ std hash was compared, and FarmHash's own README and NEWS give no numbers.",
+  "status_note": "Marked active only because of the commit date: the 2026-06-05 commits merge a 2020 README rename (#39) and a 2018 'remove using namespace std' fix (#25). The last substantive code change was in 2019, there is no release tag and 15 issues are open. It is MIT-licensed and small enough to vendor as two files (farmhash.cc is 11,840 lines, mostly generated self-test tables).",
+  "sources_read": [
+    "https://github.com/google/farmhash",
+    "https://github.com/google/farmhash/blob/master/README.md",
+    "https://github.com/google/farmhash/blob/master/NEWS",
+    "https://github.com/google/farmhash/blob/master/src/farmhash.h",
+    "https://github.com/google/farmhash/blob/master/src/farmhash.cc",
+    "https://github.com/google/farmhash/commits/master",
+    "https://github.com/google/farmhash/issues?q=is%3Aissue",
+    "https://github.com/google/farmhash/issues/37",
+    "https://github.com/google/farmhash/issues/35",
+    "https://github.com/google/farmhash/issues/24",
+    "https://github.com/google/farmhash/issues/12",
+    "https://github.com/google/farmhash/issues/6",
+    "https://github.com/google/farmhash/issues/2",
+    "https://github.com/google/farmhash/issues/20",
+    "https://github.com/google/farmhash/pull/39",
+    "https://github.com/google/farmhash/pull/25",
+    "https://github.com/rurban/smhasher/blob/master/README.md",
+    "https://raw.githubusercontent.com/rurban/smhasher/master/README.md",
+    "https://github.com/rurban/smhasher/blob/master/main.cpp",
+    "https://github.com/rurban/smhasher/blob/master/FarmTest.cc",
+    "https://raw.githubusercontent.com/rurban/smhasher/master/doc/FarmHash32.txt",
+    "https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/hash_functions",
+    "https://github.com/search?q=repo%3Atensorflow%2Ftensorflow+farmhash&type=code"
+  ],
+  "confidence": 0.8
+}

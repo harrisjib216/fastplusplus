@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/blake3-team/blake3",
+  "one_liner": "Official Rust/C implementation of BLAKE3, a Merkle-tree hash/XOF/MAC about 4x faster than SHA-256 on long single-core inputs.",
+  "what_it_does": "Implements the BLAKE3 hash function, which covers what SHA-256/SHA3-256 do (a collision-resistant 256-bit digest) and adds keyed-MAC, key-derivation and extendable, seekable-output modes in one algorithm with no variants. The Rust crate offers blake3::hash(), an incremental Hasher (update/finalize/finalize_xof), keyed_hash and derive_key; the C library offers blake3_hasher_init/update/finalize with the same modes, and b3sum is a sha256sum-style CLI. The digests differ from SHA-2/SHA-3/BLAKE2, so it can replace those only where you control both the side that computes the hash and the side that checks it.",
+  "how_it_is_fast": "The input is cut into 1 KiB chunks that form the leaves of a binary Merkle tree (derived from the Bao tree mode), so chunks are independent and the SIMD code compresses 4, 8 or 16 of them at once, one 32-bit word per vector lane (SSE4.1/AVX2/AVX-512). This 'word-based' parallelism is why throughput jumps between 2 and 16 KiB. The compression function is BLAKE2s's 32-bit ARX core, with rounds cut from 10 to 7 and a message schedule simplified to one repeated permutation. On x86-64, runtime CPU detection selects hand-written assembly, and optional Rayon (Rust) or oneTBB (C) spreads subtrees across cores.",
+  "when_to_use": [
+    "Content addressing, deduplication, build caches and file-integrity checks on inputs of several KiB or more, where you choose the hash (the README lists Cargo, ccache, Bazel, Nix, LLVM and OpenZFS as adopters).",
+    "x86-64 hosts with AVX2 or AVX-512: on eBASH, single-thread long-message cost is 0.51-0.60 cycles/byte, against 2.02-2.21 for SHA-NI SHA-256 and 5.5-6.5 for SHA3-256.",
+    "Hashing large in-memory buffers or files on many cores: update_rayon, update_mmap_rayon and blake3_hasher_update_tbb split the tree across threads, and the spec shows near-linear scaling up to 16 threads.",
+    "When you need a MAC, a KDF or arbitrary-length/seekable output and would otherwise layer HMAC/HKDF/SHAKE on a plain hash.",
+    "Verified streaming or incremental verification of large blobs through the tree structure (the Bao project)."
+  ],
+  "when_not_to_use": [
+    "Formats or protocols that mandate SHA-256/SHA-3 (FIPS-validated modules, TLS, X.509, existing on-disk or wire formats): the digest is not compatible.",
+    "Short and medium messages on CPUs with SHA-256 instructions. eBASH shows SHA-256 ahead at 576 and 1536 bytes on Tiger Lake (2.34 vs 2.88 cycles/byte at 1536 B) and on Zen 4 (2.10 vs 3.76), and issue #315 reports single-thread b3sum slower than `openssl sha256` on Apple Silicon.",
+    "Password storage or deriving keys from passwords: the README says to use Argon2 instead.",
+    "Low-end cores without wide SIMD: here BLAKE3 performs like BLAKE2s (spec Figure 5, ARM1176), and issue #403 reports the NEON build slower than the portable one on a Cortex-A9.",
+    "Multithreaded hashing of small inputs or of big files on spinning disks: update_rayon is slower than update below about 128 KiB on x86-64, and parallel mmap reads thrash HDDs (issue #31)."
+  ],
+  "integration": {
+    "form": "crate (blake3, plus the b3sum CLI crate) and a C static/shared library, built with CMake or by compiling the .c/.S files directly",
+    "dependencies": "Rust: arrayvec, constant_time_eq, cfg-if, cpufeatures (x86 only). Optional: rayon-core, memmap2, digest, serde, zeroize. Build dependency: cc. C: none, with optional oneTBB for multithreading.",
+    "min_toolchain": "Rust 1.85 (edition 2024; CI builds on 1.85.1, but there is no formal MSRV policy). C: GCC, Clang or MSVC (tested in CI), CMake 3.9+. The TBB path needs a C++20 compiler and -fno-exceptions.",
+    "platforms": "x86 and x86-64 (SSE2/SSE4.1/AVX2/AVX-512, runtime dispatch, assembly for Unix, Windows MSVC and Windows GNU). AArch64 NEON is on by default. ARMv7 NEON and WASM SIMD are compile-time opt-ins. Other targets use the portable fallback, and CI covers big-endian powerpc64 and s390x.",
+    "thread_safety": "A Hasher/blake3_hasher is a plain value with no shared state, so use one per thread or clone it. Only update_rayon/update_mmap_rayon (Rust) and blake3_hasher_update_tbb (C) are multithreaded internally; all other APIs are single-threaded. The C CPU-feature cache uses atomics when stdatomic.h is available and Interlocked calls on MSVC.",
+    "drop_in_for_baseline": "partial — the API shape (init/update/finalize) matches a SHA-256 streaming hasher, but the output values differ, so existing stored or exchanged digests cannot be checked. RustCrypto digest traits exist only behind the traits-preview feature, which has no SemVer guarantee."
+  },
+  "gotchas": [
+    "The widely quoted 10-20x-over-SHA-256 figures come from multithreaded mmap hashing (b3sum's default) or from a 2019 Cascade Lake CPU without SHA-NI. The single-thread lead over hardware SHA-256 is about 3.4-4.3x at long lengths and turns into a loss around 0.5-1.5 KiB.",
+    "sizeof(blake3_hasher) is 1912 bytes on x86-64 because it holds a 55-entry chaining-value stack. That is large for per-object or on-stack state, and the C library does not implement the spec's reduced-maximum-length option.",
+    "The Rust build compiles C/assembly through cc. If no suitable C compiler (or no AVX-512-capable one) is found, it quietly falls back to a slower pure-Rust build. NEON on non-AArch64 targets and WASM SIMD are not runtime-detected: enabling them produces binaries that assume the feature.",
+    "Outputs shorter than 32 bytes give proportionally less security, and the XOF seek offset should not be treated as secret. Compare Hash values with the type's constant-time == rather than as byte slices."
+  ],
+  "pick_this_over_siblings_when": "Pick BLAKE3 over sha256-simd, Intel ISA-L multi-buffer SHA, j-lanes or S-HASH when you are free to change the digest: those keep SHA-256 compatibility or need many independent buffers, while BLAKE3 parallelizes a single message. Pick it over KangarooTwelve (XKCP) for peak speed at shorter lengths (1 KiB vs 8 KiB leaves), built-in multithreading and keyed/KDF modes; pick K12 when you want a Keccak/SHA-3-family primitive.",
+  "verified_claims_summary": "On eBASH (SUPERCOP 20260831; single-core 'long message' = cycle difference between 18208- and 1824-byte inputs), the BLAKE3 avx512 build (Clang 14, -O3) on an Intel Core i7-1165G7 (Tiger Lake, AVX-512 + SHA-NI) takes a median 0.51 cycles/byte versus 2.21 for the fastest SHA-256 implementation, 5.50 for SHA3-256 and 2.99 for BLAKE2b (about 4.3x, 10.8x, 5.9x), and a Ryzen 7 7700 gives 0.60 vs 2.02 for SHA-256. The project's own 2020 chart (16 KiB, one thread, Xeon 8275CL without SHA-NI, OpenSSL 1.1.1d) shows about 14x over SHA-256, a gap that does not carry over to CPUs with SHA instructions.",
+  "status_note": "Actively maintained (v1.8.7 released 2026-08-20, commits through 2026-09-10, about 189M crates.io downloads) and licensed CC0 or Apache-2.0 (with or without the LLVM exception), so the C files can be vendored into any build.",
+  "sources_read": [
+    "https://github.com/BLAKE3-team/BLAKE3",
+    "https://github.com/BLAKE3-team/BLAKE3/blob/master/README.md",
+    "https://github.com/BLAKE3-team/BLAKE3/blob/master/c/README.md",
+    "https://github.com/BLAKE3-team/BLAKE3/blob/master/Cargo.toml",
+    "https://github.com/BLAKE3-team/BLAKE3/blob/master/src/lib.rs",
+    "https://github.com/BLAKE3-team/BLAKE3/blob/master/.github/workflows/ci.yml",
+    "https://github.com/BLAKE3-team/BLAKE3/blob/master/c/blake3_dispatch.c",
+    "https://github.com/BLAKE3-team/BLAKE3/blob/master/c/blake3.h",
+    "https://github.com/BLAKE3-team/BLAKE3/issues?q=slow",
+    "https://github.com/BLAKE3-team/BLAKE3/issues?q=bug",
+    "https://github.com/BLAKE3-team/BLAKE3/issues/315",
+    "https://github.com/BLAKE3-team/BLAKE3/issues/220",
+    "https://github.com/BLAKE3-team/BLAKE3/issues/403",
+    "https://github.com/BLAKE3-team/BLAKE3/issues/565",
+    "https://crates.io/api/v1/crates/blake3",
+    "https://raw.githubusercontent.com/BLAKE3-team/BLAKE3-specs/master/blake3.pdf",
+    "https://bench.cr.yp.to/results-hash/amd64-panther.html",
+    "https://bench.cr.yp.to/results-hash/amd64-hertz.html",
+    "https://bench.cr.yp.to/web-impl/amd64-panther-crypto_hash.html"
+  ],
+  "confidence": 0.88
+}

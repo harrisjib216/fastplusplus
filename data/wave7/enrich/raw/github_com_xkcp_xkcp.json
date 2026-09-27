@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/xkcp/xkcp",
+  "one_liner": "Keccak team's C package; its KangarooTwelve XOF hashes long messages 5-8x faster than SHAKE128 via SIMD tree hashing.",
+  "what_it_does": "XKCP is the Keccak designers' C code base for the Keccak family (SHA-3, SHAKE, cSHAKE/KMAC, TurboSHAKE, KangarooTwelve, Xoodyak and more), built as libXKCP. KangarooTwelve (KT128/KT256, RFC 9861) is an extendable-output hash with an optional customization string, meant as a faster alternative to SHAKE128/SHA-3 with the same 128-bit (or 256-bit) security claim. The C API is a one-shot KT128(in, inLen, out, outLen, custom, customLen) or KangarooTwelve_Initialize/Update/Final/Squeeze; outputs differ from SHAKE128 and SHA-256, so it is not a drop-in replacement.",
+  "how_it_is_fast": "It makes two changes to SHAKE128. First, the permutation is Keccak-p[1600] reduced to 12 rounds (TurboSHAKE), roughly halving the per-block cost. Second, a Sakura-coded tree mode cuts the input into 8 KiB leaves whose chaining values feed a final node, and 'kangaroo hopping' merges the first chunk into that final node so inputs of 8 KiB or less pay no tree overhead. Independent leaves go through 2-, 4- or 8-way parallel Keccak-p code (SSSE3/AVX2/AVX-512, chosen at runtime by the x86-64 target), where AVX-512 rotate and ternary-logic instructions and its 32 registers cut the instruction count further.",
+  "when_to_use": [
+    "You want to stay in the Keccak/SHA-3 family (same permutation and cryptanalysis track record, 128-bit claim like SHAKE128) but SHAKE128 is too slow: even serially (8 KiB or less), KT128 is about 1.8x faster than SHAKE128 (paper Table 2; eBASH gives 2.77 vs 4.98 cycles/byte at 1536 B on Tiger Lake).",
+    "Hashing large single buffers (tens of KiB and up) on x86-64 with AVX2 or AVX-512: the paper reports 1.22-1.44 cycles/byte on Skylake/Haswell and 0.55 on SkylakeX, against 4.28-7.09 for SHAKE128.",
+    "ARMv8.4-A cores with SHA-3 instructions (Apple A14/M1): the Keccak team reports 0.75 cycles/byte for KT128, 1.7x hardware SHA-256 (a first-party figure).",
+    "Protocols that want a standardized fast XOF with domain separation: KT128/KT256 are specified in RFC 9861.",
+    "Projects that also need other Keccak-team constructions (SHA-3, SHAKE, cSHAKE/KMAC, TurboSHAKE, Xoodyak) from one mostly CC0 code base."
+  ],
+  "when_not_to_use": [
+    "Short to medium messages on x86 CPUs with SHA-NI: in eBASH 2026 at about 16 KiB, K12 takes 2.47 cycles/byte on Tiger Lake and 2.93 on Zen 4, against 2.21/2.02 for SHA-256, so it is slower than hardware SHA-256 there.",
+    "When FIPS 202 / FIPS 140 compliance is required: KT128 is not one of the six approved FIPS 202 instances, and its 12-round permutation has a smaller margin (the paper claims 7 of 12 rounds).",
+    "Streaming input in small pieces: the SIMD multi-leaf path runs only when a single Update call still holds 16/32/64 KiB of full 8 KiB leaves (2/4/8-way); 4-16 KiB reads fall back to serial speed.",
+    "When you need multi-core hashing out of the box: XKCP's K12 is single-threaded (SIMD only) and has no parallel API like BLAKE3's update_rayon.",
+    "MSVC/Windows builds: the fast x86 assembly uses GCC syntax, so MSVC needs the *noAsm targets, and libXKCP.dll does not link yet."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (libXKCP via make <target>/libXKCP.a|.so), or source-drop via the .pack targets / HOWTO-customize; the trimmed K12-only package lives at github.com/XKCP/K12",
+    "dependencies": "none at runtime. Building needs GCC or clang, GNU make and xsltproc, plus initialized git submodules.",
+    "min_toolchain": "not documented (no C standard stated). The README requires GCC or clang, GNU make and xsltproc; MSVC works only through generated .vcxproj files and noAsm targets.",
+    "platforms": "x86-64 (runtime dispatch among plain 64-bit, SSSE3, AVX2 and AVX-512); fixed targets for AVX/XOP/AVX2/AVX512, ARMv6/ARMv6M/ARMv7M/ARMv7A/ARMv8A (with an aarch64 dispatch and SHA-3-instruction cores) and AVR8; generic32/generic64 plain C elsewhere",
+    "thread_safety": "Functions work on caller-owned instances (KangarooTwelve_Instance) with no internal threading or locking, so use one instance per thread. On GCC/clang, x86-64 CPU detection runs once in a constructor before main to avoid races; the XKCP_Disable*() switches set process-wide globals.",
+    "drop_in_for_baseline": "partial — KT128 output differs from SHAKE128/SHA-256, so it cannot replace them in existing formats. The same library's SimpleFIPS202/KeccakHash interfaces do produce bit-compatible SHA-3/SHAKE, but through a different API from OpenSSL's."
+  },
+  "gotchas": [
+    "Licensing is mixed: the AVX2/AVX-512 single-permutation Keccak-p assembly is CRYPTOGAMS (BSD-style or GPL), the ARMv8-A cores are Apache-2.0/ISC/MIT, and only the rest is CC0 (which gives no patent grant). Keep the LICENSE file when redistributing.",
+    "Past memory-safety bug: CVE-2022-37454 (GHSA-6w4m-2xhg-2658, critical) was a buffer overflow in the sponge queue when a partial input reached 2^32-200 bytes or more, fixed in commit fdc6fef. Open issue #171 (Aug 2026) reports UBSan misaligned loads in the AVX2 times4 code.",
+    "Makefile.build is XML that xsltproc expands into a makefile; there is no CMake or pkg-config support. Pick a SIMD-capable target (e.g. x86-64/libXKCP.a), because generic32/generic64 are plain C and will not reach the headline numbers.",
+    "Headline numbers are single-core and need very long messages: parallelism starts only after the first 8 KiB, and 4-way needs 5 chunks (40 KiB) on the paper's Skylake plot. eBASH's 16 KiB 'long message' metric therefore shows K12 near its serial speed."
+  ],
+  "pick_this_over_siblings_when": "Pick K12 over BLAKE3 when you want to stay in the Keccak/SHA-3 family (RFC 9861, KT256 for 256-bit security) or target ARMv8.4-A SHA-3 hardware; pick BLAKE3 for peak speed at shorter lengths (1 KiB vs 8 KiB leaves), multithreading and a maintained Rust crate. Versus sha256-simd, ISA-L multi-buffer SHA, j-lanes and S-HASH, K12 fits when you can change the digest and hash single long messages, not many parallel SHA-256 streams.",
+  "verified_claims_summary": "In the designers' peer-reviewed paper (ACNS 2018, Table 2; compiler not stated), single-core long-message KangarooTwelve ran at 0.55/1.22/1.44 cycles/byte on a Core i7-7800X (AVX-512), i5-6500 and i5-4570 (AVX2), against 4.28/5.56/7.09 for SHAKE128 and 6.65/6.91/9.27 for SHA-256 (the fastest implementations found, often OpenSSL, cross-checked against eBASH) on CPUs without SHA-NI. Independent eBASH 2026 runs at about 16 KiB show K12 about 1.8x faster than SHAKE128 but slightly slower than SHA-NI SHA-256 (2.47 vs 2.21 cycles/byte on Tiger Lake).",
+  "status_note": "Actively maintained by the Keccak team (commits through 2026-09-25, including recent alignment and aliasing fixes; 664 stars) and mostly CC0, but the fast x86 cores carry CRYPTOGAMS terms, so vendor it through the .pack targets or the trimmed XKCP/K12 repo and keep the LICENSE file.",
+  "sources_read": [
+    "https://github.com/XKCP/XKCP",
+    "https://github.com/XKCP/XKCP/blob/master/README.md",
+    "https://github.com/XKCP/XKCP/blob/master/LICENSE",
+    "https://github.com/XKCP/XKCP/blob/master/lib/high/KangarooTwelve/KangarooTwelve.h",
+    "https://github.com/XKCP/XKCP/blob/master/lib/high/KangarooTwelve/KangarooTwelve.c",
+    "https://github.com/XKCP/XKCP/blob/master/lib/low/x86-64-dispatch/x86-64-dispatch.c",
+    "https://github.com/XKCP/XKCP/blob/master/lib/low/x86-64-dispatch/x86-64-dispatch.h",
+    "https://github.com/XKCP/XKCP/blob/master/Makefile.build",
+    "https://github.com/XKCP/XKCP/blob/master/Makefile.ci",
+    "https://github.com/XKCP/XKCP/blob/master/.github/workflows/ci.yml",
+    "https://github.com/XKCP/XKCP/blob/master/usage-example.md",
+    "https://github.com/XKCP/XKCP/commits/master",
+    "https://github.com/XKCP/XKCP/issues",
+    "https://github.com/XKCP/XKCP/issues/171",
+    "https://github.com/XKCP/XKCP/issues/170",
+    "https://github.com/XKCP/XKCP/issues/105",
+    "https://github.com/advisories/GHSA-6w4m-2xhg-2658",
+    "https://github.com/XKCP/K12",
+    "https://eprint.iacr.org/2016/770.pdf",
+    "https://keccak.team/kangarootwelve.html",
+    "https://keccak.team/sw_performance.html",
+    "https://bench.cr.yp.to/results-hash/amd64-panther.html",
+    "https://bench.cr.yp.to/results-hash/amd64-hertz.html",
+    "https://bench.cr.yp.to/web-impl/amd64-panther-crypto_hash.html",
+    "https://raw.githubusercontent.com/BLAKE3-team/BLAKE3-specs/master/blake3.pdf"
+  ],
+  "confidence": 0.8
+}
