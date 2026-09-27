@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/simdutf/simdutf",
+  "one_liner": "SIMD WHATWG forgiving-base64 codec in the simdutf C++ library; its fastbase64 CLI decodes 100 MB 3.5–27x faster than system base64.",
+  "what_it_does": "The base64 part of simdutf, the Unicode library used by Node.js, V8/Chromium and Bun, among others. It encodes binary to base64 or base64url, optionally with line breaks, and decodes both alphabets with WHATWG forgiving semantics: ASCII whitespace is skipped, padding is optional by default, and TC39-style strict / stop_before_partial / only_full_chunks last-chunk modes are available. It also accepts char16_t input. The API is non-allocating free functions (binary_to_base64, base64_to_binary, base64_to_binary_safe, base64_to_binary_details, plus length helpers) that return an error code and a position. It is not a drop-in for any other codec's API. The repo also ships two CLI tools meant as drop-in replacements for the system utility: fastbase64 (BSD/macOS flags) and fastbase64.coreutils (GNU flags, 76-column wrap).",
+  "how_it_is_fast": "The decoder works on 64-character blocks. vpshufb/vqtbl nibble lookups (aqrit's delta/check tables) classify each byte as a base64 digit, ASCII whitespace or garbage, giving 64-bit whitespace and error masks. A block with no whitespace is translated and packed straight to 48 bytes, and long clean inputs take a two-block fast path. A block with whitespace is compacted (animetosho-style pshufb stream compaction on SSE/AVX2/NEON, vpcompressb on AVX-512 VBMI2) into a 384-byte stack buffer that is decoded in 64-byte groups, so sparse newlines never drop the loop to scalar code. The encoder uses Muła's pshufb lookup and inserts line feeds in-register. The best kernel is chosen at runtime (SSE/Westmere, AVX2/Haswell, AVX-512/Ice Lake on x86), and there are separate NEON, RVV, LoongArch LSX/LASX and POWER source files.",
+  "when_to_use": [
+    "Decoding web-style base64 (atob semantics, data: URLs, JSON fields, MIME/PEM text with line breaks) where the input may contain spaces or newlines that would force a strict SIMD codec to reject it or fall back to scalar.",
+    "When you need base64url, padding control, strict canonical checks (BASE64_EXTRA_BITS) or chunked decoding (stop_before_partial plus base64_to_binary_details) in one library. These are the functions that Node.js atob and V8's Uint8Array.fromBase64/toBase64 call.",
+    "Encoding MIME-style wrapped output directly (binary_to_base64_with_lines) rather than encoding and then inserting newlines in a second pass.",
+    "Replacing the base64 CLI on files of 10 MB or more: in the README's run, 100 MB decodes in 52.7 ms against 1,433.5 ms for macOS base64 on an M4 Max, and in 84.4 ms against 291.8 ms for GNU base64 on a Xeon Gold 6548N.",
+    "Projects that already link simdutf, or C++17 projects that can vendor the two-file amalgamation built with --with-base64 to leave out the UTF code."
+  ],
+  "when_not_to_use": [
+    "Small one-off CLI jobs: at 1 MB, fastbase64 and the system tool are at parity in the README table (e.g. 13.7 vs 12.8 ms decode on Linux), because process startup dominates.",
+    "When you need strict RFC 4648 rejection by default. The default loose mode ignores whitespace, accepts missing padding, and decodes 'ZXhhZg==', 'ZXhhZg' and 'ZXhhZh==' to the same bytes. You must pass last_chunk_handling_options::strict to reject the last two.",
+    "Pure-C codebases without a C++17 toolchain: the C API (C11) is a thin wrapper over the C++ build and is labelled experimental.",
+    "Decoding secrets where timing side channels matter (for example PEM private keys): a constant-time decoder was requested and closed without one (#426), and the lookup and compaction paths depend on the data.",
+    "Short, whitespace-heavy inputs through base64_to_binary_safe (the README says a few dozen characters with 5% whitespace can be nearly 3x slower), or through atomic_base64_to_binary_safe, which is 1.5–1.8x slower at every size."
+  ],
+  "integration": {
+    "form": "static lib or shared lib via CMake, or source-drop (single-header amalgamation: simdutf.h + simdutf.cpp, optionally base64-only)",
+    "dependencies": "none (Python 3 only to regenerate the amalgamation; can even build without libstdc++ via SIMDUTF_NO_LIBCXX, experimental)",
+    "min_toolchain": "C++17 with GCC, Clang or MSVC (GCC on Windows unsupported); CMake 3.18+; the AVX-512 kernels need GCC 8+, Clang 6+ or VS 2022 plus binutils 2.30+; the C API needs C11; the compile-time _base64 literal needs C++23",
+    "platforms": "x86-64 with runtime dispatch (SSE, AVX2, AVX-512 with VBMI2 on Ice Lake/Zen 4+), AArch64 NEON, RISC-V RVV (only when compiled with -march=rv64gcv), LoongArch LSX/LASX (LASX dispatch only with GCC 15+), POWER, and a scalar fallback everywhere else",
+    "thread_safety": "Documented. Functions are reentrant and single-threaded, and CPU detection on first use is thread-safe (function-local statics). The dispatch objects are globals that may be destroyed when the main thread exits, so threads still calling during shutdown can break. atomic_base64_to_binary_safe exists for output buffers that other threads may read concurrently.",
+    "drop_in_for_baseline": "partial — the fastbase64 and fastbase64.coreutils CLIs aim to be drop-in replacements for BSD and GNU base64. The library API is its own: caller-sized buffers, a result struct, and more lenient decoding by default than RFC 4648 decoders."
+  },
+  "gotchas": [
+    "base64_to_binary and base64_to_binary_details do not check bounds. The output must be at least maximal_binary_length_from_base64() bytes (or binary_length_from_base64() when the input has whitespace), or the docs warn of a buffer overflow; use base64_to_binary_safe when capacity is fixed.",
+    "result.count means different things depending on the function: base64_to_binary gives the error position or the bytes written, _safe gives the input consumed with the output length returned by reference, and _details returns both. On error, the fast paths may not have decoded everything before the bad character unless you pass decode_up_to_bad_char=true, which is slower (#847, open).",
+    "The *_accept_garbage options silently skip non-alphabet bytes and stop at the first '='.",
+    "There is no streaming state object. Chunked encoding must feed multiples of 3 bytes, and chunked decoding carries the unconsumed tail over with stop_before_partial; tools/fastbase64.cpp is the reference pattern."
+  ],
+  "pick_this_over_siblings_when": "Pick simdutf over aklomp/base64, Turbo-Base64 or lemire's fastbase64 when the input can contain whitespace or needs base64url, strict/loose padding control, or JavaScript-compatible semantics; aklomp/base64 rejects any non-alphabet byte and supports only '+/'. Stay with aklomp/base64 for a small C99 dependency on clean input, or Turbo-Base64 for raw speed on short clean strings when GPL-3.0 is acceptable. No library-level head-to-head against either has been published; simdutf's benchmark_base64 includes libbase64, but the README gives no results.",
+  "verified_claims_summary": "The only first-party numbers are end-to-end CLI timings from scripts/base64bench.sh: the median of 10 runs on random 1/10/100 MB files, fastbase64 (no wrapping) against the OS base64. At 100 MB, decode is 52.7 vs 1,433.5 ms on an Apple M4 Max (macOS base64) and 84.4 vs 291.8 ms on a Xeon Gold 6548N (GNU base64), with no compiler or flags stated. Each timing includes a python3 interpreter start (the script timestamps with `python3 -c`), and on Linux GNU base64 decodes its own 76-column wrapped output. Separately, Lemire's in-browser test (Apple M4, 64 KiB blocks) has Chrome, whose V8 Uint8Array base64 builtins call simdutf, at 19 GB/s encode and 4.6 GB/s decode, against 0.34/0.40 GB/s for the older Firefox.",
+  "status_note": "Very active: release v9.2.1 on 2026-09-23, commits the same day as this review, a fuzzing setup, and 54 open issues. Dual Apache-2.0/MIT and embedded in Node.js, V8/Chromium, Bun, Cloudflare workerd and others, so the base64 path gets heavy production use. Only benchmarks/competition is research-only code.",
+  "sources_read": [
+    "https://github.com/simdutf/simdutf",
+    "https://github.com/simdutf/simdutf#readme",
+    "https://github.com/simdutf/simdutf#performance",
+    "https://github.com/simdutf/simdutf/blob/master/scripts/base64bench.sh",
+    "https://github.com/simdutf/simdutf/blob/master/tools/fastbase64.cpp",
+    "https://github.com/simdutf/simdutf/blob/master/src/generic/base64.h",
+    "https://github.com/simdutf/simdutf/blob/master/src/haswell/avx2_base64.cpp",
+    "https://github.com/simdutf/simdutf/blob/master/src/icelake/icelake_base64.inl.cpp",
+    "https://github.com/simdutf/simdutf/blob/master/src/arm64/arm_base64.cpp",
+    "https://github.com/simdutf/simdutf/blob/master/src/westmere/sse_base64.cpp",
+    "https://github.com/simdutf/simdutf/blob/master/src/rvv/rvv_base64.cpp",
+    "https://github.com/simdutf/simdutf/blob/master/include/simdutf/base64_implementation.h",
+    "https://github.com/simdutf/simdutf/blob/master/include/simdutf/scalar/base64.h",
+    "https://github.com/simdutf/simdutf/blob/master/include/simdutf_c.h",
+    "https://github.com/simdutf/simdutf/blob/master/benchmarks/base64/benchmark_base64.cpp",
+    "https://github.com/simdutf/simdutf/releases",
+    "https://github.com/simdutf/simdutf/issues?q=base64",
+    "https://github.com/simdutf/simdutf/issues/380",
+    "https://github.com/simdutf/simdutf/issues/426",
+    "https://github.com/simdutf/simdutf/issues/763",
+    "https://github.com/simdutf/simdutf/issues/847",
+    "https://github.com/simdutf/simdutf/issues/908",
+    "https://github.com/lemire/base64scale",
+    "https://github.com/v8/v8/blob/main/src/builtins/builtins-typed-array.cc",
+    "https://lemire.me/blog/2025/11/29/how-fast-can-browsers-process-base64-data/",
+    "https://hn.algolia.com/api/v1/search?query=simdutf%20base64",
+    "https://hn.algolia.com/api/v1/search?query=lemire.me%20base64",
+    "https://github.com/aklomp/base64",
+    "https://github.com/powturbo/Turbo-Base64"
+  ],
+  "confidence": 0.75
+}
