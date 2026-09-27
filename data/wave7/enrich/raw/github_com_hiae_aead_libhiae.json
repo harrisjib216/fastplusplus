@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/hiae-aead/libhiae",
+  "one_liner": "Portable C library for the HiAE AES-round AEAD; about 3.8x OpenSSL AES-128-GCM encryption throughput on Apple M5 Max.",
+  "what_it_does": "libhiae implements HiAE, an AES-round-based AEAD cipher from Huawei (IETF individual draft draft-pham-cfrg-hiae) with a 256-bit key, 128-bit nonce and 128-bit tag. It offers three API levels: one-shot HiAE_encrypt/HiAE_decrypt/HiAE_mac, a buffered streaming API (HiAE_stream_*) that takes any chunk size, and a low-level block API (HiAE_init/absorb/enc/dec/finalize) that needs 16-byte multiples except on the last call. HiAE is a different cipher, not a faster AES-GCM: ciphertexts do not interoperate with GCM and the calls do not match OpenSSL EVP. The repo also ships experimental HiAEx2/HiAEx4 variants (different, non-spec ciphers) and a `hiae` file-encryption CLI.",
+  "how_it_is_fast": "HiAE is a stream-cipher-style AEAD with a 2048-bit state of sixteen 128-bit words. Each 16-byte block costs two bare AES rounds plus a few XORs (the draft's 'XAXX' structure, arranged to suit both ARM AESE/AESMC and x86 AESENC), with no AES key schedule and no GHASH multiply. The code avoids physically rotating the state by using a cycling index (offset) and unrolls 16 blocks (256 bytes) per loop, so all 16 state words stay in registers. A load-time constructor picks a backend by CPU detection: ARMv8 AES, ARMv8 AES plus FEAT_SHA3 (EOR3 three-way XOR), x86 AES-NI+AVX, 'VAES+AVX512' (still 128-bit _mm_aesenc_si128 code, compiled for AVX-512 targets), WASM SIMD128, or a table-based software fallback.",
+  "when_to_use": [
+    "Bulk AEAD on Apple Silicon or other ARMv8 cores with AES and SHA3 extensions, when AES-GCM is the bottleneck. On an M5 Max at 64 KB, HiAE encrypts at 266.7 Gbps vs 70.8 for OpenSSL AES-128-GCM.",
+    "x86-64 servers and desktops with AVX-512 and VAES (the README's Zen 4 run: 251.7 Gbps encryption at 64 KB) in systems where you control both ends: storage, backups, internal links, high-rate tunnels.",
+    "Messages of several KB and up. Throughput climbs from about 131 Gbps at 1 KB to about 252 Gbps at 64 KB on Apple M4, and from 71 to 252 Gbps on Zen 4.",
+    "Encrypt-heavy workloads such as write-mostly storage or broadcast senders, since encryption runs 1.5-1.9x faster than decryption.",
+    "When you want 128-bit random nonces and a 256-bit key without GCM's 96-bit nonce limits (the draft caps a key at 2^64 messages)."
+  ],
+  "when_not_to_use": [
+    "Anywhere that needs interoperability, FIPS or a published standard. HiAE is only an individual IETF draft (rev 06, expires 2026-11-11), not an RFC, and there are no NIST or TLS registrations.",
+    "Systems where nonce reuse, release of unverified plaintext, or unlimited forged-decryption attempts are possible. ePrint 2025/1180 (Bille and Tischhauser, TOSC 2026) gives full key recovery from a small constant number of repeated nonces or unverified decryptions, plus nonce-respecting key recovery at 2^128 data and 2^129 time using decryption queries. The designers (ePrint 2025/1235) and the draft answer that repeated forgery attempts are outside the security model.",
+    "Decrypt-heavy or receive-side workloads. On the M5 Max, HiAE decrypts at 171.4 Gbps against 211.8 for AEGIS-128x2 (which decrypts as fast as it encrypts), and on Zen 4 HiAE decryption is 48% slower than its encryption.",
+    "CPUs without AES instructions. The fallback is a T-table soft AES (hardened by touching every cache line, not bitsliced), and the WASM scalar build uses plain table lookups. There is no constant-time bitsliced path like aegis-bitsliced.",
+    "Tiny messages or MSVC/gcc toolchains. Throughput is 4-16 Gbps at 16-64 B on M4, and the benchmark page's text tables give AES-GCM figures only at 64 KB. MSVC proper cannot build the VAES backend, and the README says gcc produces noticeably slower code than clang or zig cc."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (Make, CMake with find_package(hiae), or zig build); also a source-drop of src/hiae/*.c or a single-file amalgamation (make amalgamate)",
+    "dependencies": "none (standard C library only)",
+    "min_toolchain": "C99, CMake 3.10+. clang or zig cc recommended, GCC 14+ if gcc must be used. CI builds with gcc, clang and MSVC (cl), and with Zig for wasm32-wasi.",
+    "platforms": "x86-64 (AES-NI+AVX, or VAES+AVX-512F, chosen at runtime), aarch64 (ARMv8 AES, FEAT_SHA3 when present, detected via getauxval/sysctl), wasm32 (SIMD128/relaxed SIMD), portable software fallback elsewhere",
+    "thread_safety": "The backend is chosen once by a load-time constructor into a global pointer, and HiAE_init_library() is documented as thread-safe and idempotent. States are caller-owned 256-byte structs, independent per operation. HiAE_force_implementation() resets that global and must be called before other use.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "One-shot HiAE_decrypt writes plaintext into the output buffer before comparing tags and does not wipe it on failure; the header only says the output is 'undefined'. HiAE_stream_decrypt/HiAE_dec also return plaintext before the tag is checked. Given the RUP key-recovery attack, zero or discard that output yourself.",
+    "The low-level API needs every absorb/enc/dec call except the last to be a multiple of 16 bytes, needs the exact total lengths at finalize, and states must not be reused. HiAE_enc_partial_noupdate does not advance the state.",
+    "CMake defaults to a Debug build. Pass -DCMAKE_BUILD_TYPE=Release (-O3), or benchmarks will be far off.",
+    "HiAEx2/HiAEx4 are separate, non-spec ciphers that do not interoperate with HiAE. HiAEx4's C1 constant was fixed on 2026-09-18, which changed its outputs. The README says they need unique nonces even in MAC mode."
+  ],
+  "pick_this_over_siblings_when": "Pick libhiae over Concyclics/HiAE when you want the same cipher as an MIT-licensed, runtime-dispatched library with streaming and MAC APIs and IETF test vectors; the designers' repo has no license. Pick it over libaegis only if you control both ends and mostly encrypt on ARM or AVX-512 x86 (266.7 vs 211.8 Gbps for AEGIS-128x2 on M5 Max). Otherwise AEGIS has an RFC, a bitsliced constant-time fallback, and decrypts as fast as it encrypts.",
+  "verified_claims_summary": "The author's hiae-aead/benchmarks harness ran a vendored libhiae copy against OpenSSL 3.6.4 AES-128-GCM on an Apple M5 Max (macOS 26, Apple clang 21.0.0, -O3 -mcpu=native, median of three passes, 4096-byte-aligned buffers, with AD and tag). At 64 KB, HiAE encrypted at 266.7 Gbps vs 70.8 for GCM (~3.8x) and decrypted at 171.4 vs 70.2 (~2.4x). The ePrint 2025/377 figures (for example 340.02 vs 51.90 Gbps against OpenSSL 3.0 AES-256-GCM on a Ryzen 9 7950X with GCC 11.4 at 16 KB) measure the designers' separate Concyclics/HiAE code, not libhiae.",
+  "status_note": "Actively maintained (v0.2.4 tagged 2026-07-17, commits through 2026-09-20, no open issues) and MIT-licensed, with a single-file amalgamation that makes vendoring trivial. It is essentially a one-maintainer, pre-1.0 project for a cipher that is still an individual draft.",
+  "sources_read": [
+    "https://github.com/hiae-aead/libhiae",
+    "https://github.com/hiae-aead/libhiae/blob/main/README.md",
+    "https://github.com/hiae-aead/libhiae/blob/main/include/HiAE.h",
+    "https://github.com/hiae-aead/libhiae/blob/main/src/hiae/HiAE.c",
+    "https://github.com/hiae-aead/libhiae/blob/main/src/hiae/HiAE_internal.h",
+    "https://github.com/hiae-aead/libhiae/blob/main/src/hiae/HiAE_arm.c",
+    "https://github.com/hiae-aead/libhiae/blob/main/src/hiae/HiAE_arm_sha3.c",
+    "https://github.com/hiae-aead/libhiae/blob/main/src/hiae/HiAE_aesni.c",
+    "https://github.com/hiae-aead/libhiae/blob/main/src/hiae/HiAE_vaes_avx512.c",
+    "https://github.com/hiae-aead/libhiae/blob/main/src/hiae/HiAE_stream.c",
+    "https://github.com/hiae-aead/libhiae/blob/main/src/hiae/softaes.h",
+    "https://github.com/hiae-aead/libhiae/blob/main/src/common/cpu.h",
+    "https://github.com/hiae-aead/libhiae/blob/main/CMakeLists.txt",
+    "https://github.com/hiae-aead/libhiae/blob/main/Makefile",
+    "https://github.com/hiae-aead/libhiae/blob/main/.github/workflows/cmake-multi-platform.yml",
+    "https://github.com/hiae-aead/libhiae/issues?q=is%3Aissue",
+    "https://github.com/hiae-aead/libhiae/pulls?q=is%3Apr",
+    "https://github.com/hiae-aead/libhiae/commits/main",
+    "https://github.com/hiae-aead/libhiae/releases",
+    "https://github.com/hiae-aead/libhiae/tags",
+    "https://github.com/hiae-aead/benchmarks",
+    "https://github.com/hiae-aead/benchmarks/blob/main/aes128-gcm-openssl/benchmark.c",
+    "https://github.com/hiae-aead/benchmarks/blob/main/aes128-gcm-openssl/Makefile",
+    "https://eprint.iacr.org/search?q=HiAE",
+    "https://eprint.iacr.org/2025/377",
+    "https://eprint.iacr.org/2025/1180",
+    "https://eprint.iacr.org/2025/1203",
+    "https://eprint.iacr.org/2025/1235",
+    "https://datatracker.ietf.org/api/v1/doc/document/?name__contains=hiae&format=json",
+    "https://www.ietf.org/archive/id/draft-pham-cfrg-hiae-06.txt",
+    "https://hn.algolia.com/api/v1/search?query=HiAE&tags=story"
+  ],
+  "confidence": 0.8
+}
