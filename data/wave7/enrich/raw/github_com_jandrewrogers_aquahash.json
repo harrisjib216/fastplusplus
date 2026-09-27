@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/jandrewrogers/aquahash",
+  "one_liner": "Single-header AES-NI 128-bit hash: about 4x XXH64 bulk throughput in SMHasher3, but fails 55/250 quality tests.",
+  "what_it_does": "AquaHash is a 128-bit non-cryptographic hash for x86 CPUs with AES-NI. It ships as one 440-line C++ header (aquahash.h) holding a single class. The API differs from xxHash: AquaHash::Hash(const uint8_t*, size_t, __m128i seed = 0) returns an __m128i, and an incremental object provides Initialize/Update/Finalize. The two component algorithms (SmallKeyAlgorithm, LargeKeyAlgorithm) are public too, and VerifyImplementation() checks built-in test vectors.",
+  "how_it_is_fast": "Each 16-byte input block becomes the round key of a single AES round (_mm_aesenc_si128), so the whole per-block cost is one AES instruction. Keys of 64 bytes or more are spread across four independent 128-bit lanes (a 512-bit block), which keeps the AES units pipelined; the lanes are mixed and reduced with a few AES rounds only at the end. Keys under 64 bytes take a single-lane path: the 1-15-byte tail is XORed in with constant-padded vectors and three AES rounds finish the hash, with no cross-lane reduction. The author's blog gives 15 bytes/cycle bulk on Skylake and about 25 cycles per hash at the smallest key sizes.",
+  "when_to_use": [
+    "Non-adversarial bulk checksums, deduplication or content fingerprinting of large buffers on x86-64 with AES-NI, when bytes/cycle is the bottleneck (SMHasher3: 15.84 bytes/cycle vs 12.82 for XXH3-64 and 3.99 for XXH-64).",
+    "As a fast pre-filter where every hash match is confirmed by a byte comparison, so extra collisions cost time but never correctness.",
+    "Clang-built, x86-only codebases that want a tiny Apache-2.0 header with no dependencies to vendor and patch.",
+    "As a compact reference point when studying AES-round hash constructions next to Meow hash."
+  ],
+  "when_not_to_use": [
+    "Hash tables, or any use that needs good distribution on structured keys. SMHasher3 finds full 128-bit collisions on the Sparse, Cyclic and Permutation keysets: for example, 405 collisions among 22.4M 64-byte keys with at most 3 bits set, where 0 are expected. An open 2019 issue (#7) reports 3,488,136 collisions in a brute-force test that should give about 312.",
+    "Short keys: its 34.31 cycles average on 1-32 bytes is slower than wyhash (29.31), XXH3-64 (30.69) and a5hash (26.91) in the same SMHasher3 table.",
+    "Untrusted input or HashDoS defence: the author says it is not suitable for cryptographic use, and it fails SMHasher3's Seed, SeedSparse and SeedBlockLen tests.",
+    "ARM or any CPU without AES-NI: the code calls x86 intrinsics directly and has no fallback path.",
+    "Anything that needs a maintained dependency or an unpatched GCC build: the upstream header does not compile with GCC (issue #1, open since 2019), issues are now disabled, and there have been no commits since 2019-03-06."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "None beyond the x86 intrinsic headers <smmintrin.h> and <wmmintrin.h>.",
+    "min_toolchain": "Not documented. The features used (constexpr, brace-initialised member arrays) need C++11, and the author says the code came from a C++17 codebase. The author says it compiles cleanly with Clang in strict mode. Upstream fails on GCC (reported on 4.9 and 8.2.1) because LargeKeyAlgorithm declares `__m128 block[4]` where `__m128i` is needed. AES codegen must be enabled (-maes or a suitable -march). MSVC is not documented.",
+    "platforms": "x86/x86-64 with AES-NI only. There is no ARM or portable fallback.",
+    "thread_safety": "Not documented. The static Hash/SmallKeyAlgorithm/LargeKeyAlgorithm functions keep no shared state (read from source). An incremental AquaHash object is unsynchronised.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The result is a by-value __m128i. Writing it through a cast pointer into an unaligned buffer can crash: issue #3 reports SMHasher's BulkSpeed test segfaulting this way. Store it with _mm_storeu_si128.",
+    "Upstream has no std::hash-style adapter and no 64-bit output. For hash tables you must pull 64 bits out of the __m128i yourself (the hungptit fork adds such a wrapper).",
+    "After Finalize() the incremental object is in an undefined state and must be re-Initialize()d. Only an assert guards against double finalization, so release builds get no check.",
+    "Hash() switches from the small-key to the large-key algorithm at 64 bytes, and calling a component function directly outside its intended range gives values that differ from Hash(). Tail bytes are read through reinterpret_cast'ed uint64/32/16 pointers: these are unaligned, aliasing-violating loads that the author's x86 targets tolerate."
+  ],
+  "pick_this_over_siblings_when": "Pick it over Meow hash or xxHash's XXH3 only when raw x86 bulk throughput on non-adversarial data matters more than hash quality: SMHasher3 puts AquaHash at 15.84 bytes/cycle against Meow's 12.43 and XXH3-64's 12.82, but Meow passes all 250 tests and XXH3 is portable and maintained. For short keys, wyhash and a5hash are both faster and better tested, so do not pick AquaHash there.",
+  "verified_claims_summary": "SMHasher3's results summary (CPU and compiler not stated; GiB/s figures are converted at a nominal 3.5 GHz) measures AquaHash at 15.84 bytes/cycle bulk against 3.99 for XXH-64 (about 4x) and 12.82 for XXH3-64 (about 1.24x), and at 34.31 cycles average on 1-32-byte keys against 52.60 for XXH-64 and 29.31 for wyhash. The author's Skylake graph against xxhash64 and FarmHash gives no compiler or flags, and a 2019 third-party fork benchmark (clang 8) timed its aquahash command at 131.6 ms against 163.2 ms for xxhsum on a 100 MB+ file, about 1.24x including I/O.",
+  "status_note": "Abandoned since the 2019-03-06 v1.0 commit: issues are disabled and the GCC-build and collision-rate reports were never answered with fixes. It is Apache-2.0 and one 440-line header, so it is easy to vendor and patch; the hungptit fork already fixes the GCC error.",
+  "sources_read": [
+    "https://github.com/jandrewrogers/AquaHash",
+    "https://github.com/jandrewrogers/AquaHash/blob/master/aquahash.h",
+    "https://github.com/jandrewrogers/AquaHash/pull/5",
+    "https://github.com/jandrewrogers/AquaHash/pull/6",
+    "https://web.archive.org/web/20201125105502/https://github.com/jandrewrogers/AquaHash/issues/1",
+    "https://web.archive.org/web/20201125105503/https://github.com/jandrewrogers/AquaHash/issues/2",
+    "https://web.archive.org/web/20201125105504/https://github.com/jandrewrogers/AquaHash/issues/3",
+    "https://web.archive.org/web/20201125105504/https://github.com/jandrewrogers/AquaHash/issues/4",
+    "https://web.archive.org/web/20201125105505/https://github.com/jandrewrogers/AquaHash/issues/7",
+    "https://web.archive.org/cdx/search/cdx?url=github.com/jandrewrogers/AquaHash/issues*",
+    "http://www.jandrewrogers.com/2019/03/06/aquahash/",
+    "https://gitlab.com/fwojcik/smhasher3/-/raw/main/results/README.md",
+    "https://gitlab.com/fwojcik/smhasher3/-/raw/main/results/raw/AquaHash.txt",
+    "https://github.com/hungptit/AquaHash",
+    "https://github.com/hungptit/AquaHash/blob/master/benchmark.md",
+    "https://github.com/hungptit/AquaHash/blob/master/benchmark/benchmark.md",
+    "https://github.com/hungptit/AquaHash/blob/master/benchmark/CMakeLists.txt",
+    "https://github.com/hungptit/AquaHash/blob/master/src/aquahash.h",
+    "https://github.com/hungptit/AquaHash/blob/master/src/interface.h",
+    "https://github.com/hungptit/AquaHash/blob/master/docs/slides.md",
+    "https://hn.algolia.com/api/v1/search?query=aquahash",
+    "https://releases.llvm.org/10.0.0/tools/clang/docs/ReleaseNotes.html"
+  ],
+  "confidence": 0.8
+}
