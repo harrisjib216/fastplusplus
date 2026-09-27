@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/asylian21/sha256mb",
+  "one_liner": "Go multi-buffer SHA-256 for batches of 33-byte pubkeys; its 4-lane ARMv8 kernel runs ~2.6x faster than crypto/sha256.Sum256 on M3.",
+  "what_it_does": "One call, `Hash33(dst, src, n, stride)`, hashes n independent 33-byte messages (compressed secp256k1 public keys) read from a strided buffer and writes contiguous 32-byte digests. Each digest is byte-identical to `crypto/sha256.Sum256` of that message. The package is not a `hash.Hash`: it has no streaming, no io.Writer and no other message lengths, only the fixed 33-byte case. A `hash160mb` subpackage adds batched Bitcoin HASH160 (`RIPEMD160(SHA256(x))`) through `FromPubkeys33`, byte-identical to `btcutil.Hash160`.",
+  "how_it_is_fast": "The ARMv8 SHA256H/H2/SU0/SU1 instructions are latency-bound, so a single message leaves the crypto pipeline idle. The generated assembly runs four independent messages as register-disjoint streams in lockstep, emitting each round group for all four lanes back-to-back so the out-of-order core overlaps them (multi-buffer or interleaved hashing). Every message is exactly 33 bytes, so each fits one pre-padded block: the padding bit and the 264-bit length are constant schedule words, and there is no generic padding, buffering or finalize code. The project publishes no ablation that separates the interleaving gain from the per-call `Sum256` overhead it also removes.",
+  "when_to_use": [
+    "Bitcoin/secp256k1 tooling on arm64 that hashes large batches of compressed public keys: address indexing, HASH160 derivation, key-space research.",
+    "arm64 hosts with the ARMv8 SHA-256 extension. Apple M-series is assumed to have it; Linux and BSD arm64 are gated on HWCAP. Only Apple M3 was actually benchmarked.",
+    "Throughput-bound loops with batches in the hundreds to thousands; the published point is n=6144 on one core. Calls are zero-allocation and goroutine-safe, so you can shard batches across cores.",
+    "Replacing a hot `for` loop of `sha256.Sum256` over fixed 33-byte slices at a stride of 33 bytes or more, when bit-identical output matters. It is tested against the stdlib oracle with fuzzing, race tests and poisoned inter-message padding."
+  ],
+  "when_not_to_use": [
+    "amd64 or any non-arm64 target: no SIMD backend exists yet (AVX-512/SHA-NI are only planned), so it runs the stdlib scalar loop and gives no speedup.",
+    "Any message length other than exactly 33 bytes, streaming input, or code that expects `hash.Hash`: none of these are supported.",
+    "Tiny batches: n below 4 and the remainder after the last full group of 4 go through the scalar path, and no small-n numbers are published.",
+    "Dependencies that must be mature and reviewed: 0 stars, one author, three commits all on 2026-05-31 and nothing since, and only v0.1.0. The single measurement is a local Apple M3 laptop run on Go 1.22.5; other CPUs and Go versions are not measured."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "golang.org/x/sys (arm64 HWCAP detection outside Darwin). The hash160mb subpackage adds github.com/Asylian21/ripemd160-asm (same author, 0 stars). The module also requires golang.org/x/crypto.",
+    "min_toolchain": "Go 1.22 (go.mod; toolchain go1.22.5; CI runs 1.22.x)",
+    "platforms": "The fast path needs arm64 with the ARMv8 SHA-256 extension (assumed on darwin/arm64, HWCAP-gated elsewhere). Every other GOARCH builds and runs the scalar crypto/sha256 loop. CI runs ubuntu amd64, ubuntu-24.04-arm and macos-14 arm64, and cross-compiles for 386 and ppc64le.",
+    "thread_safety": "Hash33 and FromPubkeys33 are documented safe for concurrent use and are tested under -race. Hash33 keeps no state; FromPubkeys33 reuses a pooled per-goroutine scratch buffer after a one-time warm-up.",
+    "drop_in_for_baseline": "partial — it replaces a loop of sha256.Sum256 over fixed 33-byte messages with one batched call and identical output, but it is not a hash.Hash and rejects every other length."
+  },
+  "gotchas": [
+    "Programmer errors panic instead of returning errors: n < 0, stride < 33, or a short src or dst.",
+    "The backend is chosen once at package init, and GOSHA256MB_FORCE can pin it. Unknown or unsupported values silently fall back to scalar, so check Backend() and Lanes() before trusting a benchmark.",
+    "On darwin/arm64 the SHA2 extension is assumed unconditionally, because x/sys/cpu reports no ARM64 flags there. Other arm64 platforms use HWCAP.",
+    "In hash160mb, the staged default grows its pooled digest buffer to the largest n ever used and keeps it. The fused kernel (GOHASH160MB_FORCE=fused) ties staged single-threaded and is about 3% slower at 8 threads."
+  ],
+  "pick_this_over_siblings_when": "In Go on arm64 with many fixed 33-byte pubkeys, pick it over minio/sha256-simd: sha256-simd speeds up general single-stream hashing but has no batched fixed-length API. hashtree, Intel ISA-L multi-buffer SHA and Gueron's j-lanes/S-HASH use the same many-messages idea from C, with the catalogued numbers measured on x86, so prefer them on amd64, where sha256mb has no SIMD path.",
+  "verified_claims_summary": "The test hashed 6,144 random 33-byte messages at a 64-byte stride on an Apple M3 with Go 1.22.5 and GOMAXPROCS=1 (`BenchmarkHash33`, -count=8, median). The 4-lane `sha2x4` kernel reached 57.58M hashes/s (106.7 µs per call); the scalar backend, a plain loop over stdlib `crypto/sha256.Sum256` that already uses the ARMv8 SHA2 instructions, reached 21.55M (285.1 µs), about 2.6x (2.57-2.67x across thermal states). This is one author's local run; no other CPU, batch size or Go version has published ratios, and no comparison of HASH160 against btcutil is given.",
+  "status_note": "The catalog marks it active, but it was released as v0.1.0 on 2026-05-31 in three commits and nothing has landed since. MIT-licensed and small enough to vendor (a few Go files plus a generated arm64 assembly kernel), but unproven: 0 stars, single author, no amd64 kernel.",
+  "sources_read": [
+    "https://github.com/Asylian21/sha256mb",
+    "https://github.com/Asylian21/sha256mb/blob/main/README.md",
+    "https://github.com/Asylian21/sha256mb/blob/main/PERFORMANCE.md",
+    "https://github.com/Asylian21/sha256mb/blob/main/SPEC.md",
+    "https://github.com/Asylian21/sha256mb/blob/main/CHANGELOG.md",
+    "https://github.com/Asylian21/sha256mb/blob/main/go.mod",
+    "https://github.com/Asylian21/sha256mb/blob/main/scalar.go",
+    "https://github.com/Asylian21/sha256mb/blob/main/sha256mb.go",
+    "https://github.com/Asylian21/sha256mb/blob/main/cpu.go",
+    "https://github.com/Asylian21/sha256mb/blob/main/feature_arm64_darwin.go",
+    "https://github.com/Asylian21/sha256mb/blob/main/feature_arm64_hwcap.go",
+    "https://github.com/Asylian21/sha256mb/blob/main/block_arm64.go",
+    "https://github.com/Asylian21/sha256mb/blob/main/block_arm64.s",
+    "https://github.com/Asylian21/sha256mb/blob/main/backend_generic.go",
+    "https://github.com/Asylian21/sha256mb/blob/main/bench_test.go",
+    "https://github.com/Asylian21/sha256mb/blob/main/internal/shagen/main.go",
+    "https://github.com/Asylian21/sha256mb/blob/main/hash160mb/hash160mb.go",
+    "https://github.com/Asylian21/sha256mb/blob/main/.github/workflows/ci.yml",
+    "https://github.com/Asylian21/sha256mb/tags",
+    "https://github.com/Asylian21/sha256mb/commits/main",
+    "https://github.com/Asylian21/sha256mb/actions",
+    "https://github.com/Asylian21/ripemd160-asm",
+    "https://raw.githubusercontent.com/golang/go/go1.22.5/src/crypto/sha256/sha256block_arm64.go",
+    "https://pkg.go.dev/github.com/Asylian21/sha256mb"
+  ],
+  "confidence": 0.6
+}
