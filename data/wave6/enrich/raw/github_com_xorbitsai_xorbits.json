@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/xorbitsai/xorbits",
+  "one_liner": "Distributed pandas/NumPy-API engine built on Mars. On 100 GB-1 TB TPC-H it beats Dask DataFrame, Modin and pandas-on-Spark.",
+  "what_it_does": "Xorbits scales pandas and NumPy code across the cores of one machine or across a cluster. You change `import pandas as pd` to `import xorbits.pandas as pd` (the same works for numpy, and there are thin sklearn, XGBoost, LightGBM and HuggingFace datasets wrappers). Execution is deferred: it builds a plan and runs it on repr/str, on output methods such as to_csv, when metadata is missing, or when you call xorbits.run(). Unlike Dask, you never set partitions or chunk sizes or call repartition/compute. Chunking happens automatically.",
+  "how_it_is_fast": "Data is split into chunks that plain pandas/NumPy runs in separate worker processes, so there is no GIL, and intermediate results go to a shared-memory storage service (disk, mmap or Vineyard backends are optional). The core idea is dynamic (iterative) tiling: Xorbits executes the first chunks, collects their real shapes, sizes and dtypes, and only then tiles the rest of the graph. That lets it choose tree-reduce or shuffle-reduce for groupby.agg, merge small chunks up to chunk_store_limit (512 MB by default), and handle skewed joins that Dask and Modin partition blindly. It adds coloring-based graph-level fusion of the chunk graph into subtasks, operator fusion through NumExpr/JAX/CuPy, column pruning, and breadth-first plus locality-aware scheduling onto NUMA-node or GPU 'bands'. The paper's ablation credits dynamic tiling with 7.08x (TPC-H Q2, SF1000) and 10.59x (Q7, SF100), and graph fusion with 3.80x (Q7) and 2.04x (Q8).",
+  "when_to_use": [
+    "Existing pandas code on 100 GB-1 TB Parquet/CSV that no longer fits one node, when you want to keep the pandas API rather than rewrite into Spark SQL or Dask idioms.",
+    "Merges between a huge fact table and a tiny dimension table (skewed keys). There Dask and Modin stall on one core; the paper measured 29x and 37x on TPCx-AI UC10 (34 GB joined to 3.2 MB).",
+    "Single-node multi-core speedup on 20 GB-class CSV feature-engineering pipelines. The paper reports 2.65x over Modin on census and 3.86x over PySpark on plasticc, with single-threaded pandas slowest.",
+    "Mixed dataframe and distributed-array work (QR, linear regression) where you would otherwise pair Dask DataFrame with Dask Array. The paper reports 5.88x and 1.74x average throughput over Dask Array.",
+    "Teams already running Kubernetes, SLURM or a plain supervisor/worker cluster (the xorbits-supervisor and xorbits-worker CLIs) that want a pandas-shaped front end."
+  ],
+  "when_not_to_use": [
+    "Data that fits comfortably in one machine's RAM when raw speed is the goal. The paper compares only against pandas-API frameworks, never DuckDB, Polars or SQL engines, and it calls pandas-API TPC-H 'fundamentally unfair' against SQL systems.",
+    "Small or interactive workloads. Startup is slow (the docs say to call xorbits.init() before timing), and too many chunks make the supervisor spend its time scheduling.",
+    "Anything that needs an actively maintained dependency. The last release was 0.8.2 (2024-12-26) and the last main commit 2025-04-21. There are 84 open issues, including open correctness bugs (#691 reset_index on unexecuted groupby output, #671 head(100) wrong on TPC-H Q18 output).",
+    "Python 3.13+: PyPI has wheels only for CPython 3.9-3.12.",
+    "GPU (cuDF/CuPy) production use. Many GPU-labelled bugs are still open, such as nunique failing on GPU (#344), cuDF NA deserialization errors (#406) and CUDA memory not being released on shutdown (#377)."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "xoscar (actor runtime), numpy, pandas, scipy, scikit-learn, pyarrow, fsspec, cloudpickle, pyyaml, psutil, tornado, sqlalchemy, defusedxml, tqdm, uvloop (non-Windows). Optional: ray, kubernetes, vineyard, jax, numexpr/lz4, s3fs, adlfs, datasets.",
+    "min_toolchain": "Python >=3.9. PyPI 0.8.2 wheels cover CPython 3.9-3.12, and building from source needs Cython >=0.29.33. setup.cfg declares pandas >=1.0, but CI carries a TODO that pandas 2.2.3 does not work well with numpy 2.2 / pyarrow 19.",
+    "platforms": "Wheels for Linux x86-64/aarch64 (manylinux2014), macOS x86-64/arm64 and Windows amd64. Cluster deployment is via CLI, Kubernetes (including EKS) or SLURM. Optional NVIDIA GPU through cuDF/CuPy (gpu=True on loaders).",
+    "thread_safety": "Not documented. Execution runs in separate worker processes behind a client session created by xorbits.init() (or implicitly on the first compute).",
+    "drop_in_for_baseline": "partial — it is not API-compatible with Dask. Code written with dd.*, .compute(), map_partitions or repartition must be rewritten as plain pandas-style code (the Xorbits equivalent of map_partitions is map_chunk). As a pandas replacement it is close to drop-in: the paper reports 96.7% coverage on 30 pandas asv cases, against 46.7% for Dask. Unimplemented methods fall back to pandas (see gotchas)."
+  },
+  "gotchas": [
+    "Silent-scale fallback: any pandas method Xorbits has not implemented is emitted as a RuntimeWarning '<Type>.<method> will fallback to Pandas'. It then runs after rechunking the whole object into one chunk (core/adapter.py), so a single worker must hold the full frame. On 1 TB data that means OOM.",
+    "Deferred execution plus iterative tiling means a statement can trigger partial execution mid-plan whenever metadata such as a post-filter shape is unknown. Errors and cost appear later than they would in pandas. Call xorbits.run() to force evaluation, and warm up with xorbits.init() before benchmarking.",
+    "Performance depends on chunk_store_limit (512 MB by default). The docs say raising it helps little on CPU but should be raised on GPU. chunk_size= on constructors is meant for debugging.",
+    "Open operational bugs include 'Too many open files' (#769, #731), gzip read_csv using only one core (#738), and read_parquet memory-allocation errors (#729)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over Modin when data exceeds one node or merges are skewed: in the paper Modin on Ray OOMed on SF1000 and was 37x slower on skewed UC10, even though both reach 96.7% pandas-API coverage. FireDucks and cuDF (cudf.pandas) are single-machine pandas accelerators with much larger speedups over pandas, so Xorbits is only the right choice when you need multi-node scale-out behind the pandas API.",
+  "verified_claims_summary": "The ICDE 2024 paper is by the Xorbits authors. Setup: AWS r6i workers, each r6i.8xlarge with 32 vCPU and 256 GB, CPU model unnamed; 4 workers for TPC-H SF100 (36 GB Parquet) and 16 for SF1000 (358 GB). Versions were Xorbits 0.6.3, Dask 2023.9, Modin 0.24.1 on Ray, pandas-on-Spark 3.5.0 and pandas 2.1.1, all with default configs, averaged over 7 runs with the max and min dropped. Xorbits averaged 2.66x over the fastest baseline on operations every system supports and was 29x/37x faster than Dask/Modin on skewed TPCx-AI UC10. TPC-H relative times count only the queries each baseline finished. The docs' '~8x DaskDF, ~4x Modin at SF100' figure gives no hardware.",
+  "status_note": "Stale: last release 0.8.2 in December 2024, last main commit April 2025 (cuDF 25.2 compat), later pushes are dependabot branches only. It is Apache-2.0 and pip-installable with prebuilt wheels, but the large Mars-derived codebase is not something you can realistically vendor or maintain yourself.",
+  "sources_read": [
+    "https://github.com/xorbitsai/xorbits",
+    "https://github.com/xorbitsai/xorbits/blob/main/python/setup.cfg",
+    "https://github.com/xorbitsai/xorbits/blob/main/python/pyproject.toml",
+    "https://github.com/xorbitsai/xorbits/blob/main/python/xorbits/pandas/pandas_adapters/core.py",
+    "https://github.com/xorbitsai/xorbits/blob/main/python/xorbits/core/adapter.py",
+    "https://github.com/xorbitsai/xorbits/blob/main/benchmarks/tpch/README.md",
+    "https://github.com/xorbitsai/xorbits/blob/main/.github/workflows/python.yaml",
+    "https://github.com/xorbitsai/xorbits/blob/main/doc/source/user_guide/best_practices.rst",
+    "https://github.com/xorbitsai/xorbits/blob/main/doc/source/user_guide/deferred_execution.rst",
+    "https://github.com/xorbitsai/xorbits/blob/main/doc/source/user_guide/storage_backend.rst",
+    "https://github.com/xorbitsai/xorbits/blob/main/doc/source/user_guide/chunking.rst",
+    "https://github.com/xorbitsai/xorbits/blob/main/doc/source/user_guide/operator_fusion.rst",
+    "https://github.com/xorbitsai/xorbits/issues?q=is%3Aissue+is%3Aopen",
+    "https://github.com/xorbitsai/xorbits/issues/671",
+    "https://github.com/xorbitsai/xorbits/issues/691",
+    "https://github.com/xorbitsai/xorbits/issues/499",
+    "https://github.com/xorbitsai/xorbits/issues/738",
+    "https://github.com/xorbitsai/xorbits/releases",
+    "https://github.com/xorbitsai/xorbits/commits/main",
+    "https://github.com/xorbitsai/xorbits/branches",
+    "https://xorbits.readthedocs.io/en/latest/getting_started/why_xorbits/comparisons.html",
+    "https://xorbits.readthedocs.io/en/latest/getting_started/why_xorbits/fast.html",
+    "https://xorbits.readthedocs.io/en/latest/getting_started/why_xorbits/pandas.html",
+    "https://xorbits.readthedocs.io/en/latest/user_guide/deployment.html",
+    "https://xorbits.readthedocs.io/en/latest/user_guide/deployment_local.html",
+    "https://arxiv.org/pdf/2401.00865v2",
+    "https://pypi.org/pypi/xorbits/json",
+    "https://pypi.org/pypi/xorbits/0.8.2/json",
+    "https://hn.algolia.com/api/v1/search?query=xorbits&tags=story"
+  ],
+  "confidence": 0.75
+}
