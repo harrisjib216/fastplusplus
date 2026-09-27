@@ -7,3 +7,6 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - NNG (https://github.com/nanomsg/nng): nanomsg's upstream-recommended successor. Found by the nanomsg enricher.
 
 Seeded as w6-seed-leads (RocksDB integrated BlobDB, FastPLBF, NNG) on 2026-09-26.
+
+For a later wave (not storage-and-data):
+- pgrust OLTP (https://github.com/malisper/pgrust): a Rust reimplementation of PostgreSQL with a real head-to-head OLTP result of 1.25-1.40x vs PostgreSQL 18.3 in its own kit. Its columnar ClickBench claim was rejected in wave 6 (benchmark-specific kernels, removed from ClickBench).
