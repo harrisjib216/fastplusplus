@@ -1,0 +1,60 @@
+{
+  "id": "https://ed25519.cr.yp.to/software.html",
+  "one_liner": "The original 2011 public-domain Ed25519 amd64 assembly in SUPERCOP. On Westmere it signs about 20x and verifies about 7.6x faster than OpenSSL-based P-256 ECDSA.",
+  "what_it_does": "It implements Ed25519: EdDSA over the twisted Edwards form of Curve25519 with SHA-512, deterministic nonces, 32-byte public keys and 64-byte signatures. The code ships only as the crypto_sign/ed25519 directory of SUPERCOP. The page lists three interchangeable implementations: amd64-51-30k and amd64-64-24k (assembly) and a slow portable 'ref'. SUPERCOP has since added ref10, lib25519-amd64/ref10, neon and s2n variants. The API is NaCl's signed-message style: crypto_sign_keypair(pk, sk) with a 64-byte sk, crypto_sign(sm, &smlen, m, mlen, sk) producing signature||message, and crypto_sign_open. The amd64 code also has an open_batch entry point. It is a different scheme, key format and API from ECDSA, not a drop-in replacement.",
+  "how_it_is_fast": "Field elements mod 2^255-19 use five radix-2^51 limbs. This avoids the slow add-with-carry chains that radix 2^64 hits on Nehalem/Westmere, and reduction is folded into the 25-mul schoolbook product through multiplies by 19. amd64-64-24k keeps radix 2^64 for CPUs such as K10/Core 2. Signing computes rB as a signed radix-16 fixed-base sum (Pippenger-style) over a 30KB precomputed table. Constant-time lookups load every candidate entry and combine them arithmetically, at a bit under 1000 cycles per step plus about 21000 for the final inversion. Verification merges the inversion into the square root when decompressing points, runs a double-scalar multiplication with a=-1 Edwards formulas, and compares encodings so R is never decompressed. Batch verification checks a random linear combination (128-bit z_i) with the Bos–Coster multi-scalar method over a heap using Floyd's bottom-up root replacement.",
+  "when_to_use": [
+    "You want the canonical, public-domain Ed25519 code to study, benchmark against, or vendor into C on x86-64, and you control the SUPERCOP/NaCl-style glue (sha512, verify_32, randombytes)",
+    "Server-side verification of many signatures from many keys: the amd64 open_batch path handles up to 64 at a time. The paper measured under 134000 cycles per signature versus 273364 for single verification on Westmere",
+    "Designing a new protocol that is free to pick its signature scheme and wants small keys and signatures (32/64 bytes) and deterministic signing that needs no RNG",
+    "Side-channel-conscious signing on general-purpose CPUs: the authors state there are no secret-dependent branches or array indices, and SUPERCOP's goal files record a TIMECOP pass for amd64-51-30k (titan0, 2020)"
+  ],
+  "when_not_to_use": [
+    "Environments that must interoperate with ECDSA P-256 (X.509 PKI, FIPS-only policies, existing P-256 keys): Ed25519 is a different curve, key format and signature semantics, so there is no drop-in path",
+    "Non-x86-64 targets: both assembly variants are amd64-only (the 'architectures' file says amd64), and the software page calls the portable 'ref' 'slow'",
+    "Systems that need strict, consensus-grade validity rules. open.c rejects S only when its top 3 bits are set, so S values in [ℓ, 2^253) pass the check. Single verification is cofactorless (encoding of SB−hA must equal R), while the batch equation only guarantees 8SB = 8R + 8hA, so the two paths can disagree on crafted signatures",
+    "Production deployments that want a maintained library: this 2011 code is frozen, and SUPERCOP itself now carries lib25519-amd64, lib25519-ref10 and s2n implementations of the same primitive",
+    "Very long or streamed messages: the API takes the whole message in memory, copies it into the signed-message buffer, and for long messages the time is dominated by SHA-512"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "SUPERCOP/NaCl-provided crypto_hash_sha512, crypto_verify_32, randombytes and the crypto_sign.h namespace macros",
+    "min_toolchain": "C compiler plus an assembler for the qhasm-generated AT&T-syntax .S files (gcc or clang). The paper states no compiler; SUPERCOP's goal files show gcc -march=native -O3 builds",
+    "platforms": "x86-64 only for amd64-51-30k and amd64-64-24k; the portable C ref/ref10 run anywhere but slowly",
+    "thread_safety": "Not documented. The C entry points read (keypair, sign, open, open_batch) keep their state on the stack, and keypair and open_batch call randombytes, so thread safety depends on that function",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The 64-byte secret key is the 32-byte seed followed by the 32-byte public key. crypto_sign copies A from sk+32 instead of recomputing it, so never assemble sk from a separately stored or untrusted public key",
+    "crypto_sign_open needs an output buffer m of at least smlen bytes because it uses it as scratch. On failure it sets *mlen to (unsigned long long)-1 and zeroes m",
+    "open_batch calls randombytes and caps batches at 64. It verifies fewer than 3 signatures one by one and, on any failure, falls back to individual verification. The paper's batch figures were the authors' own and were 'not yet benchmarked by' eBATS",
+    "The Westmere numbers come from the radix-2^51 amd64-51-30k code; the paper says radix 2^64 (amd64-64-24k) bottlenecks on Nehalem/Westmere. SUPERCOP selects the fastest implementation per machine, so which one you get varies by CPU"
+  ],
+  "pick_this_over_siblings_when": "Pick this over ENG25519 when you need plain x86-64 Ed25519 without AVX-512IFMA hardware, or when public-domain provenance matters more than peak throughput. libsecp256k1 and UltrafastSecp256k1 fit only when you need secp256k1 interop, and FourQlib only when a non-standard curve is acceptable.",
+  "verified_claims_summary": "The paper (CHES 2011 / JCEN 2012) cites official eBATS reports on hydra2, a 2.4 GHz Intel Xeon E5620 (Westmere): 87548 cycles to sign and 273364 cycles to verify a short message. Against eBATS ecdonaldp256 (P-256 ECDSA; current eBATS shows it is an OpenSSL EC_KEY wrapper) at 1790936 and 2087500 cycles on the same machine, that is about 20.5x and 7.6x; the compiler is not stated. Current eBATS on 'alder' (Core i3-12100, SUPERCOP 20260831) shows the gap has narrowed. The fastest listed ed25519 is at a median of 27171 cycles to sign and 102613 to open, against 90965 and 248160 for ecdonaldp256 (about 3.3x and 2.4x).",
+  "status_note": "Frozen 2011 research code (software page last revised 2017-01-22) that is still shipped and benchmarked in SUPERCOP 20260831. The promised NaCl integration never shipped: NaCl's latest release, 20110221, still ships a prototype crypto_sign and points to SUPERCOP. It is public domain and easy to copy for study, but a maintained descendant is the better production choice.",
+  "sources_read": [
+    "https://ed25519.cr.yp.to/software.html",
+    "https://ed25519.cr.yp.to/",
+    "https://ed25519.cr.yp.to/ed25519-20110926.pdf",
+    "https://bench.cr.yp.to/impl-sign/ed25519.html",
+    "https://bench.cr.yp.to/web-impl/amd64-alder-crypto_sign-ed25519.html",
+    "https://bench.cr.yp.to/web-impl/amd64-alder-crypto_sign-ecdonaldp256.html",
+    "https://bench.cr.yp.to/results-sign/amd64-alder.html",
+    "https://github.com/jedisct1/supercop/tree/master/crypto_sign/ed25519",
+    "https://github.com/jedisct1/supercop/tree/master/crypto_sign/ed25519/amd64-51-30k",
+    "https://github.com/jedisct1/supercop/tree/master/crypto_sign/ed25519/amd64-64-24k",
+    "https://github.com/jedisct1/supercop/blob/master/crypto_sign/ed25519/amd64-51-30k/api.h",
+    "https://github.com/jedisct1/supercop/blob/master/crypto_sign/ed25519/amd64-51-30k/keypair.c",
+    "https://github.com/jedisct1/supercop/blob/master/crypto_sign/ed25519/amd64-51-30k/sign.c",
+    "https://github.com/jedisct1/supercop/blob/master/crypto_sign/ed25519/amd64-51-30k/open.c",
+    "https://github.com/jedisct1/supercop/blob/master/crypto_sign/ed25519/amd64-51-30k/batch.c",
+    "https://github.com/jedisct1/supercop/blob/master/crypto_sign/ed25519/amd64-51-30k/goal-constbranch",
+    "https://github.com/jedisct1/supercop/blob/master/crypto_sign/ed25519/amd64-51-30k/goal-constindex",
+    "https://github.com/jedisct1/supercop/blob/master/crypto_sign/ed25519/amd64-51-30k/architectures",
+    "https://github.com/jedisct1/supercop/blob/master/crypto_sign/ed25519/amd64-51-30k/implementors",
+    "https://nacl.cr.yp.to/install.html",
+    "https://nacl.cr.yp.to/sign.html"
+  ],
+  "confidence": 0.8
+}
