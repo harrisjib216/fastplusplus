@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/punnerud/mpedb",
+  "one_liner": "Rust embedded SQL database (mmap'd copy-on-write B+tree, MVCC, sqlite3 C-API shim) that beats SQLite on in-process point operations.",
+  "what_it_does": "mpedb is an embedded SQL engine with no server. Several processes mmap the same file, each can read and write it, and any of them can be SIGKILLed without corrupting it. Its SQL surface is close to sqlite's (the author reports zero wrong answers across sqlite's 7.4M-record sqllogictest corpus), but columns are rigidly typed, stricter than sqlite's STRICT. There are four ways to use it: the Rust facade (Database::open with a TOML config, prepare() returning a PlanHash, then execute(hash, params)); a PyO3 wheel imported as `import mpedb as sqlite3`; a cdylib, libmpedb_sqlite3, that exports about 50 sqlite3_* C functions for LD_PRELOAD or soname substitution; and an overlay mode that opens an existing sqlite .db, sends writes to a sidecar and checkpoints them back.",
+  "how_it_is_fast": "SQL is compiled once into a content-hashed plan, so the hot path is execute(hash, params) with no parsing or statement lookup. Rows live in an LMDB-style copy-on-write B+tree inside a MAP_SHARED mmap'd file, with double-buffered meta pages. A read is an in-process walk over mapped pages under an MVCC snapshot, pinned in a lock-free reader table of packed {pid, seq} slots, so readers never take the writer lock. Writers enqueue into a shared-memory intent ring; whoever holds the single writer lock drains it in key-locality order and commits the batch with one meta flip and one flush (group commit). durability=wal appends lean records (only touched COW pages, with node free space elided) using one pwrite plus one fdatasync. The repo's own bisect credits the 1.26M to 1.98M ops/s point-select jump on the M3 to one plan-cache and parameter-resolution commit (7fb0d53).",
+  "when_to_use": [
+    "Several processes on one host (workers, CLI tools, notebooks) writing one local database file, where SQLite gives you SQLITE_BUSY and retry loops. The README's fork test (none-class, median of 3) shows 250-302k writes/s for mpedb vs 79-90k for SQLite WAL with a 60 s busy_timeout.",
+    "Read-heavy primary-key lookups through prepared plans on a table that fits in the mapped file. M3: 1.98M vs 320k ops/s in the non-durable config and 1.94M vs 762k in the durable WAL config.",
+    "Readers that must keep going while a writer is active. M3 commit-class: 2.41M vs 1.32M reads/s against SQLite WAL, with durable write rates about equal (345 vs 338/s).",
+    "Batched durable writes with durability=wal: 29.7k vs 27.4k rows/s at 100 rows/commit on the M3, and the README reports a larger lead on Linux.",
+    "Development and test: running an existing Django or CPython sqlite3 suite through the shim as a stricter 'second opinion' before deploying to PostgreSQL. This is the use the author recommends, rather than replacing SQLite."
+  ],
+  "when_not_to_use": [
+    "Single-writer durable workloads. On the M3 it ties or loses: durable insert 328 vs 353 ops/s, update 300 vs 392, and deferred-fsync inserts (mpedb async vs SQLite synchronous=NORMAL) 19,720 vs 86,062, so SQLite is 4.4x faster there. The default-style durability=commit manages only 143 ops/s.",
+    "Production or long-lived deployments. The author calls it a 'personal research project' and 'not production-hardened'. It has one author, 11 stars and no externally filed issues, and the author names the multi-process write path, where harnesses found a leak (#37), an atomicity hole (#119) and a shared-page corruption (#160), as the part to be sceptical about.",
+    "Organizations that need OSI licensing or have more than $5B revenue or valuation. The custom license charges USD 0.07 per device, counted per device connecting to servers backed by it, with a five-year tail. It claims to apply retroactively to every prior version and says ambiguities resolve in the licensor's favour.",
+    "Full libsqlite3 fidelity. Only about 50 of roughly 300 C functions are exported. Commit, update and authorizer hooks and tracing are silent no-ops, custom VFS (such as encryption) and loadable extensions are refused, SQLITE_OPEN_READONLY is not enforced, and writes to ATTACHed databases are refused. The pip module passed only 2/89 of sqlitedict's tests and 67/87 of diskcache's at 0.1.3, and PY-COMPAT.md lists an overlay INSERT OR REPLACE duplicate (#133) as a wrong answer.",
+    "Windows, NFS or containers. On Windows the contended-insert cell is about 4x worse relative to SQLite than on Linux, with the cause unknown. Network filesystems are unsupported. Attaching from a different PID namespace is refused, and the platform table says nothing has run on Linux aarch64."
+  ],
+  "integration": {
+    "form": "crate (Cargo workspace used as a git dependency; not published on crates.io), plus a PyPI wheel (mpedb 0.3.1), a cdylib sqlite3 shim and a CLI",
+    "dependencies": "Engine: libc, xxhash-rust, blake3, toml, plus in-repo crates. Optional rusqlite 0.31 (bundled) behind the sqlite-checkpoint feature. The C-API shim adds cc to build a printf.c. The Python module uses PyO3 (abi3-py310).",
+    "min_toolchain": "Rust edition 2021 with no rust-version declared (benchmarks built with rustc 1.96); CPython 3.10+ for the wheel",
+    "platforms": "Linux x86-64 (reference platform) and armv7 (tested on a Raspberry Pi 3); macOS Apple Silicon; Windows x86-64 (runs, markedly slower); wasm32 in-browser, single-process only. The platform table lists Linux aarch64 as 'nothing yet'. Local filesystems only, single PID namespace.",
+    "thread_safety": "One Database handle is shared across threads via Arc (the benchmark does this), and many processes can attach one file. Readers are lock-free MVCC snapshots. All writers in a file serialize on one writer lock, so write parallelism comes from separate files in a Workspace. The facade rule is to prepare plans before opening a write session. Through the C-API, busy_timeout is honoured, but a write with a deadline never joins group commit, which the docs measure as 2.3-2.5x slower with 4 contended durable writers.",
+    "drop_in_for_baseline": "partial — the libsqlite3 ABI shim runs unchanged CPython sqlite3, Django and SQLAlchemy suites (via LD_PRELOAD; PHP needs soname substitution because LD_PRELOAD silently binds nothing there), and `import mpedb as sqlite3` works for common DB-API code. Rigid typing, integer-overflow errors, narrower ORDER BY, a fixed file size, no-op hooks and a subset of exported functions mean some code breaks loudly. The docs disagree on CPython test_sqlite3: the README says 466/466, C-API-COMPAT.md says 459 of 467."
+  },
+  "gotchas": [
+    "The file size is fixed at creation: it is fallocate'd from size_mb, the shim defaults are 64 MiB file-backed and 16 MiB in-memory, and it never grows. Exceeding it gives DbFull or SQLITE_FULL. A reader that is alive but stalled (SIGSTOP, debugger, a long scan) pins its snapshot and can eventually stall every writer with DbFull, because snapshot eviction is only half built.",
+    "Pick durability deliberately. `commit` (msync data, then meta) costs two device flushes, and on macOS each is a full F_FULLFSYNC, so it runs at about half the speed of `wal`. The benchmark page calls `wal` the like-for-like comparand. The data file and its -wal sidecar must be copied together for snapshots.",
+    "The benchmark arms are not symmetric. mpedb shares one handle across threads and uses execute(hash); the batched-insert cell uses the typed insert_row, bypassing SQL, while SQLite gets one connection per thread and prepared SQL. WAL auto-checkpoint is deferred out of the timed cells for both engines. SQLite's none-class mode is journal_mode=MEMORY with synchronous=OFF, a rollback-journal setup in which SQLite's own point-select is 2.4x slower than in its WAL setup. That inflates the 6.2x headline and produces the pathological 180 reads/s read-while-write cell, which the author labels as such.",
+    "The README's prebuilt-shim install line points at releases/latest, but v0.3.0 and v0.3.1 have no assets attached and the filename says 0.2.1. v0.2.9 has no macOS build either, so on current releases you build the shim with cargo."
+  ],
+  "pick_this_over_siblings_when": "Among the SQLite-baseline siblings (CalicoDB, ForestDB, ZoneTree, BTreePlus, DBX, CacheAdvance), pick mpedb when you want to keep SQL and existing libsqlite3/Python sqlite3 code while gaining multi-process writers and faster point reads. The others expose key-value or custom APIs, so adopting them means rewriting the data layer. Prefer them when a plain KV API is enough and you need a conventional license or a longer track record.",
+  "verified_claims_summary": "The author's mpedb-bench harness ran once on 2026-07-23 on an Apple M3 Pro (11 cores, macOS 26.6), built with rustc 1.96.0 --release, thin LTO and codegen-units=1. It measured mpedb 0.1.0 against bundled SQLite 3.45.0 through rusqlite 0.31 (STRICT table, prepare_cached) on a 50,000-row table. Warm PK point-select ran at 1.98M vs 320k ops/s non-durable (tmpfs; SQLite journal=MEMORY, sync=OFF) and 1.94M vs 762k durable (mpedb wal vs SQLite WAL, sync=FULL plus fullfsync), and point-insert at 231k vs 115k, with SQLite ahead on durable update, single-client durable insert and the deferred-fsync class. A same-day 2-core AMD EPYC-Milan Linux run shows point-select at 490k vs 80k.",
+  "status_note": "Actively developed by a single author: the repo was created 2026-07-13, the last commit was 2026-08-28, and the latest release is v0.3.1 (2026-08-22, also on PyPI), not the 0.2.1 in the record. The benchmark measured 0.1.0 and has not been re-run on 0.3.x. The author describes it as a research project rather than production software, and it ships under a custom non-OSI source-available license.",
+  "sources_read": [
+    "https://github.com/punnerud/mpedb",
+    "https://github.com/punnerud/mpedb/blob/main/README.md",
+    "https://github.com/punnerud/mpedb/blob/main/crates/mpedb-bench/RESULTS-macos-apple-m3-pro-11c.md",
+    "https://github.com/punnerud/mpedb/blob/main/crates/mpedb-bench/RESULTS-linux-amd-epyc-milan-2c.md",
+    "https://github.com/punnerud/mpedb/blob/main/benchmarks/head-to-head.md",
+    "https://github.com/punnerud/mpedb/blob/main/benchmarks/README.md",
+    "https://github.com/punnerud/mpedb/blob/main/crates/mpedb-bench/src/eng_sqlite.rs",
+    "https://github.com/punnerud/mpedb/blob/main/crates/mpedb-bench/src/eng_mpedb.rs",
+    "https://github.com/punnerud/mpedb/blob/main/crates/mpedb-bench/src/workloads.rs",
+    "https://github.com/punnerud/mpedb/blob/main/crates/mpedb-bench/Cargo.toml",
+    "https://github.com/punnerud/mpedb/blob/main/Cargo.toml",
+    "https://github.com/punnerud/mpedb/blob/main/crates/mpedb-core/Cargo.toml",
+    "https://github.com/punnerud/mpedb/blob/main/crates/mpedb/Cargo.toml",
+    "https://github.com/punnerud/mpedb/blob/main/crates/mpedb-capi/Cargo.toml",
+    "https://github.com/punnerud/mpedb/blob/main/LICENSE",
+    "https://github.com/punnerud/mpedb/blob/main/design/DESIGN.md",
+    "https://github.com/punnerud/mpedb/blob/main/INNOVATIONS.md",
+    "https://github.com/punnerud/mpedb/blob/main/GUIDE.md",
+    "https://github.com/punnerud/mpedb/blob/main/C-API-COMPAT.md",
+    "https://github.com/punnerud/mpedb/blob/main/PY-COMPAT.md",
+    "https://github.com/punnerud/mpedb/releases",
+    "https://github.com/punnerud/mpedb/commits/main",
+    "https://github.com/punnerud/mpedb/issues",
+    "https://github.com/punnerud/mpedb/pulls",
+    "https://pypi.org/pypi/mpedb/json",
+    "https://crates.io/api/v1/crates/mpedb",
+    "https://hn.algolia.com/api/v1/search?query=mpedb",
+    "https://hn.algolia.com/api/v1/search?query=mpedb&tags=comment"
+  ],
+  "confidence": 0.8
+}
