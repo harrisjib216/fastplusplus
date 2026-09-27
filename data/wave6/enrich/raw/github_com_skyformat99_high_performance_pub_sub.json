@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/skyformat99/high-performance-pub-sub",
+  "one_liner": "150-line C++11 µWebSockets demo of broadcast coalescing for pub/sub fan-out; claims 89 ms vs Redis pub/sub's 5 s.",
+  "what_it_does": "A 150-line C++11 WebSocket server that exists only as a code block in the README. It puts every connection into one hard-coded room and re-broadcasts whatever any client sends to every other client. There is no real protocol: on connect it sends a 16-byte dummy string, which the deepstream.io-benchmarks event client accepts as a finished login, and after that every inbound frame is treated as a publication. It is a pattern to copy and adapt, not a library or broker, and it has no Redis-compatible API; the only other source file is redisBenchmark.cpp, the hiredis client used for the Redis comparison.",
+  "how_it_is_fast": "It uses broadcast coalescing: publications are appended to one shared per-room buffer, and the batch is flushed only on a libuv loop iteration that brought no new publications. A uv_prepare hook arms a 1 ms no-op timer so epoll_wait wakes up, and a uv_check hook does the flush. On flush the buffer is framed once with µWS prepareMessage and sent verbatim with sendPrepared to every listen-only socket, so N publications to M subscribers cost about M frames and sends instead of N×M. Sockets that published in the batch instead get a copy with their own bytes cut out ('gaps'), found by walking a sorted socket vector in lockstep with a std::map of senders.",
+  "when_to_use": [
+    "You are writing your own WebSocket fan-out server (chat rooms, game lobbies, live dashboards) and want a small reference for batching many small publications into one frame per subscriber.",
+    "Bursty rooms: many clients publish into one busy room at about the same moment, then the loop goes quiet, and per-message framing and send calls are the bottleneck.",
+    "Your application messages delimit themselves (a record separator like deepstream's 0x1E, or fixed-size messages), so clients can split a frame that holds several messages.",
+    "You care about throughput more than per-message latency. Every message waits at least until a loop iteration with no new publications.",
+    "You want to reproduce the 2016 Socket.IO / deepstream.io / Redis fan-out comparison. The Redis client is in this repo; the WebSocket client is deepstream.io-benchmarks' eventBenchmark.cpp."
+  ],
+  "when_not_to_use": [
+    "You need a broker. There are no topics or multiple rooms, no subscribe/unsubscribe, persistence, acks, auth, clustering or Redis protocol. Use Redis, NATS or current µWebSockets' built-in pub/sub instead.",
+    "Sustained load where every loop iteration receives at least one publication. The flush condition never fires, and there is no maximum batch size or deadline, so latency and the shared buffer grow without bound.",
+    "Clients need message boundaries. A batch goes out as a single TEXT frame of payloads joined with no separator.",
+    "You are on current µWebSockets. The code targets the removed 2016 uWS::Hub API (about v0.12) with the libuv backend, so it won't compile against modern uWS without a port.",
+    "Many different publishers per batch with large batches. Each sender's custom message is built with substr/append copies of the shared buffer, so copying grows with senders × batch bytes."
+  ],
+  "integration": {
+    "form": "source-drop (a code block in README.md; the repo has no build files and no .cpp for the server)",
+    "dependencies": "µWebSockets of the v0.12 era (uWS::Hub, WebSocket<SERVER>::prepareMessage/sendPrepared/finalizeMessage, getPollHandle) built on its default libuv backend, because the code calls uv_prepare, uv_check and uv_timer, which uWS's optional micro-uv epoll shim (USE_MICRO_UV) does not provide. That uWS also needs OpenSSL and zlib. The Redis harness needs hiredis (async API plus the libuv adapter) and libuv.",
+    "min_toolchain": "C++11 (stated in the README; the uWS v0.12 Makefile builds with g++ -std=c++11 -O3). No compiler versions are given. The companion benchmark client's README gives Ubuntu 16.04 build steps.",
+    "platforms": "Not documented for the prototype. The uWS v0.12 it depends on has Linux and Darwin Makefile targets, and the published runs were on localhost (Linux, per the Ubuntu 16.04 instructions).",
+    "thread_safety": "None. It is single-threaded: one global Room is mutated from event-loop callbacks.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "There is no disconnection handler, so closed sockets stay in Room::sockets and keep getting sends. In uWS v0.12 a WebSocket is a thin wrapper around a raw uv_poll_t*, so reusing that handle after close is unsafe.",
+    "The lockstep walk assumes every publisher is also in the sorted subscriber vector. If a sender is not subscribed, the index stops advancing, and every later sender in that batch gets the shared frame, including its own messages.",
+    "The benchmark client never parses a batched frame. It counts deliveries as frame length / 16, which works only because every deepstream test event is exactly 16 bytes.",
+    "addSubscriber calls push_back and then re-sorts the whole vector on every connect, and broadcast() copies each map entry by value. The author's own comments mark both as unoptimized."
+  ],
+  "pick_this_over_siblings_when": "Pick it only as a design reference for coalescing fan-out inside your own WebSocket server. For something you can deploy, use Wisp or NATS JetStream (real brokers with clients, subjects and published delivery-rate comparisons) or Eclipse Mosquitto (MQTT).",
+  "verified_claims_summary": "The README reports 89 ms per fan-out round, against 5 s for Redis pub/sub (~56x) and 4.5 min for Socket.IO. The uWS side is 10,000 localhost connections with 1,000 publications of a 16-byte deepstream event, about 10M deliveries; deepstream.io-benchmarks' Socket.IO row for that size is 274,335.6 ms. The Redis side, in redisBenchmark.cpp, is 9,000 SUBSCRIBE plus 1,000 PUBLISH connections with a 1-byte payload, 9M deliveries. That works out to roughly 112M vs 1.8M deliveries/s (derived). No hardware, compiler, flags or Redis version are given, and no raw uWS-side output is published. The two timed runs also include very different client work: 10,000 coalesced frames counted by length versus 9M separate pub/sub messages parsed by hiredis.",
+  "status_note": "Abandoned since the last commit on 2016-11-25. This copy re-uploads Alex Hultman's repo (the original URL now returns 404; one typo-fix commit comes from a contributor). It is Zlib-licensed and small enough to copy, but it builds only against 2016-era µWebSockets. The maintained path is current µWebSockets' own Apache-2.0 pub/sub (src/TopicTree.h), which also queues per-subscriber publishes and drains them in batches.",
+  "sources_read": [
+    "https://github.com/skyformat99/High-performance-pub-sub",
+    "https://github.com/skyformat99/High-performance-pub-sub/blob/master/README.md",
+    "https://github.com/skyformat99/High-performance-pub-sub/blob/master/redisBenchmark.cpp",
+    "https://github.com/skyformat99/High-performance-pub-sub/blob/master/LICENSE",
+    "https://github.com/skyformat99/High-performance-pub-sub/commits/master",
+    "https://github.com/skyformat99/High-performance-pub-sub/issues?q=is%3Aissue",
+    "https://github.com/alexhultman/High-performance-pub-sub",
+    "https://github.com/uNetworking/High-performance-pub-sub",
+    "https://github.com/deepstreamIO/deepstream.io-benchmarks",
+    "https://github.com/deepstreamIO/deepstream.io-benchmarks/blob/master/README.md",
+    "https://github.com/deepstreamIO/deepstream.io-benchmarks/blob/master/eventBenchmark.cpp",
+    "https://github.com/deepstreamIO/deepstream.io-benchmarks/blob/master/Makefile",
+    "https://github.com/deepstreamIO/deepstream.io-benchmarks/blob/master/runBenchmarks",
+    "https://github.com/deepstreamIO/deepstream.io-benchmarks/blob/master/socketio.js",
+    "https://github.com/deepstreamIO/deepstream.io-benchmarks/blob/master/deepstream2.csv",
+    "https://github.com/deepstreamIO/deepstream.io-benchmarks/blob/master/deepstream2rc.csv",
+    "https://github.com/deepstreamIO/deepstream.io-benchmarks/blob/master/socketio.csv",
+    "https://github.com/uNetworking/uWebSockets/tags",
+    "https://github.com/uNetworking/uWebSockets/blob/v0.12.0/src/WebSocket.h",
+    "https://github.com/uNetworking/uWebSockets/blob/v0.12.0/src/Hub.h",
+    "https://github.com/uNetworking/uWebSockets/blob/v0.12.0/src/Node.h",
+    "https://github.com/uNetworking/uWebSockets/blob/v0.12.0/src/uUV.h",
+    "https://github.com/uNetworking/uWebSockets/blob/v0.12.0/src/Networking.h",
+    "https://github.com/uNetworking/uWebSockets/blob/v0.12.0/Makefile",
+    "https://github.com/uNetworking/uWebSockets/blob/master/src/TopicTree.h",
+    "https://github.com/uNetworking/uWebSockets/blob/master/README.md",
+    "https://news.ycombinator.com/item?id=12906228",
+    "https://hn.algolia.com/api/v1/search?query=High-performance-pub-sub&restrictSearchableAttributes=url"
+  ],
+  "confidence": 0.7
+}
