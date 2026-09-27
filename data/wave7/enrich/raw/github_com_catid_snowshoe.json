@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/catid/snowshoe",
+  "one_liner": "Constant-time EC scalar multiplication on a custom 2^127-1 GLS curve, claimed 4-8x faster than OpenSSL 1.0.1e P-256.",
+  "what_it_does": "Snowshoe is a small C API, implemented in C++, for elliptic-curve point multiplication on its own twisted Edwards GLS curve over Fp^2 with p = 2^127-1, at about 126-bit security. It offers fixed-base mul_gen (key generation, signing), variable-base mul (ECDH), two-point simul (ECDH with forward secrecy), a variable-time simul_gen for signature verification, mod-q scalar helpers and an Elligator-based point mapping. Inputs and outputs are raw char arrays: 32-byte scalars and 64-byte affine (X,Y) points. It has no RNG, hashing, key encoding or protocol layer; the author's Tabby library builds signatures and handshakes on top, so it is not a replacement for OpenSSL's EC/EVP API.",
+  "how_it_is_fast": "Field arithmetic is in Fp^2 over the Mersenne prime 2^127-1: reduction is a shift and add, multiplies use x86-64 64x64->128 instructions (GCC/Clang __uint128_t plus AT&T inline asm), and Fp^2 multiplication uses 3 Fp multiplies (Karatsuba). Points use extended twisted Edwards coordinates (Hisil et al.) with complete formulas. A 2-dimensional GLS endomorphism (Galbraith-Lin-Scott), with Smith's short lattice basis, splits the 252-bit scalar into two ~126-bit halves, which are then recoded with GLV-SAC (Faz-Hernandez/Longa/Sanchez, 'Keep Calm and Stay with One'). The halves are evaluated with 2-bit windows and masked constant-time table lookups. Fixed-base multiplication uses an LSB-set comb (w=6, v=7) over static precomputed tables. The whole library compiles as one translation unit so the compiler can inline everything.",
+  "when_to_use": [
+    "Studying or teaching constant-time GLS/GLV-SAC scalar multiplication: the README derives the curve, endomorphism, decomposition and base point in detail, with MAGMA scripts, and the code is about 5.3k heavily commented lines.",
+    "Closed systems where you control both endpoints and already depend on Snowshoe or Tabby, and interoperability with standard curves does not matter.",
+    "As a historical reference point when benchmarking 2013-era 128-bit-security EC implementations on x86-64 (Sandy Bridge figures published with methodology).",
+    "Experiments that need a fast, allocation-free, constant-time variable-base mul or double-base simul on x86-64 built with GCC or Clang."
+  ],
+  "when_not_to_use": [
+    "Any new production system: in 2020 the author told a user who could not reproduce the benchmarks, 'These days I'd recommend not to use this library and instead use one of the more active projects' (issue #4).",
+    "Anything that must interoperate with P-256, X25519/Ed25519 or secp256k1. The curve is non-standard, public keys are 64-byte uncompressed (X,Y), and there is no ASN.1, EVP or ECDSA layer.",
+    "MSVC or Intel C++ builds of the source. The README says these compilers are unsupported, and a 2020 MSVC 2019 x64 build measured 2-2.5x more cycles than the README on the same Sandy Bridge class of CPU (issue #4, never resolved).",
+    "Non-x86-64 targets where speed matters. The fast paths are x86-64 inline asm plus native 128-bit integers; 32-bit and ARM builds exist (a 2014 commit and a Makefile target hardwired to a local toolchain path) but have no published numbers.",
+    "When you need the fastest or best-reviewed option. The README's own comparison table shows Longa's GLV-GLS code and 'Kummer strikes back' beating it on several operations, and the author's handshake constructions had no security proof (issue #1). The README also says there is no blinding against power analysis."
+  ],
+  "integration": {
+    "form": "static lib (build src/snowshoe.cpp, one translation unit, or link the prebuilt bin/libsnowshoe.a / libsnowshoe.lib) or source-drop",
+    "dependencies": "libcat (catid/libcat git submodule, pinned; per-file BSD-style headers but no repo-level LICENSE file) for platform macros, 128-bit math, endian and secure-erase helpers. The caller must supply the RNG and any hash function.",
+    "min_toolchain": "GCC or Clang with __uint128_t for full speed (Makefile default: clang++ -m64 -O4; the README says Clang generates better code). No C++ standard is stated. MSVC and Intel C++ are unsupported for compiling, but MSVC can link a MinGW/LLVM-built .lib.",
+    "platforms": "x86-64 is the primary target; its fast paths use inline asm. A little-endian fast path is included and big-endian loads/saves are handled. A 32-bit mode was added in March 2014 via emulated 128-bit math, and there is an ARM cross-compile target. Only the x86-64 builds have benchmarks (macOS and Windows).",
+    "thread_safety": "Not documented. From reading the source there is no mutable global state (precomputed tables are static const and nothing is heap-allocated), so concurrent calls on separate buffers appear safe, but this is unverified.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Call snowshoe_init() at startup and check its return value. It checks struct sizes and the library version, and runs a power-on self-test meant to catch compilers that build the 128-bit math but produce wrong results (the source names Intel C++).",
+    "Scalars must satisfy 0 < k < q, and input points are validated. Every multiply returns non-zero on bad input, and you must check it because this is the defence against invalid-point attacks. mul, simul and simul_gen compute 4*k*P (cofactor clearing); mul_gen multiplies by 4 only when its mul4 flag is set.",
+    "simul_gen is explicitly not constant-time. Use it only with public inputs, such as signature verification.",
+    "The README's 'EdDSA sign/verify' timings come from tests/snowshoe_test.cpp, which uses fake hashes ('to avoid implementing Skein'). They leave out hashing cost and are not directly comparable to full Ed25519 or ECDSA timings."
+  ],
+  "pick_this_over_siblings_when": "FourQlib uses the same design ideas (Fp^2 over 2^127-1, twisted Edwards, endomorphism decomposition), adds a 4-dimensional decomposition, and is maintained. Its catalog entry reports about 72k cycles for variable-base multiplication on Sandy Bridge, against Snowshoe's about 131k (a comparison across different pages), so pick FourQlib when you want speed with that design. Pick the Ed25519, libsecp256k1 or curve25519-voi entries for standard, interoperable curves; Snowshoe only makes sense as a readable reference implementation or for existing Snowshoe/Tabby deployments.",
+  "verified_claims_summary": "Snowshoe side: median of 10,000 RDTSC samples with Turbo Boost off, clang++ -m64 -O4, on Sandy Bridge i5-2557M and i5-2500S. ec_mul_gen took about 60k cycles, ec_mul about 131k and ec_simul about 192k, or 22.4 us for keygen and 49.3 us for EC-DH on the 2.7 GHz iMac. OpenSSL side: the author reports 'roughly 100 usec' for keygen (4x slower) and 'roughly 400 usec' for EC-DH (8x slower) from OpenSSL 1.0.1e's make tests with the ectest.c timing macros, on an unnamed machine with no harness in the repo. Two further caveats on that run. First, the ecp_nistp256.c path the README names is gated by ec_nistp_64_gcc_128, which OpenSSL 1.0.1e's Configure disables by default, and the README does not say it was enabled. Second, the '~6x' headline chains Kasper's P-224-only paper (which claims 'up to 4 times faster' atomic operations, not 3x) with a cycle-count projection. A 2020 third-party MSVC reproduction measured 2-2.5x more cycles than the README.",
+  "status_note": "Abandoned: the last code change was in March 2014 (a BSD-3-Clause LICENSE was added in February 2018), and in 2020 the author recommended more active projects instead. It is small and permissively licensed enough to vendor for study, but it is not advisable for new production use.",
+  "sources_read": [
+    "https://github.com/catid/snowshoe",
+    "https://github.com/catid/snowshoe/blob/master/README.md",
+    "https://github.com/catid/snowshoe/blob/master/include/snowshoe.h",
+    "https://github.com/catid/snowshoe/blob/master/Makefile",
+    "https://github.com/catid/snowshoe/blob/master/LICENSE",
+    "https://github.com/catid/snowshoe/blob/master/.gitmodules",
+    "https://github.com/catid/snowshoe/blob/master/src/README.md",
+    "https://github.com/catid/snowshoe/blob/master/src/snowshoe.cpp",
+    "https://github.com/catid/snowshoe/blob/master/src/fp.inc",
+    "https://github.com/catid/snowshoe/blob/master/src/fe.inc",
+    "https://github.com/catid/snowshoe/blob/master/src/ecmul.inc",
+    "https://github.com/catid/snowshoe/blob/master/src/recode.inc",
+    "https://github.com/catid/snowshoe/blob/master/src/precomp.inc",
+    "https://github.com/catid/snowshoe/blob/master/tests/README.md",
+    "https://github.com/catid/snowshoe/blob/master/tests/ecmul_test.cpp",
+    "https://github.com/catid/snowshoe/blob/master/tests/snowshoe_test.cpp",
+    "https://github.com/catid/snowshoe/blob/master/bin/LINKING.md",
+    "https://github.com/catid/snowshoe/blob/master/supercop/crypto_sign/snowshoe/ref/README.md",
+    "https://github.com/catid/snowshoe/commits/master",
+    "https://github.com/catid/snowshoe/issues/1",
+    "https://github.com/catid/snowshoe/issues/2",
+    "https://github.com/catid/snowshoe/issues/4",
+    "https://github.com/catid/snowshoe/issues/6",
+    "https://github.com/catid/libcat",
+    "https://github.com/catid/libcat/blob/9ca03e48e7f6f38ee001d8c89eda0f7c1e2a7734/BigMath.hpp",
+    "https://github.com/catid/libcat/blob/9ca03e48e7f6f38ee001d8c89eda0f7c1e2a7734/Platform.hpp",
+    "https://github.com/catid/tabby",
+    "https://bench.cr.yp.to/primitives-dh.html",
+    "https://bench.cr.yp.to/primitives-sign.html",
+    "https://hn.algolia.com/api/v1/search?query=snowshoe%20curve",
+    "https://raw.githubusercontent.com/openssl/openssl/OpenSSL_1_0_1e/Configure",
+    "https://raw.githubusercontent.com/openssl/openssl/OpenSSL_1_0_1e/CHANGES",
+    "http://static.googleusercontent.com/media/research.google.com/en/us/pubs/archive/37376.pdf"
+  ],
+  "confidence": 0.8
+}
