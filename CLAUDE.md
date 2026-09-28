@@ -1,0 +1,131 @@
+# fastpp: working notes for Claude Code
+
+These notes carry the project's conventions between machines. They were written from the
+orchestrating session's memory on 2026-09-28; keep them current when a rule or lesson changes.
+
+## Goal
+
+A centralized list of the fastest C++ code (other languages later) so agents and developers can
+find faster implementations and libraries for their projects. C++ comes first; C libraries callable
+from C++ count. The spec is `faster-than-std-agent-prompt.md` (Part 4 lists each wave's categories
+and baselines). Scripts are in `pipeline/`, data in `data/waveN/`, rendered lists in the repo root.
+
+## Standing rules from the user
+
+- **Commit and push after every milestone** (each search merged, verifier batch applied,
+  enrichment recorded, lists rendered). Pushing to `origin main` is pre-authorized. Stage only
+  the files a step produced; never commit raw files that a still-running agent is writing.
+- **Keep flagged entries and document their shortcomings** in `data/decisions.json` instead of
+  dropping them (not faster, off-baseline, private repo, wrong category, low confidence, security
+  bugs, quality failures). Reject only when the evidence is invalid or fabricated (precedents:
+  MQF timed a no-op; FastestJSONInTheWest benchmarked a sleep; zokio hard-coded its baseline
+  column; ClickBench-disqualified results; stb-zip's fast path computed a different checksum;
+  Go stdlib's libp2p "OpenSSL" columns ran Go code).
+- **Quiet runs:** no progress updates to the user after each agent report. Speak when blocked,
+  when a wave closes, or when asked. Every subagent prompt ends with a terse final-reply rule
+  (max ~8 lines; the JSON output stays normal prose).
+- **Tokens are not a concern:** raise or remove caps when it yields more or better results.
+  Sonnet for search (get coverage from more search agents, not a bigger model), Opus for verify,
+  enrich and re-tier checks.
+- **QUEUE.md** holds later extensions (waves 13-14, cross-language claims, seed-list mining).
+  Keep it out of the spec, pipeline and data until waves 3-12 are finished, unless the user pulls
+  it forward.
+- **Developer source repo:** it is private, so its entries are capped at tier C and link to a 404. Do not
+  change its visibility or modify its checkout without an explicit instruction.
+- Hard-to-reverse actions need the user's confirmation.
+
+## Privacy and security (repeat these in every agent prompt)
+
+- Never send the user's email, name or other personal identifiers to any outside service (URLs,
+  headers, payloads). Do not build headers from `git config`. For APIs that want a User-Agent
+  (crates.io and others) use exactly `User-Agent: fastpp-research-bot/1.0`.
+- Agents write nothing in the repo except their named output file. They must `mkdir -p` their
+  own scratch directory under the session's scratchpad and save every fetched file there by
+  absolute path. A relative `readme.md` overwrote `README.md` twice in wave 7 (macOS file names
+  are case-insensitive). Check `git status` after each report and restore/delete strays.
+- Never disable the sandbox.
+
+## Evidence tiers
+
+- A: public benchmark code + compiler + flags + CPU model (fully reproducible), whoever ran it.
+- B: independent or peer-reviewed measurement.
+- C: first-party only.
+- D: directional, no numbers.
+Ratios a verifier derives are allowed if labelled "(derived from page data)". CC0/public-domain
+code counts as copyable.
+
+## The wave loop
+
+Each wave has `data/waveN/assignments.json`: categories x 8 source batches
+(b1 gh-cpp, b2 papers, b3 gh-cpp2, b4 shootouts, b5 registry, b6 gh-any, b7 blogs, b8 hn),
+plus an optional `seed` assignment. Build a new wave's file from spec Part 4 the same way as
+`data/wave8/assignments.json`, and create `data/waveN/leads.md`.
+
+1. `python3 pipeline/render.py data/waveN --batch bK` renders search prompts to
+   `data/waveN/prompts/`. Render a category's gh-cpp2 prompt after its papers search finishes.
+2. Launch one Sonnet agent per prompt. When it reports:
+   `python3 pipeline/merge.py data/waveN`, then
+   `python3 pipeline/verify.py render data/waveN --assignments <assignment ids>`
+   (renders only that search's new entries; batches of 3).
+3. Launch one Opus agent per verifier batch. When it reports, record shortcomings, then
+   `python3 pipeline/verify.py apply data/waveN` and `python3 pipeline/enrich.py data/waveN`.
+4. Launch Opus enrichers for newly verified entries (two prompts per agent works well). Record
+   their shortcomings.
+5. Collect leads from enrichers in `leads.md`; before closing, add a `seed` assignment with a
+   `projects` list, run `python3 pipeline/seed.py data/waveN --batch seed`, then merge, verify
+   and enrich the seed records.
+6. Close: final `verify.py apply`, confirm every verified entry has `enrich/raw/<slug>.json`
+   (slug = `re.sub(r"[^a-z0-9]+","_", id.removeprefix("https://")).strip("_")`), run
+   `python3 pipeline/render_lists.py`, commit, push, and update these notes.
+
+Recording decisions: pipe JSON lines into `python3 pipeline/add_decisions.py`, e.g.
+
+```
+python3 pipeline/add_decisions.py <<'EOF'
+{"id":"https://github.com/owner/repo","s":"shortcoming text","m":"independent measurement"}
+{"id":"https://github.com/owner/port","decision":"duplicate","reason":"why it folds into X"}
+EOF
+```
+
+Override fields (`name`, `category`, `domain`, `repo_url`, `has_code`, `language`) are applied by
+`verify.py apply`. Re-tier a verified entry by writing `data/waveN/verify/raw/retier-NN.json`
+(`[{id, evidence_tier_final, tier_reason, corrections{...}, urls_opened}]`).
+
+Agent prompt shape (search/verify/enrich): "Read <prompt file> and carry out that task exactly;
+it names your output file." plus a harness note: which sources to use (`gh`, prefer
+`gh api graphql` when REST search is rate-limited; WebFetch; PDFs via curl + pdftotext; HN
+Algolia; arXiv; IACR ePrint; crossref.org since DBLP blocks bots), draft output early, move on
+after 2 failed fetches, the privacy/scratch rules above, and the terse final-reply rule.
+
+## External limits
+
+- `gh search` allows ~30 requests/min across all agents; the authenticated REST limit (5000/h)
+  runs out at ~30-40 concurrent agents, so agents fall back to `gh api graphql`, github.com pages
+  or raw.githubusercontent.com.
+- WebSearch has a per-session budget (exhausted in earlier sessions); prefer arXiv, Semantic
+  Scholar and HN Algolia APIs. kerkour.com asks not to be scraped.
+- Subagent concurrency: set `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=50` in
+  `.claude/settings.local.json` (gitignored, so set it on each machine).
+
+## Lessons
+
+- `merge.py` reads every raw file, including drafts of running agents; render verify batches with
+  `--assignments` so drafts stay out. Applying while verifiers are mid-write picks up drafts
+  (harmless; re-apply after they report).
+- Records sharing one repo URL, or pointing at an already-known repo (SUPERCOP mirror, Crypto++),
+  need a `paper:` id set in the raw file before merging.
+- Wrappers, ports and FFI bindings of an already-listed project get decision `duplicate`.
+- Vendor-blog evidence from a company selling the product is retiered to C; numbers measured on
+  code later fixed for correctness bugs, or built with flags absent from public sources, go to C.
+- `verify.py render` skips `duplicate` entries; `apply` honors keep/reject/duplicate and the
+  override fields above.
+- Default search assignments to a C++ language filter; "any"-language passes are extra coverage.
+
+## Status (2026-09-28)
+
+- Waves 1-7 are finished. Lists at f74eba1: COPYABLE 843, REFERENCE 86, REJECTED 16.
+- Wave 8 (numerics-and-science) is set up but not started: `data/wave8/assignments.json`
+  (56 assignments: blas, fft, sparse, bigint, ml, rng, geo x b1-b8) and the b1/b2 prompts are
+  committed. Next: launch the b1 and b2 searches. The user paused on 2026-09-26; resume when asked.
+- Then waves 9-12 per spec Part 4. zlib-ng and libdeflate are already filed under wave 9's
+  general-lossless category.
