@@ -4,8 +4,9 @@ This run is in a locked-down cloud container. What works and what does not:
 - WORKS: WebSearch (load with ToolSearch "select:WebSearch,WebFetch"). It is the main discovery tool now; budget is shared by ~14 agents, so make each query count. If it reports exhausted, continue with WebFetch-only sources below.
 - WORKS: WebFetch on github.com repo pages (https://github.com/OWNER/REPO gives license, stars, description; https://github.com/OWNER/REPO/commits gives last commit date; https://github.com/OWNER/REPO/blob/BRANCH/PATH for files). WebFetch on a github.com page counts as opening it.
 - WORKS: curl https://raw.githubusercontent.com/OWNER/REPO/HEAD/PATH (READMEs, bench files) — save into your scratch dir by absolute path.
-- WORKS: WebFetch https://hn.algolia.com/api/v1/search?query=<terms>&tags=story ; WebFetch https://arxiv.org/abs/<id> and https://arxiv.org/html/<id> ; most blogs and project sites via WebFetch.
-- SOMETIMES: WebFetch https://api.semanticscholar.org/graph/v1/paper/search?query=<terms>&fields=title,url,year,externalIds&limit=20 (rate-limited 429; move on after 2 failures).
+- BLOCKED in the 2026-10-01 session (egress policy, EGRESS_BLOCKED): arxiv.org, hn.algolia.com, api.semanticscholar.org, *.github.io, dl.acm.org, ieeexplore, doi.org, sciencedirect, springer, readthedocs and most blogs/project sites. Try one fetch; if it says EGRESS_BLOCKED, do not retry that host. Use WebSearch snippets to learn what a blocked page says, and say so in your notes.
+- WebSearch: subagents share a budget that ran out (200/200) when ~28 agents ran at once; try it, and if it reports exhausted, switch to github.com/topics/<topic>?l=c%2B%2B pages and repo READMEs.
+- WORKS: github.com pages (WebFetch), raw.githubusercontent.com (curl), gitlab.com, pypi.org.
 - DOES NOT WORK: the `gh` CLI (search and api are blocked for other repos), api.github.com, github.com/search, export.arxiv.org API, crossref, dblp, curl to any host except raw.githubusercontent.com and package registries (pypi.org). Do not retry these.
 - Move on after 2 failed fetches of the same resource. Draft your output file early (a valid JSON array) and update it as you go.
 

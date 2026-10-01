@@ -1,0 +1,81 @@
+[
+  {
+    "id": "https://github.com/ooalahhq/ra_prng",
+    "verdict": "reject",
+    "reject_reason": "other: invalid evidence - the headline ra_core_singleblock rows time dead code. In experiments/2026-9-1_family-productionization/bench_release.c every call passes raw_stream=NULL, and ra_core_singleblock (src/ra_core/c/ra_core.c) returns cons, which always equals the key, so no generated word is observable. With the helpers force-inlined, the 255-step serial output loop can be removed by the compiler; the README's own table shows ~0.00 ns/word generate time and a real time (0.191 ns/word x 255 = 48.7 ns) below the separately timed init (49.96 ns). The rows that do consume output (orbit --stream, whose ra_reseed reads the swapped L[]) are 3.2x slower than xoshiro256** (3.87 vs 1.20 ns/word) and level with scalar Philox (3.89).",
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "Benchmark code (bench_release.c), GCC 13.2.0, -O3 -march=native and the i3-1115G4 CPU are all stated, but the singleblock K=1/K=255 timings measure a call whose output is discarded (only init and call overhead remain), so they are not valid evidence. The valid first-party rows show no win over xoshiro256**.",
+    "corrections": {
+      "claimed_speedup": "README 2026-09-12 table: ra_core_singleblock K=255 0.191 ns/word (20018 MB/s) vs xoshiro256** 1.30 and Philox4x32-10 3.79 ns/word (README: ~6.8x and ~19.9x); K=1 12.41 ns vs Philox 14.08 and xoshiro256** 7.00. These singleblock rows are invalid (output never consumed; generate/word shown as ~0.00). Valid rows: ra_core_orbit --stream 3.87 ns/word vs xoshiro256** 1.20 (about 3.2x slower) and Philox4x32-10 3.89 (about equal).",
+      "caveats": "The singleblock benchmark discards every output (raw_stream=NULL; the function returns the key), so the 20 GB/s figure times init plus call overhead, not generation; a 255-step serial dependency chain cannot run at ~0 ns/word. The README's 2026-09-12 'fairness fix' (always_inline on the singleblock helpers) moved singleblock from ~8000 to ~20000 MB/s, consistent with the compiler deleting the now-dead loop. Orbit, which does generate, is 3.2x slower than xoshiro256** on a long stream. An earlier 30303 MB/s claim was withdrawn as non-reproducible. Repo first commit 2026-08; most commits co-authored with an AI assistant. CC BY-NC-SA 4.0 (non-OSI, non-commercial). Papers are unpublished manuscripts. Not for cryptographic use."
+    },
+    "notes": "Reject on the MQF precedent (timed a no-op): checked ra_core.c lines ~374-430 and bench_release.c; outputs are only reachable through fwrite(raw_stream), which the benchmark sets to NULL, and ra_core_singleblock returns the key. Not compiled (no builds allowed); the reasoning rests on the source plus the README's own ~0.00 ns/word generate column. Metadata confirmed: 5 stars, 0 forks, 215 commits, last commit 2026-09-12, CC BY-NC-SA 4.0.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/ooalahhq/ra_prng/HEAD/README.md",
+      "https://raw.githubusercontent.com/ooalahhq/ra_prng/HEAD/experiments/2026-9-1_family-productionization/bench_release.c",
+      "https://raw.githubusercontent.com/ooalahhq/ra_prng/HEAD/src/ra_core/c/ra_core.c",
+      "https://raw.githubusercontent.com/ooalahhq/ra_prng/HEAD/LICENSE",
+      "https://github.com/ooalahhq/ra_prng",
+      "https://github.com/ooalahhq/ra_prng/commits"
+    ]
+  },
+  {
+    "id": "https://github.com/diamondinoia/simdrng",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "A",
+    "tier_reason": "Benchmark code is public (tests/benchmarks.cpp, Google Benchmark with DoNotOptimize/ClobberMemory on the filled buffer), the CI workflow (.github/workflows/benchmarks.yml) builds with the 'bench' preset (Release, -march=x86-64-v3) for gcc-14/15 and clang-19/20 and records the CPU (cpu_model.txt: AMD EPYC 7763). The gcc-15 JSON contains every number in the record.",
+    "corrections": {
+      "claimed_speedup": "gcc-15 benchmark JSON (2026-07-22): XoshiroSIMD fill_u64 1645 ns per 4096 values (2.49e9 values/s) vs scalar Xoshiro fill_u64 3835 ns (1.07e9 values/s), about 2.3x (derived from page data); SIMD Philox4x32 fill 7970 vs scalar 27502 ns (about 3.5x) and ChaCha20 21555 vs 61019 ns (about 2.8x) (derived from page data). Scalar Xoshiro uniform() 1.32 ns vs the same engine through std::uniform_real_distribution 4.65 ns (about 3.5x) and vs std::mt19937_64 + std::uniform_real_distribution 8.01 ns (about 6x) (derived from page data); std::mt19937_64 single u64 call 1.60 ns vs scalar Xoshiro 0.94 ns. docs/benchmarks.rst: Xoshiro bulk 'reaches ~2.3x its scalar loop'; uniform() ~1.6 ns vs ~5.2 ns, 'roughly 3x' (a different run).",
+      "baseline_stdlib": ["libstdc++"],
+      "caveats": "The gain is for bulk fills only: single-value SIMD calls cost 2.82 ns vs 0.94 ns for scalar Xoshiro (buffered read overhead, per the docs), so one-at-a-time use should stay scalar. The SIMD stream interleaves SIMD_WIDTH xoshiro256++ lanes, lane i being the scalar generator after i jump() calls (tests/test_xoshiro_simd.cpp checks each lane against the scalar engine, which tests/test_xoshiro.cpp checks against Vigna's xoshiro256plusplus.c), so it is the same generator but a different output order than one scalar stream for the same seed. The std::mt19937_64 figure is a per-call time, not a bulk fill. Shared GitHub-hosted runner; cpu_model.txt is rewritten on each publish run. libstdc++ inferred from gcc-15 on ubuntu-24.04. License is BSD-3-Clause with an added acknowledgement clause (SPDX BSD-3-Clause-Attribution, not OSI-approved), so marked reference although permissive. Pre-1.0, no tagged release, 3 stars."
+    },
+    "notes": "Numbers match the gcc-15 JSON exactly. RNG check passed: the SIMD path is per-lane xoshiro256++ verified against the scalar reference, not a different generator. Last commit 2026-07-22 on main (151 commits, 3 stars, 1 fork); LICENSE text confirmed as BSD-3-Clause plus attribution clause 4.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/DiamonDinoia/simdrng/benchmark-results/results/gcc-15/20260722T164804Z.json",
+      "https://raw.githubusercontent.com/DiamonDinoia/simdrng/benchmark-results/results/gcc-15/cpu_model.txt",
+      "https://github.com/DiamonDinoia/simdrng",
+      "https://github.com/DiamonDinoia/simdrng/commits/main",
+      "https://github.com/DiamonDinoia/simdrng/tree/main/tests",
+      "https://github.com/DiamonDinoia/simdrng/tree/main/.github/workflows",
+      "https://raw.githubusercontent.com/DiamonDinoia/simdrng/main/readme.md",
+      "https://raw.githubusercontent.com/DiamonDinoia/simdrng/main/docs/benchmarks.rst",
+      "https://raw.githubusercontent.com/DiamonDinoia/simdrng/main/LICENSE",
+      "https://raw.githubusercontent.com/DiamonDinoia/simdrng/main/CMakePresets.json",
+      "https://raw.githubusercontent.com/DiamonDinoia/simdrng/main/.github/workflows/benchmarks.yml",
+      "https://raw.githubusercontent.com/DiamonDinoia/simdrng/main/tests/benchmarks.cpp",
+      "https://raw.githubusercontent.com/DiamonDinoia/simdrng/main/tests/test_xoshiro_simd.cpp",
+      "https://raw.githubusercontent.com/DiamonDinoia/simdrng/main/tests/test_xoshiro.cpp"
+    ]
+  },
+  {
+    "id": "https://github.com/fabiocannizzo/vmt19937",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "A",
+    "tier_reason": "Benchmark harness src/perf.cpp (std::mt19937 and std::mt19937_64 rows, volatile traps against dead-code elimination) is public, the Makefile gives -O3 -std=c++20 plus -march=native (default NBITS=native) or explicit ISA flags, and doc/main.tex names GCC 16 and all five CPU models; every number in the record is on the README and in doc/main.tex.",
+    "corrections": {
+      "baseline": "std::mt19937 and std::mt19937_64 (STL-MT19937 / STL-MT19937-64 rows); also the original reference MT19937 / MT19937-64 / SFMT19937 and Intel MKL MT/SFMT",
+      "baseline_stdlib": ["libstdc++"],
+      "claimed_speedup": "README table, M samples/s, vectorial mode: V-MT19937-64 2865 (AVX-512) / 1161 (AVX2) vs STL-MT19937-64 590 / 317 (about 4.9x and 3.7x, derived from page data); V-MT19937 2392 (AVX2) vs ORIG-MT19937 259 (about 9.2x, derived from page data); V-SFMT19937 10943 (AVX-512) vs ORIG-SFMT19937 4445 (about 2.5x, derived from page data). Scalar mode: X-MT19937-64 1095 (AVX-512) vs STL 590 (about 1.9x, derived from page data). doc/main.tex also has a 32-bit std::mt19937 row: V-MT19937 vectorial 2391.8 (AVX2) / 5841.4 (AVX-512) vs STL-MT19937 305.7 / 598.6 (about 7.8x and 9.8x, derived from page data).",
+      "compiler_and_flags": "GCC 16 per doc/main.tex; Makefile default (NBITS=native) is -O3 -std=c++20 -march=native (plus -msve-vector-bits=256 on SVE); explicit NBITS builds use -msse4.2/-mavx2/-mavx512f -mavx512vl -mavx512bw -mavx512dq with -mpclmul, or -march=armv8-a+simd / -march=armv8-a+sve -msve-vector-bits=256. Which variant produced the tables is not stated. Harness: perf.exe from src/perf.cpp.",
+      "caveats": "Big speedups are in vectorial (block fill of 10,240) mode; scalar single-value V-MT19937 is about 1.7-2.1x the original reference. Intel MKL-MT beats V-MT19937 at AVX-512 vectorial (6479 vs 5742 M/s README; 6578.9 vs 5841.4 in main.tex). The README omits the 32-bit STL-MT19937 row that doc/main.tex and perf.cpp include; std::mt19937 beats the original reference from AVX2 up. On SVE256 STL-MT19937-64 (573) beats V-MT19937-64 scalar (513). README and main.tex disagree on the AVX-512 MT19937 scalar figures (README X 1341 / V 729; main.tex X 929.5 / V 1354.0) and slightly on other AVX-512 MT19937 cells, so they come from different runs. V-family output interleaves jump-separated MT states (src/test.cpp checks each against the reference at the jumped index), so it is a different sequence from one MT19937 for the same seed; the X-family is bit-identical to the reference. libstdc++ inferred from GCC 16 (main.tex credits GCC auto-vectorization of the STL MT). Single author, first-party; arXiv 2309.16682 could not be opened (egress blocked)."
+    },
+    "notes": "README and doc/main.tex numbers checked; derived ratios correct. RNG check passed: X-family matches the original MT output and V-family lanes match the reference at jumped offsets in src/test.cpp. Metadata: MIT, 3 stars, 0 forks, 393 commits, default branch master, last commit 2026-05-29.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/fabiocannizzo/VMT19937/HEAD/README.md",
+      "https://raw.githubusercontent.com/fabiocannizzo/VMT19937/master/Makefile",
+      "https://raw.githubusercontent.com/fabiocannizzo/VMT19937/master/doc/main.tex",
+      "https://raw.githubusercontent.com/fabiocannizzo/VMT19937/master/src/test.cpp",
+      "https://raw.githubusercontent.com/fabiocannizzo/VMT19937/master/src/perf.cpp",
+      "https://github.com/fabiocannizzo/VMT19937",
+      "https://github.com/fabiocannizzo/VMT19937/commits"
+    ]
+  }
+]
