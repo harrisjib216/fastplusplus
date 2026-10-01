@@ -128,8 +128,10 @@ after 2 failed fetches, the privacy/scratch rules above, and the terse final-rep
   sciencedirect, springer, readthedocs and most blogs; github.com (WebFetch), raw.githubusercontent.com
   (curl), gitlab.com and pypi.org worked. Papers checked in a repo (e.g. doc/*.pdf) are reachable via
   raw.githubusercontent.com. Give every agent `pipeline/cloud_harness.md` as an override of the
-  prompt's tool notes and /Users/... output path. Widening the environment's network access (or
-  adding those hosts) is what unlocks b7/b8 and paper-based retiers.
+  prompt's tool notes and /Users/... output path. Egress differs by environment: the project
+  thread that ran wave 8 b1/b2 could WebFetch arxiv.org/abs and HN Algolia. Widening the
+  environment's network access (or adding those hosts), or working from that thread, is what
+  unlocks b7/b8 and paper-based retiers.
 - Subagents share one WebSearch budget per session (it ran out at 200/200 with ~28 agents running);
   draft from github.com pages first. Do not let agents use mcp__github__ tools: the session's GitHub
   scope is this repo only.

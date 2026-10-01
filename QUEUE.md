@@ -7,8 +7,10 @@ extension passes further down.
 
 1. **Wave 8 searches b7 (blogs) and b8 (HN), all 7 categories (14 assignments).** Not run because the
    2026-10-01 cloud session's egress policy blocked hn.algolia.com, arxiv.org and most blogs, and the
-   shared WebSearch budget was spent. Needs a session whose network access allows those hosts
-   (environment menu, Edit, Network access). Steps: `python3 pipeline/render.py data/wave8 --batch b7`
+   shared WebSearch budget was spent. The earlier project thread ("Resume wave 8 searches",
+   branch claude/project-thread-2zu8vo, paused at 682afe9) reported that WebFetch on arxiv.org/abs
+   and HN Algolia worked there, so its environment can likely run b7/b8 and the paper retiers below;
+   otherwise widen this environment's network access (environment menu, Edit, Network access). Steps: `python3 pipeline/render.py data/wave8 --batch b7`
    (then b8), one Sonnet agent per prompt, merge, `verify.py render --assignments ...`, verify, apply,
    enrich, `render_lists.py`, commit.
 2. **Wave 8 retier checks that need paper access** (Opus; write `data/wave8/verify/raw/retier-05.json`):
@@ -25,7 +27,11 @@ extension passes further down.
 3. **Wave 8 second seed pass.** `data/wave8/leads.md` holds ~67 leads. The strongest: GFFT (ICPP 2023),
    Caracal and irregular-blocking LU (GPU sparse LU), CKTSO-GPU, NICSLU, private-gemm-x86 (faer's GEMM),
    facebookarchive/fbcuda (fbfft), ROOT's RanluxppEngine, Open3D registration, fast_gicp, Zd-tree /
-   CPAM siblings of Pkd-tree, MultiFloats follow-ups (arXiv 2603.14926, 2607.11391). Add a `seed`
+   CPAM siblings of Pkd-tree, MultiFloats follow-ups (arXiv 2603.14926, 2607.11391). Still open
+   from the project thread's original seed list (the rest of it was seeded in this pass): IATF
+   (compact BLAS on ARMv8), ThunderMittens (Apple Silicon), FlashAttention-4 (own entry or fold into
+   FlashAttention), Vigna's public-domain xoshiro256++-vect-speed.c, and two harnesses that could
+   back tier upgrades for listed entries, hayguen/pffft_benchmarks and ddemidov/amgcl_benchmarks. Add a `seed`
    assignment with a `projects` list, then `seed.py`, merge, verify, enrich, render lists.
 4. **Small checks left from wave 8:**
    - VBCSR repo_url was overridden to github.com/DeepElectron/vbcsr on the enricher's report of a
