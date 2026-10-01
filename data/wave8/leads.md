@@ -28,3 +28,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - wjr-z/wjr (bigint with benches vs GMP in benchmarks/src/biginteger.cpp, no published numbers). (from bigint gh-cpp2 search)
 - tttapa/batmat (claims to beat MKL, OpenBLAS and BLASFEO on small matrices; no numbers in README) and NinjadenMu/fast_matmul. yzhaiustc/ftblas is the code of the listed FT-BLAS paper entry. (from blas gh-cpp2 search)
 - FZJ-JSC/juFFTe (RISC-V FFT, claims about 3x over FFTW3 in arXiv 2608.28076; README has no numbers), heFFTe (paper numbers unreachable), snudatalab/PFT, dealias/fftwpp (READMEs without numbers). (from fft gh-any search)
+- ArborX (vs Boost.Geometry.Index and nanoflann), iShape-Rust/iOverlay (numbers on github.io, blocked here), sdd/kiddo (Rust kd-tree). (from geo gh-any search)
