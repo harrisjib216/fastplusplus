@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/hazyresearch/hipkittens",
+  "one_liner": "C++ tile-primitive kernel DSL for AMD Instinct GPUs; its GQA attention backward runs about 3x faster than AITER on MI355X.",
+  "what_it_does": "HipKittens (HK) is the AMD port of Stanford Hazy Research's ThunderKittens: a set of C++/HIP headers (include/cdna3, cdna4, cdna5) with register and shared-memory tile types, bulk tile operations and asynchronous load/store helpers, plus hand-written reference kernels built on them (BF16/FP8 GEMM, MHA and GQA attention forward and backward at head dim 64/128, rotary, fused layernorm, softmax). It is not a drop-in library: each kernel is a .cpp file compiled with hipcc into a pybind11 extension, with batch, heads and sequence length fixed as compile-time constants in its Makefile, and you call it from PyTorch tensors you allocate yourself.",
+  "how_it_is_fast": "Tiles are sized to the CDNA matrix-core (MFMA) shapes and loaded with coalesced, bank-conflict-free layouts and direct buffer loads into shared memory to hide address computation. Kernels overlap compute and memory with two schedules the authors name 8-wave ping-pong and 4-wave interleave, and order thread blocks for the chiplet (XCD) layout; the inner loops use explicit s_waitcnt lgkmcnt/vmcnt counts and sched_barrier hints instead of relying on the compiler. The GQA backward kernel launches one block per (KV head, 256-row KV block, batch), loops over all query heads in the group and accumulates dQ with packed BF16 atomic adds.",
+  "when_to_use": [
+    "Training or fine-tuning with grouped-query attention (e.g. 64 query heads, 8 KV heads, head dim 128) on MI350X/MI355X, where the backward pass is about 3x AITER's in the committed results",
+    "Writing your own fused AMD kernel and wanting MFMA-shaped tile abstractions instead of raw HIP intrinsics or Composable Kernel templates",
+    "Fixed, known shapes (batch, heads, sequence a multiple of the 256-row block) that you can bake into a build",
+    "Studying how to schedule compute and memory on CDNA3/CDNA4 (the analysis/ directory has the sweep scripts, plots and baseline recipes from the paper)",
+    "Consuming the HK kernels indirectly: AITER merged an HK-based 128-head MLA decode kernel (ROCm/aiter PR 2039, March 2026) and the README says AMD Transformer Engine has an HK backend"
+  ],
+  "when_not_to_use": [
+    "MHA (H_KV = H) attention backward at sequence length 2048-4096 and above: the same harness shows HK 3-9% slower than AITER",
+    "NVIDIA or RDNA GPUs: CDNA3/CDNA4 (and initial CDNA5/gfx1250) only; RDNA4 support is an open question (issue 13)",
+    "Ragged or unaligned shapes (MoE experts, variable-length batches): grids are computed with integer division, so partial edge tiles are silently dropped and results are wrong without padding (open issue 74)",
+    "When you need deterministic gradients: dQ is accumulated with BF16 atomics",
+    "When you want a stable, documented API: docs/README.md has an empty HipKittens documentation link, and kernels are research code tuned per shape"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "ROCm with hipcc (README uses the rocm/7.0-preview PyTorch Docker images), pybind11 and Python for the shipped kernels; PyTorch and AITER for the tests and benchmarks",
+    "min_toolchain": "C++20 (common.mk sets -std=c++20), hipcc from ROCm 7.0 preview images",
+    "platforms": "AMD CDNA4 gfx950 (MI350X/MI355X) on main; CDNA3 gfx942 (MI300X/MI325X) via the cdna3 branch per README (include/cdna3 also exists on main); CDNA5 gfx1250 unit tests on main",
+    "thread_safety": "not documented (GPU kernels; dQ uses atomic adds within a launch)",
+    "drop_in_for_baseline": "partial — the kernels replace AITER/CK attention or hipBLASLt GEMM calls only after you build each one for your exact shapes and wire it into PyTorch yourself; no torch.nn.functional-compatible wrapper ships in the repo"
+  },
+  "gotchas": [
+    "Batch, query heads, KV heads and sequence length are -D compile-time constants (ATTN_B, ATTN_H, ATTN_H_KV, ATTN_N); a new shape means a rebuild, and the backward grid uses ATTN_N / 256",
+    "The backward pass is three launches (prep, combined dK/dV/dQ, dQ shuffle) and expects pre-zeroed output buffers in specific layouts",
+    "Hand-tuned s_waitcnt counts are fragile: a race in the 8-wave FP8 GEMM epilogue was fixed in commit 20cd6bb and issue 42 asks whether the 4-wave FP8 kernel has the same bug (open, unverified)",
+    "Gradients match AITER only to BF16 rounding (the verifier saw max abs error 0.0039 at N=1024), and -ffast-math is on for the attention builds"
+  ],
+  "pick_this_over_siblings_when": "Pick HipKittens when the target is AMD Instinct hardware; ThunderKittens, FlashAttention-3, SageAttention and FFPA in this category are NVIDIA-only, and HK is the same tile-DSL idea as ThunderKittens ported to CDNA. On NVIDIA use ThunderKittens or FlashAttention-3 instead.",
+  "verified_claims_summary": "On one AMD Instinct MI355X with BF16 inputs, the repo's committed results for GQA attention backward (batch 16, 64 query heads, 8 KV heads, head dim 128) give HipKittens 881 to 1176 TFLOPS for sequence length 1024 to 16384 against AITER's 300 to 389 TFLOPS (about 2.9-3.0x; causal 3.0-4.3x), timed with torch.cuda events over 100 iterations after 500 warmups, kernels built with hipcc in the ROCm 7.0 preview image (-ffast-math, C++20, gfx950). AITER is timed through a PyTorch autograd backward call while HK times its three kernels directly, and on MHA shapes HK falls 3-9% behind AITER at longer sequences.",
+  "status_note": "Actively developed (last commit 2026-09-22, MLSys 2026 paper, CDNA5 support landing) and MIT-licensed, but it is research code with per-shape kernels and no API docs, so expect to read and adapt kernels rather than link a library.",
+  "sources_read": [
+    "https://github.com/HazyResearch/HipKittens",
+    "https://raw.githubusercontent.com/HazyResearch/HipKittens/HEAD/README.md",
+    "https://raw.githubusercontent.com/HazyResearch/HipKittens/HEAD/analysis/attn/bkwd/README.md",
+    "https://raw.githubusercontent.com/HazyResearch/HipKittens/HEAD/analysis/attn/bkwd/benchmark/test_python.py",
+    "https://raw.githubusercontent.com/HazyResearch/HipKittens/HEAD/analysis/attn/bkwd/benchmark/Makefile",
+    "https://raw.githubusercontent.com/HazyResearch/HipKittens/HEAD/analysis/baselines/README.md",
+    "https://raw.githubusercontent.com/HazyResearch/HipKittens/HEAD/analysis/bf16_gemm/README.md",
+    "https://raw.githubusercontent.com/HazyResearch/HipKittens/HEAD/kernels/common.mk",
+    "https://raw.githubusercontent.com/HazyResearch/HipKittens/HEAD/kernels/cdna4/attn/gqa_backwards/Makefile",
+    "https://raw.githubusercontent.com/HazyResearch/HipKittens/HEAD/kernels/cdna4/attn/gqa_backwards/test_python.py",
+    "https://raw.githubusercontent.com/HazyResearch/HipKittens/HEAD/kernels/cdna4/attn/gqa_backwards/attn_bkwd_non_causal.cpp",
+    "https://raw.githubusercontent.com/HazyResearch/HipKittens/HEAD/docs/README.md",
+    "https://github.com/HazyResearch/HipKittens/tree/main/include",
+    "https://github.com/HazyResearch/HipKittens/tree/main/include/cdna4",
+    "https://github.com/HazyResearch/HipKittens/tree/main/kernels/cdna4",
+    "https://github.com/HazyResearch/HipKittens/issues",
+    "https://github.com/HazyResearch/HipKittens/issues?q=is%3Aissue+is%3Aclosed",
+    "https://github.com/HazyResearch/HipKittens/issues/74",
+    "https://github.com/HazyResearch/HipKittens/issues/42",
+    "https://github.com/HazyResearch/HipKittens/issues/34",
+    "https://github.com/HazyResearch/HipKittens/issues/12",
+    "https://github.com/ROCm/aiter/pull/2039"
+  ],
+  "confidence": 0.75
+}

@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/scicompkl/codipack",
+  "one_liner": "Header-only C++17 operator-overloading AD with expression templates; peer-reviewed paper reports it beats ADOL-C and roughly matches Adept.",
+  "what_it_does": "CoDiPack computes forward- and reverse-mode derivatives (and higher orders) of existing C++ code by replacing double with an active type such as codi::RealForward or codi::RealReverse and recording a tape. Reverse mode follows the usual register-inputs / record / seed-output / evaluate workflow, with helpers for Jacobians and Hessians, external functions, preaccumulation, linear-system solvers, MPI (via MeDiPack) and OpenMP (via OpDiLib). It is not a drop-in replacement for another AD tool's API, though the switch from double to the active type is the same kind of change as with Adept or ADOL-C.",
+  "how_it_is_fast": "Expression templates collapse each full right-hand-side statement into one tape entry instead of one entry per elementary operation. Two taping strategies are offered: Jacobian taping (stores the statement's partial derivatives, as Adept and dco/c++ do) and primal value taping (stores primal values and re-evaluates the statement's derivative from generated code during the reverse sweep, as ADOL-C does, but with expression templates). Index managers either hand out linear identifiers or reuse freed ones (the *Index types), which shrinks the adjoint vector; per search-result text of the TOMS paper, that smaller footprint is what makes the index-reuse tapes faster in the reverse interpretation.",
+  "when_to_use": [
+    "Gradients of large simulation codes (CFD, PDE solvers; the paper evaluates SU2) where tape memory, not only speed, limits what you can differentiate",
+    "Existing double-based C++ code where you can substitute a type, and you want to trade memory for generality by switching among RealReverse, RealReverseIndex, RealReversePrimal and RealReversePrimalIndex without changing user code",
+    "MPI or OpenMP parallel codes, via MeDiPack and the RealReverseIndexOpenMP / OpDiLib bindings",
+    "Mixed workflows that need external functions, preaccumulation, tape editing, tape writing to disk or Enzyme-generated derivatives inserted into the tape (helper since v2.2.0)",
+    "Open-source (GPL-3.0) projects, or teams willing to negotiate a different license with the RPTU group"
+  ],
+  "when_not_to_use": [
+    "Closed-source distribution without a separate license: CoDiPack is GPL-3.0",
+    "When raw speed over Adept 2 is the goal: per search-result summaries the TOMS paper shows rough parity with Adept (a few percent less tape memory), and no public benchmark harness exists to check it",
+    "Small statically known expression graphs, where FastAD's paper claims 2-10x over Adept (not measured against CoDiPack)",
+    "Plain multithreaded code using the default types: the default active types share one static tape per type, so threads need the OpenMP-specific types",
+    "Projects stuck on C++11/14: CoDiPack 3.x requires C++17 (use the 2.x series otherwise)"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (optional: Eigen, MPI via MeDiPack, OpenMP/OpDiLib, Enzyme)",
+    "min_toolchain": "C++17 for 3.x (CMake target sets cxx_std_17; 2.x for C++11); README says tested with GCC, Clang and Intel; CMake 3.12+ for the package config",
+    "platforms": "any platform with a C++17 compiler; CI runs clang++ on Ubuntu; MSVC compile problems were reported and closed in issues 5, 16 and 29",
+    "thread_safety": "Default types use a static global tape per active type (not safe across threads); RealReverseIndexOpenMP and OpDiLib bindings (since v2.1.0) provide thread-safe taping with atomic adjoint updates",
+    "drop_in_for_baseline": "partial — swapping double for the active type is source-compatible in most code, but the tape API differs from Adept and ADOL-C, so driver code must be rewritten"
+  },
+  "gotchas": [
+    "Performance depends on inlining, and the README's recommended -DCODI_UseForcedInlines is stale: include/codi/config.h in 3.1.2 only reads CODI_ForcedInlines (default 0), so define that name to actually force inlining",
+    "The *Index types do not support C-style memory operations such as memcpy on active values; RealReverse and RealReversePrimal do",
+    "Open issue 49 (v2.3.2, clang 16): with a variable repeated in one statement and a 1e30 term, forward returns 0 and reverse -14 (or the reverse when operands are swapped); per-occurrence partials are summed in an order that loses the small term, and splitting the statement fixes it. Closed issue 46 shows a similar cancellation with no documented fix",
+    "The static tape makes gdb output verbose; the README suggests 'set print static-members off'"
+  ],
+  "pick_this_over_siblings_when": "Pick CoDiPack over Adept 2 or XAD when you need primal-value tapes, index-reuse memory savings, MPI/OpenMP support or Enzyme integration for a large simulation code, and GPL-3.0 is acceptable; XAD has the stronger published head-to-head numbers (vendor-run) and Adept 2 a more permissive Apache-2.0 license. Enzyme and Clad avoid operator overloading altogether but need an LLVM/Clang toolchain.",
+  "verified_claims_summary": "Not reproduced here: the only evidence is the peer-reviewed ACM TOMS 45(4) 2019 paper, which per search-result text compares CoDiPack's tape types with Adept and ADOL-C on a coupled Burgers test and on SU2 with GCC and Intel compilers, finding CoDiPack faster and lighter than ADOL-C and close to Adept, with index tapes speeding up reverse interpretation. CPU model, compiler versions, flags and exact ratios were not seen because the paper hosts are blocked from this session.",
+  "status_note": "Actively maintained by the RPTU Scientific Computing group (v3.1.2 released 2026-07-13, regular feature releases since 2015); GPL-3.0 header-only, so easy to vendor for open-source projects but a licensing question for proprietary ones.",
+  "sources_read": [
+    "https://github.com/SciCompKL/CoDiPack",
+    "https://raw.githubusercontent.com/SciCompKL/CoDiPack/HEAD/README.md",
+    "https://raw.githubusercontent.com/SciCompKL/CoDiPack/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/SciCompKL/CoDiPack/HEAD/cmake/codipack-include.cmake",
+    "https://raw.githubusercontent.com/SciCompKL/CoDiPack/HEAD/include/codi.hpp",
+    "https://raw.githubusercontent.com/SciCompKL/CoDiPack/HEAD/include/codi/config.h",
+    "https://raw.githubusercontent.com/SciCompKL/CoDiPack/HEAD/include/codi/expressions/activeType.hpp",
+    "https://raw.githubusercontent.com/SciCompKL/CoDiPack/HEAD/include/codi/tools/parallel/openmp/codiOpenMP.hpp",
+    "https://raw.githubusercontent.com/SciCompKL/CoDiPack/HEAD/documentation/Changelog.md",
+    "https://raw.githubusercontent.com/SciCompKL/CoDiPack/HEAD/.github/workflows/tests.yml",
+    "https://github.com/SciCompKL/CoDiPack/tree/master/documentation",
+    "https://github.com/SciCompKL/CoDiPack/tree/master/.github/workflows",
+    "https://github.com/SciCompKL/CoDiPack/issues?q=is%3Aissue",
+    "https://github.com/SciCompKL/CoDiPack/issues/49",
+    "https://github.com/SciCompKL/CoDiPack/issues/46",
+    "https://github.com/SciCompKL/CoDiPack/issues/28",
+    "WebSearch: High-Performance Derivative Computations using CoDiPack (result snippets for arxiv.org/abs/1709.07229 and dl.acm.org/doi/10.1145/3356900; pages not opened)"
+  ],
+  "confidence": 0.6
+}
