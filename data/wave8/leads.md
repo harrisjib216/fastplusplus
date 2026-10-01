@@ -18,3 +18,7 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - Indexicon (arXiv 2606.04676), spatial indexing library; not read (arXiv 429). (from geo searches)
 - IATF (input-aware tuning framework for compact BLAS on ARMv8, cunyangwei.github.io/files/IATF.pdf). (from IAAT enrichment)
 - hayguen/pffft_benchmarks: per-CPU results for the marton78 pffft fork itself; could back a tier change. (from pffft enrichment)
+- ParAlg/ParGeo (ESA 2022, parallel computational geometry vs CGAL/Qhull): numbers only in the paper, unreachable here. (from geo gh-cpp2 search)
+- ucrparlay/Pkd-tree and ucrparlay/SpaceTreeLib (parallel kd-trees vs CGAL): numbers only in papers. (from geo gh-cpp2 search)
+- hku-mars/ikd-Tree (incremental kd-tree for LiDAR mapping) and RTSpatial/LibRTS (ray-tracing-core spatial index): baselines unnamed in READMEs. (from geo gh-cpp2 search)
+- Paper-only sparse claims not opened (arXiv blocked): GraphBLAST, MaskedSpGEMM, PanguLU, DASP, TileSpMV, AmgT, clusterwise-spgemm, SparseX, cfs-spmv, Kokkos Kernels. (from sparse searches)
