@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/rmsalinas/picoflann",
+  "one_liner": "Tiny single-header exact kd-tree (knn and radius search) claiming 1.25-4x over nanoflann; unlicensed, claim disputed.",
+  "what_it_does": "An exact (not approximate) kd-tree for low-dimensional points, extracted from the UcoSLAM project. You write a small adapter functor that returns coordinate `dim` of your element, build over any container with size() and at(), then call searchKnn(container, query, k) or radiusSearch(container, query, r); results come back as std::vector<std::pair<uint32_t,double>> of point index and squared distance. The index stores only indices, not data, and can be saved/loaded with toStream/fromStream. picoflann2.h (added 2026-04-27) keeps the same API in namespace picoflann2 with templated Scalar (float default) and leaf size.",
+  "how_it_is_fast": "Classic FLANN/nanoflann-style single kd-tree: split dimension chosen by highest variance estimated from about 100 sampled points, split at the mean with a two-pass in-place plane partition, leaves of 10 points, and searches that keep per-dimension incremental distances to the cell (the 'dists' array) so the far child is pruned with mindistsq against the current k-th best held in a max-heap; distance accumulation exits early once it exceeds the worst. picoflann2 removes the per-leaf std::vector (indices stored inline so a float node is 64 bytes, one cache line), puts bounding boxes in std::array, unrolls distance loops on compile-time DIMS and defaults to float arithmetic.",
+  "when_to_use": [
+    "Internal or research code (not redistributed) that needs exact knn/radius search over a few thousand to a few hundred thousand 2D/3D float points, e.g. SLAM map points or keypoint matching",
+    "Large-k queries: the independent OpenFLANN comparison found picoflann much faster than nanoflann at K=5000 on 200,000 points (0.84 ms vs 8.36 ms)",
+    "When you want a single small header with no dependencies and a functor adapter instead of nanoflann-style dataset adaptor classes",
+    "Static datasets built once and queried many times, with the option to serialise the index next to the data"
+  ],
+  "when_not_to_use": [
+    "Anything you ship or redistribute: the repo has no LICENSE file and no licence header, so it is all-rights-reserved by default; the README also says academic users 'must cite' UcoSLAM",
+    "Small-k queries (k=1 to 10), the common robotics case: OpenFLANN measured nanoflann faster (10,000 points, K=10: 0.00213 ms vs 0.00358 ms) and open issue #1 (2021, unanswered) reports picoflann 'about half as fast as nanoflann' on range-image data",
+    "Dynamic data: there is no insert or erase; any change means a full rebuild",
+    "Loading index files from untrusted sources: fromStream does no validation (see gotchas)",
+    "Double-precision or large-magnitude coordinates with the defaults: v1 keeps bounding boxes and split bounds in float, and picoflann2 defaults to Scalar=float"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none for picoflann.h / picoflann2.h; the repo's testperformance.cpp and test_accuracy.cpp need OpenCV",
+    "min_toolchain": "not documented for the headers; the repo's CMakeLists builds its tests as C++14 with -O3 -march=native",
+    "platforms": "any (portable C++, no intrinsics)",
+    "thread_safety": "not documented; in picoflann2 all search methods are const and keep state on the stack or in the returned vector, so concurrent queries on a built index look safe from the code; build() mutates the object",
+    "drop_in_for_baseline": "partial — same job as nanoflann's KDTreeSingleIndexAdaptor (exact single kd-tree, knn and radius search) but a different interface: an adapter functor (element, dim) plus a container with size()/at() passed to every search call"
+  },
+  "gotchas": [
+    "Security/robustness: fromStream trusts the stream. picoflann2 reads a per-node idx_count (uint8_t, up to 255) and then copies idx_count*4 bytes into a fixed idx[MAX_LEAF=10] array, so a corrupt or crafted file overflows the node; child indices are never range-checked. v1 resizes vectors from unchecked 64-bit sizes and takes &idx[0] of empty vectors for internal nodes in both toStream and fromStream (undefined behaviour that debug STL assertions abort on)",
+    "radiusSearch's maxNN parameter is ignored in both versions: in radius mode ResultSet::push appends every hit without checking maxSize, so a large radius returns everything inside it",
+    "Radius is passed in linear units but returned distances are squared; the index does not copy the data, so the same container must be alive and unchanged at search time and after fromStream",
+    "README's radiusSearch(data, res, point, r) example does not match the actual overload radiusSearch(res, data, point, r); point indices are 32-bit (v1 stores leaf indices as int)"
+  ],
+  "pick_this_over_siblings_when": "Rarely: PicoTree (catalogued as beating nanoflann v1.7.1 on build about 2.6x and knn about 1.2x) or nanoflann itself, which the independent OpenFLANN test found faster at small k, are the safer picks; picoflann only stands out for very large k, and its missing licence rules it out of products. Janos95/kdtree is another small exact kd-tree with a modest 10-15% claimed edge over nanoflann.",
+  "verified_claims_summary": "The README (2018) claims, on 10,000 points (heading says 2D, block says 3D), index build 1.46x, knn 4.14x and radius search 1.25x faster than nanoflann, with no k, hardware, compiler or nanoflann benchmark code; the repo's only benchmark (testperformance.cpp, 2026, -O3 -march=native, k=10) races picoflann v1/v2 against OpenCV FLANN, not nanoflann, and publishes no numbers. An independent PCL-wrapper comparison (OpenFLANN) found nanoflann faster at small k and picoflann faster only at very large k.",
+  "status_note": "Dormant from 2018 until two commits on 2026-04-27 that added picoflann2.h and OpenCV benchmarks (19 commits total, 22 stars, one open unanswered issue); with no licence it is reference-only, not something to vendor.",
+  "sources_read": [
+    "https://github.com/rmsalinas/picoflann",
+    "https://github.com/rmsalinas/picoflann/commits",
+    "https://github.com/rmsalinas/picoflann/issues?q=is%3Aissue",
+    "https://github.com/rmsalinas/picoflann/issues/1",
+    "https://raw.githubusercontent.com/rmsalinas/picoflann/HEAD/README.md",
+    "https://raw.githubusercontent.com/rmsalinas/picoflann/HEAD/picoflann.h",
+    "https://raw.githubusercontent.com/rmsalinas/picoflann/HEAD/picoflann2.h",
+    "https://raw.githubusercontent.com/rmsalinas/picoflann/HEAD/testperformance.cpp",
+    "https://raw.githubusercontent.com/rmsalinas/picoflann/HEAD/test_accuracy.cpp",
+    "https://raw.githubusercontent.com/rmsalinas/picoflann/HEAD/CMakeLists.txt"
+  ],
+  "confidence": 0.75
+}

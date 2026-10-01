@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/jbuckmccready/cavaliercontours",
+  "one_liner": "Header-only C++ offsetting and booleans for 2D polylines with exact arcs; up to 16-85x faster than Clipper1 offsets when arcs stay exact.",
+  "what_it_does": "Offsets (parallel/contour offsets with rounded joins) and combines (union, intersection, difference, XOR) closed or open 2D polylines whose segments are straight lines or constant-radius arcs, stored as (x, y, bulge) vertices with bulge = tan(sweep/4). It also gives area, path length, winding number, closest point, extents and arc-to-line conversion. The C++ API is cavc::parallelOffset(Polyline<Real>, offset, hasSelfIntersects) and cavc::combinePolylines(a, b, mode); a C API (cavaliercontours.h, built as a shared or static library) wraps it. Not a drop-in for Clipper: different data model (floating-point polylines with arcs instead of integer point paths) and no multi-path polygon clipping with fill rules.",
+  "how_it_is_fast": "The offset follows Liu et al. 2007 ('An offset algorithm for polyline curves'): build raw offset segments, join them with exact arcs, find self-intersects (and dual-offset intersects for open or self-intersecting input), slice, discard slices closer than the offset to the original, and stitch the rest. Because arcs are kept as single bulge segments, a circle stays 2 vertices instead of 142-446 line segments, which is where the 15-860x ratios come from. Intersection and distance queries go through a packed Hilbert R-tree (StaticSpatialIndex, flatbush-style, node size 16), giving O(n log n) for typical CAD/CAM input and O(n^2) only when all segment boxes overlap.",
+  "when_to_use": [
+    "CAD/CAM tool-path generation (cutter compensation, pocketing/cleanout passes) on profiles made of lines and arcs, especially DXF-style bulge polylines",
+    "Offsets where exactness of rounded joins matters: output stays at a constant distance with true arcs, so no re-fitting of arcs after offsetting",
+    "Repeated inward/outward offsets of small to medium profiles (tens to a few thousand vertices); with arcs kept exact the README times are 0.12-85 ms where Clipper1 took 9-1347 ms",
+    "C or FFI consumers that want a small, dependency-free library with a C API (a Python wrapper exists over it)"
+  ],
+  "when_not_to_use": [
+    "Line-only polygons, where the advantage shrinks: with arcs approximated for both libraries cavc is 0.7x on BM_Profile1 and 0.9x on BM_Profile2 at 1e-2, and 1.0x on the circle",
+    "General polygon clipping with holes, many paths and fill rules (even-odd, non-zero): booleans here take exactly two closed polylines; Clipper2 or clipper2next fit that job",
+    "Robustness-critical pipelines without your own validation: open bug reports include a union that returns empty when operands are swapped (#71, 2025), offset failures on open polylines (#59), numeric failures after translating input (#53), and ParallelOffsetIslands output errors (#49), and the author has stopped fixing bugs in the C++ version",
+    "Inputs with coordinates far from the 0.1-1000 range: fixed absolute epsilons (1e-8, 1e-5, 1e-4) mean you may need to rescale, as the README itself advises",
+    "New projects that can take a Rust dependency: development moved to the Rust cavalier_contours crate (MIT/Apache-2.0, with a C FFI crate), and the author recommends using it from C++"
+  ],
+  "integration": {
+    "form": "header-only (CAVC_HEADER_ONLY) or shared/static lib for the C API",
+    "dependencies": "none for the library; GoogleTest for tests; google/benchmark plus the author's clipper-lib mirror (FetchContent at origin/master) for benchmarks",
+    "min_toolchain": "README says C++14; the current top-level CMakeLists sets CMAKE_CXX_STANDARD 20 and CMake 3.21 (since the 2024 reorganisation); benchmarks were built with MSVC 2019 19.24 and MinGW 7.3",
+    "platforms": "any (portable scalar C++, no SIMD intrinsics); benchmarked on Windows 10 x64; the dev app also builds to WebAssembly via Emscripten",
+    "thread_safety": "not documented; functions are stateless templates that take const inputs and return new polylines, so concurrent calls on separate data look safe, but no guarantee is stated",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "parallelOffset takes a hasSelfIntersects flag (default false); for a closed, self-intersecting input you must pass true to get the dual-offset path, otherwise results can be wrong",
+    "Internal consistency checks use CAVC_ASSERT, which is plain assert(); in release builds (NDEBUG) cases like 'Bug detected, should never loop this many times!' in polylinecombine.hpp are not checked",
+    "Offsets always use rounded (arc) joins; there is no miter or square join, so sharp-corner offsets need post-processing (issue #44)",
+    "The Clipper benchmark used Clipper1 (original ClipperLib, scaled by 1e8 into 64-bit ints) from an unpinned mirror; Clipper2, its successor, was not compared"
+  ],
+  "pick_this_over_siblings_when": "Pick it over clipper2next or Clipper2 when your geometry has real arcs and you need exact arc output for machining; pick clipper2next/Clipper2 for line-only polygons, multi-path clipping with fill rules, or integer-exact robustness. No other catalogued sibling offsets arc polylines.",
+  "verified_claims_summary": "First-party Google Benchmark runs (Windows 10 x64, i7-6700K at 4.00 GHz, MSVC 2019 19.24.28314; optimisation flags not stated) offset nine profiles repeatedly inward and outward with rounded joins against original Clipper (ClipperOffset, jtRound, input scaled by 1e8). With arcs approximated for both at 1e-2, cavc ranges from 0.7x (BM_Profile1) to 4.0x (PathologicalProfile1/100); with arcs kept exact vs Clipper at 1e-2 it is 3.4x-84.9x, and vs Clipper at 1e-3 up to 494.7x (circle) and 861.0x (PathologicalProfile1/10), largely because the arc representation needs far fewer segments.",
+  "status_note": "Stale: the author says the C++ version will get no new features or bug fixes (last commit 2024-08-28, a contributed fix); MIT-licensed, header-only and easy to vendor, but the Rust cavalier_contours with its C FFI is the maintained path.",
+  "sources_read": [
+    "https://github.com/jbuckmccready/CavalierContours",
+    "https://raw.githubusercontent.com/jbuckmccready/CavalierContours/master/README.md",
+    "https://raw.githubusercontent.com/jbuckmccready/CavalierContours/master/CMakeLists.txt",
+    "https://raw.githubusercontent.com/jbuckmccready/CavalierContours/master/LICENSE",
+    "https://raw.githubusercontent.com/jbuckmccready/CavalierContours/master/tests/benchmarks/clipperbenchmarks.cpp",
+    "https://raw.githubusercontent.com/jbuckmccready/CavalierContours/master/tests/benchmarks/CMakeLists.txt",
+    "https://raw.githubusercontent.com/jbuckmccready/CavalierContours/master/tests/benchmarks/clipper.cmake",
+    "https://raw.githubusercontent.com/jbuckmccready/CavalierContours/master/include/cavc/mathutils.hpp",
+    "https://raw.githubusercontent.com/jbuckmccready/CavalierContours/master/include/cavc/polylineoffset.hpp",
+    "https://raw.githubusercontent.com/jbuckmccready/CavalierContours/master/include/cavc/polylinecombine.hpp",
+    "https://raw.githubusercontent.com/jbuckmccready/CavalierContours/master/include/cavc/polyline.hpp",
+    "https://raw.githubusercontent.com/jbuckmccready/CavalierContours/master/include/cavc/staticspatialindex.hpp",
+    "https://raw.githubusercontent.com/jbuckmccready/CavalierContours/master/include/cavc/internal/common.hpp",
+    "https://raw.githubusercontent.com/jbuckmccready/CavalierContours/master/c_api_include/cavaliercontours.h",
+    "https://github.com/jbuckmccready/CavalierContours/tree/master/include/cavc",
+    "https://github.com/jbuckmccready/CavalierContours/commits/master",
+    "https://github.com/jbuckmccready/CavalierContours/issues?q=is%3Aissue",
+    "https://github.com/jbuckmccready/CavalierContours/issues/71",
+    "https://github.com/jbuckmccready/CavalierContours/issues/59",
+    "https://github.com/jbuckmccready/CavalierContours/issues/53",
+    "https://github.com/jbuckmccready/cavalier_contours",
+    "https://raw.githubusercontent.com/AngusJohnson/Clipper2/main/README.md"
+  ],
+  "confidence": 0.75
+}

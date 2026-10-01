@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/gfonsecabr/pgl",
+  "one_liner": "Header-only, exact 2D geometry library (MIT) that beats CGAL on segment intersection, arrangements and unions, loses on Delaunay.",
+  "what_it_does": "Pangolin (pgl) is a plane-only computational-geometry library: 17 shape types (Point, Segment, Line, Ray, Triangle, Rectangle, Disk, Convex, Polygon, PolygonWithHoles, PolygonSet, HalfplaneIntersection and more) with one boolean predicate vocabulary (contains, boundaryContains, interiorContains, intersects, separates, crosses) across every shape pair. On top sit convex hull, segment sweep, Minkowski sum and erosion, regularized booleans, visibility, Delaunay/constrained Delaunay triangulation, arrangements with point location, Voronoi and power diagrams, a kd-tree-like ShapeTree and a Graph class. It is not a CGAL drop-in: shapes are unoriented values (hashable, usable in std::set), lines are stored as two points rather than an equation, number types are per shape and convert implicitly, and the library chooses the algorithm instead of exposing CGAL-style traits and parameters.",
+  "how_it_is_fast": "Predicates on integer coordinates run in plain integer arithmetic with width promotion (int32 to int64, int64 to __int128, int128 to its own BigInt), so no filter or lazy-exact layer is needed on integer input; lines through integer points stay integral because they are stored as two points. Its own Rational<T> defers gcd reduction, and its BigInt stays inline below 2^127; types.md measures Rational<BigInt> at about 38 ns per segment-crossing test vs 1,062 ns for GMP mpq and 1,804 ns for boost::rational<cpp_int>. For arbitrary-precision types the orientation/incircle predicates first try a floating-point evaluation with an error bound. Algorithms are chosen adaptively, e.g. findIntersections prices a bounding-box scan against a Bentley-Ottmann sweep from a sample and switches once the scan exceeds the sweep's cost.",
+  "when_to_use": [
+    "2D problems on integer-coordinate input (GIS rasters, lattice/polyomino work, competitive-programming-style geometry) where you want exact answers without paying for CGAL's EPECK lazy-exact machinery",
+    "Segment intersection, arrangement point location, unions of many triangles/polygons and range counting in a Rectangle, the rows where doc/cgal.md shows pgl at 0.2x-0.7x of CGAL's time",
+    "Projects that cannot take CGAL's GPL/LGPL licence or its Boost/GMP/MPFR dependencies: pgl is MIT, header-only and dependency-free on GCC/Clang",
+    "Teaching, prototyping and research code where a readable predicate API (polygon.contains(segment)) matters more than CGAL's breadth; built-in Canvas exports SVG/PDF/Ipe for figures",
+    "Exact Voronoi/power diagrams of order k or farthest-point diagrams, visibility graphs and Minkowski erosion, which CGAL does not offer directly"
+  ],
+  "when_not_to_use": [
+    "Delaunay triangulation throughput: CGAL is 2.6x faster (ERational vs EPECK) and 1.7x faster (int vs EPICK); also slower for Minkowski sum (1.7x), convex hull with ERational (1.8x) and, with int, kd-tree build and nearest-neighbour queries (1.7-1.8x)",
+    "Anything beyond the plane: no 3D, curved geometry, alpha shapes, straight skeletons/offsets, snap rounding, polygon repair, mesh processing or file formats (WKT, DXF, OFF, STL)",
+    "Floating-point input: types.md says double coordinates are accepted 'at your own risk' and robustness to rounding is untested; use int or rationals",
+    "Production code that needs a long track record: v1.0.0 was tagged 2026-09-20, the repo has 6 stars and 0 forks, and its own README rates maturity 'Very low'",
+    "Huge or adversarial integer coordinates without checking types.md's overflow table: plain int32 predicates are exact only up to about 1.5e9 with promotion (23,170 without), and Rational<int64_t> can overflow on long construction chains"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none on GCC/Clang; on MSVC the Boost.Multiprecision headers (no native __int128). Bundled doctest, PDFGen and plf_nanotimer are for tests, PDF export and benchmarks only.",
+    "min_toolchain": "C++20 (C++23 and C++26 also work); CI runs GCC 13, Clang 18 and MSVC",
+    "platforms": "any platform with a C++20 compiler; 128-bit integers native on GCC/Clang, emulated via Boost on MSVC",
+    "thread_safety": "not documented; note that Triangulation::locate walks from where the previous query ended, so queries carry per-object state",
+    "drop_in_for_baseline": "partial — covers CGAL's 2D overlap (hull, Delaunay/CDT, arrangements, Boolean_set_operations_2, minkowski_sum_2, Kd_tree/AABB_tree, visibility, Partition_2), but with a different value-based API, unoriented shapes, bool predicates instead of CGAL's three-way bounded_side, and a fixed short list of number types"
+  },
+  "gotchas": [
+    "Constructions from integral shapes return ERational (Rational<BigInt>) by default, which types.md puts at about 8x the cost of int; pick a smaller result type explicitly when bounds allow",
+    "Some integer-typed constructions truncate: smallestEnclosingDisk divides by two, so integral coordinates should be even, and requesting an integral ResultNumber from Arrangement::halfplaneIntersection can truncate split coordinates",
+    "ShapeTree::insert does no rebalancing, so repeated inserts can drive height to Theta(n) until rebuild(); Triangulation point-location indices are not updated after modification",
+    "The benchmark page says pgl is tuned against this very benchmark and some rows (count in Triangle) race a CGAL query the benchmark authors wrote themselves; Range_tree_2 is deliberately not run"
+  ],
+  "pick_this_over_siblings_when": "Pick pgl over detria or Delaunay32 when you need a whole exact 2D toolkit (sweeps, arrangements, booleans, visibility) rather than only a fast triangulator, since those siblings beat CGAL-class triangulation and pgl does not; pick it over GeoToolbox KdBoxTree or nanoflann only when queries are arbitrary shapes (triangles, polygons) on integer data rather than point kNN.",
+  "verified_claims_summary": "doc/cgal.md times 18 2D problems on identical integer inputs (random data plus the Salzburg polygon database, about 32 sizes), pgl ERational vs CGAL 6.1.2 EPECK and pgl int vs EPICK, built with g++ 16.2.1 -std=c++23 -O2 -DNDEBUG on an AMD Ryzen 9 9900X and an Intel Xeon w5-3433, one run each, ratios averaged over the two machines. Medians range from CGAL 2.6x faster (Delaunay) to pgl about 4.4x faster (union of many triangles, 0.23x) with ERational, and from CGAL 1.8x faster to pgl about 4.8x faster (count in Triangle, 0.21x) with int.",
+  "status_note": "Very actively developed (916 commits, last commit 2026-10-01, v1.0.0 tagged 2026-09-20, no issues filed) by one academic author with a student contributor and AI-assisted code; MIT-licensed and header-only, so easy to vendor, but young and unproven outside its own benchmarks.",
+  "sources_read": [
+    "https://github.com/gfonsecabr/pgl",
+    "https://github.com/gfonsecabr/pgl/issues?q=is%3Aissue",
+    "https://github.com/gfonsecabr/pgl/tags",
+    "https://raw.githubusercontent.com/gfonsecabr/pgl/HEAD/README.md",
+    "https://raw.githubusercontent.com/gfonsecabr/pgl/HEAD/doc/cgal.md",
+    "https://raw.githubusercontent.com/gfonsecabr/pgl/HEAD/doc/types.md",
+    "https://raw.githubusercontent.com/gfonsecabr/pgl/HEAD/doc/data_structures.md",
+    "https://raw.githubusercontent.com/gfonsecabr/pgl/HEAD/doc/algorithms.md",
+    "https://raw.githubusercontent.com/gfonsecabr/pgl/HEAD/tests/benchmark/README.md",
+    "https://raw.githubusercontent.com/gfonsecabr/pgl/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/gfonsecabr/pgl/HEAD/CMakeLists.txt"
+  ],
+  "confidence": 0.8
+}

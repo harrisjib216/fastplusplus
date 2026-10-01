@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/alecjacobson/alpha-wrap",
+  "one_liner": "MIT clean-room C++17 alpha wrapping (TOG 2022) without CGAL; about 2x faster than a GMP-free CGAL::alpha_wrap_3 build.",
+  "what_it_does": "Turns an arbitrary triangle soup (open, self-intersecting, non-manifold, duplicated or flipped faces) into a watertight, outward-oriented, 2-manifold surface that strictly encloses the input, following Portaneri et al., 'Alpha Wrapping with an Offset' (ACM TOG 2022). Two knobs: alpha (carving-ball radius, so gaps and handles narrower than about alpha get bridged) and offset (how far outside the input the wrap sits). The C++ API is aw::alpha_wrap(std::vector<aw::Triangle>, alpha, offset, manifold, &stats) returning aw::Mesh{V, F}; there is also a CLI for OBJ/ASCII PLY and a nanobind Python module, alpha_wrap.wrap(V, F, alpha_rel=..., offset_rel=...). It is not a drop-in for CGAL: own mesh types, no CGAL concepts or named parameters, and no seeds or custom oracles (point sets, segment soups).",
+  "how_it_is_fast": "It runs the paper's algorithm on its own data structures instead of CGAL's generic machinery: a roughly 1.2k-line incremental Bowyer-Watson 3D Delaunay on flat cell arrays with a free list, an enclosing super-tetrahedron instead of an infinite vertex, and Shewchuk's adaptive exact orient3d/insphere predicates (public domain). The input soup goes into a hand-written AABB tree that answers distance, closest point, tet-soup intersection and the offset-surface crossing; the crossing is found by sphere tracing the 1-Lipschitz distance field. Gates are flood-filled from a max-circumradius priority queue as in CGAL's sorted reference variant. The README attributes the measured gap partly to the comparison environment ('in this GMP-free CGAL environment'); no profiling breakdown is published.",
+  "when_to_use": [
+    "Making watertight, manifold shells from defective meshes (scans, CAD exports, game assets, Thingi10K-style 3D-print models) for meshing, simulation, collision proxies or 3D printing, when you cannot ship GPL/LGPL CGAL code",
+    "Python pipelines that want a pip-installable wrapper over NumPy arrays (wheels are built for Linux, macOS arm64/x86_64 and Windows x86-64) without pulling Boost or CGAL",
+    "Coarse to medium wraps (alpha around diag/20 to diag/300) of meshes up to a few hundred thousand triangles: the README tested a 100k-triangle sphere and a 236k-triangle statue, and a 1000-model Thingi10K run gave median 1.1 s and p90 6.2 s per model",
+    "Batch jobs where a slightly coarser output (0.6-1.0x CGAL's face count) is acceptable or even preferred"
+  ],
+  "when_not_to_use": [
+    "When you need CGAL's exact output or its extra features (point-set and segment-soup oracles, seeds for interior wrapping, visitors, custom oracles, the faster unsorted LIFO queue): this implements only the triangle-soup path",
+    "When you already link CGAL with GMP: the only speed claim is against a CGAL 6.0.1 build with CGAL_DISABLE_GMP (Boost.Multiprecision fallback), with no timing table, hardware or compiler, so a normal GMP-backed CGAL may close the gap",
+    "Very fine wraps or huge inputs that need multithreading: the wrap is single-threaded (no threading in src/), and the Thingi10K worst case took 59 s on one model",
+    "Production code that needs a track record: the repo is two months old (first commit 2026-07-29, 8 commits, 10 stars, no issues filed), and the authors note a known residual degenerate case (zero-volume Delaunay cells) that is only detected, not fixed, by verify_topology()",
+    "Binary I/O or formats beyond OBJ and ASCII PLY through the CLI"
+  ],
+  "integration": {
+    "form": "static lib (awcore, 4 .cpp files) plus CLI and Python wheel (nanobind, scikit-build-core)",
+    "dependencies": "Shewchuk's robust predicates (danshapero/predicates), fetched by CMake FetchContent from GIT_TAG master on first configure (network needed); NumPy for the Python package. Optional CGAL 6.0.1 + Boost 1.85 headers only for the reference tool or wrap_cgal (GPL-encumbered build).",
+    "min_toolchain": "C++17, CMake 3.16+; Python 3.8+ for bindings (wheels built for CPython 3.9-3.13); CI builds with Release on ubuntu-latest, macos-latest and windows-latest",
+    "platforms": "Linux, macOS (arm64 tested, x86_64 cross-built), Windows x86-64; no SIMD or architecture-specific code; musllinux, PyPy and 32-bit wheels are skipped",
+    "thread_safety": "not documented; each aw::AlphaWrap object holds its own Delaunay, oracle and labels, so separate instances on separate threads look independent, but no guarantee is stated",
+    "drop_in_for_baseline": "partial — same algorithm, guarantees and alpha/offset parameters as CGAL::alpha_wrap_3 for triangle soups, but a different API and mesh type, a slightly different (coarser) output, and no point-set/segment inputs or seeds"
+  },
+  "gotchas": [
+    "Builds must keep -ffp-contract=off (set in CMake for GCC/Clang) and must not use fast-math, or the exact predicates break silently; vendoring the sources into another build needs the same flags",
+    "The flood fill stops at a hard cap of 5,000,000 Steiner points (max_steiner in alpha_wrap.cpp) and just breaks out of the loop; check WrapStats.steiner_points or the CLI's invariant report if you push alpha very small",
+    "The predicates dependency is fetched from an unpinned master branch, so builds are not reproducible and pick up upstream changes; pin GIT_TAG for production",
+    "Default CMake build type is RelWithDebInfo; the CGAL comparison used -DCMAKE_BUILD_TYPE=Release, so benchmark both in Release"
+  ],
+  "pick_this_over_siblings_when": "No catalogued sibling does alpha wrapping. Pick it over Manifold or MeshLib when the input is a broken soup that their booleans reject or that you must first close: alpha-wrap is the repair/wrapping step that yields the closed manifold mesh those tools require, and it does so under MIT without CGAL. For booleans on already-clean meshes use Manifold, kigumi or trueform instead.",
+  "verified_claims_summary": "The only speed claim is one README sentence: 'competitive to faster (ours ~2x faster on most inputs in this GMP-free CGAL environment)', measured by the author against CGAL 6.0.1 CGAL::alpha_wrap_3 with the EPICK kernel built header-only with CGAL_DISABLE_GMP, over the bundled meshes, a 100k-triangle sphere and a 236k-triangle statue at alpha = diag/30. No per-model times, hardware or compiler are given; output is 0.6-1.0x CGAL's face count and within 0.1-3.4% of the bbox diagonal (Hausdorff) of CGAL's wrap, so the two do not produce identical work.",
+  "status_note": "Active but very new (8 commits from 2026-07-29 to 2026-08-31, every commit co-authored by Claude per the verifier), MIT-licensed and small enough to vendor; treat as a promising research-grade tool rather than a proven replacement for CGAL.",
+  "sources_read": [
+    "https://github.com/alecjacobson/alpha-wrap",
+    "https://github.com/alecjacobson/alpha-wrap/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/alecjacobson/alpha-wrap/HEAD/README.md",
+    "https://raw.githubusercontent.com/alecjacobson/alpha-wrap/HEAD/DESIGN.md",
+    "https://raw.githubusercontent.com/alecjacobson/alpha-wrap/HEAD/docs/algorithm-spec.md",
+    "https://raw.githubusercontent.com/alecjacobson/alpha-wrap/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/alecjacobson/alpha-wrap/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/alecjacobson/alpha-wrap/HEAD/pyproject.toml",
+    "https://raw.githubusercontent.com/alecjacobson/alpha-wrap/HEAD/cmake/cgal.cmake",
+    "https://raw.githubusercontent.com/alecjacobson/alpha-wrap/HEAD/cmake/dependencies.cmake",
+    "https://raw.githubusercontent.com/alecjacobson/alpha-wrap/HEAD/tools/CMakeLists.txt",
+    "https://raw.githubusercontent.com/alecjacobson/alpha-wrap/HEAD/tools/cgal_wrap.cpp",
+    "https://raw.githubusercontent.com/alecjacobson/alpha-wrap/HEAD/src/alpha_wrap.hpp",
+    "https://raw.githubusercontent.com/alecjacobson/alpha-wrap/HEAD/src/alpha_wrap.cpp",
+    "https://raw.githubusercontent.com/alecjacobson/alpha-wrap/HEAD/src/delaunay.hpp",
+    "https://raw.githubusercontent.com/alecjacobson/alpha-wrap/HEAD/src/aabb_tree.hpp",
+    "https://raw.githubusercontent.com/alecjacobson/alpha-wrap/HEAD/src/main.cpp",
+    "https://raw.githubusercontent.com/alecjacobson/alpha-wrap/HEAD/python/alpha_wrap/__init__.py",
+    "https://raw.githubusercontent.com/alecjacobson/alpha-wrap/HEAD/benchmarks/thingi10k/README.md",
+    "https://raw.githubusercontent.com/alecjacobson/alpha-wrap/HEAD/.github/workflows/ci.yml",
+    "https://raw.githubusercontent.com/alecjacobson/alpha-wrap/HEAD/.github/workflows/wheels.yml"
+  ],
+  "confidence": 0.7
+}

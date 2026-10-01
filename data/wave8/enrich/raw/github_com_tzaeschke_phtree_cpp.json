@@ -1,0 +1,55 @@
+{
+  "id": "https://github.com/tzaeschke/phtree-cpp",
+  "one_liner": "Header-only PH-tree (bitwise Z-order quadtree) spatial map; about 5x faster inserts than Boost.Geometry's R-tree, slower kNN.",
+  "what_it_does": "A multi-dimensional index (2 to 63 dimensions) over point or axis-aligned box keys with a std::map/std::multimap-like API: emplace, try_emplace with hint, find, erase, relocate/relocate_if, lower_bounds, window queries, kNN queries with Euclidean, L1 or Chebyshev distance, and custom filters (sphere, AABB). Map types (PhTree, PhTreeD, PhTreeF, PhTreeBoxD/F) hold one value per key; PhTreeMultiMap variants keep a bucket (std::unordered_set by default) per key. It is not a drop-in for boost::geometry::index::rtree: keys go through converter classes to int64, queries use for_each callbacks or iterators, and result accessors are first()/second() functions.",
+  "how_it_is_fast": "The PH-tree (Zaeschke et al., SIGMOD 2014) is a bitwise prefix-sharing 2^DIM-ary trie: each node is a binary hypercube addressed by one bit per dimension, so entries sit in Z-order (Morton) order and a lookup or insert walks at most one path with bit arithmetic, no rebalancing. Insert/erase modify only one node (plus possibly one created or deleted), which is why updates are cheap; relocate() reuses the shared path when an entry moves a short distance. Node entry storage switches by dimension (fixed array_map for DIM<=3, sparse sorted vector up to 8, B+tree beyond), and traversal relies on count-trailing-zeros (TZCNT/BMI2) and AVX, hence the recommended -O3 -mavx -mbmi2. Doubles are mapped to int64 losslessly via their IEEE bit pattern by default.",
+  "when_to_use": [
+    "Dynamic point sets with heavy insert/erase/move churn (simulations, game entities, moving objects) where an R-tree's rebalancing costs dominate; author's benchmark shows about 5x Boost R-tree insert throughput at 1M 3D points",
+    "Small window queries returning roughly up to 100 results per query, especially on clustered data (PH-tree 1.36x faster than Boost on 1M CLUSTER points)",
+    "Map semantics on exact coordinates (one value per key, find/count by point) with spatial queries on the same structure",
+    "Moderate dimensionality: the README says it works very well up to about 30 (sometimes 50) dimensions, with a hard limit of 63",
+    "Large datasets (millions of entries) built incrementally rather than bulk-loaded"
+  ],
+  "when_not_to_use": [
+    "kNN-heavy workloads: in the author's own 3D run Boost's R-tree answers k=1 queries about 13-26x faster at 1M points; there is no kNN for box keys at all (issue #36 open)",
+    "Box (rectangle) data with window queries: Boost R-tree is about 4.7x faster on 1M CUBE boxes in the same benchmark",
+    "Queries returning large result sets (the README says 1000+ results is inefficient; Boost already wins at about 100 results per query)",
+    "Static datasets that can be bulk-loaded once (packed R-trees or kd-trees such as nanoflann build fast and query faster)",
+    "Concurrent access: the README states the implementation does not support concurrency"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none for the library (copy include/phtree); Bazel or CMake 3.14 only for tests, examples and benchmarks, which use GoogleTest and Google Benchmark",
+    "min_toolchain": "C++17; verified with GCC 12, Clang 14, Visual Studio 2022 (CMake) and AppleClang 14 (Bazel)",
+    "platforms": "Linux, Windows, macOS; x86-64 recommended with -mavx -mbmi2 for TZCNT (works without, slower bit iteration); benchmarks do not build on Windows",
+    "thread_safety": "not thread-safe: README says the current implementation 'doesn't support concurrency or serialization'; external locking required",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Map semantics: inserting a duplicate key silently does nothing (the FAQ calls this 'losing updates'); use PhTreeMultiMap or a set as value type",
+    "Iteration order is Z-order on the unsigned bit pattern, so negative coordinates come after positive ones; iterators are invalid after modification except as a hint after exactly one erase()",
+    "Correctness history: a heap-use-after-free in multimap relocate (vector reallocation in a node's sparse map, issue #153) was fixed in 1.6.2; issue #154 (bug, open since Aug 2023) reports a crash in the multimap test with NUM_DUPL=10 where emplace_hint after erase inserts at the wrong location",
+    "Lossy ConverterMultiply can speed indexes up by 10%+ but truncates coordinates; the default IEEE converter is lossless. Values are stored inside nodes, so store pointers for large objects"
+  ],
+  "pick_this_over_siblings_when": "Pick PH-tree over GeoToolbox KdBoxTree or nanoflann when the dataset changes constantly (insert, erase, relocate) rather than being bulk-loaded and queried, and over tidwall/rtree.c when you want a typed C++17 map API with up to 63 dimensions; pick nanoflann or Boost's R-tree instead when kNN or box queries dominate.",
+  "verified_claims_summary": "In the author's separate phtree-cpp-perf repo (Google Benchmark, PH-tree 1.4.0 vendored, Feb-Mar 2023, GCC 12.1 and Clang 14, 8 x 4600 MHz CPU with 12 MiB L3, model unnamed), 3D inserts at 1M entries run at 2.79M/s vs 500k/s (points, CUBE) and 1.44M/s vs 406k/s (boxes) against Boost.Geometry's R-tree, about 3.5-5.6x; window queries are mixed and Boost wins box queries (about 4.7x) and 3D kNN (about 13-26x).",
+  "status_note": "Maintained by the original PH-tree author as a fork of Improbable's abandoned repo; last commit 2026-03-19 but the last release is v1.7.0 (GitHub release dated March 2024; CHANGELOG header says 2025) with 14 open issues, so slow-moving; Apache-2.0 and header-only, easy to vendor.",
+  "sources_read": [
+    "https://github.com/tzaeschke/phtree-cpp",
+    "https://raw.githubusercontent.com/tzaeschke/phtree-cpp/HEAD/README.md",
+    "https://raw.githubusercontent.com/tzaeschke/phtree-cpp/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/tzaeschke/phtree-cpp/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/tzaeschke/phtree-cpp/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/tzaeschke/phtree-cpp/HEAD/MODULE.bazel",
+    "https://github.com/tzaeschke/phtree-cpp/tree/master/include/phtree/v16",
+    "https://raw.githubusercontent.com/tzaeschke/phtree-cpp/HEAD/include/phtree/v16/phtree_v16.h",
+    "https://raw.githubusercontent.com/tzaeschke/phtree-cpp/HEAD/include/phtree/v16/node.h",
+    "https://raw.githubusercontent.com/tzaeschke/phtree-cpp/HEAD/include/phtree/v16/iterator_knn_hs.h",
+    "https://github.com/tzaeschke/phtree-cpp/issues?q=is%3Aissue+is%3Aopen",
+    "https://github.com/tzaeschke/phtree-cpp/issues/153",
+    "https://github.com/tzaeschke/phtree-cpp/issues/154",
+    "https://github.com/tzaeschke/phtree-cpp/releases",
+    "https://raw.githubusercontent.com/tzaeschke/phtree-cpp-perf/HEAD/README.md"
+  ],
+  "confidence": 0.8
+}
