@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/andanteyk/prng-shioi",
+  "one_liner": "Public-domain 16-byte-state 64-bit PRNG with O(1) 2^64 jump; about 3x reference mt19937-64, parity with xoshiro256**.",
+  "what_it_does": "A non-cryptographic 64-bit-output generator with 128 bits of state and period 2^128-1, shipped as one C file (shioi128.c) exposing next(), init(seed), jump32(), jump64() and jump96(). It is not a C++ UniformRandomBitGenerator: the shipped file keeps a file-static state[2], while the README's minimal version takes uint64_t state[2] as a parameter, so to feed std:: distributions you write a small wrapper class with result_type, min(), max() and operator().",
+  "how_it_is_fast": "Each step is one 64-bit constant multiply (by 0xD2B74407B1CE6E93), a rotate-left by 29 and an add for the output, plus a shift/xor update of the state (s1' = (s0 << 2) ^ (s0 >> 19, arithmetic) ^ s1). That is a two-word linear recurrence over GF(2) (the README calls it LFSR-based) with a multiply-rotate-add output scrambler, so everything stays in two registers. mt19937-64 instead keeps about 2.5 KB of state that it regenerates in blocks. Because the recurrence is linear, a 2^64-step jump reduces to a closed-form two-word update costing about one next().",
+  "when_to_use": [
+    "Games, simulations and Monte Carlo code on 64-bit CPUs that need a small non-cryptographic 64-bit generator faster than std::mt19937_64 and can vendor ~20 lines of CC0 code.",
+    "Parallel or per-task streams: jump64() costs about one next() and splits the period into 2^64 non-overlapping subsequences of length 2^64.",
+    "Many independent generator instances (per particle, per entity), where 16 bytes of state beats mt19937_64's ~2.5 KB.",
+    "When you want a fast 128-bit-state generator that, per the author, passes PractRand to 32 TB, BigCrush (normal and bit-reversed), the Hamming-weight-dependency test to 1.5 PB and gjrand. In the same table xoroshiro128+ fails BRank and hwd."
+  ],
+  "when_not_to_use": [
+    "Anything security-relevant (tokens, keys, adversarial inputs). It is not a CSPRNG, and the only attack the author reports is one day of Z3 that did not recover the state.",
+    "When raw speed is the goal: in the author's own C table it is behind sfc64 (1.21), seiran128 (1.20) and xoroshiro128+ (1.13) and only ties xoshiro256** (1.00 vs 0.99 outputs/ns).",
+    "32-bit targets or cores without a fast 64x64-bit multiply: the README warns that speed may drop there, and the 32-bit-word variants are unfinished.",
+    "When you need a widely analysed or standardized generator: the author says it 'has not been investigated by others', and no paper or third-party statistical analysis is linked.",
+    "When you need a maintained, packaged library: there are four commits (the last on 2019-08-18) and no tests beyond the self-test main() in the source file."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (<inttypes.h>; <stdio.h> only for the bundled self-test main)",
+    "min_toolchain": "C99 (for-loop declarations, <inttypes.h>); needs a compiler whose >> on a negative int64_t is an arithmetic shift, which is guaranteed only from C23 / C++20 and implementation-defined before that",
+    "platforms": "any target with 64-bit integers; benchmarked only on x86-64 (i7-7700HQ); slower where 64-bit multiply is slow",
+    "thread_safety": "Not thread-safe as shipped: next()/init()/jump*() share one file-static state[2]. Give each thread its own state (the README's minimal version takes state[2] as a parameter).",
+    "drop_in_for_baseline": "partial — not a std::UniformRandomBitGenerator; needs a small wrapper class to replace std::mt19937_64 under std:: distributions, and the output sequence differs from MT"
+  },
+  "gotchas": [
+    "shioi128.c defines bare global symbols next(), init(), jump32/64/96() and a main() self-test in the same file. Strip main and rename or namespace the functions before linking into a real program.",
+    "The update must use an arithmetic (sign-extending) right shift of (int64_t)s0 (the source says 'MUST use arithmetic right shift'). A port that uses a logical shift, such as Java's >>> or an unsigned >> in Rust or C#, silently produces a different, untested generator.",
+    "State {0,0} is a fixed point. The shipped init() seeds both words through a 64-bit LCG, which never yields {0,0}, but custom seeding must avoid two zero words.",
+    "Only jump64() is O(1). jump32() and jump96() run the generic polynomial jump, which is 128 next() calls plus XORs."
+  ],
+  "pick_this_over_siblings_when": "Over seiran128 (same author, 1.20 vs 1.00 outputs/ns in the shared C table), pick shioi128 for the O(1) jump64. In the author's later Culumi table, Seiran's state is rated 'easy(Z3)' to predict and Shioi's 'unknown', and Shioi was faster there (81.97 vs 97.26 ns/KiB under .NET 8). Over xoshiro256**, it gives half the state and a constant-time 2^64 jump at equal measured speed; pick Culumi (needs SSE4/PCLMUL) or a SIMD generator such as simdrng or SHISHUA when bulk fill throughput matters more.",
+  "verified_claims_summary": "Author-run xoshiro harness.c on an i7-7700HQ with gcc 7.3.0 (flags not stated): shioi128 1.00 64-bit outputs/ns vs the reference mt19937-64.c at 0.32 (3.1x), pcg64_xsh_rr 0.38 and xoshiro256** 0.99; std::mt19937_64 itself was not timed. An independent casual C++ benchmark (t-mat gist, last updated 2022-11-24, -std=c++20 -O3, CPU not stated) measured Shioi128 at 10.15 GiB/s with GCC 11.2 vs xoroshiro128+ 8.02 and wyrand 8.85, and 10.86 GiB/s with MSVC 19.32 vs xoroshiro128+ 6.75 and wyrand 12.81.",
+  "status_note": "Abandoned since 2019-08-18 (four commits, no issues), but CC0 and about 20 lines of logic, so vendoring and maintaining a wrapper yourself is trivial.",
+  "sources_read": [
+    "https://github.com/andanteyk/prng-shioi",
+    "https://github.com/andanteyk/prng-shioi/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/andanteyk/prng-shioi/HEAD/README.md",
+    "https://raw.githubusercontent.com/andanteyk/prng-shioi/HEAD/README-ja.md",
+    "https://raw.githubusercontent.com/andanteyk/prng-shioi/HEAD/shioi128.c",
+    "https://raw.githubusercontent.com/andanteyk/prng-culumi/HEAD/README.md",
+    "https://gist.github.com/t-mat/ff347c3ea6b94f3c60150631edeb07d3"
+  ],
+  "confidence": 0.75
+}
