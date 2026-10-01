@@ -1,0 +1,111 @@
+[
+  {
+    "id": "https://github.com/maciejczyzewski/libchaos",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "First-party Google Benchmark items/s in the README for libchaos PRNGs and STL engines (std::mt19937 68.239M, mt19937_64 60.0674M items/s), with public benchmark code (tests/b_generators.cc) and build flags in CMakeLists.txt/.travis.yml, but the CPU is an unnamed Travis VM, so not A; no independent source, so C.",
+    "corrections": {
+      "compiler_and_flags": "g++-4.8 on Travis CI (.travis.yml; clang lines commented out) with -std=c++11 -O3 -flto -march=native -mtune=native, Release build (CMakeLists.txt). The flags come from the build files, not from the text next to the numbers.",
+      "baseline_stdlib": [
+        "libstdc++"
+      ],
+      "caveats": "The numbers are from 2016-2017 on a shared Travis VM whose CPU is not stated. The libchaos table and the STL block are listed separately in the README, and it does not say they came from the same run. The generator called CHAOS_PRNG_XOROSHIRO128PLUS is actually xorshift128+ (include/chaos/generators/xoroshiro.hh: s1 ^= s1 << 23; s[1] = s1 ^ s0 ^ (s1 >> 18) ^ (s0 >> 5)), not xoroshiro128+, and CHAOS_PRNG_XOROSHIRO1024STAR is actually xorshift1024* (shifts 31/11/30, multiplier 1181783497276652981). Both are mislabelled, and the README lists them as 'high' quality. Benchmark harness (tests/b_generators.cc): the return values of next()/operator() are discarded without DoNotOptimize, so output scrambling can be removed as dead code for every engine; each loop iteration makes 4 calls but counts 1 item, so all items/s figures are understated 4x (the ratios are unaffected). The speed edge is what any xorshift-family generator gives over MT19937. Most of the library (chaos machines, hashing, analysis) is not about speed."
+    },
+    "notes": "README numbers match exactly (Xoroshiro128Plus 178.426M vs mt19937 68.239M items/s, 2.6x derived). Metadata: BSD-2-Clause (FreeBSD variant), 1.6k stars, 158 forks, last commit 2017-01-01 (abandoned). Worth recording as a shortcoming: the generator named xoroshiro128+ is mislabelled (it implements xorshift128+).",
+    "urls_opened": [
+      "https://github.com/maciejczyzewski/libchaos",
+      "https://github.com/maciejczyzewski/libchaos/commits/master",
+      "https://github.com/maciejczyzewski/libchaos/tree/master/include/chaos",
+      "https://github.com/maciejczyzewski/libchaos/tree/master/include/chaos/generators",
+      "https://raw.githubusercontent.com/maciejczyzewski/libchaos/HEAD/README.md",
+      "https://raw.githubusercontent.com/maciejczyzewski/libchaos/HEAD/tests/b_generators.cc",
+      "https://raw.githubusercontent.com/maciejczyzewski/libchaos/HEAD/include/chaos/generators/xoroshiro.hh",
+      "https://raw.githubusercontent.com/maciejczyzewski/libchaos/HEAD/include/chaos/prng.hh",
+      "https://raw.githubusercontent.com/maciejczyzewski/libchaos/HEAD/CMakeLists.txt",
+      "https://raw.githubusercontent.com/maciejczyzewski/libchaos/HEAD/.travis.yml",
+      "https://raw.githubusercontent.com/maciejczyzewski/libchaos/HEAD/LICENSE"
+    ]
+  },
+  {
+    "id": "https://github.com/msu-sparta/openrand",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "A",
+    "tier_reason": "Upgraded from C. The paper (SoftwareX 27 (2024) 101773; preprint in the repo as docs/OpenRAND.pdf) gives Brownian-dynamics wall times against cuRAND on named GPUs (A100 SXM, Tesla V100 PCIe). The benchmark code is public in the paper's linked repo Shihab-Shahriar/brownian-dynamics (Curand.cu, Openrand.cu, r123.cu, runfile.sh), and its Makefile gives the compiler and flags (nvcc -Xcompiler -Wall -O3 -std=c++17 -arch=sm_80). That meets A for the cuRAND result; the nvcc version is not stated, the same gap the midint precedent accepted. The CPU comparison against std::mt19937 alone would only be B (chart only, compiler and flags unstated).",
+    "corrections": {
+      "benchmark_url": "https://github.com/msu-sparta/OpenRAND/blob/main/docs/OpenRAND.pdf",
+      "claimed_speedup": "Paper Fig. 4b, Brownian dynamics wall time (1M particles, 10,000 steps, Philox in every library): A100 SXM cuRAND 3.20 s vs OpenRAND 1.78 s (1.80x, derived from page data), Random123 1.81 s; Tesla V100 PCIe cuRAND 4.23 s vs OpenRAND 2.48 s (1.71x, derived from page data), Random123 2.46 s. Text: 'OpenRAND outperformed cuRAND by 1.8x, while saving ~64 MB of GPU memory per million particles, and performed on par with Random123.' CPU (Fig. 4a, log-scale chart without printed values, read by eye) against libstdc++ std::mt19937 on a Xeon Platinum 8260: all four generators are far faster for 10-100 draws per freshly constructed engine. At 10K draws, Tyche (~1.6e4 ns) and Squares (~1.4e4 ns) are roughly 3.5-4x faster than mt19937 (~5.5e4 ns), while Philox (~6.6e4 ns) is slightly slower and Threefry (~3.3e5 ns) is about 6x slower.",
+      "compiler_and_flags": "GPU benchmark: nvcc -Xcompiler -Wall -O3 -std=c++17 -arch=sm_80 (brownian-dynamics Makefile; CUDA version not stated; the README says to change -arch for other GPUs, so the V100 build used a different arch flag). CPU micro-benchmark: compiler and flags not stated (Google Benchmark via CMake; the repo CMakeLists sets no CMAKE_BUILD_TYPE).",
+      "hardware": "Intel Xeon Platinum 8260 (CPU micro-benchmark); NVIDIA Tesla V100 PCIe and A100 SXM (Brownian dynamics benchmark).",
+      "workload": "CPU: Google Benchmark (benchmarks/raw_speed_cpu.cpp) constructing a fresh engine each iteration and drawing 10 to 100,000 uint32 values, against std::mt19937. GPU: 2D Brownian dynamics, 1M particles x 10,000 steps, timed with `time` on each whole executable (brownian-dynamics/runfile.sh) for cuRAND (curandStatePhilox4_32_10_t kept in global memory), Random123 Philox4x32 and OpenRAND Philox.",
+      "stars_or_usage": "37 stars, 6 forks; SoftwareX 27 (2024) 101773 (doi 10.1016/j.softx.2024.101773)",
+      "caveats": "The GPU win over cuRAND comes from the counter-based API, which avoids loading and storing per-thread cuRAND state in global memory. It is not a faster algorithm: every library uses Philox, Random123 is on par, and the authors say they do not expect the margin to hold in real kernels where RNG cost is smaller. Timing is whole-process wall time (including CUDA context setup and cuRAND state initialization). The benchmark repo vendors an early copy of the library (namespace rnd) rather than the current openrand headers, and its Makefile targets sm_80 (A100); the V100 build flags are not published. CPU micro-benchmark: compiler and flags unstated, and the repo CMake sets no build type. The engine is constructed inside the timed loop, so mt19937's 624-word seeding dominates small streams (the paper says so). At 10K draws only Tyche and Squares beat mt19937; Philox and Threefry are slower. CPU values exist only as a log-scale chart. The paper is first-party."
+    },
+    "notes": "The SoftwareX page (sciencedirect), arXiv, SSRN and the project docs site are egress-blocked, but the repo carries the preprint (docs/OpenRAND.pdf); Fig. 4b values were read from the rendered PDF, matching legend order Curand/Random123/OpenRAND. Metadata: MIT, 37 stars, last commit 2024-12-11 (stale).",
+    "urls_opened": [
+      "https://github.com/msu-sparta/OpenRAND",
+      "https://github.com/msu-sparta/OpenRAND/commits/main",
+      "https://github.com/msu-sparta/OpenRAND/tree/main/benchmarks",
+      "https://github.com/msu-sparta/OpenRAND/tree/main/examples",
+      "https://github.com/msu-sparta/OpenRAND/tree/main/docs",
+      "https://github.com/msu-sparta/OpenRAND/blob/main/docs/OpenRAND.pdf",
+      "https://raw.githubusercontent.com/msu-sparta/OpenRAND/HEAD/README.md",
+      "https://raw.githubusercontent.com/msu-sparta/OpenRAND/HEAD/docs/OpenRAND.pdf",
+      "https://raw.githubusercontent.com/msu-sparta/OpenRAND/HEAD/benchmarks/raw_speed_cpu.cpp",
+      "https://raw.githubusercontent.com/msu-sparta/OpenRAND/HEAD/benchmarks/raw_speed_cuda.cu",
+      "https://raw.githubusercontent.com/msu-sparta/OpenRAND/HEAD/benchmarks/CMakeLists.txt",
+      "https://raw.githubusercontent.com/msu-sparta/OpenRAND/HEAD/CMakeLists.txt",
+      "https://raw.githubusercontent.com/msu-sparta/OpenRAND/HEAD/LICENSE",
+      "https://github.com/Shihab-Shahriar/brownian-dynamics",
+      "https://raw.githubusercontent.com/Shihab-Shahriar/brownian-dynamics/HEAD/README.md",
+      "https://raw.githubusercontent.com/Shihab-Shahriar/brownian-dynamics/HEAD/Makefile",
+      "https://raw.githubusercontent.com/Shihab-Shahriar/brownian-dynamics/HEAD/runfile.sh",
+      "https://raw.githubusercontent.com/Shihab-Shahriar/brownian-dynamics/HEAD/Curand.cu",
+      "https://raw.githubusercontent.com/Shihab-Shahriar/brownian-dynamics/HEAD/Openrand.cu",
+      "https://raw.githubusercontent.com/Shihab-Shahriar/brownian-dynamics/HEAD/LICENSE"
+    ]
+  },
+  {
+    "id": "https://github.com/sibidanov/ranluxpp",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "B",
+    "tier_reason": "Upgraded from C. An independent measurement by a ROOT/CERN developer (ROOT blog 'Implementing and tuning RANLUX++ for ROOT', 2020) puts Sibidanov's assembly implementation at about 8 ns per number, against about 62 ns for ROOT's RANLUX (TRandom1), on one core of an AMD Ryzen 9 3900 with GCC 8.3.1. Compiler flags are not given, and the harness used for the assembly version is not identified (rootbench PR #200 benchmarks ROOT's TRandom classes), so not A. The repo README's own 20 vs 198 clock/float figure is first-party only.",
+    "corrections": {
+      "benchmark_url": "https://github.com/root-project/web/blob/main/blog/_posts/2020-11-30-ranluxpp.md",
+      "baseline": "std::ranlux (GCC libstdc++ RANLUX) in the repo README and tests/std_random_test.cxx; ROOT's TRandom1 (James' RANLUX implementation) in the independent ROOT measurement",
+      "claimed_speedup": "Independent (ROOT blog, AMD Ryzen 9 3900, GCC 8.3.1): Sibidanov's implementation 'comes in at around 8ns per number' vs TRandom1 RANLUX 'around 62ns per number' (single-precision only), about 7.8x (derived from page data); ROOT's own portable RANLUX++ reaches about 9 ns after tuning. First-party README: 'generation speed achieved (20 clock/float) is order of magnitude faster than the usual approach, for example, GCC C++ RANLUX implementation where 198 clock/float is measured at Haswell CPU'; the optimized conventional RANLUX reaches 40 clock/float, and 'The SSE2 and AVX2 versions is approximately 4 and 8 times faster correspondingly' (README does not name the reference; the SIMD classes run 4 or 8 independent RANLUX lanes, so this is aggregate throughput).",
+      "compiler_and_flags": "Repo Makefile: g++ -O3 -Iinc -mavx2 -DASMSKIP (compiler version not stated). Independent ROOT measurement: GCC 8.3.1 on CentOS 8.2.2004 (flags not stated).",
+      "hardware": "README: Haswell (GCC RANLUX 198 clock/float) and Skylake (155 clocks per 576-bit modular multiplication), microarchitectures only; the CPU for the 20 clock/float figure is not named. ROOT blog: single core of an AMD Ryzen 9 3900.",
+      "last_commit": "2018-01-17",
+      "maintenance_status": "abandoned",
+      "stars_or_usage": "11 stars, 4 forks; the algorithm was adopted in ROOT 6.24 as TRandomRanluxpp/RanluxppEngine through a portable C++ reimplementation (not this x86-64 assembly code); described in Computer Physics Communications 2017 (arXiv 1705.03123)",
+      "caveats": "The README's 10x figure mixes CPUs: GCC's 198 clock/float was measured on Haswell, the 155-cycle modmul on Skylake, and the CPU for 20 clock/float is not named. The README does not say whether std::ranlux24 (p=223) or std::ranlux48 (p=389) gave 198 clock/float, while ranluxpp defaults to p=2048 (higher luxury, so the comparison is conservative on quality). ranluxpp's float/double output is unpacked directly from the 576-bit LCG state, not the RANLUX base-2^24 sequence, so the numbers differ from std::ranlux even though the state is provably equivalent; tests/ranluxpp_test.cxx modes 0 and 1 check the LCG state against the conventional RANLUX for 1e8 steps. The SIMD (SSE2/AVX2) conventional-RANLUX classes run 4 or 8 independent RANLUX lanes; their claimed 4x/8x is aggregate multi-stream throughput, and the same-seed consistency check (ranlux_test mode 7) only prints values for visual comparison. RANLUX++ is x86-64 assembly only (mulx/adx variants via GCC function multiversioning). It is faster than other RANLUX implementations but slower than Mersenne Twister: the ROOT blog measures TRandom3 at about 3 ns per number on the same machine. The CPC 2017 paper could not be opened (arxiv.org blocked). License: LGPL-3.0-or-later per source headers, with COPYING (GPLv3) and COPYING.LESSER (LGPLv3) texts at the repo root (there is no LICENSE file)."
+    },
+    "notes": "Upgraded to B on the ROOT blog's independent numbers (opened via its GitHub source; root.cern is egress-blocked). The README quote matches the record. The record's 'no license text at HEAD' was wrong: COPYING and COPYING.LESSER exist. Last commit is 2018-01-17 (6 commits total).",
+    "urls_opened": [
+      "https://github.com/sibidanov/ranluxpp",
+      "https://github.com/sibidanov/ranluxpp/commits/master",
+      "https://raw.githubusercontent.com/sibidanov/ranluxpp/HEAD/README.md",
+      "https://raw.githubusercontent.com/sibidanov/ranluxpp/HEAD/Makefile",
+      "https://raw.githubusercontent.com/sibidanov/ranluxpp/HEAD/COPYING",
+      "https://raw.githubusercontent.com/sibidanov/ranluxpp/HEAD/COPYING.LESSER",
+      "https://raw.githubusercontent.com/sibidanov/ranluxpp/HEAD/tests/ranluxpp_test.cxx",
+      "https://raw.githubusercontent.com/sibidanov/ranluxpp/HEAD/tests/std_random_test.cxx",
+      "https://raw.githubusercontent.com/sibidanov/ranluxpp/HEAD/tests/ranlux_test.cxx",
+      "https://raw.githubusercontent.com/sibidanov/ranluxpp/HEAD/src/ranluxpp.cxx",
+      "https://raw.githubusercontent.com/sibidanov/ranluxpp/HEAD/inc/ranluxpp.h",
+      "https://raw.githubusercontent.com/sibidanov/ranluxpp/HEAD/inc/ranlux.h",
+      "https://github.com/root-project/web/blob/main/blog/_posts/2020-11-30-ranluxpp.md",
+      "https://raw.githubusercontent.com/root-project/web/main/blog/_posts/2020-11-30-ranluxpp.md",
+      "https://github.com/root-project/rootbench/pull/200"
+    ]
+  }
+]
