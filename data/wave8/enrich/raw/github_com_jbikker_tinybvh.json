@@ -1,0 +1,68 @@
+{
+  "id": "https://github.com/jbikker/tinybvh",
+  "one_liner": "Header-only C++ BVH builder and ray tracer; author's benchmark shows faster SAH builds and single-ray traversal than Embree.",
+  "what_it_does": "Builds bounding volume hierarchies over triangle meshes (also AABBs, custom primitives via callbacks, and instanced BLASes under a TLAS) and answers ray queries: nearest hit with Intersect, any hit with IsOccluded, plus sphere-vs-BVH overlap. You instantiate a layout class (BVH, BVH4_CPU, BVH8_CPU, BVH_GPU, BVH4_GPU, BVH8_CWBVH, double-precision variants), call Build with a float4-per-vertex triangle soup or vertices plus indices, then trace Ray objects and read ray.hit. It is its own API, not a drop-in for Embree's rtcore; the GPU layouts are node data plus example kernels for OpenCL, OpenGL compute, DX12 and Vulkan.",
+  "how_it_is_fast": "The default build is a binned SAH builder (8 bins) with AVX or NEON bin evaluation, run on a process-wide std::thread pool for meshes of 50k+ triangles. The fastest CPU layout, BVH4_CPU, follows the WiVe design (Fuetterling et al., HPG 2017): 128-byte 4-wide nodes with child bounds in SoA form and a precomputed per-octant child order, kernels templated on the ray-direction signs, FMA slab tests, and leaves of 4 triangles tested together with SIMD. Optional quality passes are SBVH spatial splits (Stich et al. 2009), pre-splitting and tree-rotation optimization (Bittner et al. 2013), which lower SAH cost at the price of build time. There is also a 64-ray bundle (packet) traversal path (WiVeC) for coherent rays.",
+  "when_to_use": [
+    "CPU ray casting against static or rigidly instanced triangle meshes (visibility, AO, baking, picking, path tracing) when you want one dependency-free header instead of linking Embree and TBB.",
+    "Frequent rebuilds of meshes in the 100k-1M triangle range: the author measures a ~6.7 ms SAH build for the 263k-triangle Sponza. Refit is the cheaper option for small deformations with a fixed triangle count.",
+    "Building BVHs on the CPU for your own GPU traversal (CWBVH, Aila-Laine BVH_GPU, BVH4_GPU) in OpenCL, compute shaders or WebGPU without vendor ray-tracing APIs.",
+    "Targets where shipping one header is simpler than shipping Embree: WASM/Emscripten (SIMD128), Android/Apple NEON, plus double-precision BVHs (BVH_Double, BVH4_Double)."
+  ],
+  "when_not_to_use": [
+    "Spatial queries this category's baselines serve: point k-NN, box range queries, polygon predicates and GIS geometry. TinyBVH answers ray and sphere-overlap queries over triangles and AABBs only.",
+    "Workloads that need Embree's wider primitive set (curves/hair, subdivision surfaces, motion blur), none of which is in TinyBVH's feature list.",
+    "Code that must not be terminated by a library: fatal errors (NaN in a ray, empty mesh, rebuilding a non-rebuildable BVH) call exit(1) unless you install a handler that throws.",
+    "x86 builds without -mavx2 -mfma, and 32-bit x86, RISC-V or PowerPC: the SIMD builder and the BVH4_CPU/BVH8_CPU kernels compile out, leaving scalar code.",
+    "Projects that need a frozen API: in September 2026 alone the header was split into several files and ray directions stopped being normalized, and correctness issues remain open (#301, #291)."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (tiny_ocl.h and OpenCL are needed only for the GPU examples)",
+    "min_toolchain": "C++17 by default (threaded builds); C++14 with NO_THREADED_BUILDS; the repo's CMake and build.bat use C++20. GCC, clang, MSVC and Emscripten are supported.",
+    "platforms": "x86-64 (SSE4.2/AVX/AVX2+FMA kernels, scalar fallback without them), aarch64 NEON, WASM SIMD128; scalar code on any other C++17 target",
+    "thread_safety": "Intersect and IsOccluded are const, and the author's benchmark traces one BVH from many threads. Builds use a process-wide std::thread pool, or your own spawn/barrier/parallel_for hooks in BVHContext. Concurrent builds are not documented; VoxelSet::Set is marked 'not thread-safe'.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Every BVH::Intersect call runs VALIDATE_RAY, so one NaN in a ray's origin, direction or t ends the process with exit(1). Call tinybvh_set_fatal_error_handler with a handler that throws if you need to recover.",
+    "On x86, compiling without -mavx2 -mfma only prints a warning and defines TINYBVH_NO_SIMD, so the program silently falls back to scalar code. The fast layouts need AVX2+FMA; CMake passes -march=native and build.bat passes -mavx2 -mfma.",
+    "Since PR #296 (merged 2026-09-23), ray directions are used as given, so hit.t scales with |D|; define NORMALIZE_RAY_DIR for the old behaviour. Input vertices are float4, with w as padding that is sometimes reused (for example for triangle color).",
+    "BVH_GPU::ConvertFrom ignores vertex indices (issue #301, open; still at tiny_bvh_base.h line 4650 at HEAD), so indexed meshes give wrong GPU geometry in that layout. Traversal kernels use fixed stacks (TINYBVH_STACK_SIZE 128, doubled for wide layouts) with no bounds check in the hot loop, and a stack overflow on the San Miguel scene in BVH4_CPU conversion was reported (#300)."
+  ],
+  "pick_this_over_siblings_when": "Pick TinyBVH when the query is ray-triangle intersection (nearest or any hit) over large meshes, on the CPU or GPU. The catalogued siblings answer other questions: nanoflann, tidwall/rtree.c, THST and GeoToolbox for point k-NN and box range queries, TG for 2D polygon predicates, and Manifold, MeshLib or trueform for mesh booleans and mesh processing.",
+  "verified_claims_summary": "The author's preliminary chart, produced with the public tiny_bvh_benchmark.cpp (built per build.bat with g++ -std=c++20 -mavx2 -mfma -Ofast; Windows-only harness; CPU model not published), measures Crytek Sponza (263k triangles): a 'fast build' takes ~6.7 ms vs Embree 4 at ~17.5 ms and madmann91/bvh at ~13 ms (~2.6x vs Embree, derived from page data). Single-core single-ray traversal reaches ~16 vs ~6.2 (Embree) vs ~2.3 (madmann91) MRay/s for nearest hit and ~36 vs ~23.5 MRay/s for any hit. The harness tilts some comparisons: TinyBVH traces an SBVH BVH4 optimized for 100 iterations while Embree's build quality for the chart is not stated; Embree's timing loop resets tfar to 1e30 instead of each ray's tmax (this matters for the AO ray set, whose tmax is 5% of scene size); madmann91 creates a new thread pool inside every timed build. An earlier README, still in the wjakob fork, said Embree beat TinyBVH on any-hit rays.",
+  "status_note": "Very active (v1.9.0, last commit 2026-09-25, 1,753 commits, 34 contributors, 1.2k stars), MIT-licensed and used in Remedy Northlight, SideFX Houdini and EA SEED Gigi; it is easy to vendor, but pin a commit because layouts and semantics still change.",
+  "sources_read": [
+    "https://github.com/jbikker/tinybvh",
+    "https://github.com/jbikker/tinybvh/commits",
+    "https://github.com/jbikker/tinybvh/issues?q=is%3Aissue",
+    "https://github.com/jbikker/tinybvh/issues/299",
+    "https://github.com/jbikker/tinybvh/issues/300",
+    "https://github.com/jbikker/tinybvh/issues/301",
+    "https://github.com/jbikker/tinybvh/pull/294",
+    "https://github.com/jbikker/tinybvh/pull/296",
+    "https://github.com/wjakob/tinybvh",
+    "https://raw.githubusercontent.com/jbikker/tinybvh/HEAD/README.md",
+    "https://raw.githubusercontent.com/jbikker/tinybvh/HEAD/tiny_bvh.h",
+    "https://raw.githubusercontent.com/jbikker/tinybvh/HEAD/tiny_bvh_base.h",
+    "https://raw.githubusercontent.com/jbikker/tinybvh/HEAD/tiny_bvh_x86_float.h",
+    "https://raw.githubusercontent.com/jbikker/tinybvh/HEAD/tiny_bvh_benchmark.cpp",
+    "https://raw.githubusercontent.com/jbikker/tinybvh/HEAD/images/perfgraphs.png",
+    "https://raw.githubusercontent.com/jbikker/tinybvh/HEAD/images/cpu_vs_gpu.png",
+    "https://raw.githubusercontent.com/jbikker/tinybvh/HEAD/build.bat",
+    "https://raw.githubusercontent.com/jbikker/tinybvh/HEAD/build_debug.bat",
+    "https://raw.githubusercontent.com/jbikker/tinybvh/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/jbikker/tinybvh/HEAD/benchmark/acc_struc.cpp",
+    "https://raw.githubusercontent.com/jbikker/tinybvh/HEAD/benchmark/experiment.cpp",
+    "https://raw.githubusercontent.com/jbikker/tinybvh/HEAD/benchmark/experiment.h",
+    "https://raw.githubusercontent.com/jbikker/tinybvh/HEAD/benchmark/headers.h",
+    "https://raw.githubusercontent.com/jbikker/tinybvh/HEAD/benchmark/tools.cpp",
+    "https://raw.githubusercontent.com/jbikker/tinybvh/HEAD/benchmark/tiny_bvh.cpp",
+    "https://raw.githubusercontent.com/jbikker/tinybvh/HEAD/benchmark/ray_distribution.cpp",
+    "https://raw.githubusercontent.com/jbikker/tinybvh/HEAD/benchmark/ray_distribution.h",
+    "https://raw.githubusercontent.com/jbikker/tinybvh/HEAD/benchmark/primitive_set.cpp",
+    "https://raw.githubusercontent.com/madmann91/bvh/HEAD/src/bvh/v2/thread_pool.h"
+  ],
+  "confidence": 0.75
+}
