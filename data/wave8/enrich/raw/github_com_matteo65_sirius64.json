@@ -1,0 +1,44 @@
+{
+  "id": "https://github.com/matteo65/sirius64",
+  "one_liner": "Six-line 64-bit-state PRNG, a SplitMix64-style Weyl counter with a stronger output mix; ~1.25x faster than xoshiro256++.",
+  "what_it_does": "Sirius64 is a non-cryptographic PRNG: a single function `uint64_t sirius64(uint64_t *state)` that advances a 64-bit state and returns 64 bits. You copy the function into your code; the repo ships no header, only the README snippet, a Java port and test and benchmark tools. The period is 2^64 and every 64-bit seed is valid. There is no C++ UniformRandomBitGenerator wrapper and no jump or stream API.",
+  "how_it_is_fast": "The state update is one add of the golden-ratio constant 0x9e3779b97f4a7c15 (a Weyl sequence, as in SplitMix64). The output function is xorshift-17, a multiply, a 32-bit rotate, then a multiply of state ^ z ^ (z >> 17), all with the same constant. The state carries only an add dependency from call to call, and the multiplies are off that chain, so the cost is close to SplitMix64 (2.38 instructions/byte in testingRNG vs 2.75 for splitmix64).",
+  "when_to_use": [
+    "Scalar 64-bit random streams in simulations, games or procedural generation, where you want SplitMix64 speed but a generator that passes a 64-bit collision test",
+    "Replacing xoshiro256++/** or PCG64 in a hot loop that draws one value at a time (README: 5.0 vs 6.2-8.6 cycles per value)",
+    "When 8 bytes of state per stream matters, e.g. one generator per object or per thread",
+    "When you need a trivially portable generator: pure C99 with 64-bit multiply, no 128-bit arithmetic (unlike wyrand and PCG64)"
+  ],
+  "when_not_to_use": [
+    "Anything security-related: it is explicitly non-cryptographic",
+    "When you need jump-ahead, provably independent parallel streams or a period above 2^64 (xoshiro256 offers 2^256 and jump functions)",
+    "When you need a widely reviewed design: it was published in 2026, has 2 stars and a single author, and all its quality testing (PractRand to 64 TB, BigCrush x300, HWD to 15 PB) is self-reported",
+    "When the output must be a bijection of the state: the output function is not one, so not every 64-bit value is guaranteed to appear in a period",
+    "Bulk generation, where SIMD generators (SHISHUA, 8-way xoshiro256++) are several times faster"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none",
+    "min_toolchain": "C99 (needs uint64_t); the benchmark tool needs GCC/Clang with x86intrin.h",
+    "platforms": "any platform with 64-bit integer multiply; benchmarked only on x86-64",
+    "thread_safety": "Reentrant: all state is in the caller-supplied uint64_t. Use one state per thread.",
+    "drop_in_for_baseline": "partial: one function on a uint64_t, but you must write your own wrapper to replace a C++ <random> engine or the xoshiro API (no jump())"
+  },
+  "gotchas": [
+    "The README's 'Collision 64: Yes' column means the generator passes a 64-bit collision test: it produces about as many repeated outputs as a random function (6.8 observed vs 6.94 expected per 16e9 values). SplitMix64 is marked 'No' because its output is a bijection and never repeats within a period. In testingRNG issue 30 a SmokeRand author points out that 64-bit bijectivity is not proven.",
+    "Its benchmark calls each generator through a function pointer, XORs into a volatile sink and counts rdtscp TSC ticks, not core cycles. Call overhead is included, which compresses the gaps between generators, and the author says rankings changed on other machines.",
+    "Seeds of 0 and UINT64_MAX are documented as fine; with a Weyl counter, nearby seeds give overlapping, shifted streams.",
+    "The README's 'pgc64' labels mean PCG64."
+  ],
+  "pick_this_over_siblings_when": "Pick it over Romu/RomuTrio or xoshiro256++ when you want the smallest state and the fastest scalar draw with no 128-bit multiply. Prefer testingRNG's wyrand or lehmer64 for similar speed and a longer public track record, and SHISHUA or the 8-way xoshiro256++ gist for bulk SIMD throughput.",
+  "verified_claims_summary": "With the author's benchmark.c (gcc 13.3, -O3 -march=native, 1e8 calls, best of 10) on a Core Ultra 7 265H under WSL2, Sirius64 took 5.007 cycles per 64-bit value vs xoshiro256++ 6.331, xoshiro256** 6.158, RomuTrio 5.842 and PCG64 DXSM 8.623, essentially tied with SplitMix64 at 4.985. lemire/testingRNG independently measured 4.29 GB/s on a Xeon Gold 6548N with GCC 14, vs pcg64 2.53, wyrand 4.22 and splitmix64 4.35. That makes it a tie with wyrand and splitmix64, not a clear win.",
+  "status_note": "Actively developed (last commit 2026-09-29) under Apache-2.0. The algorithm is six lines and easy to vendor, but the design is weeks old and has had no third-party cryptanalysis-style review.",
+  "sources_read": [
+    "https://github.com/matteo65/Sirius64",
+    "https://raw.githubusercontent.com/matteo65/Sirius64/HEAD/README.md",
+    "https://raw.githubusercontent.com/matteo65/Sirius64/HEAD/tools/benchmark.c",
+    "https://raw.githubusercontent.com/lemire/testingRNG/master/README.md",
+    "https://github.com/lemire/testingRNG/issues/30"
+  ],
+  "confidence": 0.8
+}

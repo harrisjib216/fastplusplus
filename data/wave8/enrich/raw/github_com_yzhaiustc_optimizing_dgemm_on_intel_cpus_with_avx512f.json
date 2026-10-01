@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/yzhaiustc/optimizing-dgemm-on-intel-cpus-with-avx512f",
+  "one_liner": "Step-by-step AVX-512 DGEMM tutorial whose final kernel roughly matches single-threaded Intel MKL on large square matrices.",
+  "what_it_does": "A teaching repo of 19 column-major DGEMM kernels, from a naive triple loop to a packed, cache-blocked AVX-512 inline-assembly kernel (18 serial, 19 OpenMP). Each kernel is a C function mydgemm_cpu_vN(M,N,K,alpha,A,LDA,B,LDB,beta,C,LDC) covering only the column-major, no-transpose case; there is no BLAS-compatible API.",
+  "how_it_is_fast": "Goto/BLIS-style blocking (M=192, K=384, N=8640 blocks) with packing of A and B into 4096-byte-aligned buffers, and a 24x8 register-blocked micro-kernel in AVX-512 inline asm (vbroadcastsd + vfmadd231pd on zmm registers). It adds software prefetching (prefetcht0) on A, B and C, a tuned C-scaling routine, and 'discontinuous' packing of B meant to help the L2 hardware prefetcher. Kernel 19 parallelises over M with a shared packed-B buffer and OpenMP barriers.",
+  "when_to_use": [
+    "Learning or teaching how a BLIS/Goto-style DGEMM is built on AVX-512, one optimisation at a time",
+    "Vendoring a small, readable FP64 GEMM micro-kernel into GPL-compatible code on Skylake-X/Cascade Lake-class CPUs",
+    "Large square column-major FP64 GEMM (about n >= 1600), where kernel 18 was a few percent ahead of single-threaded MKL on a Xeon W-2255",
+    "As a starting point for your own AVX-512 kernel tuning experiments"
+  ],
+  "when_not_to_use": [
+    "Small and mid-size matrices: in the repo's own plot kernel 18 trails MKL by roughly 10-20% for n=200..1500",
+    "Any production BLAS need: only NN column-major DGEMM, no transposes, no other precisions or routines; use MKL, OpenBLAS or BLIS",
+    "CPUs without AVX-512F (all AMD before Zen 4, most Intel client chips), or non-x86",
+    "Closed-source or permissive-licence projects: GPL-3.0",
+    "Multi-threaded claims: the harness links mkl_sequential and run.sh sets MKL_NUM_THREADS=1, so the parallel kernel 19 was never compared to threaded MKL"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "OpenMP (kernel 19); Intel MKL only for the test harness and correctness reference",
+    "min_toolchain": "GCC with AT&T inline asm and -march=skylake-avx512 (tested with GCC 7.3.0); C11 aligned_alloc",
+    "platforms": "x86-64 with AVX-512F only",
+    "thread_safety": "not documented; each call allocates its own packing buffers, kernel 19 spawns its own OpenMP team",
+    "drop_in_for_baseline": "partial — same argument order as column-major cblas_dgemm NN, but 32-bit int dims, no layout/transpose flags, separate function per kernel"
+  },
+  "gotchas": [
+    "If alpha==0 or K==0 the function returns without applying beta to C, unlike BLAS semantics (C = beta*C)",
+    "Correctness check in the harness uses an absolute tolerance of 1e-2, which is loose",
+    "Timing is 3 repetitions via gettimeofday with no warm-up; MKL's 7 GFLOPS at n=100 in the plot looks like a first-call artifact",
+    "The Makefile builds everything at -O0; the hot path is inline asm so this matters less, but the C driver/packing code is unoptimised"
+  ],
+  "pick_this_over_siblings_when": "Pick it over llamafile tinyBLAS or TCL when you want FP64 GEMM on AVX-512 and readable, staged code to learn from; tinyBLAS targets FP16/BF16/quantised LLM matmuls and TCL targets tensor contractions on top of a BLAS.",
+  "verified_claims_summary": "On one Intel Xeon W-2255 core (GCC 7.3.0, -march=skylake-avx512, oneMKL 2021.1 beta sequential), the repo's plot shows kernel 18 at about 33-115 GFLOPS across square n=100..3000, behind MKL from n=200 to 1500 and about 2-8% ahead from n=1600 to 3000 (about 115 vs 110 GFLOPS at n=3000, read from the plot). No measurement of the parallel kernel 19 against MKL was found.",
+  "status_note": "Abandoned since February 2022 and tutorial code, but GPL-3.0 and small (one ~670-line header per kernel), so it can be vendored by GPL projects; last tested compiler GCC 7.3.0.",
+  "sources_read": [
+    "https://github.com/yzhaiustc/Optimizing-DGEMM-on-Intel-CPUs-with-AVX512F",
+    "https://raw.githubusercontent.com/yzhaiustc/Optimizing-DGEMM-on-Intel-CPUs-with-AVX512F/HEAD/README.md",
+    "https://raw.githubusercontent.com/yzhaiustc/Optimizing-DGEMM-on-Intel-CPUs-with-AVX512F/HEAD/Makefile",
+    "https://raw.githubusercontent.com/yzhaiustc/Optimizing-DGEMM-on-Intel-CPUs-with-AVX512F/HEAD/kernels.h",
+    "https://raw.githubusercontent.com/yzhaiustc/Optimizing-DGEMM-on-Intel-CPUs-with-AVX512F/HEAD/test.c",
+    "https://raw.githubusercontent.com/yzhaiustc/Optimizing-DGEMM-on-Intel-CPUs-with-AVX512F/HEAD/utils.c",
+    "https://raw.githubusercontent.com/yzhaiustc/Optimizing-DGEMM-on-Intel-CPUs-with-AVX512F/HEAD/run.sh",
+    "https://raw.githubusercontent.com/yzhaiustc/Optimizing-DGEMM-on-Intel-CPUs-with-AVX512F/HEAD/include/kernel18.h",
+    "https://raw.githubusercontent.com/yzhaiustc/Optimizing-DGEMM-on-Intel-CPUs-with-AVX512F/HEAD/include/kernel19.h",
+    "https://raw.githubusercontent.com/yzhaiustc/Optimizing-DGEMM-on-Intel-CPUs-with-AVX512F/HEAD/figures/Kernel18.png"
+  ],
+  "confidence": 0.8
+}

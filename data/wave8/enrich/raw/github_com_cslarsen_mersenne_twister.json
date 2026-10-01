@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/cslarsen/mersenne-twister",
+  "one_liner": "Loop-unrolled, batch-tempered MT19937 in one C++ file; same output as reference mt19937ar.c, 1.1-1.6x faster on Intel.",
+  "what_it_does": "A two-file (mersenne-twister.h/.cpp) implementation of 32-bit MT19937 that produces the same sequence as the Matsumoto/Nishimura reference; test-mt checks 2000 consecutive outputs and outputs at doubling indices up to ~4 billion against it. The API is two extern \"C\" functions on a hidden singleton: seed(uint32_t) and rand_u32(). It is not a std::mt19937-style class and has no 64-bit variant.",
+  "how_it_is_fast": "The state-update loop is split into two index ranges (0..226 and 227..622) so the wrap-around modulus disappears, the odd/even matrix select uses a branchless sign-extension trick ((int32_t(y) << 31) >> 31) & MAGIC instead of a table lookup, and tempering is done for all 624 words in one batch into a second array so rand_u32() is just an array read. The Makefile adds -O2 -march=native -funroll-loops -ftree-vectorize so the batch loops can vectorize.",
+  "when_to_use": [
+    "Legacy code that must keep the exact MT19937 sequence (reproducible simulations, saved seeds) but wants a faster scalar implementation than mt19937ar.c",
+    "C or C++ projects on x86 that want a tiny vendorable MT19937 with no dependencies",
+    "Single-threaded Monte Carlo code drawing many 32-bit values in a tight loop"
+  ],
+  "when_not_to_use": [
+    "Multithreaded code: state is one static global struct with no locking; you must edit the source to make it per-instance",
+    "When you are free to change generator: modern generators (lehmer64, wyrand, splitmix64, pcg64) are faster and MT19937 fails PractRand binary-rank tests",
+    "Non-Intel CPUs: the author says he only tested Intel and doubts the speedup holds elsewhere; the extra unrolling (MT_UNROLL_MORE) is slower on newer Xeons",
+    "Code already using std::mt19937: no comparison against libstdc++/libc++ is published, and those implementations may already be competitive",
+    "Need for 64-bit outputs, jump-ahead, or cryptographic unpredictability (624 outputs reveal the state, per the README)"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none",
+    "min_toolchain": "C++11 (Makefile uses --std=gnu++11; source uses default member initializers)",
+    "platforms": "any in principle; only tested on Intel x86-64",
+    "thread_safety": "Not thread-safe: single static MTState shared by all callers",
+    "drop_in_for_baseline": "partial — same output sequence as mt19937ar.c's init_genrand/genrand_int32, but different function names (seed/rand_u32) and no init_by_array or real-valued outputs"
+  },
+  "gotchas": [
+    "Exports unprefixed C symbols named seed and rand_u32, which can collide with other code; the README's namespace wrapper does not change the extern \"C\" linkage names",
+    "Earlier unrolled versions produced wrong numbers and had an out-of-bounds read (both fixed per README); the srand/rand drop-ins were removed because the author believed they had errors",
+    "State is ~5 KB (624 raw + 624 tempered words), double the reference's footprint",
+    "No LICENSE file in the repo; the BSD license is stated only in the README and source headers"
+  ],
+  "pick_this_over_siblings_when": "Pick this only when you must keep the MT19937 sequence; if the generator can change, testingRNG's lehmer64 or wyrand headers are about 2x faster than MT19937 in that repo's table, and SHISHUA or xoshiro8x256pp are far faster for bulk fills.",
+  "verified_claims_summary": "Author's own test-mt run (best of 20 passes, both implementations built with the repo Makefile's -O2 -march=native flags) gave 351-355 M numbers/s vs 222-223 M/s for the reference mt19937ar code (1.59x) on an unnamed Intel Xeon with gcc 6.3, and only 1.12x on an older Core i7 with clang 4; no comparison with std::mt19937.",
+  "status_note": "Abandoned since December 2017, but it is two small BSD-licensed files (license stated in README only) that are easy to vendor.",
+  "sources_read": [
+    "https://github.com/cslarsen/mersenne-twister",
+    "https://raw.githubusercontent.com/cslarsen/mersenne-twister/HEAD/README.md",
+    "https://raw.githubusercontent.com/cslarsen/mersenne-twister/HEAD/Makefile",
+    "https://raw.githubusercontent.com/cslarsen/mersenne-twister/HEAD/mersenne-twister.h",
+    "https://raw.githubusercontent.com/cslarsen/mersenne-twister/HEAD/mersenne-twister.cpp",
+    "https://raw.githubusercontent.com/cslarsen/mersenne-twister/HEAD/test-mt.cpp",
+    "https://raw.githubusercontent.com/cslarsen/mersenne-twister/HEAD/reference/mt19937ar.cpp",
+    "https://raw.githubusercontent.com/lemire/testingRNG/HEAD/README.md"
+  ],
+  "confidence": 0.85
+}

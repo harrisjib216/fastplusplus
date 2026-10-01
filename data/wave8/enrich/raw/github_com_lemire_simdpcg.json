@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/lemire/simdpcg",
+  "one_liner": "Vectorized PCG32 (pcg32 XSH-RR) in AVX2 and AVX-512 C intrinsics; 1.8x to 3.7x faster than scalar PCG32 at filling arrays.",
+  "what_it_does": "A single C99 header (include/simdpcg32.h) that runs several PCG32 generators in one SIMD register. A call returns 8 (AVX2 / AVX-512) or 16 (AVX-512 'bis') 32-bit outputs as a __m256i or __m512i. The *_initialize(state, inc) helpers added in 2026 leapfrog the lanes, so the interleaved output is identical to O'Neill's scalar pcg32_random_r stream, and the unit test checks that. The API uses raw intrinsic types, not a C++ engine class.",
+  "how_it_is_fast": "It runs the scalar PCG32 step (an LCG multiply-add, then an xorshift and a data-dependent rotate) across 64-bit SIMD lanes. On AVX-512 it uses _mm512_mullo_epi64 (AVX512DQ) and _mm512_rorv_epi32. The AVX2 path builds the 64-bit multiply from 32-bit partial products (_mm256_mul_epu32) and emulates the rotate with variable shifts (code credited to Wenzel Jakob's pcg32_8.h). Leapfrog seeding (multiplier^k per lane) keeps the scalar sequence. The benchmark's 'two' and 'four' variants interleave 2 or 4 independent generator keys to hide multiply latency.",
+  "when_to_use": [
+    "You already depend on PCG32 output (seeds, reproducibility) and want the same stream generated 8 values at a time, e.g. filling arrays of 32-bit randoms",
+    "AVX-512 servers (Skylake-X or newer with AVX512DQ), where the four-key variant reaches 1.14 cycles per value against 4.25 for scalar",
+    "Throughput-bound Monte Carlo or simulation code that can consume values in 8- or 16-wide vectors",
+    "C or C++ projects that want an Apache-2.0 header with no dependencies"
+  ],
+  "when_not_to_use": [
+    "Portable or ARM code: there are only x86 AVX2 and AVX-512 paths and no scalar fallback in simdpcg32.h, and the types disappear when __AVX2__ / __AVX512DQ__ are not defined",
+    "Code that needs a std::uniform_random_bit_generator engine or one value per call: you must buffer the vector output yourself",
+    "Peak bulk throughput regardless of algorithm: SHISHUA reports about 0.05 cycles per byte, against roughly 0.29 cycles per byte here (1.14 cycles per 4-byte value)",
+    "Any cryptographic use (PCG32 is not a CSPRNG)",
+    "Older AVX-512 chips where heavy 512-bit use can lower clocks: not measured in the repo, so benchmark on your own hardware"
+  ],
+  "integration": {
+    "form": "header-only (include/simdpcg32.h; include/pcg32.h holds the scalar reference)",
+    "dependencies": "none",
+    "min_toolchain": "C99 (Makefile uses -std=c99 -march=native); the compiler must support AVX2 or AVX512F+AVX512DQ intrinsics",
+    "platforms": "x86-64 with AVX2 (avx2_/avx256_ paths) or AVX-512F+DQ (avx512_/avx512bis_ paths); no ARM or scalar fallback",
+    "thread_safety": "not documented; state is a plain struct with no globals, so use one key per thread",
+    "drop_in_for_baseline": "partial: avx2/avx256/avx512 *_initialize reproduce the scalar PCG32 stream bit-for-bit (unit test check_identity), but the API returns SIMD vectors, not one uint32_t per call"
+  },
+  "gotchas": [
+    "Each feature path is compiled only when its macro (AVX2PCG / AVX512PCG) is set by __AVX2__ or __AVX512F__ && __AVX512DQ__. Without -mavx2/-mavx512dq or -march=native the types are silently missing.",
+    "If you fill the struct by hand (as the benchmark and older README code do) instead of calling *_initialize, every inc lane must be odd. That was a 2025 bug fix (PR #3). Hand-filled lanes also give independent streams, not the scalar sequence.",
+    "Two helpers in the AVX2 path (hacked_mm256_rorv_epi32, hacked_mm256_mullo_epi64) are marked '// untested' in the source, although the 2026 check_identity unit test now exercises the avx256 path.",
+    "The README 'Sample result' shows only the scalar and three AVX-512 variants. The current benchmark/fillarray.c also times AVX2, avx256 and avx512bis variants that have no published numbers."
+  ],
+  "pick_this_over_siblings_when": "Pick simdpcg over SHISHUA, SIMDxorshift or xoshiro8x256pp when you need the exact PCG32 stream (reproducibility with existing scalar PCG32 code) rather than the fastest new generator. Pick testingRNG's lehmer64/aesctr or SHISHUA when raw throughput matters more than matching PCG32.",
+  "verified_claims_summary": "The README sample, from benchmark/fillarray.c (RDTSC, best of 500 runs, 50,000 32-bit values in a 195 kB array, -O3 -march=native with an unstated compiler and CPU), shows scalar O'Neill pcg32_random_r at 4.25 cycles/value. The AVX-512 one-, two- and four-key variants run at 2.37, 1.21 and 1.14 cycles/value, which is 1.8x to 3.7x (derived from page data). The multi-key variants interleave independent streams, and nothing was compared with std::mt19937.",
+  "status_note": "Small but active (merges in January 2026 for an AVX-512 packing speedup and August 2026 for scalar-identical initialize helpers), Apache-2.0, and easy to vendor as one header.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/lemire/simdpcg/HEAD/README.md",
+    "https://raw.githubusercontent.com/lemire/simdpcg/HEAD/Makefile",
+    "https://raw.githubusercontent.com/lemire/simdpcg/HEAD/include/simdpcg32.h",
+    "https://raw.githubusercontent.com/lemire/simdpcg/HEAD/include/pcg32.h",
+    "https://raw.githubusercontent.com/lemire/simdpcg/HEAD/tests/unit.c",
+    "https://raw.githubusercontent.com/lemire/simdpcg/HEAD/benchmark/fillarray.c",
+    "https://github.com/lemire/simdpcg/commits"
+  ],
+  "confidence": 0.85
+}

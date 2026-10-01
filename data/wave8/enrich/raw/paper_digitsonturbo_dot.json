@@ -1,0 +1,41 @@
+{
+  "id": "paper:digitsonturbo-dot",
+  "one_liner": "Research SIMD (AVX-512/IFMA) kernels for bignum add/sub and base-case multiply, patched into GMP and OpenSSL.",
+  "what_it_does": "DigitsOnTurbo (DoT) is a 2026 arXiv preprint (Das, Bichhawat, Patel; IIT Gandhinagar and Edinburgh) with about 1,000 lines of C intrinsics that replace GMP's mpn_add_n, mpn_sub_n and 256-bit base-case multiplication, plus the matching OpenSSL bignum primitives. It is not a library you call directly: the authors add it to GMP (DoTMP) and OpenSSL (DoTSSL) with about 40 lines of changes, so existing mpz/BN code picks it up unchanged.",
+  "how_it_is_fast": "Add/sub runs in four phases: lane-parallel limb add, carry detection with SIMD compares, a single parallel carry-propagation step, and a deferred scalar slow path for cascading carries. A cascade requires limbs equal to 2^64-1, so on random inputs it practically never fires. Multiplication uses a 'vertical and crosswise' scheme that exposes all m^2 partial products as independent AVX-512 IFMA multiplies (52-bit radix, with conversion from 64-bit limbs) before reducing columns, which removes read-after-write chains on a shared accumulator. Karatsuba/Toom recursion in GMP bottoms out in this base case.",
+  "when_to_use": [
+    "Research or prototyping on AVX-512 (Sapphire/Emerald Rapids class) Xeons where GMP mpn add/sub dominates the profile",
+    "Mid-size operands (about 6,144-32,768 bits), where the paper reports its largest gains",
+    "Reproducing or extending SIMD bignum work; the four-phase carry design is a clear reference",
+    "Estimating headroom before investing in your own SIMD mpn kernels"
+  ],
+  "when_not_to_use": [
+    "Production work: there is no public repository or license, and the code sits at an anonymous review URL",
+    "CPUs without AVX-512: the paper reports SSE addition at 0.7x (slower than scalar) and AVX2 at only 1.2x",
+    "Huge-operand multiplication dominated by FFT: DoT replaces only the base case, so whole-program gains shrink (GMPbench +7.8% overall)",
+    "Crypto code that needs constant time: the data-dependent cascading-carry slow path is not analysed for timing leaks",
+    "Adversarial inputs built to trigger cascading carries, where the paper's advantage drops to 0.7-2.0x versus prior SIMD methods"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "GMP 6.3.0 or OpenSSL 3.5.2 source tree to patch",
+    "min_toolchain": "evaluated with clang 14, -O2 -march=native; others not documented",
+    "platforms": "x86-64; AVX-512 (plus IFMA for multiply) needed for the reported gains",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": "partial — it patches GMP/OpenSSL internals (about 40 lines) so the public API stays the same, but you must rebuild those libraries from patched source"
+  },
+  "gotchas": [
+    "The code was not verifiable: anonymous.4open.science blocks fetchers, and no license is stated",
+    "The headline 3.81x/3.73x geomeans are for the add/sub primitives alone; end-to-end gains are much smaller (pi +19.3%, divide +8.4%, RSA/FFDH/DSA throughput +3-5%)",
+    "The multiply needs a 64-to-52-bit radix conversion for the 4x4 routine to stay compatible with GMP/OpenSSL limbs, which adds overhead"
+  ],
+  "pick_this_over_siblings_when": "Pick it over ctbignum or mp++ only if you want faster stock GMP/OpenSSL arithmetic at thousands of bits on AVX-512 without changing your code, and you can live with unpublished code. FLINT is the shippable choice for big-number workloads, and the truncated-batch AVX-512 Montgomery code fits better when you batch modular exponentiations.",
+  "verified_claims_summary": "Against stock GMP 6.3.0, DoT-patched GMP gives geomean 3.81x add, 3.73x sub and 1.41x multiply over 512-32,768-bit operands, up to 48.7% on large multiplies and +19.3% on pi. Against OpenSSL 3.5.2 it gives 2.95x add and 4.08x sub. All results are from clang 14 -O2 -march=native on Xeon Gold 6548Y+ (Emerald Rapids) and Xeon Max 9462 (Sapphire Rapids), measured by the authors.",
+  "status_note": "Preprint with no stated venue and code only at an anonymous review link with no license, so treat it as a reference design, not a dependency; maintenance status unknown.",
+  "sources_read": [
+    "https://arxiv.org/html/2604.21566v1",
+    "https://arxiv.org/abs/2604.21566",
+    "https://anonymous.4open.science/r/DigitsOnTurbo/ (robots-disallowed, not readable)"
+  ],
+  "confidence": 0.6
+}

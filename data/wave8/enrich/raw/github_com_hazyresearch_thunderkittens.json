@@ -1,0 +1,44 @@
+{
+  "id": "https://github.com/hazyresearch/thunderkittens",
+  "one_liner": "Header-only CUDA tile DSL for writing GEMM/attention/SSM kernels that match cuBLAS and FA3 and beat FA3 backward.",
+  "what_it_does": "ThunderKittens is a small C++20/CUDA template library of register and shared-memory tile types (minimum 16x16) plus warp- and warpgroup-scoped operations (mma, load/store, map/reduce) for writing your own GPU kernels. It is not a drop-in BLAS or attention library: you write kernels against its API (or build the self-contained kernels under kernels/ with their Makefiles and call them from PyTorch via pybind11). Operations follow an assembly-like dest-first signature, e.g. kittens::mul(c, a, b).",
+  "how_it_is_fast": "Everything is expressed as tensor-core-sized tiles whose shared-memory layouts are chosen at compile time to avoid bank conflicts. A Load-Compute-Store-Finish (LCSF) template splits warps into producers (issuing asynchronous TMA loads) and consumers (issuing asynchronous WGMMA on Hopper, tcgen05 on Blackwell) with register reallocation between them, so memory movement overlaps compute. Persistent grids and supergrouped tile ordering improve L2 reuse; later versions add distributed shared memory and NVLink/NVSwitch multi-GPU primitives.",
+  "when_to_use": [
+    "You write custom fused kernels (attention variants, linear attention, long convolutions, Mamba-style SSMs) on H100/H200 or B200 and want near-cuBLAS/FA3 throughput without hand-writing PTX.",
+    "Attention training workloads where the backward pass dominates: the ICLR 2025 paper reports 10-40% faster backward than FlashAttention-3 at head dim 64/128.",
+    "Non-standard attention or SSM operators where the incumbent is Triton or a research kernel (FLA, FlashFFTConv): the paper reports 6.5-14x over FLA and 4.7-7.9x over FlashFFTConv.",
+    "Low-precision Blackwell GEMMs (MXFP8, NVFP4) in TK 2.0, where the authors report matching or surpassing cuBLAS on B200."
+  ],
+  "when_not_to_use": [
+    "You just need a GEMM or standard attention call: cuBLAS and FlashAttention already deliver matching forward performance with a stable API.",
+    "Ampere or older GPUs (Ampere no longer actively supported), AMD (use HipKittens), or Windows builds (open issue #174).",
+    "Toolchains older than CUDA 12.8 or compilers without C++20 concepts.",
+    "You need a packaged, versioned library: since 2.0 there is no Python package, and each kernel under kernels/ is built separately by its own Makefile."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "CUDA toolkit 12.8+; PyTorch 2.8+ and pybind11 only for the prebuilt kernels/ and demos",
+    "min_toolchain": "C++20, CUDA 12.8+ (README suggests gcc-11 / clang-11 or newer)",
+    "platforms": "NVIDIA Hopper (SM90) and Blackwell (SM100/103/120), Vera Rubin added Sept 2026; Ampere (SM80) builds but is unsupported",
+    "thread_safety": "Not applicable in the host sense; most ops are warp-scoped and calling one from several warps on the same data is undefined behavior per the README",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Default operation scope is a single warp; assigning multiple warps to the same op is undefined behavior and can corrupt memory. WGMMA ops live in kittens::warpgroup / group<N>.",
+    "Some ops alias-fail silently: transpose_sep must not be given the same registers as source and destination.",
+    "Layouts are checked at compile time; a 'missing' operation is usually a layout mismatch (e.g. mma B operand needs column layout).",
+    "The README says mma unit tests occasionally fail by a single element due to tensor-core floating-point rounding."
+  ],
+  "pick_this_over_siblings_when": "Choose it over FlashAttention-3 when you need custom attention/SSM variants or faster backward passes and can write CUDA; stay with FlashAttention-3 for a maintained drop-in attention API with forward performance that TK only matches. Unlike CPU siblings such as LIBXSMM or Fastor, it targets NVIDIA datacenter GPUs only.",
+  "verified_claims_summary": "On an H100 80GB SXM with CUDA 12.6, the ICLR 2025 paper by the project team shows TK GEMM competitive with cuBLAS, non-causal attention forward matching FlashAttention-3, and attention backward 10-40% faster than FA3 (largest gain at short sequences). It also shows 14x/6.5x over FLA linear attention and 4.7-7.9x over FlashFFTConv. The README's ~855 TFLOPs (86% of peak) H100 bf16 GEMM figure is first-party, and nvcc flags are not stated.",
+  "status_note": "Actively maintained by Stanford Hazy Research (TK 2.0 in Jan 2026, Vera Rubin support Sept 2026, last commit 2026-09-12), MIT-licensed and header-only, so easy to vendor; expect API churn between major versions.",
+  "sources_read": [
+    "https://github.com/HazyResearch/ThunderKittens",
+    "https://raw.githubusercontent.com/HazyResearch/ThunderKittens/HEAD/README.md",
+    "https://arxiv.org/html/2410.20399",
+    "https://github.com/HazyResearch/ThunderKittens/issues",
+    "https://github.com/HazyResearch/ThunderKittens/issues/187",
+    "https://hazyresearch.stanford.edu/blog/2026-02-19-tk-2"
+  ],
+  "confidence": 0.75
+}

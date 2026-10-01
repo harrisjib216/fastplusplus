@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/facebookresearch/baspacho",
+  "one_liner": "Supernodal sparse Cholesky for block-structured SPD systems with CPU and batched-CUDA backends; factors faster than CHOLMOD on its synthetic tests.",
+  "what_it_does": "A direct solver for symmetric positive-definite sparse matrices built for Levenberg-Marquardt optimizers (bundle adjustment, factor graphs, Meta's Theseus). You describe the matrix as a block CSR structure plus parameter-block sizes, call createSolver() for symbolic analysis and AMD reordering, then call factor()/solve() on numeric data you allocate in the solver's internal (permuted) layout. It is not a drop-in for CHOLMOD's cholmod_sparse API. It also exposes partial factor/solve (factorUpTo, solveLUpTo) for marginals and mixed direct/iterative (PCG) schemes.",
+  "how_it_is_fast": "Supernodal Cholesky groups columns into dense blocks so most of the work runs through BLAS/LAPACK potrf/trsm/syrk/gemm. A fitted computation model of BLAS timings chooses which supernodes to merge. Independent small diagonal blocks (the 'Schur-complement trick' from Ceres-style BA) go through a parallel 'sparse elimination' stage before the supernodal part, which gives the large wins on FLAT+SCHUR problems. On GPU it runs entirely in CUDA/cuBLAS and can batch several matrices that share a sparsity pattern.",
+  "when_to_use": [
+    "Bundle adjustment or SLAM normal equations with many small (1-12) parameter blocks and a large set of independently eliminable points (point/landmark Schur structure)",
+    "Repeated factorizations of a fixed sparsity pattern in an LM/Gauss-Newton loop, where the analysis cost is paid once",
+    "Batched solves of same-structure systems on an NVIDIA GPU, e.g. differentiable optimization in PyTorch/Theseus",
+    "Moderately to strongly interconnected graphs (2D grids, mesh-like graphs) where supernodes are large enough for BLAS to pay off",
+    "When you need partial factorization or marginal covariances, or a direct/PCG hybrid"
+  ],
+  "when_not_to_use": [
+    "Banded or very sparse matrices where simplicial Cholesky wins; the README says to use CHOLMOD or Eigen there",
+    "Matrices that need update/downdate of the factor, or non-SPD/indefinite systems (no LDL^T or LU, and singularity reporting is listed as future work)",
+    "Single-RHS CPU solves dominate your runtime: in the repo's own runs, CPU solve-1 was about 2.1-2.5x slower than CHOLMOD on FLAT 1000",
+    "One-shot factorizations of very sparse FLAT problems: symbolic analysis was about 3.5-4x slower than CHOLMOD on FLAT size=4000 fill=0.01",
+    "If you link Intel MKL: with MKL, BaSpaCho's CPU factor was 15-23% slower than CHOLMOD on two FLAT problem types"
+  ],
+  "integration": {
+    "form": "static lib (CMake build)",
+    "dependencies": "BLAS/LAPACK (OpenBLAS, ATLAS or MKL); Eigen 3.4, dispenso 1.4 (threads), gtest and Sophus are fetched by CMake; optional CUDA toolkit + cuBLAS/cuSPARSE, SuiteSparse AMD, and CHOLMOD (benchmarks only)",
+    "min_toolchain": "C++17, CMake 3.28+; CUDA tested with 10.2/11.7, compute capability >= 6.0 for double atomicAdd (else a workaround define)",
+    "platforms": "x86-64 Linux documented (CPU via BLAS); NVIDIA GPUs via CUDA; other platforms not documented",
+    "thread_safety": "not documented; Solver methods are const and operate on caller-owned buffers, and the CPU backend uses its own dispenso thread pool (numThreads setting, default 16)",
+    "drop_in_for_baseline": "partial — same problem (sparse SPD Cholesky) but a different block-structured API, internal permuted ordering, and supernodal only; no cholmod_* compatible interface"
+  },
+  "gotchas": [
+    "Numeric data and vectors live in the solver's internal reordered layout; use the accessor/paramToSpan permutation to load values and map results back",
+    "The CUDA path is not deterministic when sparse-elimination ranges exist (atomic adds in factor and solve); the CPU path is deterministic given deterministic BLAS",
+    "Default Settings use 16 threads and an untuned computation model; the README advises re-fitting the model (bench -Z plus opt_comp_model) per CPU/BLAS/GPU",
+    "Every entry is a block; matrices with no block structure become 1x1 blocks and run slightly slower, and very large parameter blocks fit the thread/kernel design poorly"
+  ],
+  "pick_this_over_siblings_when": "Pick BaSpaCho over Sympiler when you need a GPU or batched backend and BA-style Schur elimination built in, rather than code generation specialised to one sparsity pattern on the CPU. Ginkgo and AMGCL are iterative solvers (Krylov/AMG); choose BaSpaCho when you want an exact direct factorization of a block SPD system and the fill is manageable.",
+  "verified_claims_summary": "The repo's bench tool timed factorization against CHOLMOD on synthetic FLAT, FLAT+SCHUR, GRID and MERI block graphs (5 random instances each) on a Xeon Silver 4214 with a Quadro RTX 5000. With OpenBLAS and 16 threads, CPU factor time was 4-17% lower on FLAT problems and 44-74% lower on Schur-heavy and larger grid problems. With MKL the result ran from about 20% slower to 88% faster. The CUDA backend was 77-95% faster than CPU CHOLMOD. Compiler and flags are not stated.",
+  "status_note": "Maintained at low volume by Meta research (76 commits, last commit 2025-10-08, 112 stars) and MIT-licensed, so copyable, but the CMake/BLAS/CUDA build is not trivial to vendor.",
+  "sources_read": [
+    "https://github.com/facebookresearch/baspacho",
+    "https://raw.githubusercontent.com/facebookresearch/baspacho/HEAD/README.md",
+    "https://raw.githubusercontent.com/facebookresearch/baspacho/HEAD/BENCHMARK_RESULTS.md",
+    "https://raw.githubusercontent.com/facebookresearch/baspacho/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/facebookresearch/baspacho/HEAD/baspacho/baspacho/Solver.h",
+    "https://raw.githubusercontent.com/facebookresearch/baspacho/HEAD/baspacho/baspacho/Accessor.h"
+  ],
+  "confidence": 0.8
+}

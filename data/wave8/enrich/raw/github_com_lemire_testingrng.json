@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/lemire/testingrng",
+  "one_liner": "Benchmark-plus-quality shootout of C/C++ PRNGs; its winners (aesctr, lehmer64) beat MT19937, PCG and xoroshiro128+ on throughput.",
+  "what_it_does": "testingRNG is a test harness, not a library: it runs ~28 non-cryptographic generators through TestU01 BigCrush (including bit- and byte-reversed outputs), PractRand to 512 GB, and a throughput benchmark. Each generator is a small C header in source/ with a seed function and a global-state next() function (e.g. lehmer64_seed(seed); lehmer64()), so the useful outputs are copyable single headers plus a table telling you which ones pass both test suites and how fast they are.",
+  "how_it_is_fast": "lehmer64 is a 128-bit multiplicative LCG (one 64x64->128 multiply per output, returning the high 64 bits; about 1.75 instructions per byte). aesctr runs AES-128 rounds (AES-NI _mm_aesenc_si128) in counter mode over 4 interleaved counters, buffering 64 bytes per refill so the AES latency is hidden by instruction-level parallelism. Both pass BigCrush and PractRand 512 GB in the repo's runs, unlike the faster-looking xorshift/xoroshiro variants.",
+  "when_to_use": [
+    "Choosing a fast non-cryptographic 64-bit generator for simulation, sampling or randomized algorithms, with statistical-test results to back the choice",
+    "Bulk generation on x86-64 with AES-NI where aesctr's ~5.35 GB/s (vs ~1.68 GB/s for MT19937) matters",
+    "Portable fast 64-bit output on GCC/Clang targets with __uint128_t: lehmer64 is ~10 lines and passes BigCrush and PractRand",
+    "Replacing MT19937 or rand() in hot loops: MT fails PractRand (BRank) in this repo and is ~1.8x slower than lehmer64",
+    "Benchmarking your own generator: the harness gives a ready speed + TestU01 + PractRand pipeline"
+  ],
+  "when_not_to_use": [
+    "Cryptographic or adversarial settings: these are non-cryptographic generators; aesctr uses the seed as the AES key with a zero high half, and the repo makes no security claim",
+    "Multithreaded code using the headers as-is: every generator keeps static global state (aesctr has a reentrant aesctr_r(state*) variant; lehmer64 does not)",
+    "MSVC or 32-bit targets: lehmer64 needs __uint128_t; aesctr compiles to nothing unless __AES__ is defined",
+    "Latency-bound single-draw code: the README says the benchmark stresses throughput, and aesctr's 64-byte refill makes per-call cost uneven",
+    "Where you need a std::uniform_random_bit_generator class with distributions, jump-ahead or streams: the headers are bare C functions"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none for the generator headers (each includes splitmix64.h for seeding); the harness needs CMake 3.20+, C++20, lemire/counters via CPM, TestU01 (bundled zip) and PractRand",
+    "min_toolchain": "Headers: C99 with GCC/Clang extensions (__uint128_t, __builtin_expect, immintrin.h); harness: C++20, GCC 14+ or Clang 17+ recommended",
+    "platforms": "lehmer64: any 64-bit GCC/Clang target; aesctr: x86-64 with AES-NI only; README assumes Linux or macOS on x64",
+    "thread_safety": "Not thread-safe: static global state per generator; aesctr_r/aesctr_seed_r take an explicit state struct",
+    "drop_in_for_baseline": "partial — same call shape as rand()/genrand_int32 (seed then next) but different output sequences, 64-bit outputs, and no C++ URBG class"
+  },
+  "gotchas": [
+    "The 'mersennetwister' baseline is the reference Nishimura/Matsumoto C code, not libstdc++ std::mt19937; no std:: generator is timed. The only C library baseline is rand() (0.28 GB/s)",
+    "The speed binary is built with -march=native and fills a 4 KB buffer through a function pointer, so numbers measure in-cache throughput and may not carry to other CPUs or ARM (README warns)",
+    "aesctr.h is wrapped in #ifdef __AES__; without -maes/-march=native it silently defines nothing",
+    "lehmer64 is an LCG: low bits of the 128-bit state are weak, which is why it returns only the high 64 bits; do not change it to return the low half"
+  ],
+  "pick_this_over_siblings_when": "Pick testingRNG's headers when you want a scalar generator with published BigCrush and PractRand results side by side with speed; SHISHUA and xoshiro8x256pp are much faster for bulk SIMD fills, and Randen is the choice if you need attack-resistant output, while simdpcg/SIMDxorshift only accelerate a single family.",
+  "verified_claims_summary": "On an Intel Xeon Gold 6548N with GCC 14 (CMake Release -O3 plus -march=native), filling a 4 KB buffer, aesctr produced 5.35 GB/s and lehmer64 3.10 GB/s, versus 1.68 GB/s for reference MT19937 C code, 1.55 GB/s pcg32, 2.53 GB/s pcg64, 2.50 GB/s xoroshiro128+ and 0.28 GB/s glibc rand(); splitmix64 (4.35) and wyrand (4.22) also beat lehmer64.",
+  "status_note": "Actively maintained (speed table refreshed 2026-09-21), Apache-2.0, and each generator is a small standalone header that is easy to vendor.",
+  "sources_read": [
+    "https://github.com/lemire/testingRNG",
+    "https://raw.githubusercontent.com/lemire/testingRNG/HEAD/README.md",
+    "https://raw.githubusercontent.com/lemire/testingRNG/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/lemire/testingRNG/HEAD/speed/CMakeLists.txt",
+    "https://raw.githubusercontent.com/lemire/testingRNG/HEAD/speed/src/rng.cpp",
+    "https://raw.githubusercontent.com/lemire/testingRNG/HEAD/source/aesctr.h",
+    "https://raw.githubusercontent.com/lemire/testingRNG/HEAD/source/lehmer64.h",
+    "https://raw.githubusercontent.com/lemire/testingRNG/HEAD/source/mersennetwister.h",
+    "https://raw.githubusercontent.com/lemire/testingRNG/HEAD/LICENSE"
+  ],
+  "confidence": 0.85
+}

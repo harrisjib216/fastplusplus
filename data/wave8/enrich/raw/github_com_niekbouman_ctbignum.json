@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/niekbouman/ctbignum",
+  "one_liner": "Header-only constexpr C++20 fixed-width big integers and Z/qZ arithmetic; beats GMP mpn_mul at 2-4 limbs.",
+  "what_it_does": "ctbignum provides big_int<N, T>, a thin wrapper over std::array of limbs, plus constexpr functions for add/sub, schoolbook mul, Knuth division, Granlund-Montgomery division by invariant integers, Barrett and Montgomery reduction, modular inverse and modular exponentiation. A ZqElement type (declared via decltype(Zq(<modulus>_Z))) gives operator-overloaded arithmetic modulo a compile-time modulus, and the _Z literal parses base-10 numbers at compile time. It is a different interface from GMP: sizes and moduli are template parameters, there is no heap allocation and no dynamic growth.",
+  "how_it_is_fast": "Because the limb count is a template parameter, the schoolbook loops (using unsigned __int128 for 64-bit limbs) have fixed trip counts that the compiler fully unrolls and, with [[gnu::always_inline]], inlines into the caller, avoiding GMP's call overhead and length dispatch. Arguments are passed by value so limbs can live in registers. Modulus-dependent constants for Barrett/Montgomery reduction and invariant division are precomputed at compile time.",
+  "when_to_use": [
+    "Cryptographic field/ring arithmetic on 2-4 64-bit limbs (128-256 bits), e.g. elliptic-curve or pairing fields, where the modulus is known at compile time.",
+    "Tight inner loops of many small multiplications or Montgomery multiplications where GMP's per-call overhead dominates (paper: 4-limb Montgomery mul 39 ns vs libff assembly 66 ns, with forced inlining).",
+    "You want big-integer constants or precomputation evaluated at compile time (constexpr, static_assert on big-integer results).",
+    "Embedded or allocation-free code that needs fixed-size stack integers and only the C++ standard library."
+  ],
+  "when_not_to_use": [
+    "Operands of about 5-6 limbs or more: GMP's mpn_mul is faster (8 limbs: 85 vs 67 ns with -march=native, 125 vs 69 ns without).",
+    "Sizes not known at compile time or numbers that grow; there is no arbitrary-precision type (fixed vs expanding separation is an open issue).",
+    "Side-channel-sensitive code that assumes every function is constant-time: the README says only explicitly marked functions are (add, mul and comparison are ct-verif checked).",
+    "MSVC builds: the code relies on __uint128_t and [[gnu::always_inline]], and MSVC support is an open issue (#44).",
+    "Large-number algorithms: multiplication is O(n^2) schoolbook only, with no Karatsuba/FFT."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (C++ standard library); benchmarks need GMP, NTL 10.5+, libff and Google Benchmark",
+    "min_toolchain": "C++20 (releases up to v0.3 were C++17 on Clang 5 / Apple LLVM 9); needs GCC/Clang extensions __uint128_t and gnu::always_inline",
+    "platforms": "64-bit targets where the compiler provides __uint128_t (GCC/Clang on x86-64, aarch64); MSVC not supported",
+    "thread_safety": "Value types with no shared state; not documented explicitly",
+    "drop_in_for_baseline": "partial: replaces GMP mpn/mpz only for fixed-width operands whose limb count is known at compile time; different API (big_int<N>, ZqElement)"
+  },
+  "gotchas": [
+    "The headline wins assume forced inlining and -march=native; without -march=native the 2-limb gain shrinks (5 vs 13 ns) and GMP is 1.8x faster at 8 limbs.",
+    "mul returns big_int<M+N>, so result width grows by type; use partial_mul or Montgomery/Barrett reduction to stay at a fixed width.",
+    "Open bug #55: bit shifts larger than the limb bit width do not work.",
+    "ZqElement's skip_reduction constructor assumes input < modulus and does not check it."
+  ],
+  "pick_this_over_siblings_when": "Pick ctbignum over mp++ or FLINT when the width is fixed at compile time and small (2-4 limbs), or when you need constexpr evaluation; mp++/FLINT handle arbitrary sizes and grow dynamically. The AVX-512 batched Montgomery entry targets 1024-4096-bit operands in batches of 8, a different regime from ctbignum's 100-500-bit scalar operations.",
+  "verified_claims_summary": "The 2018 arXiv paper times schoolbook multiplication against GMP mpn_mul on a 2.3 GHz Kaby Lake i5 (Turbo off) with Apple LLVM 9.0.0 -O3 -march=native and forced inlining: 4 vs 14 ns at 2 limbs (3.5x), 18 vs 29 ns at 4 limbs (1.6x), and 85 vs 67 ns at 8 limbs, where GMP wins. The public benchmark source is benchmarks/src/bench-mul.cpp.",
+  "status_note": "Small, Apache-2.0 header-only library marked 'work in progress' in its README, with commits as recent as 2026-08-07 and 12 open issues; easy to vendor, though the published benchmarks date from 2018.",
+  "sources_read": [
+    "https://github.com/niekbouman/ctbignum",
+    "https://raw.githubusercontent.com/niekbouman/ctbignum/HEAD/README.md",
+    "https://raw.githubusercontent.com/niekbouman/ctbignum/HEAD/doc/bigint.md",
+    "https://raw.githubusercontent.com/niekbouman/ctbignum/HEAD/doc/finitefield.md",
+    "https://raw.githubusercontent.com/niekbouman/ctbignum/HEAD/include/ctbignum/mult.hpp",
+    "https://raw.githubusercontent.com/niekbouman/ctbignum/HEAD/include/ctbignum/type_traits.hpp",
+    "https://raw.githubusercontent.com/niekbouman/ctbignum/HEAD/include/ctbignum/config.hpp",
+    "https://arxiv.org/abs/1804.07236",
+    "https://github.com/niekbouman/ctbignum/issues"
+  ],
+  "confidence": 0.8
+}

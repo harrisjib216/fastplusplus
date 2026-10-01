@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/google/randen",
+  "one_liner": "AES-based backtracking-resistant PRNG (C++11 URBG) at roughly std::mt19937_64 speed; reference code for absl::BitGen's engine.",
+  "what_it_does": "Randen is a 'strong' pseudorandom generator: outputs are indistinguishable from random and leaking the current state does not reveal earlier outputs. randen::Randen<T> (T = any built-in unsigned type) implements the C++11 UniformRandomBitGenerator interface (seed, discard, stream operators, reseed from a SeedSequence), so it plugs into std:: distributions and std::shuffle in place of std::mt19937_64. The repo is a research reference implementation (randen.h/.cc plus vector128.h and benchmarks); the maintained production version is Abseil's absl::random (absl::BitGen).",
+  "how_it_is_fast": "It plugs a 2048-bit Simpira-v2-style permutation (a 16-branch generalized Feistel network with improved block shuffle, 17 rounds of 2-round AES-128 functions) into the Reverie sponge construction, so one permutation call refills a 240-byte output buffer while keeping a 128-bit hidden capacity for backtracking resistance. The AES rounds run on hardware AES instructions (AES-NI, POWER8 VSX crypto, ARMv8 crypto), and operator() is just a buffer read with a rare refill branch.",
+  "when_to_use": [
+    "You want a default generator that is safe if outputs or state might be attacker-observable (shuffles, sampling, randomized algorithms in services) without paying CTR-DRBG or /dev/urandom costs (~10x slower in the README table).",
+    "Applied workloads (shuffle, reservoir sampling, Monte Carlo) on x86 with AES-NI where std::mt19937_64 is the incumbent: about 1.1x faster geomean per the paper, with 256 bytes of state versus mt19937_64's ~2.5 KB.",
+    "Already on Abseil: use absl::BitGen, which is this algorithm with runtime AES dispatch and a portable fallback.",
+    "x86-64 with AES-NI, POWER8+ with VSX, or ARMv8 with crypto extensions."
+  ],
+  "when_not_to_use": [
+    "Raw throughput is the goal: pcg64_c32 is ~2x faster in the tight-loop microbenchmark (0.78 vs 1.54 cpb) and the paper's shuffle tables show PCG ahead; non-crypto generators like Romu or xoshiro are faster still.",
+    "Targets without hardware AES: the standalone repo has no software fallback (vector128.h hits #error \"Port\"); only Abseil ships a slow portable path.",
+    "You need a vetted CSPRNG for keys/tokens: the README says the algorithm is 'still under review and subject to change' and the paper is not peer reviewed.",
+    "You need a maintained standalone library: archived 2023-06-12, last commit 2018-10-05, no versioned releases or build system beyond a Makefile.",
+    "Performance depends heavily on compiler unrolling: README reports up to 1.6x more cycles/byte with GCC 7.3 and 1.3x with Clang 4.0.1."
+  ],
+  "integration": {
+    "form": "source-drop (randen.h, randen.cc, vector128.h)",
+    "dependencies": "none (compiler intrinsics only)",
+    "min_toolchain": "C++11; Makefile uses clang++ -O3 -mavx2 -maes; Clang recommended for loop unrolling",
+    "platforms": "x86 with SSE2+AES-NI, POWER8 with VSX, ARMv8 with NEON+crypto; build fails elsewhere",
+    "thread_safety": "not documented; engine is a plain mutable object with no synchronization (Abseil states its BitGen is not thread safe, like std engines)",
+    "drop_in_for_baseline": true
+  },
+  "gotchas": [
+    "Must be compiled with AES enabled (-maes or equivalent); there is no runtime CPU dispatch in this repo.",
+    "Object is alignas(32) with 256 bytes of state; heap allocation of the engine relies on aligned new (C++17) or a custom allocator under C++11.",
+    "Backtracking resistance only covers outputs before the last Generate call; prediction resistance needs periodic reseed() with fresh entropy.",
+    "Output stream may change if the algorithm is revised (README: 'subject to change'); Abseil's absl::BitGen deliberately offers no seed stability across runs."
+  ],
+  "pick_this_over_siblings_when": "Pick Randen when you need attack resistance (indistinguishability plus backtracking resistance) at near-Mersenne-Twister cost; Romu, SIMDxorshift and Randompack are faster but non-cryptographic, and Squares/Philox-style counter-based RNGs suit parallel stream splitting rather than state-compromise resistance.",
+  "verified_claims_summary": "On an Intel Xeon E5-2690 v3 (Haswell) with Clang -O3, Google's paper reports Randen about 1.1x faster than std::mt19937_64 (geomean over shuffle, reservoir sampling and Monte Carlo, also on POWER8), while pcg64_c32 is fastest on x86; the README's tight-loop microbenchmark shows 1.54 cpb vs 1.79 for mt19937_64 and 0.78 for pcg64_c32. The standard library implementation for mt19937_64 is not named.",
+  "status_note": "Archived since 2023-06-12 (last commit 2018-10-05) but Apache-2.0 and small enough to vendor; for production prefer the maintained Abseil absl::BitGen implementation.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/google/randen/HEAD/README.md",
+    "https://raw.githubusercontent.com/google/randen/HEAD/randen.h",
+    "https://raw.githubusercontent.com/google/randen/HEAD/randen.cc",
+    "https://raw.githubusercontent.com/google/randen/HEAD/vector128.h",
+    "https://raw.githubusercontent.com/google/randen/HEAD/Makefile",
+    "https://github.com/google/randen/issues",
+    "https://github.com/google/randen/issues/4",
+    "https://abseil.io/docs/cpp/guides/random",
+    "https://github.com/abseil/abseil-cpp/blob/master/absl/random/internal/randen.h"
+  ],
+  "confidence": 0.8
+}

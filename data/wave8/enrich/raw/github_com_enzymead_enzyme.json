@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/enzymead/enzyme",
+  "one_liner": "LLVM/MLIR compiler plugin that generates gradients of optimized IR; matched or beat Tapenade and Adept in its NeurIPS 2020 study.",
+  "what_it_does": "Enzyme performs automatic differentiation on statically analyzable LLVM IR and MLIR, so any language that lowers to LLVM (C, C++, Rust, Julia, Fortran) can get derivatives of existing code without rewriting it against an AD type. In C/C++ you call a magic function, e.g. __enzyme_autodiff(foo, x), and the Enzyme pass replaces that call with the synthesized gradient. It is not a drop-in for operator-overloading libraries like Adept: there is no active scalar type, and you annotate arguments (duplicated/const) at the call site.",
+  "how_it_is_fast": "It differentiates after the normal LLVM optimization pipeline has run, so loop-invariant code motion, inlining and dead-code elimination have already simplified the primal; the paper's norm example drops from O(N^2) to O(N) gradient work this way. Interprocedural type analysis (seeded from TBAA metadata) and activity analysis skip adjoints for values that cannot affect the output. Shadow memory mirrors active allocations, and cache minimization stores only the forward values the reverse pass needs. Being source-transformation AD, it avoids the runtime tape that operator-overloading tools such as Adept record.",
+  "when_to_use": [
+    "You need reverse-mode gradients of an existing C/C++/Fortran/Rust numerical kernel (simulations, integrators, bundle adjustment, LSTMs) without rewriting it in an AD type.",
+    "Loop-heavy code where compiler optimizations shrink the primal before differentiation (the paper reports a 4.5x geomean gain from optimizing first).",
+    "Mixed-language or GPU/parallel code: the authors' later SC'21/SC'22 papers add CUDA/ROCm kernels, OpenMP, MPI and Julia tasks.",
+    "You already build with Clang/LLVM 15+ and can add a compiler plugin to the build."
+  ],
+  "when_not_to_use": [
+    "Code that relies on C++ exceptions, runtime-loaded or self-modifying code, or shared libraries without IR: the paper requires IR for every differentiated function and exceptions disabled.",
+    "Code with type punning (unions of differing types, copies of undefined memory) that defeats type analysis; you get errors or must use loose-type flags.",
+    "Toolchains that are not LLVM-based (MSVC, stock GCC) or builds where loading an LLVM plugin is impractical.",
+    "Quick prototyping where a header-only operator-overloading library (XAD, FastAD, Adept) is easier to set up and debug.",
+    "When you need per-benchmark proof that it beats Tapenade: the paper attributes GMM and Bruss differences to tape structure and does not give a uniform win ratio."
+  ],
+  "integration": {
+    "form": "shared lib (LLVM pass plugin: LLVMEnzyme-<ver>.so, ClangEnzyme-<ver>.so, LLDEnzyme-<ver>.so)",
+    "dependencies": "LLVM 15+ built with plugin support (CMake aborts below 15); CMake 3.13+; Ninja or Make. Packages on Homebrew, Spack and Nix.",
+    "min_toolchain": "C++17 to build the plugin; Clang/LLVM 15 or newer (CI matrix tests LLVM 15 and 16)",
+    "platforms": "Linux and macOS in CI; any target LLVM supports in principle; GPU (CUDA/ROCm) per the SC'21 paper",
+    "thread_safety": "not documented for the generated code; parallel AD (OpenMP, MPI, Julia tasks) is covered by the SC'22 paper",
+    "drop_in_for_baseline": "partial — replaces Adept/Tapenade as the AD engine but uses a different API (__enzyme_autodiff calls plus argument annotations) and a compiler-plugin build step"
+  },
+  "gotchas": [
+    "ClangEnzyme works on one translation unit only; if the differentiated function calls code in other files you need LLDEnzyme with LTO.",
+    "Requires TBAA metadata and statically deducible types for active memory; enzyme-loose-types and enzyme-emptyfn-inactive exist to paper over ambiguous cases, at your own risk.",
+    "The docs warn that LLVM's plugin infrastructure can be flaky or not built by default, and recommend building LLVM from source when loading segfaults.",
+    "Indirect calls into code Enzyme cannot analyze need user-supplied custom gradients."
+  ],
+  "pick_this_over_siblings_when": "Pick Enzyme over XAD or FastAD when you cannot or will not rewrite code into an active scalar type, when the code spans languages or runs on GPU, or when compiler optimization of the primal matters; pick XAD or FastAD for a header-only C++ library with no compiler-plugin build step.",
+  "verified_claims_summary": "The NeurIPS 2020 paper measures reverse-mode AD on ADBench (BA, LSTM, GMM) plus Euler/RK4 integrators, FFT and a 2D Brusselator on an AWS c4.8xlarge with hyperthreading and Turbo Boost disabled, taking geometric means over inputs: differentiating after optimization gives a 4.5x geomean speedup over differentiating unoptimized IR, and results vs Tapenade and Adept are given per benchmark only. LLVM version and flags are not stated in the evaluation, and the paper does not say where the benchmark code lives.",
+  "status_note": "Actively developed (1.7k stars, about 209 open issues) under Apache-2.0 with LLVM exceptions; usable today through Homebrew/Spack/Nix packages or a source build against LLVM 15+, with Julia, Rust and Fortran front ends.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/EnzymeAD/Enzyme/HEAD/Readme.md",
+    "https://raw.githubusercontent.com/EnzymeAD/Enzyme/HEAD/enzyme/CMakeLists.txt",
+    "https://raw.githubusercontent.com/EnzymeAD/Enzyme/HEAD/.github/workflows/enzyme-ci.yml",
+    "https://github.com/EnzymeAD/Enzyme",
+    "https://enzyme.mit.edu/Installation/",
+    "https://enzyme.mit.edu/getting_started/UsingEnzyme/",
+    "https://arxiv.org/html/2010.01709"
+  ],
+  "confidence": 0.7
+}

@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/polyu-ior/ispmv",
+  "one_liner": "Closed-binary GPU SpMV SDK with per-matrix plans; 1.3-2.2x faster than cuSPARSE SpMV on H100 (fp64).",
+  "what_it_does": "Computes y = alpha*A*x + beta*y on NVIDIA GPUs for a fixed CSR matrix that is applied many times, e.g. inside first-order LP/QP solvers. You build an ispmv::Plan once from device-resident CSR (C API: ispmv_prepare), then call plan.spmv(...) on a CUDA stream with device vectors. A and A^T need two separate plans. The interface is its own C/C++ API, not cuSPARSE's descriptor API.",
+  "how_it_is_fast": "Not documented in technical terms: the core source is private. The docs say plan preparation analyses the matrix on the GPU and picks a representation and kernel from the matrix structure and the device's reported resources (SM count, cache, launch limits). The work is classic inspector-executor: you pay 37-110 ms of matrix-specific preprocessing up front so each later SpMV runs faster.",
+  "when_to_use": [
+    "Iterative fp64 solvers (PDLP-style LP/QP, Krylov methods) on an NVIDIA GPU that apply the same sparsity pattern thousands of times",
+    "LP/MIP constraint matrices like those in Mittelmann and MIPLIB, where the published gain over cuSPARSE ALG2 is largest (1.6-2.2x)",
+    "Non-commercial research or internal evaluation: that is all the binary license allows without written permission",
+    "A100, H100/H200, B200, RTX 4090 or RTX 5090 (sm_80-sm_120) on Linux x86-64 with CUDA 13"
+  ],
+  "when_not_to_use": [
+    "Commercial or production use without a separate agreement: the ISpMV Binary License limits the core to internal evaluation and non-commercial research, and you may not redistribute the .so",
+    "One-off or few SpMVs per matrix: 37-110 ms of preprocessing (geometric mean) wipes out a gain of tens to hundreds of microseconds per call",
+    "FP32, complex, 64-bit indices, device-pointer scalars or CPU execution: all unsupported",
+    "Anything that needs auditable or patchable source: the core is closed, and runtime validation covers only H100 PCIe",
+    "Risk-averse deployments: v0.1.0 is a single-commit repo from late September 2026 with one star"
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "CUDA 13 runtime, cuBLAS 13; CMake >= 3.24 for find_package(ISpMV ... COMPONENTS runtime)",
+    "min_toolchain": "C++17 compiler, CUDA 13; no CUDA compiler needed to link",
+    "platforms": "Linux x86-64 only; NVIDIA sm_80/86/89/90/100/120, no PTX fallback (other GPUs return UNSUPPORTED)",
+    "thread_safety": "Submit a plan from one host thread at a time; a Device handle may be shared by concurrent plan preparations on the same GPU",
+    "drop_in_for_baseline": "partial: same operation as cusparseSpMV on CSR, but a different API (Plan object, separate A/A^T plans, host scalars only)"
+  },
+  "gotchas": [
+    "With copy_device_matrix=0 the plan borrows your CSR arrays, so they must stay immutable and allocated until the plan is released. Plan destruction does not synchronize.",
+    "Changing sparsity, dimensions or device requires a new plan. Changing only values per call is possible via apply_with_values, which bypasses value-dependent representations.",
+    "deterministic=1 (the default) gives bitwise-reproducible results only for the same plan, GPU and build. In the published benchmark, 24 of 400 cases (six SuiteSparse matrices) failed the forward-error criterion; all four methods failed those same cases.",
+    "Plan preparation cannot be captured in a CUDA graph, and graph-captured pointers and scalars are fixed. ispmv_version() returns the ABI major, not the SDK version."
+  ],
+  "pick_this_over_siblings_when": "Pick it over merge-spmv or CSR5 when you are on a current NVIDIA GPU, reuse one matrix many times, and can accept a closed non-commercial binary. merge-spmv and CSR5 are open, copyable source but target 2015-16 hardware. Ginkgo or AMGCL fit better when you need a full open solver stack rather than a faster SpMV kernel.",
+  "verified_claims_summary": "First-party benchmark on one H100 PCIe (CUDA 13.4.2, cuSPARSE 12.8.6.72), fp64, 100 matrices x 2 orientations x 2 scalar modes, preprocessing excluded. Geometric-mean steady-state time vs cusparseSpMV ALG2 is 2.17x lower on Mittelmann, 1.64x on large MIPLIB and 1.31x on large SuiteSparse; vs cusparseSpMVOp ALG1/ALG2 it is 1.38-1.69x lower. Host compiler, flags and CPU are not stated.",
+  "status_note": "Actively released (v0.1.0, single public commit) but reference-only: the core is a proprietary binary licensed for evaluation and non-commercial research, and only the interfaces, examples and benchmark client are MIT.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/PolyU-IOR/ISpMV/HEAD/README.md",
+    "https://raw.githubusercontent.com/PolyU-IOR/ISpMV/HEAD/benchmarks/README.md",
+    "https://raw.githubusercontent.com/PolyU-IOR/ISpMV/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/PolyU-IOR/ISpMV/HEAD/LICENSE-BINARY.txt",
+    "https://raw.githubusercontent.com/PolyU-IOR/ISpMV/HEAD/docs/API.md",
+    "https://raw.githubusercontent.com/PolyU-IOR/ISpMV/HEAD/docs/HARDWARE.md",
+    "https://raw.githubusercontent.com/PolyU-IOR/ISpMV/HEAD/docs/LIMITATIONS.md",
+    "https://raw.githubusercontent.com/PolyU-IOR/ISpMV/HEAD/docs/VALIDATION.md",
+    "https://github.com/PolyU-IOR/ISpMV"
+  ],
+  "confidence": 0.7
+}

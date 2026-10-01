@@ -1,0 +1,47 @@
+{
+  "id": "https://github.com/intel/neural-speed",
+  "one_liner": "Archived Intel llama.cpp-style CPU LLM runtime with low-bit weight-only GEMM kernels; ~1.2-1.4x faster INT4 next-token latency than ggml on Xeon.",
+  "what_it_does": "Neural Speed runs LLM inference (Llama-2, GPT-J, GPT-NeoX, Falcon, ChatGLM, Qwen, Mistral and others) on Intel CPUs from HF PyTorch checkpoints or GGUF files, using 1-8 bit weight-only quantized weights. It is used through Python scripts (convert.py, quantize.py, inference.py) in a llama.cpp-like flow, or behind Intel Extension for Transformers' AutoModelForCausalLM; it is not an API-compatible replacement for llama.cpp. Its GEMM layer, BesTLA, is a separate header-only template library you can link on its own.",
+  "how_it_is_fast": "BesTLA is a CUTLASS-style template library (Launcher / Parallel / GemmCore / Prologue / Epilogue) whose micro-kernels are generated at runtime with Xbyak for AVX2, AVX_VNNI, AVX512F/BW/VNNI, AVX512_FP16, AMX_BF16 and AMX_INT8. Weights are group-wise quantized (int1-int8, fp4, nf4, fp8) and activations are dynamically quantized per batch/per K-group to int8 so the dot products run on VNNI/AMX integer units, with fused epilogues (GELU, SWISH etc.) and an L2-cache-blocked parallel split. At graph level it fuses QKV, FFN and multi-head attention and pre-allocates the KV cache instead of reallocating it per token.",
+  "when_to_use": [
+    "Single-stream INT4 LLM decoding on Intel Xeon (Sapphire/Emerald Rapids with AMX_INT8, or Ice Lake/Cascade Lake with AVX512_VNNI) where you control the build and pin threads with numactl.",
+    "Reading or borrowing BesTLA's JIT weight-only-quantized GEMM kernels for your own x86 inference engine (Apache-2.0, header-only plus Xbyak).",
+    "Experimenting with group size 128 or per-channel int4/int3 instead of llama.cpp Q4_0-style group 32, which the project recommends for speed with similar accuracy (validated on Llama-2-7B per its docs).",
+    "Hybrid client CPUs (12th Gen and later) where its own thread pool is claimed to beat OpenMP."
+  ],
+  "when_not_to_use": [
+    "Anything needing maintenance or security fixes: Intel archived the repo on 2024-08-30 and accepts no patches; it points users to Intel Extension for PyTorch.",
+    "Non-Intel or non-x86 CPUs: kernels are x86-only (BesTLA is described as an x64 library); AMD support is not documented and ARM is not supported.",
+    "Models or GGUF quant types released after mid-2024: model support is frozen at v1.0 (March 2024).",
+    "Accuracy-sensitive int1-int3 RTN quantization: docs warn of accuracy loss; int7-asym and int8 can overflow on AVX2-without-VNNI or AVX512BW compute paths.",
+    "If you need an independently reproduced speedup: all numbers are Intel's own, with no published compiler flags or exact CPU SKU in the paper."
+  ],
+  "integration": {
+    "form": "shared lib (Python package neural-speed); BesTLA alone is header-only",
+    "dependencies": "Xbyak (fetched by CMake), OpenMP (default thread pool), Python toolchain for conversion/quantization scripts; optional Intel Extension for Transformers for HF-style API",
+    "min_toolchain": "GCC 10+ for Neural Speed (README); BesTLA: GCC 9+ / MSVC 1900+ / oneAPI 2024.0+, GCC 11+ recommended; CMake 3.12+",
+    "platforms": "x86-64 Intel CPUs (AVX2 minimum; AVX512/VNNI/AMX paths), Linux and Windows",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": "partial — reads GGUF models produced by llama.cpp, but uses its own scripts, binary format (ne-*.bin) and Python API, not llama.cpp's C API"
+  },
+  "gotchas": [
+    "The paper's 1.6x headline compares Neural Speed at group size 128 with ggml at group size 32; like-for-like group 32 is 22.99 vs 31.62 ms on GPT-J (~1.38x) and 23.4 vs 27.71 ms on Llama-2-7B (~1.18x) (derived from page data).",
+    "The README's 'up to 40x vs llama.cpp' links to an Oct 2023 Medium post whose text states only 'up to 7.27x' on a Core i9-12900 (input 1024, output 32); the 40x figure is not stated in that text.",
+    "AVX512, VNNI and AMX are OFF by default in the CMake options (NS_AVX512, NS_AVX512_VNNI, NS_AMX); build flags determine which kernels you get.",
+    "AMX_INT8 wants group sizes aligned to 128 for best efficiency."
+  ],
+  "pick_this_over_siblings_when": "Choose it over llamafile's tinyBLAS when you're on AMX/VNNI Xeons and want integer-unit int4 kernels instead of F16/Q8_0 prompt-eval speedups. Choose it over T-MAC/BitNet when you run ordinary int4 group-quantized models rather than 1-2 bit lookup-table or ternary models. Because it is archived, BesTLA is mainly worth mining for kernel ideas; for a maintained runtime, prefer the siblings.",
+  "verified_claims_summary": "The Intel NeurIPS 2023 workshop paper (arXiv 2311.00502) reports next-token latency for INT4 models on an unspecified 4th Gen Xeon Scalable cloud instance (input/output 32 tokens). At equal group size 32 it beats a ggml-based baseline: GPT-J-6B 22.99 vs 31.62 ms, Llama-2-7B 23.4 vs 27.71 ms, GPT-NeoX-20B 80.16 vs 92.36 ms. Group size 128 brings GPT-J to 19.98 ms. No compiler flags, core count or llama.cpp version are given.",
+  "status_note": "Abandoned: archived by Intel 2024-08-30 (last release v1.0, March 2024); Apache-2.0, so BesTLA can still be vendored, but nobody upstream will fix bugs or add models.",
+  "sources_read": [
+    "https://github.com/intel/neural-speed",
+    "https://raw.githubusercontent.com/intel/neural-speed/HEAD/README.md",
+    "https://raw.githubusercontent.com/intel/neural-speed/HEAD/neural_speed/core/README.md",
+    "https://raw.githubusercontent.com/intel/neural-speed/HEAD/bestla/README.md",
+    "https://raw.githubusercontent.com/intel/neural-speed/HEAD/bestla/CMakeLists.txt",
+    "https://raw.githubusercontent.com/intel/neural-speed/HEAD/CMakeLists.txt",
+    "https://arxiv.org/html/2311.00502",
+    "https://medium.com/@NeuralCompressor/llm-performance-of-intel-extension-for-transformers-f7d061556176"
+  ],
+  "confidence": 0.7
+}

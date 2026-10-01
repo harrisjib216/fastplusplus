@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/dao-ailab/flash-attention",
+  "one_liner": "Fused exact-attention CUDA kernels (FA2/FA3); FA3 on H100 is 1.5-2x faster than FA2 and beats cuDNN at sequence lengths of 1k and up.",
+  "what_it_does": "Computes exact scaled dot-product attention, softmax(QK^T*scale)V, forward and backward, without materializing the N x N score matrix, so memory is linear in sequence length. The API is a PyTorch extension: flash_attn_func(q, k, v, causal=..., window_size=..., alibi_slopes=...) on (batch, seqlen, heads, headdim) tensors, plus varlen, KV-cache/paged-KV decoding and GQA/MQA variants. FA3 lives in hopper/ as a separate package (flash_attn_3.flash_attn_interface), and a CuTeDSL FA4 for Hopper/Blackwell ships as flash-attn-4. The kernels are CUDA C++ on CUTLASS/CuTe; there is no documented standalone C++ API outside PyTorch.",
+  "how_it_is_fast": "IO-aware tiling with online softmax keeps Q/K/V blocks in shared memory and registers, so the score matrix never goes to HBM. FA3 adds Hopper features: warp specialization with TMA producer warps and WGMMA consumer warps, ping-pong scheduling so one warpgroup's softmax exponentials overlap another's GEMMs, and an intra-warpgroup two-stage pipeline overlapping softmax with the next GEMM. The FP8 path uses block quantization plus incoherent processing (a random orthogonal transform) to tame outliers, which the paper reports gives 2.6x lower error than baseline per-tensor FP8 attention.",
+  "when_to_use": [
+    "Training or prefill of transformers on H100/H800 with FP16/BF16 and sequence lengths of 1k or more, where the paper shows FA3 ahead of cuDNN.",
+    "Ampere/Ada/Hopper GPUs (A100, RTX 3090/4090, H100) via FA2 when you need exact attention with linear memory instead of PyTorch's materialized attention.",
+    "Autoregressive decoding with KV cache: flash_attn_with_kvcache does append-to-cache, rotary embedding and split-KV attention in one kernel, with paged-KV support.",
+    "Models needing sliding-window, ALiBi, softcapping, or GQA/MQA attention in a single fused kernel.",
+    "AMD MI200/MI300/MI355 and RDNA3/4 via the Composable Kernel or Triton backends (FA2 only)."
+  ],
+  "when_not_to_use": [
+    "FP8 causal attention with head dim 128 or 256 on H100: the paper shows cuDNN ahead there.",
+    "Short sequences (under about 1k), where the paper does not show a win over cuDNN; recent cuDNN and PyTorch SDPA ship their own flash-style kernels, so check current versions.",
+    "Turing and older GPUs (only a separate third-party flash-attention-turing repo), CPUs, or Windows builds, which the README calls under-tested.",
+    "Pure C++ inference engines without PyTorch: the shipped interface is a Torch extension, so you would have to lift kernels out of csrc/ and hopper/ yourself.",
+    "Builds on small machines: the README warns that compiling can take about 2 hours without ninja and that ninja can exhaust RAM under 96 GB unless MAX_JOBS is set."
+  ],
+  "integration": {
+    "form": "module (PyTorch CUDA extension; pip wheels flash-attn, flash-attn-3 from hopper/, flash-attn-4)",
+    "dependencies": "PyTorch 2.2+, CUDA 12.0+ (FA3: CUDA 12.3+, 12.8 recommended) or ROCm 6.0+, CUTLASS (git submodule), packaging, psutil, ninja",
+    "min_toolchain": "nvcc compiling C++17 (-O3 --use_fast_math, -gencode arch=compute_90a,code=sm_90a for FA3)",
+    "platforms": "Linux; NVIDIA sm80/sm86/sm89/sm90 (FA2), sm90 H100/H800 only for FA3, Hopper/Blackwell for FA4; AMD CDNA/RDNA via CK or Triton",
+    "thread_safety": "not documented (standard CUDA-stream semantics through PyTorch)",
+    "drop_in_for_baseline": "partial — replaces cuDNN or PyTorch SDPA attention calls, but with its own tensor layout (batch, seqlen, nheads, headdim) and function signatures, and only via PyTorch"
+  },
+  "gotchas": [
+    "Since v2.1 the causal mask is aligned to the bottom-right corner when seqlen_q != seqlen_k; rows that are fully masked return zeros.",
+    "deterministic=False is the default for backward; an open FA3 issue (#2244) reports dQ still differing between runs with deterministic=True, which others could not reproduce.",
+    "flash_attn_with_kvcache has no backward pass and updates k_cache/v_cache in place; paged blocks must be a multiple of 256.",
+    "FA3 wheels compile a large instantiation matrix (head dims x dtypes x paged/split/softcap); use the FLASH_ATTENTION_DISABLE_* environment flags to cut build time."
+  ],
+  "pick_this_over_siblings_when": "Pick FlashAttention over ThunderKittens when you want a maintained, pip-installable attention module with KV-cache, varlen, GQA and AMD support; ThunderKittens reports 10-40% faster attention backward than FA3 and is the choice for writing custom Hopper kernels. The CPU siblings (LIBXSMM, MNN, T-MAC, llamafile) do not target GPU attention.",
+  "verified_claims_summary": "The NeurIPS 2024 FA3 paper benchmarks attention forward and backward on an H100 SXM5 against FA2, a Triton implementation and cuDNN: FP16 forward is 1.5-2.0x faster than FA2, reaching up to 740 TFLOPs/s (75% utilization), backward is 1.5-1.75x faster, and it beats cuDNN at sequence lengths of 1k and up. FP8 reaches close to 1.2 PFLOPs/s but trails cuDNN for causal hdim 128/256. Toolchain versions differ between paper versions (CUDA 12.1-12.3, cuDNN 9.x, CUTLASS 3.x), and the comparison harness is hopper/benchmark_attn.py in the repo.",
+  "status_note": "Actively maintained, very widely used (about 24.8k stars), BSD-3-Clause; FA3 is still labelled a beta release in the README, and new work has moved to the CuTeDSL FA4 package.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/Dao-AILab/flash-attention/HEAD/README.md",
+    "https://raw.githubusercontent.com/Dao-AILab/flash-attention/HEAD/hopper/setup.py",
+    "https://raw.githubusercontent.com/Dao-AILab/flash-attention/HEAD/hopper/benchmark_attn.py",
+    "https://raw.githubusercontent.com/Dao-AILab/flash-attention/HEAD/benchmarks/benchmark_flash_attention.py",
+    "https://raw.githubusercontent.com/Dao-AILab/flash-attention/HEAD/hopper/flash_api.cpp",
+    "https://raw.githubusercontent.com/Dao-AILab/flash-attention/HEAD/LICENSE",
+    "https://arxiv.org/html/2407.08608",
+    "https://tridao.me/blog/2024/flash3/",
+    "https://github.com/Dao-AILab/flash-attention/issues/2244"
+  ],
+  "confidence": 0.8
+}

@@ -1,0 +1,43 @@
+{
+  "id": "https://github.com/stephanfr/xoshiro256plussimd",
+  "one_liner": "Header-only C++17 xoshiro256+ with an AVX2 four-stream next4() that roughly doubles throughput over the scalar reference.",
+  "what_it_does": "A header-only C++ class template `SEFUtility::RNG::Xoshiro256Plus<SIMDInstructionSet::NONE|AVX2>` (include/Xoshiro256Plus.h, plus SplitMix64.h for seeding). It offers next() and next(lower, upper) for 64-bit values, dnext() for doubles in [0,1), and four-wide next4() and dnext4() that return wrapper objects convertible to __m256i and __m256d. The serial and AVX2 instances return identical four-wide streams for the same seed. Copy construction can optionally jump or long-jump the copy to give it a separate stream.",
+  "how_it_is_fast": "next4() runs four independent xoshiro256+ states in the four 64-bit lanes of AVX2 registers, coded with explicit intrinsics rather than relying on auto-vectorization. The four lane states are seeded 2^192 apart with xoshiro long_jump. Bounded integers use a 32x32 multiply-shift reduction (Lemire-style), not a modulus, and doubles are built by OR-ing the top 52 bits into the 1.0 exponent and subtracting 1.0.",
+  "when_to_use": [
+    "Monte Carlo or simulation kernels already written with AVX2 that can use a __m256i or __m256d of four randoms directly",
+    "Filling large buffers of uint64 or double randoms on x86-64 with AVX2, where 4-wide generation measured about 2x the scalar reference (526 us vs 1.09 ms per 1M values)",
+    "When you want xoshiro256+ quality for floating-point output (Vigna's recommended use) with jump-separated streams per instance"
+  ],
+  "when_not_to_use": [
+    "Single-value draws: the author says AVX2 brings no gain there, and extracting the four lanes one at a time loses the speedup",
+    "Non-x86 targets: the header includes <immintrin.h> and uses __m256i types unconditionally, even in the serial build",
+    "MSVC: issue #1 (Jan 2023, open) reports build errors with Visual Studio 2022",
+    "Integer outputs where low-bit quality matters: xoshiro256+ has weak lowest 3 bits, and the bounded functions use the low 32 bits of the output",
+    "Bounded integers wider than 32 bits: bounds are uint32_t only"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (Catch2 only for the unit tests and benchmarks)",
+    "min_toolchain": "C++17 (if constexpr); GCC on Linux is the only documented toolchain. Compile with -mavx2 and define __AVX2_AVAILABLE__ for the AVX2 variant.",
+    "platforms": "x86-64 only; AVX2 required for the fast path",
+    "thread_safety": "Not documented; instances hold mutable state, so use one per thread (the jump-on-copy constructor gives each copy a separate stream)",
+    "drop_in_for_baseline": "partial: same xoshiro256+ algorithm and output as the Blackman/Vigna reference for next(), but a C++ class API, not the C next()/jump() functions, and not a std UniformRandomBitGenerator"
+  },
+  "gotchas": [
+    "The AVX2 template instance cannot be created unless the __AVX2_AVAILABLE__ macro is defined before the include (static_assert).",
+    "dnext() and dnext4() type-pun through a union, which is undefined behavior in ISO C++; it works on GCC and Clang.",
+    "Serial next4() is 1.8x slower than four serial next() calls (1.93 ms vs 1.08 ms per 1M values); use next4() only with the AVX2 instance.",
+    "Without -mavx2, serial dnext4() became much slower (6.39 ms vs 2.26 ms per 1M values) in the author's no-AVX benchmark."
+  ],
+  "pick_this_over_siblings_when": "Pick it over SIMDxorshift or simdpcg when you want a C++17 header with xoshiro256+ quality, bounded-int and double helpers, and serial and SIMD outputs that match. The 8-way xoshiro256++ gist or SHISHUA give more bulk throughput, and Sirius64 or wyrand are better for scalar one-at-a-time draws.",
+  "verified_claims_summary": "Catch2 benchmarks in the author's README, run in a 2-core Ubuntu 20.04 VM on a Ryzen 7 1700 (compiler and flags not stated): generating 1M uint64 values took 1.09 ms with the Blackman/Vigna C reference, 1.08 ms with the class's serial next(), and 526 us with AVX2 next4() discarding results. That is about 2.07x over the reference (derived from page data), falling to about 1.27x when the four lanes are summed into a uint64_t (860 us).",
+  "status_note": "Abandoned since 2021-08-21, with an unanswered MSVC build issue. It is MIT-licensed (built on CC0 xoshiro code) and about 580 lines, so it is easy to vendor on GCC and Clang x86-64.",
+  "sources_read": [
+    "https://github.com/stephanfr/Xoshiro256PlusSIMD",
+    "https://raw.githubusercontent.com/stephanfr/Xoshiro256PlusSIMD/HEAD/README.md",
+    "https://raw.githubusercontent.com/stephanfr/Xoshiro256PlusSIMD/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/stephanfr/Xoshiro256PlusSIMD/HEAD/include/Xoshiro256Plus.h",
+    "https://github.com/stephanfr/Xoshiro256PlusSIMD/issues"
+  ],
+  "confidence": 0.8
+}

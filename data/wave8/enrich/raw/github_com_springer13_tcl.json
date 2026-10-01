@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/springer13/tcl",
+  "one_liner": "Multithreaded C++ tensor contraction library (TTGT over BLAS + HPTT); up to 18x over the best of Eigen Tensor, NumPy, ITensor and Tensor Toolbox.",
+  "what_it_does": "TCL computes arbitrary dense tensor contractions (einsum-style, e.g. C[m,n] = A[k2,m,k1] * B[n,k2,k1]) through a single call, tcl::tensorMult(alpha, A[\"k2,m,k1\"], B[\"n,k2,k1\"], beta, C[\"m,n\"]). It offers a C++ Tensor<T> class, a C interface (s/d/c/zTensorMult on raw pointers with optional outer sizes for subtensors) and a Python wrapper comparable to numpy.einsum. Column-major by default, row-major optional; float, double and complex types.",
+  "how_it_is_fast": "It uses the Transpose-Transpose-GEMM-Transpose (TTGT) approach: operands are permuted with HPTT, a high-performance tensor transposition library, into layouts that turn the contraction into one large GEMM on a tuned BLAS (BLIS, MKL, OpenBLAS). The speedup comes mostly from fast transpositions, so it is largest for low-arithmetic-intensity contractions where transposes dominate.",
+  "when_to_use": [
+    "CPU dense tensor contractions with many index permutations (quantum chemistry, tensor networks) where Eigen Tensor or numpy.einsum is the bottleneck",
+    "Low-arithmetic-intensity contractions (small contracted dimensions), where the README reports the largest gains (up to 18x)",
+    "Multicore x86 servers with a multithreaded BLAS and pinned threads (benchmark: 2-socket Haswell-EP, 24 threads)",
+    "Python code using einsum that can call tcl.tensorMult instead"
+  ],
+  "when_not_to_use": [
+    "Concurrent contractions from several threads: a global MemoryBroker is not thread-safe (issue #3, assertion failure under OpenMP)",
+    "Memory-constrained runs: TTGT needs auxiliary buffers for the transposed tensors (README limitation); GETT, which avoids them, was never added",
+    "GEMM-dominated (high arithmetic intensity) contractions, where speedup falls toward 1x because any BLAS-backed library hits peak",
+    "Projects needing maintenance or GPU support: abandoned since 2019; the author points to NVIDIA cuTENSOR",
+    "Sparse or symmetric tensors: dense contractions only"
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "HPTT, a BLAS (BLIS by default in the Makefile; MKL/OpenBLAS/ATLAS), OpenMP",
+    "min_toolchain": "C++11; tested with g++ 5.1.0 and icpc 17.0.2",
+    "platforms": "x86-64 Linux as tested; Makefile builds with -march=native",
+    "thread_safety": "Internally multithreaded via OpenMP; not safe to call concurrently (global MemoryBroker, issue #3)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Plain Makefile with -march=native: you must edit HPTT_ROOT/BLIS_ROOT paths, and the binary is not portable to other CPUs",
+    "Set thread affinity (KMP_AFFINITY/taskset) and OMP_NUM_THREADS, and link Python against a multithreaded BLAS, or performance suffers (README)",
+    "Index strings define the contraction; layout defaults to column-major, so row-major callers must pass useRowMajor",
+    "LGPL-3.0: static linking into closed-source code carries relinking obligations"
+  ],
+  "pick_this_over_siblings_when": "It is the only general tensor-contraction entry in the category; pick it over hand-rolled transposes plus a GEMM kernel (e.g. the AVX-512 DGEMM sibling) when contractions have arbitrary index orders, and prefer T-MAC or llamafile for quantized LLM matmul instead.",
+  "verified_claims_summary": "The author measured 1000 random contractions on a 2-socket Intel Xeon E5-2680 v3 (Haswell-EP, 24 threads) against the fastest of Eigen Tensor, Tensor Toolbox, NumPy and ITensor for each case; TCL was faster on every case, up to 18x at low arithmetic intensity, falling toward parity as GEMM dominates. Compiler and flags for the run are not stated; first-party only.",
+  "status_note": "Abandoned (last commit 2019-08-22, README says no longer maintained), LGPL-3.0; small enough to vendor but expect to fix the thread-safety bug yourself.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/springer13/tcl/HEAD/README.md",
+    "https://raw.githubusercontent.com/springer13/tcl/HEAD/include/tcl.h",
+    "https://raw.githubusercontent.com/springer13/tcl/HEAD/include/contract.h",
+    "https://raw.githubusercontent.com/springer13/tcl/HEAD/include/memoryBroker.h",
+    "https://raw.githubusercontent.com/springer13/tcl/HEAD/Makefile",
+    "https://github.com/springer13/tcl/issues",
+    "https://github.com/springer13/tcl/issues/3"
+  ],
+  "confidence": 0.8
+}

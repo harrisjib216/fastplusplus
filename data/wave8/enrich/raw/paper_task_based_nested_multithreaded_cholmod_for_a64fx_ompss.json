@@ -1,0 +1,43 @@
+{
+  "id": "paper:task-based-nested-multithreaded-cholmod-for-a64fx-ompss",
+  "one_liner": "Research OmpSs/OpenMP-task parallelization of CHOLMOD's supernodal Cholesky with selective nesting; 1.95x over multi-threaded-BLAS CHOLMOD on A64FX.",
+  "what_it_does": "A research re-parallelization of the numerical factorization phase of CHOLMOD's supernodal sparse Cholesky, using one outer task per supernode and optional nested inner tasks for the SYRK/GEMM updates from predecessor supernodes. It is not a library with a stable API: it ships as a Zenodo archive (selective-nesting-main.zip) with source, raw data and plotting scripts for the paper's experiments. Analysis (ordering, elimination tree, amalgamation) and solve phases are CHOLMOD's.",
+  "how_it_is_fast": "Stock CHOLMOD walks supernodes in order and gets parallelism only from multi-threaded BLAS inside each supernode, which starves on small or very sparse fronts. This work exposes elimination-tree parallelism as tasks and uses 'selective nesting': an outer task is split into inner update tasks only if it has at least D updates (D picked per matrix by the OPT-D heuristic targeting max(1.1*n_super, n/14) tasks), and OPT-D-COST additionally suppresses inner tasks under about 50,000 flops to cut runtime overhead. Nesting is toggled with the OpenMP 'final' clause.",
+  "when_to_use": [
+    "You run CHOLMOD-style supernodal Cholesky on many-core Arm A64FX (Fugaku/FX1000/FX700) and multi-threaded BLAS leaves cores idle.",
+    "Large SPD matrices (millions of nonzeros) where the paper reports 1.67-1.83x over its non-nested task baseline.",
+    "Matrices with wide, shallow elimination trees where mt-BLAS CHOLMOD collapses (e.g. af_shell3: mt-BLAS 0.19x vs OPT-D-COST 1.31x relative to non-nested).",
+    "As a reference design for adding task-granularity control to your own supernodal or multifrontal factorization."
+  ],
+  "when_not_to_use": [
+    "Production code: it is a paper artifact under CC-BY-4.0 (not an OSI software license), with no releases, tests or maintenance.",
+    "x86 or GPU machines: only A64FX was evaluated; the authors say thresholds (n/14 goal, 50,000-flop cutoff, D <= 30% of max children) were tuned there and would need re-tuning for x86.",
+    "Small matrices (10k-200k nonzeros): gain over the non-nested task version is only about 1.07x.",
+    "Toolchains without OmpSs-1 (nanos++/mercurium) unless you port the pragmas to plain OpenMP tasks yourself.",
+    "If you need a maintained faster Cholesky, BaSpaCho or Sympiler are catalogued with real repositories."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "CHOLMOD (SuiteSparse, version not stated), OmpSs-1 19.06 (nanos++ runtime, mercurium compiler), vendor BLAS/LAPACK (Fujitsu BLAS in the paper)",
+    "min_toolchain": "not documented (paper used Fujitsu fcc 4.2.0b)",
+    "platforms": "evaluated only on aarch64 A64FX (48 cores, HBM2)",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": "partial — replaces CHOLMOD's numerical factorization internals, but it is not packaged as a patch or library; integration method is not documented"
+  },
+  "gotchas": [
+    "The 1.46x headline is against the authors' own non-nested task version (equivalent to PaStiX-style 1D task decomposition), not against an external library; 1.95x vs mt-BLAS CHOLMOD is the same data (mt-BLAS averages 0.75x of non-nested).",
+    "Always-nested tasks run out of memory on 7 large matrices; selective nesting avoids that, so the D threshold also matters for memory.",
+    "Heuristic constants are empirical and hard-coded; the paper adds further hand-written hybrid conditions (average supernode size > 50, density < 1e-4).",
+    "CHOLMOD version and compiler flags are not stated, so reproducing the numbers needs the archive's scripts."
+  ],
+  "pick_this_over_siblings_when": "Pick it over BaSpaCho or Sympiler only if you are staying inside CHOLMOD on A64FX and want its task-granularity heuristics; otherwise those siblings are maintained libraries with code you can actually depend on.",
+  "verified_claims_summary": "On a 48-core 4-socket A64FX (2.2 GHz, 32 GB HBM2) with fcc 4.2.0b, OmpSs-1 19.06 and Fujitsu BLAS, OPT-D-COST averaged 1.46x over a non-nested task-parallel CHOLMOD and 1.95x over stock CHOLMOD with multi-threaded BLAS across 60 SuiteSparse SPD matrices (about 1.07x on small, up to 1.83x on large groups).",
+  "status_note": "One-off research artifact (Zenodo v3, Oct 2021; paper arXiv 2202.09288, also presented at ESPM2'22) with no ongoing maintenance; reference-only because the artifact is CC-BY-4.0 rather than a software license.",
+  "sources_read": [
+    "https://arxiv.org/abs/2202.09288",
+    "https://arxiv.org/pdf/2202.09288",
+    "https://zenodo.org/records/5974376",
+    "https://nowlab.cse.ohio-state.edu/static/media/workshops/presentations/espm2_22/Valentin_Le_Fevre.pdf"
+  ],
+  "confidence": 0.7
+}

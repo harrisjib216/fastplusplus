@@ -1,0 +1,46 @@
+{
+  "id": "paper:romu-romutrio-romuquad-romumono",
+  "one_liner": "Romu: tiny nonlinear multiply-rotate 64/32-bit PRNGs with zero output latency, claimed 3 cycles/value vs xoshiro256++ and PCG.",
+  "what_it_does": "A family of small non-cryptographic PRNG cores (RomuQuad 256-bit, RomuTrio 192-bit, RomuDuo/RomuDuoJr 128-bit, RomuQuad32/RomuTrio32 and the 16-bit-output RomuMono32) printed as a few lines of C in the paper. Each is a function over global or caller-held state words returning one 64- or 32-bit value; there is no library, no distributions, and no std:: URBG wrapper. RomuTrio is the author's recommended general-purpose choice.",
+  "how_it_is_fast": "Each step is one multiply by a constant plus one or two rotates and an add/subtract on separate state words, and the output is a state word read before the update, so output latency is 0 cycles and the multiply overlaps with the consumer's work (instruction-level parallelism). Register pressure is 4-6 registers when inlined, against 7-8 for xoshiro256++ and 10 for 128-bit PCG.",
+  "when_to_use": [
+    "Hot inner loops (Monte Carlo, games, procedural generation, randomized algorithms) where the PRNG call is inlined and its latency or register use shows up in the profile.",
+    "Many independent parallel streams from random seeds: the paper estimates about 16,000 RomuTrio streams of 2^53 values each with negligible overlap risk.",
+    "32-bit or small cores where RomuTrio32/RomuQuad32 replace xoshiro128** (3 cycles and 0 latency vs 5 and 5 by the paper's assembly analysis).",
+    "Situations where you just need a few lines of copyable C with no dependency, provided the license question is settled for your project."
+  ],
+  "when_not_to_use": [
+    "Anything security-related: the generators are invertible and the paper says they are not cryptographically secure.",
+    "When you need jump-ahead/substreams with guaranteed non-overlap or a proven minimum period: Romu has no jump function, and periods are only probabilistic; an HN critic reported 32-bit-variant cycles shorter than the paper's bounds and disputes that the proof applies to a fixed permutation.",
+    "Huge single jobs on the small variants: estimated capacity is 2^51 bytes for RomuDuoJr and 2^26 bytes for RomuMono32 (not for parallel streams).",
+    "When you need a measured, reproducible speedup: the comparison to xoshiro256++/PCG is assembly-derived cycle counts, not timed against those baselines.",
+    "Projects that need a clear license from the original source (see status note)."
+  ],
+  "integration": {
+    "form": "source-drop (code printed in the paper; served at romu-random.org/code.c)",
+    "dependencies": "none",
+    "min_toolchain": "any C/C++ compiler with uint64_t/uint32_t; a rotate macro that the compiler turns into one instruction (gcc and Visual Studio do, per the paper)",
+    "platforms": "any; best on CPUs with a pipelined 64-bit multiplier (paper analysis targets Intel with 3-cycle multiply latency)",
+    "thread_safety": "Reference code uses global state variables, so not thread-safe as printed; give each thread its own state",
+    "drop_in_for_baseline": "partial — same role as a xoshiro/PCG next() function, but you must write the seeding and any std::uniform_random_bit_generator wrapper yourself, and output sequences differ"
+  },
+  "gotchas": [
+    "The state must not be all zeros; any nonzero seed works, and RomuMono32 needs its own init that maps the seed into a valid range.",
+    "Not equidistributed and with no guaranteed minimum period; each seed lands on a cycle of unknown length.",
+    "Only RomuTrio/RomuQuad are recommended for large or parallel jobs; RomuDuoJr trades capacity for speed.",
+    "The reference code keeps state in globals; wrap it in a struct before using it in libraries or threads."
+  ],
+  "pick_this_over_siblings_when": "Pick Romu over SIMDxorshift or Squares when you want the cheapest scalar inlined 64-bit generator with low register pressure rather than a vectorized or counter-based one; pick Squares or Randen when you need counter-based reproducible substreams or backtracking resistance, and Randompack when you need distributions and a maintained library.",
+  "verified_claims_summary": "The author's arXiv preprint counts cycles and output latency from g++ 4.8.4 -O3 assembly for an Intel Xeon E5-2643 v3: RomuTrio/RomuQuad/RomuDuo at 3 cycles with 0 latency vs xoshiro256++ at 3 cycles with 3 latency and 128-bit PCG at 9 cycles with 7 latency. The only wall-clock table times combinations of RomuMono32 (about 4.6 cycles/value) and no baselines, so no measured speedup over xoshiro or PCG is shown.",
+  "status_note": "Unmaintained 2020 single-author preprint (arXiv 2002.11331v1); no license appears in the paper, the official site's TLS certificate has expired so its code and license could not be read, and an HN thread says the author later moved the code to Apache 2.0 (unconfirmed); Apache-2.0 ports exist for Rust (hasenbanck/romu) and .NET (bgrainger/RomuRandom).",
+  "sources_read": [
+    "https://arxiv.org/abs/2002.11331",
+    "https://arxiv.org/pdf/2002.11331",
+    "http://www.romu-random.org/ (redirect loop to https; TLS certificate expired, not read)",
+    "https://www.romu-random.org/code.c (TLS certificate expired, not read)",
+    "https://news.ycombinator.com/item?id=22447848",
+    "https://github.com/bgrainger/RomuRandom",
+    "https://github.com/hasenbanck/romu"
+  ],
+  "confidence": 0.6
+}

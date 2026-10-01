@@ -1,0 +1,44 @@
+{
+  "id": "https://github.com/aske0778/midint-arithmetic-division",
+  "one_liner": "Thesis CUDA code for batched exact big-integer division on GPU (2^13-2^18 bits); 7-19x sequential GMP throughput.",
+  "what_it_does": "Divides large batches of same-size unsigned multi-precision integers (up to 2^18 bits) on an NVIDIA GPU, producing quotient and remainder. It also includes a Euclidean GCD kernel built on the division, and a Futhark version. It extends the Oancea/Watt GPU midsize add/multiply code. The interface is templated CUDA kernels (divShinvKer<Base, M, Q>, gcd<Base, M, Q>) over device arrays of fixed-size limb vectors, driven by a benchmark main.cu; there is no library API.",
+  "how_it_is_fast": "It implements Watt's shifted-inverse division: Newton iteration computes the whole shifted inverse floor(B^h/v) using only integer arithmetic, so the quotient comes from multiplications instead of long division. One CUDA block handles one division, with operands and intermediates in registers and shared memory (sequentialization factor Q=4) to avoid global-memory traffic. Throughput comes from running 2^14-2^19 such divisions in parallel across the GPU.",
+  "when_to_use": [
+    "You need many independent divisions or GCDs of same-size integers between 2^15 and 2^18 bits on an NVIDIA GPU, where CGBN has no division.",
+    "Batch throughput matters and the data already lives on the GPU.",
+    "You want a reference implementation of integer-only Newton (shifted-inverse) division to port or study."
+  ],
+  "when_not_to_use": [
+    "Sizes of 2^15 bits or less: the paper measures it 3.63-7.36x slower than CGBN's division there.",
+    "Single or few divisions, or latency-bound code: the GMP comparison is a whole A100 against one sequential CPU core.",
+    "Operands above 2^18 bits or of mixed sizes: the shared-memory limit (~100 KB per block) caps size, and the size is a compile-time template parameter.",
+    "Any production use: there is no LICENSE file, so it is reference-only, and it is a one-star thesis repo last updated 2025-06-26.",
+    "The Futhark port: the authors report poor performance due to compiler limitations."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "CUDA toolkit (nvcc), GMP (benchmark validation and baseline only)",
+    "min_toolchain": "nvcc targeting sm_80 per the Makefile (exact CUDA version not stated)",
+    "platforms": "NVIDIA GPUs (tested on A100 / sm_80)",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The GMP baseline wrapper calls mpz_import, then mpz_div plus a separate mpz_mul and mpz_sub to get the remainder, then mpz_export, with mpz_init/clear on every instance. That overhead (and not using mpz_tdiv_qr) inflates the reported GMP times.",
+    "The GPU kernel needs a large dynamic shared-memory carve-out (the GCD path sets 98000 bytes via cudaFuncSetAttribute).",
+    "Limb arrays are fixed-length per template instantiation; divisors and dividends share the same allocated size M."
+  ],
+  "pick_this_over_siblings_when": "Pick it only if you need GPU-batched division above 2^15 bits; for CPU work, FLINT or mp++ are the practical GMP-beating options, and the truncated AVX512 Montgomery code covers batched modular multiplication rather than general division.",
+  "verified_claims_summary": "On an NVIDIA A100 (nvcc -O3 -arch=sm_80), batched shifted-inverse division ran 7.4x-18.9x faster than sequential single-core GMP mpz division on an AMD EPYC 7352, for 2^13- to 2^18-bit operands at a fixed 2^32 total bits of work per test. The same paper shows it 6.7-15.5x slower than one of its own GPU multiplications, and slower than CGBN where CGBN has division.",
+  "status_note": "Stale thesis artifact (last commit 2025-06-26, 1 star) with no license file, so read it as a reference design rather than code to vendor.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/aske0778/midint-arithmetic-division/HEAD/README.md",
+    "https://raw.githubusercontent.com/aske0778/midint-arithmetic-division/HEAD/div/cuda/Makefile",
+    "https://raw.githubusercontent.com/aske0778/midint-arithmetic-division/HEAD/div/cuda/main.cu",
+    "https://raw.githubusercontent.com/aske0778/midint-arithmetic-division/HEAD/div/cuda/ker-division.cu.h",
+    "https://raw.githubusercontent.com/aske0778/midint-arithmetic-division/HEAD/div/cuda/helpers/helper.h",
+    "https://raw.githubusercontent.com/aske0778/midint-arithmetic-division/HEAD/LICENSE",
+    "https://arxiv.org/html/2606.06386"
+  ],
+  "confidence": 0.75
+}

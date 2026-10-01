@@ -1,0 +1,43 @@
+{
+  "id": "paper:squares-counter-based-rng",
+  "one_liner": "Stateless counter-based RNG built from 4-5 rounds of middle-square squaring; author reports ~1.7x Philox4x32-10 throughput.",
+  "what_it_does": "Maps a 64-bit counter and a 64-bit key to a random output: squares32(ctr, key) returns 32 bits from 4 rounds, squares64(ctr, key) returns 64 bits from 5 rounds. Like Philox or Threefry there is no state to advance, so any thread can compute element i of a stream directly; each key gives 2^64 outputs. It is two small inline C functions in a header (squares.h), not a std::uniform_random_bit_generator, so you write a small adapter for <random> distributions.",
+  "how_it_is_fast": "It is a counter-based version of von Neumann's middle-square method: x = ctr*key, then each round computes x = x*x + (y or z) and swaps the 32-bit halves with a rotate. That is one 64-bit multiply plus an add and a rotate per round, five multiplies in total for 32-bit output, against the ten rounds of 32x32->64 multiplies and key schedule in Philox4x32-10. The generator's quality depends on the key, which needs an irregular bit pattern with about half ones; the bundled key utility produces about 2 billion keys that satisfy this.",
+  "when_to_use": [
+    "Parallel or GPU-style Monte Carlo where each work item needs random access to element i of a stream without passing state around",
+    "Reproducible simulations where (counter, key) fully determines the output, so you can regenerate any sample on demand",
+    "Hot loops where Philox's per-call cost matters and you can accept 4-5 64-bit multiplies per output",
+    "Shader or hash-like use (keyed integer hash of an index), as in ports to GLSL"
+  ],
+  "when_not_to_use": [
+    "Anything security-related: it is a statistical generator, not a cryptographic one",
+    "Code that cannot take GPL code: the author's download page says the package is under the GNU GPL, so copying squares.h brings GPL terms",
+    "When a sequential generator is enough: the catalogued sibling PCG measured 0.78 cpb in Randen's README and xoshiro-class generators are typically cheaper than any counter-based design",
+    "Arbitrary user-chosen keys: quality depends on the key's bit pattern, so keys must come from the key utility or follow its rules",
+    "When you need peer-reviewed evidence: the paper is a self-published arXiv preprint (v7, March 2022) and the only speed comparison is the author's own"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (stdint.h); the key utility is a separate program",
+    "min_toolchain": "C99 or any C++ compiler with 64-bit integer multiply; paper used gcc 11.2.0",
+    "platforms": "any; fast when 64x64->64 multiply is cheap (x86-64, aarch64)",
+    "thread_safety": "Stateless pure functions of (ctr, key), so safe to call from any number of threads",
+    "drop_in_for_baseline": "partial — same counter+key model as Philox, but a different function signature (one 64-bit counter and one 64-bit key, returning one value rather than 4x32) and different output streams"
+  },
+  "gotchas": [
+    "Key quality matters: the paper says keys need an irregular bit pattern with roughly equal ones and zeros; the key utility enforces distinct upper and lower digit patterns.",
+    "The paper reports that Justin Lebar found a statistical failure in a 3-round version; do not cut rounds below 4 (32-bit) or 5 (64-bit).",
+    "The 64-bit version costs more: 1.93 s per billion 53-bit doubles versus 1.35 s for 32-bit outputs in the paper's own timing.",
+    "Code is distributed from a Wix site, not a public repository; the latest download is version 8 (Feb 2024), and older versions remain listed."
+  ],
+  "pick_this_over_siblings_when": "Pick Squares over Randen when you want a cheap stateless counter-based generator rather than a backtracking-resistant AES-based one; prefer Romu, PCG or SIMDxorshift when a single sequential stream per thread is fine, since they need no multiply-heavy rounds or key management.",
+  "verified_claims_summary": "Author's own timing: generating one billion 32-bit numbers on an Intel Core i7-9700 (3.0 GHz) with gcc 11.2.0 under Cygwin64 took 2.29 s with Philox4x32-10 and 1.35 s with squares32 (~1.7x, derived from page data); 53-bit doubles from squares64 took 1.93 s. The paper does not give the flags or the Philox source (the download page bundles Random123 1.14.0). Quality claims are 300 BigCrush runs with random keys, 300 PractRand runs to 256 GB, and 25 to 32 TB.",
+  "status_note": "A single-author algorithm with the latest code release (v8) in Feb 2024. It is GPL per the download page, and the core is about 10 lines you could reimplement from the paper, but reimplementing it does not remove the GPL question for derived code; usability stays reference.",
+  "sources_read": [
+    "https://arxiv.org/abs/2004.06278",
+    "https://arxiv.org/pdf/2004.06278",
+    "https://ar5iv.labs.arxiv.org/html/2004.06278",
+    "https://squaresrng.wixsite.com/rand"
+  ],
+  "confidence": 0.65
+}

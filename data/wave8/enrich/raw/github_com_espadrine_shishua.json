@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/espadrine/shishua",
+  "one_liner": "Non-cryptographic SIMD PRNG for bulk byte streams; about 6.7x xoshiro256+ throughput on AVX2 Intel per first-party numbers.",
+  "what_it_does": "SHISHUA is a non-cryptographic pseudo-random generator that fills byte buffers, not a per-call next() generator. You seed it with prng_init(&state, uint64_t seed[4]) and call prng_gen(&state, buf, size), where size must be a multiple of 128 bytes. It is a C header (shishua.h, plus shishua-half.h for a smaller variant) that picks an AVX2, SSE2, NEON or portable scalar implementation at compile time. There is no std::uniform_random_bit_generator wrapper, so it is not a drop-in engine for <random>.",
+  "how_it_is_fast": "The state is four 256-bit vectors plus a 256-bit counter. Each 128-byte round uses only shift, 32-bit lane permute (_mm256_permutevar8x32_epi32) and 64-bit add, then XORs pairs of state parts to make the output. There is no multiplication and the dependency chain per round is short. Writing 128 bytes per iteration amortizes loop overhead, which is how it reaches roughly 0.05 cycles per byte on AVX2.",
+  "when_to_use": [
+    "Filling large buffers with random bytes (Monte Carlo inputs, test data, noise, hashing salts) where GB/s matters more than per-call latency",
+    "x86-64 hosts with AVX2, which is where the 52.93 GB/s figure was measured",
+    "You can consume output in 128-byte blocks, or wrap it in your own buffered next() function",
+    "You want a CC0 source-drop with no dependencies and need PractRand quality (the author reports passing 32 TiB, plus BigCrush)"
+  ],
+  "when_not_to_use": [
+    "Any security use: the README says not to use it for cryptography and points to ChaCha20",
+    "Code that needs one value at a time with low latency or a std::uniform_random_bit_generator engine: you must write the buffering layer yourself",
+    "ARM: the author's Graviton figure is 8.78 GB/s, and GCC's NEON codegen is slow enough that the header falls back to scalar unless the compiler is Clang",
+    "You need jump-ahead, independent substreams with guarantees, or reproducible streams across versions: none of these is documented",
+    "Projects that need a maintained dependency: last commit August 2023, and a request for a shared-library build (issue #10) is still open"
+  ],
+  "integration": {
+    "form": "source-drop (C header shishua.h plus per-ISA headers shishua-avx2.h / -sse2.h / -neon.h)",
+    "dependencies": "none (libc, plus <immintrin.h>/<arm_neon.h> for the SIMD paths)",
+    "min_toolchain": "C99 compiler with AVX2 intrinsics for the fast path (the Makefile builds the AVX2 variant with -mavx2 -mtune=haswell); exact minimum not documented",
+    "platforms": "x86-64 (AVX2 fast path, SSE2/SSSE3 fallback), aarch64/ARMv7 NEON (auto-selected only with Clang), portable scalar fallback elsewhere; RISC-V vector support requested (issue #9) but not implemented",
+    "thread_safety": "not documented; state is a plain struct with no globals besides a const seed table, so one prng_state per thread is the safe pattern",
+    "drop_in_for_baseline": "partial: it replaces bulk xoshiro256+/wyrand output, but the API is buffer-fill (prng_gen) rather than next(), and the output stream differs from those generators"
+  },
+  "gotchas": [
+    "prng_gen asserts that size % 128 == 0, and the AVX2 path stores 32-byte chunks without alignment requirements (storeu). Tail handling is a TODO in the source.",
+    "prng_init is defined in the header as a non-static, non-inline function, so including shishua.h in more than one translation unit causes duplicate-symbol link errors. Wrap it in one .c file.",
+    "The SIMD, scalar and NEON paths are meant to produce the same bytes (the Makefile has per-target test vectors), but endianness handling is explicit only in the scalar path. Check on big-endian targets.",
+    "README footnote 1 says 'cycles per byte' but the table shows GB/s, and the raw Intel file has xoshiro256+ at 7.99 GB/s while the README says 7.88."
+  ],
+  "pick_this_over_siblings_when": "Pick SHISHUA over xoshiro8x256pp, Xoshiro256PlusSIMD or SIMDxorshift when you want the highest bulk throughput and better PractRand results than xoshiro256+-style generators (the author's table: xoshiro256+x8 fails at 1 KiB, SHISHUA passes 32 TiB). Pick simdpcg instead when you need a stream identical to the reference PCG32, and testingRNG's aesctr or Randen when you want an AES-based construction.",
+  "verified_claims_summary": "The author's benchmark-perf script ran on a GCP N2 KVM guest reporting 'Intel(R) Xeon(R) CPU' family 6 model 85 at 2.8 GHz, built with -O3 -march=native and an unstated compiler. It measured SHISHUA at 0.0527 cycles/byte (52.93 GB/s) against xoshiro256+ at 7.99 GB/s in the raw file (7.88 in the README), RomuTrio 8.62, wyrand 7.00, ChaCha8 6.28 and an 8-way vectorized xoshiro256+ at 40.18 GB/s. These are first-party numbers and were not compared with std::mt19937.",
+  "status_note": "Stale (last commit August 2023, 4 open issues) but CC0 and a few hundred lines of header code, so it is easy to vendor; Rust, Node.js and Python ports exist.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/espadrine/shishua/HEAD/README.md",
+    "https://raw.githubusercontent.com/espadrine/shishua/HEAD/shishua.h",
+    "https://raw.githubusercontent.com/espadrine/shishua/HEAD/shishua-avx2.h",
+    "https://raw.githubusercontent.com/espadrine/shishua/HEAD/shishua-neon.h",
+    "https://raw.githubusercontent.com/espadrine/shishua/HEAD/shishua-sse2.h",
+    "https://raw.githubusercontent.com/espadrine/shishua/HEAD/prng.c",
+    "https://raw.githubusercontent.com/espadrine/shishua/HEAD/Makefile",
+    "https://raw.githubusercontent.com/espadrine/shishua/HEAD/test/benchmark-perf-intel",
+    "https://github.com/espadrine/shishua/issues",
+    "https://espadrine.github.io/blog/posts/shishua-the-fastest-prng-in-the-world.html"
+  ],
+  "confidence": 0.85
+}
