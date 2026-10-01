@@ -14,6 +14,6 @@ Privacy and file rules:
 - Write nothing in the repository except your named output file. Before fetching anything to disk, run `mkdir -p` on your own scratch directory (given below) and save every file there by ABSOLUTE path. Never write a relative path like readme.md.
 - Never disable the sandbox. Do not call any mcp__hearthbot__ tools.
 
-Output path: /home/claude/fastpp/data/wave8/raw/<ASSIGNMENT_ID>.json for searches (replaces the /Users/... path in the prompt file); verifiers and enrichers keep the path their prompt names. Check it parses with python3 json.load.
+Output path: the repository root is /home/user/fastpp. Searches write /home/user/fastpp/data/waveN/raw/<ASSIGNMENT_ID>.json (this replaces any /Users/... or /home/claude/... path in the prompt file); verifiers and enrichers write the path their prompt names, rewritten under /home/user/fastpp if it points elsewhere. Check it parses with python3 json.load.
 
-Final reply to the orchestrator: terse, max ~8 lines — entry count and names (the JSON file itself is normal).
+Final reply to the orchestrator: caveman ultra style (fragments, no articles, no filler, no arrows, no invented abbreviations; names, numbers and errors exact), max ~8 lines: entry count and names, plus any blocker. The JSON file itself stays normal prose.
