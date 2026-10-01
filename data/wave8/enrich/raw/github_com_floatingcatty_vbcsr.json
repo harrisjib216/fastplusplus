@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/floatingcatty/vbcsr",
+  "one_liner": "MPI-distributed variable-block CSR matrix library (C++ core, Python API); README claims about 4.2-4.5x over SciPy CSR.",
+  "what_it_does": "Stores a sparse matrix as dense blocks of varying size (one block per atom pair or per multi-DOF node) and distributes block rows across MPI ranks, with ghost exchange done in assemble() and in each product. The main interface is Python (pybind11): A @ x for SpMV, A @ X for sparse times dense multivector, A.spmm(B, threshold) for sparse-sparse products that drop blocks below a Frobenius-norm threshold, plus add, scale, transpose and conjugate. It implements scipy.sparse.linalg.LinearOperator so SciPy's cg/gmres accept it, and converts from SciPy CSR/BSR, but it is not a scipy.sparse matrix type.",
+  "how_it_is_fast": "Blocks are stored as contiguous row-major dense tiles grouped by shape, so each block product is a small dense GEMV or GEMM rather than scalar CSR gathers. Hand-written AVX2+FMA micro-kernels (3-row output tiles, broadcast A, shared X loads, k-unrolled by 2) handle double and complex<double>; multivectors are padded so every SIMD chunk stays full; and row ranges run in OpenMP parallel-for loops with NUMA-local first-touch zeroing. BLAS (MKL or OpenBLAS, batched strided GEMM/GEMV when available) and an optional MKL or AOCL sparse backend cover other paths.",
+  "when_to_use": [
+    "Localized-orbital (tight-binding, LCAO) Hamiltonians and overlap matrices where each atom pair gives a dense block of 4-20 orbitals",
+    "Linear-scaling electronic-structure loops (McWeeny purification, KPM density of states, Chebyshev time propagation) that need thresholded sparse-sparse products to keep fill-in down",
+    "Multi-DOF PDE or FEM systems with variable unknowns per node that SciPy BSR cannot represent (BSR needs one fixed block size)",
+    "Python workflows that outgrow single-threaded scipy.sparse and need MPI distribution without leaving NumPy/SciPy solvers",
+    "Real float64 or complex128 data on x86-64 Linux with AVX2"
+  ],
+  "when_not_to_use": [
+    "Unstructured scalar sparsity (graphs, circuit matrices): the block format brings nothing there and the README only measures block-structured random matrices",
+    "float32 or integer data: only float64 and complex128 are supported, and only double and complex<double> get AVX2 kernels",
+    "Closed-source or proprietary products: AGPL-3.0 copyleft also covers network use",
+    "Production code that needs a stable API: 1 star, version 0.2.2, and the source is mid-way through a documented row-major migration that removed whole kernel families",
+    "Comparisons against a tuned multithreaded library: the published table is against SciPy, and the MKL comparison the driver can run is not published"
+  ],
+  "integration": {
+    "form": "header-only C++ core (vbcsr/core/*.hpp) built into a pybind11 Python extension; pip package vbcsr",
+    "dependencies": "MPI (C and C++), OpenMP, BLAS/LAPACK (MKL or OpenBLAS); optional ParMETIS/METIS (Hilbert-curve fallback), optional MKL sparse or AOCL-sparse; Python side needs numpy, scipy, ase, optional mpi4py",
+    "min_toolchain": "C++17, CMake 3.15+, Python 3.8+ (scikit-build-core 0.8+, pybind11)",
+    "platforms": "Linux x86-64 (PyPI classifier POSIX Linux; wheels built for AVX2 with a scalar fallback); macOS builds need libomp per the install guide; no GPU",
+    "thread_safety": "not documented; operations parallelize internally with OpenMP and are MPI-collective, so concurrent calls on one matrix should be avoided",
+    "drop_in_for_baseline": "partial: implements SciPy's LinearOperator interface and converts from SciPy CSR/BSR, but it is its own matrix class with a distributed graph, explicit add_block/assemble, and to_scipy()/to_dense() that export only the local rank's part"
+  },
+  "gotchas": [
+    "The default CMake build uses -march=native (VBCSR_ARCH=native); the CMake comments warn that without a Release build conda's -march=nocona flags silently compile out the AVX2 kernels, and native builds are not portable across CPUs",
+    "Kernels use omp_get_max_threads() and the benchmark driver never sets the thread count, while SciPy's CSR dot is single-threaded, so the README's 4.2-4.5x may be threads rather than format; benchmark_large_scale.py does pin MKL to its max threads for the separate sparse_dot_mkl comparison",
+    "The README's clone URL is the placeholder github.com/yourusername/vbcsr, and the repository now displays as DeepElectron/vbcsr (same 211 commits, 1 star), so github.com/floatingCatty/vbcsr appears to redirect",
+    "save_matrix_market() raises on distributed matrices, and NumPy arrays passed to from_numpy or mult are always the calling rank's local slice"
+  ],
+  "pick_this_over_siblings_when": "Pick VBCSR over sparse_dot_topn (also measured against SciPy) when the matrix has natural dense blocks of varying size and you need MPI distribution or norm-thresholded block SpGEMM; sparse_dot_topn is the better fit for scalar CSR products with top-n pruning. For C++ SpMV on scalar CSR matrices, SPC5 or the merge-based and CSR5 kernels are measured against MKL, which VBCSR's public numbers are not.",
+  "verified_claims_summary": "First-party README table: on random block-sparse matrices of 500 to 20,000 blocks (about 9,000 to 360,000 rows), VBCSR takes 0.0049 s vs SciPy CSR's 0.0209 s (4.21x) up to 0.1866 s vs 0.8377 s (4.49x). The README does not name the operation (the driver's default mode is SpMV), the CPU, compiler, flags or OpenMP thread count, and the current report script no longer reproduces the 20,000-block range.",
+  "status_note": "Very active (211 commits, last 2026-09-28, an ongoing row-major refactor) but a one-author, 1-star, AGPL-3.0 project at version 0.2.2; fine for research codes in electronic structure, risky as a dependency elsewhere.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/floatingCatty/vbcsr/HEAD/README.md",
+    "https://github.com/floatingCatty/vbcsr",
+    "https://github.com/DeepElectron/vbcsr",
+    "https://raw.githubusercontent.com/floatingCatty/vbcsr/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/floatingCatty/vbcsr/HEAD/pyproject.toml",
+    "https://raw.githubusercontent.com/floatingCatty/vbcsr/HEAD/doc/advanced_installation.md",
+    "https://raw.githubusercontent.com/floatingCatty/vbcsr/HEAD/doc/user_guide.md",
+    "https://raw.githubusercontent.com/floatingCatty/vbcsr/HEAD/doc/api_reference.md",
+    "https://raw.githubusercontent.com/floatingCatty/vbcsr/HEAD/generate_benchmark_report.py",
+    "https://raw.githubusercontent.com/floatingCatty/vbcsr/HEAD/tests/benchmark_large_scale.py",
+    "https://github.com/floatingCatty/vbcsr/tree/main/vbcsr/core",
+    "https://github.com/floatingCatty/vbcsr/tree/main/vbcsr/core/detail",
+    "https://github.com/floatingCatty/vbcsr/tree/main/vbcsr/core/detail/kernels",
+    "https://raw.githubusercontent.com/DeepElectron/vbcsr/HEAD/vbcsr/core/detail/kernels/vbcsr_apply.hpp",
+    "https://raw.githubusercontent.com/DeepElectron/vbcsr/HEAD/vbcsr/core/detail/kernels/rowmajor_kernels.hpp",
+    "https://raw.githubusercontent.com/DeepElectron/vbcsr/HEAD/vbcsr/core/detail/kernels/dense_kernels.hpp",
+    "https://raw.githubusercontent.com/DeepElectron/vbcsr/HEAD/vbcsr/core/detail/kernels/csr_apply.hpp",
+    "https://github.com/DeepElectron/vbcsr/issues?q=is%3Aissue"
+  ],
+  "confidence": 0.65
+}

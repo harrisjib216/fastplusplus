@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/superscientificsoftwarelaboratory/pangulu",
+  "one_liner": "Distributed MPI+CUDA sparse LU direct solver using regular 2D sparse blocks; reports up to 11.7-18x over SuperLU_DIST on 128 GPUs.",
+  "what_it_does": "Solves square sparse systems Ax = b by LU factorization on CPU or multi-GPU clusters. The C API has five calls: pangulu_init (rank 0 passes the whole CSC matrix and the library reorders and distributes it), pangulu_gstrf (factor), pangulu_gstrs (solve one right-hand side in place, repeatable), pangulu_gssv (both) and pangulu_finalize. It is not a drop-in for SuperLU_DIST: inputs, options and the process-grid setup differ, and the value type (real or complex, single or double) is fixed at compile time by a -DCALCULATE_TYPE_* flag.",
+  "how_it_is_fast": "Instead of supernodal or multifrontal layouts, the matrix is cut into equal nb x nb blocks that stay sparse, which avoids the extra fill a dense supernode stores, and the blocks are mapped 2D block-cyclically over a p x q process grid. Each block task (GETRF, TSTRF, GESSM, SSSSM) adaptively picks a sparse or dense BLAS kernel on CPU or GPU, and a synchronisation-free communication scheme lets ranks start tasks as soon as their inputs arrive instead of waiting at level barriers. Version 5.0 adds a task aggregator for numeric factorization and a smaller GPU memory layout.",
+  "when_to_use": [
+    "Large unsymmetric sparse systems whose factors outgrow one node, on an MPI cluster with one NVIDIA GPU per rank, where you would otherwise run SuperLU_DIST",
+    "Matrices whose factors are still fairly sparse inside blocks, so sparse block kernels beat SuperLU_DIST's dense supernodal kernels (an independent 2025 study on one A100 found PanguLU about 2.2x faster than SuperLU_DIST in numeric factorization, geometric mean, derived from its abstract)",
+    "Many right-hand sides with a fixed matrix: factor once with pangulu_gstrf, then call pangulu_gstrs repeatedly",
+    "Complex-valued or single-precision systems on GPUs (all four value types are supported, chosen at build time)"
+  ],
+  "when_not_to_use": [
+    "Ill-conditioned or hard-to-pivot matrices: numeric factorization does no partial pivoting and silently replaces pivots smaller than 1e-16 with 1e-16, MC64 static pivoting is optional and unavailable for complex values, and there is no iterative refinement; open issue #5 (2025, unanswered) reports relative residuals around 10 for some matrices and kernels",
+    "Single-GPU use where newer solvers exist: Caracal (SC25) reports up to 94x over PanguLU on one A100, and the structure-aware irregular blocking paper reports 1.50x over PanguLU",
+    "Reproducing the paper's numbers out of the box: closed issue #2 measured 2-10x slower factorization than the paper on one A100 40GB (cage12: 578.7 s numeric, 7.3 GFLOP/s) with no maintainer explanation",
+    "Proprietary or SaaS products that cannot accept AGPL-3.0, which also covers network use",
+    "AMD GPUs with the current code: the SC'23 paper ran on MI50, but the repo ships only CPU and CUDA platform backends"
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "MPI (tested MPICH 4.3.0), OpenMP, BLAS for CPU kernels (tested OpenBLAS 0.3.26), CUDA for GPU (tested 12.9), optional METIS (32-bit index build); MC64 is built in",
+    "min_toolchain": "C compiler with OpenMP (gcc), mpicc, nvcc and GNU make; you edit make.inc and examples/Makefile by hand (it builds both libpangulu.a and libpangulu.so)",
+    "platforms": "Linux clusters, x86-64 CPU-only or NVIDIA GPU; make.inc defaults to -gencode arch=compute_61 (Pascal), so edit it for newer GPUs such as the A100 (sm_80)",
+    "thread_safety": "not documented; the library keeps some settings in global variables and the example initialises MPI with MPI_THREAD_MULTIPLE, so treat one solver per process at a time as the safe pattern",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "On errors such as a null options pointer, nb = 0 or a value-type mismatch, the library calls exit(1) inside the solver rather than returning a status",
+    "The process grid is p x q, where p is the largest divisor of the rank count at or below its square root, so a prime number of ranks gives a 1 x P grid",
+    "Missing structural diagonal entries are filled with 1e-8 before factoring, which perturbs the matrix you passed in",
+    "Block size nb strongly affects speed and must be tuned per matrix (the example uses -nb 10 on a toy matrix; init falls back to 256 only when nb is negative)"
+  ],
+  "pick_this_over_siblings_when": "Pick PanguLU over CKTSO, GSS or RSLAB when you need a distributed, multi-node GPU LU and SuperLU_DIST is your reference. For single-node circuit matrices CKTSO targets KLU-class workloads, and for SPD systems a Cholesky solver such as BaSpaCho or the task-based CHOLMOD is the better fit.",
+  "verified_claims_summary": "Per the SC'23 paper's abstract (paper body not opened, so matrices, SuperLU_DIST version and flags are unknown), PanguLU reached up to 11.70x over SuperLU_DIST on 128 NVIDIA A100s and up to 17.97x on 128 AMD MI50s, and scaled 47.51x and 74.84x over one GPU. These are best-case maxima from the 2023 code, not typical ratios. An independent 2025 paper (Hu et al.) implies about 2.2x over SuperLU_DIST on one A100 (derived from the 1.50x and 3.32x geometric means in its abstract).",
+  "status_note": "Active research code (v5.0.0, latest commit 2026-06-25, 38 commits, 51 stars), but AGPL-3.0, with an unanswered accuracy report (issue #5) and an unanswered performance-gap report (issue #2), so validate residuals on your own matrices before adopting it.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/PanguLU/HEAD/README.md",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/PanguLU/HEAD/include/pangulu.h",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/PanguLU/HEAD/include/pangulu_interface_common.h",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/PanguLU/HEAD/make.inc",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/PanguLU/HEAD/build_list.csv",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/PanguLU/HEAD/Makefile",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/PanguLU/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/PanguLU/HEAD/examples/example.c",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/PanguLU/HEAD/src/pangulu.c",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/PanguLU/HEAD/src/pangulu_common.h",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/PanguLU/HEAD/src/pangulu_numeric.c",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/PanguLU/HEAD/src/pangulu_reordering.c",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/PanguLU/HEAD/src/platforms/01_SHAREDMEM/00_CPU/000_CPU/pangulu_platform_0100000.c",
+    "https://github.com/SuperScientificSoftwareLaboratory/PanguLU",
+    "https://github.com/SuperScientificSoftwareLaboratory/PanguLU/tree/main/src",
+    "https://github.com/SuperScientificSoftwareLaboratory/PanguLU/tree/main/src/platforms",
+    "https://github.com/SuperScientificSoftwareLaboratory/PanguLU/tree/main/src/platforms/01_SHAREDMEM/00_CPU/000_CPU",
+    "https://github.com/SuperScientificSoftwareLaboratory/PanguLU/issues?q=is%3Aissue",
+    "https://github.com/SuperScientificSoftwareLaboratory/PanguLU/issues/2",
+    "https://github.com/SuperScientificSoftwareLaboratory/PanguLU/issues/4",
+    "https://github.com/SuperScientificSoftwareLaboratory/PanguLU/issues/5",
+    "https://arxiv.org/abs/2512.04389 (EGRESS_BLOCKED; abstract read from WebSearch snippets)",
+    "https://dl.acm.org/doi/10.1145/3581784.3607050 (not opened; abstract via WebSearch snippet)",
+    "https://dl.acm.org/doi/full/10.1145/3712285.3759792 (Caracal, not opened; abstract via WebSearch snippet)"
+  ],
+  "confidence": 0.7
+}

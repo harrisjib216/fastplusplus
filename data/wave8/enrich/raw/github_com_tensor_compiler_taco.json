@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/tensor-compiler/taco",
+  "one_liner": "Compiler that generates fused C/CUDA kernels for any sparse/dense tensor expression; matches Eigen and MKL, beats uBLAS, Gmm++ and MATLAB Tensor Toolbox.",
+  "what_it_does": "You declare tensors with a per-dimension format (dense or compressed, in any dimension order, e.g. CSR = {Dense,Sparse}, CSF = {Sparse,Sparse,Sparse}), write an index-notation expression such as A(i,j) = B(i,j,k) * c(k), and taco generates, compiles and runs a kernel specialised to that expression and those formats. It works as a C++ library (Tensor<T>, insert/pack, compile/assemble/compute), as a Python API (pytaco), or as a command-line code generator that emits standalone C (or CUDA) functions you can paste into your own project. It is not a drop-in for Eigen or MKL: you write tensor-algebra expressions, not calls to a fixed SpMV/SpGEMM API.",
+  "how_it_is_fast": "The OOPSLA 2017 paper combines three ideas: per-dimension storage formats, iteration graphs that order the loop nest to follow each operand's storage tree, and merge lattices that generalise the two-way sparse merge loop so co-iteration over several sparse operands runs as specialised while-loops that drop exhausted operands. Compound expressions (e.g. y = alpha A^T x + beta z, or SDDMM) become one fused loop nest with no temporaries, which is where it beats Eigen, uBLAS and Gmm++. At HEAD a scheduling language (split, divide, reorder, fuse, pos, precompute into a workspace, parallelize with output-race strategies, unroll) lets you tile, add workspaces and target OpenMP or CUDA; generated C is compiled with -O3 -ffast-math by default.",
+  "when_to_use": [
+    "Compound or unusual sparse kernels (SDDMM, A^T x residuals, B + C + D, sparse tensor contractions) that no fixed library API offers as one fused call",
+    "Sparse 3rd-order and higher tensor kernels (TTV, TTM, MTTKRP, inner products) in CSF or mixed formats, where the MATLAB Tensor Toolbox was 9x to 1856x slower in the paper",
+    "Generating a standalone C or CUDA kernel offline with the taco CLI (e.g. -f=B:ds for CSR SpMV) and vendoring the emitted code with no runtime dependency",
+    "Exploring format choices (CSR vs DCSR vs blocked vs dense) for a kernel before hand-tuning it",
+    "Research prototypes that need a correct-by-construction baseline for new sparse formats or schedules"
+  ],
+  "when_not_to_use": [
+    "Plain SpMV, where it only matches Eigen and MKL (MKL was slightly faster on rma10 and cant in the paper) and tuned register-blocked OSKI beat it in almost all blocked cases",
+    "MTTKRP on large tensors where SPLATT is available: SPLATT was up to about 1.5x faster on NELL-1 and NELL-2 in the paper",
+    "Sparse outputs of products (A*B, A^T*A, A*B*C): the umbrella bug issue #297 (open since 2020) says taco does not currently generate correct code for such sparse outputs",
+    "Deployments where invoking a C compiler at run time is unacceptable (the library JIT path shells out to cc/nvcc and dlopens the result from a temp dir)",
+    "Projects that need active maintenance: last commit 2025-04-14, 25 open bug-labelled issues including crashes and wrong-result reports"
+  ],
+  "integration": {
+    "form": "shared lib by default (TACO_SHARED_LIBRARY=ON) plus taco CLI; generated kernels can be used as source-drop C/CUDA",
+    "dependencies": "none for the core library; a C compiler at run time for JIT; optional OpenMP (-DOPENMP=ON), CUDA toolkit (-DCUDA=ON, generated CUDA needs compute capability 6.1+), Python 3 with NumPy/SciPy and the pybind11 submodule for pytaco",
+    "min_toolchain": "C++14 (CMake sets -std=c++14), GCC 5.0+ or Clang 3.9+, CMake 3.4+; generated C is C99",
+    "platforms": "CPUs targeted by the host C compiler; build docs cover Linux (Debian/Ubuntu packages), and the JIT relies on system() and dlopen, so Windows is not documented; NVIDIA GPUs via generated CUDA (compute capability 6.1+)",
+    "thread_safety": "not documented; generated kernels can be OpenMP-parallel, and the JIT writes and dlopens libraries in a shared temp directory",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Default JIT flags are -O3 -ffast-math -std=c99 (override with TACO_CFLAGS, compiler with the target's env var, TACO_NVCC/TACO_NVCCFLAGS for CUDA), so results can differ from strict-IEEE Eigen or MKL in the last bits",
+    "Operands whose formats point opposite ways (CSR + CSC, transposes) form a cycle in the iteration graph, which the code generator does not support; convert formats first",
+    "The paper's automatic parallelisation only parallelises outer for-loops with a fully dense output and no scatter; other cases need an explicit parallelize() schedule with an output race strategy",
+    "Open bugs include a heap-buffer-overflow and misaligned access when inserting int values into a dense tensor (#514), a segfault for a kernel with a workspace (#519), and invalid COO pack/unpack code from the CUDA generator (#438)"
+  ],
+  "pick_this_over_siblings_when": "Pick taco over Sympiler when you need arbitrary fused tensor or matrix expressions rather than sparse Cholesky or triangular solves, and over the fixed SpMV kernels (CSR5, merge-spmv, SPC5, CVR) when the operation is not SpMV or the operands are higher-order tensors; for raw SpMV throughput those specialised kernels are the better pick.",
+  "verified_claims_summary": "The peer-reviewed OOPSLA 2017 paper ran serial and 12-thread kernels on a two-socket Xeon E5-2695 v2 with GCC 5.4 (the taco-bench harness builds with -O3 -ffast-math): taco's SpMV matched Eigen within about 0-10% and was close to MKL across six SuiteSparse matrices, fused compound kernels ran up to about 1.4x faster than Eigen, MKL and OSKI on webbase-1M, uBLAS and Gmm++ were 5x to 73,000x slower on some kernels for algorithmic reasons, and SPLATT's MTTKRP was faster on two of three tensors. Overall the result is parity with hand-tuned libraries plus far wider coverage, not a broad speedup.",
+  "status_note": "Stale (last commit 2025-04-14; the paper's taco-bench harness last changed 2017) but MIT-licensed, and kernels emitted by the CLI are plain C that can be vendored without the compiler.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/tensor-compiler/taco/HEAD/README.md",
+    "https://raw.githubusercontent.com/tensor-compiler/taco/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/tensor-compiler/taco/HEAD/src/codegen/module.cpp",
+    "https://github.com/tensor-compiler/taco/tree/master/include/taco/index_notation",
+    "https://raw.githubusercontent.com/tensor-compiler/taco/HEAD/include/taco/index_notation/transformations.h",
+    "https://raw.githubusercontent.com/tensor-compiler/taco/HEAD/include/taco/index_notation/index_notation.h",
+    "https://raw.githubusercontent.com/tensor-compiler/tensor-compiler.github.io/HEAD/files/kjolstad-oopsla17-tensor-compiler.pdf",
+    "https://github.com/tensor-compiler/taco/issues?q=is%3Aissue+is%3Aopen+label%3Abug",
+    "https://github.com/tensor-compiler/taco/issues/297",
+    "https://github.com/tensor-compiler/taco/issues/514"
+  ],
+  "confidence": 0.75
+}

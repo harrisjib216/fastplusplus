@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/sparselinearalgebra/cubool",
+  "one_liner": "CUDA library of sparse Boolean-semiring matrix and vector operations; Boolean SpGEMM runs 1.3-16x faster than CPU SuiteSparse:GraphBLAS.",
+  "what_it_does": "Sparse Boolean (OR/AND semiring) linear algebra on NVIDIA GPUs for graph problems such as transitive closure and regular or context-free path queries. It exposes a GraphBLAS-style C API (cuBool_Initialize, cuBool_Matrix_New/Build, cuBool_MxM with an accumulate hint, cuBool_Matrix_EWiseAdd, Kronecker, transpose, sub-matrix extract, reduce, MxV/VxM) and a Python wrapper, pycubool. It is not a drop-in for GraphBLAS: it has its own handle types and functions, supports only the Boolean semiring, and has no masks or user-defined semirings. If no CUDA device is found, a sequential CPU backend takes over automatically.",
+  "how_it_is_fast": "Matrices are stored as value-less CSR (row offsets plus uint32 column indices only), so a matrix takes (m + nnz) x 4 bytes of GPU memory. Multiplication uses nsparse, a Boolean adaptation of the Nagasaka, Nukada and Matsuoka (ICPP 2017) hash-table SpGEMM, which bins rows by work and keeps memory use low. Element-wise addition uses GPU Merge Path (Green, McColl, Bader) with dynamic load balancing and a two-pass size-then-fill scheme. The baseline is a 4-core CPU, so most of the gap is GPU versus CPU; the paper shows a smaller gain over generic GPU libraries that treat floats as truth values.",
+  "when_to_use": [
+    "Graph reachability, transitive closure, RPQ/CFPQ or parsing algorithms that reduce to repeated Boolean SpGEMM on an NVIDIA GPU",
+    "Web and co-purchase graphs of about 0.4-0.9M rows with 5-8 non-zeros per row (amazon0312, amazon-2008, web-Google), where M*M produces 14-30M non-zeros; there cuBool's mxm beat SuiteSparse by 11-16x and also beat cuSPARSE and CUSP",
+    "Memory-tight GPU work: without stored values cuBool used 165-241 MB on the large mxm cases, against 897-1717 MB for CUSP",
+    "Prototyping in Python (pycubool) on a laptop with the CPU fallback, then running the same code on a CUDA server"
+  ],
+  "when_not_to_use": [
+    "Anything beyond the Boolean semiring (numeric SpGEMM, min-plus, masks, user-defined monoids); use full GraphBLAS (SuiteSparse:GraphBLAS, GraphBLAST, or the authors' successor spla)",
+    "Road-network or very sparse, low-degree matrices: there clBool's mxm was faster, and for element-wise add CUSP and cuSPARSE beat cuBool on every road matrix (roadNet-PA 16.9 ms vs CUSP 11.2 ms)",
+    "Small matrices: on luxembourg_osm (115K rows) mxm was 2.4 ms vs 3.1 ms for SuiteSparse and 1.7 ms for cuSPARSE, and GPU memory never went below about 91 MB while SuiteSparse used 22 MB on wing",
+    "Non-NVIDIA or non-Linux platforms: only Ubuntu 20.04 is tested, and Windows and macOS are still listed as 'coming soon'",
+    "Linear-system solving: despite its category, it has no factorization or iterative solver"
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "CUDA toolkit with Thrust/CUB and the vendored nsparse-um SpGEMM (header-only, under deps/); googletest only for tests; Python 3 for pycubool",
+    "min_toolchain": "C++17 host code, CUDA standard 14, CMake 3.15+, GCC; the README's tested path is CUDA 10.1 with GCC 8 (newer combinations not documented)",
+    "platforms": "Linux x86-64 with an NVIDIA GPU (tested Ubuntu 20.04, GTX 1070); CPU sequential fallback anywhere it builds",
+    "thread_safety": "not documented; the library keeps one process-global backend (a static shared_ptr set in cuBool_Initialize, with no visible locking), so assume one thread drives it",
+    "drop_in_for_baseline": "partial — the GraphBLAS-style C API covers Boolean MxM, MxV, VxM and EWiseAdd/Mult, but the function names and types differ from the GraphBLAS C API, so code written for SuiteSparse:GraphBLAS must be ported"
+  },
+  "gotchas": [
+    "Indices are uint32 (cuBool_Index), so dimensions and nnz must stay below 2^32",
+    "The pycubool PyPI wheel (1.2.0, last upload 2021-06-11) ships a prebuilt .so; open issue #13 (2022, labelled bug) reports that this .so lacks cuBool_Matrix_EWiseMult and that source builds fail with 'limits and CUB' errors on newer toolchains; open issue #14 says pycubool tries to load its own log file as the shared library",
+    "The README advises replacing the system gcc/g++ symlinks with GCC 8 to match CUDA 10; on a modern system, set CC, CXX and CUDAHOSTCXX instead",
+    "cuBool_Finalize fails if objects are still alive unless you initialised with CUBOOL_HINT_RELAXED_FINALIZE (the Python wrapper relies on that hint)"
+  ],
+  "pick_this_over_siblings_when": "Pick cuBool over GraphBLAST or ALP/GraphBLAS when the whole algorithm is Boolean and runs on one NVIDIA GPU, so value-less CSR and a Boolean-specialised SpGEMM pay off. For other semirings or for AMD and Intel GPUs, prefer the same group's spla (OpenCL) or GraphBLAST.",
+  "verified_claims_summary": "The authors' SpBench harness, also used for their IPDPS Workshops 2021 (GrAPL) paper, times only the operation, with data already resident and an average of 10 runs. It compares cuBool on a GTX 1070 with SuiteSparse:GraphBLAS on the host's 4-core i7-6700 (SuiteSparse version and thread count not stated; GCC and CUDA versions not stated). Boolean M*M was 11x faster on amazon0312, 16x on web-Google, 3.7x on roadNet-PA and 1.3x on luxembourg_osm, and M+M^2 addition about 3x faster on web graphs (ratios derived from page data).",
+  "status_note": "MIT-licensed and listed as active (last commit 2025-11-17), but every commit since mid-2021 touches CI, docs or formatting, and the last PyPI release is 1.2.0 from June 2021, so treat it as a finished research library that you may need to patch for current CUDA.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/SparseLinearAlgebra/cuBool/HEAD/README.md",
+    "https://raw.githubusercontent.com/SparseLinearAlgebra/cuBool/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/SparseLinearAlgebra/cuBool/HEAD/cubool/CMakeLists.txt",
+    "https://raw.githubusercontent.com/SparseLinearAlgebra/cuBool/HEAD/cubool/include/cubool/cubool.h",
+    "https://raw.githubusercontent.com/SparseLinearAlgebra/cuBool/HEAD/cubool/sources/cuda/cuda_matrix_multiply.cu",
+    "https://raw.githubusercontent.com/SparseLinearAlgebra/cuBool/HEAD/cubool/sources/core/library.cpp",
+    "https://raw.githubusercontent.com/SparseLinearAlgebra/cuBool/HEAD/deps/nsparse-um/CMakeLists.txt",
+    "https://raw.githubusercontent.com/SparseLinearAlgebra/cuBool/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/EgorOrachyov/SpBench/HEAD/README.md",
+    "https://raw.githubusercontent.com/YaccConstructor/articles/master/2021/GRAPL/Sparse_Boolean_Algebra_on_GPGPU/Sparse_Boolean_Algebra_on_GPGPU.pdf",
+    "https://github.com/SparseLinearAlgebra/cuBool",
+    "https://github.com/SparseLinearAlgebra/cuBool/issues?q=is%3Aissue",
+    "https://github.com/SparseLinearAlgebra/cuBool/issues/13",
+    "https://github.com/SparseLinearAlgebra/cuBool/commits/master",
+    "https://pypi.org/pypi/pycubool/json"
+  ],
+  "confidence": 0.8
+}
