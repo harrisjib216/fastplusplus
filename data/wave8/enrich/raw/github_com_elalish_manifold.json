@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/elalish/manifold",
+  "one_liner": "Apache-2.0 C++ mesh-boolean kernel with guaranteed manifold output; 2.5-6.9x faster than CGAL corefinement on 1.3M-triangle spheres.",
+  "what_it_does": "Manifold does solid modelling on oriented 2-manifold triangle meshes. It offers booleans (operator+, -, ^, Boolean(other, OpType), and BatchBoolean for many operands), OpenSCAD-style constructors (Cube, Sphere, Cylinder, Extrude, Revolve), Hull, an SDF LevelSet mesher and smooth refinement, and it carries arbitrary vertex properties and source IDs through every operation. Meshes go in and out as MeshGL (float) or MeshGL64 (double); importing a non-manifold mesh yields Status() == NotManifold, and Merge() fixes only slightly non-manifold input. It is not a drop-in for CGAL: it has its own mesh type, works in floating point (no exact/rational output) and requires closed manifold input. C, Python (manifold3d) and JS/WASM (manifold-3d) bindings ship in-repo, and the users list includes OpenSCAD, Blender, Godot and trimesh.",
+  "how_it_is_fast": "It follows Julian Smith's dissertation: double-precision geometry with symbolic perturbation (the 'shadow' tests in boolean3.cpp) breaks exact ties, so each topological question is answered once and reused. The output is manifold by construction without the exact-constructions arithmetic that CGAL's robust path pays for. A BVH broad phase (a collider over Morton-sorted face boxes) cuts Smith's O(n^2) triangle-pair test to O(n log n). Boolean operators build a lazy CSG tree that is flattened into batched booleans when the result is requested. With MANIFOLD_PAR=ON the kernels run on TBB parallel for/scan/merge-sort above a 10^4-element threshold and fall back to serial code below it.",
+  "when_to_use": [
+    "Booleans on closed triangle meshes of 10^3 to a few 10^6 triangles where exact-kernel CGAL corefinement takes seconds: a 1.31M-triangle sphere pair union took 3.46 s vs 23.9 s for CGAL in the axiolid harness",
+    "Many chained or many-cutter booleans (Menger sponges, walls with thousands of openings): in axiolid's Menger test CGAL corefinement failed past depth 1, while Manifold finished depth 4 (58,947 cutters) in 25.8 s",
+    "Code-CAD, 3D-printing, game-engine or web tools that need watertight output, a permissive Apache-2.0 licence and Python/JS/WASM bindings",
+    "Pipelines that must carry UVs, normals, colours or material IDs through booleans"
+  ],
+  "when_not_to_use": [
+    "Results that need exact rational coordinates or proven geometric validity: only manifold topology is guaranteed, and the wiki calls geometric validity a goal without a formal proof. CGAL with an exact kernel stays the reference.",
+    "Non-manifold, open or self-overlapping input such as raw scans or STL soups: construction returns NotManifold, and the wiki says self-overlaps within one mesh cannot be removed yet. Repair the input first, or use MeshLib's voxel mode.",
+    "Current master on coincident surfaces with different triangulations: open issue #1857 reports a 584-triangle union going from 0.01 s to 17 s after PR #1790 (RecursiveEdgeSwap churn in RemoveDegenerates). Pin a release and benchmark your own models.",
+    "Maximum boolean speed on large scans when the licence allows it: in MeshLib's own benchmark Manifold was about 3x slower than MeshLib on a 2M-triangle union",
+    "Curved B-rep/NURBS CAD: the boolean works only on flat triangles, so OpenCascade remains the tool for B-rep"
+  ],
+  "integration": {
+    "form": "static lib | shared lib",
+    "dependencies": "none required; optional oneTBB (MANIFOLD_PAR=ON) for parallelism, nanobind (Python), Emscripten (WASM), GTest, Assimp, Tracy. Also packaged via vcpkg, PyPI manifold3d and npm manifold-3d.",
+    "min_toolchain": "C++17, CMake 3.18+; tested with GCC, LLVM/Clang and MSVC",
+    "platforms": "Linux, macOS, Windows (static build recommended; issue #1859 says the Windows ARM64 package is missing in 3.5.4), WebAssembly (serial only; MANIFOLD_PAR under Emscripten is not recommended because of possible memory corruption)",
+    "thread_safety": "Manifold objects behave as immutable values: header comments describe const methods being used concurrently from other threads, with lazy CSG evaluation guarded by a per-node mutex. Internal parallelism comes from TBB only when built with MANIFOLD_PAR=ON.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "MANIFOLD_PAR defaults to OFF, so a plain CMake build is single-threaded; turn on TBB yourself, and avoid MANIFOLD_USE_BUILTIN_TBB next to another TBB copy (the README warns it 'may cause performance issues or crash')",
+    "Booleans are lazy and report errors through Status() (NotManifold, NonFiniteVertex, ResultTooLarge, Cancelled and others), not through exceptions unless MANIFOLD_DEBUG is set, so the cost and any failure surface at GetMeshGL()/Volume()/Status()",
+    "Open issue #1870 (3.5.4, Windows): constructing from small non-manifold MeshGL64 input crashes intermittently with an access violation (0xC0000005), suspected to be an uninitialised or out-of-bounds read during validation. Treat untrusted meshes with care.",
+    "Exporting to STL loses manifoldness on re-import; the README recommends 3MF or glTF with EXT_mesh_manifold. Issue #1706 also reports sliver triangles from booleans on near-coincident inputs."
+  ],
+  "pick_this_over_siblings_when": "Pick Manifold over MeshLib (faster in its vendor's benchmark, but under a non-commercial licence) when you need a permissive, embeddable boolean kernel with guaranteed manifold output and broad language bindings. Pick MeshLib for messy scans if its licence fits, and look at trueform for its wider CGAL-beating mesh ops. HXT, gDel3D and the spatial indexes (nanoflann, rtree.c, KdBoxTree, THST, TG) solve different problems.",
+  "verified_claims_summary": "The third-party axiolid/benchmarks harness (a Rust driver over a C++ shim) times Manifold v3.5.1 against CGAL Polygon_mesh_processing corefine_and_compute_* with the Exact_predicates_exact_constructions_kernel on two overlapping icospheres. At 1,310,720 triangles per operand: union 3,462.5 vs 23,922.9 ms, intersection 2,248.7 vs 5,602.2 ms, A-B 2,816.2 vs 13,368.2 ms (2.5-6.9x, derived from page data); results are checked by the volume identity |A u B| + |A n B| = |A| + |B|. The timed call includes building each library's mesh and computing the volume, on a '20-core host' with the compiler unstated and best of 1 rep. Manifold was built with default CMake flags, which leave MANIFOLD_PAR off, so it most likely ran single-threaded.",
+  "status_note": "Very active (about 2.3k stars, 3.5.x releases, used by OpenSCAD and Blender) and copyable under Apache-2.0. The CUDA/GPU backend cited in older material is gone; TBB is now the only parallel backend.",
+  "sources_read": [
+    "https://github.com/elalish/manifold",
+    "https://raw.githubusercontent.com/elalish/manifold/HEAD/README.md",
+    "https://raw.githubusercontent.com/elalish/manifold/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/elalish/manifold/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/elalish/manifold/HEAD/include/manifold/manifold.h",
+    "https://raw.githubusercontent.com/elalish/manifold/HEAD/include/manifold/common.h",
+    "https://raw.githubusercontent.com/elalish/manifold/HEAD/src/parallel.h",
+    "https://raw.githubusercontent.com/elalish/manifold/HEAD/src/impl.h",
+    "https://raw.githubusercontent.com/elalish/manifold/HEAD/src/boolean3.cpp",
+    "https://raw.githubusercontent.com/elalish/manifold/HEAD/src/boolean_result.cpp",
+    "https://github.com/elalish/manifold/wiki/Manifold-Library",
+    "https://github.com/elalish/manifold/issues?q=is%3Aissue+is%3Aopen",
+    "https://github.com/elalish/manifold/issues?q=is%3Aissue+is%3Aopen+label%3Abug",
+    "https://github.com/elalish/manifold/issues/1857",
+    "https://github.com/elalish/manifold/issues/1870",
+    "https://github.com/elalish/manifold/releases",
+    "https://raw.githubusercontent.com/axiolid/benchmarks/HEAD/README.md",
+    "https://raw.githubusercontent.com/axiolid/benchmarks/HEAD/cpp/shim.cpp"
+  ],
+  "confidence": 0.75
+}

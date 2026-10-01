@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/xrq-phys/blis",
+  "one_liner": "Research BLIS fork whose DGEMM fuses packing into the first compute pass; paper plots show it ahead of OpenBLAS/ArmPL on medium sizes.",
+  "what_it_does": "A fork of BLIS (based on the 0.9.0 line) whose default branch, gemmfip, adds a gemm sandbox that replaces BLIS's conventional gemm code path when built with ./configure -s gemmfip (--enable-sandbox=gemmfip). The goal is one GEMM code path that is fast for both small/skinny and large matrices, instead of BLIS's separate gemmsup (small) and packed (large) paths. Only double precision is handled; other datatypes, and operands where neither A is column-stored nor B row-stored, fall back to the stock BLIS paths. The API is unchanged BLIS (typed, object and BLAS-compatibility layers), so it is used by relinking rather than code changes.",
+  "how_it_is_fast": "Fused-in packing (FIP): the GEMMSUP-style millikernel reads A and B directly from the caller's unpacked memory and, while computing the first micro-tile pass, writes the panels it touched into BLIS's packing buffers, so later passes over the same block reuse packed data without a separate memcpy-like packing stage. Whether A and B are packed at all is decided by size thresholds (BLIS_MT/NT/KT block sizes), so small problems never pay for packing and large ones still get contiguous, prefetch-friendly panels. Kernels are hand-written inline assembly: a 6x8 AVX2/FMA millikernel (reusing BLIS's Haswell 6x8 microkernel for fully packed large-k cases) and 8x6 NEON millikernels for ARMv8-A with explicit prefetch; small-m problems are transposed into small-n ones.",
+  "when_to_use": [
+    "Single-threaded DGEMM at medium sizes (roughly m=n=k 100-400) where neither the small-matrix nor the large-matrix path of a stock BLAS is at its best",
+    "AWS Graviton 2/3 or other ARMv8-A NEON servers where the paper reports it ahead of ArmPL and OpenBLAS in single-core DGEMM",
+    "AMD Epyc (Zen 2 class) single-core DGEMM, where the paper reports it beating OpenBLAS and conventional BLIS and matching AMD's BLIS/AOCL",
+    "Research or prototyping of fused packing / unified small-large GEMM strategies inside the BLIS framework"
+  ],
+  "when_not_to_use": [
+    "Single precision, complex, or mixed-datatype GEMM: the sandbox handles only dgemm and falls back to stock BLIS for everything else",
+    "Multithreaded GEMM: only the JR loop is parallelised; threads assigned to the JC/PC/IC/packing loops return immediately and the master thread does their work (source comment: 'Limited threading capability')",
+    "Intel Xeon with MKL available: the paper reports MKL ahead of it on the Xeon E5-2690",
+    "Production use: research fork with 1 star, no releases, last commit 2023-04-26, based on pre-1.0 BLIS; the gemmfip sandbox does not appear in upstream flame/blis's sandbox directory",
+    "General-stride operands (neither A column-stored nor B row-stored): the fused path is skipped and stock BLIS runs"
+  ],
+  "integration": {
+    "form": "static lib or shared lib (a BLIS build with the gemmfip sandbox compiled in)",
+    "dependencies": "none beyond a C99 compiler and BLIS's configure/make build; optional OpenMP/pthreads for threading",
+    "min_toolchain": "C99 with GNU extensions (sandbox uses typeof and GNU inline asm), i.e. GCC or Clang; paper used GCC 10.2/11.3, Clang 14 and Apple Clang 14",
+    "platforms": "x86-64 with AVX2+FMA (Haswell kernel set) and AArch64 NEON (ARMv8-A kernels, incl. Apple M-series and Graviton); other ISAs get a plain-C reference millikernel",
+    "thread_safety": "Not documented for the sandbox; inherits BLIS's reentrant design, but intra-GEMM threading is JR-loop only",
+    "drop_in_for_baseline": "partial — exposes the full BLIS/BLAS API so dgemm_ users can relink, but only dgemm takes the new path and it is a source build of a research fork, not a packaged library"
+  },
+  "gotchas": [
+    "GEMMFIP is off unless you configure with -s gemmfip; the README is the stock BLIS README and never mentions the sandbox (only sandbox/gemmfip/README.md does)",
+    "Setting BLIS_JC_NT/BLIS_IC_NT (or letting BLIS auto-factor threads into those loops) wastes threads: non-master workers in those loops exit and the master computes their share",
+    "Source reading: the x86 edge kernels for n=7 and n=3 load a full 8- or 4-wide row of unpacked B, reading one double past the row end (results are masked off, but it can touch memory past the last row of B), and an in-code TODO notes packed-B padding columns are left undefined",
+    "In non-DEBUG builds the millikernel dispatch silently does nothing for an unexpected (pack_a, n) combination instead of failing; correctness depends on caller invariants in bls_dgemm"
+  ],
+  "pick_this_over_siblings_when": "Pick it over BLASFEO or LibShalom when you want a standard BLAS dgemm interface that stays fast across small, medium and large sizes on Arm or AMD rather than a small-matrix specialist; for very small matrices BLASFEO/LibShalom/IAAT report larger gains, and for anything beyond single-thread double precision a maintained BLAS (or Eigen) is the safer choice.",
+  "verified_claims_summary": "The authors' paper (arXiv 2302.08417, later published as 'Towards a Unified Implementation of GEMM in BLIS', ICS '23, pp. 111-121) compares single-core DGEMM against OpenBLAS, AMD BLIS/AOCL, ArmPL and MKL on Xeon E5-2690, Epyc 7R32, Graviton 2/3 and Apple M2 (GCC 10.2/11.3, Clang 14, Apple Clang 14; other flags unstated), and its plots show it beating OpenBLAS and conventional BLIS on Epyc, matching AOCL, leading on Graviton 3, and trailing MKL on Xeon. No numeric ratios are given; I could not open the paper itself in this session (arXiv and ACM blocked) and relied on the verified record plus search-result metadata.",
+  "status_note": "Stale research fork (last commit 2023-04-26, 1 star) under BSD-3-Clause; the sandbox is a few C/asm files that could be ported to current BLIS, but expect to own the maintenance yourself.",
+  "sources_read": [
+    "https://github.com/xrq-phys/blis",
+    "https://github.com/xrq-phys/blis/commits/gemmfip",
+    "https://github.com/xrq-phys/blis/tree/gemmfip/sandbox",
+    "https://github.com/xrq-phys/blis/tree/gemmfip/sandbox/gemmfip",
+    "https://raw.githubusercontent.com/xrq-phys/blis/gemmfip/README.md",
+    "https://raw.githubusercontent.com/xrq-phys/blis/master/README.md",
+    "https://raw.githubusercontent.com/xrq-phys/blis/gemmfip/sandbox/gemmfip/README.md",
+    "https://raw.githubusercontent.com/xrq-phys/blis/gemmfip/sandbox/gemmfip/bli_sandbox.h",
+    "https://raw.githubusercontent.com/xrq-phys/blis/gemmfip/sandbox/gemmfip/bli_gemm_ex.c",
+    "https://raw.githubusercontent.com/xrq-phys/blis/gemmfip/sandbox/gemmfip/bls_dgemm.c",
+    "https://raw.githubusercontent.com/xrq-phys/blis/gemmfip/sandbox/gemmfip/bli_gemmsup2_dref.c",
+    "https://raw.githubusercontent.com/xrq-phys/blis/gemmfip/sandbox/gemmfip/bli_gemmsup2_rv_haswell_asm_d6x8m.c",
+    "https://raw.githubusercontent.com/xrq-phys/blis/gemmfip/sandbox/gemmfip/bli_gemmsup2_rv_haswell_asm_d6x8n.c",
+    "https://raw.githubusercontent.com/xrq-phys/blis/gemmfip/sandbox/gemmfip/bli_gemmsup2_rv_armv8a_asm_d8x6m.c",
+    "https://raw.githubusercontent.com/xrq-phys/blis/gemmfip/sandbox/gemmfip/bli_gemmsup2_cv_armv8a_asm_d8x6m.c",
+    "https://raw.githubusercontent.com/xrq-phys/blis/gemmfip/configure",
+    "https://raw.githubusercontent.com/xrq-phys/blis/gemmfip/CHANGELOG",
+    "https://github.com/flame/blis/tree/master/sandbox"
+  ],
+  "confidence": 0.7
+}

@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/live-clones/gmsh",
+  "one_liner": "Gmsh's HXT module: OpenMP-parallel 3D Delaunay tetrahedralization in C, about 3x faster serially than CGAL, TetGen and Geogram.",
+  "what_it_does": "HXT is a set of C99 modules shipped inside Gmsh under contrib/hxt (core, predicates, tetMesh, tetBR, reparam); tetMesh holds the 3D Delaunay kernel. You fill an HXTMesh with vertex coordinates (4 doubles per vertex, the 4th used as scratch) and call hxtDelaunay(mesh, &options), or hxtDelaunaySteadyVertices() to keep vertex order; HXTDelaunayOptions sets the thread count, reproducibility, bounding box and optional nodal sizes. From Gmsh it is 3D algorithm 10 (Mesh.Algorithm3D=10 or -algo hxt), which gmsh::algorithm::tetrahedralize also uses when that option is set, and the standalone Delaunay_CLI triangulates random or .msh points. It is not a drop-in for CGAL's Delaunay_triangulation_3: the output is a flat tetrahedron/neighbour array, with no handle-based point location or vertex removal API.",
+  "how_it_is_fast": "Points are sorted along a Moore (closed Hilbert) space-filling curve with radix sort and inserted in BRIO rounds by the Bowyer-Watson kernel: walk to the containing tetrahedron, breadth-first search to dig the cavity with Shewchuk's adaptive orient3d/insphere predicates (Devillers-Teillaud symbolic perturbation breaks ties), then refill it, computing the new adjacencies in `omp simd` loops over aligned buffers. For parallelism each OpenMP thread owns a contiguous range of Moore indices. An insertion whose cavity touches a vertex outside the thread's range is deferred to a later round, which re-sorts along a randomly shifted Moore curve and lowers the thread count when the conflict ratio rises. Conflicts are avoided by these partition-ownership checks, not by per-element locks; the README lists Geogram-style point locks only as future work.",
+  "when_to_use": [
+    "Unconstrained 3D Delaunay of 10^6 to 10^9 points on a many-core shared-memory CPU: 10M points in 4.48 s on a 64-core Xeon Phi 7210 vs 20.15 s for CGAL 4.12, and 3 billion tetrahedra in 53 s on a dual-socket EPYC 7551 (paper)",
+    "Volume tetrahedral meshing for FEM inside Gmsh, where Mesh.Algorithm3D=10 parallelises the meshing of a single volume (the default Delaunay algorithm does not)",
+    "GPL-compatible open-source C or C++ codes that want a fast Delaunay kernel and can vendor C99 sources built as CMake object libraries",
+    "Pipelines that need bit-identical meshes across thread counts: reproducible=1 reorders the output deterministically, at extra cost"
+  ],
+  "when_not_to_use": [
+    "Proprietary or closed-source products: HXT is GPL-2.0-or-later, and its exception only covers combining with Gmsh's own code",
+    "Dynamic or specialised triangulations (vertex removal, incremental point location queries, weighted/regular or periodic Delaunay): CGAL has them, while HXT's single-point insertion API is commented out as 'NOT IMPLEMENTED YET'",
+    "More than about 4.29 billion vertices: vertex indices are uint32_t (ghost vertex = UINT32_MAX), and '40+ bits nodes' is still a TODO in the README",
+    "Robustness-first meshing of messy CAD or STL input: the Gmsh manual calls the default 'Delaunay' algorithm the most robust and the only one that makes hybrid meshes with pyramids. Search results list Gmsh tracker issues on HXT crashes in reshapeCavityIfNeeded, failures on discontinuous STL and runaway memory with size fields (not opened)",
+    "An NVIDIA GPU is available and the point set fits in its memory: gDel3D is the GPU alternative"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "OpenMP 4 (optional, with a serial fallback) and libm; tetMesh also needs HXT core, predicates (Shewchuk) and tetBR (TetGen/BR boundary recovery, C++). Full Gmsh optionally adds FLTK and OpenCASCADE.",
+    "min_toolchain": "C99 compiler plus a C++ compiler for tetBR, CMake 3.9+; the README builds with -march=native so that parts of tetMesh auto-vectorise",
+    "platforms": "Any platform with a C99/OpenMP compiler. The paper ran on x86-64 (Core i7-6700HQ, Xeon Phi 7210, EPYC 7551). The standalone HXT CMake turns OpenMP off by default under MSVC, which makes it serial.",
+    "thread_safety": "Internally OpenMP-parallel (delaunayThreads: 0 = omp_get_max_threads, <0 = omp_get_num_procs); calling it concurrently from user threads is not documented",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "An error inside the parallel insertion region calls exit() (the HXT_OMP_CHECK macro in hxt_tetDelaunay.c), so a failure kills the host process instead of returning an HXTStatus",
+    "Licensing trap when extracting HXT from Gmsh: the standalone tetBR copy is TetGen 1.5 code headed 'redistributed for non-commercial use' and is relicensed only for use in Gmsh. The source emits the compile warning 'Using TetgenBR without Gmsh - please note the different licensing terms', and the tetMesh CMake always links tetBR.",
+    "hxtDelaunay reorders mesh->vertices into Moore order, overwrites each vertex's 4th coordinate and deletes vertices it could not insert; use hxtDelaunaySteadyVertices when indices must stay stable. Multithreaded tetrahedron order is nondeterministic unless reproducible=1.",
+    "Gmsh's default 3D algorithm is Delaunay (1), not HXT, so you must set Mesh.Algorithm3D=10 or -algo hxt to get this code path, including through gmsh::algorithm::tetrahedralize"
+  ],
+  "pick_this_over_siblings_when": "Among the catalogued siblings only gDel3D also does 3D Delaunay, and it needs a CUDA GPU (4-10x over serial CGAL 4.2). Pick HXT for many-core CPUs, no NVIDIA GPU, or point sets too large for GPU memory. The other siblings (mesh booleans: Manifold, MeshLib, trueform; spatial indexes: nanoflann, rtree.c, KdBoxTree, THST) solve different problems.",
+  "verified_claims_summary": "The HXT authors' paper (arXiv 1805.08831, published in IJNME 117(9):967-990, 2019 per the HXT README and the Gmsh manual) reports a serial kernel about 3x faster than CGAL, TetGen and Geogram (about 2 s vs about 6 s for 1M random points). In parallel it reports 10M points in 4.48 s vs 20.15 s for CGAL 4.12 on a 64-core Xeon Phi 7210, with CGAL not completing 10^8 points, and 3 billion tetrahedra in 53 s on a dual-socket EPYC 7551. Compiler and flags are not stated, the authors wrote HXT, and CGAL 4.12 (2018) is old.",
+  "status_note": "Gmsh is very active (mirror commits on 2026-09-28; the canonical repo is gitlab.onelab.info), but the HXT Delaunay file changes rarely: its last edits were 2025 warning fixes and a division-by-zero guard. It is GPL-2.0-or-later, so it can only be copied into GPL-compatible code.",
+  "sources_read": [
+    "https://github.com/live-clones/gmsh",
+    "https://github.com/live-clones/gmsh/commits",
+    "https://github.com/live-clones/gmsh/commits/master/contrib/hxt/tetMesh/src/hxt_tetDelaunay.c",
+    "https://raw.githubusercontent.com/live-clones/gmsh/HEAD/README.txt",
+    "https://raw.githubusercontent.com/live-clones/gmsh/HEAD/LICENSE.txt",
+    "https://raw.githubusercontent.com/live-clones/gmsh/HEAD/CREDITS.txt",
+    "https://raw.githubusercontent.com/live-clones/gmsh/HEAD/CHANGELOG.txt",
+    "https://raw.githubusercontent.com/live-clones/gmsh/HEAD/contrib/hxt/README.md",
+    "https://raw.githubusercontent.com/live-clones/gmsh/HEAD/contrib/hxt/LICENSE.txt",
+    "https://raw.githubusercontent.com/live-clones/gmsh/HEAD/contrib/hxt/CMakeLists.txt",
+    "https://raw.githubusercontent.com/live-clones/gmsh/HEAD/contrib/hxt/core/CMakeLists.txt",
+    "https://raw.githubusercontent.com/live-clones/gmsh/HEAD/contrib/hxt/core/include/hxt_omp.h",
+    "https://raw.githubusercontent.com/live-clones/gmsh/HEAD/contrib/hxt/core/include/hxt_mesh.h",
+    "https://raw.githubusercontent.com/live-clones/gmsh/HEAD/contrib/hxt/tetMesh/CMakeLists.txt",
+    "https://raw.githubusercontent.com/live-clones/gmsh/HEAD/contrib/hxt/tetMesh/include/hxt_tetDelaunay.h",
+    "https://raw.githubusercontent.com/live-clones/gmsh/HEAD/contrib/hxt/tetMesh/include/hxt_vertices.h",
+    "https://raw.githubusercontent.com/live-clones/gmsh/HEAD/contrib/hxt/tetMesh/src/hxt_tetDelaunay.c",
+    "https://raw.githubusercontent.com/live-clones/gmsh/HEAD/contrib/hxt/tetMesh/src/hxt_vertices.c",
+    "https://raw.githubusercontent.com/live-clones/gmsh/HEAD/contrib/hxt/tetMesh/exe/Delaunay_CLI.c",
+    "https://raw.githubusercontent.com/live-clones/gmsh/HEAD/contrib/hxt/tetBR/CMakeLists.txt",
+    "https://raw.githubusercontent.com/live-clones/gmsh/HEAD/contrib/hxt/tetBR/src/hxt_boundary_recovery.cxx",
+    "https://raw.githubusercontent.com/live-clones/gmsh/HEAD/contrib/hxt/tetBR/src/tetgenBR.h",
+    "https://raw.githubusercontent.com/live-clones/gmsh/HEAD/src/mesh/tetgenBR.h",
+    "https://raw.githubusercontent.com/live-clones/gmsh/HEAD/src/mesh/meshGRegionHxt.cpp",
+    "https://raw.githubusercontent.com/live-clones/gmsh/HEAD/src/common/gmsh.cpp",
+    "https://raw.githubusercontent.com/live-clones/gmsh/HEAD/api/gmsh.h",
+    "https://raw.githubusercontent.com/live-clones/gmsh/HEAD/doc/texinfo/gmsh.texi",
+    "https://raw.githubusercontent.com/live-clones/gmsh/HEAD/doc/texinfo/opt_mesh.texi"
+  ],
+  "confidence": 0.75
+}

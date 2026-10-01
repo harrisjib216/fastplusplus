@@ -1,0 +1,55 @@
+{
+  "id": "https://github.com/tianyuxbear/matmul-cpu",
+  "one_liner": "Learning-project AVX-512 FP32 GEMM (row-major C += A*B^T) that edges past OpenBLAS at 4096^3 on 24 threads only.",
+  "what_it_does": "A step-by-step series of single-precision GEMM kernels (core_v1 to core_v5) written in C++17 with AVX-512 intrinsics and OpenMP, plus a benchmark driver that compares them with OpenBLAS cblas_sgemm. The fastest kernels compute C = A*B^T + C on row-major float matrices through plain functions such as core::matmul_v5_parallel(const float* A, const float* B, float* C, size_t M, size_t N, size_t K). There is no alpha/beta, no transpose flags and no leading dimensions, so it is not a BLAS interface. The author wrote it as a lighter alternative to linking OpenBLAS in an inference engine (smaller binary, no competing thread pool) and as a study exercise.",
+  "how_it_is_fast": "It applies the Goto/BLIS loop nest: NC/KC/MC cache blocking, packing A into 14-row and B into 32-column zero-padded panels, and a 14x32 register-blocked micro-kernel that broadcasts one A element (_mm512_set1_ps) and issues two _mm512_fmadd_ps per row into 28 ZMM accumulators. Partial tiles use AVX-512 mask loads and stores. The parallel version (v5) uses OpenMP to split packing and the jr loop over micro-panels across a fixed 24 threads, with MC and NC scaled by that thread count.",
+  "when_to_use": [
+    "Studying how an AVX-512 Goto-style SGEMM is built, from naive SIMD through cache blocking to a parallel micro-kernel, with timings for each step",
+    "Large square FP32 GEMMs (about 2560-4352 per side) on a 24-core AVX-512 Xeon similar to the Silver 4310, where the author's own plots show it ahead of OpenBLAS; above about 4600 OpenBLAS's best runs are higher at most sizes",
+    "Prototyping an inference-engine GEMM kernel where B is stored as N x K (weights transposed) and you want to avoid pulling OpenBLAS and its thread pool into the binary, if you can obtain a license from the author"
+  ],
+  "when_not_to_use": [
+    "Any reuse in shipped code: the repository has no LICENSE file, so you have no right to copy it",
+    "Small and medium matrices: in the author's scaling plots core_v5 averages roughly 10 and 40 GFLOPS at 256 and 512 per side (OpenBLAS about 320 and 420) even though its best runs there are comparable, so it is erratic from run to run; OpenBLAS also leads from 768 to about 2300",
+    "Single-threaded use: core_v4 reaches 82.4% of OpenBLAS (110.74 vs 132.88 GFLOPS peak at 4096)",
+    "CPUs without AVX-512, machines that do not have 24 cores, or code that calls GEMM concurrently from several threads",
+    "Anything beyond row-major FP32 C += A*B^T: there is no FP64, no general transposes, strides, alpha or beta"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "OpenMP; OpenBLAS (via xmake add_requires) only for the benchmark wrappers; xmake for the bundled build",
+    "min_toolchain": "C++17 with AVX-512F intrinsics and OpenMP; uses __builtin_expect, so GCC or Clang; compiler and version not documented (xmake default toolchain, -O3 -march=native -fopenmp)",
+    "platforms": "x86-64 with AVX-512F only; tuned for one Intel Xeon Silver 4310 (2 sockets, 24 cores); no AVX2-only or ARM path for the core_v4/v5 kernels",
+    "thread_safety": "Not thread-safe: v4 and v5 keep packing buffers in static globals, and the v5 source comment warns that concurrent calls are unsafe",
+    "drop_in_for_baseline": "false — not a BLAS/CBLAS sgemm signature; only C += A*B^T with fixed row-major, contiguous operands"
+  },
+  "gotchas": [
+    "core_v5 hard-codes NTHREADS = 24 in an omp parallel for num_threads(24) pragma, and its MC/NC blocks scale with it, so it oversubscribes smaller machines and ignores OMP_NUM_THREADS",
+    "core_v5's static packing buffers are about 48 MB (NC*KC = 23040*512 floats for B plus 1680*512 for A), all in .bss, even for tiny matrices",
+    "It accumulates into C (C += A*B^T); callers expecting C = A*B overwrite semantics must zero C first",
+    "The benchmark driver checks correctness only with -v, which the README's benchmark commands do not pass; for partial row tiles the micro-kernel also runs FMAs on accumulator rows it never loaded (results are discarded, but the values are uninitialized)"
+  ],
+  "pick_this_over_siblings_when": "Over salykova's sgemm.c, which it is derived from, pick it when you want an AVX-512, row-major, B-transposed (weights-style) layout to study; sgemm.c is MIT-licensed, while this repo has no license. For production FP32 GEMM, OpenBLAS itself, Eigen or FT-BLAS are safer choices, and BLASFEO or LibShalom fit small matrices better.",
+  "verified_claims_summary": "On a 2-socket Intel Xeon Silver 4310 (24 cores, AVX-512) with -O3 -march=native -fopenmp and an unnamed compiler, the author's README reports core_v5 at 2010.61 peak / 1909.40 average GFLOPS against OpenBLAS's 1914.91 / 1796.69 for 4096^3 FP32 C += A*B^T with 24 threads (about 106%), and core_v4 at 82.4% of single-threaded OpenBLAS. The author's own 256-8960 scaling plots show a clear multi-threaded win only in roughly the 2560-4352 range; elsewhere OpenBLAS is ahead or tied, and the OpenBLAS version is not stated.",
+  "status_note": "Personal learning project (0 stars, 22 commits, last commit 2025-12-28) with no license, so it is reference-only: read it to learn the technique, but do not copy it.",
+  "sources_read": [
+    "https://github.com/tianyuxbear/matmul-cpu",
+    "https://github.com/tianyuxbear/matmul-cpu/commits/master",
+    "https://github.com/tianyuxbear/matmul-cpu/tree/master/src",
+    "https://github.com/tianyuxbear/matmul-cpu/tree/master/src/core",
+    "https://github.com/tianyuxbear/matmul-cpu/tree/master/include",
+    "https://raw.githubusercontent.com/tianyuxbear/matmul-cpu/HEAD/README.md",
+    "https://raw.githubusercontent.com/tianyuxbear/matmul-cpu/HEAD/xmake.lua",
+    "https://raw.githubusercontent.com/tianyuxbear/matmul-cpu/master/include/matmul.hpp",
+    "https://raw.githubusercontent.com/tianyuxbear/matmul-cpu/master/include/utils.hpp",
+    "https://raw.githubusercontent.com/tianyuxbear/matmul-cpu/master/src/main.cpp",
+    "https://raw.githubusercontent.com/tianyuxbear/matmul-cpu/master/src/openblas.cpp",
+    "https://raw.githubusercontent.com/tianyuxbear/matmul-cpu/master/src/utils.cpp",
+    "https://raw.githubusercontent.com/tianyuxbear/matmul-cpu/master/src/core/matmul_v4_cache_opt.cpp",
+    "https://raw.githubusercontent.com/tianyuxbear/matmul-cpu/master/src/core/matmul_v5_parallel.cpp",
+    "https://raw.githubusercontent.com/tianyuxbear/matmul-cpu/master/benchmark.sh",
+    "https://raw.githubusercontent.com/tianyuxbear/images/HEAD/blog/core_blas_comparison_avg.png",
+    "https://raw.githubusercontent.com/tianyuxbear/images/HEAD/blog/core_blas_comparison_peak.png"
+  ],
+  "confidence": 0.8
+}

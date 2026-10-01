@@ -1,0 +1,60 @@
+{
+  "id": "paper:ft-blas",
+  "one_liner": "Research double-precision BLAS for AVX-512 Intel CPUs with built-in soft-error checks; paper reports small wins over OpenBLAS, BLIS, MKL.",
+  "what_it_does": "FT-BLAS is the code behind an ICS '21 paper: hand-written x86 kernels for a subset of BLAS (mostly double precision: level-1 dasum/daxpy/ddot/dnrm2/drot/dscal etc., level-2 dgemv/dger/dtrsv/dsyr/banded and packed routines, level-3 dgemm/dsymm/dtrmm/dtrsm, plus a few single-precision level-1 routines). It exposes CBLAS-named functions (cblas_dgemm, cblas_ddot, ...) through its own cblas.h, and a CMake switch -DUSE_FAULT_TOLERANT=ON swaps every wrapper to a fault-tolerant variant at build time. There is no runtime choice and no LAPACK.",
+  "how_it_is_fast": "The non-FT kernels are Goto-style blocked GEMM (A/B packing into 4 KiB-aligned buffers, KC=384, 24x8 AVX-512 micro-kernel in inline assembly with software prefetch) and unrolled AVX2/AVX-512 assembly loops for level-1/2. For fault tolerance, the paper uses a hybrid scheme: dual modular redundancy (each FMA issued twice into separate registers and compared with vpcmpeqd/vmovmskpd) for memory-bound level-1/2, where the duplicate instructions hide behind memory stalls, and algorithm-based fault tolerance (row/column checksums of A, B and C) for level-3, with the checksum updates fused into the packing routines so they cost almost no extra memory traffic.",
+  "when_to_use": [
+    "Research or evaluation of soft-error-tolerant linear algebra on Intel Skylake-SP / Cascade Lake class CPUs with AVX-512.",
+    "Studying or borrowing a compact, readable AVX-512 DGEMM (Goto blocking + 24x8 assembly micro-kernel) or DMR-in-assembly level-1 kernels as a starting point for your own code, under GPL-3.0 terms.",
+    "Single-node, double-precision, column-major, non-transposed GEMM/DOT/AXPY workloads where you can test that your exact call shapes are supported."
+  ],
+  "when_not_to_use": [
+    "As a production replacement for OpenBLAS, MKL or BLIS: many argument combinations are unimplemented (cblas_dgemm accepts only ColMajor NoTrans/NoTrans; dsymm only Left/Lower; dtrsm and dtrmm only Left/Lower/NoTrans) and the library calls exit(-1) on anything else.",
+    "Code that relies on alpha == 0 semantics: the dgemm, dsymm, dtrmm and dtrsm wrappers return immediately when alpha is 0, leaving C unscaled by beta (or B not zeroed), which violates the BLAS specification.",
+    "Anyone who needs the fault tolerance to actually protect results: in the released DGEMM the checksum comparison and correction code is commented out, and the fault-tolerant DDOT on a detected mismatch only prints a message and returns a truncated (wrong) dot product instead of recomputing.",
+    "Non-AVX-512 CPUs, AMD/ARM machines, complex or most single-precision routines, or multithreaded BLAS: CMake hard-codes -march=skylake-avx512 and the DGEMM/DDOT sources contain no threading.",
+    "Closed-source or permissively licensed products: the code is GPL-3.0."
+  ],
+  "integration": {
+    "form": "static lib (CMake add_library without SHARED; builds libSrcFuncs plus test binaries)",
+    "dependencies": "none beyond libm and libpthread; CMake passes -fopenmp",
+    "min_toolchain": "C++11, CMake 3.17; GCC/Clang-style inline assembly (AT&T syntax) and AVX-512 intrinsics; the paper used icc 19.0 -O3",
+    "platforms": "x86-64 Linux with AVX-512F (Skylake-SP, Cascade Lake or newer Intel); -march=skylake-avx512 is hard-coded",
+    "thread_safety": "not documented; DGEMM allocates its packing buffers per call with aligned_alloc and uses no globals in the code read, but no statement exists",
+    "drop_in_for_baseline": "partial — exports CBLAS names and enums for the supported subset, so simple ColMajor double-precision code can relink against it, but unsupported cases abort the process, alpha==0 handling is wrong, several output pointers are declared const, and its cblas.h clashes with OpenBLAS/MKL headers"
+  },
+  "gotchas": [
+    "Unsupported layout/transpose/side combinations and bad leading dimensions call printf then exit(-1) or exit(-2) from inside the library instead of returning an error code.",
+    "Each DGEMM call allocates about 32 MB of packing buffers (384x1152 and 384x9216 doubles) and frees them on return, which hurts repeated small calls.",
+    "The fault-tolerant DGEMM compares checksums against an absolute threshold of 1e-2 (in commented-out code), which would false-alarm on large-magnitude data and miss small errors if re-enabled.",
+    "The top-level CMake overwrites CMAKE_CXX_FLAGS with CMAKE_C_FLAGS plus its own flags, so CXX flags passed by the user are dropped."
+  ],
+  "pick_this_over_siblings_when": "Pick FT-BLAS only when soft-error tolerance on x86 is the research question, since no catalogued sibling offers it; for plain speed on CPUs, BLASFEO or LibShalom (small matrices) and GEMMFIP or Eigen (general sizes) are complete, maintained and permissively licensed, and CLBlast is the GPU option.",
+  "verified_claims_summary": "The peer-reviewed ICS '21 paper reports FT-BLAS (including its fault-tolerant variants) up to 22.14% faster than OpenBLAS, 21.70% faster than BLIS and 3.50% faster than Intel MKL across routines from all three BLAS levels, built with icc 19.0 -O3 on an Intel Xeon Gold 5122 (Skylake) and a Xeon W-2255 (Cascade Lake), with fault-tolerance overhead under 3% while errors were injected. These are best-case 'up to' figures, and the repository's test programs time only FT-BLAS itself, so the comparison is not reproducible from the repo.",
+  "status_note": "Abandoned research code (last commit 2023-02-28, 7 stars, no releases); GPL-3.0 with an OpenBLAS license file included, usable for study or experiments but not production-ready.",
+  "sources_read": [
+    "https://github.com/yzhaiustc/ftblas",
+    "https://github.com/yzhaiustc/ftblas/commits/main",
+    "https://github.com/yzhaiustc/ftblas/tree/main/src",
+    "https://github.com/yzhaiustc/ftblas/tree/main/licenses",
+    "https://raw.githubusercontent.com/yzhaiustc/ftblas/HEAD/README.md",
+    "https://raw.githubusercontent.com/yzhaiustc/ftblas/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/yzhaiustc/ftblas/HEAD/src/CMakeLists.txt",
+    "https://raw.githubusercontent.com/yzhaiustc/ftblas/HEAD/include/CMakeLists.txt",
+    "https://raw.githubusercontent.com/yzhaiustc/ftblas/HEAD/test/CMakeLists.txt",
+    "https://raw.githubusercontent.com/yzhaiustc/ftblas/HEAD/test/test_dgemm.cpp",
+    "https://raw.githubusercontent.com/yzhaiustc/ftblas/HEAD/test/test_ddot.cpp",
+    "https://raw.githubusercontent.com/yzhaiustc/ftblas/HEAD/include/cblas.h",
+    "https://raw.githubusercontent.com/yzhaiustc/ftblas/HEAD/include/ftblas.h",
+    "https://raw.githubusercontent.com/yzhaiustc/ftblas/HEAD/src/cblas_dgemm.cpp",
+    "https://raw.githubusercontent.com/yzhaiustc/ftblas/HEAD/src/cblas_ddot.cpp",
+    "https://raw.githubusercontent.com/yzhaiustc/ftblas/HEAD/src/cblas_dgemv.cpp",
+    "https://raw.githubusercontent.com/yzhaiustc/ftblas/HEAD/src/cblas_dtrsm.cpp",
+    "https://raw.githubusercontent.com/yzhaiustc/ftblas/HEAD/src/cblas_dsymm.cpp",
+    "https://raw.githubusercontent.com/yzhaiustc/ftblas/HEAD/src/cblas_dtrmm.cpp",
+    "https://raw.githubusercontent.com/yzhaiustc/ftblas/HEAD/src/dgemm_avx512.cpp",
+    "https://raw.githubusercontent.com/yzhaiustc/ftblas/HEAD/src/dgemm_avx512_ft.cpp",
+    "https://raw.githubusercontent.com/yzhaiustc/ftblas/HEAD/src/ddot_avx2_ft.cpp"
+  ],
+  "confidence": 0.75
+}

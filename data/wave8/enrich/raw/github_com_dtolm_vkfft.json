@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/dtolm/vkfft",
+  "one_liner": "Header-only, cross-vendor GPU FFT library; matches cuFFT on smooth lengths and is ~1.5-3x faster on prime/Bluestein lengths.",
+  "what_it_does": "VkFFT computes 1D-ND C2C, R2C/C2R and DCT/DST I-IV transforms in half, single, double and double-double precision on GPUs through one C code base with six backends (Vulkan, CUDA, HIP, OpenCL, Level Zero, Metal). You fill one VkFFTConfiguration struct, call initializeVkFFT to build a forward+inverse plan, VkFFTAppend to record or launch the kernels into your own command buffer, queue or stream, and deleteVkFFT to free everything. It also has fused convolution/cross-correlation and native zero-padding modes. It is not API-compatible with cuFFT, rocFFT or FFTW.",
+  "how_it_is_fast": "At plan time it generates GPU source specialised to the exact length, layout and device (shared-memory size, coalescing width, register file), with constants inlined and loops unrolled, then compiles it with the backend's runtime compiler (NVRTC, HIPRTC, glslang, OpenCL, clang+llvm-spirv). The core is a mixed-radix Stockham autosort FFT with radix 2-13 kernels that keeps whole sequences in shared memory, using the register file as extra storage ('register overutilization') so more sizes fit in a single upload; longer sequences use a Four-Step FFT. Primes from 17 up to the shared-memory limit are done in-kernel with Rader's algorithm (direct-multiplication or FFT-convolution variant), other lengths with Bluestein's algorithm using merged convolution and zero-padding to cut memory passes, which is where it beats cuFFT/rocFFT.",
+  "when_to_use": [
+    "Batched FP64 or FP32 GPU FFTs whose lengths contain primes above 13 or are not smooth: on A100 cuFFT's Bluestein path falls to ~100-180 GB/s above length 2048 while VkFFT stays far higher",
+    "One FFT dependency for Nvidia, AMD, Intel and Apple GPUs (and Raspberry Pi 4) on Windows, Linux and macOS, or for Vulkan/Metal apps that have no cuFFT",
+    "Vulkan or Metal rendering/compute pipelines that want FFT dispatches appended straight into their own command buffer without extra synchronisation",
+    "FFT-based convolution or cross-correlation and zero-padded open-boundary systems: the last FFT pass, kernel multiply and first iFFT pass are fused, and padded zeros are skipped (README: up to 2x faster than padding the array)",
+    "GPU DCT I-IV, or FP64 transforms that need better-than-cuFFT accuracy (FP128-precomputed twiddles) or double-double precision"
+  ],
+  "when_not_to_use": [
+    "Power-of-two or 2-13-smooth lengths on Nvidia/AMD datacenter GPUs: the author's own A100 plot shows parity with cuFFT (~1250-1280 GB/s), so you add a runtime compiler dependency for no speedup",
+    "CPU-side FFTs: GPU only; use FFTW, PocketFFT or pffft",
+    "Programs that create many short-lived plans of different sizes: every initializeVkFFT generates and runtime-compiles kernels unless you cache binaries with saveApplicationToString/loadApplicationFromString (not available on Metal)",
+    "Intel iGPUs via Level Zero, Metal with NSAutoreleasePool, or Y-axis zero-padding on CUDA: open issues report non-deterministic wrong results (#228, v1.2.31-v1.3.4), a double free (#226) and wrong Y-padded results (#206)",
+    "Multi-GPU split transforms: listed only as a future plan"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "backend runtime plus its runtime compiler: Vulkan + glslang/SPIRV, CUDA driver/runtime + NVRTC, HIP + HIPRTC, OpenCL, Level Zero + clang + llvm-spirv, or Metal + metal-cpp; quadmath for double-double; FFTW/cuFFT/rocFFT only for the benchmark suite",
+    "min_toolchain": "C99-style C (also compiles as C++); Vulkan 1.0 (1.1 for half precision); ROCm 4.5+ unless VKFFT_OLD_ROCM is defined; CMake 3.11 for the test suite",
+    "platforms": "Nvidia, AMD, Intel, Apple and Raspberry Pi 4 GPUs; Windows, Linux, macOS",
+    "thread_safety": "Not documented. Each VkFFTApplication is initialised once from zeroed memory and VkFFTAppend only records or launches kernels into the caller's command buffer, queue or stream (CUDA/HIP streams fixed at plan creation); concurrent use of one application is not addressed",
+    "drop_in_for_baseline": "false — different API from cuFFT/rocFFT (one config struct + initializeVkFFT/VkFFTAppend/deleteVkFFT instead of cufftPlanMany/cufftExec*); interleaved complex data is compatible but axis order is XYZ, the reverse of cuFFT/FFTW"
+  },
+  "gotchas": [
+    "Structs must be zero-initialised (C API); initializeVkFFT on a non-zero app returns VKFFT_ERROR_NONZERO_APP_INITIALIZATION",
+    "Inverse transforms are unnormalised by default (set normalize=1); multidimensional sizes are given fastest axis first (XYZ), opposite to FFTW/cuFFT",
+    "Sequences beyond one shared-memory upload (e.g. ~4096 FP64 with 64KB shared memory, less for strided axes) switch to Four-Step FFT and need a tempBuffer the size of the main buffer; Bluestein needs extra buffers too",
+    "Bug fixes since v1.3.4 (memory leaks #197, 2D zero-padding #201, convolution kernel compile failure #222) exist only on the develop branch; master/releases still carry them"
+  ],
+  "pick_this_over_siblings_when": "Pick VkFFT over tcFFT and TurboFFT when you need a maintained, general library: non-Nvidia GPUs, double precision, arbitrary or prime lengths, multidimensional, DCT or convolution. tcFFT (half precision on tensor cores) and TurboFFT (small sizes, fault tolerance) are CUDA research codes that can beat cuFFT in their narrow niches; for CPU FFTs use PocketFFT or pffft instead.",
+  "verified_claims_summary": "The author's VkFFT_TestSuite (-vkfft 1001) batched 1D C2C FP64 transforms of every length 2-4096 into 500MB-1GB systems and reported achieved bandwidth on an A100 40GB vs cuFFT (CUDA 11.7) and an MI250 vs rocFFT (ROCm 5.2). Radix 2-13 lengths were at parity with cuFFT; Rader-prime and Bluestein lengths were roughly 1.5-3x faster (derived from page data). These are first-party numbers published in a peer-reviewed IEEE Access 2023 paper, with compiler and flags unstated.",
+  "status_note": "The last release (v1.3.4) and the last master commit are from Feb 2024, but the single author kept pushing bug fixes to the develop branch until 2026-04-04 and issues are still being filed, so it is slow-moving rather than abandoned. MIT-licensed and header-only, so it is easy to vendor; take develop if you hit the zero-padding or memory-leak bugs.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/DTolm/VkFFT/HEAD/README.md",
+    "https://github.com/DTolm/VkFFT",
+    "https://github.com/DTolm/VkFFT/commits",
+    "https://github.com/DTolm/VkFFT/branches",
+    "https://github.com/DTolm/VkFFT/commits/develop",
+    "https://github.com/DTolm/VkFFT/tree/master/documentation",
+    "https://raw.githubusercontent.com/DTolm/VkFFT/HEAD/documentation/VkFFT_API_guide.tex",
+    "https://raw.githubusercontent.com/DTolm/VkFFT/HEAD/vkFFT/vkFFT.h",
+    "https://raw.githubusercontent.com/DTolm/VkFFT/HEAD/CMakeLists.txt",
+    "https://github.com/DTolm/VkFFT/issues",
+    "https://github.com/DTolm/VkFFT/issues?q=is%3Aissue+wrong+OR+incorrect+OR+bug",
+    "https://github.com/DTolm/VkFFT/issues/228",
+    "https://github.com/DTolm/VkFFT/issues/206"
+  ],
+  "confidence": 0.8
+}

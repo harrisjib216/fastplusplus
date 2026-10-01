@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/rox906/tcfft",
+  "one_liner": "Research FP16 FFT kernels that run radix-16 butterflies on NVIDIA tensor cores; beats cuFFT half precision on V100/A100.",
+  "what_it_does": "Computes forward, unnormalized, in-place complex-to-complex FP16 FFTs in batches, 1D (a fixed table of power-of-two sizes: 256, 512, 1024, 2^17-2^19 and 2^24-2^27) and 2D (Nx in {256, 512}, Ny in {256, 512, 1024}). The API is two C functions, tcfftCreate(&plan, n, batch) and tcfftExec(plan, half* data), with a separate header and plan struct for 2D; there is no destroy, inverse, real-input or strided-layout call. The caller must hand it input already in digit-reversed order (the gen_rev permutation lives in the test harness, not the library), so it is not a drop-in for cufftXtExec.",
+  "how_it_is_fast": "Cooley-Tukey with radix 16: each radix-16 DFT stage is written as a 16x16 complex matrix product against the DFT matrix, split into four real FP16 WMMA mma_sync calls (real/imag parts) on tensor cores. Several radix-16 stages plus a final radix-2 or radix-4 step are fused into one kernel (256-, 512- or 1024-point 'mergings') that keeps data in shared memory, so a 2^27-point transform needs only three global-memory passes. Twiddle multiplication and the small radix-2/4 tails run as ordinary half2 CUDA-core arithmetic.",
+  "when_to_use": [
+    "Large batches of forward FP16 complex FFTs whose size is exactly one of the hard-coded lengths (for example 1M batches of 256/512/1024 points) on a V100 or A100.",
+    "Throughput-bound pipelines that already tolerate FP16 error (mixed-precision ML or signal pre-processing) and can produce input in the library's digit-reversed order for free.",
+    "As a reference design if you are writing your own tensor-core FFT kernels; the code is about 2,600 lines of CUDA in two files.",
+    "Reproducing or extending the CLUSTER 2021 tcFFT paper's experiments."
+  ],
+  "when_not_to_use": [
+    "Anything needing accuracy: it accumulates in FP16 (half accumulator fragments), and open issue #5 reports a mean relative error of 1.9 for tcFFT versus 0.0185 for cuFFT FP16 on an RTX 3090 with the repo's own accuracy test; issue #2 reports NaN output after tcfftExec.",
+    "Any size not in the switch table, inverse transforms, real-to-complex, 3D, FP32/FP64 or non-power-of-two lengths: none exist (issue #1 asked for sizes beyond 1k; the inverse is requested in #2 and unanswered).",
+    "Production code: four commits in May 2021, no error checking on CUDA calls, no plan destructor (device twiddle buffers leak), five open/closed bug reports with no maintainer replies.",
+    "Closed-source or permissively licensed products: the code is GPL-3.0.",
+    "Non-NVIDIA GPUs or GPUs older than Volta: the Makefile builds sm_70 and sm_80 only and the kernels use nvcuda::wmma."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "CUDA >= 11.0 runtime (cuda_fp16/mma.h); the header also includes cublas_v2.h; FFTW >= 3.3.8, cuFFT and OpenMP only for the test/benchmark binaries",
+    "min_toolchain": "nvcc from CUDA 11.0+, -std=c++11; host compiler with OpenMP for the harness",
+    "platforms": "NVIDIA tensor-core GPUs, Makefile targets sm_70 (V100) and sm_80 (A100); Linux Makefile only",
+    "thread_safety": "not documented; the plan is a plain struct passed by value and tcfftExec launches on the default stream with no stream parameter",
+    "drop_in_for_baseline": "partial — same job as cufftXtExec with CUDA_C_16F forward C2C, but a different API, fixed size table, and the input must be pre-permuted into digit-reversed order"
+  },
+  "gotchas": [
+    "Unsupported sizes fall through 'default: break' in tcfftCreate, leaving n_radices/n_mergings uninitialized; tcfftExec then launches with garbage values. In 2D, Nx = 1024 selects plan.layer_1[2], a function pointer that tcfftCreate never sets.",
+    "The repo benchmark permutes the input into digit-reversed order on the host inside setup(), outside the timed loop, while cuFFT is timed on natural-order input; a real user has to pay for that permutation (an extra full read and write of the array) somewhere, so the published speedups are an upper bound.",
+    "The *_A100 kernel variants in tcfft_half.cu and tcfft_half_2d.cu are never bound by tcfftCreate (tcfftExec is commented '// V100'); how the paper's A100 runs selected them is not documented.",
+    "Small sizes launch N*batch/(n_cont*RADIX) blocks (n_cont = 32, 16, 8 for 256, 512, 1024), so batch counts that are not a multiple of 32/16/8 leave trailing transforms unprocessed; test.sh only says the batch 'should bigger than 32 for short sizes'."
+  ],
+  "pick_this_over_siblings_when": "Pick tcFFT over VkFFT or TurboFFT only for batched forward FP16 transforms at its exact sizes where tensor-core throughput matters more than accuracy; VkFFT (FP16/32/64, any size, inverse, Vulkan/CUDA/HIP/OpenCL, MIT) and TurboFFT (FP32/FP64, fault tolerance) are maintained, general libraries and the safer choice otherwise.",
+  "verified_claims_summary": "The tcFFT paper (arXiv 2104.11471, IEEE CLUSTER 2021) reports average speedups of 1.29x-3.24x on V100 and 1.10x-3.03x on A100 over cuFFT 11.0 FP16 for batched 1D and 2D C2C FFTs; the repo's paired speed binaries time repeated in-place forward transforms with gettimeofday for at least 4 s per size, built by nvcc with -std=c++11 for sm_70/sm_80 and no explicit -O flag. The digit-reversal permutation is excluded from the tcFFT timing, and the host CPU and exact CUDA version are not stated in the repo.",
+  "status_note": "Abandoned research code (four commits, May 2021, no maintainer replies to issues); GPL-3.0 and small enough to vendor, but treat it as a reference implementation rather than a library.",
+  "sources_read": [
+    "https://github.com/rox906/tcFFT",
+    "https://github.com/rox906/tcFFT/commits",
+    "https://github.com/rox906/tcFFT/issues?q=is%3Aissue",
+    "https://github.com/rox906/tcFFT/issues/1",
+    "https://github.com/rox906/tcFFT/issues/2",
+    "https://github.com/rox906/tcFFT/issues/3",
+    "https://github.com/rox906/tcFFT/issues/4",
+    "https://github.com/rox906/tcFFT/issues/5",
+    "https://raw.githubusercontent.com/rox906/tcFFT/HEAD/README.md",
+    "https://raw.githubusercontent.com/rox906/tcFFT/HEAD/Makefile",
+    "https://raw.githubusercontent.com/rox906/tcFFT/HEAD/tcfft_half.h",
+    "https://raw.githubusercontent.com/rox906/tcFFT/HEAD/tcfft_half.cu",
+    "https://raw.githubusercontent.com/rox906/tcFFT/HEAD/tcfft_half_2d.h",
+    "https://raw.githubusercontent.com/rox906/tcFFT/HEAD/tcfft_half_2d.cu",
+    "https://raw.githubusercontent.com/rox906/tcFFT/HEAD/test.sh",
+    "https://raw.githubusercontent.com/rox906/tcFFT/HEAD/speed.cpp",
+    "https://raw.githubusercontent.com/rox906/tcFFT/HEAD/speed_2d.cpp",
+    "https://raw.githubusercontent.com/rox906/tcFFT/HEAD/accuracy.cpp",
+    "https://raw.githubusercontent.com/rox906/tcFFT/HEAD/tcfft_doit_half.cpp",
+    "https://raw.githubusercontent.com/rox906/tcFFT/HEAD/tcfft_doit_half_2d.cpp",
+    "https://raw.githubusercontent.com/rox906/tcFFT/HEAD/cufft_doit_half.cpp"
+  ],
+  "confidence": 0.75
+}

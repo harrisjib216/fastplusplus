@@ -1,0 +1,56 @@
+{
+  "id": "https://github.com/anthonix/ffts",
+  "one_liner": "BSD-3 C library for single-precision FFTs that JIT-compiles a machine-code plan; beat FFTW on pre-AVX SSE CPUs, loses on AVX.",
+  "what_it_does": "FFTS computes single-precision complex and real (R2C/C2R) FFTs in 1D, 2D and N-D. The API looks like FFTW's plan/execute/free (ffts_init_1d, ffts_init_2d_real, ffts_init_nd, ffts_execute, ffts_free) but is its own: interleaved complex floats, row-major arrays, sign -1 for forward. Power-of-two lengths use the native algorithm. Since 2016 other lengths go through a chirp-z (Bluestein) wrapper.",
+  "how_it_is_fast": "Plan creation fixes size and direction, precomputes twiddle lookup tables and input-offset tables, and on x86-64 (SSE) or 32-bit ARM (NEON/VFP) emits specialised machine code into an mmap'd buffer that is then flipped to read+execute. The generated code runs SIMD size-8 leaf transforms over the permuted input, then radix-4/radix-8 butterfly passes. The authors' IEEE TSP 2013 paper (Blake, Witten, Cree) calls this a cache-oblivious algorithm with run-time specialisation, without FFTW's large codelet library or time-consuming machine-specific calibration. A static (no-JIT) build uses the same SSE/NEON kernels through C macros.",
+  "when_to_use": [
+    "Power-of-two single-precision FFTs on SSE-only x86-64 CPUs (Nehalem-class and older): on an i7-870 FFTS was 1.11-1.88x faster than FFTW at every N from 4 to 262144",
+    "Very small transforms (N <= 32): even on the AVX i5-3340M FFTS beat FFTW by 1.17-1.81x",
+    "32-bit ARMv7 targets (older Android/iOS) that want a BSD-licensed FFT with hand-written NEON or VFP assembly",
+    "Replacing GPL FFTW with a permissively licensed library that has a similar plan/execute shape for 1D/2D/N-D real and complex transforms"
+  ],
+  "when_not_to_use": [
+    "AVX/AVX2/AVX-512 CPUs at N >= 64: the only SIMD paths are SSE-SSE3 and NEON, and on the i5-3340M FFTW was ~1.1-1.56x faster (FFTS ran at 0.64-0.91x of FFTW's speed, derived from page data)",
+    "Double precision: every kernel is float-only (_32f); only the linkotec fork added 'initial support for double precision' (2018)",
+    "AArch64 (Apple Silicon, arm64 Android, ARM servers): no 64-bit ARM SIMD path, and the JIT falls through to the x86 SSE code generator, so dynamic code has to be disabled; open issues #73 and #75 ask about arm64/NDK builds",
+    "Non-power-of-two lengths: they run Bluestein with a power-of-two FFT of size >= 2N-1 plus three extra buffers, so they cost several power-of-two transforms; PocketFFT or VectorFFT handle them natively",
+    "Projects that need a maintained dependency: the library code last changed in 2017, and issues #81 (segfault in forward 2D real transforms) and #66 (SIGILL in neon_transpose8 on 32-bit ARM) are still open"
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none (libm); GNU assembler for the ARM .s files",
+    "min_toolchain": "C (standard not documented); CMake 2.8.12+ or autotools (./configure --enable-sse --enable-single); GCC, Clang or MSVC",
+    "platforms": "x86-64 with SSE/SSE2/SSE3 (runtime code generation x86-64 only; 32-bit x86 falls back to the static path); 32-bit ARMv7 NEON/VFP; other targets need --disable-dynamic-code and get the scalar static path; no AVX",
+    "thread_safety": "Not documented. Real-input and non-power-of-two plans write to a per-plan scratch buffer (p->buf) during ffts_execute, so give each thread its own plan",
+    "drop_in_for_baseline": "false — FFTW-like but separate API (ffts_init_*/ffts_execute/ffts_free); interleaved float complex layout and -1 forward sign match FFTW, but there is no guru/many interface, no double precision and no wisdom"
+  },
+  "gotchas": [
+    "Input and output buffers must be 16-byte aligned on SSE/NEON builds. ffts_execute only LOGs a warning on misalignment and then runs aligned SIMD code; issue #81 is a segfault from an internally misaligned row pointer in forward 2D real transforms",
+    "The default build generates machine code at plan time and mprotects anonymous memory to read+execute. Where JIT memory is forbidden, build with --disable-dynamic-code (autotools) or DISABLE_DYNAMIC_CODE (CMake)",
+    "On ARM the CMake build probes the host with -march=native and runs test programs to pick NEON hard/soft-float or VFP, so cross-compiles skip this detection",
+    "ffts_chirp_z_init writes into its scratch buffer without checking the aligned malloc result, so an allocation failure on a large non-power-of-two plan dereferences NULL"
+  ],
+  "pick_this_over_siblings_when": "Pick FFTS only for power-of-two single-precision work on SSE-only x86-64 or 32-bit ARM NEON, where it has hand-tuned code and a permissive license. On current hardware muFFT (runtime AVX dispatch), PocketFFT (any length, double precision, ARM) or KFR (beats FFTW on modern CPUs, GPL/commercial) are better and maintained.",
+  "verified_claims_summary": "A user-posted table in issue #28 (2014) compared FFTS with FFTW on power-of-two complex FFTs from N=4 to 262144. FFTS is single precision; the FFTW version, planner flags and compiler were not stated. On an i7-870 (SSE4.2, no AVX) FFTS was 1.11-1.88x faster at every size; on an i5-3340M (AVX) it won only for N <= 32 (1.17-1.81x) and ran at 0.64-0.91x of FFTW's speed for N >= 64. The issue page showed no comments this session, so the record's second-user report (i5-3470, VS2015, real N=2048, ~50% slower) could not be re-traced.",
+  "status_note": "Abandoned: the code last changed in June 2017 (a merge of linkotec's Bluestein support), and the only later commit (May 2024) is a README note from the author pointing to the linkotec and ValveSoftware forks. Those forks are themselves idle since March 2019. The library is BSD-3 and small enough to vendor, but treat it as frozen legacy code for SSE/ARMv7 single precision.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/anthonix/ffts/HEAD/README.md",
+    "https://raw.githubusercontent.com/anthonix/ffts/HEAD/include/ffts.h",
+    "https://raw.githubusercontent.com/anthonix/ffts/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/anthonix/ffts/HEAD/COPYRIGHT",
+    "https://raw.githubusercontent.com/anthonix/ffts/HEAD/src/ffts.c",
+    "https://raw.githubusercontent.com/anthonix/ffts/HEAD/src/ffts_chirp_z.c",
+    "https://raw.githubusercontent.com/anthonix/ffts/HEAD/src/codegen.c",
+    "https://raw.githubusercontent.com/anthonix/ffts/HEAD/src/ffts_static.c",
+    "https://raw.githubusercontent.com/anthonix/ffts/HEAD/src/ffts_real.c",
+    "https://github.com/anthonix/ffts/issues/28",
+    "https://github.com/anthonix/ffts/issues",
+    "https://github.com/anthonix/ffts/issues/81",
+    "https://github.com/anthonix/ffts/commits",
+    "https://github.com/linkotec/ffts",
+    "https://github.com/linkotec/ffts/commits",
+    "https://github.com/ValveSoftware/ffts",
+    "https://raw.githubusercontent.com/project-gemmi/benchmarking-fft/HEAD/README.md"
+  ],
+  "confidence": 0.75
+}

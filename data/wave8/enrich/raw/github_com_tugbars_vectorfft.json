@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/tugbars/vectorfft",
+  "one_liner": "Double-precision x86 AVX2/AVX-512 FFT library in C, with generated codelets and a wisdom planner; median 1.29x Intel MKL on 1D c2c.",
+  "what_it_does": "VectorFFT is a C library for FP64 FFTs on x86: complex c2c, real r2c/c2r and real-to-real DCT-I to IV, DST-I to III and DHT, in 1D, 2D and 3D, batched and threaded, with interleaved or split (separate re/im planes) layouts. The API is FFTW-like but not compatible: fill a vfft_config_t (transform, dims, sizes, placement, layout, order, batch, threads), call vfft_create to get an opaque plan, then vfft_execute(plan, dir, sre, sim, dre, dim). Unsupported combinations are refused at create (NULL plus a printed reason) rather than converted.",
+  "how_it_is_fast": "Kernels are straight-line, register-allocated C codelets emitted per instruction set by the project's own DAG FFT compiler (OCaml-based, per the repo page), including Winograd-style odd radices, large conjugate-pair radix stages up to 47, Rader and Bluestein for primes, and a cache-tiled four-step path for large powers of two. The planner races every candidate route on the host CPU and keeps the winner as wisdom, so the first create of a size measures (milliseconds to seconds) and later creates replay the banked plan. Some odd composite lengths derive most twiddle factors from one loaded value instead of loading them all, trading a small accuracy loss for speed.",
+  "when_to_use": [
+    "Many FP64 complex transforms of modest length (N up to a few thousand) on AVX2 or AVX-512 x86, where MKL's sequential DFTI is the incumbent",
+    "Awkward lengths (primes, large-prime composites, odd smooth sizes), where the README reports median 1.18x over MKL on primes and up to 7.04x at N=89",
+    "Small 2D and 3D power-of-two grids (median 4.5x over MKL below 256 or 4,096 points) and batched DCT/DST work, where its tables show 2-4x over FFTW",
+    "Projects that need an MIT-licensed alternative to MKL or GPL FFTW and can recalibrate wisdom on their target CPU"
+  ],
+  "when_not_to_use": [
+    "Single-precision, ARM/Apple Silicon or other non-x86 targets: it is FP64 only and ships only AVX2 and AVX-512 codelet trees",
+    "Mid-size powers of two (32..512): it is at or slightly below MKL there (0.94-1.03x), and the power-of-two median lead is only 1.13x",
+    "Workloads that need full double accuracy on every length: 33 large-odd-radix lengths exceed the README's 10e-16 error line and there is no accuracy mode",
+    "Production code that needs a mature, packaged library: 5 stars, one author, very new, no install target; the root CMake builds only a codelet static lib and the benchmark tools",
+    "Linux or POSIX-first deployments where you want tested comparisons: the harness targets Windows (its FFTW binding says the POSIX path is untested)"
+  ],
+  "integration": {
+    "form": "source-drop (header-only core in src/core plus src/core/vfft.c, linked with a static lib of generated codelets; no install or package target)",
+    "dependencies": "none at runtime beyond libm and the platform thread library; MKL and FFTW only for the optional benchmark comparators",
+    "min_toolchain": "C11; CMake 3.16; GCC, Clang, Intel ICX or MSVC-style front ends (README benchmarks used GCC 15.2); CPU with AVX2+FMA or AVX-512F/DQ",
+    "platforms": "x86-64 only (AVX2+FMA default build, AVX-512 optional); ISA fixed at build time, with no runtime dispatch; developed and benchmarked on Windows, Linux builds supported by CMake",
+    "thread_safety": "vfft_execute performs no allocation and is safe to call concurrently on different plans; vfft_set_num_threads is process-global and must not run concurrently with plan creation or execution",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "vfft_set_num_threads(n>1) pins the calling thread to core 0 and the workers to the following cores; reset your own affinity afterwards",
+    "The default layout is SPLIT, and for SPLIT at 2D and above the default output order is SCRAMBLED (only a roundtrip through the same plan decodes it); request VFFT_ORDER_NATURAL or the interleaved layout explicitly",
+    "Errors are printed, not returned: vfft_create returns NULL, and vfft_execute with a pointer signature that does not match the plan computes nothing and returns void",
+    "Shipped wisdom was calibrated on an i9-14900KF; on other CPUs the first create of each size races candidates unless you recalibrate. The build suppresses implicit-function-declaration and incompatible-pointer-type warnings (-fpermissive), and examples/CMakeLists.txt notes an intermittent MinGW GCC segfault in the quickstart demo"
+  ],
+  "pick_this_over_siblings_when": "Pick VectorFFT over KFR, PocketFFT or PFFFT when the workload is FP64 on modern x86, an MIT license matters, and you can benchmark and recalibrate on your own CPU; pick KFR or PocketFFT for portability (ARM, float), maturity or a C++ API, and VkFFT for GPUs.",
+  "verified_claims_summary": "The author's gauntlet harness (public code and raw CSVs) on an Intel Core i9-14900KF P-core with AVX2 and GCC 15.2 at -O3 -march=native -mno-avx512f timed single-thread out-of-place interleaved FP64 c2c at every N from 2 to 4,096 against oneMKL 2025.3 sequential DFTI. It reports a 1.29x median speedup (89% of lengths at or above parity), 1.34x over 159 power-of-two 2D planes and 1.55x over 1,288 3D volumes, each ratio taking the worse of two engine orders. FFTW 3.3.10 (FFTW_MEASURE, vcpkg DLL) comparisons cover only real r2c/c2r and r2r transforms, with medians of 1.15-1.23x on powers of two and a few small-N losses.",
+  "status_note": "Very active (2,449 commits, results dated up to 2026-10-01) but a 5-star single-author project with no tagged release; MIT-licensed, so it can be vendored if you also take on the build.",
+  "sources_read": [
+    "https://github.com/Tugbars/VectorFFT",
+    "https://raw.githubusercontent.com/Tugbars/VectorFFT/HEAD/README.md",
+    "https://raw.githubusercontent.com/Tugbars/VectorFFT/HEAD/include/vfft.h",
+    "https://raw.githubusercontent.com/Tugbars/VectorFFT/HEAD/docs/performance/v1_0_results.md",
+    "https://raw.githubusercontent.com/Tugbars/VectorFFT/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/Tugbars/VectorFFT/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/Tugbars/VectorFFT/HEAD/gauntlet/README.md",
+    "https://raw.githubusercontent.com/Tugbars/VectorFFT/HEAD/gauntlet/ref_fftw.h",
+    "https://github.com/Tugbars/VectorFFT/tree/main/examples",
+    "https://raw.githubusercontent.com/Tugbars/VectorFFT/HEAD/examples/CMakeLists.txt"
+  ],
+  "confidence": 0.8
+}

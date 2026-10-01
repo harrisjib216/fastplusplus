@@ -1,0 +1,56 @@
+{
+  "id": "https://github.com/jlblancoc/nanoflann",
+  "one_liner": "Header-only C++11 k-d tree for exact point kNN/radius search; about 2.4x faster point kNN than Boost.Geometry's R*-tree.",
+  "what_it_does": "nanoflann builds an exact (non-approximate) single k-d tree over N-dimensional points and answers knnSearch, radiusSearch, rknnSearch (kNN capped by a radius), a callback radius search and findWithinBox (axis-aligned range). It does not copy your data: you write a small adaptor class exposing kdtree_get_point_count() and kdtree_get_pt(idx, dim), and the tree stores only indices into it. Ready-made adaptors cover Eigen matrices and vector-of-vectors, and the metrics are L1, squared L2, SO(2) and SO(3). The interface is unrelated to boost::geometry::index::rtree: points only, and index results instead of stored values.",
+  "how_it_is_fast": "It is a code-level fork of FLANN's single k-d tree with the virtual-dispatch layers replaced by CRTP and inlined templates. An optional compile-time DIM lets the compiler unroll the distance loops. Splits use FLANN's sliding-midpoint rule: cut the widest-spread axis among those near the maximum bounding-box span at the box midpoint, clamped to the data's min/max, then partition three ways (Dutch national flag). Queries descend the nearer child first and prune the other with an incremental per-axis distance bound (mindist + cut_dist - old_dist, as in Arya-Mount ANN). Leaves hold up to leaf_max_size points (default 10) that are scanned linearly. Since 1.14.0, nodes sit in one contiguous depth-first array and the far child is prefetched (__builtin_prefetch) while the near one is searched.",
+  "when_to_use": [
+    "Static 2D/3D point clouds (LiDAR scans, ICP correspondences, particle neighbours) queried many times for k nearest or fixed-radius neighbours: point kNN was about 2.4-2.5x faster than Boost R*-tree (geomean over 49 GeoToolbox runs, derived from page data)",
+    "Memory-constrained indexing: zero-copy adaptors over your existing array. In GeoToolbox, 10^6 2D points took about 8.8 MB of index versus about 43 MB for Boost R*-tree (derived from page data)",
+    "Data already in Eigen matrices or std::vector<std::vector<T>>, using the bundled adaptors, or in custom containers via a three-method adaptor",
+    "Many concurrent query threads against one immutable index: queries are const and documented thread-safe while nothing is building",
+    "Sliding-window maps that need add/remove: KDTreeSingleIndexIncrementalAdaptor (single self-balancing tree with removeBox/removeOutsideBox) or the Bentley-Saxe KDTreeSingleIndexDynamicAdaptor forest"
+  ],
+  "when_not_to_use": [
+    "Box or polygon keys: points only. Encoding a box as a 2N-D point needs custom query code and was about 1.4-1.5x slower than Boost on box range queries (derived from page data). Use GeoToolbox KdBoxTree, tidwall rtree.c or Boost",
+    "Build-dominated workloads: the single-threaded bulk load (n_thread_build=1 in GeoToolbox's adapter) was about 1.4-1.7x slower than Boost R*-tree packing. At 10^6 points the GeoToolbox nearest scenario's total time (build plus queries) favoured Boost (Boost/nanoflann 0.68-0.72, derived from page data); use n_thread_build or 1.13+'s faster concurrent build",
+    "Strongly structured data such as points on concentric circles: on GeoToolbox's 2D Synthetic_Polygon set at 10^6 points, nanoflann kNN took 146 ms versus 53 ms for Boost and 15 ms for KdBoxTree",
+    "Approximate NN in high dimensions: no randomized trees, no LSH and no auto-tuning. The only approximation knob is eps in SearchParameters, so use FLANN, FAISS or an HNSW library",
+    "Metrics beyond L1/L2/SO(2)/SO(3), C or Python bindings from this repo, or SE(3): not supported (README 1.6)"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (standard library; std::thread/std::async unless NANOFLANN_NO_THREADS is defined). Eigen is optional for the Eigen adaptors; GTest and Eigen only for the tests and examples",
+    "min_toolchain": "C++11 (uses if constexpr when C++17 is available); CI covers GCC/Clang on Linux, MSVC and clang-cl on Windows, and macOS 14/15",
+    "platforms": "any; no intrinsics apart from a GCC/Clang prefetch builtin. ROS 2 binaries are built for amd64 and arm64",
+    "thread_safety": "Queries (findNeighbors, knnSearch, radiusSearch, rknnSearch) are const and safe for concurrent readers. Building, or mutating a dynamic or incremental index, must not overlap any query. The internal PooledAllocator is not thread-safe. The build itself can be parallelized with n_thread_build",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "With L2 metrics, the radius you pass and every distance returned are squared distances",
+    "The index stores only indices into your adaptor's data, which must outlive the index. A static index does not see points appended or changed after the build, so call buildIndex() again or use the dynamic or incremental adaptors. removePoint does not touch your dataset (open issue #304)",
+    "The default IndexType is uint32_t (about 4.29e9 points). Unsigned coordinate types need an explicitly signed, wide-enough DistanceType; before 1.13.0 this case crashed or returned wrong results",
+    "saveIndex files are version-locked: loadIndex throws on any NANOFLANN_VERSION mismatch, so persisted indices must be rebuilt after an upgrade. Tie order between equidistant points is unspecified unless NANOFLANN_FIRST_MATCH is defined"
+  ],
+  "pick_this_over_siblings_when": "Pick nanoflann over GeoToolbox KdBoxTree for exact point kNN/radius search up to about 10^5 points, for the smallest memory footprint, or for a widely packaged dependency (apt, vcpkg, Conan, ROS). KdBoxTree wins on box keys, at 10^6 points and on structured data. Pick it over tidwall rtree.c or THST when keys are points and queries are proximity rather than box overlap.",
+  "verified_claims_summary": "The independent GeoToolbox harness compared nanoflann 1.10.1 (pinned tag, compile-time DIM, L2_Simple, single-threaded build) with Boost.Geometry 1.90 R*-tree on 2D/3D point sets of 10^2-10^6 elements. It was built with MSVC 2026 and clang-cl 22 (Release, /arch:AVX2 and LTO per its public CMakeLists) on an ASUS ROG Strix G16 laptop under Windows 11, CPU model not stated. Its result TSVs give point-kNN query times 2.40x (clang-cl) and 2.52x (MSVC) faster than Boost as a geomean, falling to about 1.85x at 10^6 points, and point range queries 1.14-1.23x faster. Bulk load was 1.4-1.7x slower, and the range queries used GeoToolbox's own traversal code rather than nanoflann's findWithinBox (all ratios derived from page data). The README's separate ~50% speedup over original FLANN comes from first-party charts with no stated CPU or compiler, and the perf-tests directory it links has moved to MRPT/nanoflann-benchmark.",
+  "status_note": "Actively maintained (1.14.0 released 2026-09-25, four releases since June 2026; 2.7k stars; packaged in Debian/Ubuntu, Homebrew, vcpkg, Conan and ROS 2) under BSD-2-Clause, and a single header you can vendor; the measured 1.10.1 predates the 1.13 build rewrite and the 1.14 contiguous-node layout.",
+  "sources_read": [
+    "https://github.com/jlblancoc/nanoflann",
+    "https://github.com/jlblancoc/nanoflann/issues",
+    "https://github.com/jlblancoc/nanoflann/issues/235",
+    "https://github.com/jlblancoc/nanoflann/issues/304",
+    "https://raw.githubusercontent.com/jlblancoc/nanoflann/HEAD/README.md",
+    "https://raw.githubusercontent.com/jlblancoc/nanoflann/HEAD/include/nanoflann.hpp",
+    "https://raw.githubusercontent.com/jlblancoc/nanoflann/HEAD/CHANGELOG.rst",
+    "https://raw.githubusercontent.com/jlblancoc/nanoflann/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/jlblancoc/nanoflann/HEAD/COPYING",
+    "https://raw.githubusercontent.com/ikolev21/GeoToolbox/HEAD/Readme.md",
+    "https://raw.githubusercontent.com/ikolev21/ikolev21.github.io/HEAD/CompareSpatialIndices_ikrogwin11_clangcl_x64.tsv",
+    "https://raw.githubusercontent.com/ikolev21/ikolev21.github.io/HEAD/CompareSpatialIndices_ikrogwin11_msvc_x64.tsv",
+    "https://github.com/ikolev21/GeoToolbox",
+    "https://raw.githubusercontent.com/ikolev21/GeoToolbox/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/ikolev21/GeoToolbox/HEAD/test/Performance/CMakeLists.txt",
+    "https://raw.githubusercontent.com/ikolev21/GeoToolbox/HEAD/test/Performance/NanoflannAdapter.hpp"
+  ],
+  "confidence": 0.8
+}

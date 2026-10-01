@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/tuxalin/thst",
+  "one_liner": "Header-only C++03 R-tree and 2D quadtree that compile about 25x faster than Boost.Geometry rtree code; runtime is not faster overall.",
+  "what_it_does": "THST provides spatial::RTree<T, Value, Dim, M, m, Indexable, VolumeMode, RealType, Allocator> (N-dimensional, quadratic split) and spatial::QuadTree<T, Value, M, Indexable, Allocator> (2D, fixed world box) with near-identical interfaces. Queries take predicates (spatial::intersects/contains/within) and an output iterator, similar to Boost.Geometry's rtree, plus a ray-box query, a radius nearest query (2D only), an incremental k_nearest, conditional insert with a predicate, remove, translate, and leaf/depth-first iterators that expose internal ('hierarchical') nodes. It is not a drop-in for boost::geometry::index::rtree: the value type, indexable getter (min()/max() returning pointers) and query predicates are THST's own.",
+  "how_it_is_fast": "The compile-time win comes from a small templated code base (Guttman's 1984 R-tree via the Greg Douglas / nushoin C++ ports) with none of Boost.Geometry's concept, variant-visitor and strategy machinery. At runtime it uses Guttman's quadratic split (pickSeeds/classify) with an optional spherical-volume measure, fixed-size nodes holding parallel arrays of values, boxes and child pointers, and a pluggable node allocator; the benchmark's fastest THST variant uses a test-only allocator that places all nodes in one pre-sized std::vector. There is no bulk loading (listed under 'Future improvements'), no R*-tree reinsertion and no SIMD.",
+  "when_to_use": [
+    "Projects where build time matters and Boost.Geometry's rtree headers dominate compile time: the README reports 1.4 s vs 35.3 s to compile the benchmark program",
+    "Games, physics and editors that rebuild or heavily update a small index every frame: the project's dynamic benchmark shows THST quadratic ahead of bgi linear above about 400 objects",
+    "Hierarchical scene partitioning where you want to store data on internal nodes, walk the tree level by level (dbegin/child iterators) or stop a query once a node is fully contained (hierachical_query)",
+    "Ray casting against boxes (rayQuery with a filter predicate) without pulling in a BVH library",
+    "Old toolchains: the core RTree/QuadTree is written for C++03 and needs no dependencies"
+  ],
+  "when_not_to_use": [
+    "Query-heavy static data: per the project's own charts, Boost.Geometry rtree with bulk loading or R* gives the best query times, ahead of THST's best (quadratic with custom allocator)",
+    "Large static datasets that you can bulk-load: THST has only one-by-one insertion, while Boost's packing algorithm loads fastest",
+    "Fewer than about 400 objects in a rebuild-every-frame loop: bgi linear was slightly faster there in the same benchmark",
+    "QuadTree for 1M-box workloads: the benchmark README calls quadtree queries 'really slow' and building 'very slow' for capacities 256-1024",
+    "Code that needs active maintenance or a package: last commit March 2024, issue #23 (assertion failure in RTree::choosePartition, Oct 2023) is still open, and there is no vcpkg port (issue #26 open)"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (the benchmark needs Boost headers, CMake and gnuplot; tests use doctest as a git submodule)",
+    "min_toolchain": "C++03 for the core trees; RTree::k_nearest (priority_queue::emplace) and QuadTree::clear (nullptr) need C++11; move constructors are enabled under C++11/MSVC 2013+",
+    "platforms": "any (portable scalar C++; benchmarked on macOS with Xcode, CMake files also handle MSVC, GCC and Clang)",
+    "thread_safety": "not documented; from the source, queries are const and use only local state, while insert/remove modify a shared member scratch buffer (m_parVars), so writes need external locking",
+    "drop_in_for_baseline": "partial — the query style (predicate + output iterator) and indexable getter resemble Boost.Geometry's rtree, but the template parameters, predicate names and getter signature differ, and there is no bulk loading, R*/linear split or general nearest() predicate"
+  },
+  "gotchas": [
+    "Several failure cases are checked only by assert, so release builds do not catch them: inserting a box outside a QuadTree's world box, more than 16 levels in the depth/leaf iterators' fixed stack (a write past the array), and the under-filled node split reported in open issue #23",
+    "RTree::nearest(point, radius) is 2D only (static assert) and ranks by distance to box centre; k_nearest works in N dimensions and uses minimum distance to the box",
+    "Node capacity and min fill are template parameters (defaults M=8, m=M/2); the benchmark sweeps M from small values up to 40x the base and results depend strongly on it",
+    "The 'custom' allocator in the benchmark is test/custom_allocator.h, not part of include/; it must be pre-sized (nodeCount * 1.5) and only asserts on overflow"
+  ],
+  "pick_this_over_siblings_when": "Pick THST over tidwall/rtree.c or GeoToolbox KdBoxTree when you want a templated, header-only C++ tree with hierarchical iteration, ray queries and low compile cost; pick those siblings (or nanoflann for point k-NN) when raw insert/query throughput against Boost is the goal, since THST's own benchmark does not show a runtime win over a bulk-loaded Boost rtree.",
+  "verified_claims_summary": "The author reused Loskot and Wulkiewicz's spatial_index_benchmark: 1M small random boxes inserted iteratively, 100K intersection queries with boxes 10x larger, and a 200-run dynamic clear/query/insert loop, comparing THST quadtree/quadratic/quadratic-sphere (heap and custom allocator) with Boost.Geometry rtree linear/quadratic/R* (iterative and bulk, compile-time parameters) on an Intel Core i7-4870HQ under macOS Sierra, built as an Xcode Release (exact compiler and flags not stated). The only numeric claim is benchmark compile time, 35.3 s for Boost vs 1.4 s for THST; runtime results are PNG charts in which Boost bulk/R* leads queries and THST quadratic wins only the dynamic case above about 400 objects.",
+  "status_note": "Stale (last commit 2024-03-16, a CMake install-script PR) but MIT-licensed, dependency-free and small (RTree.h is about 1,800 lines, QuadTree.h about 800), so easy to vendor; treat it as a compile-time and feature pick, not a runtime-speed pick.",
+  "sources_read": [
+    "https://github.com/tuxalin/THST",
+    "https://raw.githubusercontent.com/tuxalin/THST/HEAD/README.md",
+    "https://raw.githubusercontent.com/tuxalin/THST/HEAD/benchmark/README.md",
+    "https://github.com/tuxalin/THST/tree/master/include/THST",
+    "https://raw.githubusercontent.com/tuxalin/THST/HEAD/include/THST/RTree.h",
+    "https://raw.githubusercontent.com/tuxalin/THST/HEAD/include/THST/rtree_detail.h",
+    "https://raw.githubusercontent.com/tuxalin/THST/HEAD/include/THST/QuadTree.h",
+    "https://raw.githubusercontent.com/tuxalin/THST/HEAD/include/THST/allocator.h",
+    "https://raw.githubusercontent.com/tuxalin/THST/HEAD/include/THST/config.h",
+    "https://raw.githubusercontent.com/tuxalin/THST/HEAD/include/THST/bbox.h",
+    "https://raw.githubusercontent.com/tuxalin/THST/HEAD/include/THST/predicates.h",
+    "https://github.com/tuxalin/THST/tree/master/benchmark",
+    "https://raw.githubusercontent.com/tuxalin/THST/HEAD/benchmark/CMakeLists.txt",
+    "https://raw.githubusercontent.com/tuxalin/THST/HEAD/benchmark/benchmark_thst.cpp",
+    "https://raw.githubusercontent.com/tuxalin/THST/HEAD/test/custom_allocator.h",
+    "https://github.com/tuxalin/THST/issues?q=is%3Aissue",
+    "https://github.com/tuxalin/THST/issues/23",
+    "https://github.com/tuxalin/THST/issues/20",
+    "https://github.com/tuxalin/THST/commits/master"
+  ],
+  "confidence": 0.75
+}
