@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/msu-sparta/openrand",
+  "one_liner": "Header-only C++17 counter-based RNGs (Philox, Threefry, Squares, Tyche) for CPU and CUDA/HIP; beats stateful cuRAND in a Brownian dynamics run and std::mt19937 on short streams.",
+  "what_it_does": "OpenRAND gives each work unit (particle, pixel) its own reproducible stream: you construct a generator on the spot from a 64-bit seed (32-bit for Squares) and a 32-bit counter, draw a few numbers, and throw it away, so no per-thread state lives in global memory and results do not depend on thread count. Generators expose rand<T>() for 32/64-bit ints and [0,1) floats, uniform(low, high), range(N), randn() (Box-Muller), gamma(), plus Philox's draw_int4/draw_float4, and they satisfy the C++ UniformRandomBitGenerator interface so std:: distributions work on them. It is not a drop-in std::mt19937 replacement: the seeding model is (seed, counter) per work unit rather than one long-lived engine.",
+  "how_it_is_fast": "Counter-based generation: each output is a keyed bijection of (seed, counter) computed in registers (Philox-4x32-10 multiply/xor rounds, Threefry-2x32-20 add-rotate-xor, Widynski's Squares middle-square rounds, or the Tyche ARX mix), so construction is a few register moves instead of mt19937's 624-word seeding or a cuRAND state load/store. On the GPU the win in the paper comes from skipping curand_init and the per-thread state round trip to global memory (about 64 MB saved per million particles), not from a faster Philox; on the CPU it comes from cheap construction for short streams.",
+  "when_to_use": [
+    "CUDA or HIP kernels where each thread or particle needs a few random numbers per launch and you want to stop storing curandState arrays; the paper measured 1.8x over cuRAND Philox on an A100 and 1.7x on a V100 in a RNG-bound Brownian dynamics kernel.",
+    "Simulations that must be bitwise reproducible regardless of thread count or scheduling (seed = particle id, counter = timestep).",
+    "CPU code that constructs many short-lived generators (10 to 1,000 draws each), where std::mt19937's seeding cost dominates.",
+    "Code that must compile unchanged for host, CUDA and HIP from one header set with no intrinsics or platform-specific code."
+  ],
+  "when_not_to_use": [
+    "Long single streams on the CPU: at 10K draws only Tyche and Squares beat std::mt19937 (roughly 3.5-4x); Philox is slightly slower and Threefry about 6x slower, and SIMD or small-state generators (xoshiro, PCG, Romu) are faster still.",
+    "Already on Random123: the paper shows OpenRAND Philox on par with Random123 (1.78 s versus 1.81 s on A100), so the gain is API simplicity, not speed.",
+    "More than 2^32 draws from one (seed, counter) pair: the paper states each stream has period 2^32 and the internal counter is a uint32_t.",
+    "You need the published Squares64 output: open issue #25 reports the 64-bit Squares path differs from Widynski's paper.",
+    "Cryptographic use: these are reduced-round statistical generators, not CSPRNGs."
+  ],
+  "integration": {
+    "form": "header-only (include/openrand/*.h; CMake INTERFACE target OpenRAND::OpenRAND, FetchContent or make install)",
+    "dependencies": "none (Google Test, Google Benchmark, TestU01 and PractRand only for optional tests/benchmarks)",
+    "min_toolchain": "C++17 (if constexpr, std::void_t); CMake 3.18 if using the CMake target; nvcc for CUDA, hipcc for HIP",
+    "platforms": "any C++17 host; NVIDIA GPUs via CUDA (__host__ __device__ through the OPENRAND_DEVICE macro) and AMD GPUs via HIP; no architecture-specific intrinsics",
+    "thread_safety": "Generators are small value types with no shared or global state; the intended pattern is one generator per thread/work unit, so no synchronization is needed. Sharing one instance across threads is unsynchronized (not documented).",
+    "drop_in_for_baseline": "partial: satisfies the UniformRandomBitGenerator interface (32-bit result_type) so it can replace std::mt19937 inside std:: distributions, but the constructor takes (seed, counter) and the stream model differs; against cuRAND it replaces curand_init/curand_uniform with a different API"
+  },
+  "gotchas": [
+    "Philox::draw<uint32_t>() (used by operator() and rand<float>()) computes a full 4x32 Philox block and returns only one word, discarding three; use draw_int4()/draw_float4() to get all four, which is why scalar Philox loses to mt19937 on long CPU streams.",
+    "rand<float>() and rand<double>() are documented as [0,1) but the u01 conversion (x * 2^-32 + 2^-33 in float) rounds to exactly 1.0f for the top 128 uint32 inputs (about 1 in 33.5 million draws), and to 1.0 for the top 1,024 uint64 inputs in double (derived from the base_state.h code, not documented upstream); clamp before using the value as an index.",
+    "range<T>(N) defaults to the biased multiply-shift (biased=true); pass range<false>(N) for unbiased Lemire rejection. randn() discards the second Box-Muller value; use randn2().",
+    "squares.h does #define K 0xc58efd154ce32f6d at global scope, which breaks any including code that uses K as an identifier; Philox, Threefry and Squares have const members, so they are copy-constructible but not copy-assignable."
+  ],
+  "pick_this_over_siblings_when": "Pick OpenRAND for portable GPU and CPU code that wants stateless per-work-unit streams with a two-line API; vphilox and benchmark-rngs PhiloxSIMD are faster for bulk Philox output on CPUs with AVX, and the standalone Squares generator or Random123 give the same algorithms with lower-level APIs. For CPU throughput or attack resistance, Randen, Randompack or a SIMD xoshiro fit better.",
+  "verified_claims_summary": "The authors' SoftwareX paper timed a 2D Brownian dynamics simulation (1M particles, 10,000 steps, Philox in every library, whole-process wall time, nvcc -O3 -std=c++17 -arch=sm_80) at 1.78 s with OpenRAND versus 3.20 s with cuRAND and 1.81 s with Random123 on an A100 SXM, and 2.48 s versus 4.23 s and 2.46 s on a Tesla V100 PCIe. Their CPU micro-benchmark on a Xeon Platinum 8260 against libstdc++ std::mt19937 (constructing a fresh engine per iteration; compiler and flags unstated) is only a log-scale chart: all four generators win on 10-100 draws, while at 10K draws only Tyche and Squares stay ahead.",
+  "status_note": "Stale since 2024-12-11 (37 stars, CMake project version 1.0, release issue #9 still open) but MIT-licensed and small (the paper counts 470 source lines of core headers at publication), so it is easy to vendor.",
+  "sources_read": [
+    "https://github.com/msu-sparta/OpenRAND",
+    "https://raw.githubusercontent.com/msu-sparta/OpenRAND/HEAD/README.md",
+    "https://raw.githubusercontent.com/msu-sparta/OpenRAND/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/msu-sparta/OpenRAND/HEAD/include/openrand/base_state.h",
+    "https://raw.githubusercontent.com/msu-sparta/OpenRAND/HEAD/include/openrand/philox.h",
+    "https://raw.githubusercontent.com/msu-sparta/OpenRAND/HEAD/include/openrand/tyche.h",
+    "https://raw.githubusercontent.com/msu-sparta/OpenRAND/HEAD/include/openrand/squares.h",
+    "https://raw.githubusercontent.com/msu-sparta/OpenRAND/HEAD/include/openrand/threefry.h",
+    "https://raw.githubusercontent.com/msu-sparta/OpenRAND/HEAD/include/openrand/util.h",
+    "https://raw.githubusercontent.com/msu-sparta/OpenRAND/HEAD/benchmarks/raw_speed_cpu.cpp",
+    "https://raw.githubusercontent.com/msu-sparta/OpenRAND/HEAD/benchmarks/CMakeLists.txt",
+    "https://raw.githubusercontent.com/msu-sparta/OpenRAND/HEAD/docs/OpenRAND.pdf",
+    "https://raw.githubusercontent.com/msu-sparta/OpenRAND/HEAD/tests/test_uniform.cpp",
+    "https://raw.githubusercontent.com/msu-sparta/OpenRAND/HEAD/tests/README.txt",
+    "https://raw.githubusercontent.com/msu-sparta/OpenRAND/HEAD/examples/pi_cuda.cu",
+    "https://github.com/msu-sparta/OpenRAND/issues?q=is%3Aissue",
+    "https://github.com/msu-sparta/OpenRAND/issues/25",
+    "https://github.com/msu-sparta/OpenRAND/issues/15",
+    "https://github.com/msu-sparta/OpenRAND/tree/main/examples",
+    "https://github.com/msu-sparta/OpenRAND/tree/main/tests"
+  ],
+  "confidence": 0.8
+}

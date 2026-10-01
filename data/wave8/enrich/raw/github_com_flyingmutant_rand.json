@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/flyingmutant/rand",
+  "one_liner": "Go package pgregory.net/rand: sfc64-based *Rand whose draw methods run about 1.5-3.3x faster than math/rand/v2's PCG-backed *Rand.",
+  "what_it_does": "A replacement for Go's math/rand, math/rand/v2 and golang.org/x/exp/rand that keeps the *rand.Rand method set and the top-level functions (Float64, Intn, Perm, Shuffle, NormFloat64, ExpFloat64 and so on) but drops the Source interface and the top-level Seed(). rand.New() seeds from runtime entropy and rand.New(1) (up to three uint64 seeds) gives a deterministic generator; a generic ShuffleSlice and MarshalBinary/UnmarshalBinary are included. It is a Go-only library, so C++ code can only borrow the algorithms.",
+  "how_it_is_fast": "*Rand embeds a concrete SFC64 generator (Chris Doty-Humphrey's small fast chaotic generator: 256-bit state, add/xor/shift/rotate, no multiply) instead of calling through the Source interface, and the code is written to fit Go's inlining budget. Floats come from masking 24 or 53 bits and multiplying by 2^-24 or 2^-53; bounded integers use a single 64x64-to-128 fixed-point multiply for n below 2^32 and Stephen Canon's two-multiply method above that, with no division or rejection loop. Normals and exponentials reuse Go's ziggurat tables. Top-level functions draw from Go's goroutine-local runtime generator, so they avoid math/rand's global mutex.",
+  "when_to_use": [
+    "Hot Go loops on a per-goroutine *Rand that draw floats, bounded ints, shuffles or permutations: Rand_Float32 7.67 to 3.61 ns, Rand_Int31n 10.2 to 4.2 ns, Rand_Intn_Big 28.7 to 8.8 ns and Rand_Shuffle 711 to 412 ns versus math/rand/v2 with its PCG source on an i7-10510U.",
+    "Code still on legacy math/rand or golang.org/x/exp/rand, especially calling top-level functions from many goroutines: on a 48-thread Xeon E5-2680 v3, top-level Uint64 drops from 193 ns to about 1 ns because there is no global lock.",
+    "Simulations that need a seeded generator whose output is identical on 32/64-bit and little/big-endian targets (stated in the README) and whose state can be serialized cheaply (MarshalBinary 30.5 to 3.8 ns versus x/exp/rand).",
+    "Constructing many generators: rand.New allocates 48 bytes once versus 5.42 kB for math/rand."
+  ],
+  "when_not_to_use": [
+    "You only call top-level functions on Go 1.22+: they are a thin wrapper over math/rand/v2's runtime generator, and the README shows them 2.6-15 percent slower than math/rand/v2 (Uint64 3.06 to 3.20 ns, Float64 3.29 to 3.55 ns, Intn_Big 6.46 to 7.45 ns).",
+    "Frequent reseeding: Rand.Seed runs 12 warm-up rounds and costs 46.09 ns versus 0.57 ns for math/rand/v2's PCG.",
+    "Code that depends on the Source interface, a custom Source, or a global Seed() for reproducibility: they are deliberately absent.",
+    "Security-sensitive randomness: the package doc says outputs may be predictable regardless of seeding; use crypto/rand.",
+    "C or C++ projects: not callable without cgo; copy the 10-line sfc64 step function instead."
+  ],
+  "integration": {
+    "form": "module (Go module pgregory.net/rand)",
+    "dependencies": "none at runtime (go.mod lists valyala/fastrand, golang.org/x/exp and pgregory.net/rapid for tests and benchmarks)",
+    "min_toolchain": "Go 1.18 (go.mod); CI tests Go 1.18, 1.19, 1.22 and 1.23",
+    "platforms": "any Go target; CI runs Linux, Windows and macOS; README states identical deterministic output on 32/64-bit and big/little-endian",
+    "thread_safety": "Top-level functions are safe for concurrent use (goroutine-local runtime sources); *Rand methods are not safe for concurrent use, per the package doc.",
+    "drop_in_for_baseline": "partial: same *Rand methods and top-level functions as math/rand, but no Source interface, no top-level Seed(), New takes uint64 seeds instead of a Source, and seeded streams differ from math/rand and math/rand/v2"
+  },
+  "gotchas": [
+    "Uint32n (and so Intn, Int31n, Shuffle and Perm for n below 2^32) uses one multiply with no rejection step; the code comment says the result is unbiased with probability 1 - 2^-32 and argues detecting the bias needs at least 2^64 samples.",
+    "The top-level source depends on Go version and build tags: math/rand/v2's ChaCha8-based runtime generator on Go 1.22+, maphash on 1.18-1.21, or a go:linkname to runtime.fastrand64/runtime.rand with -tags unsafe; issue #8 notes the maphash path on Go 1.19-1.21 can never return 0.",
+    "rand.New() with no seed skips the warm-up rounds and takes its three state words straight from the runtime generator; pass explicit seeds for reproducible runs.",
+    "Licensing is split: MPL-2.0 for most files and BSD-3-Clause (LICENSE-go) for the ziggurat files copied from Go's standard library."
+  ],
+  "pick_this_over_siblings_when": "Pick it in Go services and simulations that use a *Rand per goroutine; the catalogued siblings are C, C++, Python or R (NumPy and randomgen expose the same SFC64 algorithm to Python, fastrand speeds up Python's random, testingRNG and Romu cover C). For C++ use the SFC64 or Romu entries directly.",
+  "verified_claims_summary": "The author's benchstat tables (n=8-10, public rand_bench_*_test.go files, linux/amd64, Go version and flags not stated) show *Rand draw methods 31-69 percent faster than math/rand/v2's *Rand over a PCG source on an Intel Core i7-10510U, while top-level functions are 2.6-15 percent slower and Seed is about 80x slower; against legacy math/rand and x/exp/rand on a 48-thread Xeon E5-2680 v3, *Rand draw methods are 39-87 percent faster and parallel top-level calls about 99 percent faster because of lock contention in the old packages.",
+  "status_note": "Stale since 2024-11-05 but declared stable by its README, with 240 stars, CI across three OSes and four Go versions, and a permissive MPL-2.0/BSD-3-Clause license; it is a Go library, outside the C++ list unless cross-language entries are pulled forward.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/flyingmutant/rand/HEAD/README.md",
+    "https://github.com/flyingmutant/rand",
+    "https://raw.githubusercontent.com/flyingmutant/rand/HEAD/go.mod",
+    "https://raw.githubusercontent.com/flyingmutant/rand/HEAD/rand.go",
+    "https://raw.githubusercontent.com/flyingmutant/rand/HEAD/sfc64.go",
+    "https://raw.githubusercontent.com/flyingmutant/rand/HEAD/global.go",
+    "https://raw.githubusercontent.com/flyingmutant/rand/HEAD/global_go118.go",
+    "https://raw.githubusercontent.com/flyingmutant/rand/HEAD/global_go119.go",
+    "https://raw.githubusercontent.com/flyingmutant/rand/HEAD/global_go122.go",
+    "https://raw.githubusercontent.com/flyingmutant/rand/HEAD/global_unsafe.go",
+    "https://raw.githubusercontent.com/flyingmutant/rand/HEAD/global_unsafe_go122.go",
+    "https://raw.githubusercontent.com/flyingmutant/rand/HEAD/rand_generic.go",
+    "https://raw.githubusercontent.com/flyingmutant/rand/HEAD/std_normal.go",
+    "https://raw.githubusercontent.com/flyingmutant/rand/HEAD/std_exp.go",
+    "https://raw.githubusercontent.com/flyingmutant/rand/HEAD/rand_bench_test.go",
+    "https://raw.githubusercontent.com/flyingmutant/rand/HEAD/rand_bench_std_pcg_test.go",
+    "https://raw.githubusercontent.com/flyingmutant/rand/HEAD/LICENSE-go",
+    "https://raw.githubusercontent.com/flyingmutant/rand/HEAD/.github/workflows/ci.yml",
+    "https://github.com/flyingmutant/rand/issues?q=is%3Aissue",
+    "https://github.com/flyingmutant/rand/issues/8",
+    "https://github.com/flyingmutant/rand/issues/6",
+    "https://go.dev/blog/chacha8rand (WebSearch snippet only: Go 1.22 runtime and math/rand/v2 top-level functions use per-core ChaCha8)"
+  ],
+  "confidence": 0.85
+}

@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/fabiocannizzo/vmt19937",
+  "one_liner": "Header-only SIMD Mersenne Twister (MT19937, MT19937-64, SFMT); bulk fills 3.7-4.9x std::mt19937_64 on AVX2/AVX-512, X-family bit-identical.",
+  "what_it_does": "VMT19937 is a C++20 header-only library with two families of SIMD Mersenne Twister generators. The X-family (XMT19937, XMT19937_64, XSFMT19937) vectorizes one generator's recurrence and gives the same output as the reference code; tests check XMT19937_64 against std::mt19937_64 for the same seed. The V-family (VMT19937, VMT19937_64, VSFMT19937) runs 2-16 MT states de-phased by polynomial jump-ahead and reads them round-robin, so it produces a different but well-defined stream. The API is genrand_uint32()/genrand_uint64() per value, genrand_uint32_anySize(dst, n) for bulk, or genrand_uint32_blk16/genrand_word_blk when the QryBlk16 template flag is set; it is not a std::uniform_random_bit_generator.",
+  "how_it_is_fast": "The V-family is inter-state vectorization: SIMD lane i holds its own MT19937 state jumped ahead by roughly P/N steps (x^J mod the characteristic polynomial, Haramoto et al.'s polynomial jump), so the twist and tempering run at full register width with no remainder iterations or misaligned word groups. The X-family vectorizes the single-state recurrence with shifts and blends, which caps its gain. Both families regenerate and temper the whole state in bulk and serve values from a cache-aligned buffer, which is why even one-value-per-call use beats the reference code by 1.5-3.5x (doc/main.tex).",
+  "when_to_use": [
+    "You must keep Mersenne Twister output: XMT19937_64 matches std::mt19937_64 for the same seed and ran 1095 vs 590 M/s per call (AVX-512) and 2525 vs 590 M/s in bulk (about 4.3x, derived from page data)",
+    "Bulk generation on x86 with AVX2 or AVX-512 where a different MT-quality stream is acceptable: V-MT19937-64 reached 1161 (AVX2) and 2865 (AVX-512) M/s vs 317 and 590 for std::mt19937_64",
+    "Many independent MT streams for Monte Carlo (finance is the author's target), using the shipped jump-polynomial files or the jump_generator tool to space instances",
+    "32-bit output on AVX2: V-MT19937 vectorial 2392 M/s vs 305.7 for std::mt19937 (about 7.8x, derived from doc/main.tex)",
+    "Faster SFMT: V-SFMT19937 10943 M/s vs 4445 for the reference SFMT at AVX-512"
+  ],
+  "when_not_to_use": [
+    "ARM NEON or SVE for 64-bit output: std::mt19937_64 matched or beat it (NEON vectorial STL 285 vs X 255 and V 290 M/s; SVE256 scalar STL 573 vs V 513)",
+    "AVX-512 bulk 32-bit MT where MKL is available: MKL-MT was faster than V-MT19937 (6479 vs 5742 M/s README, 6578.9 vs 5841.4 in doc/main.tex), and X-MT19937 also beat V-MT19937 there because the 16-state V-MT19937 needs about 40 KB of state and overflows L1",
+    "Portable binaries for baseline x86-64: the ISA is fixed at compile time (no runtime dispatch), and simd_config.h stops with '#error SSE4.2 is needed' for SSE2-only flags or 'AVX2 is needed' for AVX-only flags",
+    "Code that wants a drop-in engine for <random> distributions: there is no operator()/result_type/min/max, so you need a small adapter",
+    "Teams that want an established dependency: single author, 3 stars, no tagged releases, and one open issue (MKL comparison request)"
+  ],
+  "integration": {
+    "form": "header-only (include/ directory; RandGen.h plus polynomial_jump.h); V-family also needs the ~4 KB dat/poly/*.bits jump files at runtime",
+    "dependencies": "none for the library; Intel MKL and TestU01 optional for the benchmark and test executables",
+    "min_toolchain": "C++20; README lists GCC 13+, Clang 16+ or MSVC 2022 (/std:c++20); bundled executables need GNU make",
+    "platforms": "x86-64 with SSE4.2, AVX2 or AVX-512 (F/VL/BW/DQ plus PCLMUL in the Makefile), aarch64 NEON and SVE (256-bit vector length); chosen at compile time via SIMD_N_BITS/SIMD_ISA or compiler flags",
+    "thread_safety": "not documented; generator state lives in the object and the shared statics are const tables, so one instance per thread is the natural pattern",
+    "drop_in_for_baseline": "partial: the X-family reproduces std::mt19937/std::mt19937_64 output (test.cpp checks XMT19937_64 against std::mt19937_64 and the 32-bit reference against std::mt19937), but the API is genrand_uint32/genrand_uint64 rather than operator(), and the V-family produces a different sequence"
+  },
+  "gotchas": [
+    "The README's 'Multiple Independent Generators' example builds 10 generators with the same seed and the same 2^100 commonJump, so all ten emit identical streams; the code comment admits you would need commonJump^i. Pre-compute distinct jumps per instance.",
+    "V-family output depends on VRegBitLen, not the ISA: fix the template width (e.g. VMT19937<512>) to get the same stream on AVX2 and AVX-512 hosts, and load the jump file that matches it (J19934 for 256-bit MT32, etc.). Polynomial::fromBinFile does not check the generator type (loadWithCheck does).",
+    "Constructing a V-family generator without a sequential jump throws std::logic_error ('Having multiple states and no sequential jump provided does not make sense'); missing files also fail through MYASSERT exceptions, so plan for exceptions at init.",
+    "QryBlk16 switches the API at compile time: with it, genrand_uint32() fails a static_assert and you must use genrand_uint32_blk16(dst) (dst ideally 64-byte aligned); without it, only per-value and anySize calls exist."
+  ],
+  "pick_this_over_siblings_when": "Pick VMT19937 over pXart, SFMT or cslarsen/mersenne-twister when you need Mersenne Twister specifically and want AVX-512, NEON and SVE paths, a bit-identical X-family, plus jump-ahead tooling for parallel streams. If you are free to change algorithm, simdrng (xoshiro256++/Philox) or SHISHUA give more throughput per core with far smaller state.",
+  "verified_claims_summary": "The author's perf.cpp harness (GCC 16; -O3 -std=c++20 with -march=native or explicit ISA flags; volatile traps against dead-code elimination) measured millions of samples per second on five CPUs: Celeron J4125 (SSE4.2), Xeon E5-2686 v4 (AVX2), Xeon Platinum 8375C (AVX-512), Neoverse-N1 (NEON) and Neoverse-V1 (SVE256). In block mode (10,240 values per call) V-MT19937-64 reached 1161 and 2865 M/s against 317 and 590 for libstdc++ std::mt19937_64 on the AVX2 and AVX-512 Xeons. The STL 'vectorial' figures are copied from its per-call loop, since std::mt19937 has no block API (doc/main.tex footnote).",
+  "status_note": "Active (393 commits, last commit 2026-05-29) and MIT-licensed, so easy to vendor, but single-author with 3 stars and no releases; the paper source is in doc/main.tex.",
+  "sources_read": [
+    "https://github.com/fabiocannizzo/VMT19937",
+    "https://github.com/fabiocannizzo/VMT19937/issues",
+    "https://github.com/fabiocannizzo/VMT19937/tree/master/src",
+    "https://github.com/fabiocannizzo/VMT19937/tree/master/include",
+    "https://raw.githubusercontent.com/fabiocannizzo/VMT19937/master/README.md",
+    "https://raw.githubusercontent.com/fabiocannizzo/VMT19937/master/BUILD.txt",
+    "https://raw.githubusercontent.com/fabiocannizzo/VMT19937/master/LICENSE",
+    "https://raw.githubusercontent.com/fabiocannizzo/VMT19937/master/Makefile",
+    "https://raw.githubusercontent.com/fabiocannizzo/VMT19937/master/doc/main.tex",
+    "https://raw.githubusercontent.com/fabiocannizzo/VMT19937/master/src/perf.cpp",
+    "https://raw.githubusercontent.com/fabiocannizzo/VMT19937/master/src/test.cpp",
+    "https://raw.githubusercontent.com/fabiocannizzo/VMT19937/master/include/RandGen.h",
+    "https://raw.githubusercontent.com/fabiocannizzo/VMT19937/master/include/MT19937.h",
+    "https://raw.githubusercontent.com/fabiocannizzo/VMT19937/master/include/SIMD.h",
+    "https://raw.githubusercontent.com/fabiocannizzo/VMT19937/master/include/simd_config.h",
+    "https://raw.githubusercontent.com/fabiocannizzo/VMT19937/master/include/polynomial_jump.h",
+    "https://raw.githubusercontent.com/fabiocannizzo/VMT19937/master/include/macros.h"
+  ],
+  "confidence": 0.85
+}
