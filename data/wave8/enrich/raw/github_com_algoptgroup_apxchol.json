@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/algoptgroup/apxchol",
+  "one_liner": "Parallel randomized approximate-Cholesky PCG for graph-Laplacian and SDDM systems; beats hypre BoomerAMG on total solve time.",
+  "what_it_does": "apxchol solves Lx = b where L is a graph Laplacian or a symmetric diagonally dominant M-matrix (SDDM), by building a randomized approximate Cholesky factor and using it as the preconditioner in PCG. The C++ API takes an Eigen::SparseMatrix<double>: a one-shot apxchol::solve(L, b, {.tol = 1e-8}), a reusable apxchol::cpu_solver that factors once and solves many right-hand sides (with warm starts and a caller-memory overload), and apxchol::apx_cholesky, which plugs into Eigen's iterative-solver preconditioner interface. A CLI reads Matrix Market files (an adjacency matrix is turned into D - A), and Python (pip install apxchol) and Octave/MATLAB bindings are included.",
+  "how_it_is_fast": "It implements Kyng-Sachdeva style approximate Gaussian elimination: when a vertex is eliminated, the dense clique it would create is replaced by a few sampled edges (Gao-Kyng-Spielman 'GKS' sampler by default, a 'trace_cycle' sampler as an option), so the factor stays about as sparse as the graph. Elimination is parallelized with OpenMP by eliminating independent sets of low-degree vertices per round (block-greedy selection capped at the lowest 20% by current degree), then Baumann-Kyng style rounds on the dense residual and a short serial peel. Factor and triangular-solve arrays are stored in FP32 (optionally scaled FP16) while PCG vectors stay FP64; the CUDA build adds a synchronization-free dataflow triangular solve and a GPU-resident PCG.",
+  "when_to_use": [
+    "Large graph Laplacians from social, web or collaboration networks with skewed degrees: in the authors' GH200 table it takes 4.68 s on com-LiveJournal against 149 s for BoomerAMG and 83.7 s for AMGCL, and 0.76 s on as-Skitter against 69.8 s and 6.8 s.",
+    "Interior-point Laplacian/SDDM systems that change every iteration, where AMG setup is expensive: about 0.3 s against 7.6-9.9 s for AMGCL on the iter0020-iter0040 matrices.",
+    "Many right-hand sides on one fixed Laplacian (factor once with cpu_solver, then solve or apply repeatedly), from C++, Python or Octave.",
+    "Multicore CPU servers where you can pin threads across NUMA domains; the solver is memory-bandwidth bound and the README gives placement guidance."
+  ],
+  "when_not_to_use": [
+    "General SPD matrices that are not Laplacian or SDDM (for example elasticity or most higher-order FEM systems): only Laplacian and SDDM inputs are supported.",
+    "Regular grids and FEM meshes where AMG already works well: AMGCL matched or beat it on grid_500, grid3d_100, grid_5000, parabolic_fem, kron_g500-logn16 and com-Orkut, and BoomerAMG needs 7-9 PCG iterations where apxchol needs 30-50.",
+    "Projects that need bit-reproducible results across thread counts: the docs state a fixed seed does not give byte-identical parallel factors, so iteration counts can vary between runs.",
+    "Licensing-sensitive or GPL projects: the BSD-4-Clause advertising clause is not OSI-approved and is GPL-incompatible.",
+    "Expecting a GPU win for a single right-hand side: in the historical GH200 campaign the CPU build was faster than its own GPU build (CPU/GPU total-time ratio 0.461, solve-only 0.853)."
+  ],
+  "integration": {
+    "form": "static lib built from source with CMake (no install rules in the root CMakeLists), plus a CPU-only PyPI wheel",
+    "dependencies": "Eigen 3.3+ (fetched if absent) for the core; optional OpenMP (may need libatomic for long-double reductions) and CUDA (cudart only); CLI11, spdlog and fast_matrix_market are fetched for the CLI; GoogleTest for tests",
+    "min_toolchain": "C++23 compiler, CMake 3.16+; CUDA device code compiled as C++20 (nvcc 13.x noted); measured builds used Clang 22 with libomp and GCC 14.3",
+    "platforms": "x86-64 and aarch64 (measured on GH200 Grace and EPYC 7742); NVIDIA GPUs optional; -march=native / -mcpu=native is on by default; CPU FP16 factor storage needs F16C; PyPI 0.2.2 wheels are Linux x86-64 only (CPython 3.10-3.14)",
+    "thread_safety": "cpu_solver solve/apply calls are not safe concurrently on the same object (shared reused PCG workspace, per solve.h); separate solver objects are independent. Internal parallelism is OpenMP and the library never changes thread affinity.",
+    "drop_in_for_baseline": "partial — the apx_cholesky preconditioner fits Eigen's iterative-solver interface, but replacing hypre BoomerAMG means a different API and only Laplacian/SDDM inputs"
+  },
+  "gotchas": [
+    "The library's default build uses -march=native, so binaries are not portable to older CPUs; turn off APXCHOL_NATIVE_ARCH for redistributable builds.",
+    "Thread placement matters more than thread count: on an EPYC 7742 socket, 32 threads spread over 4 NUMA domains took 0.77 of the 16-threads-on-one-domain time, and all 64 cores were slower than 32; pin threads explicitly with OMP_PLACES.",
+    "For a singular (connected) Laplacian the returned x is the minimum-norm solution with mean zero, whatever constant component the warm start had; a wrong-length x0 throws std::invalid_argument.",
+    "APXCHOL_POOL_FP32=OFF does not make it an all-FP64 solver: the assembled factor stays FP32 and GPU triangular solves default to scaled FP16."
+  ],
+  "pick_this_over_siblings_when": "Pick apxchol over AMGCL when the systems are graph Laplacians of skewed-degree networks or interior-point SDDM matrices, where it wins by up to 31x in the authors' tables; keep AMGCL for general SPD problems and for grids and FEM meshes, where it ties or wins. Against LAMG+, which also targets graph Laplacians, apxchol offers a C++ library with OpenMP and CUDA builds and Python bindings, but no head-to-head between the two was found.",
+  "verified_claims_summary": "The authors measured setup plus solve to a 1e-8 true relative residual, one right-hand side, 72 threads on a CSCS Daint GH200 node; from the refreshed summary table the CPU build is a geometric-mean 5.7x faster than CPU hypre BoomerAMG (26 of 26 matrices) and 2.4x faster than AMGCL (faster on 18, tied on 3 and slower on 6 of 27, derived from page data), while the labelled historical campaign 2b755997 reports 3.3x over BoomerAMG and 1.7x over AMGCL with AMGCL winning 16 of 26. Compiler versions come from a later CSV snapshot and exact flags of the measured binaries are not listed; all numbers are first-party.",
+  "status_note": "Active ETH Zurich research code (354 commits, last commit 2026-09-30, PyPI 0.2.2 from 2026-07-27, 8 stars, no issues filed); usable from source or pip, but the BSD-4-Clause advertising clause limits it to reference use in this catalog.",
+  "sources_read": [
+    "https://github.com/AlgOptGroup/apxchol",
+    "https://raw.githubusercontent.com/AlgOptGroup/apxchol/HEAD/README.md",
+    "https://raw.githubusercontent.com/AlgOptGroup/apxchol/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/AlgOptGroup/apxchol/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/AlgOptGroup/apxchol/HEAD/AGENTS.md",
+    "https://raw.githubusercontent.com/AlgOptGroup/apxchol/HEAD/CPU-RESIDUAL-BLOCKED.md",
+    "https://raw.githubusercontent.com/AlgOptGroup/apxchol/HEAD/docs/precision.md",
+    "https://raw.githubusercontent.com/AlgOptGroup/apxchol/HEAD/include/apxchol.h",
+    "https://raw.githubusercontent.com/AlgOptGroup/apxchol/HEAD/include/apxchol/solver/factor_options.h",
+    "https://raw.githubusercontent.com/AlgOptGroup/apxchol/HEAD/include/apxchol/solver/solve.h",
+    "https://raw.githubusercontent.com/AlgOptGroup/apxchol/HEAD/include/apxchol/solver/preconditioner.h",
+    "https://raw.githubusercontent.com/AlgOptGroup/apxchol/HEAD/benchmarks/README.md",
+    "https://raw.githubusercontent.com/AlgOptGroup/apxchol/HEAD/benchmarks/daint/fair_t72_summary.md",
+    "https://raw.githubusercontent.com/AlgOptGroup/apxchol/HEAD/benchmarks/daint/summary.md",
+    "https://raw.githubusercontent.com/AlgOptGroup/apxchol/HEAD/benchmarks/daint/PLATFORM.md",
+    "https://raw.githubusercontent.com/AlgOptGroup/apxchol/HEAD/benchmarks/daint/results.csv",
+    "https://github.com/AlgOptGroup/apxchol/issues?q=is%3Aissue",
+    "https://pypi.org/pypi/apxchol/json"
+  ],
+  "confidence": 0.8
+}

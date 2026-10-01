@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/kul-optec/qpalm",
+  "one_liner": "Sparse C solver for convex and nonconvex quadratic programs; lower runtime geometric mean than OSQP on Maros-Meszaros, but less reliable.",
+  "what_it_does": "QPALM finds stationary points of QPs of the form minimize 1/2 x'Qx + q'x subject to bmin <= Ax <= bmax, including nonconvex Q. The core is a C11 library (QPALMData/QPALMSettings, setup, solve, warm_start, update_bounds, update_q, update_Q_A) with a C++17 wrapper (qpalm::Data, qpalm::Solver over Eigen sparse matrices; Q is passed as its upper triangle) plus Python, Julia, Matlab and Fortran bindings. It is an alternative to OSQP with a different settings and status set, not a source-level drop-in.",
+  "how_it_is_fast": "It is a proximal augmented Lagrangian method whose inner subproblems are solved with a semismooth Newton method and an exact line search (sorting breakpoints of a piecewise quadratic), so each outer iteration takes few, accurate steps instead of the many cheap ADMM steps OSQP takes. The Newton systems are solved with the bundled LADEL sparse LDL factorization (AMD ordering), choosing between the KKT system and a Schur complement, and updated by low-rank row updates and downdates when constraints enter or leave the active set instead of refactorizing. For nonconvex Q it estimates the minimum eigenvalue with LOBPCG and a Gershgorin bound to set the proximal term.",
+  "when_to_use": [
+    "Sparse convex QPs at default or moderate tolerances (around 1e-6 to 1e-3) where OSQP needs too many ADMM iterations; in qpbenchmark its runtime geometric mean is 3.6 vs OSQP 12.7 at default settings and 2.2 vs 51.9 at mid accuracy.",
+    "Nonconvex QPs where a stationary point is acceptable (for example subproblems inside SQP or nonlinear MPC); the README states this scope and the code has a dedicated path (LOBPCG minimum-eigenvalue estimate, compiled in by default with QPALM_NONCONVEX).",
+    "Sequences of related QPs (MPC, branch and bound) where warm starts, bound and vector updates and the optional dual-objective termination limit can be used.",
+    "Projects that need the same solver from C, C++, Python, Julia, Matlab and Fortran, with prebuilt binaries for Linux, Windows and macOS on x86-64 and ARM64."
+  ],
+  "when_not_to_use": [
+    "When a correct 'solved' status matters: in qpbenchmark v2.3.0 its solved return codes matched the tolerance check on only 57/63/34/37% of Maros-Meszaros problems (default/high/low/mid), against 96-100% for ProxQP and PIQP.",
+    "High-accuracy solves (1e-9): success rate 25.4% vs OSQP 26.1% on the full set and 8% vs 13% on the sparse subset, and its duality-gap geometric mean (1237362.9) is the worst in the table.",
+    "When the fastest robust convex QP solver is the goal: PIQP is 2-5x faster than QPALM in the same table and solves 73-97% of problems.",
+    "Closed-source static linking without LGPL obligations: the core, LADEL and LOBPCG are LGPL-3.0.",
+    "Dense small QPs: the solver is built around sparse LDL factorization; no dense path is documented in the files read."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (CMake 3.23+), plus PyPI wheel, Julia package and Matlab zip",
+    "dependencies": "LADEL (bundled, LGPL-3.0, includes AMD ordering); bundled LOBPCG and LAPACK pieces; Eigen3 only for the C++ interface",
+    "min_toolchain": "C11 compiler with stdatomic.h (MSVC needs /experimental:c11atomics); C++17 for the C++ interface; CMake 3.23",
+    "platforms": "Portable C; binaries for Linux, Windows and macOS on x86-64 and ARM64, wheels also for ARMv6/ARMv7",
+    "thread_safety": "Not documented. Each solver keeps its state in its own QPALMWorkspace, and the cancel flag is an atomic_bool meant to be set from another thread or a signal handler; the custom calloc/malloc/realloc/free and printf hooks are process-global setters.",
+    "drop_in_for_baseline": "partial — same problem form as OSQP (l <= Ax <= u, upper-triangular Q) and bindings through the qpsolvers Python package, but a different API, settings and status codes"
+  },
+  "gotchas": [
+    "The default eps_abs and eps_rel are 1e-4 and verbose output is on by default; set tolerances explicitly before comparing against another solver.",
+    "Check residuals yourself rather than trusting QPALM_SOLVED: the independent benchmark found many 'solved' answers that fail the stated tolerance, and qpbenchmark charges no time-limit penalty for them, which flatters the runtime figure.",
+    "Version 1.3.0 (2026-08-26) fixed scaling of the initial dual guess, residual recomputation on time or iteration limits, the dual objective and the Fortran interface's unscaled solution; the qpbenchmark numbers are from 1.2.3, before these fixes. Issue #9 (solution variables returned scaled on HS21) is closed, while issue #7 (dual cost computation fails when the Hessian is rank deficient) is still open.",
+    "The C++ Solver returns a solution view that is only valid while the Solver object is alive and unchanged; copy x and y into vec_t to keep them."
+  ],
+  "pick_this_over_siblings_when": "Pick QPALM over PIQP and ProxQP (ProxSuite) only when the QP may be nonconvex or you need its Fortran, Julia or Matlab bindings; for convex QPs PIQP is faster and far more reliable in the same independent benchmark, and ProxQP has much better solved-status correctness. Against the OSQP baseline QPALM wins on runtime at all four settings but is not more accurate at high tolerance.",
+  "verified_claims_summary": "In the third-party qpbenchmark v2.3.0 run (2024-09-07, prebuilt Python wheels qpalm 1.2.3 and osqp 0.6.7.post0 via qpsolvers, Intel Core i7-6500U, no compiler flags applicable), QPALM's shifted geometric-mean runtime on the 138 Maros-Meszaros problems was 3.6/4.8/3.4/2.2 versus OSQP's 12.7/16.1/52.8/51.9 at default/high/low/mid accuracy, with PIQP = 1.0. Its success rates were 55.8/25.4/31.2/31.2%, and failures reported as 'solved' are timed at face value rather than at the 1000 s limit.",
+  "status_note": "Actively maintained by KU Leuven's optimization group (version 1.3.0 released 2026-08-26 with scaling and dual-objective fixes; the original Benny44/QPALM_vLADEL repo is unmaintained); LGPL-3.0 with prebuilt C/C++/Fortran libraries and PyPI wheels, so linking it is easy but vendoring into a closed binary carries LGPL obligations.",
+  "sources_read": [
+    "https://github.com/kul-optec/QPALM",
+    "https://raw.githubusercontent.com/kul-optec/QPALM/HEAD/README.md",
+    "https://raw.githubusercontent.com/kul-optec/QPALM/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/kul-optec/QPALM/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/kul-optec/QPALM/HEAD/QPALM/CMakeLists.txt",
+    "https://github.com/kul-optec/QPALM/tree/main/QPALM",
+    "https://github.com/kul-optec/QPALM/tree/main/QPALM/include/qpalm",
+    "https://raw.githubusercontent.com/kul-optec/QPALM/HEAD/QPALM/include/qpalm/solver_interface.h",
+    "https://raw.githubusercontent.com/kul-optec/QPALM/HEAD/QPALM/include/qpalm/constants.h",
+    "https://raw.githubusercontent.com/kul-optec/QPALM/HEAD/QPALM/include/qpalm/types.h",
+    "https://raw.githubusercontent.com/kul-optec/QPALM/HEAD/QPALM/include/qpalm/global_opts.h",
+    "https://raw.githubusercontent.com/kul-optec/QPALM/HEAD/QPALM/src/global_opts.c",
+    "https://raw.githubusercontent.com/kul-optec/QPALM/HEAD/QPALM/include/qpalm/linesearch.h",
+    "https://raw.githubusercontent.com/kul-optec/QPALM/HEAD/QPALM/include/qpalm/nonconvex.h",
+    "https://raw.githubusercontent.com/kul-optec/QPALM/HEAD/QPALM/include/qpalm/newton.h",
+    "https://github.com/kul-optec/QPALM/tree/main/QPALM/interfaces",
+    "https://github.com/kul-optec/QPALM/tree/main/QPALM/interfaces/cxx/include/qpalm",
+    "https://raw.githubusercontent.com/kul-optec/QPALM/HEAD/QPALM/interfaces/cxx/include/qpalm.hpp",
+    "https://raw.githubusercontent.com/kul-optec/QPALM/HEAD/QPALM/interfaces/cxx/include/qpalm/sparse.hpp",
+    "https://raw.githubusercontent.com/kul-optec/QPALM/HEAD/QPALM/interfaces/cxx/CMakeLists.txt",
+    "https://github.com/kul-optec/QPALM/issues?q=is%3Aissue",
+    "https://github.com/kul-optec/QPALM/issues/7",
+    "https://github.com/kul-optec/QPALM/issues/9",
+    "https://github.com/kul-optec/QPALM/commits/main",
+    "https://raw.githubusercontent.com/qpsolvers/maros_meszaros_qpbenchmark/main/results/maros_meszaros.md"
+  ],
+  "confidence": 0.8
+}

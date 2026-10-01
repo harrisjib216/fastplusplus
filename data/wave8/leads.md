@@ -60,3 +60,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - arXiv 2110.05843 (Q-learning-scheduled block solver for power-system simulation, possibly by the GSS author).
 - PRNG Battle Royale: 47 PRNGs x 9 consoles (rhet.dev, unreachable here; header repo Almightygir/rhet_RNG); ROOT's portable RanluxppEngine could be its own entry.
 - Caracal (SC25, GPU-resident sparse LU; snippet: up to 7x over SuperLU_DIST, 94x over PanguLU, 16x over PaStiX on A100) and Hu et al. 2025 irregular-blocking LU (arXiv 2512.04389: 1.50x over PanguLU, 3.32x over SuperLU_DIST on one A100); code not found for either.
+- SPRAL SSIDS (RSLAB matching source); jkitchin/feral; Laplacians.jl approxchol; orenlivne/nlf.
