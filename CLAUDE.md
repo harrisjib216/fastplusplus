@@ -127,5 +127,7 @@ after 2 failed fetches, the privacy/scratch rules above, and the terse final-rep
 - Wave 8 (numerics-and-science) is set up but not started: `data/wave8/assignments.json`
   (56 assignments: blas, fft, sparse, bigint, ml, rng, geo x b1-b8) and the b1/b2 prompts are
   committed. Next: launch the b1 and b2 searches. The user paused on 2026-09-26; resume when asked.
-- Then waves 9-12 per spec Part 4. zlib-ng and libdeflate are already filed under wave 9's
+- Waves 9-12 are set up (2026-10-01): `data/wave{9,10,11,12}/assignments.json` (152 assignments,
+  19 categories x b1-b8) and leads.md; b1/b2 prompts rendered. Re-render b1/b2 before launching a
+  later wave so its known list is current. zlib-ng and libdeflate are already filed under wave 9's
   general-lossless category.
