@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/pscamillo/mr_blackwell",
+  "one_liner": "CUDA base-2 Miller-Rabin kernel with PTX-carry Montgomery multiplication; replaces CGBN in prime-gap and runs about 9x faster than the CPU/GMP pipeline.",
+  "what_it_does": "Runs batched base-2 strong probable-prime (Miller-Rabin) tests on odd candidates of up to 2048 bits on NVIDIA GPUs. miller_rabin_native.h exposes the same mr_params_t / test_runner_t interface as the CGBN-based miller_rabin.h in sethtroisi/prime-gap (run_test takes a vector of mpz_t pointers and fills 0/1 results), so integration means changing one #include. mr_blackwell.cu is a separate benchmark and correctness program. It is not a general big-integer library: only modular exponentiation with base 2 is implemented.",
+  "how_it_is_fast": "One GPU thread per candidate runs Montgomery CIOS multiplication written with inline PTX carry-chain instructions (mad.lo.cc, madc.hi, add.cc, addc), fixed-window modular exponentiation, and comparisons against 1 and n-1 done in Montgomery form to skip conversions. The limb count is a template parameter sized to the operand (22 limbs for 683 bits instead of 32, about 2x per the README). Version 2 computes R^2 mod n (by repeated doubling) and -n^-1 mod 2^32 (Newton iteration) on the device, so the host only exports limbs: per-candidate data drops from 268 to 136 bytes and the measured prime-gap run went from 92 s to 70 s.",
+  "when_to_use": [
+    "You run sethtroisi/prime-gap's gap_test_gpu on a Blackwell GPU (sm_120), where the author reports CGBN as orders of magnitude too slow.",
+    "Bulk base-2 PRP screening of many independent, pre-sieved odd numbers of 512-2048 bits (prime-gap and primorial searches) on a consumer NVIDIA GPU.",
+    "The CPU PRP stage is your bottleneck: paired with the included hunt_parallel.sh, which overlaps CPU sieving with GPU testing (85 s down to 52 s per range in the script's own example).",
+    "You want a small Apache-2.0 reference for Montgomery multiplication with PTX carry chains to adapt to another fixed-size modular-exponentiation kernel."
+  ],
+  "when_not_to_use": [
+    "You need a proof of primality or a multi-base or BPSW test: only base 2 is tested and the rounds argument of test_runner_t is ignored, so base-2 strong pseudoprimes pass; confirm survivors on the CPU.",
+    "Secret exponents or any cryptographic use: the code declares CONSTANT_TIME = false and uses exponent-indexed window tables and early exits.",
+    "General bignum arithmetic, arbitrary bases or moduli, operands above 2048 bits, AMD/Intel GPUs or CPU-only machines.",
+    "Pre-Blackwell NVIDIA GPUs where CGBN works: other architectures are listed as 'should work (untested)', and no comparison with CGBN on a GPU where CGBN runs normally is published.",
+    "Multi-GPU or library embedding: test_runner_t hard-codes cudaSetDevice(0) and calls exit(1) on CUDA errors or oversized candidates."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "CUDA Toolkit (README: 11.0+, 12.x recommended; tested with 12.9), GMP on the host for mpz_export and the correctness check",
+    "min_toolchain": "nvcc from CUDA 11.0+ (README); built with nvcc -O3 -arch=sm_XXX",
+    "platforms": "NVIDIA GPUs SM 3.5+ claimed; only SM 12.0 (RTX 5070) tested; Linux (Linux Mint) tested",
+    "thread_safety": "not documented; each test_runner_t owns one pinned host buffer and one device buffer and launches synchronously on device 0, so concurrent run_test calls on one runner would share those buffers",
+    "drop_in_for_baseline": "partial — drop-in for CGBN's miller_rabin.h inside prime-gap only; not a replacement for GMP's mpz_probab_prime_p or for CGBN as a general GPU bignum library"
+  },
+  "gotchas": [
+    "The '132x vs CPU (GMP)' and '21x' figures divide GPU throughput by a hard-coded 13,700 PRP/sec ('%.1fx vs CPU@13700' in mr_blackwell.cu); GMP is only an untimed correctness check (mpz_probab_prime_p(n, 1)), and the 13,700 comes from a single-threaded CPU run. The measured end-to-end comparison is 28.0 s versus 3.1 s, about 9x.",
+    "The standalone benchmark kernel takes R^2 mod n and n0inv precomputed on the host, while the shipped header computes them on the GPU (its comments estimate about 8% extra kernel time), so 'make bench' does not time the shipped kernel exactly; both time the kernel only, without host-device copies.",
+    "The code defaults to a 5-bit window (MR_WINDOW_BITS 5), while the README describes a 4-bit window and says 5 bits gave only 2.3%; the 32-entry table per thread (about 2.8 KB at 22 limbs, 5 KB at 40) lives in local memory.",
+    "In the header LIMBS = BITS / 32, so BITS must be a multiple of 32 that covers the candidate (e.g. BITS=704 for P=503), or from_mpz_native aborts the process. The carry flag is passed between separate asm volatile statements, which relies on the compiler not inserting flag-clobbering instructions; the only correctness evidence is the GMP cross-check in 'make test'."
+  ],
+  "pick_this_over_siblings_when": "Pick it over CGBN on Blackwell (sm_120) when you only need base-2 PRP tests at fixed sizes; CGBN remains the general GPU bignum library with published V100 results for add, mul and powm. For CPU-only batches, the AVX-512 truncated batch Montgomery entry (about 4-5x GMP on batched 1024-4096-bit Montgomery multiplications) is the closer alternative.",
+  "verified_claims_summary": "On an RTX 5070 (CUDA 12.9, nvcc -O3 -arch=sm_120) the standalone kernel tests 65,536 random odd 683-bit candidates at about 1.8 million base-2 PRP/sec (295,000 at 1240 bits). The '132x versus GMP' figure divides that by a hard-coded 13,700 PRP/sec from a single-threaded CPU run on a 'Ryzen 9 8800X3D' (as named in the README), with GMP version and flags not stated. The measured prime-gap run (P=503, 13K tests) takes 3.1 s on the GPU versus 28.0 s for CPU gap_test_simple, about 9x (derived from page data).",
+  "status_note": "Recently active (18 commits, last 2026-05-05; 3 stars, no releases or open issues) and Apache-2.0 with a single header of about 19 KB, but tested on one RTX 5070 only and tied to prime-gap's interface.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/pscamillo/mr_blackwell/HEAD/README.md",
+    "https://raw.githubusercontent.com/pscamillo/mr_blackwell/HEAD/Makefile",
+    "https://raw.githubusercontent.com/pscamillo/mr_blackwell/HEAD/mr_blackwell.cu",
+    "https://raw.githubusercontent.com/pscamillo/mr_blackwell/HEAD/miller_rabin_native.h",
+    "https://raw.githubusercontent.com/pscamillo/mr_blackwell/HEAD/hunt_parallel.sh",
+    "https://github.com/pscamillo/mr_blackwell",
+    "https://github.com/pscamillo/mr_blackwell/commits/main"
+  ],
+  "confidence": 0.75
+}

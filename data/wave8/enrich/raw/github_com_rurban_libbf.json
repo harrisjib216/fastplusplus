@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/rurban/libbf",
+  "one_liner": "Fabrice Bellard's tiny MIT-licensed C arbitrary-precision float library; NTT multiplication edges MPFR only at very high precision.",
+  "what_it_does": "LibBF is a small C library (about 90 KB of x86 code, no dependencies) for correctly rounded binary floating-point numbers of any precision with IEEE 754 semantics (subnormals, infinities, NaN, five rounding modes plus faithful rounding), plus base-10 floats and arbitrarily large integers via a special infinite precision. The API is stateless and differs from MPFR's: numbers carry no precision; each call such as bf_mul(r, a, b, prec, flags) takes the precision and rounding mode and returns IEEE status flags, and all allocation goes through a bf_context_t with a user-supplied realloc. It is not a drop-in for mpfr_t code.",
+  "how_it_is_fast": "Above 100 limbs (6,400 bits) for the smaller operand, multiplication switches from schoolbook to a Number Theoretic Transform over up to five word-sized primes (50-51-bit moduli in the AVX2 build, 61-62-bit in the portable build) recombined by CRT; the AVX2 build uses an original SIMD NTT on 64-bit doubles that relies on FMA to get exact products, and the portable build uses 128-bit integers with modular reductions replaced by multiplications. Division, square root and radix conversion are built on that multiplication, giving near-linear running time for the basic operations. Below 100 limbs there is no Karatsuba or Toom stage, which is why it trails MPFR at ordinary precisions.",
+  "when_to_use": [
+    "Very high precision multiplication (hundreds of thousands of bits and up) where a permissive license matters more than peak speed: the one measured win is mul at 300,000 bits, 51.2 vs 78.9 ns/limb for MPFR on an Apple M4",
+    "Embedding arbitrary-precision floats in a small C/C++ program, interpreter or calculator without linking GMP/MPFR (LGPL): a few C files, custom allocator hook, MIT license",
+    "Exact emulation of IEEE 754 formats with a configurable exponent width and subnormals, e.g. checking hardware or soft-float results",
+    "Needing integers, binary floats and decimal floats from one tiny library with a single number type"
+  ],
+  "when_not_to_use": [
+    "Ordinary precisions (53 bits to tens of thousands of bits): MPFR is faster on mul, add, div and sqrt in the same report (mul at 53 bits 43.4 vs 15.6 ns/limb, div at 30,000 bits 370.9 vs 64.9)",
+    "Transcendental-heavy code: exp, log, sin, cos, tan are about 2-7x slower than MPFR at 53-256 bits (exp at 53 bits 2985 vs 518 ns/limb); the README says they use an O(n^(1/2) M(n)) method and lack a rigorous rounding-error proof",
+    "Record-size constant computation: the README says it is about 4x slower than Bellard's TachusPI on pi",
+    "Decimal floats at high precision: base-10 arithmetic, input and output are quadratic per the README",
+    "32-bit targets: the README says the code is not designed to be efficient there and numbers are limited to about 10 million digits"
+  ],
+  "integration": {
+    "form": "source-drop (libbf.c, libbf.h, cutils.c, cutils.h; Makefile builds examples only)",
+    "dependencies": "none for the library (libm); bftest needs MPFR, GMP and libmpdec",
+    "min_toolchain": "GCC or Clang with __int128 and GNU builtins/attributes on 64-bit (C99-era C); Windows via the Makefile's mingw cross-compile option; MSVC not documented",
+    "platforms": "tested on 64-bit x86 per the README; portable C elsewhere (aarch64 used in the Apple M4 benchmark); optional AVX2+FMA build (-mavx2 -mfma -mbmi2) needs Haswell or later",
+    "thread_safety": "not documented; bf_context_t holds mutable pi/log2 constant caches and NTT state, so use one context per thread",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "libbf.h has no extern \"C\" guard; C++ code must wrap the include itself",
+    "The AVX2 and portable builds handle different maximum sizes (8*10^12 vs 4*10^16 digits per the README)",
+    "A 2024 radare2 report (issue 23317, PR 23318) flagged an unchecked size computation (na + 1) * sizeof(limb_t) before bf_malloc in __bf_div that could overflow; the 2025-06-03 code in this mirror still lacks that check",
+    "The README says memory allocation failures are not always reported correctly in the transcendental functions, and some unlikely overflow/underflow cases in exp and pow are not handled"
+  ],
+  "pick_this_over_siblings_when": "Pick libbf over MPFR-based options (FLINT, MPFR itself) only when you need an MIT-licensed, dependency-free arbitrary-precision float in a few C files; for speed at 53-256 bits, double-double/quad-double types (DoubleFloats.jl, MultiFloats.jl in Julia, TLFloat in C++) are far faster, and for huge-precision throughput FLINT (GMP-backed) is the stronger choice.",
+  "verified_claims_summary": "A report by the author of libbeef, a competing Rust port, put libbf 2025-06-03's own bftest (clang -O2, modified to use clock_gettime, random-length run-length operands) next to MPFR 4.2 via rug 1.30.0 in a separate Rust harness on an Apple M4; libbf's mul was faster only at 300,000 bits (51.2 vs 78.9 ns/limb, about 1.5x) and slower on every other operation and size. The comparison is cross-harness with different operand generators, so even that one win is not like-for-like.",
+  "status_note": "Stale mirror (last commit 2025-08-19, synced to Bellard's 2025-06-03 tarball plus warning fixes and CI); QuickJS dropped libbf in 2025, but the code is MIT, small and self-contained enough to vendor.",
+  "sources_read": [
+    "https://github.com/rurban/libbf",
+    "https://github.com/rurban/libbf/commits",
+    "https://raw.githubusercontent.com/rurban/libbf/HEAD/readme.txt",
+    "https://raw.githubusercontent.com/rurban/libbf/HEAD/VERSION",
+    "https://raw.githubusercontent.com/rurban/libbf/HEAD/Makefile",
+    "https://raw.githubusercontent.com/rurban/libbf/HEAD/libbf.h",
+    "https://raw.githubusercontent.com/rurban/libbf/HEAD/libbf.c",
+    "https://raw.githubusercontent.com/rurban/libbf/HEAD/bftest.c",
+    "https://raw.githubusercontent.com/rurban/libbf/HEAD/cutils.h",
+    "https://raw.githubusercontent.com/lifthrasiir/libbeef/main/docs/benchmark-report.md",
+    "https://github.com/radareorg/radare2/pull/23318",
+    "https://github.com/radareorg/radare2/pull/23318/files",
+    "https://github.com/radareorg/radare2/issues/23317"
+  ],
+  "confidence": 0.75
+}

@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/qustate/phastft",
+  "one_liner": "Safe-Rust, in-place, power-of-two FFT with low memory and optional threads; beats RustFFT at mid sizes and a scalar FFTW build.",
+  "what_it_does": "Computes complex-to-complex FFTs of power-of-two length in place, plus real-to-complex/complex-to-real transforms, in f32 and f64. The main API takes separate real and imaginary slices (fft_f64_dit(&mut reals, &mut imags, Direction)), with _with_planner variants that reuse precomputed twiddles; an interleaved num_complex::Complex API sits behind the complex-nums feature. It is a Rust crate with no C API and is not a drop-in for FFTW or RustFFT. It targets very large FFTs (gigabytes of data) such as quantum-computer simulation.",
+  "how_it_is_fast": "Radix-2 decimation-in-time Cooley-Tukey written recursively (cache-oblivious, switching to a loop once a block fits in L1), with a separate bit-reversal pass using the cache-optimal CO-BRAVO algorithm with SIMD. Working in place on split real/imaginary arrays cuts memory traffic and peak memory compared with out-of-place or self-sorting FFTs. SIMD kernels for SSE4.2, AVX2, NEON and WASM come from fearless_simd with runtime dispatch, and the default 'parallel' feature uses rayon for the recursive FFT and two threads for bit reversal on large inputs.",
+  "when_to_use": [
+    "Rust code doing power-of-two FFTs of 2^6 to 2^14 points single-threaded, where its own M2 plots show it 0.70x to 0.93x of RustFFT's time at most sizes.",
+    "Very large power-of-two FFTs (megabytes to gigabytes) on a multi-core machine, using the parallel feature that the README headline plots measure.",
+    "Memory-limited jobs: in astral4's run it allocated about 5x less than RustFFT (8.39 MB vs 41.94 MB at 2^20 f32), and the README claims up to 2x lower memory.",
+    "Projects that forbid unsafe code (the crate uses #![forbid(unsafe_code)]) and want runtime SIMD selection without -C target-cpu=native."
+  ],
+  "when_not_to_use": [
+    "Non-power-of-two lengths: the planner asserts is_power_of_two and panics; use RustFFT, PocketFFT or FFTW.",
+    "Single-threaded large FFTs: in its own M2 plots PhastFT takes 1.01x to 1.19x RustFFT's time from about 2^17 points up, and astral4 shows RustFFT faster at f32 N>=2^22 and f64 N>=2^21 (issue #120 raises the same point).",
+    "Tiny transforms (N=16, 32), where RustFFT's hand-written butterflies win.",
+    "C or C++ code bases: no C ABI, so you would need your own FFI layer.",
+    "When you need FFTW's multi-dimensional or arbitrary-stride interfaces; the README documents only 1-D transforms."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "num-traits, fearless_simd; rayon (default 'parallel' feature); num-complex and bytemuck with the optional 'complex-nums' feature",
+    "min_toolchain": "Rust 1.88 (rust-version in Cargo.toml, crate v0.4.1); the 2024 v0.2.1 used in astral4's benchmark needed nightly for portable SIMD",
+    "platforms": "any Rust target; SIMD on x86-64 (SSE4.2, AVX2), aarch64 (NEON) and wasm, picked at runtime",
+    "thread_safety": "not documented; calls take &mut slices and a shared &Planner, and the parallel feature spawns rayon work inside each call",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The 'parallel' feature is on by default, so a plain dependency is multi-threaded; set default-features = false for single-threaded or deterministic-latency use.",
+    "The inverse FFT scales by 1/N (IFFT(FFT(x)) == x), unlike FFTW and RustFFT, which leave output unnormalized.",
+    "The interleaved Complex API allocates temporary buffers and is slower than the split real/imag API; the convenience fft_* functions build a new planner on every call.",
+    "Issue #73 (open) reports intermittent slowdowns at the largest sizes on x86, suspected cache-associativity or TLB effects of power-of-two strides."
+  ],
+  "pick_this_over_siblings_when": "Choose it over RustFFT when lengths are powers of two and memory or multi-core throughput on huge transforms matters; stay with RustFFT for arbitrary lengths and tiny sizes. For C++ projects, PocketFFT (C++ branch) or PFFFT are the native-language siblings with similar 'no FFTW dependency' appeal.",
+  "verified_claims_summary": "Third-party astral4/fft-benchmark (M1 MacBook Pro, single thread, phastft 0.2.1, plan built inside every timed call for all libraries) shows PhastFT ahead of FFTW 3.3.8 at every size (e.g. f32 2^10 4.75 us vs 7.29 us, 2^23 109 ms vs 193 ms), but that FFTW was planned with FFTW_ESTIMATE on each call and built by the fftw crate's default 'source' feature, whose configure line has no --enable-neon. PhastFT's own steady-state criterion plots (Apple M2, plans reused) put FFTW_MEASURE at about 2.3x to 3.4x RustFFT's time for f32 2^15 to 2^24 with the same scalar FFTW build (PhastFT's dev-dependency is fftw 0.8.0 with default features), so no comparison against a SIMD-enabled FFTW exists.",
+  "status_note": "Active (last commit 2026-07-31, v0.4.1), MIT OR Apache-2.0 and pure safe Rust, so it is easy to depend on from Rust but not callable from C++ without a wrapper.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/smu160/PhastFT/HEAD/README.md",
+    "https://raw.githubusercontent.com/smu160/PhastFT/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/smu160/PhastFT/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/smu160/PhastFT/HEAD/src/planner.rs",
+    "https://raw.githubusercontent.com/smu160/PhastFT/HEAD/src/options.rs",
+    "https://raw.githubusercontent.com/smu160/PhastFT/HEAD/benches/README.md",
+    "https://raw.githubusercontent.com/smu160/PhastFT/HEAD/benches/fftw_lib/mod.rs",
+    "https://raw.githubusercontent.com/smu160/PhastFT/main/assets/criterion_overlay_c2c_forward_f32_6_14.svg",
+    "https://raw.githubusercontent.com/smu160/PhastFT/main/assets/criterion_overlay_c2c_forward_f32_15_24.svg",
+    "https://raw.githubusercontent.com/smu160/PhastFT/main/assets/criterion_overlay_c2c_forward_f64_15_24.svg",
+    "https://github.com/smu160/PhastFT/issues?q=is%3Aissue",
+    "https://github.com/smu160/PhastFT/issues/73",
+    "https://github.com/smu160/PhastFT/issues/120",
+    "https://raw.githubusercontent.com/astral4/fft-benchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/astral4/fft-benchmark/HEAD/benches/fftw.rs",
+    "https://raw.githubusercontent.com/astral4/fft-benchmark/HEAD/benches/rustfft.rs",
+    "https://raw.githubusercontent.com/astral4/fft-benchmark/HEAD/benches/phastft.rs",
+    "https://raw.githubusercontent.com/rust-math/fftw/HEAD/fftw-src/build.rs",
+    "https://raw.githubusercontent.com/rust-math/fftw/HEAD/fftw/Cargo.toml"
+  ],
+  "confidence": 0.8
+}

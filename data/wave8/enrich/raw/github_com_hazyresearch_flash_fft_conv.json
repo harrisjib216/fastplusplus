@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/hazyresearch/flash-fft-conv",
+  "one_liner": "CUDA tensor-core FFT convolution for PyTorch; 1.3x to 7.9x faster than torch.fft (cuFFT) convolution on H100.",
+  "what_it_does": "Computes long depthwise convolutions y = iFFT(FFT(u) * FFT(k)) for sequence models such as Hyena, H3 and Monarch Mixer. The API is a PyTorch module, FlashFFTConv(fft_size, dtype), that you call as conv(u, k) or conv(u, k, pregate, postgate), with u of shape (B, H, L) in fp16/bf16 and k of shape (H, L) in fp32; it has autograd forward and backward. It is not a general FFT library: there is no standalone FFT/iFFT call and no C++ API, only the PyTorch extension (monarch_cuda). A second module, FlashDepthWiseConv1d, replaces short odd-kernel depthwise nn.Conv1d.",
+  "how_it_is_fast": "It writes the FFT as a Monarch decomposition: a length-N DFT becomes small 16x16 or 32x32 DFT matrix multiplies plus twiddle multiplies, which run on tensor cores in fp16/bf16 (separate kernels for 256/1K, 512/2K real-to-real, 4K, 8K, 16K, 32K, and 16x/32x/64x/128x butterfly stages for 64K to 4M). FFT, pointwise multiply by the kernel spectrum and inverse FFT are fused in one kernel, so the intermediate spectra never go to HBM. Causal zero-padding and input/output gating are done inside the kernel (implicit padding), which removes the extra pad and gate passes a PyTorch implementation makes.",
+  "when_to_use": [
+    "Training or running long-convolution sequence models (Hyena, H3, HyenaDNA, Monarch Mixer) in PyTorch on Ampere or Hopper GPUs.",
+    "Sequence lengths of 256 to 32K, where the README table shows the largest wins (5.4x to 7.9x at 256 to 8K, 2.5x to 3.2x at 16K to 32K).",
+    "Gated and causally padded convolutions, where fusing the gates and padding saves several memory passes and about 6x activation memory.",
+    "fp16/bf16 mixed-precision training where a 1e-2 absolute tolerance against an fp32 reference is acceptable."
+  ],
+  "when_not_to_use": [
+    "You need a general FFT (spectra, non-convolution transforms, real-valued output spectra): use cuFFT, VkFFT or tcFFT instead.",
+    "fp32/fp64 accuracy is needed: only fp16 and bf16 inputs are supported, and the tests only assert allclose with atol=1e-2.",
+    "Non-power-of-two FFT sizes, sizes below 256 or above 4,194,304, odd L, or H not a multiple of 16 for FFT sizes above 32K: the module raises NotImplementedError or fails.",
+    "AMD GPUs, pre-Ampere NVIDIA GPUs or C++-only code bases: CUDA-only PyTorch extension (ROCm support is an open request, issue #34).",
+    "Very long sequences (1M to 4M), where the gain falls to 1.3x to 1.7x and memory savings to about 2.8x."
+  ],
+  "integration": {
+    "form": "module (PyTorch CUDA extension monarch_cuda built with setup.py, plus the pure-Python flashfftconv package)",
+    "dependencies": "PyTorch 2.0, CUDA toolkit (tested 12.1), einops; the README recommends the NVIDIA PyTorch container 23.05",
+    "min_toolchain": "nvcc with C++17 (-std=c++17); CUDA 12.1 tested; build emits compute_80 PTX only",
+    "platforms": "NVIDIA Ampere/Hopper GPUs (tested on A100 and H100; README says 3090/4090 should work); Linux with CUDA",
+    "thread_safety": "not documented; the README recommends one FlashFFTConv object per model, shared across layers",
+    "drop_in_for_baseline": "partial — replaces a hand-written torch.fft convolution (fft, multiply, ifft, optional pad and gates) with one module call, but needs fp16/bf16 inputs, an fp32 kernel, contiguous (B, H, L) layout and a fixed power-of-two FFT size chosen at construction"
+  },
+  "gotchas": [
+    "The kernel spectrum is still computed with torch.fft in fp32 on every forward call (the code says 'replace this with a kernel'), so precomputing FFT(k) is not supported.",
+    "Input-size rules are enforced by crashes rather than checks: an odd L with implicit padding gives a CUDA 'misaligned address' error (issue #20, open), and a bf16 batch of about 140,000 x 4 x 4096 gives an illegal memory access (issue #27, open).",
+    "Gated variants at 131K and above raise NotImplementedError when use_32_butterfly=False; the FlashDepthWiseConv1d bf16 backward pass has a known bug per the README.",
+    "setup.py hard-codes --generate-code=arch=compute_80,code=compute_80, so Hopper runs JIT-compiled sm_80 PTX rather than sm_90 code; several open issues report build or cudaFuncSetAttribute errors (#6, #19, #29)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over tcFFT, TurboFFT or VkFFT when the job is a fused FFT convolution inside a PyTorch training loop (with gating or causal padding) rather than a standalone FFT; those siblings give a general FFT API and compare against cuFFT on the transform alone.",
+  "verified_claims_summary": "On one H100-SXM, the README's gated-convolution table (fp16, times in ms per the benchmark script's torch.utils.benchmark mean x 1000, scaled to batch 64 x hidden 768) shows FlashFFTConv at 0.29 vs 2.30 at 1K (7.93x) and 10,049 vs 13,031 at 4M (1.30x) against a PyTorch reference that upcasts to fp32 and uses complex torch.fft.fft/ifft (not rfft). Rows from 16K up were measured at smaller batch/hidden sizes and rescaled, so the comparison favours FlashFFTConv on precision (fp16 vs fp32) and on the baseline's choice of complex rather than real FFT.",
+  "status_note": "Stale since December 2024, with 18 of the 25 listed issues open and no maintainer replies on the bug reports checked (#14, #20, #27), but Apache-2.0 and usable as a pinned PyTorch extension on Ampere/Hopper.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/HazyResearch/flash-fft-conv/HEAD/README.md",
+    "https://raw.githubusercontent.com/HazyResearch/flash-fft-conv/HEAD/csrc/flashfftconv/setup.py",
+    "https://raw.githubusercontent.com/HazyResearch/flash-fft-conv/HEAD/setup.py",
+    "https://raw.githubusercontent.com/HazyResearch/flash-fft-conv/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/HazyResearch/flash-fft-conv/HEAD/flashfftconv/__init__.py",
+    "https://raw.githubusercontent.com/HazyResearch/flash-fft-conv/HEAD/flashfftconv/conv.py",
+    "https://raw.githubusercontent.com/HazyResearch/flash-fft-conv/HEAD/flashfftconv/depthwise_1d.py",
+    "https://raw.githubusercontent.com/HazyResearch/flash-fft-conv/HEAD/benchmarks/benchmark_flashfftconv.py",
+    "https://raw.githubusercontent.com/HazyResearch/flash-fft-conv/HEAD/benchmarks/benchmark.py",
+    "https://raw.githubusercontent.com/HazyResearch/flash-fft-conv/HEAD/tests/test_flashfftconv.py",
+    "https://github.com/HazyResearch/flash-fft-conv/issues?q=is%3Aissue",
+    "https://github.com/HazyResearch/flash-fft-conv/issues/27",
+    "https://github.com/HazyResearch/flash-fft-conv/issues/14",
+    "https://github.com/HazyResearch/flash-fft-conv/issues/20"
+  ],
+  "confidence": 0.8
+}

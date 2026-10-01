@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/kevin-he-01/vroomssl",
+  "one_liner": "Research BoringSSL fork that swaps Montgomery multiplication for AVX-512 IFMA residue-number-system arithmetic to speed up RSA modexp.",
+  "what_it_does": "VROOM is a modular multiplication algorithm that represents operands in a residue number system (RNS) so one large modular multiply is spread across the lanes of AVX-512 vectors. This repository is the CPU artifact for the USENIX Security 2026 paper: a fork of BoringSSL (commit 3fb010b) whose BN Montgomery and RSA code can route multiplication through VROOM, switched on per context with BN_MONT_CTX_set_use_rns or process-wide with RSA_set_use_rns. Callers keep the BoringSSL BN/RSA API; the RNS code itself is C++ templates (Ring<modulus_bits>) under rns/, plus a Google Benchmark binary (bssl_bench) that compares VROOM, BoringSSL and FLINT.",
+  "how_it_is_fast": "Operands are held in two RNS bases of 52-bit residues and multiplied lane-wise with the AVX-512 IFMA instructions vpmadd52lo/hi (_mm512_madd52lo/hi_epu64), so the per-residue products are independent and fill 8-lane vectors. Modular reduction is an RNS Montgomery reduction: a per-residue Montgomery step followed by two base-extension ('CRNS') matrix products that move the value between the bases, described in rns/vector/batching_vs_no_batching_call_graph.md. Modulus size is a compile-time template parameter, so loops over limbs are fully unrolled, and exponentiation uses fixed-window tables with constant-time selection.",
+  "when_to_use": [
+    "Measuring or prototyping faster RSA verification and modular exponentiation latency on a single core of a CPU with AVX-512 IFMA (tested on Xeon Platinum 8488C, Sapphire Rapids, AWS c7i).",
+    "Moduli of exactly 1024, 1536, 2048, 3072 or 4096 bits (the sizes instantiated in BN_MONT_CTX_set_use_rns), for example RSA-4096 verify or RSA-CRT with 2048-bit primes.",
+    "Single-operation latency where you cannot batch independent multiplications: VROOM vectorizes inside one modular multiply rather than across eight.",
+    "Reproducing the paper's Sections 6.1-6.3 tables with ./reproduce.sh against BoringSSL, FLINT 3.2.1 and the separate OpenSSL and Arkworks harnesses."
+  ],
+  "when_not_to_use": [
+    "Production or any security-sensitive use: the README says it is not production-ready, was tested only on random inputs to select functions, and may contain memory errors and security bugs; commit 616817a (2026-05-22) fixed buffer over-reads in rns/vector/changebase.hpp and conversion.hpp.",
+    "CPUs without AVX-512 IFMA: the Release build adds -mavx512f -mavx512ifma to all C and C++ flags, so treat the whole libcrypto build as AVX-512-only.",
+    "Other modulus sizes: BN_MONT_CTX_set_use_rns prints a warning and leaves the ordinary Montgomery path in place for any bit length other than the five instantiated sizes.",
+    "General big-integer arithmetic (arbitrary-size add, multiply, division, string conversion): it is a modular-multiplication backend for crypto, not a GMP replacement.",
+    "Builds that cannot pull in GMP and FLINT: CMakeLists.txt stops with FATAL_ERROR without FLINT and includes GMP/FLINT headers into bcm.cc ('TODO: REMOVE GMP DEPENDENCY'), and install_deps.sh says 'The RNS code links GMP for radix<->RNS helpers', although the README says the VROOM code calls only BoringSSL BN_* routines."
+  ],
+  "integration": {
+    "form": "static lib (BoringSSL fork; RNS core is header-only C++ templates under rns/)",
+    "dependencies": "BoringSSL build tooling (CMake, Ninja); GMP and FLINT 3.x found at configure time; Google Benchmark for bssl_bench and the OpenSSL harness; Rust 1.86 only for the Arkworks baseline",
+    "min_toolchain": "C++17 and C11 per CMakeLists.txt; tested only with Clang 21.1.8 (official LLVM prebuilt)",
+    "platforms": "x86-64 with AVX-512F and AVX-512 IFMA; tested on Linux (Amazon Linux 2023) on Xeon Platinum 8488C, README says c7i-flex.large also reproduces relative speedups",
+    "thread_safety": "not documented for the RNS code; RSA_set_use_rns(int) takes no RSA argument and acts as a process-wide switch, and the BigInt wrapper keeps a thread_local BN_CTX",
+    "drop_in_for_baseline": "partial — same BoringSSL BN/RSA API with RNS enabled per BN_MONT_CTX or globally for RSA, but only for 1024/1536/2048/3072/4096-bit moduli and only inside this fork; not a drop-in for OpenSSL, GMP or FLINT"
+  },
+  "gotchas": [
+    "The BigInt wrapper used to build RNS contexts (rns/precompute/gmp_wrapper.hpp) includes the plain ossl_wrapper.hpp; the constant-time ossl_wrapper_consttime.hpp include is commented out, so precomputation on secret moduli (the p and q contexts in RSA-CRT) may not be constant-time. Not checked further this session.",
+    "Ring<modulus_bits> fixes the size at compile time; a modulus longer than the template size makes the constructor print to stderr and abort().",
+    "AVXVector::load reads whole 8-lane vectors, which caused the out-of-bounds reads fixed in 616817a by copying into padded buffers; other call sites that load unpadded data could have the same problem.",
+    "CMakeLists.txt carries a TODO about large stack frames in the RNS Montgomery code and has the -Wframe-larger-than check commented out."
+  ],
+  "pick_this_over_siblings_when": "Pick VROOM over the truncated batch AVX-512 Montgomery code (lea-gl) when you need one RSA-size modexp faster rather than eight independent ones at once, and over FLINT or GMP-based code when the modulus is one of the five RSA sizes and the CPU has AVX-512 IFMA; for BLS12-381 or non-RSA moduli the authors' separate standalone repository (SimonLangowski/VROOM, MIT) is the better starting point, and CGBN only wins if a GPU is available.",
+  "verified_claims_summary": "The repository prints no figures; it says the relative speedup over each baseline is the paper's claim and provides ./reproduce.sh, which runs bssl_bench pinned with taskset to core 0 (Clang 21.1.8, CMake Release -O3 plus -mavx512f -mavx512ifma, Xeon Platinum 8488C) for VROOM, BoringSSL BN_mod_mul_montgomery and FLINT 3.2.1, with OpenSSL and Arkworks in separate harnesses. Search summaries of the paper abstract (eprint 2026/393, not opened because the host is blocked) report 4.0x faster RSA-4096 verification over OpenSSL and, from the verifier's earlier search, 1.3x faster signing; two summaries disagree on the BLS figure (3.43x versus 4.05x), and BLS is not in this repository.",
+  "status_note": "Active research artifact (last commit 2026-06-18, 11 commits, 8 stars), Apache-2.0 like upstream BoringSSL; usable for benchmarking and study, but the authors themselves say not to use it in production.",
+  "sources_read": [
+    "https://github.com/kevin-he-01/vroomssl",
+    "https://github.com/kevin-he-01/vroomssl/commits/main",
+    "https://github.com/kevin-he-01/vroomssl/commit/616817a",
+    "https://github.com/kevin-he-01/vroomssl/tree/main/rns",
+    "https://github.com/kevin-he-01/vroomssl/tree/main/rns/vector",
+    "https://github.com/kevin-he-01/vroomssl/tree/main/rns/reduction",
+    "https://github.com/kevin-he-01/vroomssl/tree/main/rns/crypto",
+    "https://github.com/kevin-he-01/vroomssl/tree/main/rns/precompute",
+    "https://github.com/kevin-he-01/vroomssl/tree/main/crypto/fipsmodule/bn",
+    "https://raw.githubusercontent.com/kevin-he-01/vroomssl/HEAD/README.md",
+    "https://raw.githubusercontent.com/kevin-he-01/vroomssl/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/kevin-he-01/vroomssl/HEAD/configure.sh",
+    "https://raw.githubusercontent.com/kevin-he-01/vroomssl/HEAD/install_deps.sh",
+    "https://raw.githubusercontent.com/kevin-he-01/vroomssl/HEAD/reproduce.sh",
+    "https://raw.githubusercontent.com/kevin-he-01/vroomssl/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/kevin-he-01/vroomssl/HEAD/rns/vector/batching_vs_no_batching_call_graph.md",
+    "https://raw.githubusercontent.com/kevin-he-01/vroomssl/HEAD/rns/vector/avx512ifma.hpp",
+    "https://raw.githubusercontent.com/kevin-he-01/vroomssl/HEAD/rns/crypto/ring.hpp",
+    "https://raw.githubusercontent.com/kevin-he-01/vroomssl/HEAD/rns/crypto/exponentiation.hpp",
+    "https://raw.githubusercontent.com/kevin-he-01/vroomssl/HEAD/rns/precompute/gmp_wrapper.hpp",
+    "https://raw.githubusercontent.com/kevin-he-01/vroomssl/HEAD/rns/precompute/wrappers/ossl_wrapper.hpp",
+    "https://raw.githubusercontent.com/kevin-he-01/vroomssl/HEAD/rns/precompute/wrappers/ossl_wrapper_consttime.hpp",
+    "https://raw.githubusercontent.com/kevin-he-01/vroomssl/HEAD/include/openssl/rsa.h",
+    "https://raw.githubusercontent.com/kevin-he-01/vroomssl/HEAD/include/openssl/bn.h",
+    "https://raw.githubusercontent.com/kevin-he-01/vroomssl/HEAD/crypto/fipsmodule/bn/montgomery.cc.inc",
+    "https://raw.githubusercontent.com/kevin-he-01/vroomssl/HEAD/crypto/fipsmodule/bn/internal.hpp",
+    "https://github.com/commonwarexyz/monorepo/issues/4767",
+    "https://github.com/SimonLangowski/VROOM"
+  ],
+  "confidence": 0.7
+}

@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/ejmahler/rustfft",
+  "one_liner": "Pure-Rust SIMD FFT for any length, including primes; beats a scalar, per-call-planned FFTW 3.3.8 at tiny and huge sizes.",
+  "what_it_does": "Computes 1-D complex-to-complex FFTs of any length (including primes) in O(n log n) for f32 and f64. You create an FftPlanner, call plan_fft_forward(n) or plan_fft_inverse(n) to get an Arc<dyn Fft>, then call process (in place), process_with_scratch, process_outofplace_with_scratch or process_immutable_with_scratch on slices of num_complex::Complex. It is a Rust crate with no C API, so it does not replace FFTW for C/C++ callers; output is unnormalized, as in FFTW.",
+  "how_it_is_fast": "The planner factors N and builds a recipe tree from Radix4/RadixN, MixedRadix (Cooley-Tukey), the Good-Thomas prime-factor algorithm, Rader's algorithm for primes and Bluestein's algorithm for primes with large factors, with hand-written butterflies for sizes 2 to 32. Each algorithm has AVX+FMA, SSE4.1, NEON (optional FCMA on ARMv8.3) and WASM SIMD versions, and the planner picks one by runtime CPU detection. Twiddles are precomputed at plan time and callers can reuse scratch buffers to avoid allocation.",
+  "when_to_use": [
+    "Rust code needing FFTs of arbitrary or prime lengths without a C dependency; sizes of the form 2^n * 3^m are fastest under AVX per the crate docs.",
+    "Very small transforms (N = 8 to 32), where it ran about 124 ns vs FFTW's 1.4 us in astral4's plan-included M1 run.",
+    "One-shot transforms where planning cost counts, e.g. a few FFTs of many different sizes.",
+    "WebAssembly targets (wasm_simd feature) and AArch64 with NEON, where it ships native SIMD paths.",
+    "Large single-threaded power-of-two FFTs (2^21 and up) on Apple Silicon, where it beat both PhastFT and the scalar FFTW build in astral4."
+  ],
+  "when_not_to_use": [
+    "C or C++ projects: there is no C ABI, and a user report of a hand-written FFI layer hitting double-free and segfaults (issue #148) is unanswered.",
+    "Mid-size power-of-two FFTs (1K to 16K) on Apple M1: even a scalar FFTW_ESTIMATE build planned per call was faster there (e.g. f32 N=2048 11.74 us vs 22.87 us).",
+    "Multi-threaded large transforms: no built-in threading is documented, while PhastFT's parallel feature and FFTW threads exist.",
+    "Memory-tight huge FFTs: astral4 measured about 5x the allocations of PhastFT (335.5 MB vs 67.1 MB at 2^23 f32).",
+    "Real-to-complex or multi-dimensional transforms: the crate exposes only 1-D complex FFTs (a 2-D example is still an open request, issue #146)."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "num-complex, num-traits, num-integer, strength_reduce, transpose, primal-check",
+    "min_toolchain": "Rust 1.86 (crate v6.4.1); the fcma feature needs nightly",
+    "platforms": "any Rust target; runtime-detected AVX+FMA or SSE4.1 on x86-64, NEON on aarch64, opt-in WASM SIMD; scalar fallback elsewhere",
+    "thread_safety": "Fft plans are Send + Sync (the trait requires both), so one Arc<dyn Fft> can be shared across threads; FftPlanner was made Sync in 6.3 (#153)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Building an algorithm directly (e.g. Radix4::new) bypasses the planner and disables all AVX, SSE, NEON and WASM SIMD paths.",
+    "process() allocates a scratch Vec on every call; use process_with_scratch with get_inplace_scratch_len() to avoid it (Bluestein sizes may need scratch larger than N).",
+    "wasm_simd cannot be runtime-detected: with the feature on, runtimes without fixed-width SIMD trap.",
+    "Before 6.4.1, Rader's algorithm could panic with multiply overflow on 32-bit and wasm targets at sizes around 3.6M points (issue #163, fixed in 6.4.1 by using u64)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over PhastFT when lengths are not powers of two, when transforms are tiny, or for single-threaded power-of-two sizes of 2^21 and up; pick PhastFT for lower memory and multi-core large FFTs. C++ users should look at PocketFFT (C++ branch), PFFFT or KFR instead, since RustFFT has no C interface.",
+  "verified_claims_summary": "In the third-party astral4/fft-benchmark on an M1 MacBook Pro (rustfft 6.2.0, single thread, divan medians), RustFFT beat FFTW 3.3.8 at N=8 to 32 (about 124 ns vs 1.4 us) and at large sizes (f32 2^20 12.49 ms vs 14.20 ms; 2^23 103.9 ms vs 193.3 ms), but lost at f32 N=1,024 to 16,384 and f64 N=1,024, 2,048 and 524,288. Both libraries planned inside every timed call, and FFTW was planned with FFTW_ESTIMATE and built by the fftw crate's default 'source' feature with no --enable-neon, so the result does not show RustFFT beating a SIMD, pre-planned FFTW; a 2020 Rust-forum post claiming RustFFT 5.0 AVX matched or beat FFTW at every size could only be seen as a search snippet (forum host egress-blocked).",
+  "status_note": "Active (last commit 2026-09-29, v6.4.1, about 30M crates.io downloads), MIT OR Apache-2.0 with a no-breaking-changes policy, but usable from C++ only through your own FFI wrapper.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/ejmahler/RustFFT/HEAD/README.md",
+    "https://raw.githubusercontent.com/ejmahler/RustFFT/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/ejmahler/RustFFT/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/ejmahler/RustFFT/HEAD/src/plan.rs",
+    "https://raw.githubusercontent.com/ejmahler/RustFFT/HEAD/CHANGELOG.md",
+    "https://github.com/ejmahler/RustFFT/issues?q=is%3Aissue",
+    "https://github.com/ejmahler/RustFFT/issues/148",
+    "https://github.com/ejmahler/RustFFT/issues/163",
+    "https://raw.githubusercontent.com/astral4/fft-benchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/astral4/fft-benchmark/HEAD/benches/fftw.rs",
+    "https://raw.githubusercontent.com/astral4/fft-benchmark/HEAD/benches/rustfft.rs",
+    "https://raw.githubusercontent.com/rust-math/fftw/HEAD/fftw-src/build.rs",
+    "https://raw.githubusercontent.com/rust-math/fftw/HEAD/fftw/Cargo.toml",
+    "https://users.rust-lang.org/t/rustfft-5-0-0-experimental-1-now-faster-than-fftw/53049 (egress-blocked; search snippet only)"
+  ],
+  "confidence": 0.8
+}

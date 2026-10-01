@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/zhihu/zhilight",
+  "one_liner": "Zhihu/ModelBest C++/CUDA LLM serving engine tuned for PCIe multi-GPU boxes; cut TTFT versus vLLM and SGLang on 4x AD102.",
+  "what_it_does": "A complete LLM inference server, not a kernel library: a C++/CUDA backend (a static library plus a pybind11 module) behind a Python package that exposes an OpenAI-compatible HTTP server adapted from vLLM, plus an offline DynamicBatchGenerator API. It loads Hugging Face safetensors for Llama-family, Qwen2, Mixtral, MiniCPM, CommandR+, DeepSeek-V2/V3/R1 and DeepSeek-VL2 models, with INT8, SmoothQuant, FP8, AWQ and GPTQ weights. HTTP clients can switch from vLLM unchanged, but launch flags and tuning differ.",
+  "how_it_is_fast": "It targets tensor parallelism over PCIe, where all-reduce is the bottleneck: 'dual streams' overlap prefill (encode) compute with the all-reduce on a second CUDA stream (the CHANGELOG claims 20%+ on a '4090pro'), the all-reduce can be quantized to INT8 above a token threshold (REDUCE_TP_INT8_THRES), and an optional host-side all-reduce sums FP16/FP32 buffers on the CPU with AVX/F16C intrinsics. On the GPU it fuses QKV, feed-forward input, residual and layernorm kernels, uses a tensor-core fused batch attention for decode, flash-attention prefill and chunked prefill, and calls Marlin (GPTQ), TensorRT-LLM W4A16/W4A8/INT8 GEMMs and DeepGEMM/FlashMLA for DeepSeek.",
+  "when_to_use": [
+    "Serving dense 14B-110B INT4 (GPTQ/AWQ) models with tensor parallelism on 2-4 PCIe Ada-class GPUs without NVLink, where time to first token on ~4k-token prompts matters most",
+    "Prefill-heavy traffic such as RAG or long-prompt chat: its clearest wins are TTFT (for example 1111.8 ms vs vLLM 3493.97 and SGLang 2276.1 ms for Qwen2-72B GPTQ on 4x AD102)",
+    "DeepSeek-R1 AWQ or FP8 on 8x A800/H20 nodes where the published run sustained twice vLLM's offered QPS",
+    "Teams that already run Llama, Qwen2 or DeepSeek models and want an OpenAI-compatible endpoint with a self-built CUDA 12 wheel or Docker image"
+  ],
+  "when_not_to_use": [
+    "Small models or decode-heavy workloads: on 2x AD102 Llama-3.1-8B it lost to vLLM and SGLang on every metric (TPOT 66.24 vs 18.68 ms for vLLM), and its TPOT was also worse for MiniCPM-2B, Qwen1.5-110B on AD102 and DeepSeek-R1",
+    "NVLink data-center GPUs: on 4x A800, SGLang sustained twice ZhiLight's QPS for Qwen2-72B and Qwen1.5-110B",
+    "Non-NVIDIA hardware, pre-Ampere GPUs or aarch64 hosts: default CUDA architectures are 80, 89 and 90a, FP8 conversion needs sm_89+ (open issue #12), and DeepGEMM, FlashMLA and the AVX host all-reduce are x86-64 only",
+    "You need independently reproduced numbers or an open benchmark: the load generator ships only as a Docker image (issue #17 asked for its source), and open issue #59 reports 4017.89 ms mean TTFT on 4x RTX 4090 with a 4k prompt at concurrency 1, about 3.6x the README's ~1112 ms, with no maintainer reply",
+    "Broad model coverage and community support: a small Zhihu team (111 commits), many issues answered in Chinese or not at all, and no GitHub releases"
+  ],
+  "integration": {
+    "form": "module (Python package built by setup.py/CMake into a wheel with a C++/CUDA static backend and pybind11 extension); Docker image ghcr.io/zhihu/zhilight/zhilight",
+    "dependencies": "CUDA 12+ runtime, cuBLAS, NCCL; PyTorch >= 2.4.1; a flash-attn >= 2.7.0.post2 shared library (CMake stops if none is found); transformers, fastapi, uvicorn, pybind11 2.13.6; vendored bmengine, deep_gemm, flash_decoding, flash_mla and zmq; Boost.Serialization for multi-node inference",
+    "min_toolchain": "C++17 and CUDA C++17, CUDA 12.0+ (Dockerfile: CUDA 12.4.1, NCCL 2.21.5), CMake 3.20+, Python 3.9+; the C++ ABI flag is taken from the installed torch",
+    "platforms": "Linux x86-64 with NVIDIA GPUs (Ampere sm_80, Ada sm_89, Hopper sm_90a by default); tested on AD102 PCIe, A800 and H20",
+    "thread_safety": "not documented (server process with its own scheduler and dynamic batching)",
+    "drop_in_for_baseline": "partial — the OpenAI-compatible HTTP API is adapted from vLLM, so clients carry over, but server flags, the --env tuning string and the model loaders differ"
+  },
+  "gotchas": [
+    "The fast published configurations depend on an --env string of knobs (HIGH_PRECISION=0, CPM_FUSE_QKV=1, CPM_FUSE_FF_IN=2, REDUCE_TP_INT8_THRES=100, DUAL_STREAM=1) shown in the benchmark launch lines; HIGH_PRECISION=0 and INT8 all-reduce trade numerical precision for speed, which the vLLM/SGLang baselines did not do",
+    "In several baseline runs SGLang was launched with --disable-radix-cache, while ZhiLight's prefix-cache setting is not stated, so prefix reuse may differ between engines",
+    "The benchmark doc's Qwen1.5-110B launch line misspells the module (api_sever), and the benchmark tool is pulled as image 1.0.1 but run as 1.0.0",
+    "Reported QPS values are offered-load steps (many engines tie at exactly 0.09 or 0.18), so a 2x QPS is the next sustained step, not a measured 2x throughput"
+  ],
+  "pick_this_over_siblings_when": "Pick ZhiLight when you need a whole multi-GPU serving engine for INT4 70B-class models on PCIe GPUs; FasterTransformer is archived in favor of TensorRT-LLM, PowerInfer targets a single consumer GPU with CPU offload and sparse activation, and Marlin is just the GPTQ matmul kernel that ZhiLight itself calls.",
+  "verified_claims_summary": "Zhihu's own serving benchmark (a closed-source Docker load generator that steps offered QPS, 3.7k-token prompts) on 4x AD102 PCIe shows Llama-3.1-70B GPTQ-INT4 at 1419.74 ms mean TTFT vs vLLM 4796.32 and SGLang 3962.99 ms, and TPOT 30.97 vs 41.54 and 63.22 ms; on A800 and for the 8B model SGLang or vLLM win. Engine versions, CPU, driver and compiler flags are not stated.",
+  "status_note": "Active (last commit 2026-03-18, recent work on session generation and W4A8 caching; 908 stars), Apache-2.0, buildable from source or Docker (README tag 0.4.8-cu124), but the speed claims are first-party and one third-party report did not reproduce them.",
+  "sources_read": [
+    "https://github.com/zhihu/ZhiLight",
+    "https://raw.githubusercontent.com/zhihu/ZhiLight/HEAD/README.md",
+    "https://raw.githubusercontent.com/zhihu/ZhiLight/HEAD/docs/benchmarks/benchmarks.md",
+    "https://raw.githubusercontent.com/zhihu/ZhiLight/HEAD/docs/benchmarks/README.md",
+    "https://raw.githubusercontent.com/zhihu/ZhiLight/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/zhihu/ZhiLight/HEAD/setup.py",
+    "https://raw.githubusercontent.com/zhihu/ZhiLight/HEAD/requirements.txt",
+    "https://raw.githubusercontent.com/zhihu/ZhiLight/HEAD/docker/Dockerfile",
+    "https://raw.githubusercontent.com/zhihu/ZhiLight/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/zhihu/ZhiLight/HEAD/src/model/host_all_reducer.cpp",
+    "https://raw.githubusercontent.com/zhihu/ZhiLight/HEAD/examples/offline_inference.py",
+    "https://github.com/zhihu/ZhiLight/tree/main/3rd",
+    "https://github.com/zhihu/ZhiLight/tree/main/3rd/bmengine",
+    "https://github.com/zhihu/ZhiLight/tree/main/src",
+    "https://github.com/zhihu/ZhiLight/tree/main/src/nn",
+    "https://github.com/zhihu/ZhiLight/tree/main/src/model",
+    "https://github.com/zhihu/ZhiLight/tree/main/examples",
+    "https://github.com/zhihu/ZhiLight/issues?q=is%3Aissue",
+    "https://github.com/zhihu/ZhiLight/issues/59",
+    "https://github.com/zhihu/ZhiLight/issues/17",
+    "https://github.com/zhihu/ZhiLight/issues/58",
+    "https://github.com/zhihu/ZhiLight/issues/12",
+    "https://github.com/zhihu/ZhiLight/commits/main"
+  ],
+  "confidence": 0.7
+}

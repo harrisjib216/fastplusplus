@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/flashinfer-ai/flashinfer",
+  "one_liner": "CUDA kernel library for LLM serving (paged/ragged attention, MLA, GEMM, MoE, sampling); beat vLLM 0.2.6 PageAttention and FlashAttention 2.4.2 kernels.",
+  "what_it_does": "Supplies the attention and related GPU kernels that serving engines call: single and batched prefill, append and decode attention over padded, ragged or paged KV caches, cascade (shared-prefix) attention, MLA, block-sparse attention, plus GEMM (FP8/FP4), fused MoE, sorting-free top-k/top-p sampling, RoPE, norms and all-reduce. The main API is Python/PyTorch: wrapper objects take a user-allocated workspace buffer, a plan() call with the batch's page table and shapes, then run() per layer. The CUDA C++ templates under include/flashinfer can also be used directly, which is how engines such as MLC-LLM integrate it. It is not a drop-in for FlashAttention's flash_attn_func; vLLM, SGLang, TensorRT-LLM, TGI and MLC-LLM call it as an attention backend.",
+  "how_it_is_fast": "It treats paged and ragged KV caches as block-sparse matrices (down to page_size=1 'vector sparsity'), so one FlashAttention-2/3-style tiled online-softmax kernel serves every cache layout. Page indices are prefetched into shared memory, so page size does not slow the kernel. Decode uses split-KV (Flash-Decoding style) with a plan-time load-balanced scheduler, and GQA decode reuses the tensor-core prefill kernel, which the 2024 post measured at 3x vLLM at batch 64. Cascade inference computes shared-prefix attention once with a multi-query kernel and merges it with per-request suffix attention via the log-sum-exp 'attention state' merge operator. Kernels are specialized at JIT time from Jinja/CUDA templates, and calls can be dispatched to FlashAttention-3, cuDNN, CUTLASS, TensorRT-LLM or CuTe-DSL backends.",
+  "when_to_use": [
+    "Building or tuning an LLM serving engine that needs batched decode and prefill over a paged KV cache, with CUDA graphs and torch.compile",
+    "Many requests share a long prompt (document QA, self-consistency or tree search sampling): cascade attention was up to 31x vLLM 0.2.6 PageAttention at a 32k shared prefix, batch >= 128 and short unique suffixes on H100",
+    "GQA models (Llama-2-70B-style 8:1 head ratio and up) in batched decode, where the tensor-core decode path gives the 2-3x over vLLM's kernel",
+    "DeepSeek-style MLA, FP8/FP4 attention, GEMM or MoE on Hopper or Blackwell, where it exposes the TensorRT-LLM and CUTLASS kernels behind one API",
+    "Custom attention variants (logit soft-cap, sliding window, sinks, custom logits/query transforms) without writing a new kernel"
+  ],
+  "when_not_to_use": [
+    "Training or plain dense attention with fixed shapes: FlashAttention-2/3 or cuDNN SDPA are simpler, and FlashInfer itself dispatches to them in many configurations",
+    "Non-NVIDIA GPUs (AMD, Intel, Apple) or pre-Turing NVIDIA (below SM 7.5); many features exist only on Hopper or Blackwell",
+    "Environments that cannot JIT-compile or download kernels at first use (no nvcc, no network) unless you also install the flashinfer-cubin and flashinfer-jit-cache wheels",
+    "Teams that need a stable API and behaviour: pre-1.0 releases ship every few days (0.6.18, then 0.7.0 on 2026-09-22, 0.7.1rc1 on 2026-09-30) with about 426 open issues, and per-backend bugs keep showing up (see gotchas)"
+  ],
+  "integration": {
+    "form": "module (pip flashinfer-python, with JIT-compiled or downloaded cubins and optional precompiled flashinfer-cubin / flashinfer-jit-cache wheels); header-only CUDA C++ templates in include/flashinfer for direct C++ use",
+    "dependencies": "PyTorch, CUDA toolkit (nvcc and ninja for JIT), apache-tvm-ffi, cuda-python, nvidia-cudnn-frontend, nvidia-cutlass-dsl, nccl4py/nccl-extensions, numpy, einops; submodules CUTLASS, CCCL, spdlog and nixl",
+    "min_toolchain": "Python 3.10+; CUDA 12.9 or 13.0 per the README's supported list (13.4 preview); setuptools 77+ for source builds",
+    "platforms": "NVIDIA GPUs SM 7.5 (Turing) through SM 12.x (Blackwell RTX 50, DGX Spark, Jetson Thor); Linux x86-64 and aarch64 wheels; feature coverage varies by compute capability",
+    "thread_safety": "Not documented for the wrappers, which hold per-batch plan state and workspace buffers; the experimental prepared SM110 decode API says concurrent launches need independent prepared objects and workspace and may reuse one only on ordered streams",
+    "drop_in_for_baseline": "partial — engines such as vLLM and SGLang can select it as their attention backend by configuration, but direct use needs the plan()/run() wrapper API and FlashInfer's page-table (indptr/indices/last_page_len) format"
+  },
+  "gotchas": [
+    "Wrappers need a zero-initialized, 16-byte-aligned workspace buffer (128 MB recommended); with use_cuda_graph=True the batch size is fixed for the wrapper's lifetime and index buffers must be preallocated",
+    "backend='auto' picks fa2, fa3, cudnn, trtllm-gen or cute-dsl by GPU and shape, and features differ per backend (for example the cudnn decode backend lacks RoPE, soft-cap and FP8 KV), so speed and supported options change across GPUs and versions",
+    "Correctness bugs have hit specific backends: ragged prefill on SM90 hit illegal memory accesses at total sequence length >= 16384 (issue #1419, fixed via PR #2801), and trtllm_batch_decode_with_kv_cache_mla wrote NaNs into CUDA-graph padded rows in 0.6.4/0.6.6 (issue #2883, closed as not planned)",
+    "Performance moves between releases: the project's own v0.2 post says v0.1.6 prefill was slower than v0.1.1; allow_fp16_qk_reduction buys about 50% on RTX 4090 at reduced accumulation precision"
+  ],
+  "pick_this_over_siblings_when": "Pick FlashInfer when you need serving-specific attention (paged or ragged KV, mixed prefill and decode, shared prefixes, MLA) behind one API; use FlashAttention-3 for training or dense Hopper attention, SageAttention for quantized approximate attention, and Bruce-Lee-LY's Decoding Attention only for short-sequence batch-1 decode, where its README beats FlashInfer 0.1.6.",
+  "verified_claims_summary": "The project's 2024 posts timed FlashInfer 0.0.1 kernels (built with NVCC from CUDA 12.3.1, nvbench cold-L2) against FlashAttention 2.4.2 and vLLM 0.2.6 PageAttention on H100 SXM, A100 PCIe, RTX 6000 Ada and RTX 4090 with Llama-2-7B/70B head shapes: prefill and decode were best on all four GPUs (plots only), batch GQA decode was 3x vLLM at batch 64, and cascade attention reached up to 31x vLLM on H100 for a 32k shared prefix. The MLSys 2025 paper (abstract seen via search; PDF blocked here) reports 29-69% lower inter-token latency than compiler (Triton) backends in end-to-end serving. These numbers are first-party and were not re-measured for current versions.",
+  "status_note": "Very active (commits daily, 0.7.0.post1 on PyPI 2026-09-29, 6.5k stars), Apache-2.0, and the default attention backend in several major serving engines, so it is safe to adopt, though the published speedups date from 2024 and the API is still pre-1.0.",
+  "sources_read": [
+    "https://github.com/flashinfer-ai/flashinfer",
+    "https://raw.githubusercontent.com/flashinfer-ai/flashinfer/HEAD/README.md",
+    "https://raw.githubusercontent.com/flashinfer-ai/flashinfer/HEAD/benchmarks/README.md",
+    "https://raw.githubusercontent.com/flashinfer-ai/flashinfer/HEAD/pyproject.toml",
+    "https://raw.githubusercontent.com/flashinfer-ai/flashinfer/HEAD/requirements.txt",
+    "https://raw.githubusercontent.com/flashinfer-ai/flashinfer/HEAD/flashinfer/decode.py",
+    "https://github.com/flashinfer-ai/flashinfer/tree/main/include/flashinfer",
+    "https://github.com/flashinfer-ai/flashinfer/tree/main/3rdparty",
+    "https://github.com/flashinfer-ai/flashinfer/issues/2883",
+    "https://github.com/flashinfer-ai/flashinfer/issues/1419",
+    "https://raw.githubusercontent.com/flashinfer-ai/flashinfer-ai.github.io/HEAD/_posts/2024-01-03-introduce-flashinfer.md",
+    "https://raw.githubusercontent.com/flashinfer-ai/flashinfer-ai.github.io/HEAD/_posts/2024-01-08-cascade-inference.md",
+    "https://raw.githubusercontent.com/flashinfer-ai/flashinfer-ai.github.io/HEAD/_posts/2024-12-12-flashinfer-v02-release.md",
+    "https://pypi.org/pypi/flashinfer-python/json",
+    "https://proceedings.mlsys.org/paper_files/paper/2025/file/dbf02b21d77409a2db30e56866a8ab3a-Paper-Conference.pdf (EGRESS_BLOCKED; abstract seen via search results)"
+  ],
+  "confidence": 0.75
+}

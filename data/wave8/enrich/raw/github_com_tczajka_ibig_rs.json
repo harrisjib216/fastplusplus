@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/tczajka/ibig-rs",
+  "one_liner": "Pure-Rust big integers that beat GMP (via rug) only on one-word (<=64-bit) values and on string parsing.",
+  "what_it_does": "ibig provides UBig (unsigned) and IBig (signed) arbitrary-precision integers with Rust operator overloading, ubig!/ibig! literal macros, radix parsing and formatting (bases 2-36), pow, gcd/extended gcd, and a ModuloRing/Modulo type for modular arithmetic. It is a Rust crate with no C ABI, so it is not a replacement for GMP's mpz_t in C or C++ code; from Rust it replaces rug or num-bigint at the type level, with a different API.",
+  "how_it_is_fast": "UBig is an enum: Small(Word) holds a value that fits in one machine word inline, and only longer values allocate a Buffer, so one-word arithmetic avoids the heap allocation that rug/mpz pays per result. Multiplication switches from schoolbook (<=24 words) to Karatsuba (<=192 words) to Toom-3; division is schoolbook below 32 words and recursive divide-and-conquer above; non-power-of-two parsing works in 256-word chunks combined with precomputed radix powers. On x86-64 limb add/sub use the _addcarry_u64/_subborrow_u64 intrinsics; there is no hand-written assembly.",
+  "when_to_use": [
+    "Rust code where most values fit in 64 bits but must not overflow (counters, exact rationals with small parts, property-test shrinkers): one-word add/sub/mul/div measured 1.5-2.1 ns vs 17.7-28.3 ns for rug",
+    "Parsing many decimal or hex strings into big integers: ubig_from_hex and ubig_from_dec beat rug at every size up to 10^4 bits",
+    "Targets where linking GMP is impractical or LGPL is unacceptable: pure Rust, no_std, MIT OR Apache-2.0",
+    "Embedded or wasm builds that need big integers without a C toolchain"
+  ],
+  "when_not_to_use": [
+    "Operands of two words or more: rug/GMP is already ahead at 100 bits on add, sub and div, and about 2.8x faster on 10^4-bit multiplication (4.52 us vs 12.69 us)",
+    "gcd-heavy or modular-inverse-heavy code: gcd is a binary (quadratic) algorithm, 16x slower than rug at 10^4 bits (850.52 us vs 53.05 us) and 111x slower on extended gcd (7.82 ms vs 70.31 us)",
+    "Large computations (millions of digits): multiplication stops at Toom-3 with no FFT/NTT path in the released code; ibig's own suite has 10M digits of e at 20.673 s vs rug 2.788 s",
+    "Converting big values to strings: ubig_to_hex at 10^4 bits is 7.34 us vs rug 2.47 us",
+    "C or C++ projects: there is no C API; use dashu or malachite only if you are in Rust anyway, otherwise GMP itself"
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "ibig 0.3.6: cfg-if, static_assertions, num-traits (no_std); optional rand 0.8, serde 1.0",
+    "min_toolchain": "Rust 1.49 for the crates.io 0.3.6 release (crates.io rust_version); the repo's ibig-old copy now declares 1.93 and the unreleased 0.4.0 rewrite needs 1.95 (edition 2024)",
+    "platforms": "any Rust target; x86 and x86-64 get carry intrinsics, other targets use generic 16/32/64-bit word code",
+    "thread_safety": "not documented; UBig/IBig are plain owned values and no global mutable state was seen in the source read",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The repository's main code (ibig 0.4.0 on ibig-core) is a from-scratch rewrite its README calls 'in early development'; the benchmarked and published code is 0.3.6 (2022-09-17), kept in ibig-old/, so the GitHub HEAD and the crate differ",
+    "Only one word is stored inline: 65-128-bit values (u128, i128) already allocate, e.g. ubig_from_u128 21.4 ns vs dashu 1.8 ns",
+    "UBig is capped at UBig::MAX_BIT_LEN (close to usize::MAX bits) and panics if exceeded; gcd(0, 0) panics",
+    "Issue #18 ('0 shouldn't have a modular inverse') was closed in November 2022, after the last release; whether 0.3.6 is affected is not documented"
+  ],
+  "pick_this_over_siblings_when": "Prefer dashu (a hard fork of ibig) in almost every case: it also inlines two-word values, has a subquadratic gcd (13x faster than ibig at 10^4 bits) and is within a few percent of ibig on add, mul and parsing at 1,000-10^4 bits in the same report. Pick ibig only for its smaller, frozen, permissively licensed 0.3.6 codebase; pick malachite or rug when operands exceed about 1,000 bits, and Boost.Multiprecision fixed cpp_int or ctbignum from C++.",
+  "verified_claims_summary": "In DRMacIver's third-party Criterion suite (rustc 1.92.0, default bench profile, Apple M2 Max), ibig 0.3.6 beat rug 1.30.0/GMP on 10-bit add/sub/mul/div (1.5-2.1 ns vs 17.7-28.3 ns) and on hex/decimal parsing at all sizes, but lost to rug from 100 bits up on add/sub/div and at 10^4 bits on mul, gcd, pow, modular ops and formatting. The small-value win comes from avoiding a per-result heap allocation, not from faster limb kernels.",
+  "status_note": "The repo is active (commits in July 2026) but on an unreleased rewrite; the crate has had no release since 0.3.6 in September 2022, still draws about 118k recent downloads, and is MIT OR Apache-2.0, small and pure Rust, so the old version is easy to vendor.",
+  "sources_read": [
+    "https://github.com/tczajka/ibig-rs",
+    "https://github.com/tczajka/ibig-rs/tree/master/ibig-old/src",
+    "https://github.com/tczajka/ibig-rs/issues?q=is%3Aissue",
+    "https://github.com/tczajka/ibig-rs/issues/18",
+    "https://github.com/tczajka/ibig-rs/issues/13",
+    "https://raw.githubusercontent.com/tczajka/ibig-rs/HEAD/README.md",
+    "https://raw.githubusercontent.com/tczajka/ibig-rs/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/tczajka/ibig-rs/HEAD/ibig/Cargo.toml",
+    "https://raw.githubusercontent.com/tczajka/ibig-rs/HEAD/ibig/README.md",
+    "https://raw.githubusercontent.com/tczajka/ibig-rs/HEAD/ibig-old/Cargo.toml",
+    "https://raw.githubusercontent.com/tczajka/ibig-rs/HEAD/ibig-core/Cargo.toml",
+    "https://raw.githubusercontent.com/tczajka/ibig-rs/main/ibig-old/src/lib.rs",
+    "https://raw.githubusercontent.com/tczajka/ibig-rs/main/ibig-old/src/ubig.rs",
+    "https://raw.githubusercontent.com/tczajka/ibig-rs/main/ibig-old/src/mul/mod.rs",
+    "https://raw.githubusercontent.com/tczajka/ibig-rs/main/ibig-old/src/mul/ntt.rs",
+    "https://raw.githubusercontent.com/tczajka/ibig-rs/main/ibig-old/src/div/mod.rs",
+    "https://raw.githubusercontent.com/tczajka/ibig-rs/main/ibig-old/src/div/divide_conquer.rs",
+    "https://raw.githubusercontent.com/tczajka/ibig-rs/main/ibig-old/src/gcd.rs",
+    "https://raw.githubusercontent.com/tczajka/ibig-rs/main/ibig-old/src/parse/mod.rs",
+    "https://raw.githubusercontent.com/tczajka/ibig-rs/main/ibig-old/src/parse/non_power_two.rs",
+    "https://raw.githubusercontent.com/tczajka/ibig-rs/main/ibig-old/src/fmt/mod.rs",
+    "https://raw.githubusercontent.com/tczajka/ibig-rs/main/ibig-old/src/arch/mod.rs",
+    "https://raw.githubusercontent.com/tczajka/ibig-rs/main/ibig-old/src/arch/x86_64/mod.rs",
+    "https://raw.githubusercontent.com/tczajka/ibig-rs/main/ibig-old/src/arch/x86_64/add.rs",
+    "https://raw.githubusercontent.com/tczajka/ibig-rs/main/ibig-old/src/arch/generic_64_bit/ntt.rs",
+    "https://raw.githubusercontent.com/tczajka/ibig-rs/main/ibig-old/src/memory.rs",
+    "https://raw.githubusercontent.com/tczajka/ibig-rs/main/ibig-old/src/buffer.rs",
+    "https://raw.githubusercontent.com/tczajka/ibig-rs/main/ibig-old/src/pow.rs",
+    "https://raw.githubusercontent.com/tczajka/ibig-rs/main/ibig-old/src/modular/mod.rs",
+    "https://raw.githubusercontent.com/tczajka/ibig-rs/main/ibig-old/src/modular/div.rs",
+    "https://crates.io/api/v1/crates/ibig",
+    "https://raw.githubusercontent.com/DRMacIver/rust-bigint-benchmarks/main/benchmark-report.md",
+    "https://raw.githubusercontent.com/tczajka/bigint-benchmark-rs/HEAD/README.md"
+  ],
+  "confidence": 0.8
+}

@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/maandree/libzahl",
+  "one_liner": "Small ISC-licensed C bignum library that beats GMP on cheap integer operations (assign, sign, compare, add/sub) but loses on multiply.",
+  "what_it_does": "libzahl is a C99 arbitrary-size signed integer library with a GMP-like but distinct API: z_t is a one-element struct array, outputs come before inputs (zadd(a, b, c) is a := b + c), and errors are reported by longjmp to a jmp_buf registered once with zsetup() instead of return codes. It covers assignment, comparison, add/sub/mul/div/mod, powers and modular powers, bitwise ops and shifts, gcd, a Miller-Rabin style zptest, random numbers, decimal string conversion and raw save/load. It is not a drop-in for GMP; every call site has to be rewritten.",
+  "how_it_is_fast": "Allocations are never freed while the library is set up: limb arrays are rounded up to a power of two (plus 4 'fluff' limbs) and returned to per-size pools for reuse, and internal temporaries are preallocated globals. Error checks happen only where an error can first arise (longjmp out), and -DZAHL_UNSAFE removes them. Hot paths are header inlines; small copies use a computed-jump switch over 1-20 limbs, and x86-64 add/sub and copy loops use inline assembly (adcq in groups of four limbs). Multiplication is plain recursive Karatsuba down to a single 64-bit limb with no schoolbook base case, division is bit-by-bit shift-and-subtract, and gcd is binary gcd, which is why the arithmetic-heavy rows lose.",
+  "when_to_use": [
+    "Programs dominated by cheap bignum bookkeeping (set, swap, negate, abs, compare, bit test, truncate, save/load) on operands up to a few thousand bits, where STATUS ranks libzahl fastest against GMP, TomsFastMath and LibTomMath.",
+    "Addition and subtraction of operands above roughly 100-850 bits (crossover depends on compiler and libc; clang+glibc ~90 bits, gcc+glibc ~840) on x86-64.",
+    "Single-threaded C programs that want a permissively licensed (ISC) bignum without GMP's LGPL/GPL terms and are willing to vendor a small, frozen code base.",
+    "Code that prefers longjmp-style error handling over checking every return value, or that wants allocation caching without writing its own pool."
+  ],
+  "when_not_to_use": [
+    "Anything multiplication-, squaring-, division- or exponentiation-heavy: STATUS lists zmul, zsqr and zstr as 'slowest', and the legacy table lists zmodmul, zpow, zmodpow, zptest and small-divisor division as slowest; use GMP or FLINT.",
+    "Multi-threaded programs: the header says libzahl is not thread-safe (global temporaries, a global jmp_buf and global memory pools in zsetup.c).",
+    "Cryptography: zahl.h says 'Do not use libzahl for cryptographic applications'; nothing is constant-time.",
+    "C++ code bases that include zahl.h directly: open issue #4 reports it does not compile as C++ because of register and restrict.",
+    "Long-lived maintained dependencies: the repository was archived on 2024-10-06 and open issues have no maintainer replies."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none (libc only; POSIX /dev/urandom and /dev/random paths for zrand, configurable via CPPFLAGS)",
+    "min_toolchain": "C99 compiler; config.mk builds with -std=c99 -O3 -flto; GCC or Clang needed for the inline-assembly and builtin paths (-DZAHL_NO_ASM for others)",
+    "platforms": "x86-64 tested (inline assembly for add/sub/copy); other targets through portable C fallbacks with -DZAHL_NO_ASM; big-endian listed as untested in TODO",
+    "thread_safety": "Not thread-safe (stated in README and zahl.h); all state is process-global.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Errors longjmp to the point registered by setjmp + zsetup(env); code between that point and the failing call is skipped, so resources must be cleaned up there. -DZAHL_UNSAFE turns checks off entirely and must be set both when building libzahl and before including zahl.h.",
+    "Memory is pooled and only released by zunsetup(); peak memory stays allocated, and allocations round up to the next power of two.",
+    "INSTALL says libzahl contains some inline assembly and asks for -DZAHL_NO_ASM on unsupported CPUs or compilers, and -DZAHL_ISA_MISSING_INDIRECT_JUMP on ISAs without computed jumps.",
+    "znot is not GMP's NOT (GMP computes -x - 1); zstr writes decimal only, and zsets_radix/zstr_radix are TODO items."
+  ],
+  "pick_this_over_siblings_when": "Pick libzahl over Boost.Multiprecision cpp_int, mp++ or ctbignum only when you need plain C, an ISC license and no GMP dependency, and your workload is mostly assignment, comparison and add/sub at hundreds to thousands of bits; for fixed small widths in C++ cpp_int or ctbignum fit better, and for multiplication-heavy work GMP-backed mp++ or FLINT win clearly.",
+  "verified_claims_summary": "The repo's STATUS file ranks libzahl per function against GMP, TomsFastMath and LibTomMath on 1 to 4097-bit operands, on an Intel Core 2 Quad Q9300 under Linux with one pinned CPU, no CPU extensions, libzahl built with gcc+glibc, gcc+musl and clang+glibc and the others with gcc+glibc, -O3 (-std=c99 -O3 -flto in config.mk). It reports rankings and crossover sizes, not times: libzahl is fastest for assignment, sign, comparison, bit test, save/load and add/sub at larger sizes, and slowest for multiply, square and decimal output. GMP and compiler versions are not stated, and some wins go through the bench/ translation layer: the GMP side of zsave/zload calls mpz_out_raw/mpz_inp_raw through an fmemopen stdio stream, so those rows are not like-for-like.",
+  "status_note": "Abandoned: archived 2024-10-06, last commit 2022-07-20, three open issues unanswered; ISC-licensed and small enough to vendor, but treat it as frozen code.",
+  "sources_read": [
+    "https://github.com/maandree/libzahl",
+    "https://github.com/maandree/libzahl/issues",
+    "https://github.com/maandree/libzahl/issues/2",
+    "https://github.com/maandree/libzahl/issues/4",
+    "https://github.com/maandree/libzahl/issues/5",
+    "https://raw.githubusercontent.com/maandree/libzahl/HEAD/README",
+    "https://raw.githubusercontent.com/maandree/libzahl/HEAD/STATUS",
+    "https://raw.githubusercontent.com/maandree/libzahl/HEAD/TODO",
+    "https://raw.githubusercontent.com/maandree/libzahl/HEAD/INSTALL",
+    "https://raw.githubusercontent.com/maandree/libzahl/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/maandree/libzahl/HEAD/config.mk",
+    "https://raw.githubusercontent.com/maandree/libzahl/HEAD/Makefile",
+    "https://raw.githubusercontent.com/maandree/libzahl/HEAD/zahl.h",
+    "https://raw.githubusercontent.com/maandree/libzahl/HEAD/zahl/internals.h",
+    "https://raw.githubusercontent.com/maandree/libzahl/HEAD/zahl/inlines.h",
+    "https://raw.githubusercontent.com/maandree/libzahl/HEAD/zahl/memory.h",
+    "https://raw.githubusercontent.com/maandree/libzahl/HEAD/src/internals.h",
+    "https://raw.githubusercontent.com/maandree/libzahl/HEAD/src/zmul.c",
+    "https://raw.githubusercontent.com/maandree/libzahl/HEAD/src/zsqr.c",
+    "https://raw.githubusercontent.com/maandree/libzahl/HEAD/src/zadd.c",
+    "https://raw.githubusercontent.com/maandree/libzahl/HEAD/src/allocator.c",
+    "https://raw.githubusercontent.com/maandree/libzahl/HEAD/src/zdivmod.c",
+    "https://raw.githubusercontent.com/maandree/libzahl/HEAD/src/zgcd.c",
+    "https://raw.githubusercontent.com/maandree/libzahl/HEAD/src/zsetup.c",
+    "https://raw.githubusercontent.com/maandree/libzahl/HEAD/doc/libzahls-design.tex",
+    "https://raw.githubusercontent.com/maandree/libzahl/HEAD/doc/what-is-libzahl.tex",
+    "https://raw.githubusercontent.com/maandree/libzahl/HEAD/bench/libgmp.h",
+    "https://raw.githubusercontent.com/maandree/libzahl/HEAD/bench/benchmark-func.c"
+  ],
+  "confidence": 0.8
+}
