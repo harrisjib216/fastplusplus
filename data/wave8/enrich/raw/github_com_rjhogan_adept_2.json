@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/rjhogan/adept-2",
+  "one_liner": "Expression-template reverse/forward-mode C++ AD library with Fortran-like arrays; tapes faster than ADOL-C, CppAD and Ceres in third-party benchmarks.",
+  "what_it_does": "Differentiates ordinary C++ code by replacing double with adept::adouble (aReal) and recording operations on a thread-local adept::Stack; you call stack.new_recording(), run the function, seed gradients and call compute_adjoint(), compute_tangent_linear() or jacobian()/jacobian_forward()/jacobian_reverse(). Version 2 adds active and passive arrays up to 7 dimensions with Fortran-style operations (spread, count, maxval, interp), BLAS/LAPACK-backed matrix multiply and linear algebra, and minimizers (Levenberg-Marquardt, conjugate gradient, L-BFGS, with optional box constraints) in adept_optimize.h. It is an operator-overloading replacement for ADOL-C/CppAD-style tools, not a drop-in for any of them; code must be written against Adept's active types.",
+  "how_it_is_fast": "Expression templates collapse each right-hand-side statement into a single compile-time expression, so the tape stores one statement plus its precomputed partial derivatives instead of one node per elementary operation (Hogan 2014, ACM TOMS 40:26). Taping is cheap enough to redo on every call, which is why the ADBench paper found Adept's per-call ('split') taping barely slower than one large tape while ADOL-C slowed down markedly. The Stack uses raw dynamically allocated arrays (the base.h comment says these are faster than STL containers), passive array expressions are vectorized with SSE2/AVX/AVX-512/ARM NEON packets, and Jacobians are computed in OpenMP-parallel strips.",
+  "when_to_use": [
+    "Reverse-mode gradients of scalar objectives written in plain C++ with many inputs, where you want one-line taping per call and no separate tape-replay step (e.g. variational data assimilation, retrieval schemes, model calibration).",
+    "Code that already thinks in Fortran-style arrays: Adept arrays let you differentiate whole-array expressions and exchange arrays with Fortran (array_fortran.h).",
+    "Small dense Jacobians per residual, as in bundle adjustment, where ADBench measured Adept about 3.3x faster than Ceres and 10-12x faster than ADOL-C (derived from page data).",
+    "Quant-style Monte Carlo or calibration sensitivities when you need an Apache-2.0 tape library and XAD is not an option: in Xcelerit's ad-benchmarks Adept 2 beat CppAD on all four workloads.",
+    "Projects that need old toolchains: the ChangeLog keeps C++98 compatibility, with C++11 features (thread_local, move semantics, initializer lists) used when available."
+  ],
+  "when_not_to_use": [
+    "When you need maximum tape speed: XAD's open-source tape mode was 1.1x (LIBOR) to 2.3x (Heston) faster than Adept 2 in ad-benchmarks, and the FastAD paper claims 2-10x over Adept.",
+    "Higher-order derivatives: ad-benchmarks lists Adept as forward and reverse only, while CppAD and XAD are listed as higher-order; the Adept minimizers use first derivatives or a user-supplied Hessian.",
+    "Very large single recordings: in ADBench unsplit Adept crashed on GMM at 429k parameters (and from the second size up on the 1k-point GMM), so large problems must be split into per-term recordings.",
+    "Matrix-heavy code without an optimized BLAS: configure warns that without BLAS matrix multiplication is unavailable and without LAPACK linear-algebra routines are unavailable.",
+    "When a hand-written adjoint or a source-transformation tool is feasible: ADBench found hand-written C++ about 3.5x faster than Adept on BA and Tapenade faster on GMM and BA."
+  ],
+  "integration": {
+    "form": "static lib | shared lib (autotools build); a library-free single-translation-unit mode (adept_source.h) also exists",
+    "dependencies": "none for scalar AD; BLAS and LAPACK (detected via a Fortran compiler at configure time) for matrix multiply and linear algebra; OpenMP optional for parallel Jacobians",
+    "min_toolchain": "C++98 (C++11 required for ADEPT_STORAGE_THREAD_SAFE; thread_local used when available); autotools needed to build from a git snapshot (autoreconf -i)",
+    "platforms": "any; vectorization on x86 SSE2/AVX/AVX-512 and 64-bit ARM NEON, disabled on 32-bit ARM",
+    "thread_safety": "The global Stack pointer is thread-local, so each thread can record on its own Stack; it falls back to thread-unsafe where thread_local is unavailable (older Mac toolchains). Array reference counts are not atomic unless ADEPT_STORAGE_THREAD_SAFE is defined (C++11). ADEPT_FAST makes the stack thread-unsafe.",
+    "drop_in_for_baseline": "partial — replaces CppAD/ADOL-C-style operator-overloading AD for first-order derivatives, but with its own types (aReal, aVector, Stack) and API; it is not a drop-in for oneDNN/cuDNN/XNNPACK/Eigen Tensor kernels."
+  },
+  "gotchas": [
+    "Call stack.new_recording() after initializing independent variables and before any active arithmetic; the old Stack::start(), clear() and clear_statements() now throw feature_not_available.",
+    "Errors are reported by throwing adept::exception subclasses (gradient_out_of_range, gradients_not_initialized, stack_already_active, wrong_gradient, non_finite_gradient, array exceptions).",
+    "Compiling with -ffast-math silently turns on ADEPT_FAST_EXPONENTIAL, which changes exp results; ADEPT_FAST also disables dimension and alias checking, so aliased array statements need eval().",
+    "Correctness history: 2020-2021 releases fixed wrong derivatives of Active<double>/int and product, wrong maxval/minval and norm2, and unaligned AVX crashes; two 2025 reports of wrong gradients on extreme-magnitude or redundant expressions (issues #36, #37) were closed with no maintainer fix shown on the issue pages."
+  ],
+  "pick_this_over_siblings_when": "Pick Adept over XAD or FastAD when you want Apache-2.0 AD with built-in multidimensional arrays, Fortran interop and minimizers more than peak tape speed (both siblings measure faster than Adept), and over Enzyme when you cannot depend on an LLVM/Clang plugin. HyperJet is for small dense second-order derivatives and Sleipnir is an AD-plus-NLP-solver stack, so neither replaces a general reverse-mode library.",
+  "verified_claims_summary": "The ADBench paper (Microsoft, AD2016 / Optimization Methods and Software 2018) timed Adept 1.1-era code on a Xeon E5-1620 under Windows 10 with no compiler flags stated: bundle-adjustment Jacobians were about 12.5x faster than ADOL-C and 3.3x faster than Ceres at the smallest size (10.7x vs ADOL-C at the largest, where Ceres crashed), and split GMM gradients about 16x faster than ADOL-C, but unsplit GMM only about 1.8x and ADOL-C won at several sizes. Separately, Xcelerit's ad-benchmarks (GCC 13.3, -O3 -mavx2 -mfma, Xeon Platinum 8488C) show Adept 2 faster than CppAD on Heston MC (91 vs 268 ms), SABR (19 vs 32 ms), XVA CVA (7.1 vs 8.0 s) and LIBOR swaption (1.15 vs 4.57 s), but slower than XAD on all four.",
+  "status_note": "Maintained by Robin Hogan at ECMWF (last commit 2025-10-05, version 2.1.4 in progress, 189 stars); the Apache-2.0 library and all-permissive tests make it safe to vendor, though the official site and user guide (met.reading.ac.uk) were unreachable from here and open issues include a Mac install problem and out-of-tree build failure.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/rjhogan/Adept-2/HEAD/README.md",
+    "https://raw.githubusercontent.com/rjhogan/Adept-2/HEAD/ChangeLog",
+    "https://raw.githubusercontent.com/rjhogan/Adept-2/HEAD/NEWS",
+    "https://raw.githubusercontent.com/rjhogan/Adept-2/HEAD/configure.ac",
+    "https://raw.githubusercontent.com/rjhogan/Adept-2/HEAD/COPYING",
+    "https://raw.githubusercontent.com/rjhogan/Adept-2/HEAD/include/adept.h",
+    "https://raw.githubusercontent.com/rjhogan/Adept-2/HEAD/include/adept/base.h",
+    "https://raw.githubusercontent.com/rjhogan/Adept-2/HEAD/include/adept/Stack.h",
+    "https://raw.githubusercontent.com/rjhogan/Adept-2/HEAD/include/adept/exception.h",
+    "https://raw.githubusercontent.com/rjhogan/Adept-2/HEAD/include/adept_optimize.h",
+    "https://github.com/rjhogan/Adept-2",
+    "https://github.com/rjhogan/Adept-2/issues?q=is%3Aissue",
+    "https://github.com/rjhogan/Adept-2/issues/36",
+    "https://github.com/rjhogan/Adept-2/issues/37",
+    "https://raw.githubusercontent.com/auto-differentiation/ad-benchmarks/HEAD/README.md",
+    "https://raw.githubusercontent.com/microsoft/ADBench/master/Documents/ms.tex",
+    "http://www.met.reading.ac.uk/clouds/adept/adept_documentation.pdf (403, not read)"
+  ],
+  "confidence": 0.75
+}

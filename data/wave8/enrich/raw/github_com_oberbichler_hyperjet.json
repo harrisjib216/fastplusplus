@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/oberbichler/hyperjet",
+  "one_liner": "Header-only C++23 hyper-dual numbers giving value, gradient and dense Hessian in one pass; 1.2-3.3x faster than Eigen AutoDiffScalar/autodiff.",
+  "what_it_does": "Forward-mode algorithmic differentiation where each scalar carries its value, gradient and (for second order) the packed upper triangle of the Hessian, so evaluating a templated function once yields all second derivatives. DDScalar<Order, T, N> comes in static-size (N fixed at compile time, std::array storage) and dynamic-size (std::vector) variants; SScalar/SSScalar key derivatives by variable name for assembly-style code. You write the function over a template scalar type, as with ceres::Jet or Eigen AutoDiffScalar, and read f(), g(i), h(i,j); pybind11 Python bindings expose the same types with a native NumPy dtype for static sizes.",
+  "how_it_is_fast": "Hyper-dual (truncated second-order Taylor) arithmetic propagates the gradient and Hessian through each operation via the chain rule, so the Hessian comes from one evaluation rather than nested first-order duals (Eigen AutoDiffScalar of AutoDiffScalar) or n(n+1)/2 re-evaluations (autodiff dual2nd's hessian()). The Hessian is stored as a packed upper triangle in a fixed-size std::array, all operators are force-inlined, and constant partials (zero, one, minus one) are compile-time tags that fold away. Above 8 variables the gradient and Hessian are updated in one fused pass over the data array, a threshold the source comments say was measured on an M1 Pro (n=16 35% faster fused, n=6 14% slower).",
+  "when_to_use": [
+    "Element-level Hessians in nonlinear finite-element, isogeometric or cable/shell mechanics codes, where each element has a small, compile-time-known number of DOFs (roughly 3-24).",
+    "Newton-type solvers that need exact local Hessians of small dense functions evaluated many times (strain energies, constitutive laws).",
+    "Python prototyping of second-derivative code: static types back a NumPy dtype, which the README measured at 52x-246x faster than dtype=object arrays for elementwise ops.",
+    "Assembly code that wants derivatives keyed by variable name and projected onto a caller-chosen global ordering (SSScalar g(names)/hm(names))."
+  ],
+  "when_not_to_use": [
+    "Gradient-only work: the README's own first-order table shows no gain over Eigen AutoDiffScalar (244 vs 245 ns at n=24), and Ceres Jet comes with a solver.",
+    "Variable counts unknown at compile time: the dynamic variant allocates per operation and was 43x slower than static at n=3, and slower than both Eigen AutoDiffScalar nested and autodiff dual2nd at every tested size in the second-order table.",
+    "Many inputs or large n: forward-mode cost and the dense Hessian grow quadratically, and the speedup already narrows to 1.5x at n=24; reverse-mode tools (Adept, XAD) suit scalar functions of hundreds of inputs.",
+    "Toolchains older than GCC 14 / Clang 18 / MSVC 19.38: the header uses C++23 explicit object parameters ('deducing this').",
+    "Projects needing third derivatives or sparse Hessians within a set of variables: only first and second order are provided, and SSScalar's Hessian is dense over the names it carries."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none for C++ (standard library only); Python bindings need pybind11, scikit-build-core and NumPy >= 2.0",
+    "min_toolchain": "C++23; GCC 14+, Clang 18+, MSVC 19.38+ (README); CMake 3.14+ for the provided target",
+    "platforms": "any (portable C++; benchmarks only on Apple M1 Pro)",
+    "thread_safety": "not documented (scalars are value types with no shared state in the header)",
+    "drop_in_for_baseline": "partial — same template-scalar style as Eigen AutoDiffScalar or ceres::Jet, so a templated function can switch types, but the accessors (f(), g(i), h(i,j), variables()) differ and Eigen-specific traits are not provided."
+  },
+  "gotchas": [
+    "pip install hyperjet installs 1.5.0 from August 2023, not the benchmarked C++23 code; the README's CPM line pins HyperJet@2.0.0, but the tags page shows no 2.0.0 tag (latest v1.5.0), so pin a commit on main to get the rewrite (C++23 switch landed May 2026, benchmark July 2026).",
+    "C++ accessors g(i), h(i), h(i,j) are only checked by assert in debug builds; constructors and resize/eval paths throw std::runtime_error unless HYPERJET_NO_EXCEPTIONS is defined.",
+    "References returned by data() from a temporary expression are valid only within the full expression, as with std::vector::operator[].",
+    "Performance depends on inlining: the README measured a 1.56x penalty for HyperJet (similar for Eigen and Ceres) when the enclosing expression is not inlined, and writing acc += term instead of acc = acc + term saved 8% at n=24."
+  ],
+  "pick_this_over_siblings_when": "Pick HyperJet over Adept-2, XAD or FastAD when you need exact dense Hessians of small fixed-size functions, since those tape-based tools target first-order reverse mode over many inputs (Adept has no higher-order mode). Sleipnir bundles its own AD with an NLP solver and Enzyme needs an LLVM plugin; neither is a lightweight per-element Hessian scalar.",
+  "verified_claims_summary": "The author's Google Benchmark harness (benchmark/compare/compare.cpp, Apple clang 21.0.0 -O3 -DNDEBUG on an Apple M1 Pro, Eigen 3.4.0, autodiff v1.1.2, Ceres 2.2.0) times value, gradient and dense Hessian of a cable strain-energy sum: static HyperJet takes 15/101/921/12,214 ns at n=3/6/12/24 against 18/328/2,888/22,105 ns for nested Eigen AutoDiffScalar and 127/375/2,425/17,679 ns for autodiff dual2nd, after checking all contenders agree bit-for-bit. For gradients alone it ties Eigen AutoDiffScalar and is about 1.25x faster than ceres::Jet at n=24.",
+  "status_note": "Actively developed by a single author (C++23 rewrite in May 2026, last commit 2026-07-28, 17 stars) under MIT, small enough to vendor as one header, but the rewritten version has no tagged release or PyPI package yet.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/oberbichler/HyperJet/HEAD/README.md",
+    "https://raw.githubusercontent.com/oberbichler/HyperJet/HEAD/include/hyperjet/hyperjet.h",
+    "https://raw.githubusercontent.com/oberbichler/HyperJet/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/oberbichler/HyperJet/HEAD/pyproject.toml",
+    "https://raw.githubusercontent.com/oberbichler/HyperJet/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/oberbichler/HyperJet/HEAD/benchmark/compare/compare.cpp",
+    "https://raw.githubusercontent.com/oberbichler/HyperJet/HEAD/benchmark/CMakeLists.txt",
+    "https://github.com/oberbichler/HyperJet",
+    "https://github.com/oberbichler/HyperJet/issues?q=is%3Aissue",
+    "https://github.com/oberbichler/HyperJet/issues/59",
+    "https://github.com/oberbichler/HyperJet/tags",
+    "https://github.com/oberbichler/HyperJet/commits",
+    "https://pypi.org/pypi/hyperjet/json"
+  ],
+  "confidence": 0.8
+}

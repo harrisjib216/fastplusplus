@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/sleipnirgroup/sleipnir",
+  "one_liner": "C++23 reverse-mode autodiff plus Newton/SQP/interior-point NLP solver DSL; sets up and solves small optimal-control problems faster than CasADi+Ipopt.",
+  "what_it_does": "You declare decision variables on an slp::Problem, build the cost and constraints with overloaded operators (==, <=, >= create constraint objects), and call solve(); Sleipnir differentiates the expressions in reverse mode and picks a solver from the problem structure: Newton for unconstrained problems, SQP when there are only equality constraints, and an interior-point method otherwise. It is a self-contained replacement for the CasADi-plus-Ipopt stack (modelling, AD and solver in one library) rather than a general AD library you call from your own solver; the C++ API is templated on the scalar type, and Python bindings ship as sleipnirgroup-jormungandr.",
+  "how_it_is_fast": "The autodiff graph records the linearity of every node (constant, linear, quadratic, nonlinear), so constant first and second derivatives are computed once at initialization and only nonlinear subgraphs are re-evaluated each iteration; quadratic problems get their Lagrangian Hessian and constraint Jacobians once without user hints. Expression nodes come from a thread-local pool allocator and are freed through intrusive reference counts with an iterative (non-recursive) teardown. Equality and inequality constraints are distinct types so setup dispatch happens at compile time, and Eigen's sparse matrices and a regularized LDLT factorization handle the KKT systems.",
+  "when_to_use": [
+    "Small to medium trajectory-optimization or model-predictive-control NLPs (hundreds to a few thousand stages) where problem setup time matters, e.g. re-building and solving each control cycle; flywheel setup was 0.37 ms vs 19.2 ms for CasADi at 1000 samples.",
+    "Robotics code (the project comes out of the FRC robotics community) that wants a permissively licensed, dependency-light solver that cross-compiles via CMake toolchain files, since Eigen is the only heavy dependency.",
+    "Problems with many linear or quadratic constraints, where cached constant derivatives remove most per-iteration AD work.",
+    "When you want one modelling-plus-solver API in both C++ and Python, or need a non-double scalar type (the C++ API is templated for higher-precision types)."
+  ],
+  "when_not_to_use": [
+    "Harder nonlinear problems where solver robustness dominates: on cart-pole Sleipnir's solve time was slower than CasADi+Ipopt+MUMPS from 150 samples up (3065 vs 974 ms at 250 samples; 2683 vs 1251 ms at 300).",
+    "If you need fast standalone derivatives: the AD is tree-based with dynamic dispatch and an open issue (#660) calls it too slow for embedded use; the benchmark never isolates AD speed.",
+    "Large-scale NLPs that benefit from commercial sparse linear solvers (HSL MA27/MA57) in Ipopt; the benchmark README notes those may make Ipopt much faster than with MUMPS.",
+    "Toolchains older than GCC 14 / Apple Clang 16 / Visual Studio 2022 17.13: the library requires C++23.",
+    "Projects that need a stable versioned API: the README's FetchContent snippet tracks GIT_TAG main and PyPI is on 0.6.x with frequent dev builds."
+  ],
+  "integration": {
+    "form": "shared lib (BUILD_SHARED_LIBS defaults ON; static possible) via CMake FetchContent",
+    "dependencies": "Eigen (fetched at a pinned commit unless SLEIPNIR_USE_SYSTEM_EIGEN), gharveymn/small_vector; nanobind for Python bindings; Catch2 for tests",
+    "min_toolchain": "C++23; GCC 14 libstdc++ (Ubuntu 24.04), Apple Clang 16.0.0 (Xcode 16.2), MSVC from Visual Studio 2022 17.13; CMake 3.21+",
+    "platforms": "Windows 11, Ubuntu 24.04, macOS 14.5 (universal arm64/x86_64); PyPI wheels for Linux x86_64/aarch64, macOS universal2, Windows amd64/arm64",
+    "thread_safety": "not documented; the source shows a thread-local expression pool (disabled on Windows because thread-local statics are not reliably initialized across DLL boundaries) and non-atomic node reference counts, so build and solve each Problem on one thread",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The default CMake build type is RelWithDebInfo (-O2 -g), which is also what the published benchmark used; set CMAKE_BUILD_TYPE=Release explicitly if you want -O3.",
+    "solve() returns an ExitStatus (e.g. LOCALLY_INFEASIBLE, FACTORIZATION_FAILED, LINE_SEARCH_FAILED, DIVERGING_ITERATES, MAX_ITERATIONS_EXCEEDED, TIMEOUT) instead of throwing; check it. Defaults are tolerance 1e-8 and 5000 max iterations.",
+    "Memory-safety history: issue #1193 (May 2026) found heap corruption in RegularizedLDLT::compute_sparse when two KKT matrices had the same nnz but different sparsity patterns (symbolic factorization cached by nnz only), fixed in PR #1198; aarch64-only test failures ('factorization failed', 'diverging iterates', issues #803/#804) were closed in March 2026.",
+    "The benchmark README tells you to run ./tools/generate-scalability-results.sh, but the script lives at benchmarks/generate-scalability-results.sh."
+  ],
+  "pick_this_over_siblings_when": "Pick Sleipnir when the job is solving a constrained NLP end to end; Adept-2, XAD, FastAD and Enzyme only give you derivatives and leave the solver to you, and HyperJet gives dense small Hessians. If you only need gradients inside your own code, those siblings are the better fit.",
+  "verified_claims_summary": "The project's own scalability benchmark (g++ 16.2.1, CMake default RelWithDebInfo, AMD Ryzen 7 7840U) compares Sleipnir with default options against CasADi 3.8.0 + Ipopt 3.14.20 + MUMPS 5.8.1 with tuned options: on the flywheel problem, solve is about 5.3x faster at 1000 samples (11.1 vs 59.0 ms) and 4.5x at 5000 (75.1 vs 339.4 ms) with setup 40-50x faster, but on cart-pole only setup wins and the solve is about 2x slower at 300 samples (2683 vs 1251 ms). This times a whole modelling+AD+solver stack, not AD alone.",
+  "status_note": "Very active (last commit 2026-09-27, dev wheels weekly, 80 stars, BSD-3-Clause), with a pre-1.0 API and tracking of main recommended by the README, so pin a commit when vendoring.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/SleipnirGroup/Sleipnir/HEAD/README.md",
+    "https://raw.githubusercontent.com/SleipnirGroup/Sleipnir/HEAD/benchmarks/README.md",
+    "https://raw.githubusercontent.com/SleipnirGroup/Sleipnir/HEAD/benchmarks/flywheel-scalability-results-casadi.csv",
+    "https://raw.githubusercontent.com/SleipnirGroup/Sleipnir/HEAD/benchmarks/flywheel-scalability-results-sleipnir.csv",
+    "https://raw.githubusercontent.com/SleipnirGroup/Sleipnir/HEAD/benchmarks/cart-pole-scalability-results-casadi.csv",
+    "https://raw.githubusercontent.com/SleipnirGroup/Sleipnir/HEAD/benchmarks/cart-pole-scalability-results-sleipnir.csv",
+    "https://raw.githubusercontent.com/SleipnirGroup/Sleipnir/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/SleipnirGroup/Sleipnir/HEAD/cmake/CompilerFlags.cmake",
+    "https://raw.githubusercontent.com/SleipnirGroup/Sleipnir/HEAD/pyproject.toml",
+    "https://raw.githubusercontent.com/SleipnirGroup/Sleipnir/HEAD/LICENSE.txt",
+    "https://raw.githubusercontent.com/SleipnirGroup/Sleipnir/HEAD/include/sleipnir/autodiff/expression.hpp",
+    "https://raw.githubusercontent.com/SleipnirGroup/Sleipnir/HEAD/include/sleipnir/autodiff/variable.hpp",
+    "https://raw.githubusercontent.com/SleipnirGroup/Sleipnir/HEAD/include/sleipnir/optimization/problem.hpp",
+    "https://raw.githubusercontent.com/SleipnirGroup/Sleipnir/HEAD/include/sleipnir/optimization/solver/options.hpp",
+    "https://raw.githubusercontent.com/SleipnirGroup/Sleipnir/HEAD/include/sleipnir/optimization/solver/exit_status.hpp",
+    "https://github.com/SleipnirGroup/Sleipnir",
+    "https://github.com/SleipnirGroup/Sleipnir/issues?q=is%3Aissue",
+    "https://github.com/SleipnirGroup/Sleipnir/issues/1193",
+    "https://github.com/SleipnirGroup/Sleipnir/issues/660",
+    "https://pypi.org/pypi/sleipnirgroup-jormungandr/json"
+  ],
+  "confidence": 0.8
+}
