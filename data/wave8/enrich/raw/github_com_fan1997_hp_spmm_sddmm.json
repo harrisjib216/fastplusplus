@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/fan1997/hp-spmm-sddmm",
+  "one_liner": "FP32 GPU SpMM kernel for GNN graphs (IPDPS'23 HP-SpMM); tops cuSPARSE 12.2 and GE-SpMM on 17 graphs on an H800.",
+  "what_it_does": "Research code for the SpMM half of 'Fast Sparse GPU Kernels for Accelerated Training of Graph Neural Networks' (IPDPS 2023): C = A*B with A a sparse graph adjacency matrix and B a dense row-major feature matrix of K columns. The entry point is LBSpMM(const COO_Matrix&, const Matrix&, Matrix&, float& time) on the bundled starml tensor types, built as a CMake shared library plus a test_all benchmark that also runs cuSPARSE (CSR ALG2/ALG3/default, COO) and GE-SpMM. Despite the repository name, there is no SDDMM kernel here; the paper's HP-SDDMM is not included.",
+  "how_it_is_fast": "Edge-parallel, load-balanced COO SpMM: each warp takes a fixed slice of 32 (or 128 for dense, large graphs) nonzeros, so skewed degree distributions do not leave idle warps, and partial row sums are flushed to C with atomicAdd when the row changes. The paper calls this a hybrid node/edge-parallel strategy with Dynamic Task Partition and Hierarchical Vectorized Memory Access: the 128-nonzero path loads indices and values with float4/int4 cp.async into double-buffered shared memory (Ampere+). A graph-clustering row reordering (precomputed .cugraph_reorder files) groups rows with similar neighbourhoods so the rows of B they read stay in cache.",
+  "when_to_use": [
+    "Full-graph GNN aggregation (GCN-style A*X) in FP32 on A100/A800/H100/H800 with feature widths K = 32, 64 or 128",
+    "Power-law graphs with skewed degrees (Reddit, ogbn-products, Yelp) where row-per-warp CSR kernels suffer load imbalance; the README chart shows roughly 1.5-1.7x over the best cuSPARSE variant on Yelp, arxiv and reddit",
+    "The graph is static across many epochs, so a one-off clustering reorder and COO conversion are amortized",
+    "As a reference implementation of edge-balanced, vectorized SpMM to port into your own GNN framework"
+  ],
+  "when_not_to_use": [
+    "K not a multiple of 32: the kernels have no column bounds check (cid < k) and read B and write C past the end",
+    "FP16/BF16, FP64 or weighted SpMM with non-default semirings: FP32 only, and the benchmark uses all-ones values",
+    "Pre-Ampere GPUs: the build targets sm_80/sm_90 and the large-graph path uses cp.async",
+    "If you need SDDMM, a maintained library or a PyTorch/DGL binding: none is provided, and there are 6 commits with the last in December 2023",
+    "Graphs that change every step (sampled mini-batches): you cannot reproduce the reorder step from this repo, and without it the speedup is not documented"
+  ],
+  "integration": {
+    "form": "shared lib (CMake builds libspmm from spmm/*.cu and *.cpp); realistically a source-drop of spmm_kernel.cu",
+    "dependencies": "CUDA toolkit with cuSPARSE (baselines) and Thrust; bundled starml tensor framework (unlicensed); precomputed .smtx and .cugraph_reorder dataset files from a SharePoint download",
+    "min_toolchain": "NVCC 11.8+, CMake 3.14+, C++11",
+    "platforms": "NVIDIA Ampere and Hopper only (A100, A800, H100, H800; sm_80/sm_90 gencode)",
+    "thread_safety": "not documented; kernels accumulate into C with atomicAdd, so C must be zeroed before each call and concurrent calls must not share C",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Output is accumulated with atomicAdd: LBSpMM does not zero C, and the timed loop runs 200 launches into the same buffer, so after benchmarking C holds 200x the product (the disabled CHECK_RES compares with a 'div' mode); FP32 atomics also make results non-deterministic in summation order",
+    "Only HP-SpMM gets the clustering reorder; cuSPARSE and GE-SpMM run on the original order, and the reorder cost and C zeroing are excluded from its time. Neither HP-SpMM nor GE-SpMM gets the 20 warm-up runs the cuSPARSE paths get",
+    "Index arithmetic is 32-bit int (colind*k, row*k), so rows*K and cols*K must stay below 2^31; nonzero arrays must be padded to a multiple of 32 as the loader does",
+    "Input is a custom .smtx text format (header line 'rows,cols,nnz', then row offsets and column indices), not Matrix Market"
+  ],
+  "pick_this_over_siblings_when": "Pick it over Sputnik when the workload is GNN-style A*X on power-law graphs on Ampere/Hopper and FP32 is enough; Sputnik is the more general deep-learning SpMM/SDDMM library and includes SDDMM. merge-spmv and CSR5 balance load in the same spirit but only for SpMV (one dense column).",
+  "verified_claims_summary": "First-party README chart on an NVIDIA H800 (host CPU and exact CUDA version not stated beyond cuSPARSE 12.2, NVCC 11.8+, -O3, sm_80/sm_90): FP32 SpMM GFLOPS averaged over K = 32, 64 and 128 on 17 GNN graphs, with HP-SpMM above every cuSPARSE variant and GE-SpMM on all of them, for example about 1730 vs 1050 GFLOPS on Yelp and 3000 vs 1920 on reddit (values read off the chart). HP-SpMM alone runs on the precomputed clustering reorder, whose cost is not counted.",
+  "status_note": "Stale research code (last commit December 2023, also mirrored at HPMLL/HP-SpMM); kernel files carry Apache-2.0 headers but there is no LICENSE file and the starml framework is unlicensed, so copy the kernel rather than depend on the repo.",
+  "sources_read": [
+    "https://github.com/fan1997/HP-SpMM-SDDMM",
+    "https://github.com/fan1997/HP-SpMM-SDDMM/issues",
+    "https://github.com/fan1997/HP-SpMM-SDDMM/tree/main/spmm/mm",
+    "https://raw.githubusercontent.com/fan1997/HP-SpMM-SDDMM/HEAD/README.md",
+    "https://raw.githubusercontent.com/fan1997/HP-SpMM-SDDMM/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/fan1997/HP-SpMM-SDDMM/HEAD/cmake/public/CUDA.cmake",
+    "https://raw.githubusercontent.com/fan1997/HP-SpMM-SDDMM/HEAD/test/CMakeLists.txt",
+    "https://raw.githubusercontent.com/fan1997/HP-SpMM-SDDMM/HEAD/run.sh",
+    "https://raw.githubusercontent.com/fan1997/HP-SpMM-SDDMM/HEAD/test/test_all.cpp",
+    "https://raw.githubusercontent.com/fan1997/HP-SpMM-SDDMM/HEAD/spmm/mm/spmm_kernel.cu",
+    "https://raw.githubusercontent.com/fan1997/HP-SpMM-SDDMM/HEAD/spmm/mm/spmm_common.cpp",
+    "https://raw.githubusercontent.com/fan1997/HP-SpMM-SDDMM/HEAD/include/spmm/mm/spmm_kernel.h",
+    "https://raw.githubusercontent.com/fan1997/HP-SpMM-SDDMM/HEAD/include/spmm/utils/timer_cuda.h",
+    "https://raw.githubusercontent.com/fan1997/HP-SpMM-SDDMM/HEAD/dataset/download.sh",
+    "WebSearch: IPDPS 2023 paper abstract via search snippets (cse.ust.hk PDF not opened)"
+  ],
+  "confidence": 0.75
+}

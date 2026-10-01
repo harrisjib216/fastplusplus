@@ -57,3 +57,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - RcppZiggurat carries the same exponential cast bug as zigg (ke[0]=0).
 - t-mat gist ff347c3ea6b94f3c60150631edeb07d3 (PRNG bench incl. Romu, STC64, wyrand, Shioi; GCC 11.2/MSVC 19.32 -O3, CPU not stated).
 - arXiv 2603.16480 "pattern block method" (Ziggurat generalization); rust-random/rand issue #257 (ETF vs Ziggurat).
+- arXiv 2110.05843 (Q-learning-scheduled block solver for power-system simulation, possibly by the GSS author).

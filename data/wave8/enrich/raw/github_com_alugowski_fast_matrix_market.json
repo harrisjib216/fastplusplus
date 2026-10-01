@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/alugowski/fast_matrix_market",
+  "one_liner": "Parallel, full-format Matrix Market (.mtx) reader/writer; about 10x single-thread and 30x on 8 threads over IOStreams loaders.",
+  "what_it_does": "Reads and writes Matrix Market files (coordinate and array, all fields and symmetries, matrix and vector objects) into triplet/doublet vectors, dense arrays, or directly into Eigen, GraphBLAS, CXSparse, Blaze and Armadillo types. The API is free functions such as read_matrix_market_triplet(std::istream&, nrows, ncols, rows, cols, vals) and write_matrix_market_csc(); you pass a std::istream/ostream plus your containers, and a read_options/write_options struct controls threads and chunk size. It replaces a library's own mmread/mmwrite rather than any standard API, and its Python binding is what scipy.io.mmread/mmwrite use from SciPy 1.12.",
+  "how_it_is_fast": "Field conversion uses fast_float or C++17 std::from_chars for numbers and Dragonbox/Ryu or std::to_chars for writing, avoiding scanf/strtod/IOStreams, which also lock on the locale and get slower with threads. The main thread reads the stream in 2 MiB line-aligned chunks; a thread pool counts lines per chunk so each chunk's output offset (coordinate) or row/column start (array) is known, then parses chunks in parallel straight into presized output vectors. Bounded in-flight chunks give backpressure, and chunk buffers are reused to keep RSS down.",
+  "when_to_use": [
+    "Loading multi-GB SuiteSparse or graph .mtx files into C++ where the existing loader (Eigen's loadMarket, hand-written scanf/IOStreams code) is the bottleneck",
+    "Coordinate files with real/integer/complex/pattern fields read into std::vector-like triplets or CSC/CSR; the example output shows about 500 MB/s on one thread and about 1.6 GB/s on 8 threads on an M1 Pro",
+    "Writing large sparse or dense results to .mtx, including CSC/CSR directly without a COO intermediate",
+    "Python on SciPy older than 1.12, or when you need vector files, longdouble or direct CSR/CSC writes, which scipy.io.mmread lacks (pip or conda fast_matrix_market)",
+    "Files SuiteSparse ships that partial loaders reject: array format, vector objects, skew-symmetric/hermitian, 64-bit indices"
+  ],
+  "when_not_to_use": [
+    "Small files where load time is already negligible; the gain only matters at hundreds of MB and up",
+    "Binary formats would be faster still: if you control both ends, a binary sparse format avoids text parsing altogether",
+    "Some paths fall back to sequential: bool value types, symmetric array files, and coordinate files read into dense handlers do not parallelize",
+    "Toolchains without float std::from_chars and with fast_float disabled fall back to strtod, which the author's parse-bench shows serializing on the locale lock",
+    "If you need an actively maintained dependency: last commit June 2024, PyPI wheels stop at CPython 3.12 (1.7.6, December 2023)"
+  ],
+  "integration": {
+    "form": "header-only (CMake INTERFACE target; header-only only when the optional fast_float, Dragonbox and Ryu dependencies are disabled)",
+    "dependencies": "C++11 threads; optional and on by default: fast_float, Dragonbox, Ryu (vendored under dependencies/); bundled task_thread_pool header. Eigen/GraphBLAS/CXSparse/Blaze/Armadillo only for their bindings",
+    "min_toolchain": "C++17, CMake 3.14+; CI tests GCC 8 and 13, LLVM/Clang 8, MSVC and MinGW 13 (CMake probes for std::from_chars/std::to_chars support)",
+    "platforms": "any platform with C++17 and std::thread (CI: Linux, macOS, Windows; PyPI wheels for x86-64 and aarch64)",
+    "thread_safety": "Each call uses its own thread pool, default std::thread::hardware_concurrency() threads (read_options.num_threads, parallel_ok); concurrent calls on separate streams are not documented",
+    "drop_in_for_baseline": "partial: a replacement for scipy.io.mmread/mmwrite (the same functions in SciPy 1.12+) and for library loaders, but C++ callers switch to its free-function API with a std::istream"
+  },
+  "gotchas": [
+    "Open output streams in binary mode; text mode on Windows writes CRLF line endings that other loaders may reject",
+    "Symmetric files are expanded to general by default (generalize_symmetry=true); a diagonal entry gets an extra explicit zero (ExtraZeroElement) unless the app binding generalizes, so nnz can differ from what other loaders produce",
+    "Output vectors are resized from the header's nnz before parsing, so a corrupt or hostile header can force a very large allocation before any error is raised",
+    "Uses all hardware threads by default; set num_threads (C++) or parallelism (Python) inside already-parallel programs"
+  ],
+  "pick_this_over_siblings_when": "No sibling does the same job: the other sparse-and-solvers entries (merge-spmv, CSR5, AMGCL, Ginkgo) are kernels and solvers that need their input loaded first. Use this as their I/O front end when .mtx parsing dominates benchmark or pipeline start-up time.",
+  "verified_claims_summary": "First-party Google Benchmark (benchmark/fmm_bench via run_benchmarks.sh, CMake Release, compiler not stated) on an 8-core Apple M1 Pro: coordinate reads 1578 MB/s on 8 threads vs 48.5 MB/s for a sequential IOStreams loader (about 32x; about 10x on one thread); coordinate writes 691 MB/s vs 60.9 MB/s (about 11x; 3.6x on one thread). The README's '>1 GB/s, about 25x' headline holds for reads and for array writes, not for coordinate writes.",
+  "status_note": "Stale since June 2024 (C++ header version 1.7.7, PyPI 1.7.6) but feature-complete, BSD-2-Clause and shipped inside SciPy 1.12+, so it is safe to vendor; open issues are build and packaging requests, not bugs.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/alugowski/fast_matrix_market/HEAD/README.md",
+    "https://raw.githubusercontent.com/alugowski/fast_matrix_market/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/alugowski/fast_matrix_market/HEAD/run_benchmarks.sh",
+    "https://raw.githubusercontent.com/alugowski/fast_matrix_market/HEAD/README.Eigen.md",
+    "https://raw.githubusercontent.com/alugowski/fast_matrix_market/HEAD/python/README.md",
+    "https://github.com/alugowski/fast_matrix_market/tree/main/include/fast_matrix_market",
+    "https://raw.githubusercontent.com/alugowski/fast_matrix_market/HEAD/include/fast_matrix_market/fast_matrix_market.hpp",
+    "https://raw.githubusercontent.com/alugowski/fast_matrix_market/HEAD/include/fast_matrix_market/types.hpp",
+    "https://raw.githubusercontent.com/alugowski/fast_matrix_market/HEAD/include/fast_matrix_market/chunking.hpp",
+    "https://raw.githubusercontent.com/alugowski/fast_matrix_market/HEAD/include/fast_matrix_market/read_body.hpp",
+    "https://raw.githubusercontent.com/alugowski/fast_matrix_market/HEAD/include/fast_matrix_market/read_body_threads.hpp",
+    "https://raw.githubusercontent.com/alugowski/fast_matrix_market/HEAD/include/fast_matrix_market/write_body_threads.hpp",
+    "https://raw.githubusercontent.com/alugowski/fast_matrix_market/HEAD/include/fast_matrix_market/field_conv.hpp",
+    "https://raw.githubusercontent.com/alugowski/fast_matrix_market/HEAD/include/fast_matrix_market/app/triplet.hpp",
+    "https://github.com/alugowski/fast_matrix_market/issues",
+    "https://github.com/alugowski/fast_matrix_market/commits",
+    "https://pypi.org/pypi/fast-matrix-market/json",
+    "https://raw.githubusercontent.com/alugowski/parse-bench/HEAD/README.md",
+    "https://raw.githubusercontent.com/alugowski/fast_matrix_market/HEAD/.github/workflows/tests.yml"
+  ],
+  "confidence": 0.8
+}
