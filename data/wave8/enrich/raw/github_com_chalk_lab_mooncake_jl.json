@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/chalk-lab/mooncake.jl",
+  "one_liner": "Julia source-to-source AD compiler (forward, reverse, Hessians) that roughly halves warm gradient time versus Zygote on CPU Flux models.",
+  "what_it_does": "Mooncake differentiates ordinary Julia code, including code that mutates arrays, without hand-written rules for most of Julia Base. You call prepare_gradient_cache (or prepare_derivative_cache / prepare_hessian_cache) once on a typical input, then value_and_gradient!! repeatedly with the same cache. It is not a drop-in for Zygote's gradient(f, x) call; it ships package extensions for Flux, NNlib and LuxLib, and its Flux benchmark calls it directly on unmodified Flux models.",
+  "how_it_is_fast": "It runs AD on Julia's type-inferred, optimised IRCode instead of tracing at run time: each primal statement becomes a forward fragment and a pullback fragment, these are assembled into separate forward and pullback CFGs (with block stacks and edge-specific reverse blocks for phi nodes), lowered back to IRCode, optimised by the Julia compiler and wrapped in opaque closures. The prepared cache owns all gradient buffers and reuses them in place on every call, so warm calls avoid most allocation. The cost is compile time: the first gradient includes building and compiling the derived rule.",
+  "when_to_use": [
+    "Julia training or inference loops that call the gradient of the same function on same-shaped inputs many times, so the one-off cache preparation is amortised",
+    "Small, recurrent or allocation-heavy CPU models where Zygote spends time on run-time overhead: in the Flux benchmark RNN gradients were about 5x faster (1.62 ms vs 313 us) and Maxout about 12x (136 us vs 11.4 us)",
+    "Numerical Julia code that mutates arrays in place, which the README names as the main coverage gain over Zygote, ReverseDiff and ForwardDiff",
+    "Projects that need forward mode, reverse mode and Hessians (forward-over-reverse) from one package"
+  ],
+  "when_not_to_use": [
+    "Short-lived scripts or one-shot gradients: first gradients were about 10x slower than Zygote on CPU by geometric mean (Dense(2 => 4): 12.5 s vs 693 ms) and about 3x slower on GPU",
+    "GPU-bound models: warm GPU gradients were only 1.05x faster by geometric mean, and about half the GPU rows were slightly slower than Zygote",
+    "Normalisation and attention layers on CPU: LayerNorm (1.38x slower), MultiHeadAttention (1.37x slower) and Flux.Scale (1.26x slower) lost to Zygote warm",
+    "Code using try/catch in reverse mode, mutation of globals, threads/tasks, KernelAbstractions-style foreign-call CUDA kernels, or self-referential types; the known-limitations page lists these, some as silent wrong-gradient cases",
+    "Anything outside Julia: it cannot be called from C++; C/C++ projects should look at Enzyme or the C++ tape libraries instead"
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "ADTypes, ChainRulesCore, DispatchDoctor, ExprTools, MistyClosures, PrecompileTools, plus stdlib LinearAlgebra, Random, Test; optional package extensions for CUDA, cuDNN, Flux, NNlib, LuxLib, Distributions, SpecialFunctions and others",
+    "min_toolchain": "Julia 1.10.8 (compat '~1.10.8, ~1.11.6, ~1.12.1, ~1.13.0'); only the current LTS (1.10) and latest stable (1.13) are officially supported and CI-tested",
+    "platforms": "any platform Julia runs on; GPU through the CUDA/cuDNN extensions (benchmark run on aarch64 with an NVIDIA GB10)",
+    "thread_safety": "Not guaranteed: the known-limitations page says there are no thread-safety guarantees for differentiating code that uses tasks or threads. A cache owns mutable gradient buffers, so sharing one cache across threads is unsafe (inferred from the in-place buffer design).",
+    "drop_in_for_baseline": "partial: a different API (prepare a cache, then value_and_gradient!!) rather than Zygote.gradient, but it differentiates the same Flux models without model changes"
+  },
+  "gotchas": [
+    "The returned gradient aliases the cache's own buffers; the next value_and_gradient!! call overwrites it, so copy it if you keep it",
+    "A cache is tied to its input types and sizes; a differently sized input raises an error, so variable batch sizes need one cache per shape",
+    "args_to_zero = false skips cotangent zeroing and can silently corrupt gradients of other arguments (issue #1238) unless the argument has no differentiable data",
+    "Reverse mode can stop LLVM from vectorising loops that vectorise in the primal; the docs recommend hand-written rrule!! rules for hot SIMD loops (as done for kron)"
+  ],
+  "pick_this_over_siblings_when": "Pick Mooncake when your model is in Julia and you want a pure-Julia reverse-mode backend that handles mutation and beats Zygote warm; for C/C++ code it is not an option, and Enzyme (LLVM-level AD, also usable from Julia) or the C++ tape libraries XAD, FastAD and Adept-2 are the catalogued choices.",
+  "verified_claims_summary": "The repository's auto-generated Flux benchmark (Julia 1.12.7, Flux 0.16.11, Mooncake 0.5.51 at a dirty commit, 1 Julia thread, 1 BLAS thread, inputs enlarged 32x, median of at least 10 warm samples in a 2 s budget, first gradient in a fresh process) on an Arm GB10 machine (Cortex-X925 + Cortex-A725, NVIDIA GB10 GPU) found Mooncake's warm gradients 2.03x faster than Zygote by geometric mean over 19 small Flux models on CPU and 1.05x on GPU, with first gradients 10.57x (CPU) and 3.26x (GPU) slower. The baseline is Zygote, not a vendor kernel library, and the run is first-party on one machine.",
+  "status_note": "Actively developed (last commit 2026-09-30, version 0.5.61 in Project.toml, 409 stars, no open bug-labelled issues), MIT-licensed, installable through the Julia package manager; the maintainers state a conservative, correctness-first scope and plan to move rules for non-Base packages out of the repository.",
+  "sources_read": [
+    "https://github.com/chalk-lab/Mooncake.jl",
+    "https://raw.githubusercontent.com/chalk-lab/Mooncake.jl/HEAD/README.md",
+    "https://raw.githubusercontent.com/chalk-lab/Mooncake.jl/HEAD/Project.toml",
+    "https://raw.githubusercontent.com/chalk-lab/Mooncake.jl/HEAD/SUPPORT_POLICY.md",
+    "https://raw.githubusercontent.com/chalk-lab/Mooncake.jl/HEAD/test/integration_testing/flux/README.md",
+    "https://raw.githubusercontent.com/chalk-lab/Mooncake.jl/HEAD/test/integration_testing/flux/benchmarks.jl",
+    "https://raw.githubusercontent.com/chalk-lab/Mooncake.jl/HEAD/docs/make.jl",
+    "https://raw.githubusercontent.com/chalk-lab/Mooncake.jl/HEAD/docs/src/known_limitations.md",
+    "https://raw.githubusercontent.com/chalk-lab/Mooncake.jl/HEAD/docs/src/developer_documentation/reverse_mode_design.md",
+    "https://raw.githubusercontent.com/chalk-lab/Mooncake.jl/HEAD/docs/src/interface.md",
+    "https://raw.githubusercontent.com/chalk-lab/Mooncake.jl/HEAD/docs/src/tutorial.md",
+    "https://github.com/chalk-lab/Mooncake.jl/issues?q=is%3Aissue+is%3Aopen+performance",
+    "https://github.com/chalk-lab/Mooncake.jl/issues?q=is%3Aissue+is%3Aopen+label%3Abug"
+  ],
+  "confidence": 0.8
+}

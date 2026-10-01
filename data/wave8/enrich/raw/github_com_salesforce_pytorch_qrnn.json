@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/salesforce/pytorch-qrnn",
+  "one_liner": "Archived PyTorch QRNN layer with a runtime-compiled CUDA recurrence kernel; trained language models about 2x faster per epoch than cuDNN LSTM.",
+  "what_it_does": "It provides QRNN and QRNNLayer modules whose constructor and (seq_len, batch, features) input/output shapes mirror torch.nn.LSTM, so for unidirectional, time-major, fixed-length models you can swap the module. It also exposes ForgetMult, the element-wise recurrence h_t = f_t * x_t + (1 - f_t) * h_{t-1}, as a reusable autograd op with a CPU fallback. It is a different recurrent architecture, not a faster LSTM, so the model has to be retrained.",
+  "how_it_is_fast": "QRNN removes the hidden-to-hidden matrix product: the candidate, forget and output gates for all timesteps come from one large nn.Linear over the input (with a window of 1 or 2 previous inputs concatenated), which runs as a single big GEMM. The only sequential part is ForgetMult, a small CUDA kernel compiled at runtime with NVRTC and launched through CuPy, which assigns one thread per (batch, hidden unit) and walks the timesteps in a loop; the backward kernel walks them in reverse with a double-precision accumulator. The README says gains are largest at small batch sizes and long sequences, where cuDNN LSTM is limited by its step-by-step dependency.",
+  "when_to_use": [
+    "Studying or reproducing QRNN / AWD-QRNN language-model results from 2017-2018 on the PyTorch versions of that era",
+    "Unidirectional sequence models on GPU with long sequences or small batches, where the paper figure shows the largest advantage over cuDNN LSTM (up to 16.9x at batch 8, sequence length 512)",
+    "As a template for a fused gated linear recurrence: the 60-line ForgetMult kernel is easy to port to a modern torch.autograd.Function or a C++/CUDA extension"
+  ],
+  "when_not_to_use": [
+    "Current PyTorch: GPUForgetMult is a legacy autograd.Function with a non-static forward, which newer PyTorch rejects ('Legacy autograd function with non-static forward method is deprecated', issue #29, unanswered)",
+    "Bidirectional models, batch_first inputs, bias=False or PackedSequence variable-length batches: the constructor asserts against the first three and the README lists PackedSequence as unsupported",
+    "fp16, bf16 or fp64 training: the CUDA kernels are written for float pointers only and the Python wrapper does not check the dtype",
+    "Large-batch workloads: the paper figure shows only 1.3x-1.4x at batch 256 for every sequence length, and the awd-lstm-lm README notes that most time then goes to softmax and optimizer overhead",
+    "Cases needing an exact LSTM: QRNN gives 'similar accuracy' after retraining, not identical outputs or transferable weights"
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "PyTorch (2017-era Variable API), CuPy, pynvrtc (NVIDIA NVRTC Python bindings), a CUDA toolkit with NVRTC",
+    "min_toolchain": "Python 3; PyTorch 0.2-0.4 era (awd-lstm-lm, its main user, requires PyTorch 0.4); exact upper bound not documented",
+    "platforms": "Linux with an NVIDIA GPU for the fast path; CPU fallback is a Python loop over timesteps",
+    "thread_safety": "not documented; compiled kernels and the CUDA stream are cached per device in a class-level dict on first use",
+    "drop_in_for_baseline": "partial: same constructor arguments and tensor shapes as nn.LSTM for unidirectional time-major models, but a different architecture whose hidden output is a single tensor (no LSTM cell state), so weights and accuracy do not carry over"
+  },
+  "gotchas": [
+    "The CUDA stream is captured once per device when the kernel is first configured; later calls on a different stream still launch on the cached one",
+    "Installation breaks with newer pynvrtc (issue #26: 'bytes' object has no attribute 'encode'; issue #17 on double encoding), and there are open reports of window=2 size mismatches (issue #19)",
+    "The forget-gate convention is the reverse of the paper's equation (issue #22, unanswered); harmless when training from scratch but matters when porting weights between implementations",
+    "With window=2 and save_prev_x=True you must call reset() between independent sequences, or the previous batch's last input leaks into the next one"
+  ],
+  "pick_this_over_siblings_when": "No catalogued sibling is a GPU recurrent-layer replacement for cuDNN LSTM; RTNeural is the pick for small real-time LSTM/GRU inference on CPU, while the transformer runtimes (CTranslate2, LightSeq, FasterTransformer) target attention models. Choose pytorch-qrnn only if you specifically want the QRNN architecture and are prepared to modernise its autograd code.",
+  "verified_claims_summary": "The README's 2-17x figure is Figure 4 of the ICLR 2017 QRNN paper, measured on an earlier (pre-PyTorch) implementation: a 320-unit QRNN layer is 1.3x (batch 256) to 16.9x (batch 8, sequence 512) faster than an equal-size cuDNN LSTM in inference, and a two-layer 640-unit PTB LM trains at roughly 150 vs 290 ms per batch (read off the bar chart). The only numbers on this PyTorch code are first-party from awd-lstm-lm on an NVIDIA Quadro GP100: Penn Treebank 28 vs 65 s/epoch and WikiText-2 90 vs 180 s/epoch for QRNN vs cuDNN LSTM, with differently shaped models and no PyTorch, CUDA or cuDNN versions given.",
+  "status_note": "Abandoned: last code commit 2017-11-26, archived 2022-02-12, BSD-3-Clause; small enough to vendor and port, but it does not run unmodified on current PyTorch.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/salesforce/pytorch-qrnn/HEAD/README.md",
+    "https://raw.githubusercontent.com/salesforce/pytorch-qrnn/HEAD/setup.py",
+    "https://raw.githubusercontent.com/salesforce/pytorch-qrnn/HEAD/requirements.txt",
+    "https://raw.githubusercontent.com/salesforce/pytorch-qrnn/HEAD/torchqrnn/__init__.py",
+    "https://raw.githubusercontent.com/salesforce/pytorch-qrnn/HEAD/torchqrnn/forget_mult.py",
+    "https://raw.githubusercontent.com/salesforce/pytorch-qrnn/HEAD/torchqrnn/qrnn.py",
+    "https://raw.githubusercontent.com/salesforce/pytorch-qrnn/HEAD/images/qrnn_speed.png",
+    "https://github.com/salesforce/pytorch-qrnn/issues?q=is%3Aissue",
+    "https://github.com/salesforce/pytorch-qrnn/issues/29",
+    "https://github.com/salesforce/pytorch-qrnn/issues/22",
+    "https://raw.githubusercontent.com/salesforce/awd-lstm-lm/HEAD/README.md"
+  ],
+  "confidence": 0.8
+}

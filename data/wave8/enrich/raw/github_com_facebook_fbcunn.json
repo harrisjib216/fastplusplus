@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/facebook/fbcunn",
+  "one_liner": "Archived Torch7 CUDA module set whose FFT spatial convolution ran about 4x faster than cuDNN R2 on large-kernel layers in 2015.",
+  "what_it_does": "fbcunn is a Facebook AI Research extension for Torch7 (Lua) that adds GPU nn modules: FFT-based spatial convolution (nn.SpatialConvolutionCuFFT / SpatialConvolutionFBFFT), a faster temporal convolution, LookupTableGPU, hierarchical softmax, DataParallel/ModelParallel containers and FFT wrappers. The convolution modules are API-compatible with Torch's nn.SpatialConvolution, so in a Torch7 model they are a constructor swap. The underlying fbfft kernels (batched 1-D and 2-D FFTs) live in the companion fbcuda library and are C++/CUDA templates over DeviceTensor.",
+  "how_it_is_fast": "Convolution is done in the frequency domain: inputs, weights and gradients are zero-padded to a power-of-two size, transformed with batched FFTs, combined with batched complex matrix products (a transposed cuBLAS GEMM path, fbTransposeMM, is the default strategy) and transformed back, so cost depends little on kernel size. fbfft itself is a hand-written decimation-in-frequency FFT that keeps each transform in registers and exchanges data with warp shuffles, packing several small FFTs into one warp; it supports power-of-two sizes 2 to 256. The FFT path can also pad implicitly inside the transform instead of materialising padded copies, which the cuFFT path cannot.",
+  "when_to_use": [
+    "Reproducing or studying 2015-era FFT convolution results; the code is a readable reference for warp-shuffle FFTs and frequency-domain convolution (BSD-3-Clause)",
+    "Stride-1 convolutions with large kernels (7x7 to 11x11) and many feature maps, which is where it won: in the layer-wise table its backward pass for the 9x9 layer took 45 ms vs 401 ms for cuDNN R2",
+    "Mining the fbfft kernels for a small-size batched GPU FFT (sizes up to 256) in a new project, if you are willing to port them off Torch7 and old CUDA"
+  ],
+  "when_not_to_use": [
+    "Any current training or inference stack: it is a Torch7/Lua extension pinned to CUDA 7.5, sm_35, Folly, fbthrift, thpp and fblualib, and the repository was archived in 2022",
+    "Modern cuDNN baselines: in the same benchmark suite whole networks were slower than cuDNN R4 fp32 (AlexNet 104 vs 81 ms, Overfeat-fast 342 vs 268 ms, OxfordNet 1092 vs 529 ms) and slower than Nervana neon",
+    "Strided convolutions: both FFT modules assert stride 1 ('fft only supports stride-1 convolutions atm')",
+    "Layers with few input planes or memory-tight GPUs: on the first layer (3 -> 96 planes, 11x11) its forward pass took 57 ms vs 36 ms for cuda-convnet2 and 56 ms for cuDNN R2, and padding every plane to a power of two inflates buffer memory",
+    "fp16 or fp64 models: the module code assumes 4-byte float elements"
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "Torch7 (with a patched nn branch), cutorch, cudnn.torch, fbtorch, fbnn, Folly, fbthrift, thpp, fblualib, glog, cuFFT, cuBLAS; fbfft kernels from fbcuda",
+    "min_toolchain": "CUDA 7.5 (CMake requires it), nvcc -arch=sm_35, C++11, Ubuntu 14.04-era toolchain; installed with luarocks",
+    "platforms": "Linux x86-64 with an NVIDIA GPU of compute capability 3.5 or higher",
+    "thread_safety": "not documented; FFT buffers, streams and cuBLAS handles are kept in class-level maps shared by all module instances, and a source comment says the instance counter is not incremented atomically for multi-threaded use",
+    "drop_in_for_baseline": "partial: drop-in for nn.SpatialConvolution inside Torch7 when stride is 1 (and, for the cuFFT module, padding is 0); not a cuDNN API replacement"
+  },
+  "gotchas": [
+    "The rows labelled fbfft in convnet-benchmarks link to the SpatialConvolutionCuFFT class, whose current source sets fftImplementation = 'cufft'; which FFT backend produced the April 2015 numbers is not stated on the page",
+    "fbfft returns UnsupportedSize for transform sizes other than powers of two up to 256 (asserts size <= 256), so very large feature maps fall back to cuFFT or fail",
+    "SpatialConvolutionCuFFT rejects implicit padding ('cufft does not support implicit padding!'); pad the input explicitly or use the FBFFT module",
+    "License is BSD-3-Clause plus Facebook's Additional Grant of Patent Rights Version 2, whose patent grant has a termination clause"
+  ],
+  "pick_this_over_siblings_when": "Pick it only for historical or reference use: among GPU convolution siblings, Nervana neon beat both fbfft and cuDNN R4 in the same suite, and modern work should start from current cuDNN-backed frameworks; on CPU, NNPACK is the catalogued FFT/Winograd convolution library.",
+  "verified_claims_summary": "soumith/convnet-benchmarks (independent; Torch7 harness, 10 timed steps after dry runs with cutorch.synchronize) layer-wise table, last updated April 2015 on a Core i7-5930K + Titan X, gives fbfft 256 ms (101 forward, 155 backward) for five stride-1 layers (kernels 11x11, 9x9, 9x9, 7x7, 3x3, batch 128) vs 1019 ms (269 / 750) for cuDNN R2, about 4x. The same suite's whole-network tables show it ahead of cuDNN R2 but behind cuDNN R4 fp32 by 1.3x to 2.1x; compiler, flags and CUDA/cuDNN builds are not given.",
+  "status_note": "Abandoned: last code commit 2017-07-21, moved to facebookarchive/fbcunn and archived 2022-01-13; BSD-3-Clause with a patent grant, usable only as reference code since it does not build against current CUDA, Torch or PyTorch.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/facebookarchive/fbcunn/HEAD/README.md",
+    "https://raw.githubusercontent.com/facebookarchive/fbcunn/HEAD/INSTALL.md",
+    "https://raw.githubusercontent.com/facebookarchive/fbcunn/HEAD/PATENTS",
+    "https://raw.githubusercontent.com/facebookarchive/fbcunn/HEAD/CMakeLists.txt",
+    "https://github.com/facebookarchive/fbcunn/tree/master/src/fft",
+    "https://raw.githubusercontent.com/facebookarchive/fbcunn/HEAD/src/fft/CuFFTStrategy.h",
+    "https://raw.githubusercontent.com/facebookarchive/fbcunn/HEAD/src/fft/SpatialConvolutionCuFFT.cpp",
+    "https://raw.githubusercontent.com/facebookarchive/fbcunn/HEAD/src/fft/SpatialConvolutionCuFFTTuner.cpp",
+    "https://raw.githubusercontent.com/facebookarchive/fbcunn/HEAD/src/fft/FBFFTHost.cpp",
+    "https://raw.githubusercontent.com/facebookarchive/fbcunn/HEAD/src/fft/FBFFTDevice.cu",
+    "https://raw.githubusercontent.com/facebookarchive/fbcunn/HEAD/fbcunn/SpatialConvolutionCuFFT.lua",
+    "https://raw.githubusercontent.com/facebookarchive/fbcunn/HEAD/fbcunn/SpatialConvolutionFBFFT.lua",
+    "https://raw.githubusercontent.com/facebookarchive/fbcunn/HEAD/fbcunn/SpatialConvolutionFFT.lua",
+    "https://github.com/facebookarchive/fbcunn/issues?q=is%3Aissue (no issues listed)",
+    "https://raw.githubusercontent.com/facebookarchive/fbcuda/HEAD/README.md",
+    "https://raw.githubusercontent.com/facebookarchive/fbcuda/HEAD/fbfft/FBFFT.cuh",
+    "https://raw.githubusercontent.com/facebookarchive/fbcuda/HEAD/fbfft/FBFFT-inl.cuh",
+    "https://raw.githubusercontent.com/facebookarchive/fbcuda/HEAD/fbfft/FBFFTCommon.cuh",
+    "https://raw.githubusercontent.com/facebookarchive/fbcuda/HEAD/fbfft/FBFFTParameters.h",
+    "https://raw.githubusercontent.com/soumith/convnet-benchmarks/HEAD/README.md",
+    "https://github.com/soumith/convnet-benchmarks/tree/master/torch7",
+    "https://raw.githubusercontent.com/soumith/convnet-benchmarks/HEAD/torch7/layerwise_benchmarks/benchmark.lua",
+    "https://raw.githubusercontent.com/soumith/convnet-benchmarks/HEAD/torch7/imagenet_winners/benchmark.lua",
+    "https://ar5iv.labs.arxiv.org/html/1412.7580 (egress-blocked; paper claims taken from a WebSearch summary only)"
+  ],
+  "confidence": 0.75
+}
