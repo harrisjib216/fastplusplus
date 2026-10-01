@@ -1,0 +1,56 @@
+{
+  "id": "https://github.com/mratsim/laser",
+  "one_liner": "Nim BLAS-style GEMM with strided and int32/int64 support; roughly at parity with OpenBLAS, not reliably faster.",
+  "what_it_does": "Laser is a Nim HPC toolbox (SIMD wrappers, OpenMP templates, a cpuinfo wrapper, a small x86-64 JIT assembler, strided tensor iterators) whose matrix-multiplication module exports gemm_strided[T] for float32, float64, int32/uint32 and int64. The call takes M, N, K, alpha, and a pointer plus row stride and column stride for each of A, B and C, then beta; there is no BLAS/CBLAS ABI and no transpose flags, because transposes and slices are expressed through strides. A sliced view such as every second row can be multiplied without first copying it to contiguous storage. Arraymancer vendors a copy of this code under src/arraymancer/laser and uses it as its CPU GEMM.",
+  "how_it_is_fast": "It follows the Goto/BLIS blocking scheme: for each kc slice of K it packs a kc x N panel of B, each OpenMP thread packs its own mc x kc block of A, and a GEBP macro-kernel drives a register-blocked mr x nr micro-kernel over the packed data. The micro-kernels are emitted by a Nim macro (ukernel_generator) from SIMD intrinsic templates for SSE, SSE2, SSE4.1, AVX, AVX+FMA, AVX2 and AVX-512, and the kernel is picked at runtime with cpuinfo. Parallelism is OpenMP over the ic (M) loop, enabled only when M*N*K exceeds a per-kernel threshold. Blocking sizes are fixed constants (mc = 768 bytes / sizeof(T), kc = 2048 bytes / sizeof(T)), and N is not split at all (nc = N).",
+  "when_to_use": [
+    "Nim code, or Arraymancer users, who want a GEMM with no external BLAS dependency that lands within a few percent of OpenBLAS on large square float32/float64 matrices on x86-64.",
+    "Strided or sliced operands (for example A[0::2, :] during cross-validation) that you want to multiply without materialising a contiguous copy first.",
+    "Integer GEMM (int32, int64) with SSE2/SSE4.1/AVX2/AVX-512 kernels on x86, which most BLAS libraries do not provide.",
+    "As readable reference code for a macro-generated, BLIS-style micro-kernel design that is easy to extend to a new SIMD set."
+  ],
+  "when_not_to_use": [
+    "You want a faster BLAS from C++: the README claims only 97-102% of OpenBLAS, the author's open issue #40 later measured about 1011 vs 1499 GFLOP/s for OpenBLAS at 1920^3, and there is no BLAS ABI, so using it means compiling Nim and exporting a C function.",
+    "ARM/aarch64 or any non-x86 target: there is no NEON micro-kernel (marked TODO in gemm_tiling.nim), so other architectures get the generic scalar kernel.",
+    "Small matrices or many repeated calls: there is no small-GEMM path or pre-packing (both listed as future work in the README), and every call allocates fresh pack buffers sized kc x N for B plus one mc x kc block per M tile for A.",
+    "Multi-socket servers or CPUs whose caches differ from the author's desktop: block sizes are hard-coded and N is not partitioned per socket; issue #10 (December 2018, dual Xeon Gold 6154, 2304^3) recorded Intel MKL at 4 TFLOPS against Laser at 600 GFLOPS.",
+    "Anything needing a stable, packaged dependency: the README calls the library unstable and in heavy development, it was never published on nimble, and the repository has been idle since January 2024."
+  ],
+  "integration": {
+    "form": "source-drop (Nim modules; not published on nimble)",
+    "dependencies": "Nim compiler plus a C or C++ backend compiler; bundled Facebook cpuinfo (BSD-2-Clause) for x86 feature detection; OpenMP (enabled with -d:openmp) for multithreading",
+    "min_toolchain": "Nim >= 0.19.2 per laser.nimble; the benchmark was built with nim cpp -d:release -d:danger -d:openmp. Compatibility with current Nim releases is not documented.",
+    "platforms": "x86 and x86-64 with SIMD kernels from SSE to AVX-512 chosen at runtime; other architectures fall back to a generic kernel",
+    "thread_safety": "not documented; each gemm_strided call allocates its own pack buffers (newTiles), and the call itself parallelises internally with OpenMP",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Multithreading only exists when built with -d:openmp; otherwise the OpenMP templates fall back to plain loops. In open issue #23 a user's 100 x 1000^3 run took 5.4 s wall at 99% CPU against 1.84 s for NumPy.",
+    "Argument order is M, N, K followed by alpha, then each matrix as pointer, row stride, column stride; issue #23 asks for this to be documented, and the README does not spell it out.",
+    "Open issue #22 reports a clang build error ('always_inline function _mm256_setzero_pd requires target feature xsave') when compiling gemm_strided, with no reply.",
+    "The author notes 'strange OpenMP interferences' between Laser and OpenBLAS in one process (issue #40), and the recorded benchmark runs use 10 samples with a standard deviation as large as the mean time, so single-run comparisons swing either way."
+  ],
+  "pick_this_over_siblings_when": "Pick Laser only inside Nim or Arraymancer, or when you need integer or arbitrarily strided GEMM on x86. For raw speed from C or C++, use OpenBLAS itself, Eigen, or BLASFEO for small matrices; Octavian.jl is the closest pure-language GEMM sibling and publishes larger measured wins over OpenBLAS.",
+  "verified_claims_summary": "The README claims 97-102% of OpenBLAS speed (float32 and float64, single- and multi-threaded) without stating sizes or versions. Recorded runs in the bench files on an overclocked 18-core i9-9980XE (nim cpp -d:release -d:danger -d:openmp, OpenBLAS version unstated) give Laser 1874 vs OpenBLAS 1732 GFLOP/s by mean time at 1920^3 float32, but 442 vs 543 at 960^3 float64, and the author's later open issue #40 reports about 1011 vs 1499 GFLOP/s at 1920^3; this is parity at best, not a speedup.",
+  "status_note": "Stale since January 2024 and never released on nimble, but Apache-2.0 and small enough to vendor; Arraymancer vendors this GEMM under src/arraymancer/laser, which still received commits from 2024 to January 2026.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/mratsim/laser/HEAD/README.md",
+    "https://raw.githubusercontent.com/mratsim/laser/HEAD/laser.nimble",
+    "https://raw.githubusercontent.com/mratsim/laser/HEAD/benchmarks/gemm/gemm_bench_float32.nim",
+    "https://raw.githubusercontent.com/mratsim/laser/HEAD/benchmarks/gemm/gemm_bench_float64.nim",
+    "https://raw.githubusercontent.com/mratsim/laser/HEAD/laser/primitives/matrix_multiplication/gemm.nim",
+    "https://raw.githubusercontent.com/mratsim/laser/HEAD/laser/primitives/matrix_multiplication/gemm_tiling.nim",
+    "https://raw.githubusercontent.com/mratsim/laser/HEAD/laser/primitives/matrix_multiplication/gemm_ukernel_dispatch.nim",
+    "https://raw.githubusercontent.com/mratsim/laser/HEAD/laser/openmp.nim",
+    "https://github.com/mratsim/laser",
+    "https://github.com/mratsim/laser/tree/master/laser/primitives/matrix_multiplication",
+    "https://github.com/mratsim/laser/issues?q=is%3Aissue+gemm",
+    "https://github.com/mratsim/laser/issues/40",
+    "https://github.com/mratsim/laser/issues/23",
+    "https://github.com/mratsim/laser/issues/22",
+    "https://github.com/mratsim/laser/issues/10",
+    "https://raw.githubusercontent.com/mratsim/Arraymancer/HEAD/src/arraymancer/laser/primitives/matrix_multiplication/gemm.nim",
+    "https://github.com/mratsim/Arraymancer/commits/master/src/arraymancer/laser"
+  ],
+  "confidence": 0.75
+}

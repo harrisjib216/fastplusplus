@@ -1,0 +1,45 @@
+{
+  "id": "https://github.com/kate-droid-cpu/contour-coherent-hausdorff",
+  "one_liner": "Header-only exact discrete Hausdorff distance for ordered 2D contours; 245x faster than Boost.Geometry on similar silhouettes (author's run).",
+  "what_it_does": "Computes the exact symmetric discrete Hausdorff distance between two ordered point sequences, such as boundaries from cv::findContours. The whole library is one header, ContourCoherentHausdorffDistance.hpp, with a single function template CalcContourCoherentHausdorffDistance(contour1, contour2, distance). It takes std::vector of any point type with .x/.y members and returns a pair {distance-check count, distance}. Squared-L2 (default), L1 and Chebyshev policies are built in, and custom policies can be plugged in. It does not replace Boost's API: you pass vectors, not Boost geometries.",
+  "how_it_is_fast": "It applies the standard early-break rule for Hausdorff distance: stop scanning targets for a source point once its running minimum is no greater than the current maximum. The new part is the scan order. Each source point's search starts one past the previous point's nearest-neighbour index in the target contour and expands outward bidirectionally (start, start-1, start+1, start-2, ...), so on coherent contours the early break usually fires after a few checks. No spatial index, shuffle buffer or allocation is needed, and squared distances are compared with a single sqrt at the end. The baseline, Boost's discrete_hausdorff_distance, does a plain O(n*m) scan without early break unless BOOST_GEOMETRY_ENABLE_SIMILARITY_RTREE is defined.",
+  "when_to_use": [
+    "Comparing related ordered contours: segmentation masks against ground truth, frame-to-frame tracking contours, a part against a reference outline in inspection, or regression tests of a contour extractor.",
+    "All-pairs Hausdorff over a batch of similar silhouettes, where the author measured 0.24 ms per pair against 3.9 ms for shuffled brute force and 59 ms for Boost.",
+    "Large complex contours (the README's snowflake set has 23k-28k points each) where a fixed-order brute-force early break degrades badly (3.9 ms vs 642 ms per pair).",
+    "When you need an exact result with no extra memory: unlike a kd-tree (OpenCV FLANN in the author's tests was not strictly exact) it builds no index and allocates nothing."
+  ],
+  "when_not_to_use": [
+    "Unordered point clouds, or contours with inconsistent sampling or start points that make nearest-neighbour indices jump: the speedup collapses toward brute force with early break, and the worst case stays O(n*m).",
+    "All-vs-all comparisons of dissimilar shapes: on Kimia216 it only ties shuffled brute force (813.40 vs 812.02 ms) while doing about 2.4x more distance checks.",
+    "3D meshes or surfaces, or geographic coordinates: it is 2D only and works in float.",
+    "Production code that needs a maintained dependency: it is a 10-commit, 1-star personal project with no tests directory, CI or releases."
+  ],
+  "integration": {
+    "form": "header-only (single header; the benchmark executable is separate)",
+    "dependencies": "none for the header (standard library only); OpenCV and Boost only for the benchmark app, contour extraction and baselines",
+    "min_toolchain": "C++17 (structured bindings; benchmark CMake sets CMAKE_CXX_STANDARD 17); built with Visual Studio 2026 on Windows and GCC on Linux/WSL per the README",
+    "platforms": "any (portable scalar C++, no intrinsics)",
+    "thread_safety": "Not documented. The source is a pure function with no static or global state, so concurrent calls on different or read-only inputs are safe.",
+    "drop_in_for_baseline": "partial: it computes the same exact symmetric discrete Hausdorff value as calling Boost's discrete_hausdorff_distance both ways and taking the max, but it takes std::vector of .x/.y points instead of Boost geometries and returns a {checks, distance} pair"
+  },
+  "gotchas": [
+    "The return value is std::pair{checks, distance}; the first element is a diagnostic counter, so bind it as auto [checks, hd] rather than using .first.",
+    "The built-in policies compute in float even for double or large integer coordinates. Squared integer distances above 2^24 (points more than 4096 units apart) are rounded, so for large coordinates or double precision you need a custom Distance policy with value_type double.",
+    "An empty input contour returns NaN, not 0 or an error.",
+    "Speed depends on both contours having the same orientation and on point order. Reversing one contour (clockwise vs counter-clockwise) or using a different start point weakens the forward prediction, though the result stays exact."
+  ],
+  "pick_this_over_siblings_when": "Use it rather than a kd-tree sibling (nanoflann, PicoTree) when inputs are ordered, similar 2D contours and you want an exact answer with no index build per pair. For unordered or dissimilar point sets, a nanoflann/PicoTree nearest-neighbour Hausdorff (or shuffled early break) is the safer choice.",
+  "verified_claims_summary": "On one dataset (21 walking silhouettes, 210 symmetric pairs) the author's benchmark app timed 50.48 ms for the method against 12,382.56 ms for Boost.Geometry discrete_hausdorff_distance (245x). Boost was called with int point_xy linestrings converted on every call, and in a configuration that does a plain O(n*m) scan. The author's own shuffled brute force is already about 15x faster than Boost there, and the article's headline is 2.2-14.5x over shuffled early break on coherent data, with ties or losses on mixed data. Hardware and the compiler that produced the numbers are not stated.",
+  "status_note": "New personal project (first commit 2026-05-14, last 2026-06-01, 10 commits, 1 star), but MIT-licensed and a ~240-line dependency-free header that is trivial to vendor and audit.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/Kate-droid-cpu/contour-coherent-hausdorff/HEAD/README.md",
+    "https://raw.githubusercontent.com/Kate-droid-cpu/contour-coherent-hausdorff/HEAD/docs/article.html",
+    "https://raw.githubusercontent.com/Kate-droid-cpu/contour-coherent-hausdorff/HEAD/HausdorffDistanceOptimized/include/ContourHausdorff/ContourCoherentHausdorffDistance.hpp",
+    "https://raw.githubusercontent.com/Kate-droid-cpu/contour-coherent-hausdorff/HEAD/HausdorffDistanceOptimized/src/baselines/HausdorffDistanceBaselineLibs.cpp",
+    "https://raw.githubusercontent.com/Kate-droid-cpu/contour-coherent-hausdorff/HEAD/HausdorffDistanceOptimized/CMakeLists.txt",
+    "https://raw.githubusercontent.com/Kate-droid-cpu/contour-coherent-hausdorff/HEAD/CMakePresets.json",
+    "https://github.com/Kate-droid-cpu/contour-coherent-hausdorff"
+  ],
+  "confidence": 0.8
+}

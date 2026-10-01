@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/arbenson/fast-matmul",
+  "one_liner": "Code-generated Strassen-like matrix multiplication in C++ that beat sequential Intel MKL dgemm by 1.1-1.2x on large matrices.",
+  "what_it_does": "A research framework from the PPoPP 2015 paper by Benson and Ballard: a Python code generator (codegen/gen.py) turns the coefficient tensors of a fast algorithm into a templated C++ header, and the repo ships 40+ generated headers (Strassen, <4,2,2>, <3,2,3>, <4,2,3>, <3,3,6> and others, plus approximate Bini, Schonhage and Smirnov variants). Each header exposes `<alg>::FastMatmul(A, B, C, num_steps, x, alpha, beta)` on the repo's own column-major `Matrix<Scalar>` class and computes C = alpha*A*B + beta*C for float or double. It is not a BLAS replacement: you pick the algorithm and the number of recursion levels yourself.",
+  "how_it_is_fast": "Each recursion level splits A, B and C into blocks and forms fewer block products than the classical algorithm (Strassen: 7 instead of 8 for 2x2 blocks; <4,2,3>: 20 instead of 24), paying with extra matrix additions; at the leaves it calls the vendor dgemm/sgemm (MKL). The generator applies common-subexpression elimination and offers three addition schemes (write-once, streaming, pairwise), and odd sizes are handled by dynamic peeling. Shared-memory parallel builds choose DFS, BFS or hybrid task scheduling at compile time through OpenMP.",
+  "when_to_use": [
+    "Large dense float/double products (N of about 2000 and above) where 10-20% off the GEMM time matters and you control the call site.",
+    "Rectangular shapes that match a specific fast algorithm's base case (for example <4,2,3> or <3,2,3>); the paper's point is that the best algorithm depends on shape as well as size.",
+    "Research or teaching on fast matrix multiplication: comparing dozens of algorithms, recursion depths and addition schemes with ready-made benchmarks and stability tests.",
+    "Workloads that tolerate approximate products (for example neural-network training), using the APA/Bini algorithms added in 2021 (ICPP-W 2021)."
+  ],
+  "when_not_to_use": [
+    "Small or medium matrices: in the checked-in sequential data, exact algorithms beat MKL in only 329 of 756 points, mostly at N of about 2000 and above, and the extra additions dominate below that.",
+    "Code that needs tight error bounds: exact algorithms give relative errors around 1e-14 to 1e-15 (README), errors grow with each recursion level, and the approximate algorithms are lossier still.",
+    "As a general BLAS: FastMatmul has no transpose options, there are no complex types, no batched or level-2 routines, and you must pick algorithm and depth by hand.",
+    "When you need a measured win on current hardware: the evidence is a 2013 MKL on NERSC Edison, and a modern MKL or OpenBLAS may move the crossover or erase the gain.",
+    "Production use expecting maintenance: core code dates from 2014-2017, the last commit was 2021-07-06, and there is no CMake, packaging or CI."
+  ],
+  "integration": {
+    "form": "header-only (generated .hpp in algorithms/ plus linalg/ and util/ headers); Python generator for new algorithms",
+    "dependencies": "a Fortran-ABI BLAS providing dgemm/sgemm (README requires Intel MKL; parallel builds call mkl_set_num_threads_local and mkl_set_dynamic); OpenMP for parallel modes",
+    "min_toolchain": "C++11 with OpenMP; tested mainly with Intel icpc (Edison config: composer_xe 2013, gcc/4.8.0 module); README warns g++ OpenMP task handling can crash the hybrid parallel mode",
+    "platforms": "x86-64 Linux with Intel MKL as tested; other platforms not documented",
+    "thread_safety": "not documented; parallel builds call omp_set_nested(1) and change MKL dynamic/thread-local thread settings, which affects the rest of the program",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "FastMatmul takes non-const references, sets a multiplier on A as a side effect, and returns its own elapsed time in milliseconds.",
+    "Dimensions, strides and the allocation size m*n are plain int, so very large matrices (more than 2^31 elements) overflow.",
+    "The parallel scheme (DFS, BFS, hybrid) is a compile-time define (_PARALLEL_=1/2/3), and sequential versus parallel is chosen in the make include file, not at run time.",
+    "The x argument (default 1e-8) is the approximation parameter used by the approximate algorithms (for example Bini's); exact algorithms ignore it."
+  ],
+  "pick_this_over_siblings_when": "Pick fast-matmul over fmm-gen when you want fast algorithms layered on a tuned vendor dgemm (MKL) with checked-in timings against that dgemm; fmm-gen fuses the additions into BLIS-style packing with its own AVX kernel instead. For tensor contractions tblis-strassen is the analogue, and for ordinary GEMM speed any tuned BLAS sibling is the simpler choice.",
+  "verified_claims_summary": "Sequential median-of-five timings checked into data/all_sequential_algs/square.all.big (NERSC Edison, icpc -O3, MKL from composer_xe 2013) show two-level Strassen at 4836 ms vs MKL dgemm 5361 ms for N=4000 (1.11x) and 15790 vs 18075 ms at N=6000 (1.14x), with the best exact algorithms reaching 1.17-1.19x; approximate Bini reaches 1.21x. The PPoPP 2015 paper itself could not be opened here (arxiv.org and dl.acm.org blocked); its abstract, seen only in a search snippet, says novel fast algorithms 'can significantly outperform vendor implementations of the classical algorithm and Strassen's fast algorithm on modest problem sizes and shapes'.",
+  "status_note": "Abandoned research code (last commit 2021-07-06, core from 2014-2017) under BSD-2-Clause (Sandia); header-only and small enough to vendor, but re-benchmark the crossover against your BLAS before relying on it.",
+  "sources_read": [
+    "https://github.com/arbenson/fast-matmul",
+    "https://github.com/arbenson/fast-matmul/commits/master",
+    "https://github.com/arbenson/fast-matmul/tree/master/codegen",
+    "https://github.com/arbenson/fast-matmul/tree/master/linalg",
+    "https://github.com/arbenson/fast-matmul/tree/master/algorithms",
+    "https://raw.githubusercontent.com/arbenson/fast-matmul/HEAD/README.md",
+    "https://raw.githubusercontent.com/arbenson/fast-matmul/HEAD/Makefile",
+    "https://raw.githubusercontent.com/arbenson/fast-matmul/HEAD/make.incs/make.inc.linux",
+    "https://raw.githubusercontent.com/arbenson/fast-matmul/HEAD/make.incs/make.inc.edison",
+    "https://raw.githubusercontent.com/arbenson/fast-matmul/HEAD/data/README.md",
+    "https://raw.githubusercontent.com/arbenson/fast-matmul/HEAD/data/all_sequential_algs/README.md",
+    "https://raw.githubusercontent.com/arbenson/fast-matmul/HEAD/data/all_sequential_algs/square.all.big",
+    "https://raw.githubusercontent.com/arbenson/fast-matmul/HEAD/codegen/gen.py",
+    "https://raw.githubusercontent.com/arbenson/fast-matmul/HEAD/codegen/gen_all_algorithms.sh",
+    "https://raw.githubusercontent.com/arbenson/fast-matmul/HEAD/examples/strassen.cpp",
+    "https://raw.githubusercontent.com/arbenson/fast-matmul/HEAD/examples/fast433.cpp",
+    "https://raw.githubusercontent.com/arbenson/fast-matmul/HEAD/linalg/linalg.hpp",
+    "https://raw.githubusercontent.com/arbenson/fast-matmul/HEAD/linalg/blas_wrap.hpp",
+    "https://raw.githubusercontent.com/arbenson/fast-matmul/HEAD/algorithms/strassen.hpp",
+    "https://raw.githubusercontent.com/arbenson/fast-matmul/HEAD/algorithms/bini322_10_52_approx.hpp"
+  ],
+  "confidence": 0.75
+}

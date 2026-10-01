@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/gistrec/geo-utils-cpp",
+  "one_liner": "Header-only C++17 port of Google Maps' spherical geometry utils; beats Boost.Geometry's spherical strategies on area and point-in-polygon.",
+  "what_it_does": "A small set of lat/lng-native functions on a spherical Earth (radius 6371009 m): distance, heading, offset, interpolate, path length, point-at-distance, polygon area, point-in-polygon, on-path/on-edge tests, snap-to-route, Douglas-Peucker simplify, Google Encoded Polyline (precision 5 and 6) and an antimeridian-aware LatLngBounds. It is a C++ port of android-maps-utils' SphericalUtil/PolyUtil, so the API is free functions taking geo::LatLng in degrees and any Path type with size() and operator[]. It is not a drop-in for Boost.Geometry: there are no generic geometry types, coordinate systems or spatial indexes.",
+  "how_it_is_fast": "area uses the polar-triangle accumulation from PolyUtil (Todhunter's two-sides-and-included-angle formula, one tan and one atan2 per vertex) in a tight loop with no allocation, against Boost's strategy machinery. contains is an O(N) ray cast to the South Pole that by default treats edges as rhumb lines (a Mercator-latitude comparison per edge) with cheap linear-latitude early exits, while Boost's bg::within with spherical_equatorial picks a great-circle winding strategy that costs more per edge. distance uses haversine with cached degree-to-radian factors, which ties Boost and hand-written haversine rather than beating them.",
+  "when_to_use": [
+    "Polygon area on lat/lng data is a hot path: about 1.5-1.9x Boost.Geometry and about 5x S2's S2Loop::GetArea in the author's M1 runs.",
+    "Point-in-polygon for GPS/geofencing on small to medium polygons (10-1000 vertices) where rhumb-line edges are acceptable and S2 is too heavy a dependency.",
+    "You want zero dependencies and a single header (amalgamated geo.hpp) instead of pulling in Boost, S2 plus Abseil, or GeographicLib.",
+    "Mobile/backend code that must give the same answers as Google Maps Android Utils (same spherical model and conventions).",
+    "Route utilities on lat/lng (point_at_distance, polyline6 encode/decode for OSRM, Valhalla or Mapbox)."
+  ],
+  "when_not_to_use": [
+    "Sub-meter or survey-grade work: it is spherical, not WGS84 ellipsoidal (use GeographicLib), and precision degrades near the poles and for antipodal pairs.",
+    "contains on large polygons or many queries: S2 measured 18-21 M queries/s at N=100-1000 vs 2.87 and 0.33 M/s here, because the scan is linear with no built-in index or bounding-box prefilter.",
+    "You need great-circle containment semantics that match Boost's bg::within: the default contains uses rhumb-line edges, so answers differ on long edges and at high latitude; geodesic=true exists but was not benchmarked.",
+    "Planar/projected geometry, polygon booleans, validity repair or spatial indexing are needed; the feature set is far smaller than Boost.Geometry, GEOS or TG.",
+    "Very young codebase (first release in 2026, 56 stars), so there is little production track record."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (Google Test only for the test suite; Google Benchmark, Boost, S2 and GeographicLib only for the opt-in benchmarks)",
+    "min_toolchain": "C++17; CMake 3.14+ for the optional CMake package; CI covers GCC and Clang on Linux, AppleClang on macOS and MSVC on Windows",
+    "platforms": "any (portable scalar code, no SIMD or intrinsics)",
+    "thread_safety": "All functions are pure (no global mutable state or caching) and documented as safe to call concurrently.",
+    "drop_in_for_baseline": "partial — covers Boost.Geometry's spherical distance, area and within for lat/lng points, but through its own LatLng/Path API; Boost geometry types and strategies are not accepted."
+  },
+  "gotchas": [
+    "contains defaults to rhumb-line edges (geodesic=false) while on_edge and on_path default to great-circle edges; pass geodesic explicitly. The South Pole is always outside a polygon.",
+    "LatLng is never validated: out-of-range coordinates give unspecified (memory-safe, no-throw) results; call is_valid() or normalized() on untrusted input.",
+    "LatLng::operator== is approximate (1e-12 degree epsilon, longitude modulo 360), not bitwise.",
+    "Polygons are implicitly closed (last vertex connects to the first); encode, decode and simplify allocate and can throw std::bad_alloc. decode had signed-overflow UB on malformed input before v1.2.0 (fixed, found by fuzzing)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over TG when your data is raw lat/lng and you want spherical (rhumb or great-circle) area and containment without projecting; TG is planar but has indexed point-in-polygon (ystripes/natural) that scales far better on big polygons. Pair it with an index such as nanoflann or tidwall/rtree.c when you have many polygons, since it ships no spatial index of its own.",
+  "verified_claims_summary": "The author's Google Benchmark runs (Apple M1, Apple clang 17, -std=c++17 -O2 -DNDEBUG, Boost 1.90.0, s2geometry 0.14.0, GeographicLib 2.7, median of 5 repetitions) show area at 67-70 M polygons/s vs Boost.Geometry 36-45 M/s, and contains at about 8.5-14x Boost's spherical bg::within on a regular 5-degree n-gon of 10-1000 vertices with 1000 jittered query points. The contains gap is partly an algorithm difference (rhumb ray cast vs great-circle winding), and distance, heading and path_length are within noise of Boost.",
+  "status_note": "Active (v1.2.2, last commit 2026-09-20, CI with ASan/UBSan and a libFuzzer target on decode), Apache-2.0 with Google's original notices kept, and small enough (about 50 KB of headers) to vendor.",
+  "sources_read": [
+    "https://github.com/gistrec/geo-utils-cpp",
+    "https://github.com/gistrec/geo-utils-cpp/issues?q=is%3Aissue",
+    "https://github.com/gistrec/geo-utils-cpp/tree/master/benchmarks",
+    "https://raw.githubusercontent.com/gistrec/geo-utils-cpp/HEAD/README.md",
+    "https://raw.githubusercontent.com/gistrec/geo-utils-cpp/HEAD/docs/benchmarks.md",
+    "https://raw.githubusercontent.com/gistrec/geo-utils-cpp/HEAD/docs/api.md",
+    "https://raw.githubusercontent.com/gistrec/geo-utils-cpp/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/gistrec/geo-utils-cpp/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/gistrec/geo-utils-cpp/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/gistrec/geo-utils-cpp/HEAD/benchmarks/README.md",
+    "https://raw.githubusercontent.com/gistrec/geo-utils-cpp/HEAD/benchmarks/CMakeLists.txt",
+    "https://raw.githubusercontent.com/gistrec/geo-utils-cpp/HEAD/benchmarks/common/random_data.hpp",
+    "https://raw.githubusercontent.com/gistrec/geo-utils-cpp/HEAD/benchmarks/speed/bench_boost.cpp",
+    "https://raw.githubusercontent.com/gistrec/geo-utils-cpp/HEAD/benchmarks/speed/bench_geo_utils.cpp",
+    "https://raw.githubusercontent.com/gistrec/geo-utils-cpp/HEAD/include/geo/geo.hpp",
+    "https://raw.githubusercontent.com/gistrec/geo-utils-cpp/HEAD/include/geo/spherical.hpp",
+    "https://raw.githubusercontent.com/gistrec/geo-utils-cpp/HEAD/include/geo/poly.hpp",
+    "https://raw.githubusercontent.com/gistrec/geo-utils-cpp/HEAD/include/geo/latlng.hpp",
+    "https://raw.githubusercontent.com/gistrec/geo-utils-cpp/HEAD/include/geo/bounds.hpp",
+    "https://raw.githubusercontent.com/gistrec/geo-utils-cpp/HEAD/include/geo/encoding.hpp",
+    "https://raw.githubusercontent.com/gistrec/geo-utils-cpp/HEAD/include/geo/version.hpp"
+  ],
+  "confidence": 0.85
+}

@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/wolren/georepair",
+  "one_liner": "Rust crate (with a C API) for OGC validity checks and ST_MakeValid-style repair; faster than GEOS on most invalid-input classes.",
+  "what_it_does": "Validates geometries against 18 OGC rules and repairs invalid ones (self-intersections, bowties, collapsed or unclosed rings, NaN coordinates, overlapping MultiPolygon shells, self-intersecting linework). It is not a GEOS replacement, only its isValid/makeValid corner. The Rust API is geo-types based (validate, is_valid, make_valid, validate_and_fix, Rayon par_*_batch) with built-in WKB/WKT I/O. The ffi feature builds a cdylib/staticlib with include/geo_repair.h, whose WKB- and WKT-in, WKB- and WKT-out functions are the route from C or C++.",
+  "how_it_is_fast": "The default Structure strategy follows GEOS makeValid's shape (planar graph extraction, face walking, winding-number assembly), but puts a cheap fast-path gate first: a fused duplicate/basic-form/envelope scan, a monotone-chain plus grid self-intersection test, and fast floating-point orientation that escalates to Shewchuk exact predicates only inside a 32-ulp collinear band. Inputs that pass the gate skip noding entirely. Noding uses a radix-sorted sweep and an R-tree (brute force only up to 128 edges). A CDT-based Arrange strategy (spade) is the fallback. Batches run in parallel over Rayon with mimalloc as the global allocator.",
+  "when_to_use": [
+    "Bulk cleaning of messy GIS polygons before overlay or loading into PostGIS/GeoPackage, where many inputs are invalid (bowties, collapsed rings, star or spoke shapes, overlapping MultiPolygon parts): the author measures 5-25x on bowtie/collapsed rows and hundreds of times on spoke and star-burst rows.",
+    "Repairing self-intersecting linework (zigzag, dense self-overlap, spiral): 10-120x against GEOS UnaryUnion in the author's tables.",
+    "Rust pipelines on geo/geoarrow/wkb data that need a validity gate without linking GEOS, including no_std and WASM builds.",
+    "Validation-only passes over large mostly-valid datasets, where it measured about 1.4x GEOS (2.1 s vs 3.0 s on 1.58M polygons, 12 threads)."
+  ],
+  "when_not_to_use": [
+    "Mostly valid, large polygons or linestrings: GEOS is faster on valid polygons of 100 vertices or more (down to 0.31-0.37x at 10,000 vertices) and on valid linestrings of 10-500 vertices.",
+    "Full validate-and-repair passes on mostly valid data: GEOS was faster on the 1.58M-polygon real-world full pass (3.0 s vs 3.6 s).",
+    "Dense random-walk 'spaghetti' rings, self-intersecting linestrings of 100+ vertices and large-coordinate (1e12) rings, where GEOS wins by 1.5x to 20x in the README table.",
+    "You need exact GEOS isValid parity: the eps-class tolerance (1e-12 x ring scale) rejects 213 GEOS-valid XML-suite cases, mostly orientation, and repair returns an empty GeometryCollection when it cannot certify the output.",
+    "You want a stable dependency: the crate is labelled experimental, 0.x with breaking changes expected, 1 star, and correctness fixes for shipped invalid output landed as recently as 2026-09-27."
+  ],
+  "integration": {
+    "form": "crate (also cdylib/staticlib with a C header via the ffi feature, and a PyPI wheel)",
+    "dependencies": "geo 0.33, robust, spade (CDT), rstar, rayon, mimalloc (default, C allocator), rusqlite with bundled SQLite (default io-gpkg feature), plus smaller crates; GEOS only for the opt-in benchmarks",
+    "min_toolchain": "Rust 1.88 (edition 2024); simd-portable needs nightly",
+    "platforms": "x86-64 and aarch64 on Windows/Linux/macOS; WASM32 and no_std without parallelism or file I/O",
+    "thread_safety": "Batch APIs are internally parallel (Rayon). The C API is documented as panic-safe with per-item error codes; thread-safety of concurrent calls is not documented.",
+    "drop_in_for_baseline": "partial — same job as GEOS isValid/makeValid (and UnaryUnion for linework) but a different API and a stricter, tolerance-based validity contract; from C++ you go through WKB/WKT buffers, not GEOS geometry objects."
+  },
+  "gotchas": [
+    "The default features install mimalloc as the process-wide #[global_allocator] and pull in bundled SQLite; turn off default features if you embed it in a larger Rust binary or need the proj feature (sqlite3 link conflict).",
+    "The README, docs/BENCHMARKS.md and the crate docs give different numbers for the same rows (for example overlap mp 186-318x in the README vs 6.85-10.34x in BENCHMARKS.md, which calls ~200x figures a WKT round-trip artifact; lib.rs still says 1.16x on the real-world set).",
+    "The spade-based Arrange (CDT) path may panic on degenerate input (all-collinear exterior rings, coordinates near f64::MAX); the release profile keeps panic=unwind so panics are caught and the C API reports them as an error code.",
+    "GeometryCollection cross-component intersections and Z/M consistency are not validated; Cargo's description calls the crate a 'rewritten GEOS/JTS repair module', and the provenance of any ported logic is not documented."
+  ],
+  "pick_this_over_siblings_when": "None of the catalogued siblings does validity repair: TG speeds up GEOS predicates (intersects, point-in-polygon) and qdgeo speeds up GEOS overlay and buffer, but both assume valid input. Use GeoRepair as the cleaning step in front of them, or in place of GEOS makeValid when the batch has many invalid shapes.",
+  "verified_claims_summary": "First-party runs on an Intel i5-12400F under Windows 10 (Rust release profile with fat LTO, mimalloc, 12-thread Rayon batch; rustc version not stated) against conda-forge GEOS 3.14.1, MSVC build, serial per call but driven concurrently from Rayon in the same process. Validation of 1.58M production polygons was 1.4x faster than GEOS and the full repair pass was 0.83x. Synthetic rows range from 0.05x to over 9,000x, and BENCHMARKS.md counts 73 wins in 91 cases. The production dataset is not public.",
+  "status_note": "Very active (last commit 2026-09-27, nightly fuzzing that keeps finding contract breaches), Apache-2.0, but 1 star and self-described as experimental with breaking 0.x releases.",
+  "sources_read": [
+    "https://github.com/Wolren/GeoRepair/commits",
+    "https://github.com/Wolren/GeoRepair/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/Wolren/GeoRepair/HEAD/README.md",
+    "https://raw.githubusercontent.com/Wolren/GeoRepair/HEAD/docs/BENCHMARKS.md",
+    "https://raw.githubusercontent.com/Wolren/GeoRepair/HEAD/docs/GEOS-SETUP.md",
+    "https://raw.githubusercontent.com/Wolren/GeoRepair/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/Wolren/GeoRepair/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/Wolren/GeoRepair/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/Wolren/GeoRepair/HEAD/include/geo_repair.h",
+    "https://raw.githubusercontent.com/Wolren/GeoRepair/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/Wolren/GeoRepair/HEAD/.gitignore"
+  ],
+  "confidence": 0.75
+}

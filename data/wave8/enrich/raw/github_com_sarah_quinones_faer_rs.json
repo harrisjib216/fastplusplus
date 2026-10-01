@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/sarah-quinones/faer-rs",
+  "one_liner": "Pure-Rust dense (and sparse) linear algebra whose multithreaded QR and mid-size eigensolvers outrun OpenBLAS and Eigen; MKL still leads.",
+  "what_it_does": "faer is a Rust crate with matrix types (Mat, MatRef, MatMut, Col, Row), operator-overloaded arithmetic and a LAPACK-scale set of factorizations: LLT, LDLT, LBLT (Bunch-Kaufman), LU with partial or full pivoting, QR with or without column pivoting, SVD, self-adjoint and general eigendecomposition, generalized EVD, plus sparse Cholesky/LU/QR and matrix-free eigen/SVD solvers. It has its own API, not the BLAS/LAPACK ABI: a high-level API on Mat, and a low-level API where the caller supplies scratch memory (dyn-stack) and the parallelism setting. An in-repo faer-ffi crate (cdylib, cbindgen) exposes the dense factorizations, matmul and triangular solves to C (faer.h) and C++17 (faer.hpp).",
+  "how_it_is_fast": "Matrix multiplication follows the BLIS approach (packing plus register-blocked micro-kernels), with runtime CPU-feature dispatch to precompiled SIMD variants through the pulp crate, the gemm crate, nano-gemm for small products and, on x86-64 with std, the author's private-gemm-x86 backend (0.22 changelog: 'accelerated matrix multiply backend on x86_64'). Decompositions are blocked so most flops land in that GEMM; memory-bound phases (column-pivoted QR, full-pivot LU, reduction to bidiagonal/tridiagonal/Hessenberg form) use fused kernels that do A x and A^T y in one pass over A. Threading is Rayon (plus the spindle crate); SIMD for user scalar types deinterleaves AoS data to SoA in registers.",
+  "when_to_use": [
+    "Rust code that needs dense factorizations (QR, LU, Cholesky, SVD, EVD) on medium-to-large matrices without linking a C/Fortran BLAS/LAPACK.",
+    "Multithreaded QR of large f64 matrices: the JOSS plots (i5-11400, 12 threads) put faer about 3x OpenBLAS and about 5x Eigen at n=10^4.",
+    "Eigendecomposition around n=1000, where the plots show faer ahead of OpenBLAS (about 2.2e9 vs 1.2e9 n^3/s).",
+    "Extended precision: faer ships a SIMD double-double type (fx128/cx128) and the plots show it several times faster than Eigen on f128 matmul and QR.",
+    "Projects that want one portable static binary (x86-64 and AArch64 NEON SIMD, no_std-capable core) instead of distributing OpenBLAS or MKL."
+  ],
+  "when_not_to_use": [
+    "When Intel MKL is available on Intel hardware and only speed matters: the paper's plots show MKL ahead on QR and EVD and level on matmul.",
+    "Large eigendecompositions (n=10^4): the plots show faer behind OpenBLAS, BLIS and MKL (about 2.9e9 vs 3.7e9, 4.0e9 and 4.6e9 n^3/s).",
+    "Small fixed-size matrices (graphics, robotics, 3x3/4x4): the crate docs say its design is not well suited to that and point to nalgebra or cgmath.",
+    "Existing C/C++ or Fortran code that calls BLAS/LAPACK symbols: there is no drop-in ABI, and the C/C++ binding (faer-ffi) is not published on crates.io.",
+    "Ill-conditioned or singular inputs without your own checks: open bug reports show NaN from qr().solve_lstsq on a 1e16-conditioned 3x3 system (#265) and NaN instead of 0 from a singular 3x3 determinant on 0.23.2 (#260)."
+  ],
+  "integration": {
+    "form": "crate (faer on crates.io); optional cdylib with C and C++ headers built from faer-ffi in the repo",
+    "dependencies": "pure Rust crates: pulp, gemm, nano-gemm, private-gemm-x86 (x86-64, std), dyn-stack, bytemuck, generativity, reborrow, equator, num-complex, num-traits, libm; optional rayon + spindle (default on), rand, npyz",
+    "min_toolchain": "Rust 1.84.0 (MSRV); nightly needed only for the AVX-512 'nightly' feature; faer.hpp needs C++17",
+    "platforms": "any Rust target; explicit SIMD on x86-64 (AVX2/FMA, AVX-512 with nightly) and AArch64 NEON; no SVE/SME/RVV kernels yet; an open issue (#255) reports matmul compile failure on i686-unknown-linux-gnu",
+    "thread_safety": "Rust ownership rules apply (MatRef is shareable, MatMut is exclusive); parallelism is a global setting (set_global_par/get_global_par) or a per-call Par argument in the low-level API",
+    "drop_in_for_baseline": "partial — replaces LAPACK/OpenBLAS functionality for Rust callers through a different API; the C/C++ binding has its own function names (libfaer_v0_24_*), not BLAS/LAPACK symbols"
+  },
+  "gotchas": [
+    "Development moved to codeberg.org/sarah-quinones/faer; the GitHub repo is a mirror, so file issues and track releases there (crate repository field points to Codeberg).",
+    "Pre-1.0 with frequent breaking changes: 0.20-0.21 was a full project refactor, 0.24 removed serde support, and the docs warn that eigenvalue order from Mat::eigen is unspecified and may change.",
+    "The checked-in faer-ffi/faer.h declares libfaer_v0_23_* functions while faer.hpp calls libfaer_v0_24_*; build.rs only regenerates the header when FAER_FFI is set, so build it yourself rather than copying the header.",
+    "The MIT crate carries ported code under other licences (COPYING.EIGEN.MPL2, COPYING.LAPACK.BSD and two SuiteSparse BSD notices in faer/), so keep those notices when vendoring."
+  ],
+  "pick_this_over_siblings_when": "Pick faer over Eigen when you are in Rust or need fast multithreaded large QR or mid-size eigensolvers (Eigen trails both faer and OpenBLAS in the paper's QR plot), and over OxiBLAS when you need full LAPACK-style decompositions rather than BLAS kernels; for matrices in the tens BLASFEO is the better fit.",
+  "verified_claims_summary": "The JOSS 2023 paper (peer-reviewed software paper, DOI 10.21105/joss.06099) plots n^3/time for f64 matmul, QR and EVD on an Intel Core i5-11400 with 12 threads against OpenBLAS, BLIS, MKL and Eigen (built with -fopenmp); readings show about 3x OpenBLAS on QR at n=10^4, parity on large matmul, and a mid-size EVD win, while MKL stays ahead. No Rust toolchain, flags, library versions or benchmark code are given, and the plots date from November 2023, before the current 0.24 code.",
+  "status_note": "Actively developed (crate 0.24.4 released 2026-06-24, about 4.8M crates.io downloads, last mirror commit 2026-09-04), MIT-licensed and used widely in the Rust ecosystem, but still pre-1.0 with open correctness bugs on ill-conditioned inputs.",
+  "sources_read": [
+    "https://github.com/sarah-quinones/faer-rs",
+    "https://raw.githubusercontent.com/sarah-quinones/faer-rs/HEAD/README.md",
+    "https://raw.githubusercontent.com/sarah-quinones/faer-rs/HEAD/paper.md",
+    "https://raw.githubusercontent.com/sarah-quinones/faer-rs/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/sarah-quinones/faer-rs/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/sarah-quinones/faer-rs/HEAD/faer/Cargo.toml",
+    "https://raw.githubusercontent.com/sarah-quinones/faer-rs/HEAD/faer/src/lib.rs",
+    "https://raw.githubusercontent.com/sarah-quinones/faer-rs/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/sarah-quinones/faer-rs/HEAD/faer-ffi/Cargo.toml",
+    "https://raw.githubusercontent.com/sarah-quinones/faer-rs/HEAD/faer-ffi/build.rs",
+    "https://raw.githubusercontent.com/sarah-quinones/faer-rs/HEAD/faer-ffi/faer.h",
+    "https://raw.githubusercontent.com/sarah-quinones/faer-rs/HEAD/faer-ffi/faer.hpp",
+    "https://github.com/sarah-quinones/faer-rs/tree/main/faer",
+    "https://github.com/sarah-quinones/faer-rs/tree/main/faer-ffi",
+    "https://github.com/sarah-quinones/faer-rs/issues?q=is%3Aissue+label%3Abug",
+    "https://github.com/sarah-quinones/faer-rs/issues/265",
+    "https://github.com/sarah-quinones/faer-rs/issues/260",
+    "https://crates.io/api/v1/crates/faer",
+    "https://crates.io/api/v1/crates/private-gemm-x86",
+    "https://crates.io/api/v1/crates/faer-ffi",
+    "https://raw.githubusercontent.com/aleon1138/linalg-bench/HEAD/README.md"
+  ],
+  "confidence": 0.75
+}

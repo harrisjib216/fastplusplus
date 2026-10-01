@@ -37,3 +37,9 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - bassoy/ttm, steleman/primefactors, AllogeneSSRD/ECM-ELF (ECM stage 1 on GPU/IFMA vs GMP-ECM), SimonLangowski/VROOM (standalone RNS/IFMA, BLS12-381 vs BLST), urrfinjuss/mpfft, nakatamaho/libQD3, arXiv 2306.04087 (128-bit FP GEMM on FPGA), project-gemmi/benchmarking-fft (FFT shootout). (from enrichers)
 - gpuNUFFT (andyschwarzl/gpuNUFFT), eth-cscs/SpFFT, sparse-FFT codes sFFT1/sFFT2 (MIT, Hassanieh et al.), Schumacher's optimized sFFT and AAFFT (from the MPSFT report), romeric/Fastor (small fixed-size tensors vs MKL JIT/LIBXSMM/Eigen/Blaze). (from enrichers)
 - OpenBLAS relapack/ (maintained ReLAPACK copy), chillenb/pytblis, philipturner/metal-float64, Andrew Holme's GPU_FFT (raspberrypi/userland hello_fft), wjc404/GEMM_AVX512F and wjc404/GEMM_AVX2, arXiv 2608.14497 (hybrid dealiasing, FFTW++), mind-inria/mri-nufft-benchmark (NUFFT shootout), NonuniformFFTs.jl. (from enrichers)
+- fmm-gen retier follow-up: arXiv 1611.01120 (IPDPS 2017) names dual-socket Xeon E5-2680 v2, BLIS-based and MKL DGEMM baselines; open the paper where arxiv.org is reachable to check B/A.
+- private-gemm-x86 (Rust crate, faer's x86 matmul backend, MIT, ~3.1M downloads).
+- "Brief Announcement: An Automatic Framework for High Performance Alternative Basis Fast Matrix Multiplication" (doi 10.1145/3816782.3819195).
+- Arraymancer vendors a maintained copy of Laser's GEMM (src/arraymancer/laser); possible home if Laser is re-filed.
+- GFFT (ICPP 2023, task-graph FFT): snippet says 1.18x single-thread, 9.87x at 16 threads over AOCL-FFTW on EPYC; code location unknown.
+- arXiv 2509.03753 "Memory Optimization for Convex Hull Support Point Queries" (GJK support functions).

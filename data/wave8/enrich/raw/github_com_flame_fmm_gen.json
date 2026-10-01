@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/flame/fmm-gen",
+  "one_liner": "Python generator for Strassen-like DGEMM variants that fuse the extra additions into BLIS-style packing and micro-kernels; claims wins over conventional GEMM.",
+  "what_it_does": "The public artifact of the IPDPS 2017 paper by Huang, Rice, Matthews and van de Geijn. meta/control.py takes one or more fast-algorithm shapes and recursion levels (for example `python control.py 2 222 1 323 1 abc`), emits C code for a BLISlab-style DGEMM implementing that multi-level Strassen-like algorithm, compiles single- and multi-threaded libraries, and builds a test driver. The generated entry point is `bl_dgemm_strassen_<job>(m, n, k, A, lda, B, ldb, C, ldc)`, a column-major double-precision C += A*B with no alpha, beta or transpose arguments. It is research code to generate and benchmark algorithms, not a BLAS library.",
+  "how_it_is_fast": "Each fast algorithm is a [U,V,W] coefficient triple, and multi-level algorithms (including mixed shapes such as <2,2,2> then <3,2,3>) are built with Kronecker products of those triples. Instead of forming the sums of submatrices in temporary buffers, the 'ABC' variant folds the A and B sums into the GEMM packing routines and the C updates into generated micro-kernels, so there is no extra workspace and less memory traffic; 'AB' and 'naive' variants are also generated for comparison. Parallelism reuses GEMM's own loop-level data parallelism instead of task parallelism, and a performance model predicts which algorithm suits a given size and shape.",
+  "when_to_use": [
+    "Studying or prototyping Strassen-like DGEMM inside a BLIS-style GEMM, including choosing among 20+ algorithms by size and shape with the included performance model.",
+    "Large double-precision products on hardware close to the paper's (an AVX Ivy Bridge-class Xeon), where the authors report gains over conventional GEMM on one core and on ten cores.",
+    "Non-square and rank-k-like shapes, where the paper argues that fusing additions into packing helps compared with buffer-based Strassen implementations.",
+    "As a reference design when building fused FMM into your own GEMM (the sibling tblis-strassen applies the same idea to tensor contraction)."
+  ],
+  "when_not_to_use": [
+    "As a production BLAS: double precision only, no alpha/beta or transposes, generated per algorithm, and no packaging.",
+    "On current CPUs without retuning: the micro-kernels are AVX inline assembly (vmulpd/vaddpd, no FMA) with an 8x4 register block and Ivy Bridge cache blocking (MC=96, KC=256, NC=4096), so today's BLIS, OpenBLAS or MKL kernels with FMA or AVX-512 have a higher peak than the in-repo baseline the generated code was compared with.",
+    "When accuracy matters more than a modest speedup: Strassen-like algorithms have weaker error bounds than classical GEMM, and this repo documents no stability testing.",
+    "When you need published numbers: none appear in the repo, and the paper (cs.utexas.edu, arxiv.org) was unreachable from this environment.",
+    "When you need maintained code: the last commit was 2017-07-07, the scripts are Python 2.7, and paths for TACC Maverick and SLURM are hard-coded."
+  ],
+  "integration": {
+    "form": "source-drop (Python 2.7 code generator emitting C99 plus AVX inline assembly; builds a static and shared library per generated algorithm)",
+    "dependencies": "Python 2.7; Intel icc/icpc 15+ by default (sourceme.sh sets BLISLAB_USE_INTEL=true; a GNU make include is also selectable); OpenMP; Intel MKL linked when BLISLAB_USE_BLAS=true (only for the bl_dgemm_ref reference path); SLURM optional",
+    "min_toolchain": "C99 compiler with AVX and OpenMP; artifact used icc/icpc 15.0.3 with GCC 4.9.3; Python 2.7",
+    "platforms": "x86-64 with AVX (artifact: 'x86-64 processor that supports AVX instructions'); Linux or macOS per the artifact description; no ARM or other kernels",
+    "thread_safety": "not documented; the multithreaded build reads its thread count from the BLISLAB_IC_NT environment variable and OMP_NUM_THREADS",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The in-repo GEMM requires C and ldc to be aligned (my_dgemm.c: 'C must be aligned', 'ldc must also be aligned'); the test driver pads ldc to a multiple of 8 and allocates n+4 columns, so pass C the same way.",
+    "The test driver accumulates C += A*B over three timed repeats for both routines and reports min-time effective GFLOPS, with the FMM run first and the conventional run second on the same inputs.",
+    "control.py builds with os.system('source sourceme.sh; make ...'), which runs under /bin/sh; where /bin/sh is dash (Debian, Ubuntu) `source` fails, and sourceme.sh hard-codes BLAS_DIR=/u/jianyu/blis and OMP_NUM_THREADS=10.",
+    "The make include uses -openmp and -mkl=parallel, flags of the classic Intel compilers; current oneAPI icx and GCC need different flags."
+  ],
+  "pick_this_over_siblings_when": "Pick fmm-gen over fast-matmul (Benson and Ballard) when you want the additions fused into GEMM packing with no extra workspace and plain data parallelism, and you are willing to own the GEMM kernel; fast-matmul layers fast algorithms on a vendor dgemm and ships measured timings against MKL. For tensor contractions use tblis-strassen, from the same group.",
+  "verified_claims_summary": "Only a qualitative claim was readable: the README and artifact say the generated FMM implementations 'demonstrate a performance benefit over conventional GEMM on single core and multi-core systems', and the public harness times the generated routine against the project's own BLISlab dgemm built on the same AVX 8x4 micro-kernel (icc 15.0.3, -O3 -mavx, TACC Maverick). A search-result snippet of the arXiv version (page not opened) gives the test machine as a dual-socket Intel Xeon E5-2680 v2 (Ivy Bridge) at 3.54 GHz on one core and 3.10 GHz on ten, and says the comparison included a BLIS-based DGEMM and Intel MKL DGEMM; no numbers were seen.",
+  "status_note": "Abandoned since 2017-07-07 (12 stars, no open issues) and BSD-3-Clause; usable as a reference design or for generating kernels to retune, not as a library to link.",
+  "sources_read": [
+    "https://github.com/flame/fmm-gen",
+    "https://github.com/flame/fmm-gen/tree/master/meta",
+    "https://github.com/flame/fmm-gen/issues",
+    "https://raw.githubusercontent.com/flame/fmm-gen/HEAD/README.md",
+    "https://raw.githubusercontent.com/flame/fmm-gen/HEAD/fmm_artifact.pdf",
+    "https://raw.githubusercontent.com/flame/fmm-gen/HEAD/meta/misc_gen.py",
+    "https://raw.githubusercontent.com/flame/fmm-gen/HEAD/meta/control.py",
+    "https://raw.githubusercontent.com/flame/fmm-gen/HEAD/meta/config.py",
+    "https://raw.githubusercontent.com/flame/fmm-gen/HEAD/meta/abc_micro_kernel_gen.py",
+    "https://raw.githubusercontent.com/flame/fmm-gen/HEAD/common/sourceme.sh",
+    "https://raw.githubusercontent.com/flame/fmm-gen/HEAD/common/make.inc.files/make.intel.inc",
+    "https://raw.githubusercontent.com/flame/fmm-gen/HEAD/common/dgemm/my_dgemm.c",
+    "https://raw.githubusercontent.com/flame/fmm-gen/HEAD/common/include/bl_config.h"
+  ],
+  "confidence": 0.65
+}
