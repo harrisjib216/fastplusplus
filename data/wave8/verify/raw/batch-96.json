@@ -1,0 +1,73 @@
+[
+  {
+    "id": "https://github.com/lemire/fastrand",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "The README shows python3 -m timeit lines: fastrand.pcg32bounded(1001) 23.6 ns and pcg32randint(100,1000) 24.6 ns against random.randint(0,1000) 216 ns and numpy.random.randint 955 ns. No CPU, Python version, compiler or flags are given, so these are first-party numbers without methodology. The peer-reviewed TOMACS 2019 paper it cites covers the bounded-integer algorithm in C, not this extension against CPython.",
+    "corrections": {
+      "caveats": "One-line timeit measurements with no CPU, Python version or compiler stated. The gap is dominated by random.randint's Python-level call overhead and its slower bounded-integer path rather than by raw generator speed. The baseline is CPython, not std::mt19937. Checked in fastrandmodule.c: PCG32 (XSH-RR) and Lemire's nearly-divisionless bounded method are implemented correctly. Correctness issues seen by code reading (not executed): pcg32randint takes signed long bounds but returns n1 + value through Py_BuildValue(\"I\"), an unsigned 32-bit format, so ranges with a negative lower bound (e.g. pcg32randint(-10, 10)) should come back wrapped to values near 2**32 instead of negatives. The error paths set ValueError and then return None, which CPython 3 turns into a SystemError."
+    },
+    "notes": "Numbers match the README. The 2016 blog post linked from the README is on lemire.me, which is egress-blocked here. Metadata confirmed: Apache-2.0, 124 stars, last commit 2026-05-15 ('version 3.1.0').",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/lemire/fastrand/HEAD/README.md",
+      "https://raw.githubusercontent.com/lemire/fastrand/HEAD/LICENSE",
+      "https://raw.githubusercontent.com/lemire/fastrand/HEAD/fastrandmodule.c",
+      "https://github.com/lemire/fastrand",
+      "https://github.com/lemire/fastrand/commits/master"
+    ]
+  },
+  {
+    "id": "https://github.com/vigna/mrg32k3a",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "The MRG32k3a.h header comment states ~17.5 ns (L'Ecuyer's double-based MRG32k3a.c), ~7.9 ns (64-bit integer version) and ~4.1 ns (this code) per double on an i7-7700 @3.60GHz with gcc 9.2.1 and the author's harness (prng.di.unimi.it/harness.c). Optimisation flags are not stated in the repo, and the harness host is egress-blocked here, so it stays first-party C.",
+    "corrections": {
+      "caveats": "First-party header comment with CPU and gcc version but no flags. The timing harness is the author's external prng.di.unimi.it/harness.c (not opened, host blocked), and the 64-bit integer comparison code is not published. Checked: the branchless combination step matches the reference output rule, and MRG32k3a_init6() discards one output to align with L'Ecuyer's stream, as the README says. No multiple-stream support yet (the header says so). The README notes that for batch generation nothing beats Intel MKL's vectorised MRG32k3a. The repo has no LICENSE file; the CC0 dedication is in each source header (no patent grant). Baseline is the reference MRG32k3a, not std::mt19937."
+    },
+    "notes": "All numbers match the header and README. 21 stars, 7 commits. The last commit ('Testless -> Branchless') is dated 2026-06-09; the previous one was 2019-11-02.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/vigna/MRG32k3a/HEAD/MRG32k3a.h",
+      "https://raw.githubusercontent.com/vigna/MRG32k3a/HEAD/MRG32k3a.c",
+      "https://raw.githubusercontent.com/vigna/MRG32k3a/HEAD/MRG32k3a.java",
+      "https://raw.githubusercontent.com/vigna/MRG32k3a/HEAD/README.md",
+      "https://github.com/vigna/MRG32k3a",
+      "https://github.com/vigna/MRG32k3a/commits/master"
+    ]
+  },
+  {
+    "id": "https://github.com/absolucy/nanorand-rs",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": false,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "D",
+    "tier_reason": "The README's only numeric comparison is WyRand 14 GB/s against the crate's own Pcg64 at 1.6 GB/s (M1 MacBook Air). src/rand/pcg64.rs is not PCG64, though: every call rebuilds the state from a seed with three 128-bit LCG steps, and it outputs hi^lo without PCG's random rotation. So the 8.8x is against a slowed, nonstandard generator, not a recognizable baseline. The claim against real PCG32 crates is text only. nanorand-bench/benches/speed.rs does time rand_pcg, oorandom, randomize, random-fast-rng and fastrand, but no results are published, which leaves D. It is kept as notable: 78M crates.io downloads and 78 reverse dependencies.",
+    "corrections": {
+      "baseline": "The crate's own Pcg64 type (which is not standard PCG64; see caveats). The README text also claims PCG32 crates fastrand, oorandom, random-fast-rng and randomize are 'much slower than wyrand', without numbers.",
+      "claimed_speedup": "README table (M1 MacBook Air): WyRand 14 GB/s, nanorand Pcg64 1.6 GB/s (about 8.8x, derived from page data, but against a nonstandard, slowed Pcg64), ChaCha8 980 MB/s, ChaCha12 749 MB/s, ChaCha20 505 MB/s. No published numbers against any third-party PCG implementation.",
+      "stars_or_usage": "251 stars; crates.io nanorand 78,084,439 downloads (11,421,052 recent) and 78 reverse dependencies (crates.io API, 2026-10-01)",
+      "caveats": "First-party table with one footnote (M1 MacBook Air), with no compiler version or flags. Correctness: src/rand/pcg64.rs is not PCG64 as published. rand128() resets state to 0, sets inc from the seed, runs three 128-bit multiply-add steps per output, and returns hi^lo (no XSL-RR rotation). The next seed is state ^ ((ret as u128) >> 64), and that shift of a widened u64 is always 0. So the 'Pcg64' baseline is a nonstandard generator doing about three times the work of PCG64, and the 8.8x says nothing about PCG itself. The public bench (nanorand-bench/benches/speed.rs, Criterion 0.3) does time real baselines (rand_pcg, oorandom, randomize, random-fast-rng, fastrand), but its results are not published. WyRand matches the wyrand algorithm from wyhash (already catalogued): the speed comes from that algorithm, so this crate is effectively a Rust port of it plus ChaCha."
+    },
+    "notes": "README numbers match the record. Last commit 2025-06-08 confirmed (stale). Consider filing as a duplicate of wyhash (wyrand port), or keep it flagged at D for the broken Pcg64 baseline. The record's 'no benchmark code' was wrong: nanorand-bench exists, with no published output.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/Absolucy/nanorand-rs/HEAD/README.md",
+      "https://raw.githubusercontent.com/Absolucy/nanorand-rs/HEAD/LICENSE.md",
+      "https://raw.githubusercontent.com/Absolucy/nanorand-rs/HEAD/src/rand/wyrand.rs",
+      "https://raw.githubusercontent.com/Absolucy/nanorand-rs/HEAD/src/rand/pcg64.rs",
+      "https://raw.githubusercontent.com/Absolucy/nanorand-rs/HEAD/nanorand-bench/benches/speed.rs",
+      "https://raw.githubusercontent.com/Absolucy/nanorand-rs/HEAD/nanorand-bench/Cargo.toml",
+      "https://crates.io/api/v1/crates/nanorand",
+      "https://crates.io/api/v1/crates/nanorand/reverse_dependencies?per_page=10",
+      "https://github.com/Absolucy/nanorand-rs",
+      "https://github.com/Absolucy/nanorand-rs/commits/main",
+      "https://github.com/Absolucy/nanorand-rs/tree/main/nanorand-bench",
+      "https://github.com/Absolucy/nanorand-rs/tree/main/nanorand-bench/benches"
+    ]
+  }
+]
