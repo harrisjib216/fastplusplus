@@ -1,0 +1,56 @@
+{
+  "id": "https://github.com/yixuan/spectra",
+  "one_liner": "Header-only C++/Eigen implicitly restarted Arnoldi/Lanczos eigensolver; ARPACK redesign, modestly faster than ARPACK-NG in the author's dense tests.",
+  "what_it_does": "Computes a few (k much smaller than n) eigenvalues and eigenvectors of a large square matrix, for example the largest or smallest k, which is the job of ARPACK and of eigs/eigsh in MATLAB and SciPy. You supply only a matrix operation object (y = A*x, or y = inv(A - sigma*I)*x for shift-and-invert). Ready-made wrappers cover Eigen dense and sparse matrices, and any class with a Scalar typedef and perform_op() works matrix-free. The solvers are SymEigsSolver, GenEigsSolver (real and, since 1.2.0, complex), the shift-invert variants, SymGEigsSolver and SymGEigsShiftSolver for generalized problems, HermEigsSolver for complex Hermitian matrices, and a Jacobi-Davidson DavidsonSymEigsSolver. The API is a different C++ object interface, not an ARPACK clone and not linked to ARPACK.",
+  "how_it_is_fast": "It implements the same algorithm as ARPACK: implicitly restarted Arnoldi, or Lanczos for symmetric and Hermitian problems (Lehoucq-Sorensen, ARPACK Users' Guide). The speed comes from C++ templating over Eigen rather than Fortran reverse communication, so the user operator is called inline. It also has its own small-matrix kernels: TridiagQR with a deflation test, a dedicated UpperHessenbergSchur for the projected Hessenberg matrix (SIMD-accelerated in 1.0.1) and Givens-based UpperHessenbergQR. In the benchmark both sides use the same Eigen mat-vec, so the measured gap is the restart and projection machinery alone.",
+  "when_to_use": [
+    "C++ code already using Eigen that needs a few extreme eigenpairs of a large sparse or matrix-free operator (spectral clustering, PCA, graph Laplacians, vibration modes) without linking Fortran ARPACK.",
+    "Symmetric problems: the author's benchmark shows the symmetric solver faster than ARPACK-NG in every tested case (about 1.15-1.5x on n=100 and n=1000 random matrices, k=10).",
+    "Matrix-free operators, where you implement perform_op() and never form A.",
+    "Complex Hermitian or complex general matrices (HermEigsSolver, complex GenEigsSolver since 1.1.0/1.2.0) inside a header-only dependency.",
+    "Code that wraps the same engine in R (RSpectra) or Python and wants one C++ core."
+  ],
+  "when_not_to_use": [
+    "Shift-and-invert generalized problems with many requested eigenvalues: open issue #165 reports a SymGEigsShiftSolver run with k=128 that did not finish in 10 minutes, where SciPy eigsh (ARPACK) took about 9 s. Open issues #126 and #172 report shift-invert results differing from expected or MATLAB values.",
+    "Large k or full spectra: nev must be at most n-1, and issue #182 asks to lift this limit; use a dense eigensolver (LAPACK/Eigen SelfAdjointEigenSolver) instead.",
+    "Multi-threaded eigensolves: only your operator and Eigen's own kernels can be parallel (multithreading is requested in open issue #185).",
+    "When you need a big speedup over ARPACK: the measured gains are 1.0-1.6x, the general solver is described as almost identical to ARPACK, and the numbers come only from small dense random matrices.",
+    "Clustered or repeated eigenvalues with a tight ncv: open issue #133 reports SymEigsSolver missing one copy of a repeated eigenvalue at k=20, ncv=50, which reappears at k=25."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "Eigen 3 (header-only; the optional CMake install finds a system Eigen or downloads Eigen 3.4.0 through CPM). Your own sparse factorization (Eigen, CHOLMOD and so on) if you use shift-and-invert.",
+    "min_toolchain": "C++11 (required since 1.0.0); CMake 3.10+ only for the optional install and tests",
+    "platforms": "any platform Eigen supports; open issue #177 reports ctest failures on Fedora s390x and #139 reports test eigenvalues differing between macOS and Linux",
+    "thread_safety": "not documented (each solver object holds its own state; no internal threading beyond Eigen's own)",
+    "drop_in_for_baseline": "false — same algorithm and selection rules as ARPACK, but a C++ object API (operator class plus solver object with init/compute/info) instead of ARPACK's Fortran reverse-communication saupd/naupd"
+  },
+  "gotchas": [
+    "The constructor needs nev < ncv <= n, and the docs advise ncv >= 2*nev. Too small an ncv slows convergence and can miss eigenvalues.",
+    "Always check info() == CompInfo::Successful. compute() returns the number of converged eigenvalues, which can be fewer than requested. Issue #158 reports a silent failure on a 2x2 matrix.",
+    "Version 1.0.0 (2021) broke the API (enum classes, selection rule passed to compute() instead of as a template parameter, operators passed by reference); see MIGRATION.md when updating older code.",
+    "In shift-and-invert mode the selection rule applies to 1/(lambda - sigma), and the quality of your shift-solve operator decides both accuracy and speed."
+  ],
+  "pick_this_over_siblings_when": "No other eigensolver is catalogued in this category. Spectra complements the sparse direct solvers listed here (for example CKTSO, BaSpaCho or a CHOLMOD-based operator): one of them can supply the factorization behind a SymEigsShiftSolver operator.",
+  "verified_claims_summary": "Using the repo's benchmark program (10 random dense matrices per size, 10 replicates, k=10, ncv 20/30, tol 1e-10, both sides using the same Eigen mat-vec), Spectra v1.0.0 vs ARPACK-NG 3.7.0 on an Intel Core i7-11800H (Clang 11.1.0 -O2 -march=native, single-threaded OpenBLAS 0.3.15) gave symmetric speedups of about 1.3-1.5x at n=100 and 1.15-1.2x at n=1000. The general solver was about 1.0-1.6x. These figures are read from bar charts.",
+  "status_note": "Active (1.2.0 released 2025-06-29, last commit 2026-07-04, 38 open issues), MPL-2.0 like Eigen, header-only and packaged in vcpkg and Conan, so it is easy to vendor.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/yixuan/spectra/master/README.md",
+    "https://raw.githubusercontent.com/yixuan/spectra/gh-pages/performance.md",
+    "https://raw.githubusercontent.com/yixuan/spectra/gh-pages/index.md",
+    "https://raw.githubusercontent.com/yixuan/spectra/gh-pages/quick-start.md",
+    "https://raw.githubusercontent.com/yixuan/spectra/master/CHANGELOG.md",
+    "https://raw.githubusercontent.com/yixuan/spectra/master/MIGRATION.md",
+    "https://raw.githubusercontent.com/yixuan/spectra/master/CMakeLists.txt",
+    "https://raw.githubusercontent.com/yixuan/spectra/master/benchmark/Makefile",
+    "https://raw.githubusercontent.com/yixuan/spectra/master/benchmark/main.cpp",
+    "https://raw.githubusercontent.com/yixuan/spectra/master/benchmark/F77.cpp",
+    "https://raw.githubusercontent.com/yixuan/spectra/master/include/Spectra/LinAlg/Lanczos.h",
+    "https://raw.githubusercontent.com/yixuan/spectra/master/include/Spectra/LinAlg/UpperHessenbergQR.h",
+    "https://github.com/yixuan/spectra/blob/master/include/Spectra/SymEigsSolver.h",
+    "https://github.com/yixuan/spectra/issues",
+    "https://github.com/yixuan/spectra/issues/165",
+    "https://github.com/yixuan/spectra/issues/133"
+  ],
+  "confidence": 0.8
+}

@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/bashtage/randomgen",
+  "one_liner": "Python/C package of extra NumPy bit generators (Romu, SFC64, Xoshiro256, counter-based); about 2.3-2.8x faster overall than legacy RandomState.",
+  "what_it_does": "randomgen supplies about 30 BitGenerator classes (Romu, SFC64, JSF, Xoshiro256/512, LXM, PCG64 variants, SFMT, dSFMT, Squares, Tyche, EFIIX64, Philox, ThreeFry, AESCounter, ChaCha, SPECK128, HC128, BlaBla, RDRAND) that plug into numpy.random.Generator, e.g. Generator(SFC64(seed)), plus an ExtendedGenerator with uintegers, broadcasting multivariate_normal and complex_normal. Its own Generator and RandomState were removed in 1.23, so the distributions are NumPy's; randomgen provides the bit streams. Seeding goes through SeedSequence; parallel streams come from spawn, jumped/advance on generators that support them, SFC64 Weyl increments (k), or keys for the counter-based generators.",
+  "how_it_is_fast": "Each generator is a small C state machine (randomgen/src/<gen>/) exposed through NumPy's bitgen function pointers (next_uint64, next_uint32, next_double), so Generator fills whole arrays in C. The fast cores are cheap per step: RomuTrio/RomuQuad are rotate-multiply generators with 3-4 words of state, SFC64 is add/xor/shift/rotate plus a Weyl counter with no multiply, Xoshiro256 (xoshiro256**) updates four words with xor/shift/rotate and scrambles with two multiplies, whereas MT19937 regenerates a 624-word state block and, per the docs, needs two 32-bit outputs per 64-bit value. 32-bit draws use the cached upper half of a 64-bit output. Most of the normal and exponential gap against RandomState comes from NumPy Generator's ziggurat samplers versus the legacy methods, not from the bit generator.",
+  "when_to_use": [
+    "Python/NumPy simulations that still use RandomState or MT19937 and draw arrays of thousands of values, where a faster bit generator under numpy.random.Generator is a one-line change",
+    "You need a generator NumPy does not ship (Romu, Xoshiro256/512, JSF, LXM, SFMT, Squares, Tyche, EFIIX64, AESCounter, ChaCha, SPECK128, HC128), for example to reproduce a C/C++ simulation's stream from Python",
+    "Thousands of parallel streams: SFC64 with distinct Weyl increments (weyl_increments(n)), keyed counter-based generators, or PCG64DXSM with SeedSequence.spawn, as the performance page recommends",
+    "C/C++ developers who want tested C sources for many generators with Python bindings for cross-checking output"
+  ],
+  "when_not_to_use": [
+    "Pure C++ projects: this is a Python extension, and lifting a generator from randomgen/src means also taking common/randomgen_config.h and honoring that component's own license",
+    "When NumPy's built-in PCG64 or SFC64 is enough: in the same table Romu(trio) draws uniforms in 2.4 ns versus 2.5 ns for SFC64 and 2.9 ns for PCG64 (about 1.2x at best, derived from page data), a small gain for an extra dependency",
+    "Environments on NumPy 2.4 with the latest release (2.3.0): import fails (open issue #426)",
+    "Scalar one-at-a-time draws from Python: the timings amortize 25,000 values per call, so per-call overhead dominates single draws",
+    "Mersenne Twister variants (MT19937, MT64, SFMT, DSFMT) or RDRAND (about 880 ns per value): the docs advise against the MT family unless backward compatibility is needed"
+  ],
+  "integration": {
+    "form": "module (Python/Cython package on PyPI and conda-forge; the per-generator C files under randomgen/src can be used as a source-drop)",
+    "dependencies": "NumPy >=1.22.3 at runtime; building needs NumPy >=2.0, Cython >=3.0.10 and meson-python (meson >=1.9)",
+    "min_toolchain": "Python 3.9-3.13 per README (pyproject says >=3.8); C99 compiler (GCC, Clang or MSVC)",
+    "platforms": "PyPI 2.3.0 wheels for Linux x86-64 and aarch64 (manylinux), musllinux x86-64, macOS x86-64 and arm64, Windows x86-64; README also lists FreeBSD and Linux ARM CI. RDRAND is x86-only and AESCounter is fast only with AES-NI",
+    "thread_safety": "Bit generator objects carry a Python lock (self.lock, taken in the Cython sources); the C state structs are unsynchronized, so use one bit generator per thread or stream",
+    "drop_in_for_baseline": "partial — Generator(SFC64(seed)) replaces RandomState or default_rng() with one line, but the stream differs from MT19937, randomgen's own RandomState was removed in 1.23, and legacy method names (randint, random_sample) become Generator's integers and random"
+  },
+  "gotchas": [
+    "randomgen 2.3.0 (the latest PyPI release, 2025-10-22) fails to import with NumPy 2.4 because numpy.random.bit_generator.SeedlessSequence was removed (issue #426, open since 2025-12-22); main's common.pyx no longer references it, but no newer release was on PyPI as of 2026-10-01",
+    "randomgen/meson.build adds -msse2 -mssse3 -maes -mrdrnd -mavx2 to every extension on GCC/Clang, so x86-64 builds appear to assume AVX2 and AES-NI CPUs (inferred from the build file; not stated in the docs)",
+    "Component licenses differ from the package's BSD-3-Clause/NCSA: the Romu sources are Apache-2.0 and the SFC64 header is MIT (per file headers), which matters when lifting C code",
+    "Past correctness fixes worth knowing if you pinned an old version: a non-deterministic Xoshiro256 jump (#336) and a wrong xoroshiro128 jump (#321), both closed 2023, and LCG128Mix ignoring its default inc (fixed in 2.1.0)"
+  ],
+  "pick_this_over_siblings_when": "Against the NumPy Generator entry, pick randomgen only for generators NumPy lacks (Romu, Xoshiro, JSF, AES, ChaCha, Squares, Tyche) or for SFC64's configurable Weyl increment; NumPy's own PCG64/SFC64 give nearly the same speed. For C or C++ code, Randompack (a C library) or EigenRand are the better catalogued choices, and dqrng fills the same role in R.",
+  "verified_claims_summary": "The project's doc script times numpy.random.Generator draws of 25,000 values per call (min of 10 repeats of 100 calls) on an Intel Cascade Lake at 3.1 GHz under Linux, compiler and flags unstated: uniform doubles take 2.4 ns (Romu trio), 2.5 (SFC64) and 2.9 (PCG64) versus 4.0 ns for MT19937 and 5.2 ns for NumPy's legacy RandomState, and the geometric mean across six distributions is 2.3-2.8x RandomState for the listed fast generators.",
+  "status_note": "Actively maintained (commits through 2026-09-28, mostly dependency bumps; last release 2.3.0 on 2025-10-22), dual BSD-3-Clause/NCSA with per-component licenses, and marked Production/Stable on PyPI.",
+  "sources_read": [
+    "https://github.com/bashtage/randomgen",
+    "https://github.com/bashtage/randomgen/commits/main",
+    "https://github.com/bashtage/randomgen/tree/main/randomgen/src",
+    "https://github.com/bashtage/randomgen/issues?q=is%3Aissue",
+    "https://github.com/bashtage/randomgen/issues?q=is%3Aissue+illegal+instruction",
+    "https://github.com/bashtage/randomgen/issues/426",
+    "https://github.com/bashtage/randomgen/issues/389",
+    "https://raw.githubusercontent.com/bashtage/randomgen/main/README.md",
+    "https://raw.githubusercontent.com/bashtage/randomgen/main/doc/source/performance.rst",
+    "https://raw.githubusercontent.com/bashtage/randomgen/main/doc/source/performance.py",
+    "https://raw.githubusercontent.com/bashtage/randomgen/main/benchmark.py",
+    "https://raw.githubusercontent.com/bashtage/randomgen/main/LICENSE.md",
+    "https://raw.githubusercontent.com/bashtage/randomgen/main/pyproject.toml",
+    "https://raw.githubusercontent.com/bashtage/randomgen/main/requirements.txt",
+    "https://raw.githubusercontent.com/bashtage/randomgen/main/meson.build",
+    "https://raw.githubusercontent.com/bashtage/randomgen/main/randomgen/meson.build",
+    "https://raw.githubusercontent.com/bashtage/randomgen/main/doc/source/change-log.rst",
+    "https://raw.githubusercontent.com/bashtage/randomgen/main/doc/source/index.rst",
+    "https://raw.githubusercontent.com/bashtage/randomgen/main/randomgen/src/sfc/sfc.h",
+    "https://raw.githubusercontent.com/bashtage/randomgen/main/randomgen/src/romu/romu.h",
+    "https://raw.githubusercontent.com/bashtage/randomgen/main/randomgen/src/xoshiro256/xoshiro256.h",
+    "https://raw.githubusercontent.com/bashtage/randomgen/main/randomgen/src/sfmt/sfmt.h",
+    "https://raw.githubusercontent.com/bashtage/randomgen/main/randomgen/sfc.pyx",
+    "https://raw.githubusercontent.com/bashtage/randomgen/main/randomgen/romu.pyx",
+    "https://raw.githubusercontent.com/bashtage/randomgen/main/randomgen/xoshiro256.pyx",
+    "https://raw.githubusercontent.com/bashtage/randomgen/main/randomgen/sfmt.pyx",
+    "https://raw.githubusercontent.com/bashtage/randomgen/main/randomgen/common.pxd",
+    "https://raw.githubusercontent.com/bashtage/randomgen/main/randomgen/common.pyx",
+    "https://pypi.org/pypi/randomgen/json",
+    "https://raw.githubusercontent.com/bashtage/randomgen/main/randomgen/src/mt19937/mt19937.h"
+  ],
+  "confidence": 0.8
+}
