@@ -121,12 +121,31 @@ after 2 failed fetches, the privacy/scratch rules above, and the terse final-rep
   override fields above.
 - Default search assignments to a C++ language filter; "any"-language passes are extra coverage.
 
-## Status (2026-09-28)
+- Cloud sessions (claude.ai): `gh` works only for this repo, and api.github.com, export.arxiv.org,
+  crossref and dblp are blocked. Agents use WebSearch, WebFetch (github.com pages, arxiv.org/abs,
+  HN Algolia) and curl to raw.githubusercontent.com. Give every agent `pipeline/cloud_harness.md`
+  as an override of the prompt's tool notes and /Users/... output path.
+- A user interrupt in the main session can kill running background agents silently; if an agent
+  never reports and its raw file is missing or stale, relaunch it.
+
+## Status (2026-10-01)
 
 - Waves 1-7 are finished. Lists at f74eba1: COPYABLE 843, REFERENCE 86, REJECTED 16.
-- Wave 8 (numerics-and-science) is set up but not started: `data/wave8/assignments.json`
-  (56 assignments: blas, fft, sparse, bigint, ml, rng, geo x b1-b8) and the b1/b2 prompts are
-  committed. Next: launch the b1 and b2 searches. The user paused on 2026-09-26; resume when asked.
+- Wave 8 (numerics-and-science), paused 2026-10-01 (credit limit) in a claude.ai cloud session:
+  - All 14 b1/b2 searches are merged (81 unique records). Verifier batches 01-32 are applied:
+    75 verified (A 19, B 20, C 35, D 1), SIMDxorshift rejected (AVX path computes a different
+    generator), Arb, ducc0, SIMDpcg32_cpp, ademakov/RNG and the second LibShalom URL filed as
+    duplicates. Shortcomings for every verified entry are in decisions.json.
+  - 54 of 75 enrichments are done. Still to enrich (prompts already rendered in
+    data/wave8/enrich/prompts/): clblast, ft_blas, xrq_phys_blis, matmul_cpu, mpgemm_arm_sme,
+    meow_fft, tcfft, turbofft, vkfft, ffts, kfr, vectorfft, tidwall_tg, gdel3d, live_clones_gmsh,
+    manifold, nanoflann, rtree_c, thst, trueform, tinybvh. List them with:
+    `for s in $(python3 pipeline/enrich.py data/wave8 | cut -f1); do [ -f data/wave8/enrich/raw/$s.json ] || echo $s; done`
+  - Retier checks to run (Opus): FlashAttention-3 (repo has cuDNN benchmark code, flags and
+    H100 clock, maybe A) and HXT/Gmsh (confirm peer-reviewed venue, else C).
+  - Next after enrichment: b3 (gh-cpp2) prompts for all 7 categories, then b4-b8, then the seed
+    pass from data/wave8/leads.md, then close (render_lists, commit, push).
+  - Search coverage in the cloud was thin (WebSearch/WebFetch only); expect b3-b8 to add more.
 - Waves 9-12 are set up (2026-10-01): `data/wave{9,10,11,12}/assignments.json` (152 assignments,
   19 categories x b1-b8) and leads.md; b1/b2 prompts rendered. Re-render b1/b2 before launching a
   later wave so its known list is current. zlib-ng and libdeflate are already filed under wave 9's

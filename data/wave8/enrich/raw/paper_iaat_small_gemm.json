@@ -1,0 +1,39 @@
+{
+  "id": "paper:iaat-small-gemm",
+  "one_liner": "Research small-GEMM framework for ARMv8 (paper only, no code) reporting 1.1-1.8x over OpenBLAS for M=N=K<=80.",
+  "what_it_does": "IAAT (ICT/CAS) targets GEMM where the matrices are small (cube root of MNK <= 80), covering SGEMM, DGEMM, CGEMM and ZGEMM in all four transpose modes (NN, NT, TN, TT). It has two stages: an install-time stage that generates hundreds of fixed-size ARMv8 assembly kernels, and a run-time stage that tiles the input and dispatches each block to the matching kernel. The paper describes a BLAS-style GEMM, but no library, header or API is published.",
+  "how_it_is_fast": "It does no packing: every block size has its own generated kernel (for example SGEMM 16x{1-4}, 12x{1-6}, 8x{1-8} and 4/3/2/1 x {1-13}), so A and B are read in place. An input-aware adaptive tiling step splits C into blocks that minimise L2-to-register traffic and stay a multiple of the SIMD width, which also removes most of the per-call edge handling. The generator uses computational templates, a register allocator for the 32 128-bit NEON registers, and instruction scheduling with ping-pong buffering.",
+  "when_to_use": [
+    "As a design reference for packing-free, size-specialised small-GEMM kernels on ARMv8/NEON",
+    "Workloads that repeat GEMMs of the same small shape (the paper says this is the case it fits), e.g. M=N=K up to about 64 in fp32/fp64/complex",
+    "Comparing against your own Kunpeng-class aarch64 small-GEMM results when OpenBLAS or ArmPL small-size performance falls short"
+  ],
+  "when_not_to_use": [
+    "Any production use: no code, binary or license has been released",
+    "Matrices above about 80 (or 32 for TN), where the paper's gains flatten and normal packed BLAS wins",
+    "x86, SVE or SME targets: the kernels are written for 128-bit ARMv8 NEON only",
+    "Multi-threaded GEMM: only single-threaded results are reported",
+    "TN transpose: it cannot be vectorised well, so its kernels are smaller and gains are lower"
+  ],
+  "integration": {
+    "form": "not released (paper only)",
+    "dependencies": "not documented",
+    "min_toolchain": "GCC 7.5 used in the paper; flags not stated",
+    "platforms": "aarch64 ARMv8 NEON (evaluated only on Huawei Kunpeng920)",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Throughput rises and falls with size: dimensions that are multiples of 4 (fp32) or 2 (fp64) hit peak, other sizes run noticeably slower",
+    "The 11-20x ratios over BLIS 0.8.1 reflect that BLIS lacked a small-matrix path at the time; they say little about current BLIS",
+    "The gain over OpenBLAS shrinks with precision: about 1.8x for SGEMM, 1.3-1.5x for DGEMM/CGEMM and about 1.1x for ZGEMM"
+  ],
+  "pick_this_over_siblings_when": "You cannot use IAAT itself because no code was released. For usable small GEMM on aarch64, LibShalom (ARMv8, with code) or BLASFEO (small dense linear algebra) are the shipped alternatives; read IAAT for its size-specialised kernel generation and tiling heuristic.",
+  "verified_claims_summary": "Measured single-threaded on a Kunpeng920 at 2.6 GHz with GCC 7.5 (flags not given). Average speedups for M=N=K<=80 were SGEMM_NN 1.81x over OpenBLAS 0.3.13, 2.30x over ArmPL 21.0 and 20.17x over BLIS 0.8.1; DGEMM_NN 1.48x over OpenBLAS; ZGEMM about 1.1x over OpenBLAS.",
+  "status_note": "Research artifact only (arXiv 2208.09822, venue not stated); no repository, no license, and maintenance is not applicable, so it is listed as a reference.",
+  "sources_read": [
+    "https://arxiv.org/abs/2208.09822",
+    "https://arxiv.org/pdf/2208.09822"
+  ],
+  "confidence": 0.6
+}

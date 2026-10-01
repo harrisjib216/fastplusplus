@@ -14,3 +14,7 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - FlashAttention-4 (CuTeDSL, Hopper/Blackwell, flash-attn-4): own entry or fold into FlashAttention. (from FA3 enrichment)
 - Clad (Clang-plugin source-transformation AD), likely Enzyme sibling; name only, not researched. (from Enzyme enrichment)
 - prng.di.unimi.it/xoshiro256++-vect-speed.c: Vigna's public-domain 8-way vectorized xoshiro256++, the copyable original of the listed gist technique. (from xoshiro8x256pp enrichment)
+- tesch1/MTGEMM-A: MIT re-implementation of the MpGEMM (ARM SME) design with public benchmark code, compiler, flags and CPU; 1.25x over Accelerate (paper design 1.09x); 0 stars. (from MpGEMM verifier)
+- Indexicon (arXiv 2606.04676), spatial indexing library; not read (arXiv 429). (from geo searches)
+- IATF (input-aware tuning framework for compact BLAS on ARMv8, cunyangwei.github.io/files/IATF.pdf). (from IAAT enrichment)
+- hayguen/pffft_benchmarks: per-CPU results for the marton78 pffft fork itself; could back a tier change. (from pffft enrichment)

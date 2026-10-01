@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/salykova/sgemm.c",
+  "one_liner": "Compact pure-C, OpenMP, AVX2/FMA SGEMM in BLIS style that claims parity with OpenBLAS on two desktop CPUs.",
+  "what_it_does": "A single-precision matrix multiply, C = A*B, written in plain C with AVX2/FMA intrinsics and OpenMP, together with a step-by-step tutorial. The API is one function, matmul(float* A, float* B, float* C, m, n, k), on column-major operands with the leading dimension fixed to the matrix height. It is not a BLAS interface: there is no alpha/beta, no transpose flags and no lda/ldb/ldc.",
+  "how_it_is_fast": "It follows the BLIS/Goto loop nest: cache blocking with MC/NC/KC (KC=500; MC and NC scale with the compile-time thread count), packing A into 16-row panels and B into 6-column panels with zero padding, and a 16x6 register-blocked micro-kernel that does rank-1 updates with _mm256_broadcast_ss + _mm256_fmadd_ps into 12 YMM accumulators. Edge tiles use masked loads and stores. OpenMP parallelizes the packing loops and the jr loop around the micro-kernel.",
+  "when_to_use": [
+    "Learning or teaching how a Goto/BLIS-style GEMM reaches near-BLAS throughput, with readable C instead of assembly",
+    "Vendoring a small, dependency-free FP32 GEMM into a C/C++ project on AVX2/FMA x86-64 desktops (Zen 5, Arrow Lake class) where you can tune MC/NC/KC and thread count",
+    "Large square FP32 matrices in column-major layout where a ~2-file kernel is preferred over linking OpenBLAS",
+    "Starting point for a custom fused kernel (e.g. adding an epilogue) that a BLAS library will not let you modify"
+  ],
+  "when_not_to_use": [
+    "When you need speed over OpenBLAS: the README only claims 'comparable', and an independent run (tianyuxbear/matmul-cpu on a Xeon Silver 4310) measured it below OpenBLAS",
+    "On AVX-512 CPUs: AVX-512 is deliberately disabled (-mno-avx512f), and the tutorial says BLAS libraries may be notably faster there",
+    "Many-core servers: the README says its threading strategy and tile sizes are tuned for the Ryzen 7 9700X / Core Ultra 265 and recommends nested parallelism elsewhere, which is not implemented",
+    "Double precision, complex, strided/submatrix operands, transposes or C += alpha*A*B: none are supported",
+    "Small matrices: the tutorial notes multithreading pays off only at large sizes; siblings aimed at small GEMM do better there"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "OpenMP (libgomp/libomp); CMake for the bundled build",
+    "min_toolchain": "C compiler with AVX2/FMA intrinsics and OpenMP; tested with GCC 13.3 on Ubuntu 24.04; CMake 3.10+",
+    "platforms": "x86-64 with AVX2 + FMA3 only; no ARM or scalar fallback",
+    "thread_safety": "Not reentrant: the packing buffers blockA_packed/blockB_packed are static globals, so concurrent matmul calls from different threads race; parallelism is internal via OpenMP",
+    "drop_in_for_baseline": "false — not a BLAS/CBLAS sgemm signature (no alpha/beta, trans flags or leading dimensions); a wrapper would have to copy submatrices"
+  },
+  "gotchas": [
+    "NTHREADS and OMP_SCHEDULE are compile-time macros (CMake fails without NTHREADS) and MC/NC derive from them, so the binary is tied to one thread count",
+    "matmul overwrites C (the first k-block zero-initialises the accumulators); it does not accumulate into existing C",
+    "Static packing buffers of size MC*KC and NC*KC floats live in .bss and grow with NTHREADS",
+    "Built with -march=native, so binaries are not portable across CPUs"
+  ],
+  "pick_this_over_siblings_when": "Pick it over Eigen or BLASFEO only when you want a tiny, readable C kernel to study or modify; for production FP32 GEMM, Eigen or OpenBLAS itself is safer, and the catalogued tianyuxbear/matmul-cpu reports multi-core numbers that slightly exceed OpenBLAS. BLASFEO or LibShalom fit small matrices better.",
+  "verified_claims_summary": "The author's plots (GCC 13.3, -O3 -march=native -mno-avx512f, Ryzen 7 9700X and Core Ultra 265 at 90 W, DDR5-7000) show multithreaded FP32 GEMM on square sizes roughly matching OpenBLAS 0.3.26; no numbers appear in the text, and the OpenBLAS harness is not in the repo. A third-party reproduction on a Xeon Silver 4310 found it consistently slower than OpenBLAS.",
+  "status_note": "Stale (last commit 2025-04-21) but MIT-licensed, about two source files, and easy to vendor or study; treat it as a reference implementation, not a maintained library.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/salykova/sgemm.c/HEAD/README.md",
+    "https://raw.githubusercontent.com/salykova/sgemm.c/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/salykova/sgemm.c/HEAD/benchmark.c",
+    "https://raw.githubusercontent.com/salykova/sgemm.c/HEAD/src/matmul.c",
+    "https://raw.githubusercontent.com/salykova/sgemm.c/HEAD/src/matmul.h",
+    "https://raw.githubusercontent.com/salykova/sgemm.c/HEAD/src/CMakeLists.txt",
+    "https://raw.githubusercontent.com/salykova/sgemm.c/HEAD/src/kernel.h",
+    "https://raw.githubusercontent.com/salykova/sgemm.c/HEAD/src/kernel.c",
+    "https://salykova.github.io/matmul-cpu"
+  ],
+  "confidence": 0.75
+}

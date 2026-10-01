@@ -1,0 +1,47 @@
+{
+  "id": "https://github.com/anonymousywl/mylib",
+  "one_liner": "ARMv8 assembly GEMM library for small and irregular-shaped SGEMM/DGEMM; beats OpenBLAS, BLIS, ARMPL, LIBXSMM and BLASFEO there.",
+  "what_it_does": "LibShalom computes single- and double-precision GEMM on ARMv8 CPUs for small (8 to 128) and skinny or irregular shapes (e.g. M=32 with N in the tens of thousands), where packing and edge handling dominate in general BLAS libraries. It has its own API, not BLAS: LibShalom_sgemm / LibShalom_sgemm_mp (multithreaded irregular) / LibShalom_dgemm take (transa, transb, C, A, B, M, N, K) on row-major data, with no alpha, beta or leading-dimension arguments.",
+  "how_it_is_fast": "It skips packing when operands fit in L1 or are read sequentially, and where packing is needed it interleaves the pack loads/stores with the FMA stream of the micro-kernel instead of running it as a separate pass. Micro-kernel tile sizes (7x12 for FP32) come from an analytical model that maximizes the compute-to-memory ratio, and edge cases get dedicated scheduled kernels. Multithreading partitions both M and N, with the N split chosen as ceil(sqrt(T*N/M)), so skinny shapes still feed all cores.",
+  "when_to_use": [
+    "Many tiny GEMMs (8..128 per side) on ARMv8 servers such as Kunpeng 920, Phytium 2000+ or ThunderX2, single-threaded",
+    "Skinny multithreaded GEMMs such as conv-layer-as-GEMM (M of 16-64, N in the tens of thousands, large K) on many-core ARM",
+    "Row-major C = A*B or C = A*B^T where you control the call site and can adopt a non-BLAS API",
+    "Research baselines for small/irregular GEMM on ARM"
+  ],
+  "when_not_to_use": [
+    "x86 or any non-ARMv8 target: kernels are AArch64 inline assembly",
+    "Code that needs a BLAS/CBLAS drop-in, alpha/beta scaling, strided (leading-dimension) operands or column-major layout",
+    "Large square GEMMs: the paper defers those to existing libraries",
+    "DGEMM beyond the small NN path, or complex types: the API covers only SGEMM variants and one DGEMM entry point",
+    "Production use needing maintenance: anonymous-account repo, last commit 2022-04-08, new issues restricted"
+  ],
+  "integration": {
+    "form": "static lib (libsmm.a) or shared lib (libsmm.so) built by a plain Makefile",
+    "dependencies": "OpenMP",
+    "min_toolchain": "GCC 8.2+ (README); built as C++ with g++ because the header includes <vector>",
+    "platforms": "aarch64 (ARMv8 NEON) only; tested on Phytium 2000+, Kunpeng 920, ThunderX2",
+    "thread_safety": "not documented; thread counts and partitioning live in global variables (vec, Tm, Tn, T) set by LibShalom_set_thread_nums",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Despite being listed as C, LibShalom.h includes <vector> and has 'using namespace std', so it compiles only as C++",
+    "NN_LIB/Makefile compiles object files without -O flags (-O3 appears only on the link line); the inline-assembly kernels are unaffected but the C driver code builds at -O0 unless you edit it",
+    "Row-major only; the README example passes B as transposed (NT), so check the transb convention before use",
+    "Header hard-codes blocking constants (GEMM_K 320, GEMM_N 4096, GEMM_M 256) tuned for the tested CPUs"
+  ],
+  "pick_this_over_siblings_when": "Pick it over BLASFEO when you need multithreaded skinny GEMMs on ARM (BLASFEO is single-threaded and was left out of that comparison), and over OpenBLAS/BLIS for tiny or irregular shapes on ARMv8; on x86 use BLASFEO or LIBXSMM-class code instead, and for Graviton 3 / medium sizes the GEMMFIP BLIS fork is the comparable option with a BLAS interface.",
+  "verified_claims_summary": "The LibShalom paper (ACM, 2021) measured with GCC 8.2.1 -O3 on Phytium 2000+, Kunpeng 920 and ThunderX2: single-thread small GEMM reaches 2x BLASFEO at 8x8x8 and 5-10% over the best other library at 32-128, and multithreaded irregular GEMM with M=32 reaches 2.6x BLIS on Phytium 2000+ (averages 1.8x over BLIS on Kunpeng 920, 1.4x on ThunderX2). The repo's own benchmark times LibShalom only, so baseline numbers come from the paper.",
+  "status_note": "Stale since April 2022 with new issues restricted, but MIT-licensed and small enough to vendor as a source drop for AArch64 builds.",
+  "sources_read": [
+    "https://github.com/AnonymousYWL/MYLIB",
+    "https://raw.githubusercontent.com/AnonymousYWL/MYLIB/HEAD/README.md",
+    "https://raw.githubusercontent.com/AnonymousYWL/MYLIB/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/AnonymousYWL/MYLIB/HEAD/NN_LIB/Makefile",
+    "https://raw.githubusercontent.com/AnonymousYWL/MYLIB/HEAD/NN_LIB/LibShalom.h",
+    "https://raw.githubusercontent.com/AnonymousYWL/MYLIB/HEAD/NN_LIB/SMM_NT_thread.c",
+    "https://github.com/AnonymousYWL/MYLIB/issues",
+    "https://zwang4.github.io/publications/tpds21-1.pdf"
+  ],
+  "confidence": 0.75
+}

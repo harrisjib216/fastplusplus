@@ -1,0 +1,43 @@
+{
+  "id": "https://github.com/giaf/blasfeo",
+  "one_liner": "C BLAS/LAPACK subset tuned for cache-resident small matrices; 2-3x faster than OpenBLAS/BLIS at sizes in the tens.",
+  "what_it_does": "BLASFEO implements level-3 BLAS and key LAPACK factorizations (gemm, syrk, syr2k, trmm, trsm, potrf, getrf, geqrf, gelqf) for matrices up to a few hundred per side, as found in embedded model-predictive control and optimization solvers. It offers two interfaces: its own non-destructive API on blasfeo_dmat/blasfeo_dvec structs (separate output argument, panel-major storage) and a standard column-major BLAS/LAPACK API (optionally exported with Fortran dgemm_ / cblas_ names).",
+  "how_it_is_fast": "Hand-written assembly kernels per microarchitecture (Haswell AVX2/FMA, Skylake-X AVX-512, Cortex-A53/A57/A76, Apple M1, etc.) with a custom internal calling convention so kernels chain without function-call overhead. The native API stores matrices in panel-major format (fixed-height row panels, column-major inside), which is the layout GEMM kernels want, so no packing is done at all; the BLAS API packs on the fly with strategies tuned for small sizes. LAPACK factorizations are written directly on these kernels instead of the blocked LAPACK reference algorithms.",
+  "when_to_use": [
+    "Single-threaded dense linear algebra on matrices of roughly 10-250 per side that fit in cache (MPC, embedded optimization, Kalman filters, robotics)",
+    "Cholesky/LU/QR on small matrices, where the BLAS API paper shows about 2x over OpenBLAS/BLIS LAPACK up to size ~100",
+    "Low-power ARM (Cortex-A53/A57) boards, where the margin over OpenBLAS and BLIS is largest",
+    "Code you control end to end and can move to the native panel-major API for another 10-15% over BLASFEO's own BLAS API"
+  ],
+  "when_not_to_use": [
+    "Large matrices or multithreaded throughput: routines are single-threaded and optimized for cache-resident sizes; use OpenBLAS/MKL/BLIS",
+    "Needing full BLAS/LAPACK coverage: only a subset of routines and variants is optimized, others fall back to reference code or need Netlib complementing",
+    "dgemm alone on Intel: the paper finds it only competitive with MKL there, not faster",
+    "Complex-number routines: not listed among optimized routines"
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none (optional external BLAS/LAPACK for the wrapper backend, fallback or Netlib complement; Python 3.6 + jinja2 only for the test suite)",
+    "min_toolchain": "C compiler with GNU-style assembler (gcc default); Make or CMake; exact minimum not documented",
+    "platforms": "x86-64 (SSE3/AVX/AVX2+FMA/AVX-512 targets), 32-bit x86, ARMv8-A (A53/A55/A57/A73/A76, Apple M1), ARMv7-A, plus a GENERIC C target; high-performance backend on Linux, Windows x86-64 and macOS",
+    "thread_safety": "not documented (routines are single-threaded)",
+    "drop_in_for_baseline": "partial — the BLAS API exports standard dgemm_/cblas_ names only when built with FORTRAN_BLAS_API=1 (default names are blasfeo_blas_*), and only a subset of BLAS/LAPACK routines is provided unless complemented with Netlib"
+  },
+  "gotchas": [
+    "Target is chosen at build time (TARGET=...); a binary built for X64_INTEL_HASWELL will not adapt to other CPUs (CMake has X64_AUTOMATIC detection for the host only)",
+    "Denormals in matrix memory, including padding, can slow routines 10x or more; the docs recommend zeroing memory passed to blasfeo_create_dmat and BLAS-API arrays",
+    "Align memory to 64-byte cache lines and use leading dimensions that are multiples of the kernel size (typically 4 in double) for best speed",
+    "Stack buffers sized by K_MAX_STACK (default 300) can exceed small thread stacks; lower it if the stack overflows"
+  ],
+  "pick_this_over_siblings_when": "Pick BLASFEO over Eigen or a general BLAS (FT-BLAS, BLIS forks) when your matrices are small and you also need fast factorizations (potrf/getrf/geqrf), not just GEMM; LibShalom reports 2x over BLASFEO at M=N=K=8 on Phytium, so for tiny GEMM-only work on ARM servers check LibShalom or IAAT first.",
+  "verified_claims_summary": "The authors' BLAS API paper (arXiv 1902.08115) times single-threaded BLASFEO against OpenBLAS 0.3.4-dev, BLIS 0.5.0 and MKL 2019.1 on a Haswell Core i7 4810MQ, Cortex-A57 (Tegra TX1) and Cortex-A53: factor 2-3 over OpenBLAS/BLIS for level-3 BLAS at sizes in the tens on Haswell, about 2x for LAPACK factorizations up to ~100, on par with MKL dgemm and faster on other routines; compiler and flags are not stated.",
+  "status_note": "Actively developed (commits through Sept 2026), BSD-2-Clause, and used as the linear algebra layer of embedded optimization toolchains, so it is safe to build from source or vendor.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/giaf/blasfeo/HEAD/README.md",
+    "https://raw.githubusercontent.com/giaf/blasfeo/HEAD/Makefile.rule",
+    "https://raw.githubusercontent.com/giaf/blasfeo/HEAD/guidelines.md",
+    "https://arxiv.org/abs/1902.08115",
+    "https://arxiv.org/abs/1704.02457"
+  ],
+  "confidence": 0.75
+}

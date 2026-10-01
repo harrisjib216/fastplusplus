@@ -1,0 +1,42 @@
+{
+  "id": "paper:lp-gemm",
+  "one_liner": "Research GEMM variant (UNICAMP, OpenBLAS-derived kernels) that skips repacking between chained GEMMs; about 2.25x over OpenBLAS on chains.",
+  "what_it_does": "LP-GEMM speeds up sequences of dependent GEMMs, as in transformer attention/MLP blocks or consecutive conv layers, by keeping intermediate results in the packed, tiled layout instead of converting back to row/column-major after each call. It splits GEMM into three kernels: ini-GEMM packs the inputs and emits the propagated layout, mid-GEMM consumes and emits that layout, and end-GEMM unpacks to the canonical BLAS layout. The authors say it is not BLAS-API compliant: callers must thread layout metadata through the chain and adapt any ops in between (softmax, RoPE, RMSNorm).",
+  "how_it_is_fast": "The technique is layout propagation, i.e. packing elimination across operator boundaries. The micro-kernel writes C in the same tiled order the next GEMM's packed operand expects, so the O(n^2) pack and unpack steps around each O(n^3) micro-kernel run only at the ends of the chain. The kernels are derived from OpenBLAS (AVX-512 with mr=16, nr=4 on x86; RVV 1.0 with mr=16, nr=8 on RISC-V), so per-kernel FLOP efficiency is about OpenBLAS's level and the gain comes from the data movement it removes.",
+  "when_to_use": [
+    "Chains of small to medium GEMMs where packing is a large share of runtime, e.g. LLM attention at short sequence lengths (the paper shows about 2x at 10 tokens on x86)",
+    "Edge or CPU inference engines you control end to end, so custom layouts can flow between ops",
+    "RISC-V RVV 1.0 targets where OpenBLAS's unpack step is slow",
+    "As a design reference for fusing packing across operators in your own GEMM or ML compiler"
+  ],
+  "when_not_to_use": [
+    "As a library: no LP-GEMM kernels are public (the linked simple_attention repo is a naive-matmul Llama driver that links a libopenblas not included in the repo)",
+    "Single, isolated GEMM calls: the initial kernel performs about like OpenBLAS, and BLIS and FlashGEMM median speedups beat it there",
+    "Large matrices (for example the MLP at about 1.1x on x86), where packing is negligible",
+    "beta != 0 accumulation into existing C, which needs explicit packing",
+    "Multi-threaded workloads: only single-threaded results are reported"
+  ],
+  "integration": {
+    "form": "not released (paper only; authors give a contact email)",
+    "dependencies": "modified OpenBLAS (per the paper)",
+    "min_toolchain": "not documented (driver Makefile uses g++ -mavx512f -fopenmp with no -O flag)",
+    "platforms": "x86-64 AVX-512 (Xeon Gold 6252), RISC-V RV64GCV with RVV 1.0 (SpacemiT K1 X60)",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Results stay in the propagated tiled layout, so every non-GEMM op between GEMMs (softmax, RoPE, RMSNorm) needs a layout-aware rewrite; softmax pays extra at tile boundaries",
+    "The 'up to 5x for RISC-V' claim (Section V-C) is a speedup that rises with token count to 500 tokens and is attributed to a weak OpenBLAS RVV unpack kernel, not to LP-GEMM itself; the verifier found Fig. 6b peaks at about 1.5x, inconsistent with that text",
+    "Compiler, flags and OpenBLAS/BLIS/MKL versions are not stated"
+  ],
+  "pick_this_over_siblings_when": "Siblings such as BLASFEO, LibShalom and IAAT speed up individual small GEMMs; LP-GEMM's idea only pays off across chains of dependent GEMMs, and with no code it is a technique to copy, not a library to adopt. For a usable single-call kernel choose BLASFEO or LibShalom.",
+  "verified_claims_summary": "Single-threaded on an Intel Xeon Gold 6252 (AVX-512), chained GEMMs averaged 2.25x over OpenBLAS; mid/end kernels had a median of about 1.5x on single GEMMs from GEMMBench, and MKL and oneDNN stayed close. RISC-V (SpacemiT X60, RVV 1.0) attention results vs OpenBLAS are reported, but the abstract-level 5x does not match Fig. 6b per the verifier; compiler and flags are not given.",
+  "status_note": "arXiv 2604.04599 preprint (2026, no venue stated) with no released kernels and no license, so it is listed as a reference only.",
+  "sources_read": [
+    "https://arxiv.org/html/2604.04599",
+    "https://github.com/czariv/simple_attention",
+    "https://raw.githubusercontent.com/czariv/simple_attention/HEAD/Makefile",
+    "https://raw.githubusercontent.com/czariv/simple_attention/HEAD/main.cpp"
+  ],
+  "confidence": 0.55
+}

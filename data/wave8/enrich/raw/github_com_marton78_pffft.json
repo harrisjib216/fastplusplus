@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/marton78/pffft",
+  "one_liner": "Small BSD-licensed SIMD 1D FFT (float/double) plus fast convolution, about 5x faster than KissFFT, about half FFTW's speed.",
+  "what_it_does": "C library for 1D real and complex FFTs, with a thin C++ wrapper (pffft.hpp) and a companion fast-convolution library (PFFASTCONV) and DSP helpers (PFDSP). You create a read-only PFFFT_Setup for a length N, then call pffft_transform (internal 'unordered' layout, intended for frequency-domain convolution via pffft_zconvolve_*) or pffft_transform_ordered (interleaved complex). It is not API-compatible with KissFFT or FFTW. This fork of Julien Pommier's bitbucket original adds double precision, AVX, CMake, a C++ wrapper, zero-phase convolution helpers and WASM SIMD.",
+  "how_it_is_fast": "It is FFTPACK v4 (Swarztrauber) translated to C and rewritten so every butterfly works on 4-wide SIMD vectors (SSE1, AltiVec, NEON, WASM SIMD; AVX for double), using radix 2/3/4/5 codelets. Skipping the final reorder ('unordered' output) saves a pass when you only need to multiply spectra for convolution. Transforms do no allocation: the caller passes a work buffer, or stack is used.",
+  "when_to_use": [
+    "Real-time audio/DSP on CPUs, where you need 1D float FFTs with no allocation in the transform call",
+    "FIR filtering or convolution: the unordered transform plus pffft_zconvolve_accumulate skips the reorder pass",
+    "Sizes of the form 2^a*3^b*5^c, best between 128 and 8192 points (per pffft.h)",
+    "Proprietary products that cannot take FFTW's GPL and want a small library to vendor",
+    "ARM NEON, PowerPC AltiVec or WebAssembly targets where KissFFT's scalar code is too slow"
+  ],
+  "when_not_to_use": [
+    "You need the fastest x86 FFT: FFTW measured 274-321 ns vs pffft 585 ns at n=256 complex in the gemmi benchmark; the README says the goal is only at least 50% of the fastest",
+    "Lengths with prime factors above 5, or lengths below the SIMD minimum: there is no Bluestein fallback",
+    "2D/3D transforms, DCT/DST, or batched strided data: 1D only",
+    "Double precision on NEON or SSE-only CPUs: the double SIMD paths are AVX and WASM only (scalar otherwise, per CMakeLists)",
+    "32-bit ARM built with GCC: the README measures much worse code and recommends Clang"
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none (CMake build; FFTW/MKL/KissFFT/PocketFFT only for optional benchmarks)",
+    "min_toolchain": "C compiler (C99-era) + CMake; C++ wrapper needs C++ with <complex>; exact minimum not documented",
+    "platforms": "x86/x86-64 (SSE1, AVX for double; FMA opt-in via -DTARGET_C_ARCH=haswell), ARM/AArch64 NEON incl. Apple Silicon, PowerPC AltiVec, WASM SIMD, scalar fallback elsewhere; open issue #55 reports a powerpc64le build failure",
+    "thread_safety": "PFFFT_Setup is read-only after creation and may be shared by threads; each thread needs its own work buffer (per pffft.h)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "All float buffers must be SIMD-aligned (16 bytes on x86/PowerPC); use pffft_aligned_malloc",
+    "Transforms are unscaled: backward(forward(x)) = N*x",
+    "Real forward output packs DC and Nyquist into the first complex slot; pffft_transform output is in an internal order unless you use the _ordered variant or pffft_zreorder",
+    "With work=NULL the transform uses the stack; large N on small thread stacks can overflow, so pass a heap work buffer"
+  ],
+  "pick_this_over_siblings_when": "Pick it over muFFT when you need a mature, allocation-free 1D real/complex FFT with built-in convolution and ARM/PowerPC/WASM SIMD. Pick it over PocketFFT for SIMD 1D transforms (PocketFFT's 1D path is scalar) when your lengths are 5-smooth. Use PocketFFT for multi-D, arbitrary lengths or DCT/DST.",
+  "verified_claims_summary": "In project-gemmi's benchmarking-fft (GCC 8 -O3, i7-5600U, single precision), Pommier's original pffft ran a 512-point complex FFT in 1255 ns with SSE vs KissFFT's 6553 ns (5.2x, derived), and 3792 ns with SIMD disabled. Real 512-point took 597 ns vs KissFFT 2985 ns. FFTW was faster at every size (588 ns measured at n=512). The fork's own additions were not measured there.",
+  "status_note": "Actively maintained (commits in 2026, upstream fixes cherry-picked and logged in the README); FFTPACK/UCAR BSD-style license allows vendoring into closed-source code.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/marton78/pffft/HEAD/README.md",
+    "https://raw.githubusercontent.com/marton78/pffft/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/marton78/pffft/HEAD/include/pffft/pffft.h",
+    "https://raw.githubusercontent.com/marton78/pffft/HEAD/include/pffft/pffft.hpp",
+    "https://github.com/marton78/pffft/issues",
+    "https://raw.githubusercontent.com/project-gemmi/benchmarking-fft/HEAD/README.md"
+  ],
+  "confidence": 0.8
+}
