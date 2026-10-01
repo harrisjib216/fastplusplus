@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/fzj-jsc/juffte",
+  "one_liner": "Fortran FFTE rewrite with Spiral-generated RISC-V Vector kernels; its authors report beating FFTW3 on RVV 1.0 chips, but the FFTW comparison is weak.",
+  "what_it_does": "juFFTe is a Modern Fortran library, derived from Daisuke Takahashi's FFTE, for 1-D, 2-D and 3-D complex and real FFTs in single and double precision on mixed-radix sizes (2^p 3^q 5^r), parallelized with OpenMP. The native API is FFTE-style: call zfft1d(a, n, juffte_init) once, then zfft1d(a, n, juffte_fw or juffte_bw), plus in-place and out-of-place variants. C callers use src/juffte.h (zfft1d_c and the others) and link with -ljuffte -lgfortran. The repo also has an 'FFTW-compatible' shim (fftw_plan_dft_1d/2d/3d, fftw_execute, fftw_malloc), but by the project's own issue #8 it is not yet a working drop-in.",
+  "how_it_is_fast": "The kernels follow FFTE: Stockham autosort passes with radix-8/5/4/3/2 butterflies (fft235). Long 1-D transforms (n > 174,762, i.e. L2SIZE/48) switch to a six-step decomposition n = nx*ny, with NBLK=16 cache-blocked transposes, a twiddle multiply and padding (NP=8) to avoid cache conflicts. The OpenMP loops run over those blocks. With -DWITHRVV=ON the butterflies are swapped for Spiral-generated C kernels using RVV 1.0 intrinsics (src/spiral/rvv: dft2 to dft16, double and single precision), and factor2() chooses radices from {3,4,5,6,8,9,10,12,15,16}. The claimed win comes from explicit RVV vectorization, which upstream FFTW lacks (per the verifier, only an open RVV pull request exists); on x86 and Arm the generic Fortran path relies on compiler autovectorization.",
+  "when_to_use": [
+    "Double-precision 1-D/2-D/3-D FFTs on RVV 1.0 hardware (SiFive X280, SpacemiT K3/X100, Sophon SG2044/C920v2), where FFTW has no vector kernels; per the preprint, juFFTe wins multi-core on all three and single-core on the X280",
+    "Fortran HPC codes that already use FFTE's zfft1d/zfft2d/zfft3d calling convention and want a maintained, Apache-2.0 successor",
+    "Single-plan workloads: one transform size per precision and module, initialized once and executed many times from one thread (with OpenMP inside)",
+    "RISC-V porting and benchmarking work at HPC centers, where you can check correctness at your own sizes before relying on it"
+  ],
+  "when_not_to_use": [
+    "Any program that needs more than one live plan (e.g. a forward and an inverse plan at different sizes, or several sizes): the work and twiddle arrays are module-level statics, so a second init aborts with 'Attempting to allocate already allocated variable b' or silently reuses stale tables (open issue #7)",
+    "2-D transforms whose ny has a factor of 3 or 5 (e.g. 64x96, 96x96, 100x100, 120x120): they silently return wrong results (open issue #9, 2026-09-23); whether 3-D and r2c/c2r share the bug is unchecked, and CI only tests size 2 (issue #10)",
+    "As an FFTW drop-in: the C shim is defined in the header (multiple-definition link errors with more than one TU), the backward transform is normalized by 1/n where FFTW's is not, fftw_destroy_plan and fftw_plan_with_nthreads are missing from C, and a second plan breaks the first (open issue #8)",
+    "x86-64 or Arm: no SVE or AVX kernels exist (-DWITHSVE stops at configure time), and no x86 or Arm results are published, so there is no evidence it beats FFTW, MKL or KFR there",
+    "Lengths that are not 2^p 3^q 5^r: factor() just stops at the first other prime and nothing checks this, so these sizes are not rejected (read from the source)"
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "Fortran runtime (libgfortran or the vendor equivalent) and OpenMP; a C99 compiler for the Spiral/RVV kernels; FFTW3 only for the optional benchmark comparison",
+    "min_toolchain": "Fortran 2003 compiler (tested with gfortran, nvfortran, Flang and Intel ifx/ifort); CMake 3.15+ or the plain Makefile; a riscv64 cross toolchain with RVV 1.0 support for the vector kernels",
+    "platforms": "Any target with a Fortran compiler (generic kernels); RISC-V RVV 1.0 for the Spiral vector kernels, which are the only accelerated backend",
+    "thread_safety": "Not thread-safe across concurrent calls: the 1-D work array and twiddle table (b) and the saved wx/wy tables are module-level and shared, so only one call per module may run at a time (issue #7). Each call parallelizes internally with OpenMP.",
+    "drop_in_for_baseline": "partial: the README lists an FFTW-style API, but by issue #8 it has the wrong backward normalization, supports a single plan only, lacks fftw_destroy_plan in C and breaks multi-TU builds, so FFTW code will not work unchanged"
+  },
+  "gotchas": [
+    "In C++, src/juffte.h does not compile at HEAD: it opens one extern \"C\" { block but closes two braces under __cplusplus, includes <complex.h> inside the extern \"C\" block and uses double _Complex. It also defines non-static globals (int juffte_init = 0, and FFTW_FORWARD etc. as ints, not macros) in the header (read from the header)",
+    "Each OpenMP thread gets private copies of two fixed-size automatic arrays, about 16.8 MB for c((NDA2+NP)*NBLK) complex(real64) plus 1 MB for d, in the six-step path; this matches the README's known issue of segfaults unless OMP_STACKSIZE and ulimit -s are raised (size worked out from the source)",
+    "Hard size caps from src/param.F90: 2-D transform length up to 65536 per dimension and 3-D up to 4096 per dimension",
+    "The backward transform scales by 1/n (FFTE convention). Commit 1d91fc8 (2026-09-23) fixed inverted FFT sign constants in the C API and a thread-privacy race in the 2-D work arrays, so the preprint's numbers predate these fixes"
+  ],
+  "pick_this_over_siblings_when": "Pick juFFTe only on RVV 1.0 RISC-V machines, where FFTW lacks vector kernels and none of the catalogued siblings publish RVV results; on x86 or Arm, KFR, PocketFFT or (on AMD) AOCL-FFTW have evidence and none of juFFTe's single-plan or correctness limits.",
+  "verified_claims_summary": "The numbers are first-party only, from preprint arXiv 2608.28076 (accepted per search snippets to the RISC-V for HPC workshop at ISC26), seen only through search summaries. Against FFTW3, average multi-core speedups are 1.09x on SiFive X280, 1.91x on SpacemiT K3 and 3.03x on Sophon SG2044; single core, juFFTe is 1.53x faster on the X280 but slower on the K3's X100 and the SG2044. The K3 and SG2044 multi-core runs used FFTW_ESTIMATE, as does the repo's benchmark/fftw_m.F90, so the headline gains are against untuned FFTW plans. FFTW version, compilers, flags and sizes were not seen.",
+  "status_note": "Active (initial release 2026-06-25, last commit 2026-09-24, Julich Supercomputing Centre, 3 stars). It is Apache-2.0 and copyable, but four open issues opened on 2026-09-23 (#7 single plan, #8 broken FFTW shim, #9 wrong 2-D results, #10 test suite) make it pre-production.",
+  "sources_read": [
+    "https://github.com/FZJ-JSC/juFFTe",
+    "https://github.com/FZJ-JSC/juFFTe/commits",
+    "https://github.com/FZJ-JSC/juFFTe/tree/main/src",
+    "https://github.com/FZJ-JSC/juFFTe/tree/main/src/spiral/rvv",
+    "https://github.com/FZJ-JSC/juFFTe/issues?q=is%3Aissue",
+    "https://github.com/FZJ-JSC/juFFTe/issues/7",
+    "https://github.com/FZJ-JSC/juFFTe/issues/8",
+    "https://github.com/FZJ-JSC/juFFTe/issues/9",
+    "https://github.com/FZJ-JSC/juFFTe/issues/10",
+    "https://raw.githubusercontent.com/FZJ-JSC/juFFTe/HEAD/README.md",
+    "https://raw.githubusercontent.com/FZJ-JSC/juFFTe/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/FZJ-JSC/juFFTe/HEAD/Makefile",
+    "https://raw.githubusercontent.com/FZJ-JSC/juFFTe/HEAD/src/Makefile",
+    "https://raw.githubusercontent.com/FZJ-JSC/juFFTe/HEAD/src/juffte.h",
+    "https://raw.githubusercontent.com/FZJ-JSC/juFFTe/HEAD/src/juffte.F90",
+    "https://raw.githubusercontent.com/FZJ-JSC/juFFTe/HEAD/src/param.F90",
+    "https://raw.githubusercontent.com/FZJ-JSC/juFFTe/HEAD/src/factor_m.F90",
+    "https://raw.githubusercontent.com/FZJ-JSC/juFFTe/HEAD/src/zfft1d_m.F90",
+    "https://raw.githubusercontent.com/FZJ-JSC/juFFTe/HEAD/src/zfft2d_m.F90",
+    "https://raw.githubusercontent.com/FZJ-JSC/juFFTe/HEAD/src/fft235_m.F90",
+    "https://raw.githubusercontent.com/FZJ-JSC/juFFTe/HEAD/src/kernel_m.F90",
+    "https://raw.githubusercontent.com/FZJ-JSC/juFFTe/HEAD/src/utils_m.F90",
+    "https://raw.githubusercontent.com/FZJ-JSC/juFFTe/HEAD/benchmark/README.md",
+    "https://raw.githubusercontent.com/FZJ-JSC/juFFTe/HEAD/benchmark/Makefile",
+    "https://raw.githubusercontent.com/FZJ-JSC/juFFTe/HEAD/benchmark/fftbench.F90",
+    "https://raw.githubusercontent.com/FZJ-JSC/juFFTe/HEAD/benchmark/fftw_m.F90",
+    "https://arxiv.org/abs/2608.28076 (not opened; WebSearch snippets only)"
+  ],
+  "confidence": 0.7
+}

@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/ryuhei-mori/tinyfft",
+  "one_liner": "Two tiny C files for power-of-two complex FFT and real convolution; author says the AVX version beats FFTW_MEASURE at 2^17-2^20.",
+  "what_it_does": "Tiny FFT computes in-place forward and inverse complex double FFTs of length 2^k and a cyclic convolution of two real vectors. tinyfft.c (C99 double complex, interleaved) and tinyfft_avx.c (split real/imaginary arrays) each expose four functions: tfft_init builds a twiddle table of 2^(k-1) entries, tfft_fft leaves its output in bit-reversed order, tfft_ifft expects bit-reversed input and does not divide by n, and tfft_convolver multiplies two real sequences packed into the real and imaginary parts of one array. It is not an FFTW-style planner API and not a drop-in replacement: there is no natural-order output, no real-input transform, no plan object and no other sizes or precisions.",
+  "how_it_is_fast": "An iterative in-place radix-4 transform, with one radix-2 stage when k is odd. Input is in natural order and output is in bit-reversed order, and the twiddle table is stored in bit-reversed order (built recursively by tfft_genw), so each butterfly block uses one twiddle triple. The AVX file broadcasts that triple and runs the inner loop four doubles at a time on split real/imaginary arrays, using FMA for the complex multiplies. The inverse runs the stages in reverse, so fft, pointwise product and ifft never need a bit-reversal permutation. tfft_convolver adds the 'two real sequences in one complex FFT' trick and finishes with a half-length inverse. Large sizes stay competitive because the code is short and streams through memory; there is no cache blocking or codelet generation like FFTW's (inferred from the source).",
+  "when_to_use": [
+    "FFT-based convolution or polynomial/big-integer multiplication on power-of-two sizes, where bit-reversed spectra never need to be read",
+    "Lengths around 2^17 to 2^20 on an x86 CPU with AVX and FMA3, the only range where the author says it beats FFTW3 with FFTW_MEASURE",
+    "Projects that cannot take FFTW's GPL license or its build: BSD-2-Clause, two .c files and no dependencies beyond libm",
+    "Contest or teaching code that needs a readable radix-4 FFT of about 130 lines (scalar) or 340 lines (AVX)"
+  ],
+  "when_not_to_use": [
+    "Any size outside 2^17-2^20: by the author's own README it is slower than FFTW3 there, and no numbers are published for any size",
+    "Code that needs natural-order spectra, non-power-of-two lengths, single precision, real-input transforms, multi-dimensional transforms or threads; none of these are provided",
+    "Builds for CPUs without FMA3, or for non-x86 targets, using the AVX variant: it calls _mm256_fmadd_pd and _mm256_fmsub_pd (FMA3), not plain AVX as the README implies",
+    "Very small transforms in the AVX variant: for odd k the radix-2 stage always loads and stores 4 doubles, so k=1 (and tfft_convolver_avx with k=2, which calls the inverse at k=1) reads and writes past the arrays (read from the source, not reported upstream)",
+    "Projects that need upstream support: last commit 2018-07-24, 19 commits, no tests, no benchmark program and no releases"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (libm; <immintrin.h> for the AVX file)",
+    "min_toolchain": "C99 compiler with <complex.h> (README builds with clang -O3); the AVX file needs AVX and FMA enabled (-mavx -mfma or -march=native). MSVC lacks C99 double complex, so it is not usable as-is there.",
+    "platforms": "Scalar file: any C99 target. AVX file: x86-64 with AVX and FMA3 (Intel Haswell or newer, AMD Piledriver/Zen or newer).",
+    "thread_safety": "not documented; the functions keep no global state and only read the twiddle table, so separate buffers can be transformed concurrently with a shared table (inferred from the source)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Output of tfft_fft and tfft_fft_avx is in bit-reversed order and tfft_ifft is unnormalized: example.c divides by 2^k by hand, while tfft_convolver scales internally by 1/(4m)",
+    "The AVX file uses aligned _mm256_load_pd and _mm256_store_pd, so xr and xi must be 32-byte aligned (aligned_alloc or posix_memalign), or it crashes",
+    "The headers use C99 'double complex' and have no extern \"C\" guards, so they do not compile when included from C++; compile the .c files as C and declare the functions yourself (std::complex<double> has the same layout)",
+    "Output layout of tfft_convolver (the length-2^k real result packed into 2^(k-1) complex slots, read back as real and imaginary parts in example.c) is not documented beyond the example; precision limits for exact integer convolution are not documented either"
+  ],
+  "pick_this_over_siblings_when": "Pick tinyfft over minfft, meow_fft or PocketFFT only when you want one small BSD file for power-of-two convolution and bit-reversed spectra are acceptable. For a general FFT with natural-order output, any size or measured wins over KissFFT and FFTW, PocketFFT, PFFFT or meow_fft are better documented.",
+  "verified_claims_summary": "There is only one claim, a single README sentence with no numbers: the AVX variant is 'faster than FFTW3 with FFTW_MEASURE' for lengths 2^17 to 2^20 and slower for all other lengths. No benchmark program, CPU, compiler version or FFTW version is published, and the comparison skips the bit-reversal permutation that FFTW performs.",
+  "status_note": "Abandoned since 2018-07-24 (15 stars, 0 forks, no issues), but BSD-2-Clause and only two short C files, so it is easy to vendor and maintain yourself.",
+  "sources_read": [
+    "https://github.com/ryuhei-mori/tinyfft",
+    "https://github.com/ryuhei-mori/tinyfft/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/ryuhei-mori/tinyfft/HEAD/README.md",
+    "https://raw.githubusercontent.com/ryuhei-mori/tinyfft/HEAD/tinyfft.h",
+    "https://raw.githubusercontent.com/ryuhei-mori/tinyfft/HEAD/tinyfft.c",
+    "https://raw.githubusercontent.com/ryuhei-mori/tinyfft/HEAD/tinyfft_avx.h",
+    "https://raw.githubusercontent.com/ryuhei-mori/tinyfft/HEAD/tinyfft_avx.c",
+    "https://raw.githubusercontent.com/ryuhei-mori/tinyfft/HEAD/example.c",
+    "https://raw.githubusercontent.com/ryuhei-mori/tinyfft/HEAD/LICENSE"
+  ],
+  "confidence": 0.75
+}

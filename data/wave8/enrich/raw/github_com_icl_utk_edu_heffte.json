@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/icl-utk-edu/heffte",
+  "one_liner": "MPI-distributed 2-D/3-D FFT layer over FFTW, MKL, cuFFT and rocFFT; on GPUs about 2x fftMPI and SWFFT, at parity on CPU.",
+  "what_it_does": "heFFTe computes 2-D and 3-D complex, real-to-complex and sine/cosine FFTs whose data is spread across the ranks of an MPI communicator. Each rank describes its input and output sub-box of the global grid with box3d. You build a heffte::fft3d<backend> or fft3d_r2c<backend> from (inbox, outbox, comm, plan_options) and call forward() and backward() on raw arrays, std::vector or GPU buffers, with optional batching, external workspace and scaling. The API is its own C++11 template interface plus Fortran and Python bindings; it is not FFTW-MPI's, P3DFFT's or fftMPI's API, although it accepts fftw_complex, cufftComplex and similar buffer types.",
+  "how_it_is_fast": "A 3-D FFT is split into batches of local 1-D FFTs (or 2-D FFTs in slab mode), run by a backend (stock, FFTW, MKL, oneMKL, cuFFT or rocFFT), with global reshapes between pencil orientations. Reshapes pack, exchange and unpack with MPI_Alltoallv (the default), padded MPI_Alltoall or pipelined point-to-point Isend/Irecv. use_reorder transposes during unpacking so 1-D FFTs run on contiguous data, use_pencils switches between pencil and slab decomposition, and use_num_subranks/use_subcomm limit how many ranks take part in the reshapes. On GPUs, packing runs on the device and GPU-aware MPI sends device buffers directly, so data stays on the GPU. Batched calls merge communication buffers to cut latency for small signals. Since GPU local FFTs are reported >40x faster than CPU kernels, the remaining cost is mostly communication, which the paper puts at about 90% of roofline peak for 1024^3 on Summit.",
+  "when_to_use": [
+    "3-D (or 2-D) FFTs too large for one node or one GPU, e.g. 512^3 to 1024^3+ grids in spectral/pseudo-spectral PDE, MD (PME/P3M) or cosmology codes on multi-GPU clusters",
+    "Codes that must run on NVIDIA (cuFFT), AMD (rocFFT) and Intel (oneMKL) GPUs and on CPUs (FFTW, MKL, built-in stock) from one templated API",
+    "Distributed jobs whose input layout (bricks) differs from the output layout (pencils or slabs): arbitrary non-overlapping per-rank boxes are reshaped for you",
+    "Many same-shaped transforms per step: the batch overloads merge communication buffers to cut latency",
+    "Applications that need distributed DCT/DST (types I and II) next to the FFT, available since 2.4"
+  ],
+  "when_not_to_use": [
+    "Single-process or single-GPU FFTs: heFFTe is only a communication and decomposition layer, so call FFTW, MKL, cuFFT or VkFFT directly",
+    "CPU-only clusters where you expect a speedup over fftMPI, SWFFT or FFTW-MPI: the paper only claims its CPU path is 'at least as good' as those (parity); the 2x headline compares heFFTe on V100s with CPU-only libraries",
+    "Long-running jobs with repeated r2c/c2r calls on the FFTW backend: open issue #88 shows FFTW plans made on nullptr arrays (in-place) but run out of place, allocating a hidden buffer on every call (+65.9 MB at 200^3, +217.4 MB at 300^3) that size_workspace() does not report; open issue #90 reports MaxRSS growing per forward/backward call in 2.4.1",
+    "Builds without MPI, or a distributed 1-D FFT: MPI is mandatory, and the transforms are 2-D and 3-D only (2-D is a 3-D box of size 1 in one direction)",
+    "One build that targets several GPU vendors: only one of CUDA, ROCm or oneAPI can be enabled per build, and the rocFFT backend has open issues (#82, #78; titles only seen)"
+  ],
+  "integration": {
+    "form": "shared lib (or static; CMake BUILD_SHARED_LIBS) with a header API (heffte.h) and CMake target Heffte::Heffte",
+    "dependencies": "MPI plus at least one backend: the built-in stock backend, FFTW3 (both fftw3 and fftw3f needed), MKL, oneMKL, cuFFT or rocFFT; optional MAGMA, SWIG/Fortran, Python",
+    "min_toolchain": "C++11 (cxx_std_11), CMake 3.19+; CI-tested with GCC 11-13, Clang 14-18, dpcpp 2024.2, OpenMPI 4.1.6, FFTW 3.3.7-3.3.10, MKL/oneMKL 2024.2, CUDA 11-12.6, ROCm 5.6-6.2",
+    "platforms": "Linux HPC systems: x86-64 and POWER9 CPUs (stock backend with optional AVX/AVX512), NVIDIA, AMD and Intel GPUs; one GPU backend per build",
+    "thread_safety": "not documented; forward() and backward() are MPI-collective over the plan's communicator, so every rank must call them in the same order",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The FFTW backend plans every local transform with FFTW_ESTIMATE on nullptr arrays (heffte_backend_fftw.h), so local kernels are untuned and r2c/c2r break FFTW's new-array execute contract (issue #88)",
+    "No scaling by default (scale::none, like FFTW): pass scale::full to backward() (or scale::symmetric to both) to get the input back",
+    "With a GPU backend, GPU-aware MPI is assumed ON at build time (Heffte_ENABLE_GPU_AWARE_MPI); on an MPI without GPU support, turn it off at build time or with plan_options::use_gpu_aware",
+    "The stock backend has no vectorization unless built with -DHeffte_ENABLE_AVX or AVX512 (docs: up to an order of magnitude faster with them), and prime factors below HEFFTE_STOCK_RADER_MIN (100000) fall back to a direct O(p^2) DFT"
+  ],
+  "pick_this_over_siblings_when": "heFFTe is the only catalogued FFT sibling built for distributed-memory 3-D FFTs across many GPUs and nodes; use it when the grid does not fit one device. Use VkFFT, TurboFFT or tcFFT for single-GPU transforms, and FFTW++ for dealiased convolutions on CPU clusters.",
+  "verified_claims_summary": "Per search-result summaries of the peer-reviewed ICCS 2020 paper (the paper itself was not opened), on Summit (POWER9 plus V100, 6 ranks per node, one GPU per rank) heFFTe on GPUs is about 2x faster than the CPU-only fftMPI and SWFFT, more than 2x faster than FFTE with better scaling, and reaches about 90% of roofline peak for a 1024^3 FFT; its GPU local kernels are more than 40x faster than CPU kernels. Compiler, flags and competitor configurations were not seen. The repo's speed3d benchmark only prints heFFTe's own GFlops/s (5 N log2 N per run) for one backend, while the separate ICL hpfft harness wraps heFFTe, fftMPI, AccFFT, P3DFFT, FFTE, SWFFT, 2DECOMP&FFT, nb3dFFT, FFTW and FFTW++ without publishing results in its README.",
+  "status_note": "Maintained (DOE ECP, ICL UTK/ORNL): last commit 2025-11-19, CMake project version 2.4.1, BSD-3-Clause and copyable; 7 open issues include memory growth (#90) and the FFTW nullptr-plan problem (#88), and the README's 'Getting Help' link points to the SLATE issue tracker rather than heFFTe's.",
+  "sources_read": [
+    "https://github.com/icl-utk-edu/heffte",
+    "https://github.com/icl-utk-edu/heffte/commits",
+    "https://github.com/icl-utk-edu/heffte/releases",
+    "https://github.com/icl-utk-edu/heffte/issues?q=is%3Aissue",
+    "https://github.com/icl-utk-edu/heffte/issues/88",
+    "https://github.com/icl-utk-edu/heffte/issues/90",
+    "https://github.com/icl-utk-edu/heffte/tree/master/include/stock_fft",
+    "https://raw.githubusercontent.com/icl-utk-edu/heffte/HEAD/README.md",
+    "https://raw.githubusercontent.com/icl-utk-edu/heffte/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/icl-utk-edu/heffte/HEAD/doxygen/installation.md",
+    "https://raw.githubusercontent.com/icl-utk-edu/heffte/HEAD/doxygen/basic_usage.md",
+    "https://raw.githubusercontent.com/icl-utk-edu/heffte/HEAD/include/heffte.h",
+    "https://raw.githubusercontent.com/icl-utk-edu/heffte/HEAD/include/heffte_fft3d.h",
+    "https://raw.githubusercontent.com/icl-utk-edu/heffte/HEAD/include/heffte_fft3d_r2c.h",
+    "https://raw.githubusercontent.com/icl-utk-edu/heffte/HEAD/include/heffte_plan_logic.h",
+    "https://raw.githubusercontent.com/icl-utk-edu/heffte/HEAD/include/heffte_reshape3d.h",
+    "https://raw.githubusercontent.com/icl-utk-edu/heffte/HEAD/include/heffte_backends.h",
+    "https://raw.githubusercontent.com/icl-utk-edu/heffte/HEAD/include/heffte_backend_stock.h",
+    "https://raw.githubusercontent.com/icl-utk-edu/heffte/HEAD/include/heffte_backend_fftw.h",
+    "https://raw.githubusercontent.com/icl-utk-edu/heffte/HEAD/include/stock_fft/heffte_stock_algos.h",
+    "https://raw.githubusercontent.com/icl-utk-edu/heffte/HEAD/include/stock_fft/heffte_stock_tree.h",
+    "https://raw.githubusercontent.com/icl-utk-edu/heffte/HEAD/benchmarks/speed3d.h",
+    "https://raw.githubusercontent.com/icl-utk-edu/hpfft/HEAD/README.md",
+    "https://link.springer.com/chapter/10.1007/978-3-030-50371-0_19 (not opened; WebSearch snippets only)"
+  ],
+  "confidence": 0.7
+}
