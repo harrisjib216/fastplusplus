@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/tiw302/simd-f128",
+  "one_liner": "Header-only C11/C++11 double-double (about 106-bit, 31-digit) type, claimed 1.5-3.4x lower latency than GCC __float128.",
+  "what_it_does": "Provides a 128-bit double-double scalar type simd_f128 (hi + lo doubles stored in one __m128d, float64x2_t or v128_t register, or a plain struct) with C functions for add, sub, mul, div, sqrt, exp, log, pow, trigonometric and hyperbolic functions, I/O, comparisons, 2-4 dimensional matrices, a PRNG and an AVX2 4-lane simd_f128x4. A C++ wrapper f128::float128 adds operator overloading, iostream output, std::numeric_limits, std::complex interop and Eigen NumTraits. Python (pybind11), WebAssembly and Rust bindings are published. It is a faster, lower-precision stand-in for __float128, not an IEEE binary128 drop-in and not arbitrary precision.",
+  "how_it_is_fast": "Values are unevaluated sums of two hardware doubles, so each operation is a dozen or so native double operations instead of software-emulated 113-bit binary128. Addition is Knuth TwoSum on the high parts plus plain addition of the low parts (QD's 'sloppy' add); multiplication uses hardware FMA for the exact product error when FP_FAST_FMA is defined, otherwise the Dekker/Veltkamp split; division and sqrt take one hardware estimate plus one Newton-Raphson-style correction. The scalar API keeps the pair in a SIMD register but computes lane by lane, so the speedup over __float128 comes from hardware double arithmetic and FMA, not lane parallelism; only simd_f128x4 (AVX2) processes four values at once.",
+  "when_to_use": [
+    "Deep-zoom fractal rendering (the author's mandelbrot-c reaches 1e-28 coordinates) and other inner loops that need about 31 digits without heap allocation.",
+    "Long-horizon integrators (RK4, n-body, orbital mechanics) where double rounding error accumulates and the range of double (about 1e308) is enough.",
+    "Projects that must build on MSVC, ARM, RISC-V or WebAssembly where __float128 is unavailable or emulated slowly.",
+    "Batch element-wise work on x86 with AVX2 and FMA, using simd_f128x4 or the SoA array helpers.",
+    "Eigen or std::complex code that needs a higher-precision scalar through the provided traits."
+  ],
+  "when_not_to_use": [
+    "You need IEEE binary128 semantics: correct rounding, the 15-bit exponent range, or bit-exact results matching other quad implementations. Use __float128 or TLFloat.",
+    "Your code subtracts nearly equal values: the README warns of catastrophic cancellation, and the sloppy add has no small relative-error bound in that case.",
+    "sin and cos of large arguments: math_theory.md says range reduction is simplified and Payne-Hanek reduction must be applied externally for |x| much larger than 2*pi.",
+    "You need more than about 31 digits or arbitrary precision: use MPFR, or a triple/quad-double library such as MultiFloats.jl or QD.",
+    "Mature production use: first commit 2026-08, one author, 2 stars, a small test suite (two ctest targets in the README run) and no external users besides the author's own projects."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (libm on Linux/UNIX for fma); optional Google Benchmark for benchmarks; pybind11, Emscripten or cc/bindgen for the bindings",
+    "min_toolchain": "C11 (C99 for the scalar path) or C++11; README lists GCC 4.9+, Clang 3.5+, MSVC 2019+, Emscripten 3.0+, with CI on GCC 11+, Clang 14+ and MSVC 2022",
+    "platforms": "x86-64 (scalar, SSE2, AVX2), AArch64 NEON, ARMv7 (scalar, VFPv4 for FMA), RISC-V64 scalar, WebAssembly SIMD128 and scalar; backend chosen at compile time from compiler macros",
+    "thread_safety": "not documented; values are plain registers or structs and the arithmetic has no shared state, apart from the PRNG header, which is stateful",
+    "drop_in_for_baseline": "partial: f128::float128 offers operators and common math functions like __float128, but it is a different type with double's exponent range, no correct rounding and different results, and C code must call simd_f128_add-style functions"
+  },
+  "gotchas": [
+    "Every function body is static inline but sits behind #ifdef SIMD_F128_IMPLEMENTATION. Contrary to the README's 'exactly one translation unit' instruction, any translation unit that calls the arithmetic must define the macro, or it sees only declarations (inferred from simd_f128.h).",
+    "Speed depends on build flags: the default CMake build is the scalar backend, and exact products use FMA only when FP_FAST_FMA (or __FMA__ for the x4 path) is defined. Build with -mavx2 -mfma (SIMD_F128_AVX2=ON) or an AArch64 target, or multiplication falls back to the slower Dekker split.",
+    "std::numeric_limits<f128::float128>::is_iec559 is set to true although the type is double-double and not IEEE binary128. Generic code that trusts this trait will assume IEEE behaviour.",
+    "The README's Google Benchmark table mixes metrics: Add and Mul (11.7 and 10.1 ns) are loop-carried latency, while Div and Sqrt (2.87 and 6.05 ns) time independent operations (bench_math.cpp). In the Mul loop the value roughly doubles every iteration and soon overflows to infinity, hitting the early-return path."
+  ],
+  "pick_this_over_siblings_when": "Pick it over TLFloat when you are in C or C++, can accept double-double semantics, and want the cheapest roughly 31-digit type on MSVC, ARM or WebAssembly; pick TLFloat when you need IEEE binary128. Pick it over MultiFloats.jl and DoubleFloats.jl only because those are Julia-only; they offer triple and quad-double, normalized algorithms and a longer track record.",
+  "verified_claims_summary": "First-party only. The project's bench_compare.c runs loop-carried add, mul and div 10M times each against GCC __float128 on an unnamed 12-thread, 3.27 GHz machine with no compiler version stated. The current console output reads __float128 153.37/193.23/325.37 ms vs simd-f128 (AVX2) 99.44/74.46/207.98 ms (1.54x, 2.59x, 1.56x). A second README table from a different run claims up to 3.38x on multiplication.",
+  "status_note": "Brand-new (2026-08) single-author MIT project with 2 stars, active through 2026-08-17 (v1.6.0, PyPI 1.6.2), small enough to vendor but not yet proven in outside use.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/tiw302/simd-f128/HEAD/README.md",
+    "https://raw.githubusercontent.com/tiw302/simd-f128/HEAD/include/simd_f128.h",
+    "https://raw.githubusercontent.com/tiw302/simd-f128/HEAD/include/simd_f128_vector.h",
+    "https://raw.githubusercontent.com/tiw302/simd-f128/HEAD/include/simd_f128.hpp",
+    "https://raw.githubusercontent.com/tiw302/simd-f128/HEAD/benchmarks/bench_arithmetic.cpp",
+    "https://raw.githubusercontent.com/tiw302/simd-f128/HEAD/benchmarks/bench_math.cpp",
+    "https://raw.githubusercontent.com/tiw302/simd-f128/HEAD/benchmarks/bench_compare.c",
+    "https://raw.githubusercontent.com/tiw302/simd-f128/HEAD/docs/math_theory.md",
+    "https://raw.githubusercontent.com/tiw302/simd-f128/HEAD/CMakeLists.txt",
+    "https://github.com/tiw302/simd-f128/issues?q=is%3Aissue"
+  ],
+  "confidence": 0.75
+}

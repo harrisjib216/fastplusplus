@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/dzhang314/multifloats.jl",
+  "one_liner": "Julia double/triple/quad-Float64 expansion arithmetic (about 106-212 bits) claimed 30x faster than BigFloat (MPFR) at 30 digits.",
+  "what_it_does": "Provides fixed-size extended-precision types Float64x2, Float64x3 and Float64x4 (plus Float32x2-x4 for GPUs and NPUs without fast Float64) as the parametric MultiFloat{T,N} <: AbstractFloat, along with SIMD vector types such as Vec8Float64x2. They act as drop-in number types for generic Julia code (+, -, *, /, sqrt, comparisons, exp/log families, cbrt, ^, round-trip-safe printing, rand) and convert to and from Float64 and BigFloat. It replaces BigFloat or Quadmath.jl when 30-60 digits are enough; it is not arbitrary precision.",
+  "how_it_is_fast": "Each value is an unevaluated sum of 2-4 machine floats (a floating-point expansion, as in double-double and QD quad-double). Arithmetic is fixed, branch-free networks of two_sum, fast_two_sum and FMA-based two_prod error-free transformations, fully inlined. Per the README these are new algorithms found by computer search (Zhang and Aiken, CAV25 and SC25 papers). There is no heap allocation and no data-dependent branching, so the code vectorises through SIMD.jl and runs as-is in CUDA, AMDGPU and oneAPI kernels via package extensions. exp2 and log2 are native polynomial and table kernels with expansion coefficients, not MPFR calls.",
+  "when_to_use": [
+    "Julia numerical code (linear algebra, ODEs, SDP or least-squares refinement) that loses accuracy in Float64 but needs only 30-60 digits.",
+    "Element-wise kernels over large arrays where BigFloat's per-value heap allocation dominates; MultiFloat values are isbits tuples that pack into plain arrays.",
+    "GPU kernels in Julia that need more than double precision (Float64x2), or more than single precision on Float32-only hardware (Float32x2-x4).",
+    "Explicit SIMD code through the MultiFloatVec types (Vec2-Vec32 lanes), for example batched dot products.",
+    "As a reference design for a C++ port: the author's MultiprecisionBenchmarks repo has a 373-line header-only C++ MultiFloat<T,N> with + and * over double, __m128d, __m256d and __m512d."
+  ],
+  "when_not_to_use": [
+    "You need more than about 212 bits, or a precision you choose at run time: Float64x5-Float64x8 were removed in v3.0 because the v2.0 algorithms for them were 'fundamentally broken', and no replacement exists yet.",
+    "You need IEEE semantics for infinities: most operations treat +-Inf inputs as NaN (Float64x4(Inf) + 1.0 returns NaN), and the exponent range is only Float64's.",
+    "Trigonometric, hyperbolic and inverse functions (sin, cos, atan, sinh and others) raise an error unless you call MultiFloats.use_bigfloat_transcendentals(), which converts to BigFloat on every call and loses the speed advantage. Open issues #90 (atan) and #74 (sin/cos) track this.",
+    "Code in C++: the package is pure Julia. The C++ header in MultiprecisionBenchmarks covers only + and * and needs x86 SSE/AVX/AVX-512 intrinsics plus FMA.",
+    "Non-IEEE hardware or rounding modes other than round-to-nearest; the README says obscure architectures may need extra setup."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "Julia stdlib LinearAlgebra, Printf and Random; MPFR_jll 4 (conversions and the optional transcendental fallback); SIMD.jl 3. Weak dependencies: CUDA.jl, AMDGPU.jl and oneAPI.jl for GPU extensions.",
+    "min_toolchain": "Julia 1.6 (Project.toml compat), package version 3.3.2",
+    "platforms": "Any IEEE 754 CPU in round-to-nearest mode (x86 and ARM work out of the box per the README); FMA hardware needed for speed; NVIDIA, AMD and Intel GPUs through extensions",
+    "thread_safety": "not documented; values are immutable isbits structs and the arithmetic is pure, but use_bigfloat_transcendentals() redefines Base methods through eval and should be called once at startup",
+    "drop_in_for_baseline": "partial: a drop-in AbstractFloat for BigFloat or Float128 in generic Julia code at fixed 106/159/212-bit precision, but with no Inf semantics, no arbitrary or run-time precision, and trigonometric functions only through the opt-in BigFloat fallback"
+  },
+  "gotchas": [
+    "Rare non-unique representations: about 1 in 2^53 values has several normalized forms, so use MultiFloats.canonize before bitwise hashing or equality on limbs.",
+    "Mixed-type promotion: multiplying Float64x4 by UInt8 or Float32 promotes to the full Float64x4 product (open issue #34: about 250 us vs 170 us for a Float64 scalar). Convert small scalars to Float64 first.",
+    "Generic LinearAlgebra solver paths can be slower than with DoubleFloats.jl despite faster matmul (open issue #85: 20x20 SDP 3.42 s vs 2.95 s for Double64).",
+    "v3.0 fixed correctness bugs from v2.0: denormalized results that caused spurious accuracy loss (issues #42 and #45), prevfloat and nextfloat skipping values, and non-commutative multiplication. Pin v3 or later."
+  ],
+  "pick_this_over_siblings_when": "Pick it over DoubleFloats.jl when you need triple or quad-double (Float64x3/x4), SIMD vector types or GPU kernels, or the claimed 2x speedup at double-double. Pick TLFloat or simd-f128 instead when you need C or C++ code (TLFloat when you also need IEEE binary128 semantics), and MPLAPACK's dd/qd backends for C++ BLAS/LAPACK at this precision.",
+  "verified_claims_summary": "The only package-level evidence is a first-party README sentence: at 30-digit precision it is 30x faster than Julia BigFloat (MPFR), 6x faster than Quadmath.jl (libquadmath) and 2x faster than DoubleFloats.jl. No table, hardware, Julia version or package version accompanies it, and the earlier QR/pseudoinverse benchmark gist has code but no recorded output. Search snippets say the peer-reviewed SC25 paper (not opened, host blocked) measures a C++ prototype of the same algorithms against GMP 6.3.0, MPFR 4.2.1 and FLINT 3.2.1, not this Julia package.",
+  "status_note": "Actively maintained (v3.3.2, last commit 2026-09-16, 159 stars) and MIT-licensed, but usable only from Julia; C++ users would port the published networks or start from the benchmark header.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/dzhang314/MultiFloats.jl/HEAD/README.md",
+    "https://raw.githubusercontent.com/dzhang314/MultiFloats.jl/HEAD/Project.toml",
+    "https://github.com/dzhang314/MultiFloats.jl/tree/master/src",
+    "https://raw.githubusercontent.com/dzhang314/MultiFloats.jl/HEAD/src/MultiFloats.jl",
+    "https://raw.githubusercontent.com/dzhang314/MultiFloats.jl/HEAD/src/mfadd.jl",
+    "https://raw.githubusercontent.com/dzhang314/MultiFloats.jl/HEAD/src/mfmul.jl",
+    "https://raw.githubusercontent.com/dzhang314/MultiFloats.jl/HEAD/src/exp.jl",
+    "https://raw.githubusercontent.com/dzhang314/MultiFloats.jl/HEAD/src/log.jl",
+    "https://raw.githubusercontent.com/dzhang314/MultiFloats.jl/HEAD/src/Reproducible.jl",
+    "https://github.com/dzhang314/MultiFloats.jl/issues",
+    "https://github.com/dzhang314/MultiFloats.jl/issues/85",
+    "https://github.com/dzhang314/MultiFloats.jl/issues/34",
+    "https://raw.githubusercontent.com/dzhang314/MultiprecisionBenchmarks/HEAD/README.md",
+    "https://raw.githubusercontent.com/dzhang314/MultiprecisionBenchmarks/HEAD/multifloats/MultiFloats.hpp"
+  ],
+  "confidence": 0.75
+}

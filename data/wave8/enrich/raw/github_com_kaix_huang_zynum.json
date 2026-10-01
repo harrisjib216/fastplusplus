@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/kaix-huang/zynum",
+  "one_liner": "Zig BLAS 1-3 with CBLAS/Fortran ABI and SME kernels; about 2x OpenBLAS GEMM on Apple M5, roughly even with Accelerate.",
+  "what_it_does": "Zynum is a Zig-native implementation of BLAS levels 1-3 for real and complex types (no LAPACK). It exports standard Fortran symbols (dgemm_, zaxpy_, ...) and CBLAS symbols (cblas_dgemm, ...) with generated headers (<zynum/blas/cblas.h>), a Fortran module and pkg-config files, so C/C++ code links it as libzynum_blas in place of another LP64 BLAS. Zig users also get a typed API (matrixMultiply, matrixVectorMultiply) with checked views and explicit workspace.",
+  "how_it_is_fast": "One library carries separately compiled ISA tiers (baseline, SVE2, SME, SME2, SME2p1, AVX, AVX2+FMA, AVX-512) and picks one at load time from sysctl/HWCAP/CPUID, so a baseline build still reaches Apple M4/M5 SME streaming outer-product kernels, the likely source of its 2-4x lead over OpenBLAS's NEON code on M5. GEMM goes through a catalog/tuning/planner layer that chooses among packed-panel, direct, vector-edge (GEMV-like) and, for complex, 3-real-multiply or 4-real-multiply plane decompositions per shape. Work is split across a persistent std.Io thread pool by disjoint output tiles; an Apple AMX route exists but is off unless built with -Dapple-amx=true.",
+  "when_to_use": [
+    "Apple M4/M5-class Macs (SME/SME2) where you want a portable CBLAS/Fortran BLAS faster than OpenBLAS: median 2.15x GEMM GFLOP/s over OpenBLAS 0.3.34 across 168 cases on an M5",
+    "Complex GEMM on Apple Silicon: cgemm and zgemm medians are 1.21x and 1.47x Accelerate in the published sweep (zgemm 1024^3: 598 vs 407 GFLOP/s)",
+    "Medium-to-large square or rectangular GEMM (n of a few hundred to 1024) with all cores in use",
+    "Zig projects that want a typed, bounds-checked BLAS API with no external dependencies"
+  ],
+  "when_not_to_use": [
+    "Small or irregular shapes (m, n about 31-129 with k about 31-33): Zynum runs at 0.16-0.22x Accelerate there, and m17_n2048_k257 sgemm is 107 vs 429 GFLOP/s (Accelerate) and 203 (OpenBLAS)",
+    "Real sgemm/dgemm on macOS when Accelerate is available: medians are 0.92x and 0.99x of Accelerate",
+    "x86-64 or Linux servers: AVX/AVX2/AVX-512 tiers exist but no native x86 performance numbers are published, and Windows correctness rows are pending",
+    "Anything needing LAPACK, ILP64 (64-bit integer) BLAS, or a stable API: Level 1-3 only, 32-bit BLAS integers, 0.0.1-beta with dispatch policy subject to change",
+    "Projects that cannot accept LGPL-3.0-or-later linking terms"
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "none at runtime (static and shared libraries are both built); Zig 0.16 to build; Python 3 for the benchmark tooling",
+    "min_toolchain": "Zig 0.16.0 (minimum_zig_version in build.zig.zon); any C or Fortran compiler for consumers",
+    "platforms": "aarch64 macOS (benchmarked on Apple M5 with SME/SME2), aarch64 Linux (HWCAP detection, link-only CI row), x86-64 Linux and Windows (SSE2/AVX/AVX2/AVX-512 tiers, no published performance)",
+    "thread_safety": "Process-wide thread pool with documented concurrent-caller, shutdown/restart and thread-cap tests; per-thread cached workspace; ZYNUM_MAXIMUM_THREADS must be set before the first call; call zynum_blas_shutdown() before dlclose",
+    "drop_in_for_baseline": "partial — exports standard Fortran (dgemm_) and CBLAS (cblas_dgemm) symbols with 32-bit integers, so it replaces an LP64 OpenBLAS for BLAS 1-3, but it has no LAPACK, no ILP64 build, and no OpenBLAS-specific extensions"
+  },
+  "gotchas": [
+    "Default thread count is the full CPU count; set ZYNUM_MAXIMUM_THREADS before the first BLAS call (later changes are ignored)",
+    "CBLAS entry points silently return without touching outputs on invalid enum/layout arguments instead of calling xerbla",
+    "Do not compile Fortran callers with -fdefault-integer-8: the BLAS integer is 32-bit",
+    "The benchmark manifest (source.json, measured 2026-09-21) marks the measured working tree dirty on top of base revision 6a989d0, so the timed code is identified by content hashes rather than a commit"
+  ],
+  "pick_this_over_siblings_when": "Pick Zynum over GEMM-only Apple kernels such as sme-gemm, MaxMulSK or apple-bottom when you need a whole BLAS 1-3 library with CBLAS and Fortran ABI and complex types, not one fast GEMM; pick Apple Accelerate itself for real sgemm/dgemm or small shapes on macOS, and OpenBLAS or BLIS on x86.",
+  "verified_claims_summary": "The author's fresh-process interleaved sweep on an Apple M5 (10 logical CPUs, macOS 27.0, Zig 0.16.0, -Dcpu=baseline -Ddispatch=dynamic ReleaseFast) over 42 NN column-major shapes per s/d/c/zgemm shows median 2.15x OpenBLAS 0.3.34 (10 threads), with Zynum faster in 146 of 168 cases, and median 1.11x Accelerate (faster in 100 of 168), e.g. sgemm 1024^3 1999 vs 473 (OpenBLAS) and 1925 (Accelerate) GFLOP/s; correctness is sampled only.",
+  "status_note": "Weeks-old beta (0.0.1-beta, 42 commits, 0 stars, last commit 2026-09-23) under LGPL-3.0-or-later; usable for evaluation, but expect API and dispatch changes and verify on your own hardware.",
+  "sources_read": [
+    "https://github.com/kaix-huang/Zynum",
+    "https://github.com/kaix-huang/Zynum/issues",
+    "https://raw.githubusercontent.com/kaix-huang/Zynum/HEAD/README.md",
+    "https://raw.githubusercontent.com/kaix-huang/Zynum/HEAD/docs/performance/README.md",
+    "https://raw.githubusercontent.com/kaix-huang/Zynum/HEAD/docs/assets/benchmarks/current/gemm.csv",
+    "https://raw.githubusercontent.com/kaix-huang/Zynum/HEAD/docs/assets/benchmarks/current/gemm.csv.meta.json",
+    "https://raw.githubusercontent.com/kaix-huang/Zynum/HEAD/docs/assets/benchmarks/current/source.json",
+    "https://raw.githubusercontent.com/kaix-huang/Zynum/HEAD/build.zig.zon",
+    "https://raw.githubusercontent.com/kaix-huang/Zynum/HEAD/build.zig",
+    "https://raw.githubusercontent.com/kaix-huang/Zynum/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/kaix-huang/Zynum/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/kaix-huang/Zynum/HEAD/SECURITY.md",
+    "https://raw.githubusercontent.com/kaix-huang/Zynum/HEAD/docs/architecture.md",
+    "https://raw.githubusercontent.com/kaix-huang/Zynum/HEAD/docs/roadmap.md",
+    "https://raw.githubusercontent.com/kaix-huang/Zynum/HEAD/docs/users/README.md",
+    "https://raw.githubusercontent.com/kaix-huang/Zynum/HEAD/docs/development_and_usage.md",
+    "https://raw.githubusercontent.com/kaix-huang/Zynum/HEAD/docs/fortran_compatibility.md",
+    "https://raw.githubusercontent.com/kaix-huang/Zynum/HEAD/docs/common/gemm_optimization_notes.md",
+    "https://raw.githubusercontent.com/kaix-huang/Zynum/HEAD/docs/aarch64/gemm_aarch64_optimization_notes.md",
+    "https://raw.githubusercontent.com/kaix-huang/Zynum/HEAD/docs/x86_64/gemm_x86_64_optimization_notes.md"
+  ],
+  "confidence": 0.8
+}

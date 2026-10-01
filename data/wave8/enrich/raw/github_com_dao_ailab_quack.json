@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/dao-ailab/quack",
+  "one_liner": "Python CuTe-DSL GPU kernels for RMSNorm, softmax and cross-entropy that reach about 3 TB/s on H100, beating torch.compile and Liger.",
+  "what_it_does": "A pip package (quack-kernels) of hand-written NVIDIA kernels in CUTLASS's Python CuTe-DSL, JIT-compiled at first use and called from PyTorch: `from quack import rmsnorm, softmax, cross_entropy`, plus layernorm, a QuackRMSNorm subclass of torch.nn.RMSNorm, autograd backward passes and torch.library custom ops. It also ships Hopper, Blackwell and Blackwell-GeForce GEMM-with-epilogue kernels, top-k, rotary and fused linear-cross-entropy modules, and optional JAX bindings (softmax via jax-tvm-ffi with a custom VJP). There is no C++ API; the kernels exist only as Python DSL source.",
+  "how_it_is_fast": "Each row is read from HBM once with 128-bit coalesced cp.async loads into shared memory and registers, then reduced hierarchically: thread, warp (butterfly shuffle), block (shared memory) and, on Hopper and newer, thread-block cluster reduction over distributed shared memory (DSMEM), where up to 16 SMs pool their shared memory. That lets a 3-pass softmax keep a 65k-262k element row on chip instead of re-reading it, whereas torch.compile's Triton softmax reads the input twice and Liger's softmax spills registers above 32k (blog NCU analysis). The reported metric is model memory throughput (minimum bytes over time), so most of the gain over torch.compile comes from moving fewer bytes, not from faster DRAM access.",
+  "when_to_use": [
+    "LLM training or inference on H100, B200/B300 or RTX 50 GPUs where RMSNorm, softmax or cross-entropy shows up in profiles, especially with very wide rows (vocab-size cross-entropy, reduction dim 65k and up), where the blog says QuACK beats every baseline.",
+    "Replacing torch.compile-generated norm or softmax kernels in eager PyTorch code; at reduction dim 262k FP32 softmax it reports 3.01 vs 1.89 TB/s.",
+    "Fused RMSNorm with residual add, prenorm output, per-head (B, S, H, D) weights or Gemma-style weight_offset in a single kernel.",
+    "Teams that want readable kernel source to adapt: the blog walks through the TV-layout, load strategy and reduction helpers used in rmsnorm.py and softmax.py.",
+    "JAX users needing a fast softmax on Hopper/Blackwell via the optional jax extra."
+  ],
+  "when_not_to_use": [
+    "A100, Ada (RTX 40) or older GPUs, or AMD: the README lists only H100, B200/B300 and RTX 50 (issue #21 asks about Ada, and a ROCm backend is only an RFC, #178). Cluster reduction, the source of the long-row advantage, needs sm90+.",
+    "C++ or non-Python inference engines: kernels are Python CuTe-DSL compiled at runtime through nvidia-cutlass-dsl, so there is nothing to link from C++.",
+    "Small reduction dims (under about 4k), where the blog claims no advantage and the per-size results exist only in a figure.",
+    "Inside a larger torch.compile graph: open issue #77 reports rmsnorm_fwd going from 0.0413 ms (4685 GB/s) to 0.1067 ms (1815 GB/s) on B200 when wrapped in torch.compile.",
+    "Environments pinned to older toolchains: it needs CUDA 12.9+, a recent nvidia-cutlass-dsl (>=4.7) and Python 3.12 per the README, and several open issues (#187, #188) are crashes from API drift in cuda-bindings and CUTLASS."
+  ],
+  "integration": {
+    "form": "module (pip package quack-kernels; Python CuTe-DSL kernels JIT-compiled at first call)",
+    "dependencies": "nvidia-cutlass-dsl>=4.7 (cu13 extra for CUDA 13), torch, apache-tvm-ffi>=0.1.6,<0.2, einops; optional nvidia-matmul-heuristics, jax + jax-tvm-ffi",
+    "min_toolchain": "CUDA toolkit 12.9+, Python 3.12 (README; pyproject declares >=3.10)",
+    "platforms": "NVIDIA H100 (sm90), B200/B300 (sm100) and RTX 50 (sm120) per the README; OS not documented",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": "partial — QuackRMSNorm subclasses torch.nn.RMSNorm and quack.softmax/cross_entropy are function-level swaps for torch.softmax and F.cross_entropy, but only for supported GPUs, dtypes (fp16, bf16, fp32) and shapes (softmax takes 2D (M, N) only)"
+  },
+  "gotchas": [
+    "Kernels are compiled per dtype and row length N on first call (jit_cache), so new hidden or vocab sizes pay a one-time compile; issue #166 asks to bucket N in the norm forward cache key.",
+    "Softmax forward multiplies by an approximate reciprocal (rcp_approx) of the denominator, so outputs differ slightly from torch.softmax; layernorm requires 2D input and fp32 weight and bias.",
+    "Importing quack monkey-patches CuTe's tensor classes process-wide (quack.dsl indexing sugar), which can surprise other CuTe-DSL code in the same process.",
+    "The blog's cross-entropy comparison with Liger is disputed: issue #9 notes that Liger's CE forward also computes the gradient, so timing forward alone understates Liger, and the current benchmarks/benchmark_cross_entropy.py compares only quack against torch.compile."
+  ],
+  "pick_this_over_siblings_when": "Pick QuACK over Liger-Kernel when you are on H100/B200-class GPUs and need the fastest standalone norm, softmax or cross-entropy, especially with rows of 65k elements or more, where Liger spills registers or does not support the size. Liger-Kernel is the easier choice for patching Hugging Face models' RMSNorm, RoPE, SwiGLU and cross-entropy in one step. FlashAttention-3 and ThunderKittens cover attention and GEMM, not these reductions.",
+  "verified_claims_summary": "The authors' July 2025 blog measures model memory throughput of RMSNorm, softmax and cross-entropy (forward and backward, FP32 and BF16, batch 8k-32k, reduction dim 256-262k) on one H100 80GB HBM3 (3.35 TB/s peak) with a Xeon Platinum 8468 host, against torch.compile (PyTorch 2.7.1, default mode), Liger Kernel v0.5.10 (up to 65k only) and cuDNN v9.10.1 (RMSNorm only). QuACK holds about 3 TB/s (about 90% of peak) above 4k and reaches 3.01 vs 1.89 TB/s for FP32 softmax at 262k (about 1.59x, derived from page data, which the blog calls 'nearly 50% more'); CuTe-DSL and CUDA versions are not stated and the per-size numbers are only in a figure.",
+  "status_note": "Actively developed (Apache-2.0, about 1.2k stars, 48 PyPI releases from 0.1.0 on 2025-06-20 to 0.6.5 on 2026-09-11, last commit 2026-09-13), but pre-1.0 and tracking fast-moving CUTLASS DSL releases, so pin versions.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/Dao-AILab/quack/HEAD/README.md",
+    "https://raw.githubusercontent.com/Dao-AILab/quack/HEAD/media/2025-07-10-membound-sol.md",
+    "https://raw.githubusercontent.com/Dao-AILab/quack/HEAD/pyproject.toml",
+    "https://raw.githubusercontent.com/Dao-AILab/quack/HEAD/quack/__init__.py",
+    "https://raw.githubusercontent.com/Dao-AILab/quack/HEAD/quack/rmsnorm.py",
+    "https://raw.githubusercontent.com/Dao-AILab/quack/HEAD/quack/softmax.py",
+    "https://raw.githubusercontent.com/Dao-AILab/quack/HEAD/quack/cross_entropy.py",
+    "https://raw.githubusercontent.com/Dao-AILab/quack/HEAD/docs/jax.md",
+    "https://raw.githubusercontent.com/Dao-AILab/quack/HEAD/benchmarks/benchmark_cross_entropy.py",
+    "https://github.com/Dao-AILab/quack/tree/main/quack",
+    "https://github.com/Dao-AILab/quack/issues",
+    "https://github.com/Dao-AILab/quack/issues/9",
+    "https://github.com/Dao-AILab/quack/issues/77",
+    "https://pypi.org/pypi/quack-kernels/json"
+  ],
+  "confidence": 0.8
+}

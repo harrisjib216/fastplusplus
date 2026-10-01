@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/el-oso/pureblas.jl",
+  "one_liner": "Pure-Julia BLAS 1-3 plus LAPACK that matches or beats single-threaded OpenBLAS and AOCL on AMD Zen3/4/5.",
+  "what_it_does": "PureBLAS.jl reimplements BLAS levels 1-3 (real and complex) and the LAPACK routines Julia's LinearAlgebra calls (Cholesky, LU, QR, SVD, eigensolvers, banded, packed and tridiagonal solvers) in about 36k lines of Julia with no Fortran, C or assembly. Inside Julia you either call PureBLAS.gemm!/potrf!/... directly (generic over T<:Number, so ForwardDiff duals pass through) or call PureBLAS.activate(), which registers its entry points with libblastrampoline so every LinearAlgebra BLAS/LAPACK call is rerouted with no code changes. For C/C++/Rust it builds libpureblas.so via juliac --trim, exporting 492 ILP64 Fortran-ABI symbols (dgemm_64_, dgesvd_64_, ...) with an embedded Julia runtime.",
+  "how_it_is_fast": "Block sizes (MC/NC/KC, panel widths, crossovers) are derived at load time from detected cache sizes, vector width and register count instead of per-CPU hand-tuned tables, feeding a GotoBLAS-style packed GEMM engine with SIMD.jl microkernels. Above about min(m,n,k) >= 256, real gemm switches to Strassen-Winograd and complex gemm to Karatsuba 3M (three real products, 25% fewer flops), which is where much of the large-n BLAS-3 lead comes from. LAPACK routines are blocked ports (dlatrd/syr2k reduction, compact-WY back-transform, divide-and-conquer stedc, blocked dlaqps, dlasyf/zlahef) with fixes for power-of-two leading-dimension cache-set aliasing, and nrm2 scales only on overflow/underflow rather than always (hence 7-11x over OpenBLAS there).",
+  "when_to_use": [
+    "Julia code on AMD Zen3/Zen4/Zen5 that is dominated by single-threaded dense factorizations: the project's own tables show median 1.1-1.8x over OpenBLAS for potrf, geqrf, getrf, gesvd and syev",
+    "Forward-mode AD through linear algebra in Julia: ForwardDiff duals run through the generic kernels, 1.1-50x faster than LinearAlgebra's generic fallback in the dual tables",
+    "Large real or complex gemm (n >= 256) where Strassen-Winograd or 3M rounding behaviour is acceptable",
+    "Swapping BLAS backends in an existing Julia program with one activate() call to A/B test against OpenBLAS"
+  ],
+  "when_not_to_use": [
+    "Production C/C++ code: the libpureblas.so path depends on experimental juliac --trim, embeds a Julia runtime, exports only ILP64 Fortran symbols (no CBLAS header documented), and the shared library is single-threaded because juliac builds with handle-signals=no",
+    "Apple Silicon: the roadmap measures PureBLAS gemm at about 0.68x OpenBLAS at n=2048 on an M-series part, and Accelerate's SME path is about 7x faster than any NEON code; SME work is still a campaign",
+    "Intel or Arm servers in general: every published gate number is from three AMD Ryzen machines; no Intel results exist",
+    "Code that needs classical O(n^3) gemm error bounds or bitwise agreement with reference BLAS: large gemm/zgemm use fast algorithms",
+    "Multi-threaded throughput against threaded vendor BLAS: threading is opt-in and recent, and the threaded-gate plots for Zen4 are flagged as not yet adjudicable"
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "Julia packages CPUSummary, CpuId, SIMD, PrecompileTools, Preferences, StrictMode, TypeContracts (LinearAlgebra stdlib); ForwardDiff optional extension. Not registered in the General registry; install from the git URL.",
+    "min_toolchain": "Julia 1.13 (the only supported and CI-tested release)",
+    "platforms": "x86-64 with AVX2 or AVX-512 (benchmarked only on AMD Zen3/4/5); runs on Apple Silicon/aarch64 via NEON but slower than OpenBLAS there; shared library built on Linux in CI, macOS .dylib path exists",
+    "thread_safety": "Per-thread scratch (Base.OncePerThread) and allocation-free ! entries at steady state; internal threading of gemm/symm/syrk/syr2k/trsm (and getrf/potrf through them) is off by default and enabled with PureBLAS.set_num_threads(n). Not available in the .so.",
+    "drop_in_for_baseline": "partial — inside Julia, PureBLAS.activate() reroutes every LinearAlgebra BLAS/LAPACK symbol (enforced by a test); outside Julia, libpureblas.so exports ILP64 Fortran symbols (dgemm_64_ etc.) like an ILP64 OpenBLAS, but LP64 and CBLAS interfaces are not documented and the route is experimental"
+  },
+  "gotchas": [
+    "Do not load libpureblas.so into a running Julia process (or lbt_forward to it): the embedded libjulia double-initializes and aborts; use activate() instead",
+    "Calls routed through activate() go through the C ABI, so Dual numbers cannot pass; call PureBLAS.* directly for AD (reverse mode is not supported at all)",
+    "Singular vectors are only available for Float64 and complex; the generic path raises an error rather than returning less",
+    "v0.1.2 fixed a MethodError in complex gemv trans='T'/'C' for any A larger than L2 (which could make eigen() on complex Hermitian matrices throw); live 2026-08-08 to 2026-08-29, so pin to v0.1.2 or later"
+  ],
+  "pick_this_over_siblings_when": "Pick PureBLAS over Octavian.jl when you need full BLAS plus LAPACK in Julia rerouted through libblastrampoline rather than a threaded gemm alone, and over RecursiveFactorization.jl when you want every factorization, not just LU, replaced. For small cache-resident matrices in C, BLASFEO is the mature choice; for C++ code that just needs a faster BLAS, Eigen or a vendor BLAS is far less risky than PureBLAS's experimental shared library.",
+  "verified_claims_summary": "The author's harness (bench/plots.jl, single thread, frequency-locked, ABBA-interleaved rounds, median ratio) on a Ryzen 9 5900X (Zen3), Ryzen 5 7640U (Zen4) and Ryzen AI 5 340 (Zen5) laptop under Julia 1.13 against Julia's bundled OpenBLAS and AOCL_jll shows per-op median ratios such as gemm 1.17/1.08/1.23 and geqrf 1.55/1.79/1.66 vs OpenBLAS, with about 87% of 2619 cells at or above max(OpenBLAS, AOCL); worst cells lose (gemm 0.94 on Zen4, 0.90 on Zen5) and about 30% of cells sit within +-5% of parity.",
+  "status_note": "Very active (1,368 commits, last 2026-09-30) but weeks-to-months old, 9 stars, tagged v0.1.2 and deliberately unregistered; MIT-licensed, so it is easy to try inside Julia, while the C-callable library is experimental.",
+  "sources_read": [
+    "https://github.com/el-oso/PureBLAS.jl",
+    "https://github.com/el-oso/PureBLAS.jl/issues",
+    "https://raw.githubusercontent.com/el-oso/PureBLAS.jl/HEAD/README.md",
+    "https://raw.githubusercontent.com/el-oso/PureBLAS.jl/HEAD/Project.toml",
+    "https://raw.githubusercontent.com/el-oso/PureBLAS.jl/HEAD/bench/gen_table.md",
+    "https://raw.githubusercontent.com/el-oso/PureBLAS.jl/HEAD/bench/gen_table_aocl.md",
+    "https://raw.githubusercontent.com/el-oso/PureBLAS.jl/HEAD/bench/provenance.md",
+    "https://raw.githubusercontent.com/el-oso/PureBLAS.jl/HEAD/docs/src/methodology.md",
+    "https://raw.githubusercontent.com/el-oso/PureBLAS.jl/HEAD/docs/src/notes.md",
+    "https://raw.githubusercontent.com/el-oso/PureBLAS.jl/HEAD/docs/src/performance.md",
+    "https://raw.githubusercontent.com/el-oso/PureBLAS.jl/HEAD/docs/src/threading.md",
+    "https://raw.githubusercontent.com/el-oso/PureBLAS.jl/HEAD/ROADMAP.md",
+    "https://raw.githubusercontent.com/el-oso/PureBLAS.jl/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/el-oso/PureBLAS.jl/HEAD/juliac/ctest.c",
+    "https://raw.githubusercontent.com/el-oso/PureBLAS.jl/HEAD/juliac/build.jl"
+  ],
+  "confidence": 0.8
+}

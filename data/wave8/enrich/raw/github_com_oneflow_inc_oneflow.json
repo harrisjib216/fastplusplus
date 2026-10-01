@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/oneflow-inc/oneflow",
+  "one_liner": "Distributed deep learning training framework (C++/CUDA core, PyTorch-like Python API); vendor DLPerf shows 1.1-1.5x NGC PyTorch/MXNet on 32 V100s.",
+  "what_it_does": "A complete deep learning framework: eager tensors with a PyTorch-like Python API (the v0.5.0 release notes advertise `import oneflow as torch`), plus nn.Graph, a static-graph compiler for training and deployment. Global Tensor annotates each tensor with a placement and an SBP signature (split, broadcast, partial-sum) so data, model and pipeline parallelism across nodes are written as annotations instead of hand-placed communication. The C++ core (oneflow/core: actor runtime, boxing, ccl, kernels, job rewriters) is reached through Python; the CMake option BUILD_CPP_API, which builds a C++ API, is marked beta and is off by default.",
+  "how_it_is_fast": "Per the OneFlow paper (arXiv 2110.15032; abstract read via WebSearch, PDF not opened), the speed comes from two ideas: the SBP abstraction, which lets the compiler insert the needed collective ('boxing') operations automatically, and an actor-model runtime where each op is an actor that runs when its inputs and its output buffers are ready, so compute, data movement and communication overlap without a central scheduler. The DLPerf numbers point to scaling rather than per-kernel speed: on one V100, ResNet-50 FP32 is 397.64 vs 392.24 img/s for NGC MXNet (about 1.4%, derived from page data), widening to 12411.97 vs 11331.93 at 32 GPUs. The build also enables fused/fast-math softmax and layer-norm kernels by default (OF_SOFTMAX_USE_FAST_MATH, OF_LAYER_NORM_USE_FAST_MATH).",
+  "when_to_use": [
+    "Multi-node, multi-GPU training on NVIDIA clusters where you want data, tensor (model) and pipeline parallelism expressed through placement/SBP annotations instead of hand-written NCCL calls.",
+    "Large embedding or recommendation (Wide&Deep-style) training: DLPerf shows OneFlow 0.2.0 holding about 22.4 ms per iteration up to 819.2M-row vocabularies, while HugeCTR 2.2 ran out of memory above 25.6M rows.",
+    "Teams that already write PyTorch-style code and want a static-graph compile step (nn.Graph) with ZeRO, gradient accumulation and activation checkpointing built in.",
+    "Chinese accelerator targets: recent commits add Ascend NPU, Cambricon MLU and KunLunXin XPU device support."
+  ],
+  "when_not_to_use": [
+    "As a kernel library to drop into an existing C++ or PyTorch codebase: it is a whole framework, and the C++ API is beta and off by default.",
+    "Single-GPU training: the vendor's own numbers show near parity with NGC MXNet on one V100 (about 1.4% FP32), so the claimed gains appear only at multi-node scale.",
+    "Projects that need current releases and fast bug turnaround: PyPI stops at 0.9.0 (2023-01-07), v1.0.0 exists only as a GitHub release, the last commit was 2025-08-20, and performance issues such as #10437 (slow elementwise template on RTX 3090) have no visible maintainer reply.",
+    "Comparisons on modern hardware: every published framework-vs-framework number is from 2020 (OneFlow 0.2.0, V100, CUDA 10.2) against 2020 NGC containers; nothing shows the gap still holds against current PyTorch.",
+    "Windows or macOS hosts: the README lists Linux only, with Python 3.7 to 3.11, and the PyPI wheels are x86-64 manylinux only."
+  ],
+  "integration": {
+    "form": "module (Python package with a C++/CUDA shared-library core; pip wheels or CMake source build)",
+    "dependencies": "CUDA Toolkit 10.0+ and cuDNN for GPU builds, NCCL, oneDNN (WITH_ONEDNN on by default), OpenBLAS, nasm, protobuf/gRPC-era third-party libraries built by the CMake THIRD_PARTY step; optional MLIR, RDMA",
+    "min_toolchain": "C++17 (CMAKE_CXX_STANDARD 17), CMake 3.18+, CUDA 10.0+ with driver 440.33+, Python 3.7-3.11",
+    "platforms": "Linux x86-64; NVIDIA GPUs with compute capability 6.0+ (Pascal and newer); CPU-only builds; Ascend NPU, Cambricon MLU and KunLunXin XPU backends in recent commits",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": "partial — the API mirrors PyTorch (oneflow.mock_torch can redirect `torch` imports), but it is a separate framework with its own runtime, kernels and model files, not a replacement for PyTorch, TensorFlow or MXNet internals"
+  },
+  "gotchas": [
+    "Softmax and layer-norm kernels are compiled with fast-math variants by default (OF_SOFTMAX_USE_FAST_MATH and OF_LAYER_NORM_USE_FAST_MATH are ON), which can change low-order bits compared with PyTorch.",
+    "The headline BERT comparison against MXNet is run without gradient clipping (gluon-nlp lacks clip_by_global_norm); at AMP batch 64 on 32 GPUs, MXNet without clipping (11269.14) is slightly ahead of OneFlow without clipping (11195.72).",
+    "Sources in the DLPerf table disagree: the README summary lists NGC MXNet ResNet-50 FP32 at 11233.92 img/s, while the report's 4x8 row gives 11331.93.",
+    "The CUDA build cache defaults to RelWithDebInfo and shared libraries; the README's source build expects CUDA_TOOLKIT_ROOT_DIR and CUDNN_ROOT_DIR to be set, and NCCL may fail under make -j$(nproc) (troubleshooting doc)."
+  ],
+  "pick_this_over_siblings_when": "The catalogued siblings (LightSeq, ByteTransformer, FasterTransformer, oneDNN Graph Compiler) are kernel or inference libraries that plug into an existing framework; pick OneFlow only when you want to replace the training framework itself to get SBP-based multi-node parallelism. If you just need faster transformer layers inside PyTorch training, LightSeq is the smaller change.",
+  "verified_claims_summary": "OneFlow's own DLPerf report (Oct 2020) trains ResNet-50 v1.5 and BERT-base on 4 nodes x 8 V100-SXM2-16GB (Xeon Gold 5118 hosts, 100 Gb/s InfiniBand, CUDA 10.2) with each framework's official or NVIDIA DeepLearningExamples scripts, taking the median of repeated 100-step runs. OneFlow 0.2.0 reached 12411.97 img/s FP32 and 33141.02 img/s AMP on ResNet-50 vs 10917.09 and 22551.16 for NGC PyTorch 20.03 (about 1.14x and 1.47x) and 11331.93 and 30713.68 for NGC MXNet (about 1.10x and 1.08x), and 15724.70 vs 10349.12 sentences/s (about 1.52x) on BERT AMP against NGC PyTorch; ratios derived from page data, no compiler flags given for any framework.",
+  "status_note": "Stale: last commit 2025-08-20 (NPU multinomial support), with the newest PyPI wheel 0.9.0 from 2023-01-07, though the repo is not archived, is Apache-2.0 and has about 9.4k stars; treat it as a framework to evaluate, not a library to vendor.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/Oneflow-Inc/oneflow/HEAD/README.md",
+    "https://github.com/Oneflow-Inc/oneflow",
+    "https://github.com/Oneflow-Inc/oneflow/releases",
+    "https://github.com/Oneflow-Inc/oneflow/commits",
+    "https://github.com/Oneflow-Inc/oneflow/tree/master/oneflow/core",
+    "https://raw.githubusercontent.com/Oneflow-Inc/oneflow/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/Oneflow-Inc/oneflow/HEAD/cmake/caches/international/cuda.cmake",
+    "https://raw.githubusercontent.com/Oneflow-Inc/oneflow/HEAD/docs/source/troubleshooting.md",
+    "https://github.com/Oneflow-Inc/oneflow/issues?q=is%3Aissue+is%3Aopen+performance",
+    "https://github.com/Oneflow-Inc/oneflow/issues/10437",
+    "https://raw.githubusercontent.com/Oneflow-Inc/DLPerf/HEAD/README.md",
+    "https://raw.githubusercontent.com/Oneflow-Inc/DLPerf/HEAD/reports/dlperf_benchmark_test_report_v1.md",
+    "https://pypi.org/pypi/oneflow/json",
+    "WebSearch: OneFlow paper abstract (arXiv 2110.15032, SBP and actor model)"
+  ],
+  "confidence": 0.7
+}

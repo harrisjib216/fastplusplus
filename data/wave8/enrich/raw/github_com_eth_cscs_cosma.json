@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/eth-cscs/cosma",
+  "one_liner": "Communication-optimal distributed (MPI) matrix multiply with a ScaLAPACK p?gemm drop-in; beats MKL ScaLAPACK and Cray LibSci pdgemm.",
+  "what_it_does": "COSMA multiplies matrices distributed over MPI ranks (float, double, and both complex types, with transpose/conjugate) on CPUs or NVIDIA/AMD GPUs. Built with COSMA_SCALAPACK set, it provides pdgemm/psgemm/pzgemm/pcgemm with the exact ScaLAPACK signatures, so linking libcosma_pxgemm ahead of ScaLAPACK reroutes existing p?gemm calls (this is how CP2K uses it). Code not on ScaLAPACK can pass its own grid layout to multiply_using_layout or use COSMA's native blocked layout for the best speed; C, Fortran and Julia (COSMA.jl) interfaces exist.",
+  "how_it_is_fast": "It derives a near-optimal sequential schedule from a red-blue pebble game I/O lower bound and then parallelizes it, choosing the processor decomposition from m, n, k, p and memory instead of fixing a 2D (SUMMA) or 2.5D grid upfront; it may idle some ranks to get a better grid. The paper reports up to sqrt(3) less communication than 2D/3D algorithms, which matters most for tall-and-skinny shapes. Buffers are preallocated and reused, local reshuffling is minimized via the COSTA layout-transform library, communication can overlap computation, and GPU runs pipeline tiles through Tiled-MM (cuBLAS/rocBLAS) with optional NCCL/RCCL or GPU-aware MPI.",
+  "when_to_use": [
+    "Distributed dense GEMM on clusters, especially tall-and-skinny or otherwise non-square shapes where 2D ScaLAPACK grids waste communication (CP2K RPA: 46 tall-and-skinny pdgemm calls)",
+    "Fortran or C codes already calling ScaLAPACK pdgemm that want a speedup by relinking only",
+    "GPU-accelerated nodes where matrices start in host memory: GPU COSMA was about 1.86x Cray LibSci_acc on 1024 Piz Daint nodes and 1.31x on 128",
+    "Square multiplications at moderate node counts on CPU, where the README plot shows about 2x over MKL ScaLAPACK at n=20000 narrowing to about 1.3x at n=120000"
+  ],
+  "when_not_to_use": [
+    "Single-node or shared-memory GEMM: it is an MPI algorithm that calls a local BLAS (MKL, OpenBLAS, BLIS, cuBLAS, rocBLAS) for the actual work",
+    "Memory-tight runs: open issue #118 reports CP2K gradient pdgemm calls (m=n=17,408, k=3,473,408) running out of CPU/GPU memory where ScaLAPACK fit, needing about 3x the nodes",
+    "Anything beyond GEMM: no factorizations or other PBLAS/ScaLAPACK routines are provided",
+    "Expecting large wins over Intel MKL ScaLAPACK in production on CPU: the CP2K 128-node pdgemm time improved only about 7% (1723.6 s vs 1836.9 s)",
+    "Build environments with AMD or other non-MKL/OpenBLAS BLAS and COSMA_BLAS=auto: open issue #171 reports the CMake search stopping early"
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "MPI 3, a BLAS backend (MKL, OpenBLAS, BLIS, ATLAS, Cray LibSci, NVPL, custom, or CUDA/ROCm), optional ScaLAPACK (MKL, Cray LibSci, NVPL, custom) for the p?gemm wrappers, optional NCCL/RCCL; bundled submodules COSTA, Tiled-MM, semiprof, gtest_mpi",
+    "min_toolchain": "C++14 (cxx_std_14), CMake 3.24 per CMakeLists.txt (the README still says 3.17)",
+    "platforms": "Linux clusters with MPI; CPU any architecture with a BLAS, NVIDIA GPUs via CUDA, AMD GPUs via ROCm; Spack and Docker recipes provided",
+    "thread_safety": "not documented (each MPI rank uses OpenMP/BLAS threads set via OMP_NUM_THREADS and MKL_NUM_THREADS)",
+    "drop_in_for_baseline": "partial — the pxgemm wrapper library matches ScaLAPACK p?gemm signatures exactly and is selected by link order, but only the gemm routines are replaced, the layout transform costs some throughput versus the native layout, and ScaLAPACK is still needed for everything else"
+  },
+  "gotchas": [
+    "Link order matters: libcosma_pxgemm must come before any other library providing p?gemm, otherwise the ScaLAPACK version is silently used",
+    "Releases before v2.8.3 (April 2024) read the user's C matrix even when beta=0, so uninitialized or NaN-filled C could corrupt results; the fix shipped in COSTA 2.3.1, so use COSMA 2.8.4 or later",
+    "COSMA_CPU_MAX_MEMORY caps per-rank memory but throws runtime_error if the multiplication cannot fit, and the README marks it as still in testing",
+    "Clone with --recursive: COSTA and Tiled-MM are submodules, and COSMA_BLAS must be set explicitly (the CMake default OFF is a fatal error, despite the README calling MKL the default)"
+  ],
+  "pick_this_over_siblings_when": "Pick COSMA over SPLA (also eth-cscs, pdgemm-compatible) when you want the more general, peer-reviewed algorithm with native-layout and multi-GPU (NCCL/RCCL) options; SPLA's own README claims parity with COSMA on CPU and a lead on GPU, so benchmark both on GPU nodes. Tiled-MM is the single-node GPU engine COSMA itself uses, and node-local BLAS siblings (Eigen, BLASFEO, OpenBLAS forks) solve a different problem.",
+  "verified_claims_summary": "On Piz Daint (Cray XC50 nodes with Xeon E5-2690 v3 and Tesla P100, 2019), CP2K's 128-water RPA benchmark spent 75.3 s in pdgemm with GPU COSMA vs 139.8 s with Cray LibSci_acc 19.10.1 on 1024 nodes; on 128 nodes CPU COSMA took 1723.6 s vs 1836.9 s for MKL 19.0.1.144 ScaLAPACK and 5896.5 s for Cray LibSci. The SC19 paper (abstract via search snippet) reports up to 12.8x and 2.2x average over ScaLAPACK, CARMA and CTF; compiler and flags are not stated.",
+  "status_note": "Maintained by ETH Zurich/CSCS (last commit 2026-07-29, latest release v2.8.4 from April 2024, 219 stars, used in CP2K), BSD-3-Clause, with 7 open issues including memory blow-up and CMake BLAS-detection bugs.",
+  "sources_read": [
+    "https://github.com/eth-cscs/COSMA",
+    "https://github.com/eth-cscs/COSMA/issues",
+    "https://github.com/eth-cscs/COSMA/issues/118",
+    "https://github.com/eth-cscs/COSMA/issues/171",
+    "https://github.com/eth-cscs/COSMA/releases",
+    "https://raw.githubusercontent.com/eth-cscs/COSMA/HEAD/README.md",
+    "https://raw.githubusercontent.com/eth-cscs/COSMA/HEAD/INSTALL.md",
+    "https://raw.githubusercontent.com/eth-cscs/COSMA/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/eth-cscs/COSMA/HEAD/src/cosma/CMakeLists.txt",
+    "https://raw.githubusercontent.com/eth-cscs/COSMA/HEAD/LICENSE",
+    "WebSearch snippet for arXiv 1908.09606 abstract (arxiv.org egress-blocked)"
+  ],
+  "confidence": 0.75
+}
