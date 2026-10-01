@@ -551,6 +551,581 @@ Batched sntrup761/857 post-quantum key exchange for OpenSSL 1.1.1 TLS 1.3; more 
 
 [repo](https://opensslntru.cr.yp.to) · [benchmark](https://opensslntru.cr.yp.to/opensslntru-20211006.pdf)
 
+### numerics-and-science
+
+#### big-integer-arbitrary-precision
+
+##### blip_mp  `Zig`  `no license`  `active`  `Tier A`
+
+Pure-Zig arbitrary-precision integers stored as variable-length BLIP bytes; beats GMP mpz on Apple M4 at i64-sized and 128-8192-bit add/sub/mul.
+
+**Beats:** GMP 6.3.0 (mpz_t; built with assembly and with --disable-assembly) — On an Apple M4 with Zig 0.16.0 ReleaseFast against nixpkgs GMP 6.3.0 (with and without assembly, harness built at -O3, libc malloc on both sides), the author's 3-run medians show i64-range adds 1.95-2.66x faster, 12 of 15 mul sizes from 128 to 8192 bits faster (RSA-2048 mul 673 vs 800 ns), and 2048-bit powm 13% faster, while full divMod is 1.25-2.00x and invMod 3.25-5.36x slower. A Zen 4 rerun of the same Nix package shows GMP-with-asm winning everything except i64-sized adds.
+
+**Known shortcoming:** README overstates the claim: 'divMod 1.31x' is x86 vs GMP built without asm and '24% faster' is a limb-only inner kernel; the public divMod is 1.25-2.00x slower than GMP on M4; wins are Apple-Silicon-only (Zen 4 vs GMP with asm loses 1.5-4x); stale losses list and internal number conflicts; no LICENSE file (reference); Zig, not C++.
+
+**Known shortcoming:** RESULTS.md TL;DR contradicts its own table (claims a win on RSA-2048 divMod; table shows 1.26x slower); docs disagree on rational support; powm is variable-time sliding window with no constant-time mode (unsafe for secret exponents).
+
+**How:** Small-buffer optimization: a 72-byte Mp struct holds values up to 24 encoded bytes inline, and maintains a sign-extended i64 copy at inline_buf[1..9] so i64-range arithmetic is one 64-bit load plus native overflow-checked math, with no malloc round-trip. Larger values use byte-direct two's-complement add/sub that reads u512/u256/u128/u64 chunks straight from the payload (compiling to ADCS carry chains on aarch64), direct-write into the result heap buffer via a header offset, Karatsuba with a carry-bit trick that keeps sub-products 8-byte aligned, Toom-3 above 16K bits, and cached payload metadata to skip header parsing. powm uses CIOS Montgomery multiplication with sliding windows and dedicated squaring; division is u64-base Knuth Algorithm D with Moller-Granlund reciprocal quotient estimates; invMod is a wider-window Lehmer extended Euclid.
+
+**Use it when:**
+- Zig code on Apple Silicon that does large numbers of operations on values that mostly fit in an i64 but may overflow (accumulators, counters, exact arithmetic): adds measured 1.95-2.66x faster than GMP-with-asm on an M4.
+- aarch64 workloads dominated by 384-8192-bit multiplication or 256-8192-bit subtraction, where RESULTS.md shows 1.08-1.56x (mul) and 1.03-2.11x (sub) wins over GMP-with-asm on an M4.
+- Projects that want arbitrary-precision integers without linking LGPL GMP and can accept a pure-Zig dependency (or its C static library).
+- Protocols where the integer's serialized BLIP bytes are the wire format, so you skip an mpz_export/mpz_import round-trip.
+
+**Skip it when:**
+- x86-64: on a Zen 4 laptop GMP's assembly beats blip_mp by 1.5-4x at 1024-8192-bit add, mul, divMod and powm (RSA-2048 powm about 3.8 ms vs 1.9 ms); only i64-sized adds win there.
+- Division-heavy or modular-inverse-heavy code: full Mp.divMod is 1.25-2.00x slower than mpz_tdiv_qr at 256-8192 bits even on the M4, and invMod is 3.25-5.36x slower than mpz_invert.
+- Operands of 16K bits and above (mul 0.87x at 16384 and 0.55x at 32768 bits): FFT multiplication exists but is gated off, so large-number workloads should stay on GMP or FLINT.
+- Secret-dependent cryptography: powm uses sliding-window exponentiation and no constant-time mode or side-channel analysis is documented.
+- Anything you need to ship legally today: there is no LICENSE file (the README says MIT or Apache-2.0 'TBD before tagging a release'), version 0.0.1, no tagged release, one star.
+
+**Vs siblings:** Pick blip_mp over the Rust small-value libraries (dashu, ibig, Malachite) only when you are in Zig or want a C ABI without Rust, and over ctbignum when widths are not known at compile time; for C++ code that wants small-value speed with GMP-class large-operand performance, mp++ (SBO over GMP) is the safer choice, and on x86-64 none of blip_mp's mid-size wins hold.
+
+**Gotchas:**
+- The README headline overstates results: its 'RSA-2048 trifecta' divMod win (1.31x) is blip vs GMP-noasm on x86, and the '24% faster long division' is a limb-only inner kernel; RESULTS.md's own table has full Mp.divMod 1.26x slower than GMP at 2048 bits on the M4. Its 'honest losses' list (128-256-bit mul 0.40-0.67x) is stale against RESULTS.md (128-bit mul 1.38x faster).
+- 128-bit add and sub are still slower than GMP (0.56x and 0.65x) because of the heavier 72-byte struct and per-op bookkeeping; the win zone starts at i64 values and resumes around 256-768 bits.
+- blip_mp_set_u64 returns BLIP_MP_ERR_OUT_OF_RANGE for values above INT64_MAX, and pointers from blip_mp_bytes() are invalidated by the next mutating call on that handle.
+- Benchmarks are 3-run hand medians (hyperfine aggregation is listed as a to-do), and the docs disagree on cross-check counts (8240, 12029, 13029) and on whether rationals are supported.
+
+**Status:** Actively developed by one author (last commit 2026-09-27, mostly feature work through June 2026) as a research-grade 0.0.1 library with no license file yet, so treat it as reference material until a release with a license is tagged.
+
+[repo](https://github.com/pmarreck/blip_mp) · [benchmark](https://github.com/pmarreck/blip_mp/blob/yolo/RESULTS.md)
+
+##### midint-arithmetic-division (GPU multi-precision division)  `CUDA`  `no license`  `stale`  `Tier A`
+
+Thesis CUDA code for batched exact big-integer division on GPU (2^13-2^18 bits); 7-19x sequential GMP throughput.
+
+**Beats:** GMP — On an NVIDIA A100 (nvcc -O3 -arch=sm_80), batched shifted-inverse division ran 7.4x-18.9x faster than sequential single-core GMP mpz division on an AMD EPYC 7352, for 2^13- to 2^18-bit operands at a fixed 2^32 total bits of work per test. The same paper shows it 6.7-15.5x slower than one of its own GPU multiplications, and slower than CGBN where CGBN has division.
+
+**Known shortcoming:** No license file (reference only); fork of coancea/midint-arithmetic; batched A100 runs compared against sequential single-core GMP; README says it does not beat CGBN; stale (last commit 2025-06-26).
+
+**Known shortcoming:** GMP baseline handicapped: per instance mpz_init/import, mpz_div plus separate mpz_mul and mpz_sub for the remainder (not mpz_tdiv_qr), export/clear; likely inflates the 7-19x, which also compares a whole A100 against one CPU core.
+
+**How:** It implements Watt's shifted-inverse division: Newton iteration computes the whole shifted inverse floor(B^h/v) using only integer arithmetic, so the quotient comes from multiplications instead of long division. One CUDA block handles one division, with operands and intermediates in registers and shared memory (sequentialization factor Q=4) to avoid global-memory traffic. Throughput comes from running 2^14-2^19 such divisions in parallel across the GPU.
+
+**Use it when:**
+- You need many independent divisions or GCDs of same-size integers between 2^15 and 2^18 bits on an NVIDIA GPU, where CGBN has no division.
+- Batch throughput matters and the data already lives on the GPU.
+- You want a reference implementation of integer-only Newton (shifted-inverse) division to port or study.
+
+**Skip it when:**
+- Sizes of 2^15 bits or less: the paper measures it 3.63-7.36x slower than CGBN's division there.
+- Single or few divisions, or latency-bound code: the GMP comparison is a whole A100 against one sequential CPU core.
+- Operands above 2^18 bits or of mixed sizes: the shared-memory limit (~100 KB per block) caps size, and the size is a compile-time template parameter.
+- Any production use: there is no LICENSE file, so it is reference-only, and it is a one-star thesis repo last updated 2025-06-26.
+- The Futhark port: the authors report poor performance due to compiler limitations.
+
+**Vs siblings:** Pick it only if you need GPU-batched division above 2^15 bits; for CPU work, FLINT or mp++ are the practical GMP-beating options, and the truncated AVX512 Montgomery code covers batched modular multiplication rather than general division.
+
+**Gotchas:**
+- The GMP baseline wrapper calls mpz_import, then mpz_div plus a separate mpz_mul and mpz_sub to get the remainder, then mpz_export, with mpz_init/clear on every instance. That overhead (and not using mpz_tdiv_qr) inflates the reported GMP times.
+- The GPU kernel needs a large dynamic shared-memory carve-out (the GCD path sets 98000 bytes via cudaFuncSetAttribute).
+- Limb arrays are fixed-length per template instantiation; divisors and dividends share the same allocated size M.
+
+**Status:** Stale thesis artifact (last commit 2025-06-26, 1 star) with no license file, so read it as a reference design rather than code to vendor.
+
+[repo](https://github.com/aske0778/midint-arithmetic-division) · [benchmark](https://arxiv.org/html/2606.06386)
+
+##### APFP (arbitrary precision floating point on FPGA)  `C++`  `no license`  `abandoned`  `Tier B`
+
+Vitis HLS FPGA design for fixed-width arbitrary-precision floating-point matrix multiply, about 10x a 36-core MPFR node (FCCM'22).
+
+**Beats:** GNU MPFR (dual-socket 36-core Xeon node) — The README repeats the FCCM'22 result: 2.0 GMAC/s of 512-bit matrix-matrix multiplication on an Alveo U250, about ten times a dual-socket 36-core Xeon node running MPFR (375 CPU cores' worth); search summaries of the paper abstract add 9.8x at 4.8 GOp/s for 512-bit and 5.3x at 1.2 GOp/s for 1024-bit multiplication. The repo's host programs (host/Microbenchmark.cpp, host/TestMatrixMultiplication.cpp) do time and print an MPFR reference, but it is a single-threaded triple loop of mpfr_mul and mpfr_add used for bit-exact verification, not the 36-core baseline; the CPU model, compiler, flags and MPFR version of the paper's baseline are not in the repo.
+
+**Known shortcoming:** No license; CPU-side MPFR harness not public; MPFR ratios (9.8x, 5.3x, 10x) seen only in an abstract summary (paper blocked); FPGA hardware.
+
+**Known shortcoming:** Security/correctness bug in interface/Apfp.cpp: TransferToHost copies 128 bytes per number raw into an mpf_t array (24 bytes each), overflowing the buffer and producing no valid values; size check off by one (>=); the host library builds with HLSLIB_SIMULATE_OPENCL and Transpose throws; benchmarks do not use this interface; only MPFR_RNDZ, flush-to-zero, no NaN/Inf; the MPFR reference is single-threaded.
+
+**How:** The mantissa multiplier is a compile-time recursive Karatsuba decomposition (device/Karatsuba.cpp) that bottoms out at APFP_MULT_BASE_BITS (default 36) in DSP multipliers, and wide additions are split into manually pipelined stages above APFP_ADD_BASE_BITS, so the whole multiply-accumulate is fully pipelined at one MAC per cycle per compute unit. The GEMM is tiled with the communication-avoiding scheme from the authors' FPGA'20 paper (default 32x32 tiles in on-chip memory) so DRAM bandwidth does not limit it, and APFP_COMPUTE_UNITS replicates the kernel across the U250's DDR banks and SLRs.
+
+**Use it when:**
+- Large dense matrix multiplications at 448-bit or 960-bit mantissa precision (APFP_BITS 512 or 1024) that dominate a run, such as the semidefinite-programming solvers the paper targets.
+- You already have an Alveo U250 (or another XRT platform you are willing to port the DDR mapping to) and a Vitis HLS toolchain.
+- Throughput matters more than latency: matrices large enough to fill 32x32 tiles and amortize host-to-card transfers.
+- Research on FPGA arithmetic: the Karatsuba and pipelined-adder templates are a compact reference for wide-integer datapaths in HLS.
+
+**Skip it when:**
+- Anything other than matrix multiply: no division, square root, transcendental functions or element-wise kernels, and the host interface's transpose is unimplemented; use MPFR, or a GPU MPFR backend for batched scalars.
+- When you need MPFR's rounding modes or special values: only round-toward-zero (MPFR_RNDZ) is supported, the adder flushes underflow to zero, and PackedFloat asks 'Should we just assume nan/inf can't appear?'.
+- Precision chosen at run time or not a multiple of 512 bits: APFP_BITS is fixed at build time and CMake rejects values not aligned to 512.
+- Products you need to ship or redistribute: the repository has no license file, and it has been inactive since 2022-05-17.
+- Machines without an FPGA, or teams without days for hardware builds: 'make hw' runs a full Vitis synthesis and place-and-route.
+
+**Vs siblings:** Pick APFP over MPLAPACK's quad-double or CUDA backends, MultiFloats.jl or DoubleFloats.jl when you need far more than ~200 bits of mantissa in GEMM and own an Alveo U250; pick gnu-mpfr-cgbn or MPLAPACK instead if you have a GPU or need operations other than matrix multiply.
+
+**Gotchas:**
+- The installable host library (interface/Apfp.cpp) looks unfinished: DeviceMatrix::TransferToHost copies the raw device format (kBytes per number, 128 bytes at the default 1024 bits) straight into the caller's mpf_t array, which overruns a buffer of 24-byte mpf_t structs and produces no valid GMP values, and its size check (>=) rejects an exactly sized buffer. The kernel path is an empty string, ApfpHostlib is compiled with HLSLIB_SIMULATE_OPENCL, and Transpose/TransposeInPlace just throw. The benchmark programs in host/ do not use this interface.
+- APFP_BITS counts the whole number: 64 bits go to the packed sign and exponent, so 512-bit numbers have a 448-bit mantissa and 1024-bit numbers a 960-bit mantissa.
+- Only MPFR_RNDZ is supported (DeviceTypes.h: 'the only MPFR rounding mode supported'); the test programs check bit-exact equality against an MPFR RNDZ reference, so results match MPFR only under round-toward-zero.
+- Tile sizes, compute units, frequency and the DDR bank mapping (hard-coded for the U250) must be configured for the target card; the README says the accelerator 'should always be configured to match the target system'.
+
+**Status:** Abandoned research artifact (last commit 2022-05-17, three PRs open since early 2022) with no license file, so treat it as reference code for study, not something to vendor.
+
+[repo](https://github.com/spcl/apfp) · [benchmark](https://github.com/spcl/apfp)
+
+#### blas-lapack
+
+##### gemm (johnnyw3, AVX/AMX kernels)  `C++`  `no license`  `active`  `Tier A`
+
+Hand-written AVX2/AVX-512/AMX square GEMM kernels; 3-4% faster than OpenBLAS/MKL only on Granite Rapids AMX (bf16).
+
+**Beats:** OpenBLAS or Intel MKL, whichever was faster on each machine (OpenBLAS built with BUILD_BFLOAT16=1 for AMX) — With clang++ -O3 -flto -march=<target> at n=4096, averaged over repeated runs, the README reports 1279 vs 1229 GFLOPS (1.04x) single-threaded and 4810 vs 4675 GFLOPS (1.03x) with 4 threads for the AMX bf16 kernel on a Xeon 6972P, against whichever of OpenBLAS sbgemm and MKL bf16 GEMM was faster. On AVX2 and AVX-512 it is 13-24% slower. The README does not say which library won each row, its version or thread setting (bench.cxx does not limit BLAS threads), or which -march target was used.
+
+**Known shortcoming:** Wins only on AMX (3-4%) and is 13-24% slower on AVX2/AVX-512; which of OpenBLAS/MKL won each row, their versions and thread limits are unstated; README says 10 runs but the code does 30; no license.
+
+**Known shortcoming:** Memory/correctness bugs (code read): the thread partition overruns the matrix when NUM_THREADS does not split n into whole superblocks (AVX2, 12 threads, n=4096: threads 8-11 start past row 4096); the K split across threads races on C (AMX, 16 threads; a code comment admits the missing combine); no arch_prctl AMX permission request (works in the bench only because the BLAS call runs first); B transpose excluded from AVX timing; non-inline kernels in gemm.h.
+
+**How:** Goto/BLIS-style cache blocking with two levels ('superblocks' of blocks): panels of A and B are packed into contiguous, 64-byte-aligned stack buffers sized for L1/L2, then a register-blocked micro-kernel runs. The AVX2/AVX-512 micro-kernels compute a 2-row x 8-column patch of C as dot products along K (two passes of 4 columns, 16 vector accumulators) with FMAs over a pre-transposed B and finish with unpack/permute horizontal reductions; the AMX kernel keeps four 16x16 FP32 accumulator tiles and issues TDPBF16PS on two A tiles and two B tiles, with B re-laid into the VNNI pair-interleaved format by AVX-512 expand-loads inside the packing step (commit history credits that move for a 1.15-1.2x gain). Threads split the i and j dimensions of C.
+
+**Use it when:**
+- Intel Sapphire/Granite Rapids-class CPUs with AMX, bf16 inputs and FP32 output, square n that is a multiple of the superblock size (n=4096 measured), 1-4 threads.
+- Learning or teaching how an AMX bf16 GEMM is built (tile config, VNNI relayout of B, packing) from about 950 lines of readable intrinsics.
+- Small fixed-shape experiments where you control NUM_THREADS and -march at build time and can verify results against a BLAS.
+
+**Skip it when:**
+- AVX2 or AVX-512 machines: it is slower than the better of OpenBLAS/MKL, 0.76x on a Kaby Lake i5-8350U and 0.82-0.87x on a Tiger Lake i5-1135G7.
+- Any shape other than square n divisible by the superblock size (AMX: 2048 rows, 1024 columns and depth; AVX2: 512; AVX-512: 1024 rows, 512 columns, 256 depth): there is no edge handling, and the source says matrices must be padded.
+- More than about 8 threads, or a thread count that does not split n into whole superblocks: the partitioning arithmetic then hands some threads rows past the end of the matrix (12 threads on the AVX2 path at n=4096 starts threads 8-11 at row 4096 and beyond), or splits K across threads that read-modify-write the same C tiles without synchronization (16 threads on AMX at n=4096). The default NUM_THREADS is nproc.
+- Production or redistribution: no LICENSE file, no tests beyond the bench's exact-equality check on integer matrices from utils/random_gen.py (values 0-100), no issues or releases, single author.
+
+**Vs siblings:** It is the only catalogued CPU entry with an Intel AMX bf16 kernel, so pick it to study or prototype on Sapphire/Granite Rapids. For FP32 on AVX2/AVX-512 it loses to its baseline, so GEMM_AVX2_FMA3 (2-3% over MKL 2019), cpu_gemm_opt or sgemm.c (salykova, whose article inspired this code) are better references; for production, use OpenBLAS, MKL or BLIS.
+
+**Gotchas:**
+- The kernels are non-inline function definitions in gemm.h, so include it in exactly one translation unit, compiled with the right -march and -DNUM_THREADS; the installed libgemm.a holds only gemm.cxx's unused amx_relayout helper.
+- simd_gemm accumulates into C (C += A*B), so zero C first; the AVX paths expect B already transposed (bench.cxx calls cpu_transpose before the timed loop, so that cost is not in the AVX numbers), while the AMX path takes B as-is.
+- Nothing in the repository calls arch_prctl(ARCH_REQ_XCOMP_PERM); Linux traps the first AMX tile instruction until the process requests that permission (kernel xstate documentation). bench.cxx calls the BLAS first, so a standalone program must request it itself.
+- Per-thread packing buffers live on the stack: about 6 MiB per thread on the AMX path (4 MiB A panel plus 2 MiB B panel) and 2 MiB on AVX2, so small thread stacks will overflow.
+
+**Status:** Single-author hobby/study project, last commit 2025-10-08 (47 commits, 1 star, no issues); there is no license, so it is reference-only and cannot be vendored.
+
+[repo](https://github.com/johnnyw3/gemm) · [benchmark](https://github.com/johnnyw3/gemm)
+
+##### gpu-compute (SGEMM for Blackwell)  `CUDA C++`  `no license`  `active`  `Tier A`
+
+Hand-written CUDA SGEMM kernels that beat pedantic-FP32 cuBLAS only on tiny square matrices (N<=256) on an RTX 5080.
+
+**Beats:** cuBLAS cublasSgemm with CUBLAS_PEDANTIC_MATH (true FP32) on an RTX 5080 — On an RTX 5080 (sm_120, CUDA 13.3, nvcc -O3 --use_fast_math -arch=sm_120, Windows), timed with CUDA events after 15 warm-ups over about 150 ms of back-to-back launches, the auto kernel took 8.1-13.6 us against 16.2-17.8 us for cublasSgemm with CUBLAS_PEDANTIC_MATH on square N=32-256 (2.02x at 32^3, 1.49x at 128^3, 1.30x at 256^3), with max relative error under 1e-6 against cuBLAS. It was slower on every other shape measured.
+
+**Known shortcoming:** Wins only on tiny squares (N 32-256); slower from 512^3 up (0.31x-0.63x) and on skinny shapes (0.22x-0.93x); now all-rights-reserved (first commit was MIT); Windows only.
+
+**Known shortcoming:** Bugs (code read): the split-K path ignores beta (acts as beta=1); float4 loads with no alignment check, so K or N not a multiple of 4 (e.g. 33^3) should fault; README credits a 32x32 tiled kernel at N<=64 but the code uses the 64x64 vec kernel; cuBLAS TF32 ran 9.3-9.9 us at 128-256^3 in the same CSV, so the 16 us floor is path-specific; CSVs differ ~30% on absolute 128^3 times.
+
+**How:** It does not out-compute cuBLAS; it skips work cuBLAS does per call. For small squares launch_auto issues one size-specialized kernel (the classic 32x32 shared-memory tile with one accumulator per thread, 9-64 CTAs for N=80-256; at N<=64 the code actually routes to a single 64x64 register-blocked CTA, although the README credits the 32x32 kernel), which finishes in 8-14 us, while pedantic-FP32 cublasSgemm sits at a roughly constant 16-18 us from 32^3 to 256^3. The README attributes the cuBLAS floor to kernel selection plus a tile sized for large GEMMs; no Nsight counters were captured to confirm it (results/nsight.md says counters were locked).
+
+**Use it when:**
+- Reading material on why launch- or call-overhead dominates tiny GEMMs (FP32, square N of about 32-256) on a big GPU, with a clear fairness write-up (same layout, pedantic math, CUDA events).
+- A worked example of the standard SGEMM ladder (naive, smem tile, 8x8 register microtile with transposed A and padded B, split-K, warp-per-row GEMV) in about 400 lines.
+- Checking a hypothesis before writing your own size-specialized small-GEMM kernel; the license forbids copying this one.
+
+**Skip it when:**
+- Anything you would ship or publish: the LICENSE is all rights reserved and forbids copying, modification and use in any product, service or benchmark publication.
+- Medium and large GEMMs: 0.31x cuBLAS FP32 at 512^3, 0.56x at 1024^3, 0.63x at 4096^3 (23.0 vs 36.8 TFLOP/s).
+- Tall-skinny shapes (M=K=4096 or 8192, N=1-128): 0.22x-0.93x of cuBLAS on every one measured.
+- When TF32 is acceptable: cuBLAS in TF32 tensor-op mode ran 9.3-9.9 us at 128^3-256^3 in the same CSV, faster than this kernel, so the ~16 us floor is specific to the pedantic FP32 path (derived from page data).
+- Shapes the benchmark never tests: every measured dimension is a multiple of 16, and the register-blocked kernels have known edge problems (see gotchas).
+
+**Vs siblings:** Among catalogued GPU GEMM entries it is the only one aimed at tiny launch-bound FP32 shapes; blackwell-tensorcore-kernels (FP16 tensor cores at 8192^3), CUDA-L2 and emugemm-cdna (AMD MI250) target large GEMMs. Because the license forbids reuse, treat it as evidence for the idea rather than as code to adopt.
+
+**Gotchas:**
+- Split-K path (N<=128 with M,K>=512): when beta != 0 it skips the memset and atomically adds alpha*A*B into the old C, so any beta other than 0 or 1 gives a wrong result; atomicAdd partials also make the sum order nondeterministic.
+- The register-blocked kernels (used for M,N<=64, for M or N>384, and for split-K) do float4 loads with no alignment check, so K or N not a multiple of 4 (for example a 33^3 product) should fault with a misaligned-address error; only the 32x32 tiled kernel is fully bounds-safe. Found by reading the code, not by running it.
+- The WMMA TF32 kernel ignores beta, overwrites C, and has no edge handling inside a tile, so M and N must be multiples of 16 and K a multiple of 8; the benchmark only runs it when M and N are multiples of 32.
+- Built with --use_fast_math, measured on one GPU with one run per CSV and no variance reported; the two CSVs disagree by about 30% on absolute 128^3 times (10.9 vs 14.1 us for this kernel, 16.2 vs 21.7 us for cuBLAS) while the ratio holds (1.49x vs 1.54x).
+
+**Status:** Three commits on one day (2026-08-25), 0 stars, no issues; the license was switched from MIT to view-only in the second commit, so this is reference-only and nothing can be vendored.
+
+[repo](https://github.com/JohnTitor2003/gpu-compute) · [benchmark](https://github.com/JohnTitor2003/gpu-compute)
+
+##### TCCG / GETT (Tensor Contraction Code Generator)  `Python (generator that emits vectorized C code)`  `no license`  `abandoned`  `Tier A`
+
+Python code generator for GETT tensor contractions; beats MKL-backed transpose-transpose-GEMM-transpose up to about 2x on bandwidth-bound cases.
+
+**Beats:** TTGT (transpose-transpose-GEMM-transpose) tensor contraction built on Intel MKL sgemm/dgemm (the repo's default BLAS in config.cfg is MKL); TTGT is TCCG's own backend, not a third-party tensor library — On one core of an Intel Xeon E5-2680 v3 (Haswell, TurboBoost and SpeedStep off), built with icpc 16.0.1 -O3 -xhost -mkl, the figures (read by eye) show GETT at about 20.5 vs 15 GFLOPS for MKL-backed TTGT on abcde-efbad-cf and about 55.5 vs 25 on abcdef-dfgb-geac in single precision, and TCCG roughly 10x the best of CTF/naive on the most bandwidth-bound cases, with parity or a TTGT lead on compute-bound ones. The TTGT baseline is the authors' own implementation, not a third-party library.
+
+**Known shortcoming:** No licence, so reference only; abandoned 2017.
+
+**Known shortcoming:** Record corrected: TCL uses TTGT, not GETT (its README says GETT is planned 'eventually'). Python 2 only; Haswell constants hard-coded in arch.py; no licence.
+
+**Independent measurement:** verifier
+
+**Independent measurement:** enrichment
+
+**How:** GETT (GEMM-like Tensor-Tensor multiplication, Springer and Bientinesi, arXiv 1607.00145) applies the BLIS/Goto GEMM blocking directly to tensors: it packs sub-tensors into cache-sized buffers while preserving the stride-one index, then runs an AVX2 or AVX-512 register-blocked macro-kernel, so it never materializes transposed copies the way TTGT does and needs no workspace beyond small tiles. A performance model ranks the blocking and loop-order candidates and the tool then times up to --maxImplementations of them (default 16 for GETT). The gain is largest when the contraction is bandwidth-bound and TTGT's transposes dominate.
+
+**Use it when:**
+- Bandwidth-bound contractions of 4- to 6-D tensors with modest index extents (coupled-cluster CCSD, AO2MO style), where TTGT spends much of its time transposing.
+- Fixed contraction shapes known ahead of time, where offline autotuning per shape and generating code into your build is acceptable.
+- x86-64 with AVX2 and an Intel compiler plus MKL, the configuration the published results used.
+- As a reference implementation of GETT packing and macro-kernels to reimplement in your own tensor code.
+
+**Skip it when:**
+- Compute-bound contractions: in the repo's own figures TTGT ties or beats GETT (abcd-aebf-fdec about 67 vs 75 GFLOPS in single precision; TTGT leads on the last four double-precision cases).
+- Shapes known only at run time, or index sizes where the product of each input's free-index sizes is not a multiple of 24 (the stated GETT limitation).
+- Anything you need to redistribute: the repository has no license file, so the code is all rights reserved.
+- Complex numbers or GPUs for GETT: only single and double precision real types (issue #2, 2024, asks for double complex), and CUDA covers only TTGT and LoG.
+- Modern Python environments: the generator is Python 2 code (print statements, distutils setup.py) last changed in 2017.
+
+**Vs siblings:** TBLIS is the closer sibling and also avoids explicit transposes with a runtime library interface, so prefer it for production; pick TCCG only to study or reproduce GETT, or to autotune a few fixed bandwidth-bound shapes offline. HPTT is the transposition building block that TCCG's TTGT path itself uses, so it complements rather than replaces this.
+
+**Gotchas:**
+- The performance model hard-codes the authors' Haswell machine in tccg/arch.py (AVX2: 2.5 GHz, 2 FMAs per cycle, 256 KiB L2, 2 x 30 MiB L3, 13 GiB/s axpy bandwidth; AVX-512: 1.3 GHz), so candidate ranking on other CPUs may be off; raise --maxImplementations to time more variants.
+- Small tiles live on the stack by default; --useDynamicMemory is needed if the stack is too small and the help text warns it may degrade performance.
+- Tuned solutions are cached in an SQLite database (tccg/tccg.db under TCCG_ROOT) and reused unless --ignoreDatabase is passed.
+- Thread affinity is left to the user (--affinity sets KMP_AFFINITY or GOMP_CPU_AFFINITY), and the help text warns that a bad choice hurts performance severely.
+
+**Status:** Abandoned since 2017-08-14 (47 commits, 40 stars, one branch) and unlicensed, so it is reference-only; the same author's TCL library is also unmaintained and points users to NVIDIA cuTENSOR.
+
+[repo](https://github.com/HPAC/tccg) · [benchmark](https://github.com/HPAC/tccg/tree/master/benchmark)
+
+##### transpose-scale (hpit)  `C++`  `no license`  `active`  `Tier A`
+
+Single-file SIMD kernel for in-place square float transpose with scaling; 3-6x faster than MKL mkl_simatcopy at N>=64.
+
+**Beats:** Intel MKL 2025.1.0 mkl_simatcopy (in-place transpose with scale); cblas_simatcopy from OpenBLAS on ARM — utils/time_kernel.cpp times the kernel against mkl_simatcopy('R','T') from MKL 2025.1 linked sequential, single-threaded and pinned to CPU 0 on an i7-14700K at 5.5 GHz. It was built with clang-17 -O3 -march=native -ffast-math, and a final element-by-element check compares the two results. Percentile bandwidth (p10/p50/p90) over power-of-two sizes gives about 1.4x at N=16, 2.7x at N=32, 3.1-3.3x at N=64-256 and 4.4-6.2x at N=512-2048, with values read from a chart image.
+
+**Known shortcoming:** '3-6x' holds only for N>=64 (about 1.4x at N=16, 2.7x at N=32, up to 6.2x at N=2048); no LICENSE file (reference only); both sides single-threaded; only one CPU (i7-14700K) tested.
+
+**Known shortcoming:** Default build (-DFORCE_AVX2=OFF) uses SSE 4x4 tiles, so published numbers presumably come from the SSE path; kernel assumes 64-byte-aligned A (unaligned pointer is UB); uint32_t index math overflows above 2^32 elements.
+
+**How:** Two-level cache blocking: 32x32 blocks, each split into 4x4 (SSE/NEON) or 8x8 (AVX2) register tiles. Off-diagonal tile pairs are swapped by loading one tile into a small buffer and doing an in-register unpack/shuffle transpose of each side, with the alpha multiply fused into the same pass so the data is touched only once. Separate loops handle full blocks, edge blocks, edge tiles and the diagonal (the README calls this 'branch-elimination via structured iteration spaces'), so the inner loops carry no bounds checks. The baseline instead calls a general imatcopy routine.
+
+**Use it when:**
+- Single-threaded in-place transpose-and-scale of square float matrices from about 64x64 to 2048x2048 on x86 with SSE/AVX2, where the chart shows about 3.1-6.2x over MKL 2025.1 sequential.
+- Hot loops that call mkl_simatcopy on small or medium square float matrices and only need the transposed, scaled result.
+- As a readable reference for a fused SIMD 4x4/8x8 in-register transpose to adapt into your own code, after getting the author's permission (no license).
+
+**Skip it when:**
+- Any shipped code: the repo has no LICENSE file, so the code cannot legally be copied or vendored.
+- Rectangular, out-of-place, double, complex or conjugate transposes: only square float in place is implemented.
+- Very small matrices (about 1.4x at N=16) or very large ones (m*stride above 2^32 elements overflows its uint32_t index math, by inspection of the source).
+- Multi-threaded workloads: the kernel is single-threaded and was compared only against single-threaded (sequential) MKL.
+- ARM: a NEON path and an OpenBLAS cblas_simatcopy comparison exist in code, but no ARM results are published.
+
+**Vs siblings:** No catalogued sibling in this category does in-place transposes; the others (Eigen, BLASFEO, the GEMM kernels) solve different problems. The real choice is against the baseline: use this over mkl_simatcopy or cblas_simatcopy only for single-threaded, square, float, in-place transpose-scale at N>=64, and only if the license question is settled.
+
+**Gotchas:**
+- The kernel tells the compiler A is 64-byte aligned (__builtin_assume_aligned(A, 64)). Passing an unaligned pointer is undefined behaviour, even though the intrinsics use unaligned loads.
+- The default build (build_and_run.sh passes -DFORCE_AVX2=OFF) uses 128-bit 4x4 tiles even on AVX2 machines. The llvm-mca analysis shows almost only xmm instructions, so the published numbers are presumably from the SSE path. 8x8 AVX2 tiles must be enabled explicitly.
+- Reported bandwidth counts only the m(m-1)/2 off-diagonal pairs (2 loads + 2 stores each). The matrix is rewritten before every timed call, so both kernels start from cache-warm data.
+- The benchmark uses stride = m + 16 floats (one cache line of padding), which avoids power-of-two set conflicts. Unpadded power-of-two strides were not measured.
+
+**Status:** Hobby/portfolio project (1 star, last commit 2026-01-10) with no license, so it is reference-only: the technique is worth studying, but the code cannot be copied without the author's permission.
+
+[repo](https://github.com/abiel-almonte/transpose-scale) · [benchmark](https://github.com/abiel-almonte/transpose-scale)
+
+#### fft
+
+##### Admiral  `C++`  `BSD-3-Clause-Attribution`  `active`  `Tier A`
+
+Compiled C++20 SIMD FFT library (any size, 1-D/N-D, c2c/r2c/DCT); the author's sweep has it 1.34-1.43x faster than single-thread FFTW_MEASURE.
+
+**Beats:** FFTW 3 (FFTW_MEASURE, single thread; version and build flags of the system fftw3 not stated in the admiral repo, while the author's separate fft_bench uses FFTW 3.3.11); also ducc0 (commit c4dda23) — The author's 2026-08-24 sweep on a 16-core Xeon w5-3435X (GCC 14.2, Release, -march=native, -ffast-math; nanobench minimum time, each size accuracy-gated against a reference DFT) has single-thread Admiral at 1.34x (1-D) and 1.43x (N-D) the speed of system FFTW with FFTW_MEASURE. These are geomeans over 19 lengths and 9 shapes, both precisions pooled; FFTW's version and configure flags are not stated, and no per-size times are published. Against ducc0 c4dda23 it reports 2.18x/2.70x (f64/f32) at 1-D, but there the ducc0 arm allocates its output inside the timed region, so small-N 1-D ratios are inflated.
+
+**Known shortcoming:** fft_bench is by the same owner, so not independent; builds with -ffast-math by default; the 1-D ducc0 test allocates and zero-fills a new output vector inside the timed loop, inflating the 2.18x/2.70x figures (the FFTW test is fair); BSD-3-Clause-Attribution is not OSI-approved, so reference.
+
+**Known shortcoming:** 16-thread 1-D vs ducc0 is 0.33x at some sizes; the FFTW shim covers complex DFT only.
+
+**How:** Butterfly codelets up to radix 64 are unrolled at compile time with poet and vectorized with xsimd, and a mixed-radix decimation-in-frequency (DIF) pass chain is scheduled over them. Awkward lengths go to Good-Thomas prime-factor, Rader (prime N) or Bluestein (chirp-z) routes. Out-of-cache sizes use Bailey's four-step algorithm with fused, cache-blocked transposes and non-temporal stores past about 2x L3. A fitted cost model picks the route at plan time (effort::estimate); effort::automatic also times the top candidates. A per-plan thread pool engages only above about 2^15 elements and sizes itself from modelled work plus measured wake cost.
+
+**Use it when:**
+- Single-threaded 1-D or N-D complex FFTs in float or double on AVX-512 or AVX2 x86, where you can build with -march for the target
+- Non-power-of-two and prime lengths that you would otherwise run through FFTW's generic paths: codelets up to 64 plus Rader/Bluestein keep them on SIMD code
+- Moving existing FFTW complex-DFT code (fftw_plan_dft_*, fftw_execute, fftw_execute_dft, fftwf_ mirror) by recompiling against <admiral/fftw3.h>
+- Large 2-D/3-D transforms with 16 threads, where the author's sweep shows 2.67x (f64) to 3.53x (f32) over threaded ducc0 for 3-D
+- Code that wants plan construction without a wisdom or tuning step (estimate mode is deterministic, and fully reproducible with ADM_MEASURE=OFF)
+
+**Skip it when:**
+- Large multi-threaded 1-D transforms: against threaded ducc0 at 16 threads the geomean swings from 0.33x to 1.82x by size (2M and 8M lose by about 3x), because the six-step split rejects some sizes
+- Code that needs strict IEEE results: the default build adds -ffast-math (reassociation, flushed denormals), so turn ADM_USE_FAST_MATH off and expect less speed
+- Code that needs FFTW's r2c/r2r, guru, split-complex, wisdom or fftw_plan_with_nthreads through the shim: these calls are not provided and do not compile
+- Projects that need an OSI-approved license or a mature dependency: BSD-3-Clause-Attribution adds a required acknowledgment line, and the project has no stars, a single author, a 2026 history and an AI-assisted codebase by its own README
+- Small build machines or quick CI: one engine translation unit peaks near 12 GB of RAM at AVX-512 native, and the README warns that compiles are long
+
+**Vs siblings:** Choose Admiral over PocketFFT (C++ branch) and ducc0 when you have AVX2/AVX-512 x86 and can build per-target: its own sweep has it 1.1-2.7x faster than ducc0 single-threaded. Choose it over FFTW when you want a permissive (attribution) license and a recompile-only shim for complex DFTs. VectorFFT (measured against MKL) or FFTW itself are the better choice when you need wisdom, the full guru API or results from someone other than the author.
+
+**Gotchas:**
+- nthreads=0 (auto) runs serial below about 32k elements; forcing 16 threads on shapes under about 16k elements is 0.7-1.0x of serial per the benchmark README
+- effort::automatic/measure pick routes by timing, so plans can differ between runs and machines; one-shot functions always use estimate
+- Span overloads validate sizes and throw admiral::error subclasses (size_error, unsupported_error, internal_error); pointer overloads trust the caller
+- long double runs a scalar backend and is limited to plan, plan_r2c and the one-shots; there is no strided r2r, so an N-D DCT needs your own transposes
+
+**Status:** Very active (last commit 2026-09-29; CI, codecov, Doxygen/Sphinx docs, 0 open issues). It is a one-author project with no adoption yet, and its BSD-3-Clause-Attribution license is not OSI-approved, so it is catalogued as reference rather than copyable.
+
+[repo](https://github.com/DiamonDinoia/admiral) · [benchmark](https://github.com/DiamonDinoia/admiral)
+
+##### cuSpFFT  `CUDA`  `no license`  `active`  `Tier A`
+
+Course-project CUDA 2-D R2C FFT for binary (0/1) sparse matrices; beats dense cuFFT on mid-size non-power-of-2 inputs.
+
+**Beats:** cuFFT (dense 2D real-to-complex) and SpFFT (eth-cscs/SpFFT, CUDA backend) — On one RTX 4090 (CUDA 12.5.82, Release, sm_89), median of 10 runs after a warm-up, the cuFFT-backed sparse variant ran benzene (8,219^2, 0.36% dense) in 9.60 ms and the fully custom one in 14.65 ms vs 23.64 ms for dense cuFFT R2C (2.46x and 1.61x), with about one tenth of the device memory; it loses on small and power-of-2 matrices, and SpFFT (~32 ms, single run) was slower than dense.
+
+**Known shortcoming:** Slower than dense cuFFT on sstmodel and delaunay_n14; the custom variant is less accurate (max_abs 2.0e-01 vs 4.7e-02); no license (reference only).
+
+**Known shortcoming:** Latent bug: the phase index ((uint32)u*r)%rows wraps when rows exceed 65,536, giving wrong twiddles for non-power-of-2 row counts (largest tested case 52,329 rows, so no reported number is affected); timed region excludes host COO-to-CSC conversion and the Bluestein precompute.
+
+**How:** Pass 1 walks a compact CSC (empty columns dropped, no values array, uint16_t indices when rows and cols are at most 65,536) and computes the row-direction DFT directly from the nonzeros, one (output-row tile, column) block per CUDA block with no atomics. The column-direction DFT of arbitrary width is done with Bluestein's chirp-z convolution at a smooth length (3-smooth for the custom radix-2/3/fused-9 Stockham FFT, 7-smooth for the cuFFT-backed variant) instead of padding to a power of two. Output rows are processed in tiles of 128, so scratch memory is 2 x tile x fft_len complex values rather than a dense input plus cuFFT workspace, which is where the ~10x memory saving comes from.
+
+**Use it when:**
+- 2-D FFT of graph adjacency or other 0/1 sparsity patterns with a few thousand to ~65k rows, densities around 0.1-0.4%, and a non-power-of-2 width (benzene 8,219^2: 9.60 ms vs 23.64 ms dense cuFFT on an RTX 4090).
+- Inputs where dense cuFFT cannot plan or fit in device memory (pct20stif 52,329^2: dense plan creation failed and SpFFT ran out of memory; the cuFFT-backed sparse variant finished in 893 ms).
+- Memory-constrained GPUs: the sparse variants used 310-317 MB vs 3,305 MB for dense cuFFT on benzene; the experimental streaming flag ran pct20stif at about 474 MB.
+- As a worked example of Bluestein-at-smooth-length plus tiled sparse front ends on CUDA (README documents factorizations, Nsight profiles and ablations).
+
+**Skip it when:**
+- Power-of-2 widths: delaunay_n14 (16,384^2) took 68.56 ms (cuFFT-backed) and 304.76 ms (custom) vs 7.81 ms for dense cuFFT, because Bluestein doubles the transform length and the pipeline runs five passes.
+- Small matrices: on sstmodel (3,345^2) dense cuFFT took 0.85 ms vs 1.39 ms and 3.62 ms for the sparse variants.
+- Weighted (non-binary) sparse data: values are discarded on read, so the output is the FFT of the sparsity pattern, not of the matrix.
+- Matrices with more than 65,536 rows: the pass-1 phase index is computed as ((uint32_t)u * (uint32_t)r) % rows, which wraps once rows^2 exceeds 2^32 and would give wrong twiddles for non-power-of-2 row counts (not tested by the repo, whose largest case has 52,329 rows).
+- Any shipped product: there is no licence file, so the code is reference-only; it is a CSC 766 course submission with 13 commits and no releases.
+
+**Vs siblings:** The GPU FFT siblings (VkFFT, tcFFT, TurboFFT) are dense uniform FFTs and win whenever the dense grid fits and the width is FFT-friendly; FINUFFT/cuFINUFFT handles nonuniform points and MPSFT targets spectra with few large coefficients. Pick cuSpFFT only to study or adapt an input-sparse, binary-valued 2-D transform whose dense cuFFT plan is too large or whose width is awkward (large prime factors), keeping in mind it cannot be copied without a licence.
+
+**Gotchas:**
+- Reported times are CUDA-event timings of the transform loop only: host COO-to-CSC conversion, index uploads and the Bluestein kernel precompute are outside the timed region, as are dense densification and cufftPlan2d for the baseline.
+- Accuracy is lower than dense cuFFT: max_abs error vs the FFTW single-precision reference on benzene is 2.0e-01 for the custom FFT path and 6.3e-02 for the cuFFT-backed path vs 4.7e-02 for dense cuFFT (twiddles use the fast __sincosf intrinsic).
+- The reported non-streaming variants keep the full output on the device (about 11 GB for pct20stif); only the experimental --csc-stockham-cufft-stream path bounds memory by tile size.
+- Default --csc-tile is 1024 while the reported runs use 128, and --repeat defaults to a single run with no warm-up; pass --csc-tile 128 --repeat 10 to match the README tables.
+
+**Status:** Finished course project (final submission April 2026, last commit a .gitignore change on 2026-05-24) with no licence, so treat it as reference material rather than a dependency.
+
+[repo](https://github.com/Darkviper7/cuSpFFT) · [benchmark](https://github.com/Darkviper7/cuSpFFT)
+
+##### MPSFT (Matrix Pencil Sparse Fourier Transform)  `C++`  `no license`  `abandoned`  `Tier A`
+
+Research sparse Fourier transform (C++11) that recovers S dominant modes of a huge noisy spectrum faster than a full FFTW transform.
+
+**Beats:** FFTW (FFTW_ESTIMATE and FFTW_MEASURE plans) — Single-core Google Benchmark runs on an Intel i7-6700K at 4 GHz (CPU scaling off), gcc with -O3 -ffast-math -mavx2, against a locally built FFTW 3.3.6-pl2: MPSFT at prime N=4194301 took 19.4/75.8/140.8/263.4 ms for S=64/512/1024/2048, while full FFTW transforms at N=4194304 took 225.3 ms (FFTW_ESTIMATE) and 102.3 ms (FFTW_MEASURE). So it wins by 5.3x over FFTW_MEASURE at S=64 and breaks even between S=512 and 1024 (derived from page data); the report's '<1800' crossover is against FFTW_ESTIMATE only.
+
+**Known shortcoming:** The 1800 figure is against FFTW_ESTIMATE; against FFTW_MEASURE the crossover is S~1000; MPSFT runs at prime N while FFTW runs at a power of two; loses to sFFT1 and sFFT2 at N~2^22.
+
+**Known shortcoming:** Array<T> in base.h frees its buffer but has no copy constructor (copy double-frees); one global unsynchronized mt19937 (not thread-safe); works only for prime N; source headers say GPL-2.0-or-later (record had no license).
+
+**How:** It follows the sFFT-style framework: a random spectral permutation and modulation (k -> a*k+b mod N) isolates modes into B ~ 2S+1 bins, and binning runs in the time domain with a Gaussian-smoothed boxcar window of support O(B log(1/delta)), followed by a small B-point FFTW transform. Each bin's mode location is decoded one bit at a time by sampling shifts tau = q +/- 2^s B and running a 2x2 matrix pencil SVD (Eigen JacobiSVD), which also rejects bins with mode collisions; an even/odd symmetry trick halves the number of sin/cos evaluations. The hot loop (BinInTime) is vectorized with OpenMP SIMD and Boost.SIMD sincos, which the report credits with at least 2x.
+
+**Use it when:**
+- Very long 1-D complex signals (N around 2^22 or more) whose spectrum is known to be dominated by a few hundred to about a thousand tones plus noise, and you only need those tones.
+- Fixed N with S well below ~1000 (against FFTW_MEASURE) or ~1800 (against FFTW_ESTIMATE): at S=64 it took 19.4 ms vs 102 ms (MEASURE) for a full 2^22 FFTW transform.
+- Workloads where N grows but S stays small: at S=50 runtime rose only from 7.7 ms (N=8191) to 20.5 ms (N=16777213) in the README table.
+- Studying or prototyping SFT algorithms; the code is small and the report explains each step (binning, matrix pencil, symmetry trick).
+
+**Skip it when:**
+- Dense or moderately sparse spectra: at N~2^22 it loses to FFTW_MEASURE somewhere between S=512 and S=1024 (140.8 ms at S=1024 vs 102.3 ms).
+- When you need an exact DFT: output is a probabilistic set of approximate modes; modes can be missed or spurious ones added.
+- Small or medium N, multi-dimensional, real-to-complex or batched transforms: none are implemented.
+- Production use: abandoned since 2017, no releases, no tests of robustness beyond the synthetic model, and the authors' own report says it is not competitive with sFFT1/sFFT2 at N~2^22 (it only overtakes them at N >= 2^23 / 2^25 with S=50).
+- Projects that cannot take GPL code (source headers are GPL-2.0-or-later) or the dated Boost.SIMD dependency.
+
+**Vs siblings:** Pick MPSFT over dense FFTs (FFTW, PocketFFT, KFR) only when the spectrum is truly sparse and you do not know where the peaks are; Auto-MPFT fits when you know which output coefficients you need, and FINUFFT is for non-uniform samples, not sparse spectra.
+
+**Gotchas:**
+- N should be prime: Transform draws any a in [1, N-1] and inverts it mod N, which only always works for prime N; all benchmarks use primes near powers of two (kPrimes table, 4194301 for 2^22) while FFTW was timed at exact powers of two.
+- Caller must know S and the noise level sigma: Demo1 sets bins = 2*(S - found)+1 (min 51), bin_threshold = 3 sigma/sqrt(B) and sv_threshold = sigma/sqrt(B); wrong values change both speed and recovery.
+- Spectrum convention is x_hat_k = (1/N) sum x_t e^(-2 pi i k t/N) (report), unlike FFTW's unnormalized forward transform; results come back as std::unordered_map<int32_t, complex<double>>.
+- Array<T> in base.h frees its buffer in the destructor but has no user-defined copy constructor, so copying a CplexArray shallow-copies the pointer and double-frees; call mps::MainInit first (seeds the RNG with a fixed seed and builds division magic numbers).
+
+**Status:** Abandoned research code (last commit 2017-09-03, 6 stars, no issues or releases), GPL-2.0-or-later per the source headers; useful as a reference implementation of matrix-pencil SFT, not as a maintained library.
+
+[repo](https://github.com/jiaweichiu/mpsft) · [benchmark](https://github.com/jiaweichiu/mpsft)
+
+#### random-and-quasi-random
+
+##### benchmark-rngs PhiloxSIMD (AVX Philox4x32-10)  `C++`  `no license`  `abandoned`  `Tier A`
+
+AVX2 8-lane Philox4x32-10 engine in a 2019 benchmark harness; 3.7x xoshiro256** and 9x std::mt19937 single-thread.
+
+**Beats:** xoshiro256**, PCG64 and std::mt19937 (also an at::mt19937 implementation shipped in the repo) — On a Xeon E5-1660 v4 (turbo off, Ubuntu 18.04, GCC 7.4.0, -std=c++11 -march=native in a CMake Release build), one thread generating 134,217,728 32-bit values took 0.176 s with SIMD Philox (bulk vector consumption), 0.439 s with scalar Philox, 0.651 s with xoshiro256**, 0.659 s with the 'pcg64' row (actually pcg32, half the bits), 0.393 s with at::mt19937 and 1.609 s with libstdc++ std::mt19937. That is about 3.7x faster than xoshiro256** and 9.1x faster than std::mt19937 (derived from page data).
+
+**Known shortcoming:** No license; PhiloxSIMD defaults to UNSHUFFLE 0, so its output is a block-reordered Philox stream (same values, different order) and the timings leave out the reorder cost.
+
+**Known shortcoming:** Benchmark flaws: the 'pcg64' baseline in PCG.h is really pcg32 (32-bit output) yet the harness counts each call as two 32-bit values; the 9.1x over std::mt19937 is partly harness overhead (std::mt19937 ~12 ns per output vs the repo's own at::mt19937 doing the same work in 2.9 ns; against at::mt19937 the gain is 2.2x, derived from page data). In the 'global' multithreaded runs a mutex is held for each thread's whole loop, so those runs are serialized. Equality check against scalar Philox is commented out because outputs match only with UNSHUFFLE=1.
+
+**Independent measurement:** enrichment
+
+**How:** It runs 8 independent Philox counters at once in AVX2 lanes. Each round uses _mm256_mul_epu32 on even and odd lanes plus shuffle/unpack to form the 32x32-to-64 mulhi/lo pairs, and the 10 rounds are fully vectorized with broadcast keys. Counter increments are one vector add, with a scalar fallback only near 32-bit wrap. The default build (UNSHUFFLE 0) skips the 4x8 transpose, so the outputs come out word-major rather than in standard Philox order.
+
+**Use it when:**
+- You need bulk 32-bit random words on x86-64 with AVX2 and can consume them as __m256i vectors (e.g. filling buffers or vectorized distribution transforms).
+- You want counter-based streams with PyTorch/CUDA Philox semantics (seed, subsequence, offset skip-ahead) so each thread gets an independent subsequence at no setup cost.
+- Multithreaded generation with one engine per thread. Thread-local SIMD Philox reached about 0.03 s wall time for 134M values at 8 threads, against 0.188 s on one thread (derived from page data).
+- As a reference for writing your own AVX2 Philox kernel. The core is about 150 lines.
+
+**Skip it when:**
+- You need a licensed dependency. The repo has no LICENSE file, so legally it is reference-only, even though the code says it was adapted from PyTorch (BSD-3-Clause).
+- You need output identical to Random123, cuRAND or PyTorch Philox. That requires setting UNSHUFFLE to 1, which the published timings did not include.
+- Non-x86 targets, MSVC, or CPUs without AVX2. It includes <x86intrin.h>, uses __builtin_expect and AVX2 integer intrinsics, and has no NEON or scalar fallback in this header.
+- You draw a few values at a time through operator(). Only the bulk next32 path was benchmarked, and at 8 values xoshiro256** was faster (1.58e-7 s vs 1.79e-7 s).
+- You need a maintained library with tests. The last commit was in 2019, the harness's equality check against scalar Philox is commented out, and it has no CI.
+
+**Vs siblings:** Pick it only to study a compact AVX2 Philox kernel compatible with PyTorch's (seed, subsequence, offset) API. For something you can ship, compare OpenRAND (counter-based Philox and Squares for CPU and GPU, with paper measurements), vphilox (vectorized Philox benchmarked on several CPUs) or simdrng/VMT19937 (vectorized xoshiro and Mersenne Twister against std engines), and check their licenses, since this repo has none.
+
+**Gotchas:**
+- With UNSHUFFLE 0 (the default), each 32-word block is a transposed reordering of standard Philox4x32-10 output. check_philox_vs_simd() in benchmark.cpp is commented out with a note that UNSHUFFLE must be 1 for the outputs to match.
+- The 'pcg64' baseline in PCG.h is actually PCG32 (pcg32_random_r: 64-bit state, 32-bit XSH-RR output), but the harness counts each call as two 32-bit randoms. That row therefore produced only half the bits it claims.
+- Baseline per-call costs derived from page data are high (about 9.7 ns per xoshiro256** call and 12 ns per std::mt19937 output, while the repo's own at::mt19937 runs the same algorithm in 2.9 ns). Part of the 9x gap over std::mt19937 is likely harness or implementation overhead, not generator cost. Against at::mt19937 the gap is 2.2x.
+- In the 'global' multithreaded runs, a mutex is held for each thread's entire loop, so those runs are serialized and their wall time stays flat as threads are added.
+
+**Status:** Abandoned since 2019-07-18 (4 stars), with no license, so it is reference-only. The PhiloxSIMD.h technique is worth reading, but reimplement it or take PyTorch's BSD code rather than copying from here.
+
+[repo](https://github.com/syed-ahmed/benchmark-rngs) · [benchmark](https://raw.githubusercontent.com/syed-ahmed/benchmark-rngs/master/results/README.md)
+
+##### simdrng  `C++`  `BSD-3-Clause-Attribution`  `active`  `Tier A`
+
+C++20 xoshiro256++, ChaCha and Philox engines with xsimd SIMD bulk fill; beats std::mt19937_64 per call and in bulk.
+
+**Beats:** std::mt19937_64 and std::uniform_real_distribution; also scalar xoshiro256++ — The project's CI Google Benchmark run (gcc-15, Release, -march=x86-64-v3, AMD EPYC 7763 GitHub runner, libstdc++) measured XoshiroSIMD bulk fill at 1645 ns per 4096 u64 vs 3835 ns for the scalar loop (about 2.3x), Philox4x32 3.5x and ChaCha20 2.8x SIMD over scalar fills. Against the standard library it measured per-call times only: std::mt19937_64 1.60 ns vs XoshiroScalar 0.94 ns, and std::mt19937_64 + std::uniform_real_distribution 8.01 ns vs XoshiroScalar::uniform() 1.32 ns; std::mt19937_64 was never timed in bulk.
+
+**Known shortcoming:** Single-value SIMD calls are 3x slower than scalar (wins need bulk generation); BSD-3-Clause-Attribution is not OSI-approved, so reference.
+
+**Known shortcoming:** The simdrng::Xoshiro alias is the buffered XoshiroNative/XoshiroSIMD (2.8 ns per call), not the scalar engine, contrary to the docs guide. XoshiroScalar(seed,t) produces the same stream as lane t of XoshiroSIMD(seed), so mixing them overlaps streams. SIMD output depends on ISA width. fill_double gains only ~1.2x; std::mt19937_64 was timed per call only.
+
+**Independent measurement:** enrichment
+
+**How:** The SIMD engines keep SIMD_WIDTH independent xoshiro256++ states in the lanes of four xsimd registers, lane i being the scalar generator after i jump() calls (2^128 steps), so one vector step yields 2/4/8 outputs on SSE2/AVX2/AVX-512. generate() writes whole 256-value blocks straight to the caller's buffer with unrolled unaligned vector stores; single-value calls drain a 256-entry cache refilled by the same code. The scalar uniform() uses the (x >> 11) * 2^-53 conversion from Vigna's notes instead of std::uniform_real_distribution, and the scalar engine is a constexpr inlined port of the reference xoshiro256plusplus.c. ChaCha and Philox gain more from SIMD because their per-value compute is heavier.
+
+**Use it when:**
+- Filling large u64 buffers (Monte Carlo batches, tensors, NumPy arrays): XoshiroSIMD generate() measured 0.40 ns/value vs 0.94 ns for the scalar loop on an AVX2 EPYC 7763
+- Replacing std::mt19937_64 + std::uniform_real_distribution in a per-call loop: XoshiroScalar::uniform() was 1.32 ns vs 8.01 ns
+- Counter-based reproducible streams across threads or MPI ranks: Philox4x32 SIMD bulk fill was about 3.5x its scalar version, and Philox derives sub-streams from (seed, counter) without coordination
+- One binary shipped to mixed x86 fleets, built with SIMDRNG_DISPATCH=ON so the AVX-512/AVX2/SSE2 tier is picked at runtime (NEON and RVV128 on other ISAs)
+- Python code that wants a drop-in numpy.random.Generator backed by a GIL-released C++ bulk fill
+
+**Skip it when:**
+- Cheap engines consumed one value at a time: XoshiroSIMD/XoshiroNative cost 2.81-2.82 ns per call vs 0.94 ns for XoshiroScalar because of the buffered read, so stay scalar there
+- Results that must be bit-identical across machines: the SIMD stream interleaves SIMD_WIDTH lanes, so the same seed gives different sequences on SSE2 (2 lanes), AVX2 (4) and AVX-512 (8); use XoshiroScalar or Philox/ChaCha with fixed counters
+- Double-precision bulk fill expecting the u64 speedup: fill_uniform went through a 256-value temporary and measured 4219 ns vs 5116 ns scalar per 4096 doubles (about 1.2x, derived from page data)
+- Projects that need a stable API or a permissive OSI license: pre-1.0 with no tagged release, and the BSD-3-Clause-Attribution license adds an acknowledgement clause for every redistribution
+- Security uses, unless you vet it yourself: the ChaCha guide calls ChaCha12/20 'the cryptographic choices', but there is no claim of constant-time code, key handling or reseeding, so treat it as a statistical generator
+
+**Vs siblings:** Pick simdrng over Xoshiro256PlusSIMD or the xoshiro8x256pp gist when you want a maintained, tested package with runtime ISA dispatch, std-compatible engines, xoshiro256++ (not 256+) and Philox/ChaCha in one place. Pick VMT19937 instead if you must keep Mersenne Twister output, and SHISHUA or the AES-based testingRNG generators if raw byte throughput matters more than a standard algorithm.
+
+**Gotchas:**
+- simdrng::Xoshiro is not the scalar engine: xoshiro.hpp aliases it to XoshiroSIMD with SIMDRNG_DISPATCH=ON and to XoshiroNative (non-portable, build-host -march) by default, while docs/guides/xoshiro.rst says it falls back to XoshiroScalar. Name XoshiroScalar explicitly for per-call use.
+- Stream overlap when mixing types: XoshiroScalar(seed, t) jumps t times by 2^128, which is exactly lane t of XoshiroSIMD(seed); SIMD thread_id uses mid_jump (2^160) instead. Do not mix scalar thread streams and SIMD engines on the same seed.
+- On SIMD types jump(n) advances every lane by n (so n x SIMD_WIDTH outputs of the interleaved stream) and does not flush values already in the 256-entry cache (from xoshiro_simd.hpp).
+- Each SIMD instance carries a 2 KiB output cache plus up to 256 bytes of 64-byte-aligned state, and the runtime-dispatch types need the compiled library; they are not available from the single header.
+
+**Status:** Active (last commit 2026-07-22, 151 commits, CI on Linux/macOS/Windows with sanitizers and static analysis) but pre-1.0, single author, 3 stars, and under a BSD-3-Clause-Attribution license that requires an acknowledgement, so listed as reference rather than copyable.
+
+[repo](https://github.com/DiamonDinoia/simdrng) · [benchmark](https://raw.githubusercontent.com/DiamonDinoia/simdrng/benchmark-results/results/gcc-15/20260722T164804Z.json)
+
+#### sparse-and-solvers
+
+##### Cache-Aware and GPU-Accelerated SpMV (VSJ001)  `C++`  `no license`  `active`  `Tier A`
+
+Coursework-scale CUDA CSR-vector SpMV kernel (one warp per row) that edges out cuSPARSE CSR_ALG2 on three regular SuiteSparse matrices.
+
+**Beats:** cuSPARSE SpMV (CSR_ALG2) — On one A100 (CUDA 12.3, nvcc -O3 -arch=sm_80), the hand-written CSR-vector kernel ran double-precision SpMV in 0.053, 0.078 and 0.051 ms on cant, consph and pdb1HYS versus 0.069, 0.097 and 0.079 ms for cuSPARSE CSR_ALG2 called through a freshly created handle each time (24-56 percent higher effective bandwidth), while cuSPARSE was about 4.2x faster on webbase-1M; all numbers come from the author's committed results/gpu/timings.csv.
+
+**Known shortcoming:** Each timed cuSPARSE CSR_ALG2 call recreates the handle and descriptors; cuSPARSE's floor is ~0.021-0.025 ms on tiny matrices while the gaps on real matrices are 0.016-0.028 ms (derived), so much of the 24-56% win may be per-call overhead; no license (reference only).
+
+**Known shortcoming:** README pairs 'A100 80GB' with a 1555 GB/s peak, the 40GB card's figure (the 80GB SXM is ~2039 GB/s), so '98-110% of peak' is overstated. cuSPARSE wrapper creates a new handle on every call (penalizes the baseline). Committed run scripts use --iters 20, not 10. Vector kernel loses to the scalar and ELL kernels on short rows. No licence.
+
+**Independent measurement:** enrichment
+
+**How:** The CSR-vector kernel assigns one 32-thread warp per row, so the lanes stride through a row's nonzeros with coalesced loads of values and col_idx, then combine partial sums with a __shfl_down_sync warp-shuffle tree reduction (block of 128 threads, 4 rows per block). This is the classic Bell and Garland CSR-vector scheme; it pays off when rows hold tens of nonzeros (cant, consph and pdb1HYS average about 64-119 nnz per row, derived from page data). There is no load balancing, no row binning and no adaptive selection between scalar and vector inside the kernel; the harness only decides whether to skip ELL.
+
+**Use it when:**
+- Learning or teaching GPU SpMV: a compact, readable side-by-side of CSR scalar, CSR vector, ELL and cuSPARSE with a roofline script and committed A100 results.
+- FEM or structural matrices with fairly uniform, moderately long rows (tens of nonzeros per row) where a plain warp-per-row kernel is enough and you want no library dependency.
+- As a starting point for your own fused SpMV (for example inside an iterative solver loop) where launching a cuSPARSE call per iteration is not wanted.
+- Double precision, 32-bit indices, matrices that fit on one GPU (tested on A100 sm_80; Makefile also targets sm_70 and sm_90).
+
+**Skip it when:**
+- Power-law or web-graph matrices: on webbase-1M cuSPARSE is about 4.2x faster (0.087 vs 0.365 ms), because the kernel has no load balancing for heavy-tailed rows.
+- Very short rows (about 1-5 nnz per row): on the committed 50K and 100K-row synthetic matrices the vector kernel takes 0.016-0.032 ms while the scalar and ELL kernels take 0.007-0.017 ms, since one warp per row idles most lanes.
+- Production code: no LICENSE file (all rights reserved by default), 4 commits, 0 stars, no tests beyond a --validate max-abs-error print, so it can only be read as a reference.
+- Anything needing float, complex, transposed SpMV, alpha/beta scaling, 64-bit indices or multiple right-hand sides; none are implemented.
+- When you need a decision-grade comparison: only one cuSPARSE algorithm (CSR_ALG2) was tried, on one GPU, with four real matrices.
+
+**Vs siblings:** Pick it only to read a minimal warp-per-row CUDA CSR kernel; for real GPU SpMV, ISpMV (2.17x geomean over cuSPARSE ALG2 on an H100, preprocessing excluded) or merge-spmv/CSR5 (load-balanced, peer-reviewed, robust on irregular matrices) are the better choices, and on CPUs CVR, SPC5 or ALBUS target MKL instead.
+
+**Gotchas:**
+- Reported GB/s counts every x[col] read as DRAM traffic, so figures above 100 percent of peak (pdb1HYS 1718 GB/s) reflect L2 reuse of x, as the README itself notes; the CSR arrays alone are about 48-72 MB per matrix (derived from page data).
+- The README pairs 'A100 80GB' with a 1555 GB/s peak, which is the A100 40GB figure; per vendor specs quoted in search results the 80GB SXM part is rated about 2039 GB/s, so the '98-110 percent of peak' framing is likely overstated if the card really was the 80GB model.
+- The cuSPARSE wrapper creates a new handle, CSR and vector descriptors and a workspace buffer on every call and times only the cusparseSpMV call; nothing is reused across iterations, and cuSPARSE takes about 0.021-0.036 ms even on the tiny synthetic matrices, so part of the 24-56 percent margin may be per-call cuSPARSE overhead rather than kernel efficiency.
+- The cuSPARSE launcher casts nnz to int and all index arrays are int32, so matrices above 2^31 nonzeros are out of scope; the committed run scripts use --iters 20 (the README's CLI default is 10), with one untimed warm-up.
+
+**Status:** Single-author coursework-style repository (4 commits, all 2026-05-08, 0 stars) with no license, so it is reference-only and cannot be vendored.
+
+[repo](https://github.com/VSJ001/Cache-Aware-and-GPU-Accelerated-Sparse-Matrix-Vector-Multiplication) · [benchmark](https://github.com/VSJ001/Cache-Aware-and-GPU-Accelerated-Sparse-Matrix-Vector-Multiplication)
+
+##### CKTSO (parallel sparse direct solver for circuit simulation)  `C (prebuilt shared libraries with a C header; source not published)`  `Proprietary freeware binaries with no license text; the library requires a signed key file (license/cktso.lic) whose EXPIRE field is 2028-12-31`  `active`  `Tier B`
+
+Closed-source parallel sparse LU solver for SPICE circuit matrices; first-party claims >3x over KLU sequential, >25x at 16 threads.
+
+**Beats:** KLU from SuiteSparse (sequential, approximate minimum degree ordering); README also names NICSLU, Intel MKL PARDISO and two GPU-based sparse solvers — The README's 'on average >3x faster than sequential KLU (AMD ordering) when sequential and >25x with 16 threads' on 66 SuiteSparse circuit matrices is first-party with no hardware or method; the 2022 results PDF (old version, Xeon Gold 6130 16 cores, gcc 4.8.5, KLU given NICSLU's ordering) shows about 2.8x and 14.6x. The author's IEEE TCAD 2025 paper, shipped in the repo as doc/tcad.pdf, compares only with NICSLU and oneMKL PARDISO on 56 circuit matrices on the same Xeon Gold 6130, mostly in the best case where fast factorization never re-pivots: 5.9x over NICSLU and 11.9x over PARDISO at 16 threads, about 20% lower when 10% of runs re-pivot. The shipped demo/benchmark.cpp likewise times 100 Factorize(ax, fast=true) calls on unchanged values, so its numbers are also that best case.
+
+**Known shortcoming:** Binary only with no license text and a signed key file that expires 2028-12-31; its 2022 results PDF shows about 2.8x/14.6x over KLU (KLU given NICSLU's ordering), and MKL PARDISO is faster on some of the largest matrices.
+
+**Known shortcoming:** README's >3x/>25x over KLU is first-party with no hardware or method; the 2022 results PDF (Xeon Gold 6130, gcc 4.8.5, KLU given NICSLU's ordering) shows ~2.8x and ~14.6x. The peer-reviewed IEEE TCAD 2025 paper shipped as doc/tcad.pdf compares only with NICSLU and oneMKL PARDISO, mostly in the best case where fast refactorization never re-pivots (about 20% lower at 10% re-pivot); demo/benchmark.cpp also times that best case. Binary-only distribution. Open issues #12/#14/#16/#18 have no maintainer replies.
+
+**Independent measurement:** enrichment
+
+**How:** Ordering: it runs 10 fill-reducing orderings (8 minimum-degree variants, 2 nested-dissection variants) and keeps the one with the fewest predicted flops; the TCAD paper reports NICSLU's AMD-style ordering produces 39.8% and METIS-based PARDISO 188% more factorization flops than CKTSO's on 56 circuit matrices. Factorization: a pivoting-reduction 'fast factorization' reuses the previous pivot order and symbolic structure while checking each pivot, falling back to partial pivoting from the first bad row, which lets it parallelise like a refactorization. Solving: a structure-adaptive hybrid parallel forward/backward substitution, plus supernode detection and adaptive kernel selection, with AVX2 and FMA required.
+
+**Use it when:**
+- SPICE-style transient or DC simulation on x86-64 with AVX2/FMA, where the same sparsity pattern is factorized hundreds of times and KLU's sequential refactorization dominates run time.
+- Large post-layout, power-grid or mesh-like circuit matrices, where its nested-dissection ordering cuts fill-in sharply versus AMD-based KLU or NICSLU (the paper names G3_circuit, G2_circuit, memchip, meg1 and FullChip).
+- Multi-core workstations (the paper uses a 16-core Xeon Gold 6130) where you want parallel factorization with KLU-style full-row threshold partial pivoting rather than a partitioned BBD approach.
+- Commercial or in-house simulators that can accept a binary dependency and want KLU-like call structure (analyze / factorize / refactorize / solve) with a separate GPU add-on (CKTSO-GPU) available later.
+
+**Skip it when:**
+- Anything that must be open source, auditable, rebuilt, or shipped on non-x86 hardware: only x86-64 Linux (CentOS 6/7, Rocky 8) and Windows binaries exist; Apple Silicon support is an open request (issue #3).
+- Deployments that cannot depend on a licence key: the library refuses to run (error -99) without license/cktso.lic next to the .so/.dll, and the shipped key carries an expiry date (2028-12-31).
+- One-shot solves or non-circuit matrices: analysis is slow by design (it races 10 orderings), the first factorization and first parallel solve are much slower than later ones, and the author says the implementation is tuned for circuit matrices; on several of the largest matrices MKL PARDISO factorized faster in the 2022 results PDF.
+- Single-precision, or complex-heavy workloads where speed matters: only double (real or complex) is offered and the user guide says complex performance is not yet fully optimised.
+- Projects needing responsive support: open issues on parallel slowdown on Windows (#12), thread auto-detection (#14), natural-ordering failures (#16) and a demo crash in an MSVC debug build (#18) have no maintainer replies.
+
+**Vs siblings:** Pick CKTSO over GSS (also binary-only, compared with an old PARDISO) or RSLAB (pure-Rust KLU-style solver measured against PARDISO) when the matrices come from SPICE and you can run on x86-64 with a licence key and want multi-core refactorization; pick PanguLU instead for distributed multi-GPU LU on general matrices, and stay with KLU when source access, portability or a sequential embedded build matters more than speed.
+
+**Gotchas:**
+- Pass representative values (not NULL) to CKTSO_Analyze: with ax=NULL static pivoting is disabled and ordering is structure-only, which the tips document warns can increase fill-in dramatically.
+- Fast factorization (Factorize with fast=true) is unsafe after a big change in values: the tips say to disable it for the first factorization of each DC method or stepping value and after a time-step rollback.
+- Parallel solve needs a setup costing about 2-5x a sequential solve each time the LU structure changes, and the tips do not recommend parallel solve for column-mode matrices on Windows; the library may silently fall back to one thread based on matrix features (check oparm[18]).
+- Default threads=0 uses all physical cores as detected; the user guide recommends setting the count explicitly, and auto-detection in cloud VMs is reported as unreliable (issue #14).
+
+**Status:** Actively updated (latest version 20260321, last commit 2026-03-26) but distributed as proprietary binaries with no licence text and a time-limited key, so it is a reference to call, not code to copy.
+
+[repo](https://github.com/chenxm1986/cktso) · [benchmark](https://github.com/chenxm1986/cktso/blob/master/doc/tcad.pdf)
+
+##### Task-based nested multithreaded CHOLMOD for A64FX (OmpSs)  `C`  `CC-BY-4.0`  `unknown`  `Tier B`
+
+Research OmpSs/OpenMP-task parallelization of CHOLMOD's supernodal Cholesky with selective nesting; 1.95x over multi-threaded-BLAS CHOLMOD on A64FX.
+
+**Beats:** CHOLMOD with multi-threaded BLAS — On a 48-core 4-socket A64FX (2.2 GHz, 32 GB HBM2) with fcc 4.2.0b, OmpSs-1 19.06 and Fujitsu BLAS, OPT-D-COST averaged 1.46x over a non-nested task-parallel CHOLMOD and 1.95x over stock CHOLMOD with multi-threaded BLAS across 60 SuiteSparse SPD matrices (about 1.07x on small, up to 1.83x on large groups).
+
+**Known shortcoming:** Compiler flags and CHOLMOD version not stated; A64FX-only; code is a Zenodo artifact under CC-BY-4.0 (not an OSI software license).
+
+**Known shortcoming:** 1.46x is against the authors' own non-nested OpenMP-task CHOLMOD, not an external library; 1.95x vs multi-threaded-BLAS CHOLMOD is the same data; thresholds tuned on A64FX only, need re-tuning for x86; Zenodo zip has no build instructions; small matrices gain only ~1.07x.
+
+**How:** Stock CHOLMOD walks supernodes in order and gets parallelism only from multi-threaded BLAS inside each supernode, which starves on small or very sparse fronts. This work exposes elimination-tree parallelism as tasks and uses 'selective nesting': an outer task is split into inner update tasks only if it has at least D updates (D picked per matrix by the OPT-D heuristic targeting max(1.1*n_super, n/14) tasks), and OPT-D-COST additionally suppresses inner tasks under about 50,000 flops to cut runtime overhead. Nesting is toggled with the OpenMP 'final' clause.
+
+**Use it when:**
+- You run CHOLMOD-style supernodal Cholesky on many-core Arm A64FX (Fugaku/FX1000/FX700) and multi-threaded BLAS leaves cores idle.
+- Large SPD matrices (millions of nonzeros) where the paper reports 1.67-1.83x over its non-nested task baseline.
+- Matrices with wide, shallow elimination trees where mt-BLAS CHOLMOD collapses (e.g. af_shell3: mt-BLAS 0.19x vs OPT-D-COST 1.31x relative to non-nested).
+- As a reference design for adding task-granularity control to your own supernodal or multifrontal factorization.
+
+**Skip it when:**
+- Production code: it is a paper artifact under CC-BY-4.0 (not an OSI software license), with no releases, tests or maintenance.
+- x86 or GPU machines: only A64FX was evaluated; the authors say thresholds (n/14 goal, 50,000-flop cutoff, D <= 30% of max children) were tuned there and would need re-tuning for x86.
+- Small matrices (10k-200k nonzeros): gain over the non-nested task version is only about 1.07x.
+- Toolchains without OmpSs-1 (nanos++/mercurium) unless you port the pragmas to plain OpenMP tasks yourself.
+- If you need a maintained faster Cholesky, BaSpaCho or Sympiler are catalogued with real repositories.
+
+**Vs siblings:** Pick it over BaSpaCho or Sympiler only if you are staying inside CHOLMOD on A64FX and want its task-granularity heuristics; otherwise those siblings are maintained libraries with code you can actually depend on.
+
+**Gotchas:**
+- The 1.46x headline is against the authors' own non-nested task version (equivalent to PaStiX-style 1D task decomposition), not against an external library; 1.95x vs mt-BLAS CHOLMOD is the same data (mt-BLAS averages 0.75x of non-nested).
+- Always-nested tasks run out of memory on 7 large matrices; selective nesting avoids that, so the D threshold also matters for memory.
+- Heuristic constants are empirical and hard-coded; the paper adds further hand-written hybrid conditions (average supernode size > 50, density < 1e-4).
+- CHOLMOD version and compiler flags are not stated, so reproducing the numbers needs the archive's scripts.
+
+**Status:** One-off research artifact (Zenodo v3, Oct 2021; paper arXiv 2202.09288, also presented at ESPM2'22) with no ongoing maintenance; reference-only because the artifact is CC-BY-4.0 rather than a software license.
+
+[repo](https://doi.org/10.5281/zenodo.5974376) · [benchmark](https://arxiv.org/pdf/2202.09288)
+
 ### parsing-and-text
 
 #### lexers-tokenizers
@@ -1892,6 +2467,779 @@ gRPC C++ transport plugin that replaces HTTP/2-over-TCP with the Homa kernel RPC
 **Status:** Stale: work stopped in late 2023 and the last commit (Aug 2025) only ported the code to the Homa API of that time; the C++ code has no LICENSE file or license headers, so treat it as reference only, not something to vendor.
 
 [repo](https://github.com/PlatformLab/grpc_homa) · [benchmark](https://github.com/PlatformLab/grpc_homa)
+
+### numerics-and-science
+
+#### autodiff-and-ml-kernels
+
+##### learn-cuda attention (hand-written SM120 flash attention)  `CUDA C++ with inline PTX (PyTorch harness)`  `no license`  `active`  `Tier C`
+
+Educational ~300-line CUDA C++ FlashAttention-2 forward kernel; 4-6% faster than flash-attn on one RTX 5090 shape, 3% slower than cuDNN.
+
+**Beats:** flash-attn (FlashAttention-2 package) and PyTorch F.sdpa FlashAttention backend; PyTorch F.sdpa cuDNN backend is NOT beaten — On one RTX 5090 capped at 400W (CUDA 12.9, bf16, head_dim 128, 8 heads, 4096 queries x 8192 keys, non-causal), the author's harness timed v5 at 197.74 TFLOPS (median from triton do_bench), against 190.58 for the flash-attn package (about 1.04x) and 186.73 for PyTorch SDPA's FlashAttention backend (about 1.06x), but behind SDPA's cuDNN backend at 203.61 TFLOPS (about 0.97x). PyTorch and flash-attn versions and the host CPU are not stated.
+
+**Known shortcoming:** Slower than cuDNN SDPA (197.74 vs 203.61 TFLOPS); learning repo with no license.
+
+**Known shortcoming:** Correctness: no tail handling or KV masking, so sequence lengths not divisible by 64 read out of bounds and give wrong output; head_dim != 128 calls exit(1); no dtype or contiguity checks. Launches on the default stream, not torch's current stream. Uses sm80 mma.sync PTX with nothing SM120-specific, so 'SM120 flash attention' overstates it. No licence.
+
+**Independent measurement:** enrichment
+
+**How:** FlashAttention-2 partitioning: each 128-thread block owns a 64-row query tile, the four warps split those rows, and every warp streams through 64-row K/V tiles with an online softmax (running row max and sum, rescaling the output accumulator) so the attention matrix is never materialized. Data moves global to shared with cp.async into XOR-swizzled shared memory to avoid bank conflicts, then to registers with ldmatrix.x4 (transposed for V), and both matmuls use bf16 mma.sync.m16n8k16 tensor-core instructions with fp32 accumulators. v5 double-buffers K and overlaps the next K and V loads with the softmax and the matmuls (2-stage cp.async pipeline).
+
+**Use it when:**
+- You want a short, readable reference for a near-roofline FlashAttention-2 forward pass in raw CUDA C++ and inline PTX, with each optimization isolated in its own file (swizzling, pipelining, ldmatrix.x4).
+- You are writing your own attention kernel for consumer Blackwell (RTX 5090, sm_120) or Ampere/Ada-class GPUs and need a working baseline to modify, for example to try MXFP8/NVFP4 MMA, which the author cites as the reason for using CUDA C++ instead of Triton.
+- Non-causal bf16 prefill-style attention with head_dim 128 and sequence lengths that are multiples of 64, where you can verify the result yourself against F.scaled_dot_product_attention.
+
+**Skip it when:**
+- Production inference or training: use PyTorch SDPA with the cuDNN backend (203.61 vs 197.74 TFLOPS on the author's own benchmark), flash-attn or FlashInfer, which handle masks, varlen, GQA and backward.
+- Any head_dim other than 128: the host wrapper prints an error and calls exit(1), terminating the Python process.
+- Sequence lengths not divisible by 64: the kernel has no tail handling or KV masking, so partial tiles read out of bounds and produce wrong results.
+- Causal attention, masks, dropout, fp16 or fp8 inputs, or training (no backward kernel).
+- Anything you need to redistribute: the repository has no license file.
+
+**Vs siblings:** Pick this over FlashAttention-3, ThunderKittens or SageAttention only when you want to learn from or fork a minimal kernel: FA3 targets Hopper, SageAttention trades precision for speed on RTX 5090-class GPUs, and both are maintained libraries, whereas this is roughly 300 lines you can read in one sitting.
+
+**Gotchas:**
+- attention.cpp does not check dtype, device or contiguity and takes raw data pointers, flattening batch x heads; a transposed or non-contiguous tensor gives silently wrong output.
+- Kernels launch with <<<>>> on the default stream, ignoring torch.cuda.current_stream(); code running on other streams can race or serialize.
+- Softmax uses the fast-math __expf and P is rounded to bf16 before the P@V matmul (as in FA2); the harness checks output only with torch.testing.assert_close defaults on one random shape.
+- The harness default is --bs 4 while the README table states bs=1; reproduce with --bs 1 to compare numbers.
+
+**Status:** The repo gets commits (last 2026-09-07), but this is a personal learning repository with no license, so treat it as reference reading only; the attention kernel was written up in an August 2025 blog post (gau-nernst.github.io/fa-5090, blocked here and known only from search snippets).
+
+[repo](https://github.com/gau-nernst/learn-cuda) · [benchmark](https://github.com/gau-nernst/learn-cuda/blob/HEAD/07_attention/README.md)
+
+##### oneDNN Graph Compiler  `C++`  `no license`  `unknown`  `Tier C`
+
+Intel's tensor compiler backend for oneDNN Graph API that fuses MLP/MHA subgraphs; beat oneDNN post-op fusion and TVM. Removed in oneDNN 3.8.
+
+**Beats:** oneDNN primitives with post-op fusion; TVM auto-scheduler — Intel's own arXiv paper (2301.01333) measured on a 32-core Xeon Platinum 8358: BERT-Large 1.12x and DLRM 1.15x end to end over oneDNN post-op fusion, MHA 2.3x (FP32) / 2.4x (Int8) lower time than post-op fusion, and 2.4x (MLP) / 6.2x (MHA) average over TVM with auto-scheduler; FP32 MLP was 4% slower than oneDNN primitives and Int8 MLP 6% faster. No compiler, flags or benchmark scripts are given.
+
+**Known shortcoming:** Intel's own arXiv paper, no venue, compiler or flags; code lives inside the oneDNN repo (itself a baseline), no subdirectory named.
+
+**Known shortcoming:** Discontinued: deprecated in oneDNN v3.7 and removed in v3.8; code (Apache-2.0) only in v3.7 tree; always experimental; build refuses the DPCPP CPU runtime.
+
+**How:** It lowers through two IRs: a Graph IR that keeps op semantics for graph-level passes (layout propagation, constant-weight preprocessing, FP32-to-Int8 conversion with quantization-parameter folding) and a C-like Tensor IR for code generation. Compute-heavy ops are expanded from expert-written templates around tuned microkernels instead of being searched by an auto-scheduler. Fine-grain fusion inserts neighbouring ops at anchor points inside the template loops, and coarse-grain fusion merges the parallel outer loops of several fused ops, with buffer reuse by liveness analysis.
+
+**Use it when:**
+- Only if you are pinned to oneDNN 3.0-3.7 on Intel Xeon and run Int8 or FP32 BERT-style MHA blocks through the Graph API (the paper reports 2.3-2.4x lower MHA time than post-op fusion).
+- As a reference design for template-plus-fusion tensor compilers, if you are building your own fused MLP/attention codegen for CPUs.
+- Reproducing the paper's BERT-Large / DLRM numbers on a Xeon Platinum 8358-class machine with a matching oneDNN 3.x build.
+
+**Skip it when:**
+- New projects: oneDNN 3.7 deprecated the backend and 3.8 removed it; current oneDNN covers SDPA and gated MLP through its regular Graph API backend.
+- FP32 MLP: the paper measured it 4% slower than plain oneDNN primitives.
+- Non-Intel or non-x86 targets: the paper only measured a Xeon Platinum 8358 and the docs list no other supported platforms.
+- Builds with the DPC++/SYCL CPU runtime: its CMake fails with an unsupported CPU runtime error for DPCPP.
+- Anything that needs stability: the backend was always labelled experimental.
+
+**Vs siblings:** LIBXSMM and Optimizing-DGEMM are kernel libraries you call directly, while this was a graph-level fuser behind the oneDNN Graph API; pick it only for whole-subgraph MHA/MLP fusion on an old oneDNN, since it is no longer maintained.
+
+**Gotchas:**
+- Off by default; it had to be enabled at CMake time, and runtime env vars ONEDNN_EXPERIMENTAL_GRAPH_COMPILER_CPU_JIT (llvm/c/builtin) and _OPT_LEVEL change codegen.
+- Removed in oneDNN v3.8, so upgrading oneDNN silently drops back to the regular dnnl backend's fusions.
+- The 'c' JIT mode is unavailable on Windows and macOS per its CMake file.
+
+**Status:** Discontinued: deprecated in oneDNN 3.7 and removed in 3.8 (2025); the code remains readable at the v3.7 tag under Apache-2.0, but it is a reference, not something to adopt.
+
+[repo](https://github.com/uxlfoundation/oneDNN/tree/v3.7/src/graph/backend/graph_compiler) · [benchmark](https://arxiv.org/pdf/2301.01333)
+
+#### big-integer-arbitrary-precision
+
+##### DigitsOnTurbo (DoT)  `C`  `no license`  `unknown`  `Tier C`
+
+Research SIMD (AVX-512/IFMA) kernels for bignum add/sub and base-case multiply, patched into GMP and OpenSSL.
+
+**Beats:** GMP 6.3.0 (also OpenSSL 3.5.2 bignum) — Against stock GMP 6.3.0, DoT-patched GMP gives geomean 3.81x add, 3.73x sub and 1.41x multiply over 512-32,768-bit operands, up to 48.7% on large multiplies and +19.3% on pi. Against OpenSSL 3.5.2 it gives 2.95x add and 4.08x sub. All results are from clang 14 -O2 -march=native on Xeon Gold 6548Y+ (Emerald Rapids) and Xeon Max 9462 (Sapphire Rapids), measured by the authors.
+
+**Known shortcoming:** Code only at an anonymous review link that blocked fetch (unverified); no license; preprint with no venue named.
+
+**Known shortcoming:** Without AVX-512 gains mostly vanish (SSE add 0.7x, AVX2 1.2x); whole-program gains small (pi +19.3%, GMPbench +7.8%, RSA/FFDH/DSA +3-5%); constant-time behaviour not analysed.
+
+**How:** Add/sub runs in four phases: lane-parallel limb add, carry detection with SIMD compares, a single parallel carry-propagation step, and a deferred scalar slow path for cascading carries. A cascade requires limbs equal to 2^64-1, so on random inputs it practically never fires. Multiplication uses a 'vertical and crosswise' scheme that exposes all m^2 partial products as independent AVX-512 IFMA multiplies (52-bit radix, with conversion from 64-bit limbs) before reducing columns, which removes read-after-write chains on a shared accumulator. Karatsuba/Toom recursion in GMP bottoms out in this base case.
+
+**Use it when:**
+- Research or prototyping on AVX-512 (Sapphire/Emerald Rapids class) Xeons where GMP mpn add/sub dominates the profile
+- Mid-size operands (about 6,144-32,768 bits), where the paper reports its largest gains
+- Reproducing or extending SIMD bignum work; the four-phase carry design is a clear reference
+- Estimating headroom before investing in your own SIMD mpn kernels
+
+**Skip it when:**
+- Production work: there is no public repository or license, and the code sits at an anonymous review URL
+- CPUs without AVX-512: the paper reports SSE addition at 0.7x (slower than scalar) and AVX2 at only 1.2x
+- Huge-operand multiplication dominated by FFT: DoT replaces only the base case, so whole-program gains shrink (GMPbench +7.8% overall)
+- Crypto code that needs constant time: the data-dependent cascading-carry slow path is not analysed for timing leaks
+- Adversarial inputs built to trigger cascading carries, where the paper's advantage drops to 0.7-2.0x versus prior SIMD methods
+
+**Vs siblings:** Pick it over ctbignum or mp++ only if you want faster stock GMP/OpenSSL arithmetic at thousands of bits on AVX-512 without changing your code, and you can live with unpublished code. FLINT is the shippable choice for big-number workloads, and the truncated-batch AVX-512 Montgomery code fits better when you batch modular exponentiations.
+
+**Gotchas:**
+- The code was not verifiable: anonymous.4open.science blocks fetchers, and no license is stated
+- The headline 3.81x/3.73x geomeans are for the add/sub primitives alone; end-to-end gains are much smaller (pi +19.3%, divide +8.4%, RSA/FFDH/DSA throughput +3-5%)
+- The multiply needs a 64-to-52-bit radix conversion for the 4x4 routine to stay compatible with GMP/OpenSSL limbs, which adds overhead
+
+**Status:** Preprint with no stated venue and code only at an anonymous review link with no license, so treat it as a reference design, not a dependency; maintenance status unknown.
+
+[benchmark](https://arxiv.org/html/2604.21566v1)
+
+#### blas-lapack
+
+##### IAAT (small GEMM)  `None`  `no license`  `unknown`  `Tier C`
+
+Research small-GEMM framework for ARMv8 (paper only, no code) reporting 1.1-1.8x over OpenBLAS for M=N=K<=80.
+
+**Beats:** OpenBLAS 0.3.13, ARMPL 21.0, BLIS 0.8.1 — Measured single-threaded on a Kunpeng920 at 2.6 GHz with GCC 7.5 (flags not given). Average speedups for M=N=K<=80 were SGEMM_NN 1.81x over OpenBLAS 0.3.13, 2.30x over ArmPL 21.0 and 20.17x over BLIS 0.8.1; DGEMM_NN 1.48x over OpenBLAS; ZGEMM about 1.1x over OpenBLAS.
+
+**Known shortcoming:** Paper only: no code, flags or venue; large ratios over BLIS (20.17x) come from BLIS lacking a small-matrix path at the time.
+
+**Known shortcoming:** Gains over OpenBLAS shrink with precision (SGEMM ~1.8x, DGEMM ~1.3-1.5x, CGEMM ~1.2-1.4x, ZGEMM ~1.1x); peak only at dims that are multiples of 4 (fp32)/2 (fp64); weak TN transpose; 128-bit NEON only; single-threaded.
+
+**How:** It does no packing: every block size has its own generated kernel (for example SGEMM 16x{1-4}, 12x{1-6}, 8x{1-8} and 4/3/2/1 x {1-13}), so A and B are read in place. An input-aware adaptive tiling step splits C into blocks that minimise L2-to-register traffic and stay a multiple of the SIMD width, which also removes most of the per-call edge handling. The generator uses computational templates, a register allocator for the 32 128-bit NEON registers, and instruction scheduling with ping-pong buffering.
+
+**Use it when:**
+- As a design reference for packing-free, size-specialised small-GEMM kernels on ARMv8/NEON
+- Workloads that repeat GEMMs of the same small shape (the paper says this is the case it fits), e.g. M=N=K up to about 64 in fp32/fp64/complex
+- Comparing against your own Kunpeng-class aarch64 small-GEMM results when OpenBLAS or ArmPL small-size performance falls short
+
+**Skip it when:**
+- Any production use: no code, binary or license has been released
+- Matrices above about 80 (or 32 for TN), where the paper's gains flatten and normal packed BLAS wins
+- x86, SVE or SME targets: the kernels are written for 128-bit ARMv8 NEON only
+- Multi-threaded GEMM: only single-threaded results are reported
+- TN transpose: it cannot be vectorised well, so its kernels are smaller and gains are lower
+
+**Vs siblings:** You cannot use IAAT itself because no code was released. For usable small GEMM on aarch64, LibShalom (ARMv8, with code) or BLASFEO (small dense linear algebra) are the shipped alternatives; read IAAT for its size-specialised kernel generation and tiling heuristic.
+
+**Gotchas:**
+- Throughput rises and falls with size: dimensions that are multiples of 4 (fp32) or 2 (fp64) hit peak, other sizes run noticeably slower
+- The 11-20x ratios over BLIS 0.8.1 reflect that BLIS lacked a small-matrix path at the time; they say little about current BLIS
+- The gain over OpenBLAS shrinks with precision: about 1.8x for SGEMM, 1.3-1.5x for DGEMM/CGEMM and about 1.1x for ZGEMM
+
+**Status:** Research artifact only (arXiv 2208.09822, venue not stated); no repository, no license, and maintenance is not applicable, so it is listed as a reference.
+
+[benchmark](https://arxiv.org/pdf/2208.09822)
+
+##### LP-GEMM  `None`  `no license`  `unknown`  `Tier C`
+
+Research GEMM variant (UNICAMP, OpenBLAS-derived kernels) that skips repacking between chained GEMMs; about 2.25x over OpenBLAS on chains.
+
+**Beats:** OpenBLAS, BLIS, Intel MKL, oneDNN — Single-threaded on an Intel Xeon Gold 6252 (AVX-512), chained GEMMs averaged 2.25x over OpenBLAS; mid/end kernels had a median of about 1.5x on single GEMMs from GEMMBench, and MKL and oneDNN stayed close. RISC-V (SpacemiT X60, RVV 1.0) attention results vs OpenBLAS are reported, but the abstract-level 5x does not match Fig. 6b per the verifier; compiler and flags are not given.
+
+**Known shortcoming:** No LP-GEMM code released; compiler and flags not stated; gain mostly from skipping packing; BLIS/FlashGEMM beat the initial kernel on single GEMMs; abstract's 'up to 5x on RISC-V' contradicts Fig. 6b (~1.5x at best).
+
+**Known shortcoming:** Not BLAS-API compliant, cannot handle beta != 0; linked simple_attention repo uses a naive matmul with -g and no -O flag; no compiler or library versions; 'up to 5x' RISC-V is credited by the paper itself to a weak OpenBLAS RVV unpack kernel.
+
+**How:** The technique is layout propagation, i.e. packing elimination across operator boundaries. The micro-kernel writes C in the same tiled order the next GEMM's packed operand expects, so the O(n^2) pack and unpack steps around each O(n^3) micro-kernel run only at the ends of the chain. The kernels are derived from OpenBLAS (AVX-512 with mr=16, nr=4 on x86; RVV 1.0 with mr=16, nr=8 on RISC-V), so per-kernel FLOP efficiency is about OpenBLAS's level and the gain comes from the data movement it removes.
+
+**Use it when:**
+- Chains of small to medium GEMMs where packing is a large share of runtime, e.g. LLM attention at short sequence lengths (the paper shows about 2x at 10 tokens on x86)
+- Edge or CPU inference engines you control end to end, so custom layouts can flow between ops
+- RISC-V RVV 1.0 targets where OpenBLAS's unpack step is slow
+- As a design reference for fusing packing across operators in your own GEMM or ML compiler
+
+**Skip it when:**
+- As a library: no LP-GEMM kernels are public (the linked simple_attention repo is a naive-matmul Llama driver that links a libopenblas not included in the repo)
+- Single, isolated GEMM calls: the initial kernel performs about like OpenBLAS, and BLIS and FlashGEMM median speedups beat it there
+- Large matrices (for example the MLP at about 1.1x on x86), where packing is negligible
+- beta != 0 accumulation into existing C, which needs explicit packing
+- Multi-threaded workloads: only single-threaded results are reported
+
+**Vs siblings:** Siblings such as BLASFEO, LibShalom and IAAT speed up individual small GEMMs; LP-GEMM's idea only pays off across chains of dependent GEMMs, and with no code it is a technique to copy, not a library to adopt. For a usable single-call kernel choose BLASFEO or LibShalom.
+
+**Gotchas:**
+- Results stay in the propagated tiled layout, so every non-GEMM op between GEMMs (softmax, RoPE, RMSNorm) needs a layout-aware rewrite; softmax pays extra at tile boundaries
+- The 'up to 5x for RISC-V' claim (Section V-C) is a speedup that rises with token count to 500 tokens and is attributed to a weak OpenBLAS RVV unpack kernel, not to LP-GEMM itself; the verifier found Fig. 6b peaks at about 1.5x, inconsistent with that text
+- Compiler, flags and OpenBLAS/BLIS/MKL versions are not stated
+
+**Status:** arXiv 2604.04599 preprint (2026, no venue stated) with no released kernels and no license, so it is listed as a reference only.
+
+[benchmark](https://arxiv.org/html/2604.04599)
+
+##### matmul-cpu (core_v5 GEMM kernels)  `C++`  `no license`  `active`  `Tier C`
+
+Learning-project AVX-512 FP32 GEMM (row-major C += A*B^T) that edges past OpenBLAS at 4096^3 on 24 threads only.
+
+**Beats:** OpenBLAS (sgemm, C=A*B^T+C) — On a 2-socket Intel Xeon Silver 4310 (24 cores, AVX-512) with -O3 -march=native -fopenmp and an unnamed compiler, the author's README reports core_v5 at 2010.61 peak / 1909.40 average GFLOPS against OpenBLAS's 1914.91 / 1796.69 for 4096^3 FP32 C += A*B^T with 24 threads (about 106%), and core_v4 at 82.4% of single-threaded OpenBLAS. The author's own 256-8960 scaling plots show a clear multi-threaded win only in roughly the 2560-4352 range; elsewhere OpenBLAS is ahead or tied, and the OpenBLAS version is not stated.
+
+**Known shortcoming:** Compiler never named (flags in xmake.lua); no LICENSE file (reference only); single core reaches 82.4% of OpenBLAS, wins only multi-threaded (2010.61 vs 1914.91 GFLOPS, 24 threads).
+
+**Known shortcoming:** The 106%-of-OpenBLAS headline is a favourable point: the author's own plots show it ahead only at about 2560-4352; at 256 and 512 it averages about 10 and 40 GFLOPS vs about 320 and 420 for OpenBLAS; above 4600 OpenBLAS's best runs are mostly higher.
+
+**Known shortcoming:** NTHREADS=24 hard-coded; about 48 MB of static buffers; not thread-safe; benchmark checks correctness only with -v (not in README commands); no license; last commit 2025-12-28, so 'active' is doubtful.
+
+**How:** It applies the Goto/BLIS loop nest: NC/KC/MC cache blocking, packing A into 14-row and B into 32-column zero-padded panels, and a 14x32 register-blocked micro-kernel that broadcasts one A element (_mm512_set1_ps) and issues two _mm512_fmadd_ps per row into 28 ZMM accumulators. Partial tiles use AVX-512 mask loads and stores. The parallel version (v5) uses OpenMP to split packing and the jr loop over micro-panels across a fixed 24 threads, with MC and NC scaled by that thread count.
+
+**Use it when:**
+- Studying how an AVX-512 Goto-style SGEMM is built, from naive SIMD through cache blocking to a parallel micro-kernel, with timings for each step
+- Large square FP32 GEMMs (about 2560-4352 per side) on a 24-core AVX-512 Xeon similar to the Silver 4310, where the author's own plots show it ahead of OpenBLAS; above about 4600 OpenBLAS's best runs are higher at most sizes
+- Prototyping an inference-engine GEMM kernel where B is stored as N x K (weights transposed) and you want to avoid pulling OpenBLAS and its thread pool into the binary, if you can obtain a license from the author
+
+**Skip it when:**
+- Any reuse in shipped code: the repository has no LICENSE file, so you have no right to copy it
+- Small and medium matrices: in the author's scaling plots core_v5 averages roughly 10 and 40 GFLOPS at 256 and 512 per side (OpenBLAS about 320 and 420) even though its best runs there are comparable, so it is erratic from run to run; OpenBLAS also leads from 768 to about 2300
+- Single-threaded use: core_v4 reaches 82.4% of OpenBLAS (110.74 vs 132.88 GFLOPS peak at 4096)
+- CPUs without AVX-512, machines that do not have 24 cores, or code that calls GEMM concurrently from several threads
+- Anything beyond row-major FP32 C += A*B^T: there is no FP64, no general transposes, strides, alpha or beta
+
+**Vs siblings:** Over salykova's sgemm.c, which it is derived from, pick it when you want an AVX-512, row-major, B-transposed (weights-style) layout to study; sgemm.c is MIT-licensed, while this repo has no license. For production FP32 GEMM, OpenBLAS itself, Eigen or FT-BLAS are safer choices, and BLASFEO or LibShalom fit small matrices better.
+
+**Gotchas:**
+- core_v5 hard-codes NTHREADS = 24 in an omp parallel for num_threads(24) pragma, and its MC/NC blocks scale with it, so it oversubscribes smaller machines and ignores OMP_NUM_THREADS
+- core_v5's static packing buffers are about 48 MB (NC*KC = 23040*512 floats for B plus 1680*512 for A), all in .bss, even for tiny matrices
+- It accumulates into C (C += A*B^T); callers expecting C = A*B overwrite semantics must zero C first
+- The benchmark driver checks correctness only with -v, which the README's benchmark commands do not pass; for partial row tiles the micro-kernel also runs FMAs on accumulator rows it never loaded (results are discarded, but the values are uninitialized)
+
+**Status:** Personal learning project (0 stars, 22 commits, last commit 2025-12-28) with no license, so it is reference-only: read it to learn the technique, but do not copy it.
+
+[repo](https://github.com/tianyuxbear/matmul-cpu) · [benchmark](https://github.com/tianyuxbear/matmul-cpu)
+
+##### MPGEMM (ARM SME)  `None`  `no license`  `unknown`  `Tier C`
+
+SME GEMM library for Apple M4 from a NUDT paper; code unreleased; reports 1.23x average over Apple Accelerate.
+
+**Beats:** OpenBLAS, Apple Accelerate, LIBXSMM, KleidiAI — The authors report average speedups of 1.23x over Apple Accelerate, 5.7x over OpenBLAS, 3.96x over LIBXSMM and 4.69x over KleidiAI, on an Apple M4 Pro (10 P-cores) with AppleClang 16 on macOS 15.1 (flags not stated). For fp32 on one SME unit, the paper's ratios as cited by the reproduction are smaller: 1.95x over LIBXSMM, 2.34x over KleidiAI and 2.85x over OpenBLAS. An independent rebuild from the text (MTGEMM-A, Apple clang 21, M4 Pro with 8 P-cores) measured the paper design at 1.09x (row-major) and 0.95x (column-major) of Accelerate on one thread, and its tuned version at 1.25x and 1.19x.
+
+**Known shortcoming:** OpenBLAS had no SME kernels on M4 at the time, inflating the 5.7x; paper says code is open source but gives no link.
+
+**Known shortcoming:** Claim not reproduced: tesch1/MTGEMM-A, rebuilt from the paper text, got only 1.09x row-major and 0.95x col-major over Accelerate (paper 1.23x); the stack-buffer stall claim was not reproduced; the paper's OpenBLAS M=4096 numbers (422-533 GFLOPS) do not match OpenBLAS 0.3.34, which falls back to NEON there (114); fp32 one-SME-unit ratios (1.95x/2.34x/2.85x) are far below the headline 3.96x/4.69x/5.7x. OpenBLAS PR #6074 (open, 2026-09-30) ports the design.
+
+**Known shortcoming:** Code is public at github.com/mpgemm/MPGEMM (MIT, IPDPS '26), found by the MaxMulSK verifier; the record previously said no code. tesch1/MTGEMM-A is an independent reimplementation.
+
+**How:** It is a Goto-style six-loop blocked GEMM whose mc/nc/kc come from an analytical model bounded by TLB reach and an 8 MB working-set limit, because the SME unit keeps full load bandwidth only up to 8 MB of the 16 MB L2. The fp32 micro-kernel is 16x64 and uses all four ZA tiles: one A vector and four B vectors feed four FMOPA outer products per K step (fp64: 8x64 over eight tiles). Row-major A is transposed during packing through the ZA array (rows in as horizontal slices, columns out as vertical slices), B is packed online during the first pass, and all loads and stores use SME2 four-register (x4) forms, which the reproduction measured at 874-992 GB/s against 391-465 GB/s for single-register loads. Each of the M4 Pro's two P-cluster SME units gets its own thread.
+
+**Use it when:**
+- As a design reference when writing SME/SME2 GEMM kernels for Apple M4-class chips: 16x64 tile shape over 32x32, ZA-based transposition while packing, x4 loads, blocking capped at 8 MB
+- LLM-shaped fp32 GEMMs on an M4 (M = 64 or 128 with large N and K): the reproduction's largest gains over Accelerate were on these thin-M groups (1.34x-1.52x row-major, one thread)
+- When you need running code, use the MIT reproduction MTGEMM-A (fp32/fp64, no transposes), which measured 1.25x row-major and 1.19x column-major over Accelerate on the paper's 24 workloads, one thread
+- Inside OpenBLAS, once the SME2 port of this design lands (PR #6074, open as of 2026-09-30)
+
+**Skip it when:**
+- Any production dependency on MpGEMM itself: no code, binary or license has been published
+- Hardware other than SME2 with 512-bit streaming vectors and an M4-like cache: the blocking model and tile shapes are tuned for the M4 Pro, and M1-M3 have no SME
+- Small or GEMV-shaped products: in the reproduction the SME path is 0.16x-0.9x of Accelerate for squares below 64^3, about 0.5x at 4x4, and about 0.4x when one side is 1; LIBXSMM is fastest from 16^3 to 48^3
+- Short-K shapes with one side of 32 or less and the other 512 or more (0.6x-0.9x of Accelerate at K = 512 in the reproduction)
+- Mixed-precision (FP16/INT8) work you need to verify: no independent reproduction of those paths exists
+
+**Vs siblings:** None of the catalogued siblings (BLASFEO, LibShalom, IAAT, sgemm.c, FT-BLAS) uses SME, so this is the only catalogued design aimed at Apple M4's matrix units. Because its code is unreleased, read it for the design and run MTGEMM-A, Eigen's unmerged SME branch (MR !3164, which carries elements of it) or the OpenBLAS port instead. Keep LibShalom or BLASFEO for small or irregular GEMM on NEON-only Arm.
+
+**Gotchas:**
+- The baselines in the headline ratios are uneven. The reproduction matched the paper's LIBXSMM numbers within 2%, but a September 2026 KleidiAI ran 1.5x faster than the paper measured. Homebrew OpenBLAS 0.3.34 used SME only in a direct SME1 SGEMM and fell back to NEON at M = 4096. OpenBLAS develop has had SME GEMM kernels since August 2026.
+- The design as the paper describes it does not reach the paper's numbers: rebuilt literally, it ran 7-11% below the paper's MpGEMM and at 0.95x of Accelerate in column-major order. Core-side L2 prefetch and four-row ZA moves, which are not in the paper, were needed to get to 1.19x-1.25x.
+- The paper's claim that stack buffers stall the SME unit was not reproduced (heap vs stack 0.98x-1.02x). What does cost about a third of throughput is any core store during an SME loop.
+- Two-unit scaling depends on macOS placing the two threads on different P-clusters, and macOS has no API to pin them. Ratios against Accelerate also depend on the macOS version: a newer multi-threaded Accelerate cut the reproduction's two-unit gain to 1.12x-1.15x.
+
+**Status:** Paper-only reference: an arXiv preprint (Dec 2025, no venue stated) whose promised open-source code never appeared, so maintenance does not apply. The design lives on in the MIT-licensed MTGEMM-A reproduction (active Sep 2026) and in OpenBLAS PR #6074 (open).
+
+[repo](https://github.com/mpgemm/MPGEMM) · [benchmark](https://arxiv.org/html/2512.21473)
+
+#### fft
+
+##### SYLT-FFT (fixed-point FFT for Cortex-M4)  `C`  `MHG (Moral High Ground) license: the Unlicense text released 'under the single condition that good moral standards are maintained in its use', plus non-binding requests; custom, not an OSI/SPDX license (the README calls it GPL-compatible)`  `abandoned`  `Tier C`
+
+Header-only 32-bit fixed-point radix-2 (I)FFT for Cortex-M4; 15-26% faster than CMSIS-DSP arm_cfft_radix2_q31 on a 256-point inverse.
+
+**Beats:** CMSIS-DSP arm_cfft_radix2_q31 (arm_cortexM4I_math.lib 1.4.2) — The README has one data point: a 256-point inverse complex FFT (bare fft_inverse, DIT, 32-bit fixed point) on a Freescale Kinetis K20 Cortex-M4. It ran 25.6% faster than CMSIS-DSP 1.4.2's arm_cfft_radix2_q31 built with Keil C 5.01 -O3, and 15.1% faster built with GNU ARM Embedded GCC 4.8.4 -O3. No cycle counts are published, and the public main.c (FTM0 cycle counter, 100-run average on a zeroed buffer) contains only the SYLT side. The 2021 DIT fix changed only fft_forward, so the benchmarked inverse code is unchanged.
+
+**Known shortcoming:** Custom MHG license (Unlicense plus a moral-use condition), so reference only; the public harness has no CMSIS side.
+
+**Known shortcoming:** Timed fft_inverse excludes bit reversal and the CMSIS side of the comparison is not public, so the claim is not reproducible. Forward DIT transform was wrong 2014-2021 (#5; fix c6f58ca changed only fft_forward, the benchmarked inverse is unchanged). Functions and sine table defined in headers without static (one translation unit only). GCC qadd inline asm has no ARM guard, so FFT_SATURATE=1 fails to build with GCC on non-ARM hosts.
+
+**Independent measurement:** enrichment
+
+**How:** The radix-2 butterflies are written around Cortex-M4 DSP instructions issued through inline asm: SMMULR/SMMLAR/SMMLSR (32x32 multiply keeping the rounded high word, optionally accumulating), RBIT for bit reversal, and optional QADD/QSUB saturation. Butterflies with trivial twiddles (1 and -j) get their own multiply-free loops. The twiddle loop uses the -j symmetry so one table value serves the butterflies at k and k+stride/4, which is why a 129-entry quarter-wave sine table covers N up to 512. Macros switch the code style per compiler (scalar locals for GCC, struct copies for Keil) for better register allocation.
+
+**Use it when:**
+- Cortex-M4-class MCUs (the asm fast paths are enabled for __CORTEX_M >= 4) running small power-of-two complex FFTs, N <= 512 with the shipped table, in 32-bit fixed point where cycles matter more than accuracy
+- MCU audio synthesis that builds a spectrum directly (fft_real_phase_magnitude, fft_magnitude) and runs an inverse FFT: the use case it was written and benchmarked for
+- Firmware that wants no dependencies, no libm (with the ROM sine table), no plan allocation and minimal stack
+- Old Keil or GCC firmware that still calls the legacy CMSIS-DSP arm_cfft_radix2_q31
+
+**Skip it when:**
+- Projects on current CMSIS-DSP: the only comparison is against arm_cfft_radix2_q31 from CMSIS-DSP 1.4.2 (2014), not the later arm_cfft_q31 routines, so the gain over today's CMSIS is unknown
+- Accuracy-sensitive work: the README says it is designed for speed, not accuracy. The forward transform halves at every stage, rounding and saturation are off by default, and the caller must prevent overflow (open issue #10 asks how to scale inputs).
+- Floating-point data, non-power-of-two lengths, or N > 512 without regenerating the sine table (SINE_BITS goes up to 14, i.e. 65,536 points)
+- Code that needs proven correctness: the forward DIT trivial butterfly was wrong from 2014 until January 2021 (issue #5, fixed in c6f58ca); there is no test suite and there have been no commits since
+- Organizations whose legal review rejects non-standard licenses: MHG is the Unlicense plus a 'good moral standards' condition
+
+**Vs siblings:** Pick it for fixed-point FFTs on Cortex-M microcontrollers, where none of the catalogued siblings fit: Ne10 targets NEON application cores, and meow_fft, PFFFT and PocketFFT are floating-point libraries for larger CPUs.
+
+**Gotchas:**
+- fft_forward/fft_inverse do not bit-reverse: DIT needs fft_permutate before the call and DIF after it (fft_fft/fft_ifft do this). The published benchmark times bare fft_inverse, so its time excludes the permutation; the CMSIS side is not in the repo, so whether its timing included bit reversal is not documented.
+- Scaling is asymmetric: the forward transform divides by N (one halving per stage) and the inverse is unscaled. A round trip returns the input, but an inverse of a large-magnitude spectrum can overflow silently unless FFT_SATURATE is on.
+- Functions and the const sinetable[] are defined in the headers without static, so include fft.h in only one C translation unit or the link fails with duplicate symbols
+- Configuration means editing config.h (DIT/DIF, rounding, saturation, SINE_BITS). With the ROM table, changing SINE_BITS hits an #error until you paste in a regenerated table.
+
+**Status:** Abandoned since 2021-01-29 (17 commits, 90 stars, 5 open questions/requests). Small enough to vendor, but the MHG license's moral-use condition keeps it at reference usability.
+
+[repo](https://github.com/sylt-collab/SYLT-FFT) · [benchmark](https://raw.githubusercontent.com/sylt-collab/SYLT-FFT/HEAD/README.md)
+
+#### geometry-spatial
+
+##### Janos95/kdtree  `C++`  `no license`  `abandoned`  `Tier C`
+
+Tiny 2020 Magnum/Corrade 3D kd-tree with 1-NN only; build ~15% faster than nanoflann, query claim invalidated by a pruning bug.
+
+**Beats:** nanoflann — The README reports, from the author's own measurements, about 15% faster construction and about 10% faster 1-NN queries than nanoflann (KDTreeSingleIndexAdaptor, max leaf size 10) on 1,000,000 uniform random 3D float points with 10,000 queries; no timings, compiler, flags or CPU are published. The construction comparison stands as a first-party claim, but the query comparison is not like-for-like, because the kd-tree's query is inexact.
+
+**Known shortcoming:** No license; benchmark.cpp (1M random 3D points, 10k 1-NN queries vs nanoflann) has no published results.
+
+**Known shortcoming:** Correctness bug: recurse() decides on the far child with the linear gap p[cd]-q[cd] compared against a squared distance, over-pruning when distances are below 1; an independent port gave 338/1000 wrong nearest neighbours at 20k points and 88/200 at 100k (uniform [-1,1]^3), and squaring the gap fixes all. benchmark.cpp never checks results, so the 10% faster query claim timed an inexact search and is invalid; the 15% faster build claim stands. No licence.
+
+**Independent measurement:** enrichment
+
+**How:** Construction is a classic median-split kd-tree: an index array is partitioned recursively with std::nth_element on the axis depth % dim, and each node (three int32 fields) holds exactly one point, so there is no leaf bucket and no point copy. Queries recurse near-side first, prune a subtree when the squared distance from the query to its trimmed bounding box exceeds the best so far, and use a splitting-plane test to decide whether to visit the far side. That plane test compares the linear gap |p[cd] - q[cd]| with the squared best distance, which over-prunes whenever distances are below 1, so part of the measured query speed comes from skipping subtrees an exact search must visit.
+
+**Use it when:**
+- Reading a short (about 170-line) median-split kd-tree to learn the technique, for example the bounding-box-trimmed recursion.
+- Already on Magnum/Corrade and wanting a zero-copy index over a strided vertex attribute (the demo builds it straight from a mesh's Position attribute).
+- One-shot 3D tree builds where only construction time matters and you will write your own query code.
+
+**Skip it when:**
+- Any case that needs exact nearest neighbours as written: in this session's pure-Python port of kdtree.h's construct and query logic (uniform [-1,1]^3, as in benchmark.cpp), 338 of 1,000 queries over 20,000 points and 88 of 200 queries over 100,000 points returned a non-nearest point; squaring the plane gap fixed all of them.
+- Projects without Magnum/Corrade: the header pulls in Magnum Math and Corrade Containers and only accepts Magnum vector types.
+- k-NN, radius or range queries, dynamic insert/delete, or high dimensions: only single nearest-neighbour search exists.
+- Production or closed-source use: no LICENSE file, so by default all rights are reserved; 9 commits, all from June 2020, no releases, no tests.
+
+**Vs siblings:** Rarely: nanoflann, PicoTree, picoflann and kd3 (all catalogued) have exact k-NN and radius search, licences and wider use; pick this only as a Magnum-native teaching example, and fix the plane-prune comparison before trusting its results.
+
+**Gotchas:**
+- Query correctness bug in recurse(): the far-side test 'if (p[cd] - q[cd] < result.distanceSquared)' (and its mirror) compares a linear distance with a squared one. For point sets in the unit range, where best squared distances are well below 1, far subtrees that may contain the true nearest neighbour are skipped, so nearestNeighbor returns wrong answers and the '10 percent faster' query claim compares an inexact search with nanoflann's exact one.
+- benchmark.cpp never checks that KDTree and nanoflann return the same neighbour, which is how the bug went unnoticed; it also wraps each of the 10,000 queries in its own ScopedTimer, so timer overhead is part of every query sample.
+- The tree stores a non-owning StridedArrayView of the points: the caller must keep the point buffer alive and unchanged for the tree's lifetime.
+- The header does 'using namespace Magnum; using namespace Corrade;' at global scope, which leaks into every file that includes it; an empty point set leaves NNResult.pointIndex uninitialized.
+
+**Status:** Abandoned since June 2020 (9 commits, 11 stars, no issues or releases) and unlicensed, so reference only; the construction code is a fine small example, but the query code needs its prune fixed before use.
+
+[repo](https://github.com/Janos95/kdtree) · [benchmark](https://github.com/Janos95/kdtree)
+
+##### MeshLib  `C++`  `Proprietary non-commercial/educational license (AMV Consulting, LLC); commercial license sold separately`  `active`  `Tier C`
+
+Source-available C++ mesh-processing SDK whose triangle-mesh booleans run tens of times faster than CGAL's exact booleans.
+
+**Beats:** CGAL (also Manifold, libigl, MCut and 5 others) — MeshInspector's own 2026 blog benchmark tested MeshLib 3.1.3.249 against CGAL, Manifold, MCut, CinoLib, libigl, Rhino and Blender via trimesh on an Apple M5 MacBook Air (10-core, 32 GB, macOS 26), taking the minimum of 10 runs with I/O excluded and default threading; compiler and flags are not stated. Union on 2M-triangle Nefertiti meshes: 0.09 s MeshLib, 0.27 s Manifold, 4.4 s CGAL (about 47x), 14 s Blender. On a degenerate dental scan MeshLib took 0.04 s while CGAL hung and MCut failed. The raw data is on a SharePoint link, and the post says the benchmark source 'will be opened publicly later'.
+
+**Known shortcoming:** Vendor blog (company sells MeshLib); compiler and flags not stated; benchmark source 'will be opened publicly later'; non-commercial/education license from AMV Consulting (reference only).
+
+**Known shortcoming:** Blog says dental scan is ~500K triangles (record said 280K); blog both says inputs/runners are open source and that source 'will be opened later'; MeshLib's own feature page gives 1.2 s Nefertiti union vs the blog's 0.09 s (inconsistent vendor numbers); PR #6861 recently fixed Union dropping a mesh when meshes only touch; LICENSE is a terminable non-commercial trial that forbids modification.
+
+**How:** It works in floating point on a half-edge mesh. Degenerate configurations are handled by exact predicates (orient3d) on coordinates converted to integers, with Simulation of Simplicity (Edelsbrunner-Mücke) breaking ties. This avoids CGAL's rational/lazy-exact arithmetic, which the vendor blames for CGAL being 10-100x slower and hanging on near-coplanar faces. The work runs multi-threaded by default (the benchmark used default threading on a 10-core M5), and an AABB tree for intersection search is built once as pre-computation.
+
+**Use it when:**
+- Booleans on large scanned triangle meshes (10^5 to several 10^6 triangles), where CGAL takes seconds or hangs: 0.09 s vs CGAL's 4.4 s on a 2M-triangle union in the vendor benchmark
+- Inputs with many near-coplanar faces or degeneracies (dental/medical scans) that make exact-arithmetic CGAL stall
+- Non-commercial, academic or evaluation work, or a team prepared to buy the commercial licence
+- Pipelines that also need repair, decimation, offsetting or voxel/SDF operations from the same SDK, from C++, Python or C#
+
+**Skip it when:**
+- Commercial or redistributed software without a paid licence: the LICENSE grants only a terminable non-commercial/evaluation/educational licence and forbids modification and transfer
+- Work that needs provable exactness or exact rational output coordinates: CGAL's Nef/corefinement with an exact kernel stays the reference there
+- Non-manifold input: the half-edge structure cannot represent most non-manifold situations, so such meshes need repair first or the voxel mode
+- A small permissive dependency: Manifold (Apache-2.0) was only about 3x slower on the Nefertiti union and about as fast on the dental scan in the same benchmark
+
+**Vs siblings:** None of the catalogued siblings (TG, gDel3D, HXT, GeoToolbox KdBoxTree, nanoflann, tidwall rtree.c) does mesh booleans; MeshLib is the catalogue's mesh-CSG entry. Pick it when the task is a boolean on a large triangle mesh and the licence fits; otherwise look at Manifold.
+
+**Gotchas:**
+- Failures come back as an invalid BooleanResult with errorString, not as exceptions, so always check result.valid()
+- Floating-point classification bugs still turn up: PR #6861 fixed Union silently dropping a whole mesh when two meshes only touch (DifferenceBA gave negative volume), fixed with exact integer orient3d probing
+- Vendor timings vary across MeshLib's own pages: the boolean feature page lists a 1.2 s Nefertiti union, the 2026 blog 0.09 s with 3.1.3.249 on an M5. Benchmark your own version
+- Blender and Rhino give different (still watertight) results on self-intersecting input, so speed comparisons across libraries are not always like for like
+
+**Status:** Very active (commits daily, about 826 stars, versioned releases), but source-available under a non-commercial/evaluation licence. It is reference-only for this catalogue and must not be copied into commercial code.
+
+[repo](https://github.com/MeshInspector/MeshLib) · [benchmark](https://meshlib.io/blog/comparing-3d-boolean-libraries/)
+
+##### picoflann  `C++`  `no license`  `active`  `Tier C`
+
+Tiny single-header exact kd-tree (knn and radius search) claiming 1.25-4x over nanoflann; unlicensed, claim disputed.
+
+**Beats:** nanoflann (also OpenCV FLANN) — The README (2018) claims, on 10,000 points (heading says 2D, block says 3D), index build 1.46x, knn 4.14x and radius search 1.25x faster than nanoflann, with no k, hardware, compiler or nanoflann benchmark code; the repo's only benchmark (testperformance.cpp, 2026, -O3 -march=native, k=10) races picoflann v1/v2 against OpenCV FLANN, not nanoflann, and publishes no numbers. An independent PCL-wrapper comparison (OpenFLANN) found nanoflann faster at small k and picoflann faster only at very large k.
+
+**Known shortcoming:** No license; no nanoflann bench code in the repo (testperformance.cpp is only vs OpenCV FLANN); independent OpenFLANN tables show nanoflann faster at K=1/10, so the 4.14x claim holds only at large K.
+
+**Known shortcoming:** Security: fromStream trusts its input; in picoflann2 a corrupt or crafted file overflows a node (reads idx_count up to 255 into idx[10]); v1 resizes vectors from unchecked sizes and takes &idx[0] of empty vectors (UB). Correctness: radiusSearch ignores maxNN in both versions. Open issue #1 (2021, no reply) reports about half the speed of nanoflann on range-image data, matching the independent OpenFLANN small-k result. No licence.
+
+**Independent measurement:** enrichment
+
+**How:** Classic FLANN/nanoflann-style single kd-tree: split dimension chosen by highest variance estimated from about 100 sampled points, split at the mean with a two-pass in-place plane partition, leaves of 10 points, and searches that keep per-dimension incremental distances to the cell (the 'dists' array) so the far child is pruned with mindistsq against the current k-th best held in a max-heap; distance accumulation exits early once it exceeds the worst. picoflann2 removes the per-leaf std::vector (indices stored inline so a float node is 64 bytes, one cache line), puts bounding boxes in std::array, unrolls distance loops on compile-time DIMS and defaults to float arithmetic.
+
+**Use it when:**
+- Internal or research code (not redistributed) that needs exact knn/radius search over a few thousand to a few hundred thousand 2D/3D float points, e.g. SLAM map points or keypoint matching
+- Large-k queries: the independent OpenFLANN comparison found picoflann much faster than nanoflann at K=5000 on 200,000 points (0.84 ms vs 8.36 ms)
+- When you want a single small header with no dependencies and a functor adapter instead of nanoflann-style dataset adaptor classes
+- Static datasets built once and queried many times, with the option to serialise the index next to the data
+
+**Skip it when:**
+- Anything you ship or redistribute: the repo has no LICENSE file and no licence header, so it is all-rights-reserved by default; the README also says academic users 'must cite' UcoSLAM
+- Small-k queries (k=1 to 10), the common robotics case: OpenFLANN measured nanoflann faster (10,000 points, K=10: 0.00213 ms vs 0.00358 ms) and open issue #1 (2021, unanswered) reports picoflann 'about half as fast as nanoflann' on range-image data
+- Dynamic data: there is no insert or erase; any change means a full rebuild
+- Loading index files from untrusted sources: fromStream does no validation (see gotchas)
+- Double-precision or large-magnitude coordinates with the defaults: v1 keeps bounding boxes and split bounds in float, and picoflann2 defaults to Scalar=float
+
+**Vs siblings:** Rarely: PicoTree (catalogued as beating nanoflann v1.7.1 on build about 2.6x and knn about 1.2x) or nanoflann itself, which the independent OpenFLANN test found faster at small k, are the safer picks; picoflann only stands out for very large k, and its missing licence rules it out of products. Janos95/kdtree is another small exact kd-tree with a modest 10-15% claimed edge over nanoflann.
+
+**Gotchas:**
+- Security/robustness: fromStream trusts the stream. picoflann2 reads a per-node idx_count (uint8_t, up to 255) and then copies idx_count*4 bytes into a fixed idx[MAX_LEAF=10] array, so a corrupt or crafted file overflows the node; child indices are never range-checked. v1 resizes vectors from unchecked 64-bit sizes and takes &idx[0] of empty vectors for internal nodes in both toStream and fromStream (undefined behaviour that debug STL assertions abort on)
+- radiusSearch's maxNN parameter is ignored in both versions: in radius mode ResultSet::push appends every hit without checking maxSize, so a large radius returns everything inside it
+- Radius is passed in linear units but returned distances are squared; the index does not copy the data, so the same container must be alive and unchanged at search time and after fromStream
+- README's radiusSearch(data, res, point, r) example does not match the actual overload radiusSearch(res, data, point, r); point indices are 32-bit (v1 stores leaf indices as int)
+
+**Status:** Dormant from 2018 until two commits on 2026-04-27 that added picoflann2.h and OpenCV benchmarks (19 commits total, 22 stars, one open unanswered issue); with no licence it is reference-only, not something to vendor.
+
+[repo](https://github.com/rmsalinas/picoflann) · [benchmark](https://github.com/rmsalinas/picoflann)
+
+##### trueform  `C++`  `PolyForm-Noncommercial-1.0.0`  `active`  `Tier C`
+
+Header-only C++17 mesh-processing library (booleans, intersection curves, spatial trees, remeshing) that the vendor measures 2-233x faster than CGAL, libigl, MeshLib and nanoflann.
+
+**Beats:** CGAL (EPICK kernel; also libigl, MeshLib, VTK, nanoflann, Coal/FCL) — Vendor-run benchmarks on an Apple M4 Max (16 threads, Clang -O3 -march=native) use the repo's benchmarks/ suite, which FetchContents CGAL 6.0.1 (with CGAL_LINKED_WITH_TBB), libigl 2.5.0, nanoflann 1.5.5, FCL 0.7.0, geogram 1.9.4 and Coal at its unpinned 'devel' branch, and reports the mean (curves, booleans, k-NN) or minimum (decimation, components) of 10 samples. The committed data at 1M polygons: union 27.8 ms vs CGAL corefinement 2,339 ms (about 84x, derived from page data) and MeshLib 161.5 ms (5.8x); k-NN on 512,872 points at k=10, 1.5 us (OBB/OBBRSS) vs nanoflann 4.5 us; mesh-mesh distance 0.20 ms (OBBRSS) vs Coal 0.47 ms. No MeshLib benchmark code is in the repo, so the 6x MeshLib figure cannot be reproduced from it, and the curves and boolean ratios exclude trueform's tree and topology build but include CGAL's.
+
+**Known shortcoming:** Vendor-run benchmark (kept at A because code, compiler, flags and CPU are public: the vendor-blog rule covers unreproducible blog numbers); 16 threads vs serial baselines; PolyForm noncommercial license (reference only).
+
+**Known shortcoming:** Benchmarks not like-for-like: trueform's tree and topology are built before the timer and the second operand is a rotated view sharing that tree, while CGAL's timed call builds its own structures (and copies both meshes for union), so the 233x curve and union ratios are inflated; 16 threads vs mostly serial baselines.
+
+**Known shortcoming:** MeshLib 6x claim has no benchmark code in the repo; Coal pinned to an unpinned devel branch; correctness bugs fixed in v0.10.5 (Sep 2026): N-operand within builds lost operand membership (shipped 0.10.3-0.10.4) and the binary STL reader had UB from misaligned loads; vendor-run (XLAB sells a commercial licence).
+
+**How:** Coordinates are scaled onto an int32/int64 lattice, and every orientation and intersection predicate is evaluated in exact integer arithmetic. This avoids CGAL's lazy/rational number types while still classifying contacts into five canonical types (VV, VE, VF, EE, EF) and arranging each cut face in its own plane; disagreeing observations are resolved by 'topological aggregation', a majority vote within a manifold-edge-connected unit (Sajovic and Knez, arXiv 2607.15905). Most algorithms run in parallel on oneTBB (parallel union-find for components, partitioned edge collapse for decimation, k-ring quadric fitting for curvature) and allocate through a vendored mimalloc. Spatial trees are built once and reused under a rigid-transform tag, so a moving operand does not need a new tree.
+
+**Use it when:**
+- Interactive or batch booleans and intersection curves on 10^5 to 10^6-triangle meshes on a multi-core machine: about 28 ms for a 2x1M union and 7 ms for 2x1M intersection curves on 16 M4 Max threads, with the tree already built
+- Repeated collision, distance or CSG queries against rigidly moving copies of the same mesh, where one prebuilt tree is reused through a tf::frame tag
+- Pipelines that hold geometry in flat arrays (C++ buffers, NumPy, browser TypedArrays) and want many operations from one library without converting to a half-edge type
+- Messy real-world meshes (non-manifold flaps, near-coincident walls): the 0.10.0 release notes report 1000/1000 closed, manifold results on the vendor's 1000-pair real-world corpus
+- Non-commercial, academic or evaluation work, or a team that will buy XLAB's commercial licence
+
+**Skip it when:**
+- Commercial, production or revenue-generating use without a paid agreement: the only public licence is PolyForm Noncommercial 1.0.0, which is not OSI-approved
+- Results that need exact rational output coordinates or provable exactness on the original floats (CGAL EPECK/Nef): trueform is exact on its integer lattice (float input maps to int32, double to int64), then rounds output back to float, and a non-zero tolerance moves vertices
+- Single-threaded or TBB-free environments: the headline numbers use 16 threads, and oneTBB is a hard dependency
+- One-off operations on meshes you will not query again: the repo's boolean and curve benchmarks build the AABB tree and topology outside the timer, so a cold call costs more than the headline figure
+- Code that needs a stable API: the library is 0.x and recent releases removed flags and reorganised modules (0.10.0 'module map (breaking)', 0.10.5 removed the resolve_* flags)
+
+**Vs siblings:** Against MeshLib (also source-available non-commercial, and trueform's boolean baseline), pick trueform for its wider set of composable primitives on raw arrays and reusable trees under rigid motion; pick Manifold when the licence must be permissive (Apache-2.0), and nanoflann for a permissive point k-NN index, even though trueform's OBB/OBBRSS trees beat it about 3x on single queries.
+
+**Gotchas:**
+- Benchmarks are not like for like. In benchmarks/intersect and benchmarks/arrangement, trueform's AABB tree, face_membership and manifold_edge_link are built before timing, and the second operand is the same mesh under a rotation frame sharing that tree. CGAL's timed surface_intersection / corefine_and_compute_union call builds its own structures, and for the union it also copies both 1M-face Surface_meshes. trueform's own data puts one 1M-polygon AABB build at about 7.4 ms.
+- Correctness fixes are recent. v0.10.5 (Sep 2026) fixed N-operand 'within' builds that assigned every domain to operand 0 (shipped in 0.10.3-0.10.4), self-intersection split points placed on another operand's edges, and undefined behaviour from misaligned float loads in the binary STL reader. 0.10.0 fixed issue #21 (fit_similarity_alignment returned a scale n times too small). Pin a version and keep regression tests.
+- A system mimalloc must be built with MI_OVERRIDE=OFF and MI_ENABLE_LARGE_PAGES=0. Upstream's large-page default made a 16-thread process retain memory without bound (324 MB vs 156 MB over 200 graph builds), and ASAN builds force mimalloc off.
+- OBJ/STL path readers memory-map the file, so it must not change during the read
+
+**Status:** Very active (v0.10.5 released 2026-09-21, last commit 2026-09-22, about 146 stars, nearly all commits by one author at XLAB/Polydera), but dual-licensed PolyForm Noncommercial or paid commercial. It is reference-only for this catalogue and cannot be copied into commercial code.
+
+[repo](https://github.com/polydera/trueform) · [benchmark](https://github.com/polydera/trueform)
+
+#### random-and-quasi-random
+
+##### MELG-64 (MELG19937-64)  `C`  `MIT`  `abandoned`  `Tier C`
+
+Maximally equidistributed 64-bit Mersenne-Twister-type generators in C; MT19937-64-class speed with optimal high-dimensional uniformity.
+
+**Beats:** MT19937-64 reference C code (algorithmically std::mt19937_64) — The README reports CPU time for 10^9 64-bit outputs with gcc -O3 on Linux (compiler version not given): 4.21 s on an Intel Core i7-3770 and 6.29 s on an AMD Phenom II X6 1045T, versus 5.10 s and 6.65 s for the reference mt19937-64.c (about 1.21x and 1.06x faster), 4.27 s and 5.61 s for SFMT19937-64 without SIMD, and 1.85 s and 2.88 s with SIMD. These are first-party numbers with no timing harness in the repo, and std::mt19937_64 itself was not measured.
+
+**Known shortcoming:** Not faster than the incumbent: no timing harness in the repo, gcc version unstated, paper abstract claims 'equivalent' speed; only 6-21% faster than the reference mt19937-64.c, and std::mt19937_64 was never measured (VMT19937 data shows libstdc++ 1.17-1.76x faster than that same reference); source header says non-commercial while the paper says MIT.
+
+**Known shortcoming:** Licence conflict: LICENSE.md is MIT but the melg19937-64.c header says free only for personal/academic/non-commercial use and commercial users must contact the author. genrand64_int64 is a global function pointer, NULL until init; all state is file-scope globals (not thread-safe); symbol names clash with mt19937-64.c; output stream changed in 2017 and 2021.
+
+**Independent measurement:** enrichment
+
+**How:** The recurrence is MT-like (312-word state for the 2^19937-1 variant) but adds one extra 64-bit state word ('lung') and a lagged tempering term, so the output is tuned for equidistribution without adding much work per word. Each call produces one word incrementally instead of regenerating the whole state block, and the index wrap-around is handled by switching a global function pointer between four specialised case functions, so the hot path has no modulo or branch on the array index. There is no SIMD path; the measured edge over reference MT19937-64 is small (about 1.06-1.21x).
+
+**Use it when:**
+- Monte Carlo or simulation code in C that already uses the reference mt19937-64.c API and wants better high-dimensional uniformity (maximal equidistribution) at similar or slightly better speed.
+- Workloads that consume the most significant bits, e.g. 53-bit doubles via genrand64_res53(), where the equidistribution of leading bits matters.
+- Single-stream programs that need a very long period and occasional jump-ahead by 2^256 to hand out disjoint streams.
+- When you want to pick the state size: variants from 2^607-1 up to 2^44497-1 are provided.
+
+**Skip it when:**
+- Throughput is the goal: in the project's own table SFMT19937-64 with SIMD is 2.3x (Intel) and 2.2x (AMD) faster, and SFMT without SIMD is already faster on the AMD machine; a win over std::mt19937_64 was never measured.
+- Multi-threaded code or several generators in one process: all state is in file-scope statics, so there is one generator per program (per copy of the file).
+- C++ code that wants a <random> engine: there is no std::uniform_random_bit_generator wrapper.
+- Commercial products before the licence question is settled: LICENSE.md says MIT, but the header of melg19937-64.c restricts free use to personal, academic or non-commercial purposes.
+- Anything that must reproduce numbers from older copies: output values changed in 2017 (init_by_array64) and again in March 2021 (initialisation typo fix and the double output functions).
+
+**Vs siblings:** Pick MELG-64 over SFMT, VMT19937 or a faster std::mt19937_64 replacement only when maximal equidistribution of 64-bit outputs is the requirement and MT-class speed is enough; for raw throughput SFMT with SIMD (same table) or VMT19937's vectorised MT19937-64 are the better choices.
+
+**Gotchas:**
+- genrand64_int64 is a global function pointer that stays NULL until init_genrand64() or init_by_array64() runs; calling it before seeding is a null-pointer call.
+- Each .c file contains a demo main() that must be removed, there is no header, and the exported names (init_genrand64, init_by_array64, genrand64_int64, genrand64_real*) clash with mt19937-64.c if both are linked.
+- Use the most significant bits: the source notes the generators are optimised from the MSB down (Remark 4.1 of the paper), so taking low bits for small ranges forfeits the equidistribution guarantee.
+- Licence mismatch between LICENSE.md (MIT, 2021) and the source-file notice (non-commercial, contact the author for commercial use).
+
+**Status:** Abandoned research code (last commit 2023-03-18, 3 issues all closed) that is small enough to vendor, but check the MIT-versus-non-commercial licence conflict first.
+
+[repo](https://github.com/sharase/melg-64) · [benchmark](https://github.com/sharase/melg-64)
+
+##### Romu (RomuTrio/RomuQuad/RomuMono)  `C`  `no license`  `unknown`  `Tier C`
+
+Romu: tiny nonlinear multiply-rotate 64/32-bit PRNGs with zero output latency, claimed 3 cycles/value vs xoshiro256++ and PCG.
+
+**Beats:** xoshiro256++, PCG (pcg-xsh-rs) — The author's arXiv preprint counts cycles and output latency from g++ 4.8.4 -O3 assembly for an Intel Xeon E5-2643 v3: RomuTrio/RomuQuad/RomuDuo at 3 cycles with 0 latency vs xoshiro256++ at 3 cycles with 3 latency and 128-bit PCG at 9 cycles with 7 latency. The only wall-clock table times combinations of RomuMono32 (about 4.6 cycles/value) and no baselines, so no measured speedup over xoshiro or PCG is shown.
+
+**Known shortcoming:** Speed figures are cycle counts read from assembly, not timings against baselines; no license or official repo; romu-random.org has an expired certificate.
+
+**Known shortcoming:** No jump-ahead; period only probabilistic; HN critic (item 22447848) reports cycles in the 32-bit variant shorter than the paper's bounds; license unconfirmed (HN says Apache-2.0, site cert expired).
+
+**How:** Each step is one multiply by a constant plus one or two rotates and an add/subtract on separate state words, and the output is a state word read before the update, so output latency is 0 cycles and the multiply overlaps with the consumer's work (instruction-level parallelism). Register pressure is 4-6 registers when inlined, against 7-8 for xoshiro256++ and 10 for 128-bit PCG.
+
+**Use it when:**
+- Hot inner loops (Monte Carlo, games, procedural generation, randomized algorithms) where the PRNG call is inlined and its latency or register use shows up in the profile.
+- Many independent parallel streams from random seeds: the paper estimates about 16,000 RomuTrio streams of 2^53 values each with negligible overlap risk.
+- 32-bit or small cores where RomuTrio32/RomuQuad32 replace xoshiro128** (3 cycles and 0 latency vs 5 and 5 by the paper's assembly analysis).
+- Situations where you just need a few lines of copyable C with no dependency, provided the license question is settled for your project.
+
+**Skip it when:**
+- Anything security-related: the generators are invertible and the paper says they are not cryptographically secure.
+- When you need jump-ahead/substreams with guaranteed non-overlap or a proven minimum period: Romu has no jump function, and periods are only probabilistic; an HN critic reported 32-bit-variant cycles shorter than the paper's bounds and disputes that the proof applies to a fixed permutation.
+- Huge single jobs on the small variants: estimated capacity is 2^51 bytes for RomuDuoJr and 2^26 bytes for RomuMono32 (not for parallel streams).
+- When you need a measured, reproducible speedup: the comparison to xoshiro256++/PCG is assembly-derived cycle counts, not timed against those baselines.
+- Projects that need a clear license from the original source (see status note).
+
+**Vs siblings:** Pick Romu over SIMDxorshift or Squares when you want the cheapest scalar inlined 64-bit generator with low register pressure rather than a vectorized or counter-based one; pick Squares or Randen when you need counter-based reproducible substreams or backtracking resistance, and Randompack when you need distributions and a maintained library.
+
+**Gotchas:**
+- The state must not be all zeros; any nonzero seed works, and RomuMono32 needs its own init that maps the seed into a valid range.
+- Not equidistributed and with no guaranteed minimum period; each seed lands on a cycle of unknown length.
+- Only RomuTrio/RomuQuad are recommended for large or parallel jobs; RomuDuoJr trades capacity for speed.
+- The reference code keeps state in globals; wrap it in a struct before using it in libraries or threads.
+
+**Status:** Unmaintained 2020 single-author preprint (arXiv 2002.11331v1); no license appears in the paper, the official site's TLS certificate has expired so its code and license could not be read, and an HN thread says the author later moved the code to Apache 2.0 (unconfirmed); Apache-2.0 ports exist for Rust (hasenbanck/romu) and .NET (bgrainger/RomuRandom).
+
+[benchmark](https://arxiv.org/pdf/2002.11331)
+
+##### Squares counter-based RNG  `C`  `no license`  `unknown`  `Tier C`
+
+Stateless counter-based RNG built from 4-5 rounds of middle-square squaring; author reports ~1.7x Philox4x32-10 throughput.
+
+**Beats:** Philox 4x32-10 (Random123 counter-based RNG) — Author's own timing: generating one billion 32-bit numbers on an Intel Core i7-9700 (3.0 GHz) with gcc 11.2.0 under Cygwin64 took 2.29 s with Philox4x32-10 and 1.35 s with squares32 (~1.7x, derived from page data); 53-bit doubles from squares64 took 1.93 s. The paper does not give the flags or the Philox source (the download page bundles Random123 1.14.0). Quality claims are 300 BigCrush runs with random keys, 300 PractRand runs to 256 GB, and 25 to 32 TB.
+
+**Known shortcoming:** First-party, not peer-reviewed; no optimization flags; Philox implementation unnamed; code on author's site not opened, license unknown.
+
+**Known shortcoming:** Author's download page (squaresrng.wixsite.com/rand) says GNU GPL; no public repo, latest code v8 (Feb 2024); output quality depends on keys from the bundled key utility; paper notes a statistical failure in a 3-round version.
+
+**Independent measurement:** arXiv PDF: 1e9 32-bit values on i7-9700, gcc 11.2: Philox4x32-10 2.29 s vs Squares 1.35 s
+
+**How:** It is a counter-based version of von Neumann's middle-square method: x = ctr*key, then each round computes x = x*x + (y or z) and swaps the 32-bit halves with a rotate. That is one 64-bit multiply plus an add and a rotate per round, five multiplies in total for 32-bit output, against the ten rounds of 32x32->64 multiplies and key schedule in Philox4x32-10. The generator's quality depends on the key, which needs an irregular bit pattern with about half ones; the bundled key utility produces about 2 billion keys that satisfy this.
+
+**Use it when:**
+- Parallel or GPU-style Monte Carlo where each work item needs random access to element i of a stream without passing state around
+- Reproducible simulations where (counter, key) fully determines the output, so you can regenerate any sample on demand
+- Hot loops where Philox's per-call cost matters and you can accept 4-5 64-bit multiplies per output
+- Shader or hash-like use (keyed integer hash of an index), as in ports to GLSL
+
+**Skip it when:**
+- Anything security-related: it is a statistical generator, not a cryptographic one
+- Code that cannot take GPL code: the author's download page says the package is under the GNU GPL, so copying squares.h brings GPL terms
+- When a sequential generator is enough: the catalogued sibling PCG measured 0.78 cpb in Randen's README and xoshiro-class generators are typically cheaper than any counter-based design
+- Arbitrary user-chosen keys: quality depends on the key's bit pattern, so keys must come from the key utility or follow its rules
+- When you need peer-reviewed evidence: the paper is a self-published arXiv preprint (v7, March 2022) and the only speed comparison is the author's own
+
+**Vs siblings:** Pick Squares over Randen when you want a cheap stateless counter-based generator rather than a backtracking-resistant AES-based one; prefer Romu, PCG or SIMDxorshift when a single sequential stream per thread is fine, since they need no multiply-heavy rounds or key management.
+
+**Gotchas:**
+- Key quality matters: the paper says keys need an irregular bit pattern with roughly equal ones and zeros; the key utility enforces distinct upper and lower digit patterns.
+- The paper reports that Justin Lebar found a statistical failure in a 3-round version; do not cut rounds below 4 (32-bit) or 5 (64-bit).
+- The 64-bit version costs more: 1.93 s per billion 53-bit doubles versus 1.35 s for 32-bit outputs in the paper's own timing.
+- Code is distributed from a Wix site, not a public repository; the latest download is version 8 (Feb 2024), and older versions remain listed.
+
+**Status:** A single-author algorithm with the latest code release (v8) in Feb 2024. It is GPL per the download page, and the core is about 10 lines you could reimplement from the paper, but reimplementing it does not remove the GPL question for derived code; usability stays reference.
+
+[benchmark](https://arxiv.org/abs/2004.06278)
+
+##### xoshiro8x256pp (8-way SIMD xoshiro256++ gist)  `C`  `no license`  `abandoned`  `Tier C`
+
+A 15-line C function running eight xoshiro256++ streams in lockstep for compiler auto-vectorization; ~1.9x scalar xoshiro256++, ~3x PCG64.
+
+**Beats:** xoshiro256++ (also PCG64) — The gist author added the function to skeeto/prng64-shootout and ran it on an Intel Core i5-8250U (compiler and flags not stated; the shootout Makefile defaults to -O3 -march=native). It reached 4,922 MB/s vs 2,619 MB/s for scalar xoshiro256++ and 1,577 MB/s for PCG64, about 1.9x and 3.1x (derived from page data).
+
+**Known shortcoming:** Gist has no license (reference only); compiler/flags not named (run inside skeeto/prng64-shootout, whose Makefile defaults to cc -std=c99 -O3 -march=native, unconfirmed); one laptop CPU (i5-8250U); reproducing needs adding it to prng64-shootout; abandoned (2020-12-22).
+
+**Known shortcoming:** No seeding or jump code; no intrinsics, speedup depends on compiler auto-vectorization; shootout harness stores into a volatile buffer.
+
+**How:** It is Vigna's xoshiro256++-vect-speed.c idea fixed at an unroll of 8. Every step of xoshiro256++ (add, rotl 23, shift 17, four XORs, rotl 45) is a separate loop over 8 lanes, so GCC/Clang at -O3 with AVX2 turn each loop into 256-bit vector ops (two registers per word). There are no intrinsics, so the speedup depends entirely on the compiler vectorizing the loops. Eight independent dependency chains also hide latency.
+
+**Use it when:**
+- Bulk filling of uint64 buffers (Monte Carlo, noise, test data) on x86-64 with AVX2 or AVX-512, or aarch64 NEON, where the compiler can vectorize simple loops
+- When you want xoshiro256++ quality at roughly twice the scalar rate and can consume randoms in blocks of 8
+- As a small, readable template to copy into your own code base, after you clear its licensing (see when_not_to_use)
+
+**Skip it when:**
+- Without a license you cannot legally copy it as-is. Vigna's public-domain xoshiro256++-vect-speed.c gives the same technique with clear terms.
+- One-at-a-time draws: you must buffer 8 outputs, and the gain disappears if each call yields only one value
+- Builds without -O3 or -march flags that enable vectorization (e.g. -O2 on older GCC, or MSVC): the loops may stay scalar and gain nothing
+- When you need jump/long-jump to separate the 8 lanes: the gist leaves seeding to the user, and poorly seeded lanes may be correlated
+- Peak bulk throughput: SHISHUA reports far higher GB/s with explicit SIMD
+
+**Vs siblings:** Pick it over Xoshiro256PlusSIMD when you want xoshiro256++ (better low bits than xoshiro256+), 8 lanes and portable C with no intrinsics. Pick SHISHUA for maximum bulk throughput, and Sirius64 or wyrand for scalar one-at-a-time draws.
+
+**Gotchas:**
+- No license is stated on the gist, so the default copyright applies.
+- The 8 lanes need 8 distinct, well-mixed seeds (e.g. from SplitMix64, or xoshiro jump() between lanes); seeding is not provided.
+- The benchmark used skeeto/prng64-shootout, which stores each value into a volatile 512 MB buffer one at a time. That likely caps the measured gain below the generator's raw rate; the shootout's own non-PRNG baseline_simd was 12,078 MB/s on the same page.
+- Before relying on the speedup, check that the compiler vectorized the loops (e.g. -fopt-info-vec).
+
+**Status:** A one-off gist last active 2020-12-22 with no license, so it is reference only. Vigna's CC0 vect-speed.c gives the same technique under copyable terms.
+
+[repo](https://gist.github.com/CaffeineViking/dbb43bf2c388646629cb0d786195f4b7) · [benchmark](https://gist.github.com/CaffeineViking/dbb43bf2c388646629cb0d786195f4b7)
+
+#### sparse-and-solvers
+
+##### apxchol (parallel approximate-Cholesky PCG for Laplacian and SDDM systems)  `C++ (optional CUDA)`  `BSD-4-Clause (LICENSE file)`  `active`  `Tier C`
+
+Parallel randomized approximate-Cholesky PCG for graph-Laplacian and SDDM systems; beats hypre BoomerAMG on total solve time.
+
+**Beats:** hypre BoomerAMG (CPU and GPU builds); AMGCL, RCHOL and ParAC are also in the comparison — The authors measured setup plus solve to a 1e-8 true relative residual, one right-hand side, 72 threads on a CSCS Daint GH200 node; from the refreshed summary table the CPU build is a geometric-mean 5.7x faster than CPU hypre BoomerAMG (26 of 26 matrices) and 2.4x faster than AMGCL (faster on 18, tied on 3 and slower on 6 of 27, derived from page data), while the labelled historical campaign 2b755997 reports 3.3x over BoomerAMG and 1.7x over AMGCL with AMGCL winning 16 of 26. Compiler versions come from a later CSV snapshot and exact flags of the measured binaries are not listed; all numbers are first-party.
+
+**Known shortcoming:** BSD-4-Clause (not OSI-approved, advertising clause), so usability is reference; compiler versions come from a later snapshot's results.csv, not the headline campaign 2b755997; no flags; AMGCL beats apxchol on 16 of 26 CPU matrices.
+
+**Known shortcoming:** Record corrected: vs CPU AMGCL it is faster on 18 of 27 matrices, tied on 3 and slower on 6 (recomputed from summary.md), not 21 of 27. Results differ between runs because factors are not repeatable across thread counts (docs/precision.md). Its CPU build beats its own GPU build for one right-hand side (CPU/GPU ratio 0.461). Default build is -march=native.
+
+**Independent measurement:** enrichment
+
+**How:** It implements Kyng-Sachdeva style approximate Gaussian elimination: when a vertex is eliminated, the dense clique it would create is replaced by a few sampled edges (Gao-Kyng-Spielman 'GKS' sampler by default, a 'trace_cycle' sampler as an option), so the factor stays about as sparse as the graph. Elimination is parallelized with OpenMP by eliminating independent sets of low-degree vertices per round (block-greedy selection capped at the lowest 20% by current degree), then Baumann-Kyng style rounds on the dense residual and a short serial peel. Factor and triangular-solve arrays are stored in FP32 (optionally scaled FP16) while PCG vectors stay FP64; the CUDA build adds a synchronization-free dataflow triangular solve and a GPU-resident PCG.
+
+**Use it when:**
+- Large graph Laplacians from social, web or collaboration networks with skewed degrees: in the authors' GH200 table it takes 4.68 s on com-LiveJournal against 149 s for BoomerAMG and 83.7 s for AMGCL, and 0.76 s on as-Skitter against 69.8 s and 6.8 s.
+- Interior-point Laplacian/SDDM systems that change every iteration, where AMG setup is expensive: about 0.3 s against 7.6-9.9 s for AMGCL on the iter0020-iter0040 matrices.
+- Many right-hand sides on one fixed Laplacian (factor once with cpu_solver, then solve or apply repeatedly), from C++, Python or Octave.
+- Multicore CPU servers where you can pin threads across NUMA domains; the solver is memory-bandwidth bound and the README gives placement guidance.
+
+**Skip it when:**
+- General SPD matrices that are not Laplacian or SDDM (for example elasticity or most higher-order FEM systems): only Laplacian and SDDM inputs are supported.
+- Regular grids and FEM meshes where AMG already works well: AMGCL matched or beat it on grid_500, grid3d_100, grid_5000, parabolic_fem, kron_g500-logn16 and com-Orkut, and BoomerAMG needs 7-9 PCG iterations where apxchol needs 30-50.
+- Projects that need bit-reproducible results across thread counts: the docs state a fixed seed does not give byte-identical parallel factors, so iteration counts can vary between runs.
+- Licensing-sensitive or GPL projects: the BSD-4-Clause advertising clause is not OSI-approved and is GPL-incompatible.
+- Expecting a GPU win for a single right-hand side: in the historical GH200 campaign the CPU build was faster than its own GPU build (CPU/GPU total-time ratio 0.461, solve-only 0.853).
+
+**Vs siblings:** Pick apxchol over AMGCL when the systems are graph Laplacians of skewed-degree networks or interior-point SDDM matrices, where it wins by up to 31x in the authors' tables; keep AMGCL for general SPD problems and for grids and FEM meshes, where it ties or wins. Against LAMG+, which also targets graph Laplacians, apxchol offers a C++ library with OpenMP and CUDA builds and Python bindings, but no head-to-head between the two was found.
+
+**Gotchas:**
+- The library's default build uses -march=native, so binaries are not portable to older CPUs; turn off APXCHOL_NATIVE_ARCH for redistributable builds.
+- Thread placement matters more than thread count: on an EPYC 7742 socket, 32 threads spread over 4 NUMA domains took 0.77 of the 16-threads-on-one-domain time, and all 64 cores were slower than 32; pin threads explicitly with OMP_PLACES.
+- For a singular (connected) Laplacian the returned x is the minimum-norm solution with mean zero, whatever constant component the warm start had; a wrong-length x0 throws std::invalid_argument.
+- APXCHOL_POOL_FP32=OFF does not make it an all-FP64 solver: the assembled factor stays FP32 and GPU triangular solves default to scaled FP16.
+
+**Status:** Active ETH Zurich research code (354 commits, last commit 2026-09-30, PyPI 0.2.2 from 2026-07-27, 8 stars, no issues filed); usable from source or pip, but the BSD-4-Clause advertising clause limits it to reference use in this catalog.
+
+[repo](https://github.com/AlgOptGroup/apxchol) · [benchmark](https://raw.githubusercontent.com/AlgOptGroup/apxchol/HEAD/benchmarks/daint/results.csv)
+
+##### GSS (GRUS Sparse Solver, trial binaries)  `C`  `no license`  `abandoned`  `Tier C`
+
+Closed-source Windows x64 sparse direct solver (LU/Cholesky/LDLt) with optional CUDA offload; about 2.9x PARDISO on large SPD-type factorizations.
+
+**Beats:** Intel MKL PARDISO (Intel Composer XE 2013 SP1), CPU only — Vendor user guide (GSS 2.4, 2014), Table 1: numeric-factorization time only, GSS 2.4 in CPU+GPU hybrid mode vs CPU-only PARDISO from Intel Composer XE 2013 SP1, on a Core i7-4770 with 24 GB, a GTX 780 and CUDA 5.5 under Windows 7 x64. Over 12 SuiteSparse matrices the totals are 315 s vs 904 s (about 2.9x, derived from page data), with GSS losing on the 3 shortest jobs; no harness, compiler flags or thread settings are published.
+
+**Known shortcoming:** Not like-for-like: GPU-hybrid GSS (GTX 780) measured against CPU-only PARDISO (Composer XE 2013 SP1); GSS slower on 3 of 12 matrices (msdoor, inline_1, boneS10); 2014 hardware (i7-4770, Win7, CUDA 5.5).
+
+**Known shortcoming:** Closed-source Windows trial DLLs with a trial .lic file: no license, no source, no harness or flags, so not reproducible; abandoned since 2021-10-05.
+
+**Known shortcoming:** Closed-source trial: gss_spd.lic contains 'Thu Dec 31 10:11:11 2015', apparently an expiry date; only a Windows x64 double-precision real DLL ships. Guide says both solvers used default parameters, yet GPU hybrid mode is off by default (setting[20]=0), so Table 1's settings are unclear. The '64-bit' (_l) API still takes int* index arrays (2^31 nonzero limit). Claim cannot be reproduced.
+
+**Independent measurement:** User guide Table 1: 12 SuiteSparse matrices, numerical factorization only, 315.1 s vs PARDISO 904.2 s, about 2.9x (derived from page data); best case nd24k 5.4x.
+
+**Independent measurement:** enrichment
+
+**How:** Supernodal elimination-tree factorization in which an 'adaptive task-load-tree split' carves out a subtree of heavy supernodes small enough to factor entirely on the GPU (via cuBLAS), so CPU-GPU transfers stay small, while light independent supernodes run on CPU threads. A dynamic scheduler hands more tasks to whichever device is faster and splits a long-running GPU task to give child tasks to idle CPU threads. The README and the author's 2021 arXiv preprint (2109.14929) describe Q-learning for ordering, task scheduling and pivoting; the 2014 guide that carries the benchmark describes only adaptive scheduling, so how much of the Q-learning work is in this DLL is not documented.
+
+**Use it when:**
+- Historical or comparative interest: a 2014-era data point for CPU+GPU hybrid supernodal factorization against PARDISO
+- Windows x64 with an old CUDA-capable NVIDIA card (compute capability 3.0+, CUDA 5.5) and large SPD or structurally symmetric matrices whose numeric factorization takes tens of seconds; the guide shows 1.5x-5.4x there
+- Repeated factorizations of the same sparsity pattern, where the symbolic phase is reused and numeric factorization dominates
+- If you can obtain a current commercial licence from the vendor; the repository itself grants no rights
+
+**Skip it when:**
+- Anything that needs source, a licence grant or Linux/macOS: there is no LICENSE file, no source, and only a Windows x64 DLL
+- Short factorizations: the guide says PARDISO is faster when computing time is short, and GSS loses on msdoor (1.061 vs 0.424 s), inline_1 and boneS10
+- General unsymmetric, symmetric-indefinite or complex matrices if you want the GPU path: hybrid mode supports only types 10 and 11
+- Modern GPUs and toolchains: built against CUDA 5.5 and bundles cublas64_55.dll; behaviour on current drivers and GPUs is not documented
+- Matrices with more than 2^31 nonzeros: even the 64-bit ('_l') entry points take int* ptr/ind arrays
+
+**Vs siblings:** Rarely: RSLAB is an open-source alternative that reports faster solves than PARDISO, CKTSO covers circuit matrices against KLU with a PARDISO comparison, and BaSpaCho or PanguLU give GPU-accelerated sparse Cholesky/LU on current CUDA with source. Pick GSS only if you already hold a commercial licence and run on Windows.
+
+**Gotchas:**
+- The bundled trial licence file gss_spd.lic contains the string 'Thu Dec 31 10:11:11 2015', which looks like a trial expiry date; whether the DLL still runs today is not documented
+- GPU hybrid mode is off by default (setting[20]=0 is CPU only, 5 is hybrid), yet the guide says its benchmark used 'default parameters' while running hybrid; the exact settings behind Table 1 are therefore unclear
+- The header is still stamped v2.3.0 (2012) and its float solve prototypes differ (GSS_solve_is takes a double rhs, GSS_solve_ls a float rhs); the trial DLL list only has the double-precision real build
+- After a failed GSS_numeric call the samples set the handle to NULL ('must set hSolver to NULL') and skip GSS_clear; follow that pattern, because the handle's state after an error is not documented
+
+**Status:** Abandoned: the benchmarked release is from 2014, the repo's last commit is from October 2021, and it is a closed-source trial with no licence grant, so treat it as reference only.
+
+[repo](https://github.com/closest-git/GSS) · [benchmark](https://github.com/closest-git/GSS/blob/master/GSS%202.4.1%20x64%20TRIAL/doc/GSS%202.4%20quick%20start%20user%20guide.pdf)
+
+##### HP-SpMM-SDDMM (fast GPU SpMM for GNN graphs)  `C++`  `Apache-2.0 via per-file headers on the HP-SpMM sources (spmm/mm/spmm_kernel.cu, spmm/mm/spmm_common.cpp, include/spmm/mm/*, test/*.cpp). The repo has no LICENSE file. The bundled starml framework headers (e.g. include/starml/basic/matrix.h, allocator.h) and include/spmm/utils/timer_cuda.h carry no license. The integrated GE-SpMM baseline code is MIT upstream.`  `stale`  `Tier C`
+
+FP32 GPU SpMM kernel for GNN graphs (IPDPS'23 HP-SpMM); tops cuSPARSE 12.2 and GE-SpMM on 17 graphs on an H800.
+
+**Beats:** cuSPARSE 12.2 SpMM (CSR ALG2, CSR ALG3, CSR default, COO) and GE-SpMM — First-party README chart on an NVIDIA H800 (host CPU and exact CUDA version not stated beyond cuSPARSE 12.2, NVCC 11.8+, -O3, sm_80/sm_90): FP32 SpMM GFLOPS averaged over K = 32, 64 and 128 on 17 GNN graphs, with HP-SpMM above every cuSPARSE variant and GE-SpMM on all of them, for example about 1730 vs 1050 GFLOPS on Yelp and 3000 vs 1920 on reddit (values read off the chart). HP-SpMM alone runs on the precomputed clustering reorder, whose cost is not counted.
+
+**Known shortcoming:** Not like-for-like: only HP-SpMM gets a precomputed cuGraph row reorder (untimed, no generator script); CHECK_RES off by default; kernel sources carry Apache-2.0 headers but bundled starml is unlicensed and there is no LICENSE file (mixed); HPMLL/HP-SpMM is an identical copy.
+
+**Known shortcoming:** Kernels have no column bounds check, so K not a multiple of 32 reads and writes out of bounds. No SDDMM code despite the name. Only HP-SpMM gets the clustering reorder, and that cost and output zeroing are excluded from its timing; HP-SpMM and GE-SpMM get no warm-up while cuSPARSE gets 20 runs. 32-bit index maths (rows*K and cols*K < 2^31); atomicAdd output makes results non-deterministic. HPMLL/HP-SpMM is an identical copy.
+
+**Independent measurement:** enrichment
+
+**How:** Edge-parallel, load-balanced COO SpMM: each warp takes a fixed slice of 32 (or 128 for dense, large graphs) nonzeros, so skewed degree distributions do not leave idle warps, and partial row sums are flushed to C with atomicAdd when the row changes. The paper calls this a hybrid node/edge-parallel strategy with Dynamic Task Partition and Hierarchical Vectorized Memory Access: the 128-nonzero path loads indices and values with float4/int4 cp.async into double-buffered shared memory (Ampere+). A graph-clustering row reordering (precomputed .cugraph_reorder files) groups rows with similar neighbourhoods so the rows of B they read stay in cache.
+
+**Use it when:**
+- Full-graph GNN aggregation (GCN-style A*X) in FP32 on A100/A800/H100/H800 with feature widths K = 32, 64 or 128
+- Power-law graphs with skewed degrees (Reddit, ogbn-products, Yelp) where row-per-warp CSR kernels suffer load imbalance; the README chart shows roughly 1.5-1.7x over the best cuSPARSE variant on Yelp, arxiv and reddit
+- The graph is static across many epochs, so a one-off clustering reorder and COO conversion are amortized
+- As a reference implementation of edge-balanced, vectorized SpMM to port into your own GNN framework
+
+**Skip it when:**
+- K not a multiple of 32: the kernels have no column bounds check (cid < k) and read B and write C past the end
+- FP16/BF16, FP64 or weighted SpMM with non-default semirings: FP32 only, and the benchmark uses all-ones values
+- Pre-Ampere GPUs: the build targets sm_80/sm_90 and the large-graph path uses cp.async
+- If you need SDDMM, a maintained library or a PyTorch/DGL binding: none is provided, and there are 6 commits with the last in December 2023
+- Graphs that change every step (sampled mini-batches): you cannot reproduce the reorder step from this repo, and without it the speedup is not documented
+
+**Vs siblings:** Pick it over Sputnik when the workload is GNN-style A*X on power-law graphs on Ampere/Hopper and FP32 is enough; Sputnik is the more general deep-learning SpMM/SDDMM library and includes SDDMM. merge-spmv and CSR5 balance load in the same spirit but only for SpMV (one dense column).
+
+**Gotchas:**
+- Output is accumulated with atomicAdd: LBSpMM does not zero C, and the timed loop runs 200 launches into the same buffer, so after benchmarking C holds 200x the product (the disabled CHECK_RES compares with a 'div' mode); FP32 atomics also make results non-deterministic in summation order
+- Only HP-SpMM gets the clustering reorder; cuSPARSE and GE-SpMM run on the original order, and the reorder cost and C zeroing are excluded from its time. Neither HP-SpMM nor GE-SpMM gets the 20 warm-up runs the cuSPARSE paths get
+- Index arithmetic is 32-bit int (colind*k, row*k), so rows*K and cols*K must stay below 2^31; nonzero arrays must be padded to a multiple of 32 as the loader does
+- Input is a custom .smtx text format (header line 'rows,cols,nnz', then row offsets and column indices), not Matrix Market
+
+**Status:** Stale research code (last commit December 2023, also mirrored at HPMLL/HP-SpMM); kernel files carry Apache-2.0 headers but there is no LICENSE file and the starml framework is unlicensed, so copy the kernel rather than depend on the repo.
+
+[repo](https://github.com/fan1997/HP-SpMM-SDDMM) · [benchmark](https://github.com/fan1997/HP-SpMM-SDDMM)
+
+##### ISpMV  `C++`  `MIT (interfaces, examples, benchmarks) plus proprietary ISpMV Binary License for compiled core`  `active`  `Tier C`
+
+Closed-binary GPU SpMV SDK with per-matrix plans; 1.3-2.2x faster than cuSPARSE SpMV on H100 (fp64).
+
+**Beats:** cuSPARSE SpMV (CUDA 13 / cuSPARSE 12.8.6.72) — First-party benchmark on one H100 PCIe (CUDA 13.4.2, cuSPARSE 12.8.6.72), fp64, 100 matrices x 2 orientations x 2 scalar modes, preprocessing excluded. Geometric-mean steady-state time vs cusparseSpMV ALG2 is 2.17x lower on Mittelmann, 1.64x on large MIPLIB and 1.31x on large SuiteSparse; vs cusparseSpMVOp ALG1/ALG2 it is 1.38-1.69x lower. Host compiler, flags and CPU are not stated.
+
+**Known shortcoming:** Core is a closed binary; speedups exclude 37-110 ms preprocessing per direction; 1 star, one commit; no host compiler, flags or CPU.
+
+**Known shortcoming:** LICENSE-BINARY.txt limits the core to internal evaluation and non-commercial research, no redistribution of the .so; validated only on H100 PCIe; fp64 with 32-bit indices only; 24 of 400 cases failed forward-error check (all methods).
+
+**How:** Not documented in technical terms: the core source is private. The docs say plan preparation analyses the matrix on the GPU and picks a representation and kernel from the matrix structure and the device's reported resources (SM count, cache, launch limits). The work is classic inspector-executor: you pay 37-110 ms of matrix-specific preprocessing up front so each later SpMV runs faster.
+
+**Use it when:**
+- Iterative fp64 solvers (PDLP-style LP/QP, Krylov methods) on an NVIDIA GPU that apply the same sparsity pattern thousands of times
+- LP/MIP constraint matrices like those in Mittelmann and MIPLIB, where the published gain over cuSPARSE ALG2 is largest (1.6-2.2x)
+- Non-commercial research or internal evaluation: that is all the binary license allows without written permission
+- A100, H100/H200, B200, RTX 4090 or RTX 5090 (sm_80-sm_120) on Linux x86-64 with CUDA 13
+
+**Skip it when:**
+- Commercial or production use without a separate agreement: the ISpMV Binary License limits the core to internal evaluation and non-commercial research, and you may not redistribute the .so
+- One-off or few SpMVs per matrix: 37-110 ms of preprocessing (geometric mean) wipes out a gain of tens to hundreds of microseconds per call
+- FP32, complex, 64-bit indices, device-pointer scalars or CPU execution: all unsupported
+- Anything that needs auditable or patchable source: the core is closed, and runtime validation covers only H100 PCIe
+- Risk-averse deployments: v0.1.0 is a single-commit repo from late September 2026 with one star
+
+**Vs siblings:** Pick it over merge-spmv or CSR5 when you are on a current NVIDIA GPU, reuse one matrix many times, and can accept a closed non-commercial binary. merge-spmv and CSR5 are open, copyable source but target 2015-16 hardware. Ginkgo or AMGCL fit better when you need a full open solver stack rather than a faster SpMV kernel.
+
+**Gotchas:**
+- With copy_device_matrix=0 the plan borrows your CSR arrays, so they must stay immutable and allocated until the plan is released. Plan destruction does not synchronize.
+- Changing sparsity, dimensions or device requires a new plan. Changing only values per call is possible via apply_with_values, which bypasses value-dependent representations.
+- deterministic=1 (the default) gives bitwise-reproducible results only for the same plan, GPU and build. In the published benchmark, 24 of 400 cases (six SuiteSparse matrices) failed the forward-error criterion; all four methods failed those same cases.
+- Plan preparation cannot be captured in a CUDA graph, and graph-captured pointers and scalars are fixed. ispmv_version() returns the ABI major, not the SDK version.
+
+**Status:** Actively released (v0.1.0, single public commit) but reference-only: the core is a proprietary binary licensed for evaluation and non-commercial research, and only the interfaces, examples and benchmark client are MIT.
+
+[repo](https://github.com/PolyU-IOR/ISpMV) · [benchmark](https://github.com/PolyU-IOR/ISpMV/blob/main/benchmarks/README.md)
 
 ### parsing-and-text
 

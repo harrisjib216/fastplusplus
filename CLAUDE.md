@@ -122,30 +122,39 @@ after 2 failed fetches, the privacy/scratch rules above, and the terse final-rep
 - Default search assignments to a C++ language filter; "any"-language passes are extra coverage.
 
 - Cloud sessions (claude.ai): `gh` works only for this repo, and api.github.com, export.arxiv.org,
-  crossref and dblp are blocked. Agents use WebSearch, WebFetch (github.com pages, arxiv.org/abs,
-  HN Algolia) and curl to raw.githubusercontent.com. Give every agent `pipeline/cloud_harness.md`
-  as an override of the prompt's tool notes and /Users/... output path.
+  crossref and dblp are blocked. In the 2026-10-01 session the egress policy also blocked
+  arxiv.org, hn.algolia.com, api.semanticscholar.org, *.github.io, dl.acm.org, ieeexplore, doi.org,
+  sciencedirect, springer, readthedocs and most blogs; github.com (WebFetch), raw.githubusercontent.com
+  (curl), gitlab.com and pypi.org worked. Papers checked in a repo (e.g. doc/*.pdf) are reachable via
+  raw.githubusercontent.com. Give every agent `pipeline/cloud_harness.md` as an override of the
+  prompt's tool notes and /Users/... output path. Widening the environment's network access (or
+  adding those hosts) is what unlocks b7/b8 and paper-based retiers.
+- Subagents share one WebSearch budget per session (it ran out at 200/200 with ~28 agents running);
+  draft from github.com pages first. Do not let agents use mcp__github__ tools: the session's GitHub
+  scope is this repo only.
+- Category incumbents and wrappers of an already-listed project found again by a later search get
+  decision `duplicate` (wave 8: boostorg/geometry, flame/blis, SuiteSparse, libxsmm-dnn).
+- Verifier "not-notable-tier-d" rejects are overridden with decision `keep` plus a shortcoming
+  (keep-and-document rule); only invalid or fabricated evidence stays rejected.
 - A user interrupt in the main session can kill running background agents silently; if an agent
   never reports and its raw file is missing or stale, relaunch it.
 
 ## Status (2026-10-01)
 
-- Waves 1-7 are finished. Lists at f74eba1: COPYABLE 843, REFERENCE 86, REJECTED 16.
-- Wave 8 (numerics-and-science), paused 2026-10-01 (credit limit) in a claude.ai cloud session:
-  - All 14 b1/b2 searches are merged (81 unique records). Verifier batches 01-32 are applied:
-    75 verified (A 19, B 20, C 35, D 1), SIMDxorshift rejected (AVX path computes a different
-    generator), Arb, ducc0, SIMDpcg32_cpp, ademakov/RNG and the second LibShalom URL filed as
-    duplicates. Shortcomings for every verified entry are in decisions.json.
-  - 54 of 75 enrichments are done. Still to enrich (prompts already rendered in
-    data/wave8/enrich/prompts/): clblast, ft_blas, xrq_phys_blis, matmul_cpu, mpgemm_arm_sme,
-    meow_fft, tcfft, turbofft, vkfft, ffts, kfr, vectorfft, tidwall_tg, gdel3d, live_clones_gmsh,
-    manifold, nanoflann, rtree_c, thst, trueform, tinybvh. List them with:
-    `for s in $(python3 pipeline/enrich.py data/wave8 | cut -f1); do [ -f data/wave8/enrich/raw/$s.json ] || echo $s; done`
-  - Retier checks to run (Opus): FlashAttention-3 (repo has cuDNN benchmark code, flags and
-    H100 clock, maybe A) and HXT/Gmsh (confirm peer-reviewed venue, else C).
-  - Next after enrichment: b3 (gh-cpp2) prompts for all 7 categories, then b4-b8, then the seed
-    pass from data/wave8/leads.md, then close (render_lists, commit, push).
-  - Search coverage in the cloud was thin (WebSearch/WebFetch only); expect b3-b8 to add more.
+- Waves 1-8 are finished. Lists after wave 8: COPYABLE 1105, REFERENCE 121, REJECTED 21
+  (tiers across both lists A 319, B 254, C 635, D 18).
+- Wave 8 (numerics-and-science) closed 2026-10-01 in a claude.ai cloud session:
+  - Searches b1-b6 for all 7 categories plus 3 seed assignments (17 projects) are merged; 302
+    verdicts, 297 verified (A 66, B 62, C 159, D 10), every one enriched. Rejected for invalid
+    evidence: SIMDxorshift, SIMD-MT (compute a different generator), ra_prng (timed a no-op),
+    CUDA-L1 (timed solutions that skip the work), OxiBLAS (own audit calls its ratios fabricated).
+    34 duplicates filed. Retiers are in data/wave8/verify/raw/retier-0{1,2,3,4}.json.
+  - Deferred: b7 (blogs) and b8 (HN) were not run, because HN Algolia, arXiv and most blogs were
+    egress-blocked and the WebSearch budget was spent. Run them in a session with wider network
+    access, then merge/verify/enrich as usual and re-render the lists.
+  - Retier follow-ups that need paper access (listed in data/wave8/leads.md): fmm-gen (arXiv
+    1611.01120, maybe B/A), lemire/fastshuffleexperiments (maybe A), juFFTe (workshop paper, stays C
+    while its numbers predate fixes). Leads for a later seed pass are also in leads.md.
 - Waves 9-12 are set up (2026-10-01): `data/wave{9,10,11,12}/assignments.json` (152 assignments,
   19 categories x b1-b8) and leads.md; b1/b2 prompts rendered. Re-render b1/b2 before launching a
   later wave so its known list is current. zlib-ng and libdeflate are already filed under wave 9's
