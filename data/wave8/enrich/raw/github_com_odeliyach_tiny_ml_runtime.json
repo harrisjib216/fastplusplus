@@ -1,0 +1,47 @@
+{
+  "id": "https://github.com/odeliyach/tiny-ml-runtime",
+  "one_liner": "Educational pure-C MLP inference loop; beats per-call Python PyTorch only on tiny nets, loses 5x on MNIST.",
+  "what_it_does": "A student project that trains a fully connected network in PyTorch, exports layer sizes, weights, biases and an optional StandardScaler mean/std to a flat binary file, and runs single-sample forward passes in C (dense layers, ReLU between layers, softmax on the output, then argmax). The C API is load_weights(&net, path), predict(&net, input, verbose) and free_network; a CPython extension exposes tinymlinference.predict(weights_file, input_list). It is not a replacement for libtorch or any inference runtime: no batching, no model format beyond this custom binary, and only dense + ReLU + softmax.",
+  "how_it_is_fast": "It does not have a fast kernel: linear() is a naive row-major double loop with no SIMD, tiling, threading or restrict qualifiers, compiled with gcc -O2. The Iris win comes purely from skipping the Python interpreter and PyTorch's per-op dispatch on a 4-8-3 network (about 56 multiply-adds), which the README states itself. Each predict() still mallocs and frees two scratch buffers, so even the overhead-bound path is not minimal.",
+  "when_to_use": [
+    "Reading or teaching how a dense forward pass, numerically stable softmax and a weight loader work in about 300 lines of C.",
+    "Seeing the overhead-vs-compute crossover: tiny networks (tens of weights) called one sample at a time from code that would otherwise go through Python.",
+    "A starting point you intend to rewrite (preallocated buffers, SIMD GEMV) for a microcontroller-style dense classifier, under MIT terms."
+  ],
+  "when_not_to_use": [
+    "Any compute-bound network: on the 784-128-10 MNIST MLP the author's own numbers show PyTorch about 5.3x faster (22,502 vs 4,244 predictions/s).",
+    "Production or untrusted model files: the standalone engine's load_weights() reads num_layers and the input width from the file without bounds checks into fixed arrays (layer_sizes[10], scaler_mean/std[784]), so a malformed file overflows the Network struct; malloc results in predict() are unchecked.",
+    "Real-time or allocation-free contexts: predict() calls malloc/free twice per sample.",
+    "Anything beyond dense + ReLU + softmax with at most 10 layers and 784 inputs (MAX_LAYERS, MAX_FEATURES): no convolutions, recurrent layers, other activations or batching.",
+    "Through the Python binding: tinymlinference.predict() reopens and reparses the weight file on every call."
+  ],
+  "integration": {
+    "form": "source-drop (src/c/inference.c + inference.h; Makefile builds a demo executable) or CPython extension via pip install .",
+    "dependencies": "none for the C core (libc, libm); PyTorch and NumPy only for training/export and the Python benchmark",
+    "min_toolchain": "C11 per README; built with gcc -Wall -Wextra -O2",
+    "platforms": "any C11 target; benchmarked only on Apple M1 (ARM64); weight file is raw native-endian int32/float32",
+    "thread_safety": "Author's notes: safe for concurrent read-only inference with no global state, since predict() uses per-call heap buffers; one Network per loader.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The 258x figure compares C CPU time (clock()) with wall-clock time (time.time()) of a Python loop that calls .item() per prediction; it measures interpreter plus dispatch overhead, not PyTorch kernels.",
+    "The README's MNIST table header says 100K iterations, but src/python/benchmark_mnist.py runs 10,000 PyTorch iterations (10,000 / 0.444 s matches the 22,502/s shown); only the C side ran 100K.",
+    "The CPython extension carries its own copy of the loader (with bounds checks) that leaks earlier layer buffers on a mid-file read failure; the two copies can drift.",
+    "The weight format has no magic number, version or endianness marker."
+  ],
+  "pick_this_over_siblings_when": "Pick it only to learn; for real per-sample CPU inference of small networks RTNeural does the same job with compile-time-sized, allocation-free SIMD layers plus recurrent layers, and faster-enhancer.c is the catalogued example of a single-model C engine that beats ONNX Runtime on the same weights.",
+  "verified_claims_summary": "On an Apple M1 with gcc -O2 (version unstated), the C engine ran a 4-8-3 Iris MLP at 2,732,240 single-sample predictions/s versus 10,596/s for PyTorch 2.x driven from a single-threaded Python 3.11 loop (258x), but on a 784-128-10 MNIST MLP it managed 4,244/s versus PyTorch's 22,502/s, so PyTorch was about 5.3x faster. The timers differ between sides (CPU time vs wall clock) and no C/C++ runtime such as libtorch was compared.",
+  "status_note": "A 0-star student portfolio project (MIT, 47 commits, last commit 2026-03-25) with CI and tests; small enough to read and copy, but its own docs say it is not production-ready.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/odeliyach/tiny-ml-runtime/HEAD/README.md",
+    "https://raw.githubusercontent.com/odeliyach/tiny-ml-runtime/HEAD/Makefile",
+    "https://raw.githubusercontent.com/odeliyach/tiny-ml-runtime/HEAD/src/c/inference.c",
+    "https://raw.githubusercontent.com/odeliyach/tiny-ml-runtime/HEAD/src/c/inference.h",
+    "https://raw.githubusercontent.com/odeliyach/tiny-ml-runtime/HEAD/src/c/inference_module.c",
+    "https://raw.githubusercontent.com/odeliyach/tiny-ml-runtime/HEAD/src/python/benchmark.py",
+    "https://raw.githubusercontent.com/odeliyach/tiny-ml-runtime/HEAD/src/python/benchmark_mnist.py",
+    "https://raw.githubusercontent.com/odeliyach/tiny-ml-runtime/HEAD/docs/TECHNICAL_ANALYSIS.md",
+    "https://github.com/odeliyach/tiny-ml-runtime"
+  ],
+  "confidence": 0.85
+}

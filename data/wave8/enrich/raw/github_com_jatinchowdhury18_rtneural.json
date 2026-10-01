@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/jatinchowdhury18/rtneural",
+  "one_liner": "Real-time-safe C++ inference for small Dense/GRU/LSTM/Conv nets; per-sample calls run 2x-190x faster than ONNX Runtime/libtorch/TFLite.",
+  "what_it_does": "A C++14 inference-only engine for small neural networks inside real-time audio callbacks: you export weights from Keras or PyTorch to JSON (python/model_utils.py, torch_helpers) and run model.forward(input) one sample at a time. Two APIs: a run-time Model built from the JSON via json_parser::parseJson, and a compile-time ModelT<T, in, out, DenseT<...>, LSTMLayerT<...>, ...> whose layer sizes are template parameters. Recurrent layers keep their state between calls (stateful=True semantics); reset() clears it. It is not a drop-in for libtorch/ONNX Runtime: different model format, fixed layer set, no graph import.",
+  "how_it_is_fast": "It removes framework overhead rather than out-computing the frameworks: no tensor objects, graph dispatch, threading or allocation per call, just a matrix-vector product per layer on preallocated, aligned buffers. The compile-time API fixes every dimension at compile time (Eigen fixed-size matrices or xsimd arrays), so loops unroll and vectorize. The LSTM, for example, stacks W, U and bias into one [4*out x (in+out+1)] matrix and does a single GEMV per step, then applies sigmoid/tanh to the gate segments. Backends: Eigen (default, better for larger layers), xsimd (better for very small layers) or plain STL; an optional RTNEURAL_USE_AVX build adds -mavx2 -mfma with 32-byte alignment.",
+  "when_to_use": [
+    "Neural audio effects and amp/pedal models (GuitarML, AIDA-X, BYOD, NeuralNote-style plugins) that must process one sample or a short block per callback with no allocation.",
+    "Small recurrent or dense networks, roughly 4-64 hidden units, where per-call overhead of a general runtime dominates; the author's logs show 6x-268x real time for LSTM at 48 kHz on one i7-8700B core.",
+    "Architectures known at compile time: use ModelT with the Eigen or xsimd backend for the fastest path.",
+    "Embedded or plugin targets (x86, ARM incl. armv7 and Raspberry Pi per downstream users) where you want a header-style dependency with BSD-3 licensing and no runtime library."
+  ],
+  "when_not_to_use": [
+    "Batched or large-model inference: the benchmark gap shrinks fast with layer size (Dense 64: Eigen 76.8x vs TFLite 40.7x real time), and a reported crash with two 512-unit GRUs in the compile-time API (issue #157, open, no reply) suggests large static models are untested.",
+    "Layers outside Dense, Conv1D/Conv2D, GRU, LSTM, BatchNorm1D/2D and the tanh/ReLU/sigmoid/softmax/ELU/PReLU activations: MaxPooling, vanilla RNN, attention/transformers and TCN-style blocks are open requests (#102, #147, #120).",
+    "Training, GPU execution or importing ONNX/TorchScript graphs: inference only, CPU only, JSON weights only.",
+    "The STL backend on anything but tiny layers: at size 64 it falls to 1.01x (LSTM) and 8.69x (Dense) real time, below ONNX Runtime and TFLite in the author's own logs."
+  ],
+  "integration": {
+    "form": "header-style library; CMake add_subdirectory builds a small STATIC target, or include headers directly without CMake",
+    "dependencies": "nlohmann/json (bundled in modules/json) for model loading; Eigen or xsimd (bundled submodules) depending on backend; none for the STL backend",
+    "min_toolchain": "C++14 (CMake errors below 14; C++17 enables if constexpr); CMake 3.11+",
+    "platforms": "any C++14 target; armv7 uses 8-byte alignment; optional AVX2+FMA on x86 via RTNEURAL_USE_AVX",
+    "thread_safety": "not documented; models hold mutable recurrent state and scratch buffers, so use one model instance per thread",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Without CMake you must define RTNEURAL_DEFAULT_ALIGNMENT (16 or 32) and a backend macro yourself; a missing alignment define only warns and falls back to 16, which mismatches an AVX build.",
+    "Recurrent layers are stateful by default; call reset() before the first forward() and between independent sequences (issue #167 reports pops/clicks when reset() is called mid-stream).",
+    "JSON parsing and model construction allocate and use iostreams: do them off the audio thread; only forward()/reset() are marked RTNEURAL_REALTIME (checked with RealtimeSanitizer in CI).",
+    "Default sigmoid/tanh are exact Eigen/STL math; faster approximations require supplying your own MathsProvider template argument."
+  ],
+  "pick_this_over_siblings_when": "Pick RTNeural over OpenVINO, MNN or ONNX-class runtimes when the network is tiny and called per audio sample under a hard real-time deadline; pick tiny-cuda-nn for small MLPs only when you are on an NVIDIA GPU with large batches, and LIBXSMM when you are writing your own CPU kernels rather than loading a trained model.",
+  "verified_claims_summary": "In the author's RTNeural-compare harness on a 2018 Mac Mini (Intel Core i7-8700B), single layers process 10 s of 48 kHz signal one sample per call: LSTM size 4 runs at 268x real time (Eigen, compile-time API) vs 1.42x for ONNX Runtime 1.15.1 and 0.375x for libtorch, narrowing to 6.46x vs 1.13x and 0.262x at size 64; Dense size 64 is 76.8x vs TensorFlow Lite 2.14 at 40.7x. Release CMake build, compiler unstated; the libtorch loop runs without NoGradGuard/InferenceMode at default threads (ONNX Runtime is pinned to 1 thread), and baselines were timed only in the STL-backend run.",
+  "status_note": "Actively maintained (last commit 2026-08-20, 848 stars, used by more than a dozen shipping audio plugins) and BSD-3-Clause, so safe to vendor; note the reference paper (arXiv 2106.03037) is a preprint.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/jatinchowdhury18/RTNeural/HEAD/README.md",
+    "https://raw.githubusercontent.com/jatinchowdhury18/RTNeural/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/jatinchowdhury18/RTNeural/HEAD/cmake/CXXStandard.cmake",
+    "https://raw.githubusercontent.com/jatinchowdhury18/RTNeural/HEAD/cmake/SIMDExtensions.cmake",
+    "https://raw.githubusercontent.com/jatinchowdhury18/RTNeural/HEAD/cmake/ChooseBackend.cmake",
+    "https://raw.githubusercontent.com/jatinchowdhury18/RTNeural/HEAD/RTNeural/CMakeLists.txt",
+    "https://raw.githubusercontent.com/jatinchowdhury18/RTNeural/HEAD/RTNeural/RTNeural.h",
+    "https://raw.githubusercontent.com/jatinchowdhury18/RTNeural/HEAD/RTNeural/config.h",
+    "https://raw.githubusercontent.com/jatinchowdhury18/RTNeural/HEAD/RTNeural/common.h",
+    "https://raw.githubusercontent.com/jatinchowdhury18/RTNeural/HEAD/RTNeural/Layer.h",
+    "https://raw.githubusercontent.com/jatinchowdhury18/RTNeural/HEAD/RTNeural/lstm/lstm_eigen.h",
+    "https://raw.githubusercontent.com/jatinchowdhury18/RTNeural/HEAD/RTNeural/maths/maths_eigen.h",
+    "https://raw.githubusercontent.com/jatinchowdhury18/RTNeural/HEAD/RTNeural/model_loader.h",
+    "https://github.com/jatinchowdhury18/RTNeural",
+    "https://github.com/jatinchowdhury18/RTNeural/issues",
+    "https://github.com/jatinchowdhury18/RTNeural/issues?q=is%3Aissue+label%3Abug",
+    "https://github.com/jatinchowdhury18/RTNeural/issues/157",
+    "https://github.com/jatinchowdhury18/RTNeural/issues/161",
+    "https://raw.githubusercontent.com/jatinchowdhury18/RTNeural-compare/HEAD/README.md",
+    "https://raw.githubusercontent.com/jatinchowdhury18/RTNeural-compare/HEAD/src/benchmark.cpp",
+    "https://raw.githubusercontent.com/jatinchowdhury18/RTNeural-compare/HEAD/src/torch_layer.hpp",
+    "https://raw.githubusercontent.com/jatinchowdhury18/RTNeural-compare/HEAD/src/onnx_layer.hpp",
+    "https://raw.githubusercontent.com/jatinchowdhury18/RTNeural-compare/HEAD/run_bench.sh",
+    "https://raw.githubusercontent.com/jatinchowdhury18/RTNeural-compare/HEAD/results/bench_eigen.txt"
+  ],
+  "confidence": 0.8
+}
