@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/wembed-pdf/sprk",
+  "one_liner": "Rust SIMD kd-tree for fixed-radius queries with sorted LUT leaves; ESA 2026 paper reports fastest queries across 2-960 dimensions.",
+  "what_it_does": "SPRK-tree is a static index over n points in D dimensions (const-generic Sprk<D, W, F, I>, or DynSprk when D is known only at run time). It answers one question: which points lie within Euclidean radius r of a query point. query_radius appends indices or (index, distance) IdDist pairs to a Vec, and there is also a streaming iterator. update(positions) rebuilds the tree in place and reuses allocations, which suits loops where every point moves each step (force-directed graph embedding, particle simulations). There is no kNN, no box query and no single-point insert or delete. A C API (sprk.h), a header-only C++ RAII wrapper (sprk.hpp) and Python bindings ship in the repo; nothing is a drop-in for nanoflann or Boost.",
+  "how_it_is_fast": "The tree is an implicit, pointer-free balanced kd-tree: median splits on cycling axes are stored in a heap-indexed array, and leaves hold about 500-1000 points (LEAFSIZE 500, depth floor(log2(n/500))). During descent, it carries per-axis squared offsets so the radius left for a far subtree shrinks as planes are crossed. The paper calls this radius reduction; it prunes harder than a plain distance-to-plane test. Each leaf is sorted along one axis and indexed by a histogram lookup table (LUT), so two LUT reads turn the reduced radius into a contiguous slice of the leaf, in the style of SNN sorted buckets. Points are stored in W-wide (default 8) structure-of-arrays blocks. Distances are computed with SIMD FMAs (for D >= 6 via precomputed half-norms minus a dot product), and hits are written out with AVX-512 vcompressps/vpcompressd when the CPU has them (runtime check) or with `wide` shuffle tables otherwise. With the svd feature enabled and D > 16, the tree is built in SVD-rotated coordinates.",
+  "when_to_use": [
+    "Repeated fixed-radius neighbour queries on points that move every iteration, with a full rebuild each step (graph-embedding force layouts, particle or agent simulations): update() reuses the buffers",
+    "Moderate to high-dimensional Euclidean data (the paper covers 2-960 dimensions and up to 10M points). Search snippets of the abstract say it was fastest in almost all benchmarks, second only to SNN or brute force in a few high-dimensional cases, and an order of magnitude faster than brute force at 16 dimensions (paper not opened)",
+    "Rust code bases (crate sprk 0.2.0), or C/C++ callers through sprk-ffi when f32 coordinates and 2-16 dimensions are enough",
+    "x86-64 servers with AVX-512, built with -Ctarget-cpu=native as the README advises"
+  ],
+  "when_not_to_use": [
+    "k-nearest-neighbour search, box or range queries, or non-point geometry: it only does radius queries",
+    "A few inserts or deletes at a time: update() rebuilds the whole tree",
+    "Code that relies on the IdDist distance or on exact behaviour at the radius boundary when D >= 6 (see gotchas), or that needs f64 through the C API (f32 only)",
+    "Teams that cannot add a Rust toolchain (1.88+, edition 2024) to a C++ build",
+    "Risk-averse production use: the project has 18 commits made between 2026-03-08 and 2026-04-07, 3 stars, no GitHub releases and no independent measurements, and the paper's numbers were not seen here"
+  ],
+  "integration": {
+    "form": "crate (Rust); C/C++ through the sprk-ffi static or shared library with sprk.h and the header-only sprk.hpp wrapper",
+    "dependencies": "num-traits. The default feature simd-compress adds wide and simd-lookup. Optional: rayon and sharded-vec-writer (feature parallel); faer-svd, faer-core and dyn-stack (feature svd)",
+    "min_toolchain": "Rust 1.88, edition 2024",
+    "platforms": "any Rust target: an AVX-512 compress path on x86-64 (runtime-detected) and a portable `wide`/scalar fallback elsewhere",
+    "thread_safety": "Not stated in the docs. From the source, query_radius takes &self and uses a thread-local scratch buffer, so many threads can query one tree; update() needs &mut self",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "IdDist.dist is documented as the squared distance, but for D >= 6 the leaf scan computes |p|^2/2 + |q|^2/2 - p.q (half the squared distance) and stores that value unchanged (src/query.rs snn, src/simd.rs dist_half_squared, src/output.rs); D < 6 gets the true squared distance. The D >= 6 test also compares against r^2/2 + DIST_EPS (an absolute 1e-4 for f32, 1e-8 for f64) with no exact recheck. Points near the boundary can therefore be wrongly included, or lost to cancellation when coordinates are large relative to r. This comes from reading the source; no issue has been filed",
+    "Default features exclude svd and parallel (commit 2026-04-07, 'Disable svd and parallel construction features by default'), while the rembed benchmark builds sprk with svd, parallel and simd-compress. A plain `cargo add sprk` therefore gets neither the SVD projection for D > 16 nor the parallel build the paper used",
+    "C API limits: sprk_create returns NULL for any dimension outside 2-16, even though the FFI README advertises 18-24; every query heap-allocates its result array (free it with sprk_free_results), and the C++ wrapper then copies it into a new std::vector and only assert()s that creation succeeded; there is no update() and no batch query. The FFI's dynamic-dimension path builds DynSprk<f32,u32> but queries and frees it as DynSprk<f32,u64>. That path is unreachable today because of the dimension check, but it becomes a type-confusion bug if the check is relaxed",
+    "Each leaf's LUT range is rounded to whole units (floor of the minimum, ceil of the maximum). Data whose per-leaf extent is far below 1 gets coarse buckets and scans more of each leaf, so rescale tiny coordinates (from the source)"
+  ],
+  "pick_this_over_siblings_when": "Pick SPRK over nanoflann when the workload is purely fixed-radius search in moderate or high dimensions and you can link Rust. nanoflann is the safer C++ choice for kNN, f64, mature packaging and no extra toolchain. ArborX fits GPU batched queries, and Pkd-tree fits many-core batch inserts and deletes.",
+  "verified_claims_summary": "No numbers were verified. The ESA 2026 paper (LIPIcs ESA.2026.22, arXiv 2607.07367) could not be opened because arxiv.org, drops.dagstuhl.de and docs.rs are egress-blocked. Search snippets of its abstract say the SPRK-tree had the fastest query time in almost all benchmarks (graph embeddings plus real-world sets, up to 10M points, 2-960 dimensions), was second to SNN or brute force in the rest, and beat the Kiddo and Neighbourhood kd-trees. The public harness (wembed-pdf/rembed, a reproducibility CLI with Zenodo data and a nix flake) has feature-gated nanoflann, Boost R-tree and CGAL kd-tree backends, but which C++ baselines appear in the paper's figures, the CPU and the compiler were not seen.",
+  "status_note": "A young research crate under MIT (crate 0.2.0, no commits since 2026-04-07) and small enough (about 3k lines of core Rust) to vendor; treat it as a paper artifact rather than a maintained library.",
+  "sources_read": [
+    "https://github.com/wembed-pdf/sprk",
+    "https://github.com/wembed-pdf/sprk/commits",
+    "https://github.com/wembed-pdf/sprk/tree/main/src",
+    "https://github.com/wembed-pdf/sprk/tree/main/sprk-ffi",
+    "https://raw.githubusercontent.com/wembed-pdf/sprk/HEAD/README.md",
+    "https://raw.githubusercontent.com/wembed-pdf/sprk/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/wembed-pdf/sprk/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/wembed-pdf/sprk/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/wembed-pdf/sprk/HEAD/src/tree.rs",
+    "https://raw.githubusercontent.com/wembed-pdf/sprk/HEAD/src/query.rs",
+    "https://raw.githubusercontent.com/wembed-pdf/sprk/HEAD/src/simd.rs",
+    "https://raw.githubusercontent.com/wembed-pdf/sprk/HEAD/src/svd.rs",
+    "https://raw.githubusercontent.com/wembed-pdf/sprk/HEAD/src/dynamic.rs",
+    "https://raw.githubusercontent.com/wembed-pdf/sprk/HEAD/src/scalar.rs",
+    "https://raw.githubusercontent.com/wembed-pdf/sprk/HEAD/src/output.rs",
+    "https://raw.githubusercontent.com/wembed-pdf/sprk/HEAD/sprk-ffi/README.md",
+    "https://raw.githubusercontent.com/wembed-pdf/sprk/HEAD/sprk-ffi/Cargo.toml",
+    "https://raw.githubusercontent.com/wembed-pdf/sprk/HEAD/sprk-ffi/include/sprk.h",
+    "https://raw.githubusercontent.com/wembed-pdf/sprk/HEAD/sprk-ffi/include/sprk.hpp",
+    "https://raw.githubusercontent.com/wembed-pdf/sprk/HEAD/sprk-ffi/src/lib.rs",
+    "https://raw.githubusercontent.com/wembed-pdf/rembed/HEAD/README.md",
+    "https://raw.githubusercontent.com/wembed-pdf/rembed/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/wembed-pdf/rembed/reproducability/reproducibility-cli/README.md",
+    "https://arxiv.org/html/2607.07367 (EGRESS_BLOCKED; abstract seen only in WebSearch snippets)",
+    "https://docs.rs/sprk/latest/sprk/ (EGRESS_BLOCKED)"
+  ],
+  "confidence": 0.65
+}

@@ -48,3 +48,7 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - normaldist-benchmark issue #3: camel-cdr single-table ziggurat (~4.0 ns vs 7.3-7.8 ns); open PR #2 adds ratio-of-uniforms.
 - mourner/kdbush.hpp (C++ port of kdbush, archived 2026-06); mourner/geokdbush (JS kNN extension).
 - delaunay32-wasm (WebAssembly port, would be a duplicate).
+- arXiv 2106.13972 "Exploring Spatial Indexing for Accelerated Feature Retrieval in HPC" (OSTI; independent PicoTree comparison, possible B evidence for pico_tree/nanoflann).
+- arXiv 2603.06771 (linear octrees vs nanoflann/PicoTree, neighbour search).
+- GraphBLAS: Julia nonblocking GraphBLAS (arXiv 2509.14211), GraphBLAS kernel fusion (ICS 2025), HPCG on GraphBLAS (arXiv 2304.08232).
+- Pkd-tree paper siblings: BHL-tree, Log-tree, Zd-tree, CPAM (ucrparlay).

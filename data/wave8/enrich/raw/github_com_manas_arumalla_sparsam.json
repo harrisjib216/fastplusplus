@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/manas-arumalla/sparsam",
+  "one_liner": "From-scratch C++20 SLAM/pose-graph backend whose own block-sparse Cholesky beats GTSAM 4.2 on M3500, not Ceres on BA.",
+  "what_it_does": "A factor-graph nonlinear least-squares library (Lie groups SO2/SE2/SO3/SE3, analytic Jacobians, Gauss-Newton, Levenberg-Marquardt, GNC robust estimation, Schur-complement bundle adjustment) written with only the C++ standard library and Eigen dense types. The API is GTSAM-like in shape (FactorGraph, Values, Key, between/prior/projection factors, g2o/TORO/BAL readers) but it is its own interface, not a drop-in for GTSAM or Ceres. It is a solver stack, not a general sparse linear algebra library.",
+  "how_it_is_fast": "The normal equations H = J^T Sigma^-1 J are assembled into its own CSR-of-blocks storage and factored by a left-looking simplicial block Cholesky with dense per-block kernels; symbolic analysis, ordering and all storage are built once per problem and reused across iterations and LM retries with no reallocation (lambda is folded into the numeric pass). The fill-reducing ordering is a self-written quotient-graph approximate minimum degree (AMD, Amestoy-Davis-Duff degree bound), which takes M3500 factor+solve from 1623 ms (natural order) to 4.45 ms. The M3500 end-to-end win also comes from needing 7 GN iterations to GTSAM's 8.",
+  "when_to_use": [
+    "2D pose-graph SLAM on Manhattan-style datasets (M3500-like, thousands of poses) where a single-threaded GN solve under 0.1 s matters and you can avoid GTSAM.",
+    "You want a dependency-light estimation backend (C++20 + Eigen 3.4 only, no SuiteSparse, no Boost) to vendor and read.",
+    "Teaching, auditing or extending a SLAM backend: each component has a committed derivation doc and analytic-vs-numeric Jacobian tests.",
+    "Large 2D TORO graphs (M10000) from odometry initialization, where its GN reached chi2/dof about 1.2 in about 1 s and GTSAM 4.2's LM stalled in the author's runs."
+  ],
+  "when_not_to_use": [
+    "Bundle adjustment where wall clock matters: Ceres 2.2 was 1.1-3.3x faster on BAL Ladybug (e.g. 1.74 s vs 0.67 s on ladybug-49), because its trust-region damping needs 2.2-3.5x fewer iterations.",
+    "Fill-heavy 3D pose graphs: the README says GTSAM's per-iteration linear algebra is about 3-5x faster there; there are no supernodes yet.",
+    "Problems where you rely on LM: its LM plateaus on M3500 (2.8e3 after 60 iterations, where GN and GTSAM's LM reach 137.9) and hits the 200-iteration cap on several hard sets.",
+    "Multi-core or GPU solving: everything is single-threaded; use BaSpaCho, CHOLMOD or GTSAM with TBB instead.",
+    "Production use: project created July 2026, version 0.1.0, 1 star, one author; the README architecture lists batch GN/LM/GNC only, with no incremental smoothing (iSAM2-style)."
+  ],
+  "integration": {
+    "form": "static lib (CMake target sparsam; the code lives in headers under src/sparsam and the library compiles only version.cpp)",
+    "dependencies": "Eigen 3.4 (dense types only); GoogleTest fetched for tests; Ceres and GTSAM (Python wheel) only for the off-by-default SPARSAM_BUILD_BENCH oracles",
+    "min_toolchain": "C++20, CMake 3.22; benchmarks built with GCC 13.3",
+    "platforms": "Linux x86-64 is the only platform the benchmarks name; no SIMD intrinsics in the linear-algebra headers read, other platforms not documented",
+    "thread_safety": "not documented; the code is single-threaded and backend/factorization objects hold mutable workspaces, so share none across threads",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Fail-closed I/O and numerics: unknown g2o/TORO tags, non-PSD information matrices and gapped key sets throw instead of being skipped, so some datasets other tools ingest are rejected.",
+    "Its Pose2 error uses the true SE(2) log, while GTSAM's default Pose2 local chart is first-order; chi2 values differ by 2.6% (M3500) up to 27-61% on rotation-heavy sets before convergence, so unconverged chi2 is not comparable across the two.",
+    "BlockCholesky keeps a pointer to its BlockPattern (the rvalue constructor is deleted); the pattern must outlive the factorization, and one SparseBackend instance serves one fixed graph structure (adding factors after the first linearize throws).",
+    "Each block is a separately allocated Eigen::MatrixXd, so very small blocks pay allocation and indirection costs that a supernodal solver avoids."
+  ],
+  "pick_this_over_siblings_when": "Pick sparsam over BaSpaCho or Sympiler only when you want the whole nonlinear SLAM loop (factors, Lie groups, GN/LM/GNC) in one small dependency-free C++20 codebase for 2D pose graphs; for raw sparse Cholesky speed on large or fill-heavy systems, BaSpaCho's supernodal CPU/GPU factorization (benchmarked against CHOLMOD) is the stronger choice.",
+  "verified_claims_summary": "Author-run on an AMD Ryzen 9 8940HX laptop, single-threaded, GCC 13.3 -O3, median of 5: on M3500 both stacks converge to chi2 137.9 and sparsam's GN takes 0.078 s in-sweep (0.066 s standalone) against 0.133 s (0.141 s) for GTSAM 4.2.1's GN called through its prebuilt PyPI wheel, about 1.7-2.1x end to end with matched stopping criteria and a fresh backend per rep. Against Ceres 2.2 on BAL Ladybug it reaches the same final cost but is slower in wall clock on all four problems, though faster per iteration on ladybug-318 (552 vs 1091 ms).",
+  "status_note": "Active one-author project (latest commit 2026-08-08, created July 2026) under MIT with careful, reproducible benchmark records; copyable, but young and SLAM-specific rather than a general sparse solver.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/Manas-arumalla/sparsam/HEAD/README.md",
+    "https://raw.githubusercontent.com/Manas-arumalla/sparsam/HEAD/docs/benchmarks/m5.md",
+    "https://raw.githubusercontent.com/Manas-arumalla/sparsam/HEAD/docs/benchmarks/m4.md",
+    "https://raw.githubusercontent.com/Manas-arumalla/sparsam/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/Manas-arumalla/sparsam/HEAD/python/bench_m5_gtsam.py",
+    "https://raw.githubusercontent.com/Manas-arumalla/sparsam/HEAD/src/sparsam/linear/block_cholesky.hpp",
+    "https://raw.githubusercontent.com/Manas-arumalla/sparsam/HEAD/src/sparsam/linear/sparse_backend.hpp",
+    "https://raw.githubusercontent.com/Manas-arumalla/sparsam/HEAD/src/sparsam/linear/ordering.hpp",
+    "https://raw.githubusercontent.com/Manas-arumalla/sparsam/HEAD/bench/pgo2d_bench.cpp",
+    "https://raw.githubusercontent.com/Manas-arumalla/sparsam/HEAD/bench/bench_util.hpp",
+    "https://github.com/Manas-arumalla/sparsam/tree/main/src/sparsam/linear",
+    "https://github.com/Manas-arumalla/sparsam/issues"
+  ],
+  "confidence": 0.8
+}

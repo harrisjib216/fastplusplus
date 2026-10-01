@@ -1,0 +1,56 @@
+{
+  "id": "https://github.com/daqana/dqrng",
+  "one_liner": "R package with header-only xoshiro, PCG64 and Threefry engines, Ziggurat distributions and fast sampling; beats base R's RNG.",
+  "what_it_does": "Replaces R's Mersenne Twister and inversion-based samplers with faster engines: dqRNGkind, dqset.seed, dqrunif, dqrnorm, dqrexp and dqsample.int mirror the base-R names, and register_methods() installs the engine as R's user-supplied RNG so set.seed, runif, rnorm and rt use it. From C++ (Rcpp, LinkingTo: dqrng) you get dqrng::generator<RNG>(seed) wrappers that derive from an abstract random_64bit_generator satisfying UniformRandomBitGenerator, variate<Dist>() and generate<Dist>() helpers, a random_64bit_accessor for the global seeded RNG, and dqsample_int/dqsample_num. Engines: Xoroshiro128++ (the default since 0.4.0), Xoroshiro128**/+, Xoshiro256++/**/+, pcg64, and 20-round Threefry from the sitmo package.",
+  "how_it_is_fast": "It swaps R's MT19937 and inversion normals for small 64-bit engines and Boost.Random's Ziggurat normal and exponential samplers, with specializations so one 64-bit draw yields both the 53-bit double and the 8-bit Ziggurat layer index (generate_double_8bit_pair). Bounded integers use O'Neill's debiased integer-multiplication method (Lemire's multiply-shift with a rare modulo), and 32-bit requests use both halves of a 64-bit draw. Sampling without replacement picks the algorithm by sampling ratio: a partial Fisher-Yates shuffle above 50%, bitset rejection from 0.1% to 50%, and an open-addressing hash set below that.",
+  "when_to_use": [
+    "R code bottlenecked on rnorm/runif/rexp: README medians are rnorm(1e4) 654.7 us vs dqrnorm 85.9 us.",
+    "Unweighted sampling in R, especially without replacement from large ranges: sample.int(1e7, 1e5) 42.8 ms vs dqsample.int 679.1 us; with replacement 7.07 ms vs 296.86 us.",
+    "Rcpp, RcppParallel or OpenMP code that needs reproducible independent streams (clone(stream), xoshiro jumps, PCG streams, Threefry counter splitting), as shown in the parallel vignette.",
+    "R packages whose C++ code should share one seeded engine with the R session (random_64bit_accessor).",
+    "Pure C++ projects only for the bundled standalone engine headers: xoshiro.h (CC0) and pcg_* (Apache-2.0 or MIT)."
+  ],
+  "when_not_to_use": [
+    "Standalone C++ without R: dqrng_types.h, dqrng_generator.h and dqrng_sample.h include Rcpp, and dqrng_distribution.h pulls in dqrng_generator.h, so outside R use upstream xoshiro/pcg-cpp with Boost.Random or a C++ library such as EigenRand.",
+    "Codebases that cannot take AGPL-3 (strong copyleft with a network clause) for dqrng's own code.",
+    "Weighted sampling: the C++ dqsample_int ignores prob, and open issue #52 reports R-level dqsample.int with prob about 10x slower than base sample.int for small probability vectors.",
+    "When you must reproduce base R's random streams or keep streams stable across dqrng versions: the engines differ, rexp and dqrexp differ even after register_methods(), and the default engine (0.4.0) and seeding (0.3.0) have changed before."
+  ],
+  "integration": {
+    "form": "R package (CRAN) shipping header-only C++ in inst/include, used via LinkingTo or Rcpp::depends",
+    "dependencies": "R and Rcpp (the generator, type and sampling headers include Rcpp); BH (Boost.Random) for dqrng_distribution.h; sitmo for Threefry; xoshiro.h and the pcg_* headers are standalone",
+    "min_toolchain": "C++11 (per the vignette); R >= 3.5.0, Rcpp >= 0.12.16, BH >= 1.64.0-1, sitmo >= 2.0.0 (DESCRIPTION)",
+    "platforms": "wherever R and Rcpp build; PCG64 is disabled on macOS PowerPC and a fallback for compilers without a 128-bit integer was added in 0.4.1; open issue #76 reports 'Cannot install on Windows because of symlink'",
+    "thread_safety": "The global RNG is not thread-safe and must not be stored or used across threads (dqRNGkind invalidates it); the parallel vignette makes a thread-local copy per thread with clone(stream) under OpenMP, or uses PCG streams with RcppParallel.",
+    "drop_in_for_baseline": "partial — the R functions mirror runif/rnorm/rexp/sample.int and register_methods() swaps R's generator in place, but the numbers differ from base R; at C++ level the engines satisfy UniformRandomBitGenerator and work with <random> and Boost distributions"
+  },
+  "gotchas": [
+    "The C++ API vignette says operator()(range) returns integers in the closed interval [0, range], but the code (multiply-shift with rejection, returning the high half of x*range) returns [0, range).",
+    "Selecting stream k on the Xo(ro)shiro engines runs k jump() or long_jump() calls, so the cost grows linearly with the stream number.",
+    "The fast Boost specializations (Ziggurat bucket pair, uniform real) are written for random_64bit_generator and random_64bit_accessor only; passing a derived generator type falls back to Boost's generic paths (open issue #65). The uniform specialization also drops Boost's result < max rejection loop, so rounding can return max.",
+    "Every draw through random_64bit_generator is a virtual call; for the tightest loops use the concrete engine type (for example dqrng::xoroshiro128plusplus) directly."
+  ],
+  "pick_this_over_siblings_when": "Pick dqrng when you work in R/Rcpp and want faster drop-in-style replacements for runif/rnorm/sample.int plus parallel streams; zigg is a lighter R/C++ Ziggurat-only alternative, while pure C++ code is better served by EigenRand (vectorized distributions) or the simdrng and VMT19937 SIMD engines.",
+  "verified_claims_summary": "First-party bench::mark medians in the README, with no CPU, compiler or R version stated: rnorm(1e4) 654.7 us vs dqrnorm 85.9 us (7.6x), sample.int(1e7, 1e5, replace=TRUE) 7.07 ms vs 296.86 us (24x), and without replacement 42.8 ms vs 679.1 us (63x), ratios derived from page data. These time whole R-level functions (a different engine plus Ziggurat vs inversion, plus different sampling algorithms), not a generator against std::mt19937.",
+  "status_note": "Stale (last commit 2025-06-29, DESCRIPTION version 0.4.1.1, 16 open issues) but on CRAN with CI and coverage; the package is AGPL-3, while the bundled xoshiro.h (CC0) and pcg_* (Apache-2.0 or MIT) headers can be copied on their own terms.",
+  "sources_read": [
+    "https://github.com/daqana/dqrng",
+    "https://github.com/daqana/dqrng/issues",
+    "https://github.com/daqana/dqrng/issues/65",
+    "https://github.com/daqana/dqrng/issues/52",
+    "https://raw.githubusercontent.com/daqana/dqrng/HEAD/README.md",
+    "https://raw.githubusercontent.com/daqana/dqrng/HEAD/DESCRIPTION",
+    "https://raw.githubusercontent.com/daqana/dqrng/HEAD/LICENSE.note",
+    "https://raw.githubusercontent.com/daqana/dqrng/HEAD/NEWS.md",
+    "https://raw.githubusercontent.com/daqana/dqrng/HEAD/vignettes/dqrng.Rmd",
+    "https://raw.githubusercontent.com/daqana/dqrng/HEAD/vignettes/cpp-api.Rmd",
+    "https://raw.githubusercontent.com/daqana/dqrng/HEAD/vignettes/sample.Rmd",
+    "https://raw.githubusercontent.com/daqana/dqrng/HEAD/vignettes/parallel.Rmd",
+    "https://raw.githubusercontent.com/daqana/dqrng/HEAD/inst/include/dqrng_distribution.h",
+    "https://raw.githubusercontent.com/daqana/dqrng/HEAD/inst/include/dqrng_generator.h",
+    "https://raw.githubusercontent.com/daqana/dqrng/HEAD/inst/include/dqrng_sample.h",
+    "https://raw.githubusercontent.com/daqana/dqrng/HEAD/inst/include/dqrng_types.h",
+    "https://raw.githubusercontent.com/daqana/dqrng/HEAD/inst/include/xoshiro.h"
+  ],
+  "confidence": 0.8
+}

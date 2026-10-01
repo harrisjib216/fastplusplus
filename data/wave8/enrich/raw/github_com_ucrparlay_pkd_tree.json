@@ -1,0 +1,55 @@
+{
+  "id": "https://github.com/ucrparlay/pkd-tree",
+  "one_liner": "Parallel ParlayLib kd-tree with batch insert/delete; builds 80-277x faster than CGAL's kd-tree on 10^9 points.",
+  "what_it_does": "An in-memory kd-tree over fixed-dimension points (cpdd::PointType<T,d> wrapping std::array; a PointID variant carries an id). It offers a parallel build, batchInsert/batchDelete (plus single pointInsert/pointDelete), k-nearest neighbours (k_nearest into a per-query kBoundedQueue), range count (box or circle) and range report (box, serial or parallel). Each query call is sequential; the harness runs batches of queries inside parlay::parallel_for. The API is low level: you pass node* roots, parlay slices and the tree stores copies of the points. It is not a drop-in for CGAL Spatial_searching or boost::geometry::index::rtree. The repository is frozen, and the code continues in PSI-Lib (ucrparlay/SpaceTreeLib).",
+  "how_it_is_fast": "Instead of one median split per level, the build samples about 32x64 points (hash-indexed) to choose splitters for 6 levels at once (63 pivots, 64 buckets). It then distributes the points into the buckets with a blocked, cache-friendly parallel 'sieve' (per-block counts plus prefix sums), and recurses in parallel with ParlayLib fork-join; the split axis is the dimension with the widest extent. Leaves hold up to 32 points, and subtrees below 1024 points are built serially. Batch updates sieve the whole batch down the same multi-level skeleton and rebuild only subtrees whose children leave weight balance (imbalance ratio 30%, alpha 0.3). An update therefore costs about the size of the batch, not a full rebuild (CGAL rebuilds on insert). Queries are classic kd-tree searches with bounding-box pruning and a bounded priority queue for kNN.",
+  "when_to_use": [
+    "Building kd-trees over 10^8-10^9 low-dimensional points on a many-core server: build.csv for 10^9 3-D points shows 3.91 vs CGAL 1082.4 (uniform, about 277x) and 4.77 vs 381.3 (Varden, about 80x), derived from page data",
+    "Point sets that change through large batches (sliding windows, simulation steps, streaming scans): 10% batch insert into 10^8 12-D points took 0.115 vs CGAL's 171.2 (CGAL inserts and rebuilds), and deleting 0.1M points took 0.0054 vs 0.347 (uniform)",
+    "Range report and range count on large static sets: the 12-D uniform range query took 17.4 vs 109.1 for CGAL (about 6.3x, derived from page data)",
+    "Heavily skewed inputs (the Varden distribution), where the sampled multi-level build still stays balanced"
+  ],
+  "when_not_to_use": [
+    "kNN-dominated workloads: kNN was only 1.4-1.8x faster than parallel CGAL on 10^9 3-D points, and CGAL was slightly faster on one 12-D Varden row. Search snippets of the paper (not opened) say Pkd-tree, BHL-tree and CGAL have similar kNN performance",
+    "Few cores or single-threaded use: every win comes from parallel build and update; a SERIAL build mode exists, but no single-thread comparison was found",
+    "Production code that needs a maintained dependency: the README says 'This repository will no longer be updated'. The successor, PSI-Lib, notes it was later refactored with AI assistance and that some indexes' performance is 'slightly affected'",
+    "Boxes, polygons, segments, non-Euclidean metrics or approximate NN: points only",
+    "Windows, MSVC or non-x86 targets: only Linux with clang 17 and g++ 13 is documented, and the Release flags include the x86-only -mcx16 -march=native"
+  ],
+  "integration": {
+    "form": "header-only (include/cpdd) plus ParlayLib as a git submodule",
+    "dependencies": "ParlayLib (submodule). Optional: jemalloc, numactl. CGAL with TBB, Boost and ParGeo/Zdtree are only for the benchmark harnesses",
+    "min_toolchain": "C++20; CMake 3.15+; tested with clang 17 (recommended for speed), compiles with g++ 13",
+    "platforms": "Linux x86-64 documented (Release build uses -O3 -mcx16 -march=native); other platforms not documented",
+    "thread_safety": "not documented. The harness calls k_nearest, range_count and range_query concurrently from parlay::parallel_for on an already-built tree; build, batchInsert and batchDelete are internally parallel and presumably must not overlap queries (not stated)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The default batchDelete overload assumes every point to delete is in the tree (FullCoveredTag, per the header comment). Use the PartialCoverTag overload when some points may be absent",
+    "The build files disagree with the README: the README lists the CGAL option as default OFF, but CMakeLists.txt sets option(CGAL ON) and calls find_package(Boost REQUIRED) unconditionally. A plain 'cmake ..' therefore fails without CGAL and Boost; pass -DCGAL=OFF or just include the headers",
+    "Tuning knobs (BUILD_DEPTH_ONCE=6, LEAVE_WRAP=32, INBALANCE_RATIO=30) are static constexpr members. The README warns that different values 'on different machine may influence the performance dramatically'",
+    "Benchmark reading: by default the repo's kNN harness (queryKNN in tests/testFramework.h) flattens the tree's own points into the query array inside the timed loop. Queries are therefore the indexed points in tree order, a locality-friendly workload"
+  ],
+  "pick_this_over_siblings_when": "Pick Pkd-tree over nanoflann when you have many cores and need parallel build or large batch updates at 10^8-10^9 scale. nanoflann is single-threaded by default, but it is header-only with no ParlayLib dependency, maintained and widely packaged. Pick ArborX instead for GPU or Kokkos batched queries over arbitrary geometry with rebuild-only updates. For new projects, consider the successor PSI-Lib, which adds orth-trees and space-filling-curve trees.",
+  "verified_claims_summary": "First-party raw CSVs in script/data compare parallel Pkd-tree with CGAL's kd-tree, which was built with Parallel_tag and queried inside tbb::parallel_for. The CSVs give no units, hardware or date; times are presumably seconds. On 10^9 3-D points, build took 3.91 vs 1082.4 (uniform) and 4.77 vs 381.3 (Varden), and kNN (k=10) was only 1.4-1.8x faster. The batch insert and delete ratios are huge mainly because CGAL rebuilds after inserts and removes points one at a time. The SIGMOD 2025 paper was not opened; search snippets put its runs on a 96-core four-way Xeon Gold 6252 with 1.5 TB RAM. The code is built with -O3 -mcx16 -march=native, and the repo's Boost baseline is a sequentially built 2-D bgi::rtree<quadratic<2>>, a very small node capacity, so the Boost ratios flatter Pkd-tree.",
+  "status_note": "Frozen research artifact (the README says it will no longer be updated; last commit 2026-08-20) under MIT; the maintained code is PSI-Lib (ucrparlay/SpaceTreeLib, MIT, PPoPP 2026).",
+  "sources_read": [
+    "https://raw.githubusercontent.com/ucrparlay/Pkd-tree/HEAD/README.md",
+    "https://raw.githubusercontent.com/ucrparlay/Pkd-tree/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/ucrparlay/Pkd-tree/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/ucrparlay/Pkd-tree/HEAD/LICENSE",
+    "https://github.com/ucrparlay/Pkd-tree/tree/main/include",
+    "https://github.com/ucrparlay/Pkd-tree/tree/main/include/cpdd",
+    "https://raw.githubusercontent.com/ucrparlay/Pkd-tree/HEAD/include/cpdd/kdTreeParallel.h",
+    "https://raw.githubusercontent.com/ucrparlay/Pkd-tree/HEAD/include/cpdd/cpdd.h",
+    "https://raw.githubusercontent.com/ucrparlay/Pkd-tree/HEAD/include/cpdd/basic_point.h",
+    "https://raw.githubusercontent.com/ucrparlay/Pkd-tree/HEAD/include/cpdd/batch_op/build_tree.hpp",
+    "https://raw.githubusercontent.com/ucrparlay/Pkd-tree/HEAD/tests/testFramework.h",
+    "https://raw.githubusercontent.com/ucrparlay/Pkd-tree/HEAD/tests/cgal.cpp",
+    "https://raw.githubusercontent.com/ucrparlay/Pkd-tree/HEAD/tests/rtree.cpp",
+    "https://github.com/ucrparlay/Pkd-tree/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/ucrparlay/SpaceTreeLib/HEAD/README.md",
+    "https://raw.githubusercontent.com/ucrparlay/SpaceTreeLib/HEAD/docs/TREE_ANSWER.md"
+  ],
+  "confidence": 0.75
+}

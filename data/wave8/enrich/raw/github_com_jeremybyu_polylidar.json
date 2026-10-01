@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/jeremybyu/polylidar",
+  "one_liner": "C++ concave-polygon (with holes) extraction from 2D points and 3D data; about 4.8x faster than CGAL 2D alpha shapes.",
+  "what_it_does": "Polylidar turns a point set into one or more non-convex polygons, each an exterior shell plus interior holes, returned as index lists into the input points. Current master (Polylidar3D) also extracts flat surfaces and their polygons from unorganized or organized 3D point clouds and user meshes. The C++ entry point is the Polylidar3D class, with ExtractPlanesAndPolygons(points) for 2D/2.5D input and overloads taking a half-edge mesh. Python bindings (pip install polylidar) take NumPy arrays without copying. It is not a drop-in for CGAL::Alpha_shape_2: it returns ordered polygons rather than unordered alpha-boundary edges, and the shape is controlled by a maximum circumradius (alpha) and maximum edge length (lmax) rather than an alpha family.",
+  "how_it_is_fast": "It Delaunay-triangulates the points with an in-tree port of Delaunator (mapbox/delaunator-cpp, a sweep-hull algorithm), drops triangles whose circumradius exceeds alpha or whose edges exceed lmax, and groups the remaining edge-connected triangles by breadth-first region growing over the half-edge structure. Each region becomes a polygon through boundary following: border half-edges (those whose twin is missing or filtered out) go into parallel-hashmap tables keyed by point, the shell is traced from the right-most extreme point, and the leftover border loops become holes. In the 64,000-point subtimings, about 36 ms of Polylidar's 41 ms is triangulation, with 4.4 ms for filtering and region growing and 1.0 ms for polygon extraction. CGAL spends 44 ms on triangulation and 153 ms building the alpha shape, including alpha intervals for every edge. In 3D mode, marl fibers and OpenMP parallelize over multiple dominant planes.",
+  "when_to_use": [
+    "Outlines with holes from dense 2D point sets (footprints, coverage areas, sampled regions) at 10^3-10^5 points, where CGAL alpha shapes took about 200 ms and PostGIS 2.5 ST_ConcaveHull about 3-4 s for 64,000 points versus Polylidar's 30-40 ms",
+    "When you need a ready-made polygon (ordered shell plus holes) rather than unordered boundary edges you must stitch yourself",
+    "Ground-plane or floor-region polygons from airborne LiDAR, RGB-D range images or meshes, in real-time robotics loops (RealSense and KITTI use-case repos exist)",
+    "Python users who want a prebuilt wheel: PyPI polylidar 1.0.9 ships CPython 3.7-3.10 wheels for Linux x86-64, macOS (x86-64, arm64) and Windows x64"
+  ],
+  "when_not_to_use": [
+    "You need the exact CGAL alpha-shape definition, or many alpha levels from one build: Polylidar's circumradius/edge-length filter defines a different hull, and the benchmark itself notes that CGAL's per-edge alpha intervals give you a whole family of shapes",
+    "Near-degenerate input (collinear or cocircular points) with default builds: Delaunator lacks robust predicates unless you compile with PL_USE_ROBUST_PREDICATES, which is OFF by default in CMake and is not set by setup.py",
+    "Python 3.11+ or a maintained dependency: the last release (1.0.9) and last commit are from 2023-03-13, there are no wheels after cp310, and issues #16 (no polygons on airborne LiDAR) and #19 are open",
+    "Precise geodesic or GIS-grade output: there is no snapping, validity repair or CRS handling, and polygons come back as point-index lists that you turn into geometries yourself (the Python helpers use Shapely)"
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "Eigen, google/marl (task scheduler), greg7mdp parallel-hashmap and a fast-exp header, all bundled under thirdparty; optional OpenMP (disabled on Apple) and Shewchuk robust predicates (PL_Predicates); pybind11 for the Python module, with numpy, shapely and matplotlib in requirements.txt",
+    "min_toolchain": "C++14, CMake 3.14+ (the benchmark repo asks for a C++14 compiler)",
+    "platforms": "Linux, Windows and macOS (x86-64 and arm64 wheels on PyPI); no SIMD-specific code found in the files read",
+    "thread_safety": "not documented. Each Polylidar3D object creates its own marl::Scheduler (default 4 worker threads, task_threads), and the 2D path writes to the member z_thresh, so share one instance across threads only with care",
+    "drop_in_for_baseline": "partial: it replaces 'concave hull of a 2D point set' (CGAL Alpha_shape_2 boundary extraction or PostGIS ST_ConcaveHull) with different parameters (alpha = max circumradius, lmax = max edge length) and returns ordered polygons with holes instead of alpha-classified edges"
+  },
+  "gotchas": [
+    "The benchmarked code is the 2D Polylidar on the polylidar2d branch (the concavehull-evaluation submodule is at commit 6e25d1f). Master is Polylidar3D with a different API, and its 2D timings were not re-measured",
+    "Defaults are tuned for 3D: lmax=1.0, min_triangles=20 and alpha=0.0 (off). For a 2D point set you must set alpha or lmax to your data's scale, or small regions are silently dropped",
+    "When boundary tracing hits a broken edge (e.g. Delaunator mislabelling a hull edge), ConcaveSection prints to stderr and returns an empty shell instead of throwing, so check for empty polygons",
+    "Robust predicates cost speed: the evaluation README says turning them off gives a further ~30%, so the headline numbers were taken with robust predicates on, while stock builds have them off"
+  ],
+  "pick_this_over_siblings_when": "No sibling in this category extracts concave hulls. detria and Delaunay32 are fast 2D triangulators (benchmarked against CDT and Triangle, not Delaunator) but stop at the triangulation, the step that dominates Polylidar's runtime, and CGAL alpha shapes remain the reference when you need the exact alpha-complex definition or a family of alpha values.",
+  "verified_claims_summary": "In the author's concavehull-evaluation repo, the 2D Polylidar (robust predicates on, Python bindings) was timed against CGAL 4.12 Alpha_shape_2 (C++, alpha shape plus unordered boundary edges), PostGIS 2.5.2 ST_ConcaveHull (via psycopg client, upload excluded) and in-memory Spatialite ST_ConcaveHull on points sampled inside the California outline. At about 64,000 points the chart shows Polylidar at about 30-40 ms versus about 200 ms for CGAL and 3-4 s for PostGIS. The 30-run subtimings on caholes_64000 give about 41 ms for Polylidar versus about 197 ms for CGAL (about 4.8x) and about 11.3 s for Spatialite (about 270x, derived from page data). No hardware, compiler or flags are stated. The RA-L 2020 paper (arXiv 2002.01886) reports 'more than four times speedup' per search snippets, but arxiv.org is blocked here and it was not opened.",
+  "status_note": "Abandoned since 2023-03-13 (PyPI 1.0.9; 338 stars) but MIT-licensed. The 2D path is small enough to lift from the polylidar2d branch, while master pulls in marl, Eigen and parallel-hashmap.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/JeremyBYU/polylidar/HEAD/README.md",
+    "https://raw.githubusercontent.com/JeremyBYU/polylidar/polylidar2d/README.md",
+    "https://raw.githubusercontent.com/JeremyBYU/polylidar/polylidar2d/CMakeLists.txt",
+    "https://raw.githubusercontent.com/JeremyBYU/polylidar/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/JeremyBYU/polylidar/HEAD/src/Polylidar/CMakeLists.txt",
+    "https://raw.githubusercontent.com/JeremyBYU/polylidar/HEAD/setup.py",
+    "https://raw.githubusercontent.com/JeremyBYU/polylidar/HEAD/pyproject.toml",
+    "https://raw.githubusercontent.com/JeremyBYU/polylidar/HEAD/requirements.txt",
+    "https://raw.githubusercontent.com/JeremyBYU/polylidar/HEAD/src/version.txt",
+    "https://raw.githubusercontent.com/JeremyBYU/polylidar/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/JeremyBYU/polylidar/HEAD/include/Polylidar/Polylidar.hpp",
+    "https://raw.githubusercontent.com/JeremyBYU/polylidar/HEAD/include/Polylidar/Core.hpp",
+    "https://raw.githubusercontent.com/JeremyBYU/polylidar/HEAD/include/Polylidar/Types.hpp",
+    "https://raw.githubusercontent.com/JeremyBYU/polylidar/HEAD/src/Polylidar/Polylidar.cpp",
+    "https://raw.githubusercontent.com/JeremyBYU/polylidar/HEAD/src/Polylidar/Core.cpp",
+    "https://raw.githubusercontent.com/JeremyBYU/concavehull-evaluation/master/README.md",
+    "https://github.com/JeremyBYU/polylidar/issues?q=is%3Aissue",
+    "https://github.com/JeremyBYU/polylidar/issues/3",
+    "https://github.com/JeremyBYU/polylidar/issues/9",
+    "https://pypi.org/pypi/polylidar/json"
+  ],
+  "confidence": 0.75
+}

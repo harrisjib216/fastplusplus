@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/nulidangxueshen/albus",
+  "one_liner": "Research OpenMP+AVX2 double-precision CSR SpMV kernel with nonzero-balanced thread split; paper reports beating MKL, CSR5 and Merge.",
+  "what_it_does": "ALBUS (Absolute Load Balancing Using SIMD) computes y = A*x for a double-precision sparse matrix stored in ordinary CSR with 32-bit indices, on multi-core x86 CPUs. The repo is two benchmark programs (OpenMP-only and OpenMP+AVX2), each a main.cpp plus two headers: a Matrix Market reader and the kernel (albus_balance to partition, SPMV_DOU to multiply). There is no library API, no alpha/beta scaling and no transpose; to use it you copy Albus_spmv.h and call the two functions on your own CSR arrays.",
+  "how_it_is_fast": "The nonzeros are split into equal contiguous chunks per OpenMP thread (binary search over row_ptr finds each chunk's start row and offset), so a thread may start and end mid-row; the partial sums of the boundary rows go to a small per-thread buffer and are added serially after the parallel region. This is nonzero-based load balancing in the spirit of CSR5 and merge-based SpMV, but it keeps plain CSR and the partition costs only O(threads log rows). Inside each row the AVX2 variant gathers x values with _mm256_set_pd and accumulates with FMA, with specialized paths for rows of 1-4 nonzeros, software prefetch and Intel unroll pragmas.",
+  "when_to_use": [
+    "Multi-threaded double-precision SpMV on x86 CPUs with AVX2/FMA where the matrix is already in CSR and you cannot afford a format conversion (CSR5, CVR and SPC5 all need one).",
+    "Matrices with skewed row lengths (web, social and circuit graphs such as webbase-1M, web-Stanford, scircuit) where row-split OpenMP CSR loses to load imbalance.",
+    "Iterative solvers that reuse one matrix and thread count for many products, so the one-off partition is amortized (it is cheap anyway).",
+    "As a short, readable reference for nonzero-balanced CSR SpMV to port into your own code."
+  ],
+  "when_not_to_use": [
+    "You need a library: there is no build target, versioning, tests beyond a printout check, or API beyond two inline functions; MKL's CSR SpMV or merge-spmv are better-supported options.",
+    "Single precision, complex values, transposed products, y = alpha*A*x + beta*y or SpMM: only real double y = A*x is implemented.",
+    "Non-x86 targets or CPUs without AVX2/FMA (use the OpenMP-only variant, which loses the SIMD part), and matrices with 2^31 or more nonzeros (int indices).",
+    "Inputs that may contain Inf or NaN: the 3-remainder SIMD paths load one value past the row and multiply it by zero, so a non-finite neighbor value turns the row into NaN (see gotchas).",
+    "Production use without your own testing: abandoned since April 2022, no issues filed, and the MKL and Merge speedups are only in the paper abstract."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "OpenMP; AVX2 and FMA intrinsics for the AVX2 variant",
+    "min_toolchain": "not documented; Makefiles target Intel icpc (version not stated) with a commented-out g++ line (-march=native -mavx -mavx2 -fopenmp -O3); code uses the register keyword (removed in C++17) and Intel-specific pragmas",
+    "platforms": "x86-64 with AVX2+FMA for the SIMD variant; the OpenMP-only variant is portable C++",
+    "thread_safety": "not documented; SPMV_DOU opens its own OpenMP parallel region and writes a shared mid_ans scratch buffer, so concurrent calls need separate scratch, and the partition is computed for omp_get_max_threads() at albus_balance time and must be recomputed if the thread count changes",
+    "drop_in_for_baseline": "partial: takes standard 0-based CSR arrays (int row_ptr/col_idx, double values) like MKL's CSR SpMV, but it is a copy-in kernel with its own call signature, requires an output array of nrows+1 entries and a per-thread scratch buffer, and supports only y = A*x"
+  },
+  "gotchas": [
+    "Memory-safety and NaN edge case: for rows whose length is 3 or leaves remainder 3 mod 4, the kernel does a full _mm_load_pd/_mm256_load_pd that reads one double past the row (past the end of mtx_val for the last row) and multiplies it by a zero lane; the over-read is out of bounds for the last row, and a neighboring Inf/NaN value yields NaN.",
+    "The _mm256_load_pd/_mm_load_pd calls are aligned loads at row starts that are not generally 32-byte aligned; this only works when the compiler folds them into VEX memory operands (as at -O3), so a -O0 or different-compiler build can fault.",
+    "The benchmark ignores the iterations argument: ReadFile sets it to 4*min(200000, max(100, 2^34/nnz)) for both warm-up and timed loops on the same matrix and vector, so mid-size matrices run cache-warm; the README's dense 2048x2048 example implies about 457 GB/s of matrix traffic (derived from page data: 4,194,304 nonzeros x 12 bytes in 0.110 ms).",
+    "The built-in correctness check accepts up to 1% relative error per row against serial CSR, and the Matrix Market reader keeps only the real part of complex files and treats anything but 'symmetric' (e.g. hermitian, skew-symmetric) as general."
+  ],
+  "pick_this_over_siblings_when": "Pick ALBUS over CSR5, CVR or SPC5 when you must keep plain CSR with no format conversion and target AVX2 CPUs; its README table shows it ahead of CSR5 on all 28 matrices and ahead of CVR on 25 of 28 on a dual Xeon Gold 6242. merge-spmv also keeps CSR (merge-path partition) and has an SC'16 evaluation over 4,201 matrices, and SPC5 is the catalogued choice for AVX-512 or SVE.",
+  "verified_claims_summary": "The FGCS 2021 paper abstract (quoted in the README) reports, on a dual-socket Xeon E5-2670 v3 with 20 regular and 20 irregular UF matrices, average speedups of 1.48x over MKL on regular and 2.44x on irregular matrices (up to 2.31x and 5.37x), plus 1.32-1.59x over CSR5 and Merge; the README's own table, on a dual Xeon Gold 6242 with icpc -O3 -xCORE-AVX2, gives ALBUS vs CSR5 vs CVR GFlops only (e.g. rma10 94.5 vs 42.1 vs 65.8) with empty MKL and Merge columns. Timing excludes the partition step and comes from repeated cache-warm iterations; the comparison harnesses for MKL, CSR5 and Merge are not in the repo.",
+  "status_note": "Abandoned since 2022-04-04 (README edits) but MIT-licensed and a few hundred lines, so it is easy to vendor as a reference kernel after fixing the tail over-read and aligned loads.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/nulidangxueshen/ALBUS/HEAD/README.md",
+    "https://raw.githubusercontent.com/nulidangxueshen/ALBUS/HEAD/ALBUS%28OpenMP%2BAVX2%29/main.cpp",
+    "https://raw.githubusercontent.com/nulidangxueshen/ALBUS/HEAD/ALBUS%28OpenMP%2BAVX2%29/Makefile",
+    "https://raw.githubusercontent.com/nulidangxueshen/ALBUS/HEAD/ALBUS%28OpenMP%2BAVX2%29/Albus_spmv.h",
+    "https://raw.githubusercontent.com/nulidangxueshen/ALBUS/HEAD/ALBUS%28OpenMP%2BAVX2%29/Storage_format.h",
+    "https://raw.githubusercontent.com/nulidangxueshen/ALBUS/HEAD/ALBUS%28OpenMP%29/Albus_spmv.h",
+    "https://github.com/nulidangxueshen/ALBUS/issues?q=is%3Aissue"
+  ],
+  "confidence": 0.8
+}
