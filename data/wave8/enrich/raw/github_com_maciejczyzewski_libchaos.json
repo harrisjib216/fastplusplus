@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/maciejczyzewski/libchaos",
+  "one_liner": "Abandoned C++11 grab-bag of small PRNGs (xorshift128+, xorshift1024*, KISS, xorshf96) about 2.6x faster per call than std::mt19937.",
+  "what_it_does": "A C++11 library built around the author's 'chaos machines' (keyed hash/PRNG constructions from IACR ePrint 2016/468), with a set of classic small PRNGs on the side. Each PRNG is a header-only class wrapped in chaos::prng<> and exposed as a typedef such as CHAOS_PRNG_XOROSHIRO128PLUS, with seed(x), next(), operator() and stream-style << (seed) and >> (extract). It is not a std:: engine replacement: the API is its own, and the chaos machines need the compiled libchaos library.",
+  "how_it_is_fast": "There is no special technique: the speedup is what any small-state xorshift- or multiply-with-carry-family generator gets over MT19937's 624-word state and periodic twist. next() is an inline handful of shifts, xors and adds on 2-16 words of state (xorshift128+, xorshift1024* with a final multiply, Marsaglia's xorshf96 and KISS, and an MWC pair called 'abyssinian'). The benchmark builds everything with -O3 -flto -march=native.",
+  "when_to_use": [
+    "Reading or reproducing the chaos-machine research (XORRING32/64 machines and the ePrint paper), which is the library's actual focus.",
+    "Needing a copy of Marsaglia's KISS or xorshf96 with the exact sequences pinned by the repo's signature tests.",
+    "Quick non-critical C++11 simulations or games where a small generator about 2-3x faster per call than std::mt19937 is enough and BSD-2-Clause is acceptable.",
+    "Otherwise, take the reference xoshiro/PCG code or a maintained sibling instead; nothing here is faster than those originals."
+  ],
+  "when_not_to_use": [
+    "When you need xoroshiro128+ or xoroshiro1024*: the classes with those names implement the older xorshift128+ and xorshift1024* algorithms, so the output and quality do not match the names.",
+    "With <random> distributions or any template that expects a UniformRandomBitGenerator: chaos::prng<> has min(), max() and operator() but no result_type typedef, so std::uniform_int_distribution and similar should not compile against it (code reading, not compiled).",
+    "Anything security-related: the README offers chaos::password<CHAOS_MACHINE_XORRING64,...> for password hashing and calls the machines suitable for cryptographic primitives, but the repo cites no third-party cryptanalysis, only the author's ePrint paper.",
+    "MSVC or portable binaries: CMake stops on any compiler other than GCC or Clang, Clang is forced to -stdlib=libc++, and the installed library is built with -march=native.",
+    "Production use in general: the code was last committed on 2017-01-01, the CHANGELOG still reads 'Release 0.0.1 (in development)', the README warns 'early stage of development', and a 2017 link-error issue (#11) is unanswered."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none for the PRNG headers; the chaos machines link libchaos (src/, built with CMake); tests and benchmarks use Google Test and Google Benchmark submodules",
+    "min_toolchain": "C++11, g++ 4.7+ (CMake check); Travis CI used g++-4.8. Clang builds force libc++. MSVC is rejected by CMakeLists.txt.",
+    "platforms": "Linux/macOS with GCC or Clang (Travis used Ubuntu trusty); no architecture-specific code in the PRNG headers",
+    "thread_safety": "not documented; generators are plain objects with mutable state, so use one per thread",
+    "drop_in_for_baseline": "partial — exposes operator(), min() and max() like a std:: engine but no result_type, and seeding uses seed()/operator<< with generator-specific types rather than the std:: engine constructors"
+  },
+  "gotchas": [
+    "Weak seeding: seed(n) on the '128+' and '1024*' classes overwrites only the first state word and leaves the rest as fixed constants, so the first CHAOS_PRNG_XOROSHIRO128PLUS output after seed(n) is just n + 0x121fd2155c472f96, and streams from nearby seeds start correlated. KISS.seed(x) never reseeds its two MWC words, and seed(0) zeroes its xorshift component.",
+    "Every generator object carries two std::string members (name and authors, from CHAOS_META_DEFINE), so construction can allocate and copies are heavier than the state alone.",
+    "chaos.h #defines and then #undefs short macro names (M, R, KISS, MWC, SHR3, CONG, znew, wnew), which clobbers user macros with those names.",
+    "chaos::truely<> reads current_position and current_checkpoint in its constructor (via reseed()) before they are initialized, which is undefined behaviour."
+  ],
+  "pick_this_over_siblings_when": "Rarely. For a fast modern engine, cpp_prngs (RomuDuoJr, QuarkBurst64) is benchmarked directly against std::mt19937 and the other std engines, and testingRNG benchmarks the original lehmer64, xoroshiro128+ and PCG code. Pick libchaos only for its chaos-machine experiments or for its KISS/xorshf96 implementations with pinned test signatures.",
+  "verified_claims_summary": "README Google Benchmark rows from a Travis CI VM (CPU not stated; g++-4.8, -O3 -flto -march=native per the build files) report the '128+' class at 178.4M items/s and xorshf96 at 185.1M, against std::mt19937 at 68.2M and mt19937_64 at 60.1M items/s (about 2.6x, derived from page data). The libchaos and STL rows are shown separately; the harness counts one item per four discarded next() calls and uses no DoNotOptimize, so the absolute rates are understated 4x and output tempering may be optimized away for every engine.",
+  "status_note": "Abandoned since 2017-01-01 with 23 commits; BSD-2-Clause, and the PRNG headers are small enough to copy, but the mislabelled algorithms and missing result_type make it a poor dependency.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/maciejczyzewski/libchaos/HEAD/README.md",
+    "https://raw.githubusercontent.com/maciejczyzewski/libchaos/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/maciejczyzewski/libchaos/HEAD/.travis.yml",
+    "https://raw.githubusercontent.com/maciejczyzewski/libchaos/HEAD/tests/b_generators.cc",
+    "https://raw.githubusercontent.com/maciejczyzewski/libchaos/HEAD/tests/t_generators.cc",
+    "https://raw.githubusercontent.com/maciejczyzewski/libchaos/HEAD/include/chaos.h",
+    "https://raw.githubusercontent.com/maciejczyzewski/libchaos/HEAD/include/chaos/prng.hh",
+    "https://raw.githubusercontent.com/maciejczyzewski/libchaos/HEAD/include/chaos/types.hh",
+    "https://raw.githubusercontent.com/maciejczyzewski/libchaos/HEAD/include/chaos/macros.hh",
+    "https://raw.githubusercontent.com/maciejczyzewski/libchaos/HEAD/include/chaos/seed.hh",
+    "https://raw.githubusercontent.com/maciejczyzewski/libchaos/HEAD/include/chaos/truely.hh",
+    "https://raw.githubusercontent.com/maciejczyzewski/libchaos/HEAD/include/chaos/generators/xoroshiro.hh",
+    "https://raw.githubusercontent.com/maciejczyzewski/libchaos/HEAD/include/chaos/generators/kiss.hh",
+    "https://raw.githubusercontent.com/maciejczyzewski/libchaos/HEAD/include/chaos/generators/abyssinian.hh",
+    "https://raw.githubusercontent.com/maciejczyzewski/libchaos/HEAD/include/chaos/generators/xorshf96.hh",
+    "https://raw.githubusercontent.com/maciejczyzewski/libchaos/HEAD/include/chaos/generators/xorshift.hh",
+    "https://raw.githubusercontent.com/maciejczyzewski/libchaos/HEAD/include/chaos/generators/linear.hh",
+    "https://raw.githubusercontent.com/maciejczyzewski/libchaos/HEAD/ALGORITHMS",
+    "https://raw.githubusercontent.com/maciejczyzewski/libchaos/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/maciejczyzewski/libchaos/HEAD/install.sh",
+    "https://raw.githubusercontent.com/maciejczyzewski/libchaos/HEAD/LICENSE",
+    "https://github.com/maciejczyzewski/libchaos",
+    "https://github.com/maciejczyzewski/libchaos/tree/master/src",
+    "https://github.com/maciejczyzewski/libchaos/issues?q=is%3Aissue",
+    "https://github.com/maciejczyzewski/libchaos/issues/11"
+  ],
+  "confidence": 0.8
+}

@@ -1,0 +1,43 @@
+{
+  "id": "https://github.com/watney-0717/avx512-vaes2-prng",
+  "one_liner": "Single-header AVX-512/VAES/GFNI bulk PRNG proof of concept; author claims 0.093 cycles/byte versus about 4-6 for mt19937.",
+  "what_it_does": "A C header (AVX512-VAES2-PRNG.h) that fills a caller buffer with random 32-bit words in 512-byte blocks. You seed it with ufr32_seed_from_key32(state, key32), which expects an already-derived uniform 256-bit key, and generate with ufr32_8way_generate(state, out_words, blocks512). There is no single-value call, no integer seed, no distributions and no jump or stream API, so it is not a drop-in for std::mt19937 or a C++ engine. Helpers zeroize the state and mlock/VirtualLock it.",
+  "how_it_is_fast": "The state is just two 512-bit vectors (a, b). Each block adds Weyl constants, applies a GFNI affine byte transform to a and a VPSHUFB nibble lookup combined with VPTERNLOGD to b, and expands the two vectors into eight via rotations and complements. The eight vectors then go through two VAESENC rounds with seed-derived round keys and a cross-vector rotate-XOR 'diagonal' between the rounds. The eight 64-byte vectors are written with non-temporal stores (_mm512_stream_si512), and a small add/rotate/XOR remix is placed between the sixth and seventh store. There are no multiplications in the generation loop, and eight independent vectors keep the VAES and store ports busy.",
+  "when_to_use": [
+    "Experiments and benchmarking on AVX-512 + VAES + GFNI hardware (the README names AMD Zen 4/Zen 5 and Intel Sapphire Rapids/Emerald Rapids as targets) where you want a very high-throughput bulk random stream",
+    "Filling large buffers (many 512-byte blocks) that are not read back immediately, so the non-temporal stores help rather than hurt",
+    "Non-cryptographic simulation or noise generation where you can validate the output quality yourself before relying on it"
+  ],
+  "when_not_to_use": [
+    "Anything security-sensitive: the author states it is not a proven CSPRNG, and its mixing is only two AES rounds per block; use ChaCha or AES-CTR based generators instead",
+    "Production simulations that need well-tested statistical quality: the README shows only TestU01 SmallCrush and 0.962 GiB of PractRand plus home-grown statistics, and the state transition is not a bijection (see gotchas), so the period is unproven",
+    "CPUs without all of AVX-512F, GFNI and VAES, and any non-x86 target: the header has no fallback path",
+    "Small or immediately consumed outputs: generation is in 512-byte blocks with non-temporal stores, which evict the data from cache just before you read it",
+    "C++ projects without a shim: the header uses the C99 'restrict' keyword and GCC attributes, so it needs '#define restrict __restrict' under g++/clang++ and does not build with MSVC as written"
+  ],
+  "integration": {
+    "form": "header-only (single C header)",
+    "dependencies": "none (immintrin.h; sys/mman.h or windows.h for the optional lock helpers)",
+    "min_toolchain": "C99 compiler with AVX-512F/GFNI/VAES intrinsics and GCC-style __attribute__ and inline asm (GCC or Clang with -mavx512f -mgfni -mvaes or a suitable -march); exact versions not documented",
+    "platforms": "x86-64 only, requires AVX-512F + GFNI + VAES (the README tested an unnamed AMD EPYC in a shared server environment)",
+    "thread_safety": "not documented; the state is a caller-owned struct with no globals, so one state per thread works",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Output buffer must be 64-byte aligned and sized in 512-byte blocks (128 uint32 words per block): _mm512_stream_si512 faults on unaligned addresses, and the README does not mention this.",
+    "The 'VPSHUFB + VPTERNLOGD' step uses ternlog immediate 0xFE, a three-input OR of two nibble-substituted values and the input. Computing it from the header's LUTs gives only 56 distinct outputs for the 256 byte inputs, with 77% one-bits. The b-lane update is therefore many-to-one and the output vectors 4-7 start from that biased value (v[7] is its bitwise complement), so the generator has no period guarantee and rests on two AES rounds to hide the bias.",
+    "Seeding takes a 32-byte key that the comment says must already be uniformly distributed ('KDF boundary'). Passing a small integer padded with zeros is not supported by the design.",
+    "The README speed table mixes this generator's measured 0.0932 cpb with approximate '~' ranges for ChaCha8, VAES, PCG32/XorShift128+ and mt19937 that do not appear to come from the same run, and no harness, compiler or flags are published. By its own table, AVX-512 ChaCha8 (~0.08-0.18 cpb) is in the same range."
+  ],
+  "pick_this_over_siblings_when": "Rarely. SHISHUA (52.93 GB/s per its catalog record), testingRNG's aesctr and Google's Randen cover the same bulk-throughput niche with more scrutiny and without an AVX-512+VAES+GFNI requirement. Pick this one only to experiment with VAES/GFNI-based generator design on Zen 4+ or recent Xeon hardware.",
+  "verified_claims_summary": "The author's README reports 0.0932 cycles per byte (5.964 cycles per 64 bytes) for bulk output with non-temporal stores on an unnamed AMD EPYC with AVX-512/VAES/GFNI in a shared server environment, with no compiler, flags or harness published. The 43-64x figure against mt19937 compares that to an unmeasured 4-6 cpb range listed in the same table, and against PCG32/XorShift128+ the derived gap is 6-11x.",
+  "status_note": "A 0-star repo created on 2026-09-15 (all 11 commits that day), self-described as a preliminary proof of concept under a codename. MIT-licensed and small enough to vendor, but treat it as experimental.",
+  "sources_read": [
+    "https://github.com/Watney-0717/AVX512-VAES2-PRNG",
+    "https://github.com/Watney-0717/AVX512-VAES2-PRNG/commits/main",
+    "https://raw.githubusercontent.com/Watney-0717/AVX512-VAES2-PRNG/HEAD/README.md",
+    "https://raw.githubusercontent.com/Watney-0717/AVX512-VAES2-PRNG/HEAD/AVX512-VAES2-PRNG.h",
+    "https://raw.githubusercontent.com/Watney-0717/AVX512-VAES2-PRNG/HEAD/LICENSE"
+  ],
+  "confidence": 0.65
+}

@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/bab2min/eigenrand",
+  "one_liner": "Header-only SIMD random distributions for Eigen matrices; roughly 1.6-60x faster than std <random> plus NullaryExpr or Eigen::Random.",
+  "what_it_does": "It fills Eigen matrices and arrays with samples from about 20 univariate distributions: uniform, normal, gamma, beta, binomial, Poisson, discrete and others, most mirroring a std:: distribution. It also has multivariate generators (multinomial, Dirichlet, MvNormal, Wishart, inverse Wishart, truncated MvNormal). The API is Eigen-style: Rand::normal<ArrayXXf>(rows, cols, urng), -Like variants that copy another matrix's shape, and reusable generator classes (NormalGen, GammaGen, and so on) that return lazy Eigen expressions. It accepts std engines such as std::mt19937_64, and ships its own vectorized Mersenne Twister engines (Vmt19937_64, and P8_mt19937_64 for ISA-independent streams).",
+  "how_it_is_fast": "Every distribution has an Eigen packetOp, so a whole SSE2/AVX/AVX2/AVX512/NEON register of samples is produced per step and fused into Eigen's expression evaluation. Uniform reals use the mantissa trick: random bits are placed under a [1,2) exponent and 1 is subtracted. Normal uses vectorized Box-Muller with packet log/sincos and caches the second output. Rejection samplers (uniformInt bitmask rejection, gamma, binomial) pack the accepted lanes into a per-generator cache with a SIMD compress-append, so no lane is wasted. Discrete distributions use the alias method. Vmt19937_64 runs 2 (SSE2/NEON) or 4 (AVX2) Mersenne Twister 64 states in parallel lanes.",
+  "when_to_use": [
+    "You already use Eigen and generate large random matrices or arrays (e.g. 1000x1000 per call) for Monte Carlo, ML initialization or simulation.",
+    "You need non-uniform distributions in bulk (normal, Cauchy, binomial, discrete, uniformReal). The Ubuntu AVX2 chart shows about 8x-32x for these.",
+    "You want reproducible streams across SSE/AVX2/NEON builds (use P8_mt19937_64), or per-element parameters through vectorization over parameters (uniformReal, normal, binomial and others).",
+    "You want to replace Eigen::Random (rand()-based, unseedable) with a seedable, higher-quality generator."
+  ],
+  "when_not_to_use": [
+    "You draw a few scalars at a time outside Eigen expressions. The speed-up comes from bulk packet generation, and the library is tied to Eigen 3.3.4-3.4.x or 5.0.x.",
+    "You need bit-identical streams to std::normal_distribution or other std distributions. The algorithms differ, and outputs only match statistically (checked by Earth Mover's Distance).",
+    "chiSquared, gamma with large shape, fisherF, uniformInt over wide ranges (0~100k): only about 1.6-1.7x on the Ubuntu AVX2 chart. On Apple M1 NEON, binomial(100,0.75) and weibull are slower than std.",
+    "You need integer distributions for types other than int32_t. UniformIntGen and DiscreteGen static_assert on int32_t, and issue #58 requesting other integral types is open.",
+    "You need a library with many maintainers. It is a single-author project (105 stars), and issue #29 (an access violation in uniformReal for a 5x3 matrix on Eigen 3.3.9) is still open."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "Eigen 3.3.4-3.4.0 or Eigen 5.0.x (googletest only for the tests)",
+    "min_toolchain": "C++11 (C++14 with Eigen 5.0.x); CMake 3.9+ only for building tests and benchmarks",
+    "platforms": "x86 and x86-64 (SSE2, AVX, AVX2, AVX512), ARM64 NEON; scalar fallback when Eigen vectorization is off (Vmt19937_64 becomes std::mt19937_64)",
+    "thread_safety": "Not documented (issue #25 asked). Engines and generator objects hold mutable state (Box-Muller and rejection caches), so use one engine and one generator per thread.",
+    "drop_in_for_baseline": "partial: it accepts std engines and has a std-equivalent distribution for most cases, but it is called through Eigen matrix APIs, not as dist(urng), and its output values differ from libstdc++, libc++ and MSVC"
+  },
+  "gotchas": [
+    "The -Like and generator functions return lazy expressions. Rand::balancedLike(mat, urng) alone does nothing until assigned, and each evaluation draws new numbers from the engine held by reference.",
+    "Vmt19937_64 is a different type and stream depending on the compile-time ISA (Packet8i under AVX2, Packet4i under SSE2/NEON, std::mt19937_64 when unvectorized). Use P8_mt19937_64 when results must match across machines.",
+    "Uniform reals are built by the mantissa trick, so float outputs have 2^-23 granularity and never hit tiny nonzero values (to_nzur adds epsilon/8 where log(0) must be avoided).",
+    "Rejection loops have only a debug-mode assert after 100 iterations (EIGENRAND_CHECK_INFINITY_LOOP). Past bugs include a non-terminating normal (#27, fixed in 0.3.5) and out-of-range uniformInt (#42, fixed in 0.4.1), so pin to 0.6.0 or later."
+  ],
+  "pick_this_over_siblings_when": "Pick EigenRand when your data already lives in Eigen and you need many distributions (including multivariate and vectorization over parameters) behind one API. Zest or normaldist-benchmark's Ziggurat are lighter for scalar normal/gamma sampling without Eigen. Randompack covers C-callable bulk U(0,1)/N(0,1) with paper numbers, and simdrng/VMT19937 are better if you only need a fast vectorized bit engine.",
+  "verified_claims_summary": "The repo's benchmark generates 1000x1000 Eigen arrays 20 times per distribution. It compares EigenRand against std::mt19937_64 plus the matching std distribution through Eigen NullaryExpr, and against Eigen::Random for 'balanced'. The README bar charts (Eigen 3.4.0; GCC 7.5 AVX2 on Xeon Platinum 8370C, MSVC 19.29 AVX2 on Xeon Platinum 8171M, Apple clang 13.1.6 NEON on M1 Pro) show speed-ups of about 1.6x-32x on Ubuntu, 3x-61x on Windows and 0.6x-15x on M1. All values are read by eye from images, and the runs were on shared CI machines.",
+  "status_note": "Active, with release 0.6.0 (2026-01-31) adding Eigen 5.0.x and AVX512 support and the last commit on 2026-03-17. MIT-licensed and header-only, so it is easy to vendor alongside Eigen.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/bab2min/EigenRand/HEAD/README.md",
+    "https://raw.githubusercontent.com/bab2min/EigenRand/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/bab2min/EigenRand/HEAD/benchmark/benchmark.cpp",
+    "https://raw.githubusercontent.com/bab2min/EigenRand/HEAD/LICENSE",
+    "https://github.com/bab2min/EigenRand/tree/main/EigenRand",
+    "https://raw.githubusercontent.com/bab2min/EigenRand/main/EigenRand/EigenRand",
+    "https://raw.githubusercontent.com/bab2min/EigenRand/main/EigenRand/Macro.h",
+    "https://raw.githubusercontent.com/bab2min/EigenRand/main/EigenRand/doc.h",
+    "https://raw.githubusercontent.com/bab2min/EigenRand/main/EigenRand/PacketRandomEngine.h",
+    "https://raw.githubusercontent.com/bab2min/EigenRand/main/EigenRand/RandUtils.h",
+    "https://raw.githubusercontent.com/bab2min/EigenRand/main/EigenRand/MorePacketMath.h",
+    "https://raw.githubusercontent.com/bab2min/EigenRand/main/EigenRand/PacketFilter.h",
+    "https://raw.githubusercontent.com/bab2min/EigenRand/main/EigenRand/Dists/Basic.h",
+    "https://raw.githubusercontent.com/bab2min/EigenRand/main/EigenRand/Dists/NormalExp.h",
+    "https://raw.githubusercontent.com/bab2min/EigenRand/main/EigenRand/Dists/Discrete.h",
+    "https://raw.githubusercontent.com/bab2min/EigenRand/main/EigenRand/Dists/GammaPoisson.h",
+    "https://github.com/bab2min/EigenRand/issues?q=is%3Aissue",
+    "https://github.com/bab2min/EigenRand/issues/25",
+    "https://github.com/bab2min/EigenRand/issues/29"
+  ],
+  "confidence": 0.8
+}

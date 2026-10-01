@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/ulfben/cpp_prngs",
+  "one_liner": "Header-only constexpr C++17 small-state PRNG engines (RomuDuoJr, QuarkBurst64, Konadare192 and others) with a game-oriented Random<E> API, faster than std::mt19937.",
+  "what_it_does": "Packages ten small-state engines (4-32 bytes): PCG32, xoshiro256**, Bob Jenkins' SmallFast 8/16/32/64, RomuDuoJr, QuarkBurst64, Konadare192 and XorShift32Star8, ported to constexpr C++17. Each engine meets UniformRandomBitGenerator, so it works with std::shuffle and std::*_distribution. A Random<E> wrapper adds unbiased bounded integers, floats, coin flips, weighted picks, element selection and an Irwin-Hall approximate normal, plus portable state snapshots (state()/from_state()) for replays. Each engine is seeded from a single uint64_t. It is not a drop-in for std::mt19937's output sequence.",
+  "how_it_is_fast": "The gain comes from replacing the 624-word Mersenne Twister with register-sized nonlinear generators. RomuDuoJr is one multiply plus a rotate-subtract on two 64-bit words. QuarkBurst64 is rotate/XOR/add with a Weyl counter and no multiply. Konadare192 is add/rotate with a Weyl increment. The wrapper uses Lemire's nearly divisionless multiply-and-reject for bounded integers (division-free when the bound is a compile-time constant). Floats are built by writing random bits into the mantissa field (the 'IQ float hack') instead of dividing.",
+  "when_to_use": [
+    "Games and procedural generation that need fast, reproducible, cross-platform integer streams and replay checkpoints from a tiny state",
+    "Many independent generator instances (per entity, per thread, per job) where std::mt19937's 2.5 KiB state is a cache cost",
+    "Compile-time generation of tables or test data (engines and most of Random<E> are constexpr)",
+    "Bounded integers and weighted picks in hot loops: Lemire's multiply-and-reject avoids most divisions (the README's bounded-integer chart compares it with std::uniform_int_distribution and rand() % n)",
+    "8/16-bit microcontrollers (AVR Arduino built as C++17) via the SmallFast8/16 and XorShift32Star8 engines"
+  ],
+  "when_not_to_use": [
+    "Security or anything adversarial: none of the engines is cryptographic, as the README states",
+    "Scientific Monte Carlo that needs proven period, jump-ahead or guaranteed non-overlapping parallel streams: RomuDuoJr has no proven period (its seeding comment cites only empirical cycle checks), and child() explicitly 'does not promise independent or non-overlapping streams'",
+    "Code that must reproduce std::mt19937 sequences or the exact output of std distributions",
+    "Projects that need high-precision floats by default: normalized()/between() default to float with 23 random mantissa bits, and normal_approx() is an Irwin-Hall approximation clipped at about six standard deviations",
+    "When you need audited statistical quality for QuarkBurst64: the repo has known-answer tests against an archived reference but no PractRand/TestU01 results, and the upstream eightomic/quarkburst repo returns 404"
+  ],
+  "integration": {
+    "form": "header-only (copy include/ or link the CMake INTERFACE target cpp_prngs::cpp_prngs)",
+    "dependencies": "none (GoogleTest is fetched only for the test build)",
+    "min_toolchain": "C++17 (CMake 3.21+ for the provided target); C++20 adds constexpr std::bit_cast floats and the rnd::RandomBitEngine concept; AVR needs -std=gnu++17 (CI uses Arduino AVR core 1.8.8)",
+    "platforms": "any C++17 target (desktop, MSVC project included, AVR Arduino validated in CI)",
+    "thread_safety": "not documented; engines and Random<E> are plain value types with no global state, so use one instance per thread",
+    "drop_in_for_baseline": "partial: the engines satisfy UniformRandomBitGenerator and can replace std::mt19937 as the engine for std::shuffle or std distributions, but the sequences differ, seeding takes a single uint64_t rather than a seed_seq, and the Random<E> API is its own interface"
+  },
+  "gotchas": [
+    "Default construction uses a fixed seed, so Random<E>() gives the same sequence every run. Seeding helpers live in a separate gist (seeding.hpp), not in the repo.",
+    "Floating between(lo, hi) is computed as lo + (hi - lo) * normalized(), so rounding can return hi for some ranges despite the documented [lo, hi). In C++17 the float path is constexpr arithmetic unless RND_FAST_FLOAT is defined.",
+    "from_state() bypasses seeding. All-zero states are invalid for most engines (PCG32's inc must be odd), and this is checked only by assert in debug builds.",
+    "Third-party engine headers keep their own licenses (PCG32 and Konadare192 are Apache-2.0, QuarkBurst's upstream is BSD-3-Clause), so check the per-file headers when vendoring rather than assuming MIT throughout."
+  ],
+  "pick_this_over_siblings_when": "Pick cpp_prngs over libchaos or the bare Romu entry when you want ready-to-copy constexpr C++17 engines plus a convenience layer (bounded ints, weighted picks, snapshots) with portable, deterministic output, including on AVR. For SIMD bulk throughput (simdrng, SHISHUA) or scientific-grade streams with jump-ahead (Randen, xoshiro reference code, OpenRAND), look at those entries instead.",
+  "verified_claims_summary": "The author's Quick Bench charts (August 2026) put raw next() at about 13,300 for std::mt19937 versus about 2,700 for RomuDuoJr and 2,600 for QuarkBurst64, in units of CPU time / no-op time, values read by eye. That is roughly 5x per call, but it compares 64-bit-output engines with the 32-bit-output std::mt19937. Compiler, flags, standard library and CPU are not stated (the Quick Bench links were unreachable). The harness is public (benchmarks/engine_comparison.cpp, Google Benchmark, 1024 values summed per iteration).",
+  "status_note": "Actively maintained by a single author (232 commits, last 2026-08-20, 1 star, CI on desktop and AVR). MIT for the wrappers, with third-party engines under their original permissive licenses; small enough to vendor.",
+  "sources_read": [
+    "https://github.com/ulfben/cpp_prngs",
+    "https://github.com/ulfben/cpp_prngs/issues?q=is%3Aissue",
+    "https://github.com/ulfben/cpp_prngs/tree/main/tests",
+    "https://raw.githubusercontent.com/ulfben/cpp_prngs/HEAD/README.md",
+    "https://raw.githubusercontent.com/ulfben/cpp_prngs/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/ulfben/cpp_prngs/HEAD/LICENSE.md",
+    "https://raw.githubusercontent.com/ulfben/cpp_prngs/HEAD/include/rnd/random.hpp",
+    "https://raw.githubusercontent.com/ulfben/cpp_prngs/HEAD/include/rnd/concepts.hpp",
+    "https://raw.githubusercontent.com/ulfben/cpp_prngs/HEAD/include/rnd/engines/romuduojr.hpp",
+    "https://raw.githubusercontent.com/ulfben/cpp_prngs/HEAD/include/rnd/engines/quarkburst64.hpp",
+    "https://raw.githubusercontent.com/ulfben/cpp_prngs/HEAD/include/rnd/engines/konadare192.hpp",
+    "https://raw.githubusercontent.com/ulfben/cpp_prngs/HEAD/benchmarks/README.md",
+    "https://raw.githubusercontent.com/ulfben/cpp_prngs/HEAD/benchmarks/engine_comparison.cpp",
+    "https://raw.githubusercontent.com/ulfben/cpp_prngs/HEAD/benchmarks/random_bounded_integer.cpp",
+    "https://raw.githubusercontent.com/ulfben/cpp_prngs/HEAD/benchmarks/random_bounded_float.cpp",
+    "https://raw.githubusercontent.com/ulfben/cpp_prngs/HEAD/tests/engine_reference_validation.hpp",
+    "https://github.com/eightomic/quarkburst (404)"
+  ],
+  "confidence": 0.75
+}

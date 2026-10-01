@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/vigna/mrg32k3a",
+  "one_liner": "Branchless 64-bit-integer MRG32k3a in C and Java, about 4x faster per double than L'Ecuyer's reference code, same stream.",
+  "what_it_does": "A drop-in re-implementation of Pierre L'Ecuyer's MRG32k3a combined multiple recursive generator (the generator behind L'Ecuyer's SSJ MRG32k3a classes, which the header links). The C API is three functions: MRG32k3a_init(uint64_t) seeds through SplitMix64, MRG32k3a_init6(...) takes the six-word reference state and aborts on invalid input, and the static inline MRG32k3a_next() returns a double in (0,1). The Java class offers the same as setSeed/nextDouble on per-object state. Seeded with init6, the output stream is meant to match the reference MRG32k3a.c exactly.",
+  "how_it_is_fast": "It works on int64_t instead of doubles and removes all three data-dependent branches of the reference code. The two negative-residual fixes go away by adding the constant m*a13 (m*a23) before the % so the operand is always nonnegative; modulo by a constant compiles to multiply-and-shift. The combination step's 'if p1 <= p2 add m1' becomes the mask m1 * ((r - 1) >> 63). The output is computed from the current state rather than the new one, so the CPU can overlap it with the next state update; this is why init6 discards one value to stay aligned with L'Ecuyer's stream.",
+  "when_to_use": [
+    "You need MRG32k3a specifically, for example to reproduce results from codes or papers that use L'Ecuyer's generator, and want its scalar draws about 4x cheaper than MRG32k3a.c (17.5 ns to 4.1 ns per double on the author's i7-7700).",
+    "Monte Carlo or discrete-event simulation in C or C++ that draws one double at a time in (0,1) and must use L'Ecuyer's published generator.",
+    "Java simulations that use SSJ's MRG32k3a and want a faster single-stream nextDouble (header Javadoc: 21.6 ns SSJ double-based, 13.6 ns SSJ long-based, 5.4 ns this, JMH on i7-7700).",
+    "Code bases that need a public-domain (CC0) generator they can paste in: two C files or one Java file."
+  ],
+  "when_not_to_use": [
+    "Multiple independent streams or substreams (jump-ahead): not implemented; the header points to SSJ's MRG32k3aL for that.",
+    "Batch or vectorized generation: the README itself says Intel MKL's vectorized MRG32k3a is faster for batches.",
+    "When you do not need MRG32k3a in particular: modern 64-bit generators in the same category (xoshiro, PCG, Philox) are cheaper per bit and produce 64 bits instead of one 32-bit-resolution double.",
+    "Multithreaded C code: the C version keeps its state in six global variables with no per-thread instance.",
+    "Integer or 64-bit output: the only output is a double with roughly 32 bits of resolution (multiples of 1/(m1+1))."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (C: stdint.h, inttypes.h, stdio.h, stdlib.h; Java: none)",
+    "min_toolchain": "Not documented; needs C with stdint.h/inttypes.h and 64-bit integers. The author timed gcc 9.2.1 (C) and Java 13 (Java).",
+    "platforms": "any with 64-bit integer arithmetic; relies on arithmetic right shift of negative int64_t, which C leaves implementation-defined (gcc, clang and MSVC all shift arithmetically)",
+    "thread_safety": "C: not thread-safe (single global state in extern int64_t variables). Java: per-instance state, not synchronized.",
+    "drop_in_for_baseline": "partial — same output stream as L'Ecuyer's MRG32k3a.c when seeded with MRG32k3a_init6, but a different function API and no stream/substream (RngStream) support"
+  },
+  "gotchas": [
+    "Seeding by writing the state directly instead of calling MRG32k3a_init6/setSeed(long...) shifts the stream by one value: the generator emits from the current state, so you must discard one output to line up with the reference.",
+    "MRG32k3a_init6 calls abort() on an all-zero or out-of-range seed instead of returning an error.",
+    "The C header has no extern \"C\" guards, and its state uses reserved double-underscore names; from C++ either compile MRG32k3a.c as C++ or wrap the #include in extern \"C\".",
+    "In the Java file the constructors have no access modifier (package-private) and the class is in the default package, so you must copy it into your own package or use setSeed on an instance made in that package."
+  ],
+  "pick_this_over_siblings_when": "Pick it over Randen, OpenRAND/Philox or the xoshiro/PCG siblings only when MRG32k3a itself is required for reproducibility or validation, since those siblings are faster general-purpose generators. Prefer OpenRAND or another counter-based generator when you need many parallel streams or GPU support.",
+  "verified_claims_summary": "The author's header comment reports, on an Intel Core i7-7700 @3.60GHz with gcc 9.2.1 and his own harness (prng.di.unimi.it/harness.c; flags not stated), about 17.5 ns per double for L'Ecuyer's double-based MRG32k3a.c, 7.9 ns for a straightforward 64-bit integer version and 4.1 ns for this code (about 4.3x and 1.9x, derived from page data). A Python re-implementation of both update rules run in this session produced identical outputs for 201 seeds x 2000 draws (first value 0.12701112204657714 for seed 12345 x6), which supports the identical-stream claim.",
+  "status_note": "The code has not changed since November 2019; the June 2026 commit only renamed 'testless' to 'branchless' in the comments. It is CC0, has no open issues and is small enough to vendor as is.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/vigna/MRG32k3a/HEAD/README.md",
+    "https://raw.githubusercontent.com/vigna/MRG32k3a/HEAD/MRG32k3a.h",
+    "https://raw.githubusercontent.com/vigna/MRG32k3a/HEAD/MRG32k3a.c",
+    "https://raw.githubusercontent.com/vigna/MRG32k3a/HEAD/MRG32k3a.java",
+    "https://github.com/vigna/MRG32k3a",
+    "https://github.com/vigna/MRG32k3a/commits/master",
+    "https://github.com/vigna/MRG32k3a/commit/2479161"
+  ],
+  "confidence": 0.85
+}

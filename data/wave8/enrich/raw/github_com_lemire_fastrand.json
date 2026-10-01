@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/lemire/fastrand",
+  "one_liner": "Tiny CPython C extension: PCG32/xorshift128+ bounded integers about 9x faster per call than random.randint.",
+  "what_it_does": "A single-file C extension (fastrandmodule.c) that exposes module-level functions for scalar random draws from Python: pcg32bounded(n) for [0,n), pcg32randint(a,b) for [a,b], pcg32() for a raw 32-bit value, pcg32_uniform() for a double in [0,1), plus xorshift128plus* equivalents with 64-bit range on platforms that have __int128. It is not a drop-in for the random module: there are no Random objects, no shuffle/choice/sample or distributions, and the generator state is one global per process that you reseed with pcg32_seed/pcg32inc or xorshift128plus_seed1/seed2.",
+  "how_it_is_fast": "Each call is one METH_O or METH_FASTCALL C function, so it skips the several Python-level frames that random.randint goes through (randint -> randrange -> _randbelow). The generator is PCG32 (XSH-RR: one 64-bit multiply-add plus a xorshift and rotate), and the bounded draw uses Lemire's nearly-divisionless multiply-shift method (TOMACS 2019), which needs a modulo only on the rare rejection path. Most of the README's 9x gap is interpreter call overhead rather than generator speed.",
+  "when_to_use": [
+    "Pure-Python loops that draw one bounded integer at a time (simulations, randomized algorithms, sampling indices), where random.randint's ~200 ns per call dominates.",
+    "Ranges that fit in 32 bits with a non-negative lower bound (pcg32bounded / pcg32randint), or unsigned 64-bit ranges via xorshift128plusbounded on Linux/macOS 64-bit builds.",
+    "When you want a fixed, reproducible stream that you seed explicitly, and the global-state API is acceptable.",
+    "As a reference for porting the PCG32 + nearly-divisionless bounded-integer code into C or C++: the core is about 30 lines."
+  ],
+  "when_not_to_use": [
+    "Bulk generation of arrays: numpy's Generator (PCG64/SFC64) is vectorized and much cheaper per value; the README's numpy comparison times the legacy per-call numpy.random.randint, not batched draws.",
+    "Negative lower bounds or results above 2**32-1 with pcg32randint: the result n1 + r is returned through Py_BuildValue(\"I\"), an unsigned 32-bit format, so it should wrap or truncate (code reading, not executed). xorshift128plusrandint accepts only unsigned bounds.",
+    "Anything security-related (tokens, keys, shuffling for gambling): PCG32 and xorshift128+ are not cryptographic; use the secrets module.",
+    "Code that needs independent per-object or per-thread generators, getstate/setstate, or the random module's distributions and sequence helpers.",
+    "Arbitrary-size integers: bounds must fit in a C long (issue #21 shows OverflowError for a 256-bit bound where random.randint succeeds)."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none (CPython C API only; build needs setuptools>=77 and a C compiler, or a prebuilt wheel)",
+    "min_toolchain": "Python 3.9+ (pyproject requires-python); randint functions need 3.7+ METH_FASTCALL; wheels for CPython 3.9-3.14 and 3.14t",
+    "platforms": "Wheels for Linux x86-64/aarch64 (glibc and musl), macOS x86-64/arm64/universal2, Windows AMD64. xorshift128+ bounded/randint functions exist only where __int128 is available on a 64-bit target (fastrand.SIXTYFOUR == 1); issue #26 reports a 32-bit Linux build failure.",
+    "thread_safety": "Not documented. Generator state is plain C globals with no locking, so it relies on the GIL; all threads share one stream. Free-threaded (cp314t) wheels are published without any visible locking in the source.",
+    "drop_in_for_baseline": "partial — pcg32randint(a,b) mirrors random.randint(a,b) for 0 <= a <= b < 2**32, but it is a separate module-level API with no Random class, no shuffle/choice/sample, and different seeding."
+  },
+  "gotchas": [
+    "Fixed default seed: both generators start from hard-coded constants and the module never seeds from OS entropy, so every new process produces the same sequence until you call pcg32_seed (and pcg32inc for distinct streams). Forked workers share the same state.",
+    "Error paths set ValueError and then return None, which CPython reports as SystemError (returned a result with an exception set); a non-integer or out-of-range argument does not raise a clean ValueError.",
+    "pcg32_uniform has only 32 bits of resolution (r * 2**-32); xorshift128plus_uniform uses the low 53 bits of xorshift128+, whose lowest bits are its weakest.",
+    "Seeding xorshift128+ with both state words zero leaves it stuck at zero; there is no check. The repo has no unit tests: CI only builds wheels and scripts/runtests3.sh runs the timeit lines."
+  ],
+  "pick_this_over_siblings_when": "Pick it over numpy's Generator or randomgen when you need single scalar draws inside Python code rather than arrays. If you are in C++, take the same nearly-divisionless method from FastShuffleExperiments, or use simdpcg when you need PCG32 throughput, instead of going through this Python wrapper.",
+  "verified_claims_summary": "The README's python3 -m timeit lines (also in scripts/runtests3.sh) show pcg32bounded(1001) at 23.6 ns and pcg32randint(100,1000) at 24.6 ns per call, against random.randint(0,1000) at 216 ns (about 9x, derived from page data) and legacy numpy.random.randint(0,1000) at 955 ns. No CPU, Python version, compiler or flags are given, and the comparison is per call to CPython's Mersenne Twister path, not against std::mt19937.",
+  "status_note": "Active: version 3.1.0 was released on 2026-05-15 with wheels for CPython 3.9-3.14. Apache-2.0, and the C core is small enough to copy, but the Python wrapper has the bound and error-handling bugs noted above.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/lemire/fastrand/HEAD/README.md",
+    "https://raw.githubusercontent.com/lemire/fastrand/HEAD/fastrandmodule.c",
+    "https://raw.githubusercontent.com/lemire/fastrand/HEAD/pyproject.toml",
+    "https://raw.githubusercontent.com/lemire/fastrand/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/lemire/fastrand/HEAD/scripts/runtests3.sh",
+    "https://raw.githubusercontent.com/lemire/fastrand/HEAD/.github/workflows/buildwheels.yml",
+    "https://github.com/lemire/fastrand",
+    "https://github.com/lemire/fastrand/commits/master",
+    "https://github.com/lemire/fastrand/tree/master/scripts",
+    "https://github.com/lemire/fastrand/tree/master/.github/workflows",
+    "https://github.com/lemire/fastrand/issues?q=is%3Aissue",
+    "https://github.com/lemire/fastrand/issues/13",
+    "https://github.com/lemire/fastrand/issues/21",
+    "https://github.com/lemire/fastrand/issues/26",
+    "https://pypi.org/pypi/fastrand/json"
+  ],
+  "confidence": 0.8
+}
