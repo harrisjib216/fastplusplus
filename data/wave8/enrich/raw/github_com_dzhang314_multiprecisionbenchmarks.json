@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/dzhang314/multiprecisionbenchmarks",
+  "one_liner": "Paper harness with an AVX-512 header of branch-free double- to quad-double add/multiply that outruns MPFR, QD and CAMPARY.",
+  "what_it_does": "The repo is the benchmark harness for the SC '25 paper by Zhang and Aiken: one Google Benchmark program per library (GMP mpf, MPFR, CLN, FLINT, libquadmath, Boost.Multiprecision, QD, CAMPARY, MultiFloats) running axpy, dot, gemv and gemm at 1 to 4 doubles of precision. The C++ code you could reuse is multifloats/MultiFloats.hpp, a template MultiFloat<T, N> (N = 1 to 4 limbs, T = double, __m128d, __m256d or __m512d) that only defines operator+ and operator*; there is no subtraction, division, sqrt, comparison, I/O or conversion back to decimal. It is not a drop-in for mpfr_t: precision is fixed at compile time and callers store limbs in separate arrays (y0[], y1[], ...).",
+  "how_it_is_fast": "Numbers are unevaluated sums of 2 to 4 doubles (floating-point expansions), and each add or multiply is a fixed straight-line network of TwoSum, FastTwoSum and FMA-based TwoProd steps with no branches or renormalization loops (the paper calls these floating-point accumulation networks). With no data-dependent control flow, the same code instantiates on 2-, 4- and 8-wide SIMD registers; the dot and gemv kernels load 8 doubles per limb with _mm512_loadu_pd from split-array (one array per limb) storage, and axpy/gemm rely on '#pragma omp simd simdlen(8)'. The baselines (for example MPFR) are scalar per-element library calls on heap-allocated mpfr_t objects.",
+  "when_to_use": [
+    "Bulk elementwise or BLAS-style kernels (axpy, dot, gemv, small gemm) where double is not accurate enough and roughly 106, 159 or 212 significand bits suffice.",
+    "You can lay out data as one double array per limb (structure of arrays) so the add/multiply networks vectorize.",
+    "x86-64 with AVX-512 (the harness hardware per the paper abstract snippet was an AMD Ryzen 9 9950X); a scalar ARM header exists for Apple Silicon.",
+    "As a reference implementation of the paper's add and multiply networks to port into your own SIMD code, or to reproduce the paper's library comparison (MIT license)."
+  ],
+  "when_not_to_use": [
+    "You need arbitrary or runtime-selectable precision, correct rounding, or MPFR's exponent range: these types have the exponent range of double and are capped at 4 limbs.",
+    "You need anything beyond + and *: the C++ header has no subtraction, division, sqrt, transcendental functions, comparisons or string conversion (the full operation set is in the Julia package MultiFloats.jl).",
+    "Your code must handle infinities or NaN-free overflow: TwoSum on an infinite input produces NaN error terms, and the Julia sibling documents that ±Inf inputs return NaN.",
+    "Your target CPU lacks AVX-512: the x86 header defines __m512d overloads and uses _mm256_extractf64x2_pd (AVX-512DQ/VL) unconditionally, and the benchmark kernels call _mm512_loadu_pd directly.",
+    "You want a maintained library: this is a 2-star benchmark repo with a one-line README and no tests beyond assert checks in the benchmarks."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none for MultiFloats.hpp (x86 intrinsics headers only); the harness needs Google Benchmark, OpenMP, GMP, MPFR, CLN, FLINT, Boost.Multiprecision, QD and CAMPARY (fetched by download_campary.sh)",
+    "min_toolchain": "C++17; the scripts use g++-14 and clang++-20 on Linux and Homebrew LLVM clang++ on macOS",
+    "platforms": "x86-64 with FMA and AVX-512F/DQ/VL for multifloats/MultiFloats.hpp; multifloats-arm/MultiFloats.hpp is a scalar-only variant (no NEON intrinsics) for aarch64",
+    "thread_safety": "Value types with no shared state; the benchmark kernels parallelize with OpenMP. Not otherwise documented.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The error-free transformations depend on exact IEEE evaluation order: the harness builds with -ffp-contract=off and never enables fast-math; reassociation would cancel the error terms.",
+    "Results are not normalized or rounded like MPFR; equality operator== only compares against a scalar double (leading limb equal, lower limbs zero).",
+    "The baseline MPFR runs use MPFR_RNDF (faithful rounding) with separate mpfr_mul and mpfr_add calls, so MPFR was not in correctly rounded mode in this harness either.",
+    "The repo commits no benchmark output; bench_linux.sh writes Google Benchmark JSON per library at OMP_NUM_THREADS 32, 16, 8, 4, 2 and 1 for you to generate."
+  ],
+  "pick_this_over_siblings_when": "Pick this over DoubleFloats.jl or MPLAPACK's double-double/quad-double backends when you want C++ SIMD kernels at 2 to 4 doubles and can live with only + and *; pick MultiFloats.jl if you work in Julia and need the full operation set, and MPFR-based tools (or LibBF, FLINT) when you need arbitrary precision or correct rounding.",
+  "verified_claims_summary": "The SC '25 paper abstract (seen only as search snippets; the paper hosts are blocked here) reports peak throughput up to 11.7x QD, 34.4x CAMPARY, 35.6x MPFR and 41.4x FLINT across axpy, dot, gemv and gemm at 2 to 4 doubles, with search snippets naming AMD Zen 5 (Ryzen 9 9950X) and Apple M3 Pro; the public harness builds with g++-14/clang++-20 at -O3 -march=native -flto and runs MPFR at 53, 103, 156 and 208 bits. Which kernel, precision and thread count produce each peak ratio is not documented in the repo.",
+  "status_note": "Stale research harness (last commit 2025-08-27, 46 commits, 2 stars) under MIT, so the 373-line header is easy to vendor, but it is a paper artifact rather than a supported library.",
+  "sources_read": [
+    "https://github.com/dzhang314/MultiprecisionBenchmarks",
+    "https://raw.githubusercontent.com/dzhang314/MultiprecisionBenchmarks/HEAD/README.md",
+    "https://raw.githubusercontent.com/dzhang314/MultiprecisionBenchmarks/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/dzhang314/MultiprecisionBenchmarks/HEAD/build_linux.sh",
+    "https://raw.githubusercontent.com/dzhang314/MultiprecisionBenchmarks/HEAD/build_macos.sh",
+    "https://raw.githubusercontent.com/dzhang314/MultiprecisionBenchmarks/HEAD/bench_linux.sh",
+    "https://raw.githubusercontent.com/dzhang314/MultiprecisionBenchmarks/HEAD/download_campary.sh",
+    "https://raw.githubusercontent.com/dzhang314/MultiprecisionBenchmarks/HEAD/multifloats/MultiFloats.hpp",
+    "https://raw.githubusercontent.com/dzhang314/MultiprecisionBenchmarks/HEAD/multifloats/main.cpp",
+    "https://raw.githubusercontent.com/dzhang314/MultiprecisionBenchmarks/HEAD/multifloats-arm/MultiFloats.hpp",
+    "https://raw.githubusercontent.com/dzhang314/MultiprecisionBenchmarks/HEAD/mpfr/main.cpp",
+    "https://raw.githubusercontent.com/dzhang314/MultiFloats.jl/HEAD/README.md",
+    "WebSearch: 'High-Performance Branch-Free Algorithms for Extended-Precision Floating-Point Arithmetic' SC25 (abstract snippets; theory.stanford.edu and dl.acm.org not opened)"
+  ],
+  "confidence": 0.7
+}

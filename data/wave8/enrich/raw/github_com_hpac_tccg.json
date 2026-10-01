@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/hpac/tccg",
+  "one_liner": "Python code generator for GETT tensor contractions; beats MKL-backed transpose-transpose-GEMM-transpose up to about 2x on bandwidth-bound cases.",
+  "what_it_does": "TCCG takes a symbolic contraction plus index sizes in a small text file (for example C[a,b,i,j] = A[i,m,a] * B[m,j,b] with a = 24 ...) and emits, compiles and times candidate C++ implementations using three strategies: GETT, TTGT (transpose-transpose-GEMM-transpose on top of BLAS) and LoG (loops over GEMM). It returns the fastest candidate as source code. There is no runtime library API: every new contraction or size means another generate-compile-time cycle, and the output is code you include in your own build.",
+  "how_it_is_fast": "GETT (GEMM-like Tensor-Tensor multiplication, Springer and Bientinesi, arXiv 1607.00145) applies the BLIS/Goto GEMM blocking directly to tensors: it packs sub-tensors into cache-sized buffers while preserving the stride-one index, then runs an AVX2 or AVX-512 register-blocked macro-kernel, so it never materializes transposed copies the way TTGT does and needs no workspace beyond small tiles. A performance model ranks the blocking and loop-order candidates and the tool then times up to --maxImplementations of them (default 16 for GETT). The gain is largest when the contraction is bandwidth-bound and TTGT's transposes dominate.",
+  "when_to_use": [
+    "Bandwidth-bound contractions of 4- to 6-D tensors with modest index extents (coupled-cluster CCSD, AO2MO style), where TTGT spends much of its time transposing.",
+    "Fixed contraction shapes known ahead of time, where offline autotuning per shape and generating code into your build is acceptable.",
+    "x86-64 with AVX2 and an Intel compiler plus MKL, the configuration the published results used.",
+    "As a reference implementation of GETT packing and macro-kernels to reimplement in your own tensor code."
+  ],
+  "when_not_to_use": [
+    "Compute-bound contractions: in the repo's own figures TTGT ties or beats GETT (abcd-aebf-fdec about 67 vs 75 GFLOPS in single precision; TTGT leads on the last four double-precision cases).",
+    "Shapes known only at run time, or index sizes where the product of each input's free-index sizes is not a multiple of 24 (the stated GETT limitation).",
+    "Anything you need to redistribute: the repository has no license file, so the code is all rights reserved.",
+    "Complex numbers or GPUs for GETT: only single and double precision real types (issue #2, 2024, asks for double complex), and CUDA covers only TTGT and LoG.",
+    "Modern Python environments: the generator is Python 2 code (print statements, distutils setup.py) last changed in 2017."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "Python 2.7 for the generator; a BLAS (config.cfg defaults to MKL); the HPTT transposition library; the Makefile's CPU target also links TCL's libtcl.so although the README calls TCL optional; cuBLAS for the CUDA path",
+    "min_toolchain": "Python 2.7 (tested 2.7.5 and 2.7.9); Intel icpc 15+ recommended or g++ 4.8+ (experimental); generated code built with -std=c++11",
+    "platforms": "x86-64 AVX2 (AVX-512 experimental); NVIDIA CUDA for TTGT and LoG only (config.cfg sets -arch=sm_30)",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The performance model hard-codes the authors' Haswell machine in tccg/arch.py (AVX2: 2.5 GHz, 2 FMAs per cycle, 256 KiB L2, 2 x 30 MiB L3, 13 GiB/s axpy bandwidth; AVX-512: 1.3 GHz), so candidate ranking on other CPUs may be off; raise --maxImplementations to time more variants.",
+    "Small tiles live on the stack by default; --useDynamicMemory is needed if the stack is too small and the help text warns it may degrade performance.",
+    "Tuned solutions are cached in an SQLite database (tccg/tccg.db under TCCG_ROOT) and reused unless --ignoreDatabase is passed.",
+    "Thread affinity is left to the user (--affinity sets KMP_AFFINITY or GOMP_CPU_AFFINITY), and the help text warns that a bad choice hurts performance severely."
+  ],
+  "pick_this_over_siblings_when": "TBLIS is the closer sibling and also avoids explicit transposes with a runtime library interface, so prefer it for production; pick TCCG only to study or reproduce GETT, or to autotune a few fixed bandwidth-bound shapes offline. HPTT is the transposition building block that TCCG's TTGT path itself uses, so it complements rather than replaces this.",
+  "verified_claims_summary": "On one core of an Intel Xeon E5-2680 v3 (Haswell, TurboBoost and SpeedStep off), built with icpc 16.0.1 -O3 -xhost -mkl, the figures (read by eye) show GETT at about 20.5 vs 15 GFLOPS for MKL-backed TTGT on abcde-efbad-cf and about 55.5 vs 25 on abcdef-dfgb-geac in single precision, and TCCG roughly 10x the best of CTF/naive on the most bandwidth-bound cases, with parity or a TTGT lead on compute-bound ones. The TTGT baseline is the authors' own implementation, not a third-party library.",
+  "status_note": "Abandoned since 2017-08-14 (47 commits, 40 stars, one branch) and unlicensed, so it is reference-only; the same author's TCL library is also unmaintained and points users to NVIDIA cuTENSOR.",
+  "sources_read": [
+    "https://github.com/HPAC/tccg",
+    "https://github.com/HPAC/tccg/tree/master/tccg",
+    "https://github.com/HPAC/tccg/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/HPAC/tccg/master/README.md",
+    "https://raw.githubusercontent.com/HPAC/tccg/master/benchmark/README.md",
+    "https://raw.githubusercontent.com/HPAC/tccg/master/benchmark/GETT_LoG_TTGT.png",
+    "https://raw.githubusercontent.com/HPAC/tccg/master/benchmark/benchmark.png",
+    "https://raw.githubusercontent.com/HPAC/tccg/master/config.cfg",
+    "https://raw.githubusercontent.com/HPAC/tccg/master/setup.py",
+    "https://raw.githubusercontent.com/HPAC/tccg/master/example.tccg",
+    "https://raw.githubusercontent.com/HPAC/tccg/master/scripts/tccg",
+    "https://raw.githubusercontent.com/HPAC/tccg/master/tccg/Makefile",
+    "https://raw.githubusercontent.com/HPAC/tccg/master/tccg/arch.py",
+    "https://raw.githubusercontent.com/HPAC/tccg/master/tccg/gett.py",
+    "https://raw.githubusercontent.com/HPAC/tccg/master/tccg/tccg.py",
+    "https://raw.githubusercontent.com/HPAC/tccg/master/tccg/tccg_util.py",
+    "https://raw.githubusercontent.com/HPAC/tccg/master/tccg/sql_util.py",
+    "https://github.com/springer13/tcl"
+  ],
+  "confidence": 0.75
+}

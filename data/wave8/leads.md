@@ -65,3 +65,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - CKTSO-GPU (github.com/chenxm1986/cktso-gpu); NICSLU (github.com/chenxm1986/nicslu); GALATIC (GPU semiring SpGEMM); gunrock/gunrock.
 - ROCm/aiter PR 2039 (HipKittens MLA decode kernel, merged 2026-03-09, 5-19% over asm on MI300).
 - AD papers: arXiv 2602.15613 (expression-template AD for C++ DSLs), arXiv 2508.05371 (complex numbers in ET AD tools), arXiv 2307.06075 (Enzyme in CoDiPack).
+- arXiv 2603.14926 and 2607.11391 (branch-free SIMD multi-component multiprecision, follow-ups to the SC'25 MultiFloats paper; possibly independent evaluations).
