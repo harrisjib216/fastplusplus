@@ -1,0 +1,47 @@
+{
+  "id": "https://github.com/nvidia/fastertransformer",
+  "one_liner": "NVIDIA's discontinued CUDA C++ transformer inference library; beats TensorFlow XLA and TorchScript FP16 BERT on T4, mostly via INT8.",
+  "what_it_does": "Provides hand-optimized CUDA/C++ implementations of whole transformer models for GPU inference (BERT/encoder, decoder and beam-search decoding, GPT/OPT/BLOOM/GPT-J/GPT-NeoX, T5/UL2, BART, Swin, ViT, WeNet and others) with tensor and pipeline parallelism for multi-GPU GPT. It is not a drop-in for a framework layer: you either call it as a TensorFlow op, a PyTorch TorchScript custom class, a Triton backend or TensorRT plugin, or construct C++ model classes (for example Bert<T>) that take a CUDA stream, a cublasMMWrapper and an allocator, and load weights into GPU memory yourself.",
+  "how_it_is_fast": "Each BERT layer is reduced to 6 or 8 cuBLAS GEMMs plus 6 fused custom CUDA kernels (bias, activation, residual and layernorm fused), with an offline GEMM autotuner (bert_gemm writes gemm_config.in) choosing cuBLAS algorithms per shape. Effective FasterTransformer removes padding tokens before the encoder (the ByteDance Effective Transformer idea) and uses TensorRT's fused multi-head attention kernel; INT8 modes v1 (per-channel weights, int32 GEMM output) and v2 (per-tensor, int8 residual and GEMM output) run through cuBLASLt, and Ampere 2:4 sparse GEMM via cuSPARSELt is optional. Generation models use a fused masked multi-head attention kernel for the 1-token decode step, a preallocated key/value cache, buffer reuse across layers, and Megatron-style tensor parallelism with two all-reduces per block.",
+  "when_to_use": [
+    "Legacy deployments already pinned to FasterTransformer 5.x (TF1/PyTorch ops or the Triton FT backend) where the model is in its support matrix and you cannot move to TensorRT-LLM yet.",
+    "BERT-style encoder inference on Turing/Ampere GPUs with variable-length batches, where padding removal plus INT8-v2 gives the largest gains (docs: up to 5.5x over TF FP16 at batch 32, seq 384 on T4).",
+    "Studying or borrowing proven fused CUDA kernels (layernorm, fused MHA, beam search, top-k/top-p sampling) under Apache-2.0.",
+    "Encoder-decoder translation decoding where FT-Decoding replaces a framework beam search loop (README: 4x to 18x over TensorFlow FP16 on T4)."
+  ],
+  "when_not_to_use": [
+    "New LLM serving: NVIDIA states development has moved to TensorRT-LLM and the repo will get no further development; serving engines and newer kernels (ByteTransformer, CTranslate2 per their own READMEs) beat it in several settings.",
+    "Non-NVIDIA hardware or CPU inference: it is CUDA, cuBLAS and cuBLASLt only, verified for compute capability 7.0 and newer.",
+    "Same-precision FP32 speedups: on T4, FP32 FT is only 1.03x to 1.44x faster than TensorFlow (bert_guide tables), so most of the headline gain needs FP16 or INT8 plus padding removal.",
+    "Modern toolchains without patching: open bug-labelled issues report CUDA 12.2 incompatibility, clang CUDA build errors and a C++17 compile error, and the README's Known issues list TensorFlow 2.10 undefined symbols and C++ ABI mismatches when importing the PyTorch extension.",
+    "Models outside the support matrix: each architecture is hand-written C++, so a new model means writing a new model class."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "CUDA (10.2+ in CMake, 11.0+ in the BERT guide, 11.8+ for FP8), cuBLAS, cuBLASLt, optional cuDNN, CUTLASS submodule; MPI and NCCL for multi-GPU; cuSPARSELt for sparsity; TensorFlow 1.15 or PyTorch >= 1.5 for the framework ops",
+    "min_toolchain": "CMake 3.8 (3.13 for PyTorch), C++14 by default (CXX_STD cache variable; CXX flags also pass -std=c++17), nvcc with -DSM per target GPU; NGC 22.09 containers recommended",
+    "platforms": "Linux x86-64 with NVIDIA GPUs (SM 52 to 90 in the build list; correctness verified on SM 70+; INT8 on Turing+, sparsity on Ampere+, FP8 on Hopper)",
+    "thread_safety": "Not documented for the C++ classes; the cuBLAS wrapper is guarded by a caller-supplied std::mutex, and the QA list warns that calling one FasterTransformer TF op from many threads may deadlock and recommends CUDA MPS instead.",
+    "drop_in_for_baseline": "partial — the TF and PyTorch ops replace a framework's encoder/decoder module, but weights must be converted or loaded into FT's layout, INT8 needs a separately quantized model, and the C++ API is unrelated to TF/PyTorch"
+  },
+  "gotchas": [
+    "Run the GEMM autotuner (bert_gemm, gpt_gemm and similar) for your batch/sequence shapes; without gemm_config.in it falls back to default algorithms and the guide says inference may be slower.",
+    "The TorchScript FP16 baseline sits near 10.4 to 11 ms for every small case and TF FP16 at batch 1 seq 32 is slower than at seq 128, so small-batch ratios reflect framework overhead, not kernel speed.",
+    "Release builds compile CUDA with --use_fast_math by default (BUILD_FAST_MATH=ON), and decoding results differ from TensorFlow because of accumulated log probabilities (Known issues).",
+    "TensorRT's fused MHA kernel is used only on Turing+ with size_per_head 64; other shapes fall back to FT's own slower attention, and INT8 mode 1 needs sequence length a multiple of 32 above 384."
+  ],
+  "pick_this_over_siblings_when": "Pick it over ByteTransformer or LightSeq only when you need its wider model zoo (GPT, T5, BLOOM, multi-GPU tensor/pipeline parallel) or an existing Triton FT backend; for BERT alone ByteTransformer reports 24.70 vs 50.28 ms at batch 16, seq 1024, and CTranslate2 is the better-maintained choice for translation models on CPU and GPU.",
+  "verified_claims_summary": "NVIDIA's own docs/bert_guide.md tables on a T4 (Xeon E5-2670 host) show BERT-base FP16 FT 1.28x to 3.04x faster than TensorFlow XLA FP16 and 1.52x to 6.41x faster than TorchScript FP16, rising to 5.53x over TF FP16 with padding removal plus INT8-v2 (batch 8, seq 384: 39.50 vs 7.14 ms). The numbers come from the public benchmark scripts, but the compiler and CUDA versions used are not stated and the comparison mixes INT8 FT with FP16 baselines.",
+  "status_note": "Discontinued: last commit 2023-10-19, last release 5.2 (Dec 2022), a notice moving development to TensorRT-LLM, and 250 open issues and 38 open PRs; Apache-2.0, so kernels can be copied, but treat it as a reference rather than a dependency.",
+  "sources_read": [
+    "https://github.com/NVIDIA/FasterTransformer",
+    "https://raw.githubusercontent.com/NVIDIA/FasterTransformer/HEAD/README.md",
+    "https://raw.githubusercontent.com/NVIDIA/FasterTransformer/HEAD/docs/bert_guide.md",
+    "https://raw.githubusercontent.com/NVIDIA/FasterTransformer/HEAD/docs/gpt_guide.md",
+    "https://raw.githubusercontent.com/NVIDIA/FasterTransformer/HEAD/docs/QAList.md",
+    "https://raw.githubusercontent.com/NVIDIA/FasterTransformer/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/NVIDIA/FasterTransformer/HEAD/src/fastertransformer/utils/cublasMMWrapper.h",
+    "https://github.com/NVIDIA/FasterTransformer/issues?q=is%3Aissue+label%3Abug"
+  ],
+  "confidence": 0.8
+}

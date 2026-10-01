@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/nvlabs/cgbn",
+  "one_liner": "NVIDIA's header-only CUDA library for fixed-size unsigned big integers; a V100 out-throughputs 20-core OpenMP GMP 4-77x on batches.",
+  "what_it_does": "CGBN (XMP 2.0) lets you write CUDA kernels that do unsigned multiple-precision arithmetic on large arrays of independent problem instances, with each number spread across a cooperative group of 4, 8, 16 or 32 threads in a warp. You instantiate cgbn_context_t<TPI> and cgbn_env_t<context, BITS> inside a kernel and call cgbn_add, cgbn_mul (low half), cgbn_mul_wide, cgbn_div_rem, cgbn_sqrt, cgbn_gcd, cgbn_modular_inverse, cgbn_modular_power, Montgomery (bn2mont/mont_mul/mont_sqr) and Barrett routines, loading and storing cgbn_mem_t<BITS> structs from global memory. It is a device-side API with a different shape from GMP: no host calls, no growth, sizes fixed at compile time from 32 to 32K bits in multiples of 32.",
+  "how_it_is_fast": "Instead of one thread per bignum (which runs out of registers), each value's 32-bit limbs are distributed across TPI threads and kept in registers, and carries, comparisons and broadcasts move between the group's lanes with warp shuffles (__shfl_sync). Sizes and thread counts are template parameters, so loops over the per-thread limbs are fully unrolled, and the code picks multiply-add instruction sequences per architecture (IMAD/XMAD/WMAD paths selected by __CUDA_ARCH__). Throughput comes from running thousands of these groups concurrently on the GPU; the headline powm number uses a hand-written 5-bit fixed-window Montgomery kernel in the perf tests.",
+  "when_to_use": [
+    "Large batches (thousands or more) of independent fixed-width operations: RSA/DH-style modular exponentiation, Montgomery multiplication, primality testing or sieving, where each instance is 128-8192 bits.",
+    "Workloads already on an NVIDIA GPU where you can write your own CUDA kernel around the arithmetic, e.g. GPU Miller-Rabin (the repo's sample 4) or prime-gap searches.",
+    "Throughput-bound jobs where moving data to the GPU is amortized: the README's averages are 77x (add), 43.5x (low mul), 29.3x (Montgomery reduce) and 21.4x (odd powm) over 20-core OpenMP GMP on a V100.",
+    "Building blocks for higher-level GPU multiprecision libraries (gnu-mpfr-cgbn and the steleman/nvidia-cgbn fork build on it)."
+  ],
+  "when_not_to_use": [
+    "Single values or small batches: it only pays off with many concurrent instances, and per-operation latency including transfer will lose to GMP on the CPU.",
+    "Signed, variable-size or mixed-size integers, operands above 32K bits, or sizes not divisible by 32 (open issues #3 and #13); copying between environments of different sizes is described as very slow.",
+    "Secret-key cryptography that needs constant time: CONSTANT_TIME exists as a parameter but a checked context reports cgbn_unsupported_operation when it is set, and the library cgbn_modular_power is plain binary square-and-multiply.",
+    "Non-NVIDIA hardware, or Blackwell (sm_120) GPUs without testing: the Makefile targets stop at Ampere, and a third-party README (mr_blackwell) reports CGBN running orders of magnitude slower than expected there.",
+    "gcd- and inverse-heavy workloads: the README says these are not optimal, and the docs call the number-theoretic functions 'a little bit slow'."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "CUDA toolkit; GMP for the host-side mpz backend, samples and perf tests; Google Test for unit tests",
+    "min_toolchain": "CUDA 9.0+ for Kepler/Maxwell/Pascal, CUDA 10+ for Volta and newer (README); a CUDA 12.5 build problem (issue #31) was fixed in 2025",
+    "platforms": "NVIDIA GPUs; Makefile targets sm_35 (Kepler) through sm_80 (Ampere); no CPU fallback without GMP (cgbn_cpu.h is an #error stub)",
+    "thread_safety": "Values live in each thread's registers; every thread in a TPI group must call each API together with identical uint32_t arguments or results are undefined; errors are reported through an atomicCAS on a shared cgbn_error_report_t",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The perf-table powm_odd uses a 512-bit exponent at every modulus size and a custom fixed-window Montgomery kernel (perf_tests/xmp_test_powm.cu), not the library's cgbn_modular_power; the README itself says the sample-3 odd-modulus powm is much faster than the library API.",
+    "Open bug #15 (2021, no reply): cgbn_mont_sqr returned (a^2 mod m) + m for a 971-bit modulus, i.e. an unreduced result; reduce or compare before trusting mont_sqr output.",
+    "Open issue #23: cgbn_div, cgbn_div_rem and cgbn_div_rem_wide fail to compile ('incomplete type is not allowed') above 512 bits in the reporter's setup; issue #33 reported multiple-definition link errors with several .cu files, which the 2026-03-31 'Mark non-templated functions inline' commit appears to address.",
+    "Do not #define TPI before including cgbn/cgbn.h (the docs warn it breaks compilation), and the default context constructor uses cgbn_no_checks, so errors such as division by zero are silent unless you pass a monitor and report object."
+  ],
+  "pick_this_over_siblings_when": "Pick CGBN over CPU libraries such as ctbignum, blip_mp or mp++ when you have thousands of independent fixed-width operations and an NVIDIA GPU; pick midint-arithmetic-division or TzdLanguage's NTT for a few very large operands, and gnu-mpfr-cgbn when you need MPFR-style floating point on top of CGBN.",
+  "verified_claims_summary": "NVIDIA's 2018 beta measured batch throughput on a Tesla V100 against GMP 6.1.2 running across all 20 cores of a 2.2 GHz Xeon E5-2698v4 with OpenMP, using the repo's perf_tests (nvcc -arch=sm_70; the GMP driver built with g++ -fopenmp and no -O flag): average speedups over 128-8192 bits of 77.4x (add) down to 4.1x (modular inverse). Compiler versions are not stated, and the comparison is GPU device throughput versus CPU, not a faster algorithm.",
+  "status_note": "MIT-licensed NVIDIA Research code (252 stars) that has stayed at its 2018 'XMP 2.0 beta' feature level, with only small maintenance commits since (latest 2026-03-31) and several open correctness and compile issues; it is vendorable and still the common base for GPU bignum work, and the steleman/nvidia-cgbn fork adds signed integers and Ada/Blackwell support.",
+  "sources_read": [
+    "https://github.com/NVlabs/CGBN/issues?q=is%3Aissue",
+    "https://github.com/NVlabs/CGBN/issues/15",
+    "https://github.com/NVlabs/CGBN/issues/23",
+    "https://github.com/NVlabs/CGBN/issues/33",
+    "https://github.com/NVlabs/CGBN/commits/master",
+    "https://github.com/NVlabs/CGBN/tree/master/include/cgbn",
+    "https://raw.githubusercontent.com/NVlabs/CGBN/HEAD/README.md",
+    "https://raw.githubusercontent.com/NVlabs/CGBN/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/NVlabs/CGBN/HEAD/Makefile",
+    "https://raw.githubusercontent.com/NVlabs/CGBN/HEAD/docs/CGBN.md",
+    "https://raw.githubusercontent.com/NVlabs/CGBN/HEAD/include/cgbn/cgbn.h",
+    "https://raw.githubusercontent.com/NVlabs/CGBN/HEAD/include/cgbn/cgbn.cu",
+    "https://raw.githubusercontent.com/NVlabs/CGBN/HEAD/include/cgbn/cgbn_cuda.h",
+    "https://raw.githubusercontent.com/NVlabs/CGBN/HEAD/include/cgbn/impl_cuda.cu",
+    "https://raw.githubusercontent.com/NVlabs/CGBN/HEAD/include/cgbn/cgbn_mpz.h",
+    "https://raw.githubusercontent.com/NVlabs/CGBN/HEAD/include/cgbn/cgbn_cpu.h",
+    "https://raw.githubusercontent.com/NVlabs/CGBN/HEAD/perf_tests/Makefile",
+    "https://raw.githubusercontent.com/NVlabs/CGBN/HEAD/perf_tests/gmp_tester.cc",
+    "https://raw.githubusercontent.com/NVlabs/CGBN/HEAD/perf_tests/gmp_tests.cc",
+    "https://raw.githubusercontent.com/NVlabs/CGBN/HEAD/perf_tests/xmp_tester.cu",
+    "https://raw.githubusercontent.com/NVlabs/CGBN/HEAD/perf_tests/xmp_tests.cu",
+    "https://raw.githubusercontent.com/NVlabs/CGBN/HEAD/perf_tests/xmp_test_powm.cu"
+  ],
+  "confidence": 0.8
+}

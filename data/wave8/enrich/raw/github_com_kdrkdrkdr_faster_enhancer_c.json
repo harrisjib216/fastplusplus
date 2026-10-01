@@ -1,0 +1,47 @@
+{
+  "id": "https://github.com/kdrkdrkdr/faster-enhancer.c",
+  "one_liner": "Dependency-free C int8 runtime for the FastEnhancer-Medium speech denoiser; paper reports 3.3x lower RTF than fp32 ONNX Runtime on M2.",
+  "what_it_does": "Runs the published FastEnhancer-Medium weights (48 kHz streaming speech enhancement) without an inference framework, after offline conversion of the upstream ONNX export into a 565,108-byte W8A8 blob. The C API is four functions: fe_init(blob, size), fe_run(in, out) for one 320-sample frame (6.67 ms), fe_reset() between streams, and fe_free(). It is a single-model engine, not a general ONNX replacement: you get one fixed network with a fixed 704-sample (14.67 ms) STFT alignment delay.",
+  "how_it_is_fast": "W8A8 post-training quantization (per-row symmetric int8 weights, per-tensor asymmetric uint8 activations recomputed every frame) feeding six hand-written int8 GEMM microkernel tiers chosen at init: NEON vmull/vmlal/vpadalq, DOTPROD vdotq_laneq_s32 with A row-quad pre-pack, I8MM vmmlaq_s32 with KleidiAI-style row-pair pre-pack, AVX2 vpmovsxbw+vpmaddwd, AVX-VNNI and AVX-512-VNNI vpdpbusd. The k=3 convolutions run as Winograd F(2,3) (2/3 of the multiplies), the GRU (both matmuls, gates and state update) is fused into one kernel per tier, dequantization, residual adds, bias and requantize-scale tracking are fused into GEMM epilogues, and recurrent/skip state is kept in fp16. All state lives in one 432,384-byte struct with no heap allocation after init, and init page-locks buffers and runs a 128-frame warmup.",
+  "when_to_use": [
+    "You need FastEnhancer-Medium noise suppression at 48 kHz in a native C/C++ app (voice chat, conferencing, recording) and want to drop the ONNX Runtime dependency.",
+    "Hard real-time audio threads where allocation and allocator jitter are not acceptable: nothing is allocated after fe_init.",
+    "ARMv8.2+ devices with DotProd or I8MM (Apple M-series, recent Snapdragon): README measures 0.069 RTF on one M2 core and 0.096 on a Galaxy S23+.",
+    "Deployments that need bit-reproducible output across SIMD tiers of one architecture family (a SHA-256 regression gate enforces it).",
+    "Small binary budgets: the static library is 162 KiB on macOS arm64 plus the 565 KB weight blob."
+  ],
+  "when_not_to_use": [
+    "Any model other than FastEnhancer-Medium at 48 kHz: there is no graph loader, and the one open issue (#1) asks for GTCRN support.",
+    "x86 deployments where you need measured latency: the README times ARM only, the x86 tiers were not re-measured under the current protocol, and the AVX-512 tier was checked only under Intel SDE.",
+    "Older or non-mainstream CPUs: there is no scalar fallback, so fe_init fails on x86 hosts without AVX2+FMA3+F16C (SSE4.1-only parts are deliberately unsupported), and only arm64 and x86-64 build at all (no 32-bit ARM, RISC-V or MSVC).",
+    "Plain ARMv8.0 NEON cores, where the floor tier is about 2.4x (M2) to 3.6x (S23+) slower than the I8MM tier (derived from the README table).",
+    "Several independent streams in one process: the engine is a single global instance, so you cannot run two channels concurrently."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none at runtime; Python with ONNX tooling only to regenerate weights from the upstream export (the committed weights/fe.q8 blob avoids this)",
+    "min_toolchain": "C11, CMake 3.20+, GCC or Clang with GNU-style target attributes (MSVC and clang-cl rejected; MinGW or GNU-driver Clang on Windows)",
+    "platforms": "arm64 (NEON baseline; DotProd/I8MM tiers) and x86-64 (AVX2+FMA3+F16C required; AVX-VNNI, AVX-512 VNNI tiers); macOS, Linux, Android, Windows via MinGW",
+    "thread_safety": "Not thread-safe: fe.h states a single global engine instance with single-threaded calls only; fe_run is not reentrant and fe_init/run/reset/free must not be called concurrently.",
+    "drop_in_for_baseline": "partial — reproduces the same FastEnhancer-Medium model as the ONNX graph, but you replace the ORT session with the fe_* C API, a converted int8 blob and fixed 320-sample framing"
+  },
+  "gotchas": [
+    "Global state: one engine per process; a second fe_init without fe_free is a no-op, so switching weight blobs needs fe_free first, and the blob memory must outlive the engine (weights are referenced zero-copy).",
+    "Built with -ffinite-math-only and documented as a finite-input contract: feeding NaN or Inf samples is unsupported.",
+    "Benchmarks race the core; a paced real-time callback on an M2 P-core costs 4.2x more per frame (0.286 RTF), and docs show E-cores on hybrid Intel parts run a frame 3.6x slower, so set thread priority/QoS yourself (the library does not).",
+    "Output is delayed by a fixed 704 samples; comparing against an offline centered-STFT reference measures framing phase, not quantization error (the docs' own earlier fidelity table had this error and was corrected)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over RTNeural or a general engine such as MNN or OpenVINO only when the model is exactly FastEnhancer-Medium and you want an allocation-free, dependency-free C engine; RTNeural is the better choice for your own small LSTM/GRU/conv audio networks, and general runtimes cover arbitrary graphs.",
+  "verified_claims_summary": "The author's arXiv paper (2607.25350, seen only as a search snippet) reports 0.069 RTF for the int8 engine vs 0.230 for the fp32 ONNX Runtime graph on one Apple M2 core (3.3x); the README tables time only this engine (M2 and Galaxy S23+, 5569-frame clips, median of repeats) and give PESQ 3.054 vs 3.060 for fp32 ONNX over 824 VoiceBank-DEMAND utterances. The ORT version, threads and execution provider were not seen, the compiler is not named, and the ONNX benchmark artifacts the docs place under experiments/ are not in the public repo, so the comparison is int8 vs fp32 and cannot be reproduced from the repo.",
+  "status_note": "Active but young (4 commits, last 2026-07-29, single author, 25 stars); MIT-licensed C with no dependencies, so it is easy to vendor if your model matches.",
+  "sources_read": [
+    "https://github.com/kdrkdrkdr/faster-enhancer.c",
+    "https://github.com/kdrkdrkdr/faster-enhancer.c/issues",
+    "https://raw.githubusercontent.com/kdrkdrkdr/faster-enhancer.c/HEAD/README.md",
+    "https://raw.githubusercontent.com/kdrkdrkdr/faster-enhancer.c/HEAD/docs/optimizations.md",
+    "https://raw.githubusercontent.com/kdrkdrkdr/faster-enhancer.c/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/kdrkdrkdr/faster-enhancer.c/HEAD/include/fe.h",
+    "WebSearch snippet of https://arxiv.org/abs/2607.25350 (arxiv.org itself egress-blocked)"
+  ],
+  "confidence": 0.75
+}

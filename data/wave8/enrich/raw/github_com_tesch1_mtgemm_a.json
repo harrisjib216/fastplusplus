@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/tesch1/mtgemm-a",
+  "one_liner": "SME2 FP32/FP64 GEMM for Apple M4 Pro, rebuilt from the MpGEMM paper: 1.18-1.26x Apple Accelerate on the paper's workloads.",
+  "what_it_does": "A static library (build/libmtgemm.a) with two entry points, mt_sgemm and mt_dgemm. They take a BLAS-like argument list (order, M, N, K, alpha, A, lda, B, ldb, beta, C, ldc) and compute C = alpha*A*B + beta*C in row- or column-major order, with no transposition of A or B. The library re-implements Deng et al., arXiv:2512.21473 (MpGEMM), from the paper's text. An mt_options struct switches each design element on or off for ablation. Separate builds add an AMX backend for M2/M3 chips (libmtgemm_amx.a) and runtime dispatch across SME, AMX and a reference loop (libmtgemm_multi.a). It exports no cblas_* symbols, so it is not a link-level BLAS replacement.",
+  "how_it_is_fast": "It uses Goto/BLIS six-loop blocking, with mc/nc/kc chosen by the paper's analytical model: an 8 MB L2 budget, a TLB bound and the best compute-to-memory ratio. Under it sits a 16x64 FP32 (8x64 FP64) micro-kernel that issues four FMOPA outer products into four ZA tiles per A vector. A is transposed while packing through the ZA array, and B is packed online during the first pass. All full-width loads and stores use SME2 four-register (x4) forms. The project's additions over the paper are core-side prfm pldl2keep prefetch of A, B and C into the L2 that the SME unit reads (1.12x row-major, 1.20x column-major) and four-row MOVA vg4 moves for C tiles and A packing. An optional second thread drives the second P-cluster's SME unit (1.95x scaling).",
+  "when_to_use": [
+    "FP32 or FP64 GEMM on an Apple M4/M4 Pro where you want to beat Accelerate. On one thread over the paper's 24 workloads it is 1.19x column-major and 1.26x row-major; at default threading it is 1.18x. FP64 row-major on one thread is 1.29x.",
+    "Skinny and irregular shapes. With K=4096, one side 4-32 and the other two at 4096 it is 1.2-2.4x Accelerate on one thread. At K=25600 with M=N=80-200 it is 1.18-1.63x.",
+    "Mid-size problems from 192^3 to 512^3 with threads=0. It brings in the second SME unit from 2^22 multiply-adds, where Accelerate waits until about 512^3 (1.2-2.0x).",
+    "You need a BLAS-like alpha/beta/leading-dimension interface and one binary that dispatches across M2-M4 (SME, AMX or reference loop).",
+    "A readable SME GEMM reference: the core is about 740 lines, with an ablation table per design element. It was used to port SME GEMM into Eigen and OpenBLAS."
+  ],
+  "when_not_to_use": [
+    "Tiny problems. Squares below 64^3 run at 0.16-0.9x Accelerate and the 4x4 corner at 0.5x. Matrix-vector cases (one side = 1) run at 0.4x.",
+    "K=512 with one side of 32 or less and the other of 512 or more, where it is at 0.6-0.9x on one thread.",
+    "Transposed operands, complex types, mixed precision (FP16/BF16/INT8) or other BLAS/LAPACK routines. Only no-transpose real GEMM is implemented.",
+    "Non-Apple SME2 hardware or another vector length. The code uses macOS APIs (pthread QoS, sysctl) and SVL-512 constants, and the AMX backend does not run on M1.",
+    "Large squares on one thread only. The gain there is 1.04-1.06x, inside the few-percent noise of a shared machine."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "None for the library (macOS system headers). Accelerate is used by the tests and benchmarks. LIBXSMM, KleidiAI, Eigen, OpenBLAS and Google Benchmark are fetched only for the comparison targets.",
+    "min_toolchain": "C++17; Apple clang with SME2 support (results with Apple clang 21) and -march=armv8.6-a+sme2+sme-f64f64",
+    "platforms": "macOS on Apple M4 family (SME2, SVL 512, FEAT_SME_F64F64); AMX backend for M2/M3 (incl. Vision Pro), not M1; portable reference loop elsewhere",
+    "thread_safety": "Not documented. In the code the packing buffers are thread_local, and two-thread mode uses one process-wide worker thread behind a static mutex, so concurrent two-thread calls from different threads serialize.",
+    "drop_in_for_baseline": "partial: the argument list mirrors cblas_sgemm/dgemm without the transpose flags, but the names differ (mt_sgemm/mt_dgemm) and it exports no BLAS symbols"
+  },
+  "gotchas": [
+    "The default mt_options has threads=1, so a call with opt=nullptr runs on one SME unit. The README's 'default threading' figures need threads=0 (two threads from 2^22 multiply-adds) or threads=2.",
+    "Two-thread mode starts a persistent worker that is never joined and spins for 200 us after each call while the caller busy-waits. macOS cannot pin threads, so both threads can land on one SME unit, and threads=2 has no small-size fallback.",
+    "Dimensions and leading dimensions are int (32-bit). The thread_local packing buffer stays allocated between calls in every thread that calls the library.",
+    "The mt_options.prof setting gives wrong results by design (profiling only). The AMX backend relies on undocumented instructions (corsix/amx encodings), which a future OS or chip could remove."
+  ],
+  "pick_this_over_siblings_when": "Pick it over MaxMulSK when you need FP64, alpha/beta, leading dimensions, column-major input or both M4 Pro SME units, all from published code: MaxMulSK is FP32, single-threaded and row-major, and its fastest kernel is unpublished. Against MPGEMM (github.com/mpgemm/MPGEMM, MIT), the README says no MpGEMM code was found and compares only with the paper's chart numbers (1.06x/1.10x on one thread). That repository is now public, so run a side-by-side test before choosing.",
+  "verified_claims_summary": "Setup: Apple M4 Pro (8 P-cores, two SME units, SVL 512, macOS 27.0), Apple clang 21 with -O3 -march=armv8.6-a+sme2+sme-f64f64, minimum of five 50 ms trials on a shared machine (load 1.5-5.6). FP32 geometric mean over the paper's 24 workloads: 1421 vs 1196 GFLOPS for Accelerate on one thread column-major (1.19x), 1416 vs 1124 row-major (1.26x) and 2777 vs 2363 at default threading (1.18x); squares 512-4096 on one thread gain only 1.04-1.06x. In the same harness it is 2.20x LIBXSMM, 1.67x KleidiAI and 3.70x Homebrew OpenBLAS 0.3.34, which falls back to NEON at M=4096.",
+  "status_note": "Active (51 commits, last 2026-09-29), MIT and small enough to vendor, but a 0-star single-author reproduction measured on one machine. Its tests run 2304 option combinations and 900 random cases against a double-precision reference.",
+  "sources_read": [
+    "https://github.com/tesch1/MTGEMM-A",
+    "https://raw.githubusercontent.com/tesch1/MTGEMM-A/HEAD/README.md",
+    "https://raw.githubusercontent.com/tesch1/MTGEMM-A/HEAD/Makefile",
+    "https://raw.githubusercontent.com/tesch1/MTGEMM-A/HEAD/include/mtgemm.h",
+    "https://raw.githubusercontent.com/tesch1/MTGEMM-A/HEAD/src/mtgemm.cpp",
+    "https://raw.githubusercontent.com/tesch1/MTGEMM-A/HEAD/src/threads.cpp",
+    "https://raw.githubusercontent.com/tesch1/MTGEMM-A/HEAD/src/dispatch.cpp",
+    "https://github.com/mpgemm/MPGEMM"
+  ],
+  "confidence": 0.85
+}

@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/ulassertan/maxmulsk",
+  "one_liner": "Single-threaded FP32 SME/SME2 GEMM for Apple M4; published v3 beats an SME-enabled OpenBLAS build, trails Accelerate.",
+  "what_it_does": "A C++20 single-threaded FP32 GEMM for Apple M4 that runs the whole path itself: packing, M/N/K cache blocking, the ZA outer-product compute, edge tiles and the ZA-to-C writeback. The public entry point is SMEKernels1x4AccKcOut::run_multiplication(A, B, C, M, K, N), which computes C = A*B (row-major, overwrite, no alpha/beta, no leading dimensions, no transposes). It is not a BLAS or CBLAS drop-in. The repository also carries the v1/v2 kernels, a v4c path in sme/v4/ and a large benchmark suite against Accelerate, OpenBLAS, MpGEMM, KleidiAI and ggml.",
+  "how_it_is_fast": "It runs a BLIS-style blocked GEMM on Arm SME. A 1x4 geometry (a 16x64 FP32 output tile spread over four 16x16 ZA tiles) does four FMOPA outer products per A vector. A is packed through a ZA-tile transpose and B through SVE stores. The v2/v3 change keeps ZA live across the whole K panel, with K innermost: ZA is zeroed once per C tile and drained once with one svst1_f32_x4 per row, and the first K panel stores without a read-modify-write. That cut per-call fixed cost from 357 ns to 52 ns. v3 adds an outer Kc panel so the packed buffers scale with Kc rather than K. Blocking comes from a small per-shape table (gemm_tuning) whose entries are kept only if they won in three separate runs.",
+  "when_to_use": [
+    "Single-threaded FP32 row-major GEMM on an Apple M4 where Accelerate is not an option and OpenBLAS is the alternative. The published v3 is 1.01-1.31x an SME-enabled OpenBLAS develop build on squares 256^3-4096^3 and 1.36-2.23x on M=64/128 LLM shapes.",
+    "Replacing Homebrew's OpenBLAS on M4. That build cannot reach its own SME kernels and falls off above 1024^3, per the README.",
+    "Large squares (1024^3, 4096^3), where the published v3 edged Accelerate by 1.05x and 1.02x in the 9 September session.",
+    "Learning SME kernel design. The repo documents every generation, the ablations and the failed experiments (bdirect, pack-once) with dated raw data."
+  ],
+  "when_not_to_use": [
+    "You can call Accelerate. The published v3 trails it on most shapes: 0.83x at 256^3, 0.93x at 512^3, 0.97x at 2048^3 and 0.92-0.95x on the LLM shapes. v4c also trails it by 3-5% on the LLaMA shapes.",
+    "You want the headline numbers (1.86x OpenBLAS, 1.16x Accelerate, 1.06x MpGEMM). Those come from the v5.1 kernel, whose code is not in the repository, measured with a separate harness.",
+    "You need multithreading, FP64, transposed or strided (lda) operands, column-major data, or C = alpha*A*B + beta*C. None of these are supported, and SME multi-threading is listed as future work.",
+    "Any chip other than Apple M4. M1-M3 lack SME. pack_A's transpose is hard-coded for a 512-bit streaming vector length (TODO.md: 'Not portable').",
+    "Production use that needs a stable API. It is a 0-star single-student project with no library target, and the namespace-level entry point changes from generation to generation."
+  ],
+  "integration": {
+    "form": "source-drop (copy sme/v3/sme-1x4-acc-kcout.{hpp,cpp} and sme/support/gemm_tuning.{hpp,cpp}; the CMake project builds only executables)",
+    "dependencies": "The kernel needs only the ACLE headers arm_sme.h and arm_sve.h. The repo build also needs Homebrew libomp and CMake 3.30+. OpenBLAS (dlopen), KleidiAI (fetched at v1.30.0, can be turned off), llama.cpp/ggml, NumPy and PyTorch are needed only for benchmarks.",
+    "min_toolchain": "C++20; Homebrew LLVM/Clang (README: Apple's bundled Clang lacks the SME/SME2 intrinsics; results used Clang 22.1.8); kernel sources compiled with -march=armv8.7-a+sme+sme2",
+    "platforms": "Apple M4 only (SME/SME2, 512-bit streaming vector length), macOS",
+    "thread_safety": "Not documented. The library is single-threaded internally. The v3 entry point allocates its own buffers per call, keeps no shared mutable state, and reads the MAXMULSK_BLOCKING environment variable on every call.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The v3 KcOut kernel overwrites C (C = A*B). Its header says every other MaxMulSK SME kernel accumulates (C += A*B), so swapping kernels changes semantics.",
+    "Each call std::aligned_alloc's about 8.5 MB of packing buffers (1024x2048 floats for A plus 64x2048 for B at the default blocking) and does not check for a null return.",
+    "MAXMULSK_BLOCKING='M_tile,N_tile,Kc,ir_outer' overrides the blocking on every call. The parser rejects only zero values, while the header requires N_tile to be a multiple of the kernel's N_step.",
+    "Sibling kernels in the repo returned silently wrong results before fixes (4x1 pack_A when M_tile > 64; the same latent bug 'still sits in the v1 kernel', per gemm_tuning.cpp). Use only the v3 1x4 path the README documents. Timings of short calls such as 256^3 depend on the work that ran just before."
+  ],
+  "pick_this_over_siblings_when": "MTGEMM-A (MIT, all code public) covers the same M4 SME niche with FP64, alpha/beta, leading dimensions, both storage orders and two-SME-unit threading, and MPGEMM's code is now public too, so prefer those for real use. Pick MaxMulSK only for single-threaded FP32 row-major work on an M4 where you want its documented kernel history, or once v5.1 (reported 1.06x MpGEMM on the same M4) is published.",
+  "verified_claims_summary": "The reproducible claim is the 9 September 2026 session of bench/bench_headline.cpp: Homebrew Clang 22.1.8, -mcpu=apple-m4 and -march=armv8.7-a+sme+sme2, Apple M4 on macOS 26.6.2, one thread, FP32, allocation and packing inside the timed call. There the published v3 reached 1396-1768 GFLOP/s on squares 256^3-4096^3, which is 1.01-1.31x an OpenBLAS develop build reaching its SME kernels and 1.36-2.23x on LLM shapes, but only 0.83-1.05x of Accelerate. The 29 September table (v5.1: 1.86x OpenBLAS and 1.16x Accelerate, geometric mean over 35 shapes) comes from unpublished code.",
+  "status_note": "Active (39 commits, last 2026-09-29) and Apache-2.0, so it is copyable. It is a 0-star single-maintainer student project with no releases, and its best kernel (v5.1) is not yet published.",
+  "sources_read": [
+    "https://github.com/UlasSertan/MaxMulSK",
+    "https://raw.githubusercontent.com/UlasSertan/MaxMulSK/HEAD/README.md",
+    "https://raw.githubusercontent.com/UlasSertan/MaxMulSK/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/UlasSertan/MaxMulSK/HEAD/docs/BENCHMARKS.md",
+    "https://raw.githubusercontent.com/UlasSertan/MaxMulSK/HEAD/TODO.md",
+    "https://raw.githubusercontent.com/UlasSertan/MaxMulSK/HEAD/sme/v3/sme-1x4-acc-kcout.hpp",
+    "https://raw.githubusercontent.com/UlasSertan/MaxMulSK/HEAD/sme/v3/sme-1x4-acc-kcout.cpp",
+    "https://raw.githubusercontent.com/UlasSertan/MaxMulSK/HEAD/sme/support/gemm_tuning.hpp",
+    "https://raw.githubusercontent.com/UlasSertan/MaxMulSK/HEAD/sme/support/gemm_tuning.cpp",
+    "https://github.com/mpgemm/MPGEMM"
+  ],
+  "confidence": 0.8
+}

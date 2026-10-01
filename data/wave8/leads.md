@@ -32,3 +32,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - malb/m4ri (GF(2) linear algebra vs Magma; perf page blocked here), HPAC/tccg, springer13/hptt (already listed above), flame/libflame, amd/blis (AOCL-BLAS fork of a baseline). (from blas registry search)
 - raultapia/efft (eFFT, TPAMI 2024, FFTW baseline, no numbers visible) and ryuhei-mori/tinyfft (claims faster than FFTW3 MEASURE at 2^17-2^20, 15 stars). (from fft registry search)
 - eth-cscs/COSTA (distributed layout transform used by COSMA), el-oso/PureFFT.jl, arXiv 2607.11391 and 2603.14926 (branch-free multi-component FMA/SIMD multiprecision). (from enrichers)
+- Marian WNGT 2019 paper (ACL D19-5632) and FBGEMM arXiv 2101.05615 could move FBGEMM to tier B; ARM KleidiAI int8 microkernels; bytedance/effective_transformer; flashrt-project/FlashRT-Structures. (from enrichers)

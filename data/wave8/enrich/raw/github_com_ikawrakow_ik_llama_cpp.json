@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/ikawrakow/ik_llama.cpp",
+  "one_liner": "llama.cpp fork with rewritten CPU quantized-matmul kernels; 1.1-7x faster CPU prompt processing than mainline on the same GGUF.",
+  "what_it_does": "ik_llama.cpp is a fork of llama.cpp (forked June 2024, last synced with upstream August 2024) by the author of many of llama.cpp's quantization types. It keeps the llama.cpp tools and GGUF format (llama-server, llama-cli, llama-bench, llama-quantize) and loads most mainline GGUF files, but adds its own quantization types (IQ*_K, IQ*_KS, trellis IQ*_KT, row-interleaved _R4/_R8 variants), MLA/FlashMLA for DeepSeek, fused MoE ops, tensor overrides for hybrid CPU/GPU MoE offload, and its own model ports. You use it in place of llama.cpp's binaries, not as a separate library.",
+  "how_it_is_fast": "The CPU hot path is the iqk GEMM code (ggml/src/iqk/iqk_gemm_*.cpp), which multiplies several weight rows against several activation columns per kernel call, with activations quantized to 8-bit and integer dot products (AVX512-VNNI/AVX-VNNI vpdpbusd, NEON dot). Weights can be repacked at load time (-rtr) into row-interleaved layouts (4 or 8 rows), and quants that are slow to unpack (i-quants, k-quants) are expanded a few rows at a time to Q8_0_R8 and fed to one tuned Q8_0_R8 x Q8_2_X4 GEMM (PR 515: IQ2_XXS from about 107 to 288 t/s on a Ryzen 7950X). Its IQ*_K types use small non-linear lookup tables (4-32 int8 values) held in SIMD registers via pshufb/vqtbl1q, so dequantization costs about the same as a linear format.",
+  "when_to_use": [
+    "CPU-only or CPU-heavy LLM inference where prompt processing (prefill) dominates: same-GGUF pp512 on LLaMA-3.1-8B was 1.8-5.2x mainline on Zen4 (geometric mean 2.88x) and 1.1-7.0x on M2-Max NEON (3.35x)",
+    "i-quant and k-quant models (IQ2_XXS-IQ4_XS, Q3_K-Q6_K), where the gap was largest (IQ3_S 5.2x Zen4, 7.0x NEON)",
+    "AVX-512 CPUs (Zen4, Sapphire Rapids+), whose VNNI/VBMI paths mainline used little at the time of the comparison",
+    "Large MoE models such as DeepSeek, GLM or Kimi with experts left in system RAM and attention on a CUDA GPU, using tensor overrides, FlashMLA and fused MoE ops",
+    "You want lower-bpw-at-equal-quality IQ*_K / IQ*_KT quantizations that mainline does not have"
+  ],
+  "when_not_to_use": [
+    "Token generation bound by memory bandwidth: same-format TG gains in Discussion 8 were only about 1.08-1.12x",
+    "GPU backends other than CUDA Turing+: the README says ROCm, Vulkan, Metal, older NVIDIA GPUs and AVX-only CPUs are not supported and related issues will not be fixed",
+    "You need upstream llama.cpp's newest features, models or APIs exactly: the fork diverged in August 2024 and ports models itself",
+    "Interoperability: GGUFs made with ik-only quant types do not load in mainline, and Unsloth _XL models containing f16 tensors are likely not to work",
+    "Exposed or untrusted network deployments, especially the RPC backend: there is no SECURITY.md and no published advisories, and an RPC deserialize_tensor bounds-check crash (#2164) is open"
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "none for the CPU build (cmake + compiler; libcurl optional); CUDA toolkit for GPU; vendored cpp-httplib, nlohmann/json, stb-image, miniaudio for the server and multimodal tools",
+    "min_toolchain": "CMake 3.14; the top-level CMakeLists sets C++20 (docs/build.md says a C++17 compiler); GCC, Clang, or MSVC/clang-cl on Windows",
+    "platforms": "x86-64 with AVX2 or better (AVX-512 path needs VNNI/VL/BW/DQ), aarch64 NEON (Linux, macOS, Android/termux), NVIDIA CUDA Turing or newer; Windows and Linux",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": "partial — same CLI tools and llama.h-style API frozen at the August 2024 fork point, and most mainline GGUFs load; ik-only quant types and newer mainline API additions are not interchangeable"
+  },
+  "gotchas": [
+    "On Zen4 / Sapphire Rapids, a plain Release build without -DGGML_NATIVE=ON or the GGML_AVX512_* options silently falls back to the AVX2 kernels; HAVE_FANCY_SIMD needs AVX512F, VNNI, VL, BW and DQ all defined at compile time",
+    "-rtr (run-time repacking) is needed for the published speedups, but with hybrid CPU/GPU MoE it forces matmuls on repacked RAM tensors onto the CPU (k-quants have no CUDA row-interleaved kernels), which lowers prompt speed",
+    "Split mode 'graph' with partial GPU offload can produce gibberish; the README workaround is -cuda graphs=0",
+    "The Jan 2025 comparison used mainline build 4517 and states mainline's ARM Q4_0/IQ4_NL repacking had already closed most of the gap for those types (1.09x and 1.24x); re-measure against current mainline before switching for those formats"
+  ],
+  "pick_this_over_siblings_when": "Pick ik_llama.cpp over llamafile's tinyBLAS when you run i-quants or k-quants (tinyBLAS mainly speeds up F16/Q8_0 prefill), and over T-MAC or BitNet unless the model is 1-2 bit or ternary, where their lookup-table kernels are built for it; PowerInfer targets sparse-activation GPU-CPU offload of specific models, while ik_llama.cpp is a general GGUF engine.",
+  "verified_claims_summary": "The author's January 2025 llama-bench run (ik_llama.cpp 3c5f8722 vs llama.cpp 9f7add1c, same llama.cpp-quantized LLaMA-3.1-8B-Instruct GGUF, CPU only, no BLAS, no flash attention, -rtr on the fork) measured pp512 speedups of 1.78-5.18x on a Ryzen 7950X (Zen4/AVX-512), 1.52-5.13x on a Ryzen 5975WX (AVX2) and 1.09-7.03x on an M2-Max (NEON) across 15-17 quant types; it is first-party, compilers and flags are not stated, and only prompt processing was tabulated.",
+  "status_note": "Very active (last commit 2026-10-01, 3.3k stars), MIT-licensed, single-maintainer-led fork with a large contributor community; it diverges further from mainline over time, so treat it as a separate engine rather than a patch set.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/ikawrakow/ik_llama.cpp/HEAD/README.md",
+    "https://raw.githubusercontent.com/ikawrakow/ik_llama.cpp/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/ikawrakow/ik_llama.cpp/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/ikawrakow/ik_llama.cpp/HEAD/docs/build.md",
+    "https://raw.githubusercontent.com/wiki/ikawrakow/ik_llama.cpp/Jan-2025:-prompt-processing-performance-comparison.md",
+    "https://github.com/ikawrakow/ik_llama.cpp/discussions/8",
+    "https://github.com/ikawrakow/ik_llama.cpp/pull/515",
+    "https://github.com/ikawrakow/ik_llama.cpp/issues?q=is%3Aissue+security+OR+CVE+OR+overflow+OR+vulnerability",
+    "https://github.com/ikawrakow/ik_llama.cpp/issues/2164",
+    "https://github.com/ikawrakow/ik_llama.cpp/security"
+  ],
+  "confidence": 0.8
+}

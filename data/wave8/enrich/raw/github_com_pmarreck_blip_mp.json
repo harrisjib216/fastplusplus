@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/pmarreck/blip_mp",
+  "one_liner": "Pure-Zig arbitrary-precision integers stored as variable-length BLIP bytes; beats GMP mpz on Apple M4 at i64-sized and 128-8192-bit add/sub/mul.",
+  "what_it_does": "blip_mp is a signed arbitrary-precision integer library (add/sub/mul, truncated divMod, powm, invMod, gcd/lcm, bitwise ops, roots, primality, string I/O, plus an exact fixed-point Fp type) whose canonical storage is the self-describing BLIP byte encoding instead of GMP's limb array, so the value's bytes double as its wire form. The Zig API is Mp.init(allocator) / r.add(&a, &b) style; a C FFI (include/blip_mp.h, about 85 exports, opaque blip_mp_t handles, int error codes, malloc/free internally) is built as a static library and mirrors mpz semantics (mpz_tdiv_qr, mpz_and, mpz_popcount and so on) under different function names. It is not a drop-in for mpz_t.",
+  "how_it_is_fast": "Small-buffer optimization: a 72-byte Mp struct holds values up to 24 encoded bytes inline, and maintains a sign-extended i64 copy at inline_buf[1..9] so i64-range arithmetic is one 64-bit load plus native overflow-checked math, with no malloc round-trip. Larger values use byte-direct two's-complement add/sub that reads u512/u256/u128/u64 chunks straight from the payload (compiling to ADCS carry chains on aarch64), direct-write into the result heap buffer via a header offset, Karatsuba with a carry-bit trick that keeps sub-products 8-byte aligned, Toom-3 above 16K bits, and cached payload metadata to skip header parsing. powm uses CIOS Montgomery multiplication with sliding windows and dedicated squaring; division is u64-base Knuth Algorithm D with Moller-Granlund reciprocal quotient estimates; invMod is a wider-window Lehmer extended Euclid.",
+  "when_to_use": [
+    "Zig code on Apple Silicon that does large numbers of operations on values that mostly fit in an i64 but may overflow (accumulators, counters, exact arithmetic): adds measured 1.95-2.66x faster than GMP-with-asm on an M4.",
+    "aarch64 workloads dominated by 384-8192-bit multiplication or 256-8192-bit subtraction, where RESULTS.md shows 1.08-1.56x (mul) and 1.03-2.11x (sub) wins over GMP-with-asm on an M4.",
+    "Projects that want arbitrary-precision integers without linking LGPL GMP and can accept a pure-Zig dependency (or its C static library).",
+    "Protocols where the integer's serialized BLIP bytes are the wire format, so you skip an mpz_export/mpz_import round-trip."
+  ],
+  "when_not_to_use": [
+    "x86-64: on a Zen 4 laptop GMP's assembly beats blip_mp by 1.5-4x at 1024-8192-bit add, mul, divMod and powm (RSA-2048 powm about 3.8 ms vs 1.9 ms); only i64-sized adds win there.",
+    "Division-heavy or modular-inverse-heavy code: full Mp.divMod is 1.25-2.00x slower than mpz_tdiv_qr at 256-8192 bits even on the M4, and invMod is 3.25-5.36x slower than mpz_invert.",
+    "Operands of 16K bits and above (mul 0.87x at 16384 and 0.55x at 32768 bits): FFT multiplication exists but is gated off, so large-number workloads should stay on GMP or FLINT.",
+    "Secret-dependent cryptography: powm uses sliding-window exponentiation and no constant-time mode or side-channel analysis is documented.",
+    "Anything you need to ship legally today: there is no LICENSE file (the README says MIT or Apache-2.0 'TBD before tagging a release'), version 0.0.1, no tagged release, one star."
+  ],
+  "integration": {
+    "form": "module (Zig package via build.zig.zon) or static lib with C header include/blip_mp.h",
+    "dependencies": "none for the library (libc for the C API's malloc/free); GMP and Nix only for benchmarks and cross-checks",
+    "min_toolchain": "build.zig.zon declares minimum_zig_version 0.15.0; benchmarks and docs use Zig 0.16.0 via Nix",
+    "platforms": "Validated on aarch64-darwin (Apple M4) and x86_64-linux (Zen 4); README says Garnix CI cross-builds aarch64/x86_64 Linux, Darwin and Windows. Fast paths are tuned for Apple Silicon; NEON FFT code is gated off.",
+    "thread_safety": "not documented; each Mp carries its own allocator, the FFT scratch cache is thread-local (CODE_MINIMAP.md) and the README mentions per-thread scratch caches, but no guarantee for sharing one Mp across threads is stated",
+    "drop_in_for_baseline": "partial — covers most mpz integer operations with GMP-matching semantics, but a different type, function names and error-code convention; no mpf/mpfr equivalents"
+  },
+  "gotchas": [
+    "The README headline overstates results: its 'RSA-2048 trifecta' divMod win (1.31x) is blip vs GMP-noasm on x86, and the '24% faster long division' is a limb-only inner kernel; RESULTS.md's own table has full Mp.divMod 1.26x slower than GMP at 2048 bits on the M4. Its 'honest losses' list (128-256-bit mul 0.40-0.67x) is stale against RESULTS.md (128-bit mul 1.38x faster).",
+    "128-bit add and sub are still slower than GMP (0.56x and 0.65x) because of the heavier 72-byte struct and per-op bookkeeping; the win zone starts at i64 values and resumes around 256-768 bits.",
+    "blip_mp_set_u64 returns BLIP_MP_ERR_OUT_OF_RANGE for values above INT64_MAX, and pointers from blip_mp_bytes() are invalidated by the next mutating call on that handle.",
+    "Benchmarks are 3-run hand medians (hyperfine aggregation is listed as a to-do), and the docs disagree on cross-check counts (8240, 12029, 13029) and on whether rationals are supported."
+  ],
+  "pick_this_over_siblings_when": "Pick blip_mp over the Rust small-value libraries (dashu, ibig, Malachite) only when you are in Zig or want a C ABI without Rust, and over ctbignum when widths are not known at compile time; for C++ code that wants small-value speed with GMP-class large-operand performance, mp++ (SBO over GMP) is the safer choice, and on x86-64 none of blip_mp's mid-size wins hold.",
+  "verified_claims_summary": "On an Apple M4 with Zig 0.16.0 ReleaseFast against nixpkgs GMP 6.3.0 (with and without assembly, harness built at -O3, libc malloc on both sides), the author's 3-run medians show i64-range adds 1.95-2.66x faster, 12 of 15 mul sizes from 128 to 8192 bits faster (RSA-2048 mul 673 vs 800 ns), and 2048-bit powm 13% faster, while full divMod is 1.25-2.00x and invMod 3.25-5.36x slower. A Zen 4 rerun of the same Nix package shows GMP-with-asm winning everything except i64-sized adds.",
+  "status_note": "Actively developed by one author (last commit 2026-09-27, mostly feature work through June 2026) as a research-grade 0.0.1 library with no license file yet, so treat it as reference material until a release with a license is tagged.",
+  "sources_read": [
+    "https://github.com/pmarreck/blip_mp",
+    "https://github.com/pmarreck/blip_mp/commits/yolo",
+    "https://raw.githubusercontent.com/pmarreck/blip_mp/HEAD/README.md",
+    "https://raw.githubusercontent.com/pmarreck/blip_mp/HEAD/RESULTS.md",
+    "https://raw.githubusercontent.com/pmarreck/blip_mp/HEAD/BENCHMARK_RESULTS.md",
+    "https://raw.githubusercontent.com/pmarreck/blip_mp/HEAD/build.zig",
+    "https://raw.githubusercontent.com/pmarreck/blip_mp/HEAD/build.zig.zon",
+    "https://raw.githubusercontent.com/pmarreck/blip_mp/HEAD/flake.nix",
+    "https://raw.githubusercontent.com/pmarreck/blip_mp/HEAD/include/blip_mp.h",
+    "https://raw.githubusercontent.com/pmarreck/blip_mp/HEAD/CODE_MINIMAP.md",
+    "https://raw.githubusercontent.com/pmarreck/blip_mp/HEAD/SPEC.md"
+  ],
+  "confidence": 0.8
+}

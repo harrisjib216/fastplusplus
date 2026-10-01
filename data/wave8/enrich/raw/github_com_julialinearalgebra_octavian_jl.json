@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/julialinearalgebra/octavian.jl",
+  "one_liner": "Pure-Julia multithreaded GEMM built on LoopVectorization; median 1816 GFLOPS at 1000^3 vs OpenBLAS 1254 and MKL 1348.",
+  "what_it_does": "A Julia package that exports matmul!/matmul (multithreaded) and matmul_serial!/matmul_serial. They compute C = alpha*A*B + beta*C on Julia strided arrays, including transposed views, complex matrices (complex_matmul.jl) and integer matrices (docs example). Package extensions cover ForwardDiff and HyperDualNumbers. It is a separate Julia API: LinearAlgebra's * and mul! keep calling the bundled BLAS unless you call Octavian directly (libblastrampoline integration is open request #68). There is no C ABI, so C++ code cannot call it without embedding Julia.",
+  "how_it_is_fast": "It runs a Goto/BLIS-style blocked GEMM. Block sizes Mc/Kc/Nc are solved in closed form from L1/L2 cache sizes reported by CPUSummary (hwloc), with weights tuned per architecture: AVX-512, Zen1-3, a generic fallback and Apple aarch64. Depending on size and alignment it packs nothing, only A, or both A and B into page-aligned buffers preallocated at load time. LoopVectorization's @turbo generates the register-blocked micro-kernels. Threads are dispatched through PolyesterWeave/ThreadingUtilities spinning workers rather than Base.Threads tasks, which keeps per-call threading overhead low at small and mid sizes.",
+  "when_to_use": [
+    "Julia code doing dense real matmul on a many-core x86 CPU, where you call matmul! explicitly. At 1000^3 on 18 cores / 36 threads it was 1.45x OpenBLAS and 1.35x MKL by median (derived from page data).",
+    "Element types a binary BLAS cannot take, such as integer matrices or ForwardDiff/HyperDualNumbers duals (through package extensions), while keeping a blocked, vectorized kernel.",
+    "Inside your own Polyester- or LoopVectorization-threaded code, using matmul_serial! (Octavian does not start threads when nested in threaded code).",
+    "Pure-Julia stacks that want to avoid OpenBLAS/MKL threading overhead on small and medium sizes."
+  ],
+  "when_not_to_use": [
+    "C++ projects: there is no C/BLAS ABI, so you would have to embed the Julia runtime. Use a native sibling instead.",
+    "Correctness-critical work on current Julia without your own tests. Open issue #193 (October 2024, no maintainer reply) reports wrong results and segfaults for matmul!(c, a, b) with 10x3000 by 3000x10 inputs on Julia 1.10.5/1.11, single-threaded, on Intel and AMD. Issue #191 reports a ReadOnlyMemoryError with 30 threads on a 271x24 product.",
+    "Code that also uses Base.Threads @spawn/@threads. The docs warn that Octavian's tasks interfere with them and make execution much slower.",
+    "More than 64 threads (#153), dual-socket machines (#151), or large unbalanced problems (#104; #152 reports the wrong strategy for large matrices on Zen3). All four issues are open.",
+    "Long-term dependency risk. Commits in the last year are CI and dependency bumps only, LoopVectorization's upkeep depends on the SciML Small Grants program, and 32-bit Julia support was dropped."
+  ],
+  "integration": {
+    "form": "module (registered Julia package, v0.3.29)",
+    "dependencies": "LoopVectorization, VectorizationBase, PolyesterWeave, ThreadingUtilities, CPUSummary, StaticArrayInterface, Static, ManualMemory, IfElse, PrecompileTools; ForwardDiff and HyperDualNumbers as weak dependencies",
+    "min_toolchain": "Julia 1.6 (Project.toml compat), 64-bit only",
+    "platforms": "64-bit x86-64 (tuned constants for AVX-512, Zen1-3, generic) and aarch64 (tuned constants for Apple)",
+    "thread_safety": "Not documented, apart from two notes: it will not use threads when nested in other threaded code, and its tasks interfere with Base.Threads tasks. Internally a global spin lock guards a shared B-packing buffer, and the A buffers are indexed by Threads.threadid().",
+    "drop_in_for_baseline": "partial: matmul!(C, A, B, alpha, beta) has the same argument order as LinearAlgebra.mul!, but it is a separate function that does not replace BLAS calls and skips mul!'s dimension checks (#109)"
+  },
+  "gotchas": [
+    "matmul! does not check dimensions (#109, open). Mismatched sizes proceed silently where LinearAlgebra.mul! throws DimensionMismatch, and LoopVectorization's @turbo kernels do no bounds checking.",
+    "The B-buffer lock is taken without try/finally. If a matmul throws, later calls can spin until you call Octavian.reset_bcache_lock!() (per its docstring).",
+    "The thread count is min(Threads.nthreads(), physical cores), optionally lowered by OCTAVIAN_NUM_TASKS. It is read in __init__ along with the size of the preallocated pack buffers, so start Julia with -t before loading.",
+    "Block sizes depend on correct cache sizes. The README asks for CPUSummary.use_hwloc(true), the default, for accurate hardware information."
+  ],
+  "pick_this_over_siblings_when": "Choose Octavian over PureBLAS.jl, the other pure-Julia BLAS in the catalog, for multithreaded GEMM and generic element types. PureBLAS.jl's comparisons against OpenBLAS/AOCL are single-threaded. For C++ users, Eigen or a native BLIS-style sibling is the practical choice, since Octavian is not callable from C++.",
+  "verified_claims_summary": "One 2021 run of BLASBenchmarksCPU.jl (sizes 10-1000, 2h25m sweep) on an 18-core Intel Core i9-10980XE (Cascade Lake-X, AVX-512) with Julia 1.7.0-DEV.1124, LLVM 11.0.1 and 36 threads. At 1000x1000x1000 the median GFLOPS were Octavian 1816, MKL 1348, OpenBLAS 1254 and BLIS 1051, i.e. 1.35x MKL and 1.45x OpenBLAS (derived from page data). The README does not state the baseline library versions or the element type, and other sizes appear only in a plot.",
+  "status_note": "MIT, 255 stars and registered, but effectively in maintenance mode: the last commit (2025-10-21) was a CI bump, and correctness issue #193 has gone unanswered since October 2024.",
+  "sources_read": [
+    "https://github.com/JuliaLinearAlgebra/Octavian.jl",
+    "https://raw.githubusercontent.com/JuliaLinearAlgebra/Octavian.jl/HEAD/README.md",
+    "https://raw.githubusercontent.com/JuliaLinearAlgebra/Octavian.jl/HEAD/Project.toml",
+    "https://raw.githubusercontent.com/JuliaLinearAlgebra/Octavian.jl/HEAD/src/Octavian.jl",
+    "https://raw.githubusercontent.com/JuliaLinearAlgebra/Octavian.jl/HEAD/src/matmul.jl",
+    "https://raw.githubusercontent.com/JuliaLinearAlgebra/Octavian.jl/HEAD/src/block_sizes.jl",
+    "https://raw.githubusercontent.com/JuliaLinearAlgebra/Octavian.jl/HEAD/src/macrokernels.jl",
+    "https://raw.githubusercontent.com/JuliaLinearAlgebra/Octavian.jl/HEAD/src/memory_buffer.jl",
+    "https://raw.githubusercontent.com/JuliaLinearAlgebra/Octavian.jl/HEAD/src/global_constants.jl",
+    "https://raw.githubusercontent.com/JuliaLinearAlgebra/Octavian.jl/HEAD/src/init.jl",
+    "https://raw.githubusercontent.com/JuliaLinearAlgebra/Octavian.jl/HEAD/docs/src/index.md",
+    "https://raw.githubusercontent.com/JuliaLinearAlgebra/Octavian.jl/HEAD/docs/src/getting-started.md",
+    "https://raw.githubusercontent.com/JuliaLinearAlgebra/Octavian.jl/HEAD/docs/make.jl",
+    "https://raw.githubusercontent.com/JuliaSIMD/LoopVectorization.jl/HEAD/README.md",
+    "https://github.com/JuliaLinearAlgebra/Octavian.jl/issues",
+    "https://github.com/JuliaLinearAlgebra/Octavian.jl/issues/193",
+    "https://github.com/JuliaLinearAlgebra/Octavian.jl/issues/191",
+    "https://github.com/JuliaLinearAlgebra/Octavian.jl/issues/109"
+  ],
+  "confidence": 0.8
+}
