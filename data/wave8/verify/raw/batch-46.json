@@ -1,0 +1,74 @@
+[
+  {
+    "id": "https://github.com/eminsk/nanogemm",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "First-party README table vs NumPy 2.2.3 (OpenBLAS) with public benchmark code (benchmarks/bench_vs_numpy.py, notebooks/benchmark.ipynb) and flags (-O3 -mavx2 -mfma), but the CPU model is never named ('Intel/AMD x86-64 CPU', 'Google Colab CPU'), so not A.",
+    "corrections": {
+      "workload": "Single-threaded float32 square matmul (16x16 to 128x128) called from Python through NumPy arrays. The README states 'median latency across 10,000 iterations with cache pre-warming', but benchmarks/bench_vs_numpy.py times the mean per-call latency of one loop (25,000 to 50 iterations depending on size) and notebooks/benchmark.ipynb takes the best of 3 loop means (10,000/3,000/1,000 iterations); NumPy's `A @ B` allocates a new output each call while NanoGEMM writes into a preallocated `out=` buffer.",
+      "caveats": "First-party; CPU model not stated. Timed through Python, so NumPy per-call dispatch (README quotes 3-5 us fixed cost) dominates the small sizes; no direct cblas_sgemm call is compared. The README says 'median over 10,000 iterations' but the shipped benchmark code reports mean loop time (notebook: best of 3), and only the baseline pays for allocating its output (NanoGEMM uses a preallocated out= buffer). The headline 7.26x at 24x24 rests on a NumPy outlier (19.39 us at 24x24 vs 7.14 us at 32x32); 24 and 48 come from the Colab notebook, not bench_vs_numpy.py. NumPy/OpenBLAS thread count is not pinned. Slower than NumPy at 128x128 (0.77x). The INT8 table compares against NumPy int8 `@`, which does not use BLAS and returns int8 (wrapping) while NanoGEMM returns int32, so it is not a like-for-like baseline. Very new project (3 stars) with a marketing-style README; the dev.to article was not checked."
+    },
+    "notes": "README numbers match the record exactly. Methodology mismatches worth recording: README claims median timing but code reports mean/best-of-3, the baseline alone allocates its output, and the INT8 'vs NumPy' table compares against a non-BLAS int8 matmul with a different (overflowing) output type. Last commit 2026-09-28, MIT, 3 stars, 0 forks confirmed.",
+    "urls_opened": [
+      "https://github.com/eminsk/nanogemm",
+      "https://github.com/eminsk/nanogemm/commits",
+      "https://raw.githubusercontent.com/eminsk/nanogemm/HEAD/README.md",
+      "https://raw.githubusercontent.com/eminsk/nanogemm/HEAD/benchmarks/bench_vs_numpy.py",
+      "https://raw.githubusercontent.com/eminsk/nanogemm/HEAD/notebooks/benchmark.ipynb",
+      "https://raw.githubusercontent.com/eminsk/nanogemm/HEAD/LICENSE"
+    ]
+  },
+  {
+    "id": "https://github.com/avafly/optimize-gemm",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "README table compares mm_optimize.cpp against OpenBLAS 0.3.28 (mm_blas.cpp), Eigen 3.4.0, BLIS and GSL on a named CPU (Raspberry Pi 4B, Cortex-A72) with public code and -O3 in CMakeLists.txt, but the compiler is never named, so not A; first-party single run.",
+    "corrections": {
+      "caveats": "One size, one machine, one cold run per library: every program times a single gemm call with omp_get_wtime (no warm-up, no repetitions), so first-call buffer allocation and thread start-up of OpenBLAS/BLIS fall inside the timing. The compiler is not named, CMakeLists.txt passes only -O3 (no -mcpu), and the OpenBLAS/BLIS/Eigen builds (target, thread count) are not described, so OpenBLAS 0.3.28 may be running an untuned kernel. mm_optimize.cpp is tutorial code, not a library: M/N/K are compile-time macros, pack buffers are static globals sized at compile time, and sizes must be divisible by the kernel and block dimensions. BLIS is about 1 GFLOPS faster (39.57 vs 38.52 GFLOPS). Matrices are loaded from text files and a checksum is printed for correctness."
+    },
+    "notes": "All README numbers (38.5153 vs OpenBLAS 31.4546, Eigen 19.9660, BLIS 39.5670, GSL 0.6559 GFLOPS) match the record. Shortcoming worth recording: single cold-call timing and fixed compile-time sizes (not a general-purpose GEMM). MIT, 17 stars, last commit 2026-08-07, not a fork.",
+    "urls_opened": [
+      "https://github.com/Avafly/optimize-gemm",
+      "https://github.com/Avafly/optimize-gemm/commits",
+      "https://raw.githubusercontent.com/Avafly/optimize-gemm/HEAD/README.md",
+      "https://raw.githubusercontent.com/Avafly/optimize-gemm/HEAD/CMakeLists.txt",
+      "https://raw.githubusercontent.com/Avafly/optimize-gemm/HEAD/mm_blas.cpp",
+      "https://raw.githubusercontent.com/Avafly/optimize-gemm/HEAD/mm_blis.cpp",
+      "https://raw.githubusercontent.com/Avafly/optimize-gemm/HEAD/mm_optimize.cpp",
+      "https://raw.githubusercontent.com/Avafly/optimize-gemm/HEAD/utils.hpp"
+    ]
+  },
+  {
+    "id": "https://github.com/cool-japan/oxiblas",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "First-party README tables vs OpenBLAS on named CPUs (Xeon E5-2623 v4, Apple M3) with public Criterion code (crates/oxiblas-benchmarks/benches/comparison.rs) and bench profile (opt-level 3, thin LTO), but rustc version, RUSTFLAGS/target-cpu and the OpenBLAS version/threads are not stated, so not A.",
+    "corrections": {
+      "claimed_speedup": "Apple M3 (benchmarked 2025-12-28): f32 GEMM 128x128 28.34 vs 23.49 Gelem/s (121% of OpenBLAS), 1024x1024 55.99 vs 32.59 Gelem/s (172%), 101-104% at 64/256/512; f64 GEMM 97-101% (1024x1024 26.68 vs 26.48 Gelem/s); f64 DOT 165% of OpenBLAS. Intel Xeon E5-2623 v4 (2025-12-27): f64 GEMM 80-102% of OpenBLAS (1024x1024 13.31 vs 13.01 Gelem/s), f32 64x64 112% (15.79 vs 14.06 Gelem/s), other f32 sizes 94-100%. Gelem/s counts n^3 multiply-adds per second; the README's 'Gf/s' labels equal 16 x Gelem/s and overstate GFLOPS 8x (real GFLOPS = 2 x Gelem/s, e.g. Xeon f64 1024x1024 in 80.68 ms = 26.6 GFLOPS, derived from page data).",
+      "compiler_and_flags": "Rust 1.85+ (README badge); workspace [profile.bench] opt-level=3, lto=\"thin\", codegen-units=1; no RUSTFLAGS/target-cpu in the repo; cargo bench --package oxiblas-benchmarks --bench comparison --features compare-openblas (Criterion). OpenBLAS is the system package (brew / apt libopenblas-dev) reached through ndarray .dot() with ndarray-linalg openblas-system; rustc version, OpenBLAS version and thread counts not stated.",
+      "caveats": "First-party, README reads as heavily auto-generated. The README's Gf/s figures are mislabelled 8x too high (16 x Gelem/s instead of 2 x); its '220 GFLOPS peak' on a 4-core Xeon E5-2623 v4 exceeds that chip's AVX2 f64 peak (about 166 GFLOPS at base clock, derived), though the % ratios are unaffected. In benches/comparison.rs the OpenBLAS side calls ndarray a.dot(&b), which allocates a fresh n x n result each iteration, while OxiBLAS writes into a preallocated C, biasing small sizes toward OxiBLAS. Thread counts are not stated (the bench enables oxiblas-blas 'parallel'; OpenBLAS uses its default). On x86 it is mostly at or below OpenBLAS (80-102%); the main win is Apple M3 f32, where the 172% at 1024x1024 coincides with OpenBLAS f32 dropping from 54.36 to 32.59 Gelem/s between 512 and 1024, suggesting an OpenBLAS tuning or threading artefact. Apple Accelerate not compared."
+    },
+    "notes": "Ratios in the record match the README, but the absolute Gf/s values it quoted are the README's mislabelled numbers (8x too high), so claimed_speedup was rewritten in Gelem/s. Shortcoming worth recording: baseline-only allocation in the comparison bench and inflated GFLOPS labels. Apache-2.0, 43 stars, last commit 2026-08-06 confirmed; confirmed ndarray-linalg 0.18 default feature enables ndarray/blas, so .dot() does reach OpenBLAS.",
+    "urls_opened": [
+      "https://github.com/cool-japan/oxiblas",
+      "https://github.com/cool-japan/oxiblas/commits",
+      "https://raw.githubusercontent.com/cool-japan/oxiblas/HEAD/README.md",
+      "https://raw.githubusercontent.com/cool-japan/oxiblas/HEAD/crates/oxiblas-benchmarks/README.md",
+      "https://raw.githubusercontent.com/cool-japan/oxiblas/HEAD/crates/oxiblas-benchmarks/Cargo.toml",
+      "https://raw.githubusercontent.com/cool-japan/oxiblas/HEAD/crates/oxiblas-benchmarks/benches/comparison.rs",
+      "https://raw.githubusercontent.com/cool-japan/oxiblas/HEAD/Cargo.toml",
+      "https://raw.githubusercontent.com/cool-japan/oxiblas/HEAD/LICENSE",
+      "https://raw.githubusercontent.com/rust-ndarray/ndarray-linalg/HEAD/ndarray-linalg/Cargo.toml",
+      "https://raw.githubusercontent.com/rust-ndarray/ndarray-linalg/HEAD/lax/Cargo.toml"
+    ]
+  }
+]
