@@ -10,6 +10,25 @@ This run is in a locked-down cloud container. What works and what does not:
 - DOES NOT WORK: the `gh` CLI (search and api are blocked for other repos), api.github.com, github.com/search, export.arxiv.org API, crossref, dblp, curl to any host except raw.githubusercontent.com and package registries (pypi.org). Do not retry these.
 - Move on after 2 failed fetches of the same resource. Draft your output file early (a valid JSON array) and update it as you go.
 
+SESSION 2026-10-01 (evening) UPDATE, overrides the lines above where they differ:
+- Reachable: WebSearch (fresh shared budget of about 200 queries for ALL agents; use at most 10
+  WebSearch queries yourself), WebFetch on github.com, curl to raw.githubusercontent.com,
+  gitlab.com, bitbucket.org, sourceforge.net, pypi.org, crates.io API.
+- Still EGRESS_BLOCKED (do not try): arxiv.org (abs, pdf, export), hn.algolia.com,
+  news.ycombinator.com, semanticscholar, doi.org, dl.acm.org, ieeexplore, researchgate, openreview,
+  web.archive.org, zenodo, *.github.io, reddit, lobste.rs, medium, substack, dev.to, personal blogs.
+- Hacker News source (b8): run WebSearch with allowed_domains ["news.ycombinator.com"] (and plain
+  queries with "Show HN") to learn titles, linked projects and comment snippets; you cannot open the
+  thread. Then open the linked project on github.com and judge evidence from the repo. Note in
+  found_via which HN thread title led you there.
+- Blogs/talks source (b7): WebSearch finds posts; the post itself is usually blocked, so use the
+  result snippet only to learn the claim and the project, then open the project's repo. If the
+  numbers exist only in the blocked post, record them from the snippet, say "snippet only" in
+  caveats, and tier no higher than C unless the repo carries the benchmark.
+- Papers: arXiv is blocked. A copy is sometimes checked into a GitHub repo (paper.pdf, doc/*.pdf):
+  search WebSearch for '"<title>" pdf site:github.com' and fetch it via raw.githubusercontent.com,
+  then pdftotext it into your scratch dir.
+
 Privacy and file rules:
 - Never send the user's email, name or other personal identifiers to any outside service (URLs, headers, payloads). Do not build headers from `git config`. If an API wants a User-Agent, use exactly: User-Agent: fastpp-research-bot/1.0
 - Write nothing in the repository except your named output file. Before fetching anything to disk, run `mkdir -p` on your own scratch directory (given below) and save every file there by ABSOLUTE path. Never write a relative path like readme.md.
