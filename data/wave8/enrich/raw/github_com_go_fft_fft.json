@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/go-fft/fft",
+  "one_liner": "Pure-Go (no cgo) float64 FFT for any length; fastest pure-Go option, behind FFTW on most single-core 1-D sizes.",
+  "what_it_does": "A numpy.fft-style FFT package for Go: FFT/IFFT on []complex128, RFFT/IRFFT on []float64, FFT2/FFTN and their real variants on flat row-major data with an explicit shape, plus windows, FFTFreq, PSD and Spectrogram. Reusable NewPlan(n)/NewRealPlan(n) objects write into a caller-supplied dst (which may alias src); the convenience functions use an internal per-length plan cache and allocate a fresh output. Forward transforms are unnormalized and inverses divide by N, matching numpy. It is not FFTW-compatible and cannot be called from C++ without a cgo or C-ABI wrapper.",
+  "how_it_is_fast": "Lengths whose prime factors are all <= 13 run an iterative Stockham autosort engine modelled on pocketfft's passes (radix 8/4/2/3/5/7 straight-line passes, a general pass for 11 and 13, unit-stride inner loops, no bit-reversal, bounds-check-free loops). Large powers of two use an iterative radix-4 kernel; primes whose N-1 is 7-smooth use Rader's algorithm, and other lengths use Bluestein's chirp-z at a cost-model-chosen smooth convolution length. On amd64 the butterfly, Stockham pass and real-FFT untangle kernels are generated AVX2/SSE2 assembly (via go-asmgen) picked at run time; on arm64 the gc autovectorizer is used. Real transforms pack N reals into an N/2-point complex FFT, and 2-D/N-D transforms fan rows and columns across goroutines.",
+  "when_to_use": [
+    "Go programs that need FFTs with CGO_ENABLED=0 (static or cross-compiled binaries on amd64, arm64, riscv64, ppc64le, loong64 or s390x) and cannot link FFTW",
+    "Replacing gonum/dsp/fourier: faster at every size measured, typically 3-5x on composite N and 30x-200x on primes, where gonum uses a naive Bluestein",
+    "Large 2-D double-precision transforms (512x512 and up) on a multicore host, where its goroutine fan-out beat single-threaded FFTW (0.43-0.51x FFTW's time on M4 Max, 0.25x at 1024x1024 on Neoverse-N1)",
+    "Workloads that create many plans or use many distinct lengths: NewPlan at N=1,024 cost 14,808 ns vs 3,434,000 ns for an FFTW_MEASURE plan",
+    "Code that needs bit-reproducible results across amd64 builds: the SIMD kernels avoid FMA and are tested bit-identical to the scalar Go path"
+  ],
+  "when_not_to_use": [
+    "C++ projects: it is a Go module, so FFTW, PocketFFT, KFR or Admiral are the native choices",
+    "Single-core 1-D throughput against FFTW: in the fresh 2026-09-30 runs most 1-D rows still take 1.07x-2.92x FFTW's time, especially on Zen 3, where FFTW uses AVX2+FMA codelets and go-fft deliberately skips FMA",
+    "Single precision: only complex128/float64 is supported",
+    "Small 2-D shapes (64x64, 128x128): they ran 1.39x-3.20x slower than FFTW in the June snapshot, and on 64-128-thread hosts the GC cost of FFT2/FFTN's freshly allocated result slice dominates",
+    "Teams that need a stable API: there is no tagged release, the repo started in June 2026, and an allocation-free N-D entry point is still an open design decision"
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none (the library module has no dependencies; gonum is isolated in the separate benchmarks/ module)",
+    "min_toolchain": "Go 1.26.4 (go.mod)",
+    "platforms": "any Go 64-bit target; SIMD on amd64 (SSE2 baseline, AVX2 when CPU and OS allow, chosen at run time); arm64 relies on autovectorized Go; riscv64/s390x have only a SIMD complex-multiply kernel; ppc64le/loong64 run scalar code",
+    "thread_safety": "Plans are immutable after construction and safe for concurrent use by multiple goroutines (plan.go); per-call scratch comes from a sync.Pool; the package-level functions share an internal plan cache",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Plan.FFT/IFFT require dst and src to be exactly Len() long (behaviour on a wrong length is not documented), and FFT2/FFTN panic when the shape product does not equal len(data)",
+    "The package-level FFT, RFFT, FFT2 and FFTN allocate a new output slice on every call; use NewPlan/NewRealPlan for zero-allocation steady state (only 1-D has a dst-taking API)",
+    "On amd64 the AVX2 path keeps separately rounded multiply and add (no FMA) to stay bit-identical to the scalar code, which costs speed against FMA-using libraries",
+    "The README status paragraph still describes 'radix-2 Cooley-Tukey plus Bluestein', while its Performance section and BENCHMARKS.md describe the newer Stockham/Rader engines; the README tables are the June snapshot"
+  ],
+  "pick_this_over_siblings_when": "Pick it only when you are writing Go and must stay cgo-free; among the catalogued FFTs, PocketFFT, KFR and Admiral are the C++ choices, and RustFFT/PhastFT play the same role for Rust that go-fft plays for Go.",
+  "verified_claims_summary": "The author's public harness (benchmarks/run.sh plus a C FFTW driver) times steady-state float64 transforms with reused plans against FFTW 3.3.11 (Homebrew NEON, FFTW_MEASURE, one thread) on an Apple M4 Max and FFTW 3.3.10 built from source on an EPYC 7773X (Zen 3) and Neoverse-N1, with go1.26.4. In the June snapshot go-fft beat FFTW only on the 512x512 and 1024x1024 2-D rows, where it used all cores against single-threaded FFTW; the 2026-09-30 runs add single-threaded wins at complex 2^20 (0.81x on M4 Max, 0.67x on N1), prime 1009 on all three hosts (0.53x-0.75x) and RFFT 2^20 on N1 (0.92x), with most other 1-D rows 1.07x-2.92x slower than FFTW.",
+  "status_note": "Very active single-org project (48 commits from 2026-06-20 to 2026-10-01, 1 star, no releases); BSD-3-Clause, so easy to vendor in Go, but young and with no external users visible.",
+  "sources_read": [
+    "https://github.com/go-fft/fft",
+    "https://github.com/go-fft/fft/issues?q=is%3Aissue",
+    "https://github.com/go-fft/fft/commits/main",
+    "https://raw.githubusercontent.com/go-fft/fft/HEAD/README.md",
+    "https://raw.githubusercontent.com/go-fft/fft/HEAD/BENCHMARKS.md",
+    "https://raw.githubusercontent.com/go-fft/fft/HEAD/go.mod",
+    "https://raw.githubusercontent.com/go-fft/fft/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/go-fft/fft/HEAD/benchmarks/results/README.md",
+    "https://raw.githubusercontent.com/go-fft/fft/HEAD/benchmarks/run.sh",
+    "https://raw.githubusercontent.com/go-fft/fft/HEAD/benchmarks/cbench/fftw_bench.c",
+    "https://raw.githubusercontent.com/go-fft/fft/HEAD/plan.go",
+    "https://raw.githubusercontent.com/go-fft/fft/HEAD/fft.go",
+    "https://raw.githubusercontent.com/go-fft/fft/HEAD/stockham.go",
+    "https://raw.githubusercontent.com/go-fft/fft/HEAD/route_amd64.go"
+  ],
+  "confidence": 0.8
+}

@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/eth-cscs/tiled-mm",
+  "one_liner": "Out-of-core GPU GEMM on host-memory matrices for CUDA/ROCm; 2-4.7x faster than default cublasXt, on par with tuned cublasXt at n>=12000.",
+  "what_it_does": "Multiplies matrices that live in host (CPU) memory on one GPU, so they can be larger than device memory: it tiles them, streams the tiles to the GPU, and copies C back. The API is its own, not cublasXt's: gpu::gemm(handle, trans_a, trans_b, m, n, k, alpha, a, ld_a, b, ld_b, beta, c, ld_c, pin_host_buffers, copy_c_back) takes column-major host pointers. A reusable mm_handle created by gpu::make_context<T>(streams, tile_m, tile_n, tile_k) holds the streams, BLAS handles and device buffers. It is the GPU backend of COSMA.",
+  "how_it_is_fast": "It does tiled, multi-stream pipelining. Tiles of A and B (and of C on the first k-tile when beta != 0) are copied with async 2D memcpys into per-stream device buffers, and each stream runs cuBLAS or rocBLAS GEMM on its tile. Results are copied back on a separate result stream, ordered by events, so PCIe transfers overlap compute. Tile size (default 5000 per dimension) and stream count (default 2) are set per dimension, device buffers persist in the handle across calls, and copy_c_back=false keeps the full C on the device to skip the return copy.",
+  "when_to_use": [
+    "DGEMM/SGEMM/ZGEMM on matrices held in host memory that are too big for the GPU, or that you do not want to manage on the device yourself.",
+    "Replacing a default (untuned) cublasXt setup: the published chart shows 2.0x at n=4000 up to 4.7x at n=32000 on a P100.",
+    "Repeated large multiplies where a reusable context, pre-pinned host buffers and per-dimension tile sizes can be set up once.",
+    "Code that must run on both NVIDIA (CUDA) and AMD (ROCm/rocBLAS) GPUs through one host-pointer GEMM interface."
+  ],
+  "when_not_to_use": [
+    "Data already resident on the GPU: call cuBLAS or rocBLAS directly. Tiling and host transfers only add overhead.",
+    "Against a well-tuned cublasXt (tile 4000, pinned memory) at n >= 12000: the chart shows parity, and tuned cublasXt is slightly faster at n=20000 and 28000.",
+    "Half, bf16, int8 or tensor-core mixed precision: only float, double, complex<float> and complex<double> are instantiated, despite the README's 'arbitrary data types'.",
+    "Multi-GPU in one call: multi-device use is not documented (each handle wraps one context; the cublasXt comparison also selected one device). For multi-node GEMM use COSMA.",
+    "Code that cannot tolerate correctness risk without its own tests: wrong-result bugs were fixed in Feb and Jun 2024, and issue #19 (wrong NN results after 2.0 to 2.3) is still open."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "CUDA toolkit (cuBLAS, cudart) or ROCm rocBLAS. cxxopts (fetched by CMake) only for tests and examples.",
+    "min_toolchain": "C++14 (cxx_std_14), CMake 3.17+. README build example uses gcc-8.",
+    "platforms": "Hosts with an NVIDIA GPU (TILEDMM_GPU_BACKEND=CUDA) or an AMD GPU (ROCM).",
+    "thread_safety": "not documented. Each mm_handle owns its streams, BLAS handles and device buffers, and gemm() resizes those buffers, so use one handle per thread.",
+    "drop_in_for_baseline": "partial — it fills the same role as cublasXt (host pointers, tiling, overlap), but its signature is gpu::gemm with char transpose flags and a Tiled-MM handle, so call sites must be rewritten."
+  },
+  "gotchas": [
+    "The leading-dimension checks in tiled_mm.cpp build a std::runtime_error but never throw it, so ld_a/ld_b/ld_c smaller than the row count is accepted silently.",
+    "pin_host_buffers defaults to true, so each call registers and unregisters A, B and C with the driver. Allocate with gpu::malloc_pinned and pass false for repeated calls: the benchmark miniapp does this, so published timings exclude pinning.",
+    "The default context preallocates 2 streams x three 5000x5000 tiles, about 1.2 GB of device memory for double (derived from the defaults in mm_handle.hpp). The README's gpu::make_context() example omits the required template argument (make_context<double>()).",
+    "Issue #19 (opened 2024-06-21, no reply) reports wrong results for trans N/N on tall-skinny 46656x152x480 after upgrading from 2.0 to 2.3. A synchronization fix ('incorrect result would sometimes be returned') landed four days later in v2.3.1, but whether it resolves #19 is not documented."
+  ],
+  "pick_this_over_siblings_when": "Pick Tiled-MM for one GPU with host-resident matrices. Pick COSMA (which uses Tiled-MM underneath) or SPLA when the GEMM is distributed across MPI ranks. For device-resident data, the GPU GEMM kernels in this category (cuBLAS or the hand-written kernels) are the comparison, not Tiled-MM.",
+  "verified_claims_summary": "First-party chart (docs/performance.svg) on one Piz Daint P100 node with CUDA 10.1: double-precision square column-major GEMM with alpha=beta=1 on host matrices. Against default cublasXt it is 83 vs 167 ms at n=4000 (2.0x) up to 4044 vs 852 GFlop/s at n=32000 (4.7x). Against cublasXt tuned to tile 4000 with pinned memory it is 1.5x at n=4000, 1.17x at n=8000, and within about 1% from n=12000 up. Compiler, flags and host CPU are not stated, and the measured 2019 code was later fixed for wrong-result bugs.",
+  "status_note": "Stale but not abandoned: last commit 2024-12-06 (CMake/FetchContent cleanup; issue #24 notes a v2.3.2 git tag), maintained mainly as COSMA's backend. BSD-3-Clause and small (about 20 source files), so it is easy to vendor.",
+  "sources_read": [
+    "https://github.com/eth-cscs/Tiled-MM/tree/master/src/Tiled-MM",
+    "https://github.com/eth-cscs/Tiled-MM/issues?q=is%3Aissue",
+    "https://github.com/eth-cscs/Tiled-MM/issues/19",
+    "https://github.com/eth-cscs/Tiled-MM/commits/master",
+    "https://raw.githubusercontent.com/eth-cscs/Tiled-MM/HEAD/README.md",
+    "https://raw.githubusercontent.com/eth-cscs/Tiled-MM/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/eth-cscs/Tiled-MM/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/eth-cscs/Tiled-MM/HEAD/examples/compare.sh",
+    "https://raw.githubusercontent.com/eth-cscs/Tiled-MM/HEAD/examples/multiply.cpp",
+    "https://raw.githubusercontent.com/eth-cscs/Tiled-MM/HEAD/examples/cublasXt-multiply.cpp",
+    "https://raw.githubusercontent.com/eth-cscs/Tiled-MM/HEAD/examples/CMakeLists.txt",
+    "https://raw.githubusercontent.com/eth-cscs/Tiled-MM/HEAD/src/Tiled-MM/CMakeLists.txt",
+    "https://raw.githubusercontent.com/eth-cscs/Tiled-MM/HEAD/src/Tiled-MM/tiled_mm.hpp",
+    "https://raw.githubusercontent.com/eth-cscs/Tiled-MM/HEAD/src/Tiled-MM/tiled_mm.cpp",
+    "https://raw.githubusercontent.com/eth-cscs/Tiled-MM/HEAD/src/Tiled-MM/mm_handle.hpp",
+    "https://raw.githubusercontent.com/eth-cscs/Tiled-MM/HEAD/src/Tiled-MM/mm_handle.cpp",
+    "https://raw.githubusercontent.com/eth-cscs/Tiled-MM/HEAD/src/Tiled-MM/gpu_context.hpp",
+    "https://raw.githubusercontent.com/eth-cscs/Tiled-MM/HEAD/src/Tiled-MM/util.hpp"
+  ],
+  "confidence": 0.75
+}

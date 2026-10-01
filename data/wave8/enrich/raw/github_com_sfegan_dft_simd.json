@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/sfegan/dft_simd",
+  "one_liner": "Recipe and test code that runs FFTW genfft codelets on AVX2/AVX-512 vectors, 8 or 16 short DFTs per call; beats FFTW on bulk short transforms.",
+  "what_it_does": "A demonstration repository, not a library. It shows how to take a standalone scalar codelet emitted by FFTW's OCaml generator (genfft: gen_r2cf, gen_r2cb, gen_notw with -standalone -generic-arith) and compile it with the element type set to __m256 or __m512, so one call transforms 8 or 16 independent waveforms. It ships pre-generated real-to-complex forward codelets for N=60 (plus the N=60 backward codelet) and N=1024, and gtest programs that time them against fftwf_plan_dft_r2c_1d and fftwf_plan_many_dft_r2c. To use it you generate a codelet for your size, include it after the provided ADD/SUB/MUL/FMA/DK macro shims, and call it on data already interleaved by SIMD lane.",
+  "how_it_is_fast": "'Vertical' SIMD: each vector lane carries a different transform, so the codelet runs the exact scalar FFTW algorithm with no shuffles or horizontal combines, while FFTW's own SIMD codelets vectorise within a single transform and run partly scalar at small N. genfft codelets are fully unrolled straight-line code (the N=60 codelet is 374 adds and 154 multiplies), so with the size fixed at compile time there is no planner or loop overhead. Hard-coding the stride in the WS() helper removes the scalar address arithmetic that otherwise delays the vector pipelines; on the author's 2018 laptop this cut the N=60 time from 379 ms to 207 ms. Optional 2x unrolling uses a std::pair of vectors to fill pipelines when strides are variable.",
+  "when_to_use": [
+    "Millions of independent short real DFTs of one fixed size, such as digitised detector waveforms (the author's case: 60-sample Cherenkov-telescope traces), where an 8x-10x gain over FFTW at N=60 matters",
+    "x86-64 with AVX2+FMA or AVX-512 when you control the data layout and can store samples lane-interleaved (sample i of 8 or 16 waveforms in one vector)",
+    "Single-precision r2c/c2r at sizes up to about 1024, where the published gain over FFTW shrinks to roughly 1.7x (AVX2) and 2.3x (AVX-512) on an EPYC 9474F",
+    "Projects already GPL-compatible that can add an OCaml genfft step to the build to emit codelets for their own sizes and types (double-precision __m256d is mentioned as possible but untested)"
+  ],
+  "when_not_to_use": [
+    "A single large transform or variable sizes: there is no planner, and the README itself says long codelets grow as N log N and overflow the cache; the N=1024 codelet is already 700 KB of C with 1,370 stack variables",
+    "Data stored one waveform after another: the published timings do not include transposing into or out of the lane-interleaved layout, and FFTW given that layout (TransposedEight) was the slowest aligned FFTW case",
+    "Non-x86 targets: only AVX/AVX2/AVX-512 shims exist; the OpenCL path is a naive single-work-item experiment that was slower than the CPU codelet on an Iris 6100",
+    "Permissive-license products: the code is GPL-2.0-or-later (inherited from FFTW's generator), with only the README under CC-BY-SA-4.0",
+    "Production code needing tests of numerical output: the programs print lane 0 of the first result and never compare against FFTW"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "FFTW 3 (for the comparison tests and for genfft, which needs OCaml with ocamlbuild, unix and num to regenerate codelets); bundled googletest 1.8.0; OpenCL optional",
+    "min_toolchain": "C++11, CMake 3.5+; .travis.yml builds with GCC 4.9-7 and Clang 3.9-5.0; 2018 timings used Apple LLVM 9.0.0 and GCC 4.8.5; compiler for the 2025 runs not documented",
+    "platforms": "x86-64 with AVX+FMA (AVX2 for the 8-lane tests) or AVX-512F (16-lane test); CMake forces -march=native",
+    "thread_safety": "not documented; the codelets are pure functions of their arguments apart from static const vector constants, so independent calls should be safe, but this is not stated",
+    "drop_in_for_baseline": "false — no FFTW API; you call a generated codelet function with raw pointers, strides and a lane-interleaved vector layout, and must generate a codelet per size"
+  },
+  "gotchas": [
+    "Correctness bug in dft_simd_1024_avx512.cpp: its DK macro initialises a 16-lane __m512 constant with only 8 values, so lanes 8-15 of every twiddle constant are zero and half of the 16 transforms per call give wrong results; only lane 0 is printed, so the test does not show it. Timing is probably unaffected (same instruction stream), but copy the macro with 16 initialisers",
+    "FFTW's FNMA/FNMS meanings are swapped relative to Intel's intrinsics; the shims map FNMA to _mm*_fnmsub_ps and FNMS to _mm*_fnmadd_ps, and getting this wrong silently corrupts results",
+    "The r2cf codelet leaves Ci[0] (and Ci[N/2] for even N) untouched; the caller must zero them, and strides apply when indexing them",
+    "The FFTW_DESTROY_INPUT flag is set on every FFTW plan, and both sides re-transform the same in-cache buffer, so the comparison is of hot-cache compute only"
+  ],
+  "pick_this_over_siblings_when": "Pick this over FFTW-beating libraries such as Admiral or KFR only when the workload is a huge batch of identical short transforms and you can store data lane-interleaved; for anything else (one big FFT, many sizes, an FFTW-like API) Admiral, KFR or PocketFFT are real libraries, and VectorFFT is the catalogued library option benchmarked at small sizes (N=2 to 4,096 against MKL).",
+  "verified_claims_summary": "The author's gtest programs time 2^24 (AVX2) or 2^25 (AVX-512) single-precision real-to-complex transforms on one core against FFTW plans made with FFTW_MEASURE. On an AMD EPYC 9474F (2025; compiler and FFTW build not stated) the fixed-stride AVX2 codelet took 79 ms vs 858 ms for FFTW at N=60 (10.8x) and 7,270 ms vs 12,136 ms at N=1024 (1.67x, derived from page data); the AVX-512 codelet took 10,610 ms vs 24,657 ms (2.3x). In 2018 the N=60 codelet ran in 379 ms (207 ms fixed stride) vs 1,912 ms for the best FFTW plan on an i5-5287U with Apple LLVM 9.0.0, and 220 ms vs 2,194 ms on a Xeon E5-2650 v4 with GCC 4.8.5.",
+  "status_note": "A research note with test code by one author (LLR/Ecole Polytechnique), 79 commits from March 2018 to November 2025 and no issues filed; small enough to copy, but GPL-2.0-or-later, and you must regenerate codelets with genfft for any size other than 60 or 1024.",
+  "sources_read": [
+    "https://github.com/sfegan/dft_simd",
+    "https://github.com/sfegan/dft_simd/issues?q=is%3Aissue",
+    "https://github.com/sfegan/dft_simd/commits/main",
+    "https://raw.githubusercontent.com/sfegan/dft_simd/HEAD/README.md",
+    "https://raw.githubusercontent.com/sfegan/dft_simd/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/sfegan/dft_simd/HEAD/dft_simd.cpp",
+    "https://raw.githubusercontent.com/sfegan/dft_simd/HEAD/dft_simd_1024.cpp",
+    "https://raw.githubusercontent.com/sfegan/dft_simd/HEAD/dft_simd_1024_avx512.cpp",
+    "https://raw.githubusercontent.com/sfegan/dft_simd/HEAD/dft_r2cf_1024.c",
+    "https://raw.githubusercontent.com/sfegan/dft_simd/HEAD/dft_r2cf_60.c",
+    "https://raw.githubusercontent.com/sfegan/dft_simd/HEAD/.travis.yml",
+    "https://raw.githubusercontent.com/sfegan/dft_simd/HEAD/LICENSE"
+  ],
+  "confidence": 0.8
+}
