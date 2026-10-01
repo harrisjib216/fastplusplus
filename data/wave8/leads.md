@@ -67,3 +67,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - AD papers: arXiv 2602.15613 (expression-template AD for C++ DSLs), arXiv 2508.05371 (complex numbers in ET AD tools), arXiv 2307.06075 (Enzyme in CoDiPack).
 - arXiv 2603.14926 and 2607.11391 (branch-free SIMD multi-component multiprecision, follow-ups to the SC'25 MultiFloats paper; possibly independent evaluations).
 - tongsucn/hptt (separate C++14 HPTT implementation by a coauthor, 2 stars, no numbers); Cytnx-dev HPTT fork with Apple ARM patches.
+- Kiddo benches/profile_cpp_competitors.rs benchmarks nanoflann, ALGLIB and Pkd-tree (results on sdd.github.io, blocked here); notes say FASTANN's "exact" mode is an O(N) brute-force scan and ANN and libkdtree++ are slower than nanoflann.

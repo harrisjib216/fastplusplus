@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/ucrparlay/spacetreelib",
+  "one_liner": "Header-only parallel kd-, orth- and space-filling-curve trees with batch updates; 2-3x faster batch updates than a Zd-tree.",
+  "what_it_does": "PSI is a C++20 library of three in-memory parallel spatial indexes over fixed-dimension points: kd_tree (Pkd-tree), orth_tree (P-Orth, quad/oct-tree in any dimension) and p_tree (SPaC-tree, a balanced 1-D tree keyed by Morton or Hilbert code). All three share one API: build, batch_insert, batch_delete (points must be present), batch_diff (tolerates absent points), knn, range_count, range_query and flatten, plus single-point insert/erase wrappers. A docs/MANUAL.md table maps bgi::rtree calls onto PSI, but there are no predicates, no query iterators and no begin/end, and only points (no boxes or polygons) can be stored, so it is not a drop-in for Boost.Geometry's R-tree.",
+  "how_it_is_fast": "Build and batch updates are fork-join parallel on ParlayLib. kd_tree and orth_tree build a multi-level skeleton at once (default skeleton height 6, so 64 buckets per round), sieve points into the buckets in parallel blocks, recurse in parallel (serial below 1024 points, 32-point leaves) and rebuild only subtrees whose weight balance passes an imbalance ratio of 30%. The orth tree splits at spatial midpoints in every dimension per level (2^d children), so a batch update never has to re-pick splitters. p_tree sorts points by Morton (libmorton) or Hilbert code with a sample sort and stores them in a heavily modified fork of CPAM (a parallel augmented, blocked balanced tree with bounding-box augmentation), so batch insert and delete are CPAM multi_insert/multi_delete on a 1-D key.",
+  "when_to_use": [
+    "Update-heavy 2-D or 3-D point sets on a many-core server where whole batches arrive at once: in the repo's real-world CSV, SPaC-Z inserts all of Cosmo50 in 10^4 batches in 5.6 s vs 13.8 s for the Zd-tree implementation and 19.0 s for pristine CPAM-Z (derived from page data)",
+    "Mixed workloads that need both batch updates and fast k-NN: P-Orth k=10 uniform k-NN on Cosmo50 is 0.244 vs Zd-tree 0.301, while its 0.01% batch deletes total 17.9 s vs 800 s for the Pkd-tree in the same CSV",
+    "Query-heavy or higher-dimensional data (the generator covers 2-16 D): use kd_tree, which the library's own guide recommends for queries and higher dimensions",
+    "Replacing a bgi::rtree that is fed one point at a time from a single thread: the repo's Boost harness shows 134-495x faster whole-set loads, though against Boost's slowest construction path (see verified_claims_summary)",
+    "Research or benchmarking of parallel spatial indexes: it ships baselines (pristine CPAM, a Zd-tree implementation, Boost R-tree and CGAL drivers), a data generator and the PPoPP '26 and SIGMOD '25 scripts"
+  ],
+  "when_not_to_use": [
+    "Small queries or few cores: Boost's R-tree wins small range reports on all three real-world sets (Cosmo50 0.00044 vs P-Orth 0.00082), and single queries are sequential by design; every win comes from parallel batches",
+    "k-NN-heavy work on SPaC trees: SPaC-Z k=10 k-NN on Cosmo50 takes 11.5 vs 0.24 for P-Orth (about 47x slower), so pick the tree type per workload",
+    "Point-at-a-time updates: the manual calls a loop over insert/erase 'the wrong shape'; orth_tree also does not grow its bounding box, so inserting outside bounds() is an error",
+    "Boxes, polygons, segments, non-Euclidean metrics or approximate search: points only, Euclidean k-NN and axis-aligned box queries",
+    "Old toolchains, MSVC or a need for stable releases: CMake rejects g++ below 14 and clang below 19, only Linux/x86-64 builds are documented, and issue #1 asked for versioned releases; pin a commit"
+  ],
+  "integration": {
+    "form": "header-only (include/psi) with ParlayLib and libmorton as git submodules; CMake target PSI::PSI or find_package(PSI)",
+    "dependencies": "ParlayLib and libmorton (submodules, MIT); vendored CPAM fork (MIT) and a Rice University Hilbert-curve file that requires an attribution notice. Boost (bgi R-tree driver), CGAL+TBB (correctness oracles, CGAL=OFF by default) and jemalloc are only for benchmarks",
+    "min_toolchain": "C++20; CMake 3.15+; g++ 14+ or clang 19+ (enforced by CMakeLists.txt)",
+    "platforms": "Linux x86-64 documented; PSI_NATIVE_ARCH=ON by default adds -march=native and -mcx16 (x86 only, and the binary will not run on other CPUs; turn it off for portable builds). Other platforms not documented",
+    "thread_safety": "Manual: queries do not mutate the tree, so many can run at once (parallelise them yourself with parlay::parallel_for); build, batch updates and flatten are internally parallel and must not run concurrently with anything",
+    "drop_in_for_baseline": "partial — the manual gives a bgi::rtree to PSI mapping table, but PSI stores points only, has no query predicates or lazy iterators, writes results into caller buffers or returned sequences, and trees are move-only"
+  },
+  "gotchas": [
+    "batch_delete requires every point to be present; use batch_diff when some may be absent. In p_tree, points are identified by their id field, so every point needs a distinct id",
+    "Results from knn(point, queue) are references into tree-owned storage and dangle after any update; knn(point, k) returns copies. range_query into a too-small buffer silently truncates and returns the written count",
+    "PSI's -O3 and -march=native apply only to PSI's own targets: the manual warns that an unoptimised consumer build makes the index 'look broken rather than slow'. The orth tree's skeleton height must be a multiple of the dimension (static_assert)",
+    "The README says the code was refactored with AI help after the papers and some indexes are 'slightly affected'; commit af67b82 is the original design. bounds() is a loose bound after batch deletes (except in p_tree)"
+  ],
+  "pick_this_over_siblings_when": "Pick PSI over its predecessor Pkd-tree (ucrparlay/Pkd-tree, frozen) for new work: it contains the same kd-tree plus orth and SPaC trees, which handle small-batch updates far better. Pick nanoflann or PicoTree for single-threaded, static k-NN with no ParlayLib or C++20 requirement, and ArborX for GPU or Kokkos batched queries over boxes and other geometry.",
+  "verified_claims_summary": "The repo's PPoPP '26 real_world.csv (times presumably seconds; CPU model and compiler not stated, -march=native -mcx16, many-core machine) compares parallel PSI trees with a Zd-tree implementation, pristine CPAM and a quadratic<32> bgi::rtree. The fairest comparisons are the Zd-tree and CPAM rows, with two limits: the Zd-tree is the authors' own in-repo implementation built on PSI's base_tree (THIRD_PARTY.md), not the original ParGeo code, and the pristine CPAM copy differs from PSI's fork on the k-NN path. SPaC-Z batch updates at 0.01% are about 2-3x faster than that Zd-tree and about 2-3.4x faster than pristine CPAM-Z (derived from page data), and P-Orth matches the Zd-tree on updates while winning k-NN and large range reports. The 134-495x 'build' ratios over Boost compare a parallel build with n single-threaded single-point inserts (Boost's packing bulk-load was timed but dropped from the CSV), the Boost '0.0001' rows do half the work of PSI's, and the Boost k-NN columns use the wrong query points, so only the Boost range-query columns are like-for-like (both parallel; PSI 7-18x faster on large ranges, slower on small).",
+  "status_note": "Actively maintained (last commit 2026-09-09; 734 commits, 10 stars) MIT research library with CI, docs and a Docker artifact, but no documented release versioning; ship the THIRD_PARTY.md Rice University Hilbert-curve notice with any product.",
+  "sources_read": [
+    "https://github.com/ucrparlay/SpaceTreeLib",
+    "https://github.com/ucrparlay/SpaceTreeLib/issues?q=is%3Aissue",
+    "https://github.com/ucrparlay/SpaceTreeLib/tree/main/include/psi/orth_tree_impl",
+    "https://raw.githubusercontent.com/ucrparlay/SpaceTreeLib/HEAD/README.md",
+    "https://raw.githubusercontent.com/ucrparlay/SpaceTreeLib/HEAD/docs/ARTIFACT_EVALUATION.md",
+    "https://raw.githubusercontent.com/ucrparlay/SpaceTreeLib/HEAD/docs/MANUAL.md",
+    "https://raw.githubusercontent.com/ucrparlay/SpaceTreeLib/HEAD/docs/TREE_ANSWER.md",
+    "https://raw.githubusercontent.com/ucrparlay/SpaceTreeLib/HEAD/THIRD_PARTY.md",
+    "https://raw.githubusercontent.com/ucrparlay/SpaceTreeLib/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/ucrparlay/SpaceTreeLib/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/ucrparlay/SpaceTreeLib/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/ucrparlay/SpaceTreeLib/HEAD/script/merge_real_world.py",
+    "https://raw.githubusercontent.com/ucrparlay/SpaceTreeLib/HEAD/script/data/real_world/real_world.csv",
+    "https://raw.githubusercontent.com/ucrparlay/SpaceTreeLib/HEAD/tests/boost_rtree.cpp",
+    "https://raw.githubusercontent.com/ucrparlay/SpaceTreeLib/HEAD/include/psi/orth_tree.h",
+    "https://raw.githubusercontent.com/ucrparlay/SpaceTreeLib/HEAD/include/psi/orth_tree_impl/orth_build_tree.hpp",
+    "https://raw.githubusercontent.com/ucrparlay/SpaceTreeLib/HEAD/include/psi/p_tree.h",
+    "https://raw.githubusercontent.com/ucrparlay/SpaceTreeLib/HEAD/include/psi/p_tree_impl/p_batch_insert.hpp",
+    "https://raw.githubusercontent.com/ucrparlay/SpaceTreeLib/HEAD/include/psi/tree_traits.h"
+  ],
+  "confidence": 0.75
+}

@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/sdd/kiddo",
+  "one_liner": "Rust k-d tree for low-dimensional exact/approximate NN; 1.2-1.5x faster queries than nabo-rs; no C/C++ API.",
+  "what_it_does": "Kiddo is a Rust crate for nearest-neighbour search in 2-4 dimensions (no hard limit, but low-dimensional by design) over f64, f32, f16, fixed-point and u8/u16/u32 coordinates. v6 has one generic KdTree with ImmutableKdTree (build once from a slice, fastest queries, zero-copy rkyv 0.8 loading) and MutableKdTree (add, remove, replace_item) aliases. Queries go through a builder: nearest_one (exact or .approx()), nearest_n, within radius (sorted or unsorted), nearest_n within radius and best_n_within, with periodic boundaries and exclusive radius bounds; query_batch runs many queries across threads. It is a Rust API only: using it from C++ needs your own C-ABI or cxx shim, so it is not a drop-in for nanoflann or any C++ index.",
+  "how_it_is_fast": "Interior 'stem' nodes are stored implicitly in a cache-friendly array layout (Eytzinger order, and in v6 the alternative 'Donnelly' block ordering with configurable prefetch) and points live in fixed-size leaf buckets, so descent is index arithmetic rather than pointer chasing. Leaf scans and, in the Donnelly SIMD strategies, descent, pruning and backtracking use hand-written AVX2, AVX-512, NEON and wasm simd128 kernels (the 'simd' feature needs nightly Rust). The immutable tree is balanced at construction, and batch queries and construction are parallelised over the rayon thread pool by default.",
+  "when_to_use": [
+    "Rust services and pipelines doing many nearest-neighbour or radius queries on static 2-D to 4-D point sets (geocoding, star-catalogue cross-matching, colour-palette lookup, simulation neighbourhoods)",
+    "Prebuilt trees loaded from disk at startup: ImmutableKdTree with rkyv 0.8 supports zero-copy loading from memory-mapped files",
+    "Batched query workloads on multi-core machines, where query_batch spreads the queries over rayon",
+    "Periodic-boundary simulations (cosmology, molecular boxes) that need wrapped distance queries built in",
+    "Integer or fixed-point coordinates, which most C++ k-d trees do not support directly"
+  ],
+  "when_not_to_use": [
+    "C or C++ projects: there is no C API or header, so you must write and maintain an FFI layer (the crate is out of this catalog's C/C++ scope)",
+    "High-dimensional vectors (tens to thousands of dimensions): the README says plain k-d trees are the wrong structure there",
+    "Heavy insert/delete churn: MutableKdTree does no dynamic rebalancing, and the README suggests periodic rebuilds",
+    "When construction time dominates: on 1M 3-D f64 points Kiddo builds in 125-161 ms vs pykdtree's 92 ms in the author's suite",
+    "Stable-only toolchains that need the fastest path: the SIMD stem strategies require nightly Rust, and v6 needs Rust 1.89+"
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "Default features pull rayon (multi-threaded) and fixed; optional serde, rkyv 0.8, half (f16). The C++ competitor benches vendor nanoflann, ALGLIB and Pkd-tree behind a feature",
+    "min_toolchain": "Rust 1.89 (v6 MSRV; v5 needs 1.85); 'simd' feature needs nightly",
+    "platforms": "any Rust target; SIMD kernels for x86-64 AVX2/AVX-512, aarch64 NEON and wasm32 simd128; disabling multi-threaded supports WASM, embedded and single-core targets",
+    "thread_safety": "Queries take a shared reference and batch queries run on rayon by default; explicit Send/Sync guarantees are not documented in the README. Batch scheduling order is deliberately unspecified (results stay indexed by input position)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "v6 (2026-07-27) is a near rewrite with a builder query API: v5 calls such as nearest_one and within must be ported, rkyv 0.7 support is gone, and every published comparison number is for v1-v5",
+    "Many points sharing one coordinate on an axis have broken trees before: issue #475 (v5.3.2) reports MutableKdTree add panicking when 33 points share an axis value with bucket size 32. It is closed, but no fix is shown; test with your data or raise the bucket size",
+    "Issue #474 (v5.3.2, rkyv feature) reported an unsound conversion that freed a 128-byte-aligned allocation with 8-byte alignment through safe API; closed, fix not confirmed. v6.0.1 also fixed several fuzzer-found SIMD over-pruning and construction bugs, so stay on the latest 6.x",
+    "Batch queries are multi-threaded by default; a benchmark against single-threaded code (as the published scipy/sklearn comparisons do) measures threading, not the tree"
+  ],
+  "pick_this_over_siblings_when": "Pick Kiddo only if your code is Rust (or you will maintain an FFI shim) and you query static low-dimensional data in batches. For C++ use nanoflann, PicoTree or libnabo (whose Rust port nabo-rs Kiddo beats by 1.2-1.5x on queries); none of these C++ libraries appears in Kiddo's published results.",
+  "verified_claims_summary": "The author's Criterion suite (sdd/kd-tree-comparison, Ryzen 5900X, 32 GB, rustc version and flags not stated) times 1,000 queries per iteration on uniform random points (not the unit sphere the README describes). For 1M 3-D f64 points, Kiddo v3/v5 nearest-1/10/100 is about 1.2-1.45x faster than nabo-rs and 1.5-3.2x faster than pykdtree, and construction is slower than pykdtree (derived from page data). The 18-38x over scipy and sklearn compares rayon-parallel queries with single-threaded ones. The repo has an FFI harness against nanoflann, ALGLIB and Pkd-tree, but no results from it were found on a reachable page (sdd.github.io is blocked), so there is no measured C++ comparison.",
+  "status_note": "Actively maintained (v6.3.0 on 2026-09-06, CI, fuzzing, 176 stars), dual MIT/Apache-2.0 licensed; a strong choice in Rust, but outside the C/C++ scope with no C ABI.",
+  "sources_read": [
+    "https://github.com/sdd/kiddo",
+    "https://github.com/sdd/kiddo/issues?q=is%3Aissue",
+    "https://github.com/sdd/kiddo/issues/474",
+    "https://github.com/sdd/kiddo/issues/475",
+    "https://raw.githubusercontent.com/sdd/kiddo/HEAD/README.md",
+    "https://raw.githubusercontent.com/sdd/kiddo/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/sdd/kiddo/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/sdd/kiddo/HEAD/benches/profile_cpp_competitors.rs",
+    "https://raw.githubusercontent.com/sdd/kd-tree-comparison/HEAD/Readme.md"
+  ],
+  "confidence": 0.7
+}
