@@ -1,0 +1,56 @@
+{
+  "id": "https://github.com/vsj001/cache-aware-and-gpu-accelerated-sparse-matrix-vector-multiplication",
+  "one_liner": "Coursework-scale CUDA CSR-vector SpMV kernel (one warp per row) that edges out cuSPARSE CSR_ALG2 on three regular SuiteSparse matrices.",
+  "what_it_does": "A benchmark project, not a library: double-precision CSR SpMV implemented as CPU kernels (naive, cache-tiled, AVX2 with software prefetch) and CUDA kernels (CSR scalar, CSR vector, ELL) plus a cuSPARSE CSR_ALG2 reference, driven by one CLI (spmv_gpu --kernel scalar|vector|ell|cusparse|all --matrix file.mtx). Each kernel is exposed as an extern \"C\" launch_* function taking raw device pointers (int32 row_ptr/col_idx, double values/x/y) that launches once and returns its own event-timed milliseconds. To use it you would lift the roughly 20-line spmv_csr_vector_kernel into your own code.",
+  "how_it_is_fast": "The CSR-vector kernel assigns one 32-thread warp per row, so the lanes stride through a row's nonzeros with coalesced loads of values and col_idx, then combine partial sums with a __shfl_down_sync warp-shuffle tree reduction (block of 128 threads, 4 rows per block). This is the classic Bell and Garland CSR-vector scheme; it pays off when rows hold tens of nonzeros (cant, consph and pdb1HYS average about 64-119 nnz per row, derived from page data). There is no load balancing, no row binning and no adaptive selection between scalar and vector inside the kernel; the harness only decides whether to skip ELL.",
+  "when_to_use": [
+    "Learning or teaching GPU SpMV: a compact, readable side-by-side of CSR scalar, CSR vector, ELL and cuSPARSE with a roofline script and committed A100 results.",
+    "FEM or structural matrices with fairly uniform, moderately long rows (tens of nonzeros per row) where a plain warp-per-row kernel is enough and you want no library dependency.",
+    "As a starting point for your own fused SpMV (for example inside an iterative solver loop) where launching a cuSPARSE call per iteration is not wanted.",
+    "Double precision, 32-bit indices, matrices that fit on one GPU (tested on A100 sm_80; Makefile also targets sm_70 and sm_90)."
+  ],
+  "when_not_to_use": [
+    "Power-law or web-graph matrices: on webbase-1M cuSPARSE is about 4.2x faster (0.087 vs 0.365 ms), because the kernel has no load balancing for heavy-tailed rows.",
+    "Very short rows (about 1-5 nnz per row): on the committed 50K and 100K-row synthetic matrices the vector kernel takes 0.016-0.032 ms while the scalar and ELL kernels take 0.007-0.017 ms, since one warp per row idles most lanes.",
+    "Production code: no LICENSE file (all rights reserved by default), 4 commits, 0 stars, no tests beyond a --validate max-abs-error print, so it can only be read as a reference.",
+    "Anything needing float, complex, transposed SpMV, alpha/beta scaling, 64-bit indices or multiple right-hand sides; none are implemented.",
+    "When you need a decision-grade comparison: only one cuSPARSE algorithm (CSR_ALG2) was tried, on one GPU, with four real matrices."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "CUDA toolkit 12.x (tested with nvcc 12.3), cuSPARSE and cuBLAS linked by the Makefile; gcc for the CPU kernels",
+    "min_toolchain": "nvcc 12.x with -std=c++14; GPU sm_70 or newer per the Makefile options (sm_80 default)",
+    "platforms": "NVIDIA GPUs (A100 tested; V100 and H100 build targets); CPU kernels need x86-64 with AVX2",
+    "thread_safety": "not documented; each launcher uses the default stream and synchronizes on its own events",
+    "drop_in_for_baseline": "partial — the vector kernel takes the same zero-based int32 CSR device arrays that cusparseCreateCsr wraps, but it only computes y = A*x (no alpha/beta, no transpose, double only) and has no cuSPARSE-style handle or descriptor API"
+  },
+  "gotchas": [
+    "Reported GB/s counts every x[col] read as DRAM traffic, so figures above 100 percent of peak (pdb1HYS 1718 GB/s) reflect L2 reuse of x, as the README itself notes; the CSR arrays alone are about 48-72 MB per matrix (derived from page data).",
+    "The README pairs 'A100 80GB' with a 1555 GB/s peak, which is the A100 40GB figure; per vendor specs quoted in search results the 80GB SXM part is rated about 2039 GB/s, so the '98-110 percent of peak' framing is likely overstated if the card really was the 80GB model.",
+    "The cuSPARSE wrapper creates a new handle, CSR and vector descriptors and a workspace buffer on every call and times only the cusparseSpMV call; nothing is reused across iterations, and cuSPARSE takes about 0.021-0.036 ms even on the tiny synthetic matrices, so part of the 24-56 percent margin may be per-call cuSPARSE overhead rather than kernel efficiency.",
+    "The cuSPARSE launcher casts nnz to int and all index arrays are int32, so matrices above 2^31 nonzeros are out of scope; the committed run scripts use --iters 20 (the README's CLI default is 10), with one untimed warm-up."
+  ],
+  "pick_this_over_siblings_when": "Pick it only to read a minimal warp-per-row CUDA CSR kernel; for real GPU SpMV, ISpMV (2.17x geomean over cuSPARSE ALG2 on an H100, preprocessing excluded) or merge-spmv/CSR5 (load-balanced, peer-reviewed, robust on irregular matrices) are the better choices, and on CPUs CVR, SPC5 or ALBUS target MKL instead.",
+  "verified_claims_summary": "On one A100 (CUDA 12.3, nvcc -O3 -arch=sm_80), the hand-written CSR-vector kernel ran double-precision SpMV in 0.053, 0.078 and 0.051 ms on cant, consph and pdb1HYS versus 0.069, 0.097 and 0.079 ms for cuSPARSE CSR_ALG2 called through a freshly created handle each time (24-56 percent higher effective bandwidth), while cuSPARSE was about 4.2x faster on webbase-1M; all numbers come from the author's committed results/gpu/timings.csv.",
+  "status_note": "Single-author coursework-style repository (4 commits, all 2026-05-08, 0 stars) with no license, so it is reference-only and cannot be vendored.",
+  "sources_read": [
+    "https://github.com/VSJ001/Cache-Aware-and-GPU-Accelerated-Sparse-Matrix-Vector-Multiplication",
+    "https://raw.githubusercontent.com/VSJ001/Cache-Aware-and-GPU-Accelerated-Sparse-Matrix-Vector-Multiplication/HEAD/README.md",
+    "https://raw.githubusercontent.com/VSJ001/Cache-Aware-and-GPU-Accelerated-Sparse-Matrix-Vector-Multiplication/HEAD/Makefile",
+    "https://raw.githubusercontent.com/VSJ001/Cache-Aware-and-GPU-Accelerated-Sparse-Matrix-Vector-Multiplication/HEAD/src/Makefile",
+    "https://raw.githubusercontent.com/VSJ001/Cache-Aware-and-GPU-Accelerated-Sparse-Matrix-Vector-Multiplication/HEAD/src/gpu/spmv_csr_vector.cu",
+    "https://raw.githubusercontent.com/VSJ001/Cache-Aware-and-GPU-Accelerated-Sparse-Matrix-Vector-Multiplication/HEAD/src/gpu/spmv_cusparse.cu",
+    "https://raw.githubusercontent.com/VSJ001/Cache-Aware-and-GPU-Accelerated-Sparse-Matrix-Vector-Multiplication/HEAD/src/gpu/bench_gpu.cu",
+    "https://raw.githubusercontent.com/VSJ001/Cache-Aware-and-GPU-Accelerated-Sparse-Matrix-Vector-Multiplication/HEAD/src/gpu/gpu_utils.h",
+    "https://raw.githubusercontent.com/VSJ001/Cache-Aware-and-GPU-Accelerated-Sparse-Matrix-Vector-Multiplication/HEAD/src/gpu/spmv_kernels.h",
+    "https://raw.githubusercontent.com/VSJ001/Cache-Aware-and-GPU-Accelerated-Sparse-Matrix-Vector-Multiplication/HEAD/src/gpu/mtx_loader.cpp",
+    "https://raw.githubusercontent.com/VSJ001/Cache-Aware-and-GPU-Accelerated-Sparse-Matrix-Vector-Multiplication/HEAD/src/csr.h",
+    "https://raw.githubusercontent.com/VSJ001/Cache-Aware-and-GPU-Accelerated-Sparse-Matrix-Vector-Multiplication/HEAD/scripts/run_gpu.sh",
+    "https://raw.githubusercontent.com/VSJ001/Cache-Aware-and-GPU-Accelerated-Sparse-Matrix-Vector-Multiplication/HEAD/scripts/run_all.sh",
+    "https://raw.githubusercontent.com/VSJ001/Cache-Aware-and-GPU-Accelerated-Sparse-Matrix-Vector-Multiplication/HEAD/data/suitesparse/README.md",
+    "https://raw.githubusercontent.com/VSJ001/Cache-Aware-and-GPU-Accelerated-Sparse-Matrix-Vector-Multiplication/HEAD/results/gpu/timings.csv",
+    "https://raw.githubusercontent.com/VSJ001/Cache-Aware-and-GPU-Accelerated-Sparse-Matrix-Vector-Multiplication/HEAD/results/gpu/roofline.txt",
+    "WebSearch: NVIDIA A100 80GB memory bandwidth 2039 GB/s vs A100 40GB 1555 GB/s (snippets from nvidia.com/en-us/data-center/a100 and third-party spec pages)"
+  ],
+  "confidence": 0.8
+}

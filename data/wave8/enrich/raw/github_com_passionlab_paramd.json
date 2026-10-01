@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/passionlab/paramd",
+  "one_liner": "OpenMP parallel approximate minimum degree ordering, 2.9-8.5x faster than sequential SuiteSparse AMD on 64 cores.",
+  "what_it_does": "ParAMD computes a fill-reducing symmetric permutation (AMD ordering on the pattern of A+A^T) for sparse Cholesky or LU, the same job as SuiteSparse amd_order, but using all cores of a shared-memory node. It builds libparamd.so, a header (paramd/paramd.h) and a paramd CLI that reads a Matrix Market file and writes <matrix>.perm. The C++ API is a single call, paramd::paramd(n, rowptr, colidx, perm, config), taking an int32 CSR/CSC pattern (symmetrized internally) and returning the predicted number of Cholesky fill-ins; tunables live in paramd::config (mult, lim, mem, sym).",
+  "how_it_is_fast": "It keeps SuiteSparse AMD's quotient-graph machinery (approximate external degrees, supervariables, element absorption with aggressive absorption, dense rows above 10*sqrt(n) set aside) but replaces one-pivot-at-a-time elimination with multiple elimination. Each round it gathers candidates whose approximate degree is within a relaxation factor (mult, default 1.1) of the current minimum, capped at lim/threads (default 8192/threads), and picks a distance-2 independent set among them with Luby-style random priorities, so the chosen pivots share no neighbours and different threads can eliminate them concurrently. Degree lists are per-thread with thread affinity, new element lists are appended to a shared buffer through an atomic fetch-and-add, and the A+A^T symmetrization step is parallel too.",
+  "when_to_use": [
+    "Large sparse matrices (tens to hundreds of millions of nonzeros) where the AMD ordering itself takes seconds to minutes: stokes 79 s to 10 s and nlpkkt240 296 s to 35 s at 64 threads in the committed table.",
+    "Many-core shared-memory nodes (the benchmarks assume 64 physical cores, for example an AMD EPYC 7763) whose cores otherwise sit idle during the symbolic/analysis phase of a direct solver.",
+    "Workflows that reorder many different sparsity patterns, such as changing meshes or repeated analyse-factor cycles, where ordering time adds up.",
+    "When a few percent more fill (0.98x to 1.16x SuiteSparse's in the published runs) is an acceptable price for a faster ordering."
+  ],
+  "when_not_to_use": [
+    "Few cores or serial use: at one thread it ran at 0.44x to 1.01x the speed of SuiteSparse AMD, slower on 8 of 9 matrices.",
+    "One-shot factorizations of huge matrices where factor cost dwarfs ordering cost: nlpkkt240's predicted fill rises from 1.60e12 to 1.85e12 (1.16x), which can cost more in factorization time and memory than the 260 s saved on ordering (judgement derived from page data).",
+    "You need COLAMD, CAMD, constrained or column orderings, or SuiteSparse's Control/Info options: only symmetric AMD is provided (issue #1, January 2026, asks for COLAMD and is unanswered).",
+    "Matrices beyond 32-bit index range: vtype and etype are both int32_t and there is no 64-bit variant like SuiteSparse's amd_l_order.",
+    "Non-GCC or non-Linux toolchains without checking: the reader uses POSIX mmap and libstdc++ parallel mode (__gnu_parallel::sort), and the core needs OpenMP '#pragma omp atomic compare' support (GCC 13.2.1 was used)."
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "OpenMP (5.1 'atomic compare' support); optional SuiteSparse AMD (v7.10.1 in the scripts) only for the comparison mode of the CLI",
+    "min_toolchain": "C++17, CMake 3.22+, a GCC that supports '#pragma omp atomic compare' (GCC 13.2.1 used); Python 3.13 environment only for the benchmark plots",
+    "platforms": "Linux shared-memory multicore (tested on x86-64 AMD EPYC 7763, 64 cores); no SIMD or ISA requirement in the code",
+    "thread_safety": "not documented; each paramd() call opens its own OpenMP parallel region sized by OMP_NUM_THREADS, and concurrent calls from several host threads are not discussed",
+    "drop_in_for_baseline": "partial — takes the same int32 (n, Ap, Ai) pattern and fills a perm array like amd_order, but has no Control/Info arrays or 64-bit amd_l variant, returns a fill count instead of a status, and produces a different (slightly worse, thread-count-dependent) ordering"
+  },
+  "gotchas": [
+    "The quotient-graph buffer is malloc'd once at (1 + mem) times the symmetrized nonzero count (mem defaults to 1.5), and new element lists are appended at an atomically advanced offset with no capacity check and no compaction, unlike SuiteSparse AMD's garbage collection; if a matrix needs more elbow room the code would write past the buffer, so raise --mem for unusual inputs.",
+    "All offsets are int32 (etype): the reader checks that the file's nonzero count fits, but symmetric expansion roughly doubles it and the elbow room multiplies it by 2.5 at default settings, so inputs above roughly 850 million symmetrized off-diagonal entries would overflow 32-bit offsets (derived from the code).",
+    "Library code calls exit(1) on reader errors, malloc results are not checked, and the mmap failure test compares against NULL rather than MAP_FAILED; config::print() reports 'Symmetry enabled' from the stat flag instead of sym (cosmetic).",
+    "Orderings depend on the thread count (per-thread mt19937 seeded by thread id and per-thread candidate lists), so 1-thread and 64-thread fill-ins differ; the CLI randomly permutes the input first (--seed, default 1) to break ties, but a bare paramd() library call does not."
+  ],
+  "pick_this_over_siblings_when": "It is the only fill-reducing ordering among the catalogued sparse-and-solvers entries, so it complements rather than competes with them: put it in front of a direct solver such as CHOLMOD (or the task-based A64FX CHOLMOD entry), BaSpaCho or PanguLU when a sequential AMD step shows up in the analysis-phase profile.",
+  "verified_claims_summary": "On a 64-core AMD EPYC 7763 (GCC 13.2.1, OpenMP, CMake Release), ParAMD at 64 threads computed AMD orderings of nine SuiteSparse matrices 2.85x (nd24k) to 8.51x (nlpkkt240) faster than single-threaded SuiteSparse AMD v7.10.1, taking the median of five random symmetric permutations, with fill-in 0.98x to 1.16x of SuiteSparse's; at one thread it was 0.44x to 1.01x as fast. These are the authors' committed exemplar results (plots/scaling.csv), reproducible with scripts/build.sh and scripts/scaling.sh.",
+  "status_note": "Young Berkeley Lab project (v1.0.0, 4 commits April to November 2025, 9 stars, one open issue) under BSD-3-Clause with a Zenodo DOI; the arXiv paper 2504.17097 appears, per WebSearch snippets only, in the SIAM PP26 proceedings, which could not be confirmed because the publisher site is blocked here.",
+  "sources_read": [
+    "https://github.com/PASSIONLab/ParAMD",
+    "https://github.com/PASSIONLab/ParAMD/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/PASSIONLab/ParAMD/HEAD/README.md",
+    "https://raw.githubusercontent.com/PASSIONLab/ParAMD/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/PASSIONLab/ParAMD/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/PASSIONLab/ParAMD/HEAD/include/paramd/paramd.h",
+    "https://raw.githubusercontent.com/PASSIONLab/ParAMD/HEAD/bin/main.cpp",
+    "https://raw.githubusercontent.com/PASSIONLab/ParAMD/HEAD/src/paramd.cpp",
+    "https://raw.githubusercontent.com/PASSIONLab/ParAMD/HEAD/src/config.cpp",
+    "https://raw.githubusercontent.com/PASSIONLab/ParAMD/HEAD/src/matrix.cpp",
+    "https://raw.githubusercontent.com/PASSIONLab/ParAMD/HEAD/src/utils.cpp",
+    "https://raw.githubusercontent.com/PASSIONLab/ParAMD/HEAD/environment.yml",
+    "https://raw.githubusercontent.com/PASSIONLab/ParAMD/HEAD/scripts/build.sh",
+    "https://raw.githubusercontent.com/PASSIONLab/ParAMD/HEAD/scripts/scaling.sh",
+    "https://raw.githubusercontent.com/PASSIONLab/ParAMD/HEAD/scripts/download.sh",
+    "https://raw.githubusercontent.com/PASSIONLab/ParAMD/HEAD/plots/scaling.csv",
+    "WebSearch: \"Parallelizing the Approximate Minimum Degree Ordering Algorithm\" Chang Buluç Demmel (snippets from arxiv.org/abs/2504.17097 and ui.adsabs.harvard.edu)",
+    "WebSearch: ParAMD venue (snippets naming the 2026 SIAM Conference on Parallel Processing for Scientific Computing proceedings)",
+    "https://sparsitute.lbl.gov/publications (EGRESS_BLOCKED)",
+    "https://epubs.siam.org/doi/10.1137/1.9781611979022 (EGRESS_BLOCKED)"
+  ],
+  "confidence": 0.85
+}
