@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/jiaweichiu/mpsft",
+  "one_liner": "Research sparse Fourier transform (C++11) that recovers S dominant modes of a huge noisy spectrum faster than a full FFTW transform.",
+  "what_it_does": "Given a length-N time signal whose spectrum is S-sparse plus Gaussian noise, MPSFT returns the S heavy modes as a hash map (mode index -> complex coefficient) in roughly O(S) time, ignoring log factors, instead of computing all N outputs. It is research code with no packaged API: the entry points are mps::Iterate(x, IterateOptions, &ModeMap) and the Demo1 driver, which needs the mode count S and the noise level sigma up front to set bins and thresholds. It is not a replacement for a dense DFT; the output is approximate and probabilistic.",
+  "how_it_is_fast": "It follows the sFFT-style framework: a random spectral permutation and modulation (k -> a*k+b mod N) isolates modes into B ~ 2S+1 bins, and binning runs in the time domain with a Gaussian-smoothed boxcar window of support O(B log(1/delta)), followed by a small B-point FFTW transform. Each bin's mode location is decoded one bit at a time by sampling shifts tau = q +/- 2^s B and running a 2x2 matrix pencil SVD (Eigen JacobiSVD), which also rejects bins with mode collisions; an even/odd symmetry trick halves the number of sin/cos evaluations. The hot loop (BinInTime) is vectorized with OpenMP SIMD and Boost.SIMD sincos, which the report credits with at least 2x.",
+  "when_to_use": [
+    "Very long 1-D complex signals (N around 2^22 or more) whose spectrum is known to be dominated by a few hundred to about a thousand tones plus noise, and you only need those tones.",
+    "Fixed N with S well below ~1000 (against FFTW_MEASURE) or ~1800 (against FFTW_ESTIMATE): at S=64 it took 19.4 ms vs 102 ms (MEASURE) for a full 2^22 FFTW transform.",
+    "Workloads where N grows but S stays small: at S=50 runtime rose only from 7.7 ms (N=8191) to 20.5 ms (N=16777213) in the README table.",
+    "Studying or prototyping SFT algorithms; the code is small and the report explains each step (binning, matrix pencil, symmetry trick)."
+  ],
+  "when_not_to_use": [
+    "Dense or moderately sparse spectra: at N~2^22 it loses to FFTW_MEASURE somewhere between S=512 and S=1024 (140.8 ms at S=1024 vs 102.3 ms).",
+    "When you need an exact DFT: output is a probabilistic set of approximate modes; modes can be missed or spurious ones added.",
+    "Small or medium N, multi-dimensional, real-to-complex or batched transforms: none are implemented.",
+    "Production use: abandoned since 2017, no releases, no tests of robustness beyond the synthetic model, and the authors' own report says it is not competitive with sFFT1/sFFT2 at N~2^22 (it only overtakes them at N >= 2^23 / 2^25 with S=50).",
+    "Projects that cannot take GPL code (source headers are GPL-2.0-or-later) or the dated Boost.SIMD dependency."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "FFTW3 (small inner FFTs), Eigen3 (2x2 SVD), Boost.SIMD (boost/simd/* sincos), glog, Google Benchmark (benchmarks only), gperftools (demo1_main links -lprofiler); built with Bazel",
+    "min_toolchain": "C++11 with GCC (Bazel opt config passes -std=c++11 -O3 -ffast-math -mavx2 -fopenmp-simd and the GCC-only -fopt-info-vec-optimized); compiler versions not documented",
+    "platforms": "x86-64 Linux as configured (opt config requires AVX2; links -lrt); other platforms not documented",
+    "thread_safety": "Not thread-safe as written: Iterate and Transform draw random shifts from a single global, unsynchronized std::mt19937 in base.cc; nothing else documented.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "N should be prime: Transform draws any a in [1, N-1] and inverts it mod N, which only always works for prime N; all benchmarks use primes near powers of two (kPrimes table, 4194301 for 2^22) while FFTW was timed at exact powers of two.",
+    "Caller must know S and the noise level sigma: Demo1 sets bins = 2*(S - found)+1 (min 51), bin_threshold = 3 sigma/sqrt(B) and sv_threshold = sigma/sqrt(B); wrong values change both speed and recovery.",
+    "Spectrum convention is x_hat_k = (1/N) sum x_t e^(-2 pi i k t/N) (report), unlike FFTW's unnormalized forward transform; results come back as std::unordered_map<int32_t, complex<double>>.",
+    "Array<T> in base.h frees its buffer in the destructor but has no user-defined copy constructor, so copying a CplexArray shallow-copies the pointer and double-frees; call mps::MainInit first (seeds the RNG with a fixed seed and builds division magic numbers)."
+  ],
+  "pick_this_over_siblings_when": "Pick MPSFT over dense FFTs (FFTW, PocketFFT, KFR) only when the spectrum is truly sparse and you do not know where the peaks are; Auto-MPFT fits when you know which output coefficients you need, and FINUFFT is for non-uniform samples, not sparse spectra.",
+  "verified_claims_summary": "Single-core Google Benchmark runs on an Intel i7-6700K at 4 GHz (CPU scaling off), gcc with -O3 -ffast-math -mavx2, against a locally built FFTW 3.3.6-pl2: MPSFT at prime N=4194301 took 19.4/75.8/140.8/263.4 ms for S=64/512/1024/2048, while full FFTW transforms at N=4194304 took 225.3 ms (FFTW_ESTIMATE) and 102.3 ms (FFTW_MEASURE). So it wins by 5.3x over FFTW_MEASURE at S=64 and breaks even between S=512 and 1024 (derived from page data); the report's '<1800' crossover is against FFTW_ESTIMATE only.",
+  "status_note": "Abandoned research code (last commit 2017-09-03, 6 stars, no issues or releases), GPL-2.0-or-later per the source headers; useful as a reference implementation of matrix-pencil SFT, not as a maintained library.",
+  "sources_read": [
+    "https://github.com/jiaweichiu/mpsft",
+    "https://github.com/jiaweichiu/mpsft/tree/master/src",
+    "https://github.com/jiaweichiu/mpsft/commits/master",
+    "https://github.com/jiaweichiu/mpsft/tree/master/report2",
+    "https://raw.githubusercontent.com/jiaweichiu/mpsft/HEAD/README.md",
+    "https://raw.githubusercontent.com/jiaweichiu/mpsft/HEAD/report/report.pdf",
+    "https://raw.githubusercontent.com/jiaweichiu/mpsft/HEAD/report2/report.pdf",
+    "https://raw.githubusercontent.com/jiaweichiu/mpsft/HEAD/report3/report.pdf",
+    "https://raw.githubusercontent.com/jiaweichiu/mpsft/HEAD/src/BUILD",
+    "https://raw.githubusercontent.com/jiaweichiu/mpsft/HEAD/src/.bazelrc",
+    "https://raw.githubusercontent.com/jiaweichiu/mpsft/HEAD/src/base.h",
+    "https://raw.githubusercontent.com/jiaweichiu/mpsft/HEAD/src/base.cc",
+    "https://raw.githubusercontent.com/jiaweichiu/mpsft/HEAD/src/binner.h",
+    "https://raw.githubusercontent.com/jiaweichiu/mpsft/HEAD/src/binner.cc",
+    "https://raw.githubusercontent.com/jiaweichiu/mpsft/HEAD/src/iterate.h",
+    "https://raw.githubusercontent.com/jiaweichiu/mpsft/HEAD/src/iterate.cc",
+    "https://raw.githubusercontent.com/jiaweichiu/mpsft/HEAD/src/freqid.h",
+    "https://raw.githubusercontent.com/jiaweichiu/mpsft/HEAD/src/freqid.cc",
+    "https://raw.githubusercontent.com/jiaweichiu/mpsft/HEAD/src/demo1.h",
+    "https://raw.githubusercontent.com/jiaweichiu/mpsft/HEAD/src/demo1.cc",
+    "https://raw.githubusercontent.com/jiaweichiu/mpsft/HEAD/src/demo1_bench.cc",
+    "https://raw.githubusercontent.com/jiaweichiu/mpsft/HEAD/src/fftw_bench.cc",
+    "https://raw.githubusercontent.com/jiaweichiu/mpsft/HEAD/src/window.h",
+    "https://raw.githubusercontent.com/jiaweichiu/mpsft/HEAD/src/window.cc",
+    "https://raw.githubusercontent.com/jiaweichiu/mpsft/HEAD/src/integer.h",
+    "https://raw.githubusercontent.com/jiaweichiu/mpsft/HEAD/src/integer.cc",
+    "https://raw.githubusercontent.com/jiaweichiu/mpsft/HEAD/src/sincos.h",
+    "https://raw.githubusercontent.com/jiaweichiu/mpsft/HEAD/src/sincos.cc"
+  ],
+  "confidence": 0.8
+}

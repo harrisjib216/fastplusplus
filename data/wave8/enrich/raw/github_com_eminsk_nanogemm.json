@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/eminsk/nanogemm",
+  "one_liner": "Tiny AVX2/NEON float32 GEMM C kernel behind a Python extension; beats NumPy/OpenBLAS call latency for matrices up to ~64x64.",
+  "what_it_does": "A small C library (src/nanogemm_kernel.c/.h, extern \"C\" API: nanogemm_sgemm, nanogemm_matmul, nanogemm_bmm, nanogemm_gemm_i8i8i32) for row-major, contiguous float32 GEMM and int8 x int8 -> int32 GEMM, packaged mainly as a Python extension (ng.matmul, ng.sgemm, ng.bmm, ng.matmul_int8). The C sgemm takes M, N, K, alpha, beta and leading dimensions but has no transpose flags and no column-major mode, so it is not a CBLAS drop-in. On Windows the Python package can also load hand-written FASM DLLs.",
+  "how_it_is_fast": "Register-blocked outer-product micro-kernels: on x86 a 6x16 AVX2/FMA tile held in 12 ymm accumulators (broadcast an A element, two 8-wide B loads, two FMAs), with 4x16, 2x16 and 6/4/2x8 boundary kernels; on ARM a 4x8 NEON tile. Loops are cache-blocked (64x128x128) but nothing is packed, so there is no packing cost, no threading and no runtime dispatch; the Python wrapper calls the kernel through the buffer protocol with the GIL released. The speedup over NumPy at small sizes comes mostly from skipping per-call dispatch and output allocation rather than from faster arithmetic.",
+  "when_to_use": [
+    "Many tiny float32 matmuls (16x16 to ~64x64) called from Python in a loop, where NumPy's per-call overhead dominates and you can reuse a preallocated out= buffer.",
+    "You need a few hundred lines of dependency-free C to vendor for small row-major float32 GEMM on AVX2+FMA or NEON, and can live with a non-BLAS API.",
+    "Free-threaded or multi-threaded Python where you run independent small GEMMs in parallel threads (the kernel releases the GIL and is single-threaded per call).",
+    "Reading material: a compact example of a 6x16 AVX2 micro-kernel with boundary tiles."
+  ],
+  "when_not_to_use": [
+    "Matrices of 128x128 and up: the project's own table shows it slower than NumPy/OpenBLAS at 128x128 (0.77x), and with no packing or threading it falls further behind at larger sizes.",
+    "Anything needing float64, complex, transposed or column-major operands, or the rest of BLAS/LAPACK.",
+    "x86 machines without AVX2+FMA: the x86 build uses -mavx2 -mfma with no CPUID check, so the module will fault with an illegal instruction instead of falling back.",
+    "Production code that needs a mature, tested library: 3 stars, 0 forks, released in 2026, and its CI cannot fail (every step ends in '|| true'); pytest collects only the ISA test from tests/test_correctness.py because the other checks are named run_* rather than test_*.",
+    "Fast int8 inference: the int8 kernels widen to int32 and use _mm256_mullo_epi32 (no VNNI or vpmaddubsw path) and have no K blocking."
+  ],
+  "integration": {
+    "form": "source-drop (two C files) or Python extension (pip/conda; PyPI 0.3.8 ships only a cp314 win_amd64 wheel plus an sdist, so other platforms compile from source)",
+    "dependencies": "none for the C kernel; NumPy for the Python package",
+    "min_toolchain": "C99-style C with GCC/Clang target attributes or MSVC /arch:AVX2; Python >= 3.8 for the extension (exact compiler versions not documented)",
+    "platforms": "x86-64 with AVX2+FMA (required), aarch64/Apple Silicon NEON; scalar fallback only on other architectures",
+    "thread_safety": "Kernels keep no global state and allocate nothing, so concurrent calls on distinct outputs are safe (by code reading); the extension releases the GIL and declares Py_MOD_GIL_NOT_USED for free-threaded CPython.",
+    "drop_in_for_baseline": "partial — ng.matmul/ng.sgemm can replace NumPy '@' for 2D float32 row-major arrays, and nanogemm_sgemm resembles cblas_sgemm minus layout/transpose arguments; not ABI- or API-compatible with OpenBLAS"
+  },
+  "gotchas": [
+    "Possible memory-safety bug (code read, not run): ng.matmul without a backend argument calls the C fast path first, and that path checks only ndim and the inner dimension, not dtype, contiguity or the out= shape. float64 or non-contiguous inputs are read as if contiguous float32 (silent wrong results), and an undersized out= array is written past its end; the wrapper's own validation runs only if the C call raises.",
+    "Built with -ffast-math (/fp:fast on MSVC), so NaN/Inf propagation and summation order differ from IEEE-strict BLAS results.",
+    "get_simd_isa() reports the compile-time macros, not the running CPU; on MSVC (which does not define __FMA__) it reports 'AVX2' even though the FMA kernels are used.",
+    "Uses int for M, N, K and index arithmetic, so very large matrices can overflow (not an issue in the small-size range it targets)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over BLASFEO or Eigen only when the call site is Python and per-call overhead on tiny float32 matrices is the bottleneck; from C or C++, BLASFEO (small dense linear algebra with packed panel-major storage and LAPACK-style factorizations) or Eigen's fixed-size products are more complete and better tested.",
+  "verified_claims_summary": "First-party README table, timed through Python on an unnamed AVX2+FMA x86-64 CPU (GCC -O3 -mavx2 -mfma, single thread) against NumPy 2.2.3 '@' backed by OpenBLAS: 1.71 vs 4.05 us at 16x16, 4.21 vs 7.14 us at 32x32, 13.89 vs 19.69 us at 64x64, and slower at 128x128 (115.90 vs 89.44 us). The shipped benchmark reports mean loop time (the notebook takes best of 3), not the median the README states, NanoGEMM writes into a preallocated buffer while NumPy allocates each result, and the 7.26x headline at 24x24 rests on an outlying NumPy timing.",
+  "status_note": "Actively developed (last commit 2026-09-28, 62 commits, 0 issues), MIT-licensed and small enough to vendor, but very young, single-author and marketing-heavy; treat it as a Python micro-optimization rather than a BLAS replacement.",
+  "sources_read": [
+    "https://github.com/eminsk/nanogemm",
+    "https://github.com/eminsk/nanogemm/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/eminsk/nanogemm/HEAD/README.md",
+    "https://raw.githubusercontent.com/eminsk/nanogemm/HEAD/src/nanogemm_kernel.c",
+    "https://raw.githubusercontent.com/eminsk/nanogemm/HEAD/src/nanogemm_kernel.h",
+    "https://raw.githubusercontent.com/eminsk/nanogemm/HEAD/src/nanogemm_pyext.c",
+    "https://raw.githubusercontent.com/eminsk/nanogemm/HEAD/nanogemm/core.py",
+    "https://raw.githubusercontent.com/eminsk/nanogemm/HEAD/nanogemm/__init__.py",
+    "https://raw.githubusercontent.com/eminsk/nanogemm/HEAD/benchmarks/bench_vs_numpy.py",
+    "https://raw.githubusercontent.com/eminsk/nanogemm/HEAD/tests/test_correctness.py",
+    "https://raw.githubusercontent.com/eminsk/nanogemm/HEAD/.github/workflows/ci.yml",
+    "https://raw.githubusercontent.com/eminsk/nanogemm/HEAD/setup.py",
+    "https://raw.githubusercontent.com/eminsk/nanogemm/HEAD/pyproject.toml",
+    "https://raw.githubusercontent.com/eminsk/nanogemm/HEAD/LICENSE",
+    "https://pypi.org/pypi/nanogemm/json"
+  ],
+  "confidence": 0.75
+}

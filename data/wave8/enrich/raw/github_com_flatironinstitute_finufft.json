@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/flatironinstitute/finufft",
+  "one_liner": "CPU (and CUDA) nonuniform FFT library, types 1-3 in 1-3 dimensions, several times faster than NFFT3 and CMCL NUFFT.",
+  "what_it_does": "Computes nonuniform FFTs to a user-chosen relative tolerance: type 1 (nonuniform points to uniform Fourier modes, NFFT3's 'adjoint'), type 2 (modes to nonuniform points) and type 3 (nonuniform to nonuniform), in 1, 2 or 3 dimensions, single or double precision. The C/C++ API has simple calls (finufft2d1 etc.), vectorized 'many' calls for stacks of transforms sharing points, and a guru plan interface (makeplan, setpts, execute, execute_adjoint, destroy); MATLAB/Octave, Python (pip finufft / cufinufft), Fortran and Julia wrappers exist. It is not a drop-in for NFFT3: arrays are column-major, the exponent has no 2*pi factor (points live on a 2*pi-periodic box), and the tolerance must be passed explicitly; docs/nfft_migr.rst shows the conversion.",
+  "how_it_is_fast": "Standard spread / FFT / deconvolve NUFFT, but with a cheap compactly supported kernel evaluated on the fly by Horner piecewise polynomials and SIMD (xsimd) instead of precomputed kernel tables, so no point-dependent precomputation or large RAM is needed. Points are bin-sorted for cache locality and type-1 spreading is split into load-balanced subproblems across OpenMP threads; the inner FFT is FFTW (default) or DUCC0, which exploits the block sparsity of the upsampled 2D/3D grids. The 2019 paper introduced the 'exponential of semicircle' kernel; since v2.5.0 the default is a PSWF (prolate) kernel, and upsampfac=0 picks the oversampling factor (for example 2 or 1.25) from a density-aware cost model.",
+  "when_to_use": [
+    "MRI, cryo-EM, radio-astronomy imaging, spectral analysis of unevenly sampled data or PDE solvers that need sums of exponentials at nonuniform points, where a direct O(NM) sum or NFFT3 is too slow.",
+    "2-D and 3-D problems with up to millions of points at tolerances from about 1e-2 to 1e-12 in double precision (about 1e-5 in single), on multicore CPUs.",
+    "Repeated transforms with the same points: the guru or 'many' interface reuses the bin-sort and FFT plan, which the troubleshooting page says can be 10-100x faster than repeated simple calls on small problems.",
+    "NVIDIA GPU workloads through cuFINUFFT in the same repository, whose legacy README claims up to 10x over CPU FINUFFT and up to 100x over other established GPU NUFFT codes.",
+    "Projects that need one library with C, C++, Python, MATLAB/Octave, Fortran and Julia front ends under Apache-2.0."
+  ],
+  "when_not_to_use": [
+    "Data on a regular grid: a plain FFT is faster and exact, and type 1 and type 2 are adjoints, not inverses, so you cannot undo one with the other; NFFT3 has inverse NUFFTs, sphere and rotation-group transforms that FINUFFT lacks.",
+    "Very many tiny transforms through the simple interface, or very high thread counts: FFTW wisdom lookup costs about 0.1 ms per thread, and open issue #869 reports a 3-D grid running 50-80x slower at 96 threads than at 64 or fewer on a dual EPYC 9474F.",
+    "Tolerances near machine precision or large 1-D N in single precision: errors cannot beat roughly N_max times machine epsilon, and requests the library judges unreachable return error 26 unless opts.allow_eps_too_small is set.",
+    "Every regime against DUCC's own NUFFT: the project's docs say DUCC 'in some regimes is faster than ours', and NonuniformFFTs.jl is close on CPU and faster for real-valued data.",
+    "Bitwise reproducibility across thread counts: results vary at rounding level, by up to about 1e-11 relative in double with upsampfac=1.25 at tol 1e-7 to 1e-9."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "FFTW3 >= 3.3.6 single and double (default) or DUCC0 (fetched and bundled by CMake), xsimd and POET header-only (fetched), OpenMP (optional, ON by default); CUDA 11.8+ for cuFINUFFT",
+    "min_toolchain": "C++17, CMake 3.25; GCC 9+ recommended on x86-64 (GCC 8.5 can fail in xsimd with AVX-512); MSVC works on Windows",
+    "platforms": "Linux, macOS (Intel and Apple Silicon), Windows (MSVC or MinGW; Windows CI builds DUCC0 only), PowerPC64/64le cross-builds; NVIDIA GPUs via cuFINUFFT; builds default to -march=native",
+    "thread_safety": "Documented: safe with DUCC0; with FFTW, safe as long as no other thread creates or destroys FFTW plans outside FINUFFT (call fftw_make_planner_thread_safe() or pass opts.fftw_lock_fun/fftw_unlock_fun); set opts.nthreads=1 when calling from inside your own parallel region.",
+    "drop_in_for_baseline": "partial — the NFFT3 migration guide maps type-1 calls one to one, but coordinates must be rescaled by 2*pi and x/y swapped (row-major vs column-major), and NFFT3's inverse and special-geometry transforms have no equivalent"
+  },
+  "gotchas": [
+    "setpts keeps pointers to your nonuniform point arrays rather than copying them, so they must stay unchanged until the last execute that uses them.",
+    "The default FFTW plan mode is FFTW_ESTIMATE; FFTW_MEASURE gives faster repeated transforms but can spend many seconds planning on the first call.",
+    "v2.5.0 switched the default kernel to PSWF, which changes results at the tolerance level, and its kernel setup was not thread safe when plans are created concurrently (fixed in v2.5.1, #835/#838); open issue #839 reports a rare heap-corruption abort in that code path during parallel plan creation, not yet diagnosed.",
+    "Unreleased master (v2.6.0-dev) fixes a Windows fine-grid size wraparound that silently ran transforms on a tiny grid, a clang -fassociative-math build that folded points wrongly and segfaulted, and an icpx bin-sort miscompile; build from master or a later release if you hit these configurations."
+  ],
+  "pick_this_over_siblings_when": "It is the general-purpose NUFFT among the catalogued FFT entries: pick it over TRON when you need all three transform types, CPU support and arbitrary sampling rather than a GPU MRI gridding pipeline compared against gpuNUFFT. Uniform-grid FFT entries (Admiral, PocketFFT, VkFFT) and FFTW++'s padded convolutions solve a different problem and are only relevant as its inner FFT or for regularly sampled data.",
+  "verified_claims_summary": "docs/nfft_migr.rst times a 2-D type-1 transform of 500,000 random points to 300 x 200 modes at tol 1e-13, single thread on an AMD 5700U laptop: NFFT3 3.5.4alpha 0.589 s versus FINUFFT 0.0787 s (7.5x), with the same output to all printed digits (compiler and flags not stated; the timing uses clock()). The peer-reviewed 2019 SIAM J. Sci. Comput. paper, seen only through a WebSearch summary because arxiv.org is blocked here, reports NFFT 3.3.2 as 3-5x slower without precomputation and 2-4x slower with it, FINUFFT at least 2x faster than every other code tested on random points except MIRT at 1-digit accuracy, and CMCL NUFFT up to 50x slower even on one thread (docs/related.rst).",
+  "status_note": "Very active (3,747 commits, last commit 2026-09-30, release v2.5.1 of 2026-04-08 with v2.6.0 in preparation, CI across GCC, Clang, MSVC and CUDA 11.8-13.0) and Apache-2.0, maintained by the Flatiron Institute.",
+  "sources_read": [
+    "https://github.com/flatironinstitute/finufft",
+    "https://raw.githubusercontent.com/flatironinstitute/finufft/master/README.md",
+    "https://raw.githubusercontent.com/flatironinstitute/finufft/master/docs/related.rst",
+    "https://raw.githubusercontent.com/flatironinstitute/finufft/master/docs/nfft_migr.rst",
+    "https://raw.githubusercontent.com/flatironinstitute/finufft/master/docs/performance.rst",
+    "https://raw.githubusercontent.com/flatironinstitute/finufft/master/docs/trouble.rst",
+    "https://raw.githubusercontent.com/flatironinstitute/finufft/master/docs/opts.rst",
+    "https://raw.githubusercontent.com/flatironinstitute/finufft/master/docs/install.rst",
+    "https://raw.githubusercontent.com/flatironinstitute/finufft/master/docs/c.rst",
+    "https://raw.githubusercontent.com/flatironinstitute/finufft/master/include/finufft.h",
+    "https://raw.githubusercontent.com/flatironinstitute/finufft/master/CMakeLists.txt",
+    "https://raw.githubusercontent.com/flatironinstitute/finufft/master/CHANGELOG",
+    "https://raw.githubusercontent.com/flatironinstitute/finufft/master/tutorial/migrate2d1_test.c",
+    "https://raw.githubusercontent.com/ahbarnett/nufft-bench/HEAD/README.md",
+    "https://github.com/flatironinstitute/finufft/issues",
+    "https://github.com/flatironinstitute/finufft/issues?q=is%3Aissue+is%3Aopen+label%3Abug",
+    "https://github.com/flatironinstitute/finufft/issues/839",
+    "https://github.com/flatironinstitute/finufft/issues/869"
+  ],
+  "confidence": 0.8
+}

@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/wjc404/gemm_avx2_fma3",
+  "one_liner": "Archived 2019 AVX2/FMA3 OpenMP sgemm_/dgemm_ for very large matrices, 2-6% faster than MKL 2019u4 on an i9-9900K.",
+  "what_it_does": "Two shared libraries, DGEMM.so and SGEMM.so, built from one C driver and one assembly kernel file. They export the Fortran BLAS symbols dgemm_/sgemm_ (column-major, 32-bit integers, arguments by pointer) and compute C = alpha*op(A)*op(B) + beta*C for all four N/T transpose combinations. That is the whole API: no CBLAS wrapper, no other BLAS routines, and no argument checking. The bench/ folder holds a dlopen-based tester that times the library against statically linked MKL and prints the maximum absolute difference.",
+  "how_it_is_fast": "It is a Goto-style blocked GEMM. For each 256-deep K slice, the master thread packs the full-height panel of A into a shared 4096-byte-aligned buffer. Each thread packs its own alpha-scaled 256x256 block of B and runs a hand-written AT&T-syntax assembly micro-kernel. The kernel holds a 12x4 (double) or 24x4 (float) tile of C in 12 ymm accumulators, broadcasts B, does 3 aligned A loads per k step, issues explicit prefetcht0/prefetcht1 for upcoming A, B and C, and handles edges with vmaskmov. N is split statically across OpenMP threads, and a hand-rolled spin barrier (synproc with a ~3 us delay loop) replaces OpenMP barriers around each shared A-panel refill.",
+  "when_to_use": [
+    "Very large single- or double-precision GEMMs (the author recommends dimensions above 2000; numbers are given for 20000 and 45000) on an AVX2/FMA3 x86-64 Linux machine, run with all physical cores",
+    "Studying or reusing a compact (about 1,100 lines) Haswell-class GEMM with a full transpose-case driver and an assembly micro-kernel, under GPL-3.0",
+    "Benchmarking another dgemm_/sgemm_ shared library against MKL: the bench harness dlopens any library that exports those symbols"
+  ],
+  "when_not_to_use": [
+    "Small or medium matrices, or tall-skinny shapes: every call does aligned_alloc of an M x 256 A panel, packs it on one thread, and splits N statically across threads, so overhead and load imbalance dominate below the large-square regime",
+    "Code that must stay under a permissive license: it is GPL-3.0",
+    "AVX-512 machines, AMD Zen, or anything that is not Linux/ELF: block sizes are tuned for a Coffee Lake i9-9900K, and the kernel is ELF-only AT&T assembly built with -march=haswell",
+    "When you need the rest of BLAS, CBLAS, ILP64, complex types or input validation: use OpenBLAS, BLIS or MKL",
+    "Production use: archived since 2019-08-27, 1 star, no tests beyond the MKL-comparison bench"
+  ],
+  "integration": {
+    "form": "shared lib (DGEMM.so / SGEMM.so via the Makefile)",
+    "dependencies": "OpenMP (libgomp); the bench programs need Intel MKL (VSL RNG and dgemm as reference)",
+    "min_toolchain": "GCC with -fopenmp and C11 aligned_alloc; compiler version not documented",
+    "platforms": "x86-64 Linux with AVX2 and FMA3 (Haswell or later); tuned only on an Intel i9-9900K",
+    "thread_safety": "not documented; each call allocates its own buffers, but the driver assumes the OpenMP team equals omp_get_max_threads() (see gotchas)",
+    "drop_in_for_baseline": "partial: exports the Fortran LP64 sgemm_/dgemm_ symbols that MKL also exports, so code calling dgemm_ directly can link it first; there is no cblas_dgemm and no other BLAS routine"
+  },
+  "gotchas": [
+    "From reading gemm_driver.c (not tested): the driver splits N into omp_get_max_threads() chunks and spin-waits in synproc until that many threads check in. If the actual team is smaller (called from inside another parallel region with nesting off, OMP_DYNAMIC=true, or a thread limit), part of C is never computed and the call would spin forever. The barrier also uses plain non-atomic int reads, which works on x86 in practice but is a data race in C11 terms.",
+    "Pointer offsets such as LDC*cchunks[tid] are computed in 32-bit int, so matrices with more than about 2^31 elements (beyond ~46000 x 46000) overflow. aligned_alloc results are not checked for NULL.",
+    "No argument validation (no xerbla). With alpha=0 and beta=0, C is multiplied by 0 rather than zeroed, so NaN/Inf already in C survive, unlike reference BLAS.",
+    "Prebuilt test binaries (sgemmtest, dgemmtest, *_new) ship in bench/ and must be chmod +x to run; per the README the older pair links MKL 2018 and the *_new pair MKL 2019. Build your own from bench/*.c rather than running opaque binaries."
+  ],
+  "pick_this_over_siblings_when": "Pick it over cpu_gemm_opt or sgemm.c (salykova) when you need double precision and a standard Fortran dgemm_/sgemm_ entry point covering every transpose case for multi-threaded large matrices. Those two are sgemm teaching kernels measured against OpenBLAS. The author's successor GEMM_AVX2 adds per-CPU tuning headers (dgemm_tune.h, sgemm_tune.h) and claims to outperform MKL 2019u4 after tuning.",
+  "verified_claims_summary": "The author ran the bundled tester on an Intel Core i9-9900K (AVX offset 6, OMP_NUM_THREADS=8). The library was built with gcc -fopenmp -march=haswell -O2 (compiler version not stated) and timed against MKL 2019 update 4 linked statically with the GNU OpenMP layer, one call each per iteration with MKL first. At M=N=K=20000 it reached SGEMM 963-976 vs 944-951 GFLOPS and DGEMM 477-481 vs 466-469 GFLOPS (about 2-3%), and SGEMM at 45000 reached about 996 vs 943 GFLOPS (about 6%, derived from page data). Results matched MKL to about 1e-11 max absolute difference.",
+  "status_note": "Archived on 2019-08-27 and GPL-3.0. It is small enough to vendor as a reference kernel, but it is a parity-plus result on one desktop CPU with known driver hazards; the author's later GEMM_AVX2 (updated 2020-03-23) and GEMM_AVX512F repos supersede it.",
+  "sources_read": [
+    "https://github.com/wjc404/GEMM_AVX2_FMA3",
+    "https://raw.githubusercontent.com/wjc404/GEMM_AVX2_FMA3/HEAD/README.md",
+    "https://raw.githubusercontent.com/wjc404/GEMM_AVX2_FMA3/HEAD/Makefile",
+    "https://raw.githubusercontent.com/wjc404/GEMM_AVX2_FMA3/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/wjc404/GEMM_AVX2_FMA3/HEAD/bench/dgemmtest.c",
+    "https://raw.githubusercontent.com/wjc404/GEMM_AVX2_FMA3/HEAD/bench/sgemmtest.c",
+    "https://raw.githubusercontent.com/wjc404/GEMM_AVX2_FMA3/HEAD/src/gemm_driver.c",
+    "https://raw.githubusercontent.com/wjc404/GEMM_AVX2_FMA3/HEAD/src/gemm_kernel.S",
+    "https://raw.githubusercontent.com/wjc404/GEMM_AVX2_FMA3/HEAD/src/gemm_copy.c",
+    "https://raw.githubusercontent.com/wjc404/GEMM_AVX2_FMA3/HEAD/src/gemm_kernel_irreg.c",
+    "https://github.com/wjc404?tab=repositories",
+    "https://raw.githubusercontent.com/wjc404/GEMM_AVX2/HEAD/README.md"
+  ],
+  "confidence": 0.75
+}

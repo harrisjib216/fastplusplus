@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/notoriouslob/fastandfourier",
+  "one_liner": "C11 DSP library (FFT, DCT/DST, DWT, CWT, STFT) with IR interpreter plus runtime gcc JIT; beats KissFFT only at some sizes.",
+  "what_it_does": "A static C library that builds transforms from one faf_config struct (faf_create_fft, faf_create_rfft, DCT/DST I-IV, MDCT, STFT, five DWT families, CWT/CQT) and runs them with faf_execute on caller-owned buffer descriptors (split-plane by default, Hermitian-packed for R2C, interleaved opt-in). A bundled Scheme-like language, Chirp, compiles strings such as (pipeline (rfft :size 4096) (spectral notch) (irfft)) into one fused transform and lets you register your own C callbacks. It is not API-compatible with KissFFT or FFTW: different plan objects, layouts and normalization defaults (NumPy-style unscaled forward).",
+  "how_it_is_fast": "Transforms are lowered to a 34-opcode IR that either runs on a direct-threaded interpreter (VM) or is emitted as C with AVX2/AVX-512/NEON intrinsics, compiled at runtime by invoking gcc through system(), and dlopen'ed; the AUTO backend switches to the JIT at N >= 128. Version 1.1 added hard-coded split-plane codelets for N = 2-12, recursive split-radix DIF for powers of two >= 16, radix-2/3/4/5 mixed radix for 5-smooth sizes, Rader for primes with 7-smooth N-1, and optional Bluestein. Fused R2C -> pointwise -> C2R pipelines run as one generated kernel.",
+  "when_to_use": [
+    "You want a scriptable or config-driven DSP chain (filter banks, wavelet denoisers, matched filters) where FFT, DWT, CWT and STFT share one API and can be fused, more than raw FFT speed.",
+    "Replacing KissFFT on AArch64 for double-precision C2C at N = 8 or N >= 32 (author's run: 16.5 vs 21.7 us at N = 1024, 2238 vs 2735 us at N = 65536, ~1.1-1.8x).",
+    "Large power-of-two transforms on x86 AVX2 where the JIT engages (author's Feb 2026 run: 907 vs 3253 us at N = 65536).",
+    "Embedding into C projects that can tolerate a runtime C compiler, or builds with FASTANDFOURIER_SINGLE_HEADER=ON to stay VM-only."
+  ],
+  "when_not_to_use": [
+    "Raw FFT speed: the README itself says FFTW3 FFTW_MEASURE wins at nearly every size (3-10x ahead on its x86 table), and the same author's Notorious-FFT is 1.2-2.15x faster than FAF on aarch64.",
+    "Small and mid sizes on x86: the published x86 table has FAF 2.5-4x slower than KissFFT from N = 64 to 16,384 (e.g. 75.3 vs 27.1 us at N = 1024); it predates the 1.1 codelets and has not been re-run.",
+    "Hardened, multi-user or sandboxed processes: the JIT writes generated C and .so files to predictable names in /tmp (faf_jit_<pid>_<counter>), shells out to gcc with system(), and dlopen()s the result and any jit_<hash>.so found in $HOME/.cache/fastandfourier without integrity checks.",
+    "Transforms longer than 2^16 points (the VM register file is sized for N <= 65,536) or non-5-smooth lengths without opting into Bluestein (RFFT and DWT refuse it).",
+    "Production dependencies needing maturity: 0 stars, no tagged releases on the repo page, and benchmark tables with internal inconsistencies."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none at build time beyond libm, libdl and pthread on Linux; a system gcc at runtime for the JIT (otherwise VM only); tests and benchmarks fetch Google Test and Google Benchmark",
+    "min_toolchain": "CMake 3.18+, C11 compiler (C++17 only for tests)",
+    "platforms": "x86-64 (SSE4.2/AVX2/AVX-512) and AArch64 (NEON/SVE) on Linux, macOS and Windows per README; CUDA backend experimental",
+    "thread_safety": "faf_execute_jit_cached is documented thread-safe for concurrent first calls (compare-and-swap pins the kernel to the transform); error messages are thread-local; other guarantees not documented",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Release builds compile the library with -O3 -march=native -ffast-math -funroll-loops, and the JIT also compiles kernels with -ffast-math and -march=native (or -march=armv8.2-a+fp16 on AArch64 with the SIMD flag), so binaries and cached kernels are not portable to older CPUs and IEEE NaN/Inf semantics are not guaranteed.",
+    "The disk cache key is an FNV-1a hash of the IR, size, precision and flags only, not of the library version, compiler or CPU; a stale or foreign jit_<hash>.so in $HOME/.cache/fastandfourier is loaded as-is. faf_jit_destroy also unlinks ctx->so_path, which after a cache hit is the cached file itself, so the cache entry is deleted after it is reused.",
+    "The first JIT execution of each transform pays a full gcc invocation; non-power-of-two sizes and kernels that bake process pointers (FFT_STAGE, pipelines) are never disk-cached, so every process recompiles them.",
+    "Benchmarks drive the interleaved faf_execute_f64 path, which the README calls the slower convenience path; split-plane buffers are the fast path and require explicit faf_deinterleave/faf_interleave conversion."
+  ],
+  "pick_this_over_siblings_when": "For plain FFTs prefer Notorious-FFT (same author, faster on aarch64), PocketFFT or PFFFT, which beat KissFFT more consistently without a runtime compiler; pick FastAndFourier only when you need its breadth (DCT/DST, DWT, CWT/CQT, STFT, MDCT) behind one API and the Chirp scripting/fusion layer, and can accept the JIT's runtime-compiler and /tmp file model.",
+  "verified_claims_summary": "First-party Google Benchmark runs, double-precision C2C: on an unnamed 2.3 GHz AVX2 x86_64 Mac (macOS Ventura, -O3 -march=native -ffast-math, 2026-02-22) FAF beat KissFFT only at N = 65,536 (907 vs 3,253 us, about 3.6x) and lost 2.5-4x at N = 64-16,384, with FFTW3 measure fastest everywhere; on an unnamed 6-core 1.73 GHz aarch64 Linux box (-O3 -march=native, frequency scaling on, 2026-09-03) it beat KissFFT by ~1.1-1.8x at N = 8 and N >= 32 and lost slightly at N = 16. Compiler names and CPU models are not stated.",
+  "status_note": "Actively developed by a single author (last commit 2026-09-25, v1.2.0 commit on 2026-09-04) and MIT-licensed, but young, unstarred and with a security-sensitive JIT design, so treat it as experimental.",
+  "sources_read": [
+    "https://github.com/NotoriousLOB/FastAndFourier",
+    "https://github.com/NotoriousLOB/FastAndFourier/commits/master",
+    "https://github.com/NotoriousLOB/FastAndFourier/tree/master/src/jit",
+    "https://github.com/NotoriousLOB/FastAndFourier/tree/master/benchmarks",
+    "https://raw.githubusercontent.com/NotoriousLOB/FastAndFourier/HEAD/README.md",
+    "https://raw.githubusercontent.com/NotoriousLOB/FastAndFourier/HEAD/benchmarks/README.md",
+    "https://raw.githubusercontent.com/NotoriousLOB/FastAndFourier/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/NotoriousLOB/FastAndFourier/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/NotoriousLOB/FastAndFourier/HEAD/src/jit/faf_jit.c",
+    "https://raw.githubusercontent.com/NotoriousLOB/FastAndFourier/HEAD/include/fastandfourier.h",
+    "https://raw.githubusercontent.com/NotoriousLOB/FastAndFourier/HEAD/benchmarks/benchmark_comparison.cpp",
+    "https://raw.githubusercontent.com/NotoriousLOB/FastAndFourier/HEAD/benchmarks/bench_util.h"
+  ],
+  "confidence": 0.7
+}

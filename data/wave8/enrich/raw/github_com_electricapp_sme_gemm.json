@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/electricapp/sme-gemm",
+  "one_liner": "Rust crate of hand-written Apple M4/M5 SME GEMM kernels; edges out Accelerate sgemm/dgemm at mid-to-large sizes.",
+  "what_it_does": "Matrix multiply for Apple Silicon M4 and newer in f16, bf16, f32, f64, i8->i32, i16->i64 and 4-bit block-quantized weights, plus batched GEMM, pre-packed weights, fused epilogues (bias, activations, dequant scaling applied at the store) and flash attention. The API is Rust functions over slices (matmul_f32(&a, &b, &mut c, m, n, k), strided gemm_* with alpha/beta, a Gemm builder for epilogues), not a CBLAS/BLAS ABI. Optional candle and burn adapters; off Apple every entry point falls back to a portable scalar reference.",
+  "how_it_is_fast": "Kernels are C against arm_sme.h running in SME streaming mode with SVL=512: each output tile is accumulated in the 4 KB ZA array by outer-product MOPA instructions, two ZA tiles kept in lockstep so consecutive MOPAs do not collide. Because Apple has one SME unit per CPU cluster rather than per core, M-tile (or, for flat decode shapes, N-tile) chunks are spread over both the P- and E-cluster units with GCD dispatch_apply and work-stealing from an atomic cursor. Large problems use BLIS-style jc/ic blocking sized to the E-cluster L2, A is packed through ZA transposes while cache-resident, and small-B problems skip packing and load B directly.",
+  "when_to_use": [
+    "Rust code on Apple M4/M5 doing f32 GEMM in the 512^3 to 4096^3 range or tall-skinny shapes like 4096x512x512, where the README shows 1.03-1.22x over Accelerate cblas_sgemm on an M5.",
+    "f16/bf16 inference on M4/M5 from Rust, where Accelerate has no half-precision GEMM: about 2.3-2.8x over an upcast-to-f32 Accelerate path at 1024^3-4096^3, and native 16-bit accumulate on M5.",
+    "Inference layers that want GEMM plus bias/activation/dequant fused into one pass (README: fused bias+relu adds 5-27% to GEMM time, while the separate bias+relu row is 4-12x the GEMM time), int8/int16 GEMM, or 4-bit weights with a 4x smaller resident weight set.",
+    "Single-row decode shapes (1x4096x4096) against resident pre-packed weights, where packed SME measured 634 us vs 836 us for Accelerate.",
+    "f64 GEMM on an M5 specifically (0.46-0.61 vs 0.44-0.52 TF/s for Accelerate cblas_dgemm, ahead at every measured shape)."
+  ],
+  "when_not_to_use": [
+    "Small matrices or latency-bound calls: Accelerate cblas_sgemm has lower per-call time at every square size from 8^3 to 256^3 (e.g. 3.2 vs 7.9 us at 128^3), and below a flop floor (2^18, or 2^12 when m*n>=8) the crate runs its scalar reference at about 1 GFLOP/s.",
+    "f64 or i16 on an M4: those kernels need M5 features (FEAT_SME_F64F64, FEAT_SME_I16I64), so on M4 matmul_f64 silently falls back to the scalar reference, far slower than Accelerate dgemm.",
+    "Anything that is not macOS on Apple M4+ (Intel Macs, M1-M3, Linux/Windows aarch64, x86): no SME path, only the scalar fallback.",
+    "C/C++/Fortran code expecting a BLAS ABI, or Rust projects needing a crates.io release: there is no CBLAS interface, the crate is not on crates.io (404), and it needs Rust 1.97 (edition 2024) plus Apple clang 16+.",
+    "Production use needing maturity: first commit August 2026, 10 commits, 0 stars, no releases; the f32 win over Accelerate is small and mixed (Accelerate leads at 256^3 and 2048^3)."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "half; build-time cc crate and an Apple clang 16+ (Xcode 16) that accepts -mcpu=apple-m4, linking clang_rt.osx from the same toolchain; optional candle-core 0.11, burn 0.21, ort 2.0.0-rc.13 for adapters/benchmarks",
+    "min_toolchain": "Rust 1.97 (MSRV, edition 2024); Apple clang 16 / Xcode 16 for the C kernels",
+    "platforms": "macOS aarch64 on Apple M4+ for SME (f64, i16, native f16/bf16 accumulate and Q4 need M5); scalar reference fallback elsewhere",
+    "thread_safety": "Safe to call from multiple threads: per-thread scratch buffers, capabilities cached in a OnceLock, and tests/concurrency.rs checks bit-identical results from many threads sharing one pre-packed B; but each call already uses both clusters' SME units, so concurrent calls contend for the same two units",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Native f16/bf16 accumulate (Accum::F16/Bf16, M5) is about 2x the widening rate but its error grows about sqrt(K); a mismatched or unsupported Accum silently falls back to F32.",
+    "The fused relu/gelu/silu/tanh/sigmoid shortcuts share one in-register rational tanh with about 4e-2 error, visible on a bare .tanh() or .sigmoid(); scalar-divisor DIV is a reciprocal multiply about 1 ULP off (ARCHITECTURE.md section 6).",
+    "Integer SMOPA accumulation wraps silently on overflow (the oracle uses wrapping adds to match).",
+    "Benchmarks are best-of-N with constant-valued inputs (0.01/0.02), the f32 bench has no packed entry point, and some f16 cells in the comparison table come from the candle adapter or the inference_value example rather than vs_accelerate."
+  ],
+  "pick_this_over_siblings_when": "Pick sme-gemm when you are in Rust on an M4/M5 and need half-precision, int8/int16 or 4-bit GEMM with fused epilogues; for f32/f64 against Accelerate, MTGEMM-A reports a larger 1.18x f32 geomean over 24 workloads and apple-bottom targets DGEMM, while MPGEMM reports 1.23x average over Accelerate on SME.",
+  "verified_claims_summary": "First-party README tables from examples/vs_accelerate.rs on an Apple M5 (interleaved best-of-12 rounds, row-major no-transpose cblas_sgemm/cblas_dgemm writing preallocated C): f32 1.97 vs 1.61 TF/s at 512^3, 2.34 vs 2.03 at 1024^3, 2.14 vs 2.07 at 4096^3, but behind at 256^3 (1.50 vs 1.67) and 2048^3 (2.04 vs 2.14); f64 ahead at every shape (0.46-0.61 vs 0.44-0.52 TF/s). Kernels built with -mcpu=apple-m4 -ffp-contract=fast -O3 and Rust opt-level 3 with thin LTO; Apple clang and rustc versions not stated.",
+  "status_note": "Brand-new (first commit 2026-08-03, last 2026-09-30), single-author, active, 0 stars, not on crates.io; Apache-2.0 OR MIT, with a strict lint setup and 169 tests (oracle, proptest, guard-page, concurrency) that make it reasonable to vendor as a git dependency.",
+  "sources_read": [
+    "https://github.com/electricapp/sme-gemm",
+    "https://raw.githubusercontent.com/electricapp/sme-gemm/HEAD/README.md",
+    "https://raw.githubusercontent.com/electricapp/sme-gemm/HEAD/ARCHITECTURE.md",
+    "https://raw.githubusercontent.com/electricapp/sme-gemm/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/electricapp/sme-gemm/HEAD/build.rs",
+    "https://raw.githubusercontent.com/electricapp/sme-gemm/HEAD/examples/vs_accelerate.rs",
+    "https://raw.githubusercontent.com/electricapp/sme-gemm/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/electricapp/sme-gemm/HEAD/src/probe.rs",
+    "https://raw.githubusercontent.com/electricapp/sme-gemm/HEAD/src/kernels/f64.rs",
+    "https://raw.githubusercontent.com/electricapp/sme-gemm/HEAD/src/kernels/f32.rs",
+    "https://raw.githubusercontent.com/electricapp/sme-gemm/HEAD/src/exec/guard.rs",
+    "https://raw.githubusercontent.com/electricapp/sme-gemm/HEAD/tests/concurrency.rs",
+    "https://crates.io/api/v1/crates/sme-gemm (404, not published)"
+  ],
+  "confidence": 0.85
+}

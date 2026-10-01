@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/hpac/relapack",
+  "one_liner": "Recursive C replacements for LAPACK compute kernels (LU, Cholesky, LDL, trtri, Sylvester) that beat reference LAPACK's blocked versions.",
+  "what_it_does": "Provides recursive implementations of LAPACK compute routines (xgetrf, xpotrf, xpbtrf, xgbtrf, xsytrf and _rook, xtrtri, xlauum, xsygst/xhegst, xtrsyl, xtgsyl, plus the BLAS extension xgemmt) in all four precisions. Each routine is exported as RELAPACK_x and, when the INCLUDE_X flag in config.h is set (default: all), also under the Fortran LAPACK symbol (e.g. dgetrf_), so linking librelapack.a ahead of LAPACK replaces only the covered routines. QR, tridiagonal/bidiagonal/Hessenberg reductions and xpstrf are deliberately not covered.",
+  "how_it_is_fast": "Instead of LAPACK's fixed-block-size loops with BLAS-2 panel factorizations, each routine splits the matrix into two halves recursively (split point rounded so one half is a multiple of 8 or 16 elements for cache-line alignment) and does the trailing updates with large BLAS-3 calls (dtrsm, dgemm), so almost all FLOPs run in the tuned GEMM. Recursion stops at a crossover size (default 24) where LAPACK's unblocked xxxf2 kernel takes over, which removes the block-size tuning that blocked LAPACK needs. xsygst can use an n^2/2 scratch buffer to do about 30% fewer FLOPs than LAPACK (config.md).",
+  "when_to_use": [
+    "Code that calls reference LAPACK (or a LAPACK without tuned factorizations) for LU, Cholesky, LDL^T, triangular inversion or Sylvester solves and you want a faster drop-in without changing call sites.",
+    "Matrix sizes where blocked LAPACK's panel factorization is BLAS-2 bound and a good BLAS-3 is available underneath (OpenBLAS, BLIS, MKL, Accelerate).",
+    "Sylvester (xtrsyl, xtgsyl) and generalized symmetric-definite reduction (xsygst) workloads, which most tuned libraries leave as reference LAPACK code.",
+    "Building OpenBLAS with BUILD_RELAPACK=1 (and RELAPACK_REPLACE=1 to override the LAPACK symbols), which uses OpenBLAS's maintained copy of this code."
+  ],
+  "when_not_to_use": [
+    "QR, eigenvalue reductions (sytrd, gehrd, gebrd) and SVD: not covered, because recursive variants need extra FLOPs (coverage.md).",
+    "ILP64 (64-bit integer) builds: the upstream code uses plain int for every dimension and pivot; only OpenBLAS's copy was converted to blasint/INTERFACE64 (OpenBLAS commits 9a19616, 798c448, 2019).",
+    "Symmetric indefinite LDL^T (xsytrf/xhetrf) from upstream: the workspace size it reports and allocates (n*(n/2)) can be smaller than what the recursion writes when the split exceeds n/2; OpenBLAS fixed this on 2026-08-08 (commit 4a4cd8f, 'silently corrupting both the factorization and the heap'), upstream src/dsytrf.c still has the old formula.",
+    "When the vendor library already has recursive or parallel factorizations (OpenBLAS's own getrf/potrf, MKL): the gain over them is claimed in the paper but no numbers are in the repo, and the code was last compared with 2016-2017 OpenBLAS and MKL versions.",
+    "Projects needing an actively maintained upstream: the HPAC repo's last commit is a 2022 typo fix, its two issues are unanswered (issue #5 on XERBLA arguments is still open), and later bug fixes went only into OpenBLAS's copy."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "a BLAS plus LAPACK (for unblocked kernels such as dgetf2, dlaswp, dsytf2); tests need LAPACK 3.5.0 or newer",
+    "min_toolchain": "C99 compiler (make.inc default: gcc -O3 -std=c99 -pedantic); plain Makefile, no CMake",
+    "platforms": "any platform with a Fortran-convention BLAS/LAPACK; no architecture-specific code (speed comes from the BLAS underneath)",
+    "thread_safety": "not documented; from the source the routines keep no global state (stack values plus per-call malloc'd workspace), so concurrent calls rely on the underlying BLAS being thread-safe; ReLAPACK adds no threading of its own beyond what the BLAS does",
+    "drop_in_for_baseline": "partial — same Fortran LAPACK symbols and signatures for the covered routines when linked before LAPACK, but only 10 routine families (40+ routines) are covered, LP64 int only upstream, and MKL needs COMPLEX_FUNCTIONS_AS_ROUTINES=1 or ctrsyl/ztrsyl break"
+  },
+  "gotchas": [
+    "Complex-return calling convention: default is the gfortran struct-return style; with MKL set COMPLEX_FUNCTIONS_AS_ROUTINES=1 in config.h, otherwise ctrsyl/ztrsyl segfault or return errors of order 1 (config.md).",
+    "Hidden allocations: xsygst and xsytrf malloc n^2/2-sized buffers by default (ALLOW_MALLOC), and xpbtrf/xgbtrf call malloc unconditionally without a NULL check; OpenBLAS disabled the xsytrf reallocation in 2019 after memory problems in the LAPACK tests (commit 2cd463e).",
+    "Upstream lacks fixes that OpenBLAS's relapack/ copy carries: workspace sign errors and zero-size early returns in xgbtrf/xpbtrf (de63675, 2020), xGEMMT argument lists (2022, 2024) and the sytrf/hetrf workspace size (2026). Prefer OpenBLAS's copy if you can.",
+    "Upstream xgetrf passes the shared info pointer to the second recursive half, whose dgetf2 leaf resets it, so a zero pivot found in the left half may not be reported (read from src/dgetrf.c, not tested); OpenBLAS's copy returns early when info is set. A guide written for OpenBLAS builders also advises against BUILD_RELAPACK=1 because 'make lapack-test' shows too many errors."
+  ],
+  "pick_this_over_siblings_when": "Pick ReLAPACK when you want unchanged LAPACK call sites in C/C++/Fortran and need faster getrf/potrf/sytrf/trtri/trsyl on top of whatever BLAS you already use; BLASFEO is faster for matrices in the tens but uses its own panel-major API, and RecursiveFactorization.jl applies the same recursive-LU idea only to Julia and only to LU.",
+  "verified_claims_summary": "The repo states only that ReLAPACK outperforms reference LAPACK and improves on OpenBLAS and MKL; no numbers, hardware or compiler details are in any repo file. The measurements are in Peise and Bientinesi, arXiv:1602.06763 (ACM TOMS Algorithm 979), which could not be opened here (arxiv.org blocked), so the claim stays directional (tier D).",
+  "status_note": "Upstream abandoned (code from 2016-2017, last commit a 2022 typo fix) but MIT-licensed and small; the maintained copy with ILP64 support and bug fixes lives in OpenBLAS's relapack/ directory (optional BUILD_RELAPACK=1).",
+  "sources_read": [
+    "https://raw.githubusercontent.com/HPAC/ReLAPACK/HEAD/README.md",
+    "https://raw.githubusercontent.com/HPAC/ReLAPACK/HEAD/config.md",
+    "https://raw.githubusercontent.com/HPAC/ReLAPACK/HEAD/coverage.md",
+    "https://raw.githubusercontent.com/HPAC/ReLAPACK/HEAD/test/README.md",
+    "https://raw.githubusercontent.com/HPAC/ReLAPACK/HEAD/examples/README.md",
+    "https://raw.githubusercontent.com/HPAC/ReLAPACK/HEAD/config.h",
+    "https://raw.githubusercontent.com/HPAC/ReLAPACK/HEAD/make.inc",
+    "https://raw.githubusercontent.com/HPAC/ReLAPACK/HEAD/Makefile",
+    "https://raw.githubusercontent.com/HPAC/ReLAPACK/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/HPAC/ReLAPACK/HEAD/src/relapack.h",
+    "https://raw.githubusercontent.com/HPAC/ReLAPACK/HEAD/src/dgetrf.c",
+    "https://raw.githubusercontent.com/HPAC/ReLAPACK/HEAD/src/dpotrf.c",
+    "https://raw.githubusercontent.com/HPAC/ReLAPACK/HEAD/src/dsytrf.c",
+    "https://raw.githubusercontent.com/HPAC/ReLAPACK/HEAD/src/dsygst.c",
+    "https://raw.githubusercontent.com/HPAC/ReLAPACK/HEAD/src/dpbtrf.c",
+    "https://raw.githubusercontent.com/HPAC/ReLAPACK/HEAD/src/dgbtrf.c",
+    "https://github.com/HPAC/ReLAPACK/issues",
+    "https://github.com/HPAC/ReLAPACK/issues?q=is%3Aissue+is%3Aclosed",
+    "https://github.com/HPAC/ReLAPACK/issues/4",
+    "https://github.com/HPAC/ReLAPACK/issues/5",
+    "https://github.com/OpenMathLib/OpenBLAS/tree/develop/relapack",
+    "https://github.com/OpenMathLib/OpenBLAS/commits/develop/relapack",
+    "https://github.com/OpenMathLib/OpenBLAS/commit/de63675",
+    "https://github.com/OpenMathLib/OpenBLAS/commit/4a4cd8f",
+    "https://github.com/OpenMathLib/OpenBLAS/commit/2cd463e",
+    "https://raw.githubusercontent.com/OpenMathLib/OpenBLAS/develop/Makefile.rule",
+    "https://raw.githubusercontent.com/OpenMathLib/OpenBLAS/develop/relapack/relapack_config.h",
+    "https://raw.githubusercontent.com/OpenMathLib/OpenBLAS/develop/relapack/src/dgetrf.c",
+    "https://github.com/OpenMathLib/OpenBLAS/issues/788",
+    "https://github.com/bgeneto/build-install-compile-openblas",
+    "https://arxiv.org/abs/1602.06763 (EGRESS_BLOCKED)"
+  ],
+  "confidence": 0.75
+}

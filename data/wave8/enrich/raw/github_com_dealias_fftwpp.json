@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/dealias/fftwpp",
+  "one_liner": "C++ layer over FFTW3 whose implicitly/hybrid-dealiased convolutions beat explicit zero-padded FFT convolutions in 2D and 3D.",
+  "what_it_does": "Two things in one repository: a thin C++ class wrapper over double-precision FFTW3 (fft1d/2d/3d, real-to-complex, multiple 1-D transforms) that handles alignment, planning, wisdom and OpenMP threads, and a convolution engine for dealiased (anti-aliased) linear convolutions of complex, real and centered Hermitian data in 1, 2 and 3 dimensions. The convolution API is its own, not FFTW's: you build an Application (number of inputs A, outputs B, and a multiplier callback such as multBinary or a custom one), one fftPad/fftPadReal/fftPadHermitian per dimension, then a Convolution, Convolution2 or Convolution3 object and call convolve(F). C, Fortran and Python wrappers and OpenMP/MPI 2-D/3-D versions (mpi/) with an adaptive distributed transpose are included.",
+  "how_it_is_fast": "Implicit dealiasing (Bowman and Roberts, SIAM J. Sci. Comput. 2011) never transforms the padded zeros: it splits the padded transform into residue subtransforms and decouples work arrays from data arrays, so higher-dimensional convolutions need much less memory and gain data locality. Hybrid dealiasing (Murasko and Bowman, SIAM J. Sci. Comput. 2024) generalises this to arbitrary padding ratios, with explicit padding as a special case, and picks the subtransform size m, the number of residues processed at once D and in-place versus out-of-place by timing candidate configurations when the fftPad object is constructed. Multidimensional convolutions are decomposed into lower-dimensional ones, and the MPI code uses an adaptive hybrid OpenMP/MPI transpose instead of FFTW's MPI transpose.",
+  "when_to_use": [
+    "Pseudospectral PDE solvers (for example Navier-Stokes or turbulence codes) that evaluate quadratic nonlinearities as dealiased convolutions with the 2/3 or 1/2 padding rule, in 2-D or 3-D, where explicit zero padding costs memory and time.",
+    "Large 3-D convolutions that barely fit in RAM: per the 2011 paper implicit padding asymptotically needs 1/2^(d-1) of the memory of explicit padding.",
+    "Centered Hermitian-symmetric (real-field) spectral data, which has dedicated routines (fftPadHermitian, Convolution2/3 with Hermitian symmetrization helpers).",
+    "Distributed-memory runs with MPI plus OpenMP where FFTW's own MPI transpose is the bottleneck.",
+    "You want a small C++ RAII interface around double-precision FFTW3 with automatic wisdom and threading, regardless of convolutions."
+  ],
+  "when_not_to_use": [
+    "Plain FFTs: the fft classes call FFTW plans directly, so there is no speedup over FFTW itself.",
+    "Single precision, GPUs or non-FFTW back ends: everything is double-precision FFTW3 (no fftwf calls) on the CPU.",
+    "Closed-source products without a commercial FFTW licence: FFTW++ is LGPL-3.0-or-later but links FFTW, which is GPL.",
+    "1-D convolutions where speed is the goal: the 2024 paper reports hybrid dealiasing only matching or modestly beating explicit padding in 1-D; the big gains are in 2-D and 3-D.",
+    "Code that must not exit the process on error or write files: invalid parameters and failed plans call exit(), and planning reads and writes a wisdom file in the working directory."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "FFTW3 double precision plus libfftw3_omp (CMake requires both), OpenMP; MPI for mpi/; optional Array class (Array.h is bundled); Python, C and Fortran wrappers optional",
+    "min_toolchain": "C++11 (CMake sets CMAKE_CXX_STANDARD 11), CMake 3.15; flag sets for GCC, Clang, AppleClang, Intel and IBM XL",
+    "platforms": "Linux and macOS documented in CMake; x86-64 builds use -msse2 -march=native and an SSE2 complex-multiply path (cmult-sse2.h) with a generic fallback; Windows builds have needed fixes (issue #17)",
+    "thread_safety": "not documented; transforms and convolutions run multithreaded internally (OpenMP, fftw::maxthreads), but plan construction goes through FFTW's planner and a shared wisdom file without calling fftw_make_planner_thread_safe, so construct objects from one thread",
+    "drop_in_for_baseline": "partial — the FFT wrappers sit on FFTW but use their own C++ classes; the dealiased convolutions replace hand-written explicit zero-padding code and need the Application/fftPad/Convolution API"
+  },
+  "gotchas": [
+    "Constructing an fftPad object runs a timing search over subtransform sizes (repeated timed convolutions until the median stabilises within 2%), so construction is slow and the chosen m and D can differ between runs and machines; pass m, D and I to Application to pin them.",
+    "Planner() loads and saves FFTW wisdom in a file named wisdom3.txt in the current working directory (written via a temporary wisdom3.txt_<pid> and renamed), and fftw::effort defaults to FFTW_MEASURE.",
+    "Issue #26 (fixed 2026-08-12): Hermitian two-loop convolutions with more inputs than outputs (A > B, for example 15 to 3 channels) returned outputs with about 50% relative error; use a build from after that fix.",
+    "The CMake flags are -Ofast -ffast-math -march=native, so default builds are not portable across CPUs and relax IEEE semantics; the vcpkg port is a 2019 snapshot that predates the hybrid convolution code entirely."
+  ],
+  "pick_this_over_siblings_when": "Among the catalogued FFT entries it is the only CPU library aimed at dealiased convolutions for spectral solvers; pick FlashFFTConv instead for long 1-D convolutions in deep learning on NVIDIA GPUs, and FINUFFT when samples are nonuniform rather than needing a padded uniform convolution. For plain FFTs, a faster kernel such as Admiral or SFFT3 (3-D FFT built from FFTW 1-D transforms) matters more than this wrapper.",
+  "verified_claims_summary": "The baseline is explicit zero padding run through the same FFTW plans (tests/timing.py has -r implicit/explicit run types for the hybridconv* tests), so the win is algorithmic rather than a faster FFT kernel. Per WebSearch summaries of the papers (not opened; hosts blocked), the 2011 SIAM paper reports compute savings of about a factor of two from data locality and memory 1/2^(d-1) of explicit padding in d dimensions, and the 2024 hybrid paper reports matching or beating explicit dealiasing in 1-D and greatly outperforming it in 2-D and 3-D; no CPU, compiler or result data are committed to the repository.",
+  "status_note": "Actively maintained (2,942 commits, last commit 2026-08-12 fixing issue #26, header version 3.04) by its University of Alberta authors; LGPL-3.0-or-later, but any binary that links FFTW falls under the GPL unless FFTW is licensed commercially.",
+  "sources_read": [
+    "https://github.com/dealias/fftwpp",
+    "https://raw.githubusercontent.com/dealias/fftwpp/HEAD/README.md",
+    "https://raw.githubusercontent.com/dealias/fftwpp/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/dealias/fftwpp/HEAD/fftw++.h",
+    "https://raw.githubusercontent.com/dealias/fftwpp/HEAD/fftw++.cc",
+    "https://raw.githubusercontent.com/dealias/fftwpp/HEAD/convolve.h",
+    "https://raw.githubusercontent.com/dealias/fftwpp/HEAD/convolve.cc",
+    "https://raw.githubusercontent.com/dealias/fftwpp/HEAD/parallel.h",
+    "https://raw.githubusercontent.com/dealias/fftwpp/HEAD/cmult-sse2.h",
+    "https://raw.githubusercontent.com/dealias/fftwpp/HEAD/TODO",
+    "https://raw.githubusercontent.com/dealias/fftwpp/HEAD/examples/exampleconv2.cc",
+    "https://raw.githubusercontent.com/dealias/fftwpp/HEAD/tests/timing.py",
+    "https://raw.githubusercontent.com/dealias/fftwpp/HEAD/tests/options.cc",
+    "https://raw.githubusercontent.com/dealias/fftwpp/HEAD/tests/hybridconv2.cc",
+    "https://github.com/dealias/fftwpp/issues?q=is%3Aissue",
+    "https://github.com/dealias/fftwpp/issues/26",
+    "https://github.com/dealias/fftwpp/issues/23"
+  ],
+  "confidence": 0.7
+}

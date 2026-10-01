@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/eth-cscs/spla",
+  "one_liner": "MPI(+CUDA/ROCm) library for tall-and-skinny distributed GEMM with stripe layouts; outscales MKL ScaLAPACK pzgemm and Cray LibSci_acc.",
+  "what_it_does": "Provides distributed matrix products for layouts that ScaLAPACK cannot express directly: pgemm_ssb computes C = alpha*A^H*B + beta*C where A and B are row 'stripes' with a variable number of local rows per rank and C is block-cyclic (BLACS), mirrored or another supported distribution; pgemm_ssbtr does the same for a triangular C, and pgemm_sbs computes a stripe C from a stripe A and a block-distributed B. A local gemm() works like cuBLASXt and accepts any mix of host and device pointers. C++, C and (optional) Fortran interfaces; all calls take an spla::Context that holds reusable buffers, tile sizes and the processing unit (host or GPU).",
+  "how_it_is_fast": "pgemm_ssb is a distributed reduction (every rank contributes to every C element), and SPLA does it with a ring pattern after Del Ben et al.'s GW work (SC20): each rank computes a different block, passes the partial sum to its neighbour while computing the next one, and several block groups are interleaved so communication overlaps local zgemm calls. Internal block sizes are chosen independently of the output layout (with a final redistribution), and on GPUs each block runs on its own CUDA/HIP stream synchronized individually for MPI, which gives finer overlap than COSMA's grouped streams. Data can stay in device memory, avoiding host-to-GPU copies that otherwise limit scaling.",
+  "when_to_use": [
+    "Plane-wave / electronic-structure style products of two very tall stripe-distributed matrices (k in the millions, m and n in the thousands), e.g. wavefunction overlap A^H*B, where the README case is M=N=10k, K=1M complex double.",
+    "Runs at higher node counts where communication dominates: the README CPU plot shows parity with MKL ScaLAPACK at 36 sockets but about 1.6x per socket at 484 sockets (values read from plot).",
+    "GPU clusters with CUDA or ROCm, especially when A, B and C already live in device memory; the README GPU plot shows SPLA ahead of COSMA and Cray LibSci_acc at every node count from 36 to 484.",
+    "Codes already using SIRIUS (its CMakeLists requires SPLA 1.4.0+) or needing a cuBLASXt-like local gemm that mixes host and device pointers."
+  ],
+  "when_not_to_use": [
+    "General square or block-cyclic-by-block-cyclic distributed GEMM: SPLA only covers the stripe-stripe-block and stripe-block-stripe patterns; use ScaLAPACK p?gemm or COSMA.",
+    "Small CPU runs: at low rank counts COSMA is faster because SPLA must assign at least one block per rank for the ring (README), and SPLA only matches MKL at 36 sockets.",
+    "GPU runs with host-memory inputs at large node counts: blocks shrink, data is re-copied to the GPU more often and host-GPU bandwidth becomes the limit (README).",
+    "Projects needing active maintenance: last commit 2024-06-25 (v1.6.1, a HIP 6.0 fix), with open build issues (#35 SPLA_BUILD_EXAMPLES configuration failure, #24 tests fail to link, #17/#18 CMake package config).",
+    "Single-node or non-MPI applications: MPI is a hard requirement even for the library build."
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "MPI (required), BLAS chosen via CMake BLA_VENDOR (MKL, OpenBLAS, BLIS, ArmPL, Cray LibSci), optional OpenMP, optional CUDA (cudart + cuBLAS) or ROCm (HIP + rocBLAS); tests download googletest and CLI11",
+    "min_toolchain": "C++17 compiler, CMake 3.18+, CUDA 11.0+ for the CUDA backend (v1.6.0 release notes); Fortran compiler only for SPLA_FORTRAN=ON",
+    "platforms": "Linux HPC clusters; x86-64 and aarch64 hosts (ArmPL support since 1.5.3), NVIDIA GPUs via CUDA, AMD GPUs via ROCm",
+    "thread_safety": "not documented; the library throws MPIThreadSupportError ('MPI multi-threading support not sufficient') when the MPI thread level is too low, and the Context owns mutable buffers, so sharing one Context across threads is not documented as safe",
+    "drop_in_for_baseline": "partial — the benchmark expresses pgemm_ssb as an equivalent pzgemm('C','N') on a 1-D process grid, but the API is SPLA's own (Context, MatrixDistribution, local leading dimensions), not a ScaLAPACK descriptor interface"
+  },
+  "gotchas": [
+    "The Context must be destroyed before MPI_Finalize (README example comment), and it holds memory pools whose size can grow with use (allocated_memory_* accessors); custom allocators can be installed per host, pinned and GPU memory.",
+    "Below a 2mnk operation threshold (op_threshold_gpu) a GPU context may compute on the host instead; tile sizes and the number of tiles are tunable and the README notes a performance jump at 256 nodes when MPI messages cross Piz Daint's protocol threshold, so fixed block sizes may need manual tuning per system.",
+    "Errors are reported as C++ exceptions (GenericError hierarchy) in the C++ API and as SplaError codes in the C API.",
+    "Past bugs: a hang on a 6x6 MPI grid (issue #22, closed) and a deadlock when GPU input memory locations differed across ranks (fixed in 1.5.4); 1.6.0 did not compile with rocBLAS 6.0.2 until 1.6.1."
+  ],
+  "pick_this_over_siblings_when": "Pick SPLA over COSMA when the operands are tall-skinny stripes with C block-cyclic, particularly on GPUs or with device-resident data, where SPLA's plot shows it ahead at every node count; COSMA is the better choice for general shapes and for CPU runs below about 196 sockets. Tiled-MM (same group) covers only single-node GPU GEMM against cublasXt, not distributed products.",
+  "verified_claims_summary": "First-party README plots from Piz Daint (CPU: 2x18-core Xeon E5-2695 v4, two ranks per node; GPU: Xeon E5-2690 v3 + Tesla P100, one rank per node) for complex double M=N=10k, K=1M, block size 500: on CPU SPLA reaches parity with MKL ScaLAPACK at 36 sockets and about 1.6x at 484, and on GPU about 2.3x to 6x over LibSci_acc (values read from plots). Benchmark code exists in tests/programs/benchmark_scalapack.cpp, which times spla::pgemm_ssb and pzgemm/pdgemm on the same 1-D grid (100 repeats by default), but compiler, flags and library versions are not stated.",
+  "status_note": "Stale since v1.6.1 (June 2024) but BSD-3-Clause, CMake-installable and used by SIRIUS; expect to fix CMake packaging issues yourself.",
+  "sources_read": [
+    "https://github.com/eth-cscs/spla",
+    "https://raw.githubusercontent.com/eth-cscs/spla/HEAD/README.md",
+    "https://raw.githubusercontent.com/eth-cscs/spla/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/eth-cscs/spla/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/eth-cscs/spla/HEAD/include/spla/spla.hpp",
+    "https://raw.githubusercontent.com/eth-cscs/spla/HEAD/include/spla/context.hpp",
+    "https://raw.githubusercontent.com/eth-cscs/spla/HEAD/include/spla/pgemm_ssb.hpp",
+    "https://raw.githubusercontent.com/eth-cscs/spla/HEAD/include/spla/pgemm_sbs.hpp",
+    "https://raw.githubusercontent.com/eth-cscs/spla/HEAD/include/spla/gemm.hpp",
+    "https://raw.githubusercontent.com/eth-cscs/spla/HEAD/include/spla/matrix_distribution.hpp",
+    "https://raw.githubusercontent.com/eth-cscs/spla/HEAD/include/spla/types.h",
+    "https://raw.githubusercontent.com/eth-cscs/spla/HEAD/include/spla/exceptions.hpp",
+    "https://raw.githubusercontent.com/eth-cscs/spla/HEAD/docs/source/index.rst",
+    "https://github.com/eth-cscs/spla/tree/master/tests",
+    "https://github.com/eth-cscs/spla/tree/master/tests/programs",
+    "https://raw.githubusercontent.com/eth-cscs/spla/HEAD/tests/CMakeLists.txt",
+    "https://raw.githubusercontent.com/eth-cscs/spla/HEAD/tests/programs/benchmark.cpp",
+    "https://raw.githubusercontent.com/eth-cscs/spla/HEAD/tests/programs/benchmark_scalapack.cpp",
+    "https://github.com/eth-cscs/spla/issues?q=is%3Aissue",
+    "https://github.com/eth-cscs/spla/issues/22",
+    "https://github.com/eth-cscs/spla/releases",
+    "https://raw.githubusercontent.com/electronic-structure/SIRIUS/develop/CMakeLists.txt"
+  ],
+  "confidence": 0.8
+}

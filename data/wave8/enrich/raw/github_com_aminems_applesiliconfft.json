@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/aminems/applesiliconfft",
+  "one_liner": "Research Metal GPU and SME2 FFT kernels for Apple Silicon; M1 GPU N=4096 batch beats one-thread vDSP by 29%.",
+  "what_it_does": "This is research code for three of the author's preprints, not a library. It has Metal compute kernels for single-precision complex FFTs on Apple GPUs: fixed N=4096 radix-4/radix-8 variants, a multi-size kernel for powers of two from 256 to 16384, one-pass N=8192/16384 kernels for M6, and fused FFT-multiply-IFFT kernels for SAR range-Doppler imaging. It also has a C radix-8 FFT for the CPU's SME2 matrix unit (sme_fft_plan_create / sme_fft_execute / sme_fft_columns, N = 8^s). Swift host programs build, validate against vDSP and time each variant; there is no reusable C++ API.",
+  "how_it_is_fast": "Each GPU threadgroup holds a whole N=4096 transform in registers and uses the 32 KiB of threadgroup memory only as an exchange buffer between passes. Four radix-8 passes use a split-radix 8-point butterfly with twiddles from sincos, and Stockham autosort keeps device-memory access coalesced. On M6, one-pass N=8192/16384 kernels keep the transform on chip, so large batches make a single trip through DRAM and run near the 150 GB/s limit. The SME2 path writes each radix-8 butterfly, twiddles included, as a 16x16 real matrix applied with FMOPA outer products to 16 FFTs at once in a ZA tile (constant-geometry Pease DIF, batch-minor layout).",
+  "when_to_use": [
+    "As a reference when writing your own Metal FFT for one fixed power-of-two size (N=4096 complex FP32), where a register-resident single-threadgroup design matters",
+    "Large DRAM-resident batches of N=8192 or 16384 complex FP32 on an M-series GPU: on M6 the one-pass N=8192 kernel ran at 604 GF vs 257 GF for MPSGraph (batch 2048, hot)",
+    "Column FFTs of a row-major split-complex matrix on an M4-or-later CPU (SAR azimuth pass, second pass of a 2-D FFT): the SME2 column kernel needs no transpose and logged 2.7-5.3x over vDSP transpose+fftm+transpose at N up to 4096",
+    "Matched-filter style pipelines (FFT, pointwise multiply, IFFT) where fusing into one dispatch removes device-memory round trips: the fused SAR pipeline was 22x faster than the author's own unfused version on M1"
+  ],
+  "when_not_to_use": [
+    "Anything that needs a library: there is no packaged API, the GPU kernels are FP32 and powers of two only (the N=4096 kernels are hard-coded, multi-size covers 256-16384), and the SME2 path accepts only N = 64, 512, 4096 or 32768",
+    "Comparisons against a multithreaded CPU: the +29% is GPU-only time against a single-threaded vDSP_fft_zop loop timed by wall clock",
+    "L2-resident batches at N=16384 on M6: MPSGraph (805 GF) and the repo's own two-pass four-step kernel (708 GF) beat the one-pass kernel (220 GF)",
+    "Contiguous batched FFTs on the CPU with data already in vDSP's split-complex layout: once packing into the SME layout is counted, SME2 runs at 0.51-0.89x of vDSP for N >= 512",
+    "Non-Apple hardware, or Apple GPUs before M1: Metal and Apple Silicon only, macOS 13+; the SME2 code needs an M4 or later"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "Metal and Accelerate frameworks; Xcode Command Line Tools (swiftc, xcrun metal, clang); M6 harness: Swift 5.9+; plots: Python 3 with pandas and matplotlib (MLX 0.29.3 and NumPy for the landscape script)",
+    "min_toolchain": "macOS 13.0+ and Swift via Xcode CLT for the M1 code; Swift 5.9+ and clang -O3 -mcpu=apple-m4 for the M6/SME2 code; GPU matrix-unit modes need macOS 26+ and an M5-class GPU",
+    "platforms": "Apple Silicon only (M1 or later for the GPU kernels, M4 or later for SME2)",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The M1 host fft_host.swift compiles Metal source at run time and looks for fft_4096_mma.metal, which is not in the repo. The 138 GFLOPS kernel is src/fft_4096_radix8.metal (kernel function fft_4096_mma), so you have to copy or rename it; the README's xcrun metal/metallib steps are not what the host loads",
+    "The headline kernel is labeled inconsistently. Its header comment says stages 1-3 use simdgroup_matrix MMA, but all four passes call the scalar radix8_butterfly, and the README calls it both 'Radix-8 Stockham' and 'split-radix DIT'. The simdgroup_matrix kernel is the 128 GFLOPS fft_4096_ct_mma.metal",
+    "The hosts enable Metal fastMathEnabled, and the pass criterion is an L2 relative error below 1e-5 against vDSP",
+    "sme_fft_execute leaves output in base-8 digit-reversed order and batch-minor blocks of 16 FFTs (use sme_fft_unpack). Build with -mcpu=apple-m4, not -march=armv9, or the program dies with SIGILL. On M6, hot and cold runs differ by up to 3.7x"
+  ],
+  "pick_this_over_siblings_when": "VkFFT is the catalogued choice for a real GPU FFT library on Apple hardware (it has a Metal backend and arbitrary sizes). Pick AppleSiliconFFT only as reference kernels for Apple-specific tricks: register-resident one-pass N=8192/16384 kernels, fused SAR pipelines, or SME2 column FFTs on M4+ CPUs. For portable CPU FFTs, Admiral or PocketFFT apply instead.",
+  "verified_claims_summary": "On an Apple M1 (macOS and Xcode versions not stated), the radix-8 Metal kernel computed N=4096 complex FP32 FFTs in batches of 256 at a median 1.78 us per FFT of GPU-only time (138.45 GFLOPS by 5N log2 N), against 2.29 us (107 GF) for single-threaded vDSP_fft_zop timed by wall clock, so +29% is GPU vs one CPU core. On an Apple M6 (macOS 27.0, logs dated 2026-09-26), one-pass kernels beat MPSGraph about 2.3x at DRAM-resident N=8192 and lose about 3.7x at L2-resident N=16384. The SME2 FFT is 1.21-3.52x vDSP on contiguous batches before packing, 0.51-1.76x after, and 5.3x on N=512 x 256 column FFTs against vDSP transpose+fftm+transpose.",
+  "status_note": "Active as of 2026-09-26, with 5 commits and 6 stars. It is MIT-licensed research code tied to the author's preprints and is easy to copy kernels from, but it has no API, tests beyond the validation hosts, or packaging.",
+  "sources_read": [
+    "https://github.com/aminems/AppleSiliconFFT",
+    "https://github.com/aminems/AppleSiliconFFT/tree/main/src",
+    "https://github.com/aminems/AppleSiliconFFT/tree/main/m6/src/metal",
+    "https://raw.githubusercontent.com/aminems/AppleSiliconFFT/HEAD/README.md",
+    "https://raw.githubusercontent.com/aminems/AppleSiliconFFT/HEAD/m6/README.md",
+    "https://raw.githubusercontent.com/aminems/AppleSiliconFFT/HEAD/src/fft_4096_radix8.metal",
+    "https://raw.githubusercontent.com/aminems/AppleSiliconFFT/HEAD/src/fft_host.swift",
+    "https://raw.githubusercontent.com/aminems/AppleSiliconFFT/HEAD/src/fft_multisize_host.swift",
+    "https://raw.githubusercontent.com/aminems/AppleSiliconFFT/HEAD/benchmarks/Sources/vdsp_baseline_bench.swift",
+    "https://raw.githubusercontent.com/aminems/AppleSiliconFFT/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/aminems/AppleSiliconFFT/HEAD/m6/src/cpu/sme_fft.h",
+    "https://raw.githubusercontent.com/aminems/AppleSiliconFFT/HEAD/m6/results/stage5_fft.stdout",
+    "https://raw.githubusercontent.com/aminems/AppleSiliconFFT/HEAD/m6/results/stage5_col.stdout",
+    "https://raw.githubusercontent.com/aminems/AppleSiliconFFT/HEAD/m6/results/stage3_onepass.stdout",
+    "https://raw.githubusercontent.com/DTolm/VkFFT/HEAD/README.md"
+  ],
+  "confidence": 0.75
+}

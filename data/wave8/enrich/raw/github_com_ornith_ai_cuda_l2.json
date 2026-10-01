@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/ornith-ai/cuda-l2",
+  "one_liner": "1,000 per-shape fp16 GEMM CUDA kernels found by LLM-guided reinforcement learning; on average 7-12% faster than autotuned cuBLASLt on A100/3090/H100 (offline mode).",
+  "what_it_does": "A collection of CUDA source files, one per (M,N,K) shape per GPU and accumulator type (A100 fp16 and fp32 accumulate, RTX 3090 and H100 fp32 accumulate), each exposing a function such as cuda_l2_a100_fp32(a, b, b_col_major, c) that computes C = A*B in fp16 through a PyTorch C++ extension. The repo also ships the benchmark harness and cuBLAS/cuBLASLt wrappers it was compared against, plus per-shape result CSVs. It is not a GEMM library: there is no shape dispatch, alpha/beta, batching or general entry point, and a shape outside the released 1,000 has to be zero-padded up to a neighbouring released shape (or requested in an issue).",
+  "how_it_is_fast": "An LLM proposes kernel code and an RL loop rewards measured speed, so each shape gets its own tile sizes, pipeline depth and variant choice. The kernels inspected use standard Ampere-style tensor-core techniques: CuTe tiled mma.sync (SM80 16x8x16) with cp.async multi-stage shared-memory pipelines, swizzled shared-memory layouts and ldmatrix loads (e.g. the A100 64x4096x64 kernel: BM=64, BN=128, BK=32, 3 stages). The H100 64x4096x64 file uses hand-written PTX mma.sync, not Hopper wgmma/TMA, and times three variants on its first call to pick one. The win comes from per-shape specialization on small and skinny problems where cuBLAS heuristics pick poor configurations.",
+  "when_to_use": [
+    "Fixed, known fp16 GEMM shapes in an inference service (projection layers at a few batch sizes) on exactly an A100, RTX 3090 or H100, where the shape (or a slightly larger padded one) is in the released set",
+    "Small and skinny problems: from the per-shape CSVs (derived from page data), for 2MNK below 1e9 the geomean over cuBLASLt-AutoTuning is 1.24x on A100 and 1.13x on H100",
+    "Latency-sensitive serving with idle gaps between calls: the 'server' mode, with Poisson-spaced calls, shows larger gains (+12.7% A100, +22.1% H100 over cuBLASLt-AutoTuning) than back-to-back offline runs",
+    "As a reference for what per-shape CuTe/mma.sync tuning can recover over cuBLAS heuristics on Ampere"
+  ],
+  "when_not_to_use": [
+    "Large GEMMs: for 2MNK of 1e11 or more the per-shape CSVs give a geomean of about 0.98x (A100) and 0.91-0.94x (H100) against cuBLASLt-AutoTuning, and the worst shapes run at 0.545x (A100) and 0.209x (H100) (derived from page data)",
+    "Arbitrary or dynamic shapes: no runtime dispatch, and padding to a larger released shape spends extra flops",
+    "Other GPUs, or the same GPU family with different SM counts or clocks: the FAQ says A100 kernels are only expected to win on A100",
+    "FP32, BF16, FP8, batched or strided GEMM, or epilogues with alpha/beta/bias: only plain fp16 C = A*B with fp16 output",
+    "Projects that cannot take a PyTorch build-time dependency or need a C++ API without torch::Tensor"
+  ],
+  "integration": {
+    "form": "source-drop (one .cu per shape, built as a PyTorch C++/CUDA extension via torch.utils.cpp_extension.load)",
+    "dependencies": "PyTorch >= 2.6.0, NVIDIA CUTLASS/CuTe v4.2.1 headers, CUDA toolkit (cuBLAS/cuBLASLt only for the baselines)",
+    "min_toolchain": "nvcc with -std=c++17 (CUDA toolkit version not documented); TORCH_CUDA_ARCH_LIST 8.0 or 9.0a",
+    "platforms": "NVIDIA sm_80 (A100, RTX 3090 kernels) and sm_90a (H100 kernels) only",
+    "thread_safety": "not documented; the inspected H100 kernel keeps first-call autotuning state in unsynchronized static globals",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Callers must replicate the harness's input preparation: A, B and a pre-transposed B copy zero-padded to the kernel's BM/BN/BK multiples (the A100 kernel loops k/BK with no tail handling), and C allocated at the padded size and sliced afterwards.",
+    "Kernels launch with <<<grid, block>>> on the legacy default stream, not PyTorch's current stream, so they can serialize with or race against other streams' work.",
+    "Some H100 files time three variants with cudaEvents on the first call and cache the choice in a static, so the first call is slow and the choice is made once for the whole process.",
+    "Built with --use_fast_math. The harness's correctness gate tests only 0/1-valued inputs against a CPU FP32 reference (exact match required), so it is a weak check for general rounding behaviour. Issue #6 (open) reports eval_one_file.sh bugs, such as a wrong unknown-option message and rm failing on a fresh directory."
+  ],
+  "pick_this_over_siblings_when": "Pick CUDA-L2 for fixed small or skinny fp16 shapes on A100, RTX 3090 or H100. Pick blackwell-tensorcore-kernels for large square fp16 GEMM on sm_120, and gpu-compute for true-FP32 tiny GEMMs on Blackwell. Unlike CUDA-L2, those two are general kernels rather than a per-shape lookup.",
+  "verified_claims_summary": "First-party harness on an A100, an RTX 3090 and an H100 (host and CUDA version not stated), with kernels built with nvcc -O3 --use_fast_math against CUTLASS 4.2.1. Each call is timed by host wall clock around one synchronized launch, with the cuBLAS layout (TN or NN) that is faster for each shape. Averaged over 1,000 shapes (64 to 16384 per dimension), the offline gain over autotuned cuBLASLt (20 GB workspace) is +12.2% on A100, +12.7% on RTX 3090 and +7.0% on H100 for fp32 accumulate. These are arithmetic means of per-shape ratios; geometric means are 1.11x (A100) and 1.056x (H100), and 300 and 338 shapes respectively are slower than cuBLASLt (derived from page data).",
+  "status_note": "Research artifact from DeepReinforce (MIT, 482 stars, 21 commits; H100 kernels added 2026-03-30, the last commit) with open harness bugs. It is copyable kernel by kernel, but it is a per-shape snapshot rather than a maintained library, and no independent reproduction turned up in one web search.",
+  "sources_read": [
+    "https://github.com/ornith-ai/CUDA-L2",
+    "https://raw.githubusercontent.com/ornith-ai/CUDA-L2/HEAD/README.md",
+    "https://raw.githubusercontent.com/ornith-ai/CUDA-L2/HEAD/tools/utils.py",
+    "https://raw.githubusercontent.com/ornith-ai/CUDA-L2/HEAD/compile.py",
+    "https://raw.githubusercontent.com/ornith-ai/CUDA-L2/HEAD/eval_one_file.sh",
+    "https://raw.githubusercontent.com/ornith-ai/CUDA-L2/HEAD/benchmarking_utils.py",
+    "https://raw.githubusercontent.com/ornith-ai/CUDA-L2/HEAD/benchmarking_offline.py",
+    "https://raw.githubusercontent.com/ornith-ai/CUDA-L2/HEAD/benchmarking_server.py",
+    "https://raw.githubusercontent.com/ornith-ai/CUDA-L2/HEAD/zero_one_correctness_check.py",
+    "https://raw.githubusercontent.com/ornith-ai/CUDA-L2/HEAD/summarize_result.py",
+    "https://raw.githubusercontent.com/ornith-ai/CUDA-L2/HEAD/LICENSE.txt",
+    "https://raw.githubusercontent.com/ornith-ai/CUDA-L2/HEAD/pybind/hgemm_a100_fp32.cc",
+    "https://raw.githubusercontent.com/ornith-ai/CUDA-L2/HEAD/pybind/hgemm_h100_fp32.cc",
+    "https://raw.githubusercontent.com/ornith-ai/CUDA-L2/HEAD/kernels/a100_F32F16F16F32/64_4096_64.cu",
+    "https://raw.githubusercontent.com/ornith-ai/CUDA-L2/HEAD/kernels/h100_F32F16F16F32/64_4096_64.cu",
+    "https://raw.githubusercontent.com/ornith-ai/CUDA-L2/HEAD/cublas/fp32/hgemm_cublas.cu",
+    "https://raw.githubusercontent.com/ornith-ai/CUDA-L2/HEAD/cublas/fp32/hgemm_cublaslt_auto_tuning.cu",
+    "https://raw.githubusercontent.com/ornith-ai/CUDA-L2/HEAD/eval_results/cuda_l2_a100_F32F16F16F32_speedup_offline.csv",
+    "https://raw.githubusercontent.com/ornith-ai/CUDA-L2/HEAD/eval_results/cuda_l2_h100_F32F16F16F32_speedup_offline.csv",
+    "https://github.com/ornith-ai/CUDA-L2/tree/main/kernels",
+    "https://github.com/ornith-ai/CUDA-L2/issues?q=is%3Aissue",
+    "https://github.com/ornith-ai/CUDA-L2/issues/6",
+    "WebSearch: CUDA-L2 HGEMM cuBLAS reinforcement learning kernels independent benchmark criticism"
+  ],
+  "confidence": 0.75
+}

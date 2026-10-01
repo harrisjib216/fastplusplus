@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/grantdh/apple-bottom",
+  "one_liner": "Double-float (FP32-pair) DGEMM/ZGEMM on Apple Silicon GPUs via Metal; about 1.1-1.2x Accelerate's AMX DGEMM for resident N>=2048 matrices.",
+  "what_it_does": "Gives Apple Silicon GPUs, which lack FP64 hardware, near-FP64 matrix routines: DGEMM, ZGEMM, DSYRK, ZHERK, DTRSM, a mixed-precision iterative-refinement solver (ab_dgesv_mpir), element-wise ops, batched and async GEMM. The native C API (apple_bottom.h) uses opaque ABMatrix handles that you create, upload once, operate on repeatedly and download. A separate BLAS-ABI layer (ab_dgemm_blas/ab_zgemm_blas and Fortran dgemm_/zgemm_ symbols in a dylib that re-exports Accelerate) lets codes such as Quantum ESPRESSO call it as a drop-in, routing calls by FLOP count between Accelerate/OpenBLAS and the GPU.",
+  "how_it_is_fast": "Each double is stored as an unevaluated sum of two floats (hi, lo), and products/sums use Dekker/Knuth error-free transformations (twoSum, twoProduct; the DWTimesDW2 algorithm by default, DWTimesDW3 optionally), giving about 48 mantissa bits on the GPU's FP32 ALUs. The Metal kernel uses 64x64 tiles with 4x4 register blocking, compiled with MTLMathModeSafe so the shader compiler cannot reassociate the FMAs. Complex GEMM uses Gauss's 3-multiplication trick (three real GEMMs instead of four). The win comes from the GPU's FP32 throughput exceeding the CPU AMX unit's FP64 throughput at large N, once data already sits on the GPU.",
+  "when_to_use": [
+    "Iterative codes on Apple Silicon (SCF, CG, GMRES, Lanczos) that keep square matrices of N >= 2048 resident on the GPU across many GEMMs; the repo's steady-state run shows 1.09-1.16x Accelerate at N=2048-4096 on an M2 Max.",
+    "ZGEMM-heavy workloads with N >= 1024 kept in ABMatrix handles (the header's steady-state crossover).",
+    "When you want to offload FP64-class GEMM from the CPU to free it for other work (the QE run reports 47% less CPU time).",
+    "Applications that tolerate ~1e-15 relative error per element rather than bit-exact IEEE FP64, with values inside roughly 1e-30 to 1e30."
+  ],
+  "when_not_to_use": [
+    "Through the drop-in BLAS ABI with raw pointers: the repo's own end-to-end sweep (commit 271a0f0) measures 2-20 GFLOP/s on the GPU path vs 250-690 for Accelerate at all shapes up to 2048^3 (roughly 28-200x slower), because FP64-to-double-float conversion runs at about 140 MB/s; the header itself recommends AB_MODE=cpu for Fortran hosts.",
+    "Matrices below about N=1024-2048 or one-shot GEMMs: steady-state DGEMM is 0.18x Accelerate at 256 and 0.93x at 1024, with about 50-100 us dispatch overhead per call.",
+    "Anything needing IEEE FP64 semantics: double-float has FP32 exponent range (validated 1e-30 to 1e30), flushes values below about 1e-38 to zero, and per-element errors reach 1e-11 to 1e-7 on some shapes; the README itself rules out pivoted LU and eigensolvers.",
+    "Non-Apple platforms, or multi-threaded callers: Metal-only, and matrix operations are documented as not thread-safe.",
+    "Production use that needs a track record: a single-author project (3 stars) measured on one M2 Max."
+  ],
+  "integration": {
+    "form": "static lib | shared lib",
+    "dependencies": "Metal and Foundation frameworks; Accelerate (re-exported by the dylib, used for CPU routing); OpenBLAS optional for the Fortran bridge",
+    "min_toolchain": "macOS 14+ with an Xcode 16+ SDK (needed for MTLMathModeSafe; older SDKs build but give about 1e-8 precision); clang, C11 and Objective-C++ (-std=c++11) sources",
+    "platforms": "Apple Silicon (M1-M4) macOS only; benchmarked only on M2 Max",
+    "thread_safety": "ab_init/ab_shutdown are thread-safe (dispatch_once); matrix operations are not (header: Metal command queue serializes)",
+    "drop_in_for_baseline": "partial — the dylib exports dgemm_/zgemm_ and shadows Accelerate at link time, but in the default AB_MODE=auto that path sends DGEMMs of >= 50M FLOPs to the GPU, where per-call conversion makes it far slower than Accelerate; speedups need the ABMatrix handle API"
+  },
+  "gotchas": [
+    "Default AB_MODE is auto with a 50M-FLOP real / 100M-FLOP complex crossover, so a 512^3 DGEMM through the BLAS ABI goes to the slow GPU path; set AB_MODE=cpu or raise AB_CROSSOVER_FLOPS_REAL unless you use resident handles.",
+    "The README's headline numbers (552/643 GFLOP/s vs 468/566) do not match the committed result files (654/670 vs 563/586 in 2026-04-22-b9b0641/dgemm.csv), and the benchmark times the GPU kernel on already-uploaded matrices while timing Accelerate whole.",
+    "Linking order matters: libapplebottom must precede Accelerate/OpenBLAS so its dgemm_/zgemm_ win, which silently redirects every BLAS GEMM in the process.",
+    "Hard limits: maximum dimension 46,340, 128 pool entries (ab_pool_get_matrix returns NULL when full), 64 matrices per session; ZHERK is marked deprecated in the README (20x slower than CPU) although the header claims a later GPU win at N >= 1024."
+  ],
+  "pick_this_over_siblings_when": "Pick apple-bottom only when you need FP64-class GEMM on an Apple GPU with operands kept resident; for IEEE FP64 or FP32 on the CPU, MTGEMM-A (beats Accelerate sgemm/dgemm) or the SME kernels in sme-gemm and MaxMulSK are the safer choices, and they need no host-device conversion.",
+  "verified_claims_summary": "First-party, one Apple M2 Max (38-core GPU), clang -O3, compiler/Xcode version unstated: the README reports 552 vs 468 GFLOP/s (2048^2) and 643 vs 566 (4096^2) against Accelerate's AMX DGEMM, and the committed run shows 1.09-1.16x at N=2048-4096 but losses below N=2048. The 22% Quantum ESPRESSO Si64 wall-time gain was measured against 6-thread OpenBLAS, not Accelerate.",
+  "status_note": "Recently active single-author project (v1.3.1-dev, last commit 2026-04-25, no open issues) under MIT; small enough to vendor, but treat it as experimental because the default drop-in path is slower than Accelerate.",
+  "sources_read": [
+    "https://github.com/grantdh/apple-bottom",
+    "https://github.com/grantdh/apple-bottom/issues",
+    "https://github.com/grantdh/apple-bottom/tree/main/benchmarks/results/2026-04-24-271a0f0-rect",
+    "https://raw.githubusercontent.com/grantdh/apple-bottom/HEAD/README.md",
+    "https://raw.githubusercontent.com/grantdh/apple-bottom/HEAD/Makefile",
+    "https://raw.githubusercontent.com/grantdh/apple-bottom/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/grantdh/apple-bottom/HEAD/include/apple_bottom.h",
+    "https://raw.githubusercontent.com/grantdh/apple-bottom/HEAD/src/blas_wrapper.c",
+    "https://raw.githubusercontent.com/grantdh/apple-bottom/HEAD/docs/vv/PRECISION_ENVELOPE.md",
+    "https://raw.githubusercontent.com/grantdh/apple-bottom/HEAD/docs/INTEGRATION.md",
+    "https://raw.githubusercontent.com/grantdh/apple-bottom/HEAD/benchmarks/results/2026-04-22-b9b0641/dgemm.csv",
+    "https://raw.githubusercontent.com/grantdh/apple-bottom/HEAD/benchmarks/results/2026-04-24-271a0f0-rect/dgemm_gpu_sweep1.csv",
+    "https://raw.githubusercontent.com/grantdh/apple-bottom/HEAD/benchmarks/results/2026-04-24-271a0f0-rect/dgemm_cpu_sweep1.csv",
+    "https://raw.githubusercontent.com/grantdh/apple-bottom/HEAD/benchmarks/results/2026-04-24-271a0f0-rect/dgemm_auto_sweep1.csv"
+  ],
+  "confidence": 0.8
+}

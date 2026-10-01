@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/matthewsresearchgroup/tblis",
+  "one_liner": "Native tensor-contraction library on BLIS kernels; beats transpose-plus-GEMM (NumPy/MKL einsum) on strided and permuted contractions.",
+  "what_it_does": "Computes tensor contractions and other tensor operations (add/transpose, dot, reduce, scale, set, mult) on dense real and complex float/double tensors with arbitrary lengths and strides, addressed by Einstein-style index labels. It exposes a stable C API (tblis_tensor structs plus tblis_tensor_mult, tblis_tensor_add and friends, with matrix and vector variants) and a C++ API built on the bundled MArray varray/marray containers. It is not a BLAS replacement: you describe the contraction by index strings instead of reshaping operands into matrices.",
+  "how_it_is_fast": "It applies the BLIS GEMM structure (cache-blocked loops, packing into contiguous panels, register-blocked micro-kernels) directly to tensors: the packing step gathers tensor elements through their native strides, so no transposed copy of the whole operand is formed as in transpose-transpose-GEMM-transpose (TTGT). This is the algorithm of Matthews, 'High-Performance Tensor Contraction without Transposition' (SIAM J. Sci. Comput. 40(1) C1-C24, 2018); GETT/TCCG from Springer and Bientinesi is the concurrent related approach. Version 2.0 is rebuilt as a BLIS 2.0 plugin, so it uses BLIS's micro-kernels and architecture configurations, with its own TCI threading layer.",
+  "when_to_use": [
+    "Contractions whose index order would force large transposes before a GEMM, such as axyz,ybzx->ab or batched axby,yacx->abc (about 1.7x and 1.4x faster than PyTorch CPU in the tblis-rs table).",
+    "Tensors that live in strided, non-contiguous memory (sub-blocks of larger arrays): 2.0 s vs 7.3 s for NumPy/MKL on a strided 96^4 GEMM-shaped contraction.",
+    "Quantum chemistry and tensor-network codes (coupled cluster and similar) that need many differently-permuted contractions without extra workspace for transposed copies.",
+    "Projects that want a C ABI usable from C++, Python (pytblis) or Rust (tblis-rs)."
+  ],
+  "when_not_to_use": [
+    "Contractions that already map to a contiguous GEMM: in tblis-rs, axyz,xyzb->ab took 132 ms vs 63 ms for MKL and PyTorch, and the SYRK-shaped axyz,bxyz->ab took 97 ms vs 37 ms for PyTorch.",
+    "Apple Silicon/ARM with the 2.0 code line: issue #76 reports a 4x slowdown on an M3 Pro (0.73 s to 2.93 s) and 1.3x on an i7-4770K between an April 2023 commit and the August 2025 one.",
+    "Applications that already run their own thread pool or a second OpenMP runtime: issue #80 reports 2.0 beta's performance collapsing under oversubscription (time spent in a BLIS barrier), and issue #47 covers multiple OpenMP runtimes in one process.",
+    "Code relying on conjugated operands in tblis_tensor_add or on tblis_scalar abs/conj/sqrt: open issues #86, #87 and #88 (2026) report wrong results.",
+    "Windows (not supported per the wiki; Cygwin only 'probably') or GPUs (CPU only)."
+  ],
+  "integration": {
+    "form": "static lib | shared lib",
+    "dependencies": "BLIS 2.0 (found via find_package/pkg-config or fetched at a pinned commit), bundled git submodules TCI, MArray and stl_ext; optional hwloc and memkind",
+    "min_toolchain": "C++20 compiler and CMake 3.23 for the 2.0 code on master (the wiki's GCC 4.8+/autotools notes describe 1.x); GCC 15/16 builds need a newer BLIS (issue #90)",
+    "platforms": "Linux and macOS; x86-64 and other architectures BLIS supports (BLIS_CONFIG_FAMILY auto); no Windows",
+    "thread_safety": "not documented; threading via TCI (OpenMP or pthreads) with tblis_set_num_threads and a tblis_comm argument on every call; see issues #47 and #80",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The 2.0 line on master (BLIS plugin) and the wiki's build instructions (1.x autotools, --enable-config=haswell etc.) disagree; clone with git submodule update --init --recursive and build with -DCMAKE_BUILD_TYPE=Release (tblis-rs warns about this).",
+    "Issue #85: BLIS headers cannot be included alongside TBLIS headers, which bites projects that also call BLIS directly.",
+    "Mixed-sign strides can abort tblis_tensor_mult with an are_compatible assertion (issue #81); a std::bad_array_new_length crash is also open (#82).",
+    "The project publishes no benchmark numbers of its own; the only table found is a third-party wrapper's laptop run with no compiler or thread settings, using a 2.0-era commit (9b95712)."
+  ],
+  "pick_this_over_siblings_when": "Pick TBLIS over Eigen's Tensor module or a hand-written reshape plus BLAS/MKL GEMM when contractions are permuted or strided, since it skips the transposed copies. tblis-strassen is a research code built on TBLIS that adds Strassen (up to 1.3x per its README); TBLIS is the maintained base library.",
+  "verified_claims_summary": "In the independent tblis-rs README (AMD Ryzen 7945HX, 16 cores, FP64 tensors of shape 96^4, compiler and threads unstated), TBLIS beat NumPy einsum on MKL by about 1.1x on contiguous GEMM-shaped contractions and up to 5.8x on strided ones, and beat PyTorch CPU by 1.0-1.8x where it won; it lost 2x to MKL/PyTorch on plain contiguous GEMM shapes and 2.6x to PyTorch on a SYRK shape.",
+  "status_note": "Active but slow to respond (last commit 2025-11-21; 2.0 is still a beta pre-release next to stable v1.3.0, with 18 open issues including several 2026 wrong-result reports); BSD-3-Clause and a C library, so straightforward to vendor.",
+  "sources_read": [
+    "https://github.com/MatthewsResearchGroup/tblis",
+    "https://github.com/MatthewsResearchGroup/tblis/issues",
+    "https://github.com/MatthewsResearchGroup/tblis/issues/76",
+    "https://github.com/MatthewsResearchGroup/tblis/issues/80",
+    "https://github.com/MatthewsResearchGroup/tblis/issues/81",
+    "https://github.com/MatthewsResearchGroup/tblis/issues/87",
+    "https://github.com/MatthewsResearchGroup/tblis/releases",
+    "https://raw.githubusercontent.com/MatthewsResearchGroup/tblis/HEAD/README.md",
+    "https://raw.githubusercontent.com/MatthewsResearchGroup/tblis/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/MatthewsResearchGroup/tblis/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/MatthewsResearchGroup/tblis/HEAD/configure.ac",
+    "https://raw.githubusercontent.com/MatthewsResearchGroup/tblis/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/MatthewsResearchGroup/tblis/HEAD/tblis-version",
+    "https://raw.githubusercontent.com/MatthewsResearchGroup/tblis/HEAD/blis-git-tag",
+    "https://raw.githubusercontent.com/MatthewsResearchGroup/tblis/HEAD/tblis.h",
+    "https://raw.githubusercontent.com/MatthewsResearchGroup/tblis/HEAD/tblis/tblis.h",
+    "https://raw.githubusercontent.com/MatthewsResearchGroup/tblis/HEAD/tblis/frame/base/thread.h",
+    "https://raw.githubusercontent.com/wiki/MatthewsResearchGroup/tblis/Home.md",
+    "https://raw.githubusercontent.com/wiki/MatthewsResearchGroup/tblis/Building.md",
+    "https://raw.githubusercontent.com/wiki/MatthewsResearchGroup/tblis/C-Interface.md",
+    "https://raw.githubusercontent.com/wiki/MatthewsResearchGroup/tblis/CXX-Interface.md",
+    "https://raw.githubusercontent.com/wiki/MatthewsResearchGroup/tblis/Tensor-Operations.md",
+    "https://raw.githubusercontent.com/wiki/MatthewsResearchGroup/tblis/Implementation.md",
+    "https://raw.githubusercontent.com/wiki/MatthewsResearchGroup/tblis/Threading.md",
+    "https://raw.githubusercontent.com/wiki/MatthewsResearchGroup/tblis/Research.md",
+    "https://raw.githubusercontent.com/restgroup/tblis-rs/HEAD/readme.md"
+  ],
+  "confidence": 0.75
+}

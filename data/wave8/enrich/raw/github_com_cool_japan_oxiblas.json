@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/cool-japan/oxiblas",
+  "one_liner": "Pure-Rust BLAS/LAPACK/sparse stack for SciRS2; first-party Criterion runs put its GEMM at 80-172% of OpenBLAS.",
+  "what_it_does": "A Cargo workspace (oxiblas-core, -matrix, -blas, -lapack, -sparse, -ndarray) implementing BLAS levels 1-3, dense LAPACK factorizations (LU, Cholesky, QR, SVD, EVD, Schur), sparse formats with iterative solvers and preconditioners, einsum and batched GEMM, with no C dependencies. The native API is Rust (gemm(alpha, a: MatRef, b: MatRef, beta, c: MatMut), Lu::compute_auto, and so on). oxiblas-blas also contains #[no_mangle] extern \"C\" cblas_* functions (cblas_sgemm, cblas_dgemm and others), but no C header or cdylib/staticlib target is shipped, and the separate oxiblas-ffi C-API crate is retired and excluded from the workspace.",
+  "how_it_is_fast": "BLIS-style GEMM: A and B are packed into panels and blocked for cache (README: KC=192, MC=128 on a 256 KB L2 Xeon), and the inner loop is a register-blocked micro-kernel picked at runtime by CPU feature detection (f64: 8x6 AVX2+FMA, 16x6 AVX-512, 8x6 NEON; f32: 8x8 AVX2/NEON, 16x16 AVX-512; SSE4.2 and scalar fallbacks) with software prefetch. Products with m*n*k at or below a small threshold go to a separate small-matrix path, complex GEMM uses the 3M method, and gemm_with_par(Par::Rayon) splits the column loop across Rayon threads.",
+  "when_to_use": [
+    "Rust projects that want BLAS/LAPACK with no C or Fortran toolchain or system OpenBLAS (static, cross-compiled or wasm32 builds).",
+    "Users already in the SciRS2/NumRS2 ecosystem, which builds on it.",
+    "Single-threaded f32/f64 GEMM of roughly 64-1024 on Apple Silicon or AVX2 x86, where the first-party numbers show it at about parity with OpenBLAS.",
+    "When you also need sparse solvers, preconditioners or extended precision (f16, quad-float) in the same pure-Rust dependency tree."
+  ],
+  "when_not_to_use": [
+    "C++ code: there is no supported C API; the cblas_* symbols in oxiblas-blas need your own staticlib/cdylib wrapper crate and header, and the dedicated FFI crate is retired with known unfixed wrong-result bugs (per TODO.md).",
+    "When you need proven speed over OpenBLAS: the gains are first-party, mostly at or below OpenBLAS on x86 (80-102% for f64), and the project's own TODO.md audit says the OpenBLAS-ratio numbers have 'no reproducible backing — reads as fabricated/cherry-picked' (removed from the crate README, still in the repository README).",
+    "Maturity-sensitive numerics: v0.2.2 (2026-08-06) fixed 'numerous numerical correctness bugs' in BLAS, LAPACK and sparse routines plus several 'fabricated or stub code paths'; earlier releases fixed wrong eigenvectors (0.1.1) and a broken blocked QR (0.2.0).",
+    "Multi-core GEMM by default: plain gemm() runs sequentially (Par::Seq); you must call gemm_with_par with Par::Rayon and enable the 'parallel' feature."
+  ],
+  "integration": {
+    "form": "crate (Cargo workspace of several crates)",
+    "dependencies": "num-complex, num-traits, bytemuck; rayon optional ('parallel' feature); ndarray for oxiblas-ndarray",
+    "min_toolchain": "Rust 1.85+, edition 2024 (a source comment says the AVX-512 intrinsics need Rust 1.89+)",
+    "platforms": "x86-64 (runtime dispatch AVX-512 > AVX2+FMA > SSE4.2 > scalar), aarch64 NEON, wasm32 SIMD128, scalar fallback elsewhere; no_std+alloc for oxiblas-core and oxiblas-matrix",
+    "thread_safety": "Standard Rust borrow rules (MatRef shared, MatMut exclusive); internal parallelism via Rayon when requested; otherwise not documented",
+    "drop_in_for_baseline": "partial — CBLAS-named extern \"C\" functions exist in oxiblas-blas, but no shipped C library, header or LAPACKE layer; from Rust it is a different API from ndarray-linalg/OpenBLAS"
+  },
+  "gotchas": [
+    "The comparison bench (benches/comparison.rs) calls gemm(), which is sequential, while OpenBLAS runs at its unpinned default thread count; the OpenBLAS absolute numbers are near one-core levels (Xeon f64 1024: 13.01 Gelem/s = 26 GFLOPS on a 4-core chip, derived from page data), so the threading setup is unclear.",
+    "oxiblas-blas exports #[no_mangle] cblas_sgemm/cblas_dgemm; if it is linked into the same binary as OpenBLAS (as the compare-openblas bench does), the linker may bind ndarray's cblas_dgemm calls to OxiBLAS's symbol instead of OpenBLAS's. Not tested; check symbol resolution before trusting a side-by-side run.",
+    "README 'Gf/s' labels are 16 x Gelem/s, an 8x overstatement of real GFLOPS (2 x Gelem/s); the README also says the f32 NEON kernel is 4x6 while the code selects 8x8.",
+    "Before 0.2.x an AVX2-without-FMA CPU silently got garbage GEMM results (shape/kernel mismatch, documented in gemm_kernel/mod.rs); now fixed by deriving both from one selector."
+  ],
+  "pick_this_over_siblings_when": "Pick it over faer, the more established pure-Rust dense library with a JOSS paper, only if you need its wider scope (sparse solvers, preconditioners, CBLAS-shaped entry points, quad precision) or the SciRS2 ecosystem; for dense Rust linear algebra performance, faer has the stronger evidence, and from C++ use OpenBLAS or BLIS directly.",
+  "verified_claims_summary": "Repository README tables from the project's Criterion comparison bench (sequential OxiBLAS gemm into a preallocated C, versus ndarray .dot() into a freshly allocated result through system OpenBLAS, version and threads unstated): on Apple M3, f32 GEMM is 101-121% of OpenBLAS up to 512 and 172% at 1024 (55.99 vs 32.59 Gelem/s), f64 97-101%; on a Xeon E5-2623 v4, f64 is 80-102% and f32 94-112%. Rust 1.85+ with opt-level 3 and thin LTO, no target-cpu flags; first-party and disowned as unreproducible by the project's own audit notes.",
+  "status_note": "Actively developed by COOLJAPAN OU (v0.2.2, 2026-08-06; 43 stars, about 4.7k crates.io downloads), Apache-2.0 and usable from Rust, but young: its own changelog describes a 'multi-agent audit' in 2026-08 that replaced fabricated or stub code paths, and correctness fixes still land in each release.",
+  "sources_read": [
+    "https://github.com/cool-japan/oxiblas",
+    "https://github.com/cool-japan/oxiblas/issues",
+    "https://github.com/cool-japan/oxiblas/tree/master/crates/oxiblas-blas/src/level3",
+    "https://github.com/cool-japan/oxiblas/tree/master/crates/oxiblas-blas/src/level3/gemm_kernel",
+    "https://raw.githubusercontent.com/cool-japan/oxiblas/HEAD/README.md",
+    "https://raw.githubusercontent.com/cool-japan/oxiblas/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/cool-japan/oxiblas/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/cool-japan/oxiblas/HEAD/TODO.md",
+    "https://raw.githubusercontent.com/cool-japan/oxiblas/HEAD/crates/oxiblas/README.md",
+    "https://raw.githubusercontent.com/cool-japan/oxiblas/HEAD/crates/oxiblas/Cargo.toml",
+    "https://raw.githubusercontent.com/cool-japan/oxiblas/HEAD/crates/oxiblas-blas/Cargo.toml",
+    "https://raw.githubusercontent.com/cool-japan/oxiblas/HEAD/crates/oxiblas-blas/src/lib.rs",
+    "https://raw.githubusercontent.com/cool-japan/oxiblas/HEAD/crates/oxiblas-blas/src/level3/gemm.rs",
+    "https://raw.githubusercontent.com/cool-japan/oxiblas/HEAD/crates/oxiblas-blas/src/level3/gemm_kernel/mod.rs",
+    "https://raw.githubusercontent.com/cool-japan/oxiblas/HEAD/crates/oxiblas-blas/src/cblas/mod.rs",
+    "https://raw.githubusercontent.com/cool-japan/oxiblas/HEAD/crates/oxiblas-blas/src/cblas/basic/mod.rs",
+    "https://raw.githubusercontent.com/cool-japan/oxiblas/HEAD/crates/oxiblas-blas/src/cblas/basic/level3_ops.rs",
+    "https://raw.githubusercontent.com/cool-japan/oxiblas/HEAD/crates/oxiblas-core/src/parallel.rs",
+    "https://raw.githubusercontent.com/cool-japan/oxiblas/HEAD/crates/oxiblas-benchmarks/Cargo.toml",
+    "https://raw.githubusercontent.com/cool-japan/oxiblas/HEAD/crates/oxiblas-benchmarks/benches/comparison.rs",
+    "https://crates.io/api/v1/crates/oxiblas"
+  ],
+  "confidence": 0.75
+}

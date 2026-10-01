@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/avafly/optimize-gemm",
+  "one_liner": "Step-by-step ARM NEON SGEMM tutorial for Raspberry Pi 4 whose final kernel beats OpenBLAS 0.3.28 and Eigen 3.4.0 at one size.",
+  "what_it_does": "A tutorial repository that takes row-major float32 GEMM on a Raspberry Pi 4B (Cortex-A72) from a naive triple loop (0.17 GFLOPS) through a 4x4 NEON kernel, a 12x8 kernel, blocking with packing, and finally a reworked packing layout and schedule (38.5 GFLOPS). Each step is a standalone program (mm_naive.cpp ... mm_optimize.cpp) with a matmul(A, B, C, M, N, K) function, plus small harnesses that run OpenBLAS, BLIS, Eigen and GSL on the same data. It is not a library: matrix sizes are compile-time macros and the buffers are static globals.",
+  "how_it_is_fast": "Goto/BLIS-style GEMM: a 12x8 register-blocked micro-kernel holding 24 float32x4 accumulators and using vfmaq_laneq_f32 lane-broadcast FMAs, fed by A packed into transposed 12-row panels (NEON 4x4 transposes) and B packed into 8-column panels so both reach the kernel as sequential streams. Each matrix is packed once, outside the loop nest; one OpenMP parallel region with a static schedule gives every thread its own rows of C, so no barriers are needed after packing, and the kernel software-prefetches a few k steps ahead.",
+  "when_to_use": [
+    "Learning how a NEON SGEMM micro-kernel, packing and cache blocking fit together on an in-order-ish ARMv8 core; each optimization step is a separate file with its own measured GFLOPS.",
+    "As a starting point for a fixed-shape float32 GEMM on Cortex-A72 class boards (Raspberry Pi 4) where you control M, N and K at compile time and they are multiples of the block sizes.",
+    "Comparing your own kernel against OpenBLAS, BLIS, Eigen and GSL on a Pi with ready-made harnesses that print a checksum."
+  ],
+  "when_not_to_use": [
+    "General-purpose GEMM: there is no edge handling, so M must be a multiple of 384 (and 12), N of 96 (and 16) and K of 192, and sizes are fixed by -DM_SIZE/-DN_SIZE/-DK_SIZE at build time.",
+    "When BLIS is available: on the author's own table BLIS 0.9.0 is slightly faster (39.57 vs 38.52 GFLOPS).",
+    "x86 or any non-NEON target: the kernel is written only with arm_neon.h intrinsics.",
+    "Double precision, transposed or column-major inputs, alpha/beta scaling, or any other BLAS routine.",
+    "Code that needs reentrancy: pack buffers and matrices are global arrays, so only one GEMM can run at a time."
+  ],
+  "integration": {
+    "form": "source-drop (tutorial program; copy mm_optimize.cpp and utils.hpp)",
+    "dependencies": "OpenMP; OpenBLAS, BLIS, Eigen and GSL only for the comparison programs",
+    "min_toolchain": "C++11 and CMake 3.10 (CMakeLists.txt); GCC-style __attribute__ and __builtin_prefetch; compiler name and version not documented",
+    "platforms": "AArch64 with NEON (tuned for Cortex-A72 / Raspberry Pi 4B); no other targets",
+    "thread_safety": "Not reentrant: uses global A_pack/B_pack buffers; parallel internally with OpenMP",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The kernel loads C and accumulates (C += A*B); it relies on C being zero-initialized, so calling matmul twice on the same C doubles the result.",
+    "Benchmarks time a single cold call per program (no warm-up, no repetitions), so thread start-up and first-touch costs land inside the timing for every library.",
+    "CMakeLists.txt sets only -O3 (no -mcpu=cortex-a72), and the OpenBLAS/BLIS/Eigen builds and their thread counts are not described, so the baseline configuration cannot be reproduced exactly.",
+    "Matrices are read from text files in ../data relative to the build directory; the program exits if they are missing."
+  ],
+  "pick_this_over_siblings_when": "Pick it over salykova's sgemm.c or carlushuang's cpu_gemm_opt when you want the ARM NEON version of the same Goto-style tutorial on a Raspberry Pi; for a usable ARM library with edge handling, use LibShalom (small and irregular shapes on ARMv8) or plain BLIS instead.",
+  "verified_claims_summary": "On a Raspberry Pi 4 Model B (Cortex-A72, 4 cores, OpenMP 4 threads), one 1536x1152x1344 float32 row-major GEMM took 123.49 ms (38.52 GFLOPS) with mm_optimize versus 151.21 ms (31.45 GFLOPS) for OpenBLAS 0.3.28 cblas_sgemm and 238.22 ms (19.97 GFLOPS) for Eigen 3.4.0; BLIS 0.9.0 was slightly faster at 39.57 GFLOPS. Built with -O3 and an unnamed compiler; first-party, single cold run per library.",
+  "status_note": "Small MIT-licensed tutorial (17 stars, 11 commits) that was revived in July-August 2026 with the layout/scheduling step and the BLIS comparison; fine to copy as teaching code, not maintained as a library.",
+  "sources_read": [
+    "https://github.com/Avafly/optimize-gemm",
+    "https://github.com/Avafly/optimize-gemm/commits",
+    "https://raw.githubusercontent.com/Avafly/optimize-gemm/HEAD/README.md",
+    "https://raw.githubusercontent.com/Avafly/optimize-gemm/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/Avafly/optimize-gemm/HEAD/mm_optimize.cpp",
+    "https://raw.githubusercontent.com/Avafly/optimize-gemm/HEAD/utils.hpp",
+    "https://raw.githubusercontent.com/Avafly/optimize-gemm/HEAD/mm_blas.cpp",
+    "https://raw.githubusercontent.com/Avafly/optimize-gemm/HEAD/mm_blis.cpp",
+    "https://raw.githubusercontent.com/Avafly/optimize-gemm/HEAD/mm_eigen.cpp",
+    "https://raw.githubusercontent.com/Avafly/optimize-gemm/HEAD/LICENSE"
+  ],
+  "confidence": 0.8
+}

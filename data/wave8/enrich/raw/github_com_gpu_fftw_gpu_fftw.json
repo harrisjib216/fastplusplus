@@ -1,0 +1,56 @@
+{
+  "id": "https://github.com/gpu-fftw/gpu_fftw",
+  "one_liner": "LD_PRELOAD shim that reroutes FFTW3 1-D power-of-two complex float FFTs to the original Raspberry Pi's VideoCore IV GPU.",
+  "what_it_does": "Builds libgpufftwf.so and libgpufftw.so, which intercept fftwf_plan_dft_1d / fftwf_execute / fftwf_destroy_plan (and the double-precision versions) through LD_PRELOAD and dlsym(RTLD_NEXT), so an unmodified FFTW3 binary runs its 1-D complex transforms on the GPU. A launcher (sudo ./gpu_fftw [-d] -- program args) sets LD_PRELOAD and execs the program; anything it cannot handle (non-power-of-two N, N < 256, GPU setup failure, GPU_FFTW_DISABLE set) falls back to the real FFTW plan. A minimal Fortran execute hook is included for GNU Fortran.",
+  "how_it_is_fast": "The work is done by Andrew Holme's GPU_FFT 2.0 (bundled as hello_fft/): per-size hand-written QPU shader binaries that compute the transform in 2 to 4 passes of radix-16/32/64 butterflies (N=1,024 is two radix-32 passes) spread over the 8 VideoCore IV QPUs, with twiddles and ping-pong buffers in GPU-shared memory. For small batches (N*jobs <= 20480) it launches the shaders by poking V3D registers directly through /dev/mem and busy-waits; larger jobs go through the firmware mailbox. The speedup is simply that the Pi 1's ARM11 CPU running FFTW is much slower than the QPUs.",
+  "when_to_use": [
+    "Legacy Raspberry Pi 1 / Zero-class (BCM2835, ARMv6) systems running an existing FFTW3-linked program you cannot recompile, e.g. SDR or audio spectrum tools.",
+    "1-D complex single-precision FFTs of power-of-two length 2^8 to 2^21 where the plan is reused and the program fills the input before planning.",
+    "Quick experiments to see whether GPU offload helps an FFT-bound Pi 1 workload before porting code to the GPU_FFT API directly."
+  ],
+  "when_not_to_use": [
+    "Any program that plans once and then writes new data into the input array before each fftw_execute: the shim copies the input to GPU memory only at plan time, so later executes transform the stale plan-time data.",
+    "Raspberry Pi 2/3/4/5 or any non-Pi hardware: the bundled GPU_FFT 2.0 hard-codes the BCM2835 peripheral base 0x20000000, and open issue #1 reports the self-test override check failing on a Pi 3 (GPU/FFTW difference 0 ppm, i.e. the GPU path apparently never ran).",
+    "Double precision work: the -d 'double squashing' mode silently computes double requests in float.",
+    "2-D/3-D, real-to-complex, batched (plan_many), new-array execute (fftw_execute_dft) or threaded FFTW use: none are intercepted.",
+    "Production or multi-user systems: requires root (/dev/mem mapping, mknod of /dev/gpu_mb), runs the target program as root with LD_PRELOAD, and the README calls it an early alpha."
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "FFTW3 (libfftw3 and libfftw3f, called via dlsym RTLD_NEXT), libdl, bundled GPU_FFT 2.0 (hello_fft, BSD-3-Clause), root access to /dev/mem and the VideoCore mailbox",
+    "min_toolchain": "C99 + C++11 (gcc/g++; Makefile tunes for -march=armv6 -mfpu=vfp -mtune=arm1176jzf-s)",
+    "platforms": "Raspberry Pi with BCM2835 / VideoCore IV (Pi 1, Zero); Linux only",
+    "thread_safety": "Not thread-safe: plans live in a static 1024-slot array with an unlocked counter, the mailbox handle is a static, and the shim calls setenv/unsetenv on every plan to signal GPU use.",
+    "drop_in_for_baseline": "partial — binary drop-in via LD_PRELOAD for fftw(f)_plan_dft_1d + execute + destroy_plan only; every 1-D DFT plan (even a fallback one) becomes a wrapper struct, so passing it to any other FFTW function (fftw_execute_dft, fftw_print_plan, fftw_flops) hands FFTW a foreign pointer"
+  },
+  "gotchas": [
+    "Plan slots are taken as mplan_arr[mplan_n++] and freed by decrementing mplan_n, so destroying plans out of LIFO order lets the next plan overwrite a live one; past 1024 live plans the fallback path dereferences a NULL metaplan.",
+    "The input array is copied to GPU memory inside fftw_plan_dft_1d and never again; FFTW_MEASURE-style 'plan first, fill later' code gets wrong results with no error.",
+    "Planner flags (FFTW_MEASURE, FFTW_PATIENT, wisdom) are ignored on the GPU path; each GPU plan allocates and maps its own VideoCore memory, so many concurrent plans can exhaust GPU memory (then it falls back to FFTW).",
+    "The launcher passes child arguments poorly (open issue #2: the child's flags are parsed as gpu_fftw options unless separated with --)."
+  ],
+  "pick_this_over_siblings_when": "No catalogued sibling targets the Raspberry Pi GPU; on a Pi 1/Zero with an unmodifiable FFTW binary this is the only drop-in, while for new code or newer Pis a NEON CPU library such as Ne10, or PFFFT/muFFT, is the safer choice.",
+  "verified_claims_summary": "The project's own self-test, on an unnamed Raspberry Pi (Makefile targets ARMv6, so Pi 1 class), timed 1,000 forward 1,024-point complex float FFTs: 11,523 FFT/s on the GPU versus 1,619 FFT/s for CPU fftw3f with an FFTW_ESTIMATE plan (7.1x); plan creation and the GPU path's one-time input copy are outside the timed loop, and the compiler/FFTW versions are not stated.",
+  "status_note": "Abandoned since January 2015 (two open, unanswered issues) and alpha quality; MIT-licensed and small, but only of historical or Pi-1-specific interest given its stale-input and plan-slot bugs.",
+  "sources_read": [
+    "https://github.com/gpu-fftw/gpu_fftw",
+    "https://github.com/gpu-fftw/gpu_fftw/issues?q=is%3Aissue",
+    "https://github.com/gpu-fftw/gpu_fftw/issues/1",
+    "https://github.com/gpu-fftw/gpu_fftw/issues/2",
+    "https://raw.githubusercontent.com/gpu-fftw/gpu_fftw/HEAD/README.md",
+    "https://raw.githubusercontent.com/gpu-fftw/gpu_fftw/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/gpu-fftw/gpu_fftw/HEAD/Makefile",
+    "https://raw.githubusercontent.com/gpu-fftw/gpu_fftw/HEAD/gpu_fftw.h",
+    "https://raw.githubusercontent.com/gpu-fftw/gpu_fftw/HEAD/gpu_fftw.c.template",
+    "https://raw.githubusercontent.com/gpu-fftw/gpu_fftw/HEAD/gpu_fftw_util.c",
+    "https://raw.githubusercontent.com/gpu-fftw/gpu_fftw/HEAD/gpu_fftw_main.cpp",
+    "https://raw.githubusercontent.com/gpu-fftw/gpu_fftw/HEAD/hello_fft/gpu_fft_base.c",
+    "https://raw.githubusercontent.com/gpu-fftw/gpu_fftw/HEAD/hello_fft/gpu_fft.c",
+    "https://raw.githubusercontent.com/gpu-fftw/gpu_fftw/HEAD/hello_fft/gpu_fft.h",
+    "https://raw.githubusercontent.com/gpu-fftw/gpu_fftw/HEAD/hello_fft/mailbox.c",
+    "https://raw.githubusercontent.com/gpu-fftw/gpu_fftw/HEAD/hello_fft/mailbox.h",
+    "https://raw.githubusercontent.com/gpu-fftw/gpu_fftw/HEAD/hello_fft/gpu_fft_twiddles.c",
+    "https://raw.githubusercontent.com/gpu-fftw/gpu_fftw/HEAD/hello_fft/gpu_fft_shaders.c"
+  ],
+  "confidence": 0.8
+}
