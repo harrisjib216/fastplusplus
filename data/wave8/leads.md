@@ -62,3 +62,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - Caracal (SC25, GPU-resident sparse LU; snippet: up to 7x over SuperLU_DIST, 94x over PanguLU, 16x over PaStiX on A100) and Hu et al. 2025 irregular-blocking LU (arXiv 2512.04389: 1.50x over PanguLU, 3.32x over SuperLU_DIST on one A100); code not found for either.
 - SPRAL SSIDS (RSLAB matching source); jkitchin/feral; Laplacians.jl approxchol; orenlivne/nlf.
 - facebookarchive/fbcuda (standalone fbfft batched FFT kernels, BSD); awd-lstm-lm (uses QRNN).
+- CKTSO-GPU (github.com/chenxm1986/cktso-gpu); NICSLU (github.com/chenxm1986/nicslu); GALATIC (GPU semiring SpGEMM); gunrock/gunrock.

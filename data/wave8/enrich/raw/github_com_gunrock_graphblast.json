@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/gunrock/graphblast",
+  "one_liner": "CUDA implementation of the GraphBLAS API for graph algorithms; paper reports 43.51x geomean over multi-threaded SuiteSparse:GraphBLAS.",
+  "what_it_does": "GraphBLAST implements GraphBLAS-style building blocks (Vector, Matrix, Descriptor, semirings such as LogicalOrAnd, MinimumPlus, PlusMultiplies, and operations mxv, vxm, mxm, eWiseAdd, eWiseMult, assign, reduce) on NVIDIA GPUs, so graph algorithms are written as a few lines of sparse linear algebra. It ships BFS, SSSP, PageRank, triangle counting, connected components, maximal independent set, graph colouring, local graph clustering and diameter in graphblas/algorithm. The API is its own C++ template interface in namespace graphblas, modelled on but not source-compatible with the GraphBLAS C API that SuiteSparse:GraphBLAS implements, so moving from SuiteSparse means rewriting calls.",
+  "how_it_is_fast": "Direction optimisation (push-pull) borrowed from Ligra and Gunrock: vxm/mxv switches between a push SpMSpV over CSC when the frontier is sparse and a pull masked SpMV over CSR when it is dense, keeping both formats on the GPU. Masked pull SpMV fuses the mask and can exit early per row for the Boolean semiring (spmvDenseMaskedOrKernel), and descriptor flags add structure-only mode (ignore edge values) and operand reuse. Load balancing for the general SpMV comes from moderngpu's merge-based SpmvCsrBinary, and sparse vectors are compacted with prefix scans.",
+  "when_to_use": [
+    "Traversal-style or iterative graph analytics (BFS, SSSP, PageRank, triangle counting) on a single NVIDIA GPU where the whole graph, in both CSR and CSC unless symmetric, fits in device memory.",
+    "Large power-law or social graphs where PageRank and triangle counting are compute-heavy: the third-party spla chart puts GraphBLAST roughly 13-75x ahead of LAGraph for PageRank and 5-13x for triangle counting on a GTX 1070 against a 4-core i7.",
+    "Research or prototyping where you want algorithms expressed as semiring linear algebra and are willing to work in C++ templates against an older CUDA toolchain.",
+    "Older Pascal-generation (sm_6x) or earlier NVIDIA GPUs, which match the toolchain the README lists (CUDA 9.1/9.2, g++ 4.9.3/5.4.0)."
+  ],
+  "when_not_to_use": [
+    "Volta, Turing, Ampere or Hopper GPUs (sm_70+) without testing: open issue #9 reports hangs in BFS on medium matrices after patching the bundled moderngpu for SM >= 70, and the build defaults to compute_35 PTX (common.mk, CMake -arch=sm_35).",
+    "Current CUDA toolkits: issue #28 reports a CUB namespace compile error with CUDA 11.5, and unmasked mxm calls cuSPARSE csrgemm/csrgemm2, which search results say NVIDIA removed in cuSPARSE 12.0; expect porting work.",
+    "Code that relies on non-arithmetic semirings in unmasked mxm: it routes float SpGEMM to cuSPARSE csrgemm2, which only multiplies and adds, so MinimumPlus returns the PlusMultiplies result (open issue #20); the fix (draft PR #26, GALATIC) was never merged.",
+    "Workloads needing the full GraphBLAS feature set: many paths print 'not implemented yet' and return GrB_NOT_IMPLEMENTED (sparse-sparse eWiseAdd per issue #5, unmasked non-float SpGEMM, SpMM/GEMM, masked reduce, several assign/extract variants), and the shipped BFS ('use float for now for both v and A') and README SSSP work in float.",
+    "BFS or SSSP on road-like or small graphs, or graphs larger than GPU memory: the spla chart shows GraphBLAST slower than CPU LAGraph on several BFS/SSSP inputs and missing results on its larger graphs; indices are 32-bit int."
+  ],
+  "integration": {
+    "form": "header-only templates (copy graphblas/ into the include path) plus two moderngpu sources to compile with your program (ext/moderngpu/src/mgpucontext.cu, mgpuutil.cpp); Makefile and CMake builds for the examples",
+    "dependencies": "CUDA with cuSPARSE, cuBLAS and cuRAND; Boost program_options (the Descriptor parses command-line options); git submodules ctcyang/moderngpu (a fork) and a standalone NVlabs CUB",
+    "min_toolchain": "Tested on CUDA 9.1/9.2, Boost 1.58, g++ 4.9.3/5.4.0, CMake 3.11.1 optional; compiled as -std=c++11 with -O3 -use_fast_math",
+    "platforms": "NVIDIA GPUs only; build targets compute_35 by default; Linux toolchain paths in common.mk (Boost path hard-coded to the author's machine)",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Edit common.mk before building: BOOST_DIR and BOOST_DEPS point to /data/ctcyang/boost_1_58_0, and CUDA_ARCH is 35; the CMake build hard-codes -arch=sm_35.",
+    "Builds use -use_fast_math, which relaxes float accuracy for PageRank-style numeric kernels; BFS and the README SSSP example use float for both vectors and matrix values.",
+    "The benchmark scripts time only GPU kernels with a GpuTimer (not graph loading or host-device transfer) and run PageRank with --max_niter 10, so match iteration counts and what is timed before comparing with a CPU library.",
+    "Directed graphs keep both CSR and CSC copies in device memory for push-pull; only symmetric structure lets it free the CSC index arrays."
+  ],
+  "pick_this_over_siblings_when": "Pick GraphBLAST over spla when you are on NVIDIA hardware and want direction-optimised BFS/SSSP and the fastest PageRank in the spla comparison; pick spla for AMD or Intel GPUs through OpenCL, cuBool when only Boolean semiring operations are needed and you want a maintained CUDA library, and ALP/GraphBLAS for a CPU GraphBLAS that beats SuiteSparse without a GPU.",
+  "verified_claims_summary": "The TOMS paper (Yang, Buluc, Owens, doi 10.1145/3466795), known here only from its abstract as quoted in search results, reports a 43.51x geometric-mean and 1268x peak speedup of one NVIDIA GPU over multi-threaded CPU SuiteSparse:GraphBLAS (and 31.83x over GBTL) across its algorithm and graph mix, with the GPU, CPU and versions unverified. The independent spla README chart (GTX 1070 vs LAGraph on a 4-core i7-6700, read by eye) shows big wins for PageRank and triangle counting but mixed BFS and SSSP results, including losses; neither source compares like-for-like hardware.",
+  "status_note": "Abandoned since 2021-06-18 (10 open issues, including a correctness bug and Volta+ hangs, without maintainer replies); Apache-2.0 and readable as a reference design, but treat it as research code that needs porting to current CUDA and GPUs before use.",
+  "sources_read": [
+    "https://github.com/gunrock/graphblast",
+    "https://raw.githubusercontent.com/gunrock/graphblast/HEAD/README.md",
+    "https://raw.githubusercontent.com/gunrock/graphblast/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/gunrock/graphblast/HEAD/Makefile",
+    "https://raw.githubusercontent.com/gunrock/graphblast/HEAD/common.mk",
+    "https://raw.githubusercontent.com/gunrock/graphblast/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/gunrock/graphblast/HEAD/run_bfs.sh",
+    "https://raw.githubusercontent.com/gunrock/graphblast/HEAD/run_pr.sh",
+    "https://github.com/gunrock/graphblast/tree/master/graphblas/algorithm",
+    "https://github.com/gunrock/graphblast/tree/master/graphblas/backend/cuda",
+    "https://raw.githubusercontent.com/gunrock/graphblast/HEAD/graphblas/graphblas.hpp",
+    "https://raw.githubusercontent.com/gunrock/graphblast/HEAD/graphblas/types.hpp",
+    "https://raw.githubusercontent.com/gunrock/graphblast/HEAD/graphblas/algorithm/bfs.hpp",
+    "https://raw.githubusercontent.com/gunrock/graphblast/HEAD/graphblas/backend/cuda/descriptor.hpp",
+    "https://raw.githubusercontent.com/gunrock/graphblast/HEAD/graphblas/backend/cuda/spmv.hpp",
+    "https://raw.githubusercontent.com/gunrock/graphblast/HEAD/graphblas/backend/cuda/spmspv.hpp",
+    "https://raw.githubusercontent.com/gunrock/graphblast/HEAD/graphblas/backend/cuda/spgemm.hpp",
+    "https://raw.githubusercontent.com/gunrock/graphblast/HEAD/graphblas/backend/cuda/operations.hpp",
+    "https://raw.githubusercontent.com/gunrock/graphblast/HEAD/graphblas/backend/cuda/sparse_matrix.hpp",
+    "https://github.com/gunrock/graphblast/issues",
+    "https://github.com/gunrock/graphblast/issues/5",
+    "https://github.com/gunrock/graphblast/issues/9",
+    "https://github.com/gunrock/graphblast/issues/20",
+    "https://github.com/gunrock/graphblast/issues/28",
+    "https://github.com/gunrock/graphblast/pull/26",
+    "https://escholarship.org/uc/item/292901ks (EGRESS_BLOCKED)"
+  ],
+  "confidence": 0.75
+}
