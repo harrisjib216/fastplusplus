@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/lyrahgames/pxart",
+  "one_liner": "Header-only C++17 SSE/AVX2 MT19937, Xoroshiro128+ and MSWS; AVX2 MT19937 matches std::mt19937 output and generates it about 8x faster.",
+  "what_it_does": "A header-only C++17 library (include pxart/pxart.hpp) with scalar, SSE (simd128) and AVX2 (simd256) versions of MT19937, Xoroshiro128+ and Middle Square Weyl Sequence (MSWS), plus fast uniform-float and bounded-integer conversions. The SIMD engines return a whole __m128i/__m256i per call, and pxart::simd256::uniform<float>(rng) turns that into 8 floats, so callers either write intrinsics code or drain the vector through a small buffer. Default-constructed or default_seeder{seed}-seeded MT19937 engines produce exactly the std::mt19937 sequence; the repo's tests check 10 million outputs of the AVX2 engine against std::mt19937.",
+  "how_it_is_fast": "For MT19937 it vectorizes the state twist of a single generator (Agner Fog's technique): 8 consecutive state words are updated per AVX2 instruction, and a copy of the first new block stored past the end of the state array handles the wrap-around, so output order is unchanged. Xoroshiro128+ and MSWS instead run several independent instances side by side in the vector lanes (multi-stream), so their SIMD output differs from the scalar sequence. Uniform floats are made by OR-ing the top 23 (float) or 52 (double) random bits into the exponent of 1.0 and subtracting 1, and bounded integers use a multiply-shift instead of a division.",
+  "when_to_use": [
+    "Code bound to the std::mt19937 sequence (reproducible simulations, saved seeds) that needs much higher throughput on x86 with AVX2 or SSE2",
+    "Bulk fills of 32-bit randoms or floats, e.g. Monte Carlo inner loops where you can consume 8 values per call or buffer them",
+    "SIMD kernels already written with AVX2 intrinsics that want random vectors directly in registers",
+    "Projects that want a tiny MIT header-only dependency, usable via build2, CMake or by copying the pxart/ folder"
+  ],
+  "when_not_to_use": [
+    "Non-x86 targets: SIMD paths are SSE/AVX2 intrinsics only; ARM or other platforms fall back to the scalar engines",
+    "When you need std <random> distributions on the vector engines: there are no normal, exponential or other non-uniform distributions",
+    "When you are free to change the generator and want maximum speed: pXart's own AVX2 Xoroshiro128+ beats its AVX2 MT19937 (0.74 s vs 1.15 s for 16 GiB in the thesis), and other siblings are faster still",
+    "Production code that needs maintenance or support: 3 stars, alpha build2 package, last commit January 2021",
+    "Exact unbiased bounded integers: the multiply-shift range reduction has a small bias the code itself calls an approximation"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (doctest for tests, perfevent for benchmarks)",
+    "min_toolchain": "C++17; README lists GCC, Clang, Intel, MinGW and MSVC as tested; SIMD headers compile only when __AVX2__ / __SSE2__ are defined (e.g. -march=native)",
+    "platforms": "any for scalar engines; x86-64 with SSE2 (simd128 MT19937) or AVX2 (simd256) for the vectorized engines",
+    "thread_safety": "not documented; engines are plain value types with no shared state, so use one instance per thread",
+    "drop_in_for_baseline": "partial — scalar pxart::mt19937 and the SIMD versions reproduce the std::mt19937 sequence, but the SIMD engines return vectors, min()/max() are non-static, and the API (pxart::uniform, default_seeder) differs from std::mt19937 plus distributions"
+  },
+  "gotchas": [
+    "pxart::simd256::xoroshiro128plus's default constructor leaves its state uninitialized, and its seeding constructor calls rng() eight times inside one _mm256_set_epi32 argument list, whose evaluation order is unspecified, so seeded streams can differ between compilers",
+    "The templated RNG&& seeding constructor of pxart::mt19937 is a better match than the copy constructor for a non-const lvalue, so 'pxart::mt19937 b{a};' seeds b from a's outputs instead of copying a",
+    "uniform<double> from a 32-bit engine only has 32 random bits (low mantissa bits are zero); uniform<float> uses 23 bits and returns [0,1)",
+    "The SIMD headers silently define nothing if compiled without AVX2/SSE2 flags; check the PXART_SUPPORT_SIMD256_* macros"
+  ],
+  "pick_this_over_siblings_when": "Pick pXart when you must keep the exact 32-bit std::mt19937 sequence and want a small C++17 header with AVX2/SSE paths; VMT19937 also covers mt19937_64 and AVX-512, and if the generator can change, SIMD xoshiro siblings (simdrng, Xoroshiro-style engines) or SHISHUA are faster.",
+  "verified_claims_summary": "In the author's 2019 master's thesis (Jena), GCC 9.2.0 -O3 -march=native on a Core i7-7700K at 4.51 GHz, generating 16 GiB through a 16 KiB buffer took 9.29 s with libstdc++ std::mt19937, 5.79 s with Boost mt19937 and 1.15 s with pXart's AVX2 MT19937 (about 8.1x and 5.0x, derived from page data); scalar pXart MT19937 (7.61 s) beat STL but not Boost. In a 10^8-sample Monte Carlo pi run, using the AVX2 MT19937 through a buffer in scalar code took 0.15 s vs 0.53 s for STL with pXart's uniform conversion (about 3.5x, derived from page data).",
+  "status_note": "Abandoned since January 2021 (3 stars, alpha cppget.org package), but MIT-licensed, header-only and small enough to vendor; the AVX2 MT19937 is tested bit-for-bit against std::mt19937.",
+  "sources_read": [
+    "https://github.com/lyrahgames/pxart",
+    "https://github.com/lyrahgames/pxart/commits/master",
+    "https://github.com/lyrahgames/pxart/tree/master/pxart/pxart",
+    "https://github.com/lyrahgames/pxart/tree/master/tests",
+    "https://github.com/lyrahgames/pxart/tree/master/tests/basics",
+    "https://raw.githubusercontent.com/lyrahgames/pxart/HEAD/README.md",
+    "https://raw.githubusercontent.com/lyrahgames/pxart/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/lyrahgames/pxart/HEAD/docs/thesis/main.pdf",
+    "https://raw.githubusercontent.com/lyrahgames/pxart/HEAD/pxart/pxart/pxart.hpp",
+    "https://raw.githubusercontent.com/lyrahgames/pxart/HEAD/pxart/pxart/mt19937.hpp",
+    "https://raw.githubusercontent.com/lyrahgames/pxart/HEAD/pxart/pxart/uniform.hpp",
+    "https://raw.githubusercontent.com/lyrahgames/pxart/HEAD/pxart/pxart/algorithm.hpp",
+    "https://raw.githubusercontent.com/lyrahgames/pxart/HEAD/pxart/pxart/xoroshiro128plus.hpp",
+    "https://raw.githubusercontent.com/lyrahgames/pxart/HEAD/pxart/pxart/msws.hpp",
+    "https://raw.githubusercontent.com/lyrahgames/pxart/HEAD/pxart/pxart/simd256/mt19937.hpp",
+    "https://raw.githubusercontent.com/lyrahgames/pxart/HEAD/pxart/pxart/simd256/uniform.hpp",
+    "https://raw.githubusercontent.com/lyrahgames/pxart/HEAD/pxart/pxart/simd256/xoroshiro128plus.hpp",
+    "https://raw.githubusercontent.com/lyrahgames/pxart/HEAD/pxart/pxart/simd128/mt19937.hpp",
+    "https://raw.githubusercontent.com/lyrahgames/pxart/HEAD/benchmarks/basic/generate_cache.cpp",
+    "https://raw.githubusercontent.com/lyrahgames/pxart/HEAD/tests/basics/simd256/mt19937.cpp"
+  ],
+  "confidence": 0.85
+}

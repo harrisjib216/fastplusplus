@@ -1,0 +1,46 @@
+{
+  "id": "https://github.com/elgw/sfft3",
+  "one_liner": "500-line OpenMP 3-D real FFT over FFTW 1-D plans; 1.2-1.3x faster than FFTW 3-D plans on large float volumes.",
+  "what_it_does": "Computes in-place single-precision 3-D real FFTs (r2c forward, c2r inverse) on the same padded layout that fftwf_plan_dft_r2c_3d uses. The API mirrors FFTW: sfft3_create_plan(M, N, P, threads, verbose, fftw_flags), then sfft3_execute_dft_r2c(plan, float*) and sfft3_execute_dft_c2r(plan, fftwf_complex*). It does not implement an FFT: every line transform is an FFTW float 1-D plan, and SFFT3 only organizes the data movement and threading.",
+  "how_it_is_fast": "Row-column decomposition with cache-blocked transposes. For each XY plane it runs r2c along the contiguous X lines. It then copies a group of Y lines, sized to fit in L2, into a per-thread workspace through a 32x32 stack tile sized for L1. There it runs contiguous unit-stride FFTW 1-D c2c transforms and transposes the result back; the Z axis is done the same way over XZ planes. OpenMP parallelizes over planes with single-threaded FFTW plans, so every 1-D FFT runs on contiguous cache-resident data rather than strided memory.",
+  "when_to_use": [
+    "Large float 3-D real FFTs (about 256^3 and up) on multi-core x86 where FFTW's own 3-D plan is the bottleneck: 8-core Ryzen 3700X, both FFTW_PATIENT, 512^3 1.20x and 1024^3 1.31x (derived from README data)",
+    "Codes already built around FFTW's padded in-place r2c/c2r layout that only need forward/inverse 3-D transforms, e.g. FFT convolution of large volumes",
+    "As a starting point for your own 3-D driver: the author says switching the 1-D backend from FFTW needs relatively small changes",
+    "GPL-compatible projects that already link FFTW"
+  ],
+  "when_not_to_use": [
+    "Small volumes: 64^3 and 128^3 were 1.54x and 1.50x slower than FFTW_PATIENT on the Ryzen, and 128^3 was 1.79x slower on the i7-6700K (derived from README data)",
+    "Hardware you have not measured yourself: on the 4-core i7-6700K with FFTW_MEASURE it lost at 4 of 9 sizes (including 2100x2100x121) and won by only 1-10% elsewhere; the author does not expect the results to generalize",
+    "Double precision, complex input, 1-D/2-D, out-of-place or batched transforms: only in-place float 3-D r2c/c2r exists",
+    "Memory-tight or overcommit-disabled systems: it uses more workspace than FFTW's 3-D plans and, through a sizing bug, requests far more than it uses",
+    "Production code: the author calls it an untested proof of concept with nothing more planned, and FFTW plus GPL-3.0 rule out closed-source use"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "FFTW3 single precision (fftw3f via pkg-config; the makefile also links -lfftw3f_omp) and OpenMP",
+    "min_toolchain": "C11 with GNU extensions (makefile uses -std=gnu11; code uses VLAs and __attribute__((aligned))) plus OpenMP; built with gcc, and the README says clang also works",
+    "platforms": "Any platform with FFTW3 and OpenMP. Its own code has no explicit SIMD; measured only on x86-64 Linux (Ryzen 7 3700X, i7-6700K).",
+    "thread_safety": "Not documented. A plan owns one shared workspace, so concurrent execute calls on the same plan race. sfft3_create_plan runs the FFTW planner and calls fftwf_plan_with_nthreads(1), a process-wide FFTW setting.",
+    "drop_in_for_baseline": "partial — same padded in-place data layout as fftwf_plan_dft_r2c_3d/c2r_3d, but its own plan/execute API, float only, with dimensions given contiguous-first (sfft3_create_plan(M,N,P) matches fftwf_plan_dft_r2c_3d(P,N,M))"
+  },
+  "gotchas": [
+    "Do not set plan->scale = 1: the normalization loop in sfft3_execute_dft_c2r treats the padded array as dense M*N*P floats. It scales padding slots and leaves the tail of the array unscaled. Keep the default (0) and normalize the real elements yourself.",
+    "sfft3_create_plan calloc()s threads^2 x max(M*N*4, M*P*8) x 8 bytes (4 GiB of virtual memory for 1024^3 with 8 threads), while execution touches only about (M/2+1) x max(N,P) x 8 bytes per thread. This works only with lazy zero-page allocation.",
+    "Release builds use -DNDEBUG, which removes the assert() checks on plan and workspace allocation, so an allocation failure crashes instead of reporting an error",
+    "L1/L2 block sizes are compile-time macros (SFFT3_L1=64000, SFFT3_L2=512000 bytes) with no autotuning; the i7 results needed -DSFFT3_L2=256000"
+  ],
+  "pick_this_over_siblings_when": "Pick it over FFTW's own 3-D plans only for large float r2c volumes on multi-core x86, after measuring on your machine, and only if you can spare a per-thread plane buffer. Admiral reports a larger N-D margin over FFTW_MEASURE and PocketFFT avoids FFTW's GPL, so look at those first if you are not tied to FFTW.",
+  "verified_claims_summary": "The author's test_sfft3.c times SFFT3 against fftwf_plan_dft_r2c_3d/c2r_3d in one binary, single precision, one OpenMP thread per physical core, planning and padding excluded. Build: gcc -O3 -march=native -fopenmp -flto=auto; gcc and FFTW versions not stated. It won by 1.20x at 512^3 and 1.31x at 1024^3 on a Ryzen 7 3700X (both PATIENT) and by 1.01-1.10x at its winning sizes on an i7-6700K (both MEASURE), and lost at small sizes. The printed figure is the mean of one forward and one inverse transform, not the pair sum. The harness never renormalizes between round trips, so the timed data overflow to inf/NaN for both libraries alike.",
+  "status_note": "Stale proof of concept (18 commits, last 2025-08-29, 0 stars, no issues; the author says nothing more is planned). GPL-3.0 and about 660 lines over FFTW, so easy to vendor into GPL code and fix yourself.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/elgw/sfft3/HEAD/README.md",
+    "https://raw.githubusercontent.com/elgw/sfft3/HEAD/makefile",
+    "https://raw.githubusercontent.com/elgw/sfft3/HEAD/sfft3.h",
+    "https://raw.githubusercontent.com/elgw/sfft3/HEAD/sfft3.c",
+    "https://raw.githubusercontent.com/elgw/sfft3/HEAD/test_sfft3.c",
+    "https://github.com/elgw/sfft3",
+    "https://github.com/elgw/sfft3/issues?q=is%3Aissue"
+  ],
+  "confidence": 0.75
+}

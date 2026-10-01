@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/martinothamar/simd-rand",
+  "one_liner": "Rust crate of 4- and 8-lane SIMD Xoshiro256+/++, frand and biski64 generators; about 4.5x scalar rand_xoshiro Xoshiro256+ on AVX-512.",
+  "what_it_does": "Provides vectorized PRNGs for Rust that return a whole vector of random numbers per call: next_u64x8()/next_f64x8() (and x4 variants) in the portable module built on nightly std::simd, or __m256i/__m512i values in the specific::avx2 and specific::avx512 modules built on intrinsics. Generators implement rand_core's SeedableRng (from_seed, seed_from_u64) but expose their own SimdRandX4/SimdRandX8/SimdRand traits rather than RngCore, so they are not drop-in replacements for a scalar rand RNG. It targets hot loops that already work in SIMD, such as Monte Carlo kernels.",
+  "how_it_is_fast": "Each lane holds an independent copy of the generator state (multi-stream), so one vector step of xoshiro256+ (add, shift by 17, four XORs, rotate by 45) produces 4 or 8 outputs at once; the scalar xoshiro256+ has a serial state dependency that the compiler does not vectorize. frand (a Weyl increment followed by a multiply-xor-shift mix) is simple enough that the compiler already autovectorizes the scalar crate, so FrandX8 gains only from keeping eight lane states resident instead of broadcasting one state each call.",
+  "when_to_use": [
+    "Rust Monte Carlo or simulation kernels already written with std::simd or AVX2/AVX-512 intrinsics that consume random u64 or f64 vectors",
+    "Bulk generation on x86-64 CPUs with AVX-512 (avx512f+avx512dq) or AVX2 where 8 independent streams are acceptable",
+    "Throughput-bound code where the scalar rand_xoshiro Xoshiro256+ is a measured bottleneck",
+    "Projects on nightly Rust that want a portable SIMD RNG that also compiles on non-x86 targets"
+  ],
+  "when_not_to_use": [
+    "C or C++ projects: it is a Rust crate with no C API, so it needs FFI work; use a C++ SIMD xoshiro sibling instead",
+    "Code that needs the same sequence as a scalar generator, reproducible jump-ahead between lanes, or lane splitting (lane jumps are a README TODO)",
+    "Stable Rust without x86 SIMD: the portable module needs nightly; the specific modules compile only with the matching target features",
+    "Statistically critical work: the author says he is no expert and has only run PractRand; no TestU01 results are published",
+    "Production use expecting a mature crate: one crates.io release (0.1.0, February 2026, 64 downloads), 7 stars"
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "rand_core 0.9",
+    "min_toolchain": "Rust 1.89 (MSRV, edition 2024); nightly for the portable feature",
+    "platforms": "portable: any target with nightly std::simd; specific::avx2: x86-64 with AVX2 (extra paths with avx512dq/avx512vl); specific::avx512: x86-64 with avx512f and avx512dq",
+    "thread_safety": "not documented; generators are plain owned state with no shared globals, so use one instance per thread",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "FrandX8::seed_from_u64 (portable and AVX-512 versions, and FrandX4) copies one seed into every lane, so all lanes emit the same stream; the README's own benchmark rows use it. Seed with distinct from_seed bytes when you need independent lanes",
+    "The crates.io 0.1.0 release (2026-02-01) predates the 2026-03-15 'fix frand implementation (#34)' commit that made FrandX8 match the upstream frand crate; use the git main branch for upstream-identical frand output",
+    "The crate uses a fair amount of unsafe for the intrinsics paths, and the specific modules silently vanish if the target features are not enabled at compile time (.cargo/config.toml in the repo sets target-cpu=native)",
+    "Results are vectors, not single values; consuming them one element at a time through a scalar API gives back much of the speedup"
+  ],
+  "pick_this_over_siblings_when": "Pick it when you are writing Rust and want SIMD xoshiro or frand vectors directly; for C++ the closest siblings are xoshiro8x256pp (8-way xoshiro256++ gist), Xoshiro256PlusSIMD and simdrng, and SHISHUA is faster still if you can switch generator. Romu and Squares are scalar designs, so they suit code that cannot batch.",
+  "verified_claims_summary": "The author's Criterion run on an AMD Ryzen 9 9950X3D (unpinned cargo nightly, target-cpu=native plus AVX-512 RUSTFLAGS, LTO, one pinned SMT pair) took 33.1 ns to generate and sum 64 u64 values with scalar rand_xoshiro Xoshiro256+, versus 7.51 ns for the portable Xoshiro256+X8 and 7.08 ns for the AVX-512 version (about 4.4x and 4.7x, derived from page data). For frand the gain over the compiler-autovectorized scalar crate is only about 1.26x (3.18 ns vs 2.53 ns).",
+  "status_note": "Active (last commit 2026-03-15) but young and lightly used: MIT, 7 stars, one 0.1.0 crates.io release that predates the frand fix; Rust-only, so C++ users would need to port the small generator kernels.",
+  "sources_read": [
+    "https://github.com/martinothamar/simd-rand",
+    "https://github.com/martinothamar/simd-rand/pull/34",
+    "https://github.com/martinothamar/simd-rand/issues",
+    "https://raw.githubusercontent.com/martinothamar/simd-rand/HEAD/README.md",
+    "https://raw.githubusercontent.com/martinothamar/simd-rand/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/martinothamar/simd-rand/HEAD/Makefile",
+    "https://raw.githubusercontent.com/martinothamar/simd-rand/HEAD/.cargo/config.toml",
+    "https://raw.githubusercontent.com/martinothamar/simd-rand/HEAD/rust-toolchain.toml",
+    "https://raw.githubusercontent.com/martinothamar/simd-rand/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/martinothamar/simd-rand/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/martinothamar/simd-rand/HEAD/src/frand.rs",
+    "https://raw.githubusercontent.com/martinothamar/simd-rand/HEAD/src/portable/mod.rs",
+    "https://raw.githubusercontent.com/martinothamar/simd-rand/HEAD/src/portable/simdrand.rs",
+    "https://raw.githubusercontent.com/martinothamar/simd-rand/HEAD/src/portable/xoshiro256plusx8.rs",
+    "https://raw.githubusercontent.com/martinothamar/simd-rand/HEAD/src/portable/frandx8.rs",
+    "https://raw.githubusercontent.com/martinothamar/simd-rand/HEAD/src/specific/mod.rs",
+    "https://raw.githubusercontent.com/martinothamar/simd-rand/HEAD/src/specific/avx512/mod.rs",
+    "https://raw.githubusercontent.com/martinothamar/simd-rand/HEAD/src/specific/avx512/xoshiro256plus.rs",
+    "https://raw.githubusercontent.com/martinothamar/simd-rand/HEAD/benches/top/mod.rs",
+    "https://crates.io/api/v1/crates/simd_rand",
+    "https://raw.githubusercontent.com/martinothamar/simd-rand/HEAD/src/portable/frandx4.rs",
+    "https://raw.githubusercontent.com/martinothamar/simd-rand/HEAD/src/specific/avx512/frand.rs"
+  ],
+  "confidence": 0.8
+}

@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/sylt-collab/sylt-fft",
+  "one_liner": "Header-only 32-bit fixed-point radix-2 (I)FFT for Cortex-M4; 15-26% faster than CMSIS-DSP arm_cfft_radix2_q31 on a 256-point inverse.",
+  "what_it_does": "A set of C99 headers (fft.h, config.h, intrinsics.h, fpmath.h) for in-place power-of-two complex FFT and IFFT on int32 fixed-point data. Helpers pack 2N real samples into an N-point complex transform (fft_convert, fft_fftr, fft_ifftr) and build spectra from magnitude and phase for synthesis; the library came out of an MCU sound project ('DEVSOUND'). There is no plan object: call fft_fft/fft_ifft(data, log2N), or the bare fft_forward/fft_inverse, which leave the bit-reversal permutation to the caller. The API differs from CMSIS-DSP's instance-struct API.",
+  "how_it_is_fast": "The radix-2 butterflies are written around Cortex-M4 DSP instructions issued through inline asm: SMMULR/SMMLAR/SMMLSR (32x32 multiply keeping the rounded high word, optionally accumulating), RBIT for bit reversal, and optional QADD/QSUB saturation. Butterflies with trivial twiddles (1 and -j) get their own multiply-free loops. The twiddle loop uses the -j symmetry so one table value serves the butterflies at k and k+stride/4, which is why a 129-entry quarter-wave sine table covers N up to 512. Macros switch the code style per compiler (scalar locals for GCC, struct copies for Keil) for better register allocation.",
+  "when_to_use": [
+    "Cortex-M4-class MCUs (the asm fast paths are enabled for __CORTEX_M >= 4) running small power-of-two complex FFTs, N <= 512 with the shipped table, in 32-bit fixed point where cycles matter more than accuracy",
+    "MCU audio synthesis that builds a spectrum directly (fft_real_phase_magnitude, fft_magnitude) and runs an inverse FFT: the use case it was written and benchmarked for",
+    "Firmware that wants no dependencies, no libm (with the ROM sine table), no plan allocation and minimal stack",
+    "Old Keil or GCC firmware that still calls the legacy CMSIS-DSP arm_cfft_radix2_q31"
+  ],
+  "when_not_to_use": [
+    "Projects on current CMSIS-DSP: the only comparison is against arm_cfft_radix2_q31 from CMSIS-DSP 1.4.2 (2014), not the later arm_cfft_q31 routines, so the gain over today's CMSIS is unknown",
+    "Accuracy-sensitive work: the README says it is designed for speed, not accuracy. The forward transform halves at every stage, rounding and saturation are off by default, and the caller must prevent overflow (open issue #10 asks how to scale inputs).",
+    "Floating-point data, non-power-of-two lengths, or N > 512 without regenerating the sine table (SINE_BITS goes up to 14, i.e. 65,536 points)",
+    "Code that needs proven correctness: the forward DIT trivial butterfly was wrong from 2014 until January 2021 (issue #5, fixed in c6f58ca); there is no test suite and there have been no commits since",
+    "Organizations whose legal review rejects non-standard licenses: MHG is the Unlicense plus a 'good moral standards' condition"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (no libm needed with SINE_USE_TABLE=1; CMSIS device headers only for the main.c benchmark)",
+    "min_toolchain": "C99 (README: -std=c99 for GCC); measured with Keil C 5.01 and GNU Tools for ARM Embedded Processors 4.8.4",
+    "platforms": "ARM Cortex-M4 (ARMv7E-M) for the asm fast paths. Cortex-M0/M3 builds use C fallbacks and print a warning (support merged in 2016). Elsewhere portable C fallbacks apply, except that the GCC qadd asm is not guarded by __arm__, so FFT_SATURATE=1 does not build with GCC on non-ARM hosts.",
+    "thread_safety": "Not documented. The transforms touch only the caller's buffer and read-only tables, so separate buffers can be processed concurrently; with SINE_USE_TABLE=0, sine_init() must run first.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "fft_forward/fft_inverse do not bit-reverse: DIT needs fft_permutate before the call and DIF after it (fft_fft/fft_ifft do this). The published benchmark times bare fft_inverse, so its time excludes the permutation; the CMSIS side is not in the repo, so whether its timing included bit reversal is not documented.",
+    "Scaling is asymmetric: the forward transform divides by N (one halving per stage) and the inverse is unscaled. A round trip returns the input, but an inverse of a large-magnitude spectrum can overflow silently unless FFT_SATURATE is on.",
+    "Functions and the const sinetable[] are defined in the headers without static, so include fft.h in only one C translation unit or the link fails with duplicate symbols",
+    "Configuration means editing config.h (DIT/DIF, rounding, saturation, SINE_BITS). With the ROM table, changing SINE_BITS hits an #error until you paste in a regenerated table."
+  ],
+  "pick_this_over_siblings_when": "Pick it for fixed-point FFTs on Cortex-M microcontrollers, where none of the catalogued siblings fit: Ne10 targets NEON application cores, and meow_fft, PFFFT and PocketFFT are floating-point libraries for larger CPUs.",
+  "verified_claims_summary": "The README has one data point: a 256-point inverse complex FFT (bare fft_inverse, DIT, 32-bit fixed point) on a Freescale Kinetis K20 Cortex-M4. It ran 25.6% faster than CMSIS-DSP 1.4.2's arm_cfft_radix2_q31 built with Keil C 5.01 -O3, and 15.1% faster built with GNU ARM Embedded GCC 4.8.4 -O3. No cycle counts are published, and the public main.c (FTM0 cycle counter, 100-run average on a zeroed buffer) contains only the SYLT side. The 2021 DIT fix changed only fft_forward, so the benchmarked inverse code is unchanged.",
+  "status_note": "Abandoned since 2021-01-29 (17 commits, 90 stars, 5 open questions/requests). Small enough to vendor, but the MHG license's moral-use condition keeps it at reference usability.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/sylt-collab/SYLT-FFT/HEAD/README.md",
+    "https://raw.githubusercontent.com/sylt-collab/SYLT-FFT/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/sylt-collab/SYLT-FFT/HEAD/main.c",
+    "https://raw.githubusercontent.com/sylt-collab/SYLT-FFT/HEAD/fft.h",
+    "https://raw.githubusercontent.com/sylt-collab/SYLT-FFT/HEAD/config.h",
+    "https://raw.githubusercontent.com/sylt-collab/SYLT-FFT/HEAD/intrinsics.h",
+    "https://raw.githubusercontent.com/sylt-collab/SYLT-FFT/HEAD/fpmath.h",
+    "https://raw.githubusercontent.com/sylt-collab/SYLT-FFT/c6f58caa8d3d01c622768b5c66a0be1d7953235b~1/fft.h",
+    "https://github.com/sylt-collab/SYLT-FFT",
+    "https://github.com/sylt-collab/SYLT-FFT/issues?q=is%3Aissue",
+    "https://github.com/sylt-collab/SYLT-FFT/issues/5",
+    "https://github.com/sylt-collab/SYLT-FFT/commits/master"
+  ],
+  "confidence": 0.75
+}

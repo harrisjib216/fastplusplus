@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/dimandragon/pocketfft-tuned",
+  "one_liner": "Header-only PocketFFT fork with AVX float 1-D codelets: 2.4x upstream, 1.35x FFTW_ESTIMATE on 1-D c2c; loses to FFTW_MEASURE.",
+  "what_it_does": "A fork of the MPCDF GitLab PocketFFT C++ header (pocketfft_hdronly.h). It keeps the pocketfft:: namespace and the c2c/r2c/c2r/r2r/Hartley/DCT/DST function signatures, so it drops in for upstream PocketFFT but is not API-compatible with FFTW. It computes 1-D and N-D transforms of any length in float, double and long double, using Bluestein for large prime factors. The fork rewrites the hot 1-D paths and keeps the multi-dimensional code from upstream; the single header is now about 15,500 lines.",
+  "how_it_is_fast": "It adds hand-written AVX intrinsics codelets for complex<float> radix-2/3/4/8 passes and for the real radf4/radb4 passes, some with AVX2/FMA variants. Upstream PocketFFT vectorizes only across lines of multi-D arrays, so its 1-D path is scalar. Power-of-two c2c plans also get fused radix-4x4 middle stages and blocked/batched terminal stages. Selected mixed-radix lengths get measured factorization and dispatch choices, and float prime lengths choose between Rader (computed internally in double) and Bluestein. A change was promoted only after paired randomized benchmark runs, pass-level probes and correctness checks.",
+  "when_to_use": [
+    "You already call PocketFFT (or vendor its header) for single-precision 1-D c2c/r2c/c2r on x86 with AVX and want a median 2.4-2.75x speedup without changing the API",
+    "You cannot use GPL FFTW and your alternative is FFTW_ESTIMATE-quality planning: the fork beat FFTW_ESTIMATE in 813 of 1260 1-D c2c pairs (median 1.35x) and 447 of 450 2-D c2c pairs (median 6.43x)",
+    "Real-input float transforms at awkward lengths such as 131071 or 315392 points, where it was the fastest of all tested libraries in the 2026-06-26 snapshot",
+    "Float 3-D r2c in a BSD header-only package: median 1.13x over FFTW_MEASURE and 1.99x over KFR in the snapshot"
+  ],
+  "when_not_to_use": [
+    "You can use FFTW with FFTW_MEASURE/PATIENT plans, or KFR: they won most 1-D cases (fork median 0.71x and 0.49x on 1-D c2c), and FFTW_MEASURE was 6.06x faster at N=4096",
+    "Double or long double, ARM/NEON, or x86 builds without AVX: the new codelets handle only float and need AVX, so these builds run almost entirely upstream code. They were not benchmarked, except for the scalar no-SIMD float build (1.12x to 1.67x over upstream)",
+    "2-D and 3-D workloads: medians against upstream PocketFFT are 0.98x to 1.04x, so the fork adds risk for no measured gain",
+    "1-D lengths below 4096: the sweep's smallest size was 4096, so nothing smaller was measured",
+    "Code that needs a supported library: one author, 0 stars, no releases or tags, and the README calls the numbers a local snapshot from a noisy workstation"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none beyond the C++ standard library and threads (multi-threading can be disabled with POCKETFFT_NO_MULTITHREADING)",
+    "min_toolchain": "C++17 in practice: the header's guard checks only for C++11 and the README still says 'strictly C++11', but the header uses if constexpr in 15 places. The benchmarks build it with g++ -O3 -march=native -std=c++20.",
+    "platforms": "Any C++ platform. The tuned 1-D SIMD paths need x86 AVX (some AVX2/FMA) and float; other targets fall back to upstream PocketFFT code paths.",
+    "thread_safety": "Not documented in the README. In the source, the optional plan cache is mutex-guarded and plans are shared via shared_ptr; the opt-in split8 cached buffer is a per-plan buffer behind a mutex, so concurrent calls that share such a plan serialize.",
+    "drop_in_for_baseline": "partial — drop-in for upstream PocketFFT's C++ header (same namespace and signatures); not API-compatible with FFTW or KissFFT"
+  },
+  "gotchas": [
+    "The published SIMD run also defined about 15 opt-in macros (POCKETFFT_TUNED_DEFINES in the benchmarking-fft Makefile, e.g. POCKETFFT_C2C_POWER2_FUSED_PASS4X4 and ..._SPLIT8_TILE256_CACHED_BUFFER). A plain #include does not get them, and by default they only engage at N >= 1,048,576 (some at 32M+). Copy those defines to reproduce the published configuration.",
+    "Codelets are chosen at compile time from __AVX__/__AVX2__/__FMA__, with no runtime CPU dispatch: build with -mavx2 (or at least -mavx) or -march=native, or you get scalar 1-D code, and a binary built that way will not run on CPUs without AVX",
+    "Plan caching is off unless POCKETFFT_CACHE_SIZE is set (the benchmarks use 16); without it every 1-D call re-plans, which hurts repeated small transforms",
+    "With POCKETFFT_C2C_POWER2_SPLIT8_TILE256_CACHED_BUFFER, each cached plan keeps a length-N complex<float> scratch array alive (256 MiB at N=32M)"
+  ],
+  "pick_this_over_siblings_when": "Pick it over upstream PocketFFT (mreineck/pocketfft) when the hot path is 1-D float on AVX x86 and you want the same API; for multi-D or double precision upstream is equivalent and better tested. Pick FFTW (MEASURE planning), KFR or Admiral when raw 1-D speed matters more than a BSD header-only drop-in.",
+  "verified_claims_summary": "The author's randomized, CPU-pinned (taskset -c 2) Google Benchmark sweep ran 90 iterations per scenario in single precision. Makefile defaults: g++ -O3 -march=native -std=c++20 for the SIMD build, clang++ with vectorization off and FFTW_NO_SIMD for the no-SIMD build, FFTW 3.3.10 built from source; CPU model not stated, workstation not quiet. Median 1-D c2c times: 2.40x faster than upstream PocketFFT 32424d2 and 1.35x faster than FFTW_ESTIMATE, but 0.71x of FFTW_MEASURE and 0.49x of KFR; 2-D/3-D were about even with upstream.",
+  "status_note": "Active single-author fork (226 commits, last 2026-06-27, 0 stars, no releases). BSD-3-Clause and header-only, so easy to vendor, but treat it as experimental until its changes reach upstream.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/Dimandragon/pocketfft-tuned/HEAD/README.md",
+    "https://raw.githubusercontent.com/Dimandragon/pocketfft-tuned/HEAD/pocketfft_hdronly.h",
+    "https://raw.githubusercontent.com/Dimandragon/pocketfft-tuned/HEAD/meson.build",
+    "https://github.com/Dimandragon/pocketfft-tuned",
+    "https://github.com/Dimandragon/pocketfft-tuned/commits",
+    "https://github.com/Dimandragon/benchmarking-fft",
+    "https://raw.githubusercontent.com/Dimandragon/benchmarking-fft/main/README.md",
+    "https://raw.githubusercontent.com/Dimandragon/benchmarking-fft/main/results/full-machine-bench-2026-06-26-randomized-90iter/summary.md",
+    "https://raw.githubusercontent.com/Dimandragon/benchmarking-fft/main/Makefile",
+    "https://raw.githubusercontent.com/Dimandragon/benchmarking-fft/main/1d.cpp"
+  ],
+  "confidence": 0.75
+}

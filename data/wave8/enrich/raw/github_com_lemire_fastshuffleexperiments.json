@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/lemire/fastshuffleexperiments",
+  "one_liner": "Benchmark and reference code for Lemire's nearly divisionless bounded random integers; Fisher-Yates shuffles about 8-10x faster than std::shuffle.",
+  "what_it_does": "The replication package for 'Fast Random Integer Generation in an Interval' (ACM TOMACS 29(1), 2019). It implements Fisher-Yates shuffles of uint32_t arrays with several ways to map a random word to [0, n): OpenBSD/Go-like (two divisions), Java-like (one or more divisions), float/double multiplication, Lemire's nearly divisionless method, buffered variants of each, and std::shuffle for comparison. The API is a set of templates in cpp/rangedrand.h and cpp/shuffle.h parameterised on a uint32_t(*)() or uint64_t(*)() generator function, not a std::shuffle-compatible interface; the practical takeaway is the roughly 15-line random_bounded_nearlydivisionless32/64 function.",
+  "how_it_is_fast": "Instead of x % n, it multiplies the random word by n into a double-width product (64-bit for 32-bit words, __uint128_t for 64-bit words) and takes the high half as the result; the low half tells whether the draw falls in the biased region, and only then (probability below n/2^L) does it compute -n % n and possibly redraw. So almost every bounded integer costs one multiply and one compare instead of one or two hardware divisions, while staying exactly unbiased. The benchmark pairs it with lehmer64, a 128-bit multiplicative generator that is itself one multiply per output.",
+  "when_to_use": [
+    "You need unbiased random integers in [0, n) or a Fisher-Yates shuffle in a hot loop and your toolchain's std::uniform_int_distribution / std::shuffle still uses division-based rejection (MSVC STL, libc++ or an older libstdc++; check yours).",
+    "Writing your own shuffle, reservoir sampler or random index picker in C/C++ and want a short Apache-2.0 reference for the correct multiply-and-reject code (32-bit and 64-bit variants).",
+    "Arrays from a few elements up to about 10^6 that fit in cache, where range reduction dominates: the sample run shows 1.8-1.9 ns/element versus 15-19 ns for std::shuffle.",
+    "Reproducing or extending the TOMACS paper's figures (make benchmark / make plot in TOMACS_RCR)."
+  ],
+  "when_not_to_use": [
+    "As a library dependency: it is experiment code with global generator state, uint32_t-only arrays and no packaging or tests beyond a permutation check; copy the bounded-integer function instead.",
+    "When your standard library already uses this method: the README says GNU libstdc++ adopted it for std::uniform_int_distribution, so the gap against a current libstdc++ std::shuffle is smaller than the sample output shows.",
+    "MSVC or 32-bit targets without __uint128_t: the 64-bit variants and the lehmer64 generator need 128-bit integer support.",
+    "Very large arrays (10^7 to 10^9 elements), where cache misses dominate and every method slows to roughly 6-47 ns/element; the nearly divisionless shuffle is still fastest of the unbuffered methods but by a smaller factor (about 3.6-3.8x vs std::shuffle at 10^9 in the sample run).",
+    "When you need batched or SIMD generation of many bounded integers: Lemire's later batched technique is a separate project."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (C++ standard library only; gnuplot 5.2 only for the RCR figures)",
+    "min_toolchain": "C++11 (-std=c++11 in the Makefile); GCC or Clang for __uint128_t; README assumes a Linux-like system",
+    "platforms": "64-bit targets whose compiler provides __uint128_t (e.g. x86-64, aarch64 with GCC/Clang); not MSVC",
+    "thread_safety": "Not thread-safe as written: lehmer64 and the other generators keep static global state (e.g. g_lehmer64_state) seeded by setseed(); the bounded-integer functions themselves are stateless.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The generator is passed as a template parameter that must be a function pointer to a global-state function; a std:: engine object cannot be plugged in without a wrapper, so std::shuffle's column uses a small URBG wrapper around the same lehmer64 function.",
+    "The float/double-multiplication variants use only 24 or 53 random bits and are not exactly unbiased; use only the nearly divisionless variant if fairness matters.",
+    "The 'precomputed random indexes' column (about 0.9 ns/element) excludes index generation from the timing, so it is a lower bound, not a usable shuffle.",
+    "The RCR README's sample numbers carry no CPU or compiler and say 'the exact numbers will vary'; the RCR gnuplot script plots the 32-bit Figure 3a std::shuffle series from the 64-bit rows."
+  ],
+  "pick_this_over_siblings_when": "Pick this as the C++ reference for the range-reduction step (unbiased integers in [0, n) and shuffling), which fastrand ports to Python; generator siblings such as testingRNG (lehmer64, aesctr) or simdrng speed up the raw random bits instead, so they combine with this method rather than compete with it.",
+  "verified_claims_summary": "On the repo's own sample run (g++/clang++ -std=c++11 -O3, CPU and compiler version not stated), shuffling 1000-element uint32_t arrays with lehmer64 took 1.88 ns/element (32-bit words) and 1.86 ns/element (64-bit) with the nearly divisionless method versus 18.66 and 15.28 ns/element for std::shuffle driven by the same generator, about 10x and 8x. A WebSearch summary of the paper (not opened) says its figures were measured on an Intel i7-6700 (Skylake, 3.4 GHz) with GCC 5.4 -O3 -march=native, where std::shuffle performed close to the OpenBSD-like method.",
+  "status_note": "Stale research code (last commit 2024-03-12, no issues filed) under Apache-2.0; the technique matters more than the repo, which is small enough to copy from and is already absorbed into libstdc++, Abseil, Go, Swift, Julia, Zig and NumPy per the README.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/lemire/FastShuffleExperiments/HEAD/README.md",
+    "https://raw.githubusercontent.com/lemire/FastShuffleExperiments/HEAD/TOMACS_RCR/README.md",
+    "https://raw.githubusercontent.com/lemire/FastShuffleExperiments/HEAD/TOMACS_RCR/Makefile",
+    "https://raw.githubusercontent.com/lemire/FastShuffleExperiments/HEAD/cpp/Makefile",
+    "https://raw.githubusercontent.com/lemire/FastShuffleExperiments/HEAD/cpp/shuffle.cpp",
+    "https://raw.githubusercontent.com/lemire/FastShuffleExperiments/HEAD/cpp/shuffle.h",
+    "https://raw.githubusercontent.com/lemire/FastShuffleExperiments/HEAD/cpp/rangedrand.h",
+    "https://raw.githubusercontent.com/lemire/FastShuffleExperiments/HEAD/cpp/lehmer64.h",
+    "https://raw.githubusercontent.com/lemire/FastShuffleExperiments/HEAD/LICENSE",
+    "https://github.com/lemire/FastShuffleExperiments/tree/master/cpp",
+    "https://github.com/lemire/FastShuffleExperiments/issues?q=is%3Aissue"
+  ],
+  "confidence": 0.8
+}

@@ -1,0 +1,45 @@
+{
+  "id": "https://github.com/janos95/kdtree",
+  "one_liner": "Tiny 2020 Magnum/Corrade 3D kd-tree with 1-NN only; build ~15% faster than nanoflann, query claim invalidated by a pruning bug.",
+  "what_it_does": "A single-header kd-tree class template KDTree<Vector> over Magnum Math vectors (Vector3 and friends). It takes a Corrade StridedArrayView1D of points, so it indexes your data in place without copying it, and exposes one query, nearestNeighbor(q), returning the point index and squared distance. There is no k-NN, radius search, insertion or removal; the rest of the repo is a Magnum demo app that draws the tree's cells over a mesh.",
+  "how_it_is_fast": "Construction is a classic median-split kd-tree: an index array is partitioned recursively with std::nth_element on the axis depth % dim, and each node (three int32 fields) holds exactly one point, so there is no leaf bucket and no point copy. Queries recurse near-side first, prune a subtree when the squared distance from the query to its trimmed bounding box exceeds the best so far, and use a splitting-plane test to decide whether to visit the far side. That plane test compares the linear gap |p[cd] - q[cd]| with the squared best distance, which over-prunes whenever distances are below 1, so part of the measured query speed comes from skipping subtrees an exact search must visit.",
+  "when_to_use": [
+    "Reading a short (about 170-line) median-split kd-tree to learn the technique, for example the bounding-box-trimmed recursion.",
+    "Already on Magnum/Corrade and wanting a zero-copy index over a strided vertex attribute (the demo builds it straight from a mesh's Position attribute).",
+    "One-shot 3D tree builds where only construction time matters and you will write your own query code."
+  ],
+  "when_not_to_use": [
+    "Any case that needs exact nearest neighbours as written: in this session's pure-Python port of kdtree.h's construct and query logic (uniform [-1,1]^3, as in benchmark.cpp), 338 of 1,000 queries over 20,000 points and 88 of 200 queries over 100,000 points returned a non-nearest point; squaring the plane gap fixed all of them.",
+    "Projects without Magnum/Corrade: the header pulls in Magnum Math and Corrade Containers and only accepts Magnum vector types.",
+    "k-NN, radius or range queries, dynamic insert/delete, or high dimensions: only single nearest-neighbour search exists.",
+    "Production or closed-source use: no LICENSE file, so by default all rights are reserved; 9 commits, all from June 2020, no releases, no tests."
+  ],
+  "integration": {
+    "form": "header-only (kdtree.h); the benchmark and demo build with CMake",
+    "dependencies": "Magnum and Corrade (Math, Containers); the benchmark also needs nanoflann (git submodule) and a scoped_timer subdirectory; the demo app needs Magnum SDL2Application, GL, SceneGraph, Shaders, Trade, MeshTools, Primitives and MagnumPlugins AssimpImporter",
+    "min_toolchain": "C++17 (CMAKE_CXX_STANDARD 17; uses if constexpr and a class template deduction guide), CMake 3.16",
+    "platforms": "Any platform Magnum supports; no SIMD or architecture-specific code; benchmark.cpp's doNotOptimize uses GCC/Clang inline asm",
+    "thread_safety": "not documented; nearestNeighbor is a non-const member but only reads tree state, and the tree keeps a non-owning view of the caller's points",
+    "drop_in_for_baseline": "partial — replaces only nanoflann's k=1 knnSearch on 3D Magnum vectors; different API (no adaptor class, no k-NN or radius search, no leaf-size parameter), and its query results are not exact (see gotchas)"
+  },
+  "gotchas": [
+    "Query correctness bug in recurse(): the far-side test 'if (p[cd] - q[cd] < result.distanceSquared)' (and its mirror) compares a linear distance with a squared one. For point sets in the unit range, where best squared distances are well below 1, far subtrees that may contain the true nearest neighbour are skipped, so nearestNeighbor returns wrong answers and the '10 percent faster' query claim compares an inexact search with nanoflann's exact one.",
+    "benchmark.cpp never checks that KDTree and nanoflann return the same neighbour, which is how the bug went unnoticed; it also wraps each of the 10,000 queries in its own ScopedTimer, so timer overhead is part of every query sample.",
+    "The tree stores a non-owning StridedArrayView of the points: the caller must keep the point buffer alive and unchanged for the tree's lifetime.",
+    "The header does 'using namespace Magnum; using namespace Corrade;' at global scope, which leaks into every file that includes it; an empty point set leaves NNResult.pointIndex uninitialized."
+  ],
+  "pick_this_over_siblings_when": "Rarely: nanoflann, PicoTree, picoflann and kd3 (all catalogued) have exact k-NN and radius search, licences and wider use; pick this only as a Magnum-native teaching example, and fix the plane-prune comparison before trusting its results.",
+  "verified_claims_summary": "The README reports, from the author's own measurements, about 15% faster construction and about 10% faster 1-NN queries than nanoflann (KDTreeSingleIndexAdaptor, max leaf size 10) on 1,000,000 uniform random 3D float points with 10,000 queries; no timings, compiler, flags or CPU are published. The construction comparison stands as a first-party claim, but the query comparison is not like-for-like, because the kd-tree's query is inexact.",
+  "status_note": "Abandoned since June 2020 (9 commits, 11 stars, no issues or releases) and unlicensed, so reference only; the construction code is a fine small example, but the query code needs its prune fixed before use.",
+  "sources_read": [
+    "https://github.com/Janos95/kdtree",
+    "https://raw.githubusercontent.com/Janos95/kdtree/HEAD/README.md",
+    "https://raw.githubusercontent.com/Janos95/kdtree/HEAD/kdtree.h",
+    "https://raw.githubusercontent.com/Janos95/kdtree/HEAD/benchmark.cpp",
+    "https://raw.githubusercontent.com/Janos95/kdtree/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/Janos95/kdtree/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/Janos95/kdtree/HEAD/application.cpp",
+    "https://raw.githubusercontent.com/Janos95/kdtree/HEAD/types.hpp"
+  ],
+  "confidence": 0.8
+}

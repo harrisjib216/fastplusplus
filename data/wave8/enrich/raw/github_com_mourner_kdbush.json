@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/mourner/kdbush",
+  "one_liner": "JavaScript static 2D point index (flat kd-tree in one ArrayBuffer); its author says it indexes points 5-8x faster than RBush.",
+  "what_it_does": "Builds an immutable spatial index over a fixed number of 2D points and answers axis-aligned box queries (range) and radius queries (within, withinInto). You declare the point count up front, call add(x, y) for each point, then finish(). Queries return the zero-based insertion indices, not the objects. It is not a drop-in for RBush: no rectangles, no insert or remove after finish(), and a different constructor and query API.",
+  "how_it_is_fast": "finish() kd-sorts the coordinate and id arrays in place: it recursively places the median on alternating axes with Floyd-Rivest selection and stops at leaves of nodeSize points (default 64), which are scanned linearly. The tree is implicit (no node objects or pointers). Ids and coordinates live in typed arrays inside a single ArrayBuffer, with Uint16 ids under 65,536 points and a coordinate type you choose (Int32Array or Uint32Array is smaller and faster than the Float64 default). Queries walk the tree iteratively with a preallocated Uint32Array stack, and withinInto can write into a caller-supplied typed array so queries allocate nothing.",
+  "when_to_use": [
+    "Browser or Node code that indexes a large fixed set of 2D points (map markers, clustering input, hit-testing) and then runs many small box or radius queries.",
+    "Integer or grid coordinates, where Int32Array or Uint32Array storage shrinks the index and speeds it up.",
+    "Building the index in a Web Worker and handing it to the main thread without copying (postMessage with a transferable ArrayBuffer, KDBush.from on the other side), or sharing it through a SharedArrayBuffer.",
+    "Saving a prebuilt index to a file and loading it back with KDBush.from, without rebuilding.",
+    "Point-only datasets where Flatbush would also work: the README says KDBush uses about 2x less memory than Flatbush for points."
+  ],
+  "when_not_to_use": [
+    "Data that changes after indexing: there is no insert or remove, so every change means a full rebuild. RBush is the dynamic option.",
+    "Rectangles, polygons or other extents: use Flatbush (static) or RBush (dynamic).",
+    "k-nearest-neighbour queries: the core library offers only box and radius queries. kNN with great-circle distances is in the separate mourner/geokdbush extension.",
+    "3D or higher-dimensional points: 2D only (3D support is an open feature request, issue #38).",
+    "Native C++ code: this is JavaScript. The official C++11 port (mourner/kdbush.hpp) was archived in June 2026; nanoflann covers k-D point search in C++."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none (npm package kdbush; ES module, plus UMD bundles kdbush.js and kdbush.min.js that expose a KDBush global)",
+    "min_toolchain": "Any engine with ES modules and typed arrays; package.json declares no engines field. TypeScript types (index.d.ts) are generated from JSDoc at publish.",
+    "platforms": "any JavaScript runtime (browsers, Node.js); SharedArrayBuffer sharing requires a runtime that exposes it",
+    "thread_safety": "Not documented. A finished index is read-only and can be shared across workers through a SharedArrayBuffer (README). Within one realm, range and within use a module-level scratch stack (STACK), which is safe only because JavaScript runs single-threaded per realm.",
+    "drop_in_for_baseline": "partial — it replaces RBush only for static point sets, and the API differs: preallocated count, add then finish, and queries that return insertion indices instead of items."
+  },
+  "gotchas": [
+    "finish() throws unless exactly numItems points were added, so the count must be known before you start.",
+    "Queries return indices in the order the tree was traversed, not insertion order. Issue #42 (order changing after a rebuild) was closed without a fix.",
+    "Range bounds are inclusive on all sides, and radius queries compare squared Euclidean distance on raw coordinates. For latitude and longitude that is planar distance, not geodesic (geokdbush handles geographic kNN).",
+    "The serialized header stores the raw nodeSize argument as a Uint16, while the build clamps it to 2..65535. A nodeSize above 65535 would therefore serialize a different leaf size than the one used to build, and KDBush.from would rebuild a mismatched index. Keep nodeSize at the default 64 or another small value."
+  ],
+  "pick_this_over_siblings_when": "Pick KDBush over RBush when the points are static and points-only, which is where the 5-8x indexing claim applies. Pick geo-index (its Rust port of this layout) or nanoflann in native code, and nanoflann or a C++ kd-tree if you need kNN or more than two dimensions.",
+  "verified_claims_summary": "The only number is a one-line first-party claim in the RBush README, by the author of both libraries, that kdbush 'performs point indexing 5-8x faster than RBush'. It gives no workload, Node version or hardware. kdbush's own bench.js builds an index of 1M Uint32 points and times 10,000 small box and 10,000 small radius queries, but it runs kdbush alone, never RBush, and publishes no results.",
+  "status_note": "Active (v4.1.0, last commit 2026-05-19, 713 stars), ISC-licensed and about 300 lines of dependency-free JavaScript, so easy to vendor; it is JavaScript, not C++, and the official C++ port is archived.",
+  "sources_read": [
+    "https://github.com/mourner/kdbush",
+    "https://github.com/mourner/kdbush/issues?q=is%3Aissue",
+    "https://github.com/mourner/kdbush/issues/4",
+    "https://github.com/mourner/kdbush/issues/42",
+    "https://raw.githubusercontent.com/mourner/kdbush/HEAD/README.md",
+    "https://raw.githubusercontent.com/mourner/kdbush/HEAD/index.js",
+    "https://raw.githubusercontent.com/mourner/kdbush/HEAD/bench.js",
+    "https://raw.githubusercontent.com/mourner/kdbush/HEAD/package.json",
+    "https://raw.githubusercontent.com/mourner/kdbush/HEAD/test.js",
+    "https://raw.githubusercontent.com/mourner/rbush/HEAD/README.md",
+    "https://github.com/mourner/kdbush.hpp",
+    "https://github.com/mourner/geokdbush"
+  ],
+  "confidence": 0.8
+}

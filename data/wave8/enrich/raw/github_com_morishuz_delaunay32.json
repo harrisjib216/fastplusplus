@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/morishuz/delaunay32",
+  "one_liner": "Parallel exact-integer 2D (constrained) Delaunay triangulator for int32 points; about 4.4x faster than Triangle single-threaded on 1M points.",
+  "what_it_does": "Delaunay32 builds 2D Delaunay triangulations of signed 32-bit integer points, optionally with noncrossing constraint segments and disjoint polygon domains with holes (constrained Delaunay plus clipping, no Steiner points). The API is a stateful delaunay32::Triangulator: set_options(), set_points(), optionally set_constraints()/set_polygons(), then one triangulate() call that returns counterclockwise triangles as indices into your point vector, plus halfedges, convex hull and duplicate representatives when ResultDetail::Full is selected. Floating-point input must first go through the separate quantize() utility, which maps doubles onto an integer grid and reports error and collisions. It is not a drop-in for Triangle, CDT or CGAL: different types, no refinement or quality meshing, and integer-only input.",
+  "how_it_is_fast": "The core is a Guibas-Stolfi style divide-and-conquer Delaunay over a quad-edge-like dart structure (connect/splice/sym with in-circle-driven hull merges), with points ordered by a radix-sorted Morton (Z-order) key so splits alternate direction and subproblems stay spatially compact. Leaves of up to 16 points are built directly, and leaves whose local span is small use 64-bit lifted predicates even when the global span needs 128-bit ones. Parallelism splits the Morton tree into about four jobs per thread (minimum 16,384 points per job, parallel path only above 50,000 points), builds subtrees on a persistent worker team with a pre-sized edge arena, and merges level by level; arena exhaustion falls back to the growable serial path. Predicates are exact integer arithmetic with the width (int64 or __int128) chosen from the input's coordinate spans, so no floating-point filters or adaptive expansions are needed.",
+  "when_to_use": [
+    "Large unconstrained 2D point sets (around 10^5-10^6+ points) already on, or easily snapped to, an integer grid, such as GIS coordinates in fixed units, pixel/voxel positions or quantized CAD data, where you want exact robustness without floating-point predicate filters",
+    "Multicore machines where a parallel 2D Delaunay helps: the README reports 45.4 ms on 8 threads versus 131.6 ms single-threaded for 1M points on an Apple M1",
+    "Constrained Delaunay of polygon domains with holes, or several disjoint domains at once, when you need a permissive (MIT) dependency-free library instead of commercial Fade2D or Triangle's non-commercial licence",
+    "Repeated triangulations in a loop: a Triangulator keeps its allocations and worker threads across set_points() calls",
+    "Browser use via the separate delaunay32-wasm package"
+  ],
+  "when_not_to_use": [
+    "Floating-point data that must be triangulated at its native precision: input is quantized to int32, which can merge distinct points (collisions are reported) and moves vertices by the reported coordinate error",
+    "Quality mesh generation (minimum-angle refinement, area constraints, Steiner points, intersecting constraints): Triangle or CGAL's mesher still fit; Delaunay32 rejects crossing constraints and inserts no Steiner points",
+    "Coordinates spanning nearly the full int32 range on both axes: certified spans top out around 1.94e9 per axis for a square domain with __int128 (derived from the source bounds), and inputs outside the certified range throw",
+    "MSVC or other compilers without __int128: the certified span drops to 65,535 (about 29,600 for a square domain, derived from the source), and the repo's own benchmark shrinks its domain from 100,000 to 20,000 there",
+    "Dynamic insertion/deletion, 3D, or anything needing a stable ABI: it is a batch 2D triangulator, pre-1.0, and 0.7.0 changed the Triangulator binary layout"
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none beyond the C++ standard library and platform threads (Threads::Threads); the optional delaunay32::extras target adds JSON, sampling and SVG helpers with no third-party code",
+    "min_toolchain": "C++17, CMake 3.16+; __int128 support (GCC/Clang) is needed for the wide coordinate range",
+    "platforms": "Portable C++17; CI builds on ubuntu-latest, macos-latest and windows-latest (MSVC) with ASan/UBSan and TSan jobs; WebAssembly build in a separate repo; no SIMD intrinsics",
+    "thread_safety": "One Triangulator must not be called concurrently; use one instance per concurrent problem. Internally multithreaded when thread_count is 0 (hardware threads) or above 1; the default is serial.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "triangulate() consumes the configured problem even when it throws; you must call set_points() again (and resubmit constraints and polygons) before the next run",
+    "thread_count defaults to 1 (serial); set 0 to use all hardware threads, and inputs below 50,000 points stay serial regardless",
+    "Coincident points collapse to the lowest input index; three or more collinear points return no triangles; cocircular inputs have more than one valid answer, so do not compare outputs edge-for-edge against another library",
+    "Pre-1.0 API churn: 0.3.0 and 0.6.0 removed whole entry-point families without compatibility wrappers, and 0.7.0 requires consumers to rebuild"
+  ],
+  "pick_this_over_siblings_when": "Pick Delaunay32 over detria when you have large point clouds and can use integer coordinates and multiple threads; detria takes floating-point input, is header-only and targets polygon/outline triangulation against CDT and poly2tri. Pick pgl when you need CGAL-like 2D kernels (exact rationals, arrangements, hulls) rather than a dedicated parallel triangulator, and jc_voronoi when you need the Voronoi diagram itself.",
+  "verified_claims_summary": "The README table (first-party, Apple M1, 8 cores, 16 GB) times 1M unique uniform integer points with triangle-only output: Delaunay32 131.6 ms single-threaded and 45.4 ms on 8 threads, versus Fade2D 2.17.3 314.1 ms (1 thread) / 235.2 ms (auto), delaunator-cpp 542.0 ms, Triangle 1.6 584.0 ms and CDT 1.4.5 988.7 ms, so about 4.4x over Triangle and 7.5x over CDT single-threaded (derived from page data). Compiler, flags and how competitors were fed (floats or ints, conversion timed or not) are not stated, and the competitor harness was removed from the repo in 0.6.0; the remaining benchmark times only Delaunay32, end to end including input ingestion and triangle output, on a [0, 100,000) square domain.",
+  "status_note": "Very young but active (48 commits since August 2026, 0.7.0 released 2026-09-14, 191 stars, no issues filed), MIT-licensed with no third-party code, and small enough to vendor; expect breaking changes until 1.0.",
+  "sources_read": [
+    "https://github.com/morishuz/delaunay32",
+    "https://github.com/morishuz/delaunay32/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/morishuz/delaunay32/HEAD/README.md",
+    "https://raw.githubusercontent.com/morishuz/delaunay32/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/morishuz/delaunay32/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/morishuz/delaunay32/HEAD/THIRD_PARTY.md",
+    "https://raw.githubusercontent.com/morishuz/delaunay32/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/morishuz/delaunay32/HEAD/docs/usage.md",
+    "https://raw.githubusercontent.com/morishuz/delaunay32/HEAD/benchmarks/benchmark.cpp",
+    "https://raw.githubusercontent.com/morishuz/delaunay32/HEAD/src/topology.cpp",
+    "https://raw.githubusercontent.com/morishuz/delaunay32/HEAD/src/delaunay.cpp",
+    "https://raw.githubusercontent.com/morishuz/delaunay32/HEAD/src/internal.hpp",
+    "https://raw.githubusercontent.com/morishuz/delaunay32/HEAD/src/triangulator_impl.hpp",
+    "https://raw.githubusercontent.com/morishuz/delaunay32/HEAD/src/edge_arena.hpp",
+    "https://raw.githubusercontent.com/morishuz/delaunay32/HEAD/src/worker_team.cpp",
+    "https://raw.githubusercontent.com/morishuz/delaunay32/HEAD/include/delaunay32/delaunay.hpp",
+    "https://raw.githubusercontent.com/morishuz/delaunay32/HEAD/.github/workflows/ci.yml"
+  ],
+  "confidence": 0.75
+}

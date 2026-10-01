@@ -43,3 +43,8 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - Arraymancer vendors a maintained copy of Laser's GEMM (src/arraymancer/laser); possible home if Laser is re-filed.
 - GFFT (ICPP 2023, task-graph FFT): snippet says 1.18x single-thread, 9.87x at 16 threads over AOCL-FFTW on EPYC; code location unknown.
 - arXiv 2509.03753 "Memory Optimization for Convex Hull Support Point Queries" (GJK support functions).
+- lemire/fastshuffleexperiments retier follow-up: paper (TOMACS 2019) reportedly states i7-6700 Skylake 3.4 GHz, GCC 5.4 -O3 -march=native; open it where reachable to check A.
+- lemire/simple_cpp_shuffle_benchmark; lemire.me 2019-09-28 on the libstdc++ uniform_int_distribution patch (GCC 8.3 Skylake 15 to 8 ns/value).
+- normaldist-benchmark issue #3: camel-cdr single-table ziggurat (~4.0 ns vs 7.3-7.8 ns); open PR #2 adds ratio-of-uniforms.
+- mourner/kdbush.hpp (C++ port of kdbush, archived 2026-06); mourner/geokdbush (JS kNN extension).
+- delaunay32-wasm (WebAssembly port, would be a duplicate).
