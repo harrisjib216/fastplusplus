@@ -1,0 +1,73 @@
+[
+  {
+    "id": "https://github.com/xlite-dev/ffpa-attn",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "bench/README.md gives first-party latency/TFLOPS tables against PyTorch SDPA (PyTorch 2.11, CUDA 13.0, L20/H200/B200/H20), produced by the public bench CLI (python -m ffpa_attn.bench; bench/bench_fp8.py, bench/bench_fp4.py). No host CPU or build flags are stated, so C, not A.",
+    "corrections": {
+      "benchmark_url": "https://github.com/xlite-dev/ffpa-attn/blob/HEAD/bench/README.md",
+      "claimed_speedup": "README: '1.5x~15x speedup over PyTorch SDPA' for D 320 to 1024. bench/README.md (D=512, PyTorch 2.11, CUDA 13.0): B200 CuTe-DSL forward 6.45x to 8.41x over SDPA (up to 1517 TFLOPS, 16K non-aligned bf16) and backward 8.21x to 14.69x (up to 763 TFLOPS); H200 CuTe-DSL forward 1.81x to 3.46x and backward 4.09x to 6.00x; L20 Triton forward 1.03x (decode) to 1.67x and backward 1.63x to 2.21x; H20 Triton forward 1.57x to 3.46x. README news: FP4 on RTX 5090 850-980 TOPS (D=128-256), '3.8x~4.4x' over PyTorch SDPA (FlashAttention-2 backend); FP8 on L20 '1.5x~1.8x' over PyTorch SDPA (BF16) for D=64~224. Third-party: NVIDIA-NeMo Automodel PR #2436 reports 1.4x~1.5x end-to-end training throughput for Gemma4-31B on 8xH200 (per the README; PR not opened). End-to-end FLUX.1-dev on RTX PRO 5000: 17.19 s (SDPA) vs 16.08 s (FFPA-FP8) and 15.99 s (FFPA-FP4) at 1024x1024; 91.25 s vs 79.91 s and 75.73 s at 2048x2048.",
+      "caveats": "For D>256 PyTorch SDPA cannot use its flash backend and falls back to slower backends, so the largest ratios (6x to 15x on B200) are against a weak baseline; FlashAttention-2 does not support D>256 and cuDNN SDPA is not a stated baseline. For D<=256 the speedups are only for FP8/FP4 kernels compared with BF16 SDPA, i.e. lower precision vs higher precision; against SageAttention-2 (FP8) FFPA is only 'comparable or slightly better'. End-to-end diffusion gains are small (about 7% at 1024x1024). First-party; no host CPU or build flags; CUDA backend is forward-only."
+    },
+    "notes": "Metadata confirmed via github.com: Apache-2.0, 335 stars, 27 forks, 544 commits, not archived/fork, last commit 2026-09-26 ('docs: correct sm89 FP8 benchmark GPU (#372)'). benchmark_url moved from the repo root to bench/README.md, which holds the numeric tables. Shortcoming: weak SDPA fallback baseline for D>256 and mixed-precision comparisons for FP8/FP4.",
+    "urls_opened": [
+      "https://github.com/xlite-dev/ffpa-attn",
+      "https://github.com/xlite-dev/ffpa-attn/commits",
+      "https://github.com/xlite-dev/ffpa-attn/tree/main/bench",
+      "https://raw.githubusercontent.com/xlite-dev/ffpa-attn/HEAD/README.md",
+      "https://raw.githubusercontent.com/xlite-dev/ffpa-attn/HEAD/bench/README.md",
+      "https://raw.githubusercontent.com/xlite-dev/ffpa-attn/HEAD/LICENSE"
+    ]
+  },
+  {
+    "id": "https://github.com/moonshotai/flashkda",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "BENCHMARK_H20.md and BENCHMARK_GB200.md give first-party forward latencies against fla chunk_kda and chunk_gated_delta_rule, produced by public scripts (benchmarks/bench_fwd.py via benchmarks/generate_benchmark_md.py); no software versions, build flags or host CPU are stated, so C, not A.",
+    "corrections": {
+      "claimed_speedup": "BENCHMARK_H20.md (T=8192, D=128, forward): H=96 flash_kda 2.6220 ms vs fla_chunk_kda 4.8388 ms (1.85x) fixed, 2.06x and 2.29x for the two varlen cases; H=64 1.95x, 1.91x, 2.31x. BENCHMARK_GB200.md: H=96 2.31x fixed, 2.71x and 3.27x varlen; H=64 1.70x fixed, 2.42x and 3.21x varlen. Versus the fla GDN kernel: 1.17x to 1.43x on H20 and 0.96x (slower, GB200 H=64 fixed: 0.9247 ms vs 0.8857 ms) to 1.80x on GB200.",
+      "caveats": "First-party benchmark with no fla/PyTorch/CUDA versions, build flags or CPU model on the benchmark pages. The H20 page names benchmarks/generate_benchmark_hopper_h20_md.py, which no longer exists (raw fetch 404; the current generator is benchmarks/generate_benchmark_md.py). Both result pages (generated 2026-04-22 and 2026-05-26) predate correctness-related commits: 'fix missing proxy fences around TMA accesses (#25)' (2026-07-29) and 'replace fp16 Neumann inverse with 8x8 fp32 forward substitution' (2026-09-01), so the numbers were measured on code later changed for correctness/precision. H20 is a low-compute, high-bandwidth SKU, so H20 numbers may not transfer to H100. Baseline is the FLA Triton KDA kernel, not oneDNN/cuDNN/XNNPACK/Eigen; the GDN reference is a different (scalar-gate) algorithm, and in one GB200 case (H=64 fixed) FlashKDA is slower than it (0.96x). Only the forward pass is benchmarked; K=V=128 only."
+    },
+    "notes": "Metadata confirmed via github.com: MIT (Copyright 2026 MoonshotAI), 1.3k stars, 122 forks, 10 commits, not archived/fork, last commit 2026-09-01. Record omitted the GB200 H=64 rows (incl. 0.96x vs GDN). Shortcoming worth recording: numbers predate a TMA proxy-fence race fix and a precision change in the solver.",
+    "urls_opened": [
+      "https://github.com/MoonshotAI/FlashKDA",
+      "https://github.com/MoonshotAI/FlashKDA/commits",
+      "https://github.com/MoonshotAI/FlashKDA/tree/HEAD/benchmarks",
+      "https://raw.githubusercontent.com/MoonshotAI/FlashKDA/HEAD/README.md",
+      "https://raw.githubusercontent.com/MoonshotAI/FlashKDA/HEAD/BENCHMARK_H20.md",
+      "https://raw.githubusercontent.com/MoonshotAI/FlashKDA/HEAD/BENCHMARK_GB200.md",
+      "https://raw.githubusercontent.com/MoonshotAI/FlashKDA/HEAD/LICENSE",
+      "https://raw.githubusercontent.com/MoonshotAI/FlashKDA/HEAD/benchmarks/generate_benchmark_md.py"
+    ]
+  },
+  {
+    "id": "https://github.com/qwenlm/flashqla",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "benchmark/benchmark_results_H200.txt and _GB200.txt list first-party per-shape latencies against FLA Triton and FlashInfer with library versions, produced by the public benchmark/bench_gated_delta_rule.py; host CPU and build flags are not stated, so C, not A.",
+    "corrections": {
+      "claimed_speedup": "README: '2-3x forward speedup and 2x backward speedup over the FLA Triton kernel'. benchmark_results_H200.txt, forward, 397B/122B TP8, 1x32768: FlashQLA 0.348 ms vs FLA 1.019 ms (2.93x) vs FlashInfer 1.645 ms (4.73x); 1x4096: 1.19x vs FLA; TP4 4096x8: 3.18x vs FLA but 0.64x vs FlashInfer. H200 across 171 forward rows: 1.18x to 3.32x vs FLA (geometric mean 2.07x, derived from page data), FlashInfer faster in 56 rows (as low as 0.62x); 32 backward rows: 1.38x to 5.47x vs FLA (geometric mean 2.56x, derived from page data). benchmark_results_GB200.txt (torch 2.11.0, fla 0.5.1, flashinfer 0.6.12, tilelang 0.1.12): 171 forward rows 1.07x to 3.58x vs FLA (geometric mean 2.17x, derived from page data), FlashInfer faster in 85 rows (as low as 0.48x; geometric mean vs FlashInfer 1.07x, derived from page data); 32 backward rows 1.94x to 6.44x vs FLA (geometric mean 3.24x, derived from page data).",
+      "compiler_and_flags": "H200 file: torch 2.8.0+cu128, fla 0.5.1, flashinfer 0.6.13, tilelang 0.1.12; GB200 file: torch 2.11.0, fla 0.5.1, flashinfer 0.6.12, tilelang 0.1.12; both Warmup=10, Repeats=100, Backend=cudagraph (README text names FLA 0.5.0, Triton 3.5.1, FlashInfer 0.6.9, TileLang 0.1.8). No compiler flags stated.",
+      "caveats": "First-party benchmark; host CPU and compiler flags not stated (benchmark script benchmark/bench_gated_delta_rule.py and the result files are public). Baselines are the FLA Triton and FlashInfer GDN kernels, not oneDNN/cuDNN/XNNPACK/Eigen. Speedup is shape dependent: on H200 FlashInfer is faster than FlashQLA in 56 of 171 forward rows (as low as 0.62x) and on GB200 in 85 of 171 (as low as 0.48x), mostly small-batch varlen rows, so against FlashInfer FlashQLA is roughly at parity on GB200 forward. Backward is compared only with FLA (FlashInfer has no backward in the table). The README's quoted library versions differ from those printed in the result files. Result files were updated on 2026-09-30."
+    },
+    "notes": "H200 row statistics in the record reproduced exactly from the file; GB200 statistics added. Metadata confirmed via github.com: MIT (Copyright 2026 Qwen, Alibaba), 716 stars, 78 forks, 191 commits, not archived/fork, last commit 2026-09-30 ('Update version to v0.1.3').",
+    "urls_opened": [
+      "https://github.com/QwenLM/FlashQLA",
+      "https://github.com/QwenLM/FlashQLA/commits",
+      "https://raw.githubusercontent.com/QwenLM/FlashQLA/HEAD/README.md",
+      "https://raw.githubusercontent.com/QwenLM/FlashQLA/HEAD/benchmark/benchmark_results_H200.txt",
+      "https://raw.githubusercontent.com/QwenLM/FlashQLA/HEAD/benchmark/benchmark_results_GB200.txt",
+      "https://raw.githubusercontent.com/QwenLM/FlashQLA/HEAD/benchmark/bench_gated_delta_rule.py",
+      "https://raw.githubusercontent.com/QwenLM/FlashQLA/HEAD/LICENSE"
+    ]
+  }
+]
