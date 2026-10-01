@@ -12,7 +12,7 @@ This run is in a locked-down cloud container. What works and what does not:
 Privacy and file rules:
 - Never send the user's email, name or other personal identifiers to any outside service (URLs, headers, payloads). Do not build headers from `git config`. If an API wants a User-Agent, use exactly: User-Agent: fastpp-research-bot/1.0
 - Write nothing in the repository except your named output file. Before fetching anything to disk, run `mkdir -p` on your own scratch directory (given below) and save every file there by ABSOLUTE path. Never write a relative path like readme.md.
-- Never disable the sandbox. Do not call any mcp__hearthbot__ tools.
+- Never disable the sandbox. Do not call any mcp__hearthbot__ tools. Do not use mcp__github__ tools: this session's GitHub access is scoped to the project's own repository, so searching other repositories through them is out of bounds; discover via WebSearch and github.com/topics pages instead.
 
 Output path: the repository root is /home/user/fastpp. Searches write /home/user/fastpp/data/waveN/raw/<ASSIGNMENT_ID>.json (this replaces any /Users/... or /home/claude/... path in the prompt file); verifiers and enrichers write the path their prompt names, rewritten under /home/user/fastpp if it points elsewhere. Check it parses with python3 json.load.
 

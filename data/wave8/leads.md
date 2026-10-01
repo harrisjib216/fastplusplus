@@ -26,3 +26,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - mpc_cuda (arXiv 2608.00085, MPFR/MPC on CUDA): repo not found, paper unopened. (from bigint verifier and search)
 - steleman/nvidia-cgbn (CGBN fork with signed ints and Blackwell support): fork of a listed entry, likely duplicate. (from bigint gh-cpp2 search)
 - wjr-z/wjr (bigint with benches vs GMP in benchmarks/src/biginteger.cpp, no published numbers). (from bigint gh-cpp2 search)
+- tttapa/batmat (claims to beat MKL, OpenBLAS and BLASFEO on small matrices; no numbers in README) and NinjadenMu/fast_matmul. yzhaiustc/ftblas is the code of the listed FT-BLAS paper entry. (from blas gh-cpp2 search)
