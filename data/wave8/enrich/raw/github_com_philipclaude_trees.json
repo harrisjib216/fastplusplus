@@ -1,0 +1,47 @@
+{
+  "id": "https://github.com/philipclaude/trees",
+  "one_liner": "Header-only C++17 kd-trees (balanced and stackless left-balanced) for parallel kNN; builds faster than nanoflann, queries sometimes slower.",
+  "what_it_does": "Builds a static kd-tree over a caller-owned flat coordinate array (stride = dimension, up to 6 dimensions, float or double, uint32_t or size_t indices) and answers k-nearest-neighbour queries through a NearestNeighborSearch object that writes into caller buffers. Two classes: KdTree (balanced, children referenced by integer) and KdTree_LeftBalanced<dim, coord_t, index_t, with_leaves> (implicit 2i/2i+1 children, optional leaf buckets, recursive or iterative query). The API is not nanoflann-compatible; a nanoflann wrapper exists only for benchmarking (HAVE_NANOFLANN).",
+  "how_it_is_fast": "Every internal node is itself a data point (the median from std::nth_element along the widest bounding-box extent), and the node stores the point index with the split axis packed into the low 3 bits, so balanced and bucketed left-balanced trees take 3 x sizeof(index_t) per point and the bucketless left-balanced tree only 1 x (README; nanoflann about 3-4 x). The left-balanced layout needs no child pointers and allows a stackless parent-index traversal (after Ingo Wald's work); the balanced query prunes with an incrementally updated point-to-cell box distance. Construction is parallelised by spawning one std::thread per subtree at depth ceil(log2(hardware threads)); the benchmark also pre-sorts points along a Morton (z-order) curve, timed separately and given to both libraries.",
+  "when_to_use": [
+    "All-points k-nearest-neighbour queries with small k (roughly 10-50) on millions of 3D points, e.g. Voronoi or Delaunay meshing via the radius-of-security theorem, where build time matters.",
+    "Static point sets that are rebuilt often, so faster parallel construction outweighs slightly slower queries.",
+    "Memory-tight cases: the bucketless left-balanced tree uses one index per point.",
+    "Experiments with stackless, GPU-portable kd-tree traversal (the iterative left-balanced query)."
+  ],
+  "when_not_to_use": [
+    "Large k (about 100 or more): the author reports nanoflann catching up, and queries can be slower than nanoflann.",
+    "Radius search, dynamic insert/remove or more than 6 dimensions: the README calls radius search experimental and not recommended, I found no radius function in the current kdtree.h, and dim <= 6 is a static_assert.",
+    "Production code that needs support: 1 star, one author, no releases or unit tests (only a benchmark driver), stale since 2025-06-17.",
+    "MSVC builds: the header uses GCC/Clang builtins (__builtin_clz, __builtin_clzll, __builtin_expect).",
+    "Single-nearest queries through NearestNeighborSearch with k = 1: its constructor calls exit(1) unless k > 1 (use the nearest() helper, which searches k = 2 internally)."
+  ],
+  "integration": {
+    "form": "header-only (single kdtree.h)",
+    "dependencies": "none for kdtree.h (standard library and std::thread); the benchmark build clones nanoflann, morton-nd and the author's stlext at HEAD",
+    "min_toolchain": "C++17 (CMAKE_CXX_STANDARD 17) with GCC or Clang builtins; compiler versions not documented",
+    "platforms": "not documented; author benchmarks on an Apple M1 Pro (aarch64) and runs a smaller benchmark in GitHub Actions",
+    "thread_safety": "Queries are const and the benchmark runs them concurrently from many threads with per-thread result buffers; construction spawns its own threads. Nothing else is documented.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Parallel build (options.parallel defaults to true) joins its threads only when the number spawned at depth ceil(log2(hardware_concurrency)) is exactly 2^depth. By my reading of kdtree.h plus a simulation of its split sizes, some inputs spawn fewer: balanced tree, leaf_size 16, 8 threads: n = 136-142; left-balanced with leaves, 8 threads: n = 128-239; bucketless left-balanced, 32 threads: n = 65-125. In those cases the constructor returns while threads still write the tree, the left-balanced constructor then frees its index_ buffer under them, and destroying the tree calls std::terminate on joinable threads. Set options.parallel = false for small or medium inputs.",
+    "Maxima are initialised with std::numeric_limits<coord_t>::min() (the smallest positive value, not the lowest), so on an axis whose coordinates are all negative the split-axis choice and root bounding box are wrong. As far as I can tell this only loosens pruning (results stay correct), but shifting data to positive coordinates avoids it.",
+    "The tree keeps a raw pointer to your coordinate array, which must outlive it and stay unchanged. The point index is stored shifted left by 3 bits (4 for leaf offsets), so uint32_t indices cap out near 2^29 points (2^28 leaf slots); the overflow check is an assert() removed under NDEBUG.",
+    "The balanced KdTree supports only the recursive search: passing NearestNeighborApproach::kIterative hits KDTREE_ASSERT, which calls exit(1) even in release builds."
+  ],
+  "pick_this_over_siblings_when": "Among catalogued kd-tree siblings, nanoflann is the safer general choice (radius search, dynamic indices, maintained), and PicoTree and Janos95/kdtree also report beating nanoflann. Pick trees only when you want a tiny dependency-free header with parallel construction and a 1-index-per-point layout for small-k all-points kNN, and you can set parallel = false or control input sizes.",
+  "verified_claims_summary": "Author's issue #1 (Aug 2023, under the earlier name 'mapletrees') compares parallel construction and parallel all-points kNN for k = 10, 50 and 100 against nanoflann on z-curve-sorted random 3D points with 12-point leaves, on a 2022 MacBook Pro with Apple M1 Pro. The results are graphs only: build is faster, and combined build plus query is ahead until nanoflann catches up near k = 100. The flags are -O3 -ffast-math -funroll-loops -ffp-contract=fast, the compiler is not stated, and nanoflann is cloned at HEAD and built with hardware_concurrency threads in the wrapper.",
+  "status_note": "Stale (last commit 2025-06-17), 1 star, single author, Apache-2.0; a ~900-line header that is easy to vendor, but treat it as research code and turn off the parallel build for small inputs.",
+  "sources_read": [
+    "https://github.com/philipclaude/trees",
+    "https://github.com/philipclaude/trees/issues/1",
+    "https://raw.githubusercontent.com/philipclaude/trees/HEAD/README.md",
+    "https://raw.githubusercontent.com/philipclaude/trees/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/philipclaude/trees/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/philipclaude/trees/HEAD/kdtree.h",
+    "https://raw.githubusercontent.com/philipclaude/trees/HEAD/util.h",
+    "https://raw.githubusercontent.com/philipclaude/trees/HEAD/test/test_kdtree.cpp"
+  ],
+  "confidence": 0.75
+}

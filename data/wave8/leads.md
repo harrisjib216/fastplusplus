@@ -52,3 +52,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - arXiv 2603.06771 (linear octrees vs nanoflann/PicoTree, neighbour search).
 - GraphBLAS: Julia nonblocking GraphBLAS (arXiv 2509.14211), GraphBLAS kernel fusion (ICS 2025), HPCG on GraphBLAS (arXiv 2304.08232).
 - Pkd-tree paper siblings: BHL-tree, Log-tree, Zd-tree, CPAM (ucrparlay).
+- Open3D registration (beats small_gicp on low-overlap data); fast_gicp (CUDA VGICP/NDT); rbush-knn (JS).

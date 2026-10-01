@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/koide3/small_gicp",
+  "one_liner": "Header-only C++17 point-cloud registration (ICP/GICP/VGICP) and voxel downsampling; beats PCL VoxelGrid, PCL GICP and fast_gicp.",
+  "what_it_does": "Fine registration of 3D point clouds (mainly LiDAR scans): voxel-grid downsampling, kd-tree build, normal/covariance estimation and ICP, point-to-plane ICP, GICP and VGICP alignment, with a Gauss-Newton/Levenberg-Marquardt solver returning the transform, inlier count and 6x6 Hessian. Three API levels: helper functions align()/preprocess_points() on std::vector<Eigen::Vector3d/4d/3f/4f>, a PCL interface (RegistrationPCL derives from pcl::Registration with mostly the same interface as pcl::GeneralizedIterativeClosestPoint, and the downsampling functions accept pcl::PointCloud), and a Registration<Factor, Reduction, ...> template for custom factors, rejectors and optimizers. Python bindings on PyPI work with NumPy and Open3D arrays.",
+  "how_it_is_fast": "Voxel downsampling packs each point's three integer voxel coordinates (fast floor) into one 63-bit key (21 bits per axis), sorts (key, index) pairs (parallel quicksort in the OpenMP/TBB variants) and averages each run, so no hash map is needed. The kd-tree is a from-scratch nanoflann-style median-split tree (std::nth_element on the widest axis) whose recursive build runs as OpenMP or TBB tasks, with fixed-size compile-time kNN result buffers. Registration linearizes one GICP factor per source point (Mahalanobis weight from the inverse of the fused target and rotated source covariances) and sums the 6x6 normal equations with an OpenMP or TBB parallel reduction; a TBB flow-graph odometry pipeline scales to about 128 threads.",
+  "when_to_use": [
+    "LiDAR odometry or scan matching that already uses pcl::GeneralizedIterativeClosestPoint or fast_gicp on the CPU and wants a faster, mostly source-compatible replacement.",
+    "Voxel downsampling of large scans, including fine resolutions where pcl::VoxelGrid fails (README: 0.5 mm voxels on a 1000 m-wide cloud) and you want exact per-voxel means rather than pcl::ApproximateVoxelGrid's spurious points.",
+    "Multi-core machines: downsampling, kd-tree build, covariance estimation and the registration reduction are all parallel (OpenMP or TBB).",
+    "Python pipelines that need GICP/VGICP without PCL (pip install small_gicp; works on NumPy and Open3D data).",
+    "Scan-to-scan odometry that reuses preprocessed clouds and trees across successive alignments (swapSourceAndTarget, preprocess_points)."
+  ],
+  "when_not_to_use": [
+    "Low-overlap registration with a tight correspondence distance: it runs an unbounded nearest-neighbour search and only then rejects by max_dist_sq, and a user measured it slower than Open3D's radius-limited search on ~10% overlap data (issue #134, open).",
+    "GPU pipelines: no GPU code is included (fast_gicp's CUDA VGICP/NDT have not been ported; issue #80).",
+    "General computational geometry or spatial indexing: it is a registration toolkit, not a Boost.Geometry/CGAL/GEOS replacement, and its kd-tree offers kNN only (no radius search in kdtree.hpp).",
+    "Workflows needing bit-identical, deterministic downsampling with threads: the OpenMP/TBB voxel functions can return up to 10% more points than the single-thread one, varying run to run.",
+    "ROS Noetic's stock PCL or any PCL older than 1.11 (boost::shared_ptr), which the PCL interface does not support (README; issue #33)."
+  ],
+  "integration": {
+    "form": "header-only (optional compiled helper library, shared by default, and a pybind11 Python module)",
+    "dependencies": "Eigen 3 (CMake downloads 3.4.0 if missing); bundled nanoflann-derived kd-tree and Sophus-derived Lie utilities; optional OpenMP, Intel TBB, PCL >= 1.11; fmt for tests, examples and benchmarks",
+    "min_toolchain": "C++17, CMake 3.16; Python >= 3.7 for the bindings",
+    "platforms": "Linux, macOS and Windows (CI for all three); PyPI wheels for manylinux x86-64 and aarch64, macOS 14+, Windows 64-bit; SSE/SSE2 baseline unless BUILD_WITH_MARCH_NATIVE=ON",
+    "thread_safety": "Parallelism is internal via num_threads arguments and OMP/TBB variants; concurrent use of shared objects from caller threads is not documented. On MSVC, OpenMP kd-tree construction is compiled out (single-threaded) because task-based OpenMP caused memory errors with Eigen.",
+    "drop_in_for_baseline": "partial — RegistrationPCL is a pcl::Registration subclass with mostly the same interface as pcl::GICP, but voxelgrid_sampling_* are free functions rather than a pcl::Filter, and fast_gicp users must switch APIs"
+  },
+  "gotchas": [
+    "BUILD_WITH_MARCH_NATIVE gives about 1.1x but crashes unless every linked library (Eigen users, PCL) is built with -march=native; it is off by default for that reason (BENCHMARK.md). Open issue #108 reports an Eigen unaligned-array assertion in the basic example.",
+    "Voxel coordinates must fit 21 bits per axis (for 1 cm voxels, coordinates within about ±10.5 km); out-of-range points are dropped with one std::cerr line per point. By my reading of downsampling_omp.hpp, an out-of-range point that starts a 1024-point block is still emitted in the parallel variant.",
+    "align() re-orthonormalizes the rotation of init_T since the fix for issue #127 (incremental registration into a Gaussian voxel map drifted to non-orthogonal rotations and NaN after ~40 clouds; closed 2026-09-29); use a current commit for long incremental runs. It only warns, and still runs, when a cloud has 10 points or fewer.",
+    "Input point types must expose homogeneous 4D coordinates with w = 1: downsampling divides each voxel sum by its w component to get the mean."
+  ],
+  "pick_this_over_siblings_when": "It is the only catalogued sibling that does point-cloud registration and voxel downsampling; for plain kNN or radius search pick nanoflann (which its own single-thread kd-tree roughly matches) or PicoTree, and pick small_gicp when you need the whole parallel registration pipeline or a faster PCL GICP.",
+  "verified_claims_summary": "First-party KITTI 00 runs (BENCHMARK.md and README, plots only): single-thread voxel downsampling about 1.3x faster than pcl::VoxelGrid and 3.2x with 6 TBB threads; single-thread GICP odometry about 2.4x faster than pcl::GICP and 1.9x faster than fast_gicp::GICP with near-identical accuracy (APE 6.096 vs fast_gicp 6.118 vs pcl_gicp 6.451); parallel kd-tree build up to 4x (BENCHMARK.md) or 6x (README) over its own single-thread build, which is about nanoflann speed. CPU, compiler and flags are not stated (only a struck-through AMD 5995WX remark); scripts are public, the CMake default is Release without -march=native.",
+  "status_note": "Actively maintained (last commit 2026-09-29, version 1.0.1), MIT-licensed, on PyPI, with a JOSS 2024 paper; a single main author (Kenji Koide, AIST) and 24 open issues, several labelled bug (performance reports #89, #118, #134; build issues #90, #104).",
+  "sources_read": [
+    "https://raw.githubusercontent.com/koide3/small_gicp/HEAD/README.md",
+    "https://raw.githubusercontent.com/koide3/small_gicp/HEAD/BENCHMARK.md",
+    "https://raw.githubusercontent.com/koide3/small_gicp/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/koide3/small_gicp/HEAD/docs/paper.md",
+    "https://raw.githubusercontent.com/koide3/small_gicp/HEAD/package.xml",
+    "https://raw.githubusercontent.com/koide3/small_gicp/HEAD/pyproject.toml",
+    "https://raw.githubusercontent.com/koide3/small_gicp/HEAD/include/small_gicp/util/downsampling.hpp",
+    "https://raw.githubusercontent.com/koide3/small_gicp/HEAD/include/small_gicp/util/downsampling_omp.hpp",
+    "https://raw.githubusercontent.com/koide3/small_gicp/HEAD/include/small_gicp/util/downsampling_tbb.hpp",
+    "https://raw.githubusercontent.com/koide3/small_gicp/HEAD/include/small_gicp/util/fast_floor.hpp",
+    "https://raw.githubusercontent.com/koide3/small_gicp/HEAD/include/small_gicp/ann/kdtree.hpp",
+    "https://raw.githubusercontent.com/koide3/small_gicp/HEAD/include/small_gicp/ann/kdtree_omp.hpp",
+    "https://raw.githubusercontent.com/koide3/small_gicp/HEAD/include/small_gicp/ann/knn_result.hpp",
+    "https://raw.githubusercontent.com/koide3/small_gicp/HEAD/include/small_gicp/ann/traits.hpp",
+    "https://raw.githubusercontent.com/koide3/small_gicp/HEAD/include/small_gicp/ann/incremental_voxelmap.hpp",
+    "https://raw.githubusercontent.com/koide3/small_gicp/HEAD/include/small_gicp/registration/registration.hpp",
+    "https://raw.githubusercontent.com/koide3/small_gicp/HEAD/include/small_gicp/factors/gicp_factor.hpp",
+    "https://github.com/koide3/small_gicp/issues",
+    "https://github.com/koide3/small_gicp/issues?q=is%3Aissue+label%3Abug",
+    "https://github.com/koide3/small_gicp/issues/89",
+    "https://github.com/koide3/small_gicp/issues/118",
+    "https://github.com/koide3/small_gicp/issues/127",
+    "https://github.com/koide3/small_gicp/issues/134"
+  ],
+  "confidence": 0.8
+}
