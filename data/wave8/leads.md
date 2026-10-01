@@ -22,3 +22,7 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - ucrparlay/Pkd-tree and ucrparlay/SpaceTreeLib (parallel kd-trees vs CGAL): numbers only in papers. (from geo gh-cpp2 search)
 - hku-mars/ikd-Tree (incremental kd-tree for LiDAR mapping) and RTSpatial/LibRTS (ray-tracing-core spatial index): baselines unnamed in READMEs. (from geo gh-cpp2 search)
 - Paper-only sparse claims not opened (arXiv blocked): GraphBLAST, MaskedSpGEMM, PanguLU, DASP, TileSpMV, AmgT, clusterwise-spgemm, SparseX, cfs-spmv, Kokkos Kernels. (from sparse searches)
+- dzhang314/MultiprecisionBenchmarks (MIT): header-only MultiFloats.hpp with harnesses vs MPFR/QD/CAMPARY/FLINT/GMP/Boost, flags -O3 -march=native -flto, g++-14/clang++-20; SC25 paper (doi 10.1145/3712285.3759876) claims up to 35.6x over MPFR on Zen 5 (search snippet only). Likely B or A; a C++ entry in its own right. (from MultiFloats.jl verifier)
+- mpc_cuda (arXiv 2608.00085, MPFR/MPC on CUDA): repo not found, paper unopened. (from bigint verifier and search)
+- steleman/nvidia-cgbn (CGBN fork with signed ints and Blackwell support): fork of a listed entry, likely duplicate. (from bigint gh-cpp2 search)
+- wjr-z/wjr (bigint with benches vs GMP in benchmarks/src/biginteger.cpp, no published numbers). (from bigint gh-cpp2 search)
