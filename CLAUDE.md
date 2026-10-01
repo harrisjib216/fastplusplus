@@ -29,7 +29,8 @@ and baselines). Scripts are in `pipeline/`, data in `data/waveN/`, rendered list
   enrich and re-tier checks.
 - **QUEUE.md** holds later extensions (waves 13-14, cross-language claims, seed-list mining).
   Keep it out of the spec, pipeline and data until waves 3-12 are finished, unless the user pulls
-  it forward.
+  it forward. Its first section, "Unfinished work", is the open backlog of the wave loop (deferred
+  searches, retier checks, seed passes); resume from there and keep it current.
 - **Developer source repo:** it is private, so its entries are capped at tier C and link to a 404. Do not
   change its visibility or modify its checkout without an explicit instruction.
 - Hard-to-reverse actions need the user's confirmation.

@@ -1,5 +1,46 @@
 # Queue: extensions saved for the end
 
+## Unfinished work (resume here first; recorded 2026-10-01 after wave 8 closed at 8e1953f)
+
+This section is the open backlog from the main wave loop. It is not an extension; run it before the
+extension passes further down.
+
+1. **Wave 8 searches b7 (blogs) and b8 (HN), all 7 categories (14 assignments).** Not run because the
+   2026-10-01 cloud session's egress policy blocked hn.algolia.com, arxiv.org and most blogs, and the
+   shared WebSearch budget was spent. Needs a session whose network access allows those hosts
+   (environment menu, Edit, Network access). Steps: `python3 pipeline/render.py data/wave8 --batch b7`
+   (then b8), one Sonnet agent per prompt, merge, `verify.py render --assignments ...`, verify, apply,
+   enrich, `render_lists.py`, commit.
+2. **Wave 8 retier checks that need paper access** (Opus; write `data/wave8/verify/raw/retier-05.json`):
+   - fmm-gen: arXiv 1611.01120 (IPDPS 2017) names dual Xeon E5-2680 v2 with BLIS and MKL DGEMM
+     baselines; may move D to B or A.
+   - lemire/fastshuffleexperiments: TOMACS 2019 paper reportedly states i7-6700, GCC 5.4
+     -O3 -march=native; may move B to A.
+   - HPTT: the B tier rests on a verifier-reported ARRAY 2017 figure (27.4x vs Eigen) that the enricher
+     could not see; confirm it from the paper.
+   - Paper numbers seen only as search snippets: heFFTe (ICCS 2020), CoDiPack (arXiv 1709.07229),
+     MultiFloats (SC25), ALP (ACM TACO 2023), SPRK (ESA 2026, no numbers verified), polylidar (RA-L).
+   - pico_tree / nanoflann: OSTI / arXiv 2106.13972 is an independent comparison (possible B).
+   - juFFTe stays C (ISC26 workshop paper, but its numbers use FFTW_ESTIMATE and predate fixes).
+3. **Wave 8 second seed pass.** `data/wave8/leads.md` holds ~67 leads. The strongest: GFFT (ICPP 2023),
+   Caracal and irregular-blocking LU (GPU sparse LU), CKTSO-GPU, NICSLU, private-gemm-x86 (faer's GEMM),
+   facebookarchive/fbcuda (fbfft), ROOT's RanluxppEngine, Open3D registration, fast_gicp, Zd-tree /
+   CPAM siblings of Pkd-tree, MultiFloats follow-ups (arXiv 2603.14926, 2607.11391). Add a `seed`
+   assignment with a `projects` list, then `seed.py`, merge, verify, enrich, render lists.
+4. **Small checks left from wave 8:**
+   - VBCSR repo_url was overridden to github.com/DeepElectron/vbcsr on the enricher's report of a
+     rename; confirm the redirect.
+   - Pkd-tree (archived) and SpaceTreeLib are both listed; link them in the lists or fold Pkd-tree in.
+5. **Waves 9-12** are set up but not launched: 152 assignments across 19 categories
+   (wave 9 compression: entropy-coders, general-lossless, integer-bitpacking, succinct-structures;
+   wave 10 media: color-and-resampling, font-shaping-text-layout, image-codecs, rasterizers-2d,
+   video-audio; wave 11 runtime: allocators-gcs, coroutines-fibers, filesystems-and-io,
+   logging-tracing, profilers-and-instrumentation, thread-pools-work-stealing; wave 12 languages:
+   bytecode-vms-and-wasm, embedded-scripting, jits, language-interpreters). Re-render b1/b2 before
+   launching so each known list is current. Each wave needs b7/b8 network access too.
+
+---
+
 Extensions extracted from a later rewrite of the spec (2026-09-25). They are **not active**: the spec
 (`faster-than-std-agent-prompt.md`), the pipeline scripts and the records in `data/` stay as they are until
 waves 3–12 finish. Everything below is additive and runs as its own pass at the end.
