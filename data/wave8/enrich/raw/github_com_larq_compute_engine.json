@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/larq/compute-engine",
+  "one_liner": "TensorFlow Lite custom ops for binarized neural networks on 64-bit ARM; reports lower Bi-RealNet latency than dabnn on a Pixel 1.",
+  "what_it_does": "Runs binarized neural networks (1-bit weights and activations, as trained with Larq) on mobile and embedded CPUs. A Python converter (pip package larq-compute-engine, MLIR-based) turns a Larq/Keras model into a .tflite flatbuffer and replaces the emulated binary layers with LCE custom ops (LceBconv2d, LceBMaxPool2d, LceQuantize, LceDequantize). At runtime you build a standard TFLite interpreter and register the LCE ops alongside the built-in ones, so non-binary layers still run on stock TFLite and XNNPACK. It is not a drop-in replacement for any library: you need a model trained for binarization.",
+  "how_it_is_fast": "Binary convolution becomes a binary GEMM: activations and weights are bit-packed into 32-bit words, and each multiply-accumulate is an XOR followed by a popcount. On AArch64 the indirect-BGEMM kernels (8x4x1, 8x4x2 and 8x4x4, picked at runtime from the packed input depth) do this in inline NEON assembly (eor, cnt, addp) with 16-bit accumulators, and the im2col path plugs custom kernels into Google's Ruy GEMM framework. The kernels apply a per-channel output transform (multiplier, bias, clamp) in the same pass, and since v0.7.0 the converter keeps activations bit-packed between binary layers by default.",
+  "when_to_use": [
+    "You are deploying a BNN (QuickNet, Bi-RealNet or your own Larq model) to an AArch64 phone or board such as Android or Raspberry Pi 4 in 64-bit mode.",
+    "Your binary layers are standard 2D convolutions (grouped convolutions are supported since v0.5/v0.6) and the rest of the model can stay on built-in TFLite ops.",
+    "You already train with Larq/Keras and want a converter path that keeps the training graph and the deployed graph consistent.",
+    "You want per-layer latency numbers on device: the repo ships a TFLite benchmark tool with the LCE ops registered."
+  ],
+  "when_not_to_use": [
+    "Full-precision or int8 models: LCE adds nothing; it only speeds up layers that are truly binarized, and binarization costs accuracy (QuickNet tops out at 66.9% ImageNet top-1).",
+    "x86 or other non-AArch64 targets as an inference engine: the hand-written kernels are AArch64-only, and elsewhere the code falls back to portable C++ (Ruy kStandardCpp path, std::bitset popcount).",
+    "GPUs, NPUs or LLM workloads: CPU only, convnet-oriented ops.",
+    "Projects that cannot take a Bazel build pinned to a specific TensorFlow source tree (TF 2.16.1 in WORKSPACE, Bazel 6.5.0).",
+    "Teams wanting fast upstream movement: the last tagged release is v0.16.0 (2024-06-21) and recent commits are mostly dependency bumps."
+  ],
+  "integration": {
+    "form": "static lib (TFLite custom-op library built with Bazel against a pinned TensorFlow source tree) plus a Python converter wheel",
+    "dependencies": "TensorFlow Lite (TensorFlow 2.16.1 sources), Ruy, flatbuffers; the converter needs Python 3.10-3.12 and TensorFlow >= 2.8; Bazel 6.5.0 to build",
+    "min_toolchain": "Bazel 6.5.0; aarch64 builds use -march=armv8-a; Android NDK for Android; exact minimum compiler not documented",
+    "platforms": "Optimized kernels: AArch64 (Android, 64-bit Raspberry Pi and other ARM boards, Apple M1 per the README benchmarks). Portable C++ fallback elsewhere. Converter wheels: Linux x86-64, macOS x86-64 and arm64, Windows x86-64.",
+    "thread_safety": "Not documented beyond TFLite interpreter rules (one interpreter per thread; intra-op threads via TFLite's thread count). Issue #730 (2022) reported the aarch64 benchmark tool crashing with --num_threads=2 on Raspberry Pi and Jetson; closed a day later, resolution not visible on the page.",
+    "drop_in_for_baseline": "partial — the model must be trained with Larq and converted with the LCE converter; the TFLite interpreter API is unchanged, you only register the extra custom ops"
+  },
+  "gotchas": [
+    "Kernels may read (never write) up to 16 bytes past the end of an array (LCE_EXTRA_BYTES in core/types.h); custom tensor allocations need that padding.",
+    "The AArch64 assembly kernels use 16-bit accumulators and are chosen only if the maximum accumulator value fits in uint16; otherwise the code falls back to the portable 4x2 C++ kernel, and bit-packed output is also portable-only.",
+    "The benchmark tool defaults to use_indirect_bgemm=false (Ruy-based BGEMM); pass the flag to measure the indirect kernels.",
+    "Open bug #421 (since 2020): int8 default ranges break when a binary conv is followed by a normal conv."
+  ],
+  "pick_this_over_siblings_when": "Pick LCE over MNN, OpenVINO or FeatherCNN only when your network is binarized end to end, since those engines target float/int8 models; pick BitNet (bitnet.cpp) or T-MAC instead for low-bit LLM inference, which is where LCE has no kernels.",
+  "verified_claims_summary": "The README reports first-party latencies from its TFLite benchmark tool with XNNPACK enabled and random inputs: Bi-RealNet runs in 41.6 ms on a Pixel 1, versus the 61.3 ms that dabnn published for the same model (about 1.47x, a cross-report comparison, not a same-run measurement); QuickNet runs in 25.5 ms single-threaded on a Pixel 1 and 45.0 ms on a Raspberry Pi 4B. The MLSys 2021 paper's 8.5-18.5x figure (known only from search snippets) compares binary convolutions with full-precision ones, which is not equal work; no compiler flags are stated.",
+  "status_note": "Apache-2.0 and still receiving commits (mostly dependency bumps, plus a RISC-V build path in 2026), but the last PyPI release is v0.16.0 from June 2024 and the build is tied to TensorFlow 2.16.1, so expect to do your own porting.",
+  "sources_read": [
+    "https://github.com/larq/compute-engine",
+    "https://raw.githubusercontent.com/larq/compute-engine/HEAD/README.md",
+    "https://raw.githubusercontent.com/larq/compute-engine/HEAD/docs/README.md",
+    "https://github.com/larq/compute-engine/tree/main/docs",
+    "https://github.com/larq/compute-engine/tree/main/larq_compute_engine/core",
+    "https://raw.githubusercontent.com/larq/compute-engine/HEAD/.bazelrc",
+    "https://raw.githubusercontent.com/larq/compute-engine/HEAD/.bazelversion",
+    "https://raw.githubusercontent.com/larq/compute-engine/HEAD/WORKSPACE",
+    "https://raw.githubusercontent.com/larq/compute-engine/HEAD/setup.py",
+    "https://raw.githubusercontent.com/larq/compute-engine/HEAD/configure.py",
+    "https://raw.githubusercontent.com/larq/compute-engine/HEAD/larq_compute_engine/core/types.h",
+    "https://raw.githubusercontent.com/larq/compute-engine/HEAD/larq_compute_engine/core/bgemm/bgemm.h",
+    "https://raw.githubusercontent.com/larq/compute-engine/HEAD/larq_compute_engine/core/bgemm/kernels_aarch64.h",
+    "https://raw.githubusercontent.com/larq/compute-engine/HEAD/larq_compute_engine/core/indirect_bgemm/select_kernel.h",
+    "https://raw.githubusercontent.com/larq/compute-engine/HEAD/larq_compute_engine/core/indirect_bgemm/kernel_8x4x1_aarch64.h",
+    "https://raw.githubusercontent.com/larq/compute-engine/HEAD/larq_compute_engine/core/indirect_bgemm/kernel_4x2_portable.h",
+    "https://raw.githubusercontent.com/larq/compute-engine/HEAD/larq_compute_engine/tflite/kernels/BUILD",
+    "https://raw.githubusercontent.com/larq/compute-engine/HEAD/larq_compute_engine/tflite/benchmark/lce_benchmark_main.cc",
+    "https://raw.githubusercontent.com/larq/compute-engine/HEAD/larq_compute_engine/tflite/benchmark/lce_benchmark_tflite_model.cc",
+    "https://github.com/larq/compute-engine/issues?q=is%3Aissue+bug",
+    "https://github.com/larq/compute-engine/issues/730",
+    "https://github.com/larq/compute-engine/releases",
+    "https://pypi.org/pypi/larq-compute-engine/json",
+    "https://arxiv.org/html/2011.09398v2 (EGRESS_BLOCKED; paper claims taken from WebSearch snippets)"
+  ],
+  "confidence": 0.75
+}

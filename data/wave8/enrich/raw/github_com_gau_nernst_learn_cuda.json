@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/gau-nernst/learn-cuda",
+  "one_liner": "Educational ~300-line CUDA C++ FlashAttention-2 forward kernel; 4-6% faster than flash-attn on one RTX 5090 shape, 3% slower than cuDNN.",
+  "what_it_does": "07_attention in this learning repository holds five progressively optimized FlashAttention-2-style forward kernels (attention_v1.cu to attention_v5.cu), exposed to Python through a PyTorch C++ extension as sdpa_v1 to sdpa_v5(Q, K, V). Inputs are contiguous bf16 tensors [batch, heads, seq, 128]; the output is a new tensor of the same shape. There is no backward pass, causal mask, attention mask, dropout, variable-length or GQA support; it is a worked example to read, not a library to depend on.",
+  "how_it_is_fast": "FlashAttention-2 partitioning: each 128-thread block owns a 64-row query tile, the four warps split those rows, and every warp streams through 64-row K/V tiles with an online softmax (running row max and sum, rescaling the output accumulator) so the attention matrix is never materialized. Data moves global to shared with cp.async into XOR-swizzled shared memory to avoid bank conflicts, then to registers with ldmatrix.x4 (transposed for V), and both matmuls use bf16 mma.sync.m16n8k16 tensor-core instructions with fp32 accumulators. v5 double-buffers K and overlaps the next K and V loads with the softmax and the matmuls (2-stage cp.async pipeline).",
+  "when_to_use": [
+    "You want a short, readable reference for a near-roofline FlashAttention-2 forward pass in raw CUDA C++ and inline PTX, with each optimization isolated in its own file (swizzling, pipelining, ldmatrix.x4).",
+    "You are writing your own attention kernel for consumer Blackwell (RTX 5090, sm_120) or Ampere/Ada-class GPUs and need a working baseline to modify, for example to try MXFP8/NVFP4 MMA, which the author cites as the reason for using CUDA C++ instead of Triton.",
+    "Non-causal bf16 prefill-style attention with head_dim 128 and sequence lengths that are multiples of 64, where you can verify the result yourself against F.scaled_dot_product_attention."
+  ],
+  "when_not_to_use": [
+    "Production inference or training: use PyTorch SDPA with the cuDNN backend (203.61 vs 197.74 TFLOPS on the author's own benchmark), flash-attn or FlashInfer, which handle masks, varlen, GQA and backward.",
+    "Any head_dim other than 128: the host wrapper prints an error and calls exit(1), terminating the Python process.",
+    "Sequence lengths not divisible by 64: the kernel has no tail handling or KV masking, so partial tiles read out of bounds and produce wrong results.",
+    "Causal attention, masks, dropout, fp16 or fp8 inputs, or training (no backward kernel).",
+    "Anything you need to redistribute: the repository has no license file."
+  ],
+  "integration": {
+    "form": "source-drop (PyTorch C++/CUDA extension JIT-built with torch.utils.cpp_extension.load)",
+    "dependencies": "PyTorch with CUDA (cpp_extension, pybind11), CUDA toolkit (README results with CUDA 12.9); the harness also uses triton.testing.do_bench and pandas, and flash-attn optionally",
+    "min_toolchain": "CUDA 12.x with an sm_80+ target (mma.sync bf16, cp.async, ldmatrix); README results use CUDA 12.9; exact minimum not documented",
+    "platforms": "NVIDIA GPUs sm_80 and newer that support mma.sync bf16 (measured only on RTX 5090, sm_120); not for AMD/Intel",
+    "thread_safety": "not documented; kernels launch on the default CUDA stream rather than PyTorch's current stream",
+    "drop_in_for_baseline": "partial — same (Q, K, V) to O semantics as F.scaled_dot_product_attention for non-causal, unmasked, bf16, head_dim 128, contiguous [B, H, L, D] inputs only"
+  },
+  "gotchas": [
+    "attention.cpp does not check dtype, device or contiguity and takes raw data pointers, flattening batch x heads; a transposed or non-contiguous tensor gives silently wrong output.",
+    "Kernels launch with <<<>>> on the default stream, ignoring torch.cuda.current_stream(); code running on other streams can race or serialize.",
+    "Softmax uses the fast-math __expf and P is rounded to bf16 before the P@V matmul (as in FA2); the harness checks output only with torch.testing.assert_close defaults on one random shape.",
+    "The harness default is --bs 4 while the README table states bs=1; reproduce with --bs 1 to compare numbers."
+  ],
+  "pick_this_over_siblings_when": "Pick this over FlashAttention-3, ThunderKittens or SageAttention only when you want to learn from or fork a minimal kernel: FA3 targets Hopper, SageAttention trades precision for speed on RTX 5090-class GPUs, and both are maintained libraries, whereas this is roughly 300 lines you can read in one sitting.",
+  "verified_claims_summary": "On one RTX 5090 capped at 400W (CUDA 12.9, bf16, head_dim 128, 8 heads, 4096 queries x 8192 keys, non-causal), the author's harness timed v5 at 197.74 TFLOPS (median from triton do_bench), against 190.58 for the flash-attn package (about 1.04x) and 186.73 for PyTorch SDPA's FlashAttention backend (about 1.06x), but behind SDPA's cuDNN backend at 203.61 TFLOPS (about 0.97x). PyTorch and flash-attn versions and the host CPU are not stated.",
+  "status_note": "The repo gets commits (last 2026-09-07), but this is a personal learning repository with no license, so treat it as reference reading only; the attention kernel was written up in an August 2025 blog post (gau-nernst.github.io/fa-5090, blocked here and known only from search snippets).",
+  "sources_read": [
+    "https://github.com/gau-nernst/learn-cuda",
+    "https://raw.githubusercontent.com/gau-nernst/learn-cuda/HEAD/README.md",
+    "https://raw.githubusercontent.com/gau-nernst/learn-cuda/HEAD/LICENSE (404)",
+    "https://github.com/gau-nernst/learn-cuda/tree/HEAD/07_attention",
+    "https://raw.githubusercontent.com/gau-nernst/learn-cuda/HEAD/07_attention/README.md",
+    "https://raw.githubusercontent.com/gau-nernst/learn-cuda/HEAD/07_attention/main.py",
+    "https://raw.githubusercontent.com/gau-nernst/learn-cuda/HEAD/07_attention/attention.cpp",
+    "https://raw.githubusercontent.com/gau-nernst/learn-cuda/HEAD/07_attention/attention_v5.cu",
+    "https://raw.githubusercontent.com/gau-nernst/learn-cuda/HEAD/07_attention/common.h",
+    "https://gau-nernst.github.io/fa-5090/ (EGRESS_BLOCKED; date and motivation from WebSearch snippets)"
+  ],
+  "confidence": 0.8
+}

@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/linkedin/liger-kernel",
+  "one_liner": "Triton kernels that monkey-patch Hugging Face LLMs for training; mainly cut memory, with roughly 15-40% end-to-end throughput gains over eager PyTorch.",
+  "what_it_does": "A Python package of Triton kernels for the non-matmul parts of LLM training: RMSNorm, LayerNorm, RoPE, SwiGLU/GeGLU, cross-entropy, fused linear cross-entropy, plus chunked post-training and distillation losses (DPO, ORPO, SimPO, KTO, JSD, KL). One call such as apply_liger_kernel_to_llama(), or AutoLigerKernelForCausalLM, swaps the modules in Hugging Face Transformers modeling code for about 40 model families. The kernels are also exposed as standalone nn.Modules and autograd Functions, and Axolotl, LLaMA-Factory, TRL's SFTTrainer and the Hugging Face Trainer already integrate them.",
+  "how_it_is_fast": "Kernel fusion of memory-bound elementwise and row-reduction ops (one Triton program per row, with the forward pass caching per-row rstd for backward), so the gain comes from fewer HBM round trips and kernel launches. Cross-entropy computes the gradient during the forward pass and writes it in place over the logits tensor, so the backward pass only rescales it. Fused linear cross-entropy chunks the batch x tokens dimension so the full BT x V logits matrix is never materialized (by default transient logits are bounded at about BT x H elements), which is where most of the 60% memory saving comes from. Optional cuTile and CuTe-DSL backends (LIGER_KERNEL_IMPL) provide Hopper/Blackwell variants of some kernels.",
+  "when_to_use": [
+    "Fine-tuning or pretraining a supported Hugging Face causal LM (Llama, Qwen, Gemma, Mistral, Phi, DeepSeek and others) where large vocabularies (128k+) make the logits plus cross-entropy step the activation-memory peak; fused linear cross-entropy lets you raise batch size or context (the README chart: Hugging Face OOMs at 4K context while Liger reaches 16K on 8 A100s).",
+    "Eager-mode PyTorch training with FSDP, DeepSpeed or DDP where you cannot or do not want to rely on torch.compile.",
+    "Alignment or distillation losses on large-vocabulary models, where the chunked fused-linear losses save memory (benchmark CSV, CPO/ORPO/SimPO/KTO versus the Hugging Face references: 1.04-1.31x faster and up to 3.9-8.9x less memory, though ORPO uses more memory on one shape, 0.86x).",
+    "Mixed GPU fleets: the same Triton code is run in CI on NVIDIA, AMD and Intel GPUs and on Ascend NPUs."
+  ],
+  "when_not_to_use": [
+    "When raw speed of the loss step is the goal: the repo's own CSV shows fused linear cross-entropy at 0.46-0.89x the speed of the Hugging Face baseline (it trades time for memory), and fused_linear_jsd at a median 0.54x.",
+    "Standalone softmax, embedding or Megatron RMSNorm: Liger is slower than torch on most measured shapes (softmax median 0.33x, embedding 0.50-0.80x versus torch.compile, megatron_rms_norm median 0.63x), and layer_norm/group_norm drop to 0.30x/0.51x on some shapes.",
+    "Inference serving: the kernels target training (forward plus backward); use FlashInfer, FasterTransformer or engine-native kernels instead.",
+    "Models or Transformers versions outside the patching table: monkey-patching depends on Hugging Face module names and has broken on upstream changes (issues #543 and #723).",
+    "Code that reuses the logits after passing them to LigerCrossEntropyLoss: the in-place gradient write can silently corrupt gradients (open issue #272)."
+  ],
+  "integration": {
+    "form": "module (pip package liger-kernel; pure Python plus Triton JIT, optional native liger-cute-kernels wheel)",
+    "dependencies": "torch >= 2.1.2 and triton >= 2.3.1 (CUDA); triton >= 3.0.0 with ROCm PyTorch; torch >= 2.6.0 for Intel XPU; torch/torch_npu 2.9.0 and triton-ascend 3.2.2 for Ascend; transformers for the patching APIs; optional cuda-tile, nvidia-cutlass-dsl >= 4.6.0, liger-cute-kernels with NVSHMEM",
+    "min_toolchain": "Python 3.10+; torch 2.1.2 and Triton 2.3.1 on CUDA; CUDA Toolkit 13.1+ for the optional cuTile backend; CUDA 12.9 for the native LCK wheel",
+    "platforms": "Anything Triton supports: NVIDIA GPUs (benchmark CSV covers A100, H100, B200, RTX 3090/4090), AMD ROCm GPUs, Intel XPU, Ascend NPU; CuTe-DSL and native kernels only on Hopper/Blackwell",
+    "thread_safety": "not documented; native TP/EP kernels are collectives that must be called in the same order on every rank",
+    "drop_in_for_baseline": "partial — the one-line patch replaces Hugging Face modules for listed model families, but cross-entropy overwrites its input logits and the patch is tied to specific Transformers module layouts"
+  },
+  "gotchas": [
+    "LigerCrossEntropy stores the gradient in the logits buffer during forward without bumping PyTorch's version counter, so autograd cannot detect a later reuse of those logits; issue #272 shows gradients differing from F.cross_entropy (open since 2024-09).",
+    "With bf16 parameters and accum_dtype=None, fused linear cross-entropy accumulates grad_weight/grad_bias in bf16; pass accum_dtype=torch.float32 if you need fp32 accumulation.",
+    "The fused linear cross-entropy forward calls .item() (a CUDA synchronization, noted as a TODO in the source), and an optional CuTe-DSL backend raises an error if it is selected on an unsupported device.",
+    "The headline 20% throughput and 60% memory numbers are images measured against untuned eager Hugging Face code (no torch.compile, Llama 3-8B, FSDP1, 8 A100s); kernel-level gains vary from 0.3x to 10x by op and shape."
+  ],
+  "pick_this_over_siblings_when": "Pick Liger over QuACK when you want a one-line patch for Hugging Face models that also runs on AMD, Intel and Ascend; QuACK's CuTe-DSL memory-bound kernels report higher throughput than Liger v0.5.10 on H100 but are NVIDIA-only. Pick it over LightSeq when your models come from current Hugging Face Transformers rather than LightSeq's own Transformer layers.",
+  "verified_claims_summary": "End to end, the README charts show more than 20% higher throughput and 60% less memory than stock Hugging Face eager code for Llama 3-8B training (bf16, batch 8, AdamW, gradient checkpointing, FSDP1, 8x A100); the example scripts report 15-40% throughput gains. At kernel level, the repo's benchmark CSV (median timings of full forward+backward, versus the Hugging Face modules, on A100/H100/B200/RTX GPUs with the Liger version recorded but no Triton/PyTorch versions) gives cross-entropy 2.40-2.87x, RMSNorm 1.11-8.63x and RoPE 1.88-10.24x, with fused linear cross-entropy slower (0.46-0.89x) but 1.4-4.8x lighter on memory.",
+  "status_note": "Very active (v0.8.4 on PyPI 2026-09-30, commits through 2026-09-30, CI on NVIDIA/AMD/Intel/Ascend), BSD-2-Clause, and widely integrated, so it is safe to adopt; pin the Transformers version you patch against.",
+  "sources_read": [
+    "https://github.com/linkedin/Liger-Kernel",
+    "https://raw.githubusercontent.com/linkedin/Liger-Kernel/HEAD/README.md",
+    "https://raw.githubusercontent.com/linkedin/Liger-Kernel/HEAD/benchmark/README.md",
+    "https://raw.githubusercontent.com/linkedin/Liger-Kernel/HEAD/benchmark/data/all_benchmark_data.csv",
+    "https://raw.githubusercontent.com/linkedin/Liger-Kernel/HEAD/setup.py",
+    "https://raw.githubusercontent.com/linkedin/Liger-Kernel/HEAD/pyproject.toml",
+    "https://raw.githubusercontent.com/linkedin/Liger-Kernel/HEAD/src/liger_kernel/ops/fused_linear_cross_entropy.py",
+    "https://raw.githubusercontent.com/linkedin/Liger-Kernel/HEAD/src/liger_kernel/ops/cross_entropy.py",
+    "https://raw.githubusercontent.com/linkedin/Liger-Kernel/HEAD/src/liger_kernel/ops/rms_norm.py",
+    "https://raw.githubusercontent.com/linkedin/Liger-Kernel/HEAD/src/liger_kernel/ops/utils.py",
+    "https://github.com/linkedin/Liger-Kernel/issues?q=is%3Aissue%20label%3Abug",
+    "https://github.com/linkedin/Liger-Kernel/issues/272",
+    "https://pypi.org/pypi/liger-kernel/json"
+  ],
+  "confidence": 0.8
+}
