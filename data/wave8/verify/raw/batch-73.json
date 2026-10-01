@@ -1,0 +1,85 @@
+[
+  {
+    "id": "https://github.com/waynehacking8/blackwell-tensorcore-kernels",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "A",
+    "tier_reason": "README Phase 2 table and results/mma_ablation.md give mma_warptile 243.2 TFLOP/s vs cublas_tc (cublasGemmEx dispatching cutlass_80_tensorop_s16816gemm_f16_128x64_64x3) 229.0 at 8192^3; the post-fix canonical results/bench.csv has 238.47 vs 225.75. Benchmark code is public (src/main.cu, src/gemm_mma.cu, src/cublas_tc.cu, scripts/run_bench.sh), compiler is CUDA 12.8 nvcc, flags are fixed by the public CMakeLists.txt (no extra nvcc flags), and the GPU model is stated (RTX PRO 6000 Blackwell Max-Q).",
+    "corrections": {
+      "workload": "Hand-written FP16-in/FP32-acc GEMM using raw mma.sync m16n8k16 + ldmatrix, XOR-swizzled shared memory, 16-byte vectorized cp.async with a 2-stage pipeline (sweep winner 2 > 3 > 4), 128x128 CTA and 64x64 per-warp register tiles, M=N=K=8192 on a power-capped (300 W) Blackwell workstation GPU; 10 timed calls after one warm-up, CUDA events.",
+      "claimed_speedup": "243.2 TFLOP/s vs 229.0 TFLOP/s for cuBLAS tensor-core GEMM at 8192^3 on sm_120 (106.1%, README Phase 2 table; five process runs 243.2-244.0 vs 229.0-229.5); the canonical results/bench.csv re-run after the cuBLAS handle-caching fix has 238.47 vs 225.75 TFLOP/s (about 1.056x, derived from page data); nsys per-kernel durations 4.52 ms vs 4.79 ms. The WMMA kernel in the same repo reaches only 44.4% of cuBLAS-TC, and a CUTLASS 3.x wgmma build reaches 85.5% of cuBLAS on H100 (641 TFLOP/s).",
+      "caveats": "The 6% win is over the older cutlass_80 kernel that cuBLAS picks on this card (a dispatch gap), at one size (8192^3) and one shape, on a power-capped Max-Q part; the README says it is not a cuBLAS replacement and every other row is below cuBLAS (45% for WMMA, 85.5% for the H100 CUTLASS path); the cuBLAS harness originally created a cuBLAS handle on every timed call (fixed 2026-06-02, data re-run 2026-06-04; the post-fix 8192 result still shows the win); CMakeLists sets no CMAKE_BUILD_TYPE or extra nvcc flags; recent commits are co-authored by an AI assistant per the commit list; baseline cuBLAS is not one of OpenBLAS, MKL, Eigen or BLIS."
+    },
+    "notes": "Numbers verified in README, results/mma_ablation.md and results/bench.csv. The record's '3-stage cp.async' was wrong (winning kernel uses 2 stages; 3 stages was the WMMA kernel's choice); fixed in workload. Metadata checked on github.com: MIT, 1 star, not a fork, last commit 2026-06-04.",
+    "urls_opened": [
+      "https://github.com/waynehacking8/blackwell-tensorcore-kernels",
+      "https://github.com/waynehacking8/blackwell-tensorcore-kernels/commits",
+      "https://raw.githubusercontent.com/waynehacking8/blackwell-tensorcore-kernels/HEAD/README.md",
+      "https://raw.githubusercontent.com/waynehacking8/blackwell-tensorcore-kernels/HEAD/CMakeLists.txt",
+      "https://raw.githubusercontent.com/waynehacking8/blackwell-tensorcore-kernels/HEAD/LICENSE",
+      "https://raw.githubusercontent.com/waynehacking8/blackwell-tensorcore-kernels/HEAD/Makefile",
+      "https://raw.githubusercontent.com/waynehacking8/blackwell-tensorcore-kernels/HEAD/results/bench.csv",
+      "https://raw.githubusercontent.com/waynehacking8/blackwell-tensorcore-kernels/HEAD/results/mma_ablation.md",
+      "https://raw.githubusercontent.com/waynehacking8/blackwell-tensorcore-kernels/HEAD/src/main.cu",
+      "https://raw.githubusercontent.com/waynehacking8/blackwell-tensorcore-kernels/HEAD/src/cublas_tc.cu",
+      "https://raw.githubusercontent.com/waynehacking8/blackwell-tensorcore-kernels/HEAD/include/util.cuh",
+      "https://raw.githubusercontent.com/waynehacking8/blackwell-tensorcore-kernels/HEAD/scripts/run_bench.sh",
+      "https://raw.githubusercontent.com/waynehacking8/blackwell-tensorcore-kernels/HEAD/VALIDATION.md"
+    ]
+  },
+  {
+    "id": "https://github.com/carlushuang/cpu_gemm_opt",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "A",
+    "tier_reason": "README table gives gflops vs gflops_ref per size; src/gemm_driver.cc times cblas_sgemm_opt and the linked OpenBLAS cblas_sgemm (openblas_set_num_threads(1), pinned to one core), src/build.sh states clang++ 7.0.0 and -O3 -m64 -mfma -msse -msse2, and the CPU is Xeon Gold 6142 at 2600 MHz.",
+    "corrections": {
+      "workload": "Single-core row-major SGEMM, square sizes 48 to 9120, alpha=beta=1, hand-written AVX2 6x16 micro-kernel with per-size tuned block parameters, hyperthreading off; OpenBLAS also limited to one thread and the process pinned to one CPU.",
+      "claimed_speedup": "78.31 GFLOPS (96.38% of peak) vs 75.11 for the OpenBLAS reference column at 960^3; 78.12 vs 73.65 at 1920^3; 78.20 vs 73.41 at 3264^3; 78.62 vs 72.70 at 9120^3; 75.79 vs 68.14 at 192^3; 60.13 vs 43.05 at 48^3. About 4-9% faster at every size from 960 up (derived from page data). Slower than the reference at 144^3 (55.85 vs 64.26).",
+      "caveats": "OpenBLAS is version 0.3.4 (2019) and its build TARGET is not stated, so it may not have been the best kernel for that CPU; the gflops_ref column is not labelled in the README (identified as OpenBLAS from the README sentence and src/gemm_driver.cc / src/build.sh); the win is small (4-9% at large sizes) and reverses at 144^3; build.sh also adds -g and the OpenBLAS path /opt/OpenBLAS is machine-specific; the README says tuning was unfinished; results are 7 years old; single-core only."
+    },
+    "notes": "All quoted numbers match the README table; the table actually runs to 9120^3, not 3264^3. Metadata checked on github.com: MIT, 75 stars, 16 forks, not a fork, last commit 2019-04-15 (abandoned).",
+    "urls_opened": [
+      "https://github.com/carlushuang/cpu_gemm_opt",
+      "https://github.com/carlushuang/cpu_gemm_opt/commits",
+      "https://raw.githubusercontent.com/carlushuang/cpu_gemm_opt/HEAD/README.md",
+      "https://raw.githubusercontent.com/carlushuang/cpu_gemm_opt/HEAD/src/build.sh",
+      "https://raw.githubusercontent.com/carlushuang/cpu_gemm_opt/HEAD/src/gemm_driver.cc",
+      "https://raw.githubusercontent.com/carlushuang/cpu_gemm_opt/HEAD/LICENSE"
+    ]
+  },
+  {
+    "id": "https://github.com/mazukiri/emugemm-cdna",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "The 1.20-1.22x figures are first-party (README and docs/RESULTS_ROUND8.md section C), and the docs say 'the speed numbers of record come from emu_tuned', but emu_tuned.cpp (and rocblas_tune.cpp) are not in the repository (bench/ and issue9985/src/ listings, 404 on raw). The public bench/emugemm_test.cpp times native rocBLAS with the default solution (index 0), not the tuned baseline, so the headline comparison cannot be reproduced from public code: not A; no peer review: not B.",
+    "corrections": {
+      "benchmark_url": "https://github.com/Mazukiri/emugemm-cdna/blob/main/docs/RESULTS_ROUND8.md",
+      "claimed_speedup": "bf16x3 vs native FP32 rocBLAS, both sides per-shape solution-tuned, on one MI250 GCD: 45.33 vs 37.52 TFLOP/s at M=8192 N=28672 K=8192 (1.21x), 44.26 vs 37.03 at M=16384 N=8192 K=8192 (1.20x), 45.06 vs 37.02 at M=N=K=12288 (1.22x) (docs/RESULTS_ROUND8.md section C; README summarizes as 1.20-1.22x on every shape tested). Whole node, 8 GCDs at 8192^3: 325.1 vs 278.4 TF (1.17x).",
+      "workload": "FP32 GEMM emulated by splitting inputs into three BF16 slices (bf16x3) multiplied on the matrix cores, on one MI250 GCD, three shapes (8192x28672x8192, 16384x8192x8192, 12288^3), with the native rocBLAS FP32 side also tuned per shape; row-major, non-transposed, alpha=1, beta=0 only.",
+      "caveats": "GPU, not CPU. Only three shapes back the 1.20-1.22x; the harness that produced them (emu_tuned.cpp) is not published. bf16x3 has a relative-error floor of 4.4355e-6, so at the tested K (8192-12288) it is less accurate than native FP32 (4.49e-6 vs 1.62e-6 at K=8192 in the same docs): the speedup is at a lower accuracy tier, not like-for-like. The README records that an earlier 2.1x was really 1.21x because the baseline ran rocBLAS's default kernel, and ties the investigation to ROCm/rocm-libraries issue 9985, so the win depends on how well the native baseline is tuned; the tuning table is specific to gfx90a and ROCm 7.2.3. Timing-harness fixes landed 2026-08-13 ('Stop a failed HIP call from returning a plausible-looking timing'), after the Round 8 numbers (2026-07-25); the docs do not say whether the 1.20-1.22x table was re-measured. Last commit co-authored by an AI assistant. Baseline rocBLAS is not one of OpenBLAS, MKL, Eigen or BLIS."
+    },
+    "notes": "Numbers match README and docs/RESULTS_ROUND8.md, but the benchmark source for them is missing from the repo, so A drops to C. Biggest shortcoming to record: emulated result is ~2.8x less accurate than native FP32 at the tested K. Metadata checked on github.com: MIT, 0 stars, not a fork, last commit 2026-09-03.",
+    "urls_opened": [
+      "https://github.com/Mazukiri/emugemm-cdna",
+      "https://github.com/Mazukiri/emugemm-cdna/commits",
+      "https://github.com/Mazukiri/emugemm-cdna/tree/main/docs",
+      "https://github.com/Mazukiri/emugemm-cdna/tree/main/bench",
+      "https://github.com/Mazukiri/emugemm-cdna/tree/main/issue9985/src",
+      "https://raw.githubusercontent.com/Mazukiri/emugemm-cdna/HEAD/README.md",
+      "https://raw.githubusercontent.com/Mazukiri/emugemm-cdna/HEAD/BUILD.md",
+      "https://raw.githubusercontent.com/Mazukiri/emugemm-cdna/HEAD/LICENSE",
+      "https://raw.githubusercontent.com/Mazukiri/emugemm-cdna/HEAD/bench/emugemm_test.cpp",
+      "https://raw.githubusercontent.com/Mazukiri/emugemm-cdna/HEAD/docs/RESULTS_ROUND8.md",
+      "https://raw.githubusercontent.com/Mazukiri/emugemm-cdna/HEAD/docs/RESULTS_ROUND9.md",
+      "https://raw.githubusercontent.com/Mazukiri/emugemm-cdna/HEAD/docs/RESULTS_ROUND10.md"
+    ]
+  }
+]
