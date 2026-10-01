@@ -1,0 +1,55 @@
+{
+  "id": "https://github.com/bytedance/lightseq",
+  "one_liner": "Fused CUDA Transformer layers for training and beam-search inference; 1.4-2.1x faster training than PyTorch fp16 AMP on A100.",
+  "what_it_does": "A CUDA/C++ library with Python bindings that replaces Transformer-family layers (embedding, encoder, decoder, cross-entropy, Adam) for training and ships a separate inference engine with beam search, sampling and CRF decoding. Training is used by swapping PyTorch modules for LSTransformerEncoderLayer etc. (or running lightseq-train in place of fairseq-train); inference needs the checkpoint exported to LightSeq's protobuf or HDF5 format and loaded with lightseq.inference (lsi.Transformer, lsi.Bert, lsi.QuantTransformer). A Triton Inference Server backend and Docker image are provided for serving.",
+  "how_it_is_fast": "Coarse-grained kernel fusion: chains of element-wise ops (bias add, dropout, residual, layer norm, softmax with mask) run as one launch around cuBLAS GemmEx calls, cutting launch count and intermediate memory traffic. The inference engine adds Hierarchical Auto-Regressive Search (HARS) to remove redundant work in beam search, plus dynamic GPU memory reuse with buffers preallocated for the maximum batch and length. LightSeq2 (SC22) adds a mixed-precision trainer that links all parameters and gradients into one contiguous workspace so the optimizer update is a single fused pass, and int8 GEMM paths for quantised training and inference.",
+  "when_to_use": [
+    "Training Fairseq or Hugging Face Transformer/BERT/GPT-2/ViT models on V100/A100-class GPUs with small token batches (512-1024 tokens), where the README tables show the largest gains (1.78-1.99x Transformer, 1.92-2.12x BERT vs PyTorch fp16).",
+    "Seq2seq translation serving with beam search at batch 8-128 on T4-class GPUs, where docs/performance.md shows it 1.0-1.39x faster than FasterTransformer (derived from page data).",
+    "Int8 quantisation-aware training followed by int8 inference of the same Transformer, Bert or GPT-2 model in one toolchain.",
+    "Legacy pipelines already pinned to Python 3.6-3.8, PyTorch 1.x and Fairseq 0.10.2."
+  ],
+  "when_not_to_use": [
+    "Sequences longer than 1024 tokens: the training softmax kernel throws a runtime_error above to_len 1024 (issue #197 asks for longer sequences and is unanswered); attention is materialised, not FlashAttention-style.",
+    "Hopper or newer GPUs: the CMake and JIT arch lists stop at sm_86/sm_87, and nothing has been updated since 2023.",
+    "Batch-1 beam search latency: on T4 it is slower than FasterTransformer (29.66 vs 26.25 ms at seq 32, 63.04 vs 54.02 ms at seq 64).",
+    "Large token batches: training speedup flattens to about 1.44x at 4096-15000 tokens, which torch.compile or fused-kernel PyTorch paths may already match (not measured here).",
+    "Any project needing a maintained dependency: the repository was archived on 2025-07-21 and PyPI wheels cover only Python 3.6-3.8 on Linux."
+  ],
+  "integration": {
+    "form": "Python package (pip wheel with prebuilt inference extension; training ops JIT-compiled through torch.utils.cpp_extension and ninja) or C++ static/shared lib built with CMake; Triton backend",
+    "dependencies": "CUDA toolkit (cuBLAS, Thrust, CUB submodule), pybind11, protobuf >= 3.13, HDF5; PyTorch for training; Fairseq 0.10.2, transformers or DeepSpeed for the integrations",
+    "min_toolchain": "C++14, CMake 3.18; docs/build.md says CUDA >= 10.1 and < 11, but the current CMakeLists requires find_package(CUDA 11)",
+    "platforms": "Linux, NVIDIA GPUs (CMake arch lists 60-86 legacy or 70-87 new arch; training JIT defaults to 6.0/6.1/7.0 plus 8.0/8.6); the new-arch build has fp32-only x86 and arm device targets",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": "partial — Fairseq users swap fairseq-train for lightseq-train; Hugging Face models need their encoder layers replaced and weights copied; inference requires exporting to LightSeq protobuf/HDF5"
+  },
+  "gotchas": [
+    "setup.py catches any build failure of the inference extension, logs a warning and installs the training-only package anyway, so a broken CUDA build can go unnoticed until lightseq.inference is imported.",
+    "Training layers preallocate for max_batch_tokens and max_seq_len set in get_config; exceeding either raises ValueError at forward time.",
+    "Training kernels are JIT-compiled with -O3 --use_fast_math, so results are not bit-identical to PyTorch; the user guide warns Hugging Face BERT fine-tuning 'is unstable and may not converge', and issue #138 reports non-convergence with fairseq --update_freq.",
+    "Open bug reports include wrong BART top-k sampling results (#256), a bug with small decoder vocab sizes (#263) and failures at batch size 1 in the Hugging Face example (#191)."
+  ],
+  "pick_this_over_siblings_when": "Pick LightSeq over FasterTransformer or ByteTransformer when you need training acceleration as well as inference (both siblings are inference-only, and ByteTransformer covers only the BERT encoder), or when you run Fairseq beam search at batch 8 and up. For new inference deployments prefer CTranslate2, which is maintained and also covers CPUs.",
+  "verified_claims_summary": "First-party README tables give speedup ratios over PyTorch fp16 mixed precision on one A100 (training) and eight A100s (inference): fp16 training 1.44-1.99x on Transformer and 1.59-2.12x on BERT, and inference 6.2-11.8x on Transformer and 1.8-10.6x on BERT, with no raw timings, compiler flags or host CPU; the headline 'up to 3x' training figure is not in the tables. docs/performance.md (T4, Transformer-base, beam 4) has raw milliseconds against FasterTransformer: slower at batch 1, up to 1.39x faster at batch 32-128 (derived from page data).",
+  "status_note": "Archived on 2025-07-21 with no commits since 2023-05-10, but Apache-2.0 and usable as a frozen dependency on CUDA 11-era stacks (Python 3.6-3.8 wheels, PyTorch 1.x, Ampere or older GPUs).",
+  "sources_read": [
+    "https://raw.githubusercontent.com/bytedance/lightseq/HEAD/README.md",
+    "https://raw.githubusercontent.com/bytedance/lightseq/HEAD/docs/performance.md",
+    "https://raw.githubusercontent.com/bytedance/lightseq/HEAD/docs/build.md",
+    "https://raw.githubusercontent.com/bytedance/lightseq/HEAD/docs/guide.md",
+    "https://raw.githubusercontent.com/bytedance/lightseq/HEAD/docs/examples.md",
+    "https://raw.githubusercontent.com/bytedance/lightseq/HEAD/setup.py",
+    "https://raw.githubusercontent.com/bytedance/lightseq/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/bytedance/lightseq/HEAD/lightseq/csrc/kernels/cuda/CMakeLists.txt",
+    "https://raw.githubusercontent.com/bytedance/lightseq/HEAD/lightseq/csrc/kernels/cuda/softmax_kernels.cu",
+    "https://raw.githubusercontent.com/bytedance/lightseq/HEAD/lightseq/csrc/kernels/cuda/cublas_wrappers.cu",
+    "https://raw.githubusercontent.com/bytedance/lightseq/HEAD/lightseq/training/ops/pytorch/transformer_encoder_layer.py",
+    "https://raw.githubusercontent.com/bytedance/lightseq/HEAD/lightseq/training/ops/pytorch/builder/builder.py",
+    "https://raw.githubusercontent.com/bytedance/lightseq/HEAD/lightseq/training/ops/pytorch/builder/transformer_builder.py",
+    "https://github.com/bytedance/lightseq/issues?q=is%3Aissue+bug",
+    "https://github.com/bytedance/lightseq/issues/197",
+    "WebSearch snippets: LightSeq2 (arXiv 2110.05722, SC22) and LightSeq (arXiv 2010.13887, NAACL-HLT 2021 industry track) abstracts"
+  ],
+  "confidence": 0.75
+}

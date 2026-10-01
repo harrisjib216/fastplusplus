@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/infatoshi/batmobile",
+  "one_liner": "Hand-unrolled FP32 CUDA kernels for L_max=3 spherical harmonics and Clebsch-Gordan tensor products, timed against generic e3nn.",
+  "what_it_does": "A PyTorch C++/CUDA extension with the inner operations of equivariant interatomic potentials (MACE, NequIP, Allegro): real spherical harmonics of edge vectors, CG tensor products (unweighted, or with per-path C_in x C_out weights), a fused SH+TP message kernel and CSR message passing. It is not a drop-in for e3nn modules: you call plain functions on fixed layouts (node features [N, C, 16], Y_lm [N, 16], weights [34, C_in, C_out]), and torch.autograd.Function wrappers in batmobile/autograd.py call hand-written backward kernels.",
+  "how_it_is_fast": "For L_max=3 all 34 CG paths and their 611 non-zero coefficients are generated as compile-time constants (scripts/gen_fused_tp.py, cg_coefficients_l3.cuh) and fully unrolled, so no sparse CG tables are read and no per-path kernel launches happen. The weighted kernel gives each (sample, output channel) pair a thread block that accumulates in shared memory. The fused SH+TP kernel computes the 16 harmonics in registers from closed-form polynomials and uses them right away, so Y_lm never goes to global memory.",
+  "when_to_use": [
+    "Custom MACE/NequIP-style models on Ampere consumer GPUs (built for RTX 3090, sm_86) that use exactly L_max=3 irreps 0e+1o+2e+3o in FP32.",
+    "Prototyping or studying how fused, unrolled CG kernels beat e3nn's generic einsum/codegen path on small irreps.",
+    "Spherical harmonics alone for L_max 0-6 on unit vectors, where the SH kernel gave 11.8x over e3nn at 1,000 edges in the README.",
+    "Workloads whose bottleneck is the unweighted SH x feature product per edge, where the fused kernel avoids materializing Y_lm."
+  ],
+  "when_not_to_use": [
+    "Production MD runs: 3 commits, no releases, no CI, and the package does not import at HEAD (see gotchas).",
+    "Any L_max other than 3 for tensor products; the binding checks that inputs have exactly 16 components.",
+    "FP64 or mixed-precision simulations: every binding requires float32 (the README says FP32 only, no FP64).",
+    "GPUs other than sm_86-compatible: setup.py builds SASS only for compute_86/sm_86 with no PTX, so A100 (sm_80) and Hopper/Blackwell need the flag edited.",
+    "If you need a vetted fast equivariant backend: issues #1 and #3 point to OpenEquivariance and NVIDIA cuEquivariance, and batmobile has not been benchmarked against either."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "PyTorch >=2.0, NumPy >=1.20, CUDA toolkit, pybind11 (via torch.utils.cpp_extension); e3nn, torch_scatter and torch_cluster for tests/benchmarks",
+    "min_toolchain": "C++17 (g++ and nvcc -std=c++17); CUDA 12.x per README (LLMS.txt says 11.8+); Python >=3.9",
+    "platforms": "NVIDIA sm_86 as shipped (RTX 3090 / RTX 30xx); other archs need TORCH_CUDA_ARCH_LIST and the hard-coded -gencode flag in setup.py changed; Linux assumed, others not documented",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Broken import at HEAD: commit e4fa3a9 'Rename project from batteries to batmobile' renamed the built module to '_batmobile' (setup.py, bindings.cpp, autograd.py), but python/batmobile/__init__.py and every benchmark/test script still do 'import _batteries', so 'import batmobile' and the README benchmark commands fail until patched; benchmark_e2e_mace.py also imports a nonexistent 'python.autograd'.",
+    "The README autograd example imports SphericalHarmonics and TensorProduct from batmobile.autograd, but that module defines SphericalHarmonicsFunction, TensorProductFunction and lowercase wrappers.",
+    "The tensor-product speedup is not equal work: tests/benchmark_tensor_product.py times the unweighted tensor_product_simple, which sums paths into 16 outputs (l <= 3), against e3nn o3.FullTensorProduct, which outputs every (l1, l2) -> l path up to l=6; the weighted, channelled kernel has no e3nn timing ('too slow for direct comparison').",
+    "spherical_harmonics expects already-normalized vectors (docstring: 'must be normalized'); the benchmark calls e3nn with normalize=False to match."
+  ],
+  "pick_this_over_siblings_when": "No equivariant-GNN sibling is catalogued yet; the nearest siblings (tiny-cuda-nn's fully fused MLPs, Liger-Kernel's fused PyTorch ops) target other layers, so batmobile is only worth considering as a readable reference for fused L_max=3 SH/CG kernels, not as a replacement for them.",
+  "verified_claims_summary": "Single-author timings on one RTX 3090 (CUDA 12.x, PyTorch 2.x, -O3 --use_fast_math, host CPU not stated) at 1,000 atoms, C=32, about 20 neighbours: SH 0.012 ms vs e3nn 0.142 ms (11.8x, CUDA-event timed), unweighted TP 20.8x and TP backward 20.6x over e3nn, while the 1.39x 'Fused SH+TP' row and the 1.45x at-scale row compare fused against batmobile's own unfused pipeline. The TP comparison does less work than e3nn's FullTensorProduct, and the scripts cannot run at HEAD without fixing the module name.",
+  "status_note": "MIT-licensed, 44 stars, all 3 commits on 2026-01-17 (co-authored with an AI assistant), and three open issues with no maintainer replies; small enough to vendor and study, but it needs a one-line import fix and an arch-flag edit before it builds and runs anywhere but an RTX 30xx.",
+  "sources_read": [
+    "https://github.com/Infatoshi/batmobile",
+    "https://github.com/Infatoshi/batmobile/commits/main",
+    "https://github.com/Infatoshi/batmobile/tree/main/tests",
+    "https://github.com/Infatoshi/batmobile/issues",
+    "https://github.com/Infatoshi/batmobile/issues/1",
+    "https://github.com/Infatoshi/batmobile/issues/3",
+    "https://raw.githubusercontent.com/Infatoshi/batmobile/HEAD/README.md",
+    "https://raw.githubusercontent.com/Infatoshi/batmobile/HEAD/LLMS.txt",
+    "https://raw.githubusercontent.com/Infatoshi/batmobile/HEAD/setup.py",
+    "https://raw.githubusercontent.com/Infatoshi/batmobile/HEAD/pyproject.toml",
+    "https://raw.githubusercontent.com/Infatoshi/batmobile/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/Infatoshi/batmobile/HEAD/python/batmobile/__init__.py",
+    "https://raw.githubusercontent.com/Infatoshi/batmobile/HEAD/python/batmobile/autograd.py",
+    "https://raw.githubusercontent.com/Infatoshi/batmobile/HEAD/python/bindings.cpp",
+    "https://raw.githubusercontent.com/Infatoshi/batmobile/HEAD/src/tensor_product/tensor_product.cu",
+    "https://raw.githubusercontent.com/Infatoshi/batmobile/HEAD/src/spherical_harmonics/spherical_harmonics.cu",
+    "https://raw.githubusercontent.com/Infatoshi/batmobile/HEAD/src/message_passing/fused_sh_tp.cu",
+    "https://raw.githubusercontent.com/Infatoshi/batmobile/HEAD/tests/benchmark_tensor_product.py",
+    "https://raw.githubusercontent.com/Infatoshi/batmobile/HEAD/tests/test_tensor_product.py",
+    "https://raw.githubusercontent.com/Infatoshi/batmobile/HEAD/benchmarks/bench_spherical_harmonics.py",
+    "https://raw.githubusercontent.com/Infatoshi/batmobile/HEAD/benchmarks/benchmark_fused_sh_tp.py",
+    "https://raw.githubusercontent.com/Infatoshi/batmobile/HEAD/benchmarks/benchmark_e2e_mace.py",
+    "https://raw.githubusercontent.com/Infatoshi/batmobile/HEAD/examples/README.md"
+  ],
+  "confidence": 0.8
+}

@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/nzh63/unsigned-bigint",
+  "one_liner": "Fixed-width unsigned big integer for MSVC x64 with MASM MULX/ADX kernels; beats Boost.Multiprecision on add/sub/mul/modexp, loses on division.",
+  "what_it_does": "A class template unsigned_bigint<N> holding N 64-bit limbs (N*64 bits, fixed at compile time) with the usual C++ operators (+ - * / %, shifts, comparisons, bitwise ops, a bit() proxy), iostream input/output in hex, decimal and octal, Montgomery modular exponentiation (fast_pow_mod), multiply_mod, extended GCD, a Miller-Rabin is_prime_number(), and std::rand()/RDRAND random generation. Results wrap modulo 2^(64*N), like a wide unsigned integer; there is no sign and no dynamic growth. It is not a drop-in for boost::multiprecision types: the interface is its own and the README and comments are in Chinese.",
+  "how_it_is_fast": "The limb loops are hand-written MASM: addition and subtraction are 4-way unrolled ADC/SBB chains, and the schoolbook multiply-accumulate (mul_mix_add) uses BMI2 MULX with the two independent ADX carry chains (ADCX/ADOX), the same trick GMP and OpenSSL use on Broadwell and later. Multiplication only computes the low N limbs (truncated product). Modular exponentiation converts to Montgomery form and uses a sliding window (k = 1 to 6 by exponent length) over a word-by-word Montgomery reduction built on the same MULX/ADX kernel; division is HAC Algorithm 14.20 with a bit-by-bit quotient correction loop, which is why it is slower than Boost.",
+  "when_to_use": [
+    "Windows x64 projects built with Visual Studio (v141 toolset or a compatible later one) that need fixed-width 256-4096-bit unsigned arithmetic dominated by multiplication or modular exponentiation",
+    "Non-secret modular exponentiation at 512-4096 bits, where the README table shows 6.3x to 10.3x less run time than Boost (derived from page data)",
+    "Studying a compact MULX/ADCX/ADOX schoolbook multiply and Montgomery modexp written in MASM",
+    "Code that already treats big integers as fixed-size values (no heap allocation per number) and can live with wraparound on overflow"
+  ],
+  "when_not_to_use": [
+    "Division- or remainder-heavy code: the README table shows division slower than Boost at every size, 4.0x to 5.3x at 256-1024 bits and 1.1x to 1.25x at 2048-4096 bits (derived from page data), and % uses the same algorithm",
+    "Cryptography with secret exponents: fast_pow_mod uses a variable-time sliding window with data-dependent branches, randIntel() ignores RDRAND's failure flag, and Miller-Rabin witnesses come from std::rand()",
+    "Linux, macOS, GCC or Clang builds, 32-bit targets, or non-x86 CPUs: the code uses MASM, __stdcall, <intrin.h>, the MSVC-only 1i64 literal suffix and unsigned __int8, and the assembly uses 64-bit registers",
+    "Sizes of 128 limbs (8192 bits) or more, and is_prime_number()/multiply_mod() at 4096 bits: these route through an untested double-precision FFT multiply with an out-of-bounds write (see gotchas); the unit tests cover only unsigned_bigint<8>",
+    "Anything needing signed values, arbitrary/dynamic precision, rationals or floats; use GMP, Boost.Multiprecision or mp++ instead"
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none at run time; builds need Visual Studio 2017 (v141 toolset) with MASM build customizations",
+    "min_toolchain": "Visual Studio 2017 (MSVC v141, default C++14 mode, std::complex_literals); other compilers not supported",
+    "platforms": "Windows x64 only; CPU needs BMI2, ADX and RDRAND. The README says Haswell or newer, but Haswell lacks ADX (ADCX/ADOX arrived with Broadwell), so on Haswell the multiply kernels would fault",
+    "thread_safety": "not documented; values are plain arrays, but rand() and Miller-Rabin call std::rand(), which shares global state",
+    "drop_in_for_baseline": "false — own class template unsigned_bigint<N> with a different API from boost::multiprecision::number; only unsigned, fixed width"
+  },
+  "gotchas": [
+    "mul_fft (used by operator* whenever the type has 128 or more limbs, including the unsigned_bigint<2N> temporary inside multiply_mod and Miller-Rabin at 4096 bits) writes one std::complex<double> past its heap buffer when the limb count is a power of two (n == LEN*8, loop touches index LEN*8); it also uses a cyclic convolution, so an overflowing product is not reduced mod 2^(64*N) the way mul_classic is",
+    "is_prime_number() on an even number above 2 trips assert(mod.bit(0) == 1) in fast_pow_mod (the pre-sieve starts at 3, not 2); with NDEBUG it runs Montgomery code with an even modulus, so the answer is not reliable",
+    "multiply_mod_Montgomery ends with if (rlt > mod) instead of >=, so a result can come back equal to the modulus instead of 0; fast_pow_mod with a zero exponent scans exponent.bit() down to negative indices",
+    "Octal input accepts the digit 8, and multiplication silently wraps on overflow (truncated N-limb product)"
+  ],
+  "pick_this_over_siblings_when": "Pick it over Boost.Multiprecision's fixed cpp_int only on Windows/MSVC x64 when multiply and Montgomery modexp dominate and division is rare; ctbignum gives a portable compile-time fixed-width alternative with a peer-reviewed comparison against GMP, and mp++ or FLINT/GMP are the safer choices for general or variable-size work.",
+  "verified_claims_summary": "The README table (author's own run; CPU, Boost version and backend, compiler flags and time units not stated; no benchmark source in the repo) times 500,000 add/sub/mul/div and 1,000 modular exponentiations at 256-4096 bits against Boost. Multiply is 1.75x to 4.32x and modexp 3.9x to 10.3x less time, add 1.4x to 2.6x and subtract 1.5x to 3.0x, while division is slower at every size (derived from page data).",
+  "status_note": "Abandoned: a single commit from 2019-06-01, 2 stars, no issues or releases; Apache-2.0, so copyable, but the Windows/MSVC-only build and the memory-safety bug in the large-size FFT path make it reference material rather than something to vendor.",
+  "sources_read": [
+    "https://github.com/nzh63/Unsigned-Bigint",
+    "https://github.com/nzh63/Unsigned-Bigint/tree/master/bigint",
+    "https://raw.githubusercontent.com/nzh63/Unsigned-Bigint/HEAD/README.md",
+    "https://raw.githubusercontent.com/nzh63/Unsigned-Bigint/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/nzh63/Unsigned-Bigint/HEAD/UnitTest/unsigned_bigint_UnitTest.cpp",
+    "https://raw.githubusercontent.com/nzh63/Unsigned-Bigint/HEAD/example/example.cpp",
+    "https://raw.githubusercontent.com/nzh63/Unsigned-Bigint/master/bigint/unsigned_bigint.h",
+    "https://raw.githubusercontent.com/nzh63/Unsigned-Bigint/master/bigint/unsigned_bigint.hpp",
+    "https://raw.githubusercontent.com/nzh63/Unsigned-Bigint/master/bigint/unsigned_bigint_asm.hpp",
+    "https://raw.githubusercontent.com/nzh63/Unsigned-Bigint/master/bigint/unsigned_bigint_io.hpp",
+    "https://raw.githubusercontent.com/nzh63/Unsigned-Bigint/master/bigint/unsigned_bigint.asm",
+    "https://raw.githubusercontent.com/nzh63/Unsigned-Bigint/master/bigint/overload_if.hpp",
+    "https://raw.githubusercontent.com/nzh63/Unsigned-Bigint/master/bigint/bigint.vcxproj"
+  ],
+  "confidence": 0.8
+}

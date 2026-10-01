@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/waynehacking8/blackwell-tensorcore-kernels",
+  "one_liner": "Teaching repo: raw mma.sync FP16 GEMM that edges past cuBLAS's tensor-core kernel at 4096-8192 on Blackwell sm_120.",
+  "what_it_does": "A benchmark and learning repository that builds FP16-in/FP32-accumulate GEMM step by step (naive, tiled, WMMA, then a five-step raw mma.sync ablation ladder), plus FP8/FP4/MXFP4 kernels for sm_120a and a CUTLASS 3.x wgmma kernel for H100, all timed against cuBLAS/cuBLASLt in one driver that writes results/bench.csv. The fastest FP16 kernel is the template gemm_mma_t<128,128,32,64,64,2,...> in src/gemm_mma.cu, reached through launch_mma_warptile(const float* A, const float* B, float* C, int M, int N, int K): row-major FP32 device inputs are cast once to FP16 and C = A*B is written in FP32. There is no alpha/beta, no transpose flags and no leading dimensions, and the README states it is not a cuBLAS replacement.",
+  "how_it_is_fast": "The kernel issues PTX mma.sync.aligned.m16n8k16 directly, loads fragments with ldmatrix.x4 (and .trans for B) from an XOR-swizzled, bank-conflict-free shared-memory layout, and fills shared memory with 16-byte cp.async copies in a 2-stage pipeline. Its decisive step is warptiling: a 128x128x32 CTA tile split into four 64x64 per-warp register tiles, which issues 32 mma.sync per 8 ldmatrix (a 4:1 ratio) and removes the MIO-queue-full stall that held the WMMA version at about 45% of cuBLAS. ncu at 8192^3 shows 85.0% tensor-pipe utilization against 74.0% for the cutlass_80_tensorop_s16816gemm kernel that cuBLAS picks on this card.",
+  "when_to_use": [
+    "Learning how a tensor-core GEMM is built on Ampere-style PTX (mma.sync, ldmatrix, cp.async, swizzling, warptiling), with measured TFLOP/s and ncu profiles for each step",
+    "Large square FP16-in/FP32-out GEMMs (about 4096 and up) on an sm_120 workstation Blackwell card such as the RTX PRO 6000, where cuBLAS 12.8 dispatches an sm_80 CUTLASS kernel and this tile shape is 3-6% faster",
+    "A starting point for your own fixed-shape FP16 kernel on sm_120 that you can fuse or modify, since the whole mainloop is about 150 lines in one file",
+    "Reference numbers for FP8, unpacked FP4 and MXFP4 mma throughput on sm_120 (no cuBLAS FP4 GEMM exists there), keeping in mind the MXFP4 row uses unit block scales"
+  ],
+  "when_not_to_use": [
+    "Small and medium sizes: the fixed 128x128 tile loses to cuBLAS-TC at 2048 (200.96 vs 213.61 TFLOP/s), 1024 (69.45 vs 133.76) and 512 (14.59 vs 33.66) in results/bench.csv",
+    "Hopper, datacenter Blackwell (sm_100) or any GPU other than sm_120: the mma.sync path caps well below wgmma/tcgen05, and on H100 the repo's best kernel (CUTLASS wgmma) reaches 85.5% of cuBLAS-TC, not more",
+    "Production GEMM calls with arbitrary shapes, strides, transposes, alpha/beta, batching, BF16 or FP16 output: none of these exist; use cuBLAS/cuBLASLt or CUTLASS",
+    "Workloads where a newer cuBLAS might pick a Blackwell-native kernel: the 6% win is over cuBLAS 12.8's heuristic choice of an Ampere kernel on this card, measured at one size on a power-capped 300 W Max-Q part"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "CUDA toolkit (cuBLAS and cuBLASLt for the benchmark driver, NVML for the rate probe); CUTLASS >= 3.4 only for the optional Hopper wgmma row",
+    "min_toolchain": "CUDA 12.8 nvcc (H100 rows used CUDA 13.1), C++17, CMake 3.24; FP4/MXFP4 kernels need the sm_120a target",
+    "platforms": "NVIDIA GPUs; builds for sm_90 and sm_120 only and is tuned and measured as a winner only on sm_120 (RTX PRO 6000 Blackwell Max-Q). The FP16 kernel's PTX (mma.sync m16n8k16, ldmatrix, cp.async) is Ampere-level, but other architectures were not benchmarked",
+    "thread_safety": "Not thread-safe at the launcher level: launch_mma_* keep the FP16 staging buffers, cached source pointers and a shared-memory-attribute flag in static globals and launch on the default stream; the kernel itself is stateless",
+    "drop_in_for_baseline": "false — not a cublasGemmEx-compatible API; only row-major C = A*B with FP32 device inputs cast internally to FP16"
+  },
+  "gotchas": [
+    "The FP32-to-FP16 cast is cached by pointer identity (if (A != g_cA)), so calling the launcher again on the same buffer after changing its contents silently multiplies the stale FP16 copy; this is how the benchmark keeps the cast out of the timed loop",
+    "Shape assumptions are unchecked: K is processed as K/32 slabs (a remainder is silently dropped), and the 16-byte cp.async loads need N and K to be multiples of 8 with 16-byte-aligned rows; the code comment says M and N should be multiples of 128",
+    "The tuned kernel uses about 186-196 registers per thread (ncu and ptxas figures differ) and runs 2 CTAs per SM, so it does not co-schedule well with other kernels",
+    "The MXFP4 988 TFLOP/s figure feeds every block scale as 1.0, so it measures throughput only, not real per-block MXFP4 numerics (the README says so)"
+  ],
+  "pick_this_over_siblings_when": "Pick it over CUDA-L2 when you want a small, readable FP16 tensor-core kernel tuned for sm_120 rather than a large set of searched kernels for A100/H100 shapes; gpu-compute targets true-FP32 SGEMM on an RTX 5080 against pedantic cuBLAS and suits small FP32 problems, while for anything shipped cuBLAS or CUTLASS remains the safer default.",
+  "verified_claims_summary": "On an RTX PRO 6000 Blackwell Max-Q (sm_120, 300 W cap, CUDA 12.8, CMake build with no extra nvcc flags), FP16-in/FP32-acc M=N=K=8192 GEMM ran at 243.2 TFLOP/s against 229.0 for cublasGemmEx in the README's five-run session, and at 238.47 against 225.75 (about 1.056x, derived from page data) in the canonical results/bench.csv re-run after the cuBLAS handle-caching fix; nsys per-kernel times were 4.52 ms against 4.79 ms. The kernel is ahead only at 4096 (241.40 vs 235.13) and 8192, and behind cuBLAS at 2048 and smaller.",
+  "status_note": "Active personal learning project (1 star, 46 commits, last commit 2026-06-04, recent commits co-authored with an AI assistant); MIT-licensed, so the kernel and PTX helpers can be copied, but treat them as a tuned example for one GPU rather than a maintained library.",
+  "sources_read": [
+    "https://github.com/waynehacking8/blackwell-tensorcore-kernels",
+    "https://github.com/waynehacking8/blackwell-tensorcore-kernels/commits",
+    "https://raw.githubusercontent.com/waynehacking8/blackwell-tensorcore-kernels/HEAD/README.md",
+    "https://raw.githubusercontent.com/waynehacking8/blackwell-tensorcore-kernels/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/waynehacking8/blackwell-tensorcore-kernels/HEAD/Makefile",
+    "https://raw.githubusercontent.com/waynehacking8/blackwell-tensorcore-kernels/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/waynehacking8/blackwell-tensorcore-kernels/HEAD/VALIDATION.md",
+    "https://raw.githubusercontent.com/waynehacking8/blackwell-tensorcore-kernels/HEAD/results/bench.csv",
+    "https://raw.githubusercontent.com/waynehacking8/blackwell-tensorcore-kernels/HEAD/results/mma_ablation.md",
+    "https://raw.githubusercontent.com/waynehacking8/blackwell-tensorcore-kernels/HEAD/src/main.cu",
+    "https://raw.githubusercontent.com/waynehacking8/blackwell-tensorcore-kernels/HEAD/src/gemm_mma.cu",
+    "https://raw.githubusercontent.com/waynehacking8/blackwell-tensorcore-kernels/HEAD/src/cublas_tc.cu",
+    "https://raw.githubusercontent.com/waynehacking8/blackwell-tensorcore-kernels/HEAD/include/util.cuh",
+    "https://raw.githubusercontent.com/waynehacking8/blackwell-tensorcore-kernels/HEAD/include/mma_ptx.cuh",
+    "https://raw.githubusercontent.com/waynehacking8/blackwell-tensorcore-kernels/HEAD/scripts/run_bench.sh"
+  ],
+  "confidence": 0.85
+}

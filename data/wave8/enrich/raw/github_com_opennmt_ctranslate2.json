@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/opennmt/ctranslate2",
+  "one_liner": "C++ inference runtime for converted Transformer models; about 2.4-3.6x the CPU throughput of PyTorch-based translation.",
+  "what_it_does": "CTranslate2 runs inference (not training) for a fixed list of Transformer architectures: encoder-decoder (Transformer, M2M-100, NLLB, BART, T5, Whisper, MADLAD-400), decoder-only (GPT-2, Llama, Mistral, Gemma, Falcon, Qwen2 and others) and encoder-only (BERT, XLM-RoBERTa). Models are first converted from OpenNMT-py/tf, Fairseq, Marian/OPUS-MT or Hugging Face Transformers into its own format, then served through C++ classes (Translator, Generator, Encoder) or the matching Python API. It replaces the framework at inference time, not individual kernels: you call translate_batch/generate_batch on tokens rather than a PyTorch module.",
+  "how_it_is_fast": "A hand-written graph per architecture with layer fusion, padding removal, batch reordering (sorting inputs by length within max_batch_size), in-place ops and caching allocators on CPU and GPU. Weights can be stored and computed in int8 (per-row scale, Wu et al. 2016), int16, float16, bfloat16 or AWQ int4, which also cuts memory (721MB vs Marian's 7605MB on the CPU OPUS-MT run). Matrix math is delegated late to Intel MKL (packed GEMM on Intel by default since 4.8.0), oneDNN, OpenBLAS, Ruy, Apple Accelerate or cuBLAS, with runtime ISA dispatch (AVX/AVX2/AVX512); dynamic vocabulary reduction (vmap) shrinks the output softmax for translation.",
+  "when_to_use": [
+    "Serving a supported Transformer (MT models, Whisper speech recognition, small and mid-size LLMs) where PyTorch or TensorFlow inference is the incumbent and you want 2-4x more tokens/s on CPU.",
+    "CPU-only translation on x86-64 or AArch64 with int8 weights: the README shows 860 tok/s int8 vs 324 tok/s for OpenNMT-py int8 on 4 Xeon threads.",
+    "Embedding an inference engine in a C++ application without pulling in PyTorch (the project FAQ names this case), with control over intra/inter-op threads and memory.",
+    "Batch or streaming jobs that can feed many batches concurrently: multiple replicas share weights on one device, and calls release the Python GIL.",
+    "Memory-constrained deployments where int8/float16 quantization (4x smaller on disk) matters more than bit-exact output."
+  ],
+  "when_not_to_use": [
+    "Training, fine-tuning or architectures not in the supported list: the FAQ says it only exports weights and re-implements the graph, so unsupported models cannot run.",
+    "When you need a kernel-level win over oneDNN, cuBLAS or cuDNN: it calls those libraries, and the benchmarks compare whole frameworks, not kernels.",
+    "GPU fp32 versus FasterTransformer: the README shows FasterTransformer 5.3 faster (6979 vs 6635 tok/s); open issues report Whisper encode about 4x slower than the OpenAI PyTorch reference (#1699) and bfloat16 GEMM slower than float16 (#2033).",
+    "Large-scale LLM serving with paged KV cache and continuous batching: its features are batch reordering, async queues and tensor parallelism via MPI, not a serving scheduler.",
+    "Loading untrusted model files on releases before 4.8.1/4.8.2, which fixed a model-load heap overflow and out-of-bounds reads."
+  ],
+  "integration": {
+    "form": "shared lib (static optional via BUILD_SHARED_LIBS=OFF); pip wheels and Docker images",
+    "dependencies": "One CPU BLAS backend: Intel MKL (default, >= 2019.5), oneDNN >= 3.0, OpenBLAS, Ruy or Apple Accelerate; optional CUDA >= 11.0 (wheels need CUDA 12.x), cuDNN >= 8 for convolutional models, ROCm/HIP, NCCL + MPI for tensor parallelism; pybind11 for the Python module",
+    "min_toolchain": "C++17, CMake 3.15+ (per the install docs); Python >= 3.9 for wheels",
+    "platforms": "x86-64 with SSE4.1 or newer, AArch64/ARM64; Linux, macOS, Windows; NVIDIA GPUs with compute capability >= 3.5 (tensor cores need >= 7.0); AMD ROCm wheels on the releases page",
+    "thread_safety": "Translator/Generator are replica pools: concurrent translate/generate calls from multiple threads are supported and run on separate workers; load/unload/clear-cache methods on the pool are documented as not thread-safe",
+    "drop_in_for_baseline": "partial — models must be converted to the CTranslate2 format and called through its own Translator/Generator API, but converters cover OpenNMT, Fairseq, Marian and Transformers checkpoints"
+  },
+  "gotchas": [
+    "The runtime silently falls back to another compute type when the requested one is not optimized on the device (e.g. int16 runs as float16 on GPU, float16 runs as float32 on CPU); query get_supported_compute_types or set CT2_VERBOSE=1.",
+    "Quantized outputs differ slightly from the original model (BLEU 26.77 to 26.64-26.85 in the README tables); int8 + vmap is the fastest CPU row but also the lowest BLEU.",
+    "Keep inter_threads x intra_threads at or below the physical core count; the default intra_threads is 4 and async queues block once max_queued_batches is full.",
+    "Open bug #1181: importing numpy after ctranslate2 can segfault; tensor-parallel Flan-T5 XXL gave unexpected output in #1691."
+  ],
+  "pick_this_over_siblings_when": "Pick it over FasterTransformer or LightSeq when you need CPU inference, an actively maintained engine, or a single C++/Python API across MT, Whisper and LLMs; pick FasterTransformer or ByteTransformer only for NVIDIA-GPU BERT/GPT pipelines already tuned around them. Kernel libraries such as LIBXSMM or FBGEMM sit below it and do not replace it.",
+  "verified_claims_summary": "First-party README tables (CTranslate2 3.6.0, newstest2014 En-De, tokens/s excluding tokenization and model load) show 658.8 vs 275.8 tok/s against OpenNMT-py on PyTorch 1.13.1 and 525.0 vs 147.3 (Transformers) and 344.5 (Marian 1.11.0) on 4 threads of an AWS c5.2xlarge Xeon Platinum 8275CL; on an A10G (CUDA 11) float16 reaches 10990.7 vs FasterTransformer 5.3 float16 at 8592.5, while fp32 trails FasterTransformer. Docker-based scripts in tools/benchmark reproduce it, but no compiler flags are given and the table predates the current 4.8.x release.",
+  "status_note": "Actively maintained (4.8.2 released 2026-08-31 on PyPI, MIT-licensed, 4.7k stars, backend of faster-whisper); security fixes go to the latest release series only, so stay current.",
+  "sources_read": [
+    "https://github.com/OpenNMT/CTranslate2",
+    "https://raw.githubusercontent.com/OpenNMT/CTranslate2/HEAD/README.md",
+    "https://raw.githubusercontent.com/OpenNMT/CTranslate2/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/OpenNMT/CTranslate2/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/OpenNMT/CTranslate2/HEAD/SECURITY.md",
+    "https://raw.githubusercontent.com/OpenNMT/CTranslate2/HEAD/docs/installation.md",
+    "https://raw.githubusercontent.com/OpenNMT/CTranslate2/HEAD/docs/hardware_support.md",
+    "https://raw.githubusercontent.com/OpenNMT/CTranslate2/HEAD/docs/parallel.md",
+    "https://raw.githubusercontent.com/OpenNMT/CTranslate2/HEAD/docs/quantization.md",
+    "https://raw.githubusercontent.com/OpenNMT/CTranslate2/HEAD/docs/faq.md",
+    "https://raw.githubusercontent.com/OpenNMT/CTranslate2/HEAD/docs/performance.md",
+    "https://raw.githubusercontent.com/OpenNMT/CTranslate2/HEAD/docs/translation.md",
+    "https://raw.githubusercontent.com/OpenNMT/CTranslate2/HEAD/tools/benchmark/README.md",
+    "https://raw.githubusercontent.com/OpenNMT/CTranslate2/HEAD/include/ctranslate2/translator.h",
+    "https://raw.githubusercontent.com/OpenNMT/CTranslate2/HEAD/include/ctranslate2/replica_pool.h",
+    "https://pypi.org/pypi/ctranslate2/json",
+    "https://github.com/OpenNMT/CTranslate2/issues?q=is%3Aissue+is%3Aopen+label%3Abug",
+    "https://github.com/OpenNMT/CTranslate2/issues?q=is%3Aissue+slower",
+    "https://github.com/OpenNMT/CTranslate2/issues/1699"
+  ],
+  "confidence": 0.85
+}

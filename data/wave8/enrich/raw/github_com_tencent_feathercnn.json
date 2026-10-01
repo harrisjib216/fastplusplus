@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/tencent/feathercnn",
+  "one_liner": "Small dependency-free ARM CPU CNN inference library; 2017 wiki shows 2-13x lower latency than Caffe+OpenBLAS and Caffe2+Eigen.",
+  "what_it_does": "Runs float32 inference of Caffe-style CNNs (VGG, GoogleNet, ResNet, SqueezeNet, MobileNet, DenseNet) on ARM CPUs for Android, iOS and Linux, with an AVX2 x86 backend added in 2019. The current master API is ncnn-like: feather::Net::LoadParam / LoadWeights, FeedInput(name, ncnn::Mat), Forward(), Extract(blob). It is a separate runtime with its own model files, not a drop-in for Caffe, Caffe2 or TFLite.",
+  "how_it_is_fast": "3x3 stride-1 convolutions use Winograd F(6x6,3x3) (F(2x2,3x3) also exists), with the transformed tiles multiplied by a batched GEMM the TPDS paper calls TensorGEMM. Other convolutions use im2col plus a hand-written NEON SGEMM (4x12 and 8x12 register-blocked micro-kernels using vfmaq_f32), and depthwise layers get a dedicated kernel. A ReLU that follows a convolution is fused into it, and activations come from a shared memory pool.",
+  "when_to_use": [
+    "Reading the Winograd F(6x6,3x3) and NEON GEMM kernels (src/booster/arm) as BSD-3 reference code for your own ARM convolution work.",
+    "Float32 inference of a classic Caffe CNN built only from conv, depthwise conv, pooling, ReLU, BN/Scale, inner product, eltwise, concat and softmax on an ARMv8 phone or board, where you can accept an unmaintained library.",
+    "VGG-style networks dominated by 3x3 stride-1 convolutions, where the Winograd path does most of the work (the largest gains on the wiki are for VGG-16)."
+  ],
+  "when_not_to_use": [
+    "Any new production deployment: there have been no commits since 2019-09-24, open issues (segfault on SqueezeNet, unregistered Deconvolution layer, build failures) have no maintainer replies, and MNN, ncnn or XNNPACK cover the same ground and are maintained.",
+    "Models that need ops outside the 13 registered layers (no Deconvolution, Reshape, Permute, detection or SSD layers), partial group convolution, or anything other than fp32 (no int8 or fp16).",
+    "Choosing on the wiki numbers: they were measured on the pre-April-2019 code (the .feathermodel / InitFromPath API the README still describes) against Caffe, Caffe2 and TFLite builds from late 2017, and the code was rewritten on master after that.",
+    "Multi-core inference through the public API: on master Net() hard-codes one thread and exposes no setter, unlike the per-thread-count tables on the wiki."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none for the library (OpenMP optional, GCD on iOS); the Caffe model converter described in the README needs protobuf",
+    "min_toolchain": "C++11, CMake 2.8; Android NDK (android-21 for arm64-v8a, android-16 for armeabi-v7a) or the Xcode iOS SDK",
+    "platforms": "aarch64 and armv7 with NEON (Android, iOS, Linux); x86-64 with AVX2 via the BOOSTER_AVX backend (built with -march=core-avx2)",
+    "thread_safety": "not documented; a Net owns mutable layer buffers and a shared memory pool, so treat one Net as single-threaded",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The README is stale: it documents Net(num_threads), InitFromPath(.feathermodel) and Forward(float*), while master's net.h has Net(), LoadParam/LoadWeights and ncnn::Mat inputs (the param parser comes from bundled ncnn code).",
+    "The top-level CMakeLists adds -Ofast and -ffast-math globally, so results may differ slightly from strict IEEE fp32.",
+    "ConvLayer::Forward on master calls printf(\"thread num =%d\") on every convolution, which is debug output left in the hot path.",
+    "build_scripts/build_android.sh passes -DCOMPILE_OPENCL=1, which adds src/booster/cl, but that directory is not in master (its CMakeLists.txt returns 404), so expect to edit the script before the Android build works."
+  ],
+  "pick_this_over_siblings_when": "Pick MNN over this for any real ARM deployment: it is maintained, supports far more ops and has its own peer-reviewed (MLSys 2020) comparison against TFLite and ncnn. FeatherCNN is worth taking over NNPACK only as compact BSD-3 reference code for Winograd F(6x6,3x3) with a batched GEMM, not as a runtime.",
+  "verified_claims_summary": "The first-party wiki reports whole-network fp32 inference time on ARM CPUs measured in late 2017. On a 64-core Huawei D05 (Cortex-A72), best time at any thread count gives VGG-16 102 ms vs 1108 ms for Caffe+OpenBLAS and 1310 ms for Caffe2+Eigen. On an iPhone 7 with 2 cores, VGG-16 runs in 284 ms vs 905 ms for TensorFlow Lite, and on an Nvidia TX2 in 706 ms vs 3569 ms for Caffe2+NNPACK. No compiler, flags or benchmark harness are published, and the wiki's own GoogleNet speedup column (13.7x) disagrees with its timing tables (about 6.6x, derived from page data).",
+  "status_note": "Abandoned since 2019-09-24, and the README does not match the rewritten master code. BSD-3-Clause source headers make the ARM kernels copyable, but treat it as reference code rather than a runtime to adopt.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/Tencent/FeatherCNN/HEAD/README.md",
+    "https://raw.githubusercontent.com/wiki/Tencent/FeatherCNN/Benchmarks.md",
+    "https://raw.githubusercontent.com/Tencent/FeatherCNN/master/CMakeLists.txt",
+    "https://raw.githubusercontent.com/Tencent/FeatherCNN/master/src/CMakeLists.txt",
+    "https://raw.githubusercontent.com/Tencent/FeatherCNN/master/src/net.h",
+    "https://raw.githubusercontent.com/Tencent/FeatherCNN/master/src/net.cpp",
+    "https://raw.githubusercontent.com/Tencent/FeatherCNN/master/src/layer.h",
+    "https://raw.githubusercontent.com/Tencent/FeatherCNN/master/src/rt_param.h",
+    "https://raw.githubusercontent.com/Tencent/FeatherCNN/master/src/layer_factory.cpp",
+    "https://raw.githubusercontent.com/Tencent/FeatherCNN/master/src/layers/conv_layer.h",
+    "https://raw.githubusercontent.com/Tencent/FeatherCNN/master/src/booster/CMakeLists.txt",
+    "https://raw.githubusercontent.com/Tencent/FeatherCNN/master/src/booster/arm/CMakeLists.txt",
+    "https://raw.githubusercontent.com/Tencent/FeatherCNN/master/src/booster/arm/booster.cpp",
+    "https://raw.githubusercontent.com/Tencent/FeatherCNN/master/src/booster/arm/sgemm.cpp",
+    "https://raw.githubusercontent.com/Tencent/FeatherCNN/master/src/booster/arm/winograd_kernels_F63.cpp",
+    "https://raw.githubusercontent.com/Tencent/FeatherCNN/master/src/booster/include/booster/booster.h",
+    "https://raw.githubusercontent.com/Tencent/FeatherCNN/master/src/booster/avx/CMakeLists.txt",
+    "https://raw.githubusercontent.com/Tencent/FeatherCNN/master/src/booster/cl/CMakeLists.txt",
+    "https://raw.githubusercontent.com/Tencent/FeatherCNN/master/build_scripts/build_android.sh",
+    "https://raw.githubusercontent.com/Tencent/FeatherCNN/master/build_scripts/build_ios.sh",
+    "https://raw.githubusercontent.com/Tencent/FeatherCNN/master/build_scripts/build_linux_avx.sh",
+    "https://github.com/Tencent/FeatherCNN/tree/master/src",
+    "https://github.com/Tencent/FeatherCNN/tree/master/src/booster",
+    "https://github.com/Tencent/FeatherCNN/tree/master/src/booster/arm",
+    "https://github.com/Tencent/FeatherCNN/commits/master",
+    "https://github.com/Tencent/FeatherCNN/issues?q=is%3Aissue",
+    "https://github.com/Tencent/FeatherCNN/issues/31",
+    "https://github.com/Tencent/FeatherCNN/issues/33",
+    "https://github.com/Tencent/FeatherCNN/issues/50",
+    "https://hpcc.siat.ac.cn/jintao/jintao/paper/tpds_feathercnn.pdf (EGRESS_BLOCKED; paper content known only from search snippets)"
+  ],
+  "confidence": 0.8
+}

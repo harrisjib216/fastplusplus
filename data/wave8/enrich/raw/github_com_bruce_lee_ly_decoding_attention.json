@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/bruce-lee-ly/decoding_attention",
+  "one_liner": "CUDA-core decode-attention kernel for LLM inference; beats Flash-Decoding and FlashInfer only at short KV lengths.",
+  "what_it_does": "Computes single-token decode attention O = softmax(Q K^T) V for MHA, MQA, GQA and DeepSeek-style MLA (head dims 64, 96, 128, 256 and 576/512) in FP16 or BF16, with variable KV lengths and optional ALiBi. The API is one function, decoding_attn(q, k, v, o, cu_seq_k, max_seq_k, batch, head_q, head_k, dim, dim_v, is_alibi, is_bf16, stream) in C++, or decoding_attn_fwd in Python via a PyTorch extension. K and V must be packed contiguously per sequence and indexed by cumulative lengths (cu_seq_k); there is no paged KV cache, so it is not a drop-in for vLLM or FlashInfer page tables.",
+  "how_it_is_fast": "Avoids tensor cores, which Flash-Decoding underuses when the query length is 1, and instead runs a plain CUDA-core kernel adapted from OpenPPL: one thread block per (sequence, query head), 128-bit vectorised K/V loads, warp-shuffle reductions for the Q.K dot products, all scores kept in shared memory, then a block-wide softmax and a P.V pass. Launch shape is picked per head dim and batch (e.g. 256 threads for batch <= 4, 128 otherwise at head dim 128), and kernels are built with --use_fast_math. With no split over the sequence and a three-pass softmax, it is cheapest when the KV length is short and the batch fills the GPU.",
+  "when_to_use": [
+    "Decode-stage MHA with short contexts (README: faster than Flash-Decoding and FlashInfer below KV length 1536 at batch 1, about 1.75x at 1024 on an RTX 3090 by plot reading).",
+    "Large batches of short sequences: in the KV length 128 batch sweep it led both baselines at every batch size (about 1.4-1.6x at batch 16, roughly level with FlashInfer from batch 128).",
+    "Ampere/Ada consumer or workstation GPUs (sm80, sm86, sm89 build targets) where you control the KV layout and want a small, readable kernel to fork.",
+    "ALiBi models or GQA/MQA decode where a contiguous varlen KV buffer is already available."
+  ],
+  "when_not_to_use": [
+    "KV lengths above about 1536: FlashInfer reached about 0.84 vs 0.43 TFLOPS at 8192 on the same plots, roughly 2x faster.",
+    "MLA decoding: on an H20 the README's own plots show FlashMLA 1.3x to about 70x faster; each block re-reads its KV head, so MQA/MLA traffic grows with the number of query heads.",
+    "Paged KV caches, prefill, speculative decoding with more than one query token, or FP8/INT8 KV caches (KV quantization is listed as TODO).",
+    "Long contexts in general: the kernel needs max_seq_k x 4 bytes of shared memory per block, which caps KV length at about 25k tokens on sm86/sm89 and about 58k on sm90 (derived from the source and CUDA per-block shared-memory limits); tests only cover KV lengths up to 512.",
+    "Production use needing maintenance: two commits, no releases or issues, last commit 2025-06-11."
+  ],
+  "integration": {
+    "form": "source-drop (CUDA sources plus a PyTorch CUDAExtension; the CMake build produces only a benchmark executable)",
+    "dependencies": "CUDA >= 11.4; PyTorch, ninja and psutil for the Python extension; gflags and OpenMP for the C++ benchmark; pytest for tests",
+    "min_toolchain": "C++17 (nvcc -std=c++17), CMake 3.16+; README says GCC >= 5, but the kernel uses if constexpr and std::is_same_v, so a C++17-capable host compiler is required",
+    "platforms": "Linux; NVIDIA sm80 (A100), sm86 (RTX 3090/A6000), sm89 (L20/L40S), sm90 (H20/H800)",
+    "thread_safety": "Stateless launch on the caller's CUDA stream (the PyTorch wrapper uses the current stream); no other guarantees documented",
+    "drop_in_for_baseline": "partial — replaces flash_attn_with_kvcache or FlashInfer decode only for one query token per sequence with a contiguous varlen KV buffer; no paged KV, softmax-scale argument or LSE output"
+  },
+  "gotchas": [
+    "Softmax scale is hard-coded to 1/sqrt(dim); models needing another scale (e.g. absorbed MLA with dim 576) must pre-scale Q themselves.",
+    "Sequences with zero KV length return early without writing their output rows, and the PyTorch wrapper allocates the output with torch::empty, so those rows hold uninitialised memory.",
+    "Strides are recomputed from head counts and dims; the wrapper checks only that the last dimension is contiguous, so a strided view (e.g. K sliced from a combined KV tensor) is read incorrectly. For MLA pass v=None, since the V row stride is computed from dim, not dim_v.",
+    "The P.V partial sums are combined with shared-memory float atomicAdd across warps, so outputs are not bitwise reproducible run to run; setup.py also forces _GLIBCXX_USE_CXX11_ABI=0 regardless of how the installed PyTorch was built."
+  ],
+  "pick_this_over_siblings_when": "Pick it over FlashInfer only for short-context, large-batch MHA/GQA decode on Ampere/Ada with a contiguous KV buffer; for long contexts, paged KV caches or MLA, FlashInfer (or FlashMLA) wins, and FlashAttention-3 targets Hopper prefill and training rather than this niche.",
+  "verified_claims_summary": "First-party plots from the public Python harness (1 warmup, 10 timed iterations, CUDA events) on an RTX 3090 with CUDA 12.1, FP16, 32 heads, head dim 128, compare against flash_attn_with_kvcache from FlashAttention v2.6.3 and FlashInfer v0.1.6 (the author's fork): faster at KV lengths below 1536 and across a batch sweep at KV length 128, about 2x slower than FlashInfer at 8192. In the batch sweep FlashInfer runs through its paged-KV wrapper with page size 1 while this kernel reads contiguous KV, so the baselines are not on equal footing; host CPU and host compiler are not stated.",
+  "status_note": "Stale single-author research code (2 commits, last 2025-06-11, 48 stars, no issues filed), BSD-3-Clause and small (one kernel template), so it is easy to vendor and adapt but has no releases or maintenance.",
+  "sources_read": [
+    "https://github.com/Bruce-Lee-LY/decoding_attention",
+    "https://raw.githubusercontent.com/Bruce-Lee-LY/decoding_attention/HEAD/README.md",
+    "https://raw.githubusercontent.com/Bruce-Lee-LY/decoding_attention/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/Bruce-Lee-LY/decoding_attention/HEAD/setup.py",
+    "https://raw.githubusercontent.com/Bruce-Lee-LY/decoding_attention/HEAD/install_python.sh",
+    "https://raw.githubusercontent.com/Bruce-Lee-LY/decoding_attention/HEAD/build_cpp.sh",
+    "https://raw.githubusercontent.com/Bruce-Lee-LY/decoding_attention/HEAD/run_python.sh",
+    "https://raw.githubusercontent.com/Bruce-Lee-LY/decoding_attention/HEAD/LICENSE",
+    "https://github.com/Bruce-Lee-LY/decoding_attention/tree/master/csrc",
+    "https://raw.githubusercontent.com/Bruce-Lee-LY/decoding_attention/HEAD/csrc/torch/decoding_torch.cpp",
+    "https://raw.githubusercontent.com/Bruce-Lee-LY/decoding_attention/HEAD/csrc/ops/decoding_attn.cpp",
+    "https://raw.githubusercontent.com/Bruce-Lee-LY/decoding_attention/HEAD/csrc/ops/decoding_attn.h",
+    "https://raw.githubusercontent.com/Bruce-Lee-LY/decoding_attention/HEAD/csrc/kernel/decoding_attn/decoding_fwd_hd128_hdv128.cu",
+    "https://raw.githubusercontent.com/Bruce-Lee-LY/decoding_attention/HEAD/csrc/kernel/decoding_attn/decoding_fwd_launch_template.h",
+    "https://raw.githubusercontent.com/Bruce-Lee-LY/decoding_attention/HEAD/csrc/kernel/decoding_attn/decoding_fwd_kernel.h",
+    "https://raw.githubusercontent.com/Bruce-Lee-LY/decoding_attention/HEAD/csrc/kernel/decoding_attn/decoding.h",
+    "https://raw.githubusercontent.com/Bruce-Lee-LY/decoding_attention/HEAD/csrc/kernel/decoding_attn/block_info.h",
+    "https://raw.githubusercontent.com/Bruce-Lee-LY/decoding_attention/HEAD/decoding_attn/__init__.py",
+    "https://raw.githubusercontent.com/Bruce-Lee-LY/decoding_attention/HEAD/benchmarks/python/benchmark_decoding_attn.py",
+    "https://raw.githubusercontent.com/Bruce-Lee-LY/decoding_attention/HEAD/tests/test_decoding_attn.py",
+    "https://github.com/Bruce-Lee-LY/decoding_attention/issues?q=is%3Aissue"
+  ],
+  "confidence": 0.8
+}

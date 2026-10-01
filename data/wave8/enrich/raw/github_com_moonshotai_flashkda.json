@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/moonshotai/flashkda",
+  "one_liner": "CUTLASS CUDA forward kernel for Kimi Delta Attention; 1.7-3.3x lower latency than flash-linear-attention's Triton chunk_kda on H20/GB200.",
+  "what_it_does": "Computes the inference forward pass of Kimi Delta Attention (KDA), a gated delta-rule linear attention with a per-channel gate, for bf16 inputs with K=V=128, fixed-length or varlen (cu_seqlens) batches, and optional bf16/fp32 recurrent state in and out. Most users never call it directly: with flash-linear-attention >= 0.5.0 installed, fla.ops.kda.chunk_kda dispatches to it automatically under torch.inference_mode() (FLA_FLASH_KDA=0 opts out). The raw API is flash_kda.fwd(q, k, v, g, beta, scale, out, A_log, dt_bias, lower_bound, ...), which writes into a preallocated out tensor.",
+  "how_it_is_fast": "It uses chunk size 16 instead of FLA's 64. With the gate lower_bound at -5 this keeps exp(cumsum(g)) within bf16 range without intra-chunk rescaling, and the 16x16 inverse becomes cheap: fp32 forward substitution on two 8x8 diagonal blocks, merged with bf16 HMMA GEMMs. The work is split into a token-parallel kernel (gate activation, L2 norm, decay, L/Mqk build, inversion) and a head-parallel kernel (chunked delta-rule recurrence, output, state), which the authors say is at least 15% faster than one fused kernel. Other tricks: the on-chip state is held in bf16 but updated with fp32 FMAs; base-2 ex2.approx and tanh.approx-based sigmoid; __launch_bounds__(256,8) with shared-memory unions for occupancy; register-file transposes (MOVM) instead of shared-memory round trips; and TMA loads.",
+  "when_to_use": [
+    "Serving or prefill for KDA-based models (Kimi Linear style) on Hopper or Blackwell, where fla's chunk_kda is on the critical path: about 1.85-2.3x on H20 and 1.7-3.3x on GB200 at T=8192, H=64/96.",
+    "Varlen batches of mixed sequence lengths, where the gain over the Triton kernel is largest (2.3x on H20 and 3.2-3.3x on GB200 for 8x1024 packed sequences).",
+    "Stacks already built on flash-linear-attention: install FlashKDA and chunk_kda picks it up with no code changes, as long as the call runs under torch.inference_mode().",
+    "Inference where a bf16 recurrent state is acceptable (it halves the state's memory); fp32 state in and out is also supported and is what the published tables measure."
+  ],
+  "when_not_to_use": [
+    "Training: there is no backward pass, and FLA only dispatches to FlashKDA in inference mode.",
+    "Head dims other than K=V=128 (enforced by TORCH_CHECK; issue #4 asks about other sizes), non-bf16 activations, or pre-Hopper GPUs (setup.py builds only sm_90a, 100a, 103a and 120a).",
+    "Scalar-gate gated delta rule (GDN) models: that is a different algorithm, and against fla's GDN kernel FlashKDA is only 0.96x (slower, GB200 H=64 fixed) to 1.80x.",
+    "Anywhere you need a stable, released dependency: version 0.0.1, 10 commits, no PyPI wheel documented, 14 of 16 issues open, and an exact-match correctness test failing on B200 with CUDA 13.0 (#12, open)."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "PyTorch 2.4+ (C++/CUDA extension built with torch.utils.cpp_extension), CUTLASS (git submodule); flash-linear-attention >= 0.5.0 for auto-dispatch and for the tests and benchmarks",
+    "min_toolchain": "CUDA 12.9+, PyTorch 2.4+, nvcc targeting sm_90a or newer",
+    "platforms": "NVIDIA sm_90a (H100/H20/H200), sm_100a/sm_103a (B200/GB200/B300), sm_120a (RTX 50 / RTX PRO Blackwell); benchmarked only on H20 and GB200",
+    "thread_safety": "not documented; launches on PyTorch's current CUDA stream and allocates a fresh workspace (torch.empty) on each call",
+    "drop_in_for_baseline": "partial — transparent replacement for fla's chunk_kda forward under torch.inference_mode() with fla >= 0.5.0; the direct API is a lower-level function with a preallocated output, bf16 only, K=V=128, forward only"
+  },
+  "gotchas": [
+    "The published H20 (2026-04-22) and GB200 (2026-05-26) tables predate the fix for missing TMA proxy and mbarrier-init fences (#24/#25, 2026-07-29), which issue #24 says could cause hangs, stale data or silent corruption. They also predate the 2026-09-01 switch from an fp16 Neumann inverse to fp32 forward substitution. No re-run has been published, and issue #34 asking about the performance effect is unanswered.",
+    "lower_bound is documented as -5 to 0, but csrc/flash_kda.cpp does not check it. The chunk-16 bf16-range argument in the design doc assumes -5, so do not pass values below that without testing accuracy yourself.",
+    "In varlen mode B must be 1 and cu_seqlens int64; initial_state and final_state must share a dtype.",
+    "The default build compiles only for the GPU visible at install time and fails if none is visible; set FLASH_KDA_CUDA_ARCHS=all (or e.g. 90a,100a) for wheel or CI builds."
+  ],
+  "pick_this_over_siblings_when": "Pick FlashKDA when the model uses KDA's per-channel gate and you only need inference. FlashQLA targets the scalar-gate gated delta rule (Qwen-style GDN) and also covers backward, so it is the better fit for GDN models or training. FlashInfer's GDN prefill kernel is the option if you are already inside FlashInfer.",
+  "verified_claims_summary": "BENCHMARK_H20.md and BENCHMARK_GB200.md (first-party, generated by benchmarks/generate_benchmark_md.py using CUDA-event timing, warmup 30, 200 iters x 5 repeats) report KDA forward latency at T=8192, D=128, H=96 and 64. With FlashKDA run in fp32-state mode against fla's Triton chunk_kda, the speedup is 1.85-2.31x on H20 and 1.70-3.27x on GB200, largest for varlen batches. No fla, PyTorch or CUDA versions, driver or host CPU are recorded, and the numbers predate later correctness fixes.",
+  "status_note": "Active but early (v0.0.1, last commit 2026-09-01, 10 commits). MIT-licensed and small enough to vendor, though it builds against a CUTLASS submodule and needs CUDA 12.9+ on Hopper or Blackwell.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/MoonshotAI/FlashKDA/HEAD/README.md",
+    "https://raw.githubusercontent.com/MoonshotAI/FlashKDA/HEAD/BENCHMARK_H20.md",
+    "https://raw.githubusercontent.com/MoonshotAI/FlashKDA/HEAD/BENCHMARK_GB200.md",
+    "https://raw.githubusercontent.com/MoonshotAI/FlashKDA/HEAD/docs/20260420-flashkda-v1-deep-dive.md",
+    "https://raw.githubusercontent.com/MoonshotAI/FlashKDA/HEAD/setup.py",
+    "https://raw.githubusercontent.com/MoonshotAI/FlashKDA/HEAD/flash_kda/__init__.py",
+    "https://raw.githubusercontent.com/MoonshotAI/FlashKDA/HEAD/csrc/flash_kda.cpp",
+    "https://raw.githubusercontent.com/MoonshotAI/FlashKDA/HEAD/tests/test_fwd.py",
+    "https://raw.githubusercontent.com/MoonshotAI/FlashKDA/HEAD/benchmarks/bench_fwd.py",
+    "https://raw.githubusercontent.com/MoonshotAI/FlashKDA/HEAD/benchmarks/generate_benchmark_md.py",
+    "https://github.com/MoonshotAI/FlashKDA/commits/master",
+    "https://github.com/MoonshotAI/FlashKDA/issues?q=is%3Aissue",
+    "https://github.com/MoonshotAI/FlashKDA/issues/12",
+    "https://github.com/MoonshotAI/FlashKDA/issues/24",
+    "https://github.com/MoonshotAI/FlashKDA/issues/34",
+    "https://github.com/fla-org/flash-linear-attention/pull/852"
+  ],
+  "confidence": 0.85
+}

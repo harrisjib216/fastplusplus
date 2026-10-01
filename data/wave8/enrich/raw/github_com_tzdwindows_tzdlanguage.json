@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/tzdwindows/tzdlanguage",
+  "one_liner": "3-prime NTT big-integer multiply (AVX2 CPU, CUDA GPU) inside a Windows hobby language; beats single-core GMP only on GPU or decimal I/O.",
+  "what_it_does": "TzdLang is a new scripting language (bytecode VM, LLVM ORC JIT, LibTorch bindings) whose interpreter multiplies multi-million-digit integers with its own number-theoretic-transform engines. The CPU engine (Generated/TzdExperimentalCompute.cpp, enabled with --experimental-compute) exposes bigint_mul_experimental_cpu_str(a, b) on decimal strings and bigint_mul_experimental_cpu_limbs on base-10^9 limb vectors; the GPU engine lives in Generated/TzdPyTorch.cpp and is selected with --forceGPU. There is no standalone library, header or API outside the interpreter: reusing it means copying source files.",
+  "how_it_is_fast": "Numbers are stored as base-10^9 limbs, so parsing and printing decimal strings is linear chunking instead of GMP's binary/decimal radix conversion, which is where most of the 14.5x/45.1x end-to-end gains come from. The product is a cyclic convolution done as three 32-bit NTTs (primes 998244353, 985661441, 754974721 in the current source) with AVX2 Montgomery multiplication, Bailey's four-step decomposition into cache-sized row transforms with tiled transposes, OpenMP threads, and Garner CRT reconstruction. The GPU engine runs the same scheme as NVRTC-compiled Stockham kernels with shared-memory padding and a parallel carry scan.",
+  "when_to_use": [
+    "As reference code for a 3-prime 32-bit NTT multiplier with AVX2 Montgomery arithmetic and four-step cache blocking.",
+    "Workloads that start and end as decimal strings of millions of digits (e.g. printing huge products), where avoiding binary/decimal conversion dominates: the wiki's end-to-end run is 175 ms CPU and 57 ms GPU vs 2,549 ms for single-core GMP at 4.74M digits.",
+    "Windows x64 machines with an NVIDIA GPU of compute capability 6.0+ when one multiplication of roughly 1M-38M digits must finish faster than single-core GMP (GPU kernel 29.2 ms vs 111.8 ms at 4.74M digits; complete GPU product 42.0 ms)."
+  ],
+  "when_not_to_use": [
+    "As a faster CPU multiplier than GMP: the complete CPU product (54.02 ms NTT + 97.08 ms CRT/carry = 151.1 ms on 8 threads) is slower than single-threaded GMP mpz_mul (111.78 ms) on the same i7-4790.",
+    "Any project that needs a library: the code is embedded in an interpreter that also pulls in ANTLR-generated sources, LLVM, LibTorch and CUDA, and the repository has no LICENSE file (MIT appears only in the README and badge).",
+    "Linux, macOS or non-AVX2 CPUs: the CPU engine uses AVX2 intrinsics unconditionally and the MSVC _umul128 intrinsic, and the README lists Windows 10/11 x64 with Visual Studio as the platform.",
+    "Very large operands on the CPU path: nothing checks the 2^22-element transform limit (P2 = 235*2^22+1), so combined inputs above about 4.19M limbs (~37.7M digits) would compute with an invalid root of unity; the GPU path throws instead.",
+    "Anything beyond multiplication of non-negative decimal strings with a sign: no division, modular arithmetic or binary-limb interface is exposed by this engine."
+  ],
+  "integration": {
+    "form": "source-drop (two files inside an interpreter; no library target)",
+    "dependencies": "CPU engine: OpenMP, AVX2, MSVC intrinsics (_umul128); GPU engine: CUDA Toolkit 12+ with NVRTC, LibTorch (used to detect CUDA), compute capability 6.0+; the full build also wants LLVM and ANTLR4",
+    "min_toolchain": "C++20 (CMakeLists.txt), Visual Studio 2022/2026 (MSVC v143/v145) or CMake 3.20+",
+    "platforms": "Windows 10/11 x64 only per README; AVX2 required for the CPU engine; NVIDIA Pascal or newer for the GPU engine",
+    "thread_safety": "not documented; the CPU engine's global twiddle cache checks its size outside the mutex and sets the new size before the tables are built, so concurrent multiplications of different sizes can race",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The headline CPU '2.07x faster than GMP' times only the NTT phase; the --bigTime breakdown shows a 97.08 ms serial CRT/carry step that is excluded, and the GMP side is a complete mpz_mul.",
+    "The wiki and the code disagree: the wiki lists primes 469762049/167772161/754974721, a Kogge-Stone carry chain and a fast_div_1e9 helper for the CPU path, while TzdExperimentalCompute.cpp uses 998244353/985661441/754974721, a sequential carry loop and plain division. The wiki's fast_div_1e9 snippet also returns a wrong quotient for some inputs above about 1.23e19 (checked by script), though the current code does not call it.",
+    "README and wiki give two different multi-threaded GMP end-to-end figures (~519 ms and 2,522.09 ms), and the 'multi-threaded GMP' rows are the author's own Karatsuba split over mpz_mul, not a GMP feature; all figures are single runs.",
+    "GPU timings are taken after a warm-up multiplication at the same size with cached device buffers and twiddles (the sample output shows alloc=0.00 ms, twiddle=0.00 ms), and the kernels are NVRTC-compiled with --use_fast_math."
+  ],
+  "pick_this_over_siblings_when": "Pick FLINT or mp++ for a maintained library that beats GMP on large multiplications with full arithmetic, and CGBN or the GMP-on-GPU entries for batched fixed-size GPU work; TzdLanguage is only worth opening as readable NTT/CRT example code or if your inputs and outputs are huge decimal strings on a Windows/CUDA box.",
+  "verified_claims_summary": "First-party README/wiki figures for one 4,741,006-digit multiplication on an Intel Core i7-4790 (4C/8T) and an NVIDIA P106-090: GPU NTT kernel 29.20 ms (42.01 ms with CRT, carry and copy) and CPU AVX2 NTT 54.02 ms (151.1 ms with CRT/carry) vs single-core GMP 6.3.0 mpz_mul 111.78 ms from a vcpkg MSVC build (cl /O2 /openmp), so only the GPU path beats GMP on the multiply itself (about 2.66x, derived from page data); end-to-end decimal-string-to-string times are 56.52 ms GPU and 175.41 ms CPU vs 2,549.30 ms for GMP.",
+  "status_note": "Very young (first commit 2026-09-13, 81 commits, 10 stars, last commit 2026-09-30) and changing daily; no LICENSE file was present on 2026-10-01 (raw LICENSE 404) despite the README's MIT claim, so copying the code carries licence risk until one is added.",
+  "sources_read": [
+    "https://github.com/tzdwindows/TzdLanguage",
+    "https://github.com/tzdwindows/TzdLanguage/commits",
+    "https://github.com/tzdwindows/TzdLanguage/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/tzdwindows/TzdLanguage/HEAD/README.md",
+    "https://raw.githubusercontent.com/tzdwindows/TzdLanguage/HEAD/wiki/CPU-NTT-BigInt.md",
+    "https://raw.githubusercontent.com/tzdwindows/TzdLanguage/HEAD/wiki/GPU-NTT-BigInt.md",
+    "https://raw.githubusercontent.com/tzdwindows/TzdLanguage/HEAD/test/bench_gmp_mt.cpp",
+    "https://raw.githubusercontent.com/tzdwindows/TzdLanguage/HEAD/test/run_bench_gmp_mt.bat",
+    "https://raw.githubusercontent.com/tzdwindows/TzdLanguage/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/tzdwindows/TzdLanguage/HEAD/Generated/TzdExperimentalCompute.cpp",
+    "https://raw.githubusercontent.com/tzdwindows/TzdLanguage/HEAD/Generated/TzdExperimentalCompute.h",
+    "https://raw.githubusercontent.com/tzdwindows/TzdLanguage/HEAD/Generated/TzdPyTorch.cpp",
+    "https://raw.githubusercontent.com/tzdwindows/TzdLanguage/HEAD/LICENSE"
+  ],
+  "confidence": 0.75
+}

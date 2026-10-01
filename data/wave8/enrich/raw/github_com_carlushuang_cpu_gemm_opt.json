@@ -1,0 +1,56 @@
+{
+  "id": "https://github.com/carlushuang/cpu_gemm_opt",
+  "one_liner": "Single-core AVX2 SGEMM study (BLIS-style 6x16 asm kernel, per-size tuned blocking) about 4-9% ahead of OpenBLAS 0.3.4.",
+  "what_it_does": "A worked example of building a Goto/BLIS-style single-precision GEMM for one x86 core, with a PDF (res/cpu_gemm.pdf) explaining how the blocking and micro-kernel were derived and a driver that tunes and benchmarks it against OpenBLAS. The entry point cblas_sgemm_opt() mimics the cblas_sgemm argument list plus a gemm_context_t that carries the blocking parameters (mc, nc, kc, mr, nr), cache sizes and page size. Only the row-major, no-transpose case is implemented; every other layout/transpose branch is an empty stub that returns without touching C.",
+  "how_it_is_fast": "It follows the Goto/van de Geijn loop nest: A is packed into mr x kc column panels (with alpha folded in) and B into kc x nr row panels in page-aligned buffers, C is scaled by beta once, and a 6x16 AT&T inline-assembly micro-kernel keeps 12 YMM accumulators, broadcasts A with vbroadcastss, issues vfmadd231ps, unrolls k by 4 and prefetches the next A and B panels. Blocking sizes are chosen so the panels fit L1, L2, L3 and the L1D TLB (the driver prints these checks), and a tuner stores the best mc/nc/kc per problem size in sgemm_tuned.db, which the benchmark then loads.",
+  "when_to_use": [
+    "Learning how a cache- and TLB-aware SGEMM is built on AVX2/FMA, with the derivation of the blocking constraints written out in a PDF",
+    "Single-threaded row-major SGEMM experiments on an Intel Skylake-SP-class core (the author used a Xeon Gold 6142 at 2.6 GHz with hyperthreading off) for square sizes from about 192 to 9120, where the README table shows it ahead of OpenBLAS 0.3.4",
+    "A starting point for your own per-machine tuned micro-kernel, since the tuner and the parameter database format are included"
+  ],
+  "when_not_to_use": [
+    "Any general BLAS use: column-major input and every transpose combination are unimplemented stubs, and there is no DGEMM or complex type",
+    "Matrices whose M is not a multiple of 6 or N not a multiple of 16: the 6x16 assembly kernel ignores the edge-tile sizes passed to it (its assert is commented out), so edge tiles read and write past the matrix",
+    "Multi-threaded workloads: it is single-core only, and the README states it beats OpenBLAS with OpenBLAS also limited to one thread",
+    "AVX-512 machines where peak matters: the kernel uses 256-bit AVX2 even on the AVX-512-capable Gold 6142, so a library with AVX-512 kernels can be faster",
+    "Small sizes such as 144^3, where OpenBLAS was faster in the README table (55.85 vs 64.26 GFLOPS), or sizes not in the tuned database, which fall back to default blocking"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "A CBLAS header (gemm_driver.h includes <cblas.h>); OpenBLAS for the reference and benchmark driver; pthreads; Linux CPU-affinity calls in util.cc",
+    "min_toolchain": "C++11 with GCC-style AT&T inline assembly; the author built with clang++ 7.0.0 and -O3 -m64 -mfma -msse -msse2 via src/build.sh (paths are hard-coded to /opt)",
+    "platforms": "x86-64 with AVX2 and FMA3; Linux; tested only on an Intel Xeon Gold 6142",
+    "thread_safety": "not documented; each call allocates its own packing buffers, but there is no parallel path and the driver pins itself to one CPU",
+    "drop_in_for_baseline": "partial — cblas_sgemm-like argument order but different enum types and an extra gemm_context_t argument; only CblasRowMajor/NoTrans/NoTrans works"
+  },
+  "gotchas": [
+    "Non-row-major or transposed calls return silently with C unchanged, rather than failing",
+    "The micro-kernel stores C with aligned vmovaps, so C must be 32-byte aligned with ldc a multiple of 8 floats, and M and N must be multiples of 6 and 16; the benchmark only uses multiples of 48, which hides this",
+    "Packing buffers are malloc'd and freed on every call, which costs time at small sizes",
+    "The % of peak column divides by 1024 instead of 1000 (81.25 rather than 83.2 GFLOPS at 2.6 GHz) and counts 2*M*N*(K+1) flops, so the 96% figures overstate efficiency by a few points; the GFLOPS comparison with OpenBLAS uses the same formula and is unaffected"
+  ],
+  "pick_this_over_siblings_when": "Pick it over sgemm.c (salykova) or matmul-cpu when you want the blocking derivation (cache and TLB constraints) spelled out and a per-size tuner; GEMM_AVX2_FMA3 targets multi-threaded AVX2 and is measured against MKL, and BLASFEO is the better choice for small matrices.",
+  "verified_claims_summary": "On one 2.6 GHz core of an Intel Xeon Gold 6142 (hyperthreading off), built with clang++ 7.0.0 -O3 -mfma, the README's row-major SGEMM sweep shows the tuned 6x16 kernel at about 77-79 GFLOPS from 960^3 to 9120^3 against 72-75 GFLOPS for single-threaded OpenBLAS 0.3.4 cblas_sgemm (78.31 vs 75.11 at 960^3, 78.62 vs 72.70 at 9120^3), about 4-9% faster; it also leads at most small sizes (60.13 vs 43.05 at 48^3) but loses at 144^3. The OpenBLAS build target was not stated, and its column stays below the 81.25 AVX2 figure the driver uses as peak, so it was probably not running AVX-512 kernels (inference from page data).",
+  "status_note": "Abandoned since 2019-04-15 (31 commits, 75 stars, one unanswered issue asking for an MKL comparison) but MIT-licensed and small enough to vendor as a study kernel; it is unsafe as a general SGEMM because of the stubbed paths and unchecked edge tiles.",
+  "sources_read": [
+    "https://github.com/carlushuang/cpu_gemm_opt",
+    "https://github.com/carlushuang/cpu_gemm_opt/tree/master/src",
+    "https://github.com/carlushuang/cpu_gemm_opt/issues?q=is%3Aissue",
+    "https://github.com/carlushuang/cpu_gemm_opt/issues/1",
+    "https://raw.githubusercontent.com/carlushuang/cpu_gemm_opt/HEAD/README.md",
+    "https://raw.githubusercontent.com/carlushuang/cpu_gemm_opt/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/carlushuang/cpu_gemm_opt/HEAD/src/build.sh",
+    "https://raw.githubusercontent.com/carlushuang/cpu_gemm_opt/HEAD/src/gemm_driver.cc",
+    "https://raw.githubusercontent.com/carlushuang/cpu_gemm_opt/master/src/gemm_driver.h",
+    "https://raw.githubusercontent.com/carlushuang/cpu_gemm_opt/master/src/gemm_config.h",
+    "https://raw.githubusercontent.com/carlushuang/cpu_gemm_opt/master/src/gemm_opt.cc",
+    "https://raw.githubusercontent.com/carlushuang/cpu_gemm_opt/master/src/sgemm_tuned.db",
+    "https://raw.githubusercontent.com/carlushuang/cpu_gemm_opt/master/src/util.h",
+    "https://raw.githubusercontent.com/carlushuang/cpu_gemm_opt/master/src/util.cc",
+    "https://raw.githubusercontent.com/carlushuang/cpu_gemm_opt/master/src/kernel/sgemm_asm_6x16.cc",
+    "https://raw.githubusercontent.com/carlushuang/cpu_gemm_opt/master/src/kernel/sgemm_pack.cc",
+    "https://raw.githubusercontent.com/carlushuang/cpu_gemm_opt/master/src/kernel/sgemm_c.cc",
+    "https://raw.githubusercontent.com/carlushuang/cpu_gemm_opt/master/src/kernel/sgemm_micro_kernel.h"
+  ],
+  "confidence": 0.85
+}

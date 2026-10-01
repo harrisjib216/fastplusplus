@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/holiman/uint256",
+  "one_liner": "Allocation-free fixed 256-bit unsigned integer type for Go; 1.2-17x faster than math/big.Int on 256-bit arithmetic.",
+  "what_it_does": "uint256 defines `type Int [4]uint64` (little-endian limbs) with big.Int-style mutating methods (z.Add(x, y), Mul, Div, Mod, SDiv, AddMod, MulMod, Exp, Sqrt, shifts, bitwise ops, comparisons) plus conversions to and from big.Int, hex, decimal, bytes, SSZ and RLP. It is the 256-bit word type used by go-ethereum and erigon for EVM arithmetic. All arithmetic wraps modulo 2^256 and there are signed (two's complement) variants such as SDiv and Abs.",
+  "how_it_is_fast": "Values live in a fixed four-word array, so operations are straight-line code over 4 limbs using math/bits intrinsics (Add64, Sub64, Mul64) with no heap allocation, length checks or normalisation, unlike big.Int's variable-length slices. Division uses Knuth-style long division with a reciprocal-based 2-by-1 step ported from chfast/intx ('Improved division by invariant integers', Algorithm 4), and MulMod for 192-256-bit moduli reduces the 512-bit product with a precomputed 320-bit reciprocal refined by Newton-Raphson. There is no Go assembly; the README says assembly is deferred.",
+  "when_to_use": [
+    "EVM, blockchain or cryptographic Go code whose values are always at most 256 bits (balances, hashes as integers, gas math).",
+    "Hot loops where big.Int allocations dominate: SDiv, Sqrt, Exp, MulMod and decimal parsing go from several allocations per op to zero.",
+    "Simple 256-bit add/sub/mul/compare in Go, where the README shows about 2 ns vs 17-18 ns (add/sub) and 12.1 vs 57.7 ns (mul).",
+    "Modular arithmetic with 256-bit moduli, e.g. MulMod/mod256 188.8 ns vs 489.2 ns, or about 77 ns when the reciprocal is reused (MulModWithReciprocal)."
+  ],
+  "when_not_to_use": [
+    "Values that can exceed 256 bits or need arbitrary precision: results silently wrap modulo 2^256 unless you use the *Overflow variants.",
+    "C or C++ projects: it is a pure Go package with no C API; a C++ codebase would look at fixed-width C++ types instead.",
+    "Code that relies on big.Int's divide-by-zero panic: Div, Mod, DivMod, AddMod and MulMod return 0 for a zero divisor.",
+    "Decimal formatting-heavy workloads expecting large wins: ToDecimal is only 19% faster than big.Int and still allocates (248 allocs/op in the README table).",
+    "Workloads dominated by 64-bit-modulus MulMod: only 18.6% faster (91.7 vs 112.6 ns)."
+  ],
+  "integration": {
+    "form": "module (Go package github.com/holiman/uint256)",
+    "dependencies": "none outside the Go standard library (math/bits, math/big, encoding/binary)",
+    "min_toolchain": "Go 1.19 (go.mod)",
+    "platforms": "any Go target (pure Go, no assembly)",
+    "thread_safety": "not documented; Int is a plain value array mutated in place by its methods, so shared instances need external synchronisation",
+    "drop_in_for_baseline": "partial: method names mirror big.Int (z.Op(x, y)) and FromBig/ToBig convert, but the type is fixed-width and unsigned with wrap-around, and zero-divisor and String/marshal behaviour differ in places"
+  },
+  "gotchas": [
+    "Division and modulo by zero return 0 instead of panicking (documented as 'OBS: differs from the big.Int').",
+    "SetBytes with more than 32 bytes silently keeps the last 32 bytes; FromBig reports overflow through a bool, while MustFromBig panics.",
+    "The README benchmark tables date from 2020 (no CPU, Go version or OS given), and v1.3.0 later changed Mul, Exp and DivMod, so current numbers may differ in either direction.",
+    "The big.Int baselines differ slightly per benchmark: Add/single lets the big.Int grow without truncation, while Mul truncates to 256 bits with a helper, so per-row ratios are not perfectly like-for-like."
+  ],
+  "pick_this_over_siblings_when": "Pick uint256 only when you are writing Go and need 256-bit words; for C++ the catalogued fixed-width options are ctbignum (constexpr, compile-time limb count), Boost.Multiprecision fixed cpp_int and Unsigned Bigint (ADX/BMI2), and the arbitrary-precision siblings (GMP-beating mp++, FLINT, ibig/malachite in Rust) solve a different, variable-width problem.",
+  "verified_claims_summary": "First-party `go test -bench` tables in the README compare uint256.Int with Go's math/big.Int on fixed 256-bit inputs and show uint256 faster on every listed row, from -18.6% (MulMod/mod64) to -94.2% (Exp/small, about 17x), e.g. Add 1.99 vs 18.11 ns, Mul 12.10 vs 57.69 ns, SDiv/large 94.64 vs 642.10 ns, with zero allocations on most rows; the README gives the commands but no CPU, OS or Go version, and the status line is dated 2020-03-18.",
+  "status_note": "Actively maintained (last commit 2026-08-23, 352 commits, latest tagged release v1.3.2 fixing an unmarshalling overflow) and BSD-3-Clause; production-hardened through go-ethereum and erigon, with 100% test coverage claimed since v1.0.0 and an OSS-Fuzz script in the repo.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/holiman/uint256/HEAD/README.md",
+    "https://raw.githubusercontent.com/holiman/uint256/HEAD/go.mod",
+    "https://raw.githubusercontent.com/holiman/uint256/HEAD/uint256.go",
+    "https://raw.githubusercontent.com/holiman/uint256/HEAD/mod.go",
+    "https://raw.githubusercontent.com/holiman/uint256/HEAD/div.go",
+    "https://raw.githubusercontent.com/holiman/uint256/HEAD/conversion.go",
+    "https://raw.githubusercontent.com/holiman/uint256/HEAD/benchmarks_test.go",
+    "https://github.com/holiman/uint256",
+    "https://github.com/holiman/uint256/issues?q=is%3Aissue+bug",
+    "https://github.com/holiman/uint256/releases"
+  ],
+  "confidence": 0.8
+}

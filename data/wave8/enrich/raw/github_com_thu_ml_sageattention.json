@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/thu-ml/sageattention",
+  "one_liner": "Quantized (INT8 QK, FP8/FP16 PV) forward attention kernels for NVIDIA GPUs that outrun FlashAttention2 and match FlashAttention3-FP8.",
+  "what_it_does": "A PyTorch extension (CUDA C++ kernels plus Triton kernels) that computes softmax(QK^T)V for inference with quantized operands. The main call is sageattn(q, k, v, tensor_layout, is_causal), which takes FP16/BF16 tensors and picks a kernel by GPU architecture (sm80, sm86, sm89, sm90, sm120, sm121). Its signature is close enough to F.scaled_dot_product_attention that the README swaps it in by assignment, but it warns that this monkey-patch does not work for every model and suggests replacing the model's Attention class instead.",
+  "how_it_is_fast": "Q and K are quantized to INT8 (per-block, per-warp or per-thread granularity) after 'smoothing' K by subtracting its mean over the sequence, which removes channel outliers so the INT8 error stays small. QK^T then runs on INT8 tensor cores (mma / Hopper WGMMA), and PV runs in FP8 (sm89/sm90/sm120) or FP16 with an FP16 accumulator. A two-level accumulation strategy for FP8 PV (SageAttention2++, pv_accum_dtype='fp32+fp16') recovers accuracy lost to the FP8 MMA accumulator. The kernels keep the FlashAttention-style tiled online softmax, so the gain over FlashAttention2 comes from faster low-precision tensor-core throughput, not a different algorithm.",
+  "when_to_use": [
+    "Inference of video and image diffusion transformers (CogVideoX, HunyuanVideo, Mochi examples in the repo) where attention dominates runtime on long token sequences.",
+    "Consumer and workstation GPUs (RTX 3090/4090/5090, L20, A6000) where FlashAttention3 is not available and FlashAttention2 is the realistic baseline.",
+    "Hopper (H100/H20/H800) inference where you would otherwise use FlashAttention3-FP8 and want similar speed with less quantization error.",
+    "Head dimension 64 or 128 with FP16/BF16 inputs, including GQA, varlen batches (sageattn_varlen) and causal masks with qo_len == kv_len."
+  ],
+  "when_not_to_use": [
+    "Training or anything needing gradients: the SageAttention2 API in sageattention/core.py has no backward pass.",
+    "Head dimension above 128: the wrappers raise 'Unsupported head_dim'; sizes below 64 or between 64 and 128 are zero-padded, which wastes work.",
+    "Numerically strict workloads that need results close to exact FP16 attention: outputs are approximate, and open issues report black/NaN outputs with some models (#273, #221, #164 on RTX 50xx).",
+    "Very long sequences (above roughly 100k-160k tokens) until the open int32 overflow and FP8 PV corruption issues (#386, #388) are fixed.",
+    "Pre-Ampere GPUs (compute capability below 8.0), AMD or CPU: setup.py only builds sm80, 86, 89, 90, 100, 120 and 121, and the sageattn() dispatcher has no branch for sm100 (B200), so it raises 'Unsupported CUDA architecture' there; SageAttention3 for Blackwell is a separate package in sageattention3_blackwell/."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "Python >=3.9, PyTorch >=2.3.0, Triton >=3.0.0, CUDA toolkit (nvcc) for the source build; flash-attn only for benchmarking",
+    "min_toolchain": "CUDA 12.0 (Ampere), 12.3 (Hopper FP8), 12.4 (Ada FP8), 12.8 (Blackwell or SageAttention2++); C++17 (setup.py passes -std=c++17 to g++ and nvcc)",
+    "platforms": "Linux with NVIDIA GPUs sm80/86/89/90/100/120/121 (Ampere, Ada, Hopper, Blackwell); other OSes not documented",
+    "thread_safety": "not documented; the wrappers call torch.cuda.set_device(v.device) as a workaround for illegal memory access in multi-GPU torchrun runs",
+    "drop_in_for_baseline": "partial — same q/k/v call shape as F.scaled_dot_product_attention / flash_attn, but forward-only, head_dim <= 128, approximate numerics, and the README says monkey-patching SDPA does not work for every model"
+  },
+  "gotchas": [
+    "Kernel TOPS plots exclude the quantization and K-smoothing passes (README note), so end-to-end speedup is smaller than the kernel charts suggest.",
+    "Open issue #392 (2026-08-18): output silently diverges about 90% from eager when replayed inside a captured CUDA graph on sm120; the README only claims torch.compile support in non-cudagraphs mode.",
+    "Open issue #386 (2026-08-11): Triton kernels compute offsets in int32, so non-contiguous views (fused QKV buffers) at about 100k tokens silently corrupt output or crash; #388 reports FP8 PV noise above about 160k tokens on sm120.",
+    "Packaging mismatch: the README says 'pip install sageattention==2.2.0', but PyPI only has up to 1.0.6 (the Triton-only SageAttention1, 2024-11-20), whose metadata says BSD 3-Clause while the repo LICENSE is Apache-2.0; build from source to get SageAttention2/2++."
+  ],
+  "pick_this_over_siblings_when": "Pick SageAttention over FlashAttention-3 for inference on Ada/Ampere/Blackwell consumer GPUs or when lossy INT8/FP8 attention is acceptable; keep FlashAttention-3 for training and exact attention on Hopper. Use FFPA instead when head_dim exceeds 128 (SageAttention stops at 128), and FlashInfer for paged-KV LLM decode serving.",
+  "verified_claims_summary": "First-party kernel benchmarks (bench/ scripts using the flash-attn benchmark API, head_dim 64/128) on RTX 5090/4090/3090, L20, A100/A800/A6000, H100/H20/H800 show the INT8/FP8 kernels above FlashAttention2, for example 560 TOPS on RTX 5090 (2.7x FlashAttention2), and level with FlashAttention3-FP8 on Hopper; CogVideoX1.5-5B end-to-end on an H20 takes 12'07'' vs 25'34'' (FA2) and 17'32'' (FA3). The results are backed by ICLR 2025 and ICML 2025 papers, but CUDA version and flags for the plots are not stated, and the kernel figures leave out quantization time.",
+  "status_note": "Apache-2.0 research code from Tsinghua (4,000 stars); last code commit 2025-12-22 and README edit 2026-01-17, with silent-corruption bug reports from August 2026 still unanswered, so it is maintained but slowing down; usable if you build from source.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/thu-ml/SageAttention/HEAD/README.md",
+    "https://raw.githubusercontent.com/thu-ml/SageAttention/HEAD/bench/README.md",
+    "https://raw.githubusercontent.com/thu-ml/SageAttention/HEAD/setup.py",
+    "https://raw.githubusercontent.com/thu-ml/SageAttention/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/thu-ml/SageAttention/HEAD/sageattention/core.py",
+    "https://raw.githubusercontent.com/thu-ml/SageAttention/HEAD/pyproject.toml",
+    "https://pypi.org/pypi/sageattention/json",
+    "https://github.com/thu-ml/SageAttention",
+    "https://github.com/thu-ml/SageAttention/commits/main",
+    "https://github.com/thu-ml/SageAttention/tree/main/csrc",
+    "https://github.com/thu-ml/SageAttention/issues?q=is%3Aissue+label%3Abug",
+    "https://github.com/thu-ml/SageAttention/issues?q=is%3Aissue+NaN+OR+black+OR+%22illegal+memory%22",
+    "https://github.com/thu-ml/SageAttention/issues/386",
+    "https://github.com/thu-ml/SageAttention/issues/388",
+    "https://github.com/thu-ml/SageAttention/issues/392"
+  ],
+  "confidence": 0.8
+}

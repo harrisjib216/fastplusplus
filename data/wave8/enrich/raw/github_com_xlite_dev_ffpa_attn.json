@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/xlite-dev/ffpa-attn",
+  "one_liner": "Exact GPU attention kernels for head dims 320-1024 (beyond FlashAttention-2's 256); 1.5x-15x faster than PyTorch SDPA.",
+  "what_it_does": "A Python/PyTorch package (pip install ffpa-attn) providing fused exact attention, forward and backward, for large head dimensions where FlashAttention-2 and SDPA's flash backend do not apply. It also offers experimental FP8 (sm_89, sm_120) and FP4 (sm_120) forward kernels for D=64 and up. ffpa_attn_func has the same signature as torch.nn.functional.scaled_dot_product_attention and can be monkey-patched over it; shapes it does not handle are routed back to SDPA. A FlashAttention-style varlen entry (ffpa_attn_varlen_func) exists for the CuTe-DSL backend only.",
+  "how_it_is_fast": "It keeps FlashAttention's online-softmax tiling and adds two changes that stop SRAM and register use growing with D. Split-D tiles the head dimension, so Q, K and V shared-memory tiles stay a fixed Br x 16 instead of O(D). A TiledMMA M4N2 warp layout for the PV GEMM halves the per-thread O accumulator to O(D/4) registers, which avoids the register spilling the FA-2-style M8N1 layout hits at D=512 and keeps D=1024 feasible (README: 1.55x over M8N1 at D=1024 on RTX 5090, 154 vs 100 TFLOPS). There are three implementations: Triton with persistent autotune configs, CuTe-DSL kernels using TMA/WGMMA on sm_90a and tcgen05 2-CTA on sm_100a, and a forward-only CUDA extension with FP8/FP4 quantized variants.",
+  "when_to_use": [
+    "Training or prefill with head dim 320-1024 in fp16/bf16 on NVIDIA sm_80 or newer, where SDPA falls back to its slower efficient/math backends: about 1.5-1.7x forward on L20 (Triton) and 2.6-3.5x forward / 4-6x backward on H200 (CuTe-DSL) at D=512.",
+    "B200 (sm_100a) with D=512 exactly, where the CuTe-DSL tcgen05 path reports 6.5-8.4x forward and 8-15x backward over SDPA.",
+    "Models that mix a few large-D full-attention layers with ordinary layers (the README cites a NeMo Automodel PR reporting 1.4-1.5x end-to-end Gemma4-31B training throughput on 8xH200 with FFPA on the 10 of 60 D=512 layers; PR not opened).",
+    "Long sequences only: each of Nq and Nkv must be at least 512 (Nq below 8 is also accepted, for decode); anything else goes to SDPA anyway.",
+    "Diffusion inference on RTX 50 / RTX PRO Blackwell (sm_120) if you can accept FP8/FP4 accuracy loss and test quality yourself; the end-to-end FLUX.1-dev gain is about 7% at 1024x1024 and 12-17% at 2048x2048."
+  ],
+  "when_not_to_use": [
+    "Head dim 256 or less in bf16/fp16: those shapes fall straight through to SDPA, so FlashAttention-2/3 or cuDNN are what actually run.",
+    "Short sequences: if Nkv < 512, or 8 <= Nq < 512, the call falls back to SDPA. FP8/FP4 are also documented as not suitable for small models or short sequences.",
+    "Production stability: the code changes several times a day (dozens of commits in Sept 2026 alone), the CuTe-DSL backend is described as 'early stage', a varlen backward hang on H100 with D=512 (#298) was closed as not planned, and a cross-causal misalignment issue (#311) lists CUDA, Triton and CuTe-DSL but links only a Triton fix (PR #300).",
+    "fp32 inputs, non-NVIDIA hardware other than AMD through the Triton backend, or code that needs attn_mask or dropout on the CuTe-DSL backend (rejected with NotImplementedError).",
+    "Expecting the largest speedups to carry over: on B200 they are measured against SDPA's non-flash fallback at D=512, a weak baseline."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "torch>=2.10, Triton (via PyTorch), nvidia-cutlass-dsl==4.6.2, quack-kernels==0.6.4, apache-tvm-ffi (>=0.1.11,<0.2), ray, numpy, ninja, packaging; the optional CUDA extension (ffpa_attn._C) is built from source with build.sh plus git submodules",
+    "min_toolchain": "Python 3.10+, PyTorch 2.10+ (pyproject); the README says the PyPI wheel needs CUDA 13.0+ and PyTorch 2.11+",
+    "platforms": "NVIDIA sm_80+ for Triton and CuTe-DSL (fastest on sm_90a for D 320-512 and sm_100a for D=512); CUDA forward backend sm_80+; FP8 on sm_89 and sm_120; FP4 on sm_120 only; Triton backend also runs on AMD ROCm/HIP (PR #268)",
+    "thread_safety": "not documented (kernels are registered as torch.library custom ops and are torch.compile-traceable)",
+    "drop_in_for_baseline": "partial — same signature as F.scaled_dot_product_attention and can be monkey-patched over it, but only fp16/bf16 run on the FFPA path, causal masking is bottom-right aligned when Nq != Nkv (SDPA is top-left), and the CuTe-DSL backend rejects masks and dropout"
+  },
+  "gotchas": [
+    "Silent semantic change when monkey-patching: with is_causal=True and Nq != Nkv, FFPA aligns the mask to the KV tail (FlashAttention convention), while SDPA aligns it top-left, so cross-causal outputs differ from what SDPA would have returned.",
+    "Hardware or head-dim mismatches fall back to SDPA with only a warning_once log line, so you can believe FFPA is running when it is not. Set FFPA_FORCE_NO_SDPA_FALLBACK=1 when testing.",
+    "Dtype, dropout and mask constraints raise exceptions instead of falling back, so a monkey-patched model with fp32 attention at D>256 will throw.",
+    "The FP8/FP4 kernels quantize Q, K and V internally from bf16 inputs. Their 3.8-4.9x 'speedup over SDPA' compares low precision with BF16 SDPA; against SageAttention-2 (also FP8) the README says only 'comparable or slightly better'."
+  ],
+  "pick_this_over_siblings_when": "Pick FFPA over FlashAttention-3 or ThunderKittens only when head dim is above 256, which they do not target. At D<=256, FFPA just calls SDPA (bf16) or competes with SageAttention on FP8/FP4, where SageAttention-2 is the more established choice at D=128 and FFPA's edge is head dims Sage does not cover (README: Sage-2/3 support D<=128).",
+  "verified_claims_summary": "bench/README.md (first-party; PyTorch 2.11, CUDA 13.0, D=512, B=1, fp16/bf16) reports latency against torch SDPA, which cannot use its flash backend at D=512. Results: B200 CuTe-DSL forward 6.45-8.41x and backward 8.21-14.69x (up to 1517/763 TFLOPS); H200 CuTe-DSL forward 1.81-3.46x and backward 4.09-6.00x; L20 Triton forward 1.03-1.67x and backward 1.63-2.21x. No host CPU, driver or build flags are given, and the README's H200 peak (535 TFLOPS) does not match bench/README (427 TFLOPS, table max 426).",
+  "status_note": "Very active (last commit 2026-09-26, several commits a day) and Apache-2.0, so it is copyable, but APIs and kernels are moving fast and parts (CuTe-DSL, FP8/FP4) are labelled experimental or early stage.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/xlite-dev/ffpa-attn/HEAD/README.md",
+    "https://raw.githubusercontent.com/xlite-dev/ffpa-attn/HEAD/bench/README.md",
+    "https://raw.githubusercontent.com/xlite-dev/ffpa-attn/HEAD/pyproject.toml",
+    "https://raw.githubusercontent.com/xlite-dev/ffpa-attn/HEAD/setup.py",
+    "https://raw.githubusercontent.com/xlite-dev/ffpa-attn/HEAD/src/ffpa_attn/__init__.py",
+    "https://raw.githubusercontent.com/xlite-dev/ffpa-attn/HEAD/src/ffpa_attn/ffpa_attn_interface.py",
+    "https://raw.githubusercontent.com/xlite-dev/ffpa-attn/HEAD/src/ffpa_attn/functional.py",
+    "https://github.com/xlite-dev/ffpa-attn/tree/main/src/ffpa_attn",
+    "https://github.com/xlite-dev/ffpa-attn/commits/main",
+    "https://github.com/xlite-dev/ffpa-attn/issues?q=is%3Aissue",
+    "https://github.com/xlite-dev/ffpa-attn/issues/298",
+    "https://github.com/xlite-dev/ffpa-attn/issues/311",
+    "https://github.com/xlite-dev/ffpa-attn/issues/320"
+  ],
+  "confidence": 0.8
+}

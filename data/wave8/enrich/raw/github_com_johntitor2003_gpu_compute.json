@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/johntitor2003/gpu-compute",
+  "one_liner": "Hand-written CUDA SGEMM kernels that beat pedantic-FP32 cuBLAS only on tiny square matrices (N<=256) on an RTX 5080.",
+  "what_it_does": "A header of CUDA kernels (gemm/kernels.cuh) plus a benchmark (gemm/bench_gemm.cu) for row-major FP32 C = alpha*A*B + beta*C: naive, 32x32 shared-memory tiled, 128x128 and 64x64 register-blocked, warp-per-row skinny, split-K, and a labelled WMMA TF32 kernel. launch_auto(M, N, K, alpha, A, B, beta, C, stream) picks one by shape at run time. The interface is a set of raw kernel launchers, not a cuBLAS-compatible API: no transposes, no leading dimensions, no batching. The repo also holds an unrelated BVH path tracer and an N-body demo.",
+  "how_it_is_fast": "It does not out-compute cuBLAS; it skips work cuBLAS does per call. For small squares launch_auto issues one size-specialized kernel (the classic 32x32 shared-memory tile with one accumulator per thread, 9-64 CTAs for N=80-256; at N<=64 the code actually routes to a single 64x64 register-blocked CTA, although the README credits the 32x32 kernel), which finishes in 8-14 us, while pedantic-FP32 cublasSgemm sits at a roughly constant 16-18 us from 32^3 to 256^3. The README attributes the cuBLAS floor to kernel selection plus a tile sized for large GEMMs; no Nsight counters were captured to confirm it (results/nsight.md says counters were locked).",
+  "when_to_use": [
+    "Reading material on why launch- or call-overhead dominates tiny GEMMs (FP32, square N of about 32-256) on a big GPU, with a clear fairness write-up (same layout, pedantic math, CUDA events).",
+    "A worked example of the standard SGEMM ladder (naive, smem tile, 8x8 register microtile with transposed A and padded B, split-K, warp-per-row GEMV) in about 400 lines.",
+    "Checking a hypothesis before writing your own size-specialized small-GEMM kernel; the license forbids copying this one."
+  ],
+  "when_not_to_use": [
+    "Anything you would ship or publish: the LICENSE is all rights reserved and forbids copying, modification and use in any product, service or benchmark publication.",
+    "Medium and large GEMMs: 0.31x cuBLAS FP32 at 512^3, 0.56x at 1024^3, 0.63x at 4096^3 (23.0 vs 36.8 TFLOP/s).",
+    "Tall-skinny shapes (M=K=4096 or 8192, N=1-128): 0.22x-0.93x of cuBLAS on every one measured.",
+    "When TF32 is acceptable: cuBLAS in TF32 tensor-op mode ran 9.3-9.9 us at 128^3-256^3 in the same CSV, faster than this kernel, so the ~16 us floor is specific to the pedantic FP32 path (derived from page data).",
+    "Shapes the benchmark never tests: every measured dimension is a multiple of 16, and the register-blocked kernels have known edge problems (see gotchas)."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "CUDA runtime; cuBLAS only for the benchmark",
+    "min_toolchain": "C++17; README says CUDA 12.8+ (13.x for sm_120); measured with nvcc from CUDA 13.3 and MSVC 2022 host compiler, --use_fast_math",
+    "platforms": "NVIDIA GPUs; measured only on an RTX 5080 (sm_120) under Windows; WMMA TF32 path needs sm_80+; occupancy_splits hard-codes 84 SMs",
+    "thread_safety": "not documented; the launchers are stateless and take a cudaStream_t",
+    "drop_in_for_baseline": "partial — same math as cublasSgemm for row-major, non-transposed operands, but a different call signature, no ldA/ldB/ldC, and no cuBLAS handle or math modes"
+  },
+  "gotchas": [
+    "Split-K path (N<=128 with M,K>=512): when beta != 0 it skips the memset and atomically adds alpha*A*B into the old C, so any beta other than 0 or 1 gives a wrong result; atomicAdd partials also make the sum order nondeterministic.",
+    "The register-blocked kernels (used for M,N<=64, for M or N>384, and for split-K) do float4 loads with no alignment check, so K or N not a multiple of 4 (for example a 33^3 product) should fault with a misaligned-address error; only the 32x32 tiled kernel is fully bounds-safe. Found by reading the code, not by running it.",
+    "The WMMA TF32 kernel ignores beta, overwrites C, and has no edge handling inside a tile, so M and N must be multiples of 16 and K a multiple of 8; the benchmark only runs it when M and N are multiples of 32.",
+    "Built with --use_fast_math, measured on one GPU with one run per CSV and no variance reported; the two CSVs disagree by about 30% on absolute 128^3 times (10.9 vs 14.1 us for this kernel, 16.2 vs 21.7 us for cuBLAS) while the ratio holds (1.49x vs 1.54x)."
+  ],
+  "pick_this_over_siblings_when": "Among catalogued GPU GEMM entries it is the only one aimed at tiny launch-bound FP32 shapes; blackwell-tensorcore-kernels (FP16 tensor cores at 8192^3), CUDA-L2 and emugemm-cdna (AMD MI250) target large GEMMs. Because the license forbids reuse, treat it as evidence for the idea rather than as code to adopt.",
+  "verified_claims_summary": "On an RTX 5080 (sm_120, CUDA 13.3, nvcc -O3 --use_fast_math -arch=sm_120, Windows), timed with CUDA events after 15 warm-ups over about 150 ms of back-to-back launches, the auto kernel took 8.1-13.6 us against 16.2-17.8 us for cublasSgemm with CUBLAS_PEDANTIC_MATH on square N=32-256 (2.02x at 32^3, 1.49x at 128^3, 1.30x at 256^3), with max relative error under 1e-6 against cuBLAS. It was slower on every other shape measured.",
+  "status_note": "Three commits on one day (2026-08-25), 0 stars, no issues; the license was switched from MIT to view-only in the second commit, so this is reference-only and nothing can be vendored.",
+  "sources_read": [
+    "https://github.com/JohnTitor2003/gpu-compute",
+    "https://github.com/JohnTitor2003/gpu-compute/commits",
+    "https://github.com/JohnTitor2003/gpu-compute/tree/main/gemm",
+    "https://raw.githubusercontent.com/JohnTitor2003/gpu-compute/HEAD/README.md",
+    "https://raw.githubusercontent.com/JohnTitor2003/gpu-compute/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/JohnTitor2003/gpu-compute/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/JohnTitor2003/gpu-compute/HEAD/scripts/build.ps1",
+    "https://raw.githubusercontent.com/JohnTitor2003/gpu-compute/HEAD/gemm/README.md",
+    "https://raw.githubusercontent.com/JohnTitor2003/gpu-compute/HEAD/gemm/kernels.cuh",
+    "https://raw.githubusercontent.com/JohnTitor2003/gpu-compute/HEAD/gemm/bench_gemm.cu",
+    "https://raw.githubusercontent.com/JohnTitor2003/gpu-compute/HEAD/results/gemm.csv",
+    "https://raw.githubusercontent.com/JohnTitor2003/gpu-compute/HEAD/results/gemm_tf32.csv",
+    "https://raw.githubusercontent.com/JohnTitor2003/gpu-compute/HEAD/results/nsight.md"
+  ],
+  "confidence": 0.8
+}

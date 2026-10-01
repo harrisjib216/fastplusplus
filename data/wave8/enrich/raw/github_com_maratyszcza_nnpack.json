@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/maratyszcza/nnpack",
+  "one_liner": "C99 CPU convolution primitives using Winograd and FFT tiles for stride-1 layers; fp32, AVX2/FMA3 or NEON.",
+  "what_it_does": "A low-level C library of neural-network layer kernels for multi-core CPUs: convolution (inference forward, training forward, input-gradient and kernel-gradient), fully-connected, max pooling, ReLU and softmax. It is meant to sit under a framework (PyTorch mobile, Caffe2, MXNet, TVM, tiny-dnn, darknet-nnpack) rather than be called by model authors. The API takes NCHW float tensors, an algorithm enum (auto, ft8x8, ft16x16, wt8x8, implicit_gemm, direct, wt8x8_fp16), a kernel-transform strategy (compute, precompute, reuse), a caller-provided workspace and an optional pthreadpool.",
+  "how_it_is_fast": "Fast-convolution algorithms cut the multiply count: 3x3 stride-1 layers use tiled Winograd F(6x6,3x3) on 8x8 tiles, kernels up to 16x16 use 2D FFT on 8x8 or 16x16 tiles, 1x1 uses a direct GEMM, and everything else falls back to implicit GEMM. The transformed tiles are multiplied with register-blocked GEMM microkernels (s8gemm, c8gemm, s4c6gemm), generated on x86-64 as AVX2/FMA3 assembly through PeachPy, with L1/L2/L3 blocking sizes computed at init from cpuinfo's cache detection. Kernel transforms can be precomputed once and reused across inference calls.",
+  "when_to_use": [
+    "fp32 inference or training of stride-1 3x3 convolutions with many channels (VGG/ResNet-style layers) on AVX2+FMA3 x86-64 or NEON ARM CPUs, where Winograd F(6x6,3x3) does far fewer multiplies than direct convolution.",
+    "Stride-1 convolutions with larger kernels (4x4 up to 16x16), which select the FFT 8x8 or 16x16 path.",
+    "CPU training loops that need convolution backward passes (input and kernel gradients), not only inference.",
+    "Repeated inference with fixed weights, using transform_strategy precompute/reuse to skip kernel transforms on every call.",
+    "Maintaining an existing Caffe2, MXNet, TVM, tiny-dnn or darknet-nnpack deployment that already links it."
+  ],
+  "when_not_to_use": [
+    "Depthwise, grouped or strided convolutions: these fall back to implicit GEMM, and mobile depthwise-separable networks are better served by XNNPACK (a 2019 PyTorch issue, #30622, proposed replacing NNPACK with XNNPACK on Android for this reason, without numbers).",
+    "Quantised (int8) or fp16/bf16-activation inference: NNPACK is fp32, apart from an fp16 Winograd path on ARM with NEON-HP and fp16-weight fully-connected inference.",
+    "x86 CPUs without AVX2/FMA3, or VMs and containers where cpuinfo cannot see a 3-level cache: nnp_initialize returns unsupported hardware (issues #221 on a Ryzen 9 7950X under Proxmox, #207 on a VM).",
+    "Accuracy-sensitive layers: Winograd F(6x6,3x3) is less numerically stable than direct convolution; issue #8 proposes transforms said to be 100x more stable, and their adoption is not documented.",
+    "New projects that need maintenance, Windows/MSVC or AVX-512 kernels: no commits since 2023-02-01, only an unofficial Windows port, and the x86-64 kernels are AVX2/FMA3 only."
+  ],
+  "integration": {
+    "form": "static lib | shared lib (CMake; also a vcpkg port)",
+    "dependencies": "pthreadpool, cpuinfo, FXdiv, FP16 and psimd (downloaded by CMake at configure time unless *_SOURCE_DIR is set); x86-64 backend also needs Python with PeachPy, opcodes and six to generate assembly; googletest for tests",
+    "min_toolchain": "C99 (C++11 for tests), CMake 2.8.12+, Python for PeachPy on x86-64; clang required for Android arm64-v8a",
+    "platforms": "x86-64 Linux/macOS (AVX2+FMA3 and a 3-level cache), ARM NEON and ARM64 on Linux/Android/iOS, Android x86/x86-64 (generic SSE2 PSIMD kernels), Emscripten asm.js/WebAssembly, scalar fallback; no mips, no official Windows",
+    "thread_safety": "nnp_initialize is guarded by pthread_once; each call parallelises over a caller-supplied pthreadpool (NULL runs on the calling thread); concurrent calls sharing one workspace buffer are not documented",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "On x86-64, if CMake cannot find a Python interpreter it silently falls back to the generic PSIMD backend instead of the AVX2 assembly kernels; Android x86-64 builds always use SSE2 PSIMD kernels.",
+    "Cache-blocking sizes come from detected cache sizes: issue #218 reports a SIGFPE (input_channels_block_max rounding to 0, then a division) in convolution-inference.c on an AMD EPYC 7552 booted with nosmt, where cache sizes were misdetected.",
+    "Workspace buffers must be 64-byte aligned; passing workspace_buffer NULL with a size pointer returns the required size and does not compute, and passing both NULL makes NNPACK allocate on every call.",
+    "The CMake build downloads dependencies and PeachPy from the network at configure time; issues report a failed cpuinfo tag checkout (#213), a missing fp16/psimd.h (#222) and non-reproducible builds (#206)."
+  ],
+  "pick_this_over_siblings_when": "Pick NNPACK over FeatherCNN or MNN when you want standalone fp32 convolution primitives, including backward passes, for large stride-1 3x3 or bigger-kernel layers rather than a full inference engine; FeatherCNN reports beating Caffe2+NNPACK on ARM servers, and LIBXSMM is the better choice on AVX-512/AMX x86 for small-GEMM-based convolution.",
+  "verified_claims_summary": "The only numbers are from one user's June 2020 XNNPACK issue (#689): on an unnamed 6-core 4.3 GHz x86 CPU, single-threaded, NNPACK's 8x8 Winograd took 31.9 ms and 76.2 ms on two large 3x3 layers (256 to 128 channels at 128x128, 192 to 96 at 256x256) against 1345.8 ms and 3060.0 ms for XNNPACK's convolution_bench, about 42x and 40x (derived from page data). XNNPACK was most likely built without -c opt (Bazel's unoptimised default), and Winograd's effective GFLOPS are not comparable with direct convolution, so the ratio overstates the gap; the reporter's own estimate for real networks was 3-5x, with no numbers.",
+  "status_note": "Abandoned (last commit 2023-02-01, many open build and hardware-detection issues) but BSD-2-Clause and still an optional backend in PyTorch and TVM builds; vendor it only for fp32 stride-1 convolution on AVX2 or NEON CPUs.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/Maratyszcza/NNPACK/HEAD/README.md",
+    "https://raw.githubusercontent.com/Maratyszcza/NNPACK/HEAD/include/nnpack.h",
+    "https://raw.githubusercontent.com/Maratyszcza/NNPACK/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/Maratyszcza/NNPACK/HEAD/configure.py",
+    "https://raw.githubusercontent.com/Maratyszcza/NNPACK/HEAD/src/init.c",
+    "https://raw.githubusercontent.com/Maratyszcza/NNPACK/HEAD/src/convolution-inference.c",
+    "https://github.com/Maratyszcza/NNPACK/issues?q=is%3Aissue",
+    "https://github.com/Maratyszcza/NNPACK/issues/218",
+    "https://github.com/Maratyszcza/NNPACK/issues/221",
+    "https://github.com/Maratyszcza/NNPACK/issues/8",
+    "https://github.com/Maratyszcza/NNPACK/issues/168",
+    "https://github.com/pytorch/pytorch/issues/30622",
+    "WebSearch snippets: NNPACK vs XNNPACK and PyTorch backend discussions"
+  ],
+  "confidence": 0.75
+}
