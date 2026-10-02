@@ -76,3 +76,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - libapac (github.com/EpsilonNought117/libapac, HN item 47676424): WIP arbitrary-precision library, on par with GMP at small-to-medium sizes per HN snippet, no benchmark in repo. HN 'Show HN: Floating point arithmetic types in C++ for any size and any base' (item 41881722), repo unidentified. (from bigint-hn search)
 - SFFT (ETH, davidediger/sfft) retier lead: SiPS 2014 paper / thesis (spiral.ece.cmu.edu, blocked here).
 - fast.cu author's separate NVFP4 vs cuBLASLt post (gb300/nvfp4). (from ml-blogs verifier)
+- mlawsonca/benchmarking_suite_range_searching_libraries (CCGrid 2022, independent suite incl. pico_tree and nanoflann; results are paper-only, osti/arXiv blocked): possible B for both. (from retier-06)
