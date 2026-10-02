@@ -72,3 +72,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - Agner Fog's RANVEC/ranvec1 paper and vectorclass; PCG blog's bounded-rands numbers (imneme/bounded-rands). (from rng-blogs search)
 - "Show HN: FFTN, faster than FFTW in 700 lines of C" (HN item 45570502); code at gitlab.sac-home.org/sac-group/fftn (self-hosted GitLab, blocked here). Best open b8 lead. (from fft-blogs and fft-hn searches)
 - RTSpatial/RTSpatial (LibRTS, MIT, claims up to 85.1x; baselines unnamed in the repo, paper needed). (from geo-blogs search)
+- stochastic-generation EGSR paper (Helmer et al., Owen-scrambled sequences): retier lead if the paper names a baseline. XAMG (gitlab.com/xamg/xamg, arXiv 2103.07329 claims vs hypre/PETSc); SpMV paper arXiv 2502.19284 (repo not found). (from rng-blogs verifier and sparse-hn search)

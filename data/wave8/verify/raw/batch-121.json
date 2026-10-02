@@ -1,0 +1,82 @@
+[
+  {
+    "id": "https://github.com/planet36/randp",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "A",
+    "tier_reason": "benchmarks/README.md (2026-09-22 run) prints the exact numbers against glibc 2.44 arc4random/arc4random_buf/arc4random_uniform with gcc 16.2.1 and CPU i9-13980HX; the benchmark code is public (benchmarks/benchmark-others.cpp, run by `make others` single-threaded, 5 reps, random interleaving) and its flags are fixed in the public benchmarks/Makefile plus config.mk (-O3 -flto=auto, -march=x86-64-v3 -maes -mvaes -mrdrnd -mrdseed for the benchmark, -march=x86-64-v2 -maes for librandp.a).",
+    "corrections": {
+      "caveats": "Despite the name, randp's PRNG is not AES-128-CTR: src/aes_ctr_128_prng-defaults.h sets 3 keys x 1 round, and aes_enc_128 in src/aes-128-utils.h applies one _mm_aesenc_si128 per key, so each 16-byte block gets 3 AES rounds with independent random round keys (no key schedule, 3 rounds instead of 10). The README's FAQ disclaims CSPRNG status but still calls the output 'practically unpredictable', which 3-round AES does not support; glibc arc4random is backed by the kernel's ChaCha20 getrandom, so the 21x/2x/3.3x gaps compare a reduced-round generator against a cryptographic one, not like for like. Baseline is glibc arc4random (a getrandom() wrapper, sped up by the getrandom vDSO since glibc 2.41), not std::mt19937, PCG or xoshiro. First-party benchmark on one laptop CPU; flags come from the HEAD Makefiles, not printed with the results. Older runs on the same page (2024-10-04, glibc 2.40 before the vDSO) showed 27x-43x; the current figures are the 2026-09-22 ones. No LICENSE file at the root (raw LICENSE returns 404); MPL-2.0 comes from SPDX headers in every source file, so confirm before copying. Very young project, 1 star, changing daily."
+    },
+    "notes": "All three claimed ratios (21.1x, 2.0x, 3.3x) and the rdrand/rdseed timings appear verbatim on the 2026-09-22 section. Record as a shortcoming that the 'AES-CTR' generator is 3 AES rounds only, so the speed win over arc4random comes partly from doing a fraction of a cipher's work and should not be read as a faster drop-in for a cryptographic arc4random.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/planet36/randp/HEAD/benchmarks/README.md",
+      "https://raw.githubusercontent.com/planet36/randp/HEAD/README.md",
+      "https://raw.githubusercontent.com/planet36/randp/HEAD/LICENSE",
+      "https://raw.githubusercontent.com/planet36/randp/HEAD/config.mk",
+      "https://raw.githubusercontent.com/planet36/randp/HEAD/benchmarks/Makefile",
+      "https://raw.githubusercontent.com/planet36/randp/HEAD/benchmarks/benchmark-others.cpp",
+      "https://raw.githubusercontent.com/planet36/randp/HEAD/src/aes_ctr_128_prng-defaults.h",
+      "https://raw.githubusercontent.com/planet36/randp/HEAD/src/randp-defaults.h",
+      "https://raw.githubusercontent.com/planet36/randp/HEAD/src/aes_ctr_128_prng.h",
+      "https://raw.githubusercontent.com/planet36/randp/HEAD/src/aes-128-utils.h",
+      "https://github.com/planet36/randp",
+      "https://github.com/planet36/randp/commits"
+    ]
+  },
+  {
+    "id": "https://github.com/planet36/prng-test-bench",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "results/prng-next-benchmark.txt lists the claimed GiB/s figures for aes_ctr_128, clmulrand and std::mt19937 from the public prng-next-benchmark.cpp, but the results JSON names no CPU model (8 CPUs at 2419 MHz on host arch-vm) and no compiler version, so it is first-party with partial methodology, not A.",
+    "corrections": {
+      "claimed_speedup": "Results file prng-next-benchmark.txt (per-thread GiB/s, 7 threads, median of 5): aes_ctr_128 37.22, aes_compress_ctr2_128 28.60, clmulrand 21.03, wyrand 16.88, xoshiro256starstar 8.53, xoshiro256plusplus 8.10, std::mt19937_64 5.24, pcg64 5.17, std::mt19937 4.67, pcg32 3.73, std::philox4x32 3.56. aes_ctr_128 vs std::mt19937 is about 8.0x in GiB/s, but aes_ctr_128 returns a 128-bit value per call and mt19937 a 32-bit one, so calls per second differ by about 2.0x (derived from page data and header). clmulrand returns uint64_t: about 4.5x mt19937 in GiB/s, about 2.25x per call vs std::mt19937 and about 4.0x per call vs std::mt19937_64 (derived from page data and header).",
+      "hardware": "CPU model not stated in results/prng-next-benchmark.json: host arch-vm (a VM), 8 CPUs at 2419 MHz, L1D 32 KiB, L1I 64 KiB, L2 4 MiB, L3 36 MiB, run dated 2026-09-18. The PractRand summaries built from the same Makefile record -march=raptorlake, so the host is a Raptor Lake part (the author's randp page names an i9-13980HX), but the L1/L2 sizes look like the E-core clusters, not P-cores, so the exact core type is unconfirmed.",
+      "stars_or_usage": "2 stars, 743 commits",
+      "caveats": "Author-run, first-party numbers on an unnamed CPU inside a VM, so tier C. GiB/s favours generators with wide outputs (aes_ctr_128 returns 128 bits per call vs 32 for mt19937), so per-call gains are about 2x, not 8x. aes_ctr_128 is not AES-128-CTR: include/aes_ctr_128.hpp applies 3 _mm_aesenc_si128 rounds with one key to a Weyl-sequence counter, so it is a fast non-cryptographic generator and must not be used where unpredictability matters. The README does not itself claim to beat mt19937; the comparison is read from the results table. Statistical quality: aes_ctr_128 and clmulrand pass PractRand to 256 MB with all four seed types (results/prng-results.tlmax-256MB.summary.txt, GCC 16.2.1); clmulrand and an older 'aes128_ctr_128' pass to 512 GB in results/prng-results.tlmax-512GB.summary.txt, but that run predates the current code (GCC 15.2.1 build), while std::mt19937 fails at 256 MB. No LICENSE file; MPL-2.0 comes from SPDX headers in source files. Very active (several commits a week), so numbers change between runs."
+    },
+    "notes": "Numbers match the results file exactly; the GiB/s headline overstates the per-call gain, already flagged by the search agent. The record's 'repo is two weeks old' was dropped: the repo has 743 commits and a PractRand summary built with GCC 15.2.1 (2025), so its history is older, though I could not see the creation date.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/planet36/prng-test-bench/HEAD/results/prng-next-benchmark.txt",
+      "https://raw.githubusercontent.com/planet36/prng-test-bench/HEAD/results/prng-next-benchmark.json",
+      "https://raw.githubusercontent.com/planet36/prng-test-bench/HEAD/README.md",
+      "https://raw.githubusercontent.com/planet36/prng-test-bench/HEAD/Makefile",
+      "https://raw.githubusercontent.com/planet36/prng-test-bench/HEAD/LICENSE",
+      "https://raw.githubusercontent.com/planet36/prng-test-bench/HEAD/include/aes_ctr_128.hpp",
+      "https://raw.githubusercontent.com/planet36/prng-test-bench/HEAD/include/clmulrand.hpp",
+      "https://raw.githubusercontent.com/planet36/prng-test-bench/HEAD/prng-next-benchmark.cpp",
+      "https://raw.githubusercontent.com/planet36/prng-test-bench/HEAD/run-benchmarks.bash",
+      "https://raw.githubusercontent.com/planet36/prng-test-bench/HEAD/results/prng-results.tlmax-512GB.summary.txt",
+      "https://raw.githubusercontent.com/planet36/prng-test-bench/HEAD/results/prng-results.tlmax-256MB.summary.txt",
+      "https://github.com/planet36/prng-test-bench",
+      "https://github.com/planet36/prng-test-bench/commits"
+    ]
+  },
+  {
+    "id": "https://github.com/reputeless/xoshiro-cpp",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "The CppCon 2022 slides (Roth Michaels, iZotope) show the claimed timings for XoshiroCpp generators against std::mt19937 on slides 68 and 77, with Apple M1 Max and Xcode 13.2.1 named on slide 67, but no benchmark code is published and no flags are given; a conference talk is neither peer-reviewed nor a benchmark suite, so C.",
+    "corrections": {
+      "stars_or_usage": "207 stars, 21 forks, 13 commits; slide 58 of the CppCon 2022 talk names it as the xoshiro option",
+      "baseline_stdlib": [],
+      "caveats": "Only a C++ wrapper (header-only, std::uniform_random_bit_generator-conforming) of Blackman and Vigna's xoshiro/xoroshiro generators, already catalogued as https://prng.di.unimi.it; the repo README carries no speed claim or benchmark of its own. The numbers are slides only, from a third-party talk: no benchmark code, flags unstated, Apple Silicon only, and the standard library is not named (Xcode implies libc++, unconfirmed). Slides 79-84 (Neoverb plug-in, realtime 512 and offline 8192 buffers) are charts with no extractable numbers, and the speaker's conclusion on slide 85 is 'Maybe none of this matters?'. Last commit 2021-08-05, over 5 years old, but the code is small and stable."
+    },
+    "notes": "Port/wrapper only: Xoshiro-cpp makes no speed claim of its own; the measured advantage over std::mt19937 belongs to the xoshiro algorithms (prng.di.unimi.it), measured through this wrapper by an independent speaker. Suggest decision 'duplicate' of https://prng.di.unimi.it (precedent: ademakov/rng), or keep with that shortcoming; slide numbers match exactly (3.49 / 0.963 = 3.6x, derived from page data).",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/CppCon/CppCon2022/main/Presentations/Fast-High-Quality-Pseudo-Random-Numbers-CPPCon2022-Roth-Michaels.pdf",
+      "https://raw.githubusercontent.com/Reputeless/Xoshiro-cpp/HEAD/README.md",
+      "https://raw.githubusercontent.com/Reputeless/Xoshiro-cpp/HEAD/LICENSE",
+      "https://github.com/Reputeless/Xoshiro-cpp",
+      "https://github.com/Reputeless/Xoshiro-cpp/commits"
+    ]
+  }
+]
