@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/boostorg/polygon",
+  "one_liner": "Header-only Boost sweep-line Voronoi builder for integer points and segments; beats CGAL's segment Delaunay graph, loses on points.",
+  "what_it_does": "Boost.Polygon is a header-only library for integer-coordinate planar polygon Booleans, offsetting, connectivity extraction and map overlay, plus a Voronoi extension (GSoC 2010) that builds the Voronoi diagram of 2D points and non-intersecting line segments. The Voronoi API is two lines: declare voronoi_diagram<double> vd; call construct_voronoi(first, last, &vd) on any range whose element type models the Boost.Polygon point or segment concept. The output is a half-edge graph of cells, edges and vertices with floating-point vertex coordinates, and it can be traversed to get a medial axis or (as the dual) a Delaunay triangulation. It does not have CGAL's interface; inputs must be mapped to Boost.Polygon concepts or fed through voronoi_builder::insert_point / insert_segment.",
+  "how_it_is_fast": "It runs Fortune's sweep-line algorithm: site events sorted once with std::sort, a beach line held in a std::map, and circle events in an ordered priority queue, O(N log N) time and O(N) memory. Robustness comes from lazy arithmetic: predicates are first evaluated in double with relative-error tracking (robust_fpt, ULP comparisons), and only when the result falls in the uncertain range do they fall back to fixed-size, stack-allocated multiprecision integers (extended_int<128> and up). The docs say this avoids multiprecision work in about 95% of cases. There is no heap new in the algorithm itself (pure STL containers).",
+  "when_to_use": [
+    "Voronoi diagrams or medial axes of line segments (polylines, discretized curves, polygon outlines): the only case where the author's benchmark shows it beating CGAL, about 1.3x to 1.56x on 100 to 1,000,000 random non-intersecting segments.",
+    "You need Voronoi vertex coordinates with a guaranteed relative error bound (64 machine epsilons per the Voronoi main page; vertices within 128 epsilons are merged) rather than only a Delaunay topology.",
+    "You already depend on Boost and want no GMP/MPFR/CGAL build: the Voronoi headers need only the STL and boost/cstdint.hpp.",
+    "Inputs are, or can be snapped to, 32-bit signed integer coordinates; 64-bit or wider integers work after writing custom coordinate type traits.",
+    "Integer-grid polygon Booleans in VLSI/CAD-style workloads (Manhattan and 45-degree fast paths), where the separate polygon-set code applies."
+  ],
+  "when_not_to_use": [
+    "Point-only Voronoi/Delaunay: CGAL's Delaunay_triangulation_2 was about 3.8x faster at 1,000,000 random points in this same benchmark (3.47 s vs 0.90 s), and the catalogued jc_voronoi reports about 3.65x over Boost.Polygon at 1k random sites.",
+    "Floating-point input: coordinates must be integral; you have to scale and snap, and the Voronoi builder rejects overlapping inputs (a point inside a segment, or segments crossing anywhere but at endpoints) unless you split them first with the segment utils.",
+    "Workloads that cannot tolerate open robustness bugs: open issues report an infinite loop in voronoi_diagram::_build on one 1,912-segment input (#49), missing edges with coordinates up to 10,000,000 (#43), empty cells (#47) and a bug in robust_sqrt_expr::eval2 (#41), none with a linked fix.",
+    "You need edge clipping to a bounding box, custom allocators or Delaunay output directly: none are provided (jc_voronoi's own feature table lists clipping and custom allocators as missing from Boost).",
+    "Arbitrary-angle polygon Booleans on adversarial input: the polygon-set intersection uses a divide-and-conquer heuristic that the analysis page says can go quadratic on specific inputs that defeat 1-D decomposition."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "Voronoi part: STL and boost/cstdint.hpp only (Boost::config in CMake); polygon-set Booleans optionally use GMP via boost/polygon/gmp_override.hpp",
+    "min_toolchain": "not documented; pre-C++11 era Boost code. Open issues report C++20 warnings (#79) and a build error with a then-recent MSVC (#40)",
+    "platforms": "any (portable C++; 80-bit long double fpt types work on GCC but not MSVC, per the builder docs)",
+    "thread_safety": "not documented; voronoi_builder holds all state in member containers, so separate builder/diagram instances per thread are the safe assumption (inferred from voronoi_builder.hpp)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Default traits support int32 input only; int64 or wider needs custom voronoi_ctype_traits, including big-int and extended-exponent float types sized per the builder page's table.",
+    "Vertices whose coordinates agree within 128 machine epsilons are merged and the edges between them dropped during finalization, so output topology can differ slightly from the exact diagram.",
+    "Segment inputs must not intersect except at endpoints, and a point must not lie inside a segment; the builder does not check this for you.",
+    "The diagram includes infinite edges (no vertex at one end); you clip them yourself for drawing or medial-axis use."
+  ],
+  "pick_this_over_siblings_when": "Pick it over jc_voronoi when sites include line segments or you need exact-predicate robustness on an integer grid; jc_voronoi is a point-only float Fortune implementation that is about 3.65x faster on 1k random points. For point-set Delaunay, pgl, Delaunay32 or CGAL itself are faster choices.",
+  "verified_claims_summary": "The library author's 2013 benchmark (GCC 4.7.3, Boost 1.54, CGAL 4.3-beta1, CPU printed as 'Intel i5-7600 2.8 GHz', optimization level unstated) timed Boost.Polygon's Voronoi construction against CGAL's segment Delaunay graph and Delaunay triangulation: on random non-intersecting segments it was 25.0 s vs 39.1 s at 1M (about 1.56x) and 1.3x to 1.5x at smaller sizes, but on random points CGAL was about 3.8x faster (0.90 s vs 3.47 s at 1M). The two libraries produce different outputs (Voronoi with coordinates vs Delaunay topology), and segment-generation time is subtracted from the measured segment runs.",
+  "status_note": "Stale: Boost-maintained build-system commits only (last 2025-05-02), Voronoi core unchanged since about 2013 with 41 open issues, but BSL-1.0, header-only and shipped in every Boost release, so it is easy to adopt.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/boostorg/polygon/HEAD/doc/voronoi_benchmark.htm",
+    "https://raw.githubusercontent.com/boostorg/polygon/HEAD/doc/voronoi_main.htm",
+    "https://raw.githubusercontent.com/boostorg/polygon/HEAD/doc/voronoi_builder.htm",
+    "https://raw.githubusercontent.com/boostorg/polygon/HEAD/doc/voronoi_diagram.htm",
+    "https://raw.githubusercontent.com/boostorg/polygon/HEAD/doc/analysis.htm",
+    "https://raw.githubusercontent.com/boostorg/polygon/HEAD/doc/index.htm",
+    "https://raw.githubusercontent.com/boostorg/polygon/HEAD/doc/gtl_polygon_set_concept.htm",
+    "https://raw.githubusercontent.com/boostorg/polygon/HEAD/include/boost/polygon/voronoi_builder.hpp",
+    "https://raw.githubusercontent.com/boostorg/polygon/HEAD/include/boost/polygon/voronoi.hpp",
+    "https://raw.githubusercontent.com/boostorg/polygon/HEAD/include/boost/polygon/detail/voronoi_predicates.hpp",
+    "https://raw.githubusercontent.com/boostorg/polygon/HEAD/benchmark/voronoi_benchmark_segments.cpp",
+    "https://raw.githubusercontent.com/boostorg/polygon/HEAD/benchmark/Jamfile.v2",
+    "https://raw.githubusercontent.com/boostorg/polygon/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/boostorg/polygon/HEAD/meta/libraries.json",
+    "https://github.com/boostorg/polygon",
+    "https://github.com/boostorg/polygon/commits/develop",
+    "https://github.com/boostorg/polygon/issues?q=is%3Aissue+voronoi",
+    "https://github.com/boostorg/polygon/issues/49",
+    "https://github.com/boostorg/polygon/issues/43",
+    "https://raw.githubusercontent.com/JCash/voronoi/HEAD/README.md"
+  ],
+  "confidence": 0.75
+}
