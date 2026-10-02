@@ -77,3 +77,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - SFFT (ETH, davidediger/sfft) retier lead: SiPS 2014 paper / thesis (spiral.ece.cmu.edu, blocked here).
 - fast.cu author's separate NVFP4 vs cuBLASLt post (gb300/nvfp4). (from ml-blogs verifier)
 - mlawsonca/benchmarking_suite_range_searching_libraries (CCGrid 2022, independent suite incl. pico_tree and nanoflann; results are paper-only, osti/arXiv blocked): possible B for both. (from retier-06)
+- chusitoo/flatbush (C++ port of Flatbush). (from geo-hn verifier)
