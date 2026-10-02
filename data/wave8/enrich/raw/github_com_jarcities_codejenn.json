@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/jarcities/codejenn",
+  "one_liner": "Python tool that turns a trained Keras MLP/CNN into one dependency-free C++ header; snippet-reported 2-25x over Keras eager on one core.",
+  "what_it_does": "CodeJeNN reads Keras models saved as .h5 or .keras (TensorFlow, PyTorch or JAX backend) and writes a C++ header per model with all weights inlined, so a solver (CFD, constitutive laws, reduced-order models) can call the network without linking an ML runtime. The API is a single function template named after the model file, e.g. model<double>(const std::array<double, N>&), returning a std::array; inputs and outputs can be min-max or mean-std normalized from .npy files. It is not a drop-in for Keras: you change the call site, regenerate the header whenever the model changes, and supply C++ code yourself for custom activations.",
+  "how_it_is_fast": "It removes the framework entirely: no Python dispatch, no tensor allocation and no graph runtime per call, which is what dominates single-sample inference of small models in Keras eager mode. Weights are emitted as constexpr std::array literals, layers are small inline function templates (a plain scalar dot-product loop for Dense) with activations passed as lambdas so the compiler can inline everything, and intermediate buffers are preallocated function-local statics. The README says vectorization and threading are deliberately left out, on the assumption that the host solver is already parallel.",
+  "when_to_use": [
+    "Calling a small Keras-trained MLP or CNN once per cell or per sample inside a C++ physics or CFD code, where linking TensorFlow, libtorch or ONNX Runtime is unwanted",
+    "Single-sample, single-thread latency on CPU with models small enough that the weight arrays stay in cache (the speed test uses a 1000-64-32-100 MLP and a 10x100 input CNN)",
+    "Supported layer sets only: Dense, Conv1D/2D/3D and their transposes, separable and depthwise conv, pooling, Batch/Layer/Unit/Group normalization, Reshape/Flatten/Rescaling, common activations",
+    "Research or government projects that can accept the NRL Open License Agreement"
+  ],
+  "when_not_to_use": [
+    "Calling the generated function more than once with a 1-D output and no output normalization file: the generator emits `static std::array<Scalar, N> model_output = layer_K_output;`, a static local initialized only on the first call, so every later call returns the first result (this is the configuration of both speed-test models)",
+    "Multithreaded callers: every layer buffer and the output are function-local statics, so concurrent calls from OpenMP or MPI+threads code race",
+    "Large models or batched throughput: Dense is an unvectorized scalar loop with strided weight access, the README warns large static arrays make it memory-bandwidth bound, and against Keras JIT the snippet-reported gain is only about 2-2.5x",
+    "Recurrent, attention or multi-input/multi-output models: only single-input, single-output sequential or functional MLP/CNN graphs are supported (ConvLSTM2D is commented out)",
+    "Projects needing an OSI license: the NRL agreement restricts redistribution to its own terms, takes an irrevocable grant-back of modifications to the US Government, and can be terminated by the Government"
+  ],
+  "integration": {
+    "form": "source-drop (generated single header per model; the generator is a Python script, src/api-core/main.py)",
+    "dependencies": "none for the generated header beyond the C++ standard library; the generator needs Keras plus a backend (TensorFlow, PyTorch or JAX), matplotlib, pandas, scikit-learn, sympy, spektral, pydot",
+    "min_toolchain": "not documented; the generated code uses constexpr std::array and generic lambdas (C++17 is a safe assumption, not stated). The speed test used Homebrew g++-15 with -O3 -march=native -ffast-math",
+    "platforms": "any platform with a C++ compiler (portable scalar code, no intrinsics); tested by the author on an Apple M1 Pro",
+    "thread_safety": "not thread-safe: generated functions keep layer outputs and the returned array in function-local static buffers",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Stale-output bug: with a 1-D output and no output_*.npy normalization files, the returned array is a static initialized once, so results after the first call are wrong; the --debug comparison calls the model once and does not catch it, and the speed test discards results",
+    "Weights are non-static constexpr locals inside the inline function; for large models check stack use and code size, since the compiler may materialize them per call",
+    "Custom activations need a hand-written C++ version pasted into the header; until then the header prints 'WARNING: CUSTOM ACTIVATION HAS NOT BEEN IMPLEMENTED' on every call",
+    "Docs disagree with the scripts: the speed-test readme says the CNN used PyTorch and the MLP TensorFlow, but the checked-in test.py files set the opposite; src/generate.sh passes --double, which main.py's argparse does not define (it takes --bit=32|64), so the shipped default script should exit with an unrecognized-argument error"
+  ],
+  "pick_this_over_siblings_when": "RTNeural is the catalogued alternative for small-model C++ inference, with measured comparisons against libtorch, ONNX Runtime and TensorFlow Lite; pick CodeJeNN only when you want a single dependency-free header generated straight from a Keras .h5/.keras file, including 3D and transposed convolutions, and can accept the NRL license and fix the static-buffer issues. Kaoken and tiny-ml-runtime take the same baked-weights approach for other model types.",
+  "verified_claims_summary": "The repo's speed test (tutorials/06_speed_test) times 10,000 single-sample calls of a small MLP and CNN in Keras eager or JIT mode against the generated C++ (g++-15 -O3 -march=native -ffast-math, one thread, MacBook M1 Pro) but publishes no numbers. The figures come only from search snippets of arXiv 2607.02746: MLP 0.48 s vs 12.01 s Keras/TensorFlow eager (about 25x) and 1.21 s with JIT (about 2.5x), CNN 1.05 s vs 19.14 s eager (about 18x) and 2.17 s JIT (about 2.1x). The C++ timing loop discards outputs, and the measured models hit the stale-output code path described above.",
+  "status_note": "A single-commit code drop (2026-06-22, 'final draft for paper') from a US Naval Research Laboratory project with 1 star; the NRL Open License makes it reference-only for this catalog, and the generated header may count as a derivative work under that agreement.",
+  "sources_read": [
+    "https://github.com/jarcities/codejenn",
+    "https://raw.githubusercontent.com/jarcities/codejenn/HEAD/readme.md",
+    "https://raw.githubusercontent.com/jarcities/codejenn/HEAD/license.txt",
+    "https://raw.githubusercontent.com/jarcities/codejenn/HEAD/requirements.txt",
+    "https://raw.githubusercontent.com/jarcities/codejenn/HEAD/src/readme.md",
+    "https://raw.githubusercontent.com/jarcities/codejenn/HEAD/src/generate.sh",
+    "https://github.com/jarcities/codejenn/tree/main/src/api-core",
+    "https://raw.githubusercontent.com/jarcities/codejenn/HEAD/src/api-core/code_generate.py",
+    "https://raw.githubusercontent.com/jarcities/codejenn/HEAD/src/api-core/main.py",
+    "https://raw.githubusercontent.com/jarcities/codejenn/HEAD/src/api-core/build_model.py",
+    "https://raw.githubusercontent.com/jarcities/codejenn/HEAD/src/api-core/testing.py",
+    "https://raw.githubusercontent.com/jarcities/codejenn/HEAD/tutorials/supported_layers.md",
+    "https://github.com/jarcities/codejenn/tree/main/tutorials/01_simple_mlp",
+    "https://raw.githubusercontent.com/jarcities/codejenn/HEAD/tutorials/01_simple_mlp/simple_mlp.py",
+    "https://raw.githubusercontent.com/jarcities/codejenn/HEAD/tutorials/06_speed_test/readme.md",
+    "https://raw.githubusercontent.com/jarcities/codejenn/HEAD/tutorials/06_speed_test/mlp/run.sh",
+    "https://raw.githubusercontent.com/jarcities/codejenn/HEAD/tutorials/06_speed_test/mlp/test.py",
+    "https://raw.githubusercontent.com/jarcities/codejenn/HEAD/tutorials/06_speed_test/mlp/test.cpp",
+    "https://raw.githubusercontent.com/jarcities/codejenn/HEAD/tutorials/06_speed_test/mlp/train.py",
+    "https://raw.githubusercontent.com/jarcities/codejenn/HEAD/tutorials/06_speed_test/cnn/run.sh",
+    "https://raw.githubusercontent.com/jarcities/codejenn/HEAD/tutorials/06_speed_test/cnn/test.py",
+    "https://raw.githubusercontent.com/jarcities/codejenn/HEAD/tutorials/06_speed_test/cnn/train.py"
+  ],
+  "confidence": 0.7
+}
