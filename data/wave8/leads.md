@@ -78,3 +78,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - fast.cu author's separate NVFP4 vs cuBLASLt post (gb300/nvfp4). (from ml-blogs verifier)
 - mlawsonca/benchmarking_suite_range_searching_libraries (CCGrid 2022, independent suite incl. pico_tree and nanoflann; results are paper-only, osti/arXiv blocked): possible B for both. (from retier-06)
 - chusitoo/flatbush (C++ port of Flatbush). (from geo-hn verifier)
+- zeux/calm (beats yalm in yalm's own table; check whether catalogued). llm.c forks gevtushenko/llm.c (CCCL) and anthonix/llm.c (AMD); llm.c Discussion #481 (8xA100 GPT-2 124M in 90 min, ~60% MFU). Hibari-K repos (bigint_mul_avx512f, bigint_mul_avx2) possibly from the Edamatsu/Takahashi group, unconfirmed. (from enrichers)

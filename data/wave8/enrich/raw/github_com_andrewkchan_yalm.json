@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/andrewkchan/yalm",
+  "one_liner": "Educational single-GPU C++/CUDA LLM inference engine; about 2.4x Hugging Face transformers FP16 decode, roughly tied with llama.cpp.",
+  "what_it_does": "A from-scratch LLM inference program (CLI `./build/main`) that runs batch-1 text completion, perplexity and passkey tests for Llama/Mistral-architecture models on one NVIDIA GPU, plus a slower AVX2 CPU backend. Weights must first be converted from Hugging Face safetensors into its own `.yalm` file with `convert.py` (needs PyTorch). It is a standalone program, not a library: there is no public API, no chat template and no server, so it is not a drop-in for transformers or llama.cpp.",
+  "how_it_is_fast": "Decode at batch 1 is memory-bandwidth bound, so the CUDA path is a set of hand-written GEMV-style kernels: one warp per output row with a warp-shuffle reduction (`matmul_row`), a block transpose so 32 row results go out in one coalesced 128-byte store, and fused kernels for QKV projection + clipping, RoPE + KV-cache write, SwiGLU w1/w3 + activation, and output projection + residual add. The whole per-token forward pass is captured once into a CUDA graph and replayed, updating only the kernel-node parameters that change with position, which removes per-kernel launch overhead. The KV cache is FP16 and the attention value-mix kernel unrolls 16-deep register prefetches over the sequence; the design follows zeux/calm, which the README credits.",
+  "when_to_use": [
+    "Learning or teaching how a fast single-GPU decoder is built: small codebase (src/infer.cu is about 1,250 lines) with heavily commented kernels and an accompanying blog post.",
+    "Batch-1, single-sequence FP16 decode of Mistral-7B or Llama-3.2 on an NVIDIA GPU with enough VRAM for the whole model, where you want about 2.4x the token rate of Hugging Face transformers eager inference.",
+    "Profiling experiments with Nsight Compute: `./build/test -k [matmul,mha,ffn]` benchmarks individual kernels and `-b`/`-b2` measure memory bandwidth.",
+    "Long-context experiments with a sliding-window KV cache (`-T`) plus two attention-sink tokens, or the built-in perplexity and passkey modes."
+  ],
+  "when_not_to_use": [
+    "Production serving: the README says it is an educational exercise 'not meant to be run in production', and there is no license file, so the code cannot be reused.",
+    "Anything needing more speed than llama.cpp: the README's own table has llama.cpp at 61.0/58.8 tok/s vs yalm 63.8/58.7 (a tie at ~4800 tokens) and calm ahead of both at 66.0/65.7.",
+    "Batched or multi-user serving, quantized weights (only fp32/fp16 load; fp8 in convert.py is rejected by the loader), multi-GPU or models larger than VRAM.",
+    "Long prompts: the prompt is hydrated one token at a time through the decode path (no batched prefill), so time-to-first-token grows linearly with prompt length.",
+    "Mixtral/MoE on GPU: the CUDA path asserts 'Mixture of experts not yet supported for CUDA'; Mixtral works on CPU only."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "CUDA toolkit (nvcc, cudart; linked even for CPU runs), OpenMP; vendored fmt and nlohmann json; Python with safetensors, torch and numpy for weight conversion",
+    "min_toolchain": "C++20 compiler with OpenMP, CUDA toolkit with nvcc (version not documented)",
+    "platforms": "Linux x86-64 host with AVX2, FMA and F16C (hard-coded in the Makefile) plus one NVIDIA GPU; default build emits SASS for sm_80 and sm_90 only, other GPUs need CUARCH set",
+    "thread_safety": "not documented; the CLI runs one sequence on one CUDA stream and keeps device properties in file-level globals",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The README benchmark table dates from Dec 2024 - Jan 2025 README commits and was not re-measured after commit 6cd1ef6 (2025-08-26) fixed att_mix loop bounds (its 16-deep prefetch read past the attended sequence) and CUDA-graph node updates.",
+    "The program's own 'throughput' line divides prompt plus generated tokens by total time including prompt hydration, so it is not the same metric as llama.cpp's separate prompt-eval and eval rates.",
+    "Error handling is `assert(false)`/`abort()`: an unsupported dtype or model aborts, and a build with NDEBUG would let some of those paths continue silently.",
+    "CFLAGS include -Werror, so newer compilers that add warnings can break the build; issue #1 (CPU-only build) is unanswered."
+  ],
+  "pick_this_over_siblings_when": "Pick yalm over llm.c or ik_llama.cpp only to study a compact, documented single-GPU FP16 decode engine; for actual inference ik_llama.cpp/llama.cpp, CTranslate2 or PowerInfer are licensed, maintained and support quantization, batching and more models.",
+  "verified_claims_summary": "Author-run table (README, Mistral-7B-Instruct-v0.2 FP16, 4k context, RTX 4090 + EPYC 7702P): yalm 63.8 and 58.7 tok/s at ~120 and ~4800 generated tokens vs Hugging Face transformers 25.9 and 25.7 (about 2.5x and 2.3x, derived from page data), llama.cpp 61.0 and 58.8, calm 66.0 and 65.7. Transformers, llama.cpp, CUDA and compiler versions are not given and no script reproduces the cross-engine table; the build uses -O3 -ffast-math -mavx2 -mfma -mf16c and nvcc -O2.",
+  "status_note": "Stale (last commit 2025-08-26, 117 commits, three open unanswered issues) and unlicensed, so read it as reference material rather than vendoring it.",
+  "sources_read": [
+    "https://github.com/andrewkchan/yalm",
+    "https://raw.githubusercontent.com/andrewkchan/yalm/HEAD/README.md",
+    "https://raw.githubusercontent.com/andrewkchan/yalm/HEAD/Makefile",
+    "https://raw.githubusercontent.com/andrewkchan/yalm/HEAD/src/infer.cu",
+    "https://raw.githubusercontent.com/andrewkchan/yalm/HEAD/src/model.h",
+    "https://raw.githubusercontent.com/andrewkchan/yalm/HEAD/src/model.cpp",
+    "https://raw.githubusercontent.com/andrewkchan/yalm/HEAD/src/main.cpp",
+    "https://raw.githubusercontent.com/andrewkchan/yalm/HEAD/src/codec.h",
+    "https://raw.githubusercontent.com/andrewkchan/yalm/HEAD/convert.py",
+    "https://raw.githubusercontent.com/andrewkchan/yalm/HEAD/requirements.txt",
+    "https://github.com/andrewkchan/yalm/tree/main/src",
+    "https://github.com/andrewkchan/yalm/tree/main/vendor",
+    "https://github.com/andrewkchan/yalm/issues",
+    "https://github.com/andrewkchan/yalm/issues/1",
+    "https://github.com/andrewkchan/yalm/commits",
+    "https://github.com/andrewkchan/yalm/commits/main/README.md",
+    "https://github.com/andrewkchan/yalm/commit/6cd1ef6e7d6b9f724b6d98a63b273f903928ad2f",
+    "https://github.com/andrewkchan/yalm/commit/ec0a3bc"
+  ],
+  "confidence": 0.75
+}

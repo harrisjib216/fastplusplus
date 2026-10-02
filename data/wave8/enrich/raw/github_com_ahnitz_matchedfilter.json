@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/ahnitz/matchedfilter",
+  "one_liner": "Fused batched matched filter (spectral product, inverse FFT, peak scan) for data x template banks; peak-only mode beats FFTW's inverse-only time.",
+  "what_it_does": "Correlates D data segments against T templates, all given as complex64 spectra, and returns per pair either the strongest lag in each output bin (MatchedFilter), every complex lag (CorrelationFilter), or peaks from a coarse-then-refine screen (HierarchicalFilter). It is a pip-installable Python package over a C/C++ core; a C header (matchedfilter.h, extern \"C\") exposes ap_mf_create / ap_mf_set_data / ap_mf_set_template / ap_mf_run / ap_mf_correlate and ap_hmf_* equivalents. It is not an FFT library: you cannot ask it for a plain transform, and inputs must already be forward-transformed.",
+  "how_it_is_fast": "Each pair's inverse FFT uses a balanced (four-step style) split N = N1*N2 with both factors near sqrt(N) and multiples of the SIMD width, so SIMD lanes run independent small transforms with broadcast twiddles and no in-register shuffles; the one corner turn is fused into stage A's store through a WxW register transpose. The data*conj(template) product is fused into stage A's loads (both banks are rearranged once at ingest into the layout stage A walks), and in peak-only mode the binned maximum is computed in registers inside stage B, so the correlation is never written to memory. Google Highway compiles the kernel once per SIMD target (AVX2, AVX-512, NEON) with runtime dispatch; the hierarchical mode correlates only a low-frequency band on a coarse lag grid and runs the full filter only for pairs above a calibrated coarse threshold.",
+  "when_to_use": [
+    "Template-bank searches (gravitational-wave style, radar/sonar, pulse detection) where many data segments are correlated against many templates and only the loudest lag per window is needed",
+    "Power-of-two segment lengths from 64 to 1,048,576 (peak-only CPU) in complex64, where the 1.3x-3.4x gain of peak-only over FFTW's bare inverse FFT on the measured x86 hosts matters",
+    "Searches where most pairs are noise and a calibrated false-dismissal budget is acceptable: hierarchical mode ran 3.95 ms vs 34.27 ms for flat peaks on a Ryzen 9 5950X at SNR 5.5, fd=1e-2",
+    "Python pipelines that want the same API on CPU, Vulkan GPUs (Linux/Windows) and Metal (macOS)"
+  ],
+  "when_not_to_use": [
+    "General FFT work: there is no standalone transform API, only fused correlation of pre-transformed spectra",
+    "When you need every lag on CPU: full-output mode was slower than FFTW's inverse-only time on the Core i5-13500H (56.24 vs 44.96 ms) and the Haswell node",
+    "Float64 or non-power-of-two lengths: complex64 only, power-of-two sizes only",
+    "Multithreaded single filters: CPU filtering uses one thread and parallelism is left to the caller",
+    "Production use that needs a stable API or reviewed code: alpha (0.1.0a5 on PyPI, 0.1.0a6 in the tree), 1 star, single author; the 0.1.0a6 changelog fixes a stage-B intermediate indexing bug and an earlier fleet benchmark note says correctness for that revision was not yet established"
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "NumPy (>=1.20); Google Highway (vendored git submodule, or HIGHWAY_ROOT); optional pyFFTW / mkl-fft for reference timings; GPU path needs a Vulkan or Metal driver (SPIR-V and Metal kernels ship in the wheel)",
+    "min_toolchain": "Python 3.10+, setuptools 77+, a C++17 compiler (manylinux_2_28 toolchain needed for Highway's AVX-512 targets); no Makefile or CMake, pip install is the only build",
+    "platforms": "Wheels for Linux x86-64 and macOS arm64; Linux arm64 builds from source and runs in CI; x86 baseline SSE4.2 with runtime dispatch to AVX2/AVX3; SVE and RVV targets disabled; macOS x86-64 untested",
+    "thread_safety": "Not documented as thread-safe per plan. The extension releases the GIL, but pyproject.toml says plan state has not been audited for concurrent use (free-threaded builds deliberately not shipped); use one filter object per thread.",
+    "drop_in_for_baseline": "partial — replaces a pipeline of FFTW inverse transform plus product plus peak search for correlation workloads, but has a different API, takes spectra rather than time series (except run_series), and is not an FFTW substitute"
+  },
+  "gotchas": [
+    "Correlation is circular and the inverse is unnormalised (a perfect match returns n * energy); zero-pad for linear correlation and check the threshold's normalisation.",
+    "Results reuse internal storage; copy them before the next call. Series execution consumes the data slots, so a later run() needs set_data() again.",
+    "Hierarchical mode can drop detections by design, refuses to run without a covering calibration file (or an explicit band plus threshold with no guarantee), and can be slower than flat filtering when many pairs survive (Iris Xe: 23.01 ms vs 9.75 ms flat).",
+    "CPU and GPU results can differ slightly and near-equal maxima can select different lags; full output for large banks is huge (2^22 x 128 x 512 is 2 TiB) and automatic allocation is capped at 512 MiB."
+  ],
+  "pick_this_over_siblings_when": "Pick it over FFTW, PocketFFT or VkFFT when the workload is many-data x many-template correlation and you only need peaks, since the gain comes from fusing the product and never writing the correlation; FlashFFTConv is the analogous fused-FFT-convolution choice for PyTorch/H100 sequence models, not for detection searches.",
+  "verified_claims_summary": "First-party seven-machine run at revision eecb43c (2026-09-28): 16 data x 512 templates x 4096-point complex64 per call, one pinned thread, against a single batched FFTW_PATIENT backward plan (pyFFTW-bundled FFTW 3.3.5 sse2-avx built with gcc -O2 on x86, FFTW 3.3.10 NEON via the C API on M2). Peak-only took 34.27 vs 63.63 ms on a Ryzen 9 5950X and 20.68 vs 69.54 ms on a Ryzen AI Max+ 395 (1.86x and 3.36x), but the two sides do different work: FFTW does only the inverse FFT and writes every output, while matchedfilter adds the product and peak scan but never writes the correlation; the x86 FFTW build also lacks AVX2/FMA codelets.",
+  "status_note": "Very active (last commit 2026-09-30, 638 commits) but alpha with an unstable API and a single maintainer; MIT-licensed, installable from PyPI, and usable from C/C++ only by building the C sources and Highway yourself.",
+  "sources_read": [
+    "https://github.com/ahnitz/matchedfilter",
+    "https://github.com/ahnitz/matchedfilter/tree/main/src",
+    "https://raw.githubusercontent.com/ahnitz/matchedfilter/main/README.md",
+    "https://raw.githubusercontent.com/ahnitz/matchedfilter/main/LICENSE",
+    "https://raw.githubusercontent.com/ahnitz/matchedfilter/main/setup.py",
+    "https://raw.githubusercontent.com/ahnitz/matchedfilter/main/pyproject.toml",
+    "https://raw.githubusercontent.com/ahnitz/matchedfilter/main/CHANGELOG.md",
+    "https://raw.githubusercontent.com/ahnitz/matchedfilter/main/docs/README.md",
+    "https://raw.githubusercontent.com/ahnitz/matchedfilter/main/docs/usage.md",
+    "https://raw.githubusercontent.com/ahnitz/matchedfilter/main/docs/python-support.md",
+    "https://raw.githubusercontent.com/ahnitz/matchedfilter/main/docs/measurements/teaser-fleet-20260928.md",
+    "https://raw.githubusercontent.com/ahnitz/matchedfilter/main/docs/measurements/teaser-fleet-20260928.json",
+    "https://raw.githubusercontent.com/ahnitz/matchedfilter/main/docs/measurements/m2-teaser-headroom.md",
+    "https://raw.githubusercontent.com/ahnitz/matchedfilter/main/python/matchedfilter/matchedfilter.h",
+    "https://raw.githubusercontent.com/ahnitz/matchedfilter/main/src/balanced-inl.h",
+    "https://raw.githubusercontent.com/ahnitz/matchedfilter/main/src/kernel.cc",
+    "https://raw.githubusercontent.com/ahnitz/matchedfilter/main/src/matchfilt.c",
+    "https://raw.githubusercontent.com/ahnitz/matchedfilter/main/src/internal.h",
+    "https://raw.githubusercontent.com/ahnitz/matchedfilter/main/src/transform.h",
+    "https://raw.githubusercontent.com/ahnitz/matchedfilter/main/tools/teaser_fleet.py",
+    "https://raw.githubusercontent.com/ahnitz/matchedfilter/main/tools/teaser_figure.py",
+    "https://pypi.org/pypi/matchedfilter/json"
+  ],
+  "confidence": 0.8
+}

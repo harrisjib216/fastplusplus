@@ -1,0 +1,56 @@
+{
+  "id": "https://github.com/juliasimd/loopvectorization.jl",
+  "one_liner": "Julia @turbo macro that SIMD-vectorizes plain loops; its triple-loop gemm edges single-threaded MKL on small matrices.",
+  "what_it_does": "LoopVectorization.jl provides the @turbo macro (and @tturbo / @turbo thread=true for threading) that you put in front of a Julia for-loop nest or broadcast expression; it rewrites the loop into explicit SIMD code. It is not a BLAS and not a drop-in for mul!: you write the gemm as a naive triple loop over dense arrays and the macro generates the kernel. It also ships SIMD versions of special functions (exp, log, sincos, etc. via SLEEFPirates) used inside @turbo loops.",
+  "how_it_is_fast": "The macro builds a LoopSet model of the loop nest and runs a cost model (determinestrategy.jl, instruction latency/reciprocal-throughput/register-pressure tables mostly from Agner Fog's Skylake-X numbers) over loop orders, choosing which loop to vectorize and which one or two loops to unroll; this yields register-blocked micro-kernels with multiple independent accumulators. It handles loop remainders with masked SIMD instead of LLVM's slow scalar tails, uses FMA, and substitutes SIMD-able special functions. There is no cache blocking, packing or memory modelling, which is why it wins only at small sizes.",
+  "when_to_use": [
+    "Julia code with small dense Float64/Float32/Int matrix kernels (roughly up to 70x70 for C = A*B per the docs; the README's 191x189x171 example is about 5% ahead of 1-thread MKL) where BLAS call overhead dominates",
+    "Custom fused loop kernels that BLAS cannot express, e.g. gemm plus an elementwise epilogue, tropical/max-plus products, or reductions with special functions (sincos_turbo 614 ns vs 3.9 us for the plain loop in the docs' 512-element example)",
+    "Loops that LLVM vectorizes poorly because of remainders (README dot product: 12.2 ns vs 36.5 ns at length 255)",
+    "As the kernel generator under a larger library: Octavian.jl, RecursiveFactorization.jl, Tullio.jl and TropicalGEMM.jl build on it"
+  ],
+  "when_not_to_use": [
+    "Matrix multiply beyond about 70x70: the project's own docs say it falls behind MKL gemm there, and for A'*B it is well behind MKL and OpenBLAS because it does not pack",
+    "From C++: it is a Julia macro, so there is nothing to link; using it means embedding Julia",
+    "Loops that depend on execution order (cumsum, loop-carried dependencies), triangular/ragged iteration spaces, multiple loops at the same nest level, or arrays of structs/Complex without StructArrays",
+    "Code that must be bounds-checked or bit-reproducible: @turbo does no bounds checking, reorders operations and swaps in faster special functions (about 3 ULP per the docs)",
+    "Projects needing a well-staffed dependency: 116 open issues including wrong-result reports (#542, #539, #512, #507) and a memory-corruption report (#510); maintenance runs through SciML Small Grants"
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "Julia packages: VectorizationBase, SLEEFPirates, ArrayInterface, StaticArrayInterface, LayoutPointers, HostCPUFeatures, CPUSummary, PolyesterWeave, ThreadingUtilities, OffsetArrays, SpecialFunctions, ForwardDiff/ChainRulesCore and others (Project.toml); optional extensions for ForwardDiff, NNlib, SpecialFunctions",
+    "min_toolchain": "Julia 1.10 (Project.toml compat julia = \"1.10\"; the README's 'Julia 1.1 and later' is out of date); version 0.12.174",
+    "platforms": "CPUs supported by Julia/LLVM (x86-64, aarch64); performance depends on SIMD width, and the README benchmarks used an AVX-512 machine (Float64 vector width 8, CPU not named). Some tests are reported broken on macOS ARM (#564).",
+    "thread_safety": "Single-threaded by default; @tturbo or @turbo thread=N uses Polyester-style threads up to min(N, Threads.nthreads(), physical cores). Thread safety of user loops not otherwise documented.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "No bounds checking and iterating an empty collection is undefined behaviour; misuse can segfault or corrupt memory (README warning). Issue #510 reports intermittent heap corruption from a @turbo A'*A loop on Julia 1.10-beta.",
+    "Broadcasting an Array whose size(A,1) == 1 is not supported unless known at compile time and will probably crash Julia (getting_started.md); use LowDimArray.",
+    "Performance is much higher when matrix dimensions are multiples of the SIMD width (docs); padding columns (PaddedMatrices.jl) helps.",
+    "Keyword arguments inside @turbo calls fail with a TypeError; wrap the call in a functor. Issue #540 reports the same TypeError for plain broadcasts on Julia 1.12 nightly (Dec 2024); a later commit fixes 1.12 precompile warnings, but whether #540 is fully resolved is not documented."
+  ],
+  "pick_this_over_siblings_when": "Pick it over Octavian.jl when you need a custom or fused small kernel rather than a full gemm (Octavian builds on LoopVectorization and is the one that beats MKL at 1000x1000); in C or C++, BLASFEO or Eigen are the small-matrix equivalents, and LoopVectorization is only relevant if the code is already in Julia.",
+  "verified_claims_summary": "README example on an unnamed AVX-512 CPU, Julia version not stated: a @turbo triple-loop Float64 gemm at M=191, K=189, N=171 has a minimum of 111.7 us (110.5 GFLOPS) against 117.2 us (105.3 GFLOPS) for single-threaded MKL mul!, about 5% faster, and 44x faster than the same loop under @inbounds @fastmath. The project's own docs say the advantage disappears beyond roughly 70x70 for square C = A*B, so this is a narrow small-matrix win.",
+  "status_note": "Active but in maintenance mode (last commit 2026-05-31, version 0.12.174, Julia 1.10+ with CI on LTS/latest/pre/nightly), funded through SciML Small Grants with no original-author development; MIT-licensed and usable only from Julia.",
+  "sources_read": [
+    "https://github.com/JuliaSIMD/LoopVectorization.jl",
+    "https://raw.githubusercontent.com/JuliaSIMD/LoopVectorization.jl/HEAD/README.md",
+    "https://raw.githubusercontent.com/JuliaSIMD/LoopVectorization.jl/HEAD/Project.toml",
+    "https://raw.githubusercontent.com/JuliaSIMD/LoopVectorization.jl/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/JuliaSIMD/LoopVectorization.jl/HEAD/docs/src/index.md",
+    "https://raw.githubusercontent.com/JuliaSIMD/LoopVectorization.jl/HEAD/docs/src/getting_started.md",
+    "https://raw.githubusercontent.com/JuliaSIMD/LoopVectorization.jl/HEAD/docs/src/examples/matrix_multiplication.md",
+    "https://raw.githubusercontent.com/JuliaSIMD/LoopVectorization.jl/HEAD/docs/src/examples/multithreading.md",
+    "https://raw.githubusercontent.com/JuliaSIMD/LoopVectorization.jl/HEAD/docs/src/devdocs/overview.md",
+    "https://raw.githubusercontent.com/JuliaSIMD/LoopVectorization.jl/HEAD/docs/src/devdocs/evaluating_loops.md",
+    "https://raw.githubusercontent.com/JuliaSIMD/LoopVectorization.jl/HEAD/docs/src/devdocs/lowering.md",
+    "https://raw.githubusercontent.com/JuliaSIMD/LoopVectorization.jl/HEAD/docs/src/performance_accuracy.md",
+    "https://raw.githubusercontent.com/JuliaSIMD/LoopVectorization.jl/HEAD/docs/src/future_work.md",
+    "https://github.com/JuliaSIMD/LoopVectorization.jl/issues",
+    "https://github.com/JuliaSIMD/LoopVectorization.jl/issues/540",
+    "https://github.com/JuliaSIMD/LoopVectorization.jl/issues/510",
+    "https://github.com/JuliaSIMD/LoopVectorization.jl/commits/main"
+  ],
+  "confidence": 0.8
+}

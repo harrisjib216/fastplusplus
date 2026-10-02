@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/karpathy/llm.c",
+  "one_liner": "GPT-2/GPT-3 pretraining in plain C/CUDA with hand-written fused kernels; about 7% faster than PyTorch nightly on one A100.",
+  "what_it_does": "llm.c is a self-contained training program, not a library: train_gpt2.cu implements the GPT-2 forward pass, backward pass, AdamW, data loading, evaluation and sampling directly in CUDA C++, with train_gpt2.py (a tweaked nanoGPT) as the parallel PyTorch reference that also writes the starting .bin checkpoints. You run ./train_gpt2cu with command-line flags (batch, sequence length, learning-rate schedule, ZeRO stage, recompute level) instead of writing Python. A roughly 1,000-line fp32 CPU reference (train_gpt2.c) and frozen fp32 CUDA files are kept for learning, and test_gpt2 checks logits, loss and 10 Adam steps against PyTorch.",
+  "how_it_is_fast": "No framework or Python overhead, bf16 mixed precision, and kernel fusion: a fused classifier computes the cross-entropy loss without materializing the full softmax and starts the backward pass in the same kernel, a fused residual-plus-LayerNorm forward, optional GELU fused into cuBLASLt matmul epilogues, and Packed128 128-bit vectorized loads and stores. Attention uses cuDNN's flash attention (USE_CUDNN=1), matmuls go through cuBLASLt, the vocabulary is padded internally to 50304 for GPU-friendly shapes, and recomputing GELU in the backward pass saves activation memory so larger batches fit.",
+  "when_to_use": [
+    "Pretraining GPT-2 or GPT-3-style decoder-only models (124M up to the 1.6B reproduction target) on NVIDIA GPUs where you want a dependency-light binary and a few percent over torch.compile.",
+    "Reproducing GPT-2 124M cheaply: Discussion #481 reports about 90 minutes and about $20 on an 8x A100 80GB SXM node at about 60% MFU.",
+    "Learning or teaching how each transformer layer's forward and backward pass maps to CUDA, using dev/cuda's progression of kernels and the doc/layernorm tutorial.",
+    "Borrowing specific fused kernels (fused classifier, fused residual+LayerNorm, bf16 AdamW) as reference code for your own engine."
+  ],
+  "when_not_to_use": [
+    "Any architecture outside the GPT-2/GPT-3 family: there is no general autodiff, so a new layer means hand-writing its forward and backward kernels.",
+    "Serving or production inference: it is a training loop whose only inference is sampling inside the binary (-g genT); use an inference engine instead.",
+    "Non-NVIDIA hardware: mainline is CUDA only, cuDNN attention is not supported on macOS per the Makefile, and AMD, Metal, OpenCL support exist only as third-party forks.",
+    "If you need an actively maintained stack: the last commit is from May 2025, with 93 open issues and 133 open pull requests on the repo page.",
+    "Expecting a large margin over current PyTorch: the 7% was measured in May 2024 against a nightly build, and it shrinks to that only after padding PyTorch's vocab by hand (46% was against stable 2.3.0)."
+  ],
+  "integration": {
+    "form": "source-drop (single-file training program built with the repo Makefile; llmc/*.cuh headers)",
+    "dependencies": "CUDA toolkit with cuBLAS and cuBLASLt and NVML (-lnvidia-ml); optional cuDNN plus the header-only cudnn-frontend for flash attention (USE_CUDNN=1); optional NCCL and OpenMPI for multi-GPU; Python with PyTorch only to prepare data and the initial checkpoint; CPU build uses OpenMP if found",
+    "min_toolchain": "nvcc with -std=c++17 (CUDA 12.x in the published runs; the cuDNN path on Windows uses C++20); CPU reference builds with clang or gcc -Ofast",
+    "platforms": "Linux x86-64 with NVIDIA GPUs (multi-GPU and multi-node via NCCL); Windows build path in the Makefile; CPU fp32 reference on any OS including Apple Silicon",
+    "thread_safety": "not documented; it is a single training process per GPU, with multi-GPU coordination through MPI/NCCL processes",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "cuDNN flash attention is off by default (USE_CUDNN=0) because it raises compile time from seconds to about a minute; the published speed comparison was built with USE_CUDNN=1, and the FP32 test path does not support cuDNN.",
+    "The usage text says GELU fusion (-ge) defaults to 2 on SM90+, but the code currently forces the default to 0 ('off for now'), so pass -ge explicitly if you want it.",
+    "The build uses --use_fast_math for nvcc and -Ofast for the CPU reference, so results match PyTorch only within the tolerances test_gpt2 checks.",
+    "Open issues include 'inf loss at big batch' (#263), 'Possible bugs in the data loading functions' (#321) and a multi-GPU dataloader shuffle_rng question (#792)."
+  ],
+  "pick_this_over_siblings_when": "Pick llm.c when you want to own the whole GPT-2 training stack in C/CUDA; Liger-Kernel is the drop-in choice for speeding up existing Hugging Face PyTorch training, FlashAttention-3 or ThunderKittens give faster individual attention/GEMM kernels, and yalm is the from-scratch C++/CUDA counterpart for inference rather than training.",
+  "verified_claims_summary": "Karpathy's May 3, 2024 'State of the Union' (Discussion #344) measured GPT-2 124M training on TinyStories, batch 32 x 1024 tokens, bf16, on one A100 40GB PCIe (CUDA 12.2, driver 535.129.03): llm.c about 167K tok/s (160K on master) against train_gpt2.py with torch.compile and flash attention at about 150K tok/s, or about 156K with the vocab padded to 50304, so about 7% ahead of PyTorch nightly. The nightly build and host CPU are not identified; the PyTorch script is described in #481 as lacking full feature parity.",
+  "status_note": "Stale since the last commit on 2025-05-10 but MIT-licensed, widely studied (31.1k stars, 3.8k forks, many language ports) and easy to vendor as reference code.",
+  "sources_read": [
+    "https://github.com/karpathy/llm.c",
+    "https://raw.githubusercontent.com/karpathy/llm.c/HEAD/README.md",
+    "https://raw.githubusercontent.com/karpathy/llm.c/HEAD/Makefile",
+    "https://raw.githubusercontent.com/karpathy/llm.c/HEAD/train_gpt2.cu",
+    "https://github.com/karpathy/llm.c/tree/master/llmc",
+    "https://raw.githubusercontent.com/karpathy/llm.c/HEAD/llmc/matmul.cuh",
+    "https://raw.githubusercontent.com/karpathy/llm.c/HEAD/llmc/fused_classifier.cuh",
+    "https://github.com/karpathy/llm.c/discussions/344",
+    "https://github.com/karpathy/llm.c/discussions/481",
+    "https://github.com/karpathy/llm.c/issues?q=is%3Aissue+bug"
+  ],
+  "confidence": 0.75
+}

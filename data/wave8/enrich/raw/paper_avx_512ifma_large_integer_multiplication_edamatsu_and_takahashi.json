@@ -1,0 +1,43 @@
+{
+  "id": "paper:avx-512ifma-large-integer-multiplication-edamatsu-and-takahashi",
+  "one_liner": "Peer-reviewed AVX-512IFMA large-integer multiplication method, reported up to about 2.97x faster than GMP; no code released.",
+  "what_it_does": "A research paper (Edamatsu and Takahashi, ICA3PP 2019, Springer LNCS) that vectorizes multi-precision integer multiplication with the AVX-512IFMA 52-bit multiply-add instructions and compares it with the same authors' earlier AVX-512F version and with GMP on a Cannon Lake CPU. No source, library or API has been published, so it is a design to reimplement, not something to link in place of GMP's mpz_mul/mpn_mul.",
+  "how_it_is_fast": "AVX-512IFMA (VPMADD52LUQ / VPMADD52HUQ) multiplies 52-bit fields in each of eight 64-bit lanes and adds the low or high 52 bits of the product into a 64-bit accumulator. Storing operands in radix 2^52 leaves 12 spare bits per lane, so many partial products can be summed before any carry has to be propagated, and carry normalization is deferred. That gives eight 52x52-bit products per instruction instead of GMP's scalar 64x64-bit multiply-with-carry chain, and products wider than the 32x32-bit VPMULUDQ products an AVX-512F-only kernel is limited to. Whether it uses schoolbook, Karatsuba or Toom-style splitting is not documented in anything readable this session.",
+  "when_to_use": [
+    "You are writing your own mpn-level multiply kernel for x86 cores with AVX-512IFMA (Cannon Lake, Ice Lake and later Intel parts that kept it, AMD Zen 4/5 per the record) and want a peer-reviewed design reference for radix-2^52 vector multiplication.",
+    "Sizing the payoff before adding an IFMA path to a bignum library: the paper's reported best case is about 2.97x over GMP and 3.07x over an AVX-512F implementation on one CPU.",
+    "Comparing against the authors' earlier AVX-512F (Knights Landing) design to see how much IFMA adds over a 32-bit-multiply vector kernel."
+  ],
+  "when_not_to_use": [
+    "You need code you can run: nothing is published, so has_code is false and every number is the authors' own.",
+    "CPUs without AVX-512IFMA (anything before Cannon Lake/Ice Lake and later parts that dropped the extension): the technique cannot run there.",
+    "Very large operands where GMP switches to Toom-Cook or FFT multiplication: the operand-size range of the reported speedup is not documented, so it may not hold there.",
+    "Constant-time or cryptographic use: no side-channel properties are documented; for RSA-size modular work OpenSSL's IFMA almost-Montgomery routines (benchmarked in the VROOM sibling entry) are shipping code.",
+    "Decisions that need typical rather than best-case gains: both ratios are 'up to' figures."
+  ],
+  "integration": {
+    "form": "not released (paper only)",
+    "dependencies": "not documented",
+    "min_toolchain": "not documented (needs a compiler with AVX-512IFMA intrinsics or assembler support)",
+    "platforms": "x86-64 with AVX-512IFMA required; measured on a Cannon Lake processor (exact model not documented)",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Evidence is snippet only: the chapter (DOI 10.1007/978-3-030-38991-8_5) could not be opened because link.springer.com and semanticscholar are egress-blocked, so GMP version, operand sizes, compiler, flags and exact CPU are unknown.",
+    "A radix-2^52 kernel needs conversion from and to GMP's 64-bit limbs (split and recombine passes); whether that cost is inside the reported times is not documented.",
+    "Cannon Lake, the test CPU, was a short-lived discontinued microarchitecture, so the ratios may differ on Ice Lake, Sapphire Rapids or Zen 4/5.",
+    "No public repository is attributable: github.com/topics/avx512ifma lists no repositories, and Hibari-K's AVX-512F multiply repos (no IFMA variant, no license) are not linked to the authors."
+  ],
+  "pick_this_over_siblings_when": "Read it when designing a general (non-modular) IFMA multiply for single large operand pairs; for runnable code, DigitsOnTurbo patches GMP's multiplication (1.41x geomean at 512-32768 bits), lea-gl's truncated batch AVX-512 Montgomery code beats GMP 3.95-5.34x on batched modular products, and FLINT is the practical pick for very large sizes.",
+  "verified_claims_summary": "Two search-engine summaries of the abstract (paper not opened) report large-integer multiplication with AVX-512IFMA up to about 3.07x faster than the authors' AVX-512F implementation and about 2.97x faster than GMP on a Cannon Lake processor. GMP version, operand sizes, compiler and flags are not documented.",
+  "status_note": "A 2019 peer-reviewed paper with no released code or license, so it is reference material only; it could be re-tiered to B once a verifier can read the paper.",
+  "sources_read": [
+    "https://github.com/topics/avx512ifma",
+    "https://github.com/topics/avx512",
+    "https://github.com/Hibari-K?tab=repositories",
+    "https://raw.githubusercontent.com/Hibari-K/bigint_mul_avx512f/HEAD/README.md",
+    "https://raw.githubusercontent.com/Hibari-K/bigint_mul_avx512f_asm/HEAD/README.md"
+  ],
+  "confidence": 0.4
+}

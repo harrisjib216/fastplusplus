@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/shlokgpu/mini-attention",
+  "one_liner": "Hand-written FlashAttention-2 forward kernel for RTX 5090 (SM120); beats cuDNN SDPA at N<=1024, 3-5% slower beyond.",
+  "what_it_does": "A learning-oriented repo that rebuilds the FlashAttention-2 forward pass from scratch in CUDA C++ with inline PTX, as a seven-step kernel progression (K1 base to K7 auto-tuned) first on SM86 (RTX 3060) and then ported to SM120 consumer Blackwell. The SM120 kernel is exposed as a PyTorch C++ extension, JIT-built with torch.utils.cpp_extension.load, whose forward(cfg, q, k, v, o) takes contiguous [B, N, H, D] fp16 or bf16 tensors and a tile-config object. It is not packaged as a library or a drop-in for F.scaled_dot_product_attention; the repo also holds MHA/GQA/MQA reference variants and earlier SageAttention/PagedAttention experiments.",
+  "how_it_is_fast": "Standard FlashAttention-2 tiling with an online softmax in registers, using Ampere-style mma.sync.m16n8k16 tensor-core instructions (consumer Blackwell has no WGMMA or tcgen05), ldmatrix.x4(.trans) fragment loads, XOR-swizzled shared memory to avoid bank conflicts, cp.async.cg global-to-shared copies with an L2::256B prefetch hint, eager first K/V tile load and optional double buffering. SM120 tuning uses Bc=128 tiles (fits within about 100 KB shared memory), exp2-based softmax and one hoisted reciprocal for the final 1/l normalization, with K7 picked by a static scan over Br/Bc/warp configs.",
+  "when_to_use": [
+    "Studying how to write a FlashAttention-2 forward kernel by hand for consumer Blackwell (RTX 5090, SM120), with each optimization isolated in K1-K7.",
+    "Short-sequence, non-causal fp16 prefill-style attention with head dim 128 (N=512 to 1024) on an RTX 5090, where the README measures 1.12x to 1.33x over cuDNN via PyTorch SDPA.",
+    "As a reference for SM120 tile-size and PTX choices (mma.sync instead of WGMMA, Bc=128, L2::256B hints) when tuning your own kernel."
+  ],
+  "when_not_to_use": [
+    "Sequences of 2048 tokens or more: the README table shows K7 at 95-97% of cuDNN there, so cuDNN is faster.",
+    "Causal or masked attention, dropout, training (no backward pass), GQA/MQA with different K/V head counts, head dims other than 128, or sequence lengths that are not multiples of the 64/128 tile sizes; the SM120 kernel rejects or does not implement these.",
+    "Any code you plan to ship: there is no LICENSE file (it returns 404), so the code cannot be copied, and the project has 1 star and one author.",
+    "Datacenter Blackwell (B200/SM100) or Hopper: the SM100 kernel is work in progress and FlashAttention-3 or cuDNN target those parts directly."
+  ],
+  "integration": {
+    "form": "source-drop (PyTorch C++/CUDA extension compiled at runtime via torch.utils.cpp_extension.load)",
+    "dependencies": "PyTorch (libtorch and pybind11 through the extension; pyproject requires torch>=2.11.0, cu128 builds for SM120) and the CUDA toolkit; the repo's pyproject also lists triton, vllm, transformers, numpy and matplotlib for the wider experiments",
+    "min_toolchain": "nvcc with -std=c++20 and sm_120 code generation (CUDA 12.8+ per setup.sh for SM120); Python 3.11+",
+    "platforms": "NVIDIA SM120 (RTX 5090) for the benchmarked kernel; the extension refuses GPUs below SM80; separate SM86 kernels exist; SM100 is WIP; run instructions use Linux/WSL paths",
+    "thread_safety": "not documented; launches on the current PyTorch CUDA stream",
+    "drop_in_for_baseline": "partial — covers only non-causal forward attention with fp16/bf16, head dim 128, contiguous [B, N, H, D] inputs (SDPA uses [B, H, N, D]), equal Q/K/V shapes and N a multiple of the tile size"
+  },
+  "gotchas": [
+    "tests/test_correctness.py (the 'All K1-K7 passed' output in the Readme, tolerance 1e-3) loads the SM86 inline kernels, not the SM120 kernel that was benchmarked; the SM120 kernel is only checked inside _bench_sm120.py at B=4, N=1024 with a 0.05 tolerance.",
+    "The baseline timing wraps each call in a 'with sdpa_kernel(...)' context manager inside the CUDA-event window, so Python-side overhead is charged to cuDNN at sub-millisecond sizes where K7 wins; the probe also silently falls back to FLASH_ATTENTION or MATH if cuDNN is unavailable.",
+    "Several Readme figures disagree or are implausible: K7 at N=1024 is 112.2% in the latency table, 114.4% in the progression table and 'beats by ~35%' in the NCU section; the torch.profiler line (0.003 ms) is physically impossible; and the 'NCU-equivalent' metrics come from an analytical script, not Nsight Compute.",
+    "Design notes contradict the code in places, for example notes/why_mma_sync.md cites 228 KB shared memory per block on SM120 while the bench script says 100 KB per SM."
+  ],
+  "pick_this_over_siblings_when": "Pick it over learn-cuda's SM120 attention only for N<=1024 non-causal d=128 forward on an RTX 5090, since learn-cuda reaches about 94% of speed-of-light at long sequences but does not beat cuDNN; for anything production use cuDNN via SDPA or FlashAttention, and SageAttention if quantized attention is acceptable.",
+  "verified_claims_summary": "On one RTX 5090, fp16 non-causal attention with H=16, D=128 and batch 16/16/16/8/4 for N=512/1024/2048/4096/8192 (5 warm-ups, mean of 20 CUDA-event timings with a 200 MB L2 flush), K7 took 0.185 vs 0.247 ms for cuDNN through PyTorch SDPA at N=512 (1.33x) and 0.658 vs 0.739 ms at N=1024 (1.12x), but 2.588 vs 2.515 ms at N=2048 and 10.310 vs 9.904 ms at N=8192 (about 213 vs 222 TFLOPS, derived from page data). The exact PyTorch, cuDNN and CUDA versions and the host CPU are not stated beyond the torch>=2.11.0 cu128 requirement.",
+  "status_note": "Active as of the last commit on 2026-03-31 (59 commits, 1 star), but unlicensed, so treat it as reference reading rather than vendorable code.",
+  "sources_read": [
+    "https://github.com/shlokgpu/Mini-Attention",
+    "https://raw.githubusercontent.com/shlokgpu/Mini-Attention/HEAD/Readme.md",
+    "https://raw.githubusercontent.com/shlokgpu/Mini-Attention/HEAD/kernels/flash_attn/cuda/sm_120/_bench_sm120.py",
+    "https://raw.githubusercontent.com/shlokgpu/Mini-Attention/HEAD/kernels/flash_attn/cuda/sm_120/kernel/flash_attention.cu",
+    "https://github.com/shlokgpu/Mini-Attention/tree/main/kernels/flash_attn/cuda/sm_120/kernel/include",
+    "https://raw.githubusercontent.com/shlokgpu/Mini-Attention/HEAD/kernels/flash_attn/cuda/sm_120/kernel/include/ptx_functions.cuh",
+    "https://raw.githubusercontent.com/shlokgpu/Mini-Attention/HEAD/kernels/flash_attn/cuda/sm_120/kernel/include/flash_attention.cuh",
+    "https://raw.githubusercontent.com/shlokgpu/Mini-Attention/HEAD/kernels/flash_attn/cuda/sm_120/kernel/include/flash_kernels.cuh",
+    "https://raw.githubusercontent.com/shlokgpu/Mini-Attention/HEAD/kernels/flash_attn/cuda/sm_120/kernel/include/cuda_utils.cuh",
+    "https://raw.githubusercontent.com/shlokgpu/Mini-Attention/HEAD/kernels/flash_attn/cuda/sm_120/kernel/include/softmax.cuh",
+    "https://raw.githubusercontent.com/shlokgpu/Mini-Attention/HEAD/kernels/flash_attn/cuda/sm_120/kernel/include/forward_kernel.cuh",
+    "https://raw.githubusercontent.com/shlokgpu/Mini-Attention/HEAD/notes/why_mma_sync.md",
+    "https://raw.githubusercontent.com/shlokgpu/Mini-Attention/HEAD/notes/pipeline_design.md",
+    "https://raw.githubusercontent.com/shlokgpu/Mini-Attention/HEAD/tests/test_correctness.py",
+    "https://raw.githubusercontent.com/shlokgpu/Mini-Attention/HEAD/pyproject.toml",
+    "https://raw.githubusercontent.com/shlokgpu/Mini-Attention/HEAD/setup.sh",
+    "https://raw.githubusercontent.com/shlokgpu/Mini-Attention/HEAD/LICENSE"
+  ],
+  "confidence": 0.7
+}
