@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/juliageo/geometryops.jl",
+  "one_liner": "Pure-Julia 2D/spherical geometry ops; beats GEOS-through-GeoPandas/R on simple point tasks, but trails GEOS called directly.",
+  "what_it_does": "GeometryOps.jl is a Julia package of planar and spherical geometry operations (OGC predicates, distance, area, centroid, clipping, simplify, segmentize, convex hull, polygonize, reprojection through Proj.jl) that accepts any GeoInterface.jl-compatible geometry, plus apply/applyreduce for mapping over nested geometries and tables. Operations take an optional algorithm or manifold as the first argument (Planar(), Spherical(), Geodesic(); FosterHormannClipping, the experimental OverlayNG and RelateNG engines, GEOS() and TG() backends). It is not a GEOS binding or drop-in: it has its own Julia API, and some operations (buffer) simply call GEOS through LibGEOS.jl.",
+  "how_it_is_fast": "Julia compiles each call specialised to the concrete geometry and coordinate types (plain tuples after GO.tuples), so tight loops such as point-to-point distance or point-in-polygon have no per-row interpreter or wrapper marshalling cost. Clipping uses Foster-Hormann with selectable edge-intersection accelerators (NestedLoop, single/dual STRtree, natural-index trees, AutoAccelerator), and the newer OverlayNG/RelateNG ports of the JTS algorithms use exact adaptive predicates plus a prepared, indexed point-in-area locator (GO.prepare). There is no GEOS-beating kernel algorithm: the third-party wins come from avoiding Python/R per-row overhead on simple point tasks.",
+  "when_to_use": [
+    "You already work in Julia and want generic geometry operations over GeoInterface types (GeoDataFrames, Shapefile, GeoJSON, ArchGDAL objects) without converting to GEOS.",
+    "Bulk simple point workloads (pairwise point distances, many points against one polygon, rejection sampling inside a polygon) where kadyb/vector-benchmark measured 0.11 s vs 0.9 s (GeoPandas) and 0.04 s vs 0.12 s / 0.08 s (GeoPandas / R geos).",
+    "Many repeated point-in-polygon queries against one large polygon, using GO.prepare (1.2 us per query on Canada vs 62.6 us unprepared in its own benchmark).",
+    "Spherical-manifold predicates and overlays (great-circle edges) that GEOS does not offer, accepting about 5-11x the planar cost.",
+    "Points x area overlays (union/symdifference of a MultiPoint with a polygon), the one case its own benchmark shows ahead of LibGEOS (2.4 ms vs 20.6 ms)."
+  ],
+  "when_not_to_use": [
+    "From C++: it is Julia-only and needs an embedded Julia runtime, so for a C++ project call GEOS, TG or Boost.Geometry directly.",
+    "Polygon overlay throughput: its own benchmark (Apple M4 Pro, Julia 1.12.6, GEOS 3.14.1) has OverlayNG 2-4x slower than LibGEOS on country pairs and about 30x slower on river x country intersection; issue #129 reports Foster-Hormann clipping more than 10x slower than LibGEOS above about 100 vertices.",
+    "Pairwise predicate filtering of mostly disjoint polygons: RelateNG takes 1.6 us per pair vs 115.7 ns for LibGEOS (about 14x behind).",
+    "Union/difference on MultiPolygon inputs with the default Foster-Hormann engine, which raises MethodError per the project's benchmark notes; the OverlayNG alternative is marked experimental and has a known ring-assembly defect cluster.",
+    "Production code that needs a stable API: the README warns it is 'still under heavy development', the version is 0.1.x, and open bug issues cover clipping on barely touching or coverage-like polygons (#281, #337), difference (#335) and touches (#155)."
+  ],
+  "integration": {
+    "form": "module (Julia package, registered as GeometryOps; core types in the GeometryOpsCore subpackage)",
+    "dependencies": "GeoInterface, GeometryOpsCore, ExactPredicates, AdaptivePredicates, DelaunayTriangulation, SortTileRecursiveTree, StaticArrays, Tables, DataAPI, Extents, GeoFormatTypes, CoordinateTransformations, AbstractTrees, PrecompileTools; optional extensions for LibGEOS (buffer and GEOS backend), Proj (reprojection), TGGeometry (libtg predicates), DataFrames, DimensionalData, FlexiJoins, Makie",
+    "min_toolchain": "Julia 1.10 (Project.toml compat)",
+    "platforms": "any platform Julia supports (pure Julia); buffer needs LibGEOS.jl and reprojection needs Proj.jl, both binary artifacts",
+    "thread_safety": "apply/applyreduce-based operations take a `threaded` keyword (default false) to parallelise over sub-geometries or table rows; thread safety of concurrent calls is not otherwise documented",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "GO.buffer always delegates to GEOS (LibGEOS must be loaded), so its vector-benchmark buffer time (5.75 s vs 4.07 s GeoPandas) is GEOS against GEOS.",
+    "The third-party wins compare different strategies: GeoPandas distance runs a Python-level apply loop over 5,000 rows and GeoPandas intersects uses a cached STRtree sindex query, while GeometryOps brute-forces a Julia comprehension/broadcast after JIT warm-up.",
+    "Unprepared predicates recompute extents on every call; GO.tuples(x; calc_extent = true) or GO.prepare change point-in-area cost from 62.6 us to 21.9 us or 1.2 us per query.",
+    "Foster-Hormann returns a list of geometries, while OverlayNG returns a single most-specific geometry (possibly mixed-dimension), so switching engines changes result shapes."
+  ],
+  "pick_this_over_siblings_when": "Pick it over TG or qdgeo only when you are in Julia and want GeoInterface-generic, planar plus spherical operations in one package; for raw predicate speed TG is faster than GEOS prepared, and GeometryOps can even call it through GO.TG(). Arctern and qdgeo target the same GeoPandas/Shapely baseline from C++/GPU or Rust/WASM and are the better fit outside Julia.",
+  "verified_claims_summary": "Third-party kadyb/vector-benchmark (Ryzen 9 5900X, Ubuntu 22.04, median of runs; no Julia/R/Python versions) shows GeometryOps ahead of GEOS-through-wrappers on three point tasks: distance on a 5,000 x 5,000 point matrix 0.11 s vs 0.9 s (GeoPandas) and 5.37 s (R geos, row-wise sapply), 500,000 points-in-polygon intersects 0.04 s vs 0.12 s / 0.08 s, and sampling 0.04 s vs 0.9 s. The project's own direct comparison against LibGEOS (GEOS 3.14.1, Apple M4 Pro) shows it slower than GEOS on predicates and overlays except points x area unions.",
+  "status_note": "Actively developed (last commit 2026-09-20, 488 commits, about 135 open issues and 44 open PRs) and MIT-licensed, but explicitly in-development 0.1.x software usable only from Julia.",
+  "sources_read": [
+    "https://github.com/JuliaGeo/GeometryOps.jl",
+    "https://raw.githubusercontent.com/JuliaGeo/GeometryOps.jl/HEAD/README.md",
+    "https://raw.githubusercontent.com/JuliaGeo/GeometryOps.jl/HEAD/Project.toml",
+    "https://raw.githubusercontent.com/JuliaGeo/GeometryOps.jl/HEAD/src/GeometryOps.jl",
+    "https://raw.githubusercontent.com/JuliaGeo/GeometryOps.jl/HEAD/src/types.jl",
+    "https://raw.githubusercontent.com/JuliaGeo/GeometryOps.jl/HEAD/src/methods/clipping/intersection.jl",
+    "https://raw.githubusercontent.com/JuliaGeo/GeometryOps.jl/HEAD/src/methods/clipping/clipping_processor.jl",
+    "https://raw.githubusercontent.com/JuliaGeo/GeometryOps.jl/HEAD/src/methods/clipping/overlayng/api.jl",
+    "https://raw.githubusercontent.com/JuliaGeo/GeometryOps.jl/HEAD/src/methods/distance.jl",
+    "https://raw.githubusercontent.com/JuliaGeo/GeometryOps.jl/HEAD/src/methods/geom_relations/intersects.jl",
+    "https://raw.githubusercontent.com/JuliaGeo/GeometryOps.jl/HEAD/src/methods/buffer.jl",
+    "https://raw.githubusercontent.com/JuliaGeo/GeometryOps.jl/HEAD/GeometryOpsCore/src/keyword_docs.jl",
+    "https://github.com/JuliaGeo/GeometryOps.jl/tree/main/benchmarks",
+    "https://raw.githubusercontent.com/JuliaGeo/GeometryOps.jl/HEAD/benchmarks/benchmarks.jl",
+    "https://raw.githubusercontent.com/JuliaGeo/GeometryOps.jl/HEAD/benchmarks/overlayng_realdata.jl",
+    "https://raw.githubusercontent.com/JuliaGeo/GeometryOps.jl/HEAD/benchmarks/relateng_realdata.jl",
+    "https://github.com/JuliaGeo/GeometryOps.jl/tree/main/ext",
+    "https://raw.githubusercontent.com/JuliaGeo/GeometryOps.jl/HEAD/ext/GeometryOpsTGGeometryExt/GeometryOpsTGGeometryExt.jl",
+    "https://raw.githubusercontent.com/JuliaGeo/GeometryOps.jl/HEAD/ext/GeometryOpsLibGEOSExt/GeometryOpsLibGEOSExt.jl",
+    "https://github.com/JuliaGeo/GeometryOps.jl/issues?q=is%3Aissue+is%3Aopen+label%3Abug",
+    "https://github.com/JuliaGeo/GeometryOps.jl/issues/129",
+    "https://raw.githubusercontent.com/kadyb/vector-benchmark/HEAD/timings.csv",
+    "https://raw.githubusercontent.com/kadyb/vector-benchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/kadyb/vector-benchmark/HEAD/geometryops/distance.jl",
+    "https://raw.githubusercontent.com/kadyb/vector-benchmark/HEAD/geometryops/intersects.jl",
+    "https://raw.githubusercontent.com/kadyb/vector-benchmark/HEAD/geometryops/sample.jl",
+    "https://raw.githubusercontent.com/kadyb/vector-benchmark/HEAD/geometryops/buffer.jl",
+    "https://raw.githubusercontent.com/kadyb/vector-benchmark/HEAD/geopandas/distance.py",
+    "https://raw.githubusercontent.com/kadyb/vector-benchmark/HEAD/geopandas/intersects.py",
+    "https://raw.githubusercontent.com/kadyb/vector-benchmark/HEAD/geopandas/sample.py"
+  ],
+  "confidence": 0.8
+}

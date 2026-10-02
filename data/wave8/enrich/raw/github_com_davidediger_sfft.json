@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/davidediger/sfft",
+  "one_liner": "ETH Zurich's SSE-optimized C++ build of MIT's sparse FFT (sFFT v1-v3) for k-sparse spectra; no published win over FFTW.",
+  "what_it_does": "Computes the DFT of a length-n signal whose spectrum has only k significant frequencies, returning those k coefficients instead of a full dense transform. The API is FFTW-like but not FFTW-compatible: sfft_make_plan(n, k, version, fftw_flag), sfft_exec(plan, in, out) and an OpenMP sfft_exec_many for batches, with inputs allocated by sfft_malloc (16-byte aligned). In this GitHub import the public header was changed so out is a dense complex_t array of length n (zeroed on every call), while the bundled usage docs still describe an std::unordered_map output.",
+  "how_it_is_fast": "The sFFT algorithms (Hassanieh, Indyk, Katabi, Price) permute the spectrum pseudo-randomly, apply flat-window (Gaussian/Dolph-Chebyshev) filters to hash frequencies into B buckets, run small FFTW transforms on the buckets, and then locate and estimate the large coefficients by voting over several loops; v3 does this in O(k log n) for exactly sparse signals. Schumacher's 2013 ETH thesis added a plan/execute split, SSE2 intrinsics for the filter and permutation loops (about 140 _mm_ calls in the v3 source), batched in-place FFTW calls, an interleaved data layout, fixed loop counts in v3 and optional Intel IPP vector math.",
+  "when_to_use": [
+    "Exactly sparse, noise-free spectra (v3) where n is large (the tuned tables go up to 2^24 points) and k is tiny relative to n, for example k=50 at n=4,194,304.",
+    "Many same-size sparse transforms that can share one plan and run in parallel through sfft_exec_many on x86 with OpenMP.",
+    "Research or algorithm comparison where you need a tuned reference sFFT implementation rather than the original MIT code.",
+    "Noisy signals only if your (n, k) is one of the 20 pairs the usage docs list for v1/v2 (n = 2^13..2^24 with k=50, or n=4,194,304 with k from 50 to 4,000)."
+  ],
+  "when_not_to_use": [
+    "Dense or moderately sparse spectra: it is not a general FFT, and the README says it is 'NOT intended to be used as a drop-in replacement for the FFT library of your choice'.",
+    "Any setting that needs a demonstrated speedup: the repo has no FFTW comparison, and the only figures seen (search snippets of the thesis) suggest parity with FFTW at large n, not a clear win.",
+    "Noisy signals with v3, or v1/v2 with an (n, k) outside the tuned table: parameters fall back to defaults and n is silently floored to a power of two.",
+    "Non-x86 targets, Windows or MSVC: SSE intrinsics are mandatory, intrinsics.h errors out on compilers other than GCC/ICC, and the docs say it was tested only on Linux with GCC 4.4/4.7 and ICC 13+.",
+    "Production or closed-source code: experimental, abandoned since 2015, open build-failure issues, and GPL-2.0-or-later."
+  ],
+  "integration": {
+    "form": "static lib + shared lib (libsfft.a / libsfft.so, waf build); optional Python ctypes wrapper",
+    "dependencies": "FFTW 3, OpenMP (libgomp), libm, librt, Intel IPP by default (--without-ipp disables it); the waf configure step also checks for valgrind even without --develop",
+    "min_toolchain": "Documented for GCC 4.4/4.7 and Intel C++ 13+ (ICC 12 does not work); uses std::tr1::unordered_map and C99 'double complex' through <complex.h>, so modern C++11+ default modes may fail (open issue #3: 'complex_t has not been declared')",
+    "platforms": "x86/x86-64 with SSE2 (built with -march=native -ffast-math by default); Linux only tested",
+    "thread_safety": "sfft_exec_many parallelizes with OpenMP over per-thread buffers made at plan time; the docs warn the program will crash if the OpenMP thread count differs between sfft_make_plan and sfft_exec_many. v1/v2 behavior is controlled by process-global flags (ALGORITHM1, WITH_COMB) set at plan time, so mixing v1 and v2 plans in one process is unsafe.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "sfft_exec in this repo writes a dense length-n output array and zeroes all n entries on every call, an O(n) memory pass that undercuts the sublinear point of v3; the docs/usage.rst still describe an unordered_map output, so docs and header disagree.",
+    "sfft_v1_make_plan sets the global WITH_COMB=false and sfft_v2_make_plan sets it true, but sfft_v1 execution does not reset it, so creating a v2 plan after a v1 plan changes how the v1 plan runs.",
+    "Default build flags are -O3 -ffast-math -march=native, so binaries are not portable to older CPUs and IEEE semantics are relaxed.",
+    "Inputs must come from sfft_malloc (16-byte aligned _mm_malloc) because the SSE kernels use aligned loads."
+  ],
+  "pick_this_over_siblings_when": "Pick it over MPSFT only when you specifically need the classic MIT sFFT v1-v3 algorithms on power-of-two sizes; MPSFT publishes timings against FFTW (19.4 ms vs 225.3 ms at N about 2^22, S=64) and handles prime sizes. For anything dense, FFTW, PocketFFT or KFR remain the right choice; Auto-MPFT covers the partial-transform case.",
+  "verified_claims_summary": "No benchmark exists in the repository: README.txt, CHANGELOG.txt and doc/*.rst give no numbers, and the --develop tools (sfft-timing, sfft-timing_many, sfft-instruction_count) time or count only the SFFT call with no FFTW harness. Any faster-than-FFTW claim rests on the unopened Schumacher 2013 ETH thesis and Schumacher/Pueschel SiPS 2014 paper, whose search snippets reportedly show 2-5x over the MIT reference sFFT and roughly FFTW parity at large n.",
+  "status_note": "Abandoned: a 2015 GitHub import (12 commits, last 2015-06-03) of the 2013 spiral.net 0.1.0 release plus a BSD-licensed Python ctypes wrapper; the library itself is GPL-2.0-or-later, and three issues about build errors, Windows and cross-compiling are open without replies.",
+  "sources_read": [
+    "https://github.com/davidediger/sfft",
+    "https://github.com/davidediger/sfft/commits/master",
+    "https://github.com/davidediger/sfft/issues?q=is%3Aissue",
+    "https://github.com/davidediger/sfft/issues/3",
+    "https://github.com/davidediger/sfft/tree/master/python",
+    "https://raw.githubusercontent.com/davidediger/sfft/HEAD/README.txt",
+    "https://raw.githubusercontent.com/davidediger/sfft/HEAD/CHANGELOG.txt",
+    "https://raw.githubusercontent.com/davidediger/sfft/HEAD/COPYING.txt",
+    "https://raw.githubusercontent.com/davidediger/sfft/HEAD/AUTHORS.txt",
+    "https://raw.githubusercontent.com/davidediger/sfft/HEAD/doc/introduction.rst",
+    "https://raw.githubusercontent.com/davidediger/sfft/HEAD/doc/usage.rst",
+    "https://raw.githubusercontent.com/davidediger/sfft/HEAD/doc/installation.rst",
+    "https://raw.githubusercontent.com/davidediger/sfft/HEAD/doc/development.rst",
+    "https://raw.githubusercontent.com/davidediger/sfft/HEAD/doc/index.rst",
+    "https://raw.githubusercontent.com/davidediger/sfft/HEAD/src/sfft.h",
+    "https://raw.githubusercontent.com/davidediger/sfft/HEAD/src/sfft.cc",
+    "https://raw.githubusercontent.com/davidediger/sfft/HEAD/src/fftw.cc",
+    "https://raw.githubusercontent.com/davidediger/sfft/HEAD/src/fft.h",
+    "https://raw.githubusercontent.com/davidediger/sfft/HEAD/src/intrinsics.h",
+    "https://raw.githubusercontent.com/davidediger/sfft/HEAD/src/computefourier-3.0.cc",
+    "https://raw.githubusercontent.com/davidediger/sfft/HEAD/src/computefourier-1.0-2.0.cc",
+    "https://raw.githubusercontent.com/davidediger/sfft/HEAD/src/parameters.cc",
+    "https://raw.githubusercontent.com/davidediger/sfft/HEAD/src/utils.cc",
+    "https://raw.githubusercontent.com/davidediger/sfft/HEAD/wscript",
+    "https://raw.githubusercontent.com/davidediger/sfft/HEAD/configure"
+  ],
+  "confidence": 0.7
+}
