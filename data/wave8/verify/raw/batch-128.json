@@ -1,0 +1,81 @@
+[
+  {
+    "id": "https://github.com/sandyresearch/chipmunk",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "The README gives first-party layer speedups (9.3x vs FlashAttention3, 2.5x vs cuBLAS / torch-compiled nn.Sequential, also in assets/images/speed.png) and end-to-end latency tables against torch.compile'd reference repos on H100. No script behind the layer microbenchmarks is in the repo: src/chipmunk/tests/test_csp_attn.py has only commented-out do_bench timing against torch SDPA. Sparsity level, shapes and host CPU are not given for the layer numbers. The papers are workshop papers (ES-FoMo at ICML 2025, YPS at MLSys 2025), not proceedings, so C.",
+    "corrections": {
+      "claimed_speedup": "README 'At a glance': Column Sparse Attention layer ~9.3x faster than the FlashAttention3 baseline; Column Sparse MLP layer ~2.5x faster than the cuBLAS baseline (the Benchmarks section says the MLP baseline is torch-compiled nn.Sequential). End-to-end on 1x H100 unless noted: HunyuanVideo 720x1280x129 Chipmunk alone 1030 s -> 477 s (2.16x); Chipmunk + step cache 277 s (3.72x), 412 s on 8x H100 (2.50x); step caching (TeaCache) alone 279 s (3.69x). Wan2.1 Chipmunk + STA 1.56x; Chipmunk-73% + STA + step cache 2.67x (TeaCache alone 2.0x). FLUX.1-dev 768x1280 Chipmunk alone 6.60 s -> 4.90 s (1.41x), Chipmunk + step cache 2.56x; the at-a-glance line says ~1.6x.",
+      "compiler_and_flags": "nvcc via torch CUDAExtension (setup.py): -O3 --use_fast_math -std=c++20 -lineinfo -forward-unknown-to-host-compiler -DKITTENS_HOPPER -arch=sm_90a; host C++ -std=c++20 -O3. CUDA Toolkit >= 12.4 (12.8 recommended, conda cuda 12.8.0); baselines torch.compile'd",
+      "caveats": "This is a lossy, approximate method: it caches activations across diffusion steps and recomputes only sparse deltas, so quality scores move (for example HunyuanVideo VBench total 83.24 -> 82.94). The headline 3.7x on HunyuanVideo is almost all step caching: TeaCache alone reaches 3.69x and Chipmunk + step cache 3.72x. Chipmunk's own contribution is 2.16x on HunyuanVideo and 1.41x on FLUX. The 9.3x attention and 2.5x MLP layer speedups compare sparse kernels against dense baselines at sparsity levels the README does not give. No microbenchmark script for them is in the repo; the only timing code is commented out and targets torch SDPA, not FA3. Only workshop papers back it (ES-FoMo at ICML 2025, YPS at MLSys 2025). It is not a drop-in exact kernel replacement, the CUDA kernels need Hopper (Triton ports cover Ampere), and host CPU is not stated."
+    },
+    "notes": "README numbers match the record. The record's 'nvcc flags not stated' was wrong: setup.py gives them. Recordable shortcoming: the headline end-to-end gain mostly comes from step caching (TeaCache alone 3.69x vs Chipmunk + cache 3.72x), and the method is lossy. Metadata on github.com: MIT, 114 stars, 3 forks, not a fork, 246 commits, last commit 2025-09-08 (stale is right, just over 12 months).",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/sandyresearch/chipmunk/HEAD/README.md",
+      "https://raw.githubusercontent.com/sandyresearch/chipmunk/HEAD/LICENSE",
+      "https://raw.githubusercontent.com/sandyresearch/chipmunk/HEAD/csrc/README.md",
+      "https://raw.githubusercontent.com/sandyresearch/chipmunk/HEAD/setup.py",
+      "https://raw.githubusercontent.com/sandyresearch/chipmunk/HEAD/src/chipmunk/tests/test_csp_attn.py",
+      "https://raw.githubusercontent.com/sandyresearch/chipmunk/HEAD/assets/images/speed.png",
+      "https://github.com/sandyresearch/chipmunk",
+      "https://github.com/sandyresearch/chipmunk/commits",
+      "https://github.com/sandyresearch/chipmunk/tree/master/src/chipmunk",
+      "https://github.com/sandyresearch/chipmunk/tree/master/src/chipmunk/tests"
+    ]
+  },
+  {
+    "id": "https://github.com/jarcities/codejenn",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": false,
+    "evidence_tier_final": "C",
+    "tier_reason": "The benchmark page (tutorials/06_speed_test/readme.md) describes a CodeJeNN-vs-Keras eager/JIT harness. The harness is public (mlp/ and cnn/ run.sh, test.py, test.cpp), the compiler and flags are in run.sh, and the hardware (M1 Pro, one core) is named. But the page publishes no numbers. The timings exist only in arXiv 2607.02746, which is blocked here and seen through search snippets, so per the snippet-only rule the tier stays C.",
+    "corrections": {
+      "claimed_speedup": "Snippet only (arXiv 2607.02746 not opened; WebSearch summary): MLP, 10,000 samples in 0.48 s with generated C++ vs 12.01 s for Keras with the TensorFlow backend (about 25x) and 1.21 s for TensorFlow JIT (about 2.5x). CNN: 1.05 s vs 19.14 s eager (about 18x) and 2.17 s JIT (about 2.1x). The abstract-level summary says '2-38x faster inference than Keras backends'. The search agent's other summary (nearly 38x with the PyTorch backend, about 9x vs PyTorch JIT) was not confirmed by the snippet seen here. The repo itself publishes no numbers.",
+      "compiler_and_flags": "g++-15 (Homebrew GCC, not Apple clang) with -O3 -march=native -ffast-math -fopenmp, OMP_NUM_THREADS=1, linked against conda HDF5 (tutorials/06_speed_test/mlp/run.sh and cnn/run.sh); llvm-openmp from conda-forge",
+      "caveats": "Speedup figures come only from search snippets of arXiv 2607.02746, which could not be opened. Two snippet summaries disagree on the CNN figures (about 18x vs about 38x). The repo's speed test reproduces the setup but publishes no numbers. The baseline is Keras eager mode on tiny models, single thread, which is dominated by Python dispatch overhead, so the comparison favors generated code; against JIT modes the gain is about 2-2.5x per the snippet. The generated C++ is built with -ffast-math and -march=native. The tutorial readme says the CNN uses the PyTorch backend and the MLP TensorFlow, but the checked-in test.py files set the opposite (mlp: KERAS_BACKEND=torch; cnn: tensorflow), and cnn/run.sh has the Python and training steps commented out. License is the NRL Open License Agreement: use and modify allowed, redistribution only under that agreement, irrevocable grant-back of modifications to the US Government, and the Government may terminate it. It is not OSI-approved, so the code is reference only. A single commit ('final draft for paper') makes up the history."
+    },
+    "notes": "The benchmark page has no numbers. I confirmed the MLP/CNN timings through one WebSearch snippet. The arXiv html/abs and pith.science pages are egress-blocked, so the speedup stays snippet-level. Recordable shortcomings: the backend labels in the readme contradict test.py, the baseline is Keras eager (Python overhead) and the gain vs JIT is only about 2-2.5x, and the license is non-OSI. Metadata on github.com: license.txt (NRL Open License), 1 star, 0 forks, not a fork, 1 commit on 2026-06-22 (active).",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/jarcities/codejenn/HEAD/tutorials/06_speed_test/readme.md",
+      "https://raw.githubusercontent.com/jarcities/codejenn/HEAD/readme.md",
+      "https://raw.githubusercontent.com/jarcities/codejenn/HEAD/license.txt",
+      "https://raw.githubusercontent.com/jarcities/codejenn/HEAD/tutorials/06_speed_test/mlp/run.sh",
+      "https://raw.githubusercontent.com/jarcities/codejenn/HEAD/tutorials/06_speed_test/cnn/run.sh",
+      "https://raw.githubusercontent.com/jarcities/codejenn/HEAD/tutorials/06_speed_test/mlp/test.py",
+      "https://raw.githubusercontent.com/jarcities/codejenn/HEAD/tutorials/06_speed_test/cnn/test.py",
+      "https://github.com/jarcities/codejenn",
+      "https://github.com/jarcities/codejenn/commits",
+      "https://github.com/jarcities/codejenn/tree/main/tutorials/06_speed_test"
+    ]
+  },
+  {
+    "id": "https://github.com/tugbars/flash-attention-ptx-cuda",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "docs/vllm-comparison.md gives first-party per-shape latency deltas against vLLM 0.23.0's FA2 (flash_attn_varlen_func) on an RTX 5080, with a same-process, interleaved, output-cross-checked methodology. The harness that runs vLLM (fa_sweep2.py) is not in the repo: scripts/ has only visualize.py and data, and src/bench.cu times only this kernel. Host CPU is also not stated, so it cannot be A; C.",
+    "corrections": {
+      "claimed_speedup": "docs/vllm-comparison.md (latency-based, vs vLLM 0.23.0 FA2, causal fp16, RTX 5080): 'beats or matches' at 23 of 34 shapes, but it is strictly faster at 17 of 34 (derived from page data). The 23 also counts losses of -0.2% to -1.9% as matches. D=64 H=12 B=1: +18.5% (S=512), +31.9% (1024), +8.9% (2048), +2.1% (4096). D=128 H=12 B=1: +16.6% (512), +12.6% (1024), +3.8% (2048). Losses up to -4.8% (B=8 S=4096 D=64) and -4.5% (B=8 S=8192 D=128); D=128 H=32 wins only at B=1 S=2048 (+0.7%). Peak ~202 TFLOPS vs vLLM ~212. README end-to-end Qwen2.5-1.5B vs vLLM 0.23 (FLASH_ATTN backend, CUDA graphs on): decode B=1 4.70 vs 5.12 ms/token, decode B=8 5.28 vs 5.43 ms/step, prefill 128 tokens B=1 7.1-11 ms vs 10.4 ms, B=8 31.2 vs 32.1 ms.",
+      "compiler_and_flags": "CMake Release: CMAKE_CUDA_FLAGS --use_fast_math -lineinfo, CMAKE_CUDA_FLAGS_RELEASE -O3 -DNDEBUG, CXX -O3 -DNDEBUG, C++17, CMAKE_CUDA_ARCHITECTURES 80;86;89;90;120 (CMakeLists.txt); CUDA Toolkit 12.0+ (tested with 13.1)",
+      "hardware": "NVIDIA RTX 5080 (84 SMs, sm_120, 234.8 TFLOPS FP16 theoretical); the vLLM comparison ran with both kernels in one WSL2 process; host CPU not stated",
+      "license": "MIT (stated only in the README's License section; no LICENSE file in the repository, raw LICENSE returns 404)",
+      "caveats": "Strictly faster at only 17 of 34 shapes; the '23 of 34' headline counts small losses as matches. It wins mainly at B=1 and short-to-mid context and loses up to about 5% at the largest batch x context shapes. The baseline vLLM FA2 wheel ships only sm_80 SASS plus PTX, so on sm_120 it runs driver-JIT code not tuned for this GPU. FA3 does not run on sm_120 and there is no cuDNN comparison. The same-process vLLM harness (fa_sweep2.py) lives in the author's WSL environment and is not in the repo, so the comparison cannot be reproduced from the repo alone; the in-repo benchmark is src/bench.cu. Single GPU, first-party, host CPU not stated. MIT is stated only in the README, with no LICENSE file. The first page of commit history goes back only to 2026-06-25."
+    },
+    "notes": "All per-shape numbers and the end-to-end decode figures match the vLLM comparison doc and the README. Recordable shortcoming: the '23 of 34' headline is 17 strict wins plus 6 losses under 2%, and the baseline is FA2 JIT-compiled from sm_80 PTX. Metadata on github.com: MIT per README only (no LICENSE file), 12 stars, 2 forks, not a fork, 76 commits on dev/FlashAtt, last commit 2026-07-03 (active).",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/Tugbars/Flash-Attention-PTX-CUDA/HEAD/docs/vllm-comparison.md",
+      "https://raw.githubusercontent.com/Tugbars/Flash-Attention-PTX-CUDA/HEAD/README.md",
+      "https://raw.githubusercontent.com/Tugbars/Flash-Attention-PTX-CUDA/HEAD/CMakeLists.txt",
+      "https://github.com/Tugbars/Flash-Attention-PTX-CUDA",
+      "https://github.com/Tugbars/Flash-Attention-PTX-CUDA/commits",
+      "https://github.com/Tugbars/Flash-Attention-PTX-CUDA/tree/dev/FlashAtt/scripts"
+    ]
+  }
+]
