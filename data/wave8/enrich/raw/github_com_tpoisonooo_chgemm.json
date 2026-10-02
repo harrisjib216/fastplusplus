@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/tpoisonooo/chgemm",
+  "one_liner": "Symmetric int8 x int8 to int32 GEMM for ARMv8 (aarch64) NEON, hand-written assembly; reported above gemmlowp on RK3399.",
+  "what_it_does": "chgemm multiplies two row-major int8 matrices with values in [-127, 127] and writes an int32 result (C = A*B, no alpha/beta), aimed at quantised deep-learning inference such as 1x1 convolution. It is not a library with a stable API: you copy the assembly kernels plus the driver pattern in MMult_4x8_21.c (MY_MMult: pack A, pack B, loop the 4-row micro-kernel, then 2- and 1-row tails) into your own project. Requantising kernel variants (int8kernel_m*_requant.S) that convert to int8 with per-row float scales and an optional bias also exist but are not built by the makefile.",
+  "how_it_is_fast": "GotoBLAS-style packing: reorder_a (assembly) and reorder_b (a C header in MMult_4x8_22; MMult_4x8_21 transposes B and reuses reorder_a) copy A and B into panel order, then int8kernel_m4 computes 4-row by 4-column tiles with 16 int32 accumulator registers (v8-v23), with int8kernel_m2/m1 for leftover rows and K split into 8/4/2/1 remainders. The inner loop uses the SMULL/SMLAL/SADALP pattern: SMULL multiplies int8 pairs into int16, SMLAL adds a second int8 product into the same int16 lane, and SADALP pairwise-widens into the int32 accumulators, which halves the widening work. It uses no SDOT dot-product instructions (the m4 kernel has only smull/smlal/saddlp/sadalp/addp arithmetic), so it runs on ARMv8.0 cores like the RK3399's.",
+  "when_to_use": [
+    "Int8 inference GEMM or 1x1 convolution on ARMv8.0 aarch64 cores without dot-product instructions (RK3399-class boards, Cortex-A72 servers such as the AWS A72 the README mentions)",
+    "Symmetric quantisation is already in use, so weights and activations are in [-127, 127] and an int32 (or requantised int8) output is wanted",
+    "Single-threaded row-major workloads where you can pre-pack the weight matrix once, since the pack step is exposed as a separate call",
+    "As a compact, readable reference for the SMULL/SMLAL/SADALP int8 micro-kernel when writing your own"
+  ],
+  "when_not_to_use": [
+    "Cores with SDOT/I8MM (ARMv8.2 and later): these kernels do not use them, so kernels that do will be faster",
+    "Asymmetric uint8 quantisation with zero points (the gemmlowp/TFLite convention) or data that contains -128",
+    "Anything that needs a BLAS-style interface: no alpha/beta, transposes, leading dimensions, column-major input or float output; multi-threading is not provided (issue #6, 'can it support multi-core', open since July 2022 with no reply)",
+    "x86, 32-bit ARM, Windows or Apple aarch64: the .S kernels are wrapped in '#if __aarch64__' and '#ifndef __APPLE__', and the C driver stops with '#error only support arm neon' without NEON",
+    "Projects that need a maintained dependency or a clear license file: abandoned since June 2020 (13 commits), and BSD-3-Clause is stated only by a README badge"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (C plus GNU-syntax aarch64 assembly); OpenMP only if you build MMult_4x8_22.c with -fopenmp",
+    "min_toolchain": "not documented; the makefile uses gcc -O3 with C99-style declarations in for loops and .S files assembled by gcc; an Android Studio sample (android/MyApplication) is included",
+    "platforms": "aarch64 Linux and Android with NEON only; not Apple, not armv7, not x86",
+    "thread_safety": "not documented; from the source, MY_MMult keeps no global state and allocates its own pack buffers on every call",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The [-127, 127] limit is a correctness requirement, not a recommendation: two int8 products are summed in an int16 lane before widening, and (-128)*(-128)*2 = 32768 overflows int16 silently.",
+    "The test driver's random_int8_matrix fills inputs with val % 3 (only 0, 1, 2), so the bundled correctness check never exercises negative values, extremes or the int16 overflow edge.",
+    "MY_MMult ignores lda and ldb (it packs as if A is m x k and B is k x n contiguous), passes n as the output stride, and mallocs, packs and frees both A and B on every call; the published timings include that packing.",
+    "The makefile's default NEW is MMult_4x8_22, which carries '#pragma omp parallel for num_threads(3)', but CFLAGS has no -fopenmp, so it runs single-threaded; adding -fopenmp silently switches it to exactly 3 threads. parameters.h defaults to a single 77x77x77 run with NREPEATS 1, so reproducing the README graph means editing it."
+  ],
+  "pick_this_over_siblings_when": "It is the only int8 CPU kernel among the catalogued blas-lapack entries (LibShalom, IAAT and BLASFEO target fp32/fp64 small GEMM, MuBLIS and MTGEMM-A target Apple fp32), so pick it only for symmetric int8 to int32 on pre-dot-product aarch64; for floating point use those siblings or OpenBLAS.",
+  "verified_claims_summary": "chgemm's README reports up to 18.6 GFLOPS (counting int8 multiply-adds) on one RK3399 core with gcc -O3, plotted against the 14.3 GFLOPS fp32 single-core peak rather than another library, and about 23 GFLOPS on one AWS Cortex-A72 core. The gemmlowp comparison is an approximate, unsourced 'about 12-14 GFLOPS' in the separate how-to-optimize-gemm README, so the roughly 1.3x-1.55x lead over gemmlowp is derived from page data, not from a measured gemmlowp run.",
+  "status_note": "Abandoned since 2020-06-07 (13 commits; the README's ncnn file link, src/layer/arm/gemm_symm_int8.h, now returns 404 on ncnn master), but it is a dozen small C and assembly files that are easy to vendor once you settle the license question (badge says BSD-3-Clause, no LICENSE file).",
+  "sources_read": [
+    "https://github.com/tpoisonooo/chgemm",
+    "https://github.com/tpoisonooo/chgemm/commits/master",
+    "https://github.com/tpoisonooo/chgemm/issues?q=is%3Aissue",
+    "https://github.com/tpoisonooo/chgemm/issues/5",
+    "https://raw.githubusercontent.com/tpoisonooo/chgemm/HEAD/README.md",
+    "https://raw.githubusercontent.com/tpoisonooo/chgemm/HEAD/makefile",
+    "https://raw.githubusercontent.com/tpoisonooo/chgemm/HEAD/MMult_4x8_21.c",
+    "https://raw.githubusercontent.com/tpoisonooo/chgemm/HEAD/MMult_4x8_22.c",
+    "https://raw.githubusercontent.com/tpoisonooo/chgemm/HEAD/parameters.h",
+    "https://raw.githubusercontent.com/tpoisonooo/chgemm/HEAD/public.h",
+    "https://raw.githubusercontent.com/tpoisonooo/chgemm/HEAD/test_MMult.c",
+    "https://raw.githubusercontent.com/tpoisonooo/chgemm/HEAD/REF_MMult.c",
+    "https://raw.githubusercontent.com/tpoisonooo/chgemm/HEAD/random_matrix.c",
+    "https://raw.githubusercontent.com/tpoisonooo/chgemm/HEAD/reorder_b.h",
+    "https://raw.githubusercontent.com/tpoisonooo/chgemm/HEAD/.travis.yml",
+    "https://raw.githubusercontent.com/tpoisonooo/chgemm/HEAD/int8kernel_m4.S",
+    "https://raw.githubusercontent.com/tpoisonooo/chgemm/HEAD/kernel_m4n4k16.S",
+    "https://raw.githubusercontent.com/tpoisonooo/how-to-optimize-gemm/HEAD/README.md",
+    "https://raw.githubusercontent.com/Tencent/ncnn/master/src/layer/arm/gemm_symm_int8.h"
+  ],
+  "confidence": 0.75
+}
