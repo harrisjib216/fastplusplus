@@ -3152,6 +3152,42 @@
     "id": "https://github.com/cmpute/dashu"
   },
   {
+    "name": "ECM-ELF (ECM stage 1, AVX-512 IFMA 8-curve batch backend)",
+    "repo_url": "https://github.com/AllogeneSSRD/ECM-ELF",
+    "language": "C/C++ (GitHub lists C as primary; the AVX-512 kernels are .cpp; CUDA and OpenCL backends also exist)",
+    "domain": "numerics-and-science",
+    "category": "big-integer-arbitrary-precision",
+    "baseline": "GMP-ECM 7.0.6 (ecm-zen3.exe, built on GMP, curve family -param 0); the same table also compares Prime95 v31.04b05 (GWNUM FFT)",
+    "baseline_in_list": false,
+    "metric": "latency",
+    "workload": "Elliptic-curve-method stage 1 only (B2=0 or B2=B1), Suyama sigma Montgomery curves, one thread on one physical core, on Mersenne numbers 2^k-1 (M127 to M19701), per-curve seconds; the SIMD backend runs 8 curves per batch (time divided by 8). Directly measured case: N = M4001 = 2^4001-1 at B1 = 1e5, 1e6 and 2e6.",
+    "claimed_speedup": "docs/ECM_Montgomery_STAGE1.md section 14.2, M4001, per curve: B1=1e5 0.596 s vs GMP-ECM 1.787 s (3.00x faster); B1=1e6 6.264 s vs 15.008 s (2.40x faster); B1=2e6 13.455 s vs about 30 s (scaled, about 2.2x). Section 14.5 size sweep at B1=1e6: M1277 0.979 s vs 2.484 s (2.54x), M2203 2.285 s vs 5.804 s (2.54x), M3001 4.137 s vs 9.586 s (2.32x), M3500 5.164 s vs 11.656 s (2.26x), M4001 6.290 s vs 14.624 s (2.32x); about 1.7x (fitted) at M5755 and M8527. Against Prime95: 32.7x at M127, 10.4x at M521, 3.94x at M1277 but 0.90x at M4001 and 0.17x at M19701 (fitted); the doc says the new code is worthwhile below about 3700 bits and Prime95's FFT is the better choice above about 6000 bits, with mixed results in between. Section 10.4 (earlier, before clocks were pinned), M1277 B1=1e6: 1.418 s vs 3.551 s per curve (2.50x).",
+    "evidence_tier": "A",
+    "benchmark_url": "https://raw.githubusercontent.com/AllogeneSSRD/ECM-ELF/HEAD/docs/ECM_Montgomery_STAGE1.md",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "MSVC Release build (build_vs18\\Release\\ecm.exe, MSVC /O2 per README); the two AVX-512 translation units src/cpu/simd_mont_ifma.cpp and simd_edwards.cpp get /arch:AVX512 (or -mavx512f -mavx512ifma -mavx512dq on GCC/Clang) in CMakeLists.txt. Commands are in section 14.1 and 14.4: echo (2^4001-1) | ecm.exe --mont --mont-backend simd --mont-threads 1 -gpucurves 8 --sigma 4242 <B1> 0, versus ecm-zen3.exe -param 0 -c 2 <B1> <B1>. The GMP-ECM baseline is a prebuilt multiarch Windows release (ecm-2025.10.28, --enable-asm-redc); its compiler and flags are not stated.",
+    "hardware": "AMD Ryzen AI 9 HX 370 (Strix Point, Zen 5 plus Zen 5c, 256-bit FPU datapath so 512-bit IFMA runs as 2 x 256-bit); clocks pinned at 3990 MHz on the Zen 5 cores (logical CPUs 0-7) and 2995 MHz on Zen 5c; Windows (exe paths). Single-thread numbers stated reproducible to about +-3%.",
+    "compared_against_cpp_std_directly": null,
+    "license": "GPL-3.0",
+    "usability": "copyable",
+    "last_commit": "2026-10-01",
+    "maintenance_status": "active",
+    "is_fork_of": null,
+    "stars_or_usage": "5 stars, 0 forks, 212 commits (github.com page)",
+    "has_code": true,
+    "tradeoffs": "Stage 1 only (stage 2 is handed to Prime95 or GMP-ECM through compatible .save files). The fast path needs AVX-512 IFMA hardware (explicit error otherwise; auto falls back to a slow scalar mpn backend). Gains come from 8-lane batches, a Mersenne fold domain for N = 2^k-1 (about 2x faster than general N per the README) and affine differential ladder; general N uses Montgomery CIOS. Cost grows about n^1.66 in word count, so Prime95's FFT overtakes it above about 3700 bits. GPL-3.0 copyleft. Windows-first build; Chinese-language README (README.en.md exists). Renamed from OpenCL-ECM.",
+    "caveats": "Strong methodology but one author, one laptop-class machine with hand-pinned clocks, mostly Mersenne inputs (special form), and a prebuilt third-party GMP-ECM binary without stated compile flags; the doc does not say whether GMP-ECM's special-form handling for 2^k-1 was active. Only the M4001 rows (section 14.2) and the section 10.4 rows are direct same-machine measurements; a footnote under the section 14.5 table says the own-implementation points for 1277 to 4001 bits use an extrapolation from the author's fit (about 2.98e-7*k^2 + 3.79e-4*k seconds) and its wording does not make clear which rows are direct measurements, M5755 and larger are fitted for all columns, and the Prime95 column is a FFT-length model calibrated on one measured M3001 point (5.65 s) plus the M4001 run at B1=1e7. The 'about 30 s' GMP-ECM figure at B1=2e6 is scaled, not measured. The doc itself notes Prime95 was running during the measurements and that the section 10.4 numbers predate clock pinning. The repo changes daily (the 2026-10-01 commits are on the GPU and stage 2 paths; one says a mathematically wrong optimisation was caught), and no bug in the CPU IFMA path turned up, but the numbers are dated 2026-09-24 and were not re-run against HEAD. The scalar GMP mpn backend of this repo is only a cross-check (about 5.6 s/curve at M1277, B1=1e5 versus 0.135 s/curve for SIMD in the same doc), so there is no win against raw GMP mpn arithmetic to claim. The GPU backends (CUDA CGBN, OpenCL) are compared with CGBN, not GMP, and are not covered here. Evidence-tier call (A) rests on public code, stated CPU, MSVC /O2 and /arch:AVX512, and exact commands; a verifier may lower it to C because the baseline binary's flags are unknown.",
+    "found_via": [
+      "seed-record pass: https://github.com/AllogeneSSRD/ECM-ELF (README via raw.githubusercontent.com, docs/ECM_Montgomery_STAGE1.md sections 9.4, 10.4, 13, 14, CMakeLists.txt, github.com repo and commits pages)"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.55,
+    "assignment_ids": [
+      "w8-seed-g"
+    ],
+    "id": "https://github.com/allogenessrd/ecm-elf"
+  },
+  {
     "name": "libzahl",
     "repo_url": "https://github.com/maandree/libzahl",
     "language": "C",
@@ -4290,6 +4326,78 @@
     "id": "https://github.com/nzh63/unsigned-bigint"
   },
   {
+    "name": "VROOM (RNS Montgomery arithmetic with AVX-512 IFMA, BLS12-381 and BN254)",
+    "repo_url": "https://github.com/SimonLangowski/VROOM",
+    "language": "C++",
+    "domain": "numerics-and-science",
+    "category": "big-integer-arbitrary-precision",
+    "baseline": "BLST (supranational/blst at 8065152, a modified vendored copy in blst/ with benchmark wrappers); GMP is used only for parameter generation and validation, not timed",
+    "baseline_in_list": false,
+    "metric": "latency",
+    "workload": "Google Benchmark ns per operation for BLS12-381 field and curve operations (Fp mul, Fp2, Fp12, G1/G2 add, double, scalar multiplication, Miller loop, final exponentiation, full pairing), VROOM RNS code against BLST on the same machine; ratio = blst_ns / rns_ns.",
+    "claimed_speedup": "results/bench_bls12_381_vs_blst.txt, MatrixNoK (the production configuration), VROOM ns vs BLST ns: full pairing 128145.9 vs 500035.1 (ratio 3.902); Miller loop 49888.2 vs 215023.1 (4.310); final exponentiation 82491.2 vs 285421.3 (3.460); Fp12 mul 257.1 vs 1563.4 (6.082); Fp12 sqr 224.4 vs 1126.2 (5.019); G1 add 154.2 vs 585.8 (3.799); G1 scalar mult (GLV) 30647.5 vs 75949.8 (2.478); G2 scalar mult (GLS) 41245.7 vs 146934.4 (3.562); Fp mul 21.8 vs 29.0 (1.332 for a single mul, up to 2.272 amortized in a batch of 10). The slower row: Fp12 inversion with the BLST inverter 7599.8 vs 5560.4 (0.732); the RNS-assisted inversion reaches 3406.7 (1.632). The plain Matrix variant gives pairing 151066.7 vs 500035.1 (3.310).",
+    "evidence_tier": "C",
+    "benchmark_url": "https://raw.githubusercontent.com/SimonLangowski/VROOM/HEAD/results/bench_bls12_381_vs_blst.txt",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "clang++ 21.1.0 (LLVM 21 prebuilt, llvm-project 3623fe6) with Google Benchmark at 04ccbd8 (v1.9.4-89), --benchmark_min_time 0.5s (scripts/reproduce_cpu_bench.sh). VROOM benchmark: -std=c++20 -O3 -march=native -mavx512ifma -D__ADX__ (src/Makefile CXXFLAGS_BENCH). BLST baseline: blst/Makefile CFLAGS -O2 -fno-builtin -fPIC -D__x86_64__ (+ -D__ADX__ when /proc/cpuinfo shows adx), CC auto-detected as clang if present, field arithmetic from assembly_small.S.",
+    "hardware": "AWS c7i.metal-24xl, Intel Xeon Platinum 8488C (Sapphire Rapids), Amazon Linux 2023 (kernel 6.1.x); raw JSON committed (results/bench_bls12_381.json, bench_blst_complete.json, run dated 2026-06-17, Google Benchmark reports 96 CPUs). Thread count of the benchmarks not stated; they look single-threaded.",
+    "compared_against_cpp_std_directly": null,
+    "license": "MIT",
+    "usability": "copyable",
+    "last_commit": "2026-08-28",
+    "maintenance_status": "active",
+    "is_fork_of": null,
+    "stars_or_usage": "5 stars, 1 fork; research artifact (README refers to paper numbers, a camera-ready update and artifact evaluation)",
+    "has_code": true,
+    "tradeoffs": "Needs AVX-512 IFMA hardware (a slow integer fallback exists for correctness only) and, per the README, clang 21.x for paper-comparable timings, because GCC and older clang are significantly slower on the IFMA path. Gains are largest on batched or compound operations (Fp12, pairing, scalar mult); a single Fp multiply is only 1.33x. Ships parameter sets for BLS12-381 and BN254 only; the MatrixNoK parameter search is exponential in the number of radix words, so it suits small moduli. README says: research-grade, not vetted or audited for security. The blst/ subtree stays Apache-2.0; baselines/ vendors arkworks, zkcrypto, zksync and gnark with their own licenses.",
+    "caveats": "Tier capped at C under the project rule for numbers measured on code later fixed for correctness bugs: the committed results and the camera-ready README are from 2026-06-17, while commits of 2026-08-14 (2785394, 145f864) and 2026-08-28 (0131695) fixed the radix-to-RNS conversion (floor instead of ceiling, reported by an outside reviewer) and the MatrixNoK negative-input conversion; results/ was not touched afterwards. The commit diffs change precomputed constants and add a rounding mode, not operation counts, so a verifier may judge tier A defensible (public code, committed raw JSON, stated CPU, compiler and flags, artifact-evaluated). The same-machine pair is clean, but BLST is built at -O2 with assembly field arithmetic while VROOM uses -O3 -march=native; the pairing figure uses BLST's own inverter inside the RNS pairing (BM_Pairing_RNS_BLST_Inverter); amortized batch rows exclude any batching cost on the caller side; BLST is a modified vendored copy. The paper 'VROOM: Accelerating (Almost All) Number-Theoretic Cryptography' (IACR ePrint 2026/393) appeared in a WebSearch result but eprint.iacr.org was blocked by the egress proxy, so the paper's own numbers and venue were not opened. The task lead's baselines (GMP, MPFR) are not what this repo benchmarks against; BLST is the relevant incumbent for BLS12-381.",
+    "found_via": [
+      "seed-record pass: https://github.com/SimonLangowski/VROOM (README, ARTIFACT.md, scripts/reproduce_cpu_bench.sh, src/Makefile, blst/Makefile, results/ files, commits and commit pages 2785394, 145f864, 0131695) plus WebSearch 'VROOM RNS Montgomery multiplication AVX512 IFMA BLS12-381 pairing faster than BLST paper Langowski'"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.75,
+    "assignment_ids": [
+      "w8-seed-g"
+    ],
+    "id": "https://github.com/simonlangowski/vroom"
+  },
+  {
+    "name": "intx (fixed-size 256/512-bit integers)",
+    "repo_url": "https://github.com/chfast/intx",
+    "language": "C++",
+    "domain": "numerics-and-science",
+    "category": "big-integer-arbitrary-precision",
+    "baseline": "GMP (low-level mpn_tdiv_qr and mpn_mul_n, called through the repo's own wrappers in test/utils/gmp.hpp)",
+    "baseline_in_list": true,
+    "metric": "latency",
+    "workload": "The repo's intx-bench (Google Benchmark, test/benchmarks/benchmarks.cpp) times uint256 and uint512 udivrem against gmp::udivrem (mpn_tdiv_qr) for divisors of 64, 128, 192 and 256 bits, and uint256 and uint512 multiplication against gmp::mul and gmp::mul_full (mpn_mul_n).",
+    "claimed_speedup": "None published. The benchmark harness that pits intx against GMP exists, but no result, ratio or table is committed or quoted in the README, CHANGELOG, the PRs and issues I opened (#99, #129, #147, #194, #267, #55, #291, #367) or any other page I could open. The only numbers on those pages compare intx with earlier intx (for example PR #99: 256-bit division about 40% faster, 512-bit about 10% slower, 'Time Old/New' 55146 -> 33118 for uint256/uint64).",
+    "evidence_tier": "D",
+    "benchmark_url": null,
+    "baseline_stdlib": [],
+    "compiler_and_flags": "Not stated for any GMP comparison. Build per README: cmake -DCMAKE_BUILD_TYPE=Release (CMake default for GCC/Clang Release is -O3 -DNDEBUG); intx-bench adds -falign-functions=32 on GCC/Clang (test/benchmarks/CMakeLists.txt); no -march flag there.",
+    "hardware": null,
+    "compared_against_cpp_std_directly": false,
+    "license": "Apache-2.0",
+    "usability": "copyable",
+    "last_commit": "2026-10-01",
+    "maintenance_status": "active",
+    "is_fork_of": null,
+    "stars_or_usage": "176 stars, 41 forks (github.com page); the task lead says it is used by Ethereum clients, which I could not confirm on an opened page (the ethereum/aleth issue 5720 only proposes replacing boost::multiprecision with intx and has no numbers).",
+    "has_code": true,
+    "tradeoffs": "Header-only C++20, allocation-free fixed-width types stored as arrays of uint64_t words (uint128, uint256, uint384, uint512 and any word count); no variable-size integers, so it is not a replacement for GMP mpz. Behaves like built-in unsigned types; division and modular helpers (addmod, mulmod, exp) target EVM and elliptic-curve use.",
+    "caveats": "Does not qualify as a speed claim yet: no published number against GMP, so tier D. The code to measure it is public (Apache-2.0, GMP linked via find_package(GMP)), so a later pass could run intx-bench and promote it. Counter-evidence for 128-bit: in a third-party harness (https://github.com/mikelik/int128-benchmark, README, GCC run, 20-core CPU at 4600 MHz, flags and CPU model not stated) intx::uint128 is slower than boost::multiprecision::uint128_t: add 16.8 ns vs 13.2 ns, multiply 15.2 ns vs 13.1 ns; that repo has no GMP benchmark. The repo's README, CHANGELOG (0.15.0 dated 2026-01-30) and docs carry no performance table; docs/benchmarks.md returned 404. WebSearch (1 query) found no published intx-vs-GMP numbers.",
+    "found_via": [
+      "seed-record pass: https://github.com/chfast/intx (README, CHANGELOG.md, test/benchmarks/CMakeLists.txt, benchmarks.cpp, bench_div.cpp, test/utils/gmp.hpp, PRs 99/129/147/194/267/367, issue 291, commits page) plus WebSearch 'intx chfast uint256 benchmark vs GMP Boost.Multiprecision division multiplication nanoseconds'"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.5,
+    "assignment_ids": [
+      "w8-seed-g"
+    ],
+    "id": "https://github.com/chfast/intx"
+  },
+  {
     "name": "libMetalFloat64 (philipturner/metal-float64; emulated FP64 on Apple GPUs)",
     "repo_url": "https://github.com/philipturner/metal-float64",
     "language": "Metal Shading Language (Swift package)",
@@ -4324,6 +4432,78 @@
       "w8-seed-e"
     ],
     "id": "https://github.com/philipturner/metal-float64"
+  },
+  {
+    "name": "libQD3 (double-double, triple-double, quad-double, extended-double)",
+    "repo_url": "https://github.com/nakatamaho/libQD3",
+    "language": "C++",
+    "domain": "numerics-and-science",
+    "category": "big-integer-arbitrary-precision",
+    "baseline": "MPFR (the task lead also names original QD; the only numbers found put the upstream QD library against MPFR and GMP)",
+    "baseline_in_list": true,
+    "metric": "throughput",
+    "workload": "No benchmark of libQD3 itself found. Indirect lead: MPLAPACK's Rgemm (dense matrix multiply) benchmark with the upstream QD library as the quad-double back end, against MPFR and GMP back ends, on one machine.",
+    "claimed_speedup": "None in the libQD3 repo or its release notes. Indirect numbers from the MPLAPACK 2.0.1 manual (section 9, upstream QD, not libQD3): peak Rgemm reference versions quad-double 33 MFlops, GMP 19 MFlops, MPFR 11 MFlops; OpenMP versions quad-double 1.3 GFlops, GMP 693 MFlops, MPFR 390 MFlops (ratio to MPFR about 3.0x single-threaded and 3.3x OpenMP, derived from page data).",
+    "evidence_tier": "D",
+    "benchmark_url": null,
+    "baseline_stdlib": [],
+    "compiler_and_flags": null,
+    "hardware": "For the indirect MPLAPACK numbers: AMD Ryzen Threadripper 3970X, 256 GB DDR4-3200 ECC, Docker, GCC 9.3.0 (flags not stated).",
+    "compared_against_cpp_std_directly": null,
+    "license": "BSD-3-Clause",
+    "usability": "copyable",
+    "last_commit": "2026-09-19",
+    "maintenance_status": "active",
+    "is_fork_of": "https://github.com/BL-highprecision/QD",
+    "stars_or_usage": "2 stars, 0 forks; MPLAPACK (same author) now uses libQD3 as its QD back end per the MPLAPACK README",
+    "has_code": true,
+    "tradeoffs": "Fixed-precision floating point built from 2 to 4 binary64 limbs (about 106, 159, 212 bits) or two binary80 limbs (EDD): binary64 exponent range, not correctly rounded, not arbitrary precision. Sloppy add, multiply and divide are on by default (a few bits of accuracy traded for speed); optional branch-free arithmetic (QD_ENABLE_BF*), FMA selection and x86-64-v3 or native code generation. C, C++ and Fortran interfaces. EDD needs binary80 long double (x87), with known MinGW/Wine trigonometry test failures.",
+    "caveats": "Why tier D: libQD3's own text has no timing against MPFR or against original QD. What it has: docs/td.tex flop counts (for example TD add 41 flops vs QD 84, multiply 116/206 vs QD 182/332 with and without FMA, FMA speedup about 1.8x to 2.7x for multiplication, derived from counts rather than timings) and tests/qd_timer.cpp (a timer with no MPFR). The README says the fork 'keeps the original double-double and quad-double functionality' and adds TD, EDD, complex types, optional branch-free arithmetic, MPFR oracle tests; recent commits (2026-09-18) fix qd sqrt rescaling. The indirect MPLAPACK numbers (https://raw.githubusercontent.com/nakatamaho/mplapack/master/doc/manual/manual.pdf, section 9, same author, arXiv 2109.13406 v2 of 2022) predate libQD3 (they used upstream QD), compare precisions that differ (quad-double about 212 bits against MPFR and GMP at their 512-bit default), go through MPLAPACK's C++ wrappers (the author suspects the MPFR wrapper copies needlessly because MPFR ran at half of GMP speed), and are not peer reviewed. Another web-search result title mentions a QD vs MPFR/GMP (212 bits) matrix-multiplication timing table of unknown authorship; it was not opened. A verifier may re-tier to C if it accepts the lineage argument. Benchmark data for the 2022 run sit in nakatamaho/mplapack benchmark/results/2022 (directory listing opened, files not read).",
+    "found_via": [
+      "seed-record pass: https://github.com/nakatamaho/libQD3 (README, README.md, CHANGES.*.md, NEWS, docs/td.tex and qd.tex, tests/ listing, LICENSE, commits page) plus WebSearch 'nakatamaho libQD3 OR MPLAPACK double-double quad-double performance versus MPFR GMP Rgemm benchmark' and the MPLAPACK README and manual PDF"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.35,
+    "assignment_ids": [
+      "w8-seed-g"
+    ],
+    "id": "https://github.com/nakatamaho/libqd3"
+  },
+  {
+    "name": "primefactors (CPU GMP/GMP-ECM reference plus CGBN GPU factoring programs)",
+    "repo_url": "https://github.com/steleman/primefactors",
+    "language": "C and CUDA",
+    "domain": "numerics-and-science",
+    "category": "big-integer-arbitrary-precision",
+    "baseline": "GMP-ECM 7.0.6 (libecm, on GMP): the repo's own CPU reference path is GMP plus libecm, and the GPU programs are measured against it",
+    "baseline_in_list": false,
+    "metric": "latency",
+    "workload": "Prime factorization of semiprimes: Pollard's rho on GPU (CUDA with the author's CGBN fork) against CPU ECM on the same number, 16-digit factor; CPU ECM wall clock on a 32-core box for 30-, 35- and 40-digit factors.",
+    "claimed_speedup": "None: the project claims no speedup and says the opposite. README 'Performance reality': the GPU programs 'do not beat the CPU for hard inputs'; for integers below 2^64 they are 'much slower than their GMP-ECM equivalent'; on an RTX 4080 a 16-digit factor takes about 8.7 s with GPU rho versus about 2 s for CPU ECM on the same number (about 4x slower, derived from page data), and 19-digit and larger factors are impractical. CPU path wall clock (32-core box, equal-size prime semiprime): 30-digit factor about 10.5 s, 35-digit about 20.6 s, 40-digit about 5.7 min.",
+    "evidence_tier": "D",
+    "benchmark_url": "https://raw.githubusercontent.com/steleman/primefactors/HEAD/README.md",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "CPU: /usr/bin/gcc -O3 -std=c17 -funroll-loops -ftree-vectorize -ftree-slp-vectorize -fopenmp, link -lecm -lgmp -flto=32. GPU: nvcc (CUDA 12.9, also tested 13.2) -O3 -arch=sm_89 (sm_120 on Blackwell), OpenMPI 5.0.5, GMP-ECM 7.0.6 (all from the Makefile and README).",
+    "hardware": "Tested on a laptop with RTX 4080 Ada (sm_89) and Core i9-14900HX, and an Intel NUC 13 Extreme with RTX PRO 4500 Blackwell (sm_120) and Core i9-13900K, Fedora 41 and 44; the 32-core CPU box for the ECM timings is not identified.",
+    "compared_against_cpp_std_directly": null,
+    "license": "MIT",
+    "usability": "copyable",
+    "last_commit": "2026-09-01",
+    "maintenance_status": "active",
+    "is_fork_of": null,
+    "stars_or_usage": "1 star, 0 forks, 7 commits (github.com page)",
+    "has_code": true,
+    "tradeoffs": "Hobby research code. primefactors.c is arbitrary precision through GMP mpz_t with trial division, Pollard's rho and GMP-ECM curves spread across cores by OpenMP (memory grows with threads times B1). The two CUDA programs (cgbnprimefactors.cu, ecmcgbnprimefactorsmpi.cu) need CUDA, the author's CGBN fork and OpenMPI; GPU rho gains only about sqrt(k) from k parallel walks. Single-machine ECM tops out around 45 digits per the README; MPI scaling was never tested beyond one node.",
+    "caveats": "Does not qualify as faster than its baseline: the README and primefactors-design.pdf both state that neither GPU program is intended to beat the CPU GMP-ECM path, and the CPU path simply calls GMP and GMP-ECM, so no baseline is beaten. Kept as a record so the shortcoming is documented (not faster). The only comparison is first-party and has no methodology beyond the GPU model (8.7 s vs 2 s, one number). The ~37 s to ~8.65 s improvement in the design doc is GPU-against-GPU tuning. The README states the author used Claude Opus 5.0 for the Pollard's rho code and for testing and bug finding. Related: the author's CGBN fork (steleman/nvidia-cgbn) was not examined.",
+    "found_via": [
+      "seed-record pass: https://github.com/steleman/primefactors (README, Makefile, primefactors-design.pdf via pdftotext, github.com repo and commits pages)"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.6,
+    "assignment_ids": [
+      "w8-seed-g"
+    ],
+    "id": "https://github.com/steleman/primefactors"
   },
   {
     "name": "wjr (WJR big integer and utility library)",
@@ -9216,6 +9396,42 @@
     "id": "https://github.com/mapbox/earcut.hpp"
   },
   {
+    "name": "fast_gicp (FastGICP / FastVGICP / FastVGICPCuda)",
+    "repo_url": "https://github.com/koide3/fast_gicp",
+    "language": "C++",
+    "domain": "numerics-and-science",
+    "category": "geometry-spatial",
+    "baseline": "PCL pcl::GeneralizedIterativeClosestPoint (GICP); also PCL NormalDistributionsTransform (NDT)",
+    "baseline_in_list": false,
+    "metric": "latency",
+    "workload": "Registering one pair of point-cloud scans (target 17,249 points, source 17,518 points after a 0.1 m approximate voxel grid) with GICP-family methods; wall time of a single alignment and of 100 repeated alignments, with fitness score reported.",
+    "claimed_speedup": "README table, i9-9900K + RTX 2080 Ti: pcl_gicp single 127.508 ms, 100 times 12549.4 ms (fitness 0.204892); pcl_ndt single 53.5904 ms, 100 times 5467.16 ms; fgicp_st (single thread) 111.324 ms / 10662.7 ms; fgicp_mt 20.1602 ms / 1585 ms (fitness 0.204412); vgicp_mt 18.1106 ms / 1381 ms; vgicp_cuda (parallel_kdtree) 15.9587 ms / 1451.85 ms; vgicp_cuda (gpu_rbf_kernel) 5.91508 ms / 590.725 ms (fitness 0.20557). Derived from page data versus pcl_gicp: fgicp_mt 6.3x (single) and 7.9x (100 runs); vgicp_mt 7.0x and 9.1x; vgicp_cuda rbf kernel 21.6x and 21.2x; single-threaded fgicp_st only 1.15x and 1.18x. README headline rates: FastGICP ~40 FPS, FastGICPSingleThread ~15 FPS, FastVGICP ~70 FPS, FastVGICPCuda ~120 FPS, NDTCuda ~500 FPS.",
+    "evidence_tier": "C",
+    "benchmark_url": "https://github.com/koide3/fast_gicp",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "CMakeLists.txt sets CMAKE_BUILD_TYPE Release (CMake default Release flags) and adds OpenMP flags; no -march option seen. Compiler name and version not stated (README says tested on Ubuntu 18.04/20.04 with CUDA 11.1).",
+    "hardware": "Core i9-9900K, GeForce RTX 2080 Ti",
+    "compared_against_cpp_std_directly": false,
+    "license": "BSD-3-Clause",
+    "usability": "copyable",
+    "last_commit": "2025-04-24",
+    "maintenance_status": "stale",
+    "is_fork_of": null,
+    "stars_or_usage": "1.7k stars, 374 forks",
+    "has_code": true,
+    "tradeoffs": "Drop-in PCL registration interface, but depends on PCL, Eigen, OpenMP, Sophus and (for CUDA) nvbio. VGICP is a voxelized approximation of GICP and the GPU rbf-kernel covariance mode is described in the source as 'extremely fast but maybe a bit inaccurate' (its fitness score 0.20557 is the worst in the table). README notes that using fewer threads than the maximum can be faster in some environments. The author's newer small_gicp (already on the known list) is stated in the README to be twice as fast as fast_gicp.",
+    "caveats": "Tier would be A except that the compiler is never named and the flags come only from the CMake Release default, so it stays C (own-repo benchmark with partial methodology). Benchmark code is public (src/align.cpp) but the README shows a single scan pair and one machine. Most of the speedup comes from multithreading and GPU use against PCL's default GICP/NDT; the thread count is not stated (src/align.cpp uses omp_get_max_threads for vgicp_mt and the default for fgicp_mt) and the PCL version is not stated. Iteration and convergence settings are each class's defaults and were not verified to be identical. The ICRA 2021 VGICP paper (easychair preprint) was not opened. The README links the SMRT-AIST/fast_gicp organisation in badges and install commands, so the repo may have moved. Last commit 2025-04-24 (over 12 months).",
+    "found_via": [
+      "seed-record pass: https://github.com/koide3/fast_gicp README Benchmark section, src/align.cpp and CMakeLists.txt via raw.githubusercontent.com, commits page"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.75,
+    "assignment_ids": [
+      "w8-seed-i"
+    ],
+    "id": "https://github.com/koide3/fast_gicp"
+  },
+  {
     "name": "fastquadtree",
     "repo_url": "https://github.com/Elan456/fastquadtree",
     "language": "Rust",
@@ -9472,6 +9688,42 @@
       "w8-geo-shootouts"
     ],
     "id": "https://github.com/psimatis/indexicon-spatial-library"
+  },
+  {
+    "name": "iOverlay (Rust polygon boolean overlay engine)",
+    "repo_url": "https://github.com/iShape-Rust/iOverlay",
+    "language": "Rust",
+    "domain": "numerics-and-science",
+    "category": "geometry-spatial",
+    "baseline": "Clipper2 (C++ polygon clipping library)",
+    "baseline_in_list": false,
+    "metric": "latency",
+    "workload": "Checkerboard polygon boolean-operation test with up to 8,384,513 squares, iOverlay (Rust, multithreading feature on) versus Clipper2, as reported in the project's performance comparison page.",
+    "claimed_speedup": "Search-result snippet of the project's Performance Comparison page (snippet only, page not opened): 8,384,513 squares in 33.7 s for iOverlay Rust with multithreading versus 644.3 s for Clipper2, about 19x (derived from snippet data). The repo's own README chart only reports iOverlay-internal relative times (Apple M4, 24 GB, geometric mean, i32 multithreading off = 1.00x: i16 off 0.92x, i64 off 1.30x, i16 on 0.85x, i32 on 0.86x, i64 on 1.08x).",
+    "evidence_tier": "C",
+    "benchmark_url": "https://ishape-rust.github.io/iShape-js/overlay/performance/performance.html",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "In-repo perf app (performance/rust_app/Cargo.toml): release profile opt-level 3, lto false, codegen-units 1; it depends on crates.io i_overlay 7.0.0. Rust toolchain version and Clipper2 build flags not seen.",
+    "hardware": "Apple M4, 24 GB for the in-repo relative-time chart; hardware of the Clipper2 comparison not seen.",
+    "compared_against_cpp_std_directly": false,
+    "license": "MIT OR Apache-2.0",
+    "usability": "copyable",
+    "last_commit": "2026-09-24",
+    "maintenance_status": "active",
+    "is_fork_of": null,
+    "stars_or_usage": "211 stars; over 5 million crates.io downloads (author's claim); core of georust/geo polygon boolean operations",
+    "has_code": true,
+    "tradeoffs": "Rust crate, so usable from C++ only through an FFI layer (the API offers a flat, FFI-friendly shape hierarchy). Integer (i16/i32/i64) and float (f32/f64) engines; the large-input gain depends on the allow_multithreading Cargo feature (rayon). Also offers slicing, clipping, offsetting and spatial predicates.",
+    "caveats": "Rust only, and the numbers were NOT opened: ishape-rust.github.io is EGRESS_BLOCKED, so the 33.7 s versus 644.3 s figure comes from a WebSearch snippet and was never checked against the page, the thread count, the hardware or the Clipper2 build. The repo carries no Clipper2, geo, Boost.Geometry, CGAL or GEOS comparison: performance/rust_app benchmarks only iOverlay itself, and the README SVG shows only internal engine variants. The README says multithreading matters most for bigger data sets; its own average chart shows multithreading cutting relative time by only about 8 to 17 percent on average. OpenROAD discussion #5864 (opened, written by the iOverlay author) links the same comparison page and separately claims the sister library xOverlay is 10-20x faster than Boost.Polygon in most benchmarks except Nested Squares, but gives no hardware or compiler. Tier C under the snippet-only rule; no Boost.Geometry, CGAL or GEOS baseline evidence found.",
+    "found_via": [
+      "seed-record pass: https://github.com/iShape-Rust/iOverlay (README via raw.githubusercontent.com, performance/rust_app, commits page); WebSearch query 'iOverlay i_overlay Rust polygon boolean benchmark faster than Clipper2 GEOS geo performance comparison'; https://github.com/The-OpenROAD-Project/OpenROAD/discussions/5864"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.5,
+    "assignment_ids": [
+      "w8-seed-i"
+    ],
+    "id": "https://github.com/ishape-rust/ioverlay"
   },
   {
     "name": "Janos95/kdtree",
@@ -9764,6 +10016,42 @@
       "w8-geo-papers"
     ],
     "id": "https://github.com/meshinspector/meshlib"
+  },
+  {
+    "name": "ParGeo (parallel 3D convex hull and kd-tree library)",
+    "repo_url": "https://github.com/ParAlg/ParGeo",
+    "language": "C++",
+    "domain": "numerics-and-science",
+    "category": "geometry-spatial",
+    "baseline": "CGAL (3D convex hull) and Qhull",
+    "baseline_in_list": true,
+    "metric": "throughput",
+    "workload": "Wall-clock time to compute 3D convex hulls of synthetic and scanned point sets on 36 cores with two-way hyper-threading, ParGeo Pseudohull / divide-and-conquer versus Qhull and CGAL (the repo's own benchmark/hull3d_bench.cpp uses 10M-point in-sphere, on-sphere, in-cube and on-cube sets plus scanned models such as Armadillo, Dragon, Buddha, Thai Statue, Lucy, but only runs ParGeo's own variants).",
+    "claimed_speedup": "From a search-result snippet of the ESA 2022 paper (paper not opened): fastest ParGeo convex hull up to 44.7x self-relative parallel speedup and up to 559x speedup against the best existing sequential implementation; Pseudohull up to 43.7x parallel speedup compared to Qhull and up to 5.05x over CGAL on 3-dimensional shapes. Exact paper wording and the per-dataset table were not verified.",
+    "evidence_tier": "C",
+    "benchmark_url": "https://arxiv.org/pdf/2207.01834",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "Repo CMakeLists.txt: C++17, -DHOMEGROWN -pthread -mcx16 -O3 -DNDEBUG -fPIC (parlaylib homegrown scheduler); compiler name and version not stated in the repo, and the paper's setup was not readable.",
+    "hardware": "36 cores with two-way hyper-threading (72 threads; repo benchmark sets maxThreads = 72); CPU model not seen because the paper was unreachable.",
+    "compared_against_cpp_std_directly": false,
+    "license": "MIT",
+    "usability": "copyable",
+    "last_commit": "2022-09-12",
+    "maintenance_status": "abandoned",
+    "is_fork_of": null,
+    "stars_or_usage": "54 stars; ESA 2022 paper (LIPIcs, per search results) and PPoPP 2022 poster",
+    "has_code": true,
+    "tradeoffs": "Needs a multicore machine to win: the headline speedups come from parallelism, not from a faster sequential algorithm. Depends on the parlaylib git submodule and Google Benchmark/Google Test. Point dimension is a template parameter (2 to 7 supported for most modules); convex hull is 2D and 3D only. The README does not discuss numerical robustness or degenerate inputs, and the repo benchmark uses float points.",
+    "caveats": "Numbers are from a search-result snippet only: arxiv.org, drops.dagstuhl.de, par.nsf.gov, www.cs.ucr.edu and www.cs.umd.edu were all EGRESS_BLOCKED, so benchmark_url was NOT opened and the CPU model, compiler, flags, baseline versions and point types are unknown. Tier is C under the cloud-harness rule for snippet-only evidence; a peer-reviewed ESA 2022 paper exists (B candidate, A if the paper or artifact states compiler, flags and CPU), so re-tier when paper access is available. The repo itself carries no CGAL or Qhull comparison: benchmark/*.cpp only time ParGeo's own algorithms (serial quickhull vs pseudohull, SEB variants). The README cites only the PPoPP 2022 poster and a GeoGraph paper, while the lead named ESA 2022; the ESA title match came from the search snippet. Parallel versus sequential baselines means unequal core counts; the 559x figure is against 'best existing sequential implementation', not CGAL. Last commit 2022-09-12 (over 4 years, not archived).",
+    "found_via": [
+      "seed-record pass: https://github.com/ParAlg/ParGeo (README, benchmark/ directory, commits page); WebSearch query 'ParGeo parallel computational geometry library convex hull kd-tree speedup over CGAL Qhull cores PPoPP 2022' supplied the paper snippet"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.55,
+    "assignment_ids": [
+      "w8-seed-i"
+    ],
+    "id": "https://github.com/paralg/pargeo"
   },
   {
     "name": "pgl (Pangolin plane geometry library)",
@@ -11076,6 +11364,42 @@
     "id": "https://github.com/watney-0717/avx512-vaes2-prng"
   },
   {
+    "name": "cauldron random.h (ziggurat normal distribution)",
+    "repo_url": "https://github.com/camel-cdr/cauldron",
+    "language": "C",
+    "domain": "numerics-and-science",
+    "category": "random-and-quasi-random",
+    "baseline": "std::normal_distribution (driven by std::minstd_rand in the benchmark's cpp11random entry)",
+    "baseline_in_list": false,
+    "metric": "throughput",
+    "workload": "Generating 1,000,000 standard-normal float or double samples per trial (minimum over 10 trials) in miloyip/normaldist-benchmark, camel-cdr's 128-block ziggurat with a single condensed lookup table and an LCG as the uniform source versus the benchmark's other implementations.",
+    "claimed_speedup": "Issue #3 in miloyip/normaldist-benchmark (author camel-cdr), ns per sample, float: ziggurat_new 4.018, cpp11random (std::normal_distribution) 8.852, existing ziggurat 7.289, marsagliapolar 6.133, inverse 6.017, boxmuller 7.484; double: ziggurat_new 4.081, cpp11random 17.009, existing ziggurat 7.817, marsagliapolar 8.711, inverse 7.222, boxmuller 16.546. Derived from page data: 2.2x faster than std::normal_distribution for float and 4.2x for double; 1.8x and 1.9x faster than the benchmark's existing ziggurat. The issue says its implementation is 60% faster than the existing ziggurat.",
+    "evidence_tier": "C",
+    "benchmark_url": "https://github.com/miloyip/normaldist-benchmark/issues/3",
+    "baseline_stdlib": [],
+    "compiler_and_flags": null,
+    "hardware": null,
+    "compared_against_cpp_std_directly": true,
+    "license": "MIT",
+    "usability": "copyable",
+    "last_commit": "2025-02-01",
+    "maintenance_status": "stale",
+    "is_fork_of": null,
+    "stars_or_usage": "143 stars",
+    "has_code": true,
+    "tradeoffs": "Single-file C header (usable from C++) with the ziggurat entry points dist_normalf_zig and dist_normal_zig that need an init call and a lookup table (128 entries, float or double) and a caller-supplied RNG function; the slow path uses log and exp. The library also offers a lower-accuracy dist_normalf_fast that was not part of this evidence. Output quality of the issue's code was not verified here (the benchmark harness has a correctness check, but the issue does not report its result).",
+    "caveats": "First-party claim in a GitHub issue comment with no CPU model, compiler or flags, so tier C. The std::normal_distribution baseline is driven by std::minstd_rand, not std::mt19937, and the standard library implementation is not stated; the ziggurat uses a cheap LCG, so the gap partly reflects RNG cost (the benchmark's null entry is about 1.05 ns). The code in the issue is the author's proposed template, not literally the current cauldron function: random.h's dist_normal(f)_zig is described as based on Doorki's implementation with the same one-table idea and later changes, so the link is by author and design, not identical code. The double version builds a 64-bit value from two 32-bit LCG outputs per the issue. The cauldron repo has tools/random/bench.c (dist_normal versus dist_normal_zig, PRNGs) but publishes no results. Issue dated 2020-12-19; last repo commit 2025-02-01. The lead's '4.0 ns versus 7.3-7.8 ns' compares against the benchmark's existing ziggurat, while the std::normal_distribution figures are 8.9 ns and 17.0 ns.",
+    "found_via": [
+      "seed-record pass: https://github.com/camel-cdr/cauldron (README, cauldron/random.h, tools/random/bench.c via raw.githubusercontent.com, commits page) and https://github.com/miloyip/normaldist-benchmark/issues/3"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.6,
+    "assignment_ids": [
+      "w8-seed-i"
+    ],
+    "id": "https://github.com/camel-cdr/cauldron"
+  },
+  {
     "domain": "numerics-and-science",
     "category": "random-and-quasi-random",
     "is_fork_of": null,
@@ -11660,6 +11984,42 @@
     "id": "paper:romu-romutrio-romuquad-romumono"
   },
   {
+    "id": "paper:root-ranluxpp",
+    "name": "ROOT RanluxppEngine (portable RANLUX++)",
+    "repo_url": "https://github.com/root-project/root",
+    "language": "C++",
+    "domain": "numerics-and-science",
+    "category": "random-and-quasi-random",
+    "baseline": "ROOT TRandom1 (RANLUX); ROOT TRandom3 (Mersenne Twister) is faster than RANLUX++ in the same benchmark",
+    "baseline_in_list": false,
+    "metric": "latency",
+    "workload": "Average time per generated random double from a Google Benchmark microbenchmark (BM_Rndm calling Rndm() once per iteration, rootbench TRandomBenchmarks.cxx) for TRandom1, TRandom3, TRandomMixMax and TRandomRanluxpp, 10 repetitions with standard deviation under 1 percent.",
+    "claimed_speedup": "ROOT blog 'Implementing and tuning RANLUX++ for ROOT' (2020-11-30): initial portable version about 30 ns per double, Sibidanov's assembly version about 8 ns, TRandom1 (RANLUX, single precision) about 62 ns, after tuning about 9 ns per number ('very close to the assembly version'), slightly slower than TRandom3 at about 3 ns. Derived from page data: about 6.9x faster than TRandom1 (62 ns versus 9 ns); 2x faster than TRandom1 already at the untuned 30 ns. Tuning gains reported: loop unrolling up to 30 percent, overflow handling up to 15 percent, native __int128 multiplication over 40 percent, carry propagation over 20 percent on GCC 7.5.0.",
+    "evidence_tier": "C",
+    "benchmark_url": "https://raw.githubusercontent.com/root-project/web/main/blog/_posts/2020-11-30-ranluxpp.md",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "GCC 8.3.1 (default); graph also covers Clang 9.0.1 and GCC 7.5.0 built from source; optimisation flags not stated in the post.",
+    "hardware": "Single core of an AMD Ryzen 9 3900, CentOS 8.2.2004",
+    "compared_against_cpp_std_directly": false,
+    "license": "LGPL-2.1-or-later",
+    "usability": "copyable",
+    "last_commit": "2026-10-02",
+    "maintenance_status": "active",
+    "is_fork_of": null,
+    "stars_or_usage": "ROOT: 3.3k stars; used across high-energy physics; RANLUX++ shipped in ROOT 6.24",
+    "has_code": true,
+    "tradeoffs": "Portable C++ (uses unsigned __int128 where available, with unrolling pragmas) instead of Sibidanov's x86 assembly; 576-bit LCG state stored as 9 x 64-bit words, and the generator advances in blocks via a multiply and modulo. It gives 48 random bits per double and passes TestU01 per the blog, but it is about 3x slower than ROOT's Mersenne Twister and the code sits inside ROOT (mathcore) with ROOT dependencies (TRandomEngine base class), so extracting it needs the src/ranluxpp helper headers. Provides RanluxppEngine24 and RanluxppEngine2048 plus compatibility engines for James/Luescher RANLUX.",
+    "caveats": "The benchmark compares against TRandom1 (original RANLUX) and does not beat std::mt19937, PCG or xoshiro: in the same post TRandom3 (Mersenne Twister) is about 3x faster. TRandom1 yields only 24-bit single-precision numbers while RANLUX++ yields 48-52 bits per double, so the work per number differs. The measured code predates correctness changes in June 2021 (commits 'Ensure full modulo operation in mod_m', 'Convert LCG state to RANLUX numbers', 'Extract only 48 bits per number', per the file history page; the blog says 52 bits per double), so the 9 ns figure was not re-measured for the shipped implementation and the tier is capped at C. Optimisation flags are not stated; the benchmark source is public (root-project/rootbench PR #200, merged 2020-12-15, 23-line file) but no results are checked in. The repo has no benchmark results for the component. The last commit shown for RanluxppEngineImpl.cxx was 2021-06-23, so the component is stable; last_commit above is the overall ROOT repo (large project, judged only for math/mathcore RanluxppEngine*).",
+    "found_via": [
+      "seed-record pass: https://github.com/root-project/root (math/mathcore/src/RanluxppEngineImpl.cxx, inc/Math/RanluxppEngine.h, src/ranluxpp/, inc/TRandomGen.h); WebSearch query 'ROOT RanluxppEngine RANLUX++ ROOT 6.24 release notes speed ns per number TRandom1 comparison' surfaced the blog source in root-project/web; https://github.com/root-project/rootbench/pull/200"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.7,
+    "assignment_ids": [
+      "w8-seed-i"
+    ]
+  },
+  {
     "domain": "numerics-and-science",
     "category": "random-and-quasi-random",
     "is_fork_of": null,
@@ -12206,6 +12566,42 @@
       "w8-rng-papers"
     ],
     "id": "https://github.com/snsinfu/cxx-ziggurat"
+  },
+  {
+    "name": "rhet_RNG (xromu2jr, winner of the PRNG Battle Royale)",
+    "repo_url": "https://github.com/Almightygir/rhet_RNG",
+    "language": "C++",
+    "domain": "numerics-and-science",
+    "category": "random-and-quasi-random",
+    "baseline": "xoshiro256++ / xoshiro256** / xoroshiro128 variants and PCG (pcg64) among the 47 PRNGs benchmarked; std::mt19937 is not among the generators listed in the README",
+    "baseline_in_list": true,
+    "metric": "throughput",
+    "workload": "Per the README: 47 non-cryptographic PRNGs on 9 game consoles (Nintendo Switch, PlayStation 4/4 Pro/5, Xbox One/One X/Series X, Stadia 1080p/4K), throughput and latency tests with at least 256 GB of random data per test, using three range-mapping methods (biased modulo, unbiased masking with discard, Lemire fixed-point fastrange) over ranges 2 to 2^16.",
+    "claimed_speedup": "No benchmark numbers appear in the repo. The README states that Romu2jr (RomuDuoJr with a NASAM-based seeding wrapper, xromu2jr.h) wins overall for game development, that the fixed-point (Lemire) range mapping beats biased modulo and unbiased masking, and that results are charts of relative speed per console (for example '2.2 implies the test was 2.2 faster than the slowest test that ran in this game console'). The charts themselves are images that are not in the repo.",
+    "evidence_tier": "D",
+    "benchmark_url": "https://github.com/Almightygir/rhet_RNG",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "README: all tests built with 'top tier configuration presets' using the latest platform SDKs and Visual Studio 2019; exact flags unstated.",
+    "hardware": "Nine game consoles (CPU models unstated)",
+    "compared_against_cpp_std_directly": false,
+    "license": null,
+    "usability": "mixed",
+    "last_commit": "2023-06-25",
+    "maintenance_status": "abandoned",
+    "is_fork_of": null,
+    "stars_or_usage": "3 stars; the original rhet.dev blog post is widely cited in PRNG discussions (not verified here)",
+    "has_code": true,
+    "tradeoffs": "RomuDuoJr has a 128-bit state and no guaranteed minimum period, so some seeds can end in short cycles; the README mitigates this with a NASAM-based initializer and brute-force checks (no cycles for 32-bit seeds within 2^24 bytes, 16-bit seeds within 2^36 bytes) but it is not a proof. Chaotic generators give low-quality first outputs unless seeded through a mixer. The README charts report some PractRand failures, and the author himself suggests xoshiro256++ or sfc64 when a guaranteed period matters. The header uses reinterpret_cast type punning in as<>() and either __uint128_t or __umulh for 64-bit ranges.",
+    "caveats": "Tier D: the repo is an archive of a single 2.8 KB header (xromu2jr.h) plus a copy of the 2020 blog text; there are no benchmark numbers, charts or code in it, and the author says the benchmark code is kept private for console NDA reasons, so nothing is reproducible. The rhet.dev post and the Wayback copy were not fetched (blocked hosts). Licensing: the header says the wrapper is released into the public domain by its author, there is no LICENSE file in the repo, and the Romu algorithm by Mark Overton is not covered by that statement, so usability is marked mixed (no patent grant implied). The repo owner appears to be a different account from the original author (README says the header was created by RomuDuoJr at rhet.dev). Relative results are per console and mix PRNG quality and worst-case criteria chosen by the author; the 'winner' conclusion is his weighting.",
+    "found_via": [
+      "seed-record pass: https://github.com/Almightygir/rhet_RNG (README.md and xromu2jr.h via raw.githubusercontent.com, commits page)"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.5,
+    "assignment_ids": [
+      "w8-seed-i"
+    ],
+    "id": "https://github.com/almightygir/rhet_rng"
   },
   {
     "domain": "numerics-and-science",
