@@ -1,0 +1,72 @@
+[
+  {
+    "id": "https://github.com/talhasaruhan/cpp-matmul",
+    "verdict": "reject",
+    "reject_reason": "other: invalid comparison - the library computes single-precision float GEMM (float* matrices, __m256, _mm256_fmadd_ps; no double code anywhere in MatrixMul.cpp) while the baseline Benchmarks/EigenBenchmark.cpp multiplies MatrixXd (double) through MKL dgemm (the README itself names MKL's avx2_dgemm_kernel_0), so the 'identically or slightly faster than Eigen (MKL+TBB)' claim compares SGEMM against DGEMM",
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "Benchmark code (Benchmarks/EigenBenchmark.cpp, MatrixMult/MatrixMul.cpp main), MSVC 2017 flags and the i7-8700K are public, but the comparison is not like-for-like (float vs double, which gives float twice the AVX2 FMA width and half the memory traffic), and the numbers are a first-party graph (Benchmark1.png) of single timed runs, so it cannot be A; at most C if kept.",
+    "corrections": {
+      "workload": "Multithreaded SINGLE-precision (float) square matrix multiplication C = A*B in the library, one timed call per run, N from 10 to 15,000; the Eigen baseline multiplies double-precision MatrixXd with the MKL backend (dgemm), so precisions differ.",
+      "claimed_speedup": "README: 'Current implementation runs identically or slightly faster than Eigen (MKL+TBB) for all test cases (tested up to N=15K)'. Benchmark1.png plots N^3/runtime (x10^9): the library ('MM') peaks near 157 at N=6000 vs Eigen(MKL+TBB) near 132, and the two lines are about even at N=13000-15000 (about 130-142); MM is behind Eigen at N=400, N=600-700 and N=13000 (read from the graph). These are float GEMM results against a double-precision MKL dgemm baseline, so they do not show a like-for-like win.",
+      "compiler_and_flags": "MSVC 2017, x64 Release plus /O2 /Ot /Gy /arch:AVX2 /fp:fast /std:c++17; hand-written AVX/FMA float intrinsics (_mm256_fmadd_ps), software prefetching, runtime-detected block sizes. The Eigen benchmark (Benchmarks/EigenBenchmark.cpp) defines EIGEN_USE_MKL_ALL, uses MatrixXd (double) and sets 12 MKL/Eigen threads; Eigen/MKL/TBB versions not stated.",
+      "caveats": "Precision mismatch: MatrixMul.cpp stores matrices as float and uses __m256/_mm256_fmadd_ps throughout (no double path), while EigenBenchmark.cpp uses MatrixXd and the README says MKL's avx2_dgemm_kernel_0 ran, so the library's float GEMM is compared with MKL's double GEMM. On AVX2, float FMA throughput is twice that of double, so 'about equal to MKL dgemm' implies well below MKL sgemm; no float-vs-float comparison exists. The graph's peak (N^3/runtime about 157e9, i.e. about 314 GFLOPS float) is also far below the i7-8700K's float FMA peak (derived estimate). Each point is a single timed call with 12 threads on one desktop CPU; numbers exist only in Benchmark1.png and benchmark.xlsx. NumpyBenchmark.py times np.dot at n=1000 only. Windows-only (Win32 affinity API, MSVC intrinsics/_aligned_malloc). No license file (raw LICENSE, LICENSE.md, LICENSE.txt all 404; repo page shows none), so reference-only. README says the build without software prefetching is about 15% faster on this CPU. Single author, last commit 2018-11-28."
+    },
+    "notes": "Correctness-of-comparison bug: float SGEMM timed against Eigen MatrixXd on MKL dgemm, so the 'faster than MKL' claim is invalid (like the SIMD-MT/stb-zip precedents of computing something different). If kept under keep-and-document, tier C with that shortcoming; metadata (18 stars, 2 forks, no license, last commit 2018-11-28, not fork/archived) checked and correct.",
+    "urls_opened": [
+      "https://github.com/talhasaruhan/cpp-matmul",
+      "https://raw.githubusercontent.com/talhasaruhan/cpp-matmul/HEAD/README.md",
+      "https://raw.githubusercontent.com/talhasaruhan/cpp-matmul/HEAD/Benchmarks/EigenBenchmark.cpp",
+      "https://raw.githubusercontent.com/talhasaruhan/cpp-matmul/HEAD/Benchmarks/NumpyBenchmark.py",
+      "https://raw.githubusercontent.com/talhasaruhan/cpp-matmul/master/Benchmark1.png",
+      "https://raw.githubusercontent.com/talhasaruhan/cpp-matmul/master/MatrixMult/MatrixMul.cpp",
+      "https://github.com/talhasaruhan/cpp-matmul/tree/master/MatrixMult",
+      "https://github.com/talhasaruhan/cpp-matmul/commits/master",
+      "https://raw.githubusercontent.com/talhasaruhan/cpp-matmul/HEAD/LICENSE"
+    ]
+  },
+  {
+    "id": "paper:aliaksei-sala-c-gemm-c-now-2025-cppcon-2025-talk",
+    "verdict": "reject",
+    "reject_reason": "not-faster",
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "D",
+    "tier_reason": "The only benchmark page that could be opened (the C++Now 2025 slides) shows OpenBLAS ahead: 0.310 s / 154.1 GFLOPS vs the final version's 0.336 s / 142.2 GFLOPS on an i5-6300HQ; the 'beats OpenBLAS' numbers (1.70 vs 1.58 TFLOPS on a Ryzen 9 9950X) exist only in a search snippet of a blocked Medium post, and there is no public code, so no opened evidence supports a win.",
+    "corrections": {
+      "compiler_and_flags": "Slides: Linux, -O3 -march=haswell -ffast-math; compiler name and version not stated. The talk's versions are C++ with SSE2/AVX2 intrinsics (_mm256_fmadd_pd shown on the slides). A slide titled 'Assembly: Where the FLOPs Really Happen' says 'All kernels are written in assembly' (in context this describes production BLAS libraries; a search snippet of the author's article says the same of OpenBLAS/BLIS) and that versions vary by up to 40% between Clang and GCC, marked 'NOT applicable for the final version'.",
+      "claimed_speedup": "Slides (opened): final version '+Unroll + prefetch' 0.336 s, 142.2 GFLOPS, 96.6% of the 147.2 GFLOPS base-clock peak; OpenBLAS 0.310 s, 154.1 GFLOPS (104%) on the i5-6300HQ, so OpenBLAS is about 8% faster (derived from page data). Search snippet only (Medium post blocked): 1.70 TFLOPS vs OpenBLAS 1.58 TFLOPS on an AMD Ryzen 9 9950X; unverified.",
+      "caveats": "Not faster on the only opened evidence: the slides end with OpenBLAS ahead of the final C++ version (154.1 vs 142.2 GFLOPS). The opposite claim (1.70 vs 1.58 TFLOPS on a Ryzen 9 9950X) is from search-result snippets of the author's Medium article (medium.com and YouTube egress-blocked): snippet only. No repository: the slides give no code link (only a LinkedIn contact), and a WebSearch for a GitHub repo found none, so has_code=false and it is reference-only. Matrix is std::vector<double>, row-major, 2880x2880, multithreaded on 4 cores. Peak is computed at the 2.3 GHz base clock, so percent-of-peak figures over 100% reflect turbo."
+    },
+    "notes": "Slides PDF opened and the record's numbers match it, but they show OpenBLAS winning; the only win is snippet-only from a blocked Medium post, with no code. Reject as not-faster; if the Medium article or a repo becomes reachable, re-verify on the 9950X numbers.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/boostcon/cppnow_presentations_2025/main/Presentations/Achieving_Peak_Performance_for_Matrix_Multiplication.pdf"
+    ]
+  },
+  {
+    "id": "https://github.com/tpoisonooo/chgemm",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "First-party only: chgemm's own graph (0.png) plots chgemm against a constant fp32-peak line, not against gemmlowp, and the gemmlowp figure is an approximate, unsourced range ('gemmlowp大约 12-14gflops') in the how-to-optimize-gemm README with no gemmlowp benchmark code, version or shapes.",
+    "corrections": {
+      "compiler_and_flags": "gcc (version not stated) with -O3 -g -Wall per the repo makefile (README: 'Compiled on RK3399 with -O3 flag'); ARM NEON C plus aarch64 assembly int8 kernels (int8kernel_m4/m2/m1, kernel_m4n4k16.S).",
+      "claimed_speedup": "how-to-optimize-gemm README (Chinese): chgemm int8 reaches up to 18.6 GFLOPS on one RK3399 core, vs an fp32 single-core theoretical limit of 14.3 GFLOPS and 'gemmlowp大约 12-14gflops' (gemmlowp about 12-14 GFLOPS); roughly 1.3x to 1.55x vs gemmlowp (derived from page data). chgemm README: peak 18.6 GFLOPS on RK3399 single core (graph 0.png, sizes 100-2000, about 16.3-18.6 GFLOPS above size 200), and about 23 GFLOPS on one AWS A72 core, which it calls the limit of this method.",
+      "caveats": "The gemmlowp comparison is only an approximate, unsourced range in the README of a different repo (the GPLv3 tutorial how-to-optimize-gemm); chgemm's own graph has no gemmlowp line (it shows chgemm, labelled 'mystery', against a flat fp32-peak line), and the repo's test harness compares only against a naive reference (REF_MMult.c). Peak 18.6 GFLOPS is a best case at size 2000. GFLOPS count int8 operations, so comparison with fp32 libraries is not like-for-like. Baseline gemmlowp is not one of OpenBLAS, MKL, Eigen or BLIS. License: BSD-3-Clause is declared only by a README badge; there is no LICENSE file (raw LICENSE 404) and no copyright header in the sources checked, so keep the attribution question in mind when copying; the same code ships in ncnn (BSD-3-Clause) as src/layer/arm/gemm_symm_int8.h. Build badge points to defunct travis-ci.org. 13 commits, last commit 2020-06-07."
+    },
+    "notes": "Record accurate; tier C stands (gemmlowp number is approximate and not measured by public code). Shortcomings worth recording: no measured gemmlowp baseline, and the BSD-3-Clause license is declared only by a README badge with no LICENSE file.",
+    "urls_opened": [
+      "https://github.com/tpoisonooo/chgemm",
+      "https://github.com/tpoisonooo/chgemm/commits/master",
+      "https://raw.githubusercontent.com/tpoisonooo/chgemm/HEAD/README.md",
+      "https://raw.githubusercontent.com/tpoisonooo/chgemm/HEAD/LICENSE",
+      "https://raw.githubusercontent.com/tpoisonooo/chgemm/HEAD/0.png",
+      "https://raw.githubusercontent.com/tpoisonooo/chgemm/HEAD/makefile",
+      "https://raw.githubusercontent.com/tpoisonooo/chgemm/HEAD/MMult_4x8_21.c",
+      "https://raw.githubusercontent.com/tpoisonooo/how-to-optimize-gemm/HEAD/README.md"
+    ]
+  }
+]
