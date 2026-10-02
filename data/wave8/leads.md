@@ -69,3 +69,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - tongsucn/hptt (separate C++14 HPTT implementation by a coauthor, 2 stars, no numbers); Cytnx-dev HPTT fork with Apple ARM patches.
 - Kiddo benches/profile_cpp_competitors.rs benchmarks nanoflann, ALGLIB and Pkd-tree (results on sdd.github.io, blocked here); notes say FASTANN's "exact" mode is an O(N) brute-force scan and ANN and libkdtree++ are slower than nanoflann.
 - icl-utk-edu/hpfft (ICL harness: heFFTe vs fftMPI, AccFFT, P3DFFT, FFTE, SWFFT; no published results).
+- Agner Fog's RANVEC/ranvec1 paper and vectorclass; PCG blog's bounded-rands numbers (imneme/bounded-rands). (from rng-blogs search)
