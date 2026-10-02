@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/pjt222/bare-metal",
+  "one_liner": "Hand-tuned sm_86 CUDA/SASS ML kernels; FP16 HGEMM roughly ties cuBLAS on one laptop GPU, other kernels trail vendor libraries.",
+  "what_it_does": "A research corpus of ML kernels (SGEMM/HGEMM, 2:4 sparse HGEMM, INT8 IGEMM, Flash Attention, implicit-GEMM conv2d, softmax/layernorm/groupnorm, activations) written for one GPU, the RTX 3070 Ti Laptop (GA104, sm_86). Each kernel is an extern \"C\" __global__ function compiled to a .cubin and driven by a CUDA Driver API bench, optionally byte-patched at SASS level with the project's R package cuasmR. It is not a library with a BLAS-style API: hgemm_16warp takes row-major FP16 A and B and writes row-major FP32 C with no alpha/beta, transpose or stream arguments.",
+  "how_it_is_fast": "hgemm_16warp uses a 128x128 block tile with 16 warps in a 4x4 grid, each warp owning a 2x2 set of 16x16 WMMA tiles, so accumulators drop to 32 registers and __launch_bounds__(512, 2) fits two blocks (32 warps) per SM. A and B tiles are double-buffered in shared memory with cp.async (LDGSTS, 16-byte copies), padded by 8 halves per row to avoid bank conflicts, and kept under the 50 KB per-block shared-memory cliff that the project measured as a 2x cliff on GA104. The docs frame the work as 'four laws of GA104': feed the Tensor Cores, read each DRAM byte once, fill the warp schedulers, stay under 50 KB of shared memory.",
+  "when_to_use": [
+    "Learning how an Ampere tensor-core GEMM is built from WMMA, cp.async double buffering and occupancy tuning, with a documented phase-by-phase progression (naive SGEMM 1.0x to HGEMM 16-warp 69.2x to sparse 2:4 90.5x in docs/inventory.md).",
+    "Studying SASS-level editing on sm_86: the cuasmR workflow (cubin to nvdisasm to byte patch) and the tutorial chapters are the distinctive part of the repo.",
+    "Square FP16-in/FP32-out GEMMs at 2048^3 to 4096^3 on a GA104 (RTX 3070 Ti class) card where you want a small, readable kernel that lands within a few percent of cuBLAS.",
+    "Reusing its benchmark discipline: the clock-lock, throttle-rejection and baseline-provenance rules in data/baselines.json and AGENTS.md are a useful template for noisy laptop GPUs."
+  ],
+  "when_not_to_use": [
+    "Production GEMM on any GPU other than sm_86: kernels, constants and tuning target GA104 only, and the repo has no CI that runs on a GPU.",
+    "When you need a measurable win over cuBLAS: under the project's own clock-locked baselines HGEMM is about 1.02x cuBLAS, and at native boost it measured 28,090 and 27,307 GFLOPS, below the recorded cuBLAS reference (28,631 and 29,708).",
+    "INT8, sparse INT8 and convolution: the project's own table shows IGEMM at 68.7% of cuBLAS, sparse IGEMM at 25.4% and 18.2% of cuSPARSELt, and conv2d at 42.3% of cuDNN.",
+    "General shapes or layouts: the HGEMM kernel has no transpose, alpha/beta or batched variants and skips any 16x16 output tile that crosses the M/N boundary.",
+    "Teams without R and the Windows/WSL2 setup: make reproduce needs CUDA 13.2, R 4.6.0 with renv and the local cuasmR package."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "CUDA toolkit (CUDA 13.2 documented) and the CUDA Driver API for benches; R 4.6.0 with renv packages and the local cuasmR package for the build/bench/SASS-patch tooling; cuBLAS, cuBLASLt, cuDNN and cuSPARSELt only for the reference benches",
+    "min_toolchain": "nvcc -arch=sm_86 -O2 (Makefile); documented toolchain CUDA 13.2 (nvcc V13.2.78), R 4.6.0; older CUDA versions not documented",
+    "platforms": "NVIDIA sm_86 (GA104, RTX 3070 Ti Laptop) only; developed under WSL2 on a Windows host",
+    "thread_safety": "not documented (plain kernels with no global state; launch and stream handling is up to the caller)",
+    "drop_in_for_baseline": "false - kernels are raw extern \"C\" cubin entry points with fixed row-major FP16 x FP16 -> FP32 semantics, not a cublasGemmEx-compatible API"
+  },
+  "gotchas": [
+    "hgemm_16warp silently skips writing any 16x16 output tile that would cross the M or N edge, and its 16-byte cp.async loads assume rows aligned to 8 halves; use M and N that are multiples of 16 and K, N multiples of 8 (read from the kernel source, not documented as a contract).",
+    "Benchmark numbers depend on clock regime: issue #158 (open) records hgemm_16warp running about 10% slower at native boost than under a 1605 MHz lock, and #159 (open) records two locked sessions disagreeing by 4.9% on the 4096^3 figure.",
+    "The 31,875/31,765 GFLOPS rows in docs/comparison_to_sota.md and the 31,910 headline in docs/inventory.md are native-boost readings the project itself footnotes as disputed (#167, closed by PR #206); the cuBLAS reference was recorded on 2026-05-18 without a clock lock, so the comparison mixes dates and regimes.",
+    "Bench executables load cubins by relative filename and must be run from their own directory (AGENTS.md)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over fast.cu when your hardware is a consumer Ampere card (sm_86) rather than an H100, or when the goal is learning SASS-level tuning; fast.cu shows a larger and better-documented margin over cuBLAS (about 1.07x at N=4096 on H100). FastGEMV covers matrix-vector (memory-bound) work, not GEMM, so the two do not overlap.",
+  "verified_claims_summary": "On an RTX 3070 Ti Laptop GPU (150 W cap, WSL2, CUDA 13.2, nvcc -O2 sm_86), the 16-warp FP16 HGEMM at 2048^3 and 4096^3 was compared with a local cublasGemmEx harness (FP16 in, FP32 out, CUBLAS_COMPUTE_32F_FAST_16F, median of 11 after 5 warmups). The current clock-locked project baselines (29,174 and 30,401 GFLOPS) sit about 2% above the cuBLAS readings (28,631 and 29,708), a margin smaller than the project's own 4.9% session-to-session spread; the 107-111% figures on the comparison page are older native-boost readings.",
+  "status_note": "Active (last commit 2026-08-17, 2 stars, MIT), with unusually candid self-auditing in its issue tracker; usable as copyable reference code for sm_86, not as a maintained GEMM library.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/pjt222/bare-metal/HEAD/README.md",
+    "https://raw.githubusercontent.com/pjt222/bare-metal/HEAD/docs/comparison_to_sota.md",
+    "https://raw.githubusercontent.com/pjt222/bare-metal/HEAD/docs/inventory.md",
+    "https://raw.githubusercontent.com/pjt222/bare-metal/HEAD/AGENTS.md",
+    "https://raw.githubusercontent.com/pjt222/bare-metal/HEAD/Makefile",
+    "https://raw.githubusercontent.com/pjt222/bare-metal/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/pjt222/bare-metal/HEAD/data/baselines.json",
+    "https://raw.githubusercontent.com/pjt222/bare-metal/HEAD/data/reference_baselines.json",
+    "https://raw.githubusercontent.com/pjt222/bare-metal/HEAD/kernels/gemm/hgemm/hgemm_16warp.cu",
+    "https://raw.githubusercontent.com/pjt222/bare-metal/HEAD/kernels/reference/cublas_hgemm/bench.cu",
+    "https://github.com/pjt222/bare-metal/issues?q=is%3Aissue+hgemm",
+    "https://github.com/pjt222/bare-metal/issues/167"
+  ],
+  "confidence": 0.8
+}
