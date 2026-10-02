@@ -1,0 +1,88 @@
+[
+  {
+    "id": "https://github.com/kolinko/effort",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "First-party only: the README states the parity/2x claim, and the project page source in the repo (docs/index.html, served as kolinko.github.io/effort) charts bucketMul tokens/s against an 'Apple's MPS speed' line and a llama.cpp line; the harness benchmarks/benchmark.swift (goQuickBucketPerformance, goBucketPerformance) times MPS basicMul against expertMul, but no compiler/flags are given and the charts name no chip, so C.",
+    "corrections": {
+      "benchmark_url": "https://github.com/kolinko/effort/blob/main/docs/index.html",
+      "baseline": "Apple MPS default matrix-vector multiplication (benchmark.swift prints 'Default Apple MPS implementation (comparable to llama.cpp)'); the project page also plots a llama.cpp tokens/s line",
+      "claimed_speedup": "README and project page: 'At 50% effort, it performs as fast as regular matrix multiplications on Apple Silicon chips; at 25% effort, it is twice as fast while still retaining most of the quality.' The 'Pure Matrix Multiplication Performance' chart (docs/ryc/ryc0.1.png, read by eye) puts Apple MPS at about 26 tps and bucketMul at about 15 tps at 100% effort, about 26-27 tps at 50%, about 47-49 tps at 25%, reaching the 2x-MPS line (about 52 tps) only near 22% effort, where the chart marks 'breakdown on Mistral'. docs/gpu.html says parity with MPS is reached 'at 50-70% effort'. The tokens/s chart (ryc0.2.png) shows the actual (unadjusted) eval speed reaching the llama.cpp line (about 25 tok/s) only near 30% effort.",
+      "workload": "Single-token decode matrix-vector multiplication (one state vector times FP16 Mistral weight matrices on the Metal GPU): benchmark.swift times bucketMul (expertMul) on w1 (4096x14336) at several effort levels against MPS basicMul on 3x wq (3x4096x4096) scaled by 4/3, with warm-ups inside timeIt.",
+      "hardware": "Charts name no chip; the author's machine is an M2 Pro per docs/setup.html ('15ms on my M2 Pro'), and docs/gpu.html says bucketMul seems faster on M3 than on M2/M1.",
+      "caveats": "First-party only; the speed charts are images on the project page (repo docs/ folder) with no chip label, raw timings, compiler or Xcode settings; the harness only prints timings when run. Read from the chart, 25% effort is about 1.85x MPS rather than 2x, 2x is reached only around 22% effort where the chart itself marks a quality breakdown on Mistral, and at 100% effort bucketMul is slower than MPS (about 15 vs 26 tps). The baseline timing compares different matrices (3x wq scaled by 4/3 vs one w1). Approximate method: lower effort skips weights, so output differs from exact matmul. The author's own pages say real generation has about 15 ms/token overhead (actual tok/s lower than the 'adjusted' line), that 'the current implementation seems just broken' for quality (Mistral worse than it used to be, Mixtral barely works), that output is nondeterministic (atomic dispatch), and that KL-divergence tests show it 'seems to not win against Quantization yet'. Last commit 2024-07-01. Repo identity inferred from the HN title and README (HN thread not opened)."
+    },
+    "notes": "kolinko.github.io is blocked, but the same pages are checked into docs/ and were read via raw.githubusercontent.com, including the chart images. Shortcomings worth recording: author-reported quality/correctness regression ('implementation seems just broken', Mixtral barely works) and the 2x claim sits at the chart's own quality-breakdown point. Metadata on github.com: MIT, 233 stars, 17 forks, not a fork or archived, 331 commits, last commit 2024-07-01 (stale is right).",
+    "urls_opened": [
+      "https://github.com/kolinko/effort",
+      "https://github.com/kolinko/effort/commits",
+      "https://github.com/kolinko/effort/tree/main/benchmarks",
+      "https://github.com/kolinko/effort/tree/main/docs",
+      "https://github.com/kolinko/effort/blob/main/docs/index.html",
+      "https://raw.githubusercontent.com/kolinko/effort/HEAD/README.md",
+      "https://raw.githubusercontent.com/kolinko/effort/HEAD/benchmarks/benchmark.swift",
+      "https://raw.githubusercontent.com/kolinko/effort/HEAD/docs/index.html",
+      "https://raw.githubusercontent.com/kolinko/effort/HEAD/docs/gpu.html",
+      "https://raw.githubusercontent.com/kolinko/effort/HEAD/docs/setup.html",
+      "https://raw.githubusercontent.com/kolinko/effort/HEAD/docs/pesky.html",
+      "https://raw.githubusercontent.com/kolinko/effort/HEAD/docs/bucketmul.html",
+      "https://raw.githubusercontent.com/kolinko/effort/HEAD/docs/ryc/ryc0.1.png",
+      "https://raw.githubusercontent.com/kolinko/effort/HEAD/docs/ryc/ryc0.2.png"
+    ]
+  },
+  {
+    "id": "https://github.com/tspeterkim/flash-attention-minimal",
+    "verdict": "reject",
+    "reject_reason": "not-faster",
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "The README numbers (52.545 ms vs 3.908 ms Self CUDA time on a T4) come from bench.py, which profiles one cold call of each variant with no warm-up, manual attention first, so the manual figure carries first-call cuBLAS/kernel initialisation; at batch 16 x 12 heads x 64 x 64 FP32 a steady-state eager attention takes far less than 52 ms. The numbers exist but do not measure a speedup, so at most first-party C and in substance invalid.",
+    "corrections": {
+      "caveats": "Invalid evidence: bench.py times a single cold call of each implementation under torch.autograd.profiler with no warm-up, and manual attention runs first, so its 52.5 ms CUDA time is dominated by one-time initialisation. Issue #11 (2025-09-04) reports that on a second run naive attention is 'drastically faster than the flash attention kernel'; issue #13 reports that timed with CUDA events 'the flash attention is consistently much slower than the manual attention'; issue #16 says the old autograd profiler does not capture the custom op correctly; issue #3 ('slow in for loop test') times both with a warm-up. The README itself concedes it gets slower than the manual implementation for longer sequences and larger block sizes (thread-per-row matmuls, FP32, fixed block size 32), and bench.py says 'Use small model params, otherwise slower than manual attention'. Educational code: forward only, no comparison with cuDNN, official flash-attention or PyTorch SDPA. The tensorcore branch has a 10-iteration wall-clock bench at GPT-2 sizes (seq 1024) but publishes no numbers. Repo identity inferred from the HN title (HN thread not opened)."
+    },
+    "notes": "Reject: the only speedup is a cold-start profiling artifact, and three issues (#11, #13, #16) report naive PyTorch attention is faster when measured properly; README admits slower at realistic sizes. If kept under keep-and-document, record shortcoming 'claimed speedup not reproducible: benchmark times an unwarmed baseline; slower than eager PyTorch attention when warmed (issues #11, #13)' and tier no higher than C. Metadata on github.com: Apache-2.0, 1.2k stars, 118 forks, not a fork or archived, 9 commits on main, last commit 2024-12-30 (stale is right).",
+    "urls_opened": [
+      "https://github.com/tspeterkim/flash-attention-minimal",
+      "https://github.com/tspeterkim/flash-attention-minimal/commits",
+      "https://github.com/tspeterkim/flash-attention-minimal/issues?q=is%3Aissue",
+      "https://github.com/tspeterkim/flash-attention-minimal/issues/3",
+      "https://github.com/tspeterkim/flash-attention-minimal/issues/11",
+      "https://github.com/tspeterkim/flash-attention-minimal/issues/13",
+      "https://github.com/tspeterkim/flash-attention-minimal/issues/16",
+      "https://raw.githubusercontent.com/tspeterkim/flash-attention-minimal/HEAD/README.md",
+      "https://raw.githubusercontent.com/tspeterkim/flash-attention-minimal/HEAD/bench.py",
+      "https://raw.githubusercontent.com/tspeterkim/flash-attention-minimal/tensorcore/README.md",
+      "https://raw.githubusercontent.com/tspeterkim/flash-attention-minimal/tensorcore/bench.py"
+    ]
+  },
+  {
+    "id": "https://github.com/luce-org/lucebox",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "RESULTS.md gives first-party RTX 3090 pp520/tg128 numbers against llama.cpp BF16 and PyTorch HF. The harness optimizations/megakernel/final_bench.py (10 warm-up + 20 timed prefill runs, perf_counter with cuda.synchronize) times only the megakernel and PyTorch HF and prints llama.cpp as '(run separately)' with no command or version; setup.py gives nvcc flags, but the CUDA version for the 3090 run and the host CPU are not stated, so C.",
+    "corrections": {
+      "workload": "Batch-1 prefill of 520 tokens (pp520) and decode of 128 tokens (tg128) for Qwen 3.5-0.8B in BF16 on an RTX 3090. Decode runs as one persistent CUDA kernel for all 24 layers (kernel.cu); prefill on the 3090 uses prefill.cu (cuBLAS plus standalone kernels), not the megakernel (a single-dispatch prefill megakernel exists only on Blackwell).",
+      "hardware": "NVIDIA RTX 3090 24GB for the llama.cpp comparison; the megakernel README adds RTX 2080 Ti results (13,919 / 250 tok/s, FP16) and RESULTS.md adds DGX Spark GB10 (NVFP4 decode, CUDA 13.2) versus PyTorch HF only; Apple M5 Max 36GB appears only as an LM Studio (llama.cpp) reference at 229 tok/s. Host CPU not stated.",
+      "claimed_speedup": "RESULTS.md (RTX 3090, BF16): prefill pp520 21,347 tok/s vs llama.cpp BF16 11,247 and PyTorch HF 7,578; decode tg128 413 tok/s vs llama.cpp 267 (1.55x) and PyTorch HF 108 (3.8x). The megakernel README states '1.9x faster prefill, 1.55x faster decode vs llama.cpp'. DVFS table: 411 tok/s and 1.87 tok/J at a 220 W limit, 433 tok/s at stock.",
+      "caveats": "First-party benchmark. llama.cpp is 'latest release at time of testing, BF16 mode, default settings' with no version, command or flags, and final_bench.py does not run it ('(run separately)'); host CPU and the CUDA version of the 3090 run are not stated. Only 0.8B parameters, batch 1, hand-written for one model's 18 DeltaNet + 6 attention layout; the README says fusion benefits shrink as model size grows, and llama.cpp has only generic, unfused DeltaNet support. Prefill on the 3090 is cuBLAS plus separate kernels, so the 1.9x prefill gain is not a megakernel result. The 413 tok/s headline is the stock run; the efficiency comparison table pairs 411 tok/s at a 220 W limit with llama.cpp's 267 tok/s at 350 W, and the DVFS table's stock row (433 tok/s) differs from the 413 headline without explanation. A search summary of the HN thread quoted 37,800 tok/s prefill, which is not on RESULTS.md; only RESULTS.md numbers are used. HN thread not opened (egress blocked). The repo was renamed from luce-megakernel to lucebox and also hosts DFlash, PFlash, KVFlash and Spark, not assessed here."
+    },
+    "notes": "Numbers verified on RESULTS.md and the megakernel README. Corrected the record's caveat: the 413 tok/s figure is not a 220 W reading (220 W gives 411 tok/s in the DVFS table). Metadata on github.com: Apache-2.0 (LICENSE file checked), 2.9k stars, 283 forks, not a fork or archived, 1,945 commits, last commit 2026-10-01 (active).",
+    "urls_opened": [
+      "https://github.com/Luce-Org/lucebox",
+      "https://github.com/Luce-Org/lucebox/commits",
+      "https://raw.githubusercontent.com/Luce-Org/lucebox/HEAD/optimizations/megakernel/RESULTS.md",
+      "https://raw.githubusercontent.com/Luce-Org/lucebox/HEAD/optimizations/megakernel/README.md",
+      "https://raw.githubusercontent.com/Luce-Org/lucebox/HEAD/optimizations/megakernel/setup.py",
+      "https://raw.githubusercontent.com/Luce-Org/lucebox/HEAD/optimizations/megakernel/final_bench.py",
+      "https://raw.githubusercontent.com/Luce-Org/lucebox/HEAD/README.md",
+      "https://raw.githubusercontent.com/Luce-Org/lucebox/HEAD/LICENSE"
+    ]
+  }
+]
