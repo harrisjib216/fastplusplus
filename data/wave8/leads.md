@@ -70,5 +70,5 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - Kiddo benches/profile_cpp_competitors.rs benchmarks nanoflann, ALGLIB and Pkd-tree (results on sdd.github.io, blocked here); notes say FASTANN's "exact" mode is an O(N) brute-force scan and ANN and libkdtree++ are slower than nanoflann.
 - icl-utk-edu/hpfft (ICL harness: heFFTe vs fftMPI, AccFFT, P3DFFT, FFTE, SWFFT; no published results).
 - Agner Fog's RANVEC/ranvec1 paper and vectorclass; PCG blog's bounded-rands numbers (imneme/bounded-rands). (from rng-blogs search)
-- "Show HN: FFTN, faster than FFTW in 700 lines of C" (HN item 45570502, sac-home.org); repo URL unknown, HN and the site blocked here. (from fft-blogs search)
+- "Show HN: FFTN, faster than FFTW in 700 lines of C" (HN item 45570502); code at gitlab.sac-home.org/sac-group/fftn (self-hosted GitLab, blocked here). Best open b8 lead. (from fft-blogs and fft-hn searches)
 - RTSpatial/RTSpatial (LibRTS, MIT, claims up to 85.1x; baselines unnamed in the repo, paper needed). (from geo-blogs search)
