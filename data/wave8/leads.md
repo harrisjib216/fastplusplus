@@ -79,3 +79,12 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - mlawsonca/benchmarking_suite_range_searching_libraries (CCGrid 2022, independent suite incl. pico_tree and nanoflann; results are paper-only, osti/arXiv blocked): possible B for both. (from retier-06)
 - chusitoo/flatbush (C++ port of Flatbush). (from geo-hn verifier)
 - zeux/calm (beats yalm in yalm's own table; check whether catalogued). llm.c forks gevtushenko/llm.c (CCCL) and anthonix/llm.c (AMD); llm.c Discussion #481 (8xA100 GPT-2 124M in 90 min, ~60% MFU). Hibari-K repos (bigint_mul_avx512f, bigint_mul_avx2) possibly from the Edamatsu/Takahashi group, unconfirmed. (from enrichers)
+
+## Paper-access retier candidates added 2026-10-03 (from verifier batches 142/144/146/151)
+
+- bassoy/ttm (D): Journal of Computational Science 2025, vol. 87, 102568 (ScienceDirect blocked); likely B.
+- eth-cscs/costa (C): ISC21 paper, arXiv 2106.06601; likely B.
+- paralg/pargeo (C): arXiv 2207.01834 and the PPoPP poster on www.cs.ucr.edu; possible B.
+- superscientificsoftwarelaboratory/amgt (B, snippet-only): SC '24, DOI 10.1109/SC41406.2024.00058; confirm numbers.
+- superscientificsoftwarelaboratory/dasp (B, snippet-only): SC '23, DOI 10.1145/3581784.3607051; confirm numbers.
+- koide3/fast_gicp: cross-link with the already-listed successor koide3/small_gicp when rendering.
