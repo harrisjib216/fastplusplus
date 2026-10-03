@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/s-yata/darts-clone",
+  "one_liner": "Single-header static double-array trie with 32-bit units; half the size of Darts and faster on cache-bound lookups.",
+  "what_it_does": "Builds an immutable string-to-int dictionary from a sorted key list and answers exact-match, common-prefix (all dictionary keys that are prefixes of a query) and incremental traverse() queries, the core lookups of morphological analysers such as MeCab-style tokenisers. The interface mirrors the original Darts (Darts::DoubleArray with build(), open()/save(), set_array(), exactMatchSearch(), commonPrefixSearch(), traverse()), so swapping is mostly a header change, but dictionary files are not compatible and must be rebuilt.",
+  "how_it_is_fast": "It is a double-array trie (Aoe 1989): each node is one 32-bit unit packing label, leaf flag and an offset, and the child for byte c is found at node_pos XOR offset XOR c, so a lookup is one dependent array load per key byte. Halving the unit from 8 to 4 bytes, and merging identical subtrees into a DAWG when values repeat, shrinks the array so more of it stays in cache; a has-leaf flag per node skips the explicit terminator transition, which mainly helps commonPrefixSearch(). The author attributes the gains to cache efficiency, which is why random-order lookups gain about 2x while in-cache, sorted-order lookups gain little.",
+  "when_to_use": [
+    "Read-only dictionaries of 100k to tens of millions of byte-string keys (word lists, titles, n-grams) needing exact and longest/common-prefix lookups",
+    "Tokenisers and morphological analysers that walk text byte by byte with commonPrefixSearch() or traverse()",
+    "Dictionaries built once offline and memory-mapped at startup via set_array() to avoid load time",
+    "Key sets with few distinct values (or no values), where the DAWG build merges subtrees and the file shrinks further (JA1: 1,272 KB with all-zero values vs 3,336 KB)",
+    "Projects that want a dependency-free, BSD-2-Clause single header (also a vcpkg port)"
+  ],
+  "when_not_to_use": [
+    "Data that changes: there is no insert or delete; any update means a full rebuild",
+    "Memory-critical dictionaries: LOUDS-based tries such as marisa-trie or xcdat are several times smaller (the verified record cites the marisa-trie README: about 377 MB for darts-clone vs 51 MB for marisa-trie on 9.8M Wikipedia titles)",
+    "Untrusted dictionary files: open() validates only the first 256 units and set_array() validates nothing, so a corrupt or hostile file can drive searches out of bounds",
+    "Unique value per key with tight build-time budgets: build is 2-3x slower than Darts on large sets (EN2 6,666 vs 2,518 ns/key)",
+    "Very large key sets: offsets of 2^29 or more throw 'too large offset' (issue 1, closed wontfix); values are limited to non-negative 31-bit ints"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none",
+    "min_toolchain": "C++98-era header (uses throw() specifications and NULL); vcpkg port builds it with current compilers",
+    "platforms": "any (portable C++, no intrinsics)",
+    "thread_safety": "not documented; search methods are const and keep no mutable state, so concurrent reads look safe (per code reading); build() is not",
+    "drop_in_for_baseline": "partial — same class name and method signatures as Darts, but dictionary files are incompatible and early versions before 0.32e had a different interface"
+  },
+  "gotchas": [
+    "Keys must be sorted in unsigned byte order, non-empty and NUL-free, and values non-negative; violations throw Darts::Details::Exception (exceptions are used for bad input and bad_alloc, while open()/save() return non-zero on I/O errors).",
+    "No bounds checks on lookup: exactMatchSearch()/traverse() index array_ directly, which is only safe for dictionaries you built; open PR 6 proposes a validate() helper taken from sentencepiece and OpenCC for exactly this reason.",
+    "The template parameter T only casts at the API boundary; internal values are always int, so 64-bit values do not fit.",
+    "Sorted-order traverse() is slower than Darts on every word list (JA2 144.6 vs 119.1 ns/key) because it is not inlined; small in-cache sets like 7-digit postal codes are also slower (24.2 vs 18.8 ns/key)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over xcdat or lexindex when lookup latency and a tiny, dependency-free header matter more than dictionary size, since those compressed tries trade lookup speed for much smaller structures; pick xcdat, lexindex or C2 when the dictionary must fit in limited memory.",
+  "verified_claims_summary": "The author's own darts-benchmark (Darts-clone 0.32g vs original Darts, gcc 4.3.3 with unstated optimisation flags, Core 2 Quad Q9550, Ubuntu 9.04) on seven key sets shows dictionaries about half the size and random-order exactMatchSearch about 2.2x faster on the small sets (JA1 76.2 vs 170.4 ns/key, EN1 111.3 vs 228.5), shrinking to about 1.2x on the large Wikipedia and n-gram sets (JA2 516.4 vs 620.8). Sorted-order lookups are close to parity and slower on the postal-code set; the results are about fifteen years old.",
+  "status_note": "Stale (last commit May 2025, mostly documentation; PR 6 with validation and warning fixes open since July 2026) but BSD-2-Clause, a single header, and embedded in sentencepiece and OpenCC, so it is easy and low-risk to vendor for trusted dictionaries.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/s-yata/darts-clone/HEAD/README.md",
+    "https://raw.githubusercontent.com/s-yata/darts-clone/HEAD/include/darts.h",
+    "https://raw.githubusercontent.com/s-yata/darts-clone/HEAD/doc/ja/Evaluation.md",
+    "https://raw.githubusercontent.com/s-yata/darts-clone/HEAD/doc/en/Introduction.md",
+    "https://raw.githubusercontent.com/s-yata/darts-clone/HEAD/doc/ja/Introduction.md",
+    "https://raw.githubusercontent.com/s-yata/darts-clone/HEAD/src/darts.cc",
+    "https://github.com/s-yata/darts-clone/issues?q=is%3Aissue",
+    "https://github.com/s-yata/darts-clone/issues/1",
+    "https://github.com/s-yata/darts-clone/pulls?q=is%3Apr",
+    "https://github.com/s-yata/darts-clone/pull/6"
+  ],
+  "confidence": 0.8
+}

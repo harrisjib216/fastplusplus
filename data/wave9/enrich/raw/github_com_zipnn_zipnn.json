@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/zipnn/zipnn",
+  "one_liner": "Lossless compressor for floating-point model weights; byte grouping plus Huffman beats plain zstd on bfloat16 speed and ratio.",
+  "what_it_does": "Compresses neural-network tensors (bfloat16, float16, float32, FP8) losslessly, typically saving about a third of a BF16 model. It is a Python package (pip install zipnn) whose ZipNN(...).compress()/decompress() take bytes, NumPy arrays or torch tensors, plus file scripts and monkey-patch plugins for safetensors, Hugging Face from_pretrained and vLLM that load .znn files transparently. It is not a general-purpose byte compressor and not a zstd drop-in: the output is its own chunked container with a ZipNN header.",
+  "how_it_is_fast": "Byte grouping: each 256 KB chunk is split into per-byte-position streams (high bytes holding the low-entropy exponent, low bytes holding near-random mantissa), after an optional bit reorder that moves the exponent into its own byte. Each stream is then coded with Huffman only (HUF_compress from Yann Collet's FiniteStateEntropy library, vendored as a git submodule), skipping LZ match finding that finds almost nothing in weights; streams that do not shrink below the threshold are stored raw. Chunks are processed in parallel by pthreads workers pulling from a mutex-protected counter.",
+  "when_to_use": [
+    "Storing or shipping BF16/FP16/FP32/FP8 checkpoints where about 33% (BF16) or 17% (FP32) smaller files cut storage or download time",
+    "Loading compressed safetensors into Hugging Face Transformers or vLLM on Linux x86-64 with spare CPU cores for multithreaded decompression",
+    "Replacing zstd on raw weight tensors when you want both better ratio and higher single-thread throughput on that data",
+    "Delta compression between two checkpoints of the same shape (XOR then compress), which the package supports"
+  ],
+  "when_not_to_use": [
+    "General data (text, logs, mixed binary): it has no LZ stage of its own for these; use zstd or lz4",
+    "Windows with MSVC: issues 45 and 79 report the C extension failing there (79 worked around it with MinGW)",
+    "Decompressing untrusted .znn files: the C decoder trusts the offsets and sizes in the input (see gotchas)",
+    "C or C++ projects wanting a library: there is no C/C++ API; the core is a CPython extension module, so you would have to lift csrc/ and the FSE sources yourself",
+    "Integer or already-quantised tensors other than FP8: uint32 is rejected in the current version"
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "numpy, torch (>=2.0), safetensors; zstandard and lz4 Python packages for the non-Huffman methods; vendored FiniteStateEntropy (and zstd) git submodules for the C extension",
+    "min_toolchain": "Python 3.6+ per setup.py; C compiler with pthreads and C99 VLAs (built with -O3)",
+    "platforms": "Linux x86-64 tested (README benchmark on Xeon Platinum 8480+); macOS not documented; Windows/MSVC broken per issues 45 and 79",
+    "thread_safety": "not documented; internally multithreaded (default min(cpu_count, 16) threads), and a ZipNN object keeps mutable header state between calls",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "compress() rewrites the caller's buffer in place: for float32 and bfloat16 the C code runs reorder_all_floats_dtype16/32 directly on the input (a torch tensor's storage via .numpy(), or even an immutable bytes object), and the project's own tests clone the tensor before compressing; copy your tensor first if you keep using it (per code reading, not run).",
+    "The decoder (py_combine_dtype) reads chunk types and cumulative size_t offsets from the input without checking them against the buffer length, and sizes several stack VLAs by the chunk count from the header, so a crafted or truncated file can read out of bounds and a very large single buffer can exhaust the stack (per code reading).",
+    "HUF_compress accepts at most 128 KB per call; FP8 is clamped to 128 KB chunks, but setting compression_chunk above 256 KB for 16-bit (or 512 KB for 32-bit) data makes every stream exceed that limit and fall back silently to raw storage (per code reading). split_bytearray_dtype16 also writes one byte past each output buffer when a 16-bit input has odd length.",
+    "Memory leaks in the C extension were fixed only in v0.5.4 (issue 78, PR 77: about 608 MB growth over 100 iterations on 190 MB); earlier versions also had segfault/core-dump reports (issues 55, 75)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over zstd or LZ4 only for floating-point model weights, where those reach about 1.27x and 1.0x ratio on BF16 versus ZipNN's 1.51x; Stenos (byte shuffle plus its own coder) is the closest catalogued alternative for typed numeric arrays in C++, and is the better fit if you need a C++ library rather than a Python package.",
+  "verified_claims_summary": "The README table (single thread, 256 KB chunks, bfloat16 weights) gives ZipNN v0.2.0 1120 MB/s compress and 1660 MB/s decompress at ratio 1.51, against zstd (labelled 'v1.56', level and hardware unstated) at 785 and 950 MB/s and ratio 1.27, about 1.4x and 1.7x; the 80 GB/s decompression figure is 16 workers on a two-socket Xeon Platinum 8480+. No benchmark script, compiler or CPU is given for the single-thread table, and the measured version (0.2.0) predates the multithreaded C rewrite.",
+  "status_note": "Active (v0.5.4 on PyPI, April 2026) and MIT-licensed, but it is a Python package with a C extension rather than a reusable C/C++ library, and its C code has unchecked-input and in-place-mutation hazards.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/zipnn/zipnn/HEAD/README.md",
+    "https://raw.githubusercontent.com/zipnn/zipnn/HEAD/setup.py",
+    "https://raw.githubusercontent.com/zipnn/zipnn/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/zipnn/zipnn/HEAD/LICENSE.txt",
+    "https://raw.githubusercontent.com/zipnn/zipnn/HEAD/csrc/zipnn_core.c",
+    "https://raw.githubusercontent.com/zipnn/zipnn/HEAD/csrc/data_manipulation_dtype16.c",
+    "https://raw.githubusercontent.com/zipnn/zipnn/HEAD/csrc/data_manipulation_dtype32.c",
+    "https://raw.githubusercontent.com/zipnn/zipnn/HEAD/zipnn/zipnn.py",
+    "https://raw.githubusercontent.com/zipnn/zipnn/HEAD/tests/test_suit.py",
+    "https://raw.githubusercontent.com/zipnn/zipnn/HEAD/tests/simple_stress_tests.py",
+    "https://raw.githubusercontent.com/Cyan4973/FiniteStateEntropy/HEAD/lib/huf.h",
+    "https://github.com/zipnn/zipnn/issues?q=is%3Aissue",
+    "https://github.com/zipnn/zipnn/issues/55",
+    "https://github.com/zipnn/zipnn/issues/78",
+    "https://github.com/zipnn/zipnn/issues/79"
+  ],
+  "confidence": 0.75
+}
