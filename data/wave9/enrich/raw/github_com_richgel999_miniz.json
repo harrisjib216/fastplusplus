@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/richgel999/miniz",
+  "one_liner": "Single-file MIT zlib/Deflate replacement with ZIP and PNG helpers; measured slower than zlib, chosen for portability, not speed.",
+  "what_it_does": "miniz is an independent C implementation of Deflate (RFC 1951) and zlib (RFC 1950) streams, shipped as an amalgamated miniz.c/miniz.h pair or as a CMake/Meson module. It exposes a zlib-style API (mz_deflate/mz_inflate, mz_compress/mz_uncompress, crc32/adler32) under zlib's own names unless MINIZ_NO_ZLIB_COMPATIBLE_NAMES is defined, plus heap-free low-level coroutine codecs (tdefl compressor, tinfl decompressor), a ZIP reader/writer/appender and a PNG writer. Features can be compiled out with MINIZ_NO_* macros, down to just CRC-32 and Adler-32.",
+  "how_it_is_fast": "It is not faster than zlib on any published measurement. The compressor uses the same hash-chaining LZ77 as zlib (32 KiB window, 2^15-entry hash, per-level probe counts from 1 at level 1 to 1500 at level 10, greedy parsing at levels 0-3) and has a special level-1 path, tdefl_compress_fast, that hashes 3-byte trigrams and compares 16-bit words. The decompressor is a single coroutine function with 10-bit fast Huffman lookup tables and a 64-bit bit buffer on 64-bit targets. CRC-32 is a plain 256-entry table loop, with no slicing-by-8 or carry-less multiply.",
+  "when_to_use": [
+    "You need zlib-format compression or decompression in C or C++ with a single MIT-licensed source pair and no build-system dependency (embedded, games, tools).",
+    "You need simple ZIP read/write/append or a quick PNG writer alongside Deflate, without pulling in libzip or libpng.",
+    "Constrained or heap-free environments: tdefl/tinfl state structs can be memcpy-saved, the low-level codecs never allocate, and MINIZ_NO_MALLOC/TDEFL_LESS_MEMORY trim memory.",
+    "Streaming with tiny buffers: the coroutine design accepts input one byte at a time."
+  ],
+  "when_not_to_use": [
+    "When speed is the goal: Wuffs measured miniz 2.2.0 decoding at 0.82-0.88x of zlib 1.2.11 (i5-10210U), and libdeflate, zlib-ng and ISA-L are all much faster than zlib on both sides.",
+    "gzip (.gz) streams or zlib features beyond the core: window_bits must be exactly 15 or -15, so gzip wrapping (31/47) and smaller windows are rejected, and there is no gz* file API, no deflateSetDictionary/inflateSetDictionary and no deflateParams.",
+    "Encrypted or multi-volume ZIP archives (unsupported per the README and header), or ZIP handling of untrusted archives where you cannot tolerate open bugs (see gotchas).",
+    "Multithreaded single-stream compression: it is single-threaded only.",
+    "Very large compressor counts in memory: by default each tdefl_compressor carries roughly 300 KB of fixed arrays (32 KiB dictionary, 64 KiB next-chain, 64 KiB hash, 64 KiB LZ code buffer, ~83 KiB output buffer; estimated from the struct fields)."
+  ],
+  "integration": {
+    "form": "source-drop (amalgamated miniz.c + miniz.h from the releases page) or static/shared lib via CMake/Meson; header-only option via BUILD_HEADER_ONLY",
+    "dependencies": "none (libc only; stdio optional via MINIZ_NO_STDIO)",
+    "min_toolchain": "C90 (CMake sets CMAKE_C_STANDARD 90); also compiles as C++; tested with GCC, Clang and MSVC per README",
+    "platforms": "any; little-endian and 64-bit detection is automatic, big-endian handled in portable paths",
+    "thread_safety": "Separate mz_stream / tdefl / tinfl / mz_zip_archive objects can be used on separate threads; the header notes the ZIP m_last_error functionality is not thread safe; no global mutable state documented otherwise",
+    "drop_in_for_baseline": "partial: zlib names and the common deflate/inflate/compress/uncompress/crc32/adler32 calls work (README says tested with libpng and libzip), but no gzip wrapper, no custom window sizes, no dictionaries, no deflateParams and no gz* file I/O; it reports its version as \"11.3.2\" through ZLIB_VERSION"
+  },
+  "gotchas": [
+    "Since 3.0.0 MINIZ_USE_UNALIGNED_LOADS_AND_STORES defaults to 0 on every CPU, which compiles out the level-1 fast compressor (tdefl_compress_fast) and the 64-bit bit-writer path; the header itself says to set it to 1 for best performance. If you define it to 1 yourself, MINIZ_UNALIGNED_USE_MEMCPY is not defined, so the code falls back to raw pointer-cast loads (undefined behaviour under strict aliasing and UBSan); define both.",
+    "Open ZIP-layer bugs as of 2026-10: issue 387 (EOCD back-scan signed/unsigned promotion yields a negative file offset), 384 (mz_zip_reader_extract_iter_new frees a non-heap pointer on OOM for in-memory archives), 378 (central-directory offset overflow on zip64), 349 (pointer corruption on bigger files) and 330 (wrong extraction tied to file-position handling). The 3.1.2 changelog fixes a central-directory offset overflow and a code_len==0 infinite loop in tinfl_decompress and adds fuzz targets.",
+    "32-bit targets: issue 371 reported tinfl_decompress writing past the struct and output buffer on ESP32-S3 (32-bit bit buffer changes the fast-path refill cadence); it is closed, but no fixing commit was shown on the page, so over-allocate or test on 32-bit before trusting it. Issue 373 (claimed heap overflow in code-length RLE) is closed; the current m_len_codes array is padded by 137 bytes, which covers the largest run (counter <= 319 plus up to 138).",
+    "Using zlib and miniz in one binary causes symbol clashes unless MINIZ_NO_ZLIB_COMPATIBLE_NAMES is defined; on glibc, define _LARGEFILE64_SOURCE before including miniz.c or ZIP files over 2 GB fail."
+  ],
+  "pick_this_over_siblings_when": "Pick miniz over zlib-ng or libdeflate only when a single-file, C90, MIT-licensed codec with built-in ZIP/PNG helpers matters more than speed; for throughput, libdeflate (1.44-1.74x zlib on the same Wuffs runs) or zlib-ng are the catalogued choices, and LZ4 or zstd if you do not need the Deflate format.",
+  "verified_claims_summary": "The README makes only directional claims (levels 2-9 'designed to compare favorably against zlib's ratio and speed'; level 1 about 35% slower than minilzo with 5-9% better ratio) and its referenced performance page was not located. The only independent numbers, Wuffs doc/benchmarks.md (Core i5-10210U, Debian Bullseye builds, Wuffs commit 315b2e52), show miniz 2.2.0 decoding raw deflate at 204/252/287 MB/s versus zlib 1.2.11 at 241/289/352 MB/s (1k/10k/100k, 0.82-0.87x) and zlib streams at 237/272 versus 268/323 MB/s (0.84-0.88x); compression speed versus zlib is unmeasured.",
+  "status_note": "Actively maintained (last commit 2026-07-01, 3.1.x line with fuzz targets and Catch2 tests) and MIT-licensed, so it is easy to vendor, but it belongs in the catalog for portability and convenience, not for beating zlib.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/richgel999/miniz/HEAD/readme.md",
+    "https://raw.githubusercontent.com/richgel999/miniz/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/richgel999/miniz/HEAD/ChangeLog.md",
+    "https://raw.githubusercontent.com/richgel999/miniz/HEAD/miniz.h",
+    "https://raw.githubusercontent.com/richgel999/miniz/HEAD/miniz.c",
+    "https://raw.githubusercontent.com/richgel999/miniz/HEAD/miniz_common.h",
+    "https://raw.githubusercontent.com/richgel999/miniz/HEAD/miniz_tdef.c",
+    "https://raw.githubusercontent.com/richgel999/miniz/HEAD/miniz_tdef.h",
+    "https://raw.githubusercontent.com/richgel999/miniz/HEAD/miniz_tinfl.c",
+    "https://raw.githubusercontent.com/richgel999/miniz/HEAD/miniz_tinfl.h",
+    "https://raw.githubusercontent.com/richgel999/miniz/HEAD/miniz_zip.c",
+    "https://raw.githubusercontent.com/richgel999/miniz/HEAD/miniz_zip.h",
+    "https://raw.githubusercontent.com/richgel999/miniz/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/richgel999/miniz/HEAD/meson.build",
+    "https://github.com/richgel999/miniz/issues?q=is%3Aissue+is%3Aopen+overflow+OR+crash+OR+corrupt+OR+CVE+OR+slow",
+    "https://github.com/richgel999/miniz/issues/373",
+    "https://github.com/richgel999/miniz/issues/371",
+    "https://github.com/richgel999/miniz/issues/330",
+    "https://raw.githubusercontent.com/google/wuffs/main/doc/benchmarks.md",
+    "https://raw.githubusercontent.com/inikep/lzbench/HEAD/README.md"
+  ],
+  "confidence": 0.75
+}

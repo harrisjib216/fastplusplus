@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/matbech/zlib",
+  "one_liner": "Archived Windows/MSVC zlib fork with SIMD hashing, CRC and match patches; about 1.3-1.9x zlib 1.2.11 level-6 compression.",
+  "what_it_does": "A fork of madler/zlib (now at 1.2.13 per zlib.h) that keeps the zlib API and ABI and builds zlib1.dll for Win32, x64 and ARM64 from a Visual Studio project. It folds in third-party speed patches: Intel's PCLMULQDQ CRC-32 and SSE4.2 CRC32-instruction hashing, Cloudflare's and gildor2/fast_zlib's longest_match, Chromium's SIMD adler32, ARM CRC/adler patches, and (in 2022 commits) zlib-ng's chunkset inflate copy and compare256 code.",
+  "how_it_is_fast": "On x86 with SSE4.2 the deflate hash is the hardware CRC32 instruction over 4 bytes with a fixed 15-bit hash table (insert_string_sse), and the window slide uses SSE2; on ARM64 the ACLE CRC32 hash is used unconditionally. longest_match is the fast_zlib/Cloudflare variant (compares several bytes at once, compare256), CRC-32 uses PCLMULQDQ folding, adler32 uses SSE/AVX2 or NEON, and inflate copies matches with zlib-ng's chunkset. CPU features are detected at run time (x86_check_features) on x86.",
+  "when_to_use": [
+    "Windows applications that ship their own zlib1.dll built with MSVC and spend time in deflate level 6 (the measured case: 1.3-1.9x on silesia mozilla and webster).",
+    "Windows on ARM64 builds that want a zlib with CRC32 hashing and NEON adler32 under the stock zlib API.",
+    "As a reference for how the Intel, Cloudflare and fast_zlib deflate patches combine, before choosing a maintained fork."
+  ],
+  "when_not_to_use": [
+    "Anything that needs maintenance or security fixes: the repository was archived on 2026-06-17, the last commit is 2025-02-21, and it is based on zlib 1.2.13, so upstream 1.3.x fixes (e.g. the minizip CVE-2023-45853 fix in 1.3.1) are absent.",
+    "Linux, macOS or GCC/Clang builds: there is no Makefile, configure or CMake at the root, only zlib.sln/zlib.vcxproj (toolset v143), crc32.c includes headers with Windows backslash paths, and SIMD paths are gated on MSVC macros (_M_IX86, _M_AMD64, _M_ARM64).",
+    "Old x86 CPUs without SSE4.2/PCLMUL: open issue #2 (2018, no maintainer reply) reports altered decompressed output (text 'becomes upper-cased') on an AMD CPU with only SSE4A; it was never confirmed or fixed.",
+    "Workloads that need byte-identical output with stock zlib: the CRC32 hash and fixed hash_bits produce different compressed streams (19,064,581 vs 19,089,124 bytes on mozilla).",
+    "New projects: zlib-ng and libdeflate (siblings) carry the same ideas, run on all major platforms and are maintained."
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "none (Visual Studio project; a 2023 commit links onecore.lib)",
+    "min_toolchain": "MSVC with platform toolset v143 (Visual Studio 2022), C17 (LanguageStandard_C stdc17); ARM64 target set to ARMv8.2",
+    "platforms": "Windows x86 (Win32), x64 and ARM64; SIMD paths need SSE2 (slide_hash), SSE4.2 for the CRC32 hash and PCLMUL for CRC-32, chosen at run time; other OSes not supported by the build files",
+    "thread_safety": "Same as zlib (README: 'All the code is thread safe' per stream); CPU-feature globals are set on deflateInit or crc32(0, NULL, 0) without synchronisation (benign write of identical values).",
+    "drop_in_for_baseline": "partial — same zlib API and zlib1.dll name on Windows, so it replaces a Windows zlib DLL; compressed bytes differ from stock zlib, memLevel no longer sets the hash size when SSE4.2 or ARM64 is used, and some project configurations define ZLIB_CONST, which changes next_in to const."
+  },
+  "gotchas": [
+    "With SSE4.2 (and always on ARM64) hash_bits is forced to 15 regardless of memLevel, so memLevel tuning has no effect on the hash table.",
+    "crc32() called before any deflateInit or crc32(0, NULL, 0) sees CPU features as unset and takes the table path: correct but without the PCLMUL speedup.",
+    "The benchmark harness (zlib-perf perf.c) has a no-op verification: it compares 'checksum != checksum' and never uses checksum2, so '-v' only catches inflate errors; timing uses GetTickCount (10-16 ms resolution) and includes fread of the input file.",
+    "Results.md is internally inconsistent for one row: matbech/zlib x86 on mozilla lists 1234 ms but 47 MB/s, while the harness formula gives 39 MB/s for 1234 ms (every other row matches), so that speedup is about 1.47x by time, not 1.8x."
+  ],
+  "pick_this_over_siblings_when": "Rarely: pick it only for a Windows-only MSVC build that must keep the stock zlib API and a single zlib1.dll and cannot adopt zlib-ng in compat mode. Otherwise zlib-ng (maintained, faster, same API in compat mode), libdeflate (faster whole-buffer API) or Cloudflare's zlib fork (the source of its longest_match patch) are better choices.",
+  "verified_claims_summary": "First-party Results.md: compression only, level 6, two silesia files, MSVC 19.14 (VS 15.7) on a CPU written as 'i7 8770' (link is the i7-8700), timed with GetTickCount; by the listed times the fork took 1234/922 ms vs zlib 1.2.11's 1813/1718 ms on mozilla (x86/x64) and 1032/907 vs 1359/1313 ms on webster, i.e. 1.32-1.86x (derived from page data), with slightly smaller output. The measured binaries predate the current code (1.2.13 base, chunkset and AVX2 patches added in 2022), and zlib-ng was not measured on x64 because of a deflate bug at the time.",
+  "status_note": "Abandoned: archived 2026-06-17, last commit 2025-02-21, 7 stars, 3 open issues including an unanswered correctness report; Zlib-licensed and copyable, but treat it as a patch reference rather than a dependency.",
+  "sources_read": [
+    "https://github.com/matbech/zlib",
+    "https://github.com/matbech/zlib/commits/master",
+    "https://github.com/matbech/zlib/issues",
+    "https://github.com/matbech/zlib/issues/2",
+    "https://raw.githubusercontent.com/matbech/zlib/HEAD/README",
+    "https://raw.githubusercontent.com/matbech/zlib/HEAD/README.md",
+    "https://raw.githubusercontent.com/matbech/zlib/HEAD/zlib.h",
+    "https://raw.githubusercontent.com/matbech/zlib/HEAD/deflate.c",
+    "https://raw.githubusercontent.com/matbech/zlib/HEAD/crc32.c",
+    "https://raw.githubusercontent.com/matbech/zlib/HEAD/inflate.c",
+    "https://raw.githubusercontent.com/matbech/zlib/HEAD/contrib/minizip/zip.c",
+    "https://raw.githubusercontent.com/matbech/zlib/HEAD/zlib.vcxproj",
+    "https://raw.githubusercontent.com/matbech/zlib-perf/HEAD/README.md",
+    "https://raw.githubusercontent.com/matbech/zlib-perf/HEAD/Results.md",
+    "https://raw.githubusercontent.com/matbech/zlib-perf/HEAD/zlibperf/perf.c",
+    "https://raw.githubusercontent.com/matbech/zlib-perf/HEAD/zlibperf/run.cmd"
+  ],
+  "confidence": 0.75
+}

@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/google/gipfeli",
+  "one_liner": "Archived Google LZ77 compressor with a light static entropy stage, claimed about 5x faster than zlib.",
+  "what_it_does": "Gipfeli is a block LZ77 compressor (64 KiB blocks, matches may reach back into the previous block) that adds a cheap entropy-coding pass on literals so it compresses text tighter than Snappy-class codecs while staying far faster than zlib. It is not zlib-compatible: it has its own undocumented format and a Snappy-style C++ interface (util::compression::Compressor with Compress/Uncompress on std::string plus Source/Sink streaming), created via NewGipfeliCompressor().",
+  "how_it_is_fast": "The LZ77 stage is Snappy's design: a 4-byte multiplicative hash (0x1e35a7bd) into a uint16 table of at most 2^15 entries, heuristic match skipping that widens the step after 32 misses, 8-byte word compares to extend matches, and 8/16-byte unaligned copies on decode. Commands are packed into a variable-length bit code (3-bit tag, then 2-6 bit length and 10-16 bit offset), and literals use a fixed per-block code: the 32 most frequent bytes get 6-bit codes, the next 64 get 8-bit codes and the rest 10 bits, with the encoder skipping entropy coding when it would not pay off. No Huffman tree building and no assembly.",
+  "when_to_use": [
+    "Research or comparison work on the speed/ratio space between Snappy/LZ4 and zlib, where Gipfeli is a historical reference point.",
+    "Reading existing Gipfeli-compressed data that some legacy system produced.",
+    "Text-like payloads under 2 GiB where you control both ends, accept an unmaintained format, and have your own round-trip tests on the exact compiler you ship with."
+  ],
+  "when_not_to_use": [
+    "Any new production use: archived 2022-07-27, last commit 2016-08-16, and lzbench lists it with 'Decompression file mismatch when compiled with GCC 14.2 using -O3', so round trips fail on a current compiler at the Makefile's own -O3.",
+    "Untrusted compressed input: the decoder has had no fuzzing or maintenance since 2016, and it reads up to 8 bytes past the end of a truncated buffer (see gotchas).",
+    "When you need zlib/gzip/zip interoperability, a checksum, or a documented format: Gipfeli has none of these.",
+    "Inputs of 2 GiB or more: Compress() accepts them and writes an up-to-8-byte length, but GetUncompressedLength() rejects lengths over 4 bytes or of 2^31 and above, so such output can never be decompressed.",
+    "When you simply want speed over zlib: zstd -1 and LZ4 beat its claimed numbers with active maintenance."
+  ],
+  "integration": {
+    "form": "source-drop (5 .cc files; the Makefile only builds the gipfeli_test benchmark binary, no library target)",
+    "dependencies": "none beyond the C++ standard library",
+    "min_toolchain": "Pre-C++11-style C++ (uses std::string, NULL, try/catch); no minimum documented; the shipped Makefile uses g++ -O3 -Werror -Wno-strict-aliasing, and lzbench reports wrong output with GCC 14.2 -O3",
+    "platforms": "Little-endian x86/x86-64 and PowerPC get raw unaligned pointer casts; ARMv7+ and other targets use memcpy-based loads; big-endian support is not documented and the 16-bit command count is read in native byte order",
+    "thread_safety": "Documented as not safe for use from multiple threads per Compressor object (it caches LZ77 and command buffers); use one object per thread",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Correctness on modern compilers is unresolved: lzbench (2026 README) reports decompression mismatches with GCC 14.2 -O3. The source type-puns char buffers through reinterpret_cast<uint64*> on x86/PowerPC (UNALIGNED_LOAD64/STORE64), which is undefined behaviour, and the Makefile silences -Wstrict-aliasing; a plausible but untested workaround is -fno-strict-aliasing or -DGIPFELI_NO_UNALIGNED (selects the memcpy path). Issue #6 (decompressed random data of a few hundred KiB not matching the input) is closed with no linked fixing commit.",
+    "Out-of-bounds read on malformed input: in the entropy-coded branch of InternalRawUncompress, ReadBits::Start() does an 8-byte load at ip before the 'ip_end - ip < 8' check, so a truncated stream is over-read by up to 8 bytes before being rejected.",
+    "Size asymmetry: the compressor writes lengths of any size but the decoder caps at 2 GiB - 1, so very large single buffers compress without error and then fail to decompress.",
+    "The public header pulls 'using std::string;' into the global namespace (compression.h) and the benchmark (gipfeli_test.cc) expects Snappy's testdata/ files, which are not in the repository."
+  ],
+  "pick_this_over_siblings_when": "Practically never for new code: Snappy (same LZ77 core, maintained, lzbench 457/976 MB/s vs zlib -1 89 MB/s) or LZ4 covers the speed end, and zstd -1 gives better ratio than Gipfeli's stated target at similar or higher speed. Pick Gipfeli only to decode legacy Gipfeli data or as a historical comparison point.",
+  "verified_claims_summary": "The only numbers are the README's first-party claim: about 180 MB/s compression and 300 MB/s decompression on one core of an unnamed Core i7 in 64-bit mode, 'typically 5x faster than zlib', with no workload, compiler, flags or zlib version; the bundled gipfeli_test.cc times Compress/Uncompress over Snappy's test corpus (html, urls.10K, fireworks.jpeg, paper-100k.pdf, Canterbury texts) but no results are published, and lzbench publishes no Gipfeli row.",
+  "status_note": "Abandoned (last commit 2016-08-16, archived by Google 2022-07-27) and BSD-3-Clause; small enough to vendor, but known to round-trip incorrectly with GCC 14.2 -O3, so treat it as reference code only.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/google/gipfeli/HEAD/README",
+    "https://raw.githubusercontent.com/google/gipfeli/HEAD/COPYING",
+    "https://raw.githubusercontent.com/google/gipfeli/HEAD/Makefile",
+    "https://raw.githubusercontent.com/google/gipfeli/HEAD/gipfeli.h",
+    "https://raw.githubusercontent.com/google/gipfeli/HEAD/gipfeli-internal.h",
+    "https://raw.githubusercontent.com/google/gipfeli/HEAD/gipfeli-internal.cc",
+    "https://raw.githubusercontent.com/google/gipfeli/HEAD/decompress.cc",
+    "https://raw.githubusercontent.com/google/gipfeli/HEAD/lz77.h",
+    "https://raw.githubusercontent.com/google/gipfeli/HEAD/lz77.cc",
+    "https://raw.githubusercontent.com/google/gipfeli/HEAD/entropy.h",
+    "https://raw.githubusercontent.com/google/gipfeli/HEAD/entropy.cc",
+    "https://raw.githubusercontent.com/google/gipfeli/HEAD/read_bits.h",
+    "https://raw.githubusercontent.com/google/gipfeli/HEAD/stubs-internal.h",
+    "https://raw.githubusercontent.com/google/gipfeli/HEAD/compression.h",
+    "https://raw.githubusercontent.com/google/gipfeli/HEAD/stream.h",
+    "https://raw.githubusercontent.com/google/gipfeli/HEAD/sinksource.h",
+    "https://raw.githubusercontent.com/google/gipfeli/HEAD/gipfeli_test.cc",
+    "https://raw.githubusercontent.com/inikep/lzbench/HEAD/README.md",
+    "https://github.com/google/gipfeli/issues?q=is%3Aissue",
+    "https://github.com/google/gipfeli/issues/6",
+    "https://github.com/google/gipfeli/issues/11",
+    "https://github.com/google/gipfeli/commits/master"
+  ],
+  "confidence": 0.75
+}

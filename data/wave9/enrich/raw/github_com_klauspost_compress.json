@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/klauspost/compress",
+  "one_liner": "Pure-Go deflate/gzip/zlib/zip, zstd and S2 packages; deflate about 2x Go stdlib, S2 beats Go Snappy.",
+  "what_it_does": "A Go module of compressors: drop-in replacements for compress/flate, compress/gzip, compress/zlib, archive/zip and compress/lzw (change only the import path), a pure-Go zstd encoder/decoder, S2 (a Snappy extension that reads Snappy data and can emit Snappy-compatible output), plus huff0/FSE entropy coders, an XPRESS decoder and gzhttp HTTP wrappers. It is a Go library, not C or C++; using it from C++ requires a cgo-exported shim.",
+  "how_it_is_fast": "Deflate levels 1-6 are replaced by specialised single-pass hash-table matchers (only levels 7-9 keep zlib-style lazy hash chains) with rebalanced levels, and decompression gains come mostly from a faster CRC32. S2 prefers matches of 6 bytes or longer, uses amd64 and arm64 assembly encoders/decoders, and splits streams into blocks compressed concurrently on all cores. zstd and huff0 use avo-generated amd64/arm64 assembly for sequence and literal decoding, and stream encode/decode is pipelined across goroutines.",
+  "when_to_use": [
+    "Go services that call compress/gzip or compress/flate on a hot path (HTTP responses, log shipping) and want roughly 2x compression speed by changing an import.",
+    "Replacing github.com/golang/snappy: S2 decodes existing Snappy data and, with Snappy-compatible output, writes data Snappy readers accept, faster and smaller (936.6 vs 790.15 MB/s on the 4 GB web corpus).",
+    "Large streams on many-core amd64/arm64 hosts where concurrent S2 or zstd stream compression can use all cores (S2 streams 6.5-16.7 GB/s on a 16-core machine).",
+    "Pure-Go zstd without cgo, for example in static or cross-compiled binaries."
+  ],
+  "when_not_to_use": [
+    "C or C++ projects: there is no C API, and the C/C++ siblings (zlib-ng, libdeflate, zstd, LZ4) are the right choice there.",
+    "Deflate decompression speed: the README says the gain on decompression is minor (mostly CRC32).",
+    "Single-core S2 'better' mode when speed matters: it runs at 0.27x-0.77x of Snappy on one CPU, and default S2 is slower than Go Snappy on 10gb.tar (0.97x) and random data (0.88x).",
+    "New S2 designs: the S2 README says the author considers MinLZ the better basis and expects only bug fixes for S2.",
+    "Pinning old releases: correctness fixes land often (see gotchas) and security fixes go only to the latest release."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none (go.mod has no require block; helpers such as internal/le and xxhash are bundled)",
+    "min_toolchain": "go.mod declares go 1.25; README: supports the current Go version and 2 versions back",
+    "platforms": "any Go target; assembly fast paths on amd64 and arm64 (disable with -tags=noasm; -tags=nounsafe removes unsafe); S2 README: not optimized for 32-bit systems",
+    "thread_safety": "Writers/Readers are single-stream objects; zstd Encoder.EncodeAll and Decoder.DecodeAll may be called concurrently on one instance; SECURITY.md warns that not all functionality is re-entrant and safe to use concurrently.",
+    "drop_in_for_baseline": "partial — flate/gzip/zlib/zip/lzw are import-path drop-ins for the Go stdlib with the same API and format; S2 output is not readable by Snappy unless Snappy-compatible mode is used; none of it replaces C zlib."
+  },
+  "gotchas": [
+    "Correctness history: zstd 'rare CORRUPTION output in best mode' fixed in v1.17.2 (PR 876); flate BestCompression produced undecodable output in v1.18.1 (issue 1114, 'flate: corrupt input before offset 10' on about 1 MiB of input), so v1.18.1 is retracted in go.mod together with v1.14.1-v1.14.3; earlier rare zstd corruption fixes in v1.9.0 and v1.9.6.",
+    "Memory safety in the assembly paths has needed several fixes: s2 'occasional out-of-bounds write on amd64', s2 final-emit OOB read (PR 601), s2 amd64 stack frame corruption (PR 1145, v1.18.6), s2 NewDict out-of-bounds read (v1.18.7 security release), zstd decoder crash on amd64 without BMI on invalid input (PR 645). Build with -tags=noasm if you distrust the assembly.",
+    "Concurrent stream modes spawn goroutines: call Close on zstd Readers to stop them, and set WithEncoderConcurrency(1) or WithDecoderConcurrency(1) for synchronous behaviour.",
+    "Rebalanced deflate levels mean level N does not give the same speed/ratio as stdlib or zlib level N; stateless mode (level -3) gives ratios worse than level 1."
+  ],
+  "pick_this_over_siblings_when": "Pick it when the codebase is Go and the baseline is Go's compress/* or golang/snappy; for C/C++ use zlib-ng or libdeflate for deflate, facebook/zstd for zstd, and google/snappy or LZ4 for fast LZ. For new fast-LZ work in Go, the same author's MinLZ (sibling) supersedes S2.",
+  "verified_claims_summary": "First-party README numbers, Go toolchain and flags unstated: S2 compresses a 4 GB web-page corpus at 936.73 MB/s single-goroutine vs Go Snappy at 790.15 MB/s with a 73.60% vs 71.89% size reduction; on a 16-core (32-thread) machine S2 streams are 8.55x-22x faster than single-threaded Go Snappy because they compress concurrently, while on 1 CPU the range is 0.88x-1.91x. The deflate packages claim 'about 2x' Go stdlib with no table in the README (a linked spreadsheet), and the Snappy baseline is the Go implementation, not Google's C++ library.",
+  "status_note": "Very active (releases 1.20.0 and 1.20.1 in September 2026, last commit 2026-10-02), BSD-3-Clause with some Apache-2.0/MIT files, widely used in Go; the S2 package is in maintenance mode in favour of MinLZ.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/klauspost/compress/HEAD/README.md",
+    "https://raw.githubusercontent.com/klauspost/compress/HEAD/s2/README.md",
+    "https://raw.githubusercontent.com/klauspost/compress/HEAD/zstd/README.md",
+    "https://raw.githubusercontent.com/klauspost/compress/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/klauspost/compress/HEAD/go.mod",
+    "https://raw.githubusercontent.com/klauspost/compress/HEAD/SECURITY.md",
+    "https://raw.githubusercontent.com/klauspost/compress/HEAD/flate/deflate.go",
+    "https://raw.githubusercontent.com/klauspost/compress/HEAD/s2/encode.go",
+    "https://raw.githubusercontent.com/klauspost/compress/HEAD/zstd/encoder.go",
+    "https://github.com/klauspost/compress/issues/1114",
+    "https://github.com/klauspost/compress/issues?q=is%3Aissue+is%3Aopen+label%3Abug"
+  ],
+  "confidence": 0.8
+}
