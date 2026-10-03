@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/codyjrivera/ipdps22-opthuffdec",
+  "one_liner": "IPDPS 2022 artifact: optimized CUDA self-synchronizing and gap-array Huffman decoders, reported 3.64x faster than cuSZ's GPU Huffman decoder.",
+  "what_it_does": "Four GPU Huffman decoders in separate directories: the original CUHD self-synchronization decoder (ICPP 2018), the original gap-array code (ICPP 2020), and optimized versions of both (opt-self-sync, opt-gap-array), the optimized ones built on the CUHD codebase. Each optimized decoder builds a demo binary or a static library (make lib, cuhd.a) exposing cuhd::CUHDGPUDecoder::decode() over CUHD's GPU input/output/codetable buffer classes, plus a sequential CPU length-limited Huffman encoder (llhuff). The run.sh scripts take cuSZ's quantization codes (cuSZ run with --skip huffman), encode them on the CPU, time GPU decoding, and runcusz.sh times cuSZ's own decompression as the baseline.",
+  "how_it_is_fast": "Per the paper abstract (WebSearch snippet) and the code: decoded symbols are staged in shared memory and written to global memory from there, the shared-memory size is tuned online, memory access patterns are improved, and warp divergence is reduced. In opt-gap-array, an 8-bit gap per 4-unit (128-bit) subsequence removes the inter-block synchronization phase (phase 2 is empty); after an exclusive scan of per-subsequence symbol counts (Thrust), blocks are bucketed by compression ratio with a CUB radix sort and the final decode/write kernel is launched on 9 CUDA streams with shared buffers of 1,024 to 8,192 (or 3,584) 16-bit symbols per bucket. Lookup uses a 2^9-entry table cached in shared memory (cache_len 9).",
+  "when_to_use": [
+    "GPU decompression in cuSZ-style error-bounded lossy compressors, where the Huffman stage decodes 16-bit quantization codes (1,024-symbol alphabet) on an NVIDIA GPU.",
+    "Building or benchmarking a GPU Huffman decoder: the repo puts both original decoders and both optimized ones behind the same harness on the same datasets.",
+    "When you control the encoder and can store an extra gap byte per 128 bits of compressed data (opt-gap-array), or need plain Huffman streams decoded on the GPU without format changes (opt-self-sync).",
+    "Large, mostly compressible inputs on Volta-class or newer GPUs, where decoding throughput rather than per-call latency matters."
+  ],
+  "when_not_to_use": [
+    "Byte-oriented general-purpose compression or standard formats (Deflate, zstd, JPEG): symbols are 16-bit, codewords are capped at 14 bits, and the encoder is CUHD's own length-limited format.",
+    "Production pipelines: research artifact, 5 commits ending 2022-03-01, editor lock and backup files committed (.#cuhd_gpu_decoder.cu, #cuhd_gather.h#), no tests beyond the demo's equality check, and cuSZ integration is left to the user.",
+    "Small inputs or latency-sensitive calls: each decode() call allocates and frees its scratch buffers, runs a CUB sort and creates and destroys 9 CUDA streams.",
+    "Non-NVIDIA or non-Linux targets: CUDA with CUB/Thrust only, Makefiles hard-code sm_70 and /usr/local/cuda, and the host code uses -march=native.",
+    "If you need the orig-gap-array code under a license: that directory is the unlicensed Hiroshima University code and has no LICENSE file."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "CUDA toolkit with Thrust and CUB; cuSZ (separate build) and the SDRBench datasets (getdata.sh, via wget from a Globus endpoint) only for the paper's benchmark",
+    "min_toolchain": "Tested with GCC 8.3.1 and NVCC 11.1 (README); Makefiles use -std=c++17 for host code and --std=c++14 for CUDA, arch sm_70 by default",
+    "platforms": "NVIDIA GPU (built for sm_70 by default; inherited CUHD README says compute capability 3.0+), Linux",
+    "thread_safety": "not documented; decode() keeps global timing arrays and an invocation counter, so concurrent calls are not safe",
+    "drop_in_for_baseline": "partial: it decodes the same cuSZ quantization codes, but the stream is encoded by its own CPU llhuff encoder (with a gap array for opt-gap-array), so cuSZ's Huffman format and code would have to be replaced, not linked against"
+  },
+  "gotchas": [
+    "License is per directory: opt-self-sync, opt-gap-array and orig-self-sync carry LGPL-3.0 LICENSE files and CUHD headers ('released under LGPL-3.0'); the repo root and orig-gap-array have none.",
+    "The demo maps any input symbol above 1024 to 0 before encoding and then checks the decoded output against that altered buffer, so arbitrary 16-bit files are silently changed (fine for cuSZ codes, not for general data).",
+    "The demo's first 'throughput' line divides by wall time of the whole decode() call including allocations; the second sums per-phase times; both use 1024^3, so 'GB/s' is GiB/s.",
+    "opt-self-sync/run.sh and opt-gap-array/run.sh are identical (both print 'best solution + self-synchronization'), CUSZ_DIR and DATA_DIR are empty and must be filled in, and $shared_size is never set, so tuning is always online."
+  ],
+  "pick_this_over_siblings_when": "Pick it over CUHD/gpuhd and Huffman_coding_Gap_arrays when you want the fastest of these GPU Huffman decoders for 16-bit quantization codes: it contains both and reports beating them as well as cuSZ. Pick FiniteStateEntropy's huff0 or PIVCO-Huffman for CPU byte-stream decoding, and multians or Recoil if you can switch from Huffman to ANS.",
+  "verified_claims_summary": "Per WebSearch snippets of the IPDPS 2022 abstract (paper not opened; arXiv, IEEE and NSF pages blocked), on an NVIDIA Tesla V100 32 GB with an unnamed x86_64 host, GCC 8.3.1 and NVCC 11.1 (-O3, sm_70), the optimized decoders averaged 3.64x faster Huffman decoding than cuSZ's native GPU decoder and 2.43x faster overall cuSZ decompression across eight scientific datasets (the repo's scripts run five: HACC, EXAALT, CESM, Nyx, Isabel, error bound 1e-3). A further snippet says shared-memory sizing alone moves throughput between 158 and 233 GB/s; the repo itself publishes no numbers.",
+  "status_note": "Abandoned research artifact (last commit 2022-03-01, 3 stars); the optimized decoders are LGPL-3.0 per their directory LICENSE files, so they can be reused under copyleft terms, while orig-gap-array is unlicensed.",
+  "sources_read": [
+    "https://github.com/codyjrivera/ipdps22-opthuffdec",
+    "https://raw.githubusercontent.com/codyjrivera/ipdps22-opthuffdec/HEAD/README.md",
+    "https://raw.githubusercontent.com/codyjrivera/ipdps22-opthuffdec/HEAD/getdata.sh",
+    "https://github.com/codyjrivera/ipdps22-opthuffdec/tree/main/opt-gap-array",
+    "https://github.com/codyjrivera/ipdps22-opthuffdec/tree/main/opt-self-sync",
+    "https://github.com/codyjrivera/ipdps22-opthuffdec/tree/main/opt-gap-array/src",
+    "https://github.com/codyjrivera/ipdps22-opthuffdec/tree/main/opt-gap-array/include",
+    "https://raw.githubusercontent.com/codyjrivera/ipdps22-opthuffdec/HEAD/opt-gap-array/LICENSE",
+    "https://raw.githubusercontent.com/codyjrivera/ipdps22-opthuffdec/HEAD/opt-gap-array/README.md",
+    "https://raw.githubusercontent.com/codyjrivera/ipdps22-opthuffdec/HEAD/opt-gap-array/Makefile",
+    "https://raw.githubusercontent.com/codyjrivera/ipdps22-opthuffdec/HEAD/opt-gap-array/run.sh",
+    "https://raw.githubusercontent.com/codyjrivera/ipdps22-opthuffdec/HEAD/opt-gap-array/src/cuhd_gpu_decoder.cu",
+    "https://raw.githubusercontent.com/codyjrivera/ipdps22-opthuffdec/HEAD/opt-gap-array/src/demo.cc",
+    "https://raw.githubusercontent.com/codyjrivera/ipdps22-opthuffdec/HEAD/opt-gap-array/include/cuhd_constants.h",
+    "https://raw.githubusercontent.com/codyjrivera/ipdps22-opthuffdec/HEAD/opt-gap-array/include/cuhd_gpu_decoder.h",
+    "https://raw.githubusercontent.com/codyjrivera/ipdps22-opthuffdec/HEAD/opt-gap-array/include/cuhd_definitions.h",
+    "https://raw.githubusercontent.com/codyjrivera/ipdps22-opthuffdec/HEAD/opt-self-sync/LICENSE",
+    "https://raw.githubusercontent.com/codyjrivera/ipdps22-opthuffdec/HEAD/opt-self-sync/README.md",
+    "https://raw.githubusercontent.com/codyjrivera/ipdps22-opthuffdec/HEAD/opt-self-sync/Makefile",
+    "https://raw.githubusercontent.com/codyjrivera/ipdps22-opthuffdec/HEAD/opt-self-sync/run.sh",
+    "https://raw.githubusercontent.com/codyjrivera/ipdps22-opthuffdec/HEAD/opt-self-sync/src/cuhd_gpu_decoder.cu",
+    "https://raw.githubusercontent.com/codyjrivera/ipdps22-opthuffdec/HEAD/opt-self-sync/src/demo.cc",
+    "https://raw.githubusercontent.com/codyjrivera/ipdps22-opthuffdec/HEAD/orig-self-sync/LICENSE",
+    "https://raw.githubusercontent.com/codyjrivera/ipdps22-opthuffdec/HEAD/orig-self-sync/README.md",
+    "https://raw.githubusercontent.com/codyjrivera/ipdps22-opthuffdec/HEAD/orig-self-sync/Makefile",
+    "https://raw.githubusercontent.com/codyjrivera/ipdps22-opthuffdec/HEAD/orig-self-sync/run.sh",
+    "https://raw.githubusercontent.com/codyjrivera/ipdps22-opthuffdec/HEAD/orig-gap-array/README.md",
+    "https://raw.githubusercontent.com/codyjrivera/ipdps22-opthuffdec/HEAD/orig-gap-array/Makefile",
+    "https://raw.githubusercontent.com/codyjrivera/ipdps22-opthuffdec/HEAD/orig-gap-array/run.sh",
+    "https://raw.githubusercontent.com/codyjrivera/ipdps22-opthuffdec/HEAD/orig-gap-array/LICENSE (404)",
+    "WebSearch: \"Optimizing Huffman Decoding for Error-Bounded Lossy Compression on GPUs\" shared memory compression ratio gap array self-synchronization GB/s V100 (snippets only)"
+  ],
+  "confidence": 0.65
+}

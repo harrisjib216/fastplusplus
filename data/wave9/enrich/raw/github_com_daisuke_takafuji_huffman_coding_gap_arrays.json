@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/daisuke-takafuji/huffman_coding_gap_arrays",
+  "one_liner": "Research CUDA Huffman encoder/decoder (ICPP 2020) whose gap array lets every GPU thread start decoding at a known bit offset.",
+  "what_it_does": "Two standalone command-line programs, encoder/ and decoder/, that Huffman-compress a byte file on an NVIDIA GPU into a custom container (symbol/length list, sizes, gap array, codeword stream) and decode it back. There is no library API: the host functions in decoder.cuh take the container's fields directly, and the drivers run each GPU phase 100 times untimed plus 100 timed and print CSV timings. It is the reference code for Yamamoto, Nakano, Ito, Takafuji, Kasagi and Tabaru, 'Huffman Coding with Gap Arrays for GPU Acceleration' (ICPP 2020, DOI 10.1145/3404397.3404429).",
+  "how_it_is_fast": "The encoder splits the compressed bit stream into 128-bit segments and stores, per segment, a 4-bit 'gap' (the offset of the first codeword starting in it), packed 8 per 32-bit word; the decoder then gives each thread one segment and starts decoding immediately, with no self-synchronization pass. Output positions come from a single-kernel decoupled look-back prefix sum (blocks take ids from an atomic counter and publish aggregate/prefix flags, which the paper calls Single Kernel Soft Synchronization). Decoding uses a two-level lookup table (10-bit first-level prefix) copied into shared memory, 32-bit word-wise global loads and atomicOr word writes; codes are length-limited to 16 bits by a CPU boundary package-merge, and the histogram runs on the GPU.",
+  "when_to_use": [
+    "Studying or porting the gap-array idea into your own GPU codec where you control both encoder and decoder format.",
+    "Byte-alphabet (256-symbol) data already resident on an NVIDIA GPU, where decode throughput matters more than about 3% extra compressed size.",
+    "As a baseline when benchmarking newer GPU Huffman decoders (the IPDPS 2022 opthuffdec artifact already wires it in for that purpose)."
+  ],
+  "when_not_to_use": [
+    "Decoding standard Huffman streams (Deflate, JPEG, zstd huff0): the format needs the gap array, so it cannot read them.",
+    "Anything needing a license: the repository has no license file, so the code is all-rights-reserved by default and only usable as reference.",
+    "Production use: no tests, no error handling beyond fatal exits, no API, no maintenance since October 2020, and the CLI always runs 200 timed loops.",
+    "Inputs of 2 GiB or more (the decoder reads sizes as int) or alphabets wider than bytes (MAX_CODE_NUM 256).",
+    "Non-NVIDIA or non-Linux targets: CUDA only, Makefile hard-codes sm_70 and /usr/local/cuda, and the encoder uses fsync/fdatasync on glibc FILE internals."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "CUDA toolkit (nvcc, CUDA runtime); GNU Make",
+    "min_toolchain": "not documented; Makefile builds with nvcc -O2 -arch=sm_70 (Volta) and needs a C++ compiler for the .cpp files",
+    "platforms": "NVIDIA GPU (default sm_70, edit ARCH for others), Linux",
+    "thread_safety": "not documented; single-process CLI tools with global timing state",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The decoder ignores its second argument and always writes ./decodedfile (huff.cpp opens \"decodedfile\" and never reads argv[2]; it also does not check argc).",
+    "decoder.cu clears gpu_output with cudaMemset sized by the compressed input words, not the output buffer, before atomicOr writes: for compressible data part of the output is never zeroed (correct only if cudaMalloc returned zeroed memory), and for incompressible data the memset runs past the buffer. It also frees gpu_input twice and leaks gpu_output.",
+    "Gap entries are 4 bits per 128-bit segment, so the gap array adds about 3.1% to the compressed size (derived from constants.hpp and the encoder's sizing).",
+    "Printed decode time covers the kernel only; host-to-device and device-to-host copies are reported as separate columns."
+  ],
+  "pick_this_over_siblings_when": "Pick it over CUHD/gpuhd when you can change the encoder: the gap array replaces CUHD's self-synchronization pass, which the paper reports as 1.26x-2.63x faster decoding. Pick ipdps22-opthuffdec instead if you want the newer, faster decoders (it includes an optimized gap-array decoder plus cuSZ integration); for CPU decoding, FiniteStateEntropy's huff0 or PIVCO-Huffman are the relevant choices.",
+  "verified_claims_summary": "Per WebSearch summaries of the ICPP 2020 abstract (paper, slides and ACM PDF not opened), on a Tesla V100 with 10 files, GPU encoding was 2.87x-7.70x and decoding 1.26x-2.63x faster than previously published GPU Huffman code, and attaching a gap array sped decoding a further 1.67x-6450x over the same decoder without one. CPU speedups are quoted as 35.2x-43.3x in the record and as 35.2x-52.3x for decoding (18.7x-39.2x for encoding) in a later summary; the CPU implementation, compiler flags and CPU model are not named in what could be read.",
+  "status_note": "Abandoned research code (9 commits, 2020-10-06 to 2020-10-09) with no license, so reference only; the Makefile targets CUDA sm_70 with nvcc -O2.",
+  "sources_read": [
+    "https://github.com/daisuke-takafuji/Huffman_coding_Gap_arrays",
+    "https://raw.githubusercontent.com/daisuke-takafuji/Huffman_coding_Gap_arrays/HEAD/README.md",
+    "https://github.com/daisuke-takafuji/Huffman_coding_Gap_arrays/tree/master/decoder",
+    "https://github.com/daisuke-takafuji/Huffman_coding_Gap_arrays/tree/master/encoder",
+    "https://github.com/daisuke-takafuji/Huffman_coding_Gap_arrays/tree/main/decoder/src",
+    "https://github.com/daisuke-takafuji/Huffman_coding_Gap_arrays/tree/main/decoder/include",
+    "https://github.com/daisuke-takafuji/Huffman_coding_Gap_arrays/tree/main/encoder/src",
+    "https://raw.githubusercontent.com/daisuke-takafuji/Huffman_coding_Gap_arrays/HEAD/decoder/Makefile",
+    "https://raw.githubusercontent.com/daisuke-takafuji/Huffman_coding_Gap_arrays/HEAD/decoder/README.md",
+    "https://raw.githubusercontent.com/daisuke-takafuji/Huffman_coding_Gap_arrays/HEAD/decoder/src/decoder.cu",
+    "https://raw.githubusercontent.com/daisuke-takafuji/Huffman_coding_Gap_arrays/HEAD/decoder/src/huff.cpp",
+    "https://raw.githubusercontent.com/daisuke-takafuji/Huffman_coding_Gap_arrays/HEAD/decoder/src/get_table.cpp",
+    "https://raw.githubusercontent.com/daisuke-takafuji/Huffman_coding_Gap_arrays/HEAD/decoder/include/constants.hpp",
+    "https://raw.githubusercontent.com/daisuke-takafuji/Huffman_coding_Gap_arrays/HEAD/decoder/include/decoder.cuh",
+    "https://raw.githubusercontent.com/daisuke-takafuji/Huffman_coding_Gap_arrays/HEAD/encoder/Makefile",
+    "https://raw.githubusercontent.com/daisuke-takafuji/Huffman_coding_Gap_arrays/HEAD/encoder/README.md",
+    "https://raw.githubusercontent.com/daisuke-takafuji/Huffman_coding_Gap_arrays/HEAD/encoder/src/huff.cpp",
+    "https://raw.githubusercontent.com/daisuke-takafuji/Huffman_coding_Gap_arrays/HEAD/encoder/src/encoder.cu",
+    "https://raw.githubusercontent.com/daisuke-takafuji/Huffman_coding_Gap_arrays/HEAD/encoder/src/package_merge.cpp",
+    "https://raw.githubusercontent.com/daisuke-takafuji/Huffman_coding_Gap_arrays/HEAD/encoder/src/symbols.cpp",
+    "WebSearch: \"Huffman Coding with Gap Arrays for GPU Acceleration\" ICPP 2020 Tesla V100 decoding throughput (snippets only)",
+    "https://raw.githubusercontent.com/jnamaral/icpp20/HEAD/slides/Yamamoto_Huffman.pdf (404)",
+    "https://raw.githubusercontent.com/jnamaral/jnamaral.github.io/HEAD/icpp20/slides/Yamamoto_Huffman.pdf (404)"
+  ],
+  "confidence": 0.6
+}
