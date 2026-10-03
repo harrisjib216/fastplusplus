@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/jibsen/brieflz",
+  "one_liner": "Tiny C LZ77 compressor with gamma-coded lengths/offsets; at -6 it matches zlib -9's ratio with about 2x faster compression.",
+  "what_it_does": "Compresses and decompresses whole in-memory buffers with a raw block format (no header, no stored length, no checksum). The API is a handful of C functions: blz_pack / blz_pack_level(src, dst, size, workmem, level 1-10), blz_depack(src, dst, depacked_size) and a bounds-checked blz_depack_safe(src, src_size, dst, depacked_size). It is not zlib-compatible: the caller supplies the work buffer and must record the uncompressed size; framing, block splitting and checksums are left to the application (the blzpack example adds a 24-byte block header and 1 MiB blocks).",
+  "how_it_is_fast": "LZSS-style matching with an Elias-gamma (gamma2) universal code for lengths and offsets and 16-bit tag words for literal/match flags, so there is no Huffman stage to build or decode. Levels pick the match finder: a single-entry hash table (level 1), lazy matching (2), hash buckets (3-4), a backwards dynamic-programming parse with left-extension of matches (5-7) and a binary-tree optimal parse (8-10). The decoder uses a 256-entry lookup table to read up to 8 bits of gamma code at a time; decode stays around 300-400 MB/s because the bit-level format is serial.",
+  "when_to_use": [
+    "Code size of the decompressor matters: blz_depack is 61 lines of C, which the README says fits in 103 bytes of x86 machine code (boot loaders, executable packers, firmware, demos).",
+    "Compress-once, decompress-many assets where you want a ratio near zlib -9 (31.71% vs 31.92% on Silesia) without carrying zlib's inflate.",
+    "Small embedded or C89 targets that need a permissively licensed (Zlib) single-file compressor with no dependencies and caller-provided memory.",
+    "Buffers whose full size is known up front, since the format has no window limit and matches can reach back across the whole buffer."
+  ],
+  "when_not_to_use": [
+    "Throughput-sensitive code on desktop or server CPUs: libdeflate 1.26 -6 in the same lzbench 2.4 run gives 31.85% at 82.1 MB/s compress and 820 MB/s decompress versus brieflz -6 at 31.71%, 22.8 and 328 MB/s, and zstd beats both.",
+    "Anything that needs the deflate/gzip/zlib format, streaming, or interoperability with other tools; BriefLZ has its own raw format with no streaming API.",
+    "Untrusted input to the plain decoder: blz_depack does no bounds checking, so use blz_depack_safe for data you did not produce.",
+    "Level 10 (--optimal) or other high levels on attacker-controlled or highly repetitive data: open issue #12 reports about 1000x slowdowns on runs of a single byte, and issue #11 reports unpredictable speed.",
+    "Very large buffers: workmem grows with input (levels 5-7 need about 3x src_size words, levels 8-10 about 5x src_size words plus the hash table), and sizes are unsigned long, which is 32-bit on 64-bit Windows."
+  ],
+  "integration": {
+    "form": "static lib | shared lib | source-drop (src/brieflz.c, src/depack.c or src/depacks.c, include/brieflz.h)",
+    "dependencies": "none (C standard library only)",
+    "min_toolchain": "ANSI C (C89); CMake 2.8.11+ for the provided build",
+    "platforms": "any; 16-bit targets need BLZ_HASH_BITS and the block size lowered",
+    "thread_safety": "not documented; functions keep no global state and all scratch is in the caller's workmem, so separate workmem buffers per thread should be safe (inferred from source)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The compressed stream does not store the original size; you must keep it yourself and pass it to blz_depack.",
+    "dst must be at least blz_max_packed_size(n) = n + n/8 + 64 bytes, and workmem must be blz_workmem_size_level(n, level) bytes, which differs by level.",
+    "The README notes its benchmark 'is not entirely fair because BriefLZ has no window size limit'; with blzpack's 1 MiB blocks, real ratios are lower than whole-file numbers.",
+    "Interfaces use unsigned long for sizes (C89); the blzpack example misreports totals above 4 GiB where unsigned long is 32-bit (issue #1, wontfix)."
+  ],
+  "pick_this_over_siblings_when": "Pick BriefLZ over zlib, libdeflate or zstd only when decoder footprint and a tiny, dependency-free, Zlib-licensed codebase matter more than speed; for raw speed LZ4 or libdeflate win, and for ratio-per-second zstd wins. Against FastLZ and LZ4 it trades speed for ratio (31.71% at -6 vs about 47-49%).",
+  "verified_claims_summary": "In lzbench 2.4 (gcc 15.2.0 release binary, one thread of an AMD EPYC 9555P at 3.2 GHz with turbo off, silesia.tar), brieflz 1.3.0 -6 compresses at 22.8 MB/s and decompresses at 328 MB/s to 31.71%, against zlib 1.3.2 -9 at 11.3 and 318 MB/s to 31.92%: about 2x faster compression and similar decompression at a slightly better ratio; versus zlib -6 it compresses slower (22.8 vs 26.8 MB/s). The README's own 2020 table on a Core i5-4570 shows 17 vs 11 MB/s and 400 vs 320 MB/s against zlib 1.2.11 -9.",
+  "status_note": "Version 1.3.0 (2020) with only CI updates since (last commit 2024-02-02) and two open performance issues unanswered; it is small, Zlib-licensed and easy to vendor, so staleness matters little for a frozen format.",
+  "sources_read": [
+    "https://github.com/jibsen/brieflz",
+    "https://github.com/jibsen/brieflz/issues?q=is%3Aissue",
+    "https://github.com/jibsen/brieflz/issues/12",
+    "https://github.com/jibsen/brieflz/issues/1",
+    "https://raw.githubusercontent.com/jibsen/brieflz/HEAD/README.md",
+    "https://raw.githubusercontent.com/jibsen/brieflz/HEAD/include/brieflz.h",
+    "https://raw.githubusercontent.com/jibsen/brieflz/HEAD/src/brieflz.c",
+    "https://raw.githubusercontent.com/jibsen/brieflz/HEAD/src/depack.c",
+    "https://raw.githubusercontent.com/jibsen/brieflz/HEAD/src/depacks.c",
+    "https://raw.githubusercontent.com/jibsen/brieflz/HEAD/src/brieflz_leparse.h",
+    "https://raw.githubusercontent.com/jibsen/brieflz/HEAD/src/brieflz_btparse.h",
+    "https://raw.githubusercontent.com/jibsen/brieflz/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/jibsen/brieflz/HEAD/example/blzpack.c",
+    "https://raw.githubusercontent.com/inikep/lzbench/HEAD/README.md"
+  ],
+  "confidence": 0.8
+}
