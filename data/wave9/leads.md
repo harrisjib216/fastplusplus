@@ -12,3 +12,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - IlyaGrebnov/libbsc (BWT; lzbench bsc 3.3.12 -m0 19.4/25.0 MB/s at 23.26%, beats xz compress): check if listed; seed candidate. AWS blog on zlib-cloudflare vs other forks (blocked, snippet). (from bzip3/cloudflare-zlib enricher)
 - paddor/m77rip (credited in misa77's README): check as a sibling. Show HN item 48922838 on misa77 (blocked). (from misa77 enricher)
 - paperhub.s3.amazonaws.com mirrors some arXiv PDFs and is reachable (curl); try it for blocked papers (found via FastPFor enricher). simdcomp shares the SPE paper; its own retier needs the simdcomp code tie-in checked.
+- OpenZL second paper arXiv 2605.09928 'Using Graphs to Compress Smaller and Faster' (blocked, not opened). (from OpenZL enricher)
