@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/madler/pigz",
+  "one_liner": "Multithreaded gzip/zlib/zip compressor by zlib's co-author; beats single-threaded GNU gzip on multicore machines.",
+  "what_it_does": "A command-line replacement for gzip (same options plus -p, -b, -i, -R, -K, -z, -11) that spreads deflate compression over all cores and writes standard gzip, zlib or single-entry zip output that any inflater reads. It also decompresses and tests .gz, .zz, .zip and Unix .Z (LZW) files. It is a program, not a library: there is no public API (issue #50 asking for a 'pigzlib' is still open).",
+  "how_it_is_fast": "Input is cut into 128 KiB chunks (-b) that worker threads deflate in parallel, each primed with the previous chunk's last 32 KiB via deflateSetDictionary() so the ratio stays close to single-threaded deflate; chunks end on a byte boundary with Z_SYNC_FLUSH and a single writer thread concatenates them in order. Per-chunk CRC-32/Adler-32 values are computed in parallel and merged with crc32_combine()/adler32_combine(). Decompression stays single-threaded inflate, but separate read, write and check-value threads overlap I/O and checksumming with it.",
+  "when_to_use": [
+    "Compressing large files or streams to .gz on a multicore box where the output must stay plain gzip for downstream tools (NIfTI .nii.gz, log archives, tarballs, initramfs).",
+    "Shell pipelines (tar | pigz) where gzip -6 is the bottleneck and switching to zstd is not allowed.",
+    "Building against a faster zlib (zlib-ng in compat mode or Cloudflare zlib) to stack a per-core speedup on top of the thread scaling.",
+    "Rsync-friendly archives (-R) or random-access/damage-tolerant gzip (-i) produced at multicore speed.",
+    "Maximum-ratio gzip output via -11 (bundled zopfli) where compression time does not matter."
+  ],
+  "when_not_to_use": [
+    "Single-core or -p 1 runs: compression speed is then the same as gzip on the same zlib (pigzbench thread-scaling graph), so there is no gain.",
+    "Decompression-heavy workloads: gzip inflate cannot be split, so pigz only reaches about 1.6x gzip (306 vs 189 MB/s); Rapidgzip or a zlib-ng/libdeflate-backed decoder goes much further.",
+    "In-process use from C/C++: there is no library interface; link zlib-ng, libdeflate or ISA-L instead.",
+    "Native Windows builds: the code targets Unix-style systems with pthreads (Windows/CMake support is the open issue #62 and a to-do in pigz.c).",
+    "When the format is free to change: zstd (pzstd or zstd -T) beats it on both speed and ratio in the same pigzbench graphs."
+  ],
+  "integration": {
+    "form": "source-drop (single CLI executable built with make; widely packaged by distributions)",
+    "dependencies": "zlib 1.2.3+ (1.2.6+ recommended), POSIX pthreads, libm; bundled zopfli source for -11",
+    "min_toolchain": "not documented; the Makefile uses gcc -O3 (use gmake on Solaris)",
+    "platforms": "Unix-style systems with zlib and pthreads (README); no official Windows build",
+    "thread_safety": "not applicable (a standalone program); internally uses its own yarn.c pthread wrapper",
+    "drop_in_for_baseline": "partial: a CLI drop-in for gzip (same flags, standard .gz output, unpigz link), but output bytes differ from gzip's and level 3 and below are not identical between threaded and unthreaded runs"
+  },
+  "gotchas": [
+    "Each 128 KiB chunk adds about 4-5 bytes (Z_SYNC_FLUSH marker), and -i (independent blocks) costs more ratio because the 32 KiB dictionary is dropped.",
+    "Byte-identical output across thread counts needs zlib 1.2.4+ and level 4 or higher; levels 1-3 differ by thread count.",
+    "Open issue #116 (Feb 2024): all threads hung on a futex in a 'cpio | pigz' dracut pipeline, with no maintainer response.",
+    "README header says 'pigz 2.8 (19 Aug 2022)' while pigz.c says 19 Aug 2023; the 2023 date matches the commit history."
+  ],
+  "pick_this_over_siblings_when": "Pick pigz when you need multithreaded compression that writes plain gzip from the command line; pigzpp claims about 2.1x over pigz 2.6 at the same level but is younger and less proven, Rapidgzip is the choice for fast parallel gzip decompression, and zlib-ng, libdeflate or ISA-L are the in-process library options (and zlib-ng can be linked under pigz).",
+  "verified_claims_summary": "Third-party zlib-ng/pigzbench (Python scripts, CMake-default builds, compiler and flags not stated) on a 12-core AMD Ryzen 3900X over the Silesia corpus: decompression of identical .gz data at 306 MB/s for pigz with system zlib vs 189 MB/s for gzip (about 1.6x, derived from page data), 361 MB/s with zlib-ng. Compression results are in graphs only: at 1 thread pigz and gzip plot at about the same speed, and the multicore gain comes from threads (roughly 490 vs 65 MB/s at level 3 with 12 threads, read from the graph).",
+  "status_note": "No commits since v2.8 on 2023-08-20 (abandoned by the 3-year rule, though widely packaged and stable); zlib-licensed and a few C files, so easy to vendor or rebuild against zlib-ng.",
+  "sources_read": [
+    "https://github.com/madler/pigz",
+    "https://raw.githubusercontent.com/madler/pigz/HEAD/README",
+    "https://raw.githubusercontent.com/madler/pigz/HEAD/pigz.c",
+    "https://raw.githubusercontent.com/madler/pigz/HEAD/Makefile",
+    "https://github.com/madler/pigz/commits",
+    "https://github.com/madler/pigz/issues",
+    "https://github.com/madler/pigz/issues/116",
+    "https://raw.githubusercontent.com/zlib-ng/pigzbench/HEAD/README.MD"
+  ],
+  "confidence": 0.8
+}
