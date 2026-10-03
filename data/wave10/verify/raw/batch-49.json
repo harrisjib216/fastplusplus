@@ -1,0 +1,106 @@
+[
+  {
+    "id": "https://github.com/academysoftwarefoundation/openimageio",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "B",
+    "tier_reason": "The libvips 'Speed and memory use' wiki table (run by the libvips maintainer on 12 Aug 2025, AMD Ryzen Threadripper PRO 3955WX, Ubuntu 25.04) lists oiio 2.5.18 at 3.46 s against magick 4.41 s and convert 4.44 s, and the scripts are public in libvips/vips-bench (oiio.sh, im.sh, im7.sh, benchmark.sh). This is an independent third-party measurement, but every program came from Ubuntu packages and no compiler or flags are stated, so it is B, not A.",
+    "corrections": {
+      "workload": "libvips vips-bench: load a 10000x10000 8-bit RGB uncompressed tiled TIFF, crop 100 pixels off every edge, resize to 90% and apply a 3x3 convolution, then save. oiiotool 2.5.18 runs '--resize:filter=triangle 90%' with a 3x3 gaussian '--convolve' (the script comment says this blurs rather than sharpens). ImageMagick 7.1.1 ('magick' via im7.sh, 'convert' via im.sh) crops on load and runs '-filter triangle -resize 90x90%' with a 3x3 sharpen '-convolve'. Both are multithreaded, and each time is the fastest real time of five runs.",
+      "caveats": "The 1.3x margin is modest, and the test is trivial and I/O-dominated (the wiki says it flatters libvips). The wiki notes that oiiotool 'may not be the best way to test the library'. The run is by the libvips maintainer, a third party for OpenImageIO and ImageMagick. Both oiio and ImageMagick use triangle-filter convolution resizing, so the work is comparable, unlike libvips' affine bilinear (vips-bench issue 8, opened by the Pillow-SIMD author). oiio.sh has an unfixed bug, unchanged since 2014: it passes '--crop $widthx$height+100+100', and because widthx is an undefined shell variable this expands to '9800+100+100'. oiiotool 2.5.18's adjust_geometry parses that string as an origin offset (+9800+100) and keeps the 10000x10000 size, so oiio resizes and convolves a mostly black 10000x10000 frame instead of the 9800x9800 crop. That is about 4% more pixels, so the time is not flattered by doing less work, but the output is not the intended image. oiio also uses a gaussian kernel instead of the sharpen kernel (the cost is the same). Programs are distro builds with unstated flags, and 2.5.18 predates the current OpenImageIO 3.x line."
+    },
+    "notes": "The numbers match the wiki row exactly (oiio 3.46 s, 6.07x vs magick 4.41 s, 7.74x and convert 4.44 s, 7.79x). The ratio is 1.27x to 1.28x (derived from page data). I read the oiiotool v2.5.18.0 geometry parser to confirm the crop-bug behaviour; the bug adds work rather than removing it, so it is recorded as a caveat. fawick/speedtest-resize (opened) has no OpenImageIO or Skia rows; it compares Go resizers with ImageMagick and GraphicsMagick.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/wiki/libvips/libvips/Speed-and-memory-use.md",
+      "https://raw.githubusercontent.com/libvips/vips-bench/master/README.md",
+      "https://raw.githubusercontent.com/libvips/vips-bench/master/oiio.sh",
+      "https://raw.githubusercontent.com/libvips/vips-bench/master/im.sh",
+      "https://raw.githubusercontent.com/libvips/vips-bench/master/im7.sh",
+      "https://raw.githubusercontent.com/libvips/vips-bench/master/benchmark.sh",
+      "https://github.com/libvips/vips-bench/commits/master/oiio.sh",
+      "https://github.com/libvips/vips-bench/issues/8",
+      "https://raw.githubusercontent.com/AcademySoftwareFoundation/OpenImageIO/v2.5.18.0/src/oiiotool/oiiotool.cpp",
+      "https://github.com/AcademySoftwareFoundation/OpenImageIO",
+      "https://github.com/AcademySoftwareFoundation/OpenImageIO/commits/main",
+      "https://raw.githubusercontent.com/fawick/speedtest-resize/HEAD/README.md"
+    ]
+  },
+  {
+    "id": "https://github.com/google/skia",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "B",
+    "tier_reason": "pillow-perf (python-pillow org) data files c4.large.json (Xeon E5-2666 v3, Ubuntu 16.04.1) and macbook.json (Core i5-4258U, Ubuntu 16.04.2) carry skia-53 and imagemagick-6.8 (6.8.9-9) rows for the same resample-4k-rgb cases. Homm (the Pillow-SIMD author, independent of both Skia and ImageMagick) added the Skia rows on 2016-11-02. Both harnesses are public: the nanobench gist BitmapScaleBench.cpp for Skia and testsuite/cases/wand_scale.py for ImageMagick. No compiler or flags are given, so it is B, not A.",
+    "corrections": {
+      "workload": "pillow-perf resample-4k-rgb, single core: a 2560x1600 source resized to 26x16, 320x200, 2048x1280 and 5478x3424 with bilinear (triangle), bicubic (Mitchell in Skia, Catmull-Rom in ImageMagick) and Lanczos-3 filters. Skia 53 'SSE2' was timed with a nanobench BitmapScaleBench.cpp gist calling SkBitmapScaler::Resize on a white-filled N32 bitmap. ImageMagick 6.8.9-9 was timed through Wand (Python) with MAGICK_THREAD_LIMIT=1 on a resized color_circle.png in RGB truecolor.",
+      "claimed_speedup": "Xeon E5-2666 v3 (c4.large), 2560x1600 to 320x200: Lanczos 18.1 ms for Skia vs 127.67 ms for ImageMagick (7.1x) and bilinear 6.41 vs 46.15 ms (7.2x). To 2048x1280, Lanczos 39.8 vs 276.76 ms (7.0x). Core i5-4258U, Lanczos to 320x200: 24.8 vs 156.8 ms (6.3x). Across all 12 size and filter cases Skia is 6.4x to 9.5x faster on c4.large and 4.2x to 9.7x faster on the macbook. All ratios are derived from page data.",
+      "compiler_and_flags": "Not stated. The only label is 'Skia 53 SSE2' in docs/src/data/index.js; Skia was timed with nanobench and no build flags are given.",
+      "caveats": "This is old evidence: Skia 53 (2016) against ImageMagick 6.8.9-9. The SkBitmapScaler API the gist measures is no longer at src/core/SkBitmapScaler.h on Skia main (404), so current Skia resampling differs from what was timed. The Skia section and the Skia library description are commented out of the published docs/index.html; only the data files keep the rows, and only c4.large.json and macbook.json have Skia results. The commented-out prose says ImageMagick is 'about 20 times slower than Skia', but the data show 4.2x to 9.7x (derived from page data). Skia was timed with a separate C++ nanobench harness on a constant white 4-channel bitmap, while ImageMagick ran through Python Wand on a 3-channel image. Both are single-threaded convolution resamplers with matching filter families, except that bicubic is Mitchell in Skia and Catmull-Rom in ImageMagick. The suite is maintained by the Pillow-SIMD authors, who report Pillow-SIMD faster than Skia (4.3 AVX2 Lanczos 320x200 6.23 ms and 3.4 AVX2 7.38 ms vs Skia 18.1 ms on c4.large)."
+    },
+    "notes": "Every cited number is in this project's rows of c4.large.json and macbook.json (cross-checked with c4.large.txt for ImageMagick). Metadata is confirmed: BSD-3-Clause, 11.0k stars, mirror of skia.googlesource.com, last commit 2026-10-03. fawick/speedtest-resize (opened) has no Skia rows.",
+    "urls_opened": [
+      "https://raw.githubusercontent.com/python-pillow/pillow-perf/HEAD/docs/src/data/c4.large.json",
+      "https://raw.githubusercontent.com/python-pillow/pillow-perf/HEAD/docs/src/data/macbook.json",
+      "https://raw.githubusercontent.com/python-pillow/pillow-perf/HEAD/docs/src/data/c4.large.txt",
+      "https://raw.githubusercontent.com/python-pillow/pillow-perf/HEAD/docs/src/data/index.js",
+      "https://raw.githubusercontent.com/python-pillow/pillow-perf/HEAD/docs/src/data/amd.a10.7800.json",
+      "https://raw.githubusercontent.com/python-pillow/pillow-perf/HEAD/docs/src/data/c3.large.json",
+      "https://raw.githubusercontent.com/python-pillow/pillow-perf/HEAD/docs/src/data/c5.large.json",
+      "https://raw.githubusercontent.com/python-pillow/pillow-perf/HEAD/docs/src/data/i5-4430.json",
+      "https://raw.githubusercontent.com/python-pillow/pillow-perf/HEAD/docs/src/data/m5a.large.json",
+      "https://raw.githubusercontent.com/python-pillow/pillow-perf/HEAD/docs/src/data/macbook.2019.json",
+      "https://raw.githubusercontent.com/python-pillow/pillow-perf/HEAD/docs/index.html",
+      "https://raw.githubusercontent.com/python-pillow/pillow-perf/HEAD/README.md",
+      "https://raw.githubusercontent.com/python-pillow/pillow-perf/HEAD/testsuite/run.py",
+      "https://raw.githubusercontent.com/python-pillow/pillow-perf/HEAD/testsuite/cases/wand_scale.py",
+      "https://raw.githubusercontent.com/python-pillow/pillow-perf/HEAD/testsuite/cases/wand.py",
+      "https://raw.githubusercontent.com/python-pillow/pillow-perf/HEAD/testsuite/cases/base.py",
+      "https://raw.githubusercontent.com/python-pillow/pillow-perf/HEAD/testsuite/cases/pillow_scale.py",
+      "https://github.com/python-pillow/pillow-perf",
+      "https://github.com/python-pillow/pillow-perf/tree/main/testsuite",
+      "https://github.com/python-pillow/pillow-perf/tree/main/testsuite/cases",
+      "https://github.com/python-pillow/pillow-perf/tree/main/docs/src/data",
+      "https://github.com/python-pillow/pillow-perf/commits/main/docs/src/data/c4.large.json",
+      "https://gist.github.com/homm/6e048cb0dad135b6db63b924458730e8",
+      "https://raw.githubusercontent.com/google/skia/main/src/core/SkBitmapScaler.h",
+      "https://github.com/google/skia",
+      "https://github.com/google/skia/commits/main",
+      "https://raw.githubusercontent.com/fawick/speedtest-resize/HEAD/README.md"
+    ]
+  },
+  {
+    "id": "https://github.com/gnome/babl",
+    "verdict": "confirm",
+    "reject_reason": null,
+    "page_compares_against_baseline": null,
+    "numbers_found_on_page": null,
+    "evidence_tier_final": "C",
+    "tier_reason": "The claim lives only in the GIMP 2.10 release notes (gimp.org, blocked here; WebSearch snippet: babl is 'up to 10 times faster than LCMS2 for the cases tested'). That is a first-party ratio with no timings, workloads, machine or code. The babl repository has no lcms2 comparison benchmark: tools/babl-benchmark.c times babl's own conversions only, and NEWS, OldNews and the docs carry no lcms2 speed claim. Snippet-only evidence without methodology caps it at C.",
+    "corrections": {
+      "benchmark_url": "https://www.gimp.org/release-notes/gimp-2.10.html",
+      "license": "LGPL-3.0-or-later",
+      "claimed_speedup": "GIMP 2.10 release notes (snippet only, page blocked): babl is 'up to 10 times faster than LCMS2 for the cases tested'; no timings, cases or hardware are given. Disputed: the Little CMS blog post 'Babl throughput comparative' (2019-10-02, from the lcms2 project, snippet only) measured lcms2 at 3.59 s vs babl at 6.36 s on 8-bit transforms on a low-end machine, so lcms2 was about 1.8x faster (derived from snippet), and lcms2 with its fast-float plugin took 1.7 s.",
+      "caveats": "Snippet only: the GIMP 2.10 release notes (gimp.org) and littlecms.com are blocked here, and gitlab.gnome.org is blocked as well. Neither the 10x claim nor the rebuttal could be opened, and the release notes do not say which conversions were tested. The babl repository (GitHub mirror) has no benchmark against lcms2; tools/babl-benchmark.c measures babl's own conversion paths only. The only timed comparison found comes from the baseline's own project (Little CMS) and shows babl slower on 8-bit data. babl's ICC support covers matrix+TRC RGB profiles natively, and CMYK goes through lcms2 itself. Keep as a flagged, low-confidence entry."
+    },
+    "notes": "I found where the claim lives (GIMP 2.10 release notes) via WebSearch, but its measurements are not published anywhere reachable, and babl's own tree has no lcms2 timing harness. A disputed, unpublished claim stays C as a caveat, not a reject. Metadata is confirmed on the GitHub mirror: 25 stars, last commit 2026-10-03. Source headers say LGPL version 3 or any later version.",
+    "urls_opened": [
+      "https://github.com/GNOME/babl",
+      "https://github.com/GNOME/babl/commits/master",
+      "https://github.com/GNOME/babl/tree/master/tools",
+      "https://github.com/GNOME/babl/tree/master/docs",
+      "https://raw.githubusercontent.com/GNOME/babl/master/NEWS",
+      "https://raw.githubusercontent.com/GNOME/babl/master/tools/babl-benchmark.c",
+      "https://raw.githubusercontent.com/GNOME/babl/master/tests/meson.build",
+      "https://raw.githubusercontent.com/GNOME/babl/master/meson_options.txt",
+      "https://raw.githubusercontent.com/GNOME/babl/master/docs/ColorManagement-static.html",
+      "https://raw.githubusercontent.com/GNOME/babl/master/docs/OldNews-static.html",
+      "https://raw.githubusercontent.com/GNOME/babl/master/docs/index-static.html.in",
+      "https://raw.githubusercontent.com/GNOME/babl/master/docs/CMYK-static.html",
+      "https://raw.githubusercontent.com/GNOME/babl/master/babl/babl.c"
+    ]
+  }
+]
