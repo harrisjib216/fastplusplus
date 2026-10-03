@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/cydhra/vers",
+  "one_liner": "Pure-Rust succinct structures (rank/select bit vector, Elias-Fano, RMQ, wavelet matrix, BP tree) benchmarked against other Rust crates only.",
+  "what_it_does": "vers-vecs (crate name) provides a plain BitVec plus immutable succinct structures built from it: RsVec (rank0/rank1/select0/select1, predecessor/successor, select iterators), SparseRSVec, EliasFanoVec (access, predecessor/successor), two RMQ structures (FastRmq, BinaryRmq), a WaveletMatrix with rank/select/statistical queries, and a balanced-parentheses BpTree. RsVec is built once from a BitVec (RsVec::from_bit_vec) and cannot be modified; out-of-range rank returns the total count and out-of-range select returns len() instead of panicking. It is a Rust crate with its own API, not a drop-in for SDSL or sux.",
+  "how_it_is_fast": "RsVec uses a two-level rank directory: 512-bit blocks with a 16-bit zero count relative to 8192-bit super-blocks that hold an absolute count, so rank is two table loads plus popcount over at most 7 words. Select samples every 8192th 0-bit and 1-bit to pick a super-block range, binary-searches super-blocks, then does a manually unrolled binary search over the 16 block counts (or, with the simd feature and AVX-512BW/VL, one 256-bit unsigned compare plus mask popcount), and finishes inside a 64-bit word with the PDEP + TZCNT select trick (pdep code copied from the MIT bitintr crate). FastRmq is a block-decomposed linear-space RMQ design that uses small per-block bit vectors with rank/select instead of logarithmic-size tables.",
+  "when_to_use": [
+    "Rust project on x86-64 with BMI2 and popcnt (build with -C target-cpu=native or +bmi2,+popcnt) that needs both rank and select on a static bit vector with about 5.5 percent overhead (doc comment: 28 bits per 512 bits).",
+    "Static monotone integer sequences in Rust where Elias-Fano predecessor/successor queries must have a logarithmic worst case (README notes sucds degrades to linear on adversarial input).",
+    "Range-minimum queries over large u64 arrays in Rust where FastRmq's lower memory than a sparse table matters (BinaryRmq exceeded 32 GB in the author's largest runs).",
+    "You want one dependency-free crate (std only by default) covering bit vector, Elias-Fano, RMQ, wavelet matrix and BP tree with serde support behind a feature."
+  ],
+  "when_not_to_use": [
+    "C++ code bases: there are no C or C++ bindings; SDSL, sux (C++) or the C++ siblings below are the native options.",
+    "Rank-heavy workloads: the README itself says the succinct crate's rank9 substantially outperforms Vers on rank, and the catalogued sux-rs entry measured sux Rank9 rank1 2.8-3.8x faster than vers-vecs RsVec (ARM64).",
+    "Non-x86 targets such as aarch64: PDEP/TZCNT fall back to portable code the README calls significantly slower; the catalogued sucds entry measured vers-vecs select1 1.3x to 7.8x slower than sucds Rank9Sel on ARM64.",
+    "Wavelet-tree style queries at scale: the README says qwt is substantially faster because of fewer cache misses, and no wavelet-matrix benchmarks are published.",
+    "Mutable bit vectors with rank/select: RsVec is immutable; changes require into_bit_vec and a full rebuild."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "none by default; optional serde (derive) and mem_dbg 0.4.3 features",
+    "min_toolchain": "Rust edition 2021; no rust-version field in Cargo.toml, and the code calls usize::is_multiple_of, so in practice Rust 1.87 or newer",
+    "platforms": "any Rust target; fast path needs x86-64 BMI1/BMI2 and popcnt; simd feature needs AVX, AVX2, AVX-512F/BW/VL (cfg-gated at compile time, no runtime dispatch)",
+    "thread_safety": "not documented; structures are immutable after construction and hold only Vecs, so they are Send and Sync by Rust auto traits",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "simd feature: the AVX-512 BitSetIter (bit_set_iter0/bit_set_iter1) mishandles the final 16-bit chunk. Reading bitset.rs at HEAD (v1.10.2), it loads the last chunk with SIMD, then when no further chunk exists re-scans bit by bit from that same chunk base, so matching bits in the last chunk are returned twice; bit_set_iter0 also returns padding positions >= len() when len is not a multiple of 16. A Python transcription of the logic gives 48 items for a 32-bit all-ones vector instead of 32. The crate's tests only use vectors whose last chunk has no matching bits, so they pass. Found by reading source, not by running the crate; the default (non-simd) iter0/iter1 are not affected.",
+    "Recent correctness history: closed bugs #6 and #8 (iter1 errors, including length > 8192), #29 (from_bit_vec panic after append_bits(u64::MAX, 1)), and on 2026-08-09 fixes for successor0 rank adjustment, the select-block upper-bound sentinel, and garbage bits when appending zeros. Use 1.10.2 or later.",
+    "Performance bug fixed 2026-08-09: the select1 super-block binary search undershot its upper bound and fell back to linear search in all cases; the published select plots were made earlier (benchmark repo last commit 2026-06-09, vers submodule pinned at 4c495ae), so they reflect the pre-fix code.",
+    "Naming and docs: get_unchecked is a safe function that may panic or return garbage, not an unsafe unchecked access; the README calls the BP lookup feature u16_lookup while Cargo.toml names it bp_u16_lookup; issue #19 showed the documented select1(rank1(pos)) == pos only holds when pos is a 1-bit."
+  ],
+  "pick_this_over_siblings_when": "Among Rust siblings, pick sux-rs for the fastest rank and sucds for select on ARM; pick Vers when you want one dependency-free crate covering bit vector, Elias-Fano with logarithmic worst-case predecessor, RMQ, wavelet matrix and BP tree on x86-64 with BMI2. Pick QWT (Rust) for wavelet-tree workloads, and the C++ entries (succinct-bitvec-cpp, 3star-rankselect, SPIDER) when you are in C++.",
+  "verified_claims_summary": "First-party criterion plots (no numeric table) on a Ryzen 9 7950X with target-cpu=native and Vers' simd feature compare rank/select, heap overhead, Elias-Fano access/predecessor and RMQ only against other Rust crates (succinct rank9, rsdict, bio, fid, indexed_bitvec, sucds, bitm; range_minimum_query, librualg); the claim is qualitative ('among the fastest'), succinct's rank9 wins on rank, and the 2-3x figure is Vers with versus without BMI2/popcnt. The benchmark Cargo.toml has rsdict's simd feature commented out although the README says it was enabled, lists sux 0.14 as a dependency although no sux results appear in the README plots, and does not state the rustc version.",
+  "status_note": "Actively maintained (v1.10.2 on crates.io 2026-08-10, about 174k downloads, 3 open issues, 2.0 breaking-change wishlist open); MIT OR Apache-2.0, std-only by default and easy to depend on from Rust, but not usable from C++ without writing an FFI layer.",
+  "sources_read": [
+    "https://github.com/Cydhra/vers",
+    "https://raw.githubusercontent.com/Cydhra/vers/HEAD/readme.md",
+    "https://raw.githubusercontent.com/Cydhra/vers/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/Cydhra/vers/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/Cydhra/vers/HEAD/src/bit_vec/fast_rs_vec/mod.rs",
+    "https://raw.githubusercontent.com/Cydhra/vers/HEAD/src/bit_vec/fast_rs_vec/select.rs",
+    "https://raw.githubusercontent.com/Cydhra/vers/HEAD/src/bit_vec/fast_rs_vec/bitset.rs",
+    "https://raw.githubusercontent.com/Cydhra/vers/HEAD/src/bit_vec/fast_rs_vec/tests.rs",
+    "https://raw.githubusercontent.com/Cydhra/vers/HEAD/src/bit_vec/fast_rs_vec/iter.rs",
+    "https://raw.githubusercontent.com/Cydhra/vers/HEAD/src/bit_vec/mod.rs",
+    "https://raw.githubusercontent.com/Cydhra/vers/HEAD/src/bit_vec/sparse.rs",
+    "https://raw.githubusercontent.com/Cydhra/vers/HEAD/src/util/mod.rs",
+    "https://raw.githubusercontent.com/Cydhra/vers/HEAD/src/util/pdep.rs",
+    "https://raw.githubusercontent.com/Cydhra/vers/HEAD/src/elias_fano/mod.rs",
+    "https://raw.githubusercontent.com/Cydhra/vers/HEAD/src/rmq/fast_rmq/mod.rs",
+    "https://raw.githubusercontent.com/Cydhra/vers/HEAD/src/rmq/binary_rmq/mod.rs",
+    "https://raw.githubusercontent.com/Cydhra/vers/HEAD/.github/workflows/rust.yml",
+    "https://github.com/Cydhra/vers/issues?q=is%3Aissue",
+    "https://github.com/Cydhra/vers/issues/19",
+    "https://github.com/Cydhra/vers/issues/29",
+    "https://github.com/Cydhra/vers/commits/master",
+    "https://crates.io/api/v1/crates/vers-vecs",
+    "https://github.com/Cydhra/vers_benchmarks",
+    "https://github.com/Cydhra/vers_benchmarks/commits/master",
+    "https://raw.githubusercontent.com/Cydhra/vers_benchmarks/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/Cydhra/vers_benchmarks/HEAD/.cargo/config.toml",
+    "https://raw.githubusercontent.com/Cydhra/vers_benchmarks/HEAD/.gitmodules"
+  ],
+  "confidence": 0.75
+}
