@@ -1,0 +1,56 @@
+{
+  "id": "https://github.com/cloudflare/zlib",
+  "one_liner": "Deprecated Cloudflare fork of zlib 1.2.8 with SSE4.2/NEON hashing and SIMD checksums; about 4x faster deflate than stock zlib.",
+  "what_it_does": "A source-compatible fork of madler/zlib (header reports ZLIB_VERSION 1.2.8) that produces standard zlib/deflate/gzip streams through the usual deflateInit/deflate/inflate/compress/gz* API. Applications relink against it without code changes, as long as they do not need APIs added in zlib 1.2.9 and later. It is also published as the Rust crate cloudflare-zlib-sys (0.3.7, marked deprecated).",
+  "how_it_is_fast": "Deflate hashes 4 input bytes with one hardware CRC32C instruction (_mm_crc32_u32 on SSE4.2, __crc32cw on ARMv8 CRC) instead of zlib's 3-byte rolling shift-xor hash, which gives fewer hash collisions and shorter chain walks, and longest_match compares several bytes per step using wide unaligned loads. CRC-32 uses PCLMULQDQ carry-less-multiply folding on x86 (code copied from zlib-ng) and the ARMv8 __crc32d/w/h/b instructions on aarch64. Adler-32 uses SSSE3/NEON SIMD, and inflate uses Chromium-derived SSE2/NEON chunk copies (inffast_chunk, chunkcopy); PR #23 measured 15-34% faster decompression on Silesia files from those last two.",
+  "when_to_use": [
+    "Legacy C/C++ code that links zlib and needs level 6-9 deflate 3.7-4.4x faster with byte-compatible streams and no API changes (zlib-ng discussion 871: level 9 0.476 s vs 2.106 s on Silesia-small, Ryzen 9 3900X).",
+    "Rust projects already using cloudflare-zlib-sys that cannot switch yet; Cloudflare itself recommends moving to zlib-rs.",
+    "x86-64 servers with SSE4.2 or ARMv8 machines with the CRC extension, where a fixed build target is acceptable.",
+    "High-level compression (levels 6-9) where its speed matches zlib-ng's and the API surface of zlib 1.2.8 is enough."
+  ],
+  "when_not_to_use": [
+    "New projects: the README marks it deprecated with no further development planned; zlib-ng (actively maintained, runtime CPU dispatch) is as fast at level 9 and faster at levels 1-6, and libdeflate is faster still for whole-buffer use.",
+    "Fast levels: at level 1 it took 0.147 s vs zlib-ng 0.078 s and libdeflate 0.076 s in the 2025 run (it keeps zlib-like ratio, 44.16%, where zlib-ng trades ratio for speed).",
+    "Portable binaries: configure aborts on x86-64 without SSE4.2 and on aarch64 without CRC ('CRC and SSE4.2 support is required') and compiles with -msse4.2 or -march=armv8-a+crc, so the build will not run on older CPUs; there is no runtime dispatch except for PCLMUL CRC.",
+    "Code that calls newer zlib APIs: the 1.2.8-based zlib.h lacks crc32_z, adler32_z, gzfread, gzfwrite, deflateGetDictionary, inflateCodesUsed and crc32_combine_gen.",
+    "Pipelines that need output identical to stock zlib (tests with golden files, reproducible archives): the different hash produces different, at level 9 about 0.5% larger, streams."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (configure/make or CMake); also a Rust -sys crate",
+    "dependencies": "none",
+    "min_toolchain": "C89-style C (zlib 1.2.8 code base) built with GCC or Clang supporting -msse4.2 (x86-64) or -march=armv8-a+crc (aarch64)",
+    "platforms": "x86-64 with SSE4.2 (PCLMUL optional, detected at runtime for CRC-32) and aarch64 with NEON and CRC; other architectures fall back to a generic multiply-xor hash in the source, but the README and configure checks only target these two",
+    "thread_safety": "Same model as zlib: separate z_stream objects are independent and can run on different threads (bundled zlib README: 'All the code is thread safe'); the PCLMUL CPU check in crc32.c uses a lazily initialised static flag.",
+    "drop_in_for_baseline": "partial — same zlib API, ABI and stream format, but it exposes only the zlib 1.2.8 API set (no crc32_z, gzfread and other 1.2.9+ functions), requires SSE4.2/ARMv8 CRC, and its compressed bytes differ from stock zlib"
+  },
+  "gotchas": [
+    "The fork reports ZLIB_VERSION 1.2.8; selected upstream security fixes were backported by hand (the 2018 sym_buf fix, the CVE-2022-37434 extra-field bound, CVE-2016-9842 in Oct 2023, NULL checks and inflate state zeroing in Feb 2026), so version checks by scanners misreport it and anything not backported stays unfixed after deprecation.",
+    "The default branch is gcc.amd64, not master; check out that branch when vendoring.",
+    "zlib-ng's maintainer notes in discussion 871 that the fork keeps the old zlib code style and lands 'mega-commits' mixing optimizations and refactoring, with no public CI, which makes auditing hard.",
+    "Compressed output is not bit-identical to madler/zlib; ratio is slightly worse at level 9 (40.696% vs 40.490%) and slightly better at level 1 (44.160% vs 44.805%)."
+  ],
+  "pick_this_over_siblings_when": "Rarely: pick it only when you need a zlib-1.2.8-compatible library already wired into your build (for example via cloudflare-zlib-sys) and cannot move; otherwise zlib-ng gives the same level-9 speed with active maintenance and runtime dispatch, and libdeflate is faster with better ratio when whole buffers suffice.",
+  "verified_claims_summary": "The zlib-ng maintainers' deflatebench runs on Silesia-small.tar measured Cloudflare zlib against stock zlib: on a Ryzen 9 3900X with GCC 13.3.0 (2025), level 9 compression took 0.476 s vs 2.106 s and decompression 0.031 s vs 0.099 s; on an i9-9900K with GCC 4.8.5 (2021), level 9 compression took 0.544 s vs 2.760 s. Compiler flags were not stated.",
+  "status_note": "Deprecated by Cloudflare (no further development; recommends zlib-rs); last commits on 2026-02-25 are backported hardening fixes, and the Zlib license makes it easy to vendor if you must.",
+  "sources_read": [
+    "https://github.com/cloudflare/zlib",
+    "https://github.com/cloudflare/zlib/commits/gcc.amd64",
+    "https://github.com/cloudflare/zlib/issues",
+    "https://github.com/cloudflare/zlib/pull/23",
+    "https://raw.githubusercontent.com/cloudflare/zlib/HEAD/README.md",
+    "https://raw.githubusercontent.com/cloudflare/zlib/HEAD/README",
+    "https://raw.githubusercontent.com/cloudflare/zlib/HEAD/configure",
+    "https://raw.githubusercontent.com/cloudflare/zlib/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/cloudflare/zlib/HEAD/Makefile.in",
+    "https://raw.githubusercontent.com/cloudflare/zlib/HEAD/deflate.c",
+    "https://raw.githubusercontent.com/cloudflare/zlib/HEAD/crc32.c",
+    "https://raw.githubusercontent.com/cloudflare/zlib/HEAD/inflate.c",
+    "https://raw.githubusercontent.com/cloudflare/zlib/HEAD/zlib.h",
+    "https://raw.githubusercontent.com/cloudflare/zlib/HEAD/zconf.h",
+    "https://raw.githubusercontent.com/cloudflare/zlib/HEAD/Cargo.toml",
+    "https://crates.io/api/v1/crates/cloudflare-zlib-sys",
+    "https://github.com/zlib-ng/zlib-ng/discussions/871"
+  ],
+  "confidence": 0.85
+}

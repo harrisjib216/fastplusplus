@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/kspalaiologos/bzip3",
+  "one_liner": "BWT plus context-mixing compressor (bzip2 successor) that compresses text 3-4x faster than xz -9 at slightly smaller size.",
+  "what_it_does": "bzip3 is a block-sorting compressor for text and source code, shipped as the libbz3 C library plus a bzip2-style CLI (bzip3, bunzip3, bz3cat, bz3grep). The API is its own, not zlib/liblzma-compatible: bz3_compress/bz3_decompress handle a whole in-memory frame, while bz3_new/bz3_encode_block/bz3_decode_block work on independent blocks of 65 KiB to 511 MiB, and bz3_encode_blocks/bz3_decode_blocks run 2-16 blocks on pthreads. The .bz3 format is its own and cannot be read by bzip2 or xz.",
+  "how_it_is_fast": "Each block passes through a run-length coder, then an LZP pass (hashed order-4 context, 2^18-entry table, minimum match 40 bytes) that removes long repeats before sorting, then a Burrows-Wheeler transform built with Ilya Grebnov's libsais (SA-IS suffix-array construction), then a bitwise arithmetic coder that mixes order-0/order-1/order-2 probability counters with a run-dependent secondary table (derived from Ilya Muravyov's BWT post-coder). Removing long matches before the BWT and coding with a small CM model instead of LZMA's optimal parsing gives xz-level ratio at roughly 4x xz -9's compression speed. Blocks are independent, so the CLI and the block API scale across threads.",
+  "when_to_use": [
+    "Archiving large text, logs, source trees or tarballs of code, where ratio matters and xz -9 compression is too slow (lzbench silesia: 11.9 MB/s vs 2.75 MB/s, 22.29% vs 23.01%).",
+    "Replacing bzip2 for cold storage: similar compression speed but 13% smaller output on silesia (22.29% vs 25.75%) and smaller on every file in the project's corpus.",
+    "Multi-core batch compression with large blocks (-b up to 511 MiB, -j workers), where per-block parallelism gives the README's 7:10 vs xz -T16 12:09 and half the size on Perl tarballs.",
+    "Write-once, read-rarely data where a decompression speed near compression speed (about 10-14 MB/s per thread) is acceptable."
+  ],
+  "when_not_to_use": [
+    "Read-heavy data: single-thread decompression is about 10x slower than xz (12.4 vs 122 MB/s) and two orders of magnitude slower than zstd or LZ4.",
+    "Binary, already-compressed or media data; the README says it excels at text or code, and BWT/CM gains shrink on other inputs.",
+    "When interoperability matters: the .bz3 format is read only by bzip3, and both the format details (CRC change in 1.3.0/1.3.1) and the library ABI (1.5.0) have broken in recent releases.",
+    "Memory-constrained hosts: each state allocates about 5x the block size (swap buffer, 4-byte suffix array, LZP table) and the README's -b 256 -j 12 run used 18.3 GB; parallel modes multiply that per thread.",
+    "Streaming APIs: there is no incremental zlib-style stream interface; callers frame blocks themselves or buffer whole inputs (issue #171 asks for a memory-to-memory multi-threaded API)."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (libbz3) plus CLI; autotools or CMake",
+    "dependencies": "none at runtime beyond libc; pthreads optional for the parallel block API (bundled libsais and LZP code)",
+    "min_toolchain": "C99; CMake 3.13+ or autotools",
+    "platforms": "Portable C; tested on x86, x86_64, armv6, armv7, aarch64, ppc64le, mips, mips64, sparc, s390x; Windows builds exist but the README says Windows and 32-bit builds can be considerably slower",
+    "thread_safety": "One bz3_state per thread; bz3_encode_blocks/bz3_decode_blocks take an array of states and spawn one pthread per block (2-16). Sharing a state across threads is not documented as safe.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The repository moved to github.com/iczelia/bzip3 (NEWS v1.5.3; kspalaiologos/bzip3 redirects); 1.5.0 changed bz3_encode_block/bz3_decode_block signatures and the soname, so older callers must be updated.",
+    "Archives written by 1.3.0 and 1.3.1 carry a wrong CRC and fail normal decompression in later versions; 'bzip3 -rd' (recovery mode, 1.3.2) restores them.",
+    "Fuzzing found heap overflows in the 1.2.2 decoder (issue #94, CVE-2023-29421 per a search result; issue #97 in bz3_decompress); NEWS lists security fixes in 1.2.3 and libsais-related security fixes in 1.3.0 with 'updating is strongly encouraged'. Do not decode untrusted input with old versions.",
+    "Speed depends heavily on the compiler (README: clang 13 x64 Linux reaches about 17 MiB/s compress and 23 MiB/s decompress per thread); release binaries are built without -march=native, and the CMake option BZIP3_ENABLE_ARCH_NATIVE is off by default. In lzbench the -9 setting gives a worse ratio than -5 (23.00% vs 22.29%)."
+  ],
+  "pick_this_over_siblings_when": "Pick bzip3 over Fast LZMA2 or xz when compression time and ratio on text matter more than decompression speed; Kanzi -7 lands at almost the same point in lzbench (10.8 / 15.8 MB/s, 22.32%) under a permissive license and with more levels, so prefer Kanzi if LGPL-3.0 is a problem or you need to trade ratio for speed. For anything read often, zstd or LZ4 decompress far faster.",
+  "verified_claims_summary": "In the independent lzbench 2.4 run (gcc 15.2.0 release binary, one thread of an AMD EPYC 9555P at 3.20 GHz, silesia.tar), bzip3 1.5.4 -5 compressed at 11.9 MB/s to 22.29% versus xz 5.8.4 -9 at 2.75 MB/s to 23.01% (about 4.3x faster and slightly smaller), but decompressed at 12.4 MB/s versus xz's 122 MB/s. The README's Perl-tarball numbers are first-party, multi-threaded wall-clock runs on an HDD with no CPU model.",
+  "status_note": "Actively maintained (1.5.4 released 2026-09-07, last commit 2026-09-09) under LGPL-3.0 with Apache-2.0 libsais/LZP parts; the format and ABI have changed in recent releases, so pin a version.",
+  "sources_read": [
+    "https://github.com/kspalaiologos/bzip3",
+    "https://raw.githubusercontent.com/kspalaiologos/bzip3/HEAD/README.md",
+    "https://raw.githubusercontent.com/kspalaiologos/bzip3/HEAD/include/libbz3.h",
+    "https://raw.githubusercontent.com/iczelia/bzip3/HEAD/NEWS",
+    "https://raw.githubusercontent.com/iczelia/bzip3/HEAD/etc/BENCHMARKS.md",
+    "https://raw.githubusercontent.com/iczelia/bzip3/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/iczelia/bzip3/HEAD/src/libbz3.c",
+    "https://github.com/iczelia/bzip3/issues",
+    "https://github.com/iczelia/bzip3/issues/94",
+    "https://github.com/iczelia/bzip3/releases",
+    "https://raw.githubusercontent.com/inikep/lzbench/HEAD/README.md"
+  ],
+  "confidence": 0.85
+}
