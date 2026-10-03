@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/mapbox/earcut.hpp",
+  "one_liner": "Header-only C++ ear-slicing polygon triangulator (port of Mapbox earcut.js); about 1.6x faster than the JS original on tile polygons.",
+  "what_it_does": "Triangulates 2D polygons with holes into a flat index list, three indices per triangle, numbered into the input rings concatenated in order. The call is mapbox::earcut<N>(polygon), where polygon is a container of rings, the first ring is the outer boundary and the rest are holes; any point type works through the util::nth<0/1> accessor (std::array, std::pair and std::tuple ship by default). An optional mapbox::refine(indices, coords) post-pass flips interior edges toward a constrained Delaunay triangulation in place, keeping the triangle count.",
+  "how_it_is_fast": "Modified ear slicing (after Held's FIST and Eberly's ear clipping) on an intrusive doubly linked vertex list taken from a block object pool. Once the input exceeds 80 vertices, vertices are hashed onto a z-order (Morton) curve over a 32767-unit grid, so the point-in-ear test only visits nearby vertices. Hole bridging (eliminateHoles/findHoleBridge) skips whole blocks using one bounding box per 16 ring edges, a fix for slowdowns on polygons with many holes (issue #124, PR #132). refine() runs Lawson edge flips with non-robust orient/inCircle predicates on thread-local scratch buffers.",
+  "when_to_use": [
+    "Real-time triangulation of map or vector-tile polygons (buildings, water, land use) for GPU rendering, the workload it is tuned for: about 120k MVT polygons with 1.9M vertices in about 276 ms on an M1 Pro.",
+    "You need a dependency-free, ISC-licensed single header that builds as C++14 and takes your own point and container types without copying.",
+    "Input is already valid (no self-crossing rings, holes inside the outer ring, no duplicate or zero-length edges) and small or medium polygons dominate.",
+    "You want the C++ output to match earcut.js: PR #132 reports bit-identical results against the JS fixtures, so the same data triangulates the same way in browser and native code.",
+    "Rendering can accept slivers, or you can pay roughly 35% more time (98 ms on top of 276 ms in the README) for the opt-in Delaunay-style refine pass."
+  ],
+  "when_not_to_use": [
+    "Correctness on dirty input matters: on self-intersecting or overlapping rings the README warns of overlapping triangles, gaps or triangles outside the polygon. Clean the input first, or use a robust tessellator such as libtess2 or CGAL.",
+    "Meshing for FEM, navmeshes or simulation: the output is not conforming (T-junctions), and refine() only approximates a constrained Delaunay triangulation with non-robust predicates.",
+    "You need a conforming constrained Delaunay triangulation or point-set Delaunay: use a CDT library (detria, CDT) or delaunator-cpp instead.",
+    "3D or non-planar input: only x and y are read, so you must project to a plane first.",
+    "You chose it for a measured C++-vs-C++ speedup: none is published. bench.cpp times libtess2 v1.0.2 on 9 small fixtures but reports no results, so benchmark your own data."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (the C++ standard library only; GoogleTest, Google Benchmark, libtess2 and GLFW are fetched only for tests, the bench and the visualizer)",
+    "min_toolchain": "C++14 for the shipping header (per a CMakeLists.txt comment); the tests, bench and visualizer need C++17 (GCC 9+, Clang 10+, MSVC 2019+) and CMake 3.16+",
+    "platforms": "any (portable C++, no SIMD or intrinsics); CI status for non-x86 is not documented, and older issues #97 and #103 reported test failures on aarch64, ppc64le and s390x (closed 2025-09-18)",
+    "thread_safety": "Not documented explicitly. From the source: each mapbox::earcut() call builds its own detail::Earcut object with no shared state, so concurrent calls are safe; refine() keeps its scratch buffers in a static thread_local object.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Output indices refer to all input vertices concatenated ring after ring. refine() needs a flat coords container in that same order, so you must flatten nested rings yourself; the PR #132 discussion measured nested-ring lookups as 2.7x to 5.2x slower than flat coordinates in refine.",
+    "N defaults to uint32_t. Pass uint16_t only if the total vertex count stays within 65536; there is no documented overflow check.",
+    "The free function allocates a new node pool and index vector on every call. Buffer reuse across calls exists only on mapbox::detail::Earcut, which is not a public API.",
+    "The README promises bit-identical output across compilers for earcut but not for refine(). The project's own tests are built with -ffp-contract=off, so use that flag if you need identical indices across platforms."
+  ],
+  "pick_this_over_siblings_when": "Pick earcut.hpp over detria or Delaunay32 when you triangulate many small, already-valid polygons for rendering and want a single dependency-free header whose output matches earcut.js. Pick detria when you need a robust constrained Delaunay result, and delaunator-cpp or Delaunay32 for point-set Delaunay.",
+  "verified_claims_summary": "The only quantified comparison is against its own JavaScript original: 119,680 real-world Mapbox Vector Tile polygons (1.9M vertices) triangulate in about 276 ms in C++ against about 445 ms in earcut.js on the same MacBook Pro M1 Pro (2021), about 1.6x (refine pass 98 vs 168 ms, about 1.7x), derived across the two READMEs; the compiler, flags and Node version are not stated. No C++ baseline (libtess2, CGAL, poly2tri) has published numbers.",
+  "status_note": "Actively maintained (last commit 2026-09-28, synced to earcut 3.2.4, 0 open issues). ISC-licensed single header, easy to vendor.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/mapbox/earcut.hpp/HEAD/README.md",
+    "https://raw.githubusercontent.com/mapbox/earcut.hpp/HEAD/include/mapbox/earcut.hpp",
+    "https://raw.githubusercontent.com/mapbox/earcut.hpp/HEAD/test/bench.cpp",
+    "https://raw.githubusercontent.com/mapbox/earcut.hpp/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/mapbox/earcut.hpp/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/mapbox/earcut.hpp/v2.2.4/README.md",
+    "https://raw.githubusercontent.com/mapbox/earcut/HEAD/README.md",
+    "https://github.com/mapbox/earcut.hpp",
+    "https://github.com/mapbox/earcut.hpp/issues?q=is%3Aissue",
+    "https://github.com/mapbox/earcut.hpp/issues/124",
+    "https://github.com/mapbox/earcut.hpp/issues/116",
+    "https://github.com/mapbox/earcut.hpp/pull/132"
+  ],
+  "confidence": 0.8
+}

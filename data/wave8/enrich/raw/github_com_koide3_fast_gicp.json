@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/koide3/fast_gicp",
+  "one_liner": "PCL-compatible multithreaded GICP and voxelized GICP (CPU and CUDA); about 6-9x faster than PCL GICP on 8 cores.",
+  "what_it_does": "Fine registration of two 3D point clouds (LiDAR scan matching and odometry) with GICP-family algorithms. FastGICP, FastGICPSingleThread, FastVGICP, FastVGICPCuda and NDTCuda all derive from pcl::Registration, so the usual setInputSource / setInputTarget / align / getFinalTransformation code keeps working; extra setters cover threads, neighbor count k, covariance regularization and voxel resolution. pygicp Python bindings offer an align_points(target, source) function and a class interface.",
+  "how_it_is_fast": "The CPU code parallelizes per-point work with OpenMP: nearest-neighbor correspondence search, covariance estimation (k=20 neighbors, PLANE regularization via SVD) and Hessian/gradient accumulation into per-thread buffers. Each class solves a Gauss-Newton or Levenberg-Marquardt problem on SE(3) (LM by default, at most 64 iterations). VGICP (Koide et al., ICRA 2021) replaces the per-point kd-tree search with a lookup in a hash map of Gaussian voxels (1.0 m default resolution, DIRECT1 neighborhood), each voxel aggregating the target-point distributions. Covariances are cached per input cloud and can be carried over with swapSourceAndTarget() in odometry. The CUDA build moves voxel mapping, correspondences and derivatives to the GPU; covariances come from a CPU parallel kd-tree, GPU brute force, or an approximate RBF-kernel estimate.",
+  "when_to_use": [
+    "Existing PCL code calls pcl::GeneralizedIterativeClosestPoint and you want a near drop-in speedup on a multi-core x86 CPU (the README shows 20 ms vs 128 ms per scan pair at about 17k points on an i9-9900K).",
+    "Frame-to-frame LiDAR odometry where the previous frame's covariances can be reused: the benchmark's reuse mode cuts 100 fgicp_mt alignments from 1585 ms to 1018 ms.",
+    "You have an NVIDIA GPU and need CUDA registration (FastVGICPCuda at 5.9 ms per pair with the RBF-kernel covariances and 16.0 ms with the CPU kd-tree; NDTCuda). The author's successor small_gicp ships no GPU implementation.",
+    "You are stuck on an older PCL that still uses boost::shared_ptr (the headers switch at PCL 1.10). small_gicp's PCL interface needs PCL 1.11 or newer.",
+    "Python prototyping on numpy arrays through pygicp."
+  ],
+  "when_not_to_use": [
+    "New CPU-only projects: the author's small_gicp (already catalogued) is reported 1.9x faster single-threaded than fast_gicp::GICP on KITTI 00, scales better with threads, is header-only with Eigen as its only hard dependency, and is actively maintained.",
+    "Single-core or thread-constrained targets: single-threaded FastGICP is only about 1.15x faster than PCL GICP in the README. Issue #145 reports multithreaded GICP and VGICP running slower than single-threaded on an i9-13900KF under WSL/Docker (100 runs: 12,986 vs 9,945 ms and 16,300 vs 7,514 ms).",
+    "Large initial misalignment: like any ICP-family local method it needs a good initial guess; issue #169 reports failure under large rotation, and #135 reports a score that drifts over time.",
+    "Projects that cannot take PCL, Boost and OpenMP, or a CUDA toolchain plus the nvbio submodule (tested only with CUDA 11.1 on Ubuntu 18.04/20.04). Windows builds are not documented, and issue #158 (cannot build fast_gicp.lib) is open.",
+    "You need upstream fixes: the last commit is 2025-04-24 and 69 issues are open, including #148, which claims the Levenberg-Marquardt gain-ratio (rho) formula in step_lm() is wrong and has no maintainer reply."
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "PCL, Eigen3, Boost (hash and format headers, normally pulled in with PCL), OpenMP; README also lists Sophus and nvbio, which are git submodules under thirdparty/ along with Eigen; optional CUDA (BUILD_VGICP_CUDA=ON) builds an extra libfast_vgicp_cuda with cuBLAS; optional pybind11 for pygicp",
+    "min_toolchain": "Not documented beyond CMake 3.10; CMakeLists.txt sets no C++ standard and forces CMAKE_BUILD_TYPE Release; tested on Ubuntu 18.04/20.04 with CUDA 11.1; builds as a ROS1 catkin or ROS2 ament package or as plain CMake",
+    "platforms": "Linux (x86-64 tested in the README benchmark); macOS via Homebrew libomp per the README; Windows not documented; the CUDA classes need an NVIDIA GPU",
+    "thread_safety": "Not documented. Each registration object caches covariances, correspondences and the voxel map as mutable members and runs its own OpenMP team, so use one instance per thread.",
+    "drop_in_for_baseline": "partial: derives from pcl::Registration, so generic align() code works, but it is not a pcl::GeneralizedIterativeClosestPoint subclass, uses its own defaults (LM optimizer, 64 max iterations, k=20, PLANE regularization) and its own setters (setNumThreads, setRegularizationMethod, setResolution), and results differ slightly (fitness 0.2044 vs 0.2049 in the README)."
+  },
+  "gotchas": [
+    "The thread count defaults to omp_get_max_threads(); the README itself notes that fewer threads can be faster on some machines, so set setNumThreads explicitly and measure.",
+    "Covariance caching is keyed on the cloud pointer: setInputSource/setInputTarget return early when given the same pointer. If you modify a cloud in place, call clearSource()/clearTarget() first (the benchmark does), or stale covariances are used.",
+    "The output cloud passed to align() must be a different object from the source and target clouds; issue #133 reports covariance computation failing with an index error otherwise.",
+    "CPU FastVGICP with NeighborSearchMethod::DIRECT_RADIUS (supported only by the CUDA class) hits the default branch of neighbor_offsets(), which prints 'unsupported neighbor search method' and calls abort(). The GPU_RBF_KERNEL covariance mode needs a hand-tuned kernel width and is described in align.cpp as 'extremely fast but maybe a bit inaccurate'."
+  ],
+  "pick_this_over_siblings_when": "Choose fast_gicp over small_gicp only when you need its CUDA paths (FastVGICPCuda, NDTCuda) or must stay on a pre-1.11 PCL; otherwise small_gicp is faster, lighter and maintained. Neither competes with nanoflann or ikd-Tree, which are neighbor-search structures rather than registration solvers.",
+  "verified_claims_summary": "Own-repo benchmark (src/align.cpp) on one KITTI-style scan pair (17,249 and 17,518 points after a 0.1 m approximate voxel grid), Core i9-9900K plus RTX 2080 Ti, PCL version and compiler not stated: PCL GICP 127.5 ms per alignment vs FastGICP multithreaded 20.2 ms (about 6.3x), FastVGICP multithreaded 18.1 ms (about 7.0x), VGICP CUDA RBF kernel 5.9 ms (about 21.6x), and single-threaded FastGICP 111.3 ms (about 1.15x), ratios derived from page data. small_gicp's KITTI 00 benchmark by the same author implies single-threaded fast_gicp::GICP is about 1.26x faster than pcl::GICP (2.4x / 1.9x, derived from page data), with lower drift (RPE(100) 1.212 vs 2.424).",
+  "status_note": "Stale since 2025-04-24 with 69 open issues, and the author points users to small_gicp; BSD-3-Clause and usable, but plan to own any fixes you need.",
+  "sources_read": [
+    "https://github.com/koide3/fast_gicp",
+    "https://raw.githubusercontent.com/koide3/fast_gicp/HEAD/README.md",
+    "https://raw.githubusercontent.com/koide3/fast_gicp/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/koide3/fast_gicp/HEAD/package.xml",
+    "https://raw.githubusercontent.com/koide3/fast_gicp/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/koide3/fast_gicp/HEAD/setup.py",
+    "https://raw.githubusercontent.com/koide3/fast_gicp/HEAD/src/align.cpp",
+    "https://raw.githubusercontent.com/koide3/fast_gicp/HEAD/include/fast_gicp/gicp/fast_gicp.hpp",
+    "https://raw.githubusercontent.com/koide3/fast_gicp/HEAD/include/fast_gicp/gicp/fast_vgicp.hpp",
+    "https://raw.githubusercontent.com/koide3/fast_gicp/HEAD/include/fast_gicp/gicp/fast_vgicp_voxel.hpp",
+    "https://raw.githubusercontent.com/koide3/fast_gicp/HEAD/include/fast_gicp/gicp/fast_vgicp_cuda.hpp",
+    "https://raw.githubusercontent.com/koide3/fast_gicp/HEAD/include/fast_gicp/gicp/lsq_registration.hpp",
+    "https://raw.githubusercontent.com/koide3/fast_gicp/HEAD/include/fast_gicp/gicp/gicp_settings.hpp",
+    "https://raw.githubusercontent.com/koide3/fast_gicp/HEAD/include/fast_gicp/gicp/impl/fast_gicp_impl.hpp",
+    "https://raw.githubusercontent.com/koide3/fast_gicp/HEAD/include/fast_gicp/gicp/impl/fast_vgicp_impl.hpp",
+    "https://raw.githubusercontent.com/koide3/fast_gicp/HEAD/include/fast_gicp/gicp/impl/lsq_registration_impl.hpp",
+    "https://github.com/koide3/fast_gicp/tree/master/thirdparty",
+    "https://github.com/koide3/fast_gicp/issues?q=is%3Aissue",
+    "https://github.com/koide3/fast_gicp/issues/145",
+    "https://github.com/koide3/fast_gicp/issues/133",
+    "https://github.com/koide3/fast_gicp/issues/148",
+    "https://raw.githubusercontent.com/koide3/small_gicp/HEAD/README.md",
+    "https://raw.githubusercontent.com/koide3/small_gicp/HEAD/BENCHMARK.md"
+  ],
+  "confidence": 0.8
+}
