@@ -17,3 +17,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - Debian Code Search's Go SIMD TurboPFor port (Go 1.26 archsimd, AVX-512; claims to beat the C encode): cross-language claim for QUEUE wave 14. (from TurboPFor enricher)
 - arXiv 2605.25528 'Engineering Practical Succinct Bit Vectors: A Space-Time Pareto Analysis on Apple Silicon ARM64 Cores': may list more rank/select code; blocked. (from orzo enricher)
 - Apple LZMESH (OS 27 fast codec, liblzraven SPEC section 15) and libzbitmap (LZBITMAP reimplementation; lzfse issue #62): Apple-codec siblings to check. (from LZFSE/liblzraven enricher)
+- pisa-engine/pisa: maintained ds2i fork (PEF plus many codecs), not catalogued; seed candidate. (from ds2i enricher)
