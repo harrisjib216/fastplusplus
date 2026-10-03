@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/guzba/zippy",
+  "one_liner": "Pure-Nim deflate/zlib/gzip codec (plus zip and tar readers) that the author times as faster than zlib on small files.",
+  "what_it_does": "Implements raw DEFLATE, zlib and gzip compression and decompression in Nim with no C dependencies, plus ZIP archive reading/writing and tarball extraction. The API is whole-buffer only: compress(src, level, dataFormat) and uncompress(src, dataFormat) on string, seq[uint8] or pointer+length, with format auto-detection on uncompress; there is no streaming or incremental interface and no zlib-compatible C ABI. From C++ it is usable only by porting it or by compiling Nim code that exports wrappers yourself.",
+  "how_it_is_fast": "Inflate uses a 9-bit fast Huffman lookup table with a canonical-code slow path, a 64-bit bit buffer refilled with 8-byte unaligned loads, and 8-byte (copy64) match copies with a 16-byte fast path for short non-overlapping matches. BestSpeed replaces zlib's LZ77 with Snappy's match finder (from the author's supersnappy), and other levels use zlib-style lazy matching with good/lazy/nice/chain parameters and a 2^17-entry hash. CRC-32 uses SSE4.1+PCLMULQDQ and Adler-32 uses SSSE3 on x86-64 (runtime CPUID dispatch) and NEON on arm64; release builds turn Nim's bounds and overflow checks off in the hot modules.",
+  "when_to_use": [
+    "Nim programs that need gzip/zlib/deflate (HTTP Content-Encoding, small payloads, embedded assets) without linking zlib or shipping zlib1.dll.",
+    "Decompressing small to medium in-memory gzip/zlib payloads, where the README shows 1.15x to 1.85x lower min time than zlib via nim-lang/zip on the non-trivial files (e.g. alice29.txt.gz 0.233 vs 0.397 ms, tor-list.gz 27.3 vs 36.6 ms).",
+    "BestSpeed compression where output size matters less than time (alice29.txt 0.643 vs 1.236 ms; tor-list 26.1 vs 178.2 ms against zlib level 1).",
+    "Cross-compiling Nim to targets where a C zlib is awkward (the README lists nim c, nim cpp and --cc:vcc; recent releases added emscripten and Mac C++ backend fixes)."
+  ],
+  "when_not_to_use": [
+    "C++ projects: zlib-ng or libdeflate give the same formats with a C API, published third-party benchmarks and SIMD-tuned paths.",
+    "Default-level compression of the largest test input: on tor-list zippy took 409.5 ms vs zlib's 244.4 ms, and urls.10K was a tie (13.36 vs 13.05 ms).",
+    "Streaming, partial or very large data: everything is decompressed into one in-memory string, there is no output size limit for zlib/deflate input, and partial raw-deflate decoding is an open request (issue #96).",
+    "Multi-member or extra-field gzip (pigz/bgzip-style output): uncompressGzip assumes one member and rejects FEXTRA, and the FHCRC header CRC is skipped, not checked.",
+    "Data written by zippy 0.10.x at levels 8-9 before 2026-09-30: a Huffman histogram overflow could emit invalid deflate streams (see gotchas)."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none (pure Nim; uses std/sysrand on Nim >= 1.6)",
+    "min_toolchain": "Nim >= 1.0.10 per zippy.nimble; README says it works with --gc:arc, --gc:orc and the default GC, and with nim c, nim cpp and --cc:vcc",
+    "platforms": "any Nim target; SIMD checksums on amd64 (SSSE3, SSE4.1+PCLMUL with runtime detection) and arm64 (NEON); 32-bit targets have had overflow and RangeDefect bugs, and a DivByZeroDefect on i386 Windows gzip is still open (issue #94)",
+    "thread_safety": "not documented; compress/uncompress are pure functions over their arguments with no shared state seen in the source",
+    "drop_in_for_baseline": "partial: produces and reads standard deflate/zlib/gzip streams interoperable with zlib (tests/validate.nim checks both directions), but the API is Nim whole-buffer calls, not zlib's z_stream interface, and preset dictionaries are not supported"
+  },
+  "gotchas": [
+    "Correctness bug behind the benchmarked code: until PR #111 (merged 2026-09-30, after the last tagged 0.10.20) huffmanCodes counted symbols per code length in a uint8, so blocks with 256+ symbols at one length got wrong canonical codes and produced invalid deflate data (reported on multi-MB binary inputs, about 1 in 10 failing at levels 8-9; all 0.10.x affected). Version 0.10.19 also had an inflate bug on macOS arm64 that returned one extra byte for a multi-MB BestCompression stream (issue #108, fixed in 0.10.20 by removing that path).",
+    "Release builds run inflate, deflate and the bit reader with Nim checks off; fuzzing found an out-of-bounds read on 1-byte raw-deflate input (issue #102, fixed in 0.10.19 'fix for tiny src len'), and tarball extraction trusted gzip ISIZE for allocation (issue #104, a memory DoS, closed). Treat older versions as unsafe on untrusted input.",
+    "gzip output is not deterministic: compress writes a random 0-25 character file name into the gzip header (Heal-the-BREACH mitigation, issue #61), so identical input gives different bytes.",
+    "The benchmark compares speed only; compressed sizes are not reported, and BestSpeed uses a Snappy-style matcher, so its ratio versus zlib level 1 is unknown. The README still links tests/benchmark.nim, now tests/bench.nim."
+  ],
+  "pick_this_over_siblings_when": "Pick Zippy only inside Nim when you want deflate/gzip with zero C dependencies; for C or C++ use zlib-ng (drop-in zlib API, broad speedups) or libdeflate (faster whole-buffer deflate and CRC-32), and miniz if you need a tiny single-file C library.",
+  "verified_claims_summary": "Author-run benchy timings on a Ryzen 5 5600X compiled with nim c --gc:arc -d:release, against zlib through the nim-lang/zip wrapper (zlib version and build unstated; bench comments say it needs zlib1.dll, so likely a Windows run): Zippy decompresses the test files 1.15x to 1.85x faster (8x on the microsecond-scale randtest3) and compresses at BestSpeed 1.6x to 6.8x faster (15x on randtest3), derived from page data, but at the default level it is slower on tor-list (409.5 vs 244.4 ms) and tied on urls.10K; Nim version and C backend compiler are not stated, compressed sizes are not shown, and the timed code predates the Huffman overflow fix.",
+  "status_note": "Actively maintained (last commit 2026-09-30, tagged release 0.10.20 from 2026-08-20) and MIT-licensed, but Nim-only, so for C++ it is a reference design rather than something to link; take the post-0.10.20 master or the next release for the Huffman fix.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/guzba/zippy/HEAD/README.md",
+    "https://raw.githubusercontent.com/guzba/zippy/HEAD/zippy.nimble",
+    "https://raw.githubusercontent.com/guzba/zippy/HEAD/src/zippy.nim",
+    "https://raw.githubusercontent.com/guzba/zippy/HEAD/tests/bench.nim",
+    "https://github.com/guzba/zippy/tree/master/src/zippy",
+    "https://raw.githubusercontent.com/guzba/zippy/HEAD/src/zippy/common.nim",
+    "https://raw.githubusercontent.com/guzba/zippy/HEAD/src/zippy/deflate.nim",
+    "https://raw.githubusercontent.com/guzba/zippy/HEAD/src/zippy/inflate.nim",
+    "https://raw.githubusercontent.com/guzba/zippy/HEAD/src/zippy/bitstreams.nim",
+    "https://raw.githubusercontent.com/guzba/zippy/HEAD/src/zippy/gzip.nim",
+    "https://raw.githubusercontent.com/guzba/zippy/HEAD/src/zippy/lz77.nim",
+    "https://raw.githubusercontent.com/guzba/zippy/HEAD/src/zippy/snappy.nim",
+    "https://raw.githubusercontent.com/guzba/zippy/HEAD/src/zippy/internal.nim",
+    "https://raw.githubusercontent.com/guzba/zippy/HEAD/src/zippy/crc.nim",
+    "https://raw.githubusercontent.com/guzba/zippy/HEAD/src/zippy/crc32_simd.nim",
+    "https://raw.githubusercontent.com/guzba/zippy/HEAD/src/zippy/adler32.nim",
+    "https://raw.githubusercontent.com/guzba/zippy/HEAD/src/zippy/adler32_simd.nim",
+    "https://raw.githubusercontent.com/guzba/zippy/HEAD/src/zippy/ziparchives.nim",
+    "https://raw.githubusercontent.com/guzba/zippy/HEAD/src/zippy/tarballs.nim",
+    "https://github.com/guzba/zippy/issues?q=is%3Aissue",
+    "https://github.com/guzba/zippy/pull/111",
+    "https://github.com/guzba/zippy/issues/108",
+    "https://github.com/guzba/zippy/issues/102",
+    "https://github.com/guzba/zippy/commits/master"
+  ],
+  "confidence": 0.75
+}

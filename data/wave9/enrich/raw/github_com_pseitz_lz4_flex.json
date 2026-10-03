@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/pseitz/lz4_flex",
+  "one_liner": "Pure-Rust LZ4 block and frame codec that matches or slightly beats the C reference lz4 when built with its unsafe paths.",
+  "what_it_does": "Implements the LZ4 block format and the LZ4 frame format (xxhash32 checksums via twox-hash) in Rust, wire-compatible with the C lz4 library. The block API is compress/compress_into/compress_prepend_size and decompress/decompress_into/decompress_size_prepended (optionally with an external dictionary); the frame API is FrameEncoder/FrameDecoder implementing std::io::Write/Read. It is a Rust crate, not a C/C++ API: C++ callers need their own FFI shim (the README lists Node.js, Wasm and Python bindings, no C one).",
+  "how_it_is_fast": "Standard LZ4 greedy matching with a 4K-entry multiplicative hash table (u16 positions for small inputs, hash5 over 5 bytes on 64-bit), plus a decoder hot loop that handles the common single-byte token case with fixed 16-byte literal copies and 18-byte match copies whenever the input and output pointers are a safe distance from the end, so most sequences skip per-byte bounds checks. Long matches use a 16-byte wild copy; overlapping matches use a deliberately lightly unrolled byte loop. With safe-encode/safe-decode disabled these run on raw pointers; the default safe build uses slice operations and pays roughly 15-25% (README tables).",
+  "when_to_use": [
+    "Rust services that need LZ4 compatibility without a C toolchain or a -sys crate (no C build step, no_std block format, 32-bit and wasm targets).",
+    "Small to medium blocks (tens of KB, e.g. per-message or per-page compression) where the README shows the unsafe build about 10% faster than C lz4 1.9.3 at compression.",
+    "Projects that want a memory-safe default decoder for untrusted LZ4 input and accept a speed loss versus C lz4 for it.",
+    "Interop with existing LZ4 frame data written by the C tool or library."
+  ],
+  "when_not_to_use": [
+    "C++ codebases: the C reference lz4 is the same format, within a few percent on these benchmarks, and callable directly.",
+    "When you need high-compression (LZ4 HC) modes: the README TODO still lists high compression as missing, so only the fast level exists.",
+    "When the default safe build is all you can ship and speed is the reason: it is slower than C lz4 on both inputs (66 KB JSON 1272/4540 MiB/s vs 1469/5313).",
+    "Large-file decompression where the margin matters: on 10 MB dickens the unsafe decoder is 2734 MiB/s vs C lz4 2759 MiB/s, i.e. no win.",
+    "Versions before 0.11.6/0.12.1/0.13.0 on untrusted input: an invalid match offset (offset 0) could read uninitialized memory or leak a reused output buffer (advisory GHSA-vvp9-7p8x-rfvv, High, 2026-03-14)."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "none for the block format; twox-hash 2 (xxhash32) with the default 'frame' feature",
+    "min_toolchain": "Rust 1.81 (rust-version in Cargo.toml), edition 2021",
+    "platforms": "any Rust target; 64-bit uses an 8-byte hash path, 32-bit supported (wasm32 had overflow bugs, one still open as issue #215)",
+    "thread_safety": "not documented; the API is free functions plus per-instance FrameEncoder/FrameDecoder with no shared global state seen in the source",
+    "drop_in_for_baseline": "partial: bit-compatible LZ4 block and frame format, so data interoperates with C lz4, but the API is Rust (no LZ4_compress_default-style C ABI) and there is no HC level"
+  },
+  "gotchas": [
+    "The README's fastest row ('unsafe w. unchecked_decode', 5973 and 3168 MiB/s decompress) used a feature removed in 0.11.1 (2023-06-19); the 'checked-decode' feature still listed in Cargo.toml is not referenced by any cfg in src, so that row cannot be reproduced on current releases.",
+    "The fast numbers need default-features = false; since 0.14.0 that also drops 'alloc' (Vec-returning compress/decompress) unless you add features = [\"alloc\"], and Cargo feature unification can silently turn safe-decode back on (or off) through another dependency.",
+    "decompress_size_prepended trusts the 4-byte little-endian size header and allocates Vec::with_capacity of up to 4 GiB before decoding, so hostile input can force large allocations; check the size yourself for untrusted data. The block API keeps the whole payload in memory, the frame format is the streaming path.",
+    "Recent bug history: offset-0 uninitialized-read advisory (fixed 0.11.6/0.12.1/0.13.0), u32 overflow on large block payloads (fixed 0.12.0), short-dictionary out-of-bounds read in unsafe compression (fixed 0.12.2/0.13.1), Max8MB frames rejected by its own decoder (fixed Aug 2026), try_finish panic on a second empty frame (issue #233, open). The GitHub default branch (master) still shows 0.11.5; current code is on main (0.14.0)."
+  ],
+  "pick_this_over_siblings_when": "Pick lz4_flex over the C LZ4 reference only when you are in Rust and want no C build or a safe-by-default decoder; from C++ use LZ4 itself. lzvolt and misa77 decode much faster but use their own formats, and lz4ultra targets better LZ4 ratio at slow compression, so lz4_flex is the choice only when LZ4 wire compatibility in pure Rust is the requirement.",
+  "verified_claims_summary": "Author's criterion run of v0.11.0 (June 2023) with rustc 1.69.0 on a Ryzen 7 5900HX at 3 GHz with boost off: on a 66 KB JSON file the unsafe build compresses at 1615 vs 1469 MiB/s and decompresses at 5512 vs 5313 MiB/s against C lz4 1.9.3 via the lzzzz binding (about 1.10x and 1.04x), and on 10 MB dickens 347 vs 324 MiB/s compress but 2734 vs 2759 MiB/s decompress (a tie); the C compiler and flags used to build lzzzz's lz4 are not stated, and the numbers predate the 2025-2026 security fixes.",
+  "status_note": "Actively maintained (0.14.0 released 2026-07-14, last commit 2026-08-11 on main) and MIT-licensed, but it is a Rust crate, so for C++ it is usable only through FFI or as a reference design; the published benchmark has not been refreshed since v0.11.0.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/PSeitz/lz4_flex/HEAD/README.md",
+    "https://raw.githubusercontent.com/PSeitz/lz4_flex/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/PSeitz/lz4_flex/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/PSeitz/lz4_flex/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/PSeitz/lz4_flex/HEAD/src/block/mod.rs",
+    "https://raw.githubusercontent.com/PSeitz/lz4_flex/HEAD/src/block/decompress.rs",
+    "https://raw.githubusercontent.com/PSeitz/lz4_flex/HEAD/src/block/decompress_safe.rs",
+    "https://raw.githubusercontent.com/PSeitz/lz4_flex/HEAD/src/block/compress.rs",
+    "https://raw.githubusercontent.com/PSeitz/lz4_flex/HEAD/src/block/hashtable.rs",
+    "https://raw.githubusercontent.com/PSeitz/lz4_flex/HEAD/src/frame/mod.rs",
+    "https://raw.githubusercontent.com/PSeitz/lz4_flex/HEAD/src/sink.rs",
+    "https://raw.githubusercontent.com/PSeitz/lz4_flex/HEAD/src/fastcpy_unsafe.rs",
+    "https://raw.githubusercontent.com/PSeitz/lz4_flex/main/README.md",
+    "https://raw.githubusercontent.com/PSeitz/lz4_flex/main/Cargo.toml",
+    "https://raw.githubusercontent.com/PSeitz/lz4_flex/main/CHANGELOG.md",
+    "https://raw.githubusercontent.com/PSeitz/lz4_flex/main/src/block/decompress.rs",
+    "https://raw.githubusercontent.com/PSeitz/lz4_flex/main/src/block/decompress_safe.rs",
+    "https://raw.githubusercontent.com/PSeitz/lz4_flex/main/src/block/mod.rs",
+    "https://github.com/PSeitz/lz4_flex/issues?q=is%3Aissue",
+    "https://github.com/PSeitz/lz4_flex/security",
+    "https://github.com/PSeitz/lz4_flex/commits/main"
+  ],
+  "confidence": 0.8
+}
