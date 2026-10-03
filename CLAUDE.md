@@ -142,22 +142,18 @@ after 2 failed fetches, the privacy/scratch rules above, and the terse final-rep
 - A user interrupt in the main session can kill running background agents silently; if an agent
   never reports and its raw file is missing or stale, relaunch it.
 
-## Status (2026-10-01)
+## Status (2026-10-03)
 
-- Waves 1-8 are finished. Lists after wave 8: COPYABLE 1105, REFERENCE 121, REJECTED 21
-  (tiers across both lists A 319, B 254, C 635, D 18).
-- Wave 8 (numerics-and-science) closed 2026-10-01 in a claude.ai cloud session:
-  - Searches b1-b6 for all 7 categories plus 3 seed assignments (17 projects) are merged; 302
-    verdicts, 297 verified (A 66, B 62, C 159, D 10), every one enriched. Rejected for invalid
-    evidence: SIMDxorshift, SIMD-MT (compute a different generator), ra_prng (timed a no-op),
-    CUDA-L1 (timed solutions that skip the work), OxiBLAS (own audit calls its ratios fabricated).
-    34 duplicates filed. Retiers are in data/wave8/verify/raw/retier-0{1,2,3,4}.json.
-  - Deferred: b7 (blogs) and b8 (HN) were not run, because HN Algolia, arXiv and most blogs were
-    egress-blocked and the WebSearch budget was spent. Run them in a session with wider network
-    access, then merge/verify/enrich as usual and re-render the lists.
-  - Retier follow-ups that need paper access (listed in data/wave8/leads.md): fmm-gen (arXiv
-    1611.01120, maybe B/A), lemire/fastshuffleexperiments (maybe A), juFFTe (workshop paper, stays C
-    while its numbers predate fixes). Leads for a later seed pass are also in leads.md.
+- Waves 1-7 are finished. Wave 8 is nearly finished; open items are in QUEUE.md "Unfinished work".
+  Lists after the 2026-10-02 session: COPYABLE 1122, REFERENCE 128, REJECTED 22.
+- Wave 8 (numerics-and-science): searches b1-b8 for all 7 categories and two seed passes (52
+  projects) are merged. 353 verdicts, 347 verified (A 70, B 69, C 189, D 19); rejected for invalid
+  evidence: SIMDxorshift, SIMD-MT, ra_prng, CUDA-L1, OxiBLAS, cpp-matmul (SGEMM timed against
+  MKL DGEMM). 42 merged records still need verdicts and 26 verified entries still need
+  enrichment. Retiers are in data/wave8/verify/raw/retier-0{1..7}.json. List unenriched slugs with:
+  `for s in $(python3 pipeline/enrich.py data/wave8 | cut -f1); do [ -f data/wave8/enrich/raw/$s.json ] || echo $s; done`
+- b7/b8 in this environment ran on WebSearch snippets plus github.com, since HN Algolia, HN
+  threads, arXiv and most blogs were blocked; their yield was thin (55 records).
 - Waves 9-12 are set up (2026-10-01): `data/wave{9,10,11,12}/assignments.json` (152 assignments,
   19 categories x b1-b8) and leads.md; b1/b2 prompts rendered. Re-render b1/b2 before launching a
   later wave so its known list is current. zlib-ng and libdeflate are already filed under wave 9's

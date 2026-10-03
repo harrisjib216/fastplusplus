@@ -2472,6 +2472,47 @@ gRPC C++ transport plugin that replaces HTTP/2-over-TCP with the Homa kernel RPC
 
 #### autodiff-and-ml-kernels
 
+##### CodeJeNN (Keras-to-C++ inference header generator)  `C++ (generated); generator in Python`  `NRL Open License Agreement (custom, non-OSI)`  `active`  `Tier C`
+
+Python tool that turns a trained Keras MLP/CNN into one dependency-free C++ header; snippet-reported 2-25x over Keras eager on one core.
+
+**Beats:** Keras eager-mode inference (TensorFlow backend for the MLP case, PyTorch backend for the CNN case) — The repo's speed test (tutorials/06_speed_test) times 10,000 single-sample calls of a small MLP and CNN in Keras eager or JIT mode against the generated C++ (g++-15 -O3 -march=native -ffast-math, one thread, MacBook M1 Pro) but publishes no numbers. The figures come only from search snippets of arXiv 2607.02746: MLP 0.48 s vs 12.01 s Keras/TensorFlow eager (about 25x) and 1.21 s with JIT (about 2.5x), CNN 1.05 s vs 19.14 s eager (about 18x) and 2.17 s JIT (about 2.1x). The C++ timing loop discards outputs, and the measured models hit the stale-output code path described above.
+
+**Known shortcoming:** Numbers from an arXiv snippet only (MLP 0.48 s vs 12.01 s eager and 1.21 s JIT; CNN 1.05 s vs 19.14 s and 2.17 s JIT); the 38x CNN figure is not confirmed. README backend labels contradict test.py. NRL licence is non-OSI, so reference only.
+
+**Known shortcoming:** Correctness bug: code_generate.py emits `static std::array<Scalar,N> model_output = layer_K_output;` for 1-D outputs without output normalization; a static local initialises once, so every call after the first returns the first result. Both speed-test models (MLP 1000->100, CNN ->100) take this path, and test.cpp discards results while --debug calls the model once, so neither catches it; whether the timed loop still does the work (or is optimised away) is unproven without a build. Every layer buffer is a function-local static (not thread-safe). src/generate.sh passes --double, which main.py's argparse lacks.
+
+**Independent measurement:** verifier
+
+**Independent measurement:** enrichment
+
+**How:** It removes the framework entirely: no Python dispatch, no tensor allocation and no graph runtime per call, which is what dominates single-sample inference of small models in Keras eager mode. Weights are emitted as constexpr std::array literals, layers are small inline function templates (a plain scalar dot-product loop for Dense) with activations passed as lambdas so the compiler can inline everything, and intermediate buffers are preallocated function-local statics. The README says vectorization and threading are deliberately left out, on the assumption that the host solver is already parallel.
+
+**Use it when:**
+- Calling a small Keras-trained MLP or CNN once per cell or per sample inside a C++ physics or CFD code, where linking TensorFlow, libtorch or ONNX Runtime is unwanted
+- Single-sample, single-thread latency on CPU with models small enough that the weight arrays stay in cache (the speed test uses a 1000-64-32-100 MLP and a 10x100 input CNN)
+- Supported layer sets only: Dense, Conv1D/2D/3D and their transposes, separable and depthwise conv, pooling, Batch/Layer/Unit/Group normalization, Reshape/Flatten/Rescaling, common activations
+- Research or government projects that can accept the NRL Open License Agreement
+
+**Skip it when:**
+- Calling the generated function more than once with a 1-D output and no output normalization file: the generator emits `static std::array<Scalar, N> model_output = layer_K_output;`, a static local initialized only on the first call, so every later call returns the first result (this is the configuration of both speed-test models)
+- Multithreaded callers: every layer buffer and the output are function-local statics, so concurrent calls from OpenMP or MPI+threads code race
+- Large models or batched throughput: Dense is an unvectorized scalar loop with strided weight access, the README warns large static arrays make it memory-bandwidth bound, and against Keras JIT the snippet-reported gain is only about 2-2.5x
+- Recurrent, attention or multi-input/multi-output models: only single-input, single-output sequential or functional MLP/CNN graphs are supported (ConvLSTM2D is commented out)
+- Projects needing an OSI license: the NRL agreement restricts redistribution to its own terms, takes an irrevocable grant-back of modifications to the US Government, and can be terminated by the Government
+
+**Vs siblings:** RTNeural is the catalogued alternative for small-model C++ inference, with measured comparisons against libtorch, ONNX Runtime and TensorFlow Lite; pick CodeJeNN only when you want a single dependency-free header generated straight from a Keras .h5/.keras file, including 3D and transposed convolutions, and can accept the NRL license and fix the static-buffer issues. Kaoken and tiny-ml-runtime take the same baked-weights approach for other model types.
+
+**Gotchas:**
+- Stale-output bug: with a 1-D output and no output_*.npy normalization files, the returned array is a static initialized once, so results after the first call are wrong; the --debug comparison calls the model once and does not catch it, and the speed test discards results
+- Weights are non-static constexpr locals inside the inline function; for large models check stack use and code size, since the compiler may materialize them per call
+- Custom activations need a hand-written C++ version pasted into the header; until then the header prints 'WARNING: CUSTOM ACTIVATION HAS NOT BEEN IMPLEMENTED' on every call
+- Docs disagree with the scripts: the speed-test readme says the CNN used PyTorch and the MLP TensorFlow, but the checked-in test.py files set the opposite; src/generate.sh passes --double, which main.py's argparse does not define (it takes --bit=32|64), so the shipped default script should exit with an unrecognized-argument error
+
+**Status:** A single-commit code drop (2026-06-22, 'final draft for paper') from a US Naval Research Laboratory project with 1 star; the NRL Open License makes it reference-only for this catalog, and the generated header may count as a derivative work under that agreement.
+
+[repo](https://github.com/jarcities/codejenn) · [benchmark](https://raw.githubusercontent.com/jarcities/codejenn/HEAD/tutorials/06_speed_test/readme.md)
+
 ##### learn-cuda attention (hand-written SM120 flash attention)  `CUDA C++ with inline PTX (PyTorch harness)`  `no license`  `active`  `Tier C`
 
 Educational ~300-line CUDA C++ FlashAttention-2 forward kernel; 4-6% faster than flash-attn on one RTX 5090 shape, 3% slower than cuDNN.
@@ -2510,6 +2551,45 @@ Educational ~300-line CUDA C++ FlashAttention-2 forward kernel; 4-6% faster than
 
 [repo](https://github.com/gau-nernst/learn-cuda) · [benchmark](https://github.com/gau-nernst/learn-cuda/blob/HEAD/07_attention/README.md)
 
+##### Mini-Attention (FlashAttention-2 from scratch in CUDA C++ for SM120)  `C++ (CUDA/PTX)`  `no license`  `active`  `Tier C`
+
+Hand-written FlashAttention-2 forward kernel for RTX 5090 (SM120); beats cuDNN SDPA at N<=1024, 3-5% slower beyond.
+
+**Beats:** cuDNN fused attention via PyTorch SDPA (SDPBackend.CUDNN_ATTENTION) — On one RTX 5090, fp16 non-causal attention with H=16, D=128 and batch 16/16/16/8/4 for N=512/1024/2048/4096/8192 (5 warm-ups, mean of 20 CUDA-event timings with a 200 MB L2 flush), K7 took 0.185 vs 0.247 ms for cuDNN through PyTorch SDPA at N=512 (1.33x) and 0.658 vs 0.739 ms at N=1024 (1.12x), but 2.588 vs 2.515 ms at N=2048 and 10.310 vs 9.904 ms at N=8192 (about 213 vs 222 TFLOPS, derived from page data). The exact PyTorch, cuDNN and CUDA versions and the host CPU are not stated beyond the torch>=2.11.0 cu128 requirement.
+
+**Known shortcoming:** README contradicts itself (133.2% vs 134.7%; 'beats ~35%' at N=1024 vs 112.2%). One profiler line (0.003 ms) is physically impossible (~2,900 TFLOPS vs 419 peak), so at least one measurement is wrong. Beats cuDNN SDPA only at N<=1024. No licence.
+
+**Known shortcoming:** tests/test_correctness.py checks the SM86 inline kernels, not the benchmarked SM120 kernel, which is checked only in the bench script at 0.05 tolerance. The baseline timing counts the `with sdpa_kernel()` context manager inside the CUDA-event window, inflating cuDNN at short N where this kernel wins. Non-causal, d=128, forward only.
+
+**Independent measurement:** verifier
+
+**Independent measurement:** enrichment
+
+**How:** Standard FlashAttention-2 tiling with an online softmax in registers, using Ampere-style mma.sync.m16n8k16 tensor-core instructions (consumer Blackwell has no WGMMA or tcgen05), ldmatrix.x4(.trans) fragment loads, XOR-swizzled shared memory to avoid bank conflicts, cp.async.cg global-to-shared copies with an L2::256B prefetch hint, eager first K/V tile load and optional double buffering. SM120 tuning uses Bc=128 tiles (fits within about 100 KB shared memory), exp2-based softmax and one hoisted reciprocal for the final 1/l normalization, with K7 picked by a static scan over Br/Bc/warp configs.
+
+**Use it when:**
+- Studying how to write a FlashAttention-2 forward kernel by hand for consumer Blackwell (RTX 5090, SM120), with each optimization isolated in K1-K7.
+- Short-sequence, non-causal fp16 prefill-style attention with head dim 128 (N=512 to 1024) on an RTX 5090, where the README measures 1.12x to 1.33x over cuDNN via PyTorch SDPA.
+- As a reference for SM120 tile-size and PTX choices (mma.sync instead of WGMMA, Bc=128, L2::256B hints) when tuning your own kernel.
+
+**Skip it when:**
+- Sequences of 2048 tokens or more: the README table shows K7 at 95-97% of cuDNN there, so cuDNN is faster.
+- Causal or masked attention, dropout, training (no backward pass), GQA/MQA with different K/V head counts, head dims other than 128, or sequence lengths that are not multiples of the 64/128 tile sizes; the SM120 kernel rejects or does not implement these.
+- Any code you plan to ship: there is no LICENSE file (it returns 404), so the code cannot be copied, and the project has 1 star and one author.
+- Datacenter Blackwell (B200/SM100) or Hopper: the SM100 kernel is work in progress and FlashAttention-3 or cuDNN target those parts directly.
+
+**Vs siblings:** Pick it over learn-cuda's SM120 attention only for N<=1024 non-causal d=128 forward on an RTX 5090, since learn-cuda reaches about 94% of speed-of-light at long sequences but does not beat cuDNN; for anything production use cuDNN via SDPA or FlashAttention, and SageAttention if quantized attention is acceptable.
+
+**Gotchas:**
+- tests/test_correctness.py (the 'All K1-K7 passed' output in the Readme, tolerance 1e-3) loads the SM86 inline kernels, not the SM120 kernel that was benchmarked; the SM120 kernel is only checked inside _bench_sm120.py at B=4, N=1024 with a 0.05 tolerance.
+- The baseline timing wraps each call in a 'with sdpa_kernel(...)' context manager inside the CUDA-event window, so Python-side overhead is charged to cuDNN at sub-millisecond sizes where K7 wins; the probe also silently falls back to FLASH_ATTENTION or MATH if cuDNN is unavailable.
+- Several Readme figures disagree or are implausible: K7 at N=1024 is 112.2% in the latency table, 114.4% in the progression table and 'beats by ~35%' in the NCU section; the torch.profiler line (0.003 ms) is physically impossible; and the 'NCU-equivalent' metrics come from an analytical script, not Nsight Compute.
+- Design notes contradict the code in places, for example notes/why_mma_sync.md cites 228 KB shared memory per block on SM120 while the bench script says 100 KB per SM.
+
+**Status:** Active as of the last commit on 2026-03-31 (59 commits, 1 star), but unlicensed, so treat it as reference reading rather than vendorable code.
+
+[repo](https://github.com/shlokgpu/Mini-Attention) · [benchmark](https://raw.githubusercontent.com/shlokgpu/Mini-Attention/HEAD/Readme.md)
+
 ##### oneDNN Graph Compiler  `C++`  `no license`  `unknown`  `Tier C`
 
 Intel's tensor compiler backend for oneDNN Graph API that fuses MLP/MHA subgraphs; beat oneDNN post-op fusion and TVM. Removed in oneDNN 3.8.
@@ -2545,7 +2625,84 @@ Intel's tensor compiler backend for oneDNN Graph API that fuses MLP/MHA subgraph
 
 [repo](https://github.com/uxlfoundation/oneDNN/tree/v3.7/src/graph/backend/graph_compiler) · [benchmark](https://arxiv.org/pdf/2301.01333)
 
+##### yalm (Yet Another Language Model, C++/CUDA LLM inference)  `C++ (CUDA)`  `no license`  `stale`  `Tier C`
+
+Educational single-GPU C++/CUDA LLM inference engine; about 2.4x Hugging Face transformers FP16 decode, roughly tied with llama.cpp.
+
+**Beats:** Hugging Face transformers (PyTorch) GPU inference; llama.cpp GPU also measured — Author-run table (README, Mistral-7B-Instruct-v0.2 FP16, 4k context, RTX 4090 + EPYC 7702P): yalm 63.8 and 58.7 tok/s at ~120 and ~4800 generated tokens vs Hugging Face transformers 25.9 and 25.7 (about 2.5x and 2.3x, derived from page data), llama.cpp 61.0 and 58.8, calm 66.0 and 65.7. Transformers, llama.cpp, CUDA and compiler versions are not given and no script reproduces the cross-engine table; the build uses -O3 -ffast-math -mavx2 -mfma -mf16c and nvcc -O2.
+
+**Known shortcoming:** Only clearly beats HF transformers (2.5x); ties llama.cpp at ~4800 tokens and calm is faster. No script for the cross-engine table. No licence.
+
+**Known shortcoming:** README benchmark table predates commit 6cd1ef6 (2025-08-26), which fixed out-of-bounds prefetch reads in att_mix and CUDA graph node updates, so the numbers come from pre-fix code (tier C rule). yalm's tok/s counts prompt plus generated tokens over total time with the prompt run one token at a time, not llama.cpp's metric. fp8 offered by convert.py but rejected by the loader; MoE asserts on CUDA; default build targets sm_80/sm_90 only.
+
+**Independent measurement:** verifier
+
+**Independent measurement:** enrichment
+
+**How:** Decode at batch 1 is memory-bandwidth bound, so the CUDA path is a set of hand-written GEMV-style kernels: one warp per output row with a warp-shuffle reduction (`matmul_row`), a block transpose so 32 row results go out in one coalesced 128-byte store, and fused kernels for QKV projection + clipping, RoPE + KV-cache write, SwiGLU w1/w3 + activation, and output projection + residual add. The whole per-token forward pass is captured once into a CUDA graph and replayed, updating only the kernel-node parameters that change with position, which removes per-kernel launch overhead. The KV cache is FP16 and the attention value-mix kernel unrolls 16-deep register prefetches over the sequence; the design follows zeux/calm, which the README credits.
+
+**Use it when:**
+- Learning or teaching how a fast single-GPU decoder is built: small codebase (src/infer.cu is about 1,250 lines) with heavily commented kernels and an accompanying blog post.
+- Batch-1, single-sequence FP16 decode of Mistral-7B or Llama-3.2 on an NVIDIA GPU with enough VRAM for the whole model, where you want about 2.4x the token rate of Hugging Face transformers eager inference.
+- Profiling experiments with Nsight Compute: `./build/test -k [matmul,mha,ffn]` benchmarks individual kernels and `-b`/`-b2` measure memory bandwidth.
+- Long-context experiments with a sliding-window KV cache (`-T`) plus two attention-sink tokens, or the built-in perplexity and passkey modes.
+
+**Skip it when:**
+- Production serving: the README says it is an educational exercise 'not meant to be run in production', and there is no license file, so the code cannot be reused.
+- Anything needing more speed than llama.cpp: the README's own table has llama.cpp at 61.0/58.8 tok/s vs yalm 63.8/58.7 (a tie at ~4800 tokens) and calm ahead of both at 66.0/65.7.
+- Batched or multi-user serving, quantized weights (only fp32/fp16 load; fp8 in convert.py is rejected by the loader), multi-GPU or models larger than VRAM.
+- Long prompts: the prompt is hydrated one token at a time through the decode path (no batched prefill), so time-to-first-token grows linearly with prompt length.
+- Mixtral/MoE on GPU: the CUDA path asserts 'Mixture of experts not yet supported for CUDA'; Mixtral works on CPU only.
+
+**Vs siblings:** Pick yalm over llm.c or ik_llama.cpp only to study a compact, documented single-GPU FP16 decode engine; for actual inference ik_llama.cpp/llama.cpp, CTranslate2 or PowerInfer are licensed, maintained and support quantization, batching and more models.
+
+**Gotchas:**
+- The README benchmark table dates from Dec 2024 - Jan 2025 README commits and was not re-measured after commit 6cd1ef6 (2025-08-26) fixed att_mix loop bounds (its 16-deep prefetch read past the attended sequence) and CUDA-graph node updates.
+- The program's own 'throughput' line divides prompt plus generated tokens by total time including prompt hydration, so it is not the same metric as llama.cpp's separate prompt-eval and eval rates.
+- Error handling is `assert(false)`/`abort()`: an unsupported dtype or model aborts, and a build with NDEBUG would let some of those paths continue silently.
+- CFLAGS include -Werror, so newer compilers that add warnings can break the build; issue #1 (CPU-only build) is unanswered.
+
+**Status:** Stale (last commit 2025-08-26, 117 commits, three open unanswered issues) and unlicensed, so read it as reference material rather than vendoring it.
+
+[repo](https://github.com/andrewkchan/yalm) · [benchmark](https://raw.githubusercontent.com/andrewkchan/yalm/HEAD/README.md)
+
 #### big-integer-arbitrary-precision
+
+##### AVX-512IFMA large integer multiplication (Edamatsu and Takahashi)  `unknown`  `no license`  `unknown`  `Tier C`
+
+Peer-reviewed AVX-512IFMA large-integer multiplication method, reported up to about 2.97x faster than GMP; no code released.
+
+**Beats:** GMP — Two search-engine summaries of the abstract (paper not opened) report large-integer multiplication with AVX-512IFMA up to about 3.07x faster than the authors' AVX-512F implementation and about 2.97x faster than GMP on a Cannon Lake processor. GMP version, operand sizes, compiler and flags are not documented.
+
+**Known shortcoming:** No public code; snippet-only evidence (ICA3PP 2019 paper unreachable here); 'up to' best-case ratios (2.97x over GMP, 3.07x over own AVX-512F); discontinued CPU (Cannon Lake); GMP version, flags and operand sizes unknown.
+
+**Independent measurement:** verifier
+
+**How:** AVX-512IFMA (VPMADD52LUQ / VPMADD52HUQ) multiplies 52-bit fields in each of eight 64-bit lanes and adds the low or high 52 bits of the product into a 64-bit accumulator. Storing operands in radix 2^52 leaves 12 spare bits per lane, so many partial products can be summed before any carry has to be propagated, and carry normalization is deferred. That gives eight 52x52-bit products per instruction instead of GMP's scalar 64x64-bit multiply-with-carry chain, and products wider than the 32x32-bit VPMULUDQ products an AVX-512F-only kernel is limited to. Whether it uses schoolbook, Karatsuba or Toom-style splitting is not documented in anything readable this session.
+
+**Use it when:**
+- You are writing your own mpn-level multiply kernel for x86 cores with AVX-512IFMA (Cannon Lake, Ice Lake and later Intel parts that kept it, AMD Zen 4/5 per the record) and want a peer-reviewed design reference for radix-2^52 vector multiplication.
+- Sizing the payoff before adding an IFMA path to a bignum library: the paper's reported best case is about 2.97x over GMP and 3.07x over an AVX-512F implementation on one CPU.
+- Comparing against the authors' earlier AVX-512F (Knights Landing) design to see how much IFMA adds over a 32-bit-multiply vector kernel.
+
+**Skip it when:**
+- You need code you can run: nothing is published, so has_code is false and every number is the authors' own.
+- CPUs without AVX-512IFMA (anything before Cannon Lake/Ice Lake and later parts that dropped the extension): the technique cannot run there.
+- Very large operands where GMP switches to Toom-Cook or FFT multiplication: the operand-size range of the reported speedup is not documented, so it may not hold there.
+- Constant-time or cryptographic use: no side-channel properties are documented; for RSA-size modular work OpenSSL's IFMA almost-Montgomery routines (benchmarked in the VROOM sibling entry) are shipping code.
+- Decisions that need typical rather than best-case gains: both ratios are 'up to' figures.
+
+**Vs siblings:** Read it when designing a general (non-modular) IFMA multiply for single large operand pairs; for runnable code, DigitsOnTurbo patches GMP's multiplication (1.41x geomean at 512-32768 bits), lea-gl's truncated batch AVX-512 Montgomery code beats GMP 3.95-5.34x on batched modular products, and FLINT is the practical pick for very large sizes.
+
+**Gotchas:**
+- Evidence is snippet only: the chapter (DOI 10.1007/978-3-030-38991-8_5) could not be opened because link.springer.com and semanticscholar are egress-blocked, so GMP version, operand sizes, compiler, flags and exact CPU are unknown.
+- A radix-2^52 kernel needs conversion from and to GMP's 64-bit limbs (split and recombine passes); whether that cost is inside the reported times is not documented.
+- Cannon Lake, the test CPU, was a short-lived discontinued microarchitecture, so the ratios may differ on Ice Lake, Sapphire Rapids or Zen 4/5.
+- No public repository is attributable: github.com/topics/avx512ifma lists no repositories, and Hibari-K's AVX-512F multiply repos (no IFMA variant, no license) are not linked to the authors.
+
+**Status:** A 2019 peer-reviewed paper with no released code or license, so it is reference material only; it could be re-tiered to B once a verifier can read the paper.
+
+[benchmark](https://www.semanticscholar.org/paper/Accelerating-Large-Integer-Multiplication-Using-Edamatsu-Takahashi/ee766c654ad4acc8d42340ff3b5fd37f1229dff3)
 
 ##### DigitsOnTurbo (DoT)  `C`  `no license`  `unknown`  `Tier C`
 
@@ -2556,6 +2713,8 @@ Research SIMD (AVX-512/IFMA) kernels for bignum add/sub and base-case multiply, 
 **Known shortcoming:** Code only at an anonymous review link that blocked fetch (unverified); no license; preprint with no venue named.
 
 **Known shortcoming:** Without AVX-512 gains mostly vanish (SSE add 0.7x, AVX2 1.2x); whole-program gains small (pi +19.3%, GMPbench +7.8%, RSA/FFDH/DSA +3-5%); constant-time behaviour not analysed.
+
+**Independent measurement:** DoTMP (the GMP integration in arXiv 2604.21566) reports +7.8% on GMPbench (search snippet only); code still only at anonymous.4open.science.
 
 **How:** Add/sub runs in four phases: lane-parallel limb add, carry detection with SIMD compares, a single parallel carry-propagation step, and a deferred scalar slow path for cascading carries. A cascade requires limbs equal to 2^64-1, so on random inputs it practically never fires. Multiplication uses a 'vertical and crosswise' scheme that exposes all m^2 partial products as independent AVX-512 IFMA multiplies (52-bit radix, with conversion from 64-bit limbs) before reducing columns, which removes read-after-write chains on a shared accumulator. Karatsuba/Toom recursion in GMP bottoms out in this base case.
 
@@ -2583,7 +2742,83 @@ Research SIMD (AVX-512/IFMA) kernels for bignum add/sub and base-case multiply, 
 
 [benchmark](https://arxiv.org/html/2604.21566v1)
 
+##### Large integer multiplication with Intel AVX-512 on Knights Landing  `unknown`  `no license`  `unknown`  `Tier C`
+
+Peer-reviewed AVX-512F reduced-radix large-integer multiplication for Xeon Phi Knights Landing, reported about 2.5x faster than GMP; no code.
+
+**Beats:** GMP — Two search-engine summaries of the abstract (paper not opened) say the AVX-512F implementation is about 2.5x faster in execution time than GMP for large-integer multiplication on Knights Landing, also comparing instruction counts. GMP version, operand sizes, compiler, flags and the exact Xeon Phi model are not documented.
+
+**Known shortcoming:** No linked public code (github.com/Hibari-K/bigint_mul_avx512f looks related but is unattributed, unlicensed and has no GMP comparison); snippet-only evidence (IEEE HPCC 2018 unreachable here); best-case ~2.5x over GMP on discontinued Xeon Phi Knights Landing; GMP version, flags and sizes unknown.
+
+**Independent measurement:** verifier
+
+**How:** AVX-512F has no 64x64-bit vector multiply; VPMULUDQ (_mm512_mul_epu32) gives eight 32x32-to-64-bit products per instruction. With a reduced-radix representation (limbs narrower than 32 bits) each 64-bit accumulator keeps headroom, so the column sums of the product can be built from many vector multiply-adds before carries are propagated in a final normalization pass. On Knights Landing, whose scalar cores are weak, this vector path beats GMP's scalar mpn code; the exact limb width and multiplication algorithm used in the paper are not documented in anything readable this session.
+
+**Use it when:**
+- Designing a multi-precision multiply for cores that have AVX-512F but not AVX-512IFMA, such as Knights Landing, where GMP's scalar path is slow.
+- Throughput-oriented number crunching on many-core Xeon Phi nodes that still run, as a reference for vectorizing the column sums of a multi-limb product.
+- As the baseline when evaluating the same authors' later AVX-512IFMA paper, which reports up to about 3.07x over this AVX-512F approach.
+
+**Skip it when:**
+- You need code you can run: nothing is published and attributed, so has_code is false.
+- CPUs with AVX-512IFMA: the authors' own IFMA version (sibling entry) reports up to about 3.07x over their AVX-512F one.
+- Mainstream x86 cores with fast scalar 64-bit multiply and carry chains: the 2.5x is specific to Knights Landing, and the gain elsewhere is not documented.
+- Very large operands where GMP uses Toom-Cook or FFT multiplication: the operand-size range of the result is not documented.
+- New deployments: Knights Landing (Xeon Phi) is discontinued.
+
+**Vs siblings:** Read it only as a design reference for AVX-512F-only hardware; on IFMA-capable CPUs prefer the same authors' AVX-512IFMA design, and for runnable code CGBN (GPU, 43.5x average on low multiplication vs 20-core GMP), lea-gl's batched AVX-512 Montgomery code or FLINT (large sizes) are the practical picks.
+
+**Gotchas:**
+- Evidence is snippet only: ieeexplore document 8622797 and semanticscholar are egress-blocked, so GMP version, operand sizes, compiler, flags and the exact CPU are unknown.
+- Reduced-radix limbs need split and recombine passes to and from 32- or 64-bit limbs; whether the reported time includes that conversion is not documented.
+- Hibari-K/bigint_mul_avx512f matches the topic and period (28-bit split/combine, _mm512_mul_epu32, 'naive algorithm', Makefile for Intel icc -xMIC-AVX512 on Knights Landing) but names no authors or paper, has no timing harness, no GMP comparison and no license; do not treat it as this paper's artifact.
+- Knights Landing results lean on its weak scalar cores, so a 2.5x win over GMP there says little about Skylake-SP or later server parts.
+
+**Status:** A 2018 peer-reviewed paper with no released code on discontinued hardware, so it is reference material only; it could be re-tiered to B once a verifier can read the paper.
+
+[benchmark](https://ieeexplore.ieee.org/document/8622797/)
+
 #### blas-lapack
+
+##### Aliaksei Sala C++ GEMM (C++Now 2025 / CppCon 2025 talk)  `C++`  `no license`  `unknown`  `Tier C`
+
+C++Now/CppCon 2025 talk building a C++ DGEMM step by step to roughly OpenBLAS speed; slides only, no code.
+
+**Beats:** OpenBLAS — C++Now 2025 slides (PDF): final version 0.336 s / 142.2 GFLOPS vs OpenBLAS 0.310 s / 154.1 GFLOPS for 2880^2 FP64 on a 4-core i5-6300HQ under Linux with -O3 -march=haswell -ffast-math, so OpenBLAS is about 8% faster. CppCon 2025 deck (Keynote, text extracted): on a 16-core, 5.7 GHz Zen 5 CPU (kernel named zen5_packed_kernel; consistent with a Ryzen 9 9950X, though the slide text does not name the model) 'Matmul: 1.7 TFLOPS' vs 'Openblas: 1.58 TFLOPS' in FP64 (about 1.08x, derived from page data), a tie at 3.57 TFLOPS in FP32, and 3.09 TFLOPS in bfloat16 with no OpenBLAS counterpart; first-party, no code.
+
+**Known shortcoming:** Not faster on the opened slides: OpenBLAS 154.1 GFLOPS vs the talk's final version 142.2 (i5-6300HQ). The Ryzen 9950X win (1.70 vs 1.58 TFLOPS) is only a Medium snippet. No code repository.
+
+**Known shortcoming:** The CppCon 2025 keynote file (CppCon/CppCon2025 Presentations, Matrix_Multiplication.key) shows FP64 1.70 vs OpenBLAS 1.58 TFLOPS (~1.08x, derived), an FP32 tie at 3.57 vs 3.57, and bf16 3.09 TFLOPS with no OpenBLAS figure; kernel zen5_packed_kernel (16 cores, 5.7 GHz); CPU model, matrix size and compiler not given. The talk's code is C++ (AVX2 intrinsics, then std::experimental::simd), not hand-written assembly; no code repository.
+
+**Independent measurement:** verifier
+
+**Independent measurement:** enrichment
+
+**How:** The steps follow the Goto/BLIS recipe (the deck credits Robert van de Geijn): ikj loop order, 64-wide tiling, AVX2 FMA (_mm256_fmadd_pd), cache blocking with Mc=180, Nc=96, Kc=240, a 4x12 register block (12 ymm accumulators plus 3 for B), OpenMP over the outer blocks with pinned threads, packing B (the slides say packing A had no effect), reordering panels to unit stride, manual unrolling and _mm_prefetch with the NTA hint. The CppCon 2025 deck adds a portable kernel written with std::experimental::simd and index_sequence fold expressions (zen5_packed_kernel), a 4x8 thread grid to use 32 threads, and float and bfloat16 instantiations (bf16 through an intrinsics specialisation the slide says 'will be removed').
+
+**Use it when:**
+- Learning or teaching how a BLIS-style GEMM is built in C++, with a measured time for every step (152 s naive down to 0.336 s on a 4-core i5-6300HQ)
+- Judging whether portable C++ (std::experimental::simd templates) can get close to a tuned BLAS on your CPU before committing to assembly
+- A design reference for a custom kernel where your BLAS lacks the type, e.g. bfloat16 GEMM on a Zen 5 desktop, which the CppCon deck says OpenBLAS did not support
+
+**Skip it when:**
+- Any production use: there is no repository, license, test suite or build, so you would be re-typing slide fragments; use OpenBLAS, BLIS, MKL or Eigen
+- Expecting a win on AVX2 machines: on the one fully specified run (i5-6300HQ, 2880^2 FP64, -O3 -march=haswell -ffast-math) OpenBLAS took 0.310 s against 0.336 s, about 8% faster (derived from page data)
+- Odd or non-square shapes: the slide kernels use fixed constexpr block sizes and show no edge handling, and 2880 is an exact multiple of Mc, Nc and Kc
+- Code that needs a BLAS interface (column-major, transposes, alpha/beta, leading dimensions); none is shown
+- Relying on the Zen 5 numbers: matrix size, compiler, flags and OpenBLAS version for that run are not stated in the deck
+
+**Vs siblings:** Never as a dependency; as study material it complements optimize-gemm (Avafly), sgemm.c (salykova) and cpu_gemm_opt, which cover the same blocking-and-packing path but ship runnable code that beats OpenBLAS in their own runs, so use those if you want something to build.
+
+**Gotchas:**
+- The slide 'Assembly: Where the FLOPs Really Happen / All kernels are written in assembly' describes production BLAS libraries, not this code; the talk's kernels are C++ (AVX2 intrinsics, then std::experimental::simd), and the CppCon deck concludes 'C++ can deliver assembly-class performance on matrix multiply.'
+- Percent-of-peak figures depend on the clock assumed: the C++Now deck uses 2.3 GHz (147.2 GFLOPS peak, so OpenBLAS shows 104%), the CppCon deck 2.8 GHz (179.2 GFLOPS); for Zen 5 it gives 2.9 TFLOPS at 5.7 GHz but expects 1.95 TFLOPS after an AVX-512 downclock to 3.8 GHz.
+- Built with -ffast-math, so floating-point reassociation is allowed; results need not match a strict-IEEE BLAS bit for bit.
+- The slides report up to 40% performance differences between Clang and GCC for intermediate versions, marked 'NOT applicable for the final version'.
+
+**Status:** A conference talk, not a maintained project: no code, license or repository was found, so it is reference-only; the author's 'future plans' slide lists finishing the CPU work and repeating it on GPUs and AI chips.
+
+[benchmark](https://raw.githubusercontent.com/boostcon/cppnow_presentations_2025/main/Presentations/Achieving_Peak_Performance_for_Matrix_Multiplication.pdf)
 
 ##### IAAT (small GEMM)  `None`  `no license`  `unknown`  `Tier C`
 
@@ -2732,6 +2967,43 @@ SME GEMM library for Apple M4 from a NUDT paper; code unreleased; reports 1.23x 
 **Status:** Paper-only reference: an arXiv preprint (Dec 2025, no venue stated) whose promised open-source code never appeared, so maintenance does not apply. The design lives on in the MIT-licensed MTGEMM-A reproduction (active Sep 2026) and in OpenBLAS PR #6074 (open).
 
 [repo](https://github.com/mpgemm/MPGEMM) · [benchmark](https://arxiv.org/html/2512.21473)
+
+##### Faster_SGEMM_CUDA (arekpaterek)  `CUDA C++`  `no license`  `unknown`  `Tier D`
+
+Deleted CUDA FP32 SGEMM repository; a Show HN title claimed up to 24% over cuBLAS on an RTX 4090.
+
+**Beats:** cuBLAS FP32 SGEMM — Nothing could be verified: the only claim is the Show HN title 'FP32 matmul of large matrices up to 24% faster than cuBLAS on a 4090' (HN item 41122018, known from search results), with no opened page giving matrix sizes, CUDA or cuBLAS version, or methodology.
+
+**Known shortcoming:** Repository is missing (404 on github.com and raw; the owner has only two unrelated forks; no mirror found). Numbers come only from Hacker News search snippets, so nothing could be checked.
+
+**Known shortcoming:** Re-checked by the enricher: repo still 404; every field is undocumented.
+
+**Independent measurement:** verifier
+
+**Independent measurement:** enrichment
+
+**How:** not documented: the kernel source is unavailable. The name suggests it builds on the SGEMM_CUDA kernel series (siboehm/SGEMM_CUDA, whose README ladder runs from a naive kernel to warptiling at 93.7% of cuBLAS on an A6000), but that link is inferred from the name only and that README does not mention this repository.
+
+**Use it when:**
+- Not usable as it stands: there is no code to build
+- Keep as a lead if the repository or a fork resurfaces, for FP32 (non-tensor-core) GEMM on large square matrices on consumer Ada GPUs such as the RTX 4090
+- As a pointer that cuBLAS FP32 SGEMM may leave headroom at large sizes on some GPUs, to check with your own benchmark
+
+**Skip it when:**
+- Any production or research use: code, license, compiler, CUDA version and benchmark harness are all unavailable
+- Citing the 24% figure: it comes only from a thread title and search summaries that could not be opened
+- Workloads that can use TF32, FP16 or BF16 tensor cores, where an FP32 CUDA-core SGEMM is the wrong comparison
+- Small or irregular shapes: the claim, as reported, covers only large square matrices
+
+**Vs siblings:** Do not pick it: it has no code. For FP32 CUDA GEMM with code, gpu-compute (beats pedantic-FP32 cuBLAS on an RTX 5080 at small sizes) is the catalogued sibling; for tensor-core GEMM see blackwell-tensorcore-kernels or CUDA-L2; otherwise stay on cuBLAS.
+
+**Gotchas:**
+- The repository 404s on github.com and raw.githubusercontent.com, and the owner's public profile shows only two 2048 forks from 2014-2015, so the code appears deleted or made private.
+- Every performance number (24% on a 4090; other GPUs in search summaries) is snippet-only from an HN thread that could not be opened.
+
+**Status:** Repository missing (404, re-checked 2026-10-02), so maintenance status and license are unknown and the entry is a reference-only lead at tier D.
+
+[repo](https://github.com/arekpaterek/Faster_SGEMM_CUDA)
 
 #### fft
 

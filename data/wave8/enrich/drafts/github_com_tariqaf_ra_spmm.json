@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/tariqaf/ra-spmm",
+  "one_liner": "Rule-based GPU SpMM dispatcher (five CSR/tensor-core kernels) for GNN graphs, 1.70x warm geomean over FP32 cuSPARSE.",
+  "what_it_does": "Computes C = A*B for a CSR sparse matrix A (int32 indices, float32 values) and a dense feature matrix B on NVIDIA GPUs, the aggregation step of GCN/GraphSAGE/GIN layers. It is a PyTorch CUDA extension (ra_spmm) exposing make_router_plan plus per-kernel make_<kernel>_plan / run_<kernel>_plan pairs; you build a plan once per graph and reuse it. It is not a drop-in cuSPARSE replacement: inputs are torch CUDA tensors and the output is a new float32 tensor.",
+  "how_it_is_fast": "A single O(M) pass over the row-pointer array computes row count, mean degree and degree coefficient of variation; with feature width N, a seven-rule decision tree picks one of five kernels: subwarp-per-row CSR (CSR_DIRECT), degree-binned CSR (ZERO_OVERHEAD_CSR), and three tensor-core kernels on an 8x1 vector-block layout using mma.m16n8k8 (TC_DIRECT, COMMUNITY_TC with a leading-neighbour locality sort, SEGMENT_HYBRID with balanced window splits). Tile kernels run FP16 or TF32 inputs chosen by a precision rule, and a cuSPARSE guardrail covers the case where no specialist wins; most of the headline gain comes from tensor-core reduced precision (precision-matched speedup is 1.222x).",
+  "when_to_use": [
+    "GNN training or inference in PyTorch on Ampere/Ada GPUs (sm_86 RTX 3090, sm_89 RTX 4090 tested) where the same graph is multiplied many times, so the one-time tile build amortizes (median break-even 388 calls per RESULTS.md).",
+    "Feature widths N of 64 to 512 on graphs resembling its 51-graph suite (citation, social, web, Reddit/ogbn-proteins-style dense rows, synthetic power-law and community graphs).",
+    "Cold first-call SpMM where you cannot amortize setup: the cold path dispatches a zero-conversion CSR kernel (2.269x over cuSPARSE descriptor+workspace+first call on the 3090).",
+    "When FP16/TF32 accumulation error (max deviation 0.125 observed under its tolerance gate) is acceptable for your model."
+  ],
+  "when_not_to_use": [
+    "You need FP32 or bit-identical results to cuSPARSE: tile paths use FP16 or TF32 inputs and the build uses --use_fast_math; restricted to precision-matched comparison the gain drops to 1.222x on the 3090 and 1.053x on the 4090.",
+    "Graphs unlike the tuning suite: rule thresholds are named after specific benchmark graphs (com-youtube, Reddit, amazon-photo, web-Google), and the frozen router on 9 unseen graphs reached only 1.197x with 11/34 oracle hits; wiki-Talk and cit-Patents at N=512 exhausted memory on every deployed kernel.",
+    "If FlashSparse or MP-SpMM is an option: per RESULTS.md FlashSparse is 1.28x faster than the router over 190 configs on the 4090, and MP-SpMM beats it on aggregate at N=128 (router 0.84x; router wins only on real graphs, 1.15x).",
+    "Non-NVIDIA hardware, CPU, int64 indices, double precision, or code outside PyTorch: none are supported.",
+    "Production use: a research artifact for a paper under review, 1 star, 7 commits on one day; the model-based runtime router (ra_runtime_router.py) loads results/router/runtime_cost_model.json, which is not in the repository."
+  ],
+  "integration": {
+    "form": "module (PyTorch CUDA extension built with python setup.py install; C++/CUDA sources compiled by nvcc)",
+    "dependencies": "CUDA 11.8+ toolkit, cuSPARSE, matching PyTorch (torch.utils.cpp_extension), OpenMP for host-side plan construction; numpy/scipy/scikit-learn only for the evaluation scripts",
+    "min_toolchain": "C++17 host code, nvcc from CUDA 11.8+; target arch set by RA_SM_ARCH (default 86)",
+    "platforms": "NVIDIA GPUs with tensor cores; tested only on sm_86 (RTX 3090, CUDA 11.8) and sm_89 (RTX 4090, CUDA 12.1); Linux implied",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": "partial: same CSR SpMM operation as cusparseSpMM, but a different PyTorch tensor API with a plan/run split, int32/float32 only, and reduced-precision tile paths"
+  },
+  "gotchas": [
+    "The one-shot run_router_plan helper rebuilds the plan and host-copies the CSR on every call; the binding's own docstring says to cache make_<kernel>_plan/run_<kernel>_plan pairs for real use.",
+    "Tile kernels need a format build (1 ms to 36 ms geomean per kernel, worst 1.5 s) and are withheld when the estimated build (about 20 ms per 1e6 nnz) exceeds 20 s or N < 16; 9 configurations never amortize the tile build at all.",
+    "Plan building copies rowptr/colind/vals to the host, so the cold path includes a device-to-host transfer.",
+    "CUDA errors are thrown as std::runtime_error (surfacing as Python exceptions); setup.py compiles every ablation kernel too, so build time is long."
+  ],
+  "pick_this_over_siblings_when": "Pick it over HP-SpMM-SDDMM or Sputnik when your graphs vary in structure and you want one call that picks a CSR or tensor-core kernel per graph and accept FP16/TF32 precision; HP-SpMM-SDDMM is a single FP32 kernel tuned on an H800 and Sputnik targets deep-learning sparsity patterns rather than graph adjacency.",
+  "verified_claims_summary": "On an RTX 3090 with CUDA 11.8 (nvcc -O3 --use_fast_math -arch=sm_86), over 51 graphs x N in {64,128,256,512}, routed kernels ran 1.702x faster (warm geomean, 50 warmup + 200 timed CUDA-event iterations, preprocessing outside the timed region) than FP32 cusparseSpMM with CUSPARSE_SPMM_CSR_ALG2; the figure recomputes from the released CSV, but compares FP16/TF32 tensor-core paths against FP32 cuSPARSE, so the precision-matched figure is 1.222x (1.053x on an RTX 4090).",
+  "status_note": "Code dump from 2026-07-31 accompanying a paper under review at FGCS; MIT code with CC-BY-4.0 data and a full reproduce script, but no issues, releases or users yet, so treat it as a research artifact to study or vendor rather than a maintained library.",
+  "sources_read": [
+    "https://github.com/tariqaf/RA-SpMM",
+    "https://raw.githubusercontent.com/tariqaf/RA-SpMM/HEAD/README.md",
+    "https://raw.githubusercontent.com/tariqaf/RA-SpMM/HEAD/RESULTS.md",
+    "https://raw.githubusercontent.com/tariqaf/RA-SpMM/HEAD/setup.py",
+    "https://raw.githubusercontent.com/tariqaf/RA-SpMM/HEAD/router/router_dispatch.cpp",
+    "https://raw.githubusercontent.com/tariqaf/RA-SpMM/HEAD/bindings/ra_bindings.cpp",
+    "https://raw.githubusercontent.com/tariqaf/RA-SpMM/HEAD/ra_common.h",
+    "https://raw.githubusercontent.com/tariqaf/RA-SpMM/HEAD/ra_runtime_router.py",
+    "https://raw.githubusercontent.com/tariqaf/RA-SpMM/HEAD/requirements-revision.txt",
+    "https://raw.githubusercontent.com/tariqaf/RA-SpMM/HEAD/DATASETS.md",
+    "https://raw.githubusercontent.com/tariqaf/RA-SpMM/HEAD/fgcs_results/revision/tf32/baseline_audit/mp_regime.csv",
+    "https://raw.githubusercontent.com/tariqaf/RA-SpMM/HEAD/fgcs_results/revision/tf32/baseline_audit/hc_regime.csv",
+    "https://raw.githubusercontent.com/tariqaf/RA-SpMM/HEAD/fgcs_results/revision/tf32/baseline_audit/baseline_regime_matrix.csv",
+    "https://raw.githubusercontent.com/tariqaf/RA-SpMM/HEAD/results/router/runtime_cost_model.json"
+  ],
+  "confidence": 0.8
+}
