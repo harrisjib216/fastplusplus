@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/powturbo/turbopfor-integer-compression",
+  "one_liner": "GPL C library of SIMD bit packing, PFor, variable-byte and Elias-Fano integer codecs; README tables beat Simple-8b, FastPFor and VByte.",
+  "what_it_does": "A large C library (C++-callable through include/ic.h) of integer codecs for 8/16/32/64-bit arrays: bit packing (bitpack/bitunpack), TurboPFor (p4enc/p4dec, patched frame of reference), variable byte (vbenc), Variable Simple (vsenc), TurboByte group varint (v8enc), Elias-Fano, binary interpolative coding, plus delta, delta-of-delta, zigzag, XOR and transpose transforms and float/time-series codecs. Functions follow one naming scheme ({vb|p4|bit|vs|v8|bic}[n][d|d1|f|z]{enc|dec|pack|unpack}[128v|256v][8|16|32|64]) and the shape `char *end = enc(uint *in, n, char *out)`; the 'n' variants handle whole arrays and return the byte count, while low-level calls take 128 or 256 integers. It is not a drop-in for FastPFor or a varint library: formats and APIs are its own, and it defines no container or block-length framing.",
+  "how_it_is_fast": "TurboPFor picks a base bit width per block from a histogram of value bit lengths and an estimated cost, packs all values at that width, and stores the high bits of exceptions separately behind a 64-bit-word bitmap (hybrid mode can store them as variable bytes); decode unpacks the block and then adds exceptions back with pshufb shuffle tables indexed by 4- or 8-bit bitmap slices. TurboPackV/TurboPack256V are SSE/AVX2/NEON vertical (lane-interleaved) bit packers with delta, delta-of-1, FOR and zigzag fused into the unpack loop, so no second pass over the output is needed. The x86 build compiles AVX2 copies of the hot files and selects them at run time (cpuini/cpuisa), and fixed-width data supports direct access to one element (bitgetx32) without decoding the block.",
+  "when_to_use": [
+    "Inverted-index posting lists, docid/frequency/position arrays or column-store integer columns in blocks of 128 or 256 values, where decode speed and bits per integer both matter",
+    "Sorted 32-bit ids: delta-fused SIMD unpack (TurboPackV256 about 11.9 GB/s decode on gov2.sorted) or TurboPFor256 (4.48 bits/int) depending on the size-versus-speed point",
+    "Timestamps and other monotonic time series, where zigzag/delta-of-delta plus bit packing reached 0.008-0.2% of raw size in the README's ts.txt test",
+    "Projects that can accept GPL-2.0, or buy the author's commercial license, on x86-64 (SSE4.1/AVX2), ARMv8 NEON or POWER9",
+    "Random access to individual packed values without decompressing the block"
+  ],
+  "when_not_to_use": [
+    "Closed-source or permissively licensed products that will not buy a commercial license: the code is GPL-2.0; FastPFor, simdcomp, streamvbyte and MaskedVByte are Apache-2.0 or similar",
+    "Decoding untrusted data: no bounds checks are documented beyond 'normally does not read outside the input buffers', a third-party analysis (Stapelberg 2019, snippet only) says it reads and writes as far as it needs and decode buffers need about 32 extra integers, and issue #133 showed p4nbound16 under-sizing an encode buffer by 2 bytes",
+    "Code that needs a reviewable history: issue #122 reports a fix for uninitialized registers (#60) silently reverted, most commits have no message, and a batch of bug reports (#130 memory corruption in vlccomp32 on small inputs, #135 fpx32 decode bug, #141 1+ MB stack use) was closed in April 2026 with no visible reply",
+    "Small stacks or embedded targets: issue #141 measured over 1 MB of stack because large switch blocks sum their frames, and the Windows ICCODEC build links with a 32 MB stack",
+    "Pre-AVX x86 CPUs with the default makefile, which compiles the base objects with -march=corei7-avx (Sandy Bridge); riscv64 only gets the scalar generic path"
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none for libic.a (libm, librt on Linux for the benchmark); optional git submodules (zstd, lz4, Turbo-Range-Coder, bitshuffle and others) only for ICCODEC=1 and the icapp benchmark",
+    "min_toolchain": "C99-style C with GCC >= 4.6 or Clang >= 3.2 on x86-64, GCC >= 6.3 on aarch64, GCC >= 8 on ppc64le, Visual C++ >= VS2008 (makefile.vs) or the VS2022 project; GCC 14 build problems were reported in issue #134",
+    "platforms": "x86-64 (default build needs AVX via -march=corei7-avx, AVX2 paths dispatched at run time), aarch64 NEON including Apple M1, POWER9 Altivec, riscv64 scalar generic path (added June 2026); Linux, macOS, Windows",
+    "thread_safety": "README: 'All TurboPFor integer compression functions are thread safe' (stateless functions over caller buffers)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Size output buffers with the matching *bound function and pad inputs; low-level p4enc32 and similar calls are limited to 128/256 integers per call, and only the 'n' array variants handle arbitrary lengths",
+    "Scalar, 128v (SSE/NEON) and 256v (AVX2) variants are separate function families; decode with the same family and integer width that encoded the data",
+    "The library defines no stream header: you must store the element count and choose the codec yourself, and the README benchmark tables (2019.11) predate many later code changes",
+    "Debian Code Search, the best-known user, replaced its cgo binding with a pure-Go SIMD port of the TurboPFor format in August 2026 (Stapelberg blog, WebSearch snippet only)"
+  ],
+  "pick_this_over_siblings_when": "Pick TurboPFor when you want one library covering bit packing, PFor, varint, Elias-Fano and time-series transforms with the best size/speed points in its own tables (TurboPFor256 15.7% at 10.9 GB/s decode versus FP_SIMDOptPFor 16.3% at 2.7 GB/s) and GPL is acceptable; choose simdcomp or FastPFor for permissive licensing and conservative code, streamvbyte or MaskedVByte for a small, well-specified varint format, and ds2i for partitioned Elias-Fano indexes.",
+  "verified_claims_summary": "The author's icapp benchmark (single thread, CPU, compiler and flags not stated beside the 2019.11 tables) on 100M Zipfian integers (alpha 1.5, range 0-255, 128/256-value blocks) shows TurboPackV (SSE) encoding at 17,357 MB/s and decoding at 12,363 MB/s against Simple-8b's 848/3,832 and TurboVByte at 11,191/10,333 against FastPFor's VByte at 5,200/4,268; on gov2.sorted with delta coding TurboPackV runs 7,064/10,268 MB/s versus Simple-8b 836/3,296. Simple-8b packs slightly smaller than plain TurboPack on Zipf (24.0% versus 25.0%), while TurboPFor256 packs smaller than both (15.7%).",
+  "status_note": "Actively changed (commits through 2026-09-21, riscv64 path merged June 2026) but by one author with mostly unlabelled commits and reports of reverted fixes; GPL-2.0 with a paid commercial license, so 'copyable' only under copyleft terms.",
+  "sources_read": [
+    "https://github.com/powturbo/TurboPFor-Integer-Compression",
+    "https://raw.githubusercontent.com/powturbo/TurboPFor-Integer-Compression/HEAD/README.md",
+    "https://raw.githubusercontent.com/powturbo/TurboPFor-Integer-Compression/HEAD/include/ic.h",
+    "https://raw.githubusercontent.com/powturbo/TurboPFor-Integer-Compression/HEAD/makefile",
+    "https://raw.githubusercontent.com/powturbo/TurboPFor-Integer-Compression/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/powturbo/TurboPFor-Integer-Compression/HEAD/lib/vp4c.c",
+    "https://raw.githubusercontent.com/powturbo/TurboPFor-Integer-Compression/HEAD/lib/vp4d.c",
+    "https://raw.githubusercontent.com/powturbo/TurboPFor-Integer-Compression/HEAD/lib/bitunpack.c",
+    "https://github.com/powturbo/TurboPFor-Integer-Compression/commits/master",
+    "https://github.com/powturbo/TurboPFor-Integer-Compression/issues?q=is%3Aissue",
+    "https://github.com/powturbo/TurboPFor-Integer-Compression/issues/122",
+    "https://github.com/powturbo/TurboPFor-Integer-Compression/issues/132",
+    "https://github.com/powturbo/TurboPFor-Integer-Compression/issues/133",
+    "https://github.com/powturbo/TurboPFor-Integer-Compression/issues/141",
+    "https://github.com/stapelberg/goturbopfor",
+    "https://michael.stapelberg.ch/posts/2019-02-05-turbopfor-analysis/ (EGRESS_BLOCKED; WebSearch snippet only)",
+    "https://michael.stapelberg.ch/posts/2026-09-06-dcs-fast-turbopfor-go-simd/ (WebSearch snippet only)"
+  ],
+  "confidence": 0.8
+}

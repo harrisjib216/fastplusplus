@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/cyan4973/finitestateentropy",
+  "one_liner": "Yann Collet's standalone tANS (FSE) and 4-stream Huffman (Huff0) block coders, the entropy stage later built into zstd.",
+  "what_it_does": "A C library of two block entropy coders over byte alphabets: FSE, a table-based asymmetric numeral systems (tANS) coder, and Huff0, a Huffman coder. The simple API is FSE_compress/FSE_decompress and HUF_compress/HUF_decompress on caller-allocated buffers, returning a size or an error code tested with FSE_isError/HUF_isError; a detailed API exposes counting, normalization, table build and per-table encode/decode so a format can reuse tables. It is not a drop-in for zlib: there is no stream or container format, and the caller stores block sizes and handles raw/RLE blocks (FSE_decompress does not decode them; HUF_decompress needs the exact original size).",
+  "how_it_is_fast": "FSE is Jarek Duda's tANS: symbol probabilities are normalized to a power of two (2^tableLog, default 2^13 table) and each symbol becomes one table lookup plus a variable bit read or write, with no multiplication or division; the decoder runs two interleaved states over one bitstream so the CPU overlaps their dependency chains. Huff0 splits each block into four independently decodable streams behind a jump table and decodes them in one loop for instruction-level parallelism, with single-symbol (X1) and double-symbol (X2) lookup tables limited to 11-12 bits and an optional BMI2 code path. Both use a 64-bit branch-light bit container (bitstream.h) that refills with unaligned word loads.",
+  "when_to_use": [
+    "You are building your own compressor format and need an order-0 entropy stage after LZ, BWT or transform coding, with per-block (up to 128 KB for Huff0) static statistics",
+    "Skewed byte distributions where Huffman's 1-bit-per-symbol floor costs ratio: FSE reached 8.84x on Proba80 versus 6.38x for Huff0 and zlibh",
+    "Flat or moderately skewed data where decode speed matters more than the last percent of ratio: Huff0 decoded 2.9-4.5x faster than zlibh in the README tests",
+    "You want to study or prototype with the upstream reference of the coders inside zstd, in a small set of files that compile independently for compression or decompression"
+  ],
+  "when_not_to_use": [
+    "Untrusted input or fuzz-exposed services: four open memory-safety reports from 2025-2026 (#121 heap write overflow in FSE_compress_usingCTable on single-symbol input, #122 stack underflow in FSE_compress2, #123 segfault in FSE_decompress_usingDTable on a 6-byte round trip, #124 1-byte out-of-bounds write in HUF_decompress4X1 when dstSize is small and not a multiple of 4) have no maintainer reply",
+    "Production use where you can take zstd instead: zstd's lib/common and lib/compress carry the maintained, fuzzed copies of the same FSE and Huff0 code, while this repo's library code has had no functional change since 2020",
+    "Peak entropy-decode throughput on current CPUs: later SIMD rANS and Huffman decoders (hypersonic-rANS, htscodecs, PIVCO-Huffman) report several times FSE's and Huff0's decode speed",
+    "Alphabets above 256 symbols with Huff0 (HUF_SYMBOLVALUE_MAX 255); FSE has a separate fseU16 variant, with an open clipping bug (#97)",
+    "Adaptive or context-mixing models: both coders assume one static distribution per block, sent as a header"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (libc malloc/free only for the create/free table helpers; workspace variants avoid allocation)",
+    "min_toolchain": "C89-compatible with C99 stdint.h used when available; a 2024 PR updated the programs/ build for current compilers; README benchmark used GCC 4.8.4",
+    "platforms": "any; little- and big-endian handled through MEM_isLittleEndian; BMI2 decode path on x86-64 when enabled; GitHub Actions builds all supported platforms",
+    "thread_safety": "Not documented; functions work on caller-supplied tables, buffers and workspaces with no global state seen in the sources, so separate contexts per thread is the safe assumption",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Return value 0 means incompressible (nothing written) and FSE_compress returns 1 for single-symbol input (use RLE); FSE_decompress cannot decode either case, so your format must flag them",
+    "HUF_decompress needs the exact original size, and HUF_compress rejects blocks larger than 128 KB",
+    "Everything under HUF_STATIC_LINKING_ONLY / FSE_STATIC_LINKING_ONLY (table sizes, workspace and X1/X2 APIs) is marked unstable and not for dynamic libraries",
+    "lib/ is dual BSD-2-Clause or GPLv2 at your option, but the programs/ benchmark and fuzzer tools are GPLv2 only"
+  ],
+  "pick_this_over_siblings_when": "Pick it when you need a portable, plain-C pair of block coders with a precise tANS option and no SIMD requirement, or the upstream reference for zstd's entropy stage; for raw decode speed hypersonic-rANS (enwik8 decode about 3.1x FSE) and PIVCO-Huffman (5.9x huf0 X2 on Apple M4 Max) win, and htscodecs gives a maintained interleaved rANS library.",
+  "verified_claims_summary": "On an Intel Core i7-5600U (Linux Mint, GCC 4.8.4, 64-bit, flags not stated; the programs Makefile defaults to -O3), the author's README splits probagen-generated files into 32 KB blocks: Huff0 decodes 1350/860/555 MB/s on Proba80/14/02 versus zlibh's 300/250/210 MB/s and encodes 600/595/525 versus 265/255/180 MB/s, while FSE runs 325-330 MB/s encode and 440-460 MB/s decode with the best ratio on Proba80. The baseline is zlib's Huffman stage as packaged by Frederic Kayser, on synthetic data only.",
+  "status_note": "Stale: the last commits (March 2024) touched only CI and the benchmark build, the library code last synced with zstd in 2020, and four memory-safety issues are unanswered; BSD-2-Clause library code is easy to vendor, but take zstd's copy for anything exposed to untrusted data.",
+  "sources_read": [
+    "https://github.com/Cyan4973/FiniteStateEntropy",
+    "https://raw.githubusercontent.com/Cyan4973/FiniteStateEntropy/dev/README.md",
+    "https://raw.githubusercontent.com/Cyan4973/FiniteStateEntropy/dev/lib/README.md",
+    "https://raw.githubusercontent.com/Cyan4973/FiniteStateEntropy/dev/LICENSE",
+    "https://raw.githubusercontent.com/Cyan4973/FiniteStateEntropy/dev/lib/fse.h",
+    "https://raw.githubusercontent.com/Cyan4973/FiniteStateEntropy/dev/lib/huf.h",
+    "https://raw.githubusercontent.com/Cyan4973/FiniteStateEntropy/dev/lib/fse_compress.c",
+    "https://raw.githubusercontent.com/Cyan4973/FiniteStateEntropy/dev/lib/fse_decompress.c",
+    "https://raw.githubusercontent.com/Cyan4973/FiniteStateEntropy/dev/lib/huf_decompress.c",
+    "https://raw.githubusercontent.com/Cyan4973/FiniteStateEntropy/dev/lib/bitstream.h",
+    "https://raw.githubusercontent.com/Cyan4973/FiniteStateEntropy/dev/lib/mem.h",
+    "https://raw.githubusercontent.com/Cyan4973/FiniteStateEntropy/dev/lib/compiler.h",
+    "https://raw.githubusercontent.com/Cyan4973/FiniteStateEntropy/dev/programs/Makefile",
+    "https://github.com/Cyan4973/FiniteStateEntropy/issues?q=is%3Aissue",
+    "https://github.com/Cyan4973/FiniteStateEntropy/issues/124",
+    "https://github.com/Cyan4973/FiniteStateEntropy/issues/123",
+    "https://github.com/Cyan4973/FiniteStateEntropy/issues/121",
+    "https://github.com/Cyan4973/FiniteStateEntropy/issues/112",
+    "https://github.com/Cyan4973/FiniteStateEntropy/commits/dev"
+  ],
+  "confidence": 0.85
+}
