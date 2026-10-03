@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/libmir/mir-random",
+  "one_liner": "D random library: Lemire bounded integers, a faster Mersenne Twister (since merged into Phobos), xoshiro/PCG engines, ndslice distributions.",
+  "what_it_does": "A replacement for D's std.random: engines (Mt19937/Mt19937_64, PCG, SplitMix, XorshiftStar, Xoroshiro128Plus, Xoshiro256StarStar, Xoshiro128StarStar_32) called through opCall rather than the range interface, plus rand!T, randIndex, randGeometric and randExponential2. mir.random.variable and ndvariable add distributions (normal, exponential, gamma, Cauchy, multivariate normal, simplex, sphere), and mir.random.algorithm fills ndslice arrays. A per-thread, auto-seeded default engine is available as rne, and PhobosRandom wraps any engine for code that expects the Phobos range API.",
+  "how_it_is_fast": "randIndex replaces modulo-with-rejection by Daniel Lemire's multiply-shift reduction (a double-width multiply; the rejection threshold, and its division, is computed only when the low half falls below m), with a branch hint on the rare path. The Mersenne Twister updates one state word per call over a reversed state array and interleaves tempering of the previous output with the state update so values stay in registers, instead of regenerating all 624 words in a block. Floating-point rand!T fills every mantissa bit (saturated values; README: rand!real can produce more than 2^78 distinct values).",
+  "when_to_use": [
+    "D programs doing many bounded integer draws (shuffles, sampling, random indexing), where randIndex measured 1.4x to 4.3x more calls per second than modulo reduction on the same engine.",
+    "D code that needs a faster default generator than Phobos's 32-bit Mt19937: switch to Xoroshiro128Plus or Xoshiro256StarStar, which the bench runs much faster than Mt19937_64 under randIndex.",
+    "Filling ndslice arrays with normal, exponential, gamma or multivariate-normal variates for simulation or Monte Carlo in D.",
+    "-betterC or @nogc nothrow code that cannot use DRuntime; the engines and rand functions are @nogc and do not need the GC."
+  ],
+  "when_not_to_use": [
+    "C or C++ projects: generators are D templates with no C ABI; only the entropy functions (mir_random_genRandomNonBlocking and mir_random_genRandomBlocking) have C names. In C++ use the catalogued C++ entries instead.",
+    "Mersenne Twister throughput alone: Phobos's MersenneTwisterEngine has used this implementation since it was merged (current std/random.d credits Ilya Yaroshenko and mir-random), so the +54% generation figure no longer applies to current Phobos.",
+    "Cryptography, tokens or secrets: the README says not to use it for that.",
+    "Projects that need an active upstream: only 2 commits since January 2022 (December 2024 and June 2026, both compiler fixes), and issue #133 (wrong signs in flex transformation unit-test expectations) has been open since 2021.",
+    "Code built on Phobos's range-based RNG API: engines use opCall and forbid default construction and copying, so porting needs PhobosRandom or rewrites."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "mir-core (>=0.2.0 <2.0.0); mir-linux-kernel on Linux; advapi32 on Windows; mir-algorithm optional ('default' configuration) or required ('extended') for ndslice and distribution features; the 'minimal' configuration omits it",
+    "min_toolchain": "not documented; code branches for LDC, GDC and DMD, and README figures used LDC 1.6.0; last commit (2026-06-10) adapted to recent compilers",
+    "platforms": "Linux, Windows, macOS/iOS and the BSDs (seeding via getrandom, Windows APIs or arc4random); any architecture D compilers target",
+    "thread_safety": "Engines are plain structs with no locking; rne / threadLocal!Engine give one auto-seeded instance per thread (needs TLS, so not available under -betterC), and the docs warn not to share threadLocalPtr pointers between threads.",
+    "drop_in_for_baseline": "partial: Mt19937 output matches Phobos for the same seed (the bench prints identical checksums), but the API differs (opCall instead of front/popFront, randIndex instead of uniform); PhobosRandom!Engine adapts an engine to the Phobos interface."
+  },
+  "gotchas": [
+    "rand!float / rand!double / rand!real return values in (-1, 1), not [0, 1); apply fabs or use a uniform variable for [0, 1).",
+    "The default Random is Mt19937_64 on 64-bit targets (Mt19937 on 32-bit), which is slower than the bundled xoshiro/xoroshiro engines; choose an engine explicitly when speed matters.",
+    "Engines @disable default construction and postblit, so they must be passed by ref or pointer; seeding Mt19937 from a 64-bit unpredictableSeed requires masking to Mt19937.max (shown in the docs).",
+    "Xoroshiro128Plus (xoroshiro128+) has weak low bits that fail binary-rank tests; the module docs recommend Xoshiro256StarStar as the all-purpose generator."
+  ],
+  "pick_this_over_siblings_when": "Pick mir-random only for D code; for C++ the same ideas are catalogued directly: FastShuffleExperiments for Lemire's nearly divisionless bounded integers, cslarsen/mersenne-twister or VMT19937 for a faster Mersenne Twister, and dqrng or simdrng for xoshiro/PCG engines with fast distributions.",
+  "verified_claims_summary": "bench/Mt19937_bench.d (100 million outputs, LDC via ldmd2 with dub release-nobounds, CPU not stated) shows mir's 32-bit Mt19937 at 6.81 Gb/s vs the Phobos Mt19937 of that time at 4.42 Gb/s (1.54x), with matching checksums. Phobos has since adopted this implementation (D 2.074.0 changelog per a search snippet; dlang.org is blocked here, but current Phobos std/random.d credits it). bench/randindex_bench.d on an Intel Core i7-7920HQ compares Lemire multiply-shift with modulo-with-rejection, both written in the bench file, over 800 million calls with moduli 6 to 105: ulong from Xoroshiro128Plus 4.40 vs 1.02 x10^8 calls/s, ulong from Mt19937_64 1.87 vs 0.80 x10^8. Current Phobos uniform and _uniformIndex still use modulo-with-rejection, so that gap should still hold against Phobos, but Phobos itself was not timed.",
+  "status_note": "Maintenance-only rather than active (2 commits since January 2022, both compiler fixes; 32 stars; dub package), but Boost-licensed (Apache-2.0 for PCG) and usable from D; out of language scope for C++.",
+  "sources_read": [
+    "https://github.com/libmir/mir-random",
+    "https://github.com/libmir/mir-random/commits",
+    "https://github.com/libmir/mir-random/issues?q=is%3Aissue",
+    "https://github.com/libmir/mir-random/issues/133",
+    "https://github.com/libmir/mir-random/tree/master/source/mir/random",
+    "https://github.com/libmir/mir-random/tree/master/source/mir/random/engine",
+    "https://raw.githubusercontent.com/libmir/mir-random/HEAD/README.md",
+    "https://raw.githubusercontent.com/libmir/mir-random/HEAD/dub.sdl",
+    "https://raw.githubusercontent.com/libmir/mir-random/HEAD/bench/Mt19937_bench.d",
+    "https://raw.githubusercontent.com/libmir/mir-random/HEAD/bench/randindex_bench.d",
+    "https://raw.githubusercontent.com/libmir/mir-random/HEAD/source/mir/random/package.d",
+    "https://raw.githubusercontent.com/libmir/mir-random/HEAD/source/mir/random/engine/package.d",
+    "https://raw.githubusercontent.com/libmir/mir-random/HEAD/source/mir/random/engine/mersenne_twister.d",
+    "https://raw.githubusercontent.com/libmir/mir-random/HEAD/source/mir/random/engine/xoshiro.d",
+    "https://raw.githubusercontent.com/dlang/phobos/master/std/random.d"
+  ],
+  "confidence": 0.75
+}
