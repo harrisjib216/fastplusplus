@@ -18,3 +18,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - arXiv 2605.25528 'Engineering Practical Succinct Bit Vectors: A Space-Time Pareto Analysis on Apple Silicon ARM64 Cores': may list more rank/select code; blocked. (from orzo enricher)
 - Apple LZMESH (OS 27 fast codec, liblzraven SPEC section 15) and libzbitmap (LZBITMAP reimplementation; lzfse issue #62): Apple-codec siblings to check. (from LZFSE/liblzraven enricher)
 - pisa-engine/pisa: maintained ds2i fork (PEF plus many codecs), not catalogued; seed candidate. (from ds2i enricher)
+- traviswheelerlab/avxwindowfmindex (C): AMB paper on biomedcentral/biorxiv (blocked); retier to B when reachable. (w9 batch 36)
