@@ -1,0 +1,55 @@
+{
+  "id": "https://github.com/kampersanda/xcdat",
+  "one_liner": "Header-only C++17 compressed double-array trie dictionary; about 2x faster key-to-ID lookup than marisa-trie, at about 1.1-2x its size.",
+  "what_it_does": "A static string dictionary: build once from a sorted, unique key list, then map each key to a dense ID in [0, N-1] (lookup) and back (decode), plus common-prefix search, predictive search and enumeration through iterators. The API is its own (xcdat::trie<BcVector> with four ready-made types trie_7/8/15/16_type, xcdat::save/load/mmap), not a drop-in for marisa::Trie, though the command-line tools mirror marisa's. Keys can contain NUL bytes (binary mode), and a pybind11 Python binding is included.",
+  "how_it_is_fast": "It keeps the double-array trie's O(1) child transition (base XOR char-code, then a check comparison) and compresses the BASE/CHECK arrays with XCDA (Kanda, Morita, Fuketa, KAIS 2017): directly addressable codes (DACs, Brisaboa et al.) for the 8/16-bit types, or pointer-based DACs for the 7/15-bit types. A minimal-prefix trie moves single-path suffixes into a TAIL vector, cutting node hops and random accesses. IDs come from rank/select over a terminal-flag bitvector, using POPCNT and BMI2 PDEP/TZCNT when compiled with -msse4.2/-mbmi2 (portable fallbacks otherwise).",
+  "when_to_use": [
+    "You use marisa-trie (or another LOUDS/succinct trie such as tx, fst or pdt) for a static key-to-ID map and lookups are the bottleneck: about 2x faster lookup on Wikipedia titles and up to 3.8x on URLs in the author's tables.",
+    "Read-mostly dictionaries of millions of strings (titles, words, URLs, column-store domain encoding) where you also need ID-to-string decode, which darts-clone and hat-trie do not offer.",
+    "Autocomplete, tokenizers or IME dictionaries that need common-prefix and predictive search over a compact, mmap-able file.",
+    "When a double-array trie such as darts-clone is too big: xcdat<8> is 139 MiB vs darts-clone's 525 MiB on 14.1M Wikipedia titles.",
+    "Pick trie_15_type for speed (619 ns/key on Wiki) and trie_8_type for size (139 MiB on Wiki)."
+  ],
+  "when_not_to_use": [
+    "Memory is the hard constraint: marisa is smaller on every published dataset (Wiki 69 vs 139 MiB; independent 1M-key runs 13.15 vs 15.03 B/key on English titles), and FM-index or front-coding dictionaries such as lexindex are smaller still.",
+    "Raw lookup speed matters more than space: darts-clone (450 ns/key), cedar and hat-trie (368 ns/key) beat xcdat on Wiki at 2.5-8x the memory.",
+    "The set changes: it is static, so any insert or delete means a full rebuild from sorted input.",
+    "You need IDs in lexicographic order or chosen by you: IDs follow the trie layout (issue #3 is open and unanswered).",
+    "Windows or exotic targets: tested only on macOS and Linux; 32-bit ARM support was asked about in issue #4 with no maintainer answer."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none for the library; the CLI tools vendor cmd_line_parser, mm_file and tinyformat; optional pybind11 for Python",
+    "min_toolchain": "C++17 (README: g++ >= 7.0 or clang >= 4.0); CMake >= 3.0 only for the tools and tests",
+    "platforms": "UNIX-like (tested on macOS and Linux); needs std::uint64_t; x86-64 SSE4.2/BMI2 intrinsics used when enabled, portable fallbacks otherwise",
+    "thread_safety": "not documented; lookup and decode are const and use no mutable members in trie.hpp, so concurrent read-only queries on a built trie look safe, but the README does not promise it",
+    "drop_in_for_baseline": "partial — same operations as marisa (lookup, reverse lookup, prefix and predictive search) and similar CLI tools, but a different C++ API and file format, and input must be pre-sorted and deduplicated"
+  },
+  "gotchas": [
+    "The constructor requires lexicographically sorted, unique keys; sort and deduplicate first.",
+    "lookup returns std::optional<uint64_t>; IDs are not in lexicographic order.",
+    "Copy is deleted (move-only), and errors in build or I/O throw xcdat::exception.",
+    "Iterator decoded_view() points to storage that changes on the next next() call; copy it if you keep it."
+  ],
+  "pick_this_over_siblings_when": "Pick xcdat over lexindex when exact-match lookup latency matters more than size and you can spend about 2-2.4x lexindex's bytes (independent 1M English titles: XCDAT 15 243 ns at 17.13 B/key vs lexindex's fastest exact search 324 ns and its smallest 7.21 B/key); pick it over darts-clone when you also need ID-to-key decode in a far smaller file. Pick lexindex or C2-MARISA when bytes per key dominate.",
+  "verified_claims_summary": "The author's tables (fast_succinct_trie/bench, AppleClang 12 -O3 -march=native, MacBook Pro 13-inch 2019 2.4 GHz quad-core Core i5, 1,000 random queries, best of 10) show xcdat<8> lookups of 826 vs marisa's 1818 ns/key on 14.1M Wikipedia titles and 469 vs 1789 on URLs, at 139 vs 69 MiB on Wiki. An independent run in ilgrad/string-index-benchmarks (AMD Ryzen 7 5800HS, GCC 16.2.1, 2026-09-26, C2-style single shuffled pass) agrees on direction: XCDAT 8 259 vs MARISA 505 ns on 1M English titles (about 1.95x, derived from page data), 377 vs 581 ns on 1M URLs, at 15.0 vs 13.2 B/key.",
+  "status_note": "Stale since September 2024 (last commit 2024-09-10) but MIT-licensed, header-only and small enough to vendor; open issues are questions and a vcpkg-port request, not bug reports against xcdat itself.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/kampersanda/xcdat/HEAD/README.md",
+    "https://github.com/kampersanda/xcdat/issues?q=is%3Aissue",
+    "https://github.com/kampersanda/xcdat/issues/3",
+    "https://github.com/kampersanda/xcdat/issues/4",
+    "https://github.com/kampersanda/xcdat/tree/master/include/xcdat",
+    "https://raw.githubusercontent.com/kampersanda/xcdat/HEAD/include/xcdat/trie.hpp",
+    "https://raw.githubusercontent.com/kampersanda/xcdat/HEAD/include/xcdat/bc_vector_8.hpp",
+    "https://raw.githubusercontent.com/kampersanda/xcdat/HEAD/include/xcdat/bc_vector_15.hpp",
+    "https://raw.githubusercontent.com/kampersanda/xcdat/HEAD/include/xcdat/tail_vector.hpp",
+    "https://raw.githubusercontent.com/kampersanda/xcdat/HEAD/include/xcdat/bit_vector.hpp",
+    "https://raw.githubusercontent.com/kampersanda/xcdat/HEAD/include/xcdat/bit_tools.hpp",
+    "https://github.com/ilgrad/string-index-benchmarks",
+    "https://raw.githubusercontent.com/ilgrad/string-index-benchmarks/HEAD/README.md",
+    "https://raw.githubusercontent.com/ilgrad/string-index-benchmarks/HEAD/results/frontier-1m-2026-09-26-arz-be75a38.json",
+    "https://raw.githubusercontent.com/ilgrad/string-index-benchmarks/HEAD/harness/xcdat_frontier.cpp"
+  ],
+  "confidence": 0.85
+}
