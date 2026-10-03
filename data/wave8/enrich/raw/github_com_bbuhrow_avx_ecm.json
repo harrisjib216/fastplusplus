@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/bbuhrow/avx-ecm",
+  "one_liner": "AVX-512 command-line ECM factoring program running 8 or 16 curves per thread; about 1.5-2.5x GMP-ECM curve throughput below ~1000 bits.",
+  "what_it_does": "A standalone program that runs the Elliptic Curve Method (stage 1 and stage 2) on one input number, many curves at once: `avx-ecm input curves B1 [threads] [B2] [sigma]`. Inputs can be expressions (+,-,*,/,^,%, primorial #, factorial !, fib(), luc()), and known algebraic factors of Cunningham-style inputs are removed first. It writes a stage 1 savefile that GMP-ECM can resume (`ecm -resume`), so it can replace GMP-ECM's stage 1 in a workflow; it is not a drop-in library or a replacement for the `ecm` command line.",
+  "how_it_is_fast": "Each AVX-512 lane carries a different curve over the same modulus, so Montgomery multiplication and squaring (vecmulmod52/vecsqrmod52) run 8 curves at once with 52-bit digits in 64-bit lanes (16 curves with DIGITBITS=32); ICELAKE/TIGERLAKE builds add -DIFMA for the 52-bit multiply-add instructions. Stage 1 uses Montgomery-form curves with Suyama sigma parametrization and Montgomery's PRAC Lucas chains; stage 2 is the standard continuation with pairing. Inputs of the form 2^n-1, 2^n+1 or 2^n-c switch to special Mersenne/pseudo-Mersenne reduction instead of REDC. Work is spread over threads with pthreads.",
+  "when_to_use": [
+    "Running many ECM curves (t30-t60 style work) on composites of roughly 200-1000 bits on Skylake-X, Cascade Lake, Ice Lake, Tiger Lake or later AVX-512 x86-64 CPUs.",
+    "Batch stage 1 on AVX-512 hardware followed by GMP-ECM stage 2 from the savefile, when you want GMP-ECM's faster stage 2 but higher stage 1 throughput.",
+    "Factoring Mersenne-like or 2^n+-c inputs, where the special reduction path applies.",
+    "Choosing DIGITBITS=32 for sizes just above a 208-bit step, since the 32-bit build steps in 128 bits and can have higher throughput there."
+  ],
+  "when_not_to_use": [
+    "CPUs without AVX-512 (all AVX2-only Intel and pre-Zen 4 AMD parts, and all ARM): the program targets AVX-512 intrinsics only.",
+    "Inputs well above about 1000 bits: the README says GMP-ECM wins because this program has no sub-quadratic multiplication.",
+    "Single-curve or latency-bound work: the speedup comes from running 8 or 16 curves together per thread.",
+    "Production use that needs maintenance or bug fixes: the standalone repo's last commit is 2021-03-09; its one issue (a SIGSEGV in vecsqrmod52 reported from a YAFU build) was closed with no visible reply. The maintained copy lives inside YAFU (factor/avx-ecm).",
+    "Embedding as a library: there is no documented API; the Makefile archives the objects (including main.c) into libavxecm.a only to link the program."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "GMP (-lgmp), pthreads, libm; Intel builds also link MKL (-mkl)",
+    "min_toolchain": "README: gcc 7.3.0 or icc (only these tested); MinGW64/MSYS2 supported via COMPILER=mingw",
+    "platforms": "x86-64 with AVX-512 (SKYLAKEX=1, KNL=1 for Knights Landing, ICELAKE=1 or TIGERLAKE=1 for IFMA); Linux and Windows (MinGW)",
+    "thread_safety": "not documented; multi-threaded internally with pthreads, but the header defines process-wide globals (MAXBITS, NWORDS, NBLOCKS, lcg_state) sized for one input per run",
+    "drop_in_for_baseline": "partial: different command line from GMP-ECM's `ecm`, but the stage 1 savefile is resumable by GMP-ECM stage 2"
+  },
+  "gotchas": [
+    "Run time is constant within 208-bit steps (128-bit with DIGITBITS=32): a 417-bit input costs the same as a 623-bit one, so the speedup over GMP-ECM depends strongly on where the input falls in a step.",
+    "The Makefile hard-codes the author's GMP paths (/sppdg/scratch/..., ../../gmp-6.2.1) and a gcc-7.3.0 binary name; edit INC/LIBS before building. The IFMA build options (ICELAKE=1, TIGERLAKE=1) exist in the Makefile but not in the README.",
+    "avx_ecm.h defines globals without extern (uint32_t MAXBITS; NWORDS; NBLOCKS; uint64_t *lcg_state) in a header shared by several .c files; GCC 10+ defaults to -fno-common, so a link with multiple-definition errors is likely unless -fcommon is added (inferred from the source, not tested).",
+    "The repo ships prebuilt Windows binaries (avx-ecm-32.exe, avx-ecm-52.exe, avx-ecm-52-icc-static) of unstated build provenance; prefer building from source."
+  ],
+  "pick_this_over_siblings_when": "Pick it over ECM-ELF when you need a complete ECM (stage 1 and stage 2, multi-threaded, savefiles for GMP-ECM) on generic inputs rather than a stage 1 IFMA backend benchmarked on one Mersenne number, and over primefactors when you have AVX-512 CPUs rather than an NVIDIA GPU. For general big-integer arithmetic (not factoring), the GMP-replacement siblings such as FLINT or mp++ are the relevant entries; this program only does ECM.",
+  "verified_claims_summary": "The only checked claim is the README's first-party statement of about 1.5 to 2.5 times GMP-ECM's curves per second for inputs up to about 1000 bits on AVX-512 CPUs, with no table, CPU model, GMP-ECM version or flags. Forum numbers (about 2x with 1 thread on a Xeon Gold 5122; a search summary also quotes 900-bit t35 at 2.78 s versus GMP-ECM 7.0.4 at 10.04 s per curve) were seen only as search snippets from mersenneforum.org, which is blocked here, and are unverified.",
+  "status_note": "Standalone repo abandoned since 2021-03-09 (34 commits, 8 stars) but BSD-2-Clause and small enough to vendor; active development continued inside bbuhrow/yafu under factor/avx-ecm (commits through 2026-08-31, with added Karatsuba and AVX-512 P-1 files), which is the better source today.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/bbuhrow/avx-ecm/HEAD/README.md",
+    "https://raw.githubusercontent.com/bbuhrow/avx-ecm/HEAD/Makefile",
+    "https://raw.githubusercontent.com/bbuhrow/avx-ecm/HEAD/avx_ecm.h",
+    "https://raw.githubusercontent.com/bbuhrow/avx-ecm/HEAD/main.c",
+    "https://raw.githubusercontent.com/bbuhrow/avx-ecm/HEAD/ecm.c",
+    "https://raw.githubusercontent.com/bbuhrow/avx-ecm/HEAD/test.csh",
+    "https://raw.githubusercontent.com/bbuhrow/avx-ecm/HEAD/test_inputs.txt",
+    "https://github.com/bbuhrow/avx-ecm",
+    "https://github.com/bbuhrow/avx-ecm/issues?q=is%3Aissue",
+    "https://github.com/bbuhrow/avx-ecm/issues/1",
+    "https://github.com/bbuhrow/yafu",
+    "https://github.com/bbuhrow/yafu/tree/master/factor/avx-ecm",
+    "https://github.com/bbuhrow/yafu/commits/master/factor/avx-ecm",
+    "https://raw.githubusercontent.com/bbuhrow/yafu/HEAD/README.md"
+  ],
+  "confidence": 0.6
+}

@@ -126,3 +126,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - xing-cong/CB-Sparse (CB-SpMV, ICS '25, Apache-2.0, 29 stars): independent suite beating TileSpMV (3.95x A100, 3.06x RTX 4090) and DASP; candidate entry for the SpMV set. TileSpMSpV (ICPP '22) 1.83x over TileSpMV. (from TileSpMV enricher)
 - ralna/spral retier sources: arXiv 1909.08104 (Tasseff et al., Ipopt linear-solver parallelism, SPRAL vs HSL; blocked); NLAFET/SyLVER is the StarPU successor of SSIDS (README has no numbers). (from SPRAL enricher)
 - cornellhpc/ocean-spgemm (C): arXiv 2604.19004 unopened; retier to B when reachable. (batch 158)
+- bbuhrow/yafu (379 stars, not catalogued): maintained AVX-ECM copy in factor/avx-ecm plus SIQS/NFS; candidate for big-integer-arbitrary-precision. (from avx-ecm enricher)
