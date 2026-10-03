@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/kurpicz/pwm",
+  "one_liner": "Sequential, parallel and external-memory wavelet tree/matrix construction (prefix counting/sorting); ALENEX 2018 reports up to 2x faster than Shun's construction.",
+  "what_it_does": "A collection of C++17 algorithms that build the level bit vectors (plus zeros counts for the wavelet matrix) of a wavelet tree or wavelet matrix from a text. They come in sequential (wx_pc, wx_ps), parallel shared-memory (wx_ppc, wx_pps, domain-decomposition wx_dd_pc/ps), single-scan (_ss), Huffman-shaped (wx_huff_*), and semi- or fully external-memory variants. Each algorithm is a class with a static compute(text, size, levels) that returns a wavelet_structure of bit vectors. It is a construction toolkit and benchmark driver, not a query library: include/queries has only basic popcount rank/select helpers, and nothing outputs SDSL wt_* objects.",
+  "how_it_is_fast": "Prefix counting builds the levels bottom-up. One scan writes level 0 and a histogram of the reduced alphabet; parent histograms come from summing child buckets, prefix sums of the histogram (with the bit-reversal permutation for the matrix) give each bit prefix's write offset, and each level is then a single linear pass writing one bit per symbol. Prefix sorting instead stable-sorts the text by bit prefix level by level. The parallel versions shard histograms per thread and run the levels in parallel with OpenMP. The domain-decomposition variants (dd_pc, dd_ps) split the text into p slices, build per-slice structures and merge the bit vectors, which the paper says lets them scale to 32 cores while using less memory than Labeit et al.",
+  "when_to_use": [
+    "Building wavelet trees or matrices over large texts (GBs; byte, 16-bit or 32-bit symbols after alphabet reduction) where construction time or peak memory is the bottleneck.",
+    "Multicore Linux servers: the paper says the domain-decomposition variant (ddpcWT) is on average 13% faster than Shun's recWT on 32 cores, and faster on large or small-alphabet texts (PROT, 1000G, CC).",
+    "Texts that do not fit in RAM: the semi-external and fully external variants (STXXL-based) build the structure from disk.",
+    "Benchmarking WT/WM construction: the repo vendors Shun's and Labeit et al.'s competitors (serialWT, levelWT, recWT, ddWT, sortWTOpt and others) and a driver that reports median time and peak memory and can check its output against the naive builder."
+  ],
+  "when_not_to_use": [
+    "You need fast rank/select/access queries: pwm only builds the bit vectors; query speed comes from whatever rank/select layer you put on top (SDSL, QWT and so on).",
+    "Small texts, where SDSL's built-in constructors are good enough and avoid the pwm, tlx and STXXL dependency chain.",
+    "Very large alphabets that have not been reduced: prefix counting keeps a 2^levels histogram per level (per thread for ppc), so memory grows with sigma.",
+    "Wanting all cores busy in the plain ppc variant: after the first level, its parallelism is over levels (levels - 1 tasks, e.g. 7 for a byte alphabet). Use the dd_* variants for wide machines.",
+    "Non-Linux or non-GCC/Clang builds: CMake rejects other compilers and links rt, dl and stdc++fs; abandoned since July 2020 with a dead travis-ci.org badge."
+  ],
+  "integration": {
+    "form": "header-only algorithms (include/), built with CMake as a benchmark executable",
+    "dependencies": "OpenMP; tlx (submodule, command-line parser); STXXL (fetched by find_or_download_package, needed by the benchmark and external-memory variants); googletest for tests; competitor builds need Cilk Plus (gcc < 8) and optionally an installed SDSL",
+    "min_toolchain": "C++17; GCC 7.3+ or Clang 3.4+ (CMake checks); Release builds use -O3 -funroll-loops -march=native -fopenmp",
+    "platforms": "Linux x86-64 in practice (links rt, dl, stdc++fs; -march=native); other compilers are rejected by CMake",
+    "thread_safety": "not documented; parallel variants use OpenMP internally and size thread-local histograms from omp_get_max_threads()",
+    "drop_in_for_baseline": "partial: it replaces the construction step only; output is pwm's own wavelet_structure (level bit vectors plus zeros), which you must convert for SDSL or other query libraries"
+  },
+  "gotchas": [
+    "PWM_ENABLE_CILK_ALGORITHM defaults to ON, but those competitors need Cilk Plus, which GCC removed in version 8. On a modern GCC, configure with -DPWM_ENABLE_CILK_ALGORITHM=OFF (or -DPWM_BUILD_COMPETITORS=OFF).",
+    "The README calls the SDSL option PWM_BUILD_SDSL_WT, but CMakeLists.txt defines PWM_BUILD_SDSL_WX, so the documented flag silently does nothing.",
+    "Past correctness bugs, all now closed: issue #1 (Apr 2017) was a heap overflow in every construction algorithm (memset of (size+63)>>3 bytes into a buffer of ((size+63)>>6) uint64 words). Issue #5 (Oct 2018) suspected ppc_ss OpenMP pragmas made threads redo the same work. Issues #16/#17 (Dec 2018, fixed by PR #18) were a thread limit not applied to the ppx variants and ppc_ss performance problems. Issue #1 was closed after the February 2017 arXiv v1 but before ALENEX 2018; the _ss and ppc fixes came after the paper.",
+    "The benchmark's --check validation works only for 1-byte alphabets (benchmark.cpp prints that it can only check texts over 1-byte alphabets)."
+  ],
+  "pick_this_over_siblings_when": "No sibling builds wavelet trees faster; QWT and quad-wavelet-tree speed up queries, and wavelet_forest and faster-minuter change the tree shape. Use pwm to build the levels quickly and in parallel, then hand them to a query-side structure; pick a sibling when query latency is the goal.",
+  "verified_claims_summary": "The ALENEX 2018 paper (seen through search snippets only; arXiv, SIAM and Semantic Scholar are blocked) reports a sequential prefix-counting construction up to 2x faster than Shun's DCC 2015 algorithm using half the space. In parallel, ddpcWT is on average 13% faster than Shun's recWT on 32 cores and comparable to Labeit et al. using about 75% of the space. Hardware, compiler and tables were not seen; the repo's CMake builds with -O3 -funroll-loops -march=native and includes the competitors' code, so the comparison is reproducible in principle.",
+  "status_note": "Abandoned since July 2020 (all 4 issues closed); BSD-2-Clause, and the core algorithms are a handful of headers that can be vendored without the benchmark's STXXL and Cilk baggage.",
+  "sources_read": [
+    "https://github.com/kurpicz/pwm",
+    "https://github.com/kurpicz/pwm/tree/master/include",
+    "https://github.com/kurpicz/pwm/tree/master/include/construction",
+    "https://github.com/kurpicz/pwm/tree/master/include/arrays",
+    "https://github.com/kurpicz/pwm/tree/master/include/queries",
+    "https://github.com/kurpicz/pwm/tree/master/src",
+    "https://github.com/kurpicz/pwm/tree/master/external/wavelet_construction",
+    "https://github.com/kurpicz/pwm/issues?q=is%3Aissue",
+    "https://github.com/kurpicz/pwm/issues/1",
+    "https://github.com/kurpicz/pwm/issues/5",
+    "https://github.com/kurpicz/pwm/issues/16",
+    "https://github.com/kurpicz/pwm/issues/17",
+    "https://raw.githubusercontent.com/kurpicz/pwm/HEAD/README.md",
+    "https://raw.githubusercontent.com/kurpicz/pwm/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/kurpicz/pwm/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/kurpicz/pwm/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/kurpicz/pwm/HEAD/include/wx_pc.hpp",
+    "https://raw.githubusercontent.com/kurpicz/pwm/HEAD/include/wx_ppc.hpp",
+    "https://raw.githubusercontent.com/kurpicz/pwm/HEAD/include/wx_ppc_ss.hpp",
+    "https://raw.githubusercontent.com/kurpicz/pwm/HEAD/include/wx_base.hpp",
+    "https://raw.githubusercontent.com/kurpicz/pwm/HEAD/include/construction/pc.hpp",
+    "https://raw.githubusercontent.com/kurpicz/pwm/HEAD/include/construction/ppc.hpp",
+    "https://raw.githubusercontent.com/kurpicz/pwm/HEAD/include/construction/ppc_ss.hpp",
+    "https://raw.githubusercontent.com/kurpicz/pwm/HEAD/include/construction/building_blocks.hpp",
+    "https://raw.githubusercontent.com/kurpicz/pwm/HEAD/include/arrays/bit_vectors.hpp",
+    "https://raw.githubusercontent.com/kurpicz/pwm/HEAD/include/arrays/flat_two_dim_array.hpp",
+    "https://raw.githubusercontent.com/kurpicz/pwm/HEAD/src/benchmark.cpp",
+    "https://raw.githubusercontent.com/kurpicz/pwm/HEAD/src/CMakeLists.txt",
+    "https://raw.githubusercontent.com/kurpicz/pwm/HEAD/external/wavelet_construction/CMakeLists.txt",
+    "https://raw.githubusercontent.com/kurpicz/pwm/HEAD/test/CMakeLists.txt"
+  ],
+  "confidence": 0.7
+}
