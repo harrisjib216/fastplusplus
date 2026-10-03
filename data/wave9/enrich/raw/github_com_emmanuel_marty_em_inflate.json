@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/emmanuel-marty/em_inflate",
+  "one_liner": "Single-file, one-call memory-to-memory inflate for zlib, gzip and raw deflate; 11-16% faster than zlib 1.2.11 with checksums on.",
+  "what_it_does": "em_inflate decodes a complete zlib (RFC 1950), gzip (RFC 1952) or raw deflate (RFC 1951) buffer into a caller-supplied output buffer with one function: size_t em_inflate(const void *src, size_t src_size, unsigned char *dst, size_t dst_capacity), returning the decoded size or (size_t)-1. It auto-detects the wrapper from the first bytes and verifies the adler32 or crc32 trailer unless the EM_INFLATE_VERIFY_CHECKSUM define is commented out. There is no streaming, no compressor and no zlib-compatible API.",
+  "how_it_is_fast": "A 64-bit LSB bit buffer refilled 32 bits at a time with an unaligned load on x86-64 (byte loads on aarch64), and canonical Huffman decoding through a 10-bit fast lookup table (NFASTSYMBOLBITS) that returns symbol plus length in one load, falling back to a bit-by-bit canonical walk for longer codes. Length and distance bases plus extra-bit counts are folded into the decoded symbol values, and matches with offset >= 16 away from the buffer end are copied with 16-byte memcpy chunks. Decoding a whole buffer in one call means matches read straight from the output buffer with no separate sliding window; checksums use Stephan Brumme's slicing-by-4 crc32 and Mark Adler's adler32.",
+  "when_to_use": [
+    "Decompressing whole gzip or zlib assets already in memory (game data, textures, embedded resources) where you know or can bound the output size.",
+    "Embedded or size-sensitive builds: about 15 KB of code plus rodata with checksums and about 9 KB without, per the README (clang 6.0.0 -O3, x86-64).",
+    "Replacing a zlib dependency in a read-only path with a single vendored .c/.h pair under the zlib license.",
+    "Trusted input where you can afford to skip checksum verification for the extra speed (README: 64% of zlib's time on enwik8 without checksum)."
+  ],
+  "when_not_to_use": [
+    "Untrusted or possibly truncated input: stored blocks are memcpy'd without checking that the declared length is present in the input (heap over-read), and other edge cases are not hardened (see gotchas).",
+    "Streaming or unknown-size output: there is no incremental API, and the output buffer must hold the whole result.",
+    "When the fastest inflate is the goal: the baseline is zlib 1.2.11 from 2017, and libdeflate, zlib-ng and Wuffs are not compared.",
+    "Multi-member gzip files, preset-dictionary zlib streams, or anything needing compression: none are supported.",
+    "64-bit targets other than x86-64 and aarch64 (for example ppc64 or RISC-V) fall back to the 32-bit bit-buffer path, which is not benchmarked."
+  ],
+  "integration": {
+    "form": "source-drop (lib/em_inflate.c and lib/em_inflate.h)",
+    "dependencies": "none (libc only: string.h, stdlib.h, sys/types.h)",
+    "min_toolchain": "C99 (mixed declarations, inline); a Makefile with cc -O3 and a VS2017 project are provided",
+    "platforms": "any; fast 64-bit bit buffer on x86-64 and aarch64, unaligned 32-bit refill only on x86-64",
+    "thread_safety": "reentrant: all state is on the stack and tables are const (inferred from the code; not documented)",
+    "drop_in_for_baseline": "partial — replaces zlib uncompress()-style one-shot use, not the inflate() stream API"
+  },
+  "gotchas": [
+    "Stored blocks: em_inflate_copy_stored checks output room but not input room, so a truncated or crafted stream with a large LEN copies past the end of the input buffer.",
+    "If the input runs out while reading a block header, get_bits returns (unsigned)-1, no switch case matches, and the uninitialized nBlockResult is used; the bit reader can also let its bit count go negative on truncated input.",
+    "Invalid symbols are accepted: literal/length codes 286-287 decode as a literal 0 byte, and distance codes 30-31 decode as offset 0 (copying not-yet-written output bytes) instead of failing; with checksums on, the trailer check will usually reject these, but raw deflate has no trailer.",
+    "Gzip header parsing skips the FHCRC field before FEXTRA/FNAME/FCOMMENT instead of after them, so headers that set FHCRC together with those fields are misparsed; the gzip ISIZE trailer is not checked. The x86-64 refill reads through an unsigned int* cast (alignment and strict-aliasing UB, fine on mainstream compilers)."
+  ],
+  "pick_this_over_siblings_when": "Pick em_inflate over miniz when you only need one-shot decoding and want the smallest code; pick libdeflate (also whole-buffer, much faster and fuzzed) or Wuffs (memory-safe by construction) whenever input is untrusted or raw speed matters more than a 1,200-line single file.",
+  "verified_claims_summary": "Author's README timings on an unspecified 'core i7' with no stated compiler or flags for the timing run: enwik8 gzip -9 stream decodes in 358,118 us with checksum and 275,847 us without, versus 426,167 us for zlib inflate 1.2.11 (1.19x and 1.54x, derived from page data); a 32 MB texture zlib stream takes 114,369 / 105,476 us versus 127,945 us (1.12x / 1.21x). The repository contains no timing harness, only an example CLI with a fixed 200,000,000-byte output buffer.",
+  "status_note": "Abandoned: last functional changes were a bounds-check fix in the Huffman table setup (August-October 2020), and 2022 commits are cosmetic; zlib-licensed and small enough to vendor, but fuzz it or add input-length checks before using it on untrusted data.",
+  "sources_read": [
+    "https://github.com/emmanuel-marty/em_inflate",
+    "https://github.com/emmanuel-marty/em_inflate/commits",
+    "https://github.com/emmanuel-marty/em_inflate/issues?q=is%3Aissue",
+    "https://github.com/emmanuel-marty/em_inflate/commit/e536ec7",
+    "https://github.com/emmanuel-marty/em_inflate/commit/0ea8a01",
+    "https://raw.githubusercontent.com/emmanuel-marty/em_inflate/HEAD/README.md",
+    "https://raw.githubusercontent.com/emmanuel-marty/em_inflate/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/emmanuel-marty/em_inflate/HEAD/Makefile",
+    "https://raw.githubusercontent.com/emmanuel-marty/em_inflate/HEAD/lib/em_inflate.c",
+    "https://raw.githubusercontent.com/emmanuel-marty/em_inflate/HEAD/lib/em_inflate.h",
+    "https://raw.githubusercontent.com/emmanuel-marty/em_inflate/HEAD/example/main.c"
+  ],
+  "confidence": 0.8
+}

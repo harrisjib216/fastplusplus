@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/jibsen/blz4",
+  "one_liner": "Experimental LZ4 legacy-format encoder using BriefLZ's optimal parser; output matches lz4 -12 or is a few bytes smaller, at much lower speed.",
+  "what_it_does": "blz4 is a small C99 command-line tool plus a tiny library (lz4.c, lz4_depack.c, lz4.h) that compresses data into the LZ4 legacy frame format (magic 0x184C2102, 8 MiB blocks), so stock lz4 tools can decode it. The library API is block-only: lz4_pack_level(src, dst, size, workmem, level) with levels 5-9 and 10 (= --optimal), plus lz4_workmem_size_level, lz4_max_packed_size and a simple lz4_depack. It is not API-compatible with liblz4 (no LZ4_compress_* / LZ4F_* functions, no streaming, no LZ4 frame format).",
+  "how_it_is_fast": "It does not aim to be fast; it aims for smaller LZ4 output. Levels 5-7 use BriefLZ's 'leparse' (backwards dynamic-programming parse over hash chains) and levels 8-10 use 'btparse' (forwards dynamic-programming parse with a binary-tree match finder per hash bucket, Knuth multiplicative hash of 4 bytes, 64 KiB window). Level 10 searches without depth or length limits, which is how it reaches the true optimum for LZ4's cost model.",
+  "when_to_use": [
+    "Offline, write-once data (firmware images, game assets, embedded ROM blobs) where every byte saved matters and compression time is irrelevant.",
+    "Checking how close lz4 -12 gets to an optimal LZ4 parse, as a reference encoder for research or encoder testing.",
+    "Producing LZ4 legacy-format streams to feed an existing lz4 decoder, which keeps stock LZ4 decompression speed."
+  ],
+  "when_not_to_use": [
+    "Any time compression speed matters: the README calls --optimal 'very slow' and says lz4 'is very close to optimal, and much faster'.",
+    "When you need the modern LZ4 frame format (checksums, content size, block independence flags) or the liblz4 API; blz4 writes only legacy-format output.",
+    "Decoding untrusted data with the bundled lz4_depack or 'blz4 -d': the decoder has no output-capacity parameter and no bounds or offset checks.",
+    "Production use in general: the author says it 'is not production quality, and has not been properly tested'.",
+    "Memory-constrained compression: btparse needs (5 x block size + 128 Ki + 3) 32-bit words of workmem, about 160 MiB for one 8 MiB block."
+  ],
+  "integration": {
+    "form": "source-drop (Meson builds a static liblz4-named library and the blz4 CLI)",
+    "dependencies": "none (parg.c bundled for CLI option parsing)",
+    "min_toolchain": "C99; Meson >= 0.60.0 if using the bundled build",
+    "platforms": "any (portable C; uses __builtin_clzl or _BitScanReverse when available)",
+    "thread_safety": "not documented; the pack functions keep all state in the caller-supplied workmem, so separate workmem buffers per thread should be safe (inferred from the code)",
+    "drop_in_for_baseline": "partial — output is readable by lz4 tools (legacy format), but the API is not the liblz4 API and the frame format is legacy only"
+  },
+  "gotchas": [
+    "lz4_depack(src, dst, packed_size) takes no destination size and does not validate offsets or lengths, so a crafted block can write past dst or read before it (the CLI decompresses into a fixed 8 MiB buffer); it also reads in[0] even when packed_size is 0.",
+    "The header is named lz4.h and the library is built as 'lz4', which collide with the real liblz4 header and library name if both are on the include or link path.",
+    "lz4_pack_level returns LZ4_ERROR for any level outside 5-10; there are no fast levels.",
+    "lz4.h's LZ4_VER_MINOR is 1 while LZ4_VER_STRING and meson.build say 0.2.0."
+  ],
+  "pick_this_over_siblings_when": "Pick it over LZ4's own lz4 -12 (LZ4 HC) only when you need the last few hundred bytes of an LZ4 stream and can spend far more CPU; for faster LZ4-compatible high-ratio encoding use LZ4 HC, and for better decode-speed-aware optimal parsing in the same format see lz4ultra.",
+  "verified_claims_summary": "First-party README table, size only: on the 12 Silesia files, blz4 --optimal output equals lz4 -12 -l on 7 files and is 18 to 99 bytes smaller on the other 5 (for example mr 4,190,675 vs 4,190,774), and it equals lz4x -9 on every file. No timings, versions, compiler, flags or hardware are given.",
+  "status_note": "Stale: the last code change was February 2020 (btparse added, version 0.2.0) and the November 2023 commit only updated CI; Zlib-licensed and small enough to vendor, but self-described as an untested experiment.",
+  "sources_read": [
+    "https://github.com/jibsen/blz4",
+    "https://github.com/jibsen/blz4/commits",
+    "https://github.com/jibsen/blz4/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/jibsen/blz4/HEAD/README.md",
+    "https://raw.githubusercontent.com/jibsen/blz4/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/jibsen/blz4/HEAD/meson.build",
+    "https://raw.githubusercontent.com/jibsen/blz4/HEAD/lz4.h",
+    "https://raw.githubusercontent.com/jibsen/blz4/HEAD/lz4.c",
+    "https://raw.githubusercontent.com/jibsen/blz4/HEAD/lz4_depack.c",
+    "https://raw.githubusercontent.com/jibsen/blz4/HEAD/lz4_btparse.h",
+    "https://raw.githubusercontent.com/jibsen/blz4/HEAD/lz4_leparse.h",
+    "https://raw.githubusercontent.com/jibsen/blz4/HEAD/blz4.c"
+  ],
+  "confidence": 0.8
+}
