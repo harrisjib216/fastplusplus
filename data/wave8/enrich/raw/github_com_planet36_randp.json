@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/planet36/randp",
+  "one_liner": "Linux C library with arc4random-style API backed by a thread-local 3-round-AES pool; 2-21x faster than glibc arc4random.",
+  "what_it_does": "Provides the arc4random family under new names on Linux: randp_bytes (like arc4random_buf), randp_u8/u16/u32/u64 (like arc4random) and randp_lt_u32/u64 (like arc4random_uniform, returning 0 for a bound of 1 or less), with no seed to manage. Each calling thread lazily mmaps a private page holding the PRNG state and a 256-byte output pool; bytes are served from the pool and wiped with explicit_bzero, the pool is refilled when empty, and the PRNG is reseeded from getentropy every 1024 refills (every 256 KiB of output per thread, derived from the defaults). It ships as librandp.a / librandp.so with randp.h (extern \"C\", callable from C++), or as an amalgamated randp-single.h.",
+  "how_it_is_fast": "The generator transforms a counter with three AESENC instructions under three independent random 128-bit round keys: no key schedule, no initial key whitening, no AESENCLAST, so far less work than the kernel getrandom path that glibc's arc4random wraps. The counter advances as two 64-bit Weyl sequences with odd per-lane increments. Output is produced 256 bytes at a time into a lock-free thread_local pool, so randp_u32 is a memcpy plus explicit_bzero with no syscall or vDSO call; bounded integers use Lemire's nearly divisionless multiply-and-reject method. A VAES/AVX2 path that generates two blocks per instruction exists, but the default config.mk build (-march=x86-64-v2 -maes) compiles the 128-bit AES-NI path.",
+  "when_to_use": [
+    "Linux x86-64 code that calls arc4random or arc4random_uniform in hot loops (shuffles, sampling, randomized algorithms, jitter, non-secret IDs): 7.0 ns versus 14.0 ns per uint32 and 7.19 ns versus 23.6 ns per bounded draw on the author's machine.",
+    "Bulk filling of buffers with unpredictable-looking bytes where secrecy does not matter (test data, fuzz inputs, randomized padding): about 16 GiB/s on one thread versus about 0.8 GiB/s for arc4random_buf in 256-byte calls (both derived from page data).",
+    "Multi-threaded or forking servers that want per-thread, lock-free randomness with no seeding code: the pool is thread_local and MADV_WIPEONFORK makes a forked child reseed before its first output.",
+    "You want periodic automatic reseeding from the OS, which plain xoshiro/PCG-style generators do not do."
+  ],
+  "when_not_to_use": [
+    "Keys, nonces, session tokens, salts, or anything an attacker gains from predicting: three AES rounds are not a cipher, there is no security proof, and the README makes no CSPRNG claim. Use getrandom/arc4random, or Randen if you need speed with a stated security argument.",
+    "Reproducible simulations: there is no seed or stream API; it is always seeded from getentropy and reseeds every 256 KiB per thread.",
+    "Anything other than Linux x86-64 with GCC 14+ and glibc 2.34+: non-x86-64 hits #error \"Architecture not supported\", clang is explicitly unsupported, and MADV_WIPEONFORK needs Linux 4.14+.",
+    "Maximum raw throughput for statistics or Monte Carlo: the pool copy and wiping cost time, and the same author's raw aes_ctr_128 generator (prng-test-bench) is listed at 37.22 GiB/s per thread versus about 16 GiB/s for randp_bytes (different benchmarks).",
+    "Long-lived production dependencies: 1 star, single author, the soname went from 4.5 (February 2026) to 7.0 (September 2026), and parameters and build options change frequently."
+  ],
+  "integration": {
+    "form": "static lib, shared lib, or header-only (make randp-single.h amalgamation)",
+    "dependencies": "none beyond glibc 2.34+ (getentropy, explicit_bzero, C11 threads in libc) and Linux 4.14+ (mmap, MADV_DONTDUMP, MADV_WIPEONFORK); python3 to generate the single header; Google Benchmark for the benchmarks",
+    "min_toolchain": "GCC 14+ in C23 mode (clang and clang++ not supported); the C++ benchmarks use g++ -std=c++23",
+    "platforms": "Linux x86-64 only, AES-NI plus SSE4.1 required (optional VAES + AVX2 path)",
+    "thread_safety": "Thread-safe without locks: each thread gets its own lazily mmapped pool (thread_local), released by a tss destructor at thread exit. Fork-safe via MADV_WIPEONFORK (tests/README.md: 'fork-safe, just like arc4random'). Async-signal safety not documented.",
+    "drop_in_for_baseline": "partial: same semantics as arc4random, arc4random_buf and arc4random_uniform (no seeding, unbiased bounded integers, 0 for bound <= 1), but different function names, Linux x86-64 GCC only, and not cryptographically equivalent"
+  },
+  "gotchas": [
+    "Despite the name, the defaults (3 keys x 1 round in src/aes_ctr_128_prng-defaults.h and aes_ctr_256_prng-defaults.h) give 3 AESENC rounds on a Weyl-sequence counter, not AES-128 in CTR mode. The parameters are compile-time constexpr values; the build-time override was removed on 2026-09-24, so changing them means editing the headers.",
+    "Failures are fatal: an error from mmap, madvise (for example a kernel without MADV_WIPEONFORK), getentropy or tss_create calls err/errx and exits the process.",
+    "The keys and counter sit in the per-thread page between reseeds, so a memory disclosure exposes outputs both before and after it up to the next reseed (256 KiB); wiping handed-out pool bytes does not prevent that. Each thread that calls randp also holds a 4 KiB mapping until it exits.",
+    "There is no LICENSE file at the root (raw LICENSE returns 404); MPL-2.0 comes only from SPDX headers in each source file. The published numbers cover the 128-bit AES-NI path: benchmarks/Makefile adds -march=x86-64-v3 -mvaes only to the C++ benchmark file, while librandp.a is built with config.mk's -march=x86-64-v2 -maes."
+  ],
+  "pick_this_over_siblings_when": "Pick randp over Randen when you want arc4random's seedless, per-thread, fork-safe API on Linux and can accept a reduced-round generator with no proof; pick Randen when you need its stated indistinguishability and backtracking resistance. For seeded simulation streams or raw speed, the same author's prng-test-bench aes_ctr_128 or testingRNG's aesctr skip randp's pool copy and wiping.",
+  "verified_claims_summary": "In the author's Google Benchmark run of 2026-09-22 (i9-13980HX, Linux 7.2.6, glibc 2.44 with the getrandom vDSO, gcc 16.2.1, one thread, median of 5), filling 4 GiB in 256-byte calls took 247 ms with randp_bytes against 5211 ms with arc4random_buf (21.1x). One uint32 took 7.00 ns against 14.0 ns for arc4random, and a bounded uint32 (bounds cycling over 1..0x100000) took 7.19 ns against 23.6 ns for arc4random_uniform. Runs on glibc 2.40, before the vDSO, showed 27-43x; randp_bytes itself slowed from 199 ms (librandp 4.5, February 2026) to 247 ms (7.0), and the cause is not documented.",
+  "status_note": "Very active (last commit 2026-10-02, commits almost daily) but a 1-star single-author project. MPL-2.0 by SPDX headers only, and small enough to vendor through randp-single.h if you accept its Linux/x86-64/GCC-only scope.",
+  "sources_read": [
+    "https://github.com/planet36/randp",
+    "https://github.com/planet36/randp/commits",
+    "https://raw.githubusercontent.com/planet36/randp/HEAD/README.md",
+    "https://raw.githubusercontent.com/planet36/randp/HEAD/benchmarks/README.md",
+    "https://raw.githubusercontent.com/planet36/randp/HEAD/benchmarks/Makefile",
+    "https://raw.githubusercontent.com/planet36/randp/HEAD/benchmarks/benchmark-others.cpp",
+    "https://raw.githubusercontent.com/planet36/randp/HEAD/tests/README.md",
+    "https://raw.githubusercontent.com/planet36/randp/HEAD/config.mk",
+    "https://raw.githubusercontent.com/planet36/randp/HEAD/Makefile",
+    "https://raw.githubusercontent.com/planet36/randp/HEAD/randp.h",
+    "https://raw.githubusercontent.com/planet36/randp/HEAD/src/randp.c",
+    "https://raw.githubusercontent.com/planet36/randp/HEAD/src/randp-defaults.h",
+    "https://raw.githubusercontent.com/planet36/randp/HEAD/src/aes_ctr_128_prng.h",
+    "https://raw.githubusercontent.com/planet36/randp/HEAD/src/aes_ctr_128_prng-defaults.h",
+    "https://raw.githubusercontent.com/planet36/randp/HEAD/src/aes_ctr_256_prng-defaults.h",
+    "https://raw.githubusercontent.com/planet36/randp/HEAD/src/aes-128-utils.h",
+    "https://raw.githubusercontent.com/planet36/randp/HEAD/src/nearlydivisionless.h",
+    "https://raw.githubusercontent.com/planet36/randp/HEAD/src/allocate.h",
+    "https://raw.githubusercontent.com/planet36/randp/HEAD/LICENSE",
+    "https://github.com/google/randen"
+  ],
+  "confidence": 0.75
+}
