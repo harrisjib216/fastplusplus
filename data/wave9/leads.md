@@ -8,3 +8,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - dtANS (C++/CUDA, arXiv 2603.01915): repo URL unknown, arXiv blocked. (w9 entropy-gh-cpp2)
 - ot/ds2i (D): SIGIR 2014 Partitioned Elias-Fano paper on groups.di.unipi.it (blocked); retier when reachable. (w9 batch 17)
 - jermp/mutable_rank_select (D): arXiv 2009.12809 blocked; kurpicz/pwm (C): arXiv 1702.07578 blocked; aaronhong1024/wavelet_forest (D): arXiv 2308.07809 blocked. Retier candidates. (w9 batch 20)
+- mikkohei13/faster-minuter (D): Algorithmica wt_fbb paper (Springer, blocked); retier when reachable. (w9 batch 22)
