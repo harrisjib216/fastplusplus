@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/hpdps-group/mans",
+  "one_liner": "ANS pipeline for 16/32-bit integer arrays on CPU, CUDA and HIP; reports 1.92x/2.04x faster than FSE on CPU.",
+  "what_it_does": "MANS compresses unsigned 16-bit and 32-bit integer arrays (detector frames, simulation fields, sensor slices) by first mapping them to 8-bit symbols with Adaptive Data Mapping (ADM) and then entropy-coding those bytes with ANS. One C++ API (mans_api.hpp: mans::compress, decompress, compress_device, decompress_device, get_mans_max_compress_bytes) takes a MansParams struct choosing backend (CPU, NVIDIA, AMD, DCU), dtype, mode and 1D/2D/3D shape, and writes a self-describing stream with a 40-byte header. CLI tools, an autotuner for OpenMP thread counts and an HDF5 filter (H5Z-MANS) are included; it is not a drop-in for the FSE API.",
+  "how_it_is_fast": "ADM works per block (512 elements in 1D, 16x16 tiles in 2D, 4096-element tiles in 3D): if the block's value range is under 3500 it stores the block mean as a center and emits each value as an 8-bit code of its signed offset within 126-wide bands, with the band index in a separate bit-signal stream; wider blocks go RAW. Byte symbols then compress far better and faster than coding 16/32-bit words directly. In P mode the bytes go to a 32-lane interleaved rANS whose GPU kernels are Meta's DietGPU code (files keep Meta's copyright header) and whose CPU port writes the same warp-state format, so CPU and GPU streams interoperate; R mode feeds the bytes to a vendored FSE (tANS) for the best ratio. CPU stages are OpenMP-parallel and built with -march=native -mavx2 by default.",
+  "when_to_use": [
+    "Lossless compression of uint16 or uint32 scientific arrays with locally narrow value ranges (photon-science detector frames, quantized simulation output), where generic byte coders do poorly.",
+    "Pipelines that compress on GPU and decompress on CPU or the reverse: P-mode streams interoperate between the CPU and NVIDIA backends, with a cross-backend test.",
+    "HDF5 datasets, through the H5Z-MANS filter plugin.",
+    "Many small slices (kilobytes to a few MB), where the authors say it is more stable than 16-bit Huffman and the autotuner picks thread counts per size."
+  ],
+  "when_not_to_use": [
+    "Generic byte streams, text, signed or floating-point data: only unsigned 16-bit and 32-bit integers are supported.",
+    "Blocks whose value range is 3500 or more fall back to RAW, so high-entropy or noisy integer data gains little.",
+    "When you need a proven speed comparison against nvCOMP's ANS codec: the GPU claim (45.14x) is against nvCOMP Huffman, and the 288.45x/135.86x figures compare the GPU to MANS's own CPU mode.",
+    "Non-x86 CPUs without editing the build: MANS_CPU_ARCH_FLAGS defaults to -march=native -mavx2, and -march=native binaries do not move between machines.",
+    "R-mode (best-ratio) streams on the GPU: the NVIDIA backend accepts P mode only."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "OpenMP for the CPU backend; CUDA toolkit (12.6 named) for NVIDIA; hipcc/ROCm (or DTK for DCU) for AMD; HDF5 only for the optional plugin (on by default); FSE and DietGPU-derived ANS sources are vendored",
+    "min_toolchain": "C++17, CMake 3.15+; CUDA 12.6 per README (Dockerfile uses nvidia/cuda:12.6.2-devel-ubuntu22.04)",
+    "platforms": "x86-64 CPUs (AVX2 by default flags), NVIDIA GPUs, AMD GPUs via HIP and Hygon DCUs; Ubuntu 22.04+ recommended",
+    "thread_safety": "not documented; the CPU path reuses named scratch buffers from a buffer cache (cache.get_t), so concurrent calls from several threads should be treated as unsafe until checked",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The license is inconsistent: README badge and GitHub sidebar say MIT, but the LICENSE file at HEAD is BSD 3-Clause; the vendored GPU ANS files carry Meta's MIT header.",
+    "nv/ans/CMakeLists.txt hard-codes CMAKE_CUDA_COMPILER to /usr/local/cuda/bin/nvcc and defines _GLIBCXX_USE_CXX11_ABI=0, which can break linking against code built with the default libstdc++ ABI.",
+    "The --dims product must equal the element count, and the HDF5 plugin builds unless you pass -DBUILD_HDF5_PLUGIN=OFF.",
+    "The API reports errors by throwing std::runtime_error (for example when a backend was not compiled in), and the default build enables timing instrumentation (ENABLE_TIMING=ON)."
+  ],
+  "pick_this_over_siblings_when": "Pick MANS over DietGPU when your data is 16/32-bit integers rather than bytes or float exponents, or when you need the same stream on CPU, NVIDIA and AMD; for plain byte streams on CPU, FiniteStateEntropy, hypersonic-rANS or htscodecs are simpler and benchmarked on standard corpora.",
+  "verified_claims_summary": "First-party README figures (THR.png, no compiler flags or exact commands given) on a Xeon Gold 5220S show 1.92x faster compression and 2.04x faster decompression than FSE-ANS. On an A100, compression is 45.14x faster than nvCOMP Huffman (not nvCOMP ANS). The SC25 paper abstract (search snippet only, ACM blocked) confirms an average 1.24x ratio gain and 870.27 MB/s on CPU, but not the FSE throughput comparison.",
+  "status_note": "Actively developed (27 commits, last 2026-09-30 adding DCU/AMD support, 11 stars), backed by a peer-reviewed SC25 paper with a reproducibility report; permissively licensed, though the MIT-versus-BSD-3 mismatch should be settled before vendoring.",
+  "sources_read": [
+    "https://github.com/hpdps-group/MANS",
+    "https://raw.githubusercontent.com/hpdps-group/MANS/HEAD/README.md",
+    "https://raw.githubusercontent.com/hpdps-group/MANS/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/hpdps-group/MANS/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/hpdps-group/MANS/HEAD/mans_api.hpp",
+    "https://raw.githubusercontent.com/hpdps-group/MANS/HEAD/mans_api.cpp",
+    "https://raw.githubusercontent.com/hpdps-group/MANS/HEAD/mans_defs.h",
+    "https://raw.githubusercontent.com/hpdps-group/MANS/HEAD/bench.csv",
+    "https://raw.githubusercontent.com/hpdps-group/MANS/HEAD/Dockerfile",
+    "https://github.com/hpdps-group/MANS/tree/main/cpu",
+    "https://github.com/hpdps-group/MANS/tree/main/cpu/adm",
+    "https://raw.githubusercontent.com/hpdps-group/MANS/HEAD/cpu/mans_cpu.h",
+    "https://raw.githubusercontent.com/hpdps-group/MANS/HEAD/cpu/adm/adm.h",
+    "https://raw.githubusercontent.com/hpdps-group/MANS/HEAD/cpu/adm/adm_utils.cpp",
+    "https://raw.githubusercontent.com/hpdps-group/MANS/HEAD/cpu/pans/pans_utils.cpp",
+    "https://raw.githubusercontent.com/hpdps-group/MANS/HEAD/cpu/fse/CMakeLists.txt",
+    "https://raw.githubusercontent.com/hpdps-group/MANS/HEAD/nv/ans/CMakeLists.txt",
+    "https://raw.githubusercontent.com/hpdps-group/MANS/HEAD/nv/ans/src/GpuANS.cu",
+    "WebSearch: MANS Multi-Byte Integer Data ANS SC25 (snippet of dl.acm.org/doi/10.1145/3712285.3759825; page blocked here)"
+  ],
+  "confidence": 0.75
+}

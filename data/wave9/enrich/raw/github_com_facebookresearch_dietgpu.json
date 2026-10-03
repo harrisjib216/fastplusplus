@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/facebookresearch/dietgpu",
+  "one_liner": "CUDA byte-wise rANS encoder/decoder at 250-410 GB/s on A100; open alternative to nvCOMP's proprietary ANS codec.",
+  "what_it_does": "DietGPU compresses and decompresses batches of independent byte arrays entirely on an NVIDIA GPU with a byte-oriented rANS entropy coder, plus a float codec that rANS-codes the exponent byte of float16/bfloat16 tensors. The C++ API (dietgpu/ans/GpuANSCodec.h) takes raw device pointers in stride, pointer-array or split-size batch layouts, a StackDeviceMemory scratch allocator and a cudaStream_t; a PyTorch tensor API wraps the same kernels. It is not a drop-in for any CPU or nvCOMP API, and the archive format (magic 0xd00d) is its own.",
+  "how_it_is_fast": "Input is split into 4 KiB blocks, each encoded by one warp as 32 interleaved rANS streams (one 31-bit state per lane, 16-bit renormalisation words). Lanes that need to emit or consume a word are compacted with __ballot_sync plus __popc on the lane mask, so a warp writes a dense output stream without serialising. Encoding replaces the division by pdf with constant multiply-and-shift (state is capped below 2^31 to avoid overflow), decoding uses a shared-memory lookup table packing cdf, pdf and symbol into one 32-bit word, and histogram, table build, encode and output coalescing all run on device with no host synchronisation when scratch memory is pre-sized.",
+  "when_to_use": [
+    "Compressing data already resident in GPU memory before sending it over NVLink, PCIe or InfiniBand, where interconnect bandwidth rather than ratio is the bottleneck.",
+    "Entropy-coding stage for a GPU compression pipeline (LZ or RLE literal/match streams) that needs an open-source rANS rather than proprietary nvCOMP ANS.",
+    "ML tensors in bfloat16 or float16 whose exponents carry about 2.7 bits of entropy, giving roughly 0.67x (bfloat16) or 0.85x (float16) size per the README.",
+    "Total inputs of at least about 512 KiB, ideally enough 4 KiB blocks to fill every SM; a batch size of 1 on large data performs best per the README."
+  ],
+  "when_not_to_use": [
+    "Data whose redundancy lives above the byte level (text, structured records): byte-wise order-0 statistics compress it poorly; an LZ codec does better.",
+    "Small buffers under about 512 KiB, or any CPU-only or non-NVIDIA deployment.",
+    "Single arrays of 2 GiB or more: the ANS compressor fails a CHECK on rawSize <= INT32_MAX (issue #19, closed as not planned).",
+    "float32 or float64 tensors: the float codec supports only float16 and bfloat16 (float32 requests #11 and #15 never landed).",
+    "Projects that need upstream support: the repository was archived on 2026-06-14 and was labelled a very early alpha."
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "CUDA toolkit, glog and googletest (git submodules); the top-level CMake also configures the PyTorch wrapper, so find_package(Torch) must succeed even if only gpu_ans is wanted",
+    "min_toolchain": "CMake 3.10+, C++14 and CUDA C++14 (nvcc); a recent PyTorch build failed (issue #25, PyTorch 2.7.1+cu118)",
+    "platforms": "NVIDIA GPUs only; README says CC 3.5+ should work but only V100/A100 were tested by the author (a third-party paper reports runs on H100)",
+    "thread_safety": "not documented; calls are stream-ordered and use a caller-owned StackDeviceMemory scratch object, so give each concurrent stream its own",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Inputs must be 4-byte aligned (kANSRequiredAlignment = 4), and the output buffer must be sized with getMaxCompressedSize(), which is larger than the input.",
+    "The compressed size is known only on the device; you copy the per-batch size array back to the host before you can move or trim the output.",
+    "Only probability precisions of 9, 10 or 11 bits are accepted (default 10); any other value hits a CHECK failure.",
+    "Decode trusts the stride you pass: a stride smaller than a member's compressed size can read out of bounds (header comment says it may segfault). The optional checksum is off by default."
+  ],
+  "pick_this_over_siblings_when": "Pick DietGPU over multians or Recoil when you need both a GPU encoder and decoder with per-array statistics (multians is decode-only), and over torch_ans when you want raw C++ device-pointer batches instead of PyTorch-only symbol tensors; for CPU entropy coding use hypersonic-rANS or htscodecs instead.",
+  "verified_claims_summary": "The README reports first-party absolute rANS throughput of about 250-410 GB/s on one A100 at batch size 1 via the PyTorch API on torch.normal-derived data, with no baseline on the page. A third-party preprint (arXiv 2606.18900, seen only as a search snippet) measured 364.9 GB/s encode and 592.5 GB/s decode on H100 (256 MB, batch 4096 x 64 KB) against 480 GB/s for nvcomp-ANS; a 2025 user request for an nvCOMP comparison (issue #20) got no maintainer reply.",
+  "status_note": "Archived on 2026-06-14 after a last commit on 2026-03-18 and labelled an early alpha; MIT-licensed and small enough to vendor, but the build is tied to PyTorch and nobody fixes issues any more.",
+  "sources_read": [
+    "https://github.com/facebookresearch/dietgpu",
+    "https://raw.githubusercontent.com/facebookresearch/dietgpu/HEAD/README.md",
+    "https://raw.githubusercontent.com/facebookresearch/dietgpu/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/facebookresearch/dietgpu/HEAD/dietgpu/CMakeLists.txt",
+    "https://raw.githubusercontent.com/facebookresearch/dietgpu/HEAD/dietgpu/ans/CMakeLists.txt",
+    "https://raw.githubusercontent.com/facebookresearch/dietgpu/HEAD/dietgpu/ans/GpuANSCodec.h",
+    "https://raw.githubusercontent.com/facebookresearch/dietgpu/HEAD/dietgpu/ans/GpuANSUtils.cuh",
+    "https://raw.githubusercontent.com/facebookresearch/dietgpu/HEAD/dietgpu/ans/GpuANSEncode.cuh",
+    "https://raw.githubusercontent.com/facebookresearch/dietgpu/HEAD/dietgpu/ans/GpuANSDecode.cuh",
+    "https://github.com/facebookresearch/dietgpu/issues?q=is%3Aissue",
+    "https://github.com/facebookresearch/dietgpu/issues/19",
+    "https://github.com/facebookresearch/dietgpu/issues/20",
+    "https://github.com/facebookresearch/dietgpu/issues/25",
+    "WebSearch: dietgpu nvcomp ANS throughput H100 comparison GB/s (snippet of arXiv 2606.18900; the page itself is blocked here)"
+  ],
+  "confidence": 0.75
+}

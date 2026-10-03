@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/powturbo/turbo-histogram",
+  "one_liner": "Scalar C byte-histogram routines for entropy-coder front ends; 1.5x the naive loop on text, up to 22x on runs.",
+  "what_it_does": "Counts the 256 byte frequencies of a buffer, the first pass of Huffman, FSE/tANS and rANS encoders. Each routine has the shape f(unsigned char *in, unsigned inlen, unsigned *cnt) and fills a 256-entry 32-bit count array. There is no library or header: the functions are static functions in turbohist_.c, included by the turbohist.c benchmark driver, so you copy the one you want into your code.",
+  "how_it_is_fast": "It spreads increments over 4 or 8 separate count tables so consecutive equal bytes do not serialize on a store-to-load forwarding dependency, then sums the tables at the end in an auto-vectorizable loop. It reads 32- or 64-bit words and extracts bytes with shifts (x86 uses the high-byte trick via unsigned short casts), prefetches 512 bytes ahead, and pads each table to 256+8 counters to avoid 4K aliasing between tables (issue #2). The histr_* variants compare two 64-bit words and, when 16 bytes are one repeated value, add 16 to a single counter, which is where the 19.6 GB/s all-zeros figure comes from.",
+  "when_to_use": [
+    "The counting pass in front of a block entropy coder (Huffman, FSE, rANS) on blocks of KB to GB, single thread",
+    "Skewed or run-heavy data (BWT output, sparse images, zero-filled regions): histr_8_64 measured 5135 MB/s vs 1171 MB/s naive on enwik9.bwt and 19629 vs 877 MB/s on zeros",
+    "Portable C without SIMD or assembly requirements: the fastest rows are plain scalar C, so the same code serves x86-64, aarch64 and ppc64le builds",
+    "As a reference when tuning your own histogram loop: the driver checks every variant against the naive count and reports MB/s and cycles/byte"
+  ],
+  "when_not_to_use": [
+    "Uniform, high-entropy data where the gain is modest: on enwik9 text hist_8_64 is 4053 MB/s vs 2761 MB/s naive (about 1.47x, derived from page data)",
+    "Inputs of 4 GiB or more in one call, or counts above 2^32-1: lengths and counters are 32-bit unsigned",
+    "Small buffers (a few hundred bytes): each call zeroes and later sums 8 x 264 counters (about 8.4 KB of stack), which can outweigh the counting; the 64-bit variants only enter the fast loop for inlen >= 72-80 bytes",
+    "Multi-threaded or 16-bit-symbol histograms: only single-thread 8-bit symbol counting is implemented",
+    "Projects that need a maintained, versioned library: no releases, no header, last commit 2021-12-29"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none for the functions (conf.h supplies ctou32/ctou64, likely and ALWAYS_INLINE macros; sse_neon.h only for the SSE/NEON variants)",
+    "min_toolchain": "GCC >= 4.6 or Clang >= 3.2 on Linux, MinGW-w64 on Windows, Xcode >= 9 on macOS, gcc >= 6.3 on aarch64, gcc >= 8.0 on ppc64le (README); C99 with GCC builtins",
+    "platforms": "x86-64 and i386 (default build -march=corei7-avx; AVX2=1 uses -march=haswell), aarch64, Apple M1, ppc64le; hist_8_64a inline-asm variant is x86-64 only",
+    "thread_safety": "Not documented; the code keeps all count tables on the stack and has no global state, so separate calls on separate buffers do not share data",
+    "drop_in_for_baseline": "partial: same signature shape as a naive count loop (input, length, 256-entry counts), but you must copy the static function and the conf.h load macros"
+  },
+  "gotchas": [
+    "The README advertises a 'C++ compatible header', but no header exists in the repo (turbohist.h returns 404); the functions are static in turbohist_.c.",
+    "Table rows came from a build whose flags are not stated (default -march=corei7-avx or AVX2=1 -march=haswell), so expect different ratios with other flags; the SSE4.1 and AVX2 variants were slower than the scalar 64-bit ones on the i7-9700K.",
+    "hist_8_64a is declared to return unsigned but has no return statement; do not use its return value.",
+    "The disabled '#else' table-reduction path mixes _mm256_add_epi32 with __m128i in its SSE branch and would not compile if enabled; leave the default '#if 1' summation."
+  ],
+  "pick_this_over_siblings_when": "The sibling entries (FiniteStateEntropy, hypersonic-rANS, htscodecs, rans_static) are coders, not histogram routines; use TurboHist as their counting stage when profiling shows the frequency pass matters, especially on BWT or run-heavy blocks where its run-aware histr_8_64 is 1.1x Ryg's best asm and 4.4x the naive loop.",
+  "verified_claims_summary": "First-party single-thread benchmark on an Intel i7-9700K with gcc 11.2 over 1 GB inputs, every variant checked against the naive count: hist_8_64 4053 MB/s vs naive 2761 MB/s on enwik9, histr_8_64 5135 vs 1171 MB/s on enwik9.bwt and 19629 vs 877 MB/s on all zeros (the 22x headline). Against Ryg's assembly histograms the lead is small: 4053 vs 4133 MB/s (Ryg var3 is faster on enwik9), 5135 vs 4642 MB/s on BWT and 19629 vs 14076 MB/s on zeros.",
+  "status_note": "Abandoned since 2021-12-29 (102 commits, 74 stars, no releases, no open issues) but BSD-2-Clause and a few dozen lines per function, so easy to vendor.",
+  "sources_read": [
+    "https://github.com/powturbo/Turbo-Histogram",
+    "https://github.com/powturbo/Turbo-Histogram/issues?q=is%3Aissue",
+    "https://github.com/powturbo/Turbo-Histogram/issues/2",
+    "https://raw.githubusercontent.com/powturbo/Turbo-Histogram/HEAD/README.md",
+    "https://raw.githubusercontent.com/powturbo/Turbo-Histogram/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/powturbo/Turbo-Histogram/HEAD/makefile",
+    "https://raw.githubusercontent.com/powturbo/Turbo-Histogram/HEAD/turbohist.c",
+    "https://raw.githubusercontent.com/powturbo/Turbo-Histogram/HEAD/turbohist_.c",
+    "https://raw.githubusercontent.com/powturbo/Turbo-Histogram/HEAD/conf.h",
+    "https://raw.githubusercontent.com/powturbo/Turbo-Histogram/HEAD/turbohist.h"
+  ],
+  "confidence": 0.8
+}
