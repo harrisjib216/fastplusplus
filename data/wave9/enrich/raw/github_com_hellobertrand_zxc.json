@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/hellobertrand/zxc",
+  "one_liner": "Asymmetric LZ77 codec in C that decodes faster than LZ4, LZ4HC and zstd -1 at equal or smaller output.",
+  "what_it_does": "ZXC is a block-based lossless compressor for write-once, read-many data (assets, firmware, packages, column stores): the encoder spends extra time on match search and parsing so the decoder runs faster. Its API is its own, not LZ4- or zstd-compatible: zxc_compress / zxc_decompress with options structs and caller-allocated, bounds-checked buffers, plus reusable contexts, multi-threaded stream functions, seekable archives, trained dictionaries and in-place decompression into a single buffer. It ships a CLI usable as a tar compressor and official Rust, Python, Node.js, Go and WASM bindings.",
+  "how_it_is_fast": "Levels 1-5 are LZ77 with hash-chain and lazy matching that emit sequences in separate bit-packed streams (prefix varints, RLE) laid out for straight-line decoding, with SIMD match copies and NEON/SSE2/AVX2/AVX-512 paths. Levels 6-7 add optimal parsing and length-limited canonical Huffman for literals (and tokens at level 7) stored in the PivCo level-ordered layout from pivco-huffman: per-node branch bitmaps that the decoder rebuilds with byte-shuffle list merges (TBL, pshufb, vpexpandb) instead of a serial bit chain, which the whitepaper measures at about 3.1 GB/s, 77% over its earlier 4-stream Huffman decoder on Apple M3. Encode-side choices are priced with a size-versus-decode-time Lagrangian, trading ratio for decode cycles.",
+  "when_to_use": [
+    "Data compressed once (CI, build step, ingest) and decompressed many times, where decode throughput or effective bandwidth matters more than compression speed: game assets, app bundles, container layers, FOTA images.",
+    "Replacing LZ4 or LZ4HC when you control both ends: in lzbench 2.4 on an EPYC 9555P, zxc -1 decodes at 8,151 vs 3,977 MB/s for lz4 --fast -17 at a slightly smaller size, and -3 at 4,716 vs 3,832 MB/s for lz4.",
+    "ARM64 targets (Apple Silicon, Graviton, Axion), where its decode lead over LZ4 is largest (1.25-2.62x on the README's M2 and Axion rows).",
+    "Firmware or kernel-side unpacking with tight RAM: in-place decompression with a caller-owned static context does no allocation inside the library.",
+    "Small homogeneous records (JSON, logs, KV values) compressed in small blocks, using a trained .zxd dictionary."
+  ],
+  "when_not_to_use": [
+    "Compression-speed-bound paths (logging, network streaming of fresh data): zxc -3 compresses at 168 MB/s vs 550 MB/s for lz4 in lzbench 2.4, and -6/-7 at single-digit to low-teens MB/s.",
+    "Long-term archives before v1.0: format breaks have been clean at every bump (v6, v7, v8, v9) and v9 tools reject v8 archives; the maintainer only promises backward-readable archives after v1.0 (issue #457).",
+    "When you need the best ratio: -7 reaches 33.09% on Silesia versus 31.20% for zstd -3; zstd, xz or bzip3 remain the choice for density.",
+    "x86 at the high tier if the margin matters: lzbench's own run puts -6 only 1.06x ahead of lz4hc -9 on decode.",
+    "Interop with existing LZ4/zstd consumers or tooling: the stream format is ZXC-only."
+  ],
+  "integration": {
+    "form": "static lib (shared optional) with CMake, pkg-config and Meson; also packaged in vcpkg, Conan, Homebrew, winget, Debian/Ubuntu, crates.io, PyPI and npm",
+    "dependencies": "none required (rapidhash is vendored; a system rapidhash.h can be used instead)",
+    "min_toolchain": "C17 compiler (GCC, Clang or MSVC), CMake 3.14+; PGO only with GCC/Clang",
+    "platforms": "x86-64 (SSE2 baseline, AVX2/AVX-512 paths, runtime dispatch in release binaries), ARM64 NEON, ARMv7, ARMv6, RISC-V, POWER, s390x (big-endian), i386; a Linux kernel contrib tree exists",
+    "thread_safety": "Documented as a thread-safe, stateless API; reusable cctx/dctx contexts hold sticky settings and are per-caller objects; stream functions spawn worker threads.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "A standalone CMake build defaults ZXC_NATIVE_ARCH=ON (-march=native), so a self-built binary may not run on an older CPU; pass -DZXC_NATIVE_ARCH=OFF for portable builds (vendored builds default it OFF, and the release archives dispatch AVX2/AVX-512 at runtime).",
+    "A static decompression context accepts only archives made with its exact block size and no dictionary; dictionary archives also need the same .zxd passed explicitly (no auto-lookup).",
+    "Default block size is 512 KB, so the compression context needs about 1.78 MB per thread (about 5.84 MB at level 6), and the in-place margin is about one block; small payloads want smaller blocks at some cost in ratio and speed.",
+    "The README's 1.75x/1.50x figures at -3/-6 are Apple M2; on x86 the default and high tiers gain 1.10-1.41x."
+  ],
+  "pick_this_over_siblings_when": "Pick ZXC over LZ4/LZ4HC when decode speed per compressed byte is the goal and compression runs offline, and over zstd -1 when you want about 2-2.6x faster decode at a similar ratio; stay with LZ4 when compression speed matters, and with zstd or bzip3 when ratio matters more than decode speed.",
+  "verified_claims_summary": "The author's lzbench 2.3.1 runs (-march=native; Clang 21 on Apple M2, GCC 14 on Axion, EPYC 9B45 and EPYC 7B13; single thread, silesia.tar, 512 KB blocks) show decode ratios of 1.81-2.62x over lz4 --fast at level -1, 1.22-1.75x over lz4 at -3, 1.10-1.50x over lz4hc -9 at -6 and 1.94-2.60x over zstd -1 at -7, each at a slightly smaller size. lzbench's maintainer independently measures 2.05x, 1.23x and 1.06x for the first three pairings on an EPYC 9555P (gcc 15.2.0, turbo off).",
+  "status_note": "Very active (586 commits; the record's last commit is 2026-10-02; format v9 is the v1.0 freeze candidate), BSD-3-Clause, fuzzed on OSS-Fuzz and shipped as an opt-in ClickHouse codec, so usable now if you can tolerate one more format break before 1.0.",
+  "sources_read": [
+    "https://github.com/hellobertrand/zxc",
+    "https://raw.githubusercontent.com/hellobertrand/zxc/HEAD/README.md",
+    "https://raw.githubusercontent.com/hellobertrand/zxc/HEAD/docs/WHITEPAPER.md",
+    "https://raw.githubusercontent.com/hellobertrand/zxc/HEAD/docs/INSTALL.md",
+    "https://raw.githubusercontent.com/hellobertrand/zxc/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/hellobertrand/zxc/HEAD/cmake/zxcCompilerFlags.cmake",
+    "https://github.com/hellobertrand/zxc/issues?q=is%3Aissue",
+    "https://github.com/hellobertrand/zxc/issues/457",
+    "https://github.com/hellobertrand/zxc/issues/248",
+    "https://raw.githubusercontent.com/inikep/lzbench/HEAD/README.md",
+    "https://github.com/MarcinZukowski/pivco-huffman/issues/27"
+  ],
+  "confidence": 0.85
+}

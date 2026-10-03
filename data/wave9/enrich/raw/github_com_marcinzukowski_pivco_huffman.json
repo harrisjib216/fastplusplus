@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/marcinzukowski/pivco-huffman",
+  "one_liner": "Block-SIMD Huffman decoder (pivoted coding) that decodes 2-6x faster than zstd's huf0 on most byte distributions.",
+  "what_it_does": "A research Huffman codec for byte alphabets (256 symbols, code length capped at 11 by default) that encodes each block of up to 65,535 symbols into its own bitstream format and decodes the whole block at once with SIMD. It offers a file-level buffer API (pivcohuf_compress_ex / pivcohuf_decompress in include/pivcohuf_file.h, with header and body checksums) and a block-level API (pivco_build_table, pivco_encoder_create / pivco_decoder_create, pivco_encode / pivco_decode) for embedding in your own container. It is not a drop-in for huf0 or any existing Huffman stream: the wire format is its own and still versioned (pivcohuf wire v0.10 as of September 2026).",
+  "how_it_is_fast": "Pivoted coding (PivCo): instead of a per-symbol table lookup with a serial bit cursor, the encoder stores, for each internal node of the Huffman tree, a bitmap saying which symbols of the block go left or right, and the decoder partitions the whole block's index set level by level with SIMD compress/permute primitives (AVX-512 VBMI2 vpcompressb/w, NEON vqtbl, pshufb with compress tables on SSE/AVX2), then merges results bottom-up. Subtrees whose leaves all sit at one depth take a flat fast path: one packed D-bit code per element and a single code_to_sym lookup. This removes the serial bit-length dependency that limits table decoders like huf0, so throughput grows with SIMD width; the optional PHA mode additionally FSE/ANS-codes skewed bitmaps to beat plain Huffman ratio.",
+  "when_to_use": [
+    "Read-heavy pipelines where you control both the encoder and the decoder and decode speed of an order-0 byte entropy stage is the bottleneck.",
+    "x86 servers with AVX-512 VBMI2 (Ice Lake, Sapphire/Granite Rapids, Zen 4/5) or Apple M-series, where the published decode ratios over huf0 X2 are 2-4x on real text and up to 11.7x on skewed data.",
+    "Heavily skewed or few-symbol data (proba80-like, bitmaps, scanned 1bpp images, DNA): PH decodes at 8-26 GB/s, and PHA gives about 28-32% smaller output than plain Huffman on proba80 and calgary_pic while still decoding about 2.2-2.6x faster than huf0 X2 on M4.",
+    "Research or prototyping of SIMD entropy decoding; the repo documents its kernels, wire format and per-primitive costs in detail."
+  ],
+  "when_not_to_use": [
+    "Production use today: the README marks it WIP and 'not production-ready by any means', and open issue #12 ('Make PH memory-safe and resilient') lists bounds checks on corrupted or adversarial bitmaps as still to do, so do not decode untrusted input with it.",
+    "AVX2/SSE-only x86 such as Zen 3: html_wiki, json_api and log_apache lose to huf0 X2 (0.94-0.95x) and most real-text rows are only 1.06-1.3x.",
+    "When you need compatibility with an existing Huffman stream (zstd, deflate, Oodle): the bitstream is new and still changes between versions.",
+    "Small inputs or latency-bound single-block decodes: the gains come from decoding blocks of thousands of symbols (the benchmarks use 4096-8192; current defaults are 16K on Apple and 32K elsewhere).",
+    "Encode-speed-sensitive paths: the published tables cover decode only; the README example shows encode at about 0.5-0.7 GB/s versus 3.6-5.4 GB/s decode."
+  ],
+  "integration": {
+    "form": "static lib (libpivco_huffman.a) or a single relocatable object (libpivco_huffman_local.o) with vendored FSE symbols localized",
+    "dependencies": "vendored FiniteStateEntropy submodule (ext/fse, required for PHA); libm on Linux; CMake 3.16+",
+    "min_toolchain": "C11 (CMake also enables C++17 for tools); the build auto-picks gcc-14 on AVX-512 Linux and clang-20 on Zen 3 and aarch64 Linux when present; benchmark tables used GCC 11.5.0 and clang-20",
+    "platforms": "aarch64 with NEON (Apple M-series, Graviton), x86-64 with AVX-512 VBMI2, AVX2+BMI2 or SSE4.1+POPCNT tiers, scalar fallback elsewhere; SVE backend was tried and removed",
+    "thread_safety": "Encoder/decoder contexts are single-threaded objects, one per thread; tables are built once and passed in. FSE statistics helpers are documented as not thread-safe, and issue #12 still lists removing global variables as open.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The CMake build detects the build host's CPU from /proc/cpuinfo and applies -mavx512*/-mavx2 flags with add_compile_options to every source, so a binary built on an AVX-512 host is not safe to run on an older x86 CPU; build on (or for) the target machine.",
+    "Linking it next to zstd or anything else that vendors FSE gives duplicate HUF_*/FSE_* symbols; link libpivco_huffman_local.o instead of the .a.",
+    "The README's API names (pivco_huffman_build_table, pivco_huffman_set_fse_enabled) lag the header, which now uses pivco_build_table with a pivco_cfg_t and explicit encoder/decoder contexts; the header is authoritative.",
+    "BENCHMARKS.md is a 2026-05-15 snapshot (block 8192/4096, --no-fse) while the code has since changed block-size defaults, wire format and table construction; re-measure on your own data with the bundled pivco_try or pivcohuf CLI."
+  ],
+  "pick_this_over_siblings_when": "Pick it over FiniteStateEntropy's Huff0 when you can adopt a new format and want CPU Huffman decode several times faster on SIMD-rich hardware; hypersonic-rANS is the alternative if you want an interleaved SIMD rANS decoder (about 3 GB/s on enwik8 in its own README) rather than a Huffman stage, and the GPU decoders (CUHD, gap-array, ipdps22-opthuffdec) only make sense when the data already lives on a GPU.",
+  "verified_claims_summary": "The author's in-memory decode microbenchmark (400M symbols per run, median of the 3 best of 5 runs, 30 synthetic and real byte distributions, PH without FSE) measures pivco against huf0 X1/X2 from FiniteStateEntropy and an in-tree 4-stream table decoder on four hosts: on a Xeon 6975P-C with AVX-512 (GCC 11.5.0, -O3) it decodes english at 7,909 vs 1,875 MB/s for huf0 X2 (4.22x) and 2.96-3.79x on real text; on Apple M4 Max 1.94-2.71x on real text; on Graviton 4 1.29-1.98x; on Zen 3 0.94-1.42x on real text. Oodle Huffman is wired into a separate harness but has no published numbers in these tables.",
+  "status_note": "Actively developed (578 commits, last on 2026-09-17, many co-authored with an AI assistant) under Apache-2.0 and copyable, but explicitly a WIP research codebase with an unstable wire format and an open memory-safety issue; ZXC (hellobertrand/zxc) reimplements the PivCo layout for its entropy stage per issue #27.",
+  "sources_read": [
+    "https://github.com/MarcinZukowski/pivco-huffman",
+    "https://raw.githubusercontent.com/MarcinZukowski/pivco-huffman/HEAD/README.md",
+    "https://raw.githubusercontent.com/MarcinZukowski/pivco-huffman/HEAD/docs/BENCHMARKS.md",
+    "https://raw.githubusercontent.com/MarcinZukowski/pivco-huffman/HEAD/docs/DATA_FORMAT.md",
+    "https://raw.githubusercontent.com/MarcinZukowski/pivco-huffman/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/MarcinZukowski/pivco-huffman/HEAD/include/pivco_huffman.h",
+    "https://raw.githubusercontent.com/MarcinZukowski/pivco-huffman/HEAD/include/pivcohuf_file.h",
+    "https://github.com/MarcinZukowski/pivco-huffman/issues?q=is%3Aissue",
+    "https://github.com/MarcinZukowski/pivco-huffman/issues/12",
+    "https://github.com/MarcinZukowski/pivco-huffman/issues/27",
+    "https://github.com/MarcinZukowski/pivco-huffman/commits/main"
+  ],
+  "confidence": 0.85
+}
