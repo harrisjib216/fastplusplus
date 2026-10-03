@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/dennwc/varint",
+  "one_liner": "Fully unrolled Go LEB128/protobuf varint decoder, roughly 1.3x-2.9x faster per call than encoding/binary.Uvarint on Go 1.17.3.",
+  "what_it_does": "Decodes unsigned LEB128 (protobuf) varints from a byte slice with the same signature and error convention as binary.Uvarint: (value, n) where n == 0 means the buffer is too short and n < 0 means overflow. It also offers UvarintSize (encoded length of a uint64, like gogo/protobuf's sov helpers) and ProtoTag, which decodes and validates a protobuf field-number/wire-type key in one pass. There is no encoder (use binary.PutUvarint) and no signed or zigzag Varint.",
+  "how_it_is_fast": "The decode loop is fully unrolled into ten byte steps, each with an early return. When the input slice is at least 10 bytes long, one up-front length test lets the Go compiler drop the per-byte bounds checks. Shorter slices take a second unrolled path that checks the length at each step. UvarintSize replaces the shift-and-count loop with a small binary tree of comparisons against precomputed MaxValN constants.",
+  "when_to_use": [
+    "Go code that decodes many individual varints in a hand-written protobuf, LEB128 or log-format parser, where binary.Uvarint shows up in profiles.",
+    "Buffers that usually have 10 or more bytes left past the varint (streams, large messages), which hit the bounds-check-free path; the README's _large rows show the biggest gains there.",
+    "Size precomputation before encoding (UvarintSize), e.g. to size a buffer exactly before marshalling.",
+    "Protobuf key parsing where you want field number and wire type validated in the same pass (ProtoTag)."
+  ],
+  "when_not_to_use": [
+    "Bulk integer arrays where you control the format: block codecs (Stream VByte, SIMD bit packing, FastPFor) decode orders of magnitude more integers per second than any per-value LEB128 decoder.",
+    "C++ projects: this is Go only, and the catalog's C++/Rust siblings (varint-simd, MaskedVByte, Stream VByte) are the relevant options.",
+    "When you also need a faster encoder or signed/zigzag varints; the package only decodes unsigned values and computes sizes.",
+    "If you need speedup figures for a current Go toolchain: the README table was produced with Go 1.17.3 (2021), CI still pins Go 1.17.x, and nobody has re-measured on newer compilers."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none (standard library only in tests)",
+    "min_toolchain": "Go 1.17 (go.mod; CI runs 1.17.x on ubuntu-20.04)",
+    "platforms": "any Go target; pure Go, no assembly; a 2021 commit fixed protobuf tag decoding on 32-bit architectures",
+    "thread_safety": "Stateless pure functions; safe for concurrent use (not stated in docs, follows from the code).",
+    "drop_in_for_baseline": "partial: Uvarint has the same signature and the same return values as binary.Uvarint, including -11 for reads past 10 bytes (tests compare both on short, overflow and long buffers), but there is no PutUvarint, Varint, ReadUvarint or io.ByteReader variant."
+  },
+  "gotchas": [
+    "Before commit 44109b0 (2021-11-16) an overflowing input made Uvarint scan the rest of the buffer and return -(11+j); it now stops at 10 bytes and returns -11, matching Go 1.17's fix for golang/go#41185. Pin a version from November 2021 or later.",
+    "ProtoTag decodes at most 9 bytes and returns an int64 field number without checking protobuf's 2^29-1 limit. It rejects field 0 only in the 1-byte form, so an overlong encoding such as 0x81 0x00 returns num 0 with n 2. Callers still need a range check.",
+    "The README calls this an encoding/decoding package, but the only encoder-side helper is UvarintSize.",
+    "The benchmarks decode a single constant value in a loop, so branch prediction is perfect. The UvarintSize 'old' column has no stdlib counterpart (encoding/binary has no size function); the test file's loop version (uvarintSizeLoop) appears to be what it measured."
+  ],
+  "pick_this_over_siblings_when": "Pick it over chmike/varint when you only need a drop-in faster binary.Uvarint with identical error semantics plus a protobuf tag helper; chmike/varint covers encoding as well and publishes a dated i5-11400 table. Pick streamvbyte-simdgo instead when you can change the wire format to a block codec and want throughput rather than per-value latency.",
+  "verified_claims_summary": "The README benchcmp table compares this package's Uvarint against binary.Uvarint for 1-9-byte values decoded repeatedly from 'exact' and 16-byte buffers. Per call it drops from 3.46 to 2.64 ns (1 byte) and from 14.1 to 4.89 ns (8 bytes, large buffer). UvarintSize runs in 0.43-1.00 ns versus 1.71-6.64 ns for a loop. Per the 2021-11-19 commit the numbers come from Go 1.17.3 with GOMAXPROCS 8; CPU model not stated.",
+  "status_note": "Small (about 200 lines of decode logic), MIT-licensed and easy to vendor; untouched from 2021 until a 2026-05-01 commit that only adds tests, so treat it as finished rather than actively developed.",
+  "sources_read": [
+    "https://github.com/dennwc/varint",
+    "https://github.com/dennwc/varint/commits",
+    "https://github.com/dennwc/varint/issues?q=is%3Aissue",
+    "https://github.com/dennwc/varint/tree/master/.github/workflows",
+    "https://github.com/dennwc/varint/commit/68362ad",
+    "https://github.com/dennwc/varint/commit/44109b0",
+    "https://raw.githubusercontent.com/dennwc/varint/HEAD/README.md",
+    "https://raw.githubusercontent.com/dennwc/varint/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/dennwc/varint/HEAD/go.mod",
+    "https://raw.githubusercontent.com/dennwc/varint/HEAD/varint.go",
+    "https://raw.githubusercontent.com/dennwc/varint/HEAD/varint_test.go",
+    "https://raw.githubusercontent.com/dennwc/varint/HEAD/proto.go",
+    "https://raw.githubusercontent.com/dennwc/varint/HEAD/proto_test.go",
+    "https://raw.githubusercontent.com/dennwc/varint/HEAD/.github/workflows/ci.yml"
+  ],
+  "confidence": 0.75
+}

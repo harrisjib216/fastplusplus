@@ -29,3 +29,5 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - Velox discussion #4918 "[Design] AVX-512 bitpack optimization" (facebookincubator/velox). From apache/orc enricher.
 - gildor2/fast_zlib, jtkukunas/zlib (Intel zlib fork): not catalogued in wave 9. From matbech/zlib enricher.
 - Paper-access retier candidate: ZipNN (arXiv 2411.05239, IEEE CLOUD 2025) could move C to B. From verify batch-49.
+- arXiv 2604.11338 "Wavelet Forests Revisited" (snippet only; paper-access retier for wavelet_forest). From enricher.
+- Ports of FastPFOR: ronanh/intcomp (Go), Genbox/CSharpFastPFOR, reducedb/encoding (Go). Duplicates if found. From JavaFastPFOR enricher.

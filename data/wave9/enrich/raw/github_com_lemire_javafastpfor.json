@@ -1,0 +1,55 @@
+{
+  "id": "https://github.com/lemire/javafastpfor",
+  "one_liner": "Java integer-array codecs (FastPFOR, binary packing, OptPFD, Simple9) that decode 2.7x-4x faster than VariableByte and Kamikaze PForDelta.",
+  "what_it_does": "Compresses int[] arrays of small values or small gaps, such as posting lists and column-store integers, into int[] buffers. You can pick a codec class directly (FastPFOR, FastPFOR128, BinaryPacking, NewPFD, OptPFD, Simple9/16, VariableByte), use IntCompressor/IntegratedIntCompressor for a simple array-in, array-out call, or use the differential package for sorted input. The low-level API is IntegerCODEC.compress/uncompress(int[] in, IntWrapper inpos, int len, int[] out, IntWrapper outpos): the caller preallocates the output, and block codecs are chained with Composition(new FastPFOR(), new VariableByte()) to handle the tail.",
+  "how_it_is_fast": "FastPFOR is patched frame-of-reference coding. Per 256-integer block it picks a bit width b by a cost model (getBestBFromData), bit-packs all values with b bits using unrolled 32-integer fastpack/fastunpack routines, and stores the high bits of outliers as exceptions grouped by width and bit-packed per page of 65,536 integers. Most of the decode is straight-line shift/mask code with no per-integer branches, which the JIT compiles well; the 'Integrated' codecs also fold the delta/prefix-sum into the unpack loop. An optional vector package (VectorFastPFOR, VectorBitPacker) uses the incubating Java Vector API.",
+  "when_to_use": [
+    "JVM search engines, OLAP stores and inverted indexes that hold sorted docID or posting lists as int[] (the same niche as Pinot, Terrier and NiFi, which the README lists as users).",
+    "Arrays of thousands of integers or more where most values or gaps need far fewer than 32 bits; FastPFOR copes with occasional large outliers better than plain binary packing.",
+    "Decode-heavy workloads: in the 2013 run FastPFOR+VariableByte decoded 811 M ints/s at 2.78 bits/int versus 299 M ints/s at 8 bits/int for VariableByte.",
+    "Sorted input where you want the fastest decode: IntegratedBinaryPacking+IntegratedVariableByte reached 1,183 M ints/s, close to the 1,468 M ints/s of a plain copy."
+  ],
+  "when_not_to_use": [
+    "C or C++ code: use the C++ FastPFor library (already catalogued), which also has SIMD codecs that this port lacks.",
+    "Short arrays (under about 1,024 integers, per the FastPFOR javadoc) or random 32-bit values; random integers do not compress.",
+    "Older JVMs: current releases are built with maven.compiler.release 21, so they need JDK 21 or later (releases up to 0.1.12 ran on Java 7).",
+    "Relying on the vector codecs for speed: issue #53 ('vector implementation is slower than the scalar one', Nov 2022) is still open, and the README warns that on aarch64 before JDK 24 the Vector API fallback is slower than the scalar codec.",
+    "Long (64-bit) values: the codecs work on int[] only (issue #30 asked about long support)."
+  ],
+  "integration": {
+    "form": "Maven/Gradle jar (me.lemire.integercompression:JavaFastPFOR on Maven Central, also JitPack)",
+    "dependencies": "none at runtime (JUnit and RoaringBitmap are test-scope only); the vector package needs --add-modules jdk.incubator.vector",
+    "min_toolchain": "JDK 21 for current releases (pom release 21; 0.3.14 tagged 2026-06-24); Java 7 for releases up to 0.1.12",
+    "platforms": "any JVM; vector codecs want x86-64 AVX2/AVX-512 or aarch64 on JDK 24+",
+    "thread_safety": "Instances hold mutable scratch buffers (FastPFOR keeps dataTobePacked, dataPointers and a direct ByteBuffer), so the README says to use one codec per thread.",
+    "drop_in_for_baseline": "partial: it uses the same IntegerCODEC interface as the library's VariableByte, so swapping codecs is a one-line change, but the formats are not interchangeable, and it is not API-compatible with Kamikaze PForDelta."
+  },
+  "gotchas": [
+    "FastPFOR, FastPFOR128 and BinaryPacking compress only the largest multiple of their block size and silently ignore the rest. Wrap them in Composition(..., new VariableByte()) or use IntCompressor, or the tail is lost.",
+    "Plain codecs do not apply delta coding: call Delta.delta on sorted lists first, or use the Integrated* codecs in the differential package, which need sorted input.",
+    "Reusing one FastPFOR128 instance can give different compressed bytes for the same input (issue #59, closed with no linked fix). From reading the code: dataTobePacked is not cleared between calls, so stale exception values fill the padding bits of the last packed word. Decoding still works, but byte-for-byte golden tests and content hashing of the output can fail.",
+    "Decoders trust their input: sizes and bit widths come from the stream without validation, so corrupt or hostile data raises ArrayIndexOutOfBounds or BufferOverflow exceptions or forces large allocations rather than returning an error. Each FastPFOR instance also allocates about 66 KB of direct (off-heap) memory."
+  ],
+  "pick_this_over_siblings_when": "Pick it when you are on the JVM and want pure-Java code with no JNI. Its C++ parent FastPFor and simdcomp/TurboPFor are faster but need native code, and TurboPFor's Java wrapper is GPL. Pick VTEnc or Stream VByte in C/C++ instead when you can call native code.",
+  "verified_claims_summary": "benchmarkresults_icore7_10may2013.txt (an unspecified Core i7 with an unspecified JVM and flags, May 2013) measures synthetic clustered sorted arrays at sparsity 1, with delta coding inside the timed region. Each codec runs three times and only the third run is reported, as JIT warm-up, and every round trip is checked. Decode speeds: FastPFOR+VariableByte 811 M ints/s, IntegratedBinaryPacking 1,183 M ints/s, VariableByte 299 M ints/s, Kamikaze PForDelta 262 M ints/s. Those numbers predate the FastPFOR bug fixes of November 2013 and February 2014 and the September 2014 format change, so today's code has never been timed against them.",
+  "status_note": "Actively maintained under fast-pack (Apache-2.0, releases 0.3.5 to 0.3.14 between October 2025 and June 2026), but the published benchmark is 13 years old, the CHANGELOG stops at 0.1.10 (2016), and the README's dependency snippet still shows 0.3.8.",
+  "sources_read": [
+    "https://github.com/fast-pack/JavaFastPFOR",
+    "https://github.com/fast-pack/JavaFastPFOR/issues?q=is%3Aissue",
+    "https://github.com/fast-pack/JavaFastPFOR/issues/53",
+    "https://github.com/fast-pack/JavaFastPFOR/issues/59",
+    "https://github.com/fast-pack/JavaFastPFOR/tags",
+    "https://github.com/fast-pack/JavaFastPFOR/tree/master/src/main/java/me/lemire/integercompression",
+    "https://github.com/fast-pack/JavaFastPFOR/tree/master/src/main/java/me/lemire/integercompression/vector",
+    "https://raw.githubusercontent.com/fast-pack/JavaFastPFOR/HEAD/README.md",
+    "https://raw.githubusercontent.com/fast-pack/JavaFastPFOR/HEAD/pom.xml",
+    "https://raw.githubusercontent.com/fast-pack/JavaFastPFOR/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/fast-pack/JavaFastPFOR/HEAD/CHANGELOG",
+    "https://raw.githubusercontent.com/fast-pack/JavaFastPFOR/HEAD/benchmarkresults/benchmarkresults_icore7_10may2013.txt",
+    "https://raw.githubusercontent.com/fast-pack/JavaFastPFOR/HEAD/src/main/java/me/lemire/integercompression/benchmarktools/Benchmark.java",
+    "https://raw.githubusercontent.com/fast-pack/JavaFastPFOR/HEAD/src/main/java/me/lemire/integercompression/FastPFOR.java",
+    "https://raw.githubusercontent.com/fast-pack/JavaFastPFOR/HEAD/src/main/java/me/lemire/integercompression/FastPFOR128.java",
+    "https://raw.githubusercontent.com/fast-pack/JavaFastPFOR/HEAD/src/main/java/me/lemire/integercompression/VariableByte.java"
+  ],
+  "confidence": 0.75
+}
