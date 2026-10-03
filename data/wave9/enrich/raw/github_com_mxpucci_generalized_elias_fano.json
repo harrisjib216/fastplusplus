@@ -1,0 +1,69 @@
+{
+  "id": "https://github.com/mxpucci/generalized-elias-fano",
+  "one_liner": "Elias-Fano-style compressed integer arrays for unsorted sequences, with O(1) random access; claims smaller than ALP, LeCo and DAC.",
+  "what_it_does": "Compresses an arbitrary (non-monotone, possibly signed) integer sequence such as a time series and still lets you read any element in constant time. The API is a set of class templates (gef::B_GEF<T>, B_STAR_GEF<T>, U_GEF<T>, RLE_GEF<T>, plus *_APPROXIMATE variants) built from a std::vector<T>, with operator[], get_elements(start, count, buffer) for range decoding, size_in_bytes(), and serialize()/load(). It is a read-only compressed container, not a drop-in std::vector: no mutation, no iterators.",
+  "how_it_is_fast": "Each value minus the sequence minimum is split at a chosen bit b into low bits (stored verbatim in an sdsl int_vector L) and high bits. In B_GEF, small up/down changes between consecutive high parts are written in unary into two gap bitvectors (G+ and G-), while large jumps are flagged in an exception bitvector B and stored in full in H; rank/select over these pasta bitvectors gives O(1) access. b is chosen per partition (default 32,000 elements) by exhaustive search (OPTIMAL) or a closed-form estimate (APPROXIMATE); partitions are built in parallel with OpenMP, and range decoding batch-decodes the unary gaps 64 at a time with ctz/prefetch and AVX2 or NEON bit writers.",
+  "when_to_use": [
+    "Large read-mostly arrays of 32/64-bit integers with locally smooth values (sensor or financial time series, fixed-point floats) where you need random access without decompressing blocks.",
+    "Replacing block compressors (zstd/brotli per block) or fixed-width bit packing when point lookups dominate and space matters more than build time.",
+    "Workloads that decode long ranges: get_elements streams partitions and goes multi-threaded with OpenMP for spans of at least 100,000 elements across 4 or more partitions.",
+    "GPL-compatible projects already using sdsl-lite, where the extra dependency costs nothing."
+  ],
+  "when_not_to_use": [
+    "Proprietary or Apache-only codebases: the GEF code is Apache-2.0, but it links sdsl-lite (GPLv3 or later) and pasta bit_vector (GPLv3), so any binary built with it is effectively GPLv3.",
+    "Sorted sequences or rank/select bitvectors: plain or partitioned Elias-Fano, or LA-vector, are the established choices there.",
+    "Data that changes: there is no append or update; you rebuild the whole structure.",
+    "When you need independently checked numbers: the ALP/LeCo/DAC/Brotli/Xz comparisons live only on the first-party project site (gef.di.unipi.it, not opened here); the repo's benchmarks and plots cover GEF variants only and ship no datasets.",
+    "MSVC or other compilers without __int128 and __builtin_* (the README lists MSVC 2019+, but the headers use unsigned __int128 and GCC builtins)."
+  ],
+  "integration": {
+    "form": "header-only templates exposed as a CMake INTERFACE target (gef::gef), but it links the compiled sdsl-lite library",
+    "dependencies": "sdsl-lite (fetched from simongog/sdsl-lite master and patched at configure time), vigna/sux (master), pasta-toolbox/bit_vector (main, pulls tlx), optional OpenMP; googletest and Google Benchmark 1.8.3 for tests/benchmarks",
+    "min_toolchain": "C++20, CMake 3.14+; GCC or Clang (README says GCC 10+/Clang 10+/MSVC 2019+, but CI builds only GCC on Alpine and needs -Wno-error=template-body and CMAKE_POLICY_VERSION_MINIMUM=3.14)",
+    "platforms": "x86-64 (BMI1/AVX2 paths) and AArch64 (NEON path) with scalar fallback via GEF_DISABLE_SIMD; CI builds Linux x86-64 only",
+    "thread_safety": "not documented; const accessors appear read-only, and construction plus large get_elements calls use OpenMP threads internally",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Linking gef::gef injects -O3 -march=native -ffast-math -funroll-loops into every consumer target's Release compile (INTERFACE compile options), changing your floating-point semantics and making binaries CPU-specific unless you override GEF_TARGET_ARCH and strip the flags.",
+    "Dependencies are fetched from unpinned master/main branches (sdsl-lite, sux, pasta) and sdsl-lite's CMakeLists is rewritten at configure time, so builds are not reproducible; CI only checks that test binaries exist and never runs them.",
+    "The partition size K is a template parameter that serialize() does not store: loading a file with a different K silently gives wrong indexing. The format is raw native-endian size_t/T writes, and load() trusts the stream (no bounds or consistency checks), so treat serialized files as trusted input only.",
+    "operator[] on the top-level classes throws std::out_of_range, but the internal partition decoders have no bounds checks; signed 64-bit inputs spanning more than 2^63 rely on signed overflow in the base + offset reconstruction (long long), which is undefined behaviour without -fwrapv."
+  ],
+  "pick_this_over_siblings_when": "Pick it over LA-vector when the integers are not sorted (LA-vector and Elias-Fano need monotone input); for sorted posting lists or rank/select bitvectors use LA-vector, CPEF or the rank/select siblings instead.",
+  "verified_claims_summary": "The headline numbers (up to 42.83% smaller than ALP, LeCo and DAC; near Brotli/Zstd ratios with O(1) access; up to 500x faster compression than Brotli, Xz and NeaTS; over 1 GB/s) come only from a search snippet of the authors' site, with no compiler or CPU for the baseline runs. The repo's own Google Benchmark JSON (bench_partition_size_tradeoff, 72-CPU 3.7 GHz host, Release) shows B_GEF alone at, for example, 10.5 bits per element on AP.bin and 9.3 on CT.bin (64-bit inputs) with single-thread compression around 70-170 MB/s at 8,000-element partitions; the >1 GB/s figure matches only the multi-threaded throughput plot (up to about 5,000 MB/s).",
+  "status_note": "Active (last commit 2026-02-01, 136 commits, 4 stars), research-grade code from the University of Pisa; Apache-2.0 on its own but GPLv3 in practice through sdsl-lite and pasta, and no tagged release.",
+  "sources_read": [
+    "https://github.com/mxpucci/generalized-elias-fano",
+    "https://github.com/mxpucci/generalized-elias-fano/tree/main/include",
+    "https://github.com/mxpucci/generalized-elias-fano/tree/main/include/gef",
+    "https://github.com/mxpucci/generalized-elias-fano/tree/main/tests",
+    "https://github.com/mxpucci/generalized-elias-fano/tree/main/plots",
+    "https://github.com/mxpucci/generalized-elias-fano/tree/main/scripts",
+    "https://github.com/mxpucci/generalized-elias-fano/tree/main/.github/workflows",
+    "https://raw.githubusercontent.com/mxpucci/generalized-elias-fano/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/mxpucci/generalized-elias-fano/HEAD/include/gef/gef.hpp",
+    "https://raw.githubusercontent.com/mxpucci/generalized-elias-fano/HEAD/include/gef/B_GEF.hpp",
+    "https://raw.githubusercontent.com/mxpucci/generalized-elias-fano/HEAD/include/gef/B_STAR_GEF.hpp",
+    "https://raw.githubusercontent.com/mxpucci/generalized-elias-fano/HEAD/include/gef/U_GEF.hpp",
+    "https://raw.githubusercontent.com/mxpucci/generalized-elias-fano/HEAD/include/gef/RLE_GEF.hpp",
+    "https://raw.githubusercontent.com/mxpucci/generalized-elias-fano/HEAD/include/gef/UniformPartitioning.hpp",
+    "https://raw.githubusercontent.com/mxpucci/generalized-elias-fano/HEAD/include/gef/FastUnaryDecoder.hpp",
+    "https://raw.githubusercontent.com/mxpucci/generalized-elias-fano/HEAD/include/gef/FastBitWriter.hpp",
+    "https://raw.githubusercontent.com/mxpucci/generalized-elias-fano/HEAD/include/gef/gap_computation_utils.hpp",
+    "https://raw.githubusercontent.com/mxpucci/generalized-elias-fano/HEAD/benchmarks/CMakeLists.txt",
+    "https://raw.githubusercontent.com/mxpucci/generalized-elias-fano/HEAD/tests/CMakeLists.txt",
+    "https://raw.githubusercontent.com/mxpucci/generalized-elias-fano/HEAD/run_benchmarks.sh",
+    "https://raw.githubusercontent.com/mxpucci/generalized-elias-fano/HEAD/.github/workflows/build-linux.yml",
+    "https://raw.githubusercontent.com/mxpucci/generalized-elias-fano/HEAD/benchmark_results/benchs_st/B_GEF.json",
+    "https://raw.githubusercontent.com/mxpucci/generalized-elias-fano/HEAD/plots/compression_ratio_by_compressor.pdf",
+    "https://raw.githubusercontent.com/mxpucci/generalized-elias-fano/HEAD/plots/compression_throughput_by_compressor_st.pdf",
+    "https://raw.githubusercontent.com/mxpucci/generalized-elias-fano/HEAD/plots/compression_throughput_by_compressor_mt.pdf",
+    "https://raw.githubusercontent.com/simongog/sdsl-lite/master/COPYING",
+    "https://raw.githubusercontent.com/pasta-toolbox/bit_vector/main/LICENSE",
+    "https://raw.githubusercontent.com/pasta-toolbox/bit_vector/main/README.md",
+    "https://raw.githubusercontent.com/vigna/sux/master/README.md",
+    "WebSearch: \"Generalized Elias-Fano\" compressed index arbitrary integer sequences (snippet of gef.di.unipi.it; page not opened)"
+  ],
+  "confidence": 0.7
+}

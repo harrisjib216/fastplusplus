@@ -1,0 +1,55 @@
+{
+  "id": "https://github.com/jermp/clustered_elias_fano_indexes",
+  "one_liner": "Research inverted-index codec that encodes clusters of posting lists against a shared reference list; smaller than partitioned Elias-Fano.",
+  "what_it_does": "Compresses docID/frequency posting lists of an inverted index by grouping similar lists into clusters, building one reference list per cluster, and encoding each list's overlap with the reference as positions into it plus a residual list. It ships as the paper's experiment code on top of ds2i: command-line tools (compute_clusters, create_clustered_freq_index_fb / _sb, create_freq_index, queries) that read ds2i binary collections and write a memory-mappable index. There is no library API beyond the ds2i-style clustered_freq_index class with operator[] returning a document_enumerator (next, next_geq, freq).",
+  "how_it_is_fast": "The gain is space, not speed. Each list is split into the part shared with the cluster's reference list (stored as a 'mapped intersection': ranks inside the reference, a much smaller universe) and a residual; both segments are encoded with partitioned Elias-Fano (optimal_partition from ds2i), so next_geq still works by skipping in both segments and merging. Reference lists are chosen per cluster either by docID frequency in the cluster (fb) or by bits saved (sb), and compute_clusters splits lists recursively with 2-means (k-means++ seeding, 1 - cosine similarity over inverse-term-frequency weighted docIDs) restricted to postings in Elias-Fano-coded blocks.",
+  "when_to_use": [
+    "Read-only inverted index (Gov2/ClueWeb-style docID + frequency postings) where index size matters more than build time and you can afford a clustering step.",
+    "Reproducing or extending the TOIS 2017 clustered Elias-Fano experiments inside a ds2i-derived codebase.",
+    "Collections with many long, overlapping posting lists, where a shared reference list removes redundancy that per-list codecs (PEF, BIC) cannot see."
+  ],
+  "when_not_to_use": [
+    "As a general integer or bitvector library: it is tied to ds2i's posting-list formats, Boost and command-line tools, with no standalone API or packaging.",
+    "When query latency is the priority: decoding merges two Elias-Fano segments plus a reference lookup per posting, and the README publishes no query-time numbers against PEF.",
+    "Updatable indexes: construction is offline and needs the whole collection plus a positions file and a gzip'd cluster file.",
+    "New projects needing modern toolchains: the build forces -std=c++11, uses std::result_of and std::iterator (removed or deprecated in later standards), Boost.Thread experimental executors, and was tested only with gcc 5.4.1 on Ubuntu."
+  ],
+  "integration": {
+    "form": "source-drop (CMake-built executables plus headers; no installable library)",
+    "dependencies": "Boost >= 1.58 (iostreams, unit_test_framework, filesystem, system, thread), git submodules ot/succinct, ot/FastPFor and stxxl",
+    "min_toolchain": "C++11, CMake >= 2.8; tested only with gcc 5.4.1 on Linux Ubuntu",
+    "platforms": "Linux x86-64 tested (builds with -march=native, uses mmap/posix_madvise); others not documented",
+    "thread_safety": "not documented; building uses a Boost thread pool sized by DS2I_THREADS, and the mapped index is read-only",
+    "drop_in_for_baseline": "partial: same ds2i collection input format and enumerator interface as ds2i's PEF index (queries.cpp runs both), but needs an extra clustering step and separate build tools"
+  },
+  "gotchas": [
+    "Possible edge-case decoding bug (read in clustered_freq_index.hpp and clustered_sequence.hpp, not reproduced): add_reference writes the reference length only when ceil_log2(size) > 1 and the reader then assumes size 1, so a 2-element reference decodes as length 1; a 1-element reference calls write_gamma_nonzero(0), which underflows to write_gamma(UINT64_MAX). Real clusters with MAX_REF_SIZE around 800,000 should not hit this; run the builders with --check.",
+    "clustered_freq_index::warmup() is an empty stub ('XXX implement this') while ds2i indexes prefetch their lists, so queries.cpp timings of clustered_opt vs PEF are not warmed up the same way.",
+    "No input validation: binary collections, positions and cluster files are trusted (atoi/stoull parsing, unchecked offsets into the mmapped file); a malformed file reads out of bounds. queries.cpp also dereferences argv[1..3] without checking argc.",
+    "README names the positions file test_collection.lists_positions.gz but the example command uses test_collection.plists_positions.gz; scripts/filter_plists.py, which generates positions files for other collections, is Python 2."
+  ],
+  "pick_this_over_siblings_when": "Pick it over Sliced Indexes (jermp/s_indexes) when the goal is the smallest docID+frequency inverted index rather than fast intersections; s_indexes beats PEF on intersection time, while CPEF beats PEF and BIC on bits per posting.",
+  "verified_claims_summary": "On the 244-list Gov2 sample checked into test_data, the README reports 4.23 bits per posting for the clustered index against 5.15 for partitioned Elias-Fano (+17.86%) and 4.60 for Binary Interpolative Coding (+8.04%), all built by this repo's ds2i-based tools with gcc 5.4.1 and -march=native; space does not depend on the CPU, and no CPU model is given. The full Gov2/ClueWeb09 results and any query-time comparison are only in the TOIS 2017 paper, which could not be opened here.",
+  "status_note": "Abandoned since 2018-06-04 (18 commits, 14 stars, no open issues) but Apache-2.0; usable as research code to vendor into a ds2i/PISA-style engine, not as a maintained dependency.",
+  "sources_read": [
+    "https://github.com/jermp/clustered_elias_fano_indexes",
+    "https://github.com/jermp/clustered_elias_fano_indexes/tree/master/scripts",
+    "https://raw.githubusercontent.com/jermp/clustered_elias_fano_indexes/HEAD/README.md",
+    "https://raw.githubusercontent.com/jermp/clustered_elias_fano_indexes/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/jermp/clustered_elias_fano_indexes/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/jermp/clustered_elias_fano_indexes/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/jermp/clustered_elias_fano_indexes/HEAD/clustered_sequence.hpp",
+    "https://raw.githubusercontent.com/jermp/clustered_elias_fano_indexes/HEAD/clustered_freq_index.hpp",
+    "https://raw.githubusercontent.com/jermp/clustered_elias_fano_indexes/HEAD/clustered_index_types.hpp",
+    "https://raw.githubusercontent.com/jermp/clustered_elias_fano_indexes/HEAD/clustered_binary_collection.hpp",
+    "https://raw.githubusercontent.com/jermp/clustered_elias_fano_indexes/HEAD/create_clustered_freq_index_fb.cpp",
+    "https://raw.githubusercontent.com/jermp/clustered_elias_fano_indexes/HEAD/compute_clusters.cpp",
+    "https://raw.githubusercontent.com/jermp/clustered_elias_fano_indexes/HEAD/queries.cpp",
+    "https://raw.githubusercontent.com/jermp/clustered_elias_fano_indexes/HEAD/configuration.hpp",
+    "https://raw.githubusercontent.com/jermp/clustered_elias_fano_indexes/HEAD/integer_codes.hpp",
+    "https://raw.githubusercontent.com/jermp/clustered_elias_fano_indexes/HEAD/util.hpp",
+    "https://raw.githubusercontent.com/jermp/clustered_elias_fano_indexes/HEAD/scripts/filter_plists.py",
+    "WebSearch: \"Clustered Elias-Fano Indexes\" Pibiri Venturini TOIS abstract (snippets of dl.acm.org/doi/10.1145/3052773 and semanticscholar; pages not opened)"
+  ],
+  "confidence": 0.75
+}

@@ -36,3 +36,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - AWRY and genedex: FM-index competitors listed by the QuadRank sibling repo. From AvxWindowFmIndex enricher.
 - tsl::htrie_map (Tessil/hat-trie): possible faster dynamic trie sibling of poplar-trie, not catalogued. From poplar-trie enricher.
 - intel/zlib-accel (zlib-API shim over QPL), intel/iaa-plugin-rocksdb, ivagorRetrocomp/DeLZSA. From QPL/LZSA enricher.
+- NeaTS (learned compressor, GEF baseline): not catalogued. From GEF enricher.
