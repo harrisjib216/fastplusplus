@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/andyschwarzl/gpunufft",
+  "one_liner": "CUDA gridding/NUFFT library for 2D/3D non-Cartesian MRI with MATLAB and Python front ends; GPU alternative to CPU NUFFTs.",
+  "what_it_does": "Computes the forward NUFFT (image to non-uniform k-space) and the adjoint (gridding k-space samples onto a Cartesian grid, inverse FFT, crop, deapodize) for arbitrary 2D and 3D MRI trajectories on one NVIDIA GPU. A GpuNUFFTOperatorFactory precomputes, from the k-space trajectory, a kernel width, a sector width, an oversampling factor and the image size, an operator that can optionally include density compensation and coil sensitivity maps. It is used mainly as a MATLAB object (@gpuNUFFT with mex files) or through Python bindings (pysap-mri, MRI-NUFFT). It is not a general FFT: there is no tolerance parameter and no type-3 transform.",
+  "how_it_is_fast": "Kaiser-Bessel gridding with Beatty et al.'s minimal-oversampling kernel, read from a precomputed radial lookup table held in constant memory or in GPU textures with linear interpolation. Samples are pre-sorted into fixed-size grid sectors (e.g. 8^3) so each thread block caches its sector's data in shared memory and scatters with atomicAdd. A 'balanced' operator precomputes a sector processing order to even out load on clustered trajectories such as radial or spiral centers, and cuFFT does the oversampled FFT.",
+  "when_to_use": [
+    "Iterative 3D non-Cartesian MRI reconstruction (CG-SENSE, compressed sensing) with a fixed trajectory, where the one-time sector precomputation is amortized over many forward/adjoint calls.",
+    "Multi-coil 3D data with sensitivity maps and density compensation built into the operator; in a 2022 cufinufft issue (#126) gpuNUFFT ran 2.1x to 5.65x faster than cufinufft on 3D 128x128x160 data with 1 and 32 coils (tolerances not matched, GPU not stated).",
+    "MATLAB-based MRI pipelines that want a drop-in GPU NUFFT operator object.",
+    "Python MRI work through MRI-NUFFT or pysap-mri, installed from PyPI (the gpuNUFFT package built from the chaithyagr fork)."
+  ],
+  "when_not_to_use": [
+    "General-purpose or 2D NUFFTs with a target accuracy: cuFINUFFT takes an explicit tolerance and, per its paper (seen only as a search snippet), averages 78x faster than gpuNUFFT on type 1 and 5x faster on type 2; the issue #126 reporter also found cufinufft faster in 2D.",
+    "Upstream on current CUDA: the code uses the legacy texture-reference API (texture<> globals, cudaBindTextureToArray), which NVIDIA removed in CUDA 12 (removal known from CUDA release notes, not opened here). Its gencode list stops at sm_75, and CUDA 10/11 build issues (#89, #91) are open. Use the chaithyagr fork, which drops that API and adds sm_80 to sm_120.",
+    "Multi-GPU or concurrent use: one GPU per process (issue #72, open), and the operator state lives in device-global __constant__ symbols (GI, KERNEL[10000]) and global textures.",
+    "Very large 3D problems: indices are 32-bit unsigned int; an overflow on large trajectories (#81) was fixed, while a crash on large 3D matrices (#84) and an out-of-memory report (#68) are still open.",
+    "Codebases without CUDA: there is no CPU fallback; the CPU-side code covers only precomputation."
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "CUDA Toolkit with cuFFT; MATLAB for the default mex build (GEN_MEX_FILES=ON); optional pybind11 Python bindings (GEN_PYTHON_FILES) and Google Test",
+    "min_toolchain": "C++11, CMake 3.12 (FindCUDA), CUDA 8 to 11 for upstream (README says it was tested with CUDA 5.0 and gcc 4.6); CUDA 12 needs the chaithyagr fork",
+    "platforms": "NVIDIA GPUs only; upstream gencode sm_50 to sm_75 plus compute_52/compute_61 PTX for JIT on newer cards; Linux (gcc) and Windows (Visual Studio 2013 Win64) documented",
+    "thread_safety": "not documented; the code keeps per-device global state (__constant__ GI and KERNEL, global texture references), so run one operator at a time per device/process",
+    "drop_in_for_baseline": "partial: it replaces a CPU NUFFT operator in MATLAB or MRI-NUFFT pipelines, but it has its own operator API (kernel width, sector width and oversampling, no tolerance), so outputs differ in accuracy and scaling from FINUFFT/NFFT"
+  },
+  "gotchas": [
+    "Accuracy is set indirectly by kernel width and oversampling factor, not by a tolerance, so speed comparisons against FINUFFT or cuFINUFFT must match error levels; issue #101 ('How to determine the scaling?') is open.",
+    "Single precision by default; double precision requires rebuilding with GPU_DOUBLE_PREC=ON.",
+    "Operator construction sorts samples into sectors (CPU or GPU) and must be redone when the trajectory changes; loadPrecomputedGpuNUFFTOperator reuses saved mappings.",
+    "Host-array calls copy data to and from the device each time and return arrays that must be freed manually; for iterative loops use the GpuArray overloads that keep data on the GPU."
+  ],
+  "pick_this_over_siblings_when": "Pick gpuNUFFT (preferably the chaithyagr fork) for 3D multi-coil MRI operators with coil sensitivities and density compensation built in, where the one reported head-to-head (cufinufft issue #126) favours it. Pick cuFINUFFT (FINUFFT) for general or 2D NUFFTs with a guaranteed tolerance. TRON's README claims 30x over gpuNUFFT, but only for its own trajectory-optimized radial/spiral use.",
+  "verified_claims_summary": "The repo publishes no speed numbers, and the MRI-NUFFT JOSS paper only says cufinufft and gpuNUFFT performed best in its benchmark, which commits no results; a gpuNUFFT Python-binding author co-wrote that paper. One concrete measurement is in cufinufft issue #126 (Jan 2022, GPU and tolerances unstated, gpuNUFFT timings include host-device copies): forward 73.42 ms vs 279.36 ms and adjoint 62.73 vs 132.27 ms on single-coil 128x128x160, and 1582.74 vs 8952.54 ms and 1739.30 vs 4159.96 ms with 32 coils, while the cuFINUFFT paper reports the opposite direction for general-purpose benchmarks.",
+  "status_note": "Upstream has been abandoned since 2022-02-06, with many open build and crash issues; it is MIT-licensed (with a request to cite Knoll et al., ISMRM 2014), and the maintained chaithyagr fork (PyPI gpuNUFFT, recommended by MRI-NUFFT) is the version to adopt.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/andyschwarzl/gpuNUFFT/HEAD/README.md",
+    "https://raw.githubusercontent.com/andyschwarzl/gpuNUFFT/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/andyschwarzl/gpuNUFFT/HEAD/CUDA/CMakeLists.txt",
+    "https://raw.githubusercontent.com/andyschwarzl/gpuNUFFT/HEAD/CUDA/inc/gpuNUFFT_operator.hpp",
+    "https://raw.githubusercontent.com/andyschwarzl/gpuNUFFT/HEAD/CUDA/inc/gpuNUFFT_operator_factory.hpp",
+    "https://raw.githubusercontent.com/andyschwarzl/gpuNUFFT/HEAD/CUDA/inc/config.hpp.cmake",
+    "https://raw.githubusercontent.com/andyschwarzl/gpuNUFFT/HEAD/CUDA/inc/gpuNUFFT_types.hpp",
+    "https://raw.githubusercontent.com/andyschwarzl/gpuNUFFT/master/CUDA/inc/cuda_utils.cuh",
+    "https://raw.githubusercontent.com/andyschwarzl/gpuNUFFT/master/CUDA/inc/gpuNUFFT_kernels.hpp",
+    "https://raw.githubusercontent.com/andyschwarzl/gpuNUFFT/master/CUDA/inc/gpuNUFFT_utils.hpp",
+    "https://raw.githubusercontent.com/andyschwarzl/gpuNUFFT/master/CUDA/src/gpu/std_gpuNUFFT_kernels.cu",
+    "https://raw.githubusercontent.com/andyschwarzl/gpuNUFFT/master/CUDA/src/gpu/atomic/atomic_gpuNUFFT_kernels.cu",
+    "https://github.com/andyschwarzl/gpuNUFFT/tree/master/CUDA/src/gpu",
+    "https://github.com/andyschwarzl/gpuNUFFT/issues?q=is%3Aissue",
+    "https://github.com/andyschwarzl/gpuNUFFT/issues/80",
+    "https://github.com/andyschwarzl/gpuNUFFT/issues/72",
+    "https://raw.githubusercontent.com/chaithyagr/gpuNUFFT/HEAD/README.md",
+    "https://raw.githubusercontent.com/chaithyagr/gpuNUFFT/HEAD/CUDA/CMakeLists.txt",
+    "https://raw.githubusercontent.com/chaithyagr/gpuNUFFT/HEAD/CUDA/src/gpu/std_gpuNUFFT_kernels.cu",
+    "https://github.com/flatironinstitute/cufinufft/issues/126",
+    "https://raw.githubusercontent.com/flatironinstitute/finufft/master/docs/related.rst",
+    "https://raw.githubusercontent.com/flatironinstitute/finufft/master/docs/refs.rst",
+    "https://raw.githubusercontent.com/flatironinstitute/finufft/master/docs/c_gpu.rst",
+    "https://raw.githubusercontent.com/mind-inria/mri-nufft/master/docs/backend.rst",
+    "https://raw.githubusercontent.com/mind-inria/mri-nufft/master/docs/paper-joss/paper.md",
+    "https://github.com/mind-inria/mri-nufft-benchmark",
+    "WebSearch snippet: cuFINUFFT paper arXiv 2102.08463 abstract/summary (page not opened; arxiv.org blocked)"
+  ],
+  "confidence": 0.7
+}

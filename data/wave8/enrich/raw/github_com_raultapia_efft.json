@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/raultapia/efft",
+  "one_liner": "Header-only C++17/Eigen incremental 2D FFT for event cameras; updates an exact spectrum per event instead of rerunning FFTW.",
+  "what_it_does": "Keeps the exact 2D DFT of an N x N binary event frame (N a power of two, fixed at compile time as eFFT<N>) current as events arrive, one at a time or in packets. The API is not FFTW-shaped: you call initialize() (zero frame or an initial matrix), then update(Stimulus{row, col, on/off}) or update(Stimuli) and read the spectrum with getFFT(), which returns a const reference to an Eigen complex-float matrix. Forward transform only; there is no inverse.",
+  "how_it_is_fast": "It stores every intermediate matrix of a 2D radix-2x2 decimation-in-time FFT in a quadtree (log2 N + 1 levels). An event changes one leaf, so only the matrices on that leaf's root path are recomputed. A level of size n costs about n^2 butterfly outputs, so one event costs roughly (4/3) N^2 complex operations, against about N^2 log2 N for a full FFT; this ratio is derived from reading the code, not measured. Events that do not change a pixel's state stop the recomputation, and packet updates partition the events by row and column parity so each shared ancestor matrix is recomputed once per packet, not once per event.",
+  "when_to_use": [
+    "Event-camera (DVS) pipelines that need the full 2D spectrum after every event or small packet, e.g. frequency-domain registration or filtering on 64x64 to 256x256 windows.",
+    "Sparse binary frames where a few pixels toggle between consecutive transforms and you would otherwise rerun a full 2D FFT at each step.",
+    "Packets of tens to thousands of events at 128x128; the TPAMI abstract (seen only as a search snippet) reports under 1 microsecond per event for packets over 40 events and under 0.5 microsecond for packets over 200.",
+    "GPL-compatible C++ or Python projects (pip install efft, nanobind bindings) that already use Eigen."
+  ],
+  "when_not_to_use": [
+    "General FFTs of dense or fully changing data: every update still rewrites the full N x N root matrix, so a from-scratch FFT (FFTW, PocketFFT, KFR) is the right tool.",
+    "Non-binary pixel values: update() can only set a pixel to 0 or 1; arbitrary intensities enter only through initialize(matrix).",
+    "Non-power-of-two or non-square frames, 1D or 3D transforms, inverse transforms or double precision: none is supported (complex float only; issue #1 asked for IFFT code).",
+    "Memory-tight targets: the tree holds (log2 N + 1) x N^2 complex floats plus an N(N+1) twiddle table, about 5 MB at N=256, spread over roughly (4N^2)/3 separately heap-allocated Eigen matrices (figures derived from the code).",
+    "Proprietary or permissively licensed codebases: GPLv3 copyleft."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "Eigen >= 3.4 (Eigen 5 handled); optional FFTW3 >= 3.3.8 with -DEFFT_USE_FFTW3 for ground-truth checks; GTest and Google Benchmark for tests and benchmarks; nanobind for the Python package",
+    "min_toolchain": "C++17, CMake >= 3.20",
+    "platforms": "any with C++17 and Eigen; CI builds and tests on Ubuntu, Windows (MinGW-w64 GCC via MSYS2) and macOS",
+    "thread_safety": "not documented; each eFFT instance holds mutable tree state (copy deleted, move allowed), so one instance per thread or external locking",
+    "drop_in_for_baseline": "partial: it produces the same unnormalized forward 2D DFT as fftw_plan_dft_2d (the tests compare them element-wise), but only for power-of-two square binary frames and through an event-update API, not a plan/execute API"
+  },
+  "gotchas": [
+    "update(Stimuli&) reorders the caller's vector and right-shifts its row/col fields in place, so the packet is unusable afterwards (the tests copy it first); initialize(matrix) likewise overwrites its argument with the transform.",
+    "Within one packet, duplicate events on a pixel resolve to 'on' if any of them is on, regardless of order; it is not last-event-wins.",
+    "No bounds or size checks: row and col are effectively taken modulo N, and no static_assert enforces a power-of-two N.",
+    "Precision is single-precision float. The tests accept a Frobenius-norm difference from FFTW (double) below 0.001 after single events and below 0.1 after packets, for N up to 256."
+  ],
+  "pick_this_over_siblings_when": "Pick eFFT when the input changes sparsely between transforms and you need the full exact spectrum each time. MPSFT and the SFFT library target sparse spectra, PFT and Auto-MPFT compute only a few output coefficients, and SpFFT handles sparse 3D plane-wave input; for ordinary one-shot 2D FFTs, FFTW, PocketFFT or KFR are the choice.",
+  "verified_claims_summary": "No comparative numbers are published in the repo or on any reachable page. benchmarks/efft_benchmark.cpp (Google Benchmark, -O3 -march=native -ffast-math for eFFT) pits eFFT against an FFTW 2D transform rerun after every event or packet with FFTW_ESTIMATE | FFTW_NO_SIMD in double precision (a deliberately weak baseline), and CI runs it without committing results. The only figures seen are absolute eFFT times from the TPAMI abstract snippet, with no CPU named.",
+  "status_note": "Active: 57 commits, last commit 2026-09-22, a TPAMI 2024 and a JORS 2026 paper, a PyPI package (efft 1.0.5) and a Docker image; it is a single small header that is easy to vendor, but GPLv3 limits that to GPL-compatible projects.",
+  "sources_read": [
+    "https://github.com/raultapia/efft",
+    "https://raw.githubusercontent.com/raultapia/efft/HEAD/README.md",
+    "https://raw.githubusercontent.com/raultapia/efft/HEAD/include/efft.hpp",
+    "https://raw.githubusercontent.com/raultapia/efft/HEAD/benchmarks/efft_benchmark.cpp",
+    "https://raw.githubusercontent.com/raultapia/efft/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/raultapia/efft/HEAD/.github/workflows/ci.yaml",
+    "https://raw.githubusercontent.com/raultapia/efft/HEAD/tests/efft_test.cpp",
+    "https://raw.githubusercontent.com/raultapia/efft/HEAD/python/pyproject.toml",
+    "https://github.com/raultapia/efft/issues?q=is%3Aissue",
+    "https://github.com/raultapia/efft/issues/1",
+    "https://pubmed.ncbi.nlm.nih.gov/38954586/ (EGRESS_BLOCKED)",
+    "WebSearch snippets: TPAMI 10.1109/TPAMI.2024.3422209 abstract and JORS 10.5334/jors.642 summary (pages not opened)"
+  ],
+  "confidence": 0.75
+}
