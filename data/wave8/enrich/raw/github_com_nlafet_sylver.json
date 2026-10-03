@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/nlafet/sylver",
+  "one_liner": "Research StarPU task-based sparse Cholesky/LDL^T solver built on SPRAL SSIDS kernels; no published speedup in the repo.",
+  "what_it_does": "Solves large sparse symmetric systems by direct factorization: Cholesky for positive-definite matrices, and LDL^T with 1x1/2x2 pivots for indefinite ones (a disabled, undocumented unsymmetric-pattern LU path also exists). The API is SPRAL/HSL style in Fortran 2003 (sylver_init, then spldlt_analyse, spldlt_factor, spldlt_solve, spldlt_free, then sylver_finalize), with a partial C interface under src/interfaces/C. It reuses SPRAL's analysis and CPU kernels, so it behaves like a different scheduler for SSIDS rather than a drop-in for PARDISO or MA87.",
+  "how_it_is_fast": "The multifrontal factorization is written as a sequential task flow: fronts are split into blocks (block size nb), and each block operation is submitted as a task to StarPU, which builds the DAG and schedules it across CPU cores and, optionally, NVIDIA GPUs (lws or heteroprio schedulers). Indefinite factorization uses A Posteriori Threshold Pivoting (APTP), which factors blocks optimistically and checks stability afterwards, so pivoting does not serialise the column sweep; failed pivots are delayed or redone with TPP. This is the method of Duff-Hogg-Lopez (NLAFET Working Note 21 / SSIDS v2), which per search snippets performs favourably against HSL MA86, HSL MA97 and PARDISO on multicore, but those numbers are for SSIDS, not for this repo.",
+  "when_to_use": [
+    "Research on runtime-system (StarPU) scheduling of sparse direct solvers, as a worked example of an STF multifrontal Cholesky/LDL^T on CPU+GPU nodes.",
+    "Studying or reproducing NLAFET-era APTP and heterogeneous-scheduling results where you need the StarPU variant of SSIDS rather than the OpenMP one.",
+    "Large symmetric indefinite systems on one multicore node with optional NVIDIA GPUs, when you already run StarPU and SPRAL and can tolerate prototype code."
+  ],
+  "when_not_to_use": [
+    "Production solves: the last commit was 2020-05-11, there are no releases, CI was Travis, and no benchmarks or regression results are published; use SPRAL SSIDS, MUMPS, PARDISO or CHOLMOD instead.",
+    "When you need the factors: open issue #2 (March 2020, unanswered) reports that L and D cannot be obtained from spldlt_factorize().",
+    "Unsymmetric systems: the splu path is commented out of the documentation and has no driver beyond splu_test.F90.",
+    "Simple builds: it needs StarPU >= 1.3, a SPRAL submodule pinned to commit f71ab9e (branch 'gpufix'), MeTiS, hwloc, a sequential BLAS/LAPACK, and Fortran, C and C++ compilers, plus CUDA for GPU runs.",
+    "Distributed-memory (MPI) runs: nothing in the README or CMake options offers them."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "StarPU >= 1.3 (or sequential STF runtime), SPRAL (git submodule, built automatically), MeTiS, hwloc, sequential BLAS/LAPACK (MKL/ESSL/OpenBLAS); optional CUDA, CUTLASS, OpenMP",
+    "min_toolchain": "C++11 (CMAKE_CXX_STANDARD 11), Fortran 2003 compiler, CMake; CUDA toolkit for GPU builds",
+    "platforms": "Linux x86-64 and IBM POWER (ESSL recommended there) are implied by the README; NVIDIA GPUs optional; other platforms not documented",
+    "thread_safety": "not documented (parallelism is internal via StarPU; global sylver_init/sylver_finalize suggests one solver context per process)",
+    "drop_in_for_baseline": "partial — API mirrors SPRAL SSIDS's analyse/factor/solve cycle in Fortran, but uses its own spldlt_* names and init/finalize; not a drop-in for PARDISO, MA87 or CHOLMOD"
+  },
+  "gotchas": [
+    "It must be linked against a sequential BLAS/LAPACK (README); a threaded BLAS oversubscribes cores under StarPU.",
+    "It includes SPRAL's internal C++ headers (ssids/cpu/cpu_iface.hxx, ThreadStats.hxx), so it is coupled to the pinned SPRAL submodule commit; building against a current SPRAL release is not documented and may break.",
+    "STARPU_DIR must be set in the environment for FindSTARPU.cmake, and the default runtime is StarPU, so a plain cmake without StarPU fails unless you pass -D SYLVER_RUNTIME=STF.",
+    "The docs claim bit-compatible results, but no test evidence for that is in the repo."
+  ],
+  "pick_this_over_siblings_when": "Choose SPRAL SSIDS, which carries the same APTP kernels in a maintained OpenMP/CUDA library with published comparisons, for real solves; pick SyLVER only to study or extend the StarPU task-based variant. For SPD-only problems with published speedups over CHOLMOD, BaSpaCho or Sympiler are better documented.",
+  "verified_claims_summary": "The repo has no measured result: the README and doc pages only say the DAG algorithms 'enable an efficient exploitation of multicore CPU architectures and GPU-accelerated systems'. The related NLAFET papers (SpLLT vs HSL MA87 on 28 cores, reported only as 'comparable performance'; SSIDS v2 APTP vs MA86/MA97/PARDISO, 'performs favourably') were seen as search snippets only, because nlafet.eu, researchgate and epubs.stfc.ac.uk are blocked here, and they measure sibling codes, not SyLVER.",
+  "status_note": "Abandoned since May 2020 (EU H2020 NLAFET project ended), with 844 commits, 13 stars and one unanswered issue; BSD-3-Clause so copyable, but a research prototype with heavy dependencies.",
+  "sources_read": [
+    "https://github.com/NLAFET/SyLVER",
+    "https://raw.githubusercontent.com/NLAFET/SyLVER/HEAD/README.md",
+    "https://raw.githubusercontent.com/NLAFET/SyLVER/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/NLAFET/SyLVER/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/NLAFET/SyLVER/HEAD/doc/source/purpose.rst",
+    "https://raw.githubusercontent.com/NLAFET/SyLVER/HEAD/doc/source/introduction.rst",
+    "https://raw.githubusercontent.com/NLAFET/SyLVER/HEAD/src/sylver_ciface.hxx",
+    "https://github.com/NLAFET/SyLVER/tree/master/src",
+    "https://github.com/NLAFET/SyLVER/tree/master/examples",
+    "https://github.com/NLAFET/SyLVER/issues?q=is%3Aissue",
+    "https://github.com/orgs/NLAFET/repositories",
+    "https://raw.githubusercontent.com/NLAFET/SpLLT/HEAD/README.md",
+    "WebSearch snippets: aimsciences.org naco.2018014 abstract (SpLLT vs HSL MA87), NLAFET WN21 / RAL-TR-2016-017 abstract (SSIDS APTP vs MA86, MA97, PARDISO)",
+    "Attempted, blocked (CONNECT 403): https://www.nlafet.eu/wp-content/uploads/2017/03/NLAFET-WN14-Duff-Lopez-17-06-13.pdf, https://epubs.stfc.ac.uk/manifestation/30693256/RAL-TR-2016-017.pdf"
+  ],
+  "confidence": 0.6
+}
