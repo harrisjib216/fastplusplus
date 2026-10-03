@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/superscientificsoftwarelaboratory/amgt",
+  "one_liner": "Modified HYPRE 2.31 whose BoomerAMG SpGEMM and SpMV run on tensor cores; beats stock GPU HYPRE with cuSPARSE.",
+  "what_it_does": "AmgT is a research fork of HYPRE 2.31.0 that keeps the BoomerAMG API but swaps the two GPU kernels AMG spends most time in: SpGEMM in the setup phase (Galerkin triple products and interpolation) and SpMV in the solve phase. Callers keep using HYPRE_BoomerAMGSetup/Solve, and nothing in the user-facing API changes. The variant (AmgT FP64, AmgT mixed precision, or plain HYPRE+cuSPARSE as the baseline) is chosen at build time by copying a config header over seq_mv/seq_mv.h. The repo's only driver (AmgT_test/test_new.c) reads a Matrix Market file and runs a fixed BoomerAMG configuration.",
+  "how_it_is_fast": "Matrices are converted lazily, on first use, from CSR to an 'mBSR' format: 4x4 dense blocks, each with a 16-bit occupancy bitmap, stored in the hypre_CSRMatrix struct next to the CSR arrays. SpGEMM uses binned, shared-memory hash-table symbolic passes over block columns. Its numeric pass issues FP64 mma.sync m8n8k4 tensor-core instructions for A-blocks with at least 10 of 16 entries filled, and CUDA-core bitmap arithmetic for sparser blocks. SpMV picks among four kernels by average nonzeros per block (tensor cores at 10 or more) and the standard deviation of blocks per block-row (warp-balanced row splitting at 12 or more). The mixed-precision build runs level-0 products in FP64, level-1 products through TF32 tensor cores (cvt.rna.tf32, mma m16n8k4) and all coarser levels in FP16. Because SpGEMM outputs mBSR directly, the format is reused across levels, which cuts CSR/BSR conversion cost.",
+  "when_to_use": [
+    "You already solve with HYPRE BoomerAMG on NVIDIA A100 (sm_80) or H100 (sm_90) and want faster setup and solve without retuning AMG parameters.",
+    "Matrices whose nonzeros cluster into dense 4x4 blocks (FEM/PDE stencils, multi-DOF problems). The tensor-core paths only fire when blocks average 10 or more of 16 entries.",
+    "Experiments with mixed-precision AMG where coarse levels can tolerate TF32/FP16 operators, inside an outer FP64 iteration that restores accuracy.",
+    "Research baselines: reproducing or extending the SC '24 paper's tensor-core AMG kernels inside a known solver framework."
+  ],
+  "when_not_to_use": [
+    "Production code that needs a maintained library: 7 commits, last on 2024-11-11, three open build/run issues (config file not found, missing HYPRE_krylov.h, cudaErrorInvalidDevice on H100 with CUDA 12.6), none answered.",
+    "AMD or other GPUs: compile.sh builds only CUDA sm_80 or sm_90, and there is no HIP path, though the paper reports MI210 results.",
+    "Very sparse or irregular matrices with little 4x4 block fill: these fall back to CUDA-core bitmap kernels and also pay a 4x4 padding memory cost.",
+    "Accuracy-sensitive solves with the mixed build: level 1 runs in TF32 (10-bit mantissa) and levels 2 and coarser in FP16, which can change convergence.",
+    "Multi-GPU runs: the driver calls cudaSetDevice(0) on every MPI rank, and multi-GPU behaviour is not documented."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "Its own embedded HYPRE 2.31.0 (configured --with-cuda --enable-unified-memory), CUDA toolkit (cuSPARSE, cuBLAS, cuRAND, Thrust), MPI (README asks for OpenMPI 4.0+)",
+    "min_toolchain": "CUDA 12.2+ recommended in the README (compile.sh defaults to /usr/local/cuda-12.0); mpicc; NVIDIA compute capability 8.0+",
+    "platforms": "Linux, NVIDIA A100 (sm_80) or H100 (sm_90) only as built by compile.sh",
+    "thread_safety": "Not documented. The modified HYPRE keeps non-atomic global timing counters (time_spmv_sum, spgemm_times, csr2bsr_step*) and lazily attaches the mBSR copy to the matrix, so treat it as single-threaded per process.",
+    "drop_in_for_baseline": "partial: same HYPRE/BoomerAMG API, but you must build and link this modified HYPRE in place of stock HYPRE, and the variant is fixed at compile time"
+  },
+  "gotchas": [
+    "The test driver builds and configures a PCG solver (tol 1e-5, 300 iterations) but never uses it. The timed run is standalone BoomerAMGSetup plus BoomerAMGSolve with tol 1e-20 and max 50 iterations, i.e. a fixed 50 V-cycles, PMIS coarsening, Jacobi (relax 18) and extended+i interpolation. This corrects the verifier's 'PCG with BoomerAMG preconditioner' reading.",
+    "compile.sh ships with execuative=cuSPARSE, so running it unchanged builds the baseline, not AmgT. It also contains a broken 'chmod -R *' line and an unquoted CUDA_ARCH export.",
+    "The AmgT SpMV entry (spmv_amgT_fp64/fp32/fp16) takes HYPRE's trans flag but never branches on it. It is correct inside BoomerAMG only because HYPRE's GPU default keeps explicit transposes (keepT = 1 in par_amg.c). Disabling KeepTranspose, or calling ParCSRMatrixMatvecT on a matrix without a stored transpose, would route a transposed product into a kernel that computes A*x.",
+    "The mBSR copy is built once (bsr_tag set on first SpMV or SpGEMM) and I found no code that invalidates it, so changing a matrix's values in place after first use is risky. Every kernel launch is followed by cudaDeviceSynchronize."
+  ],
+  "pick_this_over_siblings_when": "Pick AmgT over Ginkgo or AMGCL only if you are committed to HYPRE BoomerAMG on A100/H100 and can carry a research fork; Ginkgo and AMGCL are maintained libraries with their own AMG. For a standalone tensor-core SpMV or SpGEMM kernel, use DASP or TileSpGEMM from the same lab. apxchol is the catalogued option that beats BoomerAMG with a different (approximate-Cholesky) method on Laplacian/SDDM systems.",
+  "verified_claims_summary": "Per a search-engine snippet of the SC '24 abstract (paper not opened: dl.acm.org and ieeexplore are blocked here), AmgT beats the original GPU HYPRE by geomean 1.46x on A100, 1.32x on H100 and 2.24x on MI210 (maximums 2.10x, 2.06x, 3.67x). The snippet does not say whether these are setup, solve or total times, or whether they are FP64 or mixed precision. The repo reproduces only the NVIDIA comparison: it builds stock HYPRE 2.31 with cuSPARSE SpGEMM/SpMV (HYPRE's default vendor path) against the AmgT builds and times setup and the 50-cycle solve separately with gettimeofday; it holds no result tables, and host CPU and matrix list are not stated.",
+  "status_note": "Stale research code (7 commits, last 2024-11-11, 9 stars, issues unanswered). It is Apache-2.0 at the top level, with HYPRE's own Apache-2.0/MIT files embedded, so the kernels are copyable, but expect build fixes before it runs.",
+  "sources_read": [
+    "https://github.com/SuperScientificSoftwareLaboratory/AmgT",
+    "https://github.com/SuperScientificSoftwareLaboratory/AmgT/tree/main/config_files",
+    "https://github.com/SuperScientificSoftwareLaboratory/AmgT/issues",
+    "https://github.com/SuperScientificSoftwareLaboratory/AmgT/issues/1",
+    "https://github.com/SuperScientificSoftwareLaboratory/AmgT/issues/2",
+    "https://github.com/SuperScientificSoftwareLaboratory/AmgT/issues/3",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/AmgT/HEAD/README.md",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/AmgT/HEAD/compile.sh",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/AmgT/HEAD/AmgT_test/test_new.c",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/AmgT/HEAD/AmgT_test/Makefile",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/AmgT/HEAD/config_files/AmgT_FP64.h",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/AmgT/HEAD/config_files/AmgT_Mixed.h",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/AmgT/HEAD/config_files/cuSPARSE.h",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/AmgT/HEAD/AmgT_HYPRE/src/seq_mv/csr_matvec_device.c",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/AmgT/HEAD/AmgT_HYPRE/src/seq_mv/csr_spgemm_device.c",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/AmgT/HEAD/AmgT_HYPRE/src/parcsr_mv/par_csr_matvec.c",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/AmgT/HEAD/AmgT_HYPRE/src/parcsr_mv/par_csr_matvec_device.c",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/AmgT/HEAD/AmgT_HYPRE/src/parcsr_ls/par_amg.c",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/AmgT/HEAD/AmgT_HYPRE/src/utilities/device_utils.c",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/AmgT/HEAD/AmgT_HYPRE/src/utilities/handle.c",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/AmgT/HEAD/AmgT_HYPRE/src/utilities/general.c"
+  ],
+  "confidence": 0.62
+}

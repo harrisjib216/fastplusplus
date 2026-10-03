@@ -1,0 +1,55 @@
+{
+  "id": "https://github.com/superscientificsoftwarelaboratory/dasp",
+  "one_liner": "CUDA SpMV that repacks CSR rows into 8x4 tiles for FP64/FP16 tensor-core MMA; beats cuSPARSE CSR SpMV on A100.",
+  "what_it_does": "DASP is the SC '23 research code for general sparse matrix-vector multiply (y = Ax) on NVIDIA tensor cores, not a library. It ships as two benchmark programs (make double, make half). Each reads a Matrix Market file, overwrites every matrix value and x entry with 1.0, times cuSPARSE CSR SpMV and then DASP, and appends the results to data/spmv_f64_record.csv (or spmv_f16_record.csv). To use DASP you would lift the host function spmv_all (preprocessing, allocation, timing and teardown in one call) and the dasp_spmv2 / longPart_sum kernels out of src/dasp_f64.h or dasp_f16.h. There is no reusable API that separates analysis from execution.",
+  "how_it_is_fast": "On the host, rows are bucketed by length: long rows (256 or more nonzeros), medium 'row-block' rows (5 to 255), and short rows (1 to 4). Medium rows are sorted and grouped into 8-row blocks, then cut into 4-column chunks. A chunk that is at least 75% full goes to a dense part computed with FP64 mma.sync m8n8k4 (x gathered into the B fragment); the remainder goes to a CSR part handled on CUDA cores. Long rows are split into 64-nonzero pieces, one warp each (two MMAs), followed by a separate warp-reduction kernel. Short rows are packed in pairs (1+3, 2+2) or alone (4) so they fill MMA tiles. A single fused kernel covers all parts. It uses streaming cache hints (ld.global.cs), sets the shared-memory carveout to 0 to maximise L1, and processes 1, 2 or 4 row-blocks per warp depending on the row-block count.",
+  "when_to_use": [
+    "Iterative solvers on A100/H100-class GPUs with strong FP64 tensor cores, where one matrix is multiplied thousands of times and the CPU-side reordering is amortised.",
+    "Matrices whose medium-length rows sort into dense 8x4 tiles (many rows of similar length); these are the cases the MMA path is built for.",
+    "Matrices that are mostly L2-resident: an independent study (search snippet) found DASP's advantage over cuSPARSE holds for cache-resident data.",
+    "FP16 SpMV where half-precision accumulation is acceptable."
+  ],
+  "when_not_to_use": [
+    "One-off or few SpMVs: the row classification, sorting and zero-padding run single-threaded on the host and are excluded from the timed loop.",
+    "Matrices much larger than L2: the 'Can Tensor Cores Benefit Memory-Bound Kernels? (No!)' study (snippet only) reports cuSPARSE faster than DASP on average there, and GitHub issue #4 reports DASP slower than cuSPARSE on many matrices on an A100, including bibd_20_10.",
+    "GPUs with weak FP64 tensor cores such as the RTX 4090: CB-SpMV (ICS '25) measured a CUDA-core block format 2.76x faster than DASP on average there, versus 1.21x on A100.",
+    "Code that needs y in original row order with no extra pass, or a maintained, validated kernel: open issues #1 (wrong results when run for only one iteration) and #3 (wrong result on mip1) have no maintainer reply.",
+    "Proprietary or hosted software that cannot accept AGPL-3.0 copyleft."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "CUDA toolkit (cuSPARSE and cuBLAS are linked for the baseline); host compiler with -fopenmp-simd",
+    "min_toolchain": "Makefile pins nvcc from CUDA 12.0 with host gcc 12.2 (absolute /usr/local paths); FP64 mma.sync m8n8k4 needs compute capability 8.0+",
+    "platforms": "Linux, NVIDIA GPUs; the Makefile builds only sm_80 (A100). The paper also reports H800, and CB-SpMV ran it on an RTX 4090.",
+    "thread_safety": "not documented; spmv_all is a monolithic host routine that allocates, converts, times and frees on every call",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The output vector is permuted: y comes out ordered as long rows, then row-block rows, then short-row groups, and order_rid maps it back. The verify_new() check against cuSPARSE exists, but its call is commented out in both main_f64.cu and main_f16.cu, so the harness never validates results. This corrects the verifier's note that it checks DASP against cuSPARSE. Because initVec sets every matrix value and x entry to 1.0, any check you re-enable runs on all-ones data.",
+    "The FP16 comparison is not like for like. The cuSPARSE baseline stores FP16 but computes in FP32 (CUDA_R_32F compute type). DASP's FP16 kernels use mma m8n8k4 with .f16 accumulators, so DASP accumulates in half precision; with the all-ones inputs, any row with more than 2048 nonzeros already exceeds FP16's exact-integer range.",
+    "Issue #1 (June 2024): with 0 warm-ups and 1 timed iteration the results are wrong but become correct with more iterations; y is cudaMemset only once before the loops. Issue #3 (Sept 2025): wrong result on mip1. Neither has a reply.",
+    "Tuning is hard-coded: long-row cut 256, tile fill threshold 0.75, rows per warp switched at 59,990 and 400,000 row-blocks. The harness writes relative data/*.csv files, and make clean deletes data/*.csv."
+  ],
+  "pick_this_over_siblings_when": "Use DASP over merge-spmv or CSR5 only on A100/H100 when matrices tile densely, fit in L2 and are reused many times. Merge-spmv and CSR5 are more predictable CUDA-core kernels with no reordering. ISpMV is the more recent catalogued option that beats cuSPARSE in FP64 on H100 against CUDA 13 cuSPARSE, and TileSpMV is the same lab's older format that DASP reports beating by 2.09x.",
+  "verified_claims_summary": "A search snippet of the SC '23 abstract (paper not opened; dl.acm.org is blocked) reports, for FP64 on A100, average speedups of 1.52x over cuSPARSE CSR (max 6.94x), 1.46x over CSR5, 2.09x over TileSpMV, 3.29x over LSRB-CSR and 2.08x over cuSPARSE BSR; for FP16 it reports 1.70x (A100) and 1.75x (H800) over cuSPARSE. The repo harness (nvcc 12.0, gcc 12.2, -O3, sm_80) times cuSPARSE ALG_DEFAULT and DASP for 1000 iterations each after 100 warm-ups, on all-ones values, excluding DASP preprocessing and without checking results. Independently, the CB-SpMV ICS '25 paper (FP64, 2,843 SuiteSparse matrices, cuSPARSE 12.4) ran DASP as a baseline and beat it by 1.21x on average on A100 and 2.76x on RTX 4090.",
+  "status_note": "Stale research code (19 commits, last 2024-06-18, 29 stars) with four open, unanswered issues, including two wrong-result reports and a challenge to the speedups (#4). It is AGPL-3.0, so copying it into non-AGPL software is not an option.",
+  "sources_read": [
+    "https://github.com/SuperScientificSoftwareLaboratory/DASP",
+    "https://github.com/SuperScientificSoftwareLaboratory/DASP/tree/main/src",
+    "https://github.com/SuperScientificSoftwareLaboratory/DASP/issues?q=is%3Aissue",
+    "https://github.com/SuperScientificSoftwareLaboratory/DASP/issues/1",
+    "https://github.com/SuperScientificSoftwareLaboratory/DASP/issues/2",
+    "https://github.com/SuperScientificSoftwareLaboratory/DASP/issues/3",
+    "https://github.com/SuperScientificSoftwareLaboratory/DASP/issues/4",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/DASP/HEAD/README.md",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/DASP/HEAD/Makefile",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/DASP/HEAD/src/main_f64.cu",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/DASP/HEAD/src/dasp_f64.h",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/DASP/HEAD/src/main_f16.cu",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/DASP/HEAD/src/dasp_f16.h",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/DASP/HEAD/src/common.h",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/DASP/HEAD/src/utils.h",
+    "https://raw.githubusercontent.com/hpcrl/ICS2025-webpage/main/program/Proceedings_ICS25/ics25-7.pdf"
+  ],
+  "confidence": 0.7
+}
