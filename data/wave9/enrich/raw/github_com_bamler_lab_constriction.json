@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/bamler-lab/constriction",
+  "one_liner": "Rust/Python rANS and range coders with near-optimal bit rates; decodes 6-14x faster than the arcode arithmetic coder.",
+  "what_it_does": "A library of composable stream entropy coders (rANS as a stack, range coding as a queue, an experimental chain coder, plus Huffman for teaching) and fixed-point probability models (quantized Gaussians and other continuous distributions, categorical, lookup tables, custom models). You encode a sequence of symbols, each with its own entropy model, and get back a Vec of u32 (default) or u16 words. It targets learned compression: the same coders and bit-exact formats are exposed to Rust and to Python (NumPy), and the Rust crate also builds to WebAssembly and no_std. It is a coder core, not a file compressor, and has no C or C++ API.",
+  "how_it_is_fast": "Range variant of Asymmetric Numeral Systems (rANS, Duda) with a 64-bit state and 32-bit word renormalization, so decoding is a multiply, a CDF lookup and an occasional word read with few branches; the docs say ANS decoding is more than twice as fast as its range decoder, while ANS encoding pays for an integer division. Word size, state size and PRECISION are compile-time generics, so the inner loops monomorphize to fixed-width integer code. The 'small' presets (12-bit precision, 16/32-bit word/state) enable ContiguousLookupDecoderModel and NonContiguousLookupDecoderModel, which replace the CDF search with a direct table lookup. There is no SIMD or multi-stream interleaving.",
+  "when_to_use": [
+    "Learned or model-based compression (neural codecs, VAEs) where every symbol has its own probability model and you need about 0.002-0.02% bit-rate overhead with the default presets.",
+    "Bits-back coding with latent-variable models: AnsCoder is a stack that allows encoding and decoding to be interleaved arbitrarily and is surjective, so decoding arbitrary bits and re-encoding restores them.",
+    "Autoregressive models that decode in the same order they encode: use the range coder (FIFO) instead of ANS.",
+    "Prototyping in Python and shipping in Rust or WebAssembly with bit-identical output across both.",
+    "Low-entropy symbol streams (well below 1 bit/symbol) where Huffman and other symbol codes waste close to 1 bit per symbol."
+  ],
+  "when_not_to_use": [
+    "Byte-oriented general-purpose entropy coding where you need GB/s throughput: the coders are single-stream and scalar (default ANS decode is 6.1 ns/symbol, roughly 160 M symbols/s on an i7-7500U), well below interleaved SIMD rANS or Huffman decoders such as hypersonic-rANS, htscodecs or Huff0.",
+    "C or C++ projects that cannot take a Rust dependency: there is no C header or C ABI, so you need your own FFI layer.",
+    "When the entropy model dominates: the docs warn that unless you use the lookup decoder models, evaluating the model, not the coder, is usually the bottleneck.",
+    "Python on Linux aarch64: PyPI 0.5.0 ships wheels only for manylinux x86_64, macOS (x86_64 and arm64) and Windows amd64, so other platforms build from source.",
+    "Bits-back coding with the range coder: the docs say it is not surjective, so it cannot be used reliably for that."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "hashbrown, num-traits, smallvec, libm, probability; optional pyo3 and numpy for the Python extension",
+    "min_toolchain": "Rust 1.85 per Cargo.toml rust-version (the README still says 1.75); Python 3.10-3.14 for the 0.5.0 wheels",
+    "platforms": "any Rust target including no_std and WebAssembly; Python wheels for Linux x86_64, macOS x86_64/arm64, Windows amd64",
+    "thread_safety": "not documented; coders are plain owned structs (Vec-backed), so use one coder per thread",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "ANS is LIFO: you must encode symbols in reverse (encode_symbols_reverse / encode_iid_symbols_reverse) to decode them in forward order.",
+    "Default presets (24-bit precision) must not be used with the lookup decoder models: the docs say the tables grow to about 67 MB; use the 12-bit 'small' presets for those, at about 4% bit-rate overhead in the README table.",
+    "Model construction from floating point can differ across architectures: issue #38 reports a panic ('assertion failed: b > 0.0' in the probability crate's Laplace distribution) on ARM for input that encoded fine on amd64; issue #20 reported an infinite loop in optimize_leaky_categorical for inputs like [0.15, 0.69, 0.15] (closed).",
+    "Any change to encoder or decoder output is treated as a breaking change that bumps the leading nonzero version number, so pin the minor version (0.5.x) when compressed data must stay decodable."
+  ],
+  "pick_this_over_siblings_when": "Pick constriction over ryg_rans, htscodecs or hypersonic-rANS when you need per-symbol adaptive models from continuous distributions, bits-back coding or a Python API with matching Rust output, not raw byte throughput; for static byte histograms at GB/s those siblings (or FiniteStateEntropy/Huff0) are far faster. Against torch_ans it is the CPU option with exact fixed-point model quantization rather than a GPU batch decoder.",
+  "verified_claims_summary": "The author's benchmark (bamler-lab/understanding-ans, constriction 0.1.4 against the arcode 0.2.3 Rust crate, cargo run --release, rustc version not stated, Intel Core i7-7500U) encoded and decoded 3-million-symbol i.i.d. messages from 0.001 to 10 bits/symbol: default ANS took 24.2 / 6.1 ns per symbol and default range coding 16.6 / 14.3, against 43.2 / 85.6 for arcode arithmetic coding, all within 0.025% of the entropy. The baseline is a Rust arithmetic coder, not a C or C++ entropy coder, and the numbers predate the current 0.5.0 release.",
+  "status_note": "Actively maintained (0.5.0 released to crates.io and PyPI on 2026-07-17, about 35k crate downloads) and triple-licensed MIT, Apache-2.0 or BSL-1.0, so it is easy to depend on from Rust; use from C++ needs a hand-written FFI shim.",
+  "sources_read": [
+    "https://github.com/bamler-lab/constriction",
+    "https://raw.githubusercontent.com/bamler-lab/constriction/HEAD/README.md",
+    "https://raw.githubusercontent.com/bamler-lab/constriction/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/bamler-lab/constriction/HEAD/src/stream/stack.rs",
+    "https://raw.githubusercontent.com/bamler-lab/constriction/HEAD/src/stream/queue.rs",
+    "https://raw.githubusercontent.com/bamler-lab/constriction/HEAD/src/stream/mod.rs",
+    "https://raw.githubusercontent.com/bamler-lab/constriction/HEAD/src/lib.rs",
+    "https://github.com/bamler-lab/constriction/issues?q=is%3Aissue",
+    "https://github.com/bamler-lab/constriction/issues/38",
+    "https://github.com/bamler-lab/constriction/issues/20",
+    "https://pypi.org/pypi/constriction/json",
+    "https://crates.io/api/v1/crates/constriction"
+  ],
+  "confidence": 0.8
+}

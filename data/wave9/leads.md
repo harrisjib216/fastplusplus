@@ -23,3 +23,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - hpdps-group/mans (C): SC25 Reproducibility Report doi 10.1145/3712285.3769469 (ACM blocked) could give B. (w9 batch 42)
 - CERN 'Exploring compression techniques for ROOT IO' (arXiv 1704.06976, blocked) may hold independent LZHAM numbers. (from LZHAM enricher)
 - arXiv 2509.06900 'Engineering Select Support for Hybrid Bitvectors' (seen only as a search result). (from faster-minuter enricher)
+- richox/orz (libzling successor, not catalogued); smalLZ4, jibsen/blz4, LZ4X (optimal LZ4 encoders, same niche as lz4ultra). From lz4ultra/libzling enricher.

@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/g1mv/density",
+  "one_liner": "Pure-Rust block compressor using 4-byte hashed dictionary units; compresses faster than LZ4 at matching ratios, decompresses slower.",
+  "what_it_does": "Density is a raw in-memory buffer compressor (crate density-rs, formerly a C99 library) with three algorithms: Chameleon (fastest), Cheetah (middle) and Lion (best ratio). The Rust API is Chameleon::encode(&input, &mut output) / Chameleon::decode(...) returning Result<usize, _>, with safe_encode_buffer_size() for sizing the output; since 0.16.6 each algorithm also exports extern \"C\" functions (chameleon_encode, chameleon_decode, chameleon_safe_encode_buffer_size, and the cheetah/lion equivalents). There is no frame or container format: the stream carries no original length or checksum, so the caller must store the decompressed size.",
+  "how_it_is_fast": "It is not an LZ77 matcher: input is read 16 bytes at a time as a u128 and split into four 32-bit 'quads'; each quad is hashed (multiply by 0x9D6EF916, keep the top 16 bits) into a 64K-entry u32 dictionary, and a hit emits a 2-byte hash index while a miss emits the 4 literal bytes, with 1 flag bit per quad packed into a 64-bit signature word. Cheetah adds a second dictionary slot and a predictor, Lion five predictors. There is no match search, no variable-length offsets and no entropy coder, and a 'blowup protection' state machine switches blocks to plain copy when two consecutive blocks fail to shrink.",
+  "when_to_use": [
+    "Compression throughput is the bottleneck and decode volume is similar or lower, e.g. write-heavy logging, snapshotting or spill-to-disk where data is written once and read rarely.",
+    "Large text-like or moderately redundant buffers (tens of MB), where the 4-byte dictionary has time to learn; Cheetah (-2) matches LZ4-default ratio while compressing about 1.4x faster in lzbench 2.4.",
+    "Rust codebases wanting a dependency-free, bounds-checked codec with no unsafe code on the data path, or C/C++ code willing to link a Rust staticlib through the 0.16.6 C functions.",
+    "Incompressible or mixed inputs, where the copy-mode protection keeps output at most 8 bytes per 256-byte block above the input size."
+  ],
+  "when_not_to_use": [
+    "Read-heavy workloads: decompression is 1617 MB/s for Chameleon versus 3832-3977 MB/s for LZ4 on the same lzbench table, so LZ4, LZSSE or ZXC decode 2.4x or more faster.",
+    "When interoperability matters: the format is not standardised, has no framing, length header or checksum, and changed across the C-to-Rust rewrite (0.14.x C streams are a different codebase).",
+    "Small messages: the README says the algorithms 'are less performant on very small datasets' because the 4-byte dictionary learns slowly.",
+    "Untrusted or corrupted input from C/C++: decode never returns an error; malformed data or a too-small output buffer hits a Rust slice bounds check and panics, which through the extern \"C\" functions aborts the process (Rust 1.81+ behavior).",
+    "If you only need one fast-compress point: memlz 0.5 beta in the same lzbench table compresses at 4452 MB/s at 59.90% size, faster and smaller than Density -1 (1630 MB/s, 62.77%)."
+  ],
+  "integration": {
+    "form": "crate (Rust); C callers must build it as a staticlib/cdylib themselves (no header or C build files shipped)",
+    "dependencies": "none at runtime (dev-dependencies divan, snap, lz4_flex for benches only)",
+    "min_toolchain": "Rust 1.85 (edition 2024); lzbench's wrapper crate states 1.85 as Density's minimum",
+    "platforms": "any Rust target; CI tests x86-64 Linux/macOS/Windows (MSVC and GNU), i686, aarch64, and big-endian powerpc64 and s390x; no SIMD or arch-specific code",
+    "thread_safety": "not documented; each encode/decode call allocates its own 256 KiB dictionary state, so separate calls on separate threads share nothing",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Errors are effectively panics: encode and decode always return Ok, and all bounds problems surface as slice-index panics; the C wrappers return 0 only for an Err that never occurs.",
+    "Every static encode/decode call allocates and zeroes a 64K-entry u32 table (256 KiB); reuse a Chameleon::new() instance for many small buffers, or the setup dominates.",
+    "The level-to-algorithm mapping in lzbench is -1 Chameleon, -2 Cheetah, -3 Lion; Lion compresses at only 442 MB/s with 578 MB/s decode, slower than LZ4 default on both sides.",
+    "lzbench documents earlier bugs: its README carried a warning about density 0.14.2 producing shortened decompressed output (issues #92 and #94 asked about it and were closed without a written answer); fuzzing crashes (#60) and an encoder division by zero (#56) were fixed in the C era."
+  ],
+  "pick_this_over_siblings_when": "Pick Density over LZ4 or Snappy when compression speed matters more than decode speed: Cheetah gives LZ4-default ratio at 1.4x LZ4's compression speed, and Chameleon gives LZ4 --fast -17 ratio at 1.8x its speed. For fast decode pick LZ4, ZXC or LZSSE; for the fastest compress-only point at this ratio memlz is ahead.",
+  "verified_claims_summary": "In lzbench 2.4 (gcc 15.2.0 release binary, density built with cargo inside lzbench, one thread of an AMD EPYC 9555P with turbo off, silesia.tar), Density 0.16.6 -1 compresses at 1630 MB/s to 62.77% versus LZ4 1.10.0 --fast -17 at 924 MB/s and 62.15% (about 1.8x), and -2 at 767 MB/s to 47.94% versus LZ4 default at 550 MB/s and 47.60% (about 1.4x, derived from page data); decompression is 758-1617 MB/s versus LZ4's 3832-3977 MB/s. The repo's own cargo bench compares only against the Rust ports lz4_flex and snap, not the C libraries.",
+  "status_note": "Last commit and crate release 0.16.6 on 2025-08-27 (C bindings added), zero open issues, about 1k stars and 6.6k crate downloads; small, MIT OR Apache-2.0, and easy to vendor, but effectively single-maintainer and quiet for 13 months.",
+  "sources_read": [
+    "https://github.com/g1mv/density",
+    "https://raw.githubusercontent.com/g1mv/density/HEAD/README.md",
+    "https://raw.githubusercontent.com/g1mv/density/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/g1mv/density/HEAD/benchmark.log",
+    "https://raw.githubusercontent.com/g1mv/density/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/g1mv/density/HEAD/src/algorithms/chameleon/chameleon.rs",
+    "https://raw.githubusercontent.com/g1mv/density/HEAD/src/codec/codec.rs",
+    "https://raw.githubusercontent.com/g1mv/density/HEAD/src/codec/protection_state.rs",
+    "https://raw.githubusercontent.com/g1mv/density/HEAD/src/io/read_buffer.rs",
+    "https://raw.githubusercontent.com/g1mv/density/HEAD/src/io/write_buffer.rs",
+    "https://raw.githubusercontent.com/g1mv/density/HEAD/src/errors/decode_error.rs",
+    "https://raw.githubusercontent.com/g1mv/density/HEAD/.github/workflows/ci.yml",
+    "https://github.com/g1mv/density/commits",
+    "https://github.com/g1mv/density/issues?q=is%3Aissue",
+    "https://github.com/g1mv/density/issues/92",
+    "https://github.com/g1mv/density/issues/94",
+    "https://crates.io/api/v1/crates/density-rs",
+    "https://raw.githubusercontent.com/inikep/lzbench/HEAD/README.md",
+    "https://raw.githubusercontent.com/inikep/lzbench/HEAD/Makefile",
+    "https://raw.githubusercontent.com/inikep/lzbench/HEAD/misc/rust-codecs/lib.rs",
+    "https://raw.githubusercontent.com/inikep/lzbench/HEAD/misc/rust-codecs/Cargo.toml"
+  ],
+  "confidence": 0.8
+}

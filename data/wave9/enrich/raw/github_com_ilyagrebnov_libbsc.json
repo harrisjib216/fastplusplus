@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/ilyagrebnov/libbsc",
+  "one_liner": "Block-sorting (BWT/ST + LZP + QLFC) compressor library that reaches xz -5 ratios with 5x faster single-thread compression.",
+  "what_it_does": "libbsc is the library behind the bsc file compressor: a C-callable API (extern \"C\" in libbsc.h, implemented in C++17) that compresses one memory block per call. You call bsc_init(features) once, then bsc_compress(input, output, n, lzpHashSize, lzpMinLen, blockSorter, coder, features) into a buffer of n + 28 bytes; decompression calls bsc_block_info to read sizes from the 28-byte header and then bsc_decompress. It is not a drop-in for liblzma or libbz2: different API, its own format, and no streaming interface, so large files have to be chunked by the caller (the bsc CLI does this with -b block sizes up to 2047 MB).",
+  "how_it_is_fast": "Each block optionally passes through LZP (Lempel-Ziv prediction, default 2^15 hash, minimum match 72) to strip long repeats, then a Burrows-Wheeler Transform built with libsais (a fast SA-IS suffix-array construction by the same author) or a Sort Transform of order 3-8, then QLFC (Quantized Local Frequency Coding) with static, adaptive or fast models. Compression cost is dominated by the linear-time suffix sort rather than LZMA's optimal-parse match search, which is why it compresses several times faster than xz at a similar ratio. SIMD paths exist for MTF, QLFC (AVX-512) and Adler-32 (SSSE3/AVX2) with runtime CPU dispatch, and optional OpenMP and CUDA (compute capability 7.5+) paths parallelise blocks, the BWT and the ST.",
+  "when_to_use": [
+    "Archival or backup of text-like, log or source data where you want xz-class ratio but cannot afford xz -5..-9 compression time: bsc -m0 -e1 compresses silesia at 19.4 MB/s to 23.26% versus xz -5 at 3.84 MB/s to 23.70%.",
+    "Write-once, read-rarely data where compression and decompression times are both acceptable at about 20-25 MB/s per core.",
+    "Machines with many cores or an NVIDIA GPU: OpenMP processes blocks in parallel and the CUDA build offloads forward/inverse BWT and ST.",
+    "In-memory block compression of large buffers (megabytes to 2 GB per block) where a self-checking format matters: headers, payload and original data each carry an Adler-32."
+  ],
+  "when_not_to_use": [
+    "Read-heavy data: decompression is 25.0 MB/s for -m0 -e1 and 14.7-15.8 MB/s for the ST modes, versus xz at about 121 MB/s and zstd/LZ4 at hundreds to thousands of MB/s.",
+    "Small messages or random access: BWT needs whole blocks and the format has no seeking within a block; the default 25 MB CLI block is where the ratio comes from.",
+    "Memory-constrained systems: compression and decompression both need about 16 MB + 5 x block size x parallel blocks (the GPU paths 7-21 x block size).",
+    "When interoperability matters: the .bsc format is read only by bsc/libbsc; use xz or zstd for files other tools must open.",
+    "32-bit ARM: lzbench disables bsc there because its multithreaded decompress path faults (SIGBUS, lzbench#293)."
+  ],
+  "integration": {
+    "form": "static lib (default) or shared lib via CMake -DBSC_BUILD_SHARED_LIB=ON; sources are also easy to vendor (lzbench compiles the libbsc/ tree directly)",
+    "dependencies": "none required (libsais is vendored); optional OpenMP for multithreading and CUDA Toolkit for GPU acceleration",
+    "min_toolchain": "C++17, CMake 3.24; CUDA compute capability 7.5+ for the GPU path",
+    "platforms": "x86-64 (runtime dispatch to SSE2/AVX/AVX2/AVX-512) and AArch64 (optimised since 3.2.4); Windows, Linux, macOS; 32-bit ARM multithreaded decompress reported to fault",
+    "thread_safety": "not documented; bsc_init sets process-wide state (allocator hooks and coder/BWT tables) and must run first; internal parallelism is controlled by LIBBSC_FEATURE_MULTITHREADING plus OpenMP",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The CMake build defaults to BSC_ENABLE_NATIVE_COMPILATION=ON (-march=native), so binaries built on a newer CPU can SIGILL elsewhere; turn it off for distributable builds.",
+    "LIBBSC_DEFAULT_FEATURES includes MULTITHREADING; pass LIBBSC_FEATURE_FASTMODE alone for single-threaded behaviour (lzbench does this at one thread, so its numbers are single-core).",
+    "Sizes are int: one call handles at most about 2 GB, and bsc_compress can return LIBBSC_NOT_COMPRESSIBLE, in which case the caller should fall back to bsc_store.",
+    "Upgrade past old versions: 3.2.3 fixed LibFuzzer-found out-of-bounds and corruption bugs, 3.2.5 fixed LZP encoder data corruption ('upgrade strongly recommended'), and 3.3.3 fixed out-of-bounds access on large inputs."
+  ],
+  "pick_this_over_siblings_when": "Pick libbsc over bzip3 when compression speed matters (19.4 versus 11.9 MB/s and 25.0 versus 12.4 MB/s decode in lzbench 2.4) and a 1-point worse ratio is fine, and over xz when compression time dominates and decompression at 25 MB/s is acceptable; Kanzi -6 gives a similar ratio (23.36%) with faster decode (31.2 MB/s) but slower compression (15.0 MB/s).",
+  "verified_claims_summary": "lzbench 2.4 (gcc 15.2.0 release binary, one thread of an AMD EPYC 9555P at 3.2 GHz with turbo off, silesia.tar) shows bsc 3.3.12 -m0 -e1 at 19.4 MB/s compress and 25.0 MB/s decompress to 23.26% of input, versus xz 5.8.4 -5 at 3.84 / 121 MB/s to 23.70% (5.1x faster compression, 4.8x slower decompression, derived from page data) and bzip2 1.0.8 -9 at 12.7 / 35.5 MB/s to 25.75%. lzbench's wrapper drops LIBBSC_FEATURE_MULTITHREADING when run with one thread, and libbsc then calls libsais with one thread, so the numbers are single-core even in an OpenMP build.",
+  "status_note": "Active: releases 3.3.5 to 3.3.12 shipped through 2025 (latest 3.3.12, September 2025; last commit 2026-02-03, a build-warning fix), Apache-2.0, 352 stars, single primary author who also maintains libsais; the GitHub issue tracker shows no issues.",
+  "sources_read": [
+    "https://github.com/IlyaGrebnov/libbsc",
+    "https://github.com/IlyaGrebnov/libbsc/commits",
+    "https://github.com/IlyaGrebnov/libbsc/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/IlyaGrebnov/libbsc/HEAD/README",
+    "https://raw.githubusercontent.com/IlyaGrebnov/libbsc/HEAD/CHANGES",
+    "https://raw.githubusercontent.com/IlyaGrebnov/libbsc/HEAD/VERSION",
+    "https://raw.githubusercontent.com/IlyaGrebnov/libbsc/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/IlyaGrebnov/libbsc/HEAD/bsc.cpp",
+    "https://raw.githubusercontent.com/IlyaGrebnov/libbsc/HEAD/libbsc/libbsc.h",
+    "https://raw.githubusercontent.com/IlyaGrebnov/libbsc/HEAD/libbsc/libbsc/libbsc.cpp",
+    "https://raw.githubusercontent.com/IlyaGrebnov/libbsc/HEAD/libbsc/bwt/bwt.cpp",
+    "https://raw.githubusercontent.com/inikep/lzbench/HEAD/README.md",
+    "https://raw.githubusercontent.com/inikep/lzbench/HEAD/Makefile",
+    "https://raw.githubusercontent.com/inikep/lzbench/HEAD/mk/bsc.mk",
+    "https://raw.githubusercontent.com/inikep/lzbench/HEAD/bench/symmetric_codecs.cpp",
+    "https://raw.githubusercontent.com/inikep/lzbench/HEAD/bench/lzbench.h",
+    "https://github.com/inikep/lzbench",
+    "https://github.com/inikep/lzbench/tree/master/bench"
+  ],
+  "confidence": 0.85
+}

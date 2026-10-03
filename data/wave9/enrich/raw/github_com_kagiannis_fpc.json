@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/kagiannis/fpc",
+  "one_liner": "Single-file ISC C Huffman (prefix) coder decoding silesia.tar about 1.25x faster than FSE's Huff0 and 3.7x faster than zlib's Huffman.",
+  "what_it_does": "An order-0 byte entropy coder: it builds length-limited prefix (Huffman) codes per block and encodes bytes with them, with no modelling or match finding. The API is four C functions in fpc.h: FPC_compress / FPC_decompress over whole buffers (block size 1-63 KB, or 0 for adaptive block subdivision) and FPC_compress_block / FPC_decompress_block for single blocks under 64 KB; FPC_MAX_OUTPUT gives the worst-case output size. It is not a drop-in for zlib or Huff0: the format is its own, and a CLI (cli.c) offers compress, decompress and a -B benchmark mode.",
+  "how_it_is_fast": "Code lengths are capped at MAX_BIT_LEN = 11 bits with the package-merge algorithm, so decoding is a single 2048-entry table lookup per symbol with no multi-level tables. Bytes are split round-robin across 3 interleaved bit streams (NUM_STREAMS) to give the CPU independent dependency chains, and each stream's 64-bit bit buffer is refilled branchlessly with one unaligned word load every RENORM_NUM = 5 symbols (5 x 11 bits fits in 56); the decode loop is unrolled twice and prefetches on ARM. The encoder mirrors this with table lookups and unconditional 64-bit stores, and the adaptive mode chooses block boundaries by dynamic programming over 2 KB steps using integer log2 entropy estimates.",
+  "when_to_use": [
+    "Order-0 entropy stage of a custom compressor (after LZ, BWT or transform stages) where decode throughput matters more than the last 1-2% of ratio.",
+    "Byte data with non-skewed distributions such as text: on silesia.tar it matches Huff0's ratio (61.4%) and decodes 897 MB/s versus 715 MB/s on a Core i5-4460.",
+    "Small in-order ARM cores: on an Allwinner H3 board, enwik8 decoded at 90.7 MB/s versus 61-63 MB/s for Huff0, zlib Huffman and FSE.",
+    "Projects that want a permissively licensed (ISC) single C file to vendor, with no dependencies and big-endian support.",
+    "Data with shifting statistics, using bsize = 0 so adaptive block subdivision picks block sizes."
+  ],
+  "when_not_to_use": [
+    "Skewed or sparse distributions (well under 1 bit per byte): prefix codes cost at least 1 bit per symbol, and issue #3 (open) reports FSE compressing most files of a sparse binary set better.",
+    "Multithreaded encoding or decoding within one process: the prefix-length header code uses non-static global state (byte_pos, init_pos, byte_end, c, nibble_count), so concurrent calls race.",
+    "When you need the fastest current Huffman decoder: PIVCO-Huffman and hypersonic-rANS report several GB/s, and the FPC tables compare against TurboBench's Huff0 build from the 2017-2018 era, not today's zstd Huffman.",
+    "Inputs larger than one block per call without the wrapper format: block APIs require size < 64 KB and the length fields are 16-bit.",
+    "Untrusted input in safety-critical code: no fuzzing is documented, and FPC_decompress returns 0 for both errors and empty output."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (C standard library only)",
+    "min_toolchain": "C99 (Makefile uses -O2 -std=c99); GCC/Clang builtins used when available",
+    "platforms": "any 32- or 64-bit CPU with detectable endianness (little and big endian); tuned constants for x86-64, i386, ARM and AArch64",
+    "thread_safety": "not thread-safe: block header encode/decode uses non-static global variables",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Compile fpc.c as C, not C++: fpc.c does not include fpc.h, so building it with g++ yields C++-mangled symbols and 'undefined reference to FPC_compress' link errors (issue #2, open); the reported workaround was #include \"fpc.c\".",
+    "fpc.c exports non-static symbols with generic names (global variable c, byte_pos, and functions brev, byte_count, sort_inc, build_prefix_codes), which can collide with other code at link time; fpc.h has no include guard and does not include stddef.h for size_t.",
+    "Tuning (NUM_STREAMS, MAX_BIT_LEN, ADAPTIVE_STEP) is by #define in fpc.c, and the stream format depends on them, so encoder and decoder must be built with the same values.",
+    "Issue #4 (closed 2020) reported uninitialized reads under Valgrind in the adaptive block-size path producing outputs over 15000 bytes for inputs under 100 bytes; no fix commit is linked from the issue, though earlier history mentions 'fixed unitialised read'."
+  ],
+  "pick_this_over_siblings_when": "Pick FPC over FiniteStateEntropy's Huff0 when you want a small ISC-licensed C file whose decoder was measured faster than Huff0 at equal ratio on silesia.tar and enwik8 in TurboBench. Prefer PIVCO-Huffman or hypersonic-rANS for top decode speed on modern x86 or Apple cores, and FSE or an rANS coder for skewed or sparse data.",
+  "verified_claims_summary": "The author ran TurboBench (compiler and flags not stated) on silesia.tar on a Core i5-4460: fpc with 32 KB blocks decoded at 897 MB/s versus 715 for Huff0 (fsehuf), 591 for rans_static16, 484 for FSE and 243 for zlib's Huffman, at the same 61.4% ratio as Huff0, while Huff0 still encoded slightly faster (575 versus 548 MB/s). On an Allwinner H3 board, enwik8 decode was 90.7 MB/s versus 61.1 for Huff0; an independent powturbo entropy-coder benchmark figure (928.53 versus 831.45 MB/s decode) is known only from a search snippet.",
+  "status_note": "Abandoned since April 2022 (last commits only touched the Makefile; two issues open, no releases) but ISC-licensed and only about 1,100 lines of C, so it is easy to vendor if you fix the global state for threaded use.",
+  "sources_read": [
+    "https://github.com/kagiannis/FPC",
+    "https://raw.githubusercontent.com/kagiannis/FPC/HEAD/README.md",
+    "https://raw.githubusercontent.com/kagiannis/FPC/HEAD/Makefile",
+    "https://raw.githubusercontent.com/kagiannis/FPC/HEAD/fpc.h",
+    "https://raw.githubusercontent.com/kagiannis/FPC/HEAD/fpc.c",
+    "https://raw.githubusercontent.com/kagiannis/FPC/HEAD/cli.c",
+    "https://github.com/kagiannis/FPC/issues?q=is%3Aissue",
+    "https://github.com/kagiannis/FPC/issues/2",
+    "https://github.com/kagiannis/FPC/issues/3",
+    "https://github.com/kagiannis/FPC/issues/4",
+    "https://github.com/kagiannis/FPC/commits"
+  ],
+  "confidence": 0.8
+}
