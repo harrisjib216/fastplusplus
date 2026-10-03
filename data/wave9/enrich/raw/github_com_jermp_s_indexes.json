@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/jermp/s_indexes",
+  "one_liner": "Universe-sliced compressed integer sets (bitmaps/posting lists) with SIMD intersection; 5-10x faster AND than Partitioned Elias-Fano.",
+  "what_it_does": "Compresses sorted sets of 32-bit integers (bitmaps or inverted-index posting lists) and answers decode, select, contains, next_geq, and pairwise or multi-way intersection and union directly on the compressed form. The API is a read-only s_sequence view over a byte buffer built by s_sequence::builder (or an s_index over a whole collection), which can be serialized and memory-mapped; set operations write decoded uint32_t results into a caller-supplied output buffer. It is not a drop-in for PEF/ds2i or CRoaring: different builder, file format and free-function API.",
+  "how_it_is_fast": "Recursive universe partitioning (the 'RUP' / slicing scheme of Pibiri, DCC 2021): the universe is cut into 2^16-integer chunks typed empty, full, dense (8 KiB bitmap, chosen when cardinality >= 2^15) or sparse, and sparse chunks are re-sliced into 256-integer blocks stored either as 32-byte bitmaps or as sorted arrays of 8-bit offsets. Intersection walks the two header arrays and only touches chunks/blocks with the same id, so work is proportional to shared slices rather than list lengths. Bitmap-bitmap pairs use 64-bit AND plus ctz extraction; array-array pairs use an SSE4.2 _mm_cmpestrm all-versus-all byte compare (after Schlegel et al.) with a precomputed shuffle table, widened to 32-bit with AVX2 _mm256_cvtepu8_epi32; bitmap-array pairs use bit tests.",
+  "when_to_use": [
+    "Inverted-index or bitmap-index query processing dominated by AND queries over 32-bit doc ids, where PEF or another cardinality-partitioned codec is your current choice and intersection latency matters more than the last bit per integer.",
+    "Read-mostly, static collections built once and then memory-mapped (the builder serializes to a flat buffer that s_index mmaps).",
+    "When you want space between PEF and Roaring: the README shows Slicing smaller than Roaring on all four CRoaring datasets (e.g. 10.83 vs 15.93 bits/int on Census-1881) while staying within about 2x of Roaring's intersection time.",
+    "x86-64 servers with SSE4.2 and AVX2 (the build uses -march=native)."
+  ],
+  "when_not_to_use": [
+    "When raw speed beats space: CRoaring was faster on 3 of 4 README datasets (Census-Income 4.68 vs 11.56 us) and on unions in the DCC 2021 paper; the author attributes this to extra branches from recursive partitioning.",
+    "When minimum space is the goal: PEF and Interpolative are 1.3-2 bits/int smaller in the paper (e.g. 2.03 vs 2.23 bpi on Census-Income, 7.28 vs 10.83 on Census-1881).",
+    "Mutable sets: there is no insert/delete; sequences are built once from sorted input.",
+    "Non-x86 targets (ARM, Apple Silicon) or general rank/select bitvector needs: the code uses inline x86 asm (bt/sbb) and SSE4.2/AVX2 intrinsics with no fallback, and offers select/next_geq on sets, not rank/select over a plain bitvector.",
+    "Production use needing support: no releases, 19 stars, 2 closed issues, last commit 2023-01-08."
+  ],
+  "integration": {
+    "form": "header-only (include/*.hpp) plus a CMake project for tools and benchmarks; serialization pulls in git submodules",
+    "dependencies": "jermp/essentials (serialization, timing) and jermp/mm_file (memory mapping) as git submodules; no other libraries",
+    "min_toolchain": "C++14 (CMakeLists sets -std=c++14); tested with gcc 7.3.0 on Linux and clang 10.0.0 on macOS 10.14; clang builds add -stdlib=libc++",
+    "platforms": "x86-64 only in practice (inline 'bt' asm in util.hpp, SSE4.2 _mm_cmpestrm and AVX2 intrinsics in intersection.hpp); Linux and macOS tested",
+    "thread_safety": "not documented; s_sequence is a const view over immutable bytes, so concurrent reads look safe, but nothing states it",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Several helpers in util.hpp and intersection.hpp (and_bitmaps, or_bitmaps, bytes_for, ss_intersect_block, ...) are defined in headers without 'inline', so including them from more than one translation unit will hit multiple-definition link errors; keep the library in one .cpp or patch the headers.",
+    "Values are uint32_t and the chunk count is stored in a 16-bit header field, so the universe is limited to 2^32; the output buffer must be large enough for the whole result (the benchmark allocates universe() words).",
+    "include/table.hpp is a 65,547-line precomputed shuffle table for the cmpestrm path, which slows compilation and adds about 1 MB of static data.",
+    "Build density/size thresholds (--density) decide which lists get sliced in s_index; the README notes tests must be run with the same density used at build time."
+  ],
+  "pick_this_over_siblings_when": "The other catalogued succinct-structures entries (SPIDER, QuadRank, LA-vector, h0_bv, rankselect) speed up rank/select over a single bitvector; pick s_indexes when the operation you need is intersection or union of many compressed sorted integer sets, as in an inverted index. Among the same author's work, mutable_rank_select is the choice for updatable bitmaps, s_indexes for static posting lists.",
+  "verified_claims_summary": "On an Intel i7-7700 with gcc 7.3.0 and -O3 -march=native, the README reports 2-list intersections over CRoaring's real datasets at 0.18-25.70 us for Slicing versus 0.92-213.00 us for Partitioned Elias-Fano (about 5-10x faster), and the peer-reviewed DCC 2021 paper reports 0.32/1.67/1.78 ms per TREC AND query on Gov2/ClueWeb09/CCNews versus about 2.5/12.8/19 ms for the cardinality-partitioned codecs (7.6-10.6x). Only the Slicing timing harness (src/intersect.cpp) is in the repo; PEF and Roaring numbers come from the authors' own code run separately.",
+  "status_note": "Inactive since 2023-01-08 with no releases, but MIT-licensed, header-based and small enough to vendor for x86-64; known-good compiler gcc 7.3.0.",
+  "sources_read": [
+    "https://github.com/jermp/s_indexes",
+    "https://github.com/jermp/s_indexes/tree/master/include",
+    "https://github.com/jermp/s_indexes/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/jermp/s_indexes/HEAD/README.md",
+    "https://raw.githubusercontent.com/jermp/s_indexes/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/jermp/s_indexes/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/jermp/s_indexes/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/jermp/s_indexes/HEAD/include/constants.hpp",
+    "https://raw.githubusercontent.com/jermp/s_indexes/HEAD/include/util.hpp",
+    "https://raw.githubusercontent.com/jermp/s_indexes/HEAD/include/intersection.hpp",
+    "https://raw.githubusercontent.com/jermp/s_indexes/HEAD/include/s_sequence.hpp",
+    "https://raw.githubusercontent.com/jermp/s_indexes/HEAD/include/table.hpp",
+    "https://raw.githubusercontent.com/jermp/s_indexes/HEAD/src/intersect.cpp",
+    "https://raw.githubusercontent.com/jermp/jermp.github.io/master/assets/pdf/papers/DCC2021.pdf"
+  ],
+  "confidence": 0.8
+}

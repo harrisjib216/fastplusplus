@@ -1,0 +1,55 @@
+{
+  "id": "https://github.com/splatlab/rankselect",
+  "one_liner": "Research fork of CMU's CS-Poppy rank/select bitvector that swaps word-level select for PTSelect (PDEP+TZCNT); benchmarked against SDSL.",
+  "what_it_does": "Provides rank and select over a plain (uncompressed) 64-bit-word bit array through the BitmapPoppy class (constructor takes a uint64 pointer and bit count; rank(pos), select(rank), selectWord(word, rank)), plus a header popcount.h with several machine-word select variants. This fork of efficient/rankselect (Zhou, Andersen, Kaminsky, 2013) adds the PTSelect word select from Pandey, Bender and Johnson's 2017 arXiv preprint 1706.00990 and benchmark drivers that time the same queries on this code and on a bundled SDSL. It is a benchmarking artifact rather than a packaged library; the API is not SDSL-compatible.",
+  "how_it_is_fast": "Bit-vector select uses CS-Poppy's layout: a 3-level rank index (64-bit L1 entries every 2^32 bits, L2 entries every 2048 bits holding three 10-bit sub-block counts) plus a sampled position array every 8192 ones, so select jumps near the target, scans L2 entries, then finishes inside one 512-bit basic block. The final in-word step is PTSelect: select(x, r) = TZCNT(PDEP(1 << r, x)), two BMI2/LZCNT-era instructions instead of the 50-80-instruction broadword or table-lookup routines. The repo keeps the older select64_sdsl, broadword and popcount-search variants in popcount.h for comparison.",
+  "when_to_use": [
+    "Studying or reproducing the 2017 PTSelect result, or lifting the 4-instruction select64_pdep_tzcnt routine (Apache-2.0) into your own rank/select structure.",
+    "Static, uncompressed bit vectors on Intel Haswell or later (or AMD Zen 3 or later) where select latency dominates.",
+    "As a comparison point when benchmarking newer rank/select structures against CS-Poppy and SDSL."
+  ],
+  "when_not_to_use": [
+    "As a production select: in the current head, BitmapPoppy::select passes a 1-based in-word rank to the 0-based select64_pdep_tzcnt and uses LSB-first word select while the index and construction loop use MSB-first bit order, so select results do not match the structure's rank convention; no correctness test exists in the repo.",
+    "Memory-constrained hosts: this fork enlarged BitmapPoppy's member arrays from 2^16 to 2^31 entries (uint32* loc_[1ULL<<31] and uint64 locCount_[1ULL<<31], about 32 GiB of object), and the constructor memsets the 16 GiB locCount_ array.",
+    "CPUs without fast BMI2: PDEP is missing before Haswell and microcoded on AMD Zen 1/Zen 2 (search snippets report about 300-cycle latency on Zen 2), where PTSelect loses badly; there is no runtime fallback.",
+    "When you need compressed bit vectors, updates, or a maintained library: newer catalogued entries (SPIDER, 3star-rankselect, QuadRank, pasta/sux-based designs) target the same queries and are actively developed; this repo's last commit is 2017-04-14."
+  ],
+  "integration": {
+    "form": "source-drop (bitmap.cc, bitmap.h, popcount.h, shared.h; Makefile builds benchmark binaries only)",
+    "dependencies": "none for the structure; the SDSL comparison benchmark uses SDSL sources bundled under include/sdsl",
+    "min_toolchain": "C++11 (Makefile: g++ -std=c++11 -O9 -mpopcnt -msse4); GCC-style inline asm required",
+    "platforms": "x86-64 only; select needs BMI2 (PDEP) and TZCNT, i.e. Intel Haswell+ or AMD Zen 3+ for usable speed, injected via inline asm so the compiler flags do not check for it",
+    "thread_safety": "not documented; queries only read the index, construction is single-threaded",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Allocations are made inside assert(posix_memalign(...) >= 0) in bitmap.cc (and assert(... == 0) in the benches), so any build with -DNDEBUG (e.g. CMake Release) compiles the allocation away and leaves the index pointers uninitialized.",
+    "select64_pdep_tzcnt computes 1ULL << rank, which is undefined for rank 64; select512 can pass k = 64 for a full word, and a rank beyond the word's popcount returns 64 rather than an error.",
+    "The benchmark code at commit 952ad74 ('Final commit to collect benchmarks', 2017-02-17) still routed select64 to select64_sdsl; PTSelect became the default only in the last commit (29bc174, 2017-04-14), so which variant produced published numbers is not stated in the repo.",
+    "Timing uses gettimeofday and random synthetic bits with a density parameter; bitmap_bench_word times selectWord on a single fixed word (index 2279) through a non-inlined call and discards the result."
+  ],
+  "pick_this_over_siblings_when": "Pick it only to borrow the PTSelect word routine or to reproduce the 2017 CS-Poppy/SDSL comparison; for a usable rank/select bit vector, SPIDER, 3star-rankselect or QuadRank are newer, benchmarked against Poppy and SDSL in their own repos, and do not carry this fork's select-convention and 32 GiB-object problems. succinct-bitvec-cpp is a smaller self-contained alternative with published SDSL comparisons.",
+  "verified_claims_summary": "The only performance numbers come from search-result snippets of arXiv 1706.00990: PTSelect is 2x-4x faster than prior 64-bit word select, and plugging it into CS-Poppy and SDSL makes bit-vector select 2.2x-6x faster; the repo has the benchmark drivers (bitmap_bench.cc, bitmap_bench_sdsl.cc, bitmap_bench_word.cc) with -O9 -mpopcnt -msse4, but no published results, CPU model, or correctness checks.",
+  "status_note": "Abandoned since 2017-04-14, Apache-2.0; usable as a reference for the PTSelect idea, but the structure itself needs fixes (select bit order and rank base, 32 GiB member arrays, asserts around allocation) before anyone vendors it.",
+  "sources_read": [
+    "https://github.com/splatlab/rankselect",
+    "https://github.com/splatlab/rankselect/commits",
+    "https://github.com/splatlab/rankselect/commits/master/popcount.h",
+    "https://raw.githubusercontent.com/splatlab/rankselect/HEAD/README.md",
+    "https://raw.githubusercontent.com/splatlab/rankselect/HEAD/Makefile",
+    "https://raw.githubusercontent.com/splatlab/rankselect/HEAD/popcount.h",
+    "https://raw.githubusercontent.com/splatlab/rankselect/HEAD/bitmap.h",
+    "https://raw.githubusercontent.com/splatlab/rankselect/HEAD/bitmap.cc",
+    "https://raw.githubusercontent.com/splatlab/rankselect/HEAD/bitmap_bench.cc",
+    "https://raw.githubusercontent.com/splatlab/rankselect/HEAD/bitmap_bench_word.cc",
+    "https://raw.githubusercontent.com/splatlab/rankselect/HEAD/shared.h",
+    "https://raw.githubusercontent.com/splatlab/rankselect/952ad74/popcount.h",
+    "https://raw.githubusercontent.com/efficient/rankselect/HEAD/bitmap.h",
+    "https://raw.githubusercontent.com/efficient/rankselect/HEAD/bitmap.cc",
+    "https://raw.githubusercontent.com/efficient/rankselect/HEAD/popcount.h",
+    "https://www.adrian.idv.hk/2018-11-05-pbj17-fastx86/ (WebSearch snippet only)",
+    "https://arxiv.org/pdf/1706.00990 (WebSearch snippet only; arXiv blocked, paperhub mirror returned 403)",
+    "https://news.ycombinator.com/item?id=40985258 (WebSearch snippet only, Zen 2/Zen 3 PDEP latency)"
+  ],
+  "confidence": 0.65
+}
