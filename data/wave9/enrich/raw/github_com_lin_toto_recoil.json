@@ -1,0 +1,63 @@
+{
+  "id": "https://github.com/lin-toto/recoil",
+  "one_liner": "Header-only C++20 rANS library that splits one interleaved stream for parallel decode on AVX2/AVX-512 CPUs and CUDA GPUs.",
+  "what_it_does": "Recoil encodes data into one 32-way interleaved rANS bitstream and records the intermediate encoder states at chosen split points, so many threads, or CUDA warps, can decode one stream in parallel. Split metadata can be thinned after encoding: SplitsMetadata::reduceSplitCount (example 01_combine_encoded_splits) merges splits so a weaker decoder receives less side data. The API is templates (Rans32/Rans64, RansSplitEncoder::flushSplits, RansSplitDecoder::decodeSplit, RansSplitDecoderCuda::decodeAll) over a CdfLutPool of static or per-symbol CDFs. There is no file format and no zstd/FSE compatibility, and the README's documentation section is 'TODO', so usage is learned from examples/.",
+  "how_it_is_fast": "It uses interleaved rANS (32 lanes) with SIMD decoders (RansDecoder_AVX2_32x32, RansDecoder_AVX512_32x32) and a CUDA decoder in which each warp lane is one rANS state; lanes share the bitstream pointer through __ballot_sync/__popc. Parallelism comes from split points: the encoder stores the state of each interleaved coder near a cut, and a split decoder starts there and runs 'sync' decodes (syncRansOnce) until all 32 lanes are initialised. Unlike conventional fixed partitioning, it does not need fresh coder states and flushes per partition. A heuristic picks split points to balance symbol counts (HeuristicSymbolCount) or bitstream length (EqualBitstreamLength).",
+  "when_to_use": [
+    "Static-model or per-symbol-CDF rANS payloads (8- or 16-bit symbols, ProbBits 11 or 16) that one encoder writes and decoders of very different widths read, e.g. a 16-thread CPU and a GPU",
+    "Bandwidth-sensitive delivery where split metadata should match the decoder: encode with many splits once, then reduce the split count per client",
+    "GPU-resident bulk decode: the paper snippet reports over 90 GB/s on a Turing GPU (RTX 2080 Ti)",
+    "Learned-image-compression style workloads with per-symbol distributions (the LIC examples 20-28)"
+  ],
+  "when_not_to_use": [
+    "Adaptive-model or context-mixing coding: the decoders take precomputed CDF/LUT offsets, with no adaptive model updates",
+    "Non-x86 CPUs or CPUs without AVX2: RansSplitDecoder hard-wires the AVX2 or AVX-512 32x32 decoder, and the testscripts build.sh exits without AVX2",
+    "Projects that cannot accept GPL-3.0 (copyleft for a header-only library means your binary is covered)",
+    "Small inputs or single-threaded decode: hypersonic-rANS or htscodecs are simpler and faster per core, and Recoil's win is parallel scalability, not per-thread speed",
+    "Production use without your own testing: no releases, no tests, no docs, last code change 2023-06-26"
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none for CPU (pthread used by examples); CUDA 12+ for the GPU decoder",
+    "min_toolchain": "C++20 (concepts, std::span), gcc 10+ or clang 14+, CMake 3.24+ for examples, CUDA 12+",
+    "platforms": "x86-64 with AVX2 (AVX-512 optional via -DAVX512) for the split CPU decoder; NVIDIA GPUs (CMake default CUDA arch 70) for CUDA",
+    "thread_safety": "not documented; RansSplitDecoder::decodeSplit writes disjoint ranges of a shared result vector, so different splitIds can run on separate threads, but one decoder object is not otherwise synchronised",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The CPU split decoder picks AVX2 or AVX-512 at compile time through the AVX512 macro; the CMake build also adds -march=native, so binaries are not portable across CPUs",
+    "The CUDA decoder static_asserts NInterleaved == 32, and its grid is metadata.splits.size() / (NThreads / NInterleaved) with integer division, so split counts that are not multiples of the warps per block look like they leave trailing splits unlaunched (not documented)",
+    "RansSplitDecoderCuda::decodeAll times only the kernel with CUDA events; bitstream and CDF pool are copied to the GPU in the constructor and the result is copied back afterwards, so lastDuration excludes PCIe transfers",
+    "The encoder buffers all symbols and every intermediate state (symbolBuffer, intermediateStates) before flushSplits, so encode memory grows with input size; there is no streaming encode",
+    "Decoding past the end throws DecodingReachesEndException, and buffer or offset mismatches throw std::runtime_error, so exceptions must be enabled on the CPU path"
+  ],
+  "pick_this_over_siblings_when": "Choose Recoil over multians when you control the encoder and want rANS with static or per-symbol CDFs, decoding on both CPU and GPU, and newer CUDA. The paper compares against multians on GPU and reports much higher throughput. Choose hypersonic-rANS or htscodecs instead for single-core CPU rANS speed or a maintained, permissively licensed codec, and torch_ans for PyTorch-integrated GPU rANS.",
+  "verified_claims_summary": "Per search snippets of the ICPP 2023 paper (arXiv 2306.12141, not opened), CPU runs on a 16-core Xeon W-3245 compared AVX2 and AVX-512 single-thread, conventional fixed-partition and Recoil decoders, and GPU runs on an RTX 2080 Ti compared multians, conventional and Recoil CUDA decoders. Recoil matched conventional throughput (over 90 GB/s on the GPU) with lower partition overhead. The public harness (recoil-testscripts: gcc-10, CUDA 12.1, CMake Release with -O3 -march=native, ProbBits 11/16, multians built with NUM_STATES 1024/32768 from the lin-toto/multians fork) has no recorded numbers.",
+  "status_note": "The code has been dormant since 2023-06-26; the only later commit is a GPL-3.0 LICENSE added 2026-07-12 through PR #3 by another contributor. Usable research code with no open issues, but 'active' maintenance overstates it.",
+  "sources_read": [
+    "https://github.com/lin-toto/recoil",
+    "https://raw.githubusercontent.com/lin-toto/recoil/HEAD/README.md",
+    "https://raw.githubusercontent.com/lin-toto/recoil/HEAD/CMakeLists.txt",
+    "https://github.com/lin-toto/recoil/issues",
+    "https://github.com/lin-toto/recoil/commits/main",
+    "https://github.com/lin-toto/recoil/tree/main/include/recoil",
+    "https://github.com/lin-toto/recoil/tree/main/include/recoil/simd",
+    "https://github.com/lin-toto/recoil/tree/main/include/recoil/split",
+    "https://github.com/lin-toto/recoil/tree/main/include/recoil/cuda",
+    "https://github.com/lin-toto/recoil/tree/main/examples",
+    "https://github.com/lin-toto/recoil/tree/main/examples/01_combine_encoded_splits",
+    "https://raw.githubusercontent.com/lin-toto/recoil/HEAD/include/recoil/rans.h",
+    "https://raw.githubusercontent.com/lin-toto/recoil/HEAD/include/recoil/rans_decoder.h",
+    "https://raw.githubusercontent.com/lin-toto/recoil/HEAD/include/recoil/rans_encoder.h",
+    "https://raw.githubusercontent.com/lin-toto/recoil/HEAD/include/recoil/rans_coded_data.h",
+    "https://raw.githubusercontent.com/lin-toto/recoil/HEAD/include/recoil/split/rans_split_decoder.h",
+    "https://raw.githubusercontent.com/lin-toto/recoil/HEAD/include/recoil/split/rans_split_encoder.h",
+    "https://raw.githubusercontent.com/lin-toto/recoil/HEAD/include/recoil/cuda/rans_split_decoder_cuda.cuh",
+    "https://raw.githubusercontent.com/lin-toto/recoil/HEAD/examples/01_combine_encoded_splits/combine_encoded_splits.cpp",
+    "https://raw.githubusercontent.com/lin-toto/recoil-testscripts/HEAD/build.sh",
+    "https://raw.githubusercontent.com/lin-toto/recoil-testscripts/HEAD/runall.sh",
+    "https://raw.githubusercontent.com/lin-toto/recoil-testscripts/HEAD/Dockerfile",
+    "https://raw.githubusercontent.com/lin-toto/recoil-testscripts/HEAD/.gitmodules"
+  ],
+  "confidence": 0.72
+}

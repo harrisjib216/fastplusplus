@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/weissenberger/multians",
+  "one_liner": "CUDA research decoder for a single unpartitioned tANS bitstream; paper claims up to 17x over 64 CPU threads.",
+  "what_it_does": "Decodes one raw tANS-encoded bitstream on an NVIDIA GPU without the encoder having to split it into independent blocks, so a stream from an ordinary single-state tANS encoder can be decoded in parallel. The repo is a demo program, not a library: src/main.cc generates exponentially distributed 256-symbol data, encodes it with a basic built-in single-state tANS encoder, then times the GPU decoder (cuhd::CUHDGPUDecoder::decode) against a std::thread multicore implementation of the same method. Using it means vendoring the buffer, codetable and decoder classes and matching their encoder bit layout, not linking a stable API.",
+  "how_it_is_fast": "It decodes speculatively and relies on self-synchronisation. Each GPU thread starts decoding a small subsequence of input units (SUBSEQUENCE_SIZE 4) at a guessed state and bit offset and records a sync point (unit, bit, state, symbol count). Phase 1 synchronises subsequences within a thread block and phase 2 repeats a cross-block kernel until every block's start matches the previous block's end state. A thrust::exclusive_scan over per-subsequence symbol counts then gives output offsets, and phase 4 decodes again and writes the output in parallel.",
+  "when_to_use": [
+    "Research or prototyping on GPU entropy decoding, especially as the baseline that later work such as Recoil compares against",
+    "You already have large single-stream tANS data (radix 2, one table, up to 256 symbols) and an NVIDIA GPU, and you cannot change the encoder to add partitions",
+    "Data already resident in GPU memory: the demo times only the decode kernels, not the PCIe copies",
+    "Studying self-synchronising speculative decoding; the same author's CUHD/gpuhd applies the idea to Huffman"
+  ],
+  "when_not_to_use": [
+    "Decoding zstd or FSE frames: the bit layout comes from the repo's own toy encoder and has no zstd format compatibility",
+    "Anything that needs multiple tables, adaptive models, more than 256 symbols, rANS or byte-wise renormalisation (README: single table, b = 2 only)",
+    "Production code: 5 commits, no tests beyond the demo's equality check, untouched since 2019-07-26, and an open build-failure issue (#1, 2020) left unanswered",
+    "CPU-only or non-NVIDIA targets: only a CUDA implementation exists (the README says an OpenCL port 'should be straightforward' but none exists)",
+    "Small inputs or latency-bound paths: kernel launches, a host-side sync loop and the prefix scan dominate short streams"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "CUDA toolkit 9+ (nvcc, thrust), pthreads; GNU/Linux per README",
+    "min_toolchain": "C++14 (nvcc --std=c++14), CUDA SDK 9+, GPU compute capability 3.0+",
+    "platforms": "Linux x86-64 with an NVIDIA GPU; the Makefile hard-codes ARCH = 61 plus -arch=sm_70 and must be edited",
+    "thread_safety": "not documented; the decoder uses caller-allocated device buffers and auxiliary memory per call, so concurrent calls need separate buffers",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Open issue #1 (Nov 2020): build fails with 'src/multians_output_buffer.cc:28:49: error: invalid use of array with unspecified bounds' on newer compilers; no fix in the repo",
+    "Phase 2 is a do/while loop on the host that relaunches the kernel until all blocks report synchronised. It has no iteration cap, so a stream that synchronises slowly costs extra kernel launches and host round trips",
+    "main.cc passes a hard-coded maximum codeword length of 11 to decode() and decodes output in reverse order (output_buffer->reverse() afterwards), matching the demo encoder only",
+    "The demo's GPU timing covers decode kernels only: host-to-device copies of input and table, and the device-to-host copy of output, are outside TIMER_START/TIMER_STOP"
+  ],
+  "pick_this_over_siblings_when": "Pick multians over the CPU coders (FiniteStateEntropy, hypersonic-rANS, htscodecs) only when the data is a single unpartitioned tANS stream that must be decoded on a GPU. For new GPU ANS work, Recoil (rANS, CPU and GPU, decoder-adaptive splits) is newer, maintained and reports higher throughput than multians. CUHD/gpuhd is the Huffman equivalent from the same author.",
+  "verified_claims_summary": "The ICPP 2019 paper's abstract, seen only as a search snippet, reports up to 17x over a 64-thread CPU decoder, up to 31x over a SIMD decoder and up to 39x over Zstandard's entropy codec. The GPU, CPU and compiler behind those numbers were not readable here because ACM DL is blocked. The repo prints only raw microsecond timings of GPU kernels against its own std::thread decoder on synthetic data and contains no zstd comparison.",
+  "status_note": "Abandoned since 2019-07-26 with an open, unanswered build issue; LGPL-3.0, and the five main source files total about 1.7k lines, so vendoring is feasible, but expect to patch it for current CUDA/GCC.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/weissenberger/multians/HEAD/README.md",
+    "https://raw.githubusercontent.com/weissenberger/multians/HEAD/Makefile",
+    "https://raw.githubusercontent.com/weissenberger/multians/HEAD/LICENSE",
+    "https://github.com/weissenberger/multians/tree/master/src",
+    "https://raw.githubusercontent.com/weissenberger/multians/HEAD/src/main.cc",
+    "https://raw.githubusercontent.com/weissenberger/multians/HEAD/src/multians_gpu_decoder.cu",
+    "https://raw.githubusercontent.com/weissenberger/multians/HEAD/src/multicore_decoder.cc",
+    "https://raw.githubusercontent.com/weissenberger/multians/HEAD/src/ans_encoder.cc",
+    "https://raw.githubusercontent.com/weissenberger/multians/HEAD/src/ans_table_generator.cc",
+    "https://github.com/weissenberger/multians/issues",
+    "https://github.com/weissenberger/multians/issues/1"
+  ],
+  "confidence": 0.7
+}
