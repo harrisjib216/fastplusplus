@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/paralg/pargeo",
+  "one_liner": "Multicore C++17 computational-geometry library (3D convex hull, kd-tree, spatial graphs) that outruns sequential CGAL and Qhull hulls through parallelism.",
+  "what_it_does": "Research library from the MIT/UCR parallel-algorithms groups with parallel 2D/3D convex hull (pseudohull, divide-and-conquer, parallel quickhull, randomized incremental), a parallel kd-tree with k-NN, range search, bichromatic closest pair and well-separated pair decomposition, a batch-dynamic kd-tree, spatial graph generators (k-NN, 2D Delaunay, beta-skeleton/Gabriel, t-spanner, EMST), smallest enclosing ball, closest pair and Morton sort. The API is free template functions over parlay::slice/parlay::sequence of pargeo::point<dim> or fpoint<dim> (for example pargeo::hull3d::pseudo::compute(make_slice(P)) returns a sequence of triangular facets). It does not mimic CGAL or Qhull interfaces.",
+  "how_it_is_fast": "All modules run on parlaylib's work-stealing fork-join scheduler. The 3D pseudohull first prunes interior points in parallel: it builds an extreme-point simplex, partitions points by the facet they see (split_k), recurses on each facet's points in parallel, then runs a parallel quickhull on the survivors; per search snippets of the paper, its parallel hull uses a reservation technique so several facets can be inserted into the hull concurrently. The divide-and-conquer hull splits the input into one block per processor, hulls each block with sequential quickhull, and hulls the union of block-hull vertices. The kd-tree splits in parallel during construction and runs queries data-parallel.",
+  "when_to_use": [
+    "3D convex hulls of millions of float or double points on a many-core machine (the paper used 36 cores with two-way hyper-threading), where single-threaded CGAL or Qhull is the bottleneck.",
+    "Batch k-NN or radius/box range queries over a static 2D-7D point set, where a parallel kd-tree build plus data-parallel queries fit the workload.",
+    "Building spatial graphs in parallel: k-NN graph, 2D Delaunay graph, beta-skeleton/Gabriel graph, WSPD-based t-spanner, Euclidean MST.",
+    "Research or prototyping that wants several parallel geometry primitives (enclosing ball, closest pair, Morton sort) on one scheduler."
+  ],
+  "when_not_to_use": [
+    "Inputs needing robust hulls: visibility tests compare against a fixed absolute epsilon of 1e-5 in float/double (pargeo point eps, pseudohull numericKnob); there are no exact predicates in the code read, so very small, very large or degenerate (coplanar, duplicate) coordinates are risky, and the README says nothing about robustness.",
+    "Few cores or single-threaded builds: the claimed gains come from parallelism, and the repo's own benchmark compares only ParGeo's serial quickhull against its pseudohull, not CGAL or Qhull.",
+    "Hulls above 3D, or callers who need a half-edge/polyhedron mesh: hulls are 2D and 3D only, and the 3D result is a flat list of triangle facets (vertex coordinates).",
+    "Production code that needs maintenance: last commit 2022-09-12; the only issue (#1, January 2024, clang rejects a redefined default template argument in src/dataset/seedSpreader.cpp) is still open.",
+    "Dynamic kd-tree workloads where a maintained alternative exists (see Pkd-tree under siblings)."
+  ],
+  "integration": {
+    "form": "static lib (each hull module builds its own CMake library, e.g. pseudoHull3dLib) plus header-only parts (kd-tree, point types)",
+    "dependencies": "parlaylib (ParAlg fork, pargeo branch, git submodule); batch-dynamic-kdtree submodule; Google Benchmark and Google Test for benchmarks/tests; pthreads",
+    "min_toolchain": "C++17, CMake 3.10; GCC-style flags; clang fails to build seedSpreader.cpp without the one-line fix in issue #1",
+    "platforms": "x86-64 as configured (CMakeLists hard-codes -mcx16 for 16-byte compare-and-swap); other architectures not documented",
+    "thread_safety": "not documented; parallelism uses parlaylib's global scheduler, whose thread count comes from the PARLAY_NUM_THREADS environment variable (default std::thread::hardware_concurrency)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The root CMakeLists.txt overwrites CMAKE_CXX_FLAGS with set(...) (-DHOMEGROWN -pthread -mcx16 -O3 -DNDEBUG -fPIC), so flags you pass on the command line are discarded unless you edit it; USE_PARALLEL=OFF switches to -DPARLAY_SEQUENTIAL.",
+    "pseudo::compute is explicitly instantiated only for fpoint<3> and point<3>; other point types will not link without adding instantiations.",
+    "By construction the pseudohull filter only discards interior points, so inputs with most points on the hull (the repo's onSphere set) get little benefit from the pruning step.",
+    "The README's Multi-core Parallelism section is empty; thread control is only through parlaylib."
+  ],
+  "pick_this_over_siblings_when": "Pick ParGeo over DGtal QuickHull (sequential, about 2x CGAL convex_hull_3) when you have many cores and very large 3D point sets and can accept epsilon-based float predicates; prefer DGtal for single-threaded or integer-lattice work. For parallel kd-trees, the Pkd-tree from the same research lineage (ucrparlay) is newer and benchmarks against the CGAL kd-tree and Boost R-tree directly, so use ParGeo's kd-tree mainly when you also want its WSPD, EMST or spatial-graph routines.",
+  "verified_claims_summary": "Not reproduced, and the paper was not opened (arxiv.org, cs.ucr.edu, par.nsf.gov, dspace.mit.edu blocked). Search-result snippets of the ESA 2022 paper say the fastest parallel hulls on 36 cores with two-way hyper-threading are 10.5-124x (61.4x on average) faster than CGAL and 5.68-43.8x (19.9x on average) faster than Qhull for 3D hulls, while another snippet says pseudohull reaches up to 43.7x over Qhull and up to 5.05x over CGAL; the two statements conflict, and CPU model, compiler and CGAL/Qhull versions are unknown.",
+  "status_note": "Abandoned since 2022-09-12 (one open build issue from 2024) but MIT-licensed; modules are small enough to vendor together with the parlaylib fork, and the ESA 2022 paper documents the algorithms.",
+  "sources_read": [
+    "https://github.com/ParAlg/ParGeo",
+    "https://raw.githubusercontent.com/ParAlg/ParGeo/HEAD/README.md",
+    "https://raw.githubusercontent.com/ParAlg/ParGeo/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/ParAlg/ParGeo/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/ParAlg/ParGeo/HEAD/benchmark/hull3d_bench.cpp",
+    "https://github.com/ParAlg/ParGeo/tree/main/include",
+    "https://github.com/ParAlg/ParGeo/tree/main/include/convexHull3d",
+    "https://raw.githubusercontent.com/ParAlg/ParGeo/HEAD/include/convexHull3d/pseudo/hull.h",
+    "https://raw.githubusercontent.com/ParAlg/ParGeo/HEAD/include/convexHull3d/divideConquer/hull.h",
+    "https://raw.githubusercontent.com/ParAlg/ParGeo/HEAD/include/convexHull3d/parallelQuickHull/hull.h",
+    "https://raw.githubusercontent.com/ParAlg/ParGeo/HEAD/include/convexHull3d/hullTopology.h",
+    "https://raw.githubusercontent.com/ParAlg/ParGeo/HEAD/include/kdTree/kdTree.h",
+    "https://raw.githubusercontent.com/ParAlg/ParGeo/HEAD/include/pargeo/point.h",
+    "https://github.com/ParAlg/ParGeo/tree/main/src/convexHull3d",
+    "https://raw.githubusercontent.com/ParAlg/ParGeo/HEAD/src/convexHull3d/CMakeLists.txt",
+    "https://raw.githubusercontent.com/ParAlg/ParGeo/HEAD/src/convexHull3d/plot.py",
+    "https://github.com/ParAlg/ParGeo/tree/main/src/convexHull3d/pseudoHull",
+    "https://raw.githubusercontent.com/ParAlg/ParGeo/HEAD/src/convexHull3d/pseudoHull/CMakeLists.txt",
+    "https://raw.githubusercontent.com/ParAlg/ParGeo/HEAD/src/convexHull3d/pseudoHull/hull.cpp",
+    "https://raw.githubusercontent.com/ParAlg/ParGeo/HEAD/example/convexHull.cpp",
+    "https://raw.githubusercontent.com/ParAlg/parlaylib/pargeo/include/parlay/scheduler.h",
+    "https://github.com/ParAlg/ParGeo/issues?q=is%3Aissue",
+    "https://github.com/ParAlg/ParGeo/issues/1",
+    "https://github.com/yushangdi/yushangdi.github.io",
+    "https://github.com/yushangdi/yushangdi.github.io/tree/master/files",
+    "https://www.cs.ucr.edu/~ygu/papers/ESA22/ParGeo.pdf (EGRESS_BLOCKED)",
+    "https://dspace.mit.edu/bitstream/handle/1721.1/151320/wang-yiqiuw-phd-eecs-2023-thesis.pdf (blocked by proxy)"
+  ],
+  "confidence": 0.55
+}

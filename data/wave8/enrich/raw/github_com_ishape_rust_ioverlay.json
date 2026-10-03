@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/ishape-rust/ioverlay",
+  "one_liner": "Rust 2D polygon boolean engine (union/intersect/difference/xor, offsetting) that outscales Clipper2 on very large, intersection-heavy inputs.",
+  "what_it_does": "Computes boolean overlays (union, intersection, difference, xor) of polygons with holes and self-intersections under even-odd, non-zero, positive or negative fill rules, plus polyline slicing/clipping, path and polygon offsetting, simplification and spatial predicates (intersects, within, covers, touches). The API is Rust traits on slices of points (subj.overlay(&clip, OverlayRule::Union, FillRule::EvenOdd)) or reusable Overlay/FloatOverlay objects; float input is converted to an i16/i32/i64 integer grid internally. It is not a Clipper2 drop-in: different types, fill-rule names and output layout (Vec of shapes, outer contour counter-clockwise, holes clockwise).",
+  "how_it_is_fast": "All geometry runs on integer coordinates: segments are sorted (i_key_sort, parallel radix-style sort when allowed), coincident edges merged, then split at intersections by one of three solvers chosen by size: an all-pairs list below about 4,000 segments, a sweep over an interval tree of expiring segments (i_tree SegExpTree), or, above 16,000 segments, a grid of vertical strips where each strip is split independently (in parallel with rayon when the allow_multithreading feature is on). Intersections are snapped with a growing snap radius and the split repeats until stable, after which winding counts are filled and contours extracted from the graph. The comparison page's large factors over Clipper2 appear where Clipper2's run time grows much faster than linearly with intersection count.",
+  "when_to_use": [
+    "Rust (or WASM/Swift via the iShape bindings) code that needs polygon booleans on large inputs: hundreds of thousands to millions of edges with dense intersections, where the comparison page shows 2.5x (130k squares) to 17x (8.4M squares) over Clipper2 single-threaded.",
+    "Deeply nested or spiral-like inputs, where Clipper2 degraded sharply on the comparison page (Nested Squares 65,536: 4.03 s vs 3502 s; Spiral 1M: 3.19 s vs 260 s).",
+    "Unioning many shapes at once (simplify_shape) instead of chaining pairwise overlays.",
+    "Pipelines that want deterministic integer-grid results or OGC-valid output (OverlayOptions::ogc()), or that already use georust/geo, whose boolean ops are built on it.",
+    "no_std targets: the crate is #![no_std] with alloc."
+  ],
+  "when_not_to_use": [
+    "Small inputs: on the comparison page Clipper2 is equal or faster at a few hundred to about a thousand elements (Checkerboard 481 squares 1.017 ms vs 1.117 ms; Lines Net 64: 0.75 ms vs 1.01 ms; Spiral 1024: 2.94 ms vs 3.57 ms).",
+    "C++ codebases wanting a supported library: there is no C/C++ API; iShape-ffi is an undocumented staticlib bridge (0 stars, built against sibling-repo paths) aimed at the Swift binding.",
+    "Workloads needing exact arithmetic or no snapping: results are rounded to an integer grid and intersections are snapped within a growing radius (Precision setting), so vertices can move slightly.",
+    "Integer inputs outside -2^(N-2)..2^(N-2)-1 for the chosen engine: the integer APIs do not check the bound, and overflow gives wrong results.",
+    "Risk-averse production use without your own tests: 2026 issues include panics (#88 i16 Frag overflow, #91 hole binding), a Frag strategy dropping a filled region (#87), an infinite loop in buffering (#37) and non-OGC union output (#57); all are closed, but they show the edge-case surface."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "i_float, i_shape, i_tree, i_key_sort (same author); rayon optional via allow_multithreading; optional glam and serde features",
+    "min_toolchain": "Rust 1.88 (edition 2024) for i_overlay 9.0.0",
+    "platforms": "any Rust target; #![no_std] + alloc; WASM via iShape-js; multithreading needs rayon (std)",
+    "thread_safety": "not documented; operations take owned or borrowed inputs and build their own overlay object, and Overlay objects are reused through &mut self, so one object per thread",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Multithreading is off by default; you must enable the allow_multithreading Cargo feature, and parallel sorting kicks in only above par_sort_min_size (32,768 by default). Issue #65 (closed) reported the feature not enabling parallel sort in i_key_sort.",
+    "Default float conversion uses the i32 engine with a conservative coordinate budget; pick i64 (overlay_as::<i64> or FloatOverlay::<_, i64>) when bounds or precision demand it, and expect i64 to be about 30 percent slower (README chart).",
+    "Polygon offsetting assumes valid input (no self-intersections, CCW outer and CW holes); run simplify_shape first otherwise. Integer-math miter joins clip corners sharper than 5 degrees.",
+    "Infallible float APIs panic on non-finite or out-of-range coordinates; the fixed-scale APIs return errors instead."
+  ],
+  "pick_this_over_siblings_when": "Pick iOverlay over clipper2next (a C++ Clipper2 fork with about 1.6x geometric-mean gain) when inputs are large and intersection-dense enough to hit Clipper2's super-linear growth and a Rust dependency is acceptable; stay with clipper2next or Clipper2 for C++ drop-in use and small polygons. For offsetting with true arcs pick CavalierContours, and for GEOS-compatible unions in Python/WASM pipelines qdgeo is the closer fit.",
+  "verified_claims_summary": "First-party comparison page: iOverlay Rust v1.9.0 versus Clipper2 C++ v1.4.0 (and Boost 1.86) on six synthetic grid tests, on a '3 GHz 6-Core Intel Core i5' with no compiler named; single-thread iOverlay is 16.7x faster on 8,384,513 checkerboard squares (38.6 s vs 644.3 s), 12.4x on Not Overlap, 17.1x on Windows, 6.1x on Lines Net 4096, 81x on Spiral 1M and 869x on Nested Squares 65,536 (ratios derived from page data), while Clipper2 wins or ties at small sizes. The numbers are for an old iOverlay release (current 9.0.0) and Boost's build type is unset.",
+  "status_note": "Actively maintained (last commit 2026-09-24, 940 commits, every listed issue closed), dual MIT/Apache-2.0, 9.0M crates.io downloads and the boolean engine inside georust/geo; usable from C++ only through your own FFI layer.",
+  "sources_read": [
+    "https://github.com/iShape-Rust/iOverlay",
+    "https://raw.githubusercontent.com/iShape-Rust/iOverlay/HEAD/README.md",
+    "https://raw.githubusercontent.com/iShape-Rust/iOverlay/HEAD/iOverlay/README.md",
+    "https://raw.githubusercontent.com/iShape-Rust/iOverlay/HEAD/iOverlay/Cargo.toml",
+    "https://raw.githubusercontent.com/iShape-Rust/iShape-js/HEAD/docs/overlay/performance/performance.html",
+    "https://github.com/iShape-Rust/iOverlay/tree/main/iOverlay/src",
+    "https://github.com/iShape-Rust/iOverlay/tree/main/iOverlay/src/split",
+    "https://github.com/iShape-Rust/iOverlay/tree/main/iOverlay/src/core",
+    "https://raw.githubusercontent.com/iShape-Rust/iOverlay/HEAD/iOverlay/src/lib.rs",
+    "https://raw.githubusercontent.com/iShape-Rust/iOverlay/HEAD/iOverlay/src/core/solver.rs",
+    "https://raw.githubusercontent.com/iShape-Rust/iOverlay/HEAD/iOverlay/src/split/solver.rs",
+    "https://raw.githubusercontent.com/iShape-Rust/iOverlay/HEAD/iOverlay/src/split/solver_fragment.rs",
+    "https://raw.githubusercontent.com/iShape-Rust/iOverlay/HEAD/iOverlay/src/split/solver_tree.rs",
+    "https://raw.githubusercontent.com/iShape-Rust/iOverlay/HEAD/iOverlay/src/split/solver_list.rs",
+    "https://raw.githubusercontent.com/iShape-Rust/iOverlay/HEAD/iOverlay/src/split/grid_layout.rs",
+    "https://github.com/iShape-Rust/iOverlay/issues?q=is%3Aissue",
+    "https://github.com/iShape-Rust/iOverlay/blob/main/CONTRIBUTING.md",
+    "https://github.com/iShape-Rust",
+    "https://github.com/iShape-Rust/iShape-ffi",
+    "https://raw.githubusercontent.com/iShape-Rust/iShape-ffi/HEAD/README.md",
+    "https://raw.githubusercontent.com/iShape-Rust/iShape-ffi/HEAD/Cargo.toml"
+  ],
+  "confidence": 0.7
+}
