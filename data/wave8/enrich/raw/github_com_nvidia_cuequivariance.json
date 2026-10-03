@@ -1,0 +1,55 @@
+{
+  "id": "https://github.com/nvidia/cuequivariance",
+  "one_liner": "NVIDIA's CUDA kernels for equivariant tensor products (MACE, NequIP, Allegro); an independent study puts MACE inference about 3x faster than e3nn.",
+  "what_it_does": "A Python library (cuequivariance core plus cuequivariance_torch and cuequivariance_jax frontends) that describes equivariant operations as 'segmented polynomials' and executes them with CUDA kernels shipped in separate cuequivariance-ops-* wheels. The PyTorch API offers e3nn-like modules (cuet.ChannelWiseTensorProduct, FullyConnectedTensorProduct, SymmetricContraction, Linear, SphericalHarmonics) plus a generic cuet.SegmentedPolynomial with a method switch (naive, uniform_1d, fused_tp, indexed_linear). It also ships AlphaFold-style triangle_attention, triangle_multiplicative_update and attention_pair_bias kernels. It is not a drop-in replacement for e3nn modules: you rebuild the operation from cue descriptors, and data use the transposed ir_mul layout by default.",
+  "how_it_is_fast": "Every supported operation is lowered to one segmented-polynomial descriptor and run by a JIT-compiled 'uniform_1d' CUDA kernel (or fused_tp / indexed_linear kernels) instead of e3nn's chain of small PyTorch ops. The uniform_1d kernel fuses the gather of sender features and the scatter-add of messages into the tensor-product call, so the edge-sized intermediates of the e3nn message-passing path are not written to memory. It uses an ir_mul (component-major) layout so channels are contiguous, and indexed linear layers (per-species weights) run as one kernel instead of e3nn's FullyConnectedTensorProduct against a one-hot vector.",
+  "when_to_use": [
+    "Inference or training of MACE-style interatomic potentials on NVIDIA GPUs, where MACE already exposes cuEquivariance as a backend",
+    "Large graphs (thousands of nodes, tens of thousands of edges) with multiplicities around 128, where the tutorial says the kernels do best",
+    "Message-passing layers where you can fuse gather, channelwise tensor product and scatter into one uniform_1d call",
+    "Symmetric contraction and per-species (indexed) linear layers in MACE's product basis and skip connections",
+    "Protein-structure models (OpenFold3/Boltz-style) that need triangle attention or triangle multiplication on Ampere through Blackwell"
+  ],
+  "when_not_to_use": [
+    "You need AMD GPUs, CPUs or source-level control of the kernels: the kernel wheels are NVIDIA-only binaries under a proprietary license, and the open-source OpenEquivariance covers AMD and is BSD-3",
+    "Plain equivariant linear layers or scalar-only irreps: the tutorial says it does 'not provide a large speedup' there, and issue #45 reported no gain over e3nn for a 3000x0e linear case",
+    "Small inputs: the tutorial says the kernels do best on very large inputs, and triangle kernels fall back to PyTorch below sequence length 100 by default",
+    "Code that must stay in e3nn's mul_ir layout end to end: each TransposeIrrepsLayout call costs time, which the tutorial calls 'quite expensive'",
+    "Production code that cannot absorb API breaks: the README says Beta, and 0.4.0 and 0.9.0 removed or renamed public classes"
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "cuequivariance (core), PyTorch (>=2.11 for ops 0.12.0) or JAX, and the proprietary cuequivariance-ops-torch-cu12/-cu13 or cuequivariance-ops-jax-* kernel wheels; Triton for the triangle kernels; optional ONNX/TensorRT extras for export",
+    "min_toolchain": "Python 3.10+ (3.10-3.14 listed), CUDA 12 or 13 wheels (CUDA 11 dropped in 0.6.0); Blackwell triangle-attention kernels need cu13 builds",
+    "platforms": "Linux x86-64 and aarch64 (manylinux wheels) with NVIDIA GPUs; the 'naive' PyTorch method runs anywhere but is unoptimized",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": "partial — the descriptors reproduce e3nn operations (an O3_e3nn group exists for matching conventions) and MACE can switch backends, but modules, weight layouts and the default ir_mul data layout differ from e3nn, so direct e3nn code must be ported"
+  },
+  "gotchas": [
+    "uniform_1d and fused_tp compute only in FP32 or FP64; FP16/BF16 inputs are upcast to FP32 math unless you choose another method.",
+    "The triangle-multiplication Triton kernels can run ahead-of-time tuning that 'may take several hours'; the cache lives in ~/.cache/cuequivariance-triton and is lost on container restart unless it is persisted.",
+    "Open issue #244 reports out-of-shared-memory failures on Blackwell at embedding size 128, and 0.9.1 fixed an index overflow in uniform_1d at large index values; 0.9.1 also turned parallel kernel compilation off by default after multi-GPU problems.",
+    "Deprecated primitives (TensorProduct, EquivariantTensorProduct, SymmetricTensorProduct) raise ImportError since 0.9.0; use SegmentedPolynomial or the high-level modules."
+  ],
+  "pick_this_over_siblings_when": "Pick cuEquivariance over OpenEquivariance when you run MACE or AlphaFold-style models on NVIDIA hardware and want the vendor-maintained backend with JAX bindings and triangle kernels. OpenEquivariance claims parity with it, is BSD-3 and runs on AMD. batmobile's 11.8x-20x e3nn numbers come from a much smaller single-author kernel set.",
+  "verified_claims_summary": "An independent preprint (arXiv 2510.23621, 'Speeding Up MACE', read only as a search snippet) profiles MACE end to end and finds the cuEquivariance backend cuts inference latency by about 3x versus e3nn, with roughly 4x more from casting linear layers to BF16/FP16. GPU, compiler and exact model size were not visible. The repo's own tutorial times e3nn against cuEquivariance (1000 nodes, 10000 edges, multiplicity 128, FP32) but stores no output.",
+  "status_note": "Actively developed by NVIDIA (0.12.0 on PyPI 2026-09-23, roughly monthly releases) and still labelled Beta; the Apache-2.0 Python frontends are usable, but the speed comes from closed binary kernel wheels under the NVIDIA Math Libraries SDK license, which forbids reverse engineering and derivative works, so usability is mixed.",
+  "sources_read": [
+    "https://github.com/NVIDIA/cuEquivariance",
+    "https://raw.githubusercontent.com/NVIDIA/cuEquivariance/HEAD/README.md",
+    "https://raw.githubusercontent.com/NVIDIA/cuEquivariance/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/NVIDIA/cuEquivariance/HEAD/VERSION",
+    "https://raw.githubusercontent.com/NVIDIA/cuEquivariance/HEAD/docs/tutorials/pytorch/MACE.rst",
+    "https://raw.githubusercontent.com/NVIDIA/cuEquivariance/HEAD/cuequivariance_torch/cuequivariance_torch/__init__.py",
+    "https://raw.githubusercontent.com/NVIDIA/cuEquivariance/HEAD/cuequivariance_torch/cuequivariance_torch/primitives/segmented_polynomial.py",
+    "https://raw.githubusercontent.com/NVIDIA/cuEquivariance/HEAD/cuequivariance_torch/pyproject.toml",
+    "https://github.com/NVIDIA/cuEquivariance/issues?q=is%3Aissue+slow+OR+performance+OR+slower",
+    "https://github.com/NVIDIA/cuEquivariance/issues/45",
+    "https://github.com/NVIDIA/cuEquivariance/issues/39",
+    "https://pypi.org/pypi/cuequivariance-ops-torch-cu12/json",
+    "https://pypi.org/pypi/cuequivariance-torch/json",
+    "https://raw.githubusercontent.com/PASSIONLab/OpenEquivariance/HEAD/README.md",
+    "https://github.com/Cortex-Discovery/sobek"
+  ],
+  "confidence": 0.6
+}

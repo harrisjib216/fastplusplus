@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/hazyresearch/thundermittens",
+  "one_liner": "Metal port of the ThunderKittens tile DSL for Apple GPUs; its bf16 GEMM is about 9% faster than MLX's mx.matmul.",
+  "what_it_does": "A header-only Metal Shading Language tile library (ThunderMittens/include, included as tk.metal) with register tiles and vectors, global layouts (gl), load/store, mma_AB/mma_ABt and row-wise reductions, mirroring ThunderKittens' CUDA API. It can be used two ways: an Xcode project for writing standalone MSL kernels, or an MLX C++ extension (Python module tk, built with nanobind) that exposes two example ops, attn_fwd(q, k, v) and matmul_custom(a, b), as MLX primitives. It is a research demo with two real kernels, not a library you call in place of MLX.",
+  "how_it_is_fast": "The base tile shrinks from ThunderKittens' 16x16 to 8x8 so tiles map directly onto Metal's simdgroup_matrix multiply-accumulate; per the blog snippet this was needed because the M2 Pro allows at most 128 registers per thread. Each threadgroup is one 32-thread SIMD group. The GEMM computes a 32x32 output tile from 32x16 and 16x32 register tiles with FP32 accumulators, reads straight from device memory with no threadgroup-memory staging, and fully unrolls the K loop. The attention kernel is FlashAttention-style: online softmax over 8-row query tiles, with Q pre-scaled by 1/sqrt(D)*log2(e) so it can use exp2.",
+  "when_to_use": [
+    "Learning or porting ThunderKittens-style tile kernels to Apple Silicon (M-series GPUs) through Metal",
+    "Experimenting with a custom bf16 square GEMM inside MLX where every dimension is a multiple of 32 (time_gemm.py sweeps 1024 to 16384)",
+    "Prototyping fused Metal kernels for MLX with tile primitives instead of hand-written simdgroup_matrix code (the blog says the GEMM is 11 lines against MLX's 100+)",
+    "Non-causal, unmasked bf16 forward attention with head dim 64 or 128 and equal Q/K/V shapes, for inference experiments"
+  ],
+  "when_not_to_use": [
+    "Any shipped product: the repo has no license file for its own code (only the vendored MLX tree is MIT), so legally it is reference-only",
+    "Attention speed: the first-party claim is only 'within +-15%' of mx.fast.scaled_dot_product_attention, so it is not a reliable win",
+    "Training or autodiff: there is no backward kernel, and the JVP transform in attn_fwd.cpp is a commented-out template stub",
+    "Causal or masked attention, GQA/MQA (Q, K and V must share one shape), head dims other than 64/128, or FP16/FP32 attention",
+    "CPU fallback or ragged shapes: eval_cpu ends in assert(false), and sequence lengths and GEMM sizes that are not tile multiples have no tail handling"
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "MLX built from the vendored ThunderMittens/mlx tree (requirements: mlx>=0.18.1), nanobind 2.2.0, CMake, setuptools; Xcode for the standalone MSL path",
+    "min_toolchain": "C++17, CMake 3.27 (kernels/CMakeLists.txt), Python 3.8+, Xcode Command Line Tools",
+    "platforms": "macOS on Apple Silicon (Metal GPU only); the blog's numbers are from an M2 Pro",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": "partial — attn_fwd and matmul_custom are separate MLX ops with their own names; attn_fwd takes no scale, mask or causal argument and applies a fixed 1/sqrt(D) scale, so existing mx.fast.scaled_dot_product_attention or mx.matmul calls must be rewritten and shape-padded"
+  },
+  "gotchas": [
+    "Shape and dtype checks are plain assert() calls (N a multiple of 8 for attention; GEMM M/N multiples of 32 and K a multiple of 16), which disappear in release builds, so wrong shapes can produce silent garbage or out-of-bounds reads.",
+    "matmul_custom accepts float16 in its host-side check, but the float16 Metal instantiation is commented out; only float32 and bfloat16 kernels exist.",
+    "time_attn.py warms up MLX's SDPA instead of the ThunderMittens kernel and passes scale=1 to MLX while the TK kernel scales by 1/sqrt(D); neither timing script checks correctness, and each iteration calls mx.eval, so launch overhead is included.",
+    "The repository vanished and was restored on 2025-08-26 (two 'revive thundermittens' commits; ThunderKittens issue #132), so there is no history, issue tracker activity or tests to lean on."
+  ],
+  "pick_this_over_siblings_when": "Pick it over ThunderKittens (CUDA) or HipKittens (AMD) only when the target is an Apple GPU and you want the same tile programming model there. Effort (bucketMul) is the other Apple Silicon entry but does approximate matrix-vector products for LLM decoding, not exact GEMM or attention.",
+  "verified_claims_summary": "First-party only, read as a WebSearch snippet because the Hazy Research blog is egress-blocked: on an Apple M2 Pro, the bf16 GEMM is about 9% faster than mx.matmul on most square sizes, and the forward attention kernel is within +-15% of mx.fast.scaled_dot_product_attention (B=16, H=16, N 512 to 2560, D 64/128 in time_attn.py). The repo stores no results, and both kernels are built with MLX's default Metal compilation, with no extra flags.",
+  "status_note": "Stale (two restore commits on 2025-08-26, 24 stars) and unlicensed, so it is reference code for reading and re-implementing, not for vendoring.",
+  "sources_read": [
+    "https://github.com/HazyResearch/ThunderMittens",
+    "https://raw.githubusercontent.com/HazyResearch/ThunderMittens/HEAD/README.md",
+    "https://raw.githubusercontent.com/HazyResearch/ThunderMittens/HEAD/ThunderMittens/kernels/time_attn.py",
+    "https://raw.githubusercontent.com/HazyResearch/ThunderMittens/HEAD/ThunderMittens/kernels/time_gemm.py",
+    "https://raw.githubusercontent.com/HazyResearch/ThunderMittens/HEAD/ThunderMittens/kernels/CMakeLists.txt",
+    "https://raw.githubusercontent.com/HazyResearch/ThunderMittens/HEAD/ThunderMittens/kernels/setup.py",
+    "https://raw.githubusercontent.com/HazyResearch/ThunderMittens/HEAD/ThunderMittens/kernels/requirements.txt",
+    "https://raw.githubusercontent.com/HazyResearch/ThunderMittens/HEAD/ThunderMittens/kernels/attn_fwd/attn_fwd.metal",
+    "https://raw.githubusercontent.com/HazyResearch/ThunderMittens/HEAD/ThunderMittens/kernels/attn_fwd/attn_fwd.cpp",
+    "https://raw.githubusercontent.com/HazyResearch/ThunderMittens/HEAD/ThunderMittens/kernels/matmul_custom/matmul_custom.metal",
+    "https://raw.githubusercontent.com/HazyResearch/ThunderMittens/HEAD/ThunderMittens/kernels/matmul_custom/matmul_custom.cpp",
+    "https://raw.githubusercontent.com/HazyResearch/ThunderKittens/HEAD/README.md",
+    "https://github.com/philipturner/metal-flash-attention"
+  ],
+  "confidence": 0.6
+}

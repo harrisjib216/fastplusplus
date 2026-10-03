@@ -101,3 +101,6 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - snudatalab/auto-mpft (B): the KDD 2024 paper is reachable at raw.githubusercontent.com/yongchanpark/yongchanpark.github.io/gh-pages/resources/2024/KDD/ParkKK24.pdf (HTTP 200) although the enrich entry says the host was blocked; retier check against the paper. (from PFT enricher)
 - Author gh-pages repos (yongchanpark.github.io) carry paper PDFs reachable via raw.githubusercontent.com; try the same trick for other blocked papers.
 - SPADE (arXiv 2608.03335) and PISA (arXiv 2602.01077) benchmark independently against SpargeAttn (arXiv blocked); SpargeAttention2 (arXiv 2602.13515) has no released code (#119). (from SpargeAttn enricher)
+- Cortex-Discovery/sobek (Apache-2.0, 12 stars, arXiv 2607.18074): tensor-product convolutions 1.2x-49.7x faster in 75 capacity-matched comparisons, baseline mostly OpenEquivariance. Candidate for the equivariant-GNN kernel set. (from cuEquivariance enricher)
+- philipturner/metal-flash-attention (MIT, 612 stars, Swift/Metal, forward and backward, 83-86% ALU on M1 Max): not catalogued; no MLX comparison on its page. (from ThunderMittens enricher)
+- arXiv 2605.15073 'Fast contracted Clebsch-Gordan tensor products for equivariant graph neural networks': unchecked. (from cuEquivariance enricher)
