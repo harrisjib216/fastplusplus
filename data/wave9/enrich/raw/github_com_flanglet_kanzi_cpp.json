@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/flanglet/kanzi-cpp",
+  "one_liner": "Multithreaded BWT/context-mixing/LZ compressor with nine presets; beats xz -9 on compress speed at similar or better ratio.",
+  "what_it_does": "Kanzi is a block-based lossless compressor (CLI plus C++ and C library) with its own seekable container format, not compatible with gzip, xz or zstd. Each block runs a runtime-selected chain of transforms (TEXT, UTF, EXE, BWT, LZX, ROLZ, LZP, DNA, ...) followed by an entropy coder (Huffman, ANS, FPAQ, CM, TPAQ). The C++ API is CompressedOutputStream / CompressedInputStream (std::ostream / std::istream subclasses taking transform string, codec string, block size, job count and checksum flag); the C API is initCompressor/compress/disposeCompressor and the matching decompressor calls.",
+  "how_it_is_fast": "Blocks (4 MiB default, 8-32 MiB at levels 6-9) are compressed and decompressed in parallel on worker threads, which is where most of the wall-clock win over single-threaded xz comes from. The mid and high levels use Burrows-Wheeler Transform pipelines (BWT+RANK/SRT+ZRLT with ANS0/FPAQ at levels 5-6; LZP+TEXT+UTF+BWT+LZP with a CM coder at level 7) instead of LZ77+LZMA's optimal parsing, and content-specific preprocessors (text dictionary, UTF, x86 EXE, DNA) raise ratio before entropy coding. Levels 8-9 use TPAQ/TPAQX context mixing and are symmetric and slow.",
+  "when_to_use": [
+    "Backups, archives and one-off transfers where you control both ends and want xz -9 class ratio or better at a fraction of the compress time on a multicore box (README, Ryzen 9 9950X, silesia.tar: level 7 1150 ms vs xz -9 43611 ms, 47.3 MB vs 48.8 MB).",
+    "Single-thread high-ratio compression faster than xz -9: lzbench 2.4 on EPYC 9555P has kanzi -7 at 10.8 MB/s vs xz -9 at 2.75 MB/s with a slightly smaller output.",
+    "Text, UTF-8, x86 executables or DNA/FASTA data, where the built-in TEXT, UTF, EXE and DNA transforms help (wiki lzbench DNA table: kanzi -7 ratio 8.15% vs xz -5 7.64%, kanzi -9 7.02%).",
+    "Data that needs block-level random access: the bitstream is seekable and --from/--to decode a range of blocks.",
+    "Research or niche formats where you want to plug in a custom Transform<T> or entropy codec via the factory classes."
+  ],
+  "when_not_to_use": [
+    "Read-heavy data (compress once, decompress many times): at levels 5-7 decompression is roughly symmetric with compression and far slower than xz or zstd per core (lzbench single thread: kanzi -7 15.8 MB/s vs xz -9 122 MB/s; zstd -19 decompresses silesia in 23 ms vs 885 ms for kanzi -7 in the README).",
+    "Anything that must interoperate with standard tools or formats (gzip, xz, zstd, 7z): the output is only readable by Kanzi (Java/Go ports exist, but issue #39 found TPAQX and CM bitstreams differed between the Java and C++ 2.5.0 implementations).",
+    "Low levels as a zstd replacement: on silesia.tar with 16 threads kanzi -2 (59/41 ms) is about the same ratio as zstd -T16 -2 (57/25 ms) and decodes slower; the wiki lzbench tables show zstd -1/-3 compressing faster.",
+    "Levels 8-9 under latency or memory constraints: TPAQ/TPAQX run at 2-60 MB/s even with 16 threads and use 16-32 MiB blocks per thread.",
+    "Untrusted or adversarial input without your own fuzzing: memory-safety bugs in decoders were found and fixed as recently as 2026 (issue #37 ROLZ out-of-bounds read, #36 TPAQ double free on 64 MiB+ blocks)."
+  ],
+  "integration": {
+    "form": "static lib | shared lib (Makefile 'lib' target or CMake), plus CLI",
+    "dependencies": "none (pthreads/std::thread for multithreading)",
+    "min_toolchain": "Builds as C++98 through C++20 per README (CMake defaults to C++17); multithreading needs C++11 and g++ 5+; MSVC 2008/2022/2026 solutions provided",
+    "platforms": "Linux, macOS, Windows, BSD; portable C++ with optional intrinsics (KANZI_USE_INTRINSICS off by default); armhf and i386 builds tested in issue #34",
+    "thread_safety": "Library parallelizes internally across blocks (job count parameter); per-stream objects are not documented as shareable across threads; custom transforms must be multi-thread safe per the wiki.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Both the Makefile and CMake (KANZI_ENABLE_NATIVE_OPTIMIZATIONS ON) build with -march=native by default, so a binary built on one machine may crash with illegal instructions on an older CPU; turn it off for distributable builds. Builds use -fno-rtti.",
+    "The CLI uses half the available cores by default (max 64 jobs); -j 0 uses all cores, -j 1 forces single-threaded. Large default block sizes at levels 7-9 cap parallelism on small files.",
+    "Bitstream compatibility is kept for releases (old versions decode), but development snapshots may break it; pin a release tag for stored data.",
+    "It is a compressor, not an archiver: no file metadata, permissions or timestamps are kept, and checksums are optional (block-level 32/64-bit)."
+  ],
+  "pick_this_over_siblings_when": "Pick Kanzi over xz, Fast LZMA2 or lrzip when you want LZMA-class or better ratio with much faster compression of a single stream and can live with slow, non-standard decompression; prefer LZHAM or zstd -19 when decompression speed matters more than compress time. Against bzip3 it is about equal single-threaded (lzbench: kanzi -7 10.8 MB/s at 22.32% vs bzip3 -5 11.9 MB/s at 22.29%) but offers a wider preset range and faster multithreaded runs (README: 1150 ms vs bzip3 -j16 2348 ms at similar size).",
+  "verified_claims_summary": "Independent lzbench 2.4 (gcc 15.2.0 release binary, one thread of an AMD EPYC 9555P, silesia.tar) measured kanzi 2.5.3 -7 compressing at 10.8 MB/s to 22.32% vs xz 5.8.4 -9 at 2.75 MB/s to 23.01% (about 3.9x faster), while decompressing at 15.8 vs 122 MB/s. The README's 38x figure (1150 ms vs 43611 ms on a Ryzen 9 9950X) pits multithreaded kanzi 2.6.0 against single-threaded xz, so most of that gap is parallelism.",
+  "status_note": "Actively maintained (commits in late September 2026, all 36 visible issues closed; issue #37 came from integrating Kanzi into 7-Zip-zstd) and Apache-2.0 with no dependencies, so it is easy to vendor as a library.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/flanglet/kanzi-cpp/HEAD/README.md",
+    "https://github.com/flanglet/kanzi-cpp/wiki/Using-and-extending-the-code",
+    "https://github.com/flanglet/kanzi-cpp/wiki/q&a",
+    "https://github.com/flanglet/kanzi-cpp/wiki/Performance",
+    "https://github.com/flanglet/kanzi-cpp/issues?q=is%3Aissue",
+    "https://github.com/flanglet/kanzi-cpp/issues/41",
+    "https://github.com/flanglet/kanzi-cpp/issues/37",
+    "https://raw.githubusercontent.com/flanglet/kanzi-cpp/HEAD/src/app/BlockCompressor.cpp",
+    "https://raw.githubusercontent.com/flanglet/kanzi-cpp/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/flanglet/kanzi-cpp/HEAD/src/Makefile"
+  ],
+  "confidence": 0.8
+}

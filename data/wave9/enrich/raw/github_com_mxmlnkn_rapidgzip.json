@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/mxmlnkn/rapidgzip",
+  "one_liner": "Parallel decompressor and random-access reader for ordinary gzip files; 7-20x faster than GNU gzip on 12 cores.",
+  "what_it_does": "Rapidgzip decompresses any standard gzip file (not only bgzip/pigz-style multi-member files) in parallel and supports seeking into the decompressed stream, optionally using an exportable index (indexed_gzip or gztool format). It ships as a CLI (rapidgzip -d -P 0, usable as tar --use-compress-program), a Python module (RapidgzipFile, a file-like object) and a header-only C++17 library whose main class, rapidgzip::ParallelGzipReader, takes a file path, descriptor or FileReader plus thread count and chunk size and exposes read/seek/tell and index import/export. It only decompresses; there is no compressor.",
+  "how_it_is_fast": "It generalizes pugz's two-stage scheme: worker threads start inside the file at Deflate block candidates found by a fast block finder (skip-table checks of Dynamic and Non-Compressed block headers), decode with the unknown 32 KiB window filled by 15-bit marker symbols, and the markers are resolved once the preceding chunk's window is known. A cache keyed by chunk offset plus a parallel prefetcher make it robust to false-positive block offsets, which simply get evicted. With an index (windows known) it skips marker resolution and hands chunks to ISA-L or zlib-ng, which is why indexed decompression is 2-3x faster on Silesia-like data.",
+  "when_to_use": [
+    "Large (hundreds of MB and up) .gz files produced by GNU gzip, igzip or pigz that you must read on a machine with 8+ cores: README Ryzen 3900X numbers are 2070 MB/s vs gzip 293 MB/s on 20x Silesia and 5060 vs 250 MB/s on base64 data, from scratch.",
+    "Repeated reads or random access into the same gzip file: export an index once, then decompression reaches 5640 MB/s on the 3900X and up to 24 GB/s on 2x EPYC 7702, and seeks land in a chunk instead of rescanning from the start.",
+    "Genomics and log pipelines in Python that currently use the gzip module or indexed_gzip and are CPU-bound on decompression.",
+    "Mounting .tar.gz archives with ratarmount (rapidgzip is its default gzip backend) for random file access.",
+    "Counting decompressed size or lines in huge gzip files (--count, --count-lines), which can skip decompression entirely when a gztool index with lines exists."
+  ],
+  "when_not_to_use": [
+    "Single-threaded or small-file decompression: in the HPDC paper (v0.5.0) one rapidgzip thread reached 153-169 MB/s, about half of igzip; later versions are described as close to igzip, so libdeflate, ISA-L or zlib-ng are the better choice for one core.",
+    "Memory-constrained hosts: without an index each thread holds chunks whose size scales with the compression ratio (paper: about 80 MiB per thread at ratio 10, worst case 8.3 GiB per thread at ratio 1032 before the current 20x-chunk cap); the cache holds twice as many chunks as threads, and issue #69 reports 8 GB not released by RapidgzipFile after an index export (open).",
+    "Files that are effectively one Deflate block (igzip -0) or only Fixed-Huffman blocks: the block finder cannot split them, so decompression stays serial.",
+    "Integrity checks on possibly truncated input: issue #71 (open, v0.16.0, 2026-08-31) shows exit status 0 for some gzip files truncated mid-Deflate-stream, depending on truncation point and -P setting; GNU gzip reports an error.",
+    "Highly redundant data (FASTQ, Silesia-like text) on many-socket machines without an index: the sequential marker resolution of the last 32 KiB per chunk caps scaling around 64 cores (paper and README FASTQ plot)."
+  ],
+  "integration": {
+    "form": "header-only C++ library (via CMake add_subdirectory/FetchContent of librapidarchive), plus CLI and PyPI wheel",
+    "dependencies": "Optional but on by default: ISA-L (needs nasm on x86-64), zlib-ng (or zlib/system zlib), rpmalloc; cxxopts for the CLI",
+    "min_toolchain": "C++17, CMake 3.17+",
+    "platforms": "Linux, Windows, macOS (PyPI wheels); x86-64 and aarch64 with ISA-L; RISC-V 64 builds without rpmalloc; ISA-L is disabled on macOS in the CMake build",
+    "thread_safety": "ParallelGzipReader is internally multithreaded but its methods are documented as not thread-safe; use one reader per calling thread.",
+    "drop_in_for_baseline": "partial — the CLI accepts gzip-style -d/-c/-k/-f flags and works with tar --use-compress-program, and RapidgzipFile mirrors Python's gzip file object, but the C++ API is its own reader class, not a zlib inflate() replacement, and it cannot compress."
+  },
+  "gotchas": [
+    "Without -f, output piped to /dev/null may skip the actual decoding, so naive benchmarks overstate speed.",
+    "CRC32 verification is controllable (--verify/--no-verify); turning it off speeds things up but relies on implicit checks.",
+    "The first seek on a file without an index builds the whole block-offset map, so it can take as long as a full decompression; export and import the index to avoid this.",
+    "Development happens in mxmlnkn/indexed_bzip2 (librapidarchive); the rapidgzip repo is a release mirror, while issues go to the rapidgzip repo."
+  ],
+  "pick_this_over_siblings_when": "Pick rapidgzip over ISA-L igzip, libdeflate, zlib-ng or Wuffs when you have one large existing .gz file and many idle cores, or need random access into it; those siblings are faster per core and simpler to embed but decode a single gzip stream on one thread. Against zstd it is the option when you cannot re-compress the data: README reports 24.3 GB/s vs 9.5 GB/s for pzstd with an index on 128 cores.",
+  "verified_claims_summary": "On a 12-core Ryzen 3900X (compiler and flags not stated), rapidgzip with automatic thread count decompressed 3.95 GiB of 20x-concatenated Silesia at 2070 MB/s from scratch and 5640 MB/s with an index, against 293 MB/s for single-threaded GNU gzip (6.9x and 18.8x). The peer-reviewed HPDC 2023 paper (v0.5.0, 2x EPYC 7702, 128 cores) reports 5.6 GB/s on Silesia (33x over GNU gzip) and 8.7 GB/s on base64 data (55x over gzip); the gain is parallel scaling, not a faster single-thread inflate.",
+  "status_note": "Active (v0.16.0 on 2025-11-30, development continuing in indexed_bzip2) and permissively licensed (MIT per README, LICENSE-MIT and CITATION.cff; the repo also carries LICENSE-APACHE without a documented split), with two open correctness/memory issues (#71, #69) worth checking before production use.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/mxmlnkn/rapidgzip/HEAD/README.md",
+    "https://github.com/mxmlnkn/rapidgzip",
+    "https://raw.githubusercontent.com/mxmlnkn/rapidgzip/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/mxmlnkn/rapidgzip/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/mxmlnkn/rapidgzip/HEAD/LICENSE-MIT",
+    "https://raw.githubusercontent.com/mxmlnkn/rapidgzip/HEAD/LICENSE-APACHE",
+    "https://raw.githubusercontent.com/mxmlnkn/rapidgzip/HEAD/CITATION.cff",
+    "https://raw.githubusercontent.com/mxmlnkn/indexed_bzip2/master/CMakeLists.txt",
+    "https://raw.githubusercontent.com/mxmlnkn/indexed_bzip2/master/src/rapidgzip/ParallelGzipReader.hpp",
+    "https://raw.githubusercontent.com/mxmlnkn/indexed_bzip2/master/results/paper/Knespel%2C%20Brunst%20-%202023%20-%20Rapidgzip%20-%20Parallel%20Decompression%20and%20Seeking%20in%20Gzip%20Files%20Using%20Cache%20Prefetching.pdf",
+    "https://github.com/mxmlnkn/rapidgzip/issues?q=is%3Aissue",
+    "https://github.com/mxmlnkn/rapidgzip/issues/71",
+    "https://github.com/mxmlnkn/rapidgzip/issues/69"
+  ],
+  "confidence": 0.85
+}
