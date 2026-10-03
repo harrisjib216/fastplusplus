@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/eth-cscs/spfft",
+  "one_liner": "3D FFT layer for sparse (spherical-cutoff) frequency data that skips empty columns before calling FFTW/MKL/cuFFT/rocFFT; no published speedup.",
+  "what_it_does": "Computes forward and backward 3D C2C, R2C and C2R transforms where the frequency-domain side is a sparse list of (x, y, z) index triplets, as produced by a plane-wave energy cutoff in electronic-structure codes, and the space-domain side is a dense grid. The API is not FFTW-like: you build a Grid (pre-allocated buffers up to a maximum size, optionally bound to an MPI communicator and a GPU) and create Transform handles from it with the index list, then call backward()/forward() with host or GPU pointers; C and Fortran interfaces mirror the C++ classes. Distributed runs use slab decomposition in space and z-pencil (z-column) decomposition in frequency, with all elements of a z-column on one rank.",
+  "how_it_is_fast": "Pruned 3D FFT by dimension: on the host it runs the batched 1D z-transforms only over the z-columns that hold data (decompress, z-FFT, transpose), then the y-transforms only for x indices that own a column (Transform1DVerticalHost with uniqueXIndices), and full x-transforms last, so zero columns and empty y-lines are never touched. For R2C/C2R it exploits Hermitian symmetry so only half the columns (plus the non-redundant half of the x=0 plane) are needed. The z-to-xy redistribution is an MPI all-to-all (Alltoall, Alltoallv or Alltoallw variants, optionally exchanging doubles as floats to halve traffic), and Grid buffers are reused across transforms; all 1D/2D kernels are FFTW, MKL, ARMPL, NVPL, cuFFT or rocFFT plans, not SpFFT's own.",
+  "when_to_use": [
+    "Plane-wave DFT or similar codes where frequency data is a sphere inside a cube, so most z-columns are empty (this is what SIRIUS, and through it Quantum ESPRESSO and CP2K, use it for).",
+    "Repeated transforms of the same sparsity pattern, where the cost of building the Grid/Transform (FFTW planning, index setup) is amortized over many calls.",
+    "MPI-distributed 3D grids that already use z-column ownership per rank, on CPU or on NVIDIA (CUDA 11+) or AMD (ROCm 5+) GPUs, with optional GPU-aware MPI.",
+    "Codes that need one interface for host and GPU execution and C/Fortran bindings."
+  ],
+  "when_not_to_use": [
+    "Dense frequency data or 2D problems: there is nothing to prune, and a third-party test (cuSpFFT course project, RTX 4090, single precision, full R2C output set) measured SpFFT at 0.74x, 0.41x and 0.17x the speed of plain dense cuFFT with 1.3-2.3x more device memory; it ran out of memory on a 52,329^2 case.",
+    "When you need evidence of a speedup: the repo publishes no timings against FFTW, MKL or cuFFT, and tests/programs/benchmark.cpp times only SpFFT itself.",
+    "Sparsity in the space domain (sparse inputs to a forward transform) or arbitrary non-column patterns: only frequency-side sparsity grouped into complete z-columns is supported.",
+    "1D FFTs, non-uniform FFTs, or sizes with large prime factors: it only does 3D transforms and inherits the backend's speed on sizes not of the form 2^a 3^b 5^c 7^d.",
+    "Projects that need a multi-GPU single transform: each Grid/Transform is tied to one GPU."
+  ],
+  "integration": {
+    "form": "shared lib (static with SPFFT_STATIC=ON); CMake build, conda-forge package",
+    "dependencies": "a library with the FFTW 3.x interface (FFTW3, Intel MKL, ARM Performance Libraries or NVPL); optional MPI, OpenMP, CUDA 11+ (cuFFT) or ROCm 5+ (rocFFT/hipFFT)",
+    "min_toolchain": "C++17; GCC 7+, Clang 5+ or ICC 19+; CMake 3.18 (3.21 for ROCm)",
+    "platforms": "Linux HPC targets: x86-64 and Arm CPUs, NVIDIA and AMD GPUs; other platforms not documented",
+    "thread_safety": "Grid/Transform creation is thread-safe only if no other FFTW calls run concurrently (and MPI_THREAD_MULTIPLE when distributed); execution is thread-safe when each thread uses its own Grid and Transform. Creation and execution are collective over all MPI ranks.",
+    "drop_in_for_baseline": "partial: it calls FFTW/MKL/cuFFT/rocFFT underneath, but the caller must supply the sparse index triplets and use the Grid/Transform API, so it replaces a hand-rolled pruned 3D FFT rather than an fftw_plan_dft_3d call"
+  },
+  "gotchas": [
+    "Index layout rules: all elements of one z-column must be on the same rank, R2C inputs need x in [0, n/2], and the docs say the order and rank distribution of z-columns strongly affects speed (continuous in y for host, in x for GPU).",
+    "Normalization is only applied on forward transforms (1/(Nx*Ny*Nz)); backward is never scaled.",
+    "Bug history in released versions: wrong results with 2 OpenMPI ranks (issue #51, labelled Bug/Wrong Results, closed January 2022), ROCm Release builds left debug device_synchronize() on (fixed in 1.1.0), C/Fortran multi-transform segfault (fixed in 1.1.1), and an array size mismatch for local transforms fixed in PR #65 (2025-07-25) after the last release v1.1.1.",
+    "Creating Grids/Transforms inside an OpenMP parallel region crashed in FFTW planning (issue #32); create them outside the region."
+  ],
+  "pick_this_over_siblings_when": "Pick SpFFT over heFFTe (dense distributed 3D FFT) when your frequency data is a plane-wave cutoff sphere and you want the empty columns skipped for you. cuSpFFT solves a different problem (binary-sparse 2D inputs on one GPU) and beat SpFFT only in an off-design test where SpFFT was given a full output set.",
+  "verified_claims_summary": "Nothing measured: the repository, its docs and its benchmark program make no speed claim and contain no comparison against FFTW, MKL, cuFFT or rocFFT. The only third-party numbers found (cuSpFFT README, RTX 4090, single precision, 2D full-output use) show SpFFT slower than dense cuFFT, which is outside SpFFT's sparse 3D design point.",
+  "status_note": "Stale but maintained at a low rate: last release v1.1.1 (2025-01-19) and last commit 2025-07-25; BSD-3-Clause, packaged on conda-forge and a required dependency of SIRIUS, so it is exercised in production electronic-structure codes.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/eth-cscs/SpFFT/master/README.md",
+    "https://raw.githubusercontent.com/eth-cscs/SpFFT/master/docs/source/details.rst",
+    "https://raw.githubusercontent.com/eth-cscs/SpFFT/master/docs/source/index.rst",
+    "https://raw.githubusercontent.com/eth-cscs/SpFFT/master/docs/source/installation.rst",
+    "https://raw.githubusercontent.com/eth-cscs/SpFFT/master/CMakeLists.txt",
+    "https://raw.githubusercontent.com/eth-cscs/SpFFT/master/include/spfft/grid.hpp",
+    "https://raw.githubusercontent.com/eth-cscs/SpFFT/master/include/spfft/transform.hpp",
+    "https://raw.githubusercontent.com/eth-cscs/SpFFT/master/tests/programs/benchmark.cpp",
+    "https://raw.githubusercontent.com/eth-cscs/SpFFT/master/src/execution/execution_host.cpp",
+    "https://raw.githubusercontent.com/eth-cscs/SpFFT/master/src/execution/execution_gpu.cpp",
+    "https://raw.githubusercontent.com/eth-cscs/SpFFT/master/src/fft/transform_1d_host.hpp",
+    "https://github.com/eth-cscs/SpFFT/tree/master/src",
+    "https://github.com/eth-cscs/SpFFT/tree/master/src/execution",
+    "https://github.com/eth-cscs/SpFFT/issues?q=is%3Aissue",
+    "https://github.com/eth-cscs/SpFFT/issues/17",
+    "https://github.com/eth-cscs/SpFFT/issues/32",
+    "https://github.com/eth-cscs/SpFFT/issues/51",
+    "https://github.com/eth-cscs/SpFFT/issues/53",
+    "https://github.com/eth-cscs/SpFFT/issues/58",
+    "https://github.com/eth-cscs/SpFFT/releases",
+    "https://raw.githubusercontent.com/Darkviper7/cuSpFFT/HEAD/README.md"
+  ],
+  "confidence": 0.8
+}
