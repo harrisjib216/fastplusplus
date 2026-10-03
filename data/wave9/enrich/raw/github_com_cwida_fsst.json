@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/cwida/fsst",
+  "one_liner": "Symbol-table string compressor with per-string random access; beats LZ4 on ratio and compression speed for short database strings.",
+  "what_it_does": "FSST compresses batches of short strings (database columns, dictionaries, URLs, IDs) with a static table of up to 255 symbols of 1-8 bytes, each emitted as a one-byte code, with byte 255 as an escape for unmatched bytes. Every compressed string can be decoded on its own without touching its neighbours, and equal inputs give equal compressed bytes under one table, so equality predicates can run on compressed data. The C API is batch-oriented and not LZ4-shaped: fsst_create() trains a table on a sample, fsst_compress() encodes arrays of (pointer, length) strings into one output buffer, fsst_export()/fsst_import() serialize the table (at most FSST_MAXHEADER bytes) into a block header, and the inline fsst_decompress() decodes one string.",
+  "how_it_is_fast": "Table construction runs five rounds of bottom-up symbol generation on a 16 KB sample (sample fraction 8/128 rising to 128/128), keeping the highest-gain symbols and pair concatenations. Encoding finds the longest match with a 'lossy perfect hash' table (1024 buckets keyed on the next 3 bytes) plus a 65,536-entry shortCodes[A][B] array for 1-2 byte symbols, selected with a conditional move and no loops or branches. On AVX-512 CPUs a 'meatgrinder' kernel encodes 24 strings at once (8 lanes, unrolled 3x) using gather/scatter and compress-store/expand-load lane refills; the paper reports about 4.1 cycles/byte on an i9-7900X. Decoding is a table lookup that stores 8 bytes unaligned per code, checking 4 codes at a time for escapes with a SWAR test.",
+  "when_to_use": [
+    "Columnar or row stores holding many short strings (under about 100 bytes) with many distinct values, where dictionary encoding does not pay off and LZ4 on single values expands the data (paper: LZ4 compression factor 0.46 on 16-byte blocks).",
+    "Selective scans and point lookups that need one value from a compressed block; FSST output rate does not depend on selectivity, while LZ4-block must decode the whole block (paper Figure 5).",
+    "Machine-generated text such as UUIDs, emails, URLs, genome strings and TPC-H comments, where the paper measures the biggest ratio gains (genome 3.32x vs LZ4 1.59x).",
+    "Joins, aggregations or network shuffles that can keep strings compressed and compare them for equality without decoding.",
+    "x86-64 servers with AVX-512, where the SIMD encoder is enabled at runtime and is 2.5x faster than the scalar encoder (paper Table 2)."
+  ],
+  "when_not_to_use": [
+    "General byte streams, binaries, large files or archives: on Silesia FSST is 25% worse than LZ4 on the binary files, and on large XML/JSON its ratio is 2-2.5x worse than LZ4 (paper section 6.3). Use LZ4 or zstd for those.",
+    "Decompression-bound pipelines: average decompression speed is about equal to LZ4, and LZ4 wins on 10 of 22 dbtext sets (for example hex, email).",
+    "ARM or other non-AVX-512 machines expecting the paper's compression speed: issue #39 (Aug 2025) reports about 112 MB/s on an Apple M1 against about 900 MB/s in the paper, with no maintainer reply visible.",
+    "Workloads whose value distribution shifts away from the training sample: the table is static per block, and unseen bytes are escaped at 2 bytes each, so mismatched data can double in size.",
+    "Projects that need tagged releases or a stable format contract: there is no release process yet (issue #34 open) and the format version constant is still 20190218."
+  ],
+  "integration": {
+    "form": "static lib (libfsst.cpp plus fsst_avx512.cpp built with CMake); the decoder is an inline function in fsst.h",
+    "dependencies": "none beyond the C++ standard library (CMake links Threads only for the command-line tool)",
+    "min_toolchain": "C++17 (CMakeLists sets CMAKE_CXX_STANDARD 17); public header is C-compatible via extern \"C\"; GCC, Clang and MSVC paths exist",
+    "platforms": "README: 64-bit x86 on Linux, Windows and macOS, plus macOS arm64; AVX-512 encoder only when compiled with __AVX512F__ and detected via CPUID at runtime, scalar elsewhere; 32-bit builds define NONOPT_FSST; big-endian handled with byte swaps",
+    "thread_safety": "Encoder objects are not shareable: use fsst_duplicate() to make one per thread. The decoder struct is read-only and the header states it can be shared between decompressing threads.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "CMakeLists adds -march=native whenever the compiler accepts it, so a default build is tied to the build machine's CPU; set flags yourself for distributed binaries.",
+    "fsst_compress() returns how many strings fit in the output buffer, which can be fewer than requested; the first string needs at least 7+2*length bytes of space. Issue #30 (Feb 2025, closed via PR #32) fixed an AVX-512 path that over-reported this count.",
+    "fsst_decoder() leaves the version field of fsst_decoder_t uninitialized (issue #50, opened 2026-09-25, still open); decoding is unaffected, but writing the struct to disk gives non-reproducible bytes.",
+    "Past sanitizer and robustness issues were reported and closed: makeSample buffer overflow (#17), out-of-bounds reads (#9), UBSan errors (#4), and an endless loop in buildSymbolTable on 32-bit ARM with GCC (#37)."
+  ],
+  "pick_this_over_siblings_when": "Pick FSST over LZ4, zstd or LZAV when values are short strings that must be decoded one at a time or compared while compressed; those siblings are block or stream compressors that need kilobytes of context to compress well. For whole files, logs or binary data, LZ4, zstd or ZXC are the better fit.",
+  "verified_claims_summary": "In the PVLDB 2020 paper (g++ 8.3.1 -O3 -march=native, Intel i9-7900X with AVX-512, single thread), FSST against LZ4 1.8.1 in file mode on 22 8 MB dbtext sets compressed faster on 21 sets and to a higher ratio on 21 sets (paper: 34% better average factor, 60% higher compression speed), while decompression speed was about equal on average (FSST faster on 12 sets, LZ4 on 10). The replication package and corpus are in the repo's paper/ directory.",
+  "status_note": "Active (last commit 2026-04-06; 546 stars), MIT-licensed and small (libfsst.cpp and libfsst.hpp total about 1,100 lines, plus the AVX-512 kernel), so it is easy to vendor, but it has no tagged releases and a few open hygiene issues (#49, #50).",
+  "sources_read": [
+    "https://github.com/cwida/fsst",
+    "https://raw.githubusercontent.com/cwida/fsst/HEAD/README.md",
+    "https://raw.githubusercontent.com/cwida/fsst/HEAD/fsst.h",
+    "https://raw.githubusercontent.com/cwida/fsst/HEAD/libfsst.hpp",
+    "https://raw.githubusercontent.com/cwida/fsst/HEAD/libfsst.cpp",
+    "https://raw.githubusercontent.com/cwida/fsst/HEAD/fsst_avx512.cpp",
+    "https://raw.githubusercontent.com/cwida/fsst/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/cwida/fsst/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/cwida/fsst/HEAD/fsstcompression.pdf",
+    "https://github.com/cwida/fsst/issues?q=is%3Aissue",
+    "https://github.com/cwida/fsst/issues/39",
+    "https://github.com/cwida/fsst/issues/50",
+    "https://github.com/cwida/fsst/issues/30"
+  ],
+  "confidence": 0.85
+}
