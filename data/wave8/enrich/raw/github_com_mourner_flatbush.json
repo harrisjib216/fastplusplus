@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/mourner/flatbush",
+  "one_liner": "Static packed Hilbert R-tree for 2D boxes in JavaScript, stored in one ArrayBuffer; billed as faster and leaner than RBush.",
+  "what_it_does": "Flatbush indexes a fixed number of 2D rectangles or points and answers bounding-box searches and k-nearest-neighbour queries, returning the integer ids that add() handed out. You declare numItems up front, call add() exactly that many times, then finish(); after that the index is read-only. The whole tree lives in one ArrayBuffer or SharedArrayBuffer that can be transferred to a worker, saved to disk and reopened with Flatbush.from(). The API differs from RBush: numeric ids instead of item objects, no insert or remove.",
+  "how_it_is_fast": "finish() computes a Hilbert value for each box centre on a 65,536 x 65,536 grid (the bit-twiddling Hilbert function from rawrunprotected/hilbert_curves), sorts only as far as node boundaries with an iterative quicksort, and packs nodes bottom-up (a packed Hilbert R-tree, nodeSize 16 by default). Boxes and child indices sit in flat typed arrays (Float64Array by default, Uint16/Uint32 indices), so there are no per-node objects for the garbage collector and scans are sequential in memory. search() emits a whole subtree as one contiguous leaf range without further tests once a node lies fully inside the query box, and neighbors() is a best-first traversal on a FlatQueue binary heap with a tightened bound when k = 1.",
+  "when_to_use": [
+    "Static data sets of 10^5 to 10^8 boxes or points (map features, chart glyphs, mesh triangles) that are built once and queried many times",
+    "Browser or Node code that needs to move an index between workers without copying, or share one read-only index via SharedArrayBuffer",
+    "Shipping a precomputed index as a compact binary file; the same layout is readable from Rust (geo-index, ABI compatible) and C++ (chusitoo/flatbush accepts JS-encoded buffers)",
+    "Hit-testing and viewport culling in visualization libraries; Bokeh adopted it in place of RBush for large scatter plots (PR #7583, 2018)",
+    "As the reference design to port: the README lists C++, Rust, C#, Python and Dart ports"
+  ],
+  "when_not_to_use": [
+    "Data that changes: there is no insert or remove, so every change means a full rebuild; RBush is the dynamic option",
+    "C++ code: this is JavaScript; use the C++ port chusitoo/flatbush or a native index (Boost.Geometry rtree, nanoflann, tidwall rtree.c)",
+    "Indexes near 2 GB: issue #67 (open) reports a 100M-item Float32Array index at 1.9 GB and asks for a way past the 2 GB buffer limit",
+    "Exact nearest geometry: neighbors() ranks by distance to bounding boxes, in coordinate units; for lon/lat data the README points to the geoflatbush extension",
+    "When you need a measured speed-up over RBush: the repo's benchmark times Flatbush alone, so the 'faster' claim is unquantified"
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "flatqueue ^3.1.0 (priority queue, same author)",
+    "min_toolchain": "ES module package (\"type\": \"module\") plus a UMD browser bundle and TypeScript typings; no engines field in package.json; README benchmark run on Node v24",
+    "platforms": "any JavaScript runtime with typed arrays (browsers, Node); SharedArrayBuffer sharing needs a runtime that allows it",
+    "thread_safety": "Read-only after finish(); the buffer can be shared with workers and wrapped with Flatbush.from() in each. Each instance keeps one internal priority queue for neighbors(), so do not call neighbors() on the same instance from inside its own filter callback",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "add() must be called exactly numItems times before finish(), which throws otherwise; search() and neighbors() throw until finish() has run",
+    "A non-default ArrayType (Float32Array, Int32Array) stores coordinates by ordinary typed-array conversion with no outward rounding, so stored boxes can be slightly smaller than the originals and hits on box edges can be missed",
+    "Many duplicate boxes overflowed the call stack in the old recursive sort (issues #61 and #69, the latter reported through Bokeh); the current code sorts with an explicit stack (package 4.6.2); older bundled copies may still crash",
+    "Serialized data carries format version 3 and Flatbush.from() rejects other versions; byteOffset must be 8-byte aligned. Before June 2026 the README's search rows understated the query area by 4x (issue #62)"
+  ],
+  "pick_this_over_siblings_when": "Pick Flatbush over RBush when the data is static and you want lower memory use and a transferable buffer; use KDBush instead for points only. In Rust, or for Python bindings, use geo-index (ABI-compatible port, ~2x faster construction than rstar on its own benchmark); in C++ use chusitoo/flatbush or nanoflann/GeoToolbox KdBoxTree, which have baseline numbers.",
+  "verified_claims_summary": "The only numbers are Flatbush's own (node bench.js, MacBook Pro M1 Pro, Node v24, 1,000,000 seeded random boxes, nodeSize 16, 10 runs): index 109 ms, 1,000 searches of 1% area 66 ms, 10,000 1-NN queries 30 ms, and one 1,000,000-neighbour query 84 ms. bench.js never imports RBush, and RBush's own table (Node 6.2.2, 2012 laptop) is not comparable. The 'faster than RBush' claim is qualitative (tier D). The one third-party comparison found, Bokeh PR #7583 (2018), shows its 1k-500k point profiling only as a graph.",
+  "status_note": "Active: version 4.6.2, 196 commits, 1.6k stars, last commit 2026-07-08, 5 open issues. ISC-licensed, a single 519-line index.js with one small dependency, so it is easy to vendor or port.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/mourner/flatbush/HEAD/README.md",
+    "https://raw.githubusercontent.com/mourner/flatbush/HEAD/bench.js",
+    "https://raw.githubusercontent.com/mourner/flatbush/HEAD/index.js",
+    "https://raw.githubusercontent.com/mourner/flatbush/HEAD/package.json",
+    "https://github.com/mourner/flatbush",
+    "https://github.com/mourner/flatbush/issues?q=is%3Aissue",
+    "https://github.com/mourner/flatbush/issues/69",
+    "https://github.com/mourner/flatbush/issues/67",
+    "https://raw.githubusercontent.com/chusitoo/flatbush/HEAD/README.md",
+    "https://github.com/bokeh/bokeh/issues/7582",
+    "https://github.com/bokeh/bokeh/pull/7583"
+  ],
+  "confidence": 0.75
+}
