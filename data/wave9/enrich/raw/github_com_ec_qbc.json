@@ -1,0 +1,45 @@
+{
+  "id": "https://github.com/ec-/qbc",
+  "one_liner": "Tiny adaptive order-0 binary arithmetic coder for short strings, pitched as a replacement for Quake 3's adaptive Huffman Huff_ functions.",
+  "what_it_does": "Compresses short NUL-terminated strings (Quake 3 connect-command infostrings) into a caller-supplied byte buffer and back. It ships as two single-file implementations meant to be #included: qbc.cpp (class qbc with init(encode|decode, buf, len), encode_string/encode_byte/encode_bit, encode_flush, length, decode_string/decode_byte/decode_bit) and qbc.c (the same with bc_* free functions on a bitcodec_t struct). The output stream is not compatible with the engine's Huffman format.",
+  "how_it_is_fast": "Each byte is coded as 8 binary decisions through a 255-node bit-tree context (an adaptive order-0 byte model), each with an 8-bit probability updated by a 2x256 lookup table instead of arithmetic. The coder is a carryless 32-bit low/high range coder: the interval update is written as range[bit] = split + (bit^1) to avoid a branch, and one byte is shifted out whenever low and high agree in their top 20 bits. State is 256 probability bytes plus a 512-byte shared table, so it stays in L1, whereas adaptive Huffman must rebuild its tree as it goes.",
+  "when_to_use": [
+    "Compressing short text records or network packets (hundreds of bytes) where an adaptive model with no transmitted table beats static Huffman and memory must stay under 1 KB.",
+    "Replacing Quake 3 / ioquake3 Huff_Compress()/Huff_Decompress() in a mod or engine fork that controls both client and server.",
+    "Embedded or per-connection codec state where a ~50 KB adaptive Huffman context per stream is too expensive.",
+    "As a compact teaching example of a binary adaptive range coder (about 250 lines, MIT)."
+  ],
+  "when_not_to_use": [
+    "Bulk data or throughput-critical paths: bit-at-a-time coding with a renormalization branch is far from table-driven Huffman, tANS or interleaved rANS decoders, and no MB/s figure is published.",
+    "Interoperating with existing Quake 3 clients or servers, or any other format; the stream is new and undocumented.",
+    "Data that is not text-like or needs higher-order context: the model is order-0 only and resets per init().",
+    "Hostile input fed through the C API or decode_string with a buffer sized exactly to len (see gotchas).",
+    "Any claim-sensitive decision: the 20% speed and 10% ratio figures have no benchmark code, corpus or hardware behind them."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (memset from <string.h>, which the files do not include themselves)",
+    "min_toolchain": "not documented; plain C (qbc.c) or C++98-style class (qbc.cpp)",
+    "platforms": "any with 32-bit unsigned int",
+    "thread_safety": "Per-instance state; one qbc / bitcodec_t per stream. The shared probability-update table is read-only.",
+    "drop_in_for_baseline": "partial: function-for-function replacement of Huff_Compress/Huff_Decompress at the call site, but the wire format changes, so both peers must switch"
+  },
+  "gotchas": [
+    "qbc.c's bc_encode_byte takes 'unsigned char value' and signals overrun with 'value = -1; break;', so it returns 255 instead of -1; bc_encode_string never sees the error, keeps going after the output buffer is full, and if overrun hits while coding the terminating NUL it continues reading past the end of the source string.",
+    "decode_string / bc_decode_string decode up to len bytes and then always write a terminating NUL at str[len], so the buffer must be len+1 bytes; the repo's own test passes sizeof(buf2) as len, a one-byte overflow if a corrupted or crafted stream decodes 1024 non-zero bytes.",
+    "encode_flush / bc_encode_flush stops silently when the output buffer runs out and still returns 0, so a truncated stream is not reported; the decoder then stops early and returns a shortened string without an error.",
+    "test.cpp declares 'void main', which C++ compilers reject; test.c and test.cpp also print strlen with %i. The tests only round-trip one infostring and time nothing."
+  ],
+  "pick_this_over_siblings_when": "FSE/Huff0, FPC, TurboRC and the rANS coders target large buffers with static or block-adaptive models and reach hundreds of MB/s to GB/s; qbc only makes sense for very short messages where shipping a frequency table would cost more than the payload and per-stream memory must be under 1 KB. For anything bigger, TurboRC's adaptive range coders or Huff0 are the better-supported choice.",
+  "verified_claims_summary": "The only evidence is three README bullets by the author comparing against Quake 3's adaptive Huffman Huff_ functions on connect infostrings: about 10% smaller output, about 20% faster encode/decode, and under 1 KB vs about 50 KB of memory. No corpus, timings, compiler or CPU are given and the repo contains no benchmark; the memory figure matches the code (256-byte probability array plus a 512-byte table).",
+  "status_note": "Abandoned after three commits in May-June 2022, MIT-licensed and about 250 lines, so easy to vendor, but fix the C overrun bug and the decode_string terminator before using it on network input.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/ec-/qbc/HEAD/README.md",
+    "https://raw.githubusercontent.com/ec-/qbc/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/ec-/qbc/HEAD/qbc.c",
+    "https://raw.githubusercontent.com/ec-/qbc/HEAD/qbc.cpp",
+    "https://raw.githubusercontent.com/ec-/qbc/HEAD/test.c",
+    "https://raw.githubusercontent.com/ec-/qbc/HEAD/test.cpp"
+  ],
+  "confidence": 0.75
+}

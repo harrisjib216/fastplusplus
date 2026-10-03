@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/ledbit/varint",
+  "one_liner": "Benchmark study of three byte-oriented varint formats (PrefixVarint, leSQLite, leSQLite2) that decode 2-2.9x faster than a naive LEB128 loop.",
+  "what_it_does": "A small C++ harness written in 2016 by Jakob Stoklund Olesen for WebAssembly design issue 601 (the ledbit copy adds a 2018 fix and the README sample run). Each codec exposes encode(const vector<uint64_t>&) -> vector<uint8_t> and decode(const uint8_t* in, uint64_t* out, size_t count) through a codec_descriptor; varint.cpp times decoding of 100,000 log-uniform 64-bit integers or a file of numbers. The formats are new wire formats, not LEB128-compatible.",
+  "how_it_is_fast": "All three alternatives make the total length known from the first byte, so a multi-byte value is decoded with one unaligned 8-byte load plus a shift or mask instead of LEB128's byte-at-a-time loop with a continuation-bit test per byte. PrefixVarint moves all tag bits to the low bits of byte 0 (UTF-8-like) and finds the length with count-trailing-zeros; leSQLite and leSQLite2 are little-endian variants of the SQLite4 varint where byte 0 ranges select 1-, 2-, 3- or N-byte forms, so the 3-9 byte forms are a raw little-endian integer masked to length.",
+  "when_to_use": [
+    "Designing a new binary format (bytecode, RPC, log records) where you control both sides and want a varint with first-byte length and cheaper multi-byte decode than LEB128.",
+    "Workloads with many multi-byte 64-bit integers, where LEB128's per-byte branch dominates; the measured data was log-uniform over 64 bits (about 5 bytes per integer).",
+    "Pick leSQLite when decode speed matters most (2.88x LEB128 in the sample, 4% larger output); PrefixVarint when you must keep LEB128's size (5.060 vs 5.076 bytes per integer).",
+    "As a reference to copy: each codec is 50-100 lines of Apache-2.0 C++."
+  ],
+  "when_not_to_use": [
+    "Existing formats that mandate LEB128 (protobuf, DWARF, WebAssembly binaries); none of these encodings is wire-compatible.",
+    "Untrusted input: the README says the code is not production quality and malformed input causes undefined behavior; there are no input or output bounds checks.",
+    "Mostly small values: with integers under 128 every scheme takes a one-byte LIKELY fast path, and the 2x figures come from a log-uniform 64-bit distribution where most values need 4-9 bytes.",
+    "When you need encode speed numbers, SIMD bulk decode, or a maintained library; encoding is not measured and the code has had no changes since January 2018.",
+    "Big-endian hosts or non-GCC/Clang compilers: decoding relies on host little-endian memcpy loads and __builtin_clzll/__builtin_ctz."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none",
+    "min_toolchain": "Makefile uses -std=c++14 -O3; codec_descriptor uses C++20-style designated initializers, accepted as a GCC/Clang extension in C++14 but not by MSVC before C++20",
+    "platforms": "little-endian targets with GCC or Clang builtins (x86-64 assumed for unaligned loads); not documented beyond that",
+    "thread_safety": "Encoders and decoders are stateless free functions; thread safety not otherwise documented",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The fast multi-byte decoders over-read: prefix_get and the leSQLite 3-9 byte path always load 8 bytes from the value start, and the leSQLite2 4-9 byte path does the same, so the final value can read up to 6 bytes past the end of the encoded buffer; the benchmark does not pad the std::vector. Pad any input buffer by at least 8 bytes.",
+    "ledbit's 2018 commit 'fix crash due to stack smashing - read just 2 bytes instead of 8' changed one leSQLite2 path to a 2-byte load; the other 8-byte loads were left as they were.",
+    "leb128_decode keeps shifting past 63 bits on over-long input (undefined behavior, acknowledged in a code comment), so the baseline is also unsafe on hostile data.",
+    "The LEB128 baseline is a plain byte loop with a one-byte fast path, not an optimized decoder such as protobuf's or a SIMD one, so the 2-2.9x ratios overstate the gap to the best LEB128 decoders."
+  ],
+  "pick_this_over_siblings_when": "varint-simd, MaskedVByte and Stream VByte make LEB128-style or byte-oriented decoding fast with SIMD (Stream VByte with a separate control stream); pick these formats when you can change the wire format and want a simple scalar codec with first-byte length and 64-bit range. For bulk 32-bit integer arrays, Stream VByte or simdcomp will be much faster.",
+  "verified_claims_summary": "One README sample run (compiler and CPU not stated, -O3, decode only) on 100,000 log-uniform 64-bit integers timed LEB128 at 1.165 ms per pass, PrefixVarint 0.569 ms (2.05x), leSQLite 0.404 ms (2.88x) and leSQLite2 0.482 ms (2.42x), with sizes of 5.076, 5.060, 5.285 and 5.239 bytes per integer; the harness repeats each decode for about one second and checks the round trip with assert.",
+  "status_note": "Abandoned since January 2018 (15 commits, mostly 2016 by Jakob Stoklund Olesen; the original stoklund/varint URL now returns 404) but Apache-2.0 and tiny enough to copy once the over-reads and missing bounds checks are fixed.",
+  "sources_read": [
+    "https://github.com/ledbit/varint",
+    "https://github.com/ledbit/varint/commits",
+    "https://raw.githubusercontent.com/ledbit/varint/HEAD/README.md",
+    "https://raw.githubusercontent.com/ledbit/varint/HEAD/Makefile",
+    "https://raw.githubusercontent.com/ledbit/varint/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/ledbit/varint/HEAD/compiler.h",
+    "https://raw.githubusercontent.com/ledbit/varint/HEAD/varint.h",
+    "https://raw.githubusercontent.com/ledbit/varint/HEAD/varint.cpp",
+    "https://raw.githubusercontent.com/ledbit/varint/HEAD/leb128.cpp",
+    "https://raw.githubusercontent.com/ledbit/varint/HEAD/prefix_varint.cpp",
+    "https://raw.githubusercontent.com/ledbit/varint/HEAD/lesqlite.cpp",
+    "https://raw.githubusercontent.com/ledbit/varint/HEAD/lesqlite2.cpp",
+    "https://github.com/WebAssembly/design/issues/601",
+    "https://github.com/stoklund/varint"
+  ],
+  "confidence": 0.8
+}
