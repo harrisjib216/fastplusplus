@@ -1,0 +1,55 @@
+{
+  "id": "https://github.com/lzfse/lzfse",
+  "one_liner": "Apple's LZ77 + finite-state-entropy codec in plain C99; zlib -6 ratio at about 3.4x the compress and 2.3x the decompress speed.",
+  "what_it_does": "Reference C implementation of LZFSE, the format behind Apple's Compression framework (OS X 10.11 / iOS 9 and later). The API is two one-shot buffer calls, lzfse_encode_buffer and lzfse_decode_buffer, plus scratch-size queries; there is no streaming interface, no levels, and the output is its own block format (bvx2/bvxn/bvx- magic), not deflate. A small CLI (lzfse -encode/-decode) is included.",
+  "how_it_is_fast": "The decoder uses table-driven tANS (Collet's Finite State Entropy) instead of Huffman: literals are decoded up front with four interleaved FSE states, then L/M/D (literal length, match length, distance) triplets drive a copy loop that uses deliberately oversized copies with a 32-byte safety margin on the fast path. The encoder uses a 2^14-entry hash history table, 4 candidate positions per line, and keeps a pending match it can replace (lazy matching), emitting immediately once a match exceeds 40 bytes. Inputs under 4096 bytes switch to the simpler LZVN coder.",
+  "when_to_use": [
+    "Reading or writing data that Apple's Compression framework, Apple archives or iOS/macOS tools produce or consume (COMPRESSION_LZFSE), from Linux or Windows.",
+    "One-shot in-memory compression of whole buffers where you want zlib -6 to -9 ratio (31.91% vs 32.19% on Silesia) with faster encoding than zlib and no external dependencies.",
+    "Embedding in a C or C++ project that wants a tiny, BSD-3 codec with caller-supplied scratch memory and no internal allocation."
+  ],
+  "when_not_to_use": [
+    "New formats with no Apple interop requirement: zstd -2 (352 MB/s, 1257 MB/s, 32.70%) and zstd -3 beat it on both speeds at similar or better ratio in the same lzbench run, and libdeflate -6 decodes faster (820 vs 732 MB/s) with a slightly better ratio while staying deflate-compatible.",
+    "Streaming, chunked or bounded-memory pipelines: only whole-buffer calls exist, the caller must know or guess the decompressed size, and there is no frame checksum.",
+    "Single inputs above 2 GiB: issue #64 (open) shows int32_t history positions overflowing and ratio dropping from 3.01x to 2.24x on a 3 GiB file.",
+    "Big-endian targets (issue #23, open since 2016, fails on ppc64be) or toolchains without GCC builtins/MSVC intrinsics (issue #37); unaligned loads also broke asm.js (issue #43).",
+    "Untrusted input in a security-sensitive service without your own fuzzing: the repo has had no commits since 2017 and UBSan pointer-overflow reports in the decoder (issue #53) were only closed, with no visible fix release."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none (libc only; malloc used only when scratch_buffer is NULL)",
+    "min_toolchain": "C99 (Makefile and CMake set -std=c99); README tested gcc 5.2.1 and clang 3.6.2; MSVC supported via _BitScan shims",
+    "platforms": "little-endian x86-64, aarch64 and other little-endian targets; big-endian broken (issue #23)",
+    "thread_safety": "Not documented; the API keeps no global state and takes a caller scratch buffer, so separate calls with separate scratch buffers should be independent (inferred from the API, not stated).",
+    "drop_in_for_baseline": "partial — replaces zlib's compress()/uncompress() style one-shot use, but the bitstream is not deflate, there is no inflate/deflate streaming API, no levels and no checksum"
+  },
+  "gotchas": [
+    "lzfse_encode_buffer returns 0 when the output does not fit, while lzfse_decode_buffer returns dst_size when the output is truncated; you cannot tell a truncated decode from an exact fit without a stored size.",
+    "The shipped Makefile builds with -Os, so throughput from a plain `make` build may be below lzbench numbers built with the benchmark's own flags.",
+    "The CLI crashes with a double free on empty input (issue #45, open).",
+    "Encoder tunables (hash bits, hash width, good-match length, LZVN threshold) live in lzfse_tunables.h and are compile-time only."
+  ],
+  "pick_this_over_siblings_when": "Pick it over zstd, libdeflate or zlib-ng only when you need the LZFSE bitstream for Apple interoperability; on raw speed and ratio zstd -2/-3 and libdeflate -6 dominate it in the same lzbench table. Its sibling LZVN mode (69 / 799 MB/s, 38.13%) is not a reason to choose it over LZ4 or Snappy.",
+  "verified_claims_summary": "lzbench 2.4 (gcc 15.2.0 release binary, one thread of an AMD EPYC 9555P at 3.20 GHz, turbo off, silesia.tar) lists lzfse 2017-03-08 at 91.1 MB/s compress and 732 MB/s decompress at 31.91% versus zlib 1.3.2 -6 at 26.8 / 314 MB/s and 32.19%, about 3.4x and 2.3x faster at a slightly better ratio (derived from page data). Against zlib -9 (11.3 / 318 MB/s, 31.92%) the compression gap is about 8x.",
+  "status_note": "Abandoned since May 2017 with open crash, big-endian and >2 GiB issues, but BSD-3-Clause, dependency-free C99 and small enough to vendor; the format itself stays maintained by Apple inside its Compression framework.",
+  "sources_read": [
+    "https://github.com/lzfse/lzfse",
+    "https://raw.githubusercontent.com/lzfse/lzfse/HEAD/README.md",
+    "https://raw.githubusercontent.com/lzfse/lzfse/HEAD/Makefile",
+    "https://raw.githubusercontent.com/lzfse/lzfse/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/lzfse/lzfse/HEAD/src/lzfse.h",
+    "https://raw.githubusercontent.com/lzfse/lzfse/HEAD/src/lzfse_tunables.h",
+    "https://raw.githubusercontent.com/lzfse/lzfse/HEAD/src/lzfse_internal.h",
+    "https://raw.githubusercontent.com/lzfse/lzfse/HEAD/src/lzfse_main.c",
+    "https://raw.githubusercontent.com/lzfse/lzfse/HEAD/src/lzfse_decode_base.c",
+    "https://raw.githubusercontent.com/lzfse/lzfse/HEAD/src/lzfse_encode_base.c",
+    "https://raw.githubusercontent.com/lzfse/lzfse/HEAD/src/lzfse_fse.h",
+    "https://github.com/lzfse/lzfse/issues?q=is%3Aissue",
+    "https://github.com/lzfse/lzfse/issues/64",
+    "https://github.com/lzfse/lzfse/issues/45",
+    "https://github.com/lzfse/lzfse/issues/23",
+    "https://github.com/lzfse/lzfse/issues/65",
+    "https://raw.githubusercontent.com/inikep/lzbench/HEAD/README.md"
+  ],
+  "confidence": 0.85
+}

@@ -16,3 +16,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - Consistency retier at wave close: lzbench 2.4 rows (gcc 15.2.0, EPYC 9555P, Makefile -O3 -DNDEBUG, public code) were tiered A for FastLZ (batch 25) but B for Kanzi, LZAV, LZSSE, misa77, Fast LZMA2, libslz, bzip3, memlz, Snappy, Density, libbsc, libzling; pick one and write one retier file.
 - Debian Code Search's Go SIMD TurboPFor port (Go 1.26 archsimd, AVX-512; claims to beat the C encode): cross-language claim for QUEUE wave 14. (from TurboPFor enricher)
 - arXiv 2605.25528 'Engineering Practical Succinct Bit Vectors: A Space-Time Pareto Analysis on Apple Silicon ARM64 Cores': may list more rank/select code; blocked. (from orzo enricher)
+- Apple LZMESH (OS 27 fast codec, liblzraven SPEC section 15) and libzbitmap (LZBITMAP reimplementation; lzfse issue #62): Apple-codec siblings to check. (from LZFSE/liblzraven enricher)

@@ -1,0 +1,44 @@
+{
+  "id": "https://github.com/anat0m1a/liblzraven",
+  "one_liner": "Clean-room C11 codec for Apple's LZRAVEN format (LZMA-class model, adaptive rANS); decodes about 1.7-2x faster than xz -6.",
+  "what_it_does": "Decodes and encodes LZRAVEN (COMPRESSION_LZRAVEN, 0xD05), the codec Apple introduced in the OS 27 cycle for OTA payloads (pbzm container), on any platform without libcompression. The API mirrors Apple's one-shot buffer calls: lzraven_decode_buffer(dst, cap, src, n) returning bytes written or 0, an _ex variant with a status enum, and lzraven_encode_buffer(_params) with caller-provided scratch, level 0-9 and window settings. It is not a drop-in for liblzma: different bitstream, no streaming, no container, and the caller must know the decompressed size (the pbzm container carries it).",
+  "how_it_is_fast": "The format pairs an LZMA-style grammar (state machine, four repeat distances, matched literals) with 8-way interleaved adaptive rANS over AV1/Daala-style 16-symbol CDFs instead of LZMA's serial binary range coder, so consecutive symbols are independent enough for instruction-level parallelism. The library hand-vectorises the 16-lane CDF search and update (SSE2/AVX2 compare + movemask + popcnt, NEON cmhi/uzp1/saddlv) with run-time dispatch, plus a vectorised overlapping match copy; SPEC.md section 12.4 credits these kernels with 2.75-2.96x over its own portable C path, which alone is slower than xz (0.67x). Matches address the output buffer directly, so the decoder needs only a fixed 35,336-byte working set and never allocates.",
+  "when_to_use": [
+    "Unpacking Apple OS 27 (and later) OTA payloads (pbzm/LZRAVEN) on Linux, Windows or other non-Apple hosts, where there is no other open decoder.",
+    "Decoding LZRAVEN in memory-constrained or allocation-free contexts: fixed 35 KB of automatic storage versus about 8 MiB for liblzma at xz -6.",
+    "Multi-threaded batch decoding of many independent chunks: the decoder is a pure, reentrant function of its arguments.",
+    "Producing LZRAVEN streams that Apple's libcompression will accept, where encode speed is not critical."
+  ],
+  "when_not_to_use": [
+    "As a general replacement for xz/LZMA in your own formats: the evidence is one niche corpus (Apple OTA chunks, 29.9x compressible), the format has no published spec beyond this repo's reverse-engineered one, no checksum and no streaming, and it is tied to one Apple build (iOS 27.0 beta 4 dylib).",
+    "When encode speed matters: the encoder runs about 70 MB/s on highly redundant OTA plaintext and 4-20 MB/s on Mach-O or text, and its output is about 4% larger than Apple's encoder (greedy plus one-step lazy parse, no optimal parse).",
+    "On Apple platforms: Apple's own decoder is faster on dense coded content (1333 versus 954 MiB/s on M4 Pro, ours at 72%), so call libcompression there.",
+    "When you need a maintained dependency: one commit, 7 stars, AI-authored, and the owner states he does not intend to maintain it.",
+    "When the output must be trustworthy without a container: in the SPEC's own bit-flip test, 49 of 300 single-bit flips decoded to different data without error."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none (a shared object via `make shared`; optional stdlib-only Python ctypes binding)",
+    "min_toolchain": "C11 (Makefile uses -std=c11 -O2); measured with GCC 14.2 and Apple clang 21",
+    "platforms": "x86-64 (scalar, SSE2, AVX2 paths with run-time dispatch), arm64 (NEON), portable C elsewhere",
+    "thread_safety": "Decoder and encoder are thread-safe on distinct buffers and scratch; lzraven_simd_set, which pins the SIMD path, is not thread-safe and must be called before decoding starts.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "lzraven_decode_buffer returns 0 both for failure and for a valid empty stream; use lzraven_decode_buffer_ex to tell them apart.",
+    "The decoder is deliberately stricter than Apple's (it rejects blocks whose rANS states did not drain, and matches that overrun the coded region), so a few streams Apple accepts are rejected here.",
+    "Encoder scratch is large (a few thousand times the decoder's 35 KB; Apple's own is about 10.9 MB) and grows 4 bytes per window position; windows above 8 MiB emit distance classes Apple's encoder never produces.",
+    "Streams are limited to 8192 blocks of 512 KiB, so at most 4 GiB of output per stream; the Makefile does not define NDEBUG, so asserts stay live (SPEC says at no measurable cost)."
+  ],
+  "pick_this_over_siblings_when": "Pick it only when the data is or must be LZRAVEN; for general archives that beat xz, Fast LZMA2 keeps the xz/LZMA2 format and LZHAM, libbsc or bzip3 have broader, independent benchmarks. Against LZFSE (Apple's older fast codec) it aims at the xz ratio band rather than the zlib band.",
+  "verified_claims_summary": "On 20 real iOS 27 OTA streams (89.7 MiB of output, best of 9, one pinned core of a Ryzen 9 7950X, GCC 14.2 -O2, AVX2 path), the decoder ran at 2182 MiB/s versus liblzma 5.8.1 xz -6 at 1096 MiB/s (1.99x) and 1071 versus 642 MiB/s (1.67x) on the 39 MiB dense subset, where zlib 1.3.1 -6 was faster still (1282 MiB/s) at a much worse ratio; the ratio column (a tie with xz -6) uses Apple's encoder output. On an M4 Pro with a substitute corpus the NEON path ran 954 versus 328 MiB/s for xz -6 (2.91x), below Apple's own decoder at 1333 MiB/s.",
+  "status_note": "Single AI-authored commit (2026-07-30) that the owner says he will not maintain, but it is 0BSD, dependency-free C11, heavily fuzzed (377 million AFL++ decoder executions, ASan/UBSan clean) and differentially tested against Apple's decoder, so it is reasonable to vendor for OTA tooling.",
+  "sources_read": [
+    "https://github.com/anat0m1a/liblzraven",
+    "https://raw.githubusercontent.com/anat0m1a/liblzraven/HEAD/README.md",
+    "https://raw.githubusercontent.com/anat0m1a/liblzraven/HEAD/SPEC.md",
+    "https://raw.githubusercontent.com/anat0m1a/liblzraven/HEAD/include/lzraven.h",
+    "https://raw.githubusercontent.com/anat0m1a/liblzraven/HEAD/Makefile"
+  ],
+  "confidence": 0.7
+}
