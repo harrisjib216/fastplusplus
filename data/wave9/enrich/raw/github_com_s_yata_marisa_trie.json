@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/s-yata/marisa-trie",
+  "one_liner": "Static LOUDS-based recursive (nested Patricia) trie dictionary; about 7.4x smaller than darts-clone and 2.5x smaller than tx-trie.",
+  "what_it_does": "libmarisa builds an immutable string dictionary from a Keyset and answers lookup (string to ID), reverse lookup (ID to string), common-prefix search and predictive (prefix-completion) search. The API is its own: you push keys into marisa::Keyset, call Trie::build, then query through a marisa::Agent that carries the query and per-search state. Built tries can be saved, loaded, or memory-mapped from a file or buffer (Trie::mmap / Trie::map), and command-line tools (marisa-build, marisa-lookup, marisa-benchmark and others) ship with it.",
+  "how_it_is_fast": "The win is space, not speed. Each trie level is a LOUDS (level-order unary degree sequence) succinct tree with rank/select bit vectors; edge labels are Patricia-compressed, and the label strings themselves are stored in another MARISA trie recursively (3 levels by default, up to 127), with the final tails merged into a shared TAIL. Lookups are sped up by a small node cache (five size levels) and by weight-ordered child arrangement (the default), and rank/select uses popcount, an SSSE3 or NEON byte-count path, or BMI2 PDEP-based select when built with ENABLE_NATIVE_CODE.",
+  "when_to_use": [
+    "Large static string sets (millions of words, titles, URLs, n-gram vocabularies) where dictionary size or RSS matters more than per-lookup latency.",
+    "You need key IDs both ways (string to dense ID and ID back to string) without a separate string table.",
+    "Prefix or autocomplete queries (common-prefix search for tokenizers and morphological analysers, predictive search for completion).",
+    "Dictionaries shipped as files and memory-mapped at startup, shared read-only across processes.",
+    "Python projects: the widely used marisa-trie Python package wraps this library."
+  ],
+  "when_not_to_use": [
+    "The key set changes at run time: the trie is static and must be rebuilt from a Keyset for any insert or delete.",
+    "Lookup latency is the priority: the catalogued xcdat reports marisa at 1818 ns/key vs 826 (xcdat<8>) and 619 (xcdat<15>) on its Wiki set, and double-array tries such as darts-clone are generally faster at much larger size.",
+    "More than about 4 billion keys or keys longer than 4 GiB: key IDs and lengths are 32-bit (MARISA_INVALID_KEY_ID = UINT32_MAX; set_key asserts length <= UINT32_MAX).",
+    "You need arbitrary values per key: it maps keys to dense IDs only; values must live in a side array indexed by ID.",
+    "Untrusted dictionary files: loading checks only a magic header and vector sizes (see gotchas)."
+  ],
+  "integration": {
+    "form": "static lib (or shared lib) built with CMake, plus command-line tools",
+    "dependencies": "none (C++ standard library only)",
+    "min_toolchain": "C++17 minimum since v0.3.0 (CMake sets C++20 with CXX_STANDARD_REQUIRED OFF); CMake 3.22+",
+    "platforms": "any 32- or 64-bit platform; optional x86-64 SSE2..SSE4.2/POPCNT/BMI/BMI2 paths behind ENABLE_NATIVE_CODE (-march=native), NEON popcount on AArch64; Windows (incl. MinGW64) supported",
+    "thread_safety": "not documented; query methods are const on Trie and keep search state in the caller's Agent, so one Agent per thread over a shared built Trie appears intended (inferred from the API, not stated)",
+    "drop_in_for_baseline": "partial: darts-clone and tx-trie are also static string tries with lookup and prefix search, but marisa has a different Keyset/Agent API, returns dense key IDs instead of stored values, and uses its own file format"
+  },
+  "gotchas": [
+    "Errors are reported by exceptions (std::logic_error, std::invalid_argument, std::runtime_error, std::system_error since v0.3.1; older releases threw marisa::Exception with MARISA_*_ERROR codes), so code written against 0.2.x needs its catch clauses updated; the Python binding broke on 0.3.1 (issue #121, closed).",
+    "Trie::map / mmap / load verify only the 'We love Marisa.' header and that each vector size is a multiple of its element size; there is no structural validation (e.g. cache_mask_ = cache_.size() - 1 assumes a power-of-two cache), so a corrupted or crafted dictionary file can lead to out-of-bounds reads. Treat dictionary files as trusted input.",
+    "Open issue #152 (Aug 2026): on 32-bit platforms FlatVector::build_ leaves one unit uninitialized, so saved trie files contain random heap bytes and are not reproducible (lookups still correct; proposed fix resize(num_units, 0) not yet merged). Issue #133 (Nov 2025) reports memory corruption in Trie::build with very large key sets and was closed as not planned without a root cause.",
+    "ENABLE_NATIVE_CODE=ON (shown in the README build line) compiles with -march=native and BMI2/SSE4 defines, so binaries built that way are not portable to older CPUs; the SONAME is still 0 (open issue #126)."
+  ],
+  "pick_this_over_siblings_when": "Pick marisa over darts-clone when the dictionary must be several times smaller and you need reverse lookup or predictive search; pick xcdat or darts-clone when lookup speed matters more than size. lexindex and C2 report smaller and/or faster structures than MARISA in their own benchmarks, but marisa is the long-established, widely packaged option (Debian, Python bindings) with mmap support.",
+  "verified_claims_summary": "The only comparison is the README's size table for 9,805,576 English Wikipedia titles (Nov 2012, 200,435,403 bytes): marisa-trie 50,753,560 bytes vs tx-trie 127,727,058 and darts-clone 376,613,888 (about 2.5x and 7.4x smaller, derived from page data). No compiler, hardware or speed numbers are given, and the bundled tools/marisa-benchmark.cc times marisa alone (std::clock), so speed against the baselines is not measured by this repo.",
+  "status_note": "Active (v0.3.1 released July 2024; commits through 2026, recent ones mostly dependabot CI bumps) and dual-licensed BSD-2-Clause OR LGPL-2.1-or-later, so it is safe to vendor or link.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/s-yata/marisa-trie/HEAD/README.md",
+    "https://raw.githubusercontent.com/s-yata/marisa-trie/HEAD/COPYING.md",
+    "https://raw.githubusercontent.com/s-yata/marisa-trie/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/s-yata/marisa-trie/HEAD/include/marisa.h",
+    "https://raw.githubusercontent.com/s-yata/marisa-trie/HEAD/include/marisa/trie.h",
+    "https://raw.githubusercontent.com/s-yata/marisa-trie/HEAD/include/marisa/keyset.h",
+    "https://raw.githubusercontent.com/s-yata/marisa-trie/HEAD/include/marisa/agent.h",
+    "https://raw.githubusercontent.com/s-yata/marisa-trie/HEAD/include/marisa/base.h",
+    "https://raw.githubusercontent.com/s-yata/marisa-trie/HEAD/lib/marisa/trie.cc",
+    "https://raw.githubusercontent.com/s-yata/marisa-trie/HEAD/lib/marisa/grimoire/io/mapper.cc",
+    "https://raw.githubusercontent.com/s-yata/marisa-trie/HEAD/lib/marisa/grimoire/io/reader.cc",
+    "https://raw.githubusercontent.com/s-yata/marisa-trie/HEAD/lib/marisa/grimoire/trie/louds-trie.cc",
+    "https://raw.githubusercontent.com/s-yata/marisa-trie/HEAD/lib/marisa/grimoire/trie/louds-trie.h",
+    "https://raw.githubusercontent.com/s-yata/marisa-trie/HEAD/lib/marisa/grimoire/trie/header.h",
+    "https://raw.githubusercontent.com/s-yata/marisa-trie/HEAD/lib/marisa/grimoire/vector/bit-vector.cc",
+    "https://raw.githubusercontent.com/s-yata/marisa-trie/HEAD/lib/marisa/grimoire/vector/vector.h",
+    "https://raw.githubusercontent.com/s-yata/marisa-trie/HEAD/lib/marisa/grimoire/vector/pop-count.h",
+    "https://raw.githubusercontent.com/s-yata/marisa-trie/HEAD/tools/marisa-benchmark.cc",
+    "https://github.com/s-yata/marisa-trie/issues?q=is%3Aissue",
+    "https://github.com/s-yata/marisa-trie/issues/133",
+    "https://github.com/s-yata/marisa-trie/issues/152",
+    "https://github.com/s-yata/marisa-trie/releases"
+  ],
+  "confidence": 0.8
+}

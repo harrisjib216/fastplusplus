@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/kampersanda/poplar-trie",
+  "one_liner": "Header-only dynamic path-decomposed trie string map; about 5.4x less memory than std::unordered_map, but 3-4x slower.",
+  "what_it_does": "Poplar-trie is an updatable associative array from strings to fixed-size values, implementing the Dynamic Path-decomposed Trie (DynPDT, ACM JEA 2020). The API is minimal and not a std::unordered_map drop-in: update(key) inserts if needed and returns a value_type* to write through, find(key) returns a const pointer or nullptr, and size() reports the key count. Six aliases in poplar.hpp combine a dynamic trie (m-Bonsai or FK-hash) with a plain or compact node label map (NLM).",
+  "how_it_is_fast": "The gain is memory, not speed. Path decomposition stores each key's remaining suffix as one label in the node label map, so the trie holds only branching nodes; the trie itself is a compact hash-based trie (m-Bonsai with quotienting and displacement arrays, or Fischer-Koeppl HashTrie) where a child is found by hashing (parent, symbol) with a bijective hash and storing only the quotient. The compact NLMs pack the labels of ChunkSize (default 16) slots into one vbyte-length-prefixed byte buffer indexed by a popcount bitmap, removing per-node pointers and allocation overhead.",
+  "when_to_use": [
+    "Very large dynamic string-key sets (tens of millions of titles, URLs, n-grams) built incrementally where RSS is the binding limit and about 1 us per lookup is acceptable.",
+    "Keys with long shared prefixes (URLs, paths): the README shows compact_bonsai_map at 1.09 GiB vs 6.05 GiB for std::unordered_map on 39.5M .uk URLs.",
+    "Small trivially copyable values (integers, IDs, counters) attached to each key.",
+    "Insert-only or insert-mostly workloads with no need for ordered iteration or prefix queries."
+  ],
+  "when_not_to_use": [
+    "Latency- or throughput-sensitive lookups: on the README's titles set, compact_bonsai_map lookup is 1.02 us/key vs 0.27 for std::unordered_map and 0.12 for tsl::robin_map; insert is 1.71 vs 0.50 us/key.",
+    "You need deletion, iteration, prefix/predictive search, key-by-ID, or serialization: map.hpp offers only find, update and size (issues #3 iterate, #4 deletion, #6 key-by-index are unanswered); deletion can only be emulated by writing a sentinel value, and the memory is not reclaimed.",
+    "Non-trivial value types such as std::string (issue #2, unanswered): values are written into raw byte buffers with reinterpret_cast and moved with byte copies, never constructed or destroyed.",
+    "Binary keys containing NUL bytes (issue #1, open): keys are NUL-terminated, and an alphabet of 254 or more distinct byte values makes update throw.",
+    "Projects that need maintenance: last commit 2021-09-07, and the README's Todo list still says code comments and an API document are missing."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none",
+    "min_toolchain": "C++17 (g++ 7+ or clang 4+ per README); CMake 2.8 only for samples/tests/bench",
+    "platforms": "any 64-bit target in principle; uses SSE4.2 popcount when __SSE4_2__ is defined, table fallback otherwise; only Linux/macOS build logic in CMake, other OSes not documented",
+    "thread_safety": "not documented; no internal synchronization in map.hpp, and find on a map being updated is unsafe because update can reallocate label buffers and rehash the whole trie",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Pointers returned by update/find are invalidated by later inserts: each insert into a 16-slot chunk reallocates that chunk's byte buffer, and table growth (expand) rebuilds the trie and the whole NLM. Write the value immediately and do not keep the pointer.",
+    "Values are stored unaligned right after the label bytes (reinterpret_cast<value_type*>(ptr + length)) and initialised with static_cast<value_type>(0); this is undefined behavior for types with alignment above 1 and can fault on strict-alignment CPUs, and there is no static_assert restricting value_type.",
+    "find(\"\") and update(\"\") throw poplar::exception (empty keys are rejected), so the map cannot hold an empty-string key.",
+    "Growth doubles the hash table and rehashes every node at once (expand in compact_bonsai_trie.hpp), so individual inserts have large latency spikes; pre-size with map(capa_bits) when the key count is known. The bundled CMake and the dictionary_bench build also add -march=native, so binaries built that way are not portable."
+  ],
+  "pick_this_over_siblings_when": "Pick poplar-trie when keys arrive incrementally and must stay queryable: marisa-trie and xcdat are static and must be rebuilt, though marisa is far smaller for a fixed set and xcdat faster. If you can afford about 1.8x more memory than compact_bonsai_map, tsl::htrie_map (0.43 GiB, 0.27 us/key on titles; not catalogued) is a maintained, faster dynamic alternative with iteration and prefix search.",
+  "verified_claims_summary": "The README (via the public kampersanda/dictionary_bench driver) inserts 14.1M English Wikipedia titles and 39.5M .uk URLs in random order and looks up 1M random keys on one core of a Xeon E5-2680 v2, g++ 7.3.0: compact_bonsai_map max RSS 0.24 vs 1.29 GiB (titles) and 1.09 vs 6.05 GiB (URLs) for libstdc++ std::unordered_map (about 5.4-5.5x smaller, derived from page data) while being about 3-4x slower on lookup and insert. The README states only -O3, but dictionary_bench's Release flags are -O3 -DNDEBUG -march=native with -msse4.2 added when available.",
+  "status_note": "Abandoned since September 2021, but MIT-licensed, header-only and small enough to vendor; treat it as research code and pin a commit.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/kampersanda/poplar-trie/HEAD/README.md",
+    "https://raw.githubusercontent.com/kampersanda/poplar-trie/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/kampersanda/poplar-trie/HEAD/LICENSE",
+    "https://github.com/kampersanda/poplar-trie/tree/master/include/poplar",
+    "https://raw.githubusercontent.com/kampersanda/poplar-trie/HEAD/include/poplar.hpp",
+    "https://raw.githubusercontent.com/kampersanda/poplar-trie/HEAD/include/poplar/map.hpp",
+    "https://raw.githubusercontent.com/kampersanda/poplar-trie/HEAD/include/poplar/basics.hpp",
+    "https://raw.githubusercontent.com/kampersanda/poplar-trie/HEAD/include/poplar/poplar_config.hpp",
+    "https://raw.githubusercontent.com/kampersanda/poplar-trie/HEAD/include/poplar/bit_tools.hpp",
+    "https://raw.githubusercontent.com/kampersanda/poplar-trie/HEAD/include/poplar/compact_bonsai_trie.hpp",
+    "https://raw.githubusercontent.com/kampersanda/poplar-trie/HEAD/include/poplar/compact_bonsai_nlm.hpp",
+    "https://raw.githubusercontent.com/kampersanda/poplar-trie/HEAD/include/poplar/plain_bonsai_nlm.hpp",
+    "https://raw.githubusercontent.com/kampersanda/poplar-trie/HEAD/include/poplar/plain_bonsai_trie.hpp",
+    "https://raw.githubusercontent.com/kampersanda/poplar-trie/HEAD/include/poplar/exception.hpp",
+    "https://raw.githubusercontent.com/kampersanda/poplar-trie/HEAD/include/poplar/compact_vector.hpp",
+    "https://raw.githubusercontent.com/kampersanda/poplar-trie/HEAD/include/poplar/bijective_hash.hpp",
+    "https://raw.githubusercontent.com/kampersanda/dictionary_bench/HEAD/README.md",
+    "https://raw.githubusercontent.com/kampersanda/dictionary_bench/HEAD/CMakeLists.txt",
+    "https://github.com/kampersanda/poplar-trie/issues?q=is%3Aissue",
+    "https://github.com/kampersanda/poplar-trie/issues/2",
+    "https://github.com/kampersanda/poplar-trie/issues/3"
+  ],
+  "confidence": 0.8
+}
