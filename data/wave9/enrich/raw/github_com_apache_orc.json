@@ -1,0 +1,56 @@
+{
+  "id": "https://github.com/apache/orc",
+  "one_liner": "Apache ORC's C++ reader with opt-in AVX-512 (and RVV) RLEv2 bit-unpacking, claimed 6-7x over ORC's scalar generic unpacker.",
+  "what_it_does": "Apache ORC is the columnar file format library; its C++ reader decodes integer columns with RLEv2, whose direct and patched runs hold up to 512 bit-packed values. ORC-1356 adds an AVX-512 implementation of the internal BitUnpack::readLongs used by RleDecoderV2, chosen at run time through a DynamicDispatch table (NONE, AVX512, RVV). It is not a standalone bit-packing API: you get it only by reading ORC files through the orc C++ library built with -DBUILD_ENABLE_AVX512=ON.",
+  "how_it_is_fast": "For each bit width 1 to 32 a vectorUnpackN routine loads packed bytes with masked AVX-512BW loads (_mm512_maskz_loadu_epi8), or 64-bit gathers (_mm512_i64gather_epi64) for wider fields, rearranges them with _mm512_permutexvar and _mm512_shuffle_epi8, aligns each field with per-lane variable shifts (srlv/sllv) and masks it, decoding 64, 32 or 16 values per 512-bit step into a small scratch buffer that is then widened into the int64_t output. Leading and trailing values that do not fill a vector, and widths above 32, go to the scalar plainUnpackLongs or the existing unrolled byte-aligned unpackers.",
+  "when_to_use": [
+    "You already read ORC files from C++ on Linux x86-64 servers with AVX-512F/CD/VL/DQ/BW (Skylake-SP or newer Intel, Zen 4 or newer AMD) and integer decode shows up in profiles.",
+    "Files written with non-byte-aligned RLEv2 bit widths (for example 3, 5, 7, 11 bits), which the PR author says is where the gain appears; byte-aligned widths already use scalar unrolled unpackers.",
+    "Long direct runs of integers (dozens to 512 values), so the vector loop rather than the scalar head and tail handles most values.",
+    "RISC-V vector hardware: the same dispatch has an RVV path (BUILD_ENABLE_RVV, ORC-2216, committed 2026-09-21)."
+  ],
+  "when_not_to_use": [
+    "Expecting an end-to-end speedup: a ClickHouse contributor reading a 505 MB, 1.2M-row ORC file saw no improvement, and with only int64 columns selected the AVX-512 run was marginally slower (0.442 s vs 0.440 s median), since decompression and other work dominate.",
+    "Distributing portable binaries: when enabled, the CMake module appends -march=native -mtune=native to CMAKE_CXX_FLAGS for the whole library and only enables AVX-512 if the build host's /proc/cpuinfo lists avx512f, so the build is tied to the build machine's CPU.",
+    "macOS or MinGW builds: the top-level CMakeLists skips the AVX-512 configuration on Apple, and ConfigSimdLevel disables it on MinGW (GCC bug 65782).",
+    "As a general bit-packing library for your own arrays: the code is internal to RleDecoderV2 and tied to its buffer management; use simdcomp, FastPFor or TurboPFor for that."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "ORC C++ third-party stack (protobuf, zlib, Snappy, LZ4, Zstd), fetched by ThirdpartyToolchain.cmake",
+    "min_toolchain": "C++17 (CMAKE_CXX_STANDARD 17); compiler must accept -mavx512f -mavx512cd -mavx512vl -mavx512dq -mavx512bw (or /arch:AVX512 on MSVC)",
+    "platforms": "x86-64 with AVX-512F/CD/VL/DQ/BW for the vector path (not macOS, not MinGW); RISC-V with RVV for the RVV path; scalar everywhere else",
+    "thread_safety": "not documented for the unpacker; dispatch and CpuInfo are function-local statics initialized once, and each RleDecoderV2 instance holds its own buffers",
+    "drop_in_for_baseline": "partial: it replaces ORC's own scalar unpacker transparently, but only after a rebuild with -DBUILD_ENABLE_AVX512=ON and with ORC_USER_SIMD_LEVEL=AVX512 set at run time"
+  },
+  "gotchas": [
+    "Off twice by default: even in a BUILD_ENABLE_AVX512=ON build, CpuInfo reads ORC_USER_SIMD_LEVEL and treats unset as NONE, which clears the AVX512 flag, so the vector path runs only when the environment variable is AVX512 (README says so; easy to miss when benchmarking).",
+    "Any value other than AVX512 or NONE (case-insensitive) makes CpuInfo construction throw ParseError('Invalid value for ORC_USER_SIMD_LEVEL'), which surfaces at the first integer decode.",
+    "The quoted 6-7x is against plainUnpackLongs, the generic bit-by-bit loop; the scalar default path already uses unrolled unpackers for widths 4, 8, 16, 24, 32, 40, 48, 56 and 64, so the realistic baseline for aligned widths is much faster than the PR's comparison.",
+    "No timing harness ships with the change: c++/test/TestRleVectorDecoder.cc checks correctness only, so the speed claim cannot be rerun from the repository."
+  ],
+  "pick_this_over_siblings_when": "Pick it only if your data already lives in ORC and you control the C++ build and deployment CPU; for your own integer arrays, simdcomp, FastPFor (SIMD-BP128) or TurboPFor give standalone, portable SIMD bit-unpacking with published benchmarks.",
+  "verified_claims_summary": "The PR author reports an average 6-7x lower latency for vectorUnpackN versus ORC's scalar plainUnpackLongs in an unpublished micro-test on an unnamed AVX-512 Intel CPU, with no compiler or flags given; a later snippet of the JIRA text says aligned widths see almost no gain and unaligned widths about 6x. The only independent end-to-end test in the thread (ClickHouse, Snappy/LZ4 files) found no improvement.",
+  "status_note": "Apache ORC is actively maintained (last commit 2026-09-21, RVV path just added) and Apache-2.0, but the AVX-512 file's own history shows only the original 2023-05-07 commit and the feature stays opt-in at both build and run time.",
+  "sources_read": [
+    "https://github.com/apache/orc/pull/1375",
+    "https://github.com/apache/orc/tree/main/c++/src",
+    "https://raw.githubusercontent.com/apache/orc/main/c++/src/Bpacking.hh",
+    "https://raw.githubusercontent.com/apache/orc/main/c++/src/BpackingAvx512.cc",
+    "https://raw.githubusercontent.com/apache/orc/main/c++/src/BpackingAvx512.hh",
+    "https://raw.githubusercontent.com/apache/orc/main/c++/src/BitUnpackerAvx512.hh",
+    "https://raw.githubusercontent.com/apache/orc/main/c++/src/BpackingDefault.cc",
+    "https://raw.githubusercontent.com/apache/orc/main/c++/src/BpackingRvv.cc",
+    "https://raw.githubusercontent.com/apache/orc/main/c++/src/CpuInfoUtil.cc",
+    "https://raw.githubusercontent.com/apache/orc/main/c++/src/Dispatch.hh",
+    "https://raw.githubusercontent.com/apache/orc/main/c++/src/RleDecoderV2.cc",
+    "https://raw.githubusercontent.com/apache/orc/main/c++/src/RLEv2.hh",
+    "https://raw.githubusercontent.com/apache/orc/main/c++/src/CMakeLists.txt",
+    "https://raw.githubusercontent.com/apache/orc/main/cmake_modules/ConfigSimdLevel.cmake",
+    "https://raw.githubusercontent.com/apache/orc/main/CMakeLists.txt",
+    "https://raw.githubusercontent.com/apache/orc/main/README.md",
+    "https://github.com/apache/orc/commits/main/c++/src/BpackingAvx512.cc",
+    "WebSearch: Apache ORC C++ AVX512 BUILD_ENABLE_AVX512 bit-unpacking bug (snippets incl. issues.apache.org/jira/browse/ORC-1356)"
+  ],
+  "confidence": 0.75
+}

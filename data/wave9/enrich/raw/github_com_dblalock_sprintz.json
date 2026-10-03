@@ -1,0 +1,55 @@
+{
+  "id": "https://github.com/dblalock/sprintz",
+  "one_liner": "Research codec for 8/16-bit multivariate integer time series; beats Simple8b, FastPFor and SIMD-BP128 on ratio at GB/s decode.",
+  "what_it_does": "Lossless compressor for quantized sensor time series stored as row-major uint8_t or uint16_t samples with up to thousands of channels. The API is four C-style function pairs (sprintz_compress_delta_8b / sprintz_compress_xff_8b and the 16-bit versions, plus matching decompress calls) that take a source pointer, length and ndims and write a self-describing 8-byte header plus packed data into a caller-supplied buffer. It is not a drop-in for an integer codec on uint32 posting lists: inputs must already be 8- or 16-bit integers.",
+  "how_it_is_fast": "Each sample is predicted from earlier samples (plain delta, or FIRE, a per-channel online-learned autoregressive filter updated with downsampled sign gradients), and the zigzag-encoded residuals of 8-row blocks are bit-packed per channel with a 3- or 4-bit width header; all-zero blocks become runs (15-bit run counter), so sparse or constant data collapses. Packing uses BMI2 pext/pdep and decode is AVX2 (_mm256 zigzag decode, prediction and prefix-add across 32 channels per vector), with state of a few bytes per channel. The paper adds an optional Huffman stage for higher ratio (search snippet only; paper blocked).",
+  "when_to_use": [
+    "IoT or wearable sensor streams already quantized to 8 or 16 bits, many channels sampled together, where you want ratio near general-purpose codecs and multi-GB/s single-thread decode.",
+    "Small blocks (1 KB to 10 KB) on memory-constrained nodes, where the README's extra figures show Sprintz gaining relative to other codecs.",
+    "Smooth or slowly drifting signals where delta or FIRE prediction leaves small residuals, and long flat stretches that the zero-block RLE removes.",
+    "As a research baseline when evaluating time-series codecs, using the author's lzbench fork for comparable runs."
+  ],
+  "when_not_to_use": [
+    "Sorted 32/64-bit integer lists (posting lists, IDs): only 8- and 16-bit element types exist; use FastPFor, simdcomp or TurboPFor there.",
+    "Non-x86 targets: sprintz_xff.h static_asserts __AVX2__ and bitpack.h includes immintrin.h for pext/pdep; issue #6 (2024, open) reports it fails to build on Apple M2.",
+    "Untrusted or possibly corrupt input: decompress takes no source length or destination capacity and trusts the header's ngroups and ndims.",
+    "Production use that needs a maintained library: last commit 2021-01-10, six open issues unanswered, no build system other than an Xcode project and the lzbench fork's Makefile, and issue #3 reports the paper's speeds could not be reproduced."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none for the codec (AVX2 and BMI2 intrinsics); benchmarks need the separate dblalock/lzbench fork plus Python, joblib, pandas, seaborn",
+    "min_toolchain": "C++11 (lzbench fork builds it with -std=c++0x -O3 -march=native); README says only tested with Clang on OS X; issue #2 reports Clang errors 'object backing the pointer will be destroyed at the end of the full-expression'",
+    "platforms": "x86-64 with AVX2 and BMI2 only",
+    "thread_safety": "not documented; functions keep no global mutable state beyond static const tables and allocate scratch per call, so separate calls on separate buffers look independent",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Compressor leaks memory on every call: compress_rowmajor_xff_rle callocs header_bytes and coef_counters_ar and never frees them (only stripe_* arrays and errs are freed), so long-running encoders grow without bound.",
+    "No output-size bound or capacity argument: the encoder comments that its memset 'can overrun dest buff', and the AVX2 decoder writes whole 32-byte vectors, so size destination buffers with slack; the needed slack is not documented.",
+    "Every call mallocs and frees scratch arrays, which costs time on small blocks; the README's GB/s figure comes from lzbench runs on large buffers.",
+    "Source files carry 'Copyright 2017 D Blalock. All rights reserved.' headers while the repository LICENSE is Apache-2.0; the LICENSE file governs, but keep it with any vendored copy."
+  ],
+  "pick_this_over_siblings_when": "Pick Sprintz over FastPFor, simdcomp or TurboPFor only for multichannel 8/16-bit sensor time series, where its prediction plus per-channel packing exploits correlation in time that those uint32 codecs ignore (the README notes they reach almost no compression on unpadded bytes); for sorted 32-bit lists or any non-x86 target, those siblings (or Stream VByte for varint-style data) are the safer choice.",
+  "verified_claims_summary": "The IMWUT 2018 paper and README compare Sprintz with Simple8b, FastPFor and SIMD-BP128 (fed 8/16-bit data zero-padded to 32 bits, ratios divided by the padding factor) and with LZ4, Zstd-class codecs on AMPDs, MSRC-12, PAMAP, UCI Gas and UCR datasets via the author's lzbench fork, reporting top compression ratios and single-thread decompression above 3 GB/s (paper abstract, search snippet only). The fork's Makefile builds with -O3 -march=native; the CPU model is not given on any page reachable here, and one user (issue #3) could not reproduce the speeds.",
+  "status_note": "Abandoned research code since 2021-01-10 with no maintainer replies to six open issues; Apache-2.0 and small enough to vendor, but plan to fix the encoder leak and add bounds checks yourself.",
+  "sources_read": [
+    "https://github.com/dblalock/sprintz",
+    "https://raw.githubusercontent.com/dblalock/sprintz/HEAD/README.md",
+    "https://github.com/dblalock/sprintz/tree/master/cpp",
+    "https://github.com/dblalock/sprintz/tree/master/cpp/Compress",
+    "https://raw.githubusercontent.com/dblalock/sprintz/HEAD/cpp/Compress/sprintz.h",
+    "https://raw.githubusercontent.com/dblalock/sprintz/HEAD/cpp/Compress/sprintz.cpp",
+    "https://raw.githubusercontent.com/dblalock/sprintz/HEAD/cpp/Compress/sprintz_xff.h",
+    "https://raw.githubusercontent.com/dblalock/sprintz/HEAD/cpp/Compress/sprintz_xff_rle.cpp",
+    "https://raw.githubusercontent.com/dblalock/sprintz/HEAD/cpp/Compress/bitpack.h",
+    "https://raw.githubusercontent.com/dblalock/sprintz/HEAD/cpp/Compress/format.h",
+    "https://raw.githubusercontent.com/dblalock/sprintz/HEAD/cpp/Compress/macros.h",
+    "https://github.com/dblalock/sprintz/issues?q=is%3Aissue",
+    "https://github.com/dblalock/sprintz/issues/2",
+    "https://github.com/dblalock/sprintz/issues/3",
+    "https://github.com/dblalock/sprintz/issues/6",
+    "https://raw.githubusercontent.com/dblalock/lzbench/master/Makefile",
+    "WebSearch: Sprintz time series compression FIRE forecasting bit packing run-length Huffman decompression GB/s (snippets of arxiv.org/pdf/1808.02515)"
+  ],
+  "confidence": 0.7
+}

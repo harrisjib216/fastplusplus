@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/101arrowz/fflate",
+  "one_liner": "Pure-JavaScript DEFLATE/gzip/zlib/ZIP codec, up to 25% faster decode and 50% faster encode than pako.",
+  "what_it_does": "Compresses and decompresses raw DEFLATE, gzip, zlib and ZIP in plain JavaScript/TypeScript for browsers, Node, Deno and Bun, with no native code. The API is its own: one-shot functions on Uint8Array (deflateSync, gunzipSync, zipSync, unzipSync, decompressSync with format autodetection), push-style streaming classes (Deflate, Gunzip, Zip, Unzip), and async variants that run the same code in a Web Worker or Node worker_thread. Output is standard DEFLATE, so any zlib can read it and vice versa.",
+  "how_it_is_fast": "Derived from UZIP.js rather than a line-by-line zlib port: the inflater decodes through flat 2^maxbits lookup tables (one typed-array read per symbol, 16-bit bit-reader), and the deflater uses a hash-chain LZ77 matcher with a 'nice length' early exit and a trick that re-hashes on the rarest 2-byte sequence inside the current match to cut chain walks. Everything works on typed arrays with closures avoided in hot loops (the source notes 'closures have awful performance'), and gzip/ZIP decompression preallocates the output from the stored size so the buffer is never grown. The async API parallelises multi-file ZIP across workers.",
+  "when_to_use": [
+    "Browser or edge-runtime code that needs synchronous, in-memory gzip/zlib/DEFLATE (CompressionStream is stream-only and has no level control).",
+    "Replacing pako in a JS bundle: decompression-only build is about 3 kB minified versus 45.6 kB for pako.",
+    "Creating or reading ZIP archives client-side, with per-file levels and a filter to skip entries before inflating.",
+    "Multi-file ZIP compression of large files where the async API can use several worker threads.",
+    "A C++ host that already embeds a JS engine (V8, QuickJS) and must keep compression inside script code."
+  ],
+  "when_not_to_use": [
+    "Any native C or C++ program: by the README's own figures fflate is about 30% slower than native zlib in decompression and 10% slower in compression, and the catalogue's zlib-ng, libdeflate and ISA-L are much faster than zlib itself.",
+    "Node services that can use the built-in zlib bindings; the author recommends those for best performance.",
+    "Untrusted input where integrity matters: the sync decoders do not verify the gzip CRC-32, the zlib Adler-32 or ZIP entry CRCs (read in src/index.ts), so corruption is not detected.",
+    "Streaming Deflate/Zip/ZipDeflate at levels 2-9 on v0.8.x: open issues #260 and #282 (May and June 2026) report output with invalid back-references that zlib rejects; zipSync and deflateSync are not affected per the reporters.",
+    "Small payloads (under about 50 kB) through the async API: worker start-up costs about 50 ms per function."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none",
+    "min_toolchain": "Any ES3-level JavaScript engine with typed arrays (README); async API needs Worker or Node worker_threads; TypeScript typings shipped",
+    "platforms": "any JavaScript runtime (browsers back to IE11 for workers, Node, Deno, Bun); not callable from C++ without an embedded JS engine",
+    "thread_safety": "Sync functions are pure over their inputs; stream objects are single-owner; async APIs run on separate workers.",
+    "drop_in_for_baseline": "partial: produces and reads the same formats as pako/zlib, but the API differs from pako's (different function names, Uint8Array only, callbacks for async)"
+  },
+  "gotchas": [
+    "gunzipSync allocates the output from the 4-byte ISIZE trailer and unzipSync from the ZIP header size, and a caller-supplied buffer is never grown; from the source, a wrong or wrapped (over 4 GiB) size leads to silently truncated output since typed-array writes past the end are dropped and no checksum is checked.",
+    "Issue #298 (Sept 2026, open): unzipSync treats ZIP64 0xFFFFFFFF size sentinels as real sizes when there is no ZIP64 end-of-central-directory locator and tries a ~4 GiB allocation on a 33 MiB file; the streaming Unzip handles it. A tiny crafted archive can trigger large allocations the same way.",
+    "The sync API has no output-size cap, so decompression bombs must be limited by the caller (unzip filter on originalSize helps only for ZIP).",
+    "Async APIs serialise functions into workers by name-recovery tricks; issues #288 (minified builds), #266 (Deno) and #294 (Firefox WebExtensions) report breakage in some bundlers and sandboxes."
+  ],
+  "pick_this_over_siblings_when": "Only when the code must stay in JavaScript: every C/C++ sibling (zlib-ng, libdeflate, miniz, Wuffs) beats it and native zlib on raw speed, and Zippy plays the same role for Nim. Pick fflate over pako-style JS ports, not over native libraries.",
+  "verified_claims_summary": "First-party README table rates fflate against pako as up to 25% faster in decompression and up to 50% faster in compression, with no data, runtime version, CPU or flags published; npm test writes timings to test/results but none are checked in. The same README states it is about 30% slower than native zlib to decompress and 10% slower to compress.",
+  "status_note": "Active (v0.8.3, last commit May 2026) and MIT-licensed (0BSD for SheetJS), with about 3.0k stars, but several data-corruption reports against the streaming compressor from 2026 are still open with no maintainer reply visible.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/101arrowz/fflate/HEAD/README.md",
+    "https://raw.githubusercontent.com/101arrowz/fflate/HEAD/package.json",
+    "https://raw.githubusercontent.com/101arrowz/fflate/HEAD/src/index.ts",
+    "https://raw.githubusercontent.com/101arrowz/fflate/HEAD/src/node-worker.ts",
+    "https://raw.githubusercontent.com/101arrowz/fflate/HEAD/src/worker.ts",
+    "https://github.com/101arrowz/fflate/issues?q=is%3Aissue+crc",
+    "https://github.com/101arrowz/fflate/issues?q=is%3Aissue+is%3Aopen",
+    "https://github.com/101arrowz/fflate/issues/260",
+    "https://github.com/101arrowz/fflate/issues/282",
+    "https://github.com/101arrowz/fflate/issues/298"
+  ],
+  "confidence": 0.7
+}
