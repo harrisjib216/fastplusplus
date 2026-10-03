@@ -5,3 +5,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - saskeli/h0_bv (C): SEA 2025 paper on drops.dagstuhl.de (blocked); retier to B when reachable. (w9 batch 04)
 - williams-cs/spider (C): SEA 2024 paper LIPIcs.SEA.2024.21 on drops.dagstuhl.de (blocked); retier to B when reachable. (w9 batch 06)
 - lin-toto/recoil (C): arXiv paper blocked; retier to B when reachable. SFVInt (arXiv 2403.06898, BMI2 varint, up to 2x over folly and protobuf): no code repo found. (w9 batch 10, intpack-gh-cpp2)
+- dtANS (C++/CUDA, arXiv 2603.01915): repo URL unknown, arXiv blocked. (w9 entropy-gh-cpp2)
