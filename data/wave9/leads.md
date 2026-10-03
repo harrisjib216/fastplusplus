@@ -37,3 +37,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - tsl::htrie_map (Tessil/hat-trie): possible faster dynamic trie sibling of poplar-trie, not catalogued. From poplar-trie enricher.
 - intel/zlib-accel (zlib-API shim over QPL), intel/iaa-plugin-rocksdb, ivagorRetrocomp/DeLZSA. From QPL/LZSA enricher.
 - NeaTS (learned compressor, GEF baseline): not catalogued. From GEF enricher.
+- Retier candidate: Chromium zlib C to B via simonis/zlib-chromium README (independent inflate run, i7-8650U at 1900 MHz, zbench.c, Silesia/Calgary, Feb 2022; graphs only, no table). From Chromium zlib enricher.

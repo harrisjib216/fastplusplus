@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/chromium/chromium",
+  "one_liner": "Chromium's zlib fork with SIMD CRC-32, Adler-32, chunk-copy inflate and a faster deflate hash; API-compatible, faster than madler/zlib.",
+  "what_it_does": "A patched copy of zlib 1.3.2 (third_party/zlib) that keeps the zlib API (deflate/inflate, gzip, crc32/adler32) and adds minizip plus Chromium's zip reader/writer. Callers use the same zlib.h calls. By default chromeconf.h renames every exported symbol to Cr_z_*, so source code is unchanged but the result is not a link-level replacement for libz unless CHROMIUM_ZLIB_NO_CHROMECONF is defined. Besides Chromium's GN build there is a standalone CMakeLists.txt with ENABLE_SIMD_OPTIMIZATIONS (off by default).",
+  "how_it_is_fast": "On inflate, contrib/optimizations/inffast_chunk.c replaces byte-wise match copies with 16-byte SSE2/NEON chunk copies (chunkcopy.h), reads input 64 bits at a time (INFLATE_CHUNK_READ_64LE), and since 2026-09 issues the bit-buffer refill after the Huffman table lookup so the two loads overlap. Checksums use carry-less-multiply folding (SSE4.2+PCLMUL, optional AVX-512 VPCLMULQDQ, Armv8 CRC32/PMULL) for CRC-32 and SSSE3/NEON/RVV for Adler-32, chosen once at run time by cpu_features.c. On deflate, the ANZAC++ multiplicative 4-byte hash (insert_string.h) replaces the Rabin-Karp rolling hash, with SIMD slide_hash and a 64-bit SWAR compare256 in longest_match.",
+  "when_to_use": [
+    "Inflate-heavy workloads (PNG, HTTP gzip/deflate, zip extraction) on x86-64 or arm64 where you must keep the zlib API",
+    "gzip streams where CRC-32 cost matters: the SIMD CRC is 5x-25x faster than zlib's BYFOUR table code per the 2018 commit",
+    "Projects that already build with GN/Chromium tooling or AOSP, or that can vendor the CMake build with ENABLE_SIMD_OPTIMIZATIONS=ON",
+    "When you want a zlib that is fuzzed (OSS-Fuzz, inflate_fuzzer.cc) and ships to billions of Chrome and Android installs"
+  ],
+  "when_not_to_use": [
+    "You need byte-identical deflate output to canonical zlib (reproducible archives, delta updates): the default ANZAC++ hash changes the output unless built with USE_ZLIB_RABIN_KARP_HASH / CHROMIUM_ZLIB_NO_CASTAGNOLI",
+    "Your code assumes inflate writes nothing past the produced bytes: chunk copies may scribble on next_out beyond the decoded data, up to avail_out (this broke OpenJDK tests and Spring/ASM when Java ran on it)",
+    "You want a turnkey, versioned library: there are no releases, the code lives in a monorepo mirror, and zconf.h says building outside Chromium is not guaranteed to keep working; zlib-ng or libdeflate are easier to package",
+    "Maximum speed regardless of API: libdeflate (whole-buffer) and ISA-L igzip are faster for one-shot (de)compression, and zlib-ng is the more widely packaged drop-in",
+    "Big-endian or exotic targets: the hash is 'validated for little endian archs', and the SIMD paths cover only x86, Arm and RISC-V (CMake)"
+  ],
+  "integration": {
+    "form": "static lib (GN component 'zlib' / CMake static or shared library)",
+    "dependencies": "none outside libc; pthread for run-time CPU detection on POSIX; Android builds need the NDK cpu_features",
+    "min_toolchain": "C (K&R-compatible zlib sources) built with GN/clang in Chromium; CMake 3.12+ for the standalone build; per-function __target__ attributes need GCC or clang for the SIMD paths (MSVC Windows-on-Arm optimizations disabled)",
+    "platforms": "x86/x86-64 (SSE2, SSSE3, SSE4.2+PCLMUL detected at run time; AVX-512 CRC opt-in), arm/arm64 (NEON, CRC32, PMULL), riscv64 (RVV, CMake only); portable C fallback elsewhere; iOS x86 simulator builds without SIMD",
+    "thread_safety": "Same as zlib: one z_stream per thread; CPU feature detection runs once through pthread_once / InitOnceExecuteOnce",
+    "drop_in_for_baseline": "partial — same zlib.h API and valid DEFLATE streams, but symbols are renamed to Cr_z_* by default, deflate output bytes differ from madler/zlib, and inflate may overwrite unused output-buffer space"
+  },
+  "gotchas": [
+    "contrib/optimizations/inflate.c is a hand-maintained copy of inflate.c: the zlib 1.3.2 update (2026-02/03) missed upstream fix madler/zlib@f7d01aa, which left state->distcode stale after inflateCopy() (the regression test shows SIGILL when a fixed Huffman block switches to a dynamic one). It was fixed 2026-04-17 in commit 296866e, so fixes to upstream inflate.c can lag here.",
+    "AVX-512 CRC (CMake ENABLE_SIMD_AVX512, off by default) is enabled from XCR0 bit 6 alone (`_xgetbv(0) & 0x40`), with no CPUID check for AVX512F or VPCLMULQDQ and no OSXSAVE check. Read from the source, not tested: on AVX-512 CPUs without VPCLMULQDQ (Skylake-SP/Cascade Lake) this likely faults with SIGILL. The same path failed to build with GCC until commit 53a2b53 (2026-08-31) added pclmul to the target attribute.",
+    "The x86 SIMD CRC is used only after cpu_check_features() has run, which happens in deflateInit/inflateInit or on the zlib-convention call crc32(0, NULL, 0); a program that calls crc32(crc, buf, len) cold gets the portable path.",
+    "With the Chromium hash, hash_bits is forced to at least 15, so a low memLevel no longer shrinks the hash table, and deflateBound() always returns the conservative stored/fixed bound."
+  ],
+  "pick_this_over_siblings_when": "Pick it over zlib-ng or Cloudflare zlib when you already build Chromium/AOSP code or want the exact zlib Chrome ships, with its fuzzing and per-CPU tuning. Pick zlib-ng for a packaged, versioned zlib-compatible library, and libdeflate when you can drop the streaming API for whole-buffer speed.",
+  "verified_claims_summary": "Chromium's 2018 commit 65e2abcb reports SSE4.2+PCLMUL CRC-32 at 5x-25x zlib's BYFOUR crc32, with gzip- and zlib-wrapped inflate 69% and 50% faster on the snappy corpus and PNG decoding 40% faster combined with SIMD Adler-32 and chunk copy; it gives no CPU, compiler or flags (details on blocked crbug.com/796178). The 2026 commits (refill overlap 8.09% average inflate gain across 11 CPUs; SWAR compare256 9.6% average deflate gain at levels 1/6/9 across 10 CPUs) name CPUs but compare against the previous Chromium zlib, not upstream. Independently, Volker Simonis's zlib-chromium README reports more than 50% faster inflate than madler/zlib on Silesia and Calgary (i7-8650U fixed at 1900 MHz, zbench.c, LD_PRELOAD, Chromium rev 3fc79233, Feb 2022), shown as graphs only.",
+  "status_note": "Actively maintained by Chromium (last zlib commit 2026-09-22, synced to zlib 1.3.2) under the Zlib licence (Chromium-original files carry BSD-style Chromium headers); there are no tagged releases, so you vendor a snapshot of third_party/zlib or the CMake build.",
+  "sources_read": [
+    "https://github.com/chromium/chromium/commits/main/third_party/zlib",
+    "https://github.com/chromium/chromium/commit/65e2abcb74b1c07fa14f46abaa1fb1717892eec3",
+    "https://github.com/chromium/chromium/commit/ea7f42038188e90cbb8884160c980f9c679c7440",
+    "https://github.com/chromium/chromium/commit/dc2f437",
+    "https://github.com/chromium/chromium/commit/296866e",
+    "https://github.com/chromium/chromium/commit/53a2b53",
+    "https://raw.githubusercontent.com/chromium/chromium/HEAD/third_party/zlib/README.chromium",
+    "https://raw.githubusercontent.com/chromium/chromium/HEAD/third_party/zlib/BUILD.gn",
+    "https://raw.githubusercontent.com/chromium/chromium/HEAD/third_party/zlib/CMakeLists.txt",
+    "https://raw.githubusercontent.com/chromium/chromium/HEAD/third_party/zlib/zconf.h",
+    "https://raw.githubusercontent.com/chromium/chromium/HEAD/third_party/zlib/chromeconf.h",
+    "https://raw.githubusercontent.com/chromium/chromium/HEAD/third_party/zlib/cpu_features.c",
+    "https://raw.githubusercontent.com/chromium/chromium/HEAD/third_party/zlib/crc32.c",
+    "https://raw.githubusercontent.com/chromium/chromium/HEAD/third_party/zlib/crc32_simd.c",
+    "https://raw.githubusercontent.com/chromium/chromium/HEAD/third_party/zlib/crc32_simd.h",
+    "https://raw.githubusercontent.com/chromium/chromium/HEAD/third_party/zlib/deflate.c",
+    "https://raw.githubusercontent.com/chromium/chromium/HEAD/third_party/zlib/contrib/optimizations/insert_string.h",
+    "https://raw.githubusercontent.com/chromium/chromium/HEAD/third_party/zlib/contrib/optimizations/inffast_chunk.c",
+    "https://raw.githubusercontent.com/chromium/chromium/HEAD/third_party/zlib/contrib/optimizations/inflate.c",
+    "https://raw.githubusercontent.com/chromium/chromium/HEAD/third_party/zlib/contrib/bench/zlib_bench.cc",
+    "https://github.com/simonis/zlib-chromium",
+    "https://raw.githubusercontent.com/simonis/zlib-chromium/HEAD/README.md",
+    "https://raw.githubusercontent.com/simonis/zlib-bench/HEAD/README.md"
+  ],
+  "confidence": 0.8
+}
