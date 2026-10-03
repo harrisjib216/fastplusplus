@@ -13,3 +13,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - paddor/m77rip (credited in misa77's README): check as a sibling. Show HN item 48922838 on misa77 (blocked). (from misa77 enricher)
 - paperhub.s3.amazonaws.com mirrors some arXiv PDFs and is reachable (curl); try it for blocked papers (found via FastPFor enricher). simdcomp shares the SPE paper; its own retier needs the simdcomp code tie-in checked.
 - OpenZL second paper arXiv 2605.09928 'Using Graphs to Compress Smaller and Faster' (blocked, not opened). (from OpenZL enricher)
+- Consistency retier at wave close: lzbench 2.4 rows (gcc 15.2.0, EPYC 9555P, Makefile -O3 -DNDEBUG, public code) were tiered A for FastLZ (batch 25) but B for Kanzi, LZAV, LZSSE, misa77, Fast LZMA2, libslz, bzip3, memlz, Snappy, Density, libbsc, libzling; pick one and write one retier file.
