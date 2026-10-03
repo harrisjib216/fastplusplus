@@ -1,0 +1,64 @@
+{
+  "id": "https://github.com/seanwevans/cromulent-prng",
+  "one_liner": "Small MIT C library for a new 128-bit-state nonlinear PRNG; its own benchmark beats xoshiro256++ but loses to splitmix64.",
+  "what_it_does": "Provides cromulent128, a 64-bit-output generator with two 64-bit state words, plus helpers for uniform doubles and floats, unbiased bounded integers (cromulent_range), and portable little-endian state save/load. The C API is explicit-state (cromulent_init(&state, seed), cromulent_next(&state)); a separate 'strong' variant and a four-lane AVX2 variant exist. A header-only C++17 binding (cromulent::engine) models UniformRandomBitGenerator, so it plugs into <random> distributions in place of std::mt19937_64; the bindings directory lists 20 languages in total.",
+  "how_it_is_fast": "Each step is a few 64-bit operations on two registers: s0 = s0*C6 + s1, s1 = rotl(s1,31) + mix_fast(s0), with a single-multiply xor-shift finalizer (MH3) inside the recurrence and a multiply-xorshift output mix (s0 + rotl(s1,11), then xorshift-27, multiply by C3, xorshift-27). That is three 64-bit multiplies per output against none for xoshiro256++, so its 1.37x lead in the README comes from the harness (all generators called through function pointers on static global state, where xoshiro256++ must load and store four words per call) rather than from fewer instructions. cromulent_range uses Lemire's multiply-and-reject method with __uint128_t, and the AVX2 path runs four independent lanes using an emulated 64-bit multiply built from three _mm256_mul_epu32.",
+  "when_to_use": [
+    "You want a tiny MIT-licensed C generator with 16-byte state and a portable, endian-independent save/restore format.",
+    "You need the same generator and stream in several languages: the repo ships bindings for 20 languages and the C++ binding is tested bit-for-bit against the C reference.",
+    "Non-cryptographic simulation or game code where a 64-bit output generator that passed a 128 TB PractRand run (per the repo's log) is enough.",
+    "As a std::mt19937_64 replacement in C++ via cromulent::engine when you also need its C or other-language twins."
+  ],
+  "when_not_to_use": [
+    "When raw speed is the goal: the repo's own table shows splitmix64 (1.27 ns) and its 'pcg64' (1.76 ns) faster than cromulent128 (2.93 ns), and siblings such as Sirius64, DualMix128, RomuDuoJr or wyrand publish better numbers against proper references.",
+    "Parallel streams that must not overlap: the jump-ahead was removed in July 2026 (PR #26) because the recurrence is nonlinear and no valid skip-ahead exists; per-thread seeds are the only option.",
+    "When a proven period matters: the README states 'period approximately 2^128', but the step is nonlinear and the repo offers no proof that it is invertible or of a minimum cycle length.",
+    "Cryptographic or adversarial use, including the 'strong' variant: nothing in the repo claims or analyses unpredictability.",
+    "Production code wanting an established algorithm: 0 stars, no external review, and the design changed repeatedly in 2025-2026 (seeding of the registry entry fixed 2026-08-30)."
+  ],
+  "integration": {
+    "form": "static lib (C, CMake); header-only C++17 binding in bindings/cpp",
+    "dependencies": "none (C11 standard library; optional __uint128_t and AVX2)",
+    "min_toolchain": "C11, CMake 3.19+; C++17 for the C++ binding; CI builds Release with GCC and Clang on Ubuntu and Clang on macOS",
+    "platforms": "any 64-bit target for the scalar code; AVX2 variant on x86-64 only, compiled with -mavx2 and with no runtime CPU dispatch",
+    "thread_safety": "Explicit-state functions are safe with one cromulent_state per thread; the registry entry points (init_cromulent / cromulent128pp) and the reference generators use file-static global state and are not thread-safe.",
+    "drop_in_for_baseline": "partial — the C++ cromulent::engine satisfies UniformRandomBitGenerator and works with <random> distributions, but the streams differ from std engines, and the C API is not a drop-in for the xoshiro256++ or PCG reference functions"
+  },
+  "gotchas": [
+    "The public header cromulent.h includes internal.h, which defines macros C1-C6 and MH3 and static inline functions rotl, rotr, diffuse, mix and mix_fast in the global namespace, and pulls in <immintrin.h> on x86-64; these names can collide with user code.",
+    "A plain 'cmake ..' as shown first in the README sets no build type and therefore no -O flag; use -DCMAKE_BUILD_TYPE=Release before benchmarking.",
+    "The AVX2 generator seeds four lanes from eight SplitMix64 outputs, so its output is four interleaved substreams that never match the scalar stream for the same seed, and its declarations are only visible when the including file is itself compiled with AVX2 enabled.",
+    "The benchmark's 'pcg64' (src/reference/pcg64.c) is not PCG64: it is a 64-bit LCG whose 37-bit xorshifted value is rotated within 64 bits, so every output contains a run of at least 27 consecutive zero bits, counting cyclically (checked by simulating the code); comparisons against it say nothing about real PCG64."
+  ],
+  "pick_this_over_siblings_when": "Pick it over Sirius64, DualMix128 or shioi128/seiran128 only when you value one MIT generator with identical streams across C, C++ and other language bindings more than speed or published analysis; for scalar speed those siblings, or splitmix64 and RomuDuoJr, are better documented, and for bulk throughput SHISHUA or the SIMD xoshiro variants are far ahead.",
+  "verified_claims_summary": "The README's sample output from apps/bench_micro.c (10^10 calls per generator, seed 69420, each called through a function pointer on static global state in a separately compiled static library) gives xoshiro256++ 4.00, cromulent128 2.93, pcg64 1.76 and splitmix64 1.27 ns/sample on an unnamed 'modern CPU' with unstated compiler, flags and build type; cromulent128 is 1.37x faster than this xoshiro256++ harness (derived from page data) but slower than the other two. The AVX2 variant is not benchmarked, and the 128 TB PractRand log (2025-05-28, RNG_stdin64, all results 'normal') does not name the generator or seed, while PR #51 says those transcripts never covered the registry entry that the benchmark times.",
+  "status_note": "Active (last commit 2026-08-30, 122 commits, 0 stars), MIT-licensed and small enough to vendor, but young, single-author and without a proven period or valid stream-splitting.",
+  "sources_read": [
+    "https://github.com/seanwevans/Cromulent-PRNG",
+    "https://github.com/seanwevans/Cromulent-PRNG/commits/main",
+    "https://github.com/seanwevans/Cromulent-PRNG/commits/main/src/scalar/cromulent_scalar.c",
+    "https://github.com/seanwevans/Cromulent-PRNG/commits/main/tests/results/practrand128TB.txt",
+    "https://github.com/seanwevans/Cromulent-PRNG/pull/25",
+    "https://github.com/seanwevans/Cromulent-PRNG/pull/26",
+    "https://github.com/seanwevans/Cromulent-PRNG/pull/51",
+    "https://github.com/seanwevans/Cromulent-PRNG/pulls?q=is%3Apr+divergence+OR+jump",
+    "https://github.com/seanwevans/Cromulent-PRNG/issues?q=is%3Aissue",
+    "https://github.com/seanwevans/Cromulent-PRNG/tree/main/bindings",
+    "https://github.com/seanwevans/Cromulent-PRNG/tree/main/bindings/cpp",
+    "https://raw.githubusercontent.com/seanwevans/Cromulent-PRNG/HEAD/README.md",
+    "https://raw.githubusercontent.com/seanwevans/Cromulent-PRNG/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/seanwevans/Cromulent-PRNG/HEAD/include/cromulent.h",
+    "https://raw.githubusercontent.com/seanwevans/Cromulent-PRNG/HEAD/include/internal.h",
+    "https://raw.githubusercontent.com/seanwevans/Cromulent-PRNG/HEAD/apps/bench_micro.c",
+    "https://raw.githubusercontent.com/seanwevans/Cromulent-PRNG/HEAD/src/scalar/cromulent_scalar.c",
+    "https://raw.githubusercontent.com/seanwevans/Cromulent-PRNG/HEAD/src/scalar/cromulent_strong.c",
+    "https://raw.githubusercontent.com/seanwevans/Cromulent-PRNG/HEAD/src/simd/cromulent_avx2.c",
+    "https://raw.githubusercontent.com/seanwevans/Cromulent-PRNG/HEAD/src/cromulent_registry.c",
+    "https://raw.githubusercontent.com/seanwevans/Cromulent-PRNG/HEAD/src/reference/xoshiro256.c",
+    "https://raw.githubusercontent.com/seanwevans/Cromulent-PRNG/HEAD/src/reference/pcg64.c",
+    "https://raw.githubusercontent.com/seanwevans/Cromulent-PRNG/HEAD/src/reference/splitmix64.c",
+    "https://raw.githubusercontent.com/seanwevans/Cromulent-PRNG/HEAD/tests/results/practrand128TB.txt",
+    "https://raw.githubusercontent.com/seanwevans/Cromulent-PRNG/HEAD/bindings/cpp/README.md"
+  ],
+  "confidence": 0.6
+}

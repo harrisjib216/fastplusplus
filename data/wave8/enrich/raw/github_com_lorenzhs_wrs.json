@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/lorenzhs/wrs",
+  "one_liner": "Research C++17 library of sequential and parallel alias tables and weighted samplers; reported 3-4x faster queries than GSL's gsl_ran_discrete.",
+  "what_it_does": "Draws items with probability proportional to given weights (weighted random sampling with replacement) in O(1) per sample after O(n) alias-table construction. It provides a sequential alias table (wrs::alias), a sweeping construction without auxiliary arrays (simple_scan_alias), parallel splitting constructions (par_scan_alias, par_scan_alias2, 'PSA'), a per-thread subtable variant (multi_alias), and an output-sensitive divide-and-conquer sampler that returns (item, multiplicity) pairs (outsens). The API is its own: init(n), construct(first, last) over double weights, then sample(u) with a uniform double you supply; it is not a drop-in for gsl_ran_discrete or std::discrete_distribution.",
+  "how_it_is_fast": "The table is stored as an array of structs {double p; uint32 alias} so a query touches one cache line, where GSL keeps F[] and A[] in separate arrays; the query picks between bucket and alias with a branchless index (candidates[rand >= p]) and reuses the fractional part of one uniform draw. Construction classifies small and large items into a single work array and pairs them in one sweep (Vose-style), and the parallel PSA variants split the item range with prefix sums so threads build disjoint table segments. Tables above 1 MB are allocated 2 MB-aligned with madvise(MADV_HUGEPAGE), and uniforms come from Intel MKL or dSFMT in blocks rather than one gsl_rng call per sample.",
+  "when_to_use": [
+    "Millions to hundreds of millions of static weights sampled many times (Monte Carlo, graph generators, particle resampling) on Linux x86-64.",
+    "You can build the table once and run queries from many threads: sample(u) is const and takes the random number as an argument.",
+    "Table construction itself is the bottleneck and you have a many-core NUMA box: PSA and multi_alias build in parallel and the paper reports near-linear scaling.",
+    "You need a batch of k samples with replacement and only want counts per item: outsens returns multiplicities instead of k individual draws.",
+    "You are studying or reimplementing alias-table algorithms and want a reference with GSL wired in for comparison."
+  ],
+  "when_not_to_use": [
+    "Closed-source or permissively licensed products: the code is GPL-3.0.",
+    "Weights that change between draws: alias tables must be rebuilt in O(n); no dynamic or update API exists.",
+    "Non-Linux or non-x86-64 targets: it calls madvise, links a prebuilt x86-64 ELF static library (extlib/stocc/libaelf64.a) and compiles with -march=native.",
+    "Production use expecting maintenance: 8 commits, last one 2020-12-09, no releases, no issues filed, research-oriented logging and benchmark scaffolding throughout.",
+    "Small tables or few queries: for a handful of weights std::discrete_distribution or a linear or binary search over a prefix sum is simpler and the setup cost (thread pool, submodules) dominates."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "tlx (author's fork, threadpool_init branch, git submodule), pthread, libatomic, Agner Fog's stocc with prebuilt asmlib libaelf64.a (vendored); optional Intel MKL (fast uniform generation), libnuma with hwloc and the Silo and Topo submodules (NUMA-aware pools), GSL (comparison only); googletest for tests",
+    "min_toolchain": "C++17, CMake 3.9.2+ (GCC or Clang; MSVC branch exists in CMake but untested here)",
+    "platforms": "Linux x86-64 (madvise, prebuilt x86-64 asmlib, -march=native); NUMA optional",
+    "thread_safety": "Queries on a constructed table are const and safe from many threads with per-thread RNGs; parallel construction uses a process-global tlx thread pool that must be created with wrs::init_threads(n) and torn down with wrs::release_threads(). The gsl_alias wrapper shares one gsl_rng and is not thread-safe.",
+    "drop_in_for_baseline": "partial — same alias-method semantics as gsl_ran_discrete_preproc / gsl_ran_discrete, but a different C++ API (init/construct/sample(u)) and the caller supplies uniforms"
+  },
+  "gotchas": [
+    "Default index type is uint32_t; a table with more than 2^32-1 items needs wrs::alias<size_t>, and construct() on a too-large or wrong-sized input only logs an error and returns, leaving the table unusable without throwing.",
+    "CMake defaults to a Debug build; pass -DCMAKE_BUILD_TYPE=Release, and run git submodule update --init first.",
+    "Benchmark fairness: benchmark/alias.cpp says the wrs tables must be switched to size_t indices for a fair GSL comparison, and the GSL query path draws from gsl_rng_mt19937 while wrs uses MKL or dSFMT block generation plus huge-page tables, so part of the reported query gain is the RNG and allocator, not the table layout.",
+    "Move construction and move assignment are deleted on wrs::alias; copies deep-copy the table."
+  ],
+  "pick_this_over_siblings_when": "No other alias-table or weighted-sampling library is catalogued in this category; the siblings (SFMT, Randen, xoshiro and Philox SIMD generators, Ziggurat samplers) produce uniform or normal variates and can feed wrs's sample(u), so pick wrs for discrete weighted draws and pair it with whichever uniform generator wins for your platform. For GPU work, ByteHamster/alias-table-gpu (same group, CUDA, GPL-3.0) ports PSA to the GPU.",
+  "verified_claims_summary": "Search-result summaries of the ESA 2019 paper (not opened; arXiv and Dagstuhl are blocked here) report sequential alias-table queries about 4x faster than GSL 2.5 gsl_ran_discrete at n = 10^8 (an earlier summary says more than 3x) and construction 30% faster on an Intel 80-core/160-thread machine and 44% faster on an AMD 32-core/64-thread machine; the GSL comparison is run single-threaded (benchmark/run_seq.sh passes -t 1) against an allocation-free copy of GSL's preprocessing in wrs/gsl.cpp. Compiler version, CPU models and build type for those runs are not stated in the repo.",
+  "status_note": "Abandoned research code (last commit 2020-12-09, dissertation version; ESA version under the esa tag), GPL-3.0, usable as a reference or vendored into GPL projects on Linux x86-64.",
+  "sources_read": [
+    "https://github.com/lorenzhs/wrs",
+    "https://github.com/lorenzhs/wrs/tree/master/wrs",
+    "https://github.com/lorenzhs/wrs/tree/master/wrs/generators",
+    "https://github.com/lorenzhs/wrs/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/lorenzhs/wrs/HEAD/README.md",
+    "https://raw.githubusercontent.com/lorenzhs/wrs/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/lorenzhs/wrs/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/lorenzhs/wrs/HEAD/benchmark/alias.cpp",
+    "https://raw.githubusercontent.com/lorenzhs/wrs/HEAD/benchmark/bench_intel.sh",
+    "https://raw.githubusercontent.com/lorenzhs/wrs/HEAD/benchmark/run_seq.sh",
+    "https://raw.githubusercontent.com/lorenzhs/wrs/HEAD/wrs/alias.hpp",
+    "https://raw.githubusercontent.com/lorenzhs/wrs/HEAD/wrs/gsl.hpp",
+    "https://raw.githubusercontent.com/lorenzhs/wrs/HEAD/wrs/gsl.cpp",
+    "https://raw.githubusercontent.com/lorenzhs/wrs/HEAD/wrs/multi_alias.hpp",
+    "https://raw.githubusercontent.com/lorenzhs/wrs/HEAD/wrs/par_scan_alias2.hpp",
+    "https://raw.githubusercontent.com/lorenzhs/wrs/HEAD/wrs/parallel_do.hpp",
+    "https://raw.githubusercontent.com/lorenzhs/wrs/HEAD/wrs/parallel_do.cpp",
+    "https://raw.githubusercontent.com/lorenzhs/wrs/HEAD/wrs/outsens.hpp",
+    "https://raw.githubusercontent.com/lorenzhs/wrs/HEAD/wrs/memory.hpp",
+    "https://raw.githubusercontent.com/lorenzhs/wrs/HEAD/wrs/memory.cpp",
+    "https://raw.githubusercontent.com/lorenzhs/wrs/HEAD/wrs/generators/select.hpp",
+    "https://github.com/ByteHamster/alias-table-gpu"
+  ],
+  "confidence": 0.6
+}

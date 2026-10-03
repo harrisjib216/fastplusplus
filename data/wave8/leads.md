@@ -121,3 +121,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - wibraun/NICSLU (LGPL-2.1, NICSLU 3.0.1, 10 stars, last commit 2018-09-04): the only open-source NICSLU; candidate entry or duplicate note under NICSLU. (from NICSLU enricher)
 - cd-mcfarland/fast_prng (McFarland modified ziggurat, MIT, 13 stars; README 7.987 ns per normal, no baseline): sibling of cauldron's ziggurat. (from cauldron enricher)
 - RANLUX++ follow-ups: ROOT's RanluxppCompatEngineStdRanlux24/48 reproduce the std::ranlux24/48 sequences (a clean baseline for a std comparison); jirka-h/ranluxpp-portable (standalone C port, 0 stars, 1.4 GiB/s on an i7-8650U); Hahnfeld/Moneta CHEP 2021 paper arXiv 2106.02504 vs ranlxd2 (cds.cern.ch blocked). (from RANLUX++ enricher)
+- ByteHamster/alias-table-gpu (CUDA, GPL-3.0, 10 stars; arXiv 2106.12270 snippet: 17x construction, up to 24x sampling vs PSA on a 16-core CPU): GPU sibling of wrs. (from wrs enricher)
