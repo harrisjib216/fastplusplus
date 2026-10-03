@@ -1,0 +1,71 @@
+{
+  "id": "https://github.com/jtkukunas/zlib",
+  "one_liner": "Archived Intel fork of zlib with SSE4.2 hashing and new quick/medium deflate strategies; about 1.8x stock zlib at mid levels.",
+  "what_it_does": "A source- and API-compatible fork of madler/zlib (HEAD reports ZLIB_VERSION 1.2.13 after a November 2022 re-apply of the patches) that writes standard zlib, gzip and raw deflate streams through the normal deflateInit/deflate/inflate/gz* API. Applications relink against it with no code changes. It was shipped for x86/x64 as 'zlib-intel' inside the .NET runtime's System.IO.Compression before .NET moved to zlib-ng.",
+  "how_it_is_fast": "Deflate hashes 4 bytes with one SSE4.2 crc32 instruction (inline asm, chosen at runtime by a CPUID check) instead of zlib's rolling shift-xor hash, slides the hash table with SSE2, and uses 16-bit unaligned compares in longest_match. Levels 4-6 run deflate_medium, a match-extending strategy that avoids zlib's lazy evaluation, and the optional deflate_quick (level 1) compares with SSE4.2 pcmpestri, emits only static-Huffman blocks and caps the window at 8 KiB (windowBits 13). The gzip path folds CRC-32 with PCLMULQDQ while copying input (crc_fold_copy).",
+  "when_to_use": [
+    "Reproducing or studying the 2014-era Intel deflate work that zlib-ng later merged (deflate_quick, deflate_medium, CRC hashing).",
+    "Legacy x86-64 builds already pinned to zlib-intel (for example older .NET runtimes) that need an audit trail of what they ship.",
+    "Mid-level (4-6) compression on x86 of text or executables where a zlib-1.2.13 API is required and zlib-ng's compat mode is not an option: Snellman's zlib-bench README shows level 5 at 52.8-56.1% of stock zlib time."
+  ],
+  "when_not_to_use": [
+    "Any new project: Intel archived it on 2024-03-01 ('This project will no longer be maintained by Intel ... no longer accepts patches'), and zlib-ng carries the same quick and medium strategies with runtime dispatch, ARM support and active maintenance.",
+    "Correctness-critical pipelines: issue #24 'deflate_medium doesn't always produce output that can be inflated' (2019) is still open, as are inflate reports #21 (corrupted output on ~8-byte inputs after commit 62b7616), #33 (zip member inflated 6,906 bytes short, v1.2.11.1_jtkv6.3) and #34 (checksum failure with windowBits 47, reported by the .NET team); none has a maintainer reply, and whether the 2022 rebase fixed them is not documented.",
+    "Incompressible data such as JPEG: zlib-bench shows level 5 at 115.4% of baseline time, i.e. slower than stock zlib.",
+    "Non-x86 targets: Makefile.in and CMakeLists.txt compile crc_folding.c and deflate_quick.c with -mpclmul -msse4 unconditionally, and the x86 code paths are the whole point; use zlib-ng or stock zlib on ARM.",
+    "Security-sensitive deployments: it stops at zlib 1.2.13, so upstream fixes from zlib 1.3 onward are not merged."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (configure/make or CMake)",
+    "dependencies": "none",
+    "min_toolchain": "C89-style zlib 1.2.13 code base; GCC or Clang with -msse4/-mpclmul support (inline asm in deflate_quick needs GCC-style asm outside MSVC)",
+    "platforms": "x86-64 and x86-32 (SSE2 required for the build; SSE4.2 and PCLMULQDQ used when CPUID reports them); other architectures not supported by the build files",
+    "thread_safety": "Same as zlib for separate z_stream objects (bundled README: 'All the code is thread safe'), but x86_check_features() sets global feature flags behind an unsynchronised static once flag on every deflateInit, a benign but formal data race when streams are created concurrently.",
+    "drop_in_for_baseline": "partial — same zlib 1.2.13 API, ABI and stream format, but x86-only, compressed bytes differ from stock zlib, and the fast level-1 strategy is not compiled in by default"
+  },
+  "gotchas": [
+    "deflate_quick is off in current HEAD: it is wrapped in #ifdef USE_QUICK and nothing in configure, Makefile.in or CMakeLists.txt defines it, whereas the 2014 commit benchmarked by zlib-bench (e176b3c) added -DUSE_QUICK -DUSE_MEDIUM in configure. A default HEAD build therefore runs deflate_fast with the CRC hash at level 1, and the 2014 'level 1 at 36% of baseline time' result does not describe it; add -DUSE_QUICK to get it.",
+    "With USE_QUICK, level 1 silently reduces windowBits to 13 (8 KiB window), which is why its ratio drops (0.46 vs 0.37 of input size on the executable in the 2014 run).",
+    "The public crc32() function is stock zlib 1.2.13; the PCLMULQDQ folding is used only inside deflate's gzip wrapper path.",
+    "Past memory-safety fixes show the risk profile: out-of-bounds reads in crc_folding (issue #15) and fizzle_matches (#3), and 'deflate_medium: avoid out-of-bounds read' landed only in the November 2022 rebase."
+  ],
+  "pick_this_over_siblings_when": "Essentially never for new code: zlib-ng (catalogued, with lzbench numbers) contains these same Intel strategies plus ARM and AVX2/AVX-512 paths and is maintained; Cloudflare's fork is the comparable deprecated alternative and is faster at levels 6-9. Keep this entry for attribution and for auditing systems that still ship zlib-intel.",
+  "verified_claims_summary": "Juho Snellman's independent zlib-bench harness (github.com/jsnell/zlib-bench) pins madler/zlib 5089329, cloudflare a80420c and Intel e176b3c and builds each with ./configure && make; its README example run at level 5 shows Intel at 1.49 s vs 2.66 s baseline on an executable (56.1%), 0.85 vs 1.62 s on HTML (52.8%) and 1.08 vs 0.93 s on JPEG (115.4%), with decompression at 97.6-103.2% of baseline. CPU and compiler are not stated in the repo; the blog's level-1 numbers and the i7-4770 came from search snippets only, and all of it measures the 2014 zlib 1.2.8-based state, not the 1.2.13 HEAD.",
+  "status_note": "Abandoned: archived by Intel on 2024-03-01 with an explicit no-maintenance notice and several open correctness reports; Zlib-licensed so vendoring is legal, but zlib-ng is the maintained successor.",
+  "sources_read": [
+    "https://github.com/jtkukunas/zlib",
+    "https://github.com/jtkukunas/zlib/commits/master",
+    "https://github.com/jtkukunas/zlib/issues?q=is%3Aissue",
+    "https://github.com/jtkukunas/zlib/issues/21",
+    "https://github.com/jtkukunas/zlib/issues/24",
+    "https://github.com/jtkukunas/zlib/issues/33",
+    "https://github.com/jtkukunas/zlib/issues/34",
+    "https://raw.githubusercontent.com/jtkukunas/zlib/HEAD/README",
+    "https://raw.githubusercontent.com/jtkukunas/zlib/HEAD/README.md",
+    "https://raw.githubusercontent.com/jtkukunas/zlib/HEAD/ChangeLog",
+    "https://raw.githubusercontent.com/jtkukunas/zlib/HEAD/configure",
+    "https://raw.githubusercontent.com/jtkukunas/zlib/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/jtkukunas/zlib/HEAD/Makefile.in",
+    "https://raw.githubusercontent.com/jtkukunas/zlib/HEAD/zlib.h",
+    "https://raw.githubusercontent.com/jtkukunas/zlib/HEAD/zutil.h",
+    "https://raw.githubusercontent.com/jtkukunas/zlib/HEAD/rte_memcpy.h",
+    "https://raw.githubusercontent.com/jtkukunas/zlib/HEAD/deflate.c",
+    "https://raw.githubusercontent.com/jtkukunas/zlib/HEAD/deflate.h",
+    "https://raw.githubusercontent.com/jtkukunas/zlib/HEAD/deflate_quick.c",
+    "https://raw.githubusercontent.com/jtkukunas/zlib/HEAD/deflate_medium.c",
+    "https://raw.githubusercontent.com/jtkukunas/zlib/HEAD/crc32.c",
+    "https://raw.githubusercontent.com/jtkukunas/zlib/HEAD/crc_folding.c",
+    "https://raw.githubusercontent.com/jtkukunas/zlib/HEAD/x86.c",
+    "https://raw.githubusercontent.com/jtkukunas/zlib/HEAD/x86.h",
+    "https://raw.githubusercontent.com/jtkukunas/zlib/HEAD/inflate.c",
+    "https://raw.githubusercontent.com/jtkukunas/zlib/HEAD/inffast.c",
+    "https://raw.githubusercontent.com/jtkukunas/zlib/e176b3c23ace88d5ded5b8f8371bbab6d7b02ba8/x86.h",
+    "https://raw.githubusercontent.com/jtkukunas/zlib/e176b3c23ace88d5ded5b8f8371bbab6d7b02ba8/configure",
+    "https://raw.githubusercontent.com/jtkukunas/zlib/e176b3c23ace88d5ded5b8f8371bbab6d7b02ba8/zlib.h",
+    "https://github.com/jsnell/zlib-bench",
+    "https://raw.githubusercontent.com/jsnell/zlib-bench/HEAD/README.org",
+    "https://raw.githubusercontent.com/jsnell/zlib-bench/HEAD/bench.pl",
+    "https://github.com/dotnet/runtime/issues/87560"
+  ],
+  "confidence": 0.75
+}
