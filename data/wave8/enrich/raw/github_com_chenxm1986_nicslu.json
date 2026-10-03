@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/chenxm1986/nicslu",
+  "one_liner": "Retired binary-only parallel sparse LU for SPICE circuit matrices; first-party 1.87x over KLU, 2.15x over MKL PARDISO.",
+  "what_it_does": "NICSLU solves the sparse MNA systems inside SPICE Newton-Raphson and transient loops: analyze once, then factorize with partial pivoting, refactorize without pivoting as values change, and solve. It ships as prebuilt x86-64 libraries (Linux built with gcc 4.8.2 on CentOS 6, Windows 7 x64; FMA and non-FMA builds; 32-bit or 64-bit index variants) with nicslu.h, a C API (NicsLU_Initialize, NicsLU_Analyze, NicsLU_CreateThreads, NicsLU_Factorize, NicsLU_ReFactorize, NicsLU_FactorizeMatrix, NicsLU_Solve, NicsLU_Refine) and a native C++ interface on the same handle. Input is zero-based CSR with unsorted column indexes (CSC is accepted and then A^T x = b is solved), real or complex double; the API is KLU-like in flow but not call-compatible.",
+  "how_it_is_fast": "It is a Gilbert-Peierls left-looking LU in the KLU lineage with several additions: static pivoting and scaling at analysis (Duff-Koster style permutation of large entries to the diagonal) to cut off-diagonal pivots, and six fill-reducing orderings (AMD, approximate minimum Markowitz, three approximate-minimum-operation variants and approximate minimum deficiency) run in parallel, keeping the one with the fewest predicted flops. Factorization adaptively picks a row-row, partial-supernode or full-supernode kernel by sparsity, and parallelizes over an elimination-tree dependency graph, running wide levels in parallel and narrow levels in a pipelined schedule; it also decides automatically whether a matrix is worth factorizing in parallel at all. Repeated Factorize calls use a pivoting-reduction technique, and ReFactorize reuses the previous pivot order with no pivoting, which is the fast path in converging Newton iterations.",
+  "when_to_use": [
+    "An existing SPICE-style simulator that already integrates NICSLU, for example Dolphin Design SMASH (the README gives a special build for SMASH 7.5.x and nicslu202110 for 7.6.0, enabled with .OPTION SOLVER=NICSLU).",
+    "Highly sparse circuit matrices refactorized thousands of times with a fixed pattern, where KLU occasionally blows up: the results chart shows KLU more than 10x slower on roughly 15 of 182 matrices (read off the chart), mostly where its fill-in is far larger.",
+    "Older x86-64 CPUs without FMA or AVX2: NICSLU ships non-FMA builds, while its successor CKTSO refuses to run without AVX2 and FMA.",
+    "Academic work that needs a frozen solver with a non-expiring key: the README says the license now runs to 9999-99-99, and use is free for academic purposes.",
+    "Studying the algorithm: an older NICSLU 3.0.1 source tree (2011-2013, LGPL-2.1) is mirrored at github.com/wibraun/NICSLU, though the author's FAQ calls that version old and buggy."
+  ],
+  "when_not_to_use": [
+    "New projects: the author says NICSLU is no longer updated or maintained and points to CKTSO, whose IEEE TCAD 2025 paper reports it 5.9x faster than NICSLU at 16 threads in the no-re-pivot best case (1.21x to 4.69x when both use CKTSO's ordering).",
+    "Commercial products without a deal with the authors: it is copyrighted by NICS Lab (Tsinghua) and Xiaoming Chen, covered by three Chinese patents, free only for academic use, and needs a research/trial license key file to run.",
+    "Solve-dominated or many-right-hand-side workloads: the user guide says only serial forward/backward solving is supported.",
+    "Scaling to many cores: the CKTSO paper says NICSLU's factorization with pivoting gets only about 2x on 8-16 threads, and the auto-selector may run small or very sparse matrices on one thread regardless of the thread count.",
+    "Non-circuit matrices (FEM, CFD) or non-x86 targets: orderings are minimum-degree family only (ColAMD and METIS were removed in 201905A), pre-analysis takes about 2.6x KLU's time, and the macOS/PowerPC request (issue #2, 2023) has no reply."
+  ],
+  "integration": {
+    "form": "shared lib (prebuilt .so / .dll; FMA and non-FMA; int32 and int64 builds) plus C headers with a C++ interface; no source for this version",
+    "dependencies": "license key file nicslu.lic beside the executable or library, or pointed to by the NICSLU_LICENSE environment variable; Linux links need -lpthread -lm -ldl (-lrt on old glibc); no OpenMP or BLAS",
+    "min_toolchain": "C or C++ caller; Linux binaries built with gcc 4.8.2 on CentOS 6 and need a gcc-compatible compiler; x64 Windows needs Visual C++ 2005 or later",
+    "platforms": "x86-64 Linux and Windows only; FMA builds need Intel Haswell or AMD Piledriver or newer (NicsLU_Initialize returns -15 otherwise), non-FMA builds run on older x86-64",
+    "thread_safety": "The user guide says one handle cannot be used by several threads simultaneously; each handle owns a pthread / Win32 thread pool created by NicsLU_CreateThreads; concurrent use of separate handles is not documented",
+    "drop_in_for_baseline": "partial — same analyze / factor / refactor / solve flow as KLU, but a different API, CSR rather than KLU's CSC by default, and a license key file to deploy"
+  },
+  "gotchas": [
+    "NICSLU expects CSR; passing KLU-style CSC without MATRIX_COLUMN_* gives wrong answers (the FAQ's 'completely wrong for any test case'), and duplicate entries are rejected with -7.",
+    "The __NICS_INT64 macro must match the int32 or int64 library you link, or the integer argument types silently disagree.",
+    "NicsLU_ReFactorize does no pivoting and can go unstable when values change a lot; call NicsLU_Factorize until Newton is converging. The FactorizeMatrix heuristic can misjudge extreme cases, and the guide recommends the low-level calls for DC analysis.",
+    "Passing ax=NULL to NicsLU_Analyze disables static pivoting. The first factorization or refactorization carries one-time setup, so benchmark the second call, as the FAQ advises."
+  ],
+  "pick_this_over_siblings_when": "Pick NICSLU over CKTSO only when you are tied to an existing NICSLU integration, need non-FMA x86-64 builds, or want the non-expiring key; otherwise CKTSO (same author, same API style) is faster and maintained. Choose Basker (open source in Trilinos, measured against KLU and PARDISO) when you need source, and GLU or CKTSO-GPU for GPU refactorization.",
+  "verified_claims_summary": "The author's 2019 results.pdf compares NICSLU 201905B with KLU and Intel MKL PARDISO on an Intel Xeon Gold 6132, using refactorization plus solve time on 182 circuit matrices (136 unpublished real circuits, 46 SuiteSparse) with 'best configurations'; thread counts, versions and compilers are not stated. It reports geomean speedups of 1.87x over KLU (faster on 149 of 182) and 2.15x over PARDISO (faster on 134). The chart shows many matrices near 1x and a few huge outliers (one KLU case at 15691x) lifting the mean; the peer-reviewed TCAD 2013 paper (2.08x to 8.57x over KLU with 1-12 threads, per a search snippet) was not opened.",
+  "status_note": "Finished: the 'Final update' commit is dated 2026-03-22, the code is unmaintained and replaced by CKTSO, and it is a proprietary, patent-covered, license-keyed binary, so treat it as a reference to call, not code to copy.",
+  "sources_read": [
+    "https://github.com/chenxm1986/nicslu",
+    "https://github.com/chenxm1986/nicslu/commits/master",
+    "https://github.com/chenxm1986/nicslu/issues?q=is%3Aissue",
+    "https://github.com/chenxm1986/nicslu/tree/master/nicslu202110",
+    "https://github.com/chenxm1986/nicslu/tree/master/nicslu202110/doc",
+    "https://github.com/chenxm1986/nicslu/tree/master/nicslu202110/include",
+    "https://github.com/chenxm1986/nicslu/tree/master/nicslu202110/demo",
+    "https://github.com/chenxm1986/nicslu/tree/master/nicslu202110/linux",
+    "https://github.com/chenxm1986/nicslu/tree/master/nicslu202110/linux/lib_centos6_x64_gcc482_fma",
+    "https://github.com/chenxm1986/nicslu/tree/master/nicslu202110/windows",
+    "https://raw.githubusercontent.com/chenxm1986/nicslu/HEAD/README.md",
+    "https://raw.githubusercontent.com/chenxm1986/nicslu/HEAD/results.pdf",
+    "https://raw.githubusercontent.com/chenxm1986/nicslu/HEAD/nicslu202110/license/readme.txt",
+    "https://raw.githubusercontent.com/chenxm1986/nicslu/HEAD/nicslu202110/doc/changelog.txt",
+    "https://raw.githubusercontent.com/chenxm1986/nicslu/HEAD/nicslu202110/doc/faq.pdf",
+    "https://raw.githubusercontent.com/chenxm1986/nicslu/HEAD/nicslu202110/doc/ug202110.pdf",
+    "https://raw.githubusercontent.com/chenxm1986/nicslu/HEAD/nicslu202110/include/nicslu.h",
+    "https://raw.githubusercontent.com/chenxm1986/nicslu/HEAD/nicslu202110/include/nics_common.h",
+    "https://raw.githubusercontent.com/chenxm1986/nicslu/HEAD/nicslu202110/include/nicslu_cpp.inl",
+    "https://raw.githubusercontent.com/chenxm1986/nicslu/HEAD/nicslu202110/demo/Makefile",
+    "https://raw.githubusercontent.com/chenxm1986/nicslu/HEAD/nicslu202110/demo/readme.txt",
+    "https://raw.githubusercontent.com/chenxm1986/cktso/master/doc/tcad.pdf",
+    "https://github.com/wibraun/NICSLU",
+    "https://github.com/wibraun/NICSLU/commits/master",
+    "https://raw.githubusercontent.com/wibraun/NICSLU/HEAD/README.md",
+    "https://raw.githubusercontent.com/wibraun/NICSLU/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/wibraun/NICSLU/HEAD/make.inc"
+  ],
+  "confidence": 0.8
+}

@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/chenxm1986/hylu",
+  "one_liner": "Closed-source multicore sparse LU/Cholesky solver for general large matrices; first-party 1.70x geomean over MKL PARDISO one-time solve.",
+  "what_it_does": "HYLU solves Ax=b for large sparse unsymmetric, symmetric indefinite and symmetric positive-definite systems (real or complex/Hermitian) on shared-memory multicore x86-64 machines, aimed at FEM, CFD, power-system, electromagnetics and circuit matrices. It ships as one C header (hylu.h) plus prebuilt shared libraries (four per platform: real/complex x 32-bit/64-bit index, e.g. libhylu.so, libhylu_cl.so), with a PARDISO-like phase API: HYLU_CreateSolver (spawns threads), HYLU_Analyze or HYLU_Analyze2 (user ordering), HYLU_Factorize, HYLU_Solve / HYLU_MSolve (multiple right-hand sides), plus determinant and 1-norm condition-number estimates. Input is CSR with unsorted column indexes, upper triangle only for symmetric types, and a 'repeat' flag tells Analyze whether the same pattern will be refactorized many times.",
+  "how_it_is_fast": "The core is a parallel up-looking (row-by-row) LU and Cholesky factorization that switches between hybrid numerical kernels according to local sparsity, so very sparse regions avoid dense supernode overhead while denser regions run as supernodes (minimum 32 columns by default); the arXiv abstract, seen only as a search snippet, says this is why it is much faster than PARDISO on highly sparse matrices and about even on relatively dense ones. Preprocessing combines static pivoting and scaling with a choice of four fill-reducing orderings (two approximate-minimum-degree and two parallel nested-dissection variants, auto-selected, or best-of-all when repeat=true). Stability comes from static pivoting plus dynamic pivoting restricted to the diagonal supernode, pivot perturbation and automatic iterative refinement, which keeps the factorization's data structures static and parallel; threads are native OS threads (no OpenMP), and the builds link either MKL BLAS or OpenBLAS.",
+  "when_to_use": [
+    "One-time or repeated solves of large general sparse systems (the benchmark set is n = 525,825 to 5,558,326) on a 16-core-class x86-64 server where MKL PARDISO's factorization time dominates.",
+    "Repeated factorization with a fixed sparsity pattern (Newton loops, transient simulation, time stepping): call Analyze once with repeat=true and the first-party results show 2.90x geomean in factorization and faster factor+solve than PARDISO on all 37 test matrices.",
+    "Very sparse, circuit-like or KKT-like matrices where PARDISO's METIS-based fill-in blows up (results.pdf names ASIC_680k, ASIC_680ks, circuit5M and nlpkkt80 as PARDISO's worst cases).",
+    "Projects that can take a binary-only dependency and want a simple C API with 64-bit index variants, complex Hermitian support and condition-number/determinant output without OpenMP."
+  ],
+  "when_not_to_use": [
+    "Anything that must be open source, audited, rebuilt or redistributed under clear terms: there is no source and no license file or terms anywhere in the repo, only x86-64 Linux .so and Windows .dll binaries.",
+    "ARM, Apple Silicon, 32-bit or CPUs without AVX2 and FMA; only x64 Windows 7/10/11 and Linux (CentOS 7/8 named) are supported.",
+    "Solve-dominated workloads (one factorization, many right-hand sides): forward-backward substitution is 18-20% slower than PARDISO on geometric mean, partly from iterative refinement.",
+    "Symmetric indefinite systems that need pivoting: the LDL^H path does no pivoting at all, and the user guide's fallback is to solve them as unsymmetric with the full matrix.",
+    "Shared or oversubscribed machines and small problems: the guide says performance degrades severely if worker threads exceed idle cores, and no results exist below n = 525,825 or for sequential runs."
+  ],
+  "integration": {
+    "form": "shared lib (prebuilt .so / .dll, four per platform, MKL-BLAS or OpenBLAS builds) plus one C header; no source",
+    "dependencies": "README says only the header and one library file are needed; Linux links also need -lpthread -lm -ldl (-lrt on old distros); Windows uses the .lib import library and the .dll",
+    "min_toolchain": "C99 (stdbool.h) or C++ via extern \"C\"; demos build with gcc -O3 -std=gnu11; results.pdf says the library is built with gcc 8.5.0 on Rocky Linux 8.10 (folder names say centos7_x64)",
+    "platforms": "x86-64 only, AVX2 and FMA required (AVX-512 recommended); 64-bit Linux and Windows 7/10/11",
+    "thread_safety": "not documented for concurrent calls; each solver instance creates and owns its worker threads, and the guide warns that the total thread count must not exceed idle cores",
+    "drop_in_for_baseline": "partial — same analyze / factorize / solve phases and matrix types as MKL PARDISO, but a different C API, 0-based CSR input with only the upper triangle for symmetric types, and no source to adapt"
+  },
+  "gotchas": [
+    "Pivoting is limited to the diagonal supernode, so some unsymmetric systems come back inaccurate; the user guide's fix is parm[23]=0, a larger parm[6] and sequential factorization, which costs speed. Check parm[11] (perturbed pivots) and the residual yourself.",
+    "Passing ax=NULL to HYLU_Analyze disables static pivoting and scaling for unsymmetric matrices; the guide strongly recommends passing values.",
+    "Builds linked with Intel MKL BLAS leak memory (the user guide blames MKL BLAS itself); use the OpenBLAS build for long-running processes if that matters.",
+    "With parm[23]=0 and several threads, the parallel nested-dissection ordering is non-deterministic; even with the default setting, sequential and parallel numerical results may differ slightly."
+  ],
+  "pick_this_over_siblings_when": "Pick HYLU over CKTSO or NICSLU (same author, tuned for circuit matrices and KLU-style refactorization) when the matrices are general FEM/CFD/KKT systems or symmetric/SPD, and over GSS (binary-only, compared with a 2013 PARDISO) or RSLAB (Rust, factorization slower than PARDISO) when you want the fastest PARDISO replacement on x86 multicore; choose Basker (open source in Trilinos) or PanguLU (distributed multi-GPU) when you need source or scale beyond one node.",
+  "verified_claims_summary": "Author's results.pdf: HYLU 20260331 vs Intel MKL PARDISO 2025.3, 16 threads on one Xeon Gold 6130, 37 SuiteSparse matrices (n 525,825 to 5,558,326): one-time solve 1.70x geomean total (factorization 2.36x, preprocessing 1.48x, substitution 18% slower); repeated solve 2.90x factorization and 2.53x factor+solve, substitution 20% slower; residuals about an order of magnitude lower on geomean. PARDISO settings and compiler flags are not stated, no benchmark harness is public, and the earlier arXiv preprint (34 matrices) reported 1.95x and 2.40x factorization speedups with near-parity on relatively dense matrices.",
+  "status_note": "Actively developed (version 20260930, last commit 2026-09-30, 39 commits since 2025) but binary-only with no license terms, so it is a reference to call, not code to copy or ship without asking the author.",
+  "sources_read": [
+    "https://github.com/chenxm1986/hylu",
+    "https://github.com/chenxm1986/hylu/commits/main",
+    "https://github.com/chenxm1986/hylu/issues?q=is%3Aissue",
+    "https://github.com/chenxm1986/hylu/tree/main/centos7_x64_openblas",
+    "https://raw.githubusercontent.com/chenxm1986/hylu/HEAD/README.md",
+    "https://raw.githubusercontent.com/chenxm1986/hylu/HEAD/include/hylu.h",
+    "https://raw.githubusercontent.com/chenxm1986/hylu/HEAD/doc/results.pdf",
+    "https://raw.githubusercontent.com/chenxm1986/hylu/HEAD/doc/ug_en.pdf",
+    "https://raw.githubusercontent.com/chenxm1986/hylu/HEAD/demo/Makefile",
+    "https://raw.githubusercontent.com/chenxm1986/hylu/HEAD/demo/unsym_r/unsym_r.c",
+    "https://www.arxiv.org/pdf/2509.07690 (EGRESS_BLOCKED; abstract read from a search snippet only)"
+  ],
+  "confidence": 0.8
+}
