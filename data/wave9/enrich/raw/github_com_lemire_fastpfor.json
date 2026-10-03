@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/lemire/fastpfor",
+  "one_liner": "C++11 library of SIMD integer codecs (SIMD-FastPFOR, SIMD-BP128) decoding 32-bit integer arrays 2-3x faster than Simple-8b and VByte.",
+  "what_it_does": "A research library of compression schemes for arrays of 32-bit unsigned integers where most values are small, such as delta-coded posting lists and dictionary-coded columns. Every scheme implements one IntegerCODEC interface (encodeArray/decodeArray over caller-allocated uint32_t buffers, plus vector-returning compress/uncompress helpers), and a CODECFactory returns codecs by name (simdfastpfor128/256, simdbinarypacking, fastpfor, simple8b, varint, streamvbyte, maskedvbyte and about 30 more). It is not a byte-stream compressor and has no container format: the caller keeps the element count and buffer sizes.",
+  "how_it_is_fast": "Binary packing in blocks of 128 integers with SSE2 shifts and masks, so four integers are unpacked per instruction with no branches (SIMD-BP128). SIMD-FastPFOR is patched frame-of-reference: each block is packed at a bit width chosen to leave a few large values as exceptions, and the exceptions are stored per page in separate bit-packed arrays so they too decode with SIMD. The paper's fastest variants also vectorize delta decoding (prefix sum) and decode in chunks small enough to stay in cache, which it reports as an almost twofold gain.",
+  "when_to_use": [
+    "Decoding large arrays of small or delta-coded 32-bit integers (inverted-index posting lists, column stores, genome hash tables) where decode throughput in billions of integers per second matters more than encode speed.",
+    "Blocks of 128 or more integers: SIMD-BP128 and SIMD-FastPFOR work per 128-integer block and per page, and the paper shows them slowing down most on short arrays.",
+    "When you want to benchmark many codecs on your own data behind one interface: the factory exposes PFOR, NewPFD, OptPFD, Simple-8b/9/16, VByte, varint-G8IU, Stream VByte and others for side-by-side runs.",
+    "x86-64 with SSE4.2 or aarch64 with NEON, from a C++11 codebase that can vendor an Apache-2.0 static library."
+  ],
+  "when_not_to_use": [
+    "Untrusted or possibly corrupted input: the README states inputs are not validated before decoding, and issue #139 (a 4-byte input causing an ASan heap-buffer-overflow read in FastPFor::decodeArray) was closed as invalid without a fix.",
+    "Best compression ratio at moderate speed: in the paper Simple-8b and OptPFD store fewer bits per integer than the fastest vectorized variants (ClueWeb09: Simple-8b 7.5 bits vs SIMD-FastPFOR with vectorized delta 9.9).",
+    "Sorted lists needing intersection or fast delta handling: the README itself points to SIMDCompressionAndIntersection, since this library is generic and not optimized for differential coding.",
+    "Short arrays (a few dozen integers) or 64-bit values: block codecs pad to 128 integers, and the 64-bit encodeArray/decodeArray overloads throw 'Not implemented!' in the IntegerCODEC base class unless a codec overrides them.",
+    "Highest absolute speed today: later libraries in this category (TurboPFor, simdcomp, upack) report higher pack/unpack throughput than FP_SimdFastPFor in the same third-party table."
+  ],
+  "integration": {
+    "form": "static lib (CMake target FastPFOR, installable); headers in headers/",
+    "dependencies": "none for the library; Google Test for the tests (FASTPFOR_WITH_TEST, on by default); Snappy only for optional comparison binaries",
+    "min_toolchain": "C++11; README lists GCC 4.7+, clang 3.2+, ICC 13.0.1+, MSVC 2012+",
+    "platforms": "x86-64 with SSE4.2 (key schemes need only SSE2; some test binaries need SSE4.1), aarch64 via native NEON intrinsics; Linux, macOS, Windows",
+    "thread_safety": "Codec objects are not thread safe; the README says to give each thread its own IntegerCODEC objects",
+    "drop_in_for_baseline": "partial — it ships its own Simple-8b and VByte implementations behind the same interface, so switching codecs is a name change, but the encoded formats differ and it does not read data written by other Simple-8b or varint libraries"
+  },
+  "gotchas": [
+    "CMakeLists.txt sets FASTPFOR_SIMD_MODE to native (-march=native) by default although its own comment and the README call portable (-msse4.2) the default; a default build can SIGILL on another CPU, so pass -DFASTPFOR_SIMD_MODE=portable for anything you distribute.",
+    "The caller must size output buffers generously: some schemes expand incompressible data, and Simple-9/Simple-16 deliberately write past the logical end of the output buffer (README).",
+    "varint-G8IU in the library is patented by its authors; the README says not to use it if you want to avoid patents.",
+    "SIMDFastPFor encodeArray requires the length to be a multiple of its block size (checkifdivisibleby); use the composite codecs from the factory, which pair it with a variable-byte tail coder, for arbitrary lengths."
+  ],
+  "pick_this_over_siblings_when": "Pick FastPFor over simdcomp or Stream VByte when you want a patched-FOR codec with a better ratio than plain binary packing, or a single C++ harness of many codecs; pick TurboPFor (GPL) or upack for maximum pack/unpack speed, SIMDCompressionAndIntersection for sorted lists with SIMD intersection, and ds2i or opt_vbyte when building a full inverted index.",
+  "verified_claims_summary": "The SPE 2015 paper (arXiv 1209.2137v1, opened via a mirror) measured on an Intel Core i7-2600 at 3.40 GHz with GCC 4.7 -O3 (plus -mssse3), code in this repository: on ClueWeb09 posting lists weighted by AOL queries, SIMD-FastPFOR decoded 1,200 and SIMD-BP128 with vectorized delta 2,300 million integers/s vs Simple-8b 730 and Variable Byte 540, i.e. 1.6x and 3.2x Simple-8b (derived from page data), with SIMD-FastPFOR at 8.1 bits/int vs Simple-8b's 7.5. A later third-party TurboPFor table (Skylake i7-6700, 2019) shows FP_SimdFastPFor decoding at 8,748 MB/s vs Simple-8b 3,832 and FP_VByte 4,268, but encoding slower than Simple-8b (624 vs 848 MB/s).",
+  "status_note": "Active (last commit 2026-06-07, release 0.5.0), Apache-2.0, small C++11 code base with no runtime dependencies that is easy to vendor; its formats and benchmarks are the reference point other integer codecs in this category measure against.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/lemire/FastPFor/HEAD/README.md",
+    "https://raw.githubusercontent.com/lemire/FastPFor/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/lemire/FastPFor/HEAD/headers/codecs.h",
+    "https://raw.githubusercontent.com/lemire/FastPFor/HEAD/headers/simdfastpfor.h",
+    "https://raw.githubusercontent.com/lemire/FastPFor/HEAD/headers/codecfactory.h",
+    "https://raw.githubusercontent.com/lemire/FastPFor/HEAD/src/codecfactory.cpp",
+    "https://github.com/lemire/FastPFor/issues?q=is%3Aissue",
+    "https://github.com/lemire/FastPFor/issues/139",
+    "https://paperhub.s3.amazonaws.com/ede067e14ecd522323725ac60dd15fcb.pdf"
+  ],
+  "confidence": 0.85
+}
