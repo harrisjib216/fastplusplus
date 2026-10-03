@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/steelcake/zint",
+  "one_liner": "Zig FastLanes bitpacking, FOR and delta codecs for u8-u256 arrays; decodes several times faster than lz4 or zstd -1.",
+  "what_it_does": "Lossless codec for arrays of fixed-width integers (u8 to u64, i8 to i64, plus 128- and 256-bit) with three schemes: plain bitpacking, frame-of-reference plus bitpacking, and delta plus bitpacking. The API is a comptime generic Zint(T) with *_compress_bound, *_compress(ctx, input, output) and *_decompress(ctx, input, output) over caller-owned buffers plus a reusable 64 KB Ctx scratch. The stream has no header or length field: the caller must store the element count and pass an output slice of exactly that length to decompress.",
+  "how_it_is_fast": "It uses the FastLanes layout (Afroozeh and Boncz, VLDB 2023): 1024-value blocks are packed in a transposed 'unified transposed layout' so that one generic scalar loop, fully unrolled at compile time for every bit width (inline for over 0..N_BITS), autovectorizes to whatever SIMD width the target has, including AVX-512. Each 1024-value block gets its own bit width (one byte of metadata), signed types go through zigzag, and FOR and delta are fused into the pack and unpack kernels so there is no separate pass. The code is a Zig port of spiraldb's Rust fastlanes (commit 8b655cf); there are no hand-written intrinsics.",
+  "when_to_use": [
+    "Zig code bases (or a C ABI wrapper you write yourself) that store columns of integers with small ranges: bit widths well under the type width, timestamps or ids suited to FOR",
+    "Columnar or analytical storage where decode throughput matters more than ratio: u32 width7 decodes at 26.9 GB/s against lz4 3.8 GB/s and zstd -1 0.9 GB/s on the author's EPYC 9354",
+    "Arrays of thousands of values or more, ideally a multiple of 1024 elements, since whole blocks take the vectorized path",
+    "Untrusted compressed input: decompress validates every per-block width and the total packed length before reading and returns error.InvalidInput, and the repo ships fuzz targets for round trips and garbage input",
+    "128- or 256-bit integer columns, which most C/C++ integer codecs do not handle"
+  ],
+  "when_not_to_use": [
+    "From C++ directly: it is a Zig module with no C header or exported C API, so you would have to write and maintain the C wrapper yourself",
+    "Short arrays: at 10 or 69 elements, and on the up-to-1023-element remainder, it falls back to a scalar bitpacker and is slower than lz4 and memcpy (u8 width7, 1023 elements: 0.776 GB/s decode against lz4 5.042 GB/s)",
+    "Data with outliers or sorted posting lists where a PFor patching scheme, Elias-Fano or Stream VByte would compress better: there are no exceptions or patches, so one large value widens its whole 1024-value block",
+    "When you need a self-describing format: there is no magic, version, length or checksum, the layout is not binary-compatible with CWI's original FastLanes, and the crate is at version 0.0.3",
+    "Big-endian targets (rejected by a compile error) or stable Zig toolchains older than 0.16.0-dev"
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none for the library (Zig std only); the benchmark pulls lz4 1.10.0 and zstd 1.5.7 through the Zig package manager",
+    "min_toolchain": "Zig 0.16.0-dev.732+2f3234c76 (build.zig.zon minimum_zig_version); dev-branch Zig, so expect breakage across Zig releases",
+    "platforms": "any little-endian target Zig supports; SIMD width comes from LLVM autovectorization (the published results are from AMD EPYC 9354 and Ryzen 7600X)",
+    "thread_safety": "Stateless functions; a Ctx scratch buffer must not be shared between threads that run at the same time (one Ctx per thread). Not documented otherwise.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "*_compress_bound and the compress offsets are computed in u32: once the input is about 4 GiB or larger (for example more than about 1.07 billion u32 values) the bound overflows, which is a panic in Debug or ReleaseSafe and illegal behavior with bounds checks off in ReleaseFast. The doc comment only promises an error at input.len >= maxInt(u32), so split large arrays yourself (found by reading src/zint.zig).",
+    "The remainder (len mod 1024 values) is stored first and packed with the scalar path; lengths such as 1023 or 1025 lose most of the speed.",
+    "Pick the variant per column: deltapack on non-monotonic data expands (ratio 103 percent on u32 frame_width7) and is slower than memcpy even when it compresses well (u32 delta_width7: 10.2 GB/s decode at 21 percent size against memcpy 14.7 GB/s).",
+    "Ctx is a 64 KB aligned allocation; allocate it once and reuse it, as the doc comment in src/zint.zig advises. Running the benchmark itself maps a 16 GiB buffer (BUFFER_SIZE 1 << 34)."
+  ],
+  "pick_this_over_siblings_when": "Pick zint over FastPFor/simdcomp or TurboPFor when you work in Zig, need 128/256-bit or signed types, or want block-wise FOR/delta with validated decoding of untrusted input; choose FastPFor or TurboPFor from C++ and on outlier-heavy data, and Stream VByte when values arrive one at a time or in short lists. No sibling has been measured head to head against zint.",
+  "verified_claims_summary": "The author's benchmark (zig build bench -Doptimize=ReleaseFast, Zig version not recorded, AMD EPYC 9354 inferred from the file name) compresses random slices of synthetic arrays, checks the round trip, and reports GB/s per uncompressed byte: u32 width7 at 123,321 elements decodes at 26.9 GB/s against lz4 3.8, zstd -1 0.9 and memcpy 15.4 GB/s, and u64 width7 at 262,144 elements at 28.0 GB/s against memcpy 20.7 GB/s. It beats memcpy only because it touches about a fifth of the bytes, and it is not compared against any integer codec (FastPFor, simdcomp, varint).",
+  "status_note": "One-author project with 21 stars, last commit 2025-12-22 (the AVX-512 tuning commit came the day after the EPYC results were committed), no issues filed, dual Apache-2.0/MIT, small enough to vendor into a Zig project but tied to a dev-branch Zig toolchain.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/steelcake/zint/HEAD/README.md",
+    "https://raw.githubusercontent.com/steelcake/zint/HEAD/build.zig",
+    "https://raw.githubusercontent.com/steelcake/zint/HEAD/build.zig.zon",
+    "https://raw.githubusercontent.com/steelcake/zint/HEAD/Makefile",
+    "https://raw.githubusercontent.com/steelcake/zint/HEAD/src/root.zig",
+    "https://raw.githubusercontent.com/steelcake/zint/HEAD/src/zint.zig",
+    "https://raw.githubusercontent.com/steelcake/zint/HEAD/src/fastlanes.zig",
+    "https://raw.githubusercontent.com/steelcake/zint/HEAD/src/scalar_bitpack.zig",
+    "https://raw.githubusercontent.com/steelcake/zint/HEAD/src/zigzag.zig",
+    "https://raw.githubusercontent.com/steelcake/zint/HEAD/bench.zig",
+    "https://raw.githubusercontent.com/steelcake/zint/HEAD/benchmark_results/epyc9354.txt",
+    "https://github.com/steelcake/zint/issues?q=is%3Aissue",
+    "https://github.com/steelcake/zint/commits"
+  ],
+  "confidence": 0.75
+}

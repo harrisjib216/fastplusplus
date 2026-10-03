@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/ilgrad/lexindex",
+  "one_liner": "Rust crate of immutable string-to-id dictionaries; front-coded DictIndex comes in smaller than MARISA and XCDAT on the author's 13 corpora.",
+  "what_it_does": "Builds a static set of strings once, assigns each a dense id in [0, n) (the sorted rank for the ordered indexes), and saves it as a flat blob you can load or memory-map. Seven index types trade size against capability: DictIndex (front-coded, ordered, id to key, prefix and range), HashedDictIndex (DictIndex plus a minimal perfect hash for id), StringIndex (an fst transducer with fuzzy and subsequence search), three perfect-hash maps (Compact, Closed, Perfect) and a character-wise DoubleArrayIndex for matching a lexicon against text. It is not a drop-in for marisa-trie or xcdat: the API is Rust or Python, and from C or C++ there is an opaque-handle C ABI (feature capi, include/lexindex.h) covering build, open/save, id, batched ids, contains and key for six of the seven types.",
+  "how_it_is_fast": "DictIndex front-codes sorted keys in blocks of 32 to 1024 split into microblocks of 16 to 32, compresses the suffixes with a per-shard FSST-style 255-symbol table or a packed alphabet over a mined phrase dictionary, and recodes mostly non-ASCII keys into an order-preserving 1-2 byte code. A lookup walks the microblock heads and rejects most entries on their one-byte header without decoding them, and the opt-in route_microblocks() trades about 0.5 B/key of memory for 19 to 31 percent faster id. HashedDictIndex adds an in-crate PHast/PTHash-style minimal perfect hash (about 1.92 bits/key) plus a bit-packed rank per slot, so id is a hash and one read instead of a dictionary search.",
+  "when_to_use": [
+    "Static vocabularies, entity catalogs, URL, path or domain lists of 0.5M to 20M keys, where the file and mapped size of the dictionary is the main cost: DictIndex at block 1024 was the smallest structure on all 13 corpora at 1M keys against the harness's MARISA, XCDAT, CoCo-trie, PDT, FST and C2 builds",
+    "Hot string-to-id paths on a closed vocabulary that also need id to key, prefix and range: HashedDictIndex answers id in 14 to 61 ns against XCDAT 15's 54 to 449 ns at 1M keys, at a smaller size than XCDAT",
+    "Rust or Python services (also Polars through lexindex-polars) that want deterministic, mmap-able blobs and safe loaders for blobs from elsewhere",
+    "Prefix counting or range scans: a prefix is an id range in DictIndex, so prefix_count costs two lookups where marisa-trie enumerates every match"
+  ],
+  "when_not_to_use": [
+    "Exact lookups that must reject unknown keys at trie speed: lexindex's fastest exact structure trails XCDAT 15 on 9 of 13 corpora at 1M keys (5 percent on uuid to 57 percent on pypi), and DictIndex at block 1024, the smallest one, is among the slowest to look up",
+    "When the keys change often: every index is immutable, and Overlay edits work only on StringIndex, CompactHashIndex and PerfectHashIndex",
+    "Path-like or highly shared keys where MARISA tuned to its smallest (many tries, tiny cache) ties or wins: 0.04 percent apart on paths at 1M, and MARISA is smaller once memory-mapped on 5 of 21 rows",
+    "C++ code that needs prefix, range, fuzzy or common-prefix queries: the C ABI exposes only id, ids, contains and key, and leaves out DoubleArrayIndex",
+    "Adversarial query streams: the hashes are unseeded and the fingerprint false-positive rate is a design rate, not a HashDoS or security defence (SECURITY.md)"
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "fst 0.4 (with levenshtein); optional memmap2 0.9 (mmap feature, default on), optional pyo3 0.29 (python feature); the C ABI builds as a cdylib or staticlib with --features capi",
+    "min_toolchain": "Rust 1.85 (edition 2024); Python wheel abi3 for CPython 3.11+",
+    "platforms": "any Rust target, 32-bit and wasm32-unknown-unknown included (without mmap); benchmarks only on x86-64 (Ryzen 7 5800HS)",
+    "thread_safety": "Indexes are immutable after build and the README mentions free-threaded CPython use; the C ABI's lexindex_last_error is per thread. No explicit Send/Sync statement was found in what was read.",
+    "drop_in_for_baseline": "partial: it does the same string-to-dense-id job as MARISA or XCDAT but with its own API, ids and blob formats; from C++ it is reachable only through the C handle API"
+  },
+  "gotchas": [
+    "HashedDictIndex closed (id_unchecked) and ClosedHashIndex return some valid id for a key that was never inserted. The 14 to 61 ns headline is that mode; use the 8-bit fingerprint (one more byte a key, 2.8 to 7.4x faster than XCDAT 15 per the README) or the dictionary search when strangers can arrive.",
+    "Blob formats change across major versions: 2.0 and 4.0 changed the key hash, so pre-4.0 hash blobs and BDX1/BDX2 dictionaries are refused and must be rebuilt from the keys; ids are not stable across key sets. Only 4.5.x is supported, and 4.5.2 fixed a crafted DictIndex blob that could make a routed lookup panic.",
+    "Loaders are safe Rust on arbitrary bytes, but StringIndex::from_bytes can panic on a crafted blob that carries a valid checksum (a fuzzer specimen is committed); use from_untrusted_bytes for blobs from strangers. load_mmap is unsafe because the file must not change while it is mapped, and through the C ABI any panic aborts the process.",
+    "Keys are raw bytes with no normalization (normalize before build and query); the C ABI rejects non-UTF-8 keys. DoubleArrayIndex refuses corpora that need more than 2^23 slots or keys (7 of 13 at 1M keys)."
+  ],
+  "pick_this_over_siblings_when": "Pick lexindex over xcdat when size or id-to-key, prefix and range matter and you can call Rust or a C handle, or when a closed vocabulary makes HashedDictIndex's hashed id usable; keep xcdat (header-only C++) for the fastest exact lookup that rejects strangers on most corpora, and C2 when you need its MARISA, FST or CoCo variants inside a C++ trie framework. For matching a lexicon against Chinese text, DoubleArrayIndex was faster and smaller than darts-clone on the author's jieba measurement, but darts-clone is the drop-in C++ choice.",
+  "verified_claims_summary": "In the author's own harness (string-index-benchmarks; competitors built at pinned commits with c++ -O3 -march=native -std=c++17, GCC 16.2.1, rustc 1.98.1, lexindex 4.5.2 from crates.io, Ryzen 7 5800HS, 2026-09-26), lexindex's smallest index has the smallest serialized file on 13 of 13 corpora at 1M keys against the campaign's MARISA (1 to 3 tries) and the other tries (words 2.51 vs 2.98 B/key), and HashedDictIndex closed answers member-only probes in 14 to 61 ns against XCDAT 15's 54 to 449 ns. Against MARISA at its smallest, paths is a tie (0.04 percent), and the lexindex README states that MARISA's smallest is 5.8 percent smaller on paths, which conflicts with the harness table.",
+  "status_note": "Very active single-maintainer project (version 4.5.2, commits through 2026-09-29, 3 stars, no known users, 4 open issues that are all documentation or feature requests); MIT, with a fuzzed loader and a written threat model, but the benchmark author is the library author.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/ilgrad/lexindex/HEAD/README.md",
+    "https://raw.githubusercontent.com/ilgrad/lexindex/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/ilgrad/lexindex/HEAD/SECURITY.md",
+    "https://raw.githubusercontent.com/ilgrad/lexindex/HEAD/include/lexindex.h",
+    "https://raw.githubusercontent.com/ilgrad/lexindex/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/ilgrad/lexindex/HEAD/src/capi.rs",
+    "https://raw.githubusercontent.com/ilgrad/lexindex/HEAD/src/dict_index.rs",
+    "https://raw.githubusercontent.com/ilgrad/lexindex/HEAD/src/hashed_dict.rs",
+    "https://raw.githubusercontent.com/ilgrad/lexindex/HEAD/src/closed_hash.rs",
+    "https://raw.githubusercontent.com/ilgrad/lexindex/HEAD/src/mphf.rs",
+    "https://github.com/ilgrad/lexindex/tree/main/src",
+    "https://github.com/ilgrad/lexindex/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/ilgrad/string-index-benchmarks/HEAD/README.md"
+  ],
+  "confidence": 0.75
+}
