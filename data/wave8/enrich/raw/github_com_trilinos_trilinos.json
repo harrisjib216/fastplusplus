@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/trilinos/trilinos",
+  "one_liner": "Threaded sparse LU (Trilinos ShyLU-Basker) for low-fill circuit matrices; paper reports 5.9x geomean over sequential KLU on 16 cores.",
+  "what_it_does": "Basker is a shared-memory, multithreaded direct LU solver for sparse unsymmetric matrices with low fill-in, the kind circuit simulators produce. You call it either through the templated native class BaskerNS::Basker<Int, Entry, Exe_Space> (Symbolic, Factor, Solve on CSC arrays, plus SetThreads), or through Trilinos' Amesos2 adapter Amesos2::ShyLUBasker on Tpetra matrices, so code already using Amesos2 KLU2 can switch with a solver-name and parameter change. Repeated factorizations with the same sparsity pattern reuse the symbolic phase.",
+  "how_it_is_fast": "It parallelizes the left-looking Gilbert-Peierls LU kernel that KLU runs serially. A block triangular form (BTF) permutation splits the matrix into many small diagonal blocks, which are factored independently, and one large block. The large block is reordered by nested dissection (METIS or Scotch) into a hierarchical 2D block layout, so threads factor separate subtrees with no communication and then cooperate on separators using point-to-point synchronization instead of global barriers (the paper's 'hierarchical parallelism and data layouts'). Diagonal blocks get AMD ordering and optional max-weight matching.",
+  "when_to_use": [
+    "SPICE-style circuit simulation: low-fill, BTF-reducible Jacobians that are refactored many times with the same pattern on one 8-32 core node.",
+    "You already build on Trilinos (Tpetra/Amesos2) and want a threaded replacement for KLU2 without leaving the stack.",
+    "You need an open-source, BSD-3-licensed threaded KLU-class solver; the circuit-LU siblings NICSLU and CKTSO need license files.",
+    "Real or complex scalars (the Entry template parameter; complex-build fixes landed in March 2025)."
+  ],
+  "when_not_to_use": [
+    "High-fill matrices from 3D PDE/FEM discretizations: the code is designed for low fill-in, and the large PARDISO margins in the paper apply only to low-fill circuit matrices where supernodal PARDISO is a weak fit; use a supernodal or multifrontal solver there.",
+    "You want to run on a GPU: factorization runs in the Kokkos host execution space; GPU builds since August 2025 only let it coexist with CUDA-enabled Kokkos.",
+    "Distributed memory: through Amesos2 the matrix is gathered to the root MPI rank and factored there, so it does not scale across nodes.",
+    "You need a standalone library: it builds only as a Trilinos subpackage (TriBITS, Kokkos, Teuchos, TrilinosSS); Trilinos 17 requires CMake 3.27 and a C++20 compiler.",
+    "You need reproducible, current numbers: the only speedups are 2016-17 paper figures; the repo has no benchmark harness ('Compiler Option Flags: NA')."
+  ],
+  "integration": {
+    "form": "static or shared lib (Trilinos subpackage ShyLU_NodeBasker: template headers plus shylubasker.cpp, library shylu_nodebasker)",
+    "dependencies": "Kokkos (OpenMP backend for threads), Teuchos, TrilinosSS (bundled SuiteSparse AMD/BTF/COLAMD); optional METIS or Scotch for nested dissection, MKL, VTune; Amesos2 and Tpetra for the high-level interface",
+    "min_toolchain": "Trilinos 17.x: C++20 compiler and CMake 3.27+ (release notes); the original 2015 README said C++11",
+    "platforms": "shared-memory CPUs through Kokkos OpenMP; README lists Intel Sandy Bridge, Xeon Phi and IBM Power8 as tested",
+    "thread_safety": "not documented; each Basker object drives its own Kokkos OpenMP thread team, and Kokkos must be initialized with at least the requested number of threads",
+    "drop_in_for_baseline": "partial: not API-compatible with KLU's C interface, but the Symbolic/Factor/Solve flow on CSC arrays mirrors it, and inside Amesos2 it swaps with KLU2 behind the same solver interface"
+  },
+  "gotchas": [
+    "SetThreads rounds the thread count down to a power of two and caps it at Kokkos OpenMP concurrency. Inside Amesos2 the default is every hardware thread when OpenMP is enabled.",
+    "The Amesos2 adapter defaults replace_zero_pivot to true, so a zero pivot is silently replaced rather than reported as singular; check residuals. The parameter 'pivot' defaults to false in the valid-parameter list, and passing that list through disables pivoting.",
+    "Symbolic cannot be rerun on the same object ('YOU CANNOT RERUN SYMBOLIC'), so a new sparsity pattern needs a new instance. Factor returns an error when BTF yields no blocks ('Case for btf_nbkls = 0 is not implemented'), so keep btf=true.",
+    "Building with CUDA-enabled Kokkos plus Basker failed with an extended-lambda error (issue #14227, closed December 2025); use a recent Trilinos if you mix backends."
+  ],
+  "pick_this_over_siblings_when": "Pick Basker over NICSLU and CKTSO, which target the same circuit-matrix niche and claim larger speedups, when you need source code under BSD-3 inside Trilinos; NICSLU is unmaintained and needs a nicslu.lic file. Pick it over GLU or CKTSO-GPU when there is no NVIDIA GPU, or the matrices are too sparse for a GPU to pay off.",
+  "verified_claims_summary": "The Basker paper (Booth, Rajamanickam, Thornquist; ASHES/IPDPS 2016 workshop, arXiv 1601.05725; journal version Parallel Computing 2017) reports, per its abstract seen only in search results, a geometric-mean 5.91x speedup on a 16-core CPU and 7.4x on a 32-core Xeon Phi over sequential KLU on circuit-type matrices, and up to 53x / 13.3x over MKL PARDISO on low-fill matrices. CPU models, compiler and flags, and the matrix list were not visible (the paper hosts are blocked), and the repo carries no benchmark code.",
+  "status_note": "Actively maintained inside Trilinos (Basker commits through 2026-08-06, adding threaded solve, worker threads and partial factorization in 2025-26) and BSD-3-Clause, but usable only as part of a Trilinos build.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/trilinos/Trilinos/HEAD/packages/shylu/shylu_node/basker/README.txt",
+    "https://raw.githubusercontent.com/trilinos/Trilinos/HEAD/packages/shylu/shylu_node/basker/src/shylubasker_def.hpp",
+    "https://raw.githubusercontent.com/trilinos/Trilinos/HEAD/packages/shylu/shylu_node/basker/src/shylubasker_types.hpp",
+    "https://raw.githubusercontent.com/trilinos/Trilinos/HEAD/packages/shylu/shylu_node/basker/CMakeLists.txt",
+    "https://raw.githubusercontent.com/trilinos/Trilinos/HEAD/packages/shylu/shylu_node/basker/src/CMakeLists.txt",
+    "https://raw.githubusercontent.com/trilinos/Trilinos/HEAD/packages/shylu/shylu_node/basker/cmake/Dependencies.cmake",
+    "https://raw.githubusercontent.com/trilinos/Trilinos/HEAD/packages/shylu/shylu_node/basker/test/basker_test.cpp",
+    "https://raw.githubusercontent.com/trilinos/Trilinos/HEAD/packages/amesos2/src/Amesos2_ShyLUBasker_def.hpp",
+    "https://raw.githubusercontent.com/trilinos/Trilinos/HEAD/RELEASE_NOTES",
+    "https://raw.githubusercontent.com/trilinos/Trilinos/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/trilinos/Trilinos/HEAD/README.md",
+    "https://raw.githubusercontent.com/trilinos/Trilinos/HEAD/INSTALL.rst",
+    "https://github.com/trilinos/Trilinos/commits/master/packages/shylu/shylu_node/basker",
+    "https://github.com/trilinos/Trilinos/tree/master/packages/shylu/shylu_node/basker/test",
+    "https://github.com/trilinos/Trilinos/issues?q=is%3Aissue+basker",
+    "https://github.com/trilinos/Trilinos/issues/14227",
+    "https://github.com/trilinos/Trilinos/pull/14065",
+    "https://github.com/chenxm1986/nicslu"
+  ],
+  "confidence": 0.7
+}

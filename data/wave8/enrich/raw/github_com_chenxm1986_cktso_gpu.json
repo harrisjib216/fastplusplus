@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/chenxm1986/cktso-gpu",
+  "one_liner": "Closed-source CUDA add-on to CKTSO for sparse LU refactorization and solve; first-party 13.3x geomean refactorization speedup over KLU.",
+  "what_it_does": "CKTSO-GPU moves the repeated part of circuit-simulation solving onto an NVIDIA GPU: numeric refactorization with a fixed pivot order, and forward/backward substitution. CKTSO still does analysis and the first factorization with pivoting on the CPU. Then CKTSO_InitializeGpuAccelerator copies CKTSO's LU structure to the GPU, and CKTSO_GpuRefactorize and CKTSO_GpuSolve take new values and right-hand sides from host memory. The C API has five functions plus a C++ interface struct, with 32-bit and 64-bit index variants (_L); it handles real and complex matrices, in row or column mode.",
+  "how_it_is_fast": "Refactorization reuses the pivot order and LU pattern fixed by the CPU factorization, so there is no pivot search and the column dependencies are known in advance; the GPU can then factor independent columns in parallel. The guide exposes a threshold (iparm[1], default 128) that switches refactorization between a 'bulk' and a 'pipeline' mode, and it picks blocks per multiprocessor and threads per block automatically. This matches the author's published GPU left-looking LU (DAC 2012, TPDS 2015), which uses a cluster mode for early dependency levels with many sparse independent columns and a pipeline mode for late levels with few, denser columns (per search snippets; the source is closed, so the exact algorithm is not visible). Gains come from matrices with enough work per factor nonzero; the guide's threshold is flops/NNZ(L+U) > 50.",
+  "when_to_use": [
+    "SPICE Newton/transient loops that refactor the same circuit-matrix pattern thousands of times while the pivot order from one CPU factorization stays acceptable.",
+    "Slightly dense circuit matrices that pass the user guide's flops/NNZ(L+U) > 50 test, the only class it was benchmarked on.",
+    "You already use CKTSO on x86-64 Windows or Linux and have an NVIDIA GPU of compute capability 3.5-8.0 with a CUDA 11 driver.",
+    "Real or complex matrices with a single right-hand side per solve."
+  ],
+  "when_not_to_use": [
+    "Highly sparse circuit matrices: the user guide itself says it cannot accelerate them efficiently and that multicore CKTSO is best there.",
+    "You have a many-core CPU: the GPU was compared only with one-thread CKTSO and sequential KLU. The CKTSO README separately claims more than 25x over KLU at 16 threads (66 matrices, a different set), which exceeds this module's 13.29x geomean over KLU, so multithreaded CKTSO may match or beat it (cross-document, not like-for-like).",
+    "You need pivoting on the GPU: factorization with pivoting stays on the CPU, and every CPU refactorization that changes the LU structure requires calling InitializeGpuAccelerator again.",
+    "You need source code, a license, non-x86-64 hosts, AMD GPUs, or post-Ampere GPUs: it ships only prebuilt x86-64 binaries with no license terms, built with CUDA 11.0, and the listed compute capabilities stop at 8.0.",
+    "Long-term support: the last commit was 2023-04-01, and the CKTSO README lists a 'faster GPU acceleration method' as work in progress."
+  ],
+  "integration": {
+    "form": "shared lib (prebuilt libcktsogpu.so / cktsogpu.dll + .lib, with _l variants for 64-bit indices; header cktso-gpu.h)",
+    "dependencies": "CKTSO shared library and header plus its cktso.lic file (separate repo; CKTSO 20230325 or later); NVIDIA CUDA 11.0 runtime and driver (Linux 450.51.05, Windows 451.48 or newer)",
+    "min_toolchain": "Prebuilt with gcc 4.8.5 on CentOS 7 and Visual Studio 2019 on Windows, CUDA 11.0; plain C API usable from C or C++ (demo Makefile uses g++ -O3)",
+    "platforms": "x86-64 Windows or Linux only; NVIDIA GPUs with compute capability 3.5, 3.7, 5.0, 5.2, 6.0, 6.1, 7.0, 7.5 or 8.0 listed (RTX 3090 used in results); V100 needs the disabledL1cache build",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Wrong results on some GPUs: disabledL1cache/readme.txt says the V100 needs the L1-cache-disabled libraries, which cost about 20% performance. Check residuals on your GPU.",
+    "GpuRefactorize does no pivoting. If changed values make a pivot unacceptable, fall back to CKTSO factorization with pivoting on the CPU and re-initialize the accelerator; CKTSO's scaling option (its iparm[7]) is not supported on the GPU.",
+    "Values and vectors are passed in host memory, and results.pdf does not say whether its timings include host-device transfers; oparm[1]/oparm[2] report the module's own timings.",
+    "Return codes are mixed: negative values are CKTSO errors (-51 to -53 are GPU-specific), and positive values are raw cudaError_t codes (e.g. 209, no kernel image, on an unsupported GPU). Call CKTSO_SortFactors before initializing, or initialization is slower."
+  ],
+  "pick_this_over_siblings_when": "Use it only if you already run CKTSO and your matrices pass the flops/NNZ(L+U) > 50 test. Otherwise multithreaded CKTSO (same author, maintained, TCAD 2025 paper) or BSD-licensed Basker on the CPU is the safer choice, and GLU is a public-source GPU circuit LU you can build and modify.",
+  "verified_claims_summary": "First-party results.pdf (CKTSO-GPU 20221207), 29 SuiteSparse circuit matrices with Flops/NZ(L+U) > 50: refactorization on an RTX 3090 is 13.29x faster on geometric mean (28.80x arithmetic) than sequential KLU 1.3.9 given CKTSO's ordering, and 6.11x (12.01x) faster than CKTSO on one thread of a Xeon Gold 6130. Solve is 1.72x (2.41x) faster than KLU and 1.46x (1.98x) faster than one-thread CKTSO. Built with gcc 4.8.5 and nvcc 11.0 on CentOS 7.9; flags are not stated, there is no benchmark code, and per-matrix results appear only as bar charts.",
+  "status_note": "Abandoned since 2023-04-01 (22 commits, 6 stars), binary-only with no license terms, so reference only; tied to CUDA 11.0-era builds and an external licensed CKTSO library.",
+  "sources_read": [
+    "https://github.com/chenxm1986/cktso-gpu",
+    "https://github.com/chenxm1986/cktso-gpu/commits",
+    "https://github.com/chenxm1986/cktso-gpu/issues",
+    "https://raw.githubusercontent.com/chenxm1986/cktso-gpu/HEAD/README.md",
+    "https://raw.githubusercontent.com/chenxm1986/cktso-gpu/HEAD/results.pdf",
+    "https://raw.githubusercontent.com/chenxm1986/cktso-gpu/HEAD/ug.pdf",
+    "https://raw.githubusercontent.com/chenxm1986/cktso-gpu/HEAD/disabledL1cache/readme.txt",
+    "https://raw.githubusercontent.com/chenxm1986/cktso-gpu/HEAD/howto.txt",
+    "https://raw.githubusercontent.com/chenxm1986/cktso-gpu/HEAD/cktso-gpu.h",
+    "https://raw.githubusercontent.com/chenxm1986/cktso-gpu/HEAD/demo.cpp",
+    "https://raw.githubusercontent.com/chenxm1986/cktso-gpu/HEAD/Makefile",
+    "https://raw.githubusercontent.com/chenxm1986/cktso/HEAD/README.md"
+  ],
+  "confidence": 0.75
+}
