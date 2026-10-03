@@ -108,3 +108,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - atomicarchitects/nequix discussion #5: semi-independent end-to-end OEQ numbers (A100). Codebook kernels for Arm LLM inference, arXiv 2501.00032: possible faster sibling of KleidiAI, not opened. ExecuTorch paper arXiv 2605.08195 mentions KleidiAI. (from KleidiAI/OEQ enricher)
 - bbuhrow/avx-ecm (BSD-2-Clause): README claims 1.5-2.5x GMP-ECM throughput on general N up to about 1000 bits; not catalogued. (from ECM-ELF enricher)
 - hchengv/avxbls (TCHES 2025, Apache-2.0; snippet: 1.86-1.97x vs blst full pairing), ePrint 2026/947 (AVX-512 BLS signatures), ePrint 2026/1827 AVXPoS, ganqin-liu/avxbls-sig: pairing siblings of VROOM, ePrint blocked. (from VROOM enricher)
+- bassoy/ttm: ICCS 2024 paper 'Fast and Layout-Oblivious Tensor-Matrix Multiplication with BLAS' (LNCS 14832), PDF at iccs-meeting.org/archive/iccs2024/papers/148320264.pdf (blocked); retier D to B. (from ttm enricher)

@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/eth-cscs/costa",
+  "one_liner": "MPI library for redistributing and transposing distributed matrices; link-time replacement for ScaLAPACK pdgemr2d/pdtran, 2-21x faster than MKL's.",
+  "what_it_does": "Moves a distributed matrix from one data layout to another across MPI ranks, optionally transposing, conjugating and scaling it on the way (B = beta*B + alpha*op(A)). Layouts can be ScaLAPACK block-cyclic or arbitrary irregular block grids described by row/column splits and an owner table, and A and B may live on different communicators. There are two APIs: a native C++ one (block_cyclic_layout/custom_layout, transform(), a transformer class that batches several transforms into one communication round, and rank-relabelling helpers), and ScaLAPACK-compatible wrappers for p?gemr2d, p?tran, p?tranu and p?tranc (s/d/c/z). The wrappers come either as same-named symbols that override ScaLAPACK when linked first (costa_scalapack) or as costa_-prefixed versions.",
+  "how_it_is_fast": "It works out the exact block-to-block overlap between the source and target grids, packs everything bound for each rank into a single message with OpenMP-parallel packing (applying alpha/beta, cache-blocked transpose and conjugation during the copy), posts all MPI_Irecv/MPI_Isend nonblocking, copies rank-local blocks while messages are in flight, and unpacks each message as soon as MPI_Waitany returns it. Data already on the right rank never touches MPI. Optionally it suggests an MPI rank relabelling, computed from the communication-volume graph by a greedy pass over edges sorted by volume, so that layouts differing only by a rank permutation need no communication at all. The README benchmarks did not use relabelling.",
+  "when_to_use": [
+    "ScaLAPACK codes (CP2K-style quantum chemistry, dense eigen/linear-solver pipelines) that call pdgemr2d or pdtran/pztranc often enough to show up in profiles: relink against costa_scalapack and the calls switch over with no code changes.",
+    "Changing block sizes or process grids between solver stages (for example 36x36 to 128x128 blocks), where the README shows 2.2x-2.9x over MKL ScaLAPACK pdgemr2d at n=20000-100000 on 16 ranks.",
+    "Moving data between a custom or irregular distribution (FFT slabs, application-owned panels) and a block-cyclic layout, which ScaLAPACK's routines cannot express.",
+    "Several matrices that must be redistributed at the same moment: transformer::schedule() plus one transform() sends them in one communication round.",
+    "Codes that can pick their own target rank assignment and want the communication-volume-minimising relabelling."
+  ],
+  "when_not_to_use": [
+    "Single-node or shared-memory transposes and copies: COSTA needs MPI 3 and runs the full message machinery; an in-place or tiled shared-memory transpose (transpose-scale, HPTT) fits better.",
+    "Memory-tight runs: each call packs data into temporary send and receive buffers, and batching several layouts in one round makes those messages, and the memory they need, larger.",
+    "Tall-skinny row-to-column reshuffles: issue #10 reported only about 1.5 Gb/s for costa::transform() on a 200000 x 600 matrix (2 Piz Daint nodes, 1 rank and 12 threads each); it was closed in January 2023 with no fix or explanation shown on the page.",
+    "Expecting 'orders of magnitude' in general: the published charts show about 20x only when source and target layouts are identical (a case where nothing needs to move), and 2.2x-2.9x when block sizes actually change.",
+    "Builds for Windows/MSVC or other non-GCC-compatible compilers: transform.cpp uses variable-length arrays (a GNU extension), and past issues show build breaks on Cray, Stampede2, nvc++ and in cross-compilation."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "MPI 3 and OpenMP (required); a ScaLAPACK (MKL, Cray LibSci, NVPL or custom via SCALAPACK_ROOT) only for the wrapper libraries; cxxopts and semiprof are fetched by CMake only for the miniapps, tests and profiling. Search results list a conda-forge package (costa-scalapack); a request to add COSTA 2.1 to Spack (issue #11) is closed.",
+    "min_toolchain": "C++14 (target_compile_features cxx_std_14); CMake 3.22 per CMakeLists.txt (INSTALL.md still says 3.12); Release build by default plus -funroll-loops (or -Munroll for NVHPC).",
+    "platforms": "Linux HPC systems with MPI (Cray XC/EX, NVHPC toolchains); CMake has macOS rpath handling; Windows not documented. The only published benchmark machine is Piz Daint (Cray XC40).",
+    "thread_safety": "Not documented. transform() is a collective over the union communicator, and packing uses a process-wide per-type workspace singleton (memory::get_costa_context_instance), so concurrent transforms from several threads of one rank are unsafe in practice (inferred from source). It uses OpenMP internally and checks omp_in_parallel() before spawning threads in the transpose kernel.",
+    "drop_in_for_baseline": "partial — for ScaLAPACK's p?gemr2d and p?tran/p?tranu/p?tranc, linking costa_scalapack before ScaLAPACK swaps in COSTA with no source changes; COSTA is not a BLAS/LAPACK kernel and provides no other ScaLAPACK routines."
+  },
+  "gotchas": [
+    "Link order is the whole switch: if ScaLAPACK appears before costa_scalapack on the link line, the vendor routine silently wins. Use costa_prefixed_scalapack if you want both versions side by side.",
+    "Each wrapper call builds the union of A's and C's communicators with MPI_Comm_create_group on MPI_COMM_WORLD, and costa_pxgemr2d.cpp never frees it (no MPI_Comm_free in the files read). Programs that call pdgemr2d thousands of times should watch for communicator-handle exhaustion.",
+    "The native transform() takes the layouts by non-const reference and temporarily transposes the initial layout object in place, undoing it afterwards. Do not share a layout object across threads during a call.",
+    "Release v2.3.1 is marked deprecated: its beta==0 handling had a bug that v2.3.2 fixed (beta==0 or alpha==0 must overwrite the destination). Pin v2.3.2 or later."
+  ],
+  "pick_this_over_siblings_when": "COSTA is the layout-conversion layer under COSMA (the catalog's communication-optimal pdgemm replacement), so use COSMA or SPLA when the bottleneck is the multiply itself and COSTA when it is pdgemr2d/pdtran or moving data between custom and block-cyclic layouts. For transposes within one node, HPTT or transpose-scale are the right tools; COSTA only pays off across MPI ranks.",
+  "verified_claims_summary": "First-party README charts (from the public miniapps/pxgemr2d_miniapp.cpp, which times COSTA and ScaLAPACK in one binary) compare pdgemr2d on square double matrices against Intel MKL ScaLAPACK v19.1, on 8 Piz Daint (Cray XC40) nodes with 16 MPI ranks in a 4x4 grid, without rank relabelling or memory pools: with the same 128x128 block-cyclic layout on both sides, 14 vs 292 ms at n=20000 up to 324 vs 6702 ms at n=100000 (about 19-21x); with 36x36 to 128x128 blocks, 188 vs 406 ms up to 4557 vs 12737 ms (2.2-2.9x). Compiler, flags, MPI library, CPU model and which repetition is plotted are not stated. The peer-reviewed ISC 2021 paper (also compared against Cray LibSci, per search snippets; its abstract says COSTA 'outperforms the best available ScaLAPACK redistribute and transpose routines multiple times') could not be opened here.",
+  "status_note": "Actively maintained by ETH Zurich/CSCS (v2.3.3 released 2026-09-14 with an nvc++ build fix; one open issue, about empty install directories) and BSD-3-Clause, with production use through COSMA in CP2K, which makes it a low-risk relink for ScaLAPACK users.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/eth-cscs/COSTA/HEAD/README.md",
+    "https://raw.githubusercontent.com/eth-cscs/COSTA/HEAD/INSTALL.md",
+    "https://raw.githubusercontent.com/eth-cscs/COSTA/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/eth-cscs/COSTA/HEAD/cmake/build_type.cmake",
+    "https://raw.githubusercontent.com/eth-cscs/COSTA/HEAD/src/costa/CMakeLists.txt",
+    "https://raw.githubusercontent.com/eth-cscs/COSTA/HEAD/src/costa/grid2grid/transform.cpp",
+    "https://raw.githubusercontent.com/eth-cscs/COSTA/HEAD/src/costa/grid2grid/communication_data.cpp",
+    "https://raw.githubusercontent.com/eth-cscs/COSTA/HEAD/src/costa/grid2grid/ranks_reordering.cpp",
+    "https://raw.githubusercontent.com/eth-cscs/COSTA/HEAD/src/costa/grid2grid/memory_utils.hpp",
+    "https://raw.githubusercontent.com/eth-cscs/COSTA/HEAD/src/costa/pxgemr2d/costa_pxgemr2d.cpp",
+    "https://raw.githubusercontent.com/eth-cscs/COSTA/HEAD/src/costa/pxgemr2d/pxgemr2d.cpp",
+    "https://raw.githubusercontent.com/eth-cscs/COSTA/HEAD/src/costa/scalapack.cpp",
+    "https://raw.githubusercontent.com/eth-cscs/COSTA/HEAD/miniapps/pxgemr2d_miniapp.cpp",
+    "https://github.com/eth-cscs/COSTA/issues?q=is%3Aissue",
+    "https://github.com/eth-cscs/COSTA/issues/10",
+    "https://github.com/eth-cscs/COSTA/releases",
+    "WebSearch snippets for https://arxiv.org/abs/2106.06601 and https://link.springer.com/chapter/10.1007/978-3-030-78713-4_12 (not opened; arXiv and Springer are egress-blocked)"
+  ],
+  "confidence": 0.8
+}
