@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/gpupeople/speck",
+  "one_liner": "CUDA SpGEMM (C = A*B in CSR) with adaptive hash/dense accumulators; PPoPP '20 reports wins over cuSPARSE and other GPU SpGEMM libraries.",
+  "what_it_does": "Multiplies two sparse CSR matrices already resident on an NVIDIA GPU and returns C in CSR, in float or double. The API is one template call, spECK::MultiplyspECK<T, 4, 1024, DYN_SHMEM, STATIC_SHMEM>(A, B, C, config, timings), on the project's own dCSR<T> struct (size_t dims, 32-bit unsigned row offsets and column ids) with a spECKConfig that queries the device and creates CUDA streams. The repo builds a library (spECKLib) plus a runspECK benchmark driver with a Matrix Market reader and a config.ini for warm-up and timing.",
+  "how_it_is_fast": "A lightweight, multi-level analysis: a cheap first kernel counts products per row of C (max and total), and finer per-row analysis and block load balancing run only when those statistics say the cost pays off (hard-coded thresholds in Multiply.cu). Rows are binned into six kernel variants that scale shared memory and threads per block, with up to 32 short rows packed into one block. Each row group gets the cheapest accumulator that fits: direct array indexing when the column range fits the map, a shared-memory hash map with linear probing and atomicCAS, dense accumulation for long rows, or a global-memory hash map fallback. It runs a symbolic (count) pass, then a numeric pass, then CUB segmented sort or in-place sorting of column indices.",
+  "when_to_use": [
+    "Repeated CSR SpGEMM on an NVIDIA GPU where cuSPARSE SpGEMM/csrgemm is the bottleneck, e.g. Galerkin products in algebraic multigrid setup or matrix powers in graph analytics.",
+    "Input sets whose row-length distribution varies widely (power-law and regular matrices mixed), the case the per-call analysis and accumulator choice are designed for.",
+    "float or double data with 32-bit indices and nnz(C) below 2^32.",
+    "As a strong, MIT-licensed baseline when benchmarking a new GPU SpGEMM; OpSparse and TileSpGEMM both measure against it."
+  ],
+  "when_not_to_use": [
+    "If you can use OpSparse: its IEEE Access 2022 paper reports OpSparse 1.52x faster than spECK on average, up to 2.04x (per its catalog entry; the OpSparse README gives a V100 with CUDA 11.2), and the OpSparse repo vendors spECK for that comparison.",
+    "AMD, Intel or CPU targets: CUDA only.",
+    "Production code that needs a supported library: master was last touched 2022-07-29 and the cuda11 branch 2023-07-18, CUDA 12 is not mentioned anywhere, and 64-bit index support was added and then removed on the cuda11 branch in January 2022. CornellHPC/Ocean-SpGEMM, partly adapted from spECK per its README, targets CUDA 12.4+ on compute capability 8.0+ (tested on A100 and H100); its speedups were not seen here.",
+    "Workloads that need bitwise reproducible values or proven correctness on unusual inputs: closed issues report wrong values on a small 4x7 by 7x4 product (#4, labelled bug), row-index mismatches against cuSPARSE on webbase-1M on a 1080 Ti (#6), and an illegal memory access on a 2048x2048 matrix with 80% nonzeros (#10, RTX 3060, CUDA 11.6); the issue pages show no maintainer reply, though later commits fix related kernel bugs."
+  ],
+  "integration": {
+    "form": "static lib (CMake target spECKLib) plus the runspECK benchmark executable; source-drop in practice",
+    "dependencies": "CUDA toolkit (Thrust, CUB); cuSPARSE is linked only by the runspECK driver for transposes and result comparison",
+    "min_toolchain": "master: CUDA 10.1 or 10.2, g++ > 7 (C++17) or Visual Studio, CMake 3.15.5 per README; CUDA 11+ needs the cuda11 branch (master's harness calls cusparseDcsrgemm, which CUDA 11 removed; cuda11 uses cusparseSpGEMM)",
+    "platforms": "NVIDIA GPUs; CMake options for compute capability 5.0 through 8.6, a 2022 commit restores launch bounds so all kernels run on Pascal; Linux and Windows; a 2020 commit fixes PowerPC builds",
+    "thread_safety": "not documented; each call does its own cudaMalloc/cudaFree and uses the streams held in the spECKConfig you pass",
+    "drop_in_for_baseline": "partial — same CSR semantics as cuSPARSE SpGEMM, but you wrap your device pointers in spECK's dCSR<T> (unsigned int offsets and column ids) and call its template; no cuSPARSE-compatible API"
+  },
+  "gotchas": [
+    "Per-GPU shared-memory limits are compile-time constants in include/Multiply.h (49152 static; dynamic 49152 pre-Volta, 65536 Turing, 98304 Volta, 101376 RTX 30xx, 166912 A100 per the cuda11 README); wrong values give runtime errors or warnings telling you to recompile.",
+    "Results are not bit-stable: config.ini says values differ from cuSPARSE, so CompareResult checks only row lengths and column indices; a 2023 cuda11 commit restores the value-correctness check.",
+    "CMake builds with -use_fast_math, and master also with -DVERBOSE and -keep/-lineinfo (CUDA_BUILD_INFO on by default).",
+    "Multi-row hash keys pack a 5-bit local row and a 27-bit column into one uint32 (HashMap.cuh masks columns with 0x7FFFFFF), so B with more than 2^27 columns looks unsafe in that path (inferred from code, not documented)."
+  ],
+  "pick_this_over_siblings_when": "Over cuSPARSE, use it when you can vendor and tune research code for a fixed NVIDIA GPU. Over OpSparse (faster on V100 per its paper) and TileSpGEMM (faster on 94 of 142 large matrices, but no license), pick spECK when you need an MIT-licensed standalone library with float and double, or a reference baseline. Kokkos Kernels SpGEMM is the maintained, portable choice when support matters more than peak speed.",
+  "verified_claims_summary": "Per the PPoPP '20 abstract as seen in search snippets (paper blocked here): over thousands of matrices spECK beat all compared GPU SpGEMM codes (snippets name CUSP, nsparse, RMerge, AC-SpGEMM and bhSPARSE) in 85% of cases and was second in 12%, about 2x the second-best on average and up to 25x; restricted to matrices with more than 15k products, the figures are 79%, 15% and 83% faster. GPU model, CUDA version and how cuSPARSE ranked were not seen, and third-party runs in the OpSparse paper (V100 per its README) put spECK 1.52x behind OpSparse on average.",
+  "status_note": "Abandoned (master 2022-07-29, cuda11 branch 2023-07-18, all issues closed) but MIT-licensed and compact enough to vendor; expect to port it yourself for CUDA 12 and newer GPUs.",
+  "sources_read": [
+    "https://github.com/GPUPeople/spECK",
+    "https://raw.githubusercontent.com/GPUPeople/spECK/master/readme.md",
+    "https://raw.githubusercontent.com/GPUPeople/spECK/master/LICENSE",
+    "https://raw.githubusercontent.com/GPUPeople/spECK/master/config.ini",
+    "https://raw.githubusercontent.com/GPUPeople/spECK/master/CMakeLists.txt",
+    "https://raw.githubusercontent.com/GPUPeople/spECK/master/linuxsetup.sh",
+    "https://raw.githubusercontent.com/GPUPeople/spECK/master/include/Multiply.h",
+    "https://raw.githubusercontent.com/GPUPeople/spECK/master/include/spECKConfig.h",
+    "https://raw.githubusercontent.com/GPUPeople/spECK/master/include/dCSR.h",
+    "https://raw.githubusercontent.com/GPUPeople/spECK/master/include/HashMap.cuh",
+    "https://raw.githubusercontent.com/GPUPeople/spECK/master/include/GPU/spECK_HashSpGEMM.cuh",
+    "https://raw.githubusercontent.com/GPUPeople/spECK/master/source/GPU/Multiply.cu",
+    "https://raw.githubusercontent.com/GPUPeople/spECK/master/source/Executor.cpp",
+    "https://raw.githubusercontent.com/GPUPeople/spECK/master/externals/cusparse/source/cuSparseMultiply.cu",
+    "https://raw.githubusercontent.com/GPUPeople/spECK/cuda11/readme.md",
+    "https://raw.githubusercontent.com/GPUPeople/spECK/cuda11/CMakeLists.txt",
+    "https://raw.githubusercontent.com/GPUPeople/spECK/cuda11/externals/cusparse/source/cuSparseMultiply.cu",
+    "https://github.com/GPUPeople/spECK/issues?q=is%3Aissue",
+    "https://github.com/GPUPeople/spECK/issues/4",
+    "https://github.com/GPUPeople/spECK/issues/5",
+    "https://github.com/GPUPeople/spECK/issues/6",
+    "https://github.com/GPUPeople/spECK/issues/10",
+    "https://github.com/GPUPeople/spECK/issues/11",
+    "https://github.com/GPUPeople/spECK/commits/master",
+    "https://github.com/GPUPeople/spECK/commits/cuda11",
+    "https://github.com/lorentzbf/OpSparse",
+    "https://github.com/CornellHPC/Ocean-SpGEMM"
+  ],
+  "confidence": 0.6
+}
