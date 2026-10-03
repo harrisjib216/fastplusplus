@@ -972,6 +972,129 @@
     }
   },
   {
+    "id": "paper:flashattention-4",
+    "name": "FlashAttention-4 (CuTeDSL, Hopper/Blackwell)",
+    "repo_url": "https://github.com/Dao-AILab/flash-attention",
+    "language": "Python (CuTe-DSL, kernels JIT-compiled; flash_attn/cute)",
+    "domain": "numerics-and-science",
+    "category": "autodiff-and-ml-kernels",
+    "baseline": "cuDNN 9.13.0 fused attention (also benchmarked: cuDNN 9.19.1.2, Triton 3.6.0, Gluon 3.6.0, FlashAttention 2.8.3)",
+    "baseline_in_list": true,
+    "metric": "throughput",
+    "workload": "Attention forward (and backward) in BF16 on B200: head dim 64, 128 and (192,128), causal and non-causal, sequence 1K to 32K with total tokens fixed at 32K, hidden dimension 2048 (32 or 16 heads); TFLOPs/s from 4 * seqlen^2 * head_dim * heads (halved for causal, backward = 2.5x forward).",
+    "claimed_speedup": "Paper abstract: 'up to 1.3x speedup over cuDNN 9.13 and 2.7x over Triton on B200 GPUs with BF16, reaching up to 1613 TFLOPs/s (71% utilization)'. Figure 4 (forward, head dim 128, TFLOPs/s, seq 1K/2K/4K/8K/16K/32K): non-causal FA4 1355, 1468, 1532, 1579, 1601, 1613; cuDNN 9.13.0 1157, 1328, 1413, 1460, 1488, 1517 (FA4 1.06-1.17x, derived from page data); cuDNN 9.19.1.2 1346, 1474, 1552, 1585, 1609, 1613 (0.99-1.01x, derived); Triton 3.6.0 507 to 703 (FA4 2.29-2.67x, derived); FA2 383 to 432. Causal FA4 744, 1053, 1279, 1426, 1526, 1576; cuDNN 9.13.0 717, 929, 1076, 1168, 1285, 1266 (1.04-1.24x, derived); cuDNN 9.19.1 822, 1103, 1295, 1430, 1509, 1540 (0.91-1.02x, derived: cuDNN ahead up to 8K); Triton 351 to 670 (2.12-2.36x, derived). Figure 5 (forward causal, head dim 192/128): FA4 812, 1121, 1357, 1506, 1600, 1654 vs cuDNN 9.13.0 769, 999, 1167, 1276, 1375, 1382 (1.06-1.20x, derived) vs cuDNN 9.19.1.2 860, 1133, 1311, 1415, 1515, 1563 (0.94-1.06x, derived). Figure 6 (backward, head dim 128): non-causal FA4 936, 1166, 1331, 1430, 1457, 1412 vs cuDNN 9.13.0 857, 1016, 1116, 1171, 1212, 1107 (1.09-1.28x, derived) vs cuDNN 9.19.1.2 928, 1108, 1231, 1300, 1280, 1274 (1.01-1.14x, derived); causal FA4 614, 887, 1102, 1284, 1402, 1446 vs cuDNN 9.13.0 543, 732, 893, 1008, 1085, 1142 (1.13-1.29x, derived) vs cuDNN 9.19.1 651, 894, 1090, 1218, 1293, 1337 (0.94-1.08x, derived). So the 'up to 1.3x over cuDNN 9.13' is reached only in the backward pass (forward peaks at 1.24x), and the only remaining lead over current cuDNN 9.19 is in the backward pass at long sequences (up to about 1.14x).",
+    "evidence_tier": "A",
+    "benchmark_url": "https://raw.githubusercontent.com/Dao-AILab/flash-attention/HEAD/assets/fa4_paper.pdf",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "Paper Appendix A.1: CUDA 13.1, CuTe-DSL 4.4.1, PyTorch 2.10.0, Triton 3.6, FlashAttention 2.8.3, cuDNN 9.13 and 9.19.1.2; 5 warmup runs then 10 repeats averaged. CuTe-DSL kernels are JIT compiled; compile options are fixed in flash_attn/cute/interface.py (cute.compile options '--enable-tvm-ffi', plus a kernel's ptxas_options where set). HEAD's flash_attn/cute/pyproject.toml now requires nvidia-cutlass-dsl>=4.6.2, so a HEAD build does not match the paper's CuTe-DSL 4.4.1.",
+    "hardware": "NVIDIA B200 (the main text says B200; Appendix A.1 writes 'B100 180GB SXM6 (1000W)', apparently a typo); CPU model not stated.",
+    "compared_against_cpp_std_directly": null,
+    "license": "BSD-3-Clause",
+    "usability": "copyable",
+    "last_commit": "2026-10-02",
+    "maintenance_status": "active",
+    "is_fork_of": null,
+    "stars_or_usage": "25.1k stars (whole flash-attention repository, shared with FlashAttention-2 and -3); pip package flash-attn-4; paper by Princeton, Meta, Colfax, NVIDIA, Georgia Tech and Together AI authors, listed in MLSys 2026 proceedings per a WebSearch result",
+    "tradeoffs": "Written in CuTe-DSL embedded in Python (paper claims 20-30x faster compile than C++ templates), so no C++ build step but a Python/CUTLASS-DSL dependency and JIT compile at first use; Hopper (sm90) and Blackwell (sm100/sm120) only, CUDA 13 recommended for best performance (cu13 extra). Forward and backward, GQA, varlen, paged KV, block sparsity and MLA kernels live in flash_attn/cute. Uses software-emulated exponentials and conditional softmax rescaling (paper abstract), which a numerics-sensitive user should check against a reference softmax.",
+    "caveats": "Paper read from the PDF checked into the repo (assets/fa4_paper.pdf); arXiv, the MLSys proceedings page, the Together AI blog and the Colfax post were not opened (egress-blocked), so the peer-review status rests on a search result and was not checked by me. The Figure 4 caption itself says 'newer versions of cuDNN have incorporated many of the techniques described in this paper, yielding similar performance to FA4', and Appendix A.1 says the authors worked with the cuDNN team to fold FA4 techniques into cuDNN from 9.13/9.14 on: in the forward pass FA4 is at parity with cuDNN 9.19.1.2 (and behind it at short causal sequences, e.g. 744 vs 822 TFLOPs/s at 1K causal), and the 1.1-1.3x lead holds only against cuDNN 9.13.0; in the backward pass FA4 still leads cuDNN 9.19 by up to about 1.14x at long sequences (derived from page data). The forward figures alone peak at 1.24x over cuDNN 9.13, so the abstract's 'up to 1.3x' comes from the backward pass. Figure 5 shows 1654 TFLOPs/s at head dim 192/128, above the abstract's 'up to 1613'. Appendix inconsistencies: it names a 'B100 180GB SXM6 (1000W)' while the text and every figure say B200 (180 GB and 1000 W match B200), and it dates the library versions to 'March 2025', which cannot be right for CUDA 13.1. The public harness covers FA2, FA3, FA4, cuDNN and PyTorch standard attention but not the Triton or Gluon baselines, and no tag marks the commit used for the paper's figures. FlashAttention-3 'does not run on B200' (paper footnote), so there is no FA4 vs FA3 comparison, and the paper has no H100 FA4 numbers. Several authors are from NVIDIA and Colfax, and the cuDNN team is thanked for feedback. Shares the Dao-AILab/flash-attention repository with FlashAttention-3 (use id paper:flashattention-4).",
+    "found_via": [
+      "seed-record pass: https://github.com/Dao-AILab/flash-attention README (FlashAttention-4 section), flash_attn/cute/README.md, benchmarks/benchmark_attn.py and assets/fa4_paper.pdf; WebSearch 'FlashAttention-4 CuTeDSL B200 BF16 forward TFLOPs speedup over cuDNN and Triton paper' gave the abstract figures and the MLSys listing"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.8,
+    "has_code": true,
+    "assignment_ids": [
+      "w8-seed-d"
+    ],
+    "verification": {
+      "date": "2026-09-26",
+      "verdict": "confirm",
+      "tier_before": "B",
+      "tier_reason": "Upgraded from B under the wave's GPU-kernel precedent (FA3 retier-01, sgemm.cu): the paper PDF in the repo (assets/fa4_paper.pdf) gives FA4 vs cuDNN 9.13.0 and 9.19.1.2 TFLOPs/s on a named GPU (B200) with the toolchain (CUDA 13.1, CuTe-DSL 4.4.1, PyTorch 2.10.0, Triton 3.6, FA 2.8.3) and timing method (5 warmup, 10 repeats averaged), and the public harness benchmarks/benchmark_attn.py times FA4 and cuDNN (fwd and bwd) with defaults that match the paper (total 32k tokens, 16 heads at head dim 128, warmup 5, rep 10). Compile options are fixed in public source (flash_attn/cute/interface.py: cute.compile options '--enable-tvm-ffi' plus per-kernel ptxas_options).",
+      "notes": "All Figure 4 bar labels in the record match the PDF exactly (checked at 330 dpi). Upgraded to A by the same reasoning the orchestrator used for FA3 (public harness + stated toolchain + named GPU); keep at B if the orchestrator prefers to require a pinned commit. Worth recording: the lead over current cuDNN (9.19) is forward parity and backward up to 1.14x only.",
+      "urls_opened": [
+        "https://raw.githubusercontent.com/Dao-AILab/flash-attention/HEAD/assets/fa4_paper.pdf",
+        "https://raw.githubusercontent.com/Dao-AILab/flash-attention/HEAD/README.md",
+        "https://raw.githubusercontent.com/Dao-AILab/flash-attention/HEAD/LICENSE",
+        "https://raw.githubusercontent.com/Dao-AILab/flash-attention/HEAD/benchmarks/benchmark_attn.py",
+        "https://raw.githubusercontent.com/Dao-AILab/flash-attention/HEAD/flash_attn/cute/interface.py",
+        "https://raw.githubusercontent.com/Dao-AILab/flash-attention/HEAD/flash_attn/cute/pyproject.toml",
+        "https://github.com/Dao-AILab/flash-attention",
+        "https://github.com/Dao-AILab/flash-attention/commits/main"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "claimed_speedup": "Paper abstract: 'up to 1.3x speedup over cuDNN 9.13 and 2.7x over Triton on B200 GPUs with BF16, reaching up to 1613 TFLOPs/s (71% utilization)'; Figure 4 caption: '1.1-1.3x speedup over cuDNN 9.13.0 and 2.1-2.7x over Triton across sequence lengths'. Figure 4 bar labels, head dim 128, non-causal, seq 1K/2K/4K/8K/16K/32K, TFLOPs/s: FA4 1355, 1468, 1532, 1579, 1601, 1613; cuDNN 9.13.0 1157, 1328, 1413, 1460, 1488, 1517 (FA4 about 1.06-1.17x, derived from page data); cuDNN 9.19.1.2 1346, 1474, 1552, 1585, 1609, 1613 (FA4 within about 1.3% either way, derived from page data); Triton 3.6.0 507 to 703; FA2 383 to 432. Causal, head dim 128, 32K: FA4 1576 vs cuDNN 9.13.0 1266 (about 1.24x, derived) vs cuDNN 9.19.1 1540 (about 1.02x, derived); causal 1K: FA4 744 vs cuDNN 9.13.0 717 vs cuDNN 9.19.1 822 (slower).",
+      "compiler_and_flags": "Per paper Appendix A.1: CUDA 13.1, CuTe-DSL 4.4.1, PyTorch 2.10.0, Triton 3.6, FlashAttention 2.8.3, cuDNN 9.13 and 9.19.1.2; 5 warmup runs then 10 repeats averaged. No nvcc-style flags (CuTe-DSL is JIT compiled).",
+      "caveats": "The paper's own Figure 4 caption says: 'newer versions of cuDNN have incorporated many of the techniques described in this paper, yielding similar performance to FA4', and the bar labels confirm parity with cuDNN 9.19.1.2 (and cuDNN ahead at short causal sequences). So the 1.1-1.3x lead holds only against cuDNN 9.13.0, the version the authors compared at release. FlashAttention-3 'does not run on B200' (paper footnote), so there is no FA4 versus FA3 comparison on B200, and I found no H100 FA4 numbers in the paper text or README (the README says only 'optimized for Hopper and Blackwell GPUs (e.g. H100, B200)'); the lead asked for FA3/H100 figures, which I could not find. Backward-pass figures (Figures 6 to 8) were not read. Short of tier A because CPU model and flags are not stated, though benchmarks/benchmark_attn.py is public and its defaults (total 32K tokens, 16 heads at head dim 128, 5 warmup, 10 reps, backends fa2/fa3/fa4/cudnn) match the paper's stated settings. The paper was read from the PDF checked into the repo (assets/fa4_paper.pdf); arXiv 2603.05451, the MLSys proceedings page, the Together AI blog and the Colfax post were not opened (EGRESS_BLOCKED). Several authors work on cuDNN or FA4's vendors, so first-party in part, but peer reviewed. Shares a repository with FlashAttention-3 (use id paper:flashattention-4)."
+    }
+  },
+  {
+    "name": "KleidiAI (via the llama.cpp KleidiAI backend PR)",
+    "repo_url": "https://github.com/ARM-software/kleidiai",
+    "language": "C",
+    "domain": "numerics-and-science",
+    "category": "autodiff-and-ml-kernels",
+    "baseline": "llama.cpp ggml CPU backend's own Arm Q4_0 kernels (master at the time: AArch64 i8mm/dotprod repacked kernels); not XNNPACK, oneDNN or Eigen",
+    "baseline_in_list": false,
+    "metric": "throughput",
+    "workload": "llama.cpp prompt processing (pp128) and token generation (tg64) with a llama 1B Q4_0 model (727.75 MiB, 1.24 B params), CPU backend, 1 to 10 threads, KleidiAI I8MM and SME micro-kernels versus llama.cpp master, in llama.cpp PR #11390 (merged 2025-02-20).",
+    "claimed_speedup": "llama.cpp PR #11390 (Arm-authored integration, merged 2025-02-20). Independent runs: max-krasnyansky (Qualcomm org member), Apple M4 Pro, llama 1B Q4_0, master vs KleidiAI SME: 1 thread pp128 160.94 vs 205.39, tg64 47.84 vs 62.22 (about 1.28x and 1.30x, derived from page data); 2 threads pp128 312.10 vs 389.43, tg64 87.31 vs 99.95; 4 threads pp128 586.83 vs 326.86, tg64 157.63 vs 110.52; 10 threads pp128 1173.93 vs 435.39, tg64 243.65 vs 162.36. KleidiAI I8MM on M4 Pro: 162.40, 304.78, 531.04, 1082.70 pp128 (equal or slower). Galaxy S25 (Snapdragon 8 Elite) 1 thread pp128 181.23 master vs 174.13 KleidiAI. slaren, M3 Max, llama 7B Q4_0, 12 threads: pp128 229.89 master vs 192.93 PR, tg32 31.54 vs 30.54 (slower). rmatif, Galaxy A34: pp512 84.25 master vs 87.11 PR, tg128 13.79 vs 11.00. First-party (chaxu01, Arm), Pixel 8, llama 7B Q4_0: pp512 19.33/37.59/69.59 master vs 20.48/40.40/74.00 PR at 1/2/4 threads, tg128 9.75/18.48/27.42 vs 11.58/21.40/28.27 (about 1.03-1.19x, derived). Comments as extracted: max-krasnyansky 'SME does much better on 1 and 2 threads and much worse from then on' and 'It looks like even Kleidi I8MM kernels perform worse than what we have in the master'; chaxu01 (Arm) 'KleidiAI's performance is generally comparable to the current AARCH64 kernels. However, we have observed performance degradation when using a high number of threads on hardware with high core count.' The record's quoted 'PR summary' ('KleidiAI SME excels with 1-2 threads but degrades significantly at higher core counts. I8MM kernels consistently underperform') was not found on the page. Later first-party claim, PR #24414 (chaxu01, merged 2026-07-14): SME2 F32 vs native F32 on Apple M4 Pro, Llama-3.2-1B F32, 19.70 vs 457.57 t/s at 1 thread up to 23.6x at 2 threads, 4.3x at 6 threads; test name and build flags not stated.",
+    "evidence_tier": "C",
+    "benchmark_url": "https://github.com/ggml-org/llama.cpp/pull/11390",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "From the PR (the PR does not say which build produced which table): Apple Clang with 'cmake -D CMAKE_BUILD_TYPE=Release -D GGML_METAL=OFF -D GGML_BLAS=OFF -D GGML_CPU_KLEIDIAI=ON -G Ninja'; or LLVM Clang 19.1.7 with CFLAGS/CXXFLAGS='-march=armv9.2a+nosve+sme', -D GGML_NATIVE=OFF -D GGML_CPU_ARM_ARCH='armv9.2a+nosve+sme+dotprod+i8mm' -D GGML_OPENMP=OFF. Build 119d3bf.",
+    "hardware": "PR #11390: Apple M4 Pro and Samsung Galaxy S25 (Snapdragon 8 Elite) run by max-krasnyansky (member of the Qualcomm GitHub org); Apple M3 Max (12 threads) by slaren; Galaxy A34 by rmatif; Google Pixel 8 by the PR author chaxu01 (Arm). PR #24414: Apple M4 Pro (Arm author).",
+    "compared_against_cpp_std_directly": null,
+    "license": "Apache-2.0 (the LICENSES directory also carries BSD-3-Clause.txt for some files)",
+    "usability": "copyable",
+    "last_commit": "2026-10-01",
+    "maintenance_status": "active",
+    "is_fork_of": null,
+    "stars_or_usage": "187 stars on the GitHub mirror (official source is gitlab.arm.com/kleidi/kleidiai); integrated in llama.cpp (GGML_CPU_KLEIDIAI), XNNPACK (open and merged KleidiAI PRs listed on github.com/google/XNNPACK/pulls); ExecuTorch use was named in the task lead and not verified by me",
+    "tradeoffs": "Arm-only (AArch64; SME/SME2, SVE, i8mm, dotprod variants; will not build on x86). Micro-kernels with caller-controlled output tiling, no threading, no allocation, no dependencies, plain .c/.h pairs (callable from C++); weights must be prepacked (RHS pack) and activations dynamically quantized and packed (LHS pack) per call, so end-to-end gain depends on the framework integration. API may change between releases (two releases per month). Dual license files: Apache-2.0 and BSD-3-Clause in LICENSES/.",
+    "caveats": "First-party vs independent: the PR #11390 author is chaxu01 (Charles Xu; GitHub profile company 'Arm', Lund), so the integration and the Pixel 8 numbers are Arm's own; the M4 Pro, S25, M3 Max and A34 tables were posted by people outside Arm (max-krasnyansky is a member of the Qualcomm GitHub org, slaren is a ggml maintainer), and those independent tables mostly show KleidiAI slower than llama.cpp's own Arm kernels. Arm's own comment in the PR calls KleidiAI 'generally comparable' to those kernels, with degradation at high thread counts; on 2025-02-05 Arm noted that max-krasnyansky's runs lacked commit f4eb1b3 (multithreaded LHS packing), and on 2025-02-19 said the kernels 'are currently optimized for lower thread counts', so the scaling issue was still present at merge. The baseline is llama.cpp's own ggml Arm Q4_0 kernels, not a library on the project's baseline list (oneDNN, XNNPACK, Eigen). The later SME2 F32 claim (PR #24414: 4.3-23.6x vs ggml's native F32 path) is Arm-authored, gives no test name, build flags or BLAS/Accelerate setting, and no reviewer reproduced it. The KleidiAI README and the GitHub mirror carry no comparative figures; Arm's blog claims (ExecuTorch, MediaPipe, XNNPACK) were not opened. Values were read through WebFetch page extraction; the four headline M4 Pro values were consistent across three fetches. The PR conversation had 11 hidden items that WebFetch could not load. The GitHub repo is a read-only mirror of gitlab.arm.com/kleidi/kleidiai. Numbers are dated: KleidiAI and its llama.cpp integration changed substantially since (SME2 kernels, runtime kernel selection, dynamic scheduling in PR #23819).",
+    "found_via": [
+      "seed-record pass: https://github.com/ARM-software/kleidiai README, benchmark/README.md and CHANGELOG.md found no comparative numbers; then https://github.com/ggml-org/llama.cpp/pull/11390 (ggml-cpu: Add CPU backend support for KleidiAI library) opened directly; XNNPACK PR list https://github.com/google/XNNPACK/pulls?q=is%3Apr+kleidiai for integration status"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.5,
+    "has_code": true,
+    "assignment_ids": [
+      "w8-seed-d"
+    ],
+    "id": "https://github.com/arm-software/kleidiai",
+    "verification": {
+      "date": "2026-09-26",
+      "verdict": "downgrade",
+      "tier_before": "B",
+      "tier_reason": "The PR's independent measurements (slaren on M3 Max, max-krasnyansky on M4 Pro and Galaxy S25, rmatif on Galaxy A34) mostly show KleidiAI equal to or slower than llama.cpp's own Arm kernels; the only independent win is the SME path at 1-2 threads on M4 Pro (about 1.28-1.30x). The numbers showing a general win come from Arm: the PR author's Pixel 8 table (1.03-1.19x) and the later Arm-authored PR #24414 (SME2 F32, no test name or build flags), so the evidence for 'faster' is first-party with partial methodology.",
+      "notes": "Answer to the orchestrator: the PR is Arm-authored (chaxu01, profile company Arm), but the measurements the record cites were posted by non-Arm contributors (a Qualcomm org member and rmatif), and they show KleidiAI mostly not faster than llama.cpp's own kernels; Arm's own PR numbers are small wins. Downgraded to C; a shortcoming worth recording is 'independent llama.cpp measurements mostly slower than llama.cpp's own Arm kernels; wins only with SME at 1-2 threads'. The record's quoted 'PR summary' sentence was not found on the page.",
+      "urls_opened": [
+        "https://github.com/ggml-org/llama.cpp/pull/11390",
+        "https://github.com/ggml-org/llama.cpp/pull/24414",
+        "https://github.com/ggml-org/llama.cpp/pulls?q=is%3Apr+kleidiai",
+        "https://github.com/chaxu01",
+        "https://github.com/max-krasnyansky",
+        "https://github.com/ARM-software/kleidiai",
+        "https://github.com/ARM-software/kleidiai/commits/main",
+        "https://github.com/ARM-software/kleidiai/tree/main/LICENSES",
+        "https://raw.githubusercontent.com/ARM-software/kleidiai/HEAD/README.md",
+        "https://raw.githubusercontent.com/ARM-software/kleidiai/HEAD/LICENSES/Apache-2.0.txt"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "claimed_speedup": "Mixed, as posted by the PR contributors. Apple M4 Pro, SME kernels, 1 thread: pp128 205.39 t/s vs master 160.94, tg64 62.22 vs 47.84 (about 1.28x and 1.30x, derived from page data); 2 threads: pp 389.43 vs 312.10, tg 99.95 vs 87.31. At 4 threads SME is slower (pp 326.86 vs master 586.83, tg 110.52 vs 157.63) and at 10 threads slower again (pp 435.39 vs 1173.93, tg 162.36 vs 243.65). KleidiAI I8MM path on M4 Pro is about equal or slower (e.g. 4 threads pp 531.04 vs 586.83). Galaxy S25 (Snapdragon 8 Elite) I8MM slower in every row (1 thread pp 174.13 vs 181.23); Galaxy A34 pp512 87.11 vs 84.25 but tg128 11.00 vs 13.79. The PR's own summary: 'KleidiAI SME excels with 1-2 threads but degrades significantly at higher core counts. I8MM kernels consistently underperform'.",
+      "hardware": "Apple M4 Pro (SME and I8MM) run by max-krasnyansky; Samsung Galaxy S25 (Snapdragon 8 Elite) by the same contributor; Galaxy A34 (8 threads) by rmatif. Exact core configuration beyond thread counts not stated.",
+      "license": "Apache-2.0",
+      "caveats": "The only numeric comparison I could open is a third-party integration PR from February 2025, and it is not a clean win: faster only for SME at 1-2 threads on M4 Pro, slower at higher thread counts and for the I8MM path on the phones, against llama.cpp's own Arm kernels rather than a library on the project's baseline list (oneDNN, cuDNN, XNNPACK, Eigen). No XNNPACK-vs-KleidiAI numbers were visible: the open and merged XNNPACK KleidiAI PRs listed titles only, the KleidiAI README and CHANGELOG hold no comparative figures, and the repo's benchmark tool (benchmark/README.md) times KleidiAI variants against each other with placeholder output ('123 ns'). Arm's own published speedup claims (developer.arm.com blogs, ExecuTorch/MediaPipe posts) were not opened. The table values come from WebFetch's page summary; four values (205.39, 160.94, 62.22, 47.84) were cross-checked by a second fetch. Tier B is on the basis of independent contributors, public llama.cpp benchmark tooling, named CPU and build commands; it falls short of A because the PR does not tie each table to one compiler and flag set. KleidiAI has changed substantially since build 119d3bf (e.g. CHANGELOG lists later SME2/SVE GEMV/GEMM kernel improvements), so the numbers are dated; llama.cpp's current docs (docs/build.md) now say the backend selects the best compatible kernel at runtime rather than always using KleidiAI."
+    }
+  },
+  {
     "domain": "numerics-and-science",
     "category": "autodiff-and-ml-kernels",
     "baseline_in_list": true,
@@ -1271,6 +1394,63 @@
       "claimed_speedup": "Repo description: 'Quantized Attention achieves speedup of 2-5x compared to FlashAttention, without losing end-to-end metrics'. README: 'On RTX5090, SageAttention reaches 560T, 2.7x faster than FlashAttention2'; on Hopper 'matches the speed of FlashAttention3-FP8 but offers much better accuracy'.",
       "stars_or_usage": "about 4.0k stars; ICLR 2025, ICML 2025 and NeurIPS 2025 (spotlight) papers",
       "caveats": "Peer-review status is taken from the README (ICLR 2025, ICML 2025, NeurIPS 2025 spotlight); the papers could not be opened here. Most kernel numbers are in figure images; the README states the TOPS figures exclude quantization and smoothing overhead. Baseline is FlashAttention2/3, not cuDNN. README says it ships a benchmark/ directory comparing against FlashAttention2/3; the script was not opened."
+    }
+  },
+  {
+    "name": "SpargeAttn (SpargeAttention)",
+    "repo_url": "https://github.com/thu-ml/SpargeAttn",
+    "language": "C++ (CUDA) with Python bindings; Triton example",
+    "domain": "numerics-and-science",
+    "category": "autodiff-and-ml-kernels",
+    "baseline": "FlashAttention2 (Figure 2 legend 'FlashAttn'; Table 1 'Full-Attention' does not name the implementation)",
+    "baseline_in_list": false,
+    "metric": "throughput",
+    "workload": "Figure 2 (README image): attention kernel speed in TOPS versus sparsity on an RTX 4090, sequence length 22K, head dim 128; Table 1 (assets/exp_table.png): average per-layer attention speed in real generation runs for Llama3.1 (NeedleInAHaystack, 128K), CogVideoX (17K), Mochi (22K), Flux (4.5K) and Stable-Diffusion3.5 (4.5K), reported with accuracy metrics.",
+    "claimed_speedup": "Table 1 (assets/exp_table.png), average per-layer speed in TOPS, Full-Attention vs SpargeAttn (sparsity): Llama3.1 128K 156.9 vs 708.1 (0.54); CogvideoX 17K 166.0 vs 507.9 (0.46); Mochi 22K 164.2 vs 582.4 (0.47); Flux 4.5K 158.2 vs 280.3 (0.38); Stable-Diffusion3.5 4.5K 164.2 vs 293.0 (0.31); about 4.5x, 3.1x, 3.5x, 1.8x and 1.8x (derived from page data). Accuracy stays near dense (e.g. Llama3.1 WikiText perplexity 6.020 vs 6.013; Mochi CLIPSIM 0.1720 vs 0.1725). Figure 2 (assets/speed_comparison.png, RTX 4090, seq 22K, head dim 128; values read from the chart, approximate): FlashAttn about 165 TOPS flat; SageAttn about 300 flat; SpargeAttn+Sage2 about 410 at sparsity 0.1 rising to about 875 at 0.6 (about 2.5-5.3x over FlashAttn, derived); SpargeAttn+Sage about 320 to 675; SpargeAttn+FA2 about 183 at 0.1 to about 370 at 0.6 (about 1.1-2.2x, derived).",
+    "evidence_tier": "B",
+    "benchmark_url": "https://raw.githubusercontent.com/thu-ml/SpargeAttn/HEAD/assets/speed_comparison.png",
+    "baseline_stdlib": [],
+    "compiler_and_flags": null,
+    "hardware": "RTX 4090 stated for Figure 2; the GPU for Table 1 is not stated in the image.",
+    "compared_against_cpp_std_directly": null,
+    "license": "Apache-2.0",
+    "usability": "copyable",
+    "last_commit": "2026-02-25",
+    "maintenance_status": "active",
+    "is_fork_of": null,
+    "stars_or_usage": "1.3k stars; ICML 2025 paper (arXiv 2502.18137); from the SageAttention group (thu-ml)",
+    "tradeoffs": "Approximate attention: a training-free predicted block-sparse mask (block 128x64) skips work, so the 'topk' parameter trades accuracy for sparsity. The headline numbers stack sparsity on SageAttention's low-bit quantization (SpargeAttn+Sage/Sage2), so part of the gain over FlashAttention2 comes from quantized matmuls, not sparsity (SageAttention alone is about 300 vs FlashAttn about 165 TOPS in Figure 2, read from the chart). CUDA-only (CUDA 12.0+ Ampere, 12.3 Hopper fp8, 12.4 Ada fp8, 12.8 Blackwell), PyTorch 2.3+; older versions required per-model tuning, the recommended API now does not.",
+    "caveats": "Peer reviewed (ICML 2025) and the numbers sit in the repo as images from the paper (the README states acceptance, and the rendered README shows Figure 2; Table 1 is in assets/exp_table.png, referenced only inside an HTML comment in the README). Short of tier A: no compiler, flags or CPU model, and I found no kernel benchmark script in the repo listing (evaluate/ holds model examples for CogVideoX, Flux, Hunyuan and Wan; tools/ holds gpu_process.py). The README comment says Table 1 and the paper used the SageAttention-based SpargeAttn and that the SageAttention2-based version is about 30% faster, so Table 1 and the current API differ. TOPS for sparse kernels may count only executed or dense-equivalent operations: not stated on the opened pages. The baseline is FlashAttention2, not a library on the project's list. Numbers were read from images using the image viewer; chart values are approximate.",
+    "found_via": [
+      "seed-record pass: https://github.com/thu-ml/SpargeAttn README (assets/speed_comparison.png and assets/exp_table.png opened via raw.githubusercontent.com)"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.7,
+    "has_code": true,
+    "assignment_ids": [
+      "w8-seed-d"
+    ],
+    "id": "https://github.com/thu-ml/spargeattn",
+    "verification": {
+      "date": "2026-09-26",
+      "verdict": "confirm",
+      "tier_before": "B",
+      "tier_reason": "Peer-reviewed paper (ICML 2025, per the README) whose Figure 2 (README image, RTX 4090) and Table 1 (assets/exp_table.png) show SpargeAttn ahead of FlashAttention2 / full attention in kernel TOPS and per-layer speed, with accuracy metrics. Not A: no kernel benchmark script in the repo (Triton_SpargeAttn holds only triton_kernel_example.py; evaluate/ holds model examples), and no compiler or flags are stated.",
+      "notes": "Numbers in the record match the two images. Worth recording: most of the headline gain over FlashAttention2 comes from SageAttention's INT8 quantization (SageAttn alone is about 1.8x FlashAttn in Figure 2), with sparsity adding the rest; at sparsity 0.1 the FA2-based variant is only about 1.1x.",
+      "urls_opened": [
+        "https://github.com/thu-ml/SpargeAttn",
+        "https://github.com/thu-ml/SpargeAttn/commits/main",
+        "https://github.com/thu-ml/SpargeAttn/tree/main/Triton_SpargeAttn",
+        "https://raw.githubusercontent.com/thu-ml/SpargeAttn/HEAD/README.md",
+        "https://raw.githubusercontent.com/thu-ml/SpargeAttn/HEAD/LICENSE",
+        "https://raw.githubusercontent.com/thu-ml/SpargeAttn/HEAD/assets/speed_comparison.png",
+        "https://raw.githubusercontent.com/thu-ml/SpargeAttn/HEAD/assets/exp_table.png"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "claimed_speedup": "Table 1, speed in TOPS, Full-Attention vs SpargeAttn (sparsity): Llama3.1 156.9 vs 708.1 (0.54); CogvideoX 166.0 vs 507.9 (0.46); Mochi 164.2 vs 582.4 (0.47); Flux 158.2 vs 280.3 (0.38); StableDiffusion3.5 164.2 vs 293.0 (0.31); ratios about 4.5x, 3.1x, 3.5x, 1.8x and 1.8x (derived from page data). Figure 2 (values read from the chart, approximate): FlashAttn about 165 TOPS flat; SpargeAttn+Sage2 about 410 TOPS at sparsity 0.1 rising to about 875 at 0.6 (about 5.3x, derived); SpargeAttn+FA2 about 370 at 0.6 (about 2.2x over FlashAttn); SageAttention alone about 300. Accuracy in Table 1 stays near the dense baseline (e.g. Llama3.1 WikiText perplexity 6.020 vs 6.013 for full attention)."
     }
   },
   {
@@ -6238,6 +6418,61 @@
     }
   },
   {
+    "name": "libMetalFloat64 (philipturner/metal-float64; emulated FP64 on Apple GPUs)",
+    "repo_url": "https://github.com/philipturner/metal-float64",
+    "language": "Metal Shading Language (Swift package)",
+    "domain": "numerics-and-science",
+    "category": "big-integer-arbitrary-precision",
+    "baseline": "Native hardware FP64 on the Apple Silicon CPU (NEON) in the README table, and OpenCL FP64 in the precision table; the listed baselines GMP and MPFR are not compared",
+    "baseline_in_list": false,
+    "metric": "throughput",
+    "workload": "Theoretical maximum scalar giga-operations per second per operation (FFMA, FADD, FMUL, FCMPSEL, FCMP, FRECIP, FDIV, FRSQRT, FSQRT) for a reference system with an 8-core 3.064 GHz ARM CPU (four 128-bit vector ALUs per core) and a 32-core 1.296 GHz Apple GPU, computed from instruction counts and not measured.",
+    "claimed_speedup": "README 'Performance' table of maximum theoretical scalar Gops (not measured), CPU FP64 vs GPU FP32x2 (double-single, 1+47-bit mantissa): FFMA 392 vs 590, FADD 196 vs 482, FMUL 196 vs 758, FCMPSEL 196 vs 2123, FCMP 196 vs 1769, FRECIP 49 vs 196, FDIV 49 vs 183, FRSQRT 49 vs 171, FSQRT 49 vs 189 (ratios 1.5x to 10.8x, derived from page data). The 'GPU eFP64' column (float64_t with edge-case checking disabled) is empty. Text: 'Based on theoretical estimates, additions and multiplications will have 1/32-1/64 the throughput of their 32-bit counterparts.'",
+    "evidence_tier": "D",
+    "benchmark_url": "https://github.com/philipturner/metal-float64",
+    "baseline_stdlib": [],
+    "compiler_and_flags": null,
+    "hardware": "README reference system: 8-core 3.064 GHz ARM CPU and 32-core 1.296 GHz Apple GPU; the chip is not named.",
+    "compared_against_cpp_std_directly": false,
+    "license": "MIT",
+    "usability": "copyable",
+    "last_commit": "2023-05-17",
+    "maintenance_status": "abandoned",
+    "is_fork_of": null,
+    "stars_or_usage": "65 stars, 3 forks; archived (read-only) on 2024-08-11",
+    "has_code": true,
+    "tradeoffs": "Swift package that builds a Metal dynamic library and headers; needs an Apple6-family or newer GPU (A13 and later, Metal 3) and macOS Ventura on Intel Macs. Two precisions: float64_t is IEEE-compliant but the README gives no throughput for it, while float32x2_t has 1+47 mantissa bits, flushes denormals and has undefined INF/NaN results. Larger functions are called through the dynamic library, so inlining is partial. The planned 64-bit atomics use a lock buffer and the README warns that a missing useResource call can freeze half the GPU. Matrix types, division, square root and transcendentals were still planned; the README states the library is 'not a finished library'.",
+    "caveats": "The README says 'Still in the planning stage - this is not a finished library!'. The only numbers are theoretical peaks from instruction counts (the README's own 'maximum theoretical performance'); no workload was timed anywhere I could open, the eFP64 column (float64_t with edge-case checks disabled) is blank and the precision table is mostly '???'. The comparison is not like-for-like: the CPU column is full IEEE FP64, while the filled GPU column is FP32x2 double-single with an 8-bit exponent and 1+47-bit mantissa that flushes denormals and gives undefined results for INF/NAN. The comparison is against the CPU's hardware double, not the category baselines GMP or MPFR (software arbitrary precision), so the entry does not fit big-integer-arbitrary-precision; it would sit better with floating-point emulation or GPU numerics. The README credits GPT-4 for much of the work. Archived (read-only) on 2024-08-11; last commit 2023-05-17.",
+    "found_via": [
+      "seed-record pass: https://github.com/philipturner/metal-float64 README (Performance and Precision tables); also https://github.com/philipturner/openmm-benchmarks/tree/main/FP64Emulation (no results found)"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.6,
+    "assignment_ids": [
+      "w8-seed-e"
+    ],
+    "id": "https://github.com/philipturner/metal-float64",
+    "verification": {
+      "date": "2026-09-26",
+      "verdict": "confirm",
+      "tier_before": "D",
+      "tier_reason": "The README's Performance table is explicitly 'maximum theoretical performance' computed from instruction counts for an unnamed reference system, not a measurement; the IEEE-path eFP64 column is empty and nothing in the repo or the linked openmm-benchmarks/FP64Emulation folder (Trial1.swift, Trial2.swift, Trial3.cl, bing-conversation.md) times a real workload. The 'baseline' is the CPU's hardware FP64 peak, not GMP or MPFR.",
+      "notes": "README numbers match the record exactly; they are theoretical, so D stands. Wrong category (FP64 emulation on Apple GPUs vs CPU FP64, not arbitrary precision vs GMP/MPFR); 65 stars and tier D would allow a not-notable-tier-d reject, but I confirmed it so the keep-and-document rule applies. Metadata verified: MIT, 65 stars, 3 forks, not a fork, archived 2024-08-11, last commit 2023-05-17 ('Correct for rounding error'), abandoned.",
+      "urls_opened": [
+        "https://github.com/philipturner/metal-float64",
+        "https://github.com/philipturner/metal-float64/commits",
+        "https://raw.githubusercontent.com/philipturner/metal-float64/HEAD/README.md",
+        "https://github.com/philipturner/openmm-benchmarks/tree/main/FP64Emulation"
+      ],
+      "page_compares_against_baseline": false,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "claimed_speedup": "README table of theoretical Gops, CPU FP64 vs GPU FP32x2 (double-single) emulation: FFMA 392 vs 590, FADD 196 vs 482, FMUL 196 vs 758, FCMPSEL 196 vs 2123, FCMP 196 vs 1769, FRECIP 49 vs 196, FDIV 49 vs 183, FRSQRT 49 vs 171, FSQRT 49 vs 189 (ratios 1.5x to 10.8x, derived from page data). The 'GPU eFP64' column, the IEEE-compliant mode, is empty. Text: additions and multiplications 'will have 1/32-1/64 the throughput of their 32-bit counterparts', an estimate.",
+      "caveats": "The README says 'Still in the planning stage - this is not a finished library!'. There is no measured benchmark anywhere I could open: the table is labelled 'maximum theoretical performance', the eFP64 (IEEE) column is blank and the precision table is mostly '???'. The related philipturner/openmm-benchmarks FP64Emulation folder holds only Trial1.swift, Trial2.swift, Trial3.cl and a chat transcript, and I found no timing numbers in the trial files. The comparison is against the CPU's hardware double, not against the category baselines GMP or MPFR (software arbitrary precision), so it does not fit this category; it is filed here because the assignment placed it there. I set tier D because no real workload was timed; the README does contain theoretical numbers, so a verifier could treat it as C. Abandoned and archived."
+    }
+  },
+  {
     "name": "wjr (WJR big integer and utility library)",
     "repo_url": "https://github.com/wjr-z/wjr",
     "language": "C++",
@@ -7626,6 +7861,63 @@
     }
   },
   {
+    "name": "TTM / TLIB(TTM) (in-place tensor-times-matrix via loops-over-GEMM)",
+    "repo_url": "https://github.com/bassoy/ttm",
+    "language": "C++",
+    "domain": "numerics-and-science",
+    "category": "blas-lapack",
+    "baseline": "Eigen (Tensor module) and LibTorch tensor-matrix products, plus Intel MKL batched GEMM; the paper reports parity with TBLIS",
+    "baseline_in_list": true,
+    "metric": "throughput",
+    "workload": "Mode-q tensor-times-matrix product on dense tensors of many shapes and orders, large tensor slices highlighted, as reported in the author's Journal of Computational Science 2025 paper (details not seen).",
+    "claimed_speedup": "SNIPPET ONLY (search-engine summary of the paper abstract; the paper was not opened): best-performing algorithm reaches a median 2.47 TFLOPS on an Intel Xeon Gold 5318Y and 2.93 TFLOPS on an AMD EPYC 9354 for large tensor slices; 'outperforms batched GEMM implementation of Intel MKL by a factor of 2.57 with large tensor slices'; 'on average at least 6.21% and up to 334.31% faster' than frameworks implementing state-of-the-art approaches including Libtorch and Eigen; 'on par with TBLIS' for the majority of tensor shapes. The repo README gives no numbers ('For large tensors reaches peak matrix-times-matrix performance').",
+    "evidence_tier": "D",
+    "benchmark_url": "https://www.sciencedirect.com/science/article/pii/S1877750325000456",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "Paper build not seen. Repo example/Makefile: g++ -Wall -O3 -std=c++17 -fopenmp with the BLAS chosen through BLAS_FLAG (OPENBLAS, MKL or BLIS makefile fragments).",
+    "hardware": "Per the search snippet only: Intel Xeon Gold 5318Y and AMD EPYC 9354.",
+    "compared_against_cpp_std_directly": false,
+    "license": "LGPL-3.0",
+    "usability": "copyable",
+    "last_commit": "2025-03-24",
+    "maintenance_status": "stale",
+    "is_fork_of": null,
+    "stars_or_usage": "5 stars, 1 fork; Python bindings (ttmpy) in repo; the README asks users to cite the Journal of Computational Science 2025 article (vol. 87, art. 102568)",
+    "has_code": true,
+    "tradeoffs": "Header-only C++17 but requires an external BLAS (BLIS, MKL or OpenBLAS makefile fragments provided), so performance follows the chosen BLAS. float and double only, contiguously stored tensors, OpenMP 4.5 or newer for threading. In-place: no tensor transposition and no extra memory. Runtime choice of contraction mode, tensor order, extents and any linear layout. Task-loop parallelism added in late 2024.",
+    "caveats": "No numbers or baseline comparison in the repository: the README gives only a qualitative claim, the wiki home page has no benchmarks (the other three wiki pages failed to load), and example/measure.cpp (g++ -O3, cache flush between runs) times only TTM's own parallel/slicing/fusion variants. The comparison against Eigen, LibTorch, MKL batched GEMM and TBLIS exists only in the peer-reviewed article 'Design of a high-performance tensor-matrix multiplication with BLAS' (Bassoy, Journal of Computational Science 87, 2025, 102568; doi 10.1016/j.jocs.2025.102568), which neither the search agent nor the verifier could open (ScienceDirect, doi.org, arXiv and tore.tuhh.de are egress-blocked). Every number in claimed_speedup is from one search-engine summary of the abstract and is UNVERIFIED; per that summary the average gain over frameworks is as low as 6.21% and TBLIS is a tie for most shapes. It is the author's own benchmark of his own library; compiler, flags, library versions and whether the benchmark code is public are unknown. The author's GitHub account has no separate artifact repo (only ttm, ttv, tlib, simd, matrix and forks). The README badge says GPL while LICENSE.txt and GitHub show LGPL-3.0. A check that can open the paper should restore B (or A if it names a public artifact with compiler, flags and CPU), as for the sibling bassoy/ttv entry (B, ICCS 2019).",
+    "found_via": [
+      "seed-record pass: https://github.com/bassoy/ttm README, example/measure.cpp and example/Makefile; WebSearch 'Bassoy Design of a high-performance tensor-matrix multiplication with BLAS in-place TBLIS Eigen speedup' (snippet source)"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.5,
+    "assignment_ids": [
+      "w8-seed-e"
+    ],
+    "id": "https://github.com/bassoy/ttm",
+    "verification": {
+      "date": "2026-09-26",
+      "verdict": "downgrade",
+      "tier_before": "B",
+      "tier_reason": "Nothing I could open has numbers: the README says only 'For large tensors reaches peak matrix-times-matrix performance', the wiki home page has no benchmarks, and example/measure.cpp times only TTM's own variants with no Eigen, LibTorch, MKL batched-GEMM or TBLIS run. The peer-reviewed Journal of Computational Science 2025 article (vol. 87, 102568, cited in the README) holds the claimed comparison, but ScienceDirect is egress-blocked here and the record's figures come only from the search agent's search-engine summary, which I could not re-check (WebSearch off-limits for this run).",
+      "notes": "Downgraded B to D because no reachable page shows numbers; do not reject: the peer-reviewed JoCS 2025 article exists (README bibtex) and the sibling bassoy/ttv is already verified at B. Add to the paper-access retier follow-ups (likely B). Metadata verified: LGPL-3.0, 5 stars, 1 fork, not a fork, last commit 2025-03-24 ('Update README.md'), stale.",
+      "urls_opened": [
+        "https://github.com/bassoy/ttm",
+        "https://github.com/bassoy/ttm/commits",
+        "https://raw.githubusercontent.com/bassoy/ttm/HEAD/README.md",
+        "https://raw.githubusercontent.com/bassoy/ttm/HEAD/example/measure.cpp",
+        "https://github.com/bassoy/ttm/wiki",
+        "https://github.com/bassoy?tab=repositories"
+      ],
+      "page_compares_against_baseline": false,
+      "numbers_found_on_page": false
+    },
+    "corrected_fields": {
+      "benchmark_url": null,
+      "caveats": "I could not open the evidence: tore.tuhh.de returned EGRESS_BLOCKED and ScienceDirect, arXiv and ICCS pages are listed as blocked, so every number above is from one WebSearch result summary and is UNVERIFIED. Tier B rests on peer review (the README cites the paper as the article to cite) and on the snippet; it is the author's own benchmark of his own library, with the low end of the claimed range (6.21% average) marginal and TBLIS a tie. Whether the baselines were built with comparable flags, the compiler used, and whether the benchmark code is public are unknown. The repo has no baseline comparison: example/measure.cpp (g++ -O3, 10 iterations, 32 MB cache flush between runs) times only TTM's own parallel/slicing/fusion variants, and the wiki has no performance page (three of four wiki pages failed to load). The README badge says GPL while LICENSE.txt is the GNU LGPL version 3 (GitHub also shows LGPL-3.0). A verifier able to open the paper should confirm numbers, CPUs and flags and check for a public artifact repo, which could move this to A."
+    }
+  },
+  {
     "name": "Aliaksei Sala C++ GEMM (C++Now 2025 / CppCon 2025 talk)",
     "repo_url": null,
     "language": "C++",
@@ -7865,6 +8157,62 @@
       "compiler_and_flags": "-O3 (RK3399 build, per chgemm README); compiler name and version not stated; ARM assembly microkernels.",
       "claimed_speedup": "tpoisonooo/how-to-optimize-gemm README: chgemm int8 reaches up to 18.6 GFLOPS on one RK3399 core, against an fp32 single-core theoretical limit of 14.3 GFLOPS and 'gemmlowp about 12-14 GFLOPS' (roughly 1.3x to 1.55x vs gemmlowp, derived from page data). The chgemm README repeats 18.6 GFLOPS on RK3399 and about 23 GFLOPS on one AWS A72 core.",
       "caveats": "The gemmlowp number is an unsourced approximate range ('about 12-14 GFLOPS') in the README of a different repo (the tutorial how-to-optimize-gemm, GPLv3, 757 stars); no gemmlowp version, flags or shapes are given, and the peak 18.6 GFLOPS is a best case. GFLOPS here count int8 operations, so comparison with fp32 libraries is not like-for-like. Baseline gemmlowp is not one of OpenBLAS, MKL, Eigen or BLIS. Last commit June 2020. The same tutorial repo also shows a CUDA kernel above cuBLAS on an RTX 3080 as a graph with no numbers; not reported separately (GPU, off-baseline, no numbers)."
+    }
+  },
+  {
+    "name": "COSTA (communication-optimal distributed matrix redistribution and transpose; ScaLAPACK pxgemr2d/pxtran replacement)",
+    "repo_url": "https://github.com/eth-cscs/COSTA",
+    "language": "C++",
+    "domain": "numerics-and-science",
+    "category": "blas-lapack",
+    "baseline": "Intel MKL ScaLAPACK v19.1 pdgemr2d (matrix redistribution between block-cyclic layouts)",
+    "baseline_in_list": true,
+    "metric": "latency",
+    "workload": "pdgemr2d redistribution of square double-precision matrices with n = 20000 to 100000 between block-cyclic layouts, once with identical layouts (128x128 blocks) and once with different block sizes (36x36 to 128x128), on 8 Piz Daint nodes of 36 cores each with 16 MPI ranks (4x4 grid); COSTA run without rank relabelling and without memory pools.",
+    "claimed_speedup": "README chart data labels (docs/costa-same.svg and docs/costa-diff.svg, rendered locally; time in ms, COSTA vs MKL). Same layout: n=20000 14 vs 292; 40000 56 vs 1100; 60000 128 vs 2487; 80000 208 vs 4402; 100000 324 vs 6702 (chart caption '~20x faster'; ratios 19.4x to 21.2x derived from page data). Different layouts: n=20000 188 vs 406; 40000 702 vs 1987; 60000 1608 vs 4579; 80000 2900 vs 8012; 100000 4557 vs 12737 (chart caption 'up to 3x faster'; ratios 2.2x to 2.9x derived from page data). README overview text also says it 'outperforms other scalapack implementations by orders of magnitude in some cases'.",
+    "evidence_tier": "C",
+    "benchmark_url": "https://github.com/eth-cscs/COSTA",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "Not stated for the benchmark. CMakeLists.txt adds -funroll-loops (or -Munroll) and a build_type.cmake default that was not read; MKL ScaLAPACK v19.1 is named as the baseline; the MPI implementation and compiler are not given.",
+    "hardware": "Piz Daint (Cray XC40, CSCS), 8 nodes x 36 cores, 16 MPI ranks as a 4x4 grid; the CPU model is not stated on the page.",
+    "compared_against_cpp_std_directly": false,
+    "license": "BSD-3-Clause",
+    "usability": "copyable",
+    "last_commit": "2026-09-14",
+    "maintenance_status": "active",
+    "is_fork_of": null,
+    "stars_or_usage": "14 stars, 8 forks; used by COSMA, which is used by CP2K (README)",
+    "has_code": true,
+    "tradeoffs": "Needs MPI 3 and OpenMP and CMake 3.12 or newer. Drop-in ScaLAPACK wrappers (pdgemr2d, pstran, pdtran, pctranu/c and complex variants) take effect when COSTA is linked before ScaLAPACK. Handles arbitrary irregular layouts, not only block-cyclic, and can transform several layouts in one communication round at the cost of larger messages and more memory. Optional rank relabelling can remove communication entirely when layouts differ only by a rank permutation (not used in these charts).",
+    "caveats": "The baseline is MKL's ScaLAPACK redistribution routine pdgemr2d, not a BLAS or LAPACK kernel, so it only loosely fits the blas-lapack baselines. The identical-layout case (about 20x) most likely reflects MKL's slow generic path when no data needs to move (my inference, not stated by the authors). The charts are first-party; MKL and MPI settings, the compiler, flags and CPU model are not stated, and the README does not say which repetition or statistic is plotted (the miniapp's n_rep default is 2 and it prints every repetition's time in ms for both COSTA and ScaLAPACK). The benchmark code is public (miniapps/pxgemr2d_miniapp.cpp, pxtran_miniapp.cpp). The peer-reviewed paper (Kabic, Pintarelli, Kozhevnikov, VandeVondele, ISC 2021, Springer LNCS pp. 217-236; arXiv 2106.06601) is cited in the README but could not be opened (Springer and arXiv are blocked in this session); a check that can open it should consider B and whether its numbers match the README charts. 'Orders of magnitude' in the README overview is not shown by these charts (largest ratio about 21x). Numbers were read from the chart data labels.",
+    "found_via": [
+      "seed-record pass: https://github.com/eth-cscs/COSTA README (Performance Results section) and its docs/costa-same.svg and docs/costa-diff.svg charts, fetched via raw.githubusercontent.com"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.75,
+    "assignment_ids": [
+      "w8-seed-e"
+    ],
+    "id": "https://github.com/eth-cscs/costa",
+    "verification": {
+      "date": "2026-09-26",
+      "verdict": "confirm",
+      "tier_before": "C",
+      "tier_reason": "The README Performance Results section and its charts (docs/costa-same.svg, docs/costa-diff.svg, rendered here) show first-party pdgemr2d times for COSTA vs MKL ScaLAPACK v19.1 on 8 Piz Daint nodes, produced by the public miniapps/pxgemr2d_miniapp.cpp, which runs both COSTA and ScaLAPACK in one binary. No compiler, flags or CPU model is stated, so not A; the peer-reviewed ISC21 paper (Springer LNCS, arXiv 2106.06601) could not be opened, so B is not confirmed.",
+      "notes": "All ten COSTA/MKL data labels in the record match the rendered charts exactly, and the derived ratios (19.4x-21.2x same layout, 2.2x-2.9x different layouts) are correct. Paper-access retier candidate (likely B). Metadata verified: BSD-3-Clause, 14 stars, 8 forks, not a fork, not archived, last commit 2026-09-14 (v2.3.3), active.",
+      "urls_opened": [
+        "https://github.com/eth-cscs/COSTA",
+        "https://github.com/eth-cscs/COSTA/commits",
+        "https://raw.githubusercontent.com/eth-cscs/COSTA/HEAD/README.md",
+        "https://raw.githubusercontent.com/eth-cscs/COSTA/HEAD/docs/costa-same.svg",
+        "https://raw.githubusercontent.com/eth-cscs/COSTA/HEAD/docs/costa-diff.svg",
+        "https://raw.githubusercontent.com/eth-cscs/COSTA/HEAD/miniapps/pxgemr2d_miniapp.cpp"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "caveats": "The baseline is MKL's ScaLAPACK redistribution routine, not a BLAS or LAPACK kernel, so it only loosely fits the blas-lapack baselines. The identical-layout case (about 20x) most likely reflects MKL's slow generic path when no data needs to move (my inference, not stated by the authors). The charts are first-party; the number of repetitions, whether times are mean or minimum, and the MKL and MPI settings are not stated (the miniapp default is n_rep=2). The README says the benchmark code is public (miniapps/pxgemr2d_miniapp.cpp, pxtran_miniapp.cpp) but the compiler, flags and CPU model are missing, so not tier A. The peer-reviewed paper (Kabic, Pintarelli, Kozhevnikov, VandeVondele, ISC 2021, Springer; arXiv 2106.06601) is cited in the README but was not opened (Springer and arXiv are blocked in this session), so I kept tier C; a verifier who can open it should consider B and check whether the paper's numbers match the README charts. 'Orders of magnitude' in the README is not shown by these charts (largest ratio about 21x). The numbers were read from the data labels of the SVG charts, which are part of the README page."
     }
   },
   {
@@ -13722,6 +14070,63 @@
     }
   },
   {
+    "name": "fast_gicp (FastGICP / FastVGICP / FastVGICPCuda)",
+    "repo_url": "https://github.com/koide3/fast_gicp",
+    "language": "C++",
+    "domain": "numerics-and-science",
+    "category": "geometry-spatial",
+    "baseline": "PCL pcl::GeneralizedIterativeClosestPoint (GICP); also PCL NormalDistributionsTransform (NDT)",
+    "baseline_in_list": false,
+    "metric": "latency",
+    "workload": "Registering one pair of point-cloud scans (target 17,249 points, source 17,518 points after a 0.1 m approximate voxel grid) with GICP-family methods; wall time of a single alignment and of 100 repeated alignments, with fitness score reported.",
+    "claimed_speedup": "README table, i9-9900K + RTX 2080 Ti: pcl_gicp single 127.508 ms, 100 times 12549.4 ms (fitness 0.204892); pcl_ndt single 53.5904 ms, 100 times 5467.16 ms; fgicp_st (single thread) 111.324 ms / 10662.7 ms; fgicp_mt 20.1602 ms / 1585 ms (fitness 0.204412); vgicp_mt 18.1106 ms / 1381 ms; vgicp_cuda (parallel_kdtree) 15.9587 ms / 1451.85 ms; vgicp_cuda (gpu_rbf_kernel) 5.91508 ms / 590.725 ms (fitness 0.20557). Derived from page data versus pcl_gicp: fgicp_mt 6.3x (single) and 7.9x (100 runs); vgicp_mt 7.0x and 9.1x; vgicp_cuda rbf kernel 21.6x and 21.2x; single-threaded fgicp_st only 1.15x and 1.18x. README headline rates: FastGICP ~40 FPS, FastGICPSingleThread ~15 FPS, FastVGICP ~70 FPS, FastVGICPCuda ~120 FPS, NDTCuda ~500 FPS.",
+    "evidence_tier": "C",
+    "benchmark_url": "https://github.com/koide3/fast_gicp",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "CMakeLists.txt sets CMAKE_BUILD_TYPE Release (CMake default Release flags) and adds OpenMP flags; no -march option seen. Compiler name and version not stated (README says tested on Ubuntu 18.04/20.04 with CUDA 11.1).",
+    "hardware": "Core i9-9900K, GeForce RTX 2080 Ti",
+    "compared_against_cpp_std_directly": false,
+    "license": "BSD-3-Clause",
+    "usability": "copyable",
+    "last_commit": "2025-04-24",
+    "maintenance_status": "stale",
+    "is_fork_of": null,
+    "stars_or_usage": "1.7k stars, 374 forks",
+    "has_code": true,
+    "tradeoffs": "Drop-in PCL registration interface, but depends on PCL, Eigen, OpenMP, Sophus and (for CUDA) nvbio. VGICP is a voxelized approximation of GICP and the GPU rbf-kernel covariance mode is described in the source as 'extremely fast but maybe a bit inaccurate' (its fitness score 0.20557 is the worst in the table). README notes that using fewer threads than the maximum can be faster in some environments. The author's newer small_gicp (already on the known list) is stated in the README to be twice as fast as fast_gicp.",
+    "caveats": "Tier would be A except that the compiler is never named and the flags come only from the CMake Release default plus OpenMP, so it stays C (own-repo benchmark with partial methodology). Benchmark code is public (src/align.cpp) but the README shows a single scan pair (data/251370668.pcd vs 251371071.pcd) on one machine. Most of the speedup comes from multithreading and GPU use against PCL's default single-threaded GICP/NDT: fgicp_mt and vgicp_mt both run with omp_get_max_threads() (FastGICP's constructor default; align.cpp leaves setNumThreads(8) commented out), and the thread count actually used on the 8-core/16-thread i9-9900K is not printed. Single-threaded fgicp_st is only about 1.15x faster than pcl_gicp. The PCL version is not stated; iteration and convergence settings are each class's defaults and were not verified to be identical; pcl_ndt reaches a worse fitness (0.2296) than the GICP variants (about 0.204), so it is a different algorithm rather than a like-for-like baseline. align.cpp also prints ndt_cuda rows that the README output omits. The ICRA 2021 VGICP paper was not opened. The README badges and install commands still point to SMRT-AIST/fast_gicp (the copyright holder), and the README now announces small_gicp (already listed as koide3/small_gicp) as the faster successor library. Last commit 2025-04-24 (over 12 months).",
+    "found_via": [
+      "seed-record pass: https://github.com/koide3/fast_gicp README Benchmark section, src/align.cpp and CMakeLists.txt via raw.githubusercontent.com, commits page"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.75,
+    "assignment_ids": [
+      "w8-seed-i"
+    ],
+    "id": "https://github.com/koide3/fast_gicp",
+    "verification": {
+      "date": "2026-09-26",
+      "verdict": "confirm",
+      "tier_before": "C",
+      "tier_reason": "README Benchmark section shows pcl_gicp and pcl_ndt against fgicp/vgicp variants on a Core i9-9900K + RTX 2080 Ti, produced by the public src/align.cpp; CMakeLists.txt forces CMAKE_BUILD_TYPE Release plus OpenMP, but the compiler is never named, so it cannot be A and stays first-party C.",
+      "notes": "Benchmark table, hardware line and BSD-3-Clause license verified from the README, LICENSE, CMakeLists.txt and src/align.cpp; github.com page shows 1.7k stars, 374 forks, not archived, not a fork; last commit 2025-04-24 (stale). Separate project from the already-listed successor koide3/small_gicp, so not a duplicate, but worth cross-linking.",
+      "urls_opened": [
+        "https://github.com/koide3/fast_gicp",
+        "https://github.com/koide3/fast_gicp/commits",
+        "https://raw.githubusercontent.com/koide3/fast_gicp/HEAD/README.md",
+        "https://raw.githubusercontent.com/koide3/fast_gicp/HEAD/CMakeLists.txt",
+        "https://raw.githubusercontent.com/koide3/fast_gicp/HEAD/src/align.cpp",
+        "https://raw.githubusercontent.com/koide3/fast_gicp/HEAD/LICENSE",
+        "https://raw.githubusercontent.com/koide3/fast_gicp/HEAD/include/fast_gicp/gicp/impl/fast_gicp_impl.hpp"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "caveats": "Tier would be A except that the compiler is never named and the flags come only from the CMake Release default, so it stays C (own-repo benchmark with partial methodology). Benchmark code is public (src/align.cpp) but the README shows a single scan pair and one machine. Most of the speedup comes from multithreading and GPU use against PCL's default GICP/NDT; the thread count is not stated (src/align.cpp uses omp_get_max_threads for vgicp_mt and the default for fgicp_mt) and the PCL version is not stated. Iteration and convergence settings are each class's defaults and were not verified to be identical. The ICRA 2021 VGICP paper (easychair preprint) was not opened. The README links the SMRT-AIST/fast_gicp organisation in badges and install commands, so the repo may have moved. Last commit 2025-04-24 (over 12 months)."
+    }
+  },
+  {
     "name": "fastquadtree",
     "repo_url": "https://github.com/Elan456/fastquadtree",
     "language": "Rust",
@@ -14134,6 +14539,73 @@
       "claimed_speedup": "README shows charts only (no table). Approximate values read off the README charts: insertion on MARINE at capacity 512 about 31.8 s (Boost) vs about 25 s (Indexicon), roughly 20% faster; range query on MARINE at capacity 32 about 425 ms vs about 280 ms (roughly 34% faster); TORONTO capacity 32 about 38.5 ms vs about 30.5 ms; near parity on MIAMI and TIGER at some capacities (derived from page data).",
       "compiler_and_flags": null,
       "caveats": "Own benchmark against Boost only, shown as chart images; compiler, flags and CPU are not on the README and the comprehensive results are in an arXiv preprint (2606.04676) that could not be opened (arxiv.org blocked). Which Boost balancing algorithm (linear, quadratic, rstar) was used is not stated. Gains are modest (about 10-35%) and some configurations are at parity. Repo created 2026-05."
+    }
+  },
+  {
+    "name": "iOverlay (Rust polygon boolean overlay engine)",
+    "repo_url": "https://github.com/iShape-Rust/iOverlay",
+    "language": "Rust",
+    "domain": "numerics-and-science",
+    "category": "geometry-spatial",
+    "baseline": "Clipper2 (C++ polygon clipping library, v1.4.0); also Boost.Geometry (Boost 1.86.0)",
+    "baseline_in_list": false,
+    "metric": "latency",
+    "workload": "Checkerboard polygon boolean-operation test with up to 8,384,513 squares, iOverlay (Rust, multithreading feature on) versus Clipper2, as reported in the project's performance comparison page.",
+    "claimed_speedup": "Performance Comparison page (seconds; 3 GHz 6-Core Intel Core i5; iOverlay Rust v1.9.0 multithreading on/off, iOverlay Swift v1.13.0, Clipper2 C++ v1.4.0, Boost C++ 1.86.0). Checkerboard test, 8,384,513 squares: Rust mt on 33.742 s, Rust mt off 38.640 s, Clipper2 644.338 s, about 19.1x (mt on) and 16.7x (mt off) faster (derived from page data); at 2,095,105 squares 7.94 s / 9.29 s versus 73.31 s. Not Overlap, 8,384,513 squares: 9.60 s / 13.51 s versus 167.97 s (17.5x / 12.4x, derived). Windows, 8,388,608: 12.06 s / 15.48 s versus 265.39 s (22.0x / 17.1x, derived). Spiral, 1,048,576: 3.23 s / 3.19 s versus 259.87 s (about 80x, derived). Lines Net 4096: 7.70 s / 7.51 s versus 45.93 s (about 6x, derived). Nested Squares 65,536: 2.20 s / 4.03 s versus 3502.23 s for Clipper2. Clipper2 is as fast or faster on small inputs (for example Checkerboard 481 squares 1.017 ms versus 1.117 ms; Lines Net up to 256; Spiral up to 1024). Boost is far slower where it ran (Checkerboard 32,513 squares 412.6 s versus 0.092 s for Rust mt off) and has no results for the largest sizes. The repo README chart separately reports iOverlay-internal relative times only (Apple M4, 24 GB, geometric mean, i32 multithreading off = 1.00x: i16 off 0.92x, i64 off 1.30x, i16 on 0.85x, i32 on 0.86x, i64 on 1.08x).",
+    "evidence_tier": "C",
+    "benchmark_url": "https://ishape-rust.github.io/iShape-js/overlay/performance/performance.html",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "Benchmark apps in iShape-Rust/iOverlayPerformance: ClipperApp/build.sh runs cmake -DCMAKE_BUILD_TYPE=Release (CMake default Release flags, C++17, Clipper2 sources compiled in); BoostApp CMakeLists sets C++17 and no build type; iOverlayAppRust/Cargo.toml release profile opt-level 3, lto false, codegen-units 1. Compiler names and versions (C++ and Rust) not stated.",
+    "hardware": "Comparison page: 3 GHz 6-Core Intel Core i5, 40 GB 2667 MHz DDR4 (exact CPU model not given). Repo README relative-time chart: Apple M4, 24 GB.",
+    "compared_against_cpp_std_directly": false,
+    "license": "MIT OR Apache-2.0",
+    "usability": "copyable",
+    "last_commit": "2026-09-24",
+    "maintenance_status": "active",
+    "is_fork_of": null,
+    "stars_or_usage": "211 stars, 18 forks; i_overlay crate 9.0 million total downloads and 4.2 million recent downloads on crates.io (API read 2026-10-02); README says it powers polygon boolean operations in georust/geo",
+    "has_code": true,
+    "tradeoffs": "Rust crate, so usable from C++ only through an FFI layer (the API offers a flat, FFI-friendly shape hierarchy). Integer (i16/i32/i64) and float (f32/f64) engines; the large-input gain depends on the allow_multithreading Cargo feature (rayon). Also offers slicing, clipping, offsetting and spatial predicates.",
+    "caveats": "Rust library (C++ is only the baseline). The comparison page lives on ishape-rust.github.io, which is EGRESS_BLOCKED; its numbers were read from the page's checked-in mdBook output at iShape-Rust/iShape-js docs/overlay/performance/performance.html via raw.githubusercontent.com. First-party benchmark by the iOverlay author: the CPU is described only as '3 GHz 6-Core Intel Core i5', no compiler or toolchain is named, BoostApp sets no CMake build type, and ClipperApp also carries a cmake-build-debug directory, so it is not established that every baseline ran an optimised build (build.sh does request Release for Clipper2). Clipper2 runs single-threaded; the 'mt on' column uses iOverlay's multithreading, while 'mt off' is the fair single-thread comparison (16.7x on the largest checkerboard). The measured versions are old: iOverlay Rust v1.9.0 (crates.io 2024-11-20) versus current 9.0.0, and Clipper2 v1.4.0; the perf app now builds iOverlay from a local path, so the published table may not match the code in the repo today. Clipper2 is equal or faster on small inputs and on Lines Net/Spiral up to about a thousand elements; the large factors come from asymptotic behaviour on adversarial synthetic grids, not typical GIS data. Boost results stop at mid sizes. The repo README chart itself shows only internal engine variants (multithreading cuts relative time by about 8 to 17 percent on average). OpenROAD discussion #5864 (opened by the search agent, written by the iOverlay author) separately claims xOverlay is 10-20x faster than Boost.Polygon in most benchmarks; not verified here.",
+    "found_via": [
+      "seed-record pass: https://github.com/iShape-Rust/iOverlay (README via raw.githubusercontent.com, performance/rust_app, commits page); WebSearch query 'iOverlay i_overlay Rust polygon boolean benchmark faster than Clipper2 GEOS geo performance comparison'; https://github.com/The-OpenROAD-Project/OpenROAD/discussions/5864"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.5,
+    "assignment_ids": [
+      "w8-seed-i"
+    ],
+    "id": "https://github.com/ishape-rust/ioverlay",
+    "verification": {
+      "date": "2026-09-26",
+      "verdict": "confirm",
+      "tier_before": "C",
+      "tier_reason": "The Performance Comparison page (read from its source in iShape-Rust/iShape-js docs/) times iOverlay against Clipper2 v1.4.0 and Boost 1.86 on six tests using the public iShape-Rust/iOverlayPerformance code, but the CPU is given only as '3 GHz 6-Core Intel Core i5' and no compiler is named, so it is first-party with partial methodology: C.",
+      "notes": "Benchmark page now verified from its source in iShape-Rust/iShape-js (github.io itself blocked); the 33.7 s versus 644.3 s figures match the Checkerboard row exactly. Tier stays C (CPU model and compiler missing); crates.io shows 9.0M downloads, so the 'over 5 million' usage line was corrected. Last commit 2026-09-24, MIT OR Apache-2.0 confirmed.",
+      "urls_opened": [
+        "https://github.com/iShape-Rust/iOverlay",
+        "https://github.com/iShape-Rust/iOverlay/commits",
+        "https://raw.githubusercontent.com/iShape-Rust/iOverlay/HEAD/iOverlay/README.md",
+        "https://raw.githubusercontent.com/iShape-Rust/iShape-js/HEAD/docs/overlay/performance/performance.html",
+        "https://github.com/iShape-Rust/iOverlayPerformance",
+        "https://github.com/iShape-Rust/iOverlayPerformance/tree/main/ClipperApp",
+        "https://raw.githubusercontent.com/iShape-Rust/iOverlayPerformance/HEAD/ClipperApp/CMakeLists.txt",
+        "https://raw.githubusercontent.com/iShape-Rust/iOverlayPerformance/HEAD/ClipperApp/build.sh",
+        "https://raw.githubusercontent.com/iShape-Rust/iOverlayPerformance/HEAD/ClipperApp/run.sh",
+        "https://raw.githubusercontent.com/iShape-Rust/iOverlayPerformance/HEAD/BoostApp/CMakeLists.txt",
+        "https://raw.githubusercontent.com/iShape-Rust/iOverlayPerformance/HEAD/iOverlayAppRust/Cargo.toml",
+        "https://crates.io/api/v1/crates/i_overlay"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "claimed_speedup": "Search-result snippet of the project's Performance Comparison page (snippet only, page not opened): 8,384,513 squares in 33.7 s for iOverlay Rust with multithreading versus 644.3 s for Clipper2, about 19x (derived from snippet data). The repo's own README chart only reports iOverlay-internal relative times (Apple M4, 24 GB, geometric mean, i32 multithreading off = 1.00x: i16 off 0.92x, i64 off 1.30x, i16 on 0.85x, i32 on 0.86x, i64 on 1.08x).",
+      "baseline": "Clipper2 (C++ polygon clipping library)",
+      "compiler_and_flags": "In-repo perf app (performance/rust_app/Cargo.toml): release profile opt-level 3, lto false, codegen-units 1; it depends on crates.io i_overlay 7.0.0. Rust toolchain version and Clipper2 build flags not seen.",
+      "hardware": "Apple M4, 24 GB for the in-repo relative-time chart; hardware of the Clipper2 comparison not seen.",
+      "stars_or_usage": "211 stars; over 5 million crates.io downloads (author's claim); core of georust/geo polygon boolean operations",
+      "caveats": "Rust only, and the numbers were NOT opened: ishape-rust.github.io is EGRESS_BLOCKED, so the 33.7 s versus 644.3 s figure comes from a WebSearch snippet and was never checked against the page, the thread count, the hardware or the Clipper2 build. The repo carries no Clipper2, geo, Boost.Geometry, CGAL or GEOS comparison: performance/rust_app benchmarks only iOverlay itself, and the README SVG shows only internal engine variants. The README says multithreading matters most for bigger data sets; its own average chart shows multithreading cutting relative time by only about 8 to 17 percent on average. OpenROAD discussion #5864 (opened, written by the iOverlay author) links the same comparison page and separately claims the sister library xOverlay is 10-20x faster than Boost.Polygon in most benchmarks except Nested Squares, but gives no hardware or compiler. Tier C under the snippet-only rule; no Boost.Geometry, CGAL or GEOS baseline evidence found."
     }
   },
   {
@@ -14622,6 +15094,64 @@
       "claimed_speedup": "Union ~0.093 s, about 3.5x faster than Manifold and 47x faster than CGAL; on dental scan 'CGAL hangs and MCut fails, while MeshLib finishes in 44 ms'.",
       "license": null,
       "caveats": "Vendor blog benchmark (company sells the product); compiler and flags not stated; raw data only in a downloadable PDF not opened. Source-available, free for non-commercial and educational use only (commercial licence required), so reference, not OSI. Default threading versus serial CGAL."
+    }
+  },
+  {
+    "name": "ParGeo (parallel 3D convex hull and kd-tree library)",
+    "repo_url": "https://github.com/ParAlg/ParGeo",
+    "language": "C++",
+    "domain": "numerics-and-science",
+    "category": "geometry-spatial",
+    "baseline": "CGAL (3D convex hull) and Qhull",
+    "baseline_in_list": true,
+    "metric": "throughput",
+    "workload": "Wall-clock time to compute 3D convex hulls of synthetic and scanned point sets on 36 cores with two-way hyper-threading, ParGeo Pseudohull / divide-and-conquer versus Qhull and CGAL (the repo's own benchmark/hull3d_bench.cpp uses 10M-point in-sphere, on-sphere, in-cube and on-cube sets plus scanned models such as Armadillo, Dragon, Buddha, Thai Statue, Lucy, but only runs ParGeo's own variants).",
+    "claimed_speedup": "From a search-result snippet of the ESA 2022 paper (paper not opened): fastest ParGeo convex hull up to 44.7x self-relative parallel speedup and up to 559x speedup against the best existing sequential implementation; Pseudohull up to 43.7x parallel speedup compared to Qhull and up to 5.05x over CGAL on 3-dimensional shapes. Exact paper wording and the per-dataset table were not verified.",
+    "evidence_tier": "C",
+    "benchmark_url": "https://arxiv.org/pdf/2207.01834",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "Repo CMakeLists.txt: C++17, -DHOMEGROWN -pthread -mcx16 -O3 -DNDEBUG -fPIC (parlaylib homegrown scheduler); compiler name and version not stated in the repo, and the paper's setup was not readable.",
+    "hardware": "36 cores with two-way hyper-threading (72 threads; repo benchmark sets maxThreads = 72); CPU model not seen because the paper was unreachable.",
+    "compared_against_cpp_std_directly": false,
+    "license": "MIT",
+    "usability": "copyable",
+    "last_commit": "2022-09-12",
+    "maintenance_status": "abandoned",
+    "is_fork_of": null,
+    "stars_or_usage": "54 stars; ESA 2022 paper (LIPIcs, per search results) and PPoPP 2022 poster",
+    "has_code": true,
+    "tradeoffs": "Needs a multicore machine to win: the headline speedups come from parallelism, not from a faster sequential algorithm. Depends on the parlaylib git submodule and Google Benchmark/Google Test. Point dimension is a template parameter (2 to 7 supported for most modules); convex hull is 2D and 3D only. The README does not discuss numerical robustness or degenerate inputs, and the repo benchmark uses float points.",
+    "caveats": "Numbers are from a search-result snippet only: arxiv.org, drops.dagstuhl.de, par.nsf.gov, www.cs.ucr.edu and www.cs.umd.edu were all EGRESS_BLOCKED (www.cs.ucr.edu re-checked by the verifier), so benchmark_url was NOT opened and the CPU model, compiler, baseline versions and point types are unknown. Tier is C under the cloud-harness rule for snippet-only evidence; a peer-reviewed ESA 2022 paper exists (B candidate, A if the paper or artifact states compiler, flags and CPU), so re-tier when paper access is available. The repo itself carries no CGAL or Qhull comparison: benchmark/hull3d_bench.cpp times only serialQuick_* versus pseudo_* on 10M synthetic sets and scanned models, with maxThreads = 72. Root CMakeLists.txt sets -DHOMEGROWN -pthread -mcx16 -O3 -DNDEBUG -fPIC (parlaylib scheduler). The README cites only the PPoPP 2022 poster and the GeoGraph paper, while the lead named ESA 2022; the ESA title match came from the search snippet. Parallel versus sequential baselines means unequal core counts; the 559x figure is against 'best existing sequential implementation', not CGAL. The original repo wangyiqiu/pargeo (12 stars) now points to ParAlg/ParGeo. Last commit 2022-09-12 (over 4 years, not archived).",
+    "found_via": [
+      "seed-record pass: https://github.com/ParAlg/ParGeo (README, benchmark/ directory, commits page); WebSearch query 'ParGeo parallel computational geometry library convex hull kd-tree speedup over CGAL Qhull cores PPoPP 2022' supplied the paper snippet"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.55,
+    "assignment_ids": [
+      "w8-seed-i"
+    ],
+    "id": "https://github.com/paralg/pargeo",
+    "verification": {
+      "date": "2026-09-26",
+      "verdict": "confirm",
+      "tier_before": "C",
+      "tier_reason": "benchmark_url (arXiv 2207.01834) is on a host the cloud harness marks EGRESS_BLOCKED and was not opened, and the README-cited PPoPP poster (www.cs.ucr.edu) returned EGRESS_BLOCKED; the repo's benchmark/hull3d_bench.cpp only times ParGeo's own serial quickhull versus pseudohull, so the CGAL/Qhull numbers remain snippet-only and stay C.",
+      "notes": "Repo metadata verified on github.com (MIT, 54 stars, 13 forks, not archived, not a fork, last commit 2022-09-12 'Fix compilation', so abandoned). The paper could not be opened, so the CGAL/Qhull speedups are unverified; queue for a paper-access retier (possible B).",
+      "urls_opened": [
+        "https://github.com/ParAlg/ParGeo",
+        "https://github.com/ParAlg/ParGeo/commits/main",
+        "https://github.com/ParAlg/ParGeo/tree/main/benchmark",
+        "https://raw.githubusercontent.com/ParAlg/ParGeo/HEAD/README.md",
+        "https://raw.githubusercontent.com/ParAlg/ParGeo/HEAD/CMakeLists.txt",
+        "https://raw.githubusercontent.com/ParAlg/ParGeo/HEAD/benchmark/hull3d_bench.cpp",
+        "https://github.com/wangyiqiu?tab=repositories",
+        "https://github.com/wangyiqiu/pargeo"
+      ],
+      "page_compares_against_baseline": null,
+      "numbers_found_on_page": null
+    },
+    "corrected_fields": {
+      "caveats": "Numbers are from a search-result snippet only: arxiv.org, drops.dagstuhl.de, par.nsf.gov, www.cs.ucr.edu and www.cs.umd.edu were all EGRESS_BLOCKED, so benchmark_url was NOT opened and the CPU model, compiler, flags, baseline versions and point types are unknown. Tier is C under the cloud-harness rule for snippet-only evidence; a peer-reviewed ESA 2022 paper exists (B candidate, A if the paper or artifact states compiler, flags and CPU), so re-tier when paper access is available. The repo itself carries no CGAL or Qhull comparison: benchmark/*.cpp only time ParGeo's own algorithms (serial quickhull vs pseudohull, SEB variants). The README cites only the PPoPP 2022 poster and a GeoGraph paper, while the lead named ESA 2022; the ESA title match came from the search snippet. Parallel versus sequential baselines means unequal core counts; the 559x figure is against 'best existing sequential implementation', not CGAL. Last commit 2022-09-12 (over 4 years, not archived)."
     }
   },
   {
@@ -18377,6 +18907,70 @@
     }
   },
   {
+    "name": "Kokkos Kernels SpGEMM (KKSPGEMM / KKMEM)",
+    "repo_url": "https://github.com/kokkos/kokkos-kernels",
+    "language": "C++",
+    "domain": "numerics-and-science",
+    "category": "sparse-and-solvers",
+    "baseline": "cuSPARSE SpGEMM (CUDA 8.0.44) on P100; Intel MKL sparse-sparse multiply (MKL-INS, MKL7, MKL8 variants; intel-18.0.128) on Knights Landing",
+    "baseline_in_list": false,
+    "metric": "latency",
+    "workload": "Sparse matrix-matrix multiplication (symbolic plus numeric phases, 'NoReuse' case) on 81-83 SuiteSparse/UFL multiplications (mostly A*A); best time over thread counts per method; Kokkos 2.50 / Kokkos Kernels 2.60; the wiki ties the setup to the Deveci et al. paper 'Multi-threaded Sparse Matrix-Matrix Multiplication for Many-Core and GPU Architectures'.",
+    "claimed_speedup": "All figures derived from page data (I parsed the xlsx tables linked from the SpGEMM_Benchmarks wiki page, skipping their summary rows; ratio = baseline time / KKSPGEMM time per matrix, then geometric mean over matrices where both ran). P100: KKSPGEMM faster than cuSPARSE on 75 of 81 multiplications, geomean 3.61x (the table's own geomean row shows 0.441 s vs 0.122 s); faster than viennaCL CUDA on 62 of 72, geomean 1.95x; but NOT faster than Nsparse (faster on only 28 of 77, geomean ratio 0.92x). KNL flat-DDR: versus MKL-INS 1.25x (faster on 63 of 83), MKL7 1.79x (75 of 83), MKL8 2.95x (72 of 78). KNL cache mode: MKL-INS 1.19x (56 of 83), MKL7 2.25x (80 of 83), MKL8 3.75x (77 of 78). Power8 OpenMP versus viennaCL: 2.79x (78 of 83).",
+    "evidence_tier": "A",
+    "benchmark_url": "https://raw.githubusercontent.com/wiki/kokkos/kokkos-kernels/SpGEMM_Benchmarks.md",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "P100 runs: nvcc_wrapper with gcc 5.4.0 and CUDA 8.0.44, CXXFLAGS='-Wall -pedantic -Werror -O3 -g -Wshadow -Wsign-compare -Wignored-qualifiers -Wempty-body -Wclobbered -Wuninitialized', KOKKOS_ARCHS=Pascal60,Power8, KOKKOSKERNELS_TPLS=cusparse, eti-only, double/int; KNL runs: icpc from module intel/compilers/18.0.128 (the SpGEMM page names MKL intel-18.0.128) with the same CXXFLAGS, KOKKOS_ARCHS=KNL, MKL TPL; Power8 runs: g++ 5.4.0, same CXXFLAGS, KOKKOS_ARCHS=Power8. OMP_PROC_BIND=spread, OMP_PLACES=threads; 6 runs with the first discarded as warm-up.",
+    "hardware": "NVIDIA Tesla P100-SXM2-16GB (host Power8, machine 'White'); Intel Knights Landing 68-core nodes (machine 'Bowman', up to 256 threads, quadrant mode); Power8 for the viennaCL comparison. Exact CPU SKUs not stated.",
+    "compared_against_cpp_std_directly": null,
+    "license": "Apache-2.0 WITH LLVM-exception",
+    "usability": "copyable",
+    "last_commit": "2026-10-01",
+    "maintenance_status": "active",
+    "is_fork_of": null,
+    "stars_or_usage": "403 stars",
+    "has_code": true,
+    "tradeoffs": "Templated C++ on top of Kokkos (needs the Kokkos library, explicit template instantiation 'eti-only' builds); one source targets OpenMP, CUDA and other Kokkos backends instead of hand-tuned vendor code. Also wraps cuSPARSE, MKL, cuBLAS and MAGMA as optional TPLs. Covers BLAS, sparse BLAS, graph (coloring, triangle counting), Gauss-Seidel and batched kernels. Performance depends on the Kokkos backend and architecture flags chosen at build time.",
+    "caveats": "Results are from 2018 (Kokkos 2.50, Kokkos Kernels 2.60, CUDA 8 cuSPARSE, MKL 18.0, P100 and KNL hardware); modern cuSPARSE/MKL SpGEMM may differ. On P100 KKSPGEMM is on average slower than Nsparse (v1.2): faster on only 28 of 77 multiplications, geomean 0.92x (derived from page data). None of the baselines is in the catalog's listed set (SuiteSparse, Eigen sparse, PETSc). Per-matrix times are best over thread counts (32-256), and MKL-INS times exclude Trilinos-style post-processing ('Actual DOUBLE MKL SPMM Time Without Free'), while MKL7/MKL8 exclude 1-based conversion. KNL CPU SKU is not given (only '68 cores', quadrant mode), Power8 SKU not given; the P100 GPU model is stated in the logged output. The current perf_test driver no longer offers the cuSPARSE/MKL/viennaCL algorithm options; reproducing needs the 2.6.00-era tag. The wiki is marked deprecated in favour of kokkos.org docs. The P100 xlsx sheet is named 'Power8' internally but holds the P100 columns (KKSPGEMM, KKMEM, KKLP, cuSPARSE, Nsparse, viennaCL). The wiki SpMV page compares only against Kokkos Kernels' own reference, so SpMV carries no incumbent comparison.",
+    "found_via": [
+      "seed-record pass: https://github.com/kokkos/kokkos-kernels (repo wiki Benchmarks and SpGEMM_Benchmarks pages)"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.7,
+    "assignment_ids": [
+      "w8-seed-h"
+    ],
+    "id": "https://github.com/kokkos/kokkos-kernels",
+    "verification": {
+      "date": "2026-09-26",
+      "verdict": "confirm",
+      "tier_before": "A",
+      "tier_reason": "The SpGEMM_Benchmarks wiki links raw per-matrix tables (xlsx) against cuSPARSE (CUDA 8.0.44), MKL 18.0.128 and viennaCL 1.7.1; the benchmark driver is public (perf_test/sparse/KokkosSparse_spgemm.cpp at tag 2.6.00 exposes --algorithm CUSPARSE|MKL|MKL2|VIENNA), and the configure pages give compilers, full CXXFLAGS, run procedure and the GPU model (Tesla P100-SXM2-16GB). I re-derived every ratio in claimed_speedup from the xlsx tables and they match exactly.",
+      "notes": "All ratios (P100 cuSPARSE 3.61x on 75/81, viennaCL 1.95x on 62/72, Nsparse 0.92x on 28/77; KNL-DDR MKL-INS 1.25x, MKL7 1.79x, MKL8 2.95x; KNL-cache 1.19x/2.25x/3.75x; Power8 viennaCL 2.79x on 78/83) reproduced exactly from the four xlsx tables. The record's 'icpc (Intel 18.2.199)' is not on the configure page (it says intel/compilers/18.0.128), corrected; machine names 'White'/'Bowman' in the hardware field were not on the pages I opened, left as is. A rests on the P100 vs cuSPARSE comparison where the device model is stated; the KNL rows alone would be borderline (no CPU SKU).",
+      "urls_opened": [
+        "https://raw.githubusercontent.com/wiki/kokkos/kokkos-kernels/SpGEMM_Benchmarks.md",
+        "https://raw.githubusercontent.com/wiki/kokkos/kokkos-kernels/p100_configure.md",
+        "https://raw.githubusercontent.com/wiki/kokkos/kokkos-kernels/knl_configure.md",
+        "https://raw.githubusercontent.com/wiki/kokkos/kokkos-kernels/power8_configure.md",
+        "https://raw.githubusercontent.com/wiki/kokkos/kokkos-kernels/figures/spgemm_benchmark/P100-table.xlsx",
+        "https://raw.githubusercontent.com/wiki/kokkos/kokkos-kernels/figures/spgemm_benchmark/knl-ddr-table.xlsx",
+        "https://raw.githubusercontent.com/wiki/kokkos/kokkos-kernels/figures/spgemm_benchmark/knl-cache-table.xlsx",
+        "https://raw.githubusercontent.com/wiki/kokkos/kokkos-kernels/figures/spgemm_benchmark/power8-table.xlsx",
+        "https://github.com/kokkos/kokkos-kernels",
+        "https://github.com/kokkos/kokkos-kernels/commits/develop",
+        "https://raw.githubusercontent.com/kokkos/kokkos-kernels/HEAD/LICENSE",
+        "https://raw.githubusercontent.com/kokkos/kokkos-kernels/HEAD/perf_test/sparse/KokkosSparse_spgemm.cpp",
+        "https://raw.githubusercontent.com/kokkos/kokkos-kernels/2.6.00/perf_test/sparse/KokkosSparse_spgemm.cpp"
+      ],
+      "page_compares_against_baseline": true,
+      "numbers_found_on_page": true
+    },
+    "corrected_fields": {
+      "compiler_and_flags": "P100 runs: nvcc_wrapper (CUDA 8.0.44) with gcc 5.4.0, CXXFLAGS='-Wall -pedantic -Werror -O3 -g -Wshadow -Wsign-compare -Wignored-qualifiers -Wempty-body -Wclobbered -Wuninitialized', KOKKOS_ARCHS=Pascal60,Power8, cuSPARSE TPL, eti-only, double/int; KNL runs: icpc (Intel 18.2.199) with the same flags, KOKKOS_ARCHS=KNL, MKL TPL; OMP_PROC_BIND=spread, OMP_PLACES=threads; first run discarded as warm-up, 6 runs.",
+      "caveats": "Results are from 2018 (Kokkos 2.50, CUDA 8, KNL and P100 hardware, MKL 18.0, cuSPARSE of that CUDA); modern cuSPARSE/MKL SpGEMM may differ. On P100 KKSPGEMM is on average slower than Nsparse (v1.2), so it is not the fastest GPU SpGEMM there. None of the baselines is in the catalog's listed set (SuiteSparse, Eigen sparse, PETSc), and the wiki's SpMV benchmark page compares only against Kokkos Kernels' own reference implementation, so SpMV carries no incumbent comparison. Per-matrix times are best over thread counts. CPU SKU is not given (only architecture names), so a strict reading of 'hardware stated' would give B. The wiki is marked deprecated (new docs on kokkos.org, which I could not open); xlsx tables used: https://raw.githubusercontent.com/wiki/kokkos/kokkos-kernels/figures/spgemm_benchmark/P100-table.xlsx and .../knl-ddr-table.xlsx, .../knl-cache-table.xlsx, .../power8-table.xlsx; setup page https://raw.githubusercontent.com/wiki/kokkos/kokkos-kernels/p100_configure.md. The tables also contain their own geomean summary rows, which I excluded from my paired ratios; the P100 sheet is oddly named 'Power8' inside the xlsx but its columns are the P100 runs."
+    }
+  },
+  {
     "name": "ParAMD (parallel approximate minimum degree ordering)",
     "repo_url": "https://github.com/PASSIONLab/ParAMD",
     "language": "C++",
@@ -18618,6 +19212,66 @@
     }
   },
   {
+    "name": "AmgT (tensor-core AMG)",
+    "repo_url": "https://github.com/SuperScientificSoftwareLaboratory/AmgT",
+    "language": "C (CUDA; HYPRE-based)",
+    "domain": "numerics-and-science",
+    "category": "sparse-and-solvers",
+    "baseline": "HYPRE (GPU build calling cuSPARSE)",
+    "baseline_in_list": false,
+    "metric": "latency",
+    "workload": "Algebraic multigrid solves on SuiteSparse matrices where AmgT replaces HYPRE's SpGEMM (setup phase) and SpMV (solve phase) with tensor-core kernels over a new mBSR storage format, in FP64 and mixed precision; the repo builds three executables (AmgT_FP64, AmgT_Mixed, and cuSPARSE = HYPRE baseline).",
+    "claimed_speedup": "Paper (SC'24): AmgT outperforms the original GPU version of HYPRE by a factor of on geomean 1.46x, 1.32x and 2.24x (up to 2.10x, 2.06x and 3.67x) on NVIDIA A100, H100 and AMD MI210 GPUs, respectively. (Numbers taken from the WebSearch result text; which phase or total time they cover is not stated there.)",
+    "evidence_tier": "B",
+    "benchmark_url": "https://dl.acm.org/doi/10.1109/SC41406.2024.00058",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "compile.sh: CUDA_HOME=/usr/local/cuda-12.0; HYPRE configured with --with-cuda --enable-unified-memory and --with-gpu-arch='80 80' (A100) or '90 90' (H100); -gencode arch=compute_80,code=sm_80 (or compute_90); README advises CUDA 12.2+ and OpenMPI 4.0+. No explicit CXX optimization flags are visible in compile.sh.",
+    "hardware": "NVIDIA A100, H100 and AMD MI210 (per the paper text returned by search); repo recommends compute capability 8.0; host CPU not verified",
+    "compared_against_cpp_std_directly": null,
+    "license": "Apache-2.0",
+    "usability": "copyable",
+    "last_commit": "2024-11-11",
+    "maintenance_status": "stale",
+    "is_fork_of": null,
+    "stars_or_usage": "9 stars",
+    "has_code": true,
+    "tradeoffs": "Implemented inside a modified copy of HYPRE (AmgT_HYPRE/), not a standalone library: using it means taking that fork or porting the mBSR data structure (seq_mv.h), SpGEMM (csr_spgemm_device.c) and SpMV (csr_matvec_device.c). The variant is chosen at build time by copying config_files/<variant>.h over seq_mv.h. Needs tensor-core GPUs (compute capability 8.0 or newer) for the main gains; the mixed-precision mode changes numerics. The embedded HYPRE code carries its own license files, which I did not inspect.",
+    "caveats": "Numbers are from a WebSearch snippet of the SC '24 abstract (ACM DL record of DOI 10.1109/SC41406.2024.00058, the DOI the repo README cites); the paper itself could not be opened here (dl.acm.org, doi.ieeecomputersociety.org, ieeexplore are egress-blocked), so which phase (setup, solve or total) the geomeans cover and the FP64 versus mixed-precision split are unverified. The repo has no result tables. Its harness (AmgT_test/test_new.c) runs HYPRE PCG with a BoomerAMG preconditioner (tolerance 1e-5, max 300 iterations) and times BoomerAMGSetup and the solve separately with gettimeofday; compile.sh builds three variants (AmgT_FP64, AmgT_Mixed, cuSPARSE = unmodified HYPRE calling cuSPARSE) for A100 (sm_80) or H100 (sm_90) only, on embedded HYPRE 2.31.0 (2024/02/14) configured with --with-cuda --enable-unified-memory. There is no MI210/HIP build path in compile.sh, so the 2.24x MI210 figure is not reproducible from the repo. Host CPU model and per-matrix problem set not verified. Not a GitHub fork, though it embeds modified HYPRE.",
+    "found_via": [
+      "seed-record pass: https://github.com/SuperScientificSoftwareLaboratory/AmgT and one WebSearch query for the SC'24 paper numbers"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.65,
+    "assignment_ids": [
+      "w8-seed-h"
+    ],
+    "id": "https://github.com/superscientificsoftwarelaboratory/amgt",
+    "verification": {
+      "date": "2026-09-26",
+      "verdict": "confirm",
+      "tier_before": "B",
+      "tier_reason": "Peer-reviewed SC '24 paper: the record's benchmark_url is the ACM DL record of DOI 10.1109/SC41406.2024.00058, which the repo README names as the AmgT SC '24 paper, so the search snippet's numbers come from that venue's abstract page; I could not open it (dl.acm.org and doi.ieeecomputersociety.org are egress-blocked). The repo's own harness (AmgT_test/test_new.c, compile.sh) builds the HYPRE+cuSPARSE baseline but states no host CPU or full flags, so not A.",
+      "notes": "Could not open the paper (EGRESS_BLOCKED on dl.acm.org and doi.ieeecomputersociety.org); B kept because the snippet's source is the SC '24 proceedings record whose DOI matches the repo README, but the numbers are unverified by me. Metadata confirmed: Apache-2.0 LICENSE, 9 stars, 7 commits, last commit 2024-11-11 (stale), not fork/archived.",
+      "urls_opened": [
+        "https://github.com/SuperScientificSoftwareLaboratory/AmgT",
+        "https://github.com/SuperScientificSoftwareLaboratory/AmgT/commits/main",
+        "https://github.com/SuperScientificSoftwareLaboratory/AmgT/tree/main/AmgT_test",
+        "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/AmgT/HEAD/README.md",
+        "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/AmgT/HEAD/compile.sh",
+        "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/AmgT/HEAD/LICENSE",
+        "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/AmgT/HEAD/AmgT_test/test_new.c",
+        "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/AmgT/HEAD/AmgT_test/Makefile",
+        "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/AmgT/HEAD/AmgT_HYPRE/src/CMakeLists.txt",
+        "https://github.com/SuperScientificSoftwareLaboratory"
+      ],
+      "page_compares_against_baseline": null,
+      "numbers_found_on_page": null
+    },
+    "corrected_fields": {
+      "caveats": "The paper could not be opened (dl.acm.org, ieeexplore, ssslab.cn are egress-blocked); the benchmark_url was returned by WebSearch and the numbers come from that result's abstract-level text ('snippet only'). The repo README has no numbers and the repo has no result tables, but it does contain the HYPRE+cuSPARSE baseline executable, so the HYPRE comparison is reproducible from repo code; no AmgX comparison was found. Hardware CPU model, HYPRE version and per-matrix problem set were not verified, so B rather than A. The 2.24x on MI210 comes from a different GPU vendor path than the tensor-core story. FP64 versus mixed-precision split of the quoted geomeans is not stated in the snippet. Not a GitHub fork, so is_fork_of is null even though it embeds modified HYPRE."
+    }
+  },
+  {
     "domain": "numerics-and-science",
     "category": "sparse-and-solvers",
     "baseline_stdlib": [],
@@ -18784,6 +19438,62 @@
     "corrected_fields": {
       "compiler_and_flags": "GCC (version not stated), CMake -DCMAKE_BUILD_TYPE=Release",
       "caveats": "GPU against CPU, which SpBench itself calls 'not entirely fair'; some compared libraries emulate Boolean operations with floats; SuiteSparse package, version and thread count not stated; cuSPARSE and clBool beat cuBool on some rows (for example luxembourg_osm and several addition rows). Benchmark is by the same project family; the 2021 GrAPL paper linked from the README was not opened. Evidence tier B because compiler version and optimisation flags are only given as 'GCC' and 'Release'."
+    }
+  },
+  {
+    "name": "DASP (dense-tensor-core SpMV)",
+    "repo_url": "https://github.com/SuperScientificSoftwareLaboratory/DASP",
+    "language": "C++ (CUDA)",
+    "domain": "numerics-and-science",
+    "category": "sparse-and-solvers",
+    "baseline": "cuSPARSE CSR SpMV (CUSPARSE_SPMV_ALG_DEFAULT); also CSR5, TileSpMV, LSRB-CSR and cuSPARSE BSR in the paper",
+    "baseline_in_list": false,
+    "metric": "throughput",
+    "workload": "General sparse matrix-vector multiplication (y = Ax) on SuiteSparse matrices in FP64 and FP16 on NVIDIA A100 and H800 GPUs, using tensor-core MMA units; the repo's harness times cuSPARSE and DASP for 1000 iterations after 100 warm-ups for a given .mtx file.",
+    "claimed_speedup": "Paper (SC'23) FP64 on A100: DASP outperforms CSR5, TileSpMV, LSRB-CSR, cuSPARSE BSR and cuSPARSE CSR by a factor of on average 1.46x, 2.09x, 3.29x, 2.08x and 1.52x (up to 12.64x, 17.48x, 90.59x, 283.92x and 6.94x), respectively. FP16 versus cuSPARSE: on average 1.70x and 1.75x (up to 26.47x and 65.94x) on A100 and H800. (Numbers taken from the WebSearch result text for the paper; see caveats.)",
+    "evidence_tier": "B",
+    "benchmark_url": "https://dl.acm.org/doi/pdf/10.1145/3581784.3607051",
+    "baseline_stdlib": [],
+    "compiler_and_flags": "From the repo Makefile: nvcc from CUDA 12.0 with host gcc 12.2, -O3 -m64 -gencode arch=compute_80,code=sm_80, -Xcompiler -fopenmp-simd, linked with -lcusparse -lcublas",
+    "hardware": "NVIDIA A100 and H800 GPUs (per the paper text returned by search); the repo recommends a GPU with compute capability 8.0. Host CPU model not verified.",
+    "compared_against_cpp_std_directly": null,
+    "license": "AGPL-3.0",
+    "usability": "copyable",
+    "last_commit": "2024-06-18",
+    "maintenance_status": "stale",
+    "is_fork_of": null,
+    "stars_or_usage": "29 stars",
+    "has_code": true,
+    "tradeoffs": "Needs NVIDIA GPUs with MMA tensor-core support (compute capability 8.0 or newer; FP64 and FP16 variants built from separate mains: make double, make half). Research code driven by Matrix Market files, not a library API. Rows are grouped into long, medium and short categories and repacked into MMA-sized blocks, which adds preprocessing and padding (fill-zero) data. AGPL-3.0 network copyleft applies to anything built on the code.",
+    "caveats": "The paper could not be opened here (dl.acm.org and other publishers are egress-blocked); the speedups come from a WebSearch snippet of the SC '23 abstract (ACM DL record of DOI 10.1145/3581784.3607051, the DOI the repo README cites), including the A100-only list of FP64 averages. The repo holds no result tables. Its harness (src/main_f64.cu) times cuSPARSE CSR SpMV (CUSPARSE_SPMV_ALG_DEFAULT) and DASP over 1000 iterations after 100 warm-ups, times cuSPARSE setup separately, and checks the DASP result against cuSPARSE; the DASP row reordering/format conversion is not in the timed loop, so gains pay off only when one matrix is multiplied many times. The repo has no scripts for the CSR5, TileSpMV, LSRB-CSR or BSR baselines, so only the cuSPARSE comparison is reproducible from it. cuSPARSE version used in the paper and host CPU not verified. Large 'up to' ratios (283.92x vs cuSPARSE BSR) are outliers; averages are the meaningful figures.",
+    "found_via": [
+      "seed-record pass: https://github.com/SuperScientificSoftwareLaboratory/DASP and one WebSearch query for the SC'23 paper numbers"
+    ],
+    "is_evidence_for_known": false,
+    "confidence": 0.7,
+    "assignment_ids": [
+      "w8-seed-h"
+    ],
+    "id": "https://github.com/superscientificsoftwarelaboratory/dasp",
+    "verification": {
+      "date": "2026-09-26",
+      "verdict": "confirm",
+      "tier_before": "B",
+      "tier_reason": "Peer-reviewed SC '23 paper: the benchmark_url is the ACM DL PDF of DOI 10.1145/3581784.3607051, which the repo README cites as the SC '23 paper (Article 73), so the snippet numbers come from that venue's abstract; I could not open it (dl.acm.org egress-blocked). The repo's harness (src/main_f64.cu, Makefile with nvcc 12.0, gcc 12.2, -O3 sm_80) reproduces the cuSPARSE comparison, but the GPU/host model is only in the unopened paper, so not A.",
+      "notes": "Could not open the paper (EGRESS_BLOCKED on dl.acm.org); B kept because the snippet's source is the SC '23 proceedings record whose DOI matches the repo README. Metadata confirmed: AGPL-3.0 LICENSE, 29 stars, 19 commits, last commit 2024-06-18 (stale), not fork/archived; Makefile flags match the record.",
+      "urls_opened": [
+        "https://github.com/SuperScientificSoftwareLaboratory/DASP",
+        "https://github.com/SuperScientificSoftwareLaboratory/DASP/commits/main",
+        "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/DASP/HEAD/README.md",
+        "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/DASP/HEAD/Makefile",
+        "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/DASP/HEAD/LICENSE",
+        "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/DASP/HEAD/src/main_f64.cu"
+      ],
+      "page_compares_against_baseline": null,
+      "numbers_found_on_page": null
+    },
+    "corrected_fields": {
+      "caveats": "The paper PDF could not be opened (dl.acm.org, ssslab.cn and other publishers are egress-blocked here); the benchmark_url was returned by WebSearch and the speedup numbers above come from that result's text (abstract-level, 'snippet only'), including the A100-only list of averages. The repo itself holds no result tables; I read its harness (src/main_f64.cu, src/dasp_f64.h): it times only the SpMV kernels, and the DASP row reordering / format conversion is not part of the timed loop (cuSPARSE buffer setup is also timed separately), so gains only pay off when the same matrix is multiplied many times. The repo has no scripts for the CSR5, TileSpMV, LSRB-CSR or BSR baselines, so only the cuSPARSE comparison is reproducible from the repo. cuSPARSE version used in the paper is not verified. Could move to tier A if the paper's setup table lists CPU model and library versions. Large 'up to' ratios (283.92x vs BSR) are outliers; averages are the meaningful figures."
     }
   },
   {
