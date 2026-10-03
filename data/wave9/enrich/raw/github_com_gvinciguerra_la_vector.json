@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/gvinciguerra/la_vector",
+  "one_liner": "Header-only C++17 compressed sorted-integer container and rank/select dictionary built from piecewise linear approximations; competes with SDSL sd_vector-style dictionaries.",
+  "what_it_does": "Stores a sorted array of unsigned integers (uint32_t/uint64_t) in compressed form and answers operator[], select(i), rank(x), lower_bound(x) and iteration over it, plus full decode() back to a std::vector and SDSL-style serialize/load. It is a static (build-once, read-only) structure and does not mirror the SDSL bitvector API: you pass the positions of the 1 bits (or any sorted integer set), not a bit_vector. Two flavours exist: la_vector<K, bpc> with a fixed number of bits per correction, and la_vector_opt<K> which picks a per-segment correction width to minimise space.",
+  "how_it_is_fast": "Points (i, A[i]) are covered by an optimal piecewise linear approximation (the PGM-index segmentation algorithm) with error bound epsilon = 2^(bpc-1)-1, and each element is stored only as a small bpc-bit correction against its segment's prediction. select(i) is just operator[](i-1): a two-level bucketed lookup plus a branchless binary search finds the segment, then one multiply-add and one bit-field read decode the value, which is why the authors report select as the fastest among the dictionaries they compared. rank and lower_bound predict a position from the segment, then binary-search (or linearly scan) a window of at most 2*epsilon+1 corrections, using sampled corrections in the fixed-bpc variant.",
+  "when_to_use": [
+    "Static sorted integer sets or sparse bitvectors (posting lists, DNA/k-mer positions, URL or document ID lists) whose values follow near-linear trends, so few segments and small corrections suffice.",
+    "Select-heavy or random-access-heavy workloads (position to value) where you want a compressed representation that still decodes an element in a few instructions.",
+    "When you want both a container view (operator[], iterators, lower_bound) and a rank/select view over the same compressed data.",
+    "Space-time trade-off experiments against SDSL dictionaries, since the TALG22 artifact repo wires la_vector next to sd_vector, s18_vector, rle_vector and others."
+  ],
+  "when_not_to_use": [
+    "Rank-dominated workloads where you need guaranteed speed: rank is a bounded search inside a segment window, and the authors only claim it is on the space-time Pareto frontier, not the fastest.",
+    "Dynamic data: there is no insert, delete or bit flip; any change means rebuilding.",
+    "Plain dense bitvectors with uniform random bits, where an uncompressed rank/select index (rank9, pasta-flat, SPIDER, QuadRank) is smaller in overhead and faster; LA-vector pays off only when the integer sequence is compressible by lines.",
+    "MSVC builds or non-GCC/Clang toolchains: the code relies on __int128 and __builtin_clzll.",
+    "Projects that cannot take an sdsl-lite dependency (the header includes sdsl/bits.hpp and sdsl/int_vector.hpp)."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "sdsl-lite headers (xxsds/sdsl-lite, git submodule); OpenMP optional (used for parallel segmentation at build time, a #warning recommends -fopenmp)",
+    "min_toolchain": "C++17; GCC or Clang (uses __int128 and __builtin_clzll); CI builds with g++-11 on ubuntu-latest; CMake 3.12 for the bundled build",
+    "platforms": "64-bit targets with __int128 (x86-64 tested in CI); the bundled CMakeLists adds -march=native",
+    "thread_safety": "not documented; queries are const member functions over immutable data, construction may use OpenMP threads internally",
+    "drop_in_for_baseline": "partial: same role as sdsl::sd_vector plus rank/select support, and it reuses SDSL serialization, but it is built from a sorted integer array rather than an sdsl::bit_vector and exposes rank(value)/select(i) member functions instead of SDSL rank_support/select_support objects"
+  },
+  "gotchas": [
+    "Input must be sorted and non-decreasing unsigned integers; the segmentation throws std::logic_error on non-increasing x and std::overflow_error when a segment's bit fields or corrections do not fit, and the auto-bpc builder can throw std::runtime_error('Cannot reach target vertex').",
+    "Correctness fixes landed after the papers: commit 'Fixes and space optimisation for 64-bit data #2' (2022-08-28) for a crash report on 127 values around 1.5e13, and 'Fixed signed overflow on input integers >= 2^31 or 2^63' (2024-09-04). Use the current master, not the 2021-2022 snapshots the experiments were run on.",
+    "rank(x) is implemented as distance(begin, lower_bound(x)), which counts elements strictly less than x, while its doc comment (and example.cpp) says 'less than or equal'; check the convention you need (observed in source, not tested).",
+    "The range constructor reads *begin and the last element before checking n == 0, so constructing from an empty range is undefined behaviour (observed in source)."
+  ],
+  "pick_this_over_siblings_when": "Pick LA-vector over h0_bv or succinct-bitvec-cpp when the data is a sparse, regular sorted integer set (Elias-Fano/sd_vector territory) and select or random access dominates; pick SPIDER, QuadRank or rankselect for dense plain bitvectors where raw rank speed with a few percent overhead matters more than compression.",
+  "verified_claims_summary": "The ACM TALG 2022 paper (abstract quoted in the GPL-3.0 artifact repo aboffa/Learned-Compressed-Rank-Select-TALG22) reports that la_vector's select is the fastest and its rank is on the space-time Pareto frontier against established compressed rank/select dictionaries including SDSL structures, s18_vector and rle_vector, measured with gcc 9.2.1 Release builds on an Intel Xeon E5-2407 v2. No numbers could be read in this session because the paper is behind blocked hosts and the artifact repo commits no result CSVs; the verifier's notes cite a search snippet saying select can be about 50 ns slower than sdsl::sd_vector on some data, so treat the win as data-dependent.",
+  "status_note": "Stale research code (last commits 2024-09-04, 31 commits, 47 stars, both issues closed) under Apache-2.0, small (two headers) and easy to vendor alongside sdsl-lite.",
+  "sources_read": [
+    "https://github.com/gvinciguerra/la_vector",
+    "https://github.com/gvinciguerra/la_vector/commits/master",
+    "https://github.com/gvinciguerra/la_vector/issues?q=is%3Aissue",
+    "https://github.com/gvinciguerra/la_vector/issues/2",
+    "https://raw.githubusercontent.com/gvinciguerra/la_vector/HEAD/README.md",
+    "https://raw.githubusercontent.com/gvinciguerra/la_vector/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/gvinciguerra/la_vector/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/gvinciguerra/la_vector/HEAD/.github/workflows/build.yml",
+    "https://raw.githubusercontent.com/gvinciguerra/la_vector/HEAD/example.cpp",
+    "https://raw.githubusercontent.com/gvinciguerra/la_vector/HEAD/include/la_vector.hpp",
+    "https://raw.githubusercontent.com/gvinciguerra/la_vector/HEAD/include/piecewise_linear_model.hpp",
+    "https://raw.githubusercontent.com/aboffa/Learned-Compressed-Rank-Select-TALG22/HEAD/README.md"
+  ],
+  "confidence": 0.7
+}

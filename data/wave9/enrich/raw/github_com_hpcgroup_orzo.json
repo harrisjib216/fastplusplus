@@ -1,0 +1,50 @@
+{
+  "id": "https://github.com/hpcgroup/orzo",
+  "one_liner": "Research rank/select index for plain bitvectors that Elias-Fano-packs L2 counts, cutting index space below pasta-flat and cs-poppy.",
+  "what_it_does": "Builds a rank/select index over an existing, caller-owned uint64_t bit array: Orzo orzo(bits, n) then orzo.rank1(bits, i) and orzo.select1(bits, k). Unlike pasta or SDSL it does not own the bitvector; you pass the same raw pointer into every query. It targets the same niche as cs-poppy and pasta-flat (uncompressed bitvector plus a few percent of index) and trades some query speed for a smaller index.",
+  "how_it_is_fast": "It keeps the cache-centric L0/L1/L2 layout of poppy-style indexes, but each 5632-bit lower block (11 basic blocks of 512 bits) gets one 128-bit entry holding an 18-bit L1 count plus the 10 cumulative L2 counts Elias-Fano encoded (20 upper bits, 90 lower bits). A rank decodes one L2 value with PDEP+TZCNT (BMI2 select-in-word) and then popcounts at most 8 words; by my arithmetic from the source constants the L1/L2 part costs 128/5632, about 2.3% of the bitvector (derived from source constants, not measured). Select uses a separate 2^32-bit upper level, a sample every 8192 ones, a linear scan over L1 entries, a linear Elias-Fano decode of the L2s and a PDEP/TZCNT finish.",
+  "when_to_use": [
+    "Very large static plain bitvectors (the bundled script sweeps 2^24 to 2^34 bits) where index memory matters more than the last nanoseconds of rank latency.",
+    "Moderate to dense bitvectors (the script tests 10%, 50% and 90% ones) on x86-64 CPUs with BMI2 and AVX2.",
+    "Research or prototyping of space-reduced poppy-style indexes, since the code is short (one ~400-line header) and the benchmark harness compares directly against pasta-flat and cs-poppy."
+  ],
+  "when_not_to_use": [
+    "Latency-critical rank: search snippets of the SEA 2025 paper report rank is about 9-38% slower than pasta-flat depending on CPU and input (snippet only, paper not opened); pick pasta-flat, SPIDER or QuadRank if speed is the goal.",
+    "Production code: no license file (so it cannot legally be copied), a single commit, no tests beyond a CHECK_CORRECTNESS mode in the benchmark, and no issues or releases.",
+    "Non-x86 targets or x86 without BMI2: the header includes immintrin.h and calls _pdep_u64 and _tzcnt_u64 unconditionally; MSVC lacks the __uint128_t it relies on.",
+    "Sparse bitvectors with heavy select traffic: select scans L1 entries linearly from a sample taken every 8192 ones, so long runs of zeros mean longer scans (observed in source, not measured).",
+    "Anything that needs compressed or dynamic bitvectors; the bit array is stored uncompressed and the index is build-once."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none for the index itself (include/orzo/orzo.h plus utils.h); the benchmark needs pasta-toolbox bit_vector, pasta utils and tlx at pinned commits via external/install_deps.sh",
+    "min_toolchain": "C++20 language features (std::popcount, std::countl_zero, std::has_single_bit); the Makefile uses clang++-17 -std=c++23; GCC or Clang only (__uint128_t)",
+    "platforms": "x86-64 with BMI2 (PDEP, TZCNT); Makefile builds with -mbmi -mbmi2 -mavx2, with a commented AVX-512 variant",
+    "thread_safety": "not documented; queries only read the index, so concurrent reads look safe, but nothing is stated",
+    "drop_in_for_baseline": "partial: same rank1/select1 names as pasta-flat, but construction takes a raw uint64_t* plus length and every query takes the bit array pointer again"
+  },
+  "gotchas": [
+    "Template parameters are not really tunable: UPPER_BLOCK_COUNT is hard-coded to 259072 with a comment that it is 'temporarily hardcoded' for the default N_L2 = 10, and the L1 field is only 18 bits wide.",
+    "Class owns raw new[]/calloc buffers with no copy or move constructor, so copying an Orzo double-frees; with support_select = false the destructor still deletes and frees the uninitialised select pointers.",
+    "rank0 returns 1 + (i - rank1(i)), which looks off by one against rank1's exclusive convention; the constructor reads whole 512-bit basic blocks, so the bit array must be padded to a multiple of 512 bits (both observed in source, not tested).",
+    "The benchmark main checks argc < 4 but reads argv[4], and the repo commits no results.csv, so the paper's numbers cannot be reproduced from the repo alone."
+  ],
+  "pick_this_over_siblings_when": "Choose orzo over SPIDER, rankselect or succinct-bitvec-cpp only when shaving roughly a quarter off a poppy/pasta-style rank index matters more than rank speed and you can live with unlicensed research code; for compressed sparse sets use LA-vector or h0_bv instead.",
+  "verified_claims_summary": "Search snippets of the SEA 2025 paper (Hough and Bhatele, LIPIcs vol. 338) say orzo cuts the rank index overhead by about 26.5% relative to cs-poppy and pasta-flat (3.51% overhead with select, 3.125% rank only), at a rank slowdown of about 9-38% versus pasta-flat depending on CPU and input. The repo's benchmark times rank1/select1 for orzo, pasta-flat and pasta's poppy over 10M random queries on 2^24 to 2^34-bit random bitvectors built with clang++-17 -O3 -flto -mavx2, but no CPU model or results are committed, and the paper itself was not opened.",
+  "status_note": "Single-commit research artifact (2025-05-12, 2 stars) with no license file, so reference only; read it to learn the Elias-Fano L2 trick, do not vendor it.",
+  "sources_read": [
+    "https://github.com/hpcgroup/orzo",
+    "https://github.com/hpcgroup/orzo/tree/master/scripts",
+    "https://github.com/hpcgroup/orzo/tree/master/external",
+    "https://raw.githubusercontent.com/hpcgroup/orzo/HEAD/README.md",
+    "https://raw.githubusercontent.com/hpcgroup/orzo/HEAD/Makefile",
+    "https://raw.githubusercontent.com/hpcgroup/orzo/HEAD/benchmarking/comparison.cc",
+    "https://raw.githubusercontent.com/hpcgroup/orzo/HEAD/include/orzo/orzo.h",
+    "https://raw.githubusercontent.com/hpcgroup/orzo/HEAD/include/orzo/bitvector.h",
+    "https://raw.githubusercontent.com/hpcgroup/orzo/HEAD/include/orzo/utils.h",
+    "https://raw.githubusercontent.com/hpcgroup/orzo/HEAD/scripts/run_benchmark.sh",
+    "https://raw.githubusercontent.com/hpcgroup/orzo/HEAD/external/install_deps.sh",
+    "WebSearch snippet: https://drops.dagstuhl.de/storage/00lipics/lipics-vol338-sea2025/LIPIcs.SEA.2025.23/LIPIcs.SEA.2025.23.pdf (not opened)"
+  ],
+  "confidence": 0.65
+}
