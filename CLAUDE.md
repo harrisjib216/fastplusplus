@@ -24,6 +24,11 @@ and baselines). Scripts are in `pipeline/`, data in `data/waveN/`, rendered list
 - **Quiet runs:** no progress updates to the user after each agent report. Speak when blocked,
   when a wave closes, or when asked. Every subagent prompt ends with a terse final-reply rule
   (max ~8 lines; the JSON output stays normal prose).
+- **Caveman ultra everywhere (2026-10-03):** the orchestrator's replies to the user and every
+  subagent's final reply use caveman ultra style (fragments, no articles, no filler, no arrows,
+  no invented abbreviations; names, numbers, paths and errors exact). Data files, rendered
+  lists, decisions and commit messages stay normal prose. The subagent wording is in
+  `pipeline/cloud_harness.md`; repeat it in prompts that do not include that file.
 - **Tokens are not a concern:** raise or remove caps when it yields more or better results.
   Sonnet for search (get coverage from more search agents, not a bigger model), Opus for verify,
   enrich and re-tier checks.
