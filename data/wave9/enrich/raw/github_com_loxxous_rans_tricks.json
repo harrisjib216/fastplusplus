@@ -1,0 +1,45 @@
+{
+  "id": "https://github.com/loxxous/rans-tricks",
+  "one_liner": "Branchless 16-bit-renormalizing variant of ryg's rans_byte.h; README reports about 1.5-1.7x over standard 4-way interleaved rANS.",
+  "what_it_does": "A modified copy of Fabian Giesen's public-domain rans_byte.h (single header, about 315 lines) plus a ryg_rans-style test program. The API is the original rans_byte one: RansEncInit/RansEncPutSymbol/RansEncFlush to encode in reverse into the end of a buffer, and RansDecInit/RansDecGet/RansDecAdvanceSymbol(Step)/RansDecRenorm to decode forward; you supply the cumulative-frequency table and the cum-to-symbol lookup yourself. It is a demonstration of a technique, not a codec: there is no container format, no frequency-table serialization and no adaptive model code.",
+  "how_it_is_fast": "The normalization lower bound is raised to L = 2^16 and the coder emits and consumes 16 bits at a time, so each symbol needs at most one renormalization step; that step is then made branchless: the encoder always stores the low 16 bits at ptr-2 and advances the pointer by (x >= x_max) << 1, and the decoder always loads a 16-bit word and selects the new state with a mask (x = (-s & (tx - x)) + x). Removing the data-dependent renorm branch avoids mispredictions, and 4-way interleaving (four explicit states, or an 'implicit' rotating array of four states) supplies instruction-level parallelism. The encoder keeps ryg's reciprocal-multiply division (Alverson) for static symbols.",
+  "when_to_use": [
+    "You already use ryg_rans rans_byte.h and want a small, branch-free renormalization patch to copy into your own rANS loop.",
+    "Order-0 or model-driven byte coding where symbol frequencies may change per symbol (rANS with arbitrary start/freq per call), and you want speed near static FSE without SIMD.",
+    "Portable scalar code is required: the coder header uses no intrinsics or assembly (only the test harness uses __rdtsc).",
+    "Teaching or prototyping: the whole technique fits in about 20 changed lines and is public domain."
+  ],
+  "when_not_to_use": [
+    "You need a finished codec with headers, table serialization and bounds checking; this is a header plus a demo, last touched 2018-04-27.",
+    "Peak throughput on modern x86 or ARM: SIMD rANS (rans_static r32x16b_avx2, hypersonic-rANS, htscodecs 32-way) or Huffman decoders reach several times the 460 MB/s reported here.",
+    "Untrusted or truncated input: the decoder unconditionally reads 2 bytes at the stream pointer and there are no bounds checks.",
+    "Big-endian targets or cross-platform bitstreams: 16-bit words are stored and loaded natively through uint16_t* casts, while the flush writes bytes little-endian."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none for rans_byte.h (stdint.h); the demo main.cpp needs platform.h, which uses x86intrin/intrin.h and supports only Windows and Linux",
+    "min_toolchain": "not documented; plain C-compatible header (C99 or any C++ compiler), demo built with MSVC or GCC per platform.h",
+    "platforms": "header: any little-endian target tolerating unaligned 16-bit access; demo: x86 only (__rdtsc), Windows or Linux",
+    "thread_safety": "not documented; all state is caller-owned (RansState and the output pointer), so separate coders on separate threads share nothing",
+    "drop_in_for_baseline": "partial — same function names and call pattern as ryg_rans rans_byte.h, but the bitstream is not compatible (16-bit renorm, L = 2^16 instead of byte renorm with L = 2^23), so it replaces rans_byte only when both ends switch"
+  },
+  "gotchas": [
+    "The encoder writes 2 bytes at ptr-2 on every symbol even when it does not advance, and the decoder reads 2 bytes past the current position on every symbol; reserve slack before the start of the output buffer and after the end of the input stream.",
+    "The 16-bit loads and stores go through uint16_t* casts of uint8_t pointers (unaligned, strict-aliasing UB in C/C++); replace them with memcpy before vendoring.",
+    "The demo's 4-way decoder tail (input length not a multiple of 4) writes dec_bytes[in_size+k], past the end of the output buffer, and pops the tail states in the same order they were pushed; enwik8 (100,000,000 bytes) is a multiple of 4, so the benchmark never exercises this path.",
+    "Despite the README's 'supporting adaptive probabilities', main.cpp uses one static order-0 table (counted once, normalized to 2^15); adaptivity is only a property of rANS that the code permits, not something that was measured."
+  ],
+  "pick_this_over_siblings_when": "Pick it over ryg_rans when you want ryg's scalar API with a branchless 16-bit renorm and are willing to fix the unaligned casts yourself; pick rans_static, hypersonic-rANS or htscodecs instead when SIMD is available and raw throughput matters, and FiniteStateEntropy when static tables are fine and you want a maintained codec.",
+  "verified_claims_summary": "The README reports, for enwik8 on a Ryzen 1700 at 3.7 GHz with no compiler or flags stated, 415 MB/s encode and 460 MB/s decode for the 4-way interleaved trick versus 250/300 MB/s for 4-way interleaved standard rANS; only the trick variants exist in main.cpp (the standard-rANS rows came from code not in the current main.cpp), the harness reports MiB/s, and the FSE row (325/440 MB/s) equals the Proba80 row in the FiniteStateEntropy README rather than an enwik8 run.",
+  "status_note": "Abandoned: 18 commits, all on 2018-04-27, no issues or PRs; public-domain dedication in the README (no LICENSE file), and the core change is small enough to re-implement from reading it.",
+  "sources_read": [
+    "https://github.com/loxxous/rans-tricks",
+    "https://github.com/loxxous/rans-tricks/commits",
+    "https://github.com/loxxous/rans-tricks/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/loxxous/rans-tricks/HEAD/README.md",
+    "https://raw.githubusercontent.com/loxxous/rans-tricks/HEAD/rans_byte.h",
+    "https://raw.githubusercontent.com/loxxous/rans-tricks/HEAD/main.cpp",
+    "https://raw.githubusercontent.com/loxxous/rans-tricks/HEAD/platform.h"
+  ],
+  "confidence": 0.6
+}
