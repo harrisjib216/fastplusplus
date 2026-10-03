@@ -124,3 +124,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - ByteHamster/alias-table-gpu (CUDA, GPL-3.0, 10 stars; arXiv 2106.12270 snippet: 17x construction, up to 24x sampling vs PSA on a 16-core CPU): GPU sibling of wrs. (from wrs enricher)
 - gMAGNUS (arXiv 2607.22866, SYCL+CUDA, 1.81-7.62x geomean over five SpGEMM codes on Ponte Vecchio and H200; no repo found) and zhen-xie/IA-SpGEMM: SpGEMM siblings. (from spECK/TileSpGEMM enricher)
 - xing-cong/CB-Sparse (CB-SpMV, ICS '25, Apache-2.0, 29 stars): independent suite beating TileSpMV (3.95x A100, 3.06x RTX 4090) and DASP; candidate entry for the SpMV set. TileSpMSpV (ICPP '22) 1.83x over TileSpMV. (from TileSpMV enricher)
+- ralna/spral retier sources: arXiv 1909.08104 (Tasseff et al., Ipopt linear-solver parallelism, SPRAL vs HSL; blocked); NLAFET/SyLVER is the StarPU successor of SSIDS (README has no numbers). (from SPRAL enricher)

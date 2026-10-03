@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/ralna/spral",
+  "one_liner": "BSD-licensed multicore/GPU sparse symmetric indefinite LDL^T solver (SSIDS); paper claims beat HSL and PARDISO, unverified here.",
+  "what_it_does": "SPRAL is STFC's open-source sparse linear algebra library; its main package SSIDS solves sparse symmetric AX = B by a multifrontal method, computing PLD(PL)^T with 1x1 and 2x2 pivots for indefinite matrices or a Cholesky factor when posdef is true. The API is a four-phase analyse / factor / solve / free sequence on CSC (or coordinate) input, with Fortran modules and a C interface (spral_ssids_analyse, spral_ssids_factor, spral_ssids_solve, double precision, 64-bit column pointers and 32-bit row indices) that C++ can call. One analysis can serve many numeric factorizations, and the inform struct reports inertia (num_neg), delayed pivots and 2x2 pivot counts, which is what interior-point codes need. Ipopt 3.14+ can use it via linear_solver=spral.",
+  "how_it_is_fast": "The assembly tree is cut into leaf subtrees that are pre-assigned to NUMA regions or GPUs and factored in parallel, after which all CPU cores cooperate on the root subtree (OpenMP tasks); small leaf subtrees below small_subtree_threshold (4e6 flops) are merged into one task to cut scheduling overhead. On CPU the default pivoting is block a posteriori threshold pivoting (APTP, Duff-Hogg-Lopez): blocks are eliminated optimistically with a Cholesky-like communication pattern and pivots that fail the threshold test afterwards only force recomputation of their block column, which keeps the factorization task-parallel where classic threshold partial pivoting is serial. Dense kernels are blocked (cpu_block_size 256, inner block 32) with AVX/AVX2/AVX-512 intrinsics in SimdVec.hxx plus BLAS/LAPACK; the GPU path (TOMS 2016 paper) runs subtrees of at least min_gpu_work (5e9 flops) in CUDA with cuBLAS.",
+  "when_to_use": [
+    "Large sparse symmetric indefinite systems (KKT and saddle-point matrices from interior-point optimization, mixed finite elements) on a multicore node where you need LDL^T with 2x2 pivoting and the inertia, under a BSD licence instead of HSL MA57/MA97 or MKL PARDISO terms.",
+    "Ipopt or other C/C++ optimizers that want an open-source parallel alternative to MUMPS or MA27: Ipopt ships an interface (linear_solver=spral; Ipopt 3.14.13 needs SPRAL v2023.03.29 or later).",
+    "Sequences of factorizations with a fixed sparsity pattern: analyse once and reuse akeep for many ssids_factor calls.",
+    "Workflows that need run-to-run bit-identical results: the docs promise bit-compatibility given bit-compatible BLAS and compiler options.",
+    "Very large problems on NVIDIA GPU nodes, where subtrees above 5e9 flops are offloaded (the paper's up to 4.6x claim is for large indefinite problems)."
+  ],
+  "when_not_to_use": [
+    "Small or medium KKT systems such as power-grid optimal power flow: an independent study (Swirydowicz et al., Parallel Computing, seen only as a snippet) found SSIDS's GPU mode slower than its CPU mode and slower than one-thread MA57, and Ipopt merged PR #677 (2023) 'Linear solvers such as MUMPS should be prefered over SPRAL' when choosing its default.",
+    "Positive definite problems: the docs warn that SSIDS is designed for indefinite systems and its Cholesky path may be slower than a dedicated Cholesky solver (CHOLMOD, BaSpaCho).",
+    "Solve-dominated workloads (many right-hand sides or many repeated solves per factorization): the docs state the solve phase runs in serial.",
+    "Unsymmetric, complex or single-precision matrices, or distributed-memory (MPI) runs: SSIDS is real double symmetric only and the build has no MPI dependency.",
+    "Windows, or host applications that cannot set OMP_CANCELLATION=TRUE process-wide: Windows support is an open question (issue #137), and without that variable SSIDS fails with error -53."
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "BLAS, LAPACK, METIS (4 or 5, optional 64-bit idx), OpenMP; hwloc optional (topology detection; needs CUDA support for GPU use); CUDA 10+ with cuBLAS optional",
+    "min_toolchain": "Fortran compiler (gfortran, Intel ifx/ifort, NAG, NVIDIA HPC or LLVM flang) plus C99 and C++11 compilers; Meson 0.63+",
+    "platforms": "Linux x86-64 primarily (AVX/AVX2/AVX-512 kernels when compiled with those flags, scalar fallback otherwise); macOS handled in the build but issue #258 reports a test failure on aarch64-darwin; NVIDIA GPUs optional",
+    "thread_safety": "not documented; each analyse/factor/solve call parallelizes internally with OpenMP and needs OMP_CANCELLATION=TRUE (and OMP_PROC_BIND=TRUE for NUMA placement); state lives in per-problem akeep/fkeep handles",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Set OMP_CANCELLATION=TRUE and OMP_PROC_BIND=TRUE in the environment before the OpenMP runtime starts, or factorization returns error -53 (cancellation) or warning +50 (binding); these are process-wide settings that also affect the host application.",
+    "meson.build adds no -m flags, and SimdVec.hxx uses AVX intrinsics only under __AVX__/__AVX2__/__AVX512F__, so a default build runs the scalar kernels; pass e.g. -Dcpp_args=-march=native (inference from the source; not documented). For GPU builds set -Dgpu_arch to the card's sm_XX: meson.build warns a mismatched JIT-compiled arch can silently produce wrong results.",
+    "ssids_free must be called explicitly (going out of scope leaks C++/CUDA memory, and akeep must outlive its fkeeps); open issues include memory leaks (#259), a segfault in assemble_expected_contrib on a large Ipopt problem with 5.7M Hessian nonzeros (#218, no maintainer reply) and GPU test failures with CUDA 12.5 (#223).",
+    "Ipopt's ChangeLog records a use-after-free in its SPRAL interface when solving a second structurally singular system (fixed in Ipopt 3.14.20, 2026-08-27, PR #848), so use Ipopt 3.14.20 or later if you go through it."
+  ],
+  "pick_this_over_siblings_when": "Most catalogued sparse direct siblings are LU solvers (Basker, NICSLU, CKTSO, HYLU, PanguLU) or Cholesky-only (BaSpaCho, Sympiler); pick SPRAL SSIDS when the matrix is symmetric indefinite and you need 2x2 pivoting plus inertia under BSD with optional GPU offload. RSLAB (Rust LDL^T) has measured numbers against PARDISO but is Rust; for SPD problems BaSpaCho's measured wins over CHOLMOD are the better bet.",
+  "verified_claims_summary": "No benchmark could be opened: the repo has no performance numbers and the papers are on blocked hosts. Search snippets say the TOMS 2016 paper reports up to 4.6x for large indefinite problems against an unnamed state-of-the-art multifrontal solver on a multicore CPU (GPU version), and the SISC 2020 APTP paper (42(2) C23-C42) compares SSIDS v2 with HSL_MA86, HSL_MA97 and PARDISO with no ratio in the snippet; an independent power-grid study (snippet) found GPU mode slower than CPU-only and than one-thread MA57. Treat speed as unverified (tier D).",
+  "status_note": "Active (version 2025.09.18 in meson.build, last commit 2026-08-14, 142 stars, 19 open issues including an unanswered large-problem segfault), BSD-3-Clause and maintained by STFC's numerical analysis group; a mixed Fortran/C++/CUDA build with external METIS and BLAS, so not something to vendor casually.",
+  "sources_read": [
+    "https://github.com/ralna/spral/tree/master/src/ssids/cpu",
+    "https://github.com/ralna/spral/tree/master/src/ssids/cpu/kernels",
+    "https://github.com/ralna/spral/issues",
+    "https://github.com/ralna/spral/issues/218",
+    "https://raw.githubusercontent.com/ralna/spral/HEAD/README.md",
+    "https://raw.githubusercontent.com/ralna/spral/HEAD/ChangeLog",
+    "https://raw.githubusercontent.com/ralna/spral/HEAD/LICENCE",
+    "https://raw.githubusercontent.com/ralna/spral/HEAD/meson.build",
+    "https://raw.githubusercontent.com/ralna/spral/HEAD/meson_options.txt",
+    "https://raw.githubusercontent.com/ralna/spral/HEAD/docs/Fortran/ssids.rst",
+    "https://raw.githubusercontent.com/ralna/spral/HEAD/docs/C/ssids.rst",
+    "https://raw.githubusercontent.com/ralna/spral/HEAD/include/spral_ssids.h",
+    "https://raw.githubusercontent.com/ralna/spral/HEAD/src/ssids/cpu/kernels/SimdVec.hxx",
+    "https://raw.githubusercontent.com/ralna/spral/HEAD/src/ssids/cpu/kernels/ldlt_app.cxx",
+    "https://raw.githubusercontent.com/NLAFET/SyLVER/HEAD/README.md",
+    "https://raw.githubusercontent.com/coin-or/Ipopt/HEAD/ChangeLog.md",
+    "https://github.com/coin-or/Ipopt/issues/677",
+    "WebSearch: Duff Hogg Lopez 'a posteriori threshold pivoting' SSIDS HSL_MA97 PARDISO SISC 2020 (snippets only)",
+    "WebSearch: 'a posteriori threshold pivoting' OR SSIDS sparse LDLT pdf site:github.com (no usable copy found)"
+  ],
+  "confidence": 0.65
+}
