@@ -1,0 +1,44 @@
+{
+  "id": "https://github.com/almightygir/rhet_rng",
+  "one_liner": "2.8 KB public-domain header wrapping Overton's RomuDuoJr with seeding, range and float helpers; claimed fastest of 47 PRNGs for games, no published numbers.",
+  "what_it_does": "Archives the xromu2jr.h header and the text of Rhet Butler's 2020 'PRNG Battle Royale', which timed 47 small non-cryptographic PRNGs on nine game consoles and declared RomuDuoJr (romu2jr) the overall winner for game development. The header is a single struct xromu2jr with a uint64_t-seed constructor and its own API: ru64()/ru32() raw bits, ru32(N)/ru64(N) and ri32(f,c)-style bounded integers, rf32()/rf64() floats in [0,1), and sign and bit-count helpers. It is not a std::uniform_random_bit_generator (no result_type, min(), max() or operator()), so it does not plug into <random> distributions or std::shuffle as is.",
+  "how_it_is_fast": "RomuDuoJr keeps 128 bits of state and spends one 64-bit multiply, one subtract and one rotate per output, and it returns the previous x before the update, so the output has no dependency on the current step's multiply (the README notes Romu uses this 'return the previous roll' trick for latency). Bounded integers use Lemire's multiply-shift fastrange (high half of N times a random word) instead of modulo or rejection, which the README reports beat both alternatives in its charts, and floats are made by OR-ing random bits into the mantissa of 1.0 and subtracting 1 (Quilez's trick), avoiding an int-to-float conversion.",
+  "when_to_use": [
+    "Game or interactive code that rolls many small ranges (loot tables, AI choices, particle jitter) and can accept the tiny bias of multiply-shift range mapping.",
+    "You want a 16-byte generator you can vendor as one file with no dependencies and a public-domain wrapper.",
+    "You seed many short-lived generators from a counter (entity IDs, frame numbers): the NASAM-based constructor mixes the seed so sequential uint32_t seeds are meant to give independent sequences, and it replaces discarding the low-quality first rolls typical of chaotic generators.",
+    "Single-threaded hot loops where per-call latency matters more than vectorized throughput."
+  ],
+  "when_not_to_use": [
+    "You need a guaranteed period: RomuDuoJr is chaotic, so some seed can fall into a short cycle; the author only brute-forced that 32-bit seeds have no cycle within the first 2^24 bytes (about 2 million 64-bit outputs) and 16-bit seeds within 2^36 bytes, and himself points people who cannot accept the risk to xoshiro256++ or sfc64.",
+    "You need unbiased bounded integers: ru32(N)/ru64(N) are plain multiply-shift without the rejection step, so ranges that are not powers of two are slightly biased.",
+    "You need std::-compatible engines, jump-ahead or independent streams: none are provided (no jump function, streams only by seeding).",
+    "You need evidence: the repo has no numbers, the charts are not included, and the benchmark code was kept private for console NDA reasons, so the 'winner' claim cannot be reproduced.",
+    "Any security-sensitive use; it is a non-cryptographic generator."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none, but the header has no #include lines: include <cstdint> first (and the MSVC intrinsics header where __umulh is used)",
+    "min_toolchain": "not documented; the code uses only C++11-era features, plus either unsigned __int128 (__SIZEOF_INT128__) or MSVC's __umulh for ru64(N)",
+    "platforms": "README tests covered Nintendo Switch, PlayStation 4/4 Pro/5, Xbox One/One X/Series X and Stadia built with the platform SDKs and Visual Studio 2019; any 64-bit target whose compiler offers __int128 or __umulh",
+    "thread_safety": "not documented; a plain struct with mutable public state x, y and no locking, so use one instance per thread",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Seeds 0 and UINT64_MAX produce the same sequence: the constructor sets y = !s - s, which is 1 for both.",
+    "as<>() type-puns through reinterpret_cast, which violates C++ strict aliasing; it usually works, but std::bit_cast or memcpy is the defined way if you modify the header.",
+    "ri32(f, c) and similar return values in [f, c), and c - f is computed in the signed type, so very wide signed spans overflow.",
+    "Compilers that have neither __int128 nor MSVC's __umulh cannot compile ru64(N)."
+  ],
+  "pick_this_over_siblings_when": "Pick ulfben/cpp_prngs instead if you want the same RomuDuoJr algorithm behind a std-compatible engine that works with std::shuffle and std::sample; pick xoshiro256++, sfc64 or PCG siblings when a guaranteed period matters, SHISHUA or the SIMD xoshiro siblings for bulk throughput, and lemire/FastShuffleExperiments for unbiased bounded integers. Choose this header only for its tiny public-domain wrapper and counter-friendly seeding.",
+  "verified_claims_summary": "The README describes relative-speed charts for latency and throughput tests (raw 64-bit, biased modulo, unbiased masking and Lemire fixed-point range mapping over ranges 2 to 2^16, at least 256 GB of data per test) across nine consoles built with Visual Studio 2019 and platform SDKs, normalised per console to the slowest test; no numbers, CPU models or flags are given, the charts are absent, and the code is private, so the claim that RomuDuoJr beats xoshiro256++/PCG64 and others rests on the author's word and his own weighting of speed and PractRand results.",
+  "status_note": "Abandoned re-host (3 commits on 2023-06-25, 3 stars, no LICENSE file; the header states the wrapper is public domain, while the RomuDuoJr algorithm is Mark Overton's and its terms are not stated here); the original rhet.dev post no longer resolves (DNS failure in this session), so this repo is the reachable copy.",
+  "sources_read": [
+    "https://github.com/Almightygir/rhet_RNG",
+    "https://raw.githubusercontent.com/Almightygir/rhet_RNG/HEAD/README.md",
+    "https://raw.githubusercontent.com/Almightygir/rhet_RNG/HEAD/xromu2jr.h",
+    "https://github.com/ulfben/cpp_prngs",
+    "https://rhet.dev/wheel/rng-battle-royale-47-prngs-9-consoles/ (fetch failed: getaddrinfo ENOTFOUND rhet.dev; WebSearch snippet only)"
+  ],
+  "confidence": 0.75
+}
