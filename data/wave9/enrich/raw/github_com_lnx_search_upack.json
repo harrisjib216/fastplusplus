@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/lnx-search/upack",
+  "one_liner": "Rust SIMD bitpacking of 128-integer u32/u16 blocks; beats the bitpacking crate's BitPacker4x on x86, loses on ARM.",
+  "what_it_does": "Packs blocks of up to 128 u32 (or u16) integers to the minimum bit width of the block, with plain, delta and delta-1 variants for sorted lists. The API is four free functions per variant family (compress, compress_delta, compress_delta1 and their decompress counterparts) over fixed [u32; 128] arrays; the caller stores the returned bit length and element count, since the block carries no header. Its distinguishing feature is that a partial block of n < 128 values packs to a shorter output (19 values at 3 bits take 10 bytes rather than 64), so short posting lists need no fallback codec.",
+  "how_it_is_fast": "Hand-written AVX-512, AVX2 and NEON kernels (plus a scalar fallback) chosen at run time with is_x86_feature_detected or the aarch64 equivalent, and specialised per bit width. Each 128-value block is processed as two 64-value halves with separate full and partial pack/unpack kernels, so a short block costs only the bytes and work for its n values. Delta decoding is fused into the unpack kernels, which is where the largest gain over the baseline shows (8.81 vs 3.82 B int/s on Zen5).",
+  "when_to_use": [
+    "Rust search engines or columnar stores packing sorted docID or offset blocks of 128 u32 values on x86-64 with AVX2 or AVX-512.",
+    "Workloads with many short lists or tail blocks under 128 values, where fixed-size SIMD bitpacking would pad or need a separate VByte fallback.",
+    "Delta-coded decode-heavy paths on Zen5-class AVX-512 CPUs, where its delta decode measured 2.3x the bitpacking crate's BitPacker4x.",
+    "Projects that want zero dependencies and no allocation in the codec."
+  ],
+  "when_not_to_use": [
+    "ARM/NEON targets: on Apple M4 and Hetzner CAX11 it is slower than the bitpacking crate for both compress and decompress (M4 decompress 6.45 vs 7.01 B int/s, compress 4.12 vs 6.53).",
+    "u64 values or blocks larger than 128 integers (not supported).",
+    "Big-endian machines (compile_error in uint32/mod.rs).",
+    "C or C++ codebases: Rust-only crate with no C API; simdcomp or FastPFor give the same technique natively.",
+    "When you need a mature, widely deployed codec: 11 stars, about 95 total crates.io downloads, first release 2026-02-27."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "none (features avx512, avx2, neon enabled by default)",
+    "min_toolchain": "Rust 1.90.0, edition 2024",
+    "platforms": "x86-64 (AVX-512 or AVX2 paths, runtime detected), aarch64 (NEON), scalar fallback elsewhere; little-endian only",
+    "thread_safety": "Stateless free functions over caller-owned buffers; no shared state, so safe to call from many threads (not stated explicitly in the docs)",
+    "drop_in_for_baseline": "partial — same job and 128-value block as bitpacking::BitPacker4x, but a different bit layout and API, so stored data is not interchangeable"
+  },
+  "gotchas": [
+    "compress_delta and compress_delta1 take the input as &mut and overwrite it with the deltas.",
+    "decompress asserts that the input slice is at least the full-block size for that bit width, so a truncated partial block must be re-padded (zero-filled) in memory before decoding; only the stored copy can be short.",
+    "The block has no header: the caller must persist compressed_bit_length and n alongside the bytes.",
+    "Its format differs from simdcomp and from BitPacker4x/8x even at n = 128, so it cannot read their output."
+  ],
+  "pick_this_over_siblings_when": "Pick it over simdcomp or FastPFor when you are in Rust, on x86, and have many partial blocks; on ARM, or in C/C++, use simdcomp, FastPFor or TurboPFor, and for byte-oriented variable-length codes see Stream VByte or varint-simd.",
+  "verified_claims_summary": "The author's benchmark crate (synthetic sorted blocks with random gap bit widths up to 26, 1 M samples, 15 s per routine) compares against the bitpacking 0.9 crate's BitPacker4x, which is its SSE3 128-bit format, not the AVX2 BitPacker8x. On Zen5 (Ryzen 9 9950X, AVX-512), x128 decompress was 10.07 vs 8.85 B int/s plain and 8.81 vs 3.82 delta; on AVX2 Zen3 and Hetzner CCX13 the plain gain was about 4-6%; on NEON (M4, CAX11) upack was slower. Rust compiler version is not stated and builds used plain cargo --release with no target-cpu flag.",
+  "status_note": "Actively maintained (v1.1.1 on 2026-06-23, one open NEON tuning issue) and Apache-2.0, but young and lightly used; usable as a Rust dependency, not as C++ code.",
+  "sources_read": [
+    "https://github.com/lnx-search/upack",
+    "https://github.com/lnx-search/upack/issues?q=is%3Aissue",
+    "https://github.com/lnx-search/upack/tree/main/src",
+    "https://github.com/lnx-search/upack/tree/main/src/uint32",
+    "https://github.com/lnx-search/upack/tree/main/benchmark/src",
+    "https://github.com/lnx-search/upack/tree/main/benchmark/src/uint32",
+    "https://raw.githubusercontent.com/lnx-search/upack/HEAD/README.md",
+    "https://raw.githubusercontent.com/lnx-search/upack/HEAD/BENCHMARKS.md",
+    "https://raw.githubusercontent.com/lnx-search/upack/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/lnx-search/upack/HEAD/Justfile",
+    "https://raw.githubusercontent.com/lnx-search/upack/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/lnx-search/upack/HEAD/src/core.rs",
+    "https://raw.githubusercontent.com/lnx-search/upack/HEAD/src/util.rs",
+    "https://raw.githubusercontent.com/lnx-search/upack/HEAD/src/uint32/mod.rs",
+    "https://raw.githubusercontent.com/lnx-search/upack/HEAD/src/uint32/avx2/mod.rs",
+    "https://raw.githubusercontent.com/lnx-search/upack/HEAD/benchmark/Cargo.toml",
+    "https://raw.githubusercontent.com/lnx-search/upack/HEAD/benchmark/src/main.rs",
+    "https://raw.githubusercontent.com/lnx-search/upack/HEAD/benchmark/src/uint32/mod.rs",
+    "https://raw.githubusercontent.com/lnx-search/upack/HEAD/benchmark/src/uint32/lib_bitpacking.rs",
+    "https://raw.githubusercontent.com/lnx-search/upack/HEAD/benchmark/src/uint32/generate.rs",
+    "https://raw.githubusercontent.com/lnx-search/upack/HEAD/benchmark/src/uint32/runner.rs",
+    "https://raw.githubusercontent.com/quickwit-oss/bitpacking/HEAD/README.md",
+    "https://crates.io/api/v1/crates/upack"
+  ],
+  "confidence": 0.75
+}

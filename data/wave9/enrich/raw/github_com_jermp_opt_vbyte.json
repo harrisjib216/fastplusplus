@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/jermp/opt_vbyte",
+  "one_liner": "Research code that partitions posting lists into VByte and bitmap blocks, cutting VByte index space 30-47% at equal query speed.",
+  "what_it_does": "Builds and queries compressed inverted indexes (docID and frequency lists) where each sorted list is split into blocks, each coded either with VByte or as a plain bit vector. It is a ds2i-derived research codebase: you get command-line tools (create_freq_index, queries, check_index) over ds2i-format binary collections, plus C++ templates such as pvb::opt_vbyte and partitioned_vb_sequence. It is not a drop-in varint codec for arbitrary integer arrays.",
+  "how_it_is_fast": "The speed comes from VByte itself: sparse blocks are decoded with Masked-VByte (SSE shuffle-table decoding), and dense runs become compact ranked bit vectors, which are both smaller and fast to scan. The win is space: a single-pass, linear-time partitioning algorithm (optimizer.hpp) tracks the running bit-cost difference between VByte and bit-vector encoding of each run, with a fixed per-block cost F (default 64 bits), and cuts a block when switching encoders saves more than that cost. Block endpoints and sizes are stored with Elias-Fano so NextGEQ can skip partitions.",
+  "when_to_use": [
+    "Search-engine inverted indexes with sorted docID lists that contain dense clusters, where plain VByte wastes a full byte per small gap.",
+    "You already use VByte for decode speed and want about 30% smaller docID lists and 47% smaller frequency lists without giving up that speed.",
+    "Reproducing or extending the TKDE 2019/2020 paper's experiments on ds2i-format collections (Gov2, ClueWeb09, CCNews).",
+    "x86-64 build machines where -march=native with SSE4 is available for Masked-VByte."
+  ],
+  "when_not_to_use": [
+    "You need speed over VByte: query time is level with or slightly slower than unpartitioned VByte (4.378 vs 4.316 microseconds per AND query).",
+    "Unsorted integer arrays or general bitpacking: the partitioner assumes monotone docID lists (frequencies are handled as prefix sums via positive_sequence).",
+    "You want a small embeddable library: it pulls in Boost (iostreams, filesystem, thread, unit_test_framework), stxxl, succinct, FastPFor, streamvbyte and MaskedVByte submodules.",
+    "Long-lived production code: research code, last commit 2021-11-10, no releases, no tests enabled (test subdirectory commented out in CMakeLists.txt).",
+    "Non-x86 targets: Masked-VByte and VarIntG8IU paths use SSE intrinsics and the build forces -march=native."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "Boost >= 1.42 (iostreams, unit_test_framework, filesystem, system, thread), CMake >= 2.8, git submodules: FastPFor, stxxl, succinct, streamvbyte, MaskedVByte; OpenMP optional",
+    "min_toolchain": "C++14; README says tested with GCC 7.3.0 on Ubuntu; Clang builds add -stdlib=libc++",
+    "platforms": "x86-64 Linux tested (SSE4 via -march=native for Masked-VByte); macOS install notes for Boost only; other platforms not documented",
+    "thread_safety": "not documented; index building uses a Boost basic_thread_pool sized by DS2I_THREADS (default hardware_concurrency)",
+    "drop_in_for_baseline": "partial — same VByte byte format inside VByte blocks, but the index layout (partitions, bit-vector blocks, Elias-Fano endpoints) is new and needs this codebase to read"
+  },
+  "gotchas": [
+    "configuration's constructor creates a Boost thread pool, and pvb::opt_vbyte::encode holds a function-local static configuration, so the first encode call spawns hardware_concurrency worker threads.",
+    "Tuning is through environment variables (DS2I_FIXCOST, DS2I_K, DS2I_EPS1-3, DS2I_LOG_PART, DS2I_THREADS) read at construction, not through an API.",
+    "Uses Boost's experimental executors and task_region (BOOST_THREAD_PROVIDES_EXECUTORS, parallel::v2), which may need adjustment on recent Boost versions; not tested this session.",
+    "external/CMakeLists.txt runs 'git submodule update --init' at configure time, so a tarball without .git will not configure as-is."
+  ],
+  "pick_this_over_siblings_when": "Pick it over MaskedVByte or Stream VByte when the data is sorted posting lists and space matters as much as VByte-speed decoding; pick ds2i (partitioned Elias-Fano) for faster NextGEQ at even smaller size, or FastPFor/simdcomp when raw decode throughput is the goal.",
+  "verified_claims_summary": "On the repository's sample collection (113,306 lists, 3.3 M postings, 500 AND queries), on an i7-4790K at 4 GHz under Ubuntu 17.10 with -O3 -march=native (GCC 7.3.0 per the README), optimal partitioning shrinks docIDs from 10.498 to 7.388 bits per integer and frequencies from 8.031 to 4.268 versus unpartitioned Masked-VByte, with build time 0.739 vs 0.704 s and query time 4.378 vs 4.316 microseconds. The 2x compression on Gov2, ClueWeb09 and CCNews is the paper's claim (search snippet only; paper not opened).",
+  "status_note": "Abandoned research code (last commit 2021-11-10, no issues filed) under MIT; the partitioning algorithm (optimizer.hpp, about 130 lines) is the reusable part and is easy to port into another index.",
+  "sources_read": [
+    "https://github.com/jermp/opt_vbyte",
+    "https://github.com/jermp/opt_vbyte/commits/master",
+    "https://github.com/jermp/opt_vbyte/issues?q=is%3Aissue",
+    "https://github.com/jermp/opt_vbyte/tree/master/include",
+    "https://raw.githubusercontent.com/jermp/opt_vbyte/HEAD/README.md",
+    "https://raw.githubusercontent.com/jermp/opt_vbyte/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/jermp/opt_vbyte/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/jermp/opt_vbyte/master/include/opt_vbyte.hpp",
+    "https://raw.githubusercontent.com/jermp/opt_vbyte/master/include/optimizer.hpp",
+    "https://raw.githubusercontent.com/jermp/opt_vbyte/master/include/partitioned_vb_sequence.hpp",
+    "https://raw.githubusercontent.com/jermp/opt_vbyte/master/include/block_codecs.hpp",
+    "https://raw.githubusercontent.com/jermp/opt_vbyte/master/include/configuration.hpp",
+    "https://raw.githubusercontent.com/jermp/opt_vbyte/master/external/CMakeLists.txt",
+    "https://raw.githubusercontent.com/jermp/opt_vbyte/master/src/CMakeLists.txt",
+    "WebSearch: \"optimally partitioning variable-byte codes\" Pibiri Venturini (snippets of arxiv.org/pdf/1804.10949 and pages.di.unipi.it TKDE20.pdf; pages not opened)"
+  ],
+  "confidence": 0.75
+}
