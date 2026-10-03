@@ -1,0 +1,72 @@
+{
+  "id": "https://github.com/thempatel/streamvbyte-simdgo",
+  "one_liner": "Go port of Stream VByte with avo-generated AVX/AVX2 assembly; decodes uint32 arrays 8-14x faster than encoding/binary Uvarint loops.",
+  "what_it_does": "Encodes and decodes []uint32 in the Stream VByte format (a block of 2-bit length codes followed by the packed data bytes), with optional differential (delta) coding. Two API levels: pkg/stream/writer.WriteAll(in) []byte and reader.ReadAll(count, stream, out), and per-block decode.Get8uint32 / encode.Put8uint32 that take a 16-bit control for 8 values. It is a different format from LEB128, so it replaces Uvarint only where you own both ends; the caller must store the value count separately.",
+  "how_it_is_fast": "Decoding is a table lookup from each control byte to a PSHUFB mask, then two VPSHUFB shuffles expand 8 packed values into 32 bytes with no per-value branches; delta decoding adds an in-register prefix sum (VPSLLDQ plus VPADDD). Encoding computes control bytes with Lemire's VPMINUB/VPACKUSWB/VPMINSW/VPADDUSW/VPMOVMSKB trick and compacts with VPSHUFB. The assembly is generated with mmcloughlin/avo and chosen at init from golang.org/x/sys/cpu flags (AVX for decode, AVX and AVX2 for encode), with a pure-Go scalar fallback.",
+  "when_to_use": [
+    "Go services on amd64 that store or ship large []uint32 (posting lists, IDs, sorted timestamps as deltas) and control the format.",
+    "Bulk decode of thousands to millions of values: README ReadAllFast holds about 5.1-5.7 GB/s from 1e3 to 1e7 values on an i7-8700B.",
+    "Sorted inputs with ReadAllDelta/WriteAllDelta, where the deltas fit in 1-2 bytes and the format then compresses.",
+    "When you want pure Go plus assembly without cgo bindings to lemire/streamvbyte."
+  ],
+  "when_not_to_use": [
+    "You must read or write LEB128/protobuf varints: the format is incompatible; see chmike/varint or dennwc/varint for faster Uvarint.",
+    "Non-amd64 targets: by my reading, decode_base.go declares Get8uint32Fast with an int result that does not match the Get8Impl type assigned in decode.go init, and reader_base.go/writer_base.go lack ReadAllDeltaFast/WriteAllDeltaFast, so the packages should not compile on arm64; CI runs only on ubuntu-latest amd64.",
+    "Untrusted or externally sized buffers: the assembly ignores slice lengths, so short input or output slices cause silent out-of-bounds reads or writes rather than Go panics.",
+    "64-bit integers: only uint32 is supported.",
+    "Production dependency risk: 18 stars, 0 forks, no known importers on pkg.go.dev, last commit 2021-09-12."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "golang.org/x/sys/cpu; github.com/mmcloughlin/avo (imported by the runtime package pkg/shared via asm.go, not only by the generators); github.com/pkg/errors in go.mod",
+    "min_toolchain": "Go 1.16 (go.mod); uses legacy // +build tags",
+    "platforms": "amd64 with AVX (decode) and AVX2 (encode) for the fast path; scalar fallback on amd64 without them; other architectures advertised but appear not to build",
+    "thread_safety": "not documented; functions are stateless apart from read-only lookup tables chosen at init, so concurrent calls on distinct buffers look safe",
+    "drop_in_for_baseline": "partial: replaces encoding/binary Uvarint/PutUvarint loops over []uint32 only when you control both encoder and decoder; different wire format and the count must be stored separately"
+  },
+  "gotchas": [
+    "Get8uint32Fast/Put8uint32Fast (and the Asm variants) read 16 bytes at in and at in+len(first group), and write 32 bytes to out, without checking len(in) or len(out); pass at least 16 bytes of slack or use the stream API. The scalar versions panic on short slices instead.",
+    "ReadAllFast holds back the last 3 control bytes on the assumption that each covers 4 data bytes; by my reading, when count%4==1 and the tail values are 1-byte, the last 16-byte load can run up to 3 bytes past len(stream). It stays inside the allocation for streams from WriteAll (which returns a slice of a 4*count+ctrl buffer), but exactly sized external buffers lack that slack. Not tested here.",
+    "Benchmarks use uniform random uint32, so nearly every value takes 4 bytes in Stream VByte and 5 bytes in LEB128: no compression, constant control bytes, and the varint baseline at its slowest length. MB/s counts 4 bytes per decoded integer.",
+    "The baseline wrapper util.GetVarint loops on pos < len(data) and ignores Uvarint's n<=0 error return, so truncated input loops forever; it is test scaffolding, not library API."
+  ],
+  "pick_this_over_siblings_when": "Use it when you need Stream VByte from Go without cgo; from C or C++ use lemire/streamvbyte (the reference, also catalogued), and if the LEB128 format is fixed use chmike/varint or dennwc/varint instead.",
+  "verified_claims_summary": "go test -bench output in the README (darwin/amd64, Intel i7-8700B @ 3.20GHz, Go version not stated, go.mod go 1.16): 8-value decode 10095.99 MB/s with AVX versus 731.10 MB/s for an encoding/binary.Uvarint loop (about 13.8x, derived from page data), and stream decode of 1e6 values 5490.62 versus 695.04 MB/s (about 7.9x, derived). The repo's own scalar Stream VByte decoder already reaches about 1659 MB/s, so roughly 2.3x of the gain comes from the format and the rest from SIMD; stream encode gains only about 1.9x (3218.21 vs 1735.08 MB/s at 1e6).",
+  "status_note": "Abandoned since 2021-09-12 (30 commits, v0.4.0, no open issues, no known importers), Apache-2.0 and small enough to vendor if you add length checks and fix the non-amd64 build.",
+  "sources_read": [
+    "https://github.com/thempatel/streamvbyte-simdgo",
+    "https://github.com/thempatel/streamvbyte-simdgo/tree/main/pkg",
+    "https://github.com/thempatel/streamvbyte-simdgo/tree/main/pkg/decode",
+    "https://github.com/thempatel/streamvbyte-simdgo/tree/main/pkg/encode",
+    "https://github.com/thempatel/streamvbyte-simdgo/tree/main/pkg/shared",
+    "https://github.com/thempatel/streamvbyte-simdgo/tree/main/pkg/stream/reader",
+    "https://raw.githubusercontent.com/thempatel/streamvbyte-simdgo/HEAD/README.md",
+    "https://raw.githubusercontent.com/thempatel/streamvbyte-simdgo/HEAD/go.mod",
+    "https://raw.githubusercontent.com/thempatel/streamvbyte-simdgo/HEAD/Makefile",
+    "https://raw.githubusercontent.com/thempatel/streamvbyte-simdgo/HEAD/.github/workflows/default.yaml",
+    "https://raw.githubusercontent.com/thempatel/streamvbyte-simdgo/HEAD/pkg/decode/decode.go",
+    "https://raw.githubusercontent.com/thempatel/streamvbyte-simdgo/HEAD/pkg/decode/decode_amd64.go",
+    "https://raw.githubusercontent.com/thempatel/streamvbyte-simdgo/HEAD/pkg/decode/decode_amd64.s",
+    "https://raw.githubusercontent.com/thempatel/streamvbyte-simdgo/HEAD/pkg/decode/decode_base.go",
+    "https://raw.githubusercontent.com/thempatel/streamvbyte-simdgo/HEAD/pkg/decode/decode_test.go",
+    "https://raw.githubusercontent.com/thempatel/streamvbyte-simdgo/HEAD/pkg/encode/encode.go",
+    "https://raw.githubusercontent.com/thempatel/streamvbyte-simdgo/HEAD/pkg/encode/encode_amd64.go",
+    "https://raw.githubusercontent.com/thempatel/streamvbyte-simdgo/HEAD/pkg/encode/encode_amd64.s",
+    "https://raw.githubusercontent.com/thempatel/streamvbyte-simdgo/HEAD/pkg/encode/encode_base.go",
+    "https://raw.githubusercontent.com/thempatel/streamvbyte-simdgo/HEAD/pkg/shared/asm.go",
+    "https://raw.githubusercontent.com/thempatel/streamvbyte-simdgo/HEAD/pkg/shared/mode.go",
+    "https://raw.githubusercontent.com/thempatel/streamvbyte-simdgo/HEAD/pkg/shared/tables.go",
+    "https://raw.githubusercontent.com/thempatel/streamvbyte-simdgo/HEAD/pkg/stream/reader/reader.go",
+    "https://raw.githubusercontent.com/thempatel/streamvbyte-simdgo/HEAD/pkg/stream/reader/reader_amd64.go",
+    "https://raw.githubusercontent.com/thempatel/streamvbyte-simdgo/HEAD/pkg/stream/reader/reader_base.go",
+    "https://raw.githubusercontent.com/thempatel/streamvbyte-simdgo/HEAD/pkg/stream/reader/reader_test.go",
+    "https://raw.githubusercontent.com/thempatel/streamvbyte-simdgo/HEAD/pkg/stream/writer/writer.go",
+    "https://raw.githubusercontent.com/thempatel/streamvbyte-simdgo/HEAD/pkg/stream/writer/writer_amd64.go",
+    "https://raw.githubusercontent.com/thempatel/streamvbyte-simdgo/HEAD/pkg/stream/writer/writer_base.go",
+    "https://raw.githubusercontent.com/thempatel/streamvbyte-simdgo/HEAD/pkg/util/util.go",
+    "https://raw.githubusercontent.com/thempatel/streamvbyte-simdgo/HEAD/pkg/util/varint.go",
+    "https://raw.githubusercontent.com/thempatel/streamvbyte-simdgo/HEAD/pkg/pkg_test.go",
+    "https://pkg.go.dev/github.com/theMPatel/streamvbyte-simdgo/pkg/stream/reader?tab=importedby"
+  ],
+  "confidence": 0.75
+}

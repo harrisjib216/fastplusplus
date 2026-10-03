@@ -1,0 +1,45 @@
+{
+  "id": "paper:sfvint",
+  "one_liner": "DaMoN 2024 paper: BMI2 PEXT/PDEP LEB128 varint decoder claiming up to 2x over Folly and Protobuf; no public code.",
+  "what_it_does": "Describes a decoder for standard LEB128 (protobuf-style) varints that keeps the wire format unchanged, so it targets the same call sites as folly::decodeVarint or protobuf's varint readers. Per the abstract it is about 500 lines with one C++ template covering 32-bit and 64-bit unsigned values. No repository, licence or API was found, so it is a technique to reimplement, not a library to link.",
+  "how_it_is_fast": "Instead of the byte-at-a-time test-and-branch loop, it loads several bytes at once and uses BMI2 PEXT with a continuation-bit mask (search snippets quote masks 0x0000808080808080, 0x0080808080808080 and 0x8080808080808080 for six, seven and eight bytes) to gather the MSBs, then PEXT/PDEP to compact the 7-bit payload groups into the integer in a few instructions. The baseline it beats, folly::tryDecodeVarint, is an unrolled chain of up to ten load/test/branch steps per value.",
+  "when_to_use": [
+    "You must keep the LEB128/protobuf varint wire format (existing files, RPC payloads, column stores) and varint decode shows up in profiles.",
+    "Intel Haswell or later, or AMD Zen 3 or later, where PEXT/PDEP run in hardware.",
+    "Mixed-length 64-bit varints where the scalar loop's data-dependent branches mispredict.",
+    "You are willing to write and fuzz your own decoder from the paper's description."
+  ],
+  "when_not_to_use": [
+    "AMD Zen, Zen+ and Zen 2: PDEP/PEXT are microcoded there and much slower (varint-simd's README documents this), so a BMI2 decoder can lose to the scalar loop.",
+    "Non-x86 targets (aarch64, wasm): BMI2 does not exist; you need a separate path.",
+    "You control the format: block formats such as Stream VByte, Masked VByte or SIMD bit-packing decode several times faster than any one-at-a-time LEB128 decoder.",
+    "You need drop-in, tested code today: there is no public implementation to vendor.",
+    "Untrusted input: bounds handling, overlong-encoding and malformed-input behaviour are not documented in anything readable here."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "not documented (no public code); needs BMI2 intrinsics (_pext_u64/_pdep_u64)",
+    "min_toolchain": "not documented; C++ templates plus BMI2 intrinsics (e.g. -mbmi2)",
+    "platforms": "x86-64 with BMI2 only; fast only where PDEP/PEXT are in hardware (Intel Haswell+, AMD Zen 3+)",
+    "thread_safety": "not documented (a stateless decode function would be reentrant)",
+    "drop_in_for_baseline": "partial: same LEB128 format and per-value decode, but no published code or API to drop in"
+  },
+  "gotchas": [
+    "No code: the 2x figure cannot be reproduced or checked; the verifier and this enricher found nothing under the first author's GitHub account (gangliao).",
+    "A multi-byte load with a PEXT mask likely reads up to 8 bytes past the value start; the paper's padding or tail rule could not be read here, so check this before decoding at buffer ends.",
+    "Folly's baseline already has a bounds-checked fast path only when 10+ bytes remain and reports TooManyBytes/TooFewBytes errors; a faster decoder that drops those checks is not a like-for-like comparison."
+  ],
+  "pick_this_over_siblings_when": "Pick the technique over Stream VByte or MaskedVByte only when the LEB128 wire format is fixed; varint-simd (Rust, SSSE3/AVX2, public code and benchmarks on an i7-8850H) solves the same problem and is the safer starting point for a port to C++.",
+  "verified_claims_summary": "Only the abstract was seen (as search snippets): up to 2x faster LEB128 decoding than Facebook Folly and Google Protobuf varint decoders on AWS Intel m6i instances, for 32-bit and 64-bit values; one snippet cites 3.1 ms to 1.6 ms on a 'Web2' workload. Compiler, flags, library versions, datasets and per-length results were not readable here.",
+  "status_note": "Peer-reviewed workshop paper (DaMoN 2024, authors from University of Maryland and ByteDance) with no public code, licence or maintenance; treat as a reference design (usability: reference), tier C until the paper body is read.",
+  "sources_read": [
+    "https://github.com/gangliao?tab=repositories&q=&type=source&sort=updated",
+    "https://raw.githubusercontent.com/as-com/varint-simd/HEAD/README.md",
+    "https://raw.githubusercontent.com/facebook/folly/main/folly/Varint.h",
+    "WebSearch snippets of https://arxiv.org/abs/2403.06898, https://arxiv.org/html/2403.06898v4 and https://dl.acm.org/doi/10.1145/3662010.3663439 (pages themselves EGRESS_BLOCKED)",
+    "https://arxiv.org/html/2403.06898v4 (attempted, EGRESS_BLOCKED)",
+    "https://awesomepapers.io/systems-efficiency/papers/2403.06898 (attempted, EGRESS_BLOCKED)",
+    "https://paperhub.s3.amazonaws.com/2403.06898.pdf (attempted, HTTP 403)"
+  ],
+  "confidence": 0.35
+}
