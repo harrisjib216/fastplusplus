@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/jkbonfield/rans_static",
+  "one_liner": "James Bonfield's 2014-2018 static rANS experiments; the 32-way AVX2 decoder runs about 4x faster than the CRAM rANS_static4c codec.",
+  "what_it_does": "A research collection of order-0 and order-1 static-model byte entropy coders derived from Fabian Giesen's ryg_rans: a 4-way unrolled arithmetic coder, 4-way rANS with 8-bit and 16-bit renormalisation, generic N-way variants, and hand-written SSE4/AVX2/AVX-512 variants with 8, 16 and 32 states. Each file is a standalone C codec with a memory-to-memory API (rans_compress_to_32x16(in, in_size, out, &out_size, order) and the matching uncompress). A TEST_MAIN block in each file adds a CLI and an in-memory benchmark. The output formats differ between variants: 4x16 is incompatible with 4x8/4c, and the 32x16 stream is a different format again.",
+  "how_it_is_fast": "Interleaved rANS: many independent rANS states share one output buffer, so decode steps have no dependency on each other and can run in SIMD lanes. Moving from 8-bit to 16-bit renormalisation (state kept as 15+16 bits, as in ryg's SIMD variant) means at most one renormalisation per symbol, which alone roughly doubles scalar decode (rANS_static4x16). The r32x16b_avx2 decoder keeps 32 states in four AVX2 registers, looks up a packed freq/base/symbol table with _mm256_i32gather_epi32, updates states with _mm256_mullo_epi32, and handles renormalisation by compress-and-permute (_mm256_permutevar8x32_epi32 with a precomputed permute table) to load 16-bit words only for the lanes that need them.",
+  "when_to_use": [
+    "Studying or porting SIMD rANS: the AVX2 32-state decoder is a compact, readable worked example of the gather-plus-permute renormalisation trick.",
+    "Benchmarking your own entropy coder against the historical CRAM-era codecs (rANS_static4c, arith_static) with the same harness.",
+    "Low-alphabet, statistically stable byte data such as sequencing quality scores, where a static order-0 model compressed in ~1 MB blocks is enough.",
+    "Decode-heavy workloads on AVX2 x86-64: decode reached 1430.6 MB/s versus encode 534.7 MB/s on Q8 order-0."
+  ],
+  "when_not_to_use": [
+    "Production code: there is no licence (issue #1 asking for one was closed in March 2022 and the README now redirects to htscodecs), so you cannot legally ship it.",
+    "Untrusted input: the decoders parse the frequency table and read the stream without bounds checks on in_size, and only an assert (after the table is filled) checks that frequencies stay under TOTFREQ.",
+    "Adaptive or context-mixing needs: models are static per block and the frequency table is stored in each block, so tiny blocks pay heavily for the header.",
+    "Non-x86 or pre-AVX2 CPUs for the fast path; the scalar 4x16 coder is the portable fallback at about half the AVX2 decode speed.",
+    "Order-1 encoding speed: the r32x16b_avx2 order-1 encoder is scalar (TODO in the source), so order-1 encode stays near 237 MB/s, and r32x16_avx2 order-1 fails (ERR in the README)."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (C standard library; x86intrin.h and the in-repo permute.h for SIMD variants; OpenMP flag in the Makefile)",
+    "min_toolchain": "C99 compiler with AVX2 intrinsics; tested with gcc 6.2.0, clang 3.7.0 and icc 15.0.0",
+    "platforms": "x86-64; AVX2 (-march=core-avx2) for the r*_avx2 variants, SSE4.1 for r8x16_sse, AVX-512 (KNL) variants commented out of the Makefile; scalar variants are portable",
+    "thread_safety": "not documented; the codec functions use stack-local tables and caller-provided or malloc'd buffers, so separate calls on separate buffers look independent",
+    "drop_in_for_baseline": "partial: same function-call shape as rANS_static4c, but the 4x16 and 32x16 streams are not compatible with CRAM's 4x8/4c format"
+  },
+  "gotchas": [
+    "Each file defines its own copies of the ryg_rans helpers and similarly named functions (the README warns r16x16_avx2 exposes rans_compress_O1_4x16), so linking several variants into one binary clashes.",
+    "Order-1 4x16-family tables use 9 bits (TF_SHIFT_O1 9) against 12 bits in 4c/4x8, so order-1 speed comparisons are not like-for-like and compression is slightly worse.",
+    "The README calls the SIMD codecs experimental, with many warnings and commented-out code; some order-1 SIMD paths do not work.",
+    "Benchmarks read the input in BLK_SIZE blocks (1013*1047 in the Makefile) and time in-memory encode and decode with gettimeofday, with NTRIALS=1 by default in the Makefile."
+  ],
+  "pick_this_over_siblings_when": "Pick it only as a reference to learn the technique: for real use, htscodecs (the same author's maintained, BSD-licensed successor with more aggressive SIMD, per this README) and hypersonic-rANS (which reports about 3 GiB/s decode on enwik8 on newer hardware) are licensed and newer, and ryg_rans is the public-domain scalar origin.",
+  "verified_claims_summary": "On a Haswell i5-4570 with gcc 6.2.0, single-threaded in-memory order-0 decode of two DNA quality-score files (73 MB and 95 MB) ran at 1430.6 and 1415.0 MB/s for r32x16b_avx2 against 335.2 and 360.4 MB/s for the CRAM codec rANS_static4c (about 4.3x and 3.9x, derived from page data); encode improved only 1.8x and compressed size was within 0.02%. The clang 3.7 and icc 15 runs show the same ordering (1220.7 and 1359.0 MB/s on Q8); the test files are not shipped.",
+  "status_note": "Abandoned: last code commit 2018-04-09 and a README-only update in March 2022 pointing users to samtools/htscodecs; no licence, so reference only.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/jkbonfield/rans_static/HEAD/README.md",
+    "https://raw.githubusercontent.com/jkbonfield/rans_static/HEAD/Makefile",
+    "https://raw.githubusercontent.com/jkbonfield/rans_static/HEAD/r32x16b_avx2.c",
+    "https://raw.githubusercontent.com/jkbonfield/rans_static/HEAD/rANS_static4x16.h",
+    "https://raw.githubusercontent.com/jkbonfield/rans_static/HEAD/rANS_static.h",
+    "https://raw.githubusercontent.com/jkbonfield/rans_static/HEAD/rANS_static4c.c",
+    "https://raw.githubusercontent.com/jkbonfield/rans_static/HEAD/rANS_static4x16pr.c",
+    "https://raw.githubusercontent.com/jkbonfield/rans_static/HEAD/permute.h",
+    "https://github.com/jkbonfield/rans_static/issues?q=is%3Aissue",
+    "https://github.com/jkbonfield/rans_static/issues/1",
+    "https://github.com/jkbonfield/rans_static/commits",
+    "https://raw.githubusercontent.com/samtools/htscodecs/HEAD/LICENSE.md"
+  ],
+  "confidence": 0.8
+}

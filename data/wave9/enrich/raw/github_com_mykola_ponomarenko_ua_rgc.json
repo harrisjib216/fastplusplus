@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/mykola-ponomarenko-ua/rgc",
+  "one_liner": "Tiny MIT C entropy coder (Recursive Group Coding) that compresses large-alphabet data better than static AC, claiming about 2x its speed.",
+  "what_it_does": "RGC is a static, multiplication-free entropy coder for byte streams, an alternative to Huffman or arithmetic coding. The C API is two calls, rgc_encode(src, size, &out, &out_size) and rgc_decode(...), each allocating its output, which the caller frees with rgc_free(); a CPython extension (pip install rgclib) exposes compress()/decompress(). It is not stream- or format-compatible with any AC or range coder, so it replaces the final entropy stage of a pipeline rather than dropping into an existing one.",
+  "how_it_is_fast": "It follows Ryabko-style grouping (the 2009 paper calls it RCGS): symbols sorted by frequency are split into at most 16 power-of-two groups of near-equal probability, each symbol becomes a 4-bit group id plus a raw, uncoded suffix index of 0-8 bits. Neighbouring group ids are packed in pairs into a new byte stream half as long, and the procedure recurses until fewer than 200 bytes remain, which are stored raw. Per symbol the coder does only table lookups, a shift and an OR, with no multiplications or renormalisation; the recursion also picks up pair and longer-run statistics, which is why it can beat order-0 entropy on correlated data.",
+  "when_to_use": [
+    "Final stage of a pipeline on large-alphabet or block-structured data with residual neighbour correlation, such as quantized DCT coefficients (the repo's 1 MB tst.dat: 224,071 bytes versus 237,380 for TurboRC rcc2senc() and 261,695 for 8-bit AC).",
+    "BWT plus distance-coding pipelines; the README reports about 20% smaller output than BWT + DC + AC on traffic time stamps (no data shipped for that case).",
+    "When you want a two-file, dependency-free, MIT-licensed coder you can read in one sitting (rgc.c is about 500 lines) and a Python binding from PyPI.",
+    "Statistically homogeneous blocks of tens of kilobytes or more, where the group symbol lists per recursion level are small relative to the payload."
+  ],
+  "when_not_to_use": [
+    "Untrusted compressed input: rgc_decode() reads offsets, a group count (one byte, up to 255) and length fields straight from the stream without bounds checks, while group_sizes and group_symbols hold only 16 groups, so a crafted stream can overflow stack buffers and read outside the input.",
+    "Throughput-critical coding where rANS, FSE or Huff0 are options: the only timing of this C code is 0.01 s for 1 MB at timer resolution, and the paper's 2x speed claim is against a 2009 hand-written assembler AC, not against modern interleaved rANS or table Huffman.",
+    "Random or near-uniform 8-bit data, where the README says it loses to AC by about 1-2%, and files of only a few kilobytes, where group lists dominate.",
+    "Adaptive or streaming use: the model is static over the whole buffer, the API is one-shot in-memory, and there is no block or streaming interface.",
+    "Very large buffers: sizes are int32_t, encode allocates about 20x the input (a 9x compressed scratch buffer, a 9x one-byte-per-bit suffix buffer, plus prefix and working copies), and the int32 suffix bit counter can overflow above roughly 268 MB of high-entropy input (inferred from the code)."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (C standard library and libm for log()); Python wrapper needs CPython 3.9+",
+    "min_toolchain": "C99 compiler (uses stdint.h); README builds with MSVC 'cl /O2 /MD'",
+    "platforms": "any (portable scalar C, no SIMD); PyPI metadata lists Windows, macOS and Linux",
+    "thread_safety": "Not documented; the code has no global state and allocates per call, so concurrent calls on separate buffers look safe. The Python extension does not release the GIL.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Speed claims are in prose; examples/rgc_demo.c only round-trips tst.dat and prints the size, with no timing or TurboRC code, so the 0.01 s versus 0.03 s figures cannot be reproduced from the repo.",
+    "Encoding computes log2 in double precision for each candidate group to decide group sizes (threshold 1.02), so the model build, not only the per-symbol path, costs time; the per-symbol path is the multiplication-free part.",
+    "Compression gains on tst.dat partly come from the recursion exploiting position and neighbour structure (1024-byte DCT blocks), so the comparison with an order-0 8-bit AC is not like-for-like.",
+    "Version 0.1.2, first public release in March 2026 and marked Development Status 3 - Alpha on PyPI; tests are one test_basic.py."
+  ],
+  "pick_this_over_siblings_when": "Pick RGC over TurboRC, FSE/Huff0 or rANS coders such as ryg_rans or hypersonic-rANS when compressed size on large-alphabet, block-structured data matters more than raw throughput and you want the smallest, simplest MIT code. Those siblings publish far higher measured throughput and harden their decoders better, so they win on speed and on untrusted input.",
+  "verified_claims_summary": "The repo times one 1 MB file of quantized 32x32 DCT coefficients: RGC 0.01 s and 224,071 bytes versus TurboRC rcc2senc() 0.03 s and 237,380 bytes, with no CPU, compiler flags, repeat count or AC timing. The 2009 paper's Calgary average (17.89 ms encode and 17.72 ms decode versus 36.80 and 38.05 ms, about 2.1x, derived from page data) measured a Delphi implementation against an unnamed assembler static AC on unstated hardware, not this C code.",
+  "status_note": "Active as of March 2026 (v0.1.2, 12 commits, 2 stars) and MIT-licensed, so copyable, but young and unhardened; vendor it only for trusted data.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/mykola-ponomarenko-ua/rgc/HEAD/README.md",
+    "https://github.com/mykola-ponomarenko-ua/rgc",
+    "https://github.com/mykola-ponomarenko-ua/rgc/tree/main/tests",
+    "https://raw.githubusercontent.com/mykola-ponomarenko-ua/rgc/HEAD/src/rgc/rgc.h",
+    "https://raw.githubusercontent.com/mykola-ponomarenko-ua/rgc/HEAD/src/rgc/rgc.c",
+    "https://raw.githubusercontent.com/mykola-ponomarenko-ua/rgc/HEAD/src/rgc/__init__.py",
+    "https://raw.githubusercontent.com/mykola-ponomarenko-ua/rgc/HEAD/src/rgc/_rgcmodule.c",
+    "https://raw.githubusercontent.com/mykola-ponomarenko-ua/rgc/HEAD/examples/rgc_demo.c",
+    "https://raw.githubusercontent.com/mykola-ponomarenko-ua/rgc/HEAD/examples/prep.py",
+    "https://raw.githubusercontent.com/mykola-ponomarenko-ua/rgc/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/mykola-ponomarenko-ua/rgc/HEAD/setup.py",
+    "https://raw.githubusercontent.com/mykola-ponomarenko-ua/rgc/HEAD/pyproject.toml",
+    "https://raw.githubusercontent.com/mykola-ponomarenko-ua/rgc/main/paper/recursive_group_coding_2009.pdf"
+  ],
+  "confidence": 0.75
+}
