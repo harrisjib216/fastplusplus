@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/vigna/sux-rs",
+  "one_liner": "Vigna's Rust succinct-structures crate; Rank9 plus SelectAdapt was fastest of four Rust crates on rank1 and select1.",
+  "what_it_does": "A large pure-Rust library of succinct and compressed structures: bit vectors and bit-field vectors, composable rank/select structures (Rank9, RankSmall, SelectAdapt, Select9 and zero variants), Elias-Fano, rear-coded string lists, static functions and filters (VFunc, VFilter), monotone minimal perfect hashes, partial arrays and balanced parentheses. Rank/select structures wrap a backend and delegate to it, so you nest them as types, e.g. SelectAdapt<Rank9<BitVec>>; every query has a checked and an unsafe unchecked variant. Structures serialize with serde or with ε-serde, which can memory-map them.",
+  "how_it_is_fast": "Rank9 (Vigna, WEA 2008) interleaves a 64-bit absolute count per 512-bit block with seven 9-bit relative counts in Gog and Petri's reversed order, so rank is at most two cache misses with no loops or branches, and it exposes prefetch hooks. SelectAdapt extends Vigna's 'simple' select with an adaptive two-level inventory: an indexed one every L ones, plus M (default 8, one cache line) words of 16-bit offsets interleaved with it, falling back to 32- or 64-bit spill entries for very sparse stretches, then a short broadword scan. In-word select uses BMI2 PDEP when the build enables bmi2 and a broadword routine otherwise; unchecked accessors skip bounds checks on the hot path.",
+  "when_to_use": [
+    "Static bit vectors where both rank1 and select1 latency matter: in the succinctly benchmark (ARM64, 1M and 10M bits, 10-90% density) it was fastest of four Rust crates on both in every cell.",
+    "Pipelines that need rank/select together with Elias-Fano, static functions, MMPHFs or compressed string lists from one coherent, actively developed library.",
+    "Large read-only indexes you want to build once and memory-map (ε-serde zero-copy loading).",
+    "x86-64 builds where you can enable BMI2 (target-cpu=native): in-word select switches to PDEP."
+  ],
+  "when_not_to_use": [
+    "Memory-tight bit vectors: the benchmarked Rank9 plus SelectAdapt costs 32-39% over the raw bits (Rank9 alone is 25% by design), against 5-6.5% for vers-vecs; consider RankSmall or vers-vecs instead.",
+    "Small dependency budgets: the crate pulls in anyhow, rayon (default), zstd and flate2 (default), rand, rdst, epserde-related and other crates, and needs Rust 1.85 (edition 2024 on main).",
+    "When API stability matters: 0.14.0 (2026-04-11) was a full rewrite incompatible with 0.13, and the unreleased main changes field names and serialized formats again.",
+    "Loading untrusted serde data: Rank9's safe rank() checks only the position against the bit length, then reads the counter array with get_unchecked, and serde deserialization does not check that the counters match the bits; a crafted file could cause an out-of-bounds read (inferred from reading the source, not tested).",
+    "Bit vectors with mixed very dense and very sparse halves: the SelectAdapt docs warn its select speed then depends on which bit you ask for and suggest Select9."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "anyhow, mem_dbg, ambassador, impl-tools, lender, num-primitive, atomic-primitive, rand, rdst, value-traits, zerocopy, xxhash-rust, thiserror, crossbeam-channel, dsi-progress-logger, tempfile and others; optional rayon, zstd, flate2 (default on), epserde, serde, mmap",
+    "min_toolchain": "Rust 1.85 (rust-version); main uses edition 2024; aarch64_prefetch and iter_advance_by features need nightly",
+    "platforms": "64-bit and 32-bit targets (Rank9 requires 64-bit words, enforced at compile time); x86-64 PDEP path needs bmi2 enabled at build time; wasm32-wasip1 configured in .cargo/config.toml",
+    "thread_safety": "not documented for the rank/select structures; they are immutable after construction and queried through &self; AtomicBitVec provides concurrent bit updates (orderings fixed on main)",
+    "drop_in_for_baseline": "partial: implements its own Rank/Select traits; rank(pos) returns usize and saturates to num_ones() for pos >= len, while sucds and succinctly return Option; not a drop-in for SDSL or other Rust crates"
+  },
+  "gotchas": [
+    "The repo's .cargo/config.toml sets -C target-cpu=native, so its own benchmarks use native code, but that setting does not apply when sux is a dependency: the succinctly benchmark ran it without target-cpu, and you must set RUSTFLAGS yourself to get PDEP on x86-64.",
+    "The 30-120x slower construction in the benchmark is a harness artifact: it filled BitVec::new(len) with per-bit set(), while sux has unsafe BitVec::from_raw_parts(words, len) to adopt an already-packed Vec<usize> without copying.",
+    "0.14.0 is still affected by issues fixed only on unreleased main: EliasFano::pred with a value above the upper bound caused undefined behavior (issue #108), Select9 was wrong on very sparse vectors, unsound reference-based From conversions between BitVec and AtomicBitVec were removed, and structures built from deserialized input with dirty padding bits could return spurious rank/select answers. The benchmarked Rank9 plus SelectAdapt answers were cross-checked against the other crates.",
+    "Licence differs by version: published crates up to 0.14.0 are Apache-2.0 OR LGPL-2.1-or-later; main is Apache-2.0 OR MIT. Both allow Apache-2.0 use."
+  ],
+  "pick_this_over_siblings_when": "Pick sux-rs over sucds when query speed matters most (1.5-1.85x faster rank1 and faster select1 in the same tables) and you can accept heavier dependencies and API churn; pick vers-vecs when space or fast construction matters more; QuadRank/BiRank reports beating sux-rs Rank9 on high-throughput rank, so prefer it for batched rank-only workloads.",
+  "verified_claims_summary": "succinctly's cross-crate benchmark (rustc 1.97.0, criterion, default bench profile with no target-cpu, Apple M5 Max ARM64) timed 10,000 random queries on identical seeded 1M- and 10M-bit vectors: sux 0.14.0 SelectAdapt<Rank9<AddNumBits<BitVec>>> took 9.0-10.8 us for rank1 against 16.0-17.9 us for sucds, 14.2-17.9 us for succinctly and 30.0-34.0 us for vers-vecs, and 55.8-78.7 us for select1 against 70.8-139.7 us for sucds (near parity at 1M/90%) and 174.4-575.6 us for vers-vecs, whose AVX-512 select did not run on ARM64.",
+  "status_note": "Very active (about 3,600 commits, last commit 2026-09-11, 0.15.0 in preparation with many soundness and robustness fixes), maintained by Sebastiano Vigna and Tommaso Fontana; copyable under Apache-2.0, though the large dependency tree makes vendoring single structures harder than with the C++ sux.",
+  "sources_read": [
+    "https://github.com/vigna/sux-rs",
+    "https://github.com/vigna/sux-rs/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/vigna/sux-rs/HEAD/README.md",
+    "https://raw.githubusercontent.com/vigna/sux-rs/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/vigna/sux-rs/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/vigna/sux-rs/HEAD/.cargo/config.toml",
+    "https://raw.githubusercontent.com/vigna/sux-rs/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/vigna/sux-rs/HEAD/src/rank_sel/mod.rs",
+    "https://raw.githubusercontent.com/vigna/sux-rs/HEAD/src/rank_sel/rank9.rs",
+    "https://raw.githubusercontent.com/vigna/sux-rs/HEAD/src/rank_sel/select_adapt.rs",
+    "https://raw.githubusercontent.com/vigna/sux-rs/HEAD/src/traits/rank_sel.rs",
+    "https://raw.githubusercontent.com/vigna/sux-rs/HEAD/src/bits/bit_vec.rs",
+    "https://raw.githubusercontent.com/vigna/sux-rs/HEAD/src/utils/select_in_word.rs",
+    "https://raw.githubusercontent.com/vigna/sux-rs/HEAD/src/utils/mod.rs",
+    "https://crates.io/api/v1/crates/sux",
+    "https://raw.githubusercontent.com/maxi-tools/succinctly/HEAD/docs/benchmarks/rust-succinct-libs.md",
+    "https://raw.githubusercontent.com/maxi-tools/succinctly/HEAD/bench-compare/benches/succinct_libs.rs",
+    "https://raw.githubusercontent.com/maxi-tools/succinctly/HEAD/bench-compare/Cargo.toml"
+  ],
+  "confidence": 0.75
+}
