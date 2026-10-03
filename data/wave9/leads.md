@@ -19,3 +19,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - Apple LZMESH (OS 27 fast codec, liblzraven SPEC section 15) and libzbitmap (LZBITMAP reimplementation; lzfse issue #62): Apple-codec siblings to check. (from LZFSE/liblzraven enricher)
 - pisa-engine/pisa: maintained ds2i fork (PEF plus many codecs), not catalogued; seed candidate. (from ds2i enricher)
 - traviswheelerlab/avxwindowfmindex (C): AMB paper on biomedcentral/biorxiv (blocked); retier to B when reachable. (w9 batch 36)
+- emmanuel-marty/em_inflate (C, zlib license, 80 stars; README benchmark vs zlib 1.2.11 on a Core i7, clang 6.0.0 -O3): the original that inflatecpp ports; seed candidate for general-lossless. (from inflatecpp enricher)

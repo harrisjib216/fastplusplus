@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/artexety/inflatecpp",
+  "one_liner": "Small C++ one-shot zlib/gzip/raw-deflate decoder; a port of em_inflate, about 1.1-1.3x faster than zlib 1.2.11 inflate.",
+  "what_it_does": "Decodes a complete zlib, gzip or raw deflate stream from one memory buffer into another with a single call, Decompressor::Feed(in, in_size, out, out_max, verify_checksum), returning the output length or (unsigned)-1 on error. The caller must allocate an output buffer large enough for the whole result up front; there is no streaming, no inflate()-style state machine and no compressor. The format is auto-detected from the header bytes (1f 8b for gzip, a valid CMF/FLG pair for zlib, otherwise raw deflate).",
+  "how_it_is_fast": "The code is a near line-by-line C++ translation of Emmanuel Marty's em_inflate (2019, zlib license): a 64-bit LSB-first bit buffer, a 10-bit direct lookup table for short Huffman codes with a canonical-code walk for longer ones (the bit-reversal trick credited to Eric Biggers), and length/distance base-plus-extra-bits values folded into the decode tables so each symbol needs one table read. Matches with distance of at least 16 are copied in 16-byte memcpy chunks with overshoot into a reserved tail. Because the whole output is one flat buffer, there is no 32 KiB sliding window to manage, which is where most of the gain over zlib's streaming inflate comes from; skipping the Adler-32/CRC-32 check removes another 5-25% of the time in the README's numbers.",
+  "when_to_use": [
+    "Unpacking whole zlib or gzip assets (textures, level data) that are already fully in memory, where the decompressed size is known or bounded.",
+    "Builds that want a few hundred lines of C++ with no zlib dependency and only need decompression of trusted input.",
+    "As a readable reference for how a table-driven one-shot inflate works, to study or adapt."
+  ],
+  "when_not_to_use": [
+    "Any stream containing stored (type 0) blocks: CopyStored reads the length's low byte twice (GetInBlock()[0] in both halves), so most stored blocks fail the LEN/NLEN check and the call returns -1. em_inflate reads [0] and [1] correctly, so this bug was introduced by the port.",
+    "Untrusted input: stored-block memcpy does not check the input end (inherited from em_inflate), literal/length symbols 286-287 index past the 29-entry kMatchLenCode table, and distance symbols 30-31 map to offset 0; no fuzzing or tests exist in the repo.",
+    "Streaming, inputs or outputs of 4 GiB or more (sizes are unsigned int), multi-member gzip files, or zlib streams with a preset dictionary.",
+    "When speed is the point: libdeflate, zlib-ng and Wuffs are maintained, fuzzed and faster than zlib 1.2.11 by wider margins than these numbers show.",
+    "Projects that need clean licensing: see the gotchas about the zlib-licensed origin."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (C++ standard library only)",
+    "min_toolchain": "C++11 (uses constexpr and = default); no standard flag set in the Makefile",
+    "platforms": "Little-endian targets; the 64-bit bit buffer is enabled on x86-64 and aarch64, 32-bit elsewhere. Build scripts are build.bat plus a Makefile that calls g++ with no -O flag.",
+    "thread_safety": "Not documented; Feed keeps all state in locals and reads only constexpr tables, so separate calls on separate buffers look safe.",
+    "drop_in_for_baseline": "partial: decodes the same zlib/gzip/deflate formats as zlib inflate, but through a different one-shot API with a caller-sized output buffer, and stored blocks currently fail"
+  },
+  "gotchas": [
+    "Licensing: the source is a translation of em_inflate (Copyright 2019 Emmanuel Marty, zlib license) but ships under MIT, credits only Mark Adler and Stephen Brumme, and drops Marty's notice, which the zlib license says may not be removed. Treat the code as zlib-licensed em_inflate and keep Marty's notice if you vendor it, or use em_inflate itself.",
+    "bit_reader.cc writes '#ifdef defined(_M_X64) || defined(__x86_64__)' where em_inflate has '#if defined(...)'; '#ifdef' takes only a macro name, so the intended 32-bit unaligned refill is not selected as written and compilers warn about extra tokens.",
+    "Errors come back as (unsigned int)-1, so a test against -1 works but a test for a negative value does not; gzip's ISIZE trailer field is never checked, and the checksum is only verified when the fifth argument is true.",
+    "crc32_4bytes and the x86 refill path cast byte pointers to unsigned int*, which relies on unaligned loads and little-endian order."
+  ],
+  "pick_this_over_siblings_when": "Rarely: for one-shot in-memory deflate decoding, libdeflate is faster and maintained, Wuffs is memory-safe by construction, and zlib-ng is a drop-in. Prefer the upstream emmanuel-marty/em_inflate (C, zlib license) if you specifically want this tiny decoder.",
+  "verified_claims_summary": "First-party README timings, no CPU, compiler, flags or harness: on a 25.6 MB zlib stream, 118 ms with Adler-32 check versus 134 ms for zlib 1.2.11 inflate (1.13x), and on a 53.6 MB gzip file 362 ms versus 466 ms (1.29x), with the checksum-off rows not like-for-like. The README's percentage column does not match its own times, and em_inflate's README reports almost the same ratios (89%/82%, 84%/64%) on different files, so the numbers mostly characterize the em_inflate design.",
+  "status_note": "Abandoned since March 2021 (54 commits, 1 closed issue, no tests); labeled MIT but derived from zlib-licensed em_inflate, and it carries a stored-block decoding bug that em_inflate does not have.",
+  "sources_read": [
+    "https://github.com/artexety/inflatecpp",
+    "https://github.com/artexety/inflatecpp/tree/main/source",
+    "https://github.com/artexety/inflatecpp/commits/main",
+    "https://github.com/artexety/inflatecpp/issues?q=is%3Aissue",
+    "https://github.com/artexety/inflatecpp/issues/1",
+    "https://raw.githubusercontent.com/artexety/inflatecpp/HEAD/README.md",
+    "https://raw.githubusercontent.com/artexety/inflatecpp/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/artexety/inflatecpp/HEAD/Makefile",
+    "https://raw.githubusercontent.com/artexety/inflatecpp/HEAD/build.bat",
+    "https://raw.githubusercontent.com/artexety/inflatecpp/HEAD/source/decompressor.h",
+    "https://raw.githubusercontent.com/artexety/inflatecpp/HEAD/source/decompressor.cc",
+    "https://raw.githubusercontent.com/artexety/inflatecpp/HEAD/source/bit_reader.h",
+    "https://raw.githubusercontent.com/artexety/inflatecpp/HEAD/source/bit_reader.cc",
+    "https://raw.githubusercontent.com/artexety/inflatecpp/HEAD/source/huffman_decoder.h",
+    "https://raw.githubusercontent.com/artexety/inflatecpp/HEAD/source/huffman_decoder.cc",
+    "https://raw.githubusercontent.com/artexety/inflatecpp/HEAD/source/adler32.h",
+    "https://raw.githubusercontent.com/artexety/inflatecpp/HEAD/source/adler32.cc",
+    "https://raw.githubusercontent.com/artexety/inflatecpp/HEAD/source/crc32.h",
+    "https://raw.githubusercontent.com/artexety/inflatecpp/HEAD/source/crc32.cc",
+    "https://raw.githubusercontent.com/artexety/inflatecpp/HEAD/example/Application.cc",
+    "https://github.com/emmanuel-marty/em_inflate",
+    "https://raw.githubusercontent.com/emmanuel-marty/em_inflate/HEAD/README.md",
+    "https://raw.githubusercontent.com/emmanuel-marty/em_inflate/HEAD/lib/em_inflate.c"
+  ],
+  "confidence": 0.8
+}

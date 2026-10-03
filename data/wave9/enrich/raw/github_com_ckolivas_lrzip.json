@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/ckolivas/lrzip",
+  "one_liner": "Command-line compressor that removes long-distance duplicates (rzip) before multithreaded LZMA; beats xz/7z on large redundant files.",
+  "what_it_does": "lrzip compresses one file (lrztar wraps tar for directories) into its own .lrz format. It first runs an extended rzip pass that finds repeats across a window as large as available RAM, or the whole file with -U, then compresses the remaining stream with a selectable backend: LZMA (default), LZO (-l), gzip (-g), bzip2 (-b), ZPAQ (-z), or none (-n). It is a CLI tool, not a library: the old liblrzip API was removed in 0.650, and the format is not readable by xz, 7z or gzip.",
+  "how_it_is_fast": "The rzip stage keeps a hash table of tags computed by a rolling XOR-of-random-values hash over 31-byte windows (MINIMUM_MATCH), thinning entries by tag bit pattern as the table fills, so matches hundreds of MB to GB apart are replaced by short references before the backend runs. Because that stage shrinks the data, the much slower LZMA or ZPAQ backend has less to do, and the backend works on independent chunks in a thread per CPU. Each block is first test-compressed with LZ4 and skipped if incompressible; a 'sliding mmap' lets the window exceed RAM, at a large speed cost.",
+  "when_to_use": [
+    "Archiving large files (from about 100 MB up to many GB) with redundancy far apart: VM and disk images, tarballs of several source trees or versions, backups and database dumps.",
+    "Multi-core machines with plenty of RAM where you want 7z/xz-class ratios in less wall time, or much better ratios when long-range duplication dominates (10 GB VM image: 12.8% versus 21.2% for xz in the author's table).",
+    "Quick space savings on big files with -l (rzip plus LZO), which the author's tables show running at about gzip speed with better ratios on redundant data.",
+    "As a preprocessor: -n writes rzip-reduced output that another compressor can then shrink faster."
+  ],
+  "when_not_to_use": [
+    "Small or medium files (under about 10-50 MB per the README) or data without long-range repeats: the rzip pass adds little and plain xz -T0 or zstd is simpler.",
+    "You need an embeddable library, streaming or random access, or a format other tools read: lrzip is a POSIX CLI with its own format, and the README says piped stdin/stdout loses window size and ratio on files larger than about 25% of RAM.",
+    "Memory-constrained or shared production hosts: the README says it uses all available RAM by design, LZMA may request up to 25% of total RAM, and LZMA spawns its own threads on top of -p.",
+    "Untrusted archives on older versions: CVEs on crafted .lrz files include heap overflows and use-after-free bugs (CVE-2017-8844, CVE-2017-8846, CVE-2018-5747, CVE-2022-26291, CVE-2023-39741 in libzpaq on 0.651); fixes continue in 2026 (heap overflow in clear_buffer() fixed 2026-09-21).",
+    "32-bit targets or native Windows: 32-bit support was removed in 0.7.0, and an open issue (#276) reports MSYS builds failing on PRIO_MIN."
+  ],
+  "integration": {
+    "form": "CLI tool (standalone program; liblrzip removed in 0.650)",
+    "dependencies": "pthreads, libm, zlib, libbz2, liblzo2, liblz4 (testing only); embeds LZMA SDK 26.02 and libzpaq 7.15",
+    "min_toolchain": "autoconf 2.71 or newer to bootstrap, a C and C++ compiler (gcc tested; README recommends -O2 -march=native, since an unoptimized build is about 3x slower)",
+    "platforms": "64-bit POSIX (Linux, macOS 10.5+ noted, Android build fixes); hardware AES and PCLMUL paths for encryption where the compiler supports them",
+    "thread_safety": "Not applicable (standalone multithreaded process; -p sets thread count, LZMA adds its own threads)",
+    "drop_in_for_baseline": "partial: lrz and lrzip -d mimic gzip-style command-line semantics, but output is .lrz, which xz, 7z and gzip cannot read"
+  },
+  "gotchas": [
+    "0.7.0 introduced a new file format and AES-256-GCM encryption; archives encrypted with the new default cannot be read by lrzip 0.6.x (use --legacy-encrypt for that), and streamed large stdio archives are also incompatible.",
+    "-U (unlimited window) can be much slower when the file is far larger than RAM; once a file is over about 5x the window, plain LZMA can compress smaller (README FAQ).",
+    "-p 1 gives slightly better compression than the multithreaded default, so ratio and speed figures depend on thread count.",
+    "ZPAQ mode (-z) decompresses as slowly as it compresses (2m08s versus 4.3s for the default on the kernel tarball)."
+  ],
+  "pick_this_over_siblings_when": "Pick lrzip over xz-beating siblings such as bzip3, libbsc, Kanzi or fast-lzma2 when the input is a single multi-GB file with long-distance duplication, since their windows or blocks are far smaller than lrzip's RAM-sized rzip window. For library use, streaming, or general files, zstd (with --long for long-range matching) is the safer default.",
+  "verified_claims_summary": "Author's own 2012 tables, no compiler or flags, run on a 3 GHz quad-core Core2 with 8 GB, lrzip 0.612: on the 431 MB Linux 2.6.37 tarball the default mode compressed in 72 s versus 242 s for xz and 148 s for 7z at about the same size (14.9% versus 14.7-14.8%), and decompressed in 4.3 s versus 8.7 s for xz; on a 10 GB VM image it took 10m23s to reach 12.8% versus xz 50m58s at 21.2% (derived from page data). These compare multithreaded lrzip with the single-threaded xz of that era on old lrzip versions; the 2026 0.7.x releases with LZMA SDK 26.02 have no published benchmarks.",
+  "status_note": "Actively maintained in 2026 (0.7.3 released 2026-09-14, security and performance commits to 2026-09-21, one open issue); GPL-2.0, so use it as an external tool rather than linking it into non-GPL code.",
+  "sources_read": [
+    "https://github.com/ckolivas/lrzip",
+    "https://github.com/ckolivas/lrzip/commits/master",
+    "https://github.com/ckolivas/lrzip/releases",
+    "https://github.com/ckolivas/lrzip/issues",
+    "https://raw.githubusercontent.com/ckolivas/lrzip/HEAD/README.md",
+    "https://raw.githubusercontent.com/ckolivas/lrzip/HEAD/doc/README.benchmarks",
+    "https://raw.githubusercontent.com/ckolivas/lrzip/HEAD/configure.ac",
+    "https://raw.githubusercontent.com/ckolivas/lrzip/HEAD/BUGS",
+    "https://raw.githubusercontent.com/ckolivas/lrzip/HEAD/WHATS-NEW",
+    "https://raw.githubusercontent.com/ckolivas/lrzip/HEAD/ChangeLog",
+    "https://raw.githubusercontent.com/ckolivas/lrzip/HEAD/rzip.c",
+    "WebSearch: lrzip CVE heap overflow use-after-free crafted lrz file (snippets from opencve.io, bugzilla.redhat.com, blogs.gentoo.org)"
+  ],
+  "confidence": 0.8
+}
