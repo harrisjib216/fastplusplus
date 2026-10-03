@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/richgel999/lzham_codec_devel",
+  "one_liner": "LZ codec with LZMA-class ratio whose decoder runs about 3x faster than LZMA on large archives; compression is slow.",
+  "what_it_does": "LZHAM is an asymmetric LZ77-family codec for data compressed once offline and decompressed many times (game assets, downloadable content). It exposes a low-level C API (lzham_compress_init/lzham_decompress_init, streaming or memory-to-memory lzham_compress_memory/lzham_decompress_memory with reinit() to reuse state) plus a subset of the zlib API (lzham_z_*, or #define LZHAM_DEFINE_ZLIB_API to remap zlib symbols). The zlib-style API is source-compatible only: LZHAM cannot read deflate streams and zlib cannot read LZHAM streams. This devel repo is v1.1 and adds a stronger 'extreme' parser (multiple arrivals per lookahead entry) over the stable v1.0 repo.",
+  "how_it_is_fast": "The encoder does near-optimal parsing (a parse graph over match/literal choices, multithreaded on supported platforms) like LZMA, but the decoder replaces most of LZMA's bitwise range coding with quasi-adaptive Huffman tables (literals, match lengths, distance low bits) whose rebuild rate is tunable via m_table_update_rate; only the is_match/is_rep flag decisions use adaptive binary models. Huffman-coded literals decode much faster than LZMA's per-bit literal coding, and blocks detected as incompressible (per 512 KB) are stored raw. The decoder is a resumable coroutine (switch-based 'Coroutines in C'), so streaming adds little overhead; unbuffered mode skips the dictionary allocation and extra memcpy.",
+  "when_to_use": [
+    "Build-once, decompress-many distribution: game or app assets, patches and downloads where LZMA-class ratio matters and end-user decode time or CPU/power use is the cost.",
+    "Large solid blocks: README says LZHAM only beats LZMA's decoder above roughly 1,000-13,000 bytes of compressed input, and it prefers 10-15 KB+ blocks.",
+    "Data with many literals or incompressible stretches, where LZMA's decoder is weakest and LZHAM stores raw blocks.",
+    "Desktop and mobile targets the code explicitly configures: x86/x64 Windows, Linux, macOS/iOS, FreeBSD (ANSI fallback)."
+  ],
+  "when_not_to_use": [
+    "Small or per-record blocks: decoder init cost is higher than LZMA's and the README calls it 'not a good small block compressor'; use LZ4, zstd or deflate there.",
+    "When compression speed matters: README says the compressor is usually slower than LZMA (about 2x, and many times slower with the extreme parser) and memory-hungry (about 982 MB at a 64 MB dictionary, 5 GB at 512 MB).",
+    "When you need the fastest decoder regardless of ratio: README states LZHAM decodes slower than zlib.",
+    "When you need a maintained, fuzzed or interoperable format: code is unchanged since 2015, 13 issues open with no responses (ThreadSanitizer races #1, Coverity findings #2, valgrind alert under p7zip #7), and no other mainstream tool reads the format.",
+    "Linux on non-x86 (e.g. aarch64): lzham_core.h falls back to 'vanilla ANSI' mode there, which disables unaligned loads, atomics and multithreaded compression."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (CMake on Linux, VS2010 project on Windows; separate lzhamdecomp and lzhamcomp libraries)",
+    "dependencies": "none (pthreads on POSIX for threaded compression)",
+    "min_toolchain": "C++03; tested with gcc, clang and MSVC 2008/2010/2013; must compile with -fno-strict-aliasing on gcc/clang",
+    "platforms": "x86/x64 Windows, Linux, macOS, iOS; FreeBSD/NetBSD and other CPUs build in ANSI fallback mode without threads or unaligned loads; dictionaries up to 2^26 on 32-bit and 2^29 (512 MB) on 64-bit",
+    "thread_safety": "Separate compressor/decompressor state objects per stream; compressor spawns its own helper threads (m_max_helper_threads). Not otherwise documented, and issue #1 reports ThreadSanitizer races from non-atomic loads in the threading code.",
+    "drop_in_for_baseline": "partial - the zlib-style API eases porting from zlib, but there is no xz/liblzma-compatible API and the bitstream is LZHAM-only, so it replaces LZMA only where you control both encoder and decoder"
+  },
+  "gotchas": [
+    "Dictionary size and m_table_update_rate (and the finer table-interval settings, or lzhamtest's -h option) are NOT stored in the stream; the decoder must be given the same values the encoder used, so you must store them yourself.",
+    "The CMake file says -fno-strict-aliasing is required; the author never tested with strict aliasing on.",
+    "Issue #9: the allocator relies on _msize/malloc_size/malloc_usable_size, which breaks custom allocators (e.g. PHP emalloc, PyMem_Malloc) unless you supply a realloc that can report sizes.",
+    "Licensing is inconsistent: LICENSE and headers say MIT, the README says LZHAM is now public domain (the stable lzham_codec repo carries the public-domain license); v1.x streams are not compatible with the old Google Code alphas."
+  ],
+  "pick_this_over_siblings_when": "Pick LZHAM over Fast LZMA2 or plain xz when decode time on the client matters more than encode time: Fast LZMA2 speeds up the LZMA2 encoder, but its output still decodes at LZMA speed, while LZHAM keeps an LZMA-like ratio and decodes about 3x faster on the 10 GB test. Pick zstd, LZ4 or zlib-ng instead whenever blocks are small, encode speed matters, or you need a maintained, widely readable format.",
+  "verified_claims_summary": "The author's own run on Matt Mahoney's 10 GB benchmark with the 32-bit 7-Zip 9.38 LZHAM plugin (64 MB dictionary) shows LZHAM -mx=9 at 3,573,782,721 bytes with a 71.3 s archive test versus LZMA -mx=9 at 3,560,052,414 bytes and 223.1 s (about 3.1x faster test at 0.4% larger output, derived from page data); CPU, compiler and flags are not stated and the test time includes 7-Zip archive overhead. A search snippet credits LZHAM v1.0 with 6.62 s (151 MB/s) decompressing enwik9 at a 512 MB dictionary on a 3.3 GHz Core i7 Gulftown (snippet only, first-party, not opened); the independent LTCB and MOC pages the README cites could not be opened.",
+  "status_note": "Abandoned: codec source unchanged since 2015, last commit 2023-05-14 edits only the README, 13 open issues without replies; still MIT-licensed (README says public domain) plain C++03 that is practical to vendor if you pin the format parameters yourself.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/richgel999/lzham_codec_devel/HEAD/README.md",
+    "https://raw.githubusercontent.com/richgel999/lzham_codec_devel/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/richgel999/lzham_codec_devel/HEAD/include/lzham.h",
+    "https://raw.githubusercontent.com/richgel999/lzham_codec_devel/HEAD/lzhamdecomp/lzham_lzdecomp.cpp",
+    "https://raw.githubusercontent.com/richgel999/lzham_codec_devel/HEAD/lzhamdecomp/lzham_core.h",
+    "https://raw.githubusercontent.com/richgel999/lzham_codec_devel/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/richgel999/lzham_codec_devel/HEAD/lzhamdecomp/CMakeLists.txt",
+    "https://github.com/richgel999/lzham_codec_devel/issues",
+    "https://github.com/richgel999/lzham_codec_devel/issues/1",
+    "https://github.com/richgel999/lzham_codec_devel/issues/9",
+    "https://github.com/richgel999/lzham_codec",
+    "https://github.com/richgel999/lzham_codec/issues"
+  ],
+  "confidence": 0.7
+}

@@ -1,0 +1,47 @@
+{
+  "id": "https://github.com/rrrlasse/memlz",
+  "one_liner": "Header-only C/C++ word-hash compressor that compresses about 4.8x faster than LZ4 --fast -17 at similar ratio; decompresses slower.",
+  "what_it_does": "memlz is a single-header C library (C++ compatible) for very fast in-memory compression of large buffers and streams where compression throughput matters more than ratio. The API is its own, not LZ4-compatible: memlz_compress(dst, src, len) and memlz_decompress(dst, src) for one-shot use, plus memlz_stream_compress/memlz_stream_decompress with a caller-allocated memlz_state for packet streams; every output carries a header from which memlz_compressed_len() and memlz_decompressed_len() read the sizes. Each streaming call emits a self-contained chunk that one decompress call restores, so there is no flush step.",
+  "how_it_is_fast": "It is an 8-byte-word variant of Guillaume Voirin's Chameleon algorithm (the LZP-style dictionary coder from Density): each 4- or 8-byte word is hashed with a multiplicative hash into a 64K-entry table, and if the table already holds that word the encoder emits the 16-bit hash, otherwise the literal word, with one flag bit per word. There are no match lengths, offsets or back-references, so there is no match search and the decoder rebuilds the same table as it goes. On x86-64 it processes several words per step with SSE4.1/4.2 (vectorised hashing, cmpeq/movemask hit masks and pshufb compaction), probes each 128 KB block to choose 4- or 8-byte words, and special-cases runs of repeated words (RLE) and incompressible stretches. Because the table stores word values rather than positions, streaming needs no history window, which removes the extra memcpy that LZ4-style streaming needs.",
+  "when_to_use": [
+    "Compression throughput is the bottleneck and roughly 60% output size is acceptable: backup, dedup and archiver pipelines, snapshotting, or spilling large buffers where LZ4 default is too slow.",
+    "Streams of many small packets fed through one memlz_state (the README's eXdupe test streamed kilobyte packets at 4,616 MB/s without a 1 MB copy queue).",
+    "Buffers of megabytes, where the one-off 768 KiB table reset is amortised.",
+    "x86-64 hosts, where the SSE4.2 paths are compiled in; projects that want a one-file, dependency-free drop into C or C++."
+  ],
+  "when_not_to_use": [
+    "Read-heavy data: lzbench 2.4 measured decompression at 2,039 MB/s, about 0.53x LZ4's 3,832 MB/s, so compress-once/read-often workloads should use LZ4, LZAV or similar.",
+    "Small blocks or pages: every call (or reset) clears two hash tables of 768 KiB in total; an independent zram test (martinus/quetschn PR #17) found about 10 us per 4 KiB page in each direction and 63.6% stored size versus 34.5% for LZ4, and dropped it.",
+    "When ratio matters: 59.90% on silesia.tar versus 47.60% for LZ4 default and 47.85% for Snappy.",
+    "Persistent storage or interchange: the format is beta and the README warns compatibility may break between versions (header now says 0.6 beta; lzbench measured 0.5 beta).",
+    "Non-x86 targets expecting the headline speed: ARM64 is tested but uses the scalar path only (no NEON code); big-endian behavior is not documented."
+  ],
+  "integration": {
+    "form": "header-only (define MEMLZ_IMPLEMENTATION in one translation unit)",
+    "dependencies": "none (libc malloc/memcpy; smmintrin.h on x86-64)",
+    "min_toolchain": "C11 (stdalign.h, _Alignas) or C++11 (alignas); tested with clang, gcc and Visual Studio",
+    "platforms": "x86-64 with SSE4.2 code paths (selected via target attributes on GCC/clang; MSVC uses no attribute); ARM64 and other CPUs use portable scalar code",
+    "thread_safety": "Not documented; the one-shot functions allocate a private state per call and the only statics are const tables, so independent calls are safe on separate threads, while a memlz_state must not be shared between threads.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Decompression takes no input-length argument: the safety guarantee only covers the bounds the header declares, so check memlz_compressed_len(src) against your real buffer size (and size the output from memlz_decompressed_len) before decompressing untrusted data.",
+    "memlz_max_compressed_len() is 68*len/64+100 with a 'todo, find real bound' comment in the source; allocate at least that much and do not rely on a tighter bound.",
+    "memlz_compress/memlz_decompress malloc and memset about 768 KiB of tables on every call and return 0 on allocation failure; reuse a memlz_state through the stream API to avoid that cost.",
+    "Stream chunks must be decompressed in exactly the order they were compressed, with the same state reset once at the start; the state must be reset with memlz_reset() before first use or calls return 0."
+  ],
+  "pick_this_over_siblings_when": "Pick memlz over LZ4 (including --fast acceleration) or Snappy only when compression speed is the binding constraint and decode speed and ratio can give: lzbench shows 4,452 MB/s compression versus 924 MB/s for lz4 --fast -17 at a similar ratio, but about half of LZ4's decode speed. Density uses the same Chameleon idea; compare both on your hardware, and prefer LZ4, LZAV or ZXC when data is read more often than written or blocks are small.",
+  "verified_claims_summary": "In lzbench 2.4 (gcc 15.2.0 release build, one thread of an AMD EPYC 9555P with turbo off, silesia.tar), memlz 0.5 beta compressed at 4,452 MB/s and decompressed at 2,039 MB/s with a 59.90% output size, versus lz4 1.10.0 --fast -17 at 924/3,977 MB/s and 62.15%, lz4 default at 550/3,832 MB/s and 47.60%, and snappy 1.3.1 at 457/976 MB/s (compression about 4.8x lz4 --fast -17 and 8.1x lz4 default; decompression about 0.53x lz4, derived from page data). The README's 5-7 GB/s single-thread figure comes from the author's Intel i7 runs (model not stated) and is not reproduced by lzbench's 4,452 MB/s.",
+  "status_note": "Active: 35 commits, last on 2026-10-02, with recent speedups, a 'Fix UB reads/writes' commit and an AFL fuzz harness (ASan round-trip plus malformed-input decode); MIT-licensed and trivial to vendor, but beta, so pin the version and do not use it for long-lived stored data yet.",
+  "sources_read": [
+    "https://github.com/rrrlasse/memlz",
+    "https://raw.githubusercontent.com/rrrlasse/memlz/HEAD/README.md",
+    "https://raw.githubusercontent.com/rrrlasse/memlz/HEAD/memlz.h",
+    "https://github.com/rrrlasse/memlz/commits",
+    "https://github.com/rrrlasse/memlz/tree/main/test",
+    "https://raw.githubusercontent.com/rrrlasse/memlz/HEAD/test/afl.c",
+    "https://raw.githubusercontent.com/rrrlasse/memlz/HEAD/test/run.sh",
+    "https://github.com/martinus/quetschn/pull/17"
+  ],
+  "confidence": 0.75
+}
