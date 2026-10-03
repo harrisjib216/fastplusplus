@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/matteoceregini/quad-wavelet-tree",
+  "one_liner": "Header-only C++20 4-ary (quad) wavelet matrix with about 2x lower access/rank/select latency than SDSL wavelet trees.",
+  "what_it_does": "It stores an integer sequence over a dense alphabet [0, sigma] as a wavelet matrix and answers access(i), rank(i, value) and select(r, value) queries. The API is a class template wavelet_matrix<qvector<256 or 512>, precomputed_paths> built from a std::vector of unsigned integers plus sigma, with operator[], rank and select<linear_search>. It is research code with test programs, not a drop-in replacement for sdsl::wt_* or sdsl::wm_int: there is no SDSL-style interface or namespace, and serialization uses a visitor helper in essentials.hpp.",
+  "how_it_is_fast": "Each level of the wavelet matrix consumes 2 bits of the symbol instead of 1, so a query visits ceil(log2(sigma)/2) levels: half the levels and about half the cache misses of a binary wavelet matrix. Each level is a 'quad vector' of 2-bit symbols whose rank inside a 64-bit word is a mask-and-popcount; per-symbol superblock (44-bit) and block (12-bit) counters are packed into one 64-byte-aligned 128-bit-per-symbol counter record and prefetched, so one rank costs about one counter-line miss plus one data-block miss. Select uses sampled superblock positions (every 8192 occurrences), then binary or sqrt-step linear search over counters and a broadword in-word select (the pasta-toolbox table). The optional precomputed_paths mode stores per-symbol level offsets so select skips the top-down pass.",
+  "when_to_use": [
+    "Large in-memory sequences (GiB-scale text, BWTs for FM-index backward search) over small or medium alphabets (bytes, up to 16-bit codes), where each query misses cache and latency per access/rank/select dominates.",
+    "When you want SDSL-class wavelet matrix functionality at about 2x lower latency and less space than the SDSL 2.1.1 row (Rust companion table: 4616 vs 6089 MiB on 4 GiB English).",
+    "C++20 code built with GCC or Clang on x86-64, where a small header-only drop of five files is acceptable.",
+    "As a reference implementation to port: the code is short (qwm.hpp 220 lines, qvector.hpp 316 lines) and follows the published DCC paper."
+  ],
+  "when_not_to_use": [
+    "If you need entropy-compressed (Huffman-shaped) wavelet trees or the rank-prediction variants: those (HQwt*, *Pfs) exist only in the Rust qwt crate, which is also the maintained implementation and the faster one in its own table.",
+    "Sparse or huge alphabets: the alphabet must be dense [0, sigma], and precomputed_paths=true allocates 2 x (levels + 1) x (sigma + 1) 64-bit offsets.",
+    "MSVC or non-GCC/Clang toolchains: counters use __uint128_t and __builtin_prefetch.",
+    "Production code that needs a maintained library: this repo has had no code change since early 2023 and no releases, issue tracker activity or CI.",
+    "Dynamic sequences: the structure is static; it is built once and has no insert, delete or update."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (C++ standard library only)",
+    "min_toolchain": "C++20 (std::bit_width, std::popcount, <bit>); GCC or Clang for __uint128_t; README builds with GCC 12.2.0 and CMake 3.14+",
+    "platforms": "x86-64 tested (i9-9900KF); portable C++20 otherwise, with no SIMD intrinsics; -march=native set in CMakeLists.txt",
+    "thread_safety": "not documented; queries are const member functions with no mutable state, so concurrent reads after construction look safe (inferred from code)",
+    "drop_in_for_baseline": "partial: it covers the access/rank/select functionality of SDSL's wavelet matrix but with a different class template, constructor and serialization API, and no namespace"
+  },
+  "gotchas": [
+    "select.hpp defines the non-inline, non-template function select_uint64_t in a header, so including qvector.hpp or qwm.hpp from two translation units should cause a duplicate-symbol link error (inferred from code). Mark it inline when vendoring.",
+    "No bounds or argument checks in release builds: rank, select and access preconditions are assert() only and the default flags include -DNDEBUG. select(r, v) needs 1 <= r <= rank(size, v), and select is 1-based while access and rank are 0-based.",
+    "qvector.hpp calls std::sqrt without including <cmath>, and the classes (wavelet_matrix, qvector, counters) live in the global namespace, which can collide with other code.",
+    "The constructor takes the input vector by value and counting-sorts a copy per level, so peak construction memory is several times the input size."
+  ],
+  "pick_this_over_siblings_when": "Pick it over SDSL-based wavelet trees, wavelet_forest or faster-minuter when you are in C++ and want the lowest-latency uncompressed wavelet matrix in a small header-only drop; choose the Rust qwt sibling instead if you can use Rust or need Huffman compression or the prediction (Pfs) variants. pwm is a construction-speed tool, complementary rather than an alternative.",
+  "verified_claims_summary": "The C++ README states about 2x lower access/rank/select latency than SDSL wavelet trees on a single i9-9900KF thread (GCC 12.2.0, -O3 -march=native -DNDEBUG -flto) but shows no numbers. The companion Rust README's table (4 GiB Big English, 168 symbols, rows marked C++/Rust) gives Qwt256 584/613/1623 ns vs SDSL 2.1.1 1178/1223/2900 ns for access/rank/select. The peer-reviewed DCC 2024 paper reports up to 2x faster access/select and 3x faster rank (abstract via search snippet only). This repo's tests/test_qwm.cpp is a correctness test that times nothing and does not build SDSL.",
+  "status_note": "Abandoned: all 24 commits are from 2023-01-26 to 2023-02-21, mostly README edits. It is MIT-licensed and header-only (five headers), so it is copyable, but the Rust crate rossanoventurini/qwt is where development continued.",
+  "sources_read": [
+    "https://github.com/MatteoCeregini/quad-wavelet-tree",
+    "https://github.com/MatteoCeregini/quad-wavelet-tree/commits",
+    "https://github.com/MatteoCeregini/quad-wavelet-tree/tree/main/include",
+    "https://raw.githubusercontent.com/MatteoCeregini/quad-wavelet-tree/HEAD/README.md",
+    "https://raw.githubusercontent.com/MatteoCeregini/quad-wavelet-tree/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/MatteoCeregini/quad-wavelet-tree/HEAD/include/qwm.hpp",
+    "https://raw.githubusercontent.com/MatteoCeregini/quad-wavelet-tree/HEAD/include/qvector.hpp",
+    "https://raw.githubusercontent.com/MatteoCeregini/quad-wavelet-tree/HEAD/include/select.hpp",
+    "https://raw.githubusercontent.com/MatteoCeregini/quad-wavelet-tree/HEAD/include/essentials.hpp",
+    "https://raw.githubusercontent.com/MatteoCeregini/quad-wavelet-tree/HEAD/include/cache_aligned_allocator.hpp",
+    "https://raw.githubusercontent.com/MatteoCeregini/quad-wavelet-tree/HEAD/tests/test_qwm.cpp",
+    "https://raw.githubusercontent.com/MatteoCeregini/quad-wavelet-tree/HEAD/tests/create_dataset.cpp",
+    "https://raw.githubusercontent.com/rossanoventurini/qwt/HEAD/README.md"
+  ],
+  "confidence": 0.75
+}

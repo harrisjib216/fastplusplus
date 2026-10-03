@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/vteromero/vtenc",
+  "one_liner": "C codec for sorted unsigned integer lists that beats Delta+FastPFor on compression ratio, and on speed only for clustered data.",
+  "what_it_does": "VTEnc compresses sorted sequences (sets or lists with repeats) of uint8/16/32/64 into a byte stream and decodes them back. The API is a C handler (vtenc_create, vtenc_config, vtenc_encodeNN, vtenc_decodeNN, vtenc_max_encoded_size NN): the caller allocates the output buffer and must store the element count separately, because the format does not record it. It is not a drop-in for FastPFor's codec classes; it replaces delta coding plus a bit-packer as a whole.",
+  "how_it_is_fast": "It walks the values' binary trie top-down: for each cluster of values sharing the same high bits it finds, by branchless binary search over the sorted input, how many have a 0 at the next bit position and writes that count in ceil(log2(cluster length + 1)) bits, then descends into both halves with an explicit fixed-size stack (no recursion). Clusters no longer than min_cluster_length emit their remaining low bits directly, and for sets with no duplicates a full subtree can be skipped entirely. On highly regular data such as timestamps the high levels collapse into a few counts, so encode does O(log n) work per split rather than touching every element, which is why ts.txt shows extreme ratio and encode figures; on scattered docids it costs one bit-field read per trie node and is slower than SIMD bit-packing.",
+  "when_to_use": [
+    "Archiving or transmitting sorted 32/64-bit ID lists, timestamps or posting lists where compressed size matters more than decode speed (gov2 docids: ratio 8.29 vs 6.21 for Delta+FastPFor128).",
+    "Sorted data with long runs, duplicates or dense clusters (timestamp logs), where it beat every baseline on both ratio and decode speed in the author's test.",
+    "Cases where you can tune the ratio/speed trade-off: raising min_cluster_length to 16 or more moved gov2 decode from 211 M/s to 829 M/s and above at the cost of ratio.",
+    "Small C or C++ projects that want a dependency-free, MIT-licensed codec with a few source files."
+  ],
+  "when_not_to_use": [
+    "Decode-throughput-bound query processing over scattered docids: on gov2 VTEnc/1 decoded at 211 M/s vs 616 M/s for Delta+FastPFor128, 2.33 G/s for Delta+BinaryPacking and 2.97 G/s for Delta+VarIntGB.",
+    "Unsorted data or random access into a compressed block: it only handles sorted input and decodes a whole block at once.",
+    "Long-lived storage formats: the README says the format may change on any 0.x version, and the latest release is v0.3.0 (March 2022) with later fixes only on master.",
+    "Untrusted compressed input: the decoder's bounds checks on the input buffer are assert() calls, which the default -DNDEBUG build removes.",
+    "Windows: the README says it was tested only on Linux and macOS."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none (C standard library only)",
+    "min_toolchain": "C99; GCC builtins (__builtin_expect, __builtin_clz) used via compiler.h; Makefile defaults to gcc -O3 -march=native",
+    "platforms": "Linux and macOS tested per README; portable C with little-endian/big-endian handling in mem.h; no SIMD",
+    "thread_safety": "not documented; each call keeps its state on the stack plus the handler's out_size, so one vtenc handler per thread is the safe assumption",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Encoder buffer: bswriter writes 8 bytes at a time and checks the end of the output buffer only with assert(), so in a -DNDEBUG build an out_cap below vtenc_max_encoded_sizeNN(n) can overflow the buffer (inferred from bitstream.h). Always size the output buffer with vtenc_max_encoded_sizeNN.",
+    "Unsorted input is not checked: the header says you may still get VTENC_OK with a wrong stream. The decoder also needs the exact element count from the caller.",
+    "Decoder stack: the decoder pushes clusters down to bit position 0 into a fixed 64-entry stack (DEC_STACK_MAX_SIZE 64). By my reading of decode_generic.h, a 64-bit sequence that splits at every bit level (for example 0, 1, 2, 4, ..., 2^63) needs 65 entries, which would overflow by one. This is inferred from the code and was not reproduced; 8/16/32-bit sequences stay well within the limit.",
+    "PR #40 (Nov 2022, after the benchmarked v0.3.0) fixed a bitstream-writer corruption when more than 63 bits were buffered and cut the maximum single read/write from 57 to 56 bits. Writes that large only seem to arise with 64-bit values, so the 32-bit benchmark looks unaffected, but anyone on v0.3.0 should build from master."
+  ],
+  "pick_this_over_siblings_when": "Pick VTEnc over FastPFor, SIMDCompressionAndIntersection or simdcomp when compressed size of sorted lists is the priority, or when the data is clustered like timestamps; for decode throughput on ordinary posting lists, FastPFor, Stream VByte or TurboPFor are faster. ds2i's partitioned Elias-Fano is the better-studied size/speed choice when you also need random access or skipping.",
+  "verified_claims_summary": "The author's integer-compression-benchmarks repo (Google Benchmark, VTEnc v0.3.0 against Lemire's SIMDCompressionAndIntersection codecs, i7-6700HQ laptop, GCC -O3, compiler version unstated) reports VTEnc/1 decoding ts.txt timestamps at 7.32 G/s vs 3.88 G/s for Delta+FastPFor128, with a ratio of 26,622 vs 250. On gov2.sorted docids it gets the best ratio (8.29 vs 6.21) but decodes about 2.9x slower (211 vs 616 M/s, derived from page data); speeds are input bytes per second.",
+  "status_note": "Abandoned: last commit 2022-12-01 and last release v0.3.0 in March 2022, with no open issues. It is MIT-licensed, has no dependencies and consists of about 20 C source and header files at the repo root, so it is easy to vendor, but the format is not stable and the release lacks the later bitstream fix.",
+  "sources_read": [
+    "https://github.com/vteromero/VTEnc",
+    "https://github.com/vteromero/VTEnc/commits",
+    "https://github.com/vteromero/VTEnc/issues?q=is%3Aissue",
+    "https://github.com/vteromero/VTEnc/pull/40",
+    "https://raw.githubusercontent.com/vteromero/VTEnc/HEAD/README.md",
+    "https://raw.githubusercontent.com/vteromero/VTEnc/HEAD/Makefile",
+    "https://raw.githubusercontent.com/vteromero/VTEnc/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/vteromero/VTEnc/HEAD/vtenc.h",
+    "https://raw.githubusercontent.com/vteromero/VTEnc/HEAD/encode_generic.h",
+    "https://raw.githubusercontent.com/vteromero/VTEnc/HEAD/decode_generic.h",
+    "https://raw.githubusercontent.com/vteromero/VTEnc/HEAD/encode.c",
+    "https://raw.githubusercontent.com/vteromero/VTEnc/HEAD/decode.c",
+    "https://raw.githubusercontent.com/vteromero/VTEnc/HEAD/common.c",
+    "https://raw.githubusercontent.com/vteromero/VTEnc/HEAD/common.h",
+    "https://raw.githubusercontent.com/vteromero/VTEnc/HEAD/bitstream.h",
+    "https://raw.githubusercontent.com/vteromero/VTEnc/HEAD/countbits.h",
+    "https://raw.githubusercontent.com/vteromero/VTEnc/HEAD/internals.h",
+    "https://raw.githubusercontent.com/vteromero/VTEnc/HEAD/stack.h",
+    "https://raw.githubusercontent.com/vteromero/VTEnc/HEAD/mem.h",
+    "https://raw.githubusercontent.com/vteromero/VTEnc/HEAD/compiler.h",
+    "https://raw.githubusercontent.com/vteromero/integer-compression-benchmarks/HEAD/README.md"
+  ],
+  "confidence": 0.75
+}
