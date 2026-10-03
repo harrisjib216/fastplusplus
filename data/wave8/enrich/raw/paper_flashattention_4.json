@@ -1,0 +1,49 @@
+{
+  "id": "paper:flashattention-4",
+  "one_liner": "Blackwell/Hopper exact attention kernels in CuTe-DSL; beat cuDNN 9.13 by 1.04-1.29x on B200, roughly tie cuDNN 9.19.",
+  "what_it_does": "Exact (non-approximate) scaled-dot-product attention forward and backward for NVIDIA Hopper and Blackwell GPUs, written entirely in CuTe-DSL (Python) and JIT-compiled to PTX/SASS on first use. The API is a PyTorch function, `from flash_attn.cute import flash_attn_func, flash_attn_varlen_func`, with the familiar FlashAttention arguments (causal, window_size, softcap, GQA/MQA, learnable sink, varlen, paged KV) plus score_mod/mask_mod hooks, block-sparse tensors, MLA shapes and an FP8 forward. It ships separately from FlashAttention-2/3 as the pip package flash-attn-4.",
+  "how_it_is_fast": "On B200 the tensor cores doubled while shared-memory bandwidth and the MUFU exponential unit did not, so the paper attacks the non-matmul bottlenecks: a ping-pong pipeline over fully asynchronous Blackwell MMAs that write to tensor memory (TMEM), with a separate correction warpgroup for output rescaling. For 10-25% of each softmax row, exp2 runs as a polynomial on FMA units after Cody-Waite range reduction, in parallel with the hardware MUFU unit, and online-softmax rescaling is skipped unless the running max grows by more than a threshold (log2 256 = 8). The backward pass keeps more intermediates in TMEM and uses the 2-CTA MMA mode so each CTA stages only half of operand B, which cuts shared-memory traffic and halves the dQ global atomic adds; longest-processing-time-first tile scheduling helps causal and varlen workloads.",
+  "when_to_use": [
+    "Training or prefill on B200/GB200-class GPUs (SM100) in BF16/FP16 with head dim 64, 128 or (192,128), especially sequences of 4K tokens and longer where it leads every baseline in the paper.",
+    "Backward-heavy training at long sequence lengths: the backward pass still leads current cuDNN 9.19.1.2 by up to about 1.14x at 8K-32K tokens (derived from page data).",
+    "You need attention variants (custom score_mod/mask_mod, block sparsity, learnable sinks, MLA head dims 512, softcap) without writing CUDA C++; the paper reports 2.5 s / 1.4 s JIT compile per kernel versus 55 s / 45 s for FA3's C++ templates.",
+    "Reproducible RL or debugging runs that need a deterministic backward (deterministic=True) at a moderate cost on SM90/SM100.",
+    "A Hopper (SM90) codebase that wants one Python-level attention library spanning H100 and B200."
+  ],
+  "when_not_to_use": [
+    "Short causal sequences (1K-2K) on B200 when cuDNN 9.19+ is available: cuDNN is ahead there (e.g. 822 vs 744 TFLOPs/s at 1K causal, head dim 128), and the paper's own Figure 4 caption says newer cuDNN reaches similar performance.",
+    "A C or C++ application with no Python runtime: there is no C++ API; kernels are generated through Python, PyTorch and nvidia-cutlass-dsl at run time.",
+    "Pre-Hopper or non-NVIDIA hardware: the README targets Hopper and Blackwell, the interface has SM80/SM120 paths but the paper reports no numbers for them, and AMD needs a different library.",
+    "FP8 training: FP8 is forward-only and only on SM100 (the interface raises NotImplementedError for an FP8 backward).",
+    "Shops that need a stable release: PyPI still ships weekly betas (4.0.0b33 on 2026-09-30) with the classifier 'Development Status :: 3 - Alpha', and several FA4 correctness issues are open."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "PyTorch, nvidia-cutlass-dsl>=4.6.2 (cu13 extra for CUDA 13), apache-tvm-ffi>=0.1.11,<0.2, torch-c-dlpack-ext, quack-kernels>=0.5.3, einops, typing_extensions",
+    "min_toolchain": "Python 3.10+; CUDA 12.x (CUDA 13 recommended for B200 via the cu13 extra); nvidia-cutlass-dsl 4.6.2+ at HEAD (the paper used CuTe-DSL 4.4.1 with CUDA 13.1 and PyTorch 2.10.0)",
+    "platforms": "Linux, NVIDIA GPUs: SM90 (H100/H200) and SM100/SM103/SM110 (B200/B300) are the documented targets; the interface also accepts SM80 and SM120 with reduced features (no block-sparse, score_mod or deterministic backward on SM120)",
+    "thread_safety": "not documented (compiled kernels are cached in per-process JIT caches keyed by configuration)",
+    "drop_in_for_baseline": "partial: same call shape as FlashAttention-2/3 flash_attn_func, but not a drop-in for cuDNN; users of PyTorch SDPA's cuDNN backend must call flash_attn.cute directly, and head-dim support on SM100 is limited to 8-128, (192,128), (256,256) and the MLA 512 shapes"
+  },
+  "gotchas": [
+    "Each new shape or option set JIT-compiles on first call; issue #2635 (closed) reported very slow Qwen3.5-35B-A3B training on 8x B300 caused by CUTLASS JIT compilation during the backward pass, so warm up shapes before timing or serving.",
+    "The default backward is nondeterministic (inter-CTA atomic dQ reductions, and dK/dV for GQA); deterministic=True serializes them with a semaphore and reaches up to 75% of the 1-CTA nondeterministic backward speed per the paper.",
+    "Softmax uses a polynomial exp2 for part of the elements: the degree-3 version has a max FP32 relative error of 8.8e-5 (about 600x the hardware MUFU.EX2) but matches hardware within 1 BF16 ULP; check against a reference softmax if you consume FP32 intermediates or the LSE.",
+    "Version coupling to nvidia-cutlass-dsl matters: issue #2797 (open) reports the FA4 backward never returning with cutlass-dsl 4.6.0/4.6.1 on B300 (sm_103), #2860 (open) an illegal memory access on SM120 with 4+ varlen segments, and #2665/#2886 were hd256 non-contiguous Q/K correctness bugs on SM100 (fixed)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over FlashAttention-3 when you are on Blackwell (FA3 does not run on B200 per the paper) or want Python-level attention variants with fast JIT builds; pick it over ThunderKittens when you want a maintained pip package with varlen, paged KV and GQA rather than a kernel-authoring framework. Choose SageAttention or SpargeAttn instead only if you accept quantized or sparse approximate attention on consumer GPUs.",
+  "verified_claims_summary": "The paper PDF in the repo times FA4 against cuDNN 9.13.0 and 9.19.1.2, Triton 3.6 and FA 2.8.3 on a B200 in BF16 (CUDA 13.1, CuTe-DSL 4.4.1, PyTorch 2.10.0; 5 warmup runs, mean of 10), with total tokens fixed at 32K and head dim 64, 128 or (192,128): FA4 is 1.04-1.24x faster than cuDNN 9.13 forward and 1.09-1.29x backward, peaking at 1613 TFLOPs/s (1654 at head dim 192/128). Against cuDNN 9.19.1.2 the forward is at parity (0.91-1.06x) and only the backward keeps a lead of up to about 1.14x at long sequences (ratios derived from page data).",
+  "status_note": "Very active (last commit 2026-10-02, weekly PyPI betas, 25.1k-star repository shared with FA2/FA3) and BSD-3-Clause, but still labelled Alpha and tied to fast-moving nvidia-cutlass-dsl releases, so pin both versions.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/Dao-AILab/flash-attention/HEAD/README.md",
+    "https://raw.githubusercontent.com/Dao-AILab/flash-attention/HEAD/flash_attn/cute/README.md",
+    "https://raw.githubusercontent.com/Dao-AILab/flash-attention/HEAD/flash_attn/cute/pyproject.toml",
+    "https://raw.githubusercontent.com/Dao-AILab/flash-attention/HEAD/flash_attn/cute/interface.py",
+    "https://raw.githubusercontent.com/Dao-AILab/flash-attention/HEAD/hopper/setup.py",
+    "https://raw.githubusercontent.com/Dao-AILab/flash-attention/HEAD/assets/fa4_paper.pdf",
+    "https://github.com/Dao-AILab/flash-attention",
+    "https://github.com/Dao-AILab/flash-attention/issues?q=is%3Aissue+FA4",
+    "https://pypi.org/pypi/flash-attn-4/json"
+  ],
+  "confidence": 0.85
+}

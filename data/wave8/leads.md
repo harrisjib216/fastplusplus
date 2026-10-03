@@ -100,3 +100,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - leloykun/flash-attention-minimal fork (94x FA2 forward on RTX 3060, likely cold-profiler artifact) and ishovkun/flash-attention (10 FA2 kernels, A100 chart, 0 stars): low value. (from flash-attention-minimal enricher)
 - snudatalab/auto-mpft (B): the KDD 2024 paper is reachable at raw.githubusercontent.com/yongchanpark/yongchanpark.github.io/gh-pages/resources/2024/KDD/ParkKK24.pdf (HTTP 200) although the enrich entry says the host was blocked; retier check against the paper. (from PFT enricher)
 - Author gh-pages repos (yongchanpark.github.io) carry paper PDFs reachable via raw.githubusercontent.com; try the same trick for other blocked papers.
+- SPADE (arXiv 2608.03335) and PISA (arXiv 2602.01077) benchmark independently against SpargeAttn (arXiv blocked); SpargeAttention2 (arXiv 2602.13515) has no released code (#119). (from SpargeAttn enricher)
