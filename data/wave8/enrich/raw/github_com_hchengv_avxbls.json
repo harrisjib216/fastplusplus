@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/hchengv/avxbls",
+  "one_liner": "AVX-512 IFMA BLS12-381 optimal ate pairing built on blst; about 1.9x lower single-pairing latency than blst's x64 assembly.",
+  "what_it_does": "avxbls computes the optimal ate pairing on BLS12-381 (Miller loop plus final exponentiation), the core of BLS signature verification and pairing-based SNARK verifiers. It is a research code base forked in spirit from blst: it reuses blst's types (POINTonE1_affine, POINTonE2_affine, vec384fp12), its scalar field code and x64 assembly, and replaces the hot Miller-loop and final-exponentiation steps with vectorized versions. The exposed functions are miller_loop_n, final_exp and optimal_ate_pairing in src/pairing.h; the Makefile only builds test and bench executables, so there is no library target or blst-named API.",
+  "how_it_is_fast": "Fp elements are held in radix 2^48 (8 limbs x 48 bits = 384 bits) inside 64-bit lanes so that AVX-512 IFMA's 52x52-bit multiply-accumulate (vpmadd52lo/hi) leaves 4 bits of headroom for lazy carry propagation; Montgomery multiplication and reduction run 8 lanes wide. The paper's contribution is choosing vectorization granularities per tower level (layouts named 8x1w, 4x2w, 2x2x2w, 1x4x2w in fp12_avx.h) so that independent Fp/Fp2 operations inside line doubling/addition, Fp12 squaring and cyclotomic squaring fill the 8 lanes, with values converted between blst's 64-bit radix and the 48-bit radix at step boundaries. Final exponentiation uses Granger-Scott cyclotomic squaring by default or Karabina-style compressed cyclotomic squaring via the COMPRESSED_CYCLOTOMIC_SQR compile-time switch.",
+  "when_to_use": [
+    "Latency of a single BLS12-381 pairing matters (one signature verification, one pairing check) on a CPU with AVX-512 IFMA: Intel Ice Lake, Tiger Lake, Sapphire Rapids or later Xeons, or AMD Zen 4/Zen 5.",
+    "You already build on blst and can vendor its field code, swapping in the vectorized Miller loop and final exponentiation.",
+    "As a reference for how to map extension-field tower arithmetic onto 8-lane IFMA when writing your own pairing or BN254 code.",
+    "Research or benchmarking where reproducing the TCHES 2025 numbers against blst on the same machine is the goal (both sides ship with identical gcc flags)."
+  ],
+  "when_not_to_use": [
+    "Multi-pairing products (n > 1, e.g. aggregate BLS verification): the default vectorized Miller-loop step add_n_dbl_n_vector reads only T[0], Q[0] and Px2[0] and ignores n, so miller_loop_n with n > 1 does not compute the product of pairings.",
+    "CPUs without AVX-512 IFMA (Intel client cores from Alder Lake on, older Xeons, Arm): there is no fallback path, and the build uses -march=native so binaries are not portable.",
+    "Production signing/verification stacks: no library build, no hash-to-curve, signature API or subgroup/input validation in the pairing entry points, no side-channel claims, 9 stars and last commit 2025-09-27.",
+    "Throughput-bound batch verification: it is latency-optimized for one pairing; a batch-oriented design such as VROOM's RNS approach may fit better."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none beyond the bundled blst-derived sources (src/assembly.S, fields, points, recip) and src/rdtsc64.S for timing",
+    "min_toolchain": "gcc with AVX-512 IFMA intrinsics (Makefile: gcc -O3 -fomit-frame-pointer -m64 -mbmi2 -march=native -fwrapv -mtune=native); C99 for VLAs in miller_loop_n; gcc version not stated",
+    "platforms": "x86-64 with AVX-512F and AVX-512 IFMA plus BMI2/ADX (Linux/ELF toolchain assumed by the -z noexecstack flag)",
+    "thread_safety": "not documented (functions are pure on caller buffers; no global mutable state seen in pairing.c)",
+    "drop_in_for_baseline": "partial — same data types and math as blst's internal pairing code, but different function names, no blst public API (blst_miller_loop, pairing context) and single-pair only in the vectorized Miller loop"
+  },
+  "gotchas": [
+    "miller_loop_n/optimal_ate_pairing accept n but the vectorized Miller loop only processes the first (P, Q) pair; start_dbl_n loops over n, so results for n > 1 are silently wrong rather than rejected.",
+    "The faster 1,195,236-cycle variant needs COMPRESSED_CYCLOTOMIC_SQR set to 1 in src/pairing.h; the default build is the Granger-Scott path (1,265,314 cycles in the paper).",
+    "The bundled test checks bilinearity identities (e(P,[k]Q) == e([k]P,Q) and two variants) with a fixed scalar inside the same implementation; it does not compare output against blst or known-answer vectors.",
+    "Cycle counts come from rdtsc over 10000 iterations after 1000 warm-up calls; on CPUs where rdtsc ticks at a fixed reference rate, turbo and AVX-512 frequency licensing affect the reading."
+  ],
+  "pick_this_over_siblings_when": "Against VROOM (also AVX-512 IFMA BLS12-381 versus blst), pick avxbls when you want plain Montgomery arithmetic in radix 2^48 tuned for single-pairing latency and a peer-reviewed TCHES result; pick VROOM for its RNS formulation or broader curve coverage (BN254). The GMP-oriented siblings (ctbignum, intx, mp++) do not implement pairings.",
+  "verified_claims_summary": "The TCHES 2025(4) paper by Cheng, Fotiadis, Grossschaedl and Page (read only through search-result abstracts; tches.iacr.org and eprint.iacr.org are blocked here) reports a full BLS12-381 optimal ate pairing in 1,265,314 cycles (Granger-Scott) or 1,195,236 cycles (compressed cyclotomic squaring) versus 2,351,615 cycles for blst's scalar x64 assembly, 1.86x and 1.97x, on an Intel Core i3-1005G1 (Ice Lake). Both sides are built with the same gcc -O3 -march=native flags in the repo (Makefile and baseline/Makefile) and timed with rdtsc; the gcc version and turbo settings were not readable here.",
+  "status_note": "Apache-2.0 research artifact (230 commits, last 2025-09-27, 9 stars) with no releases or library target; small enough to vendor for single-pairing latency work, but fix or avoid the n > 1 path and validate against blst before relying on it.",
+  "sources_read": [
+    "https://github.com/hchengv/avxbls",
+    "https://raw.githubusercontent.com/hchengv/avxbls/HEAD/README.md",
+    "https://raw.githubusercontent.com/hchengv/avxbls/HEAD/Makefile",
+    "https://raw.githubusercontent.com/hchengv/avxbls/HEAD/src/main.c",
+    "https://raw.githubusercontent.com/hchengv/avxbls/HEAD/src/pairing.h",
+    "https://raw.githubusercontent.com/hchengv/avxbls/HEAD/src/pairing.c",
+    "https://raw.githubusercontent.com/hchengv/avxbls/HEAD/src/intrin.h",
+    "https://raw.githubusercontent.com/hchengv/avxbls/HEAD/src/fp12_avx.h",
+    "https://raw.githubusercontent.com/hchengv/avxbls/HEAD/baseline/Makefile",
+    "https://github.com/hchengv/avxbls/tree/main/src",
+    "https://github.com/hchengv/avxbls/tree/main/hybridmul",
+    "WebSearch snippets of https://tches.iacr.org/index.php/TCHES/article/view/12431 and https://eprint.iacr.org/2025/1283 (blocked; not opened)",
+    "WebSearch snippets of https://eprint.iacr.org/2026/947 and https://github.com/ganqin-liu/avxbls-sig (not opened)"
+  ],
+  "confidence": 0.75
+}

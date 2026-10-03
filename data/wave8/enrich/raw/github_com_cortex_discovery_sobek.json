@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/cortex-discovery/sobek",
+  "one_liner": "Generated-CUDA PyTorch backend for equivariant tensor-product graph convolutions; claims 1.2x-49.7x over OpenEquivariance with bounded memory.",
+  "what_it_does": "Sobek computes the edge-conditioned equivariant tensor-product convolution used in e3nn-style interatomic potentials (NequIP/MACE-like layers): radial projection, spherical-harmonic coupling and sum over neighbours, with forward, backward and double backward under PyTorch autograd. It is not a drop-in for e3nn or OpenEquivariance: the TPConv module takes the compact per-edge radial embedding phi plus the final radial projection matrix (owned internally or passed as radial_linear) instead of a precomputed [num_edges, weight_numel] weight tensor, and its native feature layout is ir_mul (to_ir_mul / to_mul_ir adapters provided). Extras are TPConvGraph (reusable receiver/source CSR) and TPConvCUDAGraph (fixed-shape CUDA Graph capture up to double backward).",
+  "how_it_is_fast": "It fuses the last radial linear layer into the convolution and reassociates the computation so edge-local products are reduced straight into bounded receiver-side state, so the per-edge weight tensor, per-edge messages and their adjoints are never materialized. Per-problem CUDA kernels are code-generated from the irreps/instruction spec and JIT-compiled with nvcc -O3 via torch.utils.cpp_extension.load_inline, combined with cuBLAS GEMMs; graph traversal is receiver-owned (CSR by receiver, with a source-ordered pass for gradients), deterministic and atomic-free. A receiver_scratch_bytes budget (default 128 MiB) drives node-chunking and a knapsack-style choice of which receiver aggregates to retain for the backward pass.",
+  "when_to_use": [
+    "Training equivariant GNN potentials in PyTorch on NVIDIA GPUs where force training needs double backward and memory, not FLOPs, limits graph size.",
+    "Large or dense graphs (many edges per node, wide irreps) where materializing [E, weight_numel] edge weights blows past GPU memory with OpenEquivariance or e3nn.",
+    "Models whose last radial MLP layer can be handed to the convolution (phi plus projection weight), so the fusion boundary fits.",
+    "Fixed-topology workloads (MD steps on one structure) that benefit from TPConvGraph reuse and CUDA Graph replay.",
+    "Runs that need bitwise-deterministic results, since the kernels avoid atomics."
+  ],
+  "when_not_to_use": [
+    "Anything other than float32: no fp64, fp16 or bf16 path (GEMMs can only switch between ieee and tf32).",
+    "Problems that mix uvw and uvu paths in one instruction set, or uvu with unequal input/output multiplicities or spherical-harmonic multiplicity above one; only weighted fully connected uvw and homogeneous channel-wise uvu are supported.",
+    "Non-NVIDIA hardware or environments without a CUDA toolkit for JIT compilation; every new problem shape pays a first-call nvcc compile.",
+    "Production use that needs maturity: version 0.1.0, 5 commits (2026-07-20 to 2026-07-24), no releases, no issue history, single-company authorship.",
+    "Pipelines already built around e3nn/OpenEquivariance's precomputed edge-weight interface and mul_ir layout; using mul_ir mode in Sobek adds transposes and emits an efficiency warning."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "Python >= 3.11, PyTorch >= 2.12 with CUDA, cgen >= 2025.1, a CUDA toolkit usable by PyTorch's JIT extension builder (13.3 recommended); benchmarks extra adds e3nn, OpenEquivariance, torch-geometric 2.8.0, numpy, matplotlib",
+    "min_toolchain": "Python 3.11, PyTorch 2.12, CUDA Toolkit (13.3 recommended; 12.9 builds about 25% slower per README)",
+    "platforms": "NVIDIA CUDA GPUs only (kernels compiled for the local arch via PyTorch's arch flags)",
+    "thread_safety": "not documented (generated CUDA dumps are written atomically; CUDA Graph replay returns session-owned storage overwritten by the next replay unless clone=True)",
+    "drop_in_for_baseline": "partial — same mathematical operator and e3nn-style irreps/instruction tuples, but a different call signature (phi plus radial_linear instead of per-edge weights) and a different native feature layout (ir_mul)"
+  },
+  "gotchas": [
+    "First call for each new tensor-product specification compiles CUDA; the extension is cached only when PyTorch, CUDA, GPU arch, problem and codegen settings all match.",
+    "The CUDA toolkit is chosen from CUDA_HOME; the README reports identical kernels about 25% slower when built with CUDA 12.9 instead of 13.3.",
+    "TPConvGraph tensors must not be modified in place, and a user-supplied sender_perm is only structurally checked, not validated as a permutation.",
+    "phi_dim not divisible by four disables aligned float4 radial-embedding loads in receiver-side kernels."
+  ],
+  "pick_this_over_siblings_when": "Pick Sobek over OpenEquivariance, cuEquivariance or FlashTP when the per-edge weight tensor is what runs you out of memory or you need double backward at scale and can fuse the final radial layer; pick cuEquivariance or OpenEquivariance for drop-in e3nn compatibility, other dtypes, or a mature dependency, and FlashTP for its published SevenNet end-to-end results (Sobek reports no FlashTP comparison).",
+  "verified_claims_summary": "The authors' preprint (arXiv 2607.18074, read only through search snippets) reports Sobek faster in all 75 OpenEquivariance-capacity-matched comparisons (UVW 16-profile and UVU 9-profile grids, forward, backward and double backward), 1.2x to 49.7x, with up to 99% lower peak allocated memory, on an NVIDIA RTX 5090 in fp32 per a search snippet. The repo's harness (sobek/benchmarks/measure.py, runners.py) times medians of CUDA-event samples after warmup, and by default times OpenEquivariance including the phi @ radial_linear weight expansion and receiver sort (an oe_preexpanded variant excludes the expansion); no result files are checked in and the nvcc flags are -O3 plus PyTorch arch flags.",
+  "status_note": "Apache-2.0, version 0.1.0 published in July 2026 by Cortex Discovery GmbH with 12 stars and no activity since 2026-07-24; usable as a pip-installable PyTorch module but young enough to pin and validate against e3nn before trusting it.",
+  "sources_read": [
+    "https://github.com/Cortex-Discovery/sobek",
+    "https://raw.githubusercontent.com/Cortex-Discovery/sobek/HEAD/README.md",
+    "https://raw.githubusercontent.com/Cortex-Discovery/sobek/HEAD/pyproject.toml",
+    "https://github.com/Cortex-Discovery/sobek/tree/main/sobek",
+    "https://github.com/Cortex-Discovery/sobek/tree/main/sobek/kernels",
+    "https://github.com/Cortex-Discovery/sobek/tree/main/sobek/kernels/uvw",
+    "https://github.com/Cortex-Discovery/sobek/tree/main/sobek/nn",
+    "https://github.com/Cortex-Discovery/sobek/tree/main/sobek/benchmarks",
+    "https://github.com/Cortex-Discovery/sobek/tree/main/tests",
+    "https://github.com/Cortex-Discovery/sobek/commits",
+    "https://github.com/Cortex-Discovery/sobek/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/Cortex-Discovery/sobek/HEAD/sobek/kernels/config.py",
+    "https://raw.githubusercontent.com/Cortex-Discovery/sobek/HEAD/sobek/kernels/forward.py",
+    "https://raw.githubusercontent.com/Cortex-Discovery/sobek/HEAD/sobek/kernels/_runtime.py",
+    "https://raw.githubusercontent.com/Cortex-Discovery/sobek/HEAD/sobek/kernels/uvw/forward.py",
+    "https://raw.githubusercontent.com/Cortex-Discovery/sobek/HEAD/sobek/kernels/uvw/scratch.py",
+    "https://raw.githubusercontent.com/Cortex-Discovery/sobek/HEAD/sobek/benchmarks/measure.py",
+    "https://raw.githubusercontent.com/Cortex-Discovery/sobek/HEAD/sobek/benchmarks/runners.py",
+    "WebSearch snippets of https://arxiv.org/abs/2607.18074 (arXiv egress-blocked; not opened)"
+  ],
+  "confidence": 0.6
+}
