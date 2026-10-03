@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/thammegowda/pigzpp",
+  "one_liner": "C++23 rewrite of pigz as a thread-safe library and CLI on ISA-L/zlib-ng; 2.1x to 8.5x pigz compression throughput.",
+  "what_it_does": "A rewrite of Mark Adler's pigz that keeps the gzip/zlib/raw stream format and the pigz command-line flags (-p, -0..-9, -d, -c), so output stays readable by gzip and pigz and the reverse. pigz's global state is replaced by a config value type, so the same parallel compressor can run as a library: a C++ API (src/pigzpp/*.h), a C ABI (pigzpp_gzip_compress / pigzpp_gzip_decompress returning owned buffers released with pigzpp_free), and Python, Go, Rust and WebAssembly bindings. It also has multi-member ZIP read/write and PNG encode/decode on the same DEFLATE core.",
+  "how_it_is_fast": "It uses pigz's design: the input is cut into blocks, each block is deflated on its own worker thread with the last 32 KiB of the previous block set as a preset dictionary, and CRC-32s are combined. The per-block DEFLATE is no longer system zlib: it is zlib-ng (SIMD match finding and CRC) or Intel ISA-L's hand-written x86 assembly deflate, and ISA-L is the default on x86-64. Decompression is a single sequential inflate (ISA-L isal_inflate or zlib-ng) with separate write and check (CRC) threads, as in pigz.",
+  "when_to_use": [
+    "Replacing pigz or gzip in pipelines that compress large text or log streams on x86-64 multicore machines, where 9% more output is an acceptable price for about 8x pigz throughput (ISA-L default).",
+    "When the output must stay gzip-compatible and the ratio must match pigz: --engine zlib (zlib-ng) gave 285 vs 133 MB/s at ratio 2.81 vs 2.83 at level 6 with 8 workers.",
+    "Calling parallel gzip in-process from Python, Go (for example OCI layer compression, 381 MB/s zlib-ng / 1437 MB/s ISA-L vs Go compress/gzip 34 MB/s on a 637 MB layer), Rust or WASM instead of shelling out to pigz.",
+    "Faster gzip decompression than pigz/gzip on x86-64 (711 vs 212 vs 166 MB/s on the level-6 text stream), mostly from the ISA-L inflater.",
+    "Writing ZIP archives or PNG files from Python faster than zipfile or Pillow."
+  ],
+  "when_not_to_use": [
+    "When the compression level must mean what it means in gzip/pigz: with the default ISA-L engine, levels 5 to 9 all map to ISA-L level 3, so -6 and -9 give the same ratio (2.58 on the test text vs pigz 2.83).",
+    "Incompressible data at level 1 with --engine zlib: the archived robustness run shows ratio 0.948 on random data (about 5.5% expansion) vs 0.9997 for pigz, and zlib-ng level 1 also gave ratio 1.88 vs pigz 2.40 on text.",
+    "ARM64 and WebAssembly: ISA-L is x86-64 only, so these platforms get only the zlib-ng path (about 2.1x pigz in the CLI run, not 8.5x).",
+    "Maturity-sensitive production use: very new single-author project (15 commits, 14 stars, PyPI 1.1.1 uploaded 2026-10-03), described by its author as an experiment in AI-assisted modernization, with one benchmark machine (WSL2 guest) and one text corpus.",
+    "Toolchains older than C++23: it needs GCC 13+, Clang 17+ or a recent MSVC, plus CMake 3.20+."
+  ],
+  "integration": {
+    "form": "static lib + CLI (CMake, git submodules); C ABI library libpigzppc; Python abi3 wheels on PyPI; Go, Rust and WASM bindings",
+    "dependencies": "zlib-ng and ISA-L (vendored as submodules; system zlib possible with PIGZPP_USE_ZLIB_NG=OFF); zopfli for level 11; nanobind for Python; GoogleTest for tests",
+    "min_toolchain": "C++23 (GCC 13+, Clang 17+ or recent MSVC), CMake 3.20+; Python 3.12+ for the module, Go 1.22+, Rust 1.75+, Emscripten for WASM",
+    "platforms": "Linux, macOS, Windows on x86-64 and ARM64 (prebuilt CLI and wheels); ISA-L backend x86-64 only; WebAssembly with SIMD and optional pthreads",
+    "thread_safety": "README states the library is thread-safe with no global state (config replaces pigz's global struct g); C++ API reports errors by exceptions, C ABI returns an error string",
+    "drop_in_for_baseline": "partial — the CLI accepts pigz's interface and produces standard gzip streams, but the default ISA-L engine changes the size/level trade-off, and the library API is new"
+  },
+  "gotchas": [
+    "The default engine is ISA-L, not zlib-ng, so switching from pigz silently grows files about 9% at -6 unless --engine zlib (CLI) or engine=zlib is passed.",
+    "In the in-memory buffer API, rsyncable, zopfli (level 11) and ZIP framing are routed through temporary file descriptors on tmpfs and copied back, so those modes are slower than the headline buffer path.",
+    "pigzpp_gzip_decompress is sequential; its threads argument is kept only for API compatibility.",
+    "Much of the speedup is the backend swap: pigz built against zlib-ng (the catalogued pigz entry's pigz-ng) already narrows the gap, and the baseline pigz 2.6 here used system zlib."
+  ],
+  "pick_this_over_siblings_when": "Pick pigzpp over pigz when you want pigz's parallel gzip as an in-process library with zlib-ng/ISA-L backends. Pick it over using ISA-L igzip or zlib-ng directly when you want multithreaded gzip output and bindings for several languages. For parallel decompression of a single large gzip file, Rapidgzip is the stronger choice, since pigzpp inflates sequentially.",
+  "verified_claims_summary": "The author's run in an Ubuntu 22.04 WSL2 guest (5 cores / 10 logical CPUs of a Xeon W-2235) compressed a 128 MB English+Chinese Wikipedia text corpus at level 6 with 8 workers; medians of 7 samples. Results: 1124 MB/s (ISA-L, ratio 2.58) and 285 MB/s (zlib-ng, 2.81) vs pigz 2.6 on system zlib at 133 MB/s (2.83) and gzip at 17 MB/s; decompression 711 vs 212 vs 166 MB/s. The C++ compiler and version are not recorded, and the archived run came from a dirty working tree.",
+  "status_note": "Active (commits through 2026-10-03, PyPI 1.1.1 released 2026-10-03) and zlib-licensed, so copyable, but it is a weeks-old single-author rewrite with no issue history yet.",
+  "sources_read": [
+    "https://github.com/thammegowda/pigzpp",
+    "https://github.com/thammegowda/pigzpp/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/thammegowda/pigzpp/HEAD/README.md",
+    "https://raw.githubusercontent.com/thammegowda/pigzpp/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/thammegowda/pigzpp/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/thammegowda/pigzpp/HEAD/src/pigzpp/pigzpp.h",
+    "https://raw.githubusercontent.com/thammegowda/pigzpp/HEAD/src/pigzpp/compress.cpp",
+    "https://raw.githubusercontent.com/thammegowda/pigzpp/HEAD/src/pigzpp/decompress.cpp",
+    "https://raw.githubusercontent.com/thammegowda/pigzpp/HEAD/src/pigzpp/capi.h",
+    "https://raw.githubusercontent.com/thammegowda/pigzpp/HEAD/src/pigzpp/config.h",
+    "https://raw.githubusercontent.com/thammegowda/pigzpp/HEAD/report/plots/data/robustness.tsv",
+    "https://pypi.org/pypi/pigzpp/json"
+  ],
+  "confidence": 0.75
+}
