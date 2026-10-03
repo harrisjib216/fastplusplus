@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/traviswheelerlab/awry",
+  "one_liner": "Rust port of the AVX2 windowed FM-index (AvxWindowFmIndex); in the only third-party benchmark found it is slower than genedex.",
+  "what_it_does": "Builds an FM-index over a FASTA/FASTQ file (DNA, RNA or protein) and answers exact-match count and locate queries. The API is FmIndex::new(&FmBuildArgs) with a file path, save/load to a custom .awry file, count_string/locate_string on &str, and parallel_count/parallel_locate that take a rayon ParallelIterator of &str. It cannot index an in-memory slice or a precomputed BWT; construction goes through libsufr, which writes the suffix array to a temporary file on disk.",
+  "how_it_is_fast": "The BWT is stored in 256-symbol blocks aligned to 32 bytes: each block holds per-symbol milestone counts plus 3 (nucleotide) or 5 (amino acid) bit-vectors, so an occurrence (rank) query is a few AVX2/Neon AND/ANDNOT operations to build the symbol's bit mask and a masked popcount over 4 words, i.e. one cache-line-sized block per rank. The suffix array is sampled (default ratio 8) and bit-packed, and queries are spread across threads with rayon. The C original's query batching and prefetching (4 queries at a time) are not implemented, and the k-mer lookup table it builds is not consulted when searching (see gotchas).",
+  "when_to_use": [
+    "You need a Rust FM-index that handles protein (amino acid) text as well as DNA, which genedex-style nucleotide indexes may not cover the same way.",
+    "Count-heavy exact-match workloads where you can set suffix_array_compression_ratio high (README suggests 255) to shrink the index.",
+    "Embarrassingly parallel batches of short queries on a multi-core x86-64 (AVX2) or aarch64 (Neon) machine, using parallel_count.",
+    "Prototyping against the AvxWindowFmIndex block layout from Rust without an FFI binding to the C library."
+  ],
+  "when_not_to_use": [
+    "Performance-critical read mapping: on quadrank's human-genome benchmark (i7-10750H at 3.0 GHz, 150 bp simulated reads) AWRY counted in 8.56 s on 1 thread versus 4.18 s for genedex flat64 and 0.97 s versus 0.31-0.41 s on 12 threads (about 2-3x slower, derived from page data).",
+    "Large genomes on memory- or disk-limited machines: index build took 872 s versus about 109 s for genedex in quadrank's run, feldroop/rust-fmindex-benchmark reports 18x peak construction memory, and issue #47 reports a 32 GB RAM spike and about 40 GB of temporary files for a human genome.",
+    "locate()-heavy work: issue #44 (Sep 2025, open, no maintainer reply) reports locate hanging in an apparent infinite loop during benchmarking, and rust-fmindex-benchmark excludes AWRY until it is fixed.",
+    "Soft-masked references (lowercase repeats): AWRY passes ignore_softmask: true to libsufr, which turns lowercase bases into N, so queries in soft-masked regions find nothing despite the README saying the alphabet is case-insensitive.",
+    "x86-64 CPUs without AVX2 or any other architecture: there is no scalar fallback and no runtime feature detection."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "rayon, anyhow, aligned, rand, serde, mem_dbg, libsufr 0.6.2 (suffix-array construction, writes to disk / $TMPDIR)",
+    "min_toolchain": "Rust edition 2021; no rust-version declared (code uses usize::div_ceil, stable since Rust 1.73)",
+    "platforms": "x86-64 with AVX2, aarch64 with Neon; nothing else",
+    "thread_safety": "Queries take &self and the built index holds only plain Vecs; parallel_count/parallel_locate share one index across rayon threads. Construction is single-call and file-based.",
+    "drop_in_for_baseline": "partial: same FM-index count/locate operations as SeqAn3/SDSL or the C AvxWindowFmIndex, but a different Rust API, a custom on-disk format, and file-only construction"
+  },
+  "gotchas": [
+    "The k-mer lookup table (10-mers for DNA, 4-mers for protein in code; the README says 13 and 5) is built, populated twice during construction and saved, but KmerLookupTable::get_range_for_kmer recomputes the range by backward search instead of indexing the table, so the expected head start on every query is lost.",
+    "Safe public functions index with get_unchecked: update_range_with_symbol is pub and SearchRange's fields are pub, so an out-of-range end_ptr (or start_ptr 0, which wraps around through start_ptr - 1) reads out of bounds. FmIndex::load trusts bwt_len and the other header values in the file, so a corrupt or crafted .awry file can do the same. AVX2 #[target_feature] functions are called without runtime detection, which is undefined behaviour (typically SIGILL) on non-AVX2 x86-64.",
+    "An empty query panics (unwrap on chars().last()); a query containing '$' or '#' panics in global_occurrence; any other unknown letter is silently treated as N (DNA) or X (protein) and matches those positions.",
+    "Cargo.toml puts rustflags = [\"-C\", \"target-cpu=native\"] under [lib], where Cargo does not read it, so a normal build does not get native codegen. Without -C target-feature=+avx2 the SIMD helper functions cannot be inlined into their non-AVX2 callers."
+  ],
+  "pick_this_over_siblings_when": "Pick genedex for Rust DNA FM-index work: it builds about 8x faster and counts about 2x faster in the same quadrank run. The catalogued C AvxWindowFmIndex (AWFM-index) is the faster original with batching and prefetching. Choose AWRY only if you need its protein alphabet support in pure Rust and can live with the open locate bug.",
+  "verified_claims_summary": "AWRY publishes no benchmark of its own; its 'fastest in its class' wording borrows the C AvxWindowFmIndex paper's 2-4x (DNA) / 2-6x (protein) speedups over SeqAn3, which were not measured on this port. The only third-party numbers (RagnarGrootKoerkamp/quadrank evals/fm.csv: i7-10750H fixed at 3.0 GHz, human genome, 150 bp reads with 1% error, built from a patched AWRY) show identical match counts but AWRY 2.0x slower than genedex flat64 on 1 thread (8.56 s vs 4.18 s), 2.4x slower on 12 threads (0.97 s vs 0.41 s), with a 1.96 GB index versus 2.63 GB (flat64) / 1.68 GB (cond64) and an 872 s build versus about 109 s.",
+  "status_note": "Stale: the last upstream commit and crates.io release (0.3.1) are from 2025-01-14, with about 7.2k total downloads. Six issues are open, including the locate hang (#44), missing batching and prefetching (#45) and build-resource problems (#47), none with a maintainer reply. BSD-3-Clause, so it is legally copyable, but expect to fix it yourself; the traviswheelerlab repository is a 0-star fork.",
+  "sources_read": [
+    "https://github.com/traviswheelerlab/AWRY",
+    "https://raw.githubusercontent.com/UM-Applied-Algorithms-Lab/AWRY/HEAD/README.md",
+    "https://raw.githubusercontent.com/UM-Applied-Algorithms-Lab/AWRY/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/UM-Applied-Algorithms-Lab/AWRY/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/UM-Applied-Algorithms-Lab/AWRY/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/UM-Applied-Algorithms-Lab/AWRY/HEAD/src/alphabet.rs",
+    "https://raw.githubusercontent.com/UM-Applied-Algorithms-Lab/AWRY/HEAD/src/bwt.rs",
+    "https://raw.githubusercontent.com/UM-Applied-Algorithms-Lab/AWRY/HEAD/src/compressed_suffix_array.rs",
+    "https://raw.githubusercontent.com/UM-Applied-Algorithms-Lab/AWRY/HEAD/src/fm_index.rs",
+    "https://raw.githubusercontent.com/UM-Applied-Algorithms-Lab/AWRY/HEAD/src/fm_index_file.rs",
+    "https://raw.githubusercontent.com/UM-Applied-Algorithms-Lab/AWRY/HEAD/src/kmer_lookup_table.rs",
+    "https://raw.githubusercontent.com/UM-Applied-Algorithms-Lab/AWRY/HEAD/src/search.rs",
+    "https://raw.githubusercontent.com/UM-Applied-Algorithms-Lab/AWRY/HEAD/src/sequence_index.rs",
+    "https://raw.githubusercontent.com/UM-Applied-Algorithms-Lab/AWRY/HEAD/src/simd_instructions.rs",
+    "https://github.com/UM-Applied-Algorithms-Lab/AWRY/issues?q=is%3Aissue",
+    "https://github.com/UM-Applied-Algorithms-Lab/AWRY/issues/44",
+    "https://github.com/UM-Applied-Algorithms-Lab/AWRY/issues/45",
+    "https://github.com/UM-Applied-Algorithms-Lab/AWRY/issues/47",
+    "https://github.com/UM-Applied-Algorithms-Lab/AWRY/commits",
+    "https://raw.githubusercontent.com/RagnarGrootKoerkamp/quadrank/HEAD/evals/fm.csv",
+    "https://raw.githubusercontent.com/RagnarGrootKoerkamp/quadrank/HEAD/README.md",
+    "https://raw.githubusercontent.com/feldroop/rust-fmindex-benchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/TravisWheelerLab/sufr/HEAD/README.md",
+    "https://raw.githubusercontent.com/TravisWheelerLab/sufr/HEAD/libsufr/src/util.rs",
+    "https://raw.githubusercontent.com/TravisWheelerLab/sufr/HEAD/libsufr/src/sufr_builder.rs",
+    "https://crates.io/api/v1/crates/awry"
+  ],
+  "confidence": 0.8
+}
