@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/nakatamaho/libqd3",
+  "one_liner": "Maintained fork of the Hida-Li-Bailey QD library adding triple-double and binary80/binary32 expansions; fixed 106-212-bit floats, much cheaper than MPFR.",
+  "what_it_does": "Provides fixed-precision floating-point value types built from several hardware floats: dd_real (2 doubles, about 106 bits), td_real (3 doubles, about 159 bits, new in 1.0.0), qd_real (4 doubles, about 212 bits), edd_real (2 binary80 limbs) and, since 1.5.0, ds_real/ts_real/qs_real built from 2-4 binary32 limbs. They are used like double through C++ operator overloading and a full transcendental set (exp, log, trig, hyperbolic, pow, plus C++17-style log1p, expm1, hypot, cbrt added in 1.2.0), with dd_complex/td_complex/qd_complex/edd_complex in <qd/complex.h>, C APIs (c_dd.h, c_td.h, c_qd.h, c_edd.h) and Fortran modules. It is not an MPFR replacement in API terms: precision is fixed by the type, not chosen at run time.",
+  "how_it_is_fast": "Each value is an unevaluated sum of non-overlapping hardware floats, and arithmetic is a short fixed sequence of error-free transformations (TwoSum, TwoProd via FMA or Dekker splitting) plus renormalization, all on the stack and inlinable, with no heap-allocated limb arrays or per-operation rounding-mode bookkeeping. The default build trades a few bits for speed: Cray-style sloppy addition, sloppy QD multiplication that computes the O(eps^3) terms in plain double arithmetic and skips the O(eps^4) terms, and sloppy division with fewer quotient corrections. FMA is auto-detected with a residual correctness probe (td.tex: TwoProd costs 2 flops with FMA vs 17 without, about 1.8x fewer flops for TD/QD multiplication), and optional branch-free add/multiply (Kouya and Zhang-Aiken algorithms, QD_ENABLE_BF*) target SIMD-friendly, branch-predictable dataflow.",
+  "when_to_use": [
+    "C, C++ or Fortran inner loops that need 30-64 significant digits (ill-conditioned linear algebra, SDP solvers, Newton refinement) where 106, 159 or 212 bits is enough and MPFR's per-operation overhead dominates; the lineage evidence is upstream QD at 1.3 GFlops Rgemm vs 512-bit MPFR at 390 MFlops in MPLAPACK on a Threadripper 3970X.",
+    "About 40-50 digits are needed: td_real does a default add in 41 flops vs 84 for qd_real and a multiply in 116 vs 182 flops with FMA (docs/td.tex flop counts, not timings), so you stop paying for QD's 63 digits.",
+    "You want a maintained QD with complex types, exact int64/uint64 constructors, IEEE special-value handling in division and sqrt (1.4.0), MPFR/MPC oracle tests and a CMake package, instead of the older upstream QD releases.",
+    "You build MPLAPACK or other code that already uses the QD API (dd_real/qd_real, fpu_fix_start), since libQD3 keeps that API and is MPLAPACK's QD back end."
+  ],
+  "when_not_to_use": [
+    "You need more than about 212 bits, or precision chosen at run time: use MPFR, FLINT or LibBF. The exponent range is binary64's (about 1e308) and the legacy README says the types do not extend it.",
+    "You need correctly rounded or IEEE-style error-bounded results: the defaults are sloppy add/multiply/divide, the qd.tex paper says the basic routines lack a full correctness proof, and TODO.md still lists 'sane handling of overflow / underflow / NaNs' and wider signed-zero/NaN/Inf oracle coverage as open.",
+    "You need published throughput for this fork: no benchmark of libQD3 itself exists; the only numbers are a circa-2000 QD vs MPFUN table and MPLAPACK's upstream-QD Rgemm at unequal precision, and the new td_real, edd_real, binary32 and branch-free paths are untimed.",
+    "edd_real on MinGW under Wine (EDD trig tests fail per the README) or on targets without binary80 long double/_Float64x, where EDD is not built.",
+    "Low-adoption risk matters: a 2-star single-maintainer fork; upstream BL-highprecision/QD merged the same author's td_real (PR #15) on 2026-09-25, so upstream may be the more conservative pick if you only need DD/TD/QD."
+  ],
+  "integration": {
+    "form": "shared lib (a static library is also built by default; inline arithmetic lives in installed headers)",
+    "dependencies": "none at run time beyond libm (librt for clock_gettime where needed); a Fortran compiler for the optional Fortran modules; MPFR, GMP and MPC only for the optional oracle test suites",
+    "min_toolchain": "C++11 (cxx_std_11), CMake 3.20; Autotools removed in 1.2.0; the compiler must accept -ffp-contract=off or -fp-model strict or configuration fails",
+    "platforms": "release gates on Linux amd64, macOS arm64 and amd64, Windows MinGW; Debian i386 x87 supported since 1.3.1; edd_real needs binary80 (x86); QD_ARCH can target generic, x86-64-v3 or native",
+    "thread_safety": "not documented; qdrand() calls std::rand(), and fpu_fix_start/fpu_fix_end change the calling thread's x87 control word",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Assigning a double literal gives only double accuracy: write qd_real a = \"0.1\" (string), not a = 0.1, as the qd.tex manual warns.",
+    "On x87 (32-bit x86 without SSE2 math) call fpu_fix_start() before any DD/TD/QD arithmetic, or 80-bit registers break the error-free transformations; edd_real needs the opposite 80-bit mode (fpu_fix_start_80bit), which 1.3.1 had to separate.",
+    "The library compiles itself with -ffp-contract=off (or -fp-model strict) but does not pass that flag to consumers unless QD_PROPAGATE_FP_CONTRACT_FLAG=ON, although QD_ENABLE_INLINE=ON puts the arithmetic in headers compiled with your flags; build your code without FP contraction or fast-math.",
+    "The docs and build disagree on defaults: td.tex marks accurate QD multiplication as the default, but CMake defaults QD_ENABLE_SLOPPY_MUL=ON. The license files also differ: LICENSE is BSD-3-Clause, COPYING carries the LBNL notice asking commercial users to contact LBNL's Technology Transfer Department, and the td.tex abstract says BSD 2-clause."
+  ],
+  "pick_this_over_siblings_when": "Pick libQD3 over MultiFloats.hpp (dzhang314/MultiprecisionBenchmarks) when you need a full transcendental and complex function set, triple-double, binary80 limbs or C/Fortran bindings rather than peak branch-free SIMD kernel throughput, which that sibling's SC '25 abstract claims at up to 11.7x QD; pick MPLAPACK on top of it when you need LAPACK routines, and MPFR, FLINT or LibBF when you need more than 212 bits.",
+  "verified_claims_summary": "Nothing measures libQD3's current code. The inherited evidence is the original QD paper table in docs/qd.tex (Pentium II 400 MHz, g++ 2.95.2 -O3 -funroll-loops): quad-double add 0.583 us, mul 1.965 us, div 5.267 us vs Bailey's MPFUN 5.729, 7.624 and 10.102 us (about 9.8x, 3.9x, 1.9x, derived from page data), and the MPLAPACK manual's Rgemm peaks with upstream QD on a Threadripper 3970X (GCC 9.3.0, flags not stated): quad-double 33 MFlops vs 512-bit MPFR 11 MFlops single-threaded and 1.3 GFlops vs 390 MFlops with OpenMP, at unequal precision (212 vs 512 bits).",
+  "status_note": "Actively developed (1.5.0 released 2026-09-18, last commit 2026-09-19, 158 commits, no GitHub issues filed) and BSD-3-Clause with an LBNL commercial-use contact notice; copyable, but a 2-star single-maintainer fork whose main consumer is MPLAPACK, and its td_real was merged into upstream BL-highprecision/QD on 2026-09-25.",
+  "sources_read": [
+    "https://github.com/nakatamaho/libQD3",
+    "https://github.com/nakatamaho/libQD3/commits",
+    "https://github.com/nakatamaho/libQD3/issues?q=is%3Aissue",
+    "https://github.com/nakatamaho/libQD3/tree/main/cmake",
+    "https://raw.githubusercontent.com/nakatamaho/libQD3/HEAD/README.md",
+    "https://raw.githubusercontent.com/nakatamaho/libQD3/HEAD/README",
+    "https://raw.githubusercontent.com/nakatamaho/libQD3/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/nakatamaho/libQD3/HEAD/COPYING",
+    "https://raw.githubusercontent.com/nakatamaho/libQD3/HEAD/NEWS",
+    "https://raw.githubusercontent.com/nakatamaho/libQD3/HEAD/TODO.md",
+    "https://raw.githubusercontent.com/nakatamaho/libQD3/HEAD/QA.md",
+    "https://raw.githubusercontent.com/nakatamaho/libQD3/HEAD/CHANGES.1.2.0.md",
+    "https://raw.githubusercontent.com/nakatamaho/libQD3/HEAD/CHANGES.1.3.0.md",
+    "https://raw.githubusercontent.com/nakatamaho/libQD3/HEAD/CHANGES.1.4.0.md",
+    "https://raw.githubusercontent.com/nakatamaho/libQD3/HEAD/CHANGES.1.5.0.md",
+    "https://raw.githubusercontent.com/nakatamaho/libQD3/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/nakatamaho/libQD3/HEAD/cmake/QD3CheckFMA.cmake",
+    "https://raw.githubusercontent.com/nakatamaho/libQD3/HEAD/cmake/QD3BuildOptions.cmake",
+    "https://raw.githubusercontent.com/nakatamaho/libQD3/HEAD/docs/qd.tex",
+    "https://raw.githubusercontent.com/nakatamaho/libQD3/HEAD/docs/td.tex",
+    "https://raw.githubusercontent.com/nakatamaho/libQD3/HEAD/tests/qd_timer.cpp",
+    "https://raw.githubusercontent.com/nakatamaho/libQD3/HEAD/include/qd/qd_inline.h",
+    "https://raw.githubusercontent.com/nakatamaho/libQD3/HEAD/src/fpu.cpp",
+    "https://raw.githubusercontent.com/nakatamaho/libQD3/HEAD/src/qd_real.cpp",
+    "https://github.com/BL-highprecision/QD/pull/15",
+    "https://github.com/dzhang314/MultiprecisionBenchmarks"
+  ],
+  "confidence": 0.65
+}

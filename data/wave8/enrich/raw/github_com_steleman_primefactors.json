@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/steleman/primefactors",
+  "one_liner": "Hobby integer-factoring programs: CPU GMP-ECM reference plus CGBN GPU variants that, by the author's own numbers, lose to CPU ECM.",
+  "what_it_does": "Three command-line programs print the distinct prime factors of an integer. primefactors.c (CPU) does trial division to 2^20, Pollard's rho, then GMP-ECM (libecm) curves spread over cores with OpenMP. cgbnprimefactors.cu runs Miller-Rabin and Pollard's rho on the GPU through the author's CGBN fork, optionally spread over MPI ranks. ecmcgbnprimefactorsmpi.cu trial-divides on the GPU against a file of primes (MPI x pthreads x CUDA) and hands any residual to GMP-ECM. There is no library API: input is argv, output is text on stderr.",
+  "how_it_is_fast": "It is not faster than its baseline; the design is about GPU parallelism. The CPU path runs one OpenMP task stream over a 12-level {B1, curves} ladder modelled on GMP-ECM's tables (15 to 70 digits), with no barrier between levels and a shared stop flag polled through libecm's stop_asap callback, so all cores stay busy and in-flight curves stop once one thread finds a factor. The GPU rho kernel runs about 8192 warps of independent Floyd walks (one constant c each), computes a double-width square then reduces it (cgbn_sqr_wide + cgbn_rem_wide), and sends each cofactor to the narrowest of nine CGBN widths (128 to 32768 bits). Per the design doc, those two changes cut the 16-digit case from about 37 s to 8.65 s on the GPU, which is still slower than CPU ECM.",
+  "when_to_use": [
+    "As readable example code for CGBN: width dispatch through an X-macro, the cooperative atomicCAS + __shfl_sync claim of a result, exact modular squaring, per-thread CUDA streams, and a design PDF that records three reverted 'optimizations' with measured slowdowns (Brent batched gcd about 2.6x slower, per-instance ILP 2-4x, __launch_bounds__ capping).",
+    "Quick CPU factoring of 30-40 digit factors on a many-core Linux box that already has GMP and libecm: the author reports about 10.5 s (30 digits), 20.6 s (35) and 5.7 min (40) for balanced semiprimes on a 32-core machine.",
+    "Throughput experiments that split many small factors (up to about 16 digits) across several GPUs with one MPI rank per GPU; the author has not tested multi-node runs.",
+    "A starting point for MPI-distributed trial division against a table of primes you have already proven."
+  ],
+  "when_not_to_use": [
+    "You want something faster than GMP-ECM: GPU rho took about 8.7 s on an RTX 4080 for a 16-digit factor vs about 2 s for CPU ECM (about 4x slower, derived from page data); factors of 19 or more digits are impractical on the GPU path; below 2^64 both GPU programs are 'much slower' because of CUDA and MPI start-up.",
+    "Factors beyond about 45 digits: the README says single-machine ECM tops out there, and there is no quadratic or number field sieve.",
+    "You need guaranteed factorizations: primality is Miller-Rabin (40 rounds on the CPU, 12 fixed bases 2-37 in the GPU kernel), and when the rho or ECM budget runs out the composite is printed as a 'factor' after a warning.",
+    "You need a library or multiplicities: these are CLI programs with global state that print distinct primes only, sorted, on stderr.",
+    "You need maturity: 7 commits (2026-08-28 to 2026-09-01), 1 star, no test suite, MPI scaling never measured on a real cluster."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "CPU program: GMP, GMP-ECM 7.0.6 (libecm), OpenMP. GPU programs: CUDA toolkit (12.9 or 13.2), the author's CGBN fork steleman/nvidia-cgbn installed in /usr/local/include/cgbn (adds signed arithmetic, Ada/Blackwell support and widths up to 256K bits), GMP, OpenMPI 5.0.5; ecmcgbnprimefactorsmpi also needs libecm and pthreads",
+    "min_toolchain": "GCC with C17 and OpenMP for the CPU program; nvcc from CUDA 12.9 (-arch=sm_89) or 13.2 (sm_120) for the GPU programs",
+    "platforms": "Linux (tested on Fedora 41 and 44, x86-64 hosts); GPU programs on NVIDIA Ada (RTX 4080) and Blackwell (RTX PRO 4500), other GPUs by editing GPU_ARCH",
+    "thread_safety": "not applicable as a library (global factor array, CLI only); internally the OpenMP ECM threads each own an ecm_params with a distinct RNG seed, and the pthread workers in the trial-division program keep thread-local hit lists",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "cgbnprimefactors has no ECM fallback: after 7 rho attempts (walk length starts at 200,000 iterations and triples each time) it records the unsplit composite with only a warning, and results go to stderr alongside the warnings.",
+    "ecmcgbnprimefactorsmpi treats every number in the primes file as proven prime and never tests it, so a bad table silently yields wrong factors; whatever the table misses goes to a single-threaded GMP-ECM ladder on rank 0.",
+    "The Makefile hard-codes /usr/bin/gcc, /usr/local/cuda-12.9, sm_89 and /usr/lib64/openmpi, and its CPU link rule puts -lecm -lgmp before primefactors.o, which linkers that default to --as-needed reject. The README's dependency table (GMP-ECM and CUDA rows) does not match the Makefile, and the design PDF's ecmcgbnprimefactorsmpi command line predates the current -f/-t options.",
+    "The README says the author used Claude Opus 5.0 for the Pollard's rho code and for testing and bug finding."
+  ],
+  "pick_this_over_siblings_when": "Do not pick it for speed. ECM-ELF is the sibling that beats GMP-ECM (about 3x per curve in stage 1 with AVX-512 IFMA), and CGBN itself or mr_blackwell are better places to get GPU big-integer or Miller-Rabin throughput. Use this repo only as worked example code for CGBN, MPI and libecm orchestration.",
+  "verified_claims_summary": "These are first-party wall-clock figures, and they are not a speedup. On an RTX 4080 (CUDA 12.9, nvcc -O3 -arch=sm_89) the GPU Pollard's rho needs about 8.7 s for a 16-digit factor, versus about 2 s for the CPU GMP-ECM path on the same number. The CPU path (gcc -O3 -fopenmp, GMP-ECM 7.0.6) took about 10.5 s, 20.6 s and 5.7 min for 30-, 35- and 40-digit factors on an unnamed 32-core machine, and was never compared with the stock ecm binary or with single-threaded GMP-ECM.",
+  "status_note": "Hobby project, MIT, 7 commits ending 2026-09-01: copyable but unpackaged and untested beyond the author's two Fedora machines, catalogued only to record that it does not beat GMP-ECM.",
+  "sources_read": [
+    "https://github.com/steleman/primefactors",
+    "https://github.com/steleman/primefactors/commits",
+    "https://raw.githubusercontent.com/steleman/primefactors/HEAD/README.md",
+    "https://raw.githubusercontent.com/steleman/primefactors/HEAD/Makefile",
+    "https://raw.githubusercontent.com/steleman/primefactors/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/steleman/primefactors/HEAD/primefactors-design.pdf",
+    "https://raw.githubusercontent.com/steleman/primefactors/HEAD/primefactors.c",
+    "https://raw.githubusercontent.com/steleman/primefactors/HEAD/cgbnprimefactors.cu",
+    "https://raw.githubusercontent.com/steleman/primefactors/HEAD/ecmcgbnprimefactorsmpi.cu",
+    "https://github.com/steleman/nvidia-cgbn"
+  ],
+  "confidence": 0.75
+}
