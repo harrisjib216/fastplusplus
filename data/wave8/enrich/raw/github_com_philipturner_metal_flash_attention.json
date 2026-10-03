@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/philipturner/metal-flash-attention",
+  "one_liner": "Swift/Metal port of FlashAttention for Apple GPUs; claims higher ALU utilization than FlashAttention-2/3 on NVIDIA, not wall-clock wins.",
+  "what_it_does": "A Swift package (library product 'FlashAttention') that generates and JIT-compiles Metal shaders for single-headed attention forward, backward dQ and backward dK/dV, plus the GEMM kernels it is built from. You fill an AttentionDescriptor (row/column sequence lengths, head dimension, transpose flags, low-precision inputs/intermediates), get a kernel descriptor per pass, and encode the Metal pipelines yourself; there is no Python, PyTorch or C++ API. The README presents it as a minimal reference to copy into an Xcode project and extend (multi-head, masks, block sparsity), not a packaged drop-in.",
+  "how_it_is_fast": "It implements the FlashAttention tiling with online softmax, so the N x N attention matrix is never written to memory. Because Apple GPUs lack native FP32 atomics, the backward pass is split into separate dQ and dK/dV kernels (7 GEMMs instead of 5, (9D+15)N^2 work instead of (7D+10)N^2) that need no atomics or scratch space and parallelize fully across rows and columns. For large head dimensions it adds a third blocking dimension along D with deliberate, bandwidth-minimizing register spilling, and picks block sizes and register-cached operands from per-architecture parameter tables (M1/M2 vs M3/M4 'apple9' family, which also switches between async load and async cache paths).",
+  "when_to_use": [
+    "Native Swift/Metal apps on macOS 14+ or iOS 17+ that need attention on Apple silicon and can integrate Metal command encoding directly.",
+    "Training-style workloads that need the backward pass on Apple GPUs; the README reports 62-64% (M1 architecture) and 61-71% (M3 architecture) fwd+bwd ALU utilization at D = 64, 128 and 256.",
+    "Large or odd head dimensions (e.g. 256, or non-power-of-two values), where the D-blocking and register-spilling scheme is designed to keep utilization flat.",
+    "As a reference implementation to port or extend (masks, multi-head, block sparsity) for an Apple-GPU inference engine."
+  ],
+  "when_not_to_use": [
+    "You need multi-head attention, causal or padding masks, or a PyTorch/Python API out of the box: none are in this repo; the third-party fork imperatormk/metal-flash-attention and its mps-flash-attention bindings add causal masking, macOS 15 fixes and PyTorch MPS integration (issue #32, unanswered).",
+    "You need a measured speedup against MPS, MLX or PyTorch SDPA on the same Mac: the README compares only utilization percentages against NVIDIA GPUs from the FlashAttention papers, so no wall-clock win is documented.",
+    "Standalone GEMM: users reported its GEMM slower than MPS on M3 (issue #11) and a 4096x4096 GEMM taking about 1 s versus about 0.06 s for MPSMatrixMultiplication on M2 (issue #29, user measurement, cause not established); both issues were closed without a maintainer answer.",
+    "Projects that need an actively maintained dependency: last author commit 2024-08-27, last commit 2024-09-22 (README PR), and recent issues get no replies."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none beyond Apple's Metal framework (Swift package with no package dependencies)",
+    "min_toolchain": "Swift tools 5.10; build with -Xswiftc -Ounchecked; macOS 14, iOS 17, tvOS 17, visionOS 1",
+    "platforms": "Apple silicon GPUs only (Metal); parameter tables tuned for M1/M2 and M3/M4 families",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Every kernel is JIT-compiled at runtime from generated Metal source, so first use of each problem configuration pays shader compilation latency; the older precompiled-metallib version (Xcode 14.2) was replaced by this design.",
+    "Default mixed precision keeps Q/K/V in FP16 and stores dO, D and the gradients dV/dK/dQ in BF16 (emulated on chips without native BF16); source comments report output errors around 5e-2 in typical mixed-precision runs and up to 4e-2 BF16 error when gradients are paged to memory.",
+    "Issue #8 reported NaNs on SSD-1B because the softmax scale is applied after Q*K^T and the product overflows FP16; the current pseudocode still applies scaleFactor after S = Q*K^T, so test with large-magnitude activations.",
+    "Performance needs -Ounchecked for the CPU-side Swift; the README says plain Release mode is impractical for development because it recompiles everything."
+  ],
+  "pick_this_over_siblings_when": "Pick it over ThunderMittens when you need a backward pass or large head dimensions on Apple GPUs from Swift, since ThunderMittens' evidence is a forward attention kernel compared with MLX; on NVIDIA use FlashAttention-3 or SageAttention instead, as this project only runs on Metal.",
+  "verified_claims_summary": "First-party README figures only: FP16 ALU utilization on Apple GPUs (M1 architecture forward 85-86%, fwd+bwd 62-64%; M3 architecture forward 82-94%, fwd+bwd 61-71% at D = 64/128/256; 4400 gigainstructions/s, 83%, on M1 Max at large sizes), computed with the author's own work model, set beside A100 FlashAttention-2 and H100 FlashAttention-3 utilization derived from the papers' peak GFLOPS. No same-machine timing against MPS, MLX or PyTorch exists, and the 'faster than Nvidia' sentence refers to utilization normalized for GPU size, not wall time.",
+  "status_note": "Stale since 2024-09 with unanswered issues and a third-party fork carrying fixes, but MIT-licensed and small enough to copy into an Xcode project as the README intends.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/philipturner/metal-flash-attention/HEAD/README.md",
+    "https://raw.githubusercontent.com/philipturner/metal-flash-attention/HEAD/Package.swift",
+    "https://github.com/philipturner/metal-flash-attention/issues?q=is%3Aissue",
+    "https://github.com/philipturner/metal-flash-attention/issues/8",
+    "https://github.com/philipturner/metal-flash-attention/issues/11",
+    "https://github.com/philipturner/metal-flash-attention/issues/17",
+    "https://github.com/philipturner/metal-flash-attention/issues/29",
+    "https://github.com/philipturner/metal-flash-attention/issues/32",
+    "https://github.com/philipturner/metal-flash-attention/tree/main/Sources/FlashAttention",
+    "https://github.com/philipturner/metal-flash-attention/tree/main/Sources/FlashAttention/Attention",
+    "https://github.com/philipturner/metal-flash-attention/tree/main/Sources/FlashAttention/Attention/AttentionDescriptor",
+    "https://github.com/philipturner/metal-flash-attention/tree/main/Tests/FlashAttentionTests",
+    "https://raw.githubusercontent.com/philipturner/metal-flash-attention/HEAD/Sources/FlashAttention/Attention/AttentionDescriptor/AttentionDescriptor.swift",
+    "https://raw.githubusercontent.com/philipturner/metal-flash-attention/HEAD/Sources/FlashAttention/Attention/AttentionDescriptor/AttentionDescriptor+Precisions.swift",
+    "https://raw.githubusercontent.com/philipturner/metal-flash-attention/HEAD/Sources/FlashAttention/Attention/AttentionDescriptor/AttentionDescriptor+Parameters.swift"
+  ],
+  "confidence": 0.75
+}

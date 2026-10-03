@@ -127,3 +127,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - ralna/spral retier sources: arXiv 1909.08104 (Tasseff et al., Ipopt linear-solver parallelism, SPRAL vs HSL; blocked); NLAFET/SyLVER is the StarPU successor of SSIDS (README has no numbers). (from SPRAL enricher)
 - cornellhpc/ocean-spgemm (C): arXiv 2604.19004 unopened; retier to B when reachable. (batch 158)
 - bbuhrow/yafu (379 stars, not catalogued): maintained AVX-ECM copy in factor/avx-ecm plus SIQS/NFS; candidate for big-integer-arbitrary-precision. (from avx-ecm enricher)
+- imperatormk/metal-flash-attention and imperatormk/mps-flash-attention (causal masks, PyTorch MPS, claims 2-5x over SDPA): forks worth a seed check. SevenNet-Omni paper section 2.7 compares FlashTP and cuEquivariance. (from FlashTP/MFA enricher)

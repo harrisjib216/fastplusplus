@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/snu-arc/flashtp",
+  "one_liner": "Fused, sparsity-aware CUDA kernels for e3nn's channelwise (uvu) tensor product; paper reports up to 41.6x over e3nn.",
+  "what_it_does": "FlashTP replaces the e3nn.o3.TensorProduct 'uvu' (channelwise) layer plus its gather of source-node features and scatter-sum to destination nodes, which is the dominant cost in equivariant interatomic potentials such as NequIP and SevenNet. You build flashTP_e3nn.uvu_TP(irreps_in1, irreps_in2, irreps_out, instructions) and call it with node features, edge features, per-edge weights and int32 edge_src/edge_dst; it returns the already-aggregated per-node output, so the call shape differs from e3nn's per-edge TensorProduct. Forward, backward and double-backward (needed for force training) are registered as torch.library custom ops in fp32 and fp64, with a separate .so for LAMMPS inference.",
+  "how_it_is_fast": "It fuses gather, tensor product, per-edge weighting and scatter-add into one kernel per pass, so the large per-edge intermediate tensor that e3nn materializes is never written to memory; that is where the reported 6x peak-memory reduction comes from. The Clebsch-Gordan coefficients are stored sparsely (only nonzero 'fibers', with values deduplicated into a uint8-indexed table of up to 256 unique values, or an extended-CG kernel above that), skipping the zero entries a dense e3nn contraction multiplies. Paths are grouped per input irrep and per 32-channel warp, inputs are staged in shared memory sized to the GPU (163 KiB on A100, 227 KiB on H100), and outputs are accumulated with atomicAdd.",
+  "when_to_use": [
+    "Training or running an equivariant MLIP (NequIP, SevenNet-style) on NVIDIA A100/H100 where the uvu tensor product dominates step time or GPU memory limits system size (the paper reports 28,000 atoms on one A100).",
+    "Force training that needs double-backward through the tensor product, which FlashTP implements natively in fp32 and fp64.",
+    "SevenNet users: it is wired in via --enable_flash, and SevenNet's docs say FlashTP with LAMMPS: Torch beats cuEquivariance with LAMMPS: ML-IAP for small systems (below about 10^3 atoms).",
+    "Irreps whose input-1 multiplicities are all multiples of 32 (e.g. 32x0e, 64x1o) with e3nn's default component/element normalization and per-edge (non-shared, non-internal) weights."
+  ],
+  "when_not_to_use": [
+    "Multiplicities that are not multiples of 32 (e.g. 10x1o, 40x0e): the module asserts mul % 32 == 0 and fails; issue #4 asking for a workaround was closed without an answer.",
+    "Large systems: SevenNet's accelerator docs (citing the SevenNet-Omni paper) report a crossover around 10^3 atoms beyond which cuEquivariance is more efficient.",
+    "Tensor products other than channelwise uvu (fully connected uvw, shared or internal weights), fp16/bf16, or non-NVIDIA GPUs: none are supported.",
+    "GPUs other than A100/H100 without manual tuning: the shared-memory budget is chosen by matching 'A100' or 'H100' in the device name, and any other GPU drops to a 48 KiB 'safe mode' unless you pass smem_size.",
+    "Projects that need a pip wheel or a version policy: install is from source with a CUDA build of up to 10 minutes (issue #5 asking for a pip release is open), version 0.1.1."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "PyTorch >= 2.4.1, e3nn, CUDA toolkit 12+, ninja; torch_scatter only for the e3nn reference benchmark",
+    "min_toolchain": "Python >= 3.10 (setup.py), CUDA 12, PyTorch 2.4.1; nvcc built with -O2",
+    "platforms": "NVIDIA GPUs only; built for the detected compute capability, or sm_80 and sm_90 with PTX fallback when no GPU is present at build time (Blackwell runs via PTX JIT)",
+    "thread_safety": "not documented; a DDP multi-GPU illegal-memory-access report (issue #1) was closed with no fix visible on the issue page",
+    "drop_in_for_baseline": "partial — same irreps and instruction arguments as e3nn.o3.TensorProduct uvu, but the call takes node features plus edge_src/edge_dst and returns scatter-summed node outputs, so the surrounding gather/scatter code must be removed"
+  },
+  "gotchas": [
+    "Output accumulation uses atomicAdd in the scatter step, so results are not bitwise deterministic run to run; the bundled correctness check compares against e3nn with a 1e-4 absolute tolerance.",
+    "Unique Clebsch-Gordan values are deduplicated after rounding through fp32 even in fp64 mode, which picks the kernel variant (uint8-indexed vs extended CG above 256 unique values).",
+    "The example/test.sh 'microbenchmark' runs one forward, backward and double-backward pass and checks correctness; it has no timing code, so reproducing the paper's speedups needs an external profiler (e.g. Nsight).",
+    "Building can be killed by out-of-memory in ninja (exit 137); SevenNet's docs recommend MAX_JOBS=1."
+  ],
+  "pick_this_over_siblings_when": "Pick FlashTP over cuEquivariance for uvu-based models on small-to-medium systems (below about 10^3 atoms per SevenNet's docs) or when peak memory is the limit; pick cuEquivariance or OpenEquivariance for larger systems, multiplicities not divisible by 32, or non-uvu products, and Sobek if you want streaming convolutions that its authors report beat OpenEquivariance.",
+  "verified_claims_summary": "The ICML 2025 paper (read here only through search-result snippets of its abstract) reports up to 41.6x and 60.8x kernel speedups over e3nn and NVIDIA cuEquivariance on the uvu tensor product, and 4.2x inference and 3.5x training speedups with 6.3x and 6.2x lower peak memory for SevenNet-l3i5; snippets mention an A100, but GPU model, precision and the configurations behind the maxima were not confirmed from the paper itself. SevenNet's own docs say FlashTP gives 'up to ~4x' speedup and lose to cuEquivariance above about 10^3 atoms.",
+  "status_note": "Active (last commit 2026-05-27, adding GPU auto-detection and PTX fallback), MIT-licensed, 23 commits and integrated into SevenNet main via --enable_flash, but still a 0.1.1 source-only research release with a TODO for further performance work and a JIT path.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/SNU-ARC/flashTP/HEAD/README.md",
+    "https://github.com/SNU-ARC/flashTP",
+    "https://github.com/SNU-ARC/flashTP/commits",
+    "https://github.com/SNU-ARC/flashTP/issues?q=is%3Aissue",
+    "https://github.com/SNU-ARC/flashTP/issues/1",
+    "https://github.com/SNU-ARC/flashTP/issues/4",
+    "https://github.com/SNU-ARC/flashTP/issues/6",
+    "https://github.com/SNU-ARC/flashTP/tree/main/flashTP_e3nn",
+    "https://raw.githubusercontent.com/SNU-ARC/flashTP/HEAD/flashTP_e3nn/flashTP.py",
+    "https://raw.githubusercontent.com/SNU-ARC/flashTP/HEAD/flashTP_e3nn/utils.py",
+    "https://raw.githubusercontent.com/SNU-ARC/flashTP/HEAD/flashTP_e3nn/sptp_exp_opt_large/fused_e3nn_exp_opt_large.py",
+    "https://raw.githubusercontent.com/SNU-ARC/flashTP/HEAD/flashTP_e3nn/sptp_exp_opt_large/fwd_sptp_linear_v2_shared_exp.cu",
+    "https://raw.githubusercontent.com/SNU-ARC/flashTP/HEAD/setup.py",
+    "https://raw.githubusercontent.com/SNU-ARC/flashTP/HEAD/requirements.txt",
+    "https://raw.githubusercontent.com/SNU-ARC/flashTP/HEAD/example/flashTP_test.py",
+    "https://raw.githubusercontent.com/SNU-ARC/flashTP/HEAD/example/test.sh",
+    "https://raw.githubusercontent.com/MDIL-SNU/SevenNet/main/README.md",
+    "https://raw.githubusercontent.com/MDIL-SNU/SevenNet/main/docs/source/user_guide/accelerator.md",
+    "WebSearch: FlashTP ICML 2025 abstract snippets (openreview.net/forum?id=wiQe95BPaB, proceedings.mlr.press/v267/lee25l.html)",
+    "https://lacuna.tiptreesystems.com/work/flashtp-fused-sparsity-aware-tensor-product-for-machine-learning-interatomic/wrk_8c0e4dad648c9343030816fd545ae078 (EGRESS_BLOCKED)"
+  ],
+  "confidence": 0.75
+}
