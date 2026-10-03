@@ -1,0 +1,49 @@
+[
+  {
+    "id": "https://github.com/devpilgrin/fastopencv",
+    "verdict": "downgrade",
+    "reject_reason": null,
+    "page_compares_against_baseline": true,
+    "numbers_found_on_page": true,
+    "evidence_tier_final": "C",
+    "tier_reason": "First-party only: the README table and the author's PLAN.md/QUEUE.md give before/after times, and the benchmark drivers are public (bench/resize_cubic_bench.cpp, bench/area_hist_bench.cpp, bench/transform_bench.cpp, bench/pow_bench.cpp), the CPU is named (Ryzen 9 9950X3D in PLAN.md) and the fastcv flags are in scripts/build-fastcv.sh, but no result file backs the 1080p numbers, the g++ version and bench-driver flags are not given, and the headline resize INTER_CUBIC 4.1x is contradicted by the repo's own corrected measurements, so it cannot be A.",
+    "corrections": {
+      "claimed_speedup": "README table: resize INTER_CUBIC 3.4 -> 0.8 ms (4.1x, bit-exact), but the 3.4 ms OpenCV time is the first kernel-audit figure, which PLAN.md stage 5e says was taken with setNumThreads(0), a mode that slowed OpenCV+TBB about 4x; re-measured in default threading OpenCV takes 0.88 ms, and the author's own header (fastcv/include/fastcv/fastcv.hpp) and PLAN.md give fastcv::resizeCubic8u as 1.5-1.9x for downscaling (bit-exact) and 0.7-0.9x, i.e. slower than OpenCV, for upscaling. resize INTER_AREA integer factor x4: 18.7x (8UC1) and 3.5x (8UC3), maxDiff 1 on 0.2% of pixels; for x2 cv::resize is faster (README row: 0.92 -> 0.02-0.25 ms). transform 32FC3 with a 4x4 matrix: 7.9 ms (PLAN.md says 8.8 ms) -> 0.74 ms (10.7x, bit-exact). pow 32F with a general exponent (gamma): 19-22x, relative error about 1e-5, positive inputs only.",
+      "baseline": "OpenCV 4.14.0 cv::resize (INTER_CUBIC, INTER_AREA), cv::transform and cv::pow, built from source by the repo's scripts with IPP disabled (WITH_IPP=OFF in every variant) and TBB threading at the default thread count; libfastcv is compiled against the linux-dispatch install, so the cv:: column is most likely that build, not a distribution build.",
+      "workload": "bench/resize_cubic_bench.cpp: random 8UC1 and 8UC3 images, 1920x1080 down to 960x540 and 1280x720, 960x540 up to 1920x1080, and 1920x1080 to 640x480 (C3), cv::resize INTER_CUBIC versus fastcv::resizeCubic8u, 20 timed runs after 2 warm-ups, with maxDiff and non-zero-difference counts. bench/area_hist_bench.cpp: 1080p 8UC1 and 8UC3, INTER_AREA integer factors 2 and 4 versus fastcv::resizeAreaInt8u. bench/transform_bench.cpp: 1080p 32FC3 with a 4x4 affine matrix (so the output is 32FC4) versus fastcv::transform32f. bench/pow_bench.cpp: 1080p 32FC1 with values in [0.01, 10], exponents 1.7 and -0.3, versus fastcv::pow32f.",
+      "compiler_and_flags": "g++ (version not stated); fastcv built with -O3 -march=native -fPIC against the repo's linux-dispatch OpenCV install (scripts/build-fastcv.sh). OpenCV 4.14.0 built by scripts/build-linux-opt.sh: Release, gcc/g++, LTO, TBB on, OpenMP off, WITH_IPP=OFF, LAPACK via OpenBLAS, CUDA 13.3; the dispatch variant uses an AVX2 baseline with AVX512_SKX dispatch and ENABLE_FASTMATH, while the stock variant keeps OpenCV's default CPU baseline and dispatch. Compile flags for the bench/*.cpp drivers are not given.",
+      "hardware": "AMD Ryzen 9 9950X3D (Zen 5, AVX-512 + VBMI, 32 threads), 128 GB RAM, NVIDIA RTX 4090; Arch Linux (CPU model named in PLAN.md stage 0)",
+      "stars_or_usage": "0 stars, 0 forks (repo created September 2026, 6 commits)",
+      "caveats": "This is the author's own kernel library: the code in fastcv/src uses OpenCV universal intrinsics and AVX-512 intrinsics. It is not a wrapper over Qualcomm's proprietary FastCV SDK, nor OpenCV's Qualcomm FastCV HAL; only the name is shared. The headline resize INTER_CUBIC 4.1x compares a fastcv time against an OpenCV time taken with setNumThreads(0), a mode that PLAN.md stage 5e calls a trap that slowed OpenCV+TBB about 4x and then re-measured at 0.88 ms. The author's corrected figures are 1.5-1.9x for downscaling and 0.7-0.9x (slower) for upscaling, and the README was never updated. The resize kernel follows OpenCV's algorithm (bicubic A=-0.75, 11-bit fixed-point horizontal pass, float vertical pass, clamp-to-edge borders), so the bit-exact claim is plausible. resizeAreaInt8u handles only integer factors that divide the image size, on C1 and C3. It rounds ties up with a shift, while OpenCV's area-fast path rounds sum*(1/area) with cvRound, which explains the +/-1 differences. The README's 0.02-0.25 ms range does not match 0.92/18.7 = 0.05 ms (derived from page data). The transform benchmark uses a 4x4 matrix on 3 channels, so it produces a 4-channel output, which takes OpenCV's generic single-threaded scalar loop. fastcv's dcn=4 path is also scalar, so the 10.7x comes from running that loop on 32 threads; the SIMD 3x3 path is not what was benchmarked. pow32f uses exp2(p*log2(x)) polynomials with a mask for x <= 0 that is computed but never applied. Zero or negative inputs (black pixels in gamma) therefore produce garbage values instead of 0 or NaN, and there is no overflow or underflow clamping. The benchmark avoids this by using inputs in [0.01, 10]; it is also multi-threaded against cv::pow's scalar powf. Every OpenCV build in the repo disables IPP, so the results do not speak for IPPICV-enabled distribution builds. No result files for the 1080p numbers are checked in: bench/lena_fastcv.txt holds only an assertion crash in sortIdxRows32f, and only bench/lena_stock.txt has timings. The repo has 0 stars and no third-party reproduction, and resize is only a small part of a roughly 30-kernel library."
+    },
+    "notes": "The repo is real and public (Apache-2.0, last commit 2026-09-10), with its own SIMD/threaded kernels that do the same work as OpenCV's for resize, area x4 and transform. I kept tier C but marked the claim as overstated: the 4.1x INTER_CUBIC row uses a baseline the author's own log says ran about 4x slow; the corrected figure is 1.5-1.9x for downscaling and slower than OpenCV for upscaling. Enrichers should treat pow32f as unsafe for zero or negative inputs: its x <= 0 fallback is dead code.",
+    "urls_opened": [
+      "https://github.com/devpilgrin/FastOpenCV",
+      "https://github.com/devpilgrin/FastOpenCV/tree/main/bench",
+      "https://github.com/devpilgrin/FastOpenCV/tree/main/fastcv",
+      "https://github.com/devpilgrin/FastOpenCV/tree/main/fastcv/src",
+      "https://github.com/devpilgrin/FastOpenCV/commits/main",
+      "https://raw.githubusercontent.com/devpilgrin/FastOpenCV/HEAD/README.md",
+      "https://raw.githubusercontent.com/devpilgrin/FastOpenCV/HEAD/PLAN.md",
+      "https://raw.githubusercontent.com/devpilgrin/FastOpenCV/HEAD/QUEUE.md",
+      "https://raw.githubusercontent.com/devpilgrin/FastOpenCV/HEAD/LICENSE",
+      "https://raw.githubusercontent.com/devpilgrin/FastOpenCV/HEAD/bench/resize_cubic_bench.cpp",
+      "https://raw.githubusercontent.com/devpilgrin/FastOpenCV/HEAD/bench/area_hist_bench.cpp",
+      "https://raw.githubusercontent.com/devpilgrin/FastOpenCV/HEAD/bench/transform_bench.cpp",
+      "https://raw.githubusercontent.com/devpilgrin/FastOpenCV/HEAD/bench/pow_bench.cpp",
+      "https://raw.githubusercontent.com/devpilgrin/FastOpenCV/HEAD/bench/kernel_audit.cpp",
+      "https://raw.githubusercontent.com/devpilgrin/FastOpenCV/HEAD/bench/lena_all.cpp",
+      "https://raw.githubusercontent.com/devpilgrin/FastOpenCV/HEAD/bench/lena_fastcv.txt",
+      "https://raw.githubusercontent.com/devpilgrin/FastOpenCV/HEAD/bench/lena_stock.txt",
+      "https://raw.githubusercontent.com/devpilgrin/FastOpenCV/HEAD/bench/test_imgproc_stock.txt",
+      "https://raw.githubusercontent.com/devpilgrin/FastOpenCV/HEAD/scripts/build-fastcv.sh",
+      "https://raw.githubusercontent.com/devpilgrin/FastOpenCV/HEAD/scripts/build-linux-opt.sh",
+      "https://raw.githubusercontent.com/devpilgrin/FastOpenCV/HEAD/scripts/run-bench.sh",
+      "https://raw.githubusercontent.com/devpilgrin/FastOpenCV/HEAD/fastcv/include/fastcv/fastcv.hpp",
+      "https://raw.githubusercontent.com/devpilgrin/FastOpenCV/HEAD/fastcv/src/resize_cubic_8u.cpp",
+      "https://raw.githubusercontent.com/devpilgrin/FastOpenCV/HEAD/fastcv/src/resize_area_int_8u.cpp",
+      "https://raw.githubusercontent.com/devpilgrin/FastOpenCV/HEAD/fastcv/src/transform_32f.cpp",
+      "https://raw.githubusercontent.com/devpilgrin/FastOpenCV/HEAD/fastcv/src/pow_32f.cpp"
+    ]
+  }
+]
