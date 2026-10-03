@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/lilkat002/cudafoam",
+  "one_liner": "OpenFOAM 12 plugin running the pressure-equation PCG on an NVIDIA GPU; edges CPU GAMG, 5.6x over CPU PCG-DIC.",
+  "what_it_does": "Adds a runtime-selectable lduMatrix solver named cudaPCG: load libcudaPCG.so from controlDict and set `solver cudaPCG;` for p in fvSolution, with no preconditioner entry and no changes to OpenFOAM. Each solve copies the LDU coefficients, source and psi to the GPU, runs the whole preconditioned CG there with OpenFOAM's own normFactor, tolerance/relTol/minIter/maxIter semantics, and copies psi back. It registers only for symmetric matrices; plain cyclic patches are folded into the GPU matrix, while processor (MPI), AMI/non-conformal or self-coupled interfaces make it fall back to OpenFOAM's CPU PCG with DIC.",
+  "how_it_is_fast": "The LDU matrix is converted to CSR once (structure cached, values re-gathered per solve through a permutation kernel) and SpMV goes through cuSPARSE in FP64. The preconditioner is a multicolor symmetric Gauss-Seidel: a greedy graph coloring (2 colors on the pitzDaily meshes) turns each triangular sweep into one fully parallel kernel per color, with FP32 matrix values to halve memory traffic, replacing cuSPARSE level-scheduled triangular solves that the README says were slower than the CPU. All CG scalars stay on the device (block-reduce plus atomicAdd dot products, fused update-and-residual kernel), so the host syncs once per iteration on a 16-byte readback. The gain is GPU memory bandwidth, not algorithm: the logs show 2,700-4,100 iterations per pressure solve at 1.22M cells versus about 1,900-2,100 for CPU DIC-PCG and 5-70 for GAMG.",
+  "when_to_use": [
+    "Single-rank incompressible OpenFOAM 12 cases where the symmetric pressure equation dominates run time and a recent NVIDIA GPU is available (measured on an AWS g5.xlarge with an A10G).",
+    "Meshes of a few hundred thousand cells, where the measured lead over single-rank CPU GAMG was largest (13.15 s vs 17.13 s at 305,625 cells).",
+    "Cases that currently run CPU PCG-DIC (for example because GAMG is unsuitable): about 4.2x at 306k cells (56.0 s vs 13.3 s) and 5.6x at 1.22M cells per the README table.",
+    "Periodic cases with plain cyclic patches, which stay on the GPU (validated by the author on channel395).",
+    "As a short, readable reference (about 900 lines in two source files) for writing your own GPU lduMatrix solver plugin."
+  ],
+  "when_not_to_use": [
+    "Decomposed (MPI) runs: processor interfaces force the CPU PCG-DIC fallback, which is several times slower than the GAMG most parallel cases use.",
+    "Asymmetric equations (U, k, epsilon, energy): it only registers as a symmetric-matrix solver.",
+    "When CPU GAMG already runs on several cores: the only GAMG comparison is single rank, the lead at 1.22M cells is 1.08x from one 5-step run, and multi-rank GAMG was not benchmarked.",
+    "Non-NVIDIA GPUs or tiny meshes (about 10k cells and below, which the README says are launch-latency bound); also AMI/non-conformal couplings, which always take the CPU path.",
+    "Production runs that need a maintained, tested solver: single-author repo created 2026-09-13 with 5 commits, 1 star and no test suite in the tree."
+  ],
+  "integration": {
+    "form": "shared lib (OpenFOAM runtime-loaded plugin libcudaPCG.so, built by Allwmake: nvcc for cudaKernels.cu, then wmake)",
+    "dependencies": "OpenFOAM 12 (finiteVolume headers and library), CUDA runtime, cuSPARSE",
+    "min_toolchain": "nvcc -std=c++17 -O3 with CUDA 12.x or 13.x; OpenFOAM 12 wmake (ESI v2412 compile-verified per README)",
+    "platforms": "Linux with an NVIDIA GPU; default -arch=sm_86 (Ampere), override with ARCH=sm_XX; Make/options hard-codes /usr/local/cuda include and lib64 paths; FP64 atomicAdd in the reductions needs sm_60 or newer (inferred from the code)",
+    "thread_safety": "Not documented; the code keeps one file-static GPU context (struct Ctx, one stream and cuSPARSE handle) shared by all cudaPCG instances, so it is not re-entrant",
+    "drop_in_for_baseline": "partial — selected in fvSolution exactly like GAMG or PCG with no OpenFOAM changes, but only for symmetric matrices on a single rank; anything else silently becomes CPU PCG-DIC after a one-time warning"
+  },
+  "gotchas": [
+    "The GPU context is cached on (nCells, nFaces, number of cyclic couplings) only: alternating between symmetric matrices of different sizes (multi-region cases) redoes the host-side coloring and all cudaMalloc calls on every switch, and a topology change that keeps those counts would reuse stale CSR addressing (inferred from cudaKernels.cu).",
+    "Any CUDA or cuSPARSE error calls exit(1), killing foamRun without an OpenFOAM FatalError and without falling back to the CPU solver.",
+    "Dot products and residual sums use FP64 atomicAdd, so summation order varies between runs and iteration counts or final digits may not be bit-reproducible (inferred from the code).",
+    "wmake does not track the nvcc-built cudaKernels.o; after editing the .cu file, delete libcudaPCG.so or touch cudaPCG.C (README). Set CUDAPCG_VERBOSE to see per-solve GPU/CPU path and CUDAPCG_FP64_PRECOND=1 for FP64 sweeps."
+  ],
+  "pick_this_over_siblings_when": "Ginkgo (usable from OpenFOAM through the OGL plugin, which has MPI support and CUDA/HIP/SYCL backends) and AMGCL bring AMG-class methods that cut iteration counts by orders of magnitude, which this plain PCG cannot; pick cudaFoam only when you want a zero-configuration, CUDA-only, two-file drop-in for a single-rank OpenFOAM 12 pressure solve.",
+  "verified_claims_summary": "One foamRun per configuration of the OpenFOAM 12 pitzDaily kEpsilon case on an AWS g5.xlarge (A10G GPU, one CPU rank, CPU model and OpenFOAM build flags not stated): whole-run ExecutionTime 13.15 s vs 17.13 s for CPU GAMG at 305,625 cells and 88.0 s vs 94.7 s at 1,222,500 cells over 5 steps (README rounds to 13.3/17.2 and 88.3/95.0), and 88.0 s vs 497.9 s for CPU PCG-DIC; times include the non-pressure equations. Per-step increments in the same logs show GAMG ahead over steps 3-5 at 1.22M cells (45.5 s vs 48.7 s, derived from page data), so the 1.08x lead rests on the first two steps and is within run-to-run noise.",
+  "status_note": "Brand-new single-author project (5 commits on 2026-09-13/14, 1 star); GPL-3.0 because it builds against OpenFOAM, small enough to audit and vendor, but validated only on the author's pitzDaily and channel395 runs.",
+  "sources_read": [
+    "https://github.com/Lilkat002/cudafoam",
+    "https://github.com/Lilkat002/cudafoam/commits",
+    "https://github.com/Lilkat002/cudafoam/tree/main/cudaPCG",
+    "https://github.com/Lilkat002/cudafoam/tree/main/benchmark/results",
+    "https://raw.githubusercontent.com/Lilkat002/cudafoam/HEAD/README.md",
+    "https://raw.githubusercontent.com/Lilkat002/cudafoam/HEAD/cudaPCG/Allwmake",
+    "https://raw.githubusercontent.com/Lilkat002/cudafoam/HEAD/cudaPCG/Make/files",
+    "https://raw.githubusercontent.com/Lilkat002/cudafoam/HEAD/cudaPCG/Make/options",
+    "https://raw.githubusercontent.com/Lilkat002/cudafoam/HEAD/cudaPCG/cudaPCG.H",
+    "https://raw.githubusercontent.com/Lilkat002/cudafoam/HEAD/cudaPCG/cudaPCG.C",
+    "https://raw.githubusercontent.com/Lilkat002/cudafoam/HEAD/cudaPCG/cudaKernels.cu",
+    "https://raw.githubusercontent.com/Lilkat002/cudafoam/HEAD/benchmark/results/v4_huge_gpu.log",
+    "https://raw.githubusercontent.com/Lilkat002/cudafoam/HEAD/benchmark/results/v4_huge_gamg.log",
+    "https://raw.githubusercontent.com/Lilkat002/cudafoam/HEAD/benchmark/results/v4_huge_cpu.log",
+    "https://raw.githubusercontent.com/Lilkat002/cudafoam/HEAD/benchmark/results/v4_pitzDailyBig_gpu.log",
+    "https://raw.githubusercontent.com/Lilkat002/cudafoam/HEAD/benchmark/results/v4_pitzDailyBig_gamg.log",
+    "https://github.com/hpsim/OGL"
+  ],
+  "confidence": 0.75
+}
