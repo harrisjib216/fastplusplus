@@ -1,0 +1,55 @@
+{
+  "id": "https://github.com/emmanuel-marty/lzsa",
+  "one_liner": "Byte-aligned LZ formats with an optimal packer: better ratio than LZ4_HC, and decompression as fast as LZ4 on 8-bit CPUs.",
+  "what_it_does": "LZSA defines two LZ77 formats (LZSA1 replaces LZ4, LZSA2 replaces ZX7) for 64 KB blocks with up to 64 KB of back-references. It ships a C command-line packer/unpacker and in-memory and streaming C APIs (lzsa_compress_inmem, lzsa_decompress_inmem, lzsa_get_max_decompressed_size_inmem), plus hand-written decompressors for Z80, 6502, 8088, 6809 and 6309. Output is a framed stream or a single raw block (optionally backward). It is not LZ4-format compatible, so both ends must speak LZSA.",
+  "how_it_is_fast": "The compressor finds matches with a suffix array (libdivsufsort plus a wimlib-derived interval match finder) and parses optimally, picking the sequence of commands with the smallest output that still decodes fast. The formats avoid bit-packing in the hot path: LZSA1 is byte-aligned with 8-bit short offsets and a 3-byte minimum match, and LZSA2 adds nibble-coded lengths, 5/9/13/16-bit offsets and rep-matches, so an 8-bit CPU decodes without 16-bit arithmetic. The host C decoder uses fixed 8/16/18-byte memcpy fast paths with bounds-checked slow paths.",
+  "when_to_use": [
+    "Compressing assets for Z80, 6502, 8088 or 6809 machines (demos, ROMs, retro games), where a ready-made assembly depacker from 67 bytes upward exists.",
+    "Embedded targets with small RAM and a 64 KB window, where you want a better ratio than LZ4_HC (e.g. Silesia 34.78% LZSA1 and 32.52% LZSA2 vs 36.47%) and a tiny decoder.",
+    "Pack-once, decode-many data where a slower, optimal compressor is acceptable.",
+    "Replacing ZX7 with LZSA2: the README reports better ratio (52.49% vs 53.30%) and faster decode (75% vs 47.73% of LZ4's speed) on its ZX Spectrum/C64 set."
+  ],
+  "when_not_to_use": [
+    "Speed on modern x86 or Arm: no host throughput numbers are published, and the README's own table puts LZSA1 at 90% and LZSA2 at 75% of LZ4's decompression speed. Use LZ4, LZSSE or Lizard there.",
+    "Fast compression: the packer is about 2x slower than LZ4_HC (suffix-array build per block), so it does not suit online or streaming compression.",
+    "Interop with existing LZ4 or zlib tooling: LZSA is its own format.",
+    "Untrusted input in production without fuzzing: the C decoder has no fuzz harness or sanitizer CI, and see the LZSA2 over-read under gotchas.",
+    "Projects needing an active upstream: last commit 2023-02-27. Open issue #69 (6502 backward raw-block depacker runs past the data) is unanswered."
+  ],
+  "integration": {
+    "form": "source-drop (C files plus bundled libdivsufsort); Makefile builds the lzsa CLI, and there is no install target or packaged library",
+    "dependencies": "none external (libdivsufsort, MIT, is vendored under src/libdivsufsort)",
+    "min_toolchain": "C99-ish C compiler (Makefile defaults to clang -O3); issue #45 reported and closed gcc C++11 incompatibilities",
+    "platforms": "Packer: any platform with a C compiler. Decompressors: portable C plus assembly for Z80, 6502, 8088, 6809, 6309; external i8080, PDP-11, 68000 and Game Boy ports.",
+    "thread_safety": "not documented (state lives in per-call compression/decompression contexts)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Possible 1-byte input over-read on malformed LZSA2 data (read in source this session, not reproduced): in src/expand_block_v2.c, the 13-bit-offset case (offset mode 0x80) calls lzsa_get_nibble_v2, which may consume the last block byte, then reads *pInBlock++ with no bounds check. In raw-block mode the block ends at the caller's buffer end. LZSA1 (expand_block_v1.c) checks two bytes before reading the offset.",
+    "lzsa_decompress_inmem and lzsa_get_max_decompressed_size_inmem return size_t but signal errors with -1, so compare against (size_t)-1, not < 0. Size the output buffer with lzsa_get_max_decompressed_size_inmem (64 KB per block).",
+    "Issue #65 (closed): a segfault on every input when compressing, bisected to commit 5e404e9 (2021-06-04), reported with clang 11 on Debian 11. No later commit message names the fix, so test the packer on your toolchain before relying on it.",
+    "Licensing is split: the code is Zlib, but src/matchfinder.c is CC0 (wimlib-derived, no patent grant) and the vendored libdivsufsort is MIT."
+  ],
+  "pick_this_over_siblings_when": "Pick LZSA over LZ4 or lz4ultra (same author, LZ4 format) when you control the decoder on an 8-bit or tiny embedded target and want 3-6% better ratio than LZ4_HC at similar decode cost. On modern CPUs prefer LZ4, LZSSE or Lizard for decode speed. For ratio-first 8-bit packing, BriefLZ or blz4 are alternatives with simpler formats.",
+  "verified_claims_summary": "First-party README only: on a 1,289,127-byte ZX Spectrum/C64 file set and on Canterbury, Silesia, Calgary, Large and enwik9, LZSA1 and LZSA2 compress smaller than LZ4_HC -19 -B4 -BD (enwik9 35.54% and 33.49% vs 37.18%). Relative decompression speed (LZSA1 90%, LZSA2 75% of LZ4) and the Pareto graph (fastest LZSA1 modes about 9% faster than LZ4 on Z80, read off the graph) are measured on ZX Spectrum 8-bit depackers. No host CPU, compiler, flags or harness is given.",
+  "status_note": "Unmaintained since 2023-02-27 but feature-complete, Zlib/CC0/MIT-licensed and small enough to vendor; widely used in the retro scene (Commander X16 ROM, RomWBW, rasm).",
+  "sources_read": [
+    "https://github.com/emmanuel-marty/lzsa",
+    "https://raw.githubusercontent.com/emmanuel-marty/lzsa/HEAD/README.md",
+    "https://raw.githubusercontent.com/emmanuel-marty/lzsa/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/emmanuel-marty/lzsa/HEAD/Makefile",
+    "https://github.com/emmanuel-marty/lzsa/tree/master/src",
+    "https://raw.githubusercontent.com/emmanuel-marty/lzsa/HEAD/src/expand_block_v1.c",
+    "https://raw.githubusercontent.com/emmanuel-marty/lzsa/HEAD/src/expand_block_v2.c",
+    "https://raw.githubusercontent.com/emmanuel-marty/lzsa/HEAD/src/expand_inmem.c",
+    "https://raw.githubusercontent.com/emmanuel-marty/lzsa/HEAD/src/expand_inmem.h",
+    "https://raw.githubusercontent.com/emmanuel-marty/lzsa/HEAD/src/frame.c",
+    "https://raw.githubusercontent.com/emmanuel-marty/lzsa/HEAD/src/lib.h",
+    "https://raw.githubusercontent.com/emmanuel-marty/lzsa/HEAD/src/shrink_inmem.h",
+    "https://github.com/emmanuel-marty/lzsa/issues?q=is%3Aissue",
+    "https://github.com/emmanuel-marty/lzsa/issues/65",
+    "https://github.com/emmanuel-marty/lzsa/issues/69",
+    "https://github.com/emmanuel-marty/lzsa/commits/master"
+  ],
+  "confidence": 0.6
+}

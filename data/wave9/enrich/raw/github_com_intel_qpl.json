@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/intel/qpl",
+  "one_liner": "Intel's C library that offloads Deflate (4 KB window) to the IAA accelerator on Sapphire Rapids Xeons, beating Snappy, zstd and zlib-ng in database pipelines.",
+  "what_it_does": "Low-level C job API (qpl_init_job / qpl_execute_job, or qpl_submit_job + qpl_wait_job for async) for Deflate compression and decompression, CRC-64 and SQL-style filter primitives (scan, extract, select, expand), optionally fused with decompression. Each job runs on the hardware path (IAA), the software path (host CPU) or the auto path (try IAA, fall back to host). Output can be raw Deflate, zlib (QPL_FLAG_ZLIB_MODE) or gzip (QPL_FLAG_GZIP_MODE). It is not a zlib API: callers manage qpl_job state buffers, FIRST/LAST flags and Huffman-table objects themselves.",
+  "how_it_is_fast": "The fast path hands the work to Intel In-Memory Analytics Accelerator (IAA) engines through shared work queues (Intel Accelerator Interfacing Architecture descriptors via the idxd driver), so the CPU cores are free while the device runs Deflate. The software fallback uses Deflate kernels adopted from ISA-L (igzip) behind a CPUID dispatcher (SSE4.2 minimum, AVX-512 recommended). Static, canned (header-less, shared Huffman table) and indexed modes skip per-block table building and parsing for many small buffers, and decompress-plus-filter fusion avoids writing uncompressed columns back to memory.",
+  "when_to_use": [
+    "Columnar or analytic databases (DuckDB Parquet, ClickHouse, RocksDB blocks) on 4th-gen Xeon or later with IAA enabled, where offloading compression frees CPU cores.",
+    "Many small, independent blocks (4-64 KB pages) where canned or static Huffman tables cut header overhead and decompression latency.",
+    "Pipelines that decompress and immediately filter a column (scan/select on packed integers): fused decompress-and-filter avoids a memory round trip.",
+    "You control both ends of the format and can accept a 4 KB Deflate window."
+  ],
+  "when_not_to_use": [
+    "Decompressing arbitrary zlib/gzip data from other tools: streams with a history window above 4 KB fail with QPL_STS_BAD_DIST_ERR on both paths (issue #45 hit error 217 on a chunked .zlib file).",
+    "Machines without IAA (AMD, Arm, client Intel, pre-Sapphire Rapids Xeon): only the ISA-L-derived software path runs, and no published benchmark compares it with zlib-ng, libdeflate or ISA-L itself.",
+    "Windows or kernel-mode use: the hardware path is Linux-only (kernel 5.18+ for IAA 1, 6.3+ for IAA 2) and the library is user-mode only.",
+    "Best ratio: the 4 KB window costs ratio against zlib -6 and zstd; pick zstd if ratio matters more than CPU offload.",
+    "Environments where you cannot get root or sysadmin help: IAA needs VT-d in BIOS and accel-config work-queue setup (or membership in the dsadev group with accel-config 3.2+)."
+  ],
+  "integration": {
+    "form": "static lib (shared build supported since issue #31); built from source only, no binary distribution",
+    "dependencies": "nasm 2.15+ to build; libaccel-config 4.0+ (idxd-config) for the hardware path, loaded at run time with dlopen by default so software-only users do not need it; idxd kernel driver",
+    "min_toolchain": "C++17 compiler (GCC 8.2+, Clang 12.0.1+ for fuzz tests, MSVC 14.1+), CMake 3.16.3+",
+    "platforms": "Intel 64 only. Software path: x86-64 with SSE4.2 or newer (Linux, Windows). Hardware path: Linux on Xeon with IAA (Sapphire Rapids and later).",
+    "thread_safety": "Not documented as a guarantee; state lives in a caller-allocated qpl_job, so one job per thread is the implied model. The device dispatcher picks work queues per NUMA node or socket of the calling thread.",
+    "drop_in_for_baseline": "partial — produces RFC 1950/1951/1952-compatible output readable by zlib, but its own decoder rejects streams with windows above 4 KB, and the API is a job interface, not zlib's. intel/zlib-accel is the zlib-API shim."
+  },
+  "gotchas": [
+    "Auto path gives no API to tell whether a job ran on IAA or the host; only a -DLOG_HW_INIT=ON build prints it. In a multi-job stream only the first job may fall back to the host, and later jobs fail with an error instead of falling back.",
+    "Compression jobs never share history: splitting a stream into many small jobs lowers the ratio, and canned mode cannot span multiple jobs.",
+    "Compression is verified by default (it decompresses and checks the CRC). QPL_FLAG_OMIT_VERIFY skips that, so check which setting any benchmark used. Software-path verification only works with indexing or inputs under 32 KB. Releases 1.6.0 and 1.7.0 fixed verification bugs with IAA 2.0 and with stored blocks on the async path.",
+    "Past fixes: integer overflow in qpl_get_safe_deflate_compression_buffer_size (1.8.0), the huffman_table.cpp overflow from issue #49 (64-bit casts in the current source), out-of-bounds reads found by fuzzing in expand/extract/select (1.9.0), and a symbol clash when linked with ISA-L (1.5.0). Open issue #52 reports hardware-path init error 501, and issue #51 reports throughput stuck at 3.8 GB/s beyond 2 engines with one work queue."
+  ],
+  "pick_this_over_siblings_when": "Pick QPL over ISA-L (igzip), zlib-ng or libdeflate only on an IAA-equipped Xeon where moving compression off the cores matters more than ratio, and when you control both ends of the format (4 KB window). Without IAA, ISA-L or libdeflate give the same Deflate speed with full-window compatibility and published numbers, and zstd or LZ4 give better ratio/speed if you can leave Deflate.",
+  "verified_claims_summary": "No benchmark page could be opened. Per search snippets only, the ADMS 2025 workshop paper (CMU, DuckDB Parquet Deflate offloaded to IAA via QPL vs DuckDB's Snappy) reports faster decompression and lower TPC-H latency, but snippets disagree on the size (one says 4.59 GB/s compress, 18.24 GB/s decompress, up to 10x and 30%; another says up to 3.15x and 38%). Intel's vendor RocksDB tuning guide snippet claims 103% higher throughput and 64% lower p99 than zstd on Sapphire Rapids. Compiler, flags and verify settings are unknown. That RocksDB result runs through intel/iaa-plugin-rocksdb, which builds only against RocksDB's unmerged pluggable-compression PR 6717 (a fork branch) and was tested with QPL v1.7.0.",
+  "status_note": "Actively maintained by Intel (develop branch, last commit 2026-09-25, latest tagged release v1.9.0 of 2024-12-10). MIT-licensed with bundled ISA-L code (BSD-3) and gtest/benchmark test dependencies. Copyable, but the speed claims need IAA hardware.",
+  "sources_read": [
+    "https://github.com/intel/qpl",
+    "https://raw.githubusercontent.com/intel/qpl/HEAD/README.md",
+    "https://raw.githubusercontent.com/intel/qpl/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/intel/qpl/HEAD/SECURITY.md",
+    "https://raw.githubusercontent.com/intel/qpl/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/intel/qpl/HEAD/third-party-programs.txt",
+    "https://raw.githubusercontent.com/intel/qpl/HEAD/doc/source/documentation/get_started_docs/installation.rst",
+    "https://raw.githubusercontent.com/intel/qpl/HEAD/doc/source/documentation/introduction_docs/introduction.rst",
+    "https://raw.githubusercontent.com/intel/qpl/HEAD/doc/source/documentation/dev_guide_docs/low_level_developer_guide.rst",
+    "https://raw.githubusercontent.com/intel/qpl/HEAD/doc/source/documentation/dev_guide_docs/c_use_cases/deflate/c_deflate.rst",
+    "https://raw.githubusercontent.com/intel/qpl/HEAD/doc/source/documentation/dev_guide_docs/c_use_cases/deflate/c_deflate_compression.rst",
+    "https://raw.githubusercontent.com/intel/qpl/HEAD/doc/source/documentation/dev_guide_docs/c_use_cases/deflate/c_deflate_decompression.rst",
+    "https://raw.githubusercontent.com/intel/qpl/HEAD/doc/source/documentation/dev_guide_docs/c_use_cases/deflate/c_deflate_multiple_jobs.rst",
+    "https://raw.githubusercontent.com/intel/qpl/HEAD/doc/source/documentation/dev_guide_docs/c_use_cases/deflate/c_deflate_zlib_gzip.rst",
+    "https://raw.githubusercontent.com/intel/qpl/HEAD/doc/source/documentation/dev_guide_docs/c_use_cases/c_asynchronous_execution.rst",
+    "https://raw.githubusercontent.com/intel/qpl/HEAD/doc/source/documentation/dev_guide_docs/c_use_cases/c_job_structure.rst",
+    "https://raw.githubusercontent.com/intel/qpl/HEAD/doc/source/documentation/dev_guide_docs/c_use_cases/advanced/c_advanced_topics.rst",
+    "https://raw.githubusercontent.com/intel/qpl/HEAD/include/qpl/qpl.h",
+    "https://raw.githubusercontent.com/intel/qpl/HEAD/include/qpl/c_api/job.h",
+    "https://raw.githubusercontent.com/intel/qpl/HEAD/include/qpl/c_api/defs.h",
+    "https://raw.githubusercontent.com/intel/qpl/HEAD/sources/middle-layer/compression/deflate/containers/huffman_table.cpp",
+    "https://github.com/intel/qpl/tree/develop/include/qpl",
+    "https://github.com/intel/qpl/issues?q=is%3Aissue",
+    "https://github.com/intel/qpl/issues/45",
+    "https://github.com/intel/qpl/issues/49",
+    "https://github.com/intel/qpl/issues/51",
+    "https://github.com/intel/qpl/releases",
+    "https://raw.githubusercontent.com/intel/iaa-plugin-rocksdb/HEAD/README.md"
+  ],
+  "confidence": 0.5
+}

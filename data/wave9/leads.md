@@ -35,3 +35,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - Shun, "Improved Parallel Construction of Wavelet Trees and Rank/Select Structures" (osti.gov 1593400, blocked); "Practical Wavelet Tree Construction" (ACM JEA 10.1145/3457197, pwm follow-up); "Engineering rank queries on bit vectors and strings" (AMB 2025, Springer); pacman616/hybrid-fenwick-tree. From mutable_rank_select/pwm enricher.
 - AWRY and genedex: FM-index competitors listed by the QuadRank sibling repo. From AvxWindowFmIndex enricher.
 - tsl::htrie_map (Tessil/hat-trie): possible faster dynamic trie sibling of poplar-trie, not catalogued. From poplar-trie enricher.
+- intel/zlib-accel (zlib-API shim over QPL), intel/iaa-plugin-rocksdb, ivagorRetrocomp/DeLZSA. From QPL/LZSA enricher.
