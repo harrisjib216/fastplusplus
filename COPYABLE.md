@@ -1773,6 +1773,46 @@ Rust rank structures for bit vectors and 2-bit DNA, one cache miss per query; ab
 
 [repo](https://github.com/RagnarGrootKoerkamp/quadrank) · [benchmark](https://github.com/RagnarGrootKoerkamp/quadrank/tree/master/evals)
 
+##### tsl::htrie_map (hat-trie)  `C++`  `MIT`  `active`  `Tier A`
+
+Header-only C++11 HAT-trie string map/set using about 3x less memory than std::unordered_map<std::string, T>.
+
+**Beats:** std::unordered_map<std::string, int> (memory, and speed on the Askitis set) and cedar::da double-array trie (memory and speed on the Wikipedia set) — On the author's 2017 benchmark (public gist, GCC 6.3, -O3 -march=native, CityHash64 for every hash structure, libstdc++, Intel i5-5200u laptop), inserting and then reading 13.1M shuffled Wikipedia titles took 402 MiB versus 1247 MiB for std::unordered_map<std::string,int> and 1254 MiB for cedar::da, with reads at 251 ns/key (std::unordered_map 174, cedar::da 557), so it beats the standard map on memory only and other tries on speed; the gist times one pass per run (the README's best-of-20 is not in the code) and its std::unordered_map insert wrapper, map.insert({str, value}), copies each key twice, which inflates that baseline's insert time a little but not its memory or reads. An independent harness (kampersanda/dictionary_bench, g++ 7.3.0 -O3, Xeon E5-2680 v2) reproduced about 3x less memory than std::unordered_map with equal lookup time and slower inserts; no correctness bug was found behind the numbers.
+
+**Known shortcoming:** The win is memory, not speed: about 3.1x less memory than std::unordered_map and cedar::da on 13.1M Wikipedia titles (402 MiB vs 1247/1254) and 1.7x/2.2x faster insert/read than cedar, but slower than std::unordered_map there (643 vs 591 ns insert, 251 vs 174 ns read); it beats std::unordered_map only on the Askitis set (1.14x insert, 1.35x read, 3.5x less memory) and on sorted input (2.3x/2.5x). cedar's prefix trie is only 1.18-1.23x bigger. Baselines were hashed with CityHash64; GCC 6.3, i5-5200u (2017-era run). Loose fit for succinct-structures (dynamic string dictionary).
+
+**Known shortcoming:** Enricher: the gist benchmark has no repeat loop, so the README's 'best of 20' is not in the code, and its std::unordered_map insert wrapper copies each key twice (small bias against the baseline). erase_prefix crash (issue #62) fixed in v0.7.1 (commit ef3213d) though the issue stays open; no allocator parameter; C++11 default hash is FNV-1a. kampersanda/dictionary_bench run: 0.69 vs 1.29 GiB and lookup 0.14 vs 0.27 us against std::unordered_map, insert slower (0.73 vs 0.50 us).
+
+**How:** It implements the HAT-trie of Askitis and Sinha (2007): a burst trie whose leaves are cache-conscious array hash tables (Askitis and Zobel 2005). Each array-hash bucket is one malloc'd contiguous buffer of [2-byte length][key bytes][value index] records, so a lookup hashes the key suffix and scans one short buffer instead of chasing a pointer per entry, and no per-key heap node or 32-byte std::string header is stored; values sit in a separate std::vector indexed by a 16-bit position. When a leaf reaches burst_threshold entries (16384 by default) it bursts into a trie node (a 256-entry child-pointer array) keyed on the first character, so common prefixes are stored once. The default max_load_factor of 8 entries per bucket favors memory; lowering it buys faster reads for more memory.
+
+**Use it when:**
+- Millions to hundreds of millions of string keys (titles, URLs, words, paths) where std::unordered_map<std::string, T> memory is the problem: the README shows 402 MiB vs 1247 MiB on 13.1M Wikipedia titles, and an independent run (poplar-trie README) 0.43 vs 1.29 GiB on 14.1M titles and 2.68 vs 6.05 GiB on 39.5M UK URLs.
+- You need a dynamic (insert and erase at any time) string dictionary that also answers prefix queries such as autocompletion or longest-prefix routing, which hash maps cannot do.
+- Lookup latency close to std::unordered_map is acceptable: the independent run measured identical lookup times (0.27 us/key on Wikipedia titles, 0.51 vs 0.50 us on UK URLs).
+- Keys arrive in sorted or clustered order: on the README's sorted Wikipedia run it reads at 68 ns/key versus 174 ns for std::unordered_map.
+- You want a vendorable, header-only, MIT-licensed drop-in for a string set or map with on-disk serialization.
+
+**Skip it when:**
+- Raw speed is the goal: open-addressing hash maps beat it on random-order lookups and inserts (README: tsl::hopscotch_map 119.5 ns read and 240.6 ns insert with reserve vs 250.9 and 643.1 ns; independent run: robin_map 0.12 and dense_hash_map 0.14 us lookup vs 0.27).
+- Inserts dominate: htrie_map inserts slower than std::unordered_map in both independent datasets (0.60 vs 0.50 us/key on titles, 1.08 vs 0.67 on URLs), because each insert reallocs the bucket buffer and leaves periodically burst.
+- Memory must be minimal: succinct or compact tries use far less (poplar compact_bonsai_map 0.24 GiB vs 0.43 GiB on titles; JudySL 2.21 vs 2.68 GiB on URLs; static marisa-trie or xcdat smaller still) at the cost of slower lookups or no updates.
+- You need ordered iteration (keys inside a leaf are hashed, so iteration order is not lexicographic) or stable iterators across modifications.
+- Keys are not char (wchar_t, char16_t, char32_t are rejected at compile time) or exceed 65,535 bytes without raising the KeySizeT template parameter.
+
+**Integration:** header-only · none (array-hash is vendored under include/tsl/array-hash; Boost.Test only for the test suite) · C++11; README says tested with GCC 4.8.4, Clang 3.5.0 and Visual Studio 2015; CMake 3.10 for the exported tsl::hat_trie target · any (portable C++; no SIMD or architecture-specific code)
+
+**Vs siblings:** Pick it over poplar-trie when lookup speed matters more than the last factor of memory (0.27 vs 0.68-1.02 us/key lookups for 0.43 vs 0.24-0.64 GiB in poplar's own run), and over marisa-trie, xcdat or darts-clone when the dictionary must accept inserts and erases after construction; those static tries are smaller but must be rebuilt to change.
+
+**Gotchas:**
+- Every modifying operation (insert, emplace, operator[], erase, clear) invalidates all iterators, not just those to the touched element.
+- Default hash is std::hash<std::string_view> only when compiled as C++17 or later; under C++11/14 it falls back to a byte-at-a-time FNV-1a, and the README reports CityHash64 gives about 20% faster reads, so pass a better hash functor on older standards (the published benchmark used CityHash64).
+- Memory comes from malloc/realloc and new with no allocator template parameter, so custom or shared-memory allocators are not supported (issue #59 asks how to use it with shared memory).
+- erase_prefix had crash bugs: issue #57 (iteration after erase_prefix, fixed August 2024) and issue #62 (equal_prefix_range on a fully erased prefix dereferenced a null bucket, fixed by commit ef3213d 'Bugfix on erase_prefix when erasing a full hash_node' in v0.7.1, November 2025, although the issue is still open); use 0.7.1 or newer. burst_threshold values of 65536 or more misbehaved before a clamp was added in August 2024 (issue #54).
+
+**Status:** Maintained at a slow pace (v0.7.1, last commit 2025-11-11, erase_prefix bug fixed in that release, one open PR removing the vtable pointer from nodes); MIT, header-only and portable, so it is easy to vendor.
+
+[repo](https://github.com/Tessil/hat-trie) · [benchmark](https://github.com/Tessil/hat-trie)
+
 ##### xcdat  `C++`  `MIT`  `stale`  `Tier A`
 
 Header-only C++17 compressed double-array trie dictionary; about 2x faster key-to-ID lookup than marisa-trie, at about 1.1-2x its size.
@@ -49693,6 +49733,49 @@ Command-line compressor that removes long-distance duplicates (rzip) before mult
 [repo](https://github.com/ckolivas/lrzip) · [benchmark](https://raw.githubusercontent.com/ckolivas/lrzip/HEAD/doc/README.benchmarks)
 
 #### integer-bitpacking
+
+##### NeaTS  `C++`  `GPL-3.0`  `stale`  `Tier C`
+
+Research C++23 learned compressor for 64-bit integer time series with constant-time random access; paper claims xz-like ratios, faster decompression.
+
+**Beats:** xz (and Brotli, Zstd, Lz4, Snappy; time-series codecs Gorilla, Chimp, Chimp128, TSXor, DAC (sdsl dac_vector), plus LeCo and ALP per the paper) — Not verified from an opened source: the ICDE 2025 paper (arXiv 2412.16266, blocked here) reportedly compares NeaTS with xz, Brotli, Zstd, Lz4 and Snappy run through Squash on fixed-size blocks (the harness sweeps 512 to 16384 values per block, default 1000) and with Gorilla, Chimp, Chimp128, TSXor, DAC, LeCo and ALP on 16 datasets, using a Xeon Gold 6140M and GCC 13.2.1 with no flags seen; search snippets say ratios close to xz and Brotli, up to 10x faster decompression and about 1000x faster random access. In the repo, the NeaTS timing code is real (50 full-decompression runs; 1e6 random accesses x 10 runs). Its biases mostly go against NeaTS (allocation and zero-fill of the output inside the timed loop; size_in_bits counts the starting-position Elias-Fano structure twice and adds sizeof(*this)), except that per-query random-access time is truncated to whole nanoseconds. The random-access gap over block codecs depends on the block size chosen for them.
+
+**Known shortcoming:** Tier C placeholder: the README carries no numbers; the comparison against xz, Brotli, Zstd, Lz4 and Snappy (52.77%/50.20% ratio vs Lz4/Snappy, 28.49% vs Zstd; Xeon Gold 6140M, GCC 13.2.1) lives in the ICDE 2025 paper (DOI 10.1109/ICDE65448.2025.00122, arXiv 2412.16266), blocked here and seen only in search snippets. Retier to B once the paper is readable.
+
+**Known shortcoming:** Repo harness is not a baseline benchmark: benchmark/neats_lossless.cpp main() runs only squash_scan('lz4') with the other baseline calls commented out, main_simd.cpp's last 'Decompression speed' line times a raw SIMD copy, and CMake sets no C++ optimization level. GPL-3.0; last commit 2025-07-15 (stale); the co-author copy gvinciguerra/NeaTS is active through 2026-03-08 and carries a float-coefficient fallback fix.
+
+**Known shortcoming:** Enricher: possible correctness flaw behind the numbers: slopes are stored as float (T1=float) and out-of-range residuals are silently truncated; main_simd.cpp prints a mismatch count yet still prints the CSV ratio and speeds; co-author commit a85ae14 (gvinciguerra, 2026-03-08) adds a float-to-double fallback, so the float failure is real on some inputs (effect on the paper's numbers unknown, paper unread). Residual offsets are uint32, so more than 2^32 residual bits overflow into a heap overflow; CMake forces -mavx512f with no -O level; a copied or moved compressor leaves its sdsl rank_support pointing at the other object's storage. Harness biases mostly run against NeaTS (output allocation and zero-fill timed; size_in_bits double-counts starting_positions_ef), but random-access times are truncated to whole nanoseconds and block-codec baselines use 1000-value blocks by default.
+
+**Independent measurement:** paper tables (blocked)
+
+**How:** The series is cut into segments, and each segment is approximated by one of four function shapes (linear, exponential, quadratic, square root) whose maximum error fits a chosen residual width; a shortest-path style dynamic program over all (shape, width) pairs picks the partition that minimizes total bits. Each value is stored as its model prediction plus a fixed-width residual, so random access is an Elias-Fano predecessor search on segment starts (sux select), one model evaluation and one bit-field read, with no block to decompress. Full decompression evaluates the models over 8 lanes at a time with std::experimental::simd (AVX-512 on the paper's Skylake Xeon) and adds residuals that are unpacked one field at a time with BEXTR.
+
+**Use it when:**
+- Large, smooth or trending integer time series (sensor readings, prices, temperatures after fixed-point scaling) that you query by position many more times than you rewrite.
+- Point lookups or short range scans on compressed data where block codecs (xz, Brotli, Zstd on 8 KB blocks) would have to decompress a whole block per query.
+- Read-mostly archives where a slow, one-off compression pass is acceptable in exchange for ratios the paper reports as close to xz and Brotli.
+- Research or prototyping on Linux x86-64 with GCC 13 or newer, ideally on an AVX-512 machine like the paper's Xeon Gold 6140M.
+
+**Skip it when:**
+- You need a production codec: the repo is research code with 13 stars, no tests, no install target, no release, its last commit was 2025-07-15, and its benchmark harness has most baseline calls commented out.
+- Data is noisy or random: the piecewise models only pay off when segments follow a curve; otherwise residual width approaches the raw value width.
+- Streaming or append workloads: the structure is built in one pass over the whole array and is static afterwards.
+- Very large series: offsets into the residual bit array are 32-bit (x_t = uint32_t by default), so more than 2^32 residual bits (about 512 MiB of residuals) or 2^32 values overflow the counters, and writes then run past the allocated buffer.
+- Portable binaries or non-x86 targets: this copy's CMake forces -march=native and -mavx512f, so binaries fail with illegal-instruction errors on CPUs without AVX-512, and <experimental/simd> requires libstdc++. The co-author's copy (gvinciguerra/NeaTS) drops these flags.
+
+**Integration:** header-only (include/NeaTS.hpp plus include/*.hpp), but distributed as a CMake research project with example executables, not a packaged library · sdsl-lite and sux (both vendored in lib/); Squash 0.7 only for the Benchmark target · C++23 (uses <stdfloat> and std::to_underlying), GCC 13+ or Clang 16+ with libstdc++ (needs <experimental/simd>), CMake 3.22 · Linux x86-64; and-gue CMake forces AVX-512F (-mavx512f -march=native); BMI1 BEXTR is used when available, with a portable fallback; the co-author copy adds an aarch64 -mcpu=native branch
+
+**Vs siblings:** Pick it over LeCo when the series has nonlinear trends (the paper, per search snippets only, reports 12.80% better ratio and 36.26% faster compression than LeCo) and you need per-element random access; prefer FastPFor, TurboPFor or Sprintz when you need a mature, fast, block-decoded codec for posting lists or streaming sensor data rather than random access into smooth series.
+
+**Gotchas:**
+- Lossless output is not guaranteed by construction: segment slopes are fitted in double but stored as float (default T1 = float), and residuals that then fall outside the chosen bit width are silently truncated. main_simd.cpp checks decompression and random access against the input, but on a mismatch it only prints an error count and still prints the CSV row of ratio and speeds. The co-author's March 2026 commit a85ae14 ('Use double precision if compression with float coefficients fails') adds verify-and-retry-with-double to the new neats_compress tool, which confirms that float coefficients can fail on real inputs. Check decompressed output against the input before trusting a result.
+- A plain 'cmake ..' as in the README sets no C++ optimization level (only CMAKE_C_FLAGS carry -O9), so pass -DCMAKE_BUILD_TYPE=Release before measuring anything.
+- The rank supports (sdsl rank_support_v) hold raw pointers into the compressor's own bit vectors, and the class uses default copy and move, so a copied or moved compressor can point into another object's storage; load() here returns a fresh object by value (the co-author changed it to load in place in March 2026). Build or load it in place and do not copy it.
+- The input is shifted by its minimum minus epsilon before compression and the decompressed output is not shifted back by the library; preprocess_data in algorithms.hpp does the shift and postprocess_data the inverse, so callers must keep the offset. Residual widths above 57 bits are unsupported (read_field reads 8 bytes at a byte offset).
+
+**Status:** Stale research code (13 stars, last commit 2025-07-15, GPL-3.0); the co-author's copy gvinciguerra/NeaTS was updated through 2026-03-08 with portable build flags, float-to-double fallback, serialization fixes and compress/decompress command-line tools, and is the better starting point.
+
+[repo](https://github.com/and-gue/NeaTS) · [benchmark](https://github.com/and-gue/NeaTS)
 
 ##### TurboPFor Integer Compression  `C`  `GPL-2.0`  `active`  `Tier C`
 

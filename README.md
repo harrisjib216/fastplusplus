@@ -7,11 +7,11 @@ claim against the cited page before it was written up.
 
 ## Lists
 
-- [COPYABLE.md](COPYABLE.md): 1313 entries under an OSI license or CC0. Code can be vendored or forked.
+- [COPYABLE.md](COPYABLE.md): 1315 entries under an OSI license or CC0. Code can be vendored or forked.
 - [REFERENCE.md](REFERENCE.md): 150 entries with no, unclear, or non-OSI license. Study the idea; don't copy the code.
 - [REJECTED.md](REJECTED.md): 24 candidates that failed verification.
 
-Tiers across both lists: A 360, B 291, C 771, D 41.
+Tiers across both lists: A 361, B 291, C 772, D 41.
 
 ## Evidence tiers
 
@@ -30,8 +30,8 @@ Ratios marked "(derived from page data)" were computed from numbers on the cited
 |---|---|---|---|---|---|---|
 | compression-and-encoding | entropy-coders | 26 | 2 | 5 | 19 | 0 |
 | compression-and-encoding | general-lossless | 61 | 22 | 10 | 26 | 3 |
-| compression-and-encoding | integer-bitpacking | 23 | 2 | 2 | 18 | 1 |
-| compression-and-encoding | succinct-structures | 29 | 7 | 7 | 11 | 4 |
+| compression-and-encoding | integer-bitpacking | 24 | 2 | 2 | 19 | 1 |
+| compression-and-encoding | succinct-structures | 30 | 8 | 7 | 11 | 4 |
 | crypto-and-hashing | aead-and-ciphers | 17 | 7 | 4 | 6 | 0 |
 | crypto-and-hashing | crypto-hashes | 16 | 4 | 5 | 6 | 1 |
 | crypto-and-hashing | encoding | 25 | 8 | 1 | 16 | 0 |

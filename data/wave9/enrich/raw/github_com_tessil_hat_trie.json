@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/tessil/hat-trie",
+  "one_liner": "Header-only C++11 HAT-trie string map/set using about 3x less memory than std::unordered_map<std::string, T>.",
+  "what_it_does": "tsl::htrie_map<char, T> and tsl::htrie_set<char> store a large dynamic set of strings (or string-to-value map) compactly and add prefix queries: equal_prefix_range, erase_prefix, longest_prefix and for_each_prefix_of, plus serialize/deserialize. The interface resembles std::unordered_map (insert, emplace, find, at, operator[], erase, count) but keys are passed as const char* plus length, std::string or std::string_view, and there is no std::string key object: it.key() rebuilds the key into a string on demand. Only char keys are supported (a static_assert rejects other character types); UTF-8 and binary keys with embedded NULs work.",
+  "how_it_is_fast": "It implements the HAT-trie of Askitis and Sinha (2007): a burst trie whose leaves are cache-conscious array hash tables (Askitis and Zobel 2005). Each array-hash bucket is one malloc'd contiguous buffer of [2-byte length][key bytes][value index] records, so a lookup hashes the key suffix and scans one short buffer instead of chasing a pointer per entry, and no per-key heap node or 32-byte std::string header is stored; values sit in a separate std::vector indexed by a 16-bit position. When a leaf reaches burst_threshold entries (16384 by default) it bursts into a trie node (a 256-entry child-pointer array) keyed on the first character, so common prefixes are stored once. The default max_load_factor of 8 entries per bucket favors memory; lowering it buys faster reads for more memory.",
+  "when_to_use": [
+    "Millions to hundreds of millions of string keys (titles, URLs, words, paths) where std::unordered_map<std::string, T> memory is the problem: the README shows 402 MiB vs 1247 MiB on 13.1M Wikipedia titles, and an independent run (poplar-trie README) 0.43 vs 1.29 GiB on 14.1M titles and 2.68 vs 6.05 GiB on 39.5M UK URLs.",
+    "You need a dynamic (insert and erase at any time) string dictionary that also answers prefix queries such as autocompletion or longest-prefix routing, which hash maps cannot do.",
+    "Lookup latency close to std::unordered_map is acceptable: the independent run measured identical lookup times (0.27 us/key on Wikipedia titles, 0.51 vs 0.50 us on UK URLs).",
+    "Keys arrive in sorted or clustered order: on the README's sorted Wikipedia run it reads at 68 ns/key versus 174 ns for std::unordered_map.",
+    "You want a vendorable, header-only, MIT-licensed drop-in for a string set or map with on-disk serialization."
+  ],
+  "when_not_to_use": [
+    "Raw speed is the goal: open-addressing hash maps beat it on random-order lookups and inserts (README: tsl::hopscotch_map 119.5 ns read and 240.6 ns insert with reserve vs 250.9 and 643.1 ns; independent run: robin_map 0.12 and dense_hash_map 0.14 us lookup vs 0.27).",
+    "Inserts dominate: htrie_map inserts slower than std::unordered_map in both independent datasets (0.60 vs 0.50 us/key on titles, 1.08 vs 0.67 on URLs), because each insert reallocs the bucket buffer and leaves periodically burst.",
+    "Memory must be minimal: succinct or compact tries use far less (poplar compact_bonsai_map 0.24 GiB vs 0.43 GiB on titles; JudySL 2.21 vs 2.68 GiB on URLs; static marisa-trie or xcdat smaller still) at the cost of slower lookups or no updates.",
+    "You need ordered iteration (keys inside a leaf are hashed, so iteration order is not lexicographic) or stable iterators across modifications.",
+    "Keys are not char (wchar_t, char16_t, char32_t are rejected at compile time) or exceed 65,535 bytes without raising the KeySizeT template parameter."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (array-hash is vendored under include/tsl/array-hash; Boost.Test only for the test suite)",
+    "min_toolchain": "C++11; README says tested with GCC 4.8.4, Clang 3.5.0 and Visual Studio 2015; CMake 3.10 for the exported tsl::hat_trie target",
+    "platforms": "any (portable C++; no SIMD or architecture-specific code)",
+    "thread_safety": "README: thread-safety and exception guarantees similar to STL containers (concurrent const reads OK, any writer needs external locking)",
+    "drop_in_for_baseline": "partial — API mirrors std::unordered_map, but there is no std::string key object (it.key() rebuilds one), value_type is not std::pair, every insert/emplace/erase invalidates all iterators, no allocator parameter, and iteration order differs"
+  },
+  "gotchas": [
+    "Every modifying operation (insert, emplace, operator[], erase, clear) invalidates all iterators, not just those to the touched element.",
+    "Default hash is std::hash<std::string_view> only when compiled as C++17 or later; under C++11/14 it falls back to a byte-at-a-time FNV-1a, and the README reports CityHash64 gives about 20% faster reads, so pass a better hash functor on older standards (the published benchmark used CityHash64).",
+    "Memory comes from malloc/realloc and new with no allocator template parameter, so custom or shared-memory allocators are not supported (issue #59 asks how to use it with shared memory).",
+    "erase_prefix had crash bugs: issue #57 (iteration after erase_prefix, fixed August 2024) and issue #62 (equal_prefix_range on a fully erased prefix dereferenced a null bucket, fixed by commit ef3213d 'Bugfix on erase_prefix when erasing a full hash_node' in v0.7.1, November 2025, although the issue is still open); use 0.7.1 or newer. burst_threshold values of 65536 or more misbehaved before a clamp was added in August 2024 (issue #54)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over poplar-trie when lookup speed matters more than the last factor of memory (0.27 vs 0.68-1.02 us/key lookups for 0.43 vs 0.24-0.64 GiB in poplar's own run), and over marisa-trie, xcdat or darts-clone when the dictionary must accept inserts and erases after construction; those static tries are smaller but must be rebuilt to change.",
+  "verified_claims_summary": "On the author's 2017 benchmark (public gist, GCC 6.3, -O3 -march=native, CityHash64 for every hash structure, libstdc++, Intel i5-5200u laptop), inserting and then reading 13.1M shuffled Wikipedia titles took 402 MiB versus 1247 MiB for std::unordered_map<std::string,int> and 1254 MiB for cedar::da, with reads at 251 ns/key (std::unordered_map 174, cedar::da 557), so it beats the standard map on memory only and other tries on speed; the gist times one pass per run (the README's best-of-20 is not in the code) and its std::unordered_map insert wrapper, map.insert({str, value}), copies each key twice, which inflates that baseline's insert time a little but not its memory or reads. An independent harness (kampersanda/dictionary_bench, g++ 7.3.0 -O3, Xeon E5-2680 v2) reproduced about 3x less memory than std::unordered_map with equal lookup time and slower inserts; no correctness bug was found behind the numbers.",
+  "status_note": "Maintained at a slow pace (v0.7.1, last commit 2025-11-11, erase_prefix bug fixed in that release, one open PR removing the vtable pointer from nodes); MIT, header-only and portable, so it is easy to vendor.",
+  "sources_read": [
+    "https://github.com/Tessil/hat-trie",
+    "https://raw.githubusercontent.com/Tessil/hat-trie/HEAD/README.md",
+    "https://raw.githubusercontent.com/Tessil/hat-trie/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/Tessil/hat-trie/HEAD/include/tsl/htrie_map.h",
+    "https://raw.githubusercontent.com/Tessil/hat-trie/HEAD/include/tsl/htrie_set.h",
+    "https://raw.githubusercontent.com/Tessil/hat-trie/HEAD/include/tsl/htrie_hash.h",
+    "https://raw.githubusercontent.com/Tessil/hat-trie/HEAD/include/tsl/array-hash/array_hash.h",
+    "https://raw.githubusercontent.com/Tessil/hat-trie/HEAD/include/tsl/array-hash/array_map.h",
+    "https://github.com/Tessil/hat-trie/issues?q=is%3Aissue",
+    "https://github.com/Tessil/hat-trie/issues/62",
+    "https://github.com/Tessil/hat-trie/issues/58",
+    "https://github.com/Tessil/hat-trie/commits",
+    "https://github.com/Tessil/hat-trie/commits/master",
+    "https://github.com/Tessil/hat-trie/commit/ef3213da48f23440dc084d184c3f597a13dc3cce",
+    "https://github.com/Tessil/hat-trie/pulls",
+    "https://gist.github.com/Tessil/72e11891fc155f5b2eb53de22cbc4053",
+    "https://raw.githubusercontent.com/kampersanda/poplar-trie/HEAD/README.md"
+  ],
+  "confidence": 0.85
+}

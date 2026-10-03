@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/and-gue/neats",
+  "one_liner": "Research C++23 learned compressor for 64-bit integer time series with constant-time random access; paper claims xz-like ratios, faster decompression.",
+  "what_it_does": "NeaTS compresses an in-memory series of 64-bit integers (floating-point series must first be scaled to integers) into a static structure that supports operator[] random access, range scans (simd_scan) and full decompression (simd_decompress) without decompressing blocks. The API is a class template, pfa::neats::compressor<x_t, y_t, poly, T1, T2>, constructed with a maximum residual width in bits, filled with partitioning(begin, end), and saved or loaded with serialize/load. It is not a byte-stream codec like xz or Zstd: the repository ships research executables (DecompressorSIMD, NeaTSL, SNeaTS, Benchmark) rather than a packaged library.",
+  "how_it_is_fast": "The series is cut into segments, and each segment is approximated by one of four function shapes (linear, exponential, quadratic, square root) whose maximum error fits a chosen residual width; a shortest-path style dynamic program over all (shape, width) pairs picks the partition that minimizes total bits. Each value is stored as its model prediction plus a fixed-width residual, so random access is an Elias-Fano predecessor search on segment starts (sux select), one model evaluation and one bit-field read, with no block to decompress. Full decompression evaluates the models over 8 lanes at a time with std::experimental::simd (AVX-512 on the paper's Skylake Xeon) and adds residuals that are unpacked one field at a time with BEXTR.",
+  "when_to_use": [
+    "Large, smooth or trending integer time series (sensor readings, prices, temperatures after fixed-point scaling) that you query by position many more times than you rewrite.",
+    "Point lookups or short range scans on compressed data where block codecs (xz, Brotli, Zstd on 8 KB blocks) would have to decompress a whole block per query.",
+    "Read-mostly archives where a slow, one-off compression pass is acceptable in exchange for ratios the paper reports as close to xz and Brotli.",
+    "Research or prototyping on Linux x86-64 with GCC 13 or newer, ideally on an AVX-512 machine like the paper's Xeon Gold 6140M."
+  ],
+  "when_not_to_use": [
+    "You need a production codec: the repo is research code with 13 stars, no tests, no install target, no release, its last commit was 2025-07-15, and its benchmark harness has most baseline calls commented out.",
+    "Data is noisy or random: the piecewise models only pay off when segments follow a curve; otherwise residual width approaches the raw value width.",
+    "Streaming or append workloads: the structure is built in one pass over the whole array and is static afterwards.",
+    "Very large series: offsets into the residual bit array are 32-bit (x_t = uint32_t by default), so more than 2^32 residual bits (about 512 MiB of residuals) or 2^32 values overflow the counters, and writes then run past the allocated buffer.",
+    "Portable binaries or non-x86 targets: this copy's CMake forces -march=native and -mavx512f, so binaries fail with illegal-instruction errors on CPUs without AVX-512, and <experimental/simd> requires libstdc++. The co-author's copy (gvinciguerra/NeaTS) drops these flags."
+  ],
+  "integration": {
+    "form": "header-only (include/NeaTS.hpp plus include/*.hpp), but distributed as a CMake research project with example executables, not a packaged library",
+    "dependencies": "sdsl-lite and sux (both vendored in lib/); Squash 0.7 only for the Benchmark target",
+    "min_toolchain": "C++23 (uses <stdfloat> and std::to_underlying), GCC 13+ or Clang 16+ with libstdc++ (needs <experimental/simd>), CMake 3.22",
+    "platforms": "Linux x86-64; and-gue CMake forces AVX-512F (-mavx512f -march=native); BMI1 BEXTR is used when available, with a portable fallback; the co-author copy adds an aarch64 -mcpu=native branch",
+    "thread_safety": "not documented (operator[] and simd_scan are const; simd_decompress is non-const)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Lossless output is not guaranteed by construction: segment slopes are fitted in double but stored as float (default T1 = float), and residuals that then fall outside the chosen bit width are silently truncated. main_simd.cpp checks decompression and random access against the input, but on a mismatch it only prints an error count and still prints the CSV row of ratio and speeds. The co-author's March 2026 commit a85ae14 ('Use double precision if compression with float coefficients fails') adds verify-and-retry-with-double to the new neats_compress tool, which confirms that float coefficients can fail on real inputs. Check decompressed output against the input before trusting a result.",
+    "A plain 'cmake ..' as in the README sets no C++ optimization level (only CMAKE_C_FLAGS carry -O9), so pass -DCMAKE_BUILD_TYPE=Release before measuring anything.",
+    "The rank supports (sdsl rank_support_v) hold raw pointers into the compressor's own bit vectors, and the class uses default copy and move, so a copied or moved compressor can point into another object's storage; load() here returns a fresh object by value (the co-author changed it to load in place in March 2026). Build or load it in place and do not copy it.",
+    "The input is shifted by its minimum minus epsilon before compression and the decompressed output is not shifted back by the library; preprocess_data in algorithms.hpp does the shift and postprocess_data the inverse, so callers must keep the offset. Residual widths above 57 bits are unsupported (read_field reads 8 bytes at a byte offset)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over LeCo when the series has nonlinear trends (the paper, per search snippets only, reports 12.80% better ratio and 36.26% faster compression than LeCo) and you need per-element random access; prefer FastPFor, TurboPFor or Sprintz when you need a mature, fast, block-decoded codec for posting lists or streaming sensor data rather than random access into smooth series.",
+  "verified_claims_summary": "Not verified from an opened source: the ICDE 2025 paper (arXiv 2412.16266, blocked here) reportedly compares NeaTS with xz, Brotli, Zstd, Lz4 and Snappy run through Squash on fixed-size blocks (the harness sweeps 512 to 16384 values per block, default 1000) and with Gorilla, Chimp, Chimp128, TSXor, DAC, LeCo and ALP on 16 datasets, using a Xeon Gold 6140M and GCC 13.2.1 with no flags seen; search snippets say ratios close to xz and Brotli, up to 10x faster decompression and about 1000x faster random access. In the repo, the NeaTS timing code is real (50 full-decompression runs; 1e6 random accesses x 10 runs). Its biases mostly go against NeaTS (allocation and zero-fill of the output inside the timed loop; size_in_bits counts the starting-position Elias-Fano structure twice and adds sizeof(*this)), except that per-query random-access time is truncated to whole nanoseconds. The random-access gap over block codecs depends on the block size chosen for them.",
+  "status_note": "Stale research code (13 stars, last commit 2025-07-15, GPL-3.0); the co-author's copy gvinciguerra/NeaTS was updated through 2026-03-08 with portable build flags, float-to-double fallback, serialization fixes and compress/decompress command-line tools, and is the better starting point.",
+  "sources_read": [
+    "https://github.com/and-gue/NeaTS",
+    "https://github.com/and-gue/NeaTS/tree/main/include",
+    "https://github.com/and-gue/NeaTS/issues?q=is%3Aissue",
+    "https://github.com/and-gue/NeaTS/issues/1",
+    "https://raw.githubusercontent.com/and-gue/NeaTS/HEAD/README.md",
+    "https://raw.githubusercontent.com/and-gue/NeaTS/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/and-gue/NeaTS/HEAD/main_simd.cpp",
+    "https://raw.githubusercontent.com/and-gue/NeaTS/HEAD/SNeaTS.cpp",
+    "https://raw.githubusercontent.com/and-gue/NeaTS/HEAD/include/NeaTS.hpp",
+    "https://raw.githubusercontent.com/and-gue/NeaTS/HEAD/include/algorithms.hpp",
+    "https://raw.githubusercontent.com/and-gue/NeaTS/HEAD/include/float_pfa.hpp",
+    "https://raw.githubusercontent.com/and-gue/NeaTS/HEAD/include/my_elias_fano.hpp",
+    "https://raw.githubusercontent.com/and-gue/NeaTS/HEAD/include/piecewise_nonlinear_model.hpp",
+    "https://raw.githubusercontent.com/and-gue/NeaTS/HEAD/include/coefficients_space.hpp",
+    "https://raw.githubusercontent.com/and-gue/NeaTS/HEAD/include/utils.hpp",
+    "https://raw.githubusercontent.com/and-gue/NeaTS/HEAD/benchmark/neats_lossless.cpp",
+    "https://raw.githubusercontent.com/and-gue/NeaTS/HEAD/benchmark/gp_compressors_bench.hpp",
+    "https://raw.githubusercontent.com/and-gue/NeaTS/HEAD/benchmark/st_compressors_bench.hpp",
+    "https://github.com/gvinciguerra/NeaTS",
+    "https://github.com/gvinciguerra/NeaTS/commits",
+    "https://github.com/gvinciguerra/NeaTS/commit/a85ae141d676dff4a434d7609cec496c0f128194",
+    "https://raw.githubusercontent.com/gvinciguerra/NeaTS/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/gvinciguerra/NeaTS/HEAD/README.md",
+    "https://raw.githubusercontent.com/gvinciguerra/NeaTS/HEAD/include/NeaTS.hpp",
+    "https://raw.githubusercontent.com/gvinciguerra/NeaTS/HEAD/include/algorithms.hpp",
+    "https://raw.githubusercontent.com/gvinciguerra/NeaTS/HEAD/include/float_pfa.hpp",
+    "https://raw.githubusercontent.com/gvinciguerra/NeaTS/HEAD/neats_compress.cpp"
+  ],
+  "confidence": 0.6
+}
