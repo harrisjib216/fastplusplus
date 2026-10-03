@@ -119,3 +119,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - CornellHPC/Ocean-SpGEMM (ICS 2026, arXiv 2604.19004, 7 stars, no license shown): independent A100 SpGEMM suite, 1.4x over spECK and 2.6x over OpSparse on 337 matrices; candidate entry and retier source for spECK/OpSparse. (from OpSparse enricher)
 - cslab-ntua/SpMV-Research (GPL-3.0; benchmark_code/CPU/AMD/spmv_code_bench/DIV) holds DIV (ICS 2025), the same lab's faster SpMV; result CSVs at pmpakos/SpMV-Research-benchmarks, unopened, possible retier source for SparseX. (from SparseX enricher)
 - wibraun/NICSLU (LGPL-2.1, NICSLU 3.0.1, 10 stars, last commit 2018-09-04): the only open-source NICSLU; candidate entry or duplicate note under NICSLU. (from NICSLU enricher)
+- cd-mcfarland/fast_prng (McFarland modified ziggurat, MIT, 13 stars; README 7.987 ns per normal, no baseline): sibling of cauldron's ziggurat. (from cauldron enricher)

@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/vpxyz/xorshift",
+  "one_liner": "Pure-Go ports of Vigna's xorshift/xoroshiro/xoshiro and SplitMix64 generators; raw calls 2-3x faster than math/rand's default source.",
+  "what_it_does": "Thirteen small Go packages (splitmix64, xorshift64star, xorshift128plus, xorshift1024star, xorshift1024starphi, xorshift4096star, xoroshiro128plus, xoroshiro128starstar and the 256/512-bit variants) each expose NewSource(seed int64) returning a concrete type with Seed, Uint64 and Int63, plus Jump on most. Every generator satisfies math/rand's Source64, so it can be passed to rand.New() as a drop-in source; the root package defines XorShift and XorShiftExt interfaces for switching generators. Multi-word states are filled from SplitMix64 as Vigna recommends.",
+  "how_it_is_fast": "The generators are linear xorshift / xor-rotate-shift-rotate recurrences over a few 64-bit words, costing a handful of shifts, xors and one add or multiply per output; the benchmark compares them with math/rand's default source called through the rand.Source interface (its internals were not inspected here). The 2020 rewrite switched to math/bits.RotateLeft64, which Vigna suggested in issue #3 because the standard function can be intrinsified by the compiler, and the 256/512-bit variants copy the state into locals because, per a source comment, the Go compiler generated slower code for array indexing.",
+  "when_to_use": [
+    "Go code (not C++) that calls Uint64() directly on a concrete generator in a hot loop, e.g. Monte Carlo or simulation inner loops, where the README shows 1.6-2.7 ns/op versus 4.93 ns/op for math/rand's source on an i7-3840QM.",
+    "Go programs pinned to an older toolchain (go 1.9+ per go.mod) that lack math/rand/v2 and want a small MIT-licensed SplitMix64 or xoshiro256** source.",
+    "Single-goroutine code, or one generator per goroutine, since nothing is locked.",
+    "As readable reference code for porting Vigna's generators, after checking each one against the reference outputs (see gotchas)."
+  ],
+  "when_not_to_use": [
+    "From C or C++: it is a Go package; use Vigna's reference C code or a catalogued C/C++ generator instead.",
+    "Through rand.Rand (rand.New(src).Float64/ExpFloat64 etc.): the README's wrapped rows gain only about 1.2x (8.1-8.7 ns versus 10.2 ns), and the 256- and 512-bit variants are slower than math/rand (11.7-13.6 ns).",
+    "When you need Jump() to create non-overlapping parallel streams with xoroshiro128plus or xoroshiro512starstar: both have defects (see gotchas).",
+    "Concurrent use of one generator: README says it is not concurrency-safe.",
+    "Security-sensitive randomness: none of these generators is cryptographic."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "none (Go standard library math/bits only)",
+    "min_toolchain": "Go 1.9 (go.mod 'go 1.9'; math/bits.RotateLeft64 needs 1.9); benchmarked on Go 1.14",
+    "platforms": "any platform Go supports (pure Go, no assembly)",
+    "thread_safety": "not concurrency-safe; the README says to wrap a generator with a monitor goroutine",
+    "drop_in_for_baseline": "partial: every generator implements rand.Source64, so rand.New(xorshift128plus.NewSource(seed)) replaces rand.New(rand.NewSource(seed)), but the output stream differs and the wrapped speedup is small"
+  },
+  "gotchas": [
+    "xoroshiro512starstar's state update is written 's6 ^ ^s7 ^ s3'; in Go the second '^' is unary bitwise NOT, so it complements s7, unlike the repo's own xoroshiro512plus ('s6 ^ s7 ^ s3') which shares the same xoshiro512 engine. The 512** generator therefore does not reproduce Vigna's xoshiro512** sequence and its Jump polynomial no longer applies (read in source; not run).",
+    "xoroshiro128plus uses the original 2016 parameters (rotl 55, shift 14, rotl 36, as in sysbench's copy of Vigna's code) but its Jump() uses internal.Jump128 = {0x8a5cd789635d2dff, 0x121fd2155c472f96}, the xorshift128+ jump constants that XorShift128Plus.Jump also uses; Vigna's jump for this xoroshiro128+ is {0xbeac0467eba5facb, 0xd86b048b86aa9922}, so Jump() is not the advertised 2^64-step jump. The repo's xoroshiro128starstar uses the newer 24/16/37 parameters and the matching jump constants.",
+    "The packages are named 'xoroshiro256*' and 'xoroshiro512*' but implement Vigna's xoshiro256/xoshiro512 engines (the 256-bit update and jump constants match xoshiro256); look them up under xoshiro. Package docs also call 256++ a 'floating-point' generator although ++ and ** are Vigna's all-purpose scramblers.",
+    "Int63() masks off the top bit (keeping the weak low bits) for most generators; only the + scramblers xoroshiro128plus/256plus/512plus were changed in 2020 to return the upper 63 bits after Vigna's issue #1. Vigna also reported a jump operator-precedence bug (issue #2, fixed 2020-02-27) and recommended reference-output unit tests, which the repo still lacks (xorshift_test.go has only benchmarks). The README example code does not compile as written (xorshift256plus.NewSource, unqualified XorShiftExt, rand not imported)."
+  ],
+  "pick_this_over_siblings_when": "Among Go siblings, pick pgregory.net/rand (flyingmutant/rand, sfc64, maintained, measured against math/rand/v2) for a modern faster rand.Rand replacement and valyala/fastrand for many goroutines sharing an RNG; pick this only if you specifically want a Vigna generator family in pure Go on an old toolchain and can audit the variant you use. C++ users should take the C/C++ siblings (e.g. simdrng, Xoshiro256PlusSIMD, testingRNG's lehmer64/aesctr) instead.",
+  "verified_claims_summary": "The author's go test -bench run (Go 1.14, default flags, i7-3840QM, Fedora 31, 2020) measured raw Uint64 calls at 1.61 ns (SplitMix64) to 2.66 ns (128-bit-state generators) versus 4.93 ns for math/rand.NewSource(...).Int63 called through the Source interface, so about 2-3x, partly from static versus interface dispatch; wrapped in rand.Rand for ExpFloat64 the best variants are about 1.2x faster (8.10-8.66 ns versus 10.2 ns) and the 256/512-bit variants are slower. math/rand/v2 was not measured.",
+  "status_note": "Abandoned since 2020-05-02 (44 commits; the only three issues, filed by Vigna on 2020-01-30, were fixed 2020-02-27) but MIT-licensed, dependency-free and tiny; vendor only the generator you need and test it against Vigna's reference outputs first, avoiding xoroshiro512starstar and xoroshiro128plus.Jump as written.",
+  "sources_read": [
+    "https://github.com/vpxyz/xorshift",
+    "https://github.com/vpxyz/xorshift/commits",
+    "https://github.com/vpxyz/xorshift/issues?q=is%3Aissue",
+    "https://github.com/vpxyz/xorshift/issues/1",
+    "https://github.com/vpxyz/xorshift/issues/2",
+    "https://github.com/vpxyz/xorshift/issues/3",
+    "https://raw.githubusercontent.com/vpxyz/xorshift/HEAD/README.md",
+    "https://raw.githubusercontent.com/vpxyz/xorshift/HEAD/xorshift_test.go",
+    "https://raw.githubusercontent.com/vpxyz/xorshift/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/vpxyz/xorshift/HEAD/go.mod",
+    "https://raw.githubusercontent.com/vpxyz/xorshift/HEAD/xorshift.go",
+    "https://raw.githubusercontent.com/vpxyz/xorshift/HEAD/doc.go",
+    "https://raw.githubusercontent.com/vpxyz/xorshift/HEAD/internal/internal.go",
+    "https://raw.githubusercontent.com/vpxyz/xorshift/HEAD/splitmix64/splitmix64.go",
+    "https://raw.githubusercontent.com/vpxyz/xorshift/HEAD/xorshift64star/xorshift64star.go",
+    "https://raw.githubusercontent.com/vpxyz/xorshift/HEAD/xorshift128plus/xorshift128plus.go",
+    "https://raw.githubusercontent.com/vpxyz/xorshift/HEAD/xorshift1024star/xorshift1024star.go",
+    "https://raw.githubusercontent.com/vpxyz/xorshift/HEAD/xorshift1024starphi/xorshift1024starphi.go",
+    "https://raw.githubusercontent.com/vpxyz/xorshift/HEAD/xorshift4096star/xorshift4096star.go",
+    "https://raw.githubusercontent.com/vpxyz/xorshift/HEAD/xoroshiro128plus/xoroshiro128plus.go",
+    "https://raw.githubusercontent.com/vpxyz/xorshift/HEAD/xoroshiro128starstar/xoroshiro128starstar.go",
+    "https://raw.githubusercontent.com/vpxyz/xorshift/HEAD/xoroshiro256plus/xoroshiro256plus.go",
+    "https://raw.githubusercontent.com/vpxyz/xorshift/HEAD/xoroshiro256plusplus/xoroshiro256plusplus.go",
+    "https://raw.githubusercontent.com/vpxyz/xorshift/HEAD/xoroshiro256starstar/xoroshiro256starstar.go",
+    "https://raw.githubusercontent.com/vpxyz/xorshift/HEAD/xoroshiro512plus/xoroshiro512plus.go",
+    "https://raw.githubusercontent.com/vpxyz/xorshift/HEAD/xoroshiro512starstar/xoroshiro512starstar.go",
+    "https://raw.githubusercontent.com/akopytov/sysbench/master/src/xoroshiro128plus.h"
+  ],
+  "confidence": 0.75
+}
