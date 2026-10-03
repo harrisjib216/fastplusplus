@@ -1,0 +1,49 @@
+{
+  "id": "https://github.com/allogenessrd/ecm-elf",
+  "one_liner": "AVX-512 IFMA ECM stage 1 running 8 curves per core; 2.3-3x faster per curve than GMP-ECM on Mersenne numbers.",
+  "what_it_does": "A command-line ECM stage-1 engine (ecm.exe) for GIMPS-style factoring work: it reads N from stdin, runs Suyama-sigma Montgomery curves (the same family as gmp-ecm -param 0) or Atkin-Morain Edwards curves up to B1, and writes GMP-ECM / Prime95-compatible text save files so stage 2 can continue in GMP-ECM (-resume) or Prime95 (ECMSTAGE2=). It is an application with a worktodo queue, an ecm.ini file and mid-stage-1 checkpoints, not a library; the IFMA kernel (src/cpu/simd_mont_ifma.h, a C header with ifma_ctx_init / ifma_mont_mul / ifma_mont_sqr over 8-lane SoA arrays) could be lifted out but has no stable API. CUDA (CGBN) and OpenCL GPU backends share the same driver and are not covered by this entry.",
+  "how_it_is_fast": "All curves in a batch share one exponent s = lcm(1..B1), so eight curves run in lock-step as the lanes of one zmm register per 52-bit limb (radix 2^52, vpmadd52lo/hi) with no divergence. For N = 2^k-1 a Mersenne fold domain replaces Montgomery CIOS reduction, cutting a modular multiply from n(4n+3) to 2n^2 madds (squaring about n(n-1)+2n), and the binary Montgomery ladder keeps the difference point affine so the differential add costs 3M+2S. Multiplication stays schoolbook: the dev doc measured Karatsuba slower at every size up to about 8000 bits and reports the multiply phase at 91-96% of the machine's madd throughput.",
+  "when_to_use": [
+    "Many ECM stage-1 curves on Mersenne numbers 2^k-1 below about 3700 bits, where the doc measures 2.26-2.54x per core over GMP-ECM 7.0.6 at B1=1e6 (M1277-M4001) and 3.0x at B1=1e5 on M4001.",
+    "Small Mersenne inputs (M127 to M2203) where Prime95's smallest FFT length is oversized: the doc's model puts it 3.9x (M1277) to 32.7x (M127) ahead of Prime95 per curve.",
+    "x86-64 machines with AVX512-F/DQ/IFMA, run with one thread per physical core and at least 8 curves per thread (128 curves to fill 16 cores).",
+    "Pipelines that already hand stage 2 to Prime95 or GMP-ECM and want a faster stage 1 with interoperable save files, checkpoints and resume."
+  ],
+  "when_not_to_use": [
+    "General (non-Mersenne) N: the fold domain is off and CIOS is used, which the doc measures 1.8x slower than the fold (section 19.8); section 19.4 gives about 0.85 s/curve for a 2999-bit semiprime at B1=1e5 on one thread (27.1 s for 32 curves), inside the doc's own GMP-ECM range for M3001 at that B1 (0.72-1.15 s/curve), so expect little or no gain (derived from page data; no general-N GMP-ECM comparison is published).",
+    "Mersenne N above about 3760 bits: Prime95's GWNUM FFT wins per the doc's FFT-tier model (about 1.5x at 5755 bits, about 6x at 19701 bits).",
+    "CPUs without AVX-512 IFMA: backend=simd exits with an error and backend=auto falls back to the scalar GMP mpn path, about 5.6 s/curve at M1277, B1=1e5 against 0.135 s for SIMD, far slower than GMP-ECM itself.",
+    "When you need stage 2, P-1/P+1 or a linkable library: this is a stage-1 application only.",
+    "Code that cannot take GPL-3.0, or a Linux/GCC build of the CPU path you need to trust: the documented desktop build is Windows/MSVC/vcpkg, and all published CPU timings are from one Windows laptop."
+  ],
+  "integration": {
+    "form": "application (CMake-built ecm.exe / ecm_cuda.exe); the IFMA kernels are C++ source files with a C header (source-drop at best)",
+    "dependencies": "GMP, OpenSSL (Crypto and SSL) and an OpenCL ICD, all REQUIRED by CMakeLists.txt for the ecm target; CUDA toolkit plus CGBN for ecm_cuda; optional Pari/GP for --go; Dear ImGui, Direct3D 11 and NVML for the Windows GUI",
+    "min_toolchain": "CMake 3.20+; Visual Studio 2022 recommended (timed binary built with MSVC /O2 from build_vs18); CMAKE_CXX_STANDARD is commented out, so the minimum C++ standard is not documented; GCC/Clang get -mavx512f -mavx512ifma -mavx512dq on the IFMA files",
+    "platforms": "x86-64 with AVX512-F/DQ/IFMA for the fast path (measured only on an AMD Ryzen AI 9 HX 370, Zen 5); Windows is the documented desktop build; the OpenCL path also targets Linux, macOS and Android",
+    "thread_safety": "ifma_ctx_t owns its scratch and is not thread-safe (header comment); the driver gives each worker its own context and hands out 8-curve tasks through an atomic counter, and results are byte-identical across thread counts per the doc",
+    "drop_in_for_baseline": "partial — takes N on stdin and positional B1 B2 like GMP-ECM, and its param-0 saves resume in GMP-ECM 7.0.6 and Prime95, but the flags differ (--mont, --mont-backend, -gpucurves, --sigma) and it does stage 1 only"
+  },
+  "gotchas": [
+    "The unit of parallelism is an 8-curve task, so 8 curves use one thread however many cores exist; SMT adds about 10% on the big cores but costs 19% once the whole Zen 5c cluster is loaded, and the README advises leaving affinity unset.",
+    "field=auto uses the fold only when N = 2^k-1 with k >= 64 and otherwise silently uses CIOS; field=mersenne errors on other N. Check the 'field layer :' log line before comparing timings.",
+    "All published timings use hand-pinned clocks (3990 MHz on Zen 5 cores); the doc says the pinned single-thread runs are about 30% faster than earlier unpinned ones, so stock-clock results will differ.",
+    "The GMP-ECM baseline itself varies: section 9.4 logs an earlier GMP-ECM 7.0.6 run on the same machine at about 0.72 s/curve for M3001 at B1=1e5, while section 10.4 measures 1.148 s/curve with ecm-zen3.exe for the same case."
+  ],
+  "pick_this_over_siblings_when": "Pick it over primefactors (whose own README says its GPU programs do not beat the CPU GMP-ECM path on hard inputs) and over generic batched Montgomery kernels such as the Truncated batch SIMD AVX512 code when the job is complete ECM stage 1 on Mersenne numbers with saves GMP-ECM and Prime95 can continue. For general N up to about 1000 bits, try AVX-ECM (bbuhrow/avx-ecm, BSD-2-Clause, not yet catalogued; its README claims 1.5-2.5x GMP-ECM throughput) first.",
+  "verified_claims_summary": "On one pinned 3990 MHz Zen 5 core of a Ryzen AI 9 HX 370 (MSVC Release, /arch:AVX512 on the IFMA files), stage 1 for param-0 curves on M4001 took 0.596 / 6.264 s per curve at B1 = 1e5 / 1e6 against 1.787 / 15.008 s for the prebuilt GMP-ECM 7.0.6 ecm-zen3.exe (3.0x and 2.4x), and a B1 = 1e6 sweep gives 2.26-2.54x for M1277 to M4001. Every input is a Mersenne number, where the code's fold reduction applies, and the Prime95 ratios come from a model anchored on a single measured M3001 run.",
+  "status_note": "Active single-author project (264 commits, last commit 2026-10-02, no issues filed, 5 stars) under GPL-3.0, so usable as a tool but not vendorable into closed code; the benchmark numbers date from 2026-09-24 and were not re-run against HEAD.",
+  "sources_read": [
+    "https://github.com/AllogeneSSRD/ECM-ELF",
+    "https://github.com/AllogeneSSRD/ECM-ELF/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/AllogeneSSRD/ECM-ELF/HEAD/README.md",
+    "https://raw.githubusercontent.com/AllogeneSSRD/ECM-ELF/HEAD/README.en.md",
+    "https://raw.githubusercontent.com/AllogeneSSRD/ECM-ELF/HEAD/docs/ECM_Montgomery_STAGE1.md",
+    "https://raw.githubusercontent.com/AllogeneSSRD/ECM-ELF/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/AllogeneSSRD/ECM-ELF/HEAD/src/cpu/simd_mont_ifma.h",
+    "https://raw.githubusercontent.com/AllogeneSSRD/ECM-ELF/HEAD/src/cpu/simd_mont_ifma.cpp",
+    "https://raw.githubusercontent.com/AllogeneSSRD/ECM-ELF/HEAD/src/cpu/simd_mont_curve.cpp",
+    "https://github.com/bbuhrow/avx-ecm"
+  ],
+  "confidence": 0.7
+}

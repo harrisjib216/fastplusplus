@@ -1,0 +1,56 @@
+{
+  "id": "https://github.com/simonlangowski/vroom",
+  "one_liner": "Header-only C++20 RNS Montgomery arithmetic on AVX-512 IFMA; BLS12-381 pairing 3.9x faster than BLST on Sapphire Rapids.",
+  "what_it_does": "Research artifact for the paper 'VROOM: Accelerating (Almost All) Number-Theoretic Cryptography' (IACR ePrint 2026/393): C++20 templates for modular multiplication in a residue number system, built up into the BLS12-381 tower (Fp2, Fp12), G1/G2 arithmetic with GLV/GLS scalar multiplication, the Miller loop and the final exponentiation, with precomputed parameters for BLS12-381 and BN254. You construct a ring (e.g. bls12_381_params::BlsRingProduction) from the modulus, move values in and out with from_bigint / to_bigint (GMP-backed BigInt), and multiply with modmul, or use delayed products (operator*, batch_reduce_expand) to sum several products before one reduction. It is not a BLST replacement: no BLS signature API, hash-to-curve or point serialization is documented.",
+  "how_it_is_fast": "A field element is stored as residues modulo a set of small moduli spread across zmm lanes, so one 381-bit multiply becomes lane-wise vpmadd52lo/hi products instead of a serial carry chain. RNS Montgomery reduction then needs a base extension (change-base) between two residue sets, which VROOM computes as small matrix products laid out to avoid cross-lane permutation overhead (paper abstract, via search snippet). The production MatrixNoK variant uses a cyclic r1 permutation found by an offline parameter search that removes the k-correction term, and delayed reduction lets Fp2/Fp12 formulas accumulate products before reducing, which is why compound operations gain far more (Fp12 mul 6.1x) than a single Fp multiply (1.33x).",
+  "when_to_use": [
+    "Latency-critical BLS12-381 pairings, Miller loops or G1/G2 scalar multiplications on one core of an AVX-512 IFMA x86 server: measured 3.9x full pairing, 2.5x G1 GLV and 3.6x G2 GLS scalar multiplication over BLST on a Xeon Platinum 8488C.",
+    "Pairing-heavy verification code (BLS signature aggregation checks, SNARK verifiers) where you are willing to wire the field and curve templates into your own protocol layer.",
+    "Extension-field-heavy work (Fp12 mul 6.1x, Fp12 squaring 5.0x, cyclotomic squaring 3.6x over BLST) where the delayed-reduction formulas pay off.",
+    "Research on RNS/IFMA arithmetic for other fixed moduli of similar size, using the Python generator (scripts/rns_secp256k1.py) that emits parameter headers."
+  ],
+  "when_not_to_use": [
+    "Production signing or any secret-dependent use: the README says the code is research-grade and 'has not been vetted or audited for security'; the constant-time claim comes only from the paper abstract (search snippet) and was not checked.",
+    "CPUs without avx512ifma in /proc/cpuinfo: the integer fallback build (Makefile.fallback) is for correctness only, not performance.",
+    "Builds with GCC or older clang: the README says they are 'significantly slower' than clang 21.x on the IFMA path, so the published ns/op will not reproduce with distro compilers.",
+    "Inversion-heavy code: Fp12 inversion using BLST's Fp inverter is slower than BLST (7.60 us vs 5.56 us, 0.73x), and the pairing itself still calls BLST for the base-field inversion.",
+    "Other curves or large moduli: only BLS12-381 and BN254 parameters ship, MatrixNoK parameter search is exponential in the number of radix words, and RSA-size moduli are covered by the sibling vroomssl fork instead."
+  ],
+  "integration": {
+    "form": "header-only (C++20 templates in src/*.hpp and cpu/, no shared library), plus a vendored BLST static library (libblst_small.a) for the pairing's base-field inversion",
+    "dependencies": "GMP and gmpxx (BigInt conversion, parameter setup, tests); the BLST fork in blst/ (Apache-2.0) for the BLST-inverter pairing path; Google Benchmark for the benches; Python for parameter regeneration",
+    "min_toolchain": "C++20 (-std=c++20 with clang++, -std=c++2a with g++); clang 21.1.0 for paper-comparable speed, other compilers for correctness only",
+    "platforms": "Linux x86-64 with AVX-512 IFMA (Amazon Linux 2023 and Ubuntu documented; measured on Xeon Platinum 8488C, Sapphire Rapids); optional CUDA kernels need a separate NVIDIA host",
+    "thread_safety": "not documented (all published benchmarks are single-threaded)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The production MatrixNoK path had a correctness bug: issue #1 (opened 2026-08-10) showed ConvertTo could select a negative CRT representative for a canonical BLS12-381 input, breaking import/export round-trip and multiply-by-one. Fixes landed 2026-08-14 (floor instead of ceiling rounding in generated constants, PR #2) and 2026-08-28, but results/ dates from 2026-06-17 and was not re-run.",
+    "Per-operation ratios are not like-for-like: the BLST side is called through blst_fp_* wrappers in a C glue file built with gcc -O2, while VROOM's header templates are built at -O3 -march=native, and even trivial Fp12 conjugation shows 2.2x. Trust the pairing, Miller loop and scalar-multiplication rows over the micro-op rows.",
+    "A lone Fp multiply gains little (1.33x MatrixNoK, 1.03x for the Matrix variant); amortized gains of 2.0-2.3x need batches of 5-10 multiplies through BatchModMul or delayed reduction.",
+    "MatrixNoK uses 50-bit (not 52-bit) words for integer-to-RNS conversion; regenerating parameters for a new modulus means rerunning the Python generator, rebuilding src/ and running scripts/smoke_test.sh."
+  ],
+  "pick_this_over_siblings_when": "Pick it over kevin-he-01/vroomssl (the same paper's BoringSSL/RSA fork, whose README carries no figures) when the target is BLS12-381 or BN254 pairing and curve arithmetic rather than RSA-size moduli, and over the Truncated batch SIMD AVX512 Montgomery code when you need low latency for one operation rather than throughput across 8 independent modexps; no other catalogued sibling covers pairing-friendly fields.",
+  "verified_claims_summary": "Single-threaded Google Benchmark on an AWS c7i.metal-24xl (Xeon Platinum 8488C, 3.79 GHz, CPU scaling off), VROOM built with clang 21.1.0 -O3 -march=native -mavx512ifma against the in-tree BLST fork at 8065152 (its own -O2 build with x86-64 assembly and ADX): full BLS12-381 pairing 128.1 us vs 500.0 us (3.9x), Miller loop 4.3x, final exponentiation 3.5x, single Fp multiply 1.33x. The repo's optional baseline log from the same CPU gives gnark-crypto 529 us, arkworks 1.02 ms and zkcrypto 1.07 ms per pairing, i.e. about 4.1x, 8.0x and 8.4x slower than VROOM (derived from page data); all numbers predate the August 2026 correctness fixes.",
+  "status_note": "Research artifact for IACR ePrint 2026/393 (commits mention a camera-ready version and artifact-evaluation feedback; venue not confirmed), last commit 2026-08-28; MIT-licensed headers are small enough to vendor, but the code is explicitly unaudited.",
+  "sources_read": [
+    "https://github.com/SimonLangowski/VROOM/commits",
+    "https://github.com/SimonLangowski/VROOM/issues/1",
+    "https://github.com/SimonLangowski/VROOM/tree/main/results",
+    "https://raw.githubusercontent.com/SimonLangowski/VROOM/HEAD/README.md",
+    "https://raw.githubusercontent.com/SimonLangowski/VROOM/HEAD/ARTIFACT.md",
+    "https://raw.githubusercontent.com/SimonLangowski/VROOM/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/SimonLangowski/VROOM/HEAD/results/bench_bls12_381_vs_blst.txt",
+    "https://raw.githubusercontent.com/SimonLangowski/VROOM/HEAD/results/baselines_bls12_bench.log",
+    "https://raw.githubusercontent.com/SimonLangowski/VROOM/HEAD/src/Makefile",
+    "https://raw.githubusercontent.com/SimonLangowski/VROOM/HEAD/src/README.md",
+    "https://raw.githubusercontent.com/SimonLangowski/VROOM/HEAD/blst/Makefile",
+    "https://raw.githubusercontent.com/SimonLangowski/VROOM/HEAD/baselines/README.md",
+    "https://raw.githubusercontent.com/SimonLangowski/VROOM/HEAD/scripts/reproduce_cpu_bench.sh",
+    "https://raw.githubusercontent.com/SimonLangowski/VROOM/HEAD/examples/README.md",
+    "https://raw.githubusercontent.com/SimonLangowski/VROOM/HEAD/examples/02_singular_modmul.cpp",
+    "https://raw.githubusercontent.com/SimonLangowski/VROOM/HEAD/cpu/vector/avx512ifma.hpp",
+    "https://github.com/hchengv/avxbls"
+  ],
+  "confidence": 0.75
+}
