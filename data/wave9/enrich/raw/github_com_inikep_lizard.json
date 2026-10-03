@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/inikep/lizard",
+  "one_liner": "LZ4-derived C codec (formerly LZ5) with optional Huffman; decompresses 4-5x faster than zlib -9 at similar ratio.",
+  "what_it_does": "A lossless LZ77 block and frame compressor with four families of levels: 10-19 (fastLZ4 codewords), 20-29 (LIZv1 codewords with 16 MB-class windows and repeat offsets), 30-39 and 40-49 (the same plus Huffman coding of its streams). The API mirrors LZ4's: Lizard_compress(src, dst, srcSize, maxDstSize, level) and Lizard_decompress_safe(), plus streaming (Lizard_createStream, Lizard_compress_continue, dictionaries) and a LizardF_* frame API. Its format is its own, compatible with neither LZ4 nor zlib.",
+  "how_it_is_fast": "Decoding is byte-oriented LZ77: each 128 KB block is split into five separate streams (tokens, literals, lengths, 16-bit offsets, 24-bit offsets), and a one-byte token tells the decoder how many literals to copy and where to take the offset from, including a last-offset (repeat match) code, so the hot loop is table-free memcpy work like LZ4's. Ratio comes from larger windows (up to 2^24 at levels 29/49), repeat offsets and, at the high levels, optimal parsing with a binary-tree match finder (Lizard_parser_optimalPriceBT), with all the cost paid at compression time. Levels 30-49 add Huffman coding of the streams (FiniteStateEntropy's huf), which trims size at some decode speed. The README notes no SSE/AVX intrinsics are used.",
+  "when_to_use": [
+    "Write-once, read-many data (game assets, packaged read-only blobs, archives decoded at load time) where only decode speed and ratio matter and compression can run offline at about 2 MB/s.",
+    "Replacing zlib -9 for read-heavy blobs when you control both ends: in lzbench 2.4 lizard -29 decodes silesia.tar at 1470 MB/s at 32.41% vs zlib 1.3.2 -9 at 318 MB/s at 31.92%.",
+    "A ratio band around 32-34% where it decodes somewhat faster than zstd at matched ratio: lizard -29 1470 MB/s at 32.41% vs zstd 1.5.7 -2 1257 MB/s at 32.70% in lzbench 2.4 (about 1.17x, derived from page data); the Lizard README's lzbench 2.0 run on an EPYC 9554 showed 1818 vs 1241 MB/s.",
+    "Projects that already embed the LZ4 API and want a higher-ratio variant with the same call shape, within one C library."
+  ],
+  "when_not_to_use": [
+    "New designs in general: the author's own 2025 README update calls Lizard outdated and effectively obsolete because LZ4 and zstd have since improved.",
+    "Fast levels: lz4 1.10.0 compresses at 550 MB/s and decodes at 3832 MB/s at 47.60% in lzbench 2.4, beating lizard -10 (464 / 1911 MB/s, 48.79%) on every axis; lz4hc -12 decodes 3813 MB/s at 36.45%.",
+    "High-ratio levels: zstd 1.5.7 -8 decodes at 1301 MB/s at 28.17% and compresses at 61.8 MB/s, while lizard -49 reaches 28.63% at 1058 MB/s decode and 1.99 MB/s compress.",
+    "Interoperability: the format is read only by Lizard itself (no browser, HTTP or OS support), unlike zlib/gzip.",
+    "Memory-constrained compression at high levels: level 29/49 allocates a 2^25-entry chain table and 2^23-entry hash table of U32 (about 160 MB) per stream."
+  ],
+  "integration": {
+    "form": "static lib | shared lib | source-drop (lib/ directory; Makefile, CMake and Visual Studio projects provided)",
+    "dependencies": "none external; bundled FiniteStateEntropy (huf) under lib/entropy for levels 30-49 (build with -DLIZARD_NO_HUFFMAN to limit to levels 10-29) and bundled xxhash for the frame API",
+    "min_toolchain": "C (CI covers gcc 7.5-14.2, clang 6.0-19, Apple LLVM 15, mingw-gcc 14.2, Visual Studio 2019/2022)",
+    "platforms": "any; CI covers x86/x86-64 Linux, macOS, Windows and cross builds for ARM (32/64-bit) and PowerPC (32/64-bit); no SIMD required",
+    "thread_safety": "Not documented; each Lizard_stream_t / Lizard_streamDecode_t is a separate context and Lizard_compress() allocates its own state per call, so independent contexts on separate threads appear safe (inferred from API and source).",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Lizard_compress() mallocs and frees a full compression state on every call (up to about 160 MB at levels 29/49); reuse a state via Lizard_compress_extState() or the streaming API for repeated calls. Out-of-range levels silently become level 17, and an allocation failure prints to stdout from inside the library.",
+    "Memory-safety history: Jan 2025 commits fixed a heap-buffer-overflow when decoding variable literal lengths and uninitialised reads in Lizard_decompress_LIZv1; issue #41 (Sept 2025) reported LizardF_compressFrameBound underestimating tiny inputs, giving a heap overflow in LizardF_compressFrame, and is closed alongside the 2025-10-09 commit fixing Lizard_writeBlock() for a one-byte input. That fix landed after the v2.1 release, so build from current master and fuzz untrusted input paths.",
+    "Licensing is split: lib/ is BSD-2-Clause, but the CLI and other files outside lib/ are GPLv2.",
+    "Issue #40 (open) reports GCC -O3 decoding 20-25% slower than -O2 (lizard -10: 4536 vs 6118 MB/s), and lzbench 2.4 shows lower decode numbers than the README's lzbench 2.0 run (1470 vs 1818 MB/s at -29); benchmark with your own compiler flags before relying on the margins."
+  ],
+  "pick_this_over_siblings_when": "Pick Lizard over Zstandard only when decode speed in the 32-34% ratio band matters more than compression speed and the format is private to your system; otherwise zstd (better ratio and compression speed at similar decode) or LZ4 (much faster decode at lower ratio) dominate it, and LZSSE is the sibling for maximum decode speed at about 35% when compression time does not matter.",
+  "verified_claims_summary": "In lzbench 2.4 (gcc 15.2.0 release binary, one thread of an EPYC 9555P at 3.2 GHz, turbo off, silesia.tar), lizard 2.1 -29 decompresses at 1470 MB/s to 32.41% vs zlib 1.3.2 -9 at 318 MB/s to 31.92% (4.6x, derived from page data), but compresses at only 2.08 MB/s. lzbench and Lizard share a maintainer (inikep), so this is first-party evidence.",
+  "status_note": "The author calls it obsolete but still patches it (Jan 2025 sanitizer and overflow fixes, a 2025-10-09 single-byte input fix); the BSD-2 lib is easy to vendor, though issue #36 about the project's status (2021) is unanswered.",
+  "sources_read": [
+    "https://github.com/inikep/lizard",
+    "https://raw.githubusercontent.com/inikep/lizard/HEAD/README.md",
+    "https://raw.githubusercontent.com/inikep/lizard/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/inikep/lizard/HEAD/lib/LICENSE",
+    "https://raw.githubusercontent.com/inikep/lizard/HEAD/lib/README.md",
+    "https://raw.githubusercontent.com/inikep/lizard/HEAD/lib/Makefile",
+    "https://raw.githubusercontent.com/inikep/lizard/HEAD/lib/lizard_compress.h",
+    "https://raw.githubusercontent.com/inikep/lizard/HEAD/lib/lizard_decompress.h",
+    "https://raw.githubusercontent.com/inikep/lizard/HEAD/lib/lizard_common.h",
+    "https://raw.githubusercontent.com/inikep/lizard/HEAD/lib/lizard_compress.c",
+    "https://raw.githubusercontent.com/inikep/lizard/HEAD/doc/lizard_Block_format.md",
+    "https://raw.githubusercontent.com/inikep/lizard/HEAD/doc/lizard_Frame_format.md",
+    "https://github.com/inikep/lizard/commits/lizard",
+    "https://github.com/inikep/lizard/issues?q=is%3Aissue",
+    "https://github.com/inikep/lizard/issues/36",
+    "https://github.com/inikep/lizard/issues/40",
+    "https://github.com/inikep/lizard/issues/41",
+    "https://github.com/inikep/lzbench",
+    "https://raw.githubusercontent.com/inikep/lzbench/HEAD/README.md",
+    "https://raw.githubusercontent.com/inikep/lzbench/HEAD/Makefile"
+  ],
+  "confidence": 0.85
+}

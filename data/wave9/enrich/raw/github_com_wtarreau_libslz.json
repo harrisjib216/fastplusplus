@@ -1,0 +1,55 @@
+{
+  "id": "https://github.com/wtarreau/libslz",
+  "one_liner": "Stateless deflate/zlib/gzip compressor in C, about 3.5x faster than zlib -1 at a much lower ratio.",
+  "what_it_does": "Emits standard RFC1950/1951/1952 streams (zlib, raw deflate, gzip) that any inflater, browser or gzip can read, while keeping only a 28-byte stream descriptor between calls instead of zlib's roughly 256 kB per stream. The API is its own, not zlib's: slz_init(strm, level, format), slz_encode(strm, out, in, ilen, more), slz_flush() and slz_finish(), with the caller supplying a large-enough output buffer (no output length argument). Since v1.3.0 the library also ships uslz, a small gzip/zlib/deflate decoder that needs a 32 kB sliding output buffer.",
+  "how_it_is_fast": "LZ77 matching with a single-entry hash table (8192 entries, 13-bit hash of 4 bytes) that stores the position plus a copy of the hashed 32-bit word, so most non-matches are rejected without calling the match-length routine; the match length uses word-wide XOR plus count-trailing-zeros. It never builds dynamic Huffman trees: it encodes only with the fixed deflate Huffman table, with precomputed bit sequences for lengths and distances, and switches to stored (literal) blocks when fixed coding would expand the data, so there is no tree-building pass. Bits are written with unaligned 32/64-bit stores on little-endian x86-64 and ARM, and CRC-32 for gzip uses the ARMv8 CRC32 instruction when available.",
+  "when_to_use": [
+    "HTTP servers, proxies and gateways compressing tens of thousands of concurrent responses, where zlib's per-stream memory (256 kB) is the real limit; the author's HAProxy test on a Core i5-3320M showed 23.7M/9.7M VSZ/RSS for slz vs 130M/101M for zlib and 3x the hits/s.",
+    "Any producer that must emit gzip/deflate (browser Content-Encoding, gzip files, zlib-wrapped formats) and is CPU-bound, so trading roughly 30% larger output for about 3x less compression CPU is acceptable.",
+    "Backups or streaming over a fast link where the compressor otherwise caps throughput (the bundled zenc tool is used this way).",
+    "Compressing attacker-controlled and secret data in separate calls to avoid CRIME-style dictionary leaks, since no history persists between encode calls.",
+    "Input fed in buffers of at least a few kB at a time (for example a per-thread linear buffer that collects a chunked HTTP response)."
+  ],
+  "when_not_to_use": [
+    "When ratio matters: on Silesia, lzbench 2.4 shows slz -1 at 46.97% vs zlib -1 36.45% and libdeflate -1 34.68%; the README states output is often 24-32% larger than zlib's.",
+    "When the consumer does not need deflate compatibility: in the same lzbench table LZ4 1.10.0 compresses at 550 MB/s at 47.60% and zstd -1 at 411 MB/s at 34.53%, both beating slz on speed or ratio.",
+    "Small writes: the stateless design means each call only matches within its own input, so feeding less than a few kB per call wastes ratio (the README asks for an input buffer in that case).",
+    "Fast decompression: slz output decodes through zlib or another inflater, so decode speed is the inflater's (lzbench lists 329 MB/s, which is zlib's); uslz is a lightweight decoder and the README says zlib is fine if decode performance is the priority.",
+    "Levels: only level 0 (stored) and level 1 (compress) are documented; the header warns other values give unpredictable behaviour, although the code clamps level to 0-15 and lzbench runs -1 to -3."
+  ],
+  "integration": {
+    "form": "static lib | shared lib (Makefile builds libslz.a and libslz.so); also small enough to source-drop (src/slz.c, slz.h, slz-prv.h, tables.h)",
+    "dependencies": "none (libc only)",
+    "min_toolchain": "C with GCC extensions (__builtin_ctz/clzll, __builtin_expect, __attribute__((constructor)), inline asm for CRC32); Makefile defaults to gcc -O3",
+    "platforms": "any; fast paths for unaligned little-endian x86-64, i386, ARMv7-A and ARMv8, plus the ARMv8 CRC32 instruction; other targets use the byte-wise path. Makefile handles Linux and macOS (dylib).",
+    "thread_safety": "Not documented explicitly; each slz_stream is independent and the encoder keeps no global mutable state after the constructor fills the distance table (or uses precomputed tables with -DPRECOMPUTE_TABLES), so separate streams on separate threads are safe by construction (inferred from source).",
+    "drop_in_for_baseline": "partial: output is drop-in (standard zlib/deflate/gzip readable by zlib), but the API is not zlib's deflate()/z_stream interface, so callers must be rewritten (HAProxy has a build option for it)."
+  },
+  "gotchas": [
+    "Encode functions take no output length: the caller must size the output buffer for the worst case (input plus about 5 bytes per 64 kB block plus header/trailer) and leave 3 extra bytes past the end (7 with SLZ_DIRECT_ENQUEUE56), since the direct-store paths write beyond the advanced pointer.",
+    "Each encode call puts a 64 kB hash table (8192 x 8 bytes) on the stack and memsets it, so tiny calls pay a fixed reset cost and threads need enough stack.",
+    "master moves fast: September 2026 commits fixed encoder edge cases (non-final 32 kB block emission, level 0 on blocks of 64 kB or more, the backward-match check when SLZ_BACKWARD_MATCH is 1) and uslz/zdec decoding bugs; pin a tagged release (v1.3.1 is what lzbench measured) rather than tracking master.",
+    "v1.3.1 release notes mention fixes to adler32 on 32-bit systems, so zlib-format output from older releases on 32-bit targets deserves a check."
+  ],
+  "pick_this_over_siblings_when": "Pick slz over zlib-ng, libdeflate or ISA-L igzip when the output must be deflate/gzip and memory per stream or compression CPU is the binding cost while ratio is secondary; libdeflate and zlib-ng give far better ratio at -1 (34.68% and 44.41% vs 46.97%) for about 60% of slz's speed in lzbench, and if gzip compatibility is not required, LZ4 or zstd -1 dominate it.",
+  "verified_claims_summary": "In inikep's lzbench 2.4 (release binary built with gcc 15.2.0, one thread of an EPYC 9555P at 3.2 GHz, turbo off, silesia.tar), slz_gzip 1.3.1 -1 compresses at 316 MB/s to 46.97% vs zlib 1.3.2 -1 at 89.0 MB/s to 36.45%, about 3.6x faster for about 29% more output (derived from page data). The author's README measured slz 1.2.1 at 232 MB/s (gzip) and 293 MB/s (raw deflate) vs zlib 1.2.8 -1 at 70 MB/s on one core of a Core i5-3320M.",
+  "status_note": "Actively maintained by HAProxy's author (commits through 2026-09-27, tags v1.3.0 and v1.3.1 in July 2026); X11/MIT-style licence, one C file plus headers, easy to vendor.",
+  "sources_read": [
+    "https://github.com/wtarreau/libslz",
+    "https://raw.githubusercontent.com/wtarreau/libslz/HEAD/README",
+    "https://raw.githubusercontent.com/wtarreau/libslz/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/wtarreau/libslz/HEAD/VERSION",
+    "https://raw.githubusercontent.com/wtarreau/libslz/HEAD/Makefile",
+    "https://raw.githubusercontent.com/wtarreau/libslz/HEAD/src/slz.h",
+    "https://raw.githubusercontent.com/wtarreau/libslz/HEAD/src/slz.c",
+    "https://raw.githubusercontent.com/wtarreau/libslz/HEAD/src/slz-prv.h",
+    "https://github.com/wtarreau/libslz/commits/master",
+    "https://github.com/wtarreau/libslz/tags",
+    "https://github.com/wtarreau/libslz/issues?q=is%3Aissue",
+    "https://github.com/wtarreau/libslz/issues/2",
+    "https://github.com/wtarreau/libslz/issues/3",
+    "https://github.com/inikep/lzbench",
+    "https://raw.githubusercontent.com/inikep/lzbench/HEAD/README.md"
+  ],
+  "confidence": 0.85
+}
