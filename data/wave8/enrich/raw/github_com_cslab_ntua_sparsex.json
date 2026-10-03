@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/cslab-ntua/sparsex",
+  "one_liner": "Multicore CPU SpMV library: CSX compressed format plus LLVM-JIT kernels per matrix; claims parity-or-better vs Intel MKL CSR.",
+  "what_it_does": "SparseX speeds up repeated sparse matrix-vector products (y = alpha*A*x + beta*y) on Linux SMP and NUMA multicore machines. You load a matrix from CSR arrays or a Matrix Market file, tune it once with spx_mat_tune() into the CSX format, wrap vectors as spx_vector_t objects built from the matrix's thread partition, and call spx_matvec_kernel() in your solver loop. A one-call path, spx_matvec_kernel_csr(), converts CSR on the first call and reuses the tuned handle after that. The C API is its own, not MKL's mkl_sparse_?_mv signature.",
+  "how_it_is_fast": "SpMV on CPUs is limited by memory bandwidth, and CSR spends one column index per nonzero. CSX (Compressed Sparse eXtended, PPoPP'11 / TPDS'13) detects dense substructures: horizontal, vertical, diagonal and anti-diagonal runs, row- and column-aligned blocks, and delta-encoded leftovers. It stores one short descriptor per substructure instead of per-element indices, which shrinks the index stream. For each matrix, the library fills C kernel templates for the patterns it chose (src/templates/*_tmpl.c), compiles them at runtime with the Clang frontend and LLVM MCJIT, and runs them on a pinned thread pool with NUMA-aware allocation. A symmetric variant (CSX-sym) stores only half the matrix, and optional Reverse Cuthill-McKee reordering improves locality.",
+  "when_to_use": [
+    "Iterative solvers (CG, GMRES, eigen-solvers) on one large sparse matrix that run thousands of SpMVs, so the one-off tuning and JIT cost is amortized; spx_mat_save/spx_mat_restore can skip re-tuning in later runs",
+    "Matrices with regular dense substructure (FEM and structural meshes with blocks, diagonals or long row runs), where index compression cuts memory traffic the most",
+    "Large symmetric matrices, where CSX-sym (spx.matrix.symmetric) halves the storage that has to be streamed",
+    "Multi-socket NUMA Linux servers, where the library's thread pinning and NUMA placement do the tuning for you",
+    "As a historical baseline in SpMV research: later papers (DIV, ICS 2025) still benchmark against it"
+  ],
+  "when_not_to_use": [
+    "One-shot or few SpMVs: the user's guide calls CSX preprocessing (substructure detection plus JIT compile) 'non-negligible' even with sampling",
+    "Any current toolchain: configure.ac accepts only LLVM 4.0.0 to 6.0.0, the JIT uses Clang's internal C++ API (which the README says breaks with almost every LLVM release), and the last commit is from 2018. The two open issues (#2 Boost.atomic not found with Boost 1.58, #4 cannot install LLVM) have no fix",
+    "Matrices whose sparsity pattern changes: after tuning, nonzeros cannot be inserted or deleted, only existing values updated through spx_mat_set_entry",
+    "GPUs, Windows or macOS: CPU only, Linux only (futex wrapper, libnuma required)",
+    "When a large margin over MKL is the goal: the only third-party figures found (DIV, ICS 2025, search snippet) put SparseX at a 13% median and 7.7% geometric-mean speedup on large matrices, and DIV reports 1.87x (Intel) and 2.0x (AMD) over SparseX"
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "LLVM/Clang 4.0.0-6.0.0 (linked, used at runtime for the JIT), Boost >= 1.48 (atomic, regex, serialization, system), libnuma >= 2.0.7, pthreads; optional Intel MKL or pOSKI for the bundled benchmark driver",
+    "min_toolchain": "gcc/g++ >= 4.8 plus LLVM/Clang 4.0.0-6.0.0 exactly (configure rejects other versions); autotools (autoreconf -vi) to build from git; JIT kernels are compiled as C99",
+    "platforms": "Linux on SMP and NUMA multicore CPUs; the JIT targets the host triple, and CPU architectures beyond an x86_64-specific fix in the ChangeLog are not documented",
+    "thread_safety": "The library runs its own thread pool (spx.rt.nr_threads, default all cores, pinned by spx.rt.cpu_affinity). Calling it concurrently from several user threads is not documented.",
+    "drop_in_for_baseline": "partial — spx_matvec_kernel_csr() accepts plain CSR arrays and computes y = alpha*A*x + beta*y like MKL, but x and y must be wrapped as spx_vector_t objects tied to the matrix partition, and index/value types are fixed at configure time (default int/double)"
+  },
+  "gotchas": [
+    "The public headers read (sparsex.h, matvec.h, common.h, types.h) have no extern \"C\" guards; C++ callers must wrap the #include themselves (the cslab-ntua SpMV-Research wrapper notes undefined references otherwise)",
+    "The JIT compiles C at runtime and needs the system C headers: set SPX_JIT_INC_PATH if they are in a non-standard location, and LD_LIBRARY_PATH for a non-standard install prefix",
+    "The default thread count and affinity grab all cores with a share-nothing pinning policy, which can clash with an OpenMP or MPI application's own pinning; set spx.rt.nr_threads and spx.rt.cpu_affinity explicitly",
+    "The bundled User's Guide still lists LLVM == 3.0, the README says >= 4.0, and configure.ac accepts only 4.0.0-6.0.0; trust configure.ac. Explicit zeros in the input are kept as logical nonzeros"
+  ],
+  "pick_this_over_siblings_when": "Pick SparseX over merge-spmv, CSR5 or CVR only when the matrix has strong block, diagonal or run structure (or is symmetric and large) and you can pin an old LLVM 4-6 toolchain. For irregular or scale-free matrices, CVR and merge-spmv report clearer wins over MKL, and SPC5 is the maintained block-kernel option for AVX-512 and ARM SVE.",
+  "verified_claims_summary": "No SparseX-versus-MKL numbers could be read from an opened page. Per search snippets, the TOMS 2018 abstract claims superior performance on large-scale problems and performance comparable to Intel MKL and ViennaCL. A third-party ICS 2025 paper (DIV, snippet only) says SparseX reliably speeds up SpMV on large matrices by a 13% median and 7.7% geometric mean; its baseline is presumably MKL CSR but is not stated in the snippet, and no hardware or compiler is given.",
+  "status_note": "Abandoned since 2018-06-10, when the last change added LLVM 6 support; BSD-3-Clause and copyable, but expect to port the Clang-based JIT before it builds against any LLVM newer than 6.",
+  "sources_read": [
+    "https://github.com/cslab-ntua/sparsex",
+    "https://raw.githubusercontent.com/cslab-ntua/sparsex/master/README",
+    "https://raw.githubusercontent.com/cslab-ntua/sparsex/master/LICENSE.txt",
+    "https://raw.githubusercontent.com/cslab-ntua/sparsex/master/ChangeLog",
+    "https://raw.githubusercontent.com/cslab-ntua/sparsex/master/configure.ac",
+    "https://raw.githubusercontent.com/cslab-ntua/sparsex/master/INSTALL",
+    "https://raw.githubusercontent.com/cslab-ntua/sparsex/master/AUTHORS",
+    "https://raw.githubusercontent.com/cslab-ntua/sparsex/master/doc/SparseX_UG.pdf",
+    "https://github.com/cslab-ntua/sparsex/issues?q=is%3Aissue",
+    "https://github.com/cslab-ntua/sparsex/tree/master/include/sparsex",
+    "https://raw.githubusercontent.com/cslab-ntua/sparsex/master/include/sparsex/matvec.h",
+    "https://raw.githubusercontent.com/cslab-ntua/sparsex/master/include/sparsex/sparsex.h",
+    "https://raw.githubusercontent.com/cslab-ntua/sparsex/master/include/sparsex/types.h",
+    "https://raw.githubusercontent.com/cslab-ntua/sparsex/master/include/sparsex/common.h",
+    "https://github.com/cslab-ntua/sparsex/tree/master/src",
+    "https://github.com/cslab-ntua/sparsex/tree/master/src/internals",
+    "https://github.com/cslab-ntua/sparsex/tree/master/src/templates",
+    "https://raw.githubusercontent.com/cslab-ntua/sparsex/master/src/templates/csx_spmv_tmpl.c",
+    "https://raw.githubusercontent.com/cslab-ntua/sparsex/master/src/templates/horiz_tmpl.c",
+    "https://raw.githubusercontent.com/cslab-ntua/sparsex/master/src/internals/JitCompiler.cpp",
+    "https://github.com/cslab-ntua/SpMV-Research",
+    "https://github.com/cslab-ntua/SpMV-Research/tree/main/benchmark_results",
+    "https://github.com/cslab-ntua/SpMV-Research/tree/main/benchmark_code/CPU/AMD/spmv_code_bench",
+    "https://raw.githubusercontent.com/cslab-ntua/SpMV-Research/main/benchmark_code/CPU/AMD/spmv_code_bench/spmv_kernel_sparsex.cpp",
+    "WebSearch snippets: SparseX TOMS 2018 abstract; DIV: An Index & Value compression method for SpMV on large matrices (ICS 2025)"
+  ],
+  "confidence": 0.55
+}
