@@ -1,0 +1,48 @@
+{
+  "id": "https://github.com/yasha1971-coder/aceapex",
+  "one_liner": "Block-independent LZ77 with zstd-coded token streams; decodes in parallel on CPU/GPU and supports random-access reads, aimed at genomic archives.",
+  "what_it_does": "ACEAPEX is an LZ77 codec whose match search never leaves a 16 KiB block, so any block (and any byte range) can be decoded without the rest of the file; the tokens are split into four streams (literals, offsets, lengths, commands) that are entropy-coded in chunks with libzstd, or with its own rANS in the 'open' profile. It has its own ACEPX2 container (not a zstd frame), a C API (aceapex_compress/decompress/decompress_region/decompress_ranges, streaming encode and decode, a persistent region handle), a standalone C99 decoder, a Python reader and a CUDA decoder. It replaces zstd only where you control both ends and want parallel or ranged reads of write-once data.",
+  "how_it_is_fast": "Confining matches to the block removes cross-block dependencies, so blocks decode in parallel across threads or GPU warps; inside a block the encoder redirects references to their earliest origin where it can verify the bytes, shortening dependency chains, and the GPU decoder resolves the rest by wavefront ordering and closed-form periodic fills. Entropy work is pushed into large zstd or AVX2 rANS chunks that decode independently of the match phase, and DNA literals get a 2-bit base packing with a case bitmask and exception list. Recent CPU gains come from literal tiles held in L2, transparent huge pages, and non-temporal output stores (CHANGELOG 2.3 draft).",
+  "when_to_use": [
+    "Write-once, read-many archives of genomes (FASTA/FASTQ) where you need region reads by offset: the authors report 0.081 ms 16 KB seeks on chr1 against 0.140 ms for bgzip+fai, at 11.8% smaller size",
+    "Multi-core full decode of large files where you can spend 8 or more threads on decompression",
+    "GPU-resident data pipelines that decode compressed data on the device (open profile needs no nvCOMP)",
+    "Batched random range reads (aceapex_decompress_ranges) where requests cluster in the same blocks"
+  ],
+  "when_not_to_use": [
+    "As a general zstd replacement on one thread: independent lzbench 2.4 (EPYC 9555P) shows aceapex 1.0.1 decoding silesia at about 675 MB/s against zstd -1 at 1351 MB/s, and the README's own single-thread FASTQ figure (1,624 MB/s) is below zstd -3's 2,026 MB/s",
+    "When interoperability matters: ACEPX2 is a private container, the lzbench copy is the older format 1, and archive bytes depend on the libzstd version used to encode",
+    "When ratio is the goal: the README says zstd -19 is 1.2-1.55x denser on FASTQ with a whole-file window",
+    "Write-heavy workloads: the README calls encode slow (50 GB at about 340 MB/s) and the project 'research-grade'",
+    "When you need a mature, long-fuzzed decoder for hostile input (see gotchas): the code changes daily and the 2.1.0 API returned wrong bytes under concurrent calls"
+  ],
+  "integration": {
+    "form": "static lib or CLI from one C++ translation unit (src/aceapex_api.cpp); standalone C99 decoder as source-drop or shared lib (c/aceapex_decode.c); Python package; optional CUDA shared lib",
+    "dependencies": "libzstd (1.4.8 or 1.5.x; the open profile's archives need no zstd frames), pthreads; GPU Mode 2 needs NVIDIA nvCOMP 5 (closed source)",
+    "min_toolchain": "C++17 (g++ -O3 -march=native in the documented build), C99 for the decoder, nvcc with -std=c++17 for GPU (default target sm_75)",
+    "platforms": "x86-64, x86-32, ARM32, ARM64 and PPC64LE pass the release cross-matrix under qemu-user; MinGW builds the library but no Windows runner; CLI is POSIX (mmap); GPU on NVIDIA sm_75 and later (T4 to Blackwell tested)",
+    "thread_safety": "Per-call state since 2.2.0 (globals made thread-local after concurrent calls returned wrong bytes in 2.1.0; the lzbench 1.0.1 copy is unaffected); aceapex_decompress uses every hardware thread unless aceapex_decompress_mt is given a budget",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Possible integer overflow in header validation (from reading the code, not tested): both open_arc in c/aceapex_decode.c and ax_header_ok in src/aceapex_main.cpp check 68 + num_blocks*64 + zlit_sz + zoff_sz + zlen_sz + zcmd_sz <= src_size in unchecked uint64 arithmetic, so crafted 64-bit stream sizes can wrap the sum, pass the check and send stream pointers and cursor bounds outside the buffer in the in-memory API. The C decoder was fuzzed 2,400 runs and the C++ reader 3,000 runs under ASan/UBSan per the CHANGELOG, which random bytes would rarely hit.",
+    "The 'random access' unit is the entropy chunk, not the 16 KiB block: a region read unpacks the zstd or rANS chunks of all four streams that cover it (512 KiB default for token streams, 64 KiB to 1 MiB for literals), so seek cost and ratio depend on LIT_CHUNK and related knobs.",
+    "Tuning comes from environment variables (AX_PROFILE, ACEAPEX_BS, LIT_CHUNK and 13 more) only in builds with ACEAPEX_ENV_TUNING; the library inside lzbench, TurboBench or your program ignores them since 2.2.2, so CLI numbers may use settings your build does not.",
+    "nvCOMP 5.3.0.16 hangs on some corrupt zstd frames (repro in the repo); the GPU library offers ACEAPEX_GPU_VALIDATE_ZSTD to check every frame through libzstd on the host first."
+  ],
+  "pick_this_over_siblings_when": "Choose it over Zstandard or zlib-ng only when you need parallel or ranged decode of a large static file, especially genomic data or GPU-resident decode; Rapidgzip gives parallel decode while keeping the standard gzip format, and for plain single-thread speed LZ4, zstd and misa77 decode faster.",
+  "verified_claims_summary": "The headline is first-party: on the 1 GB ERR194147 FASTQ (re-measured after an earlier sample with degenerate quality strings was withdrawn), 8-thread ACEAPEX decodes at 7,401 MB/s against zstd -3 at 2,026 MB/s at near-equal ratio (3.98 vs 3.96), where the zstd thread count is not stated and the CPU for that table is not named; single-thread ACEAPEX is 1,624 MB/s. The independent lzbench 2.4 table (EPYC 9555P, gcc 15.2.0, silesia, one thread) has the older 1.0.1 format at 675 MB/s decode, about half of zstd -1.",
+  "status_note": "Very active (releases 2.1.0, 2.2.0 and 2.2.2 between 2026-09-29 and 2026-10-01, with a 2.3 draft open) and MIT-licensed with a written format spec and conformance fixtures, but self-described as research-grade; pin a release and validate untrusted archives before use.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/yasha1971-coder/aceapex/HEAD/README.md",
+    "https://raw.githubusercontent.com/yasha1971-coder/aceapex/HEAD/c/aceapex_decode.c",
+    "https://raw.githubusercontent.com/yasha1971-coder/aceapex/HEAD/src/aceapex.h",
+    "https://raw.githubusercontent.com/yasha1971-coder/aceapex/HEAD/src/aceapex_main.cpp",
+    "https://raw.githubusercontent.com/yasha1971-coder/aceapex/HEAD/CLAIMS.md",
+    "https://raw.githubusercontent.com/yasha1971-coder/aceapex/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/yasha1971-coder/aceapex/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/yasha1971-coder/aceapex/HEAD/Makefile",
+    "https://raw.githubusercontent.com/yasha1971-coder/aceapex/HEAD/docs/FORMAT_ACEPX2.md"
+  ],
+  "confidence": 0.7
+}

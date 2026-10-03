@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/etemesi254/zune-entropy",
+  "one_liner": "Rust order-0 Huffman and tANS block coders that out-decode FSE/Huff0 on enwik8 at slightly worse ratio.",
+  "what_it_does": "A small Rust crate (about 3,400 lines) with four public functions: huff_compress/huff_decompress and fse_compress/fse_decompress, each taking a byte slice and appending to a Vec<u8>. Input is cut into 128 KiB blocks; each block is stored raw, as RLE, or entropy-coded with its own header. It is not format-compatible with FSE or Huff0 and has no streaming or C API.",
+  "how_it_is_fast": "The tANS decoder runs five interleaved 11-bit states over one little-endian bit reader lifted from Eric Biggers' xpack, with the table capped at 2^10 states and a golden-ratio state spread, which the source comment says fits 55 bits per flush branchlessly and is 'how we get an edge on FSE'; it packs symbol, bit count, next-state base and mask into one u64 table entry. The Huffman coder length-limits codes to 11 bits with a Kraft-sum heuristic, splits each block into five independent bitstreams decoded round-robin with a single 2048-entry lookup table, and uses x86 inline asm (sub/shrx) to keep the bit buffer in registers. Branchless 56-63-bit refills follow Fabian Giesen's 'reading bits in far too many ways' variant 4.",
+  "when_to_use": [
+    "Studying or porting a compact, readable Rust implementation of interleaved tANS and multi-stream Huffman decoding",
+    "Prototyping an order-0 entropy stage on x86-64 or aarch64 where decode speed matters more than the last 1-2% of ratio",
+    "Benchmarking your own entropy coder against another FSE-style design on text-like data such as enwik8"
+  ],
+  "when_not_to_use": [
+    "Decoding untrusted or possibly truncated input: the bit readers do unchecked 8-byte reads (see gotchas)",
+    "Production use: no LICENSE file, not on crates.io, README calls it beta and says some files (silesia/mozilla) fail",
+    "When ratio matters: FSE beats it in both modes on enwik8 (63.26% vs 65.00% Huffman, 63.12% vs 63.90% tANS)",
+    "When you need FSE/zstd wire compatibility, streaming, a C API, or adaptive/order-1 models",
+    "When peak decode speed is the goal: hypersonic-rANS and htscodecs SIMD rANS decode several times faster"
+  ],
+  "integration": {
+    "form": "crate (git dependency only; not published)",
+    "dependencies": "log 0.4 (criterion and rand as dev-dependencies)",
+    "min_toolchain": "Rust 2021 edition; uses std::arch::asm!, so Rust 1.59 or later (the README's companion bench says rustc 1.58)",
+    "platforms": "any Rust target; x86/x86-64 get inline-asm bit-buffer paths and a runtime-detected BMI2 wrapper, others use plain Rust",
+    "thread_safety": "not documented; the functions are pure over their arguments with no shared state, so separate calls on separate buffers should be independent",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Memory safety: BitStreamReader::refill_fast and FSEStreamReader::refill_fast copy 8 bytes from src.as_ptr().add(position) with no bounds check, and the decode loops refill every few symbols while trusting the block length from the header; over-read is only detected after decoding finishes. A corrupt or crafted stream (large declared block length, small payload) can read past the input buffer through the safe public functions, and the final stream of the last block can read up to 7 bytes past the end even when the caller's buffer has no padding (code comment: 'The buffer must be padded with fill bytes in the end, if not, this becomes UB in the refill phase').",
+    "unsafe_utils::extend calls Vec::set_len over uninitialized memory before decoding; if decoding returns an error, dest is left with uninitialized bytes in its length.",
+    "Malformed headers panic instead of returning errors (direct src[0] and slice indexing; a header table_log above 10 indexes past the 1024-entry state array); huff_decompress panics if handed a tANS stream and vice versa.",
+    "Source comment says changing CHUNK_SIZE to 1 << 19 causes a hard error on test files; the block size is a compile-time constant."
+  ],
+  "pick_this_over_siblings_when": "Pick it over FiniteStateEntropy only if you want a Rust codebase to read and adapt and accept 1-2% worse ratio; for speed hypersonic-rANS or htscodecs decode several times faster, and for a maintained Rust entropy coder constriction is the safer choice.",
+  "verified_claims_summary": "The author's README reports enwik8 on an AMD Ryzen 5 4500U: Huffman 940.97 MB/s encode and 1310.28 MB/s decode versus FSE/Huff0 924.6 and 1049.5 MB/s (about 1.25x decode, derived from page data), and tANS 602.56/1022.93 MB/s versus FSE/TANS 457.7/572.8 MB/s (about 1.8x decode, derived). The FSE numbers come from a different tool than this library's zcif_bin driver, and no compiler version or flags are stated.",
+  "status_note": "Abandoned since August 2022, unlicensed (all rights reserved by default) and unpublished, so treat it as reference code to learn from, not to vendor.",
+  "sources_read": [
+    "https://github.com/etemesi254/zune-entropy",
+    "https://github.com/etemesi254/zune-entropy/tree/master/src",
+    "https://raw.githubusercontent.com/etemesi254/zune-entropy/HEAD/Readme.md",
+    "https://raw.githubusercontent.com/etemesi254/zune-entropy/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/etemesi254/zune-entropy/master/src/lib.rs",
+    "https://raw.githubusercontent.com/etemesi254/zune-entropy/master/src/constants.rs",
+    "https://raw.githubusercontent.com/etemesi254/zune-entropy/master/src/errors.rs",
+    "https://raw.githubusercontent.com/etemesi254/zune-entropy/master/src/fse_bitstream.rs",
+    "https://raw.githubusercontent.com/etemesi254/zune-entropy/master/src/fse_compress.rs",
+    "https://raw.githubusercontent.com/etemesi254/zune-entropy/master/src/fse_decompress.rs",
+    "https://raw.githubusercontent.com/etemesi254/zune-entropy/master/src/huff_bitstream.rs",
+    "https://raw.githubusercontent.com/etemesi254/zune-entropy/master/src/huff_compress.rs",
+    "https://raw.githubusercontent.com/etemesi254/zune-entropy/master/src/huff_decompress.rs",
+    "https://raw.githubusercontent.com/etemesi254/zune-entropy/master/src/unsafe_utils.rs",
+    "https://raw.githubusercontent.com/etemesi254/zune-entropy/master/src/utils.rs"
+  ],
+  "confidence": 0.7
+}
