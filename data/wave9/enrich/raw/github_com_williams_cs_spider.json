@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/williams-cs/spider",
+  "one_liner": "Research C code for a ~3.8%-overhead rank/select bit vector that interleaves rank counters with data and predicts select positions.",
+  "what_it_does": "SPIDER answers rank and select over a static uncompressed bit vector using about 3.8% extra space (the SEA 2024 paper's figure; snippet only). The repo is not a library: spider.c, spider-1L-select.c, ni-spider.c and ni-spider-2L-select.c are standalone programs that read a bit file from disk into global arrays and then run a timed loop of random rank or select queries (r/s) or an interactive query prompt (qr/qs). To use it you would lift rank(), select_hl() and the builders in helper.h into your own code.",
+  "how_it_is_fast": "Each 512-bit cache line stores 496 data bits plus a 16-bit rank counter relative to a 64-bit top-level count kept every 63,488 bits, so a rank query costs one cache-line access plus a small top-level array that usually stays in cache, then up to 8 popcounts. Select samples the position of every k-th one (16-bit low-level and 64-bit high-level sample arrays), linearly interpolates between samples to predict the target cache line, corrects with a short scan of the interleaved counters, and finishes inside the 64-bit word with PDEP + LZCNT. The ni-* variants keep the counters in a separate array for comparison.",
+  "when_to_use": [
+    "Reference design when you are writing your own rank/select for very large bit vectors (the paper reports the gain at 8 billion bits or more, snippet only) and want low space overhead.",
+    "Studying or porting the interleaved-counter layout; QuadRank's BinaryBlock16Spider is a Rust reimplementation of the same block layout.",
+    "Prototyping select with prediction (linear interpolation from sampled positions) on x86-64 with BMI2."
+  ],
+  "when_not_to_use": [
+    "Any production use: there is no LICENSE file, so the code cannot legally be copied, and it is not packaged as a library.",
+    "Programs that need more than one bit vector or thread-safe reentrant objects: all state lives in non-static globals declared in helper.h, so even including the header in two translation units collides.",
+    "Non-x86 targets: it includes x86intrin.h and uses _pdep_u64 and _lzcnt_u64 (BMI2/LZCNT), built with -march=native.",
+    "Small or cache-resident bit vectors, where the single-cache-miss layout gives little; or workloads needing the fastest rank at any space, where 25%-overhead Rank9 still led in plain loops in QuadRank's measurements.",
+    "When you need reproducible competitor numbers: the repo only times SPIDER itself, and a reproduction question in issue #1 is unanswered."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (C standard library, x86intrin.h)",
+    "min_toolchain": "GCC with -march=native -mpopcnt -mlzcnt (Makefile uses gcc -O9); C standard not stated",
+    "platforms": "x86-64 with POPCNT, LZCNT and BMI2 (PDEP)",
+    "thread_safety": "Not thread-safe to build (global arrays); read-only queries after construction share the globals, and concurrent queries are not documented",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Bits are packed MSB-first: the builder shifts each input byte in from the low end of a 64-bit word, and the 16-bit counter occupies the top 16 bits of the first word of every cache line, so input layout differs from SDSL/sux LSB-first bit vectors.",
+    "The builder reads the file one byte at a time with fgetc and ignores a failed fopen beyond printing perror, so construction is slow and a bad path crashes.",
+    "speedtest.h times independent random queries in a loop with clock() (CPU time, not wall time) and generates indices from two 31-bit rand() calls, so the figure is loop throughput rather than dependent-query latency; issue #1 (Dec 2025, Ragnar Groot Koerkamp) asks why the paper's numbers sit between typical latency (~80 ns) and loop throughput, and is unanswered.",
+    "The 16-bit in-line counter limits each top-level block to 63,488 bits; this is fixed by #define, not configurable."
+  ],
+  "pick_this_over_siblings_when": "Only as a design reference: for a usable ~3.3%-overhead single-cache-miss rank, QuadRank/BiRank (MIT, Rust crate) implements the same layout and in its own benchmark streamed 2.63 ns vs 2.81 ns for its SPIDER-style block at 12 threads; for select, SPIDER's predictive scheme is the distinctive part, and splatlab rankselect (PTSelect) is the sibling to compare for in-word select.",
+  "verified_claims_summary": "The SEA 2024 paper (seen only as search snippets; Dagstuhl and arXiv are blocked here) reports 3.82-3.83% space overhead, the fastest rank for bit vectors of 8 billion bits or more (22% better than pasta-flat) and select up to 41% faster than existing succinct structures while nearly matching the best 12.5%-space select; compiler, flags beyond the Makefile's gcc -O9 -march=native, and CPU are not visible. An independent Rust reimplementation in QuadRank's repo (i7-10750H at 3.0 GHz, n=2^35 bits) measured the SPIDER-style block at 29.39 ns/query in a single-thread loop vs 17.75 ns for sux-rs Rank9 and 33.99 ns for RankSmall<1,11> at similar 3% space (derived from page data).",
+  "status_note": "Stale research artifact (10 commits, last 2024-05-28, 5 stars, no releases) with no license, so treat it as a reference to read, not code to vendor.",
+  "sources_read": [
+    "https://github.com/williams-cs/spider",
+    "https://github.com/williams-cs/spider/issues",
+    "https://github.com/williams-cs/spider/issues/1",
+    "https://raw.githubusercontent.com/williams-cs/spider/HEAD/README.md",
+    "https://raw.githubusercontent.com/williams-cs/spider/HEAD/Makefile",
+    "https://raw.githubusercontent.com/williams-cs/spider/HEAD/spider.c",
+    "https://raw.githubusercontent.com/williams-cs/spider/HEAD/speedtest.h",
+    "https://raw.githubusercontent.com/williams-cs/spider/HEAD/helper.h",
+    "https://raw.githubusercontent.com/williams-cs/spider/HEAD/ni-spider.c",
+    "https://raw.githubusercontent.com/williams-cs/spider/HEAD/spider-1L-select.c",
+    "https://raw.githubusercontent.com/williams-cs/spider/HEAD/ni-helper.h",
+    "https://raw.githubusercontent.com/williams-cs/spider/HEAD/ni-spider-2L-select.c",
+    "https://raw.githubusercontent.com/RagnarGrootKoerkamp/quadrank/HEAD/src/binary/blocks.rs",
+    "https://raw.githubusercontent.com/RagnarGrootKoerkamp/quadrank/HEAD/evals/rank-laptop.csv",
+    "WebSearch snippets of https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.SEA.2024.21 and https://arxiv.org/html/2405.05214 (pages blocked; drops.dagstuhl.de PDF fetch returned CONNECT 403)"
+  ],
+  "confidence": 0.6
+}

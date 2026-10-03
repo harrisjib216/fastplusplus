@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/ragnargrootkoerkamp/quadrank",
+  "one_liner": "Rust rank structures for bit vectors and 2-bit DNA, one cache miss per query; about 2x sux-rs Rank9 throughput with prefetching.",
+  "what_it_does": "Provides BiRank (rank over a packed bit vector) and QuadRank (rank1/rank4 over a packed 2-bit DNA string), plus QuadFm, a count-only FM-index in the quad-fm workspace member. You build from a little-endian &[u64] slice (or ASCII ACTG for QuadRank) and call unsafe rank_unchecked / rank1_unchecked / rank4_unchecked; there is no select and no compressed input. Each structure also exposes prefetch(pos), and the speedup assumes the caller issues prefetches ahead of a batch or stream of independent queries.",
+  "how_it_is_fast": "Each 512-bit cache line holds both the data bits and an inline rank counter (BinaryBlock16 stores 496 bits plus a 16-bit count to the middle of the line), so a query touches one cache line plus a small superblock array that usually stays in cache. The in-block count masks and popcounts at most 256 bits forward or backward from the stored midpoint, and QuadRank interleaves the transposed 2-bit data with per-symbol counters and uses SIMD (wide u32x4, SSSE3 _mm_sign_epi32) to compute all four counts at once. Most of the gain comes from software prefetching and batching independent queries, which turns memory latency into memory-bandwidth-bound throughput.",
+  "when_to_use": [
+    "High-throughput rank over very large bit vectors (GBs, far beyond L3) where queries are independent and can be prefetched in batches or streams.",
+    "FM-index / BWT backward search over DNA (2-bit alphabet) where you need rank for all 4 symbols at the same position; QuadFm counts reads against a human genome 2.0-2.5x faster than the best genedex configuration in the repo's fm.csv.",
+    "Space-constrained binary rank: BiRank16 has 3.3% overhead yet streamed 2.63 ns/query at 12 threads on n=2^35 bits vs 4.92 ns for sux-rs Rank9 (25% overhead).",
+    "Rust projects on x86-64 with AVX2 that already pack data into u64 words."
+  ],
+  "when_not_to_use": [
+    "Single dependent queries (pointer-chasing, latency-bound): at n=2^35, 1 thread, latency mode BiRank16 took 94.66 ns vs Rank9 89.42 ns, so no gain.",
+    "You need select, dynamic updates, or a general alphabet: only rank over sigma 2 and 4 is provided.",
+    "Non-x86 targets: the quad module imports std::arch::x86_64 unconditionally and NEON support is an open issue (#2); only AVX2 is supported.",
+    "C++ codebases that want a header: this is a Rust crate; from C++ you would need an FFI layer, or reimplement the cache-line layout yourself.",
+    "Small bit vectors that fit in cache: the prefetching advantage shrinks (the CSV shows qwt RSNarrow at 0.72 ns stream/12 threads for n=8192)."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "mem_dbg, packed-seq, prefetch-index, rayon, dyn_size_of, wide, perfcnt (benchmark baselines behind the optional ext feature)",
+    "min_toolchain": "Rust 1.93 (edition 2024); stable since v0.2.0",
+    "platforms": "x86-64 with AVX2 (build with -C target-cpu=native); no aarch64/NEON yet",
+    "thread_safety": "Structures are Send + Sync and immutable after construction, so concurrent queries are safe; construction itself is parallelized with rayon.",
+    "drop_in_for_baseline": "partial — same rank semantics as sux-rs Rank9 (count of ones before pos) but a different trait, unsafe unchecked calls only, and no select"
+  },
+  "gotchas": [
+    "Only unsafe rank_unchecked APIs exist; pos must be in 0..=n, and the BinaryBlock16 query deliberately reads past the data bytes into the counter field as padding.",
+    "The README's API listing is stale relative to v0.2.0 (RankerT was renamed to BiRanker/QuadRanker, and constructors are new_packed/new_ascii_dna); follow lib.rs docs and docs.rs.",
+    "Benchmark baselines (sux-rs, qwt, genedex, bitm, AWRY) are pulled from the author's own patched forks via [patch.crates-io], so measured competitors are not exactly the upstream releases.",
+    "Speed depends on the caller prefetching ahead; a plain loop without prefetching gave 4.96 ns vs 2.63 ns with streaming prefetch for BiRank16 at 12 threads."
+  ],
+  "pick_this_over_siblings_when": "Pick it over SPIDER when you are in Rust and want the same ~3.3% overhead with a single cache-line access and prefetch hooks (the repo's own Spider-style block streamed 2.81 vs 2.63 ns at 12 threads and 17.82 vs 10.12 ns at 1 thread); pick it over QWT (Rust) for 4-symbol DNA rank, where QuadRank16 streamed 2.68 ns vs 5.68 ns for qwt RSQVector256 at similar overhead. Stay with QWT or the C++ quad-wavelet-tree for larger alphabets, select or access queries.",
+  "verified_claims_summary": "The repo's committed bench (examples/bench.rs, cargo run -r with -C target-cpu=native, rustc >= 1.93) on an Intel i7-10750H fixed at 3.0 GHz measured BiRank at about 1.9x the throughput of sux-rs Rank9 and 2.2x RankSmall<1,11> for prefetched streams at 12 threads on a 2^35-bit vector, with no gain in single-query latency; QuadFm counts 150bp reads against a 3.1 Gbp genome 2.0x (12 threads) to 2.5x (1 thread) faster than the best genedex configuration. Against genedex's FlatText rank (2.67x space) QuadRank's lead narrows to about 1.2x (3.28 vs 2.68 ns, derived from page data).",
+  "status_note": "Active (last commit 2026-04-01, v0.2.0 on crates.io since 2026-02-04, 155 downloads), MIT per Cargo.toml with no LICENSE file; young, single-author research code backing a SEA 2026 paper.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/RagnarGrootKoerkamp/quadrank/HEAD/README.md",
+    "https://raw.githubusercontent.com/RagnarGrootKoerkamp/quadrank/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/RagnarGrootKoerkamp/quadrank/HEAD/.cargo/config.toml",
+    "https://raw.githubusercontent.com/RagnarGrootKoerkamp/quadrank/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/RagnarGrootKoerkamp/quadrank/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/RagnarGrootKoerkamp/quadrank/HEAD/src/binary.rs",
+    "https://raw.githubusercontent.com/RagnarGrootKoerkamp/quadrank/HEAD/src/binary/ranker.rs",
+    "https://raw.githubusercontent.com/RagnarGrootKoerkamp/quadrank/HEAD/src/binary/blocks.rs",
+    "https://raw.githubusercontent.com/RagnarGrootKoerkamp/quadrank/HEAD/src/quad.rs",
+    "https://raw.githubusercontent.com/RagnarGrootKoerkamp/quadrank/HEAD/src/quad/blocks.rs",
+    "https://raw.githubusercontent.com/RagnarGrootKoerkamp/quadrank/HEAD/evals/rank-laptop.csv",
+    "https://github.com/RagnarGrootKoerkamp/quadrank/issues?q=is%3Aissue",
+    "https://github.com/RagnarGrootKoerkamp/quadrank/commits/master",
+    "https://crates.io/api/v1/crates/quadrank"
+  ],
+  "confidence": 0.8
+}

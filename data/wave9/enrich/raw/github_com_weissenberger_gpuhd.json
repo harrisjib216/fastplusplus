@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/weissenberger/gpuhd",
+  "one_liner": "CUDA Huffman decoder (CUHD) that splits one unpartitioned bitstream across GPU threads by self-synchronization; reported 10x+ over zstd's CPU huff0.",
+  "what_it_does": "Decodes a single raw Huffman-coded byte stream on an NVIDIA GPU without needing block boundaries, gap arrays or other side information in the stream. The API is a C++ class set in namespace cuhd: wrap the compressed 32-bit units and a decoder table in CUHDGPUInputBuffer/CUHDGPUCodetable, allocate CUHDGPUOutputBuffer and CUHDGPUDecoderMemory, then call the static CUHDGPUDecoder::decode(). It ships a basic sequential length-limited Huffman encoder (llhuff) that produces the matching stream and table; it is not a drop-in for zstd/huff0 or deflate streams.",
+  "how_it_is_fast": "Uses the self-synchronization property of Huffman codes: each thread starts decoding a small subsequence (4 x 32-bit units in the demo) at an arbitrary bit offset, and decoding from a wrong offset usually falls back into codeword alignment within a few codewords. Phase 1 synchronizes subsequences within a thread block, phase 2 is relaunched until every block boundary has synchronized, phase 3 is a Thrust exclusive scan over per-subsequence symbol counts to get output offsets, and phase 4 re-decodes and writes symbols in parallel. Each symbol is decoded by a single direct lookup in a 2^11-entry table using a two-word sliding window.",
+  "when_to_use": [
+    "You control both encoder and decoder and need to decode large (tens of MB and up) byte-symbol Huffman streams that already live on, or are headed to, an NVIDIA GPU.",
+    "You cannot afford to add partition metadata (gap arrays, chunk offsets) to the stream format but still want GPU-wide parallel decode.",
+    "Research or baseline use: it is the reference self-synchronization GPU Huffman decoder (ICPP 2018) that later work such as ipdps22-opthuffdec builds on and compares against.",
+    "Throughput-bound pipelines where amortizing host-to-device transfers and kernel launches over a big buffer is acceptable."
+  ],
+  "when_not_to_use": [
+    "Decoding standard formats (deflate, zstd/huff0, JPEG): codeword length is capped at MAX_CODEWORD_LENGTH = 11 (compile-time) and the bit layout is CUHD's own 32-bit-unit format from its llhuff encoder.",
+    "Alphabets larger than 256 symbols: SYMBOL_TYPE is std::uint8_t.",
+    "Small inputs or latency-sensitive calls: the decode runs four kernel phases, a host round-trip per phase-2 iteration and a Thrust scan, plus PCIe copies.",
+    "Codes or data that synchronize slowly: phase 2 is relaunched in a host loop until all sequences synchronize, so the number of passes is data-dependent and unbounded in the code.",
+    "Production use that needs a maintained library, AMD/Intel GPUs, Windows or macOS: the README targets GNU/Linux and CUDA only, and there are no commits since 2019-02-02."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "CUDA runtime and driver (libcudart, libcuda), Thrust (bundled with the CUDA toolkit); the bundled encoder/ subdirectory for encoding",
+    "min_toolchain": "README: GCC 5.4.0+ and CUDA SDK 8+; the Makefile compiles host code with -std=c++17 -O3 -march=native -Wall -Werror and device code with nvcc --std=c++11 -O3, so a GCC with C++17 support is needed in practice",
+    "platforms": "GNU/Linux with an NVIDIA GPU of compute capability 3.0+; ARCH in the Makefile defaults to 70 (Volta) and must be edited per GPU",
+    "thread_safety": "not documented; decode() launches on the default stream and reuses a caller-supplied CUHDGPUDecoderMemory, so concurrent decodes need separate buffers and serialize on the default stream",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Build is configured by hand-editing CUDA_INCLUDE, CUDA_LIB and ARCH in the Makefile (defaults point at /usr/local/cuda-9.1 and sm_70); there is no CMake or install target.",
+    "The caller must know the exact uncompressed size up front to size CUHDOutputBuffer; the stream carries no length or table header.",
+    "Auxiliary memory scales with input: one uint4 sync point (16 bytes) plus a 32-bit output count per subsequence, which is 16 bytes of input in the demo configuration (SUBSEQ_SIZE 4, 128 threads), so aux memory is roughly the size of the compressed input.",
+    "The repository has no benchmark results; the demo only prints per-phase microsecond timings and checks the round trip on random binomially distributed bytes."
+  ],
+  "pick_this_over_siblings_when": "Pick it over Huffman_coding_Gap_arrays when the stream format cannot carry a gap array, but prefer the optimized self-sync and gap-array variants in ipdps22-opthuffdec, which report faster decoding with CUHD as their baseline. For CPU decoding of standard Huffman, PIVCO-Huffman or FSE's Huff0 are the practical choices; for GPU entropy decoding with a newer design, the same author's multians (tANS) is the sibling.",
+  "verified_claims_summary": "Per WebSearch summaries of the peer-reviewed ICPP 2018 paper (not opened; ACM blocked here), GPU decoding on TITAN V, TITAN Xp and GTX 1080 was over an order of magnitude faster than Zstandard's CPU Huffman decoder, and one citing-work snippet puts CUHD at about 10 GB/s; no CPU model, compiler flags or dataset are known, and the comparison pits a GPU against a CPU.",
+  "status_note": "Abandoned since 2019-02-02 (8 commits, 50 stars, no issues filed); LGPL-3.0, so static linking into closed-source code carries relinking obligations, and the code targets CUDA 8/9-era toolchains.",
+  "sources_read": [
+    "https://github.com/weissenberger/gpuhd",
+    "https://raw.githubusercontent.com/weissenberger/gpuhd/HEAD/README.md",
+    "https://raw.githubusercontent.com/weissenberger/gpuhd/HEAD/Makefile",
+    "https://github.com/weissenberger/gpuhd/tree/master/src",
+    "https://github.com/weissenberger/gpuhd/tree/master/include",
+    "https://raw.githubusercontent.com/weissenberger/gpuhd/HEAD/include/cuhd_constants.h",
+    "https://raw.githubusercontent.com/weissenberger/gpuhd/HEAD/include/cuhd_definitions.h",
+    "https://raw.githubusercontent.com/weissenberger/gpuhd/HEAD/include/cuhd_gpu_decoder.h",
+    "https://raw.githubusercontent.com/weissenberger/gpuhd/HEAD/include/cuhd_subsequence_sync_point.h",
+    "https://raw.githubusercontent.com/weissenberger/gpuhd/HEAD/src/cuhd_gpu_decoder.cu",
+    "https://raw.githubusercontent.com/weissenberger/gpuhd/HEAD/src/demo.cc",
+    "https://github.com/weissenberger/gpuhd/issues?q=is%3Aissue",
+    "https://github.com/codyjrivera/ipdps22-opthuffdec"
+  ],
+  "confidence": 0.7
+}
