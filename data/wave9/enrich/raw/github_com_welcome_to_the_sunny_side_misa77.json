@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/welcome-to-the-sunny-side/misa77",
+  "one_liner": "LZ77 codec built for decode speed: about 2x LZ4's decompression throughput on Silesia at a better ratio, with slow compression.",
+  "what_it_does": "A write-once, read-many byte codec: compress a whole buffer once (slowly), decompress it many times as fast as possible on one thread. The API is four one-shot free functions in misa77/misa77.h (compress_bound, compress, decompressed_size, decompress) over raw pointers, with misa77::config(level) for levels -1 to 4 and misa77::dconfig(true) to select the bounds-checked decoder. It is not a drop-in for the LZ4 API or frame format; there is no streaming interface and the CLI handles single files only.",
+  "how_it_is_fast": "The format is shaped around a nearly branch-free decode loop: in the light format (levels -1 to 3) match lengths are capped at 32 bytes and match distances must be at least 33 bytes, so every match is one unconditional 32-byte vector copy that can never overlap its source; up to 16 literals are copied unconditionally, and a mandatory raw-literal suffix of at least 32 bytes serves as padding for those over-reads and over-writes. Control tokens (3 bytes: token plus 16-bit offset) grow forward from the start while literals grow backward from the end, so the decoder walks two streams with no interleaving. The compressors then spend effort choosing parses that suit this decoder (lookahead matching up to optimal parsing, with a suffix-array (SA-IS) based optimal parser for the level-4 heavy format, which uses 20-bit offsets and a length lookup table). AVX2 or SSE2 is chosen at runtime on x86-64, NEON on AArch64.",
+  "when_to_use": [
+    "Assets, game data, model files, read-only database pages or package contents that are compressed once and decompressed many times on the hot path.",
+    "Single-threaded decode-bound pipelines where LZ4 is the current choice and a 1.5-2x faster decode with a smaller output (42.6% vs 47.6% of original on silesia.tar at level 1) is worth a slower build step.",
+    "x86-64 (AVX2 or SSE2) and AArch64/Apple Silicon servers or clients built with GCC or Clang and C++20.",
+    "Data that is compressible: per the README, level 1 decodes faster than lz4 on all 12 Silesia files."
+  ],
+  "when_not_to_use": [
+    "Compression-heavy or write-once-read-once workloads: level 1 compresses at 54-74 MB/s vs lz4's 371-550 MB/s in the same runs (about 7x slower), and levels 3-4 drop to 7-11 MB/s on the Intel run.",
+    "Long-term storage or interchange: the format is v0.x and the README says it may change unexpectedly; there is no frame format, checksum, or streaming API.",
+    "Untrusted input at level 4: the heavy format has no safe decoder yet (safe mode returns 0), and the default decoder is the unsafe one, where malformed input is undefined behavior.",
+    "When ratio matters more than decode speed: zstd -1 reaches 34.5% on silesia.tar vs misa77 level 1 at 42.6%; level 4 (35.5%) needs a 176 MB encoder state.",
+    "Big-endian or 32-bit targets, MSVC builds (the dispatcher uses __builtin_cpu_supports and GCC/Clang flags), or projects stuck below C++20."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none (CMake >= 3.20 for the build; the CLI needs POSIX)",
+    "min_toolchain": "C++20, GCC or Clang (MSVC not documented and the source uses GCC/Clang builtins), CMake 3.20+",
+    "platforms": "little-endian 64-bit only: x86-64 (runtime AVX2/SSE2 dispatch), AArch64 (NEON), portable scalar fallback for others",
+    "thread_safety": "not documented; the API is stateless free functions over caller-owned buffers",
+    "drop_in_for_baseline": "partial — same role as LZ4's block API (one-shot buffer compress/decompress) but different function signatures and an incompatible format; no LZ4 frame or streaming equivalent"
+  },
+  "gotchas": [
+    "decompress defaults to the unsafe decoder; pass misa77::dconfig(true) for corrupt or hostile input (README: about 3% slower on x86-64, 1-2% on M3; lzbench 2.4: 7694 vs 7813 MB/s at level 1).",
+    "Size the output with compress_bound using the same config as compress, because the bound differs between the light and heavy formats.",
+    "Decompression throughput is not monotonic in level: level 1 decodes fastest, level -1 decodes 23-28% slower, levels 2-4 13-21% slower.",
+    "Results are sensitive to codegen: the default CMake build uses -march=x86-64 for the CLI and core, and the README recommends -DMISA77_MARCH=native; do not enable LTO (the CMake file warns it breaks the ISA fallbacks)."
+  ],
+  "pick_this_over_siblings_when": "Pick misa77 over LZ4 when decode throughput is the hot path and compression is a one-off cost: in lzbench 2.4 level 1 decodes at 7813 vs 3832 MB/s with a smaller output. Its edge narrows at high ratios (level 4: 5177 MB/s at 35.51% vs lzsse8 -6: 5007 MB/s at 35.61%, though LZSSE is x86-only), and ZXC -1 decodes faster (8151 MB/s) at a much worse ratio (61.76%); prefer LZ4 or ZXC when compression speed or a stable format matters, and zstd when ratio matters more than decode speed.",
+  "verified_claims_summary": "In lzbench 2.4 run by the suite maintainer (gcc 15.2.0 release binary, one thread of an AMD EPYC 9555P, turbo off, silesia.tar), misa77 0.6.0 level 1 decompressed at 7813 MB/s with a 42.65% ratio vs lz4 1.10.0 at 3832 MB/s and 47.60% (2.0x, derived from page data), while compressing at 73.8 vs 550 MB/s. The author's own lzbench runs show the same shape on an i7-14650HX (5376 vs 2514 MB/s) and an Apple M3 (12638 vs 5195 MB/s).",
+  "status_note": "Active (last commit 2026-08-10, 172 stars, 1 open feature request) and MIT-licensed, small enough to vendor via add_subdirectory, but a young v0.6.0 codec whose format is not frozen and whose hardening is limited so far to local ASan/UBSan fuzzing.",
+  "sources_read": [
+    "https://github.com/welcome-to-the-sunny-side/misa77",
+    "https://raw.githubusercontent.com/welcome-to-the-sunny-side/misa77/HEAD/README.md",
+    "https://raw.githubusercontent.com/welcome-to-the-sunny-side/misa77/HEAD/docs/format.md",
+    "https://raw.githubusercontent.com/welcome-to-the-sunny-side/misa77/HEAD/include/misa77/misa77.h",
+    "https://raw.githubusercontent.com/welcome-to-the-sunny-side/misa77/HEAD/src/format.h",
+    "https://raw.githubusercontent.com/welcome-to-the-sunny-side/misa77/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/welcome-to-the-sunny-side/misa77/HEAD/src/decompressor_zoo/light_unsafe_dimpl.h",
+    "https://raw.githubusercontent.com/welcome-to-the-sunny-side/misa77/HEAD/src/decompress.cpp",
+    "https://raw.githubusercontent.com/welcome-to-the-sunny-side/misa77/HEAD/src/compress.cpp",
+    "https://github.com/welcome-to-the-sunny-side/misa77/issues?q=is%3Aissue",
+    "https://github.com/inikep/lzbench (README via https://raw.githubusercontent.com/inikep/lzbench/HEAD/README.md)",
+    "WebSearch: misa77 compression codec decompression faster than LZ4 (snippets of the Show HN thread and a dev.to write-up; pages not opened)"
+  ],
+  "confidence": 0.85
+}

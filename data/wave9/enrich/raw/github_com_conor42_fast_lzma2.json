@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/conor42/fast-lzma2",
+  "one_liner": "LZMA2 encoder with a radix match finder: 1.3-1.6x faster than xz or the LZMA SDK at matching ratio, multithreaded, standard LZMA2 output.",
+  "what_it_does": "A C library that produces LZMA2 streams (the codec inside .xz and .7z) faster than the reference encoder, plus a matching decoder. Its API is modeled on zstd's: one-shot FL2_compress/FL2_decompress (and Mt variants taking a thread count), reusable FL2_CCtx/FL2_DCtx contexts, a streaming FL2_CStream/FL2_DStream interface with timeouts and direct dictionary-buffer access, and FL2_CCtx_setParameter for fine-grained tuning. It is not API-compatible with liblzma; the companion FXZ Utils project wraps it behind a liblzma-derived interface and the .xz container, and it ships inside the 7-Zip-FL2, 7-Zip-zstd and p7zip forks.",
+  "how_it_is_fast": "The core is a block-based radix match finder: it builds a match table for a whole dictionary-sized block by bucketing positions on their first one or two bytes and recursively lengthening and splitting the buffered chains up to a search depth, which parallelizes across threads without splitting the input into independent chunks or duplicating hash chains (extra memory per thread is a few MB, per the README). Higher levels add a hybrid mode with a small HC3 hash chain for short matches, and the encoder uses 7-Zip's optimal-parse LZMA2 encoder with some of Igor Pavlov's 18.05 improvements plus zstd-derived threading code. On x86-64 the Makefile also builds Igor Pavlov's assembler-optimized LZMA decoder (LZMA2_DEC_OPT), and multi-threaded decoding is possible because the encoder inserts dictionary resets every 4 dictionary sizes by default.",
+  "when_to_use": [
+    "Building .xz/.7z-style archives, package payloads or backups at high LZMA2 levels where compression time dominates and decoders must stay standard LZMA2.",
+    "Multi-core compression of large single inputs: the radix match finder threads within one stream instead of splitting the file into independent chunks, so ratio holds up as thread count rises.",
+    "Replacing the LZMA SDK or liblzma encoder in a C or C++ tool that already handles raw LZMA2 or 7z containers (or through FXZ Utils when the .xz format and a liblzma-like API are needed).",
+    "Inputs of tens to hundreds of MB, where dictionaries of 16-128 MB and the higher levels (5-10) give the largest speed gain over the reference encoder."
+  ],
+  "when_not_to_use": [
+    "Decode-bound workloads: decompression is no faster than LZMA SDK (lzbench 2.4: 78.5-79.1 MB/s vs lzma 26.03 at about 78 MB/s) and slower than xz 5.8.4's decoder in the same run (122-124 MB/s).",
+    "Low levels: at -1 the single-thread gain over xz -1 is small (21.8 vs 19.2 MB/s at 27.85% vs 27.75%); zstd or bzip3 cover the fast-but-strong range better.",
+    "Memory-constrained decoders: matching 7-Zip's ratio needs about twice the dictionary (README), and the lzbench rows that beat xz use large dictionaries (level 8: 64 MB, level 10: 128 MB per the level table in fl2_compress.c), which sets the decompressor's memory.",
+    "Projects that need an actively released library: the last tag is v1.0.1 (2019); development was idle from Aug 2020 to Oct 2025, and two later encoder memory-safety fixes exist only on master.",
+    "Callers expecting a drop-in .xz file writer from this repository alone: the native output is a raw LZMA2 stream with a property byte, not an .xz container."
+  ],
+  "integration": {
+    "form": "static lib / shared lib (GNU make builds both; VS2015 solution for a DLL)",
+    "dependencies": "none beyond pthreads (bundled xxhash, optional via NO_XXHASH)",
+    "min_toolchain": "C compiler with GNU make (gcc -O2 -pthread by default) or Visual Studio 2015; no CMake file in current releases",
+    "platforms": "portable C, 32- and 64-bit (32-bit dictionaries capped at 128 MB, 64-bit at 1 GB); x86-64 gets an optional assembler decoder",
+    "thread_safety": "not documented as such; state lives in per-call or caller-owned FL2_CCtx/FL2_DCtx/stream objects (zstd-style), and the library manages its own worker threads (up to 200)",
+    "drop_in_for_baseline": "partial — output is standard LZMA2 that liblzma's raw LZMA2 decoder and 7-Zip can read (FL2_p_omitProperties and FL2_getCCtxDictProp exist for 7-Zip/XZ embedding), but the API differs from liblzma and .xz containers need FXZ Utils"
+  },
+  "gotchas": [
+    "Default levels use the same dictionary as 7-Zip and give output 1%-5% larger; FL2_p_highCompression selects a separate level table that compresses better on smaller dictionaries at a worse speed/ratio trade-off.",
+    "Multi-threaded decompression only works on streams that contain dictionary resets (FL2_p_resetInterval, default every 4 dictionary sizes); streams from xz or 7-Zip decode on one thread.",
+    "Out-of-bounds read in RMF_handleRepeat (issue #9, reported 2022, multi-threaded compression crash) was fixed only in January 2026 by PR #14, and an unsafe match-table access in LZMA2_ECtx_s was fixed in October 2025; neither is in a tagged release.",
+    "Build defaults differ by entry point: the root Makefile enables the x86-64 asm decoder, but embedders compiling the sources directly must define LZMA2_DEC_OPT and assemble lzma_dec_x86_64 themselves to get it."
+  ],
+  "pick_this_over_siblings_when": "Pick Fast LZMA2 over xz/liblzma when you must emit standard LZMA2 for existing decoders and want the encode faster (1.5x at matched ratio single-threaded, more with threads); pick bzip3 or Kanzi instead when the format is free to change, since lzbench shows bzip3 -5 at 11.9 MB/s and a better ratio than any fastlzma2 level.",
+  "verified_claims_summary": "lzbench 2.4 (gcc 15.2.0 release binary, one thread of an AMD EPYC 9555P with turbo off, silesia.tar) shows fastlzma2 1.0.1 -8 compressing at 4.52 MB/s to 23.18% vs xz 5.8.4 -7 at 3.01 MB/s to 23.15% (1.5x, derived from page data), and -10 at 3.38 MB/s to 22.96% vs lzma 26.03 -9 at 2.55 MB/s to 22.97% (1.3x, derived from page data); decompression in the same run is 79 MB/s vs xz's 122-124 MB/s. The README's 20%-100% gain over 7-Zip 19.00's LZMA2 encoder is a first-party two-thread chart with no numbers.",
+  "status_note": "Dual BSD-3-Clause/GPL-2.0 and production-proven in several 7-Zip forks, but effectively in maintenance mode: v1.0.1 is from 2019, master gained two memory-safety fixes (2025-10, 2026-01), a CI workflow (2026-08) and a doc fix (2026-09-12), and issues asking whether the project is maintained (#13) or documented (#7) remain open.",
+  "sources_read": [
+    "https://github.com/conor42/fast-lzma2",
+    "https://raw.githubusercontent.com/conor42/fast-lzma2/HEAD/README.md",
+    "https://raw.githubusercontent.com/conor42/fast-lzma2/HEAD/fast-lzma2.h",
+    "https://raw.githubusercontent.com/conor42/fast-lzma2/HEAD/Makefile",
+    "https://raw.githubusercontent.com/conor42/fast-lzma2/HEAD/radix_mf.c",
+    "https://raw.githubusercontent.com/conor42/fast-lzma2/HEAD/fl2_compress.c",
+    "https://github.com/conor42/fast-lzma2/commits/master",
+    "https://github.com/conor42/fast-lzma2/issues?q=is%3Aissue",
+    "https://github.com/conor42/fast-lzma2/issues/9",
+    "https://github.com/conor42/fast-lzma2/issues/10",
+    "https://github.com/conor42/fast-lzma2/pull/14",
+    "https://raw.githubusercontent.com/inikep/lzbench/HEAD/README.md",
+    "https://raw.githubusercontent.com/inikep/lzbench/HEAD/Makefile"
+  ],
+  "confidence": 0.85
+}

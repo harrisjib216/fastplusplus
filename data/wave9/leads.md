@@ -10,3 +10,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - jermp/mutable_rank_select (D): arXiv 2009.12809 blocked; kurpicz/pwm (C): arXiv 1702.07578 blocked; aaronhong1024/wavelet_forest (D): arXiv 2308.07809 blocked. Retier candidates. (w9 batch 20)
 - mikkohei13/faster-minuter (D): Algorithmica wt_fbb paper (Springer, blocked); retier when reachable. (w9 batch 22)
 - IlyaGrebnov/libbsc (BWT; lzbench bsc 3.3.12 -m0 19.4/25.0 MB/s at 23.26%, beats xz compress): check if listed; seed candidate. AWS blog on zlib-cloudflare vs other forks (blocked, snippet). (from bzip3/cloudflare-zlib enricher)
+- paddor/m77rip (credited in misa77's README): check as a sibling. Show HN item 48922838 on misa77 (blocked). (from misa77 enricher)
