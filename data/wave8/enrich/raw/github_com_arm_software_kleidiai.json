@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/arm-software/kleidiai",
+  "one_liner": "Arm's C micro-kernels for quantized/float matmul on NEON, SVE, SME; independent llama.cpp runs show wins only at 1-2 SME threads.",
+  "what_it_does": "KleidiAI is Arm's library of stateless micro-kernels (matmul, indirect matmul for convolution, depthwise convolution, and the LHS/RHS packing and quantization kernels they need) for AArch64 CPUs, aimed at framework authors rather than application code. Each kernel variant is a .c/.h pair with C linkage that depends only on kai_common.h; it exposes get_m_step/get_n_step/get_mr/get_nr/get_kr/get_sr, packed-offset helpers and run_matmul(m, n, k, ..., lhs_packed, rhs_packed, dst, strides, clamp_min, clamp_max), so the caller decides which output tile to compute and owns threading and memory. It is not an operator library: frameworks wrap it (llama.cpp's GGML_CPU_KLEIDIAI backend, an ONNX Runtime MLAS integration guide in docs/, and per Arm's marketing XNNPACK, MediaPipe and MNN). In current llama.cpp the backend takes MUL_MAT and GET_ROWS for Q4_0, Q8_0 and F32 weights and declines K-quants, IQ types and MUL_MAT_ID.",
+  "how_it_is_fast": "Hand-written kernels per Arm ISA feature: NEON SDOT (FEAT_DotProd), SMMLA (FEAT_I8MM), SVE/SVE2, and SME/SME2 outer-product (MOPA) accumulation into the ZA tile array. Operands are first packed into register-blocked panels (mr x kr for the LHS, nr x kr for the RHS, with scales and bias interleaved) so the inner loop streams contiguous memory. For the int4 paths, f32 activations are quantized to int8 per row or per 32-element block at run time (qai8dxp, qsi8d32p) and multiplied against int4 weights packed offline (qsi4cxp, qsi4c32p), with the output clamp fused. Separate GEMV (1xN) and GEMM (MxN) variants and several tile sizes let the framework pick per shape.",
+  "when_to_use": [
+    "You maintain an inference runtime for AArch64 (Android, Linux on Arm, Apple Silicon) that already has its own thread pool and allocator, and need int4/int8 x f32, bf16, fp16 or f32 matmul kernels you can vendor as plain .c/.h files with no dependencies and no dynamic allocation.",
+    "Single-thread or 2-thread LLM decode/prefill on SME-capable CPUs: in PR #11390 an independent run on an Apple M4 Pro measured the SME kernels 1.28x (pp128) and 1.30x (tg64) faster than llama.cpp's own Arm kernels at 1 thread.",
+    "F32 models in llama.cpp on SME2 hardware: Arm's own PR #24414 table shows 4.3x-23.6x over ggml's native F32 path on an M4 Pro (1B model, 1-8 threads), unreproduced but large enough to be worth a local test.",
+    "Building llama.cpp for a phone-class Arm SoC with few big cores and Q4_0/Q8_0 models: try GGML_CPU_KLEIDIAI=ON and compare with llama-bench on your own device."
+  ],
+  "when_not_to_use": [
+    "Any non-Arm target: the README FAQ says it does not compile for x86, including the packing and quantization kernels.",
+    "Multi-threaded Q4_0 inference on many-core Arm chips: in PR #11390, M3 Max at 12 threads ran pp128 192.93 vs 229.89 t/s for llama.cpp master, and M4 Pro SME at 10 threads ran pp128 435 vs 1174 t/s; the I8MM kernels tied or trailed master on M4 Pro and Galaxy S25.",
+    "You want complete operators with threading, memory management and fusion: Arm's own FAQ points those frameworks to the Compute Library (ACL) instead.",
+    "llama.cpp with K-quant or IQ GGUF files, or MoE models: the backend only takes Q4_0, Q8_0 and F32 weights for MUL_MAT/GET_ROWS and has no MUL_MAT_ID path, so those ops fall back to ggml's kernels.",
+    "You need a stable API: the README warns that API changes, including function renames, may occur without notice, with two releases a month."
+  ],
+  "integration": {
+    "form": "source-drop (per-kernel .c/.h pairs plus kai_common.h) or static lib via the provided CMake build",
+    "dependencies": "none for the kernels; CMake for the build system (CMakeLists requires 3.16, README says 3.18); GoogleTest and Google Benchmark only for tests and benchmarks",
+    "min_toolchain": "C99 kernels (C++17 for tests and examples); GCC 11+ or Clang 11+ (CMake warns below that); SME/SME2 kernels need SME-ABI compiler support or KLEIDIAI_INTERNAL_EXTRA_ARCH=+sme; MSVC builds a subset of NEON dotprod/i8mm kernels since v1.29.0",
+    "platforms": "AArch64 only (Linux, Android, macOS; Windows on Arm via MSVC for some kernels); each variant needs the feature in its name (dotprod, i8mm, bf16, fp16, SVE, SVE2, SME, SME2) and runtime dispatch is the caller's job",
+    "thread_safety": "Kernels are stateless with no internal threading; the API is built for callers to split the output among their own threads (examples/matmul_clamp_f32_qsi8d32p_qsi4c32p shows this).",
+    "drop_in_for_baseline": "partial — inside llama.cpp it is a build flag (GGML_CPU_KLEIDIAI=ON) that replaces ggml's Arm kernels for Q4_0/Q8_0/F32 matmul; as a library it is a lower-level kernel API, not a replacement for XNNPACK, oneDNN or Eigen operators"
+  },
+  "gotchas": [
+    "SME matrix units are shared per CPU cluster, so SME throughput stops scaling past the unit count: Arm's PR #24414 table on an M4 Pro (2 SME units) peaks at 2 threads (892 t/s) and drops to 452-609 t/s at 4-8 threads. Current llama.cpp caps SME threads at the detected unit count; GGML_KLEIDIAI_SME=N overrides it and 0 disables SME kernels.",
+    "llama.cpp issue #26630 (2026-08, closed as not planned): with gcc 13.3 on Cortex-X925, the -mcpu=native feature probes fail, so GGML_CPU_KLEIDIAI=ON compiles zero kai_run_matmul kernels while the build banner still says KLEIDIAI = 1. The workaround is GGML_NATIVE=OFF with an explicit GGML_CPU_ARM_ARCH; the reported 1.42x-4.57x loss covers all Arm feature kernels, not KleidiAI alone.",
+    "Packed RHS buffers are tied to one variant's mr/nr/kr/sr layout, and the LHS is quantized and packed on every call, so end-to-end gains depend on how the framework handles packing; in PR #11390 Arm noted that early reviewer runs lacked commit f4eb1b3, which made LHS packing multithreaded.",
+    "Precondition checks (KAI_ASSUME/KAI_ASSERT) call abort(), or __builtin_trap with KLEIDIAI_ERROR_TRAP; the _ALWAYS variants stay active under NDEBUG. SME kernels used inside a call chain that already uses ZA need a compiler with SME-ABI support."
+  ],
+  "pick_this_over_siblings_when": "Pick KleidiAI when you are building or maintaining your own Arm inference runtime and want Arm-maintained, vendorable kernels with SME/SME2 coverage and many data types. If you just want faster llama.cpp-style CPU inference, T-MAC (catalogued at 4-5x over llama.cpp's low-bit kernels on a Surface Laptop 7) and ik_llama.cpp report larger gains over llama.cpp than KleidiAI's independent results, though ik_llama.cpp's catalogued numbers are from x86.",
+  "verified_claims_summary": "In llama.cpp PR #11390 (Arm-authored, merged 2025-02-20), reviewers outside Arm benchmarked llama 1B/7B Q4_0 with KleidiAI against llama.cpp's own AArch64 i8mm/dotprod repacked kernels, built with Apple Clang or LLVM Clang 19.1.7 and GGML_CPU_KLEIDIAI=ON. On an Apple M4 Pro, SME was about 1.3x faster at 1 thread but 2.7x slower at 10 threads, I8MM tied or trailed, and slaren's 12-thread M3 Max run was slower (pp128 192.93 vs 229.89 t/s); only Arm's Pixel 8 run showed 1.03-1.19x at 1-4 threads, and Arm's later SME2 F32 claim (PR #24414) has not been reproduced.",
+  "status_note": "Actively developed by Arm (v1.32.0, two releases a month; the GitHub repo is a read-only mirror of gitlab.arm.com/kleidi/kleidiai). It is Apache-2.0, with some files under BSD-3-Clause, and copyable as plain .c/.h files, but the API can change without notice.",
+  "sources_read": [
+    "https://github.com/ARM-software/kleidiai",
+    "https://raw.githubusercontent.com/ARM-software/kleidiai/HEAD/README.md",
+    "https://raw.githubusercontent.com/ARM-software/kleidiai/HEAD/kai/ukernels/matmul/README.md",
+    "https://raw.githubusercontent.com/ARM-software/kleidiai/HEAD/kai/ukernels/matmul/pack/README.md",
+    "https://raw.githubusercontent.com/ARM-software/kleidiai/HEAD/kai/ukernels/matmul/matmul_clamp_f32_qsi8d32p_qsi4c32p/kai_matmul_clamp_f32_qsi8d32p_qsi4c32p_interface.h",
+    "https://raw.githubusercontent.com/ARM-software/kleidiai/HEAD/kai/kai_common.h",
+    "https://raw.githubusercontent.com/ARM-software/kleidiai/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/ARM-software/kleidiai/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/ARM-software/kleidiai/HEAD/docs/README.md",
+    "https://raw.githubusercontent.com/ARM-software/kleidiai/HEAD/docs/microkernel_tables.md",
+    "https://github.com/ggml-org/llama.cpp/pull/11390",
+    "https://github.com/ggml-org/llama.cpp/pull/24414",
+    "https://github.com/ggml-org/llama.cpp/issues/26630",
+    "https://raw.githubusercontent.com/ggml-org/llama.cpp/HEAD/ggml/src/ggml-cpu/kleidiai/kleidiai.cpp",
+    "https://gitlab.arm.com/api/v4/projects/kleidi%2Fkleidiai/issues (egress-blocked, not read)"
+  ],
+  "confidence": 0.75
+}
