@@ -1,0 +1,66 @@
+{
+  "id": "https://github.com/malb/m4ri",
+  "one_liner": "C library for dense matrix arithmetic over GF(2); 2008 paper shows 1.4-1.5x faster multiplication than Magma on Core 2.",
+  "what_it_does": "M4RI does dense linear algebra over the field with two elements: bit-packed matrices (mzd_t, 64 entries per uint64_t word), multiplication, addition, transpose, row echelon form, rank, inversion, PLE/PLUQ factorisation, triangular solving (TRSM) and system solving. It has its own C API (mzd_init, mzd_mul(C, A, B, cutoff), mzd_echelonize, mzd_ple, mzd_inv_m4ri). Nothing replaces BLAS/LAPACK directly, because those work on floating-point numbers and M4RI works on bits. SageMath uses it for its matrix_mod2_dense type.",
+  "how_it_is_fast": "Bit-packing turns 64 GF(2) additions or multiplications into one XOR or AND, and multiplication uses the Method of the Four Russians (Kronrod's method, M4RM): Gray-code tables of all 2^k combinations of k rows of B (up to six tables at once) replace inner products with table lookups and row XORs. Above a cache-derived cutoff it recurses with Strassen-Winograd (O(n^2.807)); elimination uses the M4RI algorithm (O(n^3/log n)) and a block-iterative PLE decomposition that reuses the same tables. Block sizes and cutoffs come from L1/L2/L3 cache sizes detected at configure time, because the authors found memory traffic and data locality, not arithmetic, to be the bottleneck.",
+  "when_to_use": [
+    "Dense GF(2) matrices from hundreds to tens of thousands of rows and columns: cryptanalysis (linear systems from algebraic attacks, linearization), coding theory, Groebner-basis linear algebra over F2 (PolyBoRi-style)",
+    "Rank, row echelon form, kernel or inverse of large bit matrices, where the O(n^3/log n) M4RI and PLE routines beat naive XOR elimination",
+    "Products of large square or rectangular bit matrices, where M4RM plus Strassen-Winograd beats a hand-written word-parallel triple loop",
+    "Linux x86-64 builds, the only platform the README promises to support; SSE2 code paths are used there",
+    "Code already in the SageMath ecosystem, or code that needs the companion M4RIE library for GF(2^e), 2 <= e <= 10"
+  ],
+  "when_not_to_use": [
+    "Sparse GF(2) systems (LDPC, sieve matrices from factoring): dense bit-packed storage and O(n^2.807) work waste time; use a Wiedemann/Lanczos or structured-Gaussian-elimination code instead",
+    "Many tiny products (64x64 times 64x1, 64x64 times 64x64, Nx64 times 64x64): open issue #10 calls M4RI's performance there 'embarrassingly bad'",
+    "Fields other than GF(2), or floating-point BLAS work: it covers only F2 (GF(2^e) needs the separate M4RIE library)",
+    "Proprietary or permissively licensed products: GPL-2.0-or-later is copyleft",
+    "Windows (MSYS2/MinGW) or macOS deployments that need guaranteed support: the README calls these best effort that 'may disappear any time'; there are no AVX2/AVX-512/GFNI or NEON kernels (GFNI is only a proposal in open issue #36)"
+  ],
+  "integration": {
+    "form": "static lib or shared lib (autotools: autoreconf, ./configure, make; pkg-config file m4ri.pc)",
+    "dependencies": "none required; libpng optional (PNG matrix I/O, on by default if found), OpenMP optional (--enable-openmp), PAPI optional for benchmarks; the bench/ suite vendors libcpucycles and needs python3 to build",
+    "min_toolchain": "C99 compiler (configure aborts without C99); headers wrap declarations in extern \"C\" for C++ (not under MSVC)",
+    "platforms": "Linux supported (x86-64 with SSE2 paths, portable 64-bit-word code elsewhere); macOS and Windows MSYS2/MinGW64 best effort; CI builds on ubuntu-latest (with AddressSanitizer), macos-latest and windows-latest",
+    "thread_safety": "Not thread-safe by default: a global memory-block cache (MMC) and an mzd_t struct cache are on unless configured with --enable-thread-safe (OpenMP builds turn off the mzd cache only)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Cache sizes and the Strassen cutoff (min(sqrt(4*L3), 4096)) and PLE cutoff are compiled in at configure time; a distro or cross-built binary is tuned for the build machine. Issue #4 reported L3 misdetection causing random failures with OpenMP on some systems; a fix ('Correct L3 Detection', #37) landed in December 2025, and --with-cachesize=L1:L2:L3 overrides detection.",
+    "If the library was built with SSE2, client code must also be compiled with SSE2 enabled, or m4ri.h stops with #error.",
+    "mzd_transpose does not work in place for square matrices (documented only in open issue #5); M4RI's solve_left corresponds to Sage's solve_right (issue #6); the PLUQ specification is flagged as unclear (issue #8, label bug).",
+    "Allocation failure calls m4ri_die(), which prints and abort()s; there are no error codes. Windowed sub-matrices (mzd_init_window) share storage with their parent and need not be word-aligned."
+  ],
+  "pick_this_over_siblings_when": "None of the catalogued blas-lapack siblings (OpenBLAS-class GEMMs, BLASFEO, Eigen, faer, fast-matmul) handle GF(2): emulating F2 with 0/1 floats and a mod-2 step costs 32-64x the memory and loses M4RM's table tricks. Pick M4RI whenever the field is GF(2) and the matrices are dense; it is the reference implementation in this niche.",
+  "verified_claims_summary": "Snippet only: search-engine summaries of the Albrecht-Bard-Hart paper (arXiv 0811.1714, ACM TOMS Algorithm 898) report M4RI-20080821 multiplying square GF(2) matrices 1.36-1.50x faster than Magma 2.14 on a 2.33 GHz Core 2 Duo (for example 1.504 s vs 2.210 s at n=10,000), built with GCC 4.3.1 -O2 -msse2, and at parity with Magma (within about 2%) on a 2.6 GHz Opteron. Those are 2008 numbers against a proprietary baseline that cannot be reproduced; the repo's bench/ programs time M4RI only, and the PLE paper (arXiv 1111.6549) claims gains over the previous fastest implementation without numbers on any page opened here.",
+  "status_note": "Actively maintained (tags 20251206, 20251207 and 20260122, last commit 2026-08-25, CI on Linux/macOS/Windows) and packaged by Debian, Fedora, Homebrew and SageMath; GPL-2.0-or-later, so usable as a linked library but copyleft.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/malb/m4ri/HEAD/README.md",
+    "https://raw.githubusercontent.com/malb/m4ri/HEAD/configure.ac",
+    "https://raw.githubusercontent.com/malb/m4ri/HEAD/m4ri/m4ri.h",
+    "https://raw.githubusercontent.com/malb/m4ri/HEAD/m4ri/mzd.h",
+    "https://raw.githubusercontent.com/malb/m4ri/HEAD/m4ri/misc.h",
+    "https://raw.githubusercontent.com/malb/m4ri/HEAD/m4ri/brilliantrussian.h",
+    "https://raw.githubusercontent.com/malb/m4ri/HEAD/m4ri/strassen.h",
+    "https://raw.githubusercontent.com/malb/m4ri/HEAD/m4ri/ple.h",
+    "https://raw.githubusercontent.com/malb/m4ri/HEAD/m4ri/mmc.h",
+    "https://raw.githubusercontent.com/malb/m4ri/HEAD/m4ri/m4ri_config.h.in",
+    "https://raw.githubusercontent.com/malb/m4ri/HEAD/.github/workflows/distcheck.yml",
+    "https://raw.githubusercontent.com/malb/m4ri/HEAD/bench/bench_multiplication.c",
+    "https://github.com/malb/m4ri",
+    "https://github.com/malb/m4ri/issues",
+    "https://github.com/malb/m4ri/issues/4",
+    "https://github.com/malb/m4ri/issues/10",
+    "https://github.com/malb/m4ri/issues/36",
+    "https://github.com/malb/m4ri/commits/master",
+    "https://github.com/malb/m4ri/tags",
+    "https://github.com/malb/m4ri/tree/master/.github/workflows",
+    "https://github.com/malb/m4ri/compare/release-20200125...release-20240729",
+    "https://github.com/malb/blog",
+    "https://raw.githubusercontent.com/malb/blog/HEAD/efficient-multiplication-of-dense-matrices-over-gf2.org",
+    "https://raw.githubusercontent.com/malb/blog/HEAD/efficient-dense-gaussian-elimination-over-the-field-with-two-elements.org",
+    "https://raw.githubusercontent.com/malb/blog/HEAD/block-iterative-ple-decomposition.org",
+    "https://pypi.org/pypi/gf2/json"
+  ],
+  "confidence": 0.6
+}

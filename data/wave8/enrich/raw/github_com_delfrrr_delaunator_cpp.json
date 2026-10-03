@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/delfrrr/delaunator-cpp",
+  "one_liner": "Single-header C++14 port of mapbox/delaunator for 2D Delaunay; about 10% faster than JS at 1M points, roughly matches Triangle.",
+  "what_it_does": "Computes the unconstrained Delaunay triangulation of a 2D point set. Input is a flat std::vector<double> (x0, y0, x1, y1, ...) passed to the delaunator::Delaunator constructor, and the result is public index arrays: triangles (three point indices per triangle), halfedges (index of the opposite half-edge, or INVALID_INDEX on the hull) and hull_prev/hull_next/hull_tri/hull_start for the convex hull. It is a port of the JavaScript mapbox/delaunator with the same array layout, not a drop-in for Triangle or CGAL APIs.",
+  "how_it_is_fast": "It uses the sweep-hull incremental scheme (as in S-hull). It seeds a triangle near the bounding-box centre, sorts all points by distance from that triangle's circumcentre and inserts them in order, so each new point lies outside the current convex hull. A visible hull edge is found through a hash of hull vertices keyed by pseudo-angle (about sqrt(n) buckets). The new fan of triangles is fixed up by Lawson edge flips (legalize), using an explicit stack instead of recursion (PR #12). Everything lives in flat, pre-reserved index vectors (2n-5 triangles), so there is no per-triangle allocation or pointer-based mesh.",
+  "when_to_use": [
+    "Unconstrained 2D Delaunay of well-spread double-precision points (GIS nodes, random samples, projected point clouds) up to a few million points, single-threaded",
+    "You want one small MIT-licensed header instead of pulling in CGAL or Triangle, and can patch it locally",
+    "You need the triangles/halfedges array layout of mapbox/delaunator to share code or data with the JS original",
+    "Inputs that should stay as doubles rather than being quantised to int32 as Delaunay32 requires"
+  ],
+  "when_not_to_use": [
+    "Degenerate or near-degenerate input (many collinear or cocircular points, snapped grids, huge coordinate ranges): predicates are plain double arithmetic, and open issues report an infinite loop in legalize() (#16, fix PR #32 unmerged), an orient robustness bug (#43) and division by zero when choosing the third seed point (#46)",
+    "Constrained edges, polygons with holes or quality meshing: not supported (issue #35); use detria, CDT or Triangle",
+    "Raw speed on large sets: in the Delaunay32 table (1M points, Apple M1) it takes 542.0 ms against 131.6 ms for single-thread Delaunay32 and 314.1 ms for single-thread Fade2D, and it has no parallel mode",
+    "Projects that need an upstream that takes fixes: no commits since 2018-10-07, 24 open issues, fix PRs #28, #30 and #32 unmerged",
+    "3D or higher-dimensional triangulation: 2D only"
+  ],
+  "integration": {
+    "form": "source-drop (single header include/delaunator.hpp; not safe to include from more than one translation unit as shipped)",
+    "dependencies": "none beyond the C++ standard library; the repo's tests and benchmarks pull Catch 2.4.0, RapidJSON 1.1.0 and Google Benchmark 1.2.0 through mason",
+    "min_toolchain": "C++14 (CMakeLists sets CMAKE_CXX_STANDARD 14); some toolchains (MSVC, newer GCC) need #include <tuple> added because std::tie is used without it (issues #26, #39, PR #37)",
+    "platforms": "any (portable scalar C++ on doubles, no SIMD)",
+    "thread_safety": "not documented; there is no global or static mutable state, so separate Delaunator objects can be built on separate threads, but each triangulation is single-threaded",
+    "drop_in_for_baseline": "partial: same algorithm and output arrays as mapbox/delaunator (JS), but a C++ API; not a drop-in for Triangle or CGAL"
+  },
+  "gotchas": [
+    "The out-of-class member definitions (constructor, legalize, add_triangle, link, get_hull_area) are not marked inline, so including delaunator.hpp from two .cpp files fails to link with duplicate symbols (issue #33, LNK2005; PR #30 'inline Delaunator methods' unmerged). Include it from one translation unit or add inline yourself.",
+    "The object stores `std::vector<double> const& coords`, a reference to your input. Passing a temporary leaves a dangling reference, and the input vector must outlive the Delaunator.",
+    "max_x/max_y start at std::numeric_limits<double>::min() (the smallest positive double, not the lowest value), so the bounding box is wrong when all x or all y coordinates are negative. This shifts the seed-point choice (issue #27; PR #28 'Use lowest instead of min' unmerged).",
+    "Collinear input throws std::runtime_error(\"not triangulation\"), but with fewer than two distinct points the seed indices stay INVALID_INDEX and coords is read out of bounds before that check. Validate the input size and distinctness first. Near-duplicate points (within DBL_EPSILON) are silently skipped."
+  ],
+  "pick_this_over_siblings_when": "Delaunay32 (already catalogued) is 4.1x faster single-threaded on 1M points, uses exact integer predicates and supports constraints, so prefer it unless you need double input without int32 quantisation or a C++14-only toolchain. Pick delaunator-cpp over detria or CDT only for unconstrained point sets, where it is simpler and, per the Delaunay32 table, 1.8x faster than CDT 1.4.5.",
+  "verified_claims_summary": "First-party only: a 2018-09-29 Google Benchmark run in the README (unnamed '4 X 2300 MHz' CPU, compiler unstated, CMake release flags -O3) triangulates 1M uniform random points in 994 ms. PR #8 settles on about 10% faster than the JS original at 1M points, with no hardware or Node version stated, after the author's '6 times faster' claim was challenged as JIT warmup. The only C++ comparison is the competitor-run Delaunay32 README table (1M unique integer points, Apple M1, one thread, flags not stated): 542.0 ms vs Triangle 1.6 at 584.0 ms (about 1.08x) and CDT 1.4.5 at 988.7 ms, but behind Delaunay32 (131.6 ms) and Fade2D 2.17.3 (314.1 ms).",
+  "status_note": "Abandoned since 2018-10-07 (88 commits, 24 open issues including an infinite loop), but MIT-licensed and about 600 lines in one header, so it is easy to vendor and patch. The abellgithub/delaunator-cpp fork (last commit 2025-04-18) carries the lowest() fix, header-only and compiled build modes, and collinear and degenerate-case handling.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/delfrrr/delaunator-cpp/HEAD/README.md",
+    "https://raw.githubusercontent.com/delfrrr/delaunator-cpp/HEAD/include/delaunator.hpp",
+    "https://raw.githubusercontent.com/delfrrr/delaunator-cpp/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/delfrrr/delaunator-cpp/HEAD/bench/run.cpp",
+    "https://github.com/delfrrr/delaunator-cpp",
+    "https://github.com/delfrrr/delaunator-cpp/issues?q=is%3Aissue",
+    "https://github.com/delfrrr/delaunator-cpp/pulls?q=is%3Apr",
+    "https://github.com/delfrrr/delaunator-cpp/issues/16",
+    "https://github.com/delfrrr/delaunator-cpp/issues/31",
+    "https://github.com/delfrrr/delaunator-cpp/issues/33",
+    "https://github.com/delfrrr/delaunator-cpp/pull/8",
+    "https://raw.githubusercontent.com/morishuz/delaunay32/HEAD/README.md",
+    "https://github.com/abellgithub/delaunator-cpp",
+    "https://github.com/abellgithub/delaunator-cpp/commits",
+    "https://raw.githubusercontent.com/abellgithub/delaunator-cpp/HEAD/README.md",
+    "https://raw.githubusercontent.com/abellgithub/delaunator-cpp/HEAD/include/delaunator.hpp",
+    "https://raw.githubusercontent.com/abellgithub/delaunator-cpp/HEAD/include/delaunator.cpp",
+    "https://raw.githubusercontent.com/abellgithub/delaunator-cpp/HEAD/include/delaunator-header-only.hpp"
+  ],
+  "confidence": 0.75
+}
