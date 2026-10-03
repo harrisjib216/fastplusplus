@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/tspeterkim/flash-attention-minimal",
+  "one_liner": "Educational 100-line FP32 CUDA FlashAttention forward kernel; its 13x win over eager PyTorch attention is a cold-start profiling artifact.",
+  "what_it_does": "A teaching re-implementation of the FlashAttention forward pass, with variable names taken from the paper, packaged as a PyTorch C++/CUDA extension that bench.py JIT-compiles with torch.utils.cpp_extension.load. You call minimal_attn.forward(q, k, v) on float32 CUDA tensors shaped [batch, heads, seq_len, head_dim] and get O back. There is no causal or padding mask, no dropout, no backward pass and no FP16/BF16, so it is not a replacement for F.scaled_dot_product_attention or flash-attn. A separate tensorcore branch adds a WMMA (TF32) kernel behind forward(q, k, v, use_tensor_cores).",
+  "how_it_is_fast": "It applies FlashAttention-1 tiling with online softmax: K/V tiles of 32 rows and a Q tile go into shared memory, a running row max m and row sum l are kept, and partial outputs are rescaled, so the N x N score matrix is never written to global memory. The outer loop runs over K/V tiles and the inner loop over Q tiles (the FA1 order), so O, l and m are re-read and re-written in global memory for every K/V tile. There is one thread block of 32 threads per (batch, head), and each thread computes a whole query row's dot products serially on FP32 CUDA cores. That keeps the matmuls slow and occupancy low, so in practice it shows the I/O-aware idea rather than delivering speed. The tensorcore branch uses one warp per block with 16x16x8 TF32 WMMA fragments for QK^T and PV.",
+  "when_to_use": [
+    "Learning how FlashAttention's tiling and online-softmax rescaling work, by reading about 100 lines of CUDA next to the paper's Algorithm 1.",
+    "A minimal starting point for your own attention-kernel experiments (many forks and open PRs add a backward pass, FA2 loop order, GQA or causal masking).",
+    "Classroom or interview exercises at small shapes (for example seq_len 64, head_dim 64, FP32) where correctness against a manual reference matters more than speed.",
+    "Checking a tensor-core rewrite step by step: the tensorcore branch keeps the naive kernel and a WMMA TF32 kernel side by side."
+  ],
+  "when_not_to_use": [
+    "Any case where speed matters: measured with warm-up or CUDA events, eager PyTorch attention is faster (issues #11 and #13), and the README concedes it gets slower than the manual implementation for longer sequences and larger block sizes.",
+    "As a substitute for PyTorch SDPA, flash-attn or cuDNN attention: it was never benchmarked against them and runs FP32 one-thread-per-row matmuls without tensor cores (main branch).",
+    "Training, causal or masked attention, or FP16/BF16 models: forward only, no mask, FP32 inputs only (a BF16 request, issue #7, is open).",
+    "Sequence lengths that are not a multiple of the block size (32 on main, 16 in the tensorcore branch) or head dimensions above about 117 on main (see gotchas).",
+    "Code that relies on CUDA streams or multiple GPUs: kernels launch on the default stream, and the main branch queries shared memory on device 0 only."
+  ],
+  "integration": {
+    "form": "module (PyTorch C++/CUDA extension JIT-built from flash.cu and main.cpp by torch.utils.cpp_extension.load; the kernel can also be copied as a source-drop)",
+    "dependencies": "PyTorch with CUDA, Ninja, nvcc",
+    "min_toolchain": "not documented (bench.py builds with nvcc -O2; the tensorcore branch sets TORCH_CUDA_ARCH_LIST=8.0 and -O3 -use_fast_math, and TF32 WMMA needs sm_80 or newer)",
+    "platforms": "NVIDIA GPUs with CUDA (README sample on a T4); the tensorcore branch targets Ampere (sm_80) or newer",
+    "thread_safety": "not documented; launches on the legacy default stream rather than PyTorch's current stream, and has no CUDA error checks",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The README speedup is not a speedup: bench.py profiles one cold call of each implementation (manual attention first) under torch.autograd.profiler with no warm-up, so the 52.5 ms baseline is mostly first-call initialisation; issue #16 adds that the old autograd profiler does not capture the custom op properly.",
+    "No bounds checks on N (derived from code): tiles are read and written in full for ceil(N/Bc) iterations, so a seq_len that is not a multiple of the block size reads past the head's slice and writes O out of range. A Faial data-race analysis (issue #1) found the main kernel race-free only when Bc == Br == blockDim.x, Tr <= blockDim.x and N >= blockDim.x^2.",
+    "Shared memory (derived from code, not tested): the main branch requests 3*Bc*d*4 + Bc*Br*4 bytes per block (28 KB at head_dim 64, 52 KB at 128) without the cudaFuncSetAttribute opt-in above the 48 KB default, and the launch is not error-checked, so head_dim above about 117 can fail without an error at the call and return the zero-initialised O. It also printf's the shared-memory line on every call.",
+    "The tensorcore branch cudaMallocs the l and m buffers on every call and never frees them (a leak of B*nh*N*8 bytes per call), and computes in TF32, which has less precision than the FP32 main kernel."
+  ],
+  "pick_this_over_siblings_when": "Pick it only to read the algorithm in its smallest form. For a from-scratch learning path that ends at competitive speed, use the catalogued learn-cuda attention (gau-nernst, beats the flash-attn package on SM120) or Mini-Attention (beats cuDNN SDPA at short sequences). For real workloads, use FlashAttention-3/4 or cuDNN through PyTorch SDPA.",
+  "verified_claims_summary": "The README's sample output on an AWS T4 is a single profiled forward call at batch 16, 12 heads, seq_len 64, head_dim 64, FP32: manual attention 52.545 ms vs minimal flash attention 3.908 ms Self CUDA time (about 13x, derived from page data), built with nvcc -O2, with CUDA and PyTorch versions not stated. The verifier judged this a cold-start artifact of timing an unwarmed baseline; warmed or CUDA-event-timed runs reported in issues #11 and #13 show eager PyTorch attention is faster.",
+  "status_note": "Stale since 2024-12-30 (9 commits on main), and open PRs that add a backward pass, FA2 and GQA are unmerged; it is Apache-2.0 with 1.2k stars and is good teaching code, but not something to depend on for performance.",
+  "sources_read": [
+    "https://github.com/tspeterkim/flash-attention-minimal",
+    "https://github.com/tspeterkim/flash-attention-minimal/issues?q=is%3Aissue",
+    "https://github.com/tspeterkim/flash-attention-minimal/pulls?q=is%3Apr",
+    "https://github.com/tspeterkim/flash-attention-minimal/issues/1",
+    "https://github.com/tspeterkim/flash-attention-minimal/issues/3",
+    "https://github.com/tspeterkim/flash-attention-minimal/issues/11",
+    "https://github.com/tspeterkim/flash-attention-minimal/issues/13",
+    "https://github.com/tspeterkim/flash-attention-minimal/issues/16",
+    "https://raw.githubusercontent.com/tspeterkim/flash-attention-minimal/HEAD/README.md",
+    "https://raw.githubusercontent.com/tspeterkim/flash-attention-minimal/HEAD/bench.py",
+    "https://raw.githubusercontent.com/tspeterkim/flash-attention-minimal/HEAD/flash.cu",
+    "https://raw.githubusercontent.com/tspeterkim/flash-attention-minimal/HEAD/main.cpp",
+    "https://raw.githubusercontent.com/tspeterkim/flash-attention-minimal/tensorcore/README.md",
+    "https://raw.githubusercontent.com/tspeterkim/flash-attention-minimal/tensorcore/bench.py",
+    "https://raw.githubusercontent.com/tspeterkim/flash-attention-minimal/tensorcore/flash.cu",
+    "https://raw.githubusercontent.com/tspeterkim/flash-attention-minimal/tensorcore/main.cpp",
+    "https://github.com/leloykun/flash-attention-minimal",
+    "https://github.com/ishovkun/flash-attention"
+  ],
+  "confidence": 0.8
+}

@@ -1,0 +1,59 @@
+{
+  "id": "https://github.com/kolinko/effort",
+  "one_liner": "Swift/Metal LLM engine whose approximate bucketMul matrix-vector product trades quality for speed against Apple MPS on Apple Silicon.",
+  "what_it_does": "Effort is a self-contained Mistral 7B (FP16) inference app for macOS that replaces each decode-time vector x weight-matrix product with bucketMul, an approximate multiply whose cost is set by an 'effort' fraction (100% = every multiplication, 25% = roughly a quarter of them) adjustable per query at run time. It also lets you skip loading the least important 1/16 slices of every weight matrix. It is an Xcode command-line project with an interactive prompt, not a library: there is no API you can call from C++ or from another engine, and it needs weights pre-converted into its own bucketed safetensors format (convert mode, or the kolinko/mistral-buckets download).",
+  "how_it_is_fast": "Offline, each transposed weight row is cut into buckets of 16, sorted by absolute value, interleaved so that the largest-magnitude weights of every input dimension come first, and annotated with per-bucket mean-|w| statistics plus diagonal 'probe' weights; the 4 low bits of each FP16 weight store its output position. At decode time a GPU kernel estimates the cutoff for the chosen effort from probe x input products (top-k), a second kernel builds a dispatch list of only the bucket rows whose stat x input value clears the cutoff, and the bucketMul Metal kernel streams those rows, accumulating into 16 per-thread registers selected by the embedded position bits. The speedup comes from reading fewer weight bytes in a memory-bound GEMV; the author says the kernel reaches about 50-70% of memory bandwidth and is ALU-limited.",
+  "when_to_use": [
+    "Research on input-dependent (dynamic) weight skipping for batch-1 decode, where you want a working Metal reference of the bucket/dispatch idea to read or port.",
+    "Experiments on Apple Silicon Macs with enough unified memory for FP16 Mistral 7B, where a 25-50% effort level and its quality loss are acceptable.",
+    "Exploring 'ad hoc distillation' by loading only part of each matrix (percentLoad) to fit a model into less memory without retraining.",
+    "Studying the speed/quality curve of approximate GEMV: the repo ships cosine-similarity, next-token agreement and multiple-choice quiz harnesses across effort levels."
+  ],
+  "when_not_to_use": [
+    "Production or quality-sensitive inference: the author's own pages say the current implementation 'seems just broken' (Mistral worse than before, Mixtral 'barely works'), and early KL-divergence tests 'seem to not win against Quantization yet'.",
+    "Anything outside macOS on Apple Silicon: Swift plus Metal only, Xcode project, no Linux/CUDA/CPU path (issue #5 asks for other platforms, unanswered).",
+    "When you need exact results or full speed: at 100% effort bucketMul is slower than MPS (about 15 vs 26 matrix-only tps read from the project chart), and parity needs about 50-70% effort.",
+    "Real end-to-end throughput: every generated token carries about 15 ms of overhead the author could not remove, attention is unoptimised and slows quickly with longer contexts, and only FP16 Mistral is wired up (Q8 incomplete, Q4 'extremely slow').",
+    "Maintained dependencies: last commit 2024-07-01, one-person demo, and the weights repo has gone missing before (issue #3: huggingface kolinko/mistral-buckets returned 404, April 2024)."
+  ],
+  "integration": {
+    "form": "source-drop (Xcode macOS command-line app in Swift with Metal shaders; no library target)",
+    "dependencies": "Apple Metal and MetalPerformanceShaders (MPS used for the baseline multiply and top-k); Xcode; converted bucketed FP16 Mistral weights (huggingface-cli download kolinko/mistral-buckets, or the built-in convert mode from .safetensors)",
+    "min_toolchain": "not documented (Xcode project; Swift and Metal versions not stated)",
+    "platforms": "macOS on Apple Silicon only (author's M2 Pro; notes M3 seems faster than M1/M2)",
+    "thread_safety": "not documented (single global BucketMul instance and GPU wrapper; dispatch uses atomics)",
+    "drop_in_for_baseline": "partial — bucketMul(v:by:...) mirrors basicMul's calling style inside this engine, but it needs pre-bucketed weights, returns an approximation, and has no C/C++ or MPS-compatible API"
+  },
+  "gotchas": [
+    "Output is nondeterministic: the dispatch list is built with atomic counters, so token generation varies between runs at the same effort (author's GPU page).",
+    "The 4 low bits of every FP16 weight hold the output position (kernel reads as_type<ushort>(w) & 15), so stored weights lose mantissa precision even at 100% effort.",
+    "The startup benchmark compares different matrices: MPS times 3 x wq (3 x 4096x4096, 50.3M weights) scaled by 4/3, while bucketMul times one w1 (4096x14336, 58.7M weights); derived from code, that charges the MPS line for about 14% more weights than bucketMul at 100% effort, and the printed 'tps' is matmul-only, not generation speed.",
+    "On machines with 16 GB RAM or less the loader silently loads only 11/16 of each matrix (the message says 75%, or 37% for 8 GB, but both branches set 0xB), which lowers quality before you touch effort; kernels are tuned for 4096x14336 and need per-shape hand-tuning."
+  ],
+  "pick_this_over_siblings_when": "Among catalogued siblings, PowerInfer also skips weights based on the input (predicted-active neurons, CUDA/CPU on llama.cpp) and FastGEMV is an exact fp16/int GEMV for CUDA; pick Effort only when you want an Apple-Silicon Metal implementation of magnitude-sorted dynamic weight skipping to study or port, and use PowerInfer or an exact quantised kernel when you need working inference.",
+  "verified_claims_summary": "First-party only: on the author's Apple Silicon Mac (M2 Pro per the setup notes; the charts name no chip), FP16 Mistral 7B matrix-vector products timed in benchmarks/benchmark.swift show bucketMul at about 15 tps-equivalent at 100% effort, about 26-27 at 50% (roughly MPS's 26) and about 47-49 at 25% (about 1.85x MPS, read from chart images); 2x is reached only near 22% effort, where the chart marks a quality breakdown on Mistral. No Xcode or compiler settings are given, and actual tokens/s reaches the llama.cpp line (about 25 tok/s) only near 30% effort.",
+  "status_note": "Stale since 2024-07-01 and self-described as a buggy demo looking for collaborators, but MIT-licensed; worth reading as a reference for the bucketMul idea rather than vendoring.",
+  "sources_read": [
+    "https://github.com/kolinko/effort",
+    "https://github.com/kolinko/effort/issues?q=is%3Aissue",
+    "https://github.com/kolinko/effort/issues/3",
+    "https://github.com/kolinko/effort/issues/5",
+    "https://github.com/kolinko/effort/tree/main/helpers",
+    "https://raw.githubusercontent.com/kolinko/effort/HEAD/README.md",
+    "https://raw.githubusercontent.com/kolinko/effort/HEAD/benchmarks/benchmark.swift",
+    "https://raw.githubusercontent.com/kolinko/effort/HEAD/main.swift",
+    "https://raw.githubusercontent.com/kolinko/effort/HEAD/loader.swift",
+    "https://raw.githubusercontent.com/kolinko/effort/HEAD/bucketMul.swift",
+    "https://raw.githubusercontent.com/kolinko/effort/HEAD/helpers/timeit.swift",
+    "https://raw.githubusercontent.com/kolinko/effort/HEAD/helpers/mps.swift",
+    "https://raw.githubusercontent.com/kolinko/effort/HEAD/docs/index.html",
+    "https://raw.githubusercontent.com/kolinko/effort/HEAD/docs/equations.html",
+    "https://raw.githubusercontent.com/kolinko/effort/HEAD/docs/bucketmul.html",
+    "https://raw.githubusercontent.com/kolinko/effort/HEAD/docs/gpu.html",
+    "https://raw.githubusercontent.com/kolinko/effort/HEAD/docs/q8.html",
+    "https://raw.githubusercontent.com/kolinko/effort/HEAD/docs/pesky.html",
+    "https://raw.githubusercontent.com/kolinko/effort/HEAD/docs/setup.html",
+    "https://raw.githubusercontent.com/kolinko/effort/HEAD/docs/about.html"
+  ],
+  "confidence": 0.75
+}
