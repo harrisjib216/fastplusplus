@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/lemire/simdcompressionandintersection",
+  "one_liner": "C++ research library of SIMD codecs (S4-BP128, SIMD-FastPFOR) for sorted uint32 lists, plus SIMD sorted-list intersection.",
+  "what_it_does": "Compresses and decompresses arrays of sorted 32-bit integers (posting lists, doc IDs) with differential coding fused into the codec, and intersects sorted uint32 arrays with SIMD kernels. Codecs are picked by name from a factory (CODECFactory::getFromName(\"s4-bp128-d1\")) and expose encodeArray/decodeArray over caller-allocated uint32_t buffers; intersections are plain function pointers from IntersectionFactory (\"simd\", \"galloping\", \"simdgalloping\", \"v1\", \"v3\", AVX2 variants). It is a different interface from any varint or FastPFor API, not a drop-in.",
+  "how_it_is_fast": "S4-BP128 is SIMD binary packing: blocks of 128 integers are bit-packed across four 32-bit SSE lanes at one bit width per block, so unpacking is shifts and masks with no branches per value. The delta (prefix-sum) step is vectorized and, in the non-'-ni' variants, integrated into the unpack loop; D2/D4/DM variants use coarser four-lane deltas to trade a little ratio for faster prefix sums. SIMD-FastPFOR adds patched exceptions to the same packers. Intersections use SIMD block comparison (v1/v3) and SIMD Galloping, which skips through the larger list with vector compares.",
+  "when_to_use": [
+    "Inverted-index or search-engine posting lists: sorted uint32 doc IDs where you decode whole lists and then intersect them.",
+    "Read-heavy sorted integer columns where decode speed matters more than the last bit per integer, on x86 with SSE4.1/AVX or on AArch64 (NEON mapping added in 0.2.0).",
+    "Benchmarking or prototyping: one factory exposes about 25 codecs (vbyte, varintgb, maskedvbyte, streamvbyte, fastpfor, bp32, s4-bp128-*, s4-fastpfor-*, for) behind one interface, so you can compare ratio and speed on your own data.",
+    "Intersecting a short list against a much longer one (query AND processing): SIMD Galloping is built for skewed list lengths."
+  ],
+  "when_not_to_use": [
+    "Unsorted integers: the codecs assume sorted input for differential coding; use FastPFor or simdcomp's non-delta routines instead.",
+    "Untrusted compressed input or output buffers you cannot size generously: issue #19 (open since 2017) reports an access violation rather than a NotEnoughStorage exception when the decode buffer is too small, and there is no bounds checking on decode.",
+    "64-bit integers: the API is uint32_t only.",
+    "Production code that needs a small, stable API: the README itself calls it a C++ research library and points to the C library simdcomp for something simpler.",
+    "Best compression ratio: in the vteromero gov2 run FastPFor128 compressed better (6.21 vs 5.52) and Delta+VarIntGB decoded faster than the scalar BinaryPacking row."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none",
+    "min_toolchain": "C++11 and C99; GCC 4.7+, Clang, Intel or Visual C++; CMake 3.10+ for the CMake build (Makefile and nmake makefile.vc also provided)",
+    "platforms": "x86/x64 (SSE2 required, SSE4.1 recommended; default build passes -mavx or /arch:AVX) and AArch64 (SSE intrinsics mapped to NEON via include/neon_sse.h); tested on Linux, macOS and Windows; uses POSIX headers such as sys/mman.h in common.h",
+    "thread_safety": "not documented; the factory returns shared singleton codec objects, and some codecs (SIMDFastPFor) keep internal scratch buffers as members, so use one codec instance per thread rather than the shared factory instance",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Some codecs do the delta coding in place and overwrite your input array (bp32, fastpfor, s4-bp128-*-ni, s4-fastpfor-*), per example.cpp; encodeArray takes a non-const pointer. Copy the input first if you need it.",
+    "The caller allocates the output; nvalue is in/out and, per codecs.h, a value larger than what you passed means a buffer overrun already happened. Allocate generously (the example uses N + 1024 words).",
+    "CODECFactory::getFromName returns a null shared_ptr (after printing to cerr) for an unknown name, so dereferencing it crashes; varintg8iu is only registered when compiled with SSSE3 and its header is marked 'warning: patented scheme', although the README says the work is patent-free as far as the authors know.",
+    "Header names (codecfactory.h, codecs.h, fastpfor.h) overlap with the FastPFor library; since issue #2 the code is in namespace SIMDCompressionLib, but installed headers are added flat to the include path, so keep the two libraries' include directories separate."
+  ],
+  "pick_this_over_siblings_when": "Pick it over FastPFor or simdcomp when your lists are sorted and you also need fast intersection, since FastPFor is not tuned for sorted lists (per this README) and simdcomp has no intersection or codec factory. Pick Stream VByte or MaskedVByte when you want byte-oriented codecs as a small C library, and TurboPFor when you want more codecs and are fine with GPL.",
+  "verified_claims_summary": "A third-party harness (vteromero/integer-compression-benchmarks, g++ -O3 -std=c++11, compiler version unstated, Core i7-6700HQ) on gov2.sorted measured this library's scalar Delta+BinaryPacking at 2.30 G/s encode and 2.33 G/s decode vs its own Delta+VariableByte at 1.62/1.52 G/s and Delta+FastPFor128 at 615.66/615.64 M/s; all codecs in that run come from this library and the SIMD S4-BP128 path was not the one measured. The README's 15 GB/s (4 billion integers/s) decode figure and the papers' 2x-over-varint-G8IU claims have no reproducible table in the repo.",
+  "status_note": "Maintained at low cadence (bursts in 2022, one commit in 2025, ARM/NEON support and version 0.2.0 on 2026-06-07; 4 open issues, 447 stars), Apache-2.0 and buildable with Make, CMake or nmake, so it is easy to vendor as a static library.",
+  "sources_read": [
+    "https://github.com/lemire/SIMDCompressionAndIntersection",
+    "https://github.com/lemire/SIMDCompressionAndIntersection/commits",
+    "https://github.com/lemire/SIMDCompressionAndIntersection/issues",
+    "https://github.com/lemire/SIMDCompressionAndIntersection/issues?q=is%3Aissue+is%3Aclosed",
+    "https://github.com/lemire/SIMDCompressionAndIntersection/issues/19",
+    "https://github.com/lemire/SIMDCompressionAndIntersection/issues/24",
+    "https://github.com/lemire/SIMDCompressionAndIntersection/issues/2",
+    "https://raw.githubusercontent.com/lemire/SIMDCompressionAndIntersection/HEAD/README.md",
+    "https://raw.githubusercontent.com/lemire/SIMDCompressionAndIntersection/HEAD/Makefile",
+    "https://raw.githubusercontent.com/lemire/SIMDCompressionAndIntersection/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/lemire/SIMDCompressionAndIntersection/HEAD/example.cpp",
+    "https://raw.githubusercontent.com/lemire/SIMDCompressionAndIntersection/HEAD/include/codecfactory.h",
+    "https://raw.githubusercontent.com/lemire/SIMDCompressionAndIntersection/HEAD/include/codecs.h",
+    "https://raw.githubusercontent.com/lemire/SIMDCompressionAndIntersection/HEAD/include/intersection.h",
+    "https://raw.githubusercontent.com/lemire/SIMDCompressionAndIntersection/HEAD/include/common.h",
+    "https://raw.githubusercontent.com/lemire/SIMDCompressionAndIntersection/HEAD/include/platform.h",
+    "https://raw.githubusercontent.com/lemire/SIMDCompressionAndIntersection/HEAD/include/simdfastpfor.h",
+    "https://raw.githubusercontent.com/lemire/SIMDCompressionAndIntersection/HEAD/include/simdbinarypacking.h",
+    "https://raw.githubusercontent.com/lemire/SIMDCompressionAndIntersection/HEAD/src/codecfactory.cpp",
+    "https://raw.githubusercontent.com/lemire/SIMDCompressionAndIntersection/HEAD/src/intersection.cpp",
+    "https://raw.githubusercontent.com/vteromero/integer-compression-benchmarks/HEAD/README.md"
+  ],
+  "confidence": 0.7
+}

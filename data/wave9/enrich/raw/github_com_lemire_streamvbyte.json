@@ -1,0 +1,61 @@
+{
+  "id": "https://github.com/lemire/streamvbyte",
+  "one_liner": "Small C99 library for byte-oriented uint32 compression (SIMD Group Varint variant) that decodes faster than VByte, MaskedVByte and varint-G8IU.",
+  "what_it_does": "Encodes arrays of 32-bit unsigned integers in 1 to 4 bytes each, with all 2-bit length codes stored in a separate control stream ahead of the data bytes, and decodes them back; optional differential coding (streamvbyte_delta_encode/decode with a starting value) for sorted input, zigzag helpers for signed input, and a 0/1/2/4-byte variant for zero-heavy data. The API is a handful of plain C functions over caller-allocated buffers (streamvbyte_encode(in, n, out) returns bytes written; streamvbyte_decode(in, out, n) returns bytes read). It is not wire-compatible with protobuf-style varint or with VByte streams, and the integer count is not stored in the stream.",
+  "how_it_is_fast": "Stream VByte separates the control bytes from the data bytes, so the decoder reads one control byte (four 2-bit lengths), looks up a 16-byte shuffle mask and a length in 256-entry tables, and expands four integers with a single PSHUFB (SSE4.1) or TBL (NEON) instruction, with no per-integer branches and no dependency of the next control byte on the data. Encoding is vectorized the same way in reverse. The x64 delta decoder fuses an in-register prefix sum (two shift-and-add steps per four integers) into the decode loop. CPU features are detected at runtime, so one binary picks SSE4.1 or the scalar fallback.",
+  "when_to_use": [
+    "Decode-heavy 32-bit integer arrays (posting lists, doc IDs, column chunks, tile coordinates) where you want multi-GB/s decoding and can accept byte-granular compression.",
+    "Sorted ID lists on x86-64: the delta codec has a fused SSE4.1 decode; issue #47 on the TurboPFor repo measured StreamVByte delta at 14,101.75 MB/s decode on doc IDs.",
+    "Mixed-magnitude values where bit-packing per block wastes space on outliers but you still want branch-free SIMD decode.",
+    "C or C++ projects that want a tiny, dependency-free, Apache-2.0 codec with runtime dispatch, already used by RediSearch, StarRocks, fbthrift and tilemaker per the README."
+  ],
+  "when_not_to_use": [
+    "When compression ratio matters most: byte granularity costs bits versus bit-packing (the verifier's TurboPFor tables show about 10.00 vs 8.17 bits/integer against VByte on ZIPF and 11.50 vs 8.96 on gov2); FastPFor/simdcomp/TurboPFor pack tighter.",
+    "64-bit integers: the API is uint32_t only.",
+    "Delta-coded or 0124 streams on ARM64: the differential decoder and the 0124 decoder have SSE4.1 paths only, so AArch64 falls back to scalar code (open issue #17, port differential coding to NEON, since 2017).",
+    "Big-endian targets: unsupported per the README.",
+    "Untrusted streams without validation: decode trusts the count and control bytes; call streamvbyte_validate_stream first (added in December 2024)."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "none for the library; the perf benchmark (tests enabled) links sea_counters fetched through CPM",
+    "min_toolchain": "C99; GCC 9+, LLVM 10+, Visual Studio 2019+; CMake 3.10+ (a Linux-style Makefile is also provided)",
+    "platforms": "x86-64 (SSE4.1 path selected at runtime, scalar fallback otherwise), AArch64 (NEON), other little-endian CPUs via the scalar path; Linux, macOS, Windows; big-endian unsupported",
+    "thread_safety": "Functions are stateless over caller buffers; the one shared state is the cached CPU-feature flag, which uses std::atomic in C++ and _Atomic in C11 (a plain static under MSVC C). Not otherwise documented.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Decoding may read up to STREAMVBYTE_PADDING (16) bytes past the end of the compressed data, so allocate that slack on the input buffer; streamvbyte_compressedbytes does not include it, streamvbyte_max_compressedbytes does.",
+    "The number of integers is not stored in the stream; you must keep it yourself and pass it to decode, and the decoders cannot detect a wrong count unless you call streamvbyte_validate_stream.",
+    "Delta and plain streams are not interchangeable, and 0124 streams need the _0124 decoder and validator; using the wrong one silently returns garbage.",
+    "Version 3.0.0 (April 2026) followed a March 2026 fix to the SSE4.1 detection macro (PR #77); pin a recent release rather than an old vendored copy."
+  ],
+  "pick_this_over_siblings_when": "Pick it over MaskedVByte or varint-simd when you control the format and want the fastest byte-oriented decode with a simple C API (MaskedVByte keeps the standard VByte format, which is its reason to exist). Pick FastPFor, simdcomp or SIMDCompressionAndIntersection's S4-BP128 when you need better compression ratio or sorted-list intersection, and TurboPFor if its GPL license is acceptable and you want the widest codec menu.",
+  "verified_claims_summary": "The best-documented comparison is on a competitor's page: TurboPFor issue #47 (icapp harness, Skylake i7-6700 3.4 GHz, October 2019, no compiler or flags) gives StreamVByte delta 14,101.75 MB/s decode on doc IDs vs FastPFor 7,616.66, SimdFastPFor 13,818.59 and MaskedVByte 6,507.48 MB/s, while on term frequencies plain StreamVByte (16,825.56 MB/s) roughly ties MaskedVByte (16,846.15 MB/s) and compresses worse (31.30% vs 25.12% of input). The repo's own perf tool reports about 41 GB/s decode and 27 GB/s encode on an Apple M4 Max for 500,000 random integers, with no baseline; the paper's 2x-over-varint-G8IU claim could not be opened here.",
+  "status_note": "Actively maintained (3.0.0 released April 2026, commits through June 2026, CI on GCC 9-14, LLVM 12-18, macOS and Visual Studio), Apache-2.0, a few C files with no dependencies, so easy to vendor.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/lemire/streamvbyte/HEAD/README.md",
+    "https://raw.githubusercontent.com/lemire/streamvbyte/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/lemire/streamvbyte/HEAD/Makefile",
+    "https://raw.githubusercontent.com/lemire/streamvbyte/HEAD/include/streamvbyte.h",
+    "https://raw.githubusercontent.com/lemire/streamvbyte/HEAD/include/streamvbytedelta.h",
+    "https://raw.githubusercontent.com/lemire/streamvbyte/HEAD/include/streamvbyte_zigzag.h",
+    "https://raw.githubusercontent.com/lemire/streamvbyte/HEAD/src/streamvbyte_decode.c",
+    "https://raw.githubusercontent.com/lemire/streamvbyte/HEAD/src/streamvbyte_encode.c",
+    "https://raw.githubusercontent.com/lemire/streamvbyte/HEAD/src/streamvbytedelta_decode.c",
+    "https://raw.githubusercontent.com/lemire/streamvbyte/HEAD/src/streamvbyte_0124_decode.c",
+    "https://raw.githubusercontent.com/lemire/streamvbyte/HEAD/src/streamvbytedelta_x64_decode.c",
+    "https://raw.githubusercontent.com/lemire/streamvbyte/HEAD/src/streamvbyte_isadetection.h",
+    "https://raw.githubusercontent.com/lemire/streamvbyte/HEAD/src/streamvbyte_x64_decode.c",
+    "https://raw.githubusercontent.com/lemire/streamvbyte/HEAD/tests/perf.c",
+    "https://github.com/lemire/streamvbyte/issues",
+    "https://github.com/lemire/streamvbyte/issues?q=is%3Aissue+is%3Aclosed",
+    "https://github.com/lemire/streamvbyte/issues/41",
+    "https://github.com/lemire/streamvbyte/issues/46",
+    "https://github.com/lemire/streamvbyte/issues/81",
+    "https://github.com/lemire/streamvbyte/pull/77",
+    "https://github.com/lemire/streamvbyte/commits",
+    "https://github.com/powturbo/TurboPFor-Integer-Compression/issues/47"
+  ],
+  "confidence": 0.75
+}
