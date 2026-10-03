@@ -31,3 +31,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - Paper-access retier candidate: ZipNN (arXiv 2411.05239, IEEE CLOUD 2025) could move C to B. From verify batch-49.
 - arXiv 2604.11338 "Wavelet Forests Revisited" (snippet only; paper-access retier for wavelet_forest). From enricher.
 - Ports of FastPFOR: ronanh/intcomp (Go), Genbox/CSharpFastPFOR, reducedb/encoding (Go). Duplicates if found. From JavaFastPFOR enricher.
+- c-blosc2 bitshuffle AVX-512 backport (c-blosc2 2.11); silx-kit/hdf5plugin; yhliu918/arrow_leco; yhliu918/LeCo_RocksDB. From bitshuffle/LeCo enricher. LeCo kept at B despite the 63-bit decode bug and -DNDEBUG-less timing (all codecs share the harness); revisit if the paper numbers are shown to depend on it.

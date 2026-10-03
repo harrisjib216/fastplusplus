@@ -1,0 +1,54 @@
+{
+  "id": "https://github.com/yhliu918/learn-to-compress",
+  "one_liner": "Research codec (SIGMOD'24): per-block linear regression plus bit-packed residuals for integer columns; better ratio than FOR and Elias-Fano, faster random access than Delta.",
+  "what_it_does": "LeCo compresses sorted or serially correlated integer columns (uint32/uint64) by fitting a model to each block, by default a line theta0 + theta1*i, and storing only the signed residuals at a fixed bit width. The value at any index can then be decoded from the model plus one residual, without a prefix sum. The repo is a research harness, not a library. Codecs are header templates in headers/ (Leco_int<T> with encodeArray8_int, decodeArray8, randomdecodeArray8, filter_range), driven by one executable per scheme in experiments/, which read datasets from ../data. The Arrow/Parquet and RocksDB integrations from the paper live in separate repos (yhliu918/arrow_leco, yhliu918/LeCo_RocksDB).",
+  "how_it_is_fast": "It is a learned generalisation of Frame-of-Reference. FOR stores value minus block minimum; LeCo stores value minus a least-squares regression prediction, recentred so that residuals are symmetric, so on near-linear data (sorted keys, timestamps, IDs) the residual bit width falls far below FOR's. Random access costs one multiply-add plus one unaligned 64-bit load and mask, against Delta's prefix sum over the block. The variable-length variant (LeCo-var) adds cost-model-driven partitioning, which explains its 0.02 GB/s compression throughput. There is no explicit SIMD; the build depends on -O3 -march=native auto-vectorisation.",
+  "when_to_use": [
+    "Read-mostly integer columns with strong serial correlation (sorted keys, monotone IDs, timestamps, index offsets) where compression ratio and point lookups matter more than encode speed.",
+    "You want O(1) random access into a compressed column and Delta encoding's prefix-sum cost is the bottleneck (the paper reports an order of magnitude faster random access than Delta).",
+    "Columnar or LSM index-block prototypes: the paper's Arrow/Parquet filter and bitmap scans (up to 3.9x in the technical report, 5.2x in the published abstract) and a 16% RocksDB throughput gain come from the companion repos.",
+    "Research or re-implementation: the idea (regression model plus fixed-width residuals per block) is simple to port into your own codec."
+  ],
+  "when_not_to_use": [
+    "Production use: there is no LICENSE file, so it is all rights reserved by default and cannot legally be copied (the vendored FastPFor, ALEX, ART, stx-btree and FSST code carry their own licences).",
+    "Fast encoding: LeCo-fix compresses slightly slower than FOR (0.78 vs 0.81 GB/s) and LeCo-var about 40x slower (0.02 GB/s).",
+    "Random, high-entropy or non-monotone integers: residuals then gain nothing over FOR, and a block whose residual needs the full type width is stored raw.",
+    "SIMD bulk decode throughput: the siblings FastPFor, simdcomp and TurboPFor decode at several GB/s with explicit SIMD; LeCo decode is scalar 64/128-bit shift loops.",
+    "Platforms other than x86-64 Ubuntu 20.04: setup.sh uses apt and sudo symlinks into /usr/include, src/CMakeLists.txt adds -msse4.1/-mssse3 unconditionally, and everything builds with -march=native."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "Eigen3, GMP/gmpxx, Snappy, Boost (setup.sh installs libboost-all-dev), vendored FSST; CMake 3.16+ (setup.sh upgrades to 3.22)",
+    "min_toolchain": "C++17 (CMake), GCC with __int128 support; tested only on Ubuntu 20.04.4 LTS; compiler version not named",
+    "platforms": "x86-64 only in practice (-msse2/-msse3/-mssse3/-msse4.1 always on, -march=native); little-endian assumed by the raw uint64 reinterpret loads",
+    "thread_safety": "not documented; Leco_int keeps per-instance state (blocks, block_size, mul_add_diff_set), so use one codec object per thread",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Encoder/decoder flag mismatch (source reading, not run): encodeArray8_int stores a block raw only when max_bit == sizeof(T)*8, but decodeArray8 treats any maxerror >= sizeof(T)*8-1 as raw and memcpys. A block whose residual width is exactly 63 bits (uint64) or 31 bits (uint32) is therefore written as model plus packed residuals but bulk-decoded as raw bytes, giving wrong output; randomdecodeArray8 checks == sizeof(T)*8 and stays correct.",
+    "Benchmark timing caveat: CMakeLists.txt overrides CMAKE_CXX_FLAGS_RELEASE with \"-O3 -march=native\", which drops CMake's default -DNDEBUG. The #ifndef NDEBUG verification loops in experiments/*_fix_template.cpp then run inside the timed decode-all and random-access regions, adding a full compare pass and an extra random DRAM read of the original array per lookup for every codec. Absolute ns figures are inflated and ratios between codecs are compressed, unless the paper runs used other flags (not documented).",
+    "Unaligned, type-punned 64/128-bit loads (reinterpret_cast<const uint64_t*>/uint128_t*) at offsets such as 17 bytes into a block. The word-at-a-time reader can load up to one word past the packed residuals of an exact-size realloc'd buffer: this is UB, and ASan/UBSan would flag it, though it works on x86.",
+    "Predictions are double-precision (long long)(theta0 + theta1*i), so for uint64 values above 2^53 accuracy depends on encoder and decoder rounding identically under -march=native (FMA contraction); unsigned/signed mixing in the encoder (uint64 data compared with int64 predictions) forces raw fallback when predictions go negative."
+  ],
+  "pick_this_over_siblings_when": "Pick it over FastPFor, simdcomp or TurboPFor only when the data is serially correlated, you need constant-time random access, and ratio beats raw SIMD decode speed. ds2i's partitioned Elias-Fano is the closest licensed alternative for sorted sequences. Treat LeCo as a design to re-implement, since the repo has no licence.",
+  "verified_claims_summary": "The SIGMOD'24 technical report (read from repo history) runs single-threaded on a Xeon Platinum 8369B (Ice Lake) at -O3 -march=native over nine integer datasets. Against FOR and Elias-Fano, LeCo improves compression ratio by up to 81% at comparable decode and random-access speed; it is about 10x faster than Delta on random access; and in Arrow/Parquet scans it is up to 3.9x faster (filter) and 12.6x (bitmap). The published abstract (WebSearch snippet only) says up to 5.2x in Arrow and +16% RocksDB throughput. All baselines are in-repo implementations, not FastPFor or simdcomp.",
+  "status_note": "Stale since 2024-03-26 and unlicensed (reference only): useful as the reproducible artefact of a peer-reviewed paper, not as a dependency.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/yhliu918/Learn-to-Compress/HEAD/README.md",
+    "https://raw.githubusercontent.com/yhliu918/Learn-to-Compress/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/yhliu918/Learn-to-Compress/HEAD/src/CMakeLists.txt",
+    "https://raw.githubusercontent.com/yhliu918/Learn-to-Compress/HEAD/scripts/setup.sh",
+    "https://raw.githubusercontent.com/yhliu918/Learn-to-Compress/HEAD/benchmark/fix_int_benchmark.py",
+    "https://raw.githubusercontent.com/yhliu918/Learn-to-Compress/HEAD/benchmark/auto_int_benchmark.py",
+    "https://raw.githubusercontent.com/yhliu918/Learn-to-Compress/HEAD/experiments/leco_int_fix_template.cpp",
+    "https://raw.githubusercontent.com/yhliu918/Learn-to-Compress/HEAD/experiments/FOR_int_fix_template.cpp",
+    "https://raw.githubusercontent.com/yhliu918/Learn-to-Compress/HEAD/headers/piecewise_fix_integer_template.h",
+    "https://raw.githubusercontent.com/yhliu918/Learn-to-Compress/HEAD/headers/bit_read.h",
+    "https://raw.githubusercontent.com/yhliu918/Learn-to-Compress/HEAD/LICENSE",
+    "https://github.com/yhliu918/Learn-to-Compress/tree/main/headers",
+    "https://github.com/yhliu918/Learn-to-Compress/tree/main/experiments",
+    "https://github.com/yhliu918/Learn-to-Compress/issues?q=is%3Aissue",
+    "https://github.com/yhliu918?tab=repositories"
+  ],
+  "confidence": 0.7
+}
