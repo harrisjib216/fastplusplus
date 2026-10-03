@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/saskeli/h0_bv",
+  "one_liner": "Research C++ RRR-style H0-compressed bitvectors with faster block decoding; beat SDSL rrr_vector on access at block size 63.",
+  "what_it_does": "Static compressed bitvectors that store each block as a (class = popcount, offset) pair, as in SDSL's rrr_vector, but with different block decoders and code assignments: recursive (h0_bv.hpp), iterative 8-bit-chunk decoding for b=63/64 (h0_63.hpp, h0_it.hpp), a sparsified lookup table for b=15/24 (h0_gap.hpp), and generated weighted de Bruijn code tables (weightedDeBrujin.py). Each class is constructed from an sdsl::bit_vector and exposes access(i), rank(i), select(s) and size accessors; it does not implement SDSL's rank_support/select_support or serialize/load interfaces, so it is not a drop-in rrr_vector replacement. Hybrid bitvector experiments (hyb_*.hpp) are patched copies of SDSL's hyb_vector.",
+  "how_it_is_fast": "RRR decoding of a block offset into its bit pattern dominates query time at large block sizes. h0_63/h0_it decode a 63/64-bit block iteratively in 8-bit chunks using compile-time binomial and limit tables (constexpr std::array), so a block is decoded with a few table lookups instead of SDSL's bit-by-bit combinatorial walk. h0_gap stores a sampled (gap) lookup table of all block codes for b<32, and the de Bruijn variants assign non-lexicographic codes to blocks (the SEA 2025 paper 'Succinct Rank Dictionaries Revisited' argues these can give faster queries). Select uses BMI2 _pdep_u64 for the in-word step.",
+  "when_to_use": [
+    "Research or prototyping of RRR-style compressed bitvectors for FM-indexes and wavelet trees, where you want SDSL rrr_vector<63> space (about 0.71 bits/bit on WT-DNA-1GB, same as SDSL) with lower access latency (249 vs 345 ns in the notebook).",
+    "Workloads dominated by random access on compressible bitvectors at large block size, where the iterative b=63 decoder beat SDSL b=63 on every dataset in the notebook (for example 75 vs 94 ns on WT-WEB-1GB).",
+    "Build-time-sensitive pipelines: the notebook shows IT63 construction at 3.2 s vs 21.0 s for SDSL b=63 on WT-DNA-1GB (about 6.5x, derived from page data).",
+    "As reference code for the SEA 2025 paper's decoders, to port the iterative or gap-table decoding into your own bitvector."
+  ],
+  "when_not_to_use": [
+    "Production use: no LICENSE file (all rights reserved by default), 1 star, no releases, debugging code still present, and hyb_256.hpp is marked broken (its checksums disagree in the notebook).",
+    "Rank-heavy workloads on very compressible data: IT63 rank on WT-WEB-1GB was 179 ns vs 148 ns for SDSL b=63, so it is slower there.",
+    "When access speed matters more than space: SDSL's rrr_vector<15> (RRR15 row) was fastest overall (110 ns access, 149 ns rank on WT-DNA-1GB) at about 0.90 bits/bit vs 0.71 for IT63.",
+    "Incompressible or random dense bitvectors: on RND-1 all H0 variants use more than 1 bit per bit (IT63 1.07), worse than a plain bitvector with rank support.",
+    "Non-x86 or pre-BMI2 targets: headers include immintrin.h and select uses _pdep_u64/_pdep_u32 (BMI2)."
+  ],
+  "integration": {
+    "form": "header-only (include/*.hpp), but depends on SDSL headers and library; the benchmark build patches files inside the sdsl-lite submodule",
+    "dependencies": "sdsl-lite (git submodule; int_vector and bit_vector), Python 3 to generate the de Bruijn headers (dbs15/dbs24/wdbs*.hpp)",
+    "min_toolchain": "g++ with -std=c++2b (Makefile); h0_gap needs -fconstexpr-ops-limit=5000000000 -fconstexpr-loop-limit=10000000 (GCC-specific flags) for its compile-time tables",
+    "platforms": "x86-64 with BMI2 (immintrin.h, _pdep_u64); Makefile uses -march=native and reads the cache line size via getconf (Linux)",
+    "thread_safety": "not documented; query methods are const and the structures are immutable after construction",
+    "drop_in_for_baseline": "partial — constructed from an sdsl::bit_vector like rrr_vector, but queries are member functions access/rank/select rather than operator[] plus rank_support/select_support objects, and there is no serialization"
+  },
+  "gotchas": [
+    "Select timings in the notebook are not valid: the harness (adapted from SDSL's rrr_time_and_space.cpp, which has the same bug) sets stop = timer::now() where it should reset start before the select loop, so every reported select time also includes the rank loop.",
+    "The benchmark measures independent random queries (sum of results over 10M queries from 2^20 sampled positions), i.e. throughput-like ns/query, not dependent-query latency.",
+    "Each constructor builds four temporary std::vectors copying metadata and block codes (left over from debugging), adding about 8 bytes per 63-bit block of peak memory during construction.",
+    "The SDSL baseline is built from patched sdsl_hacks/rrr_vector.hpp and rrr_helper.hpp; the patches add size accessors and an optional RRR_NO_OPT path that the Makefile does not enable, so the baseline appears unmodified in behavior."
+  ],
+  "pick_this_over_siblings_when": "Pick it over LA-vector or succinct-bitvec-cpp's RRRBitVec only when you specifically need the RRR (block class/offset) representation with faster decoding at b=63; for compressed bitvectors you intend to ship, LA-vector (TALG 2022, select fastest in its comparison) is the better-supported choice, and for uncompressed rank/select SPIDER or rankselect trade more space for speed.",
+  "verified_claims_summary": "First-party notebook output from a machine labelled 'laptop' (CPU not stated; g++ -std=c++2b -Ofast -march=native) shows the iterative b=63 decoder against SDSL rrr_vector<63> at equal space: access 249 vs 345 ns on WT-DNA-1GB and 75 vs 94 ns on WT-WEB-1GB (about 1.2-1.4x), rank 262 vs 345 ns on DNA but 179 vs 148 ns on WEB (slower); SDSL's rrr_vector<15> remains faster in absolute terms at more space.",
+  "status_note": "Stale research code (last commit 2025-07-17, 48 commits, 1 star) with no license, so it is reference only: read it for the decoding ideas, do not vendor it.",
+  "sources_read": [
+    "https://github.com/saskeli/h0_bv",
+    "https://raw.githubusercontent.com/saskeli/h0_bv/HEAD/README.md",
+    "https://raw.githubusercontent.com/saskeli/h0_bv/HEAD/Makefile",
+    "https://raw.githubusercontent.com/saskeli/h0_bv/HEAD/tester.sh",
+    "https://raw.githubusercontent.com/saskeli/h0_bv/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/saskeli/h0_bv/HEAD/sdsl_hacks/rrr_time_and_space.cpp",
+    "https://raw.githubusercontent.com/saskeli/h0_bv/HEAD/sdsl_hacks/rrr_vector.hpp",
+    "https://raw.githubusercontent.com/saskeli/h0_bv/HEAD/sdsl_hacks/rrr_helper.hpp",
+    "https://raw.githubusercontent.com/saskeli/h0_bv/HEAD/include/h0_63.hpp",
+    "https://raw.githubusercontent.com/saskeli/h0_bv/HEAD/include/h0_it.hpp",
+    "https://raw.githubusercontent.com/saskeli/h0_bv/HEAD/include/h0_bv.hpp",
+    "https://raw.githubusercontent.com/saskeli/h0_bv/HEAD/include/h0_gap.hpp",
+    "https://raw.githubusercontent.com/saskeli/h0_bv/HEAD/include/internal.hpp",
+    "https://raw.githubusercontent.com/saskeli/h0_bv/master/plotting/results.ipynb",
+    "https://raw.githubusercontent.com/simongog/sdsl-lite/master/include/sdsl/rrr_vector.hpp",
+    "https://raw.githubusercontent.com/simongog/sdsl-lite/master/include/sdsl/rrr_helper.hpp",
+    "https://raw.githubusercontent.com/simongog/sdsl-lite/master/benchmark/rrr_vector/src/rrr_time_and_space.cpp",
+    "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.SEA.2025.15 (WebSearch snippet only; Dagstuhl blocked)"
+  ],
+  "confidence": 0.7
+}

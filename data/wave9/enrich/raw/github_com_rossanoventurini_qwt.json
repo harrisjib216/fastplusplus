@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/rossanoventurini/qwt",
+  "one_liner": "Rust 4-ary wavelet matrix (rank/select/access over integer sequences), about 2x lower query latency than SDSL wavelet trees.",
+  "what_it_does": "Static wavelet tree (implemented as a wavelet matrix) over any sequence of unsigned integers, answering get(i), rank(c, i), select(c, i) and occs_range(range) in O(log sigma). Types QWT256/QWT512 (block size 256/512), Pfs variants with a prefetch model for rank, H-prefixed Huffman-shaped variants, plus binary WT/HWT and standalone rank/select bitvectors (narrow::RS, wide::RS, DArray). Built with From<Vec<T>>, collect(), or new(&mut [T]); serde-serializable (README shows bincode). It is a Rust crate with its own API, not a C++ drop-in for sdsl::wt_* (the C++ port is MatteoCeregini/quad-wavelet-tree).",
+  "how_it_is_fast": "Each level stores a quad vector (2 bits per symbol) instead of a bitvector, so the tree has half as many levels and each query takes about half the cache misses on large inputs. Rank/select on the quad vector use block (256 or 512 symbols) and superblock counters with in-word popcount/select. The Pfs variants keep a sampled approximate-rank model (one sample per 2048 positions) to predict and prefetch (_mm_prefetch NTA on x86, prfm on aarch64) the cache lines of the next levels before they are needed; Huffman shaping (HQwt) shortens paths for frequent symbols.",
+  "when_to_use": [
+    "Rust FM-index or compressed text index where backward search issues chains of dependent rank queries over a sequence much larger than L3 (README benchmark: 4 GiB text, 168 symbols).",
+    "Byte or small-integer alphabets with skewed frequencies: HQwt256Pfs reached 263 ns rank and 952 ns select vs SDSL 1223/2900 ns, at less than half the SDSL space.",
+    "Latency-bound access/rank/select on large static sequences of u8..u64 symbols where 2 bits/symbol/level plus small overhead fits in RAM.",
+    "Range symbol-distribution queries (occs_range) over a static sequence."
+  ],
+  "when_not_to_use": [
+    "C++ projects: use the C++ companion (quad-wavelet-tree) or SDSL; calling this crate needs an FFI layer that does not exist.",
+    "Dynamic sequences: the structure is built once and has no insert/delete/update.",
+    "Small sequences that fit in cache: the speedup comes from fewer cache misses, and the README notes rare-symbol ranks perform about the same across implementations because their lower levels stay cached.",
+    "Large sparse alphabets without remapping: space and depth follow the largest value, not the distinct count; values must be remapped to remove holes.",
+    "Inputs over 2^43 symbols (documented panic) or projects needing a stable, settled API (open issues on API ergonomics and naming; 0.3.5 was yanked for a breaking change in a patch release)."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "num-traits, serde, serde-big-array, minimum_redundancy, mem_dbg, paste, generic-tests, rand, clap (clap and rand are regular, not dev, dependencies in Cargo.toml)",
+    "min_toolchain": "Rust edition 2021; no rust-version declared. HEAD (0.5.0 in Cargo.toml) depends on rand 0.10.1, whose crates.io metadata says Rust 1.85; crates.io latest is 0.4.0. README benchmarks used Rust 1.73.0.",
+    "platforms": "any Rust target; explicit prefetch only on x86/x86_64 (_mm_prefetch) and aarch64 (inline prfm) behind the default 'prefetch' feature. A 32-bit panic (issue #11) was fixed via PR #12.",
+    "thread_safety": "not documented; structures are immutable after construction and the quad wavelet tree code shows no interior mutability, so concurrent read-only queries through shared references look safe",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "QWaveletTree::new(&mut seq) destroys the input (stable partitioning in place); use From<Vec<T>> or collect() to keep your data.",
+    "Faster rank on Pfs types needs rank_prefetch / rank_prefetch_unchecked; plain rank() does not use the prediction model.",
+    "Open issue #3: public utils::prefetch_read_NTA is a safe fn doing raw pointer arithmetic (reported as possibly unsound); *_unchecked methods are unsafe and UB on out-of-range input.",
+    "Odd log2(sigma) wastes half of one level (TODO in source), and crates.io lags the repo (0.4.0 vs 0.5.0 in Cargo.toml, with deprecated RSNarrow/RSWide aliases renamed to narrow::RS / wide::RS)."
+  ],
+  "pick_this_over_siblings_when": "Pick it over the C++ quad-wavelet-tree when you work in Rust or want the Huffman-shaped and prefetching variants (C++ port covers Qwt256/Qwt512 only per the README table); pick it over wavelet_forest or faster-minuter when you want a maintained, published library with reproducible QWT-side benchmarks rather than research code.",
+  "verified_claims_summary": "On a single thread of an Intel i9-9900KF (Rust 1.73.0, -C target-cpu=native) over the 4 GiB Big English prefix with 10M dependent random queries, Qwt256 measured 584/613/1623 ns for access/rank/select vs SDSL 2.1.1 at 1178/1223/2900 ns (about 2x, derived from page data), using 4616 vs 6089 MiB; the SDSL and Pasta rows come from author-run C++ harnesses whose code and flags are not in the repo.",
+  "status_note": "Active (last commit 2026-07-08, 0.5.0 bump in July 2026), MIT, 58 stars and about 189k crates.io downloads; usable today as a Rust dependency, with the API still shifting between minor versions.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/rossanoventurini/qwt/HEAD/README.md",
+    "https://raw.githubusercontent.com/rossanoventurini/qwt/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/rossanoventurini/qwt/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/rossanoventurini/qwt/HEAD/src/quadwt/mod.rs",
+    "https://raw.githubusercontent.com/rossanoventurini/qwt/HEAD/src/qvector/mod.rs",
+    "https://raw.githubusercontent.com/rossanoventurini/qwt/HEAD/src/qvector/rs_qvector.rs",
+    "https://raw.githubusercontent.com/rossanoventurini/qwt/HEAD/src/utils/mod.rs",
+    "https://github.com/rossanoventurini/qwt/issues?q=is%3Aissue",
+    "https://github.com/rossanoventurini/qwt/issues/3",
+    "https://github.com/rossanoventurini/qwt/issues/11",
+    "https://github.com/rossanoventurini/qwt/issues/19",
+    "https://crates.io/api/v1/crates/qwt",
+    "https://crates.io/api/v1/crates/rand/0.10.1"
+  ],
+  "confidence": 0.85
+}
