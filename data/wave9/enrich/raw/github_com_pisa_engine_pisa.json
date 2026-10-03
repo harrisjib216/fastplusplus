@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/pisa-engine/pisa",
+  "one_liner": "Research-grade in-memory C++ inverted-index search engine; trades blows with Lucene 10.4 on top-k ranked queries, loses on counting.",
+  "what_it_does": "PISA builds a compressed inverted index from a text collection (parse, invert, optionally reorder doc IDs, compress, build block-max metadata) and answers Boolean AND/OR and BM25-ranked top-k queries over it from memory-mapped files. It is used as a C++ library (link the pisa target and assemble cursors, scorers and query algorithms yourself, as the benchmark harness does) or through its command-line tools. It is not a drop-in for Lucene: no phrase queries in the benchmarked build, no required/optional/negated clause mixing, single segment, and indexes are built offline in batch.",
+  "how_it_is_fast": "Doc-at-a-time query processing with dynamic pruning (WAND, block-max WAND, MaxScore variants) over impact-ordered block metadata, with quantized BM25 scores. Postings are stored in SIMD-friendly block codecs (the benchmark uses block_simdbp, i.e. SIMD-BP128 from simdcomp; Elias-Fano/partitioned Elias-Fano, FastPFor, StreamVByte, MaskedVByte, QMX and interpolative are also available), and doc IDs are renumbered by recursive graph bisection so postings compress better and pruning skips more.",
+  "when_to_use": [
+    "IR research or prototyping where you want to swap posting codecs, pruning algorithms and doc-ID orderings and compare them on the same index.",
+    "Static English-like corpora that fit in RAM, rebuilt in batch, served with pure conjunctive or pure disjunctive BM25 top-k queries.",
+    "Conjunctive (AND) ranked queries with large k: on the benchmark-game intersection queries it is about 1.27-1.34x faster than Lucene 10.4.0 at top-100/top-1000 (geometric mean).",
+    "Latency experiments on x86-64 Linux where you control the build (-march=native) and can precompute per-term thresholds."
+  ],
+  "when_not_to_use": [
+    "Counting hits over disjunctions: union COUNT queries ran about 2.8x slower than Lucene 10.4.0 (geometric mean 0.36x).",
+    "Top-10 latency against a Lucene index that also uses BP reordering: PISA was 0.73x (slower) on the like-for-like intersection and union queries.",
+    "Anything needing phrase queries, mixed required/optional clauses, negation, incremental updates, deletes, multiple segments or fields; these are absent in the benchmarked build.",
+    "Production services that need a stable API: v0.9.0 notes say breaking changes will be common until a stable release.",
+    "Indexes larger than main memory without sharding: the README states PISA is an in-memory system."
+  ],
+  "integration": {
+    "form": "static lib",
+    "dependencies": "26 git submodules including Boost, oneTBB, FastPFor, simdcomp, streamvbyte, MaskedVByte, QMX, spdlog, fmt, range-v3, mio, CLI11, gumbo-parser (autotools build), nlohmann_json, Porter2/Krovetz stemmers",
+    "min_toolchain": "main: C++20, CMake 3.16.9, GCC 9+ (Dockerfile uses gcc:12); benchmarked v0.8.2: C++17",
+    "platforms": "Unix (CMake adds -march=native on UNIX); x86-64 SIMD codecs; other architectures not documented",
+    "thread_safety": "not documented (indexes are read-only memory-mapped structures; the query harness is single-threaded)",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The benchmark harness (search-benchmark-game engines/pisa-0.8.2/tools/do_query.cpp) seeds block-max WAND with each term's top-10 score threshold for TOP_100 and TOP_1000 too; topk_queue only admits scores >= threshold, so union top-100/top-1000 can return fewer than k documents. This is where the large TOP_1000 win comes from (union queries 3.34x vs intersection 1.34x).",
+    "The harness strips every '+' and treats '-' terms as ordinary terms, so all 40 intersection_union and 19 negated queries compute a different query than Lucene (every one of their COUNT results differs from Lucene's), yet they show 2.3-4.7x 'wins'.",
+    "For TOP_100_COUNT the harness only counts matches (scored_and_query or unscored or_query) without building a top-100 heap, while Lucene and Tantivy compute top-100 plus the count.",
+    "The benchmarked v0.8.2 dates from March 2021; current releases (v0.10.0, December 2024) switched to C++20 and runtime codec dispatch, so the numbers do not describe current main. details.json says FastPFOR blocks, but the harness builds a block_simdbp index."
+  ],
+  "pick_this_over_siblings_when": "Pick PISA over Tantivy, SeekStorm or IResearch (SereneDB) when you want a C++ research platform with many posting codecs, pruning algorithms and BP reordering to experiment with; pick Tantivy or IResearch for a product-grade engine with phrase queries, segments and updates, where Tantivy was slower than PISA on top-10 (about 0.75x) but PISA's count path is much slower than all three.",
+  "verified_claims_summary": "In quickwit-oss/search-benchmark-game results.json (Wikipedia, AOL queries, single-threaded, best of 10, AMD Ryzen 7 9800X3D, PISA 0.8.2 built with Ubuntu 20.04 g++, CMake Release, -march=native, C++17), restricting to the 601 intersection and union queries whose counts match Lucene: top-10 geometric-mean speedup 0.94x vs Lucene 10.4.0, 0.73x vs Lucene 10.4.0-bp, 1.34x vs Tantivy 0.26 (derived from page data). On the 300 intersection queries top-1000 is 1.34x vs Lucene, 1.00x vs Lucene-bp, 1.15x vs Tantivy; union COUNT is 0.36x vs Lucene. The headline TOP_1000 2.19x and TOP_100_COUNT 2.17x include union queries pruned with a top-10 threshold, count-only work and mis-parsed queries.",
+  "status_note": "Actively maintained (last commit 2026-09-20, v0.10.0 released December 2024), Apache-2.0, but positioned as an academic platform with an unstable API and a heavy submodule build.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/pisa-engine/pisa/HEAD/README.md",
+    "https://raw.githubusercontent.com/pisa-engine/pisa/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/pisa-engine/pisa/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/pisa-engine/pisa/HEAD/.gitmodules",
+    "https://raw.githubusercontent.com/pisa-engine/pisa/HEAD/include/pisa/cursor/block_max_scored_cursor.hpp",
+    "https://raw.githubusercontent.com/pisa-engine/pisa/HEAD/include/pisa/index_types.hpp",
+    "https://raw.githubusercontent.com/pisa-engine/pisa/HEAD/Dockerfile",
+    "https://raw.githubusercontent.com/pisa-engine/pisa/v0.8.2/include/pisa/topk_queue.hpp",
+    "https://raw.githubusercontent.com/pisa-engine/pisa/a45fcc4/include/pisa/topk_queue.hpp",
+    "https://github.com/pisa-engine/pisa",
+    "https://github.com/pisa-engine/pisa/issues?q=is%3Aissue+is%3Aopen+label%3Abug",
+    "https://github.com/pisa-engine/pisa/releases",
+    "https://github.com/quickwit-oss/search-benchmark-game/tree/master/engines/pisa-0.8.2",
+    "https://github.com/quickwit-oss/search-benchmark-game/tree/master/engines",
+    "https://raw.githubusercontent.com/quickwit-oss/search-benchmark-game/HEAD/engines/pisa-0.8.2/Dockerfile",
+    "https://raw.githubusercontent.com/quickwit-oss/search-benchmark-game/HEAD/engines/pisa-0.8.2/Makefile",
+    "https://raw.githubusercontent.com/quickwit-oss/search-benchmark-game/HEAD/engines/pisa-0.8.2/CMakeLists.txt",
+    "https://raw.githubusercontent.com/quickwit-oss/search-benchmark-game/HEAD/engines/pisa-0.8.2/details.json",
+    "https://raw.githubusercontent.com/quickwit-oss/search-benchmark-game/HEAD/engines/pisa-0.8.2/tools/do_query.cpp",
+    "https://raw.githubusercontent.com/quickwit-oss/search-benchmark-game/HEAD/engines/pisa-0.8.2/tools/build_index.cpp",
+    "https://raw.githubusercontent.com/quickwit-oss/search-benchmark-game/HEAD/engines/lucene-10.4.0/src/main/java/DoQuery.java",
+    "https://raw.githubusercontent.com/quickwit-oss/search-benchmark-game/HEAD/engines/tantivy-0.26/src/bin/do_query.rs",
+    "https://raw.githubusercontent.com/quickwit-oss/search-benchmark-game/HEAD/results.json"
+  ],
+  "confidence": 0.8
+}

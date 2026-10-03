@@ -1,0 +1,67 @@
+{
+  "id": "https://github.com/feldroop/genedex",
+  "one_liner": "Rust FM-index for DNA-sized texts; locates short reads in hg38 about 4.4x faster than rust-bio's FM-index with a third of its memory.",
+  "what_it_does": "genedex builds an FM-index (BWT plus occurrence table with rank support plus sampled suffix array) over one or many texts, such as the chromosomes of a genome, and answers exact-match count and locate queries returning (text_id, position) hits. The API is its own: FmIndexConfig::new().construct_index(texts, alphabet), then index.count(q), index.locate(q), batched count_many/locate_many, or a Cursor for step-by-step backward search; indexes can be saved and loaded with savefile. It is not a drop-in replacement for rust-bio's FMIndex or the fm-index crate.",
+  "how_it_is_fast": "The occurrence table is a text-with-rank-support structure with interleaved blocks: the 'flat' variant keeps one bitvector per symbol, and the default 'condensed' variant stores each block bit-sliced into ceil(log2 sigma) bit-planes (the encoding from Gottlieb and Reinert, 'Engineering rank queries on bit vectors and strings', 2025), both with u16 block offsets and wider superblock offsets, so one LF step touches about one cache line. A precomputed lookup table skips the first d backward-search steps, and count_many/locate_many interleave batches of 64 queries on one thread so their cache misses overlap. Construction uses libsais suffix sorting parallelised with rayon.",
+  "when_to_use": [
+    "Exact-match seeding of short DNA reads (tens of bases) against a large reference such as hg38, from Rust, where many queries can be searched in batches.",
+    "Indexing a set of texts (chromosomes, contigs) and getting hits back as (text_id, position) without manual concatenation bookkeeping.",
+    "When rust-bio's FM-index is too large or too slow: flat64 used 7.2 GB and 1.6 s versus bio large's 19.9 GB and 7.0 s on the hg38 locate benchmark.",
+    "Small alphabets (DNA, DNA with N, amino acids); the condensed variant keeps memory moderate as the alphabet grows.",
+    "Fast index persistence: built-in save/load to files avoids rebuilding a multi-GB index each run."
+  ],
+  "when_not_to_use": [
+    "Approximate or bidirectional search (MEMs/SMEMs, FMD-index, search schemes with errors): not implemented; listed on the roadmap only.",
+    "Highly repetitive collections (pangenomes) where an r-index or run-length FM-index would be far smaller; not implemented.",
+    "Maximum raw throughput on rank: the independent quadrank evaluation (i7-10750H) measured genedex flat64 at 4.18 s versus QuadFm prefetch at 1.31 s for counting simulated 150 bp reads.",
+    "Production code that needs a stable API: the README warns the library is early-stage and the API may change.",
+    "Loading index files from untrusted sources: the query path uses get_unchecked/unwrap_unchecked, and the safe wrappers check only the symbol and position against the stored text length, not that deserialized arrays are consistent."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "libsais (C library via libsais-rs), rayon, num-traits, bytemuck, memchr; optional psacak (default u32-saca feature), savefile (default), mem_dbg",
+    "min_toolchain": "Rust edition 2024 (rustc 1.85+); no rust-version field published",
+    "platforms": "any Rust target supported by libsais; no architecture-specific SIMD code found (no target_arch or intrinsics in the sources read); benchmark built with -C target-cpu=native",
+    "thread_safety": "Construction is multi-threaded via rayon (thread count set through rayon's global pool). Queries take &self and the index holds plain Vecs, so concurrent reads are possible, but thread safety is not documented.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Query bytes outside the alphabet panic (io_to_dense_representation calls expect); use the cursor with try_io_to_dense_representation or pre-filter reads containing unexpected characters.",
+    "Issue #5 (overflow at condensed.rs block_offsets_sum when a superblock is all one symbol) was fixed on master with wrapping_add after the last crates.io release (0.2.2, 2025-09-25); debug builds of 0.2.2 can panic on such inputs, while release builds wrap silently, which the code comment says is harmless.",
+    "Default config uses suffix-array sampling rate 4 and lookup-table depth 0; the benchmark speeds assume lookup depth 10 and locate_many batching, so per-query locate() calls with defaults will be slower.",
+    "Positions are stored as the generic I (i32, u32, i64...); texts over 2^31 or 2^32 symbols need a wider type and more memory, and the u32 path relies on the psacak low-memory suffix sorter, which the roadmap calls slow."
+  ],
+  "pick_this_over_siblings_when": "Among catalogued FM-indexes, pick genedex over AWRY when you want a pure-Rust crate with multi-text support and file IO (AWRY was excluded from the author's benchmark for segmentation faults), and over AvxWindowFmIndex when you are not tied to C and x86 AVX2; pick QuadRank's QuadFm if you need the fastest counting and can use research code.",
+  "verified_claims_summary": "In the author's own rust-fmindex-benchmark (Rust, cargo --release with -C target-cpu=native, rustc version not stated, Intel Xeon Gold 6348), locating 377 MB of 50-base Illumina reads in an hg38 index (sampling 4, lookup depth 10, best of 5) took 1.6 s with flat64 (7.2 GB) and 2.6 s with cond64 (5.2 GB) versus 7.0 s for rust-bio sampling 32 (19.9 GB) and 2.3-2.4 s for sview-fmindex; genedex runs through its batched locate_many while rust-bio and fm-index run one query at a time and gain no lookup table, so part of the gap is API features rather than the rank structure.",
+  "status_note": "Single-author crate, MIT OR Apache-2.0, last commit 2026-02-01 and last crates.io release 0.2.2 in September 2025; the roadmap says further work depends on user demand, so treat it as maintained but early-stage.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/feldroop/genedex/HEAD/README.md",
+    "https://raw.githubusercontent.com/feldroop/genedex/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/feldroop/genedex/HEAD/ROADMAP.md",
+    "https://raw.githubusercontent.com/feldroop/genedex/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/feldroop/genedex/HEAD/src/cursor.rs",
+    "https://raw.githubusercontent.com/feldroop/genedex/HEAD/src/alphabet.rs",
+    "https://raw.githubusercontent.com/feldroop/genedex/HEAD/src/config.rs",
+    "https://raw.githubusercontent.com/feldroop/genedex/HEAD/src/batch_computed_cursors.rs",
+    "https://raw.githubusercontent.com/feldroop/genedex/HEAD/src/sampled_suffix_array.rs",
+    "https://raw.githubusercontent.com/feldroop/genedex/HEAD/src/text_with_rank_support/mod.rs",
+    "https://raw.githubusercontent.com/feldroop/genedex/HEAD/src/text_with_rank_support/condensed.rs",
+    "https://raw.githubusercontent.com/feldroop/genedex/HEAD/src/text_with_rank_support/flat.rs",
+    "https://github.com/feldroop/genedex/tree/master/src",
+    "https://github.com/feldroop/genedex/issues?q=is%3Aissue",
+    "https://github.com/feldroop/genedex/issues/2",
+    "https://github.com/feldroop/genedex/issues/5",
+    "https://github.com/RagnarGrootKoerkamp/quadrank/issues/1",
+    "https://crates.io/api/v1/crates/genedex",
+    "https://raw.githubusercontent.com/feldroop/rust-fmindex-benchmark/HEAD/README.md",
+    "https://raw.githubusercontent.com/feldroop/rust-fmindex-benchmark/HEAD/justfile",
+    "https://raw.githubusercontent.com/feldroop/rust-fmindex-benchmark/HEAD/src/main.rs",
+    "https://raw.githubusercontent.com/feldroop/rust-fmindex-benchmark/HEAD/src/common_interface.rs",
+    "https://raw.githubusercontent.com/feldroop/rust-fmindex-benchmark/HEAD/src/genedex_bench.rs",
+    "https://raw.githubusercontent.com/feldroop/rust-fmindex-benchmark/HEAD/src/sview_fmindex_bench.rs",
+    "https://raw.githubusercontent.com/feldroop/rust-fmindex-benchmark/HEAD/src/bio_bench.rs",
+    "https://raw.githubusercontent.com/feldroop/rust-fmindex-benchmark/HEAD/src/awry_bench.rs",
+    "https://raw.githubusercontent.com/feldroop/rust-fmindex-benchmark/HEAD/src/fmindex_bench.rs"
+  ],
+  "confidence": 0.8
+}
