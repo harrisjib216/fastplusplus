@@ -1126,6 +1126,47 @@ Research OmpSs/OpenMP-task parallelization of CHOLMOD's supernodal Cholesky with
 
 [repo](https://doi.org/10.5281/zenodo.5974376) · [benchmark](https://arxiv.org/pdf/2202.09288)
 
+##### TileSpGEMM (tiled GPU SpGEMM)  `C++`  `no license`  `abandoned`  `Tier B`
+
+Research CUDA SpGEMM on 16x16 sparse tiles; PPoPP '22 reports wins over cuSPARSE on 139 of 142 large matrices.
+
+**Beats:** cuSPARSE, bhSPARSE, NSPARSE and spECK SpGEMM — Per the PPoPP '22 abstract (search snippets; paper blocked here), on GeForce RTX 3090 and RTX 3060 over 142 square SuiteSparse matrices of at least one billion flops each (C = A^2 and C = A*A^T), TileSpGEMM beat cuSPARSE, bhSPARSE, NSPARSE and spECK on 139, 138, 127 and 94 matrices, with maxima of 2.78x, 145.35x, 97.86x and 3.70x. The repo's cuSPARSE baseline is the generic cusparseSpGEMM API (workEstimation/compute/copy) built with nvcc -O3 against CUDA 11.4; averages, CPU model and cuSPARSE version were not seen.
+
+**Known shortcoming:** No licence, so reference only; PPoPP'22 win counts confirmed from the abstract.
+
+**Known shortcoming:** No license. The driver only computes A^2 or A*A^T and overwrites the input values with i % 10; C comes out tiled, not CSR; the timed region excludes the CSR-to-tile conversion and is a single run; 32-bit indices, x86-only host. Open and unanswered: #6 NULL pointer/segfault on HV15R (283M nnz) on an RTX 4090 with CUDA 11.8, #5 CUDA 12.2 build error, #4 build error, PR #2 undefined behaviour (out-of-bounds read, memsets, use-after-free). The repo's cuSPARSE baseline is the generic cusparseSpGEMM API; the paper's GPUs were an RTX 3090 and RTX 3060 (snippet).
+
+**Independent measurement:** verifier
+
+**Independent measurement:** enricher
+
+**How:** Tiling turns SpGEMM into three bounded steps. Step 1 finds which C tiles are non-empty with a tile-level SpGEMM using a sparse accumulator. Step 2 computes each C tile's nonzero pattern with bitwise ORs of 16-bit row masks, so C is allocated exactly, with no intermediate-product buffers. Step 3 computes values: it intersects A's tile row with B's tile column by binary search (positions from step 2 are cached speculatively), bins C tiles by nonzero count (thresholds 32/224/256) and picks a sparse or dense accumulator in shared memory per bin. The paper's argument is that this fixes load imbalance, intermediate-buffer sizing and accumulator design at once.
+
+**Use it when:**
+- Benchmarking or researching GPU SpGEMM on large square matrices (the paper uses at least one billion flops each) for C = A^2 or C = A*A^T, where it beat cuSPARSE's generic SpGEMM on 139 of 142 matrices.
+- Matrices whose nonzeros cluster into dense-ish 16x16 blocks (FEM, structural, banded), where per-tile bitmask symbolic work and dense on-chip accumulators pay off.
+- Pipelines that can keep matrices in a tiled format end to end, so the host-side CSR-to-tile conversion and tile-to-CSR conversion of C (both outside the reported SpGEMM time) are amortized.
+- Ampere-class NVIDIA GPUs like the paper's RTX 3090 and RTX 3060 (the Makefile targets sm_86).
+
+**Skip it when:**
+- Any reuse in a product: the repo has no LICENSE and the README names none, so the code is not clearly reusable; spECK and OpSparse are MIT.
+- Very large inputs or recent toolchains: open issue #6 (2025) reports a NULL-pointer error and a segfault on HV15R (283M nonzeros) and a 97.5M-nonzero matrix on an RTX 4090 with CUDA 11.8; open issue #5 (2024) reports a build error under CUDA 12.2; open issue #4 (2023) reports '__builtin_ia32_rndscaless_round is undefined' at build time. None shows a reply.
+- Hypersparse or irregular matrices where spECK's per-row hashing wins: spECK was faster on 48 of the 142 paper matrices, and a later third-party study (snippet only) puts TileSpGEMM's average speedup over cuSPARSE at 3.47x, below spECK (5.67x) and OpSparse (4.91x).
+- Code that needs a CSR-in, CSR-out API, single precision out of the box, 64-bit indices (m, n and nnz are int) or non-x86 hosts.
+- Anything needing maintenance: last commit 2022-11-09, 5 open issues and an open undefined-behavior PR, all without maintainer response.
+
+**Vs siblings:** Pick spECK (MIT, CSR in and out, float and double) or OpSparse (MIT, higher average speedup over cuSPARSE in the third-party snippet) for anything you ship. TileSpGEMM is worth studying when your matrices are block-structured and you can stay in its tiled format, or as the reference for the tile approach next to the same lab's TileSpMV and DASP.
+
+**Gotchas:**
+- The reported SpGEMM time (gettimeofday, one run since REPEAT_NUM is 1, no warm-up) covers the three GPU steps plus allocations of C, but not CSR-to-tile conversion of A and B, which the paper reports separately, nor tile-to-CSR conversion of C.
+- main.cu replaces the input matrix values with i % 10 before multiplying, so the driver's results are not your matrix's product; CHECK_RESULT defaults to 1 in common.h, which adds a host-side tile2csr and a cuSPARSE run.
+- Open PR #2 (2022-10-14) reported an out-of-bounds read and wrong-size memsets in csr2tile.h (reproduced on RTX 3090, RTX 2080 and GTX 1650 Ti) and a use-after-free in main.cu under CHECK_RESULT. After the November 2022 re-upload of src/, the PR's remaining diff is 2 added lines and 1 removed line in main.cu, so the use-after-free fix is probably still unmerged; the csr2tile.h memsets now look size-correct, but the out-of-bounds fix was not confirmed.
+- Issue #3: on a GTX 1650 Ti the cuSPARSE reference returned nnzC = 0 for cant and pdb1HYS, so the built-in check prints 'cuSPARSE failed!' even when TileSpGEMM's count is right; do not rely on the harness alone for validation.
+
+**Status:** Abandoned since 2022-11-09, with no license (reference only) and unanswered crash and build reports.
+
+[repo](https://github.com/SuperScientificSoftwareLaboratory/TileSpGEMM) · [benchmark](https://doi.org/10.1145/3503221.3508431)
+
 ### parsing-and-text
 
 #### lexers-tokenizers
@@ -2513,6 +2554,48 @@ Python tool that turns a trained Keras MLP/CNN into one dependency-free C++ head
 
 [repo](https://github.com/jarcities/codejenn) · [benchmark](https://raw.githubusercontent.com/jarcities/codejenn/HEAD/tutorials/06_speed_test/readme.md)
 
+##### cuEquivariance  `Python (frontends; CUDA kernels ship as separate pip packages)`  `Apache-2.0`  `active`  `Tier C`
+
+NVIDIA's CUDA kernels for equivariant tensor products (MACE, NequIP, Allegro); an independent study puts MACE inference about 3x faster than e3nn.
+
+**Beats:** e3nn (PyTorch equivariant tensor products for MACE, NequIP and similar models) — An independent preprint (arXiv 2510.23621, 'Speeding Up MACE', read only as a search snippet) profiles MACE end to end and finds the cuEquivariance backend cuts inference latency by about 3x versus e3nn, with roughly 4x more from casting linear layers to BF16/FP16. GPU, compiler and exact model size were not visible. The repo's own tutorial times e3nn against cuEquivariance (1000 nodes, 10000 edges, multiplicity 128, FP32) but stores no output.
+
+**Known shortcoming:** Raised D to C on the abstract of an independent arXiv 2510.23621 (about 3x MACE inference latency vs e3nn), seen only as a snippet. The kernel pip package ships under NVIDIA's proprietary Math Libraries SDK license, so usability stays mixed.
+
+**Known shortcoming:** The kernel wheels are proprietary binaries (NVIDIA Math Libraries SDK license forbids reverse engineering and derivative works); the README says Beta and releases 0.4.0 and 0.9.0 broke the API. uniform_1d/fused_tp compute only in FP32/FP64; the tutorial says linear layers get no large speedup and issue #45 found no gain over e3nn for a 3000x0e linear; issue #244 open: out of shared memory on Blackwell at embedding size 128. The 3x MACE figure (arXiv 2510.23621) stays snippet-only, and the snippet attributes about 4x more to BF16/FP16 linear layers.
+
+**Independent measurement:** verifier
+
+**Independent measurement:** enricher
+
+**How:** Every supported operation is lowered to one segmented-polynomial descriptor and run by a JIT-compiled 'uniform_1d' CUDA kernel (or fused_tp / indexed_linear kernels) instead of e3nn's chain of small PyTorch ops. The uniform_1d kernel fuses the gather of sender features and the scatter-add of messages into the tensor-product call, so the edge-sized intermediates of the e3nn message-passing path are not written to memory. It uses an ir_mul (component-major) layout so channels are contiguous, and indexed linear layers (per-species weights) run as one kernel instead of e3nn's FullyConnectedTensorProduct against a one-hot vector.
+
+**Use it when:**
+- Inference or training of MACE-style interatomic potentials on NVIDIA GPUs, where MACE already exposes cuEquivariance as a backend
+- Large graphs (thousands of nodes, tens of thousands of edges) with multiplicities around 128, where the tutorial says the kernels do best
+- Message-passing layers where you can fuse gather, channelwise tensor product and scatter into one uniform_1d call
+- Symmetric contraction and per-species (indexed) linear layers in MACE's product basis and skip connections
+- Protein-structure models (OpenFold3/Boltz-style) that need triangle attention or triangle multiplication on Ampere through Blackwell
+
+**Skip it when:**
+- You need AMD GPUs, CPUs or source-level control of the kernels: the kernel wheels are NVIDIA-only binaries under a proprietary license, and the open-source OpenEquivariance covers AMD and is BSD-3
+- Plain equivariant linear layers or scalar-only irreps: the tutorial says it does 'not provide a large speedup' there, and issue #45 reported no gain over e3nn for a 3000x0e linear case
+- Small inputs: the tutorial says the kernels do best on very large inputs, and triangle kernels fall back to PyTorch below sequence length 100 by default
+- Code that must stay in e3nn's mul_ir layout end to end: each TransposeIrrepsLayout call costs time, which the tutorial calls 'quite expensive'
+- Production code that cannot absorb API breaks: the README says Beta, and 0.4.0 and 0.9.0 removed or renamed public classes
+
+**Vs siblings:** Pick cuEquivariance over OpenEquivariance when you run MACE or AlphaFold-style models on NVIDIA hardware and want the vendor-maintained backend with JAX bindings and triangle kernels. OpenEquivariance claims parity with it, is BSD-3 and runs on AMD. batmobile's 11.8x-20x e3nn numbers come from a much smaller single-author kernel set.
+
+**Gotchas:**
+- uniform_1d and fused_tp compute only in FP32 or FP64; FP16/BF16 inputs are upcast to FP32 math unless you choose another method.
+- The triangle-multiplication Triton kernels can run ahead-of-time tuning that 'may take several hours'; the cache lives in ~/.cache/cuequivariance-triton and is lost on container restart unless it is persisted.
+- Open issue #244 reports out-of-shared-memory failures on Blackwell at embedding size 128, and 0.9.1 fixed an index overflow in uniform_1d at large index values; 0.9.1 also turned parallel kernel compilation off by default after multi-GPU problems.
+- Deprecated primitives (TensorProduct, EquivariantTensorProduct, SymmetricTensorProduct) raise ImportError since 0.9.0; use SegmentedPolynomial or the high-level modules.
+
+**Status:** Actively developed by NVIDIA (0.12.0 on PyPI 2026-09-23, roughly monthly releases) and still labelled Beta; the Apache-2.0 Python frontends are usable, but the speed comes from closed binary kernel wheels under the NVIDIA Math Libraries SDK license, which forbids reverse engineering and derivative works, so usability is mixed.
+
+[repo](https://github.com/NVIDIA/cuEquivariance) · [benchmark](https://arxiv.org/abs/2510.23621)
+
 ##### learn-cuda attention (hand-written SM120 flash attention)  `CUDA C++ with inline PTX (PyTorch harness)`  `no license`  `active`  `Tier C`
 
 Educational ~300-line CUDA C++ FlashAttention-2 forward kernel; 4-6% faster than flash-attn on one RTX 5090 shape, 3% slower than cuDNN.
@@ -2624,6 +2707,47 @@ Intel's tensor compiler backend for oneDNN Graph API that fuses MLP/MHA subgraph
 **Status:** Discontinued: deprecated in oneDNN 3.7 and removed in 3.8 (2025); the code remains readable at the v3.7 tag under Apache-2.0, but it is a reference, not something to adopt.
 
 [repo](https://github.com/uxlfoundation/oneDNN/tree/v3.7/src/graph/backend/graph_compiler) · [benchmark](https://arxiv.org/pdf/2301.01333)
+
+##### ThunderMittens  `C++ (Metal Shading Language) with Python/MLX bindings`  `no license`  `stale`  `Tier C`
+
+Metal port of the ThunderKittens tile DSL for Apple GPUs; its bf16 GEMM is about 9% faster than MLX's mx.matmul.
+
+**Beats:** MLX mx.fast.scaled_dot_product_attention and mx.matmul (Apple's MLX Metal kernels) — First-party only, read as a WebSearch snippet because the Hazy Research blog is egress-blocked: on an Apple M2 Pro, the bf16 GEMM is about 9% faster than mx.matmul on most square sizes, and the forward attention kernel is within +-15% of mx.fast.scaled_dot_product_attention (B=16, H=16, N 512 to 2560, D 64/128 in time_attn.py). The repo stores no results, and both kernels are built with MLX's default Metal compilation, with no extra flags.
+
+**Known shortcoming:** Raised D to C on the Hazy Research blog (domain-restricted snippet only: GEMM about 9% faster than MLX, attention within +-15%). No license, 24 stars, last commit 2025-08-26, stale.
+
+**Known shortcoming:** Shape checks are assert() only (compiled out in release builds, no tail handling); attn_fwd uses a fixed 1/sqrt(D) scale while time_attn.py passes scale=1 to MLX, so the attention comparison is not like for like; float16 matmul passes the host check but its Metal kernel is commented out; no backward kernel; eval_cpu ends in assert(false); no license.
+
+**Independent measurement:** verifier
+
+**Independent measurement:** enricher
+
+**How:** The base tile shrinks from ThunderKittens' 16x16 to 8x8 so tiles map directly onto Metal's simdgroup_matrix multiply-accumulate; per the blog snippet this was needed because the M2 Pro allows at most 128 registers per thread. Each threadgroup is one 32-thread SIMD group. The GEMM computes a 32x32 output tile from 32x16 and 16x32 register tiles with FP32 accumulators, reads straight from device memory with no threadgroup-memory staging, and fully unrolls the K loop. The attention kernel is FlashAttention-style: online softmax over 8-row query tiles, with Q pre-scaled by 1/sqrt(D)*log2(e) so it can use exp2.
+
+**Use it when:**
+- Learning or porting ThunderKittens-style tile kernels to Apple Silicon (M-series GPUs) through Metal
+- Experimenting with a custom bf16 square GEMM inside MLX where every dimension is a multiple of 32 (time_gemm.py sweeps 1024 to 16384)
+- Prototyping fused Metal kernels for MLX with tile primitives instead of hand-written simdgroup_matrix code (the blog says the GEMM is 11 lines against MLX's 100+)
+- Non-causal, unmasked bf16 forward attention with head dim 64 or 128 and equal Q/K/V shapes, for inference experiments
+
+**Skip it when:**
+- Any shipped product: the repo has no license file for its own code (only the vendored MLX tree is MIT), so legally it is reference-only
+- Attention speed: the first-party claim is only 'within +-15%' of mx.fast.scaled_dot_product_attention, so it is not a reliable win
+- Training or autodiff: there is no backward kernel, and the JVP transform in attn_fwd.cpp is a commented-out template stub
+- Causal or masked attention, GQA/MQA (Q, K and V must share one shape), head dims other than 64/128, or FP16/FP32 attention
+- CPU fallback or ragged shapes: eval_cpu ends in assert(false), and sequence lengths and GEMM sizes that are not tile multiples have no tail handling
+
+**Vs siblings:** Pick it over ThunderKittens (CUDA) or HipKittens (AMD) only when the target is an Apple GPU and you want the same tile programming model there. Effort (bucketMul) is the other Apple Silicon entry but does approximate matrix-vector products for LLM decoding, not exact GEMM or attention.
+
+**Gotchas:**
+- Shape and dtype checks are plain assert() calls (N a multiple of 8 for attention; GEMM M/N multiples of 32 and K a multiple of 16), which disappear in release builds, so wrong shapes can produce silent garbage or out-of-bounds reads.
+- matmul_custom accepts float16 in its host-side check, but the float16 Metal instantiation is commented out; only float32 and bfloat16 kernels exist.
+- time_attn.py warms up MLX's SDPA instead of the ThunderMittens kernel and passes scale=1 to MLX while the TK kernel scales by 1/sqrt(D); neither timing script checks correctness, and each iteration calls mx.eval, so launch overhead is included.
+- The repository vanished and was restored on 2025-08-26 (two 'revive thundermittens' commits; ThunderKittens issue #132), so there is no history, issue tracker activity or tests to lean on.
+
+**Status:** Stale (two restore commits on 2025-08-26, 24 stars) and unlicensed, so it is reference code for reading and re-implementing, not for vendoring.
+
+[repo](https://github.com/HazyResearch/ThunderMittens) · [benchmark](https://hazyresearch.stanford.edu/blog/2024-11-28-tk-mlx)
 
 ##### yalm (Yet Another Language Model, C++/CUDA LLM inference)  `C++ (CUDA)`  `no license`  `stale`  `Tier C`
 
@@ -2778,6 +2902,46 @@ Peer-reviewed AVX-512F reduced-radix large-integer multiplication for Xeon Phi K
 
 [benchmark](https://ieeexplore.ieee.org/document/8622797/)
 
+##### libMetalFloat64 (philipturner/metal-float64; emulated FP64 on Apple GPUs)  `Metal Shading Language (Swift package)`  `MIT`  `abandoned`  `Tier D`
+
+Archived plan for emulated FP64 on Apple GPUs in Metal; no arithmetic is implemented, only theoretical peaks versus CPU FP64.
+
+**Beats:** Native hardware FP64 on the Apple Silicon CPU (NEON) in the README table, and OpenCL FP64 in the precision table; the listed baselines GMP and MPFR are not compared — Nothing was measured: the README table gives theoretical scalar Gops for an unnamed reference system (8-core 3.064 GHz ARM CPU and 32-core 1.296 GHz Apple GPU), derived from instruction counts, comparing CPU hardware FP64 with GPU double-single FP32x2 (e.g. FMUL 196 vs 758, FADD 196 vs 482). The IEEE eFP64 column is empty, most of the precision table is '???', and the code that would produce those numbers does not exist in the repository.
+
+**Known shortcoming:** Tier D: the README Performance table is theoretical peak derived from instruction counts, not a measurement, and the baseline is the CPU's hardware FP64 peak rather than GMP or MPFR. It is FP64 emulation on Apple GPUs, so it sits oddly in the arbitrary-precision category. Archived 2024-08-11, last commit 2023-05-17.
+
+**Known shortcoming:** HEAD has no FP64 arithmetic: float64_t/float59_t/float43_t are empty ulong wrappers with no operators, the only MetalFloat64 source is a placeholder increment(uint) marked 'TODO: Remove this entire file', and the README's float32x2_t does not exist. MetalAtomic64 fetch_add ignores the type id (an f64 add would be an integer add) and the device store has no lock. The header copies Apple Metal stdlib code under Apple copyright, so MIT does not cover all of it. openmm/openmm#3889: the Metal compiler optimizes away double-single emulation. Usability corrected to reference (retier-09).
+
+**Independent measurement:** verifier
+
+**Independent measurement:** enricher
+
+**How:** The intended speed comes from emulating FP64 with FP32 and 32-bit integer ALU instructions on the GPU's wide FP32 units: an IEEE path modeled on Berkeley SoftFloat and LLVM compiler-rt fp_lib.h, and a faster double-single (float-float, e8m48) path with flushed denormals. The README's speedups over the CPU's NEON FP64 are instruction-count estimates (for example 11 FP32/integer instructions per double-single add, 7 per multiply), multiplied by the GPU's ALU count and clock; none of that arithmetic is in the repository.
+
+**Use it when:**
+- As a design reference when planning your own FP64 or double-single emulation in Metal: the README lists per-operation instruction counts and the dylib-versus-inline split.
+- As a starting point for lock-buffer 64-bit atomics on Apple GPUs (MetalAtomic64 hashes addresses into a lock buffer, borrowing the idea from Kokkos desul's Lock_Array), after finishing and testing it yourself.
+- Not for production numerics in any form: there is no working FP64 add, multiply or FMA to call.
+
+**Skip it when:**
+- Any real workload: the README opens with 'Still in the planning stage - this is not a finished library!' and the sources confirm it.
+- Arbitrary-precision or big-integer work: it is fixed 64-bit floating point, not a GMP or MPFR alternative, so it is in the wrong category for that comparison.
+- Code that needs correct 64-bit atomics: __metal_atomic64_fetch_add_explicit ignores its type argument and always does integer addition (so f64 adds would be wrong), and the device-memory store has its lock acquire and release left as comments.
+- Pre-Metal 3 hardware: it needs function pointers and Metal dynamic libraries, so Apple6-family GPUs (A13 and later) or macOS 13 Ventura on Intel Macs.
+- Fast-math builds of double-single code: the author notes in openmm/openmm#3889 that the Metal compiler optimizes away double-single FP64 emulation.
+
+**Vs siblings:** Do not pick it for computation: sibling entries such as MultiFloats.hpp, DoubleFloats.jl or libQD3 ship working double-double arithmetic with measurements, while this repository has none. It is only worth reading if you target Metal, which none of the siblings do, and plan to write the emulation yourself.
+
+**Gotchas:**
+- The README warns that forgetting useResource(_:usage:) on the atomics lock buffer can freeze half of the GPU until a restart, or silently draw half its maximum TDP in the background.
+- The library header copies parts of Apple's Metal Standard Library and says Apple owns the copyright of that code, so the MIT license does not cover all of it.
+- README and code disagree: the README documents float64_t and float32x2_t, while the headers define float64_t, float59_t and float43_t, and the atomics enum adds f32x2 and f32.
+- Clients must ship libMetalFloat64.metallib in the same directory as their own library, because it is linked with @loader_path.
+
+**Status:** Archived and read-only since 2024-08-11 with the last commit on 2023-05-17; MIT-licensed but unusable as shipped, since it contains only type scaffolding, a placeholder function and partial 64-bit atomics.
+
+[repo](https://github.com/philipturner/metal-float64) · [benchmark](https://github.com/philipturner/metal-float64)
+
 #### blas-lapack
 
 ##### Aliaksei Sala C++ GEMM (C++Now 2025 / CppCon 2025 talk)  `C++`  `no license`  `unknown`  `Tier C`
@@ -2819,6 +2983,47 @@ C++Now/CppCon 2025 talk building a C++ DGEMM step by step to roughly OpenBLAS sp
 **Status:** A conference talk, not a maintained project: no code, license or repository was found, so it is reference-only; the author's 'future plans' slide lists finishing the CPU work and repeating it on GPUs and AI chips.
 
 [benchmark](https://raw.githubusercontent.com/boostcon/cppnow_presentations_2025/main/Presentations/Achieving_Peak_Performance_for_Matrix_Multiplication.pdf)
+
+##### fast_matmul (NinjadenMu; didactic BLIS-style SGEMM for Apple M4)  `C`  `no license`  `active`  `Tier C`
+
+Seven-step NEON SGEMM tutorial for Apple M4; single-thread ties NumPy/OpenBLAS, OpenMP version about 1.5x ahead.
+
+**Beats:** OpenBLAS as called through NumPy (float32 A @ B in scripts/openblas.py) — On one Apple M4 (core count unstated) with clang -O3 -ffast-math -march=native, the single-thread BLIS-style kernel tracks single-thread NumPy A @ B (unversioned OpenBLAS) point for point in a 'largest n reached within a cumulative 5 s' plot, and the OpenMP version reaches n=4200 in about 3.1 s versus about 4.7 s for multi-threaded NumPy, roughly 1.5x (derived from page data, read by eye). The harness favors the custom side (warm-up run and preallocated buffers there; NumPy timed once in a fresh process with the result allocated inside the timed region), takes one sample per n, and never compares against Accelerate.
+
+**Known shortcoming:** Tier C: single-thread parity with OpenBLAS and about 1.5x cumulative multi-thread, read by eye from plots/plot.png. The harness is asymmetric (warm-up only on the custom side, one sample per size, output allocated inside the timed NumPy call) and the OpenBLAS build behind NumPy is unknown; OpenBLAS issue #6073 shows Accelerate and SME-enabled OpenBLAS far faster on M4. No license, 0 stars.
+
+**Known shortcoming:** No LICENSE. The kernel computes C += A*B, the bench never re-zeroes C and the repo has no correctness test. Block sizes are read from environment variables named mc/nc/kc; each call allocates about 61 MB of packing buffers whatever n is. The parallel win likely comes from P/E-core scheduling (commit 'dynamic balances between P/E cores better').
+
+**Independent measurement:** verifier
+
+**Independent measurement:** enricher
+
+**How:** The last two stages follow the Goto/BLIS five-loop algorithm: jc/pc/ic loops cut B and A into nc x kc and mc x kc panels that are packed contiguously in micro-kernel access order (fewer TLB misses, full cache lines), and a 12x8 register-blocked micro-kernel keeps 24 NEON float32x4 accumulators live while doing kc rank-1 updates with vfmaq_n_f32 (FMA against a broadcast B scalar). The parallel stage splits the jr sliver loop across OpenMP threads with schedule(dynamic), which the author's commit says balances work between the M4's performance and efficiency cores better. Everything is built with clang -O3 -ffast-math -march=native and full unrolling pragmas.
+
+**Use it when:**
+- Learning how a single-core SGEMM goes from a naive i-j-k loop to near-OpenBLAS speed, one optimization per file, on an Apple Silicon Mac.
+- Reading a compact, commented example of a 12x8 FP32 NEON micro-kernel with BLIS-style packing routines before writing your own.
+- Experimenting with cache block sizes on M-series chips: mc, nc and kc are runtime environment variables and scripts/tuner.py searches them.
+- Studying how OpenMP dynamic scheduling of the jr loop behaves on heterogeneous P/E-core Apple chips.
+
+**Skip it when:**
+- Any code you need to ship or copy: the repository has no LICENSE file, so default copyright applies.
+- Real BLAS workloads: square n x n only, float32 only, column-major only, no transposes, no alpha/beta, no leading dimensions, no FP64 or complex.
+- Peak FP32 on M4: the implied rate is roughly 100-120 GFLOPS per core on NEON, while OpenBLAS issue #6073 reports 1127-1185 GFLOPS single-thread for Apple Accelerate (AMX/SME) on an M4 Pro, about ten times more.
+- Non-Arm targets: the kernels include arm_neon.h and the Makefile assumes Homebrew libomp, so x86 needs new AVX kernels and retuned block sizes (README).
+- Anything needing checked numerics: the code is compiled with -ffast-math and the repository has no correctness test against a reference result.
+
+**Vs siblings:** Pick fast_matmul only for its stage-by-stage tutorial; for reusable routines take the same author's MuBLIS (config-driven BLIS-style library, GEMM 111.0 vs OpenBLAS 109.9 GFLOP/s single-thread on M4), and for top Apple M4 speed take MaxMulSK (Apache-2.0, about 123 GFLOP/s NEON and SME kernels near 2 TFLOP/s) or Accelerate.
+
+**Gotchas:**
+- Computes C += A*B and assumes C starts at zero; utils/bench.c zeroes C once and then calls the kernel for a warm-up plus the timed runs without re-zeroing, so the benchmark never checks the result.
+- Block sizes come from environment variables literally named mc, nc and kc (defaults 3300, 4096, 2048, checked only by assert), so an unrelated variable with one of those names changes behavior.
+- Every call posix_memaligns packing buffers sized mc*kc and nc*kc floats (about 27 MB and 34 MB at the defaults) regardless of n, and leaks the A buffer if the B allocation fails.
+- Rows or columns that do not fill a full 12x8 tile (for example the last 4 rows when n=100) fall back to an unpacked scalar triple loop, so sizes that are not multiples of 12 and 8 lose speed at the edges.
+
+**Status:** Active hobby project (45 commits, last 2026-07-29, 0 stars) with no license, so read it rather than vendor it; Apple Silicon only.
+
+[repo](https://github.com/NinjadenMu/fast_matmul) · [benchmark](https://github.com/NinjadenMu/fast_matmul)
 
 ##### IAAT (small GEMM)  `None`  `no license`  `unknown`  `Tier C`
 
@@ -3251,6 +3456,8 @@ Romu: tiny nonlinear multiply-rotate 64/32-bit PRNGs with zero output latency, c
 
 **Known shortcoming:** No jump-ahead; period only probabilistic; HN critic (item 22447848) reports cycles in the 32-bit variant shorter than the paper's bounds; license unconfirmed (HN says Apache-2.0, site cert expired).
 
+**Independent measurement:** independent gist by t-mat (no CPU model): under GCC RomuDuoJr 11.40 GiB/s vs Xoroshiro128+ 8.02 GiB/s; under MSVC Wyrand (12.81) beats RomuDuoJr (11.53)
+
 **How:** Each step is one multiply by a constant plus one or two rotates and an add/subtract on separate state words, and the output is a state word read before the update, so output latency is 0 cycles and the multiply overlaps with the consumer's work (instruction-level parallelism). Register pressure is 4-6 registers when inlined, against 7-8 for xoshiro256++ and 10 for 128-bit PCG.
 
 **Use it when:**
@@ -3353,6 +3560,47 @@ A 15-line C function running eight xoshiro256++ streams in lockstep for compiler
 
 [repo](https://gist.github.com/CaffeineViking/dbb43bf2c388646629cb0d786195f4b7) · [benchmark](https://gist.github.com/CaffeineViking/dbb43bf2c388646629cb0d786195f4b7)
 
+##### rhet_RNG (xromu2jr, winner of the PRNG Battle Royale)  `C++`  `no license`  `abandoned`  `Tier D`
+
+2.8 KB public-domain header wrapping Overton's RomuDuoJr with seeding, range and float helpers; claimed fastest of 47 PRNGs for games, no published numbers.
+
+**Beats:** xoshiro256++ / xoshiro256** / xoroshiro128 variants and PCG (pcg64) among the 47 PRNGs benchmarked; std::mt19937 is not among the generators listed in the README — The README describes relative-speed charts for latency and throughput tests (raw 64-bit, biased modulo, unbiased masking and Lemire fixed-point range mapping over ranges 2 to 2^16, at least 256 GB of data per test) across nine consoles built with Visual Studio 2019 and platform SDKs, normalised per console to the slowest test; no numbers, CPU models or flags are given, the charts are absent, and the code is private, so the claim that RomuDuoJr beats xoshiro256++/PCG64 and others rests on the author's word and his own weighting of speed and PractRand results.
+
+**Known shortcoming:** Tier D: the repo holds only a README copy and the header; no numbers, no charts, and the benchmark code is private. It is a re-host by a non-author (3 stars, abandoned), cited by ulfben/cpp_prngs's README. Usability mixed.
+
+**Known shortcoming:** Seeds 0 and UINT64_MAX give the same sequence (the constructor sets y = !s - s); the cycle check covers only the first 2^24 bytes for 32-bit seeds; the range functions are biased (multiply-shift with no rejection); as<>() violates strict aliasing; the header has no #include lines; not a std::uniform_random_bit_generator. rhet.dev no longer resolves, so the original post is gone.
+
+**Independent measurement:** verifier
+
+**Independent measurement:** enricher
+
+**How:** RomuDuoJr keeps 128 bits of state and spends one 64-bit multiply, one subtract and one rotate per output, and it returns the previous x before the update, so the output has no dependency on the current step's multiply (the README notes Romu uses this 'return the previous roll' trick for latency). Bounded integers use Lemire's multiply-shift fastrange (high half of N times a random word) instead of modulo or rejection, which the README reports beat both alternatives in its charts, and floats are made by OR-ing random bits into the mantissa of 1.0 and subtracting 1 (Quilez's trick), avoiding an int-to-float conversion.
+
+**Use it when:**
+- Game or interactive code that rolls many small ranges (loot tables, AI choices, particle jitter) and can accept the tiny bias of multiply-shift range mapping.
+- You want a 16-byte generator you can vendor as one file with no dependencies and a public-domain wrapper.
+- You seed many short-lived generators from a counter (entity IDs, frame numbers): the NASAM-based constructor mixes the seed so sequential uint32_t seeds are meant to give independent sequences, and it replaces discarding the low-quality first rolls typical of chaotic generators.
+- Single-threaded hot loops where per-call latency matters more than vectorized throughput.
+
+**Skip it when:**
+- You need a guaranteed period: RomuDuoJr is chaotic, so some seed can fall into a short cycle; the author only brute-forced that 32-bit seeds have no cycle within the first 2^24 bytes (about 2 million 64-bit outputs) and 16-bit seeds within 2^36 bytes, and himself points people who cannot accept the risk to xoshiro256++ or sfc64.
+- You need unbiased bounded integers: ru32(N)/ru64(N) are plain multiply-shift without the rejection step, so ranges that are not powers of two are slightly biased.
+- You need std::-compatible engines, jump-ahead or independent streams: none are provided (no jump function, streams only by seeding).
+- You need evidence: the repo has no numbers, the charts are not included, and the benchmark code was kept private for console NDA reasons, so the 'winner' claim cannot be reproduced.
+- Any security-sensitive use; it is a non-cryptographic generator.
+
+**Vs siblings:** Pick ulfben/cpp_prngs instead if you want the same RomuDuoJr algorithm behind a std-compatible engine that works with std::shuffle and std::sample; pick xoshiro256++, sfc64 or PCG siblings when a guaranteed period matters, SHISHUA or the SIMD xoshiro siblings for bulk throughput, and lemire/FastShuffleExperiments for unbiased bounded integers. Choose this header only for its tiny public-domain wrapper and counter-friendly seeding.
+
+**Gotchas:**
+- Seeds 0 and UINT64_MAX produce the same sequence: the constructor sets y = !s - s, which is 1 for both.
+- as<>() type-puns through reinterpret_cast, which violates C++ strict aliasing; it usually works, but std::bit_cast or memcpy is the defined way if you modify the header.
+- ri32(f, c) and similar return values in [f, c), and c - f is computed in the signed type, so very wide signed spans overflow.
+- Compilers that have neither __int128 nor MSVC's __umulh cannot compile ru64(N).
+
+**Status:** Abandoned re-host (3 commits on 2023-06-25, 3 stars, no LICENSE file; the header states the wrapper is public domain, while the RomuDuoJr algorithm is Mark Overton's and its terms are not stated here); the original rhet.dev post no longer resolves (DNS failure in this session), so this repo is the reachable copy.
+
+[repo](https://github.com/Almightygir/rhet_RNG) · [benchmark](https://github.com/Almightygir/rhet_RNG)
+
 #### sparse-and-solvers
 
 ##### apxchol (parallel approximate-Cholesky PCG for Laplacian and SDDM systems)  `C++ (optional CUDA)`  `BSD-4-Clause (LICENSE file)`  `active`  `Tier C`
@@ -3393,6 +3641,47 @@ Parallel randomized approximate-Cholesky PCG for graph-Laplacian and SDDM system
 **Status:** Active ETH Zurich research code (354 commits, last commit 2026-09-30, PyPI 0.2.2 from 2026-07-27, 8 stars, no issues filed); usable from source or pip, but the BSD-4-Clause advertising clause limits it to reference use in this catalog.
 
 [repo](https://github.com/AlgOptGroup/apxchol) · [benchmark](https://raw.githubusercontent.com/AlgOptGroup/apxchol/HEAD/benchmarks/daint/results.csv)
+
+##### CKTSO-GPU  `C++ (CUDA; solver shipped as prebuilt x86-64 Windows/Linux binaries, demos in C++)`  `None stated: no LICENSE file, and README.md and ug.pdf give no terms; prebuilt x86-64 Windows/Linux binaries only, used on top of the separately distributed CKTSO library`  `abandoned`  `Tier C`
+
+Closed-source CUDA add-on to CKTSO for sparse LU refactorization and solve; first-party 13.3x geomean refactorization speedup over KLU.
+
+**Beats:** KLU 1.3.9 (SuiteSparse; run with CKTSO's ordering); also CKTSO version 20221123 on 1 CPU thread — First-party results.pdf (CKTSO-GPU 20221207), 29 SuiteSparse circuit matrices with Flops/NZ(L+U) > 50: refactorization on an RTX 3090 is 13.29x faster on geometric mean (28.80x arithmetic) than sequential KLU 1.3.9 given CKTSO's ordering, and 6.11x (12.01x) faster than CKTSO on one thread of a Xeon Gold 6130. Solve is 1.72x (2.41x) faster than KLU and 1.46x (1.98x) faster than one-thread CKTSO. Built with gcc 4.8.5 and nvcc 11.0 on CentOS 7.9; flags are not stated, there is no benchmark code, and per-matrix results appear only as bar charts.
+
+**Known shortcoming:** Tier C: every ratio (refactor 28.80x/13.29x vs KLU, solve 2.41x/1.72x) comes from the vendor's results.pdf with no benchmark code or flags; binaries only, no license stated. Per ug.pdf the GPU module only pays off when flops/NNZ(L+U) > 50; on sparse matrices the multicore CKTSO is the better pick. It is the GPU add-on of the already-listed CKTSO.
+
+**Known shortcoming:** GpuRefactorize does no pivoting. V100 gives wrong results unless the L1-cache-disabled libraries are used (about 20% slower). Compute capabilities are listed only up to 8.0 with CUDA 11.0 builds. Benchmarked only against 1-thread CKTSO and sequential KLU; the CKTSO README claims over 25x over KLU at 16 threads on a different matrix set, above the GPU's 13.29x geomean, and lists 'Faster GPU acceleration method' as ongoing work.
+
+**Independent measurement:** verifier
+
+**Independent measurement:** enricher
+
+**How:** Refactorization reuses the pivot order and LU pattern fixed by the CPU factorization, so there is no pivot search and the column dependencies are known in advance; the GPU can then factor independent columns in parallel. The guide exposes a threshold (iparm[1], default 128) that switches refactorization between a 'bulk' and a 'pipeline' mode, and it picks blocks per multiprocessor and threads per block automatically. This matches the author's published GPU left-looking LU (DAC 2012, TPDS 2015), which uses a cluster mode for early dependency levels with many sparse independent columns and a pipeline mode for late levels with few, denser columns (per search snippets; the source is closed, so the exact algorithm is not visible). Gains come from matrices with enough work per factor nonzero; the guide's threshold is flops/NNZ(L+U) > 50.
+
+**Use it when:**
+- SPICE Newton/transient loops that refactor the same circuit-matrix pattern thousands of times while the pivot order from one CPU factorization stays acceptable.
+- Slightly dense circuit matrices that pass the user guide's flops/NNZ(L+U) > 50 test, the only class it was benchmarked on.
+- You already use CKTSO on x86-64 Windows or Linux and have an NVIDIA GPU of compute capability 3.5-8.0 with a CUDA 11 driver.
+- Real or complex matrices with a single right-hand side per solve.
+
+**Skip it when:**
+- Highly sparse circuit matrices: the user guide itself says it cannot accelerate them efficiently and that multicore CKTSO is best there.
+- You have a many-core CPU: the GPU was compared only with one-thread CKTSO and sequential KLU. The CKTSO README separately claims more than 25x over KLU at 16 threads (66 matrices, a different set), which exceeds this module's 13.29x geomean over KLU, so multithreaded CKTSO may match or beat it (cross-document, not like-for-like).
+- You need pivoting on the GPU: factorization with pivoting stays on the CPU, and every CPU refactorization that changes the LU structure requires calling InitializeGpuAccelerator again.
+- You need source code, a license, non-x86-64 hosts, AMD GPUs, or post-Ampere GPUs: it ships only prebuilt x86-64 binaries with no license terms, built with CUDA 11.0, and the listed compute capabilities stop at 8.0.
+- Long-term support: the last commit was 2023-04-01, and the CKTSO README lists a 'faster GPU acceleration method' as work in progress.
+
+**Vs siblings:** Use it only if you already run CKTSO and your matrices pass the flops/NNZ(L+U) > 50 test. Otherwise multithreaded CKTSO (same author, maintained, TCAD 2025 paper) or BSD-licensed Basker on the CPU is the safer choice, and GLU is a public-source GPU circuit LU you can build and modify.
+
+**Gotchas:**
+- Wrong results on some GPUs: disabledL1cache/readme.txt says the V100 needs the L1-cache-disabled libraries, which cost about 20% performance. Check residuals on your GPU.
+- GpuRefactorize does no pivoting. If changed values make a pivot unacceptable, fall back to CKTSO factorization with pivoting on the CPU and re-initialize the accelerator; CKTSO's scaling option (its iparm[7]) is not supported on the GPU.
+- Values and vectors are passed in host memory, and results.pdf does not say whether its timings include host-device transfers; oparm[1]/oparm[2] report the module's own timings.
+- Return codes are mixed: negative values are CKTSO errors (-51 to -53 are GPU-specific), and positive values are raw cudaError_t codes (e.g. 209, no kernel image, on an unsupported GPU). Call CKTSO_SortFactors before initializing, or initialization is slower.
+
+**Status:** Abandoned since 2023-04-01 (22 commits, 6 stars), binary-only with no license terms, so reference only; tied to CUDA 11.0-era builds and an external licensed CKTSO library.
+
+[repo](https://github.com/chenxm1986/cktso-gpu) · [benchmark](https://raw.githubusercontent.com/chenxm1986/cktso-gpu/HEAD/results.pdf)
 
 ##### GSS (GRUS Sparse Solver, trial binaries)  `C`  `no license`  `abandoned`  `Tier C`
 
@@ -3476,6 +3765,47 @@ FP32 GPU SpMM kernel for GNN graphs (IPDPS'23 HP-SpMM); tops cuSPARSE 12.2 and G
 
 [repo](https://github.com/fan1997/HP-SpMM-SDDMM) · [benchmark](https://github.com/fan1997/HP-SpMM-SDDMM)
 
+##### HYLU  `C (C API header with extern "C", closed-source prebuilt library)`  `None stated: no LICENSE file, and the README, include/hylu.h and doc/ug_en.pdf give no terms; prebuilt binaries only (unlike CKTSO, no license key file is required)`  `active`  `Tier C`
+
+Closed-source multicore sparse LU/Cholesky solver for general large matrices; first-party 1.70x geomean over MKL PARDISO one-time solve.
+
+**Beats:** Intel MKL PARDISO — Author's results.pdf: HYLU 20260331 vs Intel MKL PARDISO 2025.3, 16 threads on one Xeon Gold 6130, 37 SuiteSparse matrices (n 525,825 to 5,558,326): one-time solve 1.70x geomean total (factorization 2.36x, preprocessing 1.48x, substitution 18% slower); repeated solve 2.90x factorization and 2.53x factor+solve, substitution 20% slower; residuals about an order of magnitude lower on geomean. PARDISO settings and compiler flags are not stated, no benchmark harness is public, and the earlier arXiv preprint (34 matrices) reported 1.95x and 2.40x factorization speedups with near-parity on relatively dense matrices.
+
+**Known shortcoming:** Binary-only (no licence text); numbers in doc/results.pdf (Xeon Gold 6130, gcc 13.3.0/8.5.0, no flags, no harness); no paper PDF in the repo. The residual chart shows relative residual about 1 or higher on CurlCurl_2, CurlCurl_4 and dgreen (PARDISO worse), yet those timings count toward the means; the geomean is lifted by 4 PARDISO fill-in outliers; HYLU is slower in total time on af_shell10 (~0.8x). Read from charts, approximate.
+
+**Known shortcoming:** The forward-backward solve is 18-20% slower than PARDISO; the symmetric-indefinite LDL^H does no pivoting, and pivoting is limited to the diagonal supernode, so some unsymmetric systems come back inaccurate; MKL-BLAS builds leak memory (user guide); no license terms anywhere. The arXiv 2509.07690 snippet says near parity with PARDISO on relatively dense matrices; the paper was blocked.
+
+**Independent measurement:** verifier
+
+**Independent measurement:** enricher
+
+**How:** The core is a parallel up-looking (row-by-row) LU and Cholesky factorization that switches between hybrid numerical kernels according to local sparsity, so very sparse regions avoid dense supernode overhead while denser regions run as supernodes (minimum 32 columns by default); the arXiv abstract, seen only as a search snippet, says this is why it is much faster than PARDISO on highly sparse matrices and about even on relatively dense ones. Preprocessing combines static pivoting and scaling with a choice of four fill-reducing orderings (two approximate-minimum-degree and two parallel nested-dissection variants, auto-selected, or best-of-all when repeat=true). Stability comes from static pivoting plus dynamic pivoting restricted to the diagonal supernode, pivot perturbation and automatic iterative refinement, which keeps the factorization's data structures static and parallel; threads are native OS threads (no OpenMP), and the builds link either MKL BLAS or OpenBLAS.
+
+**Use it when:**
+- One-time or repeated solves of large general sparse systems (the benchmark set is n = 525,825 to 5,558,326) on a 16-core-class x86-64 server where MKL PARDISO's factorization time dominates.
+- Repeated factorization with a fixed sparsity pattern (Newton loops, transient simulation, time stepping): call Analyze once with repeat=true and the first-party results show 2.90x geomean in factorization and faster factor+solve than PARDISO on all 37 test matrices.
+- Very sparse, circuit-like or KKT-like matrices where PARDISO's METIS-based fill-in blows up (results.pdf names ASIC_680k, ASIC_680ks, circuit5M and nlpkkt80 as PARDISO's worst cases).
+- Projects that can take a binary-only dependency and want a simple C API with 64-bit index variants, complex Hermitian support and condition-number/determinant output without OpenMP.
+
+**Skip it when:**
+- Anything that must be open source, audited, rebuilt or redistributed under clear terms: there is no source and no license file or terms anywhere in the repo, only x86-64 Linux .so and Windows .dll binaries.
+- ARM, Apple Silicon, 32-bit or CPUs without AVX2 and FMA; only x64 Windows 7/10/11 and Linux (CentOS 7/8 named) are supported.
+- Solve-dominated workloads (one factorization, many right-hand sides): forward-backward substitution is 18-20% slower than PARDISO on geometric mean, partly from iterative refinement.
+- Symmetric indefinite systems that need pivoting: the LDL^H path does no pivoting at all, and the user guide's fallback is to solve them as unsymmetric with the full matrix.
+- Shared or oversubscribed machines and small problems: the guide says performance degrades severely if worker threads exceed idle cores, and no results exist below n = 525,825 or for sequential runs.
+
+**Vs siblings:** Pick HYLU over CKTSO or NICSLU (same author, tuned for circuit matrices and KLU-style refactorization) when the matrices are general FEM/CFD/KKT systems or symmetric/SPD, and over GSS (binary-only, compared with a 2013 PARDISO) or RSLAB (Rust, factorization slower than PARDISO) when you want the fastest PARDISO replacement on x86 multicore; choose Basker (open source in Trilinos) or PanguLU (distributed multi-GPU) when you need source or scale beyond one node.
+
+**Gotchas:**
+- Pivoting is limited to the diagonal supernode, so some unsymmetric systems come back inaccurate; the user guide's fix is parm[23]=0, a larger parm[6] and sequential factorization, which costs speed. Check parm[11] (perturbed pivots) and the residual yourself.
+- Passing ax=NULL to HYLU_Analyze disables static pivoting and scaling for unsymmetric matrices; the guide strongly recommends passing values.
+- Builds linked with Intel MKL BLAS leak memory (the user guide blames MKL BLAS itself); use the OpenBLAS build for long-running processes if that matters.
+- With parm[23]=0 and several threads, the parallel nested-dissection ordering is non-deterministic; even with the default setting, sequential and parallel numerical results may differ slightly.
+
+**Status:** Actively developed (version 20260930, last commit 2026-09-30, 39 commits since 2025) but binary-only with no license terms, so it is a reference to call, not code to copy or ship without asking the author.
+
+[repo](https://github.com/chenxm1986/hylu) · [benchmark](https://raw.githubusercontent.com/chenxm1986/hylu/HEAD/doc/results.pdf)
+
 ##### ISpMV  `C++`  `MIT (interfaces, examples, benchmarks) plus proprietary ISpMV Binary License for compiled core`  `active`  `Tier C`
 
 Closed-binary GPU SpMV SDK with per-matrix plans; 1.3-2.2x faster than cuSPARSE SpMV on H100 (fp64).
@@ -3512,6 +3842,48 @@ Closed-binary GPU SpMV SDK with per-matrix plans; 1.3-2.2x faster than cuSPARSE 
 **Status:** Actively released (v0.1.0, single public commit) but reference-only: the core is a proprietary binary licensed for evaluation and non-commercial research, and only the interfaces, examples and benchmark client are MIT.
 
 [repo](https://github.com/PolyU-IOR/ISpMV) · [benchmark](https://github.com/PolyU-IOR/ISpMV/blob/main/benchmarks/README.md)
+
+##### NICSLU  `C (prebuilt libraries only)`  `Proprietary prebuilt binaries with no source: use is gated by a license key file (nicslu202110/license/nicslu.lic), and license/readme.txt says 'License for research/trial purpose only. Long-term license key file is now provided.' The README says the license has been extended to 9999-99-99.`  `finished`  `Tier C`
+
+Retired binary-only parallel sparse LU for SPICE circuit matrices; first-party 1.87x over KLU, 2.15x over MKL PARDISO.
+
+**Beats:** KLU (SuiteSparse) and Intel MKL PARDISO — The author's 2019 results.pdf compares NICSLU 201905B with KLU and Intel MKL PARDISO on an Intel Xeon Gold 6132, using refactorization plus solve time on 182 circuit matrices (136 unpublished real circuits, 46 SuiteSparse) with 'best configurations'; thread counts, versions and compilers are not stated. It reports geomean speedups of 1.87x over KLU (faster on 149 of 182) and 2.15x over PARDISO (faster on 134). The chart shows many matrices near 1x and a few huge outliers (one KLU case at 15691x) lifting the mean; the peer-reviewed TCAD 2013 paper (2.08x to 8.57x over KLU with 1-12 threads, per a search snippet) was not opened.
+
+**Known shortcoming:** Tier C: results.pdf numbers (geomean 2.15x vs MKL PARDISO, 1.87x vs KLU over 182 matrices) are first-party; the license is a proprietary research/trial key file (nicslu202110/license/nicslu.lic). The TCAD 2013 paper (2.08x-8.57x vs KLU, 1-12 threads) was blocked and seen only as a snippet; retier candidate to B.
+
+**Known shortcoming:** Unmaintained; the author points to CKTSO. Serial solve only; the pivoting factorization scales only about 2x at 8-16 threads (CKTSO TCAD paper); the results.pdf geomean is lifted by a few huge KLU outliers (one at 15691x); thread counts and versions unstated; 136 of 182 matrices are private; patent-covered, academic use only. wibraun/NICSLU (LGPL-2.1, NICSLU 3.0.1 from 2011-2013) is the only copyable source, which the author's FAQ calls old and buggy with the closed version up to 3x faster.
+
+**Independent measurement:** verifier
+
+**Independent measurement:** same author's CKTSO doc/tcad.pdf: CKTSO 5.9x over NICSLU at 16 threads, 1.21x-4.69x with the same ordering, implying NICSLU about 2x over PARDISO there (derived from page data)
+
+**How:** It is a Gilbert-Peierls left-looking LU in the KLU lineage with several additions: static pivoting and scaling at analysis (Duff-Koster style permutation of large entries to the diagonal) to cut off-diagonal pivots, and six fill-reducing orderings (AMD, approximate minimum Markowitz, three approximate-minimum-operation variants and approximate minimum deficiency) run in parallel, keeping the one with the fewest predicted flops. Factorization adaptively picks a row-row, partial-supernode or full-supernode kernel by sparsity, and parallelizes over an elimination-tree dependency graph, running wide levels in parallel and narrow levels in a pipelined schedule; it also decides automatically whether a matrix is worth factorizing in parallel at all. Repeated Factorize calls use a pivoting-reduction technique, and ReFactorize reuses the previous pivot order with no pivoting, which is the fast path in converging Newton iterations.
+
+**Use it when:**
+- An existing SPICE-style simulator that already integrates NICSLU, for example Dolphin Design SMASH (the README gives a special build for SMASH 7.5.x and nicslu202110 for 7.6.0, enabled with .OPTION SOLVER=NICSLU).
+- Highly sparse circuit matrices refactorized thousands of times with a fixed pattern, where KLU occasionally blows up: the results chart shows KLU more than 10x slower on roughly 15 of 182 matrices (read off the chart), mostly where its fill-in is far larger.
+- Older x86-64 CPUs without FMA or AVX2: NICSLU ships non-FMA builds, while its successor CKTSO refuses to run without AVX2 and FMA.
+- Academic work that needs a frozen solver with a non-expiring key: the README says the license now runs to 9999-99-99, and use is free for academic purposes.
+- Studying the algorithm: an older NICSLU 3.0.1 source tree (2011-2013, LGPL-2.1) is mirrored at github.com/wibraun/NICSLU, though the author's FAQ calls that version old and buggy.
+
+**Skip it when:**
+- New projects: the author says NICSLU is no longer updated or maintained and points to CKTSO, whose IEEE TCAD 2025 paper reports it 5.9x faster than NICSLU at 16 threads in the no-re-pivot best case (1.21x to 4.69x when both use CKTSO's ordering).
+- Commercial products without a deal with the authors: it is copyrighted by NICS Lab (Tsinghua) and Xiaoming Chen, covered by three Chinese patents, free only for academic use, and needs a research/trial license key file to run.
+- Solve-dominated or many-right-hand-side workloads: the user guide says only serial forward/backward solving is supported.
+- Scaling to many cores: the CKTSO paper says NICSLU's factorization with pivoting gets only about 2x on 8-16 threads, and the auto-selector may run small or very sparse matrices on one thread regardless of the thread count.
+- Non-circuit matrices (FEM, CFD) or non-x86 targets: orderings are minimum-degree family only (ColAMD and METIS were removed in 201905A), pre-analysis takes about 2.6x KLU's time, and the macOS/PowerPC request (issue #2, 2023) has no reply.
+
+**Vs siblings:** Pick NICSLU over CKTSO only when you are tied to an existing NICSLU integration, need non-FMA x86-64 builds, or want the non-expiring key; otherwise CKTSO (same author, same API style) is faster and maintained. Choose Basker (open source in Trilinos, measured against KLU and PARDISO) when you need source, and GLU or CKTSO-GPU for GPU refactorization.
+
+**Gotchas:**
+- NICSLU expects CSR; passing KLU-style CSC without MATRIX_COLUMN_* gives wrong answers (the FAQ's 'completely wrong for any test case'), and duplicate entries are rejected with -7.
+- The __NICS_INT64 macro must match the int32 or int64 library you link, or the integer argument types silently disagree.
+- NicsLU_ReFactorize does no pivoting and can go unstable when values change a lot; call NicsLU_Factorize until Newton is converging. The FactorizeMatrix heuristic can misjudge extreme cases, and the guide recommends the low-level calls for DC analysis.
+- Passing ax=NULL to NicsLU_Analyze disables static pivoting. The first factorization or refactorization carries one-time setup, so benchmark the second call, as the FAQ advises.
+
+**Status:** Finished: the 'Final update' commit is dated 2026-03-22, the code is unmaintained and replaced by CKTSO, and it is a proprietary, patent-covered, license-keyed binary, so treat it as a reference to call, not code to copy.
+
+[repo](https://github.com/chenxm1986/nicslu) · [benchmark](https://raw.githubusercontent.com/chenxm1986/nicslu/HEAD/results.pdf)
 
 ### parsing-and-text
 

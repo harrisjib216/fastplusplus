@@ -7,11 +7,11 @@ claim against the cited page before it was written up.
 
 ## Lists
 
-- [COPYABLE.md](COPYABLE.md): 1122 entries under an OSI license or CC0. Code can be vendored or forked.
-- [REFERENCE.md](REFERENCE.md): 128 entries with no, unclear, or non-OSI license. Study the idea; don't copy the code.
+- [COPYABLE.md](COPYABLE.md): 1180 entries under an OSI license or CC0. Code can be vendored or forked.
+- [REFERENCE.md](REFERENCE.md): 137 entries with no, unclear, or non-OSI license. Study the idea; don't copy the code.
 - [REJECTED.md](REJECTED.md): 22 candidates that failed verification.
 
-Tiers across both lists: A 321, B 255, C 653, D 21.
+Tiers across both lists: A 327, B 267, C 691, D 32.
 
 ## Evidence tiers
 
@@ -40,13 +40,13 @@ Ratios marked "(derived from page data)" were computed from numbers on the cited
 | networking-and-servers | http-servers-frameworks | 36 | 4 | 20 | 12 | 0 |
 | networking-and-servers | tls | 16 | 3 | 4 | 9 | 0 |
 | networking-and-servers | websocket-grpc-rpc | 21 | 5 | 2 | 14 | 0 |
-| numerics-and-science | autodiff-and-ml-kernels | 68 | 10 | 14 | 43 | 1 |
-| numerics-and-science | big-integer-arbitrary-precision | 33 | 9 | 2 | 21 | 1 |
-| numerics-and-science | blas-lapack | 50 | 14 | 11 | 20 | 5 |
-| numerics-and-science | fft | 41 | 12 | 8 | 17 | 4 |
-| numerics-and-science | geometry-spatial | 54 | 5 | 9 | 39 | 1 |
-| numerics-and-science | random-and-quasi-random | 41 | 13 | 3 | 24 | 1 |
-| numerics-and-science | sparse-and-solvers | 35 | 6 | 16 | 13 | 0 |
+| numerics-and-science | autodiff-and-ml-kernels | 78 | 12 | 15 | 50 | 1 |
+| numerics-and-science | big-integer-arbitrary-precision | 39 | 10 | 2 | 24 | 3 |
+| numerics-and-science | blas-lapack | 55 | 14 | 12 | 23 | 6 |
+| numerics-and-science | fft | 46 | 12 | 9 | 18 | 7 |
+| numerics-and-science | geometry-spatial | 61 | 5 | 9 | 45 | 2 |
+| numerics-and-science | random-and-quasi-random | 58 | 15 | 4 | 36 | 3 |
+| numerics-and-science | sparse-and-solvers | 52 | 7 | 24 | 19 | 2 |
 | parsing-and-text | csv-tabular | 11 | 2 | 0 | 9 | 0 |
 | parsing-and-text | lexers-tokenizers | 9 | 1 | 1 | 6 | 1 |
 | parsing-and-text | markup-html-markdown | 9 | 1 | 0 | 8 | 0 |

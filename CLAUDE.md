@@ -147,19 +147,27 @@ after 2 failed fetches, the privacy/scratch rules above, and the terse final-rep
 - A user interrupt in the main session can kill running background agents silently; if an agent
   never reports and its raw file is missing or stale, relaunch it.
 
-## Status (2026-10-03)
+## Status (2026-10-03, evening)
 
-- Waves 1-7 are finished. Wave 8 is nearly finished; open items are in QUEUE.md "Unfinished work".
-  Lists after the 2026-10-02 session: COPYABLE 1122, REFERENCE 128, REJECTED 22.
-- Wave 8 (numerics-and-science): searches b1-b8 for all 7 categories and two seed passes (52
-  projects) are merged. 353 verdicts, 347 verified (A 70, B 69, C 189, D 19); rejected for invalid
-  evidence: SIMDxorshift, SIMD-MT, ra_prng, CUDA-L1, OxiBLAS, cpp-matmul (SGEMM timed against
-  MKL DGEMM). 42 merged records still need verdicts and 26 verified entries still need
-  enrichment. Retiers are in data/wave8/verify/raw/retier-0{1..7}.json. List unenriched slugs with:
-  `for s in $(python3 pipeline/enrich.py data/wave8 | cut -f1); do [ -f data/wave8/enrich/raw/$s.json ] || echo $s; done`
+- Waves 1-8 are finished. Lists after the 2026-10-03 session: COPYABLE 1180, REFERENCE 137,
+  REJECTED 22. The next open work is in QUEUE.md "Unfinished work" (a wave 8 backfill seed pass
+  from this session's leads, paper-access retiers, then waves 9-12).
+- Wave 8 (numerics-and-science) closed: searches b1-b8 for all 7 categories and two seed passes
+  (52 projects) merged; 394 verdicts (confirm 346, downgrade 35, reject 13), 388 verified (A 74,
+  B 75, C 215, D 24), every verified entry enriched. Rejected for invalid evidence: SIMDxorshift,
+  SIMD-MT, ra_prng, CUDA-L1, OxiBLAS, cpp-matmul; the other rejects were overridden to keep per
+  the keep-and-document rule. Retiers are in data/wave8/verify/raw/retier-{01..11}.json (08 PFT
+  C to B on the KDD paper; 09 metal-float64 usability to reference; 10 DASP B to C on harness and
+  correctness evidence; 11 vpxyz/xorshift A to C on generator bugs).
 - b7/b8 in this environment ran on WebSearch snippets plus github.com, since HN Algolia, HN
   threads, arXiv and most blogs were blocked; their yield was thin (55 records).
 - Waves 9-12 are set up (2026-10-01): `data/wave{9,10,11,12}/assignments.json` (152 assignments,
   19 categories x b1-b8) and leads.md; b1/b2 prompts rendered. Re-render b1/b2 before launching a
   later wave so its known list is current. zlib-ng and libdeflate are already filed under wave 9's
   general-lossless category.
+- Cloud-session workflow that worked on 2026-10-03: 8 agents at a time (Opus verifiers, then
+  Opus enrichers with two prompts each), record each report and push before launching the next;
+  no usage-limit kills. Enrichers often read code the verifier did not: when they find a
+  correctness bug behind the measured numbers, write a retier file rather than only a
+  shortcoming. Paper PDFs on an author's USERNAME.github.io repo (and hpcrl/ICS2025-webpage) are
+  reachable through raw.githubusercontent.com even when the site itself is blocked.

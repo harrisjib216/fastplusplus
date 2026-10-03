@@ -1,40 +1,42 @@
 # Queue: extensions saved for the end
 
-## Unfinished work (resume here first; updated 2026-10-03)
+## Unfinished work (resume here first; updated 2026-10-03 evening)
 
 This section is the open backlog from the main wave loop. It is not an extension; run it before the
-extension passes further down. The 2026-10-02 session ran wave 8's b7 (blogs) and b8 (HN) searches,
-a second seed pass (seed-d..i, 35 projects) and two paper-retier checks, then stopped when the
-account's usage limit killed every running agent (twice). Lists were re-rendered at that point.
+extension passes further down. Wave 8 closed on 2026-10-03: all 156 verify batches have verdicts,
+all 388 verified entries are enriched, lists re-rendered (COPYABLE 1180, REFERENCE 137).
 
-1. **Wave 8: verify 42 merged records that have no verdict yet.** Batches are already rendered in
-   `data/wave8/verify/prompts/`: 142-143 (seed-e), 144-145 (seed-d), 146-148 (seed-h), 149-150
-   (seed-g), 151-152 (seed-i), 153-156 (w8-rng-hn). Partial verifier drafts for 142, 144, 146 and
-   151 are saved in `data/wave8/verify/drafts/` (each holds 3 verdicts written before the agent was
-   killed): copy one into `verify/raw/` and tell the verifier to read and finish it, or rerun the
-   batch. Then record shortcomings, `verify.py apply`, `enrich.py`.
-2. **Wave 8: enrich 26 verified entries with no `enrich/raw/<slug>.json`** (list them with the
-   command in CLAUDE.md Status), plus whatever item 1 verifies. Two partial enrich drafts
-   (CapelliniSpTRSV, RA-SpMM) are in `data/wave8/enrich/drafts/`.
-3. **Wave 8 close:** after 1-2, `verify.py apply`, `render_lists.py`, update CLAUDE.md status.
-   A staged retier (`retier-07.json`, Sala GEMM talk D to C) is already applied.
-4. **Leads still open for wave 8** (in `data/wave8/leads.md`): FFTN (gitlab.sac-home.org, blocked
-   here, the best b8 lead), XAMG, RTSpatial/LibRTS, chusitoo/flatbush, libapac, zeux/calm,
-   mlawsonca range-search suite (possible B for pico_tree/nanoflann), and paper retiers that need
-   arXiv/ACM/IEEE access (fmm-gen, fastshuffleexperiments, HPTT 27.4x, heFFTe, CoDiPack, ALP,
-   SPRK, polylidar, FBGEMM, PFT, fbfft, SFFT, Edamatsu/Takahashi, stochastic-generation, SPRAL,
-   TileSpMV). The project thread's environment could reach arxiv.org/abs and HN Algolia; this
-   environment could not (only github.com, raw.githubusercontent.com, gitlab.com, bitbucket.org,
-   sourceforge.net, pypi.org and WebSearch, whose shared budget runs out at about 200 queries).
-5. **Usage-limit lesson:** launching 15-20 Opus/Sonnet agents at once exhausted the account's
-   session limit twice. Resume in batches of about 6-8 agents and record each before launching more.
-6. **Waves 9-12** are set up but not launched: 152 assignments across 19 categories
+1. **Wave 8 backfill seed pass (seed-j)** from this session's leads (`data/wave8/leads.md`, the
+   2026-10-03 entries): chusitoo/flatbush (C++ Flatbush port), Cortex-Discovery/sobek and
+   SNU-ARC/flashTP (equivariant tensor products), xing-cong/CB-Sparse (CB-SpMV) and
+   CornellHPC/Ocean-SpGEMM (independent SpMV/SpGEMM suites that beat TileSpMV, DASP, OpSparse),
+   bbuhrow/avx-ecm, philipturner/metal-flash-attention, hchengv/avxbls, wibraun/NICSLU (open
+   NICSLU 3.0.1; may be a duplicate note), jirka-h/ranluxpp-portable, cd-mcfarland/fast_prng,
+   dzhang314/MultiprecisionBenchmarks (QD vs MPFR harness), NLAFET/SyLVER, hpsim/OGL (likely a
+   Ginkgo duplicate). Add a `seed` assignment with that `projects` list, run
+   `python3 pipeline/seed.py data/wave8 --batch seed`, merge, verify, enrich, re-render.
+2. **Paper-access retiers** (need arXiv/ACM/IEEE/Springer or an author-hosted PDF): ttm (ICCS
+   2024, likely B), costa (ISC21), pargeo, nicslu (TCAD 2013), spral (TOMS 2016, arXiv
+   1909.08104), openequivariance (ACDA25), wrs (ESA 2019, to A), m4ri (TOMS Alg. 898), amgt and
+   tilespmv (SC '24, IPDPS 2021 numbers still snippet-only), auto-mpft (its KDD 2024 PDF is
+   reachable at raw.githubusercontent.com/yongchanpark/yongchanpark.github.io/gh-pages/
+   resources/2024/KDD/ParkKK24.pdf), kokkos-kernels (spECK PPoPP '20 counter-benchmark),
+   gpunufft (cufinufft issue #126 vs the cuFINUFFT paper), plus the older list in
+   `data/wave8/leads.md` (fmm-gen, fastshuffleexperiments, HPTT, heFFTe, CoDiPack, ALP, SPRK,
+   polylidar, FBGEMM, PFT done, fbfft, SFFT, Edamatsu/Takahashi, stochastic-generation, SPRAL,
+   TileSpMV, FFTN on gitlab.sac-home.org).
+3. **Usage-limit lesson:** launching 15-20 Opus/Sonnet agents at once exhausted the account's
+   session limit twice on 2026-10-02. Eight at a time, recording each report before launching
+   more, ran a full day on 2026-10-03 without a kill.
+4. **Waves 9-12** are set up but not launched: 152 assignments across 19 categories
    (wave 9 compression: entropy-coders, general-lossless, integer-bitpacking, succinct-structures;
    wave 10 media: color-and-resampling, font-shaping-text-layout, image-codecs, rasterizers-2d,
    video-audio; wave 11 runtime: allocators-gcs, coroutines-fibers, filesystems-and-io,
    logging-tracing, profilers-and-instrumentation, thread-pools-work-stealing; wave 12 languages:
    bytecode-vms-and-wasm, embedded-scripting, jits, language-interpreters). Re-render b1/b2 before
-   launching so each known list is current.
+   launching so each known list is current. In a cloud session give every agent
+   `pipeline/cloud_harness.md`; b7/b8 and paper retiers need an environment that can reach HN
+   Algolia and arXiv.
 
 ---
 
