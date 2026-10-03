@@ -1,0 +1,51 @@
+{
+  "id": "https://github.com/snudatalab/pft",
+  "one_liner": "Research C++ code computing only M of N Fourier coefficients with polynomial-approximated twiddles; up to 19x over FFTW/MKL.",
+  "what_it_does": "Approximates a contiguous block of DFT coefficients (target range [mu-M, mu+M]) of a length-N real time series without computing the full FFT, at a tolerance chosen from 1e-1 to 1e-7. The repository is a single main() in src/PFT.cpp with N, M, the divisor p and the tolerance hard-coded; it also runs a full MKL DFTI FFT and prints the relative L2 error against it. There is no header or library API: you lift the roughly 100-line core (one SGEMM, one batched DFTI call, IPP post-processing) into your own code. src/ also holds the FFTW, pruned-FFTW (web-page pseudocode) and Goertzel baselines.",
+  "how_it_is_fast": "The input is viewed as a p x q matrix (N = p*q) and the q-dependent twiddle factors are replaced by a degree-r minimax polynomial approximation of e^(pi*i*x), whose coefficients are precomputed per tolerance in src/precomputed/e-*.csv. The inner sums then collapse into one r x q by q x p SGEMM (O(rN)), r batched real FFTs of size p (O(r p log p)) and an elementwise post-processing pass over powers of the output index and twiddles (IPP ippsMul/ippsAddProduct, cblas_saxpy). The paper gives O((N + M log M) log(1/eps)) versus O(N log N), with r growing as M/p grows or the tolerance tightens; the heavy steps run in MKL BLAS and DFTI.",
+  "when_to_use": [
+    "You need only a small contiguous band (e.g. the lowest frequencies) of the spectrum of a long real series: the paper reports PFT beating the full FFT for M < 2^19 at N = 2^22, with the largest gains when the output is under about 10% of the input.",
+    "Many transforms with the same N, M and tolerance, so the precomputed B, D, twiddle tables and DFTI descriptors amortize (batch feature extraction, sliding windows, the paper's anomaly detection at about 8x over FFT).",
+    "Single-precision results at a stated tolerance such as 1e-6 relative L2 error, or looser: relaxing to 1e-4 or 1e-2 cut a further 17% or 27% in the paper.",
+    "Intel x86 machines where MKL and IPP are already part of the build.",
+    "Lengths with a convenient divisor p, including non-powers of two (the paper runs N = 32000)."
+  ],
+  "when_not_to_use": [
+    "M close to N or the full spectrum: the O(N) pre-processing and post-processing overhead makes it slower than a plain FFT (Table 3 omits settings that lost to FFT).",
+    "Exact or double-precision coefficients: it is an approximation, and the sample is float-only.",
+    "N prime or with only awkward divisors: the paper's N = 19735 = 5 x 3947 forced p = 3947.",
+    "ARM, non-Intel or fully open-source builds: it depends on proprietary Intel MKL and IPP.",
+    "Sparse spectra at unknown positions (use a sparse FFT), or production code needing an API, tests or maintenance: this is a 2021 research sample with hard-coded parameters and no timing harness."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "Intel MKL (cblas_sgemm, cblas_saxpy, DFTI), Intel IPP (ipps), the precomputed CSV tables in src/precomputed; FFTW 3 only for the baseline programs",
+    "min_toolchain": "not documented; any C++ compiler supported by MKL and IPP (the code is C++98-style); the FFTW.cpp baseline includes the Windows-only tchar.h",
+    "platforms": "x86-64 with Intel MKL and IPP (paper machine: Intel Core i7-6700HQ); others not documented",
+    "thread_safety": "not documented; everything lives in local buffers inside main(), and MKL/IPP default threading applies",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The tolerance table is read from the relative path precomputed/<tol>.csv with no open or parse check, so running outside src/ ends in a std::stod exception.",
+    "q = N / p uses integer division with no check that p divides N, and r is capped at 27 by the 26-entry threshold table (M/p up to about 3.9 at 1e-7).",
+    "The sample assumes real input and a target range centered at zero; another center needs the modulation step from the paper, which makes the input complex.",
+    "The repo's FFTW.cpp (FFTW_ESTIMATE, 4 threads, N = 2^20, no timer read) is not the paper's baseline ('optimized FFTW 3.3.5' with planning excluded), so do not reuse it as a fair comparison."
+  ],
+  "pick_this_over_siblings_when": "Pick PFT over full-spectrum libraries (FFTW, Admiral, VectorFFT, PocketFFT) only when you need a small contiguous band of a long 1-D real series; for 2-D blocks use Auto-MPFT, the same group's KDD 2024 successor with automatic choice of p, and for sparse spectra at unknown positions use MPSFT or SFFT.",
+  "verified_claims_summary": "The KDD 2021 paper (read from the author's GitHub Pages repository) times PFT on an Intel Core i7-6700HQ @ 2.60 GHz with 8 GB RAM, in single precision at relative L2 error below 1e-6, averaged over 100 runs of 1000 random vectors: up to 19x faster than FFTW 3.3.5 (planning excluded), MKL and pruned FFTW for the target range R_{0,2^9} as N grows to 2^22, with the best setting at N = 2^22 taking 1.273 ms for M = 2^9 and 11.924 ms for M = 2^18 (Table 3). The compiler, flags, MKL version and thread count are not stated, and the repository has no timing harness.",
+  "status_note": "Stale research code (last source change 2021-06-03, README edits through 2025-08-19); Apache-2.0 and small enough to copy, but it needs proprietary MKL and IPP and must be refactored out of main() before use.",
+  "sources_read": [
+    "https://github.com/snudatalab/PFT/tree/main/src",
+    "https://github.com/snudatalab/PFT/tree/main/src/precomputed",
+    "https://github.com/snudatalab/PFT/commits/main",
+    "https://raw.githubusercontent.com/snudatalab/PFT/HEAD/README.md",
+    "https://raw.githubusercontent.com/snudatalab/PFT/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/snudatalab/PFT/HEAD/src/PFT.cpp",
+    "https://raw.githubusercontent.com/snudatalab/PFT/HEAD/src/FFTW.cpp",
+    "https://raw.githubusercontent.com/snudatalab/PFT/HEAD/src/PrunedFFTW.cpp",
+    "https://raw.githubusercontent.com/snudatalab/PFT/HEAD/src/goertzel.c",
+    "https://raw.githubusercontent.com/snudatalab/PFT/HEAD/src/precomputed/e-7.csv",
+    "https://raw.githubusercontent.com/yongchanpark/yongchanpark.github.io/gh-pages/resources/2021/KDD/ParkJK21.pdf"
+  ],
+  "confidence": 0.8
+}

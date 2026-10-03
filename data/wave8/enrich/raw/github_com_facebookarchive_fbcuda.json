@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/facebookarchive/fbcuda",
+  "one_liner": "Archived Facebook CUDA headers whose fbfft kernels batch tiny power-of-two FFTs; authors claim ~1.5x over cuFFT at CNN sizes.",
+  "what_it_does": "fbcuda is a grab-bag of Facebook CUDA utilities (DeviceTensor, warp reductions, top-k, bitonic sort); its fbfft/ directory holds single-precision batched FFT kernels: real-to-complex and complex-to-real 1-D transforms of sizes 2 to 256, and 2-D transforms up to 128x128 (tuned for 8, 16 and 32), with implicit zero padding on the left/top. The API is templated host functions such as fbfft1D<BatchDims>(DeviceTensor<float> real, DeviceTensor<float> complex, padL, stream) that return an ErrorCode (UnsupportedSize for any other shape); there are no plans and nothing cuFFT-compatible. It was the FFT engine behind fbcunn's SpatialConvolutionCuFFT Torch-7 convolution modules.",
+  "how_it_is_fast": "Each transform lives in the registers of one warp: sizes up to 32 run a radix-2 decimation-in-frequency butterfly through warp shuffles (__shfl_xor), with 2 to 16 tiny FFTs packed into a single warp; sizes 64 to 256 keep several values per thread and do the butterflies across registers without shuffles, using shared memory only for bit reversal. The FFT size is a template parameter so every loop fully unrolls, twiddles come from a 128-entry precomputed single-precision table read through __ldg, and two real FFTs are packed into one complex FFT for R2C. The 2-D 32x32 path mixes Volkov-Kazian (2008) style hand-unrolled vertical FFTs with shuffle-based horizontal FFTs.",
+  "when_to_use": [
+    "Studying or porting warp-register FFT designs for very many tiny (2 to 256 point) single-precision transforms, e.g. tile-based FFT convolution.",
+    "Keeping legacy Torch-7 fbcunn FFT convolutions running on Kepler, Maxwell or Pascal GPUs (compute capability 3.5 to 6.x) with an old CUDA toolkit.",
+    "Batched R2C/C2R 1-D sizes 2 to 256, or 2-D up to 32x32, where the batch count is a multiple of the per-warp packing factor.",
+    "As a reference design when benchmarking modern small-size GPU FFT kernels (VkFFT, TurboFFT, tcFFT) against an older warp-shuffle approach."
+  ],
+  "when_not_to_use": [
+    "Any GPU newer than Volta: ComputeCapabilities.cuh stops with '#error Unknown __CUDA_ARCH__' above 700, and the code uses the non-_sync __shfl/__shfl_xor intrinsics, which NVIDIA deprecated in CUDA 9.0 and removed for compute capability 7.x targets.",
+    "1-D sizes above 256, 2-D sizes above 128, non-power-of-two lengths, double or half precision, complex 1-D input, or 3-D transforms: these assert or return UnsupportedSize, and the 2-D code itself says larger sizes 'are often slower than cufft'.",
+    "Getting fast convolutions today: soumith/convnet-benchmarks (Titan X) shows fbfft convolutions slower than cuDNN R4 fp32 (AlexNet 104 vs 81 ms, OverFeat 342 vs 268 ms, VGG-A 1092 vs 529 ms).",
+    "Production code that needs plans, a C ABI, tests or support: the repo is archived, ships no build files or fbfft tests (issue #2 asking for test files has been open since 2017), and the FFTIteratedConvolution.cuh prototypes are self-described as having 'bad performance'.",
+    "Projects that cannot accept Facebook's 'Additional Grant of Patent Rights Version 2', which terminates on patent assertions against Facebook."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "CUDA toolkit, glog (glog/logging.h), fbcuda's own DeviceTensor/Complex/CudaUtils headers under a cuda/ include prefix; the fbcunn consumer also needs Torch-7, Folly, fbthrift, thpp and fblualib",
+    "min_toolchain": "nvcc with C++11 (constexpr used); fbcunn's INSTALL targets CUDA 7.5 on Ubuntu 14.04; GPU compute capability 3.5 or above (__ldg)",
+    "platforms": "NVIDIA GPUs sm_35 to sm_6x as written (sm_70 passes the arch check but loses the non-sync shuffles under CUDA 9+); Linux",
+    "thread_safety": "not documented; kernels take a cudaStream_t, but initTwiddles() uses an unsynchronized function-static flag and copies the twiddle table only to the device current at the first call, so concurrent first calls or multi-GPU use look unsafe from the code",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "A batch count that is not a multiple of the per-warp packing factor drops to one FFT per warp (a TODO in FBFFT-inl.cuh), and the 2-D warp kernels assert that the batch divides evenly.",
+    "Padding is only on the left/top; the caller must choose a 2^(k+1) transform when the padded input no longer fits in 2^k.",
+    "Size limits are enforced partly with assert(), which compiles out under NDEBUG; always check the returned ErrorCode.",
+    "The twiddle table has 128 complex entries, so 256 is a hard ceiling for 1-D without regenerating Twiddles.cuh."
+  ],
+  "pick_this_over_siblings_when": "VkFFT (cuFFT parity on radix 2-13 lengths), TurboFFT and tcFFT (half precision) run on current GPUs and are the practical choices; pick fbfft only to study its warp-register design for tiny fp32 batches or to keep legacy fbcunn code alive, and use FlashFFTConv for FFT convolution on modern hardware.",
+  "verified_claims_summary": "The only fbfft-vs-cuFFT numbers come from the authors' ICLR 2015 paper (arXiv 1412.7580), seen here only as search snippets: over 1.5x faster than cuFFT (mean 1.51x, geometric mean 1.49x) for the batched FFT sizes used in CNNs, with the convolution experiments on an NVIDIA K40m; the cuFFT version, compiler flags and per-size tables were not seen and the repo has no benchmark. The co-author-maintained convnet-benchmarks compares convolutions with cuDNN, not FFTs with cuFFT: fbfft beat cuDNN R2 in April 2015 (256 vs 1019 ms layer-wise) and lost to cuDNN R4 fp32 on Titan X.",
+  "status_note": "Archived read-only since 2020-03-03 (last commit 2018-05-29); BSD-3-Clause plus a non-OSI patent grant, header-only and small enough to vendor, but it needs patches (sync shuffles, the __CUDA_ARCH__ check) before it compiles for any GPU from Turing onward.",
+  "sources_read": [
+    "https://github.com/facebookarchive/fbcuda",
+    "https://github.com/facebookarchive/fbcuda/tree/master/fbfft",
+    "https://github.com/facebookarchive/fbcuda/issues",
+    "https://raw.githubusercontent.com/facebookarchive/fbcuda/HEAD/README.md",
+    "https://raw.githubusercontent.com/facebookarchive/fbcuda/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/facebookarchive/fbcuda/HEAD/PATENTS",
+    "https://raw.githubusercontent.com/facebookarchive/fbcuda/HEAD/fbfft/FBFFT.cuh",
+    "https://raw.githubusercontent.com/facebookarchive/fbcuda/HEAD/fbfft/FBFFT-inl.cuh",
+    "https://raw.githubusercontent.com/facebookarchive/fbcuda/HEAD/fbfft/FBFFT2D-inl.cuh",
+    "https://raw.githubusercontent.com/facebookarchive/fbcuda/HEAD/fbfft/FBFFTCommon.cuh",
+    "https://raw.githubusercontent.com/facebookarchive/fbcuda/HEAD/fbfft/FBFFTParameters.h",
+    "https://raw.githubusercontent.com/facebookarchive/fbcuda/HEAD/fbfft/FFT2D32.cuh",
+    "https://raw.githubusercontent.com/facebookarchive/fbcuda/HEAD/fbfft/FFTIteratedConvolution.cuh",
+    "https://raw.githubusercontent.com/facebookarchive/fbcuda/HEAD/fbfft/Twiddles.cuh",
+    "https://raw.githubusercontent.com/facebookarchive/fbcuda/HEAD/ComputeCapabilities.cuh",
+    "https://raw.githubusercontent.com/facebookarchive/fbcuda/HEAD/ShuffleTypes.cuh",
+    "https://raw.githubusercontent.com/facebookarchive/fbcuda/HEAD/CudaUtils.cuh",
+    "https://raw.githubusercontent.com/facebookarchive/fbcunn/HEAD/README.md",
+    "https://raw.githubusercontent.com/facebookarchive/fbcunn/HEAD/INSTALL.md",
+    "https://raw.githubusercontent.com/soumith/convnet-benchmarks/HEAD/README.md",
+    "https://github.com/BVLC/caffe/issues/1989"
+  ],
+  "confidence": 0.7
+}
