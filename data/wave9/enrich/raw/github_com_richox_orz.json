@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/richox/orz",
+  "one_liner": "Rust ROLZ compressor: near-xz -6 ratio on enwik8 text with about 13x faster single-threaded encode; decode slower than zstd.",
+  "what_it_does": "orz is a general-purpose lossless compressor with its own stream format, shipped as a CLI (orz encode/decode, levels -l0..-l2, default 2) and a Rust library exposing encode(source, target, &LZCfg, progress_logger) and decode(...) over std::io Read/Write. It is not format-compatible with gzip, xz, zstd or brotli, so it replaces them only where you control both ends.",
+  "how_it_is_fast": "It uses ROLZ (reduced-offset Lempel-Ziv): matches are searched only among recent positions in one of 256 buckets selected by the previous byte (4094 entries each), so an offset is a small bucket index rather than a full distance and match search is cheap. Symbols (literals, 2-byte word predictions, and reduced-offset/length ids) go through a context-sensitive symbol-ranking (move-to-front) transform and then static Huffman coding per 1 MB chunk. The hot paths use nightly portable_simd 16-byte compares for match length, unchecked indexing and unaligned raw-pointer loads and stores.",
+  "when_to_use": [
+    "Archiving or shipping large text-like data (logs, wikis, source dumps) where you want xz -6 / zstd -19 class ratio but cannot afford 45 s per 100 MB of encode time",
+    "Single-threaded compression pipelines where encode CPU is the bottleneck and a decode of about 0.6 s per 100 MB is acceptable",
+    "Rust projects that control both producer and consumer and can build with a nightly toolchain",
+    "As a faster-than-gzip -6 replacement for internal text blobs where ratio matters more than decode speed (orz -l0 was both smaller and faster than gzip -6 on enwik8)"
+  ],
+  "when_not_to_use": [
+    "Decode-heavy workloads (read-many, serving): orz decodes enwik8 in about 0.58-0.60 s versus about 0.08 s for zstd, roughly 7x slower",
+    "Untrusted or possibly corrupted input: the decoder trusts length fields from the stream and writes through unchecked raw pointers (see gotchas), and the format has no checksum or magic header",
+    "C or C++ projects wanting a C ABI: the crate builds staticlib/cdylib, but the ffi module is commented out in src/lib.rs, so there is no exported C API",
+    "Interoperability needs (HTTP content-encoding, tar.xz/.zst tooling): the format is private to orz and appears to change between releases",
+    "Small inputs or memory-constrained targets: the encoder allocates about 80 MB of buffers and the decoder about 112 MB up front regardless of input size (from buffer constants in src/lib.rs)"
+  ],
+  "integration": {
+    "form": "crate (git dependency) plus CLI binary",
+    "dependencies": "bitfield-struct, clap (CLI), unchecked-index",
+    "min_toolchain": "Rust nightly (edition 2024; #![feature(portable_simd)] and #![feature(likely_unlikely)])",
+    "platforms": "not documented; portable_simd code is architecture-generic, CI runs only x86-64 ubuntu-latest with -C target-feature=+aes (no AES use found in src)",
+    "thread_safety": "not documented; single-threaded, encoder/decoder state is per-stream and owned by &mut self",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Memory safety on bad input (from reading src/lz.rs, src/coder.rs, src/mem.rs; not tested): LZDecoder::decode loops for a match_items_len read from the stream and writes at spos via raw-pointer put() with no check against sbuf length, and BitBuffer::load_u32 reads 4 bytes at input_pos with no check against the chunk length, so a crafted or truncated .orz can cause out-of-bounds heap reads and writes in release builds. The symbol range check uses an inclusive bound (0..=SYMRANK_NUM_SYMBOLS), one past the table size. Issue #24 'Remove unsafe blocks without hurting performance' is open.",
+    "BytesConstPtrExt::get starts from MaybeUninit::uninit().assume_init() for integer and SIMD types, which is undefined behaviour under Rust's rules even though the bytes are then overwritten.",
+    "The crates.io name 'orz' belongs to an unrelated project (a multi-agent server, v2.1.4), so 'cargo add orz' pulls the wrong crate; use the git tag (README: cargo install orz --git ... --tag v1.6.2). Cargo.toml on master still says version 1.6.1.",
+    "No container magic, version byte or checksum; recent commits ('reduce bytes size of initial symrank table', 'improve huffman table encoding effeciency') change the bitstream, so keep the producing version pinned. Issue #27 (stack overflow on Windows, 2022) is still open, though the current code heap-allocates its big buffers."
+  ],
+  "pick_this_over_siblings_when": "Pick orz over zstd -19 or xz -6 when encode time dominates and decode speed does not (similar enwik8 size, about 13x faster encode); prefer zstd when decode speed or a standard format matters, and Kanzi, libbsc or bzip3 when you need a C/C++ library with a C API or multithreading. libzling, the same author's older C++ ROLZ codec, is the choice if you need C++ source rather than a nightly Rust crate.",
+  "verified_claims_summary": "First-party README table, single wall-clock runs on enwik8 (100 MB English text) on an unnamed machine: orz -l2 26,892,825 bytes in 3.360 s encode versus xz -6 26,665,156 bytes in 44.936 s and zstd -19 26,944,223 bytes in 45.985 s; orz -l0 27,898,433 bytes in 1.773 s versus gzip -6 36,548,933 bytes in 2.441 s; decode 0.578-0.603 s versus zstd 0.082-0.085 s. The GitHub Actions workflow reruns a similar but not identical set (gzip -9, brotli -6/-9, no lzfse) on ubuntu-latest with apt baseline CLIs and Rust nightly release/LTO, using the shell time builtin.",
+  "status_note": "Active (last commit 2026-03-18, regular performance commits through 2025-2026, 817 stars), MIT OR Apache-2.0; usable as a Rust CLI or crate, but not as a hardened library for untrusted input.",
+  "sources_read": [
+    "https://github.com/richox/orz/tree/master/src",
+    "https://github.com/richox/orz/issues?q=is%3Aissue",
+    "https://github.com/richox/orz/issues/27",
+    "https://github.com/richox/orz/issues/29",
+    "https://github.com/richox/orz/commits/master",
+    "https://raw.githubusercontent.com/richox/orz/HEAD/README.md",
+    "https://raw.githubusercontent.com/richox/orz/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/richox/orz/HEAD/.github/workflows/enwik8-benchmark.yml",
+    "https://raw.githubusercontent.com/richox/orz/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/richox/orz/HEAD/src/main.rs",
+    "https://raw.githubusercontent.com/richox/orz/HEAD/src/lz.rs",
+    "https://raw.githubusercontent.com/richox/orz/HEAD/src/coder.rs",
+    "https://raw.githubusercontent.com/richox/orz/HEAD/src/huffman.rs",
+    "https://raw.githubusercontent.com/richox/orz/HEAD/src/matcher.rs",
+    "https://raw.githubusercontent.com/richox/orz/HEAD/src/mem.rs",
+    "https://raw.githubusercontent.com/richox/orz/HEAD/src/symrank.rs",
+    "https://raw.githubusercontent.com/richox/orz/HEAD/src/ioutil.rs",
+    "https://raw.githubusercontent.com/richox/orz/HEAD/src/progress.rs",
+    "https://crates.io/api/v1/crates/orz"
+  ],
+  "confidence": 0.75
+}
