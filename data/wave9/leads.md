@@ -33,3 +33,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - Ports of FastPFOR: ronanh/intcomp (Go), Genbox/CSharpFastPFOR, reducedb/encoding (Go). Duplicates if found. From JavaFastPFOR enricher.
 - c-blosc2 bitshuffle AVX-512 backport (c-blosc2 2.11); silx-kit/hdf5plugin; yhliu918/arrow_leco; yhliu918/LeCo_RocksDB. From bitshuffle/LeCo enricher. LeCo kept at B despite the 63-bit decode bug and -DNDEBUG-less timing (all codecs share the harness); revisit if the paper numbers are shown to depend on it.
 - Shun, "Improved Parallel Construction of Wavelet Trees and Rank/Select Structures" (osti.gov 1593400, blocked); "Practical Wavelet Tree Construction" (ACM JEA 10.1145/3457197, pwm follow-up); "Engineering rank queries on bit vectors and strings" (AMB 2025, Springer); pacman616/hybrid-fenwick-tree. From mutable_rank_select/pwm enricher.
+- AWRY and genedex: FM-index competitors listed by the QuadRank sibling repo. From AvxWindowFmIndex enricher.
