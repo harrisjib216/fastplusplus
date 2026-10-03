@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/blosc/c-blosc2",
+  "one_liner": "Blocked, multithreaded meta-compressor (shuffle/bitshuffle filters plus LZ4, Zstd, zlib or BloscLZ) for typed binary arrays; outruns memcpy on compressible data.",
+  "what_it_does": "Compresses and decompresses binary buffers (numeric arrays, tensors, records) by splitting them into blocks, running a pipeline of filters (byte shuffle, bitshuffle, delta, bytedelta, truncation) and then an inner codec on each block. Above the chunk API (blosc2_compress_ctx / blosc2_decompress_ctx) it adds super-chunks and frames for in-memory or on-disk containers, lazy chunk loading, variable-length chunks and blocks (3.x), and the B2ND n-dimensional layer. It is not a drop-in for zlib or lz4 calls: it has its own chunk and frame formats (Blosc2 can read Blosc1 buffers, not the reverse) and keeps the Blosc1 API behind BLOSC1_COMPAT.",
+  "how_it_is_fast": "Shuffle/bitshuffle transpose bytes or bits of fixed-size elements so that slowly varying high-order bytes line up into runs that a fast LZ codec squeezes well; the shuffles have SSE2, AVX2, NEON and AltiVec kernels (plus an AVX512 bitshuffle) picked at runtime (__builtin_cpu_supports/cpuid in blosc/shuffle.c). Data is processed in cache-sized blocks spread over a worker thread pool (or a user threading callback), so filter and codec run in cache and many cores share the work. The memcpy-beating result comes from moving fewer bytes through memory: with a 4.75x ratio, 8 threads decode faster than a single memcpy can read the uncompressed buffer.",
+  "when_to_use": [
+    "Large arrays of fixed-width numeric data (int32, float32/64, timestamps) with smooth or low-entropy high bytes, where typesize-aware shuffle lets LZ4 or Zstd reach ratios a byte-oriented codec cannot.",
+    "Memory- or I/O-bound pipelines on multi-core machines where keeping data compressed in RAM or on disk and decompressing with 4-16 threads beats reading it uncompressed.",
+    "Chunked n-dimensional storage needing partial reads (B2ND slicing, lazy chunks), or when interoperating with PyTables, h5py (hdf5plugin) or Zarr, which already use Blosc.",
+    "Buffers of roughly 1 MB and up: the threading notes say parallel mode only pays off above 64-128 KB per buffer."
+  ],
+  "when_not_to_use": [
+    "Single-threaded use with fast-compressing settings: in the repo's own run, clevel 1 at one thread decodes at 5293.7 MB/s versus memcpy(read) 8581.6 MB/s, and compresses at 2066.7 versus 4691.4 MB/s; the default nthreads is 1.",
+    "Text, already-compressed or irregular byte streams: shuffle helps nothing there, and Blosc then adds format and threading overhead on top of the plain codec.",
+    "Parsing untrusted chunks or frames without care: OSS-Fuzz and a Trail of Bits audit keep finding memory bugs in decode paths (BloscLZ heap overflows fixed in 3.3.3 and again in 3.3.5, ZFP plugin over-reads and a frame divide-by-zero in 3.3.5, b2nd shape overflows in 3.3.0, CVE-2024-3203/3204 in 2.14.2); stay on the latest release.",
+    "Multi-socket NUMA servers without tuning: issue #784 (open, June 2026) reports 2-5x slower runs on Xeon Platinum 8480C/8570 DGX nodes than on a Threadripper Pro workstation, attributed to NUMA, with no fix yet.",
+    "When you need a standard stream format readable by gzip, lz4 or zstd tools, or Blosc1 readers of Blosc2 output (forward compatibility is not supported)."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (CMake; also prebuilt in the blosc2 Python wheel)",
+    "dependencies": "LZ4, Zstd and zlib-ng (zlib-compatible) are needed; by default CMake fetches pinned upstream sources with FetchContent at configure time (BLOSC_DEPENDENCY_MODE=BUNDLED), or uses system packages with EXTERNAL; ZFP optional; pthreads (or a user threading callback)",
+    "min_toolchain": "C99 compiler, CMake 3.16.3+; VS2015+ on Windows; the AVX512 bitshuffle path needs GCC 11.4+ or Clang 13+ (CMakeLists notes Linux wheels built with older GCC ship without it)",
+    "platforms": "Linux, macOS and Windows on x86-64 (SSE2/AVX2/AVX512 with runtime dispatch), ARM Linux/macOS (NEON), PowerPC (AltiVec/VSX); ARM on Windows not supported",
+    "thread_safety": "Use the *_ctx functions with one context per thread; blosc2_compress/blosc2_decompress go through a global context under a global lock (BLOSC_NOLOCK switches them to private contexts), and blosc2_set_threads_callback is not thread-safe and must be called before any other Blosc call.",
+    "drop_in_for_baseline": "partial — it replaces memcpy-style storage of arrays only if you adopt its chunk/frame API and format; it is not API- or format-compatible with plain lz4/zstd/zlib"
+  },
+  "gotchas": [
+    "Speed depends on telling Blosc the right typesize and filter; with the wrong typesize or no shuffle it degrades to roughly the plain inner codec plus overhead (an independent float-compression blog series says this, per WebSearch snippet only).",
+    "The default build downloads codec sources during CMake configure; offline or distro builds need BLOSC_DEPENDENCY_MODE=EXTERNAL or the BLOSC_*_SOURCE_DIR overrides. Issue #469 reports a self-built library running about 2x slower than the one shipped in the Python wheel, so check build type and SIMD flags before benchmarking.",
+    "Chunk sizes are 32-bit: a single chunk is capped at INT_MAX minus the 32-byte maximum overhead, so bigger data must go through super-chunks.",
+    "Environment variables (BLOSC_NTHREADS, BLOSC_NOLOCK, BLOSC_SPLITMODE, BLOSC_TRACE) silently change the behaviour of the non-ctx calls."
+  ],
+  "pick_this_over_siblings_when": "Pick Blosc2 over calling LZ4 or Zstd directly when the data is typed numeric arrays and you have spare cores, since shuffle plus blocking lifts both ratio and throughput; pick Stenos if its numbers on your data beat Blosc2+Zstd, and plain LZ4/Zstd for text, streams or single-threaded use.",
+  "verified_claims_summary": "The project's own b2bench run (Blosc 2.0.0.beta.6, LZ4 1.9.3, host 'corex' with no CPU, compiler or flags stated) on a 4 MiB synthetic int32 buffer with 19 significant bits, 256 MB working set: with lz4+shuffle at clevel 1 (ratio 4.75) and 8 threads, decompression ran at 31337.5 MB/s versus memcpy(read) 8962.2 MB/s and compression at 13172.7 versus memcpy(write) 9641.2 MB/s (about 3.5x and 1.4x, derived from page data); at one thread both lose to memcpy. There is no head-to-head against standalone lz4 or zstd in the repo.",
+  "status_note": "Very active (3.3.6.dev dated 2026-09-24, last commit 2026-10-01, NumFOCUS-sponsored, BSD-3-Clause), with a steady stream of fuzzing-driven security fixes; the benchmark evidence is a 2020 beta, so re-measure on current releases and your hardware.",
+  "sources_read": [
+    "https://github.com/Blosc/c-blosc2",
+    "https://raw.githubusercontent.com/Blosc/c-blosc2/HEAD/README.rst",
+    "https://raw.githubusercontent.com/Blosc/c-blosc2/HEAD/LICENSE.txt",
+    "https://raw.githubusercontent.com/Blosc/c-blosc2/HEAD/RELEASE_NOTES.md",
+    "https://raw.githubusercontent.com/Blosc/c-blosc2/HEAD/ANNOUNCE.md",
+    "https://raw.githubusercontent.com/Blosc/c-blosc2/HEAD/README_THREADED.rst",
+    "https://raw.githubusercontent.com/Blosc/c-blosc2/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/Blosc/c-blosc2/HEAD/include/blosc2.h",
+    "https://raw.githubusercontent.com/Blosc/c-blosc2/HEAD/blosc/shuffle.c",
+    "https://raw.githubusercontent.com/Blosc/c-blosc2/HEAD/bench/results-corex/lz4-suite-corex.out",
+    "https://github.com/Blosc/c-blosc2/issues?q=is%3Aissue+performance+OR+slower",
+    "https://github.com/Blosc/c-blosc2/issues/784",
+    "https://github.com/Blosc/c-blosc2/issues/469",
+    "WebSearch snippet only: https://aras-p.info/blog/2023/03/02/Float-Compression-8-Blosc/ (site blocked here)"
+  ],
+  "confidence": 0.8
+}

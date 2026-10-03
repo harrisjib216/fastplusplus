@@ -38,3 +38,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - intel/zlib-accel (zlib-API shim over QPL), intel/iaa-plugin-rocksdb, ivagorRetrocomp/DeLZSA. From QPL/LZSA enricher.
 - NeaTS (learned compressor, GEF baseline): not catalogued. From GEF enricher.
 - Retier candidate: Chromium zlib C to B via simonis/zlib-chromium README (independent inflate run, i7-8650U at 1900 MHz, zbench.c, Silesia/Calgary, Feb 2022; graphs only, no table). From Chromium zlib enricher.
+- linux-apfs-rw carries the libzbitmap decoder (GPL-2.0+ OR MIT). Python-Blosc docs snippet (blosc.org, blocked): zstd+shuffle 7.97/32.71 GB/s, lz4+shuffle 22.58/22.03 GB/s, unverified. From c-blosc2/libzbitmap enricher.
