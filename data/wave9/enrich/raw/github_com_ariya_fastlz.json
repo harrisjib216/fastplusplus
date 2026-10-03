@@ -1,0 +1,47 @@
+{
+  "id": "https://github.com/ariya/fastlz",
+  "one_liner": "Two-file ANSI C byte-aligned LZ77 block compressor; about 3x zlib -1 compression speed and 2x decompression, at a worse ratio.",
+  "what_it_does": "FastLZ compresses and decompresses whole in-memory blocks with three C functions: fastlz_compress_level(level, in, len, out), fastlz_decompress(in, len, out, maxout) and a deprecated fastlz_compress. It is not a zlib drop-in: there is no stream API, no container format, no checksum and no stored original size, so the caller must frame blocks and record sizes itself. Level 1 and level 2 outputs are both read by the same decompressor, which detects the level from the first 3 bits of the block.",
+  "how_it_is_fast": "It is a greedy single-probe LZ77: a 13-bit multiplicative hash (Knuth constant 2654435769) of the next 3 bytes indexes an 8192-entry table of last positions, and a match is taken whenever the 3 bytes agree, with no chain search or lazy matching. Output is byte-aligned opcodes (literal runs up to 32 bytes, short and long matches with 13-bit offsets) with no entropy coding, so decoding is a branch on the top 3 bits plus memcpy/memmove. On x86-64 and aarch64 it reads 32-bit words directly to compare the first 4 bytes of a match.",
+  "when_to_use": [
+    "You need something several times faster than zlib on compressible blocks (text, logs, raw pixel rows, game assets) and can accept roughly 50% output size versus 36% for zlib -1 on Silesia.",
+    "You want a tiny, vendorable codec: two files, ANSI C/C90, MIT, compiles with GCC, Clang, MSVC and TinyCC, including DOS and big-endian targets.",
+    "You must read data already written in FastLZ format by existing users such as Godot, HHVM or Apache Traffic Server.",
+    "Embedded or exotic toolchains where LZ4 or Snappy are harder to build: CI covers PowerPC, ppc64, s390x, armhf, arm64, MIPS and RISC-V."
+  ],
+  "when_not_to_use": [
+    "New designs that only want speed: in the same lzbench 2.4 run LZ4 1.10.0 compresses about 2x faster (550 vs 273 MB/s) and decompresses about 6.5x faster (3832 vs 587 MB/s) at a slightly better ratio (47.60% vs 49.37%).",
+    "When ratio matters: zstd -1 or zlib-ng -1 give much smaller output at comparable or better speed.",
+    "Streams or very large buffers: the API is block-only with int lengths (under 2 GiB per call) and level 1 sees only an 8 KB window (level 2 about 72 KB), so long-range redundancy is lost.",
+    "Already compressed inputs (images, video, archives): the README says it is not intended for them and output can grow past the input size.",
+    "Projects that want an actively developed codec: last release 0.5.0 is from 2020-02-02 and the format's level 2 is still marked 'To be written' in the README."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (libc string.h only; FASTLZ_USE_MEMMOVE=0 removes even that)",
+    "min_toolchain": "ANSI C/C90 compiler; CI uses GCC, Clang, TinyCC and VS 2019",
+    "platforms": "any; 32/64-bit, little and big endian; tested on amd64, i686, i586 DOS, PowerPC, ppc64(le), s390x, armhf, arm64, MIPS(64)(el), RISC-V",
+    "thread_safety": "Not documented; the functions keep their hash table on the stack and use no globals, so concurrent calls on separate buffers look safe from the source.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Compression contract is easy to violate: input must be at least 16 bytes and the output buffer at least 5% larger than the input and no smaller than 66 bytes; there is no compressBound helper and no bounds checking in the compressor.",
+    "Decompression returns 0 on corrupt input or a too-small maxout; it was hardened against corrupted input only in 0.5.0 (2020). The README's 40-line reference decoder has no bounds checks and is explicitly unsafe.",
+    "The compressor puts a 32 KB hash table (8192 x uint32) on the stack per call, which matters on small embedded stacks.",
+    "On x86-64 and aarch64 flz_readu32 dereferences an unaligned uint32_t pointer, which is undefined behavior in C even though it works on those CPUs."
+  ],
+  "pick_this_over_siblings_when": "Pick FastLZ over LZ4 or Snappy only for compatibility with existing FastLZ data or for a C90/TinyCC-portable two-file drop; LZ4 beats it on every axis in lzbench 2.4, and libslz is a similar-speed choice when gzip/deflate output compatibility is needed.",
+  "verified_claims_summary": "lzbench 2.4 (gcc 15.2.0, -O3, one thread of an AMD EPYC 9555P at 3.20 GHz, turbo off, silesia.tar): fastlz 0.5.0 -1 compresses at 273 MB/s and decompresses at 587 MB/s with output 49.37% of input, versus zlib 1.3.2 -1 at 89.0 / 297 MB/s and 36.45% (about 3.1x and 2.0x, derived from page data). The FastLZ README's own enwik8 table (159 / 305 MB/s vs zlib -1 50 / 184 MB/s) gives no hardware or compiler.",
+  "status_note": "Stale: last release 0.5.0 in February 2020 and last commits in 2024 are CI and warning fixes, but it is MIT-licensed, two files and widely deployed, so vendoring it is low-risk.",
+  "sources_read": [
+    "https://github.com/ariya/FastLZ",
+    "https://raw.githubusercontent.com/ariya/FastLZ/HEAD/README.md",
+    "https://raw.githubusercontent.com/ariya/FastLZ/HEAD/fastlz.h",
+    "https://raw.githubusercontent.com/ariya/FastLZ/HEAD/fastlz.c",
+    "https://raw.githubusercontent.com/ariya/FastLZ/HEAD/ChangeLog",
+    "https://github.com/ariya/FastLZ/issues",
+    "https://github.com/ariya/FastLZ/issues?q=is%3Aissue+state%3Aclosed",
+    "https://raw.githubusercontent.com/inikep/lzbench/HEAD/README.md"
+  ],
+  "confidence": 0.85
+}
