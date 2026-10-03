@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/ninjadenmu/fast_matmul",
+  "one_liner": "Seven-step NEON SGEMM tutorial for Apple M4; single-thread ties NumPy/OpenBLAS, OpenMP version about 1.5x ahead.",
+  "what_it_does": "A teaching repository that walks square, column-major float32 matrix multiplication through seven stages (naive, loop-permuted, tiled, register-blocked micro-kernel, NEON-vectorized, single-threaded BLIS-style, OpenMP BLIS-style), each a separate heavily commented C file. Every stage has the same signature, int matmul_X(int n, const float *A, const float *B, float *C), and accumulates into a zero-initialized C. It is driven by a ./bench executable plus Python scripts that plot results and random/grid-search the mc, nc and kc block sizes; there is no BLAS interface.",
+  "how_it_is_fast": "The last two stages follow the Goto/BLIS five-loop algorithm: jc/pc/ic loops cut B and A into nc x kc and mc x kc panels that are packed contiguously in micro-kernel access order (fewer TLB misses, full cache lines), and a 12x8 register-blocked micro-kernel keeps 24 NEON float32x4 accumulators live while doing kc rank-1 updates with vfmaq_n_f32 (FMA against a broadcast B scalar). The parallel stage splits the jr sliver loop across OpenMP threads with schedule(dynamic), which the author's commit says balances work between the M4's performance and efficiency cores better. Everything is built with clang -O3 -ffast-math -march=native and full unrolling pragmas.",
+  "when_to_use": [
+    "Learning how a single-core SGEMM goes from a naive i-j-k loop to near-OpenBLAS speed, one optimization per file, on an Apple Silicon Mac.",
+    "Reading a compact, commented example of a 12x8 FP32 NEON micro-kernel with BLIS-style packing routines before writing your own.",
+    "Experimenting with cache block sizes on M-series chips: mc, nc and kc are runtime environment variables and scripts/tuner.py searches them.",
+    "Studying how OpenMP dynamic scheduling of the jr loop behaves on heterogeneous P/E-core Apple chips."
+  ],
+  "when_not_to_use": [
+    "Any code you need to ship or copy: the repository has no LICENSE file, so default copyright applies.",
+    "Real BLAS workloads: square n x n only, float32 only, column-major only, no transposes, no alpha/beta, no leading dimensions, no FP64 or complex.",
+    "Peak FP32 on M4: the implied rate is roughly 100-120 GFLOPS per core on NEON, while OpenBLAS issue #6073 reports 1127-1185 GFLOPS single-thread for Apple Accelerate (AMX/SME) on an M4 Pro, about ten times more.",
+    "Non-Arm targets: the kernels include arm_neon.h and the Makefile assumes Homebrew libomp, so x86 needs new AVX kernels and retuned block sizes (README).",
+    "Anything needing checked numerics: the code is compiled with -ffast-math and the repository has no correctness test against a reference result."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "arm_neon.h; OpenMP (Homebrew libomp, located via brew --prefix) for the parallel stage; Python with NumPy, matplotlib and tqdm for the benchmark and tuner scripts",
+    "min_toolchain": "clang (uses #pragma clang loop unroll(full) and -mllvm flags); C99 restrict; exact clang version not documented",
+    "platforms": "aarch64 with NEON; tested only on an Apple M4 under macOS",
+    "thread_safety": "matmul_blis and matmul_parallel cache mc/nc/kc in function-static variables set on the first call without synchronization, so concurrent first calls race; after that each call allocates its own packing buffers.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Computes C += A*B and assumes C starts at zero; utils/bench.c zeroes C once and then calls the kernel for a warm-up plus the timed runs without re-zeroing, so the benchmark never checks the result.",
+    "Block sizes come from environment variables literally named mc, nc and kc (defaults 3300, 4096, 2048, checked only by assert), so an unrelated variable with one of those names changes behavior.",
+    "Every call posix_memaligns packing buffers sized mc*kc and nc*kc floats (about 27 MB and 34 MB at the defaults) regardless of n, and leaks the A buffer if the B allocation fails.",
+    "Rows or columns that do not fill a full 12x8 tile (for example the last 4 rows when n=100) fall back to an unpacked scalar triple loop, so sizes that are not multiples of 12 and 8 lose speed at the edges."
+  ],
+  "pick_this_over_siblings_when": "Pick fast_matmul only for its stage-by-stage tutorial; for reusable routines take the same author's MuBLIS (config-driven BLIS-style library, GEMM 111.0 vs OpenBLAS 109.9 GFLOP/s single-thread on M4), and for top Apple M4 speed take MaxMulSK (Apache-2.0, about 123 GFLOP/s NEON and SME kernels near 2 TFLOP/s) or Accelerate.",
+  "verified_claims_summary": "On one Apple M4 (core count unstated) with clang -O3 -ffast-math -march=native, the single-thread BLIS-style kernel tracks single-thread NumPy A @ B (unversioned OpenBLAS) point for point in a 'largest n reached within a cumulative 5 s' plot, and the OpenMP version reaches n=4200 in about 3.1 s versus about 4.7 s for multi-threaded NumPy, roughly 1.5x (derived from page data, read by eye). The harness favors the custom side (warm-up run and preallocated buffers there; NumPy timed once in a fresh process with the result allocated inside the timed region), takes one sample per n, and never compares against Accelerate.",
+  "status_note": "Active hobby project (45 commits, last 2026-07-29, 0 stars) with no license, so read it rather than vendor it; Apple Silicon only.",
+  "sources_read": [
+    "https://github.com/NinjadenMu/fast_matmul",
+    "https://github.com/NinjadenMu/fast_matmul/tree/main/src",
+    "https://github.com/NinjadenMu/fast_matmul/commits/main",
+    "https://raw.githubusercontent.com/NinjadenMu/fast_matmul/HEAD/README.md",
+    "https://raw.githubusercontent.com/NinjadenMu/fast_matmul/HEAD/Makefile",
+    "https://raw.githubusercontent.com/NinjadenMu/fast_matmul/HEAD/utils/bench.c",
+    "https://raw.githubusercontent.com/NinjadenMu/fast_matmul/HEAD/utils/env.c",
+    "https://raw.githubusercontent.com/NinjadenMu/fast_matmul/HEAD/include/matmul.h",
+    "https://raw.githubusercontent.com/NinjadenMu/fast_matmul/HEAD/src/matmul_blis.c",
+    "https://raw.githubusercontent.com/NinjadenMu/fast_matmul/HEAD/src/matmul_parallel.c",
+    "https://raw.githubusercontent.com/NinjadenMu/fast_matmul/HEAD/src/matmul_vectorized.c",
+    "https://raw.githubusercontent.com/NinjadenMu/fast_matmul/HEAD/scripts/driver.py",
+    "https://raw.githubusercontent.com/NinjadenMu/fast_matmul/HEAD/scripts/openblas.py",
+    "https://raw.githubusercontent.com/NinjadenMu/fast_matmul/HEAD/scripts/tuner.py",
+    "https://raw.githubusercontent.com/NinjadenMu/fast_matmul/HEAD/plots/plot.png",
+    "https://raw.githubusercontent.com/NinjadenMu/fast_matmul/HEAD/LICENSE (404)",
+    "https://github.com/UlasSertan/MaxMulSK",
+    "https://github.com/OpenMathLib/OpenBLAS/issues/6073 (search result snippet only)"
+  ],
+  "confidence": 0.8
+}

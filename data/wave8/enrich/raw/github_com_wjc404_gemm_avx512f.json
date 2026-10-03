@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/wjc404/gemm_avx512f",
+  "one_liner": "Hand-written AVX-512F SGEMM/DGEMM with a Fortran-ABI entry point; claims 99% of one-thread MKL, which is parity, not a win.",
+  "what_it_does": "The Makefile builds SGEMM.so and DGEMM.so, each exporting a Fortran-ABI sgemm_ or dgemm_ (transa, transb, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc, with 32-bit int arguments, column-major), so it can stand in for the GEMM symbol of an LP64 BLAS. It provides GEMM only, with no cblas_ interface and no other BLAS routines. A separate OpenBLAS-like_implementation/ directory holds the author's OpenBLAS-format SkylakeX kernels (dgemm 16x2 and 4x8, cgemm3m and zgemm3m, a dtrsm 16x4 solver, and a serial stand-alone sgemm.c with its own SGEMM_ test caller).",
+  "how_it_is_fast": "It uses Goto-style blocking. Each thread packs its own B block, with alpha folded into the packed copy. A is packed once per K block into a buffer that all threads share. A GNU-assembler micro-kernel (src/kernel/gemm_kernel.S) keeps GEMM_UNROLL_M_VEC x GEMM_UNROLL_N zmm accumulators live, by default 3x8 = 24 registers (a 48x8 tile for SGEMM, 24x8 for DGEMM), and updates them with vbroadcastss/sd plus vfmadd231ps/pd. The software-prefetch distances (prefetcht0/t1) into packed A and B come from the L2/L3 latency and FMA-unit parameters in sgemm_tune.h and dgemm_tune.h, and AVX512_CPUTEST.c measures FMA throughput and latency to help set them. Threads split N into equal column chunks and meet at a spin barrier around each shared A pack.",
+  "when_to_use": [
+    "Reading a complete, small AVX-512 GEMM (assembly micro-kernel, packing, prefetch-distance arithmetic, OpenMP driver) in under 2,000 lines.",
+    "Experimenting with register-tile and cache-block parameters on an AVX-512 Xeon: change the tune headers, rebuild, and compare against your own MKL or OpenBLAS runs.",
+    "A GPL-3.0-compatible project that wants a self-contained sgemm_/dgemm_ without a full BLAS and accepts roughly MKL single-thread speed as the best case.",
+    "Tracing where OpenBLAS's SkylakeX DGEMM and STRMM kernels came from (the author committed them upstream in 2020)."
+  ],
+  "when_not_to_use": [
+    "If you want to beat MKL or OpenBLAS: the only claim is 99% of one-thread MKL, with no numbers, sizes, CPU or MKL version, and the repo has no GEMM benchmark program.",
+    "Code that cannot be GPL-3.0.",
+    "CPUs without AVX-512F, or non-ELF platforms: the kernels are System V AMD64 assembly (.type @function, stack red zone), so Windows and macOS builds are not supported as written.",
+    "Multi-threaded production use: thread 0 packs A alone while the others spin, and the one issue (#1, 2020) reports that the OpenMP .so is less efficient than the serial sgemm.c. Plain OpenBLAS already contains the author's upstreamed kernels and is maintained.",
+    "Anything that needs maintenance or other BLAS routines: last commit 2022-05-22, GEMM only, no tests and no argument checking."
+  ],
+  "integration": {
+    "form": "shared lib",
+    "dependencies": "OpenMP (gcc -fopenmp); nothing else",
+    "min_toolchain": "GCC with -mavx512f and the GNU assembler (AT&T-syntax .S); C11 aligned_alloc; exact GCC version not documented",
+    "platforms": "x86-64 with AVX-512F, ELF / System V ABI (Linux); default parameters tuned on a Xeon Platinum 8269CY",
+    "thread_safety": "Each call allocates its own buffers, so separate calls share no state. However, each call opens an OpenMP team sized by omp_get_max_threads() and spin-waits until every thread arrives, so a call from inside another OpenMP parallel region, or with OMP_DYNAMIC or a thread limit, can hang (inferred from src/gemm_driver.c, not tested).",
+    "drop_in_for_baseline": "partial: it exports Fortran-ABI sgemm_/dgemm_ with 32-bit integers and can therefore replace the GEMM symbol of an LP64 MKL or OpenBLAS, but it has no cblas_sgemm, no ILP64 and no other routines, and beta=0 does not overwrite C the way the BLAS spec allows."
+  },
+  "gotchas": [
+    "beta=0 multiplies C by zero (C_MULT_BETA) instead of overwriting it, so NaN or Inf already in C survive; reference BLAS lets callers pass an unset C when beta is zero.",
+    "The thread count comes from omp_get_max_threads(). For the single-thread setting the 99% claim refers to, set OMP_NUM_THREADS=1.",
+    "Tuning is compile-time only, by editing sgemm_tune.h and dgemm_tune.h; gemm_set_parameters.h silently clamps out-of-range values (for example GEMM_UNROLL_N is capped at 24/GEMM_UNROLL_M_VEC).",
+    "aligned_alloc and malloc results are not checked, nothing returns early when m, n or k is 0, and the assembly defines a global symbol with the generic name timedelay (used by the spin barrier)."
+  ],
+  "pick_this_over_siblings_when": "Pick it only to study or retune an AVX-512 GEMM kernel. The same author's GEMM_AVX2_FMA3 at least publishes numbers against MKL 2019 (2-3% faster at 20000^3 on 8 threads), FT-BLAS claims up to 3.5% over MKL, and stock OpenBLAS already ships this author's SkylakeX DGEMM and STRMM kernels.",
+  "verified_claims_summary": "The only performance statement is the README line 'able to reach 99% MKL 1-thread performance after tuning'. It gives no GFLOPS, matrix sizes, MKL version, compiler or CPU, and the repo contains no GEMM benchmark (AVX512_CPUTEST.c only measures peak FMA throughput and latency); the tune headers say the parameters were tuned on a Xeon Platinum 8269CY. Read literally, it is a 1% deficit against single-threaded MKL: parity, not a win.",
+  "status_note": "Abandoned since 2022-05-22 (82 commits, 15 stars, one open 2020 issue) and GPL-3.0, so vendoring it brings copyleft. Its lasting value is upstream: the author's OpenBLAS commits include 'AVX512 16x2 DGEMM kernel' (2020-02-03) and 'AVX512 STRMM kernel' (2020-02-16), matching the AVX512 DGEMM kernel added in OpenBLAS 0.3.8 and the SkylakeX STRMM kernel in 0.3.9.",
+  "sources_read": [
+    "https://github.com/wjc404/GEMM_AVX512F",
+    "https://github.com/wjc404/GEMM_AVX512F/tree/develop/src",
+    "https://github.com/wjc404/GEMM_AVX512F/tree/develop/OpenBLAS-like_implementation",
+    "https://github.com/wjc404/GEMM_AVX512F/commits/develop",
+    "https://github.com/wjc404/GEMM_AVX512F/issues?q=is%3Aissue",
+    "https://github.com/wjc404/GEMM_AVX512F/issues/1",
+    "https://raw.githubusercontent.com/wjc404/GEMM_AVX512F/HEAD/README.md",
+    "https://raw.githubusercontent.com/wjc404/GEMM_AVX512F/HEAD/Makefile",
+    "https://raw.githubusercontent.com/wjc404/GEMM_AVX512F/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/wjc404/GEMM_AVX512F/HEAD/dgemm_tune.h",
+    "https://raw.githubusercontent.com/wjc404/GEMM_AVX512F/HEAD/sgemm_tune.h",
+    "https://raw.githubusercontent.com/wjc404/GEMM_AVX512F/HEAD/AVX512_CPUTEST.c",
+    "https://raw.githubusercontent.com/wjc404/GEMM_AVX512F/HEAD/src/gemm_driver.c",
+    "https://raw.githubusercontent.com/wjc404/GEMM_AVX512F/HEAD/src/gemm_set_parameters.h",
+    "https://raw.githubusercontent.com/wjc404/GEMM_AVX512F/HEAD/src/gemm_copy.c",
+    "https://raw.githubusercontent.com/wjc404/GEMM_AVX512F/HEAD/src/kernel/gemm_kernel.S",
+    "https://raw.githubusercontent.com/wjc404/GEMM_AVX512F/HEAD/src/kernel/gemm_kernel_wrapper.c",
+    "https://raw.githubusercontent.com/wjc404/GEMM_AVX512F/HEAD/OpenBLAS-like_implementation/sgemm.c",
+    "https://raw.githubusercontent.com/wjc404/GEMM_AVX512F/HEAD/OpenBLAS-like_implementation/dgemm_kernel_16x2_skylakex.c",
+    "https://github.com/OpenMathLib/OpenBLAS/commits/develop/?author=wjc404",
+    "https://raw.githubusercontent.com/OpenMathLib/OpenBLAS/develop/Changelog.txt"
+  ],
+  "confidence": 0.75
+}
