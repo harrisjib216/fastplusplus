@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/piezoid/pugz",
+  "one_liner": "Research prototype that decompresses one gzip stream of ASCII text on many threads; beats single-threaded GNU gunzip and libdeflate.",
+  "what_it_does": "pugz is a standalone command-line decompressor (the built binary is named `gunzip`, invoked as `./gunzip -t 8 file.gz`, or `-l` to count lines) for ordinary single-member gzip files whose decompressed bytes are printable ASCII plus tab/newline. It splits one deflate stream across threads without needing an index or a specially-written file. There is no library API yet (issue #6 'API design' is open); the code is a header-style mix of libdeflate C and C++11 templates that take a consumer callback.",
+  "how_it_is_fast": "Each thread jumps to an arbitrary bit offset and finds the next deflate block start by trying to decode at every bit position, failing fast with strict checks, then confirming by decoding five more blocks. Because the 32 KB history window before that point is unknown, the thread decodes with symbolic placeholders for unresolved back-references (16-bit symbols, compressed to 8 bits through a lookup table since text only uses bytes '\\t'..'~'); a quick sequential pass hands each chunk its predecessor's final window and a parallel pass substitutes the placeholders. The single-thread inflate loop is libdeflate's table-driven Huffman decoder, which is why one pugz thread is already about 2.7x gunzip; it also skips CRC32.",
+  "when_to_use": [
+    "Decompressing large (GB-scale) gzip FASTQ, CSV, TSV or log files that someone else produced with plain gzip, on a many-core box, when you cannot get an index or a block-parallel format.",
+    "Order-insensitive consumers (read-level FASTQ processing, line counting): the unsynchronized path scaled to 1052 MB/s at 24 threads in the README versus 251 MB/s with ordered output.",
+    "As a reference implementation or algorithm source for building speculative parallel inflate into your own C++ tool (MIT licence)."
+  ],
+  "when_not_to_use": [
+    "Any binary payload (.tar.gz, BAM, images) or text with bytes outside '\\t'..'~' (UTF-8 accents, Latin-1): unsupported by design.",
+    "Multi-member or blocked gzip files (bgzip/BGZF, concatenated .gz members): unsupported; issue #5 open since 2019.",
+    "Anything needing integrity: gzip CRC32 and ISIZE are never checked, so corrupted input can silently yield wrong text.",
+    "Production pipelines: abandoned since 2019 with open crash reports (#11 'Got a context from invalid position' on Nanopore FASTQ, #13 races and mutex assertions with 64 threads on pigz-made files), and error handling is mostly assertions. rapidgzip covers the general case.",
+    "Few cores or ordered output: with ordered stdout the README shows only 147 to 251 MB/s from 1 to 24 threads (Xeon X5675), and the library holds a section of decompressed output in memory per thread."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none beyond pthreads and librt (Linux)",
+    "min_toolchain": "C++11 compiler with SSSE3; Makefile uses -O3 -flto -march=native (compiler version not documented; issues #8-#10 were build failures fixed in 2019)",
+    "platforms": "Linux on recent x86-64 per README (SSSE3 required, -march=native binaries are not portable)",
+    "thread_safety": "Internal threading only; one call decompresses one mmapped file. Issue #13 (open, 2022) reports sporadic races: assertion failures in DeflateThread::get_context(), pthread mutex owner assertion and std::system_error at 64 threads.",
+    "drop_in_for_baseline": "partial — CLI resembles gunzip (writes to stdout, -t threads) but only for single-member ASCII-text gzip, with no CRC check and no library form"
+  },
+  "gotchas": [
+    "Default is 1 thread; you must pass -t N, and the thread count is capped at 1 + compressed_size/2 MiB.",
+    "Built with asserts on by default; `make asserts=0` is faster but the README warns unsupported files may then cause undefined behaviour, because most input validation is assert() (lib/input_stream.hpp, lib/deflate_decompress.hpp). libdeflate_gzip_decompress also ignores the return value of consume_header(), so a bad gzip header is not rejected there.",
+    "The produced binary is called `gunzip`; installing it on PATH shadows GNU gunzip with a tool that lacks CRC checks and binary support.",
+    "Input is mmapped from a regular file (no stdin streaming; source comment 'need a streaming-friendly solution')."
+  ],
+  "pick_this_over_siblings_when": "Pick rapidgzip over pugz for almost every use: it handles binary data, multi-member files, CRC checks and is maintained. pugz is only worth reading for the algorithm or for unordered ASCII FASTQ throughput; pigz decompresses on one thread, and libdeflate is the faster single-thread choice when the file fits in memory.",
+  "verified_claims_summary": "Peer-reviewed HiCOMB/IPDPSW 2019 paper, Table II: on three 3-7.5 GB FASTQ files preloaded into RAM on a 2x12-core Xeon E5-2670 v3, gunzip 37 MB/s, libdeflate 118 MB/s and pugz with 32 threads 611 MB/s of compressed input (16.5x and 5.2x), with output sent unordered to /dev/null and no CRC check in pugz. The README's own script runs give 55 MB/s gunzip versus 147 MB/s (1 thread) and 251 MB/s (24 threads, ordered output) on a dual Xeon X5675; compiler version not stated.",
+  "status_note": "Abandoned prototype (last commit 2019-08-20, open crash and race issues), MIT-licensed; usable as an algorithm reference or for unordered ASCII decompression, superseded for general use by rapidgzip.",
+  "sources_read": [
+    "https://github.com/Piezoid/pugz",
+    "https://raw.githubusercontent.com/Piezoid/pugz/HEAD/README.md",
+    "https://raw.githubusercontent.com/Piezoid/pugz/HEAD/Makefile",
+    "https://raw.githubusercontent.com/Piezoid/pugz/HEAD/lib/gzip_decompress.hpp",
+    "https://raw.githubusercontent.com/Piezoid/pugz/HEAD/lib/deflate_decompress.hpp",
+    "https://raw.githubusercontent.com/Piezoid/pugz/HEAD/lib/decompressor.hpp",
+    "https://raw.githubusercontent.com/Piezoid/pugz/HEAD/lib/input_stream.hpp",
+    "https://raw.githubusercontent.com/Piezoid/pugz/HEAD/lib/memory.hpp",
+    "https://raw.githubusercontent.com/Piezoid/pugz/HEAD/programs/gunzip.cpp",
+    "https://raw.githubusercontent.com/Piezoid/pugz/HEAD/paper/paper.pdf",
+    "https://github.com/Piezoid/pugz/tree/master/lib",
+    "https://github.com/Piezoid/pugz/issues?q=is%3Aissue",
+    "https://github.com/Piezoid/pugz/issues/11",
+    "https://github.com/Piezoid/pugz/issues/12",
+    "https://github.com/Piezoid/pugz/issues/13"
+  ],
+  "confidence": 0.8
+}

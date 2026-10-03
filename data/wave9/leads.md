@@ -24,3 +24,5 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - CERN 'Exploring compression techniques for ROOT IO' (arXiv 1704.06976, blocked) may hold independent LZHAM numbers. (from LZHAM enricher)
 - arXiv 2509.06900 'Engineering Select Support for Hybrid Bitvectors' (seen only as a search result). (from faster-minuter enricher)
 - richox/orz (libzling successor, not catalogued); smalLZ4, jibsen/blz4, LZ4X (optimal LZ4 encoders, same niche as lz4ultra). From lz4ultra/libzling enricher.
+- CC0 C port of MinLZ (gist klauspost/5796a5aa116a15eb7341ffa8427bbe7a; minlz.h, unminlz.h); Rust ports minio/minlz-rs and KarpelesLab/minlz-rs. From minlz enricher.
+- Entropy gh-any search dropped for no baseline speed claim: lmz, DFloat11, cloudflareresearch/unweight-kernels (report blocked), m99, YAECL, torchac, lucastheis/rangecoder, divans, marc, kolma, SnellerInc/iguana, libaec, pcodec. encode.su and Sneller blog blocked here.
