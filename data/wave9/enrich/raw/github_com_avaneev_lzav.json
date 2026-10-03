@@ -1,0 +1,45 @@
+{
+  "id": "https://github.com/avaneev/lzav",
+  "one_liner": "Single-header C99 LZ77 codec: about 16% smaller output than LZ4/Snappy at Snappy-class compress speed.",
+  "what_it_does": "In-memory (non-streaming) block compressor in one header, lzav.h, usable from C and C++. lzav_compress_default() and lzav_compress_hi() fill a buffer sized by lzav_compress_bound()/lzav_compress_bound_hi(); lzav_decompress() needs the exact original length, which the caller must store, and returns a negative LZAV_E_* code on any error or length mismatch. It is not API-compatible with LZ4 or Snappy, and there is no frame format or streaming mode.",
+  "how_it_is_fast": "Classic LZ77 with a hash table of (4-byte prefix, 32-bit offset) tuples, 1 tuple per bucket in the default compressor (a 2048-entry on-stack table for small inputs, heap up to 1 MiB) and 8-tuple buckets in the slower HI compressor. The block format uses 10/15/21-bit offsets plus 'offset-carry' bits borrowed from neighbouring blocks, which gives a dynamic window of 2 MiB to 512 MiB at low header cost; that bigger window is where the ratio gain over LZ4 comes from. The code is scalar and portable (no SIMD), relying on prefetch hints, forced inlining and branch-likelihood hints.",
+  "when_to_use": [
+    "Replacing Snappy or LZF for in-memory block compression (database pages, cache values, filesystem blocks) when you want 39.9% instead of about 48% ratio on Silesia at similar compress speed.",
+    "Projects that want one MIT header with no build system, dependencies or SIMD requirements, including big-endian, 32-bit and WebAssembly targets.",
+    "Decoding untrusted or possibly damaged blocks: the decompressor bounds-checks every source, destination and back-reference access and returns an error code rather than crashing.",
+    "Write-once/read-many assets via lzav_compress_hi(): 34.85% on Silesia, decoded by the same fast decompressor."
+  ],
+  "when_not_to_use": [
+    "Decompression-speed-bound paths: LZ4 decodes faster everywhere measured (lzbench EPYC 9555P: lz4 1.10.0 3832 MB/s vs lzav -1 2527 MB/s; README Apple M1: 4570 vs 3830 MB/s).",
+    "Pure compress-speed needs: LZ4 default and lz4 --fast levels compress faster (README: LZAV about 30% slower than LZ4 at compression).",
+    "Streaming, framed or interoperable formats: no frame, no checksum, no streaming API; you must store the uncompressed length yourself.",
+    "Inputs larger than 2 GiB per call (int lengths); chunk them, ideally 16 MiB or more per chunk to keep the ratio.",
+    "When zstd's ratio range matters: zstd -1 reaches 34.6% (README TurboBench) and scales to far higher levels; LZAV has only two levels."
+  ],
+  "integration": {
+    "form": "header-only",
+    "dependencies": "none (libc malloc/free or C++ new[]/delete[] by default)",
+    "min_toolchain": "ISO C99 compiler or any C++ compiler; tested with Clang, GCC, MSVC and Intel C++",
+    "platforms": "any; tested on x86, x86-64 and AArch64 (Apple Silicon) under Windows, Linux and macOS; big- and little-endian; WebAssembly/WASI at about half native speed",
+    "thread_safety": "Functions are reentrant (internal hash table is on stack or per-call heap); a caller-supplied extbuf hash table must not be shared between concurrent calls.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "lzav_decompress() takes the expected decompressed length and returns an error if the output length differs; store it separately (issue #13 asked for a built-in size header and it was closed).",
+    "Output of the same input may differ between LZAV versions and between big- and little-endian machines; only decompression of older formats is guaranteed (format 2 support can be dropped with LZAV_FMT_MIN=3).",
+    "OOB checks do not guarantee correct output on corrupted input; the header advises checksumming the uncompressed data and the length header yourself.",
+    "C++ build is noexcept and uses new[] by default; define LZAV_EXCEPT to allow throwing allocation, LZAV_MALLOC/LZAV_FREE for a custom allocator, LZAV_NS_CUSTOM to move symbols out of the global namespace. All functions are static, so no ABI to keep stable."
+  ],
+  "pick_this_over_siblings_when": "Pick LZAV over LZ4 when ratio matters more than raw speed and you still want one portable header (39.91% vs 47.60% on Silesia); pick it over zstd --fast/-1 when decompression speed matters (lzbench: 2527 vs 1707 MB/s at 39.91% vs 41.01%) and you do not need zstd's frame format, streaming or higher levels. Pick LZ4 or misa77 if decode speed is the priority.",
+  "verified_claims_summary": "In the independent lzbench 2.4 run (gcc 15.2.0 release binary, one thread of an EPYC 9555P, silesia.tar), lzav 5.17 -1 compressed at 451 MB/s and decompressed at 2527 MB/s for a 39.91% ratio, vs snappy 1.3.1 at 457 / 976 MB/s and 47.85%: same compress speed, 2.6x decompress (derived from page data), much better ratio. The author's README tables (Apple M1 with Apple clang 15, Xeon E-2386G with clang 19.1.7, Ryzen 3700X with clang-cl 18.1.8) show a smaller decompress margin over Snappy 1.1.10 (3830 vs 3230 MB/s on M1) and LZ4 1.9.4 faster in both directions. The lzbench Snappy decompress figure (976 MB/s) is far below what the README measures for Snappy (2440-3360 MB/s), so treat the 2.6x as specific to that build; the robust wins are ratio and parity-or-better speed vs Snappy.",
+  "status_note": "Actively developed by one author (version 5.18, last commit 2026-10-01, 550 stars), MIT-licensed single header that is trivial to vendor; the repo has no test suite, fuzzing harness or CI visible.",
+  "sources_read": [
+    "https://github.com/avaneev/lzav",
+    "https://raw.githubusercontent.com/avaneev/lzav/HEAD/README.md",
+    "https://raw.githubusercontent.com/avaneev/lzav/HEAD/lzav.h",
+    "https://github.com/avaneev/lzav/issues?q=is%3Aissue",
+    "https://github.com/avaneev/lzav/issues/2",
+    "https://raw.githubusercontent.com/inikep/lzbench/HEAD/README.md"
+  ],
+  "confidence": 0.85
+}

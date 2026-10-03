@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/conorstokes/lzsse",
+  "one_liner": "LZSS codec whose format is built for branchless SSE4.1 decoding; decodes about 1.3x faster than LZ4HC at similar ratio.",
+  "what_it_does": "Three block codecs (LZSSE2, LZSSE4, LZSSE8), each a .cpp/.h pair with an extern \"C\" API: allocate a parse state, call LZSSEn_CompressOptimalParse (levels 1-17) or LZSSEn_CompressFast (LZSSE4/8 only), and decode with LZSSEn_Decompress(input, inputLength, output, outputLength). It is a write-once/read-many alternative to LZ4HC, not an LZ4-compatible format; there is no frame, checksum or streaming layer, and the caller must store the uncompressed size.",
+  "how_it_is_fast": "The stream is a sequence of 4-bit control nibbles packed 16 bytes at a time; the decoder loads one control block, uses pshufb (_mm_shuffle_epi8) lookup tables, compare masks and blendv to compute per-step input and output byte counts and literal/match selection, then each step does an unconditional 16-byte load of the match source, masks in literals and writes 16 bytes, with no data-dependent branches. Matches are short (LZSSE8: 4-byte minimum, up to 15 bytes per control, longer matches chained by carry nibbles) and offsets are 16-bit, so copies stay in a 64 KiB window and in L1/L2. Ratio comes from the optimal parser (binary-tree match finder similar to LzFind plus a Storer-Szymanski style parse), which is why compression is slow.",
+  "when_to_use": [
+    "Assets or data blobs compressed once offline and decompressed many times on x86-64 (games, read-only stores), where decode MB/s matters more than encode time.",
+    "Text and mixed corpora at LZ4HC-class ratio: lzsse8 -6 on silesia.tar decodes 5007 MB/s at 35.61% vs lz4hc -12 at 3813 MB/s and 36.45% (lzbench 2.4, EPYC 9555P).",
+    "Highly compressible text with LZSSE2, which the README recommends for text with short literal runs.",
+    "Code that can vendor a small BSD-2-Clause C++ source drop and wants decode speed with steady per-file throughput."
+  ],
+  "when_not_to_use": [
+    "Anything that compresses at runtime: optimal-parse levels run at about 8-9 MB/s, and the only fast mode in lzbench (lzsse4fast, 266 MB/s, 45.26%) is slower and worse than plain LZ4 (550 MB/s, 47.60%, 3832 MB/s decode) on the same run.",
+    "Non-x86 targets: requires SSE4.1 and 64-bit x86; no ARM/NEON or scalar fallback (issue #1 'Portable version' open since 2016), and the header warns it performs poorly on 32-bit x86.",
+    "LZSSE8 fast-parse output: issue #14 (open, labelled bug, March 2025) has a reproducible file whose LZSSE8_CompressFast output fails to decompress; lzbench flags the same bug.",
+    "Untrusted input or tight buffers: issue #7 (open since 2016) reports LZSSE2_Decompress writing outside the buffer for very short data under AddressSanitizer.",
+    "Projects needing a maintained dependency: last commit 2019-04-18, 25 commits, and the README itself says the code is only 'approaching production readiness'."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none (SSE4.1 intrinsics via <x86intrin.h> or <intrin.h>)",
+    "min_toolchain": "C++ compiler with SSE4.1 enabled (e.g. -msse4.1): MSVC, Clang or GCC; any other compiler hits '#error Platform not supported'; premake4 project for the example",
+    "platforms": "x86-64 with SSE4.1 only (lzbench: Windows builds via MinGW-w64 only)",
+    "thread_safety": "Per the header: one parse state must not be used by concurrent calls; separate states may run in parallel. Decompress is stateless.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Decompress expects outputLength to equal the original size: issue #16 (open, Jan 2026) shows LZSSE8 level-17 data decoded into a buffer 32 bytes larger returns 15 bytes short, and issue #12 shows the same for LZSSE2 when the block buffer exceeds the input.",
+    "Decompress returns a byte count below outputLength on error rather than an error code, and does no hash check; 'corrupt data can still be valid to decompress' per the header.",
+    "The optimal-parse state is large: a 2^20-entry hash root table, a binary-tree node array for the 64 KiB window, and an Arrival record per input byte sized by MakeOptimalParseState(bufferSize).",
+    "Compressed output is never larger than the input (stored raw instead), but outputLength for compression must be at least inputLength or the call returns 0."
+  ],
+  "pick_this_over_siblings_when": "Pick LZSSE8 over LZ4HC for x86-64-only read-heavy data when about 30% faster decoding at slightly better ratio is worth an unmaintained, SSE4.1-only dependency with open correctness issues; pick LZ4/LZ4HC for portability and maintenance, or misa77 or ZXC for a maintained decode-speed-first codec. LZAV and zstd are better whenever compression speed matters.",
+  "verified_claims_summary": "In lzbench 2.4 (gcc 15.2.0 release binary, single thread of an AMD EPYC 9555P at 3.20 GHz, turbo off, silesia.tar), lzsse8 2019-04-18 -6 decompressed at 5007 MB/s for 35.61% and lzsse4 -6 at 4714 MB/s for 35.91%, vs lz4hc 1.10.0 -12 at 3813 MB/s for 36.45% (1.31x and 1.24x, derived from page data); both LZSSE rows compress at about 9 MB/s, and lzsse2 -6 (3850 MB/s) is level with plain lz4 (3832 MB/s). The author's 2016 blog benchmarks are on a blocked host; a search snippet says LZSSE8 decode stays above 2607 MB/s on binary data where LZ4 dropped to 2115 MB/s on enwik8 (snippet only).",
+  "status_note": "Abandoned since 2019-04-18 (151 stars, open bug reports from 2016 to 2026 unanswered); BSD-2-Clause and small enough to vendor, but fuzz and round-trip test it yourself and avoid LZSSE8_CompressFast.",
+  "sources_read": [
+    "https://github.com/ConorStokes/LZSSE",
+    "https://raw.githubusercontent.com/ConorStokes/LZSSE/HEAD/README.md",
+    "https://raw.githubusercontent.com/ConorStokes/LZSSE/HEAD/lzsse8/lzsse8.h",
+    "https://raw.githubusercontent.com/ConorStokes/LZSSE/HEAD/lzsse8/lzsse8.cpp",
+    "https://raw.githubusercontent.com/ConorStokes/LZSSE/HEAD/lzsse8/lzsse8_platform.h",
+    "https://raw.githubusercontent.com/ConorStokes/LZSSE/HEAD/lzsse4/lzsse4.h",
+    "https://raw.githubusercontent.com/ConorStokes/LZSSE/HEAD/lzsse2/lzsse2.h",
+    "https://github.com/ConorStokes/LZSSE/issues?q=is%3Aissue",
+    "https://github.com/ConorStokes/LZSSE/issues/14",
+    "https://github.com/ConorStokes/LZSSE/issues/16",
+    "https://github.com/ConorStokes/LZSSE/issues/7",
+    "https://github.com/ConorStokes/LZSSE/issues/12",
+    "https://raw.githubusercontent.com/inikep/lzbench/HEAD/README.md"
+  ],
+  "confidence": 0.85
+}
