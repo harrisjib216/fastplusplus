@@ -88,3 +88,8 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - superscientificsoftwarelaboratory/amgt (B, snippet-only): SC '24, DOI 10.1109/SC41406.2024.00058; confirm numbers.
 - superscientificsoftwarelaboratory/dasp (B, snippet-only): SC '23, DOI 10.1145/3581784.3607051; confirm numbers.
 - koide3/fast_gicp: cross-link with the already-listed successor koide3/small_gicp when rendering.
+- chenxm1986/nicslu (C): TCAD 2013 paper, 2.08x-8.57x vs KLU at 1-12 threads (nicsefc.ee.tsinghua.edu.cn blocked); retier to B. (batch 147)
+- ralna/spral (D): TOMS 2016 SSIDS paper and the APTP paper (centaur.reading.ac.uk, nlafet.eu, osti.gov blocked); retier to B. (batch 147)
+- passionlab/openequivariance (C): ACDA25 paper, arXiv 2501.13986; retier to B. (batch 145)
+- nvidia/cuequivariance (C): arXiv 2510.23621 independent MACE latency study; confirm numbers. (batch 145)
+- superscientificsoftwarelaboratory/tilespmv (B, snippet-only): IPDPS 2021 paper (ssslab.cn PDF, IEEE blocked); confirm numbers. (batch 148)
