@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/xing-cong/cb-sparse",
+  "one_liner": "FP64 GPU SpMV on a 16x16 compressed-block format; about 3x faster than cuSPARSE BSR SpMV on SuiteSparse matrices.",
+  "what_it_does": "CB-SpMV computes y = A*x in double precision on NVIDIA GPUs. It reads a Matrix Market file, converts the COO matrix on the CPU into its own two-level block format (16x16 sub-blocks, each stored as COO, CSR or dense), copies it to the GPU in one transfer, and runs a CUDA kernel. The release is a benchmark driver (main.cu plus headers such as cb-spmv.cuh and coo2block.h), not a library: the cb_spmv() entry point allocates device memory, copies the matrix, times the kernel and frees everything per call, so it does not drop in for cusparseSpMV or cusparseDbsrmv.",
+  "how_it_is_fast": "Intra-block data aggregation: each sub-block's 4-bit row and column indices are packed into one uint8 and stored next to its FP64 values in one contiguous region, which raises L1/L2 hit rates (the paper measures this with Nsight Compute). Adaptive sub-block formats (COO under 32 nonzeros, dense above 128, CSR between, thresholds taken from TileSpMV) avoid BSR's padded zeros. Block-aware column aggregation packs the non-empty columns of super-sparse sub-blocks together so warps stay busy, and an inter-thread-block load-balancing pass redistributes blocks across SMs; partial sums are combined with warp shuffles and atomicAdd into y.",
+  "when_to_use": [
+    "Repeated FP64 SpMV with the same matrix (iterative solvers, power iterations) on an NVIDIA GPU, where the CPU-side conversion is paid once.",
+    "Irregular matrices with many very sparse 16x16 blocks, where cuSPARSE BSR wastes bandwidth on padded zeros (the paper's largest wins, 37.54x and 54.27x, are such cases).",
+    "Consumer or FP64-weak GPUs such as the RTX 4090, where it beat tensor-core DASP by 2.76x on average in the paper.",
+    "As a reference implementation for a block-based SpMV kernel you will adapt into your own code."
+  ],
+  "when_not_to_use": [
+    "You need a library API: there is none, the code is a benchmark driver that reallocates and copies the matrix on every cb_spmv() call.",
+    "A100/H100-class GPUs with strong FP64 tensor cores, where the paper's average edge over DASP is only 1.21x.",
+    "FP32 or mixed precision, or AMD/Intel GPUs or CPUs: ValType is hard-coded to double and the code is CUDA only.",
+    "Matrices that change every call, since the COO-to-block conversion runs on the CPU and the paper reports it as comparable to TileSpMV and BSR conversion for matrices above 1 million nonzeros.",
+    "Matrices beyond 32-bit indexing: nnz, rows and columns are int."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "CUDA Toolkit (nvcc, CUDA runtime; cuSPARSE only for the baseline harness), host C++ compiler with OpenMP",
+    "min_toolchain": "Tested with CUDA 12.4 and driver 550.144.03; minimum version not documented",
+    "platforms": "NVIDIA GPUs only; Makefiles default to -arch=sm_89 (RTX 4090), change to sm_80 for A100",
+    "thread_safety": "not documented",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Results are accumulated into y with FP64 atomicAdd, so y must be zeroed before each call and the summation order (and last bits of the result) is nondeterministic run to run.",
+    "The built-in correctness check uses loose tolerances for FP64 (absolute 1e-3, relative 1e-4).",
+    "The repo harness averages over ITER = 10 timed launches after one untimed launch, while the paper says each kernel ran 1000 times, so repo numbers will be noisier than the paper's.",
+    "The program accepts only an absolute path to the .mtx file and uses GPU 0."
+  ],
+  "pick_this_over_siblings_when": "Pick CB-SpMV over DASP when the GPU has weak FP64 tensor cores (RTX-class) and over TileSpMV for the same 16x16 tiling with better cache locality; prefer merge-spmv, CSR5 or ISpMV when you need to stay in CSR without a conversion step, and DASP on A100-class hardware where the gap is small and DASP has more history.",
+  "verified_claims_summary": "The ICS '25 paper measures FP64 SpMV Gflop/s over 2,843 SuiteSparse matrices on an A100 and an RTX 4090 with CUDA 12.4: averages of per-matrix speedups are 2.99x and 2.95x over cuSPARSE v12.4 BSR SpMV (best of block sizes 2, 4, 8, 16), 3.95x and 3.06x over TileSpMV, and 1.21x and 2.76x over DASP. The repo ships only the cuSPARSE-BSR harness, not cuSPARSE CSR, TileSpMV or DASP runners, and the host CPU is not stated.",
+  "status_note": "Active (last commit 2026-09-02, a bug fix and preprocessing change that postdates the paper) and Apache-2.0, but small (six commits, no issues filed) and research-grade; CB-SpMM and CB-SpGEMM are announced but not released.",
+  "sources_read": [
+    "https://github.com/xing-cong/CB-Sparse",
+    "https://raw.githubusercontent.com/xing-cong/CB-Sparse/HEAD/README.md",
+    "https://raw.githubusercontent.com/xing-cong/CB-Sparse/HEAD/Code-Guide.md",
+    "https://raw.githubusercontent.com/xing-cong/CB-Sparse/HEAD/cb-spmv/README.md",
+    "https://raw.githubusercontent.com/xing-cong/CB-Sparse/HEAD/cb-spmv/src/Makefile",
+    "https://raw.githubusercontent.com/xing-cong/CB-Sparse/HEAD/cb-spmv/run/run_cbspmv.sh",
+    "https://github.com/xing-cong/CB-Sparse/tree/master/cb-spmv/src",
+    "https://raw.githubusercontent.com/xing-cong/CB-Sparse/HEAD/cb-spmv/src/main.cu",
+    "https://raw.githubusercontent.com/xing-cong/CB-Sparse/HEAD/cb-spmv/src/cb-spmv.cuh",
+    "https://raw.githubusercontent.com/xing-cong/CB-Sparse/HEAD/cb-spmv/src/coo2block.h",
+    "https://raw.githubusercontent.com/xing-cong/CB-Sparse/HEAD/cb-spmv/src/format.h",
+    "https://raw.githubusercontent.com/xing-cong/CB-Sparse/HEAD/cb-spmv/src/macros.h",
+    "https://raw.githubusercontent.com/xing-cong/CB-Sparse/HEAD/cb-spmv/src/utils.h",
+    "https://raw.githubusercontent.com/xing-cong/CB-Sparse/HEAD/cb-spmv/benchmark/cuSparse/main.cu",
+    "https://raw.githubusercontent.com/xing-cong/CB-Sparse/HEAD/cb-spmv/benchmark/cuSparse/Makefile",
+    "https://github.com/xing-cong/CB-Sparse/issues?q=is%3Aissue",
+    "https://github.com/xing-cong/CB-Sparse/commits",
+    "https://raw.githubusercontent.com/hpcrl/ICS2025-webpage/HEAD/program/Proceedings_ICS25/ics25-7.pdf"
+  ],
+  "confidence": 0.8
+}
