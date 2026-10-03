@@ -1,0 +1,52 @@
+{
+  "id": "https://github.com/samtools/htscodecs",
+  "one_liner": "CRAM 3.1 codec library whose 32-way SIMD rANS decodes about 2.7x faster than its 4-way rANS and 3.8x faster than FSE.",
+  "what_it_does": "C library of the custom CRAM 'EXTERNAL' block codecs used by htslib/samtools: static rANS 4x8 (CRAM 3.0), rANS 4x16 with RLE/bit-packing/stripe transforms, an adaptive arithmetic coder, a read-name tokeniser and the fqzcomp quality codec. The general-purpose entry points are buffer-in/buffer-out C functions (rans_compress_4x16 / rans_uncompress_4x16 returning malloc'd buffers, plus *_to variants that write into a caller buffer sized with rans_compress_bound_4x16). Setting RANS_ORDER_X32 (0x04) in the order bit field selects the 32-way codec; the stream header records everything needed to decode.",
+  "how_it_is_fast": "Interleaved rANS with 32 independent states and 16-bit renormalisation, so one state per SIMD lane: 8 lanes per AVX2 register, 16 per AVX-512 register, with SSE4.1 and AArch64 NEON versions and runtime CPUID/HWCAP dispatch. Renormalisation is vectorised by compressing the lanes that need a 16-bit word with precomputed permute tables (_mm256_permutevar8x32_epi32), and symbol-table lookups use a simulated gather built from scalar loads by default (true vpgather is opt-in via -DUSE_GATHER). The encoder transposes a 32x32 block of output so the decoder reads its streams contiguously, and order-1 tables live in thread-local storage to avoid malloc churn.",
+  "when_to_use": [
+    "Order-0 or order-1 static entropy coding of byte streams in the tens-of-KB to MB range where decode speed matters, on x86-64 with AVX2 or AVX-512, or AArch64 with NEON.",
+    "Reading or writing CRAM 3.1, or any format already built on htscodecs/htslib, where the 32x16 codec is part of the spec.",
+    "Small-alphabet data (e.g. quality scores): the PACK and RLE transforms gave the highest rates in BENCHMARKS.md (r32x16-o132 AVX-512: 1050.6 MB/s encode, 3947.9 MB/s decode on 10 MB of NovaSeq qualities).",
+    "When you need a production-hardened, fuzzed (OSS-Fuzz) rANS implementation under a BSD licence rather than a research prototype."
+  ],
+  "when_not_to_use": [
+    "CPUs without SIMD: the scalar 32-way path is slower than the 4-way codec (PR #26: 358.8/642.4 vs 428.8/773.9 MB/s encode/decode), so use the 4x16 codec there.",
+    "Peak raw decode speed on enwik8-like data: the hypersonic-rANS sibling reports its fastest AVX2 decoder about 1.27x faster than htscodecs rans32avx2 order-0 on a Ryzen 9 7950X.",
+    "Encode-heavy pipelines with SSE4.1 only: the SSE4 32-way encoder (360.9 MB/s) is no faster than the scalar 4-way encoder.",
+    "Adaptive modelling: the 32-way unrolling covers only static rANS; the adaptive arithmetic coder has no X32 variant and runs near 100 MB/s.",
+    "MSVC-only builds: the build is autotools (configure/make) with GCC/Clang-style -m flags; native MSVC support is not documented."
+  ],
+  "integration": {
+    "form": "static lib | shared lib (autotools; also used as a git submodule of htslib)",
+    "dependencies": "libbz2 (optional, --disable-bz2; needed to decode some arith streams), pthreads (optional, NO_THREADS build), libm",
+    "min_toolchain": "C99 compiler with GCC/Clang intrinsics; autoconf to regenerate configure from git; SIMD files compiled only if the compiler accepts -msse4.1/-mavx2/-mavx512f",
+    "platforms": "any (scalar); x86-64 SSE4.1+POPCNT/AVX2/AVX-512F and AArch64 NEON accelerated with runtime detection; Linux, macOS, FreeBSD, Windows (MinGW-style) mentioned in source and CI",
+    "thread_safety": "Codec calls are reentrant; CPU detection runs once under pthread_once and scratch buffers are thread-local. A minor data race on the first rans4x16 call was fixed in 1.6.4 (July 2025).",
+    "drop_in_for_baseline": "partial: the 32-way codec is a flag (RANS_ORDER_X32) on the same rans_compress_4x16 API as the 4-way baseline, but the byte stream is htscodecs-specific and not compatible with FSE/zstd entropy streams"
+  },
+  "gotchas": [
+    "Intel GDS/Downfall microcode slows hardware AVX2/AVX-512 gathers 2-3x, so the default build uses simulated gathers, which cost 10-30% decode (up to 50% AVX-512 encode) on unpatched Intel CPUs; rebuild with CPPFLAGS=-DUSE_GATHER to opt back in.",
+    "On AMD CPUs the dispatcher prefers AVX2 over AVX-512 when both exist (Zen4 gathers are slow); rans_set_cpu() can force encode/decode SIMD levels for testing.",
+    "Security history: 1.5.2 (Oct 2023) fixed write overruns in fqzcomp and the name tokeniser, an 8-byte read overflow in the AVX2 rANS decoder (gcc builds) and an SSE4 order-1 mis-decode of the final 31 bytes; issue #154 (Sep 2026, open) reports CRAM 3.1 'small' encode failures with many 1 bp reads, suspected in fqzcomp.",
+    "Throughput is compiler-sensitive: the PR notes gcc-11 encoded the 4x16 codec at 268.2 MB/s versus 431.5 MB/s with gcc-7; issue #128 reported rans_compress_to_4x16 failing on blocks above about 1.25 MiB (closed; resolution not read)."
+  ],
+  "pick_this_over_siblings_when": "Pick htscodecs over hypersonic-rANS or rans-tricks when you need a maintained, fuzzed, BSD-licensed library with a stable on-disk format, NEON support and fast SIMD encoders, not just a fast decoder. Pick it over FiniteStateEntropy when decode throughput on AVX2/AVX-512 hardware matters more than portable scalar speed.",
+  "verified_claims_summary": "In the author's PR #26 on an Intel Xeon Gold 6142 with Ubuntu 18.04's system gcc (flags not stated), 101 MB of HiSeq quality data decoded at 2124.8 MB/s with the AVX-512 32x16 codec versus 773.9 MB/s for the library's own 4-way rANS and 564.4 MB/s for FSE order-0; AVX2 gave 1516.0 MB/s. On Graviton-2 the NEON decoder reached 736.2 MB/s versus 452.6 MB/s for 4-way scalar.",
+  "status_note": "Actively maintained by the samtools/htslib team (release 1.6.7 June 2026, last commit 2026-09-24); BSD-licensed with some rANS/range-coder headers public domain/CC0, so copyable.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/samtools/htscodecs/master/README.md",
+    "https://raw.githubusercontent.com/samtools/htscodecs/master/BENCHMARKS.md",
+    "https://raw.githubusercontent.com/samtools/htscodecs/master/LICENSE.md",
+    "https://raw.githubusercontent.com/samtools/htscodecs/master/NEWS.md",
+    "https://raw.githubusercontent.com/samtools/htscodecs/master/configure.ac",
+    "https://raw.githubusercontent.com/samtools/htscodecs/master/Makefile.am",
+    "https://raw.githubusercontent.com/samtools/htscodecs/master/htscodecs/rANS_static4x16pr.c",
+    "https://raw.githubusercontent.com/samtools/htscodecs/master/htscodecs/rANS_static4x16.h",
+    "https://raw.githubusercontent.com/samtools/htscodecs/master/htscodecs/rANS_static32x16pr_avx2.c",
+    "https://github.com/samtools/htscodecs/pull/26",
+    "https://github.com/samtools/htscodecs/issues?q=is%3Aissue",
+    "https://github.com/samtools/htscodecs/issues/128",
+    "https://github.com/samtools/htscodecs/issues/154"
+  ],
+  "confidence": 0.8
+}

@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/rainerzufalldererste/hypersonic-rans",
+  "one_liner": "Research C++ rANS codecs with AVX2/AVX-512 decoders reaching about 3 GiB/s, about 3.1x FSE and 1.27x htscodecs.",
+  "what_it_does": "A benchmark-driven R&D repo of static order-0 rANS byte codecs: 32-bit states with 16-bit renormalisation, interleaved 16, 32 or 64 ways (rANS32x16/32x32/32x64 '16w'), each at probability precisions of 10-15 bits. Every variant is a set of free functions over raw buffers (e.g. rANS32x64_16w_encode_scalar_11(in, len, out, cap, &hist) and many rANS32x64_*_decode_avx2_varA_11(in, inLen, out, cap) decoders) that return bytes written or 0 on failure; the caller builds the histogram with make_hist. There is no library target, stable API or dispatcher: the build produces a benchmark console app (hsrans), and the author says the repo is not yet integration-friendly.",
+  "how_it_is_fast": "Wide interleaving (32 or 64 independent rANS states) keeps 8-lane AVX2 or 16-lane AVX-512 registers busy. Decode uses a cumulative-inverse slot-to-symbol table plus a packed (freq, cumul) table, looked up with hardware gathers (_mm256_i32gather_epi32), and renormalisation is done by compacting the lanes that need a 16-bit word with shuffle/permute lookup tables (variants 'xmm shfl', 'xmm shfl2', 'ymm perm'). The encoder writes the interleaved streams in a permuted order (idx2idx) so the decoder's pack/unpack needs no extra shuffles, and lower probability precision (10-12 bits) keeps the tables in L1, which is why the 11-bit variants are the fastest.",
+  "when_to_use": [
+    "Decode-dominated, single-thread order-0 entropy decoding of large byte buffers (MB scale such as enwik8 or Silesia files) on x86-64 with AVX2, where you can vendor and adapt code yourself.",
+    "As a reference design for building your own SIMD rANS decoder: it lays out many decoder variants (gather vs shuffle vs permute, 32 vs 64 states, 10-15 bit precision) with per-variant numbers.",
+    "Block-parallel decompression: the multithreaded block variants reported 7.0-18.0 GiB/s decode on x-ray (Ryzen 9 7950X), at a small ratio cost.",
+    "When a slight ratio loss (enwik8 64.48% vs FSE 63.2% and Huff0 63.4%) is acceptable in exchange for decode speed."
+  ],
+  "when_not_to_use": [
+    "Encode-heavy workloads: all encoders are scalar and run at about 190-350 MiB/s, versus FSE 736 MiB/s and Huff0 1,581 MiB/s on the same enwik8 table.",
+    "Non-x86 or pre-AVX2 targets: every top decoder needs AVX2; there are no NEON or portable SIMD paths.",
+    "Untrusted input: from reading the raw scalar decoder, it checks header lengths but not each 16-bit renormalisation read, and computes the loop bound as expectedOutputLength - 64 + 1 in size_t, which underflows for outputs shorter than 63 bytes (code reading only, not run); no fuzzing is documented.",
+    "When you need a maintained library: functional code last changed July 2023 (later commits are CI and dependabot updates), there are no releases, and there is no stable on-disk format or API.",
+    "Adaptive or context-modelled (order-1+) coding: only static order-0 histograms are implemented."
+  ],
+  "integration": {
+    "form": "source-drop (repo builds only a benchmark executable via premake5; no library target)",
+    "dependencies": "none beyond the C++ standard library and pthreads (Linux); premake5 to generate build files",
+    "min_toolchain": "C++17 (Windows clang configuration) / C++20 (Linux and MSVC configurations); clang++, GCC or MSVC 2022 per the README build steps",
+    "platforms": "x86-64 only; AVX2 for the fast decoders, optional AVX-512 (F/BW) variants; Windows and Linux",
+    "thread_safety": "Codec functions use only caller buffers and stack state, so separate calls look independent (from source reading); not documented",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Function names encode precision and lane count; the encoder and decoder precision (10-15) and variant family must match, and the stream carries no format tag that would catch a mismatch.",
+    "Headline 'raw' rows are hidden by default in the benchmark tool (--include-raw), and the default variants are block-based; the non-raw rows encode slower (about 225-240 MiB/s on enwik8).",
+    "The decoders rely on hardware AVX2 gathers; the htscodecs README notes that Intel's GDS/Downfall microcode slows such gathers 2-3x, and the published numbers are from an AMD Ryzen 9 7950X only.",
+    "Comparisons mix environments: TurboANX numbers came from a separate 2023 native-Windows TurboBench run, and the htscodecs rows predate htscodecs 1.6.0's switch to simulated gathers. GCC CI jobs were removed in July 2023 because they hung."
+  ],
+  "pick_this_over_siblings_when": "Pick hypersonic-rANS over htscodecs or FiniteStateEntropy only when x86 AVX2 decode throughput is the single goal and you will own the code; use htscodecs for a maintained, fuzzed library with fast SIMD encoders and NEON, and FSE/Huff0 when encode speed or portability matters. Compared with rans-tricks and ryg_rans, it is the more aggressively vectorised successor design.",
+  "verified_claims_summary": "The author's single-threaded runs on an AMD Ryzen 9 7950X under WSL2, built with clang++ at -O3 with LTO (version not stated), decoded enwik8 at 3,018.02 MiB/s with rANS32x64 16w 11 (raw), against 966.58 MiB/s for FSE, 2,515.23 MiB/s for Huff0 and 2,374.04 MiB/s for htscodecs rans32avx2 order-0 (about 3.1x, 1.2x and 1.27x, derived from page data). On x-ray, 3,079.98 MiB/s beat htscodecs AVX2 at 2,244.87 MiB/s.",
+  "status_note": "Stale research code (last functional change July 2023, last commit a 2024-09-03 CI bump; 2 open issues, no releases), BSD-2-Clause, so copyable for vendoring, but needs hardening before production use.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/rainerzufalldererste/hypersonic-rANS/master/README.md",
+    "https://raw.githubusercontent.com/rainerzufalldererste/hypersonic-rANS/master/LICENSE",
+    "https://raw.githubusercontent.com/rainerzufalldererste/hypersonic-rANS/master/project.lua",
+    "https://raw.githubusercontent.com/rainerzufalldererste/hypersonic-rANS/master/premake5.lua",
+    "https://github.com/rainerzufalldererste/hypersonic-rANS/tree/master/src",
+    "https://raw.githubusercontent.com/rainerzufalldererste/hypersonic-rANS/master/src/rANS32x64_16w.h",
+    "https://raw.githubusercontent.com/rainerzufalldererste/hypersonic-rANS/master/src/rANS32x64_16w.cpp",
+    "https://raw.githubusercontent.com/rainerzufalldererste/hypersonic-rANS/master/src/hist.h",
+    "https://raw.githubusercontent.com/rainerzufalldererste/hypersonic-rANS/master/src/rans.h",
+    "https://raw.githubusercontent.com/rainerzufalldererste/hypersonic-rANS/master/src/simd_platform.h",
+    "https://raw.githubusercontent.com/rainerzufalldererste/hypersonic-rANS/master/src/main.cpp",
+    "https://github.com/rainerzufalldererste/hypersonic-rANS/issues?q=is%3Aissue",
+    "https://github.com/rainerzufalldererste/hypersonic-rANS/commits",
+    "https://raw.githubusercontent.com/samtools/htscodecs/master/README.md"
+  ],
+  "confidence": 0.8
+}
