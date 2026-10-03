@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/lemire/simdcomp",
+  "one_liner": "C library for SIMD binary packing of 128-integer blocks (SIMD-BP128); decodes several times faster than Simple-8b and scalar VByte.",
+  "what_it_does": "Packs blocks of 128 unsigned 32-bit integers into b 128-bit words, where b is the block's maximum bit width, and unpacks them again; variants handle sorted lists with fused delta coding (simdpackd1/simdunpackd1), frame-of-reference (simdpackFOR), arbitrary lengths (simdpack_length, *_shortlength), and in-place select, search and set on packed blocks. It is deliberately low level: it defines no container format, so the caller must store each block's bit width, the initial delta offset and the element count.",
+  "how_it_is_fast": "SIMD-BP128 (Lemire and Boytsov, 'Decoding billions of integers per second through vectorization', SPE 2015) lays integers out vertically across the four 32-bit lanes of an SSE register, so 4 values are shifted, masked and ORed per instruction with no per-value branches. There is one fully unrolled pack/unpack kernel per bit width 0-32 selected by a switch, and the d1 variants fuse the delta prefix sum into the unpack. AVX2 (256-integer) and AVX-512 (512-integer) kernels exist when compiled with those ISAs, and a small in-tree NEON shim maps the SSE intrinsics on AArch64.",
+  "when_to_use": [
+    "Large arrays of small or slowly growing 32-bit integers (posting lists, column chunks, sorted docids) where decode throughput matters more than squeezing the last bits.",
+    "Sorted lists that need delta decode plus fast lower-bound search or select inside a packed block without fully unpacking (simdsearchd1, simdselectd1).",
+    "Building your own compressed format or index (as upscaledb, EventQL and ManticoreSearch do) where you want permissively licensed (BSD-3-Clause) kernels instead of a GPL codec.",
+    "x86-64 with SSE4.1 or better, or AArch64 with NEON, and data lengths that are mostly multiples of 128."
+  ],
+  "when_not_to_use": [
+    "Skewed data with occasional large outliers: one big value sets the bit width for the whole 128-block; on gov2 it stores 21.8% of raw size vs 18.9% for Simple-8b and about 14% for PFor-style codecs (TurboPFor, OptPFD) in the TurboPFor table.",
+    "Short arrays (under 128 values): the *_shortlength paths are documented as much slower; LittleIntPacker targets that case.",
+    "64-bit integers: the API is 32-bit only (issue #34 asks about uint64_t and is open).",
+    "Untrusted compressed input: there is no format and no validation; a libFuzzer heap-buffer-overflow report (issue #21, 2018) is closed without a visible fix, and the bit width and length come from the caller.",
+    "If the fastest decode is all that matters and GPL is acceptable, TurboPFor's TurboPackV256 beats it in the same gov2 table (11902 vs 9488 MB/s decode, 14466 vs 6952 MB/s encode)."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (CMake target simdcomp::simdcomp, pkg-config file, FetchContent supported)",
+    "dependencies": "none for the library; the optional benchmarks fetch lemire/counters over the network and need C++17",
+    "min_toolchain": "C89/C90 compiler with extensions (GCC, Clang, MSVC); CMake 3.14",
+    "platforms": "x86/x86-64 (SSE2 for core packing, SSE4.1 for some helpers, optional AVX2/AVX-512 kernels); AArch64/ARM NEON via include/neon128.h (added June 2026)",
+    "thread_safety": "not documented; functions are stateless and operate on caller buffers",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The CMake option SIMDCOMP_NATIVE defaults to ON and compiles with -march=native, so a library built on one machine may crash with illegal instructions on an older CPU; set -DSIMDCOMP_NATIVE=OFF for distributed binaries.",
+    "The AVX2 and AVX-512 functions (avxpack/avxunpack, avx512pack/avx512unpack) are only declared when the build enables those ISAs, use 256/512-integer blocks and produce a different layout from the 128-integer SSE format; do not mix them.",
+    "simdpackwithoutmask and simdpackwithoutmaskd1 assume every value (or delta) fits in b bits; an oversized value silently corrupts its neighbors. simdunpack with a bit width above 32 silently writes nothing.",
+    "The interleaved 4-lane layout is not the same as scalar sequential bit packing, so other libraries can read it only if they implement the same layout (the Rust bitpacking crate is a port)."
+  ],
+  "pick_this_over_siblings_when": "Choose simdcomp over FastPFor or SIMDCompressionAndIntersection when you want a small C library with just the bit-packing kernels and your own block format; choose those C++ libraries for complete codecs with PFor exception handling (better ratio on skewed data) or list intersection. Over TurboPFor, pick it for the BSD license; over Stream VByte or MaskedVByte, pick it when data is blockable and you want both faster decode and smaller output.",
+  "verified_claims_summary": "In the TurboPFor README gov2.sorted table (dated 2019.11, block 128 with delta coding, run by the TurboPFor author; issue #47 names a Skylake i7-6700 3.4 GHz and gcc 9.2 but no flags), SC_SIMDPack128 encoded at 6952 MB/s and decoded at 9488 MB/s vs Simple-8b 836/3296 and FastPFor's scalar VByte 1888/1980, while storing 21.8% of raw size vs 18.9% and 28.0%. The README's own claims (4 billion integers/s, 0.3 cycles per integer on Skylake) compare only against gzip, LZO, Snappy and LZ4 and come with no published run.",
+  "status_note": "Mature (2019-2023 commits are mostly README and warning fixes) and still maintained by Daniel Lemire in the fast-pack org, with a CMake package and NEON support added on 2026-06-07; BSD-3-Clause and easy to vendor.",
+  "sources_read": [
+    "https://github.com/lemire/simdcomp",
+    "https://raw.githubusercontent.com/lemire/simdcomp/HEAD/README.md",
+    "https://raw.githubusercontent.com/lemire/simdcomp/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/lemire/simdcomp/HEAD/include/simdcomp.h",
+    "https://raw.githubusercontent.com/lemire/simdcomp/HEAD/include/simdbitpacking.h",
+    "https://raw.githubusercontent.com/lemire/simdcomp/HEAD/include/simdcomputil.h",
+    "https://raw.githubusercontent.com/lemire/simdcomp/HEAD/include/simdintegratedbitpacking.h",
+    "https://raw.githubusercontent.com/lemire/simdcomp/HEAD/include/avxbitpacking.h",
+    "https://raw.githubusercontent.com/lemire/simdcomp/HEAD/include/avx512bitpacking.h",
+    "https://raw.githubusercontent.com/lemire/simdcomp/HEAD/include/simdfor.h",
+    "https://raw.githubusercontent.com/lemire/simdcomp/HEAD/include/portability.h",
+    "https://raw.githubusercontent.com/lemire/simdcomp/HEAD/include/neon128.h",
+    "https://raw.githubusercontent.com/lemire/simdcomp/HEAD/src/simdbitpacking.c",
+    "https://github.com/lemire/simdcomp/issues?q=is%3Aissue",
+    "https://github.com/fast-pack/simdcomp/issues/21",
+    "https://github.com/fast-pack/simdcomp/issues/36",
+    "https://github.com/fast-pack/simdcomp/commits/master",
+    "https://raw.githubusercontent.com/powturbo/TurboPFor-Integer-Compression/HEAD/README.md"
+  ],
+  "confidence": 0.8
+}

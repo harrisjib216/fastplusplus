@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/lemire/maskedvbyte",
+  "one_liner": "SIMD decoder for standard 32-bit VByte/varint streams; about 1.7-2.2x faster decode than scalar VByte in third-party tables.",
+  "what_it_does": "A small C99 library that decodes ordinary VByte (LEB128-style, 7 data bits per byte, high bit = more bytes follow) arrays of 32-bit unsigned integers, optionally with delta (prefix-sum) decoding for sorted lists. The API is plain C functions over caller buffers: vbyte_encode / vbyte_encode_delta, masked_vbyte_decode(in, out, count), *_fromcompressedsize variants that decode a known byte length, plus masked_vbyte_select_delta and masked_vbyte_search_delta for random access and lower-bound search in delta streams. Because the wire format is unchanged, it can replace a scalar varint decoder without re-encoding data.",
+  "how_it_is_fast": "It gathers the continuation bits of 48 input bytes at a time with pmovmskb (_mm_movemask_epi8) into a 64-bit mask, then uses the low 12 bits of that mask to index a 4 KB-aligned lookup table that gives a pshufb shuffle pattern plus the number of bytes consumed. One shuffle and a few mask/shift/or operations then produce 2, 4, 6 or 16 integers per step (Masked VByte, Plaisance, Kurz and Lemire, 'Vectorized VByte Decoding', 2015). Delta variants fuse an SSE prefix sum into the same step; an AVX2 path is used for the mask scan when compiled with -mavx2.",
+  "when_to_use": [
+    "You must read existing VByte/varint-encoded 32-bit data (inverted-index postings, Lucene-style vInts, protobuf-style unsigned varints that fit in 5 bytes) and cannot change the format.",
+    "Decode-heavy workloads on x86-64 with SSE4.1 where scalar varint decoding is the bottleneck, especially with many 1-2 byte values.",
+    "Sorted docid or offset lists stored as delta-coded VByte, where the fused delta decode, select and search helpers avoid a separate prefix-sum pass.",
+    "C or C++ projects that want a two-file, Apache-2.0 dependency with no third-party libraries."
+  ],
+  "when_not_to_use": [
+    "Untrusted or possibly corrupted input: there is no validation; issue #6 (2025) reports segfaults when fuzzing libvbyte through this decoder and issue #7 (June 2026) reports an ASan-reproducible memory-safety bug reachable from the public decode API; both are closed with no visible fix.",
+    "When you control the format: Stream VByte decodes faster in the same TurboPFor tables (ZIPF 11984 vs 9524 MB/s; gov2 9476 vs 3384 MB/s), and bit-packing codecs (simdcomp, TurboPack) are faster still and compress better.",
+    "64-bit integers or signed varints (zigzag): only 32-bit unsigned values, at most 5 bytes per value.",
+    "Encode-heavy workloads: the encoder is a plain scalar loop; only decoding is vectorized.",
+    "AArch64 builds: the README says NEON works through include/sse_to_neon.h, but that file was not present in include/ or src/ on 2026-10-03 (raw fetch 404), and CI runs only on ubuntu-latest x86-64."
+  ],
+  "integration": {
+    "form": "static lib or shared lib (two .c files; easy to vendor as source-drop); CMake package maskedvbyte::maskedvbyte or Makefile",
+    "dependencies": "none",
+    "min_toolchain": "C99 compiler with SSE4.1 intrinsics (GCC, Clang; MSVC fixes merged in 2023); CMake 3.15 for the CMake build",
+    "platforms": "x86-64 with SSE4.1 (optional AVX2 path); AArch64 claimed in README but the NEON shim header is missing from the repository",
+    "thread_safety": "not documented; functions are stateless and use only read-only static tables, so concurrent calls on separate buffers look safe from the code",
+    "drop_in_for_baseline": "partial — same byte format as standard 32-bit VByte, so data is compatible, but you call its C functions instead of your existing decoder loop"
+  },
+  "gotchas": [
+    "masked_vbyte_decode takes the number of integers, not bytes; pass a wrong count or a truncated buffer and it reads past the input, since there are no bounds checks on the scalar tail.",
+    "From code reading (not tested): mask patterns implying a 6+ byte varint map to lookup entries with 0 bytes consumed, so a malformed stream can stall the byte cursor while the output cursor keeps advancing; treat this as the likely shape of the issue #7 report.",
+    "The Makefile's benchmark target refers to benchmarks/benchmark.c, which is not in the repository; the repo has no benchmark of its own, so the numbers come from third parties.",
+    "The *_fromcompressedsize variants need an output buffer sized for the worst case (one integer per input byte)."
+  ],
+  "pick_this_over_siblings_when": "Pick MaskedVByte over Stream VByte, simdcomp or TurboPFor when the data is already in standard VByte and must stay readable by other tools; if you can choose the format, Stream VByte (faster decode) or simdcomp/TurboPFor bit packing (faster and smaller) win. varint-simd covers the same niche for Rust with 64-bit support.",
+  "verified_claims_summary": "In the TurboPFor README tables (dated 2019.11, run by the TurboPFor author; issue #47 names a Skylake i7-6700 3.4 GHz and gcc 9.2 but no flags), MaskedVByte decoded 9524 MB/s vs FastPFor's scalar VByte 4268 MB/s on a 100M-integer Zipf set (about 2.2x), and 3384 vs 1980 MB/s on gov2.sorted with delta coding (about 1.7x), at identical compressed sizes. Encode speed in those tables (6689 and 2740 MB/s) comes from the benchmark harness, while this repository's own encoder is scalar.",
+  "status_note": "Maintained at low intensity by Daniel Lemire (moved to the fast-pack org; version 0.1.0 tagged in CMake on 2026-06-07 with a CMake package), Apache-2.0 and small enough to vendor, but unresolved memory-safety reports mean it should only see trusted input.",
+  "sources_read": [
+    "https://github.com/lemire/MaskedVByte",
+    "https://raw.githubusercontent.com/lemire/MaskedVByte/HEAD/README.md",
+    "https://raw.githubusercontent.com/lemire/MaskedVByte/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/lemire/MaskedVByte/HEAD/Makefile",
+    "https://raw.githubusercontent.com/lemire/MaskedVByte/HEAD/include/varintdecode.h",
+    "https://raw.githubusercontent.com/lemire/MaskedVByte/HEAD/include/varintencode.h",
+    "https://raw.githubusercontent.com/lemire/MaskedVByte/HEAD/src/varintdecode.c",
+    "https://raw.githubusercontent.com/lemire/MaskedVByte/HEAD/src/varintencode.c",
+    "https://raw.githubusercontent.com/lemire/MaskedVByte/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/lemire/MaskedVByte/HEAD/tests/unit.c",
+    "https://raw.githubusercontent.com/fast-pack/MaskedVByte/master/.github/workflows/ubuntu.yml",
+    "https://github.com/fast-pack/MaskedVByte/tree/master/include",
+    "https://github.com/fast-pack/MaskedVByte/tree/master/src",
+    "https://github.com/fast-pack/MaskedVByte/commits/master",
+    "https://github.com/lemire/MaskedVByte/issues?q=is%3Aissue",
+    "https://github.com/fast-pack/MaskedVByte/issues/6",
+    "https://github.com/fast-pack/MaskedVByte/issues/7",
+    "https://raw.githubusercontent.com/powturbo/TurboPFor-Integer-Compression/HEAD/README.md"
+  ],
+  "confidence": 0.8
+}
