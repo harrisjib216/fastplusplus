@@ -20,3 +20,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - pisa-engine/pisa: maintained ds2i fork (PEF plus many codecs), not catalogued; seed candidate. (from ds2i enricher)
 - traviswheelerlab/avxwindowfmindex (C): AMB paper on biomedcentral/biorxiv (blocked); retier to B when reachable. (w9 batch 36)
 - emmanuel-marty/em_inflate (C, zlib license, 80 stars; README benchmark vs zlib 1.2.11 on a Core i7, clang 6.0.0 -O3): the original that inflatecpp ports; seed candidate for general-lossless. (from inflatecpp enricher)
+- hpdps-group/mans (C): SC25 Reproducibility Report doi 10.1145/3712285.3769469 (ACM blocked) could give B. (w9 batch 42)
