@@ -7,11 +7,11 @@ claim against the cited page before it was written up.
 
 ## Lists
 
-- [COPYABLE.md](COPYABLE.md): 1189 entries under an OSI license or CC0. Code can be vendored or forked.
-- [REFERENCE.md](REFERENCE.md): 138 entries with no, unclear, or non-OSI license. Study the idea; don't copy the code.
-- [REJECTED.md](REJECTED.md): 22 candidates that failed verification.
+- [COPYABLE.md](COPYABLE.md): 1313 entries under an OSI license or CC0. Code can be vendored or forked.
+- [REFERENCE.md](REFERENCE.md): 150 entries with no, unclear, or non-OSI license. Study the idea; don't copy the code.
+- [REJECTED.md](REJECTED.md): 24 candidates that failed verification.
 
-Tiers across both lists: A 327, B 270, C 697, D 33.
+Tiers across both lists: A 360, B 291, C 771, D 41.
 
 ## Evidence tiers
 
@@ -28,7 +28,10 @@ Ratios marked "(derived from page data)" were computed from numbers on the cited
 
 | Domain | Category | Entries | A | B | C | D |
 |---|---|---|---|---|---|---|
-| compression-and-encoding | general-lossless | 4 | 0 | 3 | 1 | 0 |
+| compression-and-encoding | entropy-coders | 26 | 2 | 5 | 19 | 0 |
+| compression-and-encoding | general-lossless | 61 | 22 | 10 | 26 | 3 |
+| compression-and-encoding | integer-bitpacking | 23 | 2 | 2 | 18 | 1 |
+| compression-and-encoding | succinct-structures | 29 | 7 | 7 | 11 | 4 |
 | crypto-and-hashing | aead-and-ciphers | 17 | 7 | 4 | 6 | 0 |
 | crypto-and-hashing | crypto-hashes | 16 | 4 | 5 | 6 | 1 |
 | crypto-and-hashing | encoding | 25 | 8 | 1 | 16 | 0 |
@@ -52,7 +55,7 @@ Ratios marked "(derived from page data)" were computed from numbers on the cited
 | parsing-and-text | markup-html-markdown | 9 | 1 | 0 | 8 | 0 |
 | parsing-and-text | parser-generators-and-combinators | 8 | 3 | 0 | 5 | 0 |
 | parsing-and-text | regex-engines | 9 | 2 | 3 | 4 | 0 |
-| parsing-and-text | text-search-and-indexing | 8 | 3 | 0 | 5 | 0 |
+| parsing-and-text | text-search-and-indexing | 9 | 3 | 0 | 6 | 0 |
 | parsing-and-text | unicode-utf8 | 10 | 5 | 0 | 5 | 0 |
 | runtime-and-systems | filesystems-and-io | 1 | 0 | 1 | 0 | 0 |
 | serialization-and-formats | binary-schemas | 48 | 15 | 11 | 22 | 0 |

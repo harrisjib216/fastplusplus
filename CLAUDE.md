@@ -147,12 +147,26 @@ after 2 failed fetches, the privacy/scratch rules above, and the terse final-rep
 - A user interrupt in the main session can kill running background agents silently; if an agent
   never reports and its raw file is missing or stale, relaunch it.
 
-## Status (2026-10-03, evening)
+## Status (2026-10-03, night)
 
-- Waves 1-8 are finished, including the wave 8 backfill seed pass (seed-j/k/l, 14 projects, 11
-  kept, 2 folded, 1 already listed). Lists after the 2026-10-03 session: COPYABLE 1189,
-  REFERENCE 138, REJECTED 22. The next open work is in QUEUE.md "Unfinished work" (paper-access
-  retiers need an environment that reaches arXiv/ACM/IEEE; then waves 9-12).
+- Waves 1-9 are finished. Lists after the 2026-10-03 night session: COPYABLE 1313,
+  REFERENCE 150, REJECTED 24. The next open work is in QUEUE.md "Unfinished work" (paper-access
+  retiers need an environment that reaches arXiv/ACM/IEEE; then waves 10-12).
+- Wave 9 (compression-and-encoding) closed 2026-10-03: searches b1-b8 for all 4 categories
+  (34 raw files, b7/b8 thin: blogs and HN blocked, 17 records) plus seed-a/b (13 lead projects);
+  150 merged, 61 verify batches with 148 verdicts (confirm 123, downgrade 21, reject 4), 136
+  verified (A 33, B 21, C 74, D 8; copyable 124, reference 10, mixed 2), every verified entry
+  enriched. Rejected for invalid evidence: NZ1 (README table contradicted by its own tests.txt)
+  and SnellerInc/iguana (decoder unimplemented, ClickHouse port slower than ZSTD); torch_ans and
+  miniz rejects overridden to keep. Duplicates: zlib-rs, iczelia/bzip3, fast-pack/maskedvbyte,
+  quickwit bitpacking, go-simd/bitpack, brotli, miara (PTHash port), pzip (klauspost wrapper),
+  m77rip (misa77 port), hybrid-fenwick-tree (now in sux). Retiers in
+  data/wave9/verify/raw/retier-{01..05}.json: 01 FastPFor C to A (SPE paper on the paperhub S3
+  mirror); 02 fifteen lzbench 2.4 entries B to A for consistency with FastLZ (public Makefile
+  flags, gcc 15.2.0, EPYC 9555P); 03 genedex restored to A (quadrank precedent); 04 fdeflate D
+  to B and jtkukunas/zlib C to B on independent numbers; 05 PISA A to C (search-benchmark-game
+  driver returns fewer than k docs and mis-parses queries; moved to text-search-and-indexing).
+  ZipNN moved to general-lossless (vendored FSE Huffman).
 - Wave 8 (numerics-and-science) closed: searches b1-b8 for all 7 categories and two seed passes
   (52 projects) plus seed-j/k/l merged; 404 verdicts (confirm 353, downgrade 37, reject 14), 398
   verified (A 74, B 78, C 221, D 25), every verified entry enriched. Retier checks 12-14
@@ -168,9 +182,11 @@ after 2 failed fetches, the privacy/scratch rules above, and the terse final-rep
   19 categories x b1-b8) and leads.md; b1/b2 prompts rendered. Re-render b1/b2 before launching a
   later wave so its known list is current. zlib-ng and libdeflate are already filed under wave 9's
   general-lossless category.
-- Cloud-session workflow that worked on 2026-10-03: 8 agents at a time (Opus verifiers, then
-  Opus enrichers with two prompts each), record each report and push before launching the next;
-  no usage-limit kills. Enrichers often read code the verifier did not: when they find a
+- Cloud-session workflow that worked on 2026-10-03: 8-10 agents at a time (Opus verifiers, then
+  Opus enrichers with two prompts each; Sonnet searches and seed passes), record each report and
+  push before launching the next; no usage-limit kills across wave 9 (about 110 agents). One
+  agent left pip wheels in the repo root; tell agents never to pip download inside the repo and
+  delete strays on sight. Enrichers often read code the verifier did not: when they find a
   correctness bug behind the measured numbers, write a retier file rather than only a
   shortcoming. Paper PDFs on an author's USERNAME.github.io repo (and hpcrl/ICS2025-webpage) are
   reachable through raw.githubusercontent.com even when the site itself is blocked.

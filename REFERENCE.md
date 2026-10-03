@@ -4,6 +4,175 @@ No license, unclear/non-OSI license, mixed licensing, or paper-only. Study the i
 
 ## Verified
 
+### compression-and-encoding
+
+#### entropy-coders
+
+##### Glyd  `Rust`  `BSD-3-Clause OR GPL-2.0 (codec); glyd-store and GPU package under BUSL-1.1`  `active`  `Tier A`
+
+Rust LZ/entropy codec with a C ABI whose blocks decode in parallel; mixed one-core result against zstd -3, wins multicore reads.
+
+**Beats:** zstd -3 (also LZ4, zstd -19) — First-party suite of 2026-09-21 on an 8.7 GB corpus (logs, JSON events, SQL dumps, Parquet), rustc 1.98 with target-cpu=native and fat LTO, in-process libzstd 1.5.7 and the lz4 crate, on Graviton3 (c7g.2xlarge) and Xeon Platinum 8488C (c7i.2xlarge): one thread, --max decoded 1,571 vs zstd -3 1,425 MB/s on Graviton3 (1.10x) but 1,287 vs 1,518 on Sapphire Rapids (0.85x), and compressed slower on both (233 vs 313, 266 vs 377). Default decoded 3,309 and 2,752 MB/s vs LZ4 frame 1,394 and 1,206; the 8-thread figures compare parallel Glyd with single-thread zstd/LZ4 decoding.
+
+**Known shortcoming:** Upgraded C to A (public examples/bench_suite.rs and scripts/bench_aws_suite.sh, rustc 1.98, target-cpu=native, fat LTO, Graviton3 and Xeon 8488C), but the like-for-like gain is small: --max decode vs zstd -3 is 1.10x on Graviton3 and 0.85x on Sapphire Rapids; the 22.7 GB/s headline is 8 threads against 1, and the LZ4 baseline uses the slower streaming frame decoder. Mixed license (BUSL parts). Rust.
+
+**Known shortcoming:** The LZ4 baseline is the lz4 crate's frame encoder at level 1 with a streaming Decoder read_to_end (examples/bench_suite.rs:178-192), not the block API; Glyd checks CRC32C per block while the zstd frames carry no checksum. One-core --max decode is 0.85x zstd -3 on Sapphire Rapids (README known gaps 0.79-0.97x). Single author, 1 fork, 0 issues filed; libglyd_store (BUSL-1.1) re-exports the whole codec API; glyd.h says --max is the v7 format while the README says v9.
+
+**Independent measurement:** verifier
+
+**Independent measurement:** enricher
+
+**How:** Input is cut into 256 KB blocks and, on the parallel paths, into independent units (one per core, up to 128 MB) so a single stream decodes on every core, which is where the 8-thread read numbers come from. The --max tier uses 8-way interleaved Huffman literals and tANS-coded sequences with repeat offsets over a double-fast parse with an 8 MB window, modeled on zstd's design; the default tier is an LZAV-class finder with a minimum match of 7 and copy-only decode loops. Match finding has an AVX2+BMI2 path chosen at run time and NEON decode/checksum paths on aarch64.
+
+**Use it when:**
+- Write-once, read-many data (object storage, data lakes, release assets) where reads run on several cores per stream: Glyd's units decode in parallel while a zstd or LZ4 frame decodes on one thread.
+- Logs, CSV/TSV, SQL dumps and JSON lines where record mode (-r) stores 12-61% fewer bytes than zstd -3 per the README, if read CPU is not the bill.
+- Versioned blobs (nightly dumps, images, source tarballs) where --base stored 1.1-2.1x less than zstd --patch-from at the fast tier in the author's tests.
+- aarch64 servers (Graviton3) where the author's one-core --max decode was 1.10x zstd -3 at a slightly better ratio (3.98 vs 3.86).
+
+**Skip it when:**
+- Single-threaded decode on recent Intel x86: on Sapphire Rapids --max decoded at 1,287 MB/s vs zstd -3's 1,518 (0.85x), and the README's own known-gaps list gives 0.79-0.97x there.
+- Write-heavy workloads: --max compresses at 0.71-0.77x zstd -3's speed and default at about 0.66-0.72x LZ4's; record mode halves write speed again and reads cost 2-2.7x zstd's CPU.
+- Anything needing interoperability: the format is Glyd-only, with no other decoder; zstd and LZ4 frames are read everywhere.
+- Small objects with a dictionary: the README says sizes tie with zstd and zstd is 1.4-2x faster per object.
+- Risk-averse production use: a one-author project (240 stars, 1 fork, 0 issues filed) at v0.26.0 whose formats have already gone through v6-v9, and whose store and GPU parts are BUSL-1.1 (commercial use needs a license).
+
+**Vs siblings:** Over Zstandard (zstd) when reads of large objects can use several cores and you control both ends of the format; stay with zstd for one-core decode on x86, faster writes and universal readers. Over LZ4 or lzvolt only if you want a better ratio with parallel decode; for the fastest single-thread block decode, LZ4's block API, lzvolt or ZXC are the better-measured choices.
+
+**Gotchas:**
+- The 22.7 GB/s and 10.4 GB/s headline reads are 8-thread Glyd against single-thread zstd and LZ4 frame decoding; like for like on one core the gain over zstd -3 is 1.10x on Graviton3 and a loss on Sapphire Rapids.
+- The LZ4 baseline in examples/bench_suite.rs is the lz4 crate's frame encoder at level 1 and its streaming Decoder with read_to_end, not liblz4's block API, so LZ4 decode measured only about 1.2-1.4 GB/s; the default-vs-LZ4 decode gap is likely overstated.
+- Glyd verifies a CRC32C per block on decode while the zstd frames in the benchmark carry no checksum, which slightly favors zstd's decode numbers.
+- include/glyd.h comments still describe --max as format v7 while the README says v9; libglyd_store (BUSL-1.1) re-exports the whole codec API, so linking the wrong library silently changes your license terms.
+
+**Status:** Very actively developed (1,039 commits, last commit 2026-10-03, v0.26.0) by a single author; the codec is BSD-3-Clause OR GPL-2.0 and usable commercially, but it is young, has no external users visible in the issue tracker, and the store/GPU parts are BUSL-1.1.
+
+[repo](https://github.com/surya-koritala/Glyd) · [benchmark](https://github.com/surya-koritala/Glyd)
+
+##### Huffman_coding_Gap_arrays (gap-array GPU Huffman)  `CUDA/C`  `no license`  `abandoned`  `Tier B`
+
+Research CUDA Huffman encoder/decoder (ICPP 2020) whose gap array lets every GPU thread start decoding at a known bit offset.
+
+**Beats:** Previously published GPU Huffman decoders (unnamed in the abstract summaries; the IPDPS 2022 artifact codyjrivera/ipdps22-opthuffdec benchmarks this decoder alongside CUHD's self-synchronization decoder), an unnamed CPU Huffman implementation, and the same GPU decoder without a gap array — Per WebSearch summaries of the ICPP 2020 abstract (paper, slides and ACM PDF not opened), on a Tesla V100 with 10 files, GPU encoding was 2.87x-7.70x and decoding 1.26x-2.63x faster than previously published GPU Huffman code, and attaching a gap array sped decoding a further 1.67x-6450x over the same decoder without one. CPU speedups are quoted as 35.2x-43.3x in the record and as 35.2x-52.3x for decoding (18.7x-39.2x for encoding) in a later summary; the CPU implementation, compiler flags and CPU model are not named in what could be read.
+
+**Known shortcoming:** Tier B on paper abstract snippets: 1.26x-2.63x vs earlier GPU decoders and 35.2x-43.3x vs unnamed CPU code; the 6450x figure is against its own decoder without the gap array. No license, so reference.
+
+**Known shortcoming:** No license; standalone CLI demos only with no API. The decoder ignores its output argument and always writes ./decodedfile; decoder.cu clears the output buffer with a memset sized by the input before the atomicOr writes, so output is under-zeroed when data compresses and the memset overruns the buffer when it does not; double cudaFree(gpu_input), gpu_output leaked, sizes stored as int (under 2 GiB). The bugs do not touch the timed kernel. The CPU speedup reads 35.2x-43.3x in the record but 35.2x-52.3x in a newer snippet, unresolved.
+
+**Independent measurement:** verifier
+
+**Independent measurement:** enricher
+
+**How:** The encoder splits the compressed bit stream into 128-bit segments and stores, per segment, a 4-bit 'gap' (the offset of the first codeword starting in it), packed 8 per 32-bit word; the decoder then gives each thread one segment and starts decoding immediately, with no self-synchronization pass. Output positions come from a single-kernel decoupled look-back prefix sum (blocks take ids from an atomic counter and publish aggregate/prefix flags, which the paper calls Single Kernel Soft Synchronization). Decoding uses a two-level lookup table (10-bit first-level prefix) copied into shared memory, 32-bit word-wise global loads and atomicOr word writes; codes are length-limited to 16 bits by a CPU boundary package-merge, and the histogram runs on the GPU.
+
+**Use it when:**
+- Studying or porting the gap-array idea into your own GPU codec where you control both encoder and decoder format.
+- Byte-alphabet (256-symbol) data already resident on an NVIDIA GPU, where decode throughput matters more than about 3% extra compressed size.
+- As a baseline when benchmarking newer GPU Huffman decoders (the IPDPS 2022 opthuffdec artifact already wires it in for that purpose).
+
+**Skip it when:**
+- Decoding standard Huffman streams (Deflate, JPEG, zstd huff0): the format needs the gap array, so it cannot read them.
+- Anything needing a license: the repository has no license file, so the code is all-rights-reserved by default and only usable as reference.
+- Production use: no tests, no error handling beyond fatal exits, no API, no maintenance since October 2020, and the CLI always runs 200 timed loops.
+- Inputs of 2 GiB or more (the decoder reads sizes as int) or alphabets wider than bytes (MAX_CODE_NUM 256).
+- Non-NVIDIA or non-Linux targets: CUDA only, Makefile hard-codes sm_70 and /usr/local/cuda, and the encoder uses fsync/fdatasync on glibc FILE internals.
+
+**Vs siblings:** Pick it over CUHD/gpuhd when you can change the encoder: the gap array replaces CUHD's self-synchronization pass, which the paper reports as 1.26x-2.63x faster decoding. Pick ipdps22-opthuffdec instead if you want the newer, faster decoders (it includes an optimized gap-array decoder plus cuSZ integration); for CPU decoding, FiniteStateEntropy's huff0 or PIVCO-Huffman are the relevant choices.
+
+**Gotchas:**
+- The decoder ignores its second argument and always writes ./decodedfile (huff.cpp opens "decodedfile" and never reads argv[2]; it also does not check argc).
+- decoder.cu clears gpu_output with cudaMemset sized by the compressed input words, not the output buffer, before atomicOr writes: for compressible data part of the output is never zeroed (correct only if cudaMalloc returned zeroed memory), and for incompressible data the memset runs past the buffer. It also frees gpu_input twice and leaks gpu_output.
+- Gap entries are 4 bits per 128-bit segment, so the gap array adds about 3.1% to the compressed size (derived from constants.hpp and the encoder's sizing).
+- Printed decode time covers the kernel only; host-to-device and device-to-host copies are reported as separate columns.
+
+**Status:** Abandoned research code (9 commits, 2020-10-06 to 2020-10-09) with no license, so reference only; the Makefile targets CUDA sm_70 with nvcc -O2.
+
+[repo](https://github.com/daisuke-takafuji/Huffman_coding_Gap_arrays)
+
+##### ipdps22-opthuffdec (optimized GPU Huffman decoders)  `CUDA/C++`  `no license`  `abandoned`  `Tier B`
+
+IPDPS 2022 artifact: optimized CUDA self-synchronizing and gap-array Huffman decoders, reported 3.64x faster than cuSZ's GPU Huffman decoder.
+
+**Beats:** cuSZ's native GPU Huffman decoder (plus the original self-sync and gap-array decoders) — Per WebSearch snippets of the IPDPS 2022 abstract (paper not opened; arXiv, IEEE and NSF pages blocked), on an NVIDIA Tesla V100 32 GB with an unnamed x86_64 host, GCC 8.3.1 and NVCC 11.1 (-O3, sm_70), the optimized decoders averaged 3.64x faster Huffman decoding than cuSZ's native GPU decoder and 2.43x faster overall cuSZ decompression across eight scientific datasets (the repo's scripts run five: HACC, EXAALT, CESM, Nyx, Isabel, error bound 1e-3). A further snippet says shared-memory sizing alone moves throughput between 158 and 233 GB/s; the repo itself publishes no numbers.
+
+**Known shortcoming:** Tier B on the IPDPS 2022 paper, but the 3.64x vs the cuSZ Huffman decoder and 2.43x overall decompression figures are confirmed only from abstract snippets (hgpu.org, par.nsf.gov blocked); the '100 GB/s' claim is unconfirmed and dropped. No license, so reference; abandoned.
+
+**Known shortcoming:** License is not null: opt-self-sync, opt-gap-array and orig-self-sync carry LGPL-3.0 LICENSE files from CUHD while the root and orig-gap-array have none, so usability could be copyable with a copyleft note. The demo maps symbols above 1024 to 0 before encoding and checks against the altered buffer; decode() allocates and frees per call and builds 9 streams; the demo's 'GB/s' is GiB/s; the opt run.sh scripts are identical; editor backup files are committed. Snippet only: shared-memory sizing gives 158 vs 233 GB/s.
+
+**Independent measurement:** verifier
+
+**Independent measurement:** enricher
+
+**How:** Per the paper abstract (WebSearch snippet) and the code: decoded symbols are staged in shared memory and written to global memory from there, the shared-memory size is tuned online, memory access patterns are improved, and warp divergence is reduced. In opt-gap-array, an 8-bit gap per 4-unit (128-bit) subsequence removes the inter-block synchronization phase (phase 2 is empty); after an exclusive scan of per-subsequence symbol counts (Thrust), blocks are bucketed by compression ratio with a CUB radix sort and the final decode/write kernel is launched on 9 CUDA streams with shared buffers of 1,024 to 8,192 (or 3,584) 16-bit symbols per bucket. Lookup uses a 2^9-entry table cached in shared memory (cache_len 9).
+
+**Use it when:**
+- GPU decompression in cuSZ-style error-bounded lossy compressors, where the Huffman stage decodes 16-bit quantization codes (1,024-symbol alphabet) on an NVIDIA GPU.
+- Building or benchmarking a GPU Huffman decoder: the repo puts both original decoders and both optimized ones behind the same harness on the same datasets.
+- When you control the encoder and can store an extra gap byte per 128 bits of compressed data (opt-gap-array), or need plain Huffman streams decoded on the GPU without format changes (opt-self-sync).
+- Large, mostly compressible inputs on Volta-class or newer GPUs, where decoding throughput rather than per-call latency matters.
+
+**Skip it when:**
+- Byte-oriented general-purpose compression or standard formats (Deflate, zstd, JPEG): symbols are 16-bit, codewords are capped at 14 bits, and the encoder is CUHD's own length-limited format.
+- Production pipelines: research artifact, 5 commits ending 2022-03-01, editor lock and backup files committed (.#cuhd_gpu_decoder.cu, #cuhd_gather.h#), no tests beyond the demo's equality check, and cuSZ integration is left to the user.
+- Small inputs or latency-sensitive calls: each decode() call allocates and frees its scratch buffers, runs a CUB sort and creates and destroys 9 CUDA streams.
+- Non-NVIDIA or non-Linux targets: CUDA with CUB/Thrust only, Makefiles hard-code sm_70 and /usr/local/cuda, and the host code uses -march=native.
+- If you need the orig-gap-array code under a license: that directory is the unlicensed Hiroshima University code and has no LICENSE file.
+
+**Vs siblings:** Pick it over CUHD/gpuhd and Huffman_coding_Gap_arrays when you want the fastest of these GPU Huffman decoders for 16-bit quantization codes: it contains both and reports beating them as well as cuSZ. Pick FiniteStateEntropy's huff0 or PIVCO-Huffman for CPU byte-stream decoding, and multians or Recoil if you can switch from Huffman to ANS.
+
+**Gotchas:**
+- License is per directory: opt-self-sync, opt-gap-array and orig-self-sync carry LGPL-3.0 LICENSE files and CUHD headers ('released under LGPL-3.0'); the repo root and orig-gap-array have none.
+- The demo maps any input symbol above 1024 to 0 before encoding and then checks the decoded output against that altered buffer, so arbitrary 16-bit files are silently changed (fine for cuSZ codes, not for general data).
+- The demo's first 'throughput' line divides by wall time of the whole decode() call including allocations; the second sums per-phase times; both use 1024^3, so 'GB/s' is GiB/s.
+- opt-self-sync/run.sh and opt-gap-array/run.sh are identical (both print 'best solution + self-synchronization'), CUSZ_DIR and DATA_DIR are empty and must be filled in, and $shared_size is never set, so tuning is always online.
+
+**Status:** Abandoned research artifact (last commit 2022-03-01, 3 stars); the optimized decoders are LGPL-3.0 per their directory LICENSE files, so they can be reused under copyleft terms, while orig-gap-array is unlicensed.
+
+[repo](https://github.com/codyjrivera/ipdps22-opthuffdec) · [benchmark](https://github.com/codyjrivera/ipdps22-opthuffdec/blob/main/runcusz.sh)
+
+#### integer-bitpacking
+
+##### LeCo (Learn-to-Compress)  `C++`  `no license`  `stale`  `Tier B`
+
+Research codec (SIGMOD'24): per-block linear regression plus bit-packed residuals for integer columns; better ratio than FOR and Elias-Fano, faster random access than Delta.
+
+**Beats:** Frame of Reference (FOR), Delta encoding (fixed and variable partitions), Elias-Fano (thirdparty succinct) and rANS, all built inside the repo; Parquet default encoding and RocksDB default index blocks in the system experiments — The SIGMOD'24 technical report (read from repo history) runs single-threaded on a Xeon Platinum 8369B (Ice Lake) at -O3 -march=native over nine integer datasets. Against FOR and Elias-Fano, LeCo improves compression ratio by up to 81% at comparable decode and random-access speed; it is about 10x faster than Delta on random access; and in Arrow/Parquet scans it is up to 3.9x faster (filter) and 12.6x (bitmap). The published abstract (WebSearch snippet only) says up to 5.2x in Arrow and +16% RocksDB throughput. All baselines are in-repo implementations, not FastPFor or simdcomp.
+
+**Known shortcoming:** Upgraded C to B on the technical report found in the repo history (commit c5ea4ef, technical_report.pdf: Xeon Platinum 8369B, -O3 -march=native, compiler not named). No license, so reference.
+
+**Known shortcoming:** Bug found by reading source (not run): decodeArray8 treats maxerror >= sizeof(T)*8-1 as raw, but the encoder stores raw only at max_bit == 64, so blocks needing exactly 63 bits (31 for uint32) decode wrong; random access stays correct. Timing caveat: CMakeLists sets CMAKE_CXX_FLAGS_RELEASE to -O3 -march=native, which drops -DNDEBUG, so verification loops run inside the timed decode and random-access regions for every codec (shared harness, so tier B kept). Unaligned type-punned 64/128-bit loads with a possible one-word overread; doubles used for uint64 predictions. No LICENSE (vendored FastPFor/ALEX/ART/stx-btree/FSST carry their own). Ubuntu 20.04 x86-only build.
+
+**Independent measurement:** verifier
+
+**Independent measurement:** peer-reviewed paper (SIGMOD 2024)
+
+**How:** It is a learned generalisation of Frame-of-Reference. FOR stores value minus block minimum; LeCo stores value minus a least-squares regression prediction, recentred so that residuals are symmetric, so on near-linear data (sorted keys, timestamps, IDs) the residual bit width falls far below FOR's. Random access costs one multiply-add plus one unaligned 64-bit load and mask, against Delta's prefix sum over the block. The variable-length variant (LeCo-var) adds cost-model-driven partitioning, which explains its 0.02 GB/s compression throughput. There is no explicit SIMD; the build depends on -O3 -march=native auto-vectorisation.
+
+**Use it when:**
+- Read-mostly integer columns with strong serial correlation (sorted keys, monotone IDs, timestamps, index offsets) where compression ratio and point lookups matter more than encode speed.
+- You want O(1) random access into a compressed column and Delta encoding's prefix-sum cost is the bottleneck (the paper reports an order of magnitude faster random access than Delta).
+- Columnar or LSM index-block prototypes: the paper's Arrow/Parquet filter and bitmap scans (up to 3.9x in the technical report, 5.2x in the published abstract) and a 16% RocksDB throughput gain come from the companion repos.
+- Research or re-implementation: the idea (regression model plus fixed-width residuals per block) is simple to port into your own codec.
+
+**Skip it when:**
+- Production use: there is no LICENSE file, so it is all rights reserved by default and cannot legally be copied (the vendored FastPFor, ALEX, ART, stx-btree and FSST code carry their own licences).
+- Fast encoding: LeCo-fix compresses slightly slower than FOR (0.78 vs 0.81 GB/s) and LeCo-var about 40x slower (0.02 GB/s).
+- Random, high-entropy or non-monotone integers: residuals then gain nothing over FOR, and a block whose residual needs the full type width is stored raw.
+- SIMD bulk decode throughput: the siblings FastPFor, simdcomp and TurboPFor decode at several GB/s with explicit SIMD; LeCo decode is scalar 64/128-bit shift loops.
+- Platforms other than x86-64 Ubuntu 20.04: setup.sh uses apt and sudo symlinks into /usr/include, src/CMakeLists.txt adds -msse4.1/-mssse3 unconditionally, and everything builds with -march=native.
+
+**Vs siblings:** Pick it over FastPFor, simdcomp or TurboPFor only when the data is serially correlated, you need constant-time random access, and ratio beats raw SIMD decode speed. ds2i's partitioned Elias-Fano is the closest licensed alternative for sorted sequences. Treat LeCo as a design to re-implement, since the repo has no licence.
+
+**Gotchas:**
+- Encoder/decoder flag mismatch (source reading, not run): encodeArray8_int stores a block raw only when max_bit == sizeof(T)*8, but decodeArray8 treats any maxerror >= sizeof(T)*8-1 as raw and memcpys. A block whose residual width is exactly 63 bits (uint64) or 31 bits (uint32) is therefore written as model plus packed residuals but bulk-decoded as raw bytes, giving wrong output; randomdecodeArray8 checks == sizeof(T)*8 and stays correct.
+- Benchmark timing caveat: CMakeLists.txt overrides CMAKE_CXX_FLAGS_RELEASE with "-O3 -march=native", which drops CMake's default -DNDEBUG. The #ifndef NDEBUG verification loops in experiments/*_fix_template.cpp then run inside the timed decode-all and random-access regions, adding a full compare pass and an extra random DRAM read of the original array per lookup for every codec. Absolute ns figures are inflated and ratios between codecs are compressed, unless the paper runs used other flags (not documented).
+- Unaligned, type-punned 64/128-bit loads (reinterpret_cast<const uint64_t*>/uint128_t*) at offsets such as 17 bytes into a block. The word-at-a-time reader can load up to one word past the packed residuals of an exact-size realloc'd buffer: this is UB, and ASan/UBSan would flag it, though it works on x86.
+- Predictions are double-precision (long long)(theta0 + theta1*i), so for uint64 values above 2^53 accuracy depends on encoder and decoder rounding identically under -march=native (FMA contraction); unsigned/signed mixing in the encoder (uint64 data compared with int64 predictions) forces raw fallback when predictions go negative.
+
+**Status:** Stale since 2024-03-26 and unlicensed (reference only): useful as the reproducible artefact of a peer-reviewed paper, not as a dependency.
+
+[repo](https://github.com/yhliu918/Learn-to-Compress) · [benchmark](https://raw.githubusercontent.com/yhliu918/Learn-to-Compress/c5ea4ef5eeea7217a2d13955e879b94eaf5a3d83/technical_report.pdf)
+
 ### crypto-and-hashing
 
 #### aead-and-ciphers
@@ -1937,6 +2106,340 @@ Python solver for Partitioned Learned Bloom Filter parameters; the resulting des
 [repo](https://github.com/kapilvaidya24/PLBF) · [benchmark](https://arxiv.org/abs/2006.03176)
 
 ## Unverified claims (tier C/D)
+
+### compression-and-encoding
+
+#### entropy-coders
+
+##### rans_static (rANS_static4x16, r32x16b_avx2 SIMD rANS experiments)  `C`  `no license`  `abandoned`  `Tier C`
+
+James Bonfield's 2014-2018 static rANS experiments; the 32-way AVX2 decoder runs about 4x faster than the CRAM rANS_static4c codec.
+
+**Beats:** rANS_static4c (4-way interleaved scalar rANS, the CRAM variant) and arith_static (unrolled static arithmetic coder), both in the same repo — On a Haswell i5-4570 with gcc 6.2.0, single-threaded in-memory order-0 decode of two DNA quality-score files (73 MB and 95 MB) ran at 1430.6 and 1415.0 MB/s for r32x16b_avx2 against 335.2 and 360.4 MB/s for the CRAM codec rANS_static4c (about 4.3x and 3.9x, derived from page data); encode improved only 1.8x and compressed size was within 0.02%. The clang 3.7 and icc 15 runs show the same ordering (1220.7 and 1359.0 MB/s on Q8); the test files are not shipped.
+
+**Known shortcoming:** Tier C: README numbers reproduce (i5-4570, gcc 6.2.0 / clang 3.7.0 / icc 15.0.0) but the Q8/Q40 inputs are not shipped and the flags are not tied to runs; the order-1 comparison is not like for like (9-bit vs 12-bit tables) and the order-1 encoder is not SIMD. No licence, so reference; htscodecs is the maintained successor. Last commit 2022-03-15.
+
+**Known shortcoming:** No licence file (issue #1 asked for one in 2022 and was closed without one; README points to htscodecs, which is BSD). Decoders do not check in_size. Frequency-table overflow is caught only by an assert that runs after s3[] is written, so unsafe on untrusted input. The r32x16b_avx2 order-1 encoder is scalar. Benchmark harness defaults to NTRIALS=1. Same-named functions in different variant files clash if linked together.
+
+**Independent measurement:** verifier
+
+**Independent measurement:** first-party benchmark
+
+**How:** Interleaved rANS: many independent rANS states share one output buffer, so decode steps have no dependency on each other and can run in SIMD lanes. Moving from 8-bit to 16-bit renormalisation (state kept as 15+16 bits, as in ryg's SIMD variant) means at most one renormalisation per symbol, which alone roughly doubles scalar decode (rANS_static4x16). The r32x16b_avx2 decoder keeps 32 states in four AVX2 registers, looks up a packed freq/base/symbol table with _mm256_i32gather_epi32, updates states with _mm256_mullo_epi32, and handles renormalisation by compress-and-permute (_mm256_permutevar8x32_epi32 with a precomputed permute table) to load 16-bit words only for the lanes that need them.
+
+**Use it when:**
+- Studying or porting SIMD rANS: the AVX2 32-state decoder is a compact, readable worked example of the gather-plus-permute renormalisation trick.
+- Benchmarking your own entropy coder against the historical CRAM-era codecs (rANS_static4c, arith_static) with the same harness.
+- Low-alphabet, statistically stable byte data such as sequencing quality scores, where a static order-0 model compressed in ~1 MB blocks is enough.
+- Decode-heavy workloads on AVX2 x86-64: decode reached 1430.6 MB/s versus encode 534.7 MB/s on Q8 order-0.
+
+**Skip it when:**
+- Production code: there is no licence (issue #1 asking for one was closed in March 2022 and the README now redirects to htscodecs), so you cannot legally ship it.
+- Untrusted input: the decoders parse the frequency table and read the stream without bounds checks on in_size, and only an assert (after the table is filled) checks that frequencies stay under TOTFREQ.
+- Adaptive or context-mixing needs: models are static per block and the frequency table is stored in each block, so tiny blocks pay heavily for the header.
+- Non-x86 or pre-AVX2 CPUs for the fast path; the scalar 4x16 coder is the portable fallback at about half the AVX2 decode speed.
+- Order-1 encoding speed: the r32x16b_avx2 order-1 encoder is scalar (TODO in the source), so order-1 encode stays near 237 MB/s, and r32x16_avx2 order-1 fails (ERR in the README).
+
+**Vs siblings:** Pick it only as a reference to learn the technique: for real use, htscodecs (the same author's maintained, BSD-licensed successor with more aggressive SIMD, per this README) and hypersonic-rANS (which reports about 3 GiB/s decode on enwik8 on newer hardware) are licensed and newer, and ryg_rans is the public-domain scalar origin.
+
+**Gotchas:**
+- Each file defines its own copies of the ryg_rans helpers and similarly named functions (the README warns r16x16_avx2 exposes rans_compress_O1_4x16), so linking several variants into one binary clashes.
+- Order-1 4x16-family tables use 9 bits (TF_SHIFT_O1 9) against 12 bits in 4c/4x8, so order-1 speed comparisons are not like-for-like and compression is slightly worse.
+- The README calls the SIMD codecs experimental, with many warnings and commented-out code; some order-1 SIMD paths do not work.
+- Benchmarks read the input in BLK_SIZE blocks (1013*1047 in the Makefile) and time in-memory encode and decode with gettimeofday, with NTRIALS=1 by default in the Makefile.
+
+**Status:** Abandoned: last code commit 2018-04-09 and a README-only update in March 2022 pointing users to samtools/htscodecs; no licence, so reference only.
+
+[repo](https://github.com/jkbonfield/rans_static) · [benchmark](https://github.com/jkbonfield/rans_static)
+
+##### zune-entropy  `Rust`  `no license`  `abandoned`  `Tier C`
+
+Rust order-0 Huffman and tANS block coders that out-decode FSE/Huff0 on enwik8 at slightly worse ratio.
+
+**Beats:** FSE library (Huff0 Huffman and FSE tANS modes), Yann Collet's FiniteStateEntropy — The author's README reports enwik8 on an AMD Ryzen 5 4500U: Huffman 940.97 MB/s encode and 1310.28 MB/s decode versus FSE/Huff0 924.6 and 1049.5 MB/s (about 1.25x decode, derived from page data), and tANS 602.56/1022.93 MB/s versus FSE/TANS 457.7/572.8 MB/s (about 1.8x decode, derived). The FSE numbers come from a different tool than this library's zcif_bin driver, and no compiler version or flags are stated.
+
+**Known shortcoming:** Tier C: decode 1310 vs FSE Huff0 1049 MB/s at a worse ratio, with the FSE numbers taken from a separate tool; no license (Cargo.toml, crates.io 404), so reference. Rust.
+
+**Known shortcoming:** Memory-safety bug: both bit readers' refill_fast do unchecked 8-byte copy_nonoverlapping reads, and the over-read is checked only after decode, so corrupt or crafted input (large header block_length) reads past the buffer through the safe public fse_decompress/huff_decompress. The final block can over-read up to 7 bytes even on valid input without padding. unsafe_utils::extend uses set_len over uninitialised memory and leaves it in dest on the error path. Malformed headers panic (tbl_log above 10 indexes past the 1024-entry table). No licence, not on crates.io, beta, abandoned 2022; needs Rust 1.59+ (asm!). FSE comparison numbers came from a different tool.
+
+**Independent measurement:** verifier
+
+**Independent measurement:** first-party benchmark
+
+**How:** The tANS decoder runs five interleaved 11-bit states over one little-endian bit reader lifted from Eric Biggers' xpack, with the table capped at 2^10 states and a golden-ratio state spread, which the source comment says fits 55 bits per flush branchlessly and is 'how we get an edge on FSE'; it packs symbol, bit count, next-state base and mask into one u64 table entry. The Huffman coder length-limits codes to 11 bits with a Kraft-sum heuristic, splits each block into five independent bitstreams decoded round-robin with a single 2048-entry lookup table, and uses x86 inline asm (sub/shrx) to keep the bit buffer in registers. Branchless 56-63-bit refills follow Fabian Giesen's 'reading bits in far too many ways' variant 4.
+
+**Use it when:**
+- Studying or porting a compact, readable Rust implementation of interleaved tANS and multi-stream Huffman decoding
+- Prototyping an order-0 entropy stage on x86-64 or aarch64 where decode speed matters more than the last 1-2% of ratio
+- Benchmarking your own entropy coder against another FSE-style design on text-like data such as enwik8
+
+**Skip it when:**
+- Decoding untrusted or possibly truncated input: the bit readers do unchecked 8-byte reads (see gotchas)
+- Production use: no LICENSE file, not on crates.io, README calls it beta and says some files (silesia/mozilla) fail
+- When ratio matters: FSE beats it in both modes on enwik8 (63.26% vs 65.00% Huffman, 63.12% vs 63.90% tANS)
+- When you need FSE/zstd wire compatibility, streaming, a C API, or adaptive/order-1 models
+- When peak decode speed is the goal: hypersonic-rANS and htscodecs SIMD rANS decode several times faster
+
+**Vs siblings:** Pick it over FiniteStateEntropy only if you want a Rust codebase to read and adapt and accept 1-2% worse ratio; for speed hypersonic-rANS or htscodecs decode several times faster, and for a maintained Rust entropy coder constriction is the safer choice.
+
+**Gotchas:**
+- Memory safety: BitStreamReader::refill_fast and FSEStreamReader::refill_fast copy 8 bytes from src.as_ptr().add(position) with no bounds check, and the decode loops refill every few symbols while trusting the block length from the header; over-read is only detected after decoding finishes. A corrupt or crafted stream (large declared block length, small payload) can read past the input buffer through the safe public functions, and the final stream of the last block can read up to 7 bytes past the end even when the caller's buffer has no padding (code comment: 'The buffer must be padded with fill bytes in the end, if not, this becomes UB in the refill phase').
+- unsafe_utils::extend calls Vec::set_len over uninitialized memory before decoding; if decoding returns an error, dest is left with uninitialized bytes in its length.
+- Malformed headers panic instead of returning errors (direct src[0] and slice indexing; a header table_log above 10 indexes past the 1024-entry state array); huff_decompress panics if handed a tANS stream and vice versa.
+- Source comment says changing CHUNK_SIZE to 1 << 19 causes a hard error on test files; the block size is a compile-time constant.
+
+**Status:** Abandoned since August 2022, unlicensed (all rights reserved by default) and unpublished, so treat it as reference code to learn from, not to vendor.
+
+[repo](https://github.com/etemesi254/zune-entropy) · [benchmark](https://raw.githubusercontent.com/etemesi254/zune-entropy/HEAD/Readme.md)
+
+#### general-lossless
+
+##### AOCL-Compression  `C`  `BSD-3-Clause AND MIT AND NCSA (file-by-file per LICENSE.txt)`  `active`  `Tier C`
+
+AMD's Zen-tuned forks of zlib, zstd, lz4, snappy, bzip2 and lzma behind one C API; level-9 zlib compresses about 3.7x faster.
+
+**Beats:** zlib; also bzip2, snappy, zstd, lz4, xz/lzma upstream implementations — In an AMD developer's lzbench pull request (#321, unmerged, changes requested), single-threaded on an AMD Ryzen AI 9 HX PRO 370 with boost off, GCC 15.2.0, silesia.tar, aocl-zlib 5.3.0 -9 compressed at 27.47 MB/s and decompressed at 439.38 MB/s versus zlib 1.3.2 at 7.37 and 212.55 MB/s (ratio 32.21% versus 31.91%); aocl-bzip2 -9 ran 20.58 / 37.65 versus 8.92 / 23.16 MB/s and aocl-snappy 413 / 1434 versus 343 / 719 MB/s. The run used AOCL 5.3.0, which the 5.3.2 release notes say had GCC 15 decompression regressions in zlib and zstd, so the numbers may not match the fixed release.
+
+**Known shortcoming:** Tier C: numbers come from the open, unmerged lzbench PR #321 by an AMD developer, where the maintainer requested changes; lz4 gains are derived from page data.
+
+**Known shortcoming:** lzbench PR #321 numbers ran AOCL 5.3.0 built with GCC 15.2.0; the 5.3.2 release notes fix 'GCC 15 decompression regressions in ZLIB and ZSTD' and 'LZ4 multi-threaded decompression data corruption', so the measured code later got correctness fixes (already tier C). Open issue #5: aocl_lzma_compress has no outsize check (underflow when outsize < LZMA_PROPS_SIZE) and Lzma_compressBound pads 16 KB per call. aocl_llc_setup does not report allocation failure; dispatch state is global and destroy resets it. Windows Release builds with /arch:AVX2 globally; Linux Snappy with -msse4.1. Symbols clash with system zlib/zstd unless built with AOCL_LLC_PREFIX. Multi-threaded output carries a non-standard RAP header. x86-64 only; no head-to-head vs zlib-ng or libdeflate.
+
+**Independent measurement:** verifier
+
+**Independent measurement:** lzbench 2.4 (PR #321)
+
+**How:** Each codec gets algorithmic and SIMD changes chosen at run time by a function-multiversioning dispatcher (SSE2, AVX, AVX2, AVX512). In zlib this means Intel's deflate_medium strategy, Konstantin Nosov's fast_zlib longest_match, x86 slide_hash, a hash table 4x larger (AOCL_ADDITIONAL_HASH_BITS 2), PCLMUL/VPCLMULQDQ CRC-32 and Chromium/zlib-ng chunk-copy inflate (chunkset_sse2/avx512). Other codecs get match-skipping heuristics (lz4, zstd, snappy), branchless snappy decompression, LZ4HC pattern analysis and fewer bzip2 Huffman refinement passes; several of these are build-time options that trade ratio for speed.
+
+**Use it when:**
+- Server or HPC code on AMD Zen (or other x86-64) that already links zlib, bzip2 or snappy and wants faster output in the same format without changing callers: level 6-9 deflate (about 2.5-3.7x faster compress, 2x faster inflate in the vendor run) and bzip2 (about 2x compress, 1.6x decompress).
+- Applications that use several codecs and want one dependency with one dispatch layer and one test suite instead of seven separately tuned libraries.
+- Bulk compression of large buffers or files where the OpenMP build can split work across cores and the consumer either uses AOCL or skips the RAP header.
+- Teams that need AMD-supported builds with fuzz, ASAN and Valgrind test targets on Linux and Windows.
+
+**Skip it when:**
+- Non-x86 targets: the optimised paths are x86-only (SSE2 to AVX512), and lzbench's reviewer asked for the Linux/x86-64 and GNU binutils restriction to be documented.
+- When lz4 or zstd speed is what you need: the vendor's own run shows only +5% / +2% for lz4 and +14-21% / +8-10% for zstd, with a small ratio loss (zstd -3 31.94% versus 31.20%).
+- When you need the fastest deflate regardless of library: zlib-ng, ISA-L igzip or libdeflate have independent numbers and wider platform support; AOCL has no published head-to-head with them.
+- Many small blocks: Lzma_compressBound reserves a constant 16 KB pad per call (open issue #5), so chunked LZMA output buffers can be far larger than with peer codecs.
+- Projects that cannot track a vendored-codec fork: AOCL re-releases upstream security fixes on its own schedule (5.3.0 shipped zlib 1.3.1-based code; 5.3.2 moved to zlib 1.3.2 'addressing known security vulnerabilities').
+
+**Vs siblings:** Pick it over zlib-ng or the Cloudflare zlib fork when you also want bzip2 and snappy speedups and AMD support from one library; pick zlib-ng, libdeflate or ISA-L igzip when you only need deflate, need ARM, or want independently measured numbers. For bzip2-compatible output it is faster per thread in the vendor run (about 2.1x) than lbzip2's catalogued 1.6x, though the two were measured on different machines.
+
+**Gotchas:**
+- Behaviour depends on environment variables read at first use: AOCL_DISABLE_OPT=ON forces reference paths, AOCL_ENABLE_INSTRUCTIONS caps the ISA, AOCL_ZLIB_QUICK_MODE=ON switches zlib levels 1, 2, 3 and 5 to faster settings with a worse ratio.
+- On Windows the CMake Release build compiles everything with /arch:AVX2, and on Linux the Snappy sources are compiled with -msse4.1 and SNAPPY_HAVE_X86_CRC32=1, so not every path honours the 'portable down to SSE2' dispatch claim.
+- GCC 15 needs per-file workaround flags (-fno-schedule-insns2 and others) on zlib chunkset_avx512.c and zstd_decompress_block.c; 5.3.2 notes fix 'GCC 15 decompression regressions in ZLIB and ZSTD' and 'LZ4 multi-threaded decompression data corruption', so pin 5.3.2 or later.
+- aocl_llc_setup() only reports excluded or unsupported codecs, not allocation failures (lzbench review concern 4), and aocl_lzma_compress() does not check the output size up front and can underflow when outsize < LZMA_PROPS_SIZE (issue #5).
+
+**Status:** Actively maintained by AMD (v5.3.2 released 2026-08-20, regular releases since 4.1) under file-by-file BSD-3-Clause, MIT and NCSA plus upstream codec licences; usable as a library, but it is a vendor fork that lags upstream codec releases and has little outside adoption (44 stars).
+
+[repo](https://github.com/amd/aocl-compression) · [benchmark](https://github.com/inikep/lzbench/pull/321)
+
+##### Firetrail (formerly skim)  `Zig`  `no license`  `active`  `Tier C`
+
+Zig word-hash codec (Density-style) that encodes faster than lz4 --fast=20 and zstd --fast=5, at a lower ratio.
+
+**Beats:** lz4 (also zstd) — The author's end-to-end CLI timings (poop, single thread, warm page cache, Ryzen 7 7800X3D, CachyOS, Zig release-fast build versus distro lz4 1.10.0 --fast=20 and zstd 1.5.7 --fast=5, all -T1) put silesia.tar encode at 1.67 GB/s for White and 1.54 GB/s for Orange versus 0.98 GB/s for lz4 and 0.69 GB/s for zstd, with Orange's ratio 1.54x against lz4's 1.56x; geomean over four corpora is 1.6x lz4 and 2.5x zstd for White. Decoded output was not verified in the harness, and the independent lzbench row covers the predecessor skim 0.1.0, not this codec.
+
+**Known shortcoming:** Tier C: lz4/zstd baselines are distro binaries with flags unstated; the White dictionary is trained on the same input it compresses; the lzbench row is the old skim 0.1.0. No license, so reference.
+
+**Known shortcoming:** Correctness bug: the CLI decoder reads each compressed block into an 8,388,608-byte buffer (main.zig input_data_bound = block_size) but an incompressible 8 MiB block encodes to 8,519,680 bytes, so random or already-compressed files cannot round-trip and ReleaseFast reads past the heap buffer. The decoder has @setRuntimeSafety(false), no input-length checks and no checksum. Algorithm files have no tests and bench.fish never compares decoded output with the original. No LICENSE. Zig 0.16+, no C API. Best possible ratio about 3.76x. Benchmark corpora compress, so the timed runs are unaffected.
+
+**Independent measurement:** verifier
+
+**Independent measurement:** first-party benchmark
+
+**How:** There is no match search or entropy coding: each 64-bit word costs one Fibonacci multiplicative hash, one table load and one compare, and every 8 words share a 1-byte flag header, so the loop is branch-light, unrolled at compile time (inline for) and built with runtime safety off. The README describes the design as inspired by Density. Because only whole words at 8-byte-aligned positions can match, the best possible ratio is about 3.76x (8 bytes become 2 bytes plus 1/8 of a header byte).
+
+**Use it when:**
+- Experiments with very fast single-thread encoding of large, repetitive, word-aligned data such as logs (HDFS.log: Orange 2.42 GB/s encode at 2.53x versus lz4 --fast=20 at 1.25 GB/s and 4.53x).
+- A deployed static dictionary (White) for streams that share a vocabulary, where the dictionary is trained once with Red and shipped to both ends.
+- Pipelines that are encode-bound and can accept a ratio of 1.2-1.5x on mixed data, in a Zig code base.
+- Reading the code as a compact reference for Density-style word hashing (about 180 lines per codec).
+
+**Skip it when:**
+- Any production or redistributed use: the repository has no LICENSE file, so the code cannot legally be copied.
+- Incompressible or already-compressed input with the CLI: an 8 MiB block of random data encodes to 8,519,680 bytes, but the decoder reads each compressed block into an 8,388,608-byte buffer (input_data_bound = block_size in main.zig), so such files cannot be decoded and, in ReleaseFast builds, the read overruns the heap buffer.
+- Untrusted input: decompressBlockToBuffer runs with @setRuntimeSafety(false) and never checks the compressed length, and the CLI trusts the per-block sizes in the stream; there is no checksum or format magic.
+- Decode-bound workloads: lz4 decodes faster on all four corpora (silesia 2.53 versus 1.89 GB/s for White).
+- When ratio matters: lz4 and zstd compress smaller on silesia and HDFS.log, and zstd --fast=5 beats it everywhere on ratio.
+
+**Vs siblings:** Against LZ4, Density and ZXC it only wins on single-thread encode speed for word-aligned repetitive data; pick LZ4 (or memlz for encode-only speed) for anything that needs decode speed, a stable format, a C API or a licence, and Density if you want this style of word-hash codec with a licence and a library API.
+
+**Gotchas:**
+- Encoder and decoder must start from identical tables: a White or Orange stream encoded with --import dict.bin decodes to wrong bytes without that same file, and nothing in the stream records which dictionary or codec was used.
+- White without an imported dictionary compresses almost nothing, because its table starts zeroed and is never updated.
+- No round-trip check anywhere: the algorithm files have no tests, and scripts/bench.fish times decode with poop but never compares the decoded file with the original.
+- The published White figures use a dictionary trained on the very file being compressed and leave its 512 KB out of the size, so Orange is the fair cold comparison.
+
+**Status:** Active hobby project (63 commits, last 2026-08-04, version 0.0.0, 1 star) with no licence, so treat it as a reference to read rather than code to vendor.
+
+[repo](https://github.com/VantorreWannes/firetrail) · [benchmark](https://raw.githubusercontent.com/VantorreWannes/firetrail/HEAD/README.md)
+
+#### integer-bitpacking
+
+##### SFVInt  `C++`  `no license`  `unknown`  `Tier C`
+
+DaMoN 2024 paper: BMI2 PEXT/PDEP LEB128 varint decoder claiming up to 2x over Folly and Protobuf; no public code.
+
+**Beats:** Facebook Folly and Google Protobuf LEB128 varint decoders — Only the abstract was seen (as search snippets): up to 2x faster LEB128 decoding than Facebook Folly and Google Protobuf varint decoders on AWS Intel m6i instances, for 32-bit and 64-bit values; one snippet cites 3.1 ms to 1.6 ms on a 'Web2' workload. Compiler, flags, library versions, datasets and per-length results were not readable here.
+
+**Known shortcoming:** Tier C, paper only (arXiv 2403.06898 blocked): BMI2 varint decoding up to 2x over folly and protobuf on m6i; no code found. Candidate for a paper retier.
+
+**Known shortcoming:** No public code, licence or API; the paper body is unreadable here (arXiv blocked, paperhub mirror 403). PDEP/PEXT are microcoded on AMD Zen, Zen+ and Zen 2, so the m6i (Intel) numbers do not carry over. Likely 8-byte loads past the value start with undocumented padding. The Folly baseline (Varint.h) is an unrolled branchy loop with bounds and error checks, so it may not be like-for-like.
+
+**Independent measurement:** verifier
+
+**Independent measurement:** paper, first-party
+
+**How:** Instead of the byte-at-a-time test-and-branch loop, it loads several bytes at once and uses BMI2 PEXT with a continuation-bit mask (search snippets quote masks 0x0000808080808080, 0x0080808080808080 and 0x8080808080808080 for six, seven and eight bytes) to gather the MSBs, then PEXT/PDEP to compact the 7-bit payload groups into the integer in a few instructions. The baseline it beats, folly::tryDecodeVarint, is an unrolled chain of up to ten load/test/branch steps per value.
+
+**Use it when:**
+- You must keep the LEB128/protobuf varint wire format (existing files, RPC payloads, column stores) and varint decode shows up in profiles.
+- Intel Haswell or later, or AMD Zen 3 or later, where PEXT/PDEP run in hardware.
+- Mixed-length 64-bit varints where the scalar loop's data-dependent branches mispredict.
+- You are willing to write and fuzz your own decoder from the paper's description.
+
+**Skip it when:**
+- AMD Zen, Zen+ and Zen 2: PDEP/PEXT are microcoded there and much slower (varint-simd's README documents this), so a BMI2 decoder can lose to the scalar loop.
+- Non-x86 targets (aarch64, wasm): BMI2 does not exist; you need a separate path.
+- You control the format: block formats such as Stream VByte, Masked VByte or SIMD bit-packing decode several times faster than any one-at-a-time LEB128 decoder.
+- You need drop-in, tested code today: there is no public implementation to vendor.
+- Untrusted input: bounds handling, overlong-encoding and malformed-input behaviour are not documented in anything readable here.
+
+**Vs siblings:** Pick the technique over Stream VByte or MaskedVByte only when the LEB128 wire format is fixed; varint-simd (Rust, SSSE3/AVX2, public code and benchmarks on an i7-8850H) solves the same problem and is the safer starting point for a port to C++.
+
+**Gotchas:**
+- No code: the 2x figure cannot be reproduced or checked; the verifier and this enricher found nothing under the first author's GitHub account (gangliao).
+- A multi-byte load with a PEXT mask likely reads up to 8 bytes past the value start; the paper's padding or tail rule could not be read here, so check this before decoding at buffer ends.
+- Folly's baseline already has a bounds-checked fast path only when 10+ bytes remain and reports TooManyBytes/TooFewBytes errors; a faster decoder that drops those checks is not a like-for-like comparison.
+
+**Status:** Peer-reviewed workshop paper (DaMoN 2024, authors from University of Maryland and ByteDance) with no public code, licence or maintenance; treat as a reference design (usability: reference), tier C until the paper body is read.
+
+[benchmark](https://arxiv.org/abs/2403.06898)
+
+#### succinct-structures
+
+##### h0_bv (H0-compressed bitvectors)  `C++`  `no license`  `stale`  `Tier C`
+
+Research C++ RRR-style H0-compressed bitvectors with faster block decoding; beat SDSL rrr_vector on access at block size 63.
+
+**Beats:** SDSL rrr_vector (and SDSL hybrid bitvector) — First-party notebook output from a machine labelled 'laptop' (CPU not stated; g++ -std=c++2b -Ofast -march=native) shows the iterative b=63 decoder against SDSL rrr_vector<63> at equal space: access 249 vs 345 ns on WT-DNA-1GB and 75 vs 94 ns on WT-WEB-1GB (about 1.2-1.4x), rank 262 vs 345 ns on DNA but 179 vs 148 ns on WEB (slower); SDSL's rrr_vector<15> remains faster in absolute terms at more space.
+
+**Known shortcoming:** Downgraded B to C: real numbers live in plotting/results.ipynb (machine 'laptop', CPU unstated) and the win over SDSL rrr_vector is mixed: IT63 vs SDSL b=63 access about 1.2-1.4x faster, rank slower on WT-WEB, b=15 variants slower than RRR15. No license, so reference; 1 star; stale. The SEA 2025 paper (Dagstuhl, arXiv blocked) could restore B.
+
+**Known shortcoming:** The notebook's select times are invalid: the harness sets stop instead of start before the select loop (a bug inherited from SDSL's rrr_time_and_space.cpp), so select includes the rank loop; the access/rank claim is unaffected. The benchmark measures independent-query throughput, not dependent latency. No serialize/load, x86 BMI2 only, no license, hyb_256 checksums mismatch in the notebook. The SDSL patches only add size accessors, so the baseline is fair. Paper: 'Succinct Rank Dictionaries Revisited', SEA 2025 (LIPIcs.SEA.2025.15).
+
+**Independent measurement:** verifier
+
+**Independent measurement:** notebook: IT63 build 3.2 s vs SDSL b=63 21.0 s on WT-DNA-1GB (about 6.5x, derived from page data) at equal space 0.713 bits per bit
+
+**How:** RRR decoding of a block offset into its bit pattern dominates query time at large block sizes. h0_63/h0_it decode a 63/64-bit block iteratively in 8-bit chunks using compile-time binomial and limit tables (constexpr std::array), so a block is decoded with a few table lookups instead of SDSL's bit-by-bit combinatorial walk. h0_gap stores a sampled (gap) lookup table of all block codes for b<32, and the de Bruijn variants assign non-lexicographic codes to blocks (the SEA 2025 paper 'Succinct Rank Dictionaries Revisited' argues these can give faster queries). Select uses BMI2 _pdep_u64 for the in-word step.
+
+**Use it when:**
+- Research or prototyping of RRR-style compressed bitvectors for FM-indexes and wavelet trees, where you want SDSL rrr_vector<63> space (about 0.71 bits/bit on WT-DNA-1GB, same as SDSL) with lower access latency (249 vs 345 ns in the notebook).
+- Workloads dominated by random access on compressible bitvectors at large block size, where the iterative b=63 decoder beat SDSL b=63 on every dataset in the notebook (for example 75 vs 94 ns on WT-WEB-1GB).
+- Build-time-sensitive pipelines: the notebook shows IT63 construction at 3.2 s vs 21.0 s for SDSL b=63 on WT-DNA-1GB (about 6.5x, derived from page data).
+- As reference code for the SEA 2025 paper's decoders, to port the iterative or gap-table decoding into your own bitvector.
+
+**Skip it when:**
+- Production use: no LICENSE file (all rights reserved by default), 1 star, no releases, debugging code still present, and hyb_256.hpp is marked broken (its checksums disagree in the notebook).
+- Rank-heavy workloads on very compressible data: IT63 rank on WT-WEB-1GB was 179 ns vs 148 ns for SDSL b=63, so it is slower there.
+- When access speed matters more than space: SDSL's rrr_vector<15> (RRR15 row) was fastest overall (110 ns access, 149 ns rank on WT-DNA-1GB) at about 0.90 bits/bit vs 0.71 for IT63.
+- Incompressible or random dense bitvectors: on RND-1 all H0 variants use more than 1 bit per bit (IT63 1.07), worse than a plain bitvector with rank support.
+- Non-x86 or pre-BMI2 targets: headers include immintrin.h and select uses _pdep_u64/_pdep_u32 (BMI2).
+
+**Vs siblings:** Pick it over LA-vector or succinct-bitvec-cpp's RRRBitVec only when you specifically need the RRR (block class/offset) representation with faster decoding at b=63; for compressed bitvectors you intend to ship, LA-vector (TALG 2022, select fastest in its comparison) is the better-supported choice, and for uncompressed rank/select SPIDER or rankselect trade more space for speed.
+
+**Gotchas:**
+- Select timings in the notebook are not valid: the harness (adapted from SDSL's rrr_time_and_space.cpp, which has the same bug) sets stop = timer::now() where it should reset start before the select loop, so every reported select time also includes the rank loop.
+- The benchmark measures independent random queries (sum of results over 10M queries from 2^20 sampled positions), i.e. throughput-like ns/query, not dependent-query latency.
+- Each constructor builds four temporary std::vectors copying metadata and block codes (left over from debugging), adding about 8 bytes per 63-bit block of peak memory during construction.
+- The SDSL baseline is built from patched sdsl_hacks/rrr_vector.hpp and rrr_helper.hpp; the patches add size accessors and an optional RRR_NO_OPT path that the Makefile does not enable, so the baseline appears unmodified in behavior.
+
+**Status:** Stale research code (last commit 2025-07-17, 48 commits, 1 star) with no license, so it is reference only: read it for the decoding ideas, do not vendor it.
+
+[repo](https://github.com/saskeli/h0_bv) · [benchmark](https://github.com/saskeli/h0_bv/blob/master/plotting/results.ipynb)
+
+##### orzo (Elias-Fano encoded L2 rank/select)  `C++`  `no license`  `stale`  `Tier C`
+
+Research rank/select index for plain bitvectors that Elias-Fano-packs L2 counts, cutting index space below pasta-flat and cs-poppy.
+
+**Beats:** cs-poppy and pasta-flat — Search snippets of the SEA 2025 paper (Hough and Bhatele, LIPIcs vol. 338) say orzo cuts the rank index overhead by about 26.5% relative to cs-poppy and pasta-flat (3.51% overhead with select, 3.125% rank only), at a rank slowdown of about 9-38% versus pasta-flat depending on CPU and input. The repo's benchmark times rank1/select1 for orzo, pasta-flat and pasta's poppy over 10M random queries on 2^24 to 2^34-bit random bitvectors built with clang++-17 -O3 -flto -mavx2, but no CPU model or results are committed, and the paper itself was not opened.
+
+**Known shortcoming:** Downgraded B to C: the win is space only (26.49%, snippet only); the bench (comparison.cc vs pasta-flat and cs-poppy, clang++-17 -O3 -flto) publishes no results and no CPU; no LICENSE. SEA 2025 paper (Dagstuhl) blocked.
+
+**Known shortcoming:** Not a speed win: the SEA 2025 paper (snippet) has rank 9-38% slower than pasta-flat depending on CPU and input; space (about 26.5% less overhead) is the only win. No license; one commit; UPPER_BLOCK_COUNT hard-coded to 259072 for N_L2=10 only; no copy constructor (copies double-free); the destructor frees uninitialised pointers when support_select=false; rank0 returns 1 + (i - rank1(i)), off by one; the bench main checks argc<4 but reads argv[4]; no results.csv or CPU model; needs x86-64 BMI2.
+
+**Independent measurement:** verifier
+
+**Independent measurement:** enricher
+
+**How:** It keeps the cache-centric L0/L1/L2 layout of poppy-style indexes, but each 5632-bit lower block (11 basic blocks of 512 bits) gets one 128-bit entry holding an 18-bit L1 count plus the 10 cumulative L2 counts Elias-Fano encoded (20 upper bits, 90 lower bits). A rank decodes one L2 value with PDEP+TZCNT (BMI2 select-in-word) and then popcounts at most 8 words; by my arithmetic from the source constants the L1/L2 part costs 128/5632, about 2.3% of the bitvector (derived from source constants, not measured). Select uses a separate 2^32-bit upper level, a sample every 8192 ones, a linear scan over L1 entries, a linear Elias-Fano decode of the L2s and a PDEP/TZCNT finish.
+
+**Use it when:**
+- Very large static plain bitvectors (the bundled script sweeps 2^24 to 2^34 bits) where index memory matters more than the last nanoseconds of rank latency.
+- Moderate to dense bitvectors (the script tests 10%, 50% and 90% ones) on x86-64 CPUs with BMI2 and AVX2.
+- Research or prototyping of space-reduced poppy-style indexes, since the code is short (one ~400-line header) and the benchmark harness compares directly against pasta-flat and cs-poppy.
+
+**Skip it when:**
+- Latency-critical rank: search snippets of the SEA 2025 paper report rank is about 9-38% slower than pasta-flat depending on CPU and input (snippet only, paper not opened); pick pasta-flat, SPIDER or QuadRank if speed is the goal.
+- Production code: no license file (so it cannot legally be copied), a single commit, no tests beyond a CHECK_CORRECTNESS mode in the benchmark, and no issues or releases.
+- Non-x86 targets or x86 without BMI2: the header includes immintrin.h and calls _pdep_u64 and _tzcnt_u64 unconditionally; MSVC lacks the __uint128_t it relies on.
+- Sparse bitvectors with heavy select traffic: select scans L1 entries linearly from a sample taken every 8192 ones, so long runs of zeros mean longer scans (observed in source, not measured).
+- Anything that needs compressed or dynamic bitvectors; the bit array is stored uncompressed and the index is build-once.
+
+**Vs siblings:** Choose orzo over SPIDER, rankselect or succinct-bitvec-cpp only when shaving roughly a quarter off a poppy/pasta-style rank index matters more than rank speed and you can live with unlicensed research code; for compressed sparse sets use LA-vector or h0_bv instead.
+
+**Gotchas:**
+- Template parameters are not really tunable: UPPER_BLOCK_COUNT is hard-coded to 259072 with a comment that it is 'temporarily hardcoded' for the default N_L2 = 10, and the L1 field is only 18 bits wide.
+- Class owns raw new[]/calloc buffers with no copy or move constructor, so copying an Orzo double-frees; with support_select = false the destructor still deletes and frees the uninitialised select pointers.
+- rank0 returns 1 + (i - rank1(i)), which looks off by one against rank1's exclusive convention; the constructor reads whole 512-bit basic blocks, so the bit array must be padded to a multiple of 512 bits (both observed in source, not tested).
+- The benchmark main checks argc < 4 but reads argv[4], and the repo commits no results.csv, so the paper's numbers cannot be reproduced from the repo alone.
+
+**Status:** Single-commit research artifact (2025-05-12, 2 stars) with no license file, so reference only; read it to learn the Elias-Fano L2 trick, do not vendor it.
+
+[repo](https://github.com/hpcgroup/orzo) · [benchmark](https://github.com/hpcgroup/orzo/blob/master/benchmarking/comparison.cc)
+
+##### SPIDER (Succinct Predictive InDEx for Rank and select)  `C`  `no license`  `stale`  `Tier C`
+
+Research C code for a ~3.8%-overhead rank/select bit vector that interleaves rank counters with data and predicts select positions.
+
+**Beats:** pasta-flat and pasta-wide, poppy (cs-poppy), Vigna's rank9 and SDSL rank/select structures (competitor list from WebSearch snippets of the SEA 2024 paper; paper not opened) — The SEA 2024 paper (seen only as search snippets; Dagstuhl and arXiv are blocked here) reports 3.82-3.83% space overhead, the fastest rank for bit vectors of 8 billion bits or more (22% better than pasta-flat) and select up to 41% faster than existing succinct structures while nearly matching the best 12.5%-space select; compiler, flags beyond the Makefile's gcc -O9 -march=native, and CPU are not visible. An independent Rust reimplementation in QuadRank's repo (i7-10750H at 3.0 GHz, n=2^35 bits) measured the SPIDER-style block at 29.39 ns/query in a single-thread loop vs 17.75 ns for sux-rs Rank9 and 33.99 ns for RankSmall<1,11> at similar 3% space (derived from page data).
+
+**Known shortcoming:** Downgraded B to C: the repo has no numbers and the SEA 2024 paper (LIPIcs.SEA.2024.21, Dagstuhl blocked) is known only from snippets (22% faster than pasta-flat at 8B+ bits; select only near the best 12.5%-space structure, not faster). No license, x86-only. Retier to B when the paper is readable.
+
+**Known shortcoming:** Not a library: global state in non-static helper.h globals, an fgetc builder and an MSB-first bit layout; speedtest.h times only SPIDER with clock() over an independent-query loop. Issue #1 (2025-12-18) asks for competitor bench code, a reproduction command and why latency looks low, with no reply. No LICENSE.
+
+**Independent measurement:** verifier
+
+**Independent measurement:** independent Rust reimplementation in quadrank's evals/rank-laptop.csv (n=2^35, 1 thread, plain loop): Spider-style block 29.39 ns vs Rank9 17.75 ns vs RankSmall<1,11> 33.99 ns (derived from page data)
+
+**How:** Each 512-bit cache line stores 496 data bits plus a 16-bit rank counter relative to a 64-bit top-level count kept every 63,488 bits, so a rank query costs one cache-line access plus a small top-level array that usually stays in cache, then up to 8 popcounts. Select samples the position of every k-th one (16-bit low-level and 64-bit high-level sample arrays), linearly interpolates between samples to predict the target cache line, corrects with a short scan of the interleaved counters, and finishes inside the 64-bit word with PDEP + LZCNT. The ni-* variants keep the counters in a separate array for comparison.
+
+**Use it when:**
+- Reference design when you are writing your own rank/select for very large bit vectors (the paper reports the gain at 8 billion bits or more, snippet only) and want low space overhead.
+- Studying or porting the interleaved-counter layout; QuadRank's BinaryBlock16Spider is a Rust reimplementation of the same block layout.
+- Prototyping select with prediction (linear interpolation from sampled positions) on x86-64 with BMI2.
+
+**Skip it when:**
+- Any production use: there is no LICENSE file, so the code cannot legally be copied, and it is not packaged as a library.
+- Programs that need more than one bit vector or thread-safe reentrant objects: all state lives in non-static globals declared in helper.h, so even including the header in two translation units collides.
+- Non-x86 targets: it includes x86intrin.h and uses _pdep_u64 and _lzcnt_u64 (BMI2/LZCNT), built with -march=native.
+- Small or cache-resident bit vectors, where the single-cache-miss layout gives little; or workloads needing the fastest rank at any space, where 25%-overhead Rank9 still led in plain loops in QuadRank's measurements.
+- When you need reproducible competitor numbers: the repo only times SPIDER itself, and a reproduction question in issue #1 is unanswered.
+
+**Vs siblings:** Only as a design reference: for a usable ~3.3%-overhead single-cache-miss rank, QuadRank/BiRank (MIT, Rust crate) implements the same layout and in its own benchmark streamed 2.63 ns vs 2.81 ns for its SPIDER-style block at 12 threads; for select, SPIDER's predictive scheme is the distinctive part, and splatlab rankselect (PTSelect) is the sibling to compare for in-word select.
+
+**Gotchas:**
+- Bits are packed MSB-first: the builder shifts each input byte in from the low end of a 64-bit word, and the 16-bit counter occupies the top 16 bits of the first word of every cache line, so input layout differs from SDSL/sux LSB-first bit vectors.
+- The builder reads the file one byte at a time with fgetc and ignores a failed fopen beyond printing perror, so construction is slow and a bad path crashes.
+- speedtest.h times independent random queries in a loop with clock() (CPU time, not wall time) and generates indices from two 31-bit rand() calls, so the figure is loop throughput rather than dependent-query latency; issue #1 (Dec 2025, Ragnar Groot Koerkamp) asks why the paper's numbers sit between typical latency (~80 ns) and loop throughput, and is unanswered.
+- The 16-bit in-line counter limits each top-level block to 63,488 bits; this is fixed by #define, not configurable.
+
+**Status:** Stale research artifact (10 commits, last 2024-05-28, 5 stars, no releases) with no license, so treat it as a reference to read, not code to vendor.
+
+[repo](https://github.com/williams-cs/spider) · [benchmark](https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.SEA.2024.21)
 
 ### crypto-and-hashing
 

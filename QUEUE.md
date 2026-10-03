@@ -1,6 +1,6 @@
 # Queue: extensions saved for the end
 
-## Unfinished work (resume here first; updated 2026-10-03 evening)
+## Unfinished work (resume here first; updated 2026-10-03 night)
 
 This section is the open backlog from the main wave loop. It is not an extension; run it before the
 extension passes further down. Wave 8 closed on 2026-10-03: all 156 verify batches have verdicts,
@@ -27,9 +27,15 @@ all 388 verified entries are enriched, lists re-rendered (COPYABLE 1180, REFEREN
 3. **Usage-limit lesson:** launching 15-20 Opus/Sonnet agents at once exhausted the account's
    session limit twice on 2026-10-02. Eight at a time, recording each report before launching
    more, ran a full day on 2026-10-03 without a kill.
-4. **Waves 9-12** are set up but not launched: 152 assignments across 19 categories
-   (wave 9 compression: entropy-coders, general-lossless, integer-bitpacking, succinct-structures;
-   wave 10 media: color-and-resampling, font-shaping-text-layout, image-codecs, rasterizers-2d,
+4. **Wave 9 closed 2026-10-03** (136 verified, all enriched; see CLAUDE.md Status). Open
+   wave 9 follow-ups in `data/wave9/leads.md`: paper-access retiers (h0_bv, spider, recoil,
+   ds2i, mutable_rank_select, pwm, wavelet_forest, faster-minuter, avxwindowfmindex, mans SC25
+   report, ZipNN, QPL ADMS 2025, CPEF TOIS17, simdcomp via the SPE paper, DietGPU arXiv
+   2606.18900) and a retier of Chromium zlib C to B via simonis/zlib-chromium; seed leads not yet
+   run: tsl::htrie_map, NeaTS, intel/zlib-accel, iaa-plugin-rocksdb, DeLZSA, Apple LZMESH,
+   richox/orz done, c-blosc2 done.
+5. **Waves 10-12** are set up but not launched: 114 assignments across 15 categories
+   (wave 10 media: color-and-resampling, font-shaping-text-layout, image-codecs, rasterizers-2d,
    video-audio; wave 11 runtime: allocators-gcs, coroutines-fibers, filesystems-and-io,
    logging-tracing, profilers-and-instrumentation, thread-pools-work-stealing; wave 12 languages:
    bytecode-vms-and-wasm, embedded-scripting, jits, language-interpreters). Re-render b1/b2 before
