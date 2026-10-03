@@ -6,16 +6,15 @@ This section is the open backlog from the main wave loop. It is not an extension
 extension passes further down. Wave 8 closed on 2026-10-03: all 156 verify batches have verdicts,
 all 388 verified entries are enriched, lists re-rendered (COPYABLE 1180, REFERENCE 137).
 
-1. **Wave 8 backfill seed pass (seed-j)** from this session's leads (`data/wave8/leads.md`, the
-   2026-10-03 entries): chusitoo/flatbush (C++ Flatbush port), Cortex-Discovery/sobek and
-   SNU-ARC/flashTP (equivariant tensor products), xing-cong/CB-Sparse (CB-SpMV) and
-   CornellHPC/Ocean-SpGEMM (independent SpMV/SpGEMM suites that beat TileSpMV, DASP, OpSparse),
-   bbuhrow/avx-ecm, philipturner/metal-flash-attention, hchengv/avxbls, wibraun/NICSLU (open
-   NICSLU 3.0.1; may be a duplicate note), jirka-h/ranluxpp-portable, cd-mcfarland/fast_prng,
-   dzhang314/MultiprecisionBenchmarks (QD vs MPFR harness), NLAFET/SyLVER, hpsim/OGL (likely a
-   Ginkgo duplicate). Add a `seed` assignment with that `projects` list, run
-   `python3 pipeline/seed.py data/wave8 --batch seed`, merge, verify, enrich, re-render.
-2. **Paper-access retiers** (need arXiv/ACM/IEEE/Springer or an author-hosted PDF): ttm (ICCS
+1. **Wave 8 backfill seed pass (seed-j/k/l): done 2026-10-03.** 14 projects seeded, 11 kept
+   (FlashTP B, CB-SpMV B, avxbls B, Sobek C, Ocean SpGEMM C, avx-ecm C, metal-flash-attention C,
+   fast_prng C, chusitoo/flatbush D, SyLVER D), ranluxpp-portable and wibraun/NICSLU folded as
+   duplicates, OGL folded into Ginkgo, MultiprecisionBenchmarks was already listed. New leads for a
+   later seed pass: bbuhrow/yafu, imperatormk/mps-flash-attention, pedrobtz/zurand, NLAFET/SpLLT,
+   gMAGNUS (no repo), ganqin-liu/avxbls-sig.
+2. **Paper-access retiers** (retier checks 12-14 on 2026-10-03 re-tried all of these from this
+   environment: only gpuNUFFT moved, D to C; auto-mpft confirmed B from its gh-pages PDF; the rest
+   stay blocked, so this needs an environment that reaches arXiv/ACM/IEEE/Springer): ttm (ICCS
    2024, likely B), costa (ISC21), pargeo, nicslu (TCAD 2013), spral (TOMS 2016, arXiv
    1909.08104), openequivariance (ACDA25), wrs (ESA 2019, to A), m4ri (TOMS Alg. 898), amgt and
    tilespmv (SC '24, IPDPS 2021 numbers still snippet-only), auto-mpft (its KDD 2024 PDF is

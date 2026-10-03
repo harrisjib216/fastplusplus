@@ -4956,6 +4956,49 @@ CUDA kernel library for LLM serving (paged/ragged attention, MLA, GEMM, MoE, sam
 
 [repo](https://github.com/flashinfer-ai/flashinfer) · [benchmark](https://github.com/flashinfer-ai/flashinfer-ai.github.io/blob/main/_posts/2024-01-03-introduce-flashinfer.md)
 
+##### FlashTP (SNU-ARC)  `C++/CUDA (PyTorch extension)`  `MIT`  `active`  `Tier B`
+
+Fused, sparsity-aware CUDA kernels for e3nn's channelwise (uvu) tensor product; paper reports up to 41.6x over e3nn.
+
+**Beats:** e3nn o3.TensorProduct (uvu, with torch_scatter) and NVIDIA cuEquivariance — The ICML 2025 paper (read here only through search-result snippets of its abstract) reports up to 41.6x and 60.8x kernel speedups over e3nn and NVIDIA cuEquivariance on the uvu tensor product, and 4.2x inference and 3.5x training speedups with 6.3x and 6.2x lower peak memory for SevenNet-l3i5; snippets mention an A100, but GPU model, precision and the configurations behind the maxima were not confirmed from the paper itself. SevenNet's own docs say FlashTP gives 'up to ~4x' speedup and lose to cuEquivariance above about 10^3 atoms.
+
+**Known shortcoming:** Tier B on the ICML 2025 paper, whose 41.6x/60.8x kernel and SevenNet 4.2x/3.5x figures were seen only in abstract snippets (openreview, mlanthology, arXiv blocked); GPU and flags unverified. OpenEquivariance issue #171 confirms FlashTP did not benchmark against OpenEquivariance.
+
+**Known shortcoming:** Input-1 multiplicities must be multiples of 32 (asserted; issue #4 closed without answer). SevenNet's own accelerator docs say cuEquivariance is faster above about 10^3 atoms. Shared memory is chosen by matching 'A100' or 'H100' in the GPU name, with a 48 KiB fallback for anything else; scatter uses atomicAdd, so results are not bitwise deterministic; example/test.sh checks correctness only with no timing code; no pip release (issue #5 open); DDP illegal-memory-access issue #1 closed with no visible fix.
+
+**Independent measurement:** verifier
+
+**Independent measurement:** enricher
+
+**How:** It fuses gather, tensor product, per-edge weighting and scatter-add into one kernel per pass, so the large per-edge intermediate tensor that e3nn materializes is never written to memory; that is where the reported 6x peak-memory reduction comes from. The Clebsch-Gordan coefficients are stored sparsely (only nonzero 'fibers', with values deduplicated into a uint8-indexed table of up to 256 unique values, or an extended-CG kernel above that), skipping the zero entries a dense e3nn contraction multiplies. Paths are grouped per input irrep and per 32-channel warp, inputs are staged in shared memory sized to the GPU (163 KiB on A100, 227 KiB on H100), and outputs are accumulated with atomicAdd.
+
+**Use it when:**
+- Training or running an equivariant MLIP (NequIP, SevenNet-style) on NVIDIA A100/H100 where the uvu tensor product dominates step time or GPU memory limits system size (the paper reports 28,000 atoms on one A100).
+- Force training that needs double-backward through the tensor product, which FlashTP implements natively in fp32 and fp64.
+- SevenNet users: it is wired in via --enable_flash, and SevenNet's docs say FlashTP with LAMMPS: Torch beats cuEquivariance with LAMMPS: ML-IAP for small systems (below about 10^3 atoms).
+- Irreps whose input-1 multiplicities are all multiples of 32 (e.g. 32x0e, 64x1o) with e3nn's default component/element normalization and per-edge (non-shared, non-internal) weights.
+
+**Skip it when:**
+- Multiplicities that are not multiples of 32 (e.g. 10x1o, 40x0e): the module asserts mul % 32 == 0 and fails; issue #4 asking for a workaround was closed without an answer.
+- Large systems: SevenNet's accelerator docs (citing the SevenNet-Omni paper) report a crossover around 10^3 atoms beyond which cuEquivariance is more efficient.
+- Tensor products other than channelwise uvu (fully connected uvw, shared or internal weights), fp16/bf16, or non-NVIDIA GPUs: none are supported.
+- GPUs other than A100/H100 without manual tuning: the shared-memory budget is chosen by matching 'A100' or 'H100' in the device name, and any other GPU drops to a 48 KiB 'safe mode' unless you pass smem_size.
+- Projects that need a pip wheel or a version policy: install is from source with a CUDA build of up to 10 minutes (issue #5 asking for a pip release is open), version 0.1.1.
+
+**Integration:** module · PyTorch >= 2.4.1, e3nn, CUDA toolkit 12+, ninja; torch_scatter only for the e3nn reference benchmark · Python >= 3.10 (setup.py), CUDA 12, PyTorch 2.4.1; nvcc built with -O2 · NVIDIA GPUs only; built for the detected compute capability, or sm_80 and sm_90 with PTX fallback when no GPU is present at build time (Blackwell runs via PTX JIT)
+
+**Vs siblings:** Pick FlashTP over cuEquivariance for uvu-based models on small-to-medium systems (below about 10^3 atoms per SevenNet's docs) or when peak memory is the limit; pick cuEquivariance or OpenEquivariance for larger systems, multiplicities not divisible by 32, or non-uvu products, and Sobek if you want streaming convolutions that its authors report beat OpenEquivariance.
+
+**Gotchas:**
+- Output accumulation uses atomicAdd in the scatter step, so results are not bitwise deterministic run to run; the bundled correctness check compares against e3nn with a 1e-4 absolute tolerance.
+- Unique Clebsch-Gordan values are deduplicated after rounding through fp32 even in fp64 mode, which picks the kernel variant (uint8-indexed vs extended CG above 256 unique values).
+- The example/test.sh 'microbenchmark' runs one forward, backward and double-backward pass and checks correctness; it has no timing code, so reproducing the paper's speedups needs an external profiler (e.g. Nsight).
+- Building can be killed by out-of-memory in ninja (exit 137); SevenNet's docs recommend MAX_JOBS=1.
+
+**Status:** Active (last commit 2026-05-27, adding GPU auto-detection and PTX fallback), MIT-licensed, 23 commits and integrated into SevenNet main via --enable_flash, but still a 0.1.1 source-only research release with a TODO for further performance work and a JIT path.
+
+[repo](https://github.com/SNU-ARC/flashTP) · [benchmark](https://openreview.net/pdf?id=wiQe95BPaB)
+
 ##### LIBXSMM  `C`  `BSD-3-Clause`  `active`  `Tier B`
 
 JIT-generated small GEMM, batch-reduce GEMM and element-wise kernels; DL layers built on it beat MKL-DNN by 1.1-1.7x.
@@ -5468,6 +5511,48 @@ Research BoringSSL fork that swaps Montgomery multiplication for AVX-512 IFMA re
 **Status:** Active research artifact (last commit 2026-06-18, 11 commits, 8 stars), Apache-2.0 like upstream BoringSSL; usable for benchmarking and study, but the authors themselves say not to use it in production.
 
 [repo](https://github.com/kevin-he-01/vroomssl) · [benchmark](https://github.com/kevin-he-01/vroomssl)
+
+##### avxbls  `C`  `Apache-2.0`  `stale`  `Tier B`
+
+AVX-512 IFMA BLS12-381 optimal ate pairing built on blst; about 1.9x lower single-pairing latency than blst's x64 assembly.
+
+**Beats:** blst (non-vectorized x64 assembly BLS12-381 pairing) — The TCHES 2025(4) paper by Cheng, Fotiadis, Grossschaedl and Page (read only through search-result abstracts; tches.iacr.org and eprint.iacr.org are blocked here) reports a full BLS12-381 optimal ate pairing in 1,265,314 cycles (Granger-Scott) or 1,195,236 cycles (compressed cyclotomic squaring) versus 2,351,615 cycles for blst's scalar x64 assembly, 1.86x and 1.97x, on an Intel Core i3-1005G1 (Ice Lake). Both sides are built with the same gcc -O3 -march=native flags in the repo (Makefile and baseline/Makefile) and timed with rdtsc; the gcc version and turbo settings were not readable here.
+
+**Known shortcoming:** Tier B on TCHES 2025(4), but the cycle counts (1,265,314 and 1,195,236 vs blst 2,351,615 on an i3-1005G1) were seen only in a search snippet (tches.iacr.org 403, ePrint 2025/1283 blocked). Bench code is public (src/main.c, baseline/ blst build, same gcc flags) but the gcc version is unconfirmed, so not A. Last commit 2025-09-27.
+
+**Known shortcoming:** Code bug outside the measured n=1 numbers: add_n_dbl_n_vector reads only T[0]/Q[0]/Px2[0] and ignores n, so miller_loop_n and optimal_ate_pairing with n > 1 give a silently wrong multi-pairing result. Limbs are radix 2^48 (8x48 bits) in IFMA 52-bit lanes, not 52-bit limbs. The default build is the Granger-Scott variant (1,265,314 cycles); the 1,195,236 figure needs COMPRESSED_CYCLOTOMIC_SQR=1. The test checks bilinearity only, not output against blst; no library target.
+
+**Independent measurement:** verifier
+
+**Independent measurement:** enricher
+
+**How:** Fp elements are held in radix 2^48 (8 limbs x 48 bits = 384 bits) inside 64-bit lanes so that AVX-512 IFMA's 52x52-bit multiply-accumulate (vpmadd52lo/hi) leaves 4 bits of headroom for lazy carry propagation; Montgomery multiplication and reduction run 8 lanes wide. The paper's contribution is choosing vectorization granularities per tower level (layouts named 8x1w, 4x2w, 2x2x2w, 1x4x2w in fp12_avx.h) so that independent Fp/Fp2 operations inside line doubling/addition, Fp12 squaring and cyclotomic squaring fill the 8 lanes, with values converted between blst's 64-bit radix and the 48-bit radix at step boundaries. Final exponentiation uses Granger-Scott cyclotomic squaring by default or Karabina-style compressed cyclotomic squaring via the COMPRESSED_CYCLOTOMIC_SQR compile-time switch.
+
+**Use it when:**
+- Latency of a single BLS12-381 pairing matters (one signature verification, one pairing check) on a CPU with AVX-512 IFMA: Intel Ice Lake, Tiger Lake, Sapphire Rapids or later Xeons, or AMD Zen 4/Zen 5.
+- You already build on blst and can vendor its field code, swapping in the vectorized Miller loop and final exponentiation.
+- As a reference for how to map extension-field tower arithmetic onto 8-lane IFMA when writing your own pairing or BN254 code.
+- Research or benchmarking where reproducing the TCHES 2025 numbers against blst on the same machine is the goal (both sides ship with identical gcc flags).
+
+**Skip it when:**
+- Multi-pairing products (n > 1, e.g. aggregate BLS verification): the default vectorized Miller-loop step add_n_dbl_n_vector reads only T[0], Q[0] and Px2[0] and ignores n, so miller_loop_n with n > 1 does not compute the product of pairings.
+- CPUs without AVX-512 IFMA (Intel client cores from Alder Lake on, older Xeons, Arm): there is no fallback path, and the build uses -march=native so binaries are not portable.
+- Production signing/verification stacks: no library build, no hash-to-curve, signature API or subgroup/input validation in the pairing entry points, no side-channel claims, 9 stars and last commit 2025-09-27.
+- Throughput-bound batch verification: it is latency-optimized for one pairing; a batch-oriented design such as VROOM's RNS approach may fit better.
+
+**Integration:** source-drop · none beyond the bundled blst-derived sources (src/assembly.S, fields, points, recip) and src/rdtsc64.S for timing · gcc with AVX-512 IFMA intrinsics (Makefile: gcc -O3 -fomit-frame-pointer -m64 -mbmi2 -march=native -fwrapv -mtune=native); C99 for VLAs in miller_loop_n; gcc version not stated · x86-64 with AVX-512F and AVX-512 IFMA plus BMI2/ADX (Linux/ELF toolchain assumed by the -z noexecstack flag)
+
+**Vs siblings:** Against VROOM (also AVX-512 IFMA BLS12-381 versus blst), pick avxbls when you want plain Montgomery arithmetic in radix 2^48 tuned for single-pairing latency and a peer-reviewed TCHES result; pick VROOM for its RNS formulation or broader curve coverage (BN254). The GMP-oriented siblings (ctbignum, intx, mp++) do not implement pairings.
+
+**Gotchas:**
+- miller_loop_n/optimal_ate_pairing accept n but the vectorized Miller loop only processes the first (P, Q) pair; start_dbl_n loops over n, so results for n > 1 are silently wrong rather than rejected.
+- The faster 1,195,236-cycle variant needs COMPRESSED_CYCLOTOMIC_SQR set to 1 in src/pairing.h; the default build is the Granger-Scott path (1,265,314 cycles in the paper).
+- The bundled test checks bilinearity identities (e(P,[k]Q) == e([k]P,Q) and two variants) with a fixed scalar inside the same implementation; it does not compare output against blst or known-answer vectors.
+- Cycle counts come from rdtsc over 10000 iterations after 1000 warm-up calls; on CPUs where rdtsc ticks at a fixed reference rate, turbo and AVX-512 frequency licensing affect the reading.
+
+**Status:** Apache-2.0 research artifact (230 commits, last 2025-09-27, 9 stars) with no releases or library target; small enough to vendor for single-pairing latency work, but fix or avoid the n > 1 path and validate against blst before relying on it.
+
+[repo](https://github.com/hchengv/avxbls) · [benchmark](https://eprint.iacr.org/2025/1283)
 
 ##### MultiFloats.hpp (dzhang314/MultiprecisionBenchmarks)  `C++`  `MIT`  `stale`  `Tier B`
 
@@ -6517,9 +6602,13 @@ Double-precision x86 AVX2/AVX-512 FFT library in C, with generated codelets and 
 
 Research code (KDD 2024) computing only a low-frequency block of 2-D Fourier coefficients faster than a full FFTW/MKL FFT.
 
-**Beats:** FFTW and Intel MKL (full FFT, then keep the needed coefficients); also Pruned FFT and PFT — Peer-reviewed KDD 2024 paper (pp. 2328-2339) whose abstract claims up to 7.6x over partial-FT methods (PFT, pruned FFT) and optimized FFT libraries (FFTW, MKL) at equal accuracy; a WebSearch summary of the paper PDF (not opened, host blocked) places the experiments on an Intel Core i7-10700KF at 3.80 GHz with 32 GB RAM and says PFT is weakest on the smaller images (Cityscapes, ADE20K, DF2K). The 7.6x is a maximum over datasets and baselines; compiler, flags, library versions and per-baseline ratios were not available, and the repository contains no harness to reproduce them.
+**Beats:** FFTW 3.3.5 (planning excluded from run time), Intel MKL (version not stated), PFT (snudatalab/PFT, KDD 2021) and FFTW's pruned FFT (fftw.org/pruned.html); all single precision, with tolerances set so every method keeps relative l2 error below 1e-6. — Peer-reviewed KDD 2024 paper (pp. 2328-2339) whose abstract claims up to 7.6x over partial-FT methods (PFT, pruned FFT) and optimized FFT libraries (FFTW, MKL) at equal accuracy; a WebSearch summary of the paper PDF (not opened, host blocked) places the experiments on an Intel Core i7-10700KF at 3.80 GHz with 32 GB RAM and says PFT is weakest on the smaller images (Cityscapes, ADE20K, DF2K). The 7.6x is a maximum over datasets and baselines; compiler, flags, library versions and per-baseline ratios were not available, and the repository contains no harness to reproduce them.
 
 **Known shortcoming:** Repo has no timing code (Auto-MPFT.cpp, FFTW.cpp and PFT.cpp only print coefficients), so the 7.6x claim cannot be reproduced from it; correctness bug: post-processing offsets only the first DS term per segment and every segment writes the same TEMP buffer, so M > p^2 gives wrong output (the shipped M=128, p=128 demo is fine); FFTW baseline hard-codes 32 threads.
+
+**Known shortcoming:** KDD 2024 paper opened (author gh-pages PDF): i7-10700KF 3.80 GHz, 32 GB, single precision, relative L2 below 1e-6, FFTW 3.3.5 with planning excluded; 7.6x is the Cityscapes maximum, the other datasets give 5.7x, 6.9x, 2.8x, 2.6x and synthetic 4.7x, 3.3x. No compiler, flags, thread count or MKL version, so B not A.
+
+**Independent measurement:** retier check 14 read the KDD 2024 paper
 
 **How:** Partial Fourier transform: the input is split into p1 x p2 blocks of size q1 x q2, the twiddle factors inside each block are replaced by a truncated multivariate polynomial approximation (precomputed weights for tolerances 1e-1 to 1e-7 in src/precomputed/e-*.csv), so the block sums become two batched SGEMMs (cblas_sgemm_batch) against small r x q matrices. That leaves r1*r2 small p1 x p2 real FFTs (one batched MKL DFTI call) plus an elementwise post-processing pass with Intel IPP (ippsMul/ippsAddProduct) and a twiddle multiply, so the cost scales with the output size and the approximation order r rather than with a full N1 x N2 FFT. The 'Auto' part picks p (and hence r) by solving a convex cost model with Newton's method instead of a grid search.
 
@@ -6548,7 +6637,7 @@ Research code (KDD 2024) computing only a low-frequency block of 2-D Fourier coe
 
 **Status:** Stale research artifact (last commit 2025-08-19, 3 stars) under Apache-2.0, small enough to lift into your own code, but it needs proprietary Intel MKL and IPP and has no build system.
 
-[repo](https://github.com/snudatalab/Auto-MPFT) · [benchmark](https://github.com/snudatalab/Auto-MPFT)
+[repo](https://github.com/snudatalab/Auto-MPFT) · [benchmark](https://raw.githubusercontent.com/yongchanpark/yongchanpark.github.io/gh-pages/resources/2024/KDD/ParkKK24.pdf)
 
 ##### FINUFFT (with cuFINUFFT)  `C++`  `Apache-2.0`  `active`  `Tier B`
 
@@ -8297,6 +8386,49 @@ GPU sparse lower-triangular solve (CSR) using one thread per row; ICPP '20 repor
 
 [repo](https://github.com/JiyaSu/CapelliniSpTRSV) · [benchmark](https://github.com/JiyaSu/CapelliniSpTRSV)
 
+##### CB-SpMV / CB-Sparse (xing-cong)  `CUDA/C++`  `Apache-2.0`  `active`  `Tier B`
+
+FP64 GPU SpMV on a 16x16 compressed-block format; about 3x faster than cuSPARSE BSR SpMV on SuiteSparse matrices.
+
+**Beats:** cuSPARSE BSR SpMV (cusparse_bsrmv, cuSPARSE v12.4); also TileSpMV and DASP — The ICS '25 paper measures FP64 SpMV Gflop/s over 2,843 SuiteSparse matrices on an A100 and an RTX 4090 with CUDA 12.4: averages of per-matrix speedups are 2.99x and 2.95x over cuSPARSE v12.4 BSR SpMV (best of block sizes 2, 4, 8, 16), 3.95x and 3.06x over TileSpMV, and 1.21x and 2.76x over DASP. The repo ships only the cuSPARSE-BSR harness, not cuSPARSE CSR, TileSpMV or DASP runners, and the host CPU is not stated.
+
+**Known shortcoming:** Tier B: the ICS '25 paper (read via raw.githubusercontent.com/hpcrl/ICS2025-webpage) carries every claimed number and the repo has a cuSPARSE-BSR harness with nvcc -O3 flags, but the host CPU is unstated and the TileSpMV and DASP harnesses are not in the repo, so not A.
+
+**Known shortcoming:** No library API: cb_spmv() is a benchmark driver that reallocates, copies and frees the matrix on every call. FP64 hard-coded, int32 indices, atomicAdd into y so results are nondeterministic; the repo times ITER=10 launches where the paper says 1000; the self-check tolerance is loose (abs 1e-3, rel 1e-4). The edge over DASP on A100 is only 1.21x.
+
+**Independent measurement:** verifier read the ICS '25 PDF
+
+**Independent measurement:** enricher
+
+**How:** Intra-block data aggregation: each sub-block's 4-bit row and column indices are packed into one uint8 and stored next to its FP64 values in one contiguous region, which raises L1/L2 hit rates (the paper measures this with Nsight Compute). Adaptive sub-block formats (COO under 32 nonzeros, dense above 128, CSR between, thresholds taken from TileSpMV) avoid BSR's padded zeros. Block-aware column aggregation packs the non-empty columns of super-sparse sub-blocks together so warps stay busy, and an inter-thread-block load-balancing pass redistributes blocks across SMs; partial sums are combined with warp shuffles and atomicAdd into y.
+
+**Use it when:**
+- Repeated FP64 SpMV with the same matrix (iterative solvers, power iterations) on an NVIDIA GPU, where the CPU-side conversion is paid once.
+- Irregular matrices with many very sparse 16x16 blocks, where cuSPARSE BSR wastes bandwidth on padded zeros (the paper's largest wins, 37.54x and 54.27x, are such cases).
+- Consumer or FP64-weak GPUs such as the RTX 4090, where it beat tensor-core DASP by 2.76x on average in the paper.
+- As a reference implementation for a block-based SpMV kernel you will adapt into your own code.
+
+**Skip it when:**
+- You need a library API: there is none, the code is a benchmark driver that reallocates and copies the matrix on every cb_spmv() call.
+- A100/H100-class GPUs with strong FP64 tensor cores, where the paper's average edge over DASP is only 1.21x.
+- FP32 or mixed precision, or AMD/Intel GPUs or CPUs: ValType is hard-coded to double and the code is CUDA only.
+- Matrices that change every call, since the COO-to-block conversion runs on the CPU and the paper reports it as comparable to TileSpMV and BSR conversion for matrices above 1 million nonzeros.
+- Matrices beyond 32-bit indexing: nnz, rows and columns are int.
+
+**Integration:** source-drop · CUDA Toolkit (nvcc, CUDA runtime; cuSPARSE only for the baseline harness), host C++ compiler with OpenMP · Tested with CUDA 12.4 and driver 550.144.03; minimum version not documented · NVIDIA GPUs only; Makefiles default to -arch=sm_89 (RTX 4090), change to sm_80 for A100
+
+**Vs siblings:** Pick CB-SpMV over DASP when the GPU has weak FP64 tensor cores (RTX-class) and over TileSpMV for the same 16x16 tiling with better cache locality; prefer merge-spmv, CSR5 or ISpMV when you need to stay in CSR without a conversion step, and DASP on A100-class hardware where the gap is small and DASP has more history.
+
+**Gotchas:**
+- Results are accumulated into y with FP64 atomicAdd, so y must be zeroed before each call and the summation order (and last bits of the result) is nondeterministic run to run.
+- The built-in correctness check uses loose tolerances for FP64 (absolute 1e-3, relative 1e-4).
+- The repo harness averages over ITER = 10 timed launches after one untimed launch, while the paper says each kernel ran 1000 times, so repo numbers will be noisier than the paper's.
+- The program accepts only an absolute path to the .mtx file and uses GPU 0.
+
+**Status:** Active (last commit 2026-09-02, a bug fix and preprocessing change that postdates the paper) and Apache-2.0, but small (six commits, no issues filed) and research-grade; CB-SpMM and CB-SpGEMM are announced but not released.
+
+[repo](https://github.com/xing-cong/CB-Sparse) · [benchmark](https://raw.githubusercontent.com/hpcrl/ICS2025-webpage/HEAD/program/Proceedings_ICS25/ics25-7.pdf)
+
 ##### CSR5 (Benchmark_SpMV_using_CSR5)  `C++`  `MIT`  `abandoned`  `Tier B`
 
 Reference code for CSR5, a tiled CSR variant for SpMV that beat MKL, cuSPARSE, CUSP and pOSKI on irregular matrices in 2015.
@@ -8427,6 +8559,8 @@ C++17 sparse linear algebra library with portable CUDA/HIP/SYCL/OpenMP kernels; 
 **Known shortcoming:** 1.8-2.4x over MA57 compares a GPU against a CPU; no flags given.
 
 **Known shortcoming:** Paper says sparse direct solvers lack supernodal acceleration, AMG only graph-matching coarsening, communication limits strong scaling; headline numbers from application integrations (MFEM, PeleLM, XGC, ExaSGD), not a kernel shootout; no CPU comparison against SuiteSparse.
+
+**Independent measurement:** first-party OpenFOAM integration (hpsim/OGL, OGL_DATA boxTurb16 v0.1-108): OpenFOAM native CG on one Xeon Gold 6230 process 36.04 s vs Ginkgo CUDA on a V100 21.93 s at resolution 64 (about 1.64x, derived from page data), BiCGStab 2.0x, GPU slower at resolution 32; Meccanica paper claims up to 8x / about 15x (snippet only)
 
 **How:** Each backend gets hand-written kernels for its hardware (CUDA, HIP, SYCL), so nothing goes through a generic translation layer. The speedups in the measured cases come from mixed-precision AMG (coarse levels in lower precision, fine level in full precision, parallel graph-matching coarsening), batched iterative solvers that solve many small independent sparse systems inside one GPU kernel, and GPU-resident sparse direct factorization and triangular solves. Half and bfloat16 value types, plus adaptive-precision block-Jacobi, cut memory traffic in these memory-bound kernels.
 
@@ -8843,9 +8977,13 @@ CUDA SpMV on 16x16 sparse tiles with per-tile format choice; paper beats Merge-S
 
 **Known shortcoming:** The enricher's source reading contradicts the verifier's CSR5 caveat: the v6 kernel computes the very-sparse COO tiles in a separate first pass (offsets from a one-time v5 kernel), so the timed run seems to cover all nonzeros while CSR5 runs only in warm-up (not run, source only). main.cu rounds rowA down to a multiple of 16, dropping up to 15 trailing rows while GFlops still counts the full nnzA; values and x are overwritten with i%10. The Makefile embeds sm_86 SASS only with no PTX, so no run on A100, Turing or K40 without edits; FP64 needs CC 6.0+; it needs CUDA Samples helper_cuda.h and links only cudart. Issues #1 (missing step.h) and #2 (A100 rma10 abort at a CSR5 cudaFree) open, unanswered. Abstract snippets: beats Merge-SpMV on 1813, CSR5 on 2040 and BSR on 1638 of 2757 matrices.
 
+**Known shortcoming:** Retier check 13 opened the independent CB-SpMV ICS '25 PDF (hpcrl/ICS2025-webpage via raw.githubusercontent.com): its averages put TileSpMV no faster than cuSPARSE 12.4's best-block BSR, about 0.96x on RTX 4090 and 0.76x on A100 (derived from page data). The IPDPS 2021 paper itself stays unopened.
+
 **Independent measurement:** verifier
 
 **Independent measurement:** independent (snippets): CB-SpMV (ICS '25, xing-cong/CB-Sparse, Apache-2.0) averages 3.95x on A100 and 3.06x on RTX 4090 over TileSpMV; TileSpMSpV (ICPP '22) 1.83x average over TileSpMV
+
+**Independent measurement:** independent: CB-SpMV ICS '25 PDF, TileSpMV vs cuSPARSE 12.4 BSR about 0.96x (RTX 4090) and 0.76x (A100), derived from page data
 
 **How:** The matrix is cut into 16x16 tiles whose intra-tile row and column indices are packed into 4-bit nibbles, so index traffic is a fraction of 32-bit CSR. Each tile gets its own storage format: dense if at least 75% full, COO if it has 12 or fewer nonzeros, dense-row or dense-column when whole rows or columns are full, ELL when the row-length coefficient of variation is at most 0.2, and CSR otherwise (the HYB path is commented out at HEAD). One warp processes a chunk of up to 4 tiles of a tile row, stages the x segment in shared memory and reduces with warp shuffles; long tile rows are split into chunks that merge into y with atomicAdd. The very sparse COO tiles are not handled in the tile loop. At HEAD a one-time setup kernel records their offsets, and the timed kernel processes them in a separate pass at its start. The paper and README instead describe extracting them into a separate matrix, and the repo still builds a CSR5 handle for that matrix.
 
@@ -24516,6 +24654,48 @@ FP16 x INT4 weight-only GEMM for Ampere/Ada GPUs; near-ideal 3.9x over FP16 torc
 
 [repo](https://github.com/IST-DASLab/marlin) · [benchmark](https://github.com/IST-DASLab/marlin#benchmarks)
 
+##### metal-flash-attention  `Swift`  `MIT`  `stale`  `Tier C`
+
+Swift/Metal port of FlashAttention for Apple GPUs; claims higher ALU utilization than FlashAttention-2/3 on NVIDIA, not wall-clock wins.
+
+**Beats:** Dao-AILab FlashAttention-2 (A100) and FlashAttention-3 (H100), compared by utilization percentage, not wall time — First-party README figures only: FP16 ALU utilization on Apple GPUs (M1 architecture forward 85-86%, fwd+bwd 62-64%; M3 architecture forward 82-94%, fwd+bwd 61-71% at D = 64/128/256; 4400 gigainstructions/s, 83%, on M1 Max at large sizes), computed with the author's own work model, set beside A100 FlashAttention-2 and H100 FlashAttention-3 utilization derived from the papers' peak GFLOPS. No same-machine timing against MPS, MLX or PyTorch exists, and the 'faster than Nvidia' sentence refers to utilization normalized for GPU size, not wall time.
+
+**Known shortcoming:** Tier C: the only comparison is ALU utilization against FlashAttention-2 (A100) and FlashAttention-3 (H100) figures taken from their papers, not a wall-clock run on the same machine; no MLX, MPS or PyTorch comparison exists. Last commit 2024-09-22, stale.
+
+**Known shortcoming:** Single-head only, no masks, Swift/Metal only. Issue #8 FP16 overflow (scale applied after Q*K^T) looks unchanged in the current pseudocode. Users report its GEMM slower than MPS (issues #11 and #29: about 1 s vs 0.06 s at 4096^2 on an M2). Stale, recent issues unanswered.
+
+**Independent measurement:** verifier
+
+**Independent measurement:** enricher
+
+**How:** It implements the FlashAttention tiling with online softmax, so the N x N attention matrix is never written to memory. Because Apple GPUs lack native FP32 atomics, the backward pass is split into separate dQ and dK/dV kernels (7 GEMMs instead of 5, (9D+15)N^2 work instead of (7D+10)N^2) that need no atomics or scratch space and parallelize fully across rows and columns. For large head dimensions it adds a third blocking dimension along D with deliberate, bandwidth-minimizing register spilling, and picks block sizes and register-cached operands from per-architecture parameter tables (M1/M2 vs M3/M4 'apple9' family, which also switches between async load and async cache paths).
+
+**Use it when:**
+- Native Swift/Metal apps on macOS 14+ or iOS 17+ that need attention on Apple silicon and can integrate Metal command encoding directly.
+- Training-style workloads that need the backward pass on Apple GPUs; the README reports 62-64% (M1 architecture) and 61-71% (M3 architecture) fwd+bwd ALU utilization at D = 64, 128 and 256.
+- Large or odd head dimensions (e.g. 256, or non-power-of-two values), where the D-blocking and register-spilling scheme is designed to keep utilization flat.
+- As a reference implementation to port or extend (masks, multi-head, block sparsity) for an Apple-GPU inference engine.
+
+**Skip it when:**
+- You need multi-head attention, causal or padding masks, or a PyTorch/Python API out of the box: none are in this repo; the third-party fork imperatormk/metal-flash-attention and its mps-flash-attention bindings add causal masking, macOS 15 fixes and PyTorch MPS integration (issue #32, unanswered).
+- You need a measured speedup against MPS, MLX or PyTorch SDPA on the same Mac: the README compares only utilization percentages against NVIDIA GPUs from the FlashAttention papers, so no wall-clock win is documented.
+- Standalone GEMM: users reported its GEMM slower than MPS on M3 (issue #11) and a 4096x4096 GEMM taking about 1 s versus about 0.06 s for MPSMatrixMultiplication on M2 (issue #29, user measurement, cause not established); both issues were closed without a maintainer answer.
+- Projects that need an actively maintained dependency: last author commit 2024-08-27, last commit 2024-09-22 (README PR), and recent issues get no replies.
+
+**Integration:** module · none beyond Apple's Metal framework (Swift package with no package dependencies) · Swift tools 5.10; build with -Xswiftc -Ounchecked; macOS 14, iOS 17, tvOS 17, visionOS 1 · Apple silicon GPUs only (Metal); parameter tables tuned for M1/M2 and M3/M4 families
+
+**Vs siblings:** Pick it over ThunderMittens when you need a backward pass or large head dimensions on Apple GPUs from Swift, since ThunderMittens' evidence is a forward attention kernel compared with MLX; on NVIDIA use FlashAttention-3 or SageAttention instead, as this project only runs on Metal.
+
+**Gotchas:**
+- Every kernel is JIT-compiled at runtime from generated Metal source, so first use of each problem configuration pays shader compilation latency; the older precompiled-metallib version (Xcode 14.2) was replaced by this design.
+- Default mixed precision keeps Q/K/V in FP16 and stores dO, D and the gradients dV/dK/dQ in BF16 (emulated on chips without native BF16); source comments report output errors around 5e-2 in typical mixed-precision runs and up to 4e-2 BF16 error when gradients are paged to memory.
+- Issue #8 reported NaNs on SSD-1B because the softmax scale is applied after Q*K^T and the product overflows FP16; the current pseudocode still applies scaleFactor after S = Q*K^T, so test with large-magnitude activations.
+- Performance needs -Ounchecked for the CPU-side Swift; the README says plain Release mode is impractical for development because it recompiles everything.
+
+**Status:** Stale since 2024-09 with unanswered issues and a third-party fork carrying fixes, but MIT-licensed and small enough to copy into an Xcode project as the README intends.
+
+[repo](https://github.com/philipturner/metal-flash-attention) · [benchmark](https://github.com/philipturner/metal-flash-attention)
+
 ##### nanoinfer (int8 GEMM vs cuBLAS)  `C++`  `MIT`  `active`  `Tier C`
 
 Educational from-scratch C++ CNN inference engine plus CUDA int8 GEMM; beats cuBLAS only in its slow NN layout.
@@ -24644,9 +24824,13 @@ JIT GPU kernel generator for e3nn-style Clebsch-Gordan tensor products and fused
 
 **Known shortcoming:** Issue #211: an AMD HIP warp-sync bug gave non-conservative forces on NequIP-OAM-L at l_max=3 (9.3-32.8 meV/A, +79.7 eV/ns NVE drift, OEQ 0.6.8), fixed in PR #217 on 2026-09-10 (v0.7.0). Paper abstract snippets give 4.5x or 4.8x forward over cuEquivariance depending on version; the paper is still unopened.
 
+**Known shortcoming:** The repo holds a harness (tests/benchmark.py, docs name an A100-SXM-80GB) but no committed numbers, and e3nn/cuEquivariance versions are unpinned; a newer paper snippet claims only 1.3x over cuEquivariance and 6.2x on MACE (older: 4.5x).
+
 **Independent measurement:** verifier
 
 **Independent measurement:** semi-independent: Nequix maintainer (discussion #5) measured oeq kernels 2.5x (1000 atoms) and 3.3x (1728 atoms) end-to-end on the Nequix PyTorch port, A100; he also contributed OEQ JAX lowerings
+
+**Independent measurement:** retier check 14
 
 **How:** It exploits the sparsity of the Clebsch-Gordan (Wigner 3j) coefficient tensor. At JIT time the generator enumerates the nonzeros and writes them as hex float literals into fully unrolled CUDA/HIP code from Jinja templates (ComputationSchedule.py, loop_unroll_tp.cuh), so no sparse indexing happens at run time. Each warp works out of its own shared-memory slice: the problem is split into segments whose irreps and weights fit per-warp shared memory, and 'uvw' paths use a warp-level, register-tiled matmul (wmm.cuh). The fused convolution never materializes per-edge messages; it reduces with atomics, or deterministically over receiver-sorted edges with a transpose permutation for the backward pass, with optional Kahan summation.
 
@@ -24675,7 +24859,7 @@ JIT GPU kernel generator for e3nn-style Clebsch-Gordan tensor products and fused
 
 **Status:** Actively maintained academic project (v0.7.0 on 2026-09-10, SYCL backend merged 2026-09-23), BSD-3-Clause (LBNL/UC Berkeley) and pip-installable; it ships frequent correctness fixes, so pin a recent version.
 
-[repo](https://github.com/PASSIONLab/OpenEquivariance) · [benchmark](https://github.com/PASSIONLab/OpenEquivariance)
+[repo](https://github.com/PASSIONLab/OpenEquivariance) · [benchmark](https://github.com/PASSIONLab/OpenEquivariance/blob/main/docs/tests_and_benchmarks.rst)
 
 ##### OpenVINO (CPU inference runtime)  `C++`  `Apache-2.0`  `active`  `Tier C`
 
@@ -24835,6 +25019,50 @@ Real-time-safe C++ inference for small Dense/GRU/LSTM/Conv nets; per-sample call
 
 [repo](https://github.com/jatinchowdhury18/RTNeural) · [benchmark](https://github.com/jatinchowdhury18/RTNeural-compare/blob/main/README.md)
 
+##### Sobek (streaming equivariant tensor-product convolutions)  `Python/CUDA (generated CUDA kernels, PyTorch extension)`  `Apache-2.0`  `active`  `Tier C`
+
+Generated-CUDA PyTorch backend for equivariant tensor-product graph convolutions; claims 1.2x-49.7x over OpenEquivariance with bounded memory.
+
+**Beats:** OpenEquivariance (primary), also cuEquivariance and e3nn — The authors' preprint (arXiv 2607.18074, read only through search snippets) reports Sobek faster in all 75 OpenEquivariance-capacity-matched comparisons (UVW 16-profile and UVU 9-profile grids, forward, backward and double backward), 1.2x to 49.7x, with up to 99% lower peak allocated memory, on an NVIDIA RTX 5090 in fp32 per a search snippet. The repo's harness (sobek/benchmarks/measure.py, runners.py) times medians of CUDA-event samples after warmup, and by default times OpenEquivariance including the phi @ radial_linear weight expansion and receiver sort (an oe_preexpanded variant excludes the expansion); no result files are checked in and the nvcc flags are -O3 plus PyTorch arch flags.
+
+**Known shortcoming:** Tier C: first-party arXiv 2607.18074 preprint (snippet only) with 1.2x-49.7x over OpenEquivariance across 75 comparisons; the repo has a benchmark CLI but no published results and the GPU is unknown. 12 stars.
+
+**Known shortcoming:** v0.1.0 with 5 commits; float32 only; not a drop-in replacement (different call signature and ir_mul layout); no FlashTP comparison. The harness times OpenEquivariance including its phi @ radial_linear expansion and receiver sort (the oe_preexpanded variant leaves the expansion out); paper hardware per snippet is an RTX 5090 in fp32; no result files are checked in.
+
+**Independent measurement:** verifier
+
+**Independent measurement:** enricher
+
+**How:** It fuses the last radial linear layer into the convolution and reassociates the computation so edge-local products are reduced straight into bounded receiver-side state, so the per-edge weight tensor, per-edge messages and their adjoints are never materialized. Per-problem CUDA kernels are code-generated from the irreps/instruction spec and JIT-compiled with nvcc -O3 via torch.utils.cpp_extension.load_inline, combined with cuBLAS GEMMs; graph traversal is receiver-owned (CSR by receiver, with a source-ordered pass for gradients), deterministic and atomic-free. A receiver_scratch_bytes budget (default 128 MiB) drives node-chunking and a knapsack-style choice of which receiver aggregates to retain for the backward pass.
+
+**Use it when:**
+- Training equivariant GNN potentials in PyTorch on NVIDIA GPUs where force training needs double backward and memory, not FLOPs, limits graph size.
+- Large or dense graphs (many edges per node, wide irreps) where materializing [E, weight_numel] edge weights blows past GPU memory with OpenEquivariance or e3nn.
+- Models whose last radial MLP layer can be handed to the convolution (phi plus projection weight), so the fusion boundary fits.
+- Fixed-topology workloads (MD steps on one structure) that benefit from TPConvGraph reuse and CUDA Graph replay.
+- Runs that need bitwise-deterministic results, since the kernels avoid atomics.
+
+**Skip it when:**
+- Anything other than float32: no fp64, fp16 or bf16 path (GEMMs can only switch between ieee and tf32).
+- Problems that mix uvw and uvu paths in one instruction set, or uvu with unequal input/output multiplicities or spherical-harmonic multiplicity above one; only weighted fully connected uvw and homogeneous channel-wise uvu are supported.
+- Non-NVIDIA hardware or environments without a CUDA toolkit for JIT compilation; every new problem shape pays a first-call nvcc compile.
+- Production use that needs maturity: version 0.1.0, 5 commits (2026-07-20 to 2026-07-24), no releases, no issue history, single-company authorship.
+- Pipelines already built around e3nn/OpenEquivariance's precomputed edge-weight interface and mul_ir layout; using mul_ir mode in Sobek adds transposes and emits an efficiency warning.
+
+**Integration:** module · Python >= 3.11, PyTorch >= 2.12 with CUDA, cgen >= 2025.1, a CUDA toolkit usable by PyTorch's JIT extension builder (13.3 recommended); benchmarks extra adds e3nn, OpenEquivariance, torch-geometric 2.8.0, numpy, matplotlib · Python 3.11, PyTorch 2.12, CUDA Toolkit (13.3 recommended; 12.9 builds about 25% slower per README) · NVIDIA CUDA GPUs only (kernels compiled for the local arch via PyTorch's arch flags)
+
+**Vs siblings:** Pick Sobek over OpenEquivariance, cuEquivariance or FlashTP when the per-edge weight tensor is what runs you out of memory or you need double backward at scale and can fuse the final radial layer; pick cuEquivariance or OpenEquivariance for drop-in e3nn compatibility, other dtypes, or a mature dependency, and FlashTP for its published SevenNet end-to-end results (Sobek reports no FlashTP comparison).
+
+**Gotchas:**
+- First call for each new tensor-product specification compiles CUDA; the extension is cached only when PyTorch, CUDA, GPU arch, problem and codegen settings all match.
+- The CUDA toolkit is chosen from CUDA_HOME; the README reports identical kernels about 25% slower when built with CUDA 12.9 instead of 13.3.
+- TPConvGraph tensors must not be modified in place, and a user-supplied sender_perm is only structurally checked, not validated as a permutation.
+- phi_dim not divisible by four disables aligned float4 radial-embedding loads in receiver-side kernels.
+
+**Status:** Apache-2.0, version 0.1.0 published in July 2026 by Cortex Discovery GmbH with 12 stars and no activity since 2026-07-24; usable as a pip-installable PyTorch module but young enough to pin and validate against e3nn before trusting it.
+
+[repo](https://github.com/Cortex-Discovery/sobek) · [benchmark](https://arxiv.org/abs/2607.18074)
+
 ##### SparseDNN  `C++/Python`  `Apache-2.0`  `abandoned`  `Tier C`
 
 Python code generator emitting per-weight-matrix x86 assembly SpMM kernels for pruned networks; beats LIBXSMM sparse and dense BLAS above ~70% sparsity.
@@ -24993,6 +25221,49 @@ Zhihu/ModelBest C++/CUDA LLM serving engine tuned for PCIe multi-GPU boxes; cut 
 [repo](https://github.com/zhihu/ZhiLight) · [benchmark](https://raw.githubusercontent.com/zhihu/ZhiLight/HEAD/docs/benchmarks/benchmarks.md)
 
 #### big-integer-arbitrary-precision
+
+##### avx-ecm  `C`  `BSD-2-Clause`  `abandoned`  `Tier C`
+
+AVX-512 command-line ECM factoring program running 8 or 16 curves per thread; about 1.5-2.5x GMP-ECM curve throughput below ~1000 bits.
+
+**Beats:** GMP-ECM (the ecm program, built on GMP) — The only checked claim is the README's first-party statement of about 1.5 to 2.5 times GMP-ECM's curves per second for inputs up to about 1000 bits on AVX-512 CPUs, with no table, CPU model, GMP-ECM version or flags. Forum numbers (about 2x with 1 thread on a Xeon Gold 5122; a search summary also quotes 900-bit t35 at 2.78 s versus GMP-ECM 7.0.4 at 10.04 s per curve) were seen only as search snippets from mersenneforum.org, which is blocked here, and are unverified.
+
+**Known shortcoming:** Tier C: the README's '1.5 to 2.5x GMP-ECM' is first-party with no CPU stated; the Xeon Gold 5122 numbers live on mersenneforum (blocked). Last commit 2021-03-09, abandoned.
+
+**Known shortcoming:** Issue #1 (SIGSEGV in vecsqrmod52 on a YAFU build) closed with no visible reply. avx_ecm.h defines the globals MAXBITS, NWORDS, NBLOCKS and lcg_state without extern, so a GCC 10+ (-fno-common) link likely fails (inferred from source, not tested); the Makefile hard-codes the author's GMP paths; prebuilt .exe files sit in the repo. A mersenneforum post (blocked, snippet only) gives 2.78 s/curve vs GMP-ECM 7.0.4 at 10.04 s/curve on a 900-bit t35 (about 3.6x). The maintained copy lives in bbuhrow/yafu (factor/avx-ecm, commits through 2026-08-31).
+
+**Independent measurement:** verifier
+
+**Independent measurement:** enricher
+
+**How:** Each AVX-512 lane carries a different curve over the same modulus, so Montgomery multiplication and squaring (vecmulmod52/vecsqrmod52) run 8 curves at once with 52-bit digits in 64-bit lanes (16 curves with DIGITBITS=32); ICELAKE/TIGERLAKE builds add -DIFMA for the 52-bit multiply-add instructions. Stage 1 uses Montgomery-form curves with Suyama sigma parametrization and Montgomery's PRAC Lucas chains; stage 2 is the standard continuation with pairing. Inputs of the form 2^n-1, 2^n+1 or 2^n-c switch to special Mersenne/pseudo-Mersenne reduction instead of REDC. Work is spread over threads with pthreads.
+
+**Use it when:**
+- Running many ECM curves (t30-t60 style work) on composites of roughly 200-1000 bits on Skylake-X, Cascade Lake, Ice Lake, Tiger Lake or later AVX-512 x86-64 CPUs.
+- Batch stage 1 on AVX-512 hardware followed by GMP-ECM stage 2 from the savefile, when you want GMP-ECM's faster stage 2 but higher stage 1 throughput.
+- Factoring Mersenne-like or 2^n+-c inputs, where the special reduction path applies.
+- Choosing DIGITBITS=32 for sizes just above a 208-bit step, since the 32-bit build steps in 128 bits and can have higher throughput there.
+
+**Skip it when:**
+- CPUs without AVX-512 (all AVX2-only Intel and pre-Zen 4 AMD parts, and all ARM): the program targets AVX-512 intrinsics only.
+- Inputs well above about 1000 bits: the README says GMP-ECM wins because this program has no sub-quadratic multiplication.
+- Single-curve or latency-bound work: the speedup comes from running 8 or 16 curves together per thread.
+- Production use that needs maintenance or bug fixes: the standalone repo's last commit is 2021-03-09; its one issue (a SIGSEGV in vecsqrmod52 reported from a YAFU build) was closed with no visible reply. The maintained copy lives inside YAFU (factor/avx-ecm).
+- Embedding as a library: there is no documented API; the Makefile archives the objects (including main.c) into libavxecm.a only to link the program.
+
+**Integration:** source-drop · GMP (-lgmp), pthreads, libm; Intel builds also link MKL (-mkl) · README: gcc 7.3.0 or icc (only these tested); MinGW64/MSYS2 supported via COMPILER=mingw · x86-64 with AVX-512 (SKYLAKEX=1, KNL=1 for Knights Landing, ICELAKE=1 or TIGERLAKE=1 for IFMA); Linux and Windows (MinGW)
+
+**Vs siblings:** Pick it over ECM-ELF when you need a complete ECM (stage 1 and stage 2, multi-threaded, savefiles for GMP-ECM) on generic inputs rather than a stage 1 IFMA backend benchmarked on one Mersenne number, and over primefactors when you have AVX-512 CPUs rather than an NVIDIA GPU. For general big-integer arithmetic (not factoring), the GMP-replacement siblings such as FLINT or mp++ are the relevant entries; this program only does ECM.
+
+**Gotchas:**
+- Run time is constant within 208-bit steps (128-bit with DIGITBITS=32): a 417-bit input costs the same as a 623-bit one, so the speedup over GMP-ECM depends strongly on where the input falls in a step.
+- The Makefile hard-codes the author's GMP paths (/sppdg/scratch/..., ../../gmp-6.2.1) and a gcc-7.3.0 binary name; edit INC/LIBS before building. The IFMA build options (ICELAKE=1, TIGERLAKE=1) exist in the Makefile but not in the README.
+- avx_ecm.h defines globals without extern (uint32_t MAXBITS; NWORDS; NBLOCKS; uint64_t *lcg_state) in a header shared by several .c files; GCC 10+ defaults to -fno-common, so a link with multiple-definition errors is likely unless -fcommon is added (inferred from the source, not tested).
+- The repo ships prebuilt Windows binaries (avx-ecm-32.exe, avx-ecm-52.exe, avx-ecm-52-icc-static) of unstated build provenance; prefer building from source.
+
+**Status:** Standalone repo abandoned since 2021-03-09 (34 commits, 8 stars) but BSD-2-Clause and small enough to vendor; active development continued inside bbuhrow/yafu under factor/avx-ecm (commits through 2026-08-31, with added Karatsuba and AVX-512 P-1 files), which is the better source today.
+
+[repo](https://github.com/bbuhrow/avx-ecm) · [benchmark](https://github.com/bbuhrow/avx-ecm)
 
 ##### bigfft  `Go`  `BSD-3-Clause`  `abandoned`  `Tier C`
 
@@ -26768,6 +27039,53 @@ LD_PRELOAD shim that reroutes FFTW3 1-D power-of-two complex float FFTs to the o
 
 [repo](https://github.com/gpu-fftw/gpu_fftw) · [benchmark](https://github.com/gpu-fftw/gpu_fftw)
 
+##### gpuNUFFT  `CUDA C++`  `MIT`  `abandoned`  `Tier C`
+
+CUDA gridding/NUFFT library for 2D/3D non-Cartesian MRI with MATLAB and Python front ends; GPU alternative to CPU NUFFTs.
+
+**Beats:** cuFINUFFT (3D, single-coil and 32-coil MRI data, as measured in cufinufft issue #126, Jan 2022); CPU NUFFT libraries only directionally via the MRI-NUFFT benchmark statement — The repo publishes no speed numbers, and the MRI-NUFFT JOSS paper only says cufinufft and gpuNUFFT performed best in its benchmark, which commits no results; a gpuNUFFT Python-binding author co-wrote that paper. One concrete measurement is in cufinufft issue #126 (Jan 2022, GPU and tolerances unstated, gpuNUFFT timings include host-device copies): forward 73.42 ms vs 279.36 ms and adjoint 62.73 vs 132.27 ms on single-coil 128x128x160, and 1582.74 vs 8952.54 ms and 1739.30 vs 4159.96 ms with 32 coils, while the cuFINUFFT paper reports the opposite direction for general-purpose benchmarks.
+
+**Known shortcoming:** No numbers; the MRI-NUFFT JOSS paper only says it ranks among the fastest. Upstream abandoned; the chaithyagr/gpuNUFFT fork is active and is what PyPI ships (0.10.8, 2026-07-08).
+
+**Known shortcoming:** Uses the legacy texture-reference API that CUDA 12 removed; gencode stops at sm_75; device-global __constant__ state; single GPU only (#72); open crash/OOM issues #84, #68 and CUDA 10/11 build issues #89, #91. Double precision exists via the GPU_DOUBLE_PREC CMake option (the record said single only). The chaithyagr fork drops texture references and adds sm_80 to sm_120. The cuFINUFFT paper (arXiv 2102.08463, snippet only) reports cuFINUFFT 78x faster for type 1 and 5x for type 2.
+
+**Known shortcoming:** Raised D to C (retier-14) on cufinufft issue #126 (closed, no replies): 3D single coil 3.8x forward / 2.1x adjoint and 32 coils 5.65x / 2.39x over cuFINUFFT, with GPU, eps and gpuNUFFT parameters unstated and host-device copies counted only on the gpuNUFFT side. The cuFINUFFT paper (arXiv 2102.08463, blocked) claims the opposite (78x type 1, 5x type 2; harness MelodyShih/cuFINUFFT-bench, CUDA 10.0, gcc 7.4.0).
+
+**Independent measurement:** verifier
+
+**Independent measurement:** semi-independent: flatironinstitute/cufinufft issue #126 (Jan 2022, GPU and tolerance unstated) has gpuNUFFT 3D 128x128x160 forward 73.42 vs cuFINUFFT 279.36 ms and adjoint 62.73 vs 132.27 ms (32 coils: 1582.74 vs 8952.54 ms, 1739.30 vs 4159.96 ms), with the gpuNUFFT side including host-device copies and the reporter saying cuFINUFFT is faster in 2D
+
+**Independent measurement:** semi-independent: cufinufft issue #126 (user paquiteau), 2022
+
+**How:** Kaiser-Bessel gridding with Beatty et al.'s minimal-oversampling kernel, read from a precomputed radial lookup table held in constant memory or in GPU textures with linear interpolation. Samples are pre-sorted into fixed-size grid sectors (e.g. 8^3) so each thread block caches its sector's data in shared memory and scatters with atomicAdd. A 'balanced' operator precomputes a sector processing order to even out load on clustered trajectories such as radial or spiral centers, and cuFFT does the oversampled FFT.
+
+**Use it when:**
+- Iterative 3D non-Cartesian MRI reconstruction (CG-SENSE, compressed sensing) with a fixed trajectory, where the one-time sector precomputation is amortized over many forward/adjoint calls.
+- Multi-coil 3D data with sensitivity maps and density compensation built into the operator; in a 2022 cufinufft issue (#126) gpuNUFFT ran 2.1x to 5.65x faster than cufinufft on 3D 128x128x160 data with 1 and 32 coils (tolerances not matched, GPU not stated).
+- MATLAB-based MRI pipelines that want a drop-in GPU NUFFT operator object.
+- Python MRI work through MRI-NUFFT or pysap-mri, installed from PyPI (the gpuNUFFT package built from the chaithyagr fork).
+
+**Skip it when:**
+- General-purpose or 2D NUFFTs with a target accuracy: cuFINUFFT takes an explicit tolerance and, per its paper (seen only as a search snippet), averages 78x faster than gpuNUFFT on type 1 and 5x faster on type 2; the issue #126 reporter also found cufinufft faster in 2D.
+- Upstream on current CUDA: the code uses the legacy texture-reference API (texture<> globals, cudaBindTextureToArray), which NVIDIA removed in CUDA 12 (removal known from CUDA release notes, not opened here). Its gencode list stops at sm_75, and CUDA 10/11 build issues (#89, #91) are open. Use the chaithyagr fork, which drops that API and adds sm_80 to sm_120.
+- Multi-GPU or concurrent use: one GPU per process (issue #72, open), and the operator state lives in device-global __constant__ symbols (GI, KERNEL[10000]) and global textures.
+- Very large 3D problems: indices are 32-bit unsigned int; an overflow on large trajectories (#81) was fixed, while a crash on large 3D matrices (#84) and an out-of-memory report (#68) are still open.
+- Codebases without CUDA: there is no CPU fallback; the CPU-side code covers only precomputation.
+
+**Integration:** shared lib · CUDA Toolkit with cuFFT; MATLAB for the default mex build (GEN_MEX_FILES=ON); optional pybind11 Python bindings (GEN_PYTHON_FILES) and Google Test · C++11, CMake 3.12 (FindCUDA), CUDA 8 to 11 for upstream (README says it was tested with CUDA 5.0 and gcc 4.6); CUDA 12 needs the chaithyagr fork · NVIDIA GPUs only; upstream gencode sm_50 to sm_75 plus compute_52/compute_61 PTX for JIT on newer cards; Linux (gcc) and Windows (Visual Studio 2013 Win64) documented
+
+**Vs siblings:** Pick gpuNUFFT (preferably the chaithyagr fork) for 3D multi-coil MRI operators with coil sensitivities and density compensation built in, where the one reported head-to-head (cufinufft issue #126) favours it. Pick cuFINUFFT (FINUFFT) for general or 2D NUFFTs with a guaranteed tolerance. TRON's README claims 30x over gpuNUFFT, but only for its own trajectory-optimized radial/spiral use.
+
+**Gotchas:**
+- Accuracy is set indirectly by kernel width and oversampling factor, not by a tolerance, so speed comparisons against FINUFFT or cuFINUFFT must match error levels; issue #101 ('How to determine the scaling?') is open.
+- Single precision by default; double precision requires rebuilding with GPU_DOUBLE_PREC=ON.
+- Operator construction sorts samples into sectors (CPU or GPU) and must be redone when the trajectory changes; loadPrecomputedGpuNUFFTOperator reuses saved mappings.
+- Host-array calls copy data to and from the device each time and return arrays that must be freed manually; for iterative loops use the GpuArray overloads that keep data on the GPU.
+
+**Status:** Upstream has been abandoned since 2022-02-06, with many open build and crash issues; it is MIT-licensed (with a request to cite Knoll et al., ISMRM 2014), and the maintained chaithyagr fork (PyPI gpuNUFFT, recommended by MRI-NUFFT) is the version to adopt.
+
+[repo](https://github.com/andyschwarzl/gpuNUFFT) · [benchmark](https://github.com/flatironinstitute/cufinufft/issues/126)
+
 ##### JTransforms  `Java`  `BSD-2-Clause`  `active`  `Tier C`
 
 Pure-Java multithreaded FFT/DCT/DST/DHT library; beat a per-call-planned FFTW (via JNI) on smooth 2-D/3-D sizes, lost on primes.
@@ -27131,49 +27449,6 @@ Pure-Rust SIMD FFT for any length, including primes; beats a scalar, per-call-pl
 **Status:** Active (last commit 2026-09-29, v6.4.1, about 30M crates.io downloads), MIT OR Apache-2.0 with a no-breaking-changes policy, but usable from C++ only through your own FFI wrapper.
 
 [repo](https://github.com/ejmahler/RustFFT) · [benchmark](https://github.com/astral4/fft-benchmark)
-
-##### gpuNUFFT  `CUDA C++`  `MIT`  `abandoned`  `Tier D`
-
-CUDA gridding/NUFFT library for 2D/3D non-Cartesian MRI with MATLAB and Python front ends; GPU alternative to CPU NUFFTs.
-
-**Beats:** CPU NUFFT libraries (FINUFFT, pyNFFT, BART, SigPy, TorchKbNufft) as compared in the MRI-NUFFT benchmark; directional statement only, no numbers published — The repo publishes no speed numbers, and the MRI-NUFFT JOSS paper only says cufinufft and gpuNUFFT performed best in its benchmark, which commits no results; a gpuNUFFT Python-binding author co-wrote that paper. One concrete measurement is in cufinufft issue #126 (Jan 2022, GPU and tolerances unstated, gpuNUFFT timings include host-device copies): forward 73.42 ms vs 279.36 ms and adjoint 62.73 vs 132.27 ms on single-coil 128x128x160, and 1582.74 vs 8952.54 ms and 1739.30 vs 4159.96 ms with 32 coils, while the cuFINUFFT paper reports the opposite direction for general-purpose benchmarks.
-
-**Known shortcoming:** No numbers; the MRI-NUFFT JOSS paper only says it ranks among the fastest. Upstream abandoned; the chaithyagr/gpuNUFFT fork is active and is what PyPI ships (0.10.8, 2026-07-08).
-
-**Known shortcoming:** Uses the legacy texture-reference API that CUDA 12 removed; gencode stops at sm_75; device-global __constant__ state; single GPU only (#72); open crash/OOM issues #84, #68 and CUDA 10/11 build issues #89, #91. Double precision exists via the GPU_DOUBLE_PREC CMake option (the record said single only). The chaithyagr fork drops texture references and adds sm_80 to sm_120. The cuFINUFFT paper (arXiv 2102.08463, snippet only) reports cuFINUFFT 78x faster for type 1 and 5x for type 2.
-
-**Independent measurement:** verifier
-
-**Independent measurement:** semi-independent: flatironinstitute/cufinufft issue #126 (Jan 2022, GPU and tolerance unstated) has gpuNUFFT 3D 128x128x160 forward 73.42 vs cuFINUFFT 279.36 ms and adjoint 62.73 vs 132.27 ms (32 coils: 1582.74 vs 8952.54 ms, 1739.30 vs 4159.96 ms), with the gpuNUFFT side including host-device copies and the reporter saying cuFINUFFT is faster in 2D
-
-**How:** Kaiser-Bessel gridding with Beatty et al.'s minimal-oversampling kernel, read from a precomputed radial lookup table held in constant memory or in GPU textures with linear interpolation. Samples are pre-sorted into fixed-size grid sectors (e.g. 8^3) so each thread block caches its sector's data in shared memory and scatters with atomicAdd. A 'balanced' operator precomputes a sector processing order to even out load on clustered trajectories such as radial or spiral centers, and cuFFT does the oversampled FFT.
-
-**Use it when:**
-- Iterative 3D non-Cartesian MRI reconstruction (CG-SENSE, compressed sensing) with a fixed trajectory, where the one-time sector precomputation is amortized over many forward/adjoint calls.
-- Multi-coil 3D data with sensitivity maps and density compensation built into the operator; in a 2022 cufinufft issue (#126) gpuNUFFT ran 2.1x to 5.65x faster than cufinufft on 3D 128x128x160 data with 1 and 32 coils (tolerances not matched, GPU not stated).
-- MATLAB-based MRI pipelines that want a drop-in GPU NUFFT operator object.
-- Python MRI work through MRI-NUFFT or pysap-mri, installed from PyPI (the gpuNUFFT package built from the chaithyagr fork).
-
-**Skip it when:**
-- General-purpose or 2D NUFFTs with a target accuracy: cuFINUFFT takes an explicit tolerance and, per its paper (seen only as a search snippet), averages 78x faster than gpuNUFFT on type 1 and 5x faster on type 2; the issue #126 reporter also found cufinufft faster in 2D.
-- Upstream on current CUDA: the code uses the legacy texture-reference API (texture<> globals, cudaBindTextureToArray), which NVIDIA removed in CUDA 12 (removal known from CUDA release notes, not opened here). Its gencode list stops at sm_75, and CUDA 10/11 build issues (#89, #91) are open. Use the chaithyagr fork, which drops that API and adds sm_80 to sm_120.
-- Multi-GPU or concurrent use: one GPU per process (issue #72, open), and the operator state lives in device-global __constant__ symbols (GI, KERNEL[10000]) and global textures.
-- Very large 3D problems: indices are 32-bit unsigned int; an overflow on large trajectories (#81) was fixed, while a crash on large 3D matrices (#84) and an out-of-memory report (#68) are still open.
-- Codebases without CUDA: there is no CPU fallback; the CPU-side code covers only precomputation.
-
-**Integration:** shared lib · CUDA Toolkit with cuFFT; MATLAB for the default mex build (GEN_MEX_FILES=ON); optional pybind11 Python bindings (GEN_PYTHON_FILES) and Google Test · C++11, CMake 3.12 (FindCUDA), CUDA 8 to 11 for upstream (README says it was tested with CUDA 5.0 and gcc 4.6); CUDA 12 needs the chaithyagr fork · NVIDIA GPUs only; upstream gencode sm_50 to sm_75 plus compute_52/compute_61 PTX for JIT on newer cards; Linux (gcc) and Windows (Visual Studio 2013 Win64) documented
-
-**Vs siblings:** Pick gpuNUFFT (preferably the chaithyagr fork) for 3D multi-coil MRI operators with coil sensitivities and density compensation built in, where the one reported head-to-head (cufinufft issue #126) favours it. Pick cuFINUFFT (FINUFFT) for general or 2D NUFFTs with a guaranteed tolerance. TRON's README claims 30x over gpuNUFFT, but only for its own trajectory-optimized radial/spiral use.
-
-**Gotchas:**
-- Accuracy is set indirectly by kernel width and oversampling factor, not by a tolerance, so speed comparisons against FINUFFT or cuFINUFFT must match error levels; issue #101 ('How to determine the scaling?') is open.
-- Single precision by default; double precision requires rebuilding with GPU_DOUBLE_PREC=ON.
-- Operator construction sorts samples into sectors (CPU or GPU) and must be redone when the trajectory changes; loadPrecomputedGpuNUFFTOperator reuses saved mappings.
-- Host-array calls copy data to and from the device each time and return arrays that must be freed manually; for iterative loops use the GpuArray overloads that keep data on the GPU.
-
-**Status:** Upstream has been abandoned since 2022-02-06, with many open build and crash issues; it is MIT-licensed (with a request to cite Knoll et al., ISMRM 2014), and the maintained chaithyagr fork (PyPI gpuNUFFT, recommended by MRI-NUFFT) is the version to adopt.
-
-[repo](https://github.com/andyschwarzl/gpuNUFFT) · [benchmark](https://github.com/mind-inria/mri-nufft/blob/master/docs/paper-joss/paper.md)
 
 ##### OTFFT (OK Ojisan's Template FFT)  `C++`  `MIT`  `abandoned`  `Tier D`
 
@@ -28818,6 +29093,49 @@ Julia package for incremental 2D Delaunay/Voronoi tessellation; its author's 201
 
 [repo](https://github.com/JuliaGeometry/VoronoiDelaunay.jl) · [benchmark](https://gist.github.com/skariel/3d2018f9341a058e00fc)
 
+##### chusitoo/flatbush (C++ port of Flatbush)  `C++`  `MIT`  `active`  `Tier D`
+
+Header-only C++11 port of the Flatbush packed Hilbert R-tree for static 2D boxes; no measured head-to-head win over any baseline.
+
+**Beats:** Flatbush JavaScript original (mourner/flatbush, Node v24) — The repo makes no speedup claim; its README table reports only its own Google Benchmark timings on an i7-1185G7 (clang 18.1.3 / gcc 13.3.0 / MSVC 19.29, CMake Release, SIMD level unstated): index 1M rectangles 55-72 ms, 1000 searches at 1% area 17-18 ms, 1 search of 1M neighbours 63-88 ms. Comparing with the JS original's README (M1 Pro, Node v24) gives only cross-machine directional ratios (about 2x on build, about 3.7x on 1% searches, none on the 1M-neighbour kNN).
+
+**Known shortcoming:** Downgraded C to D: bench.cpp runs no baseline, and the only comparison is two README tables on different CPUs (i7-1185G7 vs M1 Pro); the matching 1M-neighbour kNN row has C++ at 86/88 ms (gcc/clang) against JS 84 ms, so no win is shown. Kept as a separate C++ entry cross-referenced to mourner/flatbush (JS, not callable from C++).
+
+**Known shortcoming:** Issue #9: the SIMD updateBounds stored only min values for integer coordinate types, so queries missed items (closed 2026-06-27; the README bench uses double, so its numbers are unaffected). Issues #2 (multiple definition) and #14 (32-bit compile) also closed.
+
+**Independent measurement:** verifier
+
+**Independent measurement:** enricher
+
+**How:** Items are sorted by the Hilbert-curve value of their box centres (quantized to a 16-bit grid) and packed bottom-up into a fixed-fanout tree (default node size 16) stored in one flat array, so there are no per-node allocations or pointers. The build uses a custom partial quicksort that only orders items down to node granularity, plus a bucket pass, and computes Hilbert indices with SIMD (SSE2 up to AVX-512, chosen at compile time). Queries test node boxes with SIMD comparisons, prefetch child nodes, and kNN uses a priority queue over node distances.
+
+**Use it when:**
+- Read-mostly 2D datasets (map features, tiles, bounding boxes of shapes) that are built once and queried many times, from thousands to millions of items.
+- Sharing or memory-mapping a prebuilt index, including indexes produced by the JavaScript Flatbush, without a copy (fromView on an aligned buffer).
+- Projects that want a single header with no dependencies and C++11 support, installable from Conan Center or vcpkg.
+- Range queries returning few hits (the README's 1000 searches at 0.01% area take 2 ms total on an i7-1185G7) and small-k nearest-neighbour lookups.
+
+**Skip it when:**
+- Data that changes after building: there is no insert or delete; any change means a full rebuild.
+- 3D or higher-dimensional data, or non-box geometry predicates (polygons, segments): it indexes 2D axis-aligned boxes only.
+- Choosing on proven speed over Boost.Geometry rtree, nanoflann or GEOS STRtree: the repo benchmarks only itself and publishes no comparison with any C++ or JS baseline.
+- Very large single kNN result sets: the README's 1 search of 1,000,000 neighbours takes 86-88 ms with gcc/clang, no better than the JS original's 84 ms on a different machine.
+- Inputs above uint32 item counts: numItems is stored as uint32_t and the builder throws std::length_error past the format limits.
+
+**Integration:** header-only · none (Google Benchmark, GoogleTest and fuzztest are fetched by CMake only for benchmarks and tests) · C++11 (uses std::span automatically in C++20); README table built with clang 18.1.3, gcc 13.3.0 and MSVC 19.29 · any C++11 target; SIMD paths for x86/x86-64 (SSE2 default on x64, SSE3/SSSE3/SSE4/AVX/AVX2/AVX-512 by compiler flags) with a scalar fallback elsewhere; a 32-bit compile failure was fixed in issue #14 (closed 2026-09-25)
+
+**Vs siblings:** Pick it over the JavaScript Flatbush when the consumer is C++ (the formats are interchangeable), and over nanoflann or tidwall/rtree.c when you need a static box index (not just points) with zero-copy loading of a prebuilt buffer. If you need updates, 3D or measured speed against Boost.Geometry, GeoToolbox KdBoxTree, PH-tree or nanoflann have published comparisons and this does not.
+
+**Gotchas:**
+- Errors are reported with exceptions (std::invalid_argument, std::length_error): wrong template type for a buffer, misaligned fromView buffer, empty builder, oversized index. Builds with -fno-exceptions need care.
+- The SIMD level is fixed at compile time from compiler flags (#pragma message prints which one); the default on x64 is only SSE2, so pass -mavx2 or /arch:AVX2 for the faster paths, and keep the same flags and FLATBUSH_SPAN setting across translation units.
+- Integer coordinate types had a SIMD bug: updateBounds stored only the minimum values (issue #9, closed 2026-06-27), corrupting node boxes so queries missed items; use a release after that fix if you index int types. Earlier issues: a multiple-definition link error (#2) and search/neighbors not compiling on 32-bit targets (#14), both closed.
+- A custom distance callback must return a lower bound of the point-to-box distance, and it bypasses the SIMD path; fromView requires the buffer to outlive the index and stay unchanged.
+
+**Status:** Actively maintained (last commit 2026-10-03, 161 commits, CI with unit, fuzz, CodeQL and benchmark jobs), MIT-licensed single header, packaged on Conan Center and vcpkg; evidence tier D because nothing is measured against a baseline.
+
+[repo](https://github.com/chusitoo/flatbush) · [benchmark](https://github.com/chusitoo/flatbush/blob/HEAD/bench.cpp)
+
 ##### Clipper (Clipper1 / polyclipping 6.4.2)  `C++`  `BSL-1.0`  `abandoned`  `Tier D`
 
 Clipper1: two-file C++ Vatti polygon clipper and offsetter on integer coordinates; reported faster than Boost.Geometry on simple Booleans.
@@ -29192,6 +29510,49 @@ Tiny 128-bit-state add-rotate PRNG; author's gcc benchmark: 0.401 ns/call vs xor
 **Status:** Stale (last commit 2025-05-10) and superseded by its author, but MIT-licensed and five lines long, so copying is trivial; prefer the successor if you need a period guarantee.
 
 [repo](https://github.com/the-othernet/DualMix128) · [benchmark](https://raw.githubusercontent.com/the-othernet/DualMix128/HEAD/benchmark.out)
+
+##### fast_prng (cd-mcfarland modified ziggurat)  `C`  `MIT`  `stale`  `Tier C`
+
+Header-only C modified-ziggurat normal and exponential samplers; reference code for the McFarland 2016 algorithm, faster than classic ziggurats.
+
+**Beats:** Doornik ziggurat normal and Marsaglia-Tsang ziggurat exponential (other ziggurat generators profiled in the repo); not std::normal_distribution or Boost — The only number in the repo is a README sample run: 7.987 ns per standard normal over 1e9 draws with gcc -O2, clock()-timed, CPU not stated and no baseline row; profile_all.py names gcc-4.8 -O2 on an i7-3770K, but its timings.csv is missing. Outside the repo, the paper's snippet reports median runtimes cut to 53% (normal) and 58% (exponential) of other ziggurats on pre-fix code, and an independent C port in pedrobtz/zurand PR #45 (merged 2026-09-27) measured its McFarland method at 1.08-1.25x the speed of its NumPy-table ziggurat on EPYC 7763/9V74, about 1.04-1.10x on Neoverse N2 and 1.02-1.08x on Apple M1.
+
+**Known shortcoming:** Tier C: README 7.987 ns per normal with no baseline timing in the repo (timings.csv 404); the paper's 58%/53% runtime vs other ziggurats is snippet-only, and the paper timed code later fixed for two bugs (Alex Herbert). Notable through its Commons RNG port and JDK 17's nextGaussian. Last commit 2025-05-21, stale.
+
+**Known shortcoming:** PyPI fast_prng 1.1.2 (2015-06-10) predates the 2021 Herbert fixes (PR #1 convex-overhang bug that flattened the bell curve within +/-0.25, PR #2 off-by-one, a follow-up for about 4% of first-overhang values), so pip installs the biased sampler and the paper timings ran on pre-fix code. Global state, not thread-safe, x86 SSE2 only, seed only from pid/time/ppid; headers define non-static symbols (duplicate-symbol link errors across files); profile.c's omp pragma races on global state under -fopenmp.
+
+**Independent measurement:** verifier
+
+**Independent measurement:** algorithm only, not this code: pedrobtz/zurand PR #45 (merged 2026-09-27) ports the McFarland method and measures 1.08-1.25x over its NumPy-table ziggurat on EPYC 7763/9V74, 1.04-1.10x on Neoverse N2, 1.02-1.08x on M1
+
+**How:** McFarland's modified ziggurat (J. Stat. Comput. Simul. 86(7), 2016): 252/253 layers are built entirely under the density, so about 98.8% of draws exit after one 64-bit uniform, one table lookup and one multiply, with no rejection test. The low 8 bits of that same uniform, which the float multiply discards anyway, pick the layer. Draws that miss go to Walker alias sampling over the overhang/tail areas, and precomputed triangle bounds (min_iE/max_iE) accept or reject most overhang points without calling exp(). The uniform source is a pointer into a pre-filled SFMT block buffer, so the fast path is a pointer increment.
+
+**Use it when:**
+- Monte Carlo or simulation code in C that needs very large numbers of N(0,1) or Exp(1) doubles from a single thread and can live with a process-global generator.
+- As a reference to port: the algorithm already powers Apache Commons RNG ZigguratSampler, and the pedrobtz/zurand R package re-derived its tables, so the C here is the canonical starting point for a new port.
+- When a classic ziggurat (Marsaglia-Tsang, Doornik) is your hot spot and you want the same exactness with a shorter fast path.
+- x86-64 Linux/macOS builds with SSE2 where you control the compile flags.
+
+**Skip it when:**
+- Multithreaded code: the generator state (sfmt array, iRandS buffer, global Rand pointer) is process-global with no locking or per-thread instances.
+- Reproducible experiments: mt_init() seeds only from getpid(), time(NULL) and getppid() and ignores repeat calls, and there is no public seed function.
+- Non-x86 targets or MSVC: MT19937.h uses __m128i/_mm_set_epi64 (MMX __m64) unconditionally and stores 64-bit values in 'signed long', which is 32-bit on Windows; unistd.h is required.
+- Code that needs other distributions, float output, or a generic C++ engine/distribution interface; Zest or EigenRand fit better there.
+- The PyPI package: fast_prng 1.1.2 dates from 2015-06-10, before the 2021 correctness fixes, so pip installs the biased sampler.
+
+**Integration:** header-only · none beyond libm and POSIX unistd.h; bundled SFMT-derived MT19937.h (BSD) is required · C99 compiler with SSE2 intrinsics (README builds with gcc -O2 ... -lm; profile_all.py targets gcc-4.8) · x86-64 with SSE2, POSIX (Linux, macOS); Windows path partially stubbed but not workable as written
+
+**Vs siblings:** Pick it over the miloyip/normaldist-benchmark and cauldron ziggurats when you want the McFarland layout (fewer rejection tests, exp() avoided on most overhang draws) as a C reference to port; pick Zest or EigenRand instead when you need a C++ distribution interface, more distributions, thread-local engines or SIMD batch output, and Randompack when you also need fast uniforms across languages.
+
+**Gotchas:**
+- Two correctness bugs found by Alex Herbert were fixed only in Aug-Sep 2021 (PR #1: convex-overhang resampling reused X and flattened the bell curve within +/-0.25; PR #2: off-by-one inflection index in both samplers; a follow-up commit fixed '~4% of sampled values in the 1st overhang'). The README says neither showed up in the first six moments, so the 2016 paper's timings ran on pre-fix code.
+- The headers define non-static symbols (normal_setup, exponential_setup, global 'rand64_t *Rand'), so including them in more than one translation unit causes duplicate-symbol link errors; keep them in one .c file and wrap them.
+- Rand is a raw cursor into the uniform buffer: if you mix in the helper uniforms (rand_long, wide_uniform) you must follow the README rule to call MT_FLUSH() at least every two increments, or you read past the buffer.
+- benchmarks/profile.c has '#pragma omp parallel for' around the timing loop; compiled with -fopenmp it races on the global state, so time only single-threaded builds.
+
+**Status:** Stale: the last code change was the Sept 2021 bug fixes and the 2025-05-21 commit only added an MIT LICENSE; the repo has 2 issues (both closed) and is small enough to vendor, but the 2015 PyPI release predates the fixes.
+
+[repo](https://github.com/cd-mcfarland/fast_prng) · [benchmark](https://github.com/cd-mcfarland/fast_prng)
 
 ##### fastrand (PCG32 and xorshift128+ with nearly-divisionless bounded integers for Python)  `C (CPython extension)`  `Apache-2.0`  `active`  `Tier C`
 
@@ -30402,6 +30763,8 @@ BSD-licensed multicore/GPU sparse symmetric indefinite LDL^T solver (SSIDS); pap
 
 **Known shortcoming:** The solve phase is serial and the docs say the positive-definite path may trail a dedicated Cholesky. The default meson build adds no -march flags, so the AVX kernels are probably not compiled in (inferred from source, undocumented); a mismatched gpu_arch can silently give wrong results (meson.build comment). Open issues #218 (segfault on a large Ipopt problem, no reply), #223 (GPU tests fail on CUDA 12.5), #259 (memory leaks), #258 (aarch64-darwin test failure); Ipopt PR #677 (2023) ranked MUMPS above SPRAL as the default.
 
+**Known shortcoming:** Tasseff et al. (arXiv 1909.08104, snippet only) rank SPRAL's GPU solver worst among Ipopt linear solvers, with MA57 and MUMPS best.
+
 **Independent measurement:** verifier
 
 **Independent measurement:** enricher
@@ -30435,6 +30798,48 @@ BSD-licensed multicore/GPU sparse symmetric indefinite LDL^T solver (SSIDS); pap
 **Status:** Active (version 2025.09.18 in meson.build, last commit 2026-08-14, 142 stars, 19 open issues including an unanswered large-problem segfault), BSD-3-Clause and maintained by STFC's numerical analysis group; a mixed Fortran/C++/CUDA build with external METIS and BLAS, so not something to vendor casually.
 
 [repo](https://github.com/ralna/spral)
+
+##### SyLVER (NLAFET)  `C++`  `BSD-3-Clause`  `abandoned`  `Tier D`
+
+Research StarPU task-based sparse Cholesky/LDL^T solver built on SPRAL SSIDS kernels; no published speedup in the repo.
+
+**Beats:** SPRAL SSIDS / HSL MA87 / PARDISO (no comparison found in the repo) — The repo has no measured result: the README and doc pages only say the DAG algorithms 'enable an efficient exploitation of multicore CPU architectures and GPU-accelerated systems'. The related NLAFET papers (SpLLT vs HSL MA87 on 28 cores, reported only as 'comparable performance'; SSIDS v2 APTP vs MA86/MA97/PARDISO, 'performs favourably') were seen as search snippets only, because nlafet.eu, researchgate and epubs.stfc.ac.uk are blocked here, and they measure sibling codes, not SyLVER.
+
+**Known shortcoming:** Tier D: no numbers anywhere (README, docs, drivers; nlafet.eu blocked); StarPU-based successor of SPRAL SSIDS, 13 stars, abandoned 2020-05-11.
+
+**Known shortcoming:** Open issue #2 (2020, unanswered): L and D cannot be extracted. Coupled to SPRAL internal headers through a submodule pinned at f71ab9e (branch gpufix); the splu path is undocumented. NLAFET working notes and RAL-TR-2016-017 (nlafet.eu, epubs.stfc.ac.uk blocked) unread.
+
+**Independent measurement:** verifier
+
+**Independent measurement:** enricher
+
+**How:** The multifrontal factorization is written as a sequential task flow: fronts are split into blocks (block size nb), and each block operation is submitted as a task to StarPU, which builds the DAG and schedules it across CPU cores and, optionally, NVIDIA GPUs (lws or heteroprio schedulers). Indefinite factorization uses A Posteriori Threshold Pivoting (APTP), which factors blocks optimistically and checks stability afterwards, so pivoting does not serialise the column sweep; failed pivots are delayed or redone with TPP. This is the method of Duff-Hogg-Lopez (NLAFET Working Note 21 / SSIDS v2), which per search snippets performs favourably against HSL MA86, HSL MA97 and PARDISO on multicore, but those numbers are for SSIDS, not for this repo.
+
+**Use it when:**
+- Research on runtime-system (StarPU) scheduling of sparse direct solvers, as a worked example of an STF multifrontal Cholesky/LDL^T on CPU+GPU nodes.
+- Studying or reproducing NLAFET-era APTP and heterogeneous-scheduling results where you need the StarPU variant of SSIDS rather than the OpenMP one.
+- Large symmetric indefinite systems on one multicore node with optional NVIDIA GPUs, when you already run StarPU and SPRAL and can tolerate prototype code.
+
+**Skip it when:**
+- Production solves: the last commit was 2020-05-11, there are no releases, CI was Travis, and no benchmarks or regression results are published; use SPRAL SSIDS, MUMPS, PARDISO or CHOLMOD instead.
+- When you need the factors: open issue #2 (March 2020, unanswered) reports that L and D cannot be obtained from spldlt_factorize().
+- Unsymmetric systems: the splu path is commented out of the documentation and has no driver beyond splu_test.F90.
+- Simple builds: it needs StarPU >= 1.3, a SPRAL submodule pinned to commit f71ab9e (branch 'gpufix'), MeTiS, hwloc, a sequential BLAS/LAPACK, and Fortran, C and C++ compilers, plus CUDA for GPU runs.
+- Distributed-memory (MPI) runs: nothing in the README or CMake options offers them.
+
+**Integration:** static lib · StarPU >= 1.3 (or sequential STF runtime), SPRAL (git submodule, built automatically), MeTiS, hwloc, sequential BLAS/LAPACK (MKL/ESSL/OpenBLAS); optional CUDA, CUTLASS, OpenMP · C++11 (CMAKE_CXX_STANDARD 11), Fortran 2003 compiler, CMake; CUDA toolkit for GPU builds · Linux x86-64 and IBM POWER (ESSL recommended there) are implied by the README; NVIDIA GPUs optional; other platforms not documented
+
+**Vs siblings:** Choose SPRAL SSIDS, which carries the same APTP kernels in a maintained OpenMP/CUDA library with published comparisons, for real solves; pick SyLVER only to study or extend the StarPU task-based variant. For SPD-only problems with published speedups over CHOLMOD, BaSpaCho or Sympiler are better documented.
+
+**Gotchas:**
+- It must be linked against a sequential BLAS/LAPACK (README); a threaded BLAS oversubscribes cores under StarPU.
+- It includes SPRAL's internal C++ headers (ssids/cpu/cpu_iface.hxx, ThreadStats.hxx), so it is coupled to the pinned SPRAL submodule commit; building against a current SPRAL release is not documented and may break.
+- STARPU_DIR must be set in the environment for FindSTARPU.cmake, and the default runtime is StarPU, so a plain cmake without StarPU fails unless you pass -D SYLVER_RUNTIME=STF.
+- The docs claim bit-compatible results, but no test evidence for that is in the repo.
+
+**Status:** Abandoned since May 2020 (EU H2020 NLAFET project ended), with 844 commits, 13 stars and one unanswered issue; BSD-3-Clause so copyable, but a research prototype with heavy dependencies.
+
+[repo](https://github.com/NLAFET/SyLVER) · [benchmark](https://github.com/NLAFET/SyLVER)
 
 ### parsing-and-text
 

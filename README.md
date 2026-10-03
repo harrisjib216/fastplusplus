@@ -7,11 +7,11 @@ claim against the cited page before it was written up.
 
 ## Lists
 
-- [COPYABLE.md](COPYABLE.md): 1180 entries under an OSI license or CC0. Code can be vendored or forked.
-- [REFERENCE.md](REFERENCE.md): 137 entries with no, unclear, or non-OSI license. Study the idea; don't copy the code.
+- [COPYABLE.md](COPYABLE.md): 1189 entries under an OSI license or CC0. Code can be vendored or forked.
+- [REFERENCE.md](REFERENCE.md): 138 entries with no, unclear, or non-OSI license. Study the idea; don't copy the code.
 - [REJECTED.md](REJECTED.md): 22 candidates that failed verification.
 
-Tiers across both lists: A 327, B 267, C 691, D 32.
+Tiers across both lists: A 327, B 270, C 697, D 33.
 
 ## Evidence tiers
 
@@ -40,13 +40,13 @@ Ratios marked "(derived from page data)" were computed from numbers on the cited
 | networking-and-servers | http-servers-frameworks | 36 | 4 | 20 | 12 | 0 |
 | networking-and-servers | tls | 16 | 3 | 4 | 9 | 0 |
 | networking-and-servers | websocket-grpc-rpc | 21 | 5 | 2 | 14 | 0 |
-| numerics-and-science | autodiff-and-ml-kernels | 78 | 12 | 15 | 50 | 1 |
-| numerics-and-science | big-integer-arbitrary-precision | 39 | 10 | 2 | 24 | 3 |
+| numerics-and-science | autodiff-and-ml-kernels | 81 | 12 | 16 | 52 | 1 |
+| numerics-and-science | big-integer-arbitrary-precision | 41 | 10 | 3 | 25 | 3 |
 | numerics-and-science | blas-lapack | 55 | 14 | 12 | 23 | 6 |
-| numerics-and-science | fft | 46 | 12 | 9 | 18 | 7 |
-| numerics-and-science | geometry-spatial | 61 | 5 | 9 | 45 | 2 |
-| numerics-and-science | random-and-quasi-random | 58 | 15 | 4 | 36 | 3 |
-| numerics-and-science | sparse-and-solvers | 52 | 7 | 24 | 19 | 2 |
+| numerics-and-science | fft | 46 | 12 | 9 | 19 | 6 |
+| numerics-and-science | geometry-spatial | 62 | 5 | 9 | 45 | 3 |
+| numerics-and-science | random-and-quasi-random | 59 | 15 | 4 | 37 | 3 |
+| numerics-and-science | sparse-and-solvers | 55 | 7 | 25 | 20 | 3 |
 | parsing-and-text | csv-tabular | 11 | 2 | 0 | 9 | 0 |
 | parsing-and-text | lexers-tokenizers | 9 | 1 | 1 | 6 | 1 |
 | parsing-and-text | markup-html-markdown | 9 | 1 | 0 | 8 | 0 |

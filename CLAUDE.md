@@ -149,14 +149,17 @@ after 2 failed fetches, the privacy/scratch rules above, and the terse final-rep
 
 ## Status (2026-10-03, evening)
 
-- Waves 1-8 are finished. Lists after the 2026-10-03 session: COPYABLE 1180, REFERENCE 137,
-  REJECTED 22. The next open work is in QUEUE.md "Unfinished work" (a wave 8 backfill seed pass
-  from this session's leads, paper-access retiers, then waves 9-12).
+- Waves 1-8 are finished, including the wave 8 backfill seed pass (seed-j/k/l, 14 projects, 11
+  kept, 2 folded, 1 already listed). Lists after the 2026-10-03 session: COPYABLE 1189,
+  REFERENCE 138, REJECTED 22. The next open work is in QUEUE.md "Unfinished work" (paper-access
+  retiers need an environment that reaches arXiv/ACM/IEEE; then waves 9-12).
 - Wave 8 (numerics-and-science) closed: searches b1-b8 for all 7 categories and two seed passes
-  (52 projects) merged; 394 verdicts (confirm 346, downgrade 35, reject 13), 388 verified (A 74,
-  B 75, C 215, D 24), every verified entry enriched. Rejected for invalid evidence: SIMDxorshift,
+  (52 projects) plus seed-j/k/l merged; 404 verdicts (confirm 353, downgrade 37, reject 14), 398
+  verified (A 74, B 78, C 221, D 25), every verified entry enriched. Retier checks 12-14
+  (2026-10-03) re-tried 13 blocked papers: only gpuNUFFT moved (D to C on cufinufft issue #126);
+  arXiv, ACM, IEEE, Springer, Dagstuhl, archive.org and zenodo all stay blocked here. Rejected for invalid evidence: SIMDxorshift,
   SIMD-MT, ra_prng, CUDA-L1, OxiBLAS, cpp-matmul; the other rejects were overridden to keep per
-  the keep-and-document rule. Retiers are in data/wave8/verify/raw/retier-{01..11}.json (08 PFT
+  the keep-and-document rule. Retiers are in data/wave8/verify/raw/retier-{01..14}.json (08 PFT
   C to B on the KDD paper; 09 metal-float64 usability to reference; 10 DASP B to C on harness and
   correctness evidence; 11 vpxyz/xorshift A to C on generator bugs).
 - b7/b8 in this environment ran on WebSearch snippets plus github.com, since HN Algolia, HN

@@ -3853,6 +3853,8 @@ Retired binary-only parallel sparse LU for SPICE circuit matrices; first-party 1
 
 **Known shortcoming:** Unmaintained; the author points to CKTSO. Serial solve only; the pivoting factorization scales only about 2x at 8-16 threads (CKTSO TCAD paper); the results.pdf geomean is lifted by a few huge KLU outliers (one at 15691x); thread counts and versions unstated; 136 of 182 matrices are private; patent-covered, academic use only. wibraun/NICSLU (LGPL-2.1, NICSLU 3.0.1 from 2011-2013) is the only copyable source, which the author's FAQ calls old and buggy with the closed version up to 3x faster.
 
+**Known shortcoming:** An LGPL-2.1-or-later source of NICSLU 3.0.1 (2011-2013) exists at wibraun/NICSLU (folded here as a duplicate); it bundles restricted HSL MC64 files and the author's FAQ calls it old and buggy, with the closed version up to 3x faster.
+
 **Independent measurement:** verifier
 
 **Independent measurement:** same author's CKTSO doc/tcad.pdf: CKTSO 5.9x over NICSLU at 16 threads, 1.21x-4.69x with the same ordering, implying NICSLU about 2x over PARDISO there (derived from page data)
@@ -3884,6 +3886,46 @@ Retired binary-only parallel sparse LU for SPICE circuit matrices; first-party 1
 **Status:** Finished: the 'Final update' commit is dated 2026-03-22, the code is unmaintained and replaced by CKTSO, and it is a proprietary, patent-covered, license-keyed binary, so treat it as a reference to call, not code to copy.
 
 [repo](https://github.com/chenxm1986/nicslu) · [benchmark](https://raw.githubusercontent.com/chenxm1986/nicslu/HEAD/results.pdf)
+
+##### Ocean SpGEMM (CornellHPC)  `CUDA/C++`  `no license`  `active`  `Tier C`
+
+GPU SpGEMM (C = A*B, FP64 CSR) that sizes output rows with HyperLogLog estimates; reported 1.4x over spECK on A100.
+
+**Beats:** spECK (primary) and OpSparse; also TileSpGEMM and HSMU-SpGEMM — Per WebSearch snippets of the ICS '26 paper (arXiv 2604.19004, not opened because arXiv, alphaxiv and doi.org are egress-blocked), Ocean averages 1.4x, 2.6x, 3.5x and 2.0x over spECK, OpSparse, TileSpGEMM and HSMU-SpGEMM on 337 square SuiteSparse matrices on an A100, with 1.4x to 2.8x across A100, H100 and rectangular matrices. Whether these are geometric or arithmetic means, the host CPU, and whether cuSPARSE was compared could not be checked.
+
+**Known shortcoming:** Downgraded B to C: the ICS 2026 paper (arXiv 2604.19004) could not be opened, so the 1.4x over spECK and 2.6x over OpSparse figures are snippet-only; no LICENSE file, so usability reference. Retier to B when the paper is reachable.
+
+**Known shortcoming:** run() throws std::runtime_error when the HyperLogLog estimate undershoots the output size beyond the spare buffer (hll_numeric_malloc_expansion_coe 1.3); NUM_SM and SHARED_MEMORY_KB are compile-time hand edits; index_t is uint32 by default; built with -use_fast_math. Whether the snippet speedups are geometric or arithmetic means, and any cuSPARSE comparison, are unknown.
+
+**Independent measurement:** verifier
+
+**Independent measurement:** enricher
+
+**How:** Most GPU SpGEMM codes (spECK, OpSparse, nsparse) run an exact symbolic pass to count each output row's nonzeros before the numeric pass; Ocean replaces it, where profitable, with per-row HyperLogLog cardinality estimates (HLL sketches of B's rows built with MurmurHash3, merged per row of A) and over-allocates by a configurable factor. An analysis stage uses input statistics and sampling to pick among an ultra-sparse path, an estimation path, an exact symbolic path and a 'fat' path, and the numeric phase uses hybrid dense, hash and ESC accumulators binned by row size, with rows that overflow their estimate recomputed by a dense fallback kernel. Code is compiled for compute_61 PTX on purpose to avoid Independent Thread Scheduling, which the Makefile says slows some kernels.
+
+**Use it when:**
+- Repeated FP64 SpGEMM (A*A, A*B, AMG Galerkin products, graph contraction) on A100 or H100 where spECK or OpSparse is the current tool.
+- Workloads where the symbolic pass dominates; the paper's abstract says it is about 28% of spECK's runtime.
+- Benchmarking or research on estimation-based SpGEMM, since the repo ships the 337-square and 64-rectangular SuiteSparse matrix lists and a download script.
+
+**Skip it when:**
+- Anything you need to ship: the repository has no license, so it can be read but not legally copied or redistributed.
+- GPUs other than A100/H100 or older than compute capability 8.0; the README warns that untested hardware will likely hit compile, configuration or runtime errors.
+- FP32, complex or integer values, or matrices you cannot convert to its custom CSR file format without writing glue code (data_t is hard-coded to double).
+- Pipelines that cannot tolerate a hard failure: if HLL underestimates output size beyond the spare buffer, run() throws std::runtime_error and asks you to raise hll_numeric_malloc_expansion_coe.
+- Memory-tight runs: estimation over-allocates the output (default factor 1.3) and the memory pool is set never to release memory.
+
+**Vs siblings:** Pick Ocean over spECK or OpSparse when you are on A100/H100 and only need to study or benchmark (no license); for code you will ship, use spECK, OpSparse or TileSpGEMM, or Kokkos Kernels SpGEMM where portability and a maintained API matter more than the reported 1.4x to 3.5x.
+
+**Gotchas:**
+- Hardware constants are compile-time: a wrong NUM_SM (108 for A100, 114 or 132 for H100) or SHARED_MEMORY_KB (must be 128, 96 or 80) silently changes scheduling or breaks launches.
+- index_t defaults to uint32_t, so row offsets and the output's nonzero count must stay below about 4.29 billion unless you rebuild with uint64_t.
+- The README says correctness checks against spECK output 'may fail' on some matrices from floating-point differences (relative tolerance 1e-6, auto-fail 1e-4); builds also use -use_fast_math.
+- Timed iterations include allocation through cudaMallocAsync from a pool whose release threshold is set to UINT64_MAX, so warm runs reuse memory and cold first-call cost is excluded by the default 10 warmup iterations.
+
+**Status:** Recently published (10 commits, last 2026-04-21, 7 stars, no issues) and buildable with CUDA 12.4+, but with no license it is reference-only; read it for the HyperLogLog-estimation idea rather than vendoring it.
+
+[repo](https://github.com/CornellHPC/Ocean-SpGEMM) · [benchmark](https://arxiv.org/abs/2604.19004)
 
 ### parsing-and-text
 
