@@ -95,3 +95,6 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - superscientificsoftwarelaboratory/tilespmv (B, snippet-only): IPDPS 2021 paper (ssslab.cn PDF, IEEE blocked); confirm numbers. (batch 148)
 - malb/m4ri (B, snippet-only): ACM TOMS Algorithm 898, arXiv 0811.1714; confirm the Magma tables. (batch 143)
 - lorenzhs/wrs (B): ESA 2019 paper on drops.dagstuhl.de / publikationen.bibliothek.kit.edu (blocked); retier to A once the paper's GSL tables are opened. (batch 154)
+- riftstack.ai / cloudrift 'Surfacing a 60% performance bug in cuBLAS': batched FP32 SGEMM on RTX 5090, custom kernel 50-60% over cuBLAS at 1024-8192 (cuBLAS picks simt_sgemm_128x32_8x5); snippet only, cloudrift.ai blocked, code repo not found. (from sgemm.cu enricher)
+- HazyResearch Megakernels (Llama-1B) and AlpinDale/qwen_megakernel: inspirations named by the Lucebox megakernel; not checked. (from lucebox enricher)
+- leloykun/flash-attention-minimal fork (94x FA2 forward on RTX 3060, likely cold-profiler artifact) and ishovkun/flash-attention (10 FA2 kernels, A100 chart, 0 stars): low value. (from flash-attention-minimal enricher)

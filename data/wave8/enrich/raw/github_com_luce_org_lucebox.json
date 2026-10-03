@@ -1,0 +1,53 @@
+{
+  "id": "https://github.com/luce-org/lucebox",
+  "one_liner": "Model-specific CUDA decode megakernel for Qwen 3.5-0.8B at batch 1; 1.55x llama.cpp BF16 decode on an RTX 3090.",
+  "what_it_does": "Runs batch-1 greedy inference for exactly one model, Qwen 3.5-0.8B (18 Gated DeltaNet layers plus 6 full-attention layers), on NVIDIA GPUs. It is a PyTorch C++/CUDA extension driven from Python: model.py loads the Hugging Face weights and exposes a Decoder with step(token) -> token and generate(prompt), and prefill is a separate op. It replaces llama.cpp or Hugging Face Transformers for this one model only; it is not a kernel library or a server.",
+  "how_it_is_fast": "Decode runs all 24 layers in one persistent kernel (decode_kernel in kernel.cu, 82 blocks x 512 threads on a 3090), so there are no per-layer launches or CPU round-trips. Blocks meet at a hand-rolled atomic grid barrier (AtomicGridSync) between phases. Each layer is a bandwidth-bound BF16 matrix-vector product with FP32 accumulation, the DeltaNet recurrence keeps its state in FP32, and attention uses online softmax with the KV cache written inside the kernel. A second kernel does the 248,320-row LM head and argmax. On the 3090, prefill (prefill.cu) is cuBLAS GEMMs plus standalone kernels and a chunk-parallel DeltaNet scan (chunk size 8); it is not a megakernel.",
+  "when_to_use": [
+    "Single-user, batch-1 local generation with Qwen 3.5-0.8B in BF16 on an Ampere or newer NVIDIA consumer GPU (RTX 3090 is the tuned target), where decode latency and tokens per joule matter.",
+    "Power-capped deployments: the DVFS sweep keeps 411 tok/s at a 220 W limit against 433 tok/s at stock.",
+    "As a reference implementation when writing your own persistent decode kernel for a hybrid linear-attention (DeltaNet) plus attention model.",
+    "Turing (RTX 2080 Ti, FP16) or Blackwell (RTX 5090, DGX Spark via an NVFP4 decode path) when you need this model there and accept less-documented paths."
+  ],
+  "when_not_to_use": [
+    "Any other model or size: the layer layout, head counts and vocabulary are compile-time constants, and the README says fusion gains shrink as models grow.",
+    "Batched or multi-tenant serving (batch size 1 only; the README points to vLLM or SGLang), quantized weights (no GGUF, GPTQ or AWQ), or prompts longer than the default max_seq_len of 2048.",
+    "Where output must match the reference model today: the in-place RoPE bug fixed by PR #804 (open on 2026-10-01) gave about 47% top-token agreement with Hugging Face before the fix.",
+    "Sampling-based generation: decode does greedy argmax with an optional repetition penalty and has no temperature or top-p.",
+    "A GPU shared with other work (other processes, MPS): the grid barrier needs every block to be resident at the same time."
+  ],
+  "integration": {
+    "form": "module",
+    "dependencies": "PyTorch 2.0+ (torch.utils.cpp_extension build), cuBLAS (plus cuBLASLt on Blackwell), Hugging Face transformers and the Qwen/Qwen3.5-0.8B weights; built with pip install -e . --no-build-isolation or uv sync --extra megakernel",
+    "min_toolchain": "CUDA 12+ with nvcc -std=c++17 -O3 --use_fast_math; Blackwell sm_120/sm_121a needs CUDA 12.8+ (cuda_fp4.h); RESULTS.md's GB10 run used CUDA 13.2",
+    "platforms": "NVIDIA only, Linux: sm_86 (RTX 3090, BF16) is the benchmarked target; sm_75 (FP16), sm_80+ (BF16), Pascal sm_6x shims in the source, and Blackwell sm_120/121a via NVFP4; the arch is auto-detected at build time",
+    "thread_safety": "not documented; a Decoder owns one KV cache, DeltaNet state and barrier counters, so use one Decoder per stream, and each step() syncs to the host to read the token",
+    "drop_in_for_baseline": "false - a Python Decoder API for one model, not a llama.cpp or Transformers replacement; no OpenAI-compatible server, GGUF loading or batching on this path"
+  },
+  "gotchas": [
+    "Known correctness bugs after the published numbers: PR #761 (merged 2026-09-24) fixed attention blocks overwriting each other's partial results in full_attention_layer (non-repeatable output), and PR #804 (open on 2026-10-01) fixes Q RoPE rotating in place, so the second half of each rotary pair reads an already-rotated value. kernel.cu at HEAD still has this pattern.",
+    "The built-in correctness check in bench_pp_tg.py compares the megakernel against its own step-by-step decode path, not against Hugging Face, so it cannot catch math errors both paths share. final_bench.py prints both completions but does not compare them.",
+    "'Single dispatch' means the 24 layers: each token still launches decode_kernel plus a separate lm_head_kernel, with three small memsets. The grid barrier is an atomic spin-wait under a normal <<<>>> launch, not cudaLaunchCooperativeKernel; the block count is clamped to the occupancy-reported resident limit, and the README warns that grid.sync inside loops deadlocks silently.",
+    "Prefill speedups on the 3090 come from cuBLAS plus standalone kernels, not the megakernel. Only Blackwell has a single-dispatch prefill megakernel."
+  ],
+  "pick_this_over_siblings_when": "Pick it over yalm or ik_llama.cpp only when the model is exactly Qwen 3.5-0.8B at batch 1 on an NVIDIA GPU and decode tok/s or tok/J is what you are optimizing; those engines run many models. For batched or large-model Gated DeltaNet prefill on datacenter GPUs, FlashQLA's kernels are the closer fit.",
+  "verified_claims_summary": "On an RTX 3090 in BF16, the first-party RESULTS.md reports pp520 at 21,347 tok/s against 11,247 for llama.cpp BF16 (unversioned, 'default settings', run outside the harness) and 7,578 for eager Hugging Face Transformers; tg128 is 413 vs 267 vs 108 tok/s (1.55x and 3.8x). The repo's final_bench.py times only the megakernel and Hugging Face (10 warm-up plus 20 timed prefills, perf_counter around cuda.synchronize); the CUDA version and host CPU of the 3090 run are not stated, and the numbers predate the PR #761 and #804 correctness fixes.",
+  "status_note": "Very active (last commit 2026-10-01) in an Apache-2.0 repo with 2.9k stars from Lucebox, which sells a local-AI PC; the megakernel is a self-described research proof of concept for one model, copyable but with an open RoPE correctness fix at the time of reading.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/Luce-Org/lucebox/HEAD/README.md",
+    "https://raw.githubusercontent.com/Luce-Org/lucebox/HEAD/optimizations/megakernel/README.md",
+    "https://raw.githubusercontent.com/Luce-Org/lucebox/HEAD/optimizations/megakernel/RESULTS.md",
+    "https://raw.githubusercontent.com/Luce-Org/lucebox/HEAD/optimizations/megakernel/setup.py",
+    "https://raw.githubusercontent.com/Luce-Org/lucebox/HEAD/optimizations/megakernel/final_bench.py",
+    "https://raw.githubusercontent.com/Luce-Org/lucebox/HEAD/optimizations/megakernel/kernel.cu",
+    "https://raw.githubusercontent.com/Luce-Org/lucebox/HEAD/optimizations/megakernel/prefill.cu",
+    "https://raw.githubusercontent.com/Luce-Org/lucebox/HEAD/optimizations/megakernel/model.py",
+    "https://raw.githubusercontent.com/Luce-Org/lucebox/HEAD/optimizations/megakernel/torch_bindings.cpp",
+    "https://raw.githubusercontent.com/Luce-Org/lucebox/HEAD/optimizations/megakernel/bench_pp_tg.py",
+    "https://raw.githubusercontent.com/Luce-Org/lucebox/HEAD/optimizations/megakernel/half_type.h",
+    "https://github.com/Luce-Org/lucebox/issues?q=megakernel",
+    "https://github.com/Luce-Org/lucebox/pull/761",
+    "https://github.com/Luce-Org/lucebox/pull/804"
+  ],
+  "confidence": 0.75
+}

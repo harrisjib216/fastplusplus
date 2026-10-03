@@ -1,0 +1,57 @@
+{
+  "id": "https://github.com/salykova/sgemm.cu",
+  "one_liner": "Hand-tuned row-major FP32 SGEMM kernels for Ampere; about 4-7% above cuBLAS SGEMM at large square sizes on an RTX 3090.",
+  "what_it_does": "A small set of CUDA kernels for C := alpha*A*B + beta*C in strict FP32 on CUDA cores (no tensor cores or TF32), plus a benchmark and test harness. The API is one host function, sgemm(m, n, k, &alpha, A, lda, B, ldb, &beta, C, ldc), on row-major device pointers with no transpose flags, handle or stream argument; column-major callers swap A and B as the source comment says. It is not a cublasSgemm drop-in.",
+  "how_it_is_fast": "Register-blocked SGEMM. On sm_80+, m or n above 2500 selects a 128x256x8 CTA tile with 256 threads, 64x64 warp tiles and a 16x8 accumulator per thread. Global-to-shared copies use cp.async into double-buffered shared memory, A is stored transposed with padding (ld 132), fragments are double-buffered in registers and read with 128-bit shared loads, and the hot paths are inline PTX. Smaller sizes use a 128x128x8 kernel (2 blocks per SM) with predicated LDG staging; pre-Ampere GPUs use a texture-fetch variant when operands are 16-byte aligned. The epilogue goes through shared memory and edges are handled with predicated loads and stores.",
+  "when_to_use": [
+    "Large FP32 GEMMs (m or n above about 4,000) on GA102-class Ampere (RTX 3080/3090, A10, A40, A6000) where results must stay strict FP32 rather than TF32.",
+    "Power-limited or clock-locked GPUs: the margin over cuBLAS grew from about 4-5% to about 6-7% with clocks locked at 1395 MHz.",
+    "When you want a small, readable, MIT-licensed SGEMM to vendor or study instead of linking cuBLAS, with row-major operands and ldc == n.",
+    "As a starting point for tuning SGEMM on Ada or Turing, which the README expects to perform well but which are untested."
+  ],
+  "when_not_to_use": [
+    "Small and mid-size GEMMs (below about 2,500): the curves cross, and cuBLAS wins at several sizes (near m=n=k=1280, about 17,000 vs 19,300 GFLOP/s).",
+    "Calls that need transposes, batched or strided-batched GEMM, a non-default stream, error reporting, or a C stride different from n.",
+    "When TF32, FP16 or BF16 tensor cores are acceptable: this is an FFMA kernel with single-digit gains, and tensor-core GEMMs are a different performance class.",
+    "Hopper, Blackwell or non-NVIDIA hardware: the only published results are from one RTX 3090, and the tile choice is tuned for GA102.",
+    "Long-lived production use: 10 commits, last on 2025-01-21, and an issue about the benchmark methodology left unanswered."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "CUDA runtime only for the kernels (src/sgemm.cuh, src/kernels/*.cuh, common/'helper_cuda ptx.h'); cuBLAS and CMake 3.18+ only for the bundled benchmark and test",
+    "min_toolchain": "C++17; CUDA 11.5+ for sm_80+ (static_assert in sgemm.cuh); published results used nvcc V12.6.85, g++ 13.3 and CMake 3.28.3",
+    "platforms": "NVIDIA GPUs; the arch is a build-time macro (GPUCC, CUDA_ARCHITECTURES). sm_80+ uses the cp.async kernels and sm_7x uses the texture-load kernel; only the RTX 3090 (sm_86) is benchmarked; the README advises native Linux rather than WSL for measurements",
+    "thread_safety": "not documented; sgemm() launches on the default stream, and on sm<80 it builds texture objects in namespace-scope globals on every call, so concurrent host calls are unsafe there",
+    "drop_in_for_baseline": "false - row-major sgemm() with host alpha/beta pointers and no handle, transpose, stream or status return; ldc is honored only for the first row of each tile (see gotchas)"
+  },
+  "gotchas": [
+    "C-stride bug: all three kernels set the C pointer with m_idx * ldc but step between rows with n (stg_c_ptr + (i*16+p)*n), so any ldc != n writes to the wrong addresses. test.cu and benchmark.cu always pass ldc = n, so the tests never catch it.",
+    "sgemm.cuh defines non-inline functions (and, for sm<80, global cudaResourceDesc/texture handles) in a header. Include it from only one translation unit or you get duplicate-symbol link errors.",
+    "Reproducing the plots takes edits: benchmark.sh defaults to CUBLAS=0 and lock_clocks=0, and cuBLAS is a separate -DCUBLAS=1 build of benchmark.cu (default handle, no cublasSetMathMode call). benchmark.sh and test.sh also run sudo (rm -rf build).",
+    "Correctness coverage is narrow: test.sh checks square sizes 2-3072 against a naive 16x16 kernel at 1e-4 tolerance, with no non-square shapes, strides or nonzero-offset submatrices."
+  ],
+  "pick_this_over_siblings_when": "Pick it over fast.cu (BF16 tensor-core matmul for H100) and bare-metal (FP16 HGEMM tuned for an RTX 3070 Ti Laptop) when the GEMM must stay in FP32 on an Ampere or Ada consumer or workstation card. For int8 use nanoinfer; for CPUs, the AVX-512 DGEMM tutorial.",
+  "verified_claims_summary": "Two README plots, with no numbers in text: RTX 3090 at 350 W, CUDA 12.6 (driver 550.120), square row-major NN SGEMM at m=n=k 1024 to 12800 in steps of 128, sgemm.cu vs cublasSgemm in the same harness. By eye, sgemm.cu sits at about 25,000-25,500 GFLOP/s against cuBLAS at about 24,000-24,500 at large sizes (about 4-5%), and at about 23,000-23,500 vs 21,600-22,000 with clocks locked at 1395 MHz (about 6-7%). Each point is the mean of the second half of the timed calls (CUDA events, L2 flushed between calls) after 500 warm-up runs at 4096.",
+  "status_note": "Stale since 2025-01-21 (10 commits, one unanswered issue, one unmerged Docker PR), but MIT-licensed and small enough (three kernel headers plus a PTX helper) to vendor. Fix or avoid the ldc != n bug first.",
+  "sources_read": [
+    "https://github.com/salykova/sgemm.cu",
+    "https://github.com/salykova/sgemm.cu/tree/main/src",
+    "https://github.com/salykova/sgemm.cu/issues?q=is%3Aissue",
+    "https://github.com/salykova/sgemm.cu/issues/2",
+    "https://github.com/salykova/sgemm.cu/pulls?q=is%3Apr",
+    "https://raw.githubusercontent.com/salykova/sgemm.cu/HEAD/README.md",
+    "https://raw.githubusercontent.com/salykova/sgemm.cu/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/salykova/sgemm.cu/HEAD/benchmark.cu",
+    "https://raw.githubusercontent.com/salykova/sgemm.cu/HEAD/benchmark.sh",
+    "https://raw.githubusercontent.com/salykova/sgemm.cu/HEAD/test.cu",
+    "https://raw.githubusercontent.com/salykova/sgemm.cu/HEAD/test.sh",
+    "https://raw.githubusercontent.com/salykova/sgemm.cu/HEAD/src/sgemm.cuh",
+    "https://raw.githubusercontent.com/salykova/sgemm.cu/HEAD/src/kernels/128x256x8.cuh",
+    "https://raw.githubusercontent.com/salykova/sgemm.cu/HEAD/src/kernels/128x128x8.cuh",
+    "https://raw.githubusercontent.com/salykova/sgemm.cu/HEAD/src/kernels/128x128x8_texld.cuh",
+    "https://raw.githubusercontent.com/salykova/sgemm.cu/HEAD/common/helper_cuda%20ptx.h",
+    "https://raw.githubusercontent.com/salykova/sgemm.cu/HEAD/assets/perf.png",
+    "https://raw.githubusercontent.com/salykova/sgemm.cu/HEAD/assets/perf_locked.png"
+  ],
+  "confidence": 0.8
+}
