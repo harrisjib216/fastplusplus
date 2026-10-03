@@ -28,3 +28,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - Entropy gh-any search dropped for no baseline speed claim: lmz, DFloat11, cloudflareresearch/unweight-kernels (report blocked), m99, YAECL, torchac, lucastheis/rangecoder, divans, marc, kolma, SnellerInc/iguana, libaec, pcodec. encode.su and Sneller blog blocked here.
 - Velox discussion #4918 "[Design] AVX-512 bitpack optimization" (facebookincubator/velox). From apache/orc enricher.
 - gildor2/fast_zlib, jtkukunas/zlib (Intel zlib fork): not catalogued in wave 9. From matbech/zlib enricher.
+- Paper-access retier candidate: ZipNN (arXiv 2411.05239, IEEE CLOUD 2025) could move C to B. From verify batch-49.
