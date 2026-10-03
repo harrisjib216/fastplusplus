@@ -93,3 +93,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - passionlab/openequivariance (C): ACDA25 paper, arXiv 2501.13986; retier to B. (batch 145)
 - nvidia/cuequivariance (C): arXiv 2510.23621 independent MACE latency study; confirm numbers. (batch 145)
 - superscientificsoftwarelaboratory/tilespmv (B, snippet-only): IPDPS 2021 paper (ssslab.cn PDF, IEEE blocked); confirm numbers. (batch 148)
+- malb/m4ri (B, snippet-only): ACM TOMS Algorithm 898, arXiv 0811.1714; confirm the Magma tables. (batch 143)
