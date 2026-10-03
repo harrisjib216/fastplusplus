@@ -1,0 +1,62 @@
+{
+  "id": "https://github.com/superscientificsoftwarelaboratory/tilespmv",
+  "one_liner": "CUDA SpMV on 16x16 sparse tiles with per-tile format choice; paper beats Merge-SpMV, CSR5 and BSR on most SuiteSparse matrices.",
+  "what_it_does": "Research code for y = Ax on NVIDIA GPUs (FP64 by default, MAT_VAL_TYPE switch for FP32). The test program reads a Matrix Market file and converts CSR into a tiled structure on the host with OpenMP (Tile_create in csr2tile.h). A CPU pass (tilespmv_cpu.h) builds the per-warp work lists and a reference result, and call_tilespmv_cuda then uploads everything, runs the kernels and appends time and GFlops to results.csv. There is no library API: to use it you lift the conversion code and the two kernels out of the benchmark harness.",
+  "how_it_is_fast": "The matrix is cut into 16x16 tiles whose intra-tile row and column indices are packed into 4-bit nibbles, so index traffic is a fraction of 32-bit CSR. Each tile gets its own storage format: dense if at least 75% full, COO if it has 12 or fewer nonzeros, dense-row or dense-column when whole rows or columns are full, ELL when the row-length coefficient of variation is at most 0.2, and CSR otherwise (the HYB path is commented out at HEAD). One warp processes a chunk of up to 4 tiles of a tile row, stages the x segment in shared memory and reduces with warp shuffles; long tile rows are split into chunks that merge into y with atomicAdd. The very sparse COO tiles are not handled in the tile loop. At HEAD a one-time setup kernel records their offsets, and the timed kernel processes them in a separate pass at its start. The paper and README instead describe extracting them into a separate matrix, and the repo still builds a CSR5 handle for that matrix.",
+  "when_to_use": [
+    "Repeated FP64 SpMV with a fixed sparsity pattern on NVIDIA GPUs (iterative solvers), where the one-time host-side tile conversion is amortized.",
+    "Matrices with local dense structure inside 16x16 windows (small dense blocks, dense rows or columns) that do not fit BSR well; the paper's largest wins (up to 426.59x) are against BSR.",
+    "As a research baseline or starting point for tile-based GPU sparse kernels: DASP, TileSpMSpV and CB-SpMV all benchmark against it, and the same lab's TileSpGEMM uses a similar tile structure.",
+    "When you need Apache-2.0 CUDA kernels to vendor and adapt, rather than a closed vendor library."
+  ],
+  "when_not_to_use": [
+    "Production code that needs an API, error handling or cuSPARSE-style alpha/beta semantics: this is a benchmark harness, and call_tilespmv_cuda allocates, times and frees everything in one function.",
+    "When you need the fastest current GPU SpMV: the same lab's tensor-core DASP (SC'23) reports 2.09x average over TileSpMV in FP64 on A100, and CB-SpMV (ICS'25) reports average 3.95x (A100) and 3.06x (RTX 4090) over it (both from search-result text).",
+    "Matrices that change between calls, or a single SpMV: the conversion runs on the CPU plus a setup kernel, and its cost is not measured by the harness.",
+    "Highly irregular matrices with many near-empty tiles. Per the paper's abstract it is not faster than Merge-SpMV on 944 of 2757 matrices, than CSR5 on 717 or than BSR on 1119 (derived from page data: 2757 minus the counts of wins).",
+    "AMD or Intel GPUs, or CPUs: CUDA only."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "CUDA Toolkit (11.1 tested); CUDA Samples common/inc headers (helper_cuda.h, helper_functions.h, needed by the bundled CSR5 code); OpenMP on the host. CSR5 CUDA (src/external/CSR5_cuda) and a Matrix Market reader are bundled. The README lists cuSPARSE, but the Makefile links only cudart.",
+    "min_toolchain": "nvcc from CUDA 11.1 (tested), GCC with OpenMP. The FP64 build needs a GPU with compute capability 6.0 or newer because it uses native double atomicAdd (the CAS fallback in the bundled CSR5 utils_cuda.h is commented out). The README's 'compute capability 3.5, Tesla K40' note is out of date.",
+    "platforms": "Linux (Ubuntu 18.04/20.04 tested) with NVIDIA GPUs. The Makefile's -arch=compute_61 -code=sm_86 embeds only sm_86 SASS and no PTX, so you must edit it for A100 (sm_80), Turing, Hopper and other GPUs.",
+    "thread_safety": "not documented; the kernels accumulate into y with atomics and the host entry point is a monolithic per-matrix benchmark routine",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "y must be zeroed before every launch. The kernel writes a row only when its sum is nonzero and uses atomicAdd for split tile rows and COO tiles, so FP64 results are not bitwise reproducible from run to run. alpha is passed only to the CSR5 path.",
+    "main.cu rounds the row count down to a multiple of 16 (rowA = (rowA / BLOCK_SIZE) * BLOCK_SIZE), so up to 15 trailing rows are neither computed nor checked, while GFlops still counts every nonzero. It also overwrites the matrix values and x with i % 10, and the matrix path must be the third argument after '-d N'.",
+    "At HEAD the timed loop has the CSR5 call commented out, but the timed kernel (v6) still computes the very-sparse COO tiles in its separate first pass, so the reported time appears to cover all nonzeros. The CSR5 handle built from the duplicate extracted matrix runs only in the warm-up loops, where it adds those nonzeros a second time. This is my reading of the source; the code was not run.",
+    "Open, unanswered issues: #2 (May 2023) reports an abort in the bundled CSR5 setup at cudaFree(d_scan) on an A100 with rma10; #1 (Jun 2022) reported a missing step.h, which current main.cu no longer includes."
+  ],
+  "pick_this_over_siblings_when": "Choose TileSpMV over DASP when you have no FP64 tensor cores, or when you want the simpler tile-format-selection design as a research baseline; on A100-class GPUs DASP is reported to be faster. Choose merge-spmv or CSR5 instead when you cannot afford a format conversion, or when you need a kernel with a longer track record across matrix types.",
+  "verified_claims_summary": "IPDPS 2021 paper (abstract seen only through search results; the paper was not opened): on all 2757 SuiteSparse matrices, on an NVIDIA A100 and a Titan RTX, TileSpMV beat Merge-SpMV on 1813 matrices, CSR5 on 2040 and BSR on 1638, with maximum speedups of 2.61x, 3.96x and 426.59x. Average speedups, precision per figure and the BSR implementation (presumably cuSPARSE) were not visible. The repo's harness times only TileSpMV: it averages 1000 runs, each timed with gettimeofday around the launch and a synchronize, after 200 warm-up runs and 4000 untimed runs, then checks against a CPU CSR reference. It runs no baselines.",
+  "status_note": "Abandoned: the last commit was 2022-08-12, it has 48 commits, and two issues are open and unanswered. It is Apache-2.0 and small enough to vendor, but expect to rewrite the Makefile targets and the harness before production use.",
+  "sources_read": [
+    "https://github.com/SuperScientificSoftwareLaboratory/TileSpMV",
+    "https://github.com/SuperScientificSoftwareLaboratory/TileSpMV/tree/main/src",
+    "https://github.com/SuperScientificSoftwareLaboratory/TileSpMV/issues?q=is%3Aissue",
+    "https://github.com/SuperScientificSoftwareLaboratory/TileSpMV/issues/1",
+    "https://github.com/SuperScientificSoftwareLaboratory/TileSpMV/issues/2",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/TileSpMV/HEAD/README.md",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/TileSpMV/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/TileSpMV/HEAD/src/Makefile",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/TileSpMV/HEAD/src/main.cu",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/TileSpMV/HEAD/src/common.h",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/TileSpMV/HEAD/src/csr2tile.h",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/TileSpMV/HEAD/src/tilespmv_cpu.h",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/TileSpMV/HEAD/src/tilespmv_cuda.h",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/TileSpMV/HEAD/src/utils.h",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/TileSpMV/HEAD/src/mmio_highlevel.h",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/TileSpMV/HEAD/src/mmio.h",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/TileSpMV/HEAD/src/step.h",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/TileSpMV/HEAD/src/external/CSR5_cuda/anonymouslib_cuda.h",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/TileSpMV/HEAD/src/external/CSR5_cuda/detail/utils.h",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/TileSpMV/HEAD/src/external/CSR5_cuda/detail/cuda/common_cuda.h",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/TileSpMV/HEAD/src/external/CSR5_cuda/detail/cuda/format_cuda.h",
+    "https://raw.githubusercontent.com/SuperScientificSoftwareLaboratory/TileSpMV/HEAD/src/external/CSR5_cuda/detail/cuda/utils_cuda.h",
+    "https://github.com/xing-cong/CB-Sparse"
+  ],
+  "confidence": 0.6
+}
