@@ -1,0 +1,65 @@
+{
+  "id": "https://github.com/atharvbhat/fast-vad",
+  "one_liner": "Rust/Python voice activity detector using a logistic regression over 8 FFT bands; first-party chart puts it 2-11x past webrtcvad.",
+  "what_it_does": "Labels 8 kHz or 16 kHz mono float32 audio as speech or silence in fixed 32 ms frames (512 samples at 16 kHz, 256 at 8 kHz). VAD.detect/detect_frames/detect_segments take a whole buffer and return per-sample labels, per-frame labels or [start, end] sample ranges; VadStateful.detect_frame takes one frame at a time for streaming. Three presets (permissive, normal, aggressive) or a custom threshold, minimum speech/silence durations and hangover; a FeatureExtractor exposes the band energies. It is a different detector from WebRTC VAD (own model, own frame size, float input), not a binding or drop-in.",
+  "how_it_is_fast": "The model is tiny: per frame a SIMD Hann window, one realfft real-to-complex FFT, power summed into 8 log-energy bands (about 94-4000 Hz), then a 32-weight logistic regression (raw, noise-normalised, first- and second-delta features, weights compiled in as f32x8 constants from the portable `wide` crate) and a threshold. In the offline path the window/FFT/band stage runs over all frames in parallel with rayon; the classifier is then a sequential scan, because the per-band noise floor (an EMA with alpha 0.01) only updates on frames judged silent. The streaming path reuses preallocated window, FFT output and scratch buffers, so a frame does no allocation.",
+  "when_to_use": [
+    "Batch pre-segmentation of large 16 kHz or 8 kHz speech corpora (ASR or diarisation pipelines) where throughput matters more than best-in-class F1 and all cores are free for the offline rayon path.",
+    "Python pipelines that already hold float32 numpy audio and want segment boundaries without loading ONNX Runtime or a neural model (the Silero ONNX comparison in the docs is 721x slower than the offline path and 129x slower than streaming).",
+    "Clean or read speech close to LibriVAD, where the docs report F1 about 0.93-0.94 from 0 to 20 dB SNR with precision steady near 0.908.",
+    "Rust services that need a cheap, allocation-free per-frame streaming detector with 32 ms decision granularity."
+  ],
+  "when_not_to_use": [
+    "C or C++ projects: it is a Rust crate plus a Python wheel with no C API, so it needs your own FFI layer. WebRTC VAD is C and easy to embed.",
+    "Hard real-world audio where accuracy dominates: on AVA-Speech the docs report F1 0.680 against 0.738 for Silero (webrtcvad 0.669), and the presets were tuned on LibriVAD read speech.",
+    "Sample rates other than 8 or 16 kHz (no 32/48 kHz as in WebRTC VAD), multichannel input, or decisions finer than 32 ms (WebRTC VAD takes 10, 20 or 30 ms frames).",
+    "Latency-critical turn-taking: streaming onset needs min_speech frames (2 frames, 64 ms, in normal mode) on top of the 32 ms frame, and offset waits for min_silence plus hangover.",
+    "Projects that need a stable or mature dependency: version 0.2.x, PyPI classifier 'Development Status :: 3 - Alpha', 28 stars, one breaking API change already (0.2.0 return types)."
+  ],
+  "integration": {
+    "form": "crate (fast-vad on crates.io, cdylib + lib) and Python abi3 wheel (fast-vad on PyPI)",
+    "dependencies": "rayon, realfft, wide, thiserror, plus pyo3 0.28 (extension-module, abi3-py311), numpy and ndarray, which are unconditional even for pure-Rust users; Python package needs numpy >= 2.0",
+    "min_toolchain": "Rust edition 2024 (Rust 1.85+); Python >= 3.11",
+    "platforms": "Wheels for Linux x86_64 and aarch64 (manylinux_2_28), macOS x86_64 and arm64, Windows x64; CI runs Rust tests on Ubuntu x64/arm64, macOS Intel/arm64 and Windows. SIMD is portable through `wide`, so no specific ISA is required.",
+    "thread_safety": "VAD methods take &self and fan out on rayon's global pool; VadStateful is one instance per stream (&mut self, reset_state() to reuse). The Python bindings release the GIL during detection.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The offline VAD and streaming VadStateful smooth labels differently: offline applies hangover and then drops short speech and silence runs over the whole label array, which looks ahead; streaming uses a causal state machine. The same audio can therefore get different labels from the two paths.",
+    "The noise floor is seeded from the first frame's band energies, and afterwards only moves on frames classified as silence (alpha 0.01, roughly a 3.2 s time constant at 32 ms frames, derived from the code). A stream that starts mid-speech begins with a speech-level floor. Call reset_state() between streams.",
+    "Python input must be a contiguous float32 numpy array: float64 (the default dtype of soundfile.read), int16 or int32 raise TypeError. Trailing samples that do not fill a frame are ignored by detect_frames, and detect() copies the last frame's label onto them.",
+    "Secondary write-ups describe the result as '721x realtime', but the docs chart's axis is a speedup factor relative to Silero ONNX, not a real-time factor; no absolute timings are published."
+  ],
+  "pick_this_over_siblings_when": "No other voice activity detector is catalogued. The video-audio siblings are codecs, resamplers, RTP stacks and denoisers, so none competes with it. A VAD classifies audio rather than encoding it, so it sits in this category only as audio analysis; judge it against webrtcvad and Silero, not against libopus or FFmpeg.",
+  "verified_claims_summary": "One first-party bar chart (docs/assets/processing-speed.png, Ryzen 7700X, 8 cores and 16 threads) gives speed relative to Silero ONNX: fast_vad offline 721x, streaming 129x, webrtcvad 63x. That makes streaming about 2x webrtcvad and offline about 11.4x (derived from page data), but the offline figure uses all 16 threads against single-threaded webrtcvad. The Python harness that produced the chart is not in the repo (bench_py/ is absent and excluded from the sdist; notebooks/ is gitignored), so the webrtcvad frame size (10, 20 or 30 ms), whether the float-to-int16 PCM conversion webrtcvad needs was inside the timing, Silero's ONNX thread settings, the audio used, compiler and flags are all unknown. The public criterion benches (bench_rs) time fast_vad alone on synthetic noise.",
+  "status_note": "Active (0.2.1 released 2026-03-25 on crates.io and PyPI, 83 commits, CI on Linux, macOS and Windows) and dual MIT/Apache-2.0, so it is easy to adopt from Rust or Python; it is still alpha-labelled, has a single author and its speed evidence is first-party only.",
+  "sources_read": [
+    "https://github.com/AtharvBhat/fast-vad",
+    "https://raw.githubusercontent.com/AtharvBhat/fast-vad/HEAD/README.md",
+    "https://raw.githubusercontent.com/AtharvBhat/fast-vad/HEAD/docs/README.md",
+    "https://raw.githubusercontent.com/AtharvBhat/fast-vad/main/docs/assets/processing-speed.png",
+    "https://raw.githubusercontent.com/AtharvBhat/fast-vad/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/AtharvBhat/fast-vad/HEAD/pyproject.toml",
+    "https://raw.githubusercontent.com/AtharvBhat/fast-vad/HEAD/build.rs",
+    "https://raw.githubusercontent.com/AtharvBhat/fast-vad/HEAD/.gitignore",
+    "https://raw.githubusercontent.com/AtharvBhat/fast-vad/HEAD/CHANGELOG.md",
+    "https://raw.githubusercontent.com/AtharvBhat/fast-vad/HEAD/fast_vad.pyi",
+    "https://raw.githubusercontent.com/AtharvBhat/fast-vad/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/AtharvBhat/fast-vad/HEAD/src/vad/mod.rs",
+    "https://raw.githubusercontent.com/AtharvBhat/fast-vad/HEAD/src/vad/detector.rs",
+    "https://raw.githubusercontent.com/AtharvBhat/fast-vad/HEAD/src/vad/filterbank.rs",
+    "https://raw.githubusercontent.com/AtharvBhat/fast-vad/HEAD/src/vad/simd.rs",
+    "https://raw.githubusercontent.com/AtharvBhat/fast-vad/HEAD/src/vad/constants.rs",
+    "https://raw.githubusercontent.com/AtharvBhat/fast-vad/HEAD/bench_rs/Cargo.toml",
+    "https://raw.githubusercontent.com/AtharvBhat/fast-vad/HEAD/bench_rs/benches/vad_bench.rs",
+    "https://raw.githubusercontent.com/AtharvBhat/fast-vad/HEAD/bench_rs/benches/filterbank_bench.rs",
+    "https://raw.githubusercontent.com/AtharvBhat/fast-vad/HEAD/tests/test_vad.py",
+    "https://raw.githubusercontent.com/AtharvBhat/fast-vad/HEAD/.github/workflows/ci.yml",
+    "https://github.com/AtharvBhat/fast-vad/tree/main/tests",
+    "https://github.com/AtharvBhat/fast-vad/tree/main/src/vad",
+    "https://github.com/AtharvBhat/fast-vad/tree/main/.github/workflows",
+    "https://pypi.org/pypi/fast-vad/json",
+    "https://raw.githubusercontent.com/wiseman/py-webrtcvad/master/README.rst"
+  ],
+  "confidence": 0.75
+}
