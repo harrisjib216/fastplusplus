@@ -1,0 +1,55 @@
+{
+  "id": "https://github.com/hidefromkgb/gif_load",
+  "one_liner": "Public-domain single-header C animated-GIF decoder; with the file cached it decodes 1.3-1.7x faster than giflib 5.2.2.",
+  "what_it_does": "Decodes every frame of a GIF that the caller has already read or mmap'd into memory, with one call: GIF_Load(data, size, frame_cb, meta_cb, ctx, skip). The frame callback receives a GIF_WHDR with the frame's palette indices (frame rectangle only), palette, offsets, delay, transparency index, interlace flag and disposal mode; an optional second callback receives application extensions raw. Compositing to RGBA, deinterlacing, disposal (GIF_BKGD/GIF_PREV) and clipping frames to the logical screen are left to the caller, and partial buffers can be resumed frame by frame through the skip argument.",
+  "how_it_is_fast": "Each LZW code-table entry is packed into one uint32_t (prefix code in bits 0-11, string length in bits 12-23, last byte in bits 24-31). Because the string length is known up front, the decoder writes each string straight into the frame buffer back to front by following prefix links, with no temporary stack and no per-row copy. Codes are pulled from the sub-blocks 16 bits at a time into a bit accumulator. A first pass only skips sub-blocks to count frames and find the largest one; then one allocation holds the 16 KB code table directly in front of a frame buffer that is reused for every frame. Output stays as palette indices, and there is no I/O layer in the decode loop because the whole GIF is one in-memory buffer.",
+  "when_to_use": [
+    "Animated GIFs already in memory (asset packs, network buffers, mmap'd files) where you want per-frame palette indices and do your own compositing or GPU palette lookup: warm-cache wall time was 1.28x-1.72x better than giflib's line-by-line API on the author's six test GIFs.",
+    "Long or high-resolution animations where stb_image's whole-animation RGBA buffer is too big: at 1080p x150 frames stb_image peaked at 1254 MB (shapes) and 1611 MB (noise) versus 52-60 MB and 409-418 MB for gif_load, most of which is the GIF file itself.",
+    "Embedded, freestanding or no-libc builds: under 300 lines of C89 plus stdint.h, the only external call is realloc (replaceable with GIF_MGET), and a call makes exactly one allocation (largest frame + 16 KB + 2 bytes).",
+    "Projects that need to vendor a decoder with no licence obligations: Unlicense public-domain dedication in the header.",
+    "Progressive display of a GIF still downloading, at whole-frame granularity, by calling again with skip set to the frames already shown."
+  ],
+  "when_not_to_use": [
+    "Cold reads of large or poorly compressible GIFs from disk: the whole file must be in memory before the first pixel, so giflib, which overlaps reading with decoding, won on the three noise GIFs (gif_load at 0.89x-0.91x with read() and 0.75x-0.79x with mmap(), derived from page data).",
+    "Minimal-memory streaming: giflib's line API holds a single row, while gif_load holds the whole file (twice with read(): page cache plus copy) and a full-frame buffer.",
+    "When you want ready-to-use RGBA frames: deinterlacing, disposal modes, transparency and frames that extend past the logical screen are all the caller's job (the README's own C example carries a TODO for out-of-bounds frames).",
+    "Lenient decoding of oddly encoded files: a frame whose LZW data does not begin with a clear code is rejected (gif_load.h line 104 returns -2, though GIF89a only says encoders 'should' emit one), and a frame with another sub-block after the end-of-information code is refused (tests/extradata.gif returns 0); either one stops loading at that frame. Found by code reading; the first case has no test.",
+    "Old vendored copies (the 2019 header, before 2026-09-27): issue #14 integer overflow of the frame-buffer size where long is 32 bits (all Windows, all 32-bit targets) giving an undersized buffer and heap out-of-bounds access, NULL dereference on failed allocation, uninitialised pixels on short streams and rejected palette-less GIFs; issue #15 (1-byte over-read at a trailing 0x21) was fixed on 2026-10-01."
+  ],
+  "integration": {
+    "form": "header-only (gif_load.h; can also be built as a shared library with GIF_EXTR)",
+    "dependencies": "none beyond stdint.h; realloc from stdlib.h by default, replaceable through the GIF_MGET macro",
+    "min_toolchain": "ANSI C / C89 plus stdint.h (the test suite builds it with -std=c89 -pedantic -Wall -Wextra -Wno-long-long without warnings); usable from C++ via extern \"C\"; MSVC build line given in the README",
+    "platforms": "any; little-endian by default, big-endian targets must define GIF_BIGE=1; relies on unaligned 16-bit loads",
+    "thread_safety": "Not documented; GIF_Load has no global or static mutable state and works only on its own allocation and the caller's context pointer, so concurrent calls on different buffers are safe (inferred from the source).",
+    "drop_in_for_baseline": "false: one call with per-frame callbacks instead of giflib's DGifOpen/DGifSlurp/DGifGetLine; input must be in memory, and the caller does deinterlacing, compositing and disposal that DGifSlurp or stb_image do for you"
+  },
+  "gotchas": [
+    "A positive return value is documented as the total frame count of a properly terminated GIF, but if a frame fails to decode in such a file, loading stops and the return value is the number of frames delivered so far, still positive; compare it with whdr->nfrm from the callback to detect truncation (traced in GIF_Load, lines 260-264 and 292).",
+    "LZW codes are read as *(uint16_t*) at arbitrary byte offsets (lines 104 and 112): unaligned, type-punned loads that work on x86 and ARM but are undefined behaviour in C and trip -fsanitize=alignment or strict-alignment CPUs.",
+    "whdr->bptr is one buffer reused for every frame, and cpal is NULL with clrs 0 when the file has no palette; copy what you need inside the callback.",
+    "The default GIF_MGET frees with realloc(m, 0), which the header itself warns does not free on some systems; define GIF_MGET with malloc/free there, as the README shows."
+  ],
+  "pick_this_over_siblings_when": "Among the catalogued GIF entries, giflib-turbo patches giflib's own LZW decoder, so it keeps the giflib API, but its 2.5x-30x claim comes with no harness, machine or images; pick gif_load when you can hold the file in memory and want a dependency-free public-domain header with published, if unreproducible, timings. msf_gif is an encoder and does not compete here.",
+  "verified_claims_summary": "First-party README only: on an unnamed Linux 6.4 machine (GCC 11.5 -O2), wall time including reading the file, best of two runs, to decode all frames of six synthetic non-interlaced GIFs (320x240 x100, 640x480 x200, 1920x1080 x150; flat shapes and noise). With a warm cache gif_load beat giflib 5.2.2 by 1.28x-1.72x and stb_image by 1.39x-2.42x on the compositing +RGBA rows. Cold, it won 1.42x-1.51x on shapes but lost on noise; the prose figure of 0.83x-0.85x matches neither the read() row (0.89x-0.91x) nor the mmap() row (0.75x-0.79x) but roughly their average (about 0.83x-0.84x, derived from page data). The timed code (commit 5a961ff) differs from HEAD only by the 2026-10-01 one-byte bounds check, but the harness and CPU are not published, and stb_image's figure includes its known O(N^2) realloc-and-copy of the whole animation buffer (open stb issue #1883), so the stb gap partly measures that rather than LZW speed.",
+  "status_note": "Revived after seven idle years by a hardening burst (2026-09-27 to 2026-10-01: overflow, NULL and over-read fixes plus a valgrind-checked accuracy suite); Unlicense and under 300 lines, so vendor the current header rather than any 2019 copy.",
+  "sources_read": [
+    "https://github.com/hidefromkgb/gif_load",
+    "https://raw.githubusercontent.com/hidefromkgb/gif_load/HEAD/README.md",
+    "https://raw.githubusercontent.com/hidefromkgb/gif_load/HEAD/gif_load.h",
+    "https://raw.githubusercontent.com/hidefromkgb/gif_load/5a961ff/gif_load.h",
+    "https://raw.githubusercontent.com/hidefromkgb/gif_load/74b674d/gif_load.h",
+    "https://raw.githubusercontent.com/hidefromkgb/gif_load/HEAD/tests/run.sh",
+    "https://raw.githubusercontent.com/hidefromkgb/gif_load/HEAD/tests/gif_test.c",
+    "https://raw.githubusercontent.com/hidefromkgb/gif_load/HEAD/tests/README.md",
+    "https://raw.githubusercontent.com/hidefromkgb/gif_load/HEAD/tests/expected-synthetic.txt",
+    "https://github.com/hidefromkgb/gif_load/commits/master",
+    "https://github.com/hidefromkgb/gif_load/commit/5b22e9c",
+    "https://github.com/hidefromkgb/gif_load/issues?q=is%3Aissue",
+    "https://github.com/hidefromkgb/gif_load/issues/11",
+    "https://github.com/hidefromkgb/gif_load/issues/14",
+    "https://github.com/nothings/stb/issues/1883"
+  ],
+  "confidence": 0.8
+}

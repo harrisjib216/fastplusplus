@@ -1,0 +1,70 @@
+{
+  "id": "https://github.com/hoteira/titanf",
+  "one_liner": "Zero-dependency no_std Rust TrueType rasterizer; 1.5-3.5x faster than RustType and ab_glyph, slower than Fontdue below 200px.",
+  "what_it_does": "Parses TrueType (glyf) fonts and rasterizes one glyph at a time into an owned 8-bit coverage bitmap. TrueTypeFont::load_font(&[u8]) returns a font object; get_char::<CACHE>(char, px) and get_indexed::<CACHE>(glyph_id, px) return (Metrics, Vec<u8>), and get_kerning reads pair kerning from the legacy kern table and GPOS class pairs. There is no shaping, layout, hinting, CFF, variable-font or colour-glyph support. The API resembles Fontdue's rasterize and is not a drop-in for RustType or ab_glyph, which hand back a positioned outline and a per-pixel draw callback.",
+  "how_it_is_fast": "load_font converts every cmap-mapped glyph once into raster-ready primitives: vertical lines, sloped lines with precomputed reciprocals, and quadratic Beziers split at their extrema into monotonic pieces with precomputed polynomial coefficients. Per call, scaling to pixel space is one SSE multiply-add per primitive. A grid-walk (DDA) cell traversal deposits exact signed-area coverage into a float accumulation buffer, solving the quadratic with one sqrtss at each pixel-boundary crossing instead of flattening curves. A span-limited SSE prefix sum per row then turns the coverage into alpha bytes and re-zeroes only the touched spans, so the buffer never needs a separate clear. The README advertises SSE2/AVX2 and NEON, but the code has only SSE intrinsics on x86 and scalar fallbacks elsewhere.",
+  "when_to_use": [
+    "Kernels, bootloaders and other no_std + alloc targets that need anti-aliased TrueType text with zero crate dependencies (Fontdue pulls in ttf-parser 0.25).",
+    "Large glyphs: at 200 px and 320 px it beats Fontdue (configured for each size) by 1.10x and 1.28x, and RustType or ab_glyph by 2.1-2.3x (derived from page data).",
+    "Replacing RustType or ab_glyph for per-glyph bitmap rasterization when a one-off whole-font load cost is acceptable: 1.5-3.5x faster per call in the first-party bench.",
+    "Fixed character sets mapped by cmap, such as consoles, terminals and UI labels, where the built-in (glyph id, size) cache of up to 4096 bitmaps absorbs repeats."
+  ],
+  "when_not_to_use": [
+    "Body text at 10-160 px: Fontdue is 1.06-1.47x faster in the same bench (54.3 vs 71.0 us at 10 px, 83.7 vs 123.2 us at 20 px).",
+    "CFF/CFF2 .otf fonts, variable fonts, colour or bitmap glyphs, or font collections: only glyf outlines are parsed, and load_font returns TableNotFound(\"glyf\") without that table.",
+    "Shaped or complex-script text: there is no GSUB, and only cmap-reachable glyphs are preprocessed, so get_indexed returns the .notdef glyph for ligature and contextual-form ids that a shaper produces, despite its doc comment suggesting shaper use.",
+    "Supplementary-plane characters (emoji, CJK Extension B) in fonts whose cmap lists a Unicode-platform BMP format 4 subtable before the format 12 one: load_cmap_subtables keeps only one subtable, ranks every platform-0 entry first and sorts stably, so non-BMP code points can fall back to .notdef.",
+    "Fast startup or tight memory with large CJK fonts: every mapped glyph is preprocessed at load (tens of thousands for NotoSansSC), and neither load time nor memory is reported. It is a single-author project with 3 stars and no issues ever filed."
+  ],
+  "integration": {
+    "form": "crate",
+    "dependencies": "none (fontdue 0.9.3, ab_glyph 0.2.32, rusttype 0.9.3 and criterion 0.7 are dev-dependencies for the bench only); optional std feature switches BTreeMap to HashMap and uses std float methods",
+    "min_toolchain": "Rust edition 2024 with if-let chains (fastmap.rs), which implies rustc 1.88+; no rust-version is declared",
+    "platforms": "x86-64 with SSE intrinsics compiled in unconditionally (no AVX2 code and no runtime dispatch); aarch64 and other targets use scalar fallbacks (including a three-step Newton sqrt), with no NEON code; 32-bit x86 appears not to compile, because geometry/simd.rs imports core::arch::x86_64 under cfg(target_arch = \"x86\")",
+    "thread_safety": "get_char and get_indexed take &mut self, because the bitmap cache and a single reusable coverage buffer live inside TrueTypeFont, so use one font object per thread. TrueTypeFont does not implement Clone, so each thread re-runs load_font. Otherwise not documented.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "Outline bugs found by reading the code (not run): (a) a composite glyph whose component is itself a composite loses the outer component's offset and scale, because load_from_parent recurses without passing the transform, and point-matched components (ARGS_ARE_XY_VALUES clear) get no offset at all; (b) a contour that starts with three or more off-curve points drops the curve through its second point, because preprocess() stores it in last_off_curve but the off-curve branch never reads it. The tests use only a synthetic square-glyph font, with no reference-image comparison.",
+    "Metrics are integers: advance_width is truncated to usize and left_side_bearing to isize, so layouts built on them accumulate rounding error, and the baseline comes from the glyf header's yMax rather than the computed bounds.",
+    "The cache (get_char::<true>) keys on the glyph id and the exact f32 bit pattern of the size, flushes completely at 4096 entries, and returns a cloned Vec on every hit. The default dpi is 72, so size is in pixels, and set_dpi flushes the cache.",
+    "Beyond the SIMD intrinsics, the code has other unsafe: to_bitmap calls Vec::set_len on uninitialized bytes (clippy::uninit_vec is silenced), and the rasterizer's coverage writes use get_unchecked_mut, protected only by debug_assert and coordinate clamping."
+  ],
+  "pick_this_over_siblings_when": "Pick it over fontdue only for zero dependencies, mostly large sizes (200 px and up), or exact curves at sizes far from one preset scale. Fontdue is faster from 10 to 160 px, also no_std, and far more used. font-rs has no benchmark numbers in its repo, and ttf-parser only parses outlines, so neither replaces a rasterizer the way this does.",
+  "verified_claims_summary": "These are first-party criterion medians (cargo bench, default bench profile, no RUSTFLAGS, so a baseline SSE2 x86-64 build; CPU and rustc unstated) for rasterizing a 106-character string (30 CJK, 76 ASCII; the README says 84) from NotoSansSC-Medium.ttf, which is not in the repo, at seven sizes with the cache off and every library's font load outside the timed loop. TiTanF is 1.5-3.5x faster than RustType 0.9.3 and 1.7-3.1x faster than ab_glyph 0.2.32. Against fontdue 0.9.3, with FontSettings.scale set to each size, it is 1.06-1.47x slower up to 160 px and 1.10x and 1.28x faster at 200 and 320 px (derived from page data). The table was committed in 0c4078c (2026-07-08), together with the string change and after the restructuring commit, so it matches current code. The README's quality argument that 'Fontdue reuses geometry tessellated for 40px' describes Fontdue's default scale of 40, not the benchmarked setup. No output-equivalence or quality check is run, and TiTanF skips zeroing its output buffer while RustType and ab_glyph allocate zeroed ones.",
+  "status_note": "Active single-author crate (115 commits, last 2026-07-08, v3.0.0 on crates.io with about 2.6k downloads), MIT and small enough to vendor, but no issues filed and no CI visible; treat the composite-glyph and off-curve-start parsing bugs as open.",
+  "sources_read": [
+    "https://github.com/Hoteira/titanf",
+    "https://github.com/Hoteira/titanf/tree/master/src",
+    "https://github.com/Hoteira/titanf/tree/master/tests",
+    "https://github.com/Hoteira/titanf/commits/master",
+    "https://github.com/Hoteira/titanf/commit/0c4078c5404bad166b9a8fb9f03173b8d6cad48a",
+    "https://github.com/Hoteira/titanf/commit/43e712f54912bfdec2957007d707be2a0e96509a",
+    "https://github.com/Hoteira/titanf/issues?q=is%3Aissue",
+    "https://raw.githubusercontent.com/Hoteira/titanf/HEAD/README.md",
+    "https://raw.githubusercontent.com/Hoteira/titanf/HEAD/Cargo.toml",
+    "https://raw.githubusercontent.com/Hoteira/titanf/HEAD/.gitignore",
+    "https://raw.githubusercontent.com/Hoteira/titanf/HEAD/LICENSE",
+    "https://raw.githubusercontent.com/Hoteira/titanf/HEAD/benches/rasterize_bench.rs",
+    "https://raw.githubusercontent.com/Hoteira/titanf/HEAD/src/lib.rs",
+    "https://raw.githubusercontent.com/Hoteira/titanf/HEAD/src/font.rs",
+    "https://raw.githubusercontent.com/Hoteira/titanf/HEAD/src/render.rs",
+    "https://raw.githubusercontent.com/Hoteira/titanf/HEAD/src/cache.rs",
+    "https://raw.githubusercontent.com/Hoteira/titanf/HEAD/src/fastmap.rs",
+    "https://raw.githubusercontent.com/Hoteira/titanf/HEAD/src/rasterizer/mod.rs",
+    "https://raw.githubusercontent.com/Hoteira/titanf/HEAD/src/rasterizer/dda.rs",
+    "https://raw.githubusercontent.com/Hoteira/titanf/HEAD/src/geometry/mod.rs",
+    "https://raw.githubusercontent.com/Hoteira/titanf/HEAD/src/geometry/simd.rs",
+    "https://raw.githubusercontent.com/Hoteira/titanf/HEAD/src/geometry/lines.rs",
+    "https://raw.githubusercontent.com/Hoteira/titanf/HEAD/src/geometry/points.rs",
+    "https://raw.githubusercontent.com/Hoteira/titanf/HEAD/src/tables/mod.rs",
+    "https://raw.githubusercontent.com/Hoteira/titanf/HEAD/src/tables/glyf.rs",
+    "https://raw.githubusercontent.com/Hoteira/titanf/HEAD/src/tables/cmap.rs",
+    "https://raw.githubusercontent.com/Hoteira/titanf/HEAD/src/tables/hmtx.rs",
+    "https://raw.githubusercontent.com/Hoteira/titanf/HEAD/tests/font_tests.rs",
+    "https://crates.io/api/v1/crates/titanf",
+    "https://raw.githubusercontent.com/mooman219/fontdue/HEAD/src/font.rs",
+    "https://raw.githubusercontent.com/mooman219/fontdue/HEAD/Cargo.toml"
+  ],
+  "confidence": 0.7
+}

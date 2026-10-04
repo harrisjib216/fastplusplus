@@ -1,0 +1,58 @@
+{
+  "id": "https://github.com/hpjansson/smolscale",
+  "one_liner": "Embeddable C bilinear/box RGBA scaler (SWAR, AVX2, row-batch threading); no published speed ratio against Pixman, libswscale or stb.",
+  "what_it_does": "Scales 8-bit-per-channel packed images (RGBA, BGRA, ARGB or ABGR, premultiplied or unassociated, plus RGB8/BGR8) to any size up to 65535x65535. Channel reordering and alpha premultiplication or unpremultiplication happen in the same pass. smol_scale_simple() does a one-shot, single-threaded scale. smol_scale_new() plus smol_scale_batch() scales ranges of output rows, can be called from several threads for non-overlapping rows, and takes an optional post-row callback. A with_srgb flag scales in linear light. Callers cannot choose the filter, and there are no transforms or YUV/planar formats, so it is not a drop-in for libswscale or Pixman.",
+  "how_it_is_fast": "SWAR: each 32-bit pixel is unpacked into a uint64 with four 16-bit lanes (mask 0x00ff00ff00ff00ff), so one 64-bit multiply, shift and add interpolates all four channels with an 8-bit fraction. A 128bpp layout (two words, 24-bit lanes) is used for linear sRGB or reductions beyond 255x. The filter is picked per axis: copy at 1:1; plain bilinear for upscaling and reductions down to 1/2; bilinear with one or two built-in 'halvings' (2 or 4 bilinear taps accumulated per output, then shifted) for 1/2 to 1/8; and box (area) averaging, with precomputed spans and a fixed-point reciprocal multiplier, beyond 1/8. Scaling is separable: offsets are precomputed once per context, and each horizontally scaled input row is kept in a 4-row ring for the vertical pass. The AVX2 file is chosen at run time with __builtin_cpu_supports, and threading is done by splitting output rows into batches.",
+  "when_to_use": [
+    "Large-factor downscaling or thumbnailing of big RGBA buffers in-process on x86-64, with output rows split across threads. Per a search snippet of the author's post, 8 threads scaled a 16383x16383 image down in about 50 ms, roughly 5.3 Gpx/s of input.",
+    "Pipelines that need scaling fused with pixel-order and alpha-mode conversion, for example unassociated RGBA in and premultiplied BGRA out for a compositor, without a separate conversion pass.",
+    "C or C++ projects that want a dependency-free source drop (libc only) where 'no jaggies' bilinear or box quality is enough, as in Chafa's terminal image renderer.",
+    "Streaming or tiled output: the batch API produces any range of output rows on demand, and the post-row callback can process each row."
+  ],
+  "when_not_to_use": [
+    "High-quality resampling (Lanczos, Mitchell, bicubic): it offers only automatically chosen bilinear and box filters with 8-bit interpolation fractions.",
+    "Single-threaded scaling at 0.5x-1.0x: according to search-result text of the author's own 2019 post (snippet only), Pixman's SIMD code was the fastest single-threaded implementation in that range and Skia was among the fastest below 0.5x.",
+    "YUV or planar input, 16-bit or float channels, or images wider or taller than 65535 px.",
+    "Long-term use of the standalone repo. It has been frozen since 2023-04-12 with 19 open issues, and later fixes (allocation checks, a premul16 AVX2 alpha-extraction fix, argument validation) went only into Chafa's copy, which has an incompatible API.",
+    "MSVC builds: the code relies on GNU C extensions (statement expressions in smol_alloc_aligned, __attribute__((always_inline)), __builtin_assume_aligned, __builtin_cpu_supports)."
+  ],
+  "integration": {
+    "form": "source-drop",
+    "dependencies": "none beyond libc (the test.c benchmark needs glib, libpng, pixman, gdk-pixbuf, SDL_gfx and libswscale)",
+    "min_toolchain": "GCC or Clang with GNU C extensions; a shim covers GCC < 8 missing _mm256_set_m128i; no C standard is stated",
+    "platforms": "any 64-bit-capable C target through the generic SWAR path; an optional x86-64 AVX2 path (compile smolscale-avx2.c with -mavx2 and everything with -DSMOL_WITH_AVX2) is picked at run time; no NEON or SSE-only path",
+    "thread_safety": "smol_scale_batch and smol_scale_batch_full may run concurrently on one context for non-overlapping output rows, and each call mallocs its own four row buffers; smol_scale_simple is documented as single-thread only; destroy the context only after all workers finish.",
+    "drop_in_for_baseline": false
+  },
+  "gotchas": [
+    "The README is stale. It says to copy three files, but smolscale.c calls _smol_get_generic_implementation() from smolscale-generic.c, so four files are needed (five with AVX2). It also says the AVX2 file is 'mostly just a straight copy of the generic code', yet the current smolscale-avx2.c has about 278 _mm256 intrinsic uses in pack/unpack and the 64bpp horizontal lerp, added in the March-April 2023 rework.",
+    "There is no argument validation and no allocation-failure handling: smol_scale_new's calloc and do_rows' mallocs are unchecked and every entry point returns void. An output dimension of 0 divides by zero in precalc_boxes_array (test.c clamps sizes to at least 1), and the uint16 precalc offsets cap dimensions at 65535 with no check. Chafa's copy rejects dimensions outside [1, 65535] and returns 0 on failure.",
+    "The defaults differ between copies: here with_srgb is an explicit argument and switches to the 128bpp path, and issue #2 ('Check if linearization works above 1:8191') is still open; Chafa's copy linearizes by default unless SMOL_DISABLE_SRGB_LINEARIZATION is passed.",
+    "The last standalone commit (2023-04-12) fixed a potential over-read in box precalc, so older vendored copies carry that bug. The code itself comments that box filtering is only precise enough when the input dimension exceeds five times the output."
+  ],
+  "pick_this_over_siblings_when": "Pick Smolscale for a dependency-free C drop-in that fuses channel reordering and premultiplication with scaling and lets you thread by output-row batches. For measured speed with quality filters, fast_image_resize (Rust, AVX2, beats libvips single-threaded) or stb-image-resize-opt and zimg (C/C++, published ratios) are better-evidenced choices.",
+  "verified_claims_summary": "No comparative number is reachable. The repo's harness (test.c run_benchmark_proportional via bench.sh) times one-shot calls including setup: smol_scale_simple; sws_getContext + sws_scale + sws_freeContext per call (SWS_FAST_BILINEAR up to 2x reduction, SWS_AREA beyond); Pixman separable box convolution or bilinear into a calloc'd buffer; GDK-Pixbuf bilinear; and the bundled stb_image_resize v0.97 (the old v1) box filter. It reports the mean of (input + output pixels) per second with 5th and 95th percentiles, and no results are committed. Search-result text of the blocked 2019 post says it ran on an i7-4770K at 3.5 GHz with a 2000x2000 RGBA input, taking the fastest of 50 runs at each of 500 sizes, and compared GDK-Pixbuf, Pixman 0.36.0, SDL, Skia and Smolscale; libswscale and stb are not named there. Its qualitative findings put Pixman fastest single-threaded at 0.5-1.0x and Skia among the fastest below 0.5x. Its one number, 8-thread Smolscale at about 5.3 Gpx/s on a 16383x16383 input, measured 2019 code that was largely rewritten in 2023 (premultiplication overhaul, AVX2 lerp).",
+  "status_note": "The standalone repo has been abandoned since 2023-04-12 (278 commits, 19 open issues, almost all the author's own TODOs). The maintained copy is chafa/internal/smolscale in Chafa (commits through 2026-09-25: AVX2 linearization, compositing, nearest mode, argument and allocation checks), but its API is incompatible, so vendor from Chafa under the same LGPLv3-or-BSD-4-Clause choice.",
+  "sources_read": [
+    "https://github.com/hpjansson/smolscale",
+    "https://github.com/hpjansson/smolscale/commits/master",
+    "https://github.com/hpjansson/smolscale/issues",
+    "https://raw.githubusercontent.com/hpjansson/smolscale/HEAD/README",
+    "https://raw.githubusercontent.com/hpjansson/smolscale/HEAD/COPYING",
+    "https://raw.githubusercontent.com/hpjansson/smolscale/HEAD/Makefile",
+    "https://raw.githubusercontent.com/hpjansson/smolscale/HEAD/bench.sh",
+    "https://raw.githubusercontent.com/hpjansson/smolscale/HEAD/plot.sh",
+    "https://raw.githubusercontent.com/hpjansson/smolscale/HEAD/test.c",
+    "https://raw.githubusercontent.com/hpjansson/smolscale/HEAD/smolscale.h",
+    "https://raw.githubusercontent.com/hpjansson/smolscale/HEAD/smolscale-private.h",
+    "https://raw.githubusercontent.com/hpjansson/smolscale/HEAD/smolscale.c",
+    "https://raw.githubusercontent.com/hpjansson/smolscale/HEAD/smolscale-generic.c",
+    "https://raw.githubusercontent.com/hpjansson/smolscale/HEAD/smolscale-avx2.c",
+    "https://raw.githubusercontent.com/hpjansson/smolscale/HEAD/stb_image_resize.h",
+    "https://github.com/hpjansson/chafa/tree/master/chafa/internal/smolscale",
+    "https://github.com/hpjansson/chafa/commits/master/chafa/internal/smolscale",
+    "https://raw.githubusercontent.com/hpjansson/chafa/HEAD/chafa/internal/smolscale/smolscale.h",
+    "https://raw.githubusercontent.com/hpjansson/chafa/HEAD/chafa/internal/smolscale/README"
+  ],
+  "confidence": 0.6
+}
