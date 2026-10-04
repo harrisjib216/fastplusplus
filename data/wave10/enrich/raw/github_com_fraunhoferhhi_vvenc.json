@@ -1,0 +1,60 @@
+{
+  "id": "https://github.com/fraunhoferhhi/vvenc",
+  "one_liner": "Fraunhofer's open H.266/VVC encoder; with 8 threads it runs 19x to 2400x faster than the single-threaded VTM reference encoder.",
+  "what_it_does": "VVenC encodes raw video into H.266/VVC elementary bitstreams that any conforming VVC decoder (VVdeC, VTM) can play. It ships libvvenc with a C API (vvenc_init_default(cfg, width, height, fps, bitrate, qp, preset), vvenc_encoder_create/open, then vvenc_encode() pushing vvencYUVBuffer frames and pulling vvencAccessUnit packets) plus two CLIs: vvencapp with five presets (faster, fast, medium, slow, slower) taking raw YUV or y4m input, and vvencFFapp exposing the full VTM-style parameter set. It supports constant QP, one- and two-pass rate control with rate capping, and XPSNR-based perceptual QP adaptation.",
+  "how_it_is_fast": "It started from the VTM reference code and was restructured around SIMD kernels (x86 SSE4.1/SSE4.2/AVX/AVX2 with runtime selection, Arm NEON/SVE/SVE2, LoongArch LSX, SIMDe for other targets) and Pareto-tuned presets that prune the VVC search space: 64x64 CTUs and no multi-type-tree splits in inter slices for faster/fast, fast diamond motion search, early CU termination, fewer intra modes in full RD and tool subsets per preset. Encoding runs as CTU tasks in a no-malloc thread pool with wavefront dependencies (top and top-right CTU), plus inter-frame parallelization (IFP), tiles and parallel GOPs; dependent quantization uses trellis pruning and vectorization per the authors' EUSIPCO 2024 paper listed on the wiki.",
+  "when_to_use": [
+    "You must produce H.266/VVC bitstreams (VOD archives, DASH, VVC test content) with an open encoder; the wiki puts the medium preset at -35.1% PSNR-YUV BD-rate versus HM-17.0 on HD/UHD test sequences.",
+    "Research or conformance work that would otherwise run VTM: the slower preset reaches roughly VTM-19.2's compression (-42.1% versus HM) in 1/19 of VTM's HD4K encode time on 8 threads.",
+    "Offline encoding where bitrate matters more than encoder time and a multi-core server is available (default 8 threads at 720p and above).",
+    "Arm servers: the library carries Neon and SVE/SVE2 kernels, and 1.13 and 1.14 added many Arm SIMD paths."
+  ],
+  "when_not_to_use": [
+    "Speed-critical or live encoding where H.264/HEVC/AV1 output is acceptable: Fraunhofer's own Figure 2 puts x265 3.5 presets at about 0.4% to 6% of HM's runtime versus 0.26% to 33% for VVenC (read from the figure), and unopened third-party snippets describe vvenc medium as roughly 15x slower than x265 medium; the speedups are only versus the VVC and HEVC reference encoders.",
+    "Players or hardware without VVC decode support; output is a raw .266 elementary stream that needs a VVC decoder such as VVdeC.",
+    "Projects that need an OSI-approved license or a patent grant: the Clear BSD license explicitly grants no patent rights, and VVC itself is covered by patent pools.",
+    "Lossless coding (issue #59, labelled wontfix) or multiple slices per picture (issue #635, open); vvencapp documents only 4:2:0 8- and 10-bit input.",
+    "Content where fine static detail matters with default settings: open issue #369 (bug label) reports QPA removing detail in static regions, and #489 reports visible blocking on slow-moving objects."
+  ],
+  "integration": {
+    "form": "static lib (default) or shared lib (BUILD_SHARED_LIBS=1), plus vvencapp and vvencFFapp executables",
+    "dependencies": "none external; SIMDe and nlohmann_json (rate-control statistics, optional) are bundled",
+    "min_toolchain": "C++14, CMake 3.13+, GCC 5+, Xcode clang, Visual Studio 2017+; the build refuses MSVC 19.38-19.39 as known-miscompiling unless VVENC_OVERRIDE_COMPILER_CHECK=ON",
+    "platforms": "x86 and x86-64 (SSE4.1 required since 1.13.1; SSE4.2/AVX/AVX2 kernels picked at runtime), AArch64 (Neon, optional SVE/SVE2), 32-bit Arm Neon, LoongArch64 LSX, other targets including Emscripten through SIMDe; Linux, macOS and Windows",
+    "thread_safety": "Each vvencEncoder owns its worker pool; separate encoder instances are independent. The global vvenc_set_logging_callback is deprecated as not thread-safe in favour of a per-config callback.",
+    "drop_in_for_baseline": "partial: emits standard VVC bitstreams like VTM, and vvencFFapp keeps VTM-style option names, but presets, defaults and the produced bitstreams differ from VTM, and the API is VVenC's own"
+  },
+  "gotchas": [
+    "Floating-point contraction is on by default, so bitstreams can differ across platforms and compiler versions; build with VVENC_FFP_CONTRACT_OFF=On for bit-exact output (README).",
+    "The two apps have different defaults: vvencapp turns perceptual QPA on (--qpa 1) while vvencFFapp's PerceptQPA defaults to 0, so the same preset gives different PSNR and bitrate results.",
+    "VVENC_ENABLE_WERROR defaults to On, so a newer compiler that emits a new warning breaks the build until the option is turned off; VVENC_ENABLE_UNSTABLE_API breaks ABI compatibility with other 1.x releases.",
+    "The benchmark is for the v1.14.0 tag while master reports 1.15.0-dev, and the wiki prose (e.g. 'more than 2300x', 'around 370x', 280x for medium) disagrees with its own v1.14.0 Table III, so quote the table, not the prose."
+  ],
+  "pick_this_over_siblings_when": "Pick VVenC when you need VVC/H.266 output or the highest PSNR-per-bit of the catalogued encoders and can spend encode time; pick SVT-AV1 for royalty-free AV1 with much faster production presets, Kvazaar or x265 for fast HEVC, and uavs3e only for AVS3. OpenVVC and VVdeC are VVC decoders that pair with it rather than compete.",
+  "verified_claims_summary": "First-party Fraunhofer wiki Table III (VVenC v1.14.0, 8 threads, AMD EPYC 7502P, JVET CTC random access at QP 22-37; compiler and flags not stated; VTM-19.2 and HM-17.0 single-threaded with MCTF) gives HD4K speedups over VTM of 2400x (faster, -13.3% BD-rate versus HM), 330x (medium, -35.1%) and 19x (slower, -42.1%, about VTM's efficiency). Only the slower row is quality-matched to VTM, and even if 8 threads scaled perfectly it still implies at least about 2.4x per thread (derived from page data); no x265 or x264 speed numbers are tabulated.",
+  "status_note": "Actively developed by Fraunhofer HHI (last commit 2026-10-02, latest tag 1.14.0, master at 1.15.0-dev) with unit tests for SIMD kernels; filed as reference because the Clear BSD license is not OSI-approved and grants no patent rights, and VVC patent licensing is separate.",
+  "sources_read": [
+    "https://raw.githubusercontent.com/fraunhoferhhi/vvenc/HEAD/README.md",
+    "https://raw.githubusercontent.com/fraunhoferhhi/vvenc/HEAD/LICENSE.txt",
+    "https://raw.githubusercontent.com/fraunhoferhhi/vvenc/HEAD/CMakeLists.txt",
+    "https://raw.githubusercontent.com/fraunhoferhhi/vvenc/HEAD/changelog.txt",
+    "https://raw.githubusercontent.com/fraunhoferhhi/vvenc/HEAD/include/vvenc/vvenc.h.in",
+    "https://raw.githubusercontent.com/fraunhoferhhi/vvenc/HEAD/include/vvenc/vvencCfg.h",
+    "https://raw.githubusercontent.com/fraunhoferhhi/vvenc/HEAD/source/Lib/vvenc/CMakeLists.txt",
+    "https://raw.githubusercontent.com/fraunhoferhhi/vvenc/HEAD/source/Lib/EncoderLib/EncSlice.cpp",
+    "https://raw.githubusercontent.com/wiki/fraunhoferhhi/vvenc/Encoder-Performance.md",
+    "https://raw.githubusercontent.com/wiki/fraunhoferhhi/vvenc/Home.md",
+    "https://raw.githubusercontent.com/wiki/fraunhoferhhi/vvenc/Usage.md",
+    "https://raw.githubusercontent.com/wiki/fraunhoferhhi/vvenc/Build.md",
+    "https://raw.githubusercontent.com/wiki/fraunhoferhhi/vvenc/Presets.md",
+    "https://raw.githubusercontent.com/wiki/fraunhoferhhi/vvenc/Publications.md",
+    "https://raw.githubusercontent.com/wiki/fraunhoferhhi/vvenc/License.md",
+    "https://github.com/fraunhoferhhi/vvenc/tree/master/source/Lib/CommonLib",
+    "https://github.com/fraunhoferhhi/vvenc/tree/master/source/Lib/EncoderLib",
+    "https://github.com/fraunhoferhhi/vvenc/issues",
+    "https://github.com/fraunhoferhhi/vvenc/issues/724",
+    "https://github.com/fraunhoferhhi/vvenc/issues?q=is%3Aissue+mismatch",
+    "https://github.com/fraunhoferhhi/vvenc/issues?q=is%3Aissue+x265+speed"
+  ],
+  "confidence": 0.8
+}

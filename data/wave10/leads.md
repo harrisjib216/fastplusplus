@@ -16,3 +16,4 @@ Candidates surfaced by verifiers and enrichers, not yet in any wave's records.
 - Enricher leads (e13, video-audio denoisers): Khanattila/KNLMeansCL (OpenCL non-local means, C++) and WolframRhodium/VapourSynth-BM3DCUDA (BM3D on CUDA and HIP; likely the V-BM3D arm of av-denoise's chart); neither catalogued.
 - Enricher lead (e20, unicode-utf8): simdutf PR #999 (open, xxUTF author) adds NFD/NFC/NFKD/NFKC normalisation with NEON and AVX-512 paths, opt-in, about 432 KB of tables; re-check when merged.
 - Enricher lead (e21): gpxz.io/blog/lerc-benchmarks (independent GDAL LERC vs DEFLATE vs zstd benchmark; blocked here, snippet only) could raise LERC to B when reachable.
+- Paper-access retiers (e23): VVenC first-party papers (ACM TOMM 2026 IFP, MMSys 2024, PCS 2021 VVenC vs x265 vs aomenc evaluation) behind blocked ACM and IEEE; encode.su ECT thread blocked.
